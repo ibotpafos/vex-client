@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+INTERFACE_NAME="vex"
+ACTION="${1:-}"
+CONFIG_PATH="${2:-}"
+
+quick_tool() {
+  if command -v awg-quick >/dev/null 2>&1; then
+    printf '%s\n' "awg-quick"
+    return 0
+  fi
+  if command -v wg-quick >/dev/null 2>&1; then
+    printf '%s\n' "wg-quick"
+    return 0
+  fi
+  echo "awg-quick or wg-quick is required" >&2
+  return 127
+}
+
+validate_config_path() {
+  local path="$1"
+  local real_path
+  real_path="$(readlink -f "$path" 2>/dev/null || true)"
+  if [[ -z "$real_path" || ! -f "$real_path" ]]; then
+    echo "VEX VPN config is missing: $path" >&2
+    return 2
+  fi
+  case "$real_path" in
+    /home/*/.local/share/app.vex.vpn.desktop/vex.conf|/root/.local/share/app.vex.vpn.desktop/vex.conf)
+      printf '%s\n' "$real_path"
+      ;;
+    *)
+      echo "Refusing VPN config outside VEX app data: $real_path" >&2
+      return 2
+      ;;
+  esac
+}
+
+validate_config_content() {
+  local path="$1"
+  if grep -Eiq '^[[:space:]]*(PreUp|PostUp|PreDown|PostDown)[[:space:]]*=' "$path"; then
+    echo "Refusing VPN config with wg-quick shell hook directives: $path" >&2
+    return 2
+  fi
+}
+
+case "$ACTION" in
+  up)
+    config="$(validate_config_path "$CONFIG_PATH")"
+    validate_config_content "$config"
+    "$(quick_tool)" up "$config"
+    ;;
+  down)
+    "$(quick_tool)" down "$INTERFACE_NAME" || true
+    ;;
+  *)
+    echo "usage: vex-vpn-linux-helper up <config>|down" >&2
+    exit 64
+    ;;
+esac

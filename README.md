@@ -7,9 +7,11 @@ This repository contains VEX client applications for desktop and mobile. It inte
 ## Repository Layout
 
 - `app/`, `src/`, `assets/` - shared Expo/React Native client app.
-- `src-tauri/` - desktop Tauri runtime used by Windows first, with macOS/Linux lanes kept private until they are ready here.
+- `src-tauri/` - desktop Tauri runtime used by Windows and Linux release lanes.
 - `android/`, `ios/`, `modules/` - mobile native projects and local Expo native module.
 - `.github/workflows/windows-release.yml` - first public release lane.
+- `.github/workflows/linux-release.yml` - public Linux release lane.
+- `packaging/linux/` - Linux package payloads that are safe to publish.
 
 ## Release Model
 
@@ -22,6 +24,15 @@ GitHub Actions builds Windows artifacts on `windows-latest`:
 - `.sig` sidecars
 
 The updater zip `.sig` is the Tauri updater signature and is the only signature used by the production updater contract. Installer `.sig` files are checksum metadata only; Authenticode code signing is not part of the v1 public build.
+
+GitHub Actions builds Linux artifacts on `ubuntu-24.04`:
+
+- `Vex-Linux-{version}.AppImage`
+- `Vex-Linux-{version}.deb`
+- matching `.sha256` files
+- `.sig` sidecars
+
+The AppImage `.sig` is the Tauri updater signature used by the production updater contract. The `.deb` package includes the public `vex-vpn-linux-helper` payload and sudoers drop-in for systems that install the Debian package.
 
 Production promotion stays in the private VPN repository. Public workflows never call VEX admin APIs and never update production updater settings directly.
 
@@ -48,6 +59,12 @@ The full Windows release build requires Windows:
 npm run windows:release
 ```
 
+The full Linux release build requires Linux with Tauri system dependencies:
+
+```bash
+npm run linux:release
+```
+
 ## Windows GitHub Release
 
 Push a tag named `windows-v{version}` to build and publish a GitHub Release:
@@ -55,4 +72,13 @@ Push a tag named `windows-v{version}` to build and publish a GitHub Release:
 ```bash
 git tag windows-v0.1.28
 git push origin windows-v0.1.28
+```
+
+## Linux GitHub Release
+
+Push a tag named `linux-v{version}` to build and publish a GitHub Release:
+
+```bash
+git tag linux-v0.1.28
+git push origin linux-v0.1.28
 ```

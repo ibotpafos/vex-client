@@ -52,6 +52,7 @@
     "build:web": "expo export -p web",
     "tauri:cli": "tauri",
     "windows:release": "powershell -ExecutionPolicy Bypass -File scripts/build_windows_release.ps1",
+    "linux:release": "bash scripts/build_linux_release.sh",
     "typecheck": "tsc --noEmit",
     "test:unit": "tsx tests/run-unit-tests.ts",
     "check": "npm run test:unit && npm run typecheck"

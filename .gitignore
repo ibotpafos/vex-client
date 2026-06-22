@@ -2,6 +2,7 @@ node_modules/
 dist/
 .expo/
 .cache/
+external/
 .DS_Store
 
 .env

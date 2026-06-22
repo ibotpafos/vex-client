@@ -1,0 +1,44 @@
+diff --git a/tunnel/tools/libwg-go/Makefile b/tunnel/tools/libwg-go/Makefile
+index c17855c..a273481 100644
+--- a/tunnel/tools/libwg-go/Makefile
++++ b/tunnel/tools/libwg-go/Makefile
+@@ -31,19 +31,19 @@ $(DESTDIR):
+ 
+ $(GRADLE_USER_HOME)/caches/golang/$(GO_TARBALL):
+ 	mkdir -p "$(dir $@)"
+-	flock "$@.lock" -c ' \
+-	[ -f "$@" ] && exit 0; \
+-	curl -o "$@.tmp" "https://dl.google.com/go/$(GO_TARBALL)" && \
+-	echo "$(GO_HASH_$(GO_PLATFORM))  $@.tmp" | sha256sum -c && \
+-	mv "$@.tmp" "$@"'
++	if [ ! -f "$@" ]; then \
++		curl -o "$@.tmp" "https://dl.google.com/go/$(GO_TARBALL)" && \
++		echo "$(GO_HASH_$(GO_PLATFORM))  $@.tmp" | shasum -a 256 -c && \
++		mv "$@.tmp" "$@"; \
++	fi
+ 
+ $(BUILDDIR)/go-$(GO_VERSION)/.prepared: $(GRADLE_USER_HOME)/caches/golang/$(GO_TARBALL)
+ 	mkdir -p "$(dir $@)"
+-	flock "$@.lock" -c ' \
+-	[ -f "$@" ] && exit 0; \
+-	tar -C "$(dir $@)" --strip-components=1 -xzf "$^" && \
+-	patch -p1 -f -N -r- -d "$(dir $@)" < goruntime-boottime-over-monotonic.diff && \
+-	touch "$@"'
++	if [ ! -f "$@" ]; then \
++		tar -C "$(dir $@)" --strip-components=1 -xzf "$^" && \
++		patch -p1 -f -N -r- -d "$(dir $@)" < goruntime-boottime-over-monotonic.diff && \
++		touch "$@"; \
++	fi
+ 
+ $(DESTDIR)/libwg-go.so: export PATH := $(BUILDDIR)/go-$(GO_VERSION)/bin/:$(PATH)
+ $(DESTDIR)/libwg-go.so: $(BUILDDIR)/go-$(GO_VERSION)/.prepared go.mod
+diff --git a/tunnel/tools/libwg-go/go.mod b/tunnel/tools/libwg-go/go.mod
+index e5e692e..52d93ee 100644
+--- a/tunnel/tools/libwg-go/go.mod
++++ b/tunnel/tools/libwg-go/go.mod
+@@ -12,3 +12,5 @@ require (
+ 	golang.org/x/net v0.44.0 // indirect
+ 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
+ )
++
++replace github.com/amnezia-vpn/amneziawg-go => ../../../../amneziawg-go

@@ -49,6 +49,8 @@
     "start:web": "expo start --web",
     "web": "expo start --web",
     "android": "expo run:android",
+    "android:bootstrap": "bash scripts/bootstrap_amneziawg_android.sh",
+    "android:build:local": "bash scripts/android_local_build.sh",
     "ios": "expo run:ios",
     "build:web": "expo export -p web",
     "tauri:cli": "tauri",

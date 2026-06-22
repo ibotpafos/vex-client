@@ -2,6 +2,7 @@ import React from 'react';
 import { Pressable, View, Text } from 'react-native';
 import { MapPin, Gauge, ChevronRight } from 'lucide-react-native';
 import type { VpnLocation } from '@/api/vexApi';
+import { useRenderProfilerMark } from '@/debug/render-profiler';
 import { serverLocationLabel } from '../screens/home-screen-helpers';
 import { styles } from '../screens/home-screen.styles';
 
@@ -13,13 +14,14 @@ export interface ServerChipProps {
   onPress: () => void;
 }
 
-export function ServerChip({
+export const ServerChip = React.memo(function ServerChip({
   disabled,
   isAutoMode,
   latencyText,
   location,
   onPress,
 }: ServerChipProps) {
+  useRenderProfilerMark('ServerChip');
   const locationLabel = location ? serverLocationLabel(location) : 'Не выбран';
   const serverLabel = isAutoMode && location ? `Авто: ${locationLabel}` : locationLabel;
   const visibleServerLabel = locationLabel;
@@ -47,4 +49,4 @@ export function ServerChip({
       <ChevronRight color="#78969C" size={19} strokeWidth={2.6} />
     </Pressable>
   );
-}
+});

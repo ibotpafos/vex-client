@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
+import React, { useCallback } from 'react';
 import { ActivityIndicator, Alert, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ban, CalendarClock, CheckCircle2, Crown, RefreshCw, X } from 'lucide-react-native';
 import { billingSummary, cancelSubscription, checkoutSession, vexApiBaseUrl, type BillingPlanOption } from '@/api/vexApi';
@@ -26,11 +27,11 @@ export function SubscriptionContent({ onClose }: SubscriptionContentProps) {
     queryKey: ['billing-summary', session?.accessToken],
     queryFn: () => billingSummary(session!.accessToken),
     enabled: Boolean(session?.accessToken),
-    staleTime: 10_000,
-    refetchInterval: 15_000,
+    staleTime: 30_000,
+    refetchInterval: false,
   });
 
-  const close = () => {
+  const close = useCallback(() => {
     if (onClose) {
       onClose();
       return;
@@ -38,7 +39,7 @@ export function SubscriptionContent({ onClose }: SubscriptionContentProps) {
     if (router.canGoBack()) {
       router.back();
     }
-  };
+  }, [onClose]);
 
   const checkoutMutation = useMutation({
     mutationFn: async (plan: BillingPlanOption) => {
@@ -112,6 +113,13 @@ export function SubscriptionContent({ onClose }: SubscriptionContentProps) {
         ? cancelMutation.error.message
         : null;
   const canClose = Boolean(onClose || router.canGoBack());
+  const handlePlanPress = useCallback((plan: BillingPlanOption) => {
+    if (plan.disabled) {
+      playWarningHaptic();
+      return;
+    }
+    checkoutMutation.mutate(plan);
+  }, [checkoutMutation]);
 
   return (
     <View style={styles.screen}>
@@ -200,34 +208,12 @@ export function SubscriptionContent({ onClose }: SubscriptionContentProps) {
         ) : (
           <View style={styles.planList}>
             {plans.map((plan) => (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityState={{ disabled: actionBusy || plan.disabled, selected: plan.current }}
-                disabled={actionBusy || plan.disabled}
+              <PlanOptionRow
+                actionBusy={actionBusy}
                 key={plan.id}
-                onPress={() => {
-                  if (plan.disabled) {
-                    playWarningHaptic();
-                    return;
-                  }
-                  checkoutMutation.mutate(plan);
-                }}
-                style={[styles.planOption, plan.current && styles.currentPlanOption, actionBusy && !plan.disabled && styles.busy]}
-              >
-                <View style={[styles.planIcon, plan.current && styles.currentPlanIcon]}>
-                  <Crown color={plan.current ? '#22D3EE' : '#031012'} size={22} strokeWidth={2.6} />
-                </View>
-                <View style={styles.planCopy}>
-                  <View style={styles.planNameRow}>
-                    <Text numberOfLines={1} style={[styles.planName, plan.current && styles.currentPlanName]}>{plan.name}</Text>
-                    {plan.current ? <CheckCircle2 color="#22D3EE" size={18} strokeWidth={2.6} /> : null}
-                  </View>
-                  <Text numberOfLines={2} style={styles.planMeta}>{plan.meta}</Text>
-                </View>
-                <View style={[styles.planActionPill, plan.current && styles.currentPlanActionPill]}>
-                  <Text numberOfLines={1} adjustsFontSizeToFit style={[styles.planAction, plan.current && styles.currentPlanAction]}>{plan.action}</Text>
-                </View>
-              </Pressable>
+                onPress={handlePlanPress}
+                plan={plan}
+              />
             ))}
           </View>
         )}
@@ -235,6 +221,40 @@ export function SubscriptionContent({ onClose }: SubscriptionContentProps) {
     </View>
   );
 }
+
+type PlanOptionRowProps = {
+  actionBusy: boolean;
+  onPress: (plan: BillingPlanOption) => void;
+  plan: BillingPlanOption;
+};
+
+const PlanOptionRow = React.memo(function PlanOptionRow({ actionBusy, onPress, plan }: PlanOptionRowProps) {
+  const disabled = actionBusy || plan.disabled;
+  const handlePress = useCallback(() => onPress(plan), [onPress, plan]);
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ disabled, selected: plan.current }}
+      disabled={disabled}
+      onPress={handlePress}
+      style={[styles.planOption, plan.current && styles.currentPlanOption, actionBusy && !plan.disabled && styles.busy]}
+    >
+      <View style={[styles.planIcon, plan.current && styles.currentPlanIcon]}>
+        <Crown color={plan.current ? '#22D3EE' : '#031012'} size={22} strokeWidth={2.6} />
+      </View>
+      <View style={styles.planCopy}>
+        <View style={styles.planNameRow}>
+          <Text numberOfLines={1} style={[styles.planName, plan.current && styles.currentPlanName]}>{plan.name}</Text>
+          {plan.current ? <CheckCircle2 color="#22D3EE" size={18} strokeWidth={2.6} /> : null}
+        </View>
+        <Text numberOfLines={2} style={styles.planMeta}>{plan.meta}</Text>
+      </View>
+      <View style={[styles.planActionPill, plan.current && styles.currentPlanActionPill]}>
+        <Text numberOfLines={1} adjustsFontSizeToFit style={[styles.planAction, plan.current && styles.currentPlanAction]}>{plan.action}</Text>
+      </View>
+    </Pressable>
+  );
+});
 
 function confirmCancelSubscription(onConfirm: () => void) {
   Alert.alert(

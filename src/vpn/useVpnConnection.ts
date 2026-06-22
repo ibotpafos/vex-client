@@ -66,6 +66,7 @@ import {
   animationKickDelayMs,
   activeDeviceRefreshMs,
   nativeStatusPollMs,
+  tauriNativeStatusPollMs,
   nativeHealthPollMs,
   nativeHealthFailureThreshold,
   nativeReconnectCooldownMs,
@@ -607,7 +608,7 @@ export function useVpnConnection() {
     pulseProgress.stopAnimation();
     pulseProgress.setValue(0);
 
-    if (connectionPhase === 'idle') {
+    if (connectionPhase === 'idle' || isTauriRuntime()) {
       return undefined;
     }
 
@@ -884,6 +885,7 @@ export function useVpnConnection() {
     if (!session || !supportsNativeStatusPolling()) {
       return undefined;
     }
+    const pollMs = isTauriRuntime() ? tauriNativeStatusPollMs : nativeStatusPollMs;
     const timer = setInterval(() => {
       getVpnStatus()
         .then((nextStatus) => {
@@ -902,7 +904,7 @@ export function useVpnConnection() {
             error_message: errorMessage(error, 'native_status_poll_failed'),
           }).catch(() => undefined);
         });
-    }, nativeStatusPollMs);
+    }, pollMs);
     return () => clearInterval(timer);
   }, [recordNativeStatus, session, submitClientDiagnosticsEvent]);
 

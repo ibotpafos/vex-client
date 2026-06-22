@@ -69,6 +69,8 @@
     "ios:sync-vpn-extension": "ruby scripts/ios_sync_vpn_extension.rb",
     "ios:preflight": "bash scripts/ios_preflight.sh",
     "web": "expo start --web",
+    "web:prod-auth": "bash scripts/start_web_prod_auth.sh",
+    "dev:prod-api-proxy": "node scripts/dev_prod_api_proxy.mjs",
     "build:web": "expo export -p web",
     "build:helper": "bash scripts/build_helper.sh",
     "build:native:macos": "bash scripts/build_universal_resources.sh && npm run build:helper",

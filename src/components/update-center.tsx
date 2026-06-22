@@ -113,6 +113,10 @@ function UpdateCenterModal({
   onClose: () => void;
   visible: boolean;
 }) {
+  if (!visible) {
+    return null;
+  }
+
   return (
     <Modal animationType="slide" onRequestClose={onClose} presentationStyle="fullScreen" visible={visible}>
       <View style={styles.modal}>

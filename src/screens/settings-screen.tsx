@@ -1,6 +1,6 @@
 import * as SecureStore from '@/native/secureStore';
 import { router } from 'expo-router';
-import { ChevronLeft, Languages, LogOut, Power, RefreshCw, ServerCog, Smartphone } from 'lucide-react-native';
+import { ChevronLeft, Languages, LifeBuoy, LogOut, Power, RefreshCw, ServerCog, Smartphone } from 'lucide-react-native';
 import React, { useCallback, useEffect, useState } from 'react';
 import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { appRemoteConfig, type AppRemoteConfig } from '@/api/vexApi';
@@ -331,6 +331,27 @@ export default function SettingsScreen() {
               );
             })}
           </View>
+        </View>
+
+        <View style={styles.group}>
+          <Text style={styles.groupTitle}>Поддержка</Text>
+          <Pressable
+            accessibilityLabel="Открыть чат поддержки"
+            accessibilityRole="button"
+            onPress={() => {
+              playSelectionHaptic();
+              router.push('/support');
+            }}
+            style={styles.settingRow}
+          >
+            <View style={styles.rowIcon}>
+              <LifeBuoy color="#22D3EE" size={21} strokeWidth={2.5} />
+            </View>
+            <View style={styles.rowCopy}>
+              <Text style={styles.rowTitle}>Чат поддержки</Text>
+              <Text style={styles.rowDescription}>Отдельный экран с историей обращений и отправкой сообщений.</Text>
+            </View>
+          </Pressable>
         </View>
 
         <View style={styles.group}>

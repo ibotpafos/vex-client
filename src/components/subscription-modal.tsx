@@ -11,6 +11,10 @@ export function SubscriptionModal({
   visible,
   onClose,
 }: SubscriptionModalProps) {
+  if (!visible) {
+    return null;
+  }
+
   return (
     <Modal animationType="slide" onRequestClose={onClose} presentationStyle="fullScreen" visible={visible}>
       <SubscriptionContent onClose={onClose} />

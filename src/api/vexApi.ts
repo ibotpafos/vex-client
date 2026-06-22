@@ -160,6 +160,48 @@ export type ClientDiagnosticsReportInput = {
   samplesJson?: string;
 };
 
+export type SupportMessage = {
+  id: string;
+  ticketId: string;
+  sender: 'user' | 'admin' | 'system';
+  authorId?: string;
+  body: string;
+  createdAt: string;
+};
+
+export type SupportTicket = {
+  id: string;
+  subject: string;
+  message: string;
+  messages?: SupportMessage[];
+  status: string;
+  priority?: string;
+  source: string;
+  adminNote?: string;
+  createdAt: string;
+  updatedAt: string;
+  closedAt?: string;
+};
+
+type SupportSocketEnvelope = {
+  type: string;
+  ticket?: ServerSupportTicket;
+  tickets?: ServerSupportTicket[];
+  message?: string;
+};
+
+export type SupportSocketHandle = {
+  close: () => void;
+  sendMessage: (message: { body: string; subject?: string; ticketId?: string }) => boolean;
+};
+
+export type SupportSocketOptions = {
+  onError?: (message: string) => void;
+  onOpen?: () => void;
+  onSnapshot?: (tickets: SupportTicket[]) => void;
+  onTicket?: (ticket: SupportTicket) => void;
+};
+
 export type PreparedTunnel = {
   device: VpnDevice;
   config: string;
@@ -570,6 +612,134 @@ export async function submitClientDiagnostics(accessToken: string, report: Clien
       samples_json: report.samplesJson,
     },
   });
+}
+
+export async function supportTickets(accessToken: string): Promise<SupportTicket[]> {
+  const items = await jsonRequest<ServerSupportTicket[] | null>('/v1/support-tickets', {
+    accessToken,
+    suppressErrorLog: true,
+  });
+  return (items ?? []).map(parseSupportTicket);
+}
+
+export async function createSupportTicket(
+  accessToken: string,
+  input: { subject: string; message: string; source?: string },
+): Promise<SupportTicket> {
+  const item = await jsonRequest<ServerSupportTicket>('/v1/support-tickets', {
+    accessToken,
+    body: {
+      message: input.message,
+      source: input.source ?? 'mobile',
+      subject: input.subject,
+    },
+    idempotencyKey: `support-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    method: 'POST',
+  });
+  return parseSupportTicket(item);
+}
+
+export function connectSupportSocket(accessToken: string, options: SupportSocketOptions): SupportSocketHandle {
+  let closed = false;
+  let connectionIssueReported = false;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let socket: WebSocket | null = null;
+
+  const reportConnectionIssue = (message: string) => {
+    if (connectionIssueReported) return;
+    connectionIssueReported = true;
+    options.onError?.(message);
+  };
+
+  const scheduleReconnect = () => {
+    if (closed || reconnectTimer) return;
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      void connect();
+    }, 3000);
+  };
+
+  const connect = async () => {
+    try {
+      const url = await supportWebSocketURL(accessToken);
+      if (closed) return;
+      socket = new WebSocket(url);
+      socket.onopen = () => {
+        connectionIssueReported = false;
+        options.onOpen?.();
+      };
+      socket.onmessage = (event) => dispatchSupportSocketEvent(String(event.data), options);
+      socket.onclose = scheduleReconnect;
+      socket.onerror = () => reportConnectionIssue('Соединение с чатом прервано, переподключаемся.');
+    } catch (error) {
+      if (!closed) {
+        reportConnectionIssue(apiErrorMessage(error, 'Не удалось подключить чат поддержки.'));
+        scheduleReconnect();
+      }
+    }
+  };
+
+  void connect();
+
+  return {
+    close() {
+      closed = true;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+      }
+      socket?.close();
+    },
+    sendMessage(message) {
+      if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+      socket.send(JSON.stringify({
+        body: message.body,
+        subject: message.subject,
+        ticket_id: message.ticketId,
+        type: 'support.message',
+      }));
+      return true;
+    },
+  };
+}
+
+async function supportWebSocketURL(accessToken: string) {
+  const payload = await jsonRequest<{ ticket?: string }>('/v1/support-ws-ticket', {
+    accessToken,
+    suppressErrorLog: true,
+  });
+  if (!payload.ticket?.trim()) {
+    throw new Error('Support websocket ticket missing');
+  }
+  const url = new URL('/v1/support-ws', apiRequestBaseUrl);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  url.searchParams.set('ticket', payload.ticket);
+  return url.toString();
+}
+
+function dispatchSupportSocketEvent(data: string, options: SupportSocketOptions) {
+  let envelope: SupportSocketEnvelope;
+  try {
+    envelope = JSON.parse(data) as SupportSocketEnvelope;
+  } catch {
+    options.onError?.('Получили некорректное событие чата поддержки.');
+    return;
+  }
+
+  switch (envelope.type) {
+    case 'support.snapshot':
+      options.onSnapshot?.((envelope.tickets ?? []).map(parseSupportTicket));
+      return;
+    case 'support.ticket':
+      if (envelope.ticket) options.onTicket?.(parseSupportTicket(envelope.ticket));
+      return;
+    case 'support.error':
+      if (envelope.message) options.onError?.(envelope.message);
+      return;
+  }
+}
+
+function apiErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
 }
 
 export async function registerDevicePushToken(accessToken: string, deviceId: string, push: { provider: string; token: string }): Promise<VpnDevice> {
@@ -1017,6 +1187,62 @@ function parseEntitlement(item: ServerEntitlement): Entitlement {
     effectiveExpiresAt: item.effective_expires_at || undefined,
     vpnAccess: Boolean(item.vpn_access),
   };
+}
+
+type ServerSupportMessage = {
+  id: string;
+  ticket_id: string;
+  sender: string;
+  author_id?: string;
+  body: string;
+  created_at: string;
+};
+
+type ServerSupportTicket = {
+  id: string;
+  user_id?: string;
+  subject: string;
+  message: string;
+  messages?: ServerSupportMessage[];
+  status: string;
+  priority?: string;
+  assigned_admin_user_id?: string;
+  source: string;
+  admin_note?: string;
+  created_at: string;
+  updated_at: string;
+  closed_at?: string;
+};
+
+function parseSupportTicket(item: ServerSupportTicket): SupportTicket {
+  return {
+    id: item.id,
+    subject: item.subject,
+    message: item.message,
+    messages: item.messages?.map(parseSupportMessage),
+    status: item.status,
+    priority: item.priority,
+    source: item.source,
+    adminNote: item.admin_note,
+    createdAt: item.created_at,
+    updatedAt: item.updated_at,
+    closedAt: item.closed_at,
+  };
+}
+
+function parseSupportMessage(item: ServerSupportMessage): SupportMessage {
+  return {
+    id: item.id,
+    ticketId: item.ticket_id,
+    sender: parseSupportSender(item.sender),
+    authorId: item.author_id,
+    body: item.body,
+    createdAt: item.created_at,
+  };
+}
+
+function parseSupportSender(value: string): SupportMessage['sender'] {
+  return value === 'admin' || value === 'system' ? value : 'user';
 }
 
 function parseApiError(text: string): string | null {

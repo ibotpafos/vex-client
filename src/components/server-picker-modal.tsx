@@ -18,7 +18,7 @@ export interface ServerPickerModalProps {
   onSelect: (locationId: string) => void;
 }
 
-export function ServerPickerModal({
+export const ServerPickerModal = React.memo(function ServerPickerModal({
   currentLatencyText,
   isVpnBusy,
   locations,
@@ -29,6 +29,10 @@ export function ServerPickerModal({
   onClose,
   onSelect,
 }: ServerPickerModalProps) {
+  if (!visible) {
+    return null;
+  }
+
   const autoSelected = selectionMode === 'auto';
   return (
     <Modal animationType="slide" onRequestClose={onClose} presentationStyle="fullScreen" visible={visible}>
@@ -45,67 +49,110 @@ export function ServerPickerModal({
         </View>
 
         <ScrollView contentContainerStyle={styles.serverModalList} showsVerticalScrollIndicator={false}>
-          <Pressable
+          <AutoServerRow
             disabled={isVpnBusy}
             onPress={onAutoSelect}
-            style={[styles.serverRow, autoSelected && styles.serverRowSelected, isVpnBusy && !autoSelected && styles.serverRowDisabled]}
-            accessibilityRole="button"
-            accessibilityState={{ selected: autoSelected, disabled: isVpnBusy }}
-            accessibilityLabel="Автоматически выбирать лучший сервер"
-          >
-            <View style={styles.serverRowMain}>
-              <View style={styles.serverRowFlagBox}>
-                <RefreshCw color="#22D3EE" size={18} strokeWidth={2.7} />
-              </View>
-              <View style={styles.serverRowCopy}>
-                <Text numberOfLines={1} style={[styles.serverRowName, autoSelected && styles.serverRowNameSelected]}>Автоматически</Text>
-                <View style={styles.serverRowStatusLine}>
-                  <View style={[styles.serverHealthDot, styles.serverHealthDotActive]} />
-                  <Text numberOfLines={1} style={styles.serverRowStatus}>Лучший доступный сервер</Text>
-                </View>
-              </View>
-            </View>
-            <View style={styles.serverRowSide}>
-              <Text style={[styles.serverRowLatency, autoSelected && styles.serverRowLatencySelected]}>Авто</Text>
-              {autoSelected ? <CheckCircle2 color="#22D3EE" size={20} strokeWidth={2.7} /> : null}
-            </View>
-          </Pressable>
+            selected={autoSelected}
+          />
           {locations.map((location) => {
             const selected = selectionMode === 'manual' && location.id === selectedLocationId;
-            const disabled = isVpnBusy;
             return (
-              <Pressable
+              <ServerLocationRow
+                currentLatencyText={currentLatencyText}
+                disabled={isVpnBusy}
                 key={location.id}
-                disabled={disabled}
-                onPress={() => onSelect(location.id)}
-                style={[styles.serverRow, selected && styles.serverRowSelected, disabled && !selected && styles.serverRowDisabled]}
-                accessibilityRole="button"
-                accessibilityState={{ selected, disabled }}
-                accessibilityLabel={`Подключаться к серверу ${serverLocationLabel(location)}, задержка ${selected ? currentLatencyText : locationLatencyText(location)}`}
-              >
-                <View style={styles.serverRowMain}>
-                  <View style={styles.serverRowFlagBox}>
-                    <Text style={styles.serverRowFlag}>{location.flagEmoji || location.countryCode}</Text>
-                  </View>
-                  <View style={styles.serverRowCopy}>
-                    <Text numberOfLines={1} style={[styles.serverRowName, selected && styles.serverRowNameSelected]}>{location.city}</Text>
-                    <View style={styles.serverRowStatusLine}>
-                      <View style={[styles.serverHealthDot, location.healthyNodes > 0 && styles.serverHealthDotActive]} />
-                      <Text numberOfLines={1} style={styles.serverRowStatus}>{locationStatusText(location)}</Text>
-                    </View>
-                  </View>
-                </View>
-                <View style={styles.serverRowSide}>
-                  <Text style={[styles.serverRowLatency, selected && styles.serverRowLatencySelected]}>
-                    {selected ? currentLatencyText : locationLatencyText(location)}
-                  </Text>
-                  {selected ? <CheckCircle2 color="#22D3EE" size={20} strokeWidth={2.7} /> : null}
-                </View>
-              </Pressable>
+                location={location}
+                onSelect={onSelect}
+                selected={selected}
+              />
             );
           })}
         </ScrollView>
       </View>
     </Modal>
   );
-}
+});
+
+type AutoServerRowProps = {
+  disabled: boolean;
+  onPress: () => void;
+  selected: boolean;
+};
+
+const AutoServerRow = React.memo(function AutoServerRow({ disabled, onPress, selected }: AutoServerRowProps) {
+  return (
+    <Pressable
+      disabled={disabled}
+      onPress={onPress}
+      style={[styles.serverRow, selected && styles.serverRowSelected, disabled && !selected && styles.serverRowDisabled]}
+      accessibilityRole="button"
+      accessibilityState={{ selected, disabled }}
+      accessibilityLabel="Автоматически выбирать лучший сервер"
+    >
+      <View style={styles.serverRowMain}>
+        <View style={styles.serverRowFlagBox}>
+          <RefreshCw color="#22D3EE" size={18} strokeWidth={2.7} />
+        </View>
+        <View style={styles.serverRowCopy}>
+          <Text numberOfLines={1} style={[styles.serverRowName, selected && styles.serverRowNameSelected]}>Автоматически</Text>
+          <View style={styles.serverRowStatusLine}>
+            <View style={[styles.serverHealthDot, styles.serverHealthDotActive]} />
+            <Text numberOfLines={1} style={styles.serverRowStatus}>Лучший доступный сервер</Text>
+          </View>
+        </View>
+      </View>
+      <View style={styles.serverRowSide}>
+        <Text style={[styles.serverRowLatency, selected && styles.serverRowLatencySelected]}>Авто</Text>
+        {selected ? <CheckCircle2 color="#22D3EE" size={20} strokeWidth={2.7} /> : null}
+      </View>
+    </Pressable>
+  );
+});
+
+type ServerLocationRowProps = {
+  currentLatencyText: string;
+  disabled: boolean;
+  location: VpnLocation;
+  onSelect: (locationId: string) => void;
+  selected: boolean;
+};
+
+const ServerLocationRow = React.memo(function ServerLocationRow({
+  currentLatencyText,
+  disabled,
+  location,
+  onSelect,
+  selected,
+}: ServerLocationRowProps) {
+  const latencyText = selected ? currentLatencyText : locationLatencyText(location);
+  const handlePress = React.useCallback(() => onSelect(location.id), [location.id, onSelect]);
+  return (
+    <Pressable
+      disabled={disabled}
+      onPress={handlePress}
+      style={[styles.serverRow, selected && styles.serverRowSelected, disabled && !selected && styles.serverRowDisabled]}
+      accessibilityRole="button"
+      accessibilityState={{ selected, disabled }}
+      accessibilityLabel={`Подключаться к серверу ${serverLocationLabel(location)}, задержка ${latencyText}`}
+    >
+      <View style={styles.serverRowMain}>
+        <View style={styles.serverRowFlagBox}>
+          <Text style={styles.serverRowFlag}>{location.flagEmoji || location.countryCode}</Text>
+        </View>
+        <View style={styles.serverRowCopy}>
+          <Text numberOfLines={1} style={[styles.serverRowName, selected && styles.serverRowNameSelected]}>{location.city}</Text>
+          <View style={styles.serverRowStatusLine}>
+            <View style={[styles.serverHealthDot, location.healthyNodes > 0 && styles.serverHealthDotActive]} />
+            <Text numberOfLines={1} style={styles.serverRowStatus}>{locationStatusText(location)}</Text>
+          </View>
+        </View>
+      </View>
+      <View style={styles.serverRowSide}>
+        <Text style={[styles.serverRowLatency, selected && styles.serverRowLatencySelected]}>
+          {latencyText}
+        </Text>
+        {selected ? <CheckCircle2 color="#22D3EE" size={20} strokeWidth={2.7} /> : null}
+      </View>
+    </Pressable>
+  );
+});

@@ -7,6 +7,7 @@ import { ActivityIndicator, Animated, Platform, Pressable, View, Text } from 're
 import { hasPaidEntitlement } from '@/api/vexApi';
 import { HomeNativeHeader } from '@/components/home-native-header';
 import { UpdateCenterButton } from '@/components/update-center';
+import { useRenderProfilerMark } from '@/debug/render-profiler';
 import { playSelectionHaptic } from '@/native/haptics';
 import { VexScreen, vexSharedStyles } from '@/ui/vex-ui';
 
@@ -15,11 +16,13 @@ import { ServerChip } from '../components/server-chip';
 import { TrafficStats } from '../components/traffic-stats';
 import { ServerPickerModal } from '../components/server-picker-modal';
 import { SubscriptionModal } from '../components/subscription-modal';
+import { isTauriRuntime, type ConnectionPhase } from './home-screen-helpers';
 import { styles } from './home-screen.styles';
 
 const vexLogo = require('../../assets/vex-logo-header.png');
 
 export default function App() {
+  useRenderProfilerMark('HomeScreen');
   const {
     session,
     vpnStatus,
@@ -55,6 +58,7 @@ export default function App() {
     handleOpenVpnSettingsPress,
     availableLocations,
   } = useVpnConnection();
+  const reduceDesktopMotion = isTauriRuntime();
 
   const powerButtonText = connectionPhase === 'switching'
     ? 'Переключение'
@@ -87,24 +91,6 @@ export default function App() {
       : connectionPhase === 'disconnecting'
         ? 'Завершаем'
         : 'VPN выключен';
-
-  const animatedScale = pulseProgress.interpolate({
-    inputRange: [0, 1],
-    outputRange: [1, connectionPhase === 'connected' ? 1.045 : 1.02],
-  });
-  const glowScale = pulseProgress.interpolate({
-    inputRange: [0, 1],
-    outputRange: [1, connectionPhase === 'idle' ? 1 : 1.12],
-  });
-  const glowOpacity = pulseProgress.interpolate({
-    inputRange: [0, 1],
-    outputRange: [connectionPhase === 'idle' ? 0.55 : 0.72, connectionPhase === 'connected' ? 0.92 : 0.78],
-  });
-  const orbitOpacity = connectionPhase === 'idle' ? 0 : 1;
-  const orbitRotation = spinProgress.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['0deg', '360deg'],
-  });
 
   return (
     <VexScreen contentStyle={styles.shell}>
@@ -141,60 +127,25 @@ export default function App() {
         </View>
       ) : (
         <View style={styles.mainContent}>
-          <Pressable onPress={openSubscriptionModal} style={styles.accountCard}>
-            <View style={styles.accountHeader}>
-              <View style={styles.userBadge}>
-                <User color="#22D3EE" size={25} strokeWidth={2.5} />
-              </View>
-              <View style={styles.accountCopy}>
-                <Text numberOfLines={1} style={styles.accountEmail}>{session.user.email}</Text>
-                <View style={styles.accountStatusRow}>
-                  <View style={[styles.accountStatusDot, hasPaidEntitlement(activeProfile?.entitlement ?? null) && styles.accountStatusDotActive]} />
-                  <Text numberOfLines={1} style={styles.accountMeta}>{accountSummaryText}</Text>
-                </View>
-              </View>
-              <View style={styles.accountActionWrap}>
-                <Text style={styles.accountAction}>Управлять</Text>
-                <ChevronRight color="#22D3EE" size={18} strokeWidth={2.6} />
-              </View>
-            </View>
-          </Pressable>
+          <AccountCard
+            accountSummaryText={accountSummaryText}
+            email={session.user.email}
+            hasEntitlement={hasPaidEntitlement(activeProfile?.entitlement ?? null)}
+            onPress={openSubscriptionModal}
+          />
 
-          <View style={styles.hero}>
-            <View pointerEvents="none" style={styles.heroBackdrop}>
-              <View style={[styles.heroNode, styles.heroNodeTopLeft]} />
-              <View style={[styles.heroNode, styles.heroNodeTopRight]} />
-              <View style={[styles.heroLink, styles.heroLinkOne]} />
-            </View>
-            <Animated.View
-              pointerEvents="none"
-              style={[styles.heroGlow, { opacity: glowOpacity, transform: [{ scale: glowScale }] }]}
-            />
-            <View
-              pointerEvents="none"
-              style={styles.heroRing}
-            />
-            <Animated.View
-              pointerEvents="none"
-              style={[styles.heroRingOuter, { opacity: glowOpacity, transform: [{ scale: glowScale }] }]}
-            />
-            <Animated.View style={[styles.powerButtonFrame, isConnected && styles.powerButtonFrameActive, isVpnBusy && styles.powerButtonBusy, { transform: [{ scale: animatedScale }] }]}>
-              <Pressable
-                disabled={powerButtonDisabled}
-                onPress={handlePowerPress}
-                style={styles.powerButton}
-                accessibilityRole="button"
-                accessibilityLabel={connectionPhase === 'connecting' ? 'Отменить подключение VPN' : isConnected ? 'Отключить VPN' : 'Подключить VPN'}
-              >
-                <Animated.View
-                  pointerEvents="none"
-                  style={[styles.powerOrbit, { opacity: orbitOpacity, transform: [{ rotate: orbitRotation }] }]}
-                />
-                <Text numberOfLines={1} adjustsFontSizeToFit style={styles.powerText}>{powerButtonText}</Text>
-                <Text style={styles.powerSubtext}>{powerSubtext}</Text>
-              </Pressable>
-            </Animated.View>
-          </View>
+          <PowerHero
+            connectionPhase={connectionPhase}
+            isConnected={isConnected}
+            isVpnBusy={isVpnBusy}
+            onPowerPress={handlePowerPress}
+            pulseProgress={pulseProgress}
+            spinProgress={spinProgress}
+            powerButtonDisabled={powerButtonDisabled}
+            powerButtonText={powerButtonText}
+            powerSubtext={powerSubtext}
+            reduceDesktopMotion={reduceDesktopMotion}
+          />
 
           <ServerChip
             disabled={isVpnBusy}
@@ -243,3 +194,134 @@ export default function App() {
     </VexScreen>
   );
 }
+
+type AccountCardProps = {
+  accountSummaryText: string;
+  email: string;
+  hasEntitlement: boolean;
+  onPress: () => void;
+};
+
+const AccountCard = React.memo(function AccountCard({
+  accountSummaryText,
+  email,
+  hasEntitlement,
+  onPress,
+}: AccountCardProps) {
+  useRenderProfilerMark('AccountCard');
+  return (
+    <Pressable onPress={onPress} style={styles.accountCard}>
+      <View style={styles.accountHeader}>
+        <View style={styles.userBadge}>
+          <User color="#22D3EE" size={25} strokeWidth={2.5} />
+        </View>
+        <View style={styles.accountCopy}>
+          <Text numberOfLines={1} style={styles.accountEmail}>{email}</Text>
+          <View style={styles.accountStatusRow}>
+            <View style={[styles.accountStatusDot, hasEntitlement && styles.accountStatusDotActive]} />
+            <Text numberOfLines={1} style={styles.accountMeta}>{accountSummaryText}</Text>
+          </View>
+        </View>
+        <View style={styles.accountActionWrap}>
+          <Text style={styles.accountAction}>Управлять</Text>
+          <ChevronRight color="#22D3EE" size={18} strokeWidth={2.6} />
+        </View>
+      </View>
+    </Pressable>
+  );
+});
+
+type PowerHeroProps = {
+  connectionPhase: ConnectionPhase;
+  isConnected: boolean;
+  isVpnBusy: boolean;
+  onPowerPress: () => void;
+  pulseProgress: Animated.Value;
+  spinProgress: Animated.Value;
+  powerButtonDisabled: boolean;
+  powerButtonText: string;
+  powerSubtext: string;
+  reduceDesktopMotion: boolean;
+};
+
+const PowerHero = React.memo(function PowerHero({
+  connectionPhase,
+  isConnected,
+  isVpnBusy,
+  onPowerPress,
+  pulseProgress,
+  spinProgress,
+  powerButtonDisabled,
+  powerButtonText,
+  powerSubtext,
+  reduceDesktopMotion,
+}: PowerHeroProps) {
+  useRenderProfilerMark('PowerHero');
+  const animatedScale = pulseProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, connectionPhase === 'connected' ? 1.045 : 1.02],
+  });
+  const glowScale = pulseProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, connectionPhase === 'idle' ? 1 : 1.12],
+  });
+  const glowOpacity = pulseProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [connectionPhase === 'idle' ? 0.55 : 0.72, connectionPhase === 'connected' ? 0.92 : 0.78],
+  });
+  const orbitOpacity = connectionPhase === 'idle' ? 0 : 1;
+  const orbitRotation = spinProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '360deg'],
+  });
+  const glowStyle = reduceDesktopMotion
+    ? styles.heroGlowDesktopStatic
+    : { opacity: glowOpacity, transform: [{ scale: glowScale }] };
+  const outerRingStyle = reduceDesktopMotion
+    ? styles.heroRingOuterDesktopStatic
+    : { opacity: glowOpacity, transform: [{ scale: glowScale }] };
+  const powerFrameStyle = reduceDesktopMotion
+    ? undefined
+    : { transform: [{ scale: animatedScale }] };
+  const showOrbit = connectionPhase !== 'idle';
+
+  return (
+    <View style={styles.hero}>
+      <View pointerEvents="none" style={styles.heroBackdrop}>
+        <View style={[styles.heroNode, styles.heroNodeTopLeft]} />
+        <View style={[styles.heroNode, styles.heroNodeTopRight]} />
+        <View style={[styles.heroLink, styles.heroLinkOne]} />
+      </View>
+      <Animated.View
+        pointerEvents="none"
+        style={[styles.heroGlow, glowStyle]}
+      />
+      <View
+        pointerEvents="none"
+        style={styles.heroRing}
+      />
+      <Animated.View
+        pointerEvents="none"
+        style={[styles.heroRingOuter, outerRingStyle]}
+      />
+      <Animated.View style={[styles.powerButtonFrame, reduceDesktopMotion && styles.powerButtonFrameDesktop, isConnected && styles.powerButtonFrameActive, isVpnBusy && styles.powerButtonBusy, powerFrameStyle]}>
+        <Pressable
+          disabled={powerButtonDisabled}
+          onPress={onPowerPress}
+          style={styles.powerButton}
+          accessibilityRole="button"
+          accessibilityLabel={connectionPhase === 'connecting' ? 'Отменить подключение VPN' : isConnected ? 'Отключить VPN' : 'Подключить VPN'}
+        >
+          {showOrbit ? (
+            <Animated.View
+              pointerEvents="none"
+              style={[styles.powerOrbit, { opacity: orbitOpacity, transform: [{ rotate: orbitRotation }] }]}
+            />
+          ) : null}
+          <Text numberOfLines={1} adjustsFontSizeToFit style={styles.powerText}>{powerButtonText}</Text>
+          <Text style={styles.powerSubtext}>{powerSubtext}</Text>
+        </Pressable>
+      </Animated.View>
+    </View>
+  );
+});

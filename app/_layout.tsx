@@ -6,6 +6,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { SessionProvider, useSession } from '@/auth/session-context';
 import { SplashScreenController } from '@/auth/splash-screen-controller';
 import { DesktopUpdateProvider } from '@/components/desktop-update-overlay';
+import { RenderProfilerOverlay } from '@/debug/render-profiler';
 import { captureError, initSentry } from '@/observability/sentry';
 
 initSentry();
@@ -95,6 +96,7 @@ function RootNavigator() {
         </Stack.Protected>
       </Stack>
       <DeferredStartupOverlays />
+      <RenderProfilerOverlay />
     </View>
   );
 }

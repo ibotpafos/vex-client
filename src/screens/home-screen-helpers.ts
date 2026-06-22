@@ -7,6 +7,7 @@ import type { ServerSelectionMode } from '@/vpn/serverSelection';
 export const animationKickDelayMs = 80;
 export const activeDeviceRefreshMs = 15_000;
 export const nativeStatusPollMs = 2_500;
+export const tauriNativeStatusPollMs = 5_000;
 export const nativeHealthPollMs = 30_000;
 export const nativeHealthFailureThreshold = 2;
 export const nativeReconnectCooldownMs = 120_000;

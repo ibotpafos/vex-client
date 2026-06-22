@@ -231,6 +231,11 @@ export const styles = StyleSheet.create({
     shadowRadius: 28,
     width: 222,
   },
+  heroGlowDesktopStatic: {
+    opacity: 0.46,
+    shadowOpacity: 0.26,
+    shadowRadius: 12,
+  },
   heroRing: {
     borderColor: 'rgba(34,211,238,0.34)',
     borderRadius: 122,
@@ -247,6 +252,9 @@ export const styles = StyleSheet.create({
     position: 'absolute',
     width: 242,
   },
+  heroRingOuterDesktopStatic: {
+    opacity: 0.5,
+  },
   powerButtonFrame: {
     alignItems: 'center',
     backgroundColor: 'rgba(3,17,20,0.94)',
@@ -259,6 +267,10 @@ export const styles = StyleSheet.create({
     shadowOpacity: 0.94,
     shadowRadius: 24,
     width: 204,
+  },
+  powerButtonFrameDesktop: {
+    shadowOpacity: 0.34,
+    shadowRadius: 12,
   },
   powerButtonFrameActive: {
     backgroundColor: 'rgba(4,24,27,0.96)',

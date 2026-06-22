@@ -2,7 +2,7 @@
 
 Report security issues privately. Do not open public GitHub issues for vulnerabilities, leaked credentials, signing keys, updater bypasses, or production endpoint abuse.
 
-This repository must not contain:
+This public client repository must not contain:
 
 - VEX admin tokens or production API credentials
 - Tauri updater private keys

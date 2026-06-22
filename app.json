@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "VEX",
-    "slug": "vex-windows-client",
+    "slug": "vex",
     "scheme": "vexguard",
     "version": "1.0.43",
     "orientation": "portrait",
@@ -13,6 +13,57 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
+    "ios": {
+      "associatedDomains": [
+        "applinks:vexguard.app"
+      ],
+      "supportsTablet": true,
+      "bundleIdentifier": "com.vexguard.app"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#040D11",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "softwareKeyboardLayoutMode": "resize",
+      "versionCode": 1004344,
+      "package": "com.vexguard.app",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": false,
+          "data": [
+            {
+              "scheme": "vexguard",
+              "host": "auth",
+              "pathPrefix": "/callback"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        },
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "vexguard.app",
+              "pathPrefix": "/"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        }
+      ]
+    },
     "plugins": [
       "expo-secure-store",
       [
@@ -22,14 +73,41 @@
         }
       ],
       [
+        "expo-notifications",
+        {
+          "defaultChannel": "vex_updates"
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "backgroundColor": "#020A0B",
           "image": "./assets/splash-icon.png",
           "imageWidth": 160,
-          "resizeMode": "contain"
+          "resizeMode": "contain",
+          "android": {
+            "backgroundColor": "#020A0B",
+            "image": "./assets/splash-icon.png",
+            "imageWidth": 160,
+            "resizeMode": "contain"
+          },
+          "ios": {
+            "backgroundColor": "#020A0B",
+            "image": "./assets/splash-icon.png",
+            "imageWidth": 160,
+            "resizeMode": "contain"
+          }
         }
       ],
+      [
+        "./modules/vex-vpn/plugin/withVexNativeConfig",
+        {
+          "appLinkHost": "vexguard.app",
+          "authScheme": "vexguard",
+          "notificationChannelId": "vex_updates"
+        }
+      ],
+      "./modules/vex-vpn/plugin/withVexVpnIos",
       "expo-router"
     ],
     "extra": {

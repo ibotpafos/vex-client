@@ -1,5 +1,5 @@
 {
-  "name": "vex-windows-client",
+  "name": "vex-client",
   "version": "0.1.28",
   "private": true,
   "main": "expo-router/entry",
@@ -44,8 +44,11 @@
     "typescript": "~6.0.3"
   },
   "scripts": {
-    "start": "expo start --web",
+    "start": "expo start",
+    "start:web": "expo start --web",
     "web": "expo start --web",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
     "build:web": "expo export -p web",
     "tauri:cli": "tauri",
     "windows:release": "powershell -ExecutionPolicy Bypass -File scripts/build_windows_release.ps1",

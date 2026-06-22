@@ -40,7 +40,18 @@ function Get-LatestFile {
 function Write-Sha256Sidecar {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
+    $stream = [System.IO.File]::OpenRead((Resolve-Path -LiteralPath $Path))
+    try {
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $hashBytes = $sha256.ComputeHash($stream)
+        } finally {
+            $sha256.Dispose()
+        }
+    } finally {
+        $stream.Dispose()
+    }
+    $hash = -join ($hashBytes | ForEach-Object { $_.ToString("x2") })
     $name = Split-Path -Leaf $Path
     Set-Content -LiteralPath "$Path.sha256" -Value "$hash  $name" -NoNewline
     return $hash

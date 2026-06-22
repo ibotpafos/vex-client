@@ -20,11 +20,6 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 name = "app"
 path = "src/main.rs"
 
-[[bin]]
-name = "vex-helper"
-path = "src/bin/helper.rs"
-required-features = ["macos-helper"]
-
 [features]
 default = []
 macos-helper = []

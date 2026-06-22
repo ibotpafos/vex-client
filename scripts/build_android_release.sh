@@ -73,6 +73,7 @@ export VEX_OTA_PROVIDER="${VEX_OTA_PROVIDER:-expo-open-ota}"
 export VEX_RUNTIME_VERSION="${VEX_RUNTIME_VERSION:-$(node -p "require('./app.json').expo.version")}"
 export VEX_EAS_PROJECT_ID="${VEX_EAS_PROJECT_ID:-$(node -p "require('./app.json').expo.extra.eas.projectId")}"
 export ORG_GRADLE_PROJECT_reactNativeArchitectures="${ORG_GRADLE_PROJECT_reactNativeArchitectures:-${release_abis}}"
+export VEX_ANDROID_FAST_ABI="${VEX_ANDROID_FAST_ABI:-${release_abis}}"
 
 case "$variant" in
   release)
@@ -98,6 +99,7 @@ echo "abis: ${ORG_GRADLE_PROJECT_reactNativeArchitectures}"
 cd "${root_dir}/android"
 ./gradlew "${gradle_task}" \
   -PreactNativeArchitectures="${ORG_GRADLE_PROJECT_reactNativeArchitectures}" \
+  -PVEX_ANDROID_FAST_ABI="${VEX_ANDROID_FAST_ABI}" \
   "$@"
 
 cd "${root_dir}"

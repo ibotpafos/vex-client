@@ -1,0 +1,93 @@
+{
+  "desktop": {
+    "version": "0.1.28",
+    "release_notes": "Desktop: включен Bugsink в macOS сборку и обновлена стабильность VPN-клиента.",
+    "config_schema_version": 1,
+    "min_config_schema_version": 1
+  },
+  "android": {
+    "version": "1.0.43",
+    "build": 44,
+    "min_supported_build": 1002930,
+    "is_required": true,
+    "release_notes": "Android: стабильная сборка VEX для production.",
+    "core_version": "0.1.0",
+    "config_schema_version": 1,
+    "min_config_schema_version": 1
+  },
+  "ios": {
+    "version": "0.1.0",
+    "build": 1,
+    "release_notes": "Клиент VEX для iOS.",
+    "core_version": "0.1.0",
+    "config_schema_version": 1,
+    "min_config_schema_version": 1
+  },
+  "app": {
+    "remote_config_version": "2026.06.15.1",
+    "routing_policy_version": "2026.06.15.1",
+    "routing_policies": [
+      {
+        "version": "2026.06.15.1",
+        "state": "active",
+        "notes": "stable device identity across server changes"
+      }
+    ],
+    "feature_flags": {
+      "smartConnectV2": true,
+      "newDiagnostics": false
+    },
+    "compatibility_matrix": [
+      {
+        "id": "android-stable-v1",
+        "platform": "android",
+        "channel": "stable",
+        "configSchemaVersion": 1,
+        "supportedApiClientVersions": [
+          "expo-1"
+        ],
+        "routingPolicyVersionPrefix": "2026.06."
+      },
+      {
+        "id": "macos-stable-v1",
+        "platform": "macos",
+        "channel": "stable",
+        "configSchemaVersion": 1,
+        "supportedApiClientVersions": [
+          "expo-1"
+        ],
+        "routingPolicyVersionPrefix": "2026.06."
+      },
+      {
+        "id": "windows-stable-v1",
+        "platform": "windows",
+        "channel": "stable",
+        "configSchemaVersion": 1,
+        "supportedApiClientVersions": [
+          "expo-1"
+        ],
+        "routingPolicyVersionPrefix": "2026.06."
+      },
+      {
+        "id": "linux-stable-v1",
+        "platform": "linux",
+        "channel": "stable",
+        "configSchemaVersion": 1,
+        "supportedApiClientVersions": [
+          "expo-1"
+        ],
+        "routingPolicyVersionPrefix": "2026.06."
+      },
+      {
+        "id": "ios-stable-v1",
+        "platform": "ios",
+        "channel": "stable",
+        "configSchemaVersion": 1,
+        "supportedApiClientVersions": [
+          "ios-native-1"
+        ],
+        "routingPolicyVersionPrefix": "2026.06."
+      }
+    ]
+  }
+}

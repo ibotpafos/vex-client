@@ -1,0 +1,46 @@
+{
+  "expo": {
+    "name": "VEX",
+    "slug": "vex-windows-client",
+    "scheme": "vexguard",
+    "version": "1.0.43",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-secure-store",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Разрешите VEX использовать биометрию для входа в приложение."
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#020A0B",
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 160,
+          "resizeMode": "contain"
+        }
+      ],
+      "expo-router"
+    ],
+    "extra": {
+      "vex": {
+        "apiBaseUrl": "https://vexguard.app",
+        "appVariant": "production",
+        "billingFailedUrl": "https://vexguard.app/v1/billing/mobile-return?status=failed",
+        "billingReturnUrl": "https://vexguard.app/v1/billing/mobile-return?status=success",
+        "updateChannel": "production"
+      },
+      "router": {}
+    }
+  }
+}

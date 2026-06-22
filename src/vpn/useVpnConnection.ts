@@ -6,18 +6,12 @@ import {
   entitlement,
   hasPaidEntitlement,
   registerDevicePushToken,
-  reportVpnConnect,
-  reportVpnDisconnect,
   vexApiBaseUrl,
   vpnDeviceUsage,
   vpnDevices,
   vpnLocations,
-  type Entitlement,
-  type VpnDeviceUsage,
-  type VpnLocation,
 } from '@/api/vexApi';
 import { useSession } from '@/auth/session-context';
-import { uploadClientDiagnostics } from '@/diagnostics/clientDiagnostics';
 import {
   playErrorHaptic,
   playMediumImpactHaptic,
@@ -27,7 +21,6 @@ import {
 } from '@/native/haptics';
 import { listenTauriEvent } from '@/native/tauriEvents';
 import {
-  connectVpn,
   disconnectVpn,
   getVpnStatus,
   measureEndpointLatency,
@@ -45,25 +38,22 @@ import {
   setServerSelectionMode,
 } from '@/settings/vpnPreferences';
 import {
-  connectionAttemptsForProfile,
   isVpnTransportFallbackError,
   profileEndpoint,
 } from '@/vpn/connectionFallback';
-import { connectableLocalProfile, vpnConnectTimingSamples } from '@/vpn/connectFlow';
-import { saveHotVpnProfile, withLastSuccessfulEndpoint } from '@/vpn/hotProfileCache';
 import type { VpnProfile } from '@/vpn/profile';
 import { probeNetworkHealth } from '@/vpn/networkHealthProbe';
 import {
   autoSwitchTargetLocationId,
-  chooseBestVpnLocation,
   type ServerSelectionMode,
 } from '@/vpn/serverSelection';
 import { switchVpnLocation } from '@/vpn/serverSwitch';
 import { useNativeVpnWatchdog } from '@/vpn/useNativeVpnWatchdog';
 import { useVpnProfileState, type VpnProfileRefreshEvent } from '@/vpn/useVpnProfileState';
+import { useVpnDiagnostics } from './useVpnDiagnostics';
+import { useVpnConnectionFlow } from './useVpnConnectionFlow';
 
 import {
-  animationKickDelayMs,
   activeDeviceRefreshMs,
   nativeStatusPollMs,
   tauriNativeStatusPollMs,
@@ -72,14 +62,11 @@ import {
   nativeReconnectCooldownMs,
   staleHandshakeReconnectSeconds,
   clientDiagnosticsHeartbeatMs,
-  clientDiagnosticsErrorCooldownMs,
   prewarmedProfileStaleMs,
-  connectAttemptTimeoutMs,
   vpnStatusChangedEvent,
   vpnProfileChangedEvent,
-  DiagnosticsSnapshotRef,
-  ConnectedVpnAttempt,
-  ConnectionPhase,
+  type DiagnosticsSnapshotRef,
+  type ConnectionPhase,
   isTauriRuntime,
   supportsNativeLatencyProbe,
   supportsNativeVpnWatchdog,
@@ -94,7 +81,6 @@ import {
   locationLatencyText,
   subscriptionTierLabel,
   subscriptionSummaryText,
-  withTimeout,
 } from '../screens/home-screen-helpers';
 
 export function useVpnConnection() {
@@ -141,8 +127,6 @@ export function useVpnConnection() {
   const vpnOperationInFlightRef = useRef(false);
   const vpnConnectGenerationRef = useRef(0);
   const lastRegisteredPushDeviceRef = useRef('');
-  const lastEntitlementDiagnosticsRef = useRef('');
-  const lastClientDiagnosticsAtRef = useRef<Record<string, number>>({});
 
   const entitlementQuery = useQuery({
     queryKey: ['entitlement', session?.accessToken],
@@ -179,34 +163,7 @@ export function useVpnConnection() {
     setIsSubscriptionModalVisible(true);
   }, []);
 
-  const submitProfileDiagnosticsEvent = useCallback(async ({ error, locationId, reason }: { error: unknown; locationId: string; reason: string }) => {
-    if (!session?.accessToken) {
-      return;
-    }
-    const message = errorMessage(error, reason);
-    const diagnosticKey = `${reason}:error:${locationId}:${message}`;
-    const now = Date.now();
-    if (now - (lastClientDiagnosticsAtRef.current[diagnosticKey] ?? 0) < clientDiagnosticsErrorCooldownMs) {
-      return;
-    }
-    lastClientDiagnosticsAtRef.current[diagnosticKey] = now;
-
-    await uploadClientDiagnostics(session.accessToken, {
-      reason,
-      status: 'error',
-      vpnStatus,
-      latencyMs: clientLatencyMs,
-      samples: {
-        connection_phase: connectionPhase,
-        error_message: message,
-        location_id: locationId,
-      },
-    });
-  }, [clientLatencyMs, connectionPhase, session?.accessToken, vpnStatus]);
-
-  const handleProfileRefreshFailed = useCallback((event: { error: unknown; locationId: string; reason: string }) => {
-    void submitProfileDiagnosticsEvent(event).catch(() => undefined);
-  }, [submitProfileDiagnosticsEvent]);
+  const handleProfileRefreshFailedRef = useRef<(event: { error: unknown; locationId: string; reason: string }) => void>(() => {});
 
   const {
     activeProfile,
@@ -226,7 +183,7 @@ export function useVpnConnection() {
     hasVpnAccess,
     knownEntitlement,
     onDeviceRevoked: handleProfileRevoked,
-    onProfileRefreshFailed: handleProfileRefreshFailed,
+    onProfileRefreshFailed: useCallback((event) => handleProfileRefreshFailedRef.current(event), []),
     onProfileRotationRequired: playWarningHaptic,
     onSubscriptionRequired: handleSubscriptionRequired,
     prewarmStaleMs: prewarmedProfileStaleMs,
@@ -247,11 +204,56 @@ export function useVpnConnection() {
     ? devicesQuery.data?.find((device) => device.id === activeProfile.device?.id) ?? activeProfile.device
     : undefined;
 
+  const handleSignOut = useCallback(async () => {
+    await disconnectVpn({ releaseAntiLeak: true }).catch(() => undefined);
+    await signOut();
+    clearProfile();
+    setVpnStatus({ state: 'disconnected', rxBytes: 0, txBytes: 0 });
+    setVpnError(null);
+  }, [signOut, clearProfile]);
+
   const diagnosticsSnapshotRef = useRef<DiagnosticsSnapshotRef>({
     vpnStatus,
     latencyMs: clientLatencyMs,
     endpoint: activeDevice?.endpoint,
     profileVersion: activeProfile?.profileVersion,
+  });
+
+  const diagnostics = useVpnDiagnostics({
+    session,
+    activeProfileDeviceId,
+    connectionPhase,
+    clientLatencyMs,
+    vpnStatus,
+    diagnosticsSnapshotRef,
+    entitlementQueryError: entitlementQuery.error,
+    cachedEntitlement,
+    refreshSession,
+    handleSignOut,
+  });
+
+  handleProfileRefreshFailedRef.current = diagnostics.handleProfileRefreshFailed;
+
+  const {
+    connectProfileWithEndpointFallback,
+    connectCurrentVpn,
+  } = useVpnConnectionFlow({
+    antiLeakEnabled,
+    selectedLocationId,
+    serverSelectionMode,
+    availableLocations,
+    activeProfile,
+    entitlementState,
+    requestVpnPermission,
+    cacheProfile,
+    resolveConnectableVpnProfile,
+    vpnStatus,
+    clientLatencyMs,
+    reportVpnConnectEvent: diagnostics.reportVpnConnectEvent,
+    setSelectedLocationId,
+    setActiveProfile,
+    setVpnStatus,
+    session,
   });
 
   const accountTierLabel = subscriptionTierLabel(entitlementState);
@@ -261,14 +263,6 @@ export function useVpnConnection() {
 
   const canCancelConnecting = connectionPhase === 'connecting';
   const powerButtonDisabled = isVpnBusy && !canCancelConnecting;
-
-  const handleSignOut = useCallback(async () => {
-    await disconnectVpn({ releaseAntiLeak: true }).catch(() => undefined);
-    await signOut();
-    clearProfile();
-    setVpnStatus({ state: 'disconnected', rxBytes: 0, txBytes: 0 });
-    setVpnError(null);
-  }, [signOut, clearProfile]);
 
   useEffect(() => {
     void Promise.all([getSelectedVpnLocation(), getServerSelectionMode(), getAntiLeakEnabled()])
@@ -311,129 +305,7 @@ export function useVpnConnection() {
     vpnStatus,
   ]);
 
-  const submitVpnDiagnostics = useCallback(async (reason: string, status: string, samples: Record<string, unknown> = {}) => {
-    if (!session?.accessToken || !activeProfileDeviceId) {
-      return;
-    }
-    const latest = diagnosticsSnapshotRef.current;
-    const usageRows = await vpnDeviceUsage(session.accessToken).catch((): VpnDeviceUsage[] => []);
-    const usage = usageRows.find((item) => item.deviceId === activeProfileDeviceId);
-    await uploadClientDiagnostics(session.accessToken, {
-      reason,
-      status,
-      deviceId: activeProfileDeviceId,
-      endpoint: latest.endpoint,
-      vpnStatus: latest.vpnStatus,
-      latencyMs: latest.latencyMs,
-      routingMode: latest.routingMode,
-      bypassRegion: latest.bypassRegion,
-      bypassRangesCount: latest.bypassRangesCount,
-      routingPolicyVersion: latest.routingPolicyVersion,
-      selectedLocationId: latest.selectedLocationId,
-      usage,
-      samples: {
-        profile_version: latest.profileVersion,
-        connection_phase: connectionPhase,
-        ...samples,
-      },
-    });
-  }, [activeProfileDeviceId, connectionPhase, session?.accessToken]);
 
-  const submitClientDiagnosticsEvent = useCallback(async (reason: string, status: string, samples: Record<string, unknown> = {}) => {
-    if (!session?.accessToken) {
-      return;
-    }
-    const diagnosticKey = `${reason}:${status}:${String(samples.error_message ?? samples.error ?? '')}`;
-    const now = Date.now();
-    if (now - (lastClientDiagnosticsAtRef.current[diagnosticKey] ?? 0) < clientDiagnosticsErrorCooldownMs) {
-      return;
-    }
-    lastClientDiagnosticsAtRef.current[diagnosticKey] = now;
-
-    const latest = diagnosticsSnapshotRef.current;
-    await uploadClientDiagnostics(session.accessToken, {
-      reason,
-      status,
-      deviceId: activeProfileDeviceId,
-      endpoint: latest.endpoint,
-      vpnStatus: latest.vpnStatus,
-      latencyMs: latest.latencyMs,
-      routingMode: latest.routingMode,
-      bypassRegion: latest.bypassRegion,
-      bypassRangesCount: latest.bypassRangesCount,
-      routingPolicyVersion: latest.routingPolicyVersion,
-      selectedLocationId: latest.selectedLocationId,
-      samples: {
-        profile_version: latest.profileVersion,
-        connection_phase: connectionPhase,
-        ...samples,
-      },
-    });
-  }, [activeProfileDeviceId, connectionPhase, session?.accessToken]);
-
-  const reportVpnConnectEvent = useCallback((profile: VpnProfile, reason: string) => {
-    if (!session?.accessToken) {
-      return;
-    }
-    void reportVpnConnect(session.accessToken, profile).catch((error) => {
-      void submitClientDiagnosticsEvent('vpn_connect_report_failed', 'error', {
-        error_message: errorMessage(error, 'vpn_connect_report_failed'),
-        report_reason: reason,
-        report_device_id: profile.device?.id,
-        report_location_id: profile.locationId,
-        report_profile_source: profile.source,
-      }).catch(() => undefined);
-    });
-  }, [session?.accessToken, submitClientDiagnosticsEvent]);
-
-  const reportVpnDisconnectEvent = useCallback((profile: VpnProfile, reason: string) => {
-    if (!session?.accessToken) {
-      return;
-    }
-    void reportVpnDisconnect(session.accessToken, profile, reason).catch((error) => {
-      void submitClientDiagnosticsEvent('vpn_disconnect_report_failed', 'error', {
-        error_message: errorMessage(error, 'vpn_disconnect_report_failed'),
-        report_reason: reason,
-        report_device_id: profile.device?.id,
-        report_location_id: profile.locationId,
-        report_profile_source: profile.source,
-      }).catch(() => undefined);
-    });
-  }, [session?.accessToken, submitClientDiagnosticsEvent]);
-
-  useEffect(() => {
-    if (!entitlementQuery.error) {
-      return;
-    }
-    const message = errorMessage(entitlementQuery.error, '');
-    if (session?.accessToken && lastEntitlementDiagnosticsRef.current !== message) {
-      lastEntitlementDiagnosticsRef.current = message;
-      void uploadClientDiagnostics(session.accessToken, {
-        reason: 'entitlement_fetch_failed',
-        status: isAuthenticationError(message) ? 'auth_error' : 'error',
-        vpnStatus,
-        latencyMs: clientLatencyMs,
-        samples: {
-          entitlement_error: message,
-          had_cached_entitlement: Boolean(cachedEntitlement),
-          cached_entitlement_active: hasPaidEntitlement(cachedEntitlement),
-        },
-      }).catch(() => undefined);
-    }
-    if (isAuthenticationError(message)) {
-      refreshSession().catch(() => {
-        void handleSignOut();
-      });
-    }
-  }, [
-    cachedEntitlement,
-    clientLatencyMs,
-    entitlementQuery.error,
-    handleSignOut,
-    refreshSession,
-    session?.accessToken,
-    vpnStatus,
-  ]);
 
   useEffect(() => {
     if (Platform.OS === 'web' || !session?.accessToken || !activeProfileDeviceId) {
@@ -471,11 +343,11 @@ export function useVpnConnection() {
         }
       })
       .catch((error) => {
-        void submitClientDiagnosticsEvent('native_status_startup_failed', 'error', {
+        void diagnostics.submitClientDiagnosticsEvent('native_status_startup_failed', 'error', {
           error_message: errorMessage(error, 'native_status_startup_failed'),
         }).catch(() => undefined);
       });
-  }, [submitClientDiagnosticsEvent]);
+  }, [diagnostics]);
 
   useEffect(() => {
     if (!session) {
@@ -484,14 +356,14 @@ export function useVpnConnection() {
     const subscription = AppState.addEventListener('change', (state) => {
       if (state === 'active') {
         refreshManagedProfile({ reason: 'profile_updated' }).catch((error) => {
-          void submitClientDiagnosticsEvent('profile_refresh_on_active_failed', 'error', {
+          void diagnostics.submitClientDiagnosticsEvent('profile_refresh_on_active_failed', 'error', {
             error_message: errorMessage(error, 'profile_refresh_on_active_failed'),
           }).catch(() => undefined);
         });
       }
     });
     return () => subscription.remove();
-  }, [refreshManagedProfile, session, submitClientDiagnosticsEvent]);
+  }, [refreshManagedProfile, session, diagnostics]);
 
   useEffect(() => {
     if (!isTauriRuntime()) {
@@ -523,7 +395,7 @@ export function useVpnConnection() {
     let unlisten: (() => void) | undefined;
     listenTauriEvent<VpnProfileRefreshEvent>(vpnProfileChangedEvent, (event) => {
       refreshManagedProfile(event).catch((error) => {
-        void submitClientDiagnosticsEvent('profile_refresh_event_failed', 'error', {
+        void diagnostics.submitClientDiagnosticsEvent('profile_refresh_event_failed', 'error', {
           error_message: errorMessage(error, 'profile_refresh_event_failed'),
           profile_refresh_reason: event.reason,
           profile_refresh_location_id: selectedLocationId,
@@ -538,7 +410,7 @@ export function useVpnConnection() {
         unlisten = cleanup;
       })
       .catch((error) => {
-        void submitClientDiagnosticsEvent('profile_event_subscribe_failed', 'error', {
+        void diagnostics.submitClientDiagnosticsEvent('profile_event_subscribe_failed', 'error', {
           error_message: errorMessage(error, 'profile_event_subscribe_failed'),
         }).catch(() => undefined);
       });
@@ -547,7 +419,7 @@ export function useVpnConnection() {
       disposed = true;
       unlisten?.();
     };
-  }, [refreshManagedProfile, selectedLocationId, submitClientDiagnosticsEvent]);
+  }, [refreshManagedProfile, selectedLocationId, diagnostics]);
 
   useEffect(() => {
     if (!supportsNativeLatencyProbe() || !activeDevice?.endpoint) {
@@ -590,7 +462,7 @@ export function useVpnConnection() {
       if (disposed) {
         return;
       }
-      await submitVpnDiagnostics('vpn_connected_heartbeat', 'ok').catch(() => undefined);
+      await diagnostics.submitVpnDiagnostics('vpn_connected_heartbeat', 'ok').catch(() => undefined);
     };
 
     void sendHeartbeat();
@@ -602,7 +474,7 @@ export function useVpnConnection() {
       disposed = true;
       clearInterval(timer);
     };
-  }, [activeProfileDeviceId, isConnected, session?.accessToken, submitVpnDiagnostics]);
+  }, [activeProfileDeviceId, isConnected, session?.accessToken, diagnostics]);
 
   useEffect(() => {
     pulseProgress.stopAnimation();
@@ -654,182 +526,14 @@ export function useVpnConnection() {
     return () => loop.stop();
   }, [connectionPhase, spinProgress]);
 
-  const connectProfileWithEndpointFallback = useCallback(async (profile: VpnProfile) => {
-    let lastError: unknown;
-    const endpointAttempts: string[] = [];
-    for (const attempt of connectionAttemptsForProfile(profile)) {
-      try {
-        const endpoint = profileEndpoint(attempt);
-        if (endpoint) {
-          endpointAttempts.push(endpoint);
-        }
-        const nativeStartMs = Date.now();
-        const status = await withTimeout(
-          connectVpn(attempt.config, { antiLeakEnabled }),
-          connectAttemptTimeoutMs,
-          'VPN connect timed out.',
-        );
-        return {
-          interfaceUpMs: Date.now(),
-          endpointAttempts,
-          nativeStartMs,
-          profile: withLastSuccessfulEndpoint(attempt, endpoint),
-          status,
-        };
-      } catch (error) {
-        lastError = error;
-        if (!isVpnTransportFallbackError(error)) {
-          throw error;
-        }
-      }
-    }
-    throw lastError;
-  }, [antiLeakEnabled]);
 
-  const connectCurrentVpn = useCallback(async ({
-    locationId = selectedLocationId,
-    waitForAnimation = false,
-  }: {
-    locationId?: string;
-    waitForAnimation?: boolean;
-  } = {}) => {
-    const tapStartedAt = Date.now();
-    void waitForAnimation;
-
-    const initialLocationId = serverSelectionMode === 'auto'
-      ? chooseBestVpnLocation(availableLocations)?.id ?? locationId
-      : locationId;
-    let profile = connectableLocalProfile(activeProfile, initialLocationId, entitlementState);
-    if (profile) {
-      const permissionGranted = await requestVpnPermission();
-      if (!permissionGranted) {
-        throw new Error('Разрешение Android VPN не выдано.');
-      }
-      cacheProfile(initialLocationId, profile);
-    } else {
-      profile = await resolveConnectableVpnProfile(initialLocationId, { preferCached: true });
-    }
-    let connected: ConnectedVpnAttempt | null = null;
-    let connectedLocationId = initialLocationId;
-    let lastConnectError: unknown;
-
-    try {
-      connected = await connectProfileWithEndpointFallback(profile);
-    } catch (error) {
-      if (profile.hotProfileUsed && session?.accessToken) {
-        void uploadClientDiagnostics(session.accessToken, {
-          reason: 'hot_profile_connect_failed',
-          status: 'failed',
-          deviceId: profile.device?.id,
-          endpoint: profileEndpoint(profile),
-          vpnStatus,
-          samples: {
-            connect_error: errorMessage(error, 'hot_profile_connect_failed'),
-            hot_profile_age_ms: profile.hotProfileAgeMs ?? null,
-          },
-        }).catch(() => undefined);
-      }
-      if (!isVpnTransportFallbackError(error)) {
-        throw error;
-      }
-      lastConnectError = error;
-    }
-
-    for (const fallbackLocation of availableLocations) {
-      if (connected?.status.state === 'connected' || fallbackLocation.id === initialLocationId) {
-        continue;
-      }
-      const fallbackProfile = await resolveConnectableVpnProfile(fallbackLocation.id, {
-        preferCached: true,
-        requestPermission: false,
-      });
-      try {
-        connected = await connectProfileWithEndpointFallback(fallbackProfile);
-        connectedLocationId = fallbackLocation.id;
-      } catch (error) {
-        lastConnectError = error;
-        if (!isVpnTransportFallbackError(error)) {
-          throw error;
-        }
-        const freshFallbackProfile = await resolveConnectableVpnProfile(fallbackLocation.id, {
-          forceRefresh: true,
-          preferCached: false,
-          requestPermission: false,
-        });
-        try {
-          connected = await connectProfileWithEndpointFallback(freshFallbackProfile);
-          connectedLocationId = fallbackLocation.id;
-        } catch (freshError) {
-          lastConnectError = freshError;
-          if (!isVpnTransportFallbackError(freshError)) {
-            throw freshError;
-          }
-        }
-      }
-    }
-
-    if (!connected || connected.status.state !== 'connected') {
-      throw lastConnectError ?? new Error('VPN не подключился.');
-    }
-
-    if (connectedLocationId !== selectedLocationId) {
-      const persistedLocationId = await setSelectedVpnLocation(connectedLocationId);
-      setSelectedLocationId(persistedLocationId);
-      cacheProfile(persistedLocationId, connected.profile);
-    }
-
-    setActiveProfile(connected.profile);
-    if (session?.user.id) {
-      void saveHotVpnProfile(session.user.id, connected.profile.locationId || connectedLocationId, connected.profile, {
-        lastSuccessfulEndpoint: profileEndpoint(connected.profile),
-      }).catch(() => undefined);
-    }
-    const nextStatus = connected.status;
-    setVpnStatus(nextStatus);
-    if (session) {
-      reportVpnConnectEvent(connected.profile, 'user');
-      void uploadClientDiagnostics(session.accessToken, {
-        reason: 'vpn_connect_timing',
-        status: nextStatus.verified === false ? 'verifying' : 'ok',
-        deviceId: connected.profile.device?.id,
-        endpoint: connected.profile.device?.endpoint,
-        vpnStatus: nextStatus,
-        latencyMs: clientLatencyMs,
-        samples: {
-          ...vpnConnectTimingSamples({
-            endpointAttempts: connected.endpointAttempts,
-            interfaceUpMs: connected.interfaceUpMs,
-            nativeStartMs: connected.nativeStartMs,
-            profile: connected.profile,
-            tapStartedAt,
-          }),
-          interface_up_to_handshake_ms: nextStatus.verified ? Math.max(0, connected.interfaceUpMs - connected.nativeStartMs) : null,
-        },
-      }).catch(() => undefined);
-    }
-  }, [
-    availableLocations,
-    activeProfile,
-    cacheProfile,
-    clientLatencyMs,
-    connectProfileWithEndpointFallback,
-    entitlementState,
-    reportVpnConnectEvent,
-    requestVpnPermission,
-    resolveConnectableVpnProfile,
-    selectedLocationId,
-    serverSelectionMode,
-    session,
-    setActiveProfile,
-    vpnStatus,
-  ]);
 
   const reportNativeWatchdogConnect = useCallback((profile: VpnProfile) => {
     if (!session?.accessToken) {
       return;
     }
-    reportVpnConnectEvent(profile, 'native_watchdog');
-  }, [reportVpnConnectEvent, session?.accessToken]);
+    diagnostics.reportVpnConnectEvent(profile, 'native_watchdog');
+  }, [diagnostics, session?.accessToken]);
 
   const probeVpnAutopilotHealth = useCallback((profile: VpnProfile) => {
     return probeNetworkHealth({
@@ -878,7 +582,7 @@ export function useVpnConnection() {
     sessionAccessToken: session?.accessToken,
     setCachedProfile: cacheProfile,
     staleHandshakeSeconds: staleHandshakeReconnectSeconds,
-    submitDiagnostics: submitVpnDiagnostics,
+    submitDiagnostics: diagnostics.submitVpnDiagnostics,
   });
 
   useEffect(() => {
@@ -900,13 +604,13 @@ export function useVpnConnection() {
           });
         })
         .catch((error) => {
-          void submitClientDiagnosticsEvent('native_status_poll_failed', 'error', {
+          void diagnostics.submitClientDiagnosticsEvent('native_status_poll_failed', 'error', {
             error_message: errorMessage(error, 'native_status_poll_failed'),
           }).catch(() => undefined);
         });
     }, pollMs);
     return () => clearInterval(timer);
-  }, [recordNativeStatus, session, submitClientDiagnosticsEvent]);
+  }, [recordNativeStatus, session, diagnostics]);
 
   const handleVpnFailure = useCallback((error: unknown, fallbackState: VpnStatus['state']) => {
     const message = errorMessage(error, 'VPN не подключился');
@@ -944,7 +648,7 @@ export function useVpnConnection() {
         const nextStatus = await disconnectVpn({ releaseAntiLeak: true }).catch(disconnectedVpnStatus);
         setVpnStatus(nextStatus);
         if (session && activeProfile && (latestStatus?.state === 'connected' || latestStatus?.leakProtection === 'blocking')) {
-          reportVpnDisconnectEvent(activeProfile, 'user');
+          diagnostics.reportVpnDisconnectEvent(activeProfile, 'user');
         }
         playSuccessHaptic();
       } catch (error) {
@@ -974,7 +678,7 @@ export function useVpnConnection() {
         const nextStatus = await disconnectVpn({ releaseAntiLeak: true });
         setVpnStatus(nextStatus);
         if (session && activeProfile) {
-          reportVpnDisconnectEvent(activeProfile, 'user');
+          diagnostics.reportVpnDisconnectEvent(activeProfile, 'user');
         }
         playSuccessHaptic();
         return;
@@ -985,7 +689,7 @@ export function useVpnConnection() {
         const nextStatus = await disconnectVpn({ releaseAntiLeak: true }).catch(disconnectedVpnStatus);
         setVpnStatus(nextStatus);
         if (session && activeProfile) {
-          reportVpnDisconnectEvent(activeProfile, 'user');
+          diagnostics.reportVpnDisconnectEvent(activeProfile, 'user');
         }
         return;
       }
@@ -1005,7 +709,7 @@ export function useVpnConnection() {
     isKeyRotationBusy,
     isLeakBlocked,
     isVpnBusy,
-    reportVpnDisconnectEvent,
+    diagnostics,
     session,
   ]);
 
@@ -1120,11 +824,11 @@ export function useVpnConnection() {
         previousProfile,
         previousStatus,
         reportConnect: (profile) => {
-          reportVpnConnectEvent(profile, 'server_switch');
+          diagnostics.reportVpnConnectEvent(profile, 'server_switch');
         },
         reportDisconnect: (profile, reason) => {
           if (profile) {
-            reportVpnDisconnectEvent(profile, reason);
+            diagnostics.reportVpnDisconnectEvent(profile, reason);
           }
         },
         resolveProfile: resolveConnectableVpnProfile,
@@ -1176,13 +880,13 @@ export function useVpnConnection() {
     cacheProfile,
     connectProfileWithEndpointFallback,
     queryClient,
-    reportVpnConnectEvent,
-    reportVpnDisconnectEvent,
+    diagnostics,
     resolveConnectableVpnProfile,
     selectedLocationId,
     session,
     setActiveProfile,
     vpnStatus,
+    isVpnBusy,
   ]);
 
   const handleLocationPress = useCallback(async (locationId: string) => {

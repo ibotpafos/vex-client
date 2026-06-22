@@ -2,7 +2,6 @@ import { Platform } from 'react-native';
 import { hasPaidEntitlement, type Entitlement, type VpnLocation } from '@/api/vexApi';
 import type { VpnStatus } from '@/native/vexVpn';
 import type { VpnProfile } from '@/vpn/profile';
-import type { ServerSelectionMode } from '@/vpn/serverSelection';
 
 export const animationKickDelayMs = 80;
 export const activeDeviceRefreshMs = 15_000;
@@ -200,7 +199,7 @@ export function subscriptionTierLabel(entitlementState: Entitlement | null): str
   );
 }
 
-export function planChipLabel(...values: Array<string | undefined>): string {
+export function planChipLabel(...values: (string | undefined)[]): string {
   for (const value of values) {
     const normalized = normalizePlanLabel(value);
     if (normalized) {

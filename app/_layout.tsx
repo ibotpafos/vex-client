@@ -5,7 +5,9 @@ import { ActivityIndicator, AppState, Image, Platform, Pressable, StyleSheet, Te
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { SessionProvider, useSession } from '@/auth/session-context';
 import { SplashScreenController } from '@/auth/splash-screen-controller';
-import { DesktopUpdateProvider } from '@/components/desktop-update-overlay';
+import { DesktopUpdateProvider, DesktopUpdateOverlay } from '@/components/desktop-update-overlay';
+import { AndroidUpdateOverlay } from '@/components/android-update-overlay';
+import { IOSUpdateOverlay } from '@/components/ios-update-overlay';
 import { RenderProfilerOverlay } from '@/debug/render-profiler';
 import { captureError, initSentry } from '@/observability/sentry';
 
@@ -127,10 +129,6 @@ function DeferredStartupOverlays() {
   if (!canMount) {
     return null;
   }
-
-  const { AndroidUpdateOverlay } = require('@/components/android-update-overlay');
-  const { IOSUpdateOverlay } = require('@/components/ios-update-overlay');
-  const { DesktopUpdateOverlay } = require('@/components/desktop-update-overlay');
 
   return (
     <>

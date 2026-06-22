@@ -91,9 +91,9 @@ function getSnapshot() {
   return cachedSnapshot;
 }
 
-function parseSnapshot(snapshot: string): Array<{ count: number; name: string }> {
+function parseSnapshot(snapshot: string): { count: number; name: string }[] {
   try {
-    const parsed = JSON.parse(snapshot) as { rows?: Array<{ count: number; name: string }> };
+    const parsed = JSON.parse(snapshot) as { rows?: { count: number; name: string }[] };
     return (parsed.rows ?? []).slice(0, 9);
   } catch {
     return [];

@@ -17,6 +17,15 @@ clone_or_reset() {
   local dir="${external_dir}/${name}"
 
   mkdir -p "${external_dir}"
+  if [[ -d "${dir}/.git" ]]; then
+    local current_head
+    current_head="$(git -C "${dir}" rev-parse HEAD 2>/dev/null || true)"
+    if [[ "${current_head}" == "${ref}" ]]; then
+      echo "${name} is already at ref ${ref}, skipping reset/fetch"
+      return 1 # skipped
+    fi
+  fi
+
   if [[ ! -d "${dir}/.git" ]]; then
     git clone --filter=blob:none --no-checkout "${url}" "${dir}"
   fi
@@ -27,6 +36,7 @@ clone_or_reset() {
   if [[ "${clean_checkout}" == "1" ]]; then
     git -C "${dir}" clean -fdx
   fi
+  return 0 # did reset
 }
 
 apply_patch_once() {
@@ -45,9 +55,9 @@ apply_patch_once() {
   exit 1
 }
 
-clone_or_reset "amneziawg-go" "${go_repo_url}" "${go_ref}"
+clone_or_reset "amneziawg-go" "${go_repo_url}" "${go_ref}" || true
 apply_patch_once "${external_dir}/amneziawg-go" "${root_dir}/patches/amnezia/amneziawg-go-fast-rekey.patch"
 
-clone_or_reset "amneziawg-tools" "${tools_repo_url}" "${tools_ref}"
+clone_or_reset "amneziawg-tools" "${tools_repo_url}" "${tools_ref}" || true
 
 echo "AMNEZIAWG_MACOS_DIR=${external_dir}"

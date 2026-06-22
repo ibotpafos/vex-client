@@ -11,7 +11,6 @@ import {
   isUsableHotVpnProfileRecord as isUsableHotVpnProfileRecordForRuntime,
   normalizeHotProfileLocationId,
   profileFromHotRecord,
-  withLastSuccessfulEndpoint,
   type HotVpnProfileRecord,
 } from './hotProfileCacheCore';
 

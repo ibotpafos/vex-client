@@ -316,7 +316,7 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
       }
     }
     return profile;
-  }, [accessToken, cacheProfile, cachedProfileForLocation, entitlementState, onProfileRotationRequired, onSubscriptionRequired, queryClient, refreshProfileInBackground, requestVpnPermission, userId]);
+  }, [accessToken, cacheProfile, cachedProfileForLocation, entitlementState, onProfileRefreshFailed, onProfileRotationRequired, onSubscriptionRequired, queryClient, refreshProfileInBackground, requestVpnPermission, userId]);
 
   const refreshManagedProfile = useCallback(async (event: VpnProfileRefreshEvent = {}) => {
     if (!accessToken) {
@@ -344,7 +344,7 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
     const nextProfile = await resolveVpnProfile(accessToken, entitlementState, selectedLocationId, { userId });
     setVpnProfile(nextProfile);
     cacheProfile(selectedLocationId, nextProfile);
-  }, [accessToken, activeProfile?.device?.id, cacheProfile, entitlementState, onDeviceRevoked, queryClient, selectedLocationId, userId]);
+  }, [accessToken, activeProfile?.device?.id, cacheProfile, entitlementState, onDeviceRevoked, onProfileRefreshFailed, queryClient, selectedLocationId, userId]);
 
   return {
     activeProfile,

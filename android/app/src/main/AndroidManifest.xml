@@ -35,12 +35,6 @@
         <category android:name="android.intent.category.BROWSABLE"/>
         <data android:scheme="vexguard" android:host="auth" android:pathPrefix="/callback"/>
       </intent-filter>
-      <intent-filter android:autoVerify="true">
-        <action android:name="android.intent.action.VIEW"/>
-        <category android:name="android.intent.category.DEFAULT"/>
-        <category android:name="android.intent.category.BROWSABLE"/>
-        <data android:scheme="https" android:host="vexguard.app" android:pathPrefix="/"/>
-      </intent-filter>
     </activity>
     <service android:name="org.amnezia.awg.backend.GoBackend$VpnService" android:exported="false" android:permission="android.permission.BIND_VPN_SERVICE">
       <intent-filter>

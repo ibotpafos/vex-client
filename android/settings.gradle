@@ -44,7 +44,8 @@ rootProject.name = 'vex'
 expoAutolinking.useExpoVersionCatalog()
 
 include ':app'
-def amneziaTunnelDir = new File(rootDir, "../../external/amnezia/amneziawg-android/tunnel")
+def configuredAmneziaTunnelDir = providers.environmentVariable("AMNEZIAWG_TUNNEL_DIR").orNull
+def amneziaTunnelDir = configuredAmneziaTunnelDir ? new File(configuredAmneziaTunnelDir) : new File(rootDir, "../external/amnezia/amneziawg-android/tunnel")
 if (amneziaTunnelDir.isDirectory()) {
   include ':amneziawg-tunnel'
   project(':amneziawg-tunnel').projectDir = amneziaTunnelDir

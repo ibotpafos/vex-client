@@ -28,7 +28,6 @@ const updatesMetaData = {
 };
 
 module.exports = function withVexNativeConfig(config, props = {}) {
-  const appLinkHost = props.appLinkHost || 'vexguard.app';
   const authScheme = props.authScheme || 'vexguard';
   const notificationChannelId = props.notificationChannelId || 'vex_updates';
 
@@ -41,7 +40,7 @@ module.exports = function withVexNativeConfig(config, props = {}) {
     upsertMetaData(application, notificationChannelMetaName, notificationChannelId);
     Object.entries(updatesMetaData).forEach(([name, value]) => upsertMetaData(application, name, value));
     upsertVpnServices(application);
-    upsertMainActivityIntentFilters(application, authScheme, appLinkHost);
+    upsertMainActivityIntentFilters(application, authScheme);
 
     return mod;
   });
@@ -125,25 +124,24 @@ function upsertService(services, service) {
   }
 }
 
-function upsertMainActivityIntentFilters(application, authScheme, appLinkHost) {
+function upsertMainActivityIntentFilters(application, authScheme) {
   const mainActivity = application.activity?.find((activity) => activity.$?.['android:name'] === '.MainActivity');
   if (!mainActivity) {
     throw new Error('AndroidManifest.xml is missing .MainActivity.');
   }
 
   mainActivity['intent-filter'] = (mainActivity['intent-filter'] || [])
-    .filter((filter) => !hasDataScheme(filter, 'vex') && !hasAppLink(filter, appLinkHost));
+    .filter((filter) => !hasDataScheme(filter, 'vex') && !hasDataScheme(filter, authScheme) && !hasHttpsAppLink(filter));
 
   mainActivity['intent-filter'].push(authCallbackIntentFilter(authScheme));
-  mainActivity['intent-filter'].push(appLinkIntentFilter(appLinkHost));
 }
 
 function hasDataScheme(intentFilter, scheme) {
   return (intentFilter.data || []).some((data) => data.$?.['android:scheme'] === scheme);
 }
 
-function hasAppLink(intentFilter, host) {
-  return (intentFilter.data || []).some((data) => data.$?.['android:scheme'] === 'https' && data.$?.['android:host'] === host);
+function hasHttpsAppLink(intentFilter) {
+  return (intentFilter.data || []).some((data) => data.$?.['android:scheme'] === 'https');
 }
 
 function authCallbackIntentFilter(authScheme) {
@@ -154,18 +152,6 @@ function authCallbackIntentFilter(authScheme) {
       { $: { 'android:name': 'android.intent.category.BROWSABLE' } },
     ],
     data: [{ $: { 'android:scheme': authScheme, 'android:host': 'auth', 'android:pathPrefix': '/callback' } }],
-  };
-}
-
-function appLinkIntentFilter(host) {
-  return {
-    $: { 'android:autoVerify': 'true' },
-    action: [{ $: { 'android:name': 'android.intent.action.VIEW' } }],
-    category: [
-      { $: { 'android:name': 'android.intent.category.DEFAULT' } },
-      { $: { 'android:name': 'android.intent.category.BROWSABLE' } },
-    ],
-    data: [{ $: { 'android:scheme': 'https', 'android:host': host, 'android:pathPrefix': '/' } }],
   };
 }
 

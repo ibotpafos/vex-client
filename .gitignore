@@ -23,4 +23,5 @@ yarn-error.log*
 
 # Mobile local credentials
 android/local-signing.properties
+android/app/debug.keystore
 android/app/google-services.json

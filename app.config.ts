@@ -64,12 +64,6 @@ export default function appConfig({ config }: ConfigContext): ExpoConfig {
           data: [{ scheme: appScheme, host: 'auth', pathPrefix: '/callback' }],
           category: ['BROWSABLE', 'DEFAULT'],
         },
-        {
-          action: 'VIEW',
-          autoVerify: true,
-          data: [{ scheme: 'https', host: appLinkHost, pathPrefix: '/' }],
-          category: ['BROWSABLE', 'DEFAULT'],
-        },
       ],
     },
     plugins: [
@@ -110,7 +104,6 @@ export default function appConfig({ config }: ConfigContext): ExpoConfig {
       [
         './modules/vex-vpn/plugin/withVexNativeConfig',
         {
-          appLinkHost,
           authScheme: appScheme,
           notificationChannelId: 'vex_updates',
         },

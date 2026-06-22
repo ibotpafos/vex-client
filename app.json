@@ -3,7 +3,7 @@
     "name": "VEX",
     "slug": "vex",
     "scheme": "vexguard",
-    "version": "1.0.43",
+    "version": "1.0.46",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -29,7 +29,7 @@
       },
       "predictiveBackGestureEnabled": false,
       "softwareKeyboardLayoutMode": "resize",
-      "versionCode": 1004344,
+      "versionCode": 1004647,
       "package": "com.vexguard.app",
       "intentFilters": [
         {
@@ -40,21 +40,6 @@
               "scheme": "vexguard",
               "host": "auth",
               "pathPrefix": "/callback"
-            }
-          ],
-          "category": [
-            "BROWSABLE",
-            "DEFAULT"
-          ]
-        },
-        {
-          "action": "VIEW",
-          "autoVerify": true,
-          "data": [
-            {
-              "scheme": "https",
-              "host": "vexguard.app",
-              "pathPrefix": "/"
             }
           ],
           "category": [
@@ -102,7 +87,6 @@
       [
         "./modules/vex-vpn/plugin/withVexNativeConfig",
         {
-          "appLinkHost": "vexguard.app",
           "authScheme": "vexguard",
           "notificationChannelId": "vex_updates"
         }

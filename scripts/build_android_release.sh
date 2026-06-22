@@ -59,6 +59,11 @@ if [[ "$variant" == "release" ]]; then
   require_env VEX_UPLOAD_STORE_PASSWORD
   require_env VEX_UPLOAD_KEY_ALIAS
   require_env VEX_UPLOAD_KEY_PASSWORD
+else
+  unset VEX_UPLOAD_STORE_FILE
+  unset VEX_UPLOAD_STORE_PASSWORD
+  unset VEX_UPLOAD_KEY_ALIAS
+  unset VEX_UPLOAD_KEY_PASSWORD
 fi
 
 "${root_dir}/scripts/bootstrap_amneziawg_android.sh"

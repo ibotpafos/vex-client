@@ -1,7 +1,6 @@
 import { Platform } from 'react-native';
 import { getAppInfo, getOrCreateDeviceId, VEX_API_CLIENT_VERSION, VEX_CONFIG_SCHEMA_VERSION } from '@/native/appInfo';
 import { generateWireGuardKeyPair, getOrCreateWireGuardKeyPair, replaceWireGuardKeyPair, type WireGuardKeyPair } from '@/native/vexVpn';
-import { isVpnDeviceForLocation } from '@/vpn/deviceLocation';
 import { nativeVpnDeviceForClient } from '@/vpn/nativeDeviceSelection';
 import { defaultVpnRoutingMode, defaultVpnRoutingPolicyVersion, resolvedVpnBypassRegion, type VpnRoutingMode } from '@/vpn/routingPolicy';
 import { buildBillingSummary, type BillingPlanOption, type BillingPlanSource, type BillingSummary } from './billingSummary';
@@ -384,6 +383,9 @@ export async function preparedTunnel(accessToken: string, client: VpnClientDescr
   try {
     return await managedVpnProfile(accessToken, client, options);
   } catch (error) {
+    if (requiresManagedNativeProfile(client)) {
+      throw error;
+    }
     logApiDebug('managed vpn profile failed, falling back to prepared tunnel:', error instanceof Error ? error.message : error);
   }
   return preparedTunnelFromDeviceConfig(accessToken, client, options);
@@ -392,23 +394,16 @@ export async function preparedTunnel(accessToken: string, client: VpnClientDescr
 async function preparedTunnelFromDeviceConfig(accessToken: string, client: VpnClientDescriptor = currentVpnClient(), options: PreparedTunnelOptions = {}): Promise<PreparedTunnel> {
   const versionHeaders = await clientVersionHeaders();
   const locationId = normalizeLocationId(options.locationId);
-  const allDevices = await vpnDevices(accessToken);
-  let device = allDevices.find((d) => {
-    return d.status === 'active' &&
-      d.protocol === mobileProtocol &&
-      d.name === client.deviceName &&
-      isVpnDeviceForLocation(d, locationId);
-  });
+  const [allDevices, runtimeDeviceId] = await Promise.all([vpnDevices(accessToken), getOrCreateDeviceId()]);
+  const baseExternalDeviceId = nativeDeviceId(runtimeDeviceId);
+  let device = nativeVpnDeviceForClient(allDevices, locationId, baseExternalDeviceId, baseExternalDeviceId);
+  device ??= allDevices.find((d) => d.status === 'active' && d.protocol === mobileProtocol && d.name === client.deviceName);
 
   if (!device) {
     try {
       device = await createDevice(accessToken, client, locationId);
     } catch (error) {
-      const fallback = allDevices.find((d) => {
-        return d.status === 'active' &&
-          d.protocol === mobileProtocol &&
-          isVpnDeviceForLocation(d, locationId);
-      });
+      const fallback = allDevices.find((d) => d.status === 'active' && d.protocol === mobileProtocol);
       if (fallback) {
         logApiDebug('createDevice failed, falling back to existing active device for testing:', fallback.name);
         device = fallback;
@@ -436,7 +431,7 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
   const locationId = normalizeLocationId(options.locationId);
   const [allDevices, runtimeDeviceId] = await Promise.all([vpnDevices(accessToken), getOrCreateDeviceId()]);
   const baseExternalDeviceId = nativeDeviceId(runtimeDeviceId);
-  const externalDeviceId = nativeDeviceLocationId(baseExternalDeviceId, locationId);
+  const externalDeviceId = baseExternalDeviceId;
   let device = nativeVpnDeviceForClient(allDevices, locationId, externalDeviceId, baseExternalDeviceId);
   if (!device) {
     device = await registerNativeDevice(accessToken, client, keyPair, locationId, externalDeviceId);
@@ -696,19 +691,18 @@ function nativeDeviceId(deviceId: string): string {
   return deviceId.trim();
 }
 
-function nativeDeviceLocationId(deviceId: string, locationId: string): string {
-  return `${deviceId}:${normalizeLocationId(locationId)}`;
-}
-
 type VpnClientDescriptor = {
   deviceName: string;
   idempotencyPrefix: string;
-  platform: 'android' | 'windows' | 'macos' | 'linux' | 'web';
+  platform: 'android' | 'ios' | 'windows' | 'macos' | 'linux' | 'web';
 };
 
 function currentVpnClient(): VpnClientDescriptor {
   if (Platform.OS === 'android') {
     return { deviceName: 'Android', idempotencyPrefix: 'android', platform: 'android' };
+  }
+  if (Platform.OS === 'ios') {
+    return { deviceName: 'iPhone', idempotencyPrefix: 'ios', platform: 'ios' };
   }
   if (isTauriRuntime()) {
     const platform = typeof navigator !== 'undefined' ? `${navigator.platform} ${navigator.userAgent}`.toLowerCase() : '';
@@ -724,6 +718,10 @@ function currentVpnClient(): VpnClientDescriptor {
     return { deviceName: 'Desktop', idempotencyPrefix: 'desktop', platform: 'web' };
   }
   return { deviceName: 'Web', idempotencyPrefix: 'web', platform: 'web' };
+}
+
+function requiresManagedNativeProfile(client: VpnClientDescriptor): boolean {
+  return Platform.OS === 'android' || Platform.OS === 'ios' || client.platform === 'android' || client.platform === 'ios';
 }
 
 function isTauriRuntime(): boolean {

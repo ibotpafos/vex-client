@@ -8,5 +8,5 @@
     "ignoreDeprecations": "6.0",
     "strict": true
   },
-  "exclude": [".expo", "dist", "src-tauri"]
+  "exclude": [".expo", "dist", "external", "android/build", "android/app/build", "src-tauri"]
 }

@@ -15,6 +15,20 @@ export function shouldUseLocalProfileBeforeOnline(
   return hasPaidEntitlementLike(profile.entitlement ?? fallbackEntitlement);
 }
 
+export function connectableLocalProfile(
+  profile: VpnProfile | null | undefined,
+  locationId: string,
+  fallbackEntitlement: EntitlementLike | null | undefined,
+): VpnProfile | null {
+  if (!profile || profile.locationId !== locationId) {
+    return null;
+  }
+  if (!shouldUseLocalProfileBeforeOnline(profile, fallbackEntitlement)) {
+    return null;
+  }
+  return { ...profile, source: 'local' };
+}
+
 export function vpnConnectTimingSamples(input: {
   endpointAttempts: string[];
   interfaceUpMs: number;

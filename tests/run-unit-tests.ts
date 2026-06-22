@@ -21,7 +21,7 @@ import {
   type HotVpnProfileRecord,
 } from '../src/vpn/hotProfileCacheCore';
 import { connectionAttemptsForProfile, isVpnTransportFallbackError, profileEndpoint } from '../src/vpn/connectionFallback';
-import { shouldUseLocalProfileBeforeOnline, vpnConnectTimingSamples } from '../src/vpn/connectFlow';
+import { connectableLocalProfile, shouldUseLocalProfileBeforeOnline, vpnConnectTimingSamples } from '../src/vpn/connectFlow';
 import { recoverVpnConnection } from '../src/vpn/connectionRecovery';
 import { isVpnDeviceForLocation, type VpnLocationDevice } from '../src/vpn/deviceLocation';
 import { nativeVpnDeviceForClient } from '../src/vpn/nativeDeviceSelection';
@@ -449,6 +449,10 @@ function runHotConnectFlowTests(): void {
   assertEqual(shouldUseLocalProfileBeforeOnline({ ...hotProfile, rotationRequired: true }, null), false);
   assertEqual(shouldUseLocalProfileBeforeOnline({ ...hotProfile, entitlement: undefined }, paidEntitlement), true);
   assertEqual(shouldUseLocalProfileBeforeOnline({ ...hotProfile, entitlement: { active: false, vpnAccess: false } }, null), false);
+  assertEqual(connectableLocalProfile(hotProfile, 'de', null)?.source, 'local');
+  assertEqual(connectableLocalProfile(hotProfile, 'fi', null), null);
+  assertEqual(connectableLocalProfile({ ...hotProfile, entitlement: undefined }, 'de', paidEntitlement)?.source, 'local');
+  assertEqual(connectableLocalProfile({ ...hotProfile, rotationRequired: true }, 'de', paidEntitlement), null);
   assertDeepEqual(vpnConnectTimingSamples({
     endpointAttempts: ['de.example.com:443'],
     interfaceUpMs: 1_260,
@@ -575,6 +579,19 @@ assertEqual(isVpnTransportFallbackError(new Error('Подписка не акт�
   assertEqual(
     nativeVpnDeviceForClient([currentMacDevice], 'de', 'current-mac:de', 'current-mac'),
     currentMacDevice,
+  );
+}
+
+{
+  const legacyLocationDevice = vpnDeviceCandidate({
+    externalDeviceId: 'android-123:fi',
+    nodeId: 'fi-1',
+    platform: 'android',
+  });
+
+  assertEqual(
+    nativeVpnDeviceForClient([legacyLocationDevice], 'de', 'android-123', 'android-123'),
+    legacyLocationDevice,
   );
 }
 

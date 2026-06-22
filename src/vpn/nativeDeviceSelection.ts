@@ -1,5 +1,3 @@
-import { isVpnDeviceForLocation } from './deviceLocation';
-
 const mobileProtocol = 'amneziawg';
 
 export type NativeVpnDevice = {
@@ -27,8 +25,17 @@ export function nativeVpnDeviceForClient<T extends NativeVpnDevice>(
   }
 
   const globalDevice = activeNativeDeviceByExternalId(devices, baseExternalDeviceId);
-  if (globalDevice && isVpnDeviceForLocation(globalDevice, locationId)) {
+  if (globalDevice) {
     return globalDevice;
+  }
+
+  const legacyPhysicalDevice = devices.find((device) => (
+    isActiveNativeVpnDevice(device) &&
+    typeof device.externalDeviceId === 'string' &&
+    device.externalDeviceId.startsWith(`${baseExternalDeviceId}:`)
+  ));
+  if (legacyPhysicalDevice) {
+    return legacyPhysicalDevice;
   }
 
   return undefined;

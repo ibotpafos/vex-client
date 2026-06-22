@@ -91,6 +91,7 @@
     "start:web": "expo start --web",
     "android:bootstrap": "bash scripts/bootstrap_amneziawg_android.sh",
     "android:build:local": "bash scripts/android_local_build.sh",
+    "android:release": "bash scripts/build_android_release.sh",
     "windows:release": "powershell -ExecutionPolicy Bypass -File scripts/build_windows_release.ps1",
     "linux:release": "bash scripts/build_linux_release.sh"
   },

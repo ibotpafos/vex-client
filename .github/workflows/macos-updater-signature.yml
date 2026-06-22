@@ -31,10 +31,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
 
       - name: Validate signing key contract
         run: |
@@ -58,7 +54,7 @@ jobs:
           signature="${tarball}.sig"
           curl -fsSL "${{ inputs.tarball_url }}" -o "${tarball}"
           sha256sum "${tarball}" >"${tarball}.sha256"
-          sign_output="$(./node_modules/.bin/tauri signer sign "${tarball}")"
+          sign_output="$(npm exec --yes --package @tauri-apps/cli@2.11.2 -- tauri signer sign "${tarball}")"
           if [[ -f "${signature}" ]]; then
             :
           else

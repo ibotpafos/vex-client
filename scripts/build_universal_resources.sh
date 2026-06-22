@@ -35,6 +35,8 @@ fi
 mkdir -p "${TAURI_RESOURCES_DIR}"
 mkdir -p "${STAMP_DIR}"
 
+"${ROOT_DIR}/scripts/bootstrap_amneziawg_macos.sh"
+
 tree_hash() {
   local label="$1"
   local dir="$2"

@@ -8,7 +8,7 @@
       "endpoints": [
         "https://vexguard.app/v1/desktop/updater/{{target}}/{{arch}}/{{current_version}}"
       ],
-      "pubkey": ""
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDI4MUQyMUZFQkU1OTVBMDgKUldRSVdsbSsvaUVkS0FwWWRoTDJUelJ3a3FKRnVFazErblhod0VMOHVLZlMyZkVIVklmZVpMcEgK"
     },
     "deep-link": {
       "desktop": {
@@ -42,6 +42,8 @@
     "active": true,
     "createUpdaterArtifacts": "v1Compatible",
     "targets": [
+      "app",
+      "dmg",
       "nsis",
       "msi"
     ],
@@ -49,11 +51,22 @@
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
+      "icons/icon.icns",
       "icons/icon.ico"
     ],
     "resources": [
+      "resources/amneziawg-go",
+      "resources/awg",
+      "resources/vex-helper",
+      "resources/install-vex-vpn-helper.sh",
       "amneziawg.exe",
       "wintun.dll"
-    ]
+    ],
+    "macOS": {
+      "signingIdentity": "-"
+    },
+    "android": {
+      "debugApplicationIdSuffix": ".debug"
+    }
   }
 }

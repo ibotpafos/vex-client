@@ -1,0 +1,45 @@
+# Keep EAS Build archives small and deterministic.
+
+# dependencies and Expo output
+node_modules/
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# local env and signing material; EAS env/credentials are the source of truth
+.env
+.env.*
+!.env.example
+
+# Android generated output
+android/.gradle/
+android/.kotlin/
+android/.cxx/
+android/build/
+android/app/build/
+android/local.properties
+android/local-signing.properties
+android/app/*.jks
+android/app/*.keystore
+
+# iOS generated output
+ios/Pods/
+ios/build/
+ios/DerivedData/
+ios/**/*.xcuserstate
+ios/**/*.xcuserdata/
+
+# Desktop build output is not needed for Expo Android/iOS builds
+src-tauri/target/
+src-tauri/gen/
+src-tauri/.vex-stamps/
+
+# local artifacts
+.vex-stamps/
+artifacts/
+*.tsbuildinfo
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+.DS_Store

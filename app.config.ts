@@ -10,13 +10,14 @@ const iosBundleIdentifier = 'com.vexguard.app';
 const defaultApiBaseUrl = 'https://vexguard.app';
 const defaultUpdateChannel = 'production';
 const defaultRuntimeVersion = baseConfig.expo.version || '1.0.0';
+const defaultProjectId = baseConfig.expo.extra?.eas?.projectId || '';
 const defaultOtaUpdateUrl = 'https://updates.vexguard.app/manifest';
 const defaultOtaCodeSigningCertificate = './certs/certificate.pem';
 
 export default function appConfig({ config }: ConfigContext): ExpoConfig {
   const updateChannel = env('EXPO_PUBLIC_VEX_UPDATE_CHANNEL', env('EXPO_PUBLIC_VEX_RELEASE_CHANNEL', defaultUpdateChannel));
   const buildProfile = env('VEX_BUILD_PROFILE', updateChannel);
-  const projectId = env('VEX_EAS_PROJECT_ID', env('EXPO_PUBLIC_EAS_PROJECT_ID', ''));
+  const projectId = env('VEX_EAS_PROJECT_ID', env('EXPO_PUBLIC_EAS_PROJECT_ID', defaultProjectId));
   const updatesEnabled = Boolean(projectId) && env('VEX_UPDATES_ENABLED', buildProfile === 'production' ? '1' : '0') === '1';
   const otaProvider = env('VEX_OTA_PROVIDER', 'expo-open-ota');
   const updateUrl = resolveUpdateUrl(otaProvider, projectId);
@@ -71,7 +72,7 @@ export default function appConfig({ config }: ConfigContext): ExpoConfig {
       [
         'expo-local-authentication',
         {
-          faceIDPermission: 'Разрешите VEX использовать биометрию для входа в приложение.',
+          faceIDPermission: 'Разрешите VEX использовать Face ID для входа в приложение.',
         },
       ],
       [

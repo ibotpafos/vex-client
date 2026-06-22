@@ -11,6 +11,7 @@ external/
 *.p12
 *.pfx
 *.pem
+!certs/certificate.pem
 *.key
 *.mobileprovision
 

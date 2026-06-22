@@ -54,7 +54,7 @@
       [
         "expo-local-authentication",
         {
-          "faceIDPermission": "Разрешите VEX использовать биометрию для входа в приложение."
+          "faceIDPermission": "Разрешите VEX использовать Face ID для входа в приложение."
         }
       ],
       [
@@ -102,7 +102,11 @@
         "billingReturnUrl": "https://vexguard.app/v1/billing/mobile-return?status=success",
         "updateChannel": "production"
       },
-      "router": {}
-    }
+      "router": {},
+      "eas": {
+        "projectId": "fd3804d3-63ac-423a-b176-996c2a8ea82b"
+      }
+    },
+    "owner": "generaldigits"
   }
 }

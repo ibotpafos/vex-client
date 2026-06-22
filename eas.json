@@ -1,0 +1,87 @@
+{
+  "cli": {
+    "version": ">= 16.0.1",
+    "appVersionSource": "local"
+  },
+  "build": {
+    "development": {
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleDebug"
+      },
+      "channel": "development",
+      "developmentClient": true,
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_VEX_API_BASE_URL": "https://vexguard.app",
+        "EXPO_PUBLIC_VEX_BILLING_FAILED_URL": "https://vexguard.app/v1/billing/mobile-return?status=failed",
+        "EXPO_PUBLIC_VEX_BILLING_RETURN_URL": "https://vexguard.app/v1/billing/mobile-return?status=success",
+        "EXPO_PUBLIC_VEX_RELEASE_CHANNEL": "development",
+        "EXPO_PUBLIC_VEX_UPDATE_CHANNEL": "development",
+        "VEX_BUILD_PROFILE": "development",
+        "VEX_DEBUG_APPLICATION_ID_SUFFIX": ".debug",
+        "VEX_UPDATES_ENABLED": "0"
+      },
+      "ios": {
+        "simulator": false
+      }
+    },
+    "local": {
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleLocal"
+      },
+      "channel": "local",
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_VEX_API_BASE_URL": "https://vexguard.app",
+        "EXPO_PUBLIC_VEX_BILLING_FAILED_URL": "https://vexguard.app/v1/billing/mobile-return?status=failed",
+        "EXPO_PUBLIC_VEX_BILLING_RETURN_URL": "https://vexguard.app/v1/billing/mobile-return?status=success",
+        "EXPO_PUBLIC_VEX_RELEASE_CHANNEL": "local",
+        "EXPO_PUBLIC_VEX_UPDATE_CHANNEL": "local",
+        "VEX_BUILD_PROFILE": "local",
+        "VEX_UPDATES_ENABLED": "0"
+      }
+    },
+    "preview": {
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleLocal"
+      },
+      "channel": "preview",
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_VEX_API_BASE_URL": "https://vexguard.app",
+        "EXPO_PUBLIC_VEX_BILLING_FAILED_URL": "https://vexguard.app/v1/billing/mobile-return?status=failed",
+        "EXPO_PUBLIC_VEX_BILLING_RETURN_URL": "https://vexguard.app/v1/billing/mobile-return?status=success",
+        "EXPO_PUBLIC_VEX_RELEASE_CHANNEL": "preview",
+        "EXPO_PUBLIC_VEX_UPDATE_CHANNEL": "preview",
+        "VEX_BUILD_PROFILE": "preview",
+        "VEX_UPDATES_ENABLED": "1"
+      },
+      "ios": {
+        "simulator": false
+      }
+    },
+    "production": {
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleRelease"
+      },
+      "autoIncrement": false,
+      "channel": "production",
+      "env": {
+        "EXPO_PUBLIC_VEX_API_BASE_URL": "https://vexguard.app",
+        "EXPO_PUBLIC_VEX_BILLING_FAILED_URL": "https://vexguard.app/v1/billing/mobile-return?status=failed",
+        "EXPO_PUBLIC_VEX_BILLING_RETURN_URL": "https://vexguard.app/v1/billing/mobile-return?status=success",
+        "EXPO_PUBLIC_VEX_RELEASE_CHANNEL": "production",
+        "EXPO_PUBLIC_VEX_UPDATE_CHANNEL": "production",
+        "VEX_BUILD_PROFILE": "production",
+        "VEX_UPDATES_ENABLED": "1"
+      }
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}

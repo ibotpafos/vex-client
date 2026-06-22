@@ -8,6 +8,7 @@ android_repo_url="${AMNEZIAWG_ANDROID_REPO_URL:-https://github.com/amnezia-vpn/a
 go_repo_url="${AMNEZIAWG_GO_REPO_URL:-https://github.com/amnezia-vpn/amneziawg-go.git}"
 android_ref="${AMNEZIAWG_ANDROID_REF:-fb64e74ba5a0a54e9185b8776bcb8088afb772c9}"
 go_ref="${AMNEZIAWG_GO_REF:-f4f4c999267437c3eb909e8d0e5278fb4596d9a7}"
+clean_checkout="${AMNEZIAWG_CLEAN:-1}"
 
 clone_or_reset() {
   local name="$1"
@@ -23,7 +24,9 @@ clone_or_reset() {
   git -C "${dir}" fetch --depth 1 origin "${ref}"
   git -C "${dir}" checkout --detach FETCH_HEAD
   git -C "${dir}" reset --hard FETCH_HEAD
-  git -C "${dir}" clean -fdx
+  if [[ "${clean_checkout}" == "1" ]]; then
+    git -C "${dir}" clean -fdx
+  fi
 }
 
 clone_or_reset "amneziawg-go" "${go_repo_url}" "${go_ref}"

@@ -79,6 +79,23 @@ const connectedStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0 
 }
 
 {
+  const summary = buildBillingSummary([], {
+    active: true,
+    planId: 'pro_monthly',
+    tier: 'pro',
+    vpnAccess: true,
+  });
+
+  assertEqual(summary.entitlementStatus, 'active');
+  assertEqual(summary.currentPlan?.id, 'pro_monthly');
+  assertDeepEqual(summary.plans.map((plan) => ({ id: plan.id, current: plan.current, disabled: plan.disabled })), [
+    { id: 'basic_monthly', current: false, disabled: false },
+    { id: 'pro_monthly', current: true, disabled: true },
+    { id: 'family_monthly', current: false, disabled: false },
+  ]);
+}
+
+{
   const summary = buildBillingSummary(billingPlanCandidates(), {
     active: true,
     planId: 'team-monthly',

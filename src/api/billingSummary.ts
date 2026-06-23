@@ -50,11 +50,48 @@ export type BillingPlanSource = {
   status: string;
 };
 
+const fallbackBillingPlans: BillingPlanSource[] = [
+  {
+    id: 'basic_monthly',
+    name: 'Базовый',
+    provider: 'platega',
+    amount_cents: 19900,
+    currency: 'RUB',
+    interval: 'monthly',
+    device_limit: 1,
+    tier: 'basic',
+    status: 'active',
+  },
+  {
+    id: 'pro_monthly',
+    name: 'Pro',
+    provider: 'platega',
+    amount_cents: 49900,
+    currency: 'RUB',
+    interval: 'monthly',
+    device_limit: 3,
+    tier: 'pro',
+    status: 'active',
+  },
+  {
+    id: 'family_monthly',
+    name: 'Team',
+    provider: 'platega',
+    amount_cents: 149900,
+    currency: 'RUB',
+    interval: 'monthly',
+    device_limit: 10,
+    tier: 'team',
+    status: 'active',
+  },
+];
+
 export function buildBillingSummary(
   plans: BillingPlanSource[],
   currentEntitlement: BillingEntitlement | null,
 ): BillingSummary {
-  const activePlans = plans
+  const sourcePlans = plans.length > 0 ? plans : fallbackBillingPlans;
+  const activePlans = sourcePlans
     .filter((plan) => plan.status === 'active')
     .sort((a, b) => a.amount_cents - b.amount_cents || a.id.localeCompare(b.id));
   const currentPlan = currentBillingPlan(activePlans, currentEntitlement);

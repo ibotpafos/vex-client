@@ -37,14 +37,17 @@ export async function entitlement(accessToken: string): Promise<Entitlement> {
 
 export async function billingSummary(accessToken: string): Promise<BillingSummary> {
   const [plans, currentEntitlement] = await Promise.all([
-    billingPlans(),
+    billingPlans().catch((): ServerBillingPlan[] => []),
     entitlement(accessToken).catch((): null => null),
   ]);
   return buildBillingSummary(plans, currentEntitlement);
 }
 
 async function billingPlans(): Promise<ServerBillingPlan[]> {
-  return jsonRequest<ServerBillingPlan[]>('/v1/billing/plans', { suppressErrorLog: true });
+  return jsonRequest<ServerBillingPlan[]>('/v1/billing/plans', {
+    suppressErrorLog: true,
+    timeout: 75000,
+  });
 }
 
 export async function checkoutSession(accessToken: string, plan: { id: string; provider?: string }, options: CheckoutSessionOptions = {}): Promise<CheckoutSession> {

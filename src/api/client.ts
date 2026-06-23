@@ -95,7 +95,10 @@ async function rawRequestAttempt(path: string, options: RequestOptions, method: 
     if (isTauri) {
       try {
         const tauriFetch = await tauriHttpFetch();
-        response = await tauriFetch(`${apiRequestBaseUrl}${path}`, { headers, method, body: init.body, connectTimeout: timeoutMs });
+        response = await withTimeout(
+          tauriFetch(`${apiRequestBaseUrl}${path}`, { headers, method, body: init.body, connectTimeout: timeoutMs }),
+          timeoutMs,
+        );
       } catch (err: unknown) {
         if (shouldLogApiRequests && !options.suppressErrorLog) {
           const message = err instanceof Error ? err.message : String(err);
@@ -146,6 +149,18 @@ function isRetryableRequestError(error: unknown): boolean {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => reject(new Error('Превышено время ожидания API.')), timeoutMs);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  });
 }
 
 function logApiDebug(...items: unknown[]) {

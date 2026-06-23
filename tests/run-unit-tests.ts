@@ -275,7 +275,7 @@ async function runAuthStorageWarmStartTests(): Promise<void> {
 
     assertEqual(value, '{"accessToken":"legacy"}');
     assertEqual(secureStorage.get('vex.auth.session.v1'), '{"accessToken":"legacy"}');
-    assertEqual(webStorage.getItem('vex.auth.session.v1'), null);
+    assertEqual(webStorage.getItem('vex.auth.session.v1'), '{"accessToken":"legacy"}');
     assertDeepEqual(calls, ['get:vex.auth.session.v1', 'set:vex.auth.session.v1']);
   }
 
@@ -299,6 +299,20 @@ async function runAuthStorageWarmStartTests(): Promise<void> {
     await setTauriSensitiveStorageItem('vex.auth.session.v1', '{"accessToken":"fallback"}', failingInvoke, webStorage);
 
     assertEqual(webStorage.getItem('vex.auth.session.v1'), '{"accessToken":"fallback"}');
+  }
+
+  {
+    const webStorage = memoryWebStorage();
+    const secureStorage = new Map<string, string>();
+    await setTauriSensitiveStorageItem(
+      'vex.auth.session.v1',
+      '{"accessToken":"mirrored"}',
+      tauriSensitiveStorageInvoke(secureStorage),
+      webStorage,
+    );
+
+    assertEqual(secureStorage.get('vex.auth.session.v1'), '{"accessToken":"mirrored"}');
+    assertEqual(webStorage.getItem('vex.auth.session.v1'), '{"accessToken":"mirrored"}');
   }
 
   {

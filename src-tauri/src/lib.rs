@@ -513,6 +513,15 @@ mod platform_vpn {
         }
     }
 
+    fn retryable_connect_error(error: &str) -> bool {
+        let message = error.to_ascii_lowercase();
+        message.contains("broken pipe")
+            || message.contains("uapi")
+            || message.contains("read line")
+            || message.contains("не удалось прочитать ответ от helper")
+            || message.contains("не удалось отправить команду helper")
+    }
+
     /// Send "down" silently — does NOT call ensure_helper_installed.
     /// Used inside connect() to tear down a previous session without
     /// triggering an extra password prompt.
@@ -623,15 +632,21 @@ mod platform_vpn {
         // Tear down any previous session WITHOUT asking for password again
         silent_down(anti_leak_enabled);
 
-        // Now install (asks password only when truly needed) + send "up"
-        run_helper_action(
-            app,
-            if anti_leak_enabled {
-                "up"
-            } else {
-                "up-no-antileak"
-            },
-        )?;
+        // Now install (asks password only when truly needed) + send "up".
+        // A stale amneziawg-go/UAPI socket can reject the first write after app
+        // relaunch; clean once more and retry before surfacing the error.
+        let up_action = if anti_leak_enabled {
+            "up"
+        } else {
+            "up-no-antileak"
+        };
+        if let Err(error) = run_helper_action(app, up_action) {
+            if !retryable_connect_error(&error) {
+                return Err(error);
+            }
+            silent_down(anti_leak_enabled);
+            run_helper_action(app, up_action)?;
+        }
         if let Err(error) = wait_for_tunnel_up() {
             silent_down(anti_leak_enabled);
             return Err(error);
@@ -934,7 +949,15 @@ async fn connect_vpn(
         platform_vpn::status()
     })
     .await
-    .map_err(|error| error.to_string())??;
+    .map_err(|error| error.to_string())
+    .and_then(|result| result);
+    let status = match status {
+        Ok(status) => status,
+        Err(error) => {
+            publish_vpn_status(&app, &status_with_state("error"));
+            return Err(error);
+        }
+    };
     publish_vpn_status(&app, &status);
     Ok(status)
 }

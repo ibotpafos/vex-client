@@ -22,6 +22,17 @@ plugins {
   id("expo-autolinking-settings")
 }
 
+def vexBuildProfile = System.getenv('VEX_BUILD_PROFILE') ?: ''
+def expoDevOnlyPackages = [
+  'expo-dev-client',
+  'expo-dev-launcher',
+  'expo-dev-menu',
+  'expo-dev-menu-interface',
+]
+if (vexBuildProfile && vexBuildProfile != 'development') {
+  expoAutolinking.exclude = expoDevOnlyPackages
+}
+
 dependencyResolutionManagement {
   versionCatalogs {
     create("libs") {

@@ -61,7 +61,18 @@ import json
 import sys
 
 targets = [target.strip() for target in sys.argv[1].split(",") if target.strip()]
-config = {"bundle": {"createUpdaterArtifacts": False, "targets": targets}}
+config = {
+    "bundle": {
+        "createUpdaterArtifacts": False,
+        "targets": targets,
+        "resources": [
+            "resources/amneziawg-go",
+            "resources/awg",
+            "resources/vex-helper",
+            "resources/install-vex-vpn-helper.sh",
+        ],
+    }
+}
 if sys.argv[2] == "0":
     config["build"] = {"beforeBuildCommand": None}
 else:

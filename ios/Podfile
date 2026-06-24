@@ -26,6 +26,14 @@ prepare_react_native_project!
 target 'VEX' do
   use_expo_modules!
 
+  vex_build_profile = ENV['VEX_BUILD_PROFILE'] || ''
+  expo_dev_only_packages = %w[
+    expo-dev-client
+    expo-dev-launcher
+    expo-dev-menu
+    expo-dev-menu-interface
+  ]
+
   if ENV['EXPO_USE_COMMUNITY_AUTOLINKING'] == '1'
     config_command = ['node', '-e', "process.argv=['', '', 'config'];require('@react-native-community/cli').run()"];
   else
@@ -40,6 +48,9 @@ target 'VEX' do
       '--platform',
       'ios'
     ]
+    if !vex_build_profile.empty? && vex_build_profile != 'development'
+      config_command.concat(['--exclude', *expo_dev_only_packages])
+    end
   end
 
   config = use_native_modules!(config_command)

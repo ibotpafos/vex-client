@@ -269,7 +269,9 @@ android {
             debuggable false
             def enableShrinkResources = findProperty('android.enableShrinkResourcesInLocalBuilds') ?: 'false'
             shrinkResources enableShrinkResources.toBoolean()
-            minifyEnabled false
+            def enableMinifyInLocalBuilds = findProperty('android.enableMinifyInLocalBuilds') ?: 'false'
+            minifyEnabled enableMinifyInLocalBuilds.toBoolean()
+            proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
             applyOptionalApplicationIdSuffix(delegate)
         }
         release {

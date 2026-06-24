@@ -23,21 +23,22 @@ export const vexColors = {
 };
 
 type VexScreenProps = PropsWithChildren<{
+  backgroundMapEnabled?: boolean;
   contentStyle?: ViewStyle;
 }>;
 
-export function VexScreen({ children, contentStyle }: VexScreenProps) {
+export function VexScreen({ children, contentStyle, backgroundMapEnabled = Platform.OS !== 'android' }: VexScreenProps) {
   const { width: viewportWidth } = useWindowDimensions();
   const contentWidth = Math.min(viewportWidth - 24, vexMaxContentWidth);
-  const [showBackgroundMap, setShowBackgroundMap] = useState(Platform.OS !== 'android');
+  const [showBackgroundMap, setShowBackgroundMap] = useState(backgroundMapEnabled);
 
   useEffect(() => {
-    if (showBackgroundMap) {
+    if (showBackgroundMap || !backgroundMapEnabled) {
       return undefined;
     }
     const timer = setTimeout(() => setShowBackgroundMap(true), 700);
     return () => clearTimeout(timer);
-  }, [showBackgroundMap]);
+  }, [backgroundMapEnabled, showBackgroundMap]);
 
   return (
     <View style={vexSharedStyles.screen}>

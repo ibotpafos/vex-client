@@ -1,39 +1,83 @@
-import { router } from 'expo-router';
-import { CheckCheck, ChevronLeft, Send } from 'lucide-react-native';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { connectSupportSocket, type SupportMessage, type SupportSocketHandle, type SupportTicket } from '@/api/vexApi';
-import { useSession } from '@/auth/session-context';
-import { useRenderProfilerMark } from '@/debug/render-profiler';
-import { playErrorHaptic, playLightImpactHaptic, playSelectionHaptic, playSuccessHaptic, playWarningHaptic } from '@/native/haptics';
-import { vexColors, VexScreen, vexSharedStyles } from '@/ui/vex-ui';
-
-const duplicateSupportMessageWindowMs = 10_000;
-const collapsedSupportMessageLength = 360;
-const collapsedSupportMessageLines = 8;
-const supportTopics = ['Не подключается', 'Оплата', 'Конфиг', 'Скорость'];
-
-type SupportChatItem =
-  | { type: 'message'; message: SupportMessage }
-  | { type: 'diagnosticGroup'; id: string; messages: SupportMessage[] };
+import { router } from "expo-router";
+import { CheckCheck, ChevronLeft, Send } from "lucide-react-native";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  ActivityIndicator,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
+import {
+  connectSupportSocket,
+  type SupportMessage,
+  type SupportSocketHandle,
+  type SupportTicket,
+} from "@/api/vexApi";
+import { useSession } from "@/auth/session-context";
+import { useRenderProfilerMark } from "@/debug/render-profiler";
+import {
+  playErrorHaptic,
+  playLightImpactHaptic,
+  playSelectionHaptic,
+  playSuccessHaptic,
+  playWarningHaptic,
+} from "@/native/haptics";
+import { vexColors, VexScreen, vexSharedStyles } from "@/ui/vex-ui";
+import {
+  supportTopics,
+  type SupportChatItem,
+  supportHistoryErrorMessage,
+  supportConnectionStatusText,
+  buildSupportSubject,
+  optimisticSupportTicket,
+  supportChatMessages,
+  supportChatItems,
+  toggleSetValue,
+  supportNeedsReplyIndicator,
+  removeMatchingOptimisticTicket,
+  upsertSupportTicket,
+  supportMessageKey,
+  supportDiagnosticGroupBody,
+  supportMessageDisplayBody,
+  isSupportDiagnosticMessage,
+  formatSupportMessageTime,
+} from "./support-helpers";
 
 export default function SupportScreen() {
-  useRenderProfilerMark('SupportScreen');
+  useRenderProfilerMark("SupportScreen");
   const { session } = useSession();
   const [tickets, setTickets] = useState<SupportTicket[]>([]);
-  const [message, setMessage] = useState('');
-  const [subject, setSubject] = useState('');
-  const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'online' | 'reconnecting'>('connecting');
+  const [message, setMessage] = useState("");
+  const [subject, setSubject] = useState("");
+  const [connectionStatus, setConnectionStatus] = useState<
+    "connecting" | "online" | "reconnecting"
+  >("connecting");
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [expandedDiagnosticGroups, setExpandedDiagnosticGroups] = useState<Set<string>>(() => new Set());
-  const [expandedMessages, setExpandedMessages] = useState<Set<string>>(() => new Set());
+  const [expandedDiagnosticGroups, setExpandedDiagnosticGroups] = useState<
+    Set<string>
+  >(() => new Set());
+  const [expandedMessages, setExpandedMessages] = useState<Set<string>>(
+    () => new Set(),
+  );
   const inputRef = useRef<TextInput | null>(null);
   const socketRef = useRef<SupportSocketHandle | null>(null);
   const threadRef = useRef<ScrollView | null>(null);
   const chatMessages = useMemo(() => supportChatMessages(tickets), [tickets]);
-  const chatItems = useMemo(() => supportChatItems(chatMessages), [chatMessages]);
+  const chatItems = useMemo(
+    () => supportChatItems(chatMessages),
+    [chatMessages],
+  );
   const needsReply = supportNeedsReplyIndicator(tickets);
   const showTopics = !chatMessages.length && !message.trim();
 
@@ -41,31 +85,36 @@ export default function SupportScreen() {
     if (!session?.accessToken) {
       setTickets([]);
       setIsLoading(false);
-      setConnectionStatus('connecting');
+      setConnectionStatus("connecting");
       return undefined;
     }
     setIsLoading(true);
     setError(null);
-    setConnectionStatus('connecting');
+    setConnectionStatus("connecting");
     const socket = connectSupportSocket(session.accessToken, {
       onError(messageText) {
-        setConnectionStatus('reconnecting');
+        setConnectionStatus("reconnecting");
         setIsLoading(false);
         setError(supportHistoryErrorMessage(messageText));
       },
       onOpen() {
-        setConnectionStatus('online');
+        setConnectionStatus("online");
         setError(null);
       },
       onSnapshot(nextTickets) {
         setTickets(nextTickets);
         setIsLoading(false);
-        setConnectionStatus('online');
+        setConnectionStatus("online");
       },
       onTicket(ticket) {
-        setTickets((current) => upsertSupportTicket(removeMatchingOptimisticTicket(current, ticket), ticket));
+        setTickets((current) =>
+          upsertSupportTicket(
+            removeMatchingOptimisticTicket(current, ticket),
+            ticket,
+          ),
+        );
         setIsLoading(false);
-        setConnectionStatus('online');
+        setConnectionStatus("online");
       },
     });
     socketRef.current = socket;
@@ -104,15 +153,15 @@ export default function SupportScreen() {
       return;
     }
     if (!session?.accessToken) {
-      setError('Сначала войдите в аккаунт.');
+      setError("Сначала войдите в аккаунт.");
       playWarningHaptic();
       return;
     }
     const nextSubject = subject.trim() || buildSupportSubject(body);
     const socket = socketRef.current;
     if (!socket) {
-      setError('Чат подключается, попробуйте еще раз через секунду.');
-      setConnectionStatus('reconnecting');
+      setError("Чат подключается, попробуйте еще раз через секунду.");
+      setConnectionStatus("reconnecting");
       playWarningHaptic();
       return;
     }
@@ -120,19 +169,21 @@ export default function SupportScreen() {
     playLightImpactHaptic();
     setIsSending(true);
     setError(null);
-    setMessage('');
+    setMessage("");
     setTickets((current) => upsertSupportTicket(current, optimistic));
     if (socket.sendMessage({ body, subject: nextSubject })) {
-      setSubject('');
+      setSubject("");
       playSuccessHaptic();
       setIsSending(false);
       requestAnimationFrame(() => inputRef.current?.focus());
       return;
     }
-    setTickets((current) => current.filter((item) => item.id !== optimistic.id));
+    setTickets((current) =>
+      current.filter((item) => item.id !== optimistic.id),
+    );
     setMessage(body);
-    setError('Чат переподключается, сообщение не отправлено.');
-    setConnectionStatus('reconnecting');
+    setError("Чат переподключается, сообщение не отправлено.");
+    setConnectionStatus("reconnecting");
     setIsSending(false);
     playErrorHaptic();
     requestAnimationFrame(() => inputRef.current?.focus());
@@ -156,8 +207,12 @@ export default function SupportScreen() {
             <Text style={styles.chatAvatarText}>V</Text>
           </View>
           <View style={styles.chatHeaderCopy}>
-            <Text numberOfLines={1} style={styles.chatTitle}>Поддержка VEX</Text>
-            <Text numberOfLines={1} style={styles.chatStatus}>{supportConnectionStatusText(connectionStatus)}</Text>
+            <Text numberOfLines={1} style={styles.chatTitle}>
+              Поддержка VEX
+            </Text>
+            <Text numberOfLines={1} style={styles.chatStatus}>
+              {supportConnectionStatusText(connectionStatus)}
+            </Text>
           </View>
         </View>
         <View style={vexSharedStyles.iconButton} />
@@ -167,7 +222,9 @@ export default function SupportScreen() {
         <ScrollView
           alwaysBounceVertical={false}
           contentContainerStyle={styles.threadContent}
-          onContentSizeChange={() => threadRef.current?.scrollToEnd({ animated: true })}
+          onContentSizeChange={() =>
+            threadRef.current?.scrollToEnd({ animated: true })
+          }
           ref={threadRef}
           showsVerticalScrollIndicator={false}
           style={styles.thread}
@@ -177,11 +234,14 @@ export default function SupportScreen() {
           </View>
           {!chatMessages.length && !isLoading ? (
             <View style={styles.emptyState}>
-              <Text style={styles.emptyText}>Укажите устройство, ошибку и когда началось. Повторные сообщения добавятся в активное обращение.</Text>
+              <Text style={styles.emptyText}>
+                Укажите устройство, ошибку и когда началось. Повторные сообщения
+                добавятся в активное обращение.
+              </Text>
             </View>
           ) : null}
           {chatItems.map((chatItem) => {
-            if (chatItem.type === 'diagnosticGroup') {
+            if (chatItem.type === "diagnosticGroup") {
               return (
                 <DiagnosticGroupBubble
                   expanded={expandedDiagnosticGroups.has(chatItem.id)}
@@ -205,7 +265,10 @@ export default function SupportScreen() {
           })}
           {needsReply ? (
             <View style={styles.bubble}>
-              <Text style={styles.bubbleText}>Спасибо, сообщение получено. Ответ появится здесь, как только специалист возьмет обращение в работу.</Text>
+              <Text style={styles.bubbleText}>
+                Спасибо, сообщение получено. Ответ появится здесь, как только
+                специалист возьмет обращение в работу.
+              </Text>
             </View>
           ) : null}
         </ScrollView>
@@ -223,11 +286,21 @@ export default function SupportScreen() {
                     accessibilityState={{ selected }}
                     onPress={() => {
                       playSelectionHaptic();
-                      setSubject(selected ? '' : topic);
+                      setSubject(selected ? "" : topic);
                     }}
-                    style={[styles.topicButton, selected && styles.topicButtonSelected]}
+                    style={[
+                      styles.topicButton,
+                      selected && styles.topicButtonSelected,
+                    ]}
                   >
-                    <Text style={[styles.topicText, selected && styles.topicTextSelected]}>{topic}</Text>
+                    <Text
+                      style={[
+                        styles.topicText,
+                        selected && styles.topicTextSelected,
+                      ]}
+                    >
+                      {topic}
+                    </Text>
                   </Pressable>
                 );
               })}
@@ -237,8 +310,11 @@ export default function SupportScreen() {
             <TextInput
               editable={!isSending}
               onKeyPress={(event) => {
-                const nativeEvent = event.nativeEvent as typeof event.nativeEvent & { shiftKey?: boolean };
-                if (nativeEvent.key !== 'Enter' || nativeEvent.shiftKey) return;
+                const nativeEvent =
+                  event.nativeEvent as typeof event.nativeEvent & {
+                    shiftKey?: boolean;
+                  };
+                if (nativeEvent.key !== "Enter" || nativeEvent.shiftKey) return;
                 event.preventDefault?.();
                 void handleSend();
               }}
@@ -252,13 +328,23 @@ export default function SupportScreen() {
               value={message}
             />
             <Pressable
-              accessibilityLabel={isSending ? 'Отправляем сообщение' : 'Отправить сообщение'}
+              accessibilityLabel={
+                isSending ? "Отправляем сообщение" : "Отправить сообщение"
+              }
               accessibilityRole="button"
               disabled={isSending || !message.trim()}
               onPress={handleSend}
-              style={[styles.inlineSendButton, (!message.trim() || isSending) && styles.inlineSendButtonDisabled]}
+              style={[
+                styles.inlineSendButton,
+                (!message.trim() || isSending) &&
+                  styles.inlineSendButtonDisabled,
+              ]}
             >
-              {isSending ? <ActivityIndicator color="#031012" size="small" /> : <Send color="#031012" size={19} strokeWidth={2.8} />}
+              {isSending ? (
+                <ActivityIndicator color="#031012" size="small" />
+              ) : (
+                <Send color="#031012" size={19} strokeWidth={2.8} />
+              )}
             </Pressable>
           </View>
           {error ? <Text style={styles.errorText}>{error}</Text> : null}
@@ -270,33 +356,63 @@ export default function SupportScreen() {
 
 type DiagnosticGroupBubbleProps = {
   expanded: boolean;
-  group: Extract<SupportChatItem, { type: 'diagnosticGroup' }>;
+  group: Extract<SupportChatItem, { type: "diagnosticGroup" }>;
   onToggle: (id: string) => void;
 };
 
-const DiagnosticGroupBubble = React.memo(function DiagnosticGroupBubble({ expanded, group, onToggle }: DiagnosticGroupBubbleProps) {
-  useRenderProfilerMark('SupportDiagnosticBubble');
+const DiagnosticGroupBubble = React.memo(function DiagnosticGroupBubble({
+  expanded,
+  group,
+  onToggle,
+}: DiagnosticGroupBubbleProps) {
+  useRenderProfilerMark("SupportDiagnosticBubble");
   const latestMessage = group.messages[group.messages.length - 1];
   return (
     <View
-      style={[styles.bubble, latestMessage.sender === 'user' && styles.bubbleUser, styles.bubbleDiagnostic, styles.bubbleCollapsed]}
+      style={[
+        styles.bubble,
+        latestMessage.sender === "user" && styles.bubbleUser,
+        styles.bubbleDiagnostic,
+        styles.bubbleCollapsed,
+      ]}
     >
-      <Text style={[styles.bubbleText, latestMessage.sender === 'user' && styles.bubbleTextUser, styles.bubbleTextDiagnostic]}>
+      <Text
+        style={[
+          styles.bubbleText,
+          latestMessage.sender === "user" && styles.bubbleTextUser,
+          styles.bubbleTextDiagnostic,
+        ]}
+      >
         {supportDiagnosticGroupBody(group.messages, expanded)}
       </Text>
       <Pressable
-        accessibilityLabel={expanded ? 'Скрыть диагностику' : 'Показать диагностику'}
+        accessibilityLabel={
+          expanded ? "Скрыть диагностику" : "Показать диагностику"
+        }
         accessibilityRole="button"
         onPress={() => onToggle(group.id)}
         style={styles.expandButton}
       >
-        <Text style={styles.expandText}>{expanded ? 'Скрыть' : 'Показать отчеты'}</Text>
+        <Text style={styles.expandText}>
+          {expanded ? "Скрыть" : "Показать отчеты"}
+        </Text>
       </Pressable>
       <View style={styles.bubbleMeta}>
-        <Text style={[styles.bubbleTime, latestMessage.sender === 'user' && styles.bubbleTimeUser]}>
+        <Text
+          style={[
+            styles.bubbleTime,
+            latestMessage.sender === "user" && styles.bubbleTimeUser,
+          ]}
+        >
           {formatSupportMessageTime(latestMessage.createdAt)}
         </Text>
-        {latestMessage.sender === 'user' ? <CheckCheck color="rgba(234,247,248,0.72)" size={13} strokeWidth={2.3} /> : null}
+        {latestMessage.sender === "user" ? (
+          <CheckCheck
+            color="rgba(234,247,248,0.72)"
+            size={13}
+            strokeWidth={2.3}
+          />
+        ) : null}
       </View>
     </View>
   );
@@ -309,16 +425,34 @@ type MessageBubbleProps = {
   onExpand: (key: string) => void;
 };
 
-const MessageBubble = React.memo(function MessageBubble({ expanded, message, messageKey, onExpand }: MessageBubbleProps) {
-  useRenderProfilerMark('SupportMessageBubble');
+const MessageBubble = React.memo(function MessageBubble({
+  expanded,
+  message,
+  messageKey,
+  onExpand,
+}: MessageBubbleProps) {
+  useRenderProfilerMark("SupportMessageBubble");
   const isDiagnostic = isSupportDiagnosticMessage(message.body);
   const body = supportMessageDisplayBody(message, expanded);
   const isCollapsed = body !== message.body;
   return (
     <View
-      style={[styles.bubble, message.sender === 'user' && styles.bubbleUser, isDiagnostic && styles.bubbleDiagnostic, isCollapsed && styles.bubbleCollapsed]}
+      style={[
+        styles.bubble,
+        message.sender === "user" && styles.bubbleUser,
+        isDiagnostic && styles.bubbleDiagnostic,
+        isCollapsed && styles.bubbleCollapsed,
+      ]}
     >
-      <Text style={[styles.bubbleText, message.sender === 'user' && styles.bubbleTextUser, isDiagnostic && styles.bubbleTextDiagnostic]}>{body}</Text>
+      <Text
+        style={[
+          styles.bubbleText,
+          message.sender === "user" && styles.bubbleTextUser,
+          isDiagnostic && styles.bubbleTextDiagnostic,
+        ]}
+      >
+        {body}
+      </Text>
       {isCollapsed ? (
         <Pressable
           accessibilityLabel="Показать сообщение полностью"
@@ -330,275 +464,47 @@ const MessageBubble = React.memo(function MessageBubble({ expanded, message, mes
         </Pressable>
       ) : null}
       <View style={styles.bubbleMeta}>
-        <Text style={[styles.bubbleTime, message.sender === 'user' && styles.bubbleTimeUser]}>
+        <Text
+          style={[
+            styles.bubbleTime,
+            message.sender === "user" && styles.bubbleTimeUser,
+          ]}
+        >
           {formatSupportMessageTime(message.createdAt)}
         </Text>
-        {message.sender === 'user' ? <CheckCheck color="rgba(234,247,248,0.72)" size={13} strokeWidth={2.3} /> : null}
+        {message.sender === "user" ? (
+          <CheckCheck
+            color="rgba(234,247,248,0.72)"
+            size={13}
+            strokeWidth={2.3}
+          />
+        ) : null}
       </View>
     </View>
   );
 });
 
-function supportHistoryErrorMessage(error: unknown): string | null {
-  const message = error instanceof Error && error.message ? error.message : String(error || 'Не удалось загрузить чат поддержки.');
-  return message.toLowerCase() === 'not found' ? null : message;
-}
-
-function supportConnectionStatusText(status: 'connecting' | 'online' | 'reconnecting') {
-  if (status === 'online') return 'в сети';
-  if (status === 'reconnecting') return 'переподключаемся...';
-  return 'подключаемся...';
-}
-
-function buildSupportSubject(value: string) {
-  const firstLine = value.split(/\r?\n/).find(Boolean)?.trim();
-  if (!firstLine) return 'Вопрос в поддержку';
-  return firstLine.length > 46 ? `${firstLine.slice(0, 43)}...` : firstLine;
-}
-
-function optimisticSupportTicket(subject: string, body: string): SupportTicket {
-  const now = new Date().toISOString();
-  const id = `optimistic-support-${Date.now()}`;
-  return {
-    id,
-    subject,
-    message: body,
-    messages: [{ id: `${id}-message`, ticketId: id, sender: 'user', body, createdAt: now }],
-    status: 'open',
-    source: 'mobile',
-    createdAt: now,
-    updatedAt: now,
-  };
-}
-
-function supportChatMessages(tickets: SupportTicket[]): SupportMessage[] {
-  const messages = tickets.flatMap((ticket) => {
-    const items = ticket.messages?.length ? ticket.messages : legacySupportTicketMessages(ticket);
-    return items.map((item) => ({ ...item, status: ticket.status, subject: ticket.subject }));
-  });
-  return uniqueSupportMessages(messages.sort((left, right) => supportMessageTimestamp(left) - supportMessageTimestamp(right)));
-}
-
-function supportChatItems(messages: SupportMessage[]): SupportChatItem[] {
-  const items: SupportChatItem[] = [];
-  let diagnostics: SupportMessage[] = [];
-
-  const flushDiagnostics = () => {
-    if (!diagnostics.length) return;
-    if (diagnostics.length === 1) {
-      items.push({ type: 'message', message: diagnostics[0] });
-    } else {
-      items.push({ type: 'diagnosticGroup', id: supportDiagnosticGroupKey(diagnostics), messages: diagnostics });
-    }
-    diagnostics = [];
-  };
-
-  for (const message of messages) {
-    if (isSupportDiagnosticMessage(message.body)) {
-      diagnostics.push(message);
-      continue;
-    }
-    flushDiagnostics();
-    items.push({ type: 'message', message });
-  }
-  flushDiagnostics();
-  return items;
-}
-
-function supportDiagnosticGroupKey(messages: SupportMessage[]) {
-  const first = messages[0];
-  const last = messages[messages.length - 1];
-  return ['diagnostics', first.ticketId, first.createdAt, last.createdAt, messages.length].join(':');
-}
-
-function legacySupportTicketMessages(ticket: SupportTicket): SupportMessage[] {
-  const messages: SupportMessage[] = [];
-  if (ticket.message?.trim()) {
-    messages.push({ id: `${ticket.id}-user`, ticketId: ticket.id, sender: 'user', body: ticket.message, createdAt: ticket.createdAt });
-  }
-  if (ticket.adminNote?.trim()) {
-    messages.push({ id: `${ticket.id}-admin`, ticketId: ticket.id, sender: 'admin', body: ticket.adminNote, createdAt: ticket.updatedAt || ticket.createdAt });
-  }
-  return messages;
-}
-
-function uniqueSupportMessages<TMessage extends SupportMessage>(messages: TMessage[]): TMessage[] {
-  const seen = new Set<string>();
-  return removeNearDuplicateMessages(messages.filter((message) => {
-    const key = supportMessageKey(message);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  }));
-}
-
-function removeNearDuplicateMessages<TMessage extends SupportMessage>(messages: TMessage[]): TMessage[] {
-  return messages.filter((message, index) => {
-    const previous = messages[index - 1];
-    if (!previous) return true;
-    return !isNearDuplicateMessage(previous, message);
-  });
-}
-
-function isNearDuplicateMessage(left: SupportMessage, right: SupportMessage) {
-  if (left.sender !== right.sender) return false;
-  if (normalizeSupportMessageBody(left.body) !== normalizeSupportMessageBody(right.body)) return false;
-  return Math.abs(supportMessageTimestamp(left) - supportMessageTimestamp(right)) <= duplicateSupportMessageWindowMs;
-}
-
-function normalizeSupportMessageBody(body: string) {
-  return body.trim().replace(/\s+/g, ' ').toLowerCase();
-}
-
-function supportMessageKey(message: SupportMessage) {
-  return [message.id, message.ticketId, message.sender, message.createdAt, message.body.trim()].join(':');
-}
-
-function supportMessageTimestamp(message: SupportMessage) {
-  const timestamp = new Date(message.createdAt).getTime();
-  return Number.isFinite(timestamp) ? timestamp : 0;
-}
-
-function supportMessageDisplayBody(message: SupportMessage, expanded: boolean) {
-  if (expanded || !shouldCollapseSupportMessage(message.body)) return message.body;
-  if (isSupportDiagnosticMessage(message.body)) return supportDiagnosticPreview(message.body);
-  const lines = message.body.split(/\r?\n/);
-  const head = lines.slice(0, 5).join('\n');
-  const preview = head.length > collapsedSupportMessageLength ? `${head.slice(0, collapsedSupportMessageLength).trim()}...` : `${head.trim()}...`;
-  const hiddenLines = Math.max(0, lines.length - 5);
-  return hiddenLines ? `${preview}\n\nЕще ${hiddenLines} строк диагностики` : preview;
-}
-
-function shouldCollapseSupportMessage(body: string) {
-  const lines = body.split(/\r?\n/);
-  return body.length > collapsedSupportMessageLength || lines.length > collapsedSupportMessageLines;
-}
-
-function isSupportDiagnosticMessage(body: string) {
-  return body.includes('generated_at:') && (body.includes('check.') || body.includes('status:'));
-}
-
-function supportDiagnosticPreview(body: string) {
-  const fields = supportDiagnosticFields(body);
-  const lines = ['Автоматическая диагностика'];
-  if (fields.status) lines.push(`статус: ${fields.status}`);
-  if (fields.reason) lines.push(`причина: ${fields.reason}`);
-  if (fields.error) lines.push(`ошибка: ${fields.error}`);
-  return lines.join('\n');
-}
-
-function supportDiagnosticGroupBody(messages: SupportMessage[], expanded: boolean) {
-  if (expanded) {
-    return messages.map((message, index) => {
-      const preview = supportDiagnosticPreview(message.body).replace('Автоматическая диагностика', `Отчет ${index + 1}, ${formatSupportMessageTime(message.createdAt)}`);
-      return preview;
-    }).join('\n\n');
-  }
-  const latest = messages[messages.length - 1];
-  const fields = supportDiagnosticFields(latest.body);
-  const lines = [`Автоматическая диагностика (${messages.length})`];
-  if (fields.status) lines.push(`последний статус: ${fields.status}`);
-  if (fields.reason) lines.push(`последняя причина: ${fields.reason}`);
-  return lines.join('\n');
-}
-
-function supportDiagnosticFields(body: string) {
-  const values = new Map<string, string>();
-  for (const line of body.split(/\r?\n/)) {
-    const separator = line.indexOf(':');
-    if (separator <= 0) continue;
-    values.set(line.slice(0, separator).trim(), line.slice(separator + 1).trim());
-  }
-  return {
-    error: body.split(/\r?\n/).find((line) => line.startsWith('error='))?.replace(/^error=/, '').trim(),
-    reason: values.get('reason'),
-    status: values.get('status'),
-  };
-}
-
-function toggleSetValue<T>(current: Set<T>, value: T) {
-  const next = new Set(current);
-  if (next.has(value)) {
-    next.delete(value);
-  } else {
-    next.add(value);
-  }
-  return next;
-}
-
-function supportNeedsReplyIndicator(tickets: SupportTicket[]) {
-  const active = tickets.find((ticket) => !['closed', 'resolved'].includes(ticket.status));
-  if (!active) return false;
-  const messages = active.messages?.length ? active.messages : legacySupportTicketMessages(active);
-  return messages[messages.length - 1]?.sender === 'user';
-}
-
-function removeMatchingOptimisticTicket(tickets: SupportTicket[], ticket: SupportTicket) {
-  const incomingUserMessages = supportUserMessageBodies(ticket);
-  if (!incomingUserMessages.size) return tickets;
-  return tickets.filter((item) => {
-    if (!item.id.startsWith('optimistic-support-')) return true;
-    return !setsOverlap(supportUserMessageBodies(item), incomingUserMessages);
-  });
-}
-
-function supportUserMessageBodies(ticket: SupportTicket) {
-  const messages = ticket.messages?.length ? ticket.messages : legacySupportTicketMessages(ticket);
-  return new Set(messages.filter((message) => message.sender === 'user').map((item) => item.body.trim()).filter(Boolean));
-}
-
-function setsOverlap<T>(left: Set<T>, right: Set<T>) {
-  for (const value of left) {
-    if (right.has(value)) return true;
-  }
-  return false;
-}
-
-function upsertSupportTicket(tickets: SupportTicket[], ticket: SupportTicket) {
-  const index = tickets.findIndex((item) => item.id === ticket.id);
-  if (index < 0) {
-    return [...tickets, ticket].sort((left, right) => supportTicketTimestamp(left) - supportTicketTimestamp(right));
-  }
-  const next = [...tickets];
-  next[index] = ticket;
-  return next.sort((left, right) => supportTicketTimestamp(left) - supportTicketTimestamp(right));
-}
-
-function supportTicketTimestamp(ticket: SupportTicket) {
-  const timestamp = new Date(ticket.updatedAt || ticket.createdAt).getTime();
-  return Number.isFinite(timestamp) ? timestamp : 0;
-}
-
-function formatSupportMessageTime(value?: string) {
-  const date = value ? new Date(value) : new Date();
-  if (Number.isNaN(date.getTime())) return '';
-  return new Intl.DateTimeFormat('ru-RU', {
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(date);
-}
-
 const styles = StyleSheet.create({
   chatHeader: {
-    alignItems: 'center',
+    alignItems: "center",
     flex: 1,
-    flexDirection: 'row',
+    flexDirection: "row",
     gap: 9,
     minWidth: 0,
     paddingHorizontal: 4,
   },
   chatAvatar: {
-    alignItems: 'center',
+    alignItems: "center",
     backgroundColor: vexColors.accent,
     borderRadius: 17,
     height: 34,
-    justifyContent: 'center',
+    justifyContent: "center",
     width: 34,
   },
   chatAvatarText: {
-    color: '#031012',
+    color: "#031012",
     fontSize: 16,
-    fontWeight: '900',
+    fontWeight: "900",
   },
   chatHeaderCopy: {
     flex: 1,
@@ -607,12 +513,12 @@ const styles = StyleSheet.create({
   chatTitle: {
     color: vexColors.text,
     fontSize: 15,
-    fontWeight: '900',
+    fontWeight: "900",
   },
   chatStatus: {
     color: vexColors.accent,
     fontSize: 11,
-    fontWeight: '800',
+    fontWeight: "800",
     marginTop: 2,
   },
   chatShell: {
@@ -620,7 +526,7 @@ const styles = StyleSheet.create({
     gap: 0,
   },
   thread: {
-    backgroundColor: 'transparent',
+    backgroundColor: "transparent",
     flex: 1,
   },
   threadContent: {
@@ -630,9 +536,9 @@ const styles = StyleSheet.create({
     paddingTop: 4,
   },
   dayPill: {
-    alignSelf: 'center',
-    backgroundColor: 'rgba(7,17,19,0.74)',
-    borderColor: 'rgba(96,118,123,0.28)',
+    alignSelf: "center",
+    backgroundColor: "rgba(7,17,19,0.74)",
+    borderColor: "rgba(96,118,123,0.28)",
     borderRadius: 999,
     borderWidth: 1,
     paddingHorizontal: 10,
@@ -641,51 +547,51 @@ const styles = StyleSheet.create({
   dayPillText: {
     color: vexColors.muted,
     fontSize: 11,
-    fontWeight: '900',
+    fontWeight: "900",
   },
   emptyState: {
-    alignSelf: 'center',
-    backgroundColor: 'rgba(7,17,19,0.74)',
-    borderColor: 'rgba(96,118,123,0.24)',
+    alignSelf: "center",
+    backgroundColor: "rgba(7,17,19,0.74)",
+    borderColor: "rgba(96,118,123,0.24)",
     borderRadius: 14,
     borderWidth: 1,
     marginTop: 4,
-    maxWidth: '84%',
+    maxWidth: "84%",
     paddingHorizontal: 12,
     paddingVertical: 9,
   },
   emptyText: {
     color: vexColors.muted,
     fontSize: 11,
-    fontWeight: '700',
+    fontWeight: "700",
     lineHeight: 17,
-    textAlign: 'center',
+    textAlign: "center",
   },
   bubble: {
-    alignSelf: 'flex-start',
-    backgroundColor: 'rgba(7,17,19,0.92)',
+    alignSelf: "flex-start",
+    backgroundColor: "rgba(7,17,19,0.92)",
     borderBottomLeftRadius: 5,
     borderBottomRightRadius: 16,
-    borderColor: 'rgba(96,118,123,0.24)',
+    borderColor: "rgba(96,118,123,0.24)",
     borderRadius: 16,
     borderWidth: 1,
-    maxWidth: '82%',
+    maxWidth: "82%",
     paddingHorizontal: 11,
     paddingVertical: 7,
   },
   bubbleUser: {
-    alignSelf: 'flex-end',
-    backgroundColor: 'rgba(34,211,238,0.24)',
+    alignSelf: "flex-end",
+    backgroundColor: "rgba(34,211,238,0.24)",
     borderBottomLeftRadius: 16,
     borderBottomRightRadius: 5,
-    borderColor: 'rgba(34,211,238,0.34)',
+    borderColor: "rgba(34,211,238,0.34)",
   },
   bubbleCollapsed: {
-    maxWidth: '78%',
+    maxWidth: "78%",
   },
   bubbleDiagnostic: {
-    backgroundColor: 'rgba(7,17,19,0.78)',
-    borderColor: 'rgba(96,118,123,0.2)',
+    backgroundColor: "rgba(7,17,19,0.78)",
+    borderColor: "rgba(96,118,123,0.2)",
   },
   bubbleText: {
     color: vexColors.textSoft,
@@ -693,7 +599,7 @@ const styles = StyleSheet.create({
     lineHeight: 19,
   },
   bubbleTextDiagnostic: {
-    color: 'rgba(234,247,248,0.82)',
+    color: "rgba(234,247,248,0.82)",
     fontSize: 12,
     lineHeight: 17,
   },
@@ -703,32 +609,32 @@ const styles = StyleSheet.create({
   bubbleTime: {
     color: vexColors.muted,
     fontSize: 10,
-    fontWeight: '800',
-    textAlign: 'right',
+    fontWeight: "800",
+    textAlign: "right",
   },
   bubbleTimeUser: {
-    color: 'rgba(234,247,248,0.72)',
+    color: "rgba(234,247,248,0.72)",
   },
   bubbleMeta: {
-    alignItems: 'center',
-    alignSelf: 'flex-end',
-    flexDirection: 'row',
+    alignItems: "center",
+    alignSelf: "flex-end",
+    flexDirection: "row",
     gap: 3,
     marginTop: 3,
   },
   expandButton: {
-    alignSelf: 'flex-start',
+    alignSelf: "flex-start",
     marginTop: 8,
     paddingVertical: 2,
   },
   expandText: {
     color: vexColors.accent,
     fontSize: 12,
-    fontWeight: '900',
+    fontWeight: "900",
   },
   composer: {
-    backgroundColor: 'rgba(2,10,11,0.94)',
-    borderTopColor: 'rgba(96,118,123,0.18)',
+    backgroundColor: "rgba(2,10,11,0.94)",
+    borderTopColor: "rgba(96,118,123,0.18)",
     borderTopWidth: 1,
     gap: 8,
     marginHorizontal: -4,
@@ -737,13 +643,13 @@ const styles = StyleSheet.create({
     paddingTop: 8,
   },
   topicRow: {
-    flexDirection: 'row',
-    flexWrap: 'nowrap',
+    flexDirection: "row",
+    flexWrap: "nowrap",
     gap: 6,
   },
   topicButton: {
-    backgroundColor: 'rgba(7,17,19,0.86)',
-    borderColor: 'rgba(96,118,123,0.26)',
+    backgroundColor: "rgba(7,17,19,0.86)",
+    borderColor: "rgba(96,118,123,0.26)",
     borderRadius: 999,
     borderWidth: 1,
     flex: 1,
@@ -752,25 +658,25 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   topicButtonSelected: {
-    backgroundColor: 'rgba(34,211,238,0.18)',
-    borderColor: 'rgba(34,211,238,0.4)',
+    backgroundColor: "rgba(34,211,238,0.18)",
+    borderColor: "rgba(34,211,238,0.4)",
   },
   topicText: {
     color: vexColors.muted,
     fontSize: 10,
-    fontWeight: '900',
-    textAlign: 'center',
+    fontWeight: "900",
+    textAlign: "center",
   },
   topicTextSelected: {
     color: vexColors.accent,
   },
   inputShell: {
-    alignItems: 'flex-end',
-    backgroundColor: 'rgba(7,17,19,0.94)',
-    borderColor: 'rgba(96,118,123,0.32)',
+    alignItems: "flex-end",
+    backgroundColor: "rgba(7,17,19,0.94)",
+    borderColor: "rgba(96,118,123,0.32)",
     borderRadius: 22,
     borderWidth: 1,
-    flexDirection: 'row',
+    flexDirection: "row",
     gap: 8,
     minHeight: 48,
     paddingBottom: 5,
@@ -789,11 +695,11 @@ const styles = StyleSheet.create({
     paddingTop: 8,
   },
   inlineSendButton: {
-    alignItems: 'center',
+    alignItems: "center",
     backgroundColor: vexColors.accent,
     borderRadius: 19,
     height: 38,
-    justifyContent: 'center',
+    justifyContent: "center",
     width: 38,
   },
   inlineSendButtonDisabled: {
@@ -802,7 +708,7 @@ const styles = StyleSheet.create({
   errorText: {
     color: vexColors.danger,
     fontSize: 12,
-    fontWeight: '800',
+    fontWeight: "800",
     lineHeight: 17,
   },
 });

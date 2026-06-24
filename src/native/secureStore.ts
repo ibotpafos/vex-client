@@ -8,6 +8,7 @@ import {
   type TauriInvoke,
   type WebStorageAdapter,
 } from './secureStoreCore';
+import { isTauriRuntime } from './tauriPlatform';
 
 export const SENSITIVE_STORAGE_KEYS = [
   'vex.auth.device_id',
@@ -22,9 +23,6 @@ function shouldUseWebStorage(): boolean {
   return Platform.OS === 'web';
 }
 
-function isTauriRuntime(): boolean {
-  return Platform.OS === 'web' && typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window || '__TAURI_INVOKE__' in window);
-}
 
 function shouldUseTauriSensitiveStorage(key: string): boolean {
   return isTauriRuntime() && isTauriSensitiveStorageKey(key);

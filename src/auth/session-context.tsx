@@ -5,6 +5,7 @@ import { loadSessionWithRetry } from '@/auth/sessionLoadRetry';
 import { sessionLoadFailureDiagnosticsSnapshot } from '@/auth/sessionDiagnostics';
 import { refreshSession as refreshApiSession, type AuthSession } from '@/api/vexApi';
 import { uploadClientDiagnostics } from '@/diagnostics/clientDiagnostics';
+import { errorMessage } from '@/utils/error';
 
 type SessionContextValue = {
   isLoading: boolean;
@@ -133,6 +134,3 @@ export function SessionProvider({ children }: PropsWithChildren) {
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }
 
-function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error && error.message ? error.message : fallback;
-}

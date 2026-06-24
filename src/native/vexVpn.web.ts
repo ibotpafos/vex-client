@@ -1,4 +1,5 @@
 import { NativeModules, Platform } from 'react-native';
+import { isTauriRuntime as isTauri } from './tauriPlatform';
 import { invoke } from '@tauri-apps/api/core';
 
 export type VpnState = 'connected' | 'connecting' | 'disconnecting' | 'disconnected' | 'error' | 'verifying' | 'degraded';
@@ -51,9 +52,6 @@ type VexVpnNativeModule = {
 
 const nativeModule = NativeModules.VexVpn as VexVpnNativeModule | undefined;
 
-function isTauri(): boolean {
-  return Platform.OS === 'web' && typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window || '__TAURI_INVOKE__' in window);
-}
 
 function requireNativeModule(): VexVpnNativeModule {
   if (Platform.OS !== 'android') {

@@ -21,18 +21,11 @@ export function hasPaidEntitlement(item: Entitlement | null | undefined): item i
 }
 
 export async function entitlement(accessToken: string): Promise<Entitlement> {
-  try {
-    const item = await jsonRequest<ServerEntitlement>('/v1/billing/entitlement', {
-      accessToken,
-      suppressErrorLog: true,
-    });
-    return parseEntitlement(item);
-  } catch (error) {
-    if (error instanceof Error && error.message === 'not found') {
-      return { active: false, vpnAccess: false };
-    }
-    throw error;
-  }
+  const item = await jsonRequest<ServerEntitlement>('/v1/billing/entitlement', {
+    accessToken,
+    suppressErrorLog: true,
+  });
+  return parseEntitlement(item);
 }
 
 export async function billingSummary(accessToken: string): Promise<BillingSummary> {

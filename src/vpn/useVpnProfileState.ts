@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { errorMessage } from '@/utils/error';
 
 import { entitlement, hasPaidEntitlement, type Entitlement, type VpnLocation } from '../api/vexApi';
 import { resetVpnProfileCache, resolveVpnProfile, rotateVpnProfileKey, type VpnProfile } from './profile';
@@ -23,6 +24,7 @@ type UseVpnProfileStateInput = {
   onProfileRotationRequired: () => void;
   onSubscriptionRequired: () => void;
   prewarmStaleMs: number;
+  profileRefreshMs: number;
   requestVpnPermission: () => Promise<boolean>;
   selectedLocationId: string;
   userId?: string;
@@ -53,6 +55,7 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
     onProfileRotationRequired,
     onSubscriptionRequired,
     prewarmStaleMs,
+    profileRefreshMs,
     requestVpnPermission,
     selectedLocationId,
     userId,
@@ -69,8 +72,8 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
     }),
     enabled: Boolean(accessToken && hasVpnAccess),
     retry: 1,
-    staleTime: 30_000,
-    refetchInterval: 30_000,
+    staleTime: profileRefreshMs,
+    refetchInterval: profileRefreshMs,
   });
   const activeProfile = vpnProfile ?? profileQuery.data ?? null;
   const entitlementState = knownEntitlement ?? activeProfile?.entitlement ?? null;
@@ -375,11 +378,4 @@ function prewarmLocationOrder(locations: VpnLocation[], selectedLocationId: stri
     ordered.push(candidate);
   }
   return ordered;
-}
-
-function errorMessage(error: unknown): string {
-  if (error instanceof Error && typeof error.message === 'string') {
-    return error.message;
-  }
-  return typeof error === 'string' ? error : '';
 }

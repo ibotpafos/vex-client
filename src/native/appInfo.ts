@@ -1,5 +1,6 @@
 import * as Application from 'expo-application';
 import { Platform } from 'react-native';
+import { isTauriRuntime as isTauri } from './tauriPlatform';
 import * as SecureStore from '@/native/secureStore';
 
 export type AppInfo = {
@@ -17,9 +18,6 @@ export const VEX_CONFIG_SCHEMA_VERSION = 1;
 export const VEX_API_CLIENT_VERSION = "expo-1";
 export const VEX_CORE_VERSION = "0.1.0";
 
-function isTauri(): boolean {
-  return Platform.OS === 'web' && typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window || '__TAURI_INVOKE__' in window);
-}
 
 export async function getAppInfo(): Promise<AppInfo> {
   if (isTauri()) {

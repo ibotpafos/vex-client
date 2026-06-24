@@ -58,7 +58,7 @@ export default function App() {
     handleOpenVpnSettingsPress,
     availableLocations,
   } = useVpnConnection();
-  const reduceDesktopMotion = isTauriRuntime();
+  const reduceMotionVisuals = isTauriRuntime() || Platform.OS === 'android';
 
   const powerButtonText = connectionPhase === 'switching'
     ? 'Переключение'
@@ -93,7 +93,7 @@ export default function App() {
         : 'VPN выключен';
 
   return (
-    <VexScreen contentStyle={styles.shell}>
+    <VexScreen contentStyle={styles.shell} backgroundMapEnabled={Platform.OS !== 'android'}>
       <StatusBar style="light" />
       <HomeNativeHeader
         logoSource={vexLogo}
@@ -144,7 +144,7 @@ export default function App() {
             powerButtonDisabled={powerButtonDisabled}
             powerButtonText={powerButtonText}
             powerSubtext={powerSubtext}
-            reduceDesktopMotion={reduceDesktopMotion}
+            reduceMotionVisuals={reduceMotionVisuals}
           />
 
           <ServerChip
@@ -241,7 +241,7 @@ type PowerHeroProps = {
   powerButtonDisabled: boolean;
   powerButtonText: string;
   powerSubtext: string;
-  reduceDesktopMotion: boolean;
+  reduceMotionVisuals: boolean;
 };
 
 const PowerHero = React.memo(function PowerHero({
@@ -254,7 +254,7 @@ const PowerHero = React.memo(function PowerHero({
   powerButtonDisabled,
   powerButtonText,
   powerSubtext,
-  reduceDesktopMotion,
+  reduceMotionVisuals,
 }: PowerHeroProps) {
   useRenderProfilerMark('PowerHero');
   const animatedScale = pulseProgress.interpolate({
@@ -274,16 +274,16 @@ const PowerHero = React.memo(function PowerHero({
     inputRange: [0, 1],
     outputRange: ['0deg', '360deg'],
   });
-  const glowStyle = reduceDesktopMotion
+  const glowStyle = reduceMotionVisuals
     ? styles.heroGlowDesktopStatic
     : { opacity: glowOpacity, transform: [{ scale: glowScale }] };
-  const outerRingStyle = reduceDesktopMotion
+  const outerRingStyle = reduceMotionVisuals
     ? styles.heroRingOuterDesktopStatic
     : { opacity: glowOpacity, transform: [{ scale: glowScale }] };
-  const powerFrameStyle = reduceDesktopMotion
+  const powerFrameStyle = reduceMotionVisuals
     ? undefined
     : { transform: [{ scale: animatedScale }] };
-  const showOrbit = connectionPhase !== 'idle';
+  const showOrbit = !reduceMotionVisuals && connectionPhase !== 'idle';
 
   return (
     <View style={styles.hero}>
@@ -304,7 +304,7 @@ const PowerHero = React.memo(function PowerHero({
         pointerEvents="none"
         style={[styles.heroRingOuter, outerRingStyle]}
       />
-      <Animated.View style={[styles.powerButtonFrame, reduceDesktopMotion && styles.powerButtonFrameDesktop, isConnected && styles.powerButtonFrameActive, isVpnBusy && styles.powerButtonBusy, powerFrameStyle]}>
+      <Animated.View style={[styles.powerButtonFrame, reduceMotionVisuals && styles.powerButtonFrameDesktop, isConnected && styles.powerButtonFrameActive, isVpnBusy && styles.powerButtonBusy, powerFrameStyle]}>
         <Pressable
           disabled={powerButtonDisabled}
           onPress={onPowerPress}

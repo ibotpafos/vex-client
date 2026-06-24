@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react';
+import { errorMessage } from '@/utils/error';
 
 import type { VpnDeviceUsage, VpnLocation } from '../api/vexApi';
 import type { VpnStatus } from '../native/vexVpn';
@@ -225,14 +226,4 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
   }
 
   return { recordNativeStatus };
-}
-
-function errorMessage(error: unknown, fallback: string): string {
-  if (error instanceof Error && typeof error.message === 'string' && error.message.trim()) {
-    return error.message;
-  }
-  if (typeof error === 'string' && error.trim()) {
-    return error;
-  }
-  return fallback;
 }

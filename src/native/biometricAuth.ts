@@ -1,5 +1,6 @@
 import * as LocalAuthentication from 'expo-local-authentication';
 import { Platform } from 'react-native';
+import { isTauriRuntime } from './tauriPlatform';
 
 export type BiometricAuthAvailability = {
   isAvailable: boolean;
@@ -64,9 +65,6 @@ function isNativeMobilePlatform(): boolean {
   return Platform.OS === 'ios' || Platform.OS === 'android';
 }
 
-function isTauriRuntime(): boolean {
-  return Platform.OS === 'web' && typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window || '__TAURI_INVOKE__' in window);
-}
 
 async function getDesktopBiometricAuthAvailability(): Promise<BiometricAuthAvailability> {
   try {

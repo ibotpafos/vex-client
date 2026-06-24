@@ -2,18 +2,24 @@ import { Platform } from 'react-native';
 import { hasPaidEntitlement, type Entitlement, type VpnLocation } from '@/api/vexApi';
 import type { VpnStatus } from '@/native/vexVpn';
 import type { VpnProfile } from '@/vpn/profile';
+import { isTauriRuntime } from '@/native/tauriPlatform';
+import { errorMessage } from '@/utils/error';
 
 export const animationKickDelayMs = 80;
-export const activeDeviceRefreshMs = 15_000;
+export const activeDeviceRefreshMs = 30_000;
 export const nativeStatusPollMs = 2_500;
+export const connectedNativeStatusPollMs = 5_000;
 export const tauriNativeStatusPollMs = 5_000;
 export const nativeHealthPollMs = 30_000;
 export const nativeHealthFailureThreshold = 2;
 export const nativeReconnectCooldownMs = 120_000;
 export const staleHandshakeReconnectSeconds = 180;
+export const entitlementRefreshMs = 2 * 60_000;
+export const locationRefreshMs = 2 * 60_000;
+export const profileRefreshMs = 2 * 60_000;
 export const clientDiagnosticsHeartbeatMs = 5 * 60_000;
 export const clientDiagnosticsErrorCooldownMs = 60_000;
-export const prewarmedProfileStaleMs = 2 * 60_000;
+export const prewarmedProfileStaleMs = 5 * 60_000;
 export const connectAttemptTimeoutMs = 25_000;
 
 export const vpnStatusChangedEvent = 'vpn-status-changed';
@@ -41,9 +47,7 @@ export type ConnectedVpnAttempt = {
 
 export type ConnectionPhase = 'idle' | 'connecting' | 'connected' | 'verifying' | 'degraded' | 'disconnecting' | 'switching' | 'blocked';
 
-export function isTauriRuntime() {
-  return Platform.OS === 'web' && typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window || '__TAURI_INVOKE__' in window);
-}
+export { isTauriRuntime };
 
 export function supportsNativeLatencyProbe() {
   return isTauriRuntime() || Platform.OS === 'android';
@@ -65,15 +69,8 @@ export function areVpnStatusesEqual(left: VpnStatus, right: VpnStatus) {
   return left.state === right.state && left.rxBytes === right.rxBytes && left.txBytes === right.txBytes;
 }
 
-export function errorMessage(error: unknown, fallback: string): string {
-  if (error instanceof Error && typeof error.message === 'string' && error.message.trim()) {
-    return error.message;
-  }
-  if (typeof error === 'string' && error.trim()) {
-    return error;
-  }
-  return fallback;
-}
+export { errorMessage };
+
 
 export function timeoutError(message: string): Error {
   const error = new Error(message);

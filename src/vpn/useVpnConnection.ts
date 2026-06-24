@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, AppState, Easing, Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import {
@@ -52,9 +52,13 @@ import { useNativeVpnWatchdog } from '@/vpn/useNativeVpnWatchdog';
 import { useVpnProfileState, type VpnProfileRefreshEvent } from '@/vpn/useVpnProfileState';
 import { useVpnDiagnostics } from './useVpnDiagnostics';
 import { useVpnConnectionFlow } from './useVpnConnectionFlow';
+import { useVpnConnectionAnimations } from './useVpnConnectionAnimations';
 
 import {
   activeDeviceRefreshMs,
+  connectedNativeStatusPollMs,
+  entitlementRefreshMs,
+  locationRefreshMs,
   nativeStatusPollMs,
   tauriNativeStatusPollMs,
   nativeHealthPollMs,
@@ -63,6 +67,7 @@ import {
   staleHandshakeReconnectSeconds,
   clientDiagnosticsHeartbeatMs,
   prewarmedProfileStaleMs,
+  profileRefreshMs,
   vpnStatusChangedEvent,
   vpnProfileChangedEvent,
   type DiagnosticsSnapshotRef,
@@ -121,8 +126,7 @@ export function useVpnConnection() {
               ? 'connected'
               : 'idle';
 
-  const pulseProgress = useRef(new Animated.Value(0)).current;
-  const spinProgress = useRef(new Animated.Value(0)).current;
+  const { pulseProgress, spinProgress } = useVpnConnectionAnimations(connectionPhase);
   const autoConnectAttemptedRef = useRef(false);
   const vpnOperationInFlightRef = useRef(false);
   const vpnConnectGenerationRef = useRef(0);
@@ -132,8 +136,8 @@ export function useVpnConnection() {
     queryKey: ['entitlement', session?.accessToken],
     queryFn: () => entitlement(session!.accessToken),
     enabled: Boolean(session?.accessToken),
-    staleTime: 30_000,
-    refetchInterval: 30_000,
+    staleTime: entitlementRefreshMs,
+    refetchInterval: entitlementRefreshMs,
   });
 
   const cachedSelectedProfile = session?.accessToken
@@ -147,8 +151,8 @@ export function useVpnConnection() {
     queryKey: ['vpn-locations', session?.accessToken],
     queryFn: () => vpnLocations(session!.accessToken),
     enabled: Boolean(session?.accessToken && hasVpnAccess),
-    staleTime: 30_000,
-    refetchInterval: 30_000,
+    staleTime: locationRefreshMs,
+    refetchInterval: locationRefreshMs,
   });
 
   const availableLocations = useMemo(() => availableVpnLocations(locationsQuery.data), [locationsQuery.data]);
@@ -187,6 +191,7 @@ export function useVpnConnection() {
     onProfileRotationRequired: playWarningHaptic,
     onSubscriptionRequired: handleSubscriptionRequired,
     prewarmStaleMs: prewarmedProfileStaleMs,
+    profileRefreshMs,
     requestVpnPermission,
     selectedLocationId,
     userId: session?.user.id,
@@ -232,7 +237,15 @@ export function useVpnConnection() {
     handleSignOut,
   });
 
-  handleProfileRefreshFailedRef.current = diagnostics.handleProfileRefreshFailed;
+  const {
+    handleProfileRefreshFailed,
+    reportVpnConnectEvent,
+    reportVpnDisconnectEvent,
+    submitClientDiagnosticsEvent,
+    submitVpnDiagnostics,
+  } = diagnostics;
+
+  handleProfileRefreshFailedRef.current = handleProfileRefreshFailed;
 
   const {
     connectProfileWithEndpointFallback,
@@ -249,7 +262,7 @@ export function useVpnConnection() {
     resolveConnectableVpnProfile,
     vpnStatus,
     clientLatencyMs,
-    reportVpnConnectEvent: diagnostics.reportVpnConnectEvent,
+    reportVpnConnectEvent,
     setSelectedLocationId,
     setActiveProfile,
     setVpnStatus,
@@ -339,15 +352,15 @@ export function useVpnConnection() {
     getVpnStatus()
       .then((nextStatus) => {
         if (!vpnOperationInFlightRef.current) {
-          setVpnStatus(nextStatus);
+          setVpnStatus((current) => areVpnStatusesEqual(current, nextStatus) ? current : nextStatus);
         }
       })
       .catch((error) => {
-        void diagnostics.submitClientDiagnosticsEvent('native_status_startup_failed', 'error', {
+        void submitClientDiagnosticsEvent('native_status_startup_failed', 'error', {
           error_message: errorMessage(error, 'native_status_startup_failed'),
         }).catch(() => undefined);
       });
-  }, [diagnostics]);
+  }, [submitClientDiagnosticsEvent]);
 
   useEffect(() => {
     if (!session) {
@@ -356,14 +369,14 @@ export function useVpnConnection() {
     const subscription = AppState.addEventListener('change', (state) => {
       if (state === 'active') {
         refreshManagedProfile({ reason: 'profile_updated' }).catch((error) => {
-          void diagnostics.submitClientDiagnosticsEvent('profile_refresh_on_active_failed', 'error', {
+          void submitClientDiagnosticsEvent('profile_refresh_on_active_failed', 'error', {
             error_message: errorMessage(error, 'profile_refresh_on_active_failed'),
           }).catch(() => undefined);
         });
       }
     });
     return () => subscription.remove();
-  }, [refreshManagedProfile, session, diagnostics]);
+  }, [refreshManagedProfile, session, submitClientDiagnosticsEvent]);
 
   useEffect(() => {
     if (!isTauriRuntime()) {
@@ -395,7 +408,7 @@ export function useVpnConnection() {
     let unlisten: (() => void) | undefined;
     listenTauriEvent<VpnProfileRefreshEvent>(vpnProfileChangedEvent, (event) => {
       refreshManagedProfile(event).catch((error) => {
-        void diagnostics.submitClientDiagnosticsEvent('profile_refresh_event_failed', 'error', {
+        void submitClientDiagnosticsEvent('profile_refresh_event_failed', 'error', {
           error_message: errorMessage(error, 'profile_refresh_event_failed'),
           profile_refresh_reason: event.reason,
           profile_refresh_location_id: selectedLocationId,
@@ -410,7 +423,7 @@ export function useVpnConnection() {
         unlisten = cleanup;
       })
       .catch((error) => {
-        void diagnostics.submitClientDiagnosticsEvent('profile_event_subscribe_failed', 'error', {
+        void submitClientDiagnosticsEvent('profile_event_subscribe_failed', 'error', {
           error_message: errorMessage(error, 'profile_event_subscribe_failed'),
         }).catch(() => undefined);
       });
@@ -419,7 +432,7 @@ export function useVpnConnection() {
       disposed = true;
       unlisten?.();
     };
-  }, [refreshManagedProfile, selectedLocationId, diagnostics]);
+  }, [refreshManagedProfile, selectedLocationId, submitClientDiagnosticsEvent]);
 
   useEffect(() => {
     if (!supportsNativeLatencyProbe() || !activeDevice?.endpoint) {
@@ -462,7 +475,7 @@ export function useVpnConnection() {
       if (disposed) {
         return;
       }
-      await diagnostics.submitVpnDiagnostics('vpn_connected_heartbeat', 'ok').catch(() => undefined);
+      await submitVpnDiagnostics('vpn_connected_heartbeat', 'ok').catch(() => undefined);
     };
 
     void sendHeartbeat();
@@ -474,57 +487,8 @@ export function useVpnConnection() {
       disposed = true;
       clearInterval(timer);
     };
-  }, [activeProfileDeviceId, isConnected, session?.accessToken, diagnostics]);
+  }, [activeProfileDeviceId, isConnected, session?.accessToken, submitVpnDiagnostics]);
 
-  useEffect(() => {
-    pulseProgress.stopAnimation();
-    pulseProgress.setValue(0);
-
-    if (connectionPhase === 'idle' || isTauriRuntime()) {
-      return undefined;
-    }
-
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulseProgress, {
-          duration: connectionPhase === 'connected' ? 1500 : 700,
-          easing: Easing.inOut(Easing.quad),
-          toValue: 1,
-          useNativeDriver: true,
-        }),
-        Animated.timing(pulseProgress, {
-          duration: connectionPhase === 'connected' ? 1500 : 700,
-          easing: Easing.inOut(Easing.quad),
-          toValue: 0,
-          useNativeDriver: true,
-        }),
-      ]),
-    );
-    loop.start();
-
-    return () => loop.stop();
-  }, [connectionPhase, pulseProgress]);
-
-  useEffect(() => {
-    spinProgress.stopAnimation();
-    spinProgress.setValue(0);
-
-    if (connectionPhase !== 'connecting' && connectionPhase !== 'verifying' && connectionPhase !== 'disconnecting' && connectionPhase !== 'switching') {
-      return undefined;
-    }
-
-    const loop = Animated.loop(
-      Animated.timing(spinProgress, {
-        duration: connectionPhase === 'disconnecting' ? 800 : 1100,
-        easing: Easing.linear,
-        toValue: 1,
-        useNativeDriver: true,
-      }),
-    );
-    loop.start();
-
-    return () => loop.stop();
-  }, [connectionPhase, spinProgress]);
 
 
 
@@ -532,8 +496,8 @@ export function useVpnConnection() {
     if (!session?.accessToken) {
       return;
     }
-    diagnostics.reportVpnConnectEvent(profile, 'native_watchdog');
-  }, [diagnostics, session?.accessToken]);
+    reportVpnConnectEvent(profile, 'native_watchdog');
+  }, [reportVpnConnectEvent, session?.accessToken]);
 
   const probeVpnAutopilotHealth = useCallback((profile: VpnProfile) => {
     return probeNetworkHealth({
@@ -582,14 +546,18 @@ export function useVpnConnection() {
     sessionAccessToken: session?.accessToken,
     setCachedProfile: cacheProfile,
     staleHandshakeSeconds: staleHandshakeReconnectSeconds,
-    submitDiagnostics: diagnostics.submitVpnDiagnostics,
+    submitDiagnostics: submitVpnDiagnostics,
   });
 
   useEffect(() => {
     if (!session || !supportsNativeStatusPolling()) {
       return undefined;
     }
-    const pollMs = isTauriRuntime() ? tauriNativeStatusPollMs : nativeStatusPollMs;
+    const pollMs = isTauriRuntime()
+      ? tauriNativeStatusPollMs
+      : isConnected
+        ? connectedNativeStatusPollMs
+        : nativeStatusPollMs;
     const timer = setInterval(() => {
       getVpnStatus()
         .then((nextStatus) => {
@@ -604,13 +572,13 @@ export function useVpnConnection() {
           });
         })
         .catch((error) => {
-          void diagnostics.submitClientDiagnosticsEvent('native_status_poll_failed', 'error', {
+          void submitClientDiagnosticsEvent('native_status_poll_failed', 'error', {
             error_message: errorMessage(error, 'native_status_poll_failed'),
           }).catch(() => undefined);
         });
     }, pollMs);
     return () => clearInterval(timer);
-  }, [recordNativeStatus, session, diagnostics]);
+  }, [isConnected, recordNativeStatus, session, submitClientDiagnosticsEvent]);
 
   const handleVpnFailure = useCallback((error: unknown, fallbackState: VpnStatus['state']) => {
     const message = errorMessage(error, 'VPN не подключился');
@@ -648,7 +616,7 @@ export function useVpnConnection() {
         const nextStatus = await disconnectVpn({ releaseAntiLeak: true }).catch(disconnectedVpnStatus);
         setVpnStatus(nextStatus);
         if (session && activeProfile && (latestStatus?.state === 'connected' || latestStatus?.leakProtection === 'blocking')) {
-          diagnostics.reportVpnDisconnectEvent(activeProfile, 'user');
+          reportVpnDisconnectEvent(activeProfile, 'user');
         }
         playSuccessHaptic();
       } catch (error) {
@@ -678,7 +646,7 @@ export function useVpnConnection() {
         const nextStatus = await disconnectVpn({ releaseAntiLeak: true });
         setVpnStatus(nextStatus);
         if (session && activeProfile) {
-          diagnostics.reportVpnDisconnectEvent(activeProfile, 'user');
+          reportVpnDisconnectEvent(activeProfile, 'user');
         }
         playSuccessHaptic();
         return;
@@ -689,7 +657,7 @@ export function useVpnConnection() {
         const nextStatus = await disconnectVpn({ releaseAntiLeak: true }).catch(disconnectedVpnStatus);
         setVpnStatus(nextStatus);
         if (session && activeProfile) {
-          diagnostics.reportVpnDisconnectEvent(activeProfile, 'user');
+          reportVpnDisconnectEvent(activeProfile, 'user');
         }
         return;
       }
@@ -709,7 +677,7 @@ export function useVpnConnection() {
     isKeyRotationBusy,
     isLeakBlocked,
     isVpnBusy,
-    diagnostics,
+    reportVpnDisconnectEvent,
     session,
   ]);
 
@@ -824,11 +792,11 @@ export function useVpnConnection() {
         previousProfile,
         previousStatus,
         reportConnect: (profile) => {
-          diagnostics.reportVpnConnectEvent(profile, 'server_switch');
+          reportVpnConnectEvent(profile, 'server_switch');
         },
         reportDisconnect: (profile, reason) => {
           if (profile) {
-            diagnostics.reportVpnDisconnectEvent(profile, reason);
+            reportVpnDisconnectEvent(profile, reason);
           }
         },
         resolveProfile: resolveConnectableVpnProfile,
@@ -879,14 +847,15 @@ export function useVpnConnection() {
     activeProfile,
     cacheProfile,
     connectProfileWithEndpointFallback,
+    isVpnBusy,
     queryClient,
-    diagnostics,
+    reportVpnConnectEvent,
+    reportVpnDisconnectEvent,
     resolveConnectableVpnProfile,
     selectedLocationId,
     session,
     setActiveProfile,
     vpnStatus,
-    isVpnBusy,
   ]);
 
   const handleLocationPress = useCallback(async (locationId: string) => {

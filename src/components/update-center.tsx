@@ -8,6 +8,7 @@ import { useDesktopUpdate } from '@/components/desktop-update-overlay';
 import { useMobileAppUpdateQuery } from '@/components/mobile-app-update-query';
 import { getAppInfo, type AppInfo } from '@/native/appInfo';
 import { playErrorHaptic, playLightImpactHaptic, playSelectionHaptic, playSuccessHaptic } from '@/native/haptics';
+import { isTauriRuntime } from '@/native/tauriPlatform';
 import { vexSharedStyles } from '@/ui/vex-ui';
 
 type UpdateCenterButtonProps = {
@@ -318,10 +319,6 @@ function InfoRow({
 function currentNativeBuild() {
   const parsed = Number.parseInt(String(Application.nativeBuildVersion ?? '0'), 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
-}
-
-function isTauriRuntime(): boolean {
-  return Platform.OS === 'web' && typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window || '__TAURI_INVOKE__' in window);
 }
 
 const styles = StyleSheet.create({

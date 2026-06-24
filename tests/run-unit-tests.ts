@@ -1,7 +1,10 @@
 import { billingSummaryFallbackCopy, buildBillingSummary, type BillingPlanSource } from '../src/api/billingSummary';
+import { errorMessage } from '../src/utils/error';
 import { assessManualUpdateCenter, updateCheckChannel, validateManualUpdatePayloadForBaseUrl } from '../src/api/updatePreflight';
 import { sessionLoadFailureDiagnosticsSnapshot } from '../src/auth/sessionDiagnostics';
 import { loadSessionWithRetry, loadWithRetry } from '../src/auth/sessionLoadRetry';
+import { generateChallenge, generateRandomString } from '../src/auth/pkce';
+import { optimisticSupportTicket, uniqueSupportMessages, supportChatItems } from '../src/screens/support-helpers';
 import {
   deleteTauriSensitiveStorageItem,
   getTauriSensitiveStorageItem,
@@ -31,7 +34,7 @@ import { defaultVpnBypassRegion, defaultVpnRoutingMode, defaultVpnRoutingPolicyV
 import { autoSwitchTargetLocationId, chooseBestVpnLocation } from '../src/vpn/serverSelection';
 import { switchVpnLocation } from '../src/vpn/serverSwitch';
 import { assessVpnAutopilotIssue } from '../src/vpn/vpnAutopilotAssessment';
-import type { VpnDevice, VpnDeviceUsage, VpnLocation } from '../src/api/vexApi';
+import type { VpnDevice, VpnDeviceUsage, VpnLocation, SupportMessage } from '../src/api/vexApi';
 import type { VpnStatus } from '../src/native/vexVpn';
 import type { VpnProfile } from '../src/vpn/profile';
 
@@ -632,11 +635,14 @@ void runAsyncTests().catch((error) => {
 });
 
 async function runAsyncTests(): Promise<void> {
-await runAuthStorageWarmStartTests();
-await runSessionLoadRetryTests();
-await runSafeStorageTests();
-runHotVpnProfileTests();
-runHotConnectFlowTests();
+  await runAuthStorageWarmStartTests();
+  await runSessionLoadRetryTests();
+  await runSafeStorageTests();
+  runHotVpnProfileTests();
+  runHotConnectFlowTests();
+  await runPkceTests();
+  runSupportTests();
+  runErrorMessageTests();
   await runServerSwitchTests();
 }
 
@@ -1274,3 +1280,45 @@ async function assertRejects(fn: () => Promise<unknown>, expectedMessage: string
   }
   throw new Error(`Expected rejection containing ${JSON.stringify(expectedMessage)}`);
 }
+async function runPkceTests(): Promise<void> {
+  const verifier = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
+  const expectedChallenge = 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM';
+  const challenge = await generateChallenge(verifier);
+  assertEqual(challenge, expectedChallenge);
+
+  const rand = generateRandomString(32);
+  assertEqual(rand.length, 32);
+  assertEqual(typeof rand, 'string');
+}
+
+function runSupportTests(): void {
+  const t1 = optimisticSupportTicket('Payment Issue', 'I paid but it says expired.');
+  assertEqual(t1.subject, 'Payment Issue');
+  assertEqual(t1.status, 'open');
+  assertEqual(t1.messages?.[0]?.body, 'I paid but it says expired.');
+
+  const now = new Date().toISOString();
+  const m1: SupportMessage = { id: 'm1', ticketId: 't1', sender: 'user', body: 'hello', createdAt: now };
+  const m2: SupportMessage = { id: 'm2', ticketId: 't1', sender: 'user', body: 'hello', createdAt: now };
+  const unique = uniqueSupportMessages([m1, m2]);
+  assertEqual(unique.length, 1);
+
+  const diagMsg1: SupportMessage = { id: 'd1', ticketId: 't1', sender: 'user', body: 'generated_at: 2026\ncheck.dns: ok\nstatus: connected', createdAt: now };
+  const diagMsg2: SupportMessage = { id: 'd2', ticketId: 't1', sender: 'user', body: 'generated_at: 2026\ncheck.dns: fail\nstatus: disconnected', createdAt: now };
+  const chatItemsList = supportChatItems([diagMsg1, diagMsg2]);
+  assertEqual(chatItemsList.length, 1);
+  assertEqual(chatItemsList[0].type, 'diagnosticGroup');
+}
+
+function runErrorMessageTests(): void {
+  assertEqual(errorMessage(new Error('Test message'), 'fallback'), 'Test message');
+  assertEqual(errorMessage('String message', 'fallback'), 'String message');
+  assertEqual(errorMessage(''), '');
+  assertEqual(errorMessage('', 'fallback'), 'fallback');
+  assertEqual(errorMessage(null, 'fallback'), 'fallback');
+  assertEqual(errorMessage(undefined, 'fallback'), 'fallback');
+  assertEqual(errorMessage({}), '');
+  assertEqual(errorMessage(new Error('Another Test')), 'Another Test');
+  assertEqual(errorMessage(null), '');
+}
+

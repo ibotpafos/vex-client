@@ -1,8 +1,9 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { updateCheckChannel } from '@/api/updatePreflight';
 import { appUpdateCheck } from '@/api/vexApi';
 import { getAppInfo, getOrCreateDeviceId } from '@/native/appInfo';
+import { isTauriRuntime } from '@/native/tauriPlatform';
 
 type DesktopUpdateStatus = 'idle' | 'checking' | 'downloading' | 'ready' | 'error';
 
@@ -46,9 +47,6 @@ const defaultDesktopUpdateState: DesktopUpdateState = {
 
 const DesktopUpdateContext = createContext<DesktopUpdateState>(defaultDesktopUpdateState);
 
-function isTauriRuntime(): boolean {
-  return Platform.OS === 'web' && typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window || '__TAURI_INVOKE__' in window);
-}
 
 const pendingUpdateStorageKey = 'vex.desktop.pending-update.v1';
 

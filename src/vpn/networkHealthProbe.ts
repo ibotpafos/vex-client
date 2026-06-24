@@ -1,4 +1,5 @@
 import type { VpnAutopilotProbeResult } from './vpnAutopilotAssessment';
+import { errorMessage } from '@/utils/error';
 
 type NetworkHealthProbeInput = {
   apiBaseUrl: string;
@@ -33,7 +34,7 @@ async function probeEndpoint(input: NetworkHealthProbeInput): Promise<VpnAutopil
     return {
       dnsOk: !errorLooksLikeDns(error),
       endpointLatencyMs: null,
-      endpointProbeError: errorMessage(error),
+      endpointProbeError: errorMessage(error, 'network_probe_failed'),
     };
   }
 }
@@ -55,7 +56,7 @@ async function probeHttps(input: NetworkHealthProbeInput): Promise<VpnAutopilotP
   } catch (error) {
     return {
       httpsOk: false,
-      httpsProbeError: errorMessage(error),
+      httpsProbeError: errorMessage(error, 'network_probe_failed'),
     };
   } finally {
     clearTimeout(timeout);
@@ -83,12 +84,3 @@ function errorLooksLikeDns(error: unknown): boolean {
     message.includes('unable to resolve host');
 }
 
-function errorMessage(error: unknown): string {
-  if (error instanceof Error && error.message.trim()) {
-    return error.message;
-  }
-  if (typeof error === 'string' && error.trim()) {
-    return error;
-  }
-  return 'network_probe_failed';
-}

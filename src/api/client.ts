@@ -1,5 +1,7 @@
 import { Platform } from 'react-native';
 import { getAppInfo, getOrCreateDeviceId } from '@/native/appInfo';
+import { isTauriRuntime } from '@/native/tauriPlatform';
+export { isTauriRuntime };
 
 export type RequestOptions = {
   accessToken?: string;
@@ -20,9 +22,6 @@ let tauriFetchPromise: Promise<typeof import('@tauri-apps/plugin-http').fetch> |
 export const vexApiBaseUrl = trimTrailingSlash(process.env.EXPO_PUBLIC_VEX_API_BASE_URL || 'https://vexguard.app');
 const apiRequestBaseUrl = vexApiBaseUrl;
 
-export function isTauriRuntime(): boolean {
-  return Platform.OS === 'web' && typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window || '__TAURI_INVOKE__' in window);
-}
 
 async function tauriHttpFetch() {
   tauriFetchPromise ??= import('@tauri-apps/plugin-http').then((module) => module.fetch);

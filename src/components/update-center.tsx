@@ -29,6 +29,50 @@ export function UpdateCenterButton({ visible, onOpen, onClose }: UpdateCenterBut
   return null;
 }
 
+export function MobileUpdateNoticeBanner({ onOpen }: { onOpen: () => void }) {
+  if (Platform.OS !== 'android' && Platform.OS !== 'ios') {
+    return null;
+  }
+  return <MobileUpdateNoticeBannerContent onOpen={onOpen} platform={Platform.OS} />;
+}
+
+function MobileUpdateNoticeBannerContent({ onOpen, platform }: { onOpen: () => void; platform: 'android' | 'ios' }) {
+  const buildNumber = currentNativeBuild();
+  const updateQuery = useMobileAppUpdateQuery(platform, buildNumber);
+  const update = updateQuery.data ?? null;
+  const shouldShow = Boolean(update?.required || update?.currentBuildBlocked);
+
+  if (!shouldShow) {
+    return null;
+  }
+
+  const migration = isAndroidSigningKeyMigration(update);
+  return (
+    <Pressable
+      accessibilityLabel={migration ? 'Открыть миграцию на новую Android-сборку' : 'Открыть обязательное обновление'}
+      accessibilityRole="button"
+      onPress={() => {
+        playSelectionHaptic();
+        onOpen();
+      }}
+      style={[styles.noticeBanner, migration && styles.noticeBannerMigration]}
+    >
+      <View style={styles.noticeIcon}>
+        <ShieldAlert color="#031012" size={20} strokeWidth={2.7} />
+      </View>
+      <View style={styles.noticeCopy}>
+        <Text style={styles.noticeTitle}>{migration ? 'Нужно поставить новую сборку VEX' : 'Требуется обновление VEX'}</Text>
+        <Text numberOfLines={2} style={styles.noticeText}>
+          {migration
+            ? 'Скачайте новый APK, войдите в аккаунт и затем удалите старое приложение.'
+            : 'Откройте центр обновлений и установите актуальную версию.'}
+        </Text>
+      </View>
+      <Text style={styles.noticeAction}>Открыть</Text>
+    </Pressable>
+  );
+}
+
 function MobileUpdateCenterButton({
   onOpen,
   platform,
@@ -356,6 +400,11 @@ function currentNativeBuild() {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
+function isAndroidSigningKeyMigration(update: AppUpdateCheckResult | null): boolean {
+  const changelog = update?.changelog?.toLowerCase() || '';
+  return update?.reason === 'android_signing_key_migration' || changelog.includes('android-signing-key-migration');
+}
+
 const styles = StyleSheet.create({
   headerButtonHighlighted: {
     backgroundColor: '#22D3EE',
@@ -379,6 +428,49 @@ const styles = StyleSheet.create({
   headerBadgeDanger: {
     backgroundColor: '#FF7A7A',
     borderColor: '#071113',
+  },
+  noticeBanner: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,122,122,0.14)',
+    borderColor: 'rgba(255,122,122,0.34)',
+    borderRadius: 18,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  noticeBannerMigration: {
+    backgroundColor: 'rgba(248,212,119,0.14)',
+    borderColor: 'rgba(248,212,119,0.38)',
+  },
+  noticeIcon: {
+    alignItems: 'center',
+    backgroundColor: '#F8D477',
+    borderRadius: 14,
+    height: 34,
+    justifyContent: 'center',
+    width: 34,
+  },
+  noticeCopy: {
+    flex: 1,
+    gap: 3,
+  },
+  noticeTitle: {
+    color: '#F4FCFD',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  noticeText: {
+    color: '#C6D6D9',
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 16,
+  },
+  noticeAction: {
+    color: '#F8D477',
+    fontSize: 13,
+    fontWeight: '900',
   },
   modal: {
     backgroundColor: '#020A0B',

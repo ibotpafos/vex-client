@@ -5,7 +5,7 @@ import React from 'react';
 import { Animated, Platform, Pressable, View, Text } from 'react-native';
 
 import { HomeNativeHeader } from '@/components/home-native-header';
-import { UpdateCenterButton } from '@/components/update-center';
+import { MobileUpdateNoticeBanner, UpdateCenterButton } from '@/components/update-center';
 import { useRenderProfilerMark } from '@/debug/render-profiler';
 import { playSelectionHaptic } from '@/native/haptics';
 import { VexNativeActivityIndicator } from '@/ui/native-activity-indicator';
@@ -106,6 +106,7 @@ export default function App() {
           </View>
         )}
       />
+      <MobileUpdateNoticeBanner onOpen={openUpdateCenter} />
 
       {!session ? (
         <View style={styles.centerState}>

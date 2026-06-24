@@ -17,6 +17,7 @@ export type ManualUpdateCenterInput = {
     signatureUrl?: string | null;
     channel?: string;
     reason?: string;
+    changelog?: string;
   } | null;
   currentVersion: string;
   currentBuild: number;
@@ -87,7 +88,7 @@ export function assessManualUpdateCenter(input: ManualUpdateCenterInput): Manual
       signatureUrl: update?.signatureUrl,
     }, input.trustedBaseUrl)
     : { ok: false, error: 'Обновление не требуется.' };
-  const reason = update?.reason || '';
+  const reason = updateReason(update);
   const signatureLabel = signatureStatusLabel(update, preflight);
   const signatureTone = preflight.ok ? 'ok' : updateAvailable ? 'danger' : 'warning';
   const compatibility = compatibilityCopy(reason, required, currentBuildBlocked, updateAvailable);
@@ -95,7 +96,7 @@ export function assessManualUpdateCenter(input: ManualUpdateCenterInput): Manual
   return {
     title: updateCenterTitle(reason, required, currentBuildBlocked, updateAvailable),
     message: updateCenterMessage(reason, required, currentBuildBlocked, updateAvailable),
-    actionLabel: currentBuildBlocked ? 'Вернуться на стабильную' : required ? 'Обновить сейчас' : updateAvailable ? 'Установить обновление' : 'Проверить снова',
+    actionLabel: reason === 'android_signing_key_migration' ? 'Скачать новую сборку' : currentBuildBlocked ? 'Вернуться на стабильную' : required ? 'Обновить сейчас' : updateAvailable ? 'Установить обновление' : 'Проверить снова',
     compatibilityLabel: compatibility.label,
     compatibilityTone: compatibility.tone,
     signatureLabel,
@@ -112,6 +113,9 @@ function updateCenterTitle(reason: string, required: boolean, currentBuildBlocke
   if (currentBuildBlocked || reason === 'blocked_release') {
     return 'Сборка отозвана';
   }
+  if (reason === 'android_signing_key_migration') {
+    return 'Новая Android-сборка VEX';
+  }
   if (required) {
     return 'Нужно обновить VEX';
   }
@@ -124,6 +128,9 @@ function updateCenterTitle(reason: string, required: boolean, currentBuildBlocke
 function updateCenterMessage(reason: string, required: boolean, currentBuildBlocked: boolean, updateAvailable: boolean): string {
   if (currentBuildBlocked || reason === 'blocked_release') {
     return 'Эта сборка заблокирована. Установите предложенную стабильную версию, чтобы вернуться на поддерживаемый канал.';
+  }
+  if (reason === 'android_signing_key_migration') {
+    return 'Мы выпустили новую Android-сборку с обновленной подписью. Установите ее как новое приложение, войдите в аккаунт и после проверки доступа удалите старый VEX.';
   }
   if (reason === 'unsupported_config_schema') {
     return 'Текущий клиент несовместим с новым форматом конфигурации. Обновление обязательно перед выдачей VPN-профиля.';
@@ -151,6 +158,9 @@ function compatibilityCopy(
 ): { label: string; tone: ManualUpdateCenterAssessment['compatibilityTone'] } {
   if (currentBuildBlocked || reason === 'blocked_release') {
     return { label: 'Сборка заблокирована, нужен rollback', tone: 'danger' };
+  }
+  if (reason === 'android_signing_key_migration') {
+    return { label: 'Нужна миграция на новую Android-сборку', tone: 'danger' };
   }
   if (reason === 'unsupported_config_schema') {
     return { label: 'Несовместимая схема конфигурации', tone: 'danger' };
@@ -191,4 +201,13 @@ function isTrustedUpdateUrl(value: string, trustedBaseUrl: string): boolean {
   } catch {
     return false;
   }
+}
+
+function updateReason(update: ManualUpdateCenterInput['update']): string {
+  const explicitReason = update?.reason || '';
+  const changelog = update?.changelog?.toLowerCase() || '';
+  if (changelog.includes('android-signing-key-migration')) {
+    return 'android_signing_key_migration';
+  }
+  return explicitReason;
 }

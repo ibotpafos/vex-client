@@ -12,6 +12,10 @@ def vexBuildValue(String name, String fallback = '') {
     return (findProperty(name) ?: System.getenv(name) ?: fallback).toString()
 }
 
+def vexAndroidApplicationId() {
+    return vexBuildValue('VEX_ANDROID_APPLICATION_ID', 'com.vexguard.app')
+}
+
 def buildConfigString(String value) {
     return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
 }
@@ -99,7 +103,7 @@ def localBuildSigningConfig = {
     return android.signingConfigs.debug
 }
 
-if (file("google-services.json").exists() && !optionalApplicationIdSuffix()) {
+if (file("google-services.json").exists() && !optionalApplicationIdSuffix() && vexAndroidApplicationId() == 'com.vexguard.app') {
     apply plugin: "com.google.gms.google-services"
 }
 
@@ -196,13 +200,13 @@ android {
 
     namespace 'com.vexguard.app'
     defaultConfig {
-        applicationId 'com.vexguard.app'
+        applicationId vexAndroidApplicationId()
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1004647
-        versionName "1.0.46"
+        versionCode 1004748
+        versionName "1.0.47"
         manifestPlaceholders = [
-            vexRuntimeVersion: vexBuildValue('VEX_RUNTIME_VERSION', "1.0.46"),
+            vexRuntimeVersion: vexBuildValue('VEX_RUNTIME_VERSION', "1.0.47"),
             vexUpdatesEnabled: vexUpdatesEnabled(),
             vexUpdatesUrl: vexUpdatesUrl(),
             vexUpdatesRequestHeaders: vexUpdatesRequestHeaders(),

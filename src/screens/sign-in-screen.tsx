@@ -37,6 +37,7 @@ import { vexColors, VexScreen, vexSharedStyles } from "@/ui/vex-ui";
 import { resetVpnProfileCache } from "@/vpn/profile";
 import * as SecureStore from "@/native/secureStore";
 import { generateRandomString, generateChallenge } from "@/auth/pkce";
+import { buildAppWebAuthUrl } from "@/auth/webAuthUrl";
 import {
   openWebAuthUrl,
   supportsWebsiteAuth,
@@ -261,19 +262,16 @@ export default function SignInScreen() {
       const deviceId = await getOrCreateDeviceId();
       const { platform, deviceName } = getDeviceDetails();
 
-      const webAuthUrl =
-        `${vexApiBaseUrl}/auth/app?` +
-        new URLSearchParams({
-          client_id: "vex_app",
-          code_challenge: challenge,
-          code_verifier: verifier,
-          state: state,
-          device_id: deviceId,
-          device_name: deviceName,
-          platform: platform,
-        }).toString();
+      const webAuthUrl = buildAppWebAuthUrl({
+        baseUrl: vexApiBaseUrl,
+        challenge,
+        deviceId,
+        deviceName,
+        platform,
+        state,
+      });
 
-      console.log("Opening Web Auth URL:", webAuthUrl);
+      console.log("Opening Web Auth URL for platform:", platform);
       const callbackUrl = await openWebAuthUrl(webAuthUrl);
       if (isAppAuthCallbackUrl(callbackUrl)) {
         await handleCallbackUrl(callbackUrl);

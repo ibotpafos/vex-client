@@ -1,7 +1,8 @@
 import * as Application from 'expo-application';
 import { Download, RefreshCw, ShieldAlert, ShieldCheck, X } from 'lucide-react-native';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { installManualUpdate } from '@/api/manualUpdateInstall';
 import { assessManualUpdateCenter } from '@/api/updatePreflight';
 import { vexApiBaseUrl, type AppUpdateCheckResult } from '@/api/vexApi';
 import { useDesktopUpdate } from '@/components/desktop-update-overlay';
@@ -201,6 +202,9 @@ function MobileUpdateCenterContent({
     trustedBaseUrl: vexApiBaseUrl,
     update,
   }), [appInfo?.version, buildNumber, update]);
+  const canStartInstall = platform === 'ios'
+    ? Boolean(update?.updateAvailable && update.downloadUrl)
+    : assessment.canInstall;
 
   const handlePrimaryPress = useCallback(async () => {
     setActionError(null);
@@ -209,20 +213,20 @@ function MobileUpdateCenterContent({
       await updateQuery.refetch();
       return;
     }
-    if (!assessment.canInstall || !update?.downloadUrl) {
+    if (!canStartInstall || !update?.downloadUrl) {
       playErrorHaptic();
       setActionError(assessment.preflight.error || 'Обновление недоступно для установки.');
       return;
     }
     try {
       playLightImpactHaptic();
-      await Linking.openURL(update.downloadUrl);
+      await installManualUpdate(update, platform);
       playSuccessHaptic();
-    } catch {
+    } catch (error) {
       playErrorHaptic();
-      setActionError('Не удалось открыть ссылку обновления.');
+      setActionError(error instanceof Error ? error.message : 'Не удалось открыть ссылку обновления.');
     }
-  }, [assessment, update?.downloadUrl, updateQuery]);
+  }, [assessment.preflight.error, assessment.updateAvailable, canStartInstall, platform, update, updateQuery]);
 
   return (
     <ScrollView contentContainerStyle={styles.content}>
@@ -238,20 +242,20 @@ function MobileUpdateCenterContent({
       </View>
       {update?.changelog ? <Text style={styles.notes}>{update.changelog}</Text> : null}
       {updateQuery.error ? <Text style={styles.error}>Не удалось проверить обновления. Проверьте подключение.</Text> : null}
-      {!assessment.canInstall && assessment.updateAvailable ? <Text style={styles.error}>{assessment.preflight.error}</Text> : null}
+      {!canStartInstall && assessment.updateAvailable ? <Text style={styles.error}>{assessment.preflight.error}</Text> : null}
       {actionError ? <Text style={styles.error}>{actionError}</Text> : null}
       <View style={styles.actions}>
         <Pressable disabled={updateQuery.isFetching} onPress={() => { void updateQuery.refetch(); }} style={styles.secondaryButton}>
           <RefreshCw color="#A7B9BD" size={18} strokeWidth={2.5} />
           <Text style={styles.secondaryText}>{updateQuery.isFetching ? 'Проверяем' : 'Проверить'}</Text>
         </Pressable>
-        <Pressable onPress={handlePrimaryPress} style={[styles.primaryButton, !assessment.canInstall && assessment.updateAvailable && styles.primaryButtonDisabled]}>
+        <Pressable onPress={handlePrimaryPress} style={[styles.primaryButton, !canStartInstall && assessment.updateAvailable && styles.primaryButtonDisabled]}>
           <Text style={styles.primaryText}>{assessment.actionLabel}</Text>
         </Pressable>
       </View>
       <Text style={styles.footnote}>
         {platform === 'android'
-          ? 'Android откроет официальный APK. После загрузки подтвердите установку в системном установщике.'
+          ? 'Android скачает APK внутри VEX, проверит checksum и подпись приложения, затем откроет системный установщик.'
           : 'iOS откроет официальную страницу обновления.'}
       </Text>
     </ScrollView>

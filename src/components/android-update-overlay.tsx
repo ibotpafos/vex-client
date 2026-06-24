@@ -1,7 +1,8 @@
 import * as Application from 'expo-application';
 import { Download, ShieldCheck } from 'lucide-react-native';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Linking, Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { installManualUpdate } from '@/api/manualUpdateInstall';
 import { validateManualUpdatePayload, type AppUpdateCheckResult } from '@/api/vexApi';
 import { useMobileAppUpdateQuery } from '@/components/mobile-app-update-query';
 import { playErrorHaptic, playLightImpactHaptic, playSelectionHaptic, playSuccessHaptic } from '@/native/haptics';
@@ -65,14 +66,17 @@ function AndroidUpdateOverlayContent() {
     }
     playLightImpactHaptic();
     try {
-      await Linking.openURL(update?.downloadUrl || '');
+      if (!update) {
+        throw new Error('Данные обновления недоступны.');
+      }
+      await installManualUpdate(update, 'android');
       playSuccessHaptic();
     } catch (error) {
       playErrorHaptic();
       const message = error instanceof Error && error.message ? error.message : 'Не удалось открыть ссылку обновления.';
       setDownloadState({ status: 'error', build: downloadState.build, message });
     }
-  }, [downloadState, update?.downloadUrl]);
+  }, [downloadState, update]);
 
   const handleRetryDownload = useCallback(() => {
     if (!update?.latestBuild || !preflight.ok) {
@@ -100,7 +104,7 @@ function AndroidUpdateOverlayContent() {
   const text = isReady
     ? update.currentBuildBlocked
       ? 'Установите предложенную стабильную версию, чтобы вернуться на поддерживаемую сборку.'
-      : 'Откройте официальный APK и подтвердите установку в Android.'
+      : 'VEX скачает APK, проверит checksum и подпись приложения, затем откроет системный установщик.'
     : isError
       ? 'Не удалось подготовить обновление. Проверьте подключение и попробуйте позже.'
       : 'VEX готовит ссылку на новую версию.';

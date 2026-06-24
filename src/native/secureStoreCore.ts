@@ -45,10 +45,11 @@ export async function setTauriSensitiveStorageItem(
   webStorage: WebStorageAdapter,
 ): Promise<void> {
   const storedSecurely = await invoke<boolean>('secure_storage_set', { key, value }).catch(() => false);
-  webStorage.setItem(key, value);
   if (storedSecurely) {
+    webStorage.deleteItem(key);
     return;
   }
+  webStorage.setItem(key, value);
 }
 
 export async function deleteTauriSensitiveStorageItem(

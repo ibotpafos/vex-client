@@ -1,9 +1,12 @@
 import { billingSummaryFallbackCopy, buildBillingSummary, type BillingPlanSource } from '../src/api/billingSummary';
+import { installManualUpdate, isTrustedIosUpdateUrl } from '../src/api/manualUpdateInstall';
 import { errorMessage } from '../src/utils/error';
 import { assessManualUpdateCenter, updateCheckChannel, validateManualUpdatePayloadForBaseUrl } from '../src/api/updatePreflight';
+import { resolveAuthCallbackExchange } from '../src/auth/callbackParams';
 import { sessionLoadFailureDiagnosticsSnapshot } from '../src/auth/sessionDiagnostics';
 import { loadSessionWithRetry, loadWithRetry } from '../src/auth/sessionLoadRetry';
 import { generateChallenge, generateRandomString } from '../src/auth/pkce';
+import { buildAppWebAuthUrl } from '../src/auth/webAuthUrl';
 import { optimisticSupportTicket, uniqueSupportMessages, supportChatItems } from '../src/screens/support-helpers';
 import {
   deleteTauriSensitiveStorageItem,
@@ -315,7 +318,7 @@ async function runAuthStorageWarmStartTests(): Promise<void> {
     );
 
     assertEqual(secureStorage.get('vex.auth.session.v1'), '{"accessToken":"mirrored"}');
-    assertEqual(webStorage.getItem('vex.auth.session.v1'), '{"accessToken":"mirrored"}');
+    assertEqual(webStorage.getItem('vex.auth.session.v1'), null);
   }
 
   {
@@ -641,6 +644,7 @@ async function runAsyncTests(): Promise<void> {
   runHotVpnProfileTests();
   runHotConnectFlowTests();
   await runPkceTests();
+  await runManualUpdateInstallTests();
   runSupportTests();
   runErrorMessageTests();
   await runServerSwitchTests();
@@ -1256,6 +1260,19 @@ function authSessionCandidate() {
   };
 }
 
+function appUpdateCandidate() {
+  return {
+    updateAvailable: true,
+    required: false,
+    latestVersion: '1.0.47',
+    latestBuild: 1004748,
+    minSupportedBuild: 1004300,
+    downloadUrl: 'https://vexguard.app/downloads/VEX-Android.apk',
+    checksumSha256: 'a'.repeat(64),
+    signatureUrl: 'https://vexguard.app/downloads/VEX-Android.apk.sig',
+  };
+}
+
 function assertEqual<T>(actual: T, expected: T): void {
   if (actual !== expected) {
     throw new Error(`Expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
@@ -1289,6 +1306,70 @@ async function runPkceTests(): Promise<void> {
   const rand = generateRandomString(32);
   assertEqual(rand.length, 32);
   assertEqual(typeof rand, 'string');
+
+  const authUrl = buildAppWebAuthUrl({
+    baseUrl: 'https://vexguard.app/',
+    challenge: 'challenge',
+    deviceId: 'device-1',
+    deviceName: 'Android',
+    platform: 'android',
+    state: 'state-1',
+  });
+  assertEqual(authUrl.includes('code_challenge=challenge'), true);
+  assertEqual(authUrl.includes('state=state-1'), true);
+  assertEqual(authUrl.includes('code_verifier='), false);
+
+  assertDeepEqual(
+    resolveAuthCallbackExchange({ code: 'code-1', state: 'state-1' }, 'state-1', 'verifier-1'),
+    { code: 'code-1', verifier: 'verifier-1' },
+  );
+  await assertRejects(
+    async () => resolveAuthCallbackExchange({ code: 'code-1', state: 'attacker-state' }, 'state-1', 'verifier-1'),
+    'Проверка безопасности входа',
+  );
+  await assertRejects(
+    async () => resolveAuthCallbackExchange({ code: 'code-1', state: 'state-1' }, 'state-1', null),
+    'Сессия входа устарела',
+  );
+}
+
+async function runManualUpdateInstallTests(): Promise<void> {
+  const calls: string[] = [];
+  const update = appUpdateCandidate();
+  const result = await installManualUpdate(update, 'android', {
+    downloadAndroidUpdateApk: async (downloadUrl, checksumSha256) => {
+      calls.push(`download:${downloadUrl}:${checksumSha256}`);
+      return { filePath: '/tmp/VEX.apk', sizeBytes: 123, checksumSha256: checksumSha256 || undefined };
+    },
+    installAndroidUpdateApk: async (filePath) => {
+      calls.push(`install:${filePath}`);
+      return { status: 'installer_started' };
+    },
+    openUrl: async (url) => {
+      calls.push(`open:${url}`);
+    },
+  });
+
+  assertDeepEqual(calls, [
+    `download:${update.downloadUrl}:${update.checksumSha256}`,
+    'install:/tmp/VEX.apk',
+  ]);
+  assertDeepEqual(result, { status: 'installer_started' });
+  await assertRejects(
+    () => installManualUpdate({ ...update, checksumSha256: undefined }, 'android', {}),
+    'SHA-256',
+  );
+
+  assertEqual(isTrustedIosUpdateUrl('https://apps.apple.com/app/vex/id123'), true);
+  assertEqual(isTrustedIosUpdateUrl('https://testflight.apple.com/join/abc'), true);
+  assertEqual(isTrustedIosUpdateUrl('https://vexguard.app/downloads/VEX.ipa'), false);
+  const iosCalls: string[] = [];
+  await installManualUpdate({ ...update, downloadUrl: 'https://apps.apple.com/app/vex/id123' }, 'ios', {
+    openUrl: async (url) => {
+      iosCalls.push(url);
+    },
+  });
+  assertDeepEqual(iosCalls, ['https://apps.apple.com/app/vex/id123']);
 }
 
 function runSupportTests(): void {
@@ -1321,4 +1402,3 @@ function runErrorMessageTests(): void {
   assertEqual(errorMessage(new Error('Another Test')), 'Another Test');
   assertEqual(errorMessage(null), '');
 }
-

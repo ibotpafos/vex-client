@@ -32,7 +32,7 @@ export function SubscriptionContent({ embedded = false, entitlementFallback = nu
   const cacheUserId = session?.user.id ?? '';
 
   const billingQuery = useQuery({
-    queryKey: ['billing-summary', session?.accessToken],
+    queryKey: ['billing-summary', cacheUserId],
     queryFn: () => billingSummary(session!.accessToken),
     enabled: Boolean(session?.accessToken),
     staleTime: 300_000,
@@ -53,7 +53,7 @@ export function SubscriptionContent({ embedded = false, entitlementFallback = nu
         }
         setCachedSummary(storedSummary);
         if (session?.accessToken) {
-          queryClient.setQueryData(['billing-summary', session.accessToken], (current: BillingSummary | undefined) => current ?? storedSummary);
+          queryClient.setQueryData(['billing-summary', cacheUserId], (current: BillingSummary | undefined) => current ?? storedSummary);
         }
       })
       .catch(() => undefined);

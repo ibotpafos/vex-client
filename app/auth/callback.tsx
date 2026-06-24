@@ -4,6 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { exchangeAppAuthCode } from '@/api/vexApi';
+import { resolveAuthCallbackExchange } from '@/auth/callbackParams';
 import { useSession } from '@/auth/session-context';
 import { loadWithRetry } from '@/auth/sessionLoadRetry';
 import * as SecureStore from '@/native/secureStore';
@@ -13,10 +14,9 @@ import { resetVpnProfileCache } from '@/vpn/profile';
 type CallbackState = 'loading' | 'success' | 'error';
 
 export default function AuthCallbackScreen() {
-  const params = useLocalSearchParams<{ code?: string | string[]; state?: string | string[]; code_verifier?: string | string[] }>();
+  const params = useLocalSearchParams<{ code?: string | string[]; state?: string | string[] }>();
   const code = useMemo(() => firstParam(params.code), [params.code]);
   const state = useMemo(() => firstParam(params.state), [params.state]);
-  const handoffVerifier = useMemo(() => firstParam(params.code_verifier), [params.code_verifier]);
   const queryClient = useQueryClient();
   const { signIn } = useSession();
   const [status, setStatus] = useState<CallbackState>('loading');
@@ -27,23 +27,13 @@ export default function AuthCallbackScreen() {
 
     async function completeSignIn() {
       try {
-        if (!code || !state) {
-          throw new Error('Сайт вернул неполные параметры входа.');
-        }
+        const [savedState, savedVerifier] = await Promise.all([
+          loadWithRetry(() => SecureStore.getItemAsync('vex.auth.pkce.state')),
+          loadWithRetry(() => SecureStore.getItemAsync('vex.auth.pkce.verifier')),
+        ]);
+        const exchange = resolveAuthCallbackExchange({ code, state }, savedState, savedVerifier);
 
-        if (!handoffVerifier) {
-          const savedState = await loadWithRetry(() => SecureStore.getItemAsync('vex.auth.pkce.state'));
-          if (!savedState || state !== savedState) {
-            throw new Error('Проверка безопасности входа не прошла. Запустите вход заново.');
-          }
-        }
-
-        const verifier = handoffVerifier || await loadWithRetry(() => SecureStore.getItemAsync('vex.auth.pkce.verifier'));
-        if (!verifier) {
-          throw new Error('Сессия входа устарела. Запустите вход заново.');
-        }
-
-        const session = await exchangeAppAuthCode(code, verifier);
+        const session = await exchangeAppAuthCode(exchange.code, exchange.verifier);
         resetVpnProfileCache();
         await signIn(session);
         await SecureStore.deleteItemAsync('vex.auth.pkce.state');
@@ -71,7 +61,7 @@ export default function AuthCallbackScreen() {
     return () => {
       isMounted = false;
     };
-  }, [code, handoffVerifier, queryClient, signIn, state]);
+  }, [code, queryClient, signIn, state]);
 
   return (
     <View style={styles.screen}>

@@ -1,8 +1,8 @@
 import * as Application from 'expo-application';
 import { Shield } from 'lucide-react-native';
 import React, { useCallback, useEffect, useState } from 'react';
-import { Linking, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
-import { validateManualUpdatePayload } from '@/api/vexApi';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { installManualUpdate } from '@/api/manualUpdateInstall';
 import { useMobileAppUpdateQuery } from '@/components/mobile-app-update-query';
 
 const iosBuild = currentIOSBuild();
@@ -31,19 +31,10 @@ function IOSUpdateOverlayContent() {
       setUpdateError('Данные обновления недоступны.');
       return;
     }
-    const preflight = validateManualUpdatePayload({
-      downloadUrl: update.downloadUrl,
-      checksumSha256: update.checksumSha256,
-      signatureUrl: update.signatureUrl,
-    });
-    if (!preflight.ok) {
-      setUpdateError(preflight.error ?? 'Обновление не прошло проверку целостности.');
-      return;
-    }
     try {
-      await Linking.openURL(update.downloadUrl);
-    } catch {
-      setUpdateError('Не удалось открыть страницу обновления.');
+      await installManualUpdate(update, 'ios');
+    } catch (error) {
+      setUpdateError(error instanceof Error ? error.message : 'Не удалось открыть страницу обновления.');
     }
   }, [update]);
 

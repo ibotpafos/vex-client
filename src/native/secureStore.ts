@@ -75,6 +75,7 @@ function deleteWebStorageItem(key: string): void {
 
 function clearWebStorageItems(keys: readonly string[]): void {
   for (const key of keys) {
+    webSensitiveMemoryStorage.delete(key);
     deleteWebStorageItem(key);
   }
 }
@@ -85,7 +86,25 @@ const webStorageAdapter: WebStorageAdapter = {
   deleteItem: deleteWebStorageItem,
 };
 
+const webSensitiveMemoryStorage = new Map<string, string>();
+
+function shouldUseMemoryOnlyWebStorage(key: string): boolean {
+  return Platform.OS === 'web' && SENSITIVE_STORAGE_KEYS.includes(key);
+}
+
 export async function getItemAsync(key: string): Promise<string | null> {
+  if (shouldUseMemoryOnlyWebStorage(key)) {
+    if (webSensitiveMemoryStorage.has(key)) {
+      return webSensitiveMemoryStorage.get(key) ?? null;
+    }
+    const legacyValue = getWebStorageItem(key);
+    if (legacyValue) {
+      deleteWebStorageItem(key);
+      webSensitiveMemoryStorage.set(key, legacyValue);
+      return legacyValue;
+    }
+    return null;
+  }
   if (shouldUseTauriSensitiveStorage(key)) {
     const invoke = await getTauriInvoke();
     if (invoke) {
@@ -104,6 +123,11 @@ export async function getItemAsync(key: string): Promise<string | null> {
 }
 
 export async function setItemAsync(key: string, value: string): Promise<void> {
+  if (shouldUseMemoryOnlyWebStorage(key)) {
+    webSensitiveMemoryStorage.set(key, value);
+    deleteWebStorageItem(key);
+    return;
+  }
   if (shouldUseTauriSensitiveStorage(key)) {
     const invoke = await getTauriInvoke();
     if (invoke) {
@@ -118,6 +142,11 @@ export async function setItemAsync(key: string, value: string): Promise<void> {
 }
 
 export async function deleteItemAsync(key: string): Promise<void> {
+  if (shouldUseMemoryOnlyWebStorage(key)) {
+    webSensitiveMemoryStorage.delete(key);
+    deleteWebStorageItem(key);
+    return;
+  }
   if (shouldUseTauriSensitiveStorage(key)) {
     const invoke = await getTauriInvoke();
     if (invoke) {

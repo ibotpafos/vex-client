@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, Text, Pressable, ScrollView } from 'react-native';
+import { View, Text, ScrollView } from 'react-native';
+import { VexPressable } from '@/ui/vex-ui';
 import { X, RefreshCw, CheckCircle2 } from 'lucide-react-native';
 import type { VpnLocation } from '@/api/vexApi';
 import type { ServerSelectionMode } from '@/vpn/serverSelection';
@@ -68,9 +69,9 @@ export const ServerPickerContent = React.memo(function ServerPickerContent({
           <Text style={styles.serverModalTitle}>Серверы</Text>
           <Text style={styles.serverModalSubtitle}>Ближайший стабильный узел для текущей сессии.</Text>
         </View>
-        <Pressable onPress={onClose} style={styles.serverModalClose} accessibilityLabel="Закрыть выбор сервера">
+        <VexPressable onPress={onClose} style={styles.serverModalClose} hoverStyle={{ opacity: 0.72 }} title="Закрыть выбор сервера" accessibilityLabel="Закрыть выбор сервера">
           <X color="#A7B9BD" size={24} strokeWidth={2.5} />
-        </Pressable>
+        </VexPressable>
       </View>
 
       <ScrollView contentContainerStyle={styles.serverModalList} showsVerticalScrollIndicator={false}>
@@ -105,10 +106,12 @@ type AutoServerRowProps = {
 
 const AutoServerRow = React.memo(function AutoServerRow({ disabled, onPress, selected }: AutoServerRowProps) {
   return (
-    <Pressable
+    <VexPressable
       disabled={disabled}
       onPress={onPress}
       style={[styles.serverRow, selected && styles.serverRowSelected, disabled && !selected && styles.serverRowDisabled]}
+      hoverStyle={{ backgroundColor: 'rgba(7,17,19,0.98)', borderColor: 'rgba(34,211,238,0.42)' }}
+      title="Автоматический выбор оптимального сервера"
       accessibilityRole="button"
       accessibilityState={{ selected, disabled }}
       accessibilityLabel="Автоматически выбирать лучший сервер"
@@ -129,7 +132,7 @@ const AutoServerRow = React.memo(function AutoServerRow({ disabled, onPress, sel
         <Text style={[styles.serverRowLatency, selected && styles.serverRowLatencySelected]}>Авто</Text>
         {selected ? <CheckCircle2 color="#22D3EE" size={20} strokeWidth={2.7} /> : null}
       </View>
-    </Pressable>
+    </VexPressable>
   );
 });
 
@@ -151,10 +154,12 @@ const ServerLocationRow = React.memo(function ServerLocationRow({
   const latencyText = selected ? currentLatencyText : locationLatencyText(location);
   const handlePress = React.useCallback(() => onSelect(location.id), [location.id, onSelect]);
   return (
-    <Pressable
+    <VexPressable
       disabled={disabled}
       onPress={handlePress}
       style={[styles.serverRow, selected && styles.serverRowSelected, disabled && !selected && styles.serverRowDisabled]}
+      hoverStyle={{ backgroundColor: 'rgba(7,17,19,0.98)', borderColor: 'rgba(34,211,238,0.42)' }}
+      title={`Подключиться к серверу ${location.city}`}
       accessibilityRole="button"
       accessibilityState={{ selected, disabled }}
       accessibilityLabel={`Подключаться к серверу ${serverLocationLabel(location)}, задержка ${latencyText}`}
@@ -177,6 +182,6 @@ const ServerLocationRow = React.memo(function ServerLocationRow({
         </Text>
         {selected ? <CheckCircle2 color="#22D3EE" size={20} strokeWidth={2.7} /> : null}
       </View>
-    </Pressable>
+    </VexPressable>
   );
 });

@@ -30,6 +30,26 @@ const queryClient = new QueryClient({
 });
 
 export default function RootLayout() {
+  useEffect(() => {
+    if (Platform.OS === 'web') {
+      const style = document.createElement('style');
+      style.textContent = `
+        div[class*="navigationMenuRoot"] {
+          top: auto !important;
+          bottom: 20px !important;
+          box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6) !important;
+          border: 1px solid rgba(34, 211, 238, 0.25) !important;
+          background-color: rgba(7, 17, 19, 0.92) !important;
+          backdrop-filter: blur(8px) !important;
+        }
+      `;
+      document.head.appendChild(style);
+      return () => {
+        document.head.removeChild(style);
+      };
+    }
+  }, []);
+
   return (
     <QueryClientProvider client={queryClient}>
       <ReactQueryAppStateBridge />

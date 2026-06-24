@@ -9,7 +9,7 @@ import { MobileUpdateNoticeBanner, UpdateCenterButton } from '@/components/updat
 import { useRenderProfilerMark } from '@/debug/render-profiler';
 import { playSelectionHaptic } from '@/native/haptics';
 import { VexNativeActivityIndicator } from '@/ui/native-activity-indicator';
-import { VexScreen, vexSharedStyles } from '@/ui/vex-ui';
+import { VexScreen, vexSharedStyles, VexPressable } from '@/ui/vex-ui';
 import { useVpnConnectionContext } from '@/vpn/vpn-connection-context';
 
 import { ServerChip } from '../components/server-chip';
@@ -93,16 +93,18 @@ export default function App() {
             onClose={closeUpdateCenter}
             onOpen={openUpdateCenter}
             />
-            <Pressable
+            <VexPressable
               onPress={() => {
                 playSelectionHaptic();
                 router.push('/(app)/settings');
               }}
               style={vexSharedStyles.iconButton}
+              hoverStyle={{ opacity: 0.72 }}
+              title="Настройки"
               accessibilityLabel="Настройки"
             >
-              <Settings color="#A7B9BD" size={25} strokeWidth={2.4} />
-            </Pressable>
+              <Settings color="#EAF7F8" size={24} strokeWidth={2.4} />
+            </VexPressable>
           </View>
         )}
       />
@@ -139,11 +141,17 @@ export default function App() {
 
           <View pointerEvents="none" style={styles.protocolSpacer} />
           {activeProfile?.rotationRequired ? (
-            <Pressable disabled={isKeyRotationBusy || isVpnBusy} onPress={handleRotateKeyPress} style={styles.rotationNotice}>
+            <VexPressable
+              disabled={isKeyRotationBusy || isVpnBusy}
+              onPress={handleRotateKeyPress}
+              style={styles.rotationNotice}
+              hoverStyle={{ opacity: 0.86 }}
+              title="Обновить ключи VPN"
+            >
               <Text numberOfLines={2} style={styles.vpnNoticeText}>
                 {isKeyRotationBusy ? 'Обновляем VPN-ключ...' : 'Ключ VPN устарел. Нажмите, чтобы обновить.'}
               </Text>
-            </Pressable>
+            </VexPressable>
           ) : null}
           {Platform.OS === 'android' && antiLeakEnabled ? (
             <Pressable disabled={isVpnBusy} onPress={handleOpenVpnSettingsPress} style={styles.rotationNotice}>
@@ -234,10 +242,12 @@ const PowerHero = React.memo(function PowerHero({
         style={[styles.heroRingOuter, outerRingStyle]}
       />
       <Animated.View style={[styles.powerButtonFrame, reduceMotionVisuals && styles.powerButtonFrameDesktop, isConnected && styles.powerButtonFrameActive, isVpnBusy && styles.powerButtonBusy, powerFrameStyle]}>
-        <Pressable
+        <VexPressable
           disabled={powerButtonDisabled}
           onPress={onPowerPress}
           style={styles.powerButton}
+          hoverStyle={{ opacity: 0.9 }}
+          title={connectionPhase === 'connecting' ? 'Отменить подключение VPN' : isConnected ? 'Отключить VPN' : 'Подключить VPN'}
           accessibilityRole="button"
           accessibilityLabel={connectionPhase === 'connecting' ? 'Отменить подключение VPN' : isConnected ? 'Отключить VPN' : 'Подключить VPN'}
         >
@@ -249,7 +259,7 @@ const PowerHero = React.memo(function PowerHero({
           ) : null}
           <Text numberOfLines={1} adjustsFontSizeToFit style={styles.powerText}>{powerButtonText}</Text>
           <Text style={styles.powerSubtext}>{powerSubtext}</Text>
-        </Pressable>
+        </VexPressable>
       </Animated.View>
     </View>
   );

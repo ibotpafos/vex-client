@@ -1,10 +1,11 @@
 import React from 'react';
-import { Pressable, View, Text } from 'react-native';
+import { View, Text } from 'react-native';
 import { MapPin, Gauge, ChevronRight } from 'lucide-react-native';
 import type { VpnLocation } from '@/api/vexApi';
 import { useRenderProfilerMark } from '@/debug/render-profiler';
 import { serverLocationLabel } from '../screens/home-screen-helpers';
 import { styles } from '../screens/home-screen.styles';
+import { VexPressable } from '@/ui/vex-ui';
 
 export interface ServerChipProps {
   disabled: boolean;
@@ -26,10 +27,12 @@ export const ServerChip = React.memo(function ServerChip({
   const serverLabel = isAutoMode && location ? `Авто: ${locationLabel}` : locationLabel;
   const visibleServerLabel = locationLabel;
   return (
-    <Pressable
+    <VexPressable
       disabled={disabled}
       onPress={onPress}
       style={[styles.serverChip, disabled && styles.serverChipDisabled]}
+      hoverStyle={{ backgroundColor: 'rgba(7,17,19,0.96)', borderColor: 'rgba(34,211,238,0.4)' }}
+      title="Выбрать сервер подключения"
       accessibilityRole="button"
       accessibilityLabel={`Выбрать сервер. Сейчас ${serverLabel}, задержка ${latencyText}`}
     >
@@ -47,6 +50,6 @@ export const ServerChip = React.memo(function ServerChip({
         <Text numberOfLines={1} style={styles.serverLatencyText}>{latencyText}</Text>
       </View>
       <ChevronRight color="#78969C" size={19} strokeWidth={2.6} />
-    </Pressable>
+    </VexPressable>
   );
 });

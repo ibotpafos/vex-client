@@ -1,5 +1,5 @@
 import React, { useEffect, useState, type PropsWithChildren } from 'react';
-import { ImageBackground, Platform, StyleSheet, useWindowDimensions, View, type ViewStyle } from 'react-native';
+import { ImageBackground, Platform, Pressable, StyleSheet, useWindowDimensions, View, type PressableProps, type StyleProp, type ViewStyle } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 const networkMap = require('../../assets/vex-network-map.png');
@@ -123,3 +123,37 @@ export const vexSharedStyles = StyleSheet.create({
     opacity: 0.72,
   },
 });
+
+export interface VexPressableProps extends PressableProps {
+  hoverStyle?: StyleProp<ViewStyle>;
+  pointerCursor?: boolean;
+  title?: string;
+}
+
+export function VexPressable({
+  children,
+  style,
+  hoverStyle,
+  pointerCursor = true,
+  title,
+  ...props
+}: VexPressableProps) {
+  return (
+    <Pressable
+      {...props}
+      {...(Platform.OS === 'web' && title ? { title } : {})}
+      style={(state) => {
+        const resolvedStyle = typeof style === 'function' ? style(state) : style;
+        const resolvedHoverStyle = (state as any).hovered ? hoverStyle : null;
+        return [
+          resolvedStyle,
+          resolvedHoverStyle,
+          Platform.OS === 'web' && pointerCursor && { cursor: 'pointer' } as any,
+        ];
+      }}
+    >
+      {children}
+    </Pressable>
+  );
+}
+

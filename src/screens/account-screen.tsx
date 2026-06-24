@@ -2,13 +2,13 @@ import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { Settings, ShieldCheck, User } from 'lucide-react-native';
 import React from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { hasPaidEntitlement } from '@/api/vexApi';
 import { SubscriptionContent } from '@/components/subscription-content';
 import { playSelectionHaptic } from '@/native/haptics';
 import { VexNativeActivityIndicator } from '@/ui/native-activity-indicator';
-import { VexScreen, vexSharedStyles } from '@/ui/vex-ui';
+import { VexScreen, vexSharedStyles, VexPressable } from '@/ui/vex-ui';
 import { useVpnConnectionContext } from '@/vpn/vpn-connection-context';
 
 export default function AccountScreen() {
@@ -28,16 +28,18 @@ export default function AccountScreen() {
           <Text style={styles.eyebrow}>VEX</Text>
           <Text style={styles.title}>Аккаунт</Text>
         </View>
-        <Pressable
+        <VexPressable
           accessibilityLabel="Настройки"
           onPress={() => {
             playSelectionHaptic();
             router.push('/(app)/settings');
           }}
           style={vexSharedStyles.iconButton}
+          hoverStyle={{ opacity: 0.72 }}
+          title="Настройки"
         >
           <Settings color="#A7B9BD" size={25} strokeWidth={2.4} />
-        </Pressable>
+        </VexPressable>
       </View>
 
       {!session ? (

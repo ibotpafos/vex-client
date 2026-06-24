@@ -22,7 +22,7 @@ import { useDesktopUpdate } from "@/components/desktop-update-overlay";
 import { playSelectionHaptic, playLightImpactHaptic } from "@/native/haptics";
 import { SettingsSnackbar, type SettingsSnackbarRef } from "@/ui/settings-snackbar";
 import { useToast, type ToastOptions } from "@/ui/toast";
-import { vexColors, VexScreen, vexSharedStyles } from "@/ui/vex-ui";
+import { vexColors, VexScreen, vexSharedStyles, VexPressable } from "@/ui/vex-ui";
 import { useVexSettings, languages, type LanguageCode } from "./useVexSettings";
 
 export default function SettingsScreen() {
@@ -77,7 +77,7 @@ export default function SettingsScreen() {
   return (
     <VexScreen>
       <View style={vexSharedStyles.topBar}>
-        <Pressable
+        <VexPressable
           onPress={() => {
             playSelectionHaptic();
             if (router.canGoBack()) {
@@ -87,10 +87,12 @@ export default function SettingsScreen() {
             router.replace("/(app)/(tabs)/index");
           }}
           style={vexSharedStyles.iconButton}
+          hoverStyle={{ opacity: 0.72 }}
+          title="Назад"
           accessibilityLabel="Назад"
         >
           <ChevronLeft color="#EAF7F8" size={26} strokeWidth={2.4} />
-        </Pressable>
+        </VexPressable>
         <Text style={vexSharedStyles.title}>Настройки</Text>
         <View style={vexSharedStyles.iconButton} />
       </View>
@@ -126,7 +128,15 @@ export default function SettingsScreen() {
 
         <View style={styles.group}>
           <Text style={styles.groupTitle}>Подключение</Text>
-          <View style={styles.settingRow}>
+          <VexPressable
+            disabled={isSavingAutomation}
+            onPress={() => handleAutomationToggle(!isAutomationEnabled)}
+            style={styles.settingRow}
+            hoverStyle={{ backgroundColor: 'rgba(7,17,19,0.96)', borderColor: 'rgba(34,211,238,0.36)' }}
+            accessibilityRole="switch"
+            accessibilityState={{ checked: isAutomationEnabled, disabled: isSavingAutomation }}
+            accessibilityLabel={automationTitle}
+          >
             <View style={styles.rowIcon}>
               <Power color="#22D3EE" size={21} strokeWidth={2.5} />
             </View>
@@ -144,15 +154,25 @@ export default function SettingsScreen() {
                 {automationValue}
               </Text>
             </View>
-            <SettingsNativeSwitch
-              accessibilityLabel={automationTitle}
-              disabled={isSavingAutomation}
-              onValueChange={handleAutomationToggle}
-              testID="settings-automation-switch"
-              value={isAutomationEnabled}
-            />
-          </View>
-          <View style={styles.settingRow}>
+            <View pointerEvents="none">
+              <SettingsNativeSwitch
+                accessibilityLabel={automationTitle}
+                disabled={isSavingAutomation}
+                onValueChange={handleAutomationToggle}
+                testID="settings-automation-switch"
+                value={isAutomationEnabled}
+              />
+            </View>
+          </VexPressable>
+          <VexPressable
+            disabled={isSavingServerSelection}
+            onPress={() => handleServerSelectionToggle(!isAutoServerSelectionEnabled)}
+            style={styles.settingRow}
+            hoverStyle={{ backgroundColor: 'rgba(7,17,19,0.96)', borderColor: 'rgba(34,211,238,0.36)' }}
+            accessibilityRole="switch"
+            accessibilityState={{ checked: isAutoServerSelectionEnabled, disabled: isSavingServerSelection }}
+            accessibilityLabel="Автовыбор сервера"
+          >
             <View style={styles.rowIcon}>
               <ServerCog color="#22D3EE" size={21} strokeWidth={2.5} />
             </View>
@@ -170,15 +190,25 @@ export default function SettingsScreen() {
                 {isAutoServerSelectionEnabled ? "Включено" : "Выключено"}
               </Text>
             </View>
-            <SettingsNativeSwitch
-              accessibilityLabel="Автовыбор сервера"
-              disabled={isSavingServerSelection}
-              onValueChange={handleServerSelectionToggle}
-              testID="settings-auto-server-switch"
-              value={isAutoServerSelectionEnabled}
-            />
-          </View>
-          <View style={styles.settingRow}>
+            <View pointerEvents="none">
+              <SettingsNativeSwitch
+                accessibilityLabel="Автовыбор сервера"
+                disabled={isSavingServerSelection}
+                onValueChange={handleServerSelectionToggle}
+                testID="settings-auto-server-switch"
+                value={isAutoServerSelectionEnabled}
+              />
+            </View>
+          </VexPressable>
+          <VexPressable
+            disabled={isSavingAntiLeak}
+            onPress={() => handleAntiLeakToggle(!isAntiLeakEnabled)}
+            style={styles.settingRow}
+            hoverStyle={{ backgroundColor: 'rgba(7,17,19,0.96)', borderColor: 'rgba(34,211,238,0.36)' }}
+            accessibilityRole="switch"
+            accessibilityState={{ checked: isAntiLeakEnabled, disabled: isSavingAntiLeak }}
+            accessibilityLabel="Антидетект IP"
+          >
             <View style={styles.rowIcon}>
               <Power color="#22D3EE" size={21} strokeWidth={2.5} />
             </View>
@@ -196,14 +226,16 @@ export default function SettingsScreen() {
                 {isAntiLeakEnabled ? "Включено" : "Выключено"}
               </Text>
             </View>
-            <SettingsNativeSwitch
-              accessibilityLabel="Антидетект IP"
-              disabled={isSavingAntiLeak}
-              onValueChange={handleAntiLeakToggle}
-              testID="settings-anti-leak-switch"
-              value={isAntiLeakEnabled}
-            />
-          </View>
+            <View pointerEvents="none">
+              <SettingsNativeSwitch
+                accessibilityLabel="Антидетект IP"
+                disabled={isSavingAntiLeak}
+                onValueChange={handleAntiLeakToggle}
+                testID="settings-anti-leak-switch"
+                value={isAntiLeakEnabled}
+              />
+            </View>
+          </VexPressable>
         </View>
 
         <View style={styles.group}>
@@ -262,23 +294,25 @@ export default function SettingsScreen() {
             ) : null}
           </View>
           {desktopUpdate.status === "ready" ? (
-            <Pressable
+            <VexPressable
               accessibilityRole="button"
               onPress={() => {
                 playLightImpactHaptic();
                 void desktopUpdate.relaunchToUpdate();
               }}
               style={styles.updateActionButton}
+              hoverStyle={{ opacity: 0.88 }}
+              title="Перезапустить VEX и применить обновление"
             >
               <Text style={styles.updateActionText}>
                 Перезапустить и установить
               </Text>
-            </Pressable>
+            </VexPressable>
           ) : null}
         </View>
 
         <View style={styles.dangerGroup}>
-          <Pressable
+          <VexPressable
             accessibilityRole="button"
             disabled={isSigningOut}
             onPress={handleSignOut}
@@ -286,12 +320,14 @@ export default function SettingsScreen() {
               styles.signOutButton,
               isSigningOut && styles.signOutButtonBusy,
             ]}
+            hoverStyle={{ backgroundColor: 'rgba(255,159,159,0.12)' }}
+            title="Выйти из текущей учетной записи"
           >
             <LogOut color="#FF9F9F" size={22} strokeWidth={2.5} />
             <Text style={styles.signOutText}>
               {isSigningOut ? "Выходим" : "Выйти из аккаунта"}
             </Text>
-          </Pressable>
+          </VexPressable>
         </View>
       </ScrollView>
       <SettingsSnackbar ref={snackbarRef} />
@@ -366,15 +402,16 @@ function SettingsLanguagePicker({ onValueChange, value }: SettingsLanguagePicker
       {languages.map((item) => {
         const selected = value === item.code;
         return (
-          <Pressable
+          <VexPressable
             accessibilityRole="button"
             accessibilityState={{ selected }}
             key={item.code}
             onPress={() => onValueChange(item.code)}
             style={[styles.languageButton, selected && styles.languageButtonActive]}
+            hoverStyle={{ backgroundColor: selected ? '#22D3EE' : 'rgba(34,211,238,0.14)' }}
           >
             <Text style={[styles.languageText, selected && styles.languageTextActive]}>{item.label}</Text>
-          </Pressable>
+          </VexPressable>
         );
       })}
     </View>

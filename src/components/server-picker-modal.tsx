@@ -1,5 +1,5 @@
 import React from 'react';
-import { Modal, View, Text, Pressable, ScrollView } from 'react-native';
+import { View, Text, Pressable, ScrollView } from 'react-native';
 import { X, RefreshCw, CheckCircle2 } from 'lucide-react-native';
 import type { VpnLocation } from '@/api/vexApi';
 import type { ServerSelectionMode } from '@/vpn/serverSelection';
@@ -33,43 +33,67 @@ export const ServerPickerModal = React.memo(function ServerPickerModal({
     return null;
   }
 
+  return (
+    <ServerPickerContent
+      currentLatencyText={currentLatencyText}
+      isVpnBusy={isVpnBusy}
+      locations={locations}
+      selectionMode={selectionMode}
+      selectedLocationId={selectedLocationId}
+      onAutoSelect={onAutoSelect}
+      onClose={onClose}
+      onSelect={onSelect}
+    />
+  );
+});
+
+type ServerPickerContentProps = Omit<ServerPickerModalProps, 'visible'>;
+
+export const ServerPickerContent = React.memo(function ServerPickerContent({
+  currentLatencyText,
+  isVpnBusy,
+  locations,
+  selectionMode,
+  selectedLocationId,
+  onAutoSelect,
+  onClose,
+  onSelect,
+}: ServerPickerContentProps) {
   const autoSelected = selectionMode === 'auto';
   return (
-    <Modal animationType="slide" onRequestClose={onClose} presentationStyle="fullScreen" visible={visible}>
-      <View style={styles.serverModal}>
-        <View style={styles.serverModalHeader}>
-          <View>
-            <Text style={styles.serverModalEyebrow}>VEX VPN</Text>
-            <Text style={styles.serverModalTitle}>Серверы</Text>
-            <Text style={styles.serverModalSubtitle}>Ближайший стабильный узел для текущей сессии.</Text>
-          </View>
-          <Pressable onPress={onClose} style={styles.serverModalClose} accessibilityLabel="Закрыть выбор сервера">
-            <X color="#A7B9BD" size={24} strokeWidth={2.5} />
-          </Pressable>
+    <View style={styles.serverModal}>
+      <View style={styles.serverModalHeader}>
+        <View>
+          <Text style={styles.serverModalEyebrow}>VEX VPN</Text>
+          <Text style={styles.serverModalTitle}>Серверы</Text>
+          <Text style={styles.serverModalSubtitle}>Ближайший стабильный узел для текущей сессии.</Text>
         </View>
-
-        <ScrollView contentContainerStyle={styles.serverModalList} showsVerticalScrollIndicator={false}>
-          <AutoServerRow
-            disabled={isVpnBusy}
-            onPress={onAutoSelect}
-            selected={autoSelected}
-          />
-          {locations.map((location) => {
-            const selected = selectionMode === 'manual' && location.id === selectedLocationId;
-            return (
-              <ServerLocationRow
-                currentLatencyText={currentLatencyText}
-                disabled={isVpnBusy}
-                key={location.id}
-                location={location}
-                onSelect={onSelect}
-                selected={selected}
-              />
-            );
-          })}
-        </ScrollView>
+        <Pressable onPress={onClose} style={styles.serverModalClose} accessibilityLabel="Закрыть выбор сервера">
+          <X color="#A7B9BD" size={24} strokeWidth={2.5} />
+        </Pressable>
       </View>
-    </Modal>
+
+      <ScrollView contentContainerStyle={styles.serverModalList} showsVerticalScrollIndicator={false}>
+        <AutoServerRow
+          disabled={isVpnBusy}
+          onPress={onAutoSelect}
+          selected={autoSelected}
+        />
+        {locations.map((location) => {
+          const selected = selectionMode === 'manual' && location.id === selectedLocationId;
+          return (
+            <ServerLocationRow
+              currentLatencyText={currentLatencyText}
+              disabled={isVpnBusy}
+              key={location.id}
+              location={location}
+              onSelect={onSelect}
+              selected={selected}
+            />
+          );
+        })}
+      </ScrollView>
+    </View>
   );
 });
 

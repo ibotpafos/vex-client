@@ -19,8 +19,7 @@ export default function appConfig({ config }: ConfigContext): ExpoConfig {
   const buildProfile = env('VEX_BUILD_PROFILE', updateChannel);
   const projectId = env('VEX_EAS_PROJECT_ID', env('EXPO_PUBLIC_EAS_PROJECT_ID', defaultProjectId));
   const updatesEnabled = Boolean(projectId) && env('VEX_UPDATES_ENABLED', buildProfile === 'production' ? '1' : '0') === '1';
-  const otaProvider = env('VEX_OTA_PROVIDER', 'expo-open-ota');
-  const updateUrl = resolveUpdateUrl(otaProvider, projectId);
+  const updateUrl = resolveUpdateUrl();
   const codeSigningCertificate = env('VEX_OTA_CODE_SIGNING_CERTIFICATE', defaultOtaCodeSigningCertificate);
   const runtimeVersion = env('VEX_RUNTIME_VERSION', defaultRuntimeVersion);
 
@@ -119,14 +118,10 @@ function env(name: string, fallback: string): string {
   return process.env[name]?.trim() || fallback;
 }
 
-function resolveUpdateUrl(provider: string, projectId: string): string {
+function resolveUpdateUrl(): string {
   const configuredUrl = process.env.VEX_OTA_UPDATE_URL?.trim();
   if (configuredUrl) {
     return configuredUrl;
-  }
-
-  if (provider === 'eas') {
-    return `https://u.expo.dev/${projectId}`;
   }
 
   return defaultOtaUpdateUrl;

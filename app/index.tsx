@@ -1,6 +1,7 @@
 import { Redirect } from 'expo-router';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import { useSession } from '@/auth/session-context';
+import { VexNativeActivityIndicator } from '@/ui/native-activity-indicator';
 
 export default function IndexRoute() {
   const { isLoading, session } = useSession();
@@ -16,7 +17,7 @@ function StartupFallback() {
   return (
     <View style={styles.screen}>
       <Text style={styles.title}>VEX</Text>
-      <ActivityIndicator color="#22D3EE" size="large" />
+      <VexNativeActivityIndicator color="#22D3EE" size="large" />
     </View>
   );
 }

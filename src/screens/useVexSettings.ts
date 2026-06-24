@@ -8,6 +8,7 @@ import { playErrorHaptic, playLightImpactHaptic, playSelectionHaptic, playSucces
 import { disconnectVpn, getStartupEnabled, setStartupEnabled } from '@/native/vexVpn';
 import { getAndroidAutoConnectEnabled, getAntiLeakEnabled, getServerSelectionMode, setAndroidAutoConnectEnabled, setAntiLeakEnabled, setServerSelectionMode } from '@/settings/vpnPreferences';
 import * as SecureStore from '@/native/secureStore';
+import { useToast, type ToastOptions } from '@/ui/toast';
 
 export const languages = [
   { code: 'ru', label: 'Русский' },
@@ -20,8 +21,10 @@ export function isLanguageCode(value: string | null): value is LanguageCode {
   return value === 'ru' || value === 'en';
 }
 
-export function useVexSettings() {
+export function useVexSettings(showToastOverride?: (options: ToastOptions) => void) {
   const { signOut } = useSession();
+  const { showToast: showGlobalToast } = useToast();
+  const showToast = showToastOverride ?? showGlobalToast;
   const [language, setLanguage] = useState<LanguageCode>('ru');
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [isAutomationEnabled, setIsAutomationEnabled] = useState(false);
@@ -98,14 +101,34 @@ export function useVexSettings() {
   }, []);
 
   const handleLanguagePress = useCallback((nextLanguage: LanguageCode) => {
+    if (nextLanguage === language) {
+      return;
+    }
     playSelectionHaptic();
+    const previousLanguage = language;
     setLanguage(nextLanguage);
-    SecureStore.setItemAsync(languageKey, nextLanguage).catch(() => undefined);
-  }, []);
+    SecureStore.setItemAsync(languageKey, nextLanguage)
+      .then(() => {
+        showToast({
+          message: `Язык изменён: ${languageLabel(nextLanguage)}`,
+          variant: 'success',
+        });
+      })
+      .catch(() => {
+        setLanguage(previousLanguage);
+        playErrorHaptic();
+        showToast({
+          duration: 'long',
+          message: 'Не удалось сохранить язык.',
+          variant: 'error',
+        });
+      });
+  }, [language, showToast]);
 
   const handleSignOut = useCallback(async () => {
     if (isSigningOut) {
       playWarningHaptic();
+      showToast({ message: 'Выход уже выполняется.', variant: 'warning' });
       return;
     }
     playLightImpactHaptic();
@@ -115,68 +138,103 @@ export function useVexSettings() {
       await signOut();
       playSuccessHaptic();
       router.replace('/sign-in');
+    } catch {
+      playErrorHaptic();
+      showToast({
+        duration: 'long',
+        message: 'Не удалось выйти из аккаунта. Попробуйте ещё раз.',
+        variant: 'error',
+      });
     } finally {
       setIsSigningOut(false);
     }
-  }, [isSigningOut, signOut]);
+  }, [isSigningOut, showToast, signOut]);
 
-  const handleAutomationToggle = useCallback(async () => {
+  const handleAutomationToggle = useCallback(async (next: boolean) => {
     if (isSavingAutomation) {
       playWarningHaptic();
+      showToast({ message: 'Настройка ещё сохраняется.', variant: 'warning' });
       return;
     }
     playSelectionHaptic();
     setIsSavingAutomation(true);
-    const next = !isAutomationEnabled;
     try {
       const result = Platform.OS === 'android'
         ? await setAndroidAutoConnectEnabled(next)
         : await setStartupEnabled(next);
       setIsAutomationEnabled(result);
       playSuccessHaptic();
+      showToast({
+        message: result ? 'Автоподключение включено.' : 'Автоподключение выключено.',
+        variant: 'success',
+      });
     } catch {
       playErrorHaptic();
+      showToast({
+        duration: 'long',
+        message: 'Не удалось сохранить автоподключение.',
+        variant: 'error',
+      });
     } finally {
       setIsSavingAutomation(false);
     }
-  }, [isSavingAutomation, isAutomationEnabled]);
+  }, [isSavingAutomation, showToast]);
 
-  const handleServerSelectionToggle = useCallback(async () => {
+  const handleServerSelectionToggle = useCallback(async (next: boolean) => {
     if (isSavingServerSelection) {
       playWarningHaptic();
+      showToast({ message: 'Настройка ещё сохраняется.', variant: 'warning' });
       return;
     }
     playSelectionHaptic();
     setIsSavingServerSelection(true);
-    const next = !isAutoServerSelectionEnabled;
     try {
       const mode = await setServerSelectionMode(next ? 'auto' : 'manual');
       setIsAutoServerSelectionEnabled(mode === 'auto');
       playSuccessHaptic();
+      showToast({
+        message: mode === 'auto' ? 'Автовыбор сервера включён.' : 'Автовыбор сервера выключен.',
+        variant: 'success',
+      });
     } catch {
       playErrorHaptic();
+      showToast({
+        duration: 'long',
+        message: 'Не удалось сохранить автовыбор сервера.',
+        variant: 'error',
+      });
     } finally {
       setIsSavingServerSelection(false);
     }
-  }, [isAutoServerSelectionEnabled, isSavingServerSelection]);
+  }, [isSavingServerSelection, showToast]);
 
-  const handleAntiLeakToggle = useCallback(async () => {
+  const handleAntiLeakToggle = useCallback(async (next: boolean) => {
     if (isSavingAntiLeak) {
       playWarningHaptic();
+      showToast({ message: 'Настройка ещё сохраняется.', variant: 'warning' });
       return;
     }
     playSelectionHaptic();
     setIsSavingAntiLeak(true);
-    const next = !isAntiLeakEnabled;
     try {
-      setIsAntiLeakEnabled(await setAntiLeakEnabled(next));
+      const result = await setAntiLeakEnabled(next);
+      setIsAntiLeakEnabled(result);
       playSuccessHaptic();
+      showToast({
+        message: result ? 'Антидетект IP включён.' : 'Антидетект IP выключен.',
+        variant: 'success',
+      });
     } catch {
       playErrorHaptic();
+      showToast({
+        duration: 'long',
+        message: 'Не удалось сохранить антидетект IP.',
+        variant: 'error',
+      });
     } finally {
       setIsSavingAntiLeak(false);
     }
-  }, [isAntiLeakEnabled, isSavingAntiLeak]);
+  }, [isSavingAntiLeak, showToast]);
 
   return {
     language,
@@ -195,4 +253,8 @@ export function useVexSettings() {
     handleServerSelectionToggle,
     handleAntiLeakToggle,
   };
+}
+
+function languageLabel(language: LanguageCode) {
+  return languages.find((item) => item.code === language)?.label ?? language;
 }

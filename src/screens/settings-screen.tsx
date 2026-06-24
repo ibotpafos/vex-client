@@ -1,8 +1,8 @@
+import { Host, Switch as ExpoSwitch } from "@expo/ui";
 import { router } from "expo-router";
 import {
   ChevronLeft,
   Languages,
-  LifeBuoy,
   LogOut,
   Power,
   RefreshCw,
@@ -20,10 +20,22 @@ import {
 } from "react-native";
 import { useDesktopUpdate } from "@/components/desktop-update-overlay";
 import { playSelectionHaptic, playLightImpactHaptic } from "@/native/haptics";
+import { SettingsSnackbar, type SettingsSnackbarRef } from "@/ui/settings-snackbar";
+import { useToast, type ToastOptions } from "@/ui/toast";
 import { vexColors, VexScreen, vexSharedStyles } from "@/ui/vex-ui";
-import { useVexSettings, languages } from "./useVexSettings";
+import { useVexSettings, languages, type LanguageCode } from "./useVexSettings";
 
 export default function SettingsScreen() {
+  const snackbarRef = React.useRef<SettingsSnackbarRef>(null);
+  const { showToast: showGlobalToast } = useToast();
+  const showSettingsToast = React.useCallback((options: ToastOptions) => {
+    if (Platform.OS === "android" && snackbarRef.current) {
+      snackbarRef.current.showToast(options);
+      return;
+    }
+    showGlobalToast(options);
+  }, [showGlobalToast]);
+
   const {
     language,
     isSigningOut,
@@ -40,7 +52,7 @@ export default function SettingsScreen() {
     handleAutomationToggle,
     handleServerSelectionToggle,
     handleAntiLeakToggle,
-  } = useVexSettings();
+  } = useVexSettings(showSettingsToast);
 
   const desktopUpdate = useDesktopUpdate();
   const versionText = appInfo.build
@@ -68,7 +80,11 @@ export default function SettingsScreen() {
         <Pressable
           onPress={() => {
             playSelectionHaptic();
-            router.back();
+            if (router.canGoBack()) {
+              router.back();
+              return;
+            }
+            router.replace("/(app)/(tabs)/index");
           }}
           style={vexSharedStyles.iconButton}
           accessibilityLabel="Назад"
@@ -128,27 +144,13 @@ export default function SettingsScreen() {
                 {automationValue}
               </Text>
             </View>
-            <Pressable
+            <SettingsNativeSwitch
               accessibilityLabel={automationTitle}
-              accessibilityRole="switch"
-              accessibilityState={{
-                checked: isAutomationEnabled,
-                disabled: isSavingAutomation,
-              }}
               disabled={isSavingAutomation}
-              onPress={handleAutomationToggle}
-              style={[
-                styles.switchTrack,
-                isAutomationEnabled && styles.switchTrackActive,
-              ]}
-            >
-              <View
-                style={[
-                  styles.switchThumb,
-                  isAutomationEnabled && styles.switchThumbActive,
-                ]}
-              />
-            </Pressable>
+              onValueChange={handleAutomationToggle}
+              testID="settings-automation-switch"
+              value={isAutomationEnabled}
+            />
           </View>
           <View style={styles.settingRow}>
             <View style={styles.rowIcon}>
@@ -168,27 +170,13 @@ export default function SettingsScreen() {
                 {isAutoServerSelectionEnabled ? "Включено" : "Выключено"}
               </Text>
             </View>
-            <Pressable
+            <SettingsNativeSwitch
               accessibilityLabel="Автовыбор сервера"
-              accessibilityRole="switch"
-              accessibilityState={{
-                checked: isAutoServerSelectionEnabled,
-                disabled: isSavingServerSelection,
-              }}
               disabled={isSavingServerSelection}
-              onPress={handleServerSelectionToggle}
-              style={[
-                styles.switchTrack,
-                isAutoServerSelectionEnabled && styles.switchTrackActive,
-              ]}
-            >
-              <View
-                style={[
-                  styles.switchThumb,
-                  isAutoServerSelectionEnabled && styles.switchThumbActive,
-                ]}
-              />
-            </Pressable>
+              onValueChange={handleServerSelectionToggle}
+              testID="settings-auto-server-switch"
+              value={isAutoServerSelectionEnabled}
+            />
           </View>
           <View style={styles.settingRow}>
             <View style={styles.rowIcon}>
@@ -208,27 +196,13 @@ export default function SettingsScreen() {
                 {isAntiLeakEnabled ? "Включено" : "Выключено"}
               </Text>
             </View>
-            <Pressable
+            <SettingsNativeSwitch
               accessibilityLabel="Антидетект IP"
-              accessibilityRole="switch"
-              accessibilityState={{
-                checked: isAntiLeakEnabled,
-                disabled: isSavingAntiLeak,
-              }}
               disabled={isSavingAntiLeak}
-              onPress={handleAntiLeakToggle}
-              style={[
-                styles.switchTrack,
-                isAntiLeakEnabled && styles.switchTrackActive,
-              ]}
-            >
-              <View
-                style={[
-                  styles.switchThumb,
-                  isAntiLeakEnabled && styles.switchThumbActive,
-                ]}
-              />
-            </Pressable>
+              onValueChange={handleAntiLeakToggle}
+              testID="settings-anti-leak-switch"
+              value={isAntiLeakEnabled}
+            />
           </View>
         </View>
 
@@ -245,56 +219,10 @@ export default function SettingsScreen() {
               </Text>
             </View>
           </View>
-          <View style={styles.languageRow}>
-            {languages.map((item) => {
-              const selected = item.code === language;
-              return (
-                <Pressable
-                  key={item.code}
-                  onPress={() => handleLanguagePress(item.code)}
-                  style={[
-                    styles.languageButton,
-                    selected && styles.languageButtonSelected,
-                  ]}
-                  accessibilityLabel={item.label}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected }}
-                >
-                  <Text
-                    style={[
-                      styles.languageText,
-                      selected && styles.languageTextSelected,
-                    ]}
-                  >
-                    {item.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
-        </View>
-
-        <View style={styles.group}>
-          <Text style={styles.groupTitle}>Поддержка</Text>
-          <Pressable
-            accessibilityLabel="Открыть чат поддержки"
-            accessibilityRole="button"
-            onPress={() => {
-              playSelectionHaptic();
-              router.push("/support");
-            }}
-            style={styles.settingRow}
-          >
-            <View style={styles.rowIcon}>
-              <LifeBuoy color="#22D3EE" size={21} strokeWidth={2.5} />
-            </View>
-            <View style={styles.rowCopy}>
-              <Text style={styles.rowTitle}>Чат поддержки</Text>
-              <Text style={styles.rowDescription}>
-                Отдельный экран с историей обращений и отправкой сообщений.
-              </Text>
-            </View>
-          </Pressable>
+          <SettingsLanguagePicker
+            onValueChange={handleLanguagePress}
+            value={language}
+          />
         </View>
 
         <View style={styles.group}>
@@ -366,6 +294,7 @@ export default function SettingsScreen() {
           </Pressable>
         </View>
       </ScrollView>
+      <SettingsSnackbar ref={snackbarRef} />
     </VexScreen>
   );
 }
@@ -386,6 +315,70 @@ function formatPlatformLabel(platform: string) {
   if (platform === "windows") return "Windows";
   if (platform === "web") return "Web";
   return platform;
+}
+
+type SettingsNativeSwitchProps = {
+  accessibilityLabel: string;
+  disabled: boolean;
+  onValueChange: (value: boolean) => void;
+  testID: string;
+  value: boolean;
+};
+
+function SettingsNativeSwitch({
+  accessibilityLabel,
+  disabled,
+  onValueChange,
+  testID,
+  value,
+}: SettingsNativeSwitchProps) {
+  return (
+    <Host
+      accessibilityLabel={accessibilityLabel}
+      accessibilityRole="switch"
+      accessibilityState={{ checked: value, disabled }}
+      colorScheme="dark"
+      matchContents
+      style={styles.nativeSwitchHost}
+    >
+      <ExpoSwitch
+        disabled={disabled}
+        onValueChange={onValueChange}
+        testID={testID}
+        value={value}
+      />
+    </Host>
+  );
+}
+
+type SettingsLanguagePickerProps = {
+  onValueChange: (value: LanguageCode) => void;
+  value: LanguageCode;
+};
+
+function SettingsLanguagePicker({ onValueChange, value }: SettingsLanguagePickerProps) {
+  return (
+    <View
+      accessibilityLabel="Язык интерфейса"
+      style={styles.languageSelector}
+      testID="settings-language-picker"
+    >
+      {languages.map((item) => {
+        const selected = value === item.code;
+        return (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ selected }}
+            key={item.code}
+            onPress={() => onValueChange(item.code)}
+            style={[styles.languageButton, selected && styles.languageButtonActive]}
+          >
+            <Text style={[styles.languageText, selected && styles.languageTextActive]}>{item.label}</Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
@@ -518,31 +511,35 @@ const styles = StyleSheet.create({
   rowValueActive: {
     color: vexColors.accent,
   },
-  languageRow: {
+  languageSelector: {
+    alignSelf: "stretch",
     backgroundColor: vexColors.field,
     borderColor: "rgba(96,118,123,0.28)",
     borderRadius: 12,
     borderWidth: 1,
     flexDirection: "row",
-    gap: 6,
+    gap: 4,
+    minHeight: 42,
+    overflow: "hidden",
     padding: 4,
   },
   languageButton: {
     alignItems: "center",
-    borderRadius: 12,
+    borderRadius: 9,
     flex: 1,
-    minHeight: 32,
     justifyContent: "center",
+    minHeight: 34,
+    paddingHorizontal: 10,
   },
-  languageButtonSelected: {
+  languageButtonActive: {
     backgroundColor: vexColors.accent,
   },
   languageText: {
     color: vexColors.muted,
     fontSize: 13,
-    fontWeight: "800",
+    fontWeight: "900",
   },
-  languageTextSelected: {
+  languageTextActive: {
     color: "#031012",
   },
   infoGrid: {
@@ -625,30 +622,8 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "900",
   },
-  switchTrack: {
-    alignItems: "center",
-    backgroundColor: vexColors.field,
-    borderColor: "rgba(96,118,123,0.34)",
-    borderRadius: 999,
-    borderWidth: 1,
-    flexDirection: "row",
-    height: 30,
-    justifyContent: "flex-start",
-    padding: 3,
-    width: 50,
-  },
-  switchTrackActive: {
-    backgroundColor: "rgba(34,211,238,0.24)",
-    borderColor: "rgba(34,211,238,0.42)",
-    justifyContent: "flex-end",
-  },
-  switchThumb: {
-    backgroundColor: vexColors.muted,
-    borderRadius: 12,
-    height: 22,
-    width: 22,
-  },
-  switchThumbActive: {
-    backgroundColor: vexColors.accent,
+  nativeSwitchHost: {
+    minHeight: 34,
+    minWidth: 52,
   },
 });

@@ -1,15 +1,18 @@
 import { QueryClient, QueryClientProvider, focusManager } from '@tanstack/react-query';
 import { Stack, type ErrorBoundaryProps } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, AppState, Image, Platform, Pressable, StyleSheet, Text, View, type AppStateStatus } from 'react-native';
+import { AppState, Image, Platform, Pressable, StyleSheet, Text, View, type AppStateStatus } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { SessionProvider, useSession } from '@/auth/session-context';
 import { SplashScreenController } from '@/auth/splash-screen-controller';
 import { DesktopUpdateProvider, DesktopUpdateOverlay } from '@/components/desktop-update-overlay';
 import { AndroidUpdateOverlay } from '@/components/android-update-overlay';
 import { IOSUpdateOverlay } from '@/components/ios-update-overlay';
+import { OtaUpdateOverlay } from '@/components/ota-update-overlay';
 import { RenderProfilerOverlay } from '@/debug/render-profiler';
 import { captureError, initSentry } from '@/observability/sentry';
+import { VexNativeActivityIndicator } from '@/ui/native-activity-indicator';
+import { ToastProvider } from '@/ui/toast';
 
 initSentry();
 
@@ -33,8 +36,10 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <SessionProvider>
           <DesktopUpdateProvider>
-            <SplashScreenController />
-            <RootNavigator />
+            <ToastProvider>
+              <SplashScreenController />
+              <RootNavigator />
+            </ToastProvider>
           </DesktopUpdateProvider>
         </SessionProvider>
       </SafeAreaProvider>
@@ -113,7 +118,7 @@ function BootScreen() {
         style={styles.bootLogo}
       />
       <Text style={styles.bootTitle}>VEX</Text>
-      <ActivityIndicator color="#22D3EE" size="large" />
+      <VexNativeActivityIndicator color="#22D3EE" size="large" />
     </View>
   );
 }
@@ -134,6 +139,7 @@ function DeferredStartupOverlays() {
     <>
       <AndroidUpdateOverlay />
       <IOSUpdateOverlay />
+      <OtaUpdateOverlay />
       <DesktopUpdateOverlay />
     </>
   );

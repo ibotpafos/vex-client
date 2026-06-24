@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { errorMessage } from '@/utils/error';
 
 import { entitlement, hasPaidEntitlement, type Entitlement, type VpnLocation } from '../api/vexApi';
@@ -63,19 +63,12 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
   const queryClient = useQueryClient();
   const [vpnProfile, setVpnProfile] = useState<VpnProfile | null>(null);
   const [isKeyRotationBusy, setIsKeyRotationBusy] = useState(false);
-  const profileQueryKey = ['vpn-profile', accessToken, selectedLocationId];
-  const profileQuery = useQuery({
-    queryKey: profileQueryKey,
-    queryFn: () => resolveVpnProfile(accessToken!, knownEntitlement, selectedLocationId, {
-      forceRefresh: true,
-      userId,
-    }),
-    enabled: Boolean(accessToken && hasVpnAccess),
-    retry: 1,
-    staleTime: profileRefreshMs,
-    refetchInterval: profileRefreshMs,
-  });
-  const activeProfile = vpnProfile ?? profileQuery.data ?? null;
+  const profileQueryKey = useMemo(() => ['vpn-profile', accessToken, selectedLocationId] as const, [accessToken, selectedLocationId]);
+  const fetchSelectedProfile = useCallback(() => resolveVpnProfile(accessToken!, knownEntitlement, selectedLocationId, {
+    forceRefresh: true,
+    userId,
+  }), [accessToken, knownEntitlement, selectedLocationId, userId]);
+  const activeProfile = vpnProfile;
   const entitlementState = knownEntitlement ?? activeProfile?.entitlement ?? null;
 
   const cacheProfile = useCallback((locationId: string, profile: VpnProfile) => {
@@ -165,12 +158,50 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
   }, [userId]);
 
   useEffect(() => {
-    if (!profileQuery.data) {
-      return;
+    if (!accessToken || !hasVpnAccess) {
+      setVpnProfile(null);
+      return undefined;
     }
-    setVpnProfile(profileQuery.data);
-    cacheProfile(selectedLocationId, profileQuery.data);
-  }, [cacheProfile, selectedLocationId, profileQuery.data]);
+
+    let cancelled = false;
+    const refreshProfile = async () => {
+      const profile = await queryClient.fetchQuery({
+        queryKey: profileQueryKey,
+        queryFn: fetchSelectedProfile,
+        staleTime: profileRefreshMs,
+      }).catch((error) => {
+        onProfileRefreshFailed?.({
+          error,
+          locationId: selectedLocationId,
+          reason: 'profile_query_failed',
+        });
+        return null;
+      });
+      if (!cancelled && profile) {
+        setVpnProfile(profile);
+        cacheProfile(selectedLocationId, profile);
+      }
+    };
+
+    void refreshProfile();
+    const timer = setInterval(() => {
+      void refreshProfile();
+    }, profileRefreshMs);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [
+    accessToken,
+    cacheProfile,
+    fetchSelectedProfile,
+    hasVpnAccess,
+    onProfileRefreshFailed,
+    profileQueryKey,
+    profileRefreshMs,
+    queryClient,
+    selectedLocationId,
+  ]);
 
   useEffect(() => {
     if (!accessToken || !hasVpnAccess || !entitlementState || availableLocations.length === 0) {

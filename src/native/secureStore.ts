@@ -16,6 +16,10 @@ export const SENSITIVE_STORAGE_KEYS = [
   'vex.auth.session.history.v1',
   'vex.auth.pkce.state',
   'vex.auth.pkce.verifier',
+  'vex.billing.summary.v1',
+  'vex.entitlement.v1',
+  'vex.vpn.devices.v1',
+  'vex.vpn.locations.v1',
   'vex.vpn.hot_profiles.v1',
 ];
 

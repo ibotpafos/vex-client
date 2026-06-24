@@ -29,7 +29,7 @@ class WireGuardController(context: Context) {
       val shouldBlockOnFailure = antiLeakEnabled && (antiLeakArmed || backend.getState(tunnel) == Tunnel.State.UP)
       try {
         VexLeakBlockerService.stop(appContext)
-        val configText = validatedConfigText(wgQuickConfig)
+        val configText = configTextExcludingSelf(validatedConfigText(wgQuickConfig))
         val config = Config.parse(ByteArrayInputStream(configText.toByteArray(StandardCharsets.UTF_8)))
         resetTunnelBeforeApplyingConfig()
         val state = backend.setState(tunnel, Tunnel.State.UP, config)
@@ -137,6 +137,44 @@ class WireGuardController(context: Context) {
     return value
   }
 
+  private fun configTextExcludingSelf(configText: String): String {
+    val packageName = appContext.packageName.takeIf { it.isNotBlank() } ?: return configText
+    val lines = configText.lines().toMutableList()
+    val interfaceIndex = lines.indexOfFirst { it.trim().equals("[Interface]", ignoreCase = true) }
+    if (interfaceIndex < 0) {
+      return configText
+    }
+    val nextSectionIndex = lines.indexOfFirstAfter(interfaceIndex + 1) {
+      val value = it.trim()
+      value.startsWith("[") && value.endsWith("]")
+    }.takeIf { it >= 0 } ?: lines.size
+    val hasIncludedApplications = (interfaceIndex + 1 until nextSectionIndex).any {
+      lines[it].substringBefore("=").trim().equals("IncludedApplications", ignoreCase = true)
+    }
+    if (hasIncludedApplications) {
+      return configText
+    }
+    val excludedIndex = (interfaceIndex + 1 until nextSectionIndex).firstOrNull {
+      lines[it].substringBefore("=").trim().equals("ExcludedApplications", ignoreCase = true)
+    }
+    if (excludedIndex != null) {
+      val prefix = lines[excludedIndex].substringBefore("=")
+      val apps = lines[excludedIndex]
+        .substringAfter("=", "")
+        .split(',')
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .toMutableList()
+      if (apps.none { it == packageName }) {
+        apps.add(packageName)
+      }
+      lines[excludedIndex] = "${prefix.trim()} = ${apps.joinToString(", ")}"
+      return lines.joinToString("\n")
+    }
+    lines.add(interfaceIndex + 1, "ExcludedApplications = $packageName")
+    return lines.joinToString("\n")
+  }
+
   private fun Tunnel.State.toConnectionState(traffic: VpnTraffic, antiLeakEnabled: Boolean): VpnConnectionState {
     return when (this) {
       Tunnel.State.UP -> VpnConnectionState.Connected(traffic, if (antiLeakEnabled) LeakProtectionState.Armed else LeakProtectionState.Off)
@@ -168,6 +206,15 @@ class WireGuardController(context: Context) {
   companion object {
     private const val TUNNEL_RESTART_SETTLE_MS = 500L
   }
+}
+
+private inline fun <T> List<T>.indexOfFirstAfter(startIndex: Int, predicate: (T) -> Boolean): Int {
+  for (index in startIndex until size) {
+    if (predicate(this[index])) {
+      return index
+    }
+  }
+  return -1
 }
 
 sealed interface VpnConnectionState {

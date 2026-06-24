@@ -1,7 +1,7 @@
 import * as Application from 'expo-application';
 import { Download, RefreshCw, ShieldAlert, ShieldCheck, X } from 'lucide-react-native';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { assessManualUpdateCenter } from '@/api/updatePreflight';
 import { vexApiBaseUrl, type AppUpdateCheckResult } from '@/api/vexApi';
 import { useDesktopUpdate } from '@/components/desktop-update-overlay';
@@ -9,6 +9,7 @@ import { useMobileAppUpdateQuery } from '@/components/mobile-app-update-query';
 import { getAppInfo, type AppInfo } from '@/native/appInfo';
 import { playErrorHaptic, playLightImpactHaptic, playSelectionHaptic, playSuccessHaptic } from '@/native/haptics';
 import { isTauriRuntime } from '@/native/tauriPlatform';
+import { VexNativeActivityIndicator } from '@/ui/native-activity-indicator';
 import { vexSharedStyles } from '@/ui/vex-ui';
 
 type UpdateCenterButtonProps = {
@@ -28,10 +29,8 @@ export function UpdateCenterButton({ visible, onOpen, onClose }: UpdateCenterBut
 }
 
 function MobileUpdateCenterButton({
-  onClose,
   onOpen,
   platform,
-  visible,
 }: UpdateCenterButtonProps & { platform: 'android' | 'ios' }) {
   const buildNumber = currentNativeBuild();
   const updateQuery = useMobileAppUpdateQuery(platform, buildNumber);
@@ -47,9 +46,6 @@ function MobileUpdateCenterButton({
         highlighted={hasUpdate}
         onPress={onOpen}
       />
-      <UpdateCenterModal visible={visible} onClose={onClose}>
-        <MobileUpdateCenterContent buildNumber={buildNumber} platform={platform} update={update} updateQuery={updateQuery} />
-      </UpdateCenterModal>
     </>
   );
 }
@@ -99,7 +95,7 @@ function HeaderButton({
         danger && styles.headerButtonDanger,
       ]}
     >
-      {busy ? <ActivityIndicator color="#22D3EE" size="small" /> : <Download color={danger ? '#FFB4A8' : highlighted ? '#031012' : '#A7B9BD'} size={23} strokeWidth={2.5} />}
+      {busy ? <VexNativeActivityIndicator color="#22D3EE" size="small" /> : <Download color={danger ? '#FFB4A8' : highlighted ? '#031012' : '#A7B9BD'} size={23} strokeWidth={2.5} />}
       {danger || highlighted ? <View style={[styles.headerBadge, danger && styles.headerBadgeDanger]} /> : null}
     </Pressable>
   );
@@ -120,19 +116,54 @@ function UpdateCenterModal({
 
   return (
     <Modal animationType="slide" onRequestClose={onClose} presentationStyle="fullScreen" visible={visible}>
-      <View style={styles.modal}>
-        <View style={styles.modalHeader}>
-          <View>
-            <Text style={styles.eyebrow}>VEX</Text>
-            <Text style={styles.modalTitle}>Обновления</Text>
-          </View>
-          <Pressable accessibilityLabel="Закрыть центр обновлений" onPress={onClose} style={styles.closeButton}>
-            <X color="#A7B9BD" size={24} strokeWidth={2.5} />
-          </Pressable>
-        </View>
+      <UpdateCenterFrame onClose={onClose}>
         {children}
-      </View>
+      </UpdateCenterFrame>
     </Modal>
+  );
+}
+
+export function MobileUpdateCenterRouteContent({
+  onClose,
+  platform,
+}: {
+  onClose: () => void;
+  platform: 'android' | 'ios';
+}) {
+  const buildNumber = currentNativeBuild();
+  const updateQuery = useMobileAppUpdateQuery(platform, buildNumber);
+  return (
+    <UpdateCenterFrame onClose={onClose}>
+      <MobileUpdateCenterContent
+        buildNumber={buildNumber}
+        platform={platform}
+        update={updateQuery.data ?? null}
+        updateQuery={updateQuery}
+      />
+    </UpdateCenterFrame>
+  );
+}
+
+function UpdateCenterFrame({
+  children,
+  onClose,
+}: {
+  children: React.ReactNode;
+  onClose: () => void;
+}) {
+  return (
+    <View style={styles.modal}>
+      <View style={styles.modalHeader}>
+        <View>
+          <Text style={styles.eyebrow}>VEX</Text>
+          <Text style={styles.modalTitle}>Обновления</Text>
+        </View>
+        <Pressable accessibilityLabel="Закрыть центр обновлений" onPress={onClose} style={styles.closeButton}>
+          <X color="#A7B9BD" size={24} strokeWidth={2.5} />
+        </Pressable>
+      </View>
+      {children}
+    </View>
   );
 }
 

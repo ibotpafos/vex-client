@@ -2,11 +2,12 @@ import { useQueryClient } from '@tanstack/react-query';
 import { router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { exchangeAppAuthCode } from '@/api/vexApi';
 import { useSession } from '@/auth/session-context';
 import { loadWithRetry } from '@/auth/sessionLoadRetry';
 import * as SecureStore from '@/native/secureStore';
+import { VexNativeActivityIndicator } from '@/ui/native-activity-indicator';
 import { resetVpnProfileCache } from '@/vpn/profile';
 
 type CallbackState = 'loading' | 'success' | 'error';
@@ -76,7 +77,7 @@ export default function AuthCallbackScreen() {
     <View style={styles.screen}>
       <StatusBar style="light" />
       <View style={styles.panel}>
-        {status === 'loading' ? <ActivityIndicator color="#22D3EE" size="large" /> : null}
+        {status === 'loading' ? <VexNativeActivityIndicator color="#22D3EE" size="large" /> : null}
         <Text style={styles.title}>VEX</Text>
         <Text style={styles.message}>{message}</Text>
         {status === 'error' ? (

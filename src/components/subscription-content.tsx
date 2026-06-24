@@ -1,35 +1,74 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
-import React, { useCallback } from 'react';
-import { ActivityIndicator, Alert, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Alert, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ban, CalendarClock, CheckCircle2, Crown, RefreshCw, X } from 'lucide-react-native';
-import { billingSummary, cancelSubscription, checkoutSession, vexApiBaseUrl, type BillingPlanOption } from '@/api/vexApi';
-import { billingSummaryFallbackCopy } from '@/api/billingSummary';
+import { billingSummary, cancelSubscription, checkoutSession, vexApiBaseUrl, type BillingPlanOption, type Entitlement } from '@/api/vexApi';
+import { billingSummaryFallbackCopy, buildBillingSummary, type BillingSummary } from '@/api/billingSummary';
+import { loadCachedBillingSummary, saveCachedBillingSummary } from '@/api/billingSummaryCache';
 import { useSession } from '@/auth/session-context';
 import { playErrorHaptic, playLightImpactHaptic, playSelectionHaptic, playSuccessHaptic, playWarningHaptic } from '@/native/haptics';
+import { VexNativeActivityIndicator } from '@/ui/native-activity-indicator';
 import { vexColors, vexSharedStyles } from '@/ui/vex-ui';
 
 const billingReturnScheme = 'vexguard:///billing/return';
 const billingReturnUrl = process.env.EXPO_PUBLIC_VEX_BILLING_RETURN_URL || `${vexApiBaseUrl}/v1/billing/mobile-return?status=success`;
 const billingFailedUrl = process.env.EXPO_PUBLIC_VEX_BILLING_FAILED_URL || `${vexApiBaseUrl}/v1/billing/mobile-return?status=failed`;
+const HOME_ROUTE = '/(app)/(tabs)/index';
 
 WebBrowser.maybeCompleteAuthSession();
 
 type SubscriptionContentProps = {
+  embedded?: boolean;
+  entitlementFallback?: Entitlement | null;
   onClose?: () => void;
 };
 
-export function SubscriptionContent({ onClose }: SubscriptionContentProps) {
+export function SubscriptionContent({ embedded = false, entitlementFallback = null, onClose }: SubscriptionContentProps) {
   const { session } = useSession();
   const queryClient = useQueryClient();
+  const [cachedSummary, setCachedSummary] = useState<BillingSummary | null>(null);
+  const cacheUserId = session?.user.id ?? '';
+
   const billingQuery = useQuery({
     queryKey: ['billing-summary', session?.accessToken],
     queryFn: () => billingSummary(session!.accessToken),
     enabled: Boolean(session?.accessToken),
-    staleTime: 30_000,
+    staleTime: 300_000,
+    gcTime: 1_800_000,
     refetchInterval: false,
   });
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!cacheUserId) {
+      setCachedSummary(null);
+      return undefined;
+    }
+    loadCachedBillingSummary(cacheUserId)
+      .then((storedSummary) => {
+        if (cancelled || !storedSummary) {
+          return;
+        }
+        setCachedSummary(storedSummary);
+        if (session?.accessToken) {
+          queryClient.setQueryData(['billing-summary', session.accessToken], (current: BillingSummary | undefined) => current ?? storedSummary);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [cacheUserId, queryClient, session?.accessToken]);
+
+  useEffect(() => {
+    if (!cacheUserId || !billingQuery.data) {
+      return;
+    }
+    setCachedSummary(billingQuery.data);
+    void saveCachedBillingSummary(cacheUserId, billingQuery.data).catch(() => undefined);
+  }, [billingQuery.data, cacheUserId]);
 
   const close = useCallback(() => {
     if (onClose) {
@@ -38,7 +77,9 @@ export function SubscriptionContent({ onClose }: SubscriptionContentProps) {
     }
     if (router.canGoBack()) {
       router.back();
+      return;
     }
+    router.replace(HOME_ROUTE);
   }, [onClose]);
 
   const checkoutMutation = useMutation({
@@ -91,8 +132,12 @@ export function SubscriptionContent({ onClose }: SubscriptionContentProps) {
     },
   });
 
-  const summary = billingQuery.data ?? null;
-  const fallbackCopy = billingSummaryFallbackCopy(billingQuery.isLoading);
+  const fallbackSummary = entitlementFallback ? buildBillingSummary([], entitlementFallback) : null;
+  const onlineSummary = billingQuery.data;
+  const summary = onlineSummary?.entitlementStatus === 'unknown' && fallbackSummary
+    ? fallbackSummary
+    : onlineSummary ?? cachedSummary ?? fallbackSummary;
+  const fallbackCopy = billingSummaryFallbackCopy(billingQuery.isLoading && !summary);
   const plans = summary?.plans ?? [];
   const currentPlan = summary?.currentPlan;
   const isSubscriptionActive = summary?.entitlementStatus === 'active';
@@ -105,14 +150,14 @@ export function SubscriptionContent({ onClose }: SubscriptionContentProps) {
     remainingText: summary?.remainingText,
   });
   const actionBusy = checkoutMutation.isPending || cancelMutation.isPending;
-  const error = billingQuery.error instanceof Error
-    ? billingQuery.error.message
-    : checkoutMutation.error instanceof Error
+  const error = checkoutMutation.error instanceof Error
       ? checkoutMutation.error.message
       : cancelMutation.error instanceof Error
         ? cancelMutation.error.message
+        : !summary && billingQuery.error instanceof Error
+          ? billingQuery.error.message
         : null;
-  const canClose = Boolean(onClose || router.canGoBack());
+  const canClose = !embedded && Boolean(onClose || router.canGoBack());
   const handlePlanPress = useCallback((plan: BillingPlanOption) => {
     if (plan.disabled) {
       playWarningHaptic();
@@ -122,8 +167,8 @@ export function SubscriptionContent({ onClose }: SubscriptionContentProps) {
   }, [checkoutMutation]);
 
   return (
-    <View style={styles.screen}>
-      <View style={styles.header}>
+    <View style={[styles.screen, embedded && styles.embeddedScreen]}>
+      <View style={[styles.header, embedded && styles.embeddedHeader]}>
         <View style={styles.headerCopy}>
           <Text style={styles.eyebrow}>VEX Team</Text>
           <Text style={styles.title}>Подписка</Text>
@@ -145,7 +190,8 @@ export function SubscriptionContent({ onClose }: SubscriptionContentProps) {
 
       <ScrollView
         alwaysBounceVertical={false}
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[styles.content, embedded && styles.embeddedContent]}
+        scrollEnabled={!embedded}
         showsVerticalScrollIndicator={false}
       >
         {isSubscriptionActive ? (
@@ -196,9 +242,9 @@ export function SubscriptionContent({ onClose }: SubscriptionContentProps) {
           <Text style={styles.sectionSubtitle}>{summary?.subtitle ?? fallbackCopy.subtitle}</Text>
         </View>
 
-        {billingQuery.isLoading ? (
+        {billingQuery.isLoading && !summary ? (
           <View style={styles.state}>
-            <ActivityIndicator color="#22D3EE" />
+          <VexNativeActivityIndicator color="#22D3EE" />
             <Text style={styles.stateText}>Загружаем тарифы</Text>
           </View>
         ) : error ? (
@@ -324,11 +370,19 @@ const styles = StyleSheet.create({
     backgroundColor: '#020A0B',
     flex: 1,
   },
+  embeddedScreen: {
+    backgroundColor: 'transparent',
+    flex: 0,
+  },
   content: {
     gap: 10,
     paddingBottom: 16,
     paddingHorizontal: 12,
     paddingTop: 8,
+  },
+  embeddedContent: {
+    paddingBottom: 0,
+    paddingHorizontal: 0,
   },
   header: {
     alignItems: 'center',
@@ -336,6 +390,10 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 12,
     paddingTop: 42,
+  },
+  embeddedHeader: {
+    paddingHorizontal: 0,
+    paddingTop: 0,
   },
   headerCopy: {
     flex: 1,

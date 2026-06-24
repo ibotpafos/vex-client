@@ -20,12 +20,16 @@ import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.bridge.WritableMap
+import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.google.firebase.messaging.FirebaseMessaging
 import io.sentry.Sentry
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -37,6 +41,9 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
   private val wireGuardKeyStore = WireGuardKeyStore(reactContext)
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
   private var pendingPermissionPromise: Promise? = null
+  private var listenerCount = 0
+  private var statusEmitterJob: Job? = null
+  private var lastEmittedVpnStatus: WritableMap? = null
 
   private val activityEventListener = object : BaseActivityEventListener() {
     override fun onActivityResult(activity: Activity, requestCode: Int, resultCode: Int, data: Intent?) {
@@ -93,7 +100,9 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
   fun connect(wgQuickConfig: String, antiLeakEnabled: Boolean, promise: Promise) {
     scope.launch {
       try {
-        promise.resolve(controller.connect(wgQuickConfig, antiLeakEnabled).toWritableMap())
+        val status = controller.connect(wgQuickConfig, antiLeakEnabled).toWritableMap()
+        emitVpnStatusChanged(status, force = true)
+        promise.resolve(status)
       } catch (error: VpnPermissionRequiredException) {
         rejectVpnError(promise, "VPN_PERMISSION_REQUIRED", "Android VPN permission is required.", error)
       } catch (error: Throwable) {
@@ -106,7 +115,9 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
   fun disconnect(releaseAntiLeak: Boolean, promise: Promise) {
     scope.launch {
       try {
-        promise.resolve(controller.disconnect(releaseAntiLeak).toWritableMap())
+        val status = controller.disconnect(releaseAntiLeak).toWritableMap()
+        emitVpnStatusChanged(status, force = true)
+        promise.resolve(status)
       } catch (error: Throwable) {
         rejectVpnError(promise, "VPN_DISCONNECT_FAILED", "VPN disconnect failed.", error)
       }
@@ -130,10 +141,29 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
   fun status(promise: Promise) {
     scope.launch {
       try {
-        promise.resolve(controller.status().toWritableMap())
+        val status = controller.status().toWritableMap()
+        emitVpnStatusChanged(status)
+        promise.resolve(status)
       } catch (error: Throwable) {
         rejectVpnError(promise, "VPN_STATUS_FAILED", "VPN status check failed.", error)
       }
+    }
+  }
+
+  @ReactMethod
+  fun addListener(eventName: String) {
+    if (eventName != VPN_STATUS_CHANGED_EVENT) {
+      return
+    }
+    listenerCount += 1
+    ensureStatusEmitterRunning()
+  }
+
+  @ReactMethod
+  fun removeListeners(count: Double) {
+    listenerCount = (listenerCount - count.toInt()).coerceAtLeast(0)
+    if (listenerCount == 0) {
+      stopStatusEmitter()
     }
   }
 
@@ -296,9 +326,62 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
   override fun invalidate() {
     pendingPermissionPromise?.reject("MODULE_INVALIDATED", "VexVpn module was invalidated.")
     pendingPermissionPromise = null
+    stopStatusEmitter()
     reactContext.removeActivityEventListener(activityEventListener)
     scope.cancel()
     super.invalidate()
+  }
+
+  private fun ensureStatusEmitterRunning() {
+    if (statusEmitterJob?.isActive == true || listenerCount <= 0) {
+      return
+    }
+    statusEmitterJob = scope.launch {
+      while (isActive && listenerCount > 0) {
+        try {
+          val status = controller.status().toWritableMap()
+          emitVpnStatusChanged(status)
+          delay(statusPollDelayMs(status))
+        } catch (error: Throwable) {
+          Log.w(TAG, "Native VPN status emitter failed: ${error.message}")
+          delay(STATUS_POLL_ERROR_MS)
+        }
+      }
+    }
+  }
+
+  private fun stopStatusEmitter() {
+    statusEmitterJob?.cancel()
+    statusEmitterJob = null
+  }
+
+  private fun emitVpnStatusChanged(status: WritableMap, force: Boolean = false) {
+    if (!force && listenerCount <= 0) {
+      return
+    }
+    val statusSnapshot = Arguments.makeNativeMap(status.toHashMap())
+    if (!force && lastEmittedVpnStatus?.let { writableMapsEqual(it, statusSnapshot) } == true) {
+      return
+    }
+    lastEmittedVpnStatus = statusSnapshot
+    if (listenerCount <= 0) {
+      return
+    }
+    reactContext
+      .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+      .emit(VPN_STATUS_CHANGED_EVENT, Arguments.makeNativeMap(statusSnapshot.toHashMap()))
+  }
+
+  private fun statusPollDelayMs(status: WritableMap): Long {
+    return when (status.getString("state")) {
+      "connected" -> CONNECTED_STATUS_POLL_MS
+      "connecting", "disconnecting", "verifying", "degraded" -> TRANSITION_STATUS_POLL_MS
+      else -> IDLE_STATUS_POLL_MS
+    }
+  }
+
+  private fun writableMapsEqual(left: WritableMap, right: WritableMap): Boolean {
+    return left.toHashMap() == right.toHashMap()
   }
 
   private fun VpnConnectionState.toWritableMap(): WritableMap {
@@ -374,6 +457,11 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
     private const val REQUEST_VPN_PERMISSION = 7421
     private const val REQUEST_NOTIFICATION_PERMISSION = 5018
     private const val TAG = "VexVpn"
+    private const val VPN_STATUS_CHANGED_EVENT = "vpn-status-changed"
+    private const val IDLE_STATUS_POLL_MS = 7_500L
+    private const val CONNECTED_STATUS_POLL_MS = 4_000L
+    private const val TRANSITION_STATUS_POLL_MS = 1_500L
+    private const val STATUS_POLL_ERROR_MS = 4_000L
     private const val UPDATE_DOWNLOAD_CONNECT_TIMEOUT_MS = 30_000
     private const val UPDATE_DOWNLOAD_READ_TIMEOUT_MS = 60_000
   }

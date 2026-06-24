@@ -2,16 +2,13 @@ import React from 'react';
 import { View, Text } from 'react-native';
 import { ArrowDown, ArrowUp } from 'lucide-react-native';
 import { useRenderProfilerMark } from '@/debug/render-profiler';
+import { useVpnTrafficStats } from '@/vpn/vpnTrafficStatsStore';
 import { formatBytes } from '../screens/home-screen-helpers';
 import { styles } from '../screens/home-screen.styles';
 
-export interface TrafficStatsProps {
-  rxBytes: number;
-  txBytes: number;
-}
-
-export const TrafficStats = React.memo(function TrafficStats({ rxBytes, txBytes }: TrafficStatsProps) {
+export const TrafficStats = React.memo(function TrafficStats() {
   useRenderProfilerMark('TrafficStats');
+  const { rxBytes, txBytes } = useVpnTrafficStats();
   return (
     <View style={styles.trafficStats} accessibilityLabel={`Трафик. Получено ${formatBytes(rxBytes)}, отправлено ${formatBytes(txBytes)}`}>
       <View style={styles.trafficItem}>

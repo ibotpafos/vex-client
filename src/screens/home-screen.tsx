@@ -1,21 +1,19 @@
 import { StatusBar } from 'expo-status-bar';
 import { router } from 'expo-router';
-import { Settings, User, ChevronRight } from 'lucide-react-native';
+import { Settings } from 'lucide-react-native';
 import React from 'react';
-import { ActivityIndicator, Animated, Platform, Pressable, View, Text } from 'react-native';
+import { Animated, Platform, Pressable, View, Text } from 'react-native';
 
-import { hasPaidEntitlement } from '@/api/vexApi';
 import { HomeNativeHeader } from '@/components/home-native-header';
 import { UpdateCenterButton } from '@/components/update-center';
 import { useRenderProfilerMark } from '@/debug/render-profiler';
 import { playSelectionHaptic } from '@/native/haptics';
+import { VexNativeActivityIndicator } from '@/ui/native-activity-indicator';
 import { VexScreen, vexSharedStyles } from '@/ui/vex-ui';
+import { useVpnConnectionContext } from '@/vpn/vpn-connection-context';
 
-import { useVpnConnection } from '../vpn/useVpnConnection';
 import { ServerChip } from '../components/server-chip';
 import { TrafficStats } from '../components/traffic-stats';
-import { ServerPickerModal } from '../components/server-picker-modal';
-import { SubscriptionModal } from '../components/subscription-modal';
 import { isTauriRuntime, type ConnectionPhase } from './home-screen-helpers';
 import { styles } from './home-screen.styles';
 
@@ -25,14 +23,10 @@ export default function App() {
   useRenderProfilerMark('HomeScreen');
   const {
     session,
-    vpnStatus,
     vpnError,
     isVpnBusy,
     isKeyRotationBusy,
-    selectedLocationId,
-    isServerPickerVisible,
     isUpdateCenterVisible,
-    isSubscriptionModalVisible,
     isConnected,
     antiLeakEnabled,
     serverSelectionMode,
@@ -41,23 +35,16 @@ export default function App() {
     spinProgress,
     activeProfile,
     accountTierLabel,
-    accountSummaryText,
     selectedLocation,
     selectedLatencyText,
     powerButtonDisabled,
     handlePowerPress,
-    openSubscriptionModal,
-    closeSubscriptionModal,
     handleRotateKeyPress,
-    handleLocationPress,
-    handleAutoServerSelectionPress,
     openServerPicker,
-    closeServerPicker,
     openUpdateCenter,
     closeUpdateCenter,
     handleOpenVpnSettingsPress,
-    availableLocations,
-  } = useVpnConnection();
+  } = useVpnConnectionContext();
   const reduceMotionVisuals = isTauriRuntime() || Platform.OS === 'android';
 
   const powerButtonText = connectionPhase === 'switching'
@@ -102,14 +89,14 @@ export default function App() {
         actions={(
           <View style={styles.topActions}>
             <UpdateCenterButton
-              visible={isUpdateCenterVisible}
-              onClose={closeUpdateCenter}
-              onOpen={openUpdateCenter}
+            visible={isUpdateCenterVisible}
+            onClose={closeUpdateCenter}
+            onOpen={openUpdateCenter}
             />
             <Pressable
               onPress={() => {
                 playSelectionHaptic();
-                router.push('/settings');
+                router.push('/(app)/settings');
               }}
               style={vexSharedStyles.iconButton}
               accessibilityLabel="Настройки"
@@ -122,18 +109,11 @@ export default function App() {
 
       {!session ? (
         <View style={styles.centerState}>
-          <ActivityIndicator color="#22D3EE" size="large" />
+          <VexNativeActivityIndicator color="#22D3EE" size="large" />
           <Text style={styles.centerStateText}>Загружаем VEX</Text>
         </View>
       ) : (
         <View style={styles.mainContent}>
-          <AccountCard
-            accountSummaryText={accountSummaryText}
-            email={session.user.email}
-            hasEntitlement={hasPaidEntitlement(activeProfile?.entitlement ?? null)}
-            onPress={openSubscriptionModal}
-          />
-
           <PowerHero
             connectionPhase={connectionPhase}
             isConnected={isConnected}
@@ -154,7 +134,7 @@ export default function App() {
             location={selectedLocation}
             onPress={openServerPicker}
           />
-          <TrafficStats rxBytes={vpnStatus.rxBytes} txBytes={vpnStatus.txBytes} />
+          <TrafficStats />
 
           <View pointerEvents="none" style={styles.protocolSpacer} />
           {activeProfile?.rotationRequired ? (
@@ -173,63 +153,11 @@ export default function App() {
           ) : null}
           {vpnError ? <Text numberOfLines={2} style={styles.vpnErrorText}>{vpnError}</Text> : null}
 
-          <ServerPickerModal
-            currentLatencyText={selectedLatencyText}
-            isVpnBusy={isVpnBusy}
-            locations={availableLocations}
-            selectionMode={serverSelectionMode}
-            selectedLocationId={selectedLocationId}
-            visible={isServerPickerVisible}
-            onAutoSelect={handleAutoServerSelectionPress}
-            onClose={closeServerPicker}
-            onSelect={handleLocationPress}
-          />
-          <SubscriptionModal
-            visible={isSubscriptionModalVisible}
-            onClose={closeSubscriptionModal}
-          />
-
         </View>
       )}
     </VexScreen>
   );
 }
-
-type AccountCardProps = {
-  accountSummaryText: string;
-  email: string;
-  hasEntitlement: boolean;
-  onPress: () => void;
-};
-
-const AccountCard = React.memo(function AccountCard({
-  accountSummaryText,
-  email,
-  hasEntitlement,
-  onPress,
-}: AccountCardProps) {
-  useRenderProfilerMark('AccountCard');
-  return (
-    <Pressable onPress={onPress} style={styles.accountCard}>
-      <View style={styles.accountHeader}>
-        <View style={styles.userBadge}>
-          <User color="#22D3EE" size={25} strokeWidth={2.5} />
-        </View>
-        <View style={styles.accountCopy}>
-          <Text numberOfLines={1} style={styles.accountEmail}>{email}</Text>
-          <View style={styles.accountStatusRow}>
-            <View style={[styles.accountStatusDot, hasEntitlement && styles.accountStatusDotActive]} />
-            <Text numberOfLines={1} style={styles.accountMeta}>{accountSummaryText}</Text>
-          </View>
-        </View>
-        <View style={styles.accountActionWrap}>
-          <Text style={styles.accountAction}>Управлять</Text>
-          <ChevronRight color="#22D3EE" size={18} strokeWidth={2.6} />
-        </View>
-      </View>
-    </Pressable>
-  );
-});
 
 type PowerHeroProps = {
   connectionPhase: ConnectionPhase;

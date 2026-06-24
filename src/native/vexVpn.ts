@@ -1,4 +1,4 @@
-import { NativeModules, Platform } from 'react-native';
+import { NativeEventEmitter, NativeModules, Platform, type NativeModule } from 'react-native';
 import { requireNativeModule as requireExpoNativeModule } from 'expo';
 
 export type VpnState = 'connected' | 'connecting' | 'disconnecting' | 'disconnected' | 'error' | 'verifying' | 'degraded';
@@ -32,6 +32,8 @@ export type WireGuardKeyPair = {
 };
 
 type VexVpnNativeModule = {
+  addListener?(eventName: string): void;
+  removeListeners?(count: number): void;
   needsPermission(): Promise<boolean>;
   requestPermission(): Promise<boolean>;
   connect(wgQuickConfig: string, antiLeakEnabled: boolean): Promise<VpnStatus>;
@@ -51,6 +53,12 @@ type VexVpnNativeModule = {
 };
 
 const nativeModule = NativeModules.VexVpn as VexVpnNativeModule | undefined;
+const androidStatusCacheTtlMs = 1_200;
+const vpnStatusChangedEvent = 'vpn-status-changed';
+
+let cachedVpnStatus: { status: VpnStatus; cachedAt: number } | null = null;
+let inflightVpnStatusPromise: Promise<VpnStatus> | null = null;
+let nativeVpnEventEmitter: NativeEventEmitter | null = null;
 
 function requireNativeModule(): VexVpnNativeModule {
   if (Platform.OS === 'ios') {
@@ -86,15 +94,65 @@ export type DisconnectVpnOptions = {
 };
 
 export async function connectVpn(wgQuickConfig: string, options: ConnectVpnOptions = {}): Promise<VpnStatus> {
-  return normalizeVpnStatus(await requireNativeModule().connect(wgQuickConfig, options.antiLeakEnabled !== false));
+  const status = normalizeVpnStatus(await requireNativeModule().connect(wgQuickConfig, options.antiLeakEnabled !== false));
+  updateCachedVpnStatus(status);
+  return status;
 }
 
 export async function disconnectVpn(options: DisconnectVpnOptions = {}): Promise<VpnStatus> {
-  return normalizeVpnStatus(await requireNativeModule().disconnect(options.releaseAntiLeak !== false));
+  const status = normalizeVpnStatus(await requireNativeModule().disconnect(options.releaseAntiLeak !== false));
+  updateCachedVpnStatus(status);
+  return status;
 }
 
 export async function getVpnStatus(): Promise<VpnStatus> {
-  return normalizeVpnStatus(await requireNativeModule().status());
+  if (Platform.OS === 'android') {
+    const now = Date.now();
+    if (cachedVpnStatus && now - cachedVpnStatus.cachedAt <= androidStatusCacheTtlMs) {
+      return cachedVpnStatus.status;
+    }
+    if (inflightVpnStatusPromise) {
+      return inflightVpnStatusPromise;
+    }
+  }
+
+  const request = requireNativeModule()
+    .status()
+    .then((status) => {
+      const normalizedStatus = normalizeVpnStatus(status);
+      updateCachedVpnStatus(normalizedStatus);
+      return normalizedStatus;
+    })
+    .finally(() => {
+      inflightVpnStatusPromise = null;
+    });
+
+  if (Platform.OS === 'android') {
+    inflightVpnStatusPromise = request;
+  }
+
+  return request;
+}
+
+export function listenVpnStatusChanged(listener: (status: VpnStatus) => void): (() => void) | null {
+  if (Platform.OS !== 'android') {
+    return null;
+  }
+
+  const emitter = getNativeVpnEventEmitter();
+  if (!emitter) {
+    return null;
+  }
+
+  const subscription = emitter.addListener(vpnStatusChangedEvent, (status: VpnStatus) => {
+    const normalizedStatus = normalizeVpnStatus(status);
+    updateCachedVpnStatus(normalizedStatus);
+    listener(normalizedStatus);
+  });
+
+  return () => {
+    subscription.remove();
+  };
 }
 
 export async function openVpnSettings(): Promise<boolean> {
@@ -197,4 +255,21 @@ function normalizeVpnStatus(status: VpnStatus): VpnStatus {
     verified,
     verificationReason: status.verificationReason ?? (status.state === 'connected' && verified === false ? 'handshake_pending' : undefined),
   };
+}
+
+function updateCachedVpnStatus(status: VpnStatus): void {
+  cachedVpnStatus = {
+    status,
+    cachedAt: Date.now(),
+  };
+}
+
+function getNativeVpnEventEmitter(): NativeEventEmitter | null {
+  if (Platform.OS !== 'android') {
+    return null;
+  }
+  if (!nativeVpnEventEmitter) {
+    nativeVpnEventEmitter = new NativeEventEmitter(requireNativeModule() as NativeModule);
+  }
+  return nativeVpnEventEmitter;
 }

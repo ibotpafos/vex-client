@@ -37,8 +37,15 @@ export async function createSupportTicket(
 export function connectSupportSocket(accessToken: string, options: SupportSocketOptions): SupportSocketHandle {
   let closed = false;
   let connectionIssueReported = false;
+  let openTimer: ReturnType<typeof setTimeout> | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let socket: WebSocket | null = null;
+
+  const clearOpenTimer = () => {
+    if (!openTimer) return;
+    clearTimeout(openTimer);
+    openTimer = null;
+  };
 
   const reportConnectionIssue = (message: string) => {
     if (connectionIssueReported) return;
@@ -58,14 +65,28 @@ export function connectSupportSocket(accessToken: string, options: SupportSocket
     try {
       const url = await supportWebSocketURL(accessToken);
       if (closed) return;
-      socket = new WebSocket(url);
-      socket.onopen = () => {
+      const nextSocket = new WebSocket(url);
+      socket = nextSocket;
+      openTimer = setTimeout(() => {
+        if (closed || socket !== nextSocket || nextSocket.readyState !== WebSocket.CONNECTING) return;
+        reportConnectionIssue('Чат поддержки не ответил вовремя, переподключаемся.');
+        nextSocket.close();
+        scheduleReconnect();
+      }, 8000);
+      nextSocket.onopen = () => {
+        clearOpenTimer();
         connectionIssueReported = false;
         options.onOpen?.();
       };
-      socket.onmessage = (event) => dispatchSupportSocketEvent(String(event.data), options);
-      socket.onclose = scheduleReconnect;
-      socket.onerror = () => reportConnectionIssue('Соединение с чатом прервано, переподключаемся.');
+      nextSocket.onmessage = (event) => dispatchSupportSocketEvent(String(event.data), options);
+      nextSocket.onclose = () => {
+        clearOpenTimer();
+        scheduleReconnect();
+      };
+      nextSocket.onerror = () => {
+        clearOpenTimer();
+        reportConnectionIssue('Соединение с чатом прервано, переподключаемся.');
+      };
     } catch (error) {
       if (!closed) {
         reportConnectionIssue(apiErrorMessage(error, 'Не удалось подключить чат поддержки.'));
@@ -79,6 +100,7 @@ export function connectSupportSocket(accessToken: string, options: SupportSocket
   return {
     close() {
       closed = true;
+      clearOpenTimer();
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
       }

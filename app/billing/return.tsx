@@ -1,7 +1,8 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
+import { VexNativeActivityIndicator } from '@/ui/native-activity-indicator';
 
 export default function BillingReturnRoute() {
   const queryClient = useQueryClient();
@@ -27,7 +28,7 @@ export default function BillingReturnRoute() {
 
   return (
     <View style={styles.screen}>
-      <ActivityIndicator color="#22D3EE" />
+      <VexNativeActivityIndicator color="#22D3EE" />
       <Text style={styles.title}>{status === 'failed' ? 'Оплата не завершена' : 'Проверяем оплату'}</Text>
     </View>
   );

@@ -3,7 +3,6 @@ import * as WebBrowser from "expo-web-browser";
 import { router } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import {
-  ActivityIndicator,
   Image,
   KeyboardAvoidingView,
   Linking,
@@ -33,6 +32,7 @@ import {
   playSuccessHaptic,
   playWarningHaptic,
 } from "@/native/haptics";
+import { VexNativeActivityIndicator } from "@/ui/native-activity-indicator";
 import { vexColors, VexScreen, vexSharedStyles } from "@/ui/vex-ui";
 import { resetVpnProfileCache } from "@/vpn/profile";
 import * as SecureStore from "@/native/secureStore";
@@ -514,7 +514,7 @@ export default function SignInScreen() {
               style={[styles.primaryButton, isAuthBusy && styles.busy]}
             >
               {isAuthBusy ? (
-                <ActivityIndicator color="#031012" />
+                <VexNativeActivityIndicator color="#031012" />
               ) : (
                 <Text
                   maxFontSizeMultiplier={1.1}
@@ -531,7 +531,7 @@ export default function SignInScreen() {
                 style={[styles.secondaryButton, isAuthBusy && styles.busy]}
               >
                 {isAuthBusy ? (
-                  <ActivityIndicator color="#22D3EE" />
+                  <VexNativeActivityIndicator color="#22D3EE" />
                 ) : (
                   <Text
                     maxFontSizeMultiplier={1.1}
@@ -549,7 +549,7 @@ export default function SignInScreen() {
                 style={[styles.secondaryButton, isAuthBusy && styles.busy]}
               >
                 {isAuthBusy ? (
-                  <ActivityIndicator color="#22D3EE" />
+                  <VexNativeActivityIndicator color="#22D3EE" />
                 ) : (
                   <Text
                     maxFontSizeMultiplier={1.1}

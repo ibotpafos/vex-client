@@ -8,7 +8,6 @@ import React, {
   useState,
 } from "react";
 import {
-  ActivityIndicator,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -18,11 +17,14 @@ import {
 } from "react-native";
 import {
   connectSupportSocket,
+  createSupportTicket,
   type SupportMessage,
   type SupportSocketHandle,
   type SupportTicket,
+  supportTickets,
 } from "@/api/vexApi";
 import { useSession } from "@/auth/session-context";
+import { VexNativeActivityIndicator } from "@/ui/native-activity-indicator";
 import { useRenderProfilerMark } from "@/debug/render-profiler";
 import {
   playErrorHaptic,
@@ -91,6 +93,18 @@ export default function SupportScreen() {
     setIsLoading(true);
     setError(null);
     setConnectionStatus("connecting");
+    let cancelled = false;
+    supportTickets(session.accessToken)
+      .then((nextTickets) => {
+        if (cancelled) return;
+        setTickets(nextTickets);
+        setIsLoading(false);
+      })
+      .catch((requestError: unknown) => {
+        if (cancelled) return;
+        setIsLoading(false);
+        setError(supportHistoryErrorMessage(requestError));
+      });
     const socket = connectSupportSocket(session.accessToken, {
       onError(messageText) {
         setConnectionStatus("reconnecting");
@@ -119,6 +133,7 @@ export default function SupportScreen() {
     });
     socketRef.current = socket;
     return () => {
+      cancelled = true;
       socket.close();
       if (socketRef.current === socket) {
         socketRef.current = null;
@@ -159,34 +174,48 @@ export default function SupportScreen() {
     }
     const nextSubject = subject.trim() || buildSupportSubject(body);
     const socket = socketRef.current;
-    if (!socket) {
-      setError("Чат подключается, попробуйте еще раз через секунду.");
-      setConnectionStatus("reconnecting");
-      playWarningHaptic();
-      return;
-    }
     const optimistic = optimisticSupportTicket(nextSubject, body);
     playLightImpactHaptic();
     setIsSending(true);
     setError(null);
     setMessage("");
     setTickets((current) => upsertSupportTicket(current, optimistic));
-    if (socket.sendMessage({ body, subject: nextSubject })) {
+    if (socket?.sendMessage({ body, subject: nextSubject })) {
       setSubject("");
       playSuccessHaptic();
       setIsSending(false);
       requestAnimationFrame(() => inputRef.current?.focus());
       return;
     }
-    setTickets((current) =>
-      current.filter((item) => item.id !== optimistic.id),
-    );
-    setMessage(body);
-    setError("Чат переподключается, сообщение не отправлено.");
-    setConnectionStatus("reconnecting");
-    setIsSending(false);
-    playErrorHaptic();
-    requestAnimationFrame(() => inputRef.current?.focus());
+    try {
+      const ticket = await createSupportTicket(session.accessToken, {
+        message: body,
+        source: "mobile",
+        subject: nextSubject,
+      });
+      setTickets((current) =>
+        upsertSupportTicket(removeMatchingOptimisticTicket(current, ticket), ticket),
+      );
+      setSubject("");
+      setConnectionStatus("reconnecting");
+      setError("Сообщение отправлено. Realtime-чат переподключается.");
+      playSuccessHaptic();
+      requestAnimationFrame(() => inputRef.current?.focus());
+    } catch (sendError) {
+      setTickets((current) =>
+        current.filter((item) => item.id !== optimistic.id),
+      );
+      setMessage(body);
+      setError(
+        supportHistoryErrorMessage(sendError) ??
+          "Чат переподключается, сообщение не отправлено.",
+      );
+      setConnectionStatus("reconnecting");
+      playErrorHaptic();
+      requestAnimationFrame(() => inputRef.current?.focus());
+    } finally {
+      setIsSending(false);
+    }
   }, [isSending, message, session?.accessToken, subject]);
 
   return (
@@ -195,7 +224,7 @@ export default function SupportScreen() {
         <Pressable
           onPress={() => {
             playSelectionHaptic();
-            router.back();
+            router.dismissTo("/");
           }}
           style={vexSharedStyles.iconButton}
           accessibilityLabel="Назад"
@@ -341,7 +370,7 @@ export default function SupportScreen() {
               ]}
             >
               {isSending ? (
-                <ActivityIndicator color="#031012" size="small" />
+                <VexNativeActivityIndicator color="#031012" size="small" />
               ) : (
                 <Send color="#031012" size={19} strokeWidth={2.8} />
               )}

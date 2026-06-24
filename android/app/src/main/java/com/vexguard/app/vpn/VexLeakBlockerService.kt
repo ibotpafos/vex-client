@@ -46,14 +46,18 @@ class VexLeakBlockerService : VpnService() {
       return
     }
 
-    tunnel = Builder()
+    val builder = Builder()
       .setSession("VEX AntiDetect")
       .addAddress("10.255.255.1", 32)
       .addRoute("0.0.0.0", 0)
       .addAddress("fd00:255:255::1", 128)
       .addRoute("::", 0)
       .setBlocking(false)
-      .establish()
+    try {
+      builder.addDisallowedApplication(packageName)
+    } catch (_: Throwable) {
+    }
+    tunnel = builder.establish()
 
     active.set(tunnel != null)
     val descriptor = tunnel?.fileDescriptor ?: return

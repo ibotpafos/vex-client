@@ -402,7 +402,11 @@ function currentNativeBuild() {
 
 function isAndroidSigningKeyMigration(update: AppUpdateCheckResult | null): boolean {
   const changelog = update?.changelog?.toLowerCase() || '';
-  return update?.reason === 'android_signing_key_migration' || changelog.includes('android-signing-key-migration');
+  return (
+    update?.reason === 'android_signing_key_migration' ||
+    changelog.includes('android-signing-key-migration') ||
+    changelog.includes('новую сборку vex')
+  );
 }
 
 const styles = StyleSheet.create({

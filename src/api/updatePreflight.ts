@@ -206,7 +206,7 @@ function isTrustedUpdateUrl(value: string, trustedBaseUrl: string): boolean {
 function updateReason(update: ManualUpdateCenterInput['update']): string {
   const explicitReason = update?.reason || '';
   const changelog = update?.changelog?.toLowerCase() || '';
-  if (changelog.includes('android-signing-key-migration')) {
+  if (changelog.includes('android-signing-key-migration') || changelog.includes('новую сборку vex')) {
     return 'android_signing_key_migration';
   }
   return explicitReason;

@@ -139,7 +139,7 @@ fi
 codesign --verify --deep --strict --verbose=4 "${app}"
 
 for resource in amneziawg-go awg vex-helper install-vex-vpn-helper.sh; do
-  if [[ ! -e "${app}/Contents/Resources/${resource}" ]]; then
+  if [[ ! -e "${app}/Contents/Resources/${resource}" && ! -e "${app}/Contents/Resources/resources/${resource}" ]]; then
     echo "app resource missing: ${resource}" >&2
     exit 1
   fi

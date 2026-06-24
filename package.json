@@ -98,7 +98,8 @@
     "android:build:local": "bash scripts/android_local_build.sh",
     "android:release": "bash scripts/build_android_release.sh",
     "windows:release": "powershell -ExecutionPolicy Bypass -File scripts/build_windows_release.ps1",
-    "linux:release": "bash scripts/build_linux_release.sh"
+    "linux:release": "bash scripts/build_linux_release.sh",
+    "macos:release": "bash scripts/build_macos_release.sh"
   },
   "resolutions": {
     "lightningcss": "1.30.1",

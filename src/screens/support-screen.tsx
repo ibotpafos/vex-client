@@ -38,6 +38,7 @@ import {
   supportTopics,
   type SupportChatItem,
   supportHistoryErrorMessage,
+  supportNetworkErrorMessage,
   supportConnectionStatusText,
   buildSupportSubject,
   optimisticSupportTicket,
@@ -61,7 +62,7 @@ export default function SupportScreen() {
   const [message, setMessage] = useState("");
   const [subject, setSubject] = useState("");
   const [connectionStatus, setConnectionStatus] = useState<
-    "connecting" | "online" | "reconnecting"
+    "connecting" | "online" | "reconnecting" | "offline"
   >("connecting");
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
@@ -87,40 +88,58 @@ export default function SupportScreen() {
     if (!session?.accessToken) {
       setTickets([]);
       setIsLoading(false);
-      setConnectionStatus("connecting");
+      setConnectionStatus("offline");
+      setError("Сначала войдите в аккаунт, чтобы написать в поддержку.");
       return undefined;
     }
     setIsLoading(true);
     setError(null);
     setConnectionStatus("connecting");
     let cancelled = false;
+    let connectWatchdog: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+      if (cancelled) return;
+      setIsLoading(false);
+      setConnectionStatus("reconnecting");
+      setError(supportNetworkErrorMessage);
+    }, 8000);
+    const clearConnectWatchdog = () => {
+      if (!connectWatchdog) return;
+      clearTimeout(connectWatchdog);
+      connectWatchdog = null;
+    };
     supportTickets(session.accessToken)
       .then((nextTickets) => {
         if (cancelled) return;
+        clearConnectWatchdog();
         setTickets(nextTickets);
         setIsLoading(false);
       })
       .catch((requestError: unknown) => {
         if (cancelled) return;
+        clearConnectWatchdog();
         setIsLoading(false);
         setError(supportHistoryErrorMessage(requestError));
       });
     const socket = connectSupportSocket(session.accessToken, {
       onError(messageText) {
+        clearConnectWatchdog();
         setConnectionStatus("reconnecting");
         setIsLoading(false);
         setError(supportHistoryErrorMessage(messageText));
       },
       onOpen() {
+        clearConnectWatchdog();
         setConnectionStatus("online");
         setError(null);
       },
       onSnapshot(nextTickets) {
+        clearConnectWatchdog();
         setTickets(nextTickets);
         setIsLoading(false);
         setConnectionStatus("online");
       },
       onTicket(ticket) {
+        clearConnectWatchdog();
         setTickets((current) =>
           upsertSupportTicket(
             removeMatchingOptimisticTicket(current, ticket),
@@ -134,6 +153,7 @@ export default function SupportScreen() {
     socketRef.current = socket;
     return () => {
       cancelled = true;
+      clearConnectWatchdog();
       socket.close();
       if (socketRef.current === socket) {
         socketRef.current = null;

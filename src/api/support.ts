@@ -1,4 +1,5 @@
 import { jsonRequest, vexApiBaseUrl } from './client';
+import { isSupportSocketConnecting } from './supportSocketState';
 import {
   type SupportTicket,
   type SupportMessage,
@@ -68,7 +69,7 @@ export function connectSupportSocket(accessToken: string, options: SupportSocket
       const nextSocket = new WebSocket(url);
       socket = nextSocket;
       openTimer = setTimeout(() => {
-        if (closed || socket !== nextSocket || nextSocket.readyState !== WebSocket.CONNECTING) return;
+        if (closed || socket !== nextSocket || !isSupportSocketConnecting(nextSocket)) return;
         reportConnectionIssue('Чат поддержки не ответил вовремя, переподключаемся.');
         nextSocket.close();
         scheduleReconnect();
@@ -118,6 +119,7 @@ export function connectSupportSocket(accessToken: string, options: SupportSocket
     },
   };
 }
+
 
 async function supportWebSocketURL(accessToken: string) {
   const payload = await jsonRequest<{ ticket?: string }>('/v1/support-ws-ticket', {

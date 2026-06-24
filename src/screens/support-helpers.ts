@@ -3,6 +3,8 @@ import type { SupportMessage, SupportTicket } from "@/api/vexApi";
 export const duplicateSupportMessageWindowMs = 10_000;
 export const collapsedSupportMessageLength = 360;
 export const collapsedSupportMessageLines = 8;
+export const supportNetworkErrorMessage =
+  "Нет соединения с сервером VEX. Проверьте интернет или отключите VPN и попробуйте снова.";
 export const supportTopics = [
   "Не подключается",
   "Оплата",
@@ -19,13 +21,27 @@ export function supportHistoryErrorMessage(error: unknown): string | null {
     error instanceof Error && error.message
       ? error.message
       : String(error || "Не удалось загрузить чат поддержки.");
+  if (isSupportNetworkError(message)) {
+    return supportNetworkErrorMessage;
+  }
   return message.toLowerCase() === "not found" ? null : message;
 }
 
+function isSupportNetworkError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("fetch failed") ||
+    normalized.includes("network request failed") ||
+    normalized.includes("unable to resolve host") ||
+    normalized.includes("no address associated with hostname")
+  );
+}
+
 export function supportConnectionStatusText(
-  status: "connecting" | "online" | "reconnecting",
+  status: "connecting" | "online" | "reconnecting" | "offline",
 ) {
   if (status === "online") return "в сети";
+  if (status === "offline") return "нужен вход";
   if (status === "reconnecting") return "переподключаемся...";
   return "подключаемся...";
 }

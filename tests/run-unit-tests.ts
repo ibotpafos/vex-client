@@ -7,7 +7,8 @@ import { sessionLoadFailureDiagnosticsSnapshot } from '../src/auth/sessionDiagno
 import { loadSessionWithRetry, loadWithRetry } from '../src/auth/sessionLoadRetry';
 import { generateChallenge, generateRandomString } from '../src/auth/pkce';
 import { buildAppWebAuthUrl } from '../src/auth/webAuthUrl';
-import { optimisticSupportTicket, uniqueSupportMessages, supportChatItems } from '../src/screens/support-helpers';
+import { isSupportSocketConnecting } from '../src/api/supportSocketState';
+import { optimisticSupportTicket, supportConnectionStatusText, supportHistoryErrorMessage, uniqueSupportMessages, supportChatItems } from '../src/screens/support-helpers';
 import {
   deleteTauriSensitiveStorageItem,
   getTauriSensitiveStorageItem,
@@ -1373,6 +1374,20 @@ async function runManualUpdateInstallTests(): Promise<void> {
 }
 
 function runSupportTests(): void {
+  assertEqual(isSupportSocketConnecting({ readyState: 0 }, undefined), true);
+  assertEqual(isSupportSocketConnecting({ readyState: 1 }, undefined), false);
+  assertEqual(isSupportSocketConnecting(
+    { readyState: 7 as WebSocket['readyState'] },
+    { CONNECTING: 7 as typeof WebSocket.CONNECTING },
+  ), true);
+  assertEqual(supportConnectionStatusText('offline'), 'нужен вход');
+  assertEqual(
+    supportHistoryErrorMessage(
+      'fetch failed: java.net.UnknownHostException: Unable to resolve host "vexguard.app": No address associated with hostname',
+    ),
+    'Нет соединения с сервером VEX. Проверьте интернет или отключите VPN и попробуйте снова.',
+  );
+
   const t1 = optimisticSupportTicket('Payment Issue', 'I paid but it says expired.');
   assertEqual(t1.subject, 'Payment Issue');
   assertEqual(t1.status, 'open');

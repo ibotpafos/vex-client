@@ -445,7 +445,6 @@ export function useVpnConnection() {
     entitlementQueryError: entitlementError,
     cachedEntitlement,
     refreshSession,
-    handleSignOut,
   });
 
   const {
@@ -825,12 +824,16 @@ export function useVpnConnection() {
       })
       .catch(() => undefined);
     if (isAuthenticationError(message)) {
-      refreshSession().catch(() => void handleSignOut());
-      setVpnError('Сессия истекла. Авторизуйтесь заново.');
+      void refreshSession().catch((refreshError) => {
+        void submitClientDiagnosticsEvent('vpn_session_refresh_failed_without_logout', 'auth_error', {
+          error_message: errorMessage(refreshError, 'vpn_session_refresh_failed_without_logout'),
+        }).catch(() => undefined);
+      });
+      setVpnError('Не удалось подтвердить сессию. Повторите попытку или войдите заново, если ошибка останется.');
     } else {
       setVpnError(message);
     }
-  }, [handleSignOut, refreshSession, setVpnStatus]);
+  }, [refreshSession, setVpnStatus, submitClientDiagnosticsEvent]);
 
   const handlePowerPress = useCallback(async () => {
     if (isVpnBusy || vpnOperationInFlightRef.current) {

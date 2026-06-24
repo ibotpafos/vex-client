@@ -28,7 +28,6 @@ type UseVpnDiagnosticsInput = {
   entitlementQueryError: unknown;
   cachedEntitlement: any;
   refreshSession: () => Promise<any>;
-  handleSignOut: () => Promise<void>;
 };
 
 export function useVpnDiagnostics({
@@ -41,7 +40,6 @@ export function useVpnDiagnostics({
   entitlementQueryError,
   cachedEntitlement,
   refreshSession,
-  handleSignOut,
 }: UseVpnDiagnosticsInput) {
   const lastClientDiagnosticsAtRef = useRef<Record<string, number>>({});
   const lastEntitlementDiagnosticsRef = useRef('');
@@ -191,15 +189,25 @@ export function useVpnDiagnostics({
       }).catch(() => undefined);
     }
     if (isAuthenticationError(message)) {
-      refreshSession().catch(() => {
-        void handleSignOut();
+      void refreshSession().catch((error) => {
+        void uploadClientDiagnostics(session?.accessToken ?? '', {
+          reason: 'session_refresh_failed_without_logout',
+          status: 'auth_error',
+          vpnStatus,
+          latencyMs: clientLatencyMs,
+          samples: {
+            entitlement_error: message,
+            refresh_error: errorMessage(error, 'session_refresh_failed_without_logout'),
+            had_cached_entitlement: Boolean(cachedEntitlement),
+            cached_entitlement_active: hasPaidEntitlement(cachedEntitlement),
+          },
+        }).catch(() => undefined);
       });
     }
   }, [
     cachedEntitlement,
     clientLatencyMs,
     entitlementQueryError,
-    handleSignOut,
     refreshSession,
     session?.accessToken,
     vpnStatus,

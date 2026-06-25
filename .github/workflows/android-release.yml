@@ -47,6 +47,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: "1.24.4"
+          cache: false
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -139,6 +140,24 @@ jobs:
             fi
           done
           printf '%s' "${ANDROID_RELEASE_KEYSTORE_BASE64}" | base64 --decode > android/app/release.keystore
+
+      - name: Generate Android debug keystore
+        if: env.ANDROID_RELEASE_VARIANT != 'release'
+        run: |
+          set -euo pipefail
+          if [ -f android/app/debug.keystore ]; then
+            exit 0
+          fi
+          keytool -genkeypair -v \
+            -storetype JKS \
+            -keystore android/app/debug.keystore \
+            -storepass android \
+            -alias androiddebugkey \
+            -keypass android \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
 
       - name: Typecheck
         run: npm run typecheck

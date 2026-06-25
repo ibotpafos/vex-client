@@ -34,12 +34,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.4"
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -82,6 +89,15 @@ jobs:
           key: expo-cache-${{ runner.os }}-${{ hashFiles('package-lock.json', 'app.json', 'app.config.*', 'metro.config.*', 'babel.config.*') }}
           restore-keys: |
             expo-cache-${{ runner.os }}-
+
+      - name: Restore AmneziaWG Go cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches/golang
+          key: android-amnezia-go-${{ runner.os }}-${{ hashFiles('patches/amnezia/*.patch', 'scripts/bootstrap_amneziawg_android.sh') }}
+          restore-keys: |
+            android-amnezia-go-${{ runner.os }}-
 
       - name: Restore AmneziaWG source cache
         uses: actions/cache@v4

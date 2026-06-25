@@ -57,9 +57,9 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: macos-cargo-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml', 'src-tauri/src/**/*.rs') }}
+          key: macos-cargo-v2-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml', 'src-tauri/src/**/*.rs') }}
           restore-keys: |
-            macos-cargo-${{ runner.os }}-
+            macos-cargo-v2-${{ runner.os }}-
 
       - name: Restore macOS native resource cache
         uses: actions/cache@v4

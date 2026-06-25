@@ -49,10 +49,10 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: windows-cargo-${{ runner.os }}-${{ env.WINDOWS_TARGET }}-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml', 'src-tauri/src/**/*.rs') }}
+          key: windows-cargo-v2-${{ runner.os }}-${{ env.WINDOWS_TARGET }}-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml', 'src-tauri/src/**/*.rs') }}
           restore-keys: |
-            windows-cargo-${{ runner.os }}-${{ env.WINDOWS_TARGET }}-
-            windows-cargo-${{ runner.os }}-
+            windows-cargo-v2-${{ runner.os }}-${{ env.WINDOWS_TARGET }}-
+            windows-cargo-v2-${{ runner.os }}-
 
       - name: Install dependencies
         run: npm ci --prefer-offline --no-audit --fund=false

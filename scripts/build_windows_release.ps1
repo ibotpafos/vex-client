@@ -104,6 +104,7 @@ $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = $tauriPrivateKeyPassword
 $tauriConfigPath = "src-tauri/tauri.conf.json"
 $tauriConfig = Get-Content -LiteralPath $tauriConfigPath -Raw | ConvertFrom-Json
 $tauriConfig.version = $Version
+$tauriConfig | Add-Member -NotePropertyName "mainBinaryName" -NotePropertyValue "app" -Force
 $tauriConfig.plugins.updater.pubkey = $tauriPublicKey
 $tauriConfig.bundle.createUpdaterArtifacts = "v1Compatible"
 $tauriConfig.bundle.targets = @("nsis", "msi")

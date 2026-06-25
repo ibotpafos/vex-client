@@ -78,6 +78,7 @@ const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
 
 config.productName = "VEX";
 config.version = version;
+config.mainBinaryName = "app";
 config.plugins = config.plugins || {};
 config.plugins.updater = config.plugins.updater || {};
 config.plugins.updater.pubkey = pubkey;

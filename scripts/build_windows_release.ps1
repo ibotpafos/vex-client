@@ -45,7 +45,7 @@ function New-TauriSidecarStub {
     New-Item -ItemType Directory -Force -Path $helperDir | Out-Null
     Set-Content -LiteralPath $helperSrc -Value "fn main() {}`n" -NoNewline
     try {
-        & rustc --target $Target -C opt-level=z -C strip=symbols $helperSrc -o $helperBin
+        & rustc --crate-name helper_stub --target $Target -C opt-level=z -C strip=symbols $helperSrc -o $helperBin
         if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
         }

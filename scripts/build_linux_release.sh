@@ -69,7 +69,7 @@ prepare_tauri_sidecar_stub() {
 
   mkdir -p "${helper_dir}"
   printf 'fn main() {}\n' >"${helper_src}"
-  rustc --target "${TARGET}" -C opt-level=z -C strip=symbols "${helper_src}" -o "${helper_bin}"
+  rustc --crate-name helper_stub --target "${TARGET}" -C opt-level=z -C strip=symbols "${helper_src}" -o "${helper_bin}"
   rm -f "${helper_src}"
 }
 

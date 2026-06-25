@@ -69,7 +69,6 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            src-tauri/target
           key: linux-cargo-${{ runner.os }}-${{ env.LINUX_TARGET }}-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml', 'src-tauri/src/**/*.rs') }}
           restore-keys: |
             linux-cargo-${{ runner.os }}-${{ env.LINUX_TARGET }}-

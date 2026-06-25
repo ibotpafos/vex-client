@@ -5,11 +5,14 @@ import React from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { hasPaidEntitlement } from '@/api/vexApi';
+import { HomeNativeHeader } from '@/components/home-native-header';
 import { SubscriptionContent } from '@/components/subscription-content';
 import { playSelectionHaptic } from '@/native/haptics';
 import { VexNativeActivityIndicator } from '@/ui/native-activity-indicator';
 import { VexScreen, vexSharedStyles, VexPressable } from '@/ui/vex-ui';
 import { useVpnConnectionContext } from '@/vpn/vpn-connection-context';
+
+const vexLogo = require('../../assets/vex-logo-header.png');
 
 export default function AccountScreen() {
   const {
@@ -23,24 +26,25 @@ export default function AccountScreen() {
   return (
     <VexScreen contentStyle={styles.shell}>
       <StatusBar style="light" />
-      <View style={styles.header}>
-        <View style={styles.headerCopy}>
-          <Text style={styles.eyebrow}>VEX</Text>
-          <Text style={styles.title}>Аккаунт</Text>
-        </View>
-        <VexPressable
-          accessibilityLabel="Настройки"
-          onPress={() => {
-            playSelectionHaptic();
-            router.push('/(app)/settings');
-          }}
-          style={vexSharedStyles.iconButton}
-          hoverStyle={{ opacity: 0.72 }}
-          title="Настройки"
-        >
-          <Settings color="#A7B9BD" size={25} strokeWidth={2.4} />
-        </VexPressable>
-      </View>
+      <HomeNativeHeader
+        actions={(
+          <VexPressable
+            accessibilityLabel="Настройки"
+            onPress={() => {
+              playSelectionHaptic();
+              router.push('/(app)/settings');
+            }}
+            style={vexSharedStyles.iconButton}
+            hoverStyle={{ opacity: 0.72 }}
+            title="Настройки"
+          >
+            <Settings color="#EAF7F8" size={24} strokeWidth={2.4} />
+          </VexPressable>
+        )}
+        logoSource={vexLogo}
+        planLabel={accountTierLabel}
+        showPlan={Boolean(session && accountTierLabel)}
+      />
 
       {!session ? (
         <View style={styles.centerState}>
@@ -53,12 +57,13 @@ export default function AccountScreen() {
           contentContainerStyle={styles.content}
           showsVerticalScrollIndicator={false}
         >
-          <View style={styles.accountCard}>
-            <View style={styles.accountHeader}>
+          <View style={styles.accountPanel}>
+            <View style={styles.accountHero}>
               <View style={styles.userBadge}>
-                <User color="#22D3EE" size={25} strokeWidth={2.5} />
+                <User color="#22D3EE" size={24} strokeWidth={2.5} />
               </View>
               <View style={styles.accountCopy}>
+                <Text style={styles.accountLabel}>Аккаунт VEX</Text>
                 <Text numberOfLines={1} style={styles.accountEmail}>{session.user.email}</Text>
                 <View style={styles.accountStatusRow}>
                   <View style={[styles.accountStatusDot, hasEntitlement && styles.accountStatusDotActive]} />
@@ -67,13 +72,18 @@ export default function AccountScreen() {
               </View>
             </View>
 
-            <View style={styles.planRow}>
-              <View style={styles.planBadge}>
-                <ShieldCheck color="#031012" size={18} strokeWidth={2.8} />
+            <View style={styles.accessCard}>
+              <View style={styles.accessIcon}>
+                <ShieldCheck color="#031012" size={19} strokeWidth={2.8} />
               </View>
-              <View style={styles.planCopy}>
-                <Text style={styles.planLabel}>Текущий доступ</Text>
-                <Text numberOfLines={1} style={styles.planValue}>{accountTierLabel || 'Проверяем подписку'}</Text>
+              <View style={styles.accessCopy}>
+                <Text style={styles.accessCaption}>Текущий доступ</Text>
+                <Text numberOfLines={1} style={styles.accessValue}>{accountTierLabel || 'Проверяем подписку'}</Text>
+              </View>
+              <View style={[styles.accessPill, hasEntitlement && styles.accessPillActive]}>
+                <Text style={[styles.accessPillText, hasEntitlement && styles.accessPillTextActive]}>
+                  {hasEntitlement ? 'Активен' : 'Проверка'}
+                </Text>
               </View>
             </View>
           </View>
@@ -87,32 +97,11 @@ export default function AccountScreen() {
 
 const styles = StyleSheet.create({
   shell: {
-    gap: 12,
-  },
-  header: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  headerCopy: {
-    flex: 1,
-    minWidth: 0,
-  },
-  eyebrow: {
-    color: '#22D3EE',
-    fontSize: 12,
-    fontWeight: '900',
-    letterSpacing: 0,
-    marginBottom: 4,
-  },
-  title: {
-    color: '#F4FCFD',
-    fontSize: 28,
-    fontWeight: '900',
+    gap: 10,
   },
   content: {
-    gap: 12,
-    paddingBottom: 32,
+    gap: 10,
+    paddingBottom: 30,
   },
   centerState: {
     alignItems: 'center',
@@ -125,44 +114,52 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     marginTop: 16,
   },
-  accountCard: {
+  accountPanel: {
     backgroundColor: 'rgba(8,25,29,0.84)',
-    borderColor: 'rgba(126,233,245,0.18)',
-    borderRadius: 26,
+    borderColor: 'rgba(126,233,245,0.2)',
+    borderRadius: 20,
     borderWidth: 1,
-    gap: 14,
-    padding: 14,
+    gap: 10,
+    padding: 10,
     shadowColor: '#22D3EE',
-    shadowOpacity: 0.14,
-    shadowRadius: 20,
+    shadowOpacity: 0.1,
+    shadowRadius: 14,
   },
-  accountHeader: {
+  accountHero: {
     alignItems: 'center',
     flexDirection: 'row',
-    gap: 12,
+    gap: 10,
+    minHeight: 58,
   },
   userBadge: {
     alignItems: 'center',
     backgroundColor: 'rgba(34,211,238,0.13)',
     borderColor: 'rgba(34,211,238,0.2)',
-    borderRadius: 18,
+    borderRadius: 16,
     borderWidth: 1,
-    height: 52,
+    height: 46,
     justifyContent: 'center',
-    width: 52,
+    width: 46,
   },
   accountCopy: {
     flex: 1,
     minWidth: 0,
   },
+  accountLabel: {
+    color: '#8FBEC6',
+    fontSize: 11,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
   accountEmail: {
     color: '#EAF7F8',
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: '900',
+    marginTop: 2,
   },
   accountMeta: {
     color: '#B6CACE',
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '800',
     minWidth: 0,
   },
@@ -182,38 +179,62 @@ const styles = StyleSheet.create({
   accountStatusDotActive: {
     backgroundColor: '#22D3EE',
   },
-  planRow: {
+  accessCard: {
     alignItems: 'center',
     backgroundColor: 'rgba(2,10,11,0.52)',
     borderColor: 'rgba(96,118,123,0.24)',
-    borderRadius: 18,
+    borderRadius: 16,
     borderWidth: 1,
     flexDirection: 'row',
-    gap: 10,
-    padding: 12,
+    gap: 9,
+    minHeight: 58,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
   },
-  planBadge: {
+  accessIcon: {
     alignItems: 'center',
     backgroundColor: '#22D3EE',
-    borderRadius: 14,
-    height: 38,
+    borderRadius: 13,
+    height: 36,
     justifyContent: 'center',
-    width: 38,
+    width: 36,
   },
-  planCopy: {
+  accessCopy: {
     flex: 1,
     minWidth: 0,
   },
-  planLabel: {
+  accessCaption: {
     color: '#8FBEC6',
     fontSize: 11,
     fontWeight: '900',
     textTransform: 'uppercase',
   },
-  planValue: {
+  accessValue: {
     color: '#F4FCFD',
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '900',
-    marginTop: 3,
+    marginTop: 2,
+  },
+  accessPill: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(2,10,11,0.58)',
+    borderColor: 'rgba(96,118,123,0.26)',
+    borderRadius: 999,
+    borderWidth: 1,
+    justifyContent: 'center',
+    minHeight: 30,
+    paddingHorizontal: 9,
+  },
+  accessPillActive: {
+    backgroundColor: 'rgba(34,211,238,0.12)',
+    borderColor: 'rgba(34,211,238,0.44)',
+  },
+  accessPillText: {
+    color: '#A7B9BD',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  accessPillTextActive: {
+    color: '#B9FBFF',
   },
 });

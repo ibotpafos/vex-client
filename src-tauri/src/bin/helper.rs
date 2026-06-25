@@ -11,7 +11,7 @@
 /// - Structured per-domain logging macros
 /// - Explicit resource cleanup (RAII-style drop ordering)
 use std::{
-    fs,
+    fs::{self, OpenOptions},
     io::{self, BufRead, Write},
     net::Shutdown,
     os::unix::{
@@ -61,9 +61,10 @@ const ANTILEAK_ANCHOR: &str = "com.vexguard.antileak";
 const ANTILEAK_ANCHOR_FILE: &str = "/etc/pf.anchors/com.vexguard.antileak";
 const PF_CONF: &str = "/etc/pf.conf";
 const ANTILEAK_STATE_FILE: &str = "/Library/Application Support/VEX VPN/helper/antileak.active";
+const OPERATION_LOCK_FILE: &str = "/Library/Application Support/VEX VPN/helper/operation.lock";
 const IFACE_WAIT_TIMEOUT: Duration = Duration::from_secs(8);
 const UAPI_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-const HANDSHAKE_WAIT_TIMEOUT: Duration = Duration::from_secs(12);
+const OPERATION_LOCK_STALE_AFTER: Duration = Duration::from_secs(60);
 
 // ─── Structured logging (file + stderr) ──────────────────────────────────────
 
@@ -101,6 +102,57 @@ impl Logger {
     fn error(&self, domain: &str, msg: &str) {
         self.write("ERROR", domain, msg);
     }
+}
+
+struct OperationLock {
+    path: &'static str,
+}
+
+impl Drop for OperationLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(self.path);
+    }
+}
+
+fn acquire_operation_lock(log: &Logger) -> Result<OperationLock> {
+    fs::create_dir_all(HELPER_DIR).map_err(HelperError::Io)?;
+
+    if let Ok(metadata) = fs::metadata(OPERATION_LOCK_FILE) {
+        if metadata
+            .modified()
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age > OPERATION_LOCK_STALE_AFTER)
+        {
+            let _ = fs::remove_file(OPERATION_LOCK_FILE);
+            log.warn("lock", "removed stale operation lock");
+        }
+    }
+
+    match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(OPERATION_LOCK_FILE)
+    {
+        Ok(mut file) => {
+            let _ = writeln!(file, "pid={}", std::process::id());
+            Ok(OperationLock {
+                path: OPERATION_LOCK_FILE,
+            })
+        }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            Err(HelperError::Network("operation already in progress".into()))
+        }
+        Err(error) => Err(HelperError::Io(error)),
+    }
+}
+
+fn operation_in_progress() -> bool {
+    fs::metadata(OPERATION_LOCK_FILE)
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|modified| modified.elapsed().ok())
+        .is_some_and(|age| age <= OPERATION_LOCK_STALE_AFTER)
 }
 
 // ─── WireGuard config model ───────────────────────────────────────────────────
@@ -189,8 +241,38 @@ impl WgConfig {
                 "no PrivateKey found in [Interface]".into(),
             ));
         }
+        cfg.validate()?;
 
         Ok(cfg)
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.addresses.is_empty() {
+            return Err(HelperError::Config(
+                "no Address found in [Interface]".into(),
+            ));
+        }
+        if self.endpoint.is_empty() {
+            return Err(HelperError::Config("no Endpoint found in [Peer]".into()));
+        }
+        if self
+            .peer_uapi
+            .iter()
+            .any(|line| line == "public_key=__PENDING__")
+        {
+            return Err(HelperError::Config("no PublicKey found in [Peer]".into()));
+        }
+        let mtu = self
+            .mtu
+            .parse::<u16>()
+            .map_err(|_| HelperError::Config(format!("invalid MTU: {}", self.mtu)))?;
+        if !(576..=9000).contains(&mtu) {
+            return Err(HelperError::Config(format!(
+                "MTU out of supported range: {}",
+                self.mtu
+            )));
+        }
+        Ok(())
     }
 
     fn parse_interface_field(key: &str, val: &str, cfg: &mut WgConfig) {
@@ -602,6 +684,9 @@ fn add_endpoint_host_route(endpoint: &str, gateway: &str, log: &Logger) {
     if host.is_empty() {
         return;
     }
+    let _ = Command::new("route")
+        .args(["-q", "-n", "delete", "-host", host])
+        .status();
     let status = Command::new("route")
         .args(["-q", "-n", "add", "-host", host, "-gateway", gateway])
         .status();
@@ -678,6 +763,20 @@ fn cleanup_failed_up(iface: &str, endpoint: &str, child: &mut Child, log: &Logge
     let _ = fs::remove_file(format!("{}/endpoint.txt", HELPER_DIR));
 }
 
+fn cleanup_previous_session(log: &Logger) {
+    let previous_iface = load_iface();
+    let previous_endpoint = load_endpoint();
+    if let Some(ref iface) = previous_iface {
+        cleanup_interface_routes(iface, previous_endpoint.as_deref(), log);
+        let _ = Command::new("ifconfig")
+            .args([iface.as_str(), "down"])
+            .status();
+    }
+    kill_awg_go(log);
+    let _ = fs::remove_file(format!("{}/utun.name", HELPER_DIR));
+    let _ = fs::remove_file(format!("{}/endpoint.txt", HELPER_DIR));
+}
+
 fn endpoint_route_target(endpoint: &str) -> Option<(String, String)> {
     let out = Command::new("route")
         .args(["-n", "get", endpoint_host(endpoint)])
@@ -749,6 +848,14 @@ fn load_pid() -> Option<u32> {
     content.trim().parse::<u32>().ok()
 }
 
+fn process_is_running(pid: u32) -> bool {
+    Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
 /// Kill the specific amneziawg-go process spawned by this application gracefully, then forcibly.
 fn kill_awg_go(log: &Logger) {
     let pid = load_pid();
@@ -757,9 +864,17 @@ fn kill_awg_go(log: &Logger) {
         let _ = Command::new("kill")
             .args(["-15", &pid.to_string()])
             .output();
-        thread::sleep(Duration::from_millis(400));
-        // Send SIGKILL (9) in case it hung
-        let _ = Command::new("kill").args(["-9", &pid.to_string()]).output();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if !process_is_running(pid) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        if process_is_running(pid) {
+            let _ = Command::new("kill").args(["-9", &pid.to_string()]).output();
+            log.warn("awg-go", &format!("force-stopped pid {}", pid));
+        }
         let _ = fs::remove_file(format!("{}/awg.pid", HELPER_DIR));
         log.info("awg-go", &format!("stopped pid {}", pid));
     } else {
@@ -890,7 +1005,7 @@ fn action_up(log: &Logger, arm_antileak: bool) -> Result<()> {
     );
 
     // 2. Tear down any previous session
-    kill_awg_go(log);
+    cleanup_previous_session(log);
 
     // 3. Capture gateway before tunnel changes routing
     let gateway = match default_gateway() {
@@ -976,11 +1091,11 @@ fn action_up(log: &Logger, arm_antileak: bool) -> Result<()> {
     }
     apply_dns(&dns, log);
 
-    if let Err(e) = wait_for_peer_handshake(&iface, log) {
-        log.error("up", &format!("handshake failed: {}", e));
-        cleanup_failed_up(&iface, &cfg.endpoint, &mut child, log);
-        return Err(e);
-    }
+    prime_tunnel_traffic(&iface, log);
+
+    // Finish connect as soon as the interface is usable.
+    // Handshake verification continues via status polling in the desktop app.
+    log_peer_handshake_state(&iface, log);
 
     if arm_antileak {
         if let Err(e) = enable_antileak_pf(&cfg.endpoint, &iface, log) {
@@ -1064,36 +1179,55 @@ fn route_uses_interface(destination: &str, interface: &str) -> bool {
         .any(|line| line.trim() == format!("interface: {interface}"))
 }
 
-fn wait_for_peer_handshake(iface: &str, log: &Logger) -> Result<()> {
-    let started = Instant::now();
-    while started.elapsed() < HANDSHAKE_WAIT_TIMEOUT {
-        if let Some(stats) = query_uapi_stats(iface) {
-            if stats.latest_handshake_sec > 0 || stats.rx_bytes > 0 {
-                log.info(
-                    "handshake",
-                    &format!(
-                        "ready iface={} latest={} rx={} tx={}",
-                        iface, stats.latest_handshake_sec, stats.rx_bytes, stats.tx_bytes
-                    ),
-                );
-                return Ok(());
-            }
+fn log_peer_handshake_state(iface: &str, log: &Logger) {
+    if let Some(stats) = query_uapi_stats(iface) {
+        if stats.latest_handshake_sec > 0 || stats.rx_bytes > 0 {
             log.info(
                 "handshake",
                 &format!(
-                    "waiting iface={} rx={} tx={}",
+                    "ready iface={} latest={} rx={} tx={}",
+                    iface, stats.latest_handshake_sec, stats.rx_bytes, stats.tx_bytes
+                ),
+            );
+        } else {
+            log.info(
+                "handshake",
+                &format!(
+                    "pending iface={} rx={} tx={}",
                     iface, stats.rx_bytes, stats.tx_bytes
                 ),
             );
         }
-        let _ = Command::new("ping")
-            .args(["-n", "-c", "1", "-W", "1000", "1.1.1.1"])
-            .status();
-        thread::sleep(Duration::from_millis(500));
+        return;
     }
-    Err(HelperError::Timeout(
-        "VPN handshake не появился. Предыдущий туннель восстановлен.".into(),
-    ))
+    log.warn(
+        "handshake",
+        &format!("pending iface={} stats unavailable", iface),
+    );
+}
+
+fn prime_tunnel_traffic(iface: &str, log: &Logger) {
+    if !route_uses_interface("1.1.1.1", iface) {
+        log.warn(
+            "traffic",
+            &format!("skip prime packet: 1.1.1.1 is not routed via {}", iface),
+        );
+        return;
+    }
+
+    let iface = iface.to_string();
+    let prime_iface = iface.clone();
+    thread::spawn(move || {
+        let status = Command::new("ping")
+            .args(["-q", "-c", "1", "-W", "1000", "1.1.1.1"])
+            .status();
+        eprintln!(
+            "[vex-helper][INFO][traffic] prime packet via {} -> {:?}",
+            prime_iface,
+            status.map(|s| s.code())
+        );
+    });
+    log.info("traffic", &format!("prime packet scheduled via {}", iface));
 }
 
 fn query_uapi_stats(iface: &str) -> Option<TunnelStats> {
@@ -1139,6 +1273,99 @@ fn query_uapi_stats(iface: &str) -> Option<TunnelStats> {
     Some(stats)
 }
 
+fn helper_status_response(log: &Logger) -> String {
+    if operation_in_progress() {
+        return format!(
+            "state=connecting rx=0 tx=0 leak_protection={}\n",
+            if antileak_is_active() { "armed" } else { "off" }
+        );
+    }
+
+    let Some(iface) = load_iface() else {
+        return if antileak_is_active() {
+            "state=error rx=0 tx=0 leak_protection=blocking\n".to_string()
+        } else {
+            "state=disconnected rx=0 tx=0 leak_protection=off\n".to_string()
+        };
+    };
+
+    let sock_path = format!("{}/{}.sock", WG_RUNTIME_DIR, iface);
+    if !Path::new(&sock_path).exists() {
+        return if antileak_is_active() {
+            "state=error rx=0 tx=0 leak_protection=blocking\n".to_string()
+        } else {
+            "state=disconnected rx=0 tx=0 leak_protection=off\n".to_string()
+        };
+    }
+
+    if !route_uses_interface("1.1.1.1", &iface) {
+        log.warn("status", &format!("default route is not using {}", iface));
+        return if antileak_is_active() {
+            "state=error rx=0 tx=0 leak_protection=blocking\n".to_string()
+        } else {
+            "state=error rx=0 tx=0 leak_protection=off\n".to_string()
+        };
+    }
+
+    let Some(stats) = query_uapi_stats(&iface) else {
+        log.warn("status", &format!("cannot read UAPI stats for {}", iface));
+        return if antileak_is_active() {
+            "state=error rx=0 tx=0 leak_protection=blocking\n".to_string()
+        } else {
+            "state=error rx=0 tx=0 leak_protection=off\n".to_string()
+        };
+    };
+
+    if stats.latest_handshake_sec == 0 && stats.rx_bytes == 0 {
+        log.warn("status", &format!("{} has no VPN handshake yet", iface));
+        return format!(
+            "state=connected rx=0 tx={} latest_handshake=0 leak_protection={}\n",
+            stats.tx_bytes,
+            if antileak_is_active() { "armed" } else { "off" }
+        );
+    }
+
+    format!(
+        "state=connected rx={} tx={} latest_handshake={} leak_protection={}\n",
+        stats.rx_bytes,
+        stats.tx_bytes,
+        stats.latest_handshake_sec,
+        if antileak_is_active() { "armed" } else { "off" }
+    )
+}
+
+fn helper_diagnostics_response() -> String {
+    let iface = load_iface().unwrap_or_default();
+    let endpoint = load_endpoint().unwrap_or_default();
+    let sock_exists = if iface.is_empty() {
+        false
+    } else {
+        Path::new(&format!("{}/{}.sock", WG_RUNTIME_DIR, iface)).exists()
+    };
+    let route_ok = !iface.is_empty() && route_uses_interface("1.1.1.1", &iface);
+    let stats = if !iface.is_empty() {
+        query_uapi_stats(&iface)
+    } else {
+        None
+    };
+
+    format!(
+        "operation_in_progress={}\niface={}\nendpoint={}\nsocket_exists={}\nroute_ok={}\nrx={}\ntx={}\nlatest_handshake={}\nleak_protection={}\n",
+        operation_in_progress(),
+        iface,
+        endpoint,
+        sock_exists,
+        route_ok,
+        stats.as_ref().map(|stats| stats.rx_bytes).unwrap_or(0),
+        stats.as_ref().map(|stats| stats.tx_bytes).unwrap_or(0),
+        stats
+            .as_ref()
+            .map(|stats| stats.latest_handshake_sec)
+            .unwrap_or(0),
+        if antileak_is_active() { "armed" } else { "off" }
+    )
+}
+
 fn handle_client(stream: &mut UnixStream, log: &Logger) -> Result<()> {
     let mut reader = std::io::BufReader::new(&*stream);
     let mut line = String::new();
@@ -1154,82 +1381,50 @@ fn handle_client(stream: &mut UnixStream, log: &Logger) -> Result<()> {
     log.info("socket", &format!("command: {}", command));
 
     let response = match command.as_str() {
-        "up" => match action_up(log, true) {
-            Ok(_) => "ok\n".to_string(),
+        "up" => match acquire_operation_lock(log) {
+            Ok(_guard) => match action_up(log, true) {
+                Ok(_) => "ok\n".to_string(),
+                Err(e) => format!("error: {}\n", e),
+            },
             Err(e) => format!("error: {}\n", e),
         },
-        "up-no-antileak" => match action_up(log, false) {
-            Ok(_) => "ok\n".to_string(),
+        "up-no-antileak" => match acquire_operation_lock(log) {
+            Ok(_guard) => match action_up(log, false) {
+                Ok(_) => "ok\n".to_string(),
+                Err(e) => format!("error: {}\n", e),
+            },
             Err(e) => format!("error: {}\n", e),
         },
-        "down" => {
-            let _ = action_down(log, true);
-            "ok\n".to_string()
-        }
-        "down-keep-antileak" => {
-            let _ = action_down(log, false);
-            "ok\n".to_string()
-        }
-        "repair" => match action_repair(log) {
-            Ok(_) => "ok\n".to_string(),
-            Err(e) => format!("error: {}\n", e),
-        },
-        "status" => {
-            if let Some(iface) = load_iface() {
-                let sock_path = format!("/var/run/amneziawg/{}.sock", iface);
-                if Path::new(&sock_path).exists() {
-                    if let Err(error) = action_repair(log) {
-                        log.warn("status", &format!("route repair failed: {}", error));
-                    }
-                    if !route_uses_interface("1.1.1.1", &iface) {
-                        log.warn("status", &format!("default route is not using {}", iface));
-                        if antileak_is_active() {
-                            "state=error rx=0 tx=0 leak_protection=blocking\n".to_string()
-                        } else {
-                            "state=error rx=0 tx=0 leak_protection=off\n".to_string()
-                        }
-                    } else if let Some(stats) = query_uapi_stats(&iface) {
-                        if stats.latest_handshake_sec == 0 && stats.rx_bytes == 0 {
-                            log.warn("status", &format!("{} has no VPN handshake yet", iface));
-                            if antileak_is_active() {
-                                "state=error rx=0 tx=0 latest_handshake=0 leak_protection=blocking\n"
-                                    .to_string()
-                            } else {
-                                "state=error rx=0 tx=0 latest_handshake=0 leak_protection=off\n"
-                                    .to_string()
-                            }
-                        } else {
-                            format!(
-                            "state=connected rx={} tx={} latest_handshake={} leak_protection={}\n",
-                            stats.rx_bytes,
-                            stats.tx_bytes,
-                            stats.latest_handshake_sec,
-                            if antileak_is_active() { "armed" } else { "off" }
-                        )
-                        }
-                    } else {
-                        log.warn("status", &format!("cannot read UAPI stats for {}", iface));
-                        if antileak_is_active() {
-                            "state=error rx=0 tx=0 leak_protection=blocking\n".to_string()
-                        } else {
-                            "state=error rx=0 tx=0 leak_protection=off\n".to_string()
-                        }
-                    }
-                } else if antileak_is_active() {
-                    "state=error rx=0 tx=0 leak_protection=blocking\n".to_string()
-                } else {
-                    "state=disconnected rx=0 tx=0 leak_protection=off\n".to_string()
-                }
-            } else if antileak_is_active() {
-                "state=error rx=0 tx=0 leak_protection=blocking\n".to_string()
-            } else {
-                "state=disconnected rx=0 tx=0 leak_protection=off\n".to_string()
+        "down" => match acquire_operation_lock(log) {
+            Ok(_guard) => {
+                let _ = action_down(log, true);
+                "ok\n".to_string()
             }
-        }
-        "antileak-off" => {
-            let _ = disable_antileak_pf(log);
-            "ok\n".to_string()
-        }
+            Err(e) => format!("error: {}\n", e),
+        },
+        "down-keep-antileak" => match acquire_operation_lock(log) {
+            Ok(_guard) => {
+                let _ = action_down(log, false);
+                "ok\n".to_string()
+            }
+            Err(e) => format!("error: {}\n", e),
+        },
+        "repair" => match acquire_operation_lock(log) {
+            Ok(_guard) => match action_repair(log) {
+                Ok(_) => "ok\n".to_string(),
+                Err(e) => format!("error: {}\n", e),
+            },
+            Err(e) => format!("error: {}\n", e),
+        },
+        "status" => helper_status_response(log),
+        "diagnostics" => helper_diagnostics_response(),
+        "antileak-off" => match acquire_operation_lock(log) {
+            Ok(_guard) => {
+                let _ = disable_antileak_pf(log);
+                "ok\n".to_string()
+            }
+            Err(e) => format!("error: {}\n", e),
+        },
         other => {
             log.warn("socket", &format!("unknown command: {}", other));
             format!("error: unknown command {}\n", other)
@@ -1317,5 +1512,89 @@ fn secure_command_socket(socket_path: &str, log: &Logger) {
         if let Err(err) = fs::set_permissions(socket_path, permissions) {
             log.warn("main", &format!("failed to chmod helper socket: {}", err));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WgConfig;
+    use std::{fs, path::PathBuf};
+
+    fn write_temp_config(name: &str, content: &str) -> PathBuf {
+        let path =
+            std::env::temp_dir().join(format!("vex-helper-test-{}-{}", std::process::id(), name));
+        fs::write(&path, content).expect("write temp config");
+        path
+    }
+
+    #[test]
+    fn parses_valid_wg_quick_config() {
+        let path = write_temp_config(
+            "valid.conf",
+            r#"
+[Interface]
+PrivateKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+Address = 10.8.0.2/32
+DNS = 1.1.1.1
+MTU = 1420
+
+[Peer]
+PublicKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+AllowedIPs = 0.0.0.0/0
+Endpoint = 203.0.113.10:51820
+PersistentKeepalive = 25
+"#,
+        );
+
+        let config = WgConfig::from_file(path.to_str().unwrap()).expect("valid config");
+        let _ = fs::remove_file(path);
+
+        assert_eq!(config.addresses, vec!["10.8.0.2/32"]);
+        assert_eq!(config.endpoint, "203.0.113.10:51820");
+        assert_eq!(config.mtu, "1420");
+    }
+
+    #[test]
+    fn rejects_config_without_endpoint_before_network_changes() {
+        let path = write_temp_config(
+            "no-endpoint.conf",
+            r#"
+[Interface]
+PrivateKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+Address = 10.8.0.2/32
+
+[Peer]
+PublicKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+AllowedIPs = 0.0.0.0/0
+"#,
+        );
+
+        let error = WgConfig::from_file(path.to_str().unwrap()).expect_err("invalid config");
+        let _ = fs::remove_file(path);
+
+        assert!(error.to_string().contains("no Endpoint"));
+    }
+
+    #[test]
+    fn rejects_out_of_range_mtu() {
+        let path = write_temp_config(
+            "bad-mtu.conf",
+            r#"
+[Interface]
+PrivateKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+Address = 10.8.0.2/32
+MTU = 120
+
+[Peer]
+PublicKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+AllowedIPs = 0.0.0.0/0
+Endpoint = 203.0.113.10:51820
+"#,
+        );
+
+        let error = WgConfig::from_file(path.to_str().unwrap()).expect_err("invalid mtu");
+        let _ = fs::remove_file(path);
+
+        assert!(error.to_string().contains("MTU out of supported range"));
     }
 }

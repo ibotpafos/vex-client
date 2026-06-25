@@ -4,6 +4,7 @@ import { isTauriRuntime } from '@/native/tauriPlatform';
 
 import * as SecureStore from '@/native/secureStore';
 import type { VpnProfile } from './profile';
+import { defaultVpnRoutingMode } from './routingPolicy';
 import {
   hotVpnProfileSchemaVersion,
   hotVpnProfilesStorageKey,
@@ -46,24 +47,28 @@ export function supportsPersistentHotVpnProfiles(): boolean {
 export async function loadHotVpnProfile(
   userId: string,
   locationId: string,
+  routingModeOrNowMs?: string | number,
   nowMs = Date.now(),
 ): Promise<HotVpnProfileRecord | null> {
-  return (await loadHotVpnProfileResult(userId, locationId, nowMs)).record;
+  return (await loadHotVpnProfileResult(userId, locationId, routingModeOrNowMs, nowMs)).record;
 }
 
 export async function loadHotVpnProfileResult(
   userId: string,
   locationId: string,
+  routingModeOrNowMs?: string | number,
   nowMs = Date.now(),
 ): Promise<HotVpnProfileLoadResult> {
   if (!supportsPersistentHotVpnProfiles()) {
     return { record: null };
   }
+  const routingMode = typeof routingModeOrNowMs === 'string' ? routingModeOrNowMs : undefined;
+  const effectiveNowMs = typeof routingModeOrNowMs === 'number' ? routingModeOrNowMs : nowMs;
   const store = await readHotVpnProfileStore();
-  const key = hotVpnProfileStoreKey(userId, locationId, runtimeProfileKey());
+  const key = hotVpnProfileStoreKey(userId, locationId, runtimeProfileKey(), routingMode);
   const record = store[key];
-  if (!isUsableHotVpnProfileRecordForRuntime(record, userId, locationId, runtimeProfileKey(), nowMs)) {
-    const rejectedReason = hotVpnProfileRejectionReason(record, userId, locationId, runtimeProfileKey(), nowMs) ?? undefined;
+  if (!isUsableHotVpnProfileRecordForRuntime(record, userId, locationId, runtimeProfileKey(), effectiveNowMs)) {
+    const rejectedReason = hotVpnProfileRejectionReason(record, userId, locationId, runtimeProfileKey(), effectiveNowMs) ?? undefined;
     if (record) {
       delete store[key];
       await writeHotVpnProfileStore(store);
@@ -95,7 +100,7 @@ export async function saveHotVpnProfile(
     savedAtMs: metadata.nowMs ?? Date.now(),
     lastSuccessfulEndpoint: normalizeOptionalEndpoint(metadata.lastSuccessfulEndpoint),
   };
-  store[hotVpnProfileStoreKey(userId, locationId || profile.locationId, runtimeProfileKey())] = record;
+  store[hotVpnProfileStoreKey(userId, locationId || profile.locationId, runtimeProfileKey(), profile.routingMode)] = record;
   await writeHotVpnProfileStore(store);
   return record;
 }
@@ -137,7 +142,7 @@ export async function hydrateHotVpnProfilesToQueryCache(
       continue;
     }
     const profile = profileFromHotRecord(record, nowMs);
-    queryClient.setQueryData(['vpn-profile', accessToken, record.locationId], profile);
+    queryClient.setQueryData(['vpn-profile', accessToken, record.locationId, profile.routingMode ?? defaultVpnRoutingMode], profile);
     if (profile.entitlement) {
       queryClient.setQueryData(['entitlement', accessToken], profile.entitlement);
     }

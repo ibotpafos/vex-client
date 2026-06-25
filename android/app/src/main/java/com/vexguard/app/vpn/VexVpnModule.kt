@@ -227,6 +227,23 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
   }
 
   @ReactMethod
+  fun readDiagnostics(promise: Promise) {
+    scope.launch {
+      try {
+        val event = Arguments.createMap()
+        event.putString("source", "android-native")
+        event.putString("event", "vpn_status_snapshot")
+        event.putMap("status", controller.status().toWritableMap())
+        val events = Arguments.createArray()
+        events.pushMap(event)
+        promise.resolve(events)
+      } catch (error: Throwable) {
+        rejectVpnError(promise, "VPN_DIAGNOSTICS_FAILED", "VPN diagnostics read failed.", error)
+      }
+    }
+  }
+
+  @ReactMethod
   fun requestNotificationPermission(promise: Promise) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
       promise.resolve(true)
@@ -388,13 +405,14 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
     val map = Arguments.createMap()
     when (this) {
       is VpnConnectionState.Connected -> {
+        val hasTunnelActivity = traffic.latestHandshakeEpochMillis > 0L || traffic.rxBytes > 0L || traffic.txBytes > 0L
         map.putString("state", "connected")
         map.putDouble("rxBytes", traffic.rxBytes.toDouble())
         map.putDouble("txBytes", traffic.txBytes.toDouble())
         map.putDouble("latestHandshakeEpochMillis", traffic.latestHandshakeEpochMillis.toDouble())
         map.putString("leakProtection", this.leakProtection.wireValue)
-        map.putBoolean("verified", traffic.latestHandshakeEpochMillis > 0L)
-        if (traffic.latestHandshakeEpochMillis <= 0L) {
+        map.putBoolean("verified", hasTunnelActivity)
+        if (!hasTunnelActivity) {
           map.putString("verificationReason", "handshake_pending")
         }
       }

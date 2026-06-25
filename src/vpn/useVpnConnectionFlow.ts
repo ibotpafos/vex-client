@@ -33,9 +33,11 @@ import {
 import { uploadClientDiagnostics } from '@/diagnostics/clientDiagnostics';
 import type { VpnLocation } from '@/api/vexApi';
 import type { VpnProfile } from '@/vpn/profile';
+import type { VpnRoutingMode } from '@/vpn/routingPolicy';
 
 type UseVpnConnectionFlowInput = {
   antiLeakEnabled: boolean;
+  routingMode: VpnRoutingMode;
   selectedLocationId: string;
   serverSelectionMode: ServerSelectionMode;
   availableLocations: VpnLocation[];
@@ -62,6 +64,7 @@ type UseVpnConnectionFlowInput = {
 
 export function useVpnConnectionFlow({
   antiLeakEnabled,
+  routingMode,
   selectedLocationId,
   serverSelectionMode,
   availableLocations,
@@ -124,7 +127,7 @@ export function useVpnConnectionFlow({
     const initialLocationId = serverSelectionMode === 'auto'
       ? chooseBestVpnLocation(availableLocations)?.id ?? locationId
       : locationId;
-    let profile = connectableLocalProfile(activeProfile, initialLocationId, entitlementState);
+    let profile = connectableLocalProfile(activeProfile, initialLocationId, entitlementState, routingMode);
     if (profile) {
       const permissionGranted = await requestVpnPermission();
       if (!permissionGranted) {
@@ -242,6 +245,7 @@ export function useVpnConnectionFlow({
     reportVpnConnectEvent,
     requestVpnPermission,
     resolveConnectableVpnProfile,
+    routingMode,
     selectedLocationId,
     setSelectedLocationId,
     serverSelectionMode,

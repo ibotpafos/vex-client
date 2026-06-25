@@ -18,5 +18,8 @@ Pod::Spec.new do |s|
     'DEFINES_MODULE' => 'YES',
   }
 
-  s.source_files = "VexVpnModule.swift"
+  s.source_files = [
+    "VexVpnModule.swift",
+    "live-activity/*.swift"
+  ]
 end

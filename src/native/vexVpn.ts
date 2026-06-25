@@ -25,6 +25,16 @@ export type AndroidUpdateInstallResult = {
   status: 'installer_started' | 'install_permission_required';
 };
 
+export type VpnLiveActivityPayload = {
+  state: VpnState;
+  phase: string;
+  locationName: string;
+  latencyText: string;
+  receivedText: string;
+  sentText: string;
+  updatedAtEpochSeconds: number;
+};
+
 export type WireGuardKeyPair = {
   privateKey: string;
   publicKey: string;
@@ -46,6 +56,8 @@ type VexVpnNativeModule = {
   resetWireGuardKeyPair(): Promise<boolean>;
   measureEndpointLatency(endpoint: string): Promise<number | null>;
   readDiagnostics?(): Promise<Record<string, unknown>[]>;
+  updateLiveActivity?(payload: VpnLiveActivityPayload): Promise<boolean>;
+  endLiveActivity?(): Promise<boolean>;
   requestNotificationPermission?(): Promise<boolean>;
   getFirebaseMessagingToken?(): Promise<string>;
   downloadUpdateApk(downloadUrl: string, checksumSha256?: string | null): Promise<AndroidUpdateDownload>;
@@ -199,10 +211,24 @@ export async function measureEndpointLatency(endpoint: string): Promise<number |
 }
 
 export async function readNativeVpnDiagnostics(): Promise<Record<string, unknown>[]> {
-  if (Platform.OS !== 'ios') {
+  if (Platform.OS !== 'ios' && Platform.OS !== 'android') {
     return [];
   }
   return requireNativeModule().readDiagnostics?.() ?? [];
+}
+
+export async function updateVpnLiveActivity(payload: VpnLiveActivityPayload): Promise<boolean> {
+  if (Platform.OS !== 'ios') {
+    return false;
+  }
+  return requireNativeModule().updateLiveActivity?.(payload) ?? false;
+}
+
+export async function endVpnLiveActivity(): Promise<boolean> {
+  if (Platform.OS !== 'ios') {
+    return false;
+  }
+  return requireNativeModule().endLiveActivity?.() ?? false;
 }
 
 export async function requestNotificationPermission(): Promise<boolean> {

@@ -73,6 +73,7 @@ export default function SupportScreen() {
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(
     () => new Set(),
   );
+  const hasResolvedHistoryRef = useRef(false);
   const inputRef = useRef<TextInput | null>(null);
   const socketRef = useRef<SupportSocketHandle | null>(null);
   const threadRef = useRef<ScrollView | null>(null);
@@ -95,6 +96,7 @@ export default function SupportScreen() {
     setIsLoading(true);
     setError(null);
     setConnectionStatus("connecting");
+    hasResolvedHistoryRef.current = false;
     let cancelled = false;
     let connectWatchdog: ReturnType<typeof setTimeout> | null = setTimeout(() => {
       if (cancelled) return;
@@ -111,6 +113,7 @@ export default function SupportScreen() {
       .then((nextTickets) => {
         if (cancelled) return;
         clearConnectWatchdog();
+        hasResolvedHistoryRef.current = true;
         setTickets(nextTickets);
         setIsLoading(false);
       })
@@ -125,7 +128,11 @@ export default function SupportScreen() {
         clearConnectWatchdog();
         setConnectionStatus("reconnecting");
         setIsLoading(false);
-        setError(supportHistoryErrorMessage(messageText));
+        if (!hasResolvedHistoryRef.current) {
+          setError(supportHistoryErrorMessage(messageText));
+          return;
+        }
+        setError(null);
       },
       onOpen() {
         clearConnectWatchdog();
@@ -134,12 +141,15 @@ export default function SupportScreen() {
       },
       onSnapshot(nextTickets) {
         clearConnectWatchdog();
+        hasResolvedHistoryRef.current = true;
         setTickets(nextTickets);
         setIsLoading(false);
         setConnectionStatus("online");
+        setError(null);
       },
       onTicket(ticket) {
         clearConnectWatchdog();
+        hasResolvedHistoryRef.current = true;
         setTickets((current) =>
           upsertSupportTicket(
             removeMatchingOptimisticTicket(current, ticket),
@@ -148,6 +158,7 @@ export default function SupportScreen() {
         );
         setIsLoading(false);
         setConnectionStatus("online");
+        setError(null);
       },
     });
     socketRef.current = socket;
@@ -218,7 +229,7 @@ export default function SupportScreen() {
       );
       setSubject("");
       setConnectionStatus("reconnecting");
-      setError("Сообщение отправлено. Realtime-чат переподключается.");
+      setError(null);
       playSuccessHaptic();
       requestAnimationFrame(() => inputRef.current?.focus());
     } catch (sendError) {
@@ -237,6 +248,11 @@ export default function SupportScreen() {
       setIsSending(false);
     }
   }, [isSending, message, session?.accessToken, subject]);
+
+  const reconnectHint =
+    connectionStatus === "reconnecting"
+      ? "Соединение нестабильно, переподключаемся. Уже отправленные сообщения не потеряются."
+      : null;
 
   return (
     <VexScreen>
@@ -396,6 +412,9 @@ export default function SupportScreen() {
               )}
             </Pressable>
           </View>
+          {reconnectHint ? (
+            <Text style={styles.statusHintText}>{reconnectHint}</Text>
+          ) : null}
           {error ? <Text style={styles.errorText}>{error}</Text> : null}
         </View>
       </View>
@@ -758,6 +777,12 @@ const styles = StyleSheet.create({
     color: vexColors.danger,
     fontSize: 12,
     fontWeight: "800",
+    lineHeight: 17,
+  },
+  statusHintText: {
+    color: vexColors.muted,
+    fontSize: 12,
+    fontWeight: "700",
     lineHeight: 17,
   },
 });

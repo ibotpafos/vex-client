@@ -37,6 +37,8 @@ echo "== Entitlements =="
   || fail "Network Extension entitlement is missing in ios/VEX/VEX.entitlements"
 /usr/libexec/PlistBuddy -c "Print :com.apple.security.application-groups" "$IOS_DIR/VEX/VEX.entitlements" >/dev/null \
   || fail "App Group entitlement is missing in ios/VEX/VEX.entitlements"
+/usr/libexec/PlistBuddy -c "Print :NSSupportsLiveActivities" "$IOS_DIR/VEX/Info.plist" >/dev/null \
+  || fail "NSSupportsLiveActivities is missing in ios/VEX/Info.plist"
 
 /usr/libexec/PlistBuddy -c "Print :com.apple.developer.networking.networkextension" "$APP_DIR/modules/vex-vpn/ios/tunnel/VexVpnTunnel.entitlements" >/dev/null \
   || fail "Network Extension entitlement is missing in VexVpnTunnel.entitlements"
@@ -64,6 +66,22 @@ embed = app.copy_files_build_phases.find { |phase| phase.display_name == 'Embed 
 abort('error: Embed App Extensions phase is missing') unless embed
 abort('error: VexVpnTunnel.appex is not embedded into VEX') unless embed.files_references.any? { |file| file&.display_name == 'VexVpnTunnel.appex' }
 puts 'VexVpnTunnel target is wired'
+RUBY
+
+echo "== Xcode Live Activity extension target =="
+ruby - <<'RUBY'
+require 'xcodeproj'
+project = Xcodeproj::Project.open('ios/VEX.xcodeproj')
+target = project.targets.find { |item| item.name == 'VexLiveActivityWidgetExtension' }
+abort('error: VexLiveActivityWidgetExtension target is missing; run: npm run ios:sync-live-activity-extension') unless target
+abort('error: VexLiveActivityWidgetExtension has no VexLiveActivityWidget.swift source') unless target.source_build_phase.files_references.any? { |file| file.path == 'VexLiveActivityWidget.swift' }
+abort('error: VexLiveActivityWidgetExtension has no VexVpnActivityAttributes.swift shared source') unless target.source_build_phase.files_references.any? { |file| file.path == 'VexVpnActivityAttributes.swift' }
+app = project.targets.find { |item| item.name == 'VEX' }
+abort('error: VEX target is missing') unless app
+embed = app.copy_files_build_phases.find { |phase| phase.display_name == 'Embed App Extensions' }
+abort('error: Embed App Extensions phase is missing') unless embed
+abort('error: VexLiveActivityWidgetExtension.appex is not embedded into VEX') unless embed.files_references.any? { |file| file&.display_name == 'VexLiveActivityWidgetExtension.appex' }
+puts 'VexLiveActivityWidgetExtension target is wired'
 RUBY
 
 echo "== AmneziaWG bridge =="

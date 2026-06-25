@@ -63,6 +63,14 @@ public class VexVpnModule: Module {
     AsyncFunction("readDiagnostics") { () -> [[String: Any]] in
       return VexVpnDiagnostics.readEvents(limit: 50)
     }
+
+    AsyncFunction("updateLiveActivity") { (payload: [String: Any]) async -> Bool in
+      return await VexVpnLiveActivityController.update(payload: payload)
+    }
+
+    AsyncFunction("endLiveActivity") { () async -> Bool in
+      return await VexVpnLiveActivityController.end()
+    }
   }
 }
 
@@ -323,7 +331,7 @@ private final class IosTunnelStore {
   }
 }
 
-private enum VexVpnDiagnostics {
+enum VexVpnDiagnostics {
   private static let appGroupIdentifier = "group.com.vexguard.app"
   private static let logFileName = "vex-vpn-diagnostics.jsonl"
 

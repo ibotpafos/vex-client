@@ -19,8 +19,12 @@ export function connectableLocalProfile(
   profile: VpnProfile | null | undefined,
   locationId: string,
   fallbackEntitlement: EntitlementLike | null | undefined,
+  routingMode?: VpnProfile['routingMode'],
 ): VpnProfile | null {
   if (!profile || profile.locationId !== locationId) {
+    return null;
+  }
+  if (routingMode && profile.routingMode && profile.routingMode !== routingMode) {
     return null;
   }
   if (!shouldUseLocalProfileBeforeOnline(profile, fallbackEntitlement)) {

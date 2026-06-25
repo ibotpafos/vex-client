@@ -1,6 +1,6 @@
 {
   "name": "vex-client",
-  "version": "1.0.47",
+  "version": "1.0.48",
   "private": true,
   "main": "expo-router/entry",
   "dependencies": {
@@ -69,6 +69,7 @@
     "ios": "expo run:ios",
     "ios:build-amneziawg-bridge": "bash scripts/ios_build_amneziawg_bridge.sh",
     "ios:sync-vpn-extension": "ruby scripts/ios_sync_vpn_extension.rb",
+    "ios:sync-live-activity-extension": "ruby scripts/ios_sync_live_activity_extension.rb",
     "ios:preflight": "bash scripts/ios_preflight.sh",
     "web": "expo start --web",
     "web:prod-auth": "bash scripts/start_web_prod_auth.sh",
@@ -93,6 +94,7 @@
     "check": "npm run test:unit && npm run typecheck && npm run lint",
     "ios:signing-preflight": "bash scripts/ios_signing_preflight.sh",
     "ios:device-build": "bash scripts/ios_device_build.sh",
+    "versions:sync": "node scripts/sync_versions.mjs",
     "start:web": "expo start --web",
     "android:bootstrap": "bash scripts/bootstrap_amneziawg_android.sh",
     "android:build:local": "bash scripts/android_local_build.sh",

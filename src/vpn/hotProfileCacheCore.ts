@@ -96,8 +96,9 @@ export function hotVpnProfileRejectionReason(
   return null;
 }
 
-export function hotVpnProfileStoreKey(userId: string, locationId: string, runtimeKey: string): string {
-  return `${userId.trim()}:${runtimeKey}:${normalizeLocationId(locationId)}`;
+export function hotVpnProfileStoreKey(userId: string, locationId: string, runtimeKey: string, routingMode?: string): string {
+  const normalizedRoutingMode = routingMode?.trim().toLowerCase();
+  return `${userId.trim()}:${runtimeKey}:${normalizeLocationId(locationId)}:${normalizedRoutingMode || 'default'}`;
 }
 
 export function normalizeHotProfileLocationId(locationId: string): string {

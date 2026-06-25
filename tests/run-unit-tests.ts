@@ -34,7 +34,7 @@ import { isVpnDeviceForLocation, type VpnLocationDevice } from '../src/vpn/devic
 import { nativeVpnDeviceForClient } from '../src/vpn/nativeDeviceSelection';
 import { assessNativeTunnelHealth, localStatusHealthReasons } from '../src/vpn/nativeTunnelHealth';
 import { probeNetworkHealth } from '../src/vpn/networkHealthProbe';
-import { defaultVpnBypassRegion, defaultVpnRoutingMode, defaultVpnRoutingPolicyVersion, resolvedVpnBypassRegion } from '../src/vpn/routingPolicy';
+import { defaultVpnBypassRegion, defaultVpnRoutingMode, defaultVpnRoutingPolicyVersion, isSmartRoutingMode, normalizeVpnRoutingMode, resolvedVpnBypassRegion, vpnRoutingModeFromSmartMode } from '../src/vpn/routingPolicy';
 import { autoSwitchTargetLocationId, chooseBestVpnLocation } from '../src/vpn/serverSelection';
 import { switchVpnLocation } from '../src/vpn/serverSwitch';
 import { assessVpnAutopilotIssue } from '../src/vpn/vpnAutopilotAssessment';
@@ -48,9 +48,27 @@ const connectedStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0 
   assertEqual(defaultVpnRoutingMode, 'all_except_ru');
   assertEqual(defaultVpnBypassRegion, 'ru');
   assertEqual(defaultVpnRoutingPolicyVersion, '2026.06.22.1');
+  assertEqual(normalizeVpnRoutingMode('full_tunnel'), 'full_tunnel');
+  assertEqual(normalizeVpnRoutingMode('bad'), 'all_except_ru');
+  assertEqual(vpnRoutingModeFromSmartMode(true), 'all_except_ru');
+  assertEqual(vpnRoutingModeFromSmartMode(false), 'full_tunnel');
+  assertEqual(isSmartRoutingMode('all_except_ru'), true);
+  assertEqual(isSmartRoutingMode('full_tunnel'), false);
   assertEqual(resolvedVpnBypassRegion(), 'ru');
   assertEqual(resolvedVpnBypassRegion('all_except_ru', ' RU '), 'ru');
   assertEqual(resolvedVpnBypassRegion('full_tunnel', 'ru'), undefined);
+}
+
+{
+  const profile: VpnProfile = {
+    config: '[Interface]\nPrivateKey = key\n',
+    entitlement: { active: true, vpnAccess: true },
+    locationId: 'de',
+    routingMode: 'all_except_ru',
+    source: 'local',
+  };
+  assertEqual(Boolean(connectableLocalProfile(profile, 'de', null, 'all_except_ru')), true);
+  assertEqual(connectableLocalProfile(profile, 'de', null, 'full_tunnel'), null);
 }
 
 {

@@ -1,36 +1,36 @@
 {
   "desktop": {
-    "version": "0.1.28",
-    "release_notes": "Desktop: включен Bugsink в macOS сборку и обновлена стабильность VPN-клиента.",
+    "version": "0.1.31",
+    "release_notes": "Desktop: быстрее подключение через helper, умный режим маршрутизации и обновленный интерфейс аккаунта/поддержки.",
     "config_schema_version": 1,
     "min_config_schema_version": 1
   },
   "android": {
-    "version": "1.0.46",
-    "build": 47,
+    "version": "1.0.48",
+    "build": 49,
     "min_supported_build": 1002930,
     "is_required": true,
-    "release_notes": "Android: стабильная сборка VEX для production.",
+    "release_notes": "Android: умный режим маршрутизации, более быстрый старт VPN и доработанный интерфейс.",
     "core_version": "0.1.0",
     "config_schema_version": 1,
     "min_config_schema_version": 1
   },
   "ios": {
-    "version": "0.1.0",
-    "build": 1,
-    "release_notes": "Клиент VEX для iOS.",
+    "version": "1.0.48",
+    "build": 2,
+    "release_notes": "iOS: обновлен нативный VPN UX и подготовлена база для Live Activity.",
     "core_version": "0.1.0",
     "config_schema_version": 1,
     "min_config_schema_version": 1
   },
   "app": {
-    "remote_config_version": "2026.06.15.1",
-    "routing_policy_version": "2026.06.15.1",
+    "remote_config_version": "2026.06.22.1",
+    "routing_policy_version": "2026.06.22.1",
     "routing_policies": [
       {
-        "version": "2026.06.15.1",
+        "version": "2026.06.22.1",
         "state": "active",
-        "notes": "stable device identity across server changes"
+        "notes": "smart routing with stable device identity across server changes"
       }
     ],
     "feature_flags": {

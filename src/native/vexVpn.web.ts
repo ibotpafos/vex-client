@@ -44,6 +44,7 @@ type VexVpnNativeModule = {
   replaceWireGuardKeyPair(privateKey: string, publicKey: string, keyEpoch: number): Promise<boolean>;
   resetWireGuardKeyPair(): Promise<boolean>;
   measureEndpointLatency(endpoint: string): Promise<number | null>;
+  readDiagnostics?(): Promise<Record<string, unknown>[]>;
   requestNotificationPermission?(): Promise<boolean>;
   getFirebaseMessagingToken?(): Promise<string>;
   downloadUpdateApk(downloadUrl: string, checksumSha256?: string | null): Promise<AndroidUpdateDownload>;
@@ -155,6 +156,13 @@ export async function measureEndpointLatency(endpoint: string): Promise<number |
     return invoke<number | null>('measure_endpoint_latency', { endpoint: value });
   }
   return requireNativeModule().measureEndpointLatency(value);
+}
+
+export async function readNativeVpnDiagnostics(): Promise<Record<string, unknown>[]> {
+  if (isTauri()) {
+    return invoke<Record<string, unknown>[]>('read_vpn_diagnostics');
+  }
+  return requireNativeModule().readDiagnostics?.() ?? [];
 }
 
 export async function requestNotificationPermission(): Promise<boolean> {

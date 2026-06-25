@@ -2,6 +2,7 @@ import { Host, Switch as ExpoSwitch } from "@expo/ui";
 import { router } from "expo-router";
 import {
   ChevronLeft,
+  Globe2,
   Languages,
   LogOut,
   Power,
@@ -12,7 +13,6 @@ import {
 import React from "react";
 import {
   Platform,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -23,10 +23,12 @@ import { playSelectionHaptic, playLightImpactHaptic } from "@/native/haptics";
 import { SettingsSnackbar, type SettingsSnackbarRef } from "@/ui/settings-snackbar";
 import { useToast, type ToastOptions } from "@/ui/toast";
 import { vexColors, VexScreen, vexSharedStyles, VexPressable } from "@/ui/vex-ui";
+import { useVpnConnectionContext } from "@/vpn/vpn-connection-context";
 import { useVexSettings, languages, type LanguageCode } from "./useVexSettings";
 
 export default function SettingsScreen() {
   const snackbarRef = React.useRef<SettingsSnackbarRef>(null);
+  const [isSavingSmartRouting, setIsSavingSmartRouting] = React.useState(false);
   const { showToast: showGlobalToast } = useToast();
   const showSettingsToast = React.useCallback((options: ToastOptions) => {
     if (Platform.OS === "android" && snackbarRef.current) {
@@ -53,11 +55,15 @@ export default function SettingsScreen() {
     handleServerSelectionToggle,
     handleAntiLeakToggle,
   } = useVexSettings(showSettingsToast);
+  const {
+    isSmartRoutingEnabled,
+    handleSmartRoutingToggle,
+    vpnStatus,
+  } = useVpnConnectionContext();
 
   const desktopUpdate = useDesktopUpdate();
-  const versionText = appInfo.build
-    ? `${appInfo.name} ${appInfo.version} (${appInfo.build})`
-    : `${appInfo.name} ${appInfo.version}`;
+  const versionText = appInfo.version || "dev";
+  const buildText = appInfo.build ? `Сборка ${appInfo.build}` : null;
   const desktopReleaseText = desktopUpdate.latestVersion
     ? `${desktopUpdate.latestVersion} (${desktopUpdate.latestBuild || 0})`
     : "Проверка обновлений";
@@ -69,6 +75,10 @@ export default function SettingsScreen() {
   const automationHint = isAndroidApp
     ? "Подключать VPN при открытии приложения."
     : "Запускать VEX вместе с системой.";
+  const smartRoutingValue = isSmartRoutingEnabled ? "Включено" : "Выключено";
+  const smartRoutingHint = vpnStatus.state === "connected"
+    ? "Применится после переподключения. Российские сервисы пойдут без VPN."
+    : "Российские сервисы без VPN, остальное через защищенный туннель.";
   const updateStatusLabel = desktopStatusLabel(
     desktopUpdate.status,
     desktopUpdate.required,
@@ -114,6 +124,7 @@ export default function SettingsScreen() {
               <Text style={styles.statusChip}>
                 {formatPlatformLabel(appInfo.platform)}
               </Text>
+              {buildText ? <Text style={styles.statusChip}>{buildText}</Text> : null}
               <Text style={styles.statusChip}>{appInfo.channel}</Text>
             </View>
           </View>
@@ -197,6 +208,67 @@ export default function SettingsScreen() {
                 onValueChange={handleServerSelectionToggle}
                 testID="settings-auto-server-switch"
                 value={isAutoServerSelectionEnabled}
+              />
+            </View>
+          </VexPressable>
+          <VexPressable
+            disabled={isSavingSmartRouting}
+            onPress={() => {
+              if (isSavingSmartRouting) {
+                playSelectionHaptic();
+                showSettingsToast({ message: "Настройка ещё сохраняется.", variant: "warning" });
+                return;
+              }
+              playSelectionHaptic();
+              setIsSavingSmartRouting(true);
+              handleSmartRoutingToggle(!isSmartRoutingEnabled)
+                .then((mode) => {
+                  showSettingsToast({
+                    message: mode === "all_except_ru"
+                      ? "Умный режим включён."
+                      : "Полный VPN для всего трафика включён.",
+                    variant: "success",
+                  });
+                })
+                .catch(() => {
+                  showSettingsToast({
+                    duration: "long",
+                    message: "Не удалось сохранить умный режим.",
+                    variant: "error",
+                  });
+                })
+                .finally(() => setIsSavingSmartRouting(false));
+            }}
+            style={styles.settingRow}
+            hoverStyle={{ backgroundColor: 'rgba(7,17,19,0.96)', borderColor: 'rgba(34,211,238,0.36)' }}
+            accessibilityRole="switch"
+            accessibilityState={{ checked: isSmartRoutingEnabled, disabled: isSavingSmartRouting }}
+            accessibilityLabel="Умный режим"
+          >
+            <View style={styles.rowIcon}>
+              <Globe2 color="#22D3EE" size={21} strokeWidth={2.5} />
+            </View>
+            <View style={styles.rowCopy}>
+              <Text style={styles.rowTitle}>Умный режим</Text>
+              <Text style={styles.rowDescription}>
+                {smartRoutingHint}
+              </Text>
+              <Text
+                style={[
+                  styles.rowValue,
+                  isSmartRoutingEnabled && styles.rowValueActive,
+                ]}
+              >
+                {smartRoutingValue}
+              </Text>
+            </View>
+            <View pointerEvents="none">
+              <SettingsNativeSwitch
+                accessibilityLabel="Умный режим"
+                disabled={isSavingSmartRouting}
+                onValueChange={handleSmartRoutingToggle}
+                testID="settings-smart-routing-switch"
+                value={isSmartRoutingEnabled}
               />
             </View>
           </VexPressable>

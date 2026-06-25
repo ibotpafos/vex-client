@@ -1,7 +1,7 @@
 import { Slot, usePathname, useRouter } from 'expo-router';
 import React, { useMemo } from 'react';
 import { StyleSheet, Text, View, Platform } from 'react-native';
-import { Home, User, MessageCircle } from 'lucide-react-native';
+import { Home, MessageSquareText, User } from 'lucide-react-native';
 import { VexPressable } from '@/ui/vex-ui';
 
 export default function WebTabsLayout() {
@@ -79,7 +79,7 @@ export default function WebTabsLayout() {
             hoverStyle={activeTab === 'support' ? null : styles.tabItemHover}
             title="Поддержка"
           >
-            <MessageCircle
+            <MessageSquareText
               size={20}
               color={activeTab === 'support' ? '#031012' : 'rgba(167,185,189,0.8)'}
               strokeWidth={activeTab === 'support' ? 2.5 : 2}

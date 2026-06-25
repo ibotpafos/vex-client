@@ -14,6 +14,7 @@ fail() {
 cd "$APP_DIR"
 
 npm run ios:sync-vpn-extension
+npm run ios:sync-live-activity-extension
 npm run ios:preflight
 npm run ios:signing-preflight
 

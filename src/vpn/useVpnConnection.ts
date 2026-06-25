@@ -26,11 +26,13 @@ import {
 import { listenTauriEvent } from '@/native/tauriEvents';
 import {
   disconnectVpn,
+  endVpnLiveActivity,
   getVpnStatus,
   listenVpnStatusChanged,
   measureEndpointLatency,
   openVpnSettings,
   requestVpnPermission,
+  updateVpnLiveActivity,
   type VpnStatus,
 } from '@/native/vexVpn';
 import { getExpoAccountPushRegistration } from '@/notifications/expoPush';
@@ -39,6 +41,8 @@ import {
   getAntiLeakEnabled,
   getSelectedVpnLocation,
   getServerSelectionMode,
+  getVpnRoutingMode,
+  setVpnRoutingMode,
   setSelectedVpnLocation,
   setServerSelectionMode,
 } from '@/settings/vpnPreferences';
@@ -48,6 +52,11 @@ import {
 } from '@/vpn/connectionFallback';
 import type { VpnProfile } from '@/vpn/profile';
 import { probeNetworkHealth } from '@/vpn/networkHealthProbe';
+import {
+  defaultVpnRoutingMode,
+  isSmartRoutingMode,
+  type VpnRoutingMode,
+} from '@/vpn/routingPolicy';
 import {
   autoSwitchTargetLocationId,
   type ServerSelectionMode,
@@ -101,7 +110,9 @@ import {
   waitForAnimationKick,
   disconnectedVpnStatus,
   availableVpnLocations,
+  formatBytes,
   locationLatencyText,
+  serverLocationLabel,
   subscriptionTierLabel,
   subscriptionSummaryText,
 } from '../screens/home-screen-helpers';
@@ -128,6 +139,7 @@ export function useVpnConnection() {
   const [isServerSwitching, setIsServerSwitching] = useState(false);
   const [clientLatencyMs, setClientLatencyMs] = useState<number | null>(null);
   const [antiLeakEnabled, setAntiLeakEnabledState] = useState(true);
+  const [routingMode, setRoutingMode] = useState<VpnRoutingMode>(defaultVpnRoutingMode);
   const [serverSelectionMode, setServerSelectionModeState] = useState<ServerSelectionMode>('auto');
   const [selectedLocationId, setSelectedLocationId] = useState('de');
   const [isUpdateCenterVisible, setIsUpdateCenterVisible] = useState(false);
@@ -207,7 +219,7 @@ export function useVpnConnection() {
   const fetchVpnDevices = useCallback(() => vpnDevices(accessToken!), [accessToken]);
 
   const cachedSelectedProfile = accessToken
-    ? queryClient.getQueryData<VpnProfile>(['vpn-profile', accessToken, selectedLocationId])
+    ? queryClient.getQueryData<VpnProfile>(['vpn-profile', accessToken, selectedLocationId, routingMode])
     : undefined;
   const cachedEntitlement = entitlementData ?? persistedEntitlement ?? cachedSelectedProfile?.entitlement ?? null;
   const knownEntitlement = entitlementData ?? cachedEntitlement;
@@ -252,6 +264,7 @@ export function useVpnConnection() {
     prewarmStaleMs: prewarmedProfileStaleMs,
     profileRefreshMs,
     requestVpnPermission,
+    routingMode,
     selectedLocationId,
     userId: session?.user.id,
   });
@@ -479,6 +492,7 @@ export function useVpnConnection() {
     connectCurrentVpn,
   } = useVpnConnectionFlow({
     antiLeakEnabled,
+    routingMode,
     selectedLocationId,
     serverSelectionMode,
     availableLocations,
@@ -505,11 +519,12 @@ export function useVpnConnection() {
   const powerButtonDisabled = isVpnBusy && !canCancelConnecting;
 
   useEffect(() => {
-    void Promise.all([getSelectedVpnLocation(), getServerSelectionMode(), getAntiLeakEnabled()])
-      .then(([locationId, mode, enabled]) => {
+    void Promise.all([getSelectedVpnLocation(), getServerSelectionMode(), getAntiLeakEnabled(), getVpnRoutingMode()])
+      .then(([locationId, mode, enabled, storedRoutingMode]) => {
         setSelectedLocationId(locationId);
         setServerSelectionModeState(mode);
         setAntiLeakEnabledState(enabled);
+        setRoutingMode(storedRoutingMode);
       })
       .catch(() => undefined);
   }, [setVpnStatus]);
@@ -527,7 +542,7 @@ export function useVpnConnection() {
       latencyMs: clientLatencyMs,
       endpoint: activeDevice?.endpoint,
       profileVersion: activeProfile?.profileVersion,
-      routingMode: activeProfile?.routingMode,
+      routingMode: activeProfile?.routingMode ?? routingMode,
       bypassRegion: activeProfile?.bypassRegion,
       bypassRangesCount: activeProfile?.bypassRangesCount,
       routingPolicyVersion: activeProfile?.routingPolicyVersion,
@@ -541,8 +556,37 @@ export function useVpnConnection() {
     activeProfile?.routingMode,
     activeProfile?.routingPolicyVersion,
     clientLatencyMs,
+    routingMode,
     selectedLocationId,
     vpnStatus,
+  ]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'ios') {
+      return;
+    }
+    if (connectionPhase === 'idle' || vpnStatusCore.state === 'disconnected') {
+      void endVpnLiveActivity().catch(() => undefined);
+      return;
+    }
+
+    const activityLocation = selectedLocation ? serverLocationLabel(selectedLocation) : 'VEX';
+    void updateVpnLiveActivity({
+      state: vpnStatusCore.state,
+      phase: connectionPhase,
+      locationName: activityLocation,
+      latencyText: selectedLatencyText === '-- мс' ? '' : selectedLatencyText,
+      receivedText: formatBytes(vpnStatus.rxBytes),
+      sentText: formatBytes(vpnStatus.txBytes),
+      updatedAtEpochSeconds: Date.now() / 1000,
+    }).catch(() => undefined);
+  }, [
+    connectionPhase,
+    selectedLatencyText,
+    selectedLocation,
+    vpnStatus.rxBytes,
+    vpnStatus.txBytes,
+    vpnStatusCore.state,
   ]);
 
 
@@ -1016,7 +1060,7 @@ export function useVpnConnection() {
 
     try {
       await waitForAnimationKick();
-      const cachedTargetProfile = queryClient.getQueryData<VpnProfile>(['vpn-profile', session.accessToken, targetLocationId]);
+      const cachedTargetProfile = queryClient.getQueryData<VpnProfile>(['vpn-profile', session.accessToken, targetLocationId, routingMode]);
       const result = await switchVpnLocation({
         cachedTargetProfile,
         connectProfile: connectProfileWithEndpointFallback,
@@ -1086,6 +1130,7 @@ export function useVpnConnection() {
     reportVpnConnectEvent,
     reportVpnDisconnectEvent,
     resolveConnectableVpnProfile,
+    routingMode,
     selectedLocationId,
     session,
     setActiveProfile,
@@ -1183,6 +1228,17 @@ export function useVpnConnection() {
     });
   }, []);
 
+  const handleSmartRoutingToggle = useCallback(async (next: boolean) => {
+    const nextMode: VpnRoutingMode = next ? 'all_except_ru' : 'full_tunnel';
+    const savedMode = await setVpnRoutingMode(nextMode);
+    setRoutingMode(savedMode);
+    if (vpnStatusRef.current.state !== 'connected') {
+      setActiveProfile(null);
+    }
+    await queryClient.invalidateQueries({ queryKey: ['vpn-profile', session?.accessToken] });
+    return savedMode;
+  }, [queryClient, session?.accessToken, setActiveProfile]);
+
   return {
     session,
     vpnStatus,
@@ -1191,6 +1247,8 @@ export function useVpnConnection() {
     isServerSwitching,
     clientLatencyMs,
     antiLeakEnabled,
+    routingMode,
+    isSmartRoutingEnabled: isSmartRoutingMode(routingMode),
     serverSelectionMode,
     selectedLocationId,
     isUpdateCenterVisible,
@@ -1222,6 +1280,7 @@ export function useVpnConnection() {
     openUpdateCenter,
     closeUpdateCenter,
     handleOpenVpnSettingsPress,
+    handleSmartRoutingToggle,
     clearProfile,
     setVpnError,
     availableLocations,

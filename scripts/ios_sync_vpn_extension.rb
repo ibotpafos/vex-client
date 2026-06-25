@@ -2,6 +2,7 @@
 # frozen_string_literal: true
 
 require 'xcodeproj'
+require 'shellwords'
 
 ROOT_DIR = File.expand_path('..', __dir__)
 IOS_DIR = File.join(ROOT_DIR, 'ios')
@@ -15,11 +16,15 @@ EXTENSION_SOURCE_ROOT = '../modules/vex-vpn/ios/tunnel'
 EXTENSION_INFO_PLIST = "#{EXTENSION_SOURCE_ROOT}/Info.plist"
 EXTENSION_ENTITLEMENTS = "#{EXTENSION_SOURCE_ROOT}/VexVpnTunnel.entitlements"
 AMNEZIAWG_PACKAGE_PATH = '../external/amnezia/amneziawg-apple'
+STALE_AMNEZIAWG_PACKAGE_PATHS = [
+  '../../external/amnezia/amneziawg-apple'
+].freeze
 AMNEZIAWG_BRIDGE_SCRIPT = '"${SRCROOT}/../scripts/ios_build_amneziawg_bridge.sh"'
 AMNEZIAWG_BRIDGE_OUTPUT = '$(SRCROOT)/../external/amnezia/amneziawg-apple/Sources/WireGuardKitGo/out/libwg-go.a'
 AMNEZIAWG_BRIDGE_OUTPUT_SHELL = '"${SRCROOT}/../external/amnezia/amneziawg-apple/Sources/WireGuardKitGo/out/libwg-go.a"'
 PACKET_TUNNEL_SOURCE = 'PacketTunnelProvider.swift'
 WG_QUICK_SOURCE = 'WgQuickTunnelConfiguration.swift'
+GO_RUNTIME_SHIM_SOURCE = 'GoRuntimeNoLldbShim.c'
 STALE_AMNEZIAWG_MODEL_SOURCES = [
   'String+ArrayConversion.swift',
   'TunnelConfiguration+WgQuickConfig.swift'
@@ -45,6 +50,10 @@ def find_or_create_wg_quick_file(group)
   group.files.find { |file| file.path == WG_QUICK_SOURCE } || group.new_file(WG_QUICK_SOURCE)
 end
 
+def find_or_create_go_runtime_shim_file(group)
+  group.files.find { |file| file.path == GO_RUNTIME_SHIM_SOURCE } || group.new_file(GO_RUNTIME_SHIM_SOURCE)
+end
+
 def find_or_create_extension_target(project)
   project.targets.find { |target| target.name == EXTENSION_TARGET_NAME } ||
     project.new_target(:app_extension, EXTENSION_TARGET_NAME, :ios, '16.4')
@@ -52,6 +61,27 @@ end
 
 def build_setting(target, key)
   target.build_configurations.map { |configuration| configuration.build_settings[key] }.compact.first
+end
+
+def expand_ios_build_path(path)
+  return nil if path.nil? || path.empty?
+
+  path
+    .gsub('$(SRCROOT)', IOS_DIR)
+    .gsub('${SRCROOT}', IOS_DIR)
+    .then { |expanded| File.expand_path(expanded, IOS_DIR) }
+end
+
+def plist_value(path, key)
+  return nil unless path && File.exist?(path)
+
+  value = `/usr/libexec/PlistBuddy -c "Print :#{key}" #{Shellwords.escape(path)} 2>/dev/null`.strip
+  value.empty? ? nil : value
+end
+
+def app_info_plist_value(app_target, key)
+  plist_path = expand_ios_build_path(build_setting(app_target, 'INFOPLIST_FILE'))
+  plist_value(plist_path, key)
 end
 
 def configured_development_team(app_target)
@@ -71,8 +101,12 @@ def configure_app_target(target)
 end
 
 def configure_extension_target(target, app_target)
-  marketing_version = build_setting(app_target, 'MARKETING_VERSION') || '1.0'
-  current_project_version = build_setting(app_target, 'CURRENT_PROJECT_VERSION') || '1'
+  marketing_version = app_info_plist_value(app_target, 'CFBundleShortVersionString') ||
+                      build_setting(app_target, 'MARKETING_VERSION') ||
+                      '1.0'
+  current_project_version = app_info_plist_value(app_target, 'CFBundleVersion') ||
+                            build_setting(app_target, 'CURRENT_PROJECT_VERSION') ||
+                            '1'
   development_team = configured_development_team(app_target)
 
   target.build_configurations.each do |configuration|
@@ -113,6 +147,11 @@ def remove_stale_model_sources(target)
 end
 
 def find_or_create_package_reference(project)
+  project.root_object.package_references.delete_if do |reference|
+    reference.respond_to?(:relative_path) &&
+      STALE_AMNEZIAWG_PACKAGE_PATHS.include?(reference.relative_path)
+  end
+
   package = project.root_object.package_references.find do |reference|
     reference.respond_to?(:relative_path) && reference.relative_path == AMNEZIAWG_PACKAGE_PATH
   end
@@ -126,7 +165,10 @@ end
 
 def find_or_create_package_product(project, target, package)
   product = target.package_product_dependencies.find { |dependency| dependency.product_name == 'WireGuardKit' }
-  return product if product
+  if product
+    product.package = package
+    return product
+  end
 
   product = project.new(Xcodeproj::Project::Object::XCSwiftPackageProductDependency)
   product.product_name = 'WireGuardKit'
@@ -182,6 +224,7 @@ app_target = project.targets.find { |target| target.name == APP_TARGET_NAME } ||
 extension_group = find_or_create_group(project)
 source_file = find_or_create_source_file(extension_group)
 wg_quick_file = find_or_create_wg_quick_file(extension_group)
+go_runtime_shim_file = find_or_create_go_runtime_shim_file(extension_group)
 extension_target = find_or_create_extension_target(project)
 package_reference = find_or_create_package_reference(project)
 wire_guard_kit = find_or_create_package_product(project, extension_target, package_reference)
@@ -191,6 +234,7 @@ configure_extension_target(extension_target, app_target)
 remove_stale_model_sources(extension_target)
 add_source(extension_target, source_file)
 add_source(extension_target, wg_quick_file)
+add_source(extension_target, go_runtime_shim_file)
 link_package_product(extension_target, wire_guard_kit)
 add_bridge_build_phase(extension_target)
 add_app_dependency(app_target, extension_target)

@@ -26,19 +26,23 @@ export async function resolveVpnProfile(
   accessToken?: string,
   knownEntitlement?: Entitlement | null,
   locationId = 'de',
-  options: { allowPersistentHotProfile?: boolean; forceRefresh?: boolean; userId?: string } = {},
+  options: { allowPersistentHotProfile?: boolean; forceRefresh?: boolean; routingMode?: VpnRoutingMode; userId?: string } = {},
 ): Promise<VpnProfile> {
   const token = accessToken?.trim() || '';
   const normalizedLocationId = normalizeLocationId(locationId);
-  const cacheKey = profileCacheKey(token, normalizedLocationId);
+  const routingMode = options.routingMode ?? defaultVpnRoutingMode;
+  const cacheKey = profileCacheKey(token, normalizedLocationId, routingMode);
   if (!options.forceRefresh) {
     if (cachedProfile?.key === cacheKey && !cachedProfile.profile.rotationRequired) {
       return { ...cachedProfile.profile, source: 'local' };
     }
     if (options.allowPersistentHotProfile !== false && options.userId) {
-      const hotProfile = await loadHotVpnProfile(options.userId, normalizedLocationId);
+      const hotProfile = await loadHotVpnProfile(options.userId, normalizedLocationId, routingMode);
       if (hotProfile) {
         const profile = profileFromHotRecord(hotProfile);
+        if (profile.routingMode !== routingMode) {
+          return refreshVpnProfile(token, { routingMode }, knownEntitlement, normalizedLocationId, options.userId);
+        }
         cachedProfile = { key: cacheKey, profile };
         return profile;
       }
@@ -46,7 +50,7 @@ export async function resolveVpnProfile(
   }
 
   if (token) {
-    return refreshVpnProfile(token, {}, knownEntitlement, normalizedLocationId, options.userId);
+    return refreshVpnProfile(token, { routingMode }, knownEntitlement, normalizedLocationId, options.userId);
   }
 
   throw new Error('Сначала войдите в аккаунт.');
@@ -68,7 +72,7 @@ export async function rotateVpnProfileKey(accessToken: string, profile: VpnProfi
 
   await rotateManagedVpnKey(token, device.id);
   resetVpnProfileCache();
-  return refreshVpnProfile(token, {}, profile.entitlement, profile.locationId);
+  return refreshVpnProfile(token, { routingMode: profile.routingMode ?? defaultVpnRoutingMode }, profile.entitlement, profile.locationId);
 }
 
 function runtimeProfileKey(): string {
@@ -84,7 +88,7 @@ function runtimeProfileKey(): string {
 
 async function refreshVpnProfile(
   token: string,
-  options: { cachedConfig?: string; knownVersion?: number; locationId?: string },
+  options: { cachedConfig?: string; knownVersion?: number; locationId?: string; routingMode?: VpnRoutingMode },
   knownEntitlement?: Entitlement | null,
   locationId = 'de',
   userId?: string,
@@ -95,14 +99,15 @@ async function refreshVpnProfile(
   }
 
   const selectedLocationId = normalizeLocationId(options.locationId || locationId);
-  const tunnel = await preparedTunnel(token, undefined, { ...options, locationId: selectedLocationId });
+  const routingMode = options.routingMode ?? defaultVpnRoutingMode;
+  const tunnel = await preparedTunnel(token, undefined, { ...options, locationId: selectedLocationId, routingMode });
   const profile: VpnProfile = {
     config: tunnel.config,
     device: tunnel.device,
     entitlement: currentEntitlement,
     locationId: selectedLocationId,
     profileVersion: tunnel.profileVersion,
-    routingMode: tunnel.routingMode ?? defaultVpnRoutingMode,
+    routingMode: tunnel.routingMode ?? routingMode,
     bypassRegion: tunnel.bypassRegion ?? defaultVpnBypassRegion,
     bypassRangesCount: tunnel.bypassRangesCount,
     bypassDomainsCount: tunnel.bypassDomainsCount,
@@ -110,15 +115,15 @@ async function refreshVpnProfile(
     rotationRequired: tunnel.rotationRequired,
     source: 'api',
   };
-  cachedProfile = { key: profileCacheKey(token, selectedLocationId), profile };
+  cachedProfile = { key: profileCacheKey(token, selectedLocationId, routingMode), profile };
   if (userId) {
     await saveHotVpnProfile(userId, selectedLocationId, profile).catch(() => undefined);
   }
   return profile;
 }
 
-function profileCacheKey(token: string, locationId: string): string {
-  return `${token}:${runtimeProfileKey()}:${normalizeLocationId(locationId)}:${defaultVpnRoutingMode}:${defaultVpnBypassRegion}:${defaultVpnRoutingPolicyVersion}`;
+function profileCacheKey(token: string, locationId: string, routingMode: VpnRoutingMode): string {
+  return `${token}:${runtimeProfileKey()}:${normalizeLocationId(locationId)}:${routingMode}:${defaultVpnBypassRegion}:${defaultVpnRoutingPolicyVersion}`;
 }
 
 function normalizeLocationId(locationId: string): string {

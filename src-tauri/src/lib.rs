@@ -15,6 +15,46 @@ const TRAY_ID: &str = "main-tray";
 const VPN_STATUS_CHANGED_EVENT: &str = "vpn-status-changed";
 const SENSITIVE_STORAGE_SERVICE: &str = "app.vex.vpn.desktop.sensitive-storage";
 
+fn tauri_asset_path(uri: &tauri::http::Uri) -> String {
+    let raw = uri
+        .to_string()
+        .split(&['?', '#'][..])
+        .next()
+        .unwrap_or_default()
+        .to_string();
+    raw.strip_prefix("tauri://localhost")
+        .unwrap_or(raw.as_str())
+        .to_string()
+}
+
+fn tauri_asset_response(asset: Option<tauri::Asset>) -> tauri::http::Response<Vec<u8>> {
+    match asset {
+        Some(asset) => {
+            let mut builder = tauri::http::Response::builder()
+                .header(tauri::http::header::CONTENT_TYPE, asset.mime_type)
+                .header("Access-Control-Allow-Origin", "tauri://localhost");
+            if let Some(csp) = asset.csp_header {
+                builder = builder.header("Content-Security-Policy", csp);
+            }
+            builder.body(asset.bytes).unwrap_or_else(|_| {
+                tauri::http::Response::builder()
+                    .status(500)
+                    .body(b"failed to build asset response".to_vec())
+                    .unwrap()
+            })
+        }
+        None => tauri::http::Response::builder()
+            .status(404)
+            .header(
+                tauri::http::header::CONTENT_TYPE,
+                "text/plain; charset=utf-8",
+            )
+            .header("Access-Control-Allow-Origin", "tauri://localhost")
+            .body(b"asset not found".to_vec())
+            .unwrap(),
+    }
+}
+
 struct TrayMenuState {
     _tray: tauri::tray::TrayIcon,
     status_item: tauri::menu::MenuItem<tauri::Wry>,
@@ -57,6 +97,79 @@ pub struct VpnStatus {
     verified: Option<bool>,
     #[serde(rename = "verificationReason", skip_serializing_if = "Option::is_none")]
     verification_reason: Option<String>,
+}
+
+fn disconnected_vpn_status() -> VpnStatus {
+    VpnStatus {
+        state: "disconnected".to_string(),
+        rx_bytes: 0,
+        tx_bytes: 0,
+        latest_handshake_epoch_millis: None,
+        leak_protection: "off".to_string(),
+        verified: Some(false),
+        verification_reason: None,
+    }
+}
+
+fn normalized_vpn_status(
+    state: String,
+    rx_bytes: u64,
+    tx_bytes: u64,
+    latest_handshake_epoch_millis: Option<u64>,
+    leak_protection: String,
+) -> VpnStatus {
+    let has_tunnel_activity =
+        latest_handshake_epoch_millis.is_some() || rx_bytes > 0 || tx_bytes > 0;
+    let verified = state == "connected" && has_tunnel_activity;
+    let verification_reason = if state == "connected" && !verified {
+        Some("handshake_pending".to_string())
+    } else {
+        None
+    };
+
+    VpnStatus {
+        state,
+        rx_bytes,
+        tx_bytes,
+        latest_handshake_epoch_millis,
+        leak_protection,
+        verified: Some(verified),
+        verification_reason,
+    }
+}
+
+fn parse_helper_status_response(response: &str) -> VpnStatus {
+    let mut state = "disconnected".to_string();
+    let mut rx_bytes = 0;
+    let mut tx_bytes = 0;
+    let mut latest_handshake_epoch_millis = None;
+    let mut leak_protection = "off".to_string();
+
+    for part in response.split_whitespace() {
+        if let Some(val) = part.strip_prefix("state=") {
+            state = val.to_string();
+        } else if let Some(val) = part.strip_prefix("rx=") {
+            rx_bytes = val.parse::<u64>().unwrap_or(0);
+        } else if let Some(val) = part.strip_prefix("tx=") {
+            tx_bytes = val.parse::<u64>().unwrap_or(0);
+        } else if let Some(val) = part.strip_prefix("latest_handshake=") {
+            latest_handshake_epoch_millis = val
+                .parse::<u64>()
+                .ok()
+                .filter(|seconds| *seconds > 0)
+                .map(|seconds| seconds * 1000);
+        } else if let Some(val) = part.strip_prefix("leak_protection=") {
+            leak_protection = val.to_string();
+        }
+    }
+
+    normalized_vpn_status(
+        state,
+        rx_bytes,
+        tx_bytes,
+        latest_handshake_epoch_millis,
+        leak_protection,
+    )
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -281,6 +394,10 @@ mod platform_vpn {
                 None
             },
         })
+    }
+
+    pub fn diagnostics() -> Vec<serde_json::Value> {
+        Vec::new()
     }
 }
 
@@ -598,16 +715,6 @@ mod platform_vpn {
         false
     }
 
-    fn wait_for_tunnel_up() -> Result<(), String> {
-        for _ in 0..40 {
-            if tunnel_is_usable() {
-                return Ok(());
-            }
-            thread::sleep(Duration::from_millis(250));
-        }
-        Err("VPN туннель не поднялся вовремя. Проверьте helper-лог.".into())
-    }
-
     // ── Public API ─────────────────────────────────────────────────────────
 
     pub fn connect(
@@ -647,10 +754,6 @@ mod platform_vpn {
             silent_down(anti_leak_enabled);
             run_helper_action(app, up_action)?;
         }
-        if let Err(error) = wait_for_tunnel_up() {
-            silent_down(anti_leak_enabled);
-            return Err(error);
-        }
         Ok(())
     }
 
@@ -670,71 +773,23 @@ mod platform_vpn {
 
     pub fn status() -> Result<crate::VpnStatus, String> {
         if !Path::new(HELPER_SOCKET).exists() {
-            return Ok(crate::VpnStatus {
-                state: "disconnected".to_string(),
-                rx_bytes: 0,
-                tx_bytes: 0,
-                latest_handshake_epoch_millis: None,
-                leak_protection: "off".to_string(),
-                verified: Some(false),
-                verification_reason: None,
-            });
+            return Ok(crate::disconnected_vpn_status());
         }
 
         match send_uds_command("status") {
-            Ok(response) => {
-                let mut state = "disconnected".to_string();
-                let mut rx = 0;
-                let mut tx = 0;
-                let mut latest_handshake_epoch_millis = None;
-                let mut leak_protection = "off".to_string();
-
-                for part in response.split_whitespace() {
-                    if let Some(val) = part.strip_prefix("state=") {
-                        state = val.to_string();
-                    } else if let Some(val) = part.strip_prefix("rx=") {
-                        rx = val.parse::<u64>().unwrap_or(0);
-                    } else if let Some(val) = part.strip_prefix("tx=") {
-                        tx = val.parse::<u64>().unwrap_or(0);
-                    } else if let Some(val) = part.strip_prefix("latest_handshake=") {
-                        latest_handshake_epoch_millis = val
-                            .parse::<u64>()
-                            .ok()
-                            .filter(|seconds| *seconds > 0)
-                            .map(|seconds| seconds * 1000);
-                    } else if let Some(val) = part.strip_prefix("leak_protection=") {
-                        leak_protection = val.to_string();
-                    }
-                }
-
-                let has_tunnel_activity =
-                    latest_handshake_epoch_millis.is_some() || rx > 0 || tx > 0;
-                let verified = state == "connected" && has_tunnel_activity;
-                let verification_reason = if state == "connected" && !verified {
-                    Some("handshake_pending".to_string())
-                } else {
-                    None
-                };
-                Ok(crate::VpnStatus {
-                    state,
-                    rx_bytes: rx,
-                    tx_bytes: tx,
-                    latest_handshake_epoch_millis,
-                    leak_protection,
-                    verified: Some(verified),
-                    verification_reason,
-                })
-            }
-            Err(_) => Ok(crate::VpnStatus {
-                state: "disconnected".to_string(),
-                rx_bytes: 0,
-                tx_bytes: 0,
-                latest_handshake_epoch_millis: None,
-                leak_protection: "off".to_string(),
-                verified: Some(false),
-                verification_reason: None,
-            }),
+            Ok(response) => Ok(crate::parse_helper_status_response(&response)),
+            Err(_) => Ok(crate::disconnected_vpn_status()),
         }
+    }
+
+    pub fn diagnostics() -> Vec<serde_json::Value> {
+        if !Path::new(HELPER_SOCKET).exists() {
+            return Vec::new();
+        }
+        send_uds_command("diagnostics")
+            .ok()
+            .map(|response| vec![crate::parse_key_value_diagnostics(&response)])
+            .unwrap_or_default()
     }
 }
 #[cfg(target_os = "linux")]
@@ -902,6 +957,10 @@ mod platform_vpn {
             verification_reason: Some("handshake_pending".to_string()),
         })
     }
+
+    pub fn diagnostics() -> Vec<serde_json::Value> {
+        Vec::new()
+    }
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
@@ -929,7 +988,36 @@ mod platform_vpn {
             verification_reason: None,
         })
     }
+
+    pub fn diagnostics() -> Vec<serde_json::Value> {
+        Vec::new()
+    }
 }
+
+fn parse_key_value_diagnostics(input: &str) -> serde_json::Value {
+    let mut object = serde_json::Map::new();
+    for line in input.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        let value = value.trim();
+        if key.is_empty() {
+            continue;
+        }
+        let parsed_value = match value {
+            "true" => serde_json::Value::Bool(true),
+            "false" => serde_json::Value::Bool(false),
+            _ => value
+                .parse::<u64>()
+                .map(|number| serde_json::Value::Number(number.into()))
+                .unwrap_or_else(|_| serde_json::Value::String(value.to_string())),
+        };
+        object.insert(key.to_string(), parsed_value);
+    }
+    serde_json::Value::Object(object)
+}
+
 #[tauri::command]
 async fn connect_vpn(
     app: tauri::AppHandle,
@@ -992,6 +1080,13 @@ async fn get_vpn_status(app: tauri::AppHandle) -> Result<VpnStatus, String> {
 fn measure_endpoint_latency(endpoint: String) -> Result<Option<f64>, String> {
     let host = endpoint_host(&endpoint).ok_or_else(|| "endpoint host is required".to_string())?;
     ping_host_latency(&host)
+}
+
+#[tauri::command]
+async fn read_vpn_diagnostics() -> Result<Vec<serde_json::Value>, String> {
+    tauri::async_runtime::spawn_blocking(platform_vpn::diagnostics)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -2412,6 +2507,13 @@ fn parse_latency_number(value: &str) -> Option<f64> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .register_asynchronous_uri_scheme_protocol("tauri", |ctx, request, responder| {
+            let resolver = ctx.app_handle().asset_resolver();
+            let path = tauri_asset_path(request.uri());
+            std::thread::spawn(move || {
+                responder.respond(tauri_asset_response(resolver.get(path)));
+            });
+        })
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             show_main_window(app);
             let urls: Vec<String> = args
@@ -2530,6 +2632,7 @@ pub fn run() {
             disconnect_vpn,
             get_vpn_status,
             measure_endpoint_latency,
+            read_vpn_diagnostics,
             get_or_create_wire_guard_key_pair,
             generate_wire_guard_key_pair,
             replace_wire_guard_key_pair,
@@ -2589,7 +2692,9 @@ fn resolve_dns_in_config(config: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_sensitive_storage_key;
+    use super::{
+        parse_helper_status_response, parse_key_value_diagnostics, validate_sensitive_storage_key,
+    };
 
     #[test]
     fn sensitive_storage_key_allows_only_sensitive_namespaces() {
@@ -2617,6 +2722,55 @@ mod tests {
         assert!(validate_sensitive_storage_key("vex.auth.session/../../x").is_err());
         assert!(validate_sensitive_storage_key("vex.auth.session\nx").is_err());
         assert!(validate_sensitive_storage_key("vex.auth.session x").is_err());
+    }
+
+    #[test]
+    fn helper_status_without_handshake_stays_connected_but_unverified() {
+        let status = parse_helper_status_response(
+            "state=connected rx=0 tx=0 latest_handshake=0 leak_protection=armed",
+        );
+
+        assert_eq!(status.state, "connected");
+        assert_eq!(status.leak_protection, "armed");
+        assert_eq!(status.verified, Some(false));
+        assert_eq!(
+            status.verification_reason.as_deref(),
+            Some("handshake_pending")
+        );
+    }
+
+    #[test]
+    fn helper_status_with_traffic_becomes_verified_even_without_handshake() {
+        let status = parse_helper_status_response(
+            "state=connected rx=0 tx=128 latest_handshake=0 leak_protection=off",
+        );
+
+        assert_eq!(status.state, "connected");
+        assert_eq!(status.tx_bytes, 128);
+        assert_eq!(status.verified, Some(true));
+        assert_eq!(status.verification_reason, None);
+    }
+
+    #[test]
+    fn helper_status_connecting_is_not_verified() {
+        let status =
+            parse_helper_status_response("state=connecting rx=0 tx=0 leak_protection=armed");
+
+        assert_eq!(status.state, "connecting");
+        assert_eq!(status.verified, Some(false));
+        assert_eq!(status.verification_reason, None);
+    }
+
+    #[test]
+    fn parses_helper_key_value_diagnostics() {
+        let value = parse_key_value_diagnostics(
+            "operation_in_progress=true\niface=utun7\nroute_ok=false\nrx=42\n",
+        );
+
+        assert_eq!(value["operation_in_progress"], true);
+        assert_eq!(value["iface"], "utun7");
+        assert_eq!(value["route_ok"], false);
+        assert_eq!(value["rx"], 42);
     }
 
     #[cfg(target_os = "macos")]

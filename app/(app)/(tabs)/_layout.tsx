@@ -39,8 +39,8 @@ export default function AppTabsLayout() {
         <NativeTabs.Trigger.Icon md="account_circle" sf="person.crop.circle.fill" />
         <NativeTabs.Trigger.Label>Аккаунт</NativeTabs.Trigger.Label>
       </NativeTabs.Trigger>
-      <NativeTabs.Trigger disabled name="support">
-        <NativeTabs.Trigger.Icon md="support_agent" sf="message.fill" />
+      <NativeTabs.Trigger name="support">
+        <NativeTabs.Trigger.Icon md="chat_bubble" sf="questionmark.bubble.fill" />
         <NativeTabs.Trigger.Label>Поддержка</NativeTabs.Trigger.Label>
       </NativeTabs.Trigger>
     </NativeTabs>

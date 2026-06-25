@@ -22,6 +22,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -42,6 +46,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: package-lock.json
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -117,11 +122,11 @@ jobs:
             android/build
             android/app/.cxx
             android/app/build
-          key: android-project-${{ runner.os }}-${{ env.ANDROID_RELEASE_VARIANT }}-${{ env.ANDROID_RELEASE_ABIS }}-${{ hashFiles('package-lock.json', 'android/**/*.gradle', 'android/**/*.properties', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          key: android-project-v2-${{ runner.os }}-${{ env.ANDROID_RELEASE_VARIANT }}-${{ env.ANDROID_RELEASE_ABIS }}-${{ hashFiles('package-lock.json', 'android/**/*.gradle', 'android/**/*.properties', 'android/gradle/wrapper/gradle-wrapper.properties') }}
           restore-keys: |
-            android-project-${{ runner.os }}-${{ env.ANDROID_RELEASE_VARIANT }}-${{ env.ANDROID_RELEASE_ABIS }}-
-            android-project-${{ runner.os }}-${{ env.ANDROID_RELEASE_VARIANT }}-
-            android-project-${{ runner.os }}-
+            android-project-v2-${{ runner.os }}-${{ env.ANDROID_RELEASE_VARIANT }}-${{ env.ANDROID_RELEASE_ABIS }}-
+            android-project-v2-${{ runner.os }}-${{ env.ANDROID_RELEASE_VARIANT }}-
+            android-project-v2-${{ runner.os }}-
 
       - name: Restore Android release keystore
         if: env.ANDROID_RELEASE_VARIANT == 'release'

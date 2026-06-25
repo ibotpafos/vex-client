@@ -37,6 +37,23 @@ function Get-LatestFile {
     return $matches[0]
 }
 
+function New-TauriSidecarStub {
+    $helperDir = Join-Path "src-tauri/target" (Join-Path $Target "release")
+    $helperSrc = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "vex-helper-stub-$([System.Guid]::NewGuid()).rs")
+    $helperBin = Join-Path $helperDir "helper.exe"
+
+    New-Item -ItemType Directory -Force -Path $helperDir | Out-Null
+    Set-Content -LiteralPath $helperSrc -Value "fn main() {}`n" -NoNewline
+    try {
+        & rustc --target $Target -C opt-level=z -C strip=symbols $helperSrc -o $helperBin
+        if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+        }
+    } finally {
+        Remove-Item -LiteralPath $helperSrc -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Write-Sha256Sidecar {
     param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -115,6 +132,7 @@ Write-Host "== VEX Windows Tauri release =="
 Write-Host "version: $Version"
 Write-Host "target: $Target"
 
+New-TauriSidecarStub
 npm run tauri:cli -- build --target $Target
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE

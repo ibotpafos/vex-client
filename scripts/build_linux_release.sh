@@ -61,6 +61,18 @@ latest_file() {
     awk 'NR == 1 {$1=""; sub(/^ /, ""); print}'
 }
 
+prepare_tauri_sidecar_stub() {
+  local helper_dir helper_src helper_bin
+  helper_dir="${ROOT}/src-tauri/target/${TARGET}/release"
+  helper_src="$(mktemp --suffix=.rs)"
+  helper_bin="${helper_dir}/helper"
+
+  mkdir -p "${helper_dir}"
+  printf 'fn main() {}\n' >"${helper_src}"
+  rustc --target "${TARGET}" -C opt-level=z -C strip=symbols "${helper_src}" -o "${helper_bin}"
+  rm -f "${helper_src}"
+}
+
 restore_tauri_config() {
   if [[ -n "${TAURI_CONFIG_BACKUP}" && -f "${TAURI_CONFIG_BACKUP}" ]]; then
     mv "${TAURI_CONFIG_BACKUP}" "${TAURI_CONFIG}"
@@ -155,6 +167,7 @@ echo "== VEX Linux Tauri release =="
 echo "version: ${VERSION}"
 echo "target: ${TARGET}"
 
+prepare_tauri_sidecar_stub
 npm run tauri:cli -- build --target "${TARGET}"
 
 appimage="$(latest_file "*/release/bundle/appimage/*.AppImage")"

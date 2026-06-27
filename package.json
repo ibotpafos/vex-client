@@ -99,6 +99,8 @@
     "android:bootstrap": "bash scripts/bootstrap_amneziawg_android.sh",
     "android:build:local": "bash scripts/android_local_build.sh",
     "android:release": "bash scripts/build_android_release.sh",
+    "local:release-cache": "bash scripts/setup_local_release_cache.sh",
+    "local:release": "bash scripts/build_all_local_releases.sh",
     "windows:release": "powershell -ExecutionPolicy Bypass -File scripts/build_windows_release.ps1",
     "linux:release": "bash scripts/build_linux_release.sh",
     "macos:release": "bash scripts/build_macos_release.sh"

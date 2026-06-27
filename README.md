@@ -15,7 +15,23 @@ This repository contains VEX client applications for desktop and mobile. It inte
 
 ## Release Model
 
-GitHub Actions builds Windows artifacts on `windows-latest`:
+Local release builds are the primary path when GitHub Actions runner availability is blocked. The local wrapper keeps heavy caches and generated build directories on an external disk, then calls the same per-platform scripts used by release lanes.
+
+```bash
+VEX_LOCAL_RELEASE_CACHE_ROOT=/Volumes/D/Downloads/VEX/local-release-cache/vex-client npm run local:release
+```
+
+By default, the wrapper uses `/Volumes/D/Downloads/VEX/local-release-cache/vex-client`, moves ignored heavy build directories there, and leaves source files in the checkout. Put signing secrets in ignored local env files such as `.env.tauri-updater.local`, `.env.signing.local`, or `.env.local-release`.
+
+Useful controls:
+
+- `LOCAL_RELEASE_PLATFORMS=macos,android` limits the run to selected platforms.
+- `RUN_LOCAL_RELEASE_CHECKS=0` skips `npm ci`, typecheck, and unit tests when rerunning after a clean pass.
+- `VEX_LOCAL_CACHE_MOVE_EXISTING=0 npm run local:release-cache` only reports existing local build directories instead of moving them.
+
+macOS and Android can build on this macOS workstation. Linux needs a Linux host or VM with the Tauri WebKit dependencies from `.github/workflows/linux-release.yml`. Windows needs a Windows host with PowerShell and the MSVC Rust toolchain.
+
+GitHub Actions release lanes remain as a secondary path. The Windows lane builds artifacts on `windows-latest`:
 
 - `Vex-Windows-{version}-setup.exe`
 - `Vex-Windows-{version}.msi`

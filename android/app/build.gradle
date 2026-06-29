@@ -203,10 +203,10 @@ android {
         applicationId vexAndroidApplicationId()
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1004850
-        versionName "1.0.48"
+        versionCode 1004951
+        versionName "1.0.49"
         manifestPlaceholders = [
-            vexRuntimeVersion: vexBuildValue('VEX_RUNTIME_VERSION', "1.0.48"),
+            vexRuntimeVersion: vexBuildValue('VEX_RUNTIME_VERSION', "1.0.49"),
             vexUpdatesEnabled: vexUpdatesEnabled(),
             vexUpdatesUrl: vexUpdatesUrl(),
             vexUpdatesRequestHeaders: vexUpdatesRequestHeaders(),

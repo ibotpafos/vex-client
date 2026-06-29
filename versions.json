@@ -1,7 +1,7 @@
 {
   "desktop": {
-    "version": "0.1.35",
-    "release_notes": "Desktop: меньше фоновых проверок обновлений на macOS, короткий timeout metadata и защита от зависаний WebView при медленном API/VPN.",
+    "version": "0.1.36",
+    "release_notes": "Desktop: стабильнее connect/disconnect на macOS, меньше блокирующих status-запросов к helper, новый helper v23 и устранен WebKit hang в asset protocol.",
     "config_schema_version": 1,
     "min_config_schema_version": 1
   },

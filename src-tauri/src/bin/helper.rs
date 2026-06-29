@@ -1,4 +1,4 @@
-/// vex-helper v22 — Privileged VPN daemon for VEX VPN (macOS)
+/// vex-helper v23 — Privileged VPN daemon for VEX VPN (macOS)
 ///
 /// Architecture follows official AmneziaVPN macOS client:
 /// - amneziawg-go runs in foreground (-f utun), writes iface name to file
@@ -1385,7 +1385,7 @@ fn query_uapi_stats(iface: &str) -> Option<TunnelStats> {
     Some(stats)
 }
 
-fn helper_status_response(log: &Logger) -> String {
+fn helper_status_response() -> String {
     if operation_in_progress() {
         return format!(
             "state=connecting rx=0 tx=0 leak_protection={}\n",
@@ -1411,7 +1411,6 @@ fn helper_status_response(log: &Logger) -> String {
     }
 
     if !route_uses_interface("1.1.1.1", &iface) {
-        log.warn("status", &format!("default route is not using {}", iface));
         return if antileak_is_active() {
             "state=error rx=0 tx=0 leak_protection=blocking\n".to_string()
         } else {
@@ -1420,7 +1419,6 @@ fn helper_status_response(log: &Logger) -> String {
     }
 
     let Some(stats) = query_uapi_stats(&iface) else {
-        log.warn("status", &format!("cannot read UAPI stats for {}", iface));
         return if antileak_is_active() {
             "state=error rx=0 tx=0 leak_protection=blocking\n".to_string()
         } else {
@@ -1429,7 +1427,6 @@ fn helper_status_response(log: &Logger) -> String {
     };
 
     if stats.latest_handshake_sec == 0 && stats.rx_bytes == 0 {
-        log.warn("status", &format!("{} has no VPN handshake yet", iface));
         return format!(
             "state=connected rx=0 tx={} latest_handshake=0 leak_protection={}\n",
             stats.tx_bytes,
@@ -1493,7 +1490,9 @@ fn handle_client(stream: &mut UnixStream, log: &Logger) -> Result<()> {
     let command_name = command_parts.first().copied().unwrap_or("");
     let owner_pid = parse_owner_pid(&command_parts[1..]);
 
-    log.info("socket", &format!("command: {}", command));
+    if command_name != "status" {
+        log.info("socket", &format!("command: {}", command));
+    }
 
     let (response, should_exit) = match command_name {
         "up" => match acquire_operation_lock(log) {
@@ -1551,7 +1550,7 @@ fn handle_client(stream: &mut UnixStream, log: &Logger) -> Result<()> {
             },
             Err(e) => (format!("error: {}\n", e), false),
         },
-        "status" => (helper_status_response(log), false),
+        "status" => (helper_status_response(), false),
         "diagnostics" => (helper_diagnostics_response(), false),
         "antileak-off" => match acquire_operation_lock(log) {
             Ok(_guard) => {
@@ -1597,7 +1596,7 @@ fn main() {
 
     log.info(
         "main",
-        &format!("vex-helper v22 started on {}", HELPER_SOCKET),
+        &format!("vex-helper v23 started on {}", HELPER_SOCKET),
     );
 
     for stream in listener.incoming() {

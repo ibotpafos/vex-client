@@ -61,12 +61,22 @@ class WireGuardController(context: Context) {
     }
   }
 
-  suspend fun status(): VpnConnectionState = tunnelMutex.withLock {
-    withContext(Dispatchers.IO) {
+  suspend fun status(): VpnConnectionState {
+    if (!tunnelMutex.tryLock()) {
+      return VpnConnectionState.Transition(
+        state = "connecting",
+        leakProtection = if (antiLeakArmed) LeakProtectionState.Armed else LeakProtectionState.Off,
+      )
+    }
+    return try {
+      withContext(Dispatchers.IO) {
       if (VexLeakBlockerService.isActive()) {
         return@withContext VpnConnectionState.Blocking
       }
       backend.getState(tunnel).toConnectionState(statsOrEmpty(), antiLeakArmed)
+      }
+    } finally {
+      tunnelMutex.unlock()
     }
   }
 
@@ -220,6 +230,7 @@ private inline fun <T> List<T>.indexOfFirstAfter(startIndex: Int, predicate: (T)
 sealed interface VpnConnectionState {
   data object Disconnected : VpnConnectionState
   data object Blocking : VpnConnectionState
+  data class Transition(val state: String, val leakProtection: LeakProtectionState) : VpnConnectionState
   data class Connected(val traffic: VpnTraffic, val leakProtection: LeakProtectionState) : VpnConnectionState
 }
 

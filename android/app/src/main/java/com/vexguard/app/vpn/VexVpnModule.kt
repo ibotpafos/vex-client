@@ -433,6 +433,15 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
         map.putBoolean("verified", false)
         map.putString("verificationReason", "endpoint_failed")
       }
+      is VpnConnectionState.Transition -> {
+        map.putString("state", this.state)
+        map.putDouble("rxBytes", 0.0)
+        map.putDouble("txBytes", 0.0)
+        map.putDouble("latestHandshakeEpochMillis", 0.0)
+        map.putString("leakProtection", this.leakProtection.wireValue)
+        map.putBoolean("verified", false)
+        map.putString("verificationReason", "handshake_pending")
+      }
     }
     return map
   }

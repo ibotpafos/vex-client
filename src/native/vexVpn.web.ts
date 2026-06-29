@@ -52,6 +52,10 @@ type VexVpnNativeModule = {
 };
 
 const nativeModule = NativeModules.VexVpn as VexVpnNativeModule | undefined;
+const tauriStatusCacheTtlMs = 900;
+
+let cachedTauriVpnStatus: { status: VpnStatus; cachedAt: number } | null = null;
+let inflightTauriVpnStatusPromise: Promise<VpnStatus> | null = null;
 
 
 function requireNativeModule(): VexVpnNativeModule {
@@ -84,26 +88,47 @@ export type DisconnectVpnOptions = {
 
 export async function connectVpn(wgQuickConfig: string, options: ConnectVpnOptions = {}): Promise<VpnStatus> {
   if (isTauri()) {
-    return normalizeVpnStatus(await invoke<VpnStatus>('connect_vpn', {
+    const status = normalizeVpnStatus(await invoke<VpnStatus>('connect_vpn', {
       configContent: wgQuickConfig,
       antiLeakEnabled: options.antiLeakEnabled !== false,
     }));
+    updateCachedTauriVpnStatus(status);
+    return status;
   }
   return normalizeVpnStatus(await requireNativeModule().connect(wgQuickConfig, options.antiLeakEnabled !== false));
 }
 
 export async function disconnectVpn(options: DisconnectVpnOptions = {}): Promise<VpnStatus> {
   if (isTauri()) {
-    return normalizeVpnStatus(await invoke<VpnStatus>('disconnect_vpn', {
+    const status = normalizeVpnStatus(await invoke<VpnStatus>('disconnect_vpn', {
       releaseAntiLeak: options.releaseAntiLeak !== false,
     }));
+    updateCachedTauriVpnStatus(status);
+    return status;
   }
   return normalizeVpnStatus(await requireNativeModule().disconnect(options.releaseAntiLeak !== false));
 }
 
 export async function getVpnStatus(): Promise<VpnStatus> {
   if (isTauri()) {
-    return normalizeVpnStatus(await invoke<VpnStatus>('get_vpn_status'));
+    const now = Date.now();
+    if (cachedTauriVpnStatus && now - cachedTauriVpnStatus.cachedAt <= tauriStatusCacheTtlMs) {
+      return cachedTauriVpnStatus.status;
+    }
+    if (inflightTauriVpnStatusPromise) {
+      return inflightTauriVpnStatusPromise;
+    }
+    const request = invoke<VpnStatus>('get_vpn_status')
+      .then((status) => {
+        const normalizedStatus = normalizeVpnStatus(status);
+        updateCachedTauriVpnStatus(normalizedStatus);
+        return normalizedStatus;
+      })
+      .finally(() => {
+        inflightTauriVpnStatusPromise = null;
+      });
+    inflightTauriVpnStatusPromise = request;
+    return request;
   }
   return normalizeVpnStatus(await requireNativeModule().status());
 }
@@ -219,5 +244,12 @@ function normalizeVpnStatus(status: VpnStatus): VpnStatus {
     leakProtection: status.leakProtection ?? 'off',
     verified,
     verificationReason: status.verificationReason ?? (status.state === 'connected' && verified === false ? 'handshake_pending' : undefined),
+  };
+}
+
+function updateCachedTauriVpnStatus(status: VpnStatus): void {
+  cachedTauriVpnStatus = {
+    status,
+    cachedAt: Date.now(),
   };
 }

@@ -15,46 +15,6 @@ const TRAY_ID: &str = "main-tray";
 const VPN_STATUS_CHANGED_EVENT: &str = "vpn-status-changed";
 const SENSITIVE_STORAGE_SERVICE: &str = "app.vex.vpn.desktop.sensitive-storage";
 
-fn tauri_asset_path(uri: &tauri::http::Uri) -> String {
-    let raw = uri
-        .to_string()
-        .split(&['?', '#'][..])
-        .next()
-        .unwrap_or_default()
-        .to_string();
-    raw.strip_prefix("tauri://localhost")
-        .unwrap_or(raw.as_str())
-        .to_string()
-}
-
-fn tauri_asset_response(asset: Option<tauri::Asset>) -> tauri::http::Response<Vec<u8>> {
-    match asset {
-        Some(asset) => {
-            let mut builder = tauri::http::Response::builder()
-                .header(tauri::http::header::CONTENT_TYPE, asset.mime_type)
-                .header("Access-Control-Allow-Origin", "tauri://localhost");
-            if let Some(csp) = asset.csp_header {
-                builder = builder.header("Content-Security-Policy", csp);
-            }
-            builder.body(asset.bytes).unwrap_or_else(|_| {
-                tauri::http::Response::builder()
-                    .status(500)
-                    .body(b"failed to build asset response".to_vec())
-                    .unwrap()
-            })
-        }
-        None => tauri::http::Response::builder()
-            .status(404)
-            .header(
-                tauri::http::header::CONTENT_TYPE,
-                "text/plain; charset=utf-8",
-            )
-            .header("Access-Control-Allow-Origin", "tauri://localhost")
-            .body(b"asset not found".to_vec())
-            .unwrap(),
-    }
-}
-
 struct TrayMenuState {
     _tray: tauri::tray::TrayIcon,
     status_item: tauri::menu::MenuItem<tauri::Wry>,
@@ -413,7 +373,7 @@ mod platform_vpn {
     const HELPER_DIR: &str = "/Library/Application Support/VEX VPN/helper";
     const HELPER_PLIST: &str = "/Library/LaunchDaemons/app.vex.vpn.helper.plist";
     const HELPER_VERSION_FILE: &str = "/Library/Application Support/VEX VPN/helper/version";
-    const HELPER_VERSION: &str = "22";
+    const HELPER_VERSION: &str = "23";
     const LAUNCHD_LABEL: &str = "app.vex.vpn.helper";
     const HELPER_SOCKET: &str = "/var/run/vex-helper.sock";
     const HELPER_START_TIMEOUT: Duration = Duration::from_secs(2);
@@ -2535,13 +2495,6 @@ fn parse_latency_number(value: &str) -> Option<f64> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
-        .register_asynchronous_uri_scheme_protocol("tauri", |ctx, request, responder| {
-            let resolver = ctx.app_handle().asset_resolver();
-            let path = tauri_asset_path(request.uri());
-            std::thread::spawn(move || {
-                responder.respond(tauri_asset_response(resolver.get(path)));
-            });
-        })
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             show_main_window(app);
             let urls: Vec<String> = args

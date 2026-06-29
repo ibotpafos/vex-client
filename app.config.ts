@@ -52,6 +52,11 @@ export default function appConfig({ config }: ConfigContext): ExpoConfig {
       ...baseConfig.expo.ios,
       associatedDomains: [`applinks:${appLinkHost}`],
       bundleIdentifier: iosBundleIdentifier,
+      infoPlist: {
+        ...baseConfig.expo.ios?.infoPlist,
+        UIStatusBarStyle: 'UIStatusBarStyleLightContent',
+        UIViewControllerBasedStatusBarAppearance: false,
+      },
     },
     android: {
       ...baseConfig.expo.android,

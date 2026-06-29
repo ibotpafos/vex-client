@@ -14,6 +14,23 @@ require_env() {
   fi
 }
 
+require_private_key() {
+  if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" && -z "${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ]]; then
+    echo "TAURI_SIGNING_PRIVATE_KEY or TAURI_SIGNING_PRIVATE_KEY_PATH is required" >&2
+    exit 2
+  fi
+  if [[ -n "${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" && ! -f "${TAURI_SIGNING_PRIVATE_KEY_PATH}" ]]; then
+    echo "TAURI_SIGNING_PRIVATE_KEY_PATH does not exist: ${TAURI_SIGNING_PRIVATE_KEY_PATH}" >&2
+    exit 2
+  fi
+}
+
+load_private_key_from_path() {
+  if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" && -n "${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ]]; then
+    TAURI_SIGNING_PRIVATE_KEY="$(cat "${TAURI_SIGNING_PRIVATE_KEY_PATH}")"
+  fi
+}
+
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "missing required command: $1" >&2
@@ -59,9 +76,10 @@ copy_asset() {
   sha256_sidecar "$destination"
 }
 
-require_env TAURI_SIGNING_PRIVATE_KEY
+require_private_key
 require_env TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 require_env TAURI_SIGNING_PUBLIC_KEY
+load_private_key_from_path
 require_command node
 require_command npm
 require_command python3
@@ -83,7 +101,7 @@ if [[ "${TAURI_SIGNING_PUBLIC_KEY}" != "${CONFIGURED_PUBKEY}" ]]; then
   exit 1
 fi
 
-export TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+export TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PATH TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 
 echo "== VEX macOS Tauri release =="
 echo "version: ${VERSION}"

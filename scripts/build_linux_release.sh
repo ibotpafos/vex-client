@@ -6,6 +6,18 @@ TARGET="${LINUX_TARGET:-$(rustc -vV | awk '/host:/ {print $2}')}"
 ARTIFACTS_DIR="${LINUX_ARTIFACTS_DIR:-dist/linux}"
 TAURI_CONFIG="${ROOT}/src-tauri/tauri.conf.json"
 TAURI_CONFIG_BACKUP=""
+THIN_APPIMAGE_MODE="${THIN_APPIMAGE_MODE:-system-webkit}"
+
+linux_appimage_arch() {
+  case "$1" in
+    x86_64-unknown-linux-gnu) printf 'x86_64\n' ;;
+    aarch64-unknown-linux-gnu) printf 'aarch64\n' ;;
+    *)
+      echo "Unsupported Linux AppImage target: $1" >&2
+      exit 2
+      ;;
+  esac
+}
 
 require_env() {
   local name="$1"
@@ -59,6 +71,115 @@ latest_file() {
   find "${ROOT}/src-tauri/target" -path "$pattern" -type f -printf '%T@ %p\n' |
     sort -rn |
     awk 'NR == 1 {$1=""; sub(/^ /, ""); print}'
+}
+
+download_appimagetool() {
+  local arch="$1"
+  local cache_dir tool url
+  cache_dir="${ROOT}/.cache/appimage"
+  tool="${cache_dir}/appimagetool-${arch}.AppImage"
+
+  if [[ -n "${APPIMAGETOOL_BIN:-}" ]]; then
+    if [[ ! -x "${APPIMAGETOOL_BIN}" ]]; then
+      echo "APPIMAGETOOL_BIN is not executable: ${APPIMAGETOOL_BIN}" >&2
+      exit 2
+    fi
+    printf '%s\n' "${APPIMAGETOOL_BIN}"
+    return 0
+  fi
+
+  mkdir -p "${cache_dir}"
+  if [[ ! -x "${tool}" ]]; then
+    url="https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${arch}.AppImage"
+    echo "Downloading appimagetool for ${arch}"
+    curl -fsSL "${url}" -o "${tool}"
+    chmod +x "${tool}"
+  fi
+
+  printf '%s\n' "${tool}"
+}
+
+trim_appimage_runtime_libs() {
+  local appdir="$1"
+  local lib_dir removed_any=0
+  lib_dir="${appdir}/usr/lib"
+  [[ -d "${lib_dir}" ]] || return 0
+
+  while IFS= read -r candidate; do
+    [[ -n "${candidate}" ]] || continue
+    echo "  pruning bundled runtime $(basename "${candidate}")"
+    rm -f "${candidate}"
+    removed_any=1
+  done < <(
+    find "${lib_dir}" -maxdepth 1 \( \
+      -name 'libwebkit2gtk-4.1.so*' -o \
+      -name 'libjavascriptcoregtk-4.1.so*' -o \
+      -name 'libicudata.so*' -o \
+      -name 'libicui18n.so*' -o \
+      -name 'libicuuc.so*' \
+    \) -print | sort
+  )
+
+  if [[ "${removed_any}" == "0" ]]; then
+    echo "  no heavy bundled WebKit/ICU runtime libraries were found to prune"
+  fi
+}
+
+repack_and_resign_appimage() {
+  local appimage="$1"
+  local version="$2"
+  local arch tool workdir appdir rebuilt signer_output
+
+  case "${THIN_APPIMAGE_MODE}" in
+    off)
+      echo "Skipping thin AppImage post-process (THIN_APPIMAGE_MODE=off)"
+      return 0
+      ;;
+    system-webkit)
+      ;;
+    *)
+      echo "Unsupported THIN_APPIMAGE_MODE: ${THIN_APPIMAGE_MODE}" >&2
+      exit 2
+      ;;
+  esac
+
+  arch="$(linux_appimage_arch "${TARGET}")"
+  tool="$(download_appimagetool "${arch}")"
+  workdir="$(mktemp -d)"
+  rebuilt="${workdir}/Vex-Linux-${version}.AppImage"
+
+  echo "Repacking Linux updater AppImage in thin mode (${THIN_APPIMAGE_MODE})"
+  chmod +x "${appimage}"
+  (
+    cd "${workdir}"
+    "${appimage}" --appimage-extract >/dev/null
+  )
+
+  appdir="${workdir}/squashfs-root"
+  if [[ ! -d "${appdir}" ]]; then
+    echo "AppImage extraction did not produce squashfs-root" >&2
+    rm -rf "${workdir}"
+    exit 1
+  fi
+
+  trim_appimage_runtime_libs "${appdir}"
+
+  rm -f "${appimage}" "${appimage}.sig"
+  APPIMAGE_EXTRACT_AND_RUN=1 ARCH="${arch}" VERSION="${version}" \
+    "${tool}" --comp xz --no-appstream "${appdir}" "${rebuilt}"
+
+  mv "${rebuilt}" "${appimage}"
+  chmod +x "${appimage}"
+
+  signer_output="$(npm exec --yes --package @tauri-apps/cli@2.11.2 -- tauri signer sign "${appimage}")"
+  if [[ ! -s "${appimage}.sig" ]]; then
+    printf '%s\n' "${signer_output}" >&2
+    echo "Failed to generate Tauri updater signature for ${appimage}" >&2
+    rm -rf "${workdir}"
+    exit 1
+  fi
+
+  rm -rf "${workdir}"
 }
 
 prepare_tauri_sidecar_stub() {
@@ -186,6 +307,7 @@ if [[ -z "${deb}" || ! -r "${deb}" ]]; then
   exit 1
 fi
 
+repack_and_resign_appimage "${appimage}" "${VERSION}"
 install_deb_helper_payload "${deb}"
 
 mkdir -p "${ROOT}/${ARTIFACTS_DIR}"

@@ -56,6 +56,7 @@ export function connectSupportSocket(accessToken: string, options: SupportSocket
 
   const scheduleReconnect = () => {
     if (closed || reconnectTimer) return;
+    options.onReconnect?.();
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       void connect();

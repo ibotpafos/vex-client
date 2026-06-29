@@ -22,6 +22,11 @@ for required in awg amneziawg-go vex-helper; do
   fi
 done
 
+if ! /usr/bin/codesign --verify --strict --verbose=2 "$src_dir/vex-helper" >/dev/null 2>&1; then
+  echo "Bundled vex-helper is not code-signature valid. Rebuild VEX resources before installing." >&2
+  exit 1
+fi
+
 # 4. Clean up old binary inodes to prevent 'Text file busy' errors on copy
 mkdir -p "$helper_dir"
 rm -f "$helper_dir/awg" "$helper_dir/amneziawg-go" "$helper_dir/vex-helper" || true
@@ -31,12 +36,21 @@ cp "$src_dir/awg" "$helper_dir/awg"
 cp "$src_dir/amneziawg-go" "$helper_dir/amneziawg-go"
 cp "$src_dir/vex-helper" "$helper_dir/vex-helper"
 printf '%s\n' "$config_path" > "$helper_dir/config-path"
-printf '17\n' > "$helper_dir/version"
+printf '21\n' > "$helper_dir/version"
 
 chmod 755 "$helper_dir/awg" "$helper_dir/amneziawg-go" "$helper_dir/vex-helper"
 chmod 644 "$helper_dir/config-path" "$helper_dir/version"
 chown -R root:wheel "$helper_dir"
 xattr -dr com.apple.quarantine "$helper_dir/awg" "$helper_dir/amneziawg-go" "$helper_dir/vex-helper" >/dev/null 2>&1 || true
+
+if ! /usr/bin/codesign --verify --strict --verbose=2 "$helper_dir/vex-helper" >/dev/null 2>&1; then
+  echo "Installed vex-helper failed code-signature verification." >&2
+  exit 1
+fi
+
+: > "$helper_dir/daemon.log"
+: > "$helper_dir/daemon.err"
+: > "$helper_dir/last.log"
 
 # Clean up socket if exists
 rm -f /var/run/vex-helper.sock
@@ -53,9 +67,9 @@ cat > "$plist" <<PLIST
     <string>$helper_dir/vex-helper</string>
   </array>
   <key>RunAtLoad</key>
-  <true/>
+  <false/>
   <key>KeepAlive</key>
-  <true/>
+  <false/>
   <key>StandardOutPath</key>
   <string>$helper_dir/daemon.log</string>
   <key>StandardErrorPath</key>

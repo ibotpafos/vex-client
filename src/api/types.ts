@@ -194,6 +194,7 @@ export type SupportSocketHandle = {
 export type SupportSocketOptions = {
   onError?: (message: string) => void;
   onOpen?: () => void;
+  onReconnect?: () => void;
   onSnapshot?: (tickets: SupportTicket[]) => void;
   onTicket?: (ticket: SupportTicket) => void;
 };

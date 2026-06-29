@@ -1,4 +1,4 @@
-/// vex-helper v16 — Privileged VPN daemon for VEX VPN (macOS)
+/// vex-helper v21 — Privileged VPN daemon for VEX VPN (macOS)
 ///
 /// Architecture follows official AmneziaVPN macOS client:
 /// - amneziawg-go runs in foreground (-f utun), writes iface name to file
@@ -19,7 +19,7 @@ use std::{
         net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
-    process::{Child, Command},
+    process::{Child, Command, ExitStatus, Output, Stdio},
     thread,
     time::{Duration, Instant},
 };
@@ -62,6 +62,7 @@ const ANTILEAK_ANCHOR_FILE: &str = "/etc/pf.anchors/com.vexguard.antileak";
 const PF_CONF: &str = "/etc/pf.conf";
 const ANTILEAK_STATE_FILE: &str = "/Library/Application Support/VEX VPN/helper/antileak.active";
 const OPERATION_LOCK_FILE: &str = "/Library/Application Support/VEX VPN/helper/operation.lock";
+const HELPER_SOCKET: &str = "/var/run/vex-helper.sock";
 const IFACE_WAIT_TIMEOUT: Duration = Duration::from_secs(8);
 const UAPI_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const OPERATION_LOCK_STALE_AFTER: Duration = Duration::from_secs(60);
@@ -153,6 +154,14 @@ fn operation_in_progress() -> bool {
         .and_then(|metadata| metadata.modified().ok())
         .and_then(|modified| modified.elapsed().ok())
         .is_some_and(|age| age <= OPERATION_LOCK_STALE_AFTER)
+}
+
+fn quiet_status(command: &mut Command) -> io::Result<ExitStatus> {
+    command.stdout(Stdio::null()).stderr(Stdio::null()).status()
+}
+
+fn quiet_output(command: &mut Command) -> io::Result<Output> {
+    command.stderr(Stdio::null()).output()
 }
 
 // ─── WireGuard config model ───────────────────────────────────────────────────
@@ -489,9 +498,7 @@ fn uapi_configure(iface: &str, cfg: &WgConfig, log: &Logger) -> Result<()> {
 
 /// Returns (gateway_ip, gateway_interface) for the current default route.
 fn default_gateway() -> Result<(String, String)> {
-    let out = Command::new("route")
-        .args(["-n", "get", "default"])
-        .output()
+    let out = quiet_output(Command::new("route").args(["-n", "get", "default"]))
         .map_err(HelperError::Io)?;
 
     let text = String::from_utf8_lossy(&out.stdout);
@@ -518,10 +525,7 @@ fn default_gateway() -> Result<(String, String)> {
 
 /// Apply DNS servers to all physical network services in parallel threads to avoid connection lag.
 fn apply_dns(servers: &[String], log: &Logger) {
-    let Ok(out) = Command::new("networksetup")
-        .arg("-listallnetworkservices")
-        .output()
-    else {
+    let Ok(out) = quiet_output(Command::new("networksetup").arg("-listallnetworkservices")) else {
         log.warn("dns", "networksetup -listallnetworkservices failed");
         return;
     };
@@ -548,7 +552,7 @@ fn apply_dns(servers: &[String], log: &Logger) {
             for s in dns_servers {
                 cmd.arg(s);
             }
-            let _ = cmd.status();
+            let _ = quiet_status(&mut cmd);
         });
     }
     log.info("dns", "spawning parallel networksetup DNS configuration");
@@ -556,10 +560,7 @@ fn apply_dns(servers: &[String], log: &Logger) {
 
 /// Reset DNS for all physical services back to "Empty" (DHCP-assigned) in parallel threads.
 fn reset_dns(log: &Logger) {
-    let Ok(out) = Command::new("networksetup")
-        .arg("-listallnetworkservices")
-        .output()
-    else {
+    let Ok(out) = quiet_output(Command::new("networksetup").arg("-listallnetworkservices")) else {
         return;
     };
 
@@ -577,12 +578,13 @@ fn reset_dns(log: &Logger) {
         }
 
         thread::spawn(move || {
-            let _ = Command::new("networksetup")
-                .args(["-setdnsservers", &svc, "Empty"])
-                .status();
-            let _ = Command::new("networksetup")
-                .args(["-setsearchdomains", &svc, "Empty"])
-                .status();
+            let _ =
+                quiet_status(Command::new("networksetup").args(["-setdnsservers", &svc, "Empty"]));
+            let _ = quiet_status(Command::new("networksetup").args([
+                "-setsearchdomains",
+                &svc,
+                "Empty",
+            ]));
         });
     }
     log.info("dns", "spawning parallel networksetup DNS reset");
@@ -621,32 +623,63 @@ fn ensure_antileak_pf_anchor_registered(log: &Logger) -> Result<()> {
         ANTILEAK_ANCHOR, ANTILEAK_ANCHOR, ANTILEAK_ANCHOR_FILE
     ));
     fs::write(PF_CONF, next)?;
-    let _ = Command::new("pfctl").args(["-f", PF_CONF]).status();
+    let _ = quiet_status(Command::new("pfctl").args(["-f", PF_CONF]));
     log.info("antileak", "registered pf anchor in /etc/pf.conf");
     Ok(())
 }
 
-fn enable_antileak_pf(endpoint: &str, iface: &str, log: &Logger) -> Result<()> {
-    ensure_antileak_pf_anchor_registered(log)?;
+fn build_antileak_rules(endpoint: &str, iface: &str) -> String {
     let host = endpoint_host(endpoint);
     let port = endpoint_port(endpoint).unwrap_or("");
     let endpoint_rule = if host.is_empty() || port.is_empty() {
         String::new()
     } else {
         format!(
-            "pass quick out proto udp to {} port {} keep state\n",
-            host, port
+            concat!(
+                "pass out quick inet proto udp from any to {host} port = {port} keep state\n",
+                "pass out quick inet proto tcp from any to {host} port = 443 keep state\n"
+            ),
+            host = host,
+            port = port
         )
     };
-    let rules = format!(
-        "set block-policy drop\npass quick on lo0 all\npass quick out on {} all\n{}block drop out all\n",
+
+    format!(
+        "set block-policy drop\npass quick on lo0 all\npass out quick on {} all\n{}block drop out all\n",
         iface, endpoint_rule
-    );
+    )
+}
+
+fn enable_antileak_pf(endpoint: &str, iface: &str, log: &Logger) -> Result<()> {
+    ensure_antileak_pf_anchor_registered(log)?;
+    let rules = build_antileak_rules(endpoint, iface);
     fs::write(ANTILEAK_ANCHOR_FILE, rules)?;
-    let status = Command::new("pfctl")
-        .args(["-a", ANTILEAK_ANCHOR, "-f", ANTILEAK_ANCHOR_FILE])
-        .status();
-    let _ = Command::new("pfctl").arg("-E").status();
+    let load_status = quiet_status(Command::new("pfctl").args([
+        "-a",
+        ANTILEAK_ANCHOR,
+        "-f",
+        ANTILEAK_ANCHOR_FILE,
+    ]))?;
+    if !load_status.success() {
+        let _ = fs::remove_file(ANTILEAK_STATE_FILE);
+        return Err(HelperError::Network(format!(
+            "pfctl -a {} -f {} failed with status {:?}",
+            ANTILEAK_ANCHOR,
+            ANTILEAK_ANCHOR_FILE,
+            load_status.code()
+        )));
+    }
+
+    let enable_status = quiet_status(Command::new("pfctl").arg("-E"))?;
+    if !enable_status.success() {
+        let _ = quiet_status(Command::new("pfctl").args(["-a", ANTILEAK_ANCHOR, "-F", "all"]));
+        let _ = fs::remove_file(ANTILEAK_STATE_FILE);
+        return Err(HelperError::Network(format!(
+            "pfctl -E failed with status {:?}",
+            enable_status.code()
+        )));
+    }
+
     fs::write(
         ANTILEAK_STATE_FILE,
         format!("endpoint={}\niface={}\n", endpoint, iface),
@@ -657,7 +690,7 @@ fn enable_antileak_pf(endpoint: &str, iface: &str, log: &Logger) -> Result<()> {
             "armed pf anchor iface={} endpoint={} -> {:?}",
             iface,
             endpoint,
-            status.map(|s| s.code())
+            load_status.code()
         ),
     );
     Ok(())
@@ -665,9 +698,7 @@ fn enable_antileak_pf(endpoint: &str, iface: &str, log: &Logger) -> Result<()> {
 
 fn disable_antileak_pf(log: &Logger) -> Result<()> {
     let _ = fs::write(ANTILEAK_ANCHOR_FILE, "");
-    let _ = Command::new("pfctl")
-        .args(["-a", ANTILEAK_ANCHOR, "-F", "all"])
-        .status();
+    let _ = quiet_status(Command::new("pfctl").args(["-a", ANTILEAK_ANCHOR, "-F", "all"]));
     let _ = fs::remove_file(ANTILEAK_STATE_FILE);
     log.info("antileak", "pf anchor cleared");
     Ok(())
@@ -684,12 +715,10 @@ fn add_endpoint_host_route(endpoint: &str, gateway: &str, log: &Logger) {
     if host.is_empty() {
         return;
     }
-    let _ = Command::new("route")
-        .args(["-q", "-n", "delete", "-host", host])
-        .status();
-    let status = Command::new("route")
-        .args(["-q", "-n", "add", "-host", host, "-gateway", gateway])
-        .status();
+    let _ = quiet_status(Command::new("route").args(["-q", "-n", "delete", "-host", host]));
+    let status = quiet_status(
+        Command::new("route").args(["-q", "-n", "add", "-host", host, "-gateway", gateway]),
+    );
     log.info(
         "route",
         &format!(
@@ -707,16 +736,21 @@ fn del_endpoint_host_route(endpoint: &str, gateway: &str, log: &Logger) {
     if host.is_empty() {
         return;
     }
-    let _ = Command::new("route")
-        .args(["-q", "-n", "delete", "-host", host, "-gateway", gateway])
-        .status();
+    let _ = quiet_status(
+        Command::new("route").args(["-q", "-n", "delete", "-host", host, "-gateway", gateway]),
+    );
     log.info("route", &format!("removed host route {}", host));
 }
 
 fn delete_scoped_route(destination: &str, iface: &str, log: &Logger) {
-    let status = Command::new("route")
-        .args(["-q", "-n", "delete", "-ifscope", iface, destination])
-        .status();
+    let status = quiet_status(Command::new("route").args([
+        "-q",
+        "-n",
+        "delete",
+        "-ifscope",
+        iface,
+        destination,
+    ]));
     log.info(
         "route",
         &format!(
@@ -730,9 +764,15 @@ fn delete_scoped_route(destination: &str, iface: &str, log: &Logger) {
 
 fn cleanup_interface_routes(iface: &str, endpoint: Option<&str>, log: &Logger) {
     for prefix in &["0.0.0.0/1", "128.0.0.0/1"] {
-        let _ = Command::new("route")
-            .args(["-q", "-n", "delete", "-inet", prefix, "-interface", iface])
-            .status();
+        let _ = quiet_status(Command::new("route").args([
+            "-q",
+            "-n",
+            "delete",
+            "-inet",
+            prefix,
+            "-interface",
+            iface,
+        ]));
         delete_scoped_route(prefix, iface, log);
     }
 
@@ -744,9 +784,7 @@ fn cleanup_interface_routes(iface: &str, endpoint: Option<&str>, log: &Logger) {
         let host = endpoint_host(endpoint);
         if !host.is_empty() {
             delete_scoped_route(host, iface, log);
-            let _ = Command::new("route")
-                .args(["-q", "-n", "delete", "-host", host])
-                .status();
+            let _ = quiet_status(Command::new("route").args(["-q", "-n", "delete", "-host", host]));
         }
     }
 
@@ -756,7 +794,7 @@ fn cleanup_interface_routes(iface: &str, endpoint: Option<&str>, log: &Logger) {
 fn cleanup_failed_up(iface: &str, endpoint: &str, child: &mut Child, log: &Logger) {
     reset_dns(log);
     cleanup_interface_routes(iface, Some(endpoint), log);
-    let _ = Command::new("ifconfig").args([iface, "down"]).status();
+    let _ = quiet_status(Command::new("ifconfig").args([iface, "down"]));
     let _ = child.kill();
     kill_awg_go(log);
     let _ = fs::remove_file(format!("{}/utun.name", HELPER_DIR));
@@ -768,9 +806,7 @@ fn cleanup_previous_session(log: &Logger) {
     let previous_endpoint = load_endpoint();
     if let Some(ref iface) = previous_iface {
         cleanup_interface_routes(iface, previous_endpoint.as_deref(), log);
-        let _ = Command::new("ifconfig")
-            .args([iface.as_str(), "down"])
-            .status();
+        let _ = quiet_status(Command::new("ifconfig").args([iface.as_str(), "down"]));
     }
     kill_awg_go(log);
     let _ = fs::remove_file(format!("{}/utun.name", HELPER_DIR));
@@ -778,10 +814,8 @@ fn cleanup_previous_session(log: &Logger) {
 }
 
 fn endpoint_route_target(endpoint: &str) -> Option<(String, String)> {
-    let out = Command::new("route")
-        .args(["-n", "get", endpoint_host(endpoint)])
-        .output()
-        .ok()?;
+    let out =
+        quiet_output(Command::new("route").args(["-n", "get", endpoint_host(endpoint)])).ok()?;
     if !out.status.success() {
         return None;
     }
@@ -817,9 +851,7 @@ fn ensure_endpoint_host_route(endpoint: &str, log: &Logger) -> Result<()> {
     }
 
     let host = endpoint_host(endpoint);
-    let _ = Command::new("route")
-        .args(["-q", "-n", "delete", "-host", host])
-        .status();
+    let _ = quiet_status(Command::new("route").args(["-q", "-n", "delete", "-host", host]));
     add_endpoint_host_route(endpoint, &gateway, log);
     log.warn(
         "route",
@@ -849,9 +881,7 @@ fn load_pid() -> Option<u32> {
 }
 
 fn process_is_running(pid: u32) -> bool {
-    Command::new("kill")
-        .args(["-0", &pid.to_string()])
-        .status()
+    quiet_status(Command::new("kill").args(["-0", &pid.to_string()]))
         .map(|status| status.success())
         .unwrap_or(false)
 }
@@ -861,9 +891,7 @@ fn kill_awg_go(log: &Logger) {
     let pid = load_pid();
     if let Some(pid) = pid {
         // Send SIGTERM (15) to shut down cleanly (removes utun interface)
-        let _ = Command::new("kill")
-            .args(["-15", &pid.to_string()])
-            .output();
+        let _ = quiet_status(Command::new("kill").args(["-15", &pid.to_string()]));
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
             if !process_is_running(pid) {
@@ -872,20 +900,16 @@ fn kill_awg_go(log: &Logger) {
             thread::sleep(Duration::from_millis(100));
         }
         if process_is_running(pid) {
-            let _ = Command::new("kill").args(["-9", &pid.to_string()]).output();
+            let _ = quiet_status(Command::new("kill").args(["-9", &pid.to_string()]));
             log.warn("awg-go", &format!("force-stopped pid {}", pid));
         }
         let _ = fs::remove_file(format!("{}/awg.pid", HELPER_DIR));
         log.info("awg-go", &format!("stopped pid {}", pid));
     } else {
         // Fallback: killall if no PID found (e.g. recovering from orphan runs)
-        let _ = Command::new("killall")
-            .args(["-TERM", "amneziawg-go"])
-            .output();
+        let _ = quiet_status(Command::new("killall").args(["-TERM", "amneziawg-go"]));
         thread::sleep(Duration::from_millis(200));
-        let _ = Command::new("killall")
-            .args(["-KILL", "amneziawg-go"])
-            .output();
+        let _ = quiet_status(Command::new("killall").args(["-KILL", "amneziawg-go"]));
         log.info("awg-go", "stopped (fallback)");
     }
 }
@@ -1052,9 +1076,8 @@ fn action_up(log: &Logger, arm_antileak: bool) -> Result<()> {
     // 7. Assign client IP addresses
     for addr in &cfg.addresses {
         let ip = addr.split('/').next().unwrap_or(addr.as_str());
-        let status = Command::new("ifconfig")
-            .args([iface.as_str(), "inet", ip, ip, "alias"])
-            .status();
+        let status =
+            quiet_status(Command::new("ifconfig").args([iface.as_str(), "inet", ip, ip, "alias"]));
         log.info(
             "ifconfig",
             &format!("inet {} -> {:?}", ip, status.map(|s| s.code())),
@@ -1062,10 +1085,8 @@ fn action_up(log: &Logger, arm_antileak: bool) -> Result<()> {
     }
 
     // 8. MTU + link up
-    let _ = Command::new("ifconfig")
-        .args([&iface, "mtu", &cfg.mtu])
-        .status();
-    let _ = Command::new("ifconfig").args([&iface, "up"]).status();
+    let _ = quiet_status(Command::new("ifconfig").args([&iface, "mtu", &cfg.mtu]));
+    let _ = quiet_status(Command::new("ifconfig").args([&iface, "up"]));
     log.info("ifconfig", &format!("mtu={} up on {}", cfg.mtu, iface));
 
     // 9. Routing
@@ -1075,9 +1096,15 @@ fn action_up(log: &Logger, arm_antileak: bool) -> Result<()> {
 
     // Split-default: two /1 routes cover entire IPv4 space (avoids clobbering default route)
     for prefix in &["0.0.0.0/1", "128.0.0.0/1"] {
-        let status = Command::new("route")
-            .args(["-q", "-n", "add", "-inet", prefix, "-interface", &iface])
-            .status();
+        let status = quiet_status(Command::new("route").args([
+            "-q",
+            "-n",
+            "add",
+            "-inet",
+            prefix,
+            "-interface",
+            &iface,
+        ]));
         log.info(
             "route",
             &format!("{} -> {:?}", prefix, status.map(|s| s.code())),
@@ -1121,9 +1148,7 @@ fn action_down(log: &Logger, release_antileak: bool) -> Result<()> {
         cleanup_interface_routes(iface, endpoint.as_deref(), log);
 
         // Bring interface down — this signals amneziawg-go to clean up the utun
-        let _ = Command::new("ifconfig")
-            .args([iface.as_str(), "down"])
-            .status();
+        let _ = quiet_status(Command::new("ifconfig").args([iface.as_str(), "down"]));
         log.info("ifconfig", &format!("brought {} down", iface));
     }
 
@@ -1165,10 +1190,7 @@ fn action_repair(log: &Logger) -> Result<()> {
 // ─── Traffic statistics ───────────────────────────────────────────────────────
 
 fn route_uses_interface(destination: &str, interface: &str) -> bool {
-    let Ok(output) = Command::new("route")
-        .args(["-n", "get", destination])
-        .output()
-    else {
+    let Ok(output) = quiet_output(Command::new("route").args(["-n", "get", destination])) else {
         return false;
     };
     if !output.status.success() {
@@ -1218,9 +1240,8 @@ fn prime_tunnel_traffic(iface: &str, log: &Logger) {
     let iface = iface.to_string();
     let prime_iface = iface.clone();
     thread::spawn(move || {
-        let status = Command::new("ping")
-            .args(["-q", "-c", "1", "-W", "1000", "1.1.1.1"])
-            .status();
+        let status =
+            quiet_status(Command::new("ping").args(["-q", "-c", "1", "-W", "1000", "1.1.1.1"]));
         eprintln!(
             "[vex-helper][INFO][traffic] prime packet via {} -> {:?}",
             prime_iface,
@@ -1380,54 +1401,68 @@ fn handle_client(stream: &mut UnixStream, log: &Logger) -> Result<()> {
 
     log.info("socket", &format!("command: {}", command));
 
-    let response = match command.as_str() {
+    let (response, should_exit) = match command.as_str() {
         "up" => match acquire_operation_lock(log) {
             Ok(_guard) => match action_up(log, true) {
-                Ok(_) => "ok\n".to_string(),
-                Err(e) => format!("error: {}\n", e),
+                Ok(_) => ("ok\n".to_string(), false),
+                Err(e) => (format!("error: {}\n", e), false),
             },
-            Err(e) => format!("error: {}\n", e),
+            Err(e) => (format!("error: {}\n", e), false),
         },
         "up-no-antileak" => match acquire_operation_lock(log) {
             Ok(_guard) => match action_up(log, false) {
-                Ok(_) => "ok\n".to_string(),
-                Err(e) => format!("error: {}\n", e),
+                Ok(_) => ("ok\n".to_string(), false),
+                Err(e) => (format!("error: {}\n", e), false),
             },
-            Err(e) => format!("error: {}\n", e),
+            Err(e) => (format!("error: {}\n", e), false),
         },
         "down" => match acquire_operation_lock(log) {
             Ok(_guard) => {
                 let _ = action_down(log, true);
-                "ok\n".to_string()
+                ("ok\n".to_string(), false)
             }
-            Err(e) => format!("error: {}\n", e),
+            Err(e) => (format!("error: {}\n", e), false),
         },
         "down-keep-antileak" => match acquire_operation_lock(log) {
             Ok(_guard) => {
                 let _ = action_down(log, false);
-                "ok\n".to_string()
+                ("ok\n".to_string(), false)
             }
-            Err(e) => format!("error: {}\n", e),
+            Err(e) => (format!("error: {}\n", e), false),
+        },
+        "shutdown" => match acquire_operation_lock(log) {
+            Ok(_guard) => {
+                let _ = action_down(log, true);
+                ("ok\n".to_string(), true)
+            }
+            Err(e) => (format!("error: {}\n", e), false),
+        },
+        "shutdown-keep-antileak" => match acquire_operation_lock(log) {
+            Ok(_guard) => {
+                let _ = action_down(log, false);
+                ("ok\n".to_string(), true)
+            }
+            Err(e) => (format!("error: {}\n", e), false),
         },
         "repair" => match acquire_operation_lock(log) {
             Ok(_guard) => match action_repair(log) {
-                Ok(_) => "ok\n".to_string(),
-                Err(e) => format!("error: {}\n", e),
+                Ok(_) => ("ok\n".to_string(), false),
+                Err(e) => (format!("error: {}\n", e), false),
             },
-            Err(e) => format!("error: {}\n", e),
+            Err(e) => (format!("error: {}\n", e), false),
         },
-        "status" => helper_status_response(log),
-        "diagnostics" => helper_diagnostics_response(),
+        "status" => (helper_status_response(log), false),
+        "diagnostics" => (helper_diagnostics_response(), false),
         "antileak-off" => match acquire_operation_lock(log) {
             Ok(_guard) => {
                 let _ = disable_antileak_pf(log);
-                "ok\n".to_string()
+                ("ok\n".to_string(), false)
             }
-            Err(e) => format!("error: {}\n", e),
+            Err(e) => (format!("error: {}\n", e), false),
         },
         other => {
             log.warn("socket", &format!("unknown command: {}", other));
-            format!("error: unknown command {}\n", other)
+            (format!("error: unknown command {}\n", other), false)
         }
     };
 
@@ -1435,6 +1470,11 @@ fn handle_client(stream: &mut UnixStream, log: &Logger) -> Result<()> {
         .write_all(response.as_bytes())
         .map_err(HelperError::Io)?;
     let _ = stream.flush();
+    if should_exit {
+        log.info("socket", "shutdown requested, exiting helper");
+        let _ = fs::remove_file(HELPER_SOCKET);
+        std::process::exit(0);
+    }
     Ok(())
 }
 
@@ -1443,12 +1483,9 @@ fn main() {
     let _ = fs::create_dir_all(WG_RUNTIME_DIR);
 
     let log = Logger::new();
-    log.info("main", "vex-helper v17 started");
+    let _ = fs::remove_file(HELPER_SOCKET);
 
-    let socket_path = "/var/run/vex-helper.sock";
-    let _ = fs::remove_file(socket_path);
-
-    let listener = match UnixListener::bind(socket_path) {
+    let listener = match UnixListener::bind(HELPER_SOCKET) {
         Ok(l) => l,
         Err(e) => {
             log.error("main", &format!("failed to bind socket: {}", e));
@@ -1456,9 +1493,12 @@ fn main() {
         }
     };
 
-    secure_command_socket(socket_path, &log);
+    secure_command_socket(HELPER_SOCKET, &log);
 
-    log.info("main", &format!("listening on {}", socket_path));
+    log.info(
+        "main",
+        &format!("vex-helper v21 started on {}", HELPER_SOCKET),
+    );
 
     for stream in listener.incoming() {
         match stream {
@@ -1475,24 +1515,22 @@ fn main() {
 }
 
 fn secure_command_socket(socket_path: &str, log: &Logger) {
-    let console_user = Command::new("/usr/bin/stat")
-        .args(["-f", "%Su", "/dev/console"])
-        .output()
-        .ok()
-        .and_then(|output| {
-            if output.status.success() {
-                Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
-            } else {
-                None
-            }
-        })
-        .filter(|user| !user.is_empty() && user != "root");
+    let console_user =
+        quiet_output(Command::new("/usr/bin/stat").args(["-f", "%Su", "/dev/console"]))
+            .ok()
+            .and_then(|output| {
+                if output.status.success() {
+                    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+                } else {
+                    None
+                }
+            })
+            .filter(|user| !user.is_empty() && user != "root");
 
     if let Some(user) = console_user {
         let owner = format!("{}:staff", user);
-        let status = Command::new("/usr/sbin/chown")
-            .args([owner.as_str(), socket_path])
-            .status();
+        let status =
+            quiet_status(Command::new("/usr/sbin/chown").args([owner.as_str(), socket_path]));
         if !matches!(status, Ok(s) if s.success()) {
             log.warn(
                 "main",
@@ -1517,7 +1555,7 @@ fn secure_command_socket(socket_path: &str, log: &Logger) {
 
 #[cfg(test)]
 mod tests {
-    use super::WgConfig;
+    use super::{build_antileak_rules, WgConfig};
     use std::{fs, path::PathBuf};
 
     fn write_temp_config(name: &str, content: &str) -> PathBuf {
@@ -1596,5 +1634,20 @@ Endpoint = 203.0.113.10:51820
         let _ = fs::remove_file(path);
 
         assert!(error.to_string().contains("MTU out of supported range"));
+    }
+
+    #[test]
+    fn antileak_rules_follow_pf_syntax_order() {
+        let rules = build_antileak_rules("31.77.199.171:51820", "utun6");
+
+        assert!(rules.contains("pass out quick on utun6 all"));
+        assert!(rules.contains(
+            "pass out quick inet proto udp from any to 31.77.199.171 port = 51820 keep state"
+        ));
+        assert!(rules.contains(
+            "pass out quick inet proto tcp from any to 31.77.199.171 port = 443 keep state"
+        ));
+        assert!(!rules.contains("pass quick out on utun6 all"));
+        assert!(!rules.contains("pass quick out proto udp"));
     }
 }

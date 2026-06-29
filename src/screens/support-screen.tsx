@@ -1,5 +1,5 @@
 import { router } from "expo-router";
-import { CheckCheck, ChevronLeft, Send } from "lucide-react-native";
+import { CheckCheck, ChevronLeft, RefreshCw, Send } from "lucide-react-native";
 import React, {
   useCallback,
   useEffect,
@@ -65,6 +65,7 @@ export default function SupportScreen() {
     "connecting" | "online" | "reconnecting" | "offline"
   >("connecting");
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expandedDiagnosticGroups, setExpandedDiagnosticGroups] = useState<
@@ -84,6 +85,38 @@ export default function SupportScreen() {
   );
   const needsReply = supportNeedsReplyIndicator(tickets);
   const showTopics = !chatMessages.length && !message.trim();
+  const refreshHistory = useCallback(
+    async (options?: { quiet?: boolean }) => {
+      if (!session?.accessToken) return false;
+      const quiet = options?.quiet ?? false;
+      if (quiet) {
+        setIsRefreshing(true);
+      } else {
+        setIsLoading(true);
+      }
+      try {
+        const nextTickets = await supportTickets(session.accessToken);
+        hasResolvedHistoryRef.current = true;
+        setTickets(nextTickets);
+        setIsLoading(false);
+        setIsRefreshing(false);
+        setConnectionStatus("online");
+        setError(null);
+        return true;
+      } catch (requestError: unknown) {
+        setIsLoading(false);
+        setIsRefreshing(false);
+        if (!quiet || !hasResolvedHistoryRef.current) {
+          setError(supportHistoryErrorMessage(requestError));
+        }
+        if (!hasResolvedHistoryRef.current) {
+          setConnectionStatus("reconnecting");
+        }
+        return false;
+      }
+    },
+    [session?.accessToken],
+  );
 
   useEffect(() => {
     if (!session?.accessToken) {
@@ -102,27 +135,19 @@ export default function SupportScreen() {
       if (cancelled) return;
       setIsLoading(false);
       setConnectionStatus("reconnecting");
-      setError(supportNetworkErrorMessage);
+      if (!hasResolvedHistoryRef.current) {
+        setError(supportNetworkErrorMessage);
+      }
     }, 8000);
     const clearConnectWatchdog = () => {
       if (!connectWatchdog) return;
       clearTimeout(connectWatchdog);
       connectWatchdog = null;
     };
-    supportTickets(session.accessToken)
-      .then((nextTickets) => {
-        if (cancelled) return;
-        clearConnectWatchdog();
-        hasResolvedHistoryRef.current = true;
-        setTickets(nextTickets);
-        setIsLoading(false);
-      })
-      .catch((requestError: unknown) => {
-        if (cancelled) return;
-        clearConnectWatchdog();
-        setIsLoading(false);
-        setError(supportHistoryErrorMessage(requestError));
-      });
+    void refreshHistory().finally(() => {
+      if (cancelled) return;
+      clearConnectWatchdog();
+    });
     const socket = connectSupportSocket(session.accessToken, {
       onError(messageText) {
         clearConnectWatchdog();
@@ -133,11 +158,21 @@ export default function SupportScreen() {
           return;
         }
         setError(null);
+        void refreshHistory({ quiet: true });
       },
       onOpen() {
         clearConnectWatchdog();
         setConnectionStatus("online");
         setError(null);
+      },
+      onReconnect() {
+        clearConnectWatchdog();
+        setConnectionStatus("reconnecting");
+        setIsLoading(false);
+        if (hasResolvedHistoryRef.current) {
+          setError(null);
+          void refreshHistory({ quiet: true });
+        }
       },
       onSnapshot(nextTickets) {
         clearConnectWatchdog();
@@ -170,7 +205,17 @@ export default function SupportScreen() {
         socketRef.current = null;
       }
     };
-  }, [session?.accessToken]);
+  }, [refreshHistory, session?.accessToken]);
+
+  useEffect(() => {
+    if (connectionStatus !== "reconnecting" || !session?.accessToken) {
+      return undefined;
+    }
+    const timer = setInterval(() => {
+      void refreshHistory({ quiet: true });
+    }, 15_000);
+    return () => clearInterval(timer);
+  }, [connectionStatus, refreshHistory, session?.accessToken]);
 
   useEffect(() => {
     requestAnimationFrame(() => {
@@ -228,7 +273,7 @@ export default function SupportScreen() {
         upsertSupportTicket(removeMatchingOptimisticTicket(current, ticket), ticket),
       );
       setSubject("");
-      setConnectionStatus("reconnecting");
+      setConnectionStatus("online");
       setError(null);
       playSuccessHaptic();
       requestAnimationFrame(() => inputRef.current?.focus());
@@ -251,7 +296,7 @@ export default function SupportScreen() {
 
   const reconnectHint =
     connectionStatus === "reconnecting"
-      ? "Соединение нестабильно, переподключаемся. Уже отправленные сообщения не потеряются."
+      ? "Live-обновления временно восстанавливаются. Отправка работает, история обновится автоматически."
       : null;
 
   return (
@@ -413,7 +458,32 @@ export default function SupportScreen() {
             </Pressable>
           </View>
           {reconnectHint ? (
-            <Text style={styles.statusHintText}>{reconnectHint}</Text>
+            <View style={styles.statusHintRow}>
+              <Text style={styles.statusHintText}>{reconnectHint}</Text>
+              <Pressable
+                accessibilityLabel="Обновить чат"
+                accessibilityRole="button"
+                disabled={isRefreshing}
+                onPress={() => {
+                  playSelectionHaptic();
+                  void refreshHistory({ quiet: true });
+                }}
+                style={[
+                  styles.refreshButton,
+                  isRefreshing && styles.refreshButtonDisabled,
+                ]}
+              >
+                {isRefreshing ? (
+                  <VexNativeActivityIndicator color={vexColors.accent} size="small" />
+                ) : (
+                  <RefreshCw
+                    color={vexColors.accent}
+                    size={15}
+                    strokeWidth={2.5}
+                  />
+                )}
+              </Pressable>
+            </View>
           ) : null}
           {error ? <Text style={styles.errorText}>{error}</Text> : null}
         </View>
@@ -779,8 +849,26 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     lineHeight: 17,
   },
+  refreshButton: {
+    alignItems: "center",
+    borderColor: "rgba(34,211,238,0.28)",
+    borderRadius: 14,
+    borderWidth: 1,
+    height: 28,
+    justifyContent: "center",
+    width: 28,
+  },
+  refreshButtonDisabled: {
+    opacity: 0.58,
+  },
+  statusHintRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 8,
+  },
   statusHintText: {
     color: vexColors.muted,
+    flex: 1,
     fontSize: 12,
     fontWeight: "700",
     lineHeight: 17,

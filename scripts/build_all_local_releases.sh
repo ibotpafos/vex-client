@@ -52,6 +52,24 @@ require_env() {
   fi
 }
 
+require_private_key() {
+  if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" && -z "${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ]]; then
+    echo "TAURI_SIGNING_PRIVATE_KEY or TAURI_SIGNING_PRIVATE_KEY_PATH is required" >&2
+    exit 2
+  fi
+  if [[ -n "${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" && ! -f "${TAURI_SIGNING_PRIVATE_KEY_PATH}" ]]; then
+    echo "TAURI_SIGNING_PRIVATE_KEY_PATH does not exist: ${TAURI_SIGNING_PRIVATE_KEY_PATH}" >&2
+    exit 2
+  fi
+}
+
+load_private_key_from_path() {
+  if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" && -n "${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ]]; then
+    TAURI_SIGNING_PRIVATE_KEY="$(cat "${TAURI_SIGNING_PRIVATE_KEY_PATH}")"
+    export TAURI_SIGNING_PRIVATE_KEY
+  fi
+}
+
 run_step() {
   echo
   echo "== $* =="
@@ -79,9 +97,10 @@ host_os="$(uname -s)"
 
 if platform_selected macos; then
   if [[ "${host_os}" == "Darwin" ]]; then
-    require_env TAURI_SIGNING_PRIVATE_KEY
+    require_private_key
     require_env TAURI_SIGNING_PRIVATE_KEY_PASSWORD
     require_env TAURI_SIGNING_PUBLIC_KEY
+    load_private_key_from_path
     require_command go
     require_command codesign
     run_step rustup target add aarch64-apple-darwin x86_64-apple-darwin

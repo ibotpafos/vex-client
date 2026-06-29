@@ -5,6 +5,7 @@ import {
   getTauriSensitiveStorageItem,
   isTauriSensitiveStorageKey,
   setTauriSensitiveStorageItem,
+  shouldUseMemoryOnlySensitiveWebStorage,
   type TauriInvoke,
   type WebStorageAdapter,
 } from './secureStoreCore';
@@ -89,7 +90,7 @@ const webStorageAdapter: WebStorageAdapter = {
 const webSensitiveMemoryStorage = new Map<string, string>();
 
 function shouldUseMemoryOnlyWebStorage(key: string): boolean {
-  return Platform.OS === 'web' && SENSITIVE_STORAGE_KEYS.includes(key);
+  return shouldUseMemoryOnlySensitiveWebStorage(Platform.OS, isTauriRuntime(), key, SENSITIVE_STORAGE_KEYS);
 }
 
 export async function getItemAsync(key: string): Promise<string | null> {

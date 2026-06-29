@@ -406,7 +406,6 @@ mod platform_vpn {
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process::Command;
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::thread;
     use std::time::Duration;
 
@@ -414,13 +413,11 @@ mod platform_vpn {
     const HELPER_DIR: &str = "/Library/Application Support/VEX VPN/helper";
     const HELPER_PLIST: &str = "/Library/LaunchDaemons/app.vex.vpn.helper.plist";
     const HELPER_VERSION_FILE: &str = "/Library/Application Support/VEX VPN/helper/version";
-    const HELPER_VERSION: &str = "17";
+    const HELPER_VERSION: &str = "21";
     const LAUNCHD_LABEL: &str = "app.vex.vpn.helper";
     const HELPER_SOCKET: &str = "/var/run/vex-helper.sock";
-
-    /// In-memory cache: once we verified the helper is installed in this
-    /// process lifetime, we never call osascript again (unless it crashes).
-    static HELPER_CONFIRMED: AtomicBool = AtomicBool::new(false);
+    const HELPER_START_TIMEOUT: Duration = Duration::from_secs(2);
+    const HELPER_START_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
     fn get_resource_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         use tauri::Manager;
@@ -456,21 +453,33 @@ mod platform_vpn {
         value.replace('\\', "\\\\").replace('"', "\\\"")
     }
 
-    // ── Check if the LaunchDaemon is currently running ─────────────────────
-
-    fn daemon_is_running() -> bool {
-        // We use `launchctl print system/<label>` because the system daemon is loaded
-        // in the system domain. `launchctl list` run as a normal user only searches
-        // the user domain, which would fail to find the privileged system helper.
-        Command::new("launchctl")
-            .args(["print", &format!("system/{}", LAUNCHD_LABEL)])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    }
-
     fn installed_helper_version() -> String {
         fs::read_to_string(HELPER_VERSION_FILE).unwrap_or_default()
+    }
+
+    fn helper_plist_is_current() -> bool {
+        let plist = match fs::read_to_string(HELPER_PLIST) {
+            Ok(plist) => plist,
+            Err(_) => return false,
+        };
+
+        plist.contains("<key>RunAtLoad</key>")
+            && plist.contains("<false/>")
+            && plist.contains("<key>KeepAlive</key>")
+            && !plist.contains("<true/>")
+    }
+
+    fn helper_binary_is_signature_valid() -> bool {
+        Command::new("/usr/bin/codesign")
+            .args([
+                "--verify",
+                "--strict",
+                "--verbose=2",
+                &format!("{HELPER_DIR}/vex-helper"),
+            ])
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
     }
 
     fn helper_files_are_current() -> bool {
@@ -478,11 +487,30 @@ mod platform_vpn {
             && Path::new(HELPER_DIR).join("vex-helper").exists()
             && Path::new(HELPER_DIR).join("amneziawg-go").exists()
             && Path::new(HELPER_DIR).join("awg").exists()
+            && helper_plist_is_current()
+            && helper_binary_is_signature_valid()
             && installed_helper_version().trim() == HELPER_VERSION
     }
 
+    fn helper_socket_is_connectable() -> bool {
+        use std::os::unix::net::UnixStream;
+
+        UnixStream::connect(HELPER_SOCKET).is_ok()
+    }
+
     fn helper_is_ready() -> bool {
-        Path::new(HELPER_SOCKET).exists() || daemon_is_running()
+        helper_socket_is_connectable()
+    }
+
+    fn wait_for_helper_ready(timeout: Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        while std::time::Instant::now() < deadline {
+            if helper_is_ready() {
+                return true;
+            }
+            thread::sleep(HELPER_START_POLL_INTERVAL);
+        }
+        helper_is_ready()
     }
 
     // ── Install helper (requires password — called once ever) ─────────────
@@ -512,8 +540,6 @@ mod platform_vpn {
             .map_err(|e| e.to_string())?;
 
         if output.status.success() {
-            // Mark confirmed for this process lifetime
-            HELPER_CONFIRMED.store(true, Ordering::Relaxed);
             return Ok(());
         }
 
@@ -536,46 +562,36 @@ mod platform_vpn {
     // ── Smart install check — never asks on ordinary reboot/startup drift ─
 
     fn ensure_helper_installed(app: &tauri::AppHandle) -> Result<(), String> {
-        // Fast path: already confirmed in this session
-        if HELPER_CONFIRMED.load(Ordering::Relaxed) {
-            return Ok(());
-        }
-
-        // Primary: daemon is running + version matches → nothing to do
-        if helper_is_ready() {
-            if installed_helper_version().trim() == HELPER_VERSION {
-                HELPER_CONFIRMED.store(true, Ordering::Relaxed);
+        if helper_files_are_current() {
+            if helper_is_ready() {
                 return Ok(());
             }
-            // Daemon running but old version → need upgrade (will ask once)
-        }
 
-        // Secondary: all files present + version matches → try to start without password.
-        // If launchd still refuses, do not fall back to an admin prompt: after a normal
-        // reboot the LaunchDaemon should recover by itself, while repeated reinstall
-        // prompts train users to enter admin credentials too often.
-        if helper_files_are_current() {
-            // Files are correct, daemon just isn't loaded — bootstrap without password
             let _ = Command::new("launchctl")
                 .args(["bootstrap", "system", HELPER_PLIST])
                 .output();
             let _ = Command::new("launchctl")
                 .args(["kickstart", "-k", &format!("system/{}", LAUNCHD_LABEL)])
                 .output();
-            thread::sleep(Duration::from_millis(500));
-            if daemon_is_running() {
-                HELPER_CONFIRMED.store(true, Ordering::Relaxed);
+            if wait_for_helper_ready(HELPER_START_TIMEOUT) {
                 return Ok(());
             }
 
             return Err(
-                "VPN helper установлен, но launchd не запустил его. Перезагрузите Mac или переустановите VEX один раз вручную."
+                "VPN helper установлен, но не поднялся после launchctl kickstart. Перезапустите VEX или переустановите helper один раз вручную."
                     .into(),
             );
         }
 
-        // Only reach here on first-ever install or version mismatch — ask once
-        install_helper(app)
+        install_helper(app)?;
+        if wait_for_helper_ready(HELPER_START_TIMEOUT) {
+            return Ok(());
+        }
+
+        Err(
+            "VPN helper установился, но сокет не поднялся. Перезапустите VEX и повторите попытку."
+                .into(),
+        )
     }
 
     // ── Send command to helper over Unix Domain Socket ──────────────────────
@@ -643,13 +659,25 @@ mod platform_vpn {
     /// Used inside connect() to tear down a previous session without
     /// triggering an extra password prompt.
     fn silent_down(keep_antileak: bool) {
-        if Path::new(HELPER_SOCKET).exists() {
+        if helper_is_ready() {
             let _ = send_uds_command(if keep_antileak {
                 "down-keep-antileak"
             } else {
                 "down"
             });
         }
+    }
+
+    fn shutdown_helper_session(release_antileak: bool) {
+        if !helper_is_ready() {
+            return;
+        }
+
+        let _ = send_uds_command(if release_antileak {
+            "shutdown"
+        } else {
+            "shutdown-keep-antileak"
+        });
     }
 
     // ── Tunnel state helpers ───────────────────────────────────────────────
@@ -758,21 +786,15 @@ mod platform_vpn {
     }
 
     pub fn disconnect(app: &tauri::AppHandle, release_antileak: bool) -> Result<(), String> {
+        let _ = app;
         if config_path().exists() {
-            let _ = run_helper_action(
-                app,
-                if release_antileak {
-                    "down"
-                } else {
-                    "down-keep-antileak"
-                },
-            );
+            shutdown_helper_session(release_antileak);
         }
         Ok(())
     }
 
     pub fn status() -> Result<crate::VpnStatus, String> {
-        if !Path::new(HELPER_SOCKET).exists() {
+        if !helper_is_ready() {
             return Ok(crate::disconnected_vpn_status());
         }
 
@@ -783,7 +805,7 @@ mod platform_vpn {
     }
 
     pub fn diagnostics() -> Vec<serde_json::Value> {
-        if !Path::new(HELPER_SOCKET).exists() {
+        if !helper_is_ready() {
             return Vec::new();
         }
         send_uds_command("diagnostics")
@@ -1545,7 +1567,11 @@ fn validate_sensitive_storage_key(key: &str) -> Result<String, String> {
     if trimmed.is_empty() || trimmed.len() > 128 {
         return Err("invalid sensitive storage key".to_string());
     }
-    if !trimmed.starts_with("vex.auth.") && !trimmed.starts_with("vex.vpn.") {
+    if !trimmed.starts_with("vex.auth.")
+        && !trimmed.starts_with("vex.billing.")
+        && !trimmed.starts_with("vex.entitlement.")
+        && !trimmed.starts_with("vex.vpn.")
+    {
         return Err("sensitive storage key is not allowed".to_string());
     }
     if !trimmed
@@ -2506,7 +2532,7 @@ fn parse_latency_number(value: &str) -> Option<f64> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .register_asynchronous_uri_scheme_protocol("tauri", |ctx, request, responder| {
             let resolver = ctx.app_handle().asset_resolver();
             let path = tauri_asset_path(request.uri());
@@ -2586,9 +2612,7 @@ pub fn run() {
                         "disconnect" => disconnect_from_tray(app),
                         "startup" => toggle_startup_from_tray(app),
                         "refresh" => refresh_tray_status(app),
-                        "quit" => {
-                            app.exit(0);
-                        }
+                        "quit" => app.exit(0),
                         _ => {}
                     })
                     .on_tray_icon_event(|tray, event| {
@@ -2648,8 +2672,16 @@ pub fn run() {
             authenticate_with_desktop_biometrics,
             restart_app
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app_handle, event| {
+        if let tauri::RunEvent::ExitRequested { code, .. } = event {
+            if code != Some(tauri::RESTART_EXIT_CODE) {
+                let _ = platform_vpn::disconnect(app_handle, true);
+            }
+        }
+    });
 }
 
 fn resolve_dns_in_config(config: &str) -> String {
@@ -2709,6 +2741,14 @@ mod tests {
         assert_eq!(
             validate_sensitive_storage_key("vex.vpn.hot_profiles.v1").as_deref(),
             Ok("vex.vpn.hot_profiles.v1")
+        );
+        assert_eq!(
+            validate_sensitive_storage_key("vex.billing.summary.v1").as_deref(),
+            Ok("vex.billing.summary.v1")
+        );
+        assert_eq!(
+            validate_sensitive_storage_key("vex.entitlement.v1").as_deref(),
+            Ok("vex.entitlement.v1")
         );
         assert!(validate_sensitive_storage_key("vex.settings.language.v1").is_err());
         assert!(validate_sensitive_storage_key("session.v1").is_err());

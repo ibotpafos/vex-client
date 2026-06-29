@@ -88,7 +88,9 @@ export default function AccountScreen() {
             </View>
           </View>
 
-          <SubscriptionContent embedded entitlementFallback={activeProfile?.entitlement ?? null} />
+          <View style={styles.subscriptionSection}>
+            <SubscriptionContent embedded entitlementFallback={activeProfile?.entitlement ?? null} />
+          </View>
         </ScrollView>
       )}
     </VexScreen>
@@ -102,6 +104,11 @@ const styles = StyleSheet.create({
   content: {
     gap: 10,
     paddingBottom: 30,
+  },
+  subscriptionSection: {
+    alignSelf: 'stretch',
+    minHeight: 320,
+    width: '100%',
   },
   centerState: {
     alignItems: 'center',

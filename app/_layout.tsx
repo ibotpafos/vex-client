@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider, focusManager } from '@tanstack/react-query';
 import { Stack, type ErrorBoundaryProps } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
 import { AppState, Image, Platform, Pressable, StyleSheet, Text, View, type AppStateStatus } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -110,21 +111,24 @@ function RootNavigator() {
   }
 
   return (
-    <View style={styles.root}>
-      <Stack>
-        <Stack.Screen name="index" options={{ headerShown: false }} />
-        <Stack.Screen name="auth/callback" options={{ headerShown: false }} />
-        <Stack.Protected guard={Boolean(session)}>
-          <Stack.Screen name="(app)" options={{ headerShown: false }} />
-          <Stack.Screen name="billing/return" options={{ headerShown: false }} />
-        </Stack.Protected>
-        <Stack.Protected guard={!session}>
-          <Stack.Screen name="sign-in" options={{ headerShown: false }} />
-        </Stack.Protected>
-      </Stack>
-      <DeferredStartupOverlays />
-      <RenderProfilerOverlay />
-    </View>
+    <>
+      <StatusBar style="light" />
+      <View style={styles.root}>
+        <Stack>
+          <Stack.Screen name="index" options={{ headerShown: false }} />
+          <Stack.Screen name="auth/callback" options={{ headerShown: false }} />
+          <Stack.Protected guard={Boolean(session)}>
+            <Stack.Screen name="(app)" options={{ headerShown: false }} />
+            <Stack.Screen name="billing/return" options={{ headerShown: false }} />
+          </Stack.Protected>
+          <Stack.Protected guard={!session}>
+            <Stack.Screen name="sign-in" options={{ headerShown: false }} />
+          </Stack.Protected>
+        </Stack>
+        <DeferredStartupOverlays />
+        <RenderProfilerOverlay />
+      </View>
+    </>
   );
 }
 

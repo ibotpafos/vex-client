@@ -25,7 +25,7 @@ host_rust_target() {
 
 source_hash() {
   {
-    printf '%s\n' "build-helper-v3"
+    printf '%s\n' "build-helper-v4"
     printf '%s\n' "ENABLE_UPX=${ENABLE_UPX}"
     printf '%s\n' "HELPER_TARGET=${HELPER_TARGET}"
     find src -type f \( -name '*.rs' -o -name 'Cargo.toml' -o -name 'Cargo.lock' \) -print 2>/dev/null
@@ -67,6 +67,7 @@ sign_macos_binary() {
     return 0
   fi
   codesign --force --sign - "${binary}" >/dev/null
+  codesign --verify --strict --verbose=2 "${binary}" >/dev/null
 }
 
 helper_is_current() {
@@ -98,6 +99,7 @@ if [[ "${OS}" == "Darwin" && "${HELPER_TARGET}" == "host" ]]; then
   cargo build --release --features macos-helper --bin vex-helper --target "${rust_target}"
   ensure_helper_bundle_alias "${rust_target}"
   cp "target/${rust_target}/release/vex-helper" resources/vex-helper
+  sign_macos_binary resources/vex-helper
   write_stamp
 
   echo "== Проверка архитектуры vex-helper =="
@@ -134,6 +136,7 @@ elif [[ "${OS}" == "Darwin" ]]; then
     target/aarch64-apple-darwin/release/vex-helper \
     target/x86_64-apple-darwin/release/vex-helper \
     -output resources/vex-helper
+  sign_macos_binary resources/vex-helper
     
   mkdir -p target/universal-apple-darwin/release
   cp resources/vex-helper target/universal-apple-darwin/release/vex-helper

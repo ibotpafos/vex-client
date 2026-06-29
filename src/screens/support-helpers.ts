@@ -42,7 +42,7 @@ export function supportConnectionStatusText(
 ) {
   if (status === "online") return "в сети";
   if (status === "offline") return "нужен вход";
-  if (status === "reconnecting") return "переподключаемся...";
+  if (status === "reconnecting") return "обновляем чат...";
   return "подключаемся...";
 }
 

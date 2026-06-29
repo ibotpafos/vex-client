@@ -313,6 +313,7 @@ function DesktopUpdateCenterContent() {
     : null;
   const isUpdaterError = update.status === 'error';
   const hasReadyUpdate = update.status === 'ready';
+  const canDownloadManually = isUpdaterError && Boolean(update.manualDownloadUrl);
   const title = hasReadyUpdate
     ? 'Обновление готово'
     : update.status === 'downloading'
@@ -327,7 +328,7 @@ function DesktopUpdateCenterContent() {
       : isUpdaterError
         ? 'Не удалось проверить или скачать desktop update.'
         : 'Desktop-клиент совместим с текущим каналом обновлений.';
-  const primaryLabel = hasReadyUpdate ? 'Перезапустить' : isUpdaterError ? 'Недоступно' : 'Актуально';
+  const primaryLabel = hasReadyUpdate ? 'Перезапустить' : canDownloadManually ? 'Скачать DMG' : isUpdaterError ? 'Недоступно' : 'Актуально';
 
   return (
     <ScrollView contentContainerStyle={styles.content}>
@@ -337,7 +338,7 @@ function DesktopUpdateCenterContent() {
         <InfoRow label="Доступная версия" value={update.latestVersion || 'Нет новой версии'} />
         <InfoRow label="Канал" value={update.releaseChannel || 'stable'} />
         <InfoRow label="Совместимость" tone={update.required ? 'danger' : 'ok'} value={update.required ? 'Требуется обновление' : 'Совместимо'} />
-        <InfoRow label="Подпись" tone="ok" value="Проверяется Tauri updater" />
+        <InfoRow label="Подпись" tone={isUpdaterError ? 'warning' : 'ok'} value={isUpdaterError ? 'Нужна ручная установка' : 'Проверяется Tauri updater'} />
         {progress !== null && update.status === 'downloading' ? <InfoRow label="Загрузка" value={`${progress}%`} /> : null}
       </View>
       {update.releaseNotes ? <Text style={styles.notes}>{update.releaseNotes}</Text> : null}
@@ -347,7 +348,17 @@ function DesktopUpdateCenterContent() {
           <RefreshCw color="#A7B9BD" size={18} strokeWidth={2.5} />
           <Text style={styles.secondaryText}>{update.status === 'checking' ? 'Проверяем' : 'Проверить'}</Text>
         </Pressable>
-        <Pressable disabled={!hasReadyUpdate} onPress={() => { void update.relaunchToUpdate(); }} style={[styles.primaryButton, !hasReadyUpdate && styles.primaryButtonDisabled]}>
+        <Pressable
+          disabled={!hasReadyUpdate && !canDownloadManually}
+          onPress={() => {
+            if (hasReadyUpdate) {
+              void update.relaunchToUpdate();
+              return;
+            }
+            void update.openManualDownload();
+          }}
+          style={[styles.primaryButton, !hasReadyUpdate && !canDownloadManually && styles.primaryButtonDisabled]}
+        >
           <Text style={styles.primaryText}>{primaryLabel}</Text>
         </Pressable>
       </View>
@@ -411,12 +422,12 @@ function isAndroidSigningKeyMigration(update: AppUpdateCheckResult | null): bool
 
 const styles = StyleSheet.create({
   headerButtonHighlighted: {
-    backgroundColor: '#22D3EE',
-    borderColor: '#22D3EE',
+    backgroundColor: 'transparent',
+    borderColor: 'transparent',
   },
   headerButtonDanger: {
-    backgroundColor: 'rgba(255,122,122,0.14)',
-    borderColor: 'rgba(255,122,122,0.44)',
+    backgroundColor: 'transparent',
+    borderColor: 'transparent',
   },
   headerBadge: {
     backgroundColor: '#031012',

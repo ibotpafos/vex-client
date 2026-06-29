@@ -1,14 +1,14 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "VEX",
-  "version": "0.1.31",
+  "version": "0.1.33",
   "identifier": "app.vex.vpn.desktop",
   "plugins": {
     "updater": {
       "endpoints": [
         "https://vexguard.app/v1/desktop/updater/{{target}}/{{arch}}/{{current_version}}"
       ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDI4MUQyMUZFQkU1OTVBMDgKUldRSVdsbSsvaUVkS0FwWWRoTDJUelJ3a3FKRnVFazErblhod0VMOHVLZlMyZkVIVklmZVpMcEgK"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDYzNUI0RDUwQzRDRTRBRTMKUldUalNzN0VVRTFiWTVMR1VvSWQrbEJnQzZJTHJQcDU1YVBuaENvb3BoRFVNT1cxeGJxV29ubHUK"
     },
     "deep-link": {
       "desktop": {

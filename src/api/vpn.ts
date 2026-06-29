@@ -4,6 +4,7 @@ import { generateWireGuardKeyPair, replaceWireGuardKeyPair, getOrCreateWireGuard
 import { nativeVpnDeviceForClient } from '@/vpn/nativeDeviceSelection';
 import { defaultVpnRoutingMode, defaultVpnRoutingPolicyVersion, resolvedVpnBypassRegion } from '@/vpn/routingPolicy';
 import { jsonRequest, rawRequest, clientVersionHeaders, isTauriRuntime } from './client';
+import { buildCreateDeviceRequest } from './deviceCreateRequest';
 import {
   type VpnDevice,
   type VpnLocation,
@@ -43,7 +44,7 @@ async function preparedTunnelFromDeviceConfig(accessToken: string, client: VpnCl
 
   if (!device) {
     try {
-      device = await createDevice(accessToken, client, locationId);
+      device = await createDevice(accessToken, client, locationId, baseExternalDeviceId);
     } catch (error) {
       const fallback = allDevices.find((d) => d.status === 'active' && d.protocol === mobileProtocol);
       if (fallback) {
@@ -60,7 +61,12 @@ async function preparedTunnelFromDeviceConfig(accessToken: string, client: VpnCl
     accessToken,
     headers: versionHeaders,
   });
-  const config = await rawRequest(`/v1/devices/${encodeURIComponent(device.id)}/config?format=conf&token=${encodeURIComponent(token.token)}`, {
+  const configQuery = new URLSearchParams({
+    format: 'conf',
+    token: token.token,
+    location: locationId,
+  });
+  const config = await rawRequest(`/v1/devices/${encodeURIComponent(device.id)}/config?${configQuery.toString()}`, {
     accessToken,
     headers: versionHeaders,
   });
@@ -260,17 +266,15 @@ async function syncManagedVpnKey(accessToken: string, deviceId: string, keyPair:
   return parseDevice(response.device);
 }
 
-async function createDevice(accessToken: string, client: VpnClientDescriptor, locationId?: string): Promise<VpnDevice> {
+async function createDevice(accessToken: string, client: VpnClientDescriptor, locationId: string | undefined, externalDeviceId: string): Promise<VpnDevice> {
   const location = normalizeLocationId(locationId);
+  const appInfo = await getAppInfo();
+  const request = buildCreateDeviceRequest(client, location, externalDeviceId, appInfo);
   const response = await jsonRequest<{ device: ServerDevice }>('/v1/devices', {
     method: 'POST',
     accessToken,
-    idempotencyKey: `${client.idempotencyPrefix}-${location}-device-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    body: {
-      name: nativeDeviceName(client),
-      location,
-      protocol: mobileProtocol,
-    },
+    idempotencyKey: request.idempotencyKey,
+    body: request.body,
   });
   return parseDevice(response.device);
 }

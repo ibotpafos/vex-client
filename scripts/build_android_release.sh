@@ -81,7 +81,10 @@ export VEX_RUNTIME_VERSION="${VEX_RUNTIME_VERSION:-$(node -p "require('./app.jso
 export VEX_EAS_PROJECT_ID="${VEX_EAS_PROJECT_ID:-$(node -p "require('./app.json').expo.extra.eas.projectId")}"
 export ORG_GRADLE_PROJECT_reactNativeArchitectures="${ORG_GRADLE_PROJECT_reactNativeArchitectures:-${release_abis}}"
 export VEX_ANDROID_FAST_ABI="${VEX_ANDROID_FAST_ABI:-${release_abis}}"
-read -r -a gradle_extra_args <<<"${ANDROID_GRADLE_ARGS:-}"
+gradle_extra_args=()
+if [[ -n "${ANDROID_GRADLE_ARGS:-}" ]]; then
+  read -r -a gradle_extra_args <<<"${ANDROID_GRADLE_ARGS}"
+fi
 
 case "$variant" in
   release)
@@ -105,11 +108,17 @@ echo "variant: ${variant}"
 echo "abis: ${ORG_GRADLE_PROJECT_reactNativeArchitectures}"
 
 cd "${root_dir}/android"
-./gradlew "${gradle_task}" \
-  -PreactNativeArchitectures="${ORG_GRADLE_PROJECT_reactNativeArchitectures}" \
-  -PVEX_ANDROID_FAST_ABI="${VEX_ANDROID_FAST_ABI}" \
-  "${gradle_extra_args[@]}" \
-  "$@"
+gradle_command=(
+  ./gradlew
+  "${gradle_task}"
+  -PreactNativeArchitectures="${ORG_GRADLE_PROJECT_reactNativeArchitectures}"
+  -PVEX_ANDROID_FAST_ABI="${VEX_ANDROID_FAST_ABI}"
+)
+if [[ ${#gradle_extra_args[@]} -gt 0 ]]; then
+  gradle_command+=("${gradle_extra_args[@]}")
+fi
+gradle_command+=("$@")
+"${gradle_command[@]}"
 
 cd "${root_dir}"
 

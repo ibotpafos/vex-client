@@ -7,7 +7,21 @@ export type WebStorageAdapter = {
 };
 
 export function isTauriSensitiveStorageKey(key: string): boolean {
-  return key.startsWith('vex.auth.') || key.startsWith('vex.vpn.');
+  return (
+    key.startsWith('vex.auth.')
+    || key.startsWith('vex.billing.')
+    || key.startsWith('vex.entitlement.')
+    || key.startsWith('vex.vpn.')
+  );
+}
+
+export function shouldUseMemoryOnlySensitiveWebStorage(
+  platformOS: string,
+  isTauri: boolean,
+  key: string,
+  sensitiveKeys: readonly string[],
+): boolean {
+  return platformOS === 'web' && !isTauri && sensitiveKeys.includes(key);
 }
 
 export async function getTauriSensitiveStorageItem(

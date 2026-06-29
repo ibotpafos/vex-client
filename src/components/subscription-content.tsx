@@ -188,83 +188,152 @@ export function SubscriptionContent({ embedded = false, entitlementFallback = nu
         ) : null}
       </View>
 
-      <ScrollView
-        alwaysBounceVertical={false}
-        contentContainerStyle={[styles.content, embedded && styles.embeddedContent]}
-        scrollEnabled={!embedded}
-        showsVerticalScrollIndicator={false}
-      >
-        {isSubscriptionActive ? (
-          <View style={styles.subscriptionPanel}>
-            <View style={styles.subscriptionStatusRow}>
-              <View style={styles.subscriptionStatusIcon}>
-                <CalendarClock color="#22D3EE" size={19} strokeWidth={2.6} />
-              </View>
-              <View style={styles.subscriptionStatusCopy}>
-                <Text style={styles.subscriptionLabel}>{isCanceled ? 'Доступ сохранен до' : 'Активна до'}</Text>
-                <Text numberOfLines={2} style={styles.subscriptionValue}>{statusCopy.primary}</Text>
-                <Text numberOfLines={2} style={styles.subscriptionHint}>{statusCopy.secondary}</Text>
-              </View>
-            </View>
-            <View style={styles.subscriptionActions}>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityState={{ disabled: actionBusy || !currentPlan }}
-                disabled={actionBusy || !currentPlan}
-                onPress={() => {
-                  if (!currentPlan) {
-                    playWarningHaptic();
-                    return;
-                  }
-                  checkoutMutation.mutate(currentPlan);
-                }}
-                style={[styles.subscriptionActionButton, styles.renewButton, (actionBusy || !currentPlan) && styles.disabledAction]}
-              >
-                <RefreshCw color="#031012" size={17} strokeWidth={2.8} />
-                <Text numberOfLines={1} adjustsFontSizeToFit style={styles.renewButtonText}>Продлить</Text>
-              </Pressable>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityState={{ disabled: actionBusy || isCanceled }}
-                disabled={actionBusy || isCanceled}
-                onPress={() => confirmCancelSubscription(() => cancelMutation.mutate())}
-                style={[styles.subscriptionActionButton, styles.cancelButton, (actionBusy || isCanceled) && styles.disabledAction]}
-              >
-                <Ban color="#FF9E9E" size={17} strokeWidth={2.8} />
-                <Text numberOfLines={1} adjustsFontSizeToFit style={styles.cancelButtonText}>{isCanceled ? 'Отменена' : 'Отменить'}</Text>
-              </Pressable>
-            </View>
-          </View>
-        ) : null}
-
-        <View style={styles.planSectionHeader}>
-          <Text style={styles.sectionTitle}>{summary?.title ?? fallbackCopy.title}</Text>
-          <Text style={styles.sectionSubtitle}>{summary?.subtitle ?? fallbackCopy.subtitle}</Text>
+      {embedded ? (
+        <View style={[styles.content, styles.embeddedContent]}>
+          <SubscriptionBody
+            actionBusy={actionBusy}
+            billingLoading={billingQuery.isLoading && !summary}
+            cancelMutation={cancelMutation}
+            checkoutMutation={checkoutMutation}
+            currentPlan={currentPlan}
+            error={error}
+            fallbackCopy={fallbackCopy}
+            handlePlanPress={handlePlanPress}
+            isCanceled={isCanceled}
+            isSubscriptionActive={isSubscriptionActive}
+            plans={plans}
+            statusCopy={statusCopy}
+            summary={summary}
+          />
         </View>
-
-        {billingQuery.isLoading && !summary ? (
-          <View style={styles.state}>
-          <VexNativeActivityIndicator color="#22D3EE" />
-            <Text style={styles.stateText}>Загружаем тарифы</Text>
-          </View>
-        ) : error ? (
-          <Text selectable style={styles.error}>{error}</Text>
-        ) : plans.length === 0 ? (
-          <Text selectable style={styles.error}>{summary?.emptyMessage ?? 'Активные тарифы сейчас недоступны.'}</Text>
-        ) : (
-          <View style={styles.planList}>
-            {plans.map((plan) => (
-              <PlanOptionRow
-                actionBusy={actionBusy}
-                key={plan.id}
-                onPress={handlePlanPress}
-                plan={plan}
-              />
-            ))}
-          </View>
-        )}
-      </ScrollView>
+      ) : (
+        <ScrollView
+          alwaysBounceVertical={false}
+          contentContainerStyle={styles.content}
+          showsVerticalScrollIndicator={false}
+        >
+          <SubscriptionBody
+            actionBusy={actionBusy}
+            billingLoading={billingQuery.isLoading && !summary}
+            cancelMutation={cancelMutation}
+            checkoutMutation={checkoutMutation}
+            currentPlan={currentPlan}
+            error={error}
+            fallbackCopy={fallbackCopy}
+            handlePlanPress={handlePlanPress}
+            isCanceled={isCanceled}
+            isSubscriptionActive={isSubscriptionActive}
+            plans={plans}
+            statusCopy={statusCopy}
+            summary={summary}
+          />
+        </ScrollView>
+      )}
     </View>
+  );
+}
+
+function SubscriptionBody({
+  actionBusy,
+  billingLoading,
+  cancelMutation,
+  checkoutMutation,
+  currentPlan,
+  error,
+  fallbackCopy,
+  handlePlanPress,
+  isCanceled,
+  isSubscriptionActive,
+  plans,
+  statusCopy,
+  summary,
+}: {
+  actionBusy: boolean;
+  billingLoading: boolean;
+  cancelMutation: ReturnType<typeof useMutation<void, Error, void>>;
+  checkoutMutation: ReturnType<typeof useMutation<void, Error, BillingPlanOption>>;
+  currentPlan: BillingPlanOption | undefined;
+  error: string | null;
+  fallbackCopy: Pick<BillingSummary, 'title' | 'subtitle'>;
+  handlePlanPress: (plan: BillingPlanOption) => void;
+  isCanceled: boolean;
+  isSubscriptionActive: boolean;
+  plans: BillingPlanOption[];
+  statusCopy: ReturnType<typeof subscriptionStatusCopy>;
+  summary: BillingSummary | null | undefined;
+}) {
+  return (
+    <>
+      {isSubscriptionActive ? (
+        <View style={styles.subscriptionPanel}>
+          <View style={styles.subscriptionStatusRow}>
+            <View style={styles.subscriptionStatusIcon}>
+              <CalendarClock color="#22D3EE" size={19} strokeWidth={2.6} />
+            </View>
+            <View style={styles.subscriptionStatusCopy}>
+              <Text style={styles.subscriptionLabel}>{isCanceled ? 'Доступ сохранен до' : 'Активна до'}</Text>
+              <Text numberOfLines={2} style={styles.subscriptionValue}>{statusCopy.primary}</Text>
+              <Text numberOfLines={2} style={styles.subscriptionHint}>{statusCopy.secondary}</Text>
+            </View>
+          </View>
+          <View style={styles.subscriptionActions}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ disabled: actionBusy || !currentPlan }}
+              disabled={actionBusy || !currentPlan}
+              onPress={() => {
+                if (!currentPlan) {
+                  playWarningHaptic();
+                  return;
+                }
+                checkoutMutation.mutate(currentPlan);
+              }}
+              style={[styles.subscriptionActionButton, styles.renewButton, (actionBusy || !currentPlan) && styles.disabledAction]}
+            >
+              <RefreshCw color="#031012" size={17} strokeWidth={2.8} />
+              <Text numberOfLines={1} adjustsFontSizeToFit style={styles.renewButtonText}>Продлить</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ disabled: actionBusy || isCanceled }}
+              disabled={actionBusy || isCanceled}
+              onPress={() => confirmCancelSubscription(() => cancelMutation.mutate())}
+              style={[styles.subscriptionActionButton, styles.cancelButton, (actionBusy || isCanceled) && styles.disabledAction]}
+            >
+              <Ban color="#FF9E9E" size={17} strokeWidth={2.8} />
+              <Text numberOfLines={1} adjustsFontSizeToFit style={styles.cancelButtonText}>{isCanceled ? 'Отменена' : 'Отменить'}</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
+
+      <View style={styles.planSectionHeader}>
+        <Text style={styles.sectionTitle}>{summary?.title ?? fallbackCopy.title}</Text>
+        <Text style={styles.sectionSubtitle}>{summary?.subtitle ?? fallbackCopy.subtitle}</Text>
+      </View>
+
+      {billingLoading ? (
+        <View style={styles.state}>
+          <VexNativeActivityIndicator color="#22D3EE" />
+          <Text style={styles.stateText}>Загружаем тарифы</Text>
+        </View>
+      ) : error ? (
+        <Text selectable style={styles.error}>{error}</Text>
+      ) : plans.length === 0 ? (
+        <Text selectable style={styles.error}>{summary?.emptyMessage ?? 'Активные тарифы сейчас недоступны.'}</Text>
+      ) : (
+        <View style={styles.planList}>
+          {plans.map((plan) => (
+            <PlanOptionRow
+              actionBusy={actionBusy}
+              key={plan.id}
+              onPress={handlePlanPress}
+              plan={plan}
+            />
+          ))}
+        </View>
+      )}
+    </>
   );
 }
 
@@ -371,8 +440,10 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   embeddedScreen: {
+    alignSelf: 'stretch',
     backgroundColor: 'transparent',
-    flex: 0,
+    flexShrink: 0,
+    width: '100%',
   },
   content: {
     gap: 10,
@@ -381,8 +452,11 @@ const styles = StyleSheet.create({
     paddingTop: 8,
   },
   embeddedContent: {
+    alignSelf: 'stretch',
+    minHeight: 260,
     paddingBottom: 0,
     paddingHorizontal: 0,
+    width: '100%',
   },
   header: {
     alignItems: 'center',

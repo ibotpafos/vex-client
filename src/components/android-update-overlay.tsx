@@ -12,6 +12,8 @@ const androidBuild = currentAndroidBuild();
 type DownloadState =
   | { status: 'idle' }
   | { status: 'ready'; build: number }
+  | { status: 'installing'; build: number }
+  | { status: 'installer_opened'; build: number }
   | { status: 'error'; build: number; message: string };
 
 export function AndroidUpdateOverlay() {
@@ -27,6 +29,7 @@ function AndroidUpdateOverlayContent() {
   const update = updateQuery.data ?? null;
   const [downloadState, setDownloadState] = useState<DownloadState>({ status: 'idle' });
   const [dismissedBuild, setDismissedBuild] = useState<number | null>(null);
+  const [installerOpenedBuild, setInstallerOpenedBuild] = useState<number | null>(null);
 
   const preflight = useMemo(() => {
     if (!update?.updateAvailable) {
@@ -40,11 +43,11 @@ function AndroidUpdateOverlayContent() {
   }, [update]);
 
   useEffect(() => {
-    if (!update?.updateAvailable || !preflight.ok) {
+    if (!update?.updateAvailable || !preflight.ok || installerOpenedBuild === update.latestBuild) {
       return;
     }
     setDownloadState({ status: 'ready', build: update.latestBuild });
-  }, [preflight.ok, update?.latestBuild, update?.updateAvailable]);
+  }, [installerOpenedBuild, preflight.ok, update?.latestBuild, update?.updateAvailable]);
 
   useEffect(() => {
     if (updateQuery.error && update?.required) {
@@ -52,7 +55,7 @@ function AndroidUpdateOverlayContent() {
     }
   }, [update?.latestBuild, update?.required, updateQuery.error]);
 
-  const shouldShow = shouldShowUpdateSheet(update, downloadState, dismissedBuild, preflight);
+  const shouldShow = shouldShowUpdateSheet(update, downloadState, dismissedBuild, installerOpenedBuild, preflight);
   const handleDismiss = useCallback(() => {
     if (update?.latestBuild) {
       playSelectionHaptic();
@@ -69,7 +72,11 @@ function AndroidUpdateOverlayContent() {
       if (!update) {
         throw new Error('Данные обновления недоступны.');
       }
+      setDownloadState({ status: 'installing', build: downloadState.build });
       await installManualUpdate(update, 'android');
+      setInstallerOpenedBuild(update.latestBuild);
+      setDismissedBuild(update.latestBuild);
+      setDownloadState({ status: 'installer_opened', build: update.latestBuild });
       playSuccessHaptic();
     } catch (error) {
       playErrorHaptic();
@@ -155,9 +162,13 @@ function shouldShowUpdateSheet(
   update: AppUpdateCheckResult | null,
   downloadState: DownloadState,
   dismissedBuild: number | null,
+  installerOpenedBuild: number | null,
   preflight: { ok: boolean; error?: string },
 ): boolean {
   if (!update?.updateAvailable) {
+    return false;
+  }
+  if (installerOpenedBuild === update.latestBuild) {
     return false;
   }
   if (!update.required && dismissedBuild === update.latestBuild) {

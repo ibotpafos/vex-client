@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { updateCheckChannel } from '@/api/updatePreflight';
 import { appUpdateCheck } from '@/api/vexApi';
 import { getAppInfo, getOrCreateDeviceId } from '@/native/appInfo';
@@ -14,11 +14,13 @@ type DesktopUpdateState = {
   latestBuild: number;
   releaseChannel: string;
   releaseNotes: string | null;
+  manualDownloadUrl: string | null;
   required: boolean;
   downloadedBytes: number;
   contentLength: number;
   error: string | null;
   checkNow(): Promise<void>;
+  openManualDownload(): Promise<void>;
   relaunchToUpdate(): Promise<void>;
 };
 
@@ -37,11 +39,13 @@ const defaultDesktopUpdateState: DesktopUpdateState = {
   latestBuild: 0,
   releaseChannel: 'stable',
   releaseNotes: null,
+  manualDownloadUrl: null,
   required: false,
   downloadedBytes: 0,
   contentLength: 0,
   error: null,
   checkNow: async () => undefined,
+  openManualDownload: async () => undefined,
   relaunchToUpdate: async () => undefined,
 };
 
@@ -106,6 +110,7 @@ function DesktopUpdateProviderContent({ children }: { children: React.ReactNode 
   const [latestBuild, setLatestBuild] = useState(0);
   const [releaseChannel, setReleaseChannel] = useState('stable');
   const [releaseNotes, setReleaseNotes] = useState<string | null>(null);
+  const [manualDownloadUrl, setManualDownloadUrl] = useState<string | null>(null);
   const [required, setRequired] = useState(false);
   const [downloadedBytes, setDownloadedBytes] = useState(0);
   const [contentLength, setContentLength] = useState(0);
@@ -151,6 +156,7 @@ function DesktopUpdateProviderContent({ children }: { children: React.ReactNode 
       setLatestBuild(metadata.latestBuild || 0);
       setReleaseChannel(metadata.channel || updateCheckChannel(appInfo.channel));
       setReleaseNotes(metadata.changelog || null);
+      setManualDownloadUrl(macosDmgDownloadUrl(metadata.latestVersion));
       setRequired(Boolean(metadata.required));
 
       const update = await check();
@@ -255,6 +261,13 @@ function DesktopUpdateProviderContent({ children }: { children: React.ReactNode 
     }
   }, [status]);
 
+  const openManualDownload = useCallback(async () => {
+    if (!manualDownloadUrl) {
+      return;
+    }
+    await Linking.openURL(manualDownloadUrl);
+  }, [manualDownloadUrl]);
+
   const value = useMemo<DesktopUpdateState>(() => ({
     status,
     currentVersion,
@@ -262,13 +275,15 @@ function DesktopUpdateProviderContent({ children }: { children: React.ReactNode 
     latestBuild,
     releaseChannel,
     releaseNotes,
+    manualDownloadUrl,
     required,
     downloadedBytes,
     contentLength,
     error,
     checkNow: checkAndInstall,
+    openManualDownload,
     relaunchToUpdate,
-  }), [checkAndInstall, contentLength, currentVersion, downloadedBytes, error, latestBuild, latestVersion, releaseChannel, releaseNotes, relaunchToUpdate, required, status]);
+  }), [checkAndInstall, contentLength, currentVersion, downloadedBytes, error, latestBuild, latestVersion, manualDownloadUrl, openManualDownload, releaseChannel, releaseNotes, relaunchToUpdate, required, status]);
 
   return (
     <DesktopUpdateContext.Provider value={value}>
@@ -279,6 +294,14 @@ function DesktopUpdateProviderContent({ children }: { children: React.ReactNode 
 
 export function useDesktopUpdate() {
   return useContext(DesktopUpdateContext);
+}
+
+function macosDmgDownloadUrl(version: string | null | undefined): string | null {
+  const normalized = (version || '').trim();
+  if (!normalized) {
+    return null;
+  }
+  return `https://vexguard.app/downloads/Vex-macOS-${normalized}.dmg`;
 }
 
 export function DesktopUpdateOverlay() {

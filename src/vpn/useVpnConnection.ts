@@ -513,7 +513,7 @@ export function useVpnConnection() {
   const accountTierLabel = subscriptionTierLabel(entitlementState);
   const accountSummaryText = subscriptionSummaryText(entitlementState);
   const selectedLocation = availableLocations.find((location) => location.id === selectedLocationId) ?? availableLocations[0];
-  const selectedLatencyText = locationLatencyText(selectedLocation, clientLatencyMs);
+  const selectedLatencyText = locationLatencyText(selectedLocation);
 
   const canCancelConnecting = connectionPhase === 'connecting';
   const powerButtonDisabled = isVpnBusy && !canCancelConnecting;

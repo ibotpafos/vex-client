@@ -14,6 +14,7 @@ import {
   getTauriSensitiveStorageItem,
   isTauriSensitiveStorageKey,
   setTauriSensitiveStorageItem,
+  shouldUseMemoryOnlySensitiveWebStorage,
   type TauriInvoke,
   type WebStorageAdapter,
 } from '../src/native/secureStoreCore';
@@ -38,6 +39,7 @@ import { defaultVpnBypassRegion, defaultVpnRoutingMode, defaultVpnRoutingPolicyV
 import { autoSwitchTargetLocationId, chooseBestVpnLocation } from '../src/vpn/serverSelection';
 import { switchVpnLocation } from '../src/vpn/serverSwitch';
 import { assessVpnAutopilotIssue } from '../src/vpn/vpnAutopilotAssessment';
+import { buildCreateDeviceRequest } from '../src/api/deviceCreateRequest';
 import type { VpnDevice, VpnDeviceUsage, VpnLocation, SupportMessage } from '../src/api/vexApi';
 import type { VpnStatus } from '../src/native/vexVpn';
 import type { VpnProfile } from '../src/vpn/profile';
@@ -285,8 +287,18 @@ function profileWithEndpoint(endpoint: string): VpnProfile {
 async function runAuthStorageWarmStartTests(): Promise<void> {
   assertEqual(isTauriSensitiveStorageKey('vex.auth.session.v1'), true);
   assertEqual(isTauriSensitiveStorageKey('vex.auth.device_id'), true);
+  assertEqual(isTauriSensitiveStorageKey('vex.billing.summary.v1'), true);
+  assertEqual(isTauriSensitiveStorageKey('vex.entitlement.v1'), true);
   assertEqual(isTauriSensitiveStorageKey('vex.vpn.hot_profiles.v1'), true);
   assertEqual(isTauriSensitiveStorageKey('vex.settings.language.v1'), false);
+  assertEqual(
+    shouldUseMemoryOnlySensitiveWebStorage('web', false, 'vex.auth.session.v1', ['vex.auth.session.v1']),
+    true,
+  );
+  assertEqual(
+    shouldUseMemoryOnlySensitiveWebStorage('web', true, 'vex.auth.session.v1', ['vex.auth.session.v1']),
+    false,
+  );
 
   {
     const webStorage = memoryWebStorage({ 'vex.auth.session.v1': '{"accessToken":"legacy"}' });
@@ -526,6 +538,32 @@ function runHotConnectFlowTests(): void {
   });
 }
 
+function runCreateDeviceRequestTests(): void {
+  const request = buildCreateDeviceRequest(
+    { deviceName: 'Mac', idempotencyPrefix: 'macos', platform: 'macos' },
+    ' DE ',
+    ' macos-stable-device ',
+    { platform: 'macos', version: '1.0.48' },
+  );
+  const repeated = buildCreateDeviceRequest(
+    { deviceName: 'Mac', idempotencyPrefix: 'macos', platform: 'macos' },
+    'de',
+    'macos-stable-device',
+    { platform: 'macos', version: '1.0.48' },
+  );
+
+  assertEqual(request.idempotencyKey, 'macos-macos-stable-device-de-device');
+  assertEqual(repeated.idempotencyKey, request.idempotencyKey);
+  assertDeepEqual(request.body, {
+    name: 'Mac',
+    location: 'de',
+    protocol: 'amneziawg',
+    external_device_id: 'macos-stable-device',
+    platform: 'macos',
+    app_version: '1.0.48',
+  });
+}
+
 {
   const attempts = connectionAttemptsForProfile(profileWithEndpoint('de.example.com:51820'));
 
@@ -662,6 +700,7 @@ async function runAsyncTests(): Promise<void> {
   await runSafeStorageTests();
   runHotVpnProfileTests();
   runHotConnectFlowTests();
+  runCreateDeviceRequestTests();
   await runPkceTests();
   await runManualUpdateInstallTests();
   runSupportTests();
@@ -1398,6 +1437,7 @@ function runSupportTests(): void {
     { readyState: 7 as WebSocket['readyState'] },
     { CONNECTING: 7 as typeof WebSocket.CONNECTING },
   ), true);
+  assertEqual(supportConnectionStatusText('reconnecting'), 'обновляем чат...');
   assertEqual(supportConnectionStatusText('offline'), 'нужен вход');
   assertEqual(
     supportHistoryErrorMessage(

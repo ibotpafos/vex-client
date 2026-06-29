@@ -15,19 +15,20 @@ This repository contains VEX client applications for desktop and mobile. It inte
 
 ## Release Model
 
-Local release builds are the primary path when GitHub Actions runner availability is blocked. The local wrapper keeps heavy caches and generated build directories on an external disk, then calls the same per-platform scripts used by release lanes.
+Local release builds are the primary path when GitHub Actions runner availability is blocked. Local build entrypoints keep heavy caches and generated build directories on an external disk, then call the same per-platform scripts used by release lanes.
 
 ```bash
 VEX_LOCAL_RELEASE_CACHE_ROOT=/Volumes/D/Downloads/VEX/local-release-cache/vex-client npm run local:release
 ```
 
-By default, the wrapper uses `/Volumes/D/Downloads/VEX/local-release-cache/vex-client`, moves ignored heavy build directories there, and leaves source files in the checkout. Put signing secrets in ignored local env files such as `.env.tauri-updater.local`, `.env.signing.local`, or `.env.local-release`.
+By default, `local:release`, direct Android/macOS release scripts, Tauri local builds, EAS build commands, and OTA publish commands use `/Volumes/D/Downloads/VEX/local-release-cache/vex-client`. The cache bootstrap moves ignored heavy build directories there, forces Gradle/Cargo/Go/npm/Expo/Metro/tmp caches to that path, and leaves source files in the checkout. Put signing secrets in ignored local env files such as `.env.tauri-updater.local`, `.env.signing.local`, or `.env.local-release`.
 
 Useful controls:
 
 - `LOCAL_RELEASE_PLATFORMS=macos,android` limits the run to selected platforms.
 - `RUN_LOCAL_RELEASE_CHECKS=0` skips `npm ci`, typecheck, and unit tests when rerunning after a clean pass.
 - `VEX_LOCAL_CACHE_MOVE_EXISTING=0 npm run local:release-cache` only reports existing local build directories instead of moving them.
+- `VEX_LOCAL_RELEASE_CACHE_STRICT=0` allows pre-existing cache env vars to override the external disk path. The default is strict external-disk caching.
 
 macOS and Android can build on this macOS workstation. Linux needs a Linux host or VM with the Tauri WebKit dependencies from `.github/workflows/linux-release.yml`. Windows needs a Windows host with PowerShell and the MSVC Rust toolchain.
 

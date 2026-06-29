@@ -2,6 +2,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+source "${ROOT_DIR}/scripts/local_release_cache_bootstrap.sh"
+
 AMNEZIA_DIR="${ROOT_DIR}/external/amnezia"
 TAURI_RESOURCES_DIR="${ROOT_DIR}/src-tauri/resources"
 STAMP_DIR="${ROOT_DIR}/src-tauri/.vex-stamps"

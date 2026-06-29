@@ -2,6 +2,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+source "${ROOT_DIR}/scripts/local_release_cache_bootstrap.sh"
+
 MOBILE_DIR="${ROOT_DIR}"
 LOCK_DIR="${ROOT_DIR}/src-tauri/target/.vex-local-build.lock"
 LOCK_PID_FILE="${LOCK_DIR}/pid"

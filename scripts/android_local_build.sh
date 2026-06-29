@@ -3,6 +3,8 @@ set -euo pipefail
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+source "${root_dir}/scripts/local_release_cache_bootstrap.sh"
+
 "${root_dir}/scripts/bootstrap_amneziawg_android.sh"
 
 export AMNEZIAWG_TUNNEL_DIR="${AMNEZIAWG_TUNNEL_DIR:-"${root_dir}/external/amnezia/amneziawg-android/tunnel"}"

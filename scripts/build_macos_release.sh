@@ -2,6 +2,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+source "${ROOT}/scripts/local_release_cache_bootstrap.sh"
+
 ARTIFACTS_DIR="${MACOS_ARTIFACTS_DIR:-dist/macos}"
 TAURI_CONFIG="${ROOT}/src-tauri/tauri.conf.json"
 TARGET="${MACOS_TARGET:-universal-apple-darwin}"

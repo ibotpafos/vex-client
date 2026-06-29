@@ -2,6 +2,9 @@
 set -euo pipefail
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+source "${root_dir}/scripts/local_release_cache_bootstrap.sh"
+
 artifacts_dir="${ANDROID_ARTIFACTS_DIR:-dist/android}"
 release_abis="${ANDROID_RELEASE_ABIS:-arm64-v8a}"
 variant="${ANDROID_RELEASE_VARIANT:-release}"

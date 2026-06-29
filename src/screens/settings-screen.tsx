@@ -21,21 +21,15 @@ import {
 import { useDesktopUpdate } from "@/components/desktop-update-overlay";
 import { playSelectionHaptic, playLightImpactHaptic } from "@/native/haptics";
 import { HOME_TAB_ROUTE } from "@/navigation/routes";
-import { SettingsSnackbar, type SettingsSnackbarRef } from "@/ui/settings-snackbar";
 import { useToast, type ToastOptions } from "@/ui/toast";
 import { vexColors, VexScreen, vexSharedStyles, VexPressable } from "@/ui/vex-ui";
 import { useVpnConnectionContext } from "@/vpn/vpn-connection-context";
 import { useVexSettings, languages, type LanguageCode } from "./useVexSettings";
 
 export default function SettingsScreen() {
-  const snackbarRef = React.useRef<SettingsSnackbarRef>(null);
   const [isSavingSmartRouting, setIsSavingSmartRouting] = React.useState(false);
   const { showToast: showGlobalToast } = useToast();
   const showSettingsToast = React.useCallback((options: ToastOptions) => {
-    if (Platform.OS === "android" && snackbarRef.current) {
-      snackbarRef.current.showToast(options);
-      return;
-    }
     showGlobalToast(options);
   }, [showGlobalToast]);
 
@@ -403,7 +397,6 @@ export default function SettingsScreen() {
           </VexPressable>
         </View>
       </ScrollView>
-      <SettingsSnackbar ref={snackbarRef} />
     </VexScreen>
   );
 }

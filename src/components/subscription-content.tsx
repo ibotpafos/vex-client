@@ -9,13 +9,14 @@ import { billingSummaryFallbackCopy, buildBillingSummary, type BillingSummary } 
 import { loadCachedBillingSummary, saveCachedBillingSummary } from '@/api/billingSummaryCache';
 import { useSession } from '@/auth/session-context';
 import { playErrorHaptic, playLightImpactHaptic, playSelectionHaptic, playSuccessHaptic, playWarningHaptic } from '@/native/haptics';
+import { HOME_TAB_ROUTE } from '@/navigation/routes';
 import { VexNativeActivityIndicator } from '@/ui/native-activity-indicator';
 import { vexColors, vexSharedStyles } from '@/ui/vex-ui';
 
 const billingReturnScheme = 'vexguard:///billing/return';
 const billingReturnUrl = process.env.EXPO_PUBLIC_VEX_BILLING_RETURN_URL || `${vexApiBaseUrl}/v1/billing/mobile-return?status=success`;
 const billingFailedUrl = process.env.EXPO_PUBLIC_VEX_BILLING_FAILED_URL || `${vexApiBaseUrl}/v1/billing/mobile-return?status=failed`;
-const HOME_ROUTE = '/(app)/(tabs)/index';
+const HOME_ROUTE = HOME_TAB_ROUTE;
 
 WebBrowser.maybeCompleteAuthSession();
 

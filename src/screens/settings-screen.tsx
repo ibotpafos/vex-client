@@ -20,6 +20,7 @@ import {
 } from "react-native";
 import { useDesktopUpdate } from "@/components/desktop-update-overlay";
 import { playSelectionHaptic, playLightImpactHaptic } from "@/native/haptics";
+import { HOME_TAB_ROUTE } from "@/navigation/routes";
 import { SettingsSnackbar, type SettingsSnackbarRef } from "@/ui/settings-snackbar";
 import { useToast, type ToastOptions } from "@/ui/toast";
 import { vexColors, VexScreen, vexSharedStyles, VexPressable } from "@/ui/vex-ui";
@@ -94,7 +95,7 @@ export default function SettingsScreen() {
               router.back();
               return;
             }
-            router.replace("/(app)/(tabs)/index");
+            router.replace(HOME_TAB_ROUTE);
           }}
           style={vexSharedStyles.iconButton}
           hoverStyle={{ opacity: 0.72 }}

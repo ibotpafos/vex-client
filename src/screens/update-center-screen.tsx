@@ -3,8 +3,9 @@ import { StatusBar } from 'expo-status-bar';
 import { Platform } from 'react-native';
 
 import { MobileUpdateCenterRouteContent } from '@/components/update-center';
+import { HOME_TAB_ROUTE } from '@/navigation/routes';
 
-const HOME_ROUTE = '/(app)/(tabs)/index';
+const HOME_ROUTE = HOME_TAB_ROUTE;
 
 function closeUpdateCenterRoute() {
   if (router.canGoBack()) {

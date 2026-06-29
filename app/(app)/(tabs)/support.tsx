@@ -1,5 +1,3 @@
-import { Redirect } from 'expo-router';
+import SupportScreen from '@/screens/support-screen';
 
-export default function SupportTabProxy() {
-  return <Redirect href="/(app)/(tabs)/index" />;
-}
+export default SupportScreen;

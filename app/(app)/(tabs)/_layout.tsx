@@ -1,4 +1,3 @@
-import { router } from 'expo-router';
 import { NativeTabs } from 'expo-router/unstable-native-tabs';
 
 export default function AppTabsLayout() {
@@ -10,14 +9,6 @@ export default function AppTabsLayout() {
       iconColor={{ default: 'rgba(167,185,189,0.8)', selected: '#031012' }}
       indicatorColor="#22D3EE"
       labelVisibilityMode="labeled"
-      screenListeners={({ route }) => ({
-        tabPress: () => {
-          if (route.name !== 'support') {
-            return;
-          }
-          router.push('/(app)/support-chat');
-        },
-      })}
       labelStyle={{
         default: {
           color: 'rgba(167,185,189,0.8)',

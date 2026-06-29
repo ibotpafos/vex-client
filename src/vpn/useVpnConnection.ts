@@ -58,6 +58,12 @@ import {
   type VpnRoutingMode,
 } from '@/vpn/routingPolicy';
 import {
+  HOME_TAB_ROUTE,
+  SERVER_PICKER_ROUTE,
+  SUBSCRIPTION_ROUTE,
+  UPDATE_CENTER_ROUTE,
+} from '@/navigation/routes';
+import {
   autoSwitchTargetLocationId,
   type ServerSelectionMode,
 } from '@/vpn/serverSelection';
@@ -118,7 +124,7 @@ import {
 } from '../screens/home-screen-helpers';
 
 type VpnStatusCore = Omit<VpnStatus, 'rxBytes' | 'txBytes'>;
-const HOME_ROUTE = '/(app)/(tabs)/index';
+const HOME_ROUTE = HOME_TAB_ROUTE;
 
 function closeRouteOverlay() {
   if (router.canGoBack()) {
@@ -235,7 +241,7 @@ export function useVpnConnection() {
   }, [setVpnStatus]);
 
   const handleSubscriptionRequired = useCallback(() => {
-    router.push('/(app)/subscription');
+    router.push(SUBSCRIPTION_ROUTE);
   }, []);
 
   const handleProfileRefreshFailedRef = useRef<(event: { error: unknown; locationId: string; reason: string }) => void>(() => {});
@@ -1006,7 +1012,7 @@ export function useVpnConnection() {
     }
     playSelectionHaptic();
     setVpnError(null);
-    router.push('/(app)/subscription');
+    router.push(SUBSCRIPTION_ROUTE);
   }, [session]);
 
   const closeSubscriptionModal = useCallback(() => {
@@ -1200,7 +1206,7 @@ export function useVpnConnection() {
 
   const openServerPicker = useCallback(() => {
     playSelectionHaptic();
-    router.push('/(app)/server-picker');
+    router.push(SERVER_PICKER_ROUTE);
   }, []);
 
   const closeServerPicker = useCallback(() => {
@@ -1210,7 +1216,7 @@ export function useVpnConnection() {
 
   const openUpdateCenter = useCallback(() => {
     if (Platform.OS === 'android' || Platform.OS === 'ios') {
-      router.push('/(app)/update-center');
+      router.push(UPDATE_CENTER_ROUTE);
       return;
     }
     setIsUpdateCenterVisible(true);

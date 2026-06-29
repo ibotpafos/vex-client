@@ -40,6 +40,7 @@ import { autoSwitchTargetLocationId, chooseBestVpnLocation } from '../src/vpn/se
 import { switchVpnLocation } from '../src/vpn/serverSwitch';
 import { assessVpnAutopilotIssue } from '../src/vpn/vpnAutopilotAssessment';
 import { buildCreateDeviceRequest } from '../src/api/deviceCreateRequest';
+import { HOME_TAB_ROUTE, SUPPORT_TAB_ROUTE } from '../src/navigation/routes';
 import type { VpnDevice, VpnDeviceUsage, VpnLocation, SupportMessage } from '../src/api/vexApi';
 import type { VpnStatus } from '../src/native/vexVpn';
 import type { VpnProfile } from '../src/vpn/profile';
@@ -727,6 +728,7 @@ async function runAsyncTests(): Promise<void> {
   runCreateDeviceRequestTests();
   await runPkceTests();
   await runManualUpdateInstallTests();
+  runNavigationRouteTests();
   runSupportTests();
   runErrorMessageTests();
   await runServerSwitchTests();
@@ -1486,6 +1488,13 @@ function runSupportTests(): void {
   const chatItemsList = supportChatItems([diagMsg1, diagMsg2]);
   assertEqual(chatItemsList.length, 1);
   assertEqual(chatItemsList[0].type, 'diagnosticGroup');
+}
+
+function runNavigationRouteTests(): void {
+  assertEqual(HOME_TAB_ROUTE, '/(app)/(tabs)/');
+  assertEqual(SUPPORT_TAB_ROUTE, '/(app)/(tabs)/support');
+  assertEqual(HOME_TAB_ROUTE.includes('/index'), false);
+  assertEqual(SUPPORT_TAB_ROUTE.includes('support-chat'), false);
 }
 
 function runErrorMessageTests(): void {

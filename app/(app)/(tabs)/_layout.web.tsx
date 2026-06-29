@@ -2,6 +2,7 @@ import { Slot, usePathname, useRouter } from 'expo-router';
 import React, { useMemo } from 'react';
 import { StyleSheet, Text, View, Platform } from 'react-native';
 import { Home, MessageSquareText, User } from 'lucide-react-native';
+import { ACCOUNT_TAB_ROUTE, HOME_TAB_ROUTE, SUPPORT_TAB_ROUTE } from '@/navigation/routes';
 import { VexPressable } from '@/ui/vex-ui';
 
 export default function WebTabsLayout() {
@@ -21,12 +22,11 @@ export default function WebTabsLayout() {
 
   const handlePress = (tabName: string) => {
     if (tabName === 'support') {
-      // Support opens as a modal stack screen
-      router.push('/(app)/support-chat');
+      router.push(SUPPORT_TAB_ROUTE);
     } else if (tabName === 'account') {
-      router.push('/(app)/(tabs)/account');
+      router.push(ACCOUNT_TAB_ROUTE);
     } else {
-      router.push('/(app)/(tabs)/');
+      router.push(HOME_TAB_ROUTE);
     }
   };
 

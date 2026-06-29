@@ -30,7 +30,11 @@ openssl req \
   -key "${CERT_DIR}/private-key.pem" \
   -out "${CERT_DIR}/certificate.pem" \
   -days "${VALID_DAYS}" \
-  -subj "/CN=${COMMON_NAME}"
+  -subj "/CN=${COMMON_NAME}" \
+  -addext "basicConstraints=critical,CA:FALSE" \
+  -addext "keyUsage=critical,digitalSignature" \
+  -addext "extendedKeyUsage=critical,codeSigning" \
+  -addext "subjectKeyIdentifier=hash"
 
 echo "Generated Expo Open OTA keys in ${CERT_DIR}"
 echo "Commit only ${CERT_DIR}/certificate.pem. Keep private-key.pem and public-key.pem in deployment secrets."

@@ -8,6 +8,7 @@ import { useMobileAppUpdateQuery } from '@/components/mobile-app-update-query';
 import { playErrorHaptic, playLightImpactHaptic, playSelectionHaptic, playSuccessHaptic } from '@/native/haptics';
 
 const androidBuild = currentAndroidBuild();
+const androidSigningMigrationLandingUrl = 'https://vexguard.app/download';
 
 type DownloadState =
   | { status: 'idle' }
@@ -58,7 +59,7 @@ function AndroidUpdateOverlayContent() {
 
   const shouldShow = shouldShowUpdateSheet(update, downloadState, dismissedBuild, installerOpenedBuild, preflight);
   const signingMigration = isAndroidSigningKeyMigration(update);
-  const canOpenManualDownload = signingMigration && Boolean(update?.downloadUrl);
+  const canOpenManualDownload = signingMigration;
   const handleDismiss = useCallback(() => {
     if (update?.latestBuild) {
       playSelectionHaptic();
@@ -67,12 +68,12 @@ function AndroidUpdateOverlayContent() {
   }, [update?.latestBuild]);
 
   const handleOpenManualDownload = useCallback(async () => {
-    if (!update?.downloadUrl) {
+    if (!update) {
       return;
     }
     try {
       playLightImpactHaptic();
-      await Linking.openURL(update.downloadUrl);
+      await Linking.openURL(androidSigningMigrationLandingUrl);
       setDismissedBuild(update.latestBuild);
     } catch (error) {
       playErrorHaptic();
@@ -82,7 +83,7 @@ function AndroidUpdateOverlayContent() {
         message: error instanceof Error ? error.message : 'Не удалось открыть страницу загрузки.',
       });
     }
-  }, [update?.downloadUrl, update?.latestBuild]);
+  }, [update]);
 
   const handleInstall = useCallback(async () => {
     if (downloadState.status !== 'ready' && downloadState.status !== 'permission_required') {
@@ -126,7 +127,7 @@ function AndroidUpdateOverlayContent() {
   const isError = downloadState.status === 'error';
   const needsInstallPermission = downloadState.status === 'permission_required';
   const canRetry = isError && preflight.ok;
-  const canUsePrimary = isReady || canRetry || needsInstallPermission || (!preflight.ok && canOpenManualDownload);
+  const canUsePrimary = canOpenManualDownload || isReady || canRetry || needsInstallPermission;
   const primaryDisabled = !canUsePrimary;
   const title = update.currentBuildBlocked
     ? 'Сборка отозвана'
@@ -181,19 +182,19 @@ function AndroidUpdateOverlayContent() {
             </Pressable>
             <Pressable
               disabled={primaryDisabled}
-              onPress={isReady || needsInstallPermission ? handleInstall : !preflight.ok && canOpenManualDownload ? handleOpenManualDownload : handleRetryDownload}
+              onPress={canOpenManualDownload ? handleOpenManualDownload : isReady || needsInstallPermission ? handleInstall : handleRetryDownload}
               style={[styles.primaryButton, primaryDisabled && styles.primaryButtonDisabled]}
             >
               <Text style={styles.primaryText}>
                 {isReady
                   ? signingMigration
-                    ? 'Установить новую'
+                    ? 'Скачать с сайта'
                     : update.currentBuildBlocked
                       ? 'Вернуться на стабильную'
                       : 'Установить'
                   : needsInstallPermission
                     ? 'Продолжить установку'
-                    : !preflight.ok && canOpenManualDownload
+                    : canOpenManualDownload
                       ? 'Скачать с сайта'
                       : canRetry
                         ? 'Повторить'

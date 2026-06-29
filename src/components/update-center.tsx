@@ -13,7 +13,6 @@ import { isTauriRuntime } from '@/native/tauriPlatform';
 import { VexNativeActivityIndicator } from '@/ui/native-activity-indicator';
 import { vexSharedStyles } from '@/ui/vex-ui';
 
-const androidSigningMigrationDownloadUrl = 'https://vexguard.app/downloads/android/latest';
 const androidSigningMigrationLandingUrl = 'https://vexguard.app/download';
 
 type UpdateCenterButtonProps = {
@@ -53,7 +52,7 @@ function MobileUpdateNoticeBannerContent({ onOpen, platform }: { onOpen: () => v
   const handlePress = () => {
     playSelectionHaptic();
     if (migration && platform === 'android') {
-      void openAndroidSigningMigrationDownload(update).catch(() => {
+      void openAndroidSigningMigrationDownload().catch(() => {
         onOpen();
       });
       return;
@@ -258,7 +257,7 @@ function MobileUpdateCenterContent({
     update,
   }), [appInfo?.version, buildNumber, update]);
   const signingMigration = platform === 'android' && isAndroidSigningKeyMigration(update);
-  const manualDownloadUrl = signingMigration ? androidSigningMigrationDownloadUrl : update?.downloadUrl || '';
+  const manualDownloadUrl = signingMigration ? androidSigningMigrationLandingUrl : update?.downloadUrl || '';
   const canOpenManualDownload = signingMigration && Boolean(manualDownloadUrl);
   const canStartInstall = platform === 'ios'
     ? Boolean(update?.updateAvailable && update.downloadUrl)
@@ -270,7 +269,7 @@ function MobileUpdateCenterContent({
     if (signingMigration) {
       try {
         playLightImpactHaptic();
-        await openAndroidSigningMigrationDownload(update);
+        await openAndroidSigningMigrationDownload();
         playSuccessHaptic();
       } catch (error) {
         playErrorHaptic();
@@ -458,15 +457,12 @@ function isAndroidSigningKeyMigration(update: AppUpdateCheckResult | null): bool
   );
 }
 
-async function openAndroidSigningMigrationDownload(update: AppUpdateCheckResult | null): Promise<void> {
-  const directUrl = update?.downloadUrl?.trim() || androidSigningMigrationDownloadUrl;
+async function openAndroidSigningMigrationDownload(): Promise<void> {
+  const directUrl = androidSigningMigrationLandingUrl;
   try {
     await Linking.openURL(directUrl);
   } catch (error) {
-    if (directUrl === androidSigningMigrationLandingUrl) {
-      throw error;
-    }
-    await Linking.openURL(androidSigningMigrationLandingUrl);
+    throw error;
   }
 }
 

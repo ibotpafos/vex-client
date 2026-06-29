@@ -413,7 +413,7 @@ mod platform_vpn {
     const HELPER_DIR: &str = "/Library/Application Support/VEX VPN/helper";
     const HELPER_PLIST: &str = "/Library/LaunchDaemons/app.vex.vpn.helper.plist";
     const HELPER_VERSION_FILE: &str = "/Library/Application Support/VEX VPN/helper/version";
-    const HELPER_VERSION: &str = "21";
+    const HELPER_VERSION: &str = "22";
     const LAUNCHD_LABEL: &str = "app.vex.vpn.helper";
     const HELPER_SOCKET: &str = "/var/run/vex-helper.sock";
     const HELPER_START_TIMEOUT: Duration = Duration::from_secs(2);
@@ -775,12 +775,14 @@ mod platform_vpn {
         } else {
             "up-no-antileak"
         };
-        if let Err(error) = run_helper_action(app, up_action) {
+        let owner_pid = std::process::id();
+        let up_command = format!("{up_action} owner_pid={owner_pid}");
+        if let Err(error) = run_helper_action(app, &up_command) {
             if !retryable_connect_error(&error) {
                 return Err(error);
             }
             silent_down(anti_leak_enabled);
-            run_helper_action(app, up_action)?;
+            run_helper_action(app, &up_command)?;
         }
         Ok(())
     }

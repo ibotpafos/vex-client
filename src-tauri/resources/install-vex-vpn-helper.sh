@@ -36,7 +36,7 @@ cp "$src_dir/awg" "$helper_dir/awg"
 cp "$src_dir/amneziawg-go" "$helper_dir/amneziawg-go"
 cp "$src_dir/vex-helper" "$helper_dir/vex-helper"
 printf '%s\n' "$config_path" > "$helper_dir/config-path"
-printf '21\n' > "$helper_dir/version"
+printf '22\n' > "$helper_dir/version"
 
 chmod 755 "$helper_dir/awg" "$helper_dir/amneziawg-go" "$helper_dir/vex-helper"
 chmod 644 "$helper_dir/config-path" "$helper_dir/version"

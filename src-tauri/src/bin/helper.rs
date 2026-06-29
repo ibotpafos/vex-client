@@ -1,4 +1,4 @@
-/// vex-helper v21 — Privileged VPN daemon for VEX VPN (macOS)
+/// vex-helper v22 — Privileged VPN daemon for VEX VPN (macOS)
 ///
 /// Architecture follows official AmneziaVPN macOS client:
 /// - amneziawg-go runs in foreground (-f utun), writes iface name to file
@@ -21,7 +21,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Output, Stdio},
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use thiserror::Error;
@@ -62,10 +62,12 @@ const ANTILEAK_ANCHOR_FILE: &str = "/etc/pf.anchors/com.vexguard.antileak";
 const PF_CONF: &str = "/etc/pf.conf";
 const ANTILEAK_STATE_FILE: &str = "/Library/Application Support/VEX VPN/helper/antileak.active";
 const OPERATION_LOCK_FILE: &str = "/Library/Application Support/VEX VPN/helper/operation.lock";
+const OWNER_SESSION_FILE: &str = "/Library/Application Support/VEX VPN/helper/owner-session";
 const HELPER_SOCKET: &str = "/var/run/vex-helper.sock";
 const IFACE_WAIT_TIMEOUT: Duration = Duration::from_secs(8);
 const UAPI_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const OPERATION_LOCK_STALE_AFTER: Duration = Duration::from_secs(60);
+const OWNER_WATCHDOG_INTERVAL: Duration = Duration::from_secs(2);
 
 // ─── Structured logging (file + stderr) ──────────────────────────────────────
 
@@ -1168,9 +1170,98 @@ fn action_down(log: &Logger, release_antileak: bool) -> Result<()> {
     // 6. Clean persisted state
     let _ = fs::remove_file(format!("{}/utun.name", HELPER_DIR));
     let _ = fs::remove_file(format!("{}/endpoint.txt", HELPER_DIR));
+    let _ = fs::remove_file(OWNER_SESSION_FILE);
 
     log.info("down", "=== done ===");
     Ok(())
+}
+
+fn parse_owner_pid(parts: &[&str]) -> Option<u32> {
+    parts.iter().find_map(|part| {
+        let value = part
+            .strip_prefix("owner_pid=")
+            .or_else(|| part.strip_prefix("owner-pid="))?;
+        value.parse::<u32>().ok().filter(|pid| *pid > 1)
+    })
+}
+
+fn new_owner_session_token(owner_pid: u32) -> String {
+    let timestamp_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    format!("{}-{}", owner_pid, timestamp_ms)
+}
+
+fn write_owner_session(owner_pid: u32, token: &str, log: &Logger) {
+    let payload = format!("pid={}\ntoken={}\n", owner_pid, token);
+    if let Err(error) = fs::write(OWNER_SESSION_FILE, payload) {
+        log.warn(
+            "watchdog",
+            &format!("failed to write owner session: {}", error),
+        );
+    }
+}
+
+fn owner_session_matches(owner_pid: u32, token: &str) -> bool {
+    let Ok(payload) = fs::read_to_string(OWNER_SESSION_FILE) else {
+        return false;
+    };
+    let mut stored_pid = None;
+    let mut stored_token = None;
+    for line in payload.lines() {
+        if let Some(value) = line.strip_prefix("pid=") {
+            stored_pid = value.parse::<u32>().ok();
+        } else if let Some(value) = line.strip_prefix("token=") {
+            stored_token = Some(value.trim().to_string());
+        }
+    }
+    stored_pid == Some(owner_pid) && stored_token.as_deref() == Some(token)
+}
+
+fn process_is_alive(pid: u32) -> bool {
+    Command::new("/bin/kill")
+        .args(["-0", &pid.to_string()])
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+fn arm_owner_watchdog(owner_pid: Option<u32>, log: &Logger) {
+    let Some(owner_pid) = owner_pid else {
+        let _ = fs::remove_file(OWNER_SESSION_FILE);
+        return;
+    };
+    let token = new_owner_session_token(owner_pid);
+    write_owner_session(owner_pid, &token, log);
+
+    thread::spawn(move || {
+        let log = Logger::new();
+        loop {
+            thread::sleep(OWNER_WATCHDOG_INTERVAL);
+            if !owner_session_matches(owner_pid, &token) {
+                return;
+            }
+            if process_is_alive(owner_pid) {
+                continue;
+            }
+
+            log.warn(
+                "watchdog",
+                &format!("owner pid {} exited; releasing VEX tunnel", owner_pid),
+            );
+            match acquire_operation_lock(&log) {
+                Ok(_guard) => {
+                    let _ = action_down(&log, true);
+                }
+                Err(error) => {
+                    log.warn("watchdog", &format!("cleanup lock unavailable: {}", error));
+                }
+            }
+            let _ = fs::remove_file(OWNER_SESSION_FILE);
+            return;
+        }
+    });
 }
 
 fn action_repair(log: &Logger) -> Result<()> {
@@ -1398,20 +1489,29 @@ fn handle_client(stream: &mut UnixStream, log: &Logger) -> Result<()> {
     if command.is_empty() {
         return Ok(());
     }
+    let command_parts = command.split_whitespace().collect::<Vec<_>>();
+    let command_name = command_parts.first().copied().unwrap_or("");
+    let owner_pid = parse_owner_pid(&command_parts[1..]);
 
     log.info("socket", &format!("command: {}", command));
 
-    let (response, should_exit) = match command.as_str() {
+    let (response, should_exit) = match command_name {
         "up" => match acquire_operation_lock(log) {
             Ok(_guard) => match action_up(log, true) {
-                Ok(_) => ("ok\n".to_string(), false),
+                Ok(_) => {
+                    arm_owner_watchdog(owner_pid, log);
+                    ("ok\n".to_string(), false)
+                }
                 Err(e) => (format!("error: {}\n", e), false),
             },
             Err(e) => (format!("error: {}\n", e), false),
         },
         "up-no-antileak" => match acquire_operation_lock(log) {
             Ok(_guard) => match action_up(log, false) {
-                Ok(_) => ("ok\n".to_string(), false),
+                Ok(_) => {
+                    arm_owner_watchdog(owner_pid, log);
+                    ("ok\n".to_string(), false)
+                }
                 Err(e) => (format!("error: {}\n", e), false),
             },
             Err(e) => (format!("error: {}\n", e), false),
@@ -1497,7 +1597,7 @@ fn main() {
 
     log.info(
         "main",
-        &format!("vex-helper v21 started on {}", HELPER_SOCKET),
+        &format!("vex-helper v22 started on {}", HELPER_SOCKET),
     );
 
     for stream in listener.incoming() {
@@ -1555,7 +1655,7 @@ fn secure_command_socket(socket_path: &str, log: &Logger) {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_antileak_rules, WgConfig};
+    use super::{build_antileak_rules, parse_owner_pid, WgConfig};
     use std::{fs, path::PathBuf};
 
     fn write_temp_config(name: &str, content: &str) -> PathBuf {
@@ -1563,6 +1663,15 @@ mod tests {
             std::env::temp_dir().join(format!("vex-helper-test-{}-{}", std::process::id(), name));
         fs::write(&path, content).expect("write temp config");
         path
+    }
+
+    #[test]
+    fn parses_owner_pid_command_metadata() {
+        assert_eq!(parse_owner_pid(&["owner_pid=12345"]), Some(12345));
+        assert_eq!(parse_owner_pid(&["owner-pid=23456"]), Some(23456));
+        assert_eq!(parse_owner_pid(&["owner_pid=1"]), None);
+        assert_eq!(parse_owner_pid(&["owner_pid=abc"]), None);
+        assert_eq!(parse_owner_pid(&["ignored=true"]), None);
     }
 
     #[test]

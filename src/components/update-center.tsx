@@ -13,6 +13,9 @@ import { isTauriRuntime } from '@/native/tauriPlatform';
 import { VexNativeActivityIndicator } from '@/ui/native-activity-indicator';
 import { vexSharedStyles } from '@/ui/vex-ui';
 
+const androidSigningMigrationDownloadUrl = 'https://vexguard.app/downloads/android/latest';
+const androidSigningMigrationLandingUrl = 'https://vexguard.app/download';
+
 type UpdateCenterButtonProps = {
   visible: boolean;
   onOpen: () => void;
@@ -47,14 +50,22 @@ function MobileUpdateNoticeBannerContent({ onOpen, platform }: { onOpen: () => v
   }
 
   const migration = isAndroidSigningKeyMigration(update);
+  const handlePress = () => {
+    playSelectionHaptic();
+    if (migration && platform === 'android') {
+      void openAndroidSigningMigrationDownload(update).catch(() => {
+        onOpen();
+      });
+      return;
+    }
+    onOpen();
+  };
+
   return (
     <Pressable
-      accessibilityLabel={migration ? 'Открыть миграцию на новую Android-сборку' : 'Открыть обязательное обновление'}
+      accessibilityLabel={migration ? 'Скачать новую Android-сборку' : 'Открыть обязательное обновление'}
       accessibilityRole="button"
-      onPress={() => {
-        playSelectionHaptic();
-        onOpen();
-      }}
+      onPress={handlePress}
       style={[styles.noticeBanner, migration && styles.noticeBannerMigration]}
     >
       <View style={styles.noticeIcon}>
@@ -68,7 +79,7 @@ function MobileUpdateNoticeBannerContent({ onOpen, platform }: { onOpen: () => v
             : 'Откройте центр обновлений и установите актуальную версию.'}
         </Text>
       </View>
-      <Text style={styles.noticeAction}>Открыть</Text>
+      <Text style={styles.noticeAction}>{migration ? 'Скачать' : 'Открыть'}</Text>
     </Pressable>
   );
 }
@@ -247,13 +258,26 @@ function MobileUpdateCenterContent({
     update,
   }), [appInfo?.version, buildNumber, update]);
   const signingMigration = platform === 'android' && isAndroidSigningKeyMigration(update);
-  const canOpenManualDownload = signingMigration && Boolean(update?.downloadUrl);
+  const manualDownloadUrl = signingMigration ? androidSigningMigrationDownloadUrl : update?.downloadUrl || '';
+  const canOpenManualDownload = signingMigration && Boolean(manualDownloadUrl);
   const canStartInstall = platform === 'ios'
     ? Boolean(update?.updateAvailable && update.downloadUrl)
     : assessment.canInstall || canOpenManualDownload;
+  const primaryDisabled = !canStartInstall && assessment.updateAvailable;
 
   const handlePrimaryPress = useCallback(async () => {
     setActionError(null);
+    if (signingMigration) {
+      try {
+        playLightImpactHaptic();
+        await openAndroidSigningMigrationDownload(update);
+        playSuccessHaptic();
+      } catch (error) {
+        playErrorHaptic();
+        setActionError(error instanceof Error ? error.message : 'Не удалось открыть страницу загрузки.');
+      }
+      return;
+    }
     if (!assessment.updateAvailable) {
       playLightImpactHaptic();
       await updateQuery.refetch();
@@ -303,12 +327,14 @@ function MobileUpdateCenterContent({
           <RefreshCw color="#A7B9BD" size={18} strokeWidth={2.5} />
           <Text style={styles.secondaryText}>{updateQuery.isFetching ? 'Проверяем' : 'Проверить'}</Text>
         </Pressable>
-        <Pressable onPress={handlePrimaryPress} style={[styles.primaryButton, !canStartInstall && assessment.updateAvailable && styles.primaryButtonDisabled]}>
+        <Pressable onPress={handlePrimaryPress} style={[styles.primaryButton, primaryDisabled && styles.primaryButtonDisabled]}>
           <Text style={styles.primaryText}>{assessment.actionLabel}</Text>
         </Pressable>
       </View>
       <Text style={styles.footnote}>
-        {platform === 'android'
+        {signingMigration
+          ? 'Android откроет загрузку новой APK-сборки VEX в браузере. После входа в новую сборку удалите старое приложение.'
+          : platform === 'android'
           ? 'Android скачает APK внутри VEX, проверит checksum и подпись приложения, затем откроет системный установщик.'
           : 'iOS откроет официальную страницу обновления.'}
       </Text>
@@ -426,8 +452,22 @@ function isAndroidSigningKeyMigration(update: AppUpdateCheckResult | null): bool
   return (
     update?.reason === 'android_signing_key_migration' ||
     changelog.includes('android-signing-key-migration') ||
-    changelog.includes('новую сборку vex')
+    changelog.includes('новую сборку vex') ||
+    changelog.includes('новую подпись') ||
+    changelog.includes('новой подпись')
   );
+}
+
+async function openAndroidSigningMigrationDownload(update: AppUpdateCheckResult | null): Promise<void> {
+  const directUrl = update?.downloadUrl?.trim() || androidSigningMigrationDownloadUrl;
+  try {
+    await Linking.openURL(directUrl);
+  } catch (error) {
+    if (directUrl === androidSigningMigrationLandingUrl) {
+      throw error;
+    }
+    await Linking.openURL(androidSigningMigrationLandingUrl);
+  }
 }
 
 const styles = StyleSheet.create({

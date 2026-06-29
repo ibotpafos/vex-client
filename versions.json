@@ -6,8 +6,8 @@
     "min_config_schema_version": 1
   },
   "android": {
-    "version": "1.0.48",
-    "build": 50,
+    "version": "1.0.49",
+    "build": 1004951,
     "min_supported_build": 1002930,
     "is_required": true,
     "release_notes": "Android: стабильнее обновление, умный режим маршрутизации, более быстрый старт VPN и доработанный интерфейс.",

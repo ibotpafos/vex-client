@@ -29,7 +29,6 @@ if [[ "${VEX_LOCAL_RELEASE_CACHE_STRICT:-1}" == "1" ]]; then
   export GOMODCACHE="${VEX_LOCAL_RELEASE_CACHE_ROOT}/go-mod"
   export EXPO_HOME="${VEX_LOCAL_RELEASE_CACHE_ROOT}/expo-home"
   export METRO_CACHE_DIR="${VEX_LOCAL_RELEASE_CACHE_ROOT}/metro-cache"
-  export TMPDIR="${VEX_LOCAL_RELEASE_CACHE_ROOT}/tmp/"
 else
   export npm_config_cache="${npm_config_cache:-${VEX_LOCAL_RELEASE_CACHE_ROOT}/npm}"
   export CARGO_HOME="${CARGO_HOME:-${VEX_LOCAL_RELEASE_CACHE_ROOT}/cargo-home}"
@@ -38,7 +37,10 @@ else
   export GOMODCACHE="${GOMODCACHE:-${VEX_LOCAL_RELEASE_CACHE_ROOT}/go-mod}"
   export EXPO_HOME="${EXPO_HOME:-${VEX_LOCAL_RELEASE_CACHE_ROOT}/expo-home}"
   export METRO_CACHE_DIR="${METRO_CACHE_DIR:-${VEX_LOCAL_RELEASE_CACHE_ROOT}/metro-cache}"
-  export TMPDIR="${TMPDIR:-${VEX_LOCAL_RELEASE_CACHE_ROOT}/tmp/}"
+fi
+
+if [[ "${VEX_LOCAL_RELEASE_CACHE_TMPDIR:-0}" == "1" ]]; then
+  export TMPDIR="${VEX_LOCAL_RELEASE_CACHE_ROOT}/tmp/"
 fi
 
 export ANDROID_HOME="${ANDROID_HOME:-${HOME}/Library/Android/sdk}"

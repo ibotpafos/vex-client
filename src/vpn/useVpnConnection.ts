@@ -446,12 +446,12 @@ export function useVpnConnection() {
   }, [cacheUserId, devicesData]);
 
   const handleSignOut = useCallback(async () => {
-    await disconnectVpn({ releaseAntiLeak: true }).catch(() => undefined);
     await signOut();
     clearProfile();
     resetVpnTrafficStats();
     setVpnStatus({ state: 'disconnected', rxBytes: 0, txBytes: 0 });
     setVpnError(null);
+    void disconnectVpn({ releaseAntiLeak: true }).catch(() => undefined);
   }, [signOut, clearProfile, setVpnStatus]);
 
   const diagnostics = useVpnDiagnostics({

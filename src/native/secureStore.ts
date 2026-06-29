@@ -162,9 +162,7 @@ export async function deleteItemAsync(key: string): Promise<void> {
 }
 
 export async function clearSecureKeys(keys: readonly string[]): Promise<void> {
-  for (const key of keys) {
-    await deleteItemAsync(key);
-  }
+  await Promise.all(keys.map((key) => deleteItemAsync(key).catch(() => undefined)));
 
   // На вебе сессия могла сохраниться в localStorage в промежуточных версиях.
   clearWebStorageItems(keys);

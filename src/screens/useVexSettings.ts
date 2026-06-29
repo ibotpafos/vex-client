@@ -134,8 +134,8 @@ export function useVexSettings(showToastOverride?: (options: ToastOptions) => vo
     playLightImpactHaptic();
     setIsSigningOut(true);
     try {
-      await disconnectVpn().catch(() => undefined);
       await signOut();
+      void disconnectVpn({ releaseAntiLeak: true }).catch(() => undefined);
       playSuccessHaptic();
       router.replace('/sign-in');
     } catch {

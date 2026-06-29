@@ -1,7 +1,7 @@
 {
   "desktop": {
-    "version": "0.1.34",
-    "release_notes": "Desktop: VPN-туннель теперь аварийно отключается при закрытии или падении macOS приложения, чтобы не блокировать API и повторный вход.",
+    "version": "0.1.35",
+    "release_notes": "Desktop: меньше фоновых проверок обновлений на macOS, короткий timeout metadata и защита от зависаний WebView при медленном API/VPN.",
     "config_schema_version": 1,
     "min_config_schema_version": 1
   },

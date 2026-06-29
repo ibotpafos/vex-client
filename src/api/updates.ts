@@ -20,12 +20,15 @@ export async function appUpdateCheck(input: {
   arch?: string;
   apiClientVersion?: string;
   configSchemaVersion?: number;
+  timeoutMs?: number;
 }): Promise<AppUpdateCheckResult> {
+  const { timeoutMs, ...requestBody } = input;
   const item = await jsonRequest<ServerAppUpdateCheckResponse>('/v1/app/update/check', {
     method: 'POST',
     suppressErrorLog: true,
+    timeout: timeoutMs,
     body: {
-      ...input,
+      ...requestBody,
       apiClientVersion: input.apiClientVersion ?? VEX_API_CLIENT_VERSION,
       configSchemaVersion: input.configSchemaVersion ?? VEX_CONFIG_SCHEMA_VERSION,
     },

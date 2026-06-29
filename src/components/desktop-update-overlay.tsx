@@ -53,6 +53,10 @@ const DesktopUpdateContext = createContext<DesktopUpdateState>(defaultDesktopUpd
 
 
 const pendingUpdateStorageKey = 'vex.desktop.pending-update.v1';
+const desktopAutoUpdateCheckIntervalMs = 30 * 60 * 1000;
+const desktopAutoUpdateFocusCooldownMs = 5 * 60 * 1000;
+const desktopUpdateMetadataTimeoutMs = 10_000;
+const desktopUpdateAutoRetryAfterErrorMs = 30 * 60 * 1000;
 
 type DesktopUpdaterResult = Awaited<ReturnType<typeof import('@tauri-apps/plugin-updater')['check']>>;
 type AvailableDesktopUpdate = NonNullable<DesktopUpdaterResult>;
@@ -115,12 +119,33 @@ function DesktopUpdateProviderContent({ children }: { children: React.ReactNode 
   const [downloadedBytes, setDownloadedBytes] = useState(0);
   const [contentLength, setContentLength] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const statusRef = useRef<DesktopUpdateStatus>('idle');
   const isRunningRef = useRef(false);
   const isReadyRef = useRef(false);
+  const lastAutoCheckAtRef = useRef(0);
+  const lastErrorAtRef = useRef(0);
 
-  const checkAndInstall = useCallback(async () => {
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
+
+  const checkAndInstall = useCallback(async (mode: 'auto' | 'manual' = 'manual') => {
     if (!isTauriRuntime() || isRunningRef.current || isReadyRef.current) {
       return;
+    }
+    const now = Date.now();
+    if (mode === 'auto') {
+      const currentStatus = statusRef.current;
+      if (currentStatus === 'checking' || currentStatus === 'downloading' || currentStatus === 'ready') {
+        return;
+      }
+      if (lastAutoCheckAtRef.current && now - lastAutoCheckAtRef.current < desktopAutoUpdateFocusCooldownMs) {
+        return;
+      }
+      if (lastErrorAtRef.current && now - lastErrorAtRef.current < desktopUpdateAutoRetryAfterErrorMs) {
+        return;
+      }
+      lastAutoCheckAtRef.current = now;
     }
 
     isRunningRef.current = true;
@@ -150,6 +175,7 @@ function DesktopUpdateProviderContent({ children }: { children: React.ReactNode 
         arch: typeof navigator !== 'undefined' ? navigator.platform : '',
         apiClientVersion: appInfo.apiClientVersion,
         configSchemaVersion: appInfo.configSchemaVersion,
+        timeoutMs: desktopUpdateMetadataTimeoutMs,
       });
 
       setLatestVersion(metadata.latestVersion || '');
@@ -216,6 +242,7 @@ function DesktopUpdateProviderContent({ children }: { children: React.ReactNode 
       });
       setStatus('ready');
     } catch (err) {
+      lastErrorAtRef.current = Date.now();
       setError(err instanceof Error ? err.message : 'Не удалось обновить приложение.');
       setStatus('error');
     } finally {
@@ -228,13 +255,13 @@ function DesktopUpdateProviderContent({ children }: { children: React.ReactNode 
       return undefined;
     }
 
-    void checkAndInstall();
+    void checkAndInstall('auto');
     const timer = window.setInterval(() => {
-      void checkAndInstall();
-    }, 5 * 60 * 1000);
+      void checkAndInstall('auto');
+    }, desktopAutoUpdateCheckIntervalMs);
     const checkWhenVisible = () => {
       if (document.visibilityState === 'visible') {
-        void checkAndInstall();
+        void checkAndInstall('auto');
       }
     };
     window.addEventListener('focus', checkWhenVisible);

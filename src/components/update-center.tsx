@@ -1,7 +1,7 @@
 import * as Application from 'expo-application';
 import { Download, RefreshCw, ShieldAlert, ShieldCheck, X } from 'lucide-react-native';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { installManualUpdate } from '@/api/manualUpdateInstall';
 import { assessManualUpdateCenter } from '@/api/updatePreflight';
 import { vexApiBaseUrl, type AppUpdateCheckResult } from '@/api/vexApi';
@@ -246,9 +246,11 @@ function MobileUpdateCenterContent({
     trustedBaseUrl: vexApiBaseUrl,
     update,
   }), [appInfo?.version, buildNumber, update]);
+  const signingMigration = platform === 'android' && isAndroidSigningKeyMigration(update);
+  const canOpenManualDownload = signingMigration && Boolean(update?.downloadUrl);
   const canStartInstall = platform === 'ios'
     ? Boolean(update?.updateAvailable && update.downloadUrl)
-    : assessment.canInstall;
+    : assessment.canInstall || canOpenManualDownload;
 
   const handlePrimaryPress = useCallback(async () => {
     setActionError(null);
@@ -264,13 +266,18 @@ function MobileUpdateCenterContent({
     }
     try {
       playLightImpactHaptic();
+      if (signingMigration && !assessment.preflight.ok) {
+        await Linking.openURL(update.downloadUrl);
+        playSuccessHaptic();
+        return;
+      }
       await installManualUpdate(update, platform);
       playSuccessHaptic();
     } catch (error) {
       playErrorHaptic();
       setActionError(error instanceof Error ? error.message : 'Не удалось открыть ссылку обновления.');
     }
-  }, [assessment.preflight.error, assessment.updateAvailable, canStartInstall, platform, update, updateQuery]);
+  }, [assessment.preflight.error, assessment.preflight.ok, assessment.updateAvailable, canStartInstall, platform, signingMigration, update, updateQuery]);
 
   return (
     <ScrollView contentContainerStyle={styles.content}>
@@ -287,6 +294,9 @@ function MobileUpdateCenterContent({
       {update?.changelog ? <Text style={styles.notes}>{update.changelog}</Text> : null}
       {updateQuery.error ? <Text style={styles.error}>Не удалось проверить обновления. Проверьте подключение.</Text> : null}
       {!canStartInstall && assessment.updateAvailable ? <Text style={styles.error}>{assessment.preflight.error}</Text> : null}
+      {canOpenManualDownload && !assessment.preflight.ok ? (
+        <Text style={styles.error}>Автоустановка недоступна для этой старой подписи. Скачайте APK с сайта, установите новую сборку и затем удалите старый VEX.</Text>
+      ) : null}
       {actionError ? <Text style={styles.error}>{actionError}</Text> : null}
       <View style={styles.actions}>
         <Pressable disabled={updateQuery.isFetching} onPress={() => { void updateQuery.refetch(); }} style={styles.secondaryButton}>

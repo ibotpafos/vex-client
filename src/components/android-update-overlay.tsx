@@ -1,7 +1,7 @@
 import * as Application from 'expo-application';
 import { Download, ShieldCheck } from 'lucide-react-native';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Linking, Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { installManualUpdate } from '@/api/manualUpdateInstall';
 import { validateManualUpdatePayload, type AppUpdateCheckResult } from '@/api/vexApi';
 import { useMobileAppUpdateQuery } from '@/components/mobile-app-update-query';
@@ -13,6 +13,7 @@ type DownloadState =
   | { status: 'idle' }
   | { status: 'ready'; build: number }
   | { status: 'installing'; build: number }
+  | { status: 'permission_required'; build: number }
   | { status: 'installer_opened'; build: number }
   | { status: 'error'; build: number; message: string };
 
@@ -56,6 +57,8 @@ function AndroidUpdateOverlayContent() {
   }, [update?.latestBuild, update?.required, updateQuery.error]);
 
   const shouldShow = shouldShowUpdateSheet(update, downloadState, dismissedBuild, installerOpenedBuild, preflight);
+  const signingMigration = isAndroidSigningKeyMigration(update);
+  const canOpenManualDownload = signingMigration && Boolean(update?.downloadUrl);
   const handleDismiss = useCallback(() => {
     if (update?.latestBuild) {
       playSelectionHaptic();
@@ -63,8 +66,26 @@ function AndroidUpdateOverlayContent() {
     }
   }, [update?.latestBuild]);
 
+  const handleOpenManualDownload = useCallback(async () => {
+    if (!update?.downloadUrl) {
+      return;
+    }
+    try {
+      playLightImpactHaptic();
+      await Linking.openURL(update.downloadUrl);
+      setDismissedBuild(update.latestBuild);
+    } catch (error) {
+      playErrorHaptic();
+      setDownloadState({
+        status: 'error',
+        build: update.latestBuild,
+        message: error instanceof Error ? error.message : 'Не удалось открыть страницу загрузки.',
+      });
+    }
+  }, [update?.downloadUrl, update?.latestBuild]);
+
   const handleInstall = useCallback(async () => {
-    if (downloadState.status !== 'ready') {
+    if (downloadState.status !== 'ready' && downloadState.status !== 'permission_required') {
       return;
     }
     playLightImpactHaptic();
@@ -73,7 +94,11 @@ function AndroidUpdateOverlayContent() {
         throw new Error('Данные обновления недоступны.');
       }
       setDownloadState({ status: 'installing', build: downloadState.build });
-      await installManualUpdate(update, 'android');
+      const result = await installManualUpdate(update, 'android');
+      if (result.status === 'install_permission_required') {
+        setDownloadState({ status: 'permission_required', build: update.latestBuild });
+        return;
+      }
       setInstallerOpenedBuild(update.latestBuild);
       setDismissedBuild(update.latestBuild);
       setDownloadState({ status: 'installer_opened', build: update.latestBuild });
@@ -99,25 +124,37 @@ function AndroidUpdateOverlayContent() {
 
   const isReady = downloadState.status === 'ready';
   const isError = downloadState.status === 'error';
+  const needsInstallPermission = downloadState.status === 'permission_required';
   const canRetry = isError && preflight.ok;
-  const primaryDisabled = !isReady && !canRetry;
+  const canUsePrimary = isReady || canRetry || needsInstallPermission || (!preflight.ok && canOpenManualDownload);
+  const primaryDisabled = !canUsePrimary;
   const title = update.currentBuildBlocked
     ? 'Сборка отозвана'
-    : isReady
-      ? 'Обновление готово'
-      : update.required
-        ? 'Нужно обновить VEX'
-        : 'Готовим обновление';
+    : signingMigration
+      ? 'Новая Android-сборка VEX'
+      : needsInstallPermission
+        ? 'Разрешите установку APK'
+        : isReady
+          ? 'Обновление готово'
+          : update.required
+            ? 'Нужно обновить VEX'
+            : 'Готовим обновление';
   const text = isReady
-    ? update.currentBuildBlocked
-      ? 'Установите предложенную стабильную версию, чтобы вернуться на поддерживаемую сборку.'
-      : 'VEX скачает APK, проверит checksum и подпись приложения, затем откроет системный установщик.'
-    : isError
-      ? 'Не удалось подготовить обновление. Проверьте подключение и попробуйте позже.'
-      : 'VEX готовит ссылку на новую версию.';
+    ? signingMigration
+      ? 'Это новая сборка с другой подписью. Скачайте APK, установите его как новое приложение, войдите в аккаунт и после проверки доступа удалите старый VEX.'
+      : update.currentBuildBlocked
+        ? 'Установите предложенную стабильную версию, чтобы вернуться на поддерживаемую сборку.'
+        : 'VEX скачает APK, проверит checksum и подпись приложения, затем откроет системный установщик.'
+    : needsInstallPermission
+      ? 'Android открыл настройки установки из этого источника. Включите разрешение для VEX, вернитесь сюда и нажмите продолжить установку.'
+      : isError
+        ? 'Не удалось подготовить обновление. Проверьте подключение и попробуйте позже.'
+        : signingMigration
+          ? 'Откройте сайт VEX, скачайте новую сборку, установите ее и удалите старую после входа в аккаунт.'
+          : 'VEX готовит ссылку на новую версию.';
 
   return (
-    <Modal animationType="slide" onRequestClose={update.required ? undefined : handleDismiss} transparent visible>
+    <Modal animationType="slide" onRequestClose={handleDismiss} transparent visible>
       <View style={styles.backdrop}>
         <View style={styles.sheet}>
           <View style={styles.handle} />
@@ -139,17 +176,29 @@ function AndroidUpdateOverlayContent() {
           {!preflight.ok ? <Text style={styles.error}>{preflight.error}</Text> : null}
           {isError ? <Text style={styles.error}>{downloadState.message}</Text> : null}
           <View style={styles.actions}>
-            {!update.required ? (
-              <Pressable onPress={handleDismiss} style={styles.secondaryButton}>
-                <Text style={styles.secondaryText}>Позже</Text>
-              </Pressable>
-            ) : null}
+            <Pressable onPress={handleDismiss} style={styles.secondaryButton}>
+              <Text style={styles.secondaryText}>{update.required ? 'Закрыть' : 'Позже'}</Text>
+            </Pressable>
             <Pressable
               disabled={primaryDisabled}
-              onPress={isReady ? handleInstall : handleRetryDownload}
+              onPress={isReady || needsInstallPermission ? handleInstall : !preflight.ok && canOpenManualDownload ? handleOpenManualDownload : handleRetryDownload}
               style={[styles.primaryButton, primaryDisabled && styles.primaryButtonDisabled]}
             >
-              <Text style={styles.primaryText}>{isReady ? update.currentBuildBlocked ? 'Вернуться на стабильную' : 'Установить' : canRetry ? 'Повторить' : 'Подождите'}</Text>
+              <Text style={styles.primaryText}>
+                {isReady
+                  ? signingMigration
+                    ? 'Установить новую'
+                    : update.currentBuildBlocked
+                      ? 'Вернуться на стабильную'
+                      : 'Установить'
+                  : needsInstallPermission
+                    ? 'Продолжить установку'
+                    : !preflight.ok && canOpenManualDownload
+                      ? 'Скачать с сайта'
+                      : canRetry
+                        ? 'Повторить'
+                        : 'Подождите'}
+              </Text>
             </Pressable>
           </View>
         </View>
@@ -181,6 +230,17 @@ function shouldShowUpdateSheet(
     return true;
   }
   return downloadState.status === 'ready';
+}
+
+function isAndroidSigningKeyMigration(update: AppUpdateCheckResult | null): boolean {
+  const changelog = update?.changelog?.toLowerCase() || '';
+  return (
+    update?.reason === 'android_signing_key_migration' ||
+    changelog.includes('android-signing-key-migration') ||
+    changelog.includes('новую сборку vex') ||
+    changelog.includes('новую подпись') ||
+    changelog.includes('новой подпись')
+  );
 }
 
 function currentAndroidBuild() {

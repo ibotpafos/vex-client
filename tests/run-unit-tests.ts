@@ -250,6 +250,30 @@ const connectedStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0 
 }
 
 {
+  const trustedBaseUrl = 'https://vexguard.app';
+  const assessment = assessManualUpdateCenter({
+    currentBuild: 1004748,
+    currentVersion: '1.0.47',
+    trustedBaseUrl,
+    update: {
+      updateAvailable: true,
+      required: true,
+      latestVersion: '1.0.48',
+      latestBuild: 1004850,
+      minSupportedBuild: 1004850,
+      downloadUrl: `${trustedBaseUrl}/downloads/Vex-Android-1.0.48.apk`,
+      changelog: 'Android: старая сборка больше не поддерживается из-за перехода на новую подпись.',
+      reason: 'android_signing_key_migration',
+    },
+  });
+
+  assertEqual(assessment.title, 'Новая Android-сборка VEX');
+  assertEqual(assessment.actionLabel, 'Скачать новую сборку');
+  assertEqual(assessment.compatibilityLabel, 'Нужна миграция на новую Android-сборку');
+  assertEqual(assessment.canInstall, false);
+}
+
+{
   const assessment = assessManualUpdateCenter({
     currentBuild: 1004344,
     currentVersion: '1.0.43',

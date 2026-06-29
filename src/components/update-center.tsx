@@ -1,9 +1,10 @@
 import * as Application from 'expo-application';
+import * as Updates from 'expo-updates';
 import { Download, RefreshCw, ShieldAlert, ShieldCheck, X } from 'lucide-react-native';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { installManualUpdate } from '@/api/manualUpdateInstall';
-import { assessManualUpdateCenter } from '@/api/updatePreflight';
+import { assessManualUpdateCenter, requiresNativeUpdate } from '@/api/updatePreflight';
 import { vexApiBaseUrl, type AppUpdateCheckResult } from '@/api/vexApi';
 import { useDesktopUpdate } from '@/components/desktop-update-overlay';
 import { useMobileAppUpdateQuery } from '@/components/mobile-app-update-query';
@@ -257,6 +258,7 @@ function MobileUpdateCenterContent({
     update,
   }), [appInfo?.version, buildNumber, update]);
   const signingMigration = platform === 'android' && isAndroidSigningKeyMigration(update);
+  const nativeUpdateRequired = requiresNativeUpdate(update);
   const manualDownloadUrl = signingMigration ? androidSigningMigrationLandingUrl : update?.downloadUrl || '';
   const canOpenManualDownload = signingMigration && Boolean(manualDownloadUrl);
   const canStartInstall = platform === 'ios'
@@ -309,6 +311,7 @@ function MobileUpdateCenterContent({
         <InfoRow label="Текущая версия" value={`${appInfo?.version || Application.nativeApplicationVersion || 'dev'} (${buildNumber || 0})`} />
         <InfoRow label="Доступная версия" value={update?.updateAvailable ? `${update.latestVersion || 'unknown'} (${update.latestBuild || 0})` : 'Нет новой версии'} />
         <InfoRow label="Канал" value={update?.channel || appInfo?.channel || 'production'} />
+        <InfoRow label="OTA" tone={Updates.isEnabled ? 'ok' : 'warning'} value={Updates.isEnabled ? `Включено${Updates.runtimeVersion ? `, runtime ${Updates.runtimeVersion}` : ''}` : 'Недоступно в этой сборке'} />
         <InfoRow label="Совместимость" tone={assessment.compatibilityTone} value={assessment.compatibilityLabel} />
         <InfoRow label="Подпись" tone={assessment.signatureTone} value={assessment.signatureLabel} />
         {update?.minSupportedBuild ? <InfoRow label="Минимальная сборка" value={String(update.minSupportedBuild)} /> : null}
@@ -333,6 +336,8 @@ function MobileUpdateCenterContent({
       <Text style={styles.footnote}>
         {signingMigration
           ? 'Android откроет загрузку новой APK-сборки VEX в браузере. После входа в новую сборку удалите старое приложение.'
+          : !nativeUpdateRequired && Updates.isEnabled
+          ? 'Быстрые исправления интерфейса, маршрутизации и логики VEX скачиваются через OTA и применяются автоматически без APK/App Store.'
           : platform === 'android'
           ? 'Android скачает APK внутри VEX, проверит checksum и подпись приложения, затем откроет системный установщик.'
           : 'iOS откроет официальную страницу обновления.'}

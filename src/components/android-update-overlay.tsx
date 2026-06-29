@@ -3,6 +3,7 @@ import { Download, ShieldCheck } from 'lucide-react-native';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Linking, Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { installManualUpdate } from '@/api/manualUpdateInstall';
+import { requiresNativeUpdate } from '@/api/updatePreflight';
 import { validateManualUpdatePayload, type AppUpdateCheckResult } from '@/api/vexApi';
 import { useMobileAppUpdateQuery } from '@/components/mobile-app-update-query';
 import { playErrorHaptic, playLightImpactHaptic, playSelectionHaptic, playSuccessHaptic } from '@/native/haptics';
@@ -216,6 +217,9 @@ function shouldShowUpdateSheet(
   preflight: { ok: boolean; error?: string },
 ): boolean {
   if (!update?.updateAvailable) {
+    return false;
+  }
+  if (!requiresNativeUpdate(update)) {
     return false;
   }
   if (installerOpenedBuild === update.latestBuild) {

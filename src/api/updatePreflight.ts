@@ -109,6 +109,22 @@ export function assessManualUpdateCenter(input: ManualUpdateCenterInput): Manual
   };
 }
 
+export function requiresNativeUpdate(update: ManualUpdateCenterInput['update']): boolean {
+  if (!update?.updateAvailable) {
+    return false;
+  }
+  const reason = updateReason(update);
+  return Boolean(
+    update.required ||
+    update.currentBuildBlocked ||
+    reason === 'blocked_release' ||
+    reason === 'android_signing_key_migration' ||
+    reason === 'unsupported_config_schema' ||
+    reason === 'core_version_unsupported' ||
+    reason === 'api_client_version_unsupported',
+  );
+}
+
 function updateCenterTitle(reason: string, required: boolean, currentBuildBlocked: boolean, updateAvailable: boolean): string {
   if (currentBuildBlocked || reason === 'blocked_release') {
     return 'Сборка отозвана';

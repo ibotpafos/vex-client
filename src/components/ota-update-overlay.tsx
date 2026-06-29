@@ -7,6 +7,7 @@ import { VexNativeActivityIndicator } from '@/ui/native-activity-indicator';
 
 const foregroundCheckThrottleMs = 5 * 60_000;
 const startupCheckDelayMs = 5_000;
+const autoReloadDelayMs = 2_500;
 
 type OtaStatus = 'idle' | 'checking' | 'downloading' | 'ready' | 'restarting' | 'error';
 
@@ -29,6 +30,7 @@ function OtaUpdateOverlayContent() {
   const runningRef = useRef(false);
   const lastCheckAtRef = useRef(0);
   const statusRef = useRef<OtaStatus>('idle');
+  const autoReloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const setOtaState = useCallback((nextState: OtaState) => {
     statusRef.current = nextState.status;
@@ -122,6 +124,28 @@ function OtaUpdateOverlayContent() {
     }
   }, [setOtaState]);
 
+  useEffect(() => {
+    if (state.status !== 'ready') {
+      if (autoReloadTimerRef.current) {
+        clearTimeout(autoReloadTimerRef.current);
+        autoReloadTimerRef.current = null;
+      }
+      return;
+    }
+
+    autoReloadTimerRef.current = setTimeout(() => {
+      autoReloadTimerRef.current = null;
+      handleReload().catch(() => undefined);
+    }, autoReloadDelayMs);
+
+    return () => {
+      if (autoReloadTimerRef.current) {
+        clearTimeout(autoReloadTimerRef.current);
+        autoReloadTimerRef.current = null;
+      }
+    };
+  }, [handleReload, state.status]);
+
   if (state.status !== 'ready' && state.status !== 'downloading' && state.status !== 'restarting' && state.status !== 'error') {
     return null;
   }
@@ -141,7 +165,7 @@ function OtaUpdateOverlayContent() {
           <Text style={styles.title}>{isReady ? 'Обновление готово' : isError ? 'Обновление не загрузилось' : 'Загружаем обновление'}</Text>
           <Text style={styles.text}>
             {isReady
-              ? 'Быстрое обновление интерфейса уже скачано. Перезапустите VEX, чтобы применить его.'
+              ? 'Быстрое обновление интерфейса уже скачано. VEX применит его автоматически через пару секунд.'
               : isError
                 ? state.message || 'Проверьте подключение и повторите позже.'
                 : 'Скачиваем исправления без переустановки приложения.'}

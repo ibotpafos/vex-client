@@ -1,7 +1,7 @@
 import { billingSummaryFallbackCopy, buildBillingSummary, type BillingPlanSource } from '../src/api/billingSummary';
 import { installManualUpdate, isTrustedIosUpdateUrl } from '../src/api/manualUpdateInstall';
 import { errorMessage } from '../src/utils/error';
-import { assessManualUpdateCenter, updateCheckChannel, validateManualUpdatePayloadForBaseUrl } from '../src/api/updatePreflight';
+import { assessManualUpdateCenter, requiresNativeUpdate, updateCheckChannel, validateManualUpdatePayloadForBaseUrl } from '../src/api/updatePreflight';
 import { resolveAuthCallbackExchange } from '../src/auth/callbackParams';
 import { sessionLoadFailureDiagnosticsSnapshot } from '../src/auth/sessionDiagnostics';
 import { loadSessionWithRetry, loadWithRetry } from '../src/auth/sessionLoadRetry';
@@ -222,6 +222,17 @@ const connectedStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0 
   assertEqual(assessment.canInstall, true);
   assertEqual(assessment.compatibilityLabel, 'Совместимо, доступна новая версия');
   assertEqual(assessment.signatureLabel, 'Checksum и подпись настроены');
+  assertEqual(requiresNativeUpdate({
+    updateAvailable: true,
+    required: false,
+    latestVersion: '1.0.45',
+    latestBuild: 1004546,
+    minSupportedBuild: 1004300,
+    downloadUrl: `${trustedBaseUrl}/downloads/Vex-Android.apk`,
+    checksumSha256: checksum,
+    signatureUrl: `${trustedBaseUrl}/downloads/Vex-Android.apk.sig`,
+    reason: 'update_available',
+  }), false);
 }
 
 {
@@ -248,6 +259,18 @@ const connectedStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0 
   assertEqual(assessment.title, 'Сборка отозвана');
   assertEqual(assessment.actionLabel, 'Вернуться на стабильную');
   assertEqual(assessment.compatibilityTone, 'danger');
+  assertEqual(requiresNativeUpdate({
+    updateAvailable: true,
+    required: true,
+    currentBuildBlocked: true,
+    latestVersion: '1.0.43',
+    latestBuild: 1004344,
+    minSupportedBuild: 1004300,
+    downloadUrl: `${trustedBaseUrl}/downloads/Vex-Android-1.0.43.apk`,
+    checksumSha256: 'b'.repeat(64),
+    signatureUrl: `${trustedBaseUrl}/downloads/Vex-Android-1.0.43.apk.sig`,
+    reason: 'blocked_release',
+  }), true);
 }
 
 {
@@ -272,6 +295,16 @@ const connectedStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0 
   assertEqual(assessment.actionLabel, 'Скачать новую сборку');
   assertEqual(assessment.compatibilityLabel, 'Нужна миграция на новую Android-сборку');
   assertEqual(assessment.canInstall, false);
+  assertEqual(requiresNativeUpdate({
+    updateAvailable: true,
+    required: true,
+    latestVersion: '1.0.48',
+    latestBuild: 1004850,
+    minSupportedBuild: 1004850,
+    downloadUrl: `${trustedBaseUrl}/downloads/Vex-Android-1.0.48.apk`,
+    changelog: 'Android: старая сборка больше не поддерживается из-за перехода на новую подпись.',
+    reason: 'android_signing_key_migration',
+  }), true);
 }
 
 {

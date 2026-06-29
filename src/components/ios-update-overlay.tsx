@@ -3,6 +3,7 @@ import { Shield } from 'lucide-react-native';
 import React, { useCallback, useEffect, useState } from 'react';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { installManualUpdate } from '@/api/manualUpdateInstall';
+import { requiresNativeUpdate } from '@/api/updatePreflight';
 import { useMobileAppUpdateQuery } from '@/components/mobile-app-update-query';
 
 const iosBuild = currentIOSBuild();
@@ -20,7 +21,7 @@ function IOSUpdateOverlayContent() {
   const [dismissedBuild, setDismissedBuild] = useState<number | null>(null);
   const updateQuery = useMobileAppUpdateQuery('ios', iosBuild);
   const update = updateQuery.data ?? null;
-  const shouldShow = Boolean(update && (update.required || (update.updateAvailable && dismissedBuild !== update.latestBuild)));
+  const shouldShow = Boolean(update && requiresNativeUpdate(update) && dismissedBuild !== update.latestBuild);
 
   useEffect(() => {
     setUpdateError(updateQuery.error ? 'Не удалось проверить обновление.' : null);

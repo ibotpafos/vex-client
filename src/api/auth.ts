@@ -2,19 +2,21 @@ import { jsonRequest } from './client';
 import {
   type AuthSession,
   type User,
-  type ServerAuthResult,
-  type ServerUser,
 } from './types';
+import {
+  type AuthResultDTO,
+  type UserDTO,
+} from './dto';
 
 export async function login(email: string, password: string): Promise<AuthSession> {
-  return parseAuth(await jsonRequest<ServerAuthResult>('/v1/auth/login', {
+  return parseAuth(await jsonRequest<AuthResultDTO>('/v1/auth/login', {
     method: 'POST',
     body: { email, password, remember_me: true, device_session: true },
   }));
 }
 
 export async function exchangeAppAuthCode(code: string, codeVerifier: string): Promise<AuthSession> {
-  return parseAuth(await jsonRequest<ServerAuthResult>('/v1/auth/token', {
+  return parseAuth(await jsonRequest<AuthResultDTO>('/v1/auth/token', {
     method: 'POST',
     body: {
       code,
@@ -24,19 +26,19 @@ export async function exchangeAppAuthCode(code: string, codeVerifier: string): P
 }
 
 export async function me(accessToken: string): Promise<User> {
-  const user = await jsonRequest<ServerUser>('/v1/auth/me', { accessToken });
+  const user = await jsonRequest<UserDTO>('/v1/auth/me', { accessToken });
   return parseUser(user);
 }
 
 export async function refreshSession(accessToken: string): Promise<AuthSession> {
-  return parseAuth(await jsonRequest<ServerAuthResult>('/v1/auth/refresh', {
+  return parseAuth(await jsonRequest<AuthResultDTO>('/v1/auth/refresh', {
     method: 'POST',
     accessToken,
     suppressErrorLog: true,
   }));
 }
 
-export function parseAuth(item: ServerAuthResult): AuthSession {
+export function parseAuth(item: AuthResultDTO): AuthSession {
   return {
     user: parseUser(item.user),
     accessToken: item.session.access_token,
@@ -44,7 +46,7 @@ export function parseAuth(item: ServerAuthResult): AuthSession {
   };
 }
 
-export function parseUser(item: ServerUser): User {
+export function parseUser(item: UserDTO): User {
   return {
     id: item.id,
     email: item.email,

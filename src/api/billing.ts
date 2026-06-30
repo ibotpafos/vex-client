@@ -5,11 +5,13 @@ import {
   type BillingSummary,
   type CheckoutSession,
   type BillingPortalSession,
-  type ServerBillingPlan,
-  type ServerCheckoutSession,
-  type ServerEntitlement,
-  type ServerPortalSession,
 } from './types';
+import {
+  type BillingPlanDTO,
+  type CheckoutSessionDTO,
+  type EntitlementDTO,
+  type PortalSessionDTO,
+} from './dto';
 
 export type CheckoutSessionOptions = {
   failedUrl?: string;
@@ -21,7 +23,7 @@ export function hasPaidEntitlement(item: Entitlement | null | undefined): item i
 }
 
 export async function entitlement(accessToken: string): Promise<Entitlement> {
-  const item = await jsonRequest<ServerEntitlement>('/v1/billing/entitlement', {
+  const item = await jsonRequest<EntitlementDTO>('/v1/billing/entitlement', {
     accessToken,
     suppressErrorLog: true,
   });
@@ -30,21 +32,21 @@ export async function entitlement(accessToken: string): Promise<Entitlement> {
 
 export async function billingSummary(accessToken: string): Promise<BillingSummary> {
   const [plans, currentEntitlement] = await Promise.all([
-    billingPlans().catch((): ServerBillingPlan[] => []),
+    billingPlans().catch((): BillingPlanDTO[] => []),
     entitlement(accessToken).catch((): null => null),
   ]);
   return buildBillingSummary(plans, currentEntitlement);
 }
 
-async function billingPlans(): Promise<ServerBillingPlan[]> {
-  return jsonRequest<ServerBillingPlan[]>('/v1/billing/plans', {
+async function billingPlans(): Promise<BillingPlanDTO[]> {
+  return jsonRequest<BillingPlanDTO[]>('/v1/billing/plans', {
     suppressErrorLog: true,
     timeout: 75000,
   });
 }
 
 export async function checkoutSession(accessToken: string, plan: { id: string; provider?: string }, options: CheckoutSessionOptions = {}): Promise<CheckoutSession> {
-  const item = await jsonRequest<ServerCheckoutSession>('/v1/billing/checkout-session', {
+  const item = await jsonRequest<CheckoutSessionDTO>('/v1/billing/checkout-session', {
     method: 'POST',
     accessToken,
     idempotencyKey: `android-checkout-${plan.id}-${Date.now()}`,
@@ -59,7 +61,7 @@ export async function checkoutSession(accessToken: string, plan: { id: string; p
 }
 
 export async function cancelSubscription(accessToken: string): Promise<Entitlement> {
-  const item = await jsonRequest<ServerEntitlement>('/v1/billing/subscription/cancel', {
+  const item = await jsonRequest<EntitlementDTO>('/v1/billing/subscription/cancel', {
     method: 'POST',
     accessToken,
     idempotencyKey: `subscription-cancel-${Date.now()}`,
@@ -68,7 +70,7 @@ export async function cancelSubscription(accessToken: string): Promise<Entitleme
 }
 
 export async function portalSession(accessToken: string): Promise<BillingPortalSession> {
-  const item = await jsonRequest<ServerPortalSession>('/v1/billing/portal-session', {
+  const item = await jsonRequest<PortalSessionDTO>('/v1/billing/portal-session', {
     accessToken,
     suppressErrorLog: true,
   });
@@ -80,7 +82,7 @@ export async function portalSession(accessToken: string): Promise<BillingPortalS
   };
 }
 
-export function parseCheckoutSession(item: ServerCheckoutSession): CheckoutSession {
+export function parseCheckoutSession(item: CheckoutSessionDTO): CheckoutSession {
   return {
     id: item.id,
     planId: item.plan_id,
@@ -90,7 +92,7 @@ export function parseCheckoutSession(item: ServerCheckoutSession): CheckoutSessi
   };
 }
 
-export function parseEntitlement(item: ServerEntitlement): Entitlement {
+export function parseEntitlement(item: EntitlementDTO): Entitlement {
   return {
     active: Boolean(item.active),
     planId: item.plan_id || undefined,

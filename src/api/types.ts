@@ -1,4 +1,5 @@
-import { type BillingPlanOption, type BillingPlanSource, type BillingSummary } from './billingSummary';
+import { type BillingPlanOption, type BillingSummary } from './billingSummary';
+import { type SupportTicketDTO } from './dto';
 import { type ManualUpdatePreflightResult } from './updatePreflight';
 import { type VpnRoutingMode } from '@/vpn/routingPolicy';
 
@@ -112,7 +113,6 @@ export type VpnDevice = {
   externalDeviceId?: string;
   platform?: string;
   pushProvider?: string;
-  hasPushToken?: boolean;
 };
 
 export type VpnLocation = {
@@ -181,8 +181,8 @@ export type SupportTicket = {
 
 export type SupportSocketEnvelope = {
   type: string;
-  ticket?: ServerSupportTicket;
-  tickets?: ServerSupportTicket[];
+  ticket?: SupportTicketDTO;
+  tickets?: SupportTicketDTO[];
   message?: string;
 };
 
@@ -217,198 +217,4 @@ export type PreparedTunnelOptions = {
   locationId?: string;
   routingMode?: VpnRoutingMode;
   bypassRegion?: string;
-};
-
-export type ServerSupportMessage = {
-  id: string;
-  ticket_id: string;
-  sender: string;
-  author_id?: string;
-  body: string;
-  created_at: string;
-};
-
-export type ServerSupportTicket = {
-  id: string;
-  user_id?: string;
-  subject: string;
-  message: string;
-  messages?: ServerSupportMessage[];
-  status: string;
-  priority?: string;
-  assigned_admin_user_id?: string;
-  source: string;
-  admin_note?: string;
-  created_at: string;
-  updated_at: string;
-  closed_at?: string;
-};
-
-export type ServerDevice = {
-  id: string;
-  name?: string;
-  status?: string;
-  provisioning_mode?: string;
-  client_key_ownership?: string;
-  external_device_id?: string;
-  platform?: string;
-  push_provider?: string;
-  push_token?: string;
-  has_push_token?: boolean;
-  public_key?: string;
-  assigned_ipv4?: string;
-  node_id?: string;
-  protocol?: string;
-  protocol_label?: string;
-  endpoint?: string;
-  latency_ms?: number;
-};
-
-export type ServerDeviceUsageResponse = {
-  usage?: ServerDeviceUsage[];
-};
-
-export type ServerDeviceUsage = {
-  device_id: string;
-  connection_status?: string;
-  connected?: boolean;
-  seconds_since_handshake?: number | null;
-  rx_bytes?: number;
-  tx_bytes?: number;
-  total_bytes?: number;
-};
-
-export type ServerLocation = {
-  id: string;
-  country_code?: string;
-  city?: string;
-  flag_emoji?: string;
-  availability?: string;
-  status?: string;
-  healthy_nodes?: number;
-  latency_ms?: number;
-};
-
-export type ServerManagedVpnProfile = {
-  unchanged?: boolean;
-  version?: number;
-  revoked?: boolean;
-  rotation_required?: boolean;
-  device_id?: string;
-  protocol?: string;
-  server?: string;
-  port?: number;
-  server_public_key?: string;
-  preshared_key?: string;
-  assigned_ipv4?: string;
-  dns?: string[];
-  allowed_ips?: string[];
-  bypass_ranges?: string[];
-  bypass_domains?: string[];
-  routing_policy_version?: string;
-  amnezia?: {
-    jc?: number;
-    jmin?: number;
-    jmax?: number;
-    s1?: number;
-    s2?: number;
-    s3?: number;
-    s4?: number;
-    h1?: string;
-    h2?: string;
-    h3?: string;
-    h4?: string;
-    i1?: string;
-    i2?: string;
-    i3?: string;
-    i4?: string;
-    i5?: string;
-  };
-  config?: string;
-};
-
-export type ServerNativeDeviceRegistration = {
-  device_registered?: boolean;
-  device: ServerDevice;
-};
-
-export type ServerUser = {
-  id: string;
-  email: string;
-  status?: string;
-};
-
-export type ServerAuthResult = {
-  user: ServerUser;
-  session: {
-    access_token: string;
-    expires_at?: string;
-  };
-};
-
-export type ServerEntitlement = {
-  active?: boolean;
-  plan_id?: string;
-  display_name?: string;
-  account_status?: string;
-  subscription_title?: string;
-  subscription_subtitle?: string;
-  remaining_text?: string;
-  status?: string;
-  tier?: string;
-  current_period_end?: string;
-  effective_expires_at?: string;
-  vpn_access?: boolean;
-};
-
-export type ServerBillingPlan = BillingPlanSource;
-
-export type ServerCheckoutSession = {
-  id: string;
-  plan_id: string;
-  provider: string;
-  url: string;
-  status: string;
-};
-
-export type ServerPortalSession = {
-  id?: string;
-  provider?: string;
-  url?: string;
-  created_at?: string;
-};
-
-export type ServerAppUpdateCheckResponse = {
-  updateAvailable?: boolean;
-  required?: boolean;
-  currentBuildBlocked?: boolean;
-  latestVersion?: string;
-  latestBuild?: number;
-  minSupportedBuild?: number;
-  minConfigSchemaVersion?: number;
-  downloadUrl?: string;
-  changelog?: string;
-  checksumSha256?: string;
-  signatureUrl?: string;
-  channel?: string;
-  reason?: string;
-  rolloutPercent?: number;
-  checkedAt?: string;
-};
-
-export type ServerAppRemoteConfigResponse = {
-  version?: string;
-  signature?: string;
-  releasedAt?: string;
-  platform?: string;
-  channel?: string;
-  minSupportedBuild?: number;
-  recommendedBuild?: number;
-  recommendedVersion?: string;
-  coreVersion?: string;
-  configSchemaVersion?: number;
-  minConfigSchemaVersion?: number;
-  routingPolicyVersion?: string;
-  featureFlags?: Record<string, boolean>;
-  incidentBanner?: string;
 };

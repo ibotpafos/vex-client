@@ -6,12 +6,14 @@ import {
   type SupportSocketHandle,
   type SupportSocketOptions,
   type SupportSocketEnvelope,
-  type ServerSupportTicket,
-  type ServerSupportMessage,
 } from './types';
+import {
+  type SupportMessageDTO,
+  type SupportTicketDTO,
+} from './dto';
 
 export async function supportTickets(accessToken: string): Promise<SupportTicket[]> {
-  const items = await jsonRequest<ServerSupportTicket[] | null>('/v1/support-tickets', {
+  const items = await jsonRequest<SupportTicketDTO[] | null>('/v1/support-tickets', {
     accessToken,
     suppressErrorLog: true,
   });
@@ -22,7 +24,7 @@ export async function createSupportTicket(
   accessToken: string,
   input: { subject: string; message: string; source?: string },
 ): Promise<SupportTicket> {
-  const item = await jsonRequest<ServerSupportTicket>('/v1/support-tickets', {
+  const item = await jsonRequest<SupportTicketDTO>('/v1/support-tickets', {
     accessToken,
     body: {
       message: input.message,
@@ -162,7 +164,7 @@ function apiErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
 }
 
-export function parseSupportTicket(item: ServerSupportTicket): SupportTicket {
+export function parseSupportTicket(item: SupportTicketDTO): SupportTicket {
   return {
     id: item.id,
     subject: item.subject,
@@ -178,7 +180,7 @@ export function parseSupportTicket(item: ServerSupportTicket): SupportTicket {
   };
 }
 
-export function parseSupportMessage(item: ServerSupportMessage): SupportMessage {
+export function parseSupportMessage(item: SupportMessageDTO): SupportMessage {
   return {
     id: item.id,
     ticketId: item.ticket_id,

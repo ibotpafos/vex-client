@@ -5,9 +5,11 @@ import {
   type AppUpdateCheckResult,
   type AppRemoteConfig,
   type ManualUpdatePreflightResult,
-  type ServerAppUpdateCheckResponse,
-  type ServerAppRemoteConfigResponse,
 } from './types';
+import {
+  type AppRemoteConfigResponseDTO,
+  type AppUpdateCheckResponseDTO,
+} from './dto';
 
 export async function appUpdateCheck(input: {
   platform: string;
@@ -23,7 +25,7 @@ export async function appUpdateCheck(input: {
   timeoutMs?: number;
 }): Promise<AppUpdateCheckResult> {
   const { timeoutMs, ...requestBody } = input;
-  const item = await jsonRequest<ServerAppUpdateCheckResponse>('/v1/app/update/check', {
+  const item = await jsonRequest<AppUpdateCheckResponseDTO>('/v1/app/update/check', {
     method: 'POST',
     suppressErrorLog: true,
     timeout: timeoutMs,
@@ -64,7 +66,7 @@ export async function appRemoteConfig(input: {
   apiClientVersion?: string;
   configSchemaVersion?: number;
 }): Promise<AppRemoteConfig> {
-  const item = await jsonRequest<ServerAppRemoteConfigResponse>('/v1/app/remote-config', {
+  const item = await jsonRequest<AppRemoteConfigResponseDTO>('/v1/app/remote-config', {
     method: 'POST',
     body: {
       ...input,

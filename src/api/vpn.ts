@@ -12,13 +12,16 @@ import {
   type PreparedTunnel,
   type PreparedTunnelOptions,
   type ClientDiagnosticsReportInput,
-  type ServerDevice,
-  type ServerLocation,
-  type ServerDeviceUsageResponse,
-  type ServerDeviceUsage,
-  type ServerManagedVpnProfile,
-  type ServerNativeDeviceRegistration,
 } from './types';
+import {
+  type DeviceDTO,
+  type DeviceUsageDTO,
+  type DeviceUsageResponseDTO,
+  type LocationDTO,
+  type NativeVPNProfileDTO,
+  type RegisterDevicePushTokenResultDTO,
+  type RegisterNativeDeviceResultDTO,
+} from './dto';
 
 const mobileProtocol = 'amneziawg';
 
@@ -99,7 +102,7 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
   if (typeof options.knownVersion === 'number' && options.knownVersion > 0) {
     query.set('known_version', String(options.knownVersion));
   }
-  const profile = await jsonRequest<ServerManagedVpnProfile>(`/v1/vpn/profile?${query.toString()}`, {
+  const profile = await jsonRequest<NativeVPNProfileDTO>(`/v1/vpn/profile?${query.toString()}`, {
     accessToken,
     headers: versionHeaders,
     suppressErrorLog: true,
@@ -143,17 +146,17 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
 }
 
 export async function vpnDevices(accessToken: string): Promise<VpnDevice[]> {
-  const response = await jsonRequest<ServerDevice[]>('/v1/devices', { accessToken });
+  const response = await jsonRequest<DeviceDTO[]>('/v1/devices', { accessToken });
   return response.map(parseDevice);
 }
 
 export async function vpnLocations(accessToken: string): Promise<VpnLocation[]> {
-  const response = await jsonRequest<ServerLocation[]>('/v1/locations', { accessToken, suppressErrorLog: true });
+  const response = await jsonRequest<LocationDTO[]>('/v1/locations', { accessToken, suppressErrorLog: true });
   return response.map(parseLocation).filter((location) => location.healthyNodes > 0 && location.availability !== 'retired');
 }
 
 export async function vpnDeviceUsage(accessToken: string): Promise<VpnDeviceUsage[]> {
-  const response = await jsonRequest<ServerDeviceUsageResponse>('/v1/devices/usage', { accessToken, suppressErrorLog: true });
+  const response = await jsonRequest<DeviceUsageResponseDTO>('/v1/devices/usage', { accessToken, suppressErrorLog: true });
   return (response.usage ?? []).map(parseDeviceUsage);
 }
 
@@ -221,7 +224,7 @@ export async function submitClientDiagnostics(accessToken: string, report: Clien
 }
 
 export async function registerDevicePushToken(accessToken: string, deviceId: string, push: { provider: string; token: string }): Promise<VpnDevice> {
-  const response = await jsonRequest<{ device: ServerDevice }>('/v1/devices/push-token', {
+  const response = await jsonRequest<RegisterDevicePushTokenResultDTO>('/v1/devices/push-token', {
     method: 'POST',
     accessToken,
     body: {
@@ -238,7 +241,7 @@ export async function rotateManagedVpnKey(accessToken: string, deviceId: string)
   if (!keyPair?.publicKey) {
     throw new Error('Локальный WireGuard ключ недоступен.');
   }
-  const response = await jsonRequest<{ device: ServerDevice }>('/v1/vpn/rotate-key', {
+  const response = await jsonRequest<{ device: DeviceDTO }>('/v1/vpn/rotate-key', {
     method: 'POST',
     accessToken,
     idempotencyKey: `native-rotate-key-${deviceId}-${keyPair.keyEpoch ?? Date.now()}`,
@@ -253,7 +256,7 @@ export async function rotateManagedVpnKey(accessToken: string, deviceId: string)
 }
 
 async function syncManagedVpnKey(accessToken: string, deviceId: string, keyPair: WireGuardKeyPair): Promise<VpnDevice> {
-  const response = await jsonRequest<{ device: ServerDevice }>('/v1/vpn/rotate-key', {
+  const response = await jsonRequest<{ device: DeviceDTO }>('/v1/vpn/rotate-key', {
     method: 'POST',
     accessToken,
     idempotencyKey: `native-sync-key-${deviceId}-${keyPair.keyEpoch ?? 1}-${keyPair.publicKey}`,
@@ -270,7 +273,7 @@ async function createDevice(accessToken: string, client: VpnClientDescriptor, lo
   const location = normalizeLocationId(locationId);
   const appInfo = await getAppInfo();
   const request = buildCreateDeviceRequest(client, location, externalDeviceId, appInfo);
-  const response = await jsonRequest<{ device: ServerDevice }>('/v1/devices', {
+  const response = await jsonRequest<{ device: DeviceDTO }>('/v1/devices', {
     method: 'POST',
     accessToken,
     idempotencyKey: request.idempotencyKey,
@@ -284,7 +287,7 @@ async function registerNativeDevice(accessToken: string, client: VpnClientDescri
     throw new Error('Локальные ключи WireGuard не сгенерированы. Проверьте настройки устройства.');
   }
   const appInfo = await getAppInfo();
-  const response = await jsonRequest<ServerNativeDeviceRegistration>('/v1/devices/register', {
+  const response = await jsonRequest<RegisterNativeDeviceResultDTO>('/v1/devices/register', {
     method: 'POST',
     accessToken,
     idempotencyKey: `native-register-${externalDeviceId}-${locationId}`,
@@ -365,7 +368,7 @@ function logApiDebug(...items: unknown[]) {
   console.log(...items);
 }
 
-export function parseDevice(item: ServerDevice): VpnDevice {
+export function parseDevice(item: DeviceDTO): VpnDevice {
   return {
     id: item.id,
     name: item.name ?? '',
@@ -382,11 +385,10 @@ export function parseDevice(item: ServerDevice): VpnDevice {
     externalDeviceId: item.external_device_id || undefined,
     platform: item.platform || undefined,
     pushProvider: item.push_provider || undefined,
-    hasPushToken: Boolean(item.has_push_token || item.push_token),
   };
 }
 
-export function parseDeviceUsage(item: ServerDeviceUsage): VpnDeviceUsage {
+export function parseDeviceUsage(item: DeviceUsageDTO): VpnDeviceUsage {
   return {
     deviceId: item.device_id,
     connectionStatus: item.connection_status || 'unknown',
@@ -398,7 +400,7 @@ export function parseDeviceUsage(item: ServerDeviceUsage): VpnDeviceUsage {
   };
 }
 
-export function parseLocation(item: ServerLocation): VpnLocation {
+export function parseLocation(item: LocationDTO): VpnLocation {
   return {
     id: item.id,
     countryCode: item.country_code || item.id.toUpperCase(),
@@ -411,7 +413,7 @@ export function parseLocation(item: ServerLocation): VpnLocation {
   };
 }
 
-export function managedProfileConfig(profile: ServerManagedVpnProfile, keyPair: WireGuardKeyPair | null): string {
+export function managedProfileConfig(profile: NativeVPNProfileDTO, keyPair: WireGuardKeyPair | null): string {
   if (!keyPair?.privateKey) {
     throw new Error('Управляемый VPN-профиль требует локальный ключ устройства.');
   }
@@ -445,7 +447,7 @@ PersistentKeepalive = 25
 `;
 }
 
-export function managedProfileAmneziaConfig(amnezia: ServerManagedVpnProfile['amnezia']): string {
+export function managedProfileAmneziaConfig(amnezia: NativeVPNProfileDTO['amnezia']): string {
   if (!amnezia) {
     return '';
   }
@@ -480,7 +482,7 @@ export function managedProfileAmneziaConfig(amnezia: ServerManagedVpnProfile['am
   return lines.length ? `${lines.join('\n')}\n` : '';
 }
 
-export function managedProfileEndpoint(profile: ServerManagedVpnProfile): string | undefined {
+export function managedProfileEndpoint(profile: NativeVPNProfileDTO): string | undefined {
   if (!profile.server) {
     return undefined;
   }

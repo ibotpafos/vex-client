@@ -7,6 +7,14 @@ on:
         description: Rust target triple
         required: true
         default: x86_64-pc-windows-msvc
+      fast:
+        description: Skip preflight checks and run only the release build
+        required: false
+        default: "false"
+      smoke:
+        description: Build only app.exe and verify the Windows manifest
+        required: false
+        default: "false"
   push:
     tags:
       - "windows-v*"
@@ -32,6 +40,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Node.js
+        if: ${{ inputs.smoke != 'true' }}
         uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -55,30 +64,75 @@ jobs:
             windows-cargo-v2-${{ runner.os }}-
 
       - name: Install dependencies
+        if: ${{ inputs.smoke != 'true' }}
         run: npm ci --prefer-offline --no-audit --fund=false
 
       - name: Typecheck
+        if: ${{ inputs.fast != 'true' && inputs.smoke != 'true' }}
         run: npm run typecheck
 
       - name: Unit tests
+        if: ${{ inputs.fast != 'true' && inputs.smoke != 'true' }}
         run: npm run test:unit
 
       - name: Rust check
+        if: ${{ inputs.fast != 'true' && inputs.smoke != 'true' }}
         run: cargo check --manifest-path src-tauri/Cargo.toml --target $env:WINDOWS_TARGET
 
+      - name: Smoke build Windows app.exe
+        if: ${{ inputs.smoke == 'true' }}
+        shell: pwsh
+        run: |
+          cargo build --manifest-path src-tauri/Cargo.toml --bin app --target $env:WINDOWS_TARGET
+          $exe = "src-tauri/target/$env:WINDOWS_TARGET/debug/app.exe"
+          if (!(Test-Path -LiteralPath $exe)) {
+            throw "Windows exe was not produced: $exe"
+          }
+          $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $exe))
+          $needle = [System.Text.Encoding]::ASCII.GetBytes("Microsoft.Windows.Common-Controls")
+          $found = $false
+          for ($i = 0; $i -le $bytes.Length - $needle.Length; $i++) {
+            $match = $true
+            for ($j = 0; $j -lt $needle.Length; $j++) {
+              if ($bytes[$i + $j] -ne $needle[$j]) {
+                $match = $false
+                break
+              }
+            }
+            if ($match) {
+              $found = $true
+              break
+            }
+          }
+          if (!$found) {
+            throw "manifest dependency missing from app.exe: Microsoft.Windows.Common-Controls"
+          }
+          New-Item -ItemType Directory -Force -Path dist/windows-smoke | Out-Null
+          Copy-Item -LiteralPath $exe -Destination dist/windows-smoke/app.exe -Force
+
       - name: Build Windows release
+        if: ${{ inputs.smoke != 'true' }}
         shell: pwsh
         run: npm run windows:release
 
       - name: Upload workflow artifact
+        if: ${{ inputs.smoke != 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: vex-windows-release
           path: dist/windows/*
           if-no-files-found: error
 
+      - name: Upload smoke artifact
+        if: ${{ inputs.smoke == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: vex-windows-smoke
+          path: dist/windows-smoke/*
+          if-no-files-found: error
+
       - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: ${{ inputs.smoke != 'true' && startsWith(github.ref, 'refs/tags/') }}
         uses: softprops/action-gh-release@v2
         with:
           files: dist/windows/*

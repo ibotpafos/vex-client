@@ -11,6 +11,7 @@
 /// - Structured per-domain logging macros
 /// - Explicit resource cleanup (RAII-style drop ordering)
 use std::{
+    collections::BTreeSet,
     fs::{self, OpenOptions},
     io::{self, BufRead, Write},
     net::{IpAddr, Shutdown, ToSocketAddrs},
@@ -63,11 +64,11 @@ const PF_CONF: &str = "/etc/pf.conf";
 const ANTILEAK_STATE_FILE: &str = "/Library/Application Support/VEX VPN/helper/antileak.active";
 const OPERATION_LOCK_FILE: &str = "/Library/Application Support/VEX VPN/helper/operation.lock";
 const OWNER_SESSION_FILE: &str = "/Library/Application Support/VEX VPN/helper/owner-session";
+const PROTECTED_ROUTE_STATE_FILE: &str =
+    "/Library/Application Support/VEX VPN/helper/protected-routes.txt";
 const HELPER_SOCKET: &str = "/var/run/vex-helper.sock";
-const PROTECTED_PUBLIC_HOST_ROUTES: &[&str] = &[
-    "94.141.160.212",
-    "31.77.199.171",
-];
+const PROTECTED_PUBLIC_HOST_ROUTES: &[&str] = &["94.141.160.212", "31.77.199.171"];
+const PROTECTED_PUBLIC_HOST_NAMES: &[&str] = &["vexguard.app", "www.vexguard.app"];
 const IFACE_WAIT_TIMEOUT: Duration = Duration::from_secs(8);
 const UAPI_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const OPERATION_LOCK_STALE_AFTER: Duration = Duration::from_secs(60);
@@ -863,15 +864,76 @@ fn del_host_route(host: &str, log: &Logger) {
     );
 }
 
+fn resolve_protected_public_hosts(log: &Logger) -> Vec<String> {
+    let mut hosts = BTreeSet::new();
+    for host in PROTECTED_PUBLIC_HOST_ROUTES {
+        hosts.insert((*host).to_string());
+    }
+
+    for name in PROTECTED_PUBLIC_HOST_NAMES {
+        match (*name, 443).to_socket_addrs() {
+            Ok(addrs) => {
+                for addr in addrs {
+                    if let IpAddr::V4(ip) = addr.ip() {
+                        hosts.insert(ip.to_string());
+                    }
+                }
+            }
+            Err(error) => {
+                log.warn(
+                    "route",
+                    &format!("could not resolve protected host {}: {}", name, error),
+                );
+            }
+        }
+    }
+
+    hosts.into_iter().collect()
+}
+
+fn persist_protected_public_hosts(hosts: &[String]) {
+    let _ = fs::write(PROTECTED_ROUTE_STATE_FILE, hosts.join("\n"));
+}
+
+fn load_protected_public_hosts() -> Vec<String> {
+    let mut hosts = BTreeSet::new();
+    for host in PROTECTED_PUBLIC_HOST_ROUTES {
+        hosts.insert((*host).to_string());
+    }
+    if let Ok(content) = fs::read_to_string(PROTECTED_ROUTE_STATE_FILE) {
+        for line in content
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+        {
+            hosts.insert(line.to_string());
+        }
+    }
+    hosts.into_iter().collect()
+}
+
+fn add_protected_public_host_routes(gateway: &str, log: &Logger) {
+    let hosts = resolve_protected_public_hosts(log);
+    for host in &hosts {
+        add_host_route(host, gateway, log);
+    }
+    persist_protected_public_hosts(&hosts);
+}
+
+fn del_protected_public_host_routes(log: &Logger) {
+    for host in load_protected_public_hosts() {
+        del_host_route(&host, log);
+    }
+    let _ = fs::remove_file(PROTECTED_ROUTE_STATE_FILE);
+}
+
 fn cleanup_interface_routes(iface: &str, endpoint: Option<&str>, log: &Logger) {
     if let Some(endpoint) = endpoint {
         let host = endpoint_host(endpoint);
         del_host_route(host, log);
     }
 
-    for host in PROTECTED_PUBLIC_HOST_ROUTES {
-        del_host_route(host, log);
-    }
+    del_protected_public_host_routes(log);
 
     log.info("route", &format!("host routes cleaned for {}", iface));
 }
@@ -1201,9 +1263,7 @@ fn action_up(log: &Logger, arm_antileak: bool) -> Result<()> {
     // 9. Routing
     if let Some(ref gw) = gateway {
         add_endpoint_host_route(&resolved_endpoint, gw, log);
-        for host in PROTECTED_PUBLIC_HOST_ROUTES {
-            add_host_route(host, gw, log);
-        }
+        add_protected_public_host_routes(gw, log);
     }
 
     // Parallel route addition to optimize connection speed (splits routes to concurrent workers)
@@ -1296,9 +1356,7 @@ fn action_down(log: &Logger, release_antileak: bool) -> Result<()> {
         let host = endpoint_host(ep);
         del_host_route(host, log);
     }
-    for host in PROTECTED_PUBLIC_HOST_ROUTES {
-        del_host_route(host, log);
-    }
+    del_protected_public_host_routes(log);
 
     // 4. Kill amneziawg-go
     kill_awg_go(log);
@@ -1417,9 +1475,11 @@ fn action_repair(log: &Logger) -> Result<()> {
         return Ok(());
     };
     ensure_endpoint_host_route(&endpoint, log)?;
-    for host in PROTECTED_PUBLIC_HOST_ROUTES {
+    let protected_hosts = resolve_protected_public_hosts(log);
+    for host in &protected_hosts {
         ensure_host_route(host, log)?;
     }
+    persist_protected_public_hosts(&protected_hosts);
     Ok(())
 }
 

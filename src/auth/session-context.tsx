@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { clearSession, loadSession, saveSession } from '@/auth/sessionStore';
 import { loadSessionWithRetry } from '@/auth/sessionLoadRetry';
 import { sessionLoadFailureDiagnosticsSnapshot } from '@/auth/sessionDiagnostics';
-import { refreshSession as refreshApiSession, type AuthSession } from '@/api/vexApi';
+import { refreshSession as refreshApiSession, reportAppInstall, type AuthSession } from '@/api/vexApi';
 import { uploadClientDiagnostics } from '@/diagnostics/clientDiagnostics';
 import { errorMessage } from '@/utils/error';
 
@@ -91,6 +91,13 @@ export function SessionProvider({ children }: PropsWithChildren) {
     };
   }, []);
 
+  useEffect(() => {
+    if (!session?.accessToken || !session.user.id) {
+      return;
+    }
+    void reportAppInstall(session.accessToken, session.user.id).catch(() => undefined);
+  }, [session?.accessToken, session?.user.id]);
+
   const signIn = useCallback(async (nextSession: AuthSession) => {
     const sessionLoadError = loadError;
     clearClientData();
@@ -133,4 +140,3 @@ export function SessionProvider({ children }: PropsWithChildren) {
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }
-

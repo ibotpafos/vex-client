@@ -58,6 +58,16 @@ export async function getOrCreateDeviceId(): Promise<string> {
   return deviceId;
 }
 
+export async function getOrCreateInstallId(): Promise<string> {
+  const key = 'vex.app.install_id.v1';
+  let installId = await SecureStore.getItemAsync(key).catch(() => null);
+  if (!installId) {
+    installId = `vexi_${createInstallationUUID()}`;
+    await SecureStore.setItemAsync(key, installId).catch(() => undefined);
+  }
+  return installId;
+}
+
 function createInstallationUUID(): string {
   const runtimeCrypto = globalThis.crypto;
   if (typeof runtimeCrypto?.randomUUID === 'function') {

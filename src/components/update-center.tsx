@@ -4,7 +4,7 @@ import { Download, RefreshCw, ShieldAlert, ShieldCheck, X } from 'lucide-react-n
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { installManualUpdate } from '@/api/manualUpdateInstall';
-import { assessManualUpdateCenter, requiresNativeUpdate } from '@/api/updatePreflight';
+import { assessManualUpdateCenter, canUseOtaUpdate, requiresNativeUpdate } from '@/api/updatePreflight';
 import { vexApiBaseUrl, type AppUpdateCheckResult } from '@/api/vexApi';
 import { useDesktopUpdate } from '@/components/desktop-update-overlay';
 import { useMobileAppUpdateQuery } from '@/components/mobile-app-update-query';
@@ -43,7 +43,8 @@ function MobileUpdateNoticeBannerContent({ onOpen, platform }: { onOpen: () => v
   const buildNumber = currentNativeBuild();
   const updateQuery = useMobileAppUpdateQuery(platform, buildNumber);
   const update = updateQuery.data ?? null;
-  const shouldShow = Boolean(update?.required || update?.currentBuildBlocked);
+  const nativeUpdateRequired = requiresNativeUpdate(update);
+  const shouldShow = nativeUpdateRequired;
 
   if (!shouldShow) {
     return null;
@@ -91,7 +92,7 @@ function MobileUpdateCenterButton({
   const buildNumber = currentNativeBuild();
   const updateQuery = useMobileAppUpdateQuery(platform, buildNumber);
   const update = updateQuery.data ?? null;
-  const needsAttention = Boolean(update?.required || update?.currentBuildBlocked);
+  const needsAttention = requiresNativeUpdate(update);
   const hasUpdate = Boolean(update?.updateAvailable);
 
   return (
@@ -259,12 +260,13 @@ function MobileUpdateCenterContent({
   }), [appInfo?.version, buildNumber, update]);
   const signingMigration = platform === 'android' && isAndroidSigningKeyMigration(update);
   const nativeUpdateRequired = requiresNativeUpdate(update);
+  const otaUpdateAvailable = canUseOtaUpdate(update);
   const manualDownloadUrl = signingMigration ? androidSigningMigrationLandingUrl : update?.downloadUrl || '';
   const canOpenManualDownload = signingMigration && Boolean(manualDownloadUrl);
   const canStartInstall = platform === 'ios'
     ? Boolean(update?.updateAvailable && update.downloadUrl)
-    : assessment.canInstall || canOpenManualDownload;
-  const primaryDisabled = !canStartInstall && assessment.updateAvailable;
+    : nativeUpdateRequired && (assessment.canInstall || canOpenManualDownload);
+  const primaryDisabled = !canStartInstall && assessment.updateAvailable && !otaUpdateAvailable;
 
   const handlePrimaryPress = useCallback(async () => {
     setActionError(null);
@@ -280,6 +282,11 @@ function MobileUpdateCenterContent({
       return;
     }
     if (!assessment.updateAvailable) {
+      playLightImpactHaptic();
+      await updateQuery.refetch();
+      return;
+    }
+    if (otaUpdateAvailable) {
       playLightImpactHaptic();
       await updateQuery.refetch();
       return;
@@ -302,7 +309,7 @@ function MobileUpdateCenterContent({
       playErrorHaptic();
       setActionError(error instanceof Error ? error.message : 'Не удалось открыть ссылку обновления.');
     }
-  }, [assessment.preflight.error, assessment.preflight.ok, assessment.updateAvailable, canStartInstall, platform, signingMigration, update, updateQuery]);
+  }, [assessment.preflight.error, assessment.preflight.ok, assessment.updateAvailable, canStartInstall, otaUpdateAvailable, platform, signingMigration, update, updateQuery]);
 
   return (
     <ScrollView contentContainerStyle={styles.content}>
@@ -319,7 +326,7 @@ function MobileUpdateCenterContent({
       </View>
       {update?.changelog ? <Text style={styles.notes}>{update.changelog}</Text> : null}
       {updateQuery.error ? <Text style={styles.error}>Не удалось проверить обновления. Проверьте подключение.</Text> : null}
-      {!canStartInstall && assessment.updateAvailable ? <Text style={styles.error}>{assessment.preflight.error}</Text> : null}
+      {!canStartInstall && assessment.updateAvailable && nativeUpdateRequired ? <Text style={styles.error}>{assessment.preflight.error}</Text> : null}
       {canOpenManualDownload && !assessment.preflight.ok ? (
         <Text style={styles.error}>Автоустановка недоступна для этой старой подписи. Скачайте APK с сайта, установите новую сборку и затем удалите старый VEX.</Text>
       ) : null}
@@ -336,8 +343,10 @@ function MobileUpdateCenterContent({
       <Text style={styles.footnote}>
         {signingMigration
           ? 'Android откроет загрузку новой APK-сборки VEX в браузере. После входа в новую сборку удалите старое приложение.'
-          : !nativeUpdateRequired && Updates.isEnabled
+          : otaUpdateAvailable && Updates.isEnabled
           ? 'Быстрые исправления интерфейса, маршрутизации и логики VEX скачиваются через OTA и применяются автоматически без APK/App Store.'
+          : otaUpdateAvailable
+          ? 'Это обновление не требует обязательной установки APK. OTA включится в production-сборке с настроенным expo-updates.'
           : platform === 'android'
           ? 'Android скачает APK внутри VEX, проверит checksum и подпись приложения, затем откроет системный установщик.'
           : 'iOS откроет официальную страницу обновления.'}

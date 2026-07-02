@@ -39,6 +39,14 @@ export type ManualUpdateCenterAssessment = {
   preflight: ManualUpdatePreflightResult;
 };
 
+const nativeUpdateReasons = new Set([
+  'blocked_release',
+  'android_signing_key_migration',
+  'unsupported_config_schema',
+  'core_version_unsupported',
+  'api_client_version_unsupported',
+]);
+
 export function validateManualUpdatePayloadForBaseUrl(input: {
   downloadUrl?: string | null;
   checksumSha256?: string | null;
@@ -89,14 +97,16 @@ export function assessManualUpdateCenter(input: ManualUpdateCenterInput): Manual
     }, input.trustedBaseUrl)
     : { ok: false, error: 'Обновление не требуется.' };
   const reason = updateReason(update);
+  const nativeRequired = requiresNativeUpdate(update);
+  const otaAvailable = canUseOtaUpdate(update);
   const signatureLabel = signatureStatusLabel(update, preflight);
   const signatureTone = preflight.ok ? 'ok' : updateAvailable ? 'danger' : 'warning';
-  const compatibility = compatibilityCopy(reason, required, currentBuildBlocked, updateAvailable);
+  const compatibility = compatibilityCopy(reason, required, currentBuildBlocked, updateAvailable, otaAvailable);
 
   return {
-    title: updateCenterTitle(reason, required, currentBuildBlocked, updateAvailable),
-    message: updateCenterMessage(reason, required, currentBuildBlocked, updateAvailable),
-    actionLabel: reason === 'android_signing_key_migration' ? 'Скачать новую сборку' : currentBuildBlocked ? 'Вернуться на стабильную' : required ? 'Обновить сейчас' : updateAvailable ? 'Установить обновление' : 'Проверить снова',
+    title: updateCenterTitle(reason, required, currentBuildBlocked, updateAvailable, otaAvailable),
+    message: updateCenterMessage(reason, required, currentBuildBlocked, updateAvailable, otaAvailable),
+    actionLabel: reason === 'android_signing_key_migration' ? 'Скачать новую сборку' : currentBuildBlocked ? 'Вернуться на стабильную' : nativeRequired ? 'Обновить сейчас' : updateAvailable ? 'Проверить OTA' : 'Проверить снова',
     compatibilityLabel: compatibility.label,
     compatibilityTone: compatibility.tone,
     signatureLabel,
@@ -109,28 +119,27 @@ export function assessManualUpdateCenter(input: ManualUpdateCenterInput): Manual
   };
 }
 
+export function canUseOtaUpdate(update: ManualUpdateCenterInput['update']): boolean {
+  return Boolean(update?.updateAvailable && !requiresNativeUpdate(update));
+}
+
 export function requiresNativeUpdate(update: ManualUpdateCenterInput['update']): boolean {
   if (!update?.updateAvailable) {
     return false;
   }
   const reason = updateReason(update);
-  return Boolean(
-    update.required ||
-    update.currentBuildBlocked ||
-    reason === 'blocked_release' ||
-    reason === 'android_signing_key_migration' ||
-    reason === 'unsupported_config_schema' ||
-    reason === 'core_version_unsupported' ||
-    reason === 'api_client_version_unsupported',
-  );
+  return Boolean(update.currentBuildBlocked || nativeUpdateReasons.has(reason));
 }
 
-function updateCenterTitle(reason: string, required: boolean, currentBuildBlocked: boolean, updateAvailable: boolean): string {
+function updateCenterTitle(reason: string, required: boolean, currentBuildBlocked: boolean, updateAvailable: boolean, otaAvailable: boolean): string {
   if (currentBuildBlocked || reason === 'blocked_release') {
     return 'Сборка отозвана';
   }
   if (reason === 'android_signing_key_migration') {
     return 'Новая Android-сборка VEX';
+  }
+  if (otaAvailable) {
+    return required ? 'Доступно OTA-обновление' : 'Доступно обновление';
   }
   if (required) {
     return 'Нужно обновить VEX';
@@ -141,7 +150,7 @@ function updateCenterTitle(reason: string, required: boolean, currentBuildBlocke
   return 'VEX обновлен';
 }
 
-function updateCenterMessage(reason: string, required: boolean, currentBuildBlocked: boolean, updateAvailable: boolean): string {
+function updateCenterMessage(reason: string, required: boolean, currentBuildBlocked: boolean, updateAvailable: boolean, otaAvailable: boolean): string {
   if (currentBuildBlocked || reason === 'blocked_release') {
     return 'Эта сборка заблокирована. Установите предложенную стабильную версию, чтобы вернуться на поддерживаемый канал.';
   }
@@ -157,6 +166,9 @@ function updateCenterMessage(reason: string, required: boolean, currentBuildBloc
   if (reason === 'api_client_version_unsupported') {
     return 'API-клиент устарел. Обновление нужно для совместимости с сервером.';
   }
+  if (otaAvailable) {
+    return 'Если обновление совместимо с текущим runtime, VEX скачает и применит его через OTA без установки APK.';
+  }
   if (required) {
     return 'Эта версия больше не поддерживается. Установите новую сборку, чтобы продолжить пользоваться сервисом.';
   }
@@ -171,6 +183,7 @@ function compatibilityCopy(
   required: boolean,
   currentBuildBlocked: boolean,
   updateAvailable: boolean,
+  otaAvailable: boolean,
 ): { label: string; tone: ManualUpdateCenterAssessment['compatibilityTone'] } {
   if (currentBuildBlocked || reason === 'blocked_release') {
     return { label: 'Сборка заблокирована, нужен rollback', tone: 'danger' };
@@ -186,6 +199,9 @@ function compatibilityCopy(
   }
   if (reason === 'api_client_version_unsupported') {
     return { label: 'API-клиент устарел', tone: 'danger' };
+  }
+  if (otaAvailable) {
+    return { label: 'Совместимо, обновляется через OTA', tone: 'ok' };
   }
   if (required) {
     return { label: 'Текущая версия не поддерживается', tone: 'danger' };

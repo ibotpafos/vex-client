@@ -1,7 +1,7 @@
 import { billingSummaryFallbackCopy, buildBillingSummary, type BillingPlanSource } from '../src/api/billingSummary';
 import { installManualUpdate, isTrustedIosUpdateUrl } from '../src/api/manualUpdateInstall';
 import { errorMessage } from '../src/utils/error';
-import { assessManualUpdateCenter, requiresNativeUpdate, updateCheckChannel, validateManualUpdatePayloadForBaseUrl } from '../src/api/updatePreflight';
+import { assessManualUpdateCenter, canUseOtaUpdate, requiresNativeUpdate, updateCheckChannel, validateManualUpdatePayloadForBaseUrl } from '../src/api/updatePreflight';
 import { resolveAuthCallbackExchange } from '../src/auth/callbackParams';
 import { sessionLoadFailureDiagnosticsSnapshot } from '../src/auth/sessionDiagnostics';
 import { loadSessionWithRetry, loadWithRetry } from '../src/auth/sessionLoadRetry';
@@ -220,9 +220,10 @@ const connectedStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0 
   });
 
   assertEqual(assessment.canInstall, true);
-  assertEqual(assessment.compatibilityLabel, 'Совместимо, доступна новая версия');
+  assertEqual(assessment.actionLabel, 'Проверить OTA');
+  assertEqual(assessment.compatibilityLabel, 'Совместимо, обновляется через OTA');
   assertEqual(assessment.signatureLabel, 'Checksum и подпись настроены');
-  assertEqual(requiresNativeUpdate({
+  const optionalUpdate = {
     updateAvailable: true,
     required: false,
     latestVersion: '1.0.45',
@@ -232,7 +233,38 @@ const connectedStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0 
     checksumSha256: checksum,
     signatureUrl: `${trustedBaseUrl}/downloads/Vex-Android.apk.sig`,
     reason: 'update_available',
-  }), false);
+  };
+  assertEqual(requiresNativeUpdate(optionalUpdate), false);
+  assertEqual(canUseOtaUpdate(optionalUpdate), true);
+}
+
+{
+  const trustedBaseUrl = 'https://vexguard.app';
+  const checksum = 'a'.repeat(64);
+  const normalRequiredMetadata = {
+    updateAvailable: true,
+    required: true,
+    latestVersion: '1.0.50',
+    latestBuild: 1005052,
+    minSupportedBuild: 1004850,
+    downloadUrl: `${trustedBaseUrl}/downloads/Vex-Android-1.0.50.apk`,
+    checksumSha256: checksum,
+    signatureUrl: `${trustedBaseUrl}/downloads/Vex-Android-1.0.50.apk.sig`,
+    reason: 'update_available',
+  };
+  const assessment = assessManualUpdateCenter({
+    currentBuild: 1004951,
+    currentVersion: '1.0.49',
+    trustedBaseUrl,
+    update: normalRequiredMetadata,
+  });
+
+  assertEqual(assessment.title, 'Доступно OTA-обновление');
+  assertEqual(assessment.actionLabel, 'Проверить OTA');
+  assertEqual(assessment.compatibilityTone, 'ok');
+  assertEqual(assessment.compatibilityLabel, 'Совместимо, обновляется через OTA');
+  assertEqual(requiresNativeUpdate(normalRequiredMetadata), false);
+  assertEqual(canUseOtaUpdate(normalRequiredMetadata), true);
 }
 
 {
@@ -271,6 +303,18 @@ const connectedStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0 
     signatureUrl: `${trustedBaseUrl}/downloads/Vex-Android-1.0.43.apk.sig`,
     reason: 'blocked_release',
   }), true);
+  assertEqual(canUseOtaUpdate({
+    updateAvailable: true,
+    required: true,
+    currentBuildBlocked: true,
+    latestVersion: '1.0.43',
+    latestBuild: 1004344,
+    minSupportedBuild: 1004300,
+    downloadUrl: `${trustedBaseUrl}/downloads/Vex-Android-1.0.43.apk`,
+    checksumSha256: 'b'.repeat(64),
+    signatureUrl: `${trustedBaseUrl}/downloads/Vex-Android-1.0.43.apk.sig`,
+    reason: 'blocked_release',
+  }), false);
 }
 
 {
@@ -305,6 +349,30 @@ const connectedStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0 
     changelog: 'Android: старая сборка больше не поддерживается из-за перехода на новую подпись.',
     reason: 'android_signing_key_migration',
   }), true);
+  assertEqual(canUseOtaUpdate({
+    updateAvailable: true,
+    required: true,
+    latestVersion: '1.0.48',
+    latestBuild: 1004850,
+    minSupportedBuild: 1004850,
+    downloadUrl: `${trustedBaseUrl}/downloads/Vex-Android-1.0.48.apk`,
+    changelog: 'Android: старая сборка больше не поддерживается из-за перехода на новую подпись.',
+    reason: 'android_signing_key_migration',
+  }), false);
+}
+
+{
+  for (const reason of ['unsupported_config_schema', 'core_version_unsupported', 'api_client_version_unsupported']) {
+    assertEqual(requiresNativeUpdate({
+      updateAvailable: true,
+      required: true,
+      latestVersion: '1.0.50',
+      latestBuild: 1005052,
+      minSupportedBuild: 1004850,
+      downloadUrl: 'https://vexguard.app/downloads/Vex-Android-1.0.50.apk',
+      reason,
+    }), true);
+  }
 }
 
 {

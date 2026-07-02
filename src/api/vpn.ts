@@ -1,5 +1,6 @@
 import { Platform } from 'react-native';
 import { getAppInfo, getOrCreateDeviceId } from '@/native/appInfo';
+import { deviceIdentitySignaturePayload, getOrCreateDeviceIdentity } from '@/native/deviceIdentity';
 import { generateWireGuardKeyPair, replaceWireGuardKeyPair, getOrCreateWireGuardKeyPair, type WireGuardKeyPair } from '@/native/vexVpn';
 import { nativeVpnDeviceForClient } from '@/vpn/nativeDeviceSelection';
 import { defaultVpnRoutingMode, defaultVpnRoutingPolicyVersion, resolvedVpnBypassRegion } from '@/vpn/routingPolicy';
@@ -15,6 +16,7 @@ import {
 } from './types';
 import {
   type DeviceDTO,
+  type DeviceIdentityChallengeDTO,
   type DeviceUsageDTO,
   type DeviceUsageResponseDTO,
   type LocationDTO,
@@ -287,12 +289,14 @@ async function registerNativeDevice(accessToken: string, client: VpnClientDescri
     throw new Error('Локальные ключи WireGuard не сгенерированы. Проверьте настройки устройства.');
   }
   const appInfo = await getAppInfo();
+  const identity = await nativeDeviceIdentityRegistration(accessToken, externalDeviceId, keyPair.publicKey);
   const response = await jsonRequest<RegisterNativeDeviceResultDTO>('/v1/devices/register', {
     method: 'POST',
     accessToken,
     idempotencyKey: `native-register-${externalDeviceId}-${locationId}`,
     body: {
       device_id: externalDeviceId,
+      installation_id: externalDeviceId,
       device_name: nativeDeviceName(client),
       platform: client.platform || appInfo.platform || Platform.OS,
       app_version: appInfo.version,
@@ -300,9 +304,54 @@ async function registerNativeDevice(accessToken: string, client: VpnClientDescri
       location: locationId,
       public_key: keyPair?.publicKey,
       key_epoch: keyPair?.keyEpoch ?? (keyPair ? 1 : undefined),
+      ...identity,
     },
   });
   return parseDevice(response.device);
+}
+
+async function nativeDeviceIdentityRegistration(
+  accessToken: string,
+  installationId: string,
+  wireGuardPublicKey: string,
+): Promise<Record<string, string>> {
+  const identity = await getOrCreateDeviceIdentity().catch((error) => {
+    logApiDebug('device identity unavailable:', error instanceof Error ? error.message : error);
+    return null;
+  });
+  if (!identity) {
+    return {};
+  }
+  try {
+    const challenge = await jsonRequest<DeviceIdentityChallengeDTO>('/v1/devices/identity-challenge', {
+      method: 'POST',
+      accessToken,
+      suppressErrorLog: true,
+      body: {
+        installation_id: installationId,
+        purpose: 'register',
+      },
+    });
+    const payload = deviceIdentitySignaturePayload(
+      {
+        id: challenge.id,
+        nonce: challenge.nonce,
+        purpose: challenge.purpose || 'register',
+      },
+      installationId,
+      identity.publicKey,
+      wireGuardPublicKey,
+    );
+    return {
+      identity_public_key: identity.publicKey,
+      identity_key_type: identity.keyType,
+      identity_challenge_id: challenge.id,
+      identity_signature: await identity.sign(payload),
+    };
+  } catch (error) {
+    logApiDebug('device identity challenge failed, falling back to legacy registration:', error instanceof Error ? error.message : error);
+    return {};
+  }
 }
 
 function deviceNeedsLocalKeySync(device: VpnDevice, keyPair: WireGuardKeyPair | null): keyPair is WireGuardKeyPair {

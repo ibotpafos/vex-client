@@ -6,6 +6,7 @@ import { probeNetworkHealth } from '@/vpn/networkHealthProbe';
 
 const queueKey = 'vex.diagnostics.client.queue.v1';
 const maxQueuedReports = 10;
+const networkProbeCacheTtlMs = 30_000;
 
 export type VpnDiagnosticsSnapshot = {
   reason: string;
@@ -24,6 +25,12 @@ export type VpnDiagnosticsSnapshot = {
 };
 
 let uploadChain: Promise<void> = Promise.resolve();
+let cachedNetworkProbe: {
+  endpoint?: string;
+  measuredAt: number;
+  result: Awaited<ReturnType<typeof probeNetworkHealth>>;
+} | null = null;
+let inflightNetworkProbe: Promise<Awaited<ReturnType<typeof probeNetworkHealth>>> | null = null;
 
 export function uploadClientDiagnostics(accessToken: string, snapshot: VpnDiagnosticsSnapshot): Promise<void> {
   uploadChain = uploadChain
@@ -58,11 +65,7 @@ async function buildClientDiagnosticsReport(snapshot: VpnDiagnosticsSnapshot): P
   const nativeVpnDiagnostics = await readNativeVpnDiagnostics();
   const usage = snapshot.usage;
   const generatedAt = new Date().toISOString();
-  const networkProbe = await probeNetworkHealth({
-    apiBaseUrl: vexApiBaseUrl,
-    endpoint: snapshot.endpoint,
-    measureEndpointLatency,
-  });
+  const networkProbe = await cachedDiagnosticsNetworkProbe(snapshot.endpoint);
   return {
     deviceId: snapshot.deviceId,
     platform: appInfo.platform,
@@ -98,6 +101,39 @@ async function buildClientDiagnosticsReport(snapshot: VpnDiagnosticsSnapshot): P
       ...snapshot.samples,
     },
   };
+}
+
+async function cachedDiagnosticsNetworkProbe(endpoint?: string): Promise<Awaited<ReturnType<typeof probeNetworkHealth>>> {
+  const now = Date.now();
+  if (
+    cachedNetworkProbe
+    && cachedNetworkProbe.endpoint === endpoint
+    && now - cachedNetworkProbe.measuredAt <= networkProbeCacheTtlMs
+  ) {
+    return cachedNetworkProbe.result;
+  }
+  if (inflightNetworkProbe) {
+    return inflightNetworkProbe;
+  }
+
+  inflightNetworkProbe = probeNetworkHealth({
+    apiBaseUrl: vexApiBaseUrl,
+    endpoint,
+    measureEndpointLatency,
+  })
+    .then((result) => {
+      cachedNetworkProbe = {
+        endpoint,
+        measuredAt: Date.now(),
+        result,
+      };
+      return result;
+    })
+    .finally(() => {
+      inflightNetworkProbe = null;
+    });
+
+  return inflightNetworkProbe;
 }
 
 function normalizeNumber(value: number | null | undefined): number | undefined {

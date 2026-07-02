@@ -13,6 +13,7 @@ import { isTauriRuntime } from './tauriPlatform';
 
 export const SENSITIVE_STORAGE_KEYS = [
   'vex.auth.device_id',
+  'vex.auth.device_identity.v1',
   'vex.auth.session.v1',
   'vex.auth.session.history.v1',
   'vex.auth.pkce.state',
@@ -23,6 +24,11 @@ export const SENSITIVE_STORAGE_KEYS = [
   'vex.vpn.locations.v1',
   'vex.vpn.hot_profiles.v1',
 ];
+
+const LOGOUT_PRESERVED_STORAGE_KEYS = new Set([
+  'vex.auth.device_id',
+  'vex.auth.device_identity.v1',
+]);
 
 function shouldUseWebStorage(): boolean {
   return Platform.OS === 'web';
@@ -169,5 +175,5 @@ export async function clearSecureKeys(keys: readonly string[]): Promise<void> {
 }
 
 export async function clearSensitiveStorageHistory(): Promise<void> {
-  await clearSecureKeys(SENSITIVE_STORAGE_KEYS);
+  await clearSecureKeys(SENSITIVE_STORAGE_KEYS.filter((key) => !LOGOUT_PRESERVED_STORAGE_KEYS.has(key)));
 }

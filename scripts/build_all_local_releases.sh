@@ -114,6 +114,23 @@ if platform_selected macos; then
   fi
 fi
 
+if platform_selected native-macos; then
+  if [[ "${host_os}" == "Darwin" ]]; then
+    require_command swift
+    require_command codesign
+    require_command shasum
+    if [[ "${RUN_CHECKS}" == "1" ]]; then
+      run_step swift test --package-path macos-native
+    fi
+    run_step env "VEX_SPARKLE_RELEASE_DIR=${VEX_SPARKLE_RELEASE_DIR:-${ROOT}/dist/native-macos}" bash "${ROOT}/scripts/build_native_macos_sparkle_release.sh"
+  elif [[ "${PLATFORMS}" != "auto" ]]; then
+    echo "native macOS release requires macOS host" >&2
+    exit 2
+  else
+    echo "skip native-macos: requires macOS host"
+  fi
+fi
+
 if platform_selected android; then
   require_command java
   require_command keytool
@@ -166,4 +183,4 @@ fi
 
 echo
 echo "local release build complete"
-find dist -maxdepth 2 -type f -print 2>/dev/null | sort || true
+find dist -maxdepth 3 -type f -print 2>/dev/null | sort || true

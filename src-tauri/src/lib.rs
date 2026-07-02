@@ -1,13 +1,10 @@
 use base64::prelude::*;
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
-#[cfg(target_os = "macos")]
-use std::io::Write;
 use std::process::Command;
-#[cfg(target_os = "macos")]
-use std::process::Stdio;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
+use tauri_plugin_deep_link::DeepLinkExt;
 use x25519_dalek::{PublicKey, StaticSecret};
 
 const MAIN_WINDOW_LABEL: &str = "main";
@@ -373,7 +370,7 @@ mod platform_vpn {
     const HELPER_DIR: &str = "/Library/Application Support/VEX VPN/helper";
     const HELPER_PLIST: &str = "/Library/LaunchDaemons/app.vex.vpn.helper.plist";
     const HELPER_VERSION_FILE: &str = "/Library/Application Support/VEX VPN/helper/version";
-    const HELPER_VERSION: &str = "23";
+    const HELPER_VERSION: &str = "26";
     const LAUNCHD_LABEL: &str = "app.vex.vpn.helper";
     const HELPER_SOCKET: &str = "/var/run/vex-helper.sock";
     const HELPER_START_TIMEOUT: Duration = Duration::from_secs(2);
@@ -640,6 +637,12 @@ mod platform_vpn {
         });
     }
 
+    pub fn detach_owner_watchdog() {
+        if helper_is_ready() {
+            let _ = send_uds_command("detach-owner");
+        }
+    }
+
     // ── Tunnel state helpers ───────────────────────────────────────────────
 
     fn real_interface() -> Option<String> {
@@ -735,14 +738,12 @@ mod platform_vpn {
         } else {
             "up-no-antileak"
         };
-        let owner_pid = std::process::id();
-        let up_command = format!("{up_action} owner_pid={owner_pid}");
-        if let Err(error) = run_helper_action(app, &up_command) {
+        if let Err(error) = run_helper_action(app, up_action) {
             if !retryable_connect_error(&error) {
                 return Err(error);
             }
             silent_down(anti_leak_enabled);
-            run_helper_action(app, &up_command)?;
+            run_helper_action(app, up_action)?;
         }
         Ok(())
     }
@@ -1547,7 +1548,7 @@ fn validate_sensitive_storage_key(key: &str) -> Result<String, String> {
 
 #[cfg(target_os = "macos")]
 fn read_sensitive_storage_payload(
-    _app: &tauri::AppHandle,
+    app: &tauri::AppHandle,
     key: &str,
 ) -> Result<Option<String>, String> {
     let output = Command::new("security")
@@ -1564,7 +1565,10 @@ fn read_sensitive_storage_payload(
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
         if macos_security_item_not_found(output.status.code(), &stderr) {
-            return Ok(None);
+            return read_sensitive_storage_file(app, key);
+        }
+        if let Some(payload) = read_sensitive_storage_file(app, key)? {
+            return Ok(Some(payload));
         }
         let detail = stderr.trim();
         if detail.is_empty() {
@@ -1594,21 +1598,12 @@ fn macos_security_item_not_found(status_code: Option<i32>, stderr: &str) -> bool
 }
 
 #[cfg(target_os = "macos")]
-fn macos_security_prompt_input(payload: &str) -> Result<Vec<u8>, String> {
-    if payload.contains(['\r', '\n']) {
-        return Err("sensitive value contains unsupported newline".to_string());
-    }
-    Ok(format!("{}\n{}\n", payload, payload).into_bytes())
-}
-
-#[cfg(target_os = "macos")]
 fn write_sensitive_storage_payload(
-    _app: &tauri::AppHandle,
+    app: &tauri::AppHandle,
     key: &str,
     payload: &str,
 ) -> Result<(), String> {
-    let prompt_input = macos_security_prompt_input(payload)?;
-    let mut child = Command::new("security")
+    let status = Command::new("security")
         .args([
             "add-generic-password",
             "-a",
@@ -1617,24 +1612,19 @@ fn write_sensitive_storage_payload(
             SENSITIVE_STORAGE_SERVICE,
             "-U",
             "-w",
+            payload,
         ])
-        .stdin(Stdio::piped())
-        .spawn()
+        .status()
         .map_err(|error| error.to_string())?;
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(&prompt_input)
-            .map_err(|error| format!("failed to write macOS Keychain prompt input: {}", error))?;
-    }
-    let status = child.wait().map_err(|error| error.to_string())?;
     if !status.success() {
-        return Err("failed to store sensitive value in macOS Keychain".to_string());
+        return write_sensitive_storage_file(app, key, payload);
     }
+    let _ = delete_sensitive_storage_file(app, key);
     Ok(())
 }
 
 #[cfg(target_os = "macos")]
-fn delete_sensitive_storage_payload(_app: &tauri::AppHandle, key: &str) -> Result<(), String> {
+fn delete_sensitive_storage_payload(app: &tauri::AppHandle, key: &str) -> Result<(), String> {
     let _ = Command::new("security")
         .args([
             "delete-generic-password",
@@ -1644,7 +1634,7 @@ fn delete_sensitive_storage_payload(_app: &tauri::AppHandle, key: &str) -> Resul
             SENSITIVE_STORAGE_SERVICE,
         ])
         .status();
-    Ok(())
+    delete_sensitive_storage_file(app, key)
 }
 
 #[cfg(target_os = "windows")]
@@ -1838,7 +1828,6 @@ fn delete_sensitive_storage_payload(app: &tauri::AppHandle, key: &str) -> Result
     delete_sensitive_storage_file(app, key)
 }
 
-#[cfg(not(target_os = "macos"))]
 fn read_sensitive_storage_file(
     app: &tauri::AppHandle,
     key: &str,
@@ -1851,7 +1840,6 @@ fn read_sensitive_storage_file(
     Ok(Some(payload))
 }
 
-#[cfg(not(target_os = "macos"))]
 fn write_sensitive_storage_file(
     app: &tauri::AppHandle,
     key: &str,
@@ -1871,7 +1859,6 @@ fn write_sensitive_storage_file(
     Ok(())
 }
 
-#[cfg(not(target_os = "macos"))]
 fn delete_sensitive_storage_file(app: &tauri::AppHandle, key: &str) -> Result<(), String> {
     let path = sensitive_storage_file_path(app, key)?;
     if path.exists() {
@@ -1880,7 +1867,6 @@ fn delete_sensitive_storage_file(app: &tauri::AppHandle, key: &str) -> Result<()
     Ok(())
 }
 
-#[cfg(not(target_os = "macos"))]
 fn sensitive_storage_file_path(
     app: &tauri::AppHandle,
     key: &str,
@@ -2139,16 +2125,27 @@ fn update_tray_status(app: &tauri::AppHandle, status: &VpnStatus) {
         let connected = status.state == "connected";
         let busy = status.state == "connecting" || status.state == "disconnecting";
         let can_connect = !connected && !busy && cached_vpn_config(app).is_some();
-        let _ = tray.status_item.set_text(vpn_status_label(status));
-        let _ = tray.connect_item.set_enabled(can_connect);
-        let _ = tray.disconnect_item.set_enabled(connected);
+        let status_item = tray.status_item.clone();
+        let connect_item = tray.connect_item.clone();
+        let disconnect_item = tray.disconnect_item.clone();
+        let label = vpn_status_label(status).to_string();
+
+        let _ = app.run_on_main_thread(move || {
+            let _ = status_item.set_text(label);
+            let _ = connect_item.set_enabled(can_connect);
+            let _ = disconnect_item.set_enabled(connected);
+        });
     }
 }
 
 fn update_tray_startup_item(app: &tauri::AppHandle) {
     if let Some(tray) = app.try_state::<TrayMenuState>() {
         if let Ok(enabled) = is_startup_enabled_internal(app) {
-            let _ = tray.startup_item.set_text(startup_item_title(enabled));
+            let startup_item = tray.startup_item.clone();
+            let title = startup_item_title(enabled).to_string();
+            let _ = app.run_on_main_thread(move || {
+                let _ = startup_item.set_text(title);
+            });
         }
     }
 }
@@ -2213,7 +2210,7 @@ fn start_tray_status_polling(app: tauri::AppHandle) {
     });
 }
 
-fn store_and_emit_deep_links(app: &tauri::AppHandle, urls: Vec<String>) {
+fn store_deep_links(app: &tauri::AppHandle, urls: Vec<String>) {
     if urls.is_empty() {
         return;
     }
@@ -2223,8 +2220,6 @@ fn store_and_emit_deep_links(app: &tauri::AppHandle, urls: Vec<String>) {
             pending.extend(urls.iter().cloned());
         }
     }
-
-    let _ = app.emit("deep-link://new-url", urls);
 }
 
 #[tauri::command]
@@ -2501,15 +2496,40 @@ pub fn run() {
                 .into_iter()
                 .filter(|arg| arg.starts_with("vexguard://"))
                 .collect();
-            store_and_emit_deep_links(app, urls);
+            store_deep_links(app, urls);
         }))
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_log::Builder::new().build())
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .level(log::LevelFilter::Info)
+                .build(),
+        )
         .plugin(tauri_plugin_deep_link::init())
         .setup(|app| {
             app.manage(AppRuntimeState::default());
+
+            #[cfg(target_os = "macos")]
+            platform_vpn::detach_owner_watchdog();
+
+            #[cfg(desktop)]
+            {
+                if let Some(urls) = app.deep_link().get_current()? {
+                    store_deep_links(
+                        app.handle(),
+                        urls.into_iter().map(|url| url.to_string()).collect(),
+                    );
+                }
+
+                let app_handle = app.handle().clone();
+                app.deep_link().on_open_url(move |event| {
+                    store_deep_links(
+                        &app_handle,
+                        event.urls().iter().map(|url| url.to_string()).collect(),
+                    );
+                });
+            }
 
             #[cfg(desktop)]
             {
@@ -2589,8 +2609,11 @@ pub fn run() {
                     disconnect_item,
                     startup_item,
                 });
-                refresh_tray_status(app.handle());
-                update_tray_startup_item(app.handle());
+                let app_handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    refresh_tray_status(&app_handle);
+                    update_tray_startup_item(&app_handle);
+                });
                 start_tray_status_polling(app.handle().clone());
             }
             Ok(())
@@ -2630,10 +2653,12 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
-    app.run(|app_handle, event| {
+    app.run(|_app_handle, event| {
         if let tauri::RunEvent::ExitRequested { code, .. } = event {
             if code != Some(tauri::RESTART_EXIT_CODE) {
-                let _ = platform_vpn::disconnect(app_handle, true);
+                // The VPN tunnel is intentionally independent from the UI
+                // process. Closing or quitting VEX must not drop protection;
+                // users disconnect explicitly from the app or tray.
             }
         }
     });
@@ -2783,16 +2808,5 @@ mod tests {
             Some(1),
             "User interaction is not allowed."
         ));
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn macos_security_prompt_input_writes_password_twice_without_argv_secret() {
-        assert_eq!(
-            super::macos_security_prompt_input("session-json").as_deref(),
-            Ok(b"session-json\nsession-json\n".as_slice())
-        );
-        assert!(super::macos_security_prompt_input("bad\nsecret").is_err());
-        assert!(super::macos_security_prompt_input("bad\rsecret").is_err());
     }
 }

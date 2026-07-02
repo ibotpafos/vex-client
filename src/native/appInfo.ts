@@ -52,10 +52,26 @@ export async function getOrCreateDeviceId(): Promise<string> {
   const key = 'vex.auth.device_id';
   let deviceId = await SecureStore.getItemAsync(key).catch(() => null);
   if (!deviceId) {
-    deviceId = `${detectPlatform()}-${Math.random().toString(36).slice(2, 12)}`;
+    deviceId = `vexd_${createInstallationUUID()}`;
     await SecureStore.setItemAsync(key, deviceId).catch(() => undefined);
   }
   return deviceId;
+}
+
+function createInstallationUUID(): string {
+  const runtimeCrypto = globalThis.crypto;
+  if (typeof runtimeCrypto?.randomUUID === 'function') {
+    return runtimeCrypto.randomUUID();
+  }
+  if (typeof runtimeCrypto?.getRandomValues !== 'function') {
+    throw new Error('Secure random generator is unavailable.');
+  }
+  const bytes = new Uint8Array(16);
+  runtimeCrypto.getRandomValues(bytes);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 function currentChannel(): string {

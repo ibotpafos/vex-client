@@ -1,4 +1,4 @@
-/// vex-helper v23 — Privileged VPN daemon for VEX VPN (macOS)
+/// vex-helper v26 — Privileged VPN daemon for VEX VPN (macOS)
 ///
 /// Architecture follows official AmneziaVPN macOS client:
 /// - amneziawg-go runs in foreground (-f utun), writes iface name to file
@@ -13,7 +13,7 @@
 use std::{
     fs::{self, OpenOptions},
     io::{self, BufRead, Write},
-    net::Shutdown,
+    net::{IpAddr, Shutdown, ToSocketAddrs},
     os::unix::{
         fs::PermissionsExt,
         net::{UnixListener, UnixStream},
@@ -64,10 +64,22 @@ const ANTILEAK_STATE_FILE: &str = "/Library/Application Support/VEX VPN/helper/a
 const OPERATION_LOCK_FILE: &str = "/Library/Application Support/VEX VPN/helper/operation.lock";
 const OWNER_SESSION_FILE: &str = "/Library/Application Support/VEX VPN/helper/owner-session";
 const HELPER_SOCKET: &str = "/var/run/vex-helper.sock";
+const PROTECTED_PUBLIC_HOST_ROUTES: &[&str] = &[
+    "94.141.160.212",
+    "31.77.199.171",
+];
 const IFACE_WAIT_TIMEOUT: Duration = Duration::from_secs(8);
 const UAPI_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const OPERATION_LOCK_STALE_AFTER: Duration = Duration::from_secs(60);
 const OWNER_WATCHDOG_INTERVAL: Duration = Duration::from_secs(2);
+
+struct HelperSocketCleanup;
+
+impl Drop for HelperSocketCleanup {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(HELPER_SOCKET);
+    }
+}
 
 // ─── Structured logging (file + stderr) ──────────────────────────────────────
 
@@ -182,6 +194,8 @@ struct WgConfig {
     mtu: String,
     /// UAPI lines for all [Peer] sections (aggregated)
     peer_uapi: Vec<String>,
+    /// Peer AllowedIPs from the config, used for OS routes.
+    allowed_ips: Vec<String>,
     /// First peer's endpoint host:port (needed for host route)
     endpoint: String,
 }
@@ -347,14 +361,16 @@ impl WgConfig {
             }
             "AllowedIPs" => {
                 for cidr in val.split(',') {
-                    peer.push(format!("allowed_ip={}", cidr.trim()));
+                    let cidr = cidr.trim();
+                    peer.push(format!("allowed_ip={}", cidr));
+                    cfg.allowed_ips.push(cidr.to_string());
                 }
             }
             "Endpoint" => {
                 if cfg.endpoint.is_empty() {
                     cfg.endpoint = val.to_string();
                 }
-                peer.push(format!("endpoint={}", val));
+                peer.push(format!("endpoint={}", uapi_endpoint(val)));
             }
             "PersistentKeepalive" => {
                 peer.push(format!("persistent_keepalive_interval={}", val));
@@ -362,6 +378,25 @@ impl WgConfig {
             _ => {}
         }
     }
+}
+
+fn routed_ipv4_allowed_ips(cfg: &WgConfig) -> Vec<String> {
+    let mut routes = Vec::new();
+    for cidr in &cfg.allowed_ips {
+        if cidr.is_empty() || cidr.contains(':') {
+            continue;
+        }
+        if cidr == "0.0.0.0/0" {
+            routes.push("0.0.0.0/1".to_string());
+            routes.push("128.0.0.0/1".to_string());
+        } else {
+            routes.push(cidr.clone());
+        }
+    }
+    if routes.is_empty() {
+        routes.extend(["0.0.0.0/1".to_string(), "128.0.0.0/1".to_string()]);
+    }
+    routes
 }
 
 // ─── Crypto helpers (no deps: manual base64 decode → hex) ────────────────────
@@ -525,71 +560,116 @@ fn default_gateway() -> Result<(String, String)> {
     }
 }
 
-/// Apply DNS servers to all physical network services in parallel threads to avoid connection lag.
-fn apply_dns(servers: &[String], log: &Logger) {
-    let Ok(out) = quiet_output(Command::new("networksetup").arg("-listallnetworkservices")) else {
-        log.warn("dns", "networksetup -listallnetworkservices failed");
-        return;
-    };
-
-    let servers_vec = servers.to_vec();
-
-    for svc in String::from_utf8_lossy(&out.stdout).lines() {
-        let svc = svc.trim().to_string();
-        if svc.is_empty() || svc.starts_with('*') || svc.starts_with("An asterisk") {
-            continue;
+fn route_interface_for_destination(destination: &str) -> Option<String> {
+    let out = quiet_output(Command::new("route").args(["-n", "get", destination])).ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(value) = line.strip_prefix("interface:") {
+            return Some(value.trim().to_string());
         }
-        let physical = svc.contains("Wi-Fi")
-            || svc.contains("Ethernet")
-            || svc.contains("LAN")
-            || svc.contains("USB");
-        if !physical {
-            continue;
-        }
-
-        let dns_servers = servers_vec.clone();
-        thread::spawn(move || {
-            let mut cmd = Command::new("networksetup");
-            cmd.arg("-setdnsservers").arg(&svc);
-            for s in dns_servers {
-                cmd.arg(s);
-            }
-            let _ = quiet_status(&mut cmd);
-        });
     }
-    log.info("dns", "spawning parallel networksetup DNS configuration");
+    None
 }
 
-/// Reset DNS for all physical services back to "Empty" (DHCP-assigned) in parallel threads.
-fn reset_dns(log: &Logger) {
-    let Ok(out) = quiet_output(Command::new("networksetup").arg("-listallnetworkservices")) else {
-        return;
-    };
-
-    for svc in String::from_utf8_lossy(&out.stdout).lines() {
-        let svc = svc.trim().to_string();
-        if svc.is_empty() || svc.starts_with('*') || svc.starts_with("An asterisk") {
-            continue;
-        }
-        let physical = svc.contains("Wi-Fi")
-            || svc.contains("Ethernet")
-            || svc.contains("LAN")
-            || svc.contains("USB");
-        if !physical {
-            continue;
-        }
-
-        thread::spawn(move || {
-            let _ =
-                quiet_status(Command::new("networksetup").args(["-setdnsservers", &svc, "Empty"]));
-            let _ = quiet_status(Command::new("networksetup").args([
-                "-setsearchdomains",
-                &svc,
-                "Empty",
-            ]));
-        });
+fn external_default_tunnel_route_from_iface(
+    default_iface: Option<&str>,
+    active_vex_iface: Option<&str>,
+) -> Option<String> {
+    let default_iface = default_iface?;
+    if !default_iface.starts_with("utun") {
+        return None;
     }
-    log.info("dns", "spawning parallel networksetup DNS reset");
+    if active_vex_iface.is_some_and(|iface| iface == default_iface) {
+        return None;
+    }
+    Some(default_iface.to_string())
+}
+
+fn external_default_tunnel_route(active_vex_iface: Option<&str>) -> Option<String> {
+    external_default_tunnel_route_from_iface(
+        route_interface_for_destination("default").as_deref(),
+        active_vex_iface,
+    )
+}
+
+fn apply_dns(iface: &str, servers: &[String], client_ips: &[String], log: &Logger) {
+    let mut input = String::new();
+    input.push_str("open\n");
+
+    // Set DNS
+    input.push_str("d.init\nd.add ServerAddresses *");
+    for s in servers {
+        input.push_str(&format!(" {}", s));
+    }
+    input.push_str("\nd.add SupplementalMatchDomains * \"\"\n");
+    input.push_str(&format!(
+        "set State:/Network/Service/vex-helper-{}/DNS\n",
+        iface
+    ));
+
+    // Set IPv4 to associate with the interface
+    input.push_str("d.init\n");
+    input.push_str(&format!("d.add InterfaceName {}\n", iface));
+
+    input.push_str("d.add Addresses *");
+    for addr in client_ips {
+        let ip = addr.split('/').next().unwrap_or(addr.as_str());
+        input.push_str(&format!(" {}", ip));
+    }
+    input.push_str("\n");
+
+    input.push_str("d.add SubnetMasks *");
+    for _ in client_ips {
+        input.push_str(" 255.255.255.255");
+    }
+    input.push_str("\n");
+
+    input.push_str(&format!(
+        "set State:/Network/Service/vex-helper-{}/IPv4\n",
+        iface
+    ));
+    input.push_str("close\n");
+
+    if let Ok(mut child) = Command::new("scutil")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(input.as_bytes());
+        }
+        let _ = child.wait();
+    }
+    log.info("dns", &format!("configured DNS via scutil for {}", iface));
+}
+
+fn reset_dns(iface: &str, log: &Logger) {
+    let mut input = String::new();
+    input.push_str("open\n");
+    input.push_str(&format!(
+        "remove State:/Network/Service/vex-helper-{}/DNS\n",
+        iface
+    ));
+    input.push_str(&format!(
+        "remove State:/Network/Service/vex-helper-{}/IPv4\n",
+        iface
+    ));
+    input.push_str("close\n");
+
+    if let Ok(mut child) = Command::new("scutil")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(input.as_bytes());
+        }
+        let _ = child.wait();
+    }
+    log.info("dns", &format!("removed scutil DNS keys for {}", iface));
 }
 
 fn endpoint_host(endpoint: &str) -> &str {
@@ -606,6 +686,38 @@ fn endpoint_port(endpoint: &str) -> Option<&str> {
         .rsplit_once(':')
         .map(|(_, port)| port.trim())
         .filter(|port| !port.is_empty())
+}
+
+fn uapi_endpoint(endpoint: &str) -> String {
+    let Some(port) = endpoint_port(endpoint) else {
+        return endpoint.to_string();
+    };
+    let Ok(port_number) = port.parse::<u16>() else {
+        return endpoint.to_string();
+    };
+    let host = endpoint_host(endpoint);
+    if host.parse::<IpAddr>().is_ok() {
+        return endpoint.to_string();
+    }
+
+    (host, port_number)
+        .to_socket_addrs()
+        .ok()
+        .and_then(|mut addrs| addrs.find(|addr| addr.is_ipv4()).or_else(|| addrs.next()))
+        .map(|addr| format!("{}:{}", addr.ip(), port))
+        .unwrap_or_else(|| endpoint.to_string())
+}
+
+fn resolve_to_ip(host: &str) -> String {
+    if host.parse::<IpAddr>().is_ok() {
+        return host.to_string();
+    }
+    if let Ok(mut addrs) = (host, 0).to_socket_addrs() {
+        if let Some(addr) = addrs.find(|addr| addr.is_ipv4()).or_else(|| addrs.next()) {
+            return addr.ip().to_string();
+        }
+    }
+    host.to_string()
 }
 
 fn ensure_antileak_pf_anchor_registered(log: &Logger) -> Result<()> {
@@ -714,6 +826,10 @@ fn antileak_is_active() -> bool {
 /// VPN traffic does not recursively route through the tunnel.
 fn add_endpoint_host_route(endpoint: &str, gateway: &str, log: &Logger) {
     let host = endpoint_host(endpoint);
+    add_host_route(host, gateway, log);
+}
+
+fn add_host_route(host: &str, gateway: &str, log: &Logger) {
     if host.is_empty() {
         return;
     }
@@ -732,69 +848,36 @@ fn add_endpoint_host_route(endpoint: &str, gateway: &str, log: &Logger) {
     );
 }
 
-/// Delete the host route to the VPN endpoint.
-fn del_endpoint_host_route(endpoint: &str, gateway: &str, log: &Logger) {
-    let host = endpoint_host(endpoint);
+fn del_host_route(host: &str, log: &Logger) {
     if host.is_empty() {
         return;
     }
-    let _ = quiet_status(
-        Command::new("route").args(["-q", "-n", "delete", "-host", host, "-gateway", gateway]),
-    );
-    log.info("route", &format!("removed host route {}", host));
-}
-
-fn delete_scoped_route(destination: &str, iface: &str, log: &Logger) {
-    let status = quiet_status(Command::new("route").args([
-        "-q",
-        "-n",
-        "delete",
-        "-ifscope",
-        iface,
-        destination,
-    ]));
+    let status = quiet_status(Command::new("route").args(["-q", "-n", "delete", "-host", host]));
     log.info(
         "route",
         &format!(
-            "scoped route {} on {} removed -> {:?}",
-            destination,
-            iface,
+            "removed host route {} -> {:?}",
+            host,
             status.map(|s| s.code())
         ),
     );
 }
 
 fn cleanup_interface_routes(iface: &str, endpoint: Option<&str>, log: &Logger) {
-    for prefix in &["0.0.0.0/1", "128.0.0.0/1"] {
-        let _ = quiet_status(Command::new("route").args([
-            "-q",
-            "-n",
-            "delete",
-            "-inet",
-            prefix,
-            "-interface",
-            iface,
-        ]));
-        delete_scoped_route(prefix, iface, log);
-    }
-
-    delete_scoped_route("default", iface, log);
-    delete_scoped_route("8.8.8.8", iface, log);
-    delete_scoped_route("8.8.4.4", iface, log);
-
     if let Some(endpoint) = endpoint {
         let host = endpoint_host(endpoint);
-        if !host.is_empty() {
-            delete_scoped_route(host, iface, log);
-            let _ = quiet_status(Command::new("route").args(["-q", "-n", "delete", "-host", host]));
-        }
+        del_host_route(host, log);
     }
 
-    log.info("route", &format!("routes cleaned for {}", iface));
+    for host in PROTECTED_PUBLIC_HOST_ROUTES {
+        del_host_route(host, log);
+    }
+
+    log.info("route", &format!("host routes cleaned for {}", iface));
 }
 
 fn cleanup_failed_up(iface: &str, endpoint: &str, child: &mut Child, log: &Logger) {
-    reset_dns(log);
+    reset_dns(iface, log);
     cleanup_interface_routes(iface, Some(endpoint), log);
     let _ = quiet_status(Command::new("ifconfig").args([iface, "down"]));
     let _ = child.kill();
@@ -807,6 +890,7 @@ fn cleanup_previous_session(log: &Logger) {
     let previous_iface = load_iface();
     let previous_endpoint = load_endpoint();
     if let Some(ref iface) = previous_iface {
+        reset_dns(iface, log);
         cleanup_interface_routes(iface, previous_endpoint.as_deref(), log);
         let _ = quiet_status(Command::new("ifconfig").args([iface.as_str(), "down"]));
     }
@@ -815,9 +899,8 @@ fn cleanup_previous_session(log: &Logger) {
     let _ = fs::remove_file(format!("{}/endpoint.txt", HELPER_DIR));
 }
 
-fn endpoint_route_target(endpoint: &str) -> Option<(String, String)> {
-    let out =
-        quiet_output(Command::new("route").args(["-n", "get", endpoint_host(endpoint)])).ok()?;
+fn host_route_target(host: &str) -> Option<(String, String)> {
+    let out = quiet_output(Command::new("route").args(["-n", "get", host])).ok()?;
     if !out.status.success() {
         return None;
     }
@@ -841,8 +924,12 @@ fn endpoint_route_target(endpoint: &str) -> Option<(String, String)> {
 }
 
 fn ensure_endpoint_host_route(endpoint: &str, log: &Logger) -> Result<()> {
+    ensure_host_route(endpoint_host(endpoint), log)
+}
+
+fn ensure_host_route(host: &str, log: &Logger) -> Result<()> {
     let (gateway, interface) = default_gateway()?;
-    let route = endpoint_route_target(endpoint);
+    let route = host_route_target(host);
     if route
         .as_ref()
         .is_some_and(|(route_gateway, route_interface)| {
@@ -852,9 +939,8 @@ fn ensure_endpoint_host_route(endpoint: &str, log: &Logger) -> Result<()> {
         return Ok(());
     }
 
-    let host = endpoint_host(endpoint);
     let _ = quiet_status(Command::new("route").args(["-q", "-n", "delete", "-host", host]));
-    add_endpoint_host_route(endpoint, &gateway, log);
+    add_host_route(host, &gateway, log);
     log.warn(
         "route",
         &format!(
@@ -1030,6 +1116,27 @@ fn action_up(log: &Logger, arm_antileak: bool) -> Result<()> {
         ),
     );
 
+    // Resolve endpoint hostname to IP address for routing and firewall stability
+    let resolved_endpoint_ip = resolve_to_ip(endpoint_host(&cfg.endpoint));
+    let resolved_endpoint = format!(
+        "{}:{}",
+        resolved_endpoint_ip,
+        endpoint_port(&cfg.endpoint).unwrap_or("51820")
+    );
+    log.info(
+        "up",
+        &format!("resolved endpoint IP: {}", resolved_endpoint),
+    );
+
+    if let Some(iface) = external_default_tunnel_route(load_iface().as_deref()) {
+        let message = format!(
+            "Другой VPN уже держит системный маршрут через {}. Отключите его перед запуском VEX.",
+            iface
+        );
+        log.warn("up", &message);
+        return Err(HelperError::Network(message));
+    }
+
     // 2. Tear down any previous session
     cleanup_previous_session(log);
 
@@ -1066,12 +1173,12 @@ fn action_up(log: &Logger, arm_antileak: bool) -> Result<()> {
         }
     };
     persist_iface(&iface);
-    persist_endpoint(&cfg.endpoint);
+    persist_endpoint(&resolved_endpoint);
 
     // 6. Configure via UAPI (AmneziaVPN pattern)
     if let Err(e) = uapi_configure(&iface, &cfg, log) {
         log.error("up", &format!("UAPI failed: {}", e));
-        cleanup_failed_up(&iface, &cfg.endpoint, &mut child, log);
+        cleanup_failed_up(&iface, &resolved_endpoint, &mut child, log);
         return Err(e);
     }
 
@@ -1093,23 +1200,51 @@ fn action_up(log: &Logger, arm_antileak: bool) -> Result<()> {
 
     // 9. Routing
     if let Some(ref gw) = gateway {
-        add_endpoint_host_route(&cfg.endpoint, gw, log);
+        add_endpoint_host_route(&resolved_endpoint, gw, log);
+        for host in PROTECTED_PUBLIC_HOST_ROUTES {
+            add_host_route(host, gw, log);
+        }
     }
 
-    // Split-default: two /1 routes cover entire IPv4 space (avoids clobbering default route)
-    for prefix in &["0.0.0.0/1", "128.0.0.0/1"] {
-        let status = quiet_status(Command::new("route").args([
-            "-q",
-            "-n",
-            "add",
-            "-inet",
-            prefix,
-            "-interface",
-            &iface,
-        ]));
+    // Parallel route addition to optimize connection speed (splits routes to concurrent workers)
+    let routes = routed_ipv4_allowed_ips(&cfg);
+    let worker_count = 16.min(routes.len());
+    if worker_count > 0 {
+        let routes = std::sync::Arc::new(routes);
+        let iface_arc = std::sync::Arc::new(iface.clone());
+        let mut workers = Vec::new();
+
+        for worker_id in 0..worker_count {
+            let routes = routes.clone();
+            let iface_arc = iface_arc.clone();
+            let worker_handle = thread::spawn(move || {
+                let mut idx = worker_id;
+                while idx < routes.len() {
+                    let prefix = &routes[idx];
+                    let _ = quiet_status(Command::new("route").args([
+                        "-q",
+                        "-n",
+                        "add",
+                        "-inet",
+                        prefix,
+                        "-interface",
+                        &**iface_arc,
+                    ]));
+                    idx += worker_count;
+                }
+            });
+            workers.push(worker_handle);
+        }
+        for handle in workers {
+            let _ = handle.join();
+        }
         log.info(
             "route",
-            &format!("{} -> {:?}", prefix, status.map(|s| s.code())),
+            &format!(
+                "added {} routes using {} workers",
+                routes.len(),
+                worker_count
+            ),
         );
     }
 
@@ -1118,7 +1253,7 @@ fn action_up(log: &Logger, arm_antileak: bool) -> Result<()> {
     if !dns.iter().any(|d| d == "1.1.1.1") {
         dns.push("1.1.1.1".to_string());
     }
-    apply_dns(&dns, log);
+    apply_dns(&iface, &dns, &cfg.addresses, log);
 
     prime_tunnel_traffic(&iface, log);
 
@@ -1127,7 +1262,7 @@ fn action_up(log: &Logger, arm_antileak: bool) -> Result<()> {
     log_peer_handshake_state(&iface, log);
 
     if arm_antileak {
-        if let Err(e) = enable_antileak_pf(&cfg.endpoint, &iface, log) {
+        if let Err(e) = enable_antileak_pf(&resolved_endpoint, &iface, log) {
             log.warn("antileak", &format!("failed to arm pf anchor: {}", e));
         }
     }
@@ -1139,13 +1274,15 @@ fn action_up(log: &Logger, arm_antileak: bool) -> Result<()> {
 fn action_down(log: &Logger, release_antileak: bool) -> Result<()> {
     log.info("down", "=== start ===");
 
-    // 1. Restore DNS first (while connectivity still exists)
-    reset_dns(log);
-
-    // 2. Remove routes
     let iface = load_iface();
     let endpoint = load_endpoint();
 
+    // 1. Restore DNS first (while connectivity still exists)
+    if let Some(ref iface) = iface {
+        reset_dns(iface, log);
+    }
+
+    // 2. Remove routes
     if let Some(ref iface) = iface {
         cleanup_interface_routes(iface, endpoint.as_deref(), log);
 
@@ -1154,9 +1291,13 @@ fn action_down(log: &Logger, release_antileak: bool) -> Result<()> {
         log.info("ifconfig", &format!("brought {} down", iface));
     }
 
-    // 3. Remove endpoint host route
-    if let (Some(ep), Ok((gw, _))) = (endpoint, default_gateway()) {
-        del_endpoint_host_route(&ep, &gw, log);
+    // 3. Remove endpoint host route and protected routes (no gateway needed)
+    if let Some(ref ep) = endpoint {
+        let host = endpoint_host(ep);
+        del_host_route(host, log);
+    }
+    for host in PROTECTED_PUBLIC_HOST_ROUTES {
+        del_host_route(host, log);
     }
 
     // 4. Kill amneziawg-go
@@ -1275,7 +1416,11 @@ fn action_repair(log: &Logger) -> Result<()> {
     let Some(endpoint) = load_endpoint() else {
         return Ok(());
     };
-    ensure_endpoint_host_route(&endpoint, log)
+    ensure_endpoint_host_route(&endpoint, log)?;
+    for host in PROTECTED_PUBLIC_HOST_ROUTES {
+        ensure_host_route(host, log)?;
+    }
+    Ok(())
 }
 
 // ─── Traffic statistics ───────────────────────────────────────────────────────
@@ -1386,60 +1531,36 @@ fn query_uapi_stats(iface: &str) -> Option<TunnelStats> {
 }
 
 fn helper_status_response() -> String {
-    if operation_in_progress() {
-        return format!(
-            "state=connecting rx=0 tx=0 leak_protection={}\n",
-            if antileak_is_active() { "armed" } else { "off" }
-        );
-    }
-
-    let Some(iface) = load_iface() else {
-        return if antileak_is_active() {
-            "state=error rx=0 tx=0 leak_protection=blocking\n".to_string()
-        } else {
-            "state=disconnected rx=0 tx=0 leak_protection=off\n".to_string()
-        };
+    let operation = operation_in_progress();
+    let iface = load_iface().unwrap_or_default();
+    let endpoint = load_endpoint().unwrap_or_default();
+    let sock_exists =
+        !iface.is_empty() && Path::new(&format!("{}/{}.sock", WG_RUNTIME_DIR, iface)).exists();
+    let route_ok = !iface.is_empty() && route_uses_interface("1.1.1.1", &iface);
+    let stats = if sock_exists {
+        query_uapi_stats(&iface)
+    } else {
+        None
     };
-
-    let sock_path = format!("{}/{}.sock", WG_RUNTIME_DIR, iface);
-    if !Path::new(&sock_path).exists() {
-        return if antileak_is_active() {
-            "state=error rx=0 tx=0 leak_protection=blocking\n".to_string()
-        } else {
-            "state=disconnected rx=0 tx=0 leak_protection=off\n".to_string()
-        };
-    }
-
-    if !route_uses_interface("1.1.1.1", &iface) {
-        return if antileak_is_active() {
-            "state=error rx=0 tx=0 leak_protection=blocking\n".to_string()
-        } else {
-            "state=error rx=0 tx=0 leak_protection=off\n".to_string()
-        };
-    }
-
-    let Some(stats) = query_uapi_stats(&iface) else {
-        return if antileak_is_active() {
-            "state=error rx=0 tx=0 leak_protection=blocking\n".to_string()
-        } else {
-            "state=error rx=0 tx=0 leak_protection=off\n".to_string()
-        };
+    let rx = stats.as_ref().map(|stats| stats.rx_bytes).unwrap_or(0);
+    let tx = stats.as_ref().map(|stats| stats.tx_bytes).unwrap_or(0);
+    let handshake = stats
+        .as_ref()
+        .map(|stats| stats.latest_handshake_sec)
+        .unwrap_or(0);
+    let leak_protection = if antileak_is_active() { "armed" } else { "off" };
+    let state = if operation {
+        "connecting"
+    } else if route_ok || sock_exists || rx > 0 || tx > 0 || handshake > 0 {
+        "connected"
+    } else if antileak_is_active() {
+        "error"
+    } else {
+        "disconnected"
     };
-
-    if stats.latest_handshake_sec == 0 && stats.rx_bytes == 0 {
-        return format!(
-            "state=connected rx=0 tx={} latest_handshake=0 leak_protection={}\n",
-            stats.tx_bytes,
-            if antileak_is_active() { "armed" } else { "off" }
-        );
-    }
-
     format!(
-        "state=connected rx={} tx={} latest_handshake={} leak_protection={}\n",
-        stats.rx_bytes,
-        stats.tx_bytes,
-        stats.latest_handshake_sec,
-        if antileak_is_active() { "armed" } else { "off" }
+        "state={} iface={} endpoint={} socket_exists={} route_ok={} rx={} tx={} latest_handshake={} leak_protection={}\n",
+        state, iface, endpoint, sock_exists, route_ok, rx, tx, handshake, leak_protection
     )
 }
 
@@ -1552,6 +1673,10 @@ fn handle_client(stream: &mut UnixStream, log: &Logger) -> Result<()> {
         },
         "status" => (helper_status_response(), false),
         "diagnostics" => (helper_diagnostics_response(), false),
+        "detach-owner" => {
+            let _ = fs::remove_file(OWNER_SESSION_FILE);
+            ("ok\n".to_string(), false)
+        }
         "antileak-off" => match acquire_operation_lock(log) {
             Ok(_guard) => {
                 let _ = disable_antileak_pf(log);
@@ -1578,6 +1703,7 @@ fn handle_client(stream: &mut UnixStream, log: &Logger) -> Result<()> {
 }
 
 fn main() {
+    let _socket_cleanup = HelperSocketCleanup;
     let _ = fs::create_dir_all(HELPER_DIR);
     let _ = fs::create_dir_all(WG_RUNTIME_DIR);
 
@@ -1596,7 +1722,7 @@ fn main() {
 
     log.info(
         "main",
-        &format!("vex-helper v23 started on {}", HELPER_SOCKET),
+        &format!("vex-helper v26 started on {}", HELPER_SOCKET),
     );
 
     for stream in listener.incoming() {
@@ -1654,7 +1780,10 @@ fn secure_command_socket(socket_path: &str, log: &Logger) {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_antileak_rules, parse_owner_pid, WgConfig};
+    use super::{
+        build_antileak_rules, external_default_tunnel_route_from_iface, parse_owner_pid,
+        routed_ipv4_allowed_ips, WgConfig,
+    };
     use std::{fs, path::PathBuf};
 
     fn write_temp_config(name: &str, content: &str) -> PathBuf {
@@ -1671,6 +1800,22 @@ mod tests {
         assert_eq!(parse_owner_pid(&["owner_pid=1"]), None);
         assert_eq!(parse_owner_pid(&["owner_pid=abc"]), None);
         assert_eq!(parse_owner_pid(&["ignored=true"]), None);
+    }
+
+    #[test]
+    fn detects_foreign_utun_default_route_before_connect() {
+        assert_eq!(
+            external_default_tunnel_route_from_iface(Some("utun6"), None),
+            Some("utun6".to_string())
+        );
+        assert_eq!(
+            external_default_tunnel_route_from_iface(Some("utun6"), Some("utun6")),
+            None
+        );
+        assert_eq!(
+            external_default_tunnel_route_from_iface(Some("en0"), Some("utun6")),
+            None
+        );
     }
 
     #[test]
@@ -1698,6 +1843,36 @@ PersistentKeepalive = 25
         assert_eq!(config.addresses, vec!["10.8.0.2/32"]);
         assert_eq!(config.endpoint, "203.0.113.10:51820");
         assert_eq!(config.mtu, "1420");
+    }
+
+    #[test]
+    fn resolves_hostname_endpoint_before_uapi() {
+        let path = write_temp_config(
+            "hostname-endpoint.conf",
+            r#"
+[Interface]
+PrivateKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+Address = 10.8.0.2/32
+
+[Peer]
+PublicKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+AllowedIPs = 0.0.0.0/0
+Endpoint = localhost:443
+"#,
+        );
+
+        let config = WgConfig::from_file(path.to_str().unwrap()).expect("valid config");
+        let _ = fs::remove_file(path);
+
+        assert_eq!(config.endpoint, "localhost:443");
+        assert!(config
+            .peer_uapi
+            .iter()
+            .any(|line| line == "endpoint=127.0.0.1:443"));
+        assert!(!config
+            .peer_uapi
+            .iter()
+            .any(|line| line == "endpoint=localhost:443"));
     }
 
     #[test]
@@ -1742,6 +1917,32 @@ Endpoint = 203.0.113.10:51820
         let _ = fs::remove_file(path);
 
         assert!(error.to_string().contains("MTU out of supported range"));
+    }
+
+    #[test]
+    fn uses_profile_allowed_ips_for_os_routes() {
+        let path = write_temp_config(
+            "split-routes.conf",
+            r#"
+[Interface]
+PrivateKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+Address = 10.8.0.2/32
+
+[Peer]
+PublicKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+AllowedIPs = 0.0.0.0/2, 64.0.0.0/4, 94.141.160.208/30, 94.141.160.213/32, ::/0
+Endpoint = 31.77.199.171:51820
+"#,
+        );
+
+        let config = WgConfig::from_file(path.to_str().unwrap()).expect("valid config");
+        let _ = fs::remove_file(path);
+
+        let routes = routed_ipv4_allowed_ips(&config);
+        assert!(routes.contains(&"94.141.160.208/30".to_string()));
+        assert!(routes.contains(&"94.141.160.213/32".to_string()));
+        assert!(!routes.contains(&"94.141.160.212/32".to_string()));
+        assert!(!routes.contains(&"::/0".to_string()));
     }
 
     #[test]

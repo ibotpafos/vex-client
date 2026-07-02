@@ -14,6 +14,11 @@ export type AuthResultDTO = {
   };
 };
 
+export type EmailOTPChallengeDTO = {
+  challenge_id: string;
+  expires_at?: string;
+};
+
 export type DeviceDTO = {
   id: string;
   user_id?: string;
@@ -122,10 +127,19 @@ export type NativeVPNProfileDTO = {
 export type RegisterNativeDeviceResultDTO = {
   device_registered?: boolean;
   device: DeviceDTO;
+  binding_status?: string;
+  trust_level?: string;
 };
 
 export type RegisterDevicePushTokenResultDTO = {
   device: DeviceDTO;
+};
+
+export type DeviceIdentityChallengeDTO = {
+  id: string;
+  nonce: string;
+  purpose: string;
+  expires_at?: string;
 };
 
 export type SupportMessageDTO = {

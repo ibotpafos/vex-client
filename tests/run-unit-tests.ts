@@ -7,6 +7,7 @@ import { sessionLoadFailureDiagnosticsSnapshot } from '../src/auth/sessionDiagno
 import { loadSessionWithRetry, loadWithRetry } from '../src/auth/sessionLoadRetry';
 import { generateChallenge, generateRandomString } from '../src/auth/pkce';
 import { buildAppWebAuthUrl } from '../src/auth/webAuthUrl';
+import { loadSessionFromStorage, saveSessionToStorage, type SessionStorageAdapter } from '../src/auth/sessionStoreCore';
 import { isSupportSocketConnecting } from '../src/api/supportSocketState';
 import { optimisticSupportTicket, supportConnectionStatusText, supportHistoryErrorMessage, uniqueSupportMessages, supportChatItems } from '../src/screens/support-helpers';
 import {
@@ -583,6 +584,35 @@ async function runSessionLoadRetryTests(): Promise<void> {
   }
 }
 
+async function runSessionStorePersistenceTests(): Promise<void> {
+  const store = new Map<string, string>();
+  const storage: SessionStorageAdapter = {
+    getItemAsync: async (key) => store.get(key) ?? null,
+    setItemAsync: async (key, value) => {
+      store.set(key, value);
+    },
+    deleteItemAsync: async (key) => {
+      store.delete(key);
+    },
+  };
+
+  const session = authSessionCandidate();
+  await saveSessionToStorage(session, storage);
+  assertDeepEqual(await loadSessionFromStorage(storage), session);
+  assertEqual(Boolean(store.get('vex.auth.session.v1')), true);
+  assertEqual(Boolean(store.get('vex.auth.session.history.v1')), true);
+
+  store.set('vex.auth.session.v1', '{"accessToken":"truncated"');
+  assertDeepEqual(await loadSessionFromStorage(storage), session);
+  assertDeepEqual(JSON.parse(store.get('vex.auth.session.v1') || '{}'), session);
+
+  store.set('vex.auth.session.history.v1', 'not-json');
+  store.set('vex.auth.session.v1', 'not-json');
+  assertEqual(await loadSessionFromStorage(storage), null);
+  assertEqual(store.has('vex.auth.session.v1'), false);
+  assertEqual(store.has('vex.auth.session.history.v1'), false);
+}
+
 async function runSafeStorageTests(): Promise<void> {
   assertEqual(await safeGetStoredValue('vex.settings.vpn.location.v1', async () => 'de'), 'de');
   assertEqual(await safeGetStoredValue('vex.settings.vpn.location.v1', async () => null), null);
@@ -823,6 +853,7 @@ void runAsyncTests().catch((error) => {
 async function runAsyncTests(): Promise<void> {
   await runAuthStorageWarmStartTests();
   await runSessionLoadRetryTests();
+  await runSessionStorePersistenceTests();
   await runSafeStorageTests();
   runHotVpnProfileTests();
   runHotConnectFlowTests();

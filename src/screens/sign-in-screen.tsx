@@ -15,7 +15,12 @@ import {
   View,
 } from "react-native";
 import React, { useCallback, useState, useEffect, useRef } from "react";
-import { login, exchangeAppAuthCode, vexApiBaseUrl } from "@/api/vexApi";
+import {
+  requestEmailOTP,
+  confirmEmailOTP,
+  exchangeAppAuthCode,
+  vexApiBaseUrl,
+} from "@/api/vexApi";
 import { useSession } from "@/auth/session-context";
 import { loadSession } from "@/auth/sessionStore";
 import { loadSessionWithRetry, loadWithRetry } from "@/auth/sessionLoadRetry";
@@ -57,8 +62,14 @@ export default function SignInScreen() {
   const isKeyboardVisible = useKeyboardVisible();
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const [emailOTPCode, setEmailOTPCode] = useState("");
+  const [emailOTPChallenge, setEmailOTPChallenge] = useState<{
+    email: string;
+    challengeId: string;
+    expiresAt?: string;
+  } | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [authNotice, setAuthNotice] = useState<string | null>(null);
   const [isAuthBusy, setIsAuthBusy] = useState(false);
   const [biometricAuthLabel, setBiometricAuthLabel] = useState("");
   const handledCallbackUrls = useRef(new Set<string>());
@@ -203,13 +214,6 @@ export default function SignInScreen() {
           unlisten();
           return;
         }
-
-        const pollId = window.setInterval(readPendingUrls, 1000);
-        const previousUnlisten = unlisten;
-        unlisten = () => {
-          window.clearInterval(pollId);
-          previousUnlisten();
-        };
       } catch (err) {
         console.error("Failed to initialize deep link listener:", err);
       }
@@ -289,29 +293,57 @@ export default function SignInScreen() {
     }
   }, [handleCallbackUrl]);
 
+  const handleEmailChange = useCallback((value: string) => {
+    setEmail(value);
+    setEmailOTPCode("");
+    setEmailOTPChallenge(null);
+    setAuthNotice(null);
+  }, []);
+
   const handleAuthSubmit = useCallback(async () => {
     if (isAuthBusy) {
       playWarningHaptic();
       return;
     }
-    if (authMode === "register") {
-      await handleWebAuthStart();
-      return;
-    }
-    if (!email.trim() || !password) {
+    const normalizedEmail = email.trim();
+    if (!normalizedEmail) {
       playWarningHaptic();
-      setAuthError("Введите email и пароль.");
+      setAuthError("Введите email.");
       return;
     }
 
     playLightImpactHaptic();
     setIsAuthBusy(true);
     setAuthError(null);
+    setAuthNotice(null);
     try {
-      const nextSession = await login(email.trim(), password);
+      if (!emailOTPChallenge || emailOTPChallenge.email !== normalizedEmail) {
+        const challenge = await requestEmailOTP(normalizedEmail);
+        setEmailOTPChallenge({
+          email: normalizedEmail,
+          challengeId: challenge.challengeId,
+          expiresAt: challenge.expiresAt,
+        });
+        setEmailOTPCode("");
+        setAuthNotice("Код отправлен на email.");
+        playSuccessHaptic();
+        return;
+      }
+      const code = emailOTPCode.trim();
+      if (!code) {
+        playWarningHaptic();
+        setAuthError("Введите код из письма.");
+        return;
+      }
+      const nextSession = await confirmEmailOTP(
+        normalizedEmail,
+        emailOTPChallenge.challengeId,
+        code,
+      );
       resetVpnProfileCache();
       await signIn(nextSession);
-      setPassword("");
+      setEmailOTPCode("");
+      setEmailOTPChallenge(null);
       await queryClient.invalidateQueries({ queryKey: ["entitlement"] });
       await queryClient.invalidateQueries({ queryKey: ["vpn-profile"] });
       playSuccessHaptic();
@@ -325,11 +357,10 @@ export default function SignInScreen() {
       setIsAuthBusy(false);
     }
   }, [
-    authMode,
     email,
-    handleWebAuthStart,
+    emailOTPChallenge,
+    emailOTPCode,
     isAuthBusy,
-    password,
     queryClient,
     signIn,
   ]);
@@ -349,7 +380,7 @@ export default function SignInScreen() {
       if (!storedSession) {
         setBiometricAuthLabel("");
         throw new Error(
-          "Сохраненная сессия не найдена. Войдите по email и паролю.",
+          "Сохраненная сессия не найдена. Войдите по email-коду.",
         );
       }
 
@@ -428,6 +459,7 @@ export default function SignInScreen() {
                 onPress={() => {
                   playSelectionHaptic();
                   setAuthError(null);
+                  setAuthNotice(null);
                   setAuthMode("login");
                 }}
                 style={[
@@ -451,6 +483,7 @@ export default function SignInScreen() {
                 onPress={() => {
                   playSelectionHaptic();
                   setAuthError(null);
+                  setAuthNotice(null);
                   setAuthMode("register");
                 }}
                 style={[
@@ -475,7 +508,7 @@ export default function SignInScreen() {
               importantForAutofill="no"
               keyboardType="email-address"
               maxFontSizeMultiplier={1.05}
-              onChangeText={setEmail}
+              onChangeText={handleEmailChange}
               onFocus={playSelectionHaptic}
               placeholder="Email"
               placeholderTextColor="#60767B"
@@ -483,20 +516,28 @@ export default function SignInScreen() {
               textContentType="none"
               value={email}
             />
-            <TextInput
-              autoComplete="off"
-              autoCapitalize="none"
-              importantForAutofill="no"
-              maxFontSizeMultiplier={1.05}
-              onChangeText={setPassword}
-              onFocus={playSelectionHaptic}
-              placeholder="Пароль"
-              placeholderTextColor="#60767B"
-              secureTextEntry
-              style={styles.input}
-              textContentType="none"
-              value={password}
-            />
+            {emailOTPChallenge ? (
+              <TextInput
+                autoComplete="one-time-code"
+                autoCapitalize="none"
+                importantForAutofill="yes"
+                keyboardType="number-pad"
+                maxFontSizeMultiplier={1.05}
+                maxLength={6}
+                onChangeText={setEmailOTPCode}
+                onFocus={playSelectionHaptic}
+                placeholder="Код из письма"
+                placeholderTextColor="#60767B"
+                style={styles.input}
+                textContentType="oneTimeCode"
+                value={emailOTPCode}
+              />
+            ) : null}
+            {authNotice ? (
+              <Text maxFontSizeMultiplier={1.15} style={styles.authNotice}>
+                {authNotice}
+              </Text>
+            ) : null}
             {authError ? (
               <Text
                 maxFontSizeMultiplier={1.15}
@@ -518,7 +559,7 @@ export default function SignInScreen() {
                   maxFontSizeMultiplier={1.1}
                   style={styles.primaryButtonText}
                 >
-                  {authMode === "login" ? "Войти" : "Создать аккаунт"}
+                  {emailOTPChallenge ? "Войти по коду" : "Получить код"}
                 </Text>
               )}
             </Pressable>
@@ -666,6 +707,13 @@ const styles = StyleSheet.create({
     color: vexColors.danger,
     fontSize: 12,
     fontWeight: "700",
+    lineHeight: 16,
+    textAlign: "center",
+  },
+  authNotice: {
+    color: vexColors.accent,
+    fontSize: 12,
+    fontWeight: "800",
     lineHeight: 16,
     textAlign: "center",
   },

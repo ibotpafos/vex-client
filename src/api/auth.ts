@@ -5,6 +5,7 @@ import {
 } from './types';
 import {
   type AuthResultDTO,
+  type EmailOTPChallengeDTO,
   type UserDTO,
 } from './dto';
 
@@ -12,6 +13,35 @@ export async function login(email: string, password: string): Promise<AuthSessio
   return parseAuth(await jsonRequest<AuthResultDTO>('/v1/auth/login', {
     method: 'POST',
     body: { email, password, remember_me: true, device_session: true },
+  }));
+}
+
+export type EmailOTPChallenge = {
+  challengeId: string;
+  expiresAt?: string;
+};
+
+export async function requestEmailOTP(email: string): Promise<EmailOTPChallenge> {
+  const challenge = await jsonRequest<EmailOTPChallengeDTO>('/v1/auth/email-otp/request', {
+    method: 'POST',
+    body: { email },
+  });
+  return {
+    challengeId: challenge.challenge_id,
+    expiresAt: challenge.expires_at,
+  };
+}
+
+export async function confirmEmailOTP(email: string, challengeId: string, code: string): Promise<AuthSession> {
+  return parseAuth(await jsonRequest<AuthResultDTO>('/v1/auth/email-otp/confirm', {
+    method: 'POST',
+    body: {
+      email,
+      challenge_id: challengeId,
+      code,
+      remember_me: true,
+      device_session: true,
+    },
   }));
 }
 

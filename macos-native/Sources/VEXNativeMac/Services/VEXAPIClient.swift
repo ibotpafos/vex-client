@@ -195,6 +195,7 @@ struct VEXAPIClient {
             URLQueryItem(name: "device_id", value: deviceId),
             URLQueryItem(name: "location", value: locationId),
             URLQueryItem(name: "routing_mode", value: routingMode.rawValue),
+            URLQueryItem(name: "platform", value: "macos"),
         ]
         if let bypassRegion {
             query.append(URLQueryItem(name: "bypass_region", value: bypassRegion))

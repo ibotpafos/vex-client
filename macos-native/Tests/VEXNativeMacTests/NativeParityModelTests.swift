@@ -63,6 +63,14 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertEqual(profile.bypassDomains, ["example.ru"])
     }
 
+    func testManagedProfileRequestsMacOSCompactRoutingPolicy() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let apiURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/VEXAPIClient.swift")
+        let api = try String(contentsOf: apiURL, encoding: .utf8)
+
+        XCTAssertTrue(api.contains("URLQueryItem(name: \"platform\", value: \"macos\")"))
+    }
+
     func testPreparedTunnelCacheRoundTrips() throws {
         let device = try JSONDecoder().decode(VpnDevice.self, from: """
         {"id":"dev_1","name":"Mac","status":"active","protocol":"amneziawg","external_device_id":"macos-test"}

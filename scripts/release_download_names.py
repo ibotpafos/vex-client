@@ -11,7 +11,6 @@ VERSIONS_FILE = ROOT_DIR / "versions.json"
 PLATFORM_VERSION_SOURCE = {
     "android": "android",
     "desktop-web": "desktop",
-    "macos": "desktop",
     "linux": "desktop",
     "windows": "desktop",
 }
@@ -22,11 +21,6 @@ ARTIFACT_TEMPLATES = {
     },
     "desktop-web": {
         "bundle": "vex-desktop-web-{version}.zip",
-    },
-    "macos": {
-        "dmg": "Vex-macOS-{version}.dmg",
-        "updater": "Vex-macOS-{version}.app.tar.gz",
-        "compat_zip": "Vex-macOS-{version}.zip",
     },
     "linux": {
         "appimage": "Vex-Linux-{version}.AppImage",
@@ -41,10 +35,6 @@ ARTIFACT_TEMPLATES = {
 
 SCOPE_ARTIFACTS = {
     "all": (
-        ("macos", "dmg"),
-        ("macos", "updater"),
-        ("macos", "updater.sig"),
-        ("macos", "compat_zip"),
         ("desktop-web", "bundle"),
         ("desktop-web", "bundle.sha256"),
         ("desktop-web", "bundle.sig"),
@@ -60,12 +50,6 @@ SCOPE_ARTIFACTS = {
         ("windows", "updater"),
         ("windows", "updater.sha256"),
         ("windows", "updater.sig"),
-    ),
-    "macos": (
-        ("macos", "dmg"),
-        ("macos", "updater"),
-        ("macos", "updater.sig"),
-        ("macos", "compat_zip"),
     ),
     "linux": (
         ("linux", "appimage"),

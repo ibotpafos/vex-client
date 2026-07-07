@@ -64,13 +64,17 @@ struct VEXSidebar: View {
 
             Button {
                 Task {
-                    await appState.toggleVPNPower(using: helper)
+                    if helper.installRequiredMessage != nil {
+                        await helper.repairHelper()
+                    } else {
+                        await appState.toggleVPNPower(using: helper)
+                    }
                 }
             } label: {
                 CodexSidebarRow(
                     icon: helper.status.state.symbolName,
                     title: vpnActionTitle,
-                    detail: VEXUserFacingText.status(appState.statusMessage),
+                    detail: vpnStatusDetail,
                     trailing: nil,
                     isSelected: false
                 )
@@ -190,6 +194,9 @@ struct VEXSidebar: View {
     }
 
     private var vpnActionTitle: String {
+        if helper.installRequiredMessage != nil {
+            return "Установить helper"
+        }
         switch helper.status.state {
         case .connected:
             return "Отключить VPN"
@@ -210,6 +217,19 @@ struct VEXSidebar: View {
         appState.selectedLocation?.latencyMs.map { "\(Int($0.rounded())) мс" }
     }
 
+    private var vpnStatusDetail: String? {
+        if let installRequiredMessage = helper.installRequiredMessage {
+            return installRequiredMessage
+        }
+        if let routeConflictMessage = helper.status.routeConflictMessage {
+            return routeConflictMessage
+        }
+        if let statusMessage = VEXUserFacingText.status(appState.statusMessage, respecting: helper.status, isBusy: helper.isBusy || appState.isVpnBusy) {
+            return statusMessage
+        }
+        return VEXUserFacingText.status(helper.message)
+    }
+
     private var initials: String {
         let value = appState.accountTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let first = value.first else { return "V" }
@@ -220,7 +240,7 @@ struct VEXSidebar: View {
         if let updateReadyText = appState.updateReadyText {
             return updateReadyText
         }
-        return helper.status.state == .connected ? "VPN активен" : "VEX Native"
+        return helper.status.isUsableConnectedStatus ? "VPN активен" : "VEX Native"
     }
 
     private var profileAccessorySymbol: String {

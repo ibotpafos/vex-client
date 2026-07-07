@@ -30,7 +30,12 @@ struct VPNProfileService {
 
         if !forceRefresh,
            let cached,
-           !Self.cachedProfileNeedsRefresh(cached, requestedRoutingMode: routingMode) {
+           !Self.cachedProfileNeedsRefresh(
+                cached,
+                requestedLocationId: normalizedLocationId,
+                requestedRoutingMode: routingMode,
+                allowStale: true
+           ) {
             try cache.writeHelperConfig(helperConfig(cached.config))
             return cached.tunnel
         }
@@ -72,12 +77,51 @@ struct VPNProfileService {
                 knownVersion: cached?.profileVersion
             )
         } catch {
+            if error.isTimeout,
+               !forceRefresh,
+               let cached,
+               !Self.cachedProfileNeedsRefresh(
+                    cached,
+                    requestedLocationId: normalizedLocationId,
+                    requestedRoutingMode: routingMode,
+                    allowStale: true
+               ) {
+                try cache.writeHelperConfig(helperConfig(cached.config))
+                return cached.tunnel
+            }
+            if routingMode == .fullTunnel, error.isProfileProvisioningUnavailable {
+                effectiveRoutingMode = .allExceptRu
+                effectiveBypassRegion = VEXAppInfo.defaultBypassRegion
+                managedProfile = try await api.managedVpnProfile(
+                    accessToken: accessToken,
+                    deviceId: device.id,
+                    locationId: normalizedLocationId,
+                    routingMode: .allExceptRu,
+                    bypassRegion: effectiveBypassRegion,
+                    knownVersion: nil
+                )
+                return try persistManagedProfile(
+                    managedProfile,
+                    cached: cached,
+                    device: device,
+                    keyPair: keyPair,
+                    locationId: normalizedLocationId,
+                    routingMode: effectiveRoutingMode,
+                    bypassRegion: effectiveBypassRegion
+                )
+            }
             guard routingMode != .fullTunnel, error.isTimeout else {
                 throw error
             }
             effectiveRoutingMode = .fullTunnel
             effectiveBypassRegion = nil
-            if !forceRefresh, let fallbackCached = cache.load(locationId: normalizedLocationId, routingMode: .fullTunnel) {
+            if !forceRefresh,
+               let fallbackCached = cache.load(locationId: normalizedLocationId, routingMode: .fullTunnel),
+               !Self.cachedProfileNeedsRefresh(
+                    fallbackCached,
+                    requestedLocationId: normalizedLocationId,
+                    requestedRoutingMode: .fullTunnel
+               ) {
                 try cache.writeHelperConfig(helperConfig(fallbackCached.config))
                 return fallbackCached.tunnel
             }
@@ -95,6 +139,30 @@ struct VPNProfileService {
             throw VPNProfileError.deviceRevoked
         }
 
+        return try persistManagedProfile(
+            managedProfile,
+            cached: cached,
+            device: device,
+            keyPair: keyPair,
+            locationId: normalizedLocationId,
+            routingMode: effectiveRoutingMode,
+            bypassRegion: effectiveBypassRegion
+        )
+    }
+
+    private func persistManagedProfile(
+        _ managedProfile: ManagedVpnProfile,
+        cached: PreparedTunnelCacheRecord?,
+        device: VpnDevice,
+        keyPair: WireGuardKeyPair,
+        locationId normalizedLocationId: String,
+        routingMode effectiveRoutingMode: VpnRoutingMode,
+        bypassRegion effectiveBypassRegion: String?
+    ) throws -> PreparedTunnel {
+        if managedProfile.revoked == true {
+            throw VPNProfileError.deviceRevoked
+        }
+
         let config: String
         if managedProfile.unchanged == true {
             guard let cachedConfig = cached?.config, isValidConfig(cachedConfig) else {
@@ -107,7 +175,7 @@ struct VPNProfileService {
             config = try managedProfileConfig(managedProfile, keyPair: keyPair)
         }
 
-        let nextDevice = device.withManagedProfile(managedProfile)
+        let nextDevice = device.withManagedProfile(managedProfile, locationId: normalizedLocationId)
         let tunnel = PreparedTunnel(
             device: nextDevice,
             config: config,
@@ -155,16 +223,73 @@ struct VPNProfileService {
     ) async throws -> VpnDevice {
         let devices = try await api.vpnDevices(accessToken: accessToken)
         if let exact = devices.first(where: { isActiveManagedDevice($0) && $0.externalDeviceId == externalDeviceId }) {
-            return exact
+            return try await syncNativeDeviceMetadataIfNeeded(
+                exact,
+                accessToken: accessToken,
+                externalDeviceId: externalDeviceId,
+                publicKey: publicKey,
+                keyEpoch: keyEpoch,
+                locationId: locationId
+            )
         }
         if let legacyLocation = devices.first(where: { isActiveManagedDevice($0) && $0.externalDeviceId == "\(externalDeviceId):\(locationId)" }) {
-            return legacyLocation
+            return try await syncNativeDeviceMetadataIfNeeded(
+                legacyLocation,
+                accessToken: accessToken,
+                externalDeviceId: externalDeviceId,
+                publicKey: publicKey,
+                keyEpoch: keyEpoch,
+                locationId: locationId
+            )
         }
         if let legacyPhysical = devices.first(where: {
             isActiveManagedDevice($0) && ($0.externalDeviceId ?? "").hasPrefix("\(externalDeviceId):")
         }) {
-            return legacyPhysical
+            return try await syncNativeDeviceMetadataIfNeeded(
+                legacyPhysical,
+                accessToken: accessToken,
+                externalDeviceId: externalDeviceId,
+                publicKey: publicKey,
+                keyEpoch: keyEpoch,
+                locationId: locationId
+            )
         }
+        return try await registerNativeDevice(
+            accessToken: accessToken,
+            externalDeviceId: externalDeviceId,
+            publicKey: publicKey,
+            keyEpoch: keyEpoch,
+            locationId: locationId
+        )
+    }
+
+    private func syncNativeDeviceMetadataIfNeeded(
+        _ device: VpnDevice,
+        accessToken: String,
+        externalDeviceId: String,
+        publicKey: String,
+        keyEpoch: Int,
+        locationId: String
+    ) async throws -> VpnDevice {
+        guard nativeDeviceMetadataNeedsSync(device, externalDeviceId: externalDeviceId) else {
+            return device
+        }
+        return try await registerNativeDevice(
+            accessToken: accessToken,
+            externalDeviceId: externalDeviceId,
+            publicKey: publicKey,
+            keyEpoch: keyEpoch,
+            locationId: locationId
+        )
+    }
+
+    private func registerNativeDevice(
+        accessToken: String,
+        externalDeviceId: String,
+        publicKey: String,
+        keyEpoch: Int,
+        locationId: String
+    ) async throws -> VpnDevice {
         let identityFields = await nativeDeviceIdentityRegistrationFields(
             accessToken: accessToken,
             installationId: externalDeviceId,
@@ -178,6 +303,12 @@ struct VPNProfileService {
             locationId: locationId,
             identityFields: identityFields
         )
+    }
+
+    private func nativeDeviceMetadataNeedsSync(_ device: VpnDevice, externalDeviceId: String) -> Bool {
+        normalized(device.externalDeviceId) != externalDeviceId ||
+            normalized(device.platform).lowercased() != "macos" ||
+            normalized(device.appVersion) != VEXAppInfo.version
     }
 
     private func nativeDeviceIdentityRegistrationFields(
@@ -267,28 +398,90 @@ struct VPNProfileService {
     }
 
     private func helperConfig(_ config: String) -> String {
-        config
+        Self.sanitizedMacOSHelperConfig(config, endpointResolver: resolvedConfigEndpoint)
+    }
+
+    static func sanitizedMacOSHelperConfig(
+        _ config: String,
+        endpointResolver: (String) -> String = { $0 }
+    ) -> String {
+        let hasIPv6Address = configHasIPv6InterfaceAddress(config)
+        return config
             .split(separator: "\n", omittingEmptySubsequences: false)
             .map { rawLine -> String in
                 let line = String(rawLine)
                 let trimmed = line.trimmingCharacters(in: .whitespaces)
-                guard trimmed.hasPrefix("Endpoint"),
-                      let separator = line.firstIndex(of: "=") else {
-                    return line
+                if trimmed.hasPrefix("AllowedIPs"),
+                   let separator = line.firstIndex(of: "="),
+                   !hasIPv6Address {
+                    return sanitizedIPv4AllowedIPsLine(line, separator: separator)
                 }
+                guard trimmed.hasPrefix("Endpoint"),
+                      let separator = line.firstIndex(of: "=") else { return line }
                 let endpoint = line[line.index(after: separator)...].trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !endpoint.isEmpty else { return line }
                 let prefix = String(line[...separator])
-                return "\(prefix) \(resolvedConfigEndpoint(endpoint))"
+                return "\(prefix) \(endpointResolver(endpoint))"
             }
             .joined(separator: "\n")
     }
 
+    private static func configHasIPv6InterfaceAddress(_ config: String) -> Bool {
+        config.split(separator: "\n", omittingEmptySubsequences: false).contains { rawLine in
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard line.hasPrefix("Address"),
+                  let separator = line.firstIndex(of: "=") else {
+                return false
+            }
+            return line[line.index(after: separator)...]
+                .split(separator: ",")
+                .contains { $0.contains(":") }
+        }
+    }
+
+    private static func sanitizedIPv4AllowedIPsLine(_ line: String, separator: String.Index) -> String {
+        let prefix = String(line[...separator])
+        let values = line[line.index(after: separator)...]
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && !$0.contains(":") }
+        return "\(prefix) \((values.isEmpty ? ["0.0.0.0/0"] : values).joined(separator: ", "))"
+    }
+
     static func cachedProfileNeedsRefresh(
         _ cached: PreparedTunnelCacheRecord,
-        requestedRoutingMode: VpnRoutingMode
+        requestedLocationId: String,
+        requestedRoutingMode: VpnRoutingMode,
+        allowStale: Bool = false,
+        now: Date = Date()
     ) -> Bool {
-        requestedRoutingMode == .allExceptRu && hasLegacySplitRouteAllowedIPs(cached.config)
+        let requestedLocationId = normalizedLocationId(requestedLocationId)
+        if normalizedLocationId(cached.locationId) != requestedLocationId {
+            return true
+        }
+        if cached.routingMode != requestedRoutingMode {
+            return true
+        }
+        if cachedDeviceNodeDoesNotMatchLocation(cached.device, requestedLocationId: requestedLocationId) {
+            return true
+        }
+        if requestedRoutingMode == .allExceptRu && hasLegacySplitRouteAllowedIPs(cached.config) {
+            return true
+        }
+        return !allowStale && !cached.isFresh(now: now)
+    }
+
+    private static func cachedDeviceNodeDoesNotMatchLocation(_ device: VpnDevice, requestedLocationId: String) -> Bool {
+        guard let nodeId = device.nodeId?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !nodeId.isEmpty else {
+            return false
+        }
+        return nodeId != requestedLocationId && !nodeId.hasPrefix("\(requestedLocationId)-")
+    }
+
+    private static func normalizedLocationId(_ value: String) -> String {
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized.isEmpty ? "de" : normalized
     }
 
     static func hasLegacySplitRouteAllowedIPs(_ config: String) -> Bool {
@@ -390,10 +583,11 @@ enum VPNProfileError: LocalizedError {
 }
 
 private extension VpnDevice {
-    func withManagedProfile(_ profile: ManagedVpnProfile) -> VpnDevice {
+    func withManagedProfile(_ profile: ManagedVpnProfile, locationId: String) -> VpnDevice {
         var copy = self
         copy.assignedIpv4 = profile.assignedIpv4 ?? assignedIpv4
         copy.endpoint = managedProfileEndpoint(profile) ?? endpoint
+        copy.nodeId = managedProfileNodeId(profile) ?? nodeIdForLocation(locationId)
         copy.protocol = profile.protocol ?? self.protocol
         return copy
     }
@@ -402,6 +596,18 @@ private extension VpnDevice {
         guard let server = profile.server, !server.isEmpty else { return nil }
         guard let port = profile.port, port > 0 else { return server }
         return "\(server):\(port)"
+    }
+
+    private func managedProfileNodeId(_ profile: ManagedVpnProfile) -> String? {
+        guard let server = profile.server?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !server.isEmpty else {
+            return nil
+        }
+        return server.split(separator: ".").first.map(String.init)
+    }
+
+    private func nodeIdForLocation(_ locationId: String) -> String {
+        "\(locationId)-1"
     }
 }
 

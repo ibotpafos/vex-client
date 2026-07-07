@@ -46,19 +46,7 @@ struct SignInPanel: View {
                             waitingForWebAuthView
                                 .transition(.opacity.combined(with: .scale(scale: 0.98)))
                         } else {
-                            Button {
-                                appState.openSignIn()
-                            } label: {
-                                Text("Войти через сайт")
-                                .font(.system(size: 16, weight: .black))
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 52)
-                            }
-                            .buttonStyle(.vexProminentGlass)
-                            .controlSize(.large)
-                            .tint(Color.vexCyan)
-                            .disabled(appState.isAuthBusy)
-                            .keyboardShortcut(.defaultAction)
+                            signInActions
                         }
 
                         if !appState.isWaitingForWebAuth {
@@ -95,11 +83,61 @@ struct SignInPanel: View {
         }
     }
 
+    private var signInActions: some View {
+        VStack(spacing: 10) {
+            if appState.canUnlockStoredSession {
+                Button {
+                    Task {
+                        await appState.unlockStoredSessionWithBiometrics()
+                    }
+                } label: {
+                    Text("Открыть сохраненную сессию")
+                        .font(.system(size: 16, weight: .black))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 52)
+                }
+                .buttonStyle(.vexProminentGlass)
+                .controlSize(.large)
+                .tint(Color.vexCyan)
+                .disabled(appState.isAuthBusy)
+                .keyboardShortcut(.defaultAction)
+            }
+
+            if appState.canUnlockStoredSession {
+                Button {
+                    appState.openSignIn()
+                } label: {
+                    Text("Войти через сайт заново")
+                        .font(.system(size: 13, weight: .black))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 40)
+                }
+                .buttonStyle(.vexGlass)
+                .controlSize(.large)
+                .tint(Color.vexCyan)
+                .disabled(appState.isAuthBusy)
+            } else {
+                Button {
+                    appState.openSignIn()
+                } label: {
+                    Text("Войти через сайт")
+                        .font(.system(size: 16, weight: .black))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 52)
+                }
+                .buttonStyle(.vexProminentGlass)
+                .controlSize(.large)
+                .tint(Color.vexCyan)
+                .disabled(appState.isAuthBusy)
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+    }
+
     private var waitingForWebAuthView: some View {
         VStack(spacing: 12) {
             HStack(spacing: 12) {
-                ProgressView()
-                    .controlSize(.small)
+                VEXMiniSpinner(tint: Color.vexCyan)
                 Text("Ждем подтверждение в браузере")
                     .font(.system(size: 14, weight: .black))
                     .foregroundStyle(Color.vexText)

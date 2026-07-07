@@ -17,7 +17,7 @@ struct VEXNativeMacApp: App {
                 .task {
                     appDelegate.configure(helper: helper, appState: appState)
                     await helper.start()
-                    await appState.start()
+                    await appState.start(helperStatus: helper.status)
                 }
         }
         .defaultSize(width: 860, height: 760)
@@ -141,7 +141,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        return .terminateNow
+        guard let helper else {
+            return .terminateNow
+        }
+        Task { @MainActor in
+            await helper.detachOwnerWatchdog(quiet: true)
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {

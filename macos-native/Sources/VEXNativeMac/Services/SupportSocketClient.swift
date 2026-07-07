@@ -70,13 +70,28 @@ final class SupportSocketClient: ObservableObject {
             let task = URLSession.shared.webSocketTask(with: url)
             self.task = task
             task.resume()
-            isConnected = true
-            isReconnecting = false
-            lastError = nil
+            validateOpen(task)
             receiveLoop(task)
         } catch {
             lastError = error.localizedDescription
             scheduleReconnect()
+        }
+    }
+
+    private func validateOpen(_ task: URLSessionWebSocketTask) {
+        task.sendPing { [weak self, weak task] error in
+            Task { @MainActor in
+                guard let self, let task, self.task === task else { return }
+                if let error {
+                    self.isConnected = false
+                    self.lastError = error.localizedDescription
+                    self.scheduleReconnect()
+                    return
+                }
+                self.isConnected = true
+                self.isReconnecting = false
+                self.lastError = nil
+            }
         }
     }
 
@@ -86,6 +101,9 @@ final class SupportSocketClient: ObservableObject {
                 guard let self, self.task === task else { return }
                 switch result {
                 case .success(let message):
+                    self.isConnected = true
+                    self.isReconnecting = false
+                    self.lastError = nil
                     self.dispatch(message)
                     self.receiveLoop(task)
                 case .failure(let error):
@@ -132,6 +150,8 @@ final class SupportSocketClient: ObservableObject {
 
     private func scheduleReconnect() {
         guard reconnectTask == nil else { return }
+        task?.cancel(with: .goingAway, reason: nil)
+        task = nil
         isReconnecting = true
         reconnectTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 3_000_000_000)

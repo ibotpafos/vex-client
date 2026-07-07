@@ -2546,7 +2546,7 @@ pub fn run() {
                 let show_item = MenuItem::with_id(app, "show", "Показать VEX", true, None::<&str>)?;
                 let disconnect_item =
                     MenuItem::with_id(app, "disconnect", "Отключить VPN", false, None::<&str>)?;
-                let startup_enabled = is_startup_enabled_internal(&app.handle()).unwrap_or(false);
+                let startup_enabled = is_startup_enabled_internal(app.handle()).unwrap_or(false);
                 let startup_item = MenuItem::with_id(
                     app,
                     "startup",
@@ -2618,8 +2618,8 @@ pub fn run() {
             }
             Ok(())
         })
-        .on_window_event(|window, event| match event {
-            tauri::WindowEvent::CloseRequested { api, .. } => {
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let _ = window.hide();
                 api.prevent_close();
                 #[cfg(target_os = "macos")]
@@ -2627,7 +2627,6 @@ pub fn run() {
                     .app_handle()
                     .set_activation_policy(tauri::ActivationPolicy::Accessory);
             }
-            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             connect_vpn,

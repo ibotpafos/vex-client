@@ -81,6 +81,7 @@ version = "0.1.35"
 dependencies = [
  "base64 0.22.1",
  "block2",
+ "libc",
  "log",
  "objc2",
  "objc2-foundation",

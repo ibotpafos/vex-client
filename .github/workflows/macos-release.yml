@@ -1,15 +1,19 @@
-name: macOS release
+name: macOS native release
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: Optional macOS release version override
-        required: false
+        description: Native macOS release version, for example 0.1.38
+        required: true
+        default: ""
+      build:
+        description: Native macOS numeric build, for example 38
+        required: true
         default: ""
   push:
     tags:
-      - "macos-v*"
+      - "macos-native-v*"
 
 permissions:
   contents: write
@@ -22,10 +26,11 @@ jobs:
   build:
     runs-on: macos-15
     env:
-      MACOS_RELEASE_VERSION: ${{ inputs.version || '' }}
-      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-      TAURI_SIGNING_PUBLIC_KEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
+      VEX_SPARKLE_PUBLIC_ED_KEY: ${{ secrets.VEX_SPARKLE_PUBLIC_ED_KEY }}
+      VEX_SPARKLE_PRIVATE_ED_KEY: ${{ secrets.VEX_SPARKLE_PRIVATE_ED_KEY }}
+      VEX_SPARKLE_KEY_ACCOUNT: app.vex.vpn.native
+      VEX_SPARKLE_DOWNLOAD_URL_PREFIX: https://vexguard.app/downloads/native-macos/
+      VEX_SPARKLE_PRODUCTION: "1"
 
     steps:
       - name: Checkout
@@ -40,41 +45,27 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.24.x"
-          cache: false
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
-
-      - name: Restore Rust build cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: macos-cargo-v2-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml', 'src-tauri/src/**/*.rs') }}
-          restore-keys: |
-            macos-cargo-v2-${{ runner.os }}-
-
-      - name: Restore macOS native resource cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            external/amnezia
-            ~/Library/Caches/go-build
-            src-tauri/resources/amneziawg-go
-            src-tauri/resources/awg
-            src-tauri/resources/vex-helper
-            src-tauri/.vex-stamps
-            src-tauri/target/.vex-stamps
-          key: macos-native-resources-${{ runner.os }}-${{ hashFiles('patches/amnezia/*.patch', 'scripts/bootstrap_amneziawg_macos.sh', 'scripts/build_universal_resources.sh', 'scripts/build_helper.sh', 'src-tauri/Cargo.lock', 'src-tauri/Cargo.toml', 'src-tauri/src/**/*.rs') }}
-          restore-keys: |
-            macos-native-resources-${{ runner.os }}-
+      - name: Resolve release version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ github.event.inputs.version || '' }}"
+          build="${{ github.event.inputs.build || '' }}"
+          if [[ -z "${version}" && "${GITHUB_REF_TYPE}" == "tag" && "${GITHUB_REF_NAME}" == macos-native-v* ]]; then
+            version="${GITHUB_REF_NAME#macos-native-v}"
+          fi
+          if [[ -z "${build}" ]]; then
+            build="${GITHUB_RUN_NUMBER}"
+          fi
+          if [[ -z "${version}" || ! "${build}" =~ ^[0-9]+$ ]]; then
+            echo "Set workflow inputs version and numeric build, or push a macos-native-v* tag." >&2
+            exit 2
+          fi
+          {
+            echo "VEX_NATIVE_VERSION=${version}"
+            echo "VEX_NATIVE_BUILD=${build}"
+            echo "VEX_SPARKLE_PRIVATE_ED_KEY_FILE=${RUNNER_TEMP}/sparkle-private-ed-key"
+          } >> "${GITHUB_ENV}"
 
       - name: Install dependencies
         run: npm ci --prefer-offline --no-audit --fund=false
@@ -85,22 +76,35 @@ jobs:
       - name: Unit tests
         run: npm run test:unit
 
-      - name: Rust check
-        run: cargo check --manifest-path src-tauri/Cargo.toml
+      - name: Swift tests
+        run: swift test --package-path macos-native
 
-      - name: Build macOS release
-        run: npm run macos:release
+      - name: Write Sparkle signing key
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${VEX_SPARKLE_PUBLIC_ED_KEY}" || -z "${VEX_SPARKLE_PRIVATE_ED_KEY}" ]]; then
+            echo "VEX_SPARKLE_PUBLIC_ED_KEY and VEX_SPARKLE_PRIVATE_ED_KEY secrets are required." >&2
+            exit 2
+          fi
+          printf '%s\n' "${VEX_SPARKLE_PRIVATE_ED_KEY}" > "${VEX_SPARKLE_PRIVATE_ED_KEY_FILE}"
+          chmod 0600 "${VEX_SPARKLE_PRIVATE_ED_KEY_FILE}"
+
+      - name: Build native macOS release
+        run: |
+          npm run native:macos:internal-release
+          bash scripts/prepare_native_macos_deploy_bundle.sh
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: vex-macos-release
-          path: dist/macos/*
+          name: vex-native-macos-release
+          path: dist/native-macos/deploy/*
           if-no-files-found: error
 
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/macos/*
+          files: dist/native-macos/deploy/*
           fail_on_unmatched_files: true

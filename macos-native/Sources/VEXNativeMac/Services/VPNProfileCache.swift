@@ -72,6 +72,7 @@ struct PreparedTunnelCacheRecord: Codable, Equatable {
     var bypassRangesCount: Int
     var bypassDomainsCount: Int
     var routingPolicyVersion: String
+    var fetchedAt: Date?
 
     init(tunnel: PreparedTunnel) {
         device = tunnel.device
@@ -83,6 +84,16 @@ struct PreparedTunnelCacheRecord: Codable, Equatable {
         bypassRangesCount = tunnel.bypassRangesCount
         bypassDomainsCount = tunnel.bypassDomainsCount
         routingPolicyVersion = tunnel.routingPolicyVersion
+        fetchedAt = Date()
+    }
+
+    var isFresh: Bool {
+        isFresh(now: Date())
+    }
+
+    func isFresh(now: Date, maxAge: TimeInterval = 5 * 60) -> Bool {
+        guard let fetchedAt else { return false }
+        return now.timeIntervalSince(fetchedAt) <= maxAge
     }
 
     var tunnel: PreparedTunnel {

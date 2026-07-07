@@ -16,6 +16,32 @@ final class SparkleUpdateTests: XCTestCase {
         XCTAssertEqual(appState.statusMessage, "Открыли Sparkle проверку обновлений.")
     }
 
+    func testSameVersionUpdateMetadataDoesNotSurfaceReadyState() {
+        let appState = VEXAppState(nativeUpdater: MockNativeUpdaterService())
+        appState.applyUpdateCheck(Self.updateCheck(
+            updateAvailable: true,
+            latestVersion: VEXAppInfo.version,
+            latestBuild: VEXAppInfo.buildNumber
+        ))
+
+        XCTAssertFalse(appState.hasNewerNativeUpdate)
+        XCTAssertFalse(appState.hasNativeUpdateDownload)
+        XCTAssertNil(appState.updateReadyText)
+    }
+
+    func testNewerVersionUpdateMetadataSurfacesReadyState() {
+        let appState = VEXAppState(nativeUpdater: MockNativeUpdaterService())
+        appState.applyUpdateCheck(Self.updateCheck(
+            updateAvailable: true,
+            latestVersion: "999.0.0",
+            latestBuild: VEXAppInfo.buildNumber
+        ))
+
+        XCTAssertTrue(appState.hasNewerNativeUpdate)
+        XCTAssertTrue(appState.hasNativeUpdateDownload)
+        XCTAssertEqual(appState.updateReadyText, "v999.0.0 готово к установке")
+    }
+
     func testNativeMacBuildScriptContainsSparklePlistContract() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let scriptURL = packageRoot
@@ -48,6 +74,7 @@ final class SparkleUpdateTests: XCTestCase {
 
         XCTAssertTrue(models.contains("CFBundleShortVersionString"))
         XCTAssertTrue(models.contains("CFBundleVersion"))
+        XCTAssertTrue(models.contains("Bundle(identifier: \"app.vex.vpn.native\")"))
         XCTAssertTrue(apiClient.contains("VEXAppInfo.version"))
         XCTAssertTrue(apiClient.contains("String(VEXAppInfo.buildNumber)"))
         XCTAssertFalse(apiClient.contains("request.setValue(\"0.1.0\", forHTTPHeaderField: \"X-Vex-App-Version\")"))
@@ -83,6 +110,9 @@ final class SparkleUpdateTests: XCTestCase {
         XCTAssertTrue(script.contains("VEX_NATIVE_REQUIRE_DEVELOPER_ID"))
         XCTAssertTrue(script.contains("VEX_NATIVE_DISTRIBUTION_MODE"))
         XCTAssertTrue(script.contains("ad-hoc signed as expected for internal distribution"))
+        XCTAssertTrue(script.contains("VEX_NATIVE_VERIFY_INSTALLED_RUNTIME"))
+        XCTAssertTrue(script.contains("verify_native_macos_runtime.sh"))
+        XCTAssertTrue(script.contains("STRICT=1"))
     }
 
     func testNativeMacInternalReleaseScriptDoesNotRequireAppleDeveloperID() throws {
@@ -124,7 +154,33 @@ final class SparkleUpdateTests: XCTestCase {
         XCTAssertTrue(script.contains("DOWNLOAD_SCOPE=native-macos"))
         XCTAssertTrue(script.contains("production-downloads-deploy"))
         XCTAssertTrue(script.contains("validate_live_appcast"))
+        XCTAssertTrue(script.contains("RUN_METADATA_DEPLOY"))
+        XCTAssertTrue(script.contains("publish_native_macos_release_metadata.py"))
         XCTAssertTrue(script.contains("refuses ephemeral Sparkle keys"))
+    }
+
+    private static func updateCheck(
+        updateAvailable: Bool,
+        latestVersion: String,
+        latestBuild: Int
+    ) -> AppUpdateCheckResult {
+        AppUpdateCheckResult(
+            updateAvailable: updateAvailable,
+            required: false,
+            currentBuildBlocked: false,
+            latestVersion: latestVersion,
+            latestBuild: latestBuild,
+            minSupportedBuild: 1,
+            minConfigSchemaVersion: nil,
+            downloadUrl: "https://vexguard.app/downloads/native-macos/VEXNativeMac-test.zip",
+            changelog: nil,
+            checksumSha256: nil,
+            signatureUrl: nil,
+            channel: "stable",
+            reason: nil,
+            rolloutPercent: nil,
+            checkedAt: nil
+        )
     }
 }
 

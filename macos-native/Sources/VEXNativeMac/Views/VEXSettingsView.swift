@@ -89,7 +89,8 @@ struct VEXSettingsView: View {
             SettingsSection(title: "Системный helper") {
                 SettingsInfoRow(systemName: "checkmark.shield", title: "Статус", value: helperStatusText, tone: helperStatusTone)
                 SettingsInfoRow(systemName: "number", title: "Версия", value: helperVersion, tone: .neutral)
-                SettingsInfoRow(systemName: helper.status.state.symbolName, title: "VPN", value: helper.status.state.rawValue, tone: helper.status.state == .connected ? .good : .neutral)
+                SettingsInfoRow(systemName: helper.status.state.symbolName, title: "VPN", value: helper.status.state.rawValue, tone: helper.status.isUsableConnectedStatus ? .good : .neutral)
+                helperRepairRow
             }
 
             SettingsSection(title: "Приложение") {
@@ -111,7 +112,10 @@ struct VEXSettingsView: View {
     }
 
     private var helperStatusText: String {
-        helper.installState?.filesCurrent == true ? "Установлен" : "Требует проверки"
+        guard let installState = helper.installState else {
+            return "Проверяем"
+        }
+        return installState.filesCurrent ? "Установлен" : "Требует установки"
     }
 
     private var helperStatusTone: VEXStatusBadge.Tone {
@@ -120,7 +124,47 @@ struct VEXSettingsView: View {
 
     private var helperVersion: String {
         let value = helper.installState?.version.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return value.isEmpty ? "unknown" : value
+        if value.isEmpty {
+            return "unknown"
+        }
+        guard helper.installState?.filesCurrent == true else {
+            return "\(value) устарел"
+        }
+        return value
+    }
+
+    @ViewBuilder
+    private var helperRepairRow: some View {
+        if helper.installState?.filesCurrent != true {
+            HStack(spacing: 10) {
+                SettingsGlyph(systemName: "wrench.and.screwdriver")
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Root helper")
+                        .font(.system(size: 13, weight: .black))
+                        .foregroundStyle(Color.vexText)
+                    Text("Установить актуальный системный helper.")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Color.vexSecondaryText)
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 10)
+                Button {
+                    Task {
+                        await helper.repairHelper()
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        if helper.isBusy {
+                            VEXMiniSpinner(tint: Color.vexBackground)
+                        }
+                        Text(helper.isBusy ? "Установка" : "Установить")
+                    }
+                }
+                .buttonStyle(.vexProminentGlass)
+                .disabled(helper.isBusy)
+            }
+            .padding(.vertical, 9)
+        }
     }
 }
 

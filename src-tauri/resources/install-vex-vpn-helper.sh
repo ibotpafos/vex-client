@@ -7,7 +7,7 @@ _user_name="${3:-}"
 
 helper_dir="/Library/Application Support/VEX VPN/helper"
 plist="/Library/LaunchDaemons/app.vex.vpn.helper.plist"
-helper_version="31"
+helper_version="32"
 
 umask 077
 

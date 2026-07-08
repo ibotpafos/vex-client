@@ -251,14 +251,7 @@ fn action_up(log: &Logger, arm_antileak: bool) -> Result<()> {
 
     if let Some(ref target) = route_target {
         add_host_route_to_target(endpoint_host(&resolved_endpoint), target, log);
-        if target.is_tunnel_interface() {
-            add_protected_public_host_routes_to_target(target, log);
-        } else {
-            log.info(
-                "route",
-                "skipping protected public host routes for physical default route",
-            );
-        }
+        add_protected_public_host_routes_to_target(target, log);
     }
 
     let routes = routed_ipv4_allowed_ips(&cfg.allowed_ips);
@@ -950,7 +943,7 @@ fn main() {
 
     log.info(
         "main",
-        &format!("vex-helper v30 started on {}", HELPER_SOCKET),
+        &format!("vex-helper v32 started on {}", HELPER_SOCKET),
     );
 
     for stream in listener.incoming() {

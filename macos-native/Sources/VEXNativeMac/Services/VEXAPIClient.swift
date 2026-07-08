@@ -147,7 +147,7 @@ struct VEXAPIClient {
             method: "POST",
             accessToken: accessToken,
             body: body,
-            idempotencyKey: "native-register-\(externalDeviceId)"
+            idempotencyKey: "native-register-\(externalDeviceId)-\(VEXAppInfo.version)-\(VEXAppInfo.buildNumber)"
         )
         return response.device
     }
@@ -386,12 +386,25 @@ struct VEXAPIClient {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
         }
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            if VEXAPIError.isServerUnavailable(error) {
+                throw VEXAPIError.technicalWorks
+            }
+            throw error
+        }
         guard let http = response as? HTTPURLResponse else {
             throw VEXAPIError.invalidResponse
         }
         guard (200..<300).contains(http.statusCode) else {
-            throw VEXAPIError.http(status: http.statusCode, message: apiErrorMessage(data))
+            let apiError = apiErrorPayload(data)
+            if VEXAPIError.isMaintenanceStatus(http.statusCode) || apiError.code == "maintenance" {
+                throw VEXAPIError.technicalWorks
+            }
+            throw VEXAPIError.http(status: http.statusCode, message: apiError.message)
         }
         if T.self == EmptyResponse.self, data.isEmpty {
             return EmptyResponse() as! T
@@ -409,12 +422,13 @@ struct VEXAPIClient {
         return components.percentEncodedQuery ?? ""
     }
 
-    private func apiErrorMessage(_ data: Data) -> String {
-        if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let message = object["message"] as? String {
-            return message
+    private func apiErrorPayload(_ data: Data) -> (code: String?, message: String) {
+        if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            let code = object["code"] as? String
+            let message = object["message"] as? String ?? object["error"] as? String
+            return (code, message ?? String(data: data, encoding: .utf8) ?? "HTTP request failed")
         }
-        return String(data: data, encoding: .utf8) ?? "HTTP request failed"
+        return (nil, String(data: data, encoding: .utf8) ?? "HTTP request failed")
     }
 }
 
@@ -459,7 +473,10 @@ private struct AuthSessionPayload: Decodable {
 
 enum VEXAPIError: LocalizedError {
     case invalidResponse
+    case technicalWorks
     case http(status: Int, message: String)
+
+    static let technicalWorksMessage = "Идут технические работы. Мы уже переключаем сервисы, попробуйте через пару минут."
 
     var isUnauthorized: Bool {
         if case .http(let status, _) = self {
@@ -479,9 +496,41 @@ enum VEXAPIError: LocalizedError {
         switch self {
         case .invalidResponse:
             return "Некорректный ответ API."
+        case .technicalWorks:
+            return Self.technicalWorksMessage
         case .http(let status, let message):
             return "HTTP \(status): \(message)"
         }
+    }
+
+    static func isMaintenanceStatus(_ status: Int) -> Bool {
+        status == 502 || status == 503 || status == 504
+    }
+
+    static func isServerUnavailable(_ error: Error) -> Bool {
+        if let apiError = error as? VEXAPIError {
+            if case .technicalWorks = apiError {
+                return true
+            }
+        }
+        if let urlError = error as? URLError {
+            let unavailableCodes: [URLError.Code] = [
+                .timedOut,
+                .cannotFindHost,
+                .cannotConnectToHost,
+                .networkConnectionLost,
+                .dnsLookupFailed,
+                .notConnectedToInternet,
+            ]
+            return unavailableCodes.contains(urlError.code)
+        }
+        let message = error.localizedDescription.localizedLowercase
+        return message.contains("идут технические работы")
+            || message.contains("could not connect")
+            || message.contains("connection refused")
+            || message.contains("connection reset")
+            || message.contains("network connection was lost")
+            || message.contains("timed out")
     }
 }
 
@@ -500,5 +549,18 @@ extension Error {
         }
         let nsError = self as NSError
         return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorTimedOut
+    }
+
+    var isProfileProvisioningUnavailable: Bool {
+        guard case .http(let status, let message) = self as? VEXAPIError else {
+            return false
+        }
+        let normalized = message.localizedLowercase
+        return status == 400 && (
+            normalized.contains("add-peer")
+                || normalized.contains("node-agent")
+                || normalized.contains("connection refused")
+                || normalized.contains("connect: connection refused")
+        )
     }
 }

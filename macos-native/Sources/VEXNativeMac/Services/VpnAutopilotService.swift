@@ -28,14 +28,14 @@ struct VpnAutopilotService {
             cause = .subscription
         } else if matches(messages, ["разрешение", "permission", "not authorized", "unauthorized"]) {
             cause = .permission
-        } else if matches(messages, ["revoked", "profile", "config", "public key", "private key", "wireguard key", "rotation"]) {
+        } else if matches(messages, ["revoked", "profile", "config", "public key", "private key", "wireguard key", "rotation", "no_handshake", "missing_peer"]) {
             cause = .keyOrProfile
         } else if probe.dnsOk == false || matches(messages, ["dns", "resolve", "lookup", "name resolution", "nodename nor servname"]) {
             cause = .dns
         } else if probe.httpsOk == false || matches(messages, ["offline", "no internet", "timed out", "timeout", "network connection was lost", "cancelled", "canceled"]) {
             cause = .network
         } else if healthReasons.contains(where: { [.deviceUsageDegraded, .staleLocalHandshake, .localStatusError].contains($0) })
-                    || matches(messages, ["handshake", "endpoint", "peer", "stale", "no_handshake", "missing_peer"])
+                    || matches(messages, ["handshake", "endpoint", "peer", "stale"])
                     || (probe.endpointLatencyMs ?? 0) > 900 {
             cause = .server
         } else if healthReasons.contains(.leakBlocking) || healthReasons.contains(.localStatusDisconnected) {
@@ -46,12 +46,12 @@ struct VpnAutopilotService {
 
         return VpnAutopilotAssessment(
             cause: cause,
-            canFailover: cause == .server || cause == .dns,
+            canFailover: cause == .server || cause == .dns || cause == .keyOrProfile,
             diagnosticStatus: cause.rawValue,
             userMessage: userMessage(for: cause),
             samples: [
                 "autopilot_cause": cause.rawValue,
-                "autopilot_can_failover": cause == .server || cause == .dns ? "true" : "false",
+                "autopilot_can_failover": cause == .server || cause == .dns || cause == .keyOrProfile ? "true" : "false",
                 "dns_ok": probe.dnsOk.map(String.init) ?? "",
                 "https_ok": probe.httpsOk.map(String.init) ?? "",
                 "endpoint_latency_ms": probe.endpointLatencyMs.map { String(Int($0)) } ?? "",

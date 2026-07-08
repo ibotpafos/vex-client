@@ -12,13 +12,14 @@ final class VEXHelperModel: ObservableObject {
     private let installer = VEXHelperInstaller()
     private var pollTask: Task<Void, Never>?
     private var consecutiveStatusFailures = 0
+    private let connectStabilizationDeadline: Duration = .seconds(2)
 
     func start() async {
         installState = installer.installedState
         do {
             try await installer.ensureReady(allowAdminInstall: false)
             installState = installer.installedState
-            await detachOwnerWatchdog()
+            await detachOwnerWatchdog(quiet: true)
         } catch {
             installState = installer.installedState
             message = error.localizedDescription
@@ -83,11 +84,13 @@ final class VEXHelperModel: ObservableObject {
         await refreshStatus(quiet: true)
     }
 
-    func detachOwnerWatchdog() async {
+    func detachOwnerWatchdog(quiet: Bool = false) async {
         do {
             _ = try await client.send("detach-owner")
         } catch {
-            message = error.localizedDescription
+            if !quiet {
+                message = error.localizedDescription
+            }
         }
     }
 
@@ -100,6 +103,30 @@ final class VEXHelperModel: ObservableObject {
         installState = installer.installedState
     }
 
+    func repairHelper() async {
+        guard !isBusy else { return }
+        isBusy = true
+        message = "Готовим установку helper..."
+        defer { isBusy = false }
+
+        do {
+            try await installer.repairWithAdminPrivileges()
+            installState = installer.installedState
+            message = "Helper установлен."
+            await refreshStatus(quiet: true)
+        } catch {
+            installState = installer.installedState
+            message = VEXUserFacingText.status(error.localizedDescription) ?? error.localizedDescription
+        }
+    }
+
+    var installRequiredMessage: String? {
+        guard let installState else {
+            return nil
+        }
+        return installState.filesCurrent ? nil : "Helper требует установки."
+    }
+
     private func runCommand(_ command: String, busyState: VpnConnectionState, successMessage: String) async {
         guard !isBusy else { return }
         isBusy = true
@@ -108,7 +135,7 @@ final class VEXHelperModel: ObservableObject {
 
         do {
             try await installer.ensureReady(allowAdminInstall: true)
-            if isConnectCommand(command) {
+            if isConnectCommand(command), shouldDisconnectBeforeConnect {
                 await client.silentDisconnect(releaseAntiLeak: false)
             }
             let response = try await sendCommandWithRetry(command)
@@ -116,12 +143,30 @@ final class VEXHelperModel: ObservableObject {
                 throw VEXHelperError.commandFailed(response)
             }
             installState = installer.installedState
-            message = successMessage
-            await refreshStatus(quiet: true)
+            if isConnectCommand(command) {
+                if await refreshConnectedStatusUntilStable() {
+                    await detachOwnerWatchdog(quiet: true)
+                    message = successMessage
+                } else if let routeConflictMessage = status.routeConflictMessage {
+                    message = routeConflictMessage
+                } else {
+                    message = "Подключение не подтверждено. Проверяем маршрут..."
+                }
+            } else {
+                message = successMessage
+                await refreshStatus(quiet: true)
+            }
         } catch {
             message = VEXUserFacingText.status("Command failed: \(error.localizedDescription)")
+            if isConnectCommand(command) {
+                await client.silentDisconnect(releaseAntiLeak: true)
+            }
             await refreshStatus(quiet: true)
         }
+    }
+
+    private var shouldDisconnectBeforeConnect: Bool {
+        status.state != .disconnected || status.interfaceName != nil || status.endpoint != nil
     }
 
     private func sendCommandWithRetry(_ command: String) async throws -> String {
@@ -131,13 +176,26 @@ final class VEXHelperModel: ObservableObject {
             guard isConnectCommand(command), error.isRetryableConnectFailure else {
                 throw error
             }
-            await client.silentDisconnect(releaseAntiLeak: false)
+            await client.silentDisconnect(releaseAntiLeak: true)
             return try await client.send(command)
         }
     }
 
     private func isConnectCommand(_ command: String) -> Bool {
         command.hasPrefix("up")
+    }
+
+    private func refreshConnectedStatusUntilStable() async -> Bool {
+        let deadline = ContinuousClock.now.advanced(by: connectStabilizationDeadline)
+        repeat {
+            await refreshStatus(quiet: true)
+            if status.isUsableConnectedStatus {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 160_000_000)
+        } while ContinuousClock.now < deadline
+        await refreshStatus(quiet: true)
+        return status.isUsableConnectedStatus
     }
 }
 
@@ -305,6 +363,11 @@ struct VpnStatus: Equatable {
     var leakProtection: String
     var interfaceName: String?
     var endpoint: String?
+    var routeOk: Bool
+    var routeInterface: String?
+    var ipv6RouteOk: Bool
+    var ipv6RouteInterface: String?
+    var socketExists: Bool
 
     static let disconnected = VpnStatus(
         state: .disconnected,
@@ -313,7 +376,12 @@ struct VpnStatus: Equatable {
         latestHandshake: nil,
         leakProtection: "off",
         interfaceName: nil,
-        endpoint: nil
+        endpoint: nil,
+        routeOk: false,
+        routeInterface: nil,
+        ipv6RouteOk: true,
+        ipv6RouteInterface: nil,
+        socketExists: false
     )
 
     init(helperResponse: String) {
@@ -333,14 +401,16 @@ struct VpnStatus: Equatable {
         let routeOk = values["route_ok"] == "true"
         let socketExists = values["socket_exists"] == "true"
         let operationInProgress = values["operation_in_progress"] == "true"
+        let helperState = values["state"]
         let rx = UInt64(values["rx"] ?? "") ?? 0
         let tx = UInt64(values["tx"] ?? "") ?? 0
         let handshake = UInt64(values["latest_handshake"] ?? "").flatMap { $0 > 0 ? $0 : nil }
+        let hasVerifiedTraffic = rx > 0 || handshake != nil
 
         let nextState: VpnConnectionState
         if operationInProgress {
             nextState = .connecting
-        } else if routeOk || socketExists || rx > 0 || tx > 0 || handshake != nil {
+        } else if routeOk && hasVerifiedTraffic && (helperState == nil || helperState == "connected") {
             nextState = .connected
         } else {
             nextState = .disconnected
@@ -353,6 +423,11 @@ struct VpnStatus: Equatable {
         self.leakProtection = values["leak_protection"] ?? "off"
         self.interfaceName = values["iface"].flatMap { $0.isEmpty ? nil : $0 }
         self.endpoint = values["endpoint"].flatMap { $0.isEmpty ? nil : $0 }
+        self.routeOk = routeOk
+        self.routeInterface = values["route_iface"].flatMap { $0.isEmpty ? nil : $0 }
+        self.ipv6RouteOk = values["ipv6_route_ok"].map { $0 == "true" } ?? true
+        self.ipv6RouteInterface = values["ipv6_route_iface"].flatMap { $0.isEmpty ? nil : $0 }
+        self.socketExists = socketExists
     }
 
     private init(
@@ -362,7 +437,12 @@ struct VpnStatus: Equatable {
         latestHandshake: UInt64?,
         leakProtection: String,
         interfaceName: String?,
-        endpoint: String?
+        endpoint: String?,
+        routeOk: Bool,
+        routeInterface: String?,
+        ipv6RouteOk: Bool,
+        ipv6RouteInterface: String?,
+        socketExists: Bool
     ) {
         self.state = state
         self.rxBytes = rxBytes
@@ -371,11 +451,48 @@ struct VpnStatus: Equatable {
         self.leakProtection = leakProtection
         self.interfaceName = interfaceName
         self.endpoint = endpoint
+        self.routeOk = routeOk
+        self.routeInterface = routeInterface
+        self.ipv6RouteOk = ipv6RouteOk
+        self.ipv6RouteInterface = ipv6RouteInterface
+        self.socketExists = socketExists
     }
 
     var handshakeText: String {
         guard let latestHandshake else { return "pending" }
         return Date(timeIntervalSince1970: TimeInterval(latestHandshake)).formatted(date: .omitted, time: .shortened)
+    }
+
+    var isUsableConnectedStatus: Bool {
+        state == .connected && routeOk
+    }
+
+    var hasIPv4RouteConflict: Bool {
+        guard !routeOk, socketExists, let routeInterface, !routeInterface.isEmpty else {
+            return false
+        }
+        return interfaceName != routeInterface
+    }
+
+    var hasIPv6RouteConflict: Bool {
+        guard !ipv6RouteOk, socketExists, let ipv6RouteInterface, !ipv6RouteInterface.isEmpty else {
+            return false
+        }
+        return ipv6RouteInterface.hasPrefix("utun") && ipv6RouteInterface != interfaceName
+    }
+
+    var hasRouteConflict: Bool {
+        hasIPv4RouteConflict || hasIPv6RouteConflict
+    }
+
+    var routeConflictMessage: String? {
+        if hasIPv4RouteConflict {
+            return "Другой VPN удерживает системный маршрут. Трафик через VEX не идет."
+        }
+        if hasIPv6RouteConflict {
+            return "IPv6 удерживает другой VPN. VEX ведет IPv4-трафик, часть сайтов может открываться медленно."
+        }
+        return nil
     }
 
     func withState(_ state: VpnConnectionState) -> VpnStatus {

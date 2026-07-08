@@ -55,6 +55,8 @@ final class VEXAppState: ObservableObject {
     private let supportSocket = SupportSocketClient()
     private var cancellables: Set<AnyCancellable> = []
     private var webAuthTask: Task<Void, Never>?
+    private var profileWarmupTask: Task<Void, Never>?
+    private var sessionRefreshTask: (accessToken: String, task: Task<Result<AuthSession, Error>, Never>)?
     private var desiredVpnState: DesiredVpnState = .disconnected
     private var vpnOperationGeneration = 0
 
@@ -88,8 +90,16 @@ final class VEXAppState: ObservableObject {
     }
 
     var updateReadyText: String? {
-        guard let update = updateCheck, update.updateAvailable else { return nil }
+        guard let update = updateCheck, hasNewerNativeUpdate else { return nil }
         return "v\(update.latestVersion) готово к установке"
+    }
+
+    var hasNewerNativeUpdate: Bool {
+        updateCheck?.isNewerThanInstalledApp() == true
+    }
+
+    var hasNativeUpdateDownload: Bool {
+        hasNewerNativeUpdate && updateCheck?.downloadUrl.isEmpty == false
     }
 
     var headerUpdateAction: NativeUpdateAction {
@@ -105,20 +115,26 @@ final class VEXAppState: ObservableObject {
         set { nativeUpdater.automaticallyChecksForUpdates = newValue }
     }
 
-    func start() async {
+    func start(helperStatus: VpnStatus? = nil) async {
         biometricAvailability = biometricAuth.availability()
         canUnlockStoredSession = sessionStore.hasStoredNativeSession()
-        if biometricUnlockRequired && biometricAvailability.isAvailable && canUnlockStoredSession {
-            session = nil
+        if let storedSession = sessionStore.loadSession() {
+            session = storedSession
+            user = storedSession.user
+            canUnlockStoredSession = true
+        } else if biometricUnlockRequired && biometricAvailability.isAvailable && canUnlockStoredSession {
             statusMessage = "Подтвердите вход по \(biometricAvailability.label)."
-        } else {
-            session = sessionStore.loadSession()
-            user = session?.user
+            autoLaunchEnabled = startupService.isEnabled()
+            observeSupportSocket()
+            await loadUpdate()
+            await loadRemoteConfig()
+            return
         }
         autoLaunchEnabled = startupService.isEnabled()
         observeSupportSocket()
         await refreshAll()
-        await prepareSelectedProfile(forceRefresh: false)
+        await restoreActiveTunnelIfHelperIsConnected(helperStatus)
+        scheduleProfileWarmup()
         connectSupportSocketIfPossible()
     }
 
@@ -144,6 +160,7 @@ final class VEXAppState: ObservableObject {
         serverSelectionMode = "auto"
         autoServerEnabled = true
         statusMessage = "Автовыбор сервера включен."
+        scheduleProfileWarmup()
     }
 
     func selectLocation(_ location: VpnLocation) async {
@@ -151,6 +168,7 @@ final class VEXAppState: ObservableObject {
         serverSelectionMode = "manual"
         autoServerEnabled = false
         statusMessage = "Выбран сервер: \(location.displayName)."
+        scheduleProfileWarmup()
     }
 
     func toggleVPNPower(using helper: VEXHelperModel) async {
@@ -172,7 +190,11 @@ final class VEXAppState: ObservableObject {
 
         switch helper.status.state {
         case .connected:
-            await disconnectVPN(using: helper)
+            if shouldSwitchConnectedTunnel(for: helper.status) {
+                await switchConnectedVPNLocation(using: helper)
+            } else {
+                await disconnectVPN(using: helper)
+            }
         case .connecting:
             desiredVpnState = .disconnected
             vpnOperationGeneration += 1
@@ -226,7 +248,7 @@ final class VEXAppState: ObservableObject {
                 accessToken: requestToken,
                 locationId: targetLocationId,
                 routingMode: routingMode,
-                forceRefresh: activeTunnel?.rotationRequired == true
+                forceRefresh: false
             )
             try ensureConnectStillDesired(generation: generation)
             let connectedTunnel = try await connectWithAutopilot(
@@ -244,6 +266,8 @@ final class VEXAppState: ObservableObject {
             statusMessage = "Подключение VPN отменено."
         } catch {
             statusMessage = connectErrorMessage(error)
+            await helper.interruptWithDisconnect(releaseAntiLeak: true)
+            activeTunnel = nil
             await submitDiagnostics(reason: "vpn_connect_failed", status: "error", helperStatus: helper.status, samples: ["error": error.localizedDescription])
         }
         isVpnBusy = false
@@ -287,7 +311,7 @@ final class VEXAppState: ObservableObject {
                 )
                 return try await connectPreparedTunnel(freshTunnel, helper: helper, generation: generation)
             } catch {
-                guard assessment.canFailover, let failoverLocation = bestFailoverLocation(excluding: initialTunnel.locationId) else {
+                guard allowsAutomaticFailover, assessment.canFailover, let failoverLocation = bestFailoverLocation(excluding: initialTunnel.locationId) else {
                     throw error
                 }
                 selectedLocationId = failoverLocation.id
@@ -324,11 +348,15 @@ final class VEXAppState: ObservableObject {
             try profileService.writeHelperConfig(for: attempt)
             await helper.connect(antiLeakEnabled: antiLeakEnabled)
             try ensureConnectStillDesired(generation: generation)
-            if helper.status.state == .connected {
+            if helper.status.isUsableConnectedStatus {
                 return attempt
             }
-            lastError = VpnAutopilotRuntimeError.connectFailed(helper.message ?? "VPN connection failed.")
-            await helper.disconnect(releaseAntiLeak: false)
+            if helper.status.routeOk, helper.status.socketExists, helper.status.latestHandshake == nil, helper.status.rxBytes == 0 {
+                lastError = VpnAutopilotRuntimeError.connectFailed("no_handshake: tunnel route is active but peer did not answer")
+            } else {
+                lastError = VpnAutopilotRuntimeError.connectFailed(helper.message ?? "VPN connection failed.")
+            }
+            await helper.disconnect(releaseAntiLeak: true)
         }
         throw lastError
     }
@@ -382,8 +410,8 @@ final class VEXAppState: ObservableObject {
     }
 
     func applySelectedLocationIfConnected(using helper: VEXHelperModel) async {
-        guard helper.status.state == .connected else {
-            await prepareSelectedProfile(forceRefresh: false)
+        guard helper.status.isUsableConnectedStatus else {
+            scheduleProfileWarmup()
             return
         }
         await switchConnectedVPNLocation(using: helper)
@@ -402,7 +430,9 @@ final class VEXAppState: ObservableObject {
         let previousTunnel = activeTunnel
         let previousLocationId = previousTunnel?.locationId ?? selectedLocationId
         let nextLocationId = targetLocationId
-        if previousTunnel?.locationId == nextLocationId {
+        if let previousTunnel,
+           previousTunnel.locationId == nextLocationId,
+           tunnel(previousTunnel, matches: helper.status) {
             statusMessage = "Этот сервер уже подключен."
             return
         }
@@ -429,7 +459,7 @@ final class VEXAppState: ObservableObject {
             await helper.connect(antiLeakEnabled: antiLeakEnabled)
             try ensureConnectStillDesired(generation: generation)
 
-            if helper.status.state == .connected {
+            if helper.status.isUsableConnectedStatus {
                 await api.reportVpnDisconnect(accessToken: token, tunnel: previousTunnel, reason: "server_switch")
                 await api.reportVpnConnect(accessToken: token, tunnel: nextTunnel)
                 statusMessage = "VPN переключен на \(selectedLocation?.displayName ?? nextTunnel.locationId.uppercased())."
@@ -444,7 +474,6 @@ final class VEXAppState: ObservableObject {
             if let previousTunnel {
                 try? profileService.writeHelperConfig(for: previousTunnel)
                 await helper.connect(antiLeakEnabled: antiLeakEnabled)
-                selectedLocationId = previousLocationId
             }
             statusMessage = "Не удалось переключиться на выбранный сервер. Вернули предыдущий."
             await submitDiagnostics(
@@ -477,6 +506,7 @@ final class VEXAppState: ObservableObject {
         statusMessage = enabled
             ? "Умный режим включен. Применится при следующем подключении."
             : "Полный VPN для всего трафика включен."
+        scheduleProfileWarmup()
     }
 
     func setInterfaceLanguage(_ value: String) {
@@ -659,7 +689,7 @@ final class VEXAppState: ObservableObject {
     }
 
     func submitManualDiagnostics(using helper: VEXHelperModel) async {
-        await submitDiagnostics(reason: "manual_native_diagnostics", status: helper.status.state == .connected ? "ok" : "info", helperStatus: helper.status, samples: ["message": statusMessage ?? helper.message ?? "manual"])
+        await submitDiagnostics(reason: "manual_native_diagnostics", status: helper.status.isUsableConnectedStatus ? "ok" : "info", helperStatus: helper.status, samples: ["message": statusMessage ?? helper.message ?? "manual"])
         statusMessage = "Диагностика отправлена."
     }
 
@@ -674,7 +704,7 @@ final class VEXAppState: ObservableObject {
         let redactedDiagnostics = truncateDiagnosticText(redactSensitiveDiagnostics(rawDiagnostics), limit: 2_800)
         await submitDiagnostics(
             reason: "manual_support_diagnostics",
-            status: helper.status.state == .connected ? "ok" : "info",
+            status: helper.status.isUsableConnectedStatus ? "ok" : "info",
             helperStatus: helper.status,
             samples: [
                 "support_attachment": "true",
@@ -694,7 +724,7 @@ final class VEXAppState: ObservableObject {
     }
 
     func recoverTunnelIfNeeded(using helper: VEXHelperModel) async {
-        guard autoRecoveryEnabled, helper.status.state == .connected, !helper.isBusy else { return }
+        guard autoRecoveryEnabled, helper.status.isUsableConnectedStatus, !helper.isBusy else { return }
         let usage: VpnDeviceUsage?
         if let token = accessToken {
             usage = await autopilotService.usage(accessToken: token, deviceId: activeTunnel?.device.id)
@@ -705,7 +735,7 @@ final class VEXAppState: ObservableObject {
         guard tunnelHealthLooksStale(helper.status) || !healthReasons.isEmpty else { return }
         let previousLocationId = targetLocationId
         let assessment = autopilotService.assess(healthReasons: healthReasons, status: helper.status)
-        let failoverLocation = bestFailoverLocation(excluding: previousLocationId)
+        let failoverLocation = allowsAutomaticFailover ? bestFailoverLocation(excluding: previousLocationId) : nil
         if assessment.canFailover, let failoverLocation {
             selectedLocationId = failoverLocation.id
             serverSelectionMode = "manual"
@@ -855,7 +885,7 @@ final class VEXAppState: ObservableObject {
     private func loadLocations(_ token: String) async {
         do {
             locations = try await api.vpnLocations(accessToken: token)
-            if selectedLocation == nil, let first = locations.first {
+            if selectedLocation == nil, serverSelectionMode != "manual", let first = locations.first {
                 selectedLocationId = first.id
             }
         } catch {
@@ -952,10 +982,14 @@ final class VEXAppState: ObservableObject {
 
     private func loadUpdate() async {
         do {
-            updateCheck = try await api.appUpdateCheck()
+            applyUpdateCheck(try await api.appUpdateCheck())
         } catch {
             statusMessage = error.localizedDescription
         }
+    }
+
+    func applyUpdateCheck(_ update: AppUpdateCheckResult?) {
+        updateCheck = update
     }
 
     private func beginWebAuth(mode: WebAuthMode) {
@@ -1004,8 +1038,29 @@ final class VEXAppState: ObservableObject {
 
     private func refreshSessionForRetry() async -> String? {
         guard let currentSession = session else { return nil }
+        if let sessionRefreshTask {
+            return await applySessionRefreshResult(
+                await sessionRefreshTask.task.value,
+                refreshAccessToken: sessionRefreshTask.accessToken
+            )
+        }
+        let refreshAccessToken = currentSession.accessToken
+        let task = Task<Result<AuthSession, Error>, Never> { [api] in
+            do {
+                return .success(try await api.refreshSession(accessToken: refreshAccessToken))
+            } catch {
+                return .failure(error)
+            }
+        }
+        sessionRefreshTask = (refreshAccessToken, task)
+        let result = await task.value
+        sessionRefreshTask = nil
+        return await applySessionRefreshResult(result, refreshAccessToken: refreshAccessToken)
+    }
+
+    private func applySessionRefreshResult(_ result: Result<AuthSession, Error>, refreshAccessToken: String) async -> String? {
         do {
-            let nextSession = try await api.refreshSession(accessToken: currentSession.accessToken)
+            let nextSession = try result.get()
             try sessionStore.saveSession(nextSession)
             session = nextSession
             user = nextSession.user
@@ -1015,7 +1070,11 @@ final class VEXAppState: ObservableObject {
             return nextSession.accessToken
         } catch {
             if error.isUnauthorizedAPIError {
-                expireAuthenticatedSession(message: "Сессия истекла. Войдите снова.")
+                if session?.accessToken == refreshAccessToken {
+                    expireAuthenticatedSession(message: "Сессия истекла. Войдите снова.")
+                } else {
+                    return session?.accessToken
+                }
             } else {
                 statusMessage = "Не удалось обновить сессию: \(error.localizedDescription)"
             }
@@ -1170,6 +1229,10 @@ final class VEXAppState: ObservableObject {
         return selectedLocationId
     }
 
+    private var allowsAutomaticFailover: Bool {
+        autoServerEnabled && serverSelectionMode == "auto"
+    }
+
     private func prepareSelectedProfile(forceRefresh: Bool) async {
         guard let token = accessToken else { return }
         do {
@@ -1177,11 +1240,65 @@ final class VEXAppState: ObservableObject {
                 accessToken: token,
                 locationId: targetLocationId,
                 routingMode: routingMode,
-                forceRefresh: forceRefresh
+                forceRefresh: forceRefresh,
+                writeHelperConfig: false
             )
             statusMessage = "Профиль сервера готов."
         } catch {
             statusMessage = error.localizedDescription
+        }
+    }
+
+    private func restoreActiveTunnelIfHelperIsConnected(_ helperStatus: VpnStatus?) async {
+        guard let helperStatus, helperStatus.isUsableConnectedStatus, activeTunnel == nil else { return }
+        await prepareSelectedProfile(forceRefresh: false)
+        if let activeTunnel, tunnel(activeTunnel, matches: helperStatus) {
+            statusMessage = "VPN подключен через \(selectedLocation?.displayName ?? activeTunnel.locationId.uppercased())."
+        } else {
+            activeTunnel = nil
+            statusMessage = "VPN уже активен на другом профиле. Выберите сервер или нажмите подключить для переключения."
+        }
+    }
+
+    private func tunnel(_ tunnel: PreparedTunnel, matches status: VpnStatus) -> Bool {
+        guard status.isUsableConnectedStatus, let activeEndpoint = normalizedEndpoint(status.endpoint) else {
+            return false
+        }
+        let candidates = [tunnel.configEndpoint, tunnel.endpoint].compactMap(normalizedEndpoint)
+        return candidates.contains(activeEndpoint)
+    }
+
+    private func shouldSwitchConnectedTunnel(for status: VpnStatus) -> Bool {
+        guard status.isUsableConnectedStatus else { return false }
+        if let activeTunnel {
+            return activeTunnel.locationId != targetLocationId || !tunnel(activeTunnel, matches: status)
+        }
+        return serverSelectionMode == "manual"
+    }
+
+    private func normalizedEndpoint(_ endpoint: String?) -> String? {
+        let value = endpoint?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        return value.isEmpty ? nil : value
+    }
+
+    private func scheduleProfileWarmup() {
+        guard let token = accessToken else { return }
+        let locationId = targetLocationId
+        let mode = routingMode
+        profileWarmupTask?.cancel()
+        profileWarmupTask = Task { [profileService] in
+            do {
+                _ = try await profileService.resolveProfile(
+                    accessToken: token,
+                    locationId: locationId,
+                    routingMode: mode,
+                    forceRefresh: true,
+                    writeHelperConfig: false
+                )
+            } catch is CancellationError {
+            } catch {
+                // Background warmup is best-effort; foreground connect handles user-visible errors.
+            }
         }
     }
 
@@ -1246,7 +1363,7 @@ final class VEXAppState: ObservableObject {
     }
 
     private func tunnelHealthLooksStale(_ status: VpnStatus) -> Bool {
-        guard status.state == .connected else { return false }
+        guard status.isUsableConnectedStatus else { return false }
         guard let latestHandshake = status.latestHandshake else {
             return status.rxBytes == 0 && status.txBytes == 0
         }

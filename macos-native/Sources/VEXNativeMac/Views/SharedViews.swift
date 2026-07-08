@@ -186,6 +186,23 @@ struct HeaderIconButton: View {
     }
 }
 
+struct VEXMiniSpinner: View {
+    var tint: Color = Color.vexCyan
+    @State private var isRotating = false
+
+    var body: some View {
+        Circle()
+            .trim(from: 0.16, to: 0.86)
+            .stroke(tint, style: StrokeStyle(lineWidth: 2.4, lineCap: .round))
+            .frame(width: 17, height: 17)
+            .rotationEffect(.degrees(isRotating ? 360 : 0))
+            .animation(.linear(duration: 0.82).repeatForever(autoreverses: false), value: isRotating)
+            .onAppear {
+                isRotating = true
+            }
+    }
+}
+
 struct VEXGlassButtonStyle: ButtonStyle {
     var prominent = false
 

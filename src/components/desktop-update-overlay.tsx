@@ -182,7 +182,7 @@ function DesktopUpdateProviderContent({ children }: { children: React.ReactNode 
       setLatestBuild(metadata.latestBuild || 0);
       setReleaseChannel(metadata.channel || updateCheckChannel(appInfo.channel));
       setReleaseNotes(metadata.changelog || null);
-      setManualDownloadUrl(macosDmgDownloadUrl(metadata.latestVersion));
+      setManualDownloadUrl(nativeMacOSDownloadUrl());
       setRequired(Boolean(metadata.required));
 
       const update = await check();
@@ -323,12 +323,8 @@ export function useDesktopUpdate() {
   return useContext(DesktopUpdateContext);
 }
 
-function macosDmgDownloadUrl(version: string | null | undefined): string | null {
-  const normalized = (version || '').trim();
-  if (!normalized) {
-    return null;
-  }
-  return `https://vexguard.app/downloads/Vex-macOS-${normalized}.dmg`;
+function nativeMacOSDownloadUrl(): string {
+  return 'https://vexguard.app/downloads/native-macos/VEX-macOS-Alpha.pkg';
 }
 
 export function DesktopUpdateOverlay() {

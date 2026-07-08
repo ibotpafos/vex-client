@@ -130,6 +130,40 @@ struct AppUpdateCheckResult: Codable, Equatable {
     var reason: String?
     var rolloutPercent: Int?
     var checkedAt: String?
+
+    func isNewerThanInstalledApp(currentVersion: String = VEXAppInfo.version) -> Bool {
+        guard updateAvailable else { return false }
+        let versionOrder = Self.compareVersion(latestVersion, currentVersion)
+        if versionOrder == .orderedDescending {
+            return true
+        }
+        if versionOrder == .orderedAscending {
+            return false
+        }
+
+        // Same public version should not keep the sidebar in an update-ready state.
+        // Sparkle can still manage same-version build updates from its own window.
+        return false
+    }
+
+    private static func compareVersion(_ lhs: String, _ rhs: String) -> ComparisonResult {
+        let lhsParts = versionParts(lhs)
+        let rhsParts = versionParts(rhs)
+        let count = max(lhsParts.count, rhsParts.count)
+        for index in 0..<count {
+            let left = index < lhsParts.count ? lhsParts[index] : 0
+            let right = index < rhsParts.count ? rhsParts[index] : 0
+            if left > right { return .orderedDescending }
+            if left < right { return .orderedAscending }
+        }
+        return .orderedSame
+    }
+
+    private static func versionParts(_ value: String) -> [Int] {
+        value
+            .split { !$0.isNumber }
+            .map { Int($0) ?? 0 }
+    }
 }
 
 struct VpnDevice: Codable, Equatable, Identifiable {
@@ -147,6 +181,7 @@ struct VpnDevice: Codable, Equatable, Identifiable {
     var clientKeyOwnership: String?
     var externalDeviceId: String?
     var platform: String?
+    var appVersion: String?
     var pushProvider: String?
     var hasPushToken: Bool?
 
@@ -165,6 +200,7 @@ struct VpnDevice: Codable, Equatable, Identifiable {
         case clientKeyOwnership = "client_key_ownership"
         case externalDeviceId = "external_device_id"
         case platform
+        case appVersion = "app_version"
         case pushProvider = "push_provider"
         case hasPushToken = "has_push_token"
     }
@@ -190,6 +226,7 @@ struct VpnDevice: Codable, Equatable, Identifiable {
         clientKeyOwnership = try? container.decodeIfPresent(String.self, forKey: .clientKeyOwnership)
         externalDeviceId = try? container.decodeIfPresent(String.self, forKey: .externalDeviceId)
         platform = try? container.decodeIfPresent(String.self, forKey: .platform)
+        appVersion = try? container.decodeIfPresent(String.self, forKey: .appVersion)
         pushProvider = try? container.decodeIfPresent(String.self, forKey: .pushProvider)
         let hasPush = (try? container.decodeIfPresent(Bool.self, forKey: .hasPushToken)) ?? false
         let token = try? decodeOnly.decodeIfPresent(String.self, forKey: .pushToken)
@@ -555,11 +592,11 @@ struct AppRemoteConfig: Codable, Equatable {
 
 struct VEXAppInfo: Equatable {
     static var version: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.0"
+        bundleString("CFBundleShortVersionString") ?? "0.1.0"
     }
 
     static var buildNumber: Int {
-        let rawValue = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "1"
+        let rawValue = bundleString("CFBundleVersion") ?? "1"
         return Int(rawValue) ?? 1
     }
 
@@ -569,4 +606,14 @@ struct VEXAppInfo: Equatable {
     static let apiClientVersion = "native-macos-1"
     static let routingPolicyVersion = "2026.06.22.1"
     static let defaultBypassRegion = "ru"
+
+    private static func bundleString(_ key: String) -> String? {
+        let bundles = [
+            Bundle(identifier: "app.vex.vpn.native"),
+            Bundle.main,
+        ]
+        return bundles
+            .compactMap { $0?.object(forInfoDictionaryKey: key) as? String }
+            .first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
 }

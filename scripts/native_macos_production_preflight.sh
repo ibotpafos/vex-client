@@ -9,6 +9,7 @@ PRODUCTION="${VEX_NATIVE_PRODUCTION:-0}"
 REQUIRE_DEVELOPER_ID="${VEX_NATIVE_REQUIRE_DEVELOPER_ID:-0}"
 DISPLAY_MODE="${VEX_NATIVE_DISTRIBUTION_MODE:-internal}"
 MAX_MINIMUM_SYSTEM_MAJOR="${VEX_NATIVE_MAX_MINIMUM_SYSTEM_MAJOR:-14}"
+VERIFY_INSTALLED_RUNTIME="${VEX_NATIVE_VERIFY_INSTALLED_RUNTIME:-0}"
 
 fail() {
   echo "preflight failed: $*" >&2
@@ -54,6 +55,8 @@ for resource in install-vex-vpn-helper.sh awg amneziawg-go vex-helper; do
   require_file "${resources_dir}/${resource}"
   [[ -x "${resources_dir}/${resource}" ]] || fail "resource is not executable: ${resource}"
 done
+require_file "${resources_dir}/helper-version"
+[[ -r "${resources_dir}/helper-version" ]] || fail "resource is not readable: helper-version"
 
 codesign --verify --deep --strict "${APP_PATH}" || fail "codesign verification failed"
 
@@ -109,6 +112,11 @@ elif [[ "${PRODUCTION}" == "1" ]]; then
   fail "Sparkle archives directory is missing: ${SPARKLE_ARCHIVES_DIR}"
 else
   warn "Sparkle archives directory not found; skipping appcast validation"
+fi
+
+if [[ "${VERIFY_INSTALLED_RUNTIME}" == "1" ]]; then
+  STRICT=1 APP_PATH="${VEX_NATIVE_INSTALLED_APP_PATH:-/Applications/VEX Native.app}" \
+    bash "${ROOT_DIR}/scripts/verify_native_macos_runtime.sh"
 fi
 
 echo "native macOS production preflight passed: ${APP_PATH}"

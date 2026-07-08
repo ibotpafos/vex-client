@@ -9,7 +9,7 @@ struct UpdateCenterPanel: View {
                 VStack(spacing: 12) {
                     GlassPanel(cornerRadius: 18) {
                         HStack(spacing: 12) {
-                            PanelIcon(systemName: appState.updateCheck?.updateAvailable == true ? "arrow.down.circle" : "checkmark.seal", size: 46, iconSize: 22)
+                            PanelIcon(systemName: appState.hasNewerNativeUpdate ? "arrow.down.circle" : "checkmark.seal", size: 46, iconSize: 22)
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(updateTitle)
                                     .font(.system(size: 18, weight: .black))
@@ -31,7 +31,7 @@ struct UpdateCenterPanel: View {
                             UpdateInfoRow(title: "Доступная версия", value: availableVersionText)
                             UpdateInfoRow(title: "Канал", value: appState.updateCheck?.channel ?? VEXAppInfo.channel)
                             UpdateInfoRow(title: "Совместимость", value: compatibilityText, tone: compatibilityTone)
-                            UpdateInfoRow(title: "Последняя сборка", value: appState.updateCheck.map { "\($0.latestVersion) (\($0.latestBuild))" } ?? "Проверяется")
+                            UpdateInfoRow(title: "Последняя сборка", value: latestBuildText)
                             if let minBuild = appState.updateCheck?.minSupportedBuild, minBuild > 0 {
                                 UpdateInfoRow(title: "Минимальная сборка", value: String(minBuild))
                             }
@@ -50,14 +50,14 @@ struct UpdateCenterPanel: View {
                     Button {
                         appState.checkForNativeUpdates()
                     } label: {
-                        Label(appState.updateCheck?.updateAvailable == true ? "Открыть Sparkle update" : "Проверить через Sparkle", systemImage: "sparkles")
+                        Label(appState.hasNewerNativeUpdate ? "Открыть Sparkle update" : "Проверить через Sparkle", systemImage: "sparkles")
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.vexProminentGlass)
                     .tint(Color.vexCyan)
                     .disabled(!appState.canCheckForNativeUpdates)
 
-                    if appState.updateCheck?.downloadUrl.isEmpty == false {
+                    if appState.hasNativeUpdateDownload {
                         Button {
                             appState.openUpdateDownload()
                         } label: {
@@ -82,7 +82,7 @@ struct UpdateCenterPanel: View {
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.vexProminentGlass)
-                        .tint(appState.updateCheck?.required == true || appState.updateCheck?.currentBuildBlocked == true ? .orange : Color.vexCyan)
+                        .tint(updateInstallerTone)
                         .disabled(appState.isDownloadingUpdate)
                     }
 
@@ -106,10 +106,10 @@ struct UpdateCenterPanel: View {
         if update.currentBuildBlocked == true {
             return "Эта сборка больше не поддерживается"
         }
-        if update.required {
+        if update.required && appState.hasNewerNativeUpdate {
             return "Требуется обновление"
         }
-        return update.updateAvailable ? "Доступна версия \(update.latestVersion)" : "Установлена актуальная версия"
+        return appState.hasNewerNativeUpdate ? "Доступна версия \(update.latestVersion)" : "Установлена актуальная версия"
     }
 
     private var updateSubtitle: String {
@@ -117,45 +117,58 @@ struct UpdateCenterPanel: View {
         if update.currentBuildBlocked == true {
             return update.reason ?? "Поставьте актуальную сборку VEX, чтобы продолжить стабильную работу."
         }
-        if update.required {
+        if update.required && appState.hasNewerNativeUpdate {
             return update.reason ?? update.changelog ?? "Эта версия должна быть обновлена."
         }
-        if update.updateAvailable {
+        if appState.hasNewerNativeUpdate {
             return update.changelog ?? update.reason ?? "Сборка \(update.latestBuild) доступна для загрузки."
         }
-        return "Канал \(update.channel ?? "native-preview"), сборка \(update.latestBuild)."
+        return "Канал \(update.channel ?? "native-preview"), новых версий нет."
     }
 
     private var updateBadgeText: String {
         guard let update = appState.updateCheck else { return "Проверка" }
         if update.currentBuildBlocked == true { return "Заблокировано" }
-        if update.required { return "Обязательно" }
-        return update.updateAvailable ? "Доступно" : "Актуально"
+        if update.required && appState.hasNewerNativeUpdate { return "Обязательно" }
+        return appState.hasNewerNativeUpdate ? "Доступно" : "Актуально"
     }
 
     private var updateBadgeTone: VEXStatusBadge.Tone {
         guard let update = appState.updateCheck else { return .neutral }
         if update.currentBuildBlocked == true { return .danger }
-        if update.required { return .warning }
-        return update.updateAvailable ? .warning : .good
+        if update.required && appState.hasNewerNativeUpdate { return .warning }
+        return appState.hasNewerNativeUpdate ? .warning : .good
     }
 
     private var availableVersionText: String {
         guard let update = appState.updateCheck else { return "Проверяется" }
-        return update.updateAvailable ? "\(update.latestVersion) (\(update.latestBuild))" : "Нет новой версии"
+        return appState.hasNewerNativeUpdate ? "\(update.latestVersion) (\(update.latestBuild))" : "Нет новой версии"
+    }
+
+    private var latestBuildText: String {
+        guard let update = appState.updateCheck else { return "Проверяется" }
+        return appState.hasNewerNativeUpdate ? "\(update.latestVersion) (\(update.latestBuild))" : "Нет новой сборки"
     }
 
     private var compatibilityText: String {
         guard let update = appState.updateCheck else { return "Проверяется" }
         if update.currentBuildBlocked == true { return "Сборка заблокирована" }
-        if update.required { return "Требуется обновление" }
+        if update.required && appState.hasNewerNativeUpdate { return "Требуется обновление" }
         return "Совместимо"
     }
 
     private var compatibilityTone: VEXStatusBadge.Tone {
         guard let update = appState.updateCheck else { return .neutral }
         if update.currentBuildBlocked == true { return .danger }
-        return update.required ? .warning : .good
+        return update.required && appState.hasNewerNativeUpdate ? .warning : .good
+    }
+
+    private var updateInstallerTone: Color {
+        guard let update = appState.updateCheck else { return Color.vexCyan }
+        if update.currentBuildBlocked == true || update.required && appState.hasNewerNativeUpdate {
+            return .orange
+        }
+        return Color.vexCyan
     }
 }
 

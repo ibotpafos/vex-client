@@ -370,7 +370,7 @@ mod platform_vpn {
     const HELPER_DIR: &str = "/Library/Application Support/VEX VPN/helper";
     const HELPER_PLIST: &str = "/Library/LaunchDaemons/app.vex.vpn.helper.plist";
     const HELPER_VERSION_FILE: &str = "/Library/Application Support/VEX VPN/helper/version";
-    const HELPER_VERSION: &str = "26";
+    const HELPER_VERSION: &str = "32";
     const LAUNCHD_LABEL: &str = "app.vex.vpn.helper";
     const HELPER_SOCKET: &str = "/var/run/vex-helper.sock";
     const HELPER_START_TIMEOUT: Duration = Duration::from_secs(2);
@@ -421,9 +421,8 @@ mod platform_vpn {
         };
 
         plist.contains("<key>RunAtLoad</key>")
-            && plist.contains("<false/>")
             && plist.contains("<key>KeepAlive</key>")
-            && !plist.contains("<true/>")
+            && plist.contains("<true/>")
     }
 
     fn helper_binary_is_signature_valid() -> bool {
@@ -2546,7 +2545,7 @@ pub fn run() {
                 let show_item = MenuItem::with_id(app, "show", "Показать VEX", true, None::<&str>)?;
                 let disconnect_item =
                     MenuItem::with_id(app, "disconnect", "Отключить VPN", false, None::<&str>)?;
-                let startup_enabled = is_startup_enabled_internal(&app.handle()).unwrap_or(false);
+                let startup_enabled = is_startup_enabled_internal(app.handle()).unwrap_or(false);
                 let startup_item = MenuItem::with_id(
                     app,
                     "startup",
@@ -2618,8 +2617,8 @@ pub fn run() {
             }
             Ok(())
         })
-        .on_window_event(|window, event| match event {
-            tauri::WindowEvent::CloseRequested { api, .. } => {
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let _ = window.hide();
                 api.prevent_close();
                 #[cfg(target_os = "macos")]
@@ -2627,7 +2626,6 @@ pub fn run() {
                     .app_handle()
                     .set_activation_policy(tauri::ActivationPolicy::Accessory);
             }
-            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             connect_vpn,

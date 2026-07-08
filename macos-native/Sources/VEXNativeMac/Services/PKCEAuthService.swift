@@ -92,12 +92,7 @@ final class PKCEAuthService: NSObject, ASWebAuthenticationPresentationContextPro
               callbackURL.path.hasPrefix("/callback") else {
             throw PKCEAuthError.unsupportedURL
         }
-        let components = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false)
-        let params = Dictionary(uniqueKeysWithValues: (components?.queryItems ?? []).compactMap { item -> (String, String)? in
-            guard let value = item.value else { return nil }
-            return (item.name, value)
-        })
-        guard let returnedState = params["state"], !returnedState.isEmpty else {
+        guard let returnedState = uniqueQueryValue("state", in: callbackURL), !returnedState.isEmpty else {
             throw PKCEAuthError.invalidCallback
         }
         guard let storedState = defaults.string(forKey: stateKey), storedState == returnedState else {
@@ -115,12 +110,18 @@ final class PKCEAuthService: NSObject, ASWebAuthenticationPresentationContextPro
     }
 
     func code(from callbackURL: URL) throws -> String {
-        let components = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false)
-        guard let code = components?.queryItems?.first(where: { $0.name == "code" })?.value,
-              !code.isEmpty else {
+        guard let code = uniqueQueryValue("code", in: callbackURL), !code.isEmpty else {
             throw PKCEAuthError.invalidCallback
         }
         return code
+    }
+
+    private func uniqueQueryValue(_ name: String, in url: URL) -> String? {
+        let values = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?
+            .filter { $0.name == name }
+            .compactMap(\.value) ?? []
+        return values.count == 1 ? values[0] : nil
     }
 
     private func challenge(for verifier: String) -> String {

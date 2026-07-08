@@ -1,19 +1,21 @@
 import AppKit
+import CryptoKit
 import Foundation
 
 struct VEXHelperInstaller {
     private let helperDir = "/Library/Application Support/VEX VPN/helper"
     private let helperPlist = "/Library/LaunchDaemons/app.vex.vpn.helper.plist"
-    private let helperVersion = "26"
     private let launchdLabel = "app.vex.vpn.helper"
     private let socketPath = "/var/run/vex-helper.sock"
 
     func ensureReady(allowAdminInstall: Bool = true) async throws {
-        if socketIsConnectable {
+        let currentFilesInstalled = filesAreCurrent
+
+        if socketIsConnectable && currentFilesInstalled {
             return
         }
 
-        if filesAreCurrent {
+        if currentFilesInstalled {
             if socketIsConnectable {
                 return
             }
@@ -62,7 +64,10 @@ struct VEXHelperInstaller {
               fm.fileExists(atPath: "\(helperDir)/awg"),
               installedVersion.trimmingCharacters(in: .whitespacesAndNewlines) == helperVersion,
               helperPlistIsCurrent,
-              helperBinarySignatureIsValid else {
+              helperBinarySignatureIsValid,
+              resourceMatchesInstalled("vex-helper"),
+              resourceMatchesInstalled("amneziawg-go"),
+              resourceMatchesInstalled("awg") else {
             return false
         }
         return true
@@ -72,12 +77,25 @@ struct VEXHelperInstaller {
         (try? String(contentsOfFile: "\(helperDir)/version", encoding: .utf8)) ?? ""
     }
 
+    private var helperVersion: String {
+        guard let url = try? resourceFile("helper-version"),
+              let value = try? String(contentsOf: url, encoding: .utf8) else {
+            return ""
+        }
+        return value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private var helperPlistIsCurrent: Bool {
         guard let plist = try? String(contentsOfFile: helperPlist, encoding: .utf8) else { return false }
-        return plist.contains("<key>RunAtLoad</key>")
-            && plist.contains("<false/>")
-            && plist.contains("<key>KeepAlive</key>")
-            && !plist.contains("<true/>")
+        return plistValueIsTrue("RunAtLoad", in: plist)
+            && plistValueIsTrue("KeepAlive", in: plist)
+    }
+
+    private func plistValueIsTrue(_ key: String, in plist: String) -> Bool {
+        let pattern = "<key>\(key)</key>"
+        guard let keyRange = plist.range(of: pattern) else { return false }
+        let suffix = plist[keyRange.upperBound...].prefix(80)
+        return suffix.contains("<true/>")
     }
 
     private var helperBinarySignatureIsValid: Bool {
@@ -85,6 +103,21 @@ struct VEXHelperInstaller {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
         process.arguments = ["--verify", "--strict", "--verbose=2", "\(helperDir)/vex-helper"]
         return (try? process.runAndWait()) == 0
+    }
+
+    private func resourceMatchesInstalled(_ name: String) -> Bool {
+        guard let bundled = try? resourceFile(name) else {
+            return false
+        }
+        let installed = URL(fileURLWithPath: helperDir).appendingPathComponent(name)
+        return sha256Hex(bundled) == sha256Hex(installed)
+    }
+
+    private func sha256Hex(_ file: URL) -> String? {
+        guard let data = try? Data(contentsOf: file) else {
+            return nil
+        }
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
     private var socketIsConnectable: Bool {

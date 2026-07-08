@@ -6,6 +6,7 @@ VPN_REPO="${VEX_VPN_REPO:-/Users/ibotpafos/projects/VPN}"
 RUN_CHECKS="${RUN_CHECKS:-1}"
 RUN_DEPLOY="${RUN_DEPLOY:-1}"
 RUN_LIVE_VERIFY="${RUN_LIVE_VERIFY:-1}"
+RUN_METADATA_DEPLOY="${RUN_METADATA_DEPLOY:-${RUN_DEPLOY}}"
 ALLOW_DIRTY_DEPLOY="${ALLOW_DIRTY_DEPLOY:-1}"
 ALLOW_NO_UPSTREAM_DEPLOY="${ALLOW_NO_UPSTREAM_DEPLOY:-1}"
 NATIVE_DOWNLOAD_DIR="${VPN_REPO}/web/public/downloads/native-macos"
@@ -186,6 +187,21 @@ fi
 
 if [[ "${RUN_LIVE_VERIFY}" == "1" && "${RUN_DEPLOY}" == "1" ]]; then
   validate_live_appcast
+fi
+
+if [[ "${RUN_METADATA_DEPLOY}" == "1" ]]; then
+  if [[ "${RUN_DEPLOY}" != "1" || "${RUN_LIVE_VERIFY}" != "1" ]]; then
+    echo "native macOS metadata deploy requires RUN_DEPLOY=1 and RUN_LIVE_VERIFY=1" >&2
+    exit 2
+  fi
+  require_file "${VPN_REPO}/scripts/publish_native_macos_release_metadata.py"
+  (
+    cd "${VPN_REPO}"
+    python3 ./scripts/publish_native_macos_release_metadata.py \
+      --deploy \
+      --manifest "${NATIVE_DOWNLOAD_DIR}/release-manifest.json" \
+      --changelog "Native macOS: статус обновлений показывается только для реально более новой версии."
+  )
 fi
 
 echo "native macOS autonomous release complete: ${VEX_NATIVE_VERSION} (${VEX_NATIVE_BUILD})"

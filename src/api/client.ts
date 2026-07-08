@@ -1,6 +1,8 @@
 import { Platform } from 'react-native';
 import { getAppInfo, getOrCreateDeviceId } from '@/native/appInfo';
 import { isTauriRuntime } from '@/native/tauriPlatform';
+import { ApiRequestError, isMaintenanceStatus, normalizeApiRequestError } from './error';
+export { isMaintenanceStatus, isTechnicalWorksError, normalizeApiRequestError, technicalWorksMessage } from './error';
 export { isTauriRuntime };
 
 export type RequestOptions = {
@@ -22,7 +24,6 @@ let tauriFetchPromise: Promise<typeof import('@tauri-apps/plugin-http').fetch> |
 export const vexApiBaseUrl = trimTrailingSlash(process.env.EXPO_PUBLIC_VEX_API_BASE_URL || 'https://vexguard.app');
 const apiRequestBaseUrl = vexApiBaseUrl;
 
-
 async function tauriHttpFetch() {
   tauriFetchPromise ??= import('@tauri-apps/plugin-http').then((module) => module.fetch);
   return tauriFetchPromise;
@@ -43,13 +44,13 @@ export async function rawRequest(path: string, options: RequestOptions = {}): Pr
     } catch (error) {
       lastError = error;
       if (attempt >= maxAttempts || !isRetryableRequestError(error)) {
-        throw error;
+        throw normalizeApiRequestError(error);
       }
       await delay(requestRetryDelayMs * attempt);
     }
   }
 
-  throw lastError;
+  throw normalizeApiRequestError(lastError);
 }
 
 async function rawRequestAttempt(path: string, options: RequestOptions, method: string): Promise<string> {
@@ -117,7 +118,11 @@ async function rawRequestAttempt(path: string, options: RequestOptions, method: 
       if (shouldLogApiRequests && !options.suppressErrorLog) {
         logApiDebug(`API Error Response: ${text}`);
       }
-      throw new Error(parseApiError(text) ?? `HTTP ${response.status}`);
+      const apiError = parseApiErrorPayload(text);
+      throw new ApiRequestError(apiError.message ?? `HTTP ${response.status}`, {
+        status: response.status,
+        code: apiError.code,
+      });
     }
     return text;
   } catch (error: unknown) {
@@ -126,7 +131,7 @@ async function rawRequestAttempt(path: string, options: RequestOptions, method: 
       logApiDebug('API Outer Catch Error:', message);
     }
     if (error instanceof Error && error.name === 'AbortError') {
-      throw new Error('Превышено время ожидания API.');
+      throw new ApiRequestError('Превышено время ожидания API.');
     }
     throw error;
   } finally {
@@ -137,6 +142,9 @@ async function rawRequestAttempt(path: string, options: RequestOptions, method: 
 function isRetryableRequestError(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
+  }
+  if (error instanceof ApiRequestError && error.status && isMaintenanceStatus(error.status)) {
+    return true;
   }
   const message = error.message.toLowerCase();
   return error.name === 'AbortError'
@@ -167,13 +175,22 @@ function logApiDebug(...items: unknown[]) {
 }
 
 export function parseApiError(text: string): string | null {
+  return parseApiErrorPayload(text).message ?? null;
+}
+
+function parseApiErrorPayload(text: string): { code?: string; message?: string } {
   try {
-    const parsed = JSON.parse(text) as { message?: string };
-    return parsed.message?.trim() || null;
+    const parsed = JSON.parse(text) as { code?: string; message?: string; error?: string };
+    return {
+      code: parsed.code?.trim() || undefined,
+      message: parsed.message?.trim() || parsed.error?.trim() || undefined,
+    };
   } catch {
-    return null;
+    const message = text.trim();
+    return { message: message || undefined };
   }
 }
+
 
 export function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, '');

@@ -1,4 +1,5 @@
 import { billingSummaryFallbackCopy, buildBillingSummary, type BillingPlanSource } from '../src/api/billingSummary';
+import { normalizeApiRequestError, technicalWorksMessage } from '../src/api/error';
 import { installManualUpdate, isTrustedIosUpdateUrl } from '../src/api/manualUpdateInstall';
 import { errorMessage } from '../src/utils/error';
 import { assessManualUpdateCenter, canUseOtaUpdate, requiresNativeUpdate, updateCheckChannel, validateManualUpdatePayloadForBaseUrl } from '../src/api/updatePreflight';
@@ -1639,4 +1640,7 @@ function runErrorMessageTests(): void {
   assertEqual(errorMessage({}), '');
   assertEqual(errorMessage(new Error('Another Test')), 'Another Test');
   assertEqual(errorMessage(null), '');
+  assertEqual(normalizeApiRequestError(new Error('Network request failed')).message, technicalWorksMessage);
+  assertEqual(normalizeApiRequestError(new Error('Превышено время ожидания API.')).message, technicalWorksMessage);
+  assertEqual(normalizeApiRequestError(new Error('regular failure')).message, 'regular failure');
 }

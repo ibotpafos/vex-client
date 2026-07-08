@@ -38,6 +38,24 @@ final class VEXModelDecodingTests: XCTestCase {
         XCTAssertEqual(session.user.email, "user@example.com")
     }
 
+    func testVpnDeviceDecodesClientAppVersionFromApi() throws {
+        let data = """
+        {
+          "id": "vex_1",
+          "name": "Mac",
+          "status": "active",
+          "protocol": "amneziawg",
+          "external_device_id": "macos-test",
+          "platform": "macos",
+          "app_version": "0.1.42"
+        }
+        """.data(using: .utf8)!
+
+        let device = try JSONDecoder().decode(VpnDevice.self, from: data)
+
+        XCTAssertEqual(device.appVersion, "0.1.42")
+    }
+
     func testKeychainDefaultServiceIsNativeNotLegacyTauri() {
         XCTAssertEqual(VEXKeychainStore().service, VEXKeychainStore.nativeService)
         XCTAssertNotEqual(VEXKeychainStore().service, VEXKeychainStore.legacyTauriService)

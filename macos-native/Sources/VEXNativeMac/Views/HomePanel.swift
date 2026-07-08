@@ -9,10 +9,15 @@ struct HomePanel: View {
         VStack(spacing: 14) {
             PowerHero(
                 status: helper.status,
+                requiresHelperInstall: helper.installRequiredMessage != nil,
                 isBusy: helper.isBusy || appState.isVpnBusy,
                 action: {
                     Task {
-                        await appState.toggleVPNPower(using: helper)
+                        if helper.installRequiredMessage != nil {
+                            await helper.repairHelper()
+                        } else {
+                            await appState.toggleVPNPower(using: helper)
+                        }
                     }
                 }
             )
@@ -59,9 +64,15 @@ struct HomePanel: View {
     }
 
     private var footerMessage: String? {
+        if let installRequiredMessage = helper.installRequiredMessage {
+            return installRequiredMessage
+        }
+        if let routeConflictMessage = helper.status.routeConflictMessage {
+            return routeConflictMessage
+        }
         if let statusMessage = appState.statusMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
            !statusMessage.isEmpty,
-           let polished = VEXUserFacingText.status(statusMessage) {
+           let polished = VEXUserFacingText.status(statusMessage, respecting: helper.status, isBusy: helper.isBusy || appState.isVpnBusy) {
             return polished
         }
         guard helper.status.state != .connected,
@@ -76,19 +87,27 @@ struct HomePanel: View {
 
 private struct PowerHero: View {
     let status: VpnStatus
+    let requiresHelperInstall: Bool
     let isBusy: Bool
     let action: () -> Void
 
     @State private var pulse = false
     @State private var orbit = false
 
-    private var isConnected: Bool { status.state == .connected }
+    private var isConnected: Bool { status.isUsableConnectedStatus }
 
     private var isTransitioning: Bool {
         status.state == .connecting || status.state == .disconnecting
     }
 
+    private var shouldAnimateHero: Bool {
+        isTransitioning || isBusy
+    }
+
     private var buttonText: String {
+        if requiresHelperInstall {
+            return "Установить"
+        }
         switch status.state {
         case .connected:
             return "Отключить"
@@ -102,6 +121,9 @@ private struct PowerHero: View {
     }
 
     private var subtext: String {
+        if requiresHelperInstall {
+            return "Helper требуется"
+        }
         switch status.state {
         case .connected:
             return "VPN активен"
@@ -124,15 +146,15 @@ private struct PowerHero: View {
                 .fill(heroTint.opacity(isConnected ? 0.16 : 0.10))
                 .frame(width: 222, height: 222)
                 .shadow(color: heroTint.opacity(isTransitioning ? 0.34 : 0.26), radius: isTransitioning ? 20 : 12)
-                .scaleEffect(pulseScale)
-                .animation(pulseAnimation, value: pulse)
+                .scaleEffect(shouldAnimateHero ? pulseScale : 1.0)
+                .animation(shouldAnimateHero ? pulseAnimation : nil, value: pulse)
 
             Circle()
                 .stroke(heroTint.opacity(0.34), lineWidth: 1)
                 .frame(width: 228, height: 228)
-                .scaleEffect(orbitHaloScale)
-                .opacity(orbitHaloOpacity)
-                .animation(pulseAnimation, value: pulse)
+                .scaleEffect(shouldAnimateHero ? orbitHaloScale : 1.0)
+                .opacity(shouldAnimateHero ? orbitHaloOpacity : stableHaloOpacity)
+                .animation(shouldAnimateHero ? pulseAnimation : nil, value: pulse)
 
             Circle()
                 .stroke(Color.vexCyanLight.opacity(0.08), lineWidth: 6)
@@ -153,9 +175,9 @@ private struct PowerHero: View {
                     style: StrokeStyle(lineWidth: 7, lineCap: .round)
                 )
                 .frame(width: 214, height: 214)
-                .rotationEffect(.degrees(orbit ? 360 : 0))
+                .rotationEffect(.degrees(shouldAnimateHero && orbit ? 360 : 0))
                 .opacity(isTransitioning ? 0.96 : 0.0)
-                .animation(.linear(duration: status.state == .disconnecting ? 1.45 : 1.05).repeatForever(autoreverses: false), value: orbit)
+                .animation(shouldAnimateHero ? orbitAnimation : nil, value: orbit)
                 .animation(.easeInOut(duration: 0.24), value: status.state)
 
             Button(action: action) {
@@ -179,9 +201,7 @@ private struct PowerHero: View {
 
                     VStack(spacing: 8) {
                         if isBusy {
-                            ProgressView()
-                                .controlSize(.small)
-                                .tint(heroTint)
+                            VEXMiniSpinner(tint: heroTint)
                         }
 
                         Text(buttonText)
@@ -209,8 +229,10 @@ private struct PowerHero: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(isConnected ? "Отключить VPN" : "Подключить VPN")
         .onAppear {
-            pulse = true
-            orbit = true
+            updateAnimationState()
+        }
+        .onChange(of: shouldAnimateHero) { _, _ in
+            updateAnimationState()
         }
     }
 
@@ -257,6 +279,10 @@ private struct PowerHero: View {
         }
     }
 
+    private var stableHaloOpacity: Double {
+        isConnected ? 0.42 : 0.24
+    }
+
     private var buttonScale: CGFloat {
         switch status.state {
         case .connected:
@@ -287,6 +313,11 @@ private struct PowerHero: View {
         }
     }
 
+    private var orbitAnimation: Animation {
+        .linear(duration: status.state == .disconnecting ? 1.45 : 1.05)
+            .repeatForever(autoreverses: false)
+    }
+
     private var buttonScaleAnimation: Animation {
         switch status.state {
         case .connecting:
@@ -296,6 +327,11 @@ private struct PowerHero: View {
         case .connected, .disconnected:
             return .snappy(duration: 0.24)
         }
+    }
+
+    private func updateAnimationState() {
+        pulse = shouldAnimateHero
+        orbit = shouldAnimateHero
     }
 }
 

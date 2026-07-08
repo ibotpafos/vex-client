@@ -3,7 +3,7 @@ use std::fs;
 use std::net::{IpAddr, ToSocketAddrs};
 use std::thread;
 
-use crate::commands::{quiet_output, quiet_status, system_command, ROUTE_BIN};
+use crate::commands::{quiet_output, quiet_status, system_command, NETSTAT_BIN, ROUTE_BIN};
 use crate::dns::{PROTECTED_PUBLIC_HOST_NAMES, PROTECTED_PUBLIC_HOST_ROUTES};
 use crate::errors::{HelperError, Result};
 use crate::logger::Logger;
@@ -305,6 +305,47 @@ pub fn default_route_target() -> Result<HostRouteTarget> {
         .ok_or_else(|| HelperError::Network("could not find default route target".into()))
 }
 
+fn route_target_from_netstat_default_line(line: &str) -> Option<HostRouteTarget> {
+    let parts: Vec<_> = line.split_whitespace().collect();
+    if parts.len() < 4 || parts.first() != Some(&"default") {
+        return None;
+    }
+
+    let gateway = parts[1];
+    let interface = parts[3];
+    if interface.starts_with("utun") || gateway.starts_with("link#") {
+        return None;
+    }
+    if gateway.parse::<IpAddr>().is_err() {
+        return None;
+    }
+
+    Some(HostRouteTarget::Gateway {
+        gateway: gateway.to_string(),
+        interface: interface.to_string(),
+    })
+}
+
+fn physical_default_route_target_from_netstat(text: &str) -> Option<HostRouteTarget> {
+    text.lines()
+        .find_map(route_target_from_netstat_default_line)
+}
+
+pub fn physical_default_route_target() -> Option<HostRouteTarget> {
+    let out = quiet_output(system_command(NETSTAT_BIN).args(["-rn", "-f", "inet"])).ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    physical_default_route_target_from_netstat(&text)
+}
+
+pub fn public_default_route_target() -> Result<HostRouteTarget> {
+    let target = default_route_target()?;
+    if !target.is_tunnel_interface() {
+        return Ok(target);
+    }
+
+    Ok(physical_default_route_target().unwrap_or(target))
+}
+
 pub fn route_interface_for_destination(destination: &str) -> Option<String> {
     let out = quiet_output(system_command(ROUTE_BIN).args(["-n", "get", destination])).ok()?;
     let text = String::from_utf8_lossy(&out.stdout);
@@ -328,7 +369,7 @@ pub fn host_route_target(host: &str) -> Option<HostRouteTarget> {
 }
 
 pub fn ensure_host_route(host: &str, log: &Logger) -> Result<()> {
-    let target = default_route_target()?;
+    let target = public_default_route_target()?;
     let route = host_route_target(host);
     if route
         .as_ref()
@@ -382,4 +423,53 @@ pub fn load_endpoint() -> Option<String> {
 pub fn persist_endpoint(ep: &str) {
     let path = format!("{}/endpoint.txt", HELPER_DIR);
     let _ = write_state_file(path, ep, 0o600);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ignores_tunnel_default_route_from_netstat() {
+        assert_eq!(
+            route_target_from_netstat_default_line(
+                "default            link#25            UCSg                utun6"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn parses_physical_default_route_from_netstat() {
+        assert_eq!(
+            route_target_from_netstat_default_line(
+                "default            192.168.31.1       UGScIg                en0"
+            ),
+            Some(HostRouteTarget::Gateway {
+                gateway: "192.168.31.1".to_string(),
+                interface: "en0".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn prefers_physical_default_when_tunnel_default_is_first() {
+        let output = r#"
+Routing tables
+
+Internet:
+Destination        Gateway            Flags               Netif Expire
+default            link#25            UCSg                utun6
+default            192.168.31.1       UGScIg                en0
+94.141.160.212     link#25            UHWIig              utun6
+"#;
+
+        assert_eq!(
+            physical_default_route_target_from_netstat(output),
+            Some(HostRouteTarget::Gateway {
+                gateway: "192.168.31.1".to_string(),
+                interface: "en0".to_string(),
+            })
+        );
+    }
 }

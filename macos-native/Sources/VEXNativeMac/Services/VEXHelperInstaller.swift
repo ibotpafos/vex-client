@@ -5,7 +5,6 @@ import Foundation
 struct VEXHelperInstaller {
     private let helperDir = "/Library/Application Support/VEX VPN/helper"
     private let helperPlist = "/Library/LaunchDaemons/app.vex.vpn.helper.plist"
-    private let helperVersion = "31"
     private let launchdLabel = "app.vex.vpn.helper"
     private let socketPath = "/var/run/vex-helper.sock"
 
@@ -76,6 +75,14 @@ struct VEXHelperInstaller {
 
     private var installedVersion: String {
         (try? String(contentsOfFile: "\(helperDir)/version", encoding: .utf8)) ?? ""
+    }
+
+    private var helperVersion: String {
+        guard let url = try? resourceFile("helper-version"),
+              let value = try? String(contentsOf: url, encoding: .utf8) else {
+            return ""
+        }
+        return value.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private var helperPlistIsCurrent: Bool {

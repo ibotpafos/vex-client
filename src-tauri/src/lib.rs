@@ -421,9 +421,8 @@ mod platform_vpn {
         };
 
         plist.contains("<key>RunAtLoad</key>")
-            && plist.contains("<false/>")
             && plist.contains("<key>KeepAlive</key>")
-            && !plist.contains("<true/>")
+            && plist.contains("<true/>")
     }
 
     fn helper_binary_is_signature_valid() -> bool {

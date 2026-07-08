@@ -29,8 +29,8 @@ use routing::{
     add_host_route_to_target, add_protected_public_host_routes_to_target, cleanup_interface_routes,
     default_route_target, del_host_route, del_protected_public_host_routes, endpoint_host,
     endpoint_port, ensure_endpoint_host_route, ensure_host_route, load_endpoint, load_iface,
-    persist_endpoint, persist_iface, persist_protected_public_hosts, resolve_to_ip,
-    route_interface_for_destination, routed_ipv4_allowed_ips,
+    persist_endpoint, persist_iface, persist_protected_public_hosts, public_default_route_target,
+    resolve_to_ip, route_interface_for_destination, routed_ipv4_allowed_ips,
 };
 use state::write_state_file;
 use uapi::{uapi_configure, WgConfig, WG_RUNTIME_DIR};
@@ -189,12 +189,9 @@ fn action_up(log: &Logger, arm_antileak: bool) -> Result<()> {
         );
     }
 
-    let route_target = match default_route_target() {
+    let route_target = match public_default_route_target() {
         Ok(target) => {
-            log.info(
-                "up",
-                &format!("default route target: {}", target.describe()),
-            );
+            log.info("up", &format!("public route target: {}", target.describe()));
             Some(target)
         }
         Err(e) => {

@@ -59,6 +59,7 @@
       "resources/awg",
       "resources/vex-helper",
       "resources/install-vex-vpn-helper.sh",
+      "resources/helper-version",
       "amneziawg.exe",
       "wintun.dll"
     ],

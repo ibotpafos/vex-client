@@ -55,6 +55,8 @@ for resource in install-vex-vpn-helper.sh awg amneziawg-go vex-helper; do
   require_file "${resources_dir}/${resource}"
   [[ -x "${resources_dir}/${resource}" ]] || fail "resource is not executable: ${resource}"
 done
+require_file "${resources_dir}/helper-version"
+[[ -r "${resources_dir}/helper-version" ]] || fail "resource is not readable: helper-version"
 
 codesign --verify --deep --strict "${APP_PATH}" || fail "codesign verification failed"
 

@@ -82,7 +82,7 @@ else
 fi
 
 mkdir -p "${APP_DIR}/Contents/Resources/resources"
-for resource in install-vex-vpn-helper.sh awg amneziawg-go vex-helper; do
+for resource in install-vex-vpn-helper.sh awg amneziawg-go vex-helper helper-version; do
   if [[ -f "${ROOT_DIR}/src-tauri/resources/${resource}" ]]; then
     cp "${ROOT_DIR}/src-tauri/resources/${resource}" "${APP_DIR}/Contents/Resources/resources/${resource}"
   else
@@ -94,6 +94,7 @@ chmod 755 "${APP_DIR}/Contents/Resources/resources/install-vex-vpn-helper.sh" \
   "${APP_DIR}/Contents/Resources/resources/awg" \
   "${APP_DIR}/Contents/Resources/resources/amneziawg-go" \
   "${APP_DIR}/Contents/Resources/resources/vex-helper"
+chmod 644 "${APP_DIR}/Contents/Resources/resources/helper-version"
 
 rm -rf "${ICONSET_DIR}"
 mkdir -p "${ICONSET_DIR}"

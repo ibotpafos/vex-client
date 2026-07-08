@@ -7,7 +7,16 @@ _user_name="${3:-}"
 
 helper_dir="/Library/Application Support/VEX VPN/helper"
 plist="/Library/LaunchDaemons/app.vex.vpn.helper.plist"
-helper_version="32"
+helper_version_file="$src_dir/helper-version"
+if [[ ! -r "$helper_version_file" ]]; then
+  echo "Missing VPN resource: $helper_version_file" >&2
+  exit 1
+fi
+helper_version="$(/usr/bin/sed -n '1{s/[[:space:]]//g;p;q;}' "$helper_version_file")"
+if [[ -z "$helper_version" ]]; then
+  echo "Bundled helper-version is empty." >&2
+  exit 1
+fi
 
 umask 077
 

@@ -1240,7 +1240,8 @@ final class VEXAppState: ObservableObject {
                 accessToken: token,
                 locationId: targetLocationId,
                 routingMode: routingMode,
-                forceRefresh: forceRefresh
+                forceRefresh: forceRefresh,
+                writeHelperConfig: false
             )
             statusMessage = "Профиль сервера готов."
         } catch {
@@ -1291,7 +1292,8 @@ final class VEXAppState: ObservableObject {
                     accessToken: token,
                     locationId: locationId,
                     routingMode: mode,
-                    forceRefresh: true
+                    forceRefresh: true,
+                    writeHelperConfig: false
                 )
             } catch is CancellationError {
             } catch {

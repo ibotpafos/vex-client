@@ -144,7 +144,7 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertFalse(VPNProfileService.cachedProfileNeedsRefresh(cached, requestedLocationId: "de", requestedRoutingMode: .allExceptRu))
     }
 
-    func testStaleManagedProfileCacheCanBeReusedForFastForegroundConnect() throws {
+    func testStaleManagedProfileCacheRequiresRefreshBeforeForegroundConnect() throws {
         let device = try JSONDecoder().decode(VpnDevice.self, from: """
         {"id":"dev_1","name":"Mac","status":"active","protocol":"amneziawg","external_device_id":"macos-test","node_id":"de-1"}
         """.data(using: .utf8)!)
@@ -176,6 +176,19 @@ final class NativeParityModelTests: XCTestCase {
             requestedRoutingMode: .fullTunnel,
             allowStale: true
         ))
+    }
+
+    func testForegroundProfileResolutionDoesNotAcceptStaleCacheBeforeApi() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let profileServiceURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/VPNProfileService.swift")
+        let profileService = try String(contentsOf: profileServiceURL, encoding: .utf8)
+
+        XCTAssertFalse(profileService.contains("""
+        requestedRoutingMode: routingMode,
+                        allowStale: true
+                   ) {
+        """))
+        XCTAssertTrue(profileService.contains("if error.isTimeout"))
     }
 
     func testMacOSHelperConfigDropsIPv6AllowedIPsWithoutIPv6Address() {
@@ -226,7 +239,7 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(appState.contains("private var profileWarmupTask: Task<Void, Never>?"))
         XCTAssertTrue(appState.contains("scheduleProfileWarmup()"))
         XCTAssertTrue(appState.contains("forceRefresh: false\n            )\n            try ensureConnectStillDesired"))
-        XCTAssertTrue(appState.contains("forceRefresh: true\n                )\n            } catch is CancellationError"))
+        XCTAssertTrue(appState.contains("forceRefresh: true,\n                    writeHelperConfig: false\n                )\n            } catch is CancellationError"))
     }
 
     func testAppStateRestoresActiveTunnelWhenHelperIsAlreadyConnectedOnLaunch() throws {
@@ -267,6 +280,18 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(appState.contains("private func tunnel(_ tunnel: PreparedTunnel, matches status: VpnStatus) -> Bool"))
         XCTAssertTrue(appState.contains("let candidates = [tunnel.configEndpoint, tunnel.endpoint].compactMap(normalizedEndpoint)"))
         XCTAssertTrue(appState.contains("return serverSelectionMode == \"manual\""))
+    }
+
+    func testProfileWarmupDoesNotOverwriteHelperConfig() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let appStateURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Stores/VEXAppState.swift")
+        let profileServiceURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/VPNProfileService.swift")
+        let appState = try String(contentsOf: appStateURL, encoding: .utf8)
+        let profileService = try String(contentsOf: profileServiceURL, encoding: .utf8)
+
+        XCTAssertTrue(profileService.contains("writeHelperConfig: Bool = true"))
+        XCTAssertTrue(appState.contains("writeHelperConfig: false"))
+        XCTAssertTrue(appState.contains("func scheduleProfileWarmup()"))
     }
 
     func testManagedProfileCacheRefreshesWhenLocationOrNodeIsMixed() throws {
@@ -583,11 +608,38 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(helperInstaller.contains("resourceMatchesInstalled(\"vex-helper\")"))
         XCTAssertTrue(helperInstaller.contains("resourceMatchesInstalled(\"amneziawg-go\")"))
         XCTAssertTrue(helperInstaller.contains("resourceMatchesInstalled(\"awg\")"))
-        XCTAssertTrue(helperInstaller.contains("private let helperVersion = \"31\""))
+        XCTAssertTrue(helperInstaller.contains("resourceFile(\"helper-version\")"))
+        XCTAssertTrue(helperInstaller.contains("trimmingCharacters(in: .whitespacesAndNewlines)"))
         XCTAssertTrue(helperInstaller.contains("plistValueIsTrue(\"RunAtLoad\", in: plist)"))
         XCTAssertTrue(helperInstaller.contains("plistValueIsTrue(\"KeepAlive\", in: plist)"))
         XCTAssertTrue(helperInstaller.contains("SHA256.hash"))
         XCTAssertFalse(helperInstaller.contains("if socketIsConnectable {\n            return\n        }"))
+    }
+
+    func testNativeHelperVersionUsesBundledResourceAcrossInstallPaths() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let helperVersionURL = packageRoot.appendingPathComponent("../src-tauri/resources/helper-version").standardizedFileURL
+        let installerURL = packageRoot.appendingPathComponent("../src-tauri/resources/install-vex-vpn-helper.sh").standardizedFileURL
+        let nativeInstallerURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/VEXHelperInstaller.swift")
+        let buildScriptURL = packageRoot.appendingPathComponent("../scripts/build_native_macos_app.sh").standardizedFileURL
+        let verifyScriptURL = packageRoot.appendingPathComponent("../scripts/verify_native_macos_runtime.sh").standardizedFileURL
+        let tauriConfigURL = packageRoot.appendingPathComponent("../src-tauri/tauri.conf.json").standardizedFileURL
+
+        let helperVersion = try String(contentsOf: helperVersionURL, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let installer = try String(contentsOf: installerURL, encoding: .utf8)
+        let nativeInstaller = try String(contentsOf: nativeInstallerURL, encoding: .utf8)
+        let buildScript = try String(contentsOf: buildScriptURL, encoding: .utf8)
+        let verifyScript = try String(contentsOf: verifyScriptURL, encoding: .utf8)
+        let tauriConfig = try String(contentsOf: tauriConfigURL, encoding: .utf8)
+
+        XCTAssertEqual(helperVersion, "32")
+        XCTAssertTrue(installer.contains("helper_version_file=\"$src_dir/helper-version\""))
+        XCTAssertTrue(nativeInstaller.contains("resourceFile(\"helper-version\")"))
+        XCTAssertTrue(buildScript.contains("helper-version"))
+        XCTAssertTrue(verifyScript.contains("helper_version_from_bundle"))
+        XCTAssertTrue(tauriConfig.contains("\"resources/helper-version\""))
+        XCTAssertFalse(nativeInstaller.contains("private let helperVersion = \""))
     }
 
     func testSettingsShowStaleHelperAsInstallRequired() throws {
@@ -625,6 +677,7 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(script.contains("app_codesign=ok"))
         XCTAssertTrue(script.contains("root helper does not match bundled helper"))
         XCTAssertTrue(script.contains("root helper version does not match bundled helper version"))
+        XCTAssertTrue(script.contains("helper_version_from_bundle"))
         XCTAssertTrue(script.contains("helper_install_action="))
         XCTAssertTrue(script.contains("route_iface="))
         XCTAssertTrue(script.contains("STRICT"))
@@ -709,10 +762,10 @@ final class NativeParityModelTests: XCTestCase {
         let helper = try String(contentsOf: helperURL, encoding: .utf8)
 
         XCTAssertTrue(helper.contains("preserving foreign default route"))
-        XCTAssertTrue(helper.contains("default_route_target()"))
+        XCTAssertTrue(helper.contains("public_default_route_target()"))
         XCTAssertTrue(helper.contains("add_host_route_to_target(endpoint_host(&resolved_endpoint), target, log)"))
         XCTAssertTrue(helper.contains("if target.is_tunnel_interface()"))
-        XCTAssertTrue(helper.contains("skipping protected public host routes for physical default route"))
+        XCTAssertTrue(helper.contains("add_protected_public_host_routes_to_target(target, log)"))
         XCTAssertFalse(helper.contains("\"--nc\", \"stop\""))
         XCTAssertFalse(helper.contains("release_foreign_default_tunnels"))
     }

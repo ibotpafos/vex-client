@@ -20,6 +20,7 @@ installer="${resource_dir}/install-vex-vpn-helper.sh"
 for resource in awg amneziawg-go vex-helper; do
   [[ -x "${resource_dir}/${resource}" ]] || fail "missing executable helper resource: ${resource}"
 done
+[[ -r "${resource_dir}/helper-version" ]] || fail "missing readable helper resource: helper-version"
 
 shell_quote() {
   local value="$1"

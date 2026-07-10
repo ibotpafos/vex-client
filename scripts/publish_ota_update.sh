@@ -28,10 +28,10 @@ if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
   exit 2
 fi
 
-if [[ "${operation}" == "publish" || "${operation}" == "rollback" ]]; then
+if [[ "${operation}" == "publish" || "${operation}" == "republish" || "${operation}" == "rollback" ]]; then
   runtime_version="${VEX_RUNTIME_VERSION:-}"
   if [[ -z "${runtime_version}" ]]; then
-    printf 'VEX_RUNTIME_VERSION is required for OTA publish and rollback operations.\n' >&2
+    printf 'VEX_RUNTIME_VERSION is required for every OTA operation.\n' >&2
     exit 2
   fi
   current_runtime="$(node -e "const v=require('./versions.json'); process.stdout.write(String(v['${platform}'].version))")"

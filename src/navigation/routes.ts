@@ -6,3 +6,4 @@ export const SETTINGS_ROUTE = '/(app)/settings' as const;
 export const SUBSCRIPTION_ROUTE = '/(app)/subscription' as const;
 export const SERVER_PICKER_ROUTE = '/(app)/server-picker' as const;
 export const UPDATE_CENTER_ROUTE = '/(app)/update-center' as const;
+export const VPN_APPLICATIONS_ROUTE = '/(app)/vpn-applications' as const;

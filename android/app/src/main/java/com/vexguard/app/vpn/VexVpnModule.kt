@@ -6,16 +6,20 @@ import android.content.Intent
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.content.pm.Signature
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.provider.Settings
 import android.util.Log
+import android.util.Base64
 import androidx.core.content.FileProvider
 import androidx.core.content.ContextCompat
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.BaseActivityEventListener
 import com.facebook.react.bridge.Promise
+import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
@@ -33,6 +37,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.ByteArrayOutputStream
 import java.net.URL
 import java.security.MessageDigest
 
@@ -98,15 +103,69 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
 
   @ReactMethod
   fun connect(wgQuickConfig: String, antiLeakEnabled: Boolean, promise: Promise) {
+    startConnection(
+      wgQuickConfig = wgQuickConfig,
+      antiLeakEnabled = antiLeakEnabled,
+      selectedApplications = emptyList(),
+      routeOnlySelectedApplications = false,
+      promise = promise,
+    )
+  }
+
+  @ReactMethod
+  fun connectWithApplications(
+    wgQuickConfig: String,
+    antiLeakEnabled: Boolean,
+    selectedApplications: ReadableArray,
+    routeOnlySelectedApplications: Boolean,
+    promise: Promise,
+  ) {
+    val packages = (0 until selectedApplications.size())
+      .mapNotNull { selectedApplications.getString(it)?.trim() }
+      .filter { it.isNotEmpty() }
+      .distinct()
+    startConnection(
+      wgQuickConfig = wgQuickConfig,
+      antiLeakEnabled = antiLeakEnabled,
+      selectedApplications = packages,
+      routeOnlySelectedApplications = routeOnlySelectedApplications,
+      promise = promise,
+    )
+  }
+
+  private fun startConnection(
+    wgQuickConfig: String,
+    antiLeakEnabled: Boolean,
+    selectedApplications: List<String>,
+    routeOnlySelectedApplications: Boolean,
+    promise: Promise,
+  ) {
     scope.launch {
       try {
-        val status = controller.connect(wgQuickConfig, antiLeakEnabled).toWritableMap()
+        val status = controller.connect(
+          wgQuickConfig,
+          antiLeakEnabled,
+          routeOnlySelectedApplications,
+          selectedApplications,
+        ).toWritableMap()
         emitVpnStatusChanged(status, force = true)
         promise.resolve(status)
       } catch (error: VpnPermissionRequiredException) {
         rejectVpnError(promise, "VPN_PERMISSION_REQUIRED", "Android VPN permission is required.", error)
       } catch (error: Throwable) {
         rejectVpnError(promise, "VPN_CONNECT_FAILED", "VPN connection failed.", error)
+      }
+    }
+  }
+
+  @ReactMethod
+  fun getInstalledApplications(promise: Promise) {
+    scope.launch {
+      try {
+        val applications = withContext(Dispatchers.IO) { installedApplications() }
+        promise.resolve(applications)
+      } catch (error: Throwable) {
+        rejectVpnError(promise, "VPN_APPLICATIONS_FAILED", "Installed applications are unavailable.", error)
       }
     }
   }
@@ -452,6 +511,47 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
     map.putString("publicKey", publicKey)
     map.putInt("keyEpoch", keyEpoch)
     return map
+  }
+
+  private fun installedApplications(): com.facebook.react.bridge.WritableArray {
+    val packageManager = reactContext.packageManager
+    val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+    val resolved = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      packageManager.queryIntentActivities(launcherIntent, PackageManager.ResolveInfoFlags.of(0L))
+    } else {
+      @Suppress("DEPRECATION")
+      packageManager.queryIntentActivities(launcherIntent, 0)
+    }
+    val result = Arguments.createArray()
+    resolved
+      .asSequence()
+      .filter { it.activityInfo?.packageName != reactContext.packageName }
+      .distinctBy { it.activityInfo.packageName }
+      .map { info ->
+        val label = info.loadLabel(packageManager).toString().trim()
+        Triple(label.ifEmpty { info.activityInfo.packageName }, info.activityInfo.packageName, info.loadIcon(packageManager))
+      }
+      .sortedBy { it.first.lowercase() }
+      .forEach { (label, packageName, icon) ->
+        val item = Arguments.createMap()
+        item.putString("label", label)
+        item.putString("packageName", packageName)
+        item.putString("iconDataUri", drawableDataUri(icon))
+        result.pushMap(item)
+      }
+    return result
+  }
+
+  private fun drawableDataUri(drawable: android.graphics.drawable.Drawable): String {
+    val size = (48 * reactContext.resources.displayMetrics.density).toInt().coerceIn(48, 144)
+    val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
+    drawable.setBounds(0, 0, size, size)
+    drawable.draw(canvas)
+    val output = ByteArrayOutputStream()
+    bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
+    bitmap.recycle()
+    return "data:image/png;base64,${Base64.encodeToString(output.toByteArray(), Base64.NO_WRAP)}"
   }
 
   private fun rejectVpnError(promise: Promise, code: String, fallbackMessage: String, error: Throwable) {

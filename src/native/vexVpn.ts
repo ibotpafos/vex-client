@@ -25,6 +25,12 @@ export type AndroidUpdateInstallResult = {
   status: 'installer_started' | 'install_permission_required';
 };
 
+export type InstalledVpnApplication = {
+  iconDataUri: string;
+  label: string;
+  packageName: string;
+};
+
 export type VpnLiveActivityPayload = {
   state: VpnState;
   phase: string;
@@ -47,6 +53,12 @@ type VexVpnNativeModule = {
   needsPermission(): Promise<boolean>;
   requestPermission(): Promise<boolean>;
   connect(wgQuickConfig: string, antiLeakEnabled: boolean): Promise<VpnStatus>;
+  connectWithApplications?(
+    wgQuickConfig: string,
+    antiLeakEnabled: boolean,
+    selectedApplications: string[],
+    routeOnlySelectedApplications: boolean,
+  ): Promise<VpnStatus>;
   disconnect(releaseAntiLeak: boolean): Promise<VpnStatus>;
   status(): Promise<VpnStatus>;
   openVpnSettings?(): Promise<boolean>;
@@ -62,6 +74,7 @@ type VexVpnNativeModule = {
   getFirebaseMessagingToken?(): Promise<string>;
   downloadUpdateApk(downloadUrl: string, checksumSha256?: string | null): Promise<AndroidUpdateDownload>;
   installUpdateApk(filePath: string): Promise<AndroidUpdateInstallResult>;
+  getInstalledApplications?(): Promise<InstalledVpnApplication[]>;
 };
 
 const nativeModule = NativeModules.VexVpn as VexVpnNativeModule | undefined;
@@ -99,6 +112,8 @@ export async function requestVpnPermission(): Promise<boolean> {
 
 export type ConnectVpnOptions = {
   antiLeakEnabled?: boolean;
+  applicationRoutingMode?: 'all' | 'selected';
+  selectedApplications?: string[];
 };
 
 export type DisconnectVpnOptions = {
@@ -106,9 +121,38 @@ export type DisconnectVpnOptions = {
 };
 
 export async function connectVpn(wgQuickConfig: string, options: ConnectVpnOptions = {}): Promise<VpnStatus> {
-  const status = normalizeVpnStatus(await requireNativeModule().connect(wgQuickConfig, options.antiLeakEnabled !== false));
+  const module = requireNativeModule();
+  const nativeStatus = Platform.OS === 'android' && module.connectWithApplications
+    ? await module.connectWithApplications(
+      wgQuickConfig,
+      options.antiLeakEnabled !== false,
+      options.selectedApplications ?? [],
+      options.applicationRoutingMode === 'selected',
+    )
+    : await module.connect(wgQuickConfig, options.antiLeakEnabled !== false);
+  const status = normalizeVpnStatus(nativeStatus);
   updateCachedVpnStatus(status);
   return status;
+}
+
+export async function getInstalledVpnApplications(): Promise<InstalledVpnApplication[]> {
+  if (Platform.OS !== 'android') {
+    return [];
+  }
+  const applications = await requireNativeModule().getInstalledApplications?.();
+  return Array.isArray(applications)
+    ? applications.filter(isInstalledVpnApplication)
+    : [];
+}
+
+function isInstalledVpnApplication(value: unknown): value is InstalledVpnApplication {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  const application = value as Partial<InstalledVpnApplication>;
+  return typeof application.label === 'string' &&
+    typeof application.packageName === 'string' &&
+    typeof application.iconDataUri === 'string';
 }
 
 export async function disconnectVpn(options: DisconnectVpnOptions = {}): Promise<VpnStatus> {

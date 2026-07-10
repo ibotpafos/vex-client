@@ -3,6 +3,9 @@ import * as SecureStore from '@/native/secureStore';
 import { safeGetStoredValue } from '@/settings/safeStorage';
 import { defaultVpnRoutingMode, isSmartRoutingMode, normalizeVpnRoutingMode, type VpnRoutingMode } from '@/vpn/routingPolicy';
 import { normalizeServerSelectionMode, type ServerSelectionMode } from '@/vpn/serverSelection';
+import { normalizePackageNames, type VpnApplicationRoutingMode } from '@/vpn/applicationRouting';
+
+export { normalizePackageNames, type VpnApplicationRoutingMode } from '@/vpn/applicationRouting';
 
 const androidAutoConnectKey = 'vex.settings.android.autoconnect.v1';
 const antiLeakEnabledKey = 'vex.settings.vpn.anti_leak.v1';
@@ -10,7 +13,14 @@ const smartRoutingEnabledKey = 'vex.settings.vpn.smart_routing.v1';
 const routingModeKey = 'vex.settings.vpn.routing_mode.v1';
 const serverSelectionModeKey = 'vex.settings.vpn.server_selection_mode.v1';
 const selectedVpnLocationKey = 'vex.settings.vpn.location.v1';
+const vpnApplicationRoutingModeKey = 'vex.settings.vpn.application_routing_mode.v1';
+const selectedVpnApplicationsKey = 'vex.settings.vpn.selected_applications.v1';
 const defaultVpnLocation = 'de';
+
+export type VpnApplicationSelection = {
+  mode: VpnApplicationRoutingMode;
+  packageNames: string[];
+};
 
 export function supportsAndroidAutoConnect(): boolean {
   return Platform.OS === 'android';
@@ -92,6 +102,43 @@ export async function setSelectedVpnLocation(locationId: string): Promise<string
   return normalized;
 }
 
+export async function getVpnApplicationSelection(): Promise<VpnApplicationSelection> {
+  const [storedMode, storedApplications] = await Promise.all([
+    safeGetSetting(vpnApplicationRoutingModeKey),
+    safeGetSetting(selectedVpnApplicationsKey),
+  ]);
+  return {
+    mode: storedMode === 'selected' ? 'selected' : 'all',
+    packageNames: parseStoredPackageNames(storedApplications),
+  };
+}
+
+export async function setVpnApplicationRoutingMode(mode: VpnApplicationRoutingMode): Promise<VpnApplicationRoutingMode> {
+  const normalized: VpnApplicationRoutingMode = mode === 'selected' ? 'selected' : 'all';
+  await SecureStore.setItemAsync(vpnApplicationRoutingModeKey, normalized);
+  return normalized;
+}
+
+export async function setSelectedVpnApplications(packageNames: string[]): Promise<string[]> {
+  const normalized = normalizePackageNames(packageNames);
+  await SecureStore.setItemAsync(selectedVpnApplicationsKey, JSON.stringify(normalized));
+  return normalized;
+}
+
 export async function safeGetSetting(key: string): Promise<string | null> {
   return safeGetStoredValue(key, SecureStore.getItemAsync);
+}
+
+function parseStoredPackageNames(value: string | null): string[] {
+  if (!value) {
+    return [];
+  }
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? normalizePackageNames(parsed.filter((item): item is string => typeof item === 'string'))
+      : [];
+  } catch {
+    return [];
+  }
 }

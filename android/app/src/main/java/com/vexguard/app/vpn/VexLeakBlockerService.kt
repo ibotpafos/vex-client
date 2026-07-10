@@ -9,6 +9,7 @@ import android.content.Intent
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
+import androidx.core.content.ContextCompat
 import com.vexguard.app.MainActivity
 import java.io.FileInputStream
 import java.util.concurrent.atomic.AtomicBoolean
@@ -18,19 +19,14 @@ class VexLeakBlockerService : VpnService() {
   private var drainThread: Thread? = null
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-    if (intent?.action == ACTION_STOP) {
-      stopBlocking()
-      stopSelf()
-      return START_NOT_STICKY
-    }
-
     startForeground(NOTIFICATION_ID, blockerNotification())
-    startBlocking()
+    startBlocking(intent?.getStringArrayListExtra(EXTRA_ALLOWED_APPLICATIONS).orEmpty())
     return START_STICKY
   }
 
   override fun onDestroy() {
     stopBlocking()
+    stopForeground(STOP_FOREGROUND_REMOVE)
     super.onDestroy()
   }
 
@@ -40,7 +36,7 @@ class VexLeakBlockerService : VpnService() {
     super.onRevoke()
   }
 
-  private fun startBlocking() {
+  private fun startBlocking(allowedApplications: List<String>) {
     if (tunnel != null) {
       active.set(true)
       return
@@ -53,9 +49,18 @@ class VexLeakBlockerService : VpnService() {
       .addAddress("fd00:255:255::1", 128)
       .addRoute("::", 0)
       .setBlocking(false)
-    try {
-      builder.addDisallowedApplication(packageName)
-    } catch (_: Throwable) {
+    if (allowedApplications.isEmpty()) {
+      try {
+        builder.addDisallowedApplication(packageName)
+      } catch (_: Throwable) {
+      }
+    } else {
+      allowedApplications.forEach { allowedPackage ->
+        try {
+          builder.addAllowedApplication(allowedPackage)
+        } catch (_: Throwable) {
+        }
+      }
     }
     tunnel = builder.establish()
 
@@ -94,13 +99,16 @@ class VexLeakBlockerService : VpnService() {
   private fun blockerNotification(): Notification {
     val manager = getSystemService(NotificationManager::class.java)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-      manager.createNotificationChannel(
-        NotificationChannel(
-          CHANNEL_ID,
-          "VEX AntiDetect",
-          NotificationManager.IMPORTANCE_LOW,
-        ),
-      )
+      val channel = NotificationChannel(
+        CHANNEL_ID,
+        "VEX AntiDetect",
+        NotificationManager.IMPORTANCE_LOW,
+      ).apply {
+        setSound(null, null)
+        enableVibration(false)
+        setShowBadge(false)
+      }
+      manager.createNotificationChannel(channel)
     }
 
     val pendingIntent = PendingIntent.getActivity(
@@ -120,22 +128,27 @@ class VexLeakBlockerService : VpnService() {
       .setContentText("Интернет заблокирован, чтобы не раскрыть реальный IP.")
       .setSmallIcon(android.R.drawable.stat_sys_warning)
       .setContentIntent(pendingIntent)
+      .setCategory(Notification.CATEGORY_SERVICE)
       .setOngoing(true)
+      .setOnlyAlertOnce(true)
+      .setShowWhen(false)
       .build()
   }
 
   companion object {
-    private const val ACTION_STOP = "com.vexguard.app.vpn.STOP_LEAK_BLOCKER"
     private const val CHANNEL_ID = "vex_antileak"
+    private const val EXTRA_ALLOWED_APPLICATIONS = "com.vexguard.app.vpn.ALLOWED_APPLICATIONS"
     private const val NOTIFICATION_ID = 9173
     private val active = AtomicBoolean(false)
 
-    fun start(context: Context) {
-      context.startService(Intent(context, VexLeakBlockerService::class.java))
+    fun start(context: Context, allowedApplications: List<String> = emptyList()) {
+      val intent = Intent(context, VexLeakBlockerService::class.java)
+        .putStringArrayListExtra(EXTRA_ALLOWED_APPLICATIONS, ArrayList(allowedApplications))
+      ContextCompat.startForegroundService(context, intent)
     }
 
     fun stop(context: Context) {
-      context.startService(Intent(context, VexLeakBlockerService::class.java).setAction(ACTION_STOP))
+      context.stopService(Intent(context, VexLeakBlockerService::class.java))
     }
 
     fun isActive(): Boolean = active.get()

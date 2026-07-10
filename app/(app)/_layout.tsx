@@ -12,6 +12,7 @@ export default function AppLayout() {
       <Stack>
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="settings" options={{ headerShown: false }} />
+        <Stack.Screen name="vpn-applications" options={{ headerShown: false }} />
         <Stack.Screen name="support-chat" options={{ headerShown: false }} />
         <Stack.Screen
           name="server-picker"

@@ -30,7 +30,6 @@ import {
   getVpnStatus,
   listenVpnStatusChanged,
   measureEndpointLatency,
-  openVpnSettings,
   requestVpnPermission,
   updateVpnLiveActivity,
   type VpnStatus,
@@ -113,7 +112,6 @@ import {
   areVpnStatusesEqual,
   errorMessage,
   isAuthenticationError,
-  waitForAnimationKick,
   disconnectedVpnStatus,
   availableVpnLocations,
   formatBytes,
@@ -928,7 +926,6 @@ export function useVpnConnection() {
     vpnConnectGenerationRef.current = connectGeneration;
     try {
       if (isConnected || isLeakBlocked) {
-        await waitForAnimationKick();
         const nextStatus = await disconnectVpn({ releaseAntiLeak: true });
         setVpnStatus(nextStatus);
         if (session && activeProfile) {
@@ -1065,7 +1062,6 @@ export function useVpnConnection() {
     setVpnError(null);
 
     try {
-      await waitForAnimationKick();
       const cachedTargetProfile = queryClient.getQueryData<VpnProfile>(['vpn-profile', session.accessToken, targetLocationId, routingMode]);
       const result = await switchVpnLocation({
         cachedTargetProfile,
@@ -1227,13 +1223,6 @@ export function useVpnConnection() {
     setIsUpdateCenterVisible(false);
   }, []);
 
-  const handleOpenVpnSettingsPress = useCallback(() => {
-    playSelectionHaptic();
-    void openVpnSettings().catch((error) => {
-      setVpnError(errorMessage(error, 'Не удалось открыть настройки VPN.'));
-    });
-  }, []);
-
   const handleSmartRoutingToggle = useCallback(async (next: boolean) => {
     const nextMode: VpnRoutingMode = next ? 'all_except_ru' : 'full_tunnel';
     const savedMode = await setVpnRoutingMode(nextMode);
@@ -1285,7 +1274,6 @@ export function useVpnConnection() {
     closeServerPicker,
     openUpdateCenter,
     closeUpdateCenter,
-    handleOpenVpnSettingsPress,
     handleSmartRoutingToggle,
     clearProfile,
     setVpnError,

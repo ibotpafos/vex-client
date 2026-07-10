@@ -1,12 +1,16 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
   <uses-permission android:name="android.permission.INTERNET"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
-  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED"/>
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
   <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
   <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" tools:node="remove"/>
   <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" tools:node="remove"/>
   <queries>
+    <intent>
+      <action android:name="android.intent.action.MAIN"/>
+      <category android:name="android.intent.category.LAUNCHER"/>
+    </intent>
     <intent>
       <action android:name="android.intent.action.VIEW"/>
       <category android:name="android.intent.category.BROWSABLE"/>
@@ -36,13 +40,14 @@
         <data android:scheme="vexguard" android:host="auth" android:pathPrefix="/callback"/>
       </intent-filter>
     </activity>
-    <service android:name="org.amnezia.awg.backend.GoBackend$VpnService" android:exported="false" android:permission="android.permission.BIND_VPN_SERVICE">
+    <service android:name="org.amnezia.awg.backend.GoBackend$VpnService" android:exported="false" android:foregroundServiceType="systemExempted" android:permission="android.permission.BIND_VPN_SERVICE">
+      <meta-data android:name="android.net.VpnService.SUPPORTS_ALWAYS_ON" android:value="false"/>
       <intent-filter>
         <action android:name="android.net.VpnService"/>
       </intent-filter>
     </service>
-    <service android:name=".vpn.VexLeakBlockerService" android:exported="false" android:foregroundServiceType="specialUse" android:permission="android.permission.BIND_VPN_SERVICE">
-      <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="vpn_leak_blocker"/>
+    <service android:name=".vpn.VexLeakBlockerService" android:exported="false" android:foregroundServiceType="systemExempted" android:permission="android.permission.BIND_VPN_SERVICE">
+      <meta-data android:name="android.net.VpnService.SUPPORTS_ALWAYS_ON" android:value="false"/>
       <intent-filter>
         <action android:name="android.net.VpnService"/>
       </intent-filter>

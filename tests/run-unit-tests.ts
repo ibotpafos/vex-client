@@ -40,6 +40,7 @@ import { probeNetworkHealth } from '../src/vpn/networkHealthProbe';
 import { defaultVpnBypassRegion, defaultVpnRoutingMode, defaultVpnRoutingPolicyVersion, isSmartRoutingMode, normalizeVpnRoutingMode, resolvedVpnBypassRegion, vpnRoutingModeFromSmartMode } from '../src/vpn/routingPolicy';
 import { autoSwitchTargetLocationId, chooseBestVpnLocation } from '../src/vpn/serverSelection';
 import { switchVpnLocation } from '../src/vpn/serverSwitch';
+import { normalizePackageNames } from '../src/vpn/applicationRouting';
 import { assessVpnAutopilotIssue } from '../src/vpn/vpnAutopilotAssessment';
 import { buildCreateDeviceRequest } from '../src/api/deviceCreateRequest';
 import { HOME_TAB_ROUTE, SUPPORT_TAB_ROUTE } from '../src/navigation/routes';
@@ -48,6 +49,16 @@ import type { VpnStatus } from '../src/native/vexVpn';
 import type { VpnProfile } from '../src/vpn/profile';
 
 const connectedStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0 };
+
+{
+  assertDeepEqual(normalizePackageNames([
+    ' com.telegram.messenger ',
+    'com.google.android.youtube',
+    'com.telegram.messenger',
+    'invalid',
+    '',
+  ]), ['com.google.android.youtube', 'com.telegram.messenger']);
+}
 
 {
   assertEqual(defaultVpnRoutingMode, 'all_except_ru');

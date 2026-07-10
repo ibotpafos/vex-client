@@ -2,7 +2,7 @@ import { StatusBar } from 'expo-status-bar';
 import { router } from 'expo-router';
 import { Settings } from 'lucide-react-native';
 import React from 'react';
-import { Animated, Platform, Pressable, View, Text } from 'react-native';
+import { Animated, Platform, View, Text } from 'react-native';
 
 import { HomeNativeHeader } from '@/components/home-native-header';
 import { MobileUpdateNoticeBanner, UpdateCenterButton } from '@/components/update-center';
@@ -43,7 +43,6 @@ export default function App() {
     openServerPicker,
     openUpdateCenter,
     closeUpdateCenter,
-    handleOpenVpnSettingsPress,
   } = useVpnConnectionContext();
   const reduceMotionVisuals = isTauriRuntime() || Platform.OS === 'android';
 
@@ -154,11 +153,11 @@ export default function App() {
             </VexPressable>
           ) : null}
           {Platform.OS === 'android' && antiLeakEnabled ? (
-            <Pressable disabled={isVpnBusy} onPress={handleOpenVpnSettingsPress} style={styles.rotationNotice}>
+            <View style={styles.rotationNotice}>
               <Text numberOfLines={2} style={styles.vpnNoticeText}>
-                Для максимальной защиты включите Always-on VPN и блокировку без VPN в настройках Android.
+                Anti-leak включён: если туннель не поднимется, VEX заблокирует трафик и не раскроет реальный IP.
               </Text>
-            </Pressable>
+            </View>
           ) : null}
           {vpnError ? <Text numberOfLines={2} style={styles.vpnErrorText}>{vpnError}</Text> : null}
 

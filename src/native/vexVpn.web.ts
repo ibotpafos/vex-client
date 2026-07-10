@@ -26,6 +26,12 @@ export type AndroidUpdateInstallResult = {
   status: 'installer_started' | 'install_permission_required';
 };
 
+export type InstalledVpnApplication = {
+  iconDataUri: string;
+  label: string;
+  packageName: string;
+};
+
 export type WireGuardKeyPair = {
   privateKey: string;
   publicKey: string;
@@ -80,6 +86,8 @@ export async function requestVpnPermission(): Promise<boolean> {
 
 export type ConnectVpnOptions = {
   antiLeakEnabled?: boolean;
+  applicationRoutingMode?: 'all' | 'selected';
+  selectedApplications?: string[];
 };
 
 export type DisconnectVpnOptions = {
@@ -96,6 +104,10 @@ export async function connectVpn(wgQuickConfig: string, options: ConnectVpnOptio
     return status;
   }
   return normalizeVpnStatus(await requireNativeModule().connect(wgQuickConfig, options.antiLeakEnabled !== false));
+}
+
+export async function getInstalledVpnApplications(): Promise<InstalledVpnApplication[]> {
+  return [];
 }
 
 export async function disconnectVpn(options: DisconnectVpnOptions = {}): Promise<VpnStatus> {

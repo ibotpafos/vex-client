@@ -24,6 +24,7 @@ import {
   type VpnStatus,
 } from '@/native/vexVpn';
 import {
+  getVpnApplicationSelection,
   setSelectedVpnLocation,
 } from '@/settings/vpnPreferences';
 import {
@@ -85,6 +86,7 @@ export function useVpnConnectionFlow({
   const connectProfileWithEndpointFallback = useCallback(async (profile: VpnProfile) => {
     let lastError: unknown;
     const endpointAttempts: string[] = [];
+    const applicationSelection = await getVpnApplicationSelection();
     for (const attempt of connectionAttemptsForProfile(profile)) {
       try {
         const endpoint = profileEndpoint(attempt);
@@ -93,7 +95,11 @@ export function useVpnConnectionFlow({
         }
         const nativeStartMs = Date.now();
         const status = await withTimeout(
-          connectVpn(attempt.config, { antiLeakEnabled }),
+          connectVpn(attempt.config, {
+            antiLeakEnabled,
+            applicationRoutingMode: applicationSelection.mode,
+            selectedApplications: applicationSelection.packageNames,
+          }),
           connectAttemptTimeoutMs,
           'VPN connect timed out.',
         );

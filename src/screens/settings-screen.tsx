@@ -1,6 +1,7 @@
 import { Host, Switch as ExpoSwitch } from "@expo/ui";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import {
+  ChevronRight,
   ChevronLeft,
   Globe2,
   Languages,
@@ -20,7 +21,8 @@ import {
 } from "react-native";
 import { useDesktopUpdate } from "@/components/desktop-update-overlay";
 import { playSelectionHaptic, playLightImpactHaptic } from "@/native/haptics";
-import { HOME_TAB_ROUTE } from "@/navigation/routes";
+import { HOME_TAB_ROUTE, VPN_APPLICATIONS_ROUTE } from "@/navigation/routes";
+import { getVpnApplicationSelection } from "@/settings/vpnPreferences";
 import { useToast, type ToastOptions } from "@/ui/toast";
 import { vexColors, VexScreen, vexSharedStyles, VexPressable } from "@/ui/vex-ui";
 import { useVpnConnectionContext } from "@/vpn/vpn-connection-context";
@@ -28,6 +30,7 @@ import { useVexSettings, languages, type LanguageCode } from "./useVexSettings";
 
 export default function SettingsScreen() {
   const [isSavingSmartRouting, setIsSavingSmartRouting] = React.useState(false);
+  const [applicationRoutingSummary, setApplicationRoutingSummary] = React.useState('Все приложения');
   const { showToast: showGlobalToast } = useToast();
   const showSettingsToast = React.useCallback((options: ToastOptions) => {
     showGlobalToast(options);
@@ -78,6 +81,25 @@ export default function SettingsScreen() {
     desktopUpdate.status,
     desktopUpdate.required,
   );
+
+  useFocusEffect(React.useCallback(() => {
+    let active = true;
+    if (!isAndroidApp) {
+      return () => undefined;
+    }
+    getVpnApplicationSelection()
+      .then((selection) => {
+        if (active) {
+          setApplicationRoutingSummary(selection.mode === 'selected'
+            ? `Выбрано: ${selection.packageNames.length}`
+            : 'Все приложения');
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [isAndroidApp]));
 
   return (
     <VexScreen>
@@ -170,6 +192,33 @@ export default function SettingsScreen() {
               />
             </View>
           </VexPressable>
+          {isAndroidApp ? (
+            <VexPressable
+              accessibilityLabel="Выбор приложений для VPN"
+              accessibilityRole="button"
+              onPress={() => {
+                playSelectionHaptic();
+                router.push(VPN_APPLICATIONS_ROUTE);
+              }}
+              style={styles.settingRow}
+              hoverStyle={{ backgroundColor: 'rgba(7,17,19,0.96)', borderColor: 'rgba(34,211,238,0.36)' }}
+              title="Выбрать приложения для VPN"
+            >
+              <View style={styles.rowIcon}>
+                <Smartphone color="#22D3EE" size={21} strokeWidth={2.5} />
+              </View>
+              <View style={styles.rowCopy}>
+                <Text style={styles.rowTitle}>Приложения через VPN</Text>
+                <Text numberOfLines={2} style={styles.rowDescription}>
+                  Направлять через туннель все приложения или только выбранные.
+                </Text>
+                <Text style={[styles.rowValue, applicationRoutingSummary !== 'Все приложения' && styles.rowValueActive]}>
+                  {applicationRoutingSummary}
+                </Text>
+              </View>
+              <ChevronRight color="#A7B9BD" size={22} strokeWidth={2.5} />
+            </VexPressable>
+          ) : null}
           <VexPressable
             disabled={isSavingServerSelection}
             onPress={() => handleServerSelectionToggle(!isAutoServerSelectionEnabled)}

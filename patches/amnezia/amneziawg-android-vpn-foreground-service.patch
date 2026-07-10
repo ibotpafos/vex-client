@@ -1,0 +1,95 @@
+diff --git a/tunnel/src/main/java/org/amnezia/awg/backend/GoBackend.java b/tunnel/src/main/java/org/amnezia/awg/backend/GoBackend.java
+index 2bb8026ab3d4207eb465f7428de309a1671ed2ec..1d0768614fbb95af742b06e27751b8e4cec42ffd 100644
+--- a/tunnel/src/main/java/org/amnezia/awg/backend/GoBackend.java
++++ b/tunnel/src/main/java/org/amnezia/awg/backend/GoBackend.java
+@@ -5,6 +5,10 @@
+ 
+ package org.amnezia.awg.backend;
+ 
++import android.app.Notification;
++import android.app.NotificationChannel;
++import android.app.NotificationManager;
++import android.app.PendingIntent;
+ import android.content.Context;
+ import android.content.Intent;
+ import android.os.Build;
+@@ -333,7 +337,11 @@ public final class GoBackend implements Backend {
+             final VpnService service;
+             if (!vpnService.isDone()) {
+                 Log.d(TAG, "Requesting to start VpnService");
+-                context.startService(new Intent(context, VpnService.class));
++                final Intent serviceIntent = new Intent(context, VpnService.class);
++                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
++                    context.startForegroundService(serviceIntent);
++                else
++                    context.startService(serviceIntent);
+             }
+ 
+             try {
+@@ -490,6 +498,8 @@ public final class GoBackend implements Backend {
+      * {@link android.net.VpnService} implementation for {@link GoBackend}
+      */
+     public static class VpnService extends android.net.VpnService {
++        private static final String NOTIFICATION_CHANNEL_ID = "vex_vpn_connection";
++        private static final int NOTIFICATION_ID = 9172;
+         @Nullable private GoBackend owner;
+ 
+         public Builder getBuilder() {
+@@ -515,12 +525,14 @@ public final class GoBackend implements Backend {
+                     tunnel.onStateChange(State.DOWN);
+                 }
+             }
++            stopForeground(STOP_FOREGROUND_REMOVE);
+             vpnService = vpnService.newIncompleteFuture();
+             super.onDestroy();
+         }
+ 
+         @Override
+         public int onStartCommand(@Nullable final Intent intent, final int flags, final int startId) {
++            startForeground(NOTIFICATION_ID, createNotification());
+             vpnService.complete(this);
+             if (intent == null || intent.getComponent() == null || !intent.getComponent().getPackageName().equals(getPackageName())) {
+                 Log.d(TAG, "Service started by Always-on VPN feature");
+@@ -530,6 +542,42 @@ public final class GoBackend implements Backend {
+             return super.onStartCommand(intent, flags, startId);
+         }
+ 
++        private Notification createNotification() {
++            final NotificationManager manager = getSystemService(NotificationManager.class);
++            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
++                final NotificationChannel channel = new NotificationChannel(
++                        NOTIFICATION_CHANNEL_ID,
++                        "VEX VPN",
++                        NotificationManager.IMPORTANCE_LOW);
++                channel.setSound(null, null);
++                channel.enableVibration(false);
++                channel.setShowBadge(false);
++                manager.createNotificationChannel(channel);
++            }
++
++            final Intent launchIntent = getPackageManager().getLaunchIntentForPackage(getPackageName());
++            final PendingIntent pendingIntent = PendingIntent.getActivity(
++                    this,
++                    0,
++                    launchIntent != null ? launchIntent : new Intent(),
++                    PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
++            final Notification.Builder builder;
++            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
++                builder = new Notification.Builder(this, NOTIFICATION_CHANNEL_ID);
++            else
++                builder = new Notification.Builder(this);
++            return builder
++                    .setContentTitle("VEX VPN")
++                    .setContentText("Защищённое соединение активно")
++                    .setSmallIcon(android.R.drawable.stat_sys_warning)
++                    .setContentIntent(pendingIntent)
++                    .setCategory(Notification.CATEGORY_SERVICE)
++                    .setOngoing(true)
++                    .setOnlyAlertOnce(true)
++                    .setShowWhen(false)
++                    .build();
++        }
++
+         public void setOwner(final GoBackend owner) {
+             this.owner = owner;
+         }

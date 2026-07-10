@@ -62,5 +62,6 @@ if clone_or_reset "amneziawg-android" "${android_repo_url}" "${android_ref}"; th
   git -C "${external_dir}/amneziawg-android" submodule update --init --recursive --depth 1
 fi
 apply_patch_once "${external_dir}/amneziawg-android" "${root_dir}/patches/amnezia/amneziawg-android-macos-local-go.patch"
+apply_patch_once "${external_dir}/amneziawg-android" "${root_dir}/patches/amnezia/amneziawg-android-vpn-foreground-service.patch"
 
 echo "AMNEZIAWG_TUNNEL_DIR=${external_dir}/amneziawg-android/tunnel"

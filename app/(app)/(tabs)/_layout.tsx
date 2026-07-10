@@ -16,7 +16,7 @@ export default function AppTabsLayout() {
           fontWeight: '800',
         },
         selected: {
-          color: '#031012',
+          color: '#F4FCFD',
           fontSize: 11,
           fontWeight: '900',
         },

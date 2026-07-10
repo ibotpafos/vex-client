@@ -8,7 +8,7 @@ const {
 
 const androidPermissions = [
   'android.permission.FOREGROUND_SERVICE',
-  'android.permission.FOREGROUND_SERVICE_SPECIAL_USE',
+  'android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED',
   'android.permission.POST_NOTIFICATIONS',
   'android.permission.REQUEST_INSTALL_PACKAGES',
 ];
@@ -39,6 +39,7 @@ module.exports = function withVexNativeConfig(config, props = {}) {
 
     upsertMetaData(application, notificationChannelMetaName, notificationChannelId);
     Object.entries(updatesMetaData).forEach(([name, value]) => upsertMetaData(application, name, value));
+    upsertLauncherApplicationQuery(manifest);
     upsertVpnServices(application);
     upsertMainActivityIntentFilters(application, authScheme);
 
@@ -64,6 +65,22 @@ function getMainApplication(manifest) {
   return application;
 }
 
+function upsertLauncherApplicationQuery(manifest) {
+  manifest.queries = manifest.queries || [{ intent: [] }];
+  const queries = manifest.queries[0];
+  queries.intent = queries.intent || [];
+  const exists = queries.intent.some((intent) =>
+    intent.action?.some((action) => action.$?.['android:name'] === 'android.intent.action.MAIN') &&
+    intent.category?.some((category) => category.$?.['android:name'] === 'android.intent.category.LAUNCHER'));
+  if (exists) {
+    return;
+  }
+  queries.intent.push({
+    action: [{ $: { 'android:name': 'android.intent.action.MAIN' } }],
+    category: [{ $: { 'android:name': 'android.intent.category.LAUNCHER' } }],
+  });
+}
+
 function upsertMetaData(application, name, value) {
   application['meta-data'] = application['meta-data'] || [];
   const existing = application['meta-data'].find((item) => item.$?.['android:name'] === name);
@@ -80,18 +97,23 @@ function upsertVpnServices(application) {
   upsertService(application.service, {
     name: 'org.amnezia.awg.backend.GoBackend$VpnService',
     exported: 'false',
+    foregroundServiceType: 'systemExempted',
     permission: 'android.permission.BIND_VPN_SERVICE',
     action: 'android.net.VpnService',
+    metaData: {
+      'android:name': 'android.net.VpnService.SUPPORTS_ALWAYS_ON',
+      'android:value': 'false',
+    },
   });
   upsertService(application.service, {
     name: '.vpn.VexLeakBlockerService',
     exported: 'false',
-    foregroundServiceType: 'specialUse',
+    foregroundServiceType: 'systemExempted',
     permission: 'android.permission.BIND_VPN_SERVICE',
     action: 'android.net.VpnService',
-    property: {
-      'android:name': 'android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE',
-      'android:value': 'vpn_leak_blocker',
+    metaData: {
+      'android:name': 'android.net.VpnService.SUPPORTS_ALWAYS_ON',
+      'android:value': 'false',
     },
   });
   upsertService(application.service, {
@@ -119,8 +141,11 @@ function upsertService(services, service) {
     target.$['android:foregroundServiceType'] = service.foregroundServiceType;
   }
   target['intent-filter'] = [{ action: [{ $: { 'android:name': service.action } }] }];
-  if (service.property) {
-    target.property = [{ $: service.property }];
+  if (service.metaData) {
+    target['meta-data'] = [{ $: service.metaData }];
+  }
+  if (!service.property) {
+    delete target.property;
   }
 }
 

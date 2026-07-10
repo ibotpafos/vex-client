@@ -872,16 +872,29 @@ export function useVpnConnection() {
       })
       .catch(() => undefined);
     if (isAuthenticationError(message)) {
-      void refreshSession().catch((refreshError) => {
-        void submitClientDiagnosticsEvent('vpn_session_refresh_failed_without_logout', 'auth_error', {
-          error_message: errorMessage(refreshError, 'vpn_session_refresh_failed_without_logout'),
-        }).catch(() => undefined);
-      });
-      setVpnError('Не удалось подтвердить сессию. Повторите попытку или войдите заново, если ошибка останется.');
+      setVpnError('Проверяем сессию…');
+      void refreshSession()
+        .then((refreshedSession) => {
+          if (refreshedSession) {
+            setVpnError('Сессия обновлена. Нажмите «Подключить» ещё раз.');
+          }
+        })
+        .catch((refreshError) => {
+          const refreshMessage = errorMessage(refreshError, 'vpn_session_refresh_failed_without_logout');
+          void submitClientDiagnosticsEvent('vpn_session_refresh_failed_without_logout', 'auth_error', {
+            error_message: refreshMessage,
+          }).catch(() => undefined);
+          if (isAuthenticationError(refreshMessage)) {
+            setVpnError('Сессия истекла. Войдите в аккаунт заново.');
+            void signOut();
+            return;
+          }
+          setVpnError('Не удалось проверить сессию. Проверьте интернет и повторите попытку.');
+        });
     } else {
       setVpnError(message);
     }
-  }, [refreshSession, setVpnStatus, submitClientDiagnosticsEvent]);
+  }, [refreshSession, setVpnStatus, signOut, submitClientDiagnosticsEvent]);
 
   const handlePowerPress = useCallback(async () => {
     if (isVpnBusy || vpnOperationInFlightRef.current) {

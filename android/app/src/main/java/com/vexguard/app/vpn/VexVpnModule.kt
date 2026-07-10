@@ -666,6 +666,15 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
     val installed = readInstalledApkIdentity()
     val archive = readArchiveApkIdentity(apkFile)
 
+    if (archive == null) {
+      if (checksumVerified) {
+        Log.w(TAG, "Downloaded APK metadata is unavailable; SHA-256 checksum matched manifest.")
+        return
+      }
+      apkFile.delete()
+      throw IllegalStateException("Не удалось прочитать метаданные загруженного APK.")
+    }
+
     if (archive.packageName != installed.packageName) {
       apkFile.delete()
       throw IllegalStateException("Загруженный APK принадлежит другому приложению.")
@@ -700,10 +709,11 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
     return ApkIdentity(packageInfo.packageName.orEmpty(), signerDigests(packageInfo))
   }
 
-  private fun readArchiveApkIdentity(apkFile: File): ApkIdentity {
+  private fun readArchiveApkIdentity(apkFile: File): ApkIdentity? {
     val packageManager = reactContext.packageManager
     val packageInfo = archivePackageInfo(packageManager, apkFile, packageSigningFlags())
-      ?: throw IllegalStateException("Не удалось прочитать метаданные загруженного APK.")
+      ?: archivePackageInfo(packageManager, apkFile, legacyPackageSigningFlags())
+      ?: return null
     val signerDigests = signerDigests(packageInfo).ifEmpty {
       archivePackageInfo(packageManager, apkFile, legacyPackageSigningFlags())
         ?.let(::signerDigests)

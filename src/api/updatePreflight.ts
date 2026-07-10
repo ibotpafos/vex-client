@@ -40,6 +40,10 @@ export type ManualUpdateCenterAssessment = {
 };
 
 const nativeUpdateReasons = new Set([
+  // /v1/app/update/check reports published APK/App Store releases. Expo OTA
+  // availability is queried separately, so a normal release must never be
+  // classified as OTA merely because it is optional.
+  'update_available',
   'blocked_release',
   'android_signing_key_migration',
   'unsupported_config_schema',

@@ -233,8 +233,8 @@ const connectedStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0 
   });
 
   assertEqual(assessment.canInstall, true);
-  assertEqual(assessment.actionLabel, 'Проверить OTA');
-  assertEqual(assessment.compatibilityLabel, 'Совместимо, обновляется через OTA');
+  assertEqual(assessment.actionLabel, 'Обновить сейчас');
+  assertEqual(assessment.compatibilityLabel, 'Совместимо, доступна новая версия');
   assertEqual(assessment.signatureLabel, 'Checksum и подпись настроены');
   const optionalUpdate = {
     updateAvailable: true,
@@ -247,8 +247,8 @@ const connectedStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0 
     signatureUrl: `${trustedBaseUrl}/downloads/Vex-Android.apk.sig`,
     reason: 'update_available',
   };
-  assertEqual(requiresNativeUpdate(optionalUpdate), false);
-  assertEqual(canUseOtaUpdate(optionalUpdate), true);
+  assertEqual(requiresNativeUpdate(optionalUpdate), true);
+  assertEqual(canUseOtaUpdate(optionalUpdate), false);
 }
 
 {
@@ -272,12 +272,12 @@ const connectedStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0 
     update: normalRequiredMetadata,
   });
 
-  assertEqual(assessment.title, 'Доступно OTA-обновление');
-  assertEqual(assessment.actionLabel, 'Проверить OTA');
-  assertEqual(assessment.compatibilityTone, 'ok');
-  assertEqual(assessment.compatibilityLabel, 'Совместимо, обновляется через OTA');
-  assertEqual(requiresNativeUpdate(normalRequiredMetadata), false);
-  assertEqual(canUseOtaUpdate(normalRequiredMetadata), true);
+  assertEqual(assessment.title, 'Нужно обновить VEX');
+  assertEqual(assessment.actionLabel, 'Обновить сейчас');
+  assertEqual(assessment.compatibilityTone, 'danger');
+  assertEqual(assessment.compatibilityLabel, 'Текущая версия не поддерживается');
+  assertEqual(requiresNativeUpdate(normalRequiredMetadata), true);
+  assertEqual(canUseOtaUpdate(normalRequiredMetadata), false);
 }
 
 {

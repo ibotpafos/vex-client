@@ -35,10 +35,17 @@ if [[ "${operation}" == "publish" || "${operation}" == "republish" || "${operati
     exit 2
   fi
   current_runtime="$(node -e "const v=require('./versions.json'); process.stdout.write(String(v['${platform}'].version))")"
-  if [[ "${runtime_version}" != "${current_runtime}" && "${OTA_ALLOW_NONCURRENT_RUNTIME:-0}" != "1" ]]; then
-    printf 'runtime %s differs from current %s runtime %s; set OTA_ALLOW_NONCURRENT_RUNTIME=1 only for an intentional hotfix.\n' \
-      "${runtime_version}" "${platform}" "${current_runtime}" >&2
-    exit 2
+  if [[ "${runtime_version}" != "${current_runtime}" ]]; then
+    if [[ "${operation}" == "publish" ]]; then
+      printf 'refusing to build a new %s OTA from source version %s for older runtime %s; check out source matching that runtime or republish a verified update.\n' \
+        "${platform}" "${current_runtime}" "${runtime_version}" >&2
+      exit 2
+    fi
+    if [[ "${OTA_ALLOW_NONCURRENT_RUNTIME:-0}" != "1" ]]; then
+      printf 'runtime %s differs from current %s runtime %s; set OTA_ALLOW_NONCURRENT_RUNTIME=1 only for an intentional republish or rollback.\n' \
+        "${runtime_version}" "${platform}" "${current_runtime}" >&2
+      exit 2
+    fi
   fi
 fi
 

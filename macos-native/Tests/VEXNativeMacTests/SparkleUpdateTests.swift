@@ -128,6 +128,17 @@ final class SparkleUpdateTests: XCTestCase {
         XCTAssertTrue(script.contains("Internal release cannot use ephemeral Sparkle keys"))
     }
 
+    func testAutonomousNativeMacReleaseKeepsDeploySafetyGatesEnabled() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let scriptURL = packageRoot
+            .deletingLastPathComponent()
+            .appendingPathComponent("scripts/release_native_macos_autonomous.sh")
+        let script = try String(contentsOf: scriptURL, encoding: .utf8)
+
+        XCTAssertTrue(script.contains("ALLOW_DIRTY_DEPLOY=\"${ALLOW_DIRTY_DEPLOY:-0}\""))
+        XCTAssertTrue(script.contains("ALLOW_NO_UPSTREAM_DEPLOY=\"${ALLOW_NO_UPSTREAM_DEPLOY:-0}\""))
+    }
+
     func testNativeMacDeployBundleScriptChecksReleaseFiles() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let scriptURL = packageRoot

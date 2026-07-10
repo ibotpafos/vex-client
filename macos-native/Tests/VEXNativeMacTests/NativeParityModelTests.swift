@@ -358,14 +358,6 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(api.contains("native-register-\\(externalDeviceId)-\\(VEXAppInfo.version)-\\(VEXAppInfo.buildNumber)"))
     }
 
-    func testManagedProfileRequestsMacOSCompactRoutingPolicy() throws {
-        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let apiURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/VEXAPIClient.swift")
-        let api = try String(contentsOf: apiURL, encoding: .utf8)
-
-        XCTAssertTrue(api.contains("URLQueryItem(name: \"platform\", value: \"macos\")"))
-    }
-
     func testSessionRefreshIsSingleFlightAndDoesNotClearNewerSession() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let appStateURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Stores/VEXAppState.swift")

@@ -249,6 +249,9 @@ const connectedStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0 
   };
   assertEqual(requiresNativeUpdate(optionalUpdate), true);
   assertEqual(canUseOtaUpdate(optionalUpdate), false);
+  assertEqual(requiresNativeUpdate({ ...optionalUpdate, delivery: 'native', reason: undefined }), true);
+  assertEqual(canUseOtaUpdate({ ...optionalUpdate, delivery: 'ota', reason: undefined }), true);
+  assertEqual(requiresNativeUpdate({ ...optionalUpdate, delivery: 'ota', reason: undefined }), false);
 }
 
 {

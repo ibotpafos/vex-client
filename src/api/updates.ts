@@ -37,6 +37,7 @@ export async function appUpdateCheck(input: {
   });
   return {
     updateAvailable: Boolean(item.updateAvailable),
+    delivery: item.delivery,
     required: Boolean(item.required),
     currentBuildBlocked: Boolean(item.currentBuildBlocked),
     latestVersion: item.latestVersion || '',

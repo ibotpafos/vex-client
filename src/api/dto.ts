@@ -211,6 +211,7 @@ export type PortalSessionDTO = {
 
 export type AppUpdateCheckResponseDTO = {
   updateAvailable?: boolean;
+  delivery?: 'native' | 'ota';
   required?: boolean;
   currentBuildBlocked?: boolean;
   latestVersion?: string;

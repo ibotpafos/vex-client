@@ -5,7 +5,7 @@ const baseConfig = require('./app.json') as { expo: ExpoConfig };
 const appName = 'VEX';
 const appScheme = 'vexguard';
 const appLinkHost = 'vexguard.app';
-const androidPackage = env('VEX_ANDROID_APPLICATION_ID', 'com.vexguard.app');
+const androidPackage = env('VEX_ANDROID_APPLICATION_ID', 'com.vexguard.client');
 const iosBundleIdentifier = 'com.vexguard.app';
 const defaultApiBaseUrl = 'https://vexguard.app';
 const defaultUpdateChannel = 'production';
@@ -21,7 +21,11 @@ export default function appConfig({ config }: ConfigContext): ExpoConfig {
   const updatesEnabled = Boolean(projectId) && env('VEX_UPDATES_ENABLED', buildProfile === 'production' ? '1' : '0') === '1';
   const updateUrl = resolveUpdateUrl();
   const codeSigningCertificate = env('VEX_OTA_CODE_SIGNING_CERTIFICATE', defaultOtaCodeSigningCertificate);
-  const runtimeVersion = env('VEX_RUNTIME_VERSION', defaultRuntimeVersion);
+  const explicitRuntimeVersion = env('VEX_RUNTIME_VERSION', '');
+  if (updatesEnabled && buildProfile === 'production' && !explicitRuntimeVersion) {
+    throw new Error('VEX_RUNTIME_VERSION is required for production builds and OTA operations.');
+  }
+  const runtimeVersion = explicitRuntimeVersion || defaultRuntimeVersion;
 
   return {
     ...config,

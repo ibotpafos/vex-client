@@ -30,7 +30,7 @@
       "predictiveBackGestureEnabled": false,
       "softwareKeyboardLayoutMode": "resize",
       "versionCode": 1005052,
-      "package": "com.vexguard.app",
+      "package": "com.vexguard.client",
       "intentFilters": [
         {
           "action": "VIEW",

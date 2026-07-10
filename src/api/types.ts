@@ -50,6 +50,7 @@ export type AndroidUpdateManifest = {
 
 export type AppUpdateCheckResult = {
   updateAvailable: boolean;
+  delivery?: 'native' | 'ota';
   required: boolean;
   currentBuildBlocked?: boolean;
   latestVersion: string;

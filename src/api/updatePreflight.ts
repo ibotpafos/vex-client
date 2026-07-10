@@ -6,6 +6,7 @@ export type ManualUpdatePreflightResult = {
 export type ManualUpdateCenterInput = {
   update?: {
     updateAvailable: boolean;
+    delivery?: 'native' | 'ota';
     required: boolean;
     currentBuildBlocked?: boolean;
     latestVersion?: string;
@@ -124,11 +125,17 @@ export function assessManualUpdateCenter(input: ManualUpdateCenterInput): Manual
 }
 
 export function canUseOtaUpdate(update: ManualUpdateCenterInput['update']): boolean {
-  return Boolean(update?.updateAvailable && !requiresNativeUpdate(update));
+  return Boolean(update?.updateAvailable && update.delivery === 'ota');
 }
 
 export function requiresNativeUpdate(update: ManualUpdateCenterInput['update']): boolean {
   if (!update?.updateAvailable) {
+    return false;
+  }
+  if (update.delivery === 'native') {
+    return true;
+  }
+  if (update.delivery === 'ota') {
     return false;
   }
   const reason = updateReason(update);

@@ -23,6 +23,14 @@ case "${platform}" in
 esac
 
 cd "${root_dir}"
+if [[ ! -d node_modules ]]; then
+  printf 'local node_modules is required; run npm ci in this exact checkout before publishing OTA.\n' >&2
+  exit 2
+fi
+if [[ -L node_modules || "$(cd node_modules && pwd -P)" != "${root_dir}/node_modules" ]]; then
+  printf 'refusing OTA publish with node_modules linked from another checkout; Expo Router can produce a bundle with no routes. Run npm ci locally.\n' >&2
+  exit 2
+fi
 if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
   printf 'tracked files are dirty; commit and verify the exact OTA source before publishing.\n' >&2
   exit 2

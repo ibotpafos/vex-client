@@ -142,6 +142,13 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
     routeOnlySelectedApplications: Boolean,
     promise: Promise,
   ) {
+    val recoveryHandler = Handler(Looper.getMainLooper())
+    val hardRecovery = Runnable {
+      Log.e(TAG, "VPN connect exceeded ${CONNECT_HARD_RECOVERY_MS}ms; terminating the app process to release Android VPN descriptors.")
+      VexLeakBlockerService.stop(reactContext)
+      android.os.Process.killProcess(android.os.Process.myPid())
+    }
+    recoveryHandler.postDelayed(hardRecovery, CONNECT_HARD_RECOVERY_MS)
     scope.launch {
       try {
         val status = controller.connect(
@@ -156,6 +163,8 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
         rejectVpnError(promise, "VPN_PERMISSION_REQUIRED", "Android VPN permission is required.", error)
       } catch (error: Throwable) {
         rejectVpnError(promise, "VPN_CONNECT_FAILED", "VPN connection failed.", error)
+      } finally {
+        recoveryHandler.removeCallbacks(hardRecovery)
       }
     }
   }
@@ -603,6 +612,7 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
     private const val TRANSITION_STATUS_POLL_MS = 1_500L
     private const val STATUS_POLL_ERROR_MS = 4_000L
     private const val DISCONNECT_HARD_RECOVERY_MS = 8_000L
+    private const val CONNECT_HARD_RECOVERY_MS = 20_000L
     private const val UPDATE_DOWNLOAD_CONNECT_TIMEOUT_MS = 30_000
     private const val UPDATE_DOWNLOAD_READ_TIMEOUT_MS = 60_000
   }

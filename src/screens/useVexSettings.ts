@@ -5,7 +5,7 @@ import { appRemoteConfig, type AppRemoteConfig } from '@/api/vexApi';
 import { useSession } from '@/auth/session-context';
 import { getAppInfo, type AppInfo } from '@/native/appInfo';
 import { playErrorHaptic, playLightImpactHaptic, playSelectionHaptic, playSuccessHaptic, playWarningHaptic } from '@/native/haptics';
-import { disconnectVpn, getStartupEnabled, setStartupEnabled } from '@/native/vexVpn';
+import { getStartupEnabled, setStartupEnabled } from '@/native/vexVpn';
 import { getAndroidAutoConnectEnabled, getAntiLeakEnabled, getServerSelectionMode, setAndroidAutoConnectEnabled, setAntiLeakEnabled, setServerSelectionMode } from '@/settings/vpnPreferences';
 import * as SecureStore from '@/native/secureStore';
 import { useToast, type ToastOptions } from '@/ui/toast';
@@ -135,7 +135,6 @@ export function useVexSettings(showToastOverride?: (options: ToastOptions) => vo
     setIsSigningOut(true);
     try {
       await signOut();
-      void disconnectVpn({ releaseAntiLeak: true }).catch(() => undefined);
       playSuccessHaptic();
       router.replace('/sign-in');
     } catch {

@@ -21,8 +21,10 @@ import {
 } from '@/screens/home-screen-helpers';
 import {
   connectVpn,
+  getVpnStatus,
   type VpnStatus,
 } from '@/native/vexVpn';
+import { waitForVerifiedVpnConnection } from '@/vpn/connectVerification';
 import {
   getVpnApplicationSelection,
   setSelectedVpnLocation,
@@ -94,7 +96,7 @@ export function useVpnConnectionFlow({
           endpointAttempts.push(endpoint);
         }
         const nativeStartMs = Date.now();
-        const status = await withTimeout(
+        const startedStatus = await withTimeout(
           connectVpn(attempt.config, {
             antiLeakEnabled,
             applicationRoutingMode: applicationSelection.mode,
@@ -103,6 +105,7 @@ export function useVpnConnectionFlow({
           connectAttemptTimeoutMs,
           'VPN connect timed out.',
         );
+        const status = await waitForVerifiedVpnConnection(startedStatus, getVpnStatus);
         return {
           interfaceUpMs: Date.now(),
           endpointAttempts,

@@ -3,10 +3,12 @@ import { useQueryClient } from '@tanstack/react-query';
 import { clearSession, loadSession, saveSession } from '@/auth/sessionStore';
 import { loadSessionWithRetry } from '@/auth/sessionLoadRetry';
 import { sessionLoadFailureDiagnosticsSnapshot } from '@/auth/sessionDiagnostics';
+import { isCurrentSessionMutation } from '@/auth/sessionMutationGuard';
 import { refreshSession as refreshApiSession, reportAppInstall, type AuthSession } from '@/api/vexApi';
 import { ApiRequestError } from '@/api/error';
 import { uploadClientDiagnostics } from '@/diagnostics/clientDiagnostics';
 import { errorMessage } from '@/utils/error';
+import { disconnectVpn } from '@/native/vexVpn';
 
 type SessionContextValue = {
   isLoading: boolean;
@@ -33,6 +35,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const sessionRef = useRef<AuthSession | null>(null);
+  const sessionRevisionRef = useRef(0);
   const refreshInFlightRef = useRef<Promise<AuthSession | null> | null>(null);
   const clearClientData = useCallback(() => {
     queryClient.removeQueries({ queryKey: ['entitlement'] });
@@ -46,14 +49,27 @@ export function SessionProvider({ children }: PropsWithChildren) {
   }, [queryClient]);
 
   const applySignOutState = useCallback(async () => {
+    sessionRevisionRef.current += 1;
+    let storageError: unknown;
+    await clearSession().catch((error) => {
+      storageError = error;
+    });
+    // Do not hide a failed native teardown behind a successful-looking logout.
+    // Keeping the authenticated screen mounted lets the user retry while the
+    // disconnect watchdog performs its Android recovery path.
+    await disconnectVpn({ releaseAntiLeak: true });
     sessionRef.current = null;
-    await clearSession();
     clearClientData();
     setSession(null);
+    setIsLoading(false);
+    if (storageError) {
+      throw storageError;
+    }
   }, [clearClientData]);
 
   useEffect(() => {
     let mounted = true;
+    const restoreRevision = sessionRevisionRef.current;
     const restoreSession = async () => {
       let storedSession: AuthSession | null = null;
       try {
@@ -62,6 +78,10 @@ export function SessionProvider({ children }: PropsWithChildren) {
         if (mounted) {
           setLoadError(errorMessage(error, 'Не удалось прочитать сохраненную сессию.'));
         }
+      }
+
+      if (restoreRevision !== sessionRevisionRef.current) {
+        return;
       }
 
       if (!storedSession) {
@@ -78,8 +98,14 @@ export function SessionProvider({ children }: PropsWithChildren) {
       let restoredSession: AuthSession | null = storedSession;
       try {
         restoredSession = await refreshApiSession(storedSession.accessToken);
+        if (restoreRevision !== sessionRevisionRef.current) {
+          return;
+        }
         await saveSession(restoredSession);
       } catch (error) {
+        if (restoreRevision !== sessionRevisionRef.current) {
+          return;
+        }
         if (error instanceof ApiRequestError && error.status === 401) {
           await clearSession();
           restoredSession = null;
@@ -88,7 +114,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
         // a definitively rejected token is cleared so the login screen opens.
       }
 
-      if (mounted) {
+      if (mounted && restoreRevision === sessionRevisionRef.current) {
         sessionRef.current = restoredSession;
         setLoadError(null);
         setSession(restoredSession);
@@ -112,11 +138,13 @@ export function SessionProvider({ children }: PropsWithChildren) {
 
   const signIn = useCallback(async (nextSession: AuthSession) => {
     const sessionLoadError = loadError;
+    sessionRevisionRef.current += 1;
     clearClientData();
     await saveSession(nextSession);
     sessionRef.current = nextSession;
     setLoadError(null);
     setSession(nextSession);
+    setIsLoading(false);
     if (sessionLoadError) {
       void uploadClientDiagnostics(
         nextSession.accessToken,
@@ -137,8 +165,17 @@ export function SessionProvider({ children }: PropsWithChildren) {
     if (!currentSession?.accessToken) {
       return null;
     }
+    const refreshRevision = sessionRevisionRef.current;
     const refreshOperation = (async () => {
       const refreshedSession = await refreshApiSession(currentSession.accessToken);
+      if (!isCurrentSessionMutation(
+        refreshRevision,
+        sessionRevisionRef.current,
+        currentSession.accessToken,
+        sessionRef.current?.accessToken,
+      )) {
+        return sessionRef.current;
+      }
       await saveSession(refreshedSession);
       sessionRef.current = refreshedSession;
       setSession(refreshedSession);

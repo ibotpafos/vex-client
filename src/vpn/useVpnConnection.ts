@@ -449,7 +449,6 @@ export function useVpnConnection() {
     resetVpnTrafficStats();
     setVpnStatus({ state: 'disconnected', rxBytes: 0, txBytes: 0 });
     setVpnError(null);
-    void disconnectVpn({ releaseAntiLeak: true }).catch(() => undefined);
   }, [signOut, clearProfile, setVpnStatus]);
 
   const diagnostics = useVpnDiagnostics({
@@ -984,12 +983,12 @@ export function useVpnConnection() {
     }
 
     let cancelled = false;
-    autoConnectAttemptedRef.current = true;
     getAndroidAutoConnectEnabled()
       .then(async (enabled) => {
         if (cancelled || !enabled) {
           return;
         }
+        autoConnectAttemptedRef.current = true;
         vpnOperationInFlightRef.current = true;
         setIsVpnBusy(true);
         setVpnError(null);

@@ -5,6 +5,7 @@ import { errorMessage } from '../src/utils/error';
 import { assessManualUpdateCenter, canUseOtaUpdate, requiresNativeUpdate, updateCheckChannel, validateManualUpdatePayloadForBaseUrl } from '../src/api/updatePreflight';
 import { resolveAuthCallbackExchange } from '../src/auth/callbackParams';
 import { sessionLoadFailureDiagnosticsSnapshot } from '../src/auth/sessionDiagnostics';
+import { isCurrentSessionMutation } from '../src/auth/sessionMutationGuard';
 import { loadSessionWithRetry, loadWithRetry } from '../src/auth/sessionLoadRetry';
 import { generateChallenge, generateRandomString } from '../src/auth/pkce';
 import { buildAppWebAuthUrl } from '../src/auth/webAuthUrl';
@@ -34,6 +35,7 @@ import { connectionAttemptsForProfile, isVpnTransportFallbackError, profileEndpo
 import { connectableLocalProfile, shouldUseLocalProfileBeforeOnline, vpnConnectTimingSamples } from '../src/vpn/connectFlow';
 import { recoverVpnConnection } from '../src/vpn/connectionRecovery';
 import { disconnectWithRecoveryTimeout } from '../src/vpn/disconnectRecovery';
+import { waitForVerifiedVpnConnection } from '../src/vpn/connectVerification';
 import { isKeyEpochMismatchError } from '../src/vpn/keyEpochRecovery';
 import { isVpnDeviceForLocation, type VpnLocationDevice } from '../src/vpn/deviceLocation';
 import { nativeVpnDeviceForClient } from '../src/vpn/nativeDeviceSelection';
@@ -878,10 +880,36 @@ async function runAsyncTests(): Promise<void> {
   await runPkceTests();
   await runManualUpdateInstallTests();
   await runVpnDisconnectRecoveryTests();
+  await runVpnHandshakeVerificationTests();
   runNavigationRouteTests();
   runSupportTests();
   runErrorMessageTests();
   await runServerSwitchTests();
+}
+
+async function runVpnHandshakeVerificationTests(): Promise<void> {
+  const pendingStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0, verified: false };
+  const verifiedStatus: VpnStatus = { state: 'connected', rxBytes: 128, txBytes: 64, verified: true };
+  let reads = 0;
+  const result = await waitForVerifiedVpnConnection(pendingStatus, async () => {
+    reads += 1;
+    return reads === 1 ? pendingStatus : verifiedStatus;
+  }, {
+    attempts: 2,
+    pollMs: 0,
+    wait: async () => undefined,
+  });
+  assertEqual(result.verified, true);
+  assertEqual(reads, 2);
+
+  await assertRejects(
+    () => waitForVerifiedVpnConnection(pendingStatus, async () => pendingStatus, {
+      attempts: 1,
+      pollMs: 0,
+      wait: async () => undefined,
+    }),
+    'handshake timed out',
+  );
 }
 
 async function runVpnDisconnectRecoveryTests(): Promise<void> {
@@ -1688,4 +1716,7 @@ function runErrorMessageTests(): void {
   assertEqual(normalizeApiRequestError(new Error('regular failure')).message, 'regular failure');
   assertEqual(isKeyEpochMismatchError(new Error('key_epoch does not match next device epoch')), true);
   assertEqual(isKeyEpochMismatchError(new Error('network request failed')), false);
+  assertEqual(isCurrentSessionMutation(2, 2, 'token-a', 'token-a'), true);
+  assertEqual(isCurrentSessionMutation(2, 3, 'token-a', 'token-a'), false);
+  assertEqual(isCurrentSessionMutation(2, 2, 'token-a', 'token-b'), false);
 }

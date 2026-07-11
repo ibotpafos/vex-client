@@ -11,6 +11,8 @@ import android.graphics.Canvas
 import android.net.Uri
 import android.net.VpnService
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import android.util.Base64
@@ -172,6 +174,15 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
 
   @ReactMethod
   fun disconnect(releaseAntiLeak: Boolean, promise: Promise) {
+    val recoveryHandler = Handler(Looper.getMainLooper())
+    val hardRecovery = Runnable {
+      Log.e(TAG, "VPN disconnect exceeded ${DISCONNECT_HARD_RECOVERY_MS}ms; terminating the app process to release Android VPN descriptors.")
+      VexLeakBlockerService.stop(reactContext)
+      android.os.Process.killProcess(android.os.Process.myPid())
+    }
+    if (releaseAntiLeak) {
+      recoveryHandler.postDelayed(hardRecovery, DISCONNECT_HARD_RECOVERY_MS)
+    }
     scope.launch {
       try {
         val status = controller.disconnect(releaseAntiLeak).toWritableMap()
@@ -179,6 +190,8 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
         promise.resolve(status)
       } catch (error: Throwable) {
         rejectVpnError(promise, "VPN_DISCONNECT_FAILED", "VPN disconnect failed.", error)
+      } finally {
+        recoveryHandler.removeCallbacks(hardRecovery)
       }
     }
   }
@@ -589,6 +602,7 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
     private const val CONNECTED_STATUS_POLL_MS = 4_000L
     private const val TRANSITION_STATUS_POLL_MS = 1_500L
     private const val STATUS_POLL_ERROR_MS = 4_000L
+    private const val DISCONNECT_HARD_RECOVERY_MS = 8_000L
     private const val UPDATE_DOWNLOAD_CONNECT_TIMEOUT_MS = 30_000
     private const val UPDATE_DOWNLOAD_READ_TIMEOUT_MS = 60_000
   }

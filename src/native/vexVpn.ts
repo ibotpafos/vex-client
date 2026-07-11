@@ -1,5 +1,6 @@
 import { NativeEventEmitter, NativeModules, Platform, type NativeModule } from 'react-native';
 import { requireNativeModule as requireExpoNativeModule } from 'expo';
+import { disconnectWithRecoveryTimeout } from '@/vpn/disconnectRecovery';
 
 export type VpnState = 'connected' | 'connecting' | 'disconnecting' | 'disconnected' | 'error' | 'verifying' | 'degraded';
 export type LeakProtectionState = 'off' | 'armed' | 'blocking';
@@ -156,7 +157,16 @@ function isInstalledVpnApplication(value: unknown): value is InstalledVpnApplica
 }
 
 export async function disconnectVpn(options: DisconnectVpnOptions = {}): Promise<VpnStatus> {
-  const status = normalizeVpnStatus(await requireNativeModule().disconnect(options.releaseAntiLeak !== false));
+  const module = requireNativeModule();
+  const releaseAntiLeak = options.releaseAntiLeak !== false;
+  const operation = module.disconnect(releaseAntiLeak);
+  const nativeStatus = Platform.OS === 'android'
+    ? await disconnectWithRecoveryTimeout(
+      operation,
+      () => module.openVpnSettings?.() ?? Promise.resolve(false),
+    )
+    : await operation;
+  const status = normalizeVpnStatus(nativeStatus);
   updateCachedVpnStatus(status);
   return status;
 }

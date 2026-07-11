@@ -33,6 +33,7 @@ import {
 import { connectionAttemptsForProfile, isVpnTransportFallbackError, profileEndpoint } from '../src/vpn/connectionFallback';
 import { connectableLocalProfile, shouldUseLocalProfileBeforeOnline, vpnConnectTimingSamples } from '../src/vpn/connectFlow';
 import { recoverVpnConnection } from '../src/vpn/connectionRecovery';
+import { disconnectWithRecoveryTimeout } from '../src/vpn/disconnectRecovery';
 import { isVpnDeviceForLocation, type VpnLocationDevice } from '../src/vpn/deviceLocation';
 import { nativeVpnDeviceForClient } from '../src/vpn/nativeDeviceSelection';
 import { assessNativeTunnelHealth, localStatusHealthReasons } from '../src/vpn/nativeTunnelHealth';
@@ -875,10 +876,37 @@ async function runAsyncTests(): Promise<void> {
   runCreateDeviceRequestTests();
   await runPkceTests();
   await runManualUpdateInstallTests();
+  await runVpnDisconnectRecoveryTests();
   runNavigationRouteTests();
   runSupportTests();
   runErrorMessageTests();
   await runServerSwitchTests();
+}
+
+async function runVpnDisconnectRecoveryTests(): Promise<void> {
+  let openedRecovery = false;
+  await assertRejects(
+    () => disconnectWithRecoveryTimeout(
+      new Promise<never>(() => undefined),
+      async () => {
+        openedRecovery = true;
+      },
+      0,
+    ),
+    'перезагрузка и повторный вход не нужны',
+  );
+  assertEqual(openedRecovery, true);
+
+  let unnecessaryRecovery = false;
+  const status = await disconnectWithRecoveryTimeout(
+    Promise.resolve('disconnected'),
+    async () => {
+      unnecessaryRecovery = true;
+    },
+    50,
+  );
+  assertEqual(status, 'disconnected');
+  assertEqual(unnecessaryRecovery, false);
 }
 
 async function runServerSwitchTests(): Promise<void> {

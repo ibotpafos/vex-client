@@ -76,11 +76,14 @@ class WireGuardController(context: Context) {
     transitionState = "disconnecting"
     try {
       withContext(Dispatchers.IO) {
-        setTunnelDown()
         if (releaseAntiLeak) {
+          // Release the separate kill-switch service before entering the native
+          // backend. awgTurnOff can block inside vendor code; it must never keep
+          // the user's whole phone offline after an explicit disconnect.
           VexLeakBlockerService.stop(appContext)
           antiLeakArmed = false
         }
+        setTunnelDown()
         VpnConnectionState.Disconnected
       }
     } finally {

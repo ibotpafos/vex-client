@@ -1,16 +1,16 @@
 {
   "desktop": {
-    "version": "0.1.36",
-    "release_notes": "Desktop: стабильнее connect/disconnect на macOS, меньше блокирующих status-запросов к helper, новый helper v23 и устранен WebKit hang в asset protocol.",
+    "version": "0.1.45",
+    "release_notes": "macOS: обновлён интерфейс управления аккаунтом и подпиской, добавлены актуальные тарифы и улучшено восстановление состояния после оплаты.",
     "config_schema_version": 1,
     "min_config_schema_version": 1
   },
   "android": {
-    "version": "1.0.51",
-    "build": 53,
+    "version": "1.0.52",
+    "build": 54,
     "min_supported_build": 1002930,
     "is_required": true,
-    "release_notes": "Android: аварийное восстановление зависшего отключения VPN без перезагрузки телефона, очистки данных и повторного входа.",
+    "release_notes": "Android: новый интерфейс, исправлен зависший connect/disconnect, добавлены оплата и продление подписки на 1/3/6/12 месяцев, отмена и напоминания об окончании.",
     "core_version": "0.1.0",
     "config_schema_version": 1,
     "min_config_schema_version": 1

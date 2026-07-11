@@ -203,10 +203,10 @@ android {
         applicationId vexAndroidApplicationId()
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1005153
-        versionName "1.0.51"
+        versionCode 1005254
+        versionName "1.0.52"
         manifestPlaceholders = [
-            vexRuntimeVersion: vexBuildValue('VEX_RUNTIME_VERSION', "1.0.51"),
+            vexRuntimeVersion: vexBuildValue('VEX_RUNTIME_VERSION', "1.0.52"),
             vexUpdatesEnabled: vexUpdatesEnabled(),
             vexUpdatesUrl: vexUpdatesUrl(),
             vexUpdatesRequestHeaders: vexUpdatesRequestHeaders(),
@@ -217,7 +217,7 @@ android {
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
         buildConfigField "String", "SENTRY_DSN", buildConfigString(vexBuildValue('EXPO_PUBLIC_SENTRY_DSN', ''))
         buildConfigField "String", "SENTRY_ENVIRONMENT", buildConfigString(vexBuildValue('EXPO_PUBLIC_SENTRY_ENVIRONMENT', 'production'))
-        buildConfigField "String", "SENTRY_RELEASE", buildConfigString(vexBuildValue('EXPO_PUBLIC_SENTRY_RELEASE', vexBuildValue('VEX_RUNTIME_VERSION', '1.0.51')))
+        buildConfigField "String", "SENTRY_RELEASE", buildConfigString(vexBuildValue('EXPO_PUBLIC_SENTRY_RELEASE', vexBuildValue('VEX_RUNTIME_VERSION', '1.0.52')))
     }
     signingConfigs {
         debug {

@@ -7,6 +7,7 @@ RUN_CHECKS="${RUN_CHECKS:-1}"
 RUN_DEPLOY="${RUN_DEPLOY:-1}"
 RUN_LIVE_VERIFY="${RUN_LIVE_VERIFY:-1}"
 RUN_METADATA_DEPLOY="${RUN_METADATA_DEPLOY:-${RUN_DEPLOY}}"
+VEX_NATIVE_CHANGELOG="${VEX_NATIVE_CHANGELOG:-macOS: обновлён интерфейс управления аккаунтом и подпиской, добавлены актуальные тарифы и улучшено восстановление состояния после оплаты.}"
 ALLOW_DIRTY_DEPLOY="${ALLOW_DIRTY_DEPLOY:-0}"
 ALLOW_NO_UPSTREAM_DEPLOY="${ALLOW_NO_UPSTREAM_DEPLOY:-0}"
 NATIVE_DOWNLOAD_DIR="${VPN_REPO}/web/public/downloads/native-macos"
@@ -200,7 +201,7 @@ if [[ "${RUN_METADATA_DEPLOY}" == "1" ]]; then
     python3 ./scripts/publish_native_macos_release_metadata.py \
       --deploy \
       --manifest "${NATIVE_DOWNLOAD_DIR}/release-manifest.json" \
-      --changelog "Native macOS: статус обновлений показывается только для реально более новой версии."
+      --changelog "${VEX_NATIVE_CHANGELOG}"
   )
 fi
 

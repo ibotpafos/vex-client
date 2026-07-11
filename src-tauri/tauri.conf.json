@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "VEX",
-  "version": "0.1.36",
+  "version": "0.1.45",
   "identifier": "app.vex.vpn.desktop",
   "plugins": {
     "updater": {

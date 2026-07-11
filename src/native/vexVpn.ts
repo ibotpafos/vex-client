@@ -1,6 +1,7 @@
 import { NativeEventEmitter, NativeModules, Platform, type NativeModule } from 'react-native';
 import { requireNativeModule as requireExpoNativeModule } from 'expo';
 import { disconnectWithRecoveryTimeout } from '@/vpn/disconnectRecovery';
+import { hasVerifiedNativeTunnelActivity } from '@/vpn/vpnStatusVerification';
 
 export type VpnState = 'connected' | 'connecting' | 'disconnecting' | 'disconnected' | 'error' | 'verifying' | 'degraded';
 export type LeakProtectionState = 'off' | 'armed' | 'blocking';
@@ -320,11 +321,10 @@ function normalizeVpnStatus(status: VpnStatus): VpnStatus {
   const latestHandshakeEpochMillis = typeof status.latestHandshakeEpochMillis === 'number'
     ? status.latestHandshakeEpochMillis
     : undefined;
-  const hasTunnelActivity = Boolean(
-    (latestHandshakeEpochMillis && latestHandshakeEpochMillis > 0) ||
-    status.rxBytes > 0 ||
-    status.txBytes > 0,
-  );
+  const hasTunnelActivity = hasVerifiedNativeTunnelActivity({
+    ...status,
+    latestHandshakeEpochMillis,
+  }, Platform.OS);
   const verified = status.state === 'connected'
     ? (hasTunnelActivity ? true : status.verified ?? false)
     : status.verified;

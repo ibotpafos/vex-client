@@ -76,4 +76,4 @@ exec bash scripts/run_with_local_release_cache.sh env \
   EXPO_PUBLIC_VEX_RELEASE_CHANNEL="${branch}" \
   EXPO_PUBLIC_VEX_UPDATE_CHANNEL="${branch}" \
   RELEASE_CHANNEL="${branch}" \
-  eoas "${args[@]}"
+  "${root_dir}/node_modules/.bin/eoas" "${args[@]}"

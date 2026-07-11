@@ -236,38 +236,40 @@ const PowerHero = React.memo(function PowerHero({
           {isConnected ? 'Соединение защищено' : isVpnBusy ? 'Настраиваем защищённый канал' : 'Готов к подключению'}
         </Text>
       </View>
-      <Animated.View
-        pointerEvents="none"
-        style={[styles.heroGlow, glowStyle]}
-      />
-      <View
-        pointerEvents="none"
-        style={styles.heroRing}
-      />
-      <Animated.View
-        pointerEvents="none"
-        style={[styles.heroRingOuter, outerRingStyle]}
-      />
-      <Animated.View style={[styles.powerButtonFrame, reduceMotionVisuals && styles.powerButtonFrameDesktop, isConnected && styles.powerButtonFrameActive, isVpnBusy && styles.powerButtonBusy, powerFrameStyle]}>
-        <VexPressable
-          disabled={powerButtonDisabled}
-          onPress={onPowerPress}
-          style={styles.powerButton}
-          hoverStyle={{ opacity: 0.9 }}
-          title={connectionPhase === 'connecting' ? 'Отменить подключение VPN' : isConnected ? 'Отключить VPN' : 'Подключить VPN'}
-          accessibilityRole="button"
-          accessibilityLabel={connectionPhase === 'connecting' ? 'Отменить подключение VPN' : isConnected ? 'Отключить VPN' : 'Подключить VPN'}
-        >
-          {showOrbit ? (
-            <Animated.View
-              pointerEvents="none"
-              style={[styles.powerOrbit, { opacity: orbitOpacity, transform: [{ rotate: orbitRotation }] }]}
-            />
-          ) : null}
-          <Text numberOfLines={1} adjustsFontSizeToFit style={styles.powerText}>{powerButtonText}</Text>
-          <Text style={styles.powerSubtext}>{powerSubtext}</Text>
-        </VexPressable>
-      </Animated.View>
+      <View style={styles.powerCluster}>
+        <Animated.View
+          pointerEvents="none"
+          style={[styles.heroGlow, glowStyle]}
+        />
+        <View
+          pointerEvents="none"
+          style={styles.heroRing}
+        />
+        <Animated.View
+          pointerEvents="none"
+          style={[styles.heroRingOuter, outerRingStyle]}
+        />
+        <Animated.View style={[styles.powerButtonFrame, reduceMotionVisuals && styles.powerButtonFrameDesktop, isConnected && styles.powerButtonFrameActive, isVpnBusy && styles.powerButtonBusy, powerFrameStyle]}>
+          <VexPressable
+            disabled={powerButtonDisabled}
+            onPress={onPowerPress}
+            style={styles.powerButton}
+            hoverStyle={{ opacity: 0.9 }}
+            title={connectionPhase === 'connecting' ? 'Отменить подключение VPN' : isConnected ? 'Отключить VPN' : 'Подключить VPN'}
+            accessibilityRole="button"
+            accessibilityLabel={connectionPhase === 'connecting' ? 'Отменить подключение VPN' : isConnected ? 'Отключить VPN' : 'Подключить VPN'}
+          >
+            {showOrbit ? (
+              <Animated.View
+                pointerEvents="none"
+                style={[styles.powerOrbit, { opacity: orbitOpacity, transform: [{ rotate: orbitRotation }] }]}
+              />
+            ) : null}
+            <Text numberOfLines={1} adjustsFontSizeToFit style={styles.powerText}>{powerButtonText}</Text>
+            <Text style={styles.powerSubtext}>{powerSubtext}</Text>
+          </VexPressable>
+        </Animated.View>
+      </View>
     </View>
   );
 });

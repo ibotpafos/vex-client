@@ -140,11 +140,20 @@ export const styles = StyleSheet.create({
   heroStatusTextActive: {
     color: vexTheme.colors.success,
   },
+  powerCluster: {
+    alignItems: 'center',
+    height: 222,
+    justifyContent: 'center',
+    position: 'relative',
+    width: 222,
+  },
   heroGlow: {
     backgroundColor: vexTheme.colors.accentMuted,
     borderRadius: 110,
     height: 196,
+    left: 13,
     position: 'absolute',
+    top: 13,
     width: 196,
   },
   heroGlowDesktopStatic: {
@@ -157,17 +166,19 @@ export const styles = StyleSheet.create({
     borderRadius: 104,
     borderWidth: 1,
     height: 190,
+    left: 16,
     position: 'absolute',
+    top: 16,
     width: 190,
-    top: 59,
   },
   heroRingOuter: {
     borderColor: 'rgba(121,239,247,0.08)',
     borderRadius: 112,
     borderWidth: 5,
     height: 206,
+    left: 8,
     position: 'absolute',
-    top: 51,
+    top: 8,
     width: 206,
   },
   heroRingOuterDesktopStatic: {

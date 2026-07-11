@@ -169,25 +169,27 @@ export function SubscriptionContent({ embedded = false, entitlementFallback = nu
 
   return (
     <View style={[styles.screen, embedded && styles.embeddedScreen]}>
-      <View style={[styles.header, embedded && styles.embeddedHeader]}>
-        <View style={styles.headerCopy}>
-          <Text style={styles.eyebrow}>VEX Team</Text>
-          <Text style={styles.title}>Подписка</Text>
+      {!embedded ? (
+        <View style={styles.header}>
+          <View style={styles.headerCopy}>
+            <Text style={styles.eyebrow}>VEX Team</Text>
+            <Text style={styles.title}>Подписка</Text>
+          </View>
+          {canClose ? (
+            <Pressable
+              accessibilityLabel="Закрыть управление подпиской"
+              accessibilityRole="button"
+              onPress={() => {
+                playSelectionHaptic();
+                close();
+              }}
+              style={styles.closeButton}
+            >
+              <X color="#A7B9BD" size={24} strokeWidth={2.5} />
+            </Pressable>
+          ) : null}
         </View>
-        {canClose ? (
-          <Pressable
-            accessibilityLabel="Закрыть управление подпиской"
-            accessibilityRole="button"
-            onPress={() => {
-              playSelectionHaptic();
-              close();
-            }}
-            style={styles.closeButton}
-          >
-            <X color="#A7B9BD" size={24} strokeWidth={2.5} />
-          </Pressable>
-        ) : null}
-      </View>
+      ) : null}
 
       {embedded ? (
         <View style={[styles.content, styles.embeddedContent]}>
@@ -277,34 +279,34 @@ function SubscriptionBody({
               <Text numberOfLines={2} style={styles.subscriptionHint}>{statusCopy.secondary}</Text>
             </View>
           </View>
-          <View style={styles.subscriptionActions}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityState={{ disabled: actionBusy || !currentPlan }}
-              disabled={actionBusy || !currentPlan}
-              onPress={() => {
-                if (!currentPlan) {
-                  playWarningHaptic();
-                  return;
-                }
-                checkoutMutation.mutate(currentPlan);
-              }}
-              style={[styles.subscriptionActionButton, styles.renewButton, (actionBusy || !currentPlan) && styles.disabledAction]}
-            >
-              <RefreshCw color="#031012" size={17} strokeWidth={2.8} />
-              <Text numberOfLines={1} adjustsFontSizeToFit style={styles.renewButtonText}>Продлить</Text>
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityState={{ disabled: actionBusy || isCanceled }}
-              disabled={actionBusy || isCanceled}
-              onPress={() => confirmCancelSubscription(() => cancelMutation.mutate())}
-              style={[styles.subscriptionActionButton, styles.cancelButton, (actionBusy || isCanceled) && styles.disabledAction]}
-            >
-              <Ban color="#FF9E9E" size={17} strokeWidth={2.8} />
-              <Text numberOfLines={1} adjustsFontSizeToFit style={styles.cancelButtonText}>{isCanceled ? 'Отменена' : 'Отменить'}</Text>
-            </Pressable>
-          </View>
+          {currentPlan || !isCanceled ? (
+            <View style={styles.subscriptionActions}>
+            {currentPlan ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ disabled: actionBusy }}
+                disabled={actionBusy}
+                onPress={() => checkoutMutation.mutate(currentPlan)}
+                style={[styles.subscriptionActionButton, styles.renewButton, actionBusy && styles.disabledAction]}
+              >
+                <RefreshCw color="#031012" size={17} strokeWidth={2.8} />
+                <Text numberOfLines={1} adjustsFontSizeToFit style={styles.renewButtonText}>Продлить</Text>
+              </Pressable>
+            ) : null}
+            {!isCanceled ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ disabled: actionBusy }}
+                disabled={actionBusy}
+                onPress={() => confirmCancelSubscription(() => cancelMutation.mutate())}
+                style={[styles.subscriptionActionButton, styles.cancelButton, actionBusy && styles.disabledAction]}
+              >
+                <Ban color="#FF9E9E" size={17} strokeWidth={2.8} />
+                <Text numberOfLines={1} adjustsFontSizeToFit style={styles.cancelButtonText}>Отменить</Text>
+              </Pressable>
+            ) : null}
+            </View>
+          ) : null}
         </View>
       ) : null}
 
@@ -465,10 +467,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 12,
     paddingTop: 42,
-  },
-  embeddedHeader: {
-    paddingHorizontal: 0,
-    paddingTop: 0,
   },
   headerCopy: {
     flex: 1,

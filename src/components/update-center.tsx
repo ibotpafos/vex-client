@@ -95,6 +95,10 @@ function MobileUpdateCenterButton({
   const needsAttention = requiresNativeUpdate(update);
   const hasUpdate = Boolean(update?.updateAvailable);
 
+  if (!hasUpdate) {
+    return null;
+  }
+
   return (
     <>
       <HeaderButton
@@ -109,8 +113,12 @@ function MobileUpdateCenterButton({
 
 function DesktopUpdateCenterButton({ onClose, onOpen, visible }: UpdateCenterButtonProps) {
   const update = useDesktopUpdate();
-  const needsAttention = Boolean(update.required || update.status === 'error');
+  const needsAttention = Boolean(update.required);
   const hasUpdate = update.status === 'downloading' || update.status === 'ready';
+
+  if (!needsAttention && !hasUpdate) {
+    return null;
+  }
 
   return (
     <>

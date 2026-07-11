@@ -1,6 +1,6 @@
 import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { Settings, ShieldCheck, User } from 'lucide-react-native';
+import { Settings, User } from 'lucide-react-native';
 import React from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
@@ -55,6 +55,7 @@ export default function AccountScreen() {
       ) : (
         <ScrollView
           alwaysBounceVertical={false}
+          contentInsetAdjustmentBehavior="automatic"
           contentContainerStyle={styles.content}
           showsVerticalScrollIndicator={false}
         >
@@ -64,8 +65,8 @@ export default function AccountScreen() {
                 <User color={vexTheme.colors.accent} size={24} strokeWidth={2.5} />
               </View>
               <View style={styles.accountCopy}>
-                <Text style={styles.accountLabel}>Аккаунт VEX</Text>
-                <Text numberOfLines={1} style={styles.accountEmail}>{session.user.email}</Text>
+                <Text style={styles.accountLabel}>Профиль</Text>
+                <Text numberOfLines={1} selectable style={styles.accountEmail}>{session.user.email}</Text>
                 <View style={styles.accountStatusRow}>
                   <View style={[styles.accountStatusDot, hasEntitlement && styles.accountStatusDotActive]} />
                   <Text numberOfLines={1} style={styles.accountMeta}>{accountSummaryText}</Text>
@@ -73,12 +74,10 @@ export default function AccountScreen() {
               </View>
             </View>
 
+            <View style={styles.accountDivider} />
             <View style={styles.accessCard}>
-              <View style={styles.accessIcon}>
-                <ShieldCheck color={vexTheme.colors.accentInk} size={19} strokeWidth={2.8} />
-              </View>
               <View style={styles.accessCopy}>
-                <Text style={styles.accessCaption}>Текущий доступ</Text>
+                <Text style={styles.accessCaption}>Тариф</Text>
                 <Text numberOfLines={1} style={styles.accessValue}>{accountTierLabel || 'Проверяем подписку'}</Text>
               </View>
               <View style={[styles.accessPill, hasEntitlement && styles.accessPillActive]}>
@@ -103,7 +102,7 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   content: {
-    gap: vexTheme.spacing.sm,
+    gap: vexTheme.spacing.md,
     paddingBottom: 30,
   },
   subscriptionSection: {
@@ -127,14 +126,14 @@ const styles = StyleSheet.create({
     borderColor: vexTheme.colors.line,
     borderRadius: vexTheme.radius.lg,
     borderWidth: 1,
-    gap: 10,
-    padding: 10,
+    gap: 12,
+    padding: 16,
   },
   accountHero: {
     alignItems: 'center',
     flexDirection: 'row',
     gap: 10,
-    minHeight: 58,
+    minHeight: 52,
   },
   userBadge: {
     alignItems: 'center',
@@ -158,7 +157,7 @@ const styles = StyleSheet.create({
   },
   accountEmail: {
     color: vexTheme.colors.text,
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: '900',
     marginTop: 2,
   },
@@ -184,25 +183,16 @@ const styles = StyleSheet.create({
   accountStatusDotActive: {
     backgroundColor: vexTheme.colors.success,
   },
+  accountDivider: {
+    backgroundColor: vexTheme.colors.line,
+    height: 1,
+    width: '100%',
+  },
   accessCard: {
     alignItems: 'center',
-    backgroundColor: vexTheme.colors.surfaceMuted,
-    borderColor: vexTheme.colors.line,
-    borderRadius: 16,
-    borderWidth: 1,
     flexDirection: 'row',
-    gap: 9,
-    minHeight: 58,
-    paddingHorizontal: 10,
-    paddingVertical: 9,
-  },
-  accessIcon: {
-    alignItems: 'center',
-    backgroundColor: vexTheme.colors.accent,
-    borderRadius: 13,
-    height: 36,
-    justifyContent: 'center',
-    width: 36,
+    gap: 12,
+    minHeight: 44,
   },
   accessCopy: {
     flex: 1,

@@ -1,6 +1,6 @@
 import { StatusBar } from 'expo-status-bar';
 import { router } from 'expo-router';
-import { Settings, ShieldCheck } from 'lucide-react-native';
+import { Settings } from 'lucide-react-native';
 import React from 'react';
 import { Animated, Platform, View, Text } from 'react-native';
 
@@ -28,7 +28,6 @@ export default function App() {
     isKeyRotationBusy,
     isUpdateCenterVisible,
     isConnected,
-    antiLeakEnabled,
     serverSelectionMode,
     connectionPhase,
     pulseProgress,
@@ -152,17 +151,6 @@ export default function App() {
               </Text>
             </VexPressable>
           ) : null}
-          {Platform.OS === 'android' && antiLeakEnabled ? (
-            <View style={styles.securityNotice}>
-              <View style={styles.securityNoticeIcon}>
-                <ShieldCheck color="#F3C969" size={16} strokeWidth={2.5} />
-              </View>
-              <View style={styles.securityNoticeCopy}>
-                <Text style={styles.securityNoticeTitle}>Anti-leak включён</Text>
-                <Text numberOfLines={1} style={styles.vpnNoticeText}>Трафик блокируется при сбое туннеля</Text>
-              </View>
-            </View>
-          ) : null}
           {vpnError ? <Text numberOfLines={2} style={styles.vpnErrorText}>{vpnError}</Text> : null}
 
         </View>
@@ -227,15 +215,6 @@ const PowerHero = React.memo(function PowerHero({
 
   return (
     <View style={styles.hero}>
-      <View
-        accessibilityLiveRegion="polite"
-        style={[styles.heroStatus, isConnected && styles.heroStatusActive]}
-      >
-        <View style={[styles.heroStatusDot, isConnected && styles.heroStatusDotActive]} />
-        <Text style={[styles.heroStatusText, isConnected && styles.heroStatusTextActive]}>
-          {isConnected ? 'Соединение защищено' : isVpnBusy ? 'Настраиваем защищённый канал' : 'Готов к подключению'}
-        </Text>
-      </View>
       <View style={styles.powerCluster}>
         <Animated.View
           pointerEvents="none"

@@ -1,7 +1,8 @@
 import '@/native/cryptoPolyfill';
 
 import { QueryClient, QueryClientProvider, focusManager } from '@tanstack/react-query';
-import { Stack, type ErrorBoundaryProps } from 'expo-router';
+import * as Notifications from 'expo-notifications';
+import { router, Stack, type ErrorBoundaryProps } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
 import { AppState, Image, Platform, Pressable, StyleSheet, Text, View, type AppStateStatus } from 'react-native';
@@ -18,6 +19,15 @@ import { VexNativeActivityIndicator } from '@/ui/native-activity-indicator';
 import { ToastProvider } from '@/ui/toast';
 
 initSentry();
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+    shouldShowBanner: true,
+    shouldShowList: true,
+  }),
+});
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -56,6 +66,7 @@ export default function RootLayout() {
   return (
     <QueryClientProvider client={queryClient}>
       <ReactQueryAppStateBridge />
+      <NotificationNavigationBridge />
       <SafeAreaProvider>
         <SessionProvider>
           <DesktopUpdateProvider>
@@ -68,6 +79,23 @@ export default function RootLayout() {
       </SafeAreaProvider>
     </QueryClientProvider>
   );
+}
+
+function NotificationNavigationBridge() {
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    const openSubscription = (response: Notifications.NotificationResponse) => {
+      if (response.notification.request.content.data?.kind === 'subscription-expiry') {
+        router.push('/(app)/(tabs)/account');
+      }
+    };
+    const subscription = Notifications.addNotificationResponseReceivedListener(openSubscription);
+    void Notifications.getLastNotificationResponseAsync().then((response) => {
+      if (response) openSubscription(response);
+    });
+    return () => subscription.remove();
+  }, []);
+  return null;
 }
 
 function ReactQueryAppStateBridge() {

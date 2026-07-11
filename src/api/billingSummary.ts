@@ -21,6 +21,8 @@ export type BillingPlanOption = {
   action: string;
   current: boolean;
   disabled: boolean;
+  interval: string;
+  durationMonths: number;
 };
 
 export type BillingSummary = {
@@ -112,6 +114,8 @@ export function buildBillingSummary(
       action: entitlementStatus === 'unknown' ? 'Проверяем' : mobilePlanActionText(plan, currentPlan, hasActiveEntitlement),
       current,
       disabled: current || entitlementStatus === 'unknown',
+      interval: plan.interval,
+      durationMonths: billingDurationMonths(plan.interval),
     };
   });
 
@@ -168,7 +172,7 @@ function currentBillingPlan(plans: BillingPlanSource[], entitlementState: Billin
 }
 
 function billingPlansMatch(plan: BillingPlanSource, currentPlan: BillingPlanSource): boolean {
-  return plan.id === currentPlan.id || (plan.tier !== '' && plan.tier === currentPlan.tier);
+  return plan.id === currentPlan.id;
 }
 
 function mobilePlanActionText(plan: BillingPlanSource, currentPlan: BillingPlanSource | null, hasCurrent: boolean): string {
@@ -199,6 +203,28 @@ function mobilePlanPrice(plan: BillingPlanSource): string {
     maximumFractionDigits: Number.isInteger(value) ? 0 : 2,
   }).format(value);
   return `${price}/${mobilePlanIntervalText(plan.interval)}`;
+}
+
+export function billingDurationMonths(interval: string): number {
+  switch (interval.toLowerCase()) {
+    case 'quarter':
+    case 'quarterly':
+      return 3;
+    case 'semiannual':
+      return 6;
+    case 'year':
+    case 'yearly':
+    case 'annual':
+      return 12;
+    default:
+      return 1;
+  }
+}
+
+export function billingDurationLabel(months: number): string {
+  if (months === 1) return '1 месяц';
+  if (months >= 2 && months <= 4) return `${months} месяца`;
+  return `${months} месяцев`;
 }
 
 function mobilePlanIntervalText(interval: string): string {

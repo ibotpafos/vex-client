@@ -1,15 +1,16 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Ban, CalendarClock, CheckCircle2, Crown, RefreshCw, X } from 'lucide-react-native';
+import { Ban, Bell, CalendarClock, CheckCircle2, Crown, RefreshCw, X } from 'lucide-react-native';
 import { billingSummary, cancelSubscription, checkoutSession, vexApiBaseUrl, type BillingPlanOption, type Entitlement } from '@/api/vexApi';
-import { billingSummaryFallbackCopy, buildBillingSummary, type BillingSummary } from '@/api/billingSummary';
+import { billingDurationLabel, billingSummaryFallbackCopy, buildBillingSummary, type BillingSummary } from '@/api/billingSummary';
 import { loadCachedBillingSummary, saveCachedBillingSummary } from '@/api/billingSummaryCache';
 import { useSession } from '@/auth/session-context';
 import { playErrorHaptic, playLightImpactHaptic, playSelectionHaptic, playSuccessHaptic, playWarningHaptic } from '@/native/haptics';
 import { HOME_TAB_ROUTE } from '@/navigation/routes';
+import { enableSubscriptionReminders, syncSubscriptionReminders } from '@/notifications/subscriptionReminders';
 import { VexNativeActivityIndicator } from '@/ui/native-activity-indicator';
 import { vexColors, vexSharedStyles } from '@/ui/vex-ui';
 
@@ -30,6 +31,8 @@ export function SubscriptionContent({ embedded = false, entitlementFallback = nu
   const { session } = useSession();
   const queryClient = useQueryClient();
   const [cachedSummary, setCachedSummary] = useState<BillingSummary | null>(null);
+  const [selectedDuration, setSelectedDuration] = useState<number | null>(null);
+  const [remindersEnabled, setRemindersEnabled] = useState(false);
   const cacheUserId = session?.user.id ?? '';
 
   const billingQuery = useQuery({
@@ -139,7 +142,10 @@ export function SubscriptionContent({ embedded = false, entitlementFallback = nu
     ? fallbackSummary
     : onlineSummary ?? cachedSummary ?? fallbackSummary;
   const fallbackCopy = billingSummaryFallbackCopy(billingQuery.isLoading && !summary);
-  const plans = summary?.plans ?? [];
+  const plans = useMemo(() => summary?.plans ?? [], [summary?.plans]);
+  const durations = useMemo(() => [...new Set(plans.map((plan) => plan.durationMonths))].sort((a, b) => a - b), [plans]);
+  const effectiveDuration = selectedDuration && durations.includes(selectedDuration) ? selectedDuration : durations[0] ?? null;
+  const visiblePlans = effectiveDuration ? plans.filter((plan) => plan.durationMonths === effectiveDuration) : plans;
   const currentPlan = summary?.currentPlan;
   const isSubscriptionActive = summary?.entitlementStatus === 'active';
   const isCanceled = normalizedSubscriptionStatus(summary?.status) === 'canceled';
@@ -150,6 +156,17 @@ export function SubscriptionContent({ embedded = false, entitlementFallback = nu
     isSubscriptionActive,
     remainingText: summary?.remainingText,
   });
+  const expiresAt = summary?.effectiveExpiresAt ?? summary?.currentPeriodEnd;
+
+  useEffect(() => {
+    if (!isSubscriptionActive || !expiresAt) {
+      setRemindersEnabled(false);
+      return;
+    }
+    void syncSubscriptionReminders(expiresAt)
+      .then(setRemindersEnabled)
+      .catch(() => setRemindersEnabled(false));
+  }, [expiresAt, isSubscriptionActive]);
   const actionBusy = checkoutMutation.isPending || cancelMutation.isPending;
   const error = checkoutMutation.error instanceof Error
       ? checkoutMutation.error.message
@@ -205,6 +222,19 @@ export function SubscriptionContent({ embedded = false, entitlementFallback = nu
             isCanceled={isCanceled}
             isSubscriptionActive={isSubscriptionActive}
             plans={plans}
+            durations={durations}
+            effectiveDuration={effectiveDuration}
+            visiblePlans={visiblePlans}
+            onSelectDuration={setSelectedDuration}
+            remindersEnabled={remindersEnabled}
+            onEnableReminders={() => {
+              if (!expiresAt) return;
+              void enableSubscriptionReminders(expiresAt).then((enabled) => {
+                setRemindersEnabled(enabled);
+                if (enabled) playSuccessHaptic();
+                else playWarningHaptic();
+              });
+            }}
             statusCopy={statusCopy}
             summary={summary}
           />
@@ -227,6 +257,19 @@ export function SubscriptionContent({ embedded = false, entitlementFallback = nu
             isCanceled={isCanceled}
             isSubscriptionActive={isSubscriptionActive}
             plans={plans}
+            durations={durations}
+            effectiveDuration={effectiveDuration}
+            visiblePlans={visiblePlans}
+            onSelectDuration={setSelectedDuration}
+            remindersEnabled={remindersEnabled}
+            onEnableReminders={() => {
+              if (!expiresAt) return;
+              void enableSubscriptionReminders(expiresAt).then((enabled) => {
+                setRemindersEnabled(enabled);
+                if (enabled) playSuccessHaptic();
+                else playWarningHaptic();
+              });
+            }}
             statusCopy={statusCopy}
             summary={summary}
           />
@@ -248,6 +291,12 @@ function SubscriptionBody({
   isCanceled,
   isSubscriptionActive,
   plans,
+  durations,
+  effectiveDuration,
+  visiblePlans,
+  onSelectDuration,
+  remindersEnabled,
+  onEnableReminders,
   statusCopy,
   summary,
 }: {
@@ -262,6 +311,12 @@ function SubscriptionBody({
   isCanceled: boolean;
   isSubscriptionActive: boolean;
   plans: BillingPlanOption[];
+  durations: number[];
+  effectiveDuration: number | null;
+  visiblePlans: BillingPlanOption[];
+  onSelectDuration: (duration: number) => void;
+  remindersEnabled: boolean;
+  onEnableReminders: () => void;
   statusCopy: ReturnType<typeof subscriptionStatusCopy>;
   summary: BillingSummary | null | undefined;
 }) {
@@ -307,6 +362,18 @@ function SubscriptionBody({
             ) : null}
             </View>
           ) : null}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ disabled: remindersEnabled }}
+            disabled={remindersEnabled}
+            onPress={onEnableReminders}
+            style={[styles.reminderButton, remindersEnabled && styles.reminderButtonEnabled]}
+          >
+            <Bell color={remindersEnabled ? '#77E7F4' : '#A7B9BD'} size={16} strokeWidth={2.5} />
+            <Text style={[styles.reminderButtonText, remindersEnabled && styles.reminderButtonTextEnabled]}>
+              {remindersEnabled ? 'Напоминания включены' : 'Включить напоминания'}
+            </Text>
+          </Pressable>
         </View>
       ) : null}
 
@@ -325,8 +392,28 @@ function SubscriptionBody({
       ) : plans.length === 0 ? (
         <Text selectable style={styles.error}>{summary?.emptyMessage ?? 'Активные тарифы сейчас недоступны.'}</Text>
       ) : (
-        <View style={styles.planList}>
-          {plans.map((plan) => (
+        <>
+          <Text style={styles.durationLabel}>Срок подписки</Text>
+          <View style={styles.durationRow}>
+            {durations.map((duration) => (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ selected: duration === effectiveDuration }}
+                key={duration}
+                onPress={() => {
+                  playSelectionHaptic();
+                  onSelectDuration(duration);
+                }}
+                style={[styles.durationOption, duration === effectiveDuration && styles.durationOptionSelected]}
+              >
+                <Text style={[styles.durationOptionText, duration === effectiveDuration && styles.durationOptionTextSelected]}>
+                  {billingDurationLabel(duration)}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+          <View style={styles.planList}>
+          {visiblePlans.map((plan) => (
             <PlanOptionRow
               actionBusy={actionBusy}
               key={plan.id}
@@ -334,7 +421,8 @@ function SubscriptionBody({
               plan={plan}
             />
           ))}
-        </View>
+          </View>
+        </>
       )}
     </>
   );
@@ -581,6 +669,28 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     textAlign: 'center',
   },
+  reminderButton: {
+    alignItems: 'center',
+    borderColor: 'rgba(96,118,123,0.3)',
+    borderRadius: 11,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 7,
+    justifyContent: 'center',
+    minHeight: 36,
+  },
+  reminderButtonEnabled: {
+    backgroundColor: 'rgba(34,211,238,0.08)',
+    borderColor: 'rgba(34,211,238,0.28)',
+  },
+  reminderButtonText: {
+    color: '#A7B9BD',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  reminderButtonTextEnabled: {
+    color: '#77E7F4',
+  },
   sectionTitle: {
     color: '#A7B9BD',
     fontSize: 12,
@@ -619,6 +729,37 @@ const styles = StyleSheet.create({
   },
   planList: {
     gap: 7,
+  },
+  durationLabel: {
+    color: '#8FBEC6',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  durationRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 7,
+  },
+  durationOption: {
+    alignItems: 'center',
+    borderColor: 'rgba(96,118,123,0.32)',
+    borderRadius: 999,
+    borderWidth: 1,
+    minHeight: 34,
+    paddingHorizontal: 13,
+    justifyContent: 'center',
+  },
+  durationOptionSelected: {
+    backgroundColor: '#22D3EE',
+    borderColor: '#22D3EE',
+  },
+  durationOptionText: {
+    color: '#A7B9BD',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  durationOptionTextSelected: {
+    color: '#031012',
   },
   planOption: {
     alignItems: 'center',

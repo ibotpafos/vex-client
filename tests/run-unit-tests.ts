@@ -1,4 +1,5 @@
-import { billingSummaryFallbackCopy, buildBillingSummary, type BillingPlanSource } from '../src/api/billingSummary';
+import { billingDurationLabel, billingDurationMonths, billingSummaryFallbackCopy, buildBillingSummary, type BillingPlanSource } from '../src/api/billingSummary';
+import { buildSubscriptionReminders } from '../src/notifications/subscriptionReminderSchedule';
 import { normalizeApiRequestError, technicalWorksMessage } from '../src/api/error';
 import { installManualUpdate, isTrustedIosUpdateUrl } from '../src/api/manualUpdateInstall';
 import { errorMessage } from '../src/utils/error';
@@ -53,6 +54,24 @@ import type { VpnStatus } from '../src/native/vexVpn';
 import type { VpnProfile } from '../src/vpn/profile';
 
 const connectedStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0 };
+
+{
+  assertEqual(billingDurationMonths('monthly'), 1);
+  assertEqual(billingDurationMonths('quarterly'), 3);
+  assertEqual(billingDurationMonths('semiannual'), 6);
+  assertEqual(billingDurationMonths('annual'), 12);
+  assertEqual(billingDurationLabel(1), '1 месяц');
+  assertEqual(billingDurationLabel(3), '3 месяца');
+  assertEqual(billingDurationLabel(12), '12 месяцев');
+
+  const reminders = buildSubscriptionReminders('2026-08-20T18:00:00Z', new Date('2026-08-01T00:00:00Z'));
+  assertDeepEqual(reminders.map((item) => item.daysBefore), [7, 3, 1, 0]);
+  assertEqual(buildSubscriptionReminders('bad-date').length, 0);
+  assertDeepEqual(
+    buildSubscriptionReminders('2026-08-20T18:00:00Z', new Date('2026-08-19T12:00:00Z')).map((item) => item.daysBefore),
+    [0],
+  );
+}
 
 {
   assertDeepEqual(normalizePackageNames([

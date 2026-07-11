@@ -13,6 +13,7 @@ export default function BillingReturnRoute() {
     let mounted = true;
     Promise.all([
       queryClient.invalidateQueries({ queryKey: ['entitlement'] }),
+      queryClient.invalidateQueries({ queryKey: ['billing-summary'] }),
       queryClient.invalidateQueries({ queryKey: ['vpn-profile'] }),
       queryClient.invalidateQueries({ queryKey: ['vpn-devices'] }),
     ]).finally(() => {

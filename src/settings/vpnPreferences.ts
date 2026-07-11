@@ -42,15 +42,26 @@ export async function setAndroidAutoConnectEnabled(enabled: boolean): Promise<bo
 }
 
 export async function getAntiLeakEnabled(): Promise<boolean> {
+  // TODO(android-routing): Re-enable after the combined smart-routing/anti-leak real-device matrix proves handshake, DNS, Telegram, reconnect, and network-switch recovery.
+  if (Platform.OS === 'android') {
+    return false;
+  }
   return (await safeGetSetting(antiLeakEnabledKey)) !== 'false';
 }
 
 export async function setAntiLeakEnabled(enabled: boolean): Promise<boolean> {
+  if (Platform.OS === 'android') {
+    await SecureStore.setItemAsync(antiLeakEnabledKey, 'false');
+    return false;
+  }
   await SecureStore.setItemAsync(antiLeakEnabledKey, enabled ? 'true' : 'false');
   return enabled;
 }
 
 export async function getVpnRoutingMode(): Promise<VpnRoutingMode> {
+  if (Platform.OS === 'android') {
+    return 'full_tunnel';
+  }
   const storedMode = await safeGetSetting(routingModeKey);
   if (storedMode) {
     return normalizeVpnRoutingMode(storedMode);
@@ -66,7 +77,7 @@ export async function getVpnRoutingMode(): Promise<VpnRoutingMode> {
 }
 
 export async function setVpnRoutingMode(mode: VpnRoutingMode): Promise<VpnRoutingMode> {
-  const normalized = normalizeVpnRoutingMode(mode);
+  const normalized = Platform.OS === 'android' ? 'full_tunnel' : normalizeVpnRoutingMode(mode);
   await SecureStore.setItemAsync(routingModeKey, normalized);
   await SecureStore.setItemAsync(smartRoutingEnabledKey, isSmartRoutingMode(normalized) ? 'true' : 'false');
   return normalized;

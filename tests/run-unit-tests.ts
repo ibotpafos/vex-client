@@ -41,7 +41,7 @@ import { isKeyEpochMismatchError } from '../src/vpn/keyEpochRecovery';
 import { isVpnDeviceForLocation, type VpnLocationDevice } from '../src/vpn/deviceLocation';
 import { nativeVpnDeviceForClient } from '../src/vpn/nativeDeviceSelection';
 import { assessNativeTunnelHealth, localStatusHealthReasons } from '../src/vpn/nativeTunnelHealth';
-import { hasVerifiedNativeTunnelActivity } from '../src/vpn/vpnStatusVerification';
+import { hasVerifiedNativeTunnelActivity, resolveNativeTunnelVerified } from '../src/vpn/vpnStatusVerification';
 import { probeNetworkHealth } from '../src/vpn/networkHealthProbe';
 import { defaultVpnBypassRegion, defaultVpnRoutingMode, defaultVpnRoutingPolicyVersion, isSmartRoutingMode, normalizeVpnRoutingMode, resolvedVpnBypassRegion, vpnRoutingModeFromSmartMode } from '../src/vpn/routingPolicy';
 import { autoSwitchTargetLocationId, chooseBestVpnLocation } from '../src/vpn/serverSelection';
@@ -926,6 +926,13 @@ async function runVpnHandshakeVerificationTests(): Promise<void> {
     txBytes: 256,
     latestHandshakeEpochMillis: 0,
   }, 'macos'), true);
+  assertEqual(resolveNativeTunnelVerified({
+    state: 'connected',
+    rxBytes: 0,
+    txBytes: 256,
+    latestHandshakeEpochMillis: 0,
+    verified: true,
+  }, 'android'), false);
 
   const pendingStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0, verified: false };
   const verifiedStatus: VpnStatus = { state: 'connected', rxBytes: 128, txBytes: 64, verified: true };

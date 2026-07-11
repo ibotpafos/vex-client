@@ -9,3 +9,11 @@ export function hasVerifiedNativeTunnelActivity(status: VpnStatus, platform: str
   }
   return hasHandshake || status.rxBytes > 0 || status.txBytes > 0;
 }
+
+export function resolveNativeTunnelVerified(status: VpnStatus, platform: string): boolean {
+  const hasVerifiedActivity = hasVerifiedNativeTunnelActivity(status, platform);
+  if (platform === 'android') {
+    return hasVerifiedActivity;
+  }
+  return hasVerifiedActivity || status.verified === true;
+}

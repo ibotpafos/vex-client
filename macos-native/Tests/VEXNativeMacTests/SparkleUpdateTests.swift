@@ -137,6 +137,9 @@ final class SparkleUpdateTests: XCTestCase {
 
         XCTAssertTrue(script.contains("ALLOW_DIRTY_DEPLOY=\"${ALLOW_DIRTY_DEPLOY:-0}\""))
         XCTAssertTrue(script.contains("ALLOW_NO_UPSTREAM_DEPLOY=\"${ALLOW_NO_UPSTREAM_DEPLOY:-0}\""))
+        XCTAssertTrue(script.contains("reuse_primary_worktree_sparkle_cache"))
+        XCTAssertTrue(script.contains("--disable-automatic-resolution"))
+        XCTAssertTrue(script.contains("ALLOW_RELEASE_ARTIFACT_DIRTY=1"))
     }
 
     func testNativeMacDeployBundleScriptChecksReleaseFiles() throws {

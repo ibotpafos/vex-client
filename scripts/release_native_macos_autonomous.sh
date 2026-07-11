@@ -27,6 +27,29 @@ require_file() {
   fi
 }
 
+reuse_primary_worktree_sparkle_cache() {
+  local primary artifacts
+  primary="$(git -C "${ROOT_DIR}" worktree list --porcelain | awk '/^worktree / { print substr($0, 10); exit }')"
+  artifacts="${ROOT_DIR}/macos-native/.build/artifacts/sparkle"
+  if [[ -d "${artifacts}" || -z "${primary}" || "${primary}" == "${ROOT_DIR}" ]]; then
+    return 0
+  fi
+  if [[ -d "${primary}/macos-native/.build/artifacts/sparkle" ]]; then
+    mkdir -p "$(dirname "${artifacts}")"
+    cp -R "${primary}/macos-native/.build/artifacts/sparkle" "${artifacts}"
+    echo "Reused Sparkle artifact cache from primary worktree."
+  fi
+}
+
+run_native_macos_tests() {
+  reuse_primary_worktree_sparkle_cache
+  if [[ -d "${ROOT_DIR}/macos-native/.build/artifacts/sparkle" ]]; then
+    swift test --package-path "${ROOT_DIR}/macos-native" --disable-automatic-resolution
+  else
+    swift test --package-path "${ROOT_DIR}/macos-native"
+  fi
+}
+
 load_env_file() {
   local path="$1"
   if [[ -f "${path}" ]]; then
@@ -155,7 +178,7 @@ export VEX_SPARKLE_PRODUCTION=1
 echo "native macOS autonomous release: ${VEX_NATIVE_VERSION} (${VEX_NATIVE_BUILD})"
 
 if [[ "${RUN_CHECKS}" == "1" ]]; then
-  swift test --package-path "${ROOT_DIR}/macos-native"
+  run_native_macos_tests
 fi
 
 bash "${ROOT_DIR}/scripts/build_native_macos_internal_release.sh"
@@ -179,6 +202,7 @@ if [[ "${RUN_DEPLOY}" == "1" ]]; then
     cd "${VPN_REPO}"
     env \
       ALLOW_DIRTY_DEPLOY="${ALLOW_DIRTY_DEPLOY}" \
+      ALLOW_RELEASE_ARTIFACT_DIRTY=1 \
       ALLOW_NO_UPSTREAM_DEPLOY="${ALLOW_NO_UPSTREAM_DEPLOY}" \
       DOWNLOAD_SCOPE=native-macos \
       DOWNLOAD_ARCHIVE="${VPN_RELEASE_DIR}/vex-downloads.tar.gz" \

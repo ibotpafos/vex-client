@@ -1,3 +1,5 @@
+import '@/native/cryptoPolyfill';
+
 import { QueryClient, QueryClientProvider, focusManager } from '@tanstack/react-query';
 import { Stack, type ErrorBoundaryProps } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';

@@ -3,6 +3,7 @@ import { getAppInfo, getOrCreateDeviceId } from '@/native/appInfo';
 import { deviceIdentitySignaturePayload, getOrCreateDeviceIdentity } from '@/native/deviceIdentity';
 import { generateWireGuardKeyPair, replaceWireGuardKeyPair, getOrCreateWireGuardKeyPair, type WireGuardKeyPair } from '@/native/vexVpn';
 import { nativeVpnDeviceForClient } from '@/vpn/nativeDeviceSelection';
+import { isKeyEpochMismatchError } from '@/vpn/keyEpochRecovery';
 import { defaultVpnRoutingMode, defaultVpnRoutingPolicyVersion, resolvedVpnBypassRegion } from '@/vpn/routingPolicy';
 import { jsonRequest, rawRequest, clientVersionHeaders, isTauriRuntime } from './client';
 import { buildCreateDeviceRequest } from './deviceCreateRequest';
@@ -80,7 +81,7 @@ async function preparedTunnelFromDeviceConfig(accessToken: string, client: VpnCl
 
 async function managedVpnProfile(accessToken: string, client: VpnClientDescriptor, options: PreparedTunnelOptions): Promise<PreparedTunnel> {
   const versionHeaders = await clientVersionHeaders();
-  const keyPair = await getOrCreateWireGuardKeyPair();
+  let keyPair = await getOrCreateWireGuardKeyPair();
   const locationId = normalizeLocationId(options.locationId);
   const [allDevices, runtimeDeviceId] = await Promise.all([vpnDevices(accessToken), getOrCreateDeviceId()]);
   const baseExternalDeviceId = nativeDeviceId(runtimeDeviceId);
@@ -90,7 +91,18 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
     device = await registerNativeDevice(accessToken, client, keyPair, locationId, externalDeviceId);
   }
   if (deviceNeedsLocalKeySync(device, keyPair)) {
-    device = await syncManagedVpnKey(accessToken, device.id, keyPair);
+    try {
+      device = await syncManagedVpnKey(accessToken, device.id, keyPair);
+    } catch (error) {
+      if (!isKeyEpochMismatchError(error)) {
+        throw error;
+      }
+      // Web authorization can create the managed device before the native key
+      // exists. Epoch 1 then belongs to that placeholder, so install the first
+      // real client key through the normal transactional rotation to epoch 2.
+      device = await rotateManagedVpnKey(accessToken, device.id);
+      keyPair = await getOrCreateWireGuardKeyPair();
+    }
   }
 
   const query = new URLSearchParams({ device_id: device.id });

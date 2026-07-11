@@ -34,6 +34,7 @@ import { connectionAttemptsForProfile, isVpnTransportFallbackError, profileEndpo
 import { connectableLocalProfile, shouldUseLocalProfileBeforeOnline, vpnConnectTimingSamples } from '../src/vpn/connectFlow';
 import { recoverVpnConnection } from '../src/vpn/connectionRecovery';
 import { disconnectWithRecoveryTimeout } from '../src/vpn/disconnectRecovery';
+import { isKeyEpochMismatchError } from '../src/vpn/keyEpochRecovery';
 import { isVpnDeviceForLocation, type VpnLocationDevice } from '../src/vpn/deviceLocation';
 import { nativeVpnDeviceForClient } from '../src/vpn/nativeDeviceSelection';
 import { assessNativeTunnelHealth, localStatusHealthReasons } from '../src/vpn/nativeTunnelHealth';
@@ -1685,4 +1686,6 @@ function runErrorMessageTests(): void {
   assertEqual(normalizeApiRequestError(new Error('Network request failed')).message, technicalWorksMessage);
   assertEqual(normalizeApiRequestError(new Error('Превышено время ожидания API.')).message, technicalWorksMessage);
   assertEqual(normalizeApiRequestError(new Error('regular failure')).message, 'regular failure');
+  assertEqual(isKeyEpochMismatchError(new Error('key_epoch does not match next device epoch')), true);
+  assertEqual(isKeyEpochMismatchError(new Error('network request failed')), false);
 }

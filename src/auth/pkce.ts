@@ -1,16 +1,13 @@
 export function generateRandomString(length: number): string {
   const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
   let text = '';
-  if (typeof window !== 'undefined' && window.crypto && window.crypto.getRandomValues) {
-    const values = new Uint8Array(length);
-    window.crypto.getRandomValues(values);
-    for (let i = 0; i < length; i++) {
-      text += possible.charAt(values[i] % possible.length);
-    }
-  } else {
-    for (let i = 0; i < length; i++) {
-      text += possible.charAt(Math.floor(Math.random() * possible.length));
-    }
+  const runtimeCrypto = globalThis.crypto;
+  if (typeof runtimeCrypto?.getRandomValues !== 'function') {
+    throw new Error('Secure random generator is unavailable.');
+  }
+  const values = runtimeCrypto.getRandomValues(new Uint8Array(length));
+  for (let i = 0; i < length; i++) {
+    text += possible.charAt(values[i] % possible.length);
   }
   return text;
 }

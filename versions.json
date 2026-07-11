@@ -6,11 +6,11 @@
     "min_config_schema_version": 1
   },
   "android": {
-    "version": "1.0.50",
-    "build": 52,
+    "version": "1.0.51",
+    "build": 53,
     "min_supported_build": 1002930,
     "is_required": true,
-    "release_notes": "Android: стабильнее обновление, умный режим маршрутизации, более быстрый старт VPN и доработанный интерфейс.",
+    "release_notes": "Android: аварийное восстановление зависшего отключения VPN без перезагрузки телефона, очистки данных и повторного входа.",
     "core_version": "0.1.0",
     "config_schema_version": 1,
     "min_config_schema_version": 1

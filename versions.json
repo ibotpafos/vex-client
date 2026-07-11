@@ -1,7 +1,7 @@
 {
   "desktop": {
-    "version": "0.1.45",
-    "release_notes": "macOS: обновлён интерфейс управления аккаунтом и подпиской, добавлены актуальные тарифы и улучшено восстановление состояния после оплаты.",
+    "version": "0.1.36",
+    "release_notes": "Desktop: стабильнее connect/disconnect на macOS, меньше блокирующих status-запросов к helper, новый helper v23 и устранен WebKit hang в asset protocol.",
     "config_schema_version": 1,
     "min_config_schema_version": 1
   },

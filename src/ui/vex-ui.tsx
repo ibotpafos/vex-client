@@ -2,24 +2,26 @@ import React, { useEffect, useState, type PropsWithChildren } from 'react';
 import { ImageBackground, Platform, Pressable, StyleSheet, useWindowDimensions, View, type PressableProps, type StyleProp, type ViewStyle } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { vexTheme } from '@/ui/vex-theme';
+
 const networkMap = require('../../assets/vex-network-map.png');
 
 export const vexMaxContentWidth = 430;
 
 export const vexColors = {
-  accent: '#22D3EE',
-  background: '#020A0B',
-  card: 'rgba(7,17,19,0.88)',
-  cardSoft: 'rgba(7,17,19,0.86)',
-  field: 'rgba(2,10,11,0.78)',
-  line: 'rgba(96,118,123,0.42)',
-  lineStrong: 'rgba(96,118,123,0.46)',
-  muted: '#A7B9BD',
-  text: '#F4FCFD',
-  textSoft: '#EAF7F8',
-  danger: '#FF9F9F',
-  dangerSoft: 'rgba(255,122,122,0.08)',
-  dangerLine: 'rgba(255,122,122,0.34)',
+  accent: vexTheme.colors.accent,
+  background: vexTheme.colors.background,
+  card: vexTheme.colors.surface,
+  cardSoft: vexTheme.colors.surfaceMuted,
+  field: vexTheme.colors.field,
+  line: vexTheme.colors.line,
+  lineStrong: vexTheme.colors.lineStrong,
+  muted: vexTheme.colors.textMuted,
+  text: vexTheme.colors.text,
+  textSoft: vexTheme.colors.textSecondary,
+  danger: vexTheme.colors.danger,
+  dangerSoft: vexTheme.colors.dangerMuted,
+  dangerLine: vexTheme.colors.dangerLine,
 };
 
 type VexScreenProps = PropsWithChildren<{
@@ -29,7 +31,8 @@ type VexScreenProps = PropsWithChildren<{
 
 export function VexScreen({ children, contentStyle, backgroundMapEnabled = Platform.OS !== 'android' }: VexScreenProps) {
   const { width: viewportWidth } = useWindowDimensions();
-  const contentWidth = Math.min(viewportWidth - 24, vexMaxContentWidth);
+  const horizontalInset = viewportWidth <= 360 ? 16 : 24;
+  const contentWidth = Math.min(viewportWidth - horizontalInset, vexMaxContentWidth);
   const [showBackgroundMap, setShowBackgroundMap] = useState(backgroundMapEnabled);
 
   useEffect(() => {
@@ -68,20 +71,20 @@ export const vexSharedStyles = StyleSheet.create({
   },
   backgroundMap: {
     ...StyleSheet.absoluteFill,
-    opacity: 0.28,
+    opacity: 0.2,
   },
   backgroundMapImage: {
     transform: [{ scale: 1.18 }],
   },
   backgroundOverlay: {
-    backgroundColor: 'rgba(2,10,11,0.78)',
+    backgroundColor: 'rgba(4,11,13,0.84)',
     flex: 1,
   },
   shell: {
     alignSelf: 'center',
     flex: 1,
-    gap: 10,
-    paddingBottom: 12,
+    gap: vexTheme.spacing.sm,
+    paddingBottom: vexTheme.spacing.md,
     paddingTop: 0,
   },
   topBar: {
@@ -92,9 +95,17 @@ export const vexSharedStyles = StyleSheet.create({
   },
   iconButton: {
     alignItems: 'center',
-    height: 42,
+    backgroundColor: vexTheme.colors.surfaceMuted,
+    borderColor: vexTheme.colors.line,
+    borderRadius: vexTheme.radius.md,
+    borderWidth: 1,
+    height: 44,
     justifyContent: 'center',
-    width: 42,
+    width: 44,
+  },
+  iconButtonSpacer: {
+    height: 44,
+    width: 44,
   },
   title: {
     color: vexColors.text,
@@ -104,19 +115,19 @@ export const vexSharedStyles = StyleSheet.create({
   card: {
     backgroundColor: vexColors.card,
     borderColor: vexColors.line,
-    borderRadius: 24,
+    borderRadius: vexTheme.radius.lg,
     borderWidth: 1,
   },
   primaryButton: {
     alignItems: 'center',
     backgroundColor: vexColors.accent,
-    borderRadius: 14,
+    borderRadius: vexTheme.radius.md,
     justifyContent: 'center',
-    minHeight: 50,
+    minHeight: 52,
   },
   primaryButtonText: {
     color: '#031012',
-    fontSize: 18,
+    fontSize: vexTheme.type.body,
     fontWeight: '900',
   },
   busy: {
@@ -156,4 +167,3 @@ export function VexPressable({
     </Pressable>
   );
 }
-

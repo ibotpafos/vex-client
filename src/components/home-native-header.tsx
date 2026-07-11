@@ -1,6 +1,8 @@
 import React, { type ReactElement } from 'react';
 import { Image, StyleSheet, Text, View, type ImageSourcePropType } from 'react-native';
 
+import { vexTheme } from '@/ui/vex-theme';
+
 type HomeNativeHeaderProps = {
   logoSource: ImageSourcePropType;
   planLabel: string | null;
@@ -34,7 +36,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'space-between',
-    minHeight: 46,
+    minHeight: 58,
   },
   brandGroup: {
     alignItems: 'center',
@@ -44,14 +46,17 @@ const styles = StyleSheet.create({
   },
   brandBadge: {
     alignItems: 'center',
-    height: 52,
+    backgroundColor: vexTheme.colors.surfaceMuted,
+    borderColor: vexTheme.colors.line,
+    borderRadius: vexTheme.radius.md,
+    borderWidth: 1,
+    height: 46,
     justifyContent: 'center',
-    overflow: 'visible',
-    width: 56,
+    width: 46,
   },
   brandLogo: {
-    height: 52,
-    width: 52,
+    height: 38,
+    width: 38,
   },
   brandTitleRow: {
     alignItems: 'center',
@@ -60,15 +65,15 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   brandText: {
-    color: '#F4FCFD',
-    fontSize: 28,
+    color: vexTheme.colors.text,
+    fontSize: 26,
     fontWeight: '900',
     letterSpacing: 0,
   },
   headerPlanChip: {
     alignItems: 'center',
-    backgroundColor: 'rgba(34,211,238,0.14)',
-    borderColor: 'rgba(34,211,238,0.34)',
+    backgroundColor: vexTheme.colors.accentMuted,
+    borderColor: vexTheme.colors.accentLine,
     borderRadius: 999,
     borderWidth: 1,
     justifyContent: 'center',
@@ -77,7 +82,7 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   headerPlanChipText: {
-    color: '#22D3EE',
+    color: vexTheme.colors.accentStrong,
     fontSize: 12,
     fontWeight: '900',
   },

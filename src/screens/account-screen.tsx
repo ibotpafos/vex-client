@@ -10,6 +10,7 @@ import { SubscriptionContent } from '@/components/subscription-content';
 import { playSelectionHaptic } from '@/native/haptics';
 import { VexNativeActivityIndicator } from '@/ui/native-activity-indicator';
 import { VexScreen, vexSharedStyles, VexPressable } from '@/ui/vex-ui';
+import { vexTheme } from '@/ui/vex-theme';
 import { useVpnConnectionContext } from '@/vpn/vpn-connection-context';
 
 const vexLogo = require('../../assets/vex-logo-header.png');
@@ -60,7 +61,7 @@ export default function AccountScreen() {
           <View style={styles.accountPanel}>
             <View style={styles.accountHero}>
               <View style={styles.userBadge}>
-                <User color="#22D3EE" size={24} strokeWidth={2.5} />
+                <User color={vexTheme.colors.accent} size={24} strokeWidth={2.5} />
               </View>
               <View style={styles.accountCopy}>
                 <Text style={styles.accountLabel}>Аккаунт VEX</Text>
@@ -74,7 +75,7 @@ export default function AccountScreen() {
 
             <View style={styles.accessCard}>
               <View style={styles.accessIcon}>
-                <ShieldCheck color="#031012" size={19} strokeWidth={2.8} />
+                <ShieldCheck color={vexTheme.colors.accentInk} size={19} strokeWidth={2.8} />
               </View>
               <View style={styles.accessCopy}>
                 <Text style={styles.accessCaption}>Текущий доступ</Text>
@@ -102,7 +103,7 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   content: {
-    gap: 10,
+    gap: vexTheme.spacing.sm,
     paddingBottom: 30,
   },
   subscriptionSection: {
@@ -116,21 +117,18 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   centerStateText: {
-    color: '#A7B9BD',
+    color: vexTheme.colors.textMuted,
     fontSize: 16,
     fontWeight: '700',
     marginTop: 16,
   },
   accountPanel: {
-    backgroundColor: 'rgba(8,25,29,0.84)',
-    borderColor: 'rgba(126,233,245,0.2)',
-    borderRadius: 20,
+    backgroundColor: vexTheme.colors.surface,
+    borderColor: vexTheme.colors.line,
+    borderRadius: vexTheme.radius.lg,
     borderWidth: 1,
     gap: 10,
     padding: 10,
-    shadowColor: '#22D3EE',
-    shadowOpacity: 0.1,
-    shadowRadius: 14,
   },
   accountHero: {
     alignItems: 'center',
@@ -140,8 +138,8 @@ const styles = StyleSheet.create({
   },
   userBadge: {
     alignItems: 'center',
-    backgroundColor: 'rgba(34,211,238,0.13)',
-    borderColor: 'rgba(34,211,238,0.2)',
+    backgroundColor: vexTheme.colors.accentMuted,
+    borderColor: vexTheme.colors.accentLine,
     borderRadius: 16,
     borderWidth: 1,
     height: 46,
@@ -153,19 +151,19 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   accountLabel: {
-    color: '#8FBEC6',
+    color: vexTheme.colors.textMuted,
     fontSize: 11,
     fontWeight: '900',
     textTransform: 'uppercase',
   },
   accountEmail: {
-    color: '#EAF7F8',
+    color: vexTheme.colors.text,
     fontSize: 16,
     fontWeight: '900',
     marginTop: 2,
   },
   accountMeta: {
-    color: '#B6CACE',
+    color: vexTheme.colors.textSecondary,
     fontSize: 12,
     fontWeight: '800',
     minWidth: 0,
@@ -178,18 +176,18 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   accountStatusDot: {
-    backgroundColor: '#78969C',
+    backgroundColor: vexTheme.colors.textMuted,
     borderRadius: 5,
     height: 10,
     width: 10,
   },
   accountStatusDotActive: {
-    backgroundColor: '#22D3EE',
+    backgroundColor: vexTheme.colors.success,
   },
   accessCard: {
     alignItems: 'center',
-    backgroundColor: 'rgba(2,10,11,0.52)',
-    borderColor: 'rgba(96,118,123,0.24)',
+    backgroundColor: vexTheme.colors.surfaceMuted,
+    borderColor: vexTheme.colors.line,
     borderRadius: 16,
     borderWidth: 1,
     flexDirection: 'row',
@@ -200,7 +198,7 @@ const styles = StyleSheet.create({
   },
   accessIcon: {
     alignItems: 'center',
-    backgroundColor: '#22D3EE',
+    backgroundColor: vexTheme.colors.accent,
     borderRadius: 13,
     height: 36,
     justifyContent: 'center',
@@ -211,21 +209,21 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   accessCaption: {
-    color: '#8FBEC6',
+    color: vexTheme.colors.textMuted,
     fontSize: 11,
     fontWeight: '900',
     textTransform: 'uppercase',
   },
   accessValue: {
-    color: '#F4FCFD',
+    color: vexTheme.colors.text,
     fontSize: 15,
     fontWeight: '900',
     marginTop: 2,
   },
   accessPill: {
     alignItems: 'center',
-    backgroundColor: 'rgba(2,10,11,0.58)',
-    borderColor: 'rgba(96,118,123,0.26)',
+    backgroundColor: vexTheme.colors.surface,
+    borderColor: vexTheme.colors.line,
     borderRadius: 999,
     borderWidth: 1,
     justifyContent: 'center',
@@ -233,15 +231,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 9,
   },
   accessPillActive: {
-    backgroundColor: 'rgba(34,211,238,0.12)',
-    borderColor: 'rgba(34,211,238,0.44)',
+    backgroundColor: vexTheme.colors.successMuted,
+    borderColor: 'rgba(85,214,169,0.3)',
   },
   accessPillText: {
-    color: '#A7B9BD',
+    color: vexTheme.colors.textMuted,
     fontSize: 11,
     fontWeight: '900',
   },
   accessPillTextActive: {
-    color: '#B9FBFF',
+    color: vexTheme.colors.success,
   },
 });

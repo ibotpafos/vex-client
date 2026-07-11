@@ -325,7 +325,7 @@ export default function SupportScreen() {
             </Text>
           </View>
         </View>
-        <View style={vexSharedStyles.iconButton} />
+        <View style={vexSharedStyles.iconButtonSpacer} />
       </View>
 
       <View style={styles.chatShell}>

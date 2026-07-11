@@ -5,6 +5,7 @@ import { useRenderProfilerMark } from '@/debug/render-profiler';
 import { useVpnTrafficStats } from '@/vpn/vpnTrafficStatsStore';
 import { formatBytes } from '../screens/home-screen-helpers';
 import { styles } from '../screens/home-screen.styles';
+import { vexTheme } from '@/ui/vex-theme';
 
 export const TrafficStats = React.memo(function TrafficStats() {
   useRenderProfilerMark('TrafficStats');
@@ -16,7 +17,7 @@ export const TrafficStats = React.memo(function TrafficStats() {
         <View style={styles.trafficValueRow}>
           <Text numberOfLines={1} adjustsFontSizeToFit style={styles.trafficValue}>{formatBytes(rxBytes)}</Text>
           <View style={styles.trafficDirectionBadge}>
-            <ArrowDown color="#22D3EE" size={13} strokeWidth={3} />
+            <ArrowDown color={vexTheme.colors.accent} size={13} strokeWidth={3} />
           </View>
         </View>
       </View>
@@ -26,7 +27,7 @@ export const TrafficStats = React.memo(function TrafficStats() {
         <View style={styles.trafficValueRow}>
           <Text numberOfLines={1} adjustsFontSizeToFit style={styles.trafficValue}>{formatBytes(txBytes)}</Text>
           <View style={styles.trafficDirectionBadge}>
-            <ArrowUp color="#22D3EE" size={13} strokeWidth={3} />
+            <ArrowUp color={vexTheme.colors.accent} size={13} strokeWidth={3} />
           </View>
         </View>
       </View>

@@ -1,23 +1,26 @@
 import { NativeTabs } from 'expo-router/unstable-native-tabs';
 
+import { vexTheme } from '@/ui/vex-theme';
+
 export default function AppTabsLayout() {
   return (
     <NativeTabs
-      backgroundColor="#071113"
-      badgeBackgroundColor="#22D3EE"
-      badgeTextColor="#031012"
-      iconColor={{ default: 'rgba(167,185,189,0.8)', selected: '#031012' }}
-      indicatorColor="#22D3EE"
+      backBehavior="history"
+      backgroundColor={vexTheme.colors.backgroundRaised}
+      badgeBackgroundColor={vexTheme.colors.accent}
+      badgeTextColor={vexTheme.colors.accentInk}
+      iconColor={{ default: vexTheme.colors.textMuted, selected: vexTheme.colors.accentInk }}
+      indicatorColor={vexTheme.colors.accent}
       labelVisibilityMode="labeled"
       labelStyle={{
         default: {
-          color: 'rgba(167,185,189,0.8)',
-          fontSize: 11,
+          color: vexTheme.colors.textMuted,
+          fontSize: 12,
           fontWeight: '800',
         },
         selected: {
-          color: '#F4FCFD',
-          fontSize: 11,
+          color: vexTheme.colors.text,
+          fontSize: 12,
           fontWeight: '900',
         },
       }}

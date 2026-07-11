@@ -145,7 +145,7 @@ export default function VpnApplicationsScreen() {
           <ChevronLeft color="#EAF7F8" size={26} strokeWidth={2.4} />
         </VexPressable>
         <Text style={vexSharedStyles.title}>Приложения</Text>
-        <View style={vexSharedStyles.iconButton} />
+        <View style={vexSharedStyles.iconButtonSpacer} />
       </View>
 
       <FlatList

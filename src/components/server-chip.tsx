@@ -6,6 +6,7 @@ import { useRenderProfilerMark } from '@/debug/render-profiler';
 import { serverLocationLabel } from '../screens/home-screen-helpers';
 import { styles } from '../screens/home-screen.styles';
 import { VexPressable } from '@/ui/vex-ui';
+import { vexTheme } from '@/ui/vex-theme';
 
 export interface ServerChipProps {
   disabled: boolean;
@@ -37,7 +38,7 @@ export const ServerChip = React.memo(function ServerChip({
       accessibilityLabel={`Выбрать сервер. Сейчас ${serverLabel}, задержка ${latencyText}`}
     >
       <View style={styles.serverChipIcon}>
-        <MapPin color="#22D3EE" size={18} strokeWidth={2.5} />
+        <MapPin color={vexTheme.colors.accent} size={18} strokeWidth={2.5} />
       </View>
       <View style={styles.serverChipCopy}>
         <Text style={styles.serverChipCaption}>{isAutoMode ? 'Сервер · авто' : 'Сервер'}</Text>
@@ -46,10 +47,10 @@ export const ServerChip = React.memo(function ServerChip({
         </Text>
       </View>
       <View style={styles.serverLatencyPill}>
-        <Gauge color="#B9FBFF" size={13} strokeWidth={2.6} />
+        <Gauge color={vexTheme.colors.accentStrong} size={13} strokeWidth={2.6} />
         <Text numberOfLines={1} style={styles.serverLatencyText}>{latencyText}</Text>
       </View>
-      <ChevronRight color="#78969C" size={19} strokeWidth={2.6} />
+      <ChevronRight color={vexTheme.colors.textMuted} size={19} strokeWidth={2.6} />
     </VexPressable>
   );
 });

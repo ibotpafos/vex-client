@@ -87,7 +87,7 @@ export const ServerPickerContent = React.memo(function ServerPickerContent({
               disabled={isVpnBusy}
               key={location.id}
               location={location}
-              latencyMs={selected ? selectedLatencyMs : undefined}
+              latencyMs={location.id === selectedLocationId ? selectedLatencyMs : undefined}
               onSelect={onSelect}
               selected={selected}
             />

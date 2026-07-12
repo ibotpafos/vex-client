@@ -6,6 +6,7 @@ import { useVpnConnectionContext } from '@/vpn/vpn-connection-context';
 export default function ServerPickerScreen() {
   const {
     availableLocations,
+    clientLatencyMs,
     closeServerPicker,
     handleAutoServerSelectionPress,
     handleLocationPress,
@@ -20,6 +21,7 @@ export default function ServerPickerScreen() {
       <ServerPickerContent
         isVpnBusy={isVpnBusy}
         locations={availableLocations}
+        selectedLatencyMs={clientLatencyMs}
         selectionMode={serverSelectionMode}
         selectedLocationId={selectedLocationId}
         onAutoSelect={handleAutoServerSelectionPress}

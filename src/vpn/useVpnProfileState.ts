@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { Platform } from 'react-native';
 import { errorMessage } from '@/utils/error';
 
 import { entitlement, hasPaidEntitlement, type Entitlement, type VpnLocation } from '../api/vexApi';
@@ -9,6 +10,7 @@ import { chooseBestVpnLocation } from './serverSelection';
 import { clearHotVpnProfiles, hydrateHotVpnProfilesToQueryCache, loadHotVpnProfileResult, profileFromHotRecord, saveHotVpnProfile } from './hotProfileCache';
 import { shouldUseLocalProfileBeforeOnline } from './connectFlow';
 import type { VpnRoutingMode } from './routingPolicy';
+import { androidVpnProfileWithinBinderBudget } from './androidRoutingSafety';
 
 export type VpnProfileRefreshEvent = {
   device_id?: string;
@@ -96,7 +98,7 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
     if (cached) {
       return cached;
     }
-    if (vpnProfile?.locationId === locationId) {
+    if (vpnProfile?.locationId === locationId && vpnProfile.routingMode === routingMode) {
       return vpnProfile;
     }
     return null;
@@ -108,13 +110,15 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
     }
     void hydrateHotVpnProfilesToQueryCache(userId, accessToken, queryClient)
       .then((records) => {
-        const selected = records.find((record) => record.locationId === selectedLocationId);
+        const selected = records.find((record) =>
+          record.locationId === selectedLocationId && record.profile.routingMode === routingMode
+        );
         if (selected) {
           setVpnProfile(selected.profile);
         }
       })
       .catch(() => undefined);
-  }, [accessToken, queryClient, selectedLocationId, userId]);
+  }, [accessToken, queryClient, routingMode, selectedLocationId, userId]);
 
   const refreshProfileInBackground = useCallback((
     locationId: string,
@@ -271,7 +275,12 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
 
     const preferCached = options.preferCached !== false && options.forceRefresh !== true;
     const cachedProfile = options.cachedProfile ?? cachedProfileForLocation(locationId);
-    if (preferCached && shouldUseLocalProfileBeforeOnline(cachedProfile, entitlementState)) {
+    if (
+      preferCached &&
+      cachedProfile?.routingMode === routingMode &&
+      shouldUseLocalProfileBeforeOnline(cachedProfile, entitlementState) &&
+      androidVpnProfileWithinBinderBudget(Platform.OS, cachedProfile.config)
+    ) {
       const cachedEntitlement = cachedProfile.entitlement ?? entitlementState;
       if (options.requestPermission !== false) {
         const permissionGranted = await requestVpnPermission();
@@ -300,7 +309,8 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
       if (
         hotProfile?.hotProfileUsed &&
         hotProfile.routingMode === routingMode &&
-        shouldUseLocalProfileBeforeOnline(hotProfile, null)
+        shouldUseLocalProfileBeforeOnline(hotProfile, null) &&
+        androidVpnProfileWithinBinderBudget(Platform.OS, hotProfile.config)
       ) {
         const hotEntitlement = hotProfile.entitlement;
         if (!hotEntitlement) {

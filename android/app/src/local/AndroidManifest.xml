@@ -2,4 +2,15 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" tools:node="remove" />
+
+    <application>
+        <receiver
+            android:name=".vpn.VexVpnTestReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.vexguard.app.dev.TEST_START_BLOCKER" />
+                <action android:name="com.vexguard.app.dev.TEST_STOP_BLOCKER" />
+            </intent-filter>
+        </receiver>
+    </application>
 </manifest>

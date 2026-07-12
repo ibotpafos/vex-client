@@ -1,4 +1,5 @@
 import type { VpnProfile } from './profile';
+import { vpnProfileAddressMatchesDevice } from './profileConsistency';
 
 type EntitlementLike = {
   active?: boolean;
@@ -24,7 +25,12 @@ export function connectableLocalProfile(
   if (!profile || profile.locationId !== locationId) {
     return null;
   }
-  if (routingMode && profile.routingMode && profile.routingMode !== routingMode) {
+  if (!vpnProfileAddressMatchesDevice(profile)) {
+    return null;
+  }
+  // A profile without routing metadata is legacy/ambiguous and must not be
+  // reused when the caller requested an explicit routing policy.
+  if (routingMode && profile.routingMode !== routingMode) {
     return null;
   }
   if (!shouldUseLocalProfileBeforeOnline(profile, fallbackEntitlement)) {

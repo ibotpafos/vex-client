@@ -1,6 +1,7 @@
 import { Platform } from 'react-native';
 import { getAppInfo, getOrCreateDeviceId } from '@/native/appInfo';
 import { isTauriRuntime } from '@/native/tauriPlatform';
+import { androidProfilePlatform } from '@/vpn/androidRoutingSafety';
 import { ApiRequestError, isMaintenanceStatus, normalizeApiRequestError } from './error';
 export { isMaintenanceStatus, isTechnicalWorksError, normalizeApiRequestError, technicalWorksMessage } from './error';
 export { isTauriRuntime };
@@ -211,8 +212,10 @@ export function absolutizeUrl(value: string): string {
 
 export async function clientVersionHeaders(): Promise<Record<string, string>> {
   const [appInfo, deviceId] = await Promise.all([getAppInfo(), getOrCreateDeviceId()]);
+  const experimentalAndroidRouting = Platform.OS === 'android'
+    && process.env.EXPO_PUBLIC_VEX_ANDROID_EXPERIMENTAL_ROUTING === '1';
   return {
-    'X-Vex-Platform': appInfo.platform,
+    'X-Vex-Platform': androidProfilePlatform(appInfo.platform, experimentalAndroidRouting),
     'X-Vex-App-Version': appInfo.version,
     'X-Vex-Build-Number': appInfo.build || '0',
     'X-Vex-Core-Version': appInfo.coreVersion,

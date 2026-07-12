@@ -1,6 +1,7 @@
 import { entitlement, hasPaidEntitlement, preparedTunnel, rotateManagedVpnKey, type Entitlement, type VpnDevice } from '../api/vexApi';
 import { loadHotVpnProfile, profileFromHotRecord, saveHotVpnProfile } from './hotProfileCache';
 import { defaultVpnBypassRegion, defaultVpnRoutingMode, defaultVpnRoutingPolicyVersion, type VpnRoutingMode } from './routingPolicy';
+import { vpnProfileAddressMatchesDevice } from './profileConsistency';
 
 export type VpnProfile = {
   config: string;
@@ -33,14 +34,14 @@ export async function resolveVpnProfile(
   const routingMode = options.routingMode ?? defaultVpnRoutingMode;
   const cacheKey = profileCacheKey(token, normalizedLocationId, routingMode);
   if (!options.forceRefresh) {
-    if (cachedProfile?.key === cacheKey && !cachedProfile.profile.rotationRequired) {
+    if (cachedProfile?.key === cacheKey && !cachedProfile.profile.rotationRequired && vpnProfileAddressMatchesDevice(cachedProfile.profile)) {
       return { ...cachedProfile.profile, source: 'local' };
     }
     if (options.allowPersistentHotProfile !== false && options.userId) {
       const hotProfile = await loadHotVpnProfile(options.userId, normalizedLocationId, routingMode);
       if (hotProfile) {
         const profile = profileFromHotRecord(hotProfile);
-        if (profile.routingMode !== routingMode) {
+        if (profile.routingMode !== routingMode || !vpnProfileAddressMatchesDevice(profile)) {
           return refreshVpnProfile(token, { routingMode }, knownEntitlement, normalizedLocationId, options.userId);
         }
         cachedProfile = { key: cacheKey, profile };

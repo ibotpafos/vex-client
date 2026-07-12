@@ -37,6 +37,9 @@ import { connectableLocalProfile, shouldUseLocalProfileBeforeOnline, vpnConnectT
 import { recoverVpnConnection } from '../src/vpn/connectionRecovery';
 import { disconnectWithRecoveryTimeout } from '../src/vpn/disconnectRecovery';
 import { waitForVerifiedVpnConnection } from '../src/vpn/connectVerification';
+import { cleanupFailedVpnConnection } from '../src/vpn/failedConnectionCleanup';
+import { androidExperimentalRoutingEnabled, androidProfilePlatform, androidVpnProfileWithinBinderBudget, vpnProfileRouteCount } from '../src/vpn/androidRoutingSafety';
+import { profileResolutionOrder } from '../src/vpn/profileResolutionFallback';
 import { isKeyEpochMismatchError } from '../src/vpn/keyEpochRecovery';
 import { isVpnDeviceForLocation, type VpnLocationDevice } from '../src/vpn/deviceLocation';
 import { nativeVpnDeviceForClient } from '../src/vpn/nativeDeviceSelection';
@@ -109,6 +112,12 @@ const connectedStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0 
   };
   assertEqual(Boolean(connectableLocalProfile(profile, 'de', null, 'all_except_ru')), true);
   assertEqual(connectableLocalProfile(profile, 'de', null, 'full_tunnel'), null);
+  assertEqual(connectableLocalProfile({ ...profile, routingMode: undefined }, 'de', null, 'all_except_ru'), null);
+  assertEqual(connectableLocalProfile({
+    ...profile,
+    config: '[Interface]\nAddress = 10.64.1.25/32\nPrivateKey = key\n',
+    device: { id: 'android', name: 'Android', status: 'active', assignedIpv4: '10.64.1.34' },
+  }, 'de', null, 'all_except_ru'), null);
 }
 
 {
@@ -901,10 +910,45 @@ async function runAsyncTests(): Promise<void> {
   await runManualUpdateInstallTests();
   await runVpnDisconnectRecoveryTests();
   await runVpnHandshakeVerificationTests();
+  await runFailedConnectionCleanupTests();
   runNavigationRouteTests();
+  runAndroidRoutingSafetyTests();
   runSupportTests();
   runErrorMessageTests();
   await runServerSwitchTests();
+}
+
+function runAndroidRoutingSafetyTests(): void {
+  assertEqual(androidExperimentalRoutingEnabled('android', undefined), false);
+  assertEqual(androidExperimentalRoutingEnabled('android', '0'), false);
+  assertEqual(androidExperimentalRoutingEnabled('android', '1'), true);
+assertEqual(androidExperimentalRoutingEnabled('ios', '1'), false);
+assertEqual(vpnProfileRouteCount('[Peer]\nAllowedIPs = 0.0.0.0/1, 128.0.0.0/1\n'), 2);
+assertEqual(androidVpnProfileWithinBinderBudget('android', '[Peer]\nAllowedIPs = 0.0.0.0/1, 128.0.0.0/1', 2), true);
+assertEqual(androidVpnProfileWithinBinderBudget('android', '[Peer]\nAllowedIPs = 0.0.0.0/1, 128.0.0.0/1', 1), false);
+assertEqual(androidVpnProfileWithinBinderBudget('ios', '[Peer]\nAllowedIPs = 0.0.0.0/1, 128.0.0.0/1', 1), true);
+assertEqual(androidProfilePlatform('android', true), 'android-smart-v1');
+assertEqual(androidProfilePlatform('android', false), 'android');
+
+const profileFallbackLocations = [
+  { id: 'de', availability: 'available', healthyNodes: 1 },
+  { id: 'fi', availability: 'available', healthyNodes: 1 },
+  { id: 'retired', availability: 'retired', healthyNodes: 1 },
+] as any;
+assertDeepEqual(
+  profileResolutionOrder('de', profileFallbackLocations).map((location) => location.id),
+  ['de', 'fi'],
+);
+}
+
+async function runFailedConnectionCleanupTests(): Promise<void> {
+  const calls: boolean[] = [];
+  const disconnect = async ({ releaseAntiLeak }: { releaseAntiLeak: boolean }) => {
+    calls.push(releaseAntiLeak);
+  };
+  await cleanupFailedVpnConnection(true, disconnect);
+  await cleanupFailedVpnConnection(false, disconnect);
+  assertDeepEqual(calls, [false, true]);
 }
 
 async function runVpnHandshakeVerificationTests(): Promise<void> {
@@ -947,6 +991,30 @@ async function runVpnHandshakeVerificationTests(): Promise<void> {
   });
   assertEqual(result.verified, true);
   assertEqual(reads, 2);
+
+  const staleVerifiedStatus: VpnStatus = {
+    state: 'connected',
+    rxBytes: 128,
+    txBytes: 64,
+    latestHandshakeEpochMillis: 10_000,
+    verified: true,
+  };
+  const freshVerifiedStatus: VpnStatus = {
+    ...staleVerifiedStatus,
+    latestHandshakeEpochMillis: 20_000,
+  };
+  let freshnessReads = 0;
+  const freshResult = await waitForVerifiedVpnConnection(staleVerifiedStatus, async () => {
+    freshnessReads += 1;
+    return freshVerifiedStatus;
+  }, {
+    attempts: 1,
+    minimumHandshakeEpochMillis: 15_000,
+    pollMs: 0,
+    wait: async () => undefined,
+  });
+  assertEqual(freshResult.latestHandshakeEpochMillis, 20_000);
+  assertEqual(freshnessReads, 1);
 
   await assertRejects(
     () => waitForVerifiedVpnConnection(pendingStatus, async () => pendingStatus, {
@@ -992,7 +1060,7 @@ async function runServerSwitchTests(): Promise<void> {
   await testNetworkHealthProbeReportsDnsAndHttpsState();
   await testProfileFetchFailureKeepsCurrentTunnel();
   await testTargetHandshakeFailureRollsBackToPreviousProfile();
-  await testCachedTargetProfileRetriesFreshProfileBeforeRollback();
+  await testServerSwitchRefreshesProfileBeforeReplacingTunnel();
   await testRecoveryKeepsCurrentProfileWhenReconnectSucceeds();
   await testRecoveryUsesFreshSameLocationProfile();
   await testRecoveryRotatesProfileForKeyOrProfileFailure();
@@ -1170,7 +1238,7 @@ async function testTargetHandshakeFailureRollsBackToPreviousProfile(): Promise<v
   ]);
 }
 
-async function testCachedTargetProfileRetriesFreshProfileBeforeRollback(): Promise<void> {
+async function testServerSwitchRefreshesProfileBeforeReplacingTunnel(): Promise<void> {
   const previousProfile = profileForLocation('fi', 'fi.example.com:51820');
   const cachedTargetProfile = profileForLocation('de', 'de-old.example.com:51820');
   const freshTargetProfile = profileForLocation('de', 'de.example.com:51820');
@@ -1208,8 +1276,6 @@ async function testCachedTargetProfileRetriesFreshProfileBeforeRollback(): Promi
     assertEqual(profileEndpoint(result.profile), 'de.example.com:51820');
   }
   assertDeepEqual(calls, [
-    'resolve:de:cached',
-    'connect:de-old.example.com:51820',
     'resolve:de:fresh',
     'connect:de.example.com:51820',
     'persist:de',

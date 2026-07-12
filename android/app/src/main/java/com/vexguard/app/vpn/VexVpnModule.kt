@@ -143,10 +143,17 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
     promise: Promise,
   ) {
     val recoveryHandler = Handler(Looper.getMainLooper())
-    val hardRecovery = Runnable {
-      Log.e(TAG, "VPN connect exceeded ${CONNECT_HARD_RECOVERY_MS}ms; terminating the app process to release Android VPN descriptors.")
-      VexLeakBlockerService.stop(reactContext)
-      android.os.Process.killProcess(android.os.Process.myPid())
+    val hardRecovery = object : Runnable {
+      override fun run() {
+        if (controller.isNetworkRecoveryPending()) {
+          Log.w(TAG, "Delaying VPN connect hard recovery while network recovery is active.")
+          recoveryHandler.postDelayed(this, NETWORK_RECOVERY_HARD_TIMEOUT_RETRY_MS)
+          return
+        }
+        Log.e(TAG, "VPN connect exceeded ${CONNECT_HARD_RECOVERY_MS}ms; terminating the app process to release Android VPN descriptors.")
+        VexLeakBlockerService.stop(reactContext)
+        android.os.Process.killProcess(android.os.Process.myPid())
+      }
     }
     recoveryHandler.postDelayed(hardRecovery, CONNECT_HARD_RECOVERY_MS)
     scope.launch {
@@ -184,10 +191,17 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
   @ReactMethod
   fun disconnect(releaseAntiLeak: Boolean, promise: Promise) {
     val recoveryHandler = Handler(Looper.getMainLooper())
-    val hardRecovery = Runnable {
-      Log.e(TAG, "VPN disconnect exceeded ${DISCONNECT_HARD_RECOVERY_MS}ms; terminating the app process to release Android VPN descriptors.")
-      VexLeakBlockerService.stop(reactContext)
-      android.os.Process.killProcess(android.os.Process.myPid())
+    val hardRecovery = object : Runnable {
+      override fun run() {
+        if (controller.isNetworkRecoveryPending()) {
+          Log.w(TAG, "Delaying VPN disconnect hard recovery while network recovery is active.")
+          recoveryHandler.postDelayed(this, NETWORK_RECOVERY_HARD_TIMEOUT_RETRY_MS)
+          return
+        }
+        Log.e(TAG, "VPN disconnect exceeded ${DISCONNECT_HARD_RECOVERY_MS}ms; terminating the app process to release Android VPN descriptors.")
+        VexLeakBlockerService.stop(reactContext)
+        android.os.Process.killProcess(android.os.Process.myPid())
+      }
     }
     if (releaseAntiLeak) {
       recoveryHandler.postDelayed(hardRecovery, DISCONNECT_HARD_RECOVERY_MS)
@@ -486,7 +500,7 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
     val map = Arguments.createMap()
     when (this) {
       is VpnConnectionState.Connected -> {
-        val hasTunnelActivity = traffic.latestHandshakeEpochMillis > 0L || traffic.rxBytes > 0L || traffic.txBytes > 0L
+        val hasTunnelActivity = VpnHandshakeVerifier.isVerified(traffic.latestHandshakeEpochMillis)
         map.putString("state", "connected")
         map.putDouble("rxBytes", traffic.rxBytes.toDouble())
         map.putDouble("txBytes", traffic.txBytes.toDouble())
@@ -613,6 +627,7 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
     private const val STATUS_POLL_ERROR_MS = 4_000L
     private const val DISCONNECT_HARD_RECOVERY_MS = 8_000L
     private const val CONNECT_HARD_RECOVERY_MS = 20_000L
+    private const val NETWORK_RECOVERY_HARD_TIMEOUT_RETRY_MS = 5_000L
     private const val UPDATE_DOWNLOAD_CONNECT_TIMEOUT_MS = 30_000
     private const val UPDATE_DOWNLOAD_READ_TIMEOUT_MS = 60_000
   }

@@ -13,6 +13,8 @@ import androidx.core.content.ContextCompat
 import com.vexguard.app.MainActivity
 import java.io.FileInputStream
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 
 class VexLeakBlockerService : VpnService() {
   private var tunnel: ParcelFileDescriptor? = null
@@ -20,6 +22,13 @@ class VexLeakBlockerService : VpnService() {
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     startForeground(NOTIFICATION_ID, blockerNotification())
+    if (intent?.action == ACTION_STOP) {
+      stopBlocking()
+      stopForeground(STOP_FOREGROUND_REMOVE)
+      stopSelf()
+      return START_NOT_STICKY
+    }
+
     startBlocking(intent?.getStringArrayListExtra(EXTRA_ALLOWED_APPLICATIONS).orEmpty())
     return START_STICKY
   }
@@ -86,7 +95,6 @@ class VexLeakBlockerService : VpnService() {
   }
 
   private fun stopBlocking() {
-    active.set(false)
     drainThread?.interrupt()
     drainThread = null
     try {
@@ -94,6 +102,7 @@ class VexLeakBlockerService : VpnService() {
     } catch (_: Throwable) {
     }
     tunnel = null
+    active.set(false)
   }
 
   private fun blockerNotification(): Notification {
@@ -137,6 +146,7 @@ class VexLeakBlockerService : VpnService() {
 
   companion object {
     private const val CHANNEL_ID = "vex_antileak"
+    private const val ACTION_STOP = "com.vexguard.app.vpn.STOP_LEAK_BLOCKER"
     private const val EXTRA_ALLOWED_APPLICATIONS = "com.vexguard.app.vpn.ALLOWED_APPLICATIONS"
     private const val NOTIFICATION_ID = 9173
     private val active = AtomicBoolean(false)
@@ -148,7 +158,32 @@ class VexLeakBlockerService : VpnService() {
     }
 
     fun stop(context: Context) {
-      context.stopService(Intent(context, VexLeakBlockerService::class.java))
+      val intent = Intent(context, VexLeakBlockerService::class.java).setAction(ACTION_STOP)
+      ContextCompat.startForegroundService(context, intent)
+    }
+
+    suspend fun startAndAwait(
+      context: Context,
+      allowedApplications: List<String> = emptyList(),
+      timeoutMillis: Long = 2_000L,
+    ): Boolean {
+      start(context, allowedApplications)
+      return withTimeoutOrNull(timeoutMillis) {
+        while (!active.get()) {
+          delay(25L)
+        }
+        true
+      } ?: false
+    }
+
+    suspend fun stopAndAwait(context: Context, timeoutMillis: Long = 2_000L): Boolean {
+      stop(context)
+      return withTimeoutOrNull(timeoutMillis) {
+        while (active.get()) {
+          delay(25L)
+        }
+        true
+      } ?: false
     }
 
     fun isActive(): Boolean = active.get()

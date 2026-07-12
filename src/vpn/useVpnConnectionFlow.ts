@@ -1,4 +1,5 @@
 import { useCallback } from 'react';
+import { Platform } from 'react-native';
 
 import {
   saveHotVpnProfile,
@@ -21,10 +22,15 @@ import {
 } from '@/screens/home-screen-helpers';
 import {
   connectVpn,
+  disconnectVpn,
   getVpnStatus,
   type VpnStatus,
 } from '@/native/vexVpn';
 import { waitForVerifiedVpnConnection } from '@/vpn/connectVerification';
+import { cleanupFailedVpnConnection } from '@/vpn/failedConnectionCleanup';
+import { profileResolutionOrder } from '@/vpn/profileResolutionFallback';
+import { androidVpnProfileWithinBinderBudget } from '@/vpn/androidRoutingSafety';
+import { vpnProfileAddressMatchesDevice } from '@/vpn/profileConsistency';
 import {
   getVpnApplicationSelection,
   setSelectedVpnLocation,
@@ -86,6 +92,12 @@ export function useVpnConnectionFlow({
 }: UseVpnConnectionFlowInput) {
 
   const connectProfileWithEndpointFallback = useCallback(async (profile: VpnProfile) => {
+    if (!vpnProfileAddressMatchesDevice(profile)) {
+      throw new Error('VPN connection failed: cached profile address does not match its device assignment.');
+    }
+    if (!androidVpnProfileWithinBinderBudget(Platform.OS, profile.config)) {
+      throw new Error('Android VPN profile exceeds the safe route limit. Refresh the profile before connecting.');
+    }
     let lastError: unknown;
     const endpointAttempts: string[] = [];
     const applicationSelection = await getVpnApplicationSelection();
@@ -105,7 +117,12 @@ export function useVpnConnectionFlow({
           connectAttemptTimeoutMs,
           'VPN connect timed out.',
         );
-        const status = await waitForVerifiedVpnConnection(startedStatus, getVpnStatus);
+        const status = await waitForVerifiedVpnConnection(startedStatus, getVpnStatus, {
+          // The native backend can briefly expose the previous peer timestamp
+          // while replacing a tunnel. Require activity from this attempt. The
+          // small tolerance covers second-resolution backend timestamps.
+          minimumHandshakeEpochMillis: nativeStartMs - 2_000,
+        });
         return {
           interfaceUpMs: Date.now(),
           endpointAttempts,
@@ -137,6 +154,10 @@ export function useVpnConnectionFlow({
       ? chooseBestVpnLocation(availableLocations)?.id ?? locationId
       : locationId;
     let profile = connectableLocalProfile(activeProfile, initialLocationId, entitlementState, routingMode);
+    let profileLocationId = initialLocationId;
+    if (profile && !androidVpnProfileWithinBinderBudget(Platform.OS, profile.config)) {
+      profile = null;
+    }
     if (profile) {
       const permissionGranted = await requestVpnPermission();
       if (!permissionGranted) {
@@ -144,10 +165,22 @@ export function useVpnConnectionFlow({
       }
       cacheProfile(initialLocationId, profile);
     } else {
-      profile = await resolveConnectableVpnProfile(initialLocationId, { preferCached: true });
+      let lastProfileError: unknown;
+      for (const candidate of profileResolutionOrder(initialLocationId, availableLocations)) {
+        try {
+          profile = await resolveConnectableVpnProfile(candidate.id, { preferCached: true });
+          profileLocationId = candidate.id;
+          break;
+        } catch (error) {
+          lastProfileError = error;
+        }
+      }
+      if (!profile) {
+        throw lastProfileError ?? new Error('VPN-профиль недоступен.');
+      }
     }
     let connected: ConnectedVpnAttempt | null = null;
-    let connectedLocationId = initialLocationId;
+    let connectedLocationId = profileLocationId;
     let lastConnectError: unknown;
 
     try {
@@ -173,7 +206,7 @@ export function useVpnConnectionFlow({
     }
 
     for (const fallbackLocation of availableLocations) {
-      if (connected?.status.state === 'connected' || fallbackLocation.id === initialLocationId) {
+      if (connected?.status.state === 'connected' || fallbackLocation.id === profileLocationId) {
         continue;
       }
       const fallbackProfile = await resolveConnectableVpnProfile(fallbackLocation.id, {
@@ -206,6 +239,7 @@ export function useVpnConnectionFlow({
     }
 
     if (!connected || connected.status.state !== 'connected') {
+      await cleanupFailedVpnConnection(antiLeakEnabled, disconnectVpn).catch(() => undefined);
       throw lastConnectError ?? new Error('VPN не подключился.');
     }
 
@@ -246,6 +280,7 @@ export function useVpnConnectionFlow({
     }
   }, [
     activeProfile,
+    antiLeakEnabled,
     availableLocations,
     cacheProfile,
     clientLatencyMs,

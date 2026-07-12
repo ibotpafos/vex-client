@@ -126,7 +126,7 @@ const HOME_ROUTE = HOME_TAB_ROUTE;
 const deviceLocationLatencyCache: Record<string, number> = {};
 const deviceLocationLatencyListeners = new Set<(snapshot: Record<string, number>) => void>();
 
-function publishDeviceLocationLatencies(measurements: ReadonlyArray<readonly [string, number] | null>) {
+function publishDeviceLocationLatencies(measurements: readonly (readonly [string, number] | null)[]) {
   let changed = false;
   for (const measurement of measurements) {
     if (!measurement) {

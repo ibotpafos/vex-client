@@ -1,6 +1,5 @@
 import { Stack } from 'expo-router';
 import { Platform } from 'react-native';
-import { VpnConnectionProvider } from '@/vpn/vpn-connection-context';
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -8,7 +7,6 @@ export const unstable_settings = {
 
 export default function AppLayout() {
   return (
-    <VpnConnectionProvider>
       <Stack>
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="settings" options={{ headerShown: false }} />
@@ -64,6 +62,5 @@ export default function AppLayout() {
           }}
         />
       </Stack>
-    </VpnConnectionProvider>
   );
 }

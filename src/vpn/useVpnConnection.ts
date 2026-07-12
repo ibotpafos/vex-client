@@ -1133,7 +1133,7 @@ export function useVpnConnection() {
     vpnStatusCore.state,
   ]);
 
-  const switchConnectedVpnLocation = useCallback(async (targetLocationId: string) => {
+  const switchConnectedVpnLocation = useCallback(async (targetLocationId: string, closeOverlay = true) => {
     if (!session) {
       setVpnError('Сначала войдите в аккаунт.');
       return;
@@ -1148,7 +1148,9 @@ export function useVpnConnection() {
     const previousStatus = vpnStatusRef.current;
 
     vpnOperationInFlightRef.current = true;
-    closeRouteOverlay();
+    if (closeOverlay) {
+      closeRouteOverlay();
+    }
     setIsVpnBusy(true);
     setIsServerSwitching(true);
     setVpnError(null);
@@ -1231,7 +1233,7 @@ export function useVpnConnection() {
     setVpnStatus,
   ]);
 
-  const handleLocationPress = useCallback(async (locationId: string) => {
+  const handleLocationPress = useCallback(async (locationId: string, closeOverlay = true) => {
     if (isVpnBusy) {
       playWarningHaptic();
       return;
@@ -1247,23 +1249,27 @@ export function useVpnConnection() {
       return;
     }
     if (normalizedLocationId === selectedLocationId) {
-      closeRouteOverlay();
+      if (closeOverlay) {
+        closeRouteOverlay();
+      }
       return;
     }
 
     if (isConnected) {
-      await switchConnectedVpnLocation(normalizedLocationId);
+      await switchConnectedVpnLocation(normalizedLocationId, closeOverlay);
       return;
     }
 
     const persistedLocationId = await setSelectedVpnLocation(normalizedLocationId);
     setSelectedLocationId(persistedLocationId);
-    closeRouteOverlay();
+    if (closeOverlay) {
+      closeRouteOverlay();
+    }
     clearProfile();
     setVpnError(null);
   }, [clearProfile, isConnected, isVpnBusy, selectedLocationId, switchConnectedVpnLocation]);
 
-  const handleAutoServerSelectionPress = useCallback(async () => {
+  const handleAutoServerSelectionPress = useCallback(async (closeOverlay = true) => {
     if (isVpnBusy) {
       playWarningHaptic();
       return;
@@ -1280,28 +1286,32 @@ export function useVpnConnection() {
     setVpnError(null);
 
     if (!isConnected) {
-      closeRouteOverlay();
+      if (closeOverlay) {
+        closeRouteOverlay();
+      }
       return;
     }
 
     const targetLocationId = autoSwitchTargetLocationId(selectedLocationId, availableLocations);
     if (!targetLocationId) {
-      closeRouteOverlay();
+      if (closeOverlay) {
+        closeRouteOverlay();
+      }
       return;
     }
-    await switchConnectedVpnLocation(targetLocationId);
+    await switchConnectedVpnLocation(targetLocationId, closeOverlay);
   }, [availableLocations, isConnected, isVpnBusy, selectedLocationId, switchConnectedVpnLocation]);
 
-  const openServerPicker = useCallback(() => {
+  const openServerPicker = useCallback((visibleLatencyText?: string, visibleLocationId?: string) => {
     playSelectionHaptic();
     router.push({
       pathname: SERVER_PICKER_ROUTE,
       params: {
-        activeLatencyText: selectedLatencyText,
-        activeLocationId: selectedLocation?.id ?? selectedLocationId,
+        activeLatencyText: visibleLatencyText || '',
+        activeLocationId: visibleLocationId || '',
       },
     });
-  }, [selectedLatencyText, selectedLocation?.id, selectedLocationId]);
+  }, []);
 
   const closeServerPicker = useCallback(() => {
     playSelectionHaptic();

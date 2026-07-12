@@ -12,6 +12,7 @@ export default function ServerPickerScreen() {
     handleAutoServerSelectionPress,
     handleLocationPress,
     isVpnBusy,
+    selectedLatencyText,
     selectedLocationId,
     serverSelectionMode,
   } = useVpnConnectionContext();
@@ -20,10 +21,9 @@ export default function ServerPickerScreen() {
     <>
       <StatusBar style="light" />
       <ServerPickerContent
-        activeLatencyText={params.activeLatencyText}
-        activeLocationId={params.activeLocationId}
         isVpnBusy={isVpnBusy}
         locations={availableLocations}
+        selectedLatencyText={params.activeLatencyText || selectedLatencyText}
         selectionMode={serverSelectionMode}
         selectedLocationId={selectedLocationId}
         onAutoSelect={handleAutoServerSelectionPress}

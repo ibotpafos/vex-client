@@ -53,11 +53,18 @@ import { normalizePackageNames } from '../src/vpn/applicationRouting';
 import { assessVpnAutopilotIssue } from '../src/vpn/vpnAutopilotAssessment';
 import { buildCreateDeviceRequest } from '../src/api/deviceCreateRequest';
 import { HOME_TAB_ROUTE, SUPPORT_TAB_ROUTE } from '../src/navigation/routes';
+import { fallbackLocationEndpoint } from '../src/vpn/locationEndpoint';
 import type { VpnDevice, VpnDeviceUsage, VpnLocation, SupportMessage } from '../src/api/vexApi';
 import type { VpnStatus } from '../src/native/vexVpn';
 import type { VpnProfile } from '../src/vpn/profile';
 
 const connectedStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0 };
+
+{
+  assertEqual(fallbackLocationEndpoint('de'), 'de-1.vexguard.app:51820');
+  assertEqual(fallbackLocationEndpoint(' FI '), 'fi-1.vexguard.app:51820');
+  assertEqual(fallbackLocationEndpoint('../bad'), '');
+}
 
 {
   assertEqual(billingDurationMonths('monthly'), 1);

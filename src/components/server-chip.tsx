@@ -13,7 +13,7 @@ export interface ServerChipProps {
   isAutoMode: boolean;
   latencyText: string;
   location?: VpnLocation;
-  onPress: () => void;
+  onPress: (visibleLatencyText: string) => void;
 }
 
 export const ServerChip = React.memo(function ServerChip({
@@ -30,7 +30,7 @@ export const ServerChip = React.memo(function ServerChip({
   return (
     <VexPressable
       disabled={disabled}
-      onPress={onPress}
+      onPress={() => onPress(latencyText)}
       style={[styles.serverChip, disabled && styles.serverChipDisabled]}
       hoverStyle={{ backgroundColor: 'rgba(7,17,19,0.96)', borderColor: 'rgba(34,211,238,0.4)' }}
       title="Выбрать сервер подключения"

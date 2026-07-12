@@ -1,6 +1,8 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, ScrollView } from 'react-native';
 import { VexPressable } from '@/ui/vex-ui';
+import { measureEndpointLatency } from '@/native/vexVpn';
+import { fallbackLocationEndpoint } from '@/vpn/locationEndpoint';
 import { X, RefreshCw, CheckCircle2 } from 'lucide-react-native';
 import type { VpnLocation } from '@/api/vexApi';
 import type { ServerSelectionMode } from '@/vpn/serverSelection';
@@ -8,10 +10,9 @@ import { serverLocationLabel, locationLatencyText, locationStatusText } from '..
 import { styles } from '../screens/home-screen.styles';
 
 export interface ServerPickerModalProps {
-  activeLatencyText?: string;
-  activeLocationId?: string;
   isVpnBusy: boolean;
   locations: VpnLocation[];
+  selectedLatencyText?: string;
   selectionMode: ServerSelectionMode;
   selectedLocationId: string;
   visible: boolean;
@@ -21,10 +22,9 @@ export interface ServerPickerModalProps {
 }
 
 export const ServerPickerModal = React.memo(function ServerPickerModal({
-  activeLatencyText,
-  activeLocationId,
   isVpnBusy,
   locations,
+  selectedLatencyText,
   selectionMode,
   selectedLocationId,
   visible,
@@ -38,10 +38,9 @@ export const ServerPickerModal = React.memo(function ServerPickerModal({
 
   return (
     <ServerPickerContent
-      activeLatencyText={activeLatencyText}
-      activeLocationId={activeLocationId}
       isVpnBusy={isVpnBusy}
       locations={locations}
+      selectedLatencyText={selectedLatencyText}
       selectionMode={selectionMode}
       selectedLocationId={selectedLocationId}
       onAutoSelect={onAutoSelect}
@@ -54,10 +53,9 @@ export const ServerPickerModal = React.memo(function ServerPickerModal({
 type ServerPickerContentProps = Omit<ServerPickerModalProps, 'visible'>;
 
 export const ServerPickerContent = React.memo(function ServerPickerContent({
-  activeLatencyText,
-  activeLocationId,
   isVpnBusy,
   locations,
+  selectedLatencyText,
   selectionMode,
   selectedLocationId,
   onAutoSelect,
@@ -65,6 +63,39 @@ export const ServerPickerContent = React.memo(function ServerPickerContent({
   onSelect,
 }: ServerPickerContentProps) {
   const autoSelected = selectionMode === 'auto';
+  const [deviceLatencies, setDeviceLatencies] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    // TODO(VEX Android latency): VEX Dev 1.0.79 still receives the cached 7-9 ms
+    // control-plane values here while `adb shell ping` reports ~45 ms to Germany
+    // and ~20 ms to Finland. Resolve the public endpoint on the underlying
+    // Android network (or return a server-provided numeric probe address), then
+    // verify both rows against simultaneous ADB pings on the real phone.
+    let cancelled = false;
+    void Promise.all(locations.map(async (location) => {
+      const endpoint = fallbackLocationEndpoint(location.countryCode) || location.endpoint;
+      if (!endpoint) return null;
+      try {
+        const latency = await measureEndpointLatency(endpoint);
+        return typeof latency === 'number' && Number.isFinite(latency)
+          ? [location.id, Math.max(0, latency)] as const
+          : null;
+      } catch {
+        return null;
+      }
+    })).then((measurements) => {
+      if (cancelled) return;
+      const next: Record<string, number> = {};
+      for (const measurement of measurements) {
+        if (measurement) next[measurement[0]] = measurement[1];
+      }
+      setDeviceLatencies(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [locations]);
+
   return (
     <View style={styles.serverModal}>
       <View style={styles.serverModalHeader}>
@@ -86,12 +117,17 @@ export const ServerPickerContent = React.memo(function ServerPickerContent({
         />
         {locations.map((location) => {
           const selected = selectionMode === 'manual' && location.id === selectedLocationId;
+          const measuredLatency = deviceLatencies[location.id];
           return (
             <ServerLocationRow
               disabled={isVpnBusy}
               key={location.id}
+              latencyTextOverride={Number.isFinite(measuredLatency)
+                ? `${Math.round(measuredLatency)} мс`
+                : selected
+                  ? selectedLatencyText
+                  : undefined}
               location={location}
-              latencyTextOverride={location.id === activeLocationId ? activeLatencyText : undefined}
               onSelect={onSelect}
               selected={selected}
             />
@@ -101,6 +137,7 @@ export const ServerPickerContent = React.memo(function ServerPickerContent({
     </View>
   );
 });
+
 
 type AutoServerRowProps = {
   disabled: boolean;
@@ -142,16 +179,16 @@ const AutoServerRow = React.memo(function AutoServerRow({ disabled, onPress, sel
 
 type ServerLocationRowProps = {
   disabled: boolean;
-  location: VpnLocation;
   latencyTextOverride?: string;
+  location: VpnLocation;
   onSelect: (locationId: string) => void;
   selected: boolean;
 };
 
 const ServerLocationRow = React.memo(function ServerLocationRow({
   disabled,
-  location,
   latencyTextOverride,
+  location,
   onSelect,
   selected,
 }: ServerLocationRowProps) {

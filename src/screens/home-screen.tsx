@@ -1,7 +1,7 @@
 import { StatusBar } from 'expo-status-bar';
 import { router } from 'expo-router';
 import { Settings } from 'lucide-react-native';
-import React from 'react';
+import React, { useState } from 'react';
 import { Animated, Platform, View, Text } from 'react-native';
 
 import { HomeNativeHeader } from '@/components/home-native-header';
@@ -11,8 +11,10 @@ import { playSelectionHaptic } from '@/native/haptics';
 import { VexNativeActivityIndicator } from '@/ui/native-activity-indicator';
 import { VexScreen, vexSharedStyles, VexPressable } from '@/ui/vex-ui';
 import { useVpnConnectionContext } from '@/vpn/vpn-connection-context';
+import type { VpnLocation } from '@/api/vexApi';
 
 import { ServerChip } from '../components/server-chip';
+import { ServerPickerContent } from '../components/server-picker-modal';
 import { TrafficStats } from '../components/traffic-stats';
 import { isTauriRuntime, type ConnectionPhase } from './home-screen-helpers';
 import { styles } from './home-screen.styles';
@@ -29,6 +31,7 @@ export default function App() {
     isUpdateCenterVisible,
     isConnected,
     serverSelectionMode,
+    selectedLocationId,
     connectionPhase,
     pulseProgress,
     spinProgress,
@@ -39,11 +42,39 @@ export default function App() {
     powerButtonDisabled,
     handlePowerPress,
     handleRotateKeyPress,
-    openServerPicker,
+    handleLocationPress,
+    handleAutoServerSelectionPress,
+    availableLocations,
     openUpdateCenter,
     closeUpdateCenter,
   } = useVpnConnectionContext();
+  const [isServerPickerVisible, setIsServerPickerVisible] = useState(false);
+  const [serverPickerSnapshot, setServerPickerSnapshot] = useState<{
+    latencyText: string;
+    locations: VpnLocation[];
+  } | null>(null);
   const reduceMotionVisuals = isTauriRuntime() || Platform.OS === 'android';
+
+  if (isServerPickerVisible) {
+    return (
+      <ServerPickerContent
+        isVpnBusy={isVpnBusy}
+        locations={serverPickerSnapshot?.locations ?? availableLocations}
+        selectedLatencyText={serverPickerSnapshot?.latencyText ?? selectedLatencyText}
+        selectionMode={serverSelectionMode}
+        selectedLocationId={selectedLocationId}
+        onAutoSelect={() => {
+          setIsServerPickerVisible(false);
+          void handleAutoServerSelectionPress(false);
+        }}
+        onClose={() => setIsServerPickerVisible(false)}
+        onSelect={(locationId) => {
+          setIsServerPickerVisible(false);
+          void handleLocationPress(locationId, false);
+        }}
+      />
+    );
+  }
 
   const powerButtonText = connectionPhase === 'switching'
     ? 'Переключение'
@@ -133,7 +164,13 @@ export default function App() {
             isAutoMode={serverSelectionMode === 'auto'}
             latencyText={selectedLatencyText}
             location={selectedLocation}
-            onPress={openServerPicker}
+            onPress={(visibleLatencyText) => {
+              setServerPickerSnapshot({
+                latencyText: visibleLatencyText,
+                locations: availableLocations.map((location) => ({ ...location })),
+              });
+              setIsServerPickerVisible(true);
+            }}
           />
           <TrafficStats />
 

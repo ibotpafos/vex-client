@@ -1294,8 +1294,14 @@ export function useVpnConnection() {
 
   const openServerPicker = useCallback(() => {
     playSelectionHaptic();
-    router.push(SERVER_PICKER_ROUTE);
-  }, []);
+    router.push({
+      pathname: SERVER_PICKER_ROUTE,
+      params: {
+        activeLatencyText: selectedLatencyText,
+        activeLocationId: selectedLocation?.id ?? selectedLocationId,
+      },
+    });
+  }, [selectedLatencyText, selectedLocation?.id, selectedLocationId]);
 
   const closeServerPicker = useCallback(() => {
     playSelectionHaptic();

@@ -8,6 +8,8 @@ import { serverLocationLabel, locationLatencyText, locationStatusText } from '..
 import { styles } from '../screens/home-screen.styles';
 
 export interface ServerPickerModalProps {
+  activeLatencyText?: string;
+  activeLocationId?: string;
   isVpnBusy: boolean;
   locations: VpnLocation[];
   selectionMode: ServerSelectionMode;
@@ -19,6 +21,8 @@ export interface ServerPickerModalProps {
 }
 
 export const ServerPickerModal = React.memo(function ServerPickerModal({
+  activeLatencyText,
+  activeLocationId,
   isVpnBusy,
   locations,
   selectionMode,
@@ -34,6 +38,8 @@ export const ServerPickerModal = React.memo(function ServerPickerModal({
 
   return (
     <ServerPickerContent
+      activeLatencyText={activeLatencyText}
+      activeLocationId={activeLocationId}
       isVpnBusy={isVpnBusy}
       locations={locations}
       selectionMode={selectionMode}
@@ -48,6 +54,8 @@ export const ServerPickerModal = React.memo(function ServerPickerModal({
 type ServerPickerContentProps = Omit<ServerPickerModalProps, 'visible'>;
 
 export const ServerPickerContent = React.memo(function ServerPickerContent({
+  activeLatencyText,
+  activeLocationId,
   isVpnBusy,
   locations,
   selectionMode,
@@ -83,6 +91,7 @@ export const ServerPickerContent = React.memo(function ServerPickerContent({
               disabled={isVpnBusy}
               key={location.id}
               location={location}
+              latencyTextOverride={location.id === activeLocationId ? activeLatencyText : undefined}
               onSelect={onSelect}
               selected={selected}
             />
@@ -134,6 +143,7 @@ const AutoServerRow = React.memo(function AutoServerRow({ disabled, onPress, sel
 type ServerLocationRowProps = {
   disabled: boolean;
   location: VpnLocation;
+  latencyTextOverride?: string;
   onSelect: (locationId: string) => void;
   selected: boolean;
 };
@@ -141,10 +151,11 @@ type ServerLocationRowProps = {
 const ServerLocationRow = React.memo(function ServerLocationRow({
   disabled,
   location,
+  latencyTextOverride,
   onSelect,
   selected,
 }: ServerLocationRowProps) {
-  const latencyText = locationLatencyText(location);
+  const latencyText = latencyTextOverride || locationLatencyText(location);
   const handlePress = React.useCallback(() => onSelect(location.id), [location.id, onSelect]);
   return (
     <VexPressable

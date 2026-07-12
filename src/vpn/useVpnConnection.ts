@@ -124,6 +124,28 @@ import {
 type VpnStatusCore = Omit<VpnStatus, 'rxBytes' | 'txBytes'>;
 const HOME_ROUTE = HOME_TAB_ROUTE;
 const deviceLocationLatencyCache: Record<string, number> = {};
+const deviceLocationLatencyListeners = new Set<(snapshot: Record<string, number>) => void>();
+
+function publishDeviceLocationLatencies(measurements: ReadonlyArray<readonly [string, number] | null>) {
+  let changed = false;
+  for (const measurement of measurements) {
+    if (!measurement) {
+      continue;
+    }
+    const [locationId, latency] = measurement;
+    if (deviceLocationLatencyCache[locationId] !== latency) {
+      deviceLocationLatencyCache[locationId] = latency;
+      changed = true;
+    }
+  }
+  if (!changed) {
+    return;
+  }
+  const snapshot = { ...deviceLocationLatencyCache };
+  for (const listener of deviceLocationLatencyListeners) {
+    listener(snapshot);
+  }
+}
 
 function closeRouteOverlay() {
   if (router.canGoBack()) {
@@ -241,6 +263,14 @@ export function useVpnConnection() {
       ? { ...location, latencyMs: measuredLatency }
       : location;
   }), [baseAvailableLocations, deviceLocationLatencies]);
+
+  useEffect(() => {
+    const listener = (snapshot: Record<string, number>) => setDeviceLocationLatencies(snapshot);
+    deviceLocationLatencyListeners.add(listener);
+    return () => {
+      deviceLocationLatencyListeners.delete(listener);
+    };
+  }, []);
 
   const handleProfileRevoked = useCallback(async () => {
     await disconnectVpn({ releaseAntiLeak: true }).catch(() => undefined);
@@ -738,16 +768,7 @@ export function useVpnConnection() {
       if (cancelled) {
         return;
       }
-      setDeviceLocationLatencies((current) => {
-        const next = { ...current };
-        for (const measurement of measurements) {
-          if (measurement) {
-            next[measurement[0]] = measurement[1];
-            deviceLocationLatencyCache[measurement[0]] = measurement[1];
-          }
-        }
-        return next;
-      });
+      publishDeviceLocationLatencies(measurements);
     };
 
     void refreshLocationLatencies();

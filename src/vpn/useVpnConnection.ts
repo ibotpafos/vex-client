@@ -123,6 +123,7 @@ import {
 
 type VpnStatusCore = Omit<VpnStatus, 'rxBytes' | 'txBytes'>;
 const HOME_ROUTE = HOME_TAB_ROUTE;
+const deviceLocationLatencyCache: Record<string, number> = {};
 
 function closeRouteOverlay() {
   if (router.canGoBack()) {
@@ -212,7 +213,9 @@ export function useVpnConnection() {
   const [entitlementData, setEntitlementData] = useState<Entitlement | null>(null);
   const [entitlementError, setEntitlementError] = useState<unknown>(null);
   const [locationsData, setLocationsData] = useState<VpnLocation[] | null>(null);
-  const [deviceLocationLatencies, setDeviceLocationLatencies] = useState<Record<string, number>>({});
+  const [deviceLocationLatencies, setDeviceLocationLatencies] = useState<Record<string, number>>(() => ({
+    ...deviceLocationLatencyCache,
+  }));
   const [devicesData, setDevicesData] = useState<VpnDevice[] | null>(null);
   const accessToken = session?.accessToken;
   const cacheUserId = session?.user.id ?? '';
@@ -740,6 +743,7 @@ export function useVpnConnection() {
         for (const measurement of measurements) {
           if (measurement) {
             next[measurement[0]] = measurement[1];
+            deviceLocationLatencyCache[measurement[0]] = measurement[1];
           }
         }
         return next;

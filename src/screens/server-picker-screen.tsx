@@ -5,6 +5,7 @@ import { useVpnConnectionContext } from '@/vpn/vpn-connection-context';
 
 export default function ServerPickerScreen() {
   const {
+    activeProfile,
     availableLocations,
     clientLatencyMs,
     closeServerPicker,
@@ -19,6 +20,7 @@ export default function ServerPickerScreen() {
     <>
       <StatusBar style="light" />
       <ServerPickerContent
+        activeLocationId={activeProfile?.locationId}
         isVpnBusy={isVpnBusy}
         locations={availableLocations}
         selectedLatencyMs={clientLatencyMs}

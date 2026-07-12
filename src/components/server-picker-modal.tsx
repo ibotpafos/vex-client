@@ -8,6 +8,7 @@ import { serverLocationLabel, locationLatencyText, locationStatusText } from '..
 import { styles } from '../screens/home-screen.styles';
 
 export interface ServerPickerModalProps {
+  activeLocationId?: string;
   isVpnBusy: boolean;
   locations: VpnLocation[];
   selectedLatencyMs?: number | null;
@@ -20,6 +21,7 @@ export interface ServerPickerModalProps {
 }
 
 export const ServerPickerModal = React.memo(function ServerPickerModal({
+  activeLocationId,
   isVpnBusy,
   locations,
   selectedLatencyMs,
@@ -36,6 +38,7 @@ export const ServerPickerModal = React.memo(function ServerPickerModal({
 
   return (
     <ServerPickerContent
+      activeLocationId={activeLocationId}
       isVpnBusy={isVpnBusy}
       locations={locations}
       selectedLatencyMs={selectedLatencyMs}
@@ -51,6 +54,7 @@ export const ServerPickerModal = React.memo(function ServerPickerModal({
 type ServerPickerContentProps = Omit<ServerPickerModalProps, 'visible'>;
 
 export const ServerPickerContent = React.memo(function ServerPickerContent({
+  activeLocationId,
   isVpnBusy,
   locations,
   selectedLatencyMs,
@@ -87,7 +91,7 @@ export const ServerPickerContent = React.memo(function ServerPickerContent({
               disabled={isVpnBusy}
               key={location.id}
               location={location}
-              latencyMs={location.id === selectedLocationId ? selectedLatencyMs : undefined}
+              latencyMs={location.id === (activeLocationId || selectedLocationId) ? selectedLatencyMs : undefined}
               onSelect={onSelect}
               selected={selected}
             />

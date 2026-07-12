@@ -212,6 +212,7 @@ export function useVpnConnection() {
   const [entitlementData, setEntitlementData] = useState<Entitlement | null>(null);
   const [entitlementError, setEntitlementError] = useState<unknown>(null);
   const [locationsData, setLocationsData] = useState<VpnLocation[] | null>(null);
+  const [deviceLocationLatencies, setDeviceLocationLatencies] = useState<Record<string, number>>({});
   const [devicesData, setDevicesData] = useState<VpnDevice[] | null>(null);
   const accessToken = session?.accessToken;
   const cacheUserId = session?.user.id ?? '';
@@ -230,7 +231,13 @@ export function useVpnConnection() {
   const hasVpnAccess = hasPaidEntitlement(knownEntitlement);
 
   const locationSource = locationsData ?? persistedLocations ?? undefined;
-  const availableLocations = useMemo(() => availableVpnLocations(locationSource), [locationSource]);
+  const baseAvailableLocations = useMemo(() => availableVpnLocations(locationSource), [locationSource]);
+  const availableLocations = useMemo(() => baseAvailableLocations.map((location) => {
+    const measuredLatency = deviceLocationLatencies[location.id];
+    return typeof measuredLatency === 'number' && Number.isFinite(measuredLatency)
+      ? { ...location, latencyMs: measuredLatency }
+      : location;
+  }), [baseAvailableLocations, deviceLocationLatencies]);
 
   const handleProfileRevoked = useCallback(async () => {
     await disconnectVpn({ releaseAntiLeak: true }).catch(() => undefined);
@@ -700,6 +707,52 @@ export function useVpnConnection() {
       unlisten?.();
     };
   }, [refreshManagedProfile, selectedLocationId, submitClientDiagnosticsEvent]);
+
+  useEffect(() => {
+    if (!isAppActive || !supportsNativeLatencyProbe()) {
+      return undefined;
+    }
+
+    const probeTargets = baseAvailableLocations.filter((location) => Boolean(location.endpoint));
+    if (probeTargets.length === 0) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    const refreshLocationLatencies = async () => {
+      const measurements = await Promise.all(probeTargets.map(async (location) => {
+        try {
+          const latency = await measureEndpointLatency(location.endpoint || '');
+          return typeof latency === 'number' && Number.isFinite(latency)
+            ? [location.id, Math.max(0, latency)] as const
+            : null;
+        } catch {
+          return null;
+        }
+      }));
+      if (cancelled) {
+        return;
+      }
+      setDeviceLocationLatencies((current) => {
+        const next = { ...current };
+        for (const measurement of measurements) {
+          if (measurement) {
+            next[measurement[0]] = measurement[1];
+          }
+        }
+        return next;
+      });
+    };
+
+    void refreshLocationLatencies();
+    const timer = setInterval(() => {
+      void refreshLocationLatencies();
+    }, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [baseAvailableLocations, isAppActive]);
 
   useEffect(() => {
     if (!isAppActive || !supportsNativeLatencyProbe() || !activeDevice?.endpoint) {

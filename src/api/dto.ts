@@ -83,6 +83,7 @@ export type LocationDTO = {
   availability?: string;
   status?: string;
   healthy_nodes?: number;
+  endpoint?: string;
   latency_ms?: number;
 };
 

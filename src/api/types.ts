@@ -124,6 +124,7 @@ export type VpnLocation = {
   availability: string;
   status: string;
   healthyNodes: number;
+  endpoint?: string;
   latencyMs?: number;
 };
 

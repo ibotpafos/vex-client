@@ -470,6 +470,7 @@ export function parseLocation(item: LocationDTO): VpnLocation {
     availability: item.availability || 'available',
     status: item.status || 'unknown',
     healthyNodes: typeof item.healthy_nodes === 'number' ? item.healthy_nodes : 0,
+    endpoint: item.endpoint || undefined,
     latencyMs: typeof item.latency_ms === 'number' ? item.latency_ms : undefined,
   };
 }

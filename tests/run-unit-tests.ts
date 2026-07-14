@@ -10,6 +10,7 @@ import { isCurrentSessionMutation } from '../src/auth/sessionMutationGuard';
 import { loadSessionWithRetry, loadWithRetry } from '../src/auth/sessionLoadRetry';
 import { generateChallenge, generateRandomString } from '../src/auth/pkce';
 import { buildAppWebAuthUrl } from '../src/auth/webAuthUrl';
+import { isEmailOTPExpired, isInvalidOrExpiredEmailOTPError, normalizeEmailOTPCode } from '../src/auth/emailOtp';
 import { loadSessionFromStorage, saveSessionToStorage, type SessionStorageAdapter } from '../src/auth/sessionStoreCore';
 import { isSupportSocketConnecting } from '../src/api/supportSocketState';
 import { optimisticSupportTicket, supportConnectionStatusText, supportHistoryErrorMessage, uniqueSupportMessages, supportChatItems } from '../src/screens/support-helpers';
@@ -59,6 +60,14 @@ import type { VpnStatus } from '../src/native/vexVpn';
 import type { VpnProfile } from '../src/vpn/profile';
 
 const connectedStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0 };
+
+{
+  assertEqual(normalizeEmailOTPCode(' 12-34 56 '), '123456');
+  assertEqual(normalizeEmailOTPCode('1234567'), '123456');
+  assertEqual(isEmailOTPExpired('2026-07-14T10:00:00Z', Date.parse('2026-07-14T10:00:01Z')), true);
+  assertEqual(isEmailOTPExpired('2026-07-14T10:00:02Z', Date.parse('2026-07-14T10:00:01Z')), false);
+  assertEqual(isInvalidOrExpiredEmailOTPError(new Error('invalid or expired email code')), true);
+}
 
 {
   assertEqual(fallbackLocationEndpoint('de'), 'de-1.vexguard.app:51820');

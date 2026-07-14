@@ -6,8 +6,18 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.VpnService
+import android.os.SystemClock
+import android.system.Os
+import android.system.OsConstants.AF_INET
+import android.system.OsConstants.IPPROTO_ICMP
+import android.system.OsConstants.SOCK_DGRAM
+import android.system.OsConstants.SOL_SOCKET
+import android.system.OsConstants.SO_RCVTIMEO
+import android.system.StructTimeval
 import android.util.Log
 import java.io.ByteArrayInputStream
+import java.io.FileDescriptor
+import java.net.Inet4Address
 import java.nio.charset.StandardCharsets
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineScope
@@ -168,15 +178,45 @@ class WireGuardController(context: Context) {
 
   suspend fun measureEndpointLatency(endpoint: String): Double? = withContext(Dispatchers.IO) {
     val host = endpointHost(endpoint) ?: return@withContext null
-    val process = ProcessBuilder("ping", "-c", "1", "-W", "1", host)
-      .redirectErrorStream(true)
-      .start()
-    val output = process.inputStream.bufferedReader().use { it.readText() }
-    val exitCode = process.waitFor()
-    if (exitCode != 0) {
-      return@withContext null
+    val network = selectedUnderlyingNetworkSnapshot() ?: return@withContext null
+    measureUnderlyingIcmpLatency(network, host).also { latency ->
+      Log.i(TAG, "Underlying endpoint latency host=$host network=$network latencyMs=$latency")
     }
-    parsePingLatencyMs(output)
+  }
+
+  private fun measureUnderlyingIcmpLatency(network: Network, host: String): Double? {
+    var fileDescriptor: FileDescriptor? = null
+    try {
+      val address = network.getAllByName(host).firstOrNull { it is Inet4Address } ?: return null
+      fileDescriptor = Os.socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP)
+      // A process spawned by the app inherits the VPN route and measures from
+      // the exit node. Binding the ICMP socket to the selected non-VPN network
+      // makes this the physical device-to-server RTT on Wi-Fi or cellular.
+      network.bindSocket(fileDescriptor)
+      Os.setsockoptTimeval(fileDescriptor, SOL_SOCKET, SO_RCVTIMEO, StructTimeval.fromMillis(1_500))
+      val sequence = (SystemClock.elapsedRealtimeNanos() and 0xffff).toInt()
+      val request = buildIcmpEchoRequest(sequence)
+      val startedAt = SystemClock.elapsedRealtimeNanos()
+      // Some Android kernels reject connect(2) for an ICMP datagram socket with
+      // EAFNOSUPPORT even though the socket itself and network binding are valid.
+      // ICMP is connectionless, so sendto(2) is the portable path here.
+      Os.sendto(fileDescriptor, request, 0, request.size, 0, address, 0)
+
+      val response = ByteArray(128)
+      val responseSize = Os.read(fileDescriptor, response, 0, response.size)
+      if (!isMatchingIcmpEchoReply(response, responseSize, sequence)) {
+        return null
+      }
+      return (SystemClock.elapsedRealtimeNanos() - startedAt) / 1_000_000.0
+    } catch (error: Throwable) {
+      Log.w(TAG, "Underlying endpoint latency probe failed for host=$host network=$network", error)
+      return null
+    } finally {
+      try {
+        fileDescriptor?.let(Os::close)
+      } catch (_: Throwable) {
+      }
+    }
   }
 
   private fun stats(): VpnTraffic {
@@ -490,11 +530,52 @@ class WireGuardController(context: Context) {
     return value
   }
 
-  private fun parsePingLatencyMs(output: String): Double? {
-    val match = Regex("""time[=<]([0-9.]+)""").find(output) ?: return null
-    return match.groupValues.getOrNull(1)?.toDoubleOrNull()
-  }
+}
 
+internal fun buildIcmpEchoRequest(sequence: Int): ByteArray {
+  val packet = ByteArray(32)
+  packet[0] = 8 // ICMP_ECHO
+  packet[6] = ((sequence ushr 8) and 0xff).toByte()
+  packet[7] = (sequence and 0xff).toByte()
+  for (index in 8 until packet.size) {
+    packet[index] = index.toByte()
+  }
+  val checksum = internetChecksum(packet)
+  packet[2] = ((checksum ushr 8) and 0xff).toByte()
+  packet[3] = (checksum and 0xff).toByte()
+  return packet
+}
+
+internal fun isMatchingIcmpEchoReply(packet: ByteArray, size: Int, sequence: Int): Boolean {
+  if (size < 8) return false
+  val offsets = if ((packet[0].toInt() ushr 4) == 4) {
+    intArrayOf((packet[0].toInt() and 0x0f) * 4, 0)
+  } else {
+    intArrayOf(0)
+  }
+  return offsets.any { offset ->
+    size >= offset + 8 &&
+      packet[offset].toInt() and 0xff == 0 &&
+      packet[offset + 1].toInt() and 0xff == 0 &&
+      packet[offset + 6].toInt() and 0xff == (sequence ushr 8) and 0xff &&
+      packet[offset + 7].toInt() and 0xff == sequence and 0xff
+  }
+}
+
+internal fun internetChecksum(bytes: ByteArray): Int {
+  var sum = 0L
+  var index = 0
+  while (index + 1 < bytes.size) {
+    sum += ((bytes[index].toInt() and 0xff) shl 8) or (bytes[index + 1].toInt() and 0xff)
+    index += 2
+  }
+  if (index < bytes.size) {
+    sum += (bytes[index].toInt() and 0xff) shl 8
+  }
+  while (sum ushr 16 != 0L) {
+    sum = (sum and 0xffff) + (sum ushr 16)
+  }
+  return sum.inv().toInt() and 0xffff
 }
 
 private inline fun <T> List<T>.indexOfFirstAfter(startIndex: Int, predicate: (T) -> Boolean): Int {

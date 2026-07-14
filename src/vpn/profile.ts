@@ -71,7 +71,7 @@ export async function rotateVpnProfileKey(accessToken: string, profile: VpnProfi
     throw new Error('Ротация доступна только для managed native устройства.');
   }
 
-  await rotateManagedVpnKey(token, device.id);
+  await rotateManagedVpnKey(token, device.id, device.keyEpoch);
   resetVpnProfileCache();
   return refreshVpnProfile(token, { routingMode: profile.routingMode ?? defaultVpnRoutingMode }, profile.entitlement, profile.locationId);
 }

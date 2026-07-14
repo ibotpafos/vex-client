@@ -30,3 +30,10 @@ export function androidVpnProfileWithinBinderBudget(
 ): boolean {
   return platform !== 'android' || vpnProfileRouteCount(config) <= routeLimit;
 }
+
+export function androidVpnProfileRequiresRefresh(
+  platform: string,
+  ...configs: (string | null | undefined)[]
+): boolean {
+  return configs.some((config) => Boolean(config) && !androidVpnProfileWithinBinderBudget(platform, config!));
+}

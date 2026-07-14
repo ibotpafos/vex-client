@@ -109,6 +109,7 @@ export type VpnDevice = {
   endpoint?: string;
   latencyMs?: number;
   publicKey?: string;
+  keyEpoch?: number;
   provisioningMode?: string;
   clientKeyOwnership?: string;
   externalDeviceId?: string;

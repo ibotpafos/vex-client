@@ -3,7 +3,7 @@ import { buildSubscriptionReminders } from '../src/notifications/subscriptionRem
 import { normalizeApiRequestError, technicalWorksMessage } from '../src/api/error';
 import { installManualUpdate, isTrustedIosUpdateUrl } from '../src/api/manualUpdateInstall';
 import { errorMessage } from '../src/utils/error';
-import { assessManualUpdateCenter, canUseOtaUpdate, requiresNativeUpdate, updateCheckChannel, validateManualUpdatePayloadForBaseUrl } from '../src/api/updatePreflight';
+import { assessManualUpdateCenter, canUseOtaUpdate, requiresNativeUpdate, shouldOfferAppUpdate, updateCheckChannel, validateManualUpdatePayloadForBaseUrl } from '../src/api/updatePreflight';
 import { resolveAuthCallbackExchange } from '../src/auth/callbackParams';
 import { sessionLoadFailureDiagnosticsSnapshot } from '../src/auth/sessionDiagnostics';
 import { isCurrentSessionMutation } from '../src/auth/sessionMutationGuard';
@@ -38,9 +38,9 @@ import { recoverVpnConnection } from '../src/vpn/connectionRecovery';
 import { disconnectWithRecoveryTimeout } from '../src/vpn/disconnectRecovery';
 import { waitForVerifiedVpnConnection } from '../src/vpn/connectVerification';
 import { cleanupFailedVpnConnection } from '../src/vpn/failedConnectionCleanup';
-import { androidExperimentalRoutingEnabled, androidProfilePlatform, androidVpnProfileWithinBinderBudget, vpnProfileRouteCount } from '../src/vpn/androidRoutingSafety';
+import { androidExperimentalRoutingEnabled, androidProfilePlatform, androidVpnProfileRequiresRefresh, androidVpnProfileWithinBinderBudget, vpnProfileRouteCount } from '../src/vpn/androidRoutingSafety';
 import { profileResolutionOrder } from '../src/vpn/profileResolutionFallback';
-import { isKeyEpochMismatchError } from '../src/vpn/keyEpochRecovery';
+import { isKeyEpochMismatchError, nextManagedKeyEpoch } from '../src/vpn/keyEpochRecovery';
 import { isVpnDeviceForLocation, type VpnLocationDevice } from '../src/vpn/deviceLocation';
 import { nativeVpnDeviceForClient } from '../src/vpn/nativeDeviceSelection';
 import { assessNativeTunnelHealth, localStatusHealthReasons } from '../src/vpn/nativeTunnelHealth';
@@ -132,6 +132,16 @@ const connectedStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0 
   assertEqual(updateCheckChannel('production'), 'stable');
   assertEqual(updateCheckChannel(' beta '), 'beta');
   assertEqual(updateCheckChannel(''), 'stable');
+
+  assertEqual(shouldOfferAppUpdate({ updateAvailable: true, latestBuild: 1005254 }, 1005254), false);
+  assertEqual(shouldOfferAppUpdate({ updateAvailable: true, latestBuild: 1005253 }, 1005254), false);
+  assertEqual(shouldOfferAppUpdate({ updateAvailable: true, latestBuild: 1005255 }, 1005254), true);
+  assertEqual(shouldOfferAppUpdate({ updateAvailable: false, latestBuild: 1005255 }, 1005254), false);
+  assertEqual(shouldOfferAppUpdate({
+    currentBuildBlocked: true,
+    latestBuild: 1005253,
+    updateAvailable: true,
+  }, 1005254), true);
 }
 
 {
@@ -934,6 +944,10 @@ assertEqual(vpnProfileRouteCount('[Peer]\nAllowedIPs = 0.0.0.0/1, 128.0.0.0/1\n'
 assertEqual(androidVpnProfileWithinBinderBudget('android', '[Peer]\nAllowedIPs = 0.0.0.0/1, 128.0.0.0/1', 2), true);
 assertEqual(androidVpnProfileWithinBinderBudget('android', '[Peer]\nAllowedIPs = 0.0.0.0/1, 128.0.0.0/1', 1), false);
 assertEqual(androidVpnProfileWithinBinderBudget('ios', '[Peer]\nAllowedIPs = 0.0.0.0/1, 128.0.0.0/1', 1), true);
+const oversizedAndroidProfile = `[Peer]\nAllowedIPs = ${Array.from({ length: 1_501 }, (_, index) => `10.0.${Math.floor(index / 256)}.${index % 256}/32`).join(', ')}`;
+assertEqual(androidVpnProfileRequiresRefresh('android', undefined, '[Peer]\nAllowedIPs = 0.0.0.0/0'), false);
+assertEqual(androidVpnProfileRequiresRefresh('android', oversizedAndroidProfile), true);
+assertEqual(androidVpnProfileRequiresRefresh('ios', oversizedAndroidProfile), false);
 assertEqual(androidProfilePlatform('android', true), 'android-smart-v1');
 assertEqual(androidProfilePlatform('android', false), 'android');
 
@@ -1835,6 +1849,9 @@ function runErrorMessageTests(): void {
   assertEqual(normalizeApiRequestError(new Error('regular failure')).message, 'regular failure');
   assertEqual(isKeyEpochMismatchError(new Error('key_epoch does not match next device epoch')), true);
   assertEqual(isKeyEpochMismatchError(new Error('network request failed')), false);
+  assertEqual(nextManagedKeyEpoch(2, 5), 6);
+  assertEqual(nextManagedKeyEpoch(8, 5), 6);
+  assertEqual(nextManagedKeyEpoch(undefined, undefined), 1);
   assertEqual(isCurrentSessionMutation(2, 2, 'token-a', 'token-a'), true);
   assertEqual(isCurrentSessionMutation(2, 3, 'token-a', 'token-a'), false);
   assertEqual(isCurrentSessionMutation(2, 2, 'token-a', 'token-b'), false);

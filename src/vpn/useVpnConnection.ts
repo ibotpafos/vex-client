@@ -51,6 +51,7 @@ import {
 } from '@/vpn/connectionFallback';
 import type { VpnProfile } from '@/vpn/profile';
 import { probeNetworkHealth } from '@/vpn/networkHealthProbe';
+import { fallbackLocationEndpoint } from '@/vpn/locationEndpoint';
 import {
   defaultVpnRoutingMode,
   isSmartRoutingMode,
@@ -748,16 +749,21 @@ export function useVpnConnection() {
       return undefined;
     }
 
-    const probeTargets = baseAvailableLocations.filter((location) => Boolean(location.endpoint));
+    const probeTargets = baseAvailableLocations
+      .map((location) => ({
+        endpoint: location.endpoint || fallbackLocationEndpoint(location.countryCode),
+        location,
+      }))
+      .filter((target) => Boolean(target.endpoint));
     if (probeTargets.length === 0) {
       return undefined;
     }
 
     let cancelled = false;
     const refreshLocationLatencies = async () => {
-      const measurements = await Promise.all(probeTargets.map(async (location) => {
+      const measurements = await Promise.all(probeTargets.map(async ({ endpoint, location }) => {
         try {
-          const latency = await measureEndpointLatency(location.endpoint || '');
+          const latency = await measureEndpointLatency(endpoint);
           return typeof latency === 'number' && Number.isFinite(latency)
             ? [location.id, Math.max(0, latency)] as const
             : null;

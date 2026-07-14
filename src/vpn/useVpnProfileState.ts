@@ -10,7 +10,7 @@ import { chooseBestVpnLocation } from './serverSelection';
 import { clearHotVpnProfiles, hydrateHotVpnProfilesToQueryCache, loadHotVpnProfileResult, profileFromHotRecord, saveHotVpnProfile } from './hotProfileCache';
 import { shouldUseLocalProfileBeforeOnline } from './connectFlow';
 import type { VpnRoutingMode } from './routingPolicy';
-import { androidVpnProfileWithinBinderBudget } from './androidRoutingSafety';
+import { androidVpnProfileRequiresRefresh, androidVpnProfileWithinBinderBudget } from './androidRoutingSafety';
 
 export type VpnProfileRefreshEvent = {
   device_id?: string;
@@ -275,6 +275,7 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
 
     const preferCached = options.preferCached !== false && options.forceRefresh !== true;
     const cachedProfile = options.cachedProfile ?? cachedProfileForLocation(locationId);
+    let forceRouteBudgetRefresh = androidVpnProfileRequiresRefresh(Platform.OS, cachedProfile?.config);
     if (
       preferCached &&
       cachedProfile?.routingMode === routingMode &&
@@ -306,6 +307,7 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
         });
       }
       const hotProfile = hotResult.record ? profileFromHotRecord(hotResult.record) : null;
+      forceRouteBudgetRefresh = forceRouteBudgetRefresh || androidVpnProfileRequiresRefresh(Platform.OS, hotProfile?.config);
       if (
         hotProfile?.hotProfileUsed &&
         hotProfile.routingMode === routingMode &&
@@ -347,18 +349,33 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
       }
     }
 
-    let profile = !options.forceRefresh && options.cachedProfile
+    if (forceRouteBudgetRefresh) {
+      resetVpnProfileCache();
+      queryClient.removeQueries({ queryKey: ['vpn-profile', accessToken, locationId, routingMode], exact: true });
+      if (userId) {
+        await clearHotVpnProfiles(userId).catch(() => undefined);
+      }
+    }
+
+    let profile = !options.forceRefresh && !forceRouteBudgetRefresh && options.cachedProfile
       ? options.cachedProfile
       : await resolveVpnProfile(accessToken, currentEntitlement, locationId, {
-        allowPersistentHotProfile: options.allowPersistentHotProfile,
-        forceRefresh: options.forceRefresh ?? false,
+        allowPersistentHotProfile: forceRouteBudgetRefresh ? false : options.allowPersistentHotProfile,
+        forceRefresh: options.forceRefresh === true || forceRouteBudgetRefresh,
         routingMode,
         userId,
       });
-    cacheProfile(locationId, profile);
     if (!profile) {
       throw new Error('VPN-профиль недоступен.');
     }
+    if (!androidVpnProfileWithinBinderBudget(Platform.OS, profile.config)) {
+      resetVpnProfileCache();
+      if (userId) {
+        await clearHotVpnProfiles(userId).catch(() => undefined);
+      }
+      throw new Error('Сервер вернул слишком большой VPN-профиль. Повторите подключение после обновления профиля.');
+    }
+    cacheProfile(locationId, profile);
     if (profile.rotationRequired) {
       setIsKeyRotationBusy(true);
       try {

@@ -11,7 +11,7 @@ import {
   profileEndpoint,
 } from '@/vpn/connectionFallback';
 import {
-  connectableLocalProfile,
+  explicitConnectProfileResolutionOptions,
   vpnConnectTimingSamples,
 } from '@/vpn/connectFlow';
 import {
@@ -50,8 +50,6 @@ type UseVpnConnectionFlowInput = {
   selectedLocationId: string;
   serverSelectionMode: ServerSelectionMode;
   availableLocations: VpnLocation[];
-  activeProfile: VpnProfile | null;
-  entitlementState: any;
   requestVpnPermission: () => Promise<boolean>;
   cacheProfile: (locationId: string, profile: VpnProfile) => void;
   resolveConnectableVpnProfile: (
@@ -77,8 +75,6 @@ export function useVpnConnectionFlow({
   selectedLocationId,
   serverSelectionMode,
   availableLocations,
-  activeProfile,
-  entitlementState,
   requestVpnPermission,
   cacheProfile,
   resolveConnectableVpnProfile,
@@ -153,31 +149,27 @@ export function useVpnConnectionFlow({
     const initialLocationId = serverSelectionMode === 'auto'
       ? chooseBestVpnLocation(availableLocations)?.id ?? locationId
       : locationId;
-    let profile = connectableLocalProfile(activeProfile, initialLocationId, entitlementState, routingMode);
+    let profile: VpnProfile | null = null;
     let profileLocationId = initialLocationId;
-    if (profile && !androidVpnProfileWithinBinderBudget(Platform.OS, profile.config)) {
-      profile = null;
+    let lastProfileError: unknown;
+    for (const candidate of profileResolutionOrder(initialLocationId, availableLocations)) {
+      try {
+        // A cached managed profile can outlive its server-side device. Using it
+        // before validation makes Android report a connected TUN even after the
+        // peer has been revoked, which fail-closes all user traffic. An explicit
+        // connect must therefore resolve an authoritative profile first.
+        profile = await resolveConnectableVpnProfile(candidate.id, explicitConnectProfileResolutionOptions);
+        profileLocationId = candidate.id;
+        break;
+      } catch (error) {
+        lastProfileError = error;
+      }
     }
-    if (profile) {
-      const permissionGranted = await requestVpnPermission();
-      if (!permissionGranted) {
-        throw new Error('Разрешение Android VPN не выдано.');
-      }
-      cacheProfile(initialLocationId, profile);
-    } else {
-      let lastProfileError: unknown;
-      for (const candidate of profileResolutionOrder(initialLocationId, availableLocations)) {
-        try {
-          profile = await resolveConnectableVpnProfile(candidate.id, { preferCached: true });
-          profileLocationId = candidate.id;
-          break;
-        } catch (error) {
-          lastProfileError = error;
-        }
-      }
-      if (!profile) {
-        throw lastProfileError ?? new Error('VPN-профиль недоступен.');
-      }
+    if (!profile) {
+      throw lastProfileError ?? new Error('VPN-профиль недоступен.');
+    }
+    if (!androidVpnProfileWithinBinderBudget(Platform.OS, profile.config)) {
+      throw new Error('Android VPN profile exceeds the safe route limit. Refresh the profile before connecting.');
     }
     let connected: ConnectedVpnAttempt | null = null;
     let connectedLocationId = profileLocationId;
@@ -279,17 +271,13 @@ export function useVpnConnectionFlow({
       }).catch(() => undefined);
     }
   }, [
-    activeProfile,
     antiLeakEnabled,
     availableLocations,
     cacheProfile,
     clientLatencyMs,
     connectProfileWithEndpointFallback,
-    entitlementState,
     reportVpnConnectEvent,
-    requestVpnPermission,
     resolveConnectableVpnProfile,
-    routingMode,
     selectedLocationId,
     setSelectedLocationId,
     serverSelectionMode,

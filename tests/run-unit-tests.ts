@@ -34,7 +34,7 @@ import {
   type HotVpnProfileRecord,
 } from '../src/vpn/hotProfileCacheCore';
 import { connectionAttemptsForProfile, isVpnTransportFallbackError, profileEndpoint } from '../src/vpn/connectionFallback';
-import { connectableLocalProfile, shouldUseLocalProfileBeforeOnline, vpnConnectTimingSamples } from '../src/vpn/connectFlow';
+import { connectableLocalProfile, explicitConnectProfileResolutionOptions, shouldUseLocalProfileBeforeOnline, vpnConnectTimingSamples } from '../src/vpn/connectFlow';
 import { recoverVpnConnection } from '../src/vpn/connectionRecovery';
 import { disconnectWithRecoveryTimeout } from '../src/vpn/disconnectRecovery';
 import { waitForVerifiedVpnConnection } from '../src/vpn/connectVerification';
@@ -60,6 +60,13 @@ import type { VpnStatus } from '../src/native/vexVpn';
 import type { VpnProfile } from '../src/vpn/profile';
 
 const connectedStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0 };
+
+{
+  assertDeepEqual(explicitConnectProfileResolutionOptions, {
+    forceRefresh: true,
+    preferCached: false,
+  });
+}
 
 {
   assertEqual(normalizeEmailOTPCode(' 12-34 56 '), '123456');

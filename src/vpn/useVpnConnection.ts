@@ -540,8 +540,6 @@ export function useVpnConnection() {
     selectedLocationId,
     serverSelectionMode,
     availableLocations,
-    activeProfile,
-    entitlementState,
     requestVpnPermission,
     cacheProfile,
     resolveConnectableVpnProfile,

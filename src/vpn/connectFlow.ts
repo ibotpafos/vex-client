@@ -1,6 +1,11 @@
 import type { VpnProfile } from './profile';
 import { vpnProfileAddressMatchesDevice } from './profileConsistency';
 
+export const explicitConnectProfileResolutionOptions = {
+  forceRefresh: true,
+  preferCached: false,
+} as const;
+
 type EntitlementLike = {
   active?: boolean;
   vpnAccess?: boolean;

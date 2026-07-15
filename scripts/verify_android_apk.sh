@@ -17,11 +17,32 @@ if [[ ! -x "${aapt_bin}" ]]; then
   exit 2
 fi
 
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
+hash_before="$(sha256_file "${apk_path}")"
 badging="$("${aapt_bin}" dump badging "${apk_path}")"
 package_line="$(printf '%s\n' "${badging}" | sed -n 's/^package: //p' | head -n 1)"
-actual_package="$(printf '%s\n' "${package_line}" | sed -n "s/.*name='\([^']*\)'.*/\1/p")"
+actual_package="$(printf '%s\n' "${package_line}" | sed -n "s/^name='\([^']*\)'.*/\1/p")"
 actual_version_code="$(printf '%s\n' "${package_line}" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")"
 actual_version_name="$(printf '%s\n' "${package_line}" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")"
+bundle_size="$(unzip -l "${apk_path}" assets/index.android.bundle | awk '$NF == "assets/index.android.bundle" { print $1; exit }')"
+
+if [[ ! "${bundle_size:-}" =~ ^[0-9]+$ || "${bundle_size}" -lt 100000 ]]; then
+  echo "APK does not contain a complete assets/index.android.bundle: ${apk_path}" >&2
+  exit 1
+fi
+
+hash_after="$(sha256_file "${apk_path}")"
+if [[ "${hash_before}" != "${hash_after}" ]]; then
+  echo "APK changed while it was being verified; refusing a racing build artifact: ${apk_path}" >&2
+  exit 1
+fi
 
 if [[ "${actual_package}" != "${expected_package}" || \
       "${actual_version_code}" != "${expected_version_code}" || \
@@ -32,5 +53,6 @@ if [[ "${actual_package}" != "${expected_package}" || \
   exit 1
 fi
 
-printf 'Verified APK: %s %s (%s)\n' \
-  "${actual_package}" "${actual_version_name}" "${actual_version_code}"
+printf 'Verified APK: %s %s (%s), JS bundle %s bytes, sha256 %s\n' \
+  "${actual_package}" "${actual_version_name}" "${actual_version_code}" \
+  "${bundle_size}" "${hash_after}"

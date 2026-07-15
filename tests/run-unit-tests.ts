@@ -12,6 +12,7 @@ import {
 import { sessionLoadFailureDiagnosticsSnapshot } from '../src/auth/sessionDiagnostics';
 import { isCurrentSessionMutation } from '../src/auth/sessionMutationGuard';
 import { loadSessionWithRetry, loadWithRetry } from '../src/auth/sessionLoadRetry';
+import { vpnConnectionAnimationsEnabled } from '../src/vpn/vpnAnimationPolicy';
 import { generateChallenge, generateRandomString } from '../src/auth/pkce';
 import { buildAppWebAuthUrl } from '../src/auth/webAuthUrl';
 import { isEmailOTPExpired, isInvalidOrExpiredEmailOTPError, normalizeEmailOTPCode } from '../src/auth/emailOtp';
@@ -64,6 +65,12 @@ import type { VpnStatus } from '../src/native/vexVpn';
 import type { VpnProfile } from '../src/vpn/profile';
 
 const connectedStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0 };
+
+{
+  assertEqual(vpnConnectionAnimationsEnabled('android', false), false);
+  assertEqual(vpnConnectionAnimationsEnabled('ios', false), true);
+  assertEqual(vpnConnectionAnimationsEnabled('web', true), false);
+}
 
 {
   assertDeepEqual(explicitConnectProfileResolutionOptions, {

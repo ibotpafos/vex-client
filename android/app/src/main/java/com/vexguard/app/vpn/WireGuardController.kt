@@ -194,7 +194,10 @@ class WireGuardController(context: Context) {
       // makes this the physical device-to-server RTT on Wi-Fi or cellular.
       network.bindSocket(fileDescriptor)
       Os.setsockoptTimeval(fileDescriptor, SOL_SOCKET, SO_RCVTIMEO, StructTimeval.fromMillis(1_500))
-      val sequence = (SystemClock.elapsedRealtimeNanos() and 0xffff).toInt()
+      // Android ping sockets may replace the caller-provided sequence with zero
+      // (observed on API 36 emulators). Each probe owns a fresh socket and sends
+      // one request, so sequence zero remains unambiguous across kernel variants.
+      val sequence = 0
       val request = buildIcmpEchoRequest(sequence)
       val startedAt = SystemClock.elapsedRealtimeNanos()
       // Some Android kernels reject connect(2) for an ICMP datagram socket with

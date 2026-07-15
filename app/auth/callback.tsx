@@ -1,10 +1,15 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { exchangeAppAuthCode } from '@/api/vexApi';
-import { resolveAuthCallbackExchange } from '@/auth/callbackParams';
+import {
+  authCallbackAttemptKey,
+  getOrCreateAuthCallbackAttempt,
+  resolveAuthCallbackExchange,
+  type AuthCallbackAttempt,
+} from '@/auth/callbackParams';
 import { useSession } from '@/auth/session-context';
 import { loadWithRetry } from '@/auth/sessionLoadRetry';
 import * as SecureStore from '@/native/secureStore';
@@ -21,42 +26,43 @@ export default function AuthCallbackScreen() {
   const { signIn } = useSession();
   const [status, setStatus] = useState<CallbackState>('loading');
   const [message, setMessage] = useState('Завершаем вход...');
+  const attemptRef = useRef<AuthCallbackAttempt<void> | null>(null);
 
   useEffect(() => {
     let isMounted = true;
 
     async function completeSignIn() {
-      try {
-        const [savedState, savedVerifier] = await Promise.all([
-          loadWithRetry(() => SecureStore.getItemAsync('vex.auth.pkce.state')),
-          loadWithRetry(() => SecureStore.getItemAsync('vex.auth.pkce.verifier')),
-        ]);
-        const exchange = resolveAuthCallbackExchange({ code, state }, savedState, savedVerifier);
+      const [savedState, savedVerifier] = await Promise.all([
+        loadWithRetry(() => SecureStore.getItemAsync('vex.auth.pkce.state')),
+        loadWithRetry(() => SecureStore.getItemAsync('vex.auth.pkce.verifier')),
+      ]);
+      const exchange = resolveAuthCallbackExchange({ code, state }, savedState, savedVerifier);
 
-        const session = await exchangeAppAuthCode(exchange.code, exchange.verifier);
-        resetVpnProfileCache();
-        await signIn(session);
-        await SecureStore.deleteItemAsync('vex.auth.pkce.state');
-        await SecureStore.deleteItemAsync('vex.auth.pkce.verifier');
-        await queryClient.invalidateQueries({ queryKey: ['entitlement'] });
-        await queryClient.invalidateQueries({ queryKey: ['vpn-profile'] });
+      const session = await exchangeAppAuthCode(exchange.code, exchange.verifier);
+      resetVpnProfileCache();
+      await signIn(session);
+      await SecureStore.deleteItemAsync('vex.auth.pkce.state');
+      await SecureStore.deleteItemAsync('vex.auth.pkce.verifier');
+      await queryClient.invalidateQueries({ queryKey: ['entitlement'] });
+      await queryClient.invalidateQueries({ queryKey: ['vpn-profile'] });
+    }
 
-        if (!isMounted) {
-          return;
-        }
+    const attemptKey = authCallbackAttemptKey({ code, state });
+    const attempt = getOrCreateAuthCallbackAttempt(attemptRef.current, attemptKey, completeSignIn);
+    attemptRef.current = attempt;
+    void attempt.promise.then(
+      () => {
+        if (!isMounted) return;
         setStatus('success');
         setMessage('Вход выполнен.');
         router.replace('/');
-      } catch (error) {
-        if (!isMounted) {
-          return;
-        }
+      },
+      (error: unknown) => {
+        if (!isMounted) return;
         setStatus('error');
         setMessage(error instanceof Error ? error.message : 'Не удалось завершить вход.');
-      }
-    }
-
-    completeSignIn();
+      },
+    );
 
     return () => {
       isMounted = false;

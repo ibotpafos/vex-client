@@ -4,7 +4,11 @@ import { normalizeApiRequestError, technicalWorksMessage } from '../src/api/erro
 import { installManualUpdate, isTrustedIosUpdateUrl } from '../src/api/manualUpdateInstall';
 import { errorMessage } from '../src/utils/error';
 import { assessManualUpdateCenter, canUseOtaUpdate, requiresNativeUpdate, shouldOfferAppUpdate, updateCheckChannel, validateManualUpdatePayloadForBaseUrl } from '../src/api/updatePreflight';
-import { resolveAuthCallbackExchange } from '../src/auth/callbackParams';
+import {
+  authCallbackAttemptKey,
+  getOrCreateAuthCallbackAttempt,
+  resolveAuthCallbackExchange,
+} from '../src/auth/callbackParams';
 import { sessionLoadFailureDiagnosticsSnapshot } from '../src/auth/sessionDiagnostics';
 import { isCurrentSessionMutation } from '../src/auth/sessionMutationGuard';
 import { loadSessionWithRetry, loadWithRetry } from '../src/auth/sessionLoadRetry';
@@ -1768,6 +1772,24 @@ async function runPkceTests(): Promise<void> {
     async () => resolveAuthCallbackExchange({ code: 'code-1', state: 'state-1' }, 'state-1', null),
     'Сессия входа устарела',
   );
+
+  let starts = 0;
+  const key = authCallbackAttemptKey({ code: 'code-1', state: 'state-1' });
+  const firstAttempt = getOrCreateAuthCallbackAttempt(null, key, async () => {
+    starts += 1;
+  });
+  const repeatedAttempt = getOrCreateAuthCallbackAttempt(firstAttempt, key, async () => {
+    starts += 1;
+  });
+  assertEqual(repeatedAttempt, firstAttempt);
+  await repeatedAttempt.promise;
+  assertEqual(starts, 1);
+
+  const nextAttempt = getOrCreateAuthCallbackAttempt(firstAttempt, `${key}-next`, async () => {
+    starts += 1;
+  });
+  await nextAttempt.promise;
+  assertEqual(starts, 2);
 }
 
 async function runManualUpdateInstallTests(): Promise<void> {

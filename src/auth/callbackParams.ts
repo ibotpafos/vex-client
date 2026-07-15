@@ -3,6 +3,26 @@ export type AuthCallbackInput = {
   state?: string | null;
 };
 
+export type AuthCallbackAttempt<T> = {
+  key: string;
+  promise: Promise<T>;
+};
+
+export function authCallbackAttemptKey(input: AuthCallbackInput): string {
+  return `${input.code?.trim() || ''}\u0000${input.state?.trim() || ''}`;
+}
+
+export function getOrCreateAuthCallbackAttempt<T>(
+  current: AuthCallbackAttempt<T> | null,
+  key: string,
+  start: () => Promise<T>,
+): AuthCallbackAttempt<T> {
+  if (current?.key === key) {
+    return current;
+  }
+  return { key, promise: start() };
+}
+
 export function resolveAuthCallbackExchange(
   input: AuthCallbackInput,
   savedState: string | null,

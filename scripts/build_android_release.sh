@@ -81,7 +81,8 @@ export EXPO_PUBLIC_VEX_UPDATE_CHANNEL="${EXPO_PUBLIC_VEX_UPDATE_CHANNEL:-product
 export EXPO_PUBLIC_VEX_ANDROID_EXPERIMENTAL_ROUTING="${EXPO_PUBLIC_VEX_ANDROID_EXPERIMENTAL_ROUTING:-1}"
 export VEX_UPDATES_ENABLED="${VEX_UPDATES_ENABLED:-1}"
 export VEX_OTA_PROVIDER="${VEX_OTA_PROVIDER:-expo-open-ota}"
-export VEX_RUNTIME_VERSION="${VEX_RUNTIME_VERSION:-$(node -p "require('./app.json').expo.version")}"
+export VEX_ANDROID_APPLICATION_ID="${VEX_ANDROID_APPLICATION_ID:-$(node -p "require('./app.json').expo.android.package")}" 
+export VEX_RUNTIME_VERSION="${VEX_RUNTIME_VERSION:-$(node -p "require('./app.json').expo.version")}" 
 export VEX_EAS_PROJECT_ID="${VEX_EAS_PROJECT_ID:-$(node -p "require('./app.json').expo.extra.eas.projectId")}"
 export ORG_GRADLE_PROJECT_reactNativeArchitectures="${ORG_GRADLE_PROJECT_reactNativeArchitectures:-${release_abis}}"
 export VEX_ANDROID_FAST_ABI="${VEX_ANDROID_FAST_ABI:-${release_abis}}"
@@ -110,6 +111,7 @@ echo "version: $(release_version)"
 echo "build: $(release_build)"
 echo "variant: ${variant}"
 echo "abis: ${ORG_GRADLE_PROJECT_reactNativeArchitectures}"
+echo "application id: ${VEX_ANDROID_APPLICATION_ID}"
 
 rm -f "${output_apk}"
 cd "${root_dir}/android"
@@ -132,7 +134,7 @@ if [[ ! -f "$output_apk" ]]; then
   exit 1
 fi
 
-expected_package="$(node -p "require('./app.json').expo.android.package")"
+expected_package="${VEX_ANDROID_APPLICATION_ID}"
 expected_version_code="$(node -p "require('./app.json').expo.android.versionCode")"
 expected_version_name="$(release_version)"
 if [[ "${variant}" == "local" ]]; then

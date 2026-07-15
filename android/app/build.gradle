@@ -196,7 +196,7 @@ tasks.matching { task ->
         exclude '**/node_modules/**'
         exclude '**/build/**'
     }).withPropertyName('vexFirstPartyBundleInputs')
-    bundleTask.inputs.property('vexRuntimeVersion', vexBuildValue('VEX_RUNTIME_VERSION', '1.0.52'))
+    bundleTask.inputs.property('vexRuntimeVersion', vexBuildValue('VEX_RUNTIME_VERSION', '1.0.53'))
     bundleTask.inputs.property('vexUpdateChannel', vexBuildValue('EXPO_PUBLIC_VEX_UPDATE_CHANNEL', vexBuildValue('EXPO_PUBLIC_VEX_RELEASE_CHANNEL', 'production')))
 }
 
@@ -229,10 +229,10 @@ android {
         applicationId vexAndroidApplicationId()
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1005254
-        versionName "1.0.52"
+        versionCode 1005355
+        versionName "1.0.53"
         manifestPlaceholders = [
-            vexRuntimeVersion: vexBuildValue('VEX_RUNTIME_VERSION', "1.0.52"),
+            vexRuntimeVersion: vexBuildValue('VEX_RUNTIME_VERSION', "1.0.53"),
             vexUpdatesEnabled: vexUpdatesEnabled(),
             vexUpdatesUrl: vexUpdatesUrl(),
             vexUpdatesRequestHeaders: vexUpdatesRequestHeaders(),

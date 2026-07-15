@@ -47,7 +47,8 @@ export async function setAndroidAutoConnectEnabled(enabled: boolean): Promise<bo
 }
 
 export async function getAntiLeakEnabled(): Promise<boolean> {
-  // TODO(android-routing): Re-enable after the combined smart-routing/anti-leak real-device matrix proves handshake, DNS, Telegram, reconnect, and network-switch recovery.
+  // The production build enables this gate after the Android 9/16 acceptance matrix.
+  // Keeping the gate lets an emergency OTA force full-tunnel/no-blocker behavior.
   if (Platform.OS === 'android' && !androidRoutingExperiment) {
     return false;
   }

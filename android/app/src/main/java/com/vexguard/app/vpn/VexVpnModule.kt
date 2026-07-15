@@ -20,6 +20,7 @@ import androidx.core.content.FileProvider
 import androidx.core.content.ContextCompat
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.BaseActivityEventListener
+import com.facebook.react.bridge.LifecycleEventListener
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.bridge.ReactApplicationContext
@@ -43,7 +44,7 @@ import java.io.ByteArrayOutputStream
 import java.net.URL
 import java.security.MessageDigest
 
-class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
+class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext), LifecycleEventListener {
   private val controller = WireGuardController(reactContext)
   private val wireGuardKeyStore = WireGuardKeyStore(reactContext)
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -71,6 +72,7 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
 
   init {
     reactContext.addActivityEventListener(activityEventListener)
+    reactContext.addLifecycleEventListener(this)
   }
 
   override fun getName(): String = "VexVpn"
@@ -409,26 +411,14 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
 
       verifyDownloadedApkIdentity(file, checksumVerified = hasVerifiedChecksumSidecar(file))
       if (!canRequestPackageInstalls()) {
+        rememberPendingUpdateApk(file)
         openUnknownSourcesSettings()
         promise.resolve(updateInstallResult("install_permission_required"))
         return
       }
 
-      val uri = FileProvider.getUriForFile(
-        reactContext,
-        "${reactContext.packageName}.fileprovider",
-        file,
-      )
-      val intent = Intent(Intent.ACTION_VIEW).apply {
-        setDataAndType(uri, "application/vnd.android.package-archive")
-        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-      }
-      if (intent.resolveActivity(reactContext.packageManager) == null) {
-        promise.reject("UPDATE_INSTALLER_NOT_AVAILABLE", "На устройстве не найден системный установщик APK.")
-        return
-      }
-      reactContext.startActivity(intent)
+      openPackageInstaller(file)
+      clearPendingUpdateApk()
       promise.resolve(updateInstallResult("installer_started"))
     } catch (error: Throwable) {
       promise.reject("UPDATE_INSTALL_FAILED", error.message ?: "Не удалось открыть установщик APK.", error)
@@ -440,9 +430,35 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
     pendingPermissionPromise = null
     stopStatusEmitter()
     reactContext.removeActivityEventListener(activityEventListener)
+    reactContext.removeLifecycleEventListener(this)
     scope.cancel()
     super.invalidate()
   }
+
+  override fun onHostResume() {
+    if (!canRequestPackageInstalls()) {
+      return
+    }
+    val filePath = updatePreferences().getString(PENDING_UPDATE_APK_PATH, null) ?: return
+    val file = File(filePath)
+    try {
+      if (!file.exists() || file.length() <= 0L) {
+        clearPendingUpdateApk()
+        return
+      }
+      verifyDownloadedApkIdentity(file, checksumVerified = hasVerifiedChecksumSidecar(file))
+      openPackageInstaller(file)
+      clearPendingUpdateApk()
+      Log.i(TAG, "Resumed pending Android APK installation after permission grant.")
+    } catch (error: Throwable) {
+      clearPendingUpdateApk()
+      Log.e(TAG, "Pending Android APK installation could not be resumed: ${error.message}", error)
+    }
+  }
+
+  override fun onHostPause() = Unit
+
+  override fun onHostDestroy() = Unit
 
   private fun ensureStatusEmitterRunning() {
     if (statusEmitterJob?.isActive == true || listenerCount <= 0) {
@@ -630,6 +646,8 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
     private const val NETWORK_RECOVERY_HARD_TIMEOUT_RETRY_MS = 5_000L
     private const val UPDATE_DOWNLOAD_CONNECT_TIMEOUT_MS = 30_000
     private const val UPDATE_DOWNLOAD_READ_TIMEOUT_MS = 60_000
+    private const val UPDATE_PREFERENCES = "vex_android_update"
+    private const val PENDING_UPDATE_APK_PATH = "pending_apk_path"
   }
 
   private data class ApkDownloadResult(
@@ -802,6 +820,33 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
     }
     reactContext.startActivity(intent)
   }
+
+  private fun openPackageInstaller(file: File) {
+    val uri = FileProvider.getUriForFile(
+      reactContext,
+      "${reactContext.packageName}.fileprovider",
+      file,
+    )
+    val intent = Intent(Intent.ACTION_VIEW).apply {
+      setDataAndType(uri, "application/vnd.android.package-archive")
+      addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    check(intent.resolveActivity(reactContext.packageManager) != null) {
+      "На устройстве не найден системный установщик APK."
+    }
+    reactContext.startActivity(intent)
+  }
+
+  private fun rememberPendingUpdateApk(file: File) {
+    updatePreferences().edit().putString(PENDING_UPDATE_APK_PATH, file.absolutePath).apply()
+  }
+
+  private fun clearPendingUpdateApk() {
+    updatePreferences().edit().remove(PENDING_UPDATE_APK_PATH).apply()
+  }
+
+  private fun updatePreferences() = reactContext.getSharedPreferences(UPDATE_PREFERENCES, 0)
 
   private fun updateInstallResult(status: String): WritableMap {
     return Arguments.createMap().apply {

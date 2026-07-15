@@ -3,7 +3,10 @@ set -euo pipefail
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-source "${root_dir}/scripts/local_release_cache_bootstrap.sh"
+if [[ "${VEX_RELEASE_USE_LOCAL_CACHE:-}" == "1" || \
+      ( -z "${VEX_RELEASE_USE_LOCAL_CACHE:-}" && "$(uname -s)" == "Darwin" ) ]]; then
+  source "${root_dir}/scripts/local_release_cache_bootstrap.sh"
+fi
 
 artifacts_dir="${ANDROID_ARTIFACTS_DIR:-dist/android}"
 release_abis="${ANDROID_RELEASE_ABIS:-arm64-v8a}"
@@ -81,8 +84,8 @@ export EXPO_PUBLIC_VEX_UPDATE_CHANNEL="${EXPO_PUBLIC_VEX_UPDATE_CHANNEL:-product
 export EXPO_PUBLIC_VEX_ANDROID_EXPERIMENTAL_ROUTING="${EXPO_PUBLIC_VEX_ANDROID_EXPERIMENTAL_ROUTING:-1}"
 export VEX_UPDATES_ENABLED="${VEX_UPDATES_ENABLED:-1}"
 export VEX_OTA_PROVIDER="${VEX_OTA_PROVIDER:-expo-open-ota}"
-export VEX_ANDROID_APPLICATION_ID="${VEX_ANDROID_APPLICATION_ID:-$(node -p "require('./app.json').expo.android.package")}" 
-export VEX_RUNTIME_VERSION="${VEX_RUNTIME_VERSION:-$(node -p "require('./app.json').expo.version")}" 
+export VEX_ANDROID_APPLICATION_ID="${VEX_ANDROID_APPLICATION_ID:-$(node -p "require('./app.json').expo.android.package")}"
+export VEX_RUNTIME_VERSION="${VEX_RUNTIME_VERSION:-$(node -p "require('./app.json').expo.version")}"
 export VEX_EAS_PROJECT_ID="${VEX_EAS_PROJECT_ID:-$(node -p "require('./app.json').expo.extra.eas.projectId")}"
 export ORG_GRADLE_PROJECT_reactNativeArchitectures="${ORG_GRADLE_PROJECT_reactNativeArchitectures:-${release_abis}}"
 export VEX_ANDROID_FAST_ABI="${VEX_ANDROID_FAST_ABI:-${release_abis}}"

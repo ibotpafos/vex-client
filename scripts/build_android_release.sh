@@ -111,6 +111,7 @@ echo "build: $(release_build)"
 echo "variant: ${variant}"
 echo "abis: ${ORG_GRADLE_PROJECT_reactNativeArchitectures}"
 
+rm -f "${output_apk}"
 cd "${root_dir}/android"
 gradle_command=(
   ./gradlew
@@ -130,6 +131,19 @@ if [[ ! -f "$output_apk" ]]; then
   echo "APK was not produced: ${output_apk}" >&2
   exit 1
 fi
+
+expected_package="$(node -p "require('./app.json').expo.android.package")"
+expected_version_code="$(node -p "require('./app.json').expo.android.versionCode")"
+expected_version_name="$(release_version)"
+if [[ "${variant}" == "local" ]]; then
+  expected_package="${VEX_ANDROID_APPLICATION_ID:-com.vexguard.app}${VEX_DEBUG_APPLICATION_ID_SUFFIX:-.dev}"
+  expected_version_name="${expected_version_name}.dev"
+fi
+"${root_dir}/scripts/verify_android_apk.sh" \
+  "${output_apk}" \
+  "${expected_package}" \
+  "${expected_version_code}" \
+  "${expected_version_name}"
 
 mkdir -p "${root_dir}/${artifacts_dir}"
 

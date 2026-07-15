@@ -45,7 +45,17 @@ if [[ ! -f "${debug_keystore}" ]]; then
 fi
 
 cd "${root_dir}/android"
+output_apk="${root_dir}/android/app/build/outputs/apk/local/app-local.apk"
+rm -f "${output_apk}"
 ./gradlew :app:assembleLocal \
   -PreactNativeArchitectures="${REACT_NATIVE_ARCHITECTURES:-arm64-v8a}" \
   -PVEX_ANDROID_FAST_ABI="${VEX_ANDROID_FAST_ABI:-arm64-v8a}" \
   "$@"
+
+expected_version_code="$(node -p "require('../app.json').expo.android.versionCode")"
+expected_version_name="$(node -p "require('../app.json').expo.version + '.dev'")"
+"${root_dir}/scripts/verify_android_apk.sh" \
+  "${output_apk}" \
+  "${VEX_ANDROID_APPLICATION_ID}${VEX_DEBUG_APPLICATION_ID_SUFFIX}" \
+  "${expected_version_code}" \
+  "${expected_version_name}"

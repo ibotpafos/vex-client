@@ -3,11 +3,14 @@ import { DownloadCloud, RefreshCw, X } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, Platform, Pressable, StyleSheet, Text, View, type AppStateStatus } from 'react-native';
 import { playErrorHaptic, playLightImpactHaptic, playSelectionHaptic, playSuccessHaptic } from '@/native/haptics';
+import { getVpnStatus } from '@/native/vexVpn';
 import { VexNativeActivityIndicator } from '@/ui/native-activity-indicator';
+import { canAutomaticallyApplyOtaUpdate } from '@/updates/otaAutoApply';
 
 const foregroundCheckThrottleMs = 5 * 60_000;
 const startupCheckDelayMs = 5_000;
 const autoReloadDelayMs = 2_500;
+const blockedAutoReloadRetryMs = 15_000;
 
 type OtaStatus = 'idle' | 'checking' | 'downloading' | 'ready' | 'restarting' | 'error';
 
@@ -25,6 +28,7 @@ export function OtaUpdateOverlay() {
 }
 
 function OtaUpdateOverlayContent() {
+  const updateState = Updates.useUpdates();
   const [state, setState] = useState<OtaState>({ status: 'idle' });
   const [dismissed, setDismissed] = useState(false);
   const runningRef = useRef(false);
@@ -36,6 +40,14 @@ function OtaUpdateOverlayContent() {
     statusRef.current = nextState.status;
     setState(nextState);
   }, []);
+
+  useEffect(() => {
+    if (!updateState.isUpdatePending) {
+      return;
+    }
+    setDismissed(false);
+    setOtaState({ status: 'ready' });
+  }, [setOtaState, updateState.isUpdatePending]);
 
   const checkAndFetchUpdate = useCallback(async (force = false) => {
     if (dismissed || runningRef.current || statusRef.current === 'ready' || statusRef.current === 'restarting') {
@@ -112,15 +124,22 @@ function OtaUpdateOverlayContent() {
     checkAndFetchUpdate(true).catch(() => undefined);
   }, [checkAndFetchUpdate]);
 
-  const handleReload = useCallback(async () => {
-    playLightImpactHaptic();
-    setOtaState({ status: 'restarting' });
+  const handleReload = useCallback(async (): Promise<boolean> => {
+    const vpnStatus = await getVpnStatus().catch(() => null);
+    if (!vpnStatus || !canAutomaticallyApplyOtaUpdate(AppState.currentState, vpnStatus)) {
+      return false;
+    }
+
     try {
+      playLightImpactHaptic();
+      setOtaState({ status: 'restarting' });
       await Updates.reloadAsync();
+      return true;
     } catch (error) {
       playErrorHaptic();
       const message = error instanceof Error && error.message ? error.message : 'Не удалось перезапустить приложение.';
       setOtaState({ status: 'error', message });
+      return false;
     }
   }, [setOtaState]);
 
@@ -133,12 +152,19 @@ function OtaUpdateOverlayContent() {
       return;
     }
 
-    autoReloadTimerRef.current = setTimeout(() => {
+    let cancelled = false;
+    const attemptAutomaticReload = async () => {
       autoReloadTimerRef.current = null;
-      handleReload().catch(() => undefined);
-    }, autoReloadDelayMs);
+      const reloadStarted = await handleReload();
+      if (!reloadStarted && !cancelled) {
+        autoReloadTimerRef.current = setTimeout(attemptAutomaticReload, blockedAutoReloadRetryMs);
+      }
+    };
+
+    autoReloadTimerRef.current = setTimeout(attemptAutomaticReload, autoReloadDelayMs);
 
     return () => {
+      cancelled = true;
       if (autoReloadTimerRef.current) {
         clearTimeout(autoReloadTimerRef.current);
         autoReloadTimerRef.current = null;
@@ -189,7 +215,7 @@ function OtaUpdateOverlayContent() {
               <Text style={styles.primaryText}>Повторить</Text>
             </Pressable>
           ) : null}
-          {!isBusy ? (
+          {isError ? (
             <Pressable accessibilityLabel="Скрыть OTA-обновление" accessibilityRole="button" onPress={handleDismiss} style={styles.closeButton}>
               <X color="#A7B9BD" size={18} strokeWidth={2.6} />
             </Pressable>

@@ -966,6 +966,8 @@ function runAndroidRoutingSafetyTests(): void {
   assertEqual(androidExperimentalRoutingEnabled('android', undefined), false);
   assertEqual(androidExperimentalRoutingEnabled('android', '0'), false);
   assertEqual(androidExperimentalRoutingEnabled('android', '1'), true);
+  assertEqual(androidExperimentalRoutingEnabled('android', '1', 'preview'), true);
+  assertEqual(androidExperimentalRoutingEnabled('android', '1', 'production'), false);
 assertEqual(androidExperimentalRoutingEnabled('ios', '1'), false);
 assertEqual(vpnProfileRouteCount('[Peer]\nAllowedIPs = 0.0.0.0/1, 128.0.0.0/1\n'), 2);
 assertEqual(androidVpnProfileWithinBinderBudget('android', '[Peer]\nAllowedIPs = 0.0.0.0/1, 128.0.0.0/1', 2), true);

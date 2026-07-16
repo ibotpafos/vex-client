@@ -20,6 +20,7 @@ const defaultVpnLocation = 'de';
 const androidRoutingExperiment = androidExperimentalRoutingEnabled(
   Platform.OS,
   process.env.EXPO_PUBLIC_VEX_ANDROID_EXPERIMENTAL_ROUTING,
+  process.env.EXPO_PUBLIC_VEX_RELEASE_CHANNEL,
 );
 
 export type VpnApplicationSelection = {

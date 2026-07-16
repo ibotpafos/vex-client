@@ -633,7 +633,7 @@ final class NativeParityModelTests: XCTestCase {
         let verifyScript = try String(contentsOf: verifyScriptURL, encoding: .utf8)
         let tauriConfig = try String(contentsOf: tauriConfigURL, encoding: .utf8)
 
-        XCTAssertEqual(helperVersion, "32")
+        XCTAssertEqual(helperVersion, "33")
         XCTAssertTrue(installer.contains("helper_version_file=\"$src_dir/helper-version\""))
         XCTAssertTrue(nativeInstaller.contains("resourceFile(\"helper-version\")"))
         XCTAssertTrue(buildScript.contains("helper-version"))
@@ -764,7 +764,8 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(helper.contains("preserving foreign default route"))
         XCTAssertTrue(helper.contains("public_default_route_target()"))
         XCTAssertTrue(helper.contains("add_host_route_to_target(endpoint_host(&resolved_endpoint), target, log)"))
-        XCTAssertTrue(helper.contains("if target.is_tunnel_interface()"))
+        XCTAssertTrue(helper.contains("arm_route_watchdog()"))
+        XCTAssertTrue(helper.contains("load_protected_public_hosts()"))
         XCTAssertTrue(helper.contains("add_protected_public_host_routes_to_target(target, log)"))
         XCTAssertFalse(helper.contains("\"--nc\", \"stop\""))
         XCTAssertFalse(helper.contains("release_foreign_default_tunnels"))
@@ -855,8 +856,8 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertFalse(socket.contains("task.resume()\n            isConnected = true"))
     }
 
-    func testHelperConnectedStatusNeedsUsefulSignal() {
-        XCTAssertFalse(VpnStatus(helperResponse: "state=connected iface=utun6 route_ok=true socket_exists=true rx=0 tx=128 latest_handshake=0\n").isUsableConnectedStatus)
+    func testHelperConnectedStatusUsesTrafficReadyRouteAndUAPISocket() {
+        XCTAssertTrue(VpnStatus(helperResponse: "state=connected iface=utun6 route_ok=true socket_exists=true rx=0 tx=128 latest_handshake=0\n").isUsableConnectedStatus)
         XCTAssertTrue(VpnStatus(helperResponse: "state=connected iface=utun6 route_ok=true socket_exists=true rx=1 tx=128 latest_handshake=0\n").isUsableConnectedStatus)
         XCTAssertTrue(VpnStatus(helperResponse: "state=connected iface=utun6 route_ok=true socket_exists=true rx=0 tx=128 latest_handshake=42\n").isUsableConnectedStatus)
         XCTAssertFalse(VpnStatus(helperResponse: "state=connected iface=utun6 route_ok=false socket_exists=true rx=0 tx=128 latest_handshake=0\n").isUsableConnectedStatus)

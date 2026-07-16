@@ -71,8 +71,11 @@ export async function switchVpnLocation(input: SwitchVpnLocationInput): Promise<
 
 async function resolveTargetProfile(input: SwitchVpnLocationInput): Promise<VpnProfile> {
   return input.resolveProfile(input.targetLocationId, {
-    cachedProfile: input.cachedTargetProfile,
-    forceRefresh: !input.cachedTargetProfile,
+    // A location change also changes the server-side peer placement. Always
+    // resolve that assignment before replacing the working tunnel; a cached
+    // profile can contain an IP that is valid cryptographically but no longer
+    // routed by the target node.
+    forceRefresh: true,
     requestPermission: false,
   });
 }
@@ -81,7 +84,7 @@ async function connectTargetProfile(input: SwitchVpnLocationInput, targetProfile
   try {
     return await input.connectProfile(targetProfile);
   } catch (error) {
-    if (!input.cachedTargetProfile || !input.isRetryableConnectError(error)) {
+    if (targetProfile.source !== 'local' || !input.isRetryableConnectError(error)) {
       throw error;
     }
     const freshProfile = await input.resolveProfile(input.targetLocationId, {

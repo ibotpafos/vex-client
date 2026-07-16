@@ -3,7 +3,7 @@ import { getAppInfo, getOrCreateDeviceId } from '@/native/appInfo';
 import { deviceIdentitySignaturePayload, getOrCreateDeviceIdentity } from '@/native/deviceIdentity';
 import { generateWireGuardKeyPair, replaceWireGuardKeyPair, getOrCreateWireGuardKeyPair, type WireGuardKeyPair } from '@/native/vexVpn';
 import { nativeVpnDeviceForClient } from '@/vpn/nativeDeviceSelection';
-import { isKeyEpochMismatchError } from '@/vpn/keyEpochRecovery';
+import { isKeyEpochMismatchError, nextManagedKeyEpoch } from '@/vpn/keyEpochRecovery';
 import { defaultVpnRoutingMode, defaultVpnRoutingPolicyVersion, resolvedVpnBypassRegion } from '@/vpn/routingPolicy';
 import { jsonRequest, rawRequest, clientVersionHeaders, isTauriRuntime } from './client';
 import { buildCreateDeviceRequest } from './deviceCreateRequest';
@@ -100,7 +100,7 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
       // Web authorization can create the managed device before the native key
       // exists. Epoch 1 then belongs to that placeholder, so install the first
       // real client key through the normal transactional rotation to epoch 2.
-      device = await rotateManagedVpnKey(accessToken, device.id);
+      device = await rotateManagedVpnKey(accessToken, device.id, device.keyEpoch);
       keyPair = await getOrCreateWireGuardKeyPair();
     }
   }
@@ -250,11 +250,15 @@ export async function registerDevicePushToken(accessToken: string, deviceId: str
   return parseDevice(response.device);
 }
 
-export async function rotateManagedVpnKey(accessToken: string, deviceId: string): Promise<VpnDevice> {
-  const keyPair = await generateWireGuardKeyPair();
-  if (!keyPair?.publicKey) {
+export async function rotateManagedVpnKey(accessToken: string, deviceId: string, serverCurrentEpoch?: number): Promise<VpnDevice> {
+  const generatedKeyPair = await generateWireGuardKeyPair();
+  if (!generatedKeyPair?.publicKey) {
     throw new Error('Локальный WireGuard ключ недоступен.');
   }
+  const keyPair = {
+    ...generatedKeyPair,
+    keyEpoch: nextManagedKeyEpoch(generatedKeyPair.keyEpoch, serverCurrentEpoch),
+  };
   const response = await jsonRequest<{ device: DeviceDTO }>('/v1/vpn/rotate-key', {
     method: 'POST',
     accessToken,
@@ -441,6 +445,7 @@ export function parseDevice(item: DeviceDTO): VpnDevice {
     endpoint: item.endpoint || undefined,
     latencyMs: typeof item.latency_ms === 'number' ? item.latency_ms : undefined,
     publicKey: item.public_key || undefined,
+    keyEpoch: typeof item.psk_epoch === 'number' ? item.psk_epoch : undefined,
     provisioningMode: item.provisioning_mode || undefined,
     clientKeyOwnership: item.client_key_ownership || undefined,
     externalDeviceId: item.external_device_id || undefined,
@@ -470,6 +475,7 @@ export function parseLocation(item: LocationDTO): VpnLocation {
     availability: item.availability || 'available',
     status: item.status || 'unknown',
     healthyNodes: typeof item.healthy_nodes === 'number' ? item.healthy_nodes : 0,
+    endpoint: item.endpoint || undefined,
     latencyMs: typeof item.latency_ms === 'number' ? item.latency_ms : undefined,
   };
 }

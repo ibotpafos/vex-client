@@ -19,7 +19,6 @@ export const locationRefreshMs = 2 * 60_000;
 export const profileRefreshMs = 2 * 60_000;
 export const clientDiagnosticsHeartbeatMs = 5 * 60_000;
 export const clientDiagnosticsErrorCooldownMs = 60_000;
-export const prewarmedProfileStaleMs = 5 * 60_000;
 export const connectAttemptTimeoutMs = 25_000;
 
 export const vpnStatusChangedEvent = 'vpn-status-changed';

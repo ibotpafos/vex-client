@@ -3,13 +3,19 @@ import { buildSubscriptionReminders } from '../src/notifications/subscriptionRem
 import { normalizeApiRequestError, technicalWorksMessage } from '../src/api/error';
 import { installManualUpdate, isTrustedIosUpdateUrl } from '../src/api/manualUpdateInstall';
 import { errorMessage } from '../src/utils/error';
-import { assessManualUpdateCenter, canUseOtaUpdate, requiresNativeUpdate, updateCheckChannel, validateManualUpdatePayloadForBaseUrl } from '../src/api/updatePreflight';
-import { resolveAuthCallbackExchange } from '../src/auth/callbackParams';
+import { assessManualUpdateCenter, canUseOtaUpdate, requiresNativeUpdate, shouldOfferAppUpdate, updateCheckChannel, validateManualUpdatePayloadForBaseUrl } from '../src/api/updatePreflight';
+import {
+  authCallbackAttemptKey,
+  getOrCreateAuthCallbackAttempt,
+  resolveAuthCallbackExchange,
+} from '../src/auth/callbackParams';
 import { sessionLoadFailureDiagnosticsSnapshot } from '../src/auth/sessionDiagnostics';
 import { isCurrentSessionMutation } from '../src/auth/sessionMutationGuard';
 import { loadSessionWithRetry, loadWithRetry } from '../src/auth/sessionLoadRetry';
+import { vpnConnectionAnimationsEnabled } from '../src/vpn/vpnAnimationPolicy';
 import { generateChallenge, generateRandomString } from '../src/auth/pkce';
 import { buildAppWebAuthUrl } from '../src/auth/webAuthUrl';
+import { isEmailOTPExpired, isInvalidOrExpiredEmailOTPError, normalizeEmailOTPCode } from '../src/auth/emailOtp';
 import { loadSessionFromStorage, saveSessionToStorage, type SessionStorageAdapter } from '../src/auth/sessionStoreCore';
 import { isSupportSocketConnecting } from '../src/api/supportSocketState';
 import { optimisticSupportTicket, supportConnectionStatusText, supportHistoryErrorMessage, uniqueSupportMessages, supportChatItems } from '../src/screens/support-helpers';
@@ -33,11 +39,14 @@ import {
   type HotVpnProfileRecord,
 } from '../src/vpn/hotProfileCacheCore';
 import { connectionAttemptsForProfile, isVpnTransportFallbackError, profileEndpoint } from '../src/vpn/connectionFallback';
-import { connectableLocalProfile, shouldUseLocalProfileBeforeOnline, vpnConnectTimingSamples } from '../src/vpn/connectFlow';
+import { connectableLocalProfile, explicitConnectProfileResolutionOptions, shouldUseLocalProfileBeforeOnline, vpnConnectTimingSamples } from '../src/vpn/connectFlow';
 import { recoverVpnConnection } from '../src/vpn/connectionRecovery';
 import { disconnectWithRecoveryTimeout } from '../src/vpn/disconnectRecovery';
 import { waitForVerifiedVpnConnection } from '../src/vpn/connectVerification';
-import { isKeyEpochMismatchError } from '../src/vpn/keyEpochRecovery';
+import { cleanupFailedVpnConnection } from '../src/vpn/failedConnectionCleanup';
+import { androidExperimentalRoutingEnabled, androidProfilePlatform, androidVpnProfileRequiresRefresh, androidVpnProfileWithinBinderBudget, vpnProfileRouteCount } from '../src/vpn/androidRoutingSafety';
+import { profileResolutionOrder } from '../src/vpn/profileResolutionFallback';
+import { isKeyEpochMismatchError, nextManagedKeyEpoch } from '../src/vpn/keyEpochRecovery';
 import { isVpnDeviceForLocation, type VpnLocationDevice } from '../src/vpn/deviceLocation';
 import { nativeVpnDeviceForClient } from '../src/vpn/nativeDeviceSelection';
 import { assessNativeTunnelHealth, localStatusHealthReasons } from '../src/vpn/nativeTunnelHealth';
@@ -50,11 +59,39 @@ import { normalizePackageNames } from '../src/vpn/applicationRouting';
 import { assessVpnAutopilotIssue } from '../src/vpn/vpnAutopilotAssessment';
 import { buildCreateDeviceRequest } from '../src/api/deviceCreateRequest';
 import { HOME_TAB_ROUTE, SUPPORT_TAB_ROUTE } from '../src/navigation/routes';
+import { fallbackLocationEndpoint } from '../src/vpn/locationEndpoint';
 import type { VpnDevice, VpnDeviceUsage, VpnLocation, SupportMessage } from '../src/api/vexApi';
 import type { VpnStatus } from '../src/native/vexVpn';
 import type { VpnProfile } from '../src/vpn/profile';
 
 const connectedStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0 };
+
+{
+  assertEqual(vpnConnectionAnimationsEnabled('android', false), false);
+  assertEqual(vpnConnectionAnimationsEnabled('ios', false), true);
+  assertEqual(vpnConnectionAnimationsEnabled('web', true), false);
+}
+
+{
+  assertDeepEqual(explicitConnectProfileResolutionOptions, {
+    forceRefresh: true,
+    preferCached: false,
+  });
+}
+
+{
+  assertEqual(normalizeEmailOTPCode(' 12-34 56 '), '123456');
+  assertEqual(normalizeEmailOTPCode('1234567'), '123456');
+  assertEqual(isEmailOTPExpired('2026-07-14T10:00:00Z', Date.parse('2026-07-14T10:00:01Z')), true);
+  assertEqual(isEmailOTPExpired('2026-07-14T10:00:02Z', Date.parse('2026-07-14T10:00:01Z')), false);
+  assertEqual(isInvalidOrExpiredEmailOTPError(new Error('invalid or expired email code')), true);
+}
+
+{
+  assertEqual(fallbackLocationEndpoint('de'), 'de-1.vexguard.app:51820');
+  assertEqual(fallbackLocationEndpoint(' FI '), 'fi-1.vexguard.app:51820');
+  assertEqual(fallbackLocationEndpoint('../bad'), '');
+}
 
 {
   assertEqual(billingDurationMonths('monthly'), 1);
@@ -109,6 +146,12 @@ const connectedStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0 
   };
   assertEqual(Boolean(connectableLocalProfile(profile, 'de', null, 'all_except_ru')), true);
   assertEqual(connectableLocalProfile(profile, 'de', null, 'full_tunnel'), null);
+  assertEqual(connectableLocalProfile({ ...profile, routingMode: undefined }, 'de', null, 'all_except_ru'), null);
+  assertEqual(connectableLocalProfile({
+    ...profile,
+    config: '[Interface]\nAddress = 10.64.1.25/32\nPrivateKey = key\n',
+    device: { id: 'android', name: 'Android', status: 'active', assignedIpv4: '10.64.1.34' },
+  }, 'de', null, 'all_except_ru'), null);
 }
 
 {
@@ -116,6 +159,16 @@ const connectedStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0 
   assertEqual(updateCheckChannel('production'), 'stable');
   assertEqual(updateCheckChannel(' beta '), 'beta');
   assertEqual(updateCheckChannel(''), 'stable');
+
+  assertEqual(shouldOfferAppUpdate({ updateAvailable: true, latestBuild: 1005254 }, 1005254), false);
+  assertEqual(shouldOfferAppUpdate({ updateAvailable: true, latestBuild: 1005253 }, 1005254), false);
+  assertEqual(shouldOfferAppUpdate({ updateAvailable: true, latestBuild: 1005255 }, 1005254), true);
+  assertEqual(shouldOfferAppUpdate({ updateAvailable: false, latestBuild: 1005255 }, 1005254), false);
+  assertEqual(shouldOfferAppUpdate({
+    currentBuildBlocked: true,
+    latestBuild: 1005253,
+    updateAvailable: true,
+  }, 1005254), true);
 }
 
 {
@@ -901,10 +954,49 @@ async function runAsyncTests(): Promise<void> {
   await runManualUpdateInstallTests();
   await runVpnDisconnectRecoveryTests();
   await runVpnHandshakeVerificationTests();
+  await runFailedConnectionCleanupTests();
   runNavigationRouteTests();
+  runAndroidRoutingSafetyTests();
   runSupportTests();
   runErrorMessageTests();
   await runServerSwitchTests();
+}
+
+function runAndroidRoutingSafetyTests(): void {
+  assertEqual(androidExperimentalRoutingEnabled('android', undefined), false);
+  assertEqual(androidExperimentalRoutingEnabled('android', '0'), false);
+  assertEqual(androidExperimentalRoutingEnabled('android', '1'), true);
+assertEqual(androidExperimentalRoutingEnabled('ios', '1'), false);
+assertEqual(vpnProfileRouteCount('[Peer]\nAllowedIPs = 0.0.0.0/1, 128.0.0.0/1\n'), 2);
+assertEqual(androidVpnProfileWithinBinderBudget('android', '[Peer]\nAllowedIPs = 0.0.0.0/1, 128.0.0.0/1', 2), true);
+assertEqual(androidVpnProfileWithinBinderBudget('android', '[Peer]\nAllowedIPs = 0.0.0.0/1, 128.0.0.0/1', 1), false);
+assertEqual(androidVpnProfileWithinBinderBudget('ios', '[Peer]\nAllowedIPs = 0.0.0.0/1, 128.0.0.0/1', 1), true);
+const oversizedAndroidProfile = `[Peer]\nAllowedIPs = ${Array.from({ length: 1_501 }, (_, index) => `10.0.${Math.floor(index / 256)}.${index % 256}/32`).join(', ')}`;
+assertEqual(androidVpnProfileRequiresRefresh('android', undefined, '[Peer]\nAllowedIPs = 0.0.0.0/0'), false);
+assertEqual(androidVpnProfileRequiresRefresh('android', oversizedAndroidProfile), true);
+assertEqual(androidVpnProfileRequiresRefresh('ios', oversizedAndroidProfile), false);
+assertEqual(androidProfilePlatform('android', true), 'android-smart-v1');
+assertEqual(androidProfilePlatform('android', false), 'android');
+
+const profileFallbackLocations = [
+  { id: 'de', availability: 'available', healthyNodes: 1 },
+  { id: 'fi', availability: 'available', healthyNodes: 1 },
+  { id: 'retired', availability: 'retired', healthyNodes: 1 },
+] as any;
+assertDeepEqual(
+  profileResolutionOrder('de', profileFallbackLocations).map((location) => location.id),
+  ['de', 'fi'],
+);
+}
+
+async function runFailedConnectionCleanupTests(): Promise<void> {
+  const calls: boolean[] = [];
+  const disconnect = async ({ releaseAntiLeak }: { releaseAntiLeak: boolean }) => {
+    calls.push(releaseAntiLeak);
+  };
+  await cleanupFailedVpnConnection(true, disconnect);
+  await cleanupFailedVpnConnection(false, disconnect);
+  assertDeepEqual(calls, [false, true]);
 }
 
 async function runVpnHandshakeVerificationTests(): Promise<void> {
@@ -947,6 +1039,30 @@ async function runVpnHandshakeVerificationTests(): Promise<void> {
   });
   assertEqual(result.verified, true);
   assertEqual(reads, 2);
+
+  const staleVerifiedStatus: VpnStatus = {
+    state: 'connected',
+    rxBytes: 128,
+    txBytes: 64,
+    latestHandshakeEpochMillis: 10_000,
+    verified: true,
+  };
+  const freshVerifiedStatus: VpnStatus = {
+    ...staleVerifiedStatus,
+    latestHandshakeEpochMillis: 20_000,
+  };
+  let freshnessReads = 0;
+  const freshResult = await waitForVerifiedVpnConnection(staleVerifiedStatus, async () => {
+    freshnessReads += 1;
+    return freshVerifiedStatus;
+  }, {
+    attempts: 1,
+    minimumHandshakeEpochMillis: 15_000,
+    pollMs: 0,
+    wait: async () => undefined,
+  });
+  assertEqual(freshResult.latestHandshakeEpochMillis, 20_000);
+  assertEqual(freshnessReads, 1);
 
   await assertRejects(
     () => waitForVerifiedVpnConnection(pendingStatus, async () => pendingStatus, {
@@ -992,7 +1108,7 @@ async function runServerSwitchTests(): Promise<void> {
   await testNetworkHealthProbeReportsDnsAndHttpsState();
   await testProfileFetchFailureKeepsCurrentTunnel();
   await testTargetHandshakeFailureRollsBackToPreviousProfile();
-  await testCachedTargetProfileRetriesFreshProfileBeforeRollback();
+  await testServerSwitchRefreshesProfileBeforeReplacingTunnel();
   await testRecoveryKeepsCurrentProfileWhenReconnectSucceeds();
   await testRecoveryUsesFreshSameLocationProfile();
   await testRecoveryRotatesProfileForKeyOrProfileFailure();
@@ -1170,7 +1286,7 @@ async function testTargetHandshakeFailureRollsBackToPreviousProfile(): Promise<v
   ]);
 }
 
-async function testCachedTargetProfileRetriesFreshProfileBeforeRollback(): Promise<void> {
+async function testServerSwitchRefreshesProfileBeforeReplacingTunnel(): Promise<void> {
   const previousProfile = profileForLocation('fi', 'fi.example.com:51820');
   const cachedTargetProfile = profileForLocation('de', 'de-old.example.com:51820');
   const freshTargetProfile = profileForLocation('de', 'de.example.com:51820');
@@ -1208,8 +1324,6 @@ async function testCachedTargetProfileRetriesFreshProfileBeforeRollback(): Promi
     assertEqual(profileEndpoint(result.profile), 'de.example.com:51820');
   }
   assertDeepEqual(calls, [
-    'resolve:de:cached',
-    'connect:de-old.example.com:51820',
     'resolve:de:fresh',
     'connect:de.example.com:51820',
     'persist:de',
@@ -1665,6 +1779,24 @@ async function runPkceTests(): Promise<void> {
     async () => resolveAuthCallbackExchange({ code: 'code-1', state: 'state-1' }, 'state-1', null),
     'Сессия входа устарела',
   );
+
+  let starts = 0;
+  const key = authCallbackAttemptKey({ code: 'code-1', state: 'state-1' });
+  const firstAttempt = getOrCreateAuthCallbackAttempt(null, key, async () => {
+    starts += 1;
+  });
+  const repeatedAttempt = getOrCreateAuthCallbackAttempt(firstAttempt, key, async () => {
+    starts += 1;
+  });
+  assertEqual(repeatedAttempt, firstAttempt);
+  await repeatedAttempt.promise;
+  assertEqual(starts, 1);
+
+  const nextAttempt = getOrCreateAuthCallbackAttempt(firstAttempt, `${key}-next`, async () => {
+    starts += 1;
+  });
+  await nextAttempt.promise;
+  assertEqual(starts, 2);
 }
 
 async function runManualUpdateInstallTests(): Promise<void> {
@@ -1762,6 +1894,9 @@ function runErrorMessageTests(): void {
   assertEqual(normalizeApiRequestError(new Error('regular failure')).message, 'regular failure');
   assertEqual(isKeyEpochMismatchError(new Error('key_epoch does not match next device epoch')), true);
   assertEqual(isKeyEpochMismatchError(new Error('network request failed')), false);
+  assertEqual(nextManagedKeyEpoch(2, 5), 6);
+  assertEqual(nextManagedKeyEpoch(8, 5), 6);
+  assertEqual(nextManagedKeyEpoch(undefined, undefined), 1);
   assertEqual(isCurrentSessionMutation(2, 2, 'token-a', 'token-a'), true);
   assertEqual(isCurrentSessionMutation(2, 3, 'token-a', 'token-a'), false);
   assertEqual(isCurrentSessionMutation(2, 2, 'token-a', 'token-b'), false);

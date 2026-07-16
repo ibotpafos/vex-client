@@ -51,6 +51,7 @@ import {
 } from '@/vpn/connectionFallback';
 import type { VpnProfile } from '@/vpn/profile';
 import { probeNetworkHealth } from '@/vpn/networkHealthProbe';
+import { fallbackLocationEndpoint } from '@/vpn/locationEndpoint';
 import {
   defaultVpnRoutingMode,
   isSmartRoutingMode,
@@ -98,7 +99,6 @@ import {
   nativeReconnectCooldownMs,
   staleHandshakeReconnectSeconds,
   clientDiagnosticsHeartbeatMs,
-  prewarmedProfileStaleMs,
   profileRefreshMs,
   vpnStatusChangedEvent,
   vpnProfileChangedEvent,
@@ -123,6 +123,29 @@ import {
 
 type VpnStatusCore = Omit<VpnStatus, 'rxBytes' | 'txBytes'>;
 const HOME_ROUTE = HOME_TAB_ROUTE;
+const deviceLocationLatencyCache: Record<string, number> = {};
+const deviceLocationLatencyListeners = new Set<(snapshot: Record<string, number>) => void>();
+
+function publishDeviceLocationLatencies(measurements: readonly (readonly [string, number] | null)[]) {
+  let changed = false;
+  for (const measurement of measurements) {
+    if (!measurement) {
+      continue;
+    }
+    const [locationId, latency] = measurement;
+    if (deviceLocationLatencyCache[locationId] !== latency) {
+      deviceLocationLatencyCache[locationId] = latency;
+      changed = true;
+    }
+  }
+  if (!changed) {
+    return;
+  }
+  const snapshot = { ...deviceLocationLatencyCache };
+  for (const listener of deviceLocationLatencyListeners) {
+    listener(snapshot);
+  }
+}
 
 function closeRouteOverlay() {
   if (router.canGoBack()) {
@@ -212,6 +235,9 @@ export function useVpnConnection() {
   const [entitlementData, setEntitlementData] = useState<Entitlement | null>(null);
   const [entitlementError, setEntitlementError] = useState<unknown>(null);
   const [locationsData, setLocationsData] = useState<VpnLocation[] | null>(null);
+  const [deviceLocationLatencies, setDeviceLocationLatencies] = useState<Record<string, number>>(() => ({
+    ...deviceLocationLatencyCache,
+  }));
   const [devicesData, setDevicesData] = useState<VpnDevice[] | null>(null);
   const accessToken = session?.accessToken;
   const cacheUserId = session?.user.id ?? '';
@@ -230,7 +256,21 @@ export function useVpnConnection() {
   const hasVpnAccess = hasPaidEntitlement(knownEntitlement);
 
   const locationSource = locationsData ?? persistedLocations ?? undefined;
-  const availableLocations = useMemo(() => availableVpnLocations(locationSource), [locationSource]);
+  const baseAvailableLocations = useMemo(() => availableVpnLocations(locationSource), [locationSource]);
+  const availableLocations = useMemo(() => baseAvailableLocations.map((location) => {
+    const measuredLatency = deviceLocationLatencies[location.id];
+    return typeof measuredLatency === 'number' && Number.isFinite(measuredLatency)
+      ? { ...location, latencyMs: measuredLatency }
+      : location;
+  }), [baseAvailableLocations, deviceLocationLatencies]);
+
+  useEffect(() => {
+    const listener = (snapshot: Record<string, number>) => setDeviceLocationLatencies(snapshot);
+    deviceLocationLatencyListeners.add(listener);
+    return () => {
+      deviceLocationLatencyListeners.delete(listener);
+    };
+  }, []);
 
   const handleProfileRevoked = useCallback(async () => {
     await disconnectVpn({ releaseAntiLeak: true }).catch(() => undefined);
@@ -258,14 +298,12 @@ export function useVpnConnection() {
     setActiveProfile,
   } = useVpnProfileState({
     accessToken: session?.accessToken,
-    availableLocations,
     hasVpnAccess,
     knownEntitlement,
     onDeviceRevoked: handleProfileRevoked,
     onProfileRefreshFailed: useCallback((event) => handleProfileRefreshFailedRef.current(event), []),
     onProfileRotationRequired: playWarningHaptic,
     onSubscriptionRequired: handleSubscriptionRequired,
-    prewarmStaleMs: prewarmedProfileStaleMs,
     profileRefreshMs,
     requestVpnPermission,
     routingMode,
@@ -499,8 +537,6 @@ export function useVpnConnection() {
     selectedLocationId,
     serverSelectionMode,
     availableLocations,
-    activeProfile,
-    entitlementState,
     requestVpnPermission,
     cacheProfile,
     resolveConnectableVpnProfile,
@@ -516,7 +552,9 @@ export function useVpnConnection() {
   const accountTierLabel = subscriptionTierLabel(entitlementState);
   const accountSummaryText = subscriptionSummaryText(entitlementState);
   const selectedLocation = availableLocations.find((location) => location.id === selectedLocationId) ?? availableLocations[0];
-  const selectedLatencyText = locationLatencyText(selectedLocation, clientLatencyMs);
+  // Home and the server picker must use the same device-to-location probe.
+  // clientLatencyMs remains diagnostic telemetry for the active device only.
+  const selectedLatencyText = locationLatencyText(selectedLocation);
 
   const canCancelConnecting = connectionPhase === 'connecting';
   const powerButtonDisabled = isVpnBusy && !canCancelConnecting;
@@ -700,6 +738,49 @@ export function useVpnConnection() {
       unlisten?.();
     };
   }, [refreshManagedProfile, selectedLocationId, submitClientDiagnosticsEvent]);
+
+  useEffect(() => {
+    if (!isAppActive || !supportsNativeLatencyProbe()) {
+      return undefined;
+    }
+
+    const probeTargets = baseAvailableLocations
+      .map((location) => ({
+        endpoint: location.endpoint || fallbackLocationEndpoint(location.countryCode),
+        location,
+      }))
+      .filter((target) => Boolean(target.endpoint));
+    if (probeTargets.length === 0) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    const refreshLocationLatencies = async () => {
+      const measurements = await Promise.all(probeTargets.map(async ({ endpoint, location }) => {
+        try {
+          const latency = await measureEndpointLatency(endpoint);
+          return typeof latency === 'number' && Number.isFinite(latency)
+            ? [location.id, Math.max(0, latency)] as const
+            : null;
+        } catch {
+          return null;
+        }
+      }));
+      if (cancelled) {
+        return;
+      }
+      publishDeviceLocationLatencies(measurements);
+    };
+
+    void refreshLocationLatencies();
+    const timer = setInterval(() => {
+      void refreshLocationLatencies();
+    }, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [baseAvailableLocations, isAppActive]);
 
   useEffect(() => {
     if (!isAppActive || !supportsNativeLatencyProbe() || !activeDevice?.endpoint) {
@@ -1053,7 +1134,7 @@ export function useVpnConnection() {
     vpnStatusCore.state,
   ]);
 
-  const switchConnectedVpnLocation = useCallback(async (targetLocationId: string) => {
+  const switchConnectedVpnLocation = useCallback(async (targetLocationId: string, closeOverlay = true) => {
     if (!session) {
       setVpnError('Сначала войдите в аккаунт.');
       return;
@@ -1068,7 +1149,9 @@ export function useVpnConnection() {
     const previousStatus = vpnStatusRef.current;
 
     vpnOperationInFlightRef.current = true;
-    closeRouteOverlay();
+    if (closeOverlay) {
+      closeRouteOverlay();
+    }
     setIsVpnBusy(true);
     setIsServerSwitching(true);
     setVpnError(null);
@@ -1151,7 +1234,7 @@ export function useVpnConnection() {
     setVpnStatus,
   ]);
 
-  const handleLocationPress = useCallback(async (locationId: string) => {
+  const handleLocationPress = useCallback(async (locationId: string, closeOverlay = true) => {
     if (isVpnBusy) {
       playWarningHaptic();
       return;
@@ -1167,23 +1250,27 @@ export function useVpnConnection() {
       return;
     }
     if (normalizedLocationId === selectedLocationId) {
-      closeRouteOverlay();
+      if (closeOverlay) {
+        closeRouteOverlay();
+      }
       return;
     }
 
     if (isConnected) {
-      await switchConnectedVpnLocation(normalizedLocationId);
+      await switchConnectedVpnLocation(normalizedLocationId, closeOverlay);
       return;
     }
 
     const persistedLocationId = await setSelectedVpnLocation(normalizedLocationId);
     setSelectedLocationId(persistedLocationId);
-    closeRouteOverlay();
+    if (closeOverlay) {
+      closeRouteOverlay();
+    }
     clearProfile();
     setVpnError(null);
   }, [clearProfile, isConnected, isVpnBusy, selectedLocationId, switchConnectedVpnLocation]);
 
-  const handleAutoServerSelectionPress = useCallback(async () => {
+  const handleAutoServerSelectionPress = useCallback(async (closeOverlay = true) => {
     if (isVpnBusy) {
       playWarningHaptic();
       return;
@@ -1200,21 +1287,31 @@ export function useVpnConnection() {
     setVpnError(null);
 
     if (!isConnected) {
-      closeRouteOverlay();
+      if (closeOverlay) {
+        closeRouteOverlay();
+      }
       return;
     }
 
     const targetLocationId = autoSwitchTargetLocationId(selectedLocationId, availableLocations);
     if (!targetLocationId) {
-      closeRouteOverlay();
+      if (closeOverlay) {
+        closeRouteOverlay();
+      }
       return;
     }
-    await switchConnectedVpnLocation(targetLocationId);
+    await switchConnectedVpnLocation(targetLocationId, closeOverlay);
   }, [availableLocations, isConnected, isVpnBusy, selectedLocationId, switchConnectedVpnLocation]);
 
-  const openServerPicker = useCallback(() => {
+  const openServerPicker = useCallback((visibleLatencyText?: string, visibleLocationId?: string) => {
     playSelectionHaptic();
-    router.push(SERVER_PICKER_ROUTE);
+    router.push({
+      pathname: SERVER_PICKER_ROUTE,
+      params: {
+        activeLatencyText: visibleLatencyText || '',
+        activeLocationId: visibleLocationId || '',
+      },
+    });
   }, []);
 
   const closeServerPicker = useCallback(() => {

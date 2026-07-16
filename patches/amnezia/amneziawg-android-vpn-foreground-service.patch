@@ -1,8 +1,8 @@
 diff --git a/tunnel/src/main/java/org/amnezia/awg/backend/GoBackend.java b/tunnel/src/main/java/org/amnezia/awg/backend/GoBackend.java
-index 2bb8026ab3d4207eb465f7428de309a1671ed2ec..1d0768614fbb95af742b06e27751b8e4cec42ffd 100644
+index 2bb8026..7435f1b 100644
 --- a/tunnel/src/main/java/org/amnezia/awg/backend/GoBackend.java
 +++ b/tunnel/src/main/java/org/amnezia/awg/backend/GoBackend.java
-@@ -5,6 +5,10 @@
+@@ -5,8 +5,13 @@
  
  package org.amnezia.awg.backend;
  
@@ -12,8 +12,39 @@ index 2bb8026ab3d4207eb465f7428de309a1671ed2ec..1d0768614fbb95af742b06e27751b8e4
 +import android.app.PendingIntent;
  import android.content.Context;
  import android.content.Intent;
++import android.net.Network;
  import android.os.Build;
-@@ -333,7 +337,11 @@ public final class GoBackend implements Backend {
+ import android.os.ParcelFileDescriptor;
+ import android.system.OsConstants;
+@@ -74,6 +79,27 @@ public final class GoBackend implements Backend {
+         alwaysOnCallback = cb;
+     }
+ 
++    /**
++     * Rebind the live userspace tunnel sockets to a new Android network without
++     * replacing the VpnService/TUN interface. This is the safe handover path for
++     * Wi-Fi/cellular transitions because the VPN routes remain installed while
++     * the protected UDP sockets move to the new underlay.
++     */
++    public void bindTunnelSocketsToNetwork(final Network network) throws Exception {
++        if (currentTunnelHandle < 0)
++            throw new IllegalStateException("Tunnel is not running");
++        bindSocketToNetwork(network, awgGetSocketV4(currentTunnelHandle));
++        bindSocketToNetwork(network, awgGetSocketV6(currentTunnelHandle));
++    }
++
++    private static void bindSocketToNetwork(final Network network, final int socketFd) throws Exception {
++        if (socketFd < 0)
++            return;
++        try (final ParcelFileDescriptor socket = ParcelFileDescriptor.fromFd(socketFd)) {
++            network.bindSocket(socket.getFileDescriptor());
++        }
++    }
++
+ 
+ 
+     /**
+@@ -333,7 +359,11 @@ public final class GoBackend implements Backend {
              final VpnService service;
              if (!vpnService.isDone()) {
                  Log.d(TAG, "Requesting to start VpnService");
@@ -26,7 +57,44 @@ index 2bb8026ab3d4207eb465f7428de309a1671ed2ec..1d0768614fbb95af742b06e27751b8e4
              }
  
              try {
-@@ -490,6 +498,8 @@ public final class GoBackend implements Backend {
+@@ -396,6 +426,12 @@ public final class GoBackend implements Backend {
+                 for (final InetNetwork addr : peer.getAllowedIps()) {
+                     if (addr.getMask() == 0)
+                         sawDefaultRoute = true;
++                    // VpnService.Builder rejects loopback route prefixes on Android.
++                    // Loopback must remain local and must never enter a VPN tunnel.
++                    if (addr.getAddress().isLoopbackAddress()) {
++                        Log.w(TAG, "Skipping Android-rejected loopback VPN route " + addr);
++                        continue;
++                    }
+                     builder.addRoute(addr.getAddress(), addr.getMask());
+                 }
+             }
+@@ -410,9 +446,6 @@ public final class GoBackend implements Backend {
+ 
+             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                 builder.setMetered(false);
+-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
+-                service.setUnderlyingNetworks(null);
+-
+             builder.setBlocking(true);
+             try (final ParcelFileDescriptor tun = builder.establish()) {
+                 if (tun == null)
+@@ -444,6 +477,13 @@ public final class GoBackend implements Backend {
+             try {
+                 vpnService.get(0, TimeUnit.NANOSECONDS).stopSelf();
+             } catch (final TimeoutException ignored) { }
++            // stopSelf() is asynchronous. Do not let another VpnService take
++            // ownership until this instance has delivered onDestroy(), or its
++            // delayed cleanup can tear down the replacement tunnel.
++            for (int attempt = 0; attempt < 40 && vpnService.isDone(); ++attempt)
++                Thread.sleep(50);
++            if (vpnService.isDone())
++                Log.w(TAG, "VpnService did not stop within 2 seconds");
+         }
+ 
+         tunnel.onStateChange(state);
+@@ -490,6 +530,8 @@ public final class GoBackend implements Backend {
       * {@link android.net.VpnService} implementation for {@link GoBackend}
       */
      public static class VpnService extends android.net.VpnService {
@@ -35,7 +103,7 @@ index 2bb8026ab3d4207eb465f7428de309a1671ed2ec..1d0768614fbb95af742b06e27751b8e4
          @Nullable private GoBackend owner;
  
          public Builder getBuilder() {
-@@ -515,12 +525,14 @@ public final class GoBackend implements Backend {
+@@ -515,12 +557,14 @@ public final class GoBackend implements Backend {
                      tunnel.onStateChange(State.DOWN);
                  }
              }
@@ -50,7 +118,7 @@ index 2bb8026ab3d4207eb465f7428de309a1671ed2ec..1d0768614fbb95af742b06e27751b8e4
              vpnService.complete(this);
              if (intent == null || intent.getComponent() == null || !intent.getComponent().getPackageName().equals(getPackageName())) {
                  Log.d(TAG, "Service started by Always-on VPN feature");
-@@ -530,6 +542,42 @@ public final class GoBackend implements Backend {
+@@ -530,6 +574,42 @@ public final class GoBackend implements Backend {
              return super.onStartCommand(intent, flags, startId);
          }
  

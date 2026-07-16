@@ -17,6 +17,7 @@ import { RenderProfilerOverlay } from '@/debug/render-profiler';
 import { captureError, initSentry } from '@/observability/sentry';
 import { VexNativeActivityIndicator } from '@/ui/native-activity-indicator';
 import { ToastProvider } from '@/ui/toast';
+import { VpnConnectionProvider } from '@/vpn/vpn-connection-context';
 
 initSentry();
 
@@ -140,7 +141,7 @@ function RootNavigator() {
     return <BootScreen />;
   }
 
-  return (
+  const navigator = (
     <>
       <StatusBar style="light" />
       <View style={styles.root}>
@@ -160,6 +161,10 @@ function RootNavigator() {
       </View>
     </>
   );
+
+  return session
+    ? <VpnConnectionProvider>{navigator}</VpnConnectionProvider>
+    : navigator;
 }
 
 function BootScreen() {

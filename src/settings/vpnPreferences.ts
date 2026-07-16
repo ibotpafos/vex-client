@@ -4,6 +4,7 @@ import { safeGetStoredValue } from '@/settings/safeStorage';
 import { defaultVpnRoutingMode, isSmartRoutingMode, normalizeVpnRoutingMode, type VpnRoutingMode } from '@/vpn/routingPolicy';
 import { normalizeServerSelectionMode, type ServerSelectionMode } from '@/vpn/serverSelection';
 import { normalizePackageNames, type VpnApplicationRoutingMode } from '@/vpn/applicationRouting';
+import { androidExperimentalRoutingEnabled } from '@/vpn/androidRoutingSafety';
 
 export { normalizePackageNames, type VpnApplicationRoutingMode } from '@/vpn/applicationRouting';
 
@@ -16,6 +17,10 @@ const selectedVpnLocationKey = 'vex.settings.vpn.location.v1';
 const vpnApplicationRoutingModeKey = 'vex.settings.vpn.application_routing_mode.v1';
 const selectedVpnApplicationsKey = 'vex.settings.vpn.selected_applications.v1';
 const defaultVpnLocation = 'de';
+const androidRoutingExperiment = androidExperimentalRoutingEnabled(
+  Platform.OS,
+  process.env.EXPO_PUBLIC_VEX_ANDROID_EXPERIMENTAL_ROUTING,
+);
 
 export type VpnApplicationSelection = {
   mode: VpnApplicationRoutingMode;
@@ -42,15 +47,16 @@ export async function setAndroidAutoConnectEnabled(enabled: boolean): Promise<bo
 }
 
 export async function getAntiLeakEnabled(): Promise<boolean> {
-  // TODO(android-routing): Re-enable after the combined smart-routing/anti-leak real-device matrix proves handshake, DNS, Telegram, reconnect, and network-switch recovery.
-  if (Platform.OS === 'android') {
+  // The production build enables this gate after the Android 9/16 acceptance matrix.
+  // Keeping the gate lets an emergency OTA force full-tunnel/no-blocker behavior.
+  if (Platform.OS === 'android' && !androidRoutingExperiment) {
     return false;
   }
   return (await safeGetSetting(antiLeakEnabledKey)) !== 'false';
 }
 
 export async function setAntiLeakEnabled(enabled: boolean): Promise<boolean> {
-  if (Platform.OS === 'android') {
+  if (Platform.OS === 'android' && !androidRoutingExperiment) {
     await SecureStore.setItemAsync(antiLeakEnabledKey, 'false');
     return false;
   }
@@ -59,7 +65,7 @@ export async function setAntiLeakEnabled(enabled: boolean): Promise<boolean> {
 }
 
 export async function getVpnRoutingMode(): Promise<VpnRoutingMode> {
-  if (Platform.OS === 'android') {
+  if (Platform.OS === 'android' && !androidRoutingExperiment) {
     return 'full_tunnel';
   }
   const storedMode = await safeGetSetting(routingModeKey);
@@ -77,7 +83,9 @@ export async function getVpnRoutingMode(): Promise<VpnRoutingMode> {
 }
 
 export async function setVpnRoutingMode(mode: VpnRoutingMode): Promise<VpnRoutingMode> {
-  const normalized = Platform.OS === 'android' ? 'full_tunnel' : normalizeVpnRoutingMode(mode);
+  const normalized = Platform.OS === 'android' && !androidRoutingExperiment
+    ? 'full_tunnel'
+    : normalizeVpnRoutingMode(mode);
   await SecureStore.setItemAsync(routingModeKey, normalized);
   await SecureStore.setItemAsync(smartRoutingEnabledKey, isSmartRoutingMode(normalized) ? 'true' : 'false');
   return normalized;

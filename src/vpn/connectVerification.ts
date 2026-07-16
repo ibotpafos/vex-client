@@ -2,6 +2,7 @@ import type { VpnStatus } from '@/native/vexVpn';
 
 type HandshakeVerificationOptions = {
   attempts?: number;
+  minimumHandshakeEpochMillis?: number;
   pollMs?: number;
   wait?: (delayMs: number) => Promise<void>;
 };
@@ -17,7 +18,7 @@ export async function waitForVerifiedVpnConnection(
   if (initialStatus.state !== 'connected') {
     throw new Error('VPN backend did not enter the connected state.');
   }
-  if (initialStatus.verified !== false) {
+  if (isHandshakeVerifiedForAttempt(initialStatus, options.minimumHandshakeEpochMillis)) {
     return initialStatus;
   }
 
@@ -32,12 +33,21 @@ export async function waitForVerifiedVpnConnection(
     if (latestStatus.state !== 'connected') {
       throw new Error('VPN disconnected before the handshake completed.');
     }
-    if (latestStatus.verified !== false) {
+    if (isHandshakeVerifiedForAttempt(latestStatus, options.minimumHandshakeEpochMillis)) {
       return latestStatus;
     }
   }
 
   throw new Error('VPN handshake timed out.');
+}
+
+function isHandshakeVerifiedForAttempt(status: VpnStatus, minimumHandshakeEpochMillis?: number): boolean {
+  if (minimumHandshakeEpochMillis === undefined) {
+    return status.verified !== false;
+  }
+  return status.verified !== false &&
+    typeof status.latestHandshakeEpochMillis === 'number' &&
+    status.latestHandshakeEpochMillis >= minimumHandshakeEpochMillis;
 }
 
 function delay(delayMs: number): Promise<void> {

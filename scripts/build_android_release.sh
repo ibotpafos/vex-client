@@ -3,7 +3,10 @@ set -euo pipefail
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-source "${root_dir}/scripts/local_release_cache_bootstrap.sh"
+if [[ "${VEX_RELEASE_USE_LOCAL_CACHE:-}" == "1" || \
+      ( -z "${VEX_RELEASE_USE_LOCAL_CACHE:-}" && "$(uname -s)" == "Darwin" ) ]]; then
+  source "${root_dir}/scripts/local_release_cache_bootstrap.sh"
+fi
 
 artifacts_dir="${ANDROID_ARTIFACTS_DIR:-dist/android}"
 release_abis="${ANDROID_RELEASE_ABIS:-arm64-v8a}"
@@ -78,8 +81,10 @@ export NODE_ENV="${NODE_ENV:-production}"
 export VEX_BUILD_PROFILE="${VEX_BUILD_PROFILE:-production}"
 export EXPO_PUBLIC_VEX_RELEASE_CHANNEL="${EXPO_PUBLIC_VEX_RELEASE_CHANNEL:-production}"
 export EXPO_PUBLIC_VEX_UPDATE_CHANNEL="${EXPO_PUBLIC_VEX_UPDATE_CHANNEL:-production}"
+export EXPO_PUBLIC_VEX_ANDROID_EXPERIMENTAL_ROUTING="${EXPO_PUBLIC_VEX_ANDROID_EXPERIMENTAL_ROUTING:-1}"
 export VEX_UPDATES_ENABLED="${VEX_UPDATES_ENABLED:-1}"
 export VEX_OTA_PROVIDER="${VEX_OTA_PROVIDER:-expo-open-ota}"
+export VEX_ANDROID_APPLICATION_ID="${VEX_ANDROID_APPLICATION_ID:-$(node -p "require('./app.json').expo.android.package")}"
 export VEX_RUNTIME_VERSION="${VEX_RUNTIME_VERSION:-$(node -p "require('./app.json').expo.version")}"
 export VEX_EAS_PROJECT_ID="${VEX_EAS_PROJECT_ID:-$(node -p "require('./app.json').expo.extra.eas.projectId")}"
 export ORG_GRADLE_PROJECT_reactNativeArchitectures="${ORG_GRADLE_PROJECT_reactNativeArchitectures:-${release_abis}}"
@@ -109,7 +114,9 @@ echo "version: $(release_version)"
 echo "build: $(release_build)"
 echo "variant: ${variant}"
 echo "abis: ${ORG_GRADLE_PROJECT_reactNativeArchitectures}"
+echo "application id: ${VEX_ANDROID_APPLICATION_ID}"
 
+rm -f "${output_apk}"
 cd "${root_dir}/android"
 gradle_command=(
   ./gradlew
@@ -129,6 +136,19 @@ if [[ ! -f "$output_apk" ]]; then
   echo "APK was not produced: ${output_apk}" >&2
   exit 1
 fi
+
+expected_package="${VEX_ANDROID_APPLICATION_ID}"
+expected_version_code="$(node -p "require('./app.json').expo.android.versionCode")"
+expected_version_name="$(release_version)"
+if [[ "${variant}" == "local" ]]; then
+  expected_package="${VEX_ANDROID_APPLICATION_ID:-com.vexguard.app}${VEX_DEBUG_APPLICATION_ID_SUFFIX:-.dev}"
+  expected_version_name="${expected_version_name}.dev"
+fi
+"${root_dir}/scripts/verify_android_apk.sh" \
+  "${output_apk}" \
+  "${expected_package}" \
+  "${expected_version_code}" \
+  "${expected_version_name}"
 
 mkdir -p "${root_dir}/${artifacts_dir}"
 

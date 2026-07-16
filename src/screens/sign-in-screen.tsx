@@ -44,6 +44,11 @@ import * as SecureStore from "@/native/secureStore";
 import { generateRandomString, generateChallenge } from "@/auth/pkce";
 import { buildAppWebAuthUrl } from "@/auth/webAuthUrl";
 import {
+  isEmailOTPExpired,
+  isInvalidOrExpiredEmailOTPError,
+  normalizeEmailOTPCode,
+} from "@/auth/emailOtp";
+import {
   openWebAuthUrl,
   supportsWebsiteAuth,
   getDeviceDetails,
@@ -72,6 +77,7 @@ export default function SignInScreen() {
   const [authNotice, setAuthNotice] = useState<string | null>(null);
   const [isAuthBusy, setIsAuthBusy] = useState(false);
   const [biometricAuthLabel, setBiometricAuthLabel] = useState("");
+  const authSubmitInFlight = useRef(false);
   const handledCallbackUrls = useRef(new Set<string>());
   const retryableCallbackUrls = useRef<Record<string, number>>({});
   const canUseBiometricAuth =
@@ -301,7 +307,7 @@ export default function SignInScreen() {
   }, []);
 
   const handleAuthSubmit = useCallback(async () => {
-    if (isAuthBusy) {
+    if (authSubmitInFlight.current || isAuthBusy) {
       playWarningHaptic();
       return;
     }
@@ -312,6 +318,7 @@ export default function SignInScreen() {
       return;
     }
 
+    authSubmitInFlight.current = true;
     playLightImpactHaptic();
     setIsAuthBusy(true);
     setAuthError(null);
@@ -329,7 +336,19 @@ export default function SignInScreen() {
         playSuccessHaptic();
         return;
       }
-      const code = emailOTPCode.trim();
+      if (isEmailOTPExpired(emailOTPChallenge.expiresAt)) {
+        const challenge = await requestEmailOTP(normalizedEmail);
+        setEmailOTPChallenge({
+          email: normalizedEmail,
+          challengeId: challenge.challengeId,
+          expiresAt: challenge.expiresAt,
+        });
+        setEmailOTPCode("");
+        setAuthNotice("Срок прошлого кода истёк. Мы отправили новый.");
+        playSuccessHaptic();
+        return;
+      }
+      const code = normalizeEmailOTPCode(emailOTPCode);
       if (!code) {
         playWarningHaptic();
         setAuthError("Введите код из письма.");
@@ -350,10 +369,11 @@ export default function SignInScreen() {
       router.replace("/");
     } catch (error) {
       playErrorHaptic();
-      setAuthError(
-        error instanceof Error ? error.message : "Не удалось войти.",
-      );
+      setAuthError(isInvalidOrExpiredEmailOTPError(error)
+        ? "Код не подошёл. Проверьте цифры или запросите новый код."
+        : error instanceof Error ? error.message : "Не удалось войти.");
     } finally {
+      authSubmitInFlight.current = false;
       setIsAuthBusy(false);
     }
   }, [
@@ -364,6 +384,39 @@ export default function SignInScreen() {
     queryClient,
     signIn,
   ]);
+
+  const handleEmailOTPResend = useCallback(async () => {
+    if (authSubmitInFlight.current || isAuthBusy) {
+      playWarningHaptic();
+      return;
+    }
+    const normalizedEmail = email.trim();
+    if (!normalizedEmail) {
+      setAuthError("Введите email.");
+      return;
+    }
+    authSubmitInFlight.current = true;
+    setIsAuthBusy(true);
+    setAuthError(null);
+    setAuthNotice(null);
+    try {
+      const challenge = await requestEmailOTP(normalizedEmail);
+      setEmailOTPChallenge({
+        email: normalizedEmail,
+        challengeId: challenge.challengeId,
+        expiresAt: challenge.expiresAt,
+      });
+      setEmailOTPCode("");
+      setAuthNotice("Новый код отправлен на email.");
+      playSuccessHaptic();
+    } catch (error) {
+      playErrorHaptic();
+      setAuthError(error instanceof Error ? error.message : "Не удалось отправить новый код.");
+    } finally {
+      authSubmitInFlight.current = false;
+      setIsAuthBusy(false);
+    }
+  }, [email, isAuthBusy]);
 
   const handleBiometricAuth = useCallback(async () => {
     if (isAuthBusy) {
@@ -524,7 +577,7 @@ export default function SignInScreen() {
                 keyboardType="number-pad"
                 maxFontSizeMultiplier={1.05}
                 maxLength={6}
-                onChangeText={setEmailOTPCode}
+                onChangeText={(value) => setEmailOTPCode(normalizeEmailOTPCode(value))}
                 onFocus={playSelectionHaptic}
                 placeholder="Код из письма"
                 placeholderTextColor="#60767B"
@@ -563,6 +616,17 @@ export default function SignInScreen() {
                 </Text>
               )}
             </Pressable>
+            {emailOTPChallenge ? (
+              <Pressable
+                disabled={isAuthBusy}
+                onPress={handleEmailOTPResend}
+                style={[styles.secondaryButton, isAuthBusy && styles.busy]}
+              >
+                <Text maxFontSizeMultiplier={1.1} style={styles.secondaryButtonText}>
+                  Отправить новый код
+                </Text>
+              </Pressable>
+            ) : null}
             {canUseBiometricAuth ? (
               <Pressable
                 disabled={isAuthBusy}

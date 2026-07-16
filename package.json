@@ -1,6 +1,6 @@
 {
   "name": "vex-client",
-  "version": "1.0.52",
+  "version": "1.0.53",
   "private": true,
   "main": "expo-router/entry",
   "dependencies": {

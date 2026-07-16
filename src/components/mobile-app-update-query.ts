@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Platform } from 'react-native';
 import { useCallback, useMemo } from 'react';
-import { updateCheckChannel } from '@/api/updatePreflight';
+import { shouldOfferAppUpdate, updateCheckChannel } from '@/api/updatePreflight';
 import { appUpdateCheck, type AppUpdateCheckResult } from '@/api/vexApi';
 import { getAppInfo, getOrCreateDeviceId } from '@/native/appInfo';
 
@@ -34,5 +34,8 @@ export function useMobileAppUpdateQuery(targetPlatform: 'android' | 'ios', build
     refetchInterval: appUpdatePollIntervalMs,
     refetchIntervalInBackground: false,
     retry: 2,
+    select: (update) => shouldOfferAppUpdate(update, buildNumber)
+      ? update
+      : { ...update, required: false, updateAvailable: false },
   });
 }

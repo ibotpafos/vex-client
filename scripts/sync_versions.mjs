@@ -49,7 +49,7 @@ let androidGradle = fs.readFileSync(androidGradlePath, 'utf8');
 androidGradle = replaceFirst(androidGradle, /versionCode\s+\d+/, `versionCode ${androidVersionCode}`);
 androidGradle = replaceFirst(androidGradle, /versionName\s+"[^"]+"/, `versionName "${mobileVersion}"`);
 androidGradle = replaceFirst(androidGradle, /vexRuntimeVersion:\s*vexBuildValue\('VEX_RUNTIME_VERSION',\s*"[^"]+"\)/, `vexRuntimeVersion: vexBuildValue('VEX_RUNTIME_VERSION', "${mobileVersion}")`);
-androidGradle = replaceFirst(androidGradle, /vexBuildValue\('VEX_RUNTIME_VERSION',\s*'[^']+'\)/, `vexBuildValue('VEX_RUNTIME_VERSION', '${mobileVersion}')`);
+androidGradle = replaceAllRequired(androidGradle, /vexBuildValue\('VEX_RUNTIME_VERSION',\s*'[^']+'\)/g, `vexBuildValue('VEX_RUNTIME_VERSION', '${mobileVersion}')`);
 fs.writeFileSync(androidGradlePath, androidGradle);
 
 let iosInfoPlist = fs.readFileSync(iosInfoPlistPath, 'utf8');
@@ -99,6 +99,14 @@ function buildAndroidVersionCode(version, build) {
 }
 
 function replaceFirst(input, pattern, replacement) {
+  if (!pattern.test(input)) {
+    throw new Error(`Pattern not found: ${pattern}`);
+  }
+  pattern.lastIndex = 0;
+  return input.replace(pattern, replacement);
+}
+
+function replaceAllRequired(input, pattern, replacement) {
   if (!pattern.test(input)) {
     throw new Error(`Pattern not found: ${pattern}`);
   }

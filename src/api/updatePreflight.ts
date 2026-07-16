@@ -89,6 +89,21 @@ export function updateCheckChannel(channel: string): string {
   return normalized || 'stable';
 }
 
+export function shouldOfferAppUpdate(
+  update: Pick<NonNullable<ManualUpdateCenterInput['update']>, 'currentBuildBlocked' | 'latestBuild' | 'updateAvailable'>,
+  currentBuild: number,
+): boolean {
+  if (!update.updateAvailable) {
+    return false;
+  }
+  // A revoked build may intentionally point at an older stable artifact.
+  if (update.currentBuildBlocked) {
+    return true;
+  }
+  const latestBuild = Number(update.latestBuild);
+  return Number.isFinite(latestBuild) && latestBuild > currentBuild;
+}
+
 export function assessManualUpdateCenter(input: ManualUpdateCenterInput): ManualUpdateCenterAssessment {
   const update = input.update ?? null;
   const updateAvailable = Boolean(update?.updateAvailable);

@@ -1,15 +1,22 @@
 import * as Application from 'expo-application';
 import { Download, ShieldCheck } from 'lucide-react-native';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Linking, Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { AppState, Linking, Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { installManualUpdate } from '@/api/manualUpdateInstall';
 import { requiresNativeUpdate } from '@/api/updatePreflight';
 import { validateManualUpdatePayload, type AppUpdateCheckResult } from '@/api/vexApi';
 import { useMobileAppUpdateQuery } from '@/components/mobile-app-update-query';
 import { playErrorHaptic, playLightImpactHaptic, playSelectionHaptic, playSuccessHaptic } from '@/native/haptics';
+import * as SecureStore from '@/native/secureStore';
 
 const androidBuild = currentAndroidBuild();
 const androidSigningMigrationLandingUrl = 'https://vexguard.app/download';
+const pendingAndroidInstallKey = 'vex.android.update.pending-install.v1';
+
+type PendingAndroidInstall = {
+  build: number;
+  resumeAttempted: boolean;
+};
 
 type DownloadState =
   | { status: 'idle' }
@@ -65,6 +72,7 @@ function AndroidUpdateOverlayContent() {
     if (update?.latestBuild) {
       playSelectionHaptic();
       setDismissedBuild(update.latestBuild);
+      void SecureStore.deleteItemAsync(pendingAndroidInstallKey).catch(() => undefined);
     }
   }, [update?.latestBuild]);
 
@@ -86,31 +94,82 @@ function AndroidUpdateOverlayContent() {
     }
   }, [update]);
 
-  const handleInstall = useCallback(async () => {
-    if (downloadState.status !== 'ready' && downloadState.status !== 'permission_required') {
-      return;
-    }
+  const performInstall = useCallback(async (build: number, resumeAttempted: boolean) => {
     playLightImpactHaptic();
     try {
-      if (!update) {
+      if (!update || update.latestBuild !== build) {
         throw new Error('Данные обновления недоступны.');
       }
-      setDownloadState({ status: 'installing', build: downloadState.build });
+      setDownloadState({ status: 'installing', build });
+      await SecureStore.setItemAsync(pendingAndroidInstallKey, JSON.stringify({ build, resumeAttempted }));
       const result = await installManualUpdate(update, 'android');
       if (result.status === 'install_permission_required') {
         setDownloadState({ status: 'permission_required', build: update.latestBuild });
         return;
       }
+      await SecureStore.deleteItemAsync(pendingAndroidInstallKey).catch(() => undefined);
       setInstallerOpenedBuild(update.latestBuild);
       setDismissedBuild(update.latestBuild);
       setDownloadState({ status: 'installer_opened', build: update.latestBuild });
       playSuccessHaptic();
     } catch (error) {
+      await SecureStore.deleteItemAsync(pendingAndroidInstallKey).catch(() => undefined);
       playErrorHaptic();
       const message = error instanceof Error && error.message ? error.message : 'Не удалось открыть ссылку обновления.';
-      setDownloadState({ status: 'error', build: downloadState.build, message });
+      setDownloadState({ status: 'error', build, message });
     }
-  }, [downloadState, update]);
+  }, [update]);
+
+  const handleInstall = useCallback(async () => {
+    if (downloadState.status !== 'ready' && downloadState.status !== 'permission_required') {
+      return;
+    }
+    await performInstall(downloadState.build, false);
+  }, [downloadState, performInstall]);
+
+  useEffect(() => {
+    if (!update?.latestBuild) {
+      return;
+    }
+    let cancelled = false;
+    let restoring = false;
+
+    const restorePendingInstall = async () => {
+      if (cancelled || restoring) {
+        return;
+      }
+      restoring = true;
+      try {
+        const pending = parsePendingAndroidInstall(
+          await SecureStore.getItemAsync(pendingAndroidInstallKey).catch(() => null),
+        );
+        if (!pending || pending.build !== update.latestBuild) {
+          return;
+        }
+        setDownloadState({ status: 'permission_required', build: pending.build });
+        if (!pending.resumeAttempted) {
+          await SecureStore.setItemAsync(
+            pendingAndroidInstallKey,
+            JSON.stringify({ ...pending, resumeAttempted: true }),
+          );
+          await performInstall(pending.build, true);
+        }
+      } finally {
+        restoring = false;
+      }
+    };
+
+    void restorePendingInstall();
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        void restorePendingInstall();
+      }
+    });
+    return () => {
+      cancelled = true;
+      subscription.remove();
+    };
+  }, [performInstall, update?.latestBuild]);
 
   const handleRetryDownload = useCallback(() => {
     if (!update?.latestBuild || !preflight.ok) {
@@ -207,6 +266,21 @@ function AndroidUpdateOverlayContent() {
       </View>
     </Modal>
   );
+}
+
+export function parsePendingAndroidInstall(value: string | null): PendingAndroidInstall | null {
+  if (!value) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(value) as Partial<PendingAndroidInstall>;
+    if (!Number.isInteger(parsed.build) || (parsed.build ?? 0) <= 0 || typeof parsed.resumeAttempted !== 'boolean') {
+      return null;
+    }
+    return { build: parsed.build as number, resumeAttempted: parsed.resumeAttempted };
+  } catch {
+    return null;
+  }
 }
 
 function shouldShowUpdateSheet(

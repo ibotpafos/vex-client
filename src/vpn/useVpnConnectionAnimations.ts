@@ -1,16 +1,18 @@
 import { useEffect, useRef } from 'react';
-import { Animated, Easing } from 'react-native';
+import { Animated, Easing, Platform } from 'react-native';
 import { isTauriRuntime, type ConnectionPhase } from '../screens/home-screen-helpers';
+import { vpnConnectionAnimationsEnabled } from './vpnAnimationPolicy';
 
 export function useVpnConnectionAnimations(connectionPhase: ConnectionPhase) {
   const pulseProgress = useRef(new Animated.Value(0)).current;
   const spinProgress = useRef(new Animated.Value(0)).current;
+  const animationsEnabled = vpnConnectionAnimationsEnabled(Platform.OS, isTauriRuntime());
 
   useEffect(() => {
     pulseProgress.stopAnimation();
     pulseProgress.setValue(0);
 
-    if (connectionPhase === 'idle' || isTauriRuntime()) {
+    if (connectionPhase === 'idle' || !animationsEnabled) {
       return undefined;
     }
 
@@ -39,13 +41,13 @@ export function useVpnConnectionAnimations(connectionPhase: ConnectionPhase) {
     loop.start();
 
     return () => loop.stop();
-  }, [connectionPhase, pulseProgress]);
+  }, [animationsEnabled, connectionPhase, pulseProgress]);
 
   useEffect(() => {
     spinProgress.stopAnimation();
     spinProgress.setValue(0);
 
-    if (connectionPhase !== 'connecting' && connectionPhase !== 'verifying' && connectionPhase !== 'disconnecting' && connectionPhase !== 'switching') {
+    if (!animationsEnabled || (connectionPhase !== 'connecting' && connectionPhase !== 'verifying' && connectionPhase !== 'disconnecting' && connectionPhase !== 'switching')) {
       return undefined;
     }
 
@@ -60,7 +62,7 @@ export function useVpnConnectionAnimations(connectionPhase: ConnectionPhase) {
     loop.start();
 
     return () => loop.stop();
-  }, [connectionPhase, spinProgress]);
+  }, [animationsEnabled, connectionPhase, spinProgress]);
 
   return { pulseProgress, spinProgress };
 }

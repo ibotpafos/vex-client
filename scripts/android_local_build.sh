@@ -15,6 +15,15 @@ export NODE_ENV="${NODE_ENV:-production}"
 export VEX_BUILD_PROFILE="${VEX_BUILD_PROFILE:-local}"
 export EXPO_PUBLIC_VEX_RELEASE_CHANNEL="${EXPO_PUBLIC_VEX_RELEASE_CHANNEL:-local}"
 export EXPO_PUBLIC_VEX_UPDATE_CHANNEL="${EXPO_PUBLIC_VEX_UPDATE_CHANNEL:-local}"
+# Dev builds are the acceptance surface for smart routing and anti-leak. The
+# application reads the EXPO_PUBLIC name at bundle time; the older VEX_ alias
+# silently left both switches forced off and made the device matrix invalid.
+export EXPO_PUBLIC_VEX_ANDROID_EXPERIMENTAL_ROUTING="${EXPO_PUBLIC_VEX_ANDROID_EXPERIMENTAL_ROUTING:-1}"
+# Local device builds must never replace or masquerade as a production VEX
+# package. Keep the stable VEX Dev identity even when Gradle is invoked through
+# this wrapper without any caller-provided properties.
+export VEX_ANDROID_APPLICATION_ID="${VEX_ANDROID_APPLICATION_ID:-com.vexguard.app}"
+export VEX_DEBUG_APPLICATION_ID_SUFFIX="${VEX_DEBUG_APPLICATION_ID_SUFFIX:-.dev}"
 
 debug_keystore="${root_dir}/android/app/debug.keystore"
 if [[ ! -f "${debug_keystore}" ]]; then
@@ -36,7 +45,17 @@ if [[ ! -f "${debug_keystore}" ]]; then
 fi
 
 cd "${root_dir}/android"
+output_apk="${root_dir}/android/app/build/outputs/apk/local/app-local.apk"
+rm -f "${output_apk}"
 ./gradlew :app:assembleLocal \
   -PreactNativeArchitectures="${REACT_NATIVE_ARCHITECTURES:-arm64-v8a}" \
   -PVEX_ANDROID_FAST_ABI="${VEX_ANDROID_FAST_ABI:-arm64-v8a}" \
   "$@"
+
+expected_version_code="$(node -p "require('../app.json').expo.android.versionCode")"
+expected_version_name="$(node -p "require('../app.json').expo.version + '.dev'")"
+"${root_dir}/scripts/verify_android_apk.sh" \
+  "${output_apk}" \
+  "${VEX_ANDROID_APPLICATION_ID}${VEX_DEBUG_APPLICATION_ID_SUFFIX}" \
+  "${expected_version_code}" \
+  "${expected_version_name}"

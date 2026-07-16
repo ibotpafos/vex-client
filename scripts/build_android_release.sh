@@ -9,8 +9,13 @@ if [[ "${VEX_RELEASE_USE_LOCAL_CACHE:-}" == "1" || \
 fi
 
 artifacts_dir="${ANDROID_ARTIFACTS_DIR:-dist/android}"
-release_abis="${ANDROID_RELEASE_ABIS:-arm64-v8a}"
 variant="${ANDROID_RELEASE_VARIANT:-release}"
+if [[ "${variant}" == "release" ]]; then
+  default_release_abis="arm64-v8a,armeabi-v7a"
+else
+  default_release_abis="arm64-v8a"
+fi
+release_abis="${ANDROID_RELEASE_ABIS:-${default_release_abis}}"
 
 require_env() {
   local name="$1"
@@ -148,7 +153,8 @@ fi
   "${output_apk}" \
   "${expected_package}" \
   "${expected_version_code}" \
-  "${expected_version_name}"
+  "${expected_version_name}" \
+  "${ORG_GRADLE_PROJECT_reactNativeArchitectures}"
 
 mkdir -p "${root_dir}/${artifacts_dir}"
 

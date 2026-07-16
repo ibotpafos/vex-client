@@ -58,4 +58,5 @@ expected_version_name="$(node -p "require('../app.json').expo.version + '.dev'")
   "${output_apk}" \
   "${VEX_ANDROID_APPLICATION_ID}${VEX_DEBUG_APPLICATION_ID_SUFFIX}" \
   "${expected_version_code}" \
-  "${expected_version_name}"
+  "${expected_version_name}" \
+  "${VEX_ANDROID_FAST_ABI:-arm64-v8a}"

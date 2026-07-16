@@ -3,7 +3,12 @@ set -euo pipefail
 
 SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
 ROOT="$(cd "$(dirname "${SCRIPT_PATH}")/.." && pwd)"
-DEFAULT_CACHE_ROOT="/Volumes/D/Downloads/VEX/local-release-cache/vex-client"
+external_cache_root="/Volumes/D/Downloads/VEX/local-release-cache/vex-client"
+if [[ -d "${external_cache_root}" ]]; then
+  DEFAULT_CACHE_ROOT="${external_cache_root}"
+else
+  DEFAULT_CACHE_ROOT="${HOME}/Library/Caches/VEX/local-release-cache/vex-client"
+fi
 VEX_LOCAL_RELEASE_CACHE_ROOT="${VEX_LOCAL_RELEASE_CACHE_ROOT:-${DEFAULT_CACHE_ROOT}}"
 
 if [[ ! -d "$(dirname "${VEX_LOCAL_RELEASE_CACHE_ROOT}")" ]]; then

@@ -5,6 +5,7 @@ apk_path="${1:?APK path is required}"
 expected_package="${2:?expected package is required}"
 expected_version_code="${3:?expected version code is required}"
 expected_version_name="${4:?expected version name is required}"
+expected_abis="${5:-}"
 
 if [[ ! -f "${apk_path}" ]]; then
   echo "APK is missing: ${apk_path}" >&2
@@ -32,6 +33,7 @@ actual_package="$(printf '%s\n' "${package_line}" | sed -n "s/^name='\([^']*\)'.
 actual_version_code="$(printf '%s\n' "${package_line}" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")"
 actual_version_name="$(printf '%s\n' "${package_line}" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")"
 bundle_size="$(unzip -l "${apk_path}" assets/index.android.bundle | awk '$NF == "assets/index.android.bundle" { print $1; exit }')"
+actual_abis="$(unzip -Z1 "${apk_path}" | sed -n 's#^lib/\([^/]*\)/.*#\1#p' | sort -u)"
 
 if [[ ! "${bundle_size:-}" =~ ^[0-9]+$ || "${bundle_size}" -lt 100000 ]]; then
   echo "APK does not contain a complete assets/index.android.bundle: ${apk_path}" >&2
@@ -53,6 +55,20 @@ if [[ "${actual_package}" != "${expected_package}" || \
   exit 1
 fi
 
-printf 'Verified APK: %s %s (%s), JS bundle %s bytes, sha256 %s\n' \
+if [[ -n "${expected_abis}" ]]; then
+  IFS=',' read -r -a required_abis <<<"${expected_abis}"
+  for abi in "${required_abis[@]}"; do
+    abi="$(printf '%s' "${abi}" | xargs)"
+    [[ -n "${abi}" ]] || continue
+    if ! printf '%s\n' "${actual_abis}" | grep -Fxq "${abi}"; then
+      printf 'APK is missing required ABI %s; packaged ABIs: %s\n' \
+        "${abi}" "$(printf '%s' "${actual_abis}" | tr '\n' ',' | sed 's/,$//')" >&2
+      exit 1
+    fi
+  done
+fi
+
+printf 'Verified APK: %s %s (%s), ABIs %s, JS bundle %s bytes, sha256 %s\n' \
   "${actual_package}" "${actual_version_name}" "${actual_version_code}" \
+  "$(printf '%s' "${actual_abis}" | tr '\n' ',' | sed 's/,$//')" \
   "${bundle_size}" "${hash_after}"

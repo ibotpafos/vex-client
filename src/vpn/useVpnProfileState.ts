@@ -3,10 +3,9 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Platform } from 'react-native';
 import { errorMessage } from '@/utils/error';
 
-import { entitlement, hasPaidEntitlement, type Entitlement, type VpnLocation } from '../api/vexApi';
+import { entitlement, hasPaidEntitlement, type Entitlement } from '../api/vexApi';
 import { resetVpnProfileCache, resolveVpnProfile, rotateVpnProfileKey, type VpnProfile } from './profile';
 import type { ResolveConnectableProfileOptions } from './serverSwitch';
-import { chooseBestVpnLocation } from './serverSelection';
 import { clearHotVpnProfiles, hydrateHotVpnProfilesToQueryCache, loadHotVpnProfileResult, profileFromHotRecord, saveHotVpnProfile } from './hotProfileCache';
 import { shouldUseLocalProfileBeforeOnline } from './connectFlow';
 import type { VpnRoutingMode } from './routingPolicy';
@@ -19,14 +18,12 @@ export type VpnProfileRefreshEvent = {
 
 type UseVpnProfileStateInput = {
   accessToken?: string;
-  availableLocations: VpnLocation[];
   hasVpnAccess: boolean;
   knownEntitlement: Entitlement | null;
   onDeviceRevoked: () => Promise<void>;
   onProfileRefreshFailed?: (event: { error: unknown; locationId: string; reason: string }) => void;
   onProfileRotationRequired: () => void;
   onSubscriptionRequired: () => void;
-  prewarmStaleMs: number;
   profileRefreshMs: number;
   requestVpnPermission: () => Promise<boolean>;
   routingMode: VpnRoutingMode;
@@ -51,14 +48,12 @@ type UseVpnProfileStateResult = {
 export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfileStateResult {
   const {
     accessToken,
-    availableLocations,
     hasVpnAccess,
     knownEntitlement,
     onDeviceRevoked,
     onProfileRefreshFailed,
     onProfileRotationRequired,
     onSubscriptionRequired,
-    prewarmStaleMs,
     profileRefreshMs,
     requestVpnPermission,
     routingMode,
@@ -211,44 +206,6 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
     queryClient,
     selectedLocationId,
   ]);
-
-  useEffect(() => {
-    if (!accessToken || !hasVpnAccess || !entitlementState || availableLocations.length === 0) {
-      return undefined;
-    }
-
-    let cancelled = false;
-    const prewarmProfiles = async () => {
-      const locations = prewarmLocationOrder(availableLocations, selectedLocationId).slice(0, 4);
-      for (let index = 0; index < locations.length; index += 2) {
-        if (cancelled) {
-          return;
-        }
-        const batch = locations.slice(index, index + 2);
-        await Promise.all(batch.map((location) => queryClient.prefetchQuery({
-          queryKey: ['vpn-profile', accessToken, location.id, routingMode],
-          queryFn: () => resolveVpnProfile(accessToken, entitlementState, location.id, { routingMode, userId }),
-          staleTime: prewarmStaleMs,
-        }).then(() => {
-          const profile = queryClient.getQueryData<VpnProfile>(['vpn-profile', accessToken, location.id, routingMode]);
-          if (profile) {
-            cacheProfile(location.id, profile);
-          }
-        }).catch((error) => {
-          onProfileRefreshFailed?.({
-            error,
-            locationId: location.id,
-            reason: 'profile_prewarm_failed',
-          });
-        })));
-      }
-    };
-
-    void prewarmProfiles();
-    return () => {
-      cancelled = true;
-    };
-  }, [accessToken, availableLocations, cacheProfile, entitlementState, hasVpnAccess, onProfileRefreshFailed, prewarmStaleMs, queryClient, routingMode, selectedLocationId, userId]);
 
   const rotateActiveProfile = useCallback(async (profile: VpnProfile, locationId: string) => {
     if (!accessToken) {
@@ -430,20 +387,4 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
     rotateActiveProfile,
     setActiveProfile: setVpnProfile,
   };
-}
-
-function prewarmLocationOrder(locations: VpnLocation[], selectedLocationId: string): VpnLocation[] {
-  const selected = locations.find((location) => location.id === selectedLocationId);
-  const best = chooseBestVpnLocation(locations);
-  const ordered: VpnLocation[] = [];
-  for (const candidate of [selected, best, ...locations]) {
-    if (!candidate || ordered.some((location) => location.id === candidate.id)) {
-      continue;
-    }
-    if (candidate.availability === 'retired' || candidate.healthyNodes <= 0) {
-      continue;
-    }
-    ordered.push(candidate);
-  }
-  return ordered;
 }

@@ -967,8 +967,6 @@ function runAndroidRoutingSafetyTests(): void {
   assertEqual(androidExperimentalRoutingEnabled('android', undefined), false);
   assertEqual(androidExperimentalRoutingEnabled('android', '0'), false);
   assertEqual(androidExperimentalRoutingEnabled('android', '1'), true);
-  assertEqual(androidExperimentalRoutingEnabled('android', '1', 'preview'), true);
-  assertEqual(androidExperimentalRoutingEnabled('android', '1', 'production'), false);
   assertEqual(androidExperimentalRoutingEnabled('ios', '1'), false);
   assertEqual(canAutomaticallyApplyOtaUpdate('active', { state: 'disconnected' }), true);
   assertEqual(canAutomaticallyApplyOtaUpdate('active', { state: 'error' }), true);

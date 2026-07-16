@@ -1,9 +1,7 @@
-export function androidExperimentalRoutingEnabled(
-  platform: string,
-  flag: string | undefined,
-  releaseChannel?: string,
-): boolean {
-  return platform === 'android' && flag === '1' && releaseChannel !== 'production';
+export function androidExperimentalRoutingEnabled(platform: string, flag: string | undefined): boolean {
+  // Production uses the server's Binder-limited android-smart-v1 profile.
+  // Setting the flag to 0 remains the emergency full-tunnel fallback.
+  return platform === 'android' && flag === '1';
 }
 
 export function androidProfilePlatform(platform: string, experimentalRouting: boolean): string {

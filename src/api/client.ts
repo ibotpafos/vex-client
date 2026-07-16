@@ -215,7 +215,6 @@ export async function clientVersionHeaders(): Promise<Record<string, string>> {
   const experimentalAndroidRouting = androidExperimentalRoutingEnabled(
     Platform.OS,
     process.env.EXPO_PUBLIC_VEX_ANDROID_EXPERIMENTAL_ROUTING,
-    process.env.EXPO_PUBLIC_VEX_RELEASE_CHANNEL,
   );
   return {
     'X-Vex-Platform': androidProfilePlatform(appInfo.platform, experimentalAndroidRouting),

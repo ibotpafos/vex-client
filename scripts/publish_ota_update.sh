@@ -75,6 +75,6 @@ exec bash scripts/run_with_local_release_cache.sh env \
   VEX_OTA_PROVIDER=expo-open-ota \
   EXPO_PUBLIC_VEX_RELEASE_CHANNEL="${branch}" \
   EXPO_PUBLIC_VEX_UPDATE_CHANNEL="${branch}" \
-  EXPO_PUBLIC_VEX_ANDROID_EXPERIMENTAL_ROUTING="${EXPO_PUBLIC_VEX_ANDROID_EXPERIMENTAL_ROUTING:-0}" \
+  EXPO_PUBLIC_VEX_ANDROID_EXPERIMENTAL_ROUTING="${EXPO_PUBLIC_VEX_ANDROID_EXPERIMENTAL_ROUTING:-1}" \
   RELEASE_CHANNEL="${branch}" \
   "${root_dir}/node_modules/.bin/eoas" "${args[@]}"

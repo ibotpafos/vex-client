@@ -1,5 +1,9 @@
-export function androidExperimentalRoutingEnabled(platform: string, flag: string | undefined): boolean {
-  return platform === 'android' && flag === '1';
+export function androidExperimentalRoutingEnabled(
+  platform: string,
+  flag: string | undefined,
+  releaseChannel?: string,
+): boolean {
+  return platform === 'android' && flag === '1' && releaseChannel !== 'production';
 }
 
 export function androidProfilePlatform(platform: string, experimentalRouting: boolean): string {

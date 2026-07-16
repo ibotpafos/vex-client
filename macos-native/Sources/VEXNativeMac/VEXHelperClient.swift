@@ -12,15 +12,18 @@ final class VEXHelperModel: ObservableObject {
     private let installer = VEXHelperInstaller()
     private var pollTask: Task<Void, Never>?
     private var consecutiveStatusFailures = 0
-    private let connectStabilizationDeadline: Duration = .seconds(2)
+    private var helperReadinessValidated = false
+    private let connectStabilizationDeadline: Duration = .milliseconds(750)
 
     func start() async {
         installState = installer.installedState
         do {
             try await installer.ensureReady(allowAdminInstall: false)
+            helperReadinessValidated = true
             installState = installer.installedState
             await detachOwnerWatchdog(quiet: true)
         } catch {
+            helperReadinessValidated = false
             installState = installer.installedState
             message = error.localizedDescription
         }
@@ -99,7 +102,9 @@ final class VEXHelperModel: ObservableObject {
     }
 
     func ensureHelperReady() async throws {
+        guard !helperReadinessValidated else { return }
         try await installer.ensureReady(allowAdminInstall: true)
+        helperReadinessValidated = true
         installState = installer.installedState
     }
 
@@ -111,10 +116,12 @@ final class VEXHelperModel: ObservableObject {
 
         do {
             try await installer.repairWithAdminPrivileges()
+            helperReadinessValidated = true
             installState = installer.installedState
             message = "Helper установлен."
             await refreshStatus(quiet: true)
         } catch {
+            helperReadinessValidated = false
             installState = installer.installedState
             message = VEXUserFacingText.status(error.localizedDescription) ?? error.localizedDescription
         }
@@ -157,6 +164,9 @@ final class VEXHelperModel: ObservableObject {
                 await refreshStatus(quiet: true)
             }
         } catch {
+            if isConnectCommand(command) {
+                helperReadinessValidated = false
+            }
             message = VEXUserFacingText.status("Command failed: \(error.localizedDescription)")
             if isConnectCommand(command) {
                 await client.silentDisconnect(releaseAntiLeak: true)
@@ -176,6 +186,8 @@ final class VEXHelperModel: ObservableObject {
             guard isConnectCommand(command), error.isRetryableConnectFailure else {
                 throw error
             }
+            helperReadinessValidated = false
+            try await ensureHelperReady()
             await client.silentDisconnect(releaseAntiLeak: true)
             return try await client.send(command)
         }
@@ -405,12 +417,10 @@ struct VpnStatus: Equatable {
         let rx = UInt64(values["rx"] ?? "") ?? 0
         let tx = UInt64(values["tx"] ?? "") ?? 0
         let handshake = UInt64(values["latest_handshake"] ?? "").flatMap { $0 > 0 ? $0 : nil }
-        let hasVerifiedTraffic = rx > 0 || handshake != nil
-
         let nextState: VpnConnectionState
         if operationInProgress {
             nextState = .connecting
-        } else if routeOk && hasVerifiedTraffic && (helperState == nil || helperState == "connected") {
+        } else if routeOk && socketExists && (helperState == nil || helperState == "connected") {
             nextState = .connected
         } else {
             nextState = .disconnected

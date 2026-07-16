@@ -3,7 +3,7 @@ import XCTest
 
 final class VpnStatusTests: XCTestCase {
     func testConnectedStatusParsesTrafficAndLeakProtection() {
-        let status = VpnStatus(helperResponse: "state=connected route_ok=true rx=161700000 tx=815400000 latest_handshake=0 leak_protection=off\n")
+        let status = VpnStatus(helperResponse: "state=connected route_ok=true socket_exists=true rx=161700000 tx=815400000 latest_handshake=0 leak_protection=off\n")
 
         XCTAssertEqual(status.state, .connected)
         XCTAssertTrue(status.routeOk)
@@ -61,11 +61,11 @@ final class VpnStatusTests: XCTestCase {
         )
     }
 
-    func testRouteOnlyAndTransmitOnlySignalsAreNotConnected() {
-        let status = VpnStatus(helperResponse: "state=connected iface=utun7 socket_exists=true route_ok=true route_iface=utun7 rx=0 tx=1313 latest_handshake=0\n")
+    func testRouteAndUAPISocketAreTrafficReadyBeforeFirstHandshake() {
+        let status = VpnStatus(helperResponse: "state=connected iface=utun7 socket_exists=true route_ok=true route_iface=utun7 rx=0 tx=0 latest_handshake=0\n")
 
-        XCTAssertEqual(status.state, .disconnected)
-        XCTAssertFalse(status.isUsableConnectedStatus)
+        XCTAssertEqual(status.state, .connected)
+        XCTAssertTrue(status.isUsableConnectedStatus)
     }
 
     func testStaleTransientBusyMessagesAreHiddenAfterDisconnect() {

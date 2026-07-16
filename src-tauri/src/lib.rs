@@ -370,7 +370,7 @@ mod platform_vpn {
     const HELPER_DIR: &str = "/Library/Application Support/VEX VPN/helper";
     const HELPER_PLIST: &str = "/Library/LaunchDaemons/app.vex.vpn.helper.plist";
     const HELPER_VERSION_FILE: &str = "/Library/Application Support/VEX VPN/helper/version";
-    const HELPER_VERSION: &str = "32";
+    const HELPER_VERSION: &str = "33";
     const LAUNCHD_LABEL: &str = "app.vex.vpn.helper";
     const HELPER_SOCKET: &str = "/var/run/vex-helper.sock";
     const HELPER_START_TIMEOUT: Duration = Duration::from_secs(2);

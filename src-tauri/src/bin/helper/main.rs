@@ -27,10 +27,10 @@ use firewall::{antileak_is_active, disable_antileak_pf, enable_antileak_pf};
 use logger::Logger;
 use routing::{
     add_host_route_to_target, add_protected_public_host_routes_to_target, cleanup_interface_routes,
-    default_route_target, del_host_route, del_protected_public_host_routes, endpoint_host,
-    endpoint_port, ensure_endpoint_host_route, ensure_host_route, load_endpoint, load_iface,
-    persist_endpoint, persist_iface, persist_protected_public_hosts, public_default_route_target,
-    resolve_to_ip, route_interface_for_destination, routed_ipv4_allowed_ips,
+    endpoint_host, endpoint_port, ensure_endpoint_host_route, ensure_host_route, host_route_target,
+    load_endpoint, load_iface, load_protected_public_hosts, persist_endpoint, persist_iface,
+    persist_protected_public_hosts, public_default_route_target, resolve_to_ip,
+    route_interface_for_destination, routed_ipv4_allowed_ips, HostRouteTarget,
 };
 use state::write_state_file;
 use uapi::{uapi_configure, WgConfig, WG_RUNTIME_DIR};
@@ -42,6 +42,8 @@ const AWG_GO_BIN: &str = "/Library/Application Support/VEX VPN/helper/amneziawg-
 
 const OWNER_SESSION_FILE: &str = "/Library/Application Support/VEX VPN/helper/owner.state";
 const OWNER_WATCHDOG_INTERVAL: Duration = Duration::from_secs(4);
+const ROUTE_WATCHDOG_INTERVAL: Duration = Duration::from_secs(2);
+const ROUTE_WATCHDOG_FULL_AUDIT_TICKS: u8 = 15;
 
 const OPERATION_LOCK_FILE: &str = "/Library/Application Support/VEX VPN/helper/operation.lock";
 const OPERATION_LOCK_STALE_AFTER: Duration = Duration::from_secs(120);
@@ -329,12 +331,6 @@ fn action_down(log: &Logger, release_antileak: bool) -> Result<()> {
         log.info("ifconfig", &format!("brought {} down", iface));
     }
 
-    if let Some(ref ep) = endpoint {
-        let host = endpoint_host(ep);
-        del_host_route(host, log);
-    }
-    del_protected_public_host_routes(log);
-
     kill_awg_go(HELPER_DIR, log);
 
     if release_antileak {
@@ -550,17 +546,72 @@ fn action_repair(log: &Logger) -> Result<()> {
         return Ok(());
     };
     ensure_endpoint_host_route(&endpoint, log)?;
-    let target = default_route_target()?;
-    if target.is_tunnel_interface() {
-        let protected_hosts = resolve_protected_public_hosts(log);
-        for host in &protected_hosts {
-            ensure_host_route(host, log)?;
-        }
-        persist_protected_public_hosts(&protected_hosts);
-    } else {
-        del_protected_public_host_routes(log);
+    let mut protected_hosts = load_protected_public_hosts();
+    protected_hosts.extend(resolve_protected_public_hosts(log));
+    protected_hosts.sort();
+    protected_hosts.dedup();
+    for host in &protected_hosts {
+        ensure_host_route(host, log)?;
     }
+    persist_protected_public_hosts(&protected_hosts);
     Ok(())
+}
+
+fn active_tunnel_route_context() -> Option<(String, HostRouteTarget)> {
+    let iface = load_iface()?;
+    if !Path::new(&format!("{}/{}.sock", WG_RUNTIME_DIR, iface)).exists() {
+        return None;
+    }
+    let target = public_default_route_target().ok()?;
+    Some((iface, target))
+}
+
+fn active_tunnel_routes_need_repair(target: &HostRouteTarget) -> bool {
+    let Some(endpoint) = load_endpoint() else {
+        return false;
+    };
+    if host_route_target(endpoint_host(&endpoint)).as_ref() != Some(target) {
+        return true;
+    }
+    load_protected_public_hosts()
+        .iter()
+        .any(|host| host_route_target(host).as_ref() != Some(target))
+}
+
+fn arm_route_watchdog() {
+    thread::spawn(move || {
+        let mut previous_context: Option<(String, HostRouteTarget)> = None;
+        let mut audit_ticks = ROUTE_WATCHDOG_FULL_AUDIT_TICKS;
+        loop {
+            thread::sleep(ROUTE_WATCHDOG_INTERVAL);
+            let Some(context) = active_tunnel_route_context() else {
+                previous_context = None;
+                audit_ticks = ROUTE_WATCHDOG_FULL_AUDIT_TICKS;
+                continue;
+            };
+            audit_ticks = audit_ticks.saturating_add(1);
+            let context_changed = previous_context.as_ref() != Some(&context);
+            if !context_changed && audit_ticks < ROUTE_WATCHDOG_FULL_AUDIT_TICKS {
+                continue;
+            }
+            previous_context = Some(context.clone());
+            audit_ticks = 0;
+            if !active_tunnel_routes_need_repair(&context.1) {
+                continue;
+            }
+            let log = Logger::new(HELPER_DIR);
+            match acquire_operation_lock(&log) {
+                Ok(_guard) => {
+                    if let Err(error) = action_repair(&log) {
+                        log.warn("route-watchdog", &format!("route repair failed: {}", error));
+                    }
+                }
+                Err(error) => {
+                    log.warn("route-watchdog", &format!("repair deferred: {}", error));
+                }
+            }
+        }
+    });
 }
 
 fn route_uses_interface(destination: &str, interface: &str) -> bool {
@@ -746,9 +797,6 @@ fn helper_status_response() -> String {
         route_ok,
         !iface.is_empty(),
         sock_exists,
-        rx,
-        tx,
-        handshake,
         antileak_is_active(),
     );
     format!(
@@ -762,18 +810,13 @@ fn helper_status_state(
     route_ok: bool,
     has_iface: bool,
     sock_exists: bool,
-    rx: u64,
-    tx: u64,
-    handshake: u64,
     antileak_active: bool,
 ) -> &'static str {
     if operation {
         "connecting"
-    } else if route_ok && (rx > 0 || handshake > 0) {
+    } else if route_ok && has_iface && sock_exists {
         "connected"
-    } else if has_iface && (sock_exists || rx > 0 || tx > 0 || handshake > 0) {
-        "error"
-    } else if antileak_active {
+    } else if (has_iface && sock_exists) || antileak_active {
         "error"
     } else {
         "disconnected"
@@ -938,9 +981,11 @@ fn main() {
         }
     };
 
+    arm_route_watchdog();
+
     log.info(
         "main",
-        &format!("vex-helper v32 started on {}", HELPER_SOCKET),
+        &format!("vex-helper v33 started on {}", HELPER_SOCKET),
     );
 
     for stream in listener.incoming() {
@@ -1131,23 +1176,23 @@ mod tests {
     #[test]
     fn status_state_requires_route_ownership_for_connected() {
         assert_eq!(
-            helper_status_state(false, true, true, true, 0, 0, 0, false),
-            "error"
-        );
-        assert_eq!(
-            helper_status_state(false, true, true, true, 1, 500, 0, false),
+            helper_status_state(false, true, true, true, false),
             "connected"
         );
         assert_eq!(
-            helper_status_state(false, true, true, true, 0, 500, 42, false),
+            helper_status_state(false, true, true, true, false),
             "connected"
         );
         assert_eq!(
-            helper_status_state(false, false, true, true, 2048, 4096, 0, false),
+            helper_status_state(false, true, true, true, false),
+            "connected"
+        );
+        assert_eq!(
+            helper_status_state(false, false, true, true, false),
             "error"
         );
         assert_eq!(
-            helper_status_state(false, false, false, false, 0, 0, 0, false),
+            helper_status_state(false, false, false, false, false),
             "disconnected"
         );
     }

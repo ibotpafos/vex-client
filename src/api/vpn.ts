@@ -5,6 +5,7 @@ import { generateWireGuardKeyPair, replaceWireGuardKeyPair, getOrCreateWireGuard
 import { nativeVpnDeviceForClient } from '@/vpn/nativeDeviceSelection';
 import { isKeyEpochMismatchError, nextManagedKeyEpoch } from '@/vpn/keyEpochRecovery';
 import { defaultVpnRoutingMode, defaultVpnRoutingPolicyVersion, resolvedVpnBypassRegion } from '@/vpn/routingPolicy';
+import { devicePushTokenPath } from '@/notifications/pushRegistration';
 import { jsonRequest, rawRequest, clientVersionHeaders, isTauriRuntime } from './client';
 import { buildCreateDeviceRequest } from './deviceCreateRequest';
 import {
@@ -238,7 +239,7 @@ export async function submitClientDiagnostics(accessToken: string, report: Clien
 }
 
 export async function registerDevicePushToken(accessToken: string, deviceId: string, push: { provider: string; token: string }): Promise<VpnDevice> {
-  const response = await jsonRequest<RegisterDevicePushTokenResultDTO>('/v1/devices/push-token', {
+  const response = await jsonRequest<RegisterDevicePushTokenResultDTO>(devicePushTokenPath, {
     method: 'POST',
     accessToken,
     body: {

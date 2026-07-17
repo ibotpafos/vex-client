@@ -1,5 +1,6 @@
 import { billingDurationLabel, billingDurationMonths, billingSummaryFallbackCopy, buildBillingSummary, type BillingPlanSource } from '../src/api/billingSummary';
 import { buildSubscriptionReminders } from '../src/notifications/subscriptionReminderSchedule';
+import { devicePushTokenPath, fcmPushRegistration } from '../src/notifications/pushRegistration';
 import { normalizeApiRequestError, technicalWorksMessage } from '../src/api/error';
 import { installManualUpdate, isTrustedIosUpdateUrl } from '../src/api/manualUpdateInstall';
 import { errorMessage } from '../src/utils/error';
@@ -66,6 +67,12 @@ import type { VpnStatus } from '../src/native/vexVpn';
 import type { VpnProfile } from '../src/vpn/profile';
 
 const connectedStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0 };
+
+{
+  assertEqual(devicePushTokenPath, '/v1/vpn/push-token');
+  assertDeepEqual(fcmPushRegistration(' native-fcm-token '), { provider: 'fcm', token: 'native-fcm-token' });
+  assertEqual(fcmPushRegistration('  '), null);
+}
 
 {
   assertEqual(vpnConnectionAnimationsEnabled('android', false), false);

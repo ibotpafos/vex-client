@@ -103,7 +103,7 @@ def localBuildSigningConfig = {
     return android.signingConfigs.debug
 }
 
-if (file("google-services.json").exists() && !optionalApplicationIdSuffix() && vexAndroidApplicationId() == 'com.vexguard.app') {
+if (file("google-services.json").exists() && !optionalApplicationIdSuffix()) {
     apply plugin: "com.google.gms.google-services"
 }
 

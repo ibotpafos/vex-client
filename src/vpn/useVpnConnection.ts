@@ -34,7 +34,7 @@ import {
   updateVpnLiveActivity,
   type VpnStatus,
 } from '@/native/vexVpn';
-import { getExpoAccountPushRegistration } from '@/notifications/expoPush';
+import { getFcmAccountPushRegistration } from '@/notifications/expoPush';
 import {
   getAndroidAutoConnectEnabled,
   getAntiLeakEnabled,
@@ -644,7 +644,7 @@ export function useVpnConnection() {
 
     let cancelled = false;
     const registerAccountPushToken = async () => {
-      const registration = await getExpoAccountPushRegistration().catch(() => null);
+      const registration = await getFcmAccountPushRegistration().catch(() => null);
       if (cancelled || !registration) {
         return;
       }

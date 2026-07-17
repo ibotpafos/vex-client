@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "789724768389",
+    "project_id": "vexvpn-a699a",
+    "storage_bucket": "vexvpn-a699a.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:789724768389:android:bef114dc5445932680e1ec",
+        "android_client_info": {
+          "package_name": "com.vexguard.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC4ByxTS7RHI0XL2lMdSMmuKMMsDBKLzvM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:789724768389:android:8193318c96aaa5f580e1ec",
+        "android_client_info": {
+          "package_name": "com.vexguard.client"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC4ByxTS7RHI0XL2lMdSMmuKMMsDBKLzvM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

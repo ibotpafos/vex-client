@@ -27,6 +27,8 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
     def test_linux_appimagetool_status_does_not_pollute_resolved_path(self) -> None:
         script = (ROOT / "scripts" / "build_linux_release.sh").read_text()
         self.assertIn('echo "Downloading appimagetool for ${arch}" >&2', script)
+        self.assertIn('"${tool}" --comp zstd --no-appstream', script)
+        self.assertNotIn('"${tool}" --comp xz --no-appstream', script)
 
 
 if __name__ == "__main__":

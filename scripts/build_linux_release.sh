@@ -166,7 +166,7 @@ repack_and_resign_appimage() {
 
   rm -f "${appimage}" "${appimage}.sig"
   APPIMAGE_EXTRACT_AND_RUN=1 ARCH="${arch}" VERSION="${version}" \
-    "${tool}" --comp xz --no-appstream "${appdir}" "${rebuilt}"
+    "${tool}" --comp zstd --no-appstream "${appdir}" "${rebuilt}"
 
   mv "${rebuilt}" "${appimage}"
   chmod +x "${appimage}"

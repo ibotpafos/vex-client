@@ -31,7 +31,10 @@ package_line="$(printf '%s\n' "${badging}" | sed -n 's/^package: //p' | head -n 
 actual_package="$(printf '%s\n' "${package_line}" | sed -n "s/^name='\([^']*\)'.*/\1/p")"
 actual_version_code="$(printf '%s\n' "${package_line}" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")"
 actual_version_name="$(printf '%s\n' "${package_line}" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")"
-bundle_size="$(unzip -l "${apk_path}" assets/index.android.bundle | awk '$NF == "assets/index.android.bundle" { print $1; exit }')"
+# Consume the complete unzip listing before printing the match. Exiting awk
+# early closes the pipe while unzip is still writing; with `set -o pipefail`
+# Linux reports that expected SIGPIPE as exit 141 after a successful build.
+bundle_size="$(unzip -l "${apk_path}" assets/index.android.bundle | awk '$NF == "assets/index.android.bundle" && !size { size = $1 } END { if (size) print size }')"
 
 if [[ ! "${bundle_size:-}" =~ ^[0-9]+$ || "${bundle_size}" -lt 100000 ]]; then
   echo "APK does not contain a complete assets/index.android.bundle: ${apk_path}" >&2

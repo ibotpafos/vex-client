@@ -1,6 +1,6 @@
 {
   "name": "vex-client",
-  "version": "1.0.53",
+  "version": "1.0.54",
   "private": true,
   "main": "expo-router/entry",
   "dependencies": {
@@ -37,7 +37,7 @@
     "react-native-screens": "4.25.2",
     "react-native-svg": "15.15.4",
     "react-native-web": "^0.21.2",
-    "react-native-worklets": "0.9.1"
+    "react-native-worklets": "0.8.3"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",

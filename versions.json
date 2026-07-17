@@ -6,11 +6,11 @@
     "min_config_schema_version": 1
   },
   "android": {
-    "version": "1.0.53",
-    "build": 55,
+    "version": "1.0.54",
+    "build": 56,
     "min_supported_build": 1002930,
     "is_required": true,
-    "release_notes": "Android: восстановлены стабильные умный режим и антидетект IP, исправлены переключение сетей, устаревшие ключи и коды входа, добавлен точный пинг от устройства до сервера.",
+    "release_notes": "Android: добавлены надёжные уведомления через Firebase Cloud Messaging, исправлена регистрация push-токена и сохранены улучшения стабильности VPN.",
     "core_version": "0.1.0",
     "config_schema_version": 1,
     "min_config_schema_version": 1

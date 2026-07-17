@@ -24,6 +24,10 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
             self.assertIn("VEX_RUNTIME_VERSION", workflow)
             self.assertIn('require("./app.json").expo.version', workflow)
 
+    def test_linux_appimagetool_status_does_not_pollute_resolved_path(self) -> None:
+        script = (ROOT / "scripts" / "build_linux_release.sh").read_text()
+        self.assertIn('echo "Downloading appimagetool for ${arch}" >&2', script)
+
 
 if __name__ == "__main__":
     unittest.main()

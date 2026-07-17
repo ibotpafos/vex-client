@@ -91,7 +91,7 @@ download_appimagetool() {
   mkdir -p "${cache_dir}"
   if [[ ! -x "${tool}" ]]; then
     url="https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${arch}.AppImage"
-    echo "Downloading appimagetool for ${arch}"
+    echo "Downloading appimagetool for ${arch}" >&2
     curl -fsSL "${url}" -o "${tool}"
     chmod +x "${tool}"
   fi

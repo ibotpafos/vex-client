@@ -113,18 +113,21 @@ export function useVpnConnectionFlow({
           connectAttemptTimeoutMs,
           'VPN connect timed out.',
         );
+        const interfaceUpMs = Date.now();
         const status = await waitForVerifiedVpnConnection(startedStatus, getVpnStatus, {
           // The native backend can briefly expose the previous peer timestamp
           // while replacing a tunnel. Require activity from this attempt. The
           // small tolerance covers second-resolution backend timestamps.
           minimumHandshakeEpochMillis: nativeStartMs - 2_000,
         });
+        const verificationCompletedMs = Date.now();
         return {
-          interfaceUpMs: Date.now(),
+          interfaceUpMs,
           endpointAttempts,
           nativeStartMs,
           profile: withLastSuccessfulEndpoint(attempt, endpoint),
           status,
+          verificationCompletedMs,
         };
       } catch (error) {
         lastError = error;
@@ -265,8 +268,8 @@ export function useVpnConnectionFlow({
             nativeStartMs: connected.nativeStartMs,
             profile: connected.profile,
             tapStartedAt,
+            verificationCompletedMs: connected.verificationCompletedMs,
           }),
-          interface_up_to_handshake_ms: nextStatus.verified ? Math.max(0, connected.interfaceUpMs - connected.nativeStartMs) : null,
         },
       }).catch(() => undefined);
     }

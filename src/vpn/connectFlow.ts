@@ -50,6 +50,7 @@ export function vpnConnectTimingSamples(input: {
   nativeStartMs: number;
   profile: VpnProfile;
   tapStartedAt: number;
+  verificationCompletedMs: number;
 }): Record<string, unknown> {
   return {
     connect_profile_source: input.profile.source,
@@ -58,7 +59,10 @@ export function vpnConnectTimingSamples(input: {
     hot_profile_used: input.profile.hotProfileUsed === true,
     native_start_to_interface_up_ms: Math.max(0, input.interfaceUpMs - input.nativeStartMs),
     profile_resolve_ms: Math.max(0, input.nativeStartMs - input.tapStartedAt),
+    tap_to_interface_up_ms: Math.max(0, input.interfaceUpMs - input.tapStartedAt),
     tap_to_native_start_ms: Math.max(0, input.nativeStartMs - input.tapStartedAt),
+    tap_to_verified_ms: Math.max(0, input.verificationCompletedMs - input.tapStartedAt),
+    interface_up_to_verified_ms: Math.max(0, input.verificationCompletedMs - input.interfaceUpMs),
   };
 }
 

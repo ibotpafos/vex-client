@@ -783,6 +783,7 @@ function runHotConnectFlowTests(): void {
     nativeStartMs: 1_200,
     profile: hotProfile,
     tapStartedAt: 1_000,
+    verificationCompletedMs: 1_400,
   }), {
     connect_profile_source: 'local',
     endpoint_attempts: ['de.example.com:443'],
@@ -790,7 +791,10 @@ function runHotConnectFlowTests(): void {
     hot_profile_used: true,
     native_start_to_interface_up_ms: 60,
     profile_resolve_ms: 200,
+    tap_to_interface_up_ms: 260,
     tap_to_native_start_ms: 200,
+    tap_to_verified_ms: 400,
+    interface_up_to_verified_ms: 140,
   });
 }
 

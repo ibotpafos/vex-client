@@ -42,6 +42,7 @@ export type ConnectedVpnAttempt = {
   nativeStartMs: number;
   profile: VpnProfile;
   status: VpnStatus;
+  verificationCompletedMs: number;
 };
 
 export type ConnectionPhase = 'idle' | 'connecting' | 'connected' | 'verifying' | 'degraded' | 'disconnecting' | 'switching' | 'blocked';

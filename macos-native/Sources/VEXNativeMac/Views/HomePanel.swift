@@ -91,9 +91,6 @@ private struct PowerHero: View {
     let isBusy: Bool
     let action: () -> Void
 
-    @State private var pulse = false
-    @State private var orbit = false
-
     private var isConnected: Bool { status.isUsableConnectedStatus }
 
     private var isTransitioning: Bool {
@@ -142,43 +139,11 @@ private struct PowerHero: View {
                 .frame(height: 286)
                 .opacity(0.52)
 
-            Circle()
-                .fill(heroTint.opacity(isConnected ? 0.16 : 0.10))
-                .frame(width: 222, height: 222)
-                .shadow(color: heroTint.opacity(isTransitioning ? 0.34 : 0.26), radius: isTransitioning ? 20 : 12)
-                .scaleEffect(shouldAnimateHero ? pulseScale : 1.0)
-                .animation(shouldAnimateHero ? pulseAnimation : nil, value: pulse)
-
-            Circle()
-                .stroke(heroTint.opacity(0.34), lineWidth: 1)
-                .frame(width: 228, height: 228)
-                .scaleEffect(shouldAnimateHero ? orbitHaloScale : 1.0)
-                .opacity(shouldAnimateHero ? orbitHaloOpacity : stableHaloOpacity)
-                .animation(shouldAnimateHero ? pulseAnimation : nil, value: pulse)
-
-            Circle()
-                .stroke(Color.vexCyanLight.opacity(0.08), lineWidth: 6)
-                .frame(width: 242, height: 242)
-
-            Circle()
-                .trim(from: 0.08, to: 0.92)
-                .stroke(
-                    AngularGradient(
-                        colors: [
-                            heroTint.opacity(0.18),
-                            heroTint.opacity(0.96),
-                            Color.vexCyanLight.opacity(0.82),
-                            heroTint.opacity(0.18),
-                        ],
-                        center: .center
-                    ),
-                    style: StrokeStyle(lineWidth: 7, lineCap: .round)
-                )
-                .frame(width: 214, height: 214)
-                .rotationEffect(.degrees(shouldAnimateHero && orbit ? 360 : 0))
-                .opacity(isTransitioning ? 0.96 : 0.0)
-                .animation(shouldAnimateHero ? orbitAnimation : nil, value: orbit)
-                .animation(.easeInOut(duration: 0.24), value: status.state)
+            if shouldAnimateHero {
+                AnimatedHeroLayers(status: status, tint: heroTint)
+            } else {
+                StaticHeroLayers(isConnected: isConnected, tint: heroTint)
+            }
 
             Button(action: action) {
                 ZStack {
@@ -228,16 +193,122 @@ private struct PowerHero: View {
         .frame(maxWidth: .infinity, minHeight: 292)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(isConnected ? "Отключить VPN" : "Подключить VPN")
-        .onAppear {
-            updateAnimationState()
-        }
-        .onChange(of: shouldAnimateHero) { _, _ in
-            updateAnimationState()
-        }
     }
 
     private var heroTint: Color {
         isConnected ? Color.green : Color.vexCyan
+    }
+
+    private var buttonScale: CGFloat {
+        switch status.state {
+        case .connected:
+            return 1.0
+        case .connecting:
+            return 1.02
+        case .disconnecting:
+            return 0.985
+        case .disconnected:
+            return 1.0
+        }
+    }
+
+    private var buttonRingColor: Color {
+        isTransitioning ? heroTint.opacity(0.92) : Color(red: 0.207, green: 0.902, blue: 0.957)
+    }
+
+    private var buttonScaleAnimation: Animation {
+        switch status.state {
+        case .connecting:
+            return .spring(response: 0.32, dampingFraction: 0.68)
+        case .disconnecting:
+            return .spring(response: 0.36, dampingFraction: 0.78)
+        case .connected, .disconnected:
+            return .snappy(duration: 0.24)
+        }
+    }
+
+}
+
+private struct StaticHeroLayers: View {
+    let isConnected: Bool
+    let tint: Color
+
+    var body: some View {
+        Group {
+            Circle()
+                .fill(tint.opacity(isConnected ? 0.16 : 0.10))
+                .frame(width: 222, height: 222)
+                .shadow(color: tint.opacity(0.26), radius: 12)
+
+            Circle()
+                .stroke(tint.opacity(0.34), lineWidth: 1)
+                .frame(width: 228, height: 228)
+                .opacity(isConnected ? 0.42 : 0.24)
+
+            Circle()
+                .stroke(Color.vexCyanLight.opacity(0.08), lineWidth: 6)
+                .frame(width: 242, height: 242)
+        }
+    }
+}
+
+private struct AnimatedHeroLayers: View {
+    let status: VpnStatus
+    let tint: Color
+
+    @State private var pulse = false
+    @State private var orbit = false
+
+    private var isConnected: Bool { status.isUsableConnectedStatus }
+
+    private var isTransitioning: Bool {
+        status.state == .connecting || status.state == .disconnecting
+    }
+
+    var body: some View {
+        Group {
+            Circle()
+                .fill(tint.opacity(isConnected ? 0.16 : 0.10))
+                .frame(width: 222, height: 222)
+                .shadow(color: tint.opacity(isTransitioning ? 0.34 : 0.26), radius: isTransitioning ? 20 : 12)
+                .scaleEffect(pulseScale)
+                .animation(pulseAnimation, value: pulse)
+
+            Circle()
+                .stroke(tint.opacity(0.34), lineWidth: 1)
+                .frame(width: 228, height: 228)
+                .scaleEffect(orbitHaloScale)
+                .opacity(orbitHaloOpacity)
+                .animation(pulseAnimation, value: pulse)
+
+            Circle()
+                .stroke(Color.vexCyanLight.opacity(0.08), lineWidth: 6)
+                .frame(width: 242, height: 242)
+
+            Circle()
+                .trim(from: 0.08, to: 0.92)
+                .stroke(
+                    AngularGradient(
+                        colors: [
+                            tint.opacity(0.18),
+                            tint.opacity(0.96),
+                            Color.vexCyanLight.opacity(0.82),
+                            tint.opacity(0.18),
+                        ],
+                        center: .center
+                    ),
+                    style: StrokeStyle(lineWidth: 7, lineCap: .round)
+                )
+                .frame(width: 214, height: 214)
+                .rotationEffect(.degrees(orbit ? 360 : 0))
+                .opacity(isTransitioning ? 0.96 : 0.0)
+                .animation(orbitAnimation, value: orbit)
+                .animation(.easeInOut(duration: 0.24), value: status.state)
+        }
+        .onAppear {
+            pulse = true
+            orbit = true
+        }
     }
 
     private var pulseScale: CGFloat {
@@ -279,27 +350,6 @@ private struct PowerHero: View {
         }
     }
 
-    private var stableHaloOpacity: Double {
-        isConnected ? 0.42 : 0.24
-    }
-
-    private var buttonScale: CGFloat {
-        switch status.state {
-        case .connected:
-            return 1.0
-        case .connecting:
-            return 1.02
-        case .disconnecting:
-            return 0.985
-        case .disconnected:
-            return 1.0
-        }
-    }
-
-    private var buttonRingColor: Color {
-        isTransitioning ? heroTint.opacity(0.92) : Color(red: 0.207, green: 0.902, blue: 0.957)
-    }
-
     private var pulseAnimation: Animation {
         switch status.state {
         case .connected:
@@ -316,22 +366,6 @@ private struct PowerHero: View {
     private var orbitAnimation: Animation {
         .linear(duration: status.state == .disconnecting ? 1.45 : 1.05)
             .repeatForever(autoreverses: false)
-    }
-
-    private var buttonScaleAnimation: Animation {
-        switch status.state {
-        case .connecting:
-            return .spring(response: 0.32, dampingFraction: 0.68)
-        case .disconnecting:
-            return .spring(response: 0.36, dampingFraction: 0.78)
-        case .connected, .disconnected:
-            return .snappy(duration: 0.24)
-        }
-    }
-
-    private func updateAnimationState() {
-        pulse = shouldAnimateHero
-        orbit = shouldAnimateHero
     }
 }
 

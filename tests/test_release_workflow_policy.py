@@ -21,6 +21,8 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
             self.assertNotIn("ssh-private-key", workflow)
             self.assertNotIn("production-deploy", workflow)
             self.assertIn("actions/upload-artifact@v4", workflow)
+            self.assertIn("VEX_RUNTIME_VERSION", workflow)
+            self.assertIn("require('./app.json').expo.version", workflow)
 
 
 if __name__ == "__main__":

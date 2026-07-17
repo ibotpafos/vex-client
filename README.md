@@ -15,7 +15,14 @@ This repository contains VEX client applications for desktop and mobile. It inte
 
 ## Release Model
 
-Local release builds are the primary path when GitHub Actions runner availability is blocked. Local build entrypoints keep heavy caches and generated build directories on an external disk, then call the same per-platform scripts used by release lanes.
+Windows and Linux release artifacts are built in GitHub Actions. macOS and
+Android releases are built locally; there are no GitHub release workflows for
+those platforms. Production promotion always stays local in the private VPN
+repository.
+
+Local build entrypoints keep heavy caches and generated build directories on
+an external disk, then call the same per-platform scripts used by release
+lanes or local-only releases.
 
 ```bash
 VEX_LOCAL_RELEASE_CACHE_ROOT=/Volumes/D/Downloads/VEX/local-release-cache/vex-client npm run local:release
@@ -32,7 +39,7 @@ Useful controls:
 
 macOS and Android can build on this macOS workstation. Linux needs a Linux host or VM with the Tauri WebKit dependencies from `.github/workflows/linux-release.yml`. Windows needs a Windows host with PowerShell and the MSVC Rust toolchain.
 
-GitHub Actions release lanes remain as a secondary path. The Windows lane builds artifacts on `windows-latest`:
+The primary Windows lane builds artifacts on GitHub `windows-latest`:
 
 - `Vex-Windows-{version}-setup.exe`
 - `Vex-Windows-{version}.msi`
@@ -42,7 +49,7 @@ GitHub Actions release lanes remain as a secondary path. The Windows lane builds
 
 The updater zip `.sig` is the Tauri updater signature and is the only signature used by the production updater contract. Installer `.sig` files are checksum metadata only; Authenticode code signing is not part of the v1 public build.
 
-GitHub Actions builds Linux artifacts on `ubuntu-24.04`:
+The primary Linux lane builds artifacts on GitHub `ubuntu-24.04`:
 
 - `Vex-Linux-{version}.AppImage`
 - `Vex-Linux-{version}.deb`
@@ -55,7 +62,7 @@ Production promotion stays in the private VPN repository. Public workflows never
 
 ## Required GitHub Secrets
 
-Configure these repository secrets before running the release workflow:
+Configure these repository secrets for the Windows and Linux workflows only:
 
 - `TAURI_SIGNING_PRIVATE_KEY`
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`

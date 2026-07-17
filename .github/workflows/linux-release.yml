@@ -58,6 +58,11 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
+      - name: Resolve Expo runtime version
+        run: |
+          runtime_version="$(node -p 'require("./app.json").expo.version')"
+          echo "VEX_RUNTIME_VERSION=${runtime_version}" >> "${GITHUB_ENV}"
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:

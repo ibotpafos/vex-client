@@ -91,7 +91,7 @@ download_appimagetool() {
   mkdir -p "${cache_dir}"
   if [[ ! -x "${tool}" ]]; then
     url="https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${arch}.AppImage"
-    echo "Downloading appimagetool for ${arch}"
+    echo "Downloading appimagetool for ${arch}" >&2
     curl -fsSL "${url}" -o "${tool}"
     chmod +x "${tool}"
   fi
@@ -166,7 +166,7 @@ repack_and_resign_appimage() {
 
   rm -f "${appimage}" "${appimage}.sig"
   APPIMAGE_EXTRACT_AND_RUN=1 ARCH="${arch}" VERSION="${version}" \
-    "${tool}" --comp xz --no-appstream "${appdir}" "${rebuilt}"
+    "${tool}" --comp zstd --no-appstream "${appdir}" "${rebuilt}"
 
   mv "${rebuilt}" "${appimage}"
   chmod +x "${appimage}"

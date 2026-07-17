@@ -669,6 +669,18 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(sidebar.contains("await helper.repairHelper()"))
     }
 
+    func testStableVpnHeroDestroysRepeatingAnimationView() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let homeURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/HomePanel.swift")
+        let home = try String(contentsOf: homeURL, encoding: .utf8)
+
+        XCTAssertTrue(home.contains("if shouldAnimateHero {"))
+        XCTAssertTrue(home.contains("AnimatedHeroLayers("))
+        XCTAssertTrue(home.contains("StaticHeroLayers("))
+        XCTAssertFalse(home.contains(".animation(shouldAnimateHero ? pulseAnimation : nil"))
+        XCTAssertFalse(home.contains(".animation(shouldAnimateHero ? orbitAnimation : nil"))
+    }
+
     func testNativeRuntimeVerifierIsReadOnlyAndChecksHelperTruth() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let scriptURL = packageRoot.appendingPathComponent("../scripts/verify_native_macos_runtime.sh").standardizedFileURL

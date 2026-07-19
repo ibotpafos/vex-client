@@ -777,25 +777,88 @@ function runHotConnectFlowTests(): void {
   assertEqual(connectableLocalProfile(hotProfile, 'fi', null), null);
   assertEqual(connectableLocalProfile({ ...hotProfile, entitlement: undefined }, 'de', paidEntitlement)?.source, 'local');
   assertEqual(connectableLocalProfile({ ...hotProfile, rotationRequired: true }, 'de', paidEntitlement), null);
-  assertDeepEqual(vpnConnectTimingSamples({
-    endpointAttempts: ['de.example.com:443'],
-    interfaceUpMs: 1_260,
-    nativeStartMs: 1_200,
-    profile: hotProfile,
-    tapStartedAt: 1_000,
-    verificationCompletedMs: 1_400,
-  }), {
-    connect_profile_source: 'local',
-    endpoint_attempts: ['de.example.com:443'],
-    hot_profile_age_ms: 2_000,
-    hot_profile_used: true,
-    native_start_to_interface_up_ms: 60,
-    profile_resolve_ms: 200,
-    tap_to_interface_up_ms: 260,
-    tap_to_native_start_ms: 200,
-    tap_to_verified_ms: 400,
-    interface_up_to_verified_ms: 140,
-  });
+  const timingCases = [
+    {
+      name: 'normal ordering',
+      timestamps: { tapStartedAt: 1_000, nativeStartMs: 1_200, interfaceUpMs: 1_260, verificationCompletedMs: 1_400 },
+      expectedDurations: {
+        native_start_to_interface_up_ms: 60,
+        profile_resolve_ms: 200,
+        tap_to_interface_up_ms: 260,
+        tap_to_native_start_ms: 200,
+        tap_to_verified_ms: 400,
+        interface_up_to_verified_ms: 140,
+      },
+    },
+    {
+      name: 'equal timestamps',
+      timestamps: { tapStartedAt: 1_000, nativeStartMs: 1_000, interfaceUpMs: 1_000, verificationCompletedMs: 1_000 },
+      expectedDurations: {
+        native_start_to_interface_up_ms: 0,
+        profile_resolve_ms: 0,
+        tap_to_interface_up_ms: 0,
+        tap_to_native_start_ms: 0,
+        tap_to_verified_ms: 0,
+        interface_up_to_verified_ms: 0,
+      },
+    },
+    {
+      name: 'clock regression',
+      timestamps: { tapStartedAt: 1_000, nativeStartMs: 900, interfaceUpMs: 800, verificationCompletedMs: 700 },
+      expectedDurations: {
+        native_start_to_interface_up_ms: 0,
+        profile_resolve_ms: 0,
+        tap_to_interface_up_ms: 0,
+        tap_to_native_start_ms: 0,
+        tap_to_verified_ms: 0,
+        interface_up_to_verified_ms: 0,
+      },
+    },
+  ] as const;
+
+  for (const timingCase of timingCases) {
+    const samples = vpnConnectTimingSamples({
+      endpointAttempts: ['de.example.com:443'],
+      profile: hotProfile,
+      ...timingCase.timestamps,
+    });
+    for (const [key, expected] of Object.entries(timingCase.expectedDurations)) {
+      const actual = samples[key];
+      assertEqual(typeof actual, 'number');
+      assertEqual((actual as number) >= 0, true);
+      assertEqual(actual, expected);
+    }
+    if (timingCase.name === 'normal ordering') {
+      assertEqual(samples.connect_profile_source, 'local');
+      assertDeepEqual(samples.endpoint_attempts, ['de.example.com:443']);
+      assertEqual(samples.hot_profile_age_ms, 2_000);
+      assertEqual(samples.hot_profile_used, true);
+    }
+  }
+
+  runVpnConnectTimingSourceContractTests();
+}
+
+function runVpnConnectTimingSourceContractTests(): void {
+  const { readFileSync } = (process as typeof process & {
+    getBuiltinModule: (id: 'node:fs') => { readFileSync: (path: string, encoding: string) => string };
+  }).getBuiltinModule('node:fs');
+  const source = readFileSync('src/vpn/useVpnConnectionFlow.ts', 'utf8');
+  assertEqual(
+    /connectVpn\([\s\S]*?\),\s*connectAttemptTimeoutMs,[\s\S]*?\);\s*const interfaceUpMs = Date\.now\(\);/.test(source),
+    true,
+  );
+  assertEqual(
+    /const status = await waitForVerifiedVpnConnection\([\s\S]*?\}\);\s*const verificationCompletedMs = Date\.now\(\);/.test(source),
+    true,
+  );
+
+  const successfulAttemptGuard = source.indexOf("if (!connected || connected.status.state !== 'connected')");
+  const diagnosticReason = source.indexOf("reason: 'vpn_connect_timing'");
+  assertEqual(successfulAttemptGuard >= 0, true);
+  assertEqual(diagnosticReason > successfulAttemptGuard, true);
+  assertEqual(source.slice(successfulAttemptGuard, diagnosticReason).includes('throw '), true);
+  assertEqual(source.indexOf("reason: 'vpn_connect_timing'", diagnosticReason + 1), -1);
 }
 
 function runCreateDeviceRequestTests(): void {

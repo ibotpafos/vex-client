@@ -686,6 +686,19 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertFalse(script.contains(" down"))
     }
 
+    func testPackagedAppResolvesSwiftPMResourcesFromContentsResources() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let sharedViewsURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/SharedViews.swift")
+        let preflightURL = packageRoot.appendingPathComponent("../scripts/native_macos_production_preflight.sh").standardizedFileURL
+        let sharedViews = try String(contentsOf: sharedViewsURL, encoding: .utf8)
+        let preflight = try String(contentsOf: preflightURL, encoding: .utf8)
+
+        XCTAssertTrue(sharedViews.contains("Contents/Resources"))
+        XCTAssertTrue(sharedViews.contains("VEXNativeMac_VEXNativeMac.bundle"))
+        XCTAssertFalse(sharedViews.contains("Bundle.module.image"))
+        XCTAssertTrue(preflight.contains("Contents/Resources/VEXNativeMac_VEXNativeMac.bundle"))
+    }
+
     func testNativeHelperInstallScriptUsesInstalledAppAndStrictVerifier() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let scriptURL = packageRoot.appendingPathComponent("../scripts/install_native_macos_helper_from_app.sh").standardizedFileURL

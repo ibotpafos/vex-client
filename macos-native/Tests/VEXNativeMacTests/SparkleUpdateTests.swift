@@ -140,6 +140,8 @@ final class SparkleUpdateTests: XCTestCase {
         XCTAssertTrue(script.contains("reuse_primary_worktree_sparkle_cache"))
         XCTAssertTrue(script.contains("--disable-automatic-resolution"))
         XCTAssertTrue(script.contains("ALLOW_RELEASE_ARTIFACT_DIRTY=1"))
+        XCTAssertTrue(script.contains("ALLOW_DIRTY_SOURCE"))
+        XCTAssertTrue(script.contains("requires a clean tracked source tree"))
     }
 
     func testNativeMacDeployBundleScriptChecksReleaseFiles() throws {
@@ -163,6 +165,9 @@ final class SparkleUpdateTests: XCTestCase {
         let script = try String(contentsOf: scriptURL, encoding: .utf8)
 
         XCTAssertTrue(script.contains("resolve_next_release"))
+        XCTAssertTrue(script.contains("candidates.append((local_version, local_build))"))
+        XCTAssertTrue(script.contains("candidates.append((remote_version, remote_build))"))
+        XCTAssertTrue(script.contains("max(candidates, key=lambda candidate: candidate[1]"))
         XCTAssertTrue(script.contains("build_native_macos_internal_release.sh"))
         XCTAssertTrue(script.contains("prepare_native_macos_deploy_bundle.sh"))
         XCTAssertTrue(script.contains("DOWNLOAD_SCOPE=native-macos"))

@@ -10,6 +10,7 @@ RUN_METADATA_DEPLOY="${RUN_METADATA_DEPLOY:-${RUN_DEPLOY}}"
 VEX_NATIVE_CHANGELOG="${VEX_NATIVE_CHANGELOG:-macOS: обновлён интерфейс управления аккаунтом и подпиской, добавлены актуальные тарифы и улучшено восстановление состояния после оплаты.}"
 ALLOW_DIRTY_DEPLOY="${ALLOW_DIRTY_DEPLOY:-0}"
 ALLOW_NO_UPSTREAM_DEPLOY="${ALLOW_NO_UPSTREAM_DEPLOY:-0}"
+ALLOW_DIRTY_SOURCE="${ALLOW_DIRTY_SOURCE:-0}"
 NATIVE_DOWNLOAD_DIR="${VPN_REPO}/web/public/downloads/native-macos"
 VPN_RELEASE_DIR="${VPN_RELEASE_DIR:-dist/native-macos}"
 
@@ -75,30 +76,30 @@ if provided_version and provided_build:
     print(provided_build)
     raise SystemExit(0)
 
-version = ""
-build = 0
+candidates = []
 manifest = Path(vpn_repo) / "web/public/downloads/native-macos/release-manifest.json"
 if manifest.exists():
     data = json.loads(manifest.read_text())
-    version = str(data.get("version") or "")
-    build = int(str(data.get("build") or "0"))
+    local_version = str(data.get("version") or "")
+    local_build = int(str(data.get("build") or "0"))
+    if local_version and local_build > 0:
+        candidates.append((local_version, local_build))
 
-if not version or build <= 0:
-    try:
-        with urllib.request.urlopen("https://vexguard.app/downloads/native-macos/appcast.xml", timeout=8) as response:
-            root = ET.fromstring(response.read())
-        ns = {"sparkle": "http://www.andymatuschak.org/xml-namespaces/sparkle"}
-        item = root.find("./channel/item")
-        if item is not None:
-            version = item.findtext("sparkle:shortVersionString", default="", namespaces=ns)
-            build = int(item.findtext("sparkle:version", default="0", namespaces=ns))
-    except Exception:
-        pass
+try:
+    with urllib.request.urlopen("https://vexguard.app/downloads/native-macos/appcast.xml", timeout=8) as response:
+        root = ET.fromstring(response.read())
+    ns = {"sparkle": "http://www.andymatuschak.org/xml-namespaces/sparkle"}
+    item = root.find("./channel/item")
+    if item is not None:
+        remote_version = item.findtext("sparkle:shortVersionString", default="", namespaces=ns)
+        remote_build = int(item.findtext("sparkle:version", default="0", namespaces=ns))
+        if remote_version and remote_build > 0:
+            candidates.append((remote_version, remote_build))
+except Exception:
+    pass
 
-if not version:
-    version = "0.1.36"
-if build <= 0:
-    build = 36
+version, build = max(candidates, key=lambda candidate: candidate[1], default=("0.1.36", 36))
+
 
 if provided_version:
     next_version = provided_version
@@ -152,6 +153,11 @@ require_command swift
 
 if [[ ! -d "${VPN_REPO}" ]]; then
   echo "VPN repo not found: ${VPN_REPO}" >&2
+  exit 2
+fi
+
+if [[ "${ALLOW_DIRTY_SOURCE}" != "1" ]] && [[ -n "$(git -C "${ROOT_DIR}" status --porcelain --untracked-files=no)" ]]; then
+  echo "native macOS release requires a clean tracked source tree; commit or stash changes first" >&2
   exit 2
 fi
 

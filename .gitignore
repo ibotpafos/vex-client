@@ -38,3 +38,6 @@ android/app/debug.keystore
 *.jks
 signing-backups/
 *.tar.gz.enc
+
+# Local Git worktrees
+.worktrees/

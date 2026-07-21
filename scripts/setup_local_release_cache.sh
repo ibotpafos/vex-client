@@ -50,6 +50,7 @@ ensure_linked_dir() {
   fi
 
   mkdir -p "${cache_path}"
+  mkdir -p "$(dirname "${source_path}")"
   ln -s "${cache_path}" "${source_path}"
   echo "linked ${repo_path} -> ${cache_path}"
 }

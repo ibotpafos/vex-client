@@ -1,3 +1,7 @@
+import os
+import shutil
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -29,6 +33,30 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
         self.assertIn('echo "Downloading appimagetool for ${arch}" >&2', script)
         self.assertIn('"${tool}" --comp zstd --no-appstream', script)
         self.assertNotIn('"${tool}" --comp xz --no-appstream', script)
+
+    def test_local_release_cache_creates_missing_source_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkout = Path(temp_dir) / "checkout"
+            scripts = checkout / "scripts"
+            scripts.mkdir(parents=True)
+            for name in ("local_release_env.sh", "setup_local_release_cache.sh"):
+                shutil.copy2(ROOT / "scripts" / name, scripts / name)
+
+            cache_root = Path(temp_dir) / "cache"
+            env = os.environ.copy()
+            env["VEX_LOCAL_RELEASE_CACHE_ROOT"] = str(cache_root)
+            subprocess.run(
+                ["bash", str(scripts / "setup_local_release_cache.sh")],
+                check=True,
+                cwd=checkout,
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+
+            external_amnezia = checkout / "external" / "amnezia"
+            self.assertTrue(external_amnezia.is_symlink())
+            self.assertEqual(external_amnezia.resolve(), (cache_root / "external-amnezia").resolve())
 
 
 if __name__ == "__main__":

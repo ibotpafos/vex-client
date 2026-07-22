@@ -31,23 +31,44 @@ final class VEXHelperModel: ObservableObject {
         pollTask?.cancel()
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                guard let pollInterval = self.map({ Self.pollIntervalNanoseconds(for: $0.status) }) else {
+                    return
+                }
+                do {
+                    try await Task.sleep(nanoseconds: pollInterval)
+                } catch {
+                    return
+                }
                 await self?.refreshStatus(quiet: true)
             }
+        }
+    }
+
+    nonisolated static func pollIntervalNanoseconds(for status: VpnStatus) -> UInt64 {
+        switch status.state {
+        case .connecting, .disconnecting:
+            return 1_000_000_000
+        case .connected:
+            return 15_000_000_000
+        case .disconnected:
+            return 30_000_000_000
         }
     }
 
     func refreshStatus(quiet: Bool = false) async {
         do {
             let response = try await client.sendStatus()
-            status = VpnStatus(helperResponse: response)
+            let nextStatus = VpnStatus(helperResponse: response)
+            if status != nextStatus {
+                status = nextStatus
+            }
             consecutiveStatusFailures = 0
             if !quiet {
                 message = nil
             }
         } catch {
             consecutiveStatusFailures += 1
-            if consecutiveStatusFailures >= 3 {
+            if consecutiveStatusFailures >= 3, status != .disconnected {
                 status = .disconnected
             }
             if !quiet {

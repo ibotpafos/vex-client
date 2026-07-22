@@ -681,6 +681,25 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertFalse(home.contains(".animation(shouldAnimateHero ? orbitAnimation : nil"))
     }
 
+    func testHelperPollingDoesNotPublishUnchangedStatus() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let helperURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/VEXHelperClient.swift")
+        let helper = try String(contentsOf: helperURL, encoding: .utf8)
+
+        XCTAssertTrue(helper.contains("let nextStatus = VpnStatus(helperResponse: response)"))
+        XCTAssertTrue(helper.contains("if status != nextStatus"))
+        XCTAssertTrue(helper.contains("status = nextStatus"))
+    }
+
+    func testHelperPollingBacksOffOutsideTransitions() {
+        let connected = VpnStatus(
+            helperResponse: "state=connected route_ok=true socket_exists=true iface=utun9 rx=1 tx=1"
+        )
+
+        XCTAssertEqual(VEXHelperModel.pollIntervalNanoseconds(for: connected), 15_000_000_000)
+        XCTAssertEqual(VEXHelperModel.pollIntervalNanoseconds(for: .disconnected), 30_000_000_000)
+    }
+
     func testNativeRuntimeVerifierIsReadOnlyAndChecksHelperTruth() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let scriptURL = packageRoot.appendingPathComponent("../scripts/verify_native_macos_runtime.sh").standardizedFileURL

@@ -13,7 +13,8 @@ export default [
       "external/**",
       "certs/**",
       "scripts/**",
-      "artifacts/**"
+      "artifacts/**",
+      ".worktrees/**"
     ]
   },
   {

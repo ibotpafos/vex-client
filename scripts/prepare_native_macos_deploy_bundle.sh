@@ -3,7 +3,6 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ARCHIVES_DIR="${VEX_SPARKLE_ARCHIVES_DIR:-${ROOT_DIR}/macos-native/build/sparkle-release/archives}"
-PKG_DIR="${VEX_NATIVE_PKG_DIR:-${ROOT_DIR}/macos-native/build/pkg}"
 OUT_DIR="${VEX_NATIVE_DEPLOY_BUNDLE_DIR:-${ROOT_DIR}/dist/native-macos/deploy}"
 
 require_file() {
@@ -45,10 +44,7 @@ cp "${ARCHIVES_DIR}/release-manifest.json" "${OUT_DIR}/"
 cp "${ARCHIVES_DIR}/${archive_name}" "${OUT_DIR}/"
 cp "${ARCHIVES_DIR}/${archive_name}.sha256" "${OUT_DIR}/"
 
-pkg_path="$(find "${PKG_DIR}" -maxdepth 1 -type f -name '*.pkg' -print | sort | tail -n 1 || true)"
-if [[ -n "${pkg_path}" ]]; then
-  cp "${pkg_path}" "${OUT_DIR}/"
-fi
+echo "ZIP-only Sparkle distribution: PKG is not part of the public deploy bundle."
 
 (
   cd "${OUT_DIR}"

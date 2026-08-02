@@ -19,7 +19,7 @@ final class VEXModelDecodingTests: XCTestCase {
         let location = try JSONDecoder().decode(VpnLocation.self, from: data)
 
         XCTAssertEqual(location.id, "de")
-        XCTAssertEqual(location.displayName, "🇩🇪 Germany")
+        XCTAssertEqual(location.displayName, "🇩🇪 Германия")
         XCTAssertEqual(location.latencyMs, 7.122)
     }
 

@@ -53,7 +53,17 @@ struct VpnLocation: Codable, Equatable, Identifiable {
         if city.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return id.uppercased()
         }
-        return "\(flagEmoji ?? "") \(city)".trimmingCharacters(in: .whitespaces)
+        return "\(flagEmoji ?? "") \(localizedName)".trimmingCharacters(in: .whitespaces)
+    }
+
+    var localizedName: String {
+        switch countryCode.uppercased() {
+        case "DE": return "Германия"
+        case "FI": return "Финляндия"
+        case "NL": return "Нидерланды"
+        case "US": return "США"
+        default: return city
+        }
     }
 
     enum CodingKeys: String, CodingKey {
@@ -330,14 +340,39 @@ struct BillingPlan: Codable, Equatable, Identifiable {
     }
 }
 
+struct BillingPriceQuote: Codable, Equatable {
+    var changeType: String
+    var amountDueMinor: Int
+    var creditAmountMinor: Int
+
+    enum CodingKeys: String, CodingKey {
+        case changeType = "change_type"
+        case amountDueMinor = "amount_due_minor"
+        case creditAmountMinor = "credit_amount_minor"
+    }
+}
+
 struct BillingPlanOption: Codable, Equatable, Identifiable {
     var id: String
     var provider: String
+    var tier: String
     var name: String
     var meta: String
     var action: String
     var current: Bool
     var disabled: Bool
+    var months: Int
+    var amountCents: Int
+    var currency: String
+    var deviceLimit: Int
+}
+
+struct BillingPlanFamily: Codable, Equatable, Identifiable {
+    var id: String { tier }
+    var tier: String
+    var name: String
+    var deviceLimit: Int
+    var plans: [BillingPlanOption]
 }
 
 struct BillingSummary: Codable, Equatable {
@@ -351,6 +386,7 @@ struct BillingSummary: Codable, Equatable {
     var remainingText: String?
     var status: String?
     var plans: [BillingPlanOption]
+    var families: [BillingPlanFamily]
 }
 
 enum BillingEntitlementStatus: String, Codable, Equatable {
@@ -362,6 +398,8 @@ enum BillingEntitlementStatus: String, Codable, Equatable {
 enum BillingError: LocalizedError {
     case missingCheckoutURL
     case missingPortalURL
+    case priceUnavailable
+    case downgradeScheduled
 
     var errorDescription: String? {
         switch self {
@@ -369,6 +407,10 @@ enum BillingError: LocalizedError {
             return "Платежная ссылка недоступна."
         case .missingPortalURL:
             return "Ссылка управления подпиской недоступна."
+        case .priceUnavailable:
+            return "Сервер не подтвердил цену. Обновите тарифы и попробуйте снова."
+        case .downgradeScheduled:
+            return "Понижение тарифа вступит в силу после окончания текущего периода."
         }
     }
 }
@@ -592,10 +634,24 @@ struct AppRemoteConfig: Codable, Equatable {
 
 struct VEXAppInfo: Equatable {
     static var version: String {
-        bundleString("CFBundleShortVersionString") ?? "0.1.0"
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--render-ui-preview"),
+           let previewVersion = ProcessInfo.processInfo.environment["VEX_PREVIEW_APP_VERSION"],
+           !previewVersion.isEmpty {
+            return previewVersion
+        }
+        #endif
+        return bundleString("CFBundleShortVersionString") ?? "0.1.0"
     }
 
     static var buildNumber: Int {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--render-ui-preview"),
+           let previewBuild = ProcessInfo.processInfo.environment["VEX_PREVIEW_APP_BUILD"],
+           let buildNumber = Int(previewBuild) {
+            return buildNumber
+        }
+        #endif
         let rawValue = bundleString("CFBundleVersion") ?? "1"
         return Int(rawValue) ?? 1
     }

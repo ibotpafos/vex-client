@@ -130,19 +130,22 @@ write_release_manifest() {
   local appcast_path="$2"
   local download_url="$3"
   local manifest_path="${ARCHIVES_DIR}/release-manifest.json"
-  local zip_sha appcast_sha signing_state notarized_state gatekeeper_ready_state distribution_mode
+  local zip_sha appcast_sha signature_details signing_authority signing_state
+  local notarized_state gatekeeper_ready_state apple_developer_signed_state
   zip_sha="$(sha256_file "${zip_path}")"
   appcast_sha="$(sha256_file "${appcast_path}")"
-  signing_state="${VEX_CODESIGN_IDENTITY:--}"
+  signature_details="$(codesign -dvvv "${APP_DIR}" 2>&1 || true)"
+  signing_authority="$(sed -n 's/^Authority=//p' <<<"${signature_details}" | head -n 1)"
+  signing_state="${signing_authority:--}"
   notarized_state="False"
   gatekeeper_ready_state="False"
-  distribution_mode="sparkle-ad-hoc"
-  if [[ "${VEX_NOTARIZE:-0}" == "1" ]]; then
+  apple_developer_signed_state="False"
+  if [[ "${VEX_NOTARIZE:-0}" == "1" && "${signing_authority}" == "Developer ID Application:"* ]]; then
     notarized_state="True"
     gatekeeper_ready_state="True"
-    distribution_mode="sparkle-developer-id-notarized"
-  elif [[ "${signing_state}" != "-" ]]; then
-    distribution_mode="sparkle-developer-id-not-notarized"
+    apple_developer_signed_state="True"
+  elif [[ "${signing_authority}" == "Developer ID Application:"* ]]; then
+    apple_developer_signed_state="True"
   fi
 
   python3 - "${manifest_path}" <<PY
@@ -163,8 +166,10 @@ manifest = {
     "appcastSHA256": "${appcast_sha}",
     "appcastSHA256Sidecar": "$(basename "${appcast_path}").sha256",
     "sparklePublicEDKey": "${VEX_SPARKLE_PUBLIC_ED_KEY}",
+    "updateSignatureScheme": "sparkle-ed25519",
     "codesignIdentity": "${signing_state}",
-    "distributionMode": "${distribution_mode}",
+    "distributionMode": "sparkle-ed25519-custom",
+    "appleDeveloperSigned": ${apple_developer_signed_state},
     "notarized": ${notarized_state},
     "gatekeeperReady": ${gatekeeper_ready_state},
     "createdAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",

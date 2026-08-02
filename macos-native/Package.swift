@@ -4,13 +4,14 @@ import PackageDescription
 let package = Package(
     name: "VEXNativeMac",
     platforms: [
-        .macOS(.v14)
+        .macOS(.v15)
     ],
     products: [
-        .executable(name: "VEXNativeMac", targets: ["VEXNativeMac"])
+        .executable(name: "VEXNativeMac", targets: ["VEXNativeMac"]),
+        .executable(name: "VEXPrivilegedHelper", targets: ["VEXPrivilegedHelper"])
     ],
     dependencies: [
-        .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.9.3")
+        .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.9.4")
     ],
     targets: [
         .executableTarget(
@@ -23,10 +24,29 @@ let package = Package(
                 .process("Resources")
             ]
         ),
+        .target(
+            name: "VEXHelperCore",
+            path: "Sources/VEXHelperCore",
+            linkerSettings: [
+                .linkedFramework("Security"),
+                .linkedFramework("SystemConfiguration"),
+                .linkedLibrary("bsm"),
+            ]
+        ),
+        .executableTarget(
+            name: "VEXPrivilegedHelper",
+            dependencies: ["VEXHelperCore"],
+            path: "Sources/VEXPrivilegedHelper"
+        ),
         .testTarget(
             name: "VEXNativeMacTests",
-            dependencies: ["VEXNativeMac"],
+            dependencies: ["VEXNativeMac", "VEXHelperCore"],
             path: "Tests/VEXNativeMacTests"
+        ),
+        .testTarget(
+            name: "VEXPrivilegedHelperTests",
+            dependencies: ["VEXHelperCore"],
+            path: "Tests/VEXPrivilegedHelperTests"
         )
     ],
     swiftLanguageModes: [.v5]

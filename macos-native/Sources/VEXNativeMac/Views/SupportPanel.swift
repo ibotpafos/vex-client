@@ -2,7 +2,6 @@ import SwiftUI
 
 struct SupportPanel: View {
     @EnvironmentObject private var appState: VEXAppState
-    @EnvironmentObject private var helper: VEXHelperModel
     @State private var subject = ""
     @State private var chatItems: [SupportChatItem] = []
     @State private var expandedMessageIDs: Set<String> = []
@@ -16,10 +15,7 @@ struct SupportPanel: View {
     ]
 
     var body: some View {
-        VStack(spacing: 12) {
-            supportHeader
-            chatShell
-        }
+        chatShell
         .frame(maxHeight: .infinity)
         .onAppear {
             rebuildChatItems()
@@ -29,81 +25,49 @@ struct SupportPanel: View {
         }
     }
 
-    private var supportHeader: some View {
-        GlassPanel(cornerRadius: 20) {
-            HStack(spacing: 12) {
-                ZStack {
-                    Circle()
-                        .fill(Color.vexCyan)
-                    Text("V")
-                        .font(.system(size: 16, weight: .black))
-                        .foregroundStyle(Color.vexBackground)
-                }
-                .frame(width: 34, height: 34)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Поддержка VEX")
-                        .font(.system(size: 15, weight: .black))
-                        .foregroundStyle(Color.vexText)
-                        .lineLimit(1)
-                    Text(connectionStatusText)
-                        .font(.system(size: 11, weight: .black))
-                        .foregroundStyle(connectionStatusColor)
-                        .lineLimit(1)
-                }
-
-                Spacer()
-
-                Button {
-                    Task { await appState.refreshSupport() }
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .buttonStyle(.vexGlass)
-
-                Button {
-                    Task { await appState.sendSupportDiagnostics(using: helper) }
-                } label: {
-                    Image(systemName: "stethoscope")
-                }
-                .buttonStyle(.vexGlass)
-                .disabled(appState.accessToken == nil)
-            }
-            .frame(minHeight: 48)
-        }
-    }
-
     private var chatShell: some View {
-        VStack(spacing: 0) {
-            ScrollViewReader { proxy in
-                ScrollView(showsIndicators: false) {
-                    LazyVStack(spacing: 7) {
-                        dayPill
-                        chatBody
+        VEXFeatureSurface(
+            accent: .vexCyan,
+            cornerRadius: 20,
+            contentPadding: 12,
+            fillsAvailableHeight: true
+        ) {
+            VStack(spacing: 0) {
+                ScrollViewReader { proxy in
+                    ScrollView(showsIndicators: false) {
+                        LazyVStack(spacing: 7) {
+                            dayPill
+                            chatBody
+                        }
+                        .padding(.horizontal, 4)
+                        .padding(.top, 2)
+                        .padding(.bottom, 12)
                     }
-                    .padding(.horizontal, 2)
-                    .padding(.top, 2)
-                    .padding(.bottom, 12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .onAppear {
+                        scrollToBottom(proxy: proxy)
+                    }
+                    .onChange(of: chatItems.map(\.id)) { _, _ in
+                        scrollToBottom(proxy: proxy)
+                    }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                .onAppear {
-                    scrollToBottom(proxy: proxy)
-                }
-                .onChange(of: chatItems.map(\.id)) { _, _ in
-                    scrollToBottom(proxy: proxy)
-                }
-            }
 
-            VStack(spacing: 10) {
-                if showTopics {
-                    topicRow
+                Rectangle()
+                    .fill(Color.white.opacity(0.07))
+                    .frame(height: 1)
+
+                VStack(spacing: 10) {
+                    if showTopics {
+                        topicRow
+                    }
+                    composerRow
+                    if let reconnectHint {
+                        statusHint(text: reconnectHint)
+                    }
                 }
-                composerRow
-                if let reconnectHint {
-                    statusHint(text: reconnectHint)
-                }
+                .padding(.top, 10)
             }
-            .padding(.top, 10)
+            .frame(maxHeight: .infinity)
         }
         .frame(maxHeight: .infinity)
     }
@@ -201,7 +165,7 @@ struct SupportPanel: View {
             .padding(.vertical, 4)
             .background(
                 Capsule()
-                    .fill(Color.black.opacity(0.18))
+                    .fill(Color.vexPanelStrong.opacity(0.62))
                     .overlay(Capsule().stroke(Color.white.opacity(0.10), lineWidth: 1))
             )
     }
@@ -220,7 +184,7 @@ struct SupportPanel: View {
         .padding(.vertical, 11)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.black.opacity(0.18))
+                .fill(Color.vexPanelStrong.opacity(0.54))
                 .overlay(
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .stroke(Color.white.opacity(0.08), lineWidth: 1)
@@ -239,7 +203,7 @@ struct SupportPanel: View {
             .padding(.vertical, 9)
             .background(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color.black.opacity(0.16))
+                    .fill(Color.vexPanelStrong.opacity(0.48))
                     .overlay(
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
                             .stroke(Color.white.opacity(0.08), lineWidth: 1)
@@ -281,32 +245,15 @@ struct SupportPanel: View {
         chatItems.isEmpty
     }
 
-    private var connectionStatusText: String {
-        if appState.accessToken == nil {
-            return "нужен вход"
-        }
-        if appState.supportSocketConnected {
-            return "в сети"
-        }
-        if appState.supportSocketReconnecting {
-            return "обновляем чат..."
-        }
-        return "подключаемся..."
-    }
-
-    private var connectionStatusColor: Color {
-        if appState.supportSocketConnected {
-            return Color.vexCyan
-        }
-        if appState.accessToken == nil {
-            return Color.vexSecondaryText
-        }
-        return Color.vexMuted
-    }
-
     private var reconnectHint: String? {
-        guard appState.supportSocketReconnecting else { return nil }
-        return "Live-обновления временно восстанавливаются. Отправка работает, история обновится автоматически."
+        guard appState.accessToken != nil else { return nil }
+        if appState.supportSocketReconnecting {
+            return "Live-обновления временно восстанавливаются. Отправка работает, история обновится автоматически."
+        }
+        if !appState.supportSocketConnected {
+            return "Live-чат временно отключён. Обновите подключение, чтобы получать ответы без задержки."
+        }
+        return nil
     }
 
     private func rebuildChatItems() {
@@ -423,12 +370,14 @@ private struct SupportMessageBubble: View {
             }
             .padding(.horizontal, 11)
             .padding(.vertical, 8)
-            .background(bubbleBackground)
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
+            .background {
+                RoundedBubbleShape(isUser: isUserMessage)
+                    .fill(bubbleBackground)
+            }
+            .overlay {
+                RoundedBubbleShape(isUser: isUserMessage)
                     .stroke(bubbleBorder, lineWidth: 1)
-            )
-            .clipShape(RoundedBubbleShape(isUser: isUserMessage))
+            }
             .frame(maxWidth: item.isDiagnostic ? 360 : 318, alignment: isUserMessage ? .trailing : .leading)
         }
         .frame(maxWidth: .infinity, alignment: isUserMessage ? .trailing : .leading)
@@ -447,9 +396,9 @@ private struct SupportMessageBubble: View {
             return AnyShapeStyle(Color.vexCyan.opacity(0.28))
         }
         if item.isDiagnostic {
-            return AnyShapeStyle(Color.black.opacity(0.18))
+            return AnyShapeStyle(Color.vexPanelStrong.opacity(0.56))
         }
-        return AnyShapeStyle(Color.black.opacity(0.30))
+        return AnyShapeStyle(Color.vexPanelStrong.opacity(0.72))
     }
 
     private var bubbleBorder: Color {

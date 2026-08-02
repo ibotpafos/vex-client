@@ -1,8 +1,11 @@
 import AppKit
 import CryptoKit
 import Foundation
+import Security
 
 struct VEXHelperInstaller {
+    typealias ProgressHandler = @MainActor @Sendable (VEXHelperInstallationPhase) -> Void
+
     private let helperDir = "/Library/Application Support/VEX VPN/helper"
     private let helperPlist = "/Library/LaunchDaemons/app.vex.vpn.helper.plist"
     private let launchdLabel = "app.vex.vpn.helper"
@@ -32,17 +35,28 @@ struct VEXHelperInstaller {
         }
 
         await prepareInteractiveInstall()
-        try installWithAdminPrivileges()
-        if await waitForSocket(timeout: 2.0) {
+        try await installWithAdminPrivileges()
+        if await waitForSocket(timeout: 8.0) {
             return
         }
         throw VEXHelperInstallError.socketUnavailableAfterInstall
     }
 
-    func repairWithAdminPrivileges() async throws {
+    func repairWithAdminPrivileges(
+        progress: ProgressHandler? = nil
+    ) async throws {
+        if let progress {
+            await progress(.preparing)
+        }
         await prepareInteractiveInstall()
-        try installWithAdminPrivileges()
-        if !(await waitForSocket(timeout: 2.0)) {
+        if let progress {
+            await progress(.authorizing)
+        }
+        try await installWithAdminPrivileges(progress: progress)
+        if let progress {
+            await progress(.verifying)
+        }
+        if !(await waitForSocket(timeout: 8.0)) {
             throw VEXHelperInstallError.socketUnavailableAfterInstall
         }
     }
@@ -62,12 +76,14 @@ struct VEXHelperInstaller {
               fm.fileExists(atPath: "\(helperDir)/vex-helper"),
               fm.fileExists(atPath: "\(helperDir)/amneziawg-go"),
               fm.fileExists(atPath: "\(helperDir)/awg"),
+              fm.fileExists(atPath: "\(helperDir)/awg-quick.sh"),
               installedVersion.trimmingCharacters(in: .whitespacesAndNewlines) == helperVersion,
               helperPlistIsCurrent,
               helperBinarySignatureIsValid,
               resourceMatchesInstalled("vex-helper"),
               resourceMatchesInstalled("amneziawg-go"),
-              resourceMatchesInstalled("awg") else {
+              resourceMatchesInstalled("awg"),
+              resourceMatchesInstalled("awg-quick.sh") else {
             return false
         }
         return true
@@ -86,16 +102,21 @@ struct VEXHelperInstaller {
     }
 
     private var helperPlistIsCurrent: Bool {
-        guard let plist = try? String(contentsOfFile: helperPlist, encoding: .utf8) else { return false }
-        return plistValueIsTrue("RunAtLoad", in: plist)
-            && plistValueIsTrue("KeepAlive", in: plist)
+        guard let data = FileManager.default.contents(atPath: helperPlist),
+              let plist = try? PropertyListSerialization.propertyList(
+                from: data,
+                options: [],
+                format: nil
+              ),
+              let dictionary = plist as? [String: Any],
+              dictionary["RunAtLoad"] as? Bool == true else {
+            return false
+        }
+        return helperPlistKeepsServiceAvailable(dictionary)
     }
 
-    private func plistValueIsTrue(_ key: String, in plist: String) -> Bool {
-        let pattern = "<key>\(key)</key>"
-        guard let keyRange = plist.range(of: pattern) else { return false }
-        let suffix = plist[keyRange.upperBound...].prefix(80)
-        return suffix.contains("<true/>")
+    private func helperPlistKeepsServiceAvailable(_ plist: [String: Any]) -> Bool {
+        plist["KeepAlive"] as? Bool == true
     }
 
     private var helperBinarySignatureIsValid: Bool {
@@ -122,7 +143,12 @@ struct VEXHelperInstaller {
 
     private var socketIsConnectable: Bool {
         let client = VEXHelperClient(socketPath: socketPath)
-        return (try? sendUnixSocketCommand("status", socketPath: client.socketPath)) != nil
+        guard let response = try? sendUnixSocketCommand("status", socketPath: client.socketPath) else {
+            return false
+        }
+        return response.hasPrefix("state=")
+            && response.contains("operation_in_progress=")
+            && !response.hasPrefix("error:")
     }
 
     private func removeStaleSocket() {
@@ -141,7 +167,11 @@ struct VEXHelperInstaller {
             if socketIsConnectable {
                 return true
             }
-            try? await Task.sleep(nanoseconds: 100_000_000)
+            do {
+                try await Task.sleep(nanoseconds: 100_000_000)
+            } catch {
+                return false
+            }
         }
         return socketIsConnectable
     }
@@ -149,39 +179,90 @@ struct VEXHelperInstaller {
     @MainActor
     private func prepareInteractiveInstall() async {
         NSApp.activate(ignoringOtherApps: true)
-        let deadline = Date().addingTimeInterval(1.5)
+        let deadline = Date().addingTimeInterval(0.5)
         while Date() < deadline {
             if NSApp.isActive {
                 break
             }
-            try? await Task.sleep(nanoseconds: 100_000_000)
+            do {
+                try await Task.sleep(nanoseconds: 100_000_000)
+            } catch {
+                return
+            }
             NSApp.activate(ignoringOtherApps: true)
         }
-        try? await Task.sleep(nanoseconds: 250_000_000)
+        do {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        } catch {
+            return
+        }
     }
 
-    private func installWithAdminPrivileges() throws {
-        let installer = try resourceFile("install-vex-vpn-helper.sh")
-        let resourceDir = installer.deletingLastPathComponent()
+    private func installWithAdminPrivileges(
+        progress: ProgressHandler? = nil
+    ) async throws {
+        guard verifyCurrentAppBundleSignature() else {
+            throw VEXHelperError.commandFailed("Проверка целостности подписи приложения не пройдена.")
+        }
+        _ = try resourceFile("install-vex-vpn-helper.sh")
         let configPath = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".vex", isDirectory: true)
             .appendingPathComponent("vex.conf")
         let user = NSUserName()
-        let shellCommand = "/bin/bash \(shellQuote(installer.path)) \(shellQuote(resourceDir.path)) \(shellQuote(configPath.path)) \(shellQuote(user))"
-        let appleScript = "do shell script \"\(appleScriptString(shellCommand)) > /tmp/vex-vpn-install.log 2>&1\" with administrator privileges"
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", appleScript]
-        let stderr = Pipe()
-        let stdout = Pipe()
-        process.standardError = stderr
-        process.standardOutput = stdout
-        try process.run()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else {
-            let err = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            let out = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            let message = err.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? out : err
+        guard let teamIdentifier = currentAppTeamIdentifier() else {
+            throw VEXHelperError.commandFailed("Приложение должно быть подписано Developer ID перед установкой системного helper.")
+        }
+        let appBundle = Bundle.main.bundleURL.path
+        let appRequirement = "anchor apple generic and identifier \"app.vex.vpn.native\" and certificate leaf[subject.OU] = \"\(teamIdentifier)\""
+        let shellCommand = [
+            "set -euo pipefail",
+            "verified_root=$(/usr/bin/mktemp -d /var/tmp/vex-install-app.XXXXXX)",
+            "trap '/bin/rm -rf \"$verified_root\"' EXIT",
+            "/usr/bin/ditto \(shellQuote(appBundle)) \"$verified_root/VEX Native.app\"",
+            "verified_app=\"$verified_root/VEX Native.app\"",
+            "/usr/bin/codesign --verify --deep --strict -R=\(shellQuote(appRequirement)) \"$verified_app\"",
+            "verified_resources=\"$verified_app/Contents/Resources/resources\"",
+            "VEX_EXPECTED_TEAM_ID=\(shellQuote(teamIdentifier)) /bin/bash \"$verified_resources/install-vex-vpn-helper.sh\" \"$verified_resources\" \(shellQuote(configPath.path)) \(shellQuote(user)) \"$verified_app\"",
+        ].joined(separator: "; ")
+        let appleScript = "do shell script \"\(appleScriptString(shellCommand))\" with administrator privileges with prompt \"VEX Inc. устанавливает системный компонент VEX\""
+        let phaseTask = Task {
+            do {
+                try await Task.sleep(for: .milliseconds(650))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled, let progress else { return }
+            await progress(.installing)
+        }
+        defer { phaseTask.cancel() }
+
+        let result = try await Task.detached(priority: .userInitiated) {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            process.arguments = ["-e", appleScript]
+            let stderr = Pipe()
+            let stdout = Pipe()
+            process.standardError = stderr
+            process.standardOutput = stdout
+            try process.run()
+            process.waitUntilExit()
+            return AdminInstallResult(
+                terminationStatus: process.terminationStatus,
+                standardError: String(
+                    data: stderr.fileHandleForReading.readDataToEndOfFile(),
+                    encoding: .utf8
+                ) ?? "",
+                standardOutput: String(
+                    data: stdout.fileHandleForReading.readDataToEndOfFile(),
+                    encoding: .utf8
+                ) ?? ""
+            )
+        }.value
+
+        guard result.terminationStatus == 0 else {
+            let message = result.standardError
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty ? result.standardOutput : result.standardError
             if message.localizedCaseInsensitiveContains("cancel") || message.contains("отмен") {
                 throw VEXHelperInstallError.cancelled
             }
@@ -189,17 +270,44 @@ struct VEXHelperInstaller {
         }
     }
 
+    private func currentAppTeamIdentifier() -> String? {
+        var runningCode: SecCode?
+        guard SecCodeCopySelf([], &runningCode) == errSecSuccess,
+              let runningCode,
+              SecCodeCheckValidity(runningCode, SecCSFlags(rawValue: kSecCSStrictValidate), nil) == errSecSuccess else {
+            return nil
+        }
+        var staticCode: SecStaticCode?
+        guard SecCodeCopyStaticCode(runningCode, [], &staticCode) == errSecSuccess,
+              let staticCode else {
+            return nil
+        }
+        var information: CFDictionary?
+        guard SecCodeCopySigningInformation(
+            staticCode,
+            SecCSFlags(rawValue: kSecCSSigningInformation),
+            &information
+        ) == errSecSuccess,
+              let signing = information as? [String: Any],
+              signing[kSecCodeInfoIdentifier as String] as? String == "app.vex.vpn.native",
+              let teamIdentifier = signing[kSecCodeInfoTeamIdentifier as String] as? String,
+              !teamIdentifier.isEmpty else {
+            return nil
+        }
+        return teamIdentifier
+    }
+
+    private func verifyCurrentAppBundleSignature() -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        process.arguments = ["--verify", "--deep", "--strict", Bundle.main.bundleURL.path]
+        return (try? process.runAndWait()) == 0
+    }
+
     private func resourceFile(_ name: String) throws -> URL {
         let candidates: [URL] = [
             Bundle.main.resourceURL?.appendingPathComponent("resources").appendingPathComponent(name),
             Bundle.main.resourceURL?.appendingPathComponent(name),
-            URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-                .deletingLastPathComponent()
-                .appendingPathComponent("src-tauri/resources")
-                .appendingPathComponent(name),
-            URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-                .appendingPathComponent("../src-tauri/resources")
-                .appendingPathComponent(name),
         ].compactMap { $0 }
         if let url = candidates.first(where: { FileManager.default.fileExists(atPath: $0.path) }) {
             return url
@@ -225,6 +333,12 @@ struct VEXHelperInstaller {
             return process.terminationStatus
         }.value
     }
+}
+
+private struct AdminInstallResult: Sendable {
+    let terminationStatus: Int32
+    let standardError: String
+    let standardOutput: String
 }
 
 struct VEXHelperInstallState: Equatable {

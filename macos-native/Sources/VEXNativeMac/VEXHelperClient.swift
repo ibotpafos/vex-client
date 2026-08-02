@@ -7,6 +7,7 @@ final class VEXHelperModel: ObservableObject {
     @Published private(set) var isBusy = false
     @Published private(set) var message: String?
     @Published private(set) var installState: VEXHelperInstallState?
+    @Published private(set) var installationPhase: VEXHelperInstallationPhase = .idle
 
     private let client = VEXHelperClient()
     private let installer = VEXHelperInstaller()
@@ -15,19 +16,33 @@ final class VEXHelperModel: ObservableObject {
     private var helperReadinessValidated = false
     private let connectStabilizationDeadline: Duration = .milliseconds(750)
 
+    #if DEBUG
+    func configureInstallationPreview(_ phase: VEXHelperInstallationPhase) {
+        installationPhase = phase
+        installState = VEXHelperInstallState(
+            version: "33",
+            filesCurrent: false,
+            socketConnectable: true,
+            helperPath: "/Library/Application Support/VEX VPN/helper/vex-helper"
+        )
+    }
+    #endif
+
     func start() async {
         installState = installer.installedState
         do {
             try await installer.ensureReady(allowAdminInstall: false)
             helperReadinessValidated = true
             installState = installer.installedState
-            await detachOwnerWatchdog(quiet: true)
         } catch {
             helperReadinessValidated = false
             installState = installer.installedState
             message = error.localizedDescription
         }
         await refreshStatus()
+        if status.hasManagedNetworkState {
+            await attachOwnerWatchdog(quiet: true)
+        }
         pollTask?.cancel()
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -91,16 +106,13 @@ final class VEXHelperModel: ObservableObject {
     }
 
     func disconnect(releaseAntiLeak: Bool) async {
-        await runCommand(releaseAntiLeak ? "down" : "down-keep-antileak", busyState: .disconnecting, successMessage: "VPN отключен.")
+        await runCommand("down", busyState: .disconnecting, successMessage: "VPN отключен.")
     }
 
     func interruptWithDisconnect(releaseAntiLeak: Bool) async {
         status = status.withState(.disconnecting)
         do {
-            let response = try await client.send(releaseAntiLeak ? "down" : "down-keep-antileak")
-            if response.trimmingCharacters(in: .whitespacesAndNewlines) != "ok" {
-                throw VEXHelperError.commandFailed(response)
-            }
+            try await client.sendExpectingOK("down", timeoutSeconds: 90)
             message = "VPN отключен."
         } catch {
             message = VEXUserFacingText.status("Command failed: \(error.localizedDescription)")
@@ -108,13 +120,25 @@ final class VEXHelperModel: ObservableObject {
         await refreshStatus(quiet: true)
     }
 
-    func detachOwnerWatchdog(quiet: Bool = false) async {
+    func attachOwnerWatchdog(quiet: Bool = false) async {
         do {
-            _ = try await client.send("detach-owner")
+            let ownerPID = ProcessInfo.processInfo.processIdentifier
+            try await client.sendExpectingOK("attach-owner owner_pid=\(ownerPID)")
         } catch {
             if !quiet {
                 message = error.localizedDescription
             }
+        }
+    }
+
+    func shutdownForAppTermination() async {
+        pollTask?.cancel()
+        pollTask = nil
+        do {
+            try await client.sendExpectingOK("shutdown", timeoutSeconds: 2)
+        } catch {
+            // Keep the owner watchdog armed. Once this process exits, the
+            // helper gets a second chance to tear down the tunnel and PF rules.
         }
     }
 
@@ -132,19 +156,36 @@ final class VEXHelperModel: ObservableObject {
     func repairHelper() async {
         guard !isBusy else { return }
         isBusy = true
-        message = "Готовим установку helper..."
+        installationPhase = .preparing
+        message = nil
         defer { isBusy = false }
 
         do {
-            try await installer.repairWithAdminPrivileges()
+            try await installer.repairWithAdminPrivileges { [weak self] phase in
+                self?.installationPhase = phase
+            }
             helperReadinessValidated = true
             installState = installer.installedState
+            installationPhase = .installed
             message = "Helper установлен."
             await refreshStatus(quiet: true)
+            do {
+                try await Task.sleep(for: .milliseconds(500))
+            } catch {
+                if installationPhase == .installed {
+                    installationPhase = .idle
+                }
+                return
+            }
+            if installationPhase == .installed {
+                installationPhase = .idle
+            }
         } catch {
             helperReadinessValidated = false
             installState = installer.installedState
-            message = VEXUserFacingText.status(error.localizedDescription) ?? error.localizedDescription
+            let userMessage = VEXUserFacingText.status(error.localizedDescription) ?? error.localizedDescription
+            installationPhase = .failed(userMessage)
+            message = userMessage
         }
     }
 
@@ -163,9 +204,6 @@ final class VEXHelperModel: ObservableObject {
 
         do {
             try await installer.ensureReady(allowAdminInstall: true)
-            if isConnectCommand(command), shouldDisconnectBeforeConnect {
-                await client.silentDisconnect(releaseAntiLeak: false)
-            }
             let response = try await sendCommandWithRetry(command)
             if response.trimmingCharacters(in: .whitespacesAndNewlines) != "ok" {
                 throw VEXHelperError.commandFailed(response)
@@ -173,7 +211,6 @@ final class VEXHelperModel: ObservableObject {
             installState = installer.installedState
             if isConnectCommand(command) {
                 if await refreshConnectedStatusUntilStable() {
-                    await detachOwnerWatchdog(quiet: true)
                     message = successMessage
                 } else if let routeConflictMessage = status.routeConflictMessage {
                     message = routeConflictMessage
@@ -196,21 +233,16 @@ final class VEXHelperModel: ObservableObject {
         }
     }
 
-    private var shouldDisconnectBeforeConnect: Bool {
-        status.state != .disconnected || status.interfaceName != nil || status.endpoint != nil
-    }
-
     private func sendCommandWithRetry(_ command: String) async throws -> String {
         do {
-            return try await client.send(command)
+            return try await client.send(command, timeoutSeconds: isConnectCommand(command) ? 90 : 30)
         } catch {
             guard isConnectCommand(command), error.isRetryableConnectFailure else {
                 throw error
             }
             helperReadinessValidated = false
             try await ensureHelperReady()
-            await client.silentDisconnect(releaseAntiLeak: true)
-            return try await client.send(command)
+            return try await client.send(command, timeoutSeconds: 90)
         }
     }
 
@@ -225,7 +257,12 @@ final class VEXHelperModel: ObservableObject {
             if status.isUsableConnectedStatus {
                 return true
             }
-            try? await Task.sleep(nanoseconds: 160_000_000)
+            do {
+                try await Task.sleep(nanoseconds: 160_000_000)
+            } catch {
+                return false
+            }
+            guard !Task.isCancelled else { return false }
         } while ContinuousClock.now < deadline
         await refreshStatus(quiet: true)
         return status.isUsableConnectedStatus
@@ -235,9 +272,13 @@ final class VEXHelperModel: ObservableObject {
 struct VEXHelperClient {
     var socketPath = "/var/run/vex-helper.sock"
 
-    func send(_ command: String) async throws -> String {
+    func send(_ command: String, timeoutSeconds: Int = 5) async throws -> String {
         try await Task.detached(priority: .userInitiated) {
-            try sendUnixSocketCommand(command, socketPath: socketPath)
+            try sendUnixSocketCommand(
+                command,
+                socketPath: socketPath,
+                timeoutSeconds: timeoutSeconds
+            )
         }.value
     }
 
@@ -252,7 +293,7 @@ struct VEXHelperClient {
                     break
                 }
                 if attempt < 2 {
-                    try? await Task.sleep(nanoseconds: 120_000_000)
+                    try await Task.sleep(nanoseconds: 120_000_000)
                 }
             }
         }
@@ -260,8 +301,14 @@ struct VEXHelperClient {
     }
 
     func silentDisconnect(releaseAntiLeak: Bool) async {
-        let command = releaseAntiLeak ? "down" : "down-keep-antileak"
-        _ = try? await send(command)
+        _ = try? await sendExpectingOK("down", timeoutSeconds: 30)
+    }
+
+    func sendExpectingOK(_ command: String, timeoutSeconds: Int = 5) async throws {
+        let response = try await send(command, timeoutSeconds: timeoutSeconds)
+        guard response.trimmingCharacters(in: .whitespacesAndNewlines) == "ok" else {
+            throw VEXHelperError.commandFailed(response)
+        }
     }
 }
 
@@ -322,11 +369,15 @@ private extension Error {
     }
 }
 
-func sendUnixSocketCommand(_ command: String, socketPath: String) throws -> String {
+func sendUnixSocketCommand(
+    _ command: String,
+    socketPath: String,
+    timeoutSeconds: Int = 5
+) throws -> String {
     let fd = socket(AF_UNIX, SOCK_STREAM, 0)
     guard fd >= 0 else { throw VEXHelperError.socketCreateFailed }
     defer { close(fd) }
-    setSocketTimeout(fd, seconds: 5)
+    configureHelperClientSocket(fd, timeoutSeconds: timeoutSeconds)
 
     var addr = sockaddr_un()
     addr.sun_family = sa_family_t(AF_UNIX)
@@ -349,10 +400,7 @@ func sendUnixSocketCommand(_ command: String, socketPath: String) throws -> Stri
     }
 
     let payload = command.hasSuffix("\n") ? command : "\(command)\n"
-    let bytesWritten = payload.withCString { pointer in
-        Darwin.write(fd, pointer, strlen(pointer))
-    }
-    guard bytesWritten == payload.utf8.count else { throw VEXHelperError.writeFailed }
+    try writeAllToHelperSocket(Array(payload.utf8), fd: fd)
 
     var response = [UInt8]()
     var byte: UInt8 = 0
@@ -374,12 +422,55 @@ func sendUnixSocketCommand(_ command: String, socketPath: String) throws -> Stri
         throw VEXHelperError.readFailed
     }
 
-    guard !response.isEmpty else { throw VEXHelperError.readFailed }
-    return String(decoding: response, as: UTF8.self)
+    return try decodeHelperResponseFrame(
+        response,
+        reachedLimit: response.count >= 8192 && response.last != 10
+    )
 }
 
-private func setSocketTimeout(_ fd: Int32, seconds: Int) {
-    var timeout = timeval(tv_sec: seconds, tv_usec: 0)
+func decodeHelperResponseFrame(_ response: [UInt8], reachedLimit: Bool) throws -> String {
+    guard !response.isEmpty,
+          !reachedLimit,
+          response.last == 10,
+          !response.contains(0),
+          let decoded = String(bytes: response, encoding: .utf8) else {
+        throw VEXHelperError.readFailed
+    }
+    return decoded
+}
+
+private func writeAllToHelperSocket(_ bytes: [UInt8], fd: Int32) throws {
+    var offset = 0
+    while offset < bytes.count {
+        let written = bytes.withUnsafeBytes { rawBuffer -> Int in
+            guard let baseAddress = rawBuffer.baseAddress else { return 0 }
+            return Darwin.write(
+                fd,
+                baseAddress.advanced(by: offset),
+                bytes.count - offset
+            )
+        }
+        if written > 0 {
+            offset += written
+            continue
+        }
+        if written < 0, errno == EINTR {
+            continue
+        }
+        throw VEXHelperError.writeFailed
+    }
+}
+
+func configureHelperClientSocket(_ fd: Int32, timeoutSeconds: Int) {
+    var noSIGPIPE: Int32 = 1
+    _ = setsockopt(
+        fd,
+        SOL_SOCKET,
+        SO_NOSIGPIPE,
+        &noSIGPIPE,
+        socklen_t(MemoryLayout<Int32>.size)
+    )
+    var timeout = timeval(tv_sec: timeoutSeconds, tv_usec: 0)
     withUnsafePointer(to: &timeout) { pointer in
         pointer.withMemoryRebound(to: UInt8.self, capacity: MemoryLayout<timeval>.size) { rawPointer in
             _ = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, rawPointer, socklen_t(MemoryLayout<timeval>.size))
@@ -398,6 +489,7 @@ struct VpnStatus: Equatable {
     var endpoint: String?
     var routeOk: Bool
     var routeInterface: String?
+    var ipv6RouteExpected: Bool
     var ipv6RouteOk: Bool
     var ipv6RouteInterface: String?
     var socketExists: Bool
@@ -412,10 +504,19 @@ struct VpnStatus: Equatable {
         endpoint: nil,
         routeOk: false,
         routeInterface: nil,
+        ipv6RouteExpected: false,
         ipv6RouteOk: true,
         ipv6RouteInterface: nil,
         socketExists: false
     )
+
+    var hasManagedNetworkState: Bool {
+        state != .disconnected
+            || interfaceName != nil
+            || endpoint != nil
+            || socketExists
+            || leakProtection == "armed"
+    }
 
     init(helperResponse: String) {
         let values = helperResponse
@@ -432,6 +533,9 @@ struct VpnStatus: Equatable {
             }
 
         let routeOk = values["route_ok"] == "true"
+        let ipv6RouteExpected = values["ipv6_route_expected"] == "true"
+        let ipv6RouteOk = values["ipv6_route_ok"].map { $0 == "true" } ?? true
+        let ipv6Ready = !ipv6RouteExpected || ipv6RouteOk
         let socketExists = values["socket_exists"] == "true"
         let operationInProgress = values["operation_in_progress"] == "true"
         let helperState = values["state"]
@@ -441,7 +545,10 @@ struct VpnStatus: Equatable {
         let nextState: VpnConnectionState
         if operationInProgress {
             nextState = .connecting
-        } else if routeOk && socketExists && (helperState == nil || helperState == "connected") {
+        } else if routeOk,
+                  ipv6Ready,
+                  socketExists,
+                  (helperState == nil || helperState == "connected") {
             nextState = .connected
         } else {
             nextState = .disconnected
@@ -456,7 +563,8 @@ struct VpnStatus: Equatable {
         self.endpoint = values["endpoint"].flatMap { $0.isEmpty ? nil : $0 }
         self.routeOk = routeOk
         self.routeInterface = values["route_iface"].flatMap { $0.isEmpty ? nil : $0 }
-        self.ipv6RouteOk = values["ipv6_route_ok"].map { $0 == "true" } ?? true
+        self.ipv6RouteExpected = ipv6RouteExpected
+        self.ipv6RouteOk = ipv6RouteOk
         self.ipv6RouteInterface = values["ipv6_route_iface"].flatMap { $0.isEmpty ? nil : $0 }
         self.socketExists = socketExists
     }
@@ -471,6 +579,7 @@ struct VpnStatus: Equatable {
         endpoint: String?,
         routeOk: Bool,
         routeInterface: String?,
+        ipv6RouteExpected: Bool,
         ipv6RouteOk: Bool,
         ipv6RouteInterface: String?,
         socketExists: Bool
@@ -484,6 +593,7 @@ struct VpnStatus: Equatable {
         self.endpoint = endpoint
         self.routeOk = routeOk
         self.routeInterface = routeInterface
+        self.ipv6RouteExpected = ipv6RouteExpected
         self.ipv6RouteOk = ipv6RouteOk
         self.ipv6RouteInterface = ipv6RouteInterface
         self.socketExists = socketExists
@@ -495,7 +605,9 @@ struct VpnStatus: Equatable {
     }
 
     var isUsableConnectedStatus: Bool {
-        state == .connected && routeOk
+        state == .connected
+            && routeOk
+            && (!ipv6RouteExpected || ipv6RouteOk)
     }
 
     var hasIPv4RouteConflict: Bool {
@@ -521,7 +633,7 @@ struct VpnStatus: Equatable {
             return "Другой VPN удерживает системный маршрут. Трафик через VEX не идет."
         }
         if hasIPv6RouteConflict {
-            return "IPv6 удерживает другой VPN. VEX ведет IPv4-трафик, часть сайтов может открываться медленно."
+            return "IPv6 удерживает другой VPN. Подключение VEX остановлено, чтобы исключить утечку трафика."
         }
         return nil
     }

@@ -396,8 +396,128 @@ final class NativeParityModelTests: XCTestCase {
 
         XCTAssertEqual(summary.entitlementStatus, .active)
         XCTAssertEqual(summary.currentPlan?.id, "pro_monthly")
-        XCTAssertEqual(summary.currentPlan?.action, "Текущий")
-        XCTAssertEqual(summary.plans.count, 3)
+        XCTAssertEqual(summary.currentPlan?.action, "Продлить")
+        XCTAssertEqual(summary.currentPlan?.disabled, false)
+        XCTAssertEqual(summary.families.map(\.tier), ["basic", "pro"])
+        XCTAssertEqual(summary.families.last?.plans.map(\.months), [1, 3, 6, 12])
+        XCTAssertEqual(summary.families.last?.plans.map(\.amountCents), [29900, 80730, 152490, 269100])
+    }
+
+    func testBillingSummaryLabelsLongTermPlansAndKeepsThemInUsefulOrder() {
+        let plans = [
+            BillingPlan(id: "basic_annual", name: "Базовый", provider: "platega", amountCents: 179100, currency: "RUB", interval: "annual", deviceLimit: 1, tier: "basic", status: "active"),
+            BillingPlan(id: "family_monthly", name: "Team", provider: "platega", amountCents: 149900, currency: "RUB", interval: "monthly", deviceLimit: 10, tier: "team", status: "active"),
+            BillingPlan(id: "basic_quarterly", name: "Базовый", provider: "platega", amountCents: 53730, currency: "RUB", interval: "quarterly", deviceLimit: 1, tier: "basic", status: "active"),
+            BillingPlan(id: "pro_monthly", name: "Pro", provider: "platega", amountCents: 49900, currency: "RUB", interval: "monthly", deviceLimit: 3, tier: "pro", status: "active"),
+            BillingPlan(id: "basic_monthly", name: "Базовый", provider: "platega", amountCents: 19900, currency: "RUB", interval: "monthly", deviceLimit: 1, tier: "basic", status: "active"),
+            BillingPlan(id: "basic_semiannual", name: "Базовый", provider: "platega", amountCents: 101490, currency: "RUB", interval: "semiannual", deviceLimit: 1, tier: "basic", status: "active"),
+        ]
+
+        let summary = BillingService().buildSummary(plans: plans, entitlement: Entitlement(active: false, vpnAccess: false))
+
+        XCTAssertEqual(summary.plans.map(\.id), [
+            "basic_monthly",
+            "basic_quarterly",
+            "basic_semiannual",
+            "basic_annual",
+            "pro_monthly",
+        ])
+        XCTAssertEqual(summary.families.map(\.tier), ["basic", "pro"])
+        XCTAssertEqual(summary.families.first?.plans.map(\.months), [1, 3, 6, 12])
+        XCTAssertEqual(summary.families.last?.plans.map(\.months), [1])
+        XCTAssertTrue(summary.plans.first(where: { $0.id == "basic_quarterly" })?.meta.contains("/3 мес.") == true)
+        XCTAssertTrue(summary.plans.first(where: { $0.id == "basic_semiannual" })?.meta.contains("/6 мес.") == true)
+        XCTAssertTrue(summary.plans.first(where: { $0.id == "basic_annual" })?.meta.contains("/год") == true)
+    }
+
+    func testBillingSummaryDoesNotGuessCurrentDurationFromTierOnlyEntitlement() {
+        let plans = [
+            BillingPlan(id: "basic_monthly", name: "Базовый", provider: "platega", amountCents: 19900, currency: "RUB", interval: "monthly", deviceLimit: 1, tier: "basic", status: "active"),
+            BillingPlan(id: "basic_annual", name: "Базовый", provider: "platega", amountCents: 179100, currency: "RUB", interval: "annual", deviceLimit: 1, tier: "basic", status: "active"),
+        ]
+        let entitlement = Entitlement(active: true, planId: nil, tier: "basic", vpnAccess: true)
+
+        let summary = BillingService().buildSummary(plans: plans, entitlement: entitlement)
+
+        XCTAssertNil(summary.currentPlan)
+        XCTAssertFalse(summary.plans.contains(where: \.current))
+        XCTAssertEqual(Set(summary.plans.map(\.action)), ["Сменить"])
+    }
+
+    func testBillingCheckoutUsesServerQuoteAndOnlyTwoSelfServeFamilies() throws {
+        let quote = try JSONDecoder().decode(
+            BillingPriceQuote.self,
+            from: Data(#"{"change_type":"upgrade","amount_due_minor":12900,"credit_amount_minor":7000}"#.utf8)
+        )
+        XCTAssertEqual(quote.changeType, "upgrade")
+        XCTAssertEqual(quote.amountDueMinor, 12900)
+
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let apiClient = try String(
+            contentsOf: packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/VEXAPIClient.swift"),
+            encoding: .utf8
+        )
+        let accountPanel = try String(
+            contentsOf: packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/AccountPanel.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(apiClient.contains("/v1/billing/change-preview"))
+        XCTAssertTrue(apiClient.contains("\"expected_amount_minor\": expectedAmountMinor"))
+        XCTAssertTrue(accountPanel.contains("BillingFamilyCard"))
+        XCTAssertTrue(accountPanel.contains("Slider("))
+    }
+
+    func testPaymentHistoryOpensSpecificVEXReceiptInsteadOfProviderReceipt() {
+        let payment = BillingPayment(
+            id: "pay_1",
+            subscriptionId: nil,
+            checkoutSessionId: nil,
+            planId: "basic_annual",
+            provider: "platega",
+            amountMinor: 179100,
+            currency: "RUB",
+            method: "card",
+            status: "paid",
+            receiptUrl: "https://pay.platega.io/payment/success?id=provider-secret",
+            failureReason: nil,
+            refundedAmountMinor: nil,
+            refundedAt: nil,
+            paidAt: "2026-08-01T12:00:00Z",
+            createdAt: "2026-08-01T11:59:00Z"
+        )
+
+        XCTAssertEqual(BillingPresentation.customerPaymentURL(for: payment).host, "vexguard.app")
+        XCTAssertEqual(
+            BillingPresentation.customerPaymentURL(for: payment).path,
+            "/dashboard/payments/pay_1/receipt"
+        )
+        XCTAssertNil(BillingPresentation.customerPaymentURL(for: payment).query)
+        XCTAssertEqual(BillingPresentation.planName(for: payment.planId), "Базовый · год")
+        XCTAssertEqual(BillingPresentation.planName(for: "business_monthly"), "Бизнес · месяц")
+    }
+
+    func testPaymentHistoryUsesClickableRowsWithoutSeparateWebsiteButtons() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let accountPanel = try String(
+            contentsOf: packageRoot.appendingPathComponent(
+                "Sources/VEXNativeMac/Views/AccountPanel.swift"
+            ),
+            encoding: .utf8
+        )
+        let rowStart = try XCTUnwrap(accountPanel.range(of: "private struct PaymentHistoryRow"))
+        let rowEnd = try XCTUnwrap(accountPanel.range(of: "private struct EmptyPaymentHistory"))
+        let rowSource = accountPanel[rowStart.lowerBound..<rowEnd.lowerBound]
+        let historyStart = try XCTUnwrap(accountPanel.range(of: "private var paymentHistory"))
+        let historyEnd = try XCTUnwrap(accountPanel.range(of: "private var accessTitle"))
+        let historySource = accountPanel[historyStart.lowerBound..<historyEnd.lowerBound]
+
+        XCTAssertFalse(historySource.contains("BillingPresentation.billingDashboardURL"))
+        XCTAssertFalse(historySource.contains("Label(\"Кабинет\""))
+        XCTAssertTrue(rowSource.contains("Button {"))
+        XCTAssertTrue(rowSource.contains("BillingPresentation.customerPaymentURL(for: payment)"))
+        XCTAssertTrue(rowSource.contains(".buttonStyle(.plain)"))
+        XCTAssertTrue(rowSource.contains(".contentShape(Rectangle())"))
+        XCTAssertFalse(rowSource.contains("Label(\"На сайте\""))
     }
 
     func testBillingSummaryCacheRoundTripsPerUser() throws {
@@ -610,35 +730,39 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(helperInstaller.contains("resourceMatchesInstalled(\"awg\")"))
         XCTAssertTrue(helperInstaller.contains("resourceFile(\"helper-version\")"))
         XCTAssertTrue(helperInstaller.contains("trimmingCharacters(in: .whitespacesAndNewlines)"))
-        XCTAssertTrue(helperInstaller.contains("plistValueIsTrue(\"RunAtLoad\", in: plist)"))
-        XCTAssertTrue(helperInstaller.contains("plistValueIsTrue(\"KeepAlive\", in: plist)"))
+        XCTAssertTrue(helperInstaller.contains("PropertyListSerialization.propertyList("))
+        XCTAssertTrue(helperInstaller.contains("dictionary[\"RunAtLoad\"] as? Bool == true"))
+        XCTAssertTrue(helperInstaller.contains("helperPlistKeepsServiceAvailable(dictionary)"))
         XCTAssertTrue(helperInstaller.contains("SHA256.hash"))
         XCTAssertFalse(helperInstaller.contains("if socketIsConnectable {\n            return\n        }"))
     }
 
     func testNativeHelperVersionUsesBundledResourceAcrossInstallPaths() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let helperVersionURL = packageRoot.appendingPathComponent("../src-tauri/resources/helper-version").standardizedFileURL
-        let installerURL = packageRoot.appendingPathComponent("../src-tauri/resources/install-vex-vpn-helper.sh").standardizedFileURL
+        let helperVersionURL = packageRoot.appendingPathComponent("HelperResources/helper-version")
+        let installerURL = packageRoot.appendingPathComponent("HelperResources/install-vex-vpn-helper.sh")
         let nativeInstallerURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/VEXHelperInstaller.swift")
         let buildScriptURL = packageRoot.appendingPathComponent("../scripts/build_native_macos_app.sh").standardizedFileURL
+        let helperBuildScriptURL = packageRoot.appendingPathComponent("../scripts/build_swift_macos_helper.sh").standardizedFileURL
         let verifyScriptURL = packageRoot.appendingPathComponent("../scripts/verify_native_macos_runtime.sh").standardizedFileURL
-        let tauriConfigURL = packageRoot.appendingPathComponent("../src-tauri/tauri.conf.json").standardizedFileURL
 
         let helperVersion = try String(contentsOf: helperVersionURL, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let installer = try String(contentsOf: installerURL, encoding: .utf8)
         let nativeInstaller = try String(contentsOf: nativeInstallerURL, encoding: .utf8)
         let buildScript = try String(contentsOf: buildScriptURL, encoding: .utf8)
+        let helperBuildScript = try String(contentsOf: helperBuildScriptURL, encoding: .utf8)
         let verifyScript = try String(contentsOf: verifyScriptURL, encoding: .utf8)
-        let tauriConfig = try String(contentsOf: tauriConfigURL, encoding: .utf8)
 
-        XCTAssertEqual(helperVersion, "33")
+        XCTAssertEqual(helperVersion, "35")
         XCTAssertTrue(installer.contains("helper_version_file=\"$src_dir/helper-version\""))
         XCTAssertTrue(nativeInstaller.contains("resourceFile(\"helper-version\")"))
         XCTAssertTrue(buildScript.contains("helper-version"))
+        XCTAssertTrue(buildScript.contains("build_swift_macos_helper.sh"))
+        XCTAssertTrue(helperBuildScript.contains("VEXPrivilegedHelper"))
         XCTAssertTrue(verifyScript.contains("helper_version_from_bundle"))
-        XCTAssertTrue(tauriConfig.contains("\"resources/helper-version\""))
+        XCTAssertTrue(verifyScript.contains("macos-native/HelperResources/vex-helper"))
+        XCTAssertFalse(buildScript.contains("src-tauri/resources"))
         XCTAssertFalse(nativeInstaller.contains("private let helperVersion = \""))
     }
 
@@ -657,28 +781,430 @@ final class NativeParityModelTests: XCTestCase {
     func testStaleHelperPrimaryActionsRunRepairInsteadOfVpnConnect() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let homeURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/HomePanel.swift")
+        let presentationURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Models/FocusPulsePresentation.swift")
         let sidebarURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/VEXSidebar.swift")
         let home = try String(contentsOf: homeURL, encoding: .utf8)
+        let presentation = try String(contentsOf: presentationURL, encoding: .utf8)
         let sidebar = try String(contentsOf: sidebarURL, encoding: .utf8)
 
         XCTAssertTrue(home.contains("requiresHelperInstall: helper.installRequiredMessage != nil"))
         XCTAssertTrue(home.contains("await helper.repairHelper()"))
-        XCTAssertTrue(home.contains("return \"Установить\""))
-        XCTAssertTrue(home.contains("return \"Helper требуется\""))
+        XCTAssertTrue(presentation.contains("return \"Требуется helper\""))
+        XCTAssertTrue(presentation.contains("return \"Установите системный компонент VEX\""))
         XCTAssertTrue(sidebar.contains("return \"Установить helper\""))
         XCTAssertTrue(sidebar.contains("await helper.repairHelper()"))
     }
 
-    func testStableVpnHeroDestroysRepeatingAnimationView() throws {
+    func testVpnHeroUsesInstantStateFeedbackWithoutBusyOrbit() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let heroURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/FocusPulseHero.swift")
+        let hero = try String(contentsOf: heroURL, encoding: .utf8)
+
+        XCTAssertTrue(hero.contains(".animation(.snappy(duration: 0.16)"))
+        XCTAssertTrue(hero.contains("value: status.state"))
+        XCTAssertTrue(hero.contains("Image(systemName: \"power\")"))
+        XCTAssertFalse(hero.contains("FocusPulseConnectingOrbit"))
+        XCTAssertFalse(hero.contains("VEXMiniSpinner"))
+        XCTAssertFalse(hero.contains("repeatForever"))
+    }
+
+    func testSupportMessageBubbleUsesOneMatchingShapeForFillAndBorder() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let supportURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/SupportPanel.swift")
+        let support = try String(contentsOf: supportURL, encoding: .utf8)
+
+        XCTAssertEqual(
+            support.components(separatedBy: "RoundedBubbleShape(isUser: isUserMessage)").count - 1,
+            2
+        )
+        XCTAssertTrue(support.contains(".fill(bubbleBackground)"))
+        XCTAssertTrue(support.contains(".stroke(bubbleBorder, lineWidth: 1)"))
+        XCTAssertFalse(support.contains(".background(bubbleBackground)"))
+    }
+
+    func testSupportPanelUsesGlobalWindowHeaderWithoutLocalHeader() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let supportURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/SupportPanel.swift")
+        let support = try String(contentsOf: supportURL, encoding: .utf8)
+
+        XCTAssertFalse(support.contains("private var supportHeader"))
+        XCTAssertFalse(support.contains("Text(\"Поддержка VEX\")"))
+        XCTAssertTrue(support.contains("!appState.supportSocketConnected"))
+        XCTAssertTrue(support.contains("Live-чат временно отключён"))
+    }
+
+    func testAppLaunchUsesBrandedAnimatedGateWithReducedMotionFallback() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let appURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/VEXNativeMacApp.swift")
+        let launchURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/VEXLaunchView.swift")
+        let app = try String(contentsOf: appURL, encoding: .utf8)
+        let launch = try String(contentsOf: launchURL, encoding: .utf8)
+
+        XCTAssertTrue(app.contains("VEXLaunchContainer"))
+        XCTAssertTrue(launch.contains("TimelineView(.animation"))
+        XCTAssertTrue(launch.contains("@Environment(\\.accessibilityReduceMotion)"))
+        XCTAssertTrue(launch.contains("VEXLaunchTiming.minimumDisplayNanoseconds"))
+        XCTAssertTrue(launch.contains("let startupTask = Task"))
+        XCTAssertTrue(launch.contains("Защищаем соединение"))
+    }
+
+    func testFocusPulseUsesReferenceWindowProportionsAndTransitionEdgeGlow() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let appURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/VEXNativeMacApp.swift")
+        let contentURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/ContentView.swift")
+        let glowURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/WindowIntelligenceGlow.swift")
+        let dragSurfaceURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/WindowDragSurface.swift")
+        let previewModeURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Support/VEXPreviewMode.swift")
+        let headerURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/FocusPulseWindowHeader.swift")
+        let heroURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/FocusPulseHero.swift")
         let homeURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/HomePanel.swift")
+        let app = try String(contentsOf: appURL, encoding: .utf8)
+        let content = try String(contentsOf: contentURL, encoding: .utf8)
+        let glow = try String(contentsOf: glowURL, encoding: .utf8)
+        let dragSurface = try String(contentsOf: dragSurfaceURL, encoding: .utf8)
+        let previewMode = try String(contentsOf: previewModeURL, encoding: .utf8)
+        let header = try String(contentsOf: headerURL, encoding: .utf8)
+        let hero = try String(contentsOf: heroURL, encoding: .utf8)
         let home = try String(contentsOf: homeURL, encoding: .utf8)
 
-        XCTAssertTrue(home.contains("if shouldAnimateHero {"))
-        XCTAssertTrue(home.contains("AnimatedHeroLayers("))
-        XCTAssertTrue(home.contains("StaticHeroLayers("))
-        XCTAssertFalse(home.contains(".animation(shouldAnimateHero ? pulseAnimation : nil"))
-        XCTAssertFalse(home.contains(".animation(shouldAnimateHero ? orbitAnimation : nil"))
+        XCTAssertTrue(app.contains(".defaultSize(width: 920, height: 580)"))
+        XCTAssertTrue(app.contains(".windowStyle(.plain)"))
+        XCTAssertFalse(app.contains(".windowStyle(.hiddenTitleBar)"))
+        XCTAssertTrue(app.contains(".windowResizability(.contentMinSize)"))
+        XCTAssertTrue(app.contains("window.styleMask = [.borderless, .resizable, .miniaturizable]"))
+        XCTAssertTrue(app.contains("window.ignoresMouseEvents = false"))
+        XCTAssertFalse(app.contains("NSWindow.didResignKeyNotification"))
+        XCTAssertTrue(app.contains("red: 0.008"))
+        XCTAssertTrue(app.contains("green: 0.039"))
+        XCTAssertTrue(app.contains("blue: 0.043"))
+        XCTAssertTrue(app.contains("alpha: 1"))
+        XCTAssertTrue(app.contains("window.frame.width >= 800"))
+        XCTAssertTrue(app.contains("window.contentView?.superview?.layer?.cornerRadius = 16"))
+        XCTAssertTrue(app.contains("window.contentView?.superview?.layer?.masksToBounds = true"))
+        XCTAssertTrue(app.contains("window.level = .normal"))
+        XCTAssertFalse(app.contains("window.level = .floating"))
+        XCTAssertTrue(app.contains("window.hidesOnDeactivate = false"))
+        XCTAssertTrue(content.contains("WindowIntelligenceGlow("))
+        XCTAssertTrue(content.contains("FocusPulseWindowHeader("))
+        XCTAssertGreaterThanOrEqual(
+            content.components(separatedBy: "FocusPulseWindowHeader(").count - 1,
+            3
+        )
+        XCTAssertEqual(
+            content.components(separatedBy: "VEXScrollEdgeBlur(").count - 1,
+            2
+        )
+        XCTAssertTrue(content.contains("edge: .top"))
+        XCTAssertTrue(content.contains("edge: .bottom"))
+        XCTAssertTrue(content.contains(".padding(.bottom, 110)"))
+        XCTAssertFalse(content.contains(".padding(.bottom, 64)"))
+        XCTAssertFalse(content.contains(".toolbar {"))
+        XCTAssertTrue(content.contains("WindowDragSurface()"))
+        XCTAssertFalse(content.contains("WindowDragGesture()"))
+        XCTAssertFalse(content.contains(".simultaneousGesture(WindowDragGesture())"))
+        XCTAssertFalse(content.contains(".ignoresSafeArea(.container, edges: .top)"))
+        XCTAssertTrue(dragSurface.contains("override func acceptsFirstMouse"))
+        XCTAssertTrue(dragSurface.contains("window.makeKeyAndOrderFront(nil)"))
+        XCTAssertTrue(dragSurface.contains("window.performDrag(with: event)"))
+        XCTAssertTrue(previewMode.contains("static var suppressesRuntime"))
+        XCTAssertTrue(previewMode.contains("--signed-out-ui-preview"))
+        XCTAssertTrue(glow.contains("TimelineView("))
+        XCTAssertTrue(glow.contains(".animation("))
+        XCTAssertTrue(glow.contains("accessibilityReduceMotion"))
+        XCTAssertTrue(glow.contains("Canvas(rendersAsynchronously: true)"))
+        XCTAssertTrue(glow.contains("trimmedPath"))
+        XCTAssertTrue(glow.contains("length: 0.16"))
+        XCTAssertTrue(glow.contains("lineJoin: .round"))
+        XCTAssertFalse(glow.contains("for index in palette.indices"))
+        XCTAssertFalse(glow.contains("AngularGradient"))
+        XCTAssertTrue(glow.contains("addChildWindow"))
+        XCTAssertTrue(glow.contains("addChildWindow(overlay, ordered: .below)"))
+        XCTAssertFalse(glow.contains("addChildWindow(overlay, ordered: .above)"))
+        XCTAssertTrue(glow.contains("styleMask: .borderless"))
+        XCTAssertTrue(glow.contains("ignoresMouseEvents = true"))
+        XCTAssertTrue(glow.contains("scheduleGlowFrameSync()"))
+        XCTAssertTrue(glow.contains("pendingFrameSync?.cancel()"))
+        XCTAssertTrue(glow.contains("display: false"))
+        XCTAssertFalse(glow.contains("MainActor.assumeIsolated"))
+        XCTAssertFalse(glow.contains("connectedOpacity"))
+        XCTAssertTrue(header.contains("focusPulseWindow?.orderOut(nil)"))
+        XCTAssertTrue(header.contains("WindowChromeActions.miniaturize()"))
+        XCTAssertTrue(header.contains("WindowDragSurface()"))
+        XCTAssertTrue(header.contains(".allowsHitTesting(false)"))
+        XCTAssertFalse(header.contains(".contentShape(Rectangle())"))
+        XCTAssertFalse(header.contains("window.styleMask.insert([.titled"))
+        XCTAssertTrue(header.contains("window.miniaturize(nil)"))
+        XCTAssertTrue(header.contains("restoreFrames"))
+        XCTAssertTrue(header.contains("window.setFrame(visibleFrame"))
+        XCTAssertFalse(header.contains("Обновить статус"))
+        XCTAssertFalse(header.contains("arrow.clockwise"))
+        XCTAssertFalse(header.contains("systemName: \"gearshape\""))
+        XCTAssertTrue(hero.contains(".onChange(of: bytes"))
+        XCTAssertTrue(hero.contains(".onHover"))
+        XCTAssertTrue(hero.contains("isPowerHovered"))
+        XCTAssertTrue(hero.contains(".background(alignment: .center)"))
+        XCTAssertEqual(
+            hero.components(separatedBy: "FocusPulseWaves(").count - 1,
+            1
+        )
+        XCTAssertGreaterThan(
+            try XCTUnwrap(hero.range(of: "FocusPulseWaves(")).lowerBound,
+            try XCTUnwrap(hero.range(of: "private struct FocusPulsePowerControl")).lowerBound
+        )
+        XCTAssertTrue(home.contains("ScrollView(.horizontal"))
+        XCTAssertTrue(home.contains(".scrollTargetBehavior(.viewAligned)"))
+        XCTAssertTrue(home.contains(".containerRelativeFrame("))
+        XCTAssertTrue(home.contains(".onHover"))
+    }
+
+    func testFocusPulseUsesLivingBackgroundAndAnimatedNavigationStates() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let contentURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/ContentView.swift")
+        let backgroundURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/BackgroundViews.swift")
+        let dockURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/FocusPulseNavigationDock.swift")
+        let homeURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/HomePanel.swift")
+        let serverWindowURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Support/VEXServerSidebarWindow.swift")
+        let content = try String(contentsOf: contentURL, encoding: .utf8)
+        let background = try String(contentsOf: backgroundURL, encoding: .utf8)
+        let dock = try String(contentsOf: dockURL, encoding: .utf8)
+        let home = try String(contentsOf: homeURL, encoding: .utf8)
+        let serverWindow = try String(contentsOf: serverWindowURL, encoding: .utf8)
+
+        XCTAssertTrue(content.contains("VEXBackground(selection: selection)"))
+        XCTAssertTrue(content.contains(".contentTransition(.opacity)"))
+        XCTAssertTrue(content.contains(".asymmetric("))
+        XCTAssertFalse(background.contains("TimelineView("))
+        XCTAssertFalse(background.contains("scenePhase"))
+        XCTAssertTrue(background.contains(".easeInOut(duration: 0.35)"))
+        XCTAssertTrue(background.contains("AngularGradient("))
+        XCTAssertTrue(background.contains("selection.accentColor"))
+        XCTAssertFalse(background.contains("repeatForever"))
+        XCTAssertTrue(dock.contains("@State private var hoveredSection"))
+        XCTAssertTrue(dock.contains("accessibilityReduceMotion"))
+        XCTAssertTrue(dock.contains(".snappy(duration: 0.32"))
+        XCTAssertTrue(dock.contains(".onHover"))
+        XCTAssertTrue(dock.contains("hoveredSection =="))
+        XCTAssertTrue(dock.contains("section: .settings"))
+        XCTAssertTrue(dock.contains("systemName: \"gearshape\""))
+        XCTAssertFalse(dock.contains("onShowServers"))
+        XCTAssertFalse(dock.contains("globe.europe.africa.fill"))
+        XCTAssertFalse(content.contains("presentedSheet"))
+        XCTAssertTrue(home.contains("FocusPulseLocations("))
+        XCTAssertTrue(content.contains("HomePanel(onShowServers: VEXServerSidebarWindow.toggle)"))
+        XCTAssertFalse(content.contains("isServerDrawerPresented"))
+        XCTAssertTrue(serverWindow.contains("mainWindow.addChildWindow(panel, ordered: .above)"))
+        XCTAssertTrue(serverWindow.contains("ServerSidebarPlacement.frame("))
+    }
+
+    func testHomeKeepsProtectionControlsInSettingsAndWebsiteInBottomCorner() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let contentURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/ContentView.swift")
+        let dockURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/FocusPulseNavigationDock.swift")
+        let homeURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/HomePanel.swift")
+        let settingsURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/VEXSettingsView.swift")
+        let content = try String(contentsOf: contentURL, encoding: .utf8)
+        let dock = try String(contentsOf: dockURL, encoding: .utf8)
+        let home = try String(contentsOf: homeURL, encoding: .utf8)
+        let settings = try String(contentsOf: settingsURL, encoding: .utf8)
+
+        XCTAssertTrue(content.contains("FocusPulseNavigationDock("))
+        XCTAssertTrue(content.contains("selection: $selection"))
+        XCTAssertTrue(content.contains("availableUpdateVersion: appState.availableNativeUpdateVersion"))
+        XCTAssertTrue(content.contains(".zIndex(10)"))
+        XCTAssertTrue(dock.contains("VEXPreviewMode.isEnabled"))
+        XCTAssertTrue(dock.contains("legacyDock"))
+        XCTAssertTrue(dock.contains(".fill(.ultraThinMaterial)"))
+        XCTAssertFalse(dock.contains(".background(.ultraThinMaterial, in: Capsule())"))
+        XCTAssertFalse(dock.contains("Color.white.opacity(0.10)"))
+        XCTAssertFalse(home.contains("FocusPulseQuickControls"))
+        XCTAssertFalse(home.contains("Умный режим"))
+        XCTAssertFalse(home.contains("Kill Switch"))
+        XCTAssertTrue(settings.contains("title: \"Умный режим\""))
+        XCTAssertTrue(settings.contains("title: \"Kill Switch\""))
+        XCTAssertTrue(settings.contains("isOn: $appState.antiLeakEnabled"))
+        XCTAssertFalse(home.contains("Link(destination: Self.websiteURL)"))
+        XCTAssertTrue(content.contains("VEXWebsiteLink()"))
+        XCTAssertTrue(content.contains(".padding(.trailing, 20)"))
+        XCTAssertTrue(content.contains(".padding(.bottom, 20)"))
+        XCTAssertTrue(content.contains("https://vexguard.app"))
+        XCTAssertTrue(content.contains("accessibilityLabel(\"Открыть сайт VEX\")"))
+        XCTAssertTrue(content.contains("Color.vexCyanLight.opacity(0.82)"))
+        XCTAssertTrue(content.contains(".padding(.top, 82)"))
+        XCTAssertTrue(settings.contains(".toggleStyle(VEXSwitchToggleStyle())"))
+    }
+
+    func testSettingsAndAccountKeepBrandedHierarchyWithoutDecorativeOuterSurfaces() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let settingsURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/VEXSettingsView.swift")
+        let accountURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/AccountPanel.swift")
+        let settings = try String(contentsOf: settingsURL, encoding: .utf8)
+        let account = try String(contentsOf: accountURL, encoding: .utf8)
+
+        XCTAssertTrue(settings.contains("SettingsHero("))
+        XCTAssertTrue(settings.contains("SettingsFeatureCard("))
+        XCTAssertFalse(settings.contains("LinearGradient("))
+        XCTAssertTrue(account.contains("AccountHero("))
+        XCTAssertTrue(account.contains("BillingFamilyCard("))
+        XCTAssertTrue(account.contains("VEXFeatureSurface("))
+        XCTAssertFalse(account.contains("VEXFeatureSurface(accent: .vexCyan"))
+        XCTAssertFalse(account.contains(".blur(radius: 38)"))
+        XCTAssertFalse(account.contains("AccountMetric("))
+        XCTAssertFalse(account.contains("receiptUrl"))
+        XCTAssertFalse(account.contains("provider"))
+        XCTAssertTrue(account.contains(".accessibilityLabel(\"Обновить данные подписки\")"))
+        XCTAssertFalse(settings.contains("title: \"VPN\""))
+        XCTAssertFalse(settings.contains("VEXAppInfo.coreVersion"))
+        XCTAssertFalse(settings.contains("VEXAppInfo.apiClientVersion"))
+    }
+
+    func testEnabledSettingsSwitchesUseVisibleVEXAccentTrack() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let settingsURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/VEXSettingsView.swift")
+        let settings = try String(contentsOf: settingsURL, encoding: .utf8)
+
+        XCTAssertTrue(settings.contains(".toggleStyle(VEXSwitchToggleStyle())"))
+        XCTAssertTrue(settings.contains("configuration.isOn ? Color.vexCyan"))
+        XCTAssertTrue(settings.contains("configuration.isOn ? 8 : -8"))
+        XCTAssertTrue(settings.contains("configuration.isOn ? \"Включено\" : \"Выключено\""))
+        XCTAssertFalse(settings.contains(".toggleStyle(.switch)"))
+        XCTAssertFalse(settings.contains(".tint(Color.vexCyan)"))
+    }
+
+    func testStatusItemOpensAnimatedVEXTrayPanelInsteadOfLegacyMenu() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let appURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/StatusBar/VEXStatusItemController.swift")
+        let trayURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/VEXTrayPanelView.swift")
+        let app = try String(contentsOf: appURL, encoding: .utf8)
+        let tray = try String(contentsOf: trayURL, encoding: .utf8)
+
+        XCTAssertTrue(app.contains("button.action = #selector(togglePanel)"))
+        XCTAssertTrue(app.contains("button.sendAction(on: [.leftMouseDown, .rightMouseDown])"))
+        XCTAssertFalse(app.contains("button.sendAction(on: [.leftMouseUp, .rightMouseUp])"))
+        XCTAssertTrue(app.contains("item.menu = nil"))
+        XCTAssertTrue(app.contains("VEXTrayPanel("))
+        XCTAssertTrue(app.contains("NSAnimationContext.runAnimationGroup"))
+        XCTAssertTrue(app.contains("addGlobalMonitorForEvents"))
+        XCTAssertTrue(app.contains("NSWindow.Level.popUpMenu.rawValue + 1"))
+        XCTAssertTrue(app.contains("window.backgroundColor = .clear"))
+        XCTAssertTrue(tray.contains("struct VEXTrayPanelView: View"))
+        XCTAssertTrue(tray.contains("appState.toggleVPNPower(using: helper)"))
+        XCTAssertTrue(tray.contains(".onHover"))
+        XCTAssertTrue(tray.contains("accessibilityReduceMotion"))
+        XCTAssertTrue(tray.contains("Открыть VEX"))
+        XCTAssertTrue(tray.contains("https://vexguard.app"))
+        XCTAssertTrue(tray.contains("Открыть сайт VEX"))
+    }
+
+    func testTrayPanelSharesTheMainClientVisualLanguage() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let trayURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/VEXTrayPanelView.swift")
+        let tray = try String(contentsOf: trayURL, encoding: .utf8)
+
+        XCTAssertTrue(tray.contains("VEXBackground(selection: .home)"))
+        XCTAssertTrue(tray.contains("CircuitBackdrop()"))
+        XCTAssertTrue(tray.contains("connectionPulse"))
+        XCTAssertTrue(tray.contains("trafficStrip"))
+        XCTAssertTrue(tray.contains("routeCard"))
+        XCTAssertTrue(tray.contains("Color.vexPanelStrong.opacity"))
+        XCTAssertTrue(tray.contains("Color.white.opacity(hoveredAction == .openApp"))
+        XCTAssertFalse(tray.contains("Color.vexCyan.opacity(hoveredAction == .openApp ? 0.98 : 0.86)"))
+        XCTAssertTrue(tray.contains("VEXTrayLayout.size.width"))
+        XCTAssertTrue(tray.contains("VEXTrayLayout.size.height"))
+        XCTAssertFalse(tray.contains(".background(.regularMaterial)"))
+
+        let statusURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/StatusBar/VEXStatusItemController.swift")
+        let status = try String(contentsOf: statusURL, encoding: .utf8)
+        XCTAssertTrue(status.contains("VEXTrayLayout.size"))
+        XCTAssertFalse(status.contains("width: 388, height: 472"))
+        XCTAssertTrue(status.contains("panel.makeKey()"))
+    }
+
+    func testTrayPanelFrameStaysInsideAvailableScreen() {
+        let screen = CGRect(x: -400, y: 0, width: 380, height: 480)
+        let statusItem = CGRect(x: -60, y: 452, width: 24, height: 20)
+
+        let frame = VEXTrayLayout.panelFrame(below: statusItem, inside: screen)
+
+        XCTAssertGreaterThanOrEqual(frame.minX, screen.minX + VEXTrayLayout.screenMargin)
+        XCTAssertLessThanOrEqual(frame.maxX, screen.maxX - VEXTrayLayout.screenMargin)
+        XCTAssertGreaterThanOrEqual(frame.minY, screen.minY + VEXTrayLayout.screenMargin)
+        XCTAssertLessThanOrEqual(frame.maxY, screen.maxY - VEXTrayLayout.screenMargin)
+    }
+
+    func testTrayPanelStaysAboveOtherAppsWithoutOpeningMainWindow() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let appURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/VEXNativeMacApp.swift")
+        let statusURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/StatusBar/VEXStatusItemController.swift")
+        let app = try String(contentsOf: appURL, encoding: .utf8)
+        let status = try String(contentsOf: statusURL, encoding: .utf8)
+
+        XCTAssertTrue(status.contains("NSApp.preventWindowOrdering()"))
+        XCTAssertTrue(status.contains("panel.orderFrontRegardless()"))
+        XCTAssertTrue(status.contains("NSWindow.Level.popUpMenu.rawValue + 1"))
+        XCTAssertTrue(status.contains(".canJoinAllSpaces"))
+        XCTAssertTrue(status.contains("NSRunningApplication.current.activate("))
+        XCTAssertTrue(status.contains(".activateAllWindows"))
+        XCTAssertTrue(status.contains("mainWindow?.orderFrontRegardless()"))
+        XCTAssertFalse(status.contains("--tray-panel-preview"))
+        XCTAssertTrue(status.contains("button.image = Self.statusItemImage()"))
+        XCTAssertTrue(status.contains("image.isTemplate = false"))
+        XCTAssertTrue(status.contains(".foregroundColor: NSColor.white"))
+        XCTAssertTrue(status.contains("button.contentTintColor = .white"))
+        XCTAssertTrue(app.contains("NSRunningApplication.current.activate("))
+        XCTAssertTrue(app.contains("window.orderFrontRegardless()"))
+        XCTAssertTrue(status.contains("event.windowNumber == panel.windowNumber"))
+        XCTAssertTrue(status.contains("panel.frame.insetBy(dx: -8, dy: -8).contains(pointer)"))
+    }
+
+    @MainActor
+    func testFocusPulseMainWindowKeepsNativeActivationWhileChromeIsHidden() {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 920, height: 580),
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+
+        FocusPulseMainWindowConfiguration.apply(to: window)
+        window.contentViewController = NSViewController()
+        window.orderFront(nil)
+        defer { window.orderOut(nil) }
+
+        XCTAssertTrue(window.styleMask.contains(.miniaturizable))
+        XCTAssertTrue(window.styleMask.contains(.resizable))
+        XCTAssertFalse(window.styleMask.contains(.titled))
+        XCTAssertFalse(window.styleMask.contains(.fullSizeContentView))
+        XCTAssertTrue(window.isMovableByWindowBackground)
+        XCTAssertFalse(window.ignoresMouseEvents)
+        XCTAssertEqual(window.titleVisibility, .hidden)
+        XCTAssertTrue(window.titlebarAppearsTransparent)
+
+        WindowChromeActions.miniaturize(window: window)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+        XCTAssertTrue(window.isMiniaturized)
+        window.deminiaturize(nil)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+
+        let originalFrame = window.frame
+        WindowChromeActions.zoom(window: window)
+        XCTAssertNotEqual(window.frame, originalFrame)
+        WindowChromeActions.zoom(window: window)
+        XCTAssertEqual(window.frame, originalFrame)
+    }
+
+    func testMainWindowMouseDownExplicitlyReactivatesPlainSwiftUIWindow() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let appURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/VEXNativeMacApp.swift")
+        let app = try String(contentsOf: appURL, encoding: .utf8)
+
+        XCTAssertTrue(app.contains("mainWindowActivationMonitor"))
+        XCTAssertTrue(app.contains("NSEvent.addLocalMonitorForEvents("))
+        XCTAssertTrue(app.contains("matching: [.leftMouseDown, .rightMouseDown]"))
+        XCTAssertTrue(app.contains("event.window === window"))
+        XCTAssertTrue(app.contains("activateMainWindow(window)"))
+        XCTAssertTrue(app.contains("NSApp.activate(ignoringOtherApps: true)"))
+        XCTAssertTrue(app.contains("window.makeKeyAndOrderFront(nil)"))
+        XCTAssertTrue(app.contains("NSEvent.removeMonitor(mainWindowActivationMonitor)"))
     }
 
     func testHelperPollingDoesNotPublishUnchangedStatus() throws {
@@ -744,36 +1270,80 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertFalse(script.contains(" down"))
     }
 
-    func testNativeHelperInstallerClearsTransientAntiLeakState() throws {
+    func testNativeHelperInstallerRecoversNetworkBeforeDiscardingState() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let scriptURL = packageRoot.appendingPathComponent("../src-tauri/resources/install-vex-vpn-helper.sh").standardizedFileURL
+        let scriptURL = packageRoot.appendingPathComponent("HelperResources/install-vex-vpn-helper.sh")
         let script = try String(contentsOf: scriptURL, encoding: .utf8)
 
         XCTAssertTrue(script.contains("antileak.state"))
         XCTAssertTrue(script.contains("antileak.active"))
         XCTAssertTrue(script.contains("operation.lock"))
         XCTAssertTrue(script.contains("utun.name"))
+        XCTAssertTrue(script.contains("/sbin/pfctl -a \"$antileak_anchor\" -F all"))
+        XCTAssertTrue(script.contains("/sbin/pfctl -a \"$antileak_anchor\" -sr 2>/dev/null"))
+        XCTAssertFalse(script.contains("/sbin/pfctl -a \"$antileak_anchor\" -sr 2>&1"))
+        XCTAssertTrue(script.contains("/usr/bin/printf 'shutdown\\n'"))
+        XCTAssertTrue(script.contains("/usr/bin/printf 'down\\n'"))
+        XCTAssertTrue(script.contains("Replacement helper did not confirm network recovery"))
+        XCTAssertTrue(script.contains("Keep the pre-replacement recovery evidence"))
+        XCTAssertFalse(script.contains("shutdown_response\" == \"ok\""))
+        XCTAssertFalse(script.contains("/bin/rm -f \"$helper_dir/antileak.state\""))
     }
 
     func testHelperRepairActionIsSeparateFromVpnConnect() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let helperModelURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/VEXHelperClient.swift")
+        let helperInstallerURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/VEXHelperInstaller.swift")
+        let homeURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/HomePanel.swift")
+        let heroURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/FocusPulseHero.swift")
         let helperModel = try String(contentsOf: helperModelURL, encoding: .utf8)
+        let helperInstaller = try String(contentsOf: helperInstallerURL, encoding: .utf8)
+        let home = try String(contentsOf: homeURL, encoding: .utf8)
+        let hero = try String(contentsOf: heroURL, encoding: .utf8)
 
         XCTAssertTrue(helperModel.contains("func repairHelper() async"))
-        XCTAssertTrue(helperModel.contains("installer.repairWithAdminPrivileges()"))
+        XCTAssertTrue(helperModel.contains("@Published private(set) var installationPhase"))
+        XCTAssertTrue(helperModel.contains("installer.repairWithAdminPrivileges"))
+        XCTAssertTrue(helperModel.contains("installationPhase = .failed"))
         XCTAssertTrue(helperModel.contains("Helper установлен."))
         XCTAssertTrue(helperModel.contains("var installRequiredMessage: String?"))
+        XCTAssertTrue(helperInstaller.contains("private func installWithAdminPrivileges("))
+        XCTAssertTrue(helperInstaller.contains("async throws"))
+        XCTAssertTrue(helperInstaller.contains("Task.detached(priority: .userInitiated)"))
+        XCTAssertTrue(helperInstaller.contains("VEX Inc. устанавливает системный компонент VEX"))
+        XCTAssertTrue(helperInstaller.contains("waitForSocket(timeout: 8.0)"))
+        XCTAssertTrue(helperInstaller.contains("Date().addingTimeInterval(0.5)"))
+        XCTAssertTrue(helperModel.contains("Task.sleep(for: .milliseconds(500))"))
+        XCTAssertTrue(home.contains("installationPhase: helper.installationPhase"))
+        XCTAssertTrue(hero.contains("return installationPhase.detail"))
+        XCTAssertTrue(hero.contains("TimelineView(.animation"))
+        XCTAssertTrue(hero.contains("HelperInstallProgressRing"))
     }
 
-    func testNativeConnectSkipsRedundantDisconnectAndWaitsForUsableStatus() throws {
+    func testDesktopShowsInstalledVersionInLowerLeftCorner() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let contentURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/ContentView.swift")
+        let content = try String(contentsOf: contentURL, encoding: .utf8)
+
+        XCTAssertTrue(content.contains("VEXVersionLabel()"))
+        XCTAssertTrue(content.contains("alignment: .bottomLeading"))
+        XCTAssertTrue(content.contains("VEX \\(VEXAppInfo.version) · build \\(VEXAppInfo.buildNumber)"))
+    }
+
+    func testNativeConnectUsesOneAtomicHelperUpAndWaitsForUsableStatus() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let helperModelURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/VEXHelperClient.swift")
         let appStateURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Stores/VEXAppState.swift")
+        let helperRuntimeURL = packageRoot
+            .appendingPathComponent("Sources/VEXHelperCore/Runtime.swift")
         let helperModel = try String(contentsOf: helperModelURL, encoding: .utf8)
         let appState = try String(contentsOf: appStateURL, encoding: .utf8)
+        let helperRuntime = try String(contentsOf: helperRuntimeURL, encoding: .utf8)
 
-        XCTAssertTrue(helperModel.contains("shouldDisconnectBeforeConnect"))
+        XCTAssertFalse(helperModel.contains("shouldDisconnectBeforeConnect"))
+        XCTAssertFalse(helperModel.contains("silentDisconnect(releaseAntiLeak: false)"))
+        XCTAssertTrue(helperRuntime.contains("tunnelController.bringUp("))
+        XCTAssertTrue(helperRuntime.contains("store.withOperationLock"))
         XCTAssertTrue(helperModel.contains("refreshConnectedStatusUntilStable"))
         XCTAssertTrue(helperModel.contains("status.isUsableConnectedStatus"))
         XCTAssertTrue(appState.contains("if helper.status.isUsableConnectedStatus"))
@@ -787,49 +1357,66 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertFalse(appState.contains("status: helper.status.state == .connected ? \"ok\" : \"info\""))
     }
 
-    func testNativeAppQuitDoesNotLeaveHelperOwnerAttached() throws {
+    func testNativeAppQuitFailsOpenAndKeepsCrashWatchdogArmed() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let helperModelURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/VEXHelperClient.swift")
         let appURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/VEXNativeMacApp.swift")
         let helperModel = try String(contentsOf: helperModelURL, encoding: .utf8)
         let app = try String(contentsOf: appURL, encoding: .utf8)
 
-        XCTAssertTrue(helperModel.contains("func detachOwnerWatchdog(quiet: Bool = false) async"))
-        XCTAssertTrue(helperModel.contains("await detachOwnerWatchdog(quiet: true)\n                    message = successMessage"))
+        XCTAssertTrue(helperModel.contains("func shutdownForAppTermination() async"))
+        XCTAssertTrue(helperModel.contains("pollTask?.cancel()"))
+        XCTAssertTrue(helperModel.contains("try await client.sendExpectingOK(\"shutdown\", timeoutSeconds: 2)"))
+        XCTAssertTrue(helperModel.contains("attach-owner owner_pid="))
+        XCTAssertFalse(helperModel.contains("await detachOwnerWatchdog(quiet: true)\n                    message = successMessage"))
+        XCTAssertFalse(helperModel.contains("await detachOwnerWatchdog(quiet: true)\n        } catch"))
+        XCTAssertTrue(app.contains("await helper.shutdownForAppTermination()"))
         XCTAssertTrue(app.contains("sender.reply(toApplicationShouldTerminate: true)"))
         XCTAssertTrue(app.contains("return .terminateLater"))
     }
 
+    func testHelperDaemonRestartsAfterCleanAppQuitSoNextLaunchNeedsNoPassword() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let installURL = packageRoot.appendingPathComponent("HelperResources/install-vex-vpn-helper.sh")
+        let installerURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/VEXHelperInstaller.swift")
+        let install = try String(contentsOf: installURL, encoding: .utf8)
+        let installer = try String(contentsOf: installerURL, encoding: .utf8)
+
+        XCTAssertTrue(install.contains("<key>KeepAlive</key>\n  <true/>"))
+        XCTAssertFalse(install.contains("<key>SuccessfulExit</key>"))
+        XCTAssertTrue(installer.contains("helperPlistKeepsServiceAvailable"))
+    }
+
     func testNativeHelperPreservesExistingMacOSVpnServicesDuringConnect() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let helperURL = packageRoot.appendingPathComponent("../src-tauri/src/bin/helper/main.rs").standardizedFileURL
+        let helperURL = packageRoot.appendingPathComponent("HelperResources/awg-quick.sh")
         let helper = try String(contentsOf: helperURL, encoding: .utf8)
 
-        XCTAssertTrue(helper.contains("preserving foreign default route"))
-        XCTAssertTrue(helper.contains("public_default_route_target()"))
-        XCTAssertTrue(helper.contains("add_host_route_to_target(endpoint_host(&resolved_endpoint), target, log)"))
-        XCTAssertTrue(helper.contains("arm_route_watchdog()"))
-        XCTAssertTrue(helper.contains("load_protected_public_hosts()"))
-        XCTAssertTrue(helper.contains("add_protected_public_host_routes_to_target(target, log)"))
-        XCTAssertFalse(helper.contains("\"--nc\", \"stop\""))
-        XCTAssertFalse(helper.contains("release_foreign_default_tunnels"))
+        XCTAssertTrue(helper.contains("collect_gateways"))
+        XCTAssertTrue(helper.contains("collect_endpoints"))
+        XCTAssertTrue(helper.contains("add_route"))
+        XCTAssertTrue(helper.contains("del_routes"))
+        XCTAssertFalse(helper.contains("killall"))
     }
 
     func testNativeHelperSocketRemainsAccessibleToAppUser() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let helperURL = packageRoot.appendingPathComponent("../src-tauri/src/bin/helper/main.rs").standardizedFileURL
+        let helperURL = packageRoot.appendingPathComponent("Sources/VEXHelperCore/Runtime.swift")
         let helper = try String(contentsOf: helperURL, encoding: .utf8)
 
         XCTAssertTrue(helper.contains("\"_windowserver\""))
-        XCTAssertTrue(helper.contains("args([\":staff\", socket_path])"))
-        XCTAssertTrue(helper.contains("permissions.set_mode(0o660)"))
+        XCTAssertTrue(helper.contains("SCDynamicStoreCopyConsoleUser"))
+        XCTAssertTrue(helper.contains("chown(socketPath, uid, gid)"))
+        XCTAssertTrue(helper.contains("chmod(socketPath, 0o600)"))
+        XCTAssertTrue(helper.contains("startSocketOwnershipMonitor"))
+        XCTAssertFalse(helper.contains("0o660"))
     }
 
     func testFailedConnectAlwaysReleasesAntiLeak() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let helperModelURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/VEXHelperClient.swift")
         let appStateURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Stores/VEXAppState.swift")
-        let firewallURL = packageRoot.appendingPathComponent("../src-tauri/src/bin/helper/firewall.rs").standardizedFileURL
+        let firewallURL = packageRoot.appendingPathComponent("Sources/VEXHelperCore/SystemSupport.swift")
         let helperModel = try String(contentsOf: helperModelURL, encoding: .utf8)
         let appState = try String(contentsOf: appStateURL, encoding: .utf8)
         let firewall = try String(contentsOf: firewallURL, encoding: .utf8)
@@ -837,16 +1424,17 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(helperModel.contains("await client.silentDisconnect(releaseAntiLeak: true)"))
         XCTAssertTrue(appState.contains("await helper.interruptWithDisconnect(releaseAntiLeak: true)"))
         XCTAssertTrue(appState.contains("await helper.disconnect(releaseAntiLeak: true)"))
-        XCTAssertTrue(firewall.contains("LEGACY_ANTILEAK_STATE_FILE"))
-        XCTAssertTrue(firewall.contains("remove_antileak_state_files()"))
+        XCTAssertTrue(firewall.contains("let rollback = try? runQuick(\"down\", configPath: configPath)"))
+        XCTAssertTrue(firewall.contains("try fileSystem.removeItem(at: paths.legacyAntileakStatePath)"))
     }
 
     func testAntiLeakAllowsProtectedControlPlaneHttps() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let firewallURL = packageRoot.appendingPathComponent("../src-tauri/src/bin/helper/firewall.rs").standardizedFileURL
+        let firewallURL = packageRoot.appendingPathComponent("Sources/VEXHelperCore/SystemSupport.swift")
         let firewall = try String(contentsOf: firewallURL, encoding: .utf8)
 
-        XCTAssertTrue(firewall.contains("PROTECTED_PUBLIC_HOST_ROUTES"))
+        XCTAssertTrue(firewall.contains("94.141.160.212"))
+        XCTAssertTrue(firewall.contains("31.77.199.171"))
         XCTAssertTrue(firewall.contains("port = 443 keep state"))
         XCTAssertTrue(firewall.contains("port = 22 keep state"))
     }
@@ -897,7 +1485,90 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(socket.contains("validateOpen(task)"))
         XCTAssertTrue(socket.contains("task.sendPing"))
         XCTAssertTrue(socket.contains("task?.cancel(with: .goingAway, reason: nil)"))
+        XCTAssertTrue(socket.contains("connectionTask?.cancel()"))
+        XCTAssertTrue(socket.contains("accessToken = nil"))
+        XCTAssertTrue(socket.contains("guard !Task.isCancelled, self.accessToken == accessToken else { return }"))
         XCTAssertFalse(socket.contains("task.resume()\n            isConnected = true"))
+    }
+
+    func testViewAndReconnectTasksStopImmediatelyAfterCancellation() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let homeURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/HomePanel.swift")
+        let socketURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/SupportSocketClient.swift")
+        let helperURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/VEXHelperClient.swift")
+        let home = try String(contentsOf: homeURL, encoding: .utf8)
+        let socket = try String(contentsOf: socketURL, encoding: .utf8)
+        let helper = try String(contentsOf: helperURL, encoding: .utf8)
+
+        XCTAssertTrue(home.contains("catch { return }"))
+        XCTAssertTrue(home.contains("guard !Task.isCancelled else { return }"))
+        XCTAssertFalse(home.contains("try? await Task.sleep(nanoseconds: 30_000_000_000)"))
+        XCTAssertTrue(socket.contains("catch { return }"))
+        XCTAssertTrue(socket.contains("guard !Task.isCancelled else { return }"))
+        XCTAssertFalse(socket.contains("try? await Task.sleep(nanoseconds: 3_000_000_000)"))
+        XCTAssertTrue(helper.contains("try await Task.sleep(nanoseconds: 120_000_000)"))
+        XCTAssertFalse(helper.contains("try? await Task.sleep(nanoseconds: 120_000_000)"))
+    }
+
+    func testCustomWindowAndSettingsExposeAccessibleInteractionContracts() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let contentURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/ContentView.swift")
+        let settingsURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/VEXSettingsView.swift")
+        let sharedURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/SharedViews.swift")
+        let backgroundURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/BackgroundViews.swift")
+        let content = try String(contentsOf: contentURL, encoding: .utf8)
+        let settings = try String(contentsOf: settingsURL, encoding: .utf8)
+        let shared = try String(contentsOf: sharedURL, encoding: .utf8)
+        let background = try String(contentsOf: backgroundURL, encoding: .utf8)
+
+        XCTAssertTrue(content.contains(".accessibilityHidden(true)"))
+        XCTAssertTrue(content.contains("accessibilityReduceMotion"))
+        XCTAssertTrue(settings.contains(".accessibilityLabel(title)"))
+        XCTAssertTrue(settings.contains(".accessibilityHint(subtitle)"))
+        XCTAssertTrue(settings.contains(".accessibilityLabel(\"Язык интерфейса\")"))
+        XCTAssertTrue(shared.contains("accessibilityReduceMotion"))
+        XCTAssertTrue(background.contains("accessibilityReduceMotion"))
+    }
+
+    func testProfileSupportAndHomeShareOneVisualSurfaceHierarchy() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let contentURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/ContentView.swift")
+        let sharedURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/SharedViews.swift")
+        let accountURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/AccountPanel.swift")
+        let supportURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/SupportPanel.swift")
+        let content = try String(contentsOf: contentURL, encoding: .utf8)
+        let shared = try String(contentsOf: sharedURL, encoding: .utf8)
+        let account = try String(contentsOf: accountURL, encoding: .utf8)
+        let support = try String(contentsOf: supportURL, encoding: .utf8)
+
+        XCTAssertTrue(content.contains(".padding(.top, 82)"))
+        XCTAssertTrue(content.contains(".padding(.top, 72)"))
+        XCTAssertTrue(content.contains(".zIndex(30)"))
+        XCTAssertTrue(shared.contains("struct VEXFeatureSurface"))
+        XCTAssertFalse(account.contains("VEXFeatureSurface(accent: .vexCyan"))
+        XCTAssertTrue(account.contains("AccountSurfaceCard(accent: .vexMuted)"))
+        XCTAssertFalse(account.contains(".blur(radius: 38)"))
+        XCTAssertEqual(support.components(separatedBy: "VEXFeatureSurface(").count - 1, 1)
+        XCTAssertFalse(support.contains("private var supportHeader"))
+        XCTAssertFalse(support.contains("GlassPanel(cornerRadius: 20)"))
+        XCTAssertFalse(shared.contains(".overlay(alignment: .top)"))
+        XCTAssertFalse(shared.contains(".stroke(accent.opacity(0.16), lineWidth: 1)"))
+        XCTAssertFalse(account.contains(".overlay(alignment: .leading)"))
+    }
+
+    func testAsyncSleepsAndEmptyResponsesUseCancellationAndCheckedCasts() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let installerURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/VEXHelperInstaller.swift")
+        let autopilotURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/VpnAutopilotService.swift")
+        let apiURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/VEXAPIClient.swift")
+        let installer = try String(contentsOf: installerURL, encoding: .utf8)
+        let autopilot = try String(contentsOf: autopilotURL, encoding: .utf8)
+        let api = try String(contentsOf: apiURL, encoding: .utf8)
+
+        XCTAssertFalse(installer.contains("try? await Task.sleep"))
+        XCTAssertFalse(autopilot.contains("try? await Task.sleep"))
+        XCTAssertFalse(api.contains("as! T"))
+        XCTAssertTrue(api.contains("as? T"))
     }
 
     func testHelperConnectedStatusUsesTrafficReadyRouteAndUAPISocket() {
@@ -920,14 +1591,14 @@ final class NativeParityModelTests: XCTestCase {
         )
     }
 
-    func testIPv6RouteConflictKeepsIPv4TunnelUsableButExplainsSlowTraffic() {
-        let status = VpnStatus(helperResponse: "state=connected iface=utun6 route_ok=true route_iface=utun6 ipv6_route_ok=false ipv6_route_iface=utun0 socket_exists=true rx=92 tx=11264 latest_handshake=0\n")
+    func testExpectedIPv6RouteConflictStopsUsableStateAndExplainsProtection() {
+        let status = VpnStatus(helperResponse: "state=error iface=utun6 route_ok=true route_iface=utun6 ipv6_route_expected=true ipv6_route_ok=false ipv6_route_iface=utun0 socket_exists=true rx=92 tx=11264 latest_handshake=0\n")
 
-        XCTAssertTrue(status.isUsableConnectedStatus)
+        XCTAssertFalse(status.isUsableConnectedStatus)
         XCTAssertTrue(status.hasIPv6RouteConflict)
         XCTAssertEqual(
             status.routeConflictMessage,
-            "IPv6 удерживает другой VPN. VEX ведет IPv4-трафик, часть сайтов может открываться медленно."
+            "IPv6 удерживает другой VPN. Подключение VEX остановлено, чтобы исключить утечку трафика."
         )
     }
 
@@ -937,6 +1608,10 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertEqual(
             VEXUserFacingText.status("The operation couldn’t be completed. Socket is not connected"),
             "Обновляем состояние подключения..."
+        )
+        XCTAssertEqual(
+            VEXUserFacingText.status("The data couldn’t be read because it is missing."),
+            "Системный компонент VEX запускается..."
         )
         XCTAssertEqual(
             VEXUserFacingText.status("Command failed: could not connect to helper socket"),

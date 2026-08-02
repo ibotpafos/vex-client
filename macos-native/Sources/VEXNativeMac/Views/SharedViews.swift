@@ -203,6 +203,7 @@ struct HeaderIconButton: View {
 }
 
 struct VEXMiniSpinner: View {
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     var tint: Color = Color.vexCyan
     @State private var isRotating = false
 
@@ -211,10 +212,50 @@ struct VEXMiniSpinner: View {
             .trim(from: 0.16, to: 0.86)
             .stroke(tint, style: StrokeStyle(lineWidth: 2.4, lineCap: .round))
             .frame(width: 17, height: 17)
-            .rotationEffect(.degrees(isRotating ? 360 : 0))
-            .animation(.linear(duration: 0.82).repeatForever(autoreverses: false), value: isRotating)
+            .rotationEffect(.degrees(isRotating && !accessibilityReduceMotion ? 360 : 0))
+            .animation(
+                accessibilityReduceMotion
+                    ? nil
+                    : .linear(duration: 0.82).repeatForever(autoreverses: false),
+                value: isRotating
+            )
             .onAppear {
-                isRotating = true
+                isRotating = !accessibilityReduceMotion
+            }
+    }
+}
+
+struct VEXFeatureSurface<Content: View>: View {
+    let accent: Color
+    let cornerRadius: CGFloat
+    let contentPadding: CGFloat
+    let fillsAvailableHeight: Bool
+    private let content: Content
+
+    init(
+        accent: Color = .vexCyan,
+        cornerRadius: CGFloat = 18,
+        contentPadding: CGFloat = 16,
+        fillsAvailableHeight: Bool = false,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.accent = accent
+        self.cornerRadius = cornerRadius
+        self.contentPadding = contentPadding
+        self.fillsAvailableHeight = fillsAvailableHeight
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .padding(contentPadding)
+            .frame(
+                maxWidth: .infinity,
+                maxHeight: fillsAvailableHeight ? .infinity : nil
+            )
+            .background {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(Color.vexPanel.opacity(0.46))
             }
     }
 }

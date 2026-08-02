@@ -8,6 +8,7 @@ final class SupportSocketClient: ObservableObject {
 
     private let api: VEXAPIClient
     private var task: URLSessionWebSocketTask?
+    private var connectionTask: Task<Void, Never>?
     private var reconnectTask: Task<Void, Never>?
     private var accessToken: String?
     private var onSnapshot: (([SupportTicket]) -> Void)?
@@ -20,6 +21,8 @@ final class SupportSocketClient: ObservableObject {
     func connect(accessToken: String, onSnapshot: @escaping ([SupportTicket]) -> Void, onTicket: @escaping (SupportTicket) -> Void) {
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
+        connectionTask?.cancel()
+        connectionTask = nil
         reconnectTask?.cancel()
         reconnectTask = nil
         isConnected = false
@@ -27,16 +30,19 @@ final class SupportSocketClient: ObservableObject {
         self.accessToken = accessToken
         self.onSnapshot = onSnapshot
         self.onTicket = onTicket
-        Task { await open() }
+        startOpen()
     }
 
     func close() {
+        connectionTask?.cancel()
+        connectionTask = nil
         reconnectTask?.cancel()
         reconnectTask = nil
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
         isConnected = false
         isReconnecting = false
+        accessToken = nil
     }
 
     func send(body: String, subject: String? = nil, ticketId: String? = nil) -> Bool {
@@ -63,16 +69,25 @@ final class SupportSocketClient: ObservableObject {
         return true
     }
 
+    private func startOpen() {
+        connectionTask?.cancel()
+        connectionTask = Task { [weak self] in
+            await self?.open()
+        }
+    }
+
     private func open() async {
         guard let accessToken else { return }
         do {
             let url = try await api.supportWebSocketURL(accessToken: accessToken)
+            guard !Task.isCancelled, self.accessToken == accessToken else { return }
             let task = URLSession.shared.webSocketTask(with: url)
             self.task = task
             task.resume()
             validateOpen(task)
             receiveLoop(task)
         } catch {
+            guard !Task.isCancelled, self.accessToken == accessToken else { return }
             lastError = error.localizedDescription
             scheduleReconnect()
         }
@@ -154,11 +169,14 @@ final class SupportSocketClient: ObservableObject {
         task = nil
         isReconnecting = true
         reconnectTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            do {
+                try await Task.sleep(nanoseconds: 3_000_000_000)
+            } catch { return }
+            guard !Task.isCancelled else { return }
             await MainActor.run {
                 self?.reconnectTask = nil
             }
-            await self?.open()
+            self?.startOpen()
         }
     }
 }

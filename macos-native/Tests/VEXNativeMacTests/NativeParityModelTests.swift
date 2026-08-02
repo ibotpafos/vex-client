@@ -63,6 +63,7 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertEqual(profile.bypassDomains, ["example.ru"])
     }
 
+    @MainActor
     func testManagedProfilePreservesAWG3Contract() throws {
         let data = """
         {

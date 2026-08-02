@@ -21,9 +21,9 @@ final class SwiftHelperParityContractTests: XCTestCase {
 
         XCTAssertTrue(source.contains("up owner_pid="))
         XCTAssertTrue(source.contains("up-no-antileak owner_pid="))
-        XCTAssertTrue(source.contains("down"))
-        XCTAssertTrue(source.contains("down-keep-antileak"))
-        XCTAssertTrue(source.contains("await client.send(\"detach-owner\")"))
+        XCTAssertTrue(source.contains("func disconnect(releaseAntiLeak: Bool) async"))
+        XCTAssertTrue(source.contains("sendExpectingOK(\"shutdown\", timeoutSeconds: 2)"))
+        XCTAssertTrue(source.contains("attach-owner owner_pid="))
         XCTAssertTrue(source.contains("runCommand(_ command: String, busyState: VpnConnectionState, successMessage: String)"))
     }
 
@@ -105,18 +105,15 @@ final class SwiftHelperParityContractTests: XCTestCase {
 
     private func helperContractSource() throws -> String {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let nativeSources = [
+            packageRoot.appendingPathComponent("Sources/VEXNativeMac/VEXHelperClient.swift"),
+            packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/VEXHelperInstaller.swift"),
+        ]
         let helperTargets = preferredHelperCoreSources(in: packageRoot.appendingPathComponent("Sources"))
-            .compactMap { try? String(contentsOf: $0, encoding: .utf8) }
 
-        if helperTargets.isEmpty {
-            let fallback = [
-                packageRoot.appendingPathComponent("Sources/VEXNativeMac/VEXHelperClient.swift"),
-                packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/VEXHelperInstaller.swift"),
-            ]
-            return try fallback.map { try String(contentsOf: $0, encoding: .utf8) }.joined(separator: "\n")
-        }
-
-        return helperTargets.joined(separator: "\n")
+        return try (nativeSources + helperTargets)
+            .map { try String(contentsOf: $0, encoding: .utf8) }
+            .joined(separator: "\n")
     }
 
     private func preferredHelperCoreSources(in sourceRoot: URL) -> [URL] {
@@ -124,14 +121,18 @@ final class SwiftHelperParityContractTests: XCTestCase {
             return []
         }
 
-        guard let privilegedDir = entries.first(where: { $0.lastPathComponent.hasPrefix("VEXPrivilegedHelper") }) else {
-            return []
+        let helperDirectories = entries.filter {
+            $0.lastPathComponent == "VEXHelperCore"
+                || $0.lastPathComponent.hasPrefix("VEXPrivilegedHelper")
         }
 
-        let enumerator = FileManager.default.enumerator(at: privilegedDir, includingPropertiesForKeys: nil)
-        return enumerator?.compactMap { candidate in
-            guard let url = candidate as? URL, url.pathExtension == "swift" else { return nil }
-            return url
-        } ?? []
+        return helperDirectories.flatMap { directory in
+            let enumerator = FileManager.default.enumerator(at: directory, includingPropertiesForKeys: nil)
+            let sources: [URL] = enumerator?.compactMap { candidate -> URL? in
+                guard let url = candidate as? URL, url.pathExtension == "swift" else { return nil }
+                return url
+            } ?? []
+            return sources
+        }
     }
 }

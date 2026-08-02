@@ -23,6 +23,10 @@ enum VEXUserFacingText {
         if lower == "status refreshed." {
             return nil
         }
+        if lower.contains("data couldn’t be read because it is missing")
+            || lower.contains("data couldn't be read because it is missing") {
+            return "Системный компонент VEX запускается..."
+        }
         if lower.contains("helper status unavailable") {
             return "Проверяем helper..."
         }

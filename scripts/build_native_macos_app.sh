@@ -13,8 +13,9 @@ ICNS_PATH="${APP_DIR}/Contents/Resources/VEXNative.icns"
 APP_VERSION="${VEX_NATIVE_VERSION:-0.1.0}"
 APP_BUILD="${VEX_NATIVE_BUILD:-1}"
 SPARKLE_FEED_URL="${VEX_SPARKLE_FEED_URL:-https://vexguard.app/downloads/native-macos/appcast.xml}"
-SPARKLE_PUBLIC_ED_KEY="${VEX_SPARKLE_PUBLIC_ED_KEY:-VEX_SPARKLE_PUBLIC_ED_KEY_NOT_SET}"
+SPARKLE_PUBLIC_ED_KEY="${VEX_SPARKLE_PUBLIC_ED_KEY:-cwILAPfDRcrjrAWmD/VrMzIh983R2hncvI44tfEZauI=}"
 CODESIGN_IDENTITY="${VEX_CODESIGN_IDENTITY:--}"
+HELPER_RESOURCE_DIR="${PACKAGE_DIR}/HelperResources"
 
 if [[ -f "${ROOT_DIR}/.env.sparkle.local" ]]; then
   set -a
@@ -28,10 +29,34 @@ if [[ -f "${ROOT_DIR}/.env.sparkle.local" ]]; then
   CODESIGN_IDENTITY="${VEX_CODESIGN_IDENTITY:-${CODESIGN_IDENTITY}}"
 fi
 
+if [[ "${CODESIGN_IDENTITY}" == "-" ]]; then
+  detected_identity="$(
+    /usr/bin/security find-identity -v -p codesigning 2>/dev/null \
+      | /usr/bin/awk '/Apple Development:/{print $2; exit}' \
+      | /usr/bin/head -n 1
+  )"
+  [[ -z "${detected_identity}" ]] || CODESIGN_IDENTITY="${detected_identity}"
+fi
+
 if [[ ! "${APP_BUILD}" =~ ^[0-9]+$ ]]; then
   echo "VEX_NATIVE_BUILD must be numeric; got '${APP_BUILD}'" >&2
   exit 1
 fi
+if [[ "${SPARKLE_FEED_URL}" != https://* ]]; then
+  echo "VEX_SPARKLE_FEED_URL must use HTTPS; got '${SPARKLE_FEED_URL}'" >&2
+  exit 1
+fi
+python3 - "${SPARKLE_PUBLIC_ED_KEY}" <<'PY'
+import base64
+import sys
+
+try:
+    decoded = base64.b64decode(sys.argv[1], validate=True)
+except ValueError as error:
+    raise SystemExit(f"Sparkle public Ed25519 key is not valid base64: {error}")
+if len(decoded) != 32:
+    raise SystemExit("Sparkle public Ed25519 key must decode to 32 bytes")
+PY
 
 xml_escape() {
   local value="$1"
@@ -50,6 +75,8 @@ else
 fi
 
 cd "${PACKAGE_DIR}"
+export VEX_CODESIGN_IDENTITY="${CODESIGN_IDENTITY}"
+"${ROOT_DIR}/scripts/build_swift_macos_helper.sh"
 swift build -c release
 
 rm -rf "${APP_DIR}"
@@ -82,9 +109,9 @@ else
 fi
 
 mkdir -p "${APP_DIR}/Contents/Resources/resources"
-for resource in install-vex-vpn-helper.sh awg amneziawg-go vex-helper helper-version; do
-  if [[ -f "${ROOT_DIR}/src-tauri/resources/${resource}" ]]; then
-    cp "${ROOT_DIR}/src-tauri/resources/${resource}" "${APP_DIR}/Contents/Resources/resources/${resource}"
+for resource in install-vex-vpn-helper.sh awg amneziawg-go awg-quick.sh vex-helper helper-version; do
+  if [[ -f "${HELPER_RESOURCE_DIR}/${resource}" ]]; then
+    cp "${HELPER_RESOURCE_DIR}/${resource}" "${APP_DIR}/Contents/Resources/resources/${resource}"
   else
     echo "Missing helper resource: ${resource}" >&2
     exit 1
@@ -93,6 +120,7 @@ done
 chmod 755 "${APP_DIR}/Contents/Resources/resources/install-vex-vpn-helper.sh" \
   "${APP_DIR}/Contents/Resources/resources/awg" \
   "${APP_DIR}/Contents/Resources/resources/amneziawg-go" \
+  "${APP_DIR}/Contents/Resources/resources/awg-quick.sh" \
   "${APP_DIR}/Contents/Resources/resources/vex-helper"
 chmod 644 "${APP_DIR}/Contents/Resources/resources/helper-version"
 
@@ -146,7 +174,7 @@ cat >"${APP_DIR}/Contents/Info.plist" <<PLIST
   <key>CFBundleVersion</key>
   <string>$(xml_escape "${APP_BUILD}")</string>
   <key>LSMinimumSystemVersion</key>
-  <string>14.0</string>
+  <string>15.0</string>
   <key>LSApplicationCategoryType</key>
   <string>public.app-category.utilities</string>
   <key>NSHighResolutionCapable</key>
@@ -157,8 +185,12 @@ cat >"${APP_DIR}/Contents/Info.plist" <<PLIST
   <string>$(xml_escape "${SPARKLE_PUBLIC_ED_KEY}")</string>
   <key>SUEnableAutomaticChecks</key>
   <true/>
+  <key>SUAllowsAutomaticUpdates</key>
+  <true/>
   <key>SUAutomaticallyUpdate</key>
-  <false/>
+  <true/>
+  <key>SUVerifyUpdateBeforeExtraction</key>
+  <true/>
 </dict>
 </plist>
 PLIST

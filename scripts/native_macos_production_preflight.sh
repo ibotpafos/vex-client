@@ -8,8 +8,12 @@ SPARKLE_ARCHIVES_DIR="${VEX_SPARKLE_ARCHIVES_DIR:-${ROOT_DIR}/macos-native/build
 PRODUCTION="${VEX_NATIVE_PRODUCTION:-0}"
 REQUIRE_DEVELOPER_ID="${VEX_NATIVE_REQUIRE_DEVELOPER_ID:-0}"
 DISPLAY_MODE="${VEX_NATIVE_DISTRIBUTION_MODE:-internal}"
-MAX_MINIMUM_SYSTEM_MAJOR="${VEX_NATIVE_MAX_MINIMUM_SYSTEM_MAJOR:-14}"
+MAX_MINIMUM_SYSTEM_MAJOR="${VEX_NATIVE_MAX_MINIMUM_SYSTEM_MAJOR:-15}"
 VERIFY_INSTALLED_RUNTIME="${VEX_NATIVE_VERIFY_INSTALLED_RUNTIME:-0}"
+
+if [[ "${PRODUCTION}" == "1" ]]; then
+  REQUIRE_DEVELOPER_ID=1
+fi
 
 fail() {
   echo "preflight failed: $*" >&2
@@ -52,7 +56,7 @@ sparkle_feed="$(plist_value "${APP_PATH}/Contents/Info.plist" SUFeedURL)"
 [[ "${sparkle_feed}" == https://* ]] || fail "SUFeedURL must be https: ${sparkle_feed}"
 
 resources_dir="${APP_PATH}/Contents/Resources/resources"
-for resource in install-vex-vpn-helper.sh awg amneziawg-go vex-helper; do
+for resource in install-vex-vpn-helper.sh awg amneziawg-go awg-quick.sh vex-helper; do
   require_file "${resources_dir}/${resource}"
   [[ -x "${resources_dir}/${resource}" ]] || fail "resource is not executable: ${resource}"
 done
@@ -62,6 +66,7 @@ require_file "${resources_dir}/helper-version"
 codesign --verify --deep --strict "${APP_PATH}" || fail "codesign verification failed"
 
 signature_details="$(codesign -dvvv "${APP_PATH}" 2>&1 || true)"
+signing_authority="$(sed -n 's/^Authority=//p' <<<"${signature_details}" | head -n 1)"
 if grep -q "Signature=adhoc" <<<"${signature_details}"; then
   if [[ "${REQUIRE_DEVELOPER_ID}" == "1" ]]; then
     fail "app is ad-hoc signed; Developer ID signature required"
@@ -71,11 +76,16 @@ if grep -q "Signature=adhoc" <<<"${signature_details}"; then
   else
     warn "app is ad-hoc signed; Gatekeeper distribution still requires Developer ID + notarization"
   fi
+elif [[ "${REQUIRE_DEVELOPER_ID}" == "1" && "${signing_authority}" != Developer\ ID\ Application:* ]]; then
+  fail "Developer ID Application signature required; found: ${signing_authority:-unknown}"
 fi
 
 if [[ -n "${PKG_PATH}" ]]; then
   require_file "${PKG_PATH}"
-  pkgutil --check-signature "${PKG_PATH}" >/dev/null 2>&1 || {
+  pkg_signature_details="$(pkgutil --check-signature "${PKG_PATH}" 2>&1 || true)"
+  if [[ "${REQUIRE_DEVELOPER_ID}" == "1" ]] && ! grep -q "Developer ID Installer" <<<"${pkg_signature_details}"; then
+    fail "Developer ID Installer signature required: ${PKG_PATH}"
+  elif ! pkgutil --check-signature "${PKG_PATH}" >/dev/null 2>&1; then
     if [[ "${REQUIRE_DEVELOPER_ID}" == "1" ]]; then
       fail "pkg signature check failed: ${PKG_PATH}"
     fi
@@ -84,7 +94,12 @@ if [[ -n "${PKG_PATH}" ]]; then
     else
       warn "pkg is unsigned or not trusted: ${PKG_PATH}"
     fi
-  }
+  fi
+fi
+
+if [[ "${PRODUCTION}" == "1" ]]; then
+  xcrun stapler validate "${APP_PATH}" >/dev/null 2>&1 \
+    || fail "notarization ticket is missing or invalid"
 fi
 
 if [[ -d "${SPARKLE_ARCHIVES_DIR}" ]]; then

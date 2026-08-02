@@ -5,6 +5,8 @@ import SwiftUI
 @MainActor
 final class VEXAppState: ObservableObject {
     @AppStorage("native.selectedLocationId") private var storedSelectedLocationId = "de"
+    @AppStorage("native.serverSidebarFavorites") private var storedServerSidebarFavorites = ""
+    @AppStorage("native.serverSidebarFilter") private var storedServerSidebarFilter = ServerSidebarFilter.all.rawValue
     @AppStorage("native.serverSelectionMode") var serverSelectionMode = "auto"
     @AppStorage("native.autoLaunchEnabled") var autoLaunchEnabled = false
     @AppStorage("native.autoServerEnabled") var autoServerEnabled = true
@@ -26,11 +28,11 @@ final class VEXAppState: ObservableObject {
     @Published private(set) var activeTunnel: PreparedTunnel?
     @Published private(set) var supportSocketConnected = false
     @Published private(set) var supportSocketReconnecting = false
-    @Published private(set) var isDownloadingUpdate = false
     @Published private(set) var isAuthBusy = false
     @Published private(set) var isWaitingForWebAuth = false
     @Published private(set) var isBillingBusy = false
     @Published private(set) var isVpnBusy = false
+    @Published private(set) var isServerSelectionBusy = false
     @Published private(set) var authError: String?
     @Published private(set) var emailOTPChallengeID: String?
     @Published private(set) var emailOTPChallengeEmail: String?
@@ -38,6 +40,10 @@ final class VEXAppState: ObservableObject {
     @Published private(set) var biometricAvailability = BiometricAuthAvailability(isAvailable: false, label: "биометрии")
     @Published private(set) var canUnlockStoredSession = false
     @Published private(set) var isLoading = false
+    @Published private(set) var isLoadingLocations = false
+    @Published private(set) var locationLoadError: String?
+    @Published private(set) var lastLocationsRefreshAt: Date?
+    @Published private(set) var serverSidebarOperation = ServerSidebarOperationState.idle
     @Published var statusMessage: String?
 
     private let sessionStore = VEXSessionStore()
@@ -49,7 +55,6 @@ final class VEXAppState: ObservableObject {
     private let biometricAuth = BiometricAuthService()
     private let profileService = VPNProfileService()
     private let startupService = StartupService()
-    private let updateService = UpdateService()
     private let nativeUpdater: NativeUpdaterService
     private let authService = PKCEAuthService()
     private let supportSocket = SupportSocketClient()
@@ -59,9 +64,20 @@ final class VEXAppState: ObservableObject {
     private var sessionRefreshTask: (accessToken: String, task: Task<Result<AuthSession, Error>, Never>)?
     private var desiredVpnState: DesiredVpnState = .disconnected
     private var vpnOperationGeneration = 0
+    private var updateMonitorTask: Task<Void, Never>?
+    private var automaticUpdatesPrepared = false
+    private static let updateRefreshIntervalNanoseconds: UInt64 = 15 * 60 * 1_000_000_000
 
     init() {
-        self.nativeUpdater = SparkleUpdaterService()
+        #if DEBUG
+        if VEXPreviewMode.suppressesRuntime {
+            self.nativeUpdater = DisabledNativeUpdaterService()
+        } else {
+            self.nativeUpdater = NativeUpdaterServiceFactory.make()
+        }
+        #else
+        self.nativeUpdater = NativeUpdaterServiceFactory.make()
+        #endif
     }
 
     init(nativeUpdater: NativeUpdaterService) {
@@ -75,6 +91,15 @@ final class VEXAppState: ObservableObject {
 
     var selectedLocation: VpnLocation? {
         locations.first { $0.id == selectedLocationId }
+    }
+
+    var favoriteLocationIDs: Set<String> {
+        ServerSidebarFavorites.decode(storedServerSidebarFavorites)
+    }
+
+    var serverSidebarFilter: ServerSidebarFilter {
+        get { ServerSidebarFilter(rawValue: storedServerSidebarFilter) ?? .all }
+        set { storedServerSidebarFilter = newValue.rawValue }
     }
 
     var accountTitle: String {
@@ -94,12 +119,13 @@ final class VEXAppState: ObservableObject {
         return "v\(update.latestVersion) готово к установке"
     }
 
-    var hasNewerNativeUpdate: Bool {
-        updateCheck?.isNewerThanInstalledApp() == true
+    var availableNativeUpdateVersion: String? {
+        guard let update = updateCheck, hasNewerNativeUpdate else { return nil }
+        return update.latestVersion
     }
 
-    var hasNativeUpdateDownload: Bool {
-        hasNewerNativeUpdate && updateCheck?.downloadUrl.isEmpty == false
+    var hasNewerNativeUpdate: Bool {
+        updateCheck?.isNewerThanInstalledApp() == true
     }
 
     var headerUpdateAction: NativeUpdateAction {
@@ -116,6 +142,8 @@ final class VEXAppState: ObservableObject {
     }
 
     func start(helperStatus: VpnStatus? = nil) async {
+        prepareAutomaticUpdatesForStartup()
+        startUpdateMonitoring()
         biometricAvailability = biometricAuth.availability()
         canUnlockStoredSession = sessionStore.hasStoredNativeSession()
         if let storedSession = sessionStore.loadSession() {
@@ -139,7 +167,10 @@ final class VEXAppState: ObservableObject {
     }
 
     func refreshAll() async {
+        async let updateResult: Void = loadUpdate()
+        async let remoteConfigResult: Void = loadRemoteConfig()
         guard let token = await authenticatedAccessToken() else {
+            _ = await (updateResult, remoteConfigResult)
             statusMessage = "Сессия не найдена. Войдите через браузер."
             return
         }
@@ -147,19 +178,26 @@ final class VEXAppState: ObservableObject {
         defer { isLoading = false }
 
         async let userResult = loadUser(token)
-        async let locationsResult = loadLocations(token)
+        async let locationsResult: Void = refreshLocations(accessToken: token)
         async let supportResult = loadSupport(token)
-        async let updateResult = loadUpdate()
-        async let remoteConfigResult = loadRemoteConfig()
         async let billingResult = loadBilling(token)
         async let diagnosticsFlush = diagnosticsService.flush(accessToken: token)
         _ = await [userResult, locationsResult, supportResult, updateResult, remoteConfigResult, billingResult, diagnosticsFlush]
+    }
+
+    func refreshLocations() async {
+        guard let token = await authenticatedAccessToken() else {
+            locationLoadError = "Войдите в VEX, чтобы загрузить серверы."
+            return
+        }
+        await refreshLocations(accessToken: token)
     }
 
     func selectAutoServer() {
         serverSelectionMode = "auto"
         autoServerEnabled = true
         statusMessage = "Автовыбор сервера включен."
+        serverSidebarOperation = .selected("Автовыбор сервера включён.")
         scheduleProfileWarmup()
     }
 
@@ -168,7 +206,73 @@ final class VEXAppState: ObservableObject {
         serverSelectionMode = "manual"
         autoServerEnabled = false
         statusMessage = "Выбран сервер: \(location.displayName)."
+        serverSidebarOperation = .selected("Выбран сервер: \(location.displayName).")
         scheduleProfileWarmup()
+    }
+
+    func selectAutoServer(using helper: VEXHelperModel) async {
+        await performServerSelection(using: helper) {
+            self.selectAutoServer()
+        }
+    }
+
+    func selectLocation(_ location: VpnLocation, using helper: VEXHelperModel) async {
+        await performServerSelection(using: helper) {
+            await self.selectLocation(location)
+        }
+    }
+
+    private func performServerSelection(
+        using helper: VEXHelperModel,
+        selection: @escaping @MainActor () async -> Void
+    ) async {
+        guard !isServerSelectionBusy, !isVpnBusy, !helper.isBusy else {
+            statusMessage = "Дождитесь завершения текущей операции VPN."
+            return
+        }
+
+        let previousLocationID = selectedLocationId
+        let previousSelectionMode = serverSelectionMode
+        let previousAutoServerEnabled = autoServerEnabled
+        isServerSelectionBusy = true
+        defer { isServerSelectionBusy = false }
+
+        await selection()
+        guard helper.status.isUsableConnectedStatus else {
+            return
+        }
+
+        let switched = await switchConnectedVPNLocation(using: helper)
+        guard !switched else { return }
+
+        selectedLocationId = previousLocationID
+        serverSelectionMode = previousSelectionMode
+        autoServerEnabled = previousAutoServerEnabled
+        scheduleProfileWarmup()
+    }
+
+    func setServerSidebarFilter(_ filter: ServerSidebarFilter) {
+        objectWillChange.send()
+        serverSidebarFilter = filter
+    }
+
+    func isFavoriteLocation(_ locationID: String) -> Bool {
+        favoriteLocationIDs.contains(locationID.lowercased())
+    }
+
+    func toggleFavoriteLocation(_ locationID: String) {
+        let favorites = ServerSidebarFavorites.toggling(locationID, in: favoriteLocationIDs)
+        objectWillChange.send()
+        storedServerSidebarFavorites = ServerSidebarFavorites.encode(favorites)
+    }
+
+    func retryLocationRefresh() async {
+        await refreshLocations()
+    }
+
+    func acknowledgeServerSidebarOperation(_ operation: ServerSidebarOperationState) {
+        guard serverSidebarOperation == operation, !operation.isBusy else { return }
+        serverSidebarOperation = .idle
     }
 
     func toggleVPNPower(using helper: VEXHelperModel) async {
@@ -191,7 +295,7 @@ final class VEXAppState: ObservableObject {
         switch helper.status.state {
         case .connected:
             if shouldSwitchConnectedTunnel(for: helper.status) {
-                await switchConnectedVPNLocation(using: helper)
+                _ = await switchConnectedVPNLocation(using: helper)
             } else {
                 await disconnectVPN(using: helper)
             }
@@ -414,17 +518,22 @@ final class VEXAppState: ObservableObject {
             scheduleProfileWarmup()
             return
         }
-        await switchConnectedVPNLocation(using: helper)
+        _ = await switchConnectedVPNLocation(using: helper)
     }
 
-    private func switchConnectedVPNLocation(using helper: VEXHelperModel) async {
+    private func switchConnectedVPNLocation(using helper: VEXHelperModel) async -> Bool {
         guard !isVpnBusy, !helper.isBusy else {
             statusMessage = "Дождитесь завершения текущей операции VPN."
-            return
+            serverSidebarOperation = .failed(statusMessage ?? "VPN занят.")
+            return false
         }
+        isVpnBusy = true
+        defer { isVpnBusy = false }
+
         guard let token = await authenticatedAccessToken() else {
             statusMessage = "Сначала войдите в аккаунт."
-            return
+            serverSidebarOperation = .failed(statusMessage ?? "Сначала войдите в аккаунт.")
+            return false
         }
 
         let previousTunnel = activeTunnel
@@ -434,15 +543,15 @@ final class VEXAppState: ObservableObject {
            previousTunnel.locationId == nextLocationId,
            tunnel(previousTunnel, matches: helper.status) {
             statusMessage = "Этот сервер уже подключен."
-            return
+            serverSidebarOperation = .verified(statusMessage ?? "Сервер уже подключён.")
+            return true
         }
 
-        isVpnBusy = true
         desiredVpnState = .connected
         vpnOperationGeneration += 1
         let generation = vpnOperationGeneration
         statusMessage = "Переключаем сервер VPN."
-        defer { isVpnBusy = false }
+        serverSidebarOperation = .preparingRoute
 
         do {
             let nextTunnel = try await profileService.resolveProfile(
@@ -454,28 +563,38 @@ final class VEXAppState: ObservableObject {
             try ensureConnectStillDesired(generation: generation)
             activeTunnel = nextTunnel
             try profileService.writeHelperConfig(for: nextTunnel)
+            serverSidebarOperation = .connecting
             await helper.disconnect(releaseAntiLeak: false)
             try ensureConnectStillDesired(generation: generation)
             await helper.connect(antiLeakEnabled: antiLeakEnabled)
             try ensureConnectStillDesired(generation: generation)
+            serverSidebarOperation = .verifying
 
             if helper.status.isUsableConnectedStatus {
                 await api.reportVpnDisconnect(accessToken: token, tunnel: previousTunnel, reason: "server_switch")
                 await api.reportVpnConnect(accessToken: token, tunnel: nextTunnel)
                 statusMessage = "VPN переключен на \(selectedLocation?.displayName ?? nextTunnel.locationId.uppercased())."
-                return
+                serverSidebarOperation = .verified(statusMessage ?? "VPN переключен.")
+                return true
             }
 
             throw VpnAutopilotRuntimeError.connectFailed(helper.message ?? "VPN switch failed.")
         } catch is CancellationError {
             statusMessage = "Переключение сервера отменено."
+            serverSidebarOperation = .failed(statusMessage ?? "Переключение сервера отменено.")
+            return false
         } catch {
             activeTunnel = previousTunnel
             if let previousTunnel {
                 try? profileService.writeHelperConfig(for: previousTunnel)
                 await helper.connect(antiLeakEnabled: antiLeakEnabled)
             }
-            statusMessage = "Не удалось переключиться на выбранный сервер. Вернули предыдущий."
+            let previousRouteRestored =
+                previousTunnel != nil && helper.status.isUsableConnectedStatus
+            statusMessage = previousRouteRestored
+                ? "Не удалось переключиться на выбранный сервер. Вернули предыдущий."
+                : "Не удалось переключиться. Проверьте состояние VPN и повторите попытку."
+            serverSidebarOperation = .failed(statusMessage ?? "Не удалось переключиться.")
             await submitDiagnostics(
                 reason: "vpn_server_switch_failed",
                 status: "error",
@@ -486,6 +605,7 @@ final class VEXAppState: ObservableObject {
                     "next_location_id": nextLocationId,
                 ]
             )
+            return false
         }
     }
 
@@ -515,39 +635,22 @@ final class VEXAppState: ObservableObject {
         statusMessage = normalized == "en" ? "Language preference saved." : "Язык интерфейса сохранен."
     }
 
-    func openUpdateDownload() {
-        updateService.openDownload(updateCheck)
-    }
-
     func checkForNativeUpdates() {
+        guard nativeUpdater.canCheckForUpdates else {
+            statusMessage = "Проверка обновлений временно недоступна."
+            return
+        }
         nativeUpdater.checkForUpdates()
         statusMessage = "Открыли Sparkle проверку обновлений."
     }
 
-    func downloadUpdate() async {
-        guard !isDownloadingUpdate else { return }
-        isDownloadingUpdate = true
-        defer { isDownloadingUpdate = false }
-        do {
-            let fileURL = try await updateService.download(updateCheck)
-            updateService.reveal(fileURL)
-            statusMessage = "Обновление скачано: \(fileURL.lastPathComponent)."
-        } catch {
-            statusMessage = error.localizedDescription
+    func prepareAutomaticUpdatesForStartup() {
+        guard !automaticUpdatesPrepared,
+              nativeUpdater.automaticallyChecksForUpdates else {
+            return
         }
-    }
-
-    func restartAndUpdateNow() async {
-        guard !isDownloadingUpdate else { return }
-        isDownloadingUpdate = true
-        do {
-            let fileURL = try await updateService.download(updateCheck)
-            updateService.launchInstaller(fileURL)
-            NSApp.terminate(nil)
-        } catch {
-            statusMessage = error.localizedDescription
-            isDownloadingUpdate = false
-        }
+        automaticUpdatesPrepared = true
+        nativeUpdater.checkForUpdatesInBackground()
     }
 
     func openSignIn() {
@@ -809,7 +912,20 @@ final class VEXAppState: ObservableObject {
         billingError = nil
         defer { isBillingBusy = false }
         do {
-            let checkout = try await api.checkoutSession(accessToken: token, plan: plan)
+            let quote = try await api.billingPriceQuote(accessToken: token, planID: plan.id)
+            if quote.changeType == "downgrade" {
+                throw BillingError.downgradeScheduled
+            }
+            let expectedAmountMinor = quote.changeType == "current" ? plan.amountCents : quote.amountDueMinor
+            guard expectedAmountMinor >= 0 else {
+                throw BillingError.priceUnavailable
+            }
+            let checkout = try await api.checkoutSession(
+                accessToken: token,
+                plan: plan,
+                expectedAmountMinor: expectedAmountMinor,
+                changeMode: quote.changeType
+            )
             guard let url = URL(string: checkout.url), !checkout.url.isEmpty else {
                 throw BillingError.missingCheckoutURL
             }
@@ -882,13 +998,20 @@ final class VEXAppState: ObservableObject {
         }
     }
 
-    private func loadLocations(_ token: String) async {
+    private func refreshLocations(accessToken token: String) async {
+        guard !isLoadingLocations else { return }
+        isLoadingLocations = true
+        locationLoadError = nil
+        defer { isLoadingLocations = false }
+
         do {
             locations = try await api.vpnLocations(accessToken: token)
+            lastLocationsRefreshAt = Date()
             if selectedLocation == nil, serverSelectionMode != "manual", let first = locations.first {
                 selectedLocationId = first.id
             }
         } catch {
+            locationLoadError = error.localizedDescription
             statusMessage = error.localizedDescription
         }
     }
@@ -980,17 +1103,167 @@ final class VEXAppState: ObservableObject {
         }
     }
 
-    private func loadUpdate() async {
+    private func loadUpdate(reportErrors: Bool = true) async {
         do {
             applyUpdateCheck(try await api.appUpdateCheck())
         } catch {
-            statusMessage = error.localizedDescription
+            if reportErrors {
+                statusMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func startUpdateMonitoring() {
+        guard updateMonitorTask == nil else { return }
+        updateMonitorTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: Self.updateRefreshIntervalNanoseconds)
+                guard !Task.isCancelled, let self else { return }
+                await self.loadUpdate(reportErrors: false)
+            }
         }
     }
 
     func applyUpdateCheck(_ update: AppUpdateCheckResult?) {
         updateCheck = update
     }
+
+    #if DEBUG
+    func configureServerSidebarPreview() {
+        locations = FocusPulsePresentation.animationPreviewLocations + [
+            VpnLocation(
+                id: "nl-amsterdam",
+                countryCode: "NL",
+                city: "Amsterdam",
+                flagEmoji: "🇳🇱",
+                availability: "unavailable",
+                status: "maintenance",
+                healthyNodes: 0,
+                latencyMs: nil
+            ),
+        ]
+        lastLocationsRefreshAt = Date()
+        selectedLocationId = "fi"
+        serverSelectionMode = "manual"
+        storedServerSidebarFavorites = "de"
+    }
+
+    func configureBillingPreview() {
+        let previewUser = VEXUser(id: "preview-user", email: "ilya@vexguard.app", status: "active")
+        session = AuthSession(user: previewUser, accessToken: "preview-token", expiresAt: nil, refreshToken: nil)
+        user = previewUser
+        entitlement = Entitlement(
+            active: true,
+            planId: "basic_annual",
+            displayName: "Базовый",
+            accountStatus: nil,
+            subscriptionTitle: nil,
+            subscriptionSubtitle: nil,
+            remainingText: "Осталось 284 дня",
+            status: "active",
+            tier: "basic",
+            currentPeriodEnd: "2027-05-13T12:00:00Z",
+            effectiveExpiresAt: nil,
+            vpnAccess: true
+        )
+        let previewPlans = [
+            BillingPlan(id: "basic_monthly", name: "Базовый", provider: "platega", amountCents: 19900, currency: "RUB", interval: "monthly", deviceLimit: 1, tier: "basic", status: "active"),
+            BillingPlan(id: "basic_quarterly", name: "Базовый", provider: "platega", amountCents: 53730, currency: "RUB", interval: "quarterly", deviceLimit: 1, tier: "basic", status: "active"),
+            BillingPlan(id: "basic_semiannual", name: "Базовый", provider: "platega", amountCents: 101490, currency: "RUB", interval: "semiannual", deviceLimit: 1, tier: "basic", status: "active"),
+            BillingPlan(id: "basic_annual", name: "Базовый", provider: "platega", amountCents: 179100, currency: "RUB", interval: "annual", deviceLimit: 1, tier: "basic", status: "active"),
+            BillingPlan(id: "pro_monthly", name: "Pro", provider: "platega", amountCents: 29900, currency: "RUB", interval: "monthly", deviceLimit: 3, tier: "pro", status: "active"),
+            BillingPlan(id: "pro_quarterly", name: "Pro", provider: "platega", amountCents: 80730, currency: "RUB", interval: "quarterly", deviceLimit: 3, tier: "pro", status: "active"),
+            BillingPlan(id: "pro_semiannual", name: "Pro", provider: "platega", amountCents: 152490, currency: "RUB", interval: "semiannual", deviceLimit: 3, tier: "pro", status: "active"),
+            BillingPlan(id: "pro_annual", name: "Pro", provider: "platega", amountCents: 269100, currency: "RUB", interval: "annual", deviceLimit: 3, tier: "pro", status: "active"),
+            BillingPlan(id: "family_monthly", name: "Team", provider: "platega", amountCents: 149900, currency: "RUB", interval: "monthly", deviceLimit: 10, tier: "team", status: "active"),
+        ]
+        billingSummary = BillingService().buildSummary(plans: previewPlans, entitlement: entitlement)
+        billingPayments = [
+            BillingPayment(
+                id: "preview-payment-1",
+                subscriptionId: nil,
+                checkoutSessionId: nil,
+                planId: "basic_annual",
+                provider: "platega",
+                amountMinor: 179100,
+                currency: "RUB",
+                method: "card",
+                status: "paid",
+                receiptUrl: "https://pay.platega.io/payment/success",
+                failureReason: nil,
+                refundedAmountMinor: nil,
+                refundedAt: nil,
+                paidAt: "2026-08-01T12:00:00Z",
+                createdAt: "2026-08-01T11:59:00Z"
+            ),
+            BillingPayment(
+                id: "preview-payment-2",
+                subscriptionId: nil,
+                checkoutSessionId: nil,
+                planId: "basic_monthly",
+                provider: "platega",
+                amountMinor: 19900,
+                currency: "RUB",
+                method: "card",
+                status: "paid",
+                receiptUrl: nil,
+                failureReason: nil,
+                refundedAmountMinor: nil,
+                refundedAt: nil,
+                paidAt: "2026-07-01T12:00:00Z",
+                createdAt: "2026-07-01T11:59:00Z"
+            ),
+        ]
+    }
+
+    func configureSupportPreview() {
+        let previewUser = VEXUser(id: "preview-user", email: "preview@vexguard.app", status: "active")
+        session = AuthSession(user: previewUser, accessToken: "preview-token", expiresAt: nil, refreshToken: nil)
+        user = previewUser
+        locations = FocusPulsePresentation.animationPreviewLocations
+        supportSocketConnected = true
+        supportTickets = [
+            SupportTicket(
+                id: "preview-ticket",
+                subject: "Проверка интерфейса",
+                message: "Привет",
+                messages: [
+                    SupportMessage(
+                        id: "preview-message-1",
+                        ticketId: "preview-ticket",
+                        sender: "admin",
+                        authorId: nil,
+                        body: "Привет",
+                        createdAt: "2026-08-01T12:56:00Z"
+                    ),
+                    SupportMessage(
+                        id: "preview-message-2",
+                        ticketId: "preview-ticket",
+                        sender: "admin",
+                        authorId: nil,
+                        body: "как дела",
+                        createdAt: "2026-08-01T12:56:30Z"
+                    ),
+                    SupportMessage(
+                        id: "preview-message-3",
+                        ticketId: "preview-ticket",
+                        sender: "user",
+                        authorId: "preview-user",
+                        body: "Спасибо, теперь всё работает",
+                        createdAt: "2026-08-01T12:57:00Z"
+                    ),
+                ],
+                status: "open",
+                priority: "normal",
+                source: "macos-native",
+                adminNote: nil,
+                createdAt: "2026-08-01T12:55:00Z",
+                updatedAt: "2026-08-01T12:57:00Z",
+                closedAt: nil
+            ),
+        ]
+    }
+    #endif
 
     private func beginWebAuth(mode: WebAuthMode) {
         guard !isAuthBusy, !isWaitingForWebAuth else { return }

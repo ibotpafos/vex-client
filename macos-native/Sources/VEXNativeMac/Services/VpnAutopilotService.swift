@@ -137,7 +137,12 @@ struct VpnAutopilotService {
                 await connectProbe(host: parsed.host, port: parsed.port, started: started)
             }
             group.addTask {
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                do {
+                    try await Task.sleep(nanoseconds: 3_000_000_000)
+                } catch {
+                    return .empty
+                }
+                guard !Task.isCancelled else { return .empty }
                 return VpnAutopilotProbeResult(dnsOk: true, endpointLatencyMs: nil, endpointProbeError: "endpoint probe timed out")
             }
             let result = await group.next() ?? .empty

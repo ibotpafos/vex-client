@@ -8,10 +8,32 @@ protocol NativeUpdaterService: AnyObject {
     var automaticallyChecksForUpdates: Bool { get set }
     var canCheckForUpdates: Bool { get }
     func checkForUpdates()
+    func checkForUpdatesInBackground()
 }
 
 enum NativeUpdateAction: Equatable {
     case sparkleCheck
+}
+
+enum SparkleUpdaterConfiguration {
+    static func isValidPublicEDKey(_ value: Any?) -> Bool {
+        guard let value = value as? String else { return false }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let decoded = Data(base64Encoded: trimmed) else { return false }
+        return decoded.count == 32
+    }
+}
+
+@MainActor
+enum NativeUpdaterServiceFactory {
+    static func make(bundle: Bundle = .main) -> NativeUpdaterService {
+        guard SparkleUpdaterConfiguration.isValidPublicEDKey(
+            bundle.object(forInfoDictionaryKey: "SUPublicEDKey")
+        ) else {
+            return DisabledNativeUpdaterService()
+        }
+        return SparkleUpdaterService()
+    }
 }
 
 @MainActor
@@ -20,6 +42,8 @@ final class SparkleUpdaterService: NSObject, ObservableObject, NativeUpdaterServ
 
     private let updaterController: SPUStandardUpdaterController
     private var canCheckObservation: NSKeyValueObservation?
+    private var backgroundCheckRequested = false
+    private var backgroundCheckStarted = false
 
     override init() {
         updaterController = SPUStandardUpdaterController(
@@ -32,6 +56,7 @@ final class SparkleUpdaterService: NSObject, ObservableObject, NativeUpdaterServ
         canCheckObservation = updaterController.updater.observe(\.canCheckForUpdates, options: [.initial, .new]) { [weak self] updater, _ in
             Task { @MainActor in
                 self?.canCheckForUpdates = updater.canCheckForUpdates
+                self?.startPendingBackgroundCheckIfPossible()
             }
         }
     }
@@ -44,4 +69,29 @@ final class SparkleUpdaterService: NSObject, ObservableObject, NativeUpdaterServ
     func checkForUpdates() {
         updaterController.checkForUpdates(nil)
     }
+
+    func checkForUpdatesInBackground() {
+        guard !backgroundCheckRequested else { return }
+        backgroundCheckRequested = true
+        startPendingBackgroundCheckIfPossible()
+    }
+
+    private func startPendingBackgroundCheckIfPossible() {
+        guard backgroundCheckRequested,
+              !backgroundCheckStarted,
+              updaterController.updater.canCheckForUpdates else {
+            return
+        }
+        backgroundCheckStarted = true
+        updaterController.updater.checkForUpdatesInBackground()
+    }
+}
+
+@MainActor
+final class DisabledNativeUpdaterService: NativeUpdaterService {
+    var automaticallyChecksForUpdates = false
+    let canCheckForUpdates = false
+
+    func checkForUpdates() {}
+    func checkForUpdatesInBackground() {}
 }

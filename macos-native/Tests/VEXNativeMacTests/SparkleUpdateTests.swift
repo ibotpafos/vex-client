@@ -3,6 +3,27 @@ import XCTest
 
 @MainActor
 final class SparkleUpdateTests: XCTestCase {
+    func testStartupRequestsOneNonInteractiveBackgroundUpdateCheck() {
+        let updater = MockNativeUpdaterService()
+        let appState = VEXAppState(nativeUpdater: updater)
+
+        appState.prepareAutomaticUpdatesForStartup()
+        appState.prepareAutomaticUpdatesForStartup()
+
+        XCTAssertEqual(updater.checkForUpdatesInBackgroundCallCount, 1)
+        XCTAssertEqual(updater.checkForUpdatesCallCount, 0)
+    }
+
+    func testStartupRespectsUserOptOutFromAutomaticUpdateChecks() {
+        let updater = MockNativeUpdaterService()
+        updater.automaticallyChecksForUpdates = false
+        let appState = VEXAppState(nativeUpdater: updater)
+
+        appState.prepareAutomaticUpdatesForStartup()
+
+        XCTAssertEqual(updater.checkForUpdatesInBackgroundCallCount, 0)
+    }
+
     func testHeaderUpdateActionRoutesToSparkleService() {
         let updater = MockNativeUpdaterService()
         let appState = VEXAppState(nativeUpdater: updater)
@@ -16,6 +37,41 @@ final class SparkleUpdateTests: XCTestCase {
         XCTAssertEqual(appState.statusMessage, "Открыли Sparkle проверку обновлений.")
     }
 
+    func testSparklePublicKeyValidationRejectsMissingAndPlaceholderValues() {
+        XCTAssertFalse(SparkleUpdaterConfiguration.isValidPublicEDKey(nil))
+        XCTAssertFalse(
+            SparkleUpdaterConfiguration.isValidPublicEDKey(
+                "VEX_SPARKLE_PUBLIC_ED_KEY_NOT_SET"
+            )
+        )
+        XCTAssertFalse(
+            SparkleUpdaterConfiguration.isValidPublicEDKey(
+                Data(repeating: 0x7f, count: 31).base64EncodedString()
+            )
+        )
+    }
+
+    func testSparklePublicKeyValidationAcceptsEd25519KeyMaterial() {
+        let publicKey = Data(repeating: 0x42, count: 32).base64EncodedString()
+
+        XCTAssertTrue(
+            SparkleUpdaterConfiguration.isValidPublicEDKey(publicKey)
+        )
+    }
+
+    func testUnavailableUpdaterDoesNotClaimSparkleWindowWasOpened() {
+        let updater = MockNativeUpdaterService(canCheckForUpdates: false)
+        let appState = VEXAppState(nativeUpdater: updater)
+
+        appState.checkForNativeUpdates()
+
+        XCTAssertEqual(updater.checkForUpdatesCallCount, 0)
+        XCTAssertEqual(
+            appState.statusMessage,
+            "Проверка обновлений временно недоступна."
+        )
+    }
+
     func testSameVersionUpdateMetadataDoesNotSurfaceReadyState() {
         let appState = VEXAppState(nativeUpdater: MockNativeUpdaterService())
         appState.applyUpdateCheck(Self.updateCheck(
@@ -25,7 +81,6 @@ final class SparkleUpdateTests: XCTestCase {
         ))
 
         XCTAssertFalse(appState.hasNewerNativeUpdate)
-        XCTAssertFalse(appState.hasNativeUpdateDownload)
         XCTAssertNil(appState.updateReadyText)
     }
 
@@ -38,8 +93,112 @@ final class SparkleUpdateTests: XCTestCase {
         ))
 
         XCTAssertTrue(appState.hasNewerNativeUpdate)
-        XCTAssertTrue(appState.hasNativeUpdateDownload)
         XCTAssertEqual(appState.updateReadyText, "v999.0.0 готово к установке")
+        XCTAssertEqual(appState.availableNativeUpdateVersion, "999.0.0")
+    }
+
+    func testSameVersionDoesNotSurfaceHeaderUpdateBadge() {
+        let appState = VEXAppState(nativeUpdater: MockNativeUpdaterService())
+        appState.applyUpdateCheck(Self.updateCheck(
+            updateAvailable: true,
+            latestVersion: VEXAppInfo.version,
+            latestBuild: VEXAppInfo.buildNumber
+        ))
+
+        XCTAssertNil(appState.availableNativeUpdateVersion)
+    }
+
+    func testFocusPulseDockSurfacesUpdateStateAndSettingsOwnsUpdateAction() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let dock = try String(
+            contentsOf: packageRoot.appendingPathComponent(
+                "Sources/VEXNativeMac/Views/FocusPulseNavigationDock.swift"
+            ),
+            encoding: .utf8
+        )
+        let settings = try String(
+            contentsOf: packageRoot.appendingPathComponent(
+                "Sources/VEXNativeMac/Views/VEXSettingsView.swift"
+            ),
+            encoding: .utf8
+        )
+        let content = try String(
+            contentsOf: packageRoot.appendingPathComponent("Sources/VEXNativeMac/ContentView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(dock.contains("availableUpdateVersion"))
+        XCTAssertTrue(dock.contains("Доступно обновление"))
+        XCTAssertTrue(dock.contains("case settings"))
+        XCTAssertTrue(settings.contains("appState.checkForNativeUpdates()"))
+        XCTAssertTrue(settings.contains("Проверить обновления"))
+        XCTAssertTrue(content.contains("availableUpdateVersion: appState.availableNativeUpdateVersion"))
+    }
+
+    func testDockUpdateIndicatorUsesQuietBadgeStyling() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let dock = try String(
+            contentsOf: packageRoot.appendingPathComponent(
+                "Sources/VEXNativeMac/Views/FocusPulseNavigationDock.swift"
+            ),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(dock.contains("Color.vexCyan"))
+        XCTAssertTrue(dock.contains(".frame(width: 7, height: 7)"))
+        XCTAssertFalse(dock.contains("Text(version)"))
+    }
+
+    func testOpenClientPeriodicallyRefreshesUpdateAvailability() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let appState = try String(
+            contentsOf: packageRoot.appendingPathComponent(
+                "Sources/VEXNativeMac/Stores/VEXAppState.swift"
+            ),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(appState.contains("startUpdateMonitoring()"))
+        XCTAssertTrue(appState.contains("updateMonitorTask"))
+        XCTAssertTrue(appState.contains("updateRefreshIntervalNanoseconds"))
+        XCTAssertTrue(appState.contains("await self.loadUpdate(reportErrors: false)"))
+        XCTAssertTrue(appState.contains("if reportErrors"))
+    }
+
+    func testSettingsExposeUserControlForAutomaticUpdateChecks() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let settings = try String(
+            contentsOf: packageRoot.appendingPathComponent(
+                "Sources/VEXNativeMac/Views/VEXSettingsView.swift"
+            ),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(settings.contains("Обновлять VEX автоматически"))
+        XCTAssertTrue(settings.contains("appState.automaticallyChecksForUpdates"))
+    }
+
+    func testLegacyInstallerLaunchPathIsAbsent() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let startup = try String(
+            contentsOf: packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/StartupService.swift"),
+            encoding: .utf8
+        )
+        let appState = try String(
+            contentsOf: packageRoot.appendingPathComponent("Sources/VEXNativeMac/Stores/VEXAppState.swift"),
+            encoding: .utf8
+        )
+        let updatePanel = try String(
+            contentsOf: packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/UpdateCenterPanel.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertFalse(startup.contains("struct UpdateService"))
+        XCTAssertFalse(startup.contains("launchInstaller"))
+        XCTAssertFalse(appState.contains("restartAndUpdateNow"))
+        XCTAssertFalse(appState.contains("downloadUpdate()"))
+        XCTAssertFalse(updatePanel.contains("Скачать и открыть установщик"))
+        XCTAssertFalse(updatePanel.contains("Открыть ручную ссылку"))
     }
 
     func testNativeMacBuildScriptContainsSparklePlistContract() throws {
@@ -53,8 +212,26 @@ final class SparkleUpdateTests: XCTestCase {
         XCTAssertTrue(script.contains("SUPublicEDKey"))
         XCTAssertTrue(script.contains("SUEnableAutomaticChecks"))
         XCTAssertTrue(script.contains("SUAutomaticallyUpdate"))
+        XCTAssertTrue(script.contains("<key>SUAllowsAutomaticUpdates</key>"))
+        XCTAssertTrue(script.contains("<key>SUVerifyUpdateBeforeExtraction</key>"))
+        XCTAssertTrue(
+            script.contains("<key>SUAutomaticallyUpdate</key>\n  <true/>")
+        )
         XCTAssertTrue(script.contains("VEX_NATIVE_BUILD must be numeric"))
         XCTAssertTrue(script.contains("Contents/Frameworks/Sparkle.framework"))
+        XCTAssertTrue(script.contains("cwILAPfDRcrjrAWmD/VrMzIh983R2hncvI44tfEZauI="))
+        XCTAssertTrue(script.contains("Sparkle public Ed25519 key must decode to 32 bytes"))
+        XCTAssertTrue(script.contains("VEX_SPARKLE_FEED_URL must use HTTPS"))
+    }
+
+    func testSparkleDependencyUsesSecurityPatchedRelease() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let package = try String(
+            contentsOf: packageRoot.appendingPathComponent("Package.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(package.contains("exact: \"2.9.4\""))
     }
 
     func testNativeAppInfoUsesBundleVersionForUpdateContracts() throws {
@@ -108,6 +285,8 @@ final class SparkleUpdateTests: XCTestCase {
         XCTAssertTrue(script.contains("codesign --verify --deep --strict"))
         XCTAssertTrue(script.contains("sparkle:edSignature"))
         XCTAssertTrue(script.contains("VEX_NATIVE_REQUIRE_DEVELOPER_ID"))
+        XCTAssertTrue(script.contains("Developer ID Application"))
+        XCTAssertTrue(script.contains("Developer ID Installer"))
         XCTAssertTrue(script.contains("VEX_NATIVE_DISTRIBUTION_MODE"))
         XCTAssertTrue(script.contains("ad-hoc signed as expected for internal distribution"))
         XCTAssertTrue(script.contains("VEX_NATIVE_VERIFY_INSTALLED_RUNTIME"))
@@ -123,9 +302,24 @@ final class SparkleUpdateTests: XCTestCase {
         let script = try String(contentsOf: scriptURL, encoding: .utf8)
 
         XCTAssertTrue(script.contains("VEX_NATIVE_REQUIRE_DEVELOPER_ID=0"))
+        XCTAssertTrue(script.contains("VEX_NATIVE_PRODUCTION=0"))
+        XCTAssertFalse(script.contains("VEX_NATIVE_PRODUCTION=1"))
         XCTAssertTrue(script.contains("VEX_NATIVE_DISTRIBUTION_MODE"))
         XCTAssertTrue(script.contains("build_native_macos_sparkle_release.sh"))
         XCTAssertTrue(script.contains("Internal release cannot use ephemeral Sparkle keys"))
+    }
+
+    func testSparkleManifestRecordsCustomUpdateSignatureContract() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let scriptURL = packageRoot
+            .deletingLastPathComponent()
+            .appendingPathComponent("scripts/build_native_macos_sparkle_release.sh")
+        let script = try String(contentsOf: scriptURL, encoding: .utf8)
+
+        XCTAssertTrue(script.contains("signing_authority"))
+        XCTAssertTrue(script.contains("\"updateSignatureScheme\": \"sparkle-ed25519\""))
+        XCTAssertTrue(script.contains("\"distributionMode\": \"sparkle-ed25519-custom\""))
+        XCTAssertTrue(script.contains("\"appleDeveloperSigned\""))
     }
 
     func testAutonomousNativeMacReleaseKeepsDeploySafetyGatesEnabled() throws {
@@ -142,6 +336,20 @@ final class SparkleUpdateTests: XCTestCase {
         XCTAssertTrue(script.contains("ALLOW_RELEASE_ARTIFACT_DIRTY=1"))
         XCTAssertTrue(script.contains("ALLOW_DIRTY_SOURCE"))
         XCTAssertTrue(script.contains("requires a clean tracked source tree"))
+        XCTAssertTrue(script.contains("validate_public_release_artifacts"))
+        XCTAssertTrue(script.contains("RUN_PUBLIC_PREFLIGHT"))
+        XCTAssertTrue(script.contains("RUN_DEPLOY=1 requires RUN_PUBLIC_PREFLIGHT=1"))
+        XCTAssertTrue(script.contains("sign_update"))
+        XCTAssertTrue(script.contains("--verify"))
+        XCTAssertTrue(script.contains("derived_public_key"))
+        XCTAssertTrue(script.contains("Sparkle private/public key mismatch"))
+        XCTAssertTrue(script.contains("sparkle-ed25519-custom"))
+        XCTAssertTrue(script.contains("archiveSHA256"))
+        XCTAssertTrue(script.contains("appcastSHA256"))
+        XCTAssertTrue(script.contains("archive SHA-256 mismatch"))
+        XCTAssertTrue(script.contains("appcast SHA-256 mismatch"))
+        XCTAssertTrue(script.contains("sparklePublicEDKey"))
+        XCTAssertFalse(script.contains("public release requires Developer ID"))
     }
 
     func testNativeMacDeployBundleScriptChecksReleaseFiles() throws {
@@ -155,6 +363,8 @@ final class SparkleUpdateTests: XCTestCase {
         XCTAssertTrue(script.contains("downloadURL does not end with archive name"))
         XCTAssertTrue(script.contains("shasum -a 256 -c"))
         XCTAssertTrue(script.contains("appcast.xml"))
+        XCTAssertTrue(script.contains("ZIP-only Sparkle distribution"))
+        XCTAssertFalse(script.contains("cp \"${pkg_path}\""))
     }
 
     func testNativeMacAutonomousReleaseScriptOwnsBuildDeployVerifyFlow() throws {
@@ -206,10 +416,19 @@ final class SparkleUpdateTests: XCTestCase {
 @MainActor
 private final class MockNativeUpdaterService: NativeUpdaterService {
     var automaticallyChecksForUpdates = true
-    var canCheckForUpdates = true
+    var canCheckForUpdates: Bool
     private(set) var checkForUpdatesCallCount = 0
+    private(set) var checkForUpdatesInBackgroundCallCount = 0
+
+    init(canCheckForUpdates: Bool = true) {
+        self.canCheckForUpdates = canCheckForUpdates
+    }
 
     func checkForUpdates() {
         checkForUpdatesCallCount += 1
+    }
+
+    func checkForUpdatesInBackground() {
+        checkForUpdatesInBackgroundCallCount += 1
     }
 }

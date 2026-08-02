@@ -1,22 +1,24 @@
 # VEX Native macOS
 
-This is the first SwiftUI-native macOS client slice for VEX. It intentionally
-reuses the existing privileged `vex-helper` daemon instead of creating a second
-VPN runtime.
+This is the SwiftUI-native macOS client for VEX. Its privileged
+`VEXPrivilegedHelper` is also implemented in Swift and built as a separate
+SwiftPM executable; the native release does not compile or package Tauri/Rust.
 
 Current scope:
 
 - SwiftUI `.app` bundle.
 - Ad-hoc local code signing with `codesign -s -`.
 - Helper status polling through `/var/run/vex-helper.sock`.
-- Connect/disconnect commands through the existing helper protocol.
+- Connect/disconnect commands through the stable text helper protocol.
+- Transactional PF fail-open teardown, owner watchdog and continuous tunnel
+  health supervision in `VEXHelperCore`.
 - Sparkle 2 update checks and appcast-based release archives.
 
 Non-goals for this slice:
 
 - No mandatory Apple Developer ID distribution.
 - No mandatory notarization.
-- No replacement for the current Tauri/Expo production client yet.
+- Real PF/route/DNS/launchd fault injection still requires a disposable macOS VM.
 
 Build locally:
 
@@ -24,6 +26,10 @@ Build locally:
 bash scripts/build_native_macos_app.sh
 open macos-native/build/VEXNativeMac.app
 ```
+
+`build_native_macos_app.sh` first builds a universal Swift helper through
+`scripts/build_swift_macos_helper.sh` and packages resources only from
+`macos-native/HelperResources`.
 
 Build a local installer package that drops the app into `/Applications` and
 installs the privileged helper during package postinstall:

@@ -22,7 +22,7 @@ struct VEXAPIClient {
     }
 
     func requestEmailOTP(email: String) async throws -> EmailOTPChallengeResponse {
-        try await json(
+        return try await json(
             "/v1/auth/email-otp/request",
             method: "POST",
             body: [
@@ -80,17 +80,34 @@ struct VEXAPIClient {
         try await json("/v1/billing/plans")
     }
 
-    func checkoutSession(accessToken: String, plan: BillingPlanOption) async throws -> CheckoutSession {
+    func billingPriceQuote(accessToken: String, planID: String) async throws -> BillingPriceQuote {
         try await json(
+            "/v1/billing/change-preview?\(queryString([URLQueryItem(name: "plan_id", value: planID)]))",
+            accessToken: accessToken
+        )
+    }
+
+    func checkoutSession(
+        accessToken: String,
+        plan: BillingPlanOption,
+        expectedAmountMinor: Int,
+        changeMode: String?
+    ) async throws -> CheckoutSession {
+        var body: [String: Any] = [
+            "plan_id": plan.id,
+            "provider": plan.provider,
+            "expected_amount_minor": expectedAmountMinor,
+            "return_url": "\(baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/v1/billing/mobile-return?status=success",
+            "failed_url": "\(baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/v1/billing/mobile-return?status=failed",
+        ]
+        if changeMode == "upgrade" {
+            body["change_mode"] = "upgrade"
+        }
+        return try await json(
             "/v1/billing/checkout-session",
             method: "POST",
             accessToken: accessToken,
-            body: [
-                "plan_id": plan.id,
-                "provider": plan.provider,
-                "return_url": "\(baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/v1/billing/mobile-return?status=success",
-                "failed_url": "\(baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/v1/billing/mobile-return?status=failed",
-            ],
+            body: body,
             idempotencyKey: "native-macos-checkout-\(plan.id)-\(Int(Date().timeIntervalSince1970 * 1000))"
         )
     }
@@ -407,7 +424,10 @@ struct VEXAPIClient {
             throw VEXAPIError.http(status: http.statusCode, message: apiError.message)
         }
         if T.self == EmptyResponse.self, data.isEmpty {
-            return EmptyResponse() as! T
+            guard let emptyResponse = EmptyResponse() as? T else {
+                throw VEXAPIError.invalidResponse
+            }
+            return emptyResponse
         }
         if T.self == String.self, let text = String(data: data, encoding: .utf8) as? T {
             return text

@@ -5,14 +5,14 @@ struct VEXSettingsView: View {
     @EnvironmentObject private var helper: VEXHelperModel
 
     var body: some View {
-        VStack(spacing: 14) {
-            PageTitleBlock(title: "Настройки", subtitle: "Запуск, VPN, безопасность и системный helper.")
+        VStack(spacing: 12) {
+            SettingsHero()
             incidentBanner
             generalSettings
             interfaceSettings
             helperSettings
         }
-        .padding(.top, 4)
+        .padding(.top, 2)
         .padding(.bottom, 16)
     }
 
@@ -41,8 +41,19 @@ struct VEXSettingsView: View {
     }
 
     private var generalSettings: some View {
-        VStack(spacing: 12) {
-            SettingsSection(title: "Запуск и VPN") {
+        LazyVGrid(
+            columns: [
+                GridItem(.flexible(), spacing: 12, alignment: .top),
+                GridItem(.flexible(), spacing: 12, alignment: .top)
+            ],
+            alignment: .leading,
+            spacing: 12
+        ) {
+            SettingsFeatureCard(
+                systemName: "bolt.horizontal.circle.fill",
+                title: "Подключение",
+                subtitle: "Быстрый запуск и выбор маршрута"
+            ) {
                 SettingsToggleRow(
                     systemName: "power",
                     title: "Запускать вместе с macOS",
@@ -62,11 +73,15 @@ struct VEXSettingsView: View {
                         set: { appState.setSmartRoutingEnabled($0) }
                     )
                 )
-                SettingsToggleRow(systemName: "lock.shield", title: "Anti-leak", subtitle: "Защита от утечек при сбоях.", isOn: $appState.antiLeakEnabled)
-                SettingsToggleRow(systemName: "arrow.triangle.2.circlepath", title: "Автовосстановление", subtitle: "Проверять и поднимать туннель автоматически.", isOn: $appState.autoRecoveryEnabled)
             }
 
-            SettingsSection(title: "Безопасность") {
+            SettingsFeatureCard(
+                systemName: "shield.lefthalf.filled",
+                title: "Защита",
+                subtitle: "Сеть восстанавливается без ручных действий"
+            ) {
+                SettingsToggleRow(systemName: "lock.shield", title: "Kill Switch", subtitle: "Блокирует утечки трафика при сбое VPN.", isOn: $appState.antiLeakEnabled)
+                SettingsToggleRow(systemName: "arrow.triangle.2.circlepath", title: "Автовосстановление", subtitle: "Проверять и поднимать туннель автоматически.", isOn: $appState.autoRecoveryEnabled)
                 SettingsToggleRow(
                     systemName: "touchid",
                     title: "Touch ID при запуске",
@@ -79,39 +94,70 @@ struct VEXSettingsView: View {
     }
 
     private var interfaceSettings: some View {
-        SettingsSection(title: "Интерфейс") {
-            SettingsLanguageRow(value: appState.interfaceLanguage, onChange: appState.setInterfaceLanguage)
+        SettingsFeatureCard(
+            systemName: "slider.horizontal.3",
+            title: "Интерфейс",
+            subtitle: "Персональные параметры приложения"
+        ) {
+            SettingsLanguageRow(value: appState.interfaceLanguage) { value in
+                appState.setInterfaceLanguage(value)
+            }
         }
     }
 
     private var helperSettings: some View {
         VStack(spacing: 12) {
-            SettingsSection(title: "Системный helper") {
+            SettingsFeatureCard(
+                systemName: "cpu.fill",
+                title: "Системный компонент",
+                subtitle: "Состояние локального VPN-движка"
+            ) {
                 SettingsInfoRow(systemName: "checkmark.shield", title: "Статус", value: helperStatusText, tone: helperStatusTone)
                 SettingsInfoRow(systemName: "number", title: "Версия", value: helperVersion, tone: .neutral)
-                SettingsInfoRow(systemName: helper.status.state.symbolName, title: "VPN", value: helper.status.state.rawValue, tone: helper.status.isUsableConnectedStatus ? .good : .neutral)
                 helperRepairRow
             }
 
-            SettingsSection(title: "Приложение") {
-                SettingsInfoRow(systemName: "app.badge", title: "Версия", value: VEXAppInfo.version, tone: .neutral)
-                SettingsInfoRow(systemName: "hammer", title: "Build", value: String(VEXAppInfo.buildNumber), tone: .neutral)
-                SettingsInfoRow(systemName: "point.3.connected.trianglepath.dotted", title: "Канал", value: VEXAppInfo.channel, tone: .neutral)
-                SettingsInfoRow(systemName: "cpu", title: "Ядро", value: VEXAppInfo.coreVersion, tone: .neutral)
-                SettingsInfoRow(systemName: "network", title: "Маршруты", value: remoteRoutingPolicyVersion, tone: .neutral)
-                SettingsInfoRow(systemName: "curlybraces", title: "API клиент", value: VEXAppInfo.apiClientVersion, tone: .neutral)
-                SettingsInfoRow(systemName: "doc.badge.gearshape", title: "Схема", value: String(VEXAppInfo.configSchemaVersion), tone: .neutral)
+            SettingsFeatureCard(
+                systemName: "app.badge.fill",
+                title: "Обновления",
+                subtitle: "Новые версии без лишних действий"
+            ) {
+                SettingsToggleRow(
+                    systemName: "arrow.down.circle",
+                    title: "Обновлять VEX автоматически",
+                    subtitle: appState.automaticallyChecksForUpdates
+                        ? "Обновления скачиваются в фоне и применяются при перезапуске."
+                        : "Автоматическая проверка обновлений выключена.",
+                    isOn: Binding(
+                        get: { appState.automaticallyChecksForUpdates },
+                        set: { appState.automaticallyChecksForUpdates = $0 }
+                    )
+                )
+                Button {
+                    appState.checkForNativeUpdates()
+                } label: {
+                    Label(
+                        appState.hasNewerNativeUpdate ? "Установить обновление" : "Проверить обновления",
+                        systemImage: appState.hasNewerNativeUpdate
+                            ? "arrow.down.circle.fill"
+                            : "arrow.triangle.2.circlepath"
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.vexGlass)
+                .help(
+                    appState.availableNativeUpdateVersion.map {
+                        "Доступно обновление \($0)"
+                    } ?? "Проверить наличие новой версии VEX"
+                )
             }
         }
     }
 
-    private var remoteRoutingPolicyVersion: String {
-        appState.remoteConfig?.routingPolicyVersion?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-            ? appState.remoteConfig?.routingPolicyVersion ?? VEXAppInfo.routingPolicyVersion
-            : VEXAppInfo.routingPolicyVersion
-    }
-
     private var helperStatusText: String {
+        if helper.installationPhase != .idle {
+            return helper.installationPhase.title
+        }
         guard let installState = helper.installState else {
             return "Проверяем"
         }
@@ -119,7 +165,10 @@ struct VEXSettingsView: View {
     }
 
     private var helperStatusTone: VEXStatusBadge.Tone {
-        helper.installState?.filesCurrent == true ? .good : .warning
+        if case .failed = helper.installationPhase {
+            return .warning
+        }
+        return helper.installState?.filesCurrent == true ? .good : .warning
     }
 
     private var helperVersion: String {
@@ -142,7 +191,11 @@ struct VEXSettingsView: View {
                     Text("Root helper")
                         .font(.system(size: 13, weight: .black))
                         .foregroundStyle(Color.vexText)
-                    Text("Установить актуальный системный helper.")
+                    Text(
+                        helper.installationPhase == .idle
+                            ? "Установить актуальный системный helper."
+                            : helper.installationPhase.detail
+                    )
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(Color.vexSecondaryText)
                         .lineLimit(2)
@@ -157,7 +210,7 @@ struct VEXSettingsView: View {
                         if helper.isBusy {
                             VEXMiniSpinner(tint: Color.vexBackground)
                         }
-                        Text(helper.isBusy ? "Установка" : "Установить")
+                        Text(helper.isBusy ? "Установка…" : "Установить")
                     }
                 }
                 .buttonStyle(.vexProminentGlass)
@@ -165,6 +218,89 @@ struct VEXSettingsView: View {
             }
             .padding(.vertical, 9)
         }
+    }
+}
+
+private struct SettingsHero: View {
+    var body: some View {
+        HStack(spacing: 16) {
+            Image(systemName: "gearshape.2.fill")
+                .font(.system(size: 25, weight: .bold))
+                .foregroundStyle(Color.vexCyanLight)
+                .frame(width: 48, height: 48)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Настройки VEX")
+                    .font(.system(size: 24, weight: .black, design: .rounded))
+                    .foregroundStyle(Color.vexText)
+                Text("Сеть, защита и приложение — в одном месте")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.vexSecondaryText)
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 8)
+    }
+}
+
+private struct SettingsFeatureCard<Content: View>: View {
+    let systemName: String
+    let title: String
+    let subtitle: String
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                SettingsGlyph(systemName: systemName)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 15, weight: .black))
+                        .foregroundStyle(Color.vexText)
+                    Text(subtitle)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Color.vexSecondaryText)
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 4)
+            }
+
+            Rectangle()
+                .fill(Color.white.opacity(0.07))
+                .frame(height: 1)
+
+            VStack(spacing: 0) {
+                content
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.vexPanel.opacity(0.46))
+        }
+    }
+}
+
+private struct SettingsCompactFact: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(label.uppercased())
+                .font(.system(size: 9, weight: .black))
+                .foregroundStyle(Color.vexMuted)
+            Text(value)
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.vexText)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -210,18 +346,66 @@ private struct SettingsToggleRow: View {
             }
             Spacer(minLength: 10)
             Toggle("", isOn: $isOn)
-                .toggleStyle(.switch)
+                .toggleStyle(VEXSwitchToggleStyle())
                 .labelsHidden()
                 .disabled(disabled)
+                .accessibilityLabel(title)
+                .accessibilityHint(subtitle)
         }
         .padding(.vertical, 9)
         .opacity(disabled ? 0.62 : 1)
     }
 }
 
+private struct VEXSwitchToggleStyle: ToggleStyle {
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        Button {
+            configuration.isOn.toggle()
+        } label: {
+            ZStack {
+                Capsule()
+                    .fill(configuration.isOn ? Color.vexCyan : Color.white.opacity(0.16))
+                    .overlay {
+                        Capsule()
+                            .stroke(
+                                configuration.isOn
+                                    ? Color.vexCyanLight.opacity(0.42)
+                                    : Color.white.opacity(0.10),
+                                lineWidth: 1
+                            )
+                    }
+                    .shadow(
+                        color: configuration.isOn
+                            ? Color.vexCyan.opacity(0.38)
+                            : Color.clear,
+                        radius: 7
+                    )
+
+                Circle()
+                    .fill(Color.vexText)
+                    .frame(width: 18, height: 18)
+                    .shadow(color: Color.black.opacity(0.24), radius: 2, y: 1)
+                    .offset(x: configuration.isOn ? 8 : -8)
+            }
+            .frame(width: 40, height: 23)
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .animation(
+            accessibilityReduceMotion
+                ? .linear(duration: 0.01)
+                : .snappy(duration: 0.20, extraBounce: 0.03),
+            value: configuration.isOn
+        )
+        .accessibilityValue(configuration.isOn ? "Включено" : "Выключено")
+    }
+}
+
 private struct SettingsLanguageRow: View {
     let value: String
-    let onChange: (String) -> Void
+    let onChange: @MainActor @Sendable (String) -> Void
 
     var body: some View {
         HStack(spacing: 10) {
@@ -235,13 +419,14 @@ private struct SettingsLanguageRow: View {
                     .foregroundStyle(Color.vexSecondaryText)
             }
             Spacer(minLength: 10)
-            Picker("", selection: Binding(get: { normalized }, set: onChange)) {
+            Picker("", selection: Binding(get: { normalized }, set: { onChange($0) })) {
                 Text("Русский").tag("ru")
                 Text("English").tag("en")
             }
             .pickerStyle(.segmented)
             .frame(width: 154)
             .labelsHidden()
+            .accessibilityLabel("Язык интерфейса")
         }
         .padding(.vertical, 9)
     }
@@ -279,6 +464,6 @@ private struct SettingsGlyph: View {
             .font(.system(size: 14, weight: .bold))
             .foregroundStyle(Color.vexCyan)
             .frame(width: 26, height: 26)
-            .background(Circle().fill(Color.vexCyan.opacity(0.10)))
+            .accessibilityHidden(true)
     }
 }

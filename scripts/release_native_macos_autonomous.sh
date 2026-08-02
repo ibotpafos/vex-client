@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VPN_REPO="${VEX_VPN_REPO:-/Users/ibotpafos/projects/VPN}"
 RUN_CHECKS="${RUN_CHECKS:-1}"
 RUN_DEPLOY="${RUN_DEPLOY:-1}"
+RUN_PUBLIC_PREFLIGHT="${RUN_PUBLIC_PREFLIGHT:-${RUN_DEPLOY}}"
 RUN_LIVE_VERIFY="${RUN_LIVE_VERIFY:-1}"
 RUN_METADATA_DEPLOY="${RUN_METADATA_DEPLOY:-${RUN_DEPLOY}}"
 VEX_NATIVE_CHANGELOG="${VEX_NATIVE_CHANGELOG:-macOS: обновлён интерфейс управления аккаунтом и подпиской, добавлены актуальные тарифы и улучшено восстановление состояния после оплаты.}"
@@ -26,6 +27,24 @@ require_file() {
     echo "missing required file: $1" >&2
     exit 2
   fi
+}
+
+derive_sparkle_public_key() {
+  swift -e '
+    import CryptoKit
+    import Foundation
+
+    let path = CommandLine.arguments[1]
+    let encoded = try String(contentsOfFile: path, encoding: .utf8)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let rawKey = Data(base64Encoded: encoded) else {
+        throw NSError(domain: "VEXRelease", code: 1, userInfo: [
+            NSLocalizedDescriptionKey: "Sparkle private key is not valid base64"
+        ])
+    }
+    let privateKey = try Curve25519.Signing.PrivateKey(rawRepresentation: rawKey)
+    print(privateKey.publicKey.rawRepresentation.base64EncodedString())
+  ' "$1"
 }
 
 reuse_primary_worktree_sparkle_cache() {
@@ -145,6 +164,103 @@ print(f"live native macOS appcast ok: {version} ({build})")
 PY
 }
 
+validate_public_release_artifacts() {
+  local app_path manifest_path archive_name archive_path appcast_path signature sign_tool
+  local derived_public_key archive_sha appcast_sha
+  app_path="${ROOT_DIR}/macos-native/build/VEXNativeMac.app"
+  manifest_path="${ROOT_DIR}/dist/native-macos/deploy/release-manifest.json"
+  appcast_path="${ROOT_DIR}/dist/native-macos/deploy/appcast.xml"
+  sign_tool="${ROOT_DIR}/macos-native/.build/artifacts/sparkle/Sparkle/bin/sign_update"
+
+  [[ -d "${app_path}" ]] \
+    || { echo "missing required app bundle: ${app_path}" >&2; exit 2; }
+  require_file "${manifest_path}"
+  require_file "${appcast_path}"
+  require_file "${sign_tool}"
+
+  derived_public_key="$(derive_sparkle_public_key "${VEX_SPARKLE_PRIVATE_ED_KEY_FILE}")"
+  if [[ "${derived_public_key}" != "${VEX_SPARKLE_PUBLIC_ED_KEY}" ]]; then
+    echo "Sparkle private/public key mismatch" >&2
+    exit 2
+  fi
+
+  VEX_NATIVE_APP_PATH="${app_path}" \
+    VEX_NATIVE_PRODUCTION=0 \
+    VEX_NATIVE_REQUIRE_DEVELOPER_ID=0 \
+    VEX_NATIVE_DISTRIBUTION_MODE=public-sparkle-ed25519 \
+    bash "${ROOT_DIR}/scripts/native_macos_production_preflight.sh"
+
+  archive_name="$(python3 - "${manifest_path}" "${VEX_SPARKLE_PUBLIC_ED_KEY}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+manifest = json.loads(Path(sys.argv[1]).read_text())
+expected_public_key = sys.argv[2]
+if manifest.get("distributionMode") != "sparkle-ed25519-custom":
+    raise SystemExit("public release manifest has an invalid distributionMode")
+if manifest.get("updateSignatureScheme") != "sparkle-ed25519":
+    raise SystemExit("public release manifest has an invalid updateSignatureScheme")
+if manifest.get("sparklePublicEDKey") != expected_public_key:
+    raise SystemExit("public release manifest Sparkle public key mismatch")
+if not manifest.get("archiveSHA256"):
+    raise SystemExit("public release manifest is missing archiveSHA256")
+print(manifest["archive"])
+PY
+)"
+  archive_path="${ROOT_DIR}/dist/native-macos/deploy/${archive_name}"
+  require_file "${archive_path}"
+  require_file "${archive_path}.sha256"
+  archive_sha="$(shasum -a 256 "${archive_path}" | awk '{print $1}')"
+  appcast_sha="$(shasum -a 256 "${appcast_path}" | awk '{print $1}')"
+
+  (
+    cd "${ROOT_DIR}/dist/native-macos/deploy"
+    shasum -a 256 -c "${archive_name}.sha256"
+    shasum -a 256 -c appcast.xml.sha256
+  )
+
+  python3 - "${manifest_path}" "${archive_sha}" "${appcast_sha}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+manifest = json.loads(Path(sys.argv[1]).read_text())
+archive_sha, appcast_sha = sys.argv[2:]
+if manifest.get("archiveSHA256") != archive_sha:
+    raise SystemExit("public release manifest archive SHA-256 mismatch")
+if manifest.get("appcastSHA256") != appcast_sha:
+    raise SystemExit("public release manifest appcast SHA-256 mismatch")
+PY
+
+  signature="$(python3 - "${appcast_path}" "${archive_name}" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+
+appcast_path, archive_name = sys.argv[1:]
+ns = {"sparkle": "http://www.andymatuschak.org/xml-namespaces/sparkle"}
+root = ET.parse(appcast_path).getroot()
+for item in root.findall("./channel/item"):
+    enclosure = item.find("enclosure")
+    if enclosure is None or not enclosure.attrib.get("url", "").endswith("/" + archive_name):
+        continue
+    signature = enclosure.attrib.get(f"{{{ns['sparkle']}}}edSignature", "")
+    if not signature:
+        raise SystemExit("public release appcast is missing Sparkle Ed25519 signature")
+    print(signature)
+    break
+else:
+    raise SystemExit("public release archive is missing from appcast")
+PY
+)"
+  "${sign_tool}" \
+    --verify \
+    --ed-key-file "${VEX_SPARKLE_PRIVATE_ED_KEY_FILE}" \
+    "${archive_path}" \
+    "${signature}"
+  echo "public Sparkle Ed25519 release gate passed: ${archive_name}"
+}
+
 require_command bash
 require_command codesign
 require_command python3
@@ -189,6 +305,15 @@ fi
 
 bash "${ROOT_DIR}/scripts/build_native_macos_internal_release.sh"
 bash "${ROOT_DIR}/scripts/prepare_native_macos_deploy_bundle.sh"
+
+if [[ "${RUN_PUBLIC_PREFLIGHT}" == "1" ]]; then
+  validate_public_release_artifacts
+fi
+
+if [[ "${RUN_DEPLOY}" == "1" && "${RUN_PUBLIC_PREFLIGHT}" != "1" ]]; then
+  echo "RUN_DEPLOY=1 requires RUN_PUBLIC_PREFLIGHT=1" >&2
+  exit 2
+fi
 
 mkdir -p "${NATIVE_DOWNLOAD_DIR}"
 cp "${ROOT_DIR}/dist/native-macos/deploy/VEXNativeMac-${VEX_NATIVE_VERSION}-${VEX_NATIVE_BUILD}.zip" "${NATIVE_DOWNLOAD_DIR}/"

@@ -2,6 +2,15 @@ import XCTest
 @testable import VEXNativeMac
 
 final class VpnStatusTests: XCTestCase {
+    func testArmedAntiLeakStateRequiresCrashWatchdogEvenWithoutUsableTunnel() {
+        let status = VpnStatus(
+            helperResponse: "state=error leak_protection=armed route_ok=false socket_exists=false"
+        )
+
+        XCTAssertEqual(status.state, .disconnected)
+        XCTAssertTrue(status.hasManagedNetworkState)
+    }
+
     func testConnectedStatusParsesTrafficAndLeakProtection() {
         let status = VpnStatus(helperResponse: "state=connected route_ok=true socket_exists=true rx=161700000 tx=815400000 latest_handshake=0 leak_protection=off\n")
 
@@ -35,18 +44,18 @@ final class VpnStatusTests: XCTestCase {
         )
     }
 
-    func testIPv6ForeignTunnelRouteWarnsWithoutBreakingIPv4ConnectedState() {
-        let status = VpnStatus(helperResponse: "state=connected iface=utun6 socket_exists=true route_ok=true route_iface=utun6 ipv6_route_ok=false ipv6_route_iface=utun0 rx=2048 tx=4096 latest_handshake=0\n")
+    func testExpectedIPv6ForeignTunnelRoutePreventsConnectedState() {
+        let status = VpnStatus(helperResponse: "state=error iface=utun6 socket_exists=true route_ok=true route_iface=utun6 ipv6_route_expected=true ipv6_route_ok=false ipv6_route_iface=utun0 rx=2048 tx=4096 latest_handshake=0\n")
 
-        XCTAssertEqual(status.state, .connected)
-        XCTAssertTrue(status.isUsableConnectedStatus)
+        XCTAssertEqual(status.state, .disconnected)
+        XCTAssertFalse(status.isUsableConnectedStatus)
         XCTAssertTrue(status.hasRouteConflict)
         XCTAssertFalse(status.hasIPv4RouteConflict)
         XCTAssertTrue(status.hasIPv6RouteConflict)
         XCTAssertEqual(status.ipv6RouteInterface, "utun0")
         XCTAssertEqual(
             status.routeConflictMessage,
-            "IPv6 удерживает другой VPN. VEX ведет IPv4-трафик, часть сайтов может открываться медленно."
+            "IPv6 удерживает другой VPN. Подключение VEX остановлено, чтобы исключить утечку трафика."
         )
     }
 

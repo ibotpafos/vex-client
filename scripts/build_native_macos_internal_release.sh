@@ -32,7 +32,8 @@ bash "${ROOT_DIR}/scripts/build_native_macos_sparkle_release.sh"
 
 pkg_path="$(ls -t "${ROOT_DIR}/macos-native/build/pkg/"*.pkg | head -n 1)"
 VEX_NATIVE_PKG_PATH="${pkg_path}" \
-  VEX_NATIVE_PRODUCTION=1 \
+  VEX_NATIVE_PRODUCTION=0 \
+  VEX_NATIVE_REQUIRE_DEVELOPER_ID=0 \
   VEX_NATIVE_DISTRIBUTION_MODE=internal \
   bash "${ROOT_DIR}/scripts/native_macos_production_preflight.sh"
 

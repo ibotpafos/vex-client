@@ -41,18 +41,30 @@ mkdir -p "${PKG_ROOT}/Applications" "${PKG_SCRIPTS}" "${PKG_OUTPUT_DIR}"
 
 ditto "${APP_DIR}" "${PKG_ROOT}/Applications/${INSTALL_APP_BUNDLE_NAME}"
 
+APP_TEAM_ID="$(
+  /usr/bin/codesign -d --verbose=4 "${APP_DIR}" 2>&1 \
+    | /usr/bin/sed -n 's/^TeamIdentifier=//p' \
+    | /usr/bin/head -n 1
+)"
+if [[ -z "${APP_TEAM_ID}" || "${APP_TEAM_ID}" == "not set" ]]; then
+  echo "Developer ID TeamIdentifier is required to package the privileged helper." >&2
+  exit 1
+fi
+
 cat > "${PKG_SCRIPTS}/postinstall" <<'POSTINSTALL'
 #!/usr/bin/env bash
 set -euo pipefail
 
 APP_PATH="/Applications/VEX Native.app"
-RESOURCE_DIR="${APP_PATH}/Contents/Resources/resources"
-INSTALLER="${RESOURCE_DIR}/install-vex-vpn-helper.sh"
-
-if [[ ! -x "${INSTALLER}" ]]; then
-  echo "Missing helper installer at ${INSTALLER}" >&2
-  exit 1
-fi
+verified_root="$(/usr/bin/mktemp -d /var/tmp/vex-install-app.XXXXXX)"
+trap '/bin/rm -rf "$verified_root"' EXIT
+/usr/bin/ditto "${APP_PATH}" "$verified_root/VEX Native.app"
+verified_app="$verified_root/VEX Native.app"
+/usr/bin/codesign --verify --deep --strict \
+  -R='anchor apple generic and identifier "app.vex.vpn.native" and certificate leaf[subject.OU] = "__VEX_TEAM_ID__"' \
+  "$verified_app"
+resource_dir="${verified_app}/Contents/Resources/resources"
+installer="${resource_dir}/install-vex-vpn-helper.sh"
 
 console_user="$(stat -f %Su /dev/console 2>/dev/null || true)"
 if [[ -z "${console_user}" || "${console_user}" == "root" ]]; then
@@ -71,8 +83,10 @@ fi
 config_path="${console_home}/.vex/vex.conf"
 mkdir -p "$(dirname "${config_path}")"
 
-/bin/bash "${INSTALLER}" "${RESOURCE_DIR}" "${config_path}" "${console_user}"
+VEX_EXPECTED_TEAM_ID="__VEX_TEAM_ID__" /bin/bash "${installer}" "${resource_dir}" "${config_path}" "${console_user}" "${verified_app}"
 POSTINSTALL
+
+/usr/bin/sed -i '' "s/__VEX_TEAM_ID__/${APP_TEAM_ID}/g" "${PKG_SCRIPTS}/postinstall"
 
 chmod 755 "${PKG_SCRIPTS}/postinstall"
 

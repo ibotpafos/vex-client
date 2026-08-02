@@ -2,7 +2,7 @@
 set -euo pipefail
 
 APP_PATH="${APP_PATH:-/Applications/VEX Native.app}"
-SOURCE_HELPER="${SOURCE_HELPER:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/src-tauri/resources/vex-helper}"
+SOURCE_HELPER="${SOURCE_HELPER:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/macos-native/HelperResources/vex-helper}"
 ROOT_HELPER="${ROOT_HELPER:-/Library/Application Support/VEX VPN/helper/vex-helper}"
 ROOT_HELPER_DIR="$(/usr/bin/dirname "${ROOT_HELPER}")"
 HELPER_PLIST="${HELPER_PLIST:-/Library/LaunchDaemons/app.vex.vpn.helper.plist}"
@@ -70,10 +70,10 @@ root_helper_sha="$(sha256_or_empty "${ROOT_HELPER}")"
 app_helper_version="$(helper_version_from_bundle "${app_helper_installer}")"
 root_helper_version="$(file_contents_or_empty "${ROOT_HELPER_DIR}/version" | /usr/bin/tr -d '[:space:]')"
 helper_plist_run_at_load=""
-helper_plist_keep_alive=""
+helper_plist_keep_alive_successful_exit=""
 if [[ -f "${HELPER_PLIST}" ]]; then
   helper_plist_run_at_load="$(/usr/bin/plutil -extract RunAtLoad raw -o - "${HELPER_PLIST}" 2>/dev/null || true)"
-  helper_plist_keep_alive="$(/usr/bin/plutil -extract KeepAlive raw -o - "${HELPER_PLIST}" 2>/dev/null || true)"
+  helper_plist_keep_alive_successful_exit="$(/usr/bin/plutil -extract KeepAlive.SuccessfulExit raw -o - "${HELPER_PLIST}" 2>/dev/null || true)"
 fi
 
 echo "app_helper_sha=${app_helper_sha}"
@@ -82,7 +82,7 @@ echo "root_helper_sha=${root_helper_sha}"
 echo "app_helper_version=${app_helper_version}"
 echo "root_helper_version=${root_helper_version}"
 echo "helper_plist_run_at_load=${helper_plist_run_at_load}"
-echo "helper_plist_keep_alive=${helper_plist_keep_alive}"
+echo "helper_plist_keep_alive_successful_exit=${helper_plist_keep_alive_successful_exit}"
 
 if [[ -z "${app_helper_sha}" ]]; then
   record_failure "bundled helper missing"
@@ -102,24 +102,28 @@ fi
 if [[ -n "${app_helper_version}" && "${app_helper_version}" != "${root_helper_version}" ]]; then
   record_failure "root helper version does not match bundled helper version"
 fi
-if [[ "${helper_plist_run_at_load}" != "true" || "${helper_plist_keep_alive}" != "true" ]]; then
+if [[ "${helper_plist_run_at_load}" != "true" || "${helper_plist_keep_alive_successful_exit}" != "false" ]]; then
   record_failure "helper LaunchDaemon is not configured to start and stay alive"
 fi
 if [[ -n "${app_helper_sha}" && -n "${root_helper_sha}" && "${app_helper_sha}" != "${root_helper_sha}" ]] \
-  || [[ "${helper_plist_run_at_load}" != "true" || "${helper_plist_keep_alive}" != "true" ]]; then
+  || [[ "${helper_plist_run_at_load}" != "true" || "${helper_plist_keep_alive_successful_exit}" != "false" ]]; then
   echo "helper_install_action=APP_PATH=${APP_PATH} bash scripts/install_native_macos_helper_from_app.sh"
 fi
 
 if [[ -S "${HELPER_SOCKET}" ]]; then
-  if helper_status="$(/usr/bin/printf 'status\n' | /usr/bin/nc -U "${HELPER_SOCKET}" 2>/dev/null || true)"; then
+  app_executable="${APP_PATH}/Contents/MacOS/VEXNativeMac"
+  helper_status="$("${app_executable}" --helper-status-probe 2>/dev/null || true)"
+  if [[ "${helper_status}" == state=* && "${helper_status}" == *"operation_in_progress="* ]]; then
     helper_status="${helper_status//$'\n'/ }"
-    echo "helper_socket=responds"
+    echo "helper_socket=responds_authenticated"
     echo "helper_status=${helper_status}"
   else
     echo "helper_socket=unreachable"
+    record_failure "helper socket did not return a valid authenticated status"
   fi
 else
   echo "helper_socket=missing"
+  record_failure "helper socket is missing"
 fi
 
 echo "route_iface=$(route_interface)"

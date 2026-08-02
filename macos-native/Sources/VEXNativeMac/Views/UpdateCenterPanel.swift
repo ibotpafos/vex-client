@@ -57,35 +57,6 @@ struct UpdateCenterPanel: View {
                     .tint(Color.vexCyan)
                     .disabled(!appState.canCheckForNativeUpdates)
 
-                    if appState.hasNativeUpdateDownload {
-                        Button {
-                            appState.openUpdateDownload()
-                        } label: {
-                            Label("Открыть ручную ссылку", systemImage: "safari")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.vexGlass)
-
-                        Button {
-                            Task { await appState.downloadUpdate() }
-                        } label: {
-                            Label(appState.isDownloadingUpdate ? "Скачиваем" : "Скачать в Загрузки", systemImage: "arrow.down.doc")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.vexGlass)
-                        .disabled(appState.isDownloadingUpdate)
-
-                        Button {
-                            Task { await appState.restartAndUpdateNow() }
-                        } label: {
-                            Label("Скачать и открыть установщик", systemImage: "shippingbox")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.vexProminentGlass)
-                        .tint(updateInstallerTone)
-                        .disabled(appState.isDownloadingUpdate)
-                    }
-
                     Button {
                         Task { await appState.refreshUpdates() }
                     } label: {
@@ -163,13 +134,6 @@ struct UpdateCenterPanel: View {
         return update.required && appState.hasNewerNativeUpdate ? .warning : .good
     }
 
-    private var updateInstallerTone: Color {
-        guard let update = appState.updateCheck else { return Color.vexCyan }
-        if update.currentBuildBlocked == true || update.required && appState.hasNewerNativeUpdate {
-            return .orange
-        }
-        return Color.vexCyan
-    }
 }
 
 private struct UpdateInfoRow: View {

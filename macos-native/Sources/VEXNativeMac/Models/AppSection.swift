@@ -21,6 +21,10 @@ enum AppSection: String, CaseIterable, Hashable, Identifiable {
         }
     }
 
+    var headerTitle: String? {
+        self == .home ? nil : title
+    }
+
     var systemName: String {
         switch self {
         case .home:

@@ -1,5 +1,6 @@
 import Foundation
 
+@MainActor
 struct VPNProfileService {
     private let api: VEXAPIClient
     private let identityStore: VEXDeviceIdentityStore
@@ -412,7 +413,7 @@ struct VPNProfileService {
         Self.sanitizedMacOSHelperConfig(config, endpointResolver: resolvedConfigEndpoint)
     }
 
-    static func sanitizedMacOSHelperConfig(
+    nonisolated static func sanitizedMacOSHelperConfig(
         _ config: String,
         endpointResolver: (String) -> String = { $0 }
     ) -> String {
@@ -437,7 +438,7 @@ struct VPNProfileService {
             .joined(separator: "\n")
     }
 
-    private static func configHasIPv6InterfaceAddress(_ config: String) -> Bool {
+    nonisolated private static func configHasIPv6InterfaceAddress(_ config: String) -> Bool {
         config.split(separator: "\n", omittingEmptySubsequences: false).contains { rawLine in
             let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
             guard line.hasPrefix("Address"),
@@ -450,7 +451,7 @@ struct VPNProfileService {
         }
     }
 
-    private static func sanitizedIPv4AllowedIPsLine(_ line: String, separator: String.Index) -> String {
+    nonisolated private static func sanitizedIPv4AllowedIPsLine(_ line: String, separator: String.Index) -> String {
         let prefix = String(line[...separator])
         let values = line[line.index(after: separator)...]
             .split(separator: ",")
@@ -459,7 +460,7 @@ struct VPNProfileService {
         return "\(prefix) \((values.isEmpty ? ["0.0.0.0/0"] : values).joined(separator: ", "))"
     }
 
-    static func cachedProfileNeedsRefresh(
+    nonisolated static func cachedProfileNeedsRefresh(
         _ cached: PreparedTunnelCacheRecord,
         requestedLocationId: String,
         requestedRoutingMode: VpnRoutingMode,
@@ -482,7 +483,7 @@ struct VPNProfileService {
         return !allowStale && !cached.isFresh(now: now)
     }
 
-    private static func cachedDeviceNodeDoesNotMatchLocation(_ device: VpnDevice, requestedLocationId: String) -> Bool {
+    nonisolated private static func cachedDeviceNodeDoesNotMatchLocation(_ device: VpnDevice, requestedLocationId: String) -> Bool {
         guard let nodeId = device.nodeId?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
               !nodeId.isEmpty else {
             return false
@@ -490,12 +491,12 @@ struct VPNProfileService {
         return nodeId != requestedLocationId && !nodeId.hasPrefix("\(requestedLocationId)-")
     }
 
-    private static func normalizedLocationId(_ value: String) -> String {
+    nonisolated private static func normalizedLocationId(_ value: String) -> String {
         let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return normalized.isEmpty ? "de" : normalized
     }
 
-    static func hasLegacySplitRouteAllowedIPs(_ config: String) -> Bool {
+    nonisolated static func hasLegacySplitRouteAllowedIPs(_ config: String) -> Bool {
         for rawLine in config.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
             guard line.hasPrefix("AllowedIPs"),

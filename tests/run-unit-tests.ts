@@ -65,8 +65,43 @@ import { fallbackLocationEndpoint } from '../src/vpn/locationEndpoint';
 import type { VpnDevice, VpnDeviceUsage, VpnLocation, SupportMessage } from '../src/api/vexApi';
 import type { VpnStatus } from '../src/native/vexVpn';
 import type { VpnProfile } from '../src/vpn/profile';
+import { managedProfileAmneziaConfig } from '../src/vpn/amneziaConfig';
 
 const connectedStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0 };
+
+{
+  assertEqual(
+    managedProfileAmneziaConfig({
+      jc: 4,
+      s1: 12,
+      s2: 12,
+      s3: 12,
+      s4: 12,
+      header_protection_key: ' header-key ',
+      content_padding_addition: '0',
+      rekey_after_time: '120-180',
+      rekey_timeout: '2-4',
+      reject_after_time: '180-240',
+      keepalive_timeout: '10-15',
+      max_handshake_attempts: '20-30',
+    }),
+    [
+      'Jc = 4',
+      'S1 = 12',
+      'S2 = 12',
+      'S3 = 12',
+      'S4 = 12',
+      'HeaderProtectionKey = header-key',
+      'ContentPaddingAddition = 0',
+      'RekeyAfterTime = 120-180',
+      'RekeyTimeout = 2-4',
+      'RejectAfterTime = 180-240',
+      'KeepaliveTimeout = 10-15',
+      'MaxHandshakeAttempts = 20-30',
+      '',
+    ].join('\n'),
+  );
+}
 
 {
   assertEqual(devicePushTokenPath, '/v1/vpn/push-token');

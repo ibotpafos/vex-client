@@ -76,6 +76,8 @@ export default function appConfig({ config }: ConfigContext): ExpoConfig {
       ],
     },
     plugins: [
+      'expo-status-bar',
+      'expo-web-browser',
       'expo-secure-store',
       [
         'expo-local-authentication',

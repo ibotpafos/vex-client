@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AppInstaller
+    xmlns="http://schemas.microsoft.com/appx/appinstaller/2021"
+    Version="__APPINSTALLER_VERSION__"
+    Uri="__APPINSTALLER_URI__">
+    <MainPackage
+        Name="__PACKAGE_NAME__"
+        Publisher="__PUBLISHER__"
+        Version="__PACKAGE_VERSION__"
+        ProcessorArchitecture="__ARCHITECTURE__"
+        Uri="__PACKAGE_URI__" />
+    <!-- The signed in-app updater owns automatic checks because every release
+         must provision the matching privileged VPN service through the verified
+         elevated bootstrap. Raw App Installer package-only updates are unsafe. -->
+</AppInstaller>

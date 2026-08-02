@@ -1,0 +1,56 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RootNamespace>Vex.Windows.App</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>..\..\..\src-tauri\icons\icon.ico</ApplicationIcon>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Platforms>x64;arm64</Platforms>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <UseWinUI>true</UseWinUI>
+    <WindowsPackageType>None</WindowsPackageType>
+    <EnableMsixTooling>true</EnableMsixTooling>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <SelfContained>true</SelfContained>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
+    <Version>0.1.74</Version>
+    <AssemblyVersion>0.1.74.0</AssemblyVersion>
+    <FileVersion>0.1.74.74</FileVersion>
+    <InformationalVersion>0.1.74+build.74</InformationalVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.2.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App.WindowsForms" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Vex.Windows.Core/Vex.Windows.Core.csproj" />
+    <ProjectReference Include="../Vex.Windows.Client/Vex.Windows.Client.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="Assets\*.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Assets\country-silhouettes.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Assets\flags\*.svg">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\..\..\src-tauri\icons\icon.ico">
+      <Link>Assets\Vex.ico</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+</Project>

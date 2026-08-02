@@ -559,6 +559,7 @@ struct ManagedVpnProfile: Codable, Equatable {
     var bypassDomains: [String]?
     var routingPolicyVersion: String?
     var amnezia: ManagedVpnAmnezia?
+    var amneziaVersion: Int?
     var config: String?
 
     enum CodingKeys: String, CodingKey {
@@ -579,6 +580,7 @@ struct ManagedVpnProfile: Codable, Equatable {
         case bypassDomains = "bypass_domains"
         case routingPolicyVersion = "routing_policy_version"
         case amnezia
+        case amneziaVersion = "amnezia_version"
         case config
     }
 }
@@ -600,6 +602,25 @@ struct ManagedVpnAmnezia: Codable, Equatable {
     var i3: String?
     var i4: String?
     var i5: String?
+    var headerProtectionKey: String?
+    var contentPaddingAddition: String?
+    var rekeyAfterTime: String?
+    var rekeyTimeout: String?
+    var rejectAfterTime: String?
+    var keepaliveTimeout: String?
+    var maxHandshakeAttempts: String?
+
+    enum CodingKeys: String, CodingKey {
+        case jc, jmin, jmax, s1, s2, s3, s4
+        case h1, h2, h3, h4, i1, i2, i3, i4, i5
+        case headerProtectionKey = "header_protection_key"
+        case contentPaddingAddition = "content_padding_addition"
+        case rekeyAfterTime = "rekey_after_time"
+        case rekeyTimeout = "rekey_timeout"
+        case rejectAfterTime = "reject_after_time"
+        case keepaliveTimeout = "keepalive_timeout"
+        case maxHandshakeAttempts = "max_handshake_attempts"
+    }
 }
 
 struct WireGuardKeyPair: Codable, Equatable {

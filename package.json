@@ -4,48 +4,48 @@
   "private": true,
   "main": "expo-router/entry",
   "dependencies": {
-    "@expo/ui": "~56.0.18",
-    "@sentry/react-native": "^8.14.0",
-    "@tanstack/react-query": "^5.101.0",
+    "@expo/ui": "~57.0.8",
+    "@sentry/react-native": "^8.21.0",
+    "@tanstack/react-query": "^5.101.4",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-deep-link": "^2.4.9",
     "@tauri-apps/plugin-http": "^2.5.9",
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-updater": "^2.10.1",
     "clsx": "^2.1.1",
-    "expo": "~56.0.12",
-    "expo-application": "~56.0.3",
-    "expo-constants": "~56.0.18",
-    "expo-crypto": "~56.0.4",
-    "expo-dev-client": "~56.0.20",
-    "expo-haptics": "~56.0.3",
-    "expo-linking": "~56.0.14",
-    "expo-local-authentication": "~56.0.4",
-    "expo-notifications": "~56.0.18",
-    "expo-router": "~56.2.11",
-    "expo-secure-store": "~56.0.4",
-    "expo-splash-screen": "~56.0.10",
-    "expo-status-bar": "~56.0.4",
-    "expo-updates": "~56.0.19",
-    "expo-web-browser": "~56.0.5",
-    "lucide-react-native": "^1.18.0",
+    "expo": "^57.0.9",
+    "expo-application": "~57.0.2",
+    "expo-constants": "~57.0.8",
+    "expo-crypto": "~57.0.1",
+    "expo-dev-client": "~57.0.10",
+    "expo-haptics": "~57.0.1",
+    "expo-linking": "~57.0.4",
+    "expo-local-authentication": "~57.0.2",
+    "expo-notifications": "~57.0.8",
+    "expo-router": "~57.0.9",
+    "expo-secure-store": "~57.0.1",
+    "expo-splash-screen": "~57.0.5",
+    "expo-status-bar": "~57.0.1",
+    "expo-updates": "~57.0.11",
+    "expo-web-browser": "~57.0.2",
+    "lucide-react-native": "^1.28.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",
-    "react-native": "0.85.3",
-    "react-native-gesture-handler": "~2.31.1",
+    "react-native": "0.86.2",
+    "react-native-gesture-handler": "~2.32.0",
     "react-native-safe-area-context": "~5.7.0",
-    "react-native-screens": "4.25.2",
+    "react-native-screens": "~4.26.0",
     "react-native-svg": "15.15.4",
     "react-native-web": "^0.21.2",
-    "react-native-worklets": "0.8.3"
+    "react-native-worklets": "0.10.1"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",
-    "@types/react": "~19.2.17",
-    "eoas": "^2.3.19",
-    "eslint": "^9.39.4",
-    "eslint-config-expo": "^56.0.4",
-    "tsx": "^4.22.4",
+    "@types/react": "^19.2.18",
+    "eoas": "^3.1.1",
+    "eslint": "^9.39.5",
+    "eslint-config-expo": "~57.0.1",
+    "tsx": "^4.23.4",
     "typescript": "~6.0.3"
   },
   "scripts": {
@@ -88,6 +88,15 @@
     "native:macos:deploy-release": "bash scripts/release_native_macos_autonomous.sh",
     "native:macos:internal-release": "bash scripts/build_native_macos_internal_release.sh",
     "native:macos:preflight": "bash scripts/native_macos_production_preflight.sh",
+    "native:windows:build": "dotnet build native-windows/src/Vex.Windows.App/Vex.Windows.App.csproj -c Release -r win-x64",
+    "native:windows:build:arm64": "dotnet build native-windows/src/Vex.Windows.App/Vex.Windows.App.csproj -c Release -r win-arm64",
+    "native:windows:service:build": "dotnet build native-windows/src/Vex.Windows.Service/Vex.Windows.Service.csproj -c Release -r win-x64",
+    "native:windows:service:build:arm64": "dotnet build native-windows/src/Vex.Windows.Service/Vex.Windows.Service.csproj -c Release -r win-arm64",
+    "native:windows:core:test": "dotnet run --project native-windows/tests/Vex.Windows.Core.Tests/Vex.Windows.Core.Tests.csproj",
+    "native:windows:mac-preflight": "bash scripts/native_windows_macos_preflight.sh",
+    "native:windows:package": "pwsh -ExecutionPolicy Bypass -File native-windows/packaging/package-native-windows.ps1 -Architecture x64",
+    "native:windows:package:arm64": "pwsh -ExecutionPolicy Bypass -File native-windows/packaging/package-native-windows.ps1 -Architecture arm64",
+    "native:windows:publish": "pwsh -ExecutionPolicy Bypass -File native-windows/packaging/publish-native-windows.ps1",
     "desktop:web-bundle": "bash scripts/build_desktop_web_bundle.sh",
     "desktop:storage-smoke": "bash scripts/macos_keychain_sensitive_storage_smoke.sh",
     "desktop:launch-smoke": "npm run native:macos:preflight",
@@ -117,7 +126,13 @@
   },
   "overrides": {
     "uuid": "^11.1.1",
-    "@expo/fingerprint": "0.19.4"
+    "@expo/fingerprint": "0.19.4",
+    "@expo/plist": {
+      "@xmldom/xmldom": "0.8.13"
+    },
+    "file-type": "^21.3.2",
+    "joi": "^17.13.4",
+    "tar": "^7.5.22"
   },
   "expo": {
     "autolinking": {
@@ -132,8 +147,7 @@
     },
     "install": {
       "exclude": [
-        "@sentry/react-native",
-        "react-native-worklets"
+        "@sentry/react-native"
       ]
     }
   }

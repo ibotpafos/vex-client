@@ -1,25 +1,24 @@
 import { StatusBar } from 'expo-status-bar';
 import { router } from 'expo-router';
-import { Settings } from 'lucide-react-native';
+import { Power, Settings } from 'lucide-react-native';
 import React, { useState } from 'react';
-import { Animated, Platform, View, Text } from 'react-native';
+import { Animated, FlatList, Platform, Text, useWindowDimensions, View } from 'react-native';
 
 import { HomeNativeHeader } from '@/components/home-native-header';
 import { MobileUpdateNoticeBanner, UpdateCenterButton } from '@/components/update-center';
 import { useRenderProfilerMark } from '@/debug/render-profiler';
 import { playSelectionHaptic } from '@/native/haptics';
 import { VexNativeActivityIndicator } from '@/ui/native-activity-indicator';
+import { vexTheme } from '@/ui/vex-theme';
 import { VexScreen, vexSharedStyles, VexPressable } from '@/ui/vex-ui';
 import { useVpnConnectionContext } from '@/vpn/vpn-connection-context';
 import type { VpnLocation } from '@/api/vexApi';
 
 import { ServerChip } from '../components/server-chip';
-import { ServerPickerContent } from '../components/server-picker-modal';
+import { ServerPickerModal } from '../components/server-picker-modal';
 import { TrafficStats } from '../components/traffic-stats';
 import { isTauriRuntime, type ConnectionPhase } from './home-screen-helpers';
 import { styles } from './home-screen.styles';
-
-const vexLogo = require('../../assets/vex-logo-header.png');
 
 export default function App() {
   useRenderProfilerMark('HomeScreen');
@@ -36,7 +35,6 @@ export default function App() {
     pulseProgress,
     spinProgress,
     activeProfile,
-    accountTierLabel,
     selectedLocation,
     selectedLatencyText,
     powerButtonDisabled,
@@ -53,28 +51,8 @@ export default function App() {
     latencyText: string;
     locations: VpnLocation[];
   } | null>(null);
+  const { width: viewportWidth } = useWindowDimensions();
   const reduceMotionVisuals = isTauriRuntime() || Platform.OS === 'android';
-
-  if (isServerPickerVisible) {
-    return (
-      <ServerPickerContent
-        isVpnBusy={isVpnBusy}
-        locations={serverPickerSnapshot?.locations ?? availableLocations}
-        selectedLatencyText={serverPickerSnapshot?.latencyText ?? selectedLatencyText}
-        selectionMode={serverSelectionMode}
-        selectedLocationId={selectedLocationId}
-        onAutoSelect={() => {
-          setIsServerPickerVisible(false);
-          void handleAutoServerSelectionPress(false);
-        }}
-        onClose={() => setIsServerPickerVisible(false)}
-        onSelect={(locationId) => {
-          setIsServerPickerVisible(false);
-          void handleLocationPress(locationId, false);
-        }}
-      />
-    );
-  }
 
   const powerButtonText = connectionPhase === 'switching'
     ? 'Переключение'
@@ -107,14 +85,17 @@ export default function App() {
       : connectionPhase === 'disconnecting'
         ? 'Завершаем'
         : 'VPN выключен';
+  const locationPreviews = [
+    selectedLocation,
+    ...availableLocations.filter((location) => location.id !== selectedLocation?.id),
+  ].filter((location): location is VpnLocation => Boolean(location)).slice(0, 2);
+  const carouselWidth = Math.min(viewportWidth - (viewportWidth <= 360 ? 16 : 24), 430);
+  const carouselCardWidth = carouselWidth - 44;
 
   return (
-    <VexScreen contentStyle={styles.shell} backgroundMapEnabled={Platform.OS !== 'android'}>
+    <VexScreen contentStyle={styles.shell}>
       <StatusBar style="light" />
       <HomeNativeHeader
-        logoSource={vexLogo}
-        planLabel={accountTierLabel}
-        showPlan={Boolean(session && accountTierLabel)}
         actions={(
           <View style={styles.topActions}>
             <UpdateCenterButton
@@ -159,20 +140,60 @@ export default function App() {
             reduceMotionVisuals={reduceMotionVisuals}
           />
 
-          <ServerChip
-            disabled={isVpnBusy}
-            isAutoMode={serverSelectionMode === 'auto'}
-            latencyText={selectedLatencyText}
-            location={selectedLocation}
-            onPress={(visibleLatencyText) => {
-              setServerPickerSnapshot({
-                latencyText: visibleLatencyText,
-                locations: availableLocations.map((location) => ({ ...location })),
-              });
-              setIsServerPickerVisible(true);
-            }}
-          />
           <TrafficStats />
+
+          <View style={styles.locationsSection}>
+            <View style={styles.locationsHeader}>
+              <Text style={styles.locationsTitle}>Локации</Text>
+              <VexPressable
+                disabled={isVpnBusy}
+                onPress={() => {
+                  setServerPickerSnapshot({
+                    latencyText: selectedLatencyText,
+                    locations: availableLocations.map((location) => ({ ...location })),
+                  });
+                  setIsServerPickerVisible(true);
+                }}
+                style={styles.locationsAllButton}
+                title="Все локации"
+                accessibilityLabel="Открыть все локации"
+              >
+                <Text style={styles.locationsAllText}>Все</Text>
+              </VexPressable>
+            </View>
+            <FlatList
+              data={locationPreviews}
+              decelerationRate="fast"
+              horizontal
+              keyExtractor={(location) => location.id}
+              renderItem={({ item: location }) => {
+                const isSelected = location.id === selectedLocation?.id;
+                return (
+                  <View style={[styles.locationCarouselItem, { width: carouselCardWidth }]}>
+                  <ServerChip
+                    disabled={isVpnBusy}
+                    isAutoMode={isSelected && serverSelectionMode === 'auto'}
+                    isSelected={isSelected}
+                    key={location.id}
+                    latencyText={isSelected ? selectedLatencyText : `${Math.max(0, Math.round(location.latencyMs ?? 0))} мс`}
+                    location={location}
+                    onPress={(visibleLatencyText) => {
+                      setServerPickerSnapshot({
+                        latencyText: visibleLatencyText,
+                        locations: availableLocations.map((entry) => ({ ...entry })),
+                      });
+                      setIsServerPickerVisible(true);
+                    }}
+                  />
+                  </View>
+                );
+              }}
+              showsHorizontalScrollIndicator={false}
+              snapToAlignment="start"
+              snapToInterval={carouselCardWidth + vexTheme.spacing.sm}
+              style={styles.locationCarousel}
+            />
+          </View>
 
           <View pointerEvents="none" style={styles.protocolSpacer} />
           {activeProfile?.rotationRequired ? (
@@ -192,6 +213,23 @@ export default function App() {
 
         </View>
       )}
+      <ServerPickerModal
+        isVpnBusy={isVpnBusy}
+        locations={serverPickerSnapshot?.locations ?? availableLocations}
+        selectedLatencyText={serverPickerSnapshot?.latencyText ?? selectedLatencyText}
+        selectionMode={serverSelectionMode}
+        selectedLocationId={selectedLocationId}
+        visible={isServerPickerVisible}
+        onAutoSelect={() => {
+          setIsServerPickerVisible(false);
+          void handleAutoServerSelectionPress(false);
+        }}
+        onClose={() => setIsServerPickerVisible(false)}
+        onSelect={(locationId) => {
+          setIsServerPickerVisible(false);
+          void handleLocationPress(locationId, false);
+        }}
+      />
     </VexScreen>
   );
 }
@@ -253,6 +291,8 @@ const PowerHero = React.memo(function PowerHero({
   return (
     <View style={styles.hero}>
       <View style={styles.powerCluster}>
+        <View pointerEvents="none" style={styles.heroRingFar} />
+        <View pointerEvents="none" style={styles.heroRingMid} />
         <Animated.View
           pointerEvents="none"
           style={[styles.heroGlow, glowStyle]}
@@ -281,11 +321,12 @@ const PowerHero = React.memo(function PowerHero({
                 style={[styles.powerOrbit, { opacity: orbitOpacity, transform: [{ rotate: orbitRotation }] }]}
               />
             ) : null}
-            <Text numberOfLines={1} adjustsFontSizeToFit style={styles.powerText}>{powerButtonText}</Text>
-            <Text style={styles.powerSubtext}>{powerSubtext}</Text>
+            <Power color="#B9FBFF" size={58} strokeWidth={1.75} />
           </VexPressable>
         </Animated.View>
       </View>
+      <Text numberOfLines={1} adjustsFontSizeToFit style={styles.powerText}>{powerButtonText}</Text>
+      <Text style={styles.powerSubtext}>{powerSubtext}</Text>
     </View>
   );
 });

@@ -21,7 +21,6 @@ class VexLeakBlockerService : VpnService() {
   private var drainThread: Thread? = null
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-    startForeground(NOTIFICATION_ID, blockerNotification())
     if (intent?.action == ACTION_STOP) {
       stopBlocking()
       stopForeground(STOP_FOREGROUND_REMOVE)
@@ -29,6 +28,7 @@ class VexLeakBlockerService : VpnService() {
       return START_NOT_STICKY
     }
 
+    startForeground(NOTIFICATION_ID, blockerNotification())
     startBlocking(intent?.getStringArrayListExtra(EXTRA_ALLOWED_APPLICATIONS).orEmpty())
     return START_STICKY
   }
@@ -158,8 +158,7 @@ class VexLeakBlockerService : VpnService() {
     }
 
     fun stop(context: Context) {
-      val intent = Intent(context, VexLeakBlockerService::class.java).setAction(ACTION_STOP)
-      ContextCompat.startForegroundService(context, intent)
+      context.stopService(Intent(context, VexLeakBlockerService::class.java))
     }
 
     suspend fun startAndAwait(

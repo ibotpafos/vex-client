@@ -1,0 +1,10 @@
+{
+  "schema": "vex.profile-signing-keyring.v1",
+  "keys": [
+    {
+      "key_id": "native-profile-p256-v1",
+      "algorithm": "ECDSA_P256_SHA256_DER",
+      "subject_public_key_info_base64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEzELB5rvWLu5lFgES9zkJgs59N97/S2Xi1+11/v1ZpTAyyEb4J5gG3Vq7O+D/ggPjRgT7TadNS074Sc4Rkx8tpg=="
+    }
+  ]
+}

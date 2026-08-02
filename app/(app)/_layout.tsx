@@ -1,6 +1,8 @@
 import { Stack } from 'expo-router';
 import { Platform } from 'react-native';
 
+import { vexTheme } from '@/ui/vex-theme';
+
 export const unstable_settings = {
   anchor: '(tabs)',
 };
@@ -15,7 +17,7 @@ export default function AppLayout() {
         <Stack.Screen
           name="server-picker"
           options={{
-            contentStyle: { backgroundColor: '#071113' },
+            contentStyle: { backgroundColor: vexTheme.colors.background },
             headerShown: false,
             presentation: Platform.OS === 'ios' ? 'formSheet' : 'modal',
             ...(Platform.OS === 'ios'
@@ -31,7 +33,7 @@ export default function AppLayout() {
         <Stack.Screen
           name="update-center"
           options={{
-            contentStyle: { backgroundColor: '#071113' },
+            contentStyle: { backgroundColor: vexTheme.colors.background },
             headerShown: false,
             presentation: Platform.OS === 'ios' ? 'formSheet' : 'modal',
             ...(Platform.OS === 'ios'
@@ -47,7 +49,7 @@ export default function AppLayout() {
         <Stack.Screen
           name="subscription"
           options={{
-            contentStyle: { backgroundColor: Platform.OS === 'ios' ? 'transparent' : '#071113' },
+            contentStyle: { backgroundColor: Platform.OS === 'ios' ? 'transparent' : vexTheme.colors.background },
             headerShown: false,
             presentation: Platform.OS === 'ios' ? 'formSheet' : 'modal',
             ...(Platform.OS === 'ios'

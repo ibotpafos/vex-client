@@ -6,7 +6,7 @@ export default function AppTabsLayout() {
   return (
     <NativeTabs
       backBehavior="history"
-      backgroundColor={vexTheme.colors.backgroundRaised}
+      backgroundColor={vexTheme.colors.surfaceMuted}
       badgeBackgroundColor={vexTheme.colors.accent}
       badgeTextColor={vexTheme.colors.accentInk}
       iconColor={{ default: vexTheme.colors.textMuted, selected: vexTheme.colors.accentInk }}

@@ -26,6 +26,7 @@ import {
   type RegisterDevicePushTokenResultDTO,
   type RegisterNativeDeviceResultDTO,
 } from './dto';
+import { managedProfileAmneziaConfig } from '../vpn/amneziaConfig';
 
 const mobileProtocol = 'amneziawg';
 
@@ -513,41 +514,6 @@ ${presharedKey ? `PresharedKey = ${presharedKey}\n` : ''}Endpoint = ${endpoint}
 AllowedIPs = ${(allowedIps?.length ? allowedIps : ['0.0.0.0/0']).join(', ')}
 PersistentKeepalive = 25
 `;
-}
-
-export function managedProfileAmneziaConfig(amnezia: NativeVPNProfileDTO['amnezia']): string {
-  if (!amnezia) {
-    return '';
-  }
-  const lines: string[] = [];
-  const addNumber = (key: string, value?: number) => {
-    if (typeof value === 'number' && value !== 0) {
-      lines.push(`${key} = ${value}`);
-    }
-  };
-  const addString = (key: string, value?: string) => {
-    const normalized = value?.trim();
-    if (normalized) {
-      lines.push(`${key} = ${normalized}`);
-    }
-  };
-  addNumber('Jc', amnezia.jc);
-  addNumber('Jmin', amnezia.jmin);
-  addNumber('Jmax', amnezia.jmax);
-  addNumber('S1', amnezia.s1);
-  addNumber('S2', amnezia.s2);
-  addNumber('S3', amnezia.s3);
-  addNumber('S4', amnezia.s4);
-  addString('H1', amnezia.h1);
-  addString('H2', amnezia.h2);
-  addString('H3', amnezia.h3);
-  addString('H4', amnezia.h4);
-  addString('I1', amnezia.i1);
-  addString('I2', amnezia.i2);
-  addString('I3', amnezia.i3);
-  addString('I4', amnezia.i4);
-  addString('I5', amnezia.i5);
-  return lines.length ? `${lines.join('\n')}\n` : '';
 }
 
 export function managedProfileEndpoint(profile: NativeVPNProfileDTO): string | undefined {

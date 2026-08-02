@@ -41,3 +41,9 @@ signing-backups/
 
 # Local Git worktrees
 .worktrees/
+
+# Native Windows local build outputs
+native-windows/**/bin/
+native-windows/**/obj/
+native-windows/.build/
+.codex-tmp/

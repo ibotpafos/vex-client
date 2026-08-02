@@ -527,7 +527,7 @@ function subscriptionStatusCopy(input: {
 
 const styles = StyleSheet.create({
   screen: {
-    backgroundColor: '#020A0B',
+    backgroundColor: 'transparent',
     flex: 1,
   },
   embeddedScreen: {
@@ -537,10 +537,10 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   content: {
-    gap: 10,
-    paddingBottom: 16,
-    paddingHorizontal: 12,
-    paddingTop: 8,
+    gap: 14,
+    paddingBottom: 24,
+    paddingHorizontal: 18,
+    paddingTop: 12,
   },
   embeddedContent: {
     alignSelf: 'stretch',
@@ -553,8 +553,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingHorizontal: 12,
-    paddingTop: 42,
+    paddingHorizontal: 18,
+    paddingTop: 4,
   },
   headerCopy: {
     flex: 1,
@@ -576,7 +576,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: 'rgba(255,255,255,0.06)',
     borderColor: 'rgba(255,255,255,0.1)',
-    borderRadius: 14,
+    borderRadius: 24,
     borderWidth: 1,
     height: 40,
     justifyContent: 'center',
@@ -588,8 +588,8 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(96,118,123,0.3)',
     borderRadius: 14,
     borderWidth: 1,
-    gap: 10,
-    padding: 10,
+    gap: 14,
+    padding: 16,
   },
   subscriptionStatusRow: {
     alignItems: 'center',
@@ -600,11 +600,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: 'rgba(34,211,238,0.12)',
     borderColor: 'rgba(34,211,238,0.44)',
-    borderRadius: 11,
+    borderRadius: 14,
     borderWidth: 1,
-    height: 34,
+    height: 42,
     justifyContent: 'center',
-    width: 34,
+    width: 42,
   },
   subscriptionStatusCopy: {
     flex: 1,
@@ -636,7 +636,7 @@ const styles = StyleSheet.create({
   },
   subscriptionActionButton: {
     alignItems: 'center',
-    borderRadius: 12,
+    borderRadius: 16,
     borderWidth: 1,
     flex: 1,
     flexDirection: 'row',
@@ -765,13 +765,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: 'rgba(7,17,19,0.84)',
     borderColor: 'rgba(96,118,123,0.3)',
-    borderRadius: 14,
+    borderRadius: 20,
     borderWidth: 1,
     flexDirection: 'row',
     gap: 8,
-    minHeight: 60,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
+    minHeight: 70,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
   },
   currentPlanOption: {
     backgroundColor: 'rgba(34,211,238,0.14)',

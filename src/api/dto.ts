@@ -104,6 +104,12 @@ export type NativeVPNProfileDTO = {
   bypass_ranges?: string[];
   bypass_domains?: string[];
   routing_policy_version?: string;
+  authorization?: {
+    key_id: string;
+    algorithm: 'ECDSA_P256_SHA256_DER';
+    payload_base64: string;
+    signature_base64: string;
+  };
   amnezia?: {
     jc?: number;
     jmin?: number;
@@ -121,7 +127,15 @@ export type NativeVPNProfileDTO = {
     i3?: string;
     i4?: string;
     i5?: string;
+    header_protection_key?: string;
+    content_padding_addition?: string;
+    rekey_after_time?: string;
+    rekey_timeout?: string;
+    reject_after_time?: string;
+    keepalive_timeout?: string;
+    max_handshake_attempts?: string;
   };
+  amnezia_version?: number;
   config?: string;
 };
 

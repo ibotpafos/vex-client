@@ -14,6 +14,7 @@ import { useSession } from '@/auth/session-context';
 import { loadWithRetry } from '@/auth/sessionLoadRetry';
 import * as SecureStore from '@/native/secureStore';
 import { VexNativeActivityIndicator } from '@/ui/native-activity-indicator';
+import { VexScreen, vexColors } from '@/ui/vex-ui';
 import { resetVpnProfileCache } from '@/vpn/profile';
 
 type CallbackState = 'loading' | 'success' | 'error';
@@ -70,7 +71,7 @@ export default function AuthCallbackScreen() {
   }, [code, queryClient, signIn, state]);
 
   return (
-    <View style={styles.screen}>
+    <VexScreen contentStyle={styles.screen}>
       <StatusBar style="light" />
       <View style={styles.panel}>
         {status === 'loading' ? <VexNativeActivityIndicator color="#22D3EE" size="large" /> : null}
@@ -82,7 +83,7 @@ export default function AuthCallbackScreen() {
           </Pressable>
         ) : null}
       </View>
-    </View>
+    </VexScreen>
   );
 }
 
@@ -96,24 +97,29 @@ function firstParam(value: string | string[] | undefined): string {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#031012',
-    padding: 24,
   },
   panel: {
-    width: '100%',
-    maxWidth: 360,
+    alignSelf: 'stretch',
     alignItems: 'center',
+    backgroundColor: vexColors.card,
+    borderColor: vexColors.line,
+    borderRadius: 28,
+    borderWidth: 1,
     gap: 14,
+    paddingHorizontal: 24,
+    paddingVertical: 28,
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowRadius: 24,
   },
   title: {
-    color: '#F8FAFC',
-    fontSize: 28,
-    fontWeight: '800',
+    color: vexColors.text,
+    fontSize: 30,
+    fontWeight: '900',
   },
   message: {
-    color: '#A7F3F3',
+    color: vexColors.textSoft,
     fontSize: 15,
     lineHeight: 22,
     textAlign: 'center',
@@ -123,8 +129,8 @@ const styles = StyleSheet.create({
     minHeight: 48,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 14,
-    backgroundColor: '#22D3EE',
+    borderRadius: 18,
+    backgroundColor: vexColors.accent,
     paddingHorizontal: 18,
   },
   buttonText: {

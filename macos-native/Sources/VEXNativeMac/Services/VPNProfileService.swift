@@ -369,7 +369,7 @@ struct VPNProfileService {
         Address = \(address)
         DNS = \((dns.isEmpty ? ["1.1.1.1", "8.8.8.8"] : dns).joined(separator: ", "))
         MTU = 1360
-        \(amneziaConfig(profile.amnezia))
+        \(Self.amneziaConfig(profile.amnezia))
 
         [Peer]
         PublicKey = \(serverPublicKey)
@@ -380,7 +380,7 @@ struct VPNProfileService {
         """
     }
 
-    private func amneziaConfig(_ amnezia: ManagedVpnAmnezia?) -> String {
+    static func amneziaConfig(_ amnezia: ManagedVpnAmnezia?) -> String {
         guard let amnezia else { return "" }
         var lines: [String] = []
         addNumber("Jc", amnezia.jc, to: &lines)
@@ -399,6 +399,13 @@ struct VPNProfileService {
         addString("I3", amnezia.i3, to: &lines)
         addString("I4", amnezia.i4, to: &lines)
         addString("I5", amnezia.i5, to: &lines)
+        addString("HeaderProtectionKey", amnezia.headerProtectionKey, to: &lines)
+        addString("ContentPaddingAddition", amnezia.contentPaddingAddition, to: &lines)
+        addString("RekeyAfterTime", amnezia.rekeyAfterTime, to: &lines)
+        addString("RekeyTimeout", amnezia.rekeyTimeout, to: &lines)
+        addString("RejectAfterTime", amnezia.rejectAfterTime, to: &lines)
+        addString("KeepaliveTimeout", amnezia.keepaliveTimeout, to: &lines)
+        addString("MaxHandshakeAttempts", amnezia.maxHandshakeAttempts, to: &lines)
         return lines.isEmpty ? "" : "\(lines.joined(separator: "\n"))\n"
     }
 
@@ -559,13 +566,13 @@ struct VPNProfileService {
         config.contains("[Interface]") && config.contains("[Peer]")
     }
 
-    private func addNumber(_ key: String, _ value: Int?, to lines: inout [String]) {
+    private static func addNumber(_ key: String, _ value: Int?, to lines: inout [String]) {
         if let value, value != 0 {
             lines.append("\(key) = \(value)")
         }
     }
 
-    private func addString(_ key: String, _ value: String?, to lines: inout [String]) {
+    private static func addString(_ key: String, _ value: String?, to lines: inout [String]) {
         let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let normalized, !normalized.isEmpty {
             lines.append("\(key) = \(normalized)")

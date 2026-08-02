@@ -1,10 +1,8 @@
-import React, { useEffect, useState, type PropsWithChildren } from 'react';
-import { ImageBackground, Platform, Pressable, StyleSheet, useWindowDimensions, View, type PressableProps, type StyleProp, type ViewStyle } from 'react-native';
+import React, { type PropsWithChildren } from 'react';
+import { Platform, Pressable, StyleSheet, useWindowDimensions, View, type PressableProps, type StyleProp, type ViewStyle } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { vexTheme } from '@/ui/vex-theme';
-
-const networkMap = require('../../assets/vex-network-map.png');
 
 export const vexMaxContentWidth = 430;
 
@@ -25,31 +23,16 @@ export const vexColors = {
 };
 
 type VexScreenProps = PropsWithChildren<{
-  backgroundMapEnabled?: boolean;
   contentStyle?: ViewStyle;
 }>;
 
-export function VexScreen({ children, contentStyle, backgroundMapEnabled = Platform.OS !== 'android' }: VexScreenProps) {
+export function VexScreen({ children, contentStyle }: VexScreenProps) {
   const { width: viewportWidth } = useWindowDimensions();
   const horizontalInset = viewportWidth <= 360 ? 16 : 24;
   const contentWidth = Math.min(viewportWidth - horizontalInset, vexMaxContentWidth);
-  const [showBackgroundMap, setShowBackgroundMap] = useState(backgroundMapEnabled);
-
-  useEffect(() => {
-    if (showBackgroundMap || !backgroundMapEnabled) {
-      return undefined;
-    }
-    const timer = setTimeout(() => setShowBackgroundMap(true), 700);
-    return () => clearTimeout(timer);
-  }, [backgroundMapEnabled, showBackgroundMap]);
 
   return (
     <View style={vexSharedStyles.screen}>
-      {showBackgroundMap ? (
-        <ImageBackground source={networkMap} resizeMode="cover" style={vexSharedStyles.backgroundMap} imageStyle={vexSharedStyles.backgroundMapImage as any}>
-          <View style={vexSharedStyles.backgroundOverlay} />
-        </ImageBackground>
-      ) : null}
       <SafeAreaView edges={['top', 'bottom']} style={vexSharedStyles.safeLayer}>
         <View style={[vexSharedStyles.shell, { width: contentWidth }, contentStyle]}>
           {children}
@@ -69,43 +52,37 @@ export const vexSharedStyles = StyleSheet.create({
     backgroundColor: 'transparent',
     flex: 1,
   },
-  backgroundMap: {
-    ...StyleSheet.absoluteFill,
-    opacity: 0.2,
-  },
-  backgroundMapImage: {
-    transform: [{ scale: 1.18 }],
-  },
-  backgroundOverlay: {
-    backgroundColor: 'rgba(4,11,13,0.84)',
-    flex: 1,
-  },
   shell: {
     alignSelf: 'center',
     flex: 1,
-    gap: vexTheme.spacing.sm,
-    paddingBottom: vexTheme.spacing.md,
+    gap: vexTheme.spacing.md,
+    paddingBottom: vexTheme.spacing.lg,
     paddingTop: 0,
   },
   topBar: {
     alignItems: 'center',
+    backgroundColor: vexTheme.colors.surface,
+    borderColor: vexTheme.colors.line,
+    borderRadius: vexTheme.radius.lg,
+    borderWidth: 1,
     flexDirection: 'row',
     justifyContent: 'space-between',
-    minHeight: 46,
+    minHeight: 56,
+    paddingHorizontal: 6,
   },
   iconButton: {
     alignItems: 'center',
     backgroundColor: vexTheme.colors.surfaceMuted,
     borderColor: vexTheme.colors.line,
-    borderRadius: vexTheme.radius.md,
+    borderRadius: vexTheme.radius.round,
     borderWidth: 1,
-    height: 44,
+    height: 42,
     justifyContent: 'center',
-    width: 44,
+    width: 42,
   },
   iconButtonSpacer: {
-    height: 44,
-    width: 44,
+    height: 42,
+    width: 42,
   },
   title: {
     color: vexColors.text,
@@ -117,6 +94,9 @@ export const vexSharedStyles = StyleSheet.create({
     borderColor: vexColors.line,
     borderRadius: vexTheme.radius.lg,
     borderWidth: 1,
+    shadowColor: '#000',
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
   },
   primaryButton: {
     alignItems: 'center',

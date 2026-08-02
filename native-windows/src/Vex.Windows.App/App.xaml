@@ -1,0 +1,146 @@
+<Application
+    x:Class="Vex.Windows.App.App"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+            </ResourceDictionary.MergedDictionaries>
+
+            <Color x:Key="VexBackgroundColor">#FF020A0B</Color>
+            <Color x:Key="VexPanelColor">#FF08191D</Color>
+            <Color x:Key="VexPanelStrongColor">#FF071113</Color>
+            <Color x:Key="VexInputColor">#FF020A0B</Color>
+            <Color x:Key="VexCyanColor">#FF22D3EE</Color>
+            <Color x:Key="VexCyanLightColor">#FFB9FBFF</Color>
+            <Color x:Key="VexTextColor">#FFF4FCFD</Color>
+            <Color x:Key="VexSubtextColor">#FFA8D8DE</Color>
+            <Color x:Key="VexSecondaryTextColor">#FFA7B9BD</Color>
+            <Color x:Key="VexMutedColor">#FF8FBEC6</Color>
+            <Color x:Key="VexBorderColor">#FF7EE9F5</Color>
+
+            <SolidColorBrush x:Key="VexBackgroundBrush" Color="{StaticResource VexBackgroundColor}" />
+            <SolidColorBrush x:Key="VexPanelBrush" Color="{StaticResource VexPanelColor}" />
+            <SolidColorBrush x:Key="VexPanelStrongBrush" Color="{StaticResource VexPanelStrongColor}" />
+            <SolidColorBrush x:Key="VexInputBrush" Color="{StaticResource VexInputColor}" />
+            <SolidColorBrush x:Key="VexCyanBrush" Color="{StaticResource VexCyanColor}" />
+            <SolidColorBrush x:Key="VexCyanLightBrush" Color="{StaticResource VexCyanLightColor}" />
+            <SolidColorBrush x:Key="VexTextBrush" Color="{StaticResource VexTextColor}" />
+            <SolidColorBrush x:Key="VexSubtextBrush" Color="{StaticResource VexSubtextColor}" />
+            <SolidColorBrush x:Key="VexSecondaryTextBrush" Color="{StaticResource VexSecondaryTextColor}" />
+            <SolidColorBrush x:Key="VexMutedBrush" Color="{StaticResource VexMutedColor}" />
+            <SolidColorBrush x:Key="VexBorderBrush" Color="{StaticResource VexBorderColor}" />
+            <SolidColorBrush x:Key="SmokeFillColorDefaultBrush" Color="#C9000000" />
+
+            <!-- Keep WinUI interaction states, but match the restrained macOS
+                 sidebar selection instead of the default accent-filled pill. -->
+            <SolidColorBrush x:Key="ToggleButtonBackgroundChecked" Color="#24FFFFFF" />
+            <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPointerOver" Color="#2EFFFFFF" />
+            <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPressed" Color="#1FFFFFFF" />
+            <SolidColorBrush x:Key="ToggleButtonForegroundChecked" Color="{StaticResource VexTextColor}" />
+            <SolidColorBrush x:Key="ToggleButtonForegroundCheckedPointerOver" Color="{StaticResource VexTextColor}" />
+            <SolidColorBrush x:Key="ToggleButtonForegroundCheckedPressed" Color="{StaticResource VexTextColor}" />
+            <SolidColorBrush x:Key="ToggleButtonBorderBrushChecked" Color="#00FFFFFF" />
+            <SolidColorBrush x:Key="ToggleButtonBorderBrushCheckedPointerOver" Color="#00FFFFFF" />
+            <SolidColorBrush x:Key="ToggleButtonBorderBrushCheckedPressed" Color="#00FFFFFF" />
+            <SolidColorBrush x:Key="ToggleButtonBackgroundPointerOver" Color="#14FFFFFF" />
+            <SolidColorBrush x:Key="ToggleButtonBackgroundPressed" Color="#0FFFFFFF" />
+
+            <LinearGradientBrush x:Key="VexDetailBackgroundBrush" StartPoint="0,0" EndPoint="1,1">
+                <GradientStop Color="#FF020A0B" Offset="0" />
+                <GradientStop Color="#FF031216" Offset="0.52" />
+                <GradientStop Color="#FF020A0B" Offset="1" />
+            </LinearGradientBrush>
+
+            <LinearGradientBrush x:Key="VexSidebarBackgroundBrush" StartPoint="0,0" EndPoint="1,1">
+                <GradientStop Color="#1A22D3EE" Offset="0" />
+                <GradientStop Color="#E6071113" Offset="0.42" />
+                <GradientStop Color="#F002090B" Offset="1" />
+            </LinearGradientBrush>
+
+            <Style x:Key="VexPageTitleStyle" TargetType="TextBlock">
+                <Setter Property="FontFamily" Value="Segoe UI Variable Display" />
+                <Setter Property="FontSize" Value="24" />
+                <Setter Property="FontWeight" Value="Black" />
+                <Setter Property="Foreground" Value="{StaticResource VexTextBrush}" />
+            </Style>
+
+            <Style x:Key="VexEyebrowStyle" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="12" />
+                <Setter Property="FontWeight" Value="Black" />
+                <Setter Property="Foreground" Value="{StaticResource VexMutedBrush}" />
+            </Style>
+
+            <Style x:Key="VexGlassButtonStyle" TargetType="Button">
+                <Setter Property="Foreground" Value="{StaticResource VexTextBrush}" />
+                <Setter Property="Background" Value="#12FFFFFF" />
+                <Setter Property="BorderBrush" Value="#1AFFFFFF" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="CornerRadius" Value="10" />
+                <Setter Property="FontWeight" Value="Bold" />
+                <Setter Property="Padding" Value="12,8" />
+                <Setter Property="FocusVisualPrimaryBrush" Value="{StaticResource VexCyanBrush}" />
+                <Setter Property="FocusVisualSecondaryBrush" Value="Transparent" />
+                <Setter Property="FocusVisualPrimaryThickness" Value="2" />
+                <Setter Property="FocusVisualSecondaryThickness" Value="0" />
+            </Style>
+
+            <Style x:Key="VexProminentButtonStyle" TargetType="Button">
+                <Setter Property="Foreground" Value="{StaticResource VexBackgroundBrush}" />
+                <Setter Property="Background" Value="{StaticResource VexCyanBrush}" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="CornerRadius" Value="10" />
+                <Setter Property="FontWeight" Value="Black" />
+                <Setter Property="Padding" Value="12,8" />
+                <Setter Property="FocusVisualPrimaryBrush" Value="{StaticResource VexCyanBrush}" />
+                <Setter Property="FocusVisualSecondaryBrush" Value="Transparent" />
+                <Setter Property="FocusVisualPrimaryThickness" Value="2" />
+                <Setter Property="FocusVisualSecondaryThickness" Value="0" />
+            </Style>
+
+            <Style x:Key="VexQuietButtonStyle" TargetType="Button">
+                <Setter Property="Foreground" Value="{StaticResource VexTextBrush}" />
+                <Setter Property="Background" Value="#0CFFFFFF" />
+                <Setter Property="BorderBrush" Value="#12FFFFFF" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="Padding" Value="10,7" />
+                <Setter Property="FocusVisualPrimaryBrush" Value="{StaticResource VexCyanBrush}" />
+                <Setter Property="FocusVisualSecondaryBrush" Value="Transparent" />
+                <Setter Property="FocusVisualPrimaryThickness" Value="2" />
+                <Setter Property="FocusVisualSecondaryThickness" Value="0" />
+            </Style>
+
+            <Style x:Key="VexDockButtonStyle" TargetType="ToggleButton">
+                <Setter Property="Foreground" Value="{StaticResource VexSubtextBrush}" />
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="CornerRadius" Value="23" />
+                <Setter Property="HorizontalContentAlignment" Value="Center" />
+                <Setter Property="VerticalContentAlignment" Value="Center" />
+                <Setter Property="Padding" Value="0" />
+                <Setter Property="FocusVisualPrimaryBrush" Value="{StaticResource VexCyanBrush}" />
+                <Setter Property="FocusVisualSecondaryBrush" Value="Transparent" />
+                <Setter Property="FocusVisualPrimaryThickness" Value="2" />
+                <Setter Property="FocusVisualSecondaryThickness" Value="0" />
+            </Style>
+
+            <Style x:Key="VexNavigationButtonStyle" TargetType="ToggleButton">
+                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                <Setter Property="Foreground" Value="{StaticResource VexTextBrush}" />
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="CornerRadius" Value="8" />
+                <Setter Property="FontFamily" Value="Segoe UI Variable Text" />
+                <Setter Property="FontSize" Value="13" />
+                <Setter Property="FontWeight" Value="Medium" />
+                <Setter Property="Padding" Value="10,7" />
+                <Setter Property="MinHeight" Value="36" />
+                <Setter Property="FocusVisualPrimaryBrush" Value="{StaticResource VexCyanBrush}" />
+                <Setter Property="FocusVisualSecondaryBrush" Value="Transparent" />
+                <Setter Property="FocusVisualPrimaryThickness" Value="2" />
+                <Setter Property="FocusVisualSecondaryThickness" Value="0" />
+            </Style>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

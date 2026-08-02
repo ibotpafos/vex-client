@@ -1,0 +1,173 @@
+<Page
+    x:Class="Vex.Windows.App.Views.SupportPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid MaxWidth="430" Margin="28,18" HorizontalAlignment="Stretch">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <ScrollViewer
+            Grid.Row="0"
+            Margin="0,0,0,12"
+            VerticalScrollBarVisibility="Auto">
+            <StackPanel Spacing="8">
+                <Grid Margin="2,0,2,4">
+                    <TextBlock
+                        x:Name="SupportStatusText"
+                        VerticalAlignment="Center"
+                        FontSize="11"
+                        FontWeight="SemiBold"
+                        Foreground="{StaticResource VexMutedBrush}"
+                        Text="нужен вход" />
+                    <StackPanel
+                        HorizontalAlignment="Right"
+                        Orientation="Horizontal"
+                        Spacing="8">
+                        <Button
+                            x:Name="RefreshSupportButton"
+                            AutomationProperties.AutomationId="RefreshSupportButton"
+                            AutomationProperties.Name="Обновить поддержку"
+                            Click="OnRefreshClick"
+                            Content="↻"
+                            Style="{StaticResource VexQuietButtonStyle}"
+                            ToolTipService.ToolTip="Обновить поддержку" />
+                        <ProgressRing
+                            x:Name="BusyIndicator"
+                            Width="22"
+                            Height="22"
+                            Foreground="{StaticResource VexCyanBrush}"
+                            IsActive="False"
+                            Visibility="Collapsed" />
+                    </StackPanel>
+                </Grid>
+                <InfoBar
+                    x:Name="SupportNotice"
+                    IsClosable="True"
+                    IsOpen="False"
+                    Title="VEX VPN" />
+
+                <Border
+                    x:Name="SignInRequiredPanel"
+                    Padding="18"
+                    Background="#8008191D"
+                    BorderBrush="#1FFFFFFF"
+                    BorderThickness="1"
+                    CornerRadius="16">
+                    <StackPanel Spacing="7">
+                        <TextBlock
+                            FontSize="17"
+                            FontWeight="Black"
+                            Foreground="{StaticResource VexTextBrush}"
+                            Text="Сначала войдите в аккаунт" />
+                        <TextBlock
+                            Foreground="{StaticResource VexSecondaryTextBrush}"
+                            Text="История обращений и чат доступны после входа на странице «Аккаунт»."
+                            TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+
+                <StackPanel x:Name="ConversationPanel" Spacing="8" Visibility="Collapsed">
+                    <StackPanel
+                        x:Name="TicketSummaryPanel"
+                        Spacing="4"
+                        Visibility="Collapsed">
+                        <TextBlock
+                            x:Name="TicketSubjectText"
+                            FontSize="16"
+                            FontWeight="Black"
+                            Foreground="{StaticResource VexTextBrush}"
+                            Text="Обращение" />
+                        <TextBlock x:Name="TicketMetaText" Foreground="{StaticResource VexMutedBrush}" Text="Статус: —" />
+                        <TextBlock x:Name="TicketUpdatedText" Foreground="{StaticResource VexSecondaryTextBrush}" Text="Последнее обновление: —" />
+                    </StackPanel>
+
+                    <Border
+                        x:Name="EmptyStatePanel"
+                        Padding="16,11"
+                        Background="#2E000000"
+                        BorderBrush="#14FFFFFF"
+                        BorderThickness="1"
+                        CornerRadius="14">
+                        <TextBlock
+                            HorizontalAlignment="Center"
+                            FontSize="12"
+                            FontWeight="SemiBold"
+                            Foreground="{StaticResource VexSecondaryTextBrush}"
+                            Text="Чат пока пуст. Опишите проблему ниже."
+                            TextAlignment="Center"
+                            TextWrapping="Wrap" />
+                    </Border>
+
+                    <ListView
+                        x:Name="MessagesList"
+                        MaxHeight="390"
+                        AutomationProperties.AutomationId="SupportMessagesList"
+                        Background="Transparent"
+                        SelectionMode="None"
+                        Visibility="Collapsed">
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <Border
+                                    Margin="0,0,0,7"
+                                    Padding="12,9"
+                                    Background="#8008191D"
+                                    BorderBrush="{Binding BorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="14">
+                                    <StackPanel Spacing="3">
+                                        <Grid>
+                                            <TextBlock FontWeight="Black" Foreground="{StaticResource VexMutedBrush}" Text="{Binding Sender}" />
+                                            <TextBlock
+                                                HorizontalAlignment="Right"
+                                                FontSize="10"
+                                                Foreground="{StaticResource VexSecondaryTextBrush}"
+                                                Text="{Binding Delivery}" />
+                                        </Grid>
+                                        <TextBlock Foreground="{StaticResource VexTextBrush}" Text="{Binding Body}" TextWrapping="WrapWholeWords" />
+                                        <TextBlock FontSize="10" Foreground="{StaticResource VexSecondaryTextBrush}" Text="{Binding CreatedAt}" />
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+
+        <StackPanel x:Name="ComposerPanel" Grid.Row="1" Spacing="8" Visibility="Collapsed">
+            <TextBox
+                x:Name="SubjectInput"
+                Header="Тема"
+                MaxLength="120"
+                PlaceholderText="Например: Не подключается" />
+            <TextBox
+                x:Name="MessageInput"
+                AcceptsReturn="True"
+                AutomationProperties.AutomationId="SupportMessageInput"
+                Header="Сообщение"
+                MaxLength="4000"
+                MinHeight="92"
+                PlaceholderText="Сообщение..."
+                TextWrapping="Wrap" />
+            <CheckBox
+                x:Name="AttachDiagnosticsCheckBox"
+                AutomationProperties.AutomationId="AttachDiagnosticsCheckBox"
+                Content="Приложить обезличенную диагностику" />
+            <TextBlock
+                x:Name="DraftHintText"
+                FontSize="11"
+                Foreground="{StaticResource VexSecondaryTextBrush}"
+                Text="Сообщение уйдёт в активный тред или создаст новый."
+                TextWrapping="Wrap" />
+            <Button
+                x:Name="SendMessageButton"
+                AutomationProperties.AutomationId="SendSupportMessageButton"
+                Click="OnSendClick"
+                Content="Отправить"
+                HorizontalAlignment="Stretch"
+                Style="{StaticResource VexProminentButtonStyle}" />
+        </StackPanel>
+    </Grid>
+</Page>

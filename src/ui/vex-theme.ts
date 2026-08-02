@@ -1,11 +1,11 @@
 export const vexTheme = {
   colors: {
-    background: '#040B0D',
-    backgroundRaised: '#071214',
-    surface: '#0A171A',
-    surfaceRaised: '#0E1E22',
-    surfaceMuted: '#081316',
-    field: '#071113',
+    background: '#031013',
+    backgroundRaised: '#07191C',
+    surface: 'rgba(5, 22, 25, 0.92)',
+    surfaceRaised: '#0C2428',
+    surfaceMuted: '#06171A',
+    field: '#061417',
     accent: '#43D9E7',
     accentStrong: '#79EFF7',
     accentInk: '#021012',
@@ -14,8 +14,8 @@ export const vexTheme = {
     text: '#F2F8F8',
     textSecondary: '#B8C8CB',
     textMuted: '#7E969B',
-    line: 'rgba(145,177,183,0.18)',
-    lineStrong: 'rgba(145,177,183,0.3)',
+    line: 'rgba(159, 218, 223, 0.16)',
+    lineStrong: 'rgba(159, 218, 223, 0.28)',
     success: '#55D6A9',
     successMuted: 'rgba(85,214,169,0.13)',
     warning: '#F3C969',
@@ -34,10 +34,10 @@ export const vexTheme = {
     xxl: 32,
   },
   radius: {
-    sm: 12,
-    md: 16,
-    lg: 22,
-    xl: 28,
+    sm: 14,
+    md: 18,
+    lg: 24,
+    xl: 30,
     round: 999,
   },
   type: {
@@ -48,4 +48,3 @@ export const vexTheme = {
     display: 30,
   },
 } as const;
-

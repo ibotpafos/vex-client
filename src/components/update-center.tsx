@@ -12,7 +12,7 @@ import { getAppInfo, type AppInfo } from '@/native/appInfo';
 import { playErrorHaptic, playLightImpactHaptic, playSelectionHaptic, playSuccessHaptic } from '@/native/haptics';
 import { isTauriRuntime } from '@/native/tauriPlatform';
 import { VexNativeActivityIndicator } from '@/ui/native-activity-indicator';
-import { vexSharedStyles } from '@/ui/vex-ui';
+import { VexScreen, vexSharedStyles } from '@/ui/vex-ui';
 
 const androidSigningMigrationLandingUrl = 'https://vexguard.app/download';
 
@@ -217,18 +217,20 @@ function UpdateCenterFrame({
   onClose: () => void;
 }) {
   return (
-    <View style={styles.modal}>
-      <View style={styles.modalHeader}>
-        <View>
-          <Text style={styles.eyebrow}>VEX</Text>
-          <Text style={styles.modalTitle}>Обновления</Text>
+    <VexScreen contentStyle={styles.routeShell}>
+      <View style={styles.modal}>
+        <View style={styles.modalHeader}>
+          <View>
+            <Text style={styles.eyebrow}>VEX</Text>
+            <Text style={styles.modalTitle}>Обновления</Text>
+          </View>
+          <Pressable accessibilityLabel="Закрыть центр обновлений" onPress={onClose} style={styles.closeButton}>
+            <X color="#A7B9BD" size={24} strokeWidth={2.5} />
+          </Pressable>
         </View>
-        <Pressable accessibilityLabel="Закрыть центр обновлений" onPress={onClose} style={styles.closeButton}>
-          <X color="#A7B9BD" size={24} strokeWidth={2.5} />
-        </Pressable>
+        {children}
       </View>
-      {children}
-    </View>
+    </VexScreen>
   );
 }
 
@@ -556,16 +558,18 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   modal: {
-    backgroundColor: '#020A0B',
+    backgroundColor: 'transparent',
     flex: 1,
-    paddingHorizontal: 14,
-    paddingTop: Platform.OS === 'android' ? 34 : 46,
+  },
+  routeShell: {
+    paddingHorizontal: 18,
+    paddingTop: Platform.OS === 'android' ? 12 : 20,
   },
   modalHeader: {
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 12,
+    marginBottom: 16,
   },
   eyebrow: {
     color: '#22D3EE',
@@ -597,10 +601,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: 'rgba(8,25,29,0.84)',
     borderColor: 'rgba(34,211,238,0.22)',
-    borderRadius: 8,
+    borderRadius: 26,
     borderWidth: 1,
-    gap: 10,
-    padding: 18,
+    gap: 12,
+    padding: 22,
   },
   heroDanger: {
     borderColor: 'rgba(255,122,122,0.34)',
@@ -632,7 +636,7 @@ const styles = StyleSheet.create({
   section: {
     backgroundColor: 'rgba(7,17,19,0.86)',
     borderColor: 'rgba(96,118,123,0.32)',
-    borderRadius: 8,
+    borderRadius: 22,
     borderWidth: 1,
     overflow: 'hidden',
   },
@@ -672,7 +676,7 @@ const styles = StyleSheet.create({
   notes: {
     backgroundColor: 'rgba(34,211,238,0.08)',
     borderColor: 'rgba(34,211,238,0.16)',
-    borderRadius: 8,
+    borderRadius: 18,
     borderWidth: 1,
     color: '#A7B9BD',
     fontSize: 14,
@@ -693,7 +697,7 @@ const styles = StyleSheet.create({
   secondaryButton: {
     alignItems: 'center',
     borderColor: 'rgba(167,185,189,0.24)',
-    borderRadius: 8,
+    borderRadius: 18,
     borderWidth: 1,
     flex: 1,
     flexDirection: 'row',

@@ -1,0 +1,165 @@
+<Page
+    x:Class="Vex.Windows.App.Views.SettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel
+            MaxWidth="430"
+            Margin="28"
+            HorizontalAlignment="Center"
+            Spacing="14">
+            <StackPanel Margin="0,4,0,0" Spacing="4">
+                <TextBlock
+                    FontSize="12"
+                    FontWeight="SemiBold"
+                    Foreground="{StaticResource VexSecondaryTextBrush}"
+                    Text="Запуск, VPN, безопасность и системная служба."
+                    TextWrapping="Wrap" />
+            </StackPanel>
+
+            <InfoBar
+                x:Name="SettingsNotice"
+                IsClosable="True"
+                IsOpen="False"
+                Title="VEX VPN" />
+
+            <Border
+                Padding="14"
+                Background="#8008191D"
+                BorderBrush="#14FFFFFF"
+                BorderThickness="1"
+                CornerRadius="14">
+                <StackPanel Spacing="10">
+                    <TextBlock FontSize="15" FontWeight="Black" Foreground="{StaticResource VexTextBrush}" Text="Запуск и VPN" />
+                    <ToggleSwitch
+                        x:Name="AutoLaunchToggle"
+                        Header="Запускать вместе с Windows"
+                        OffContent="Автозапуск выключен"
+                        OnContent="VEX откроется после входа"
+                        Toggled="OnAutoLaunchToggled" />
+                    <ToggleSwitch
+                        x:Name="AutoServerToggle"
+                        Header="Автовыбор сервера"
+                        OffContent="Выбран сервер вручную"
+                        OnContent="Ближайший доступный сервер"
+                        Toggled="OnPreferenceToggled" />
+                    <ToggleSwitch
+                        x:Name="SmartRoutingToggle"
+                        Header="Умный режим"
+                        OffContent="Весь трафик через VPN"
+                        OnContent="Локальные сервисы идут напрямую"
+                        Toggled="OnPreferenceToggled" />
+                    <ToggleSwitch
+                        x:Name="AntiLeakToggle"
+                        Header="Anti-leak"
+                        OffContent="Защита выключена"
+                        OnContent="Блокировать утечки при сбоях"
+                        Toggled="OnPreferenceToggled" />
+                    <ToggleSwitch
+                        x:Name="AutoRecoveryToggle"
+                        Header="Автовосстановление"
+                        OffContent="Только ручное подключение"
+                        OnContent="Проверять и поднимать туннель"
+                        Toggled="OnPreferenceToggled" />
+                    <TextBlock x:Name="SingleInstanceText" Text="Один экземпляр приложения: —" TextWrapping="Wrap" />
+                    <TextBlock x:Name="TrayModeText" Text="Работа в области уведомлений: —" TextWrapping="Wrap" />
+                    <TextBlock x:Name="QuitBehaviorText" Text="Поведение при закрытии: —" TextWrapping="Wrap" />
+                </StackPanel>
+            </Border>
+
+            <Border
+                Padding="14"
+                Background="#8008191D"
+                BorderBrush="#14FFFFFF"
+                BorderThickness="1"
+                CornerRadius="14">
+                <StackPanel Spacing="10">
+                    <TextBlock FontSize="15" FontWeight="Black" Foreground="{StaticResource VexTextBrush}" Text="Безопасность и интерфейс" />
+                    <TextBlock x:Name="WindowsHelloText" Text="Windows Hello: —" TextWrapping="Wrap" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button x:Name="UnlockWindowsHelloButton" Click="OnUnlockWindowsHelloClick" Content="Разблокировать" Style="{StaticResource VexProminentButtonStyle}" />
+                        <Button x:Name="EnableWindowsHelloButton" Click="OnEnableWindowsHelloClick" Content="Включить Hello" Style="{StaticResource VexGlassButtonStyle}" />
+                        <Button x:Name="DisableWindowsHelloButton" Click="OnDisableWindowsHelloClick" Content="Отключить Hello" Style="{StaticResource VexGlassButtonStyle}" />
+                    </StackPanel>
+                    <ComboBox
+                        x:Name="LanguagePicker"
+                        Header="Язык интерфейса"
+                        HorizontalAlignment="Stretch"
+                        SelectionChanged="OnLanguageSelectionChanged">
+                        <ComboBoxItem Content="Русский" Tag="ru" />
+                        <ComboBoxItem Content="English" Tag="en" />
+                    </ComboBox>
+                </StackPanel>
+            </Border>
+
+            <Border
+                Padding="14"
+                Background="#8008191D"
+                BorderBrush="#14FFFFFF"
+                BorderThickness="1"
+                CornerRadius="14">
+                <StackPanel Spacing="9">
+                    <TextBlock FontSize="15" FontWeight="Black" Foreground="{StaticResource VexTextBrush}" Text="Устройство и сессия" />
+                    <TextBlock x:Name="AppVersionText" Text="Версия приложения: —" TextWrapping="Wrap" />
+                    <TextBlock x:Name="SessionText" Text="Сессия: —" TextWrapping="Wrap" />
+                    <TextBlock x:Name="InstallationIdText" Text="Installation ID: —" TextWrapping="Wrap" />
+                    <TextBlock x:Name="DeviceIdText" Text="Device ID: —" TextWrapping="Wrap" />
+                    <TextBlock x:Name="LocationIdText" Text="Локация: —" />
+                    <TextBlock x:Name="IdentityEpochText" Text="Epoch ключа: —" />
+                    <TextBlock x:Name="ProfileCacheText" Text="Кэш профиля: —" TextWrapping="Wrap" />
+                    <TextBlock x:Name="ServiceStatusText" Text="Статус службы: —" TextWrapping="Wrap" />
+                    <TextBlock x:Name="LeakProtectionText" Text="Anti-leak: —" TextWrapping="Wrap" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button x:Name="RepairServiceButton" Click="OnRepairServiceClick" Content="Запустить службу" Style="{StaticResource VexProminentButtonStyle}" />
+                        <Button x:Name="RefreshSettingsButton" Click="OnRefreshClick" Content="Обновить статус" Style="{StaticResource VexGlassButtonStyle}" />
+                        <ProgressRing x:Name="BusyIndicator" Width="24" Height="24" Foreground="{StaticResource VexCyanBrush}" IsActive="False" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <Border
+                Padding="14"
+                Background="#8008191D"
+                BorderBrush="#14FFFFFF"
+                BorderThickness="1"
+                CornerRadius="14">
+                <StackPanel Spacing="9">
+                    <TextBlock FontSize="15" FontWeight="Black" Foreground="{StaticResource VexTextBrush}" Text="Центр обновлений" />
+                    <ToggleSwitch
+                        x:Name="AutoUpdatesToggle"
+                        Header="Автоматически проверять обновления"
+                        OffContent="Только ручная проверка"
+                        OnContent="Проверять при запуске и каждые 6 часов"
+                        Toggled="OnAutoUpdatesToggled" />
+                    <TextBlock x:Name="UpdateStatusText" Text="Статус: —" TextWrapping="Wrap" />
+                    <TextBlock x:Name="UpdateVersionText" Text="Доступная версия: —" TextWrapping="Wrap" />
+                    <TextBlock x:Name="UpdateDetailsText" FontSize="11" Foreground="{StaticResource VexSecondaryTextBrush}" Text="Проверяем канал обновлений." TextWrapping="Wrap" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button x:Name="CheckUpdatesButton" Click="OnCheckUpdatesClick" Content="Проверить" Style="{StaticResource VexGlassButtonStyle}" />
+                        <Button x:Name="InstallUpdateButton" Click="OnOpenDownloadsClick" Content="Установить" Style="{StaticResource VexProminentButtonStyle}" />
+                        <Button x:Name="OpenDownloadsButton" Click="OnOpenManualDownloadsClick" Content="Ручная ссылка" Style="{StaticResource VexGlassButtonStyle}" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <Border
+                Padding="14"
+                Background="#8008191D"
+                BorderBrush="#14FFFFFF"
+                BorderThickness="1"
+                CornerRadius="14">
+                <StackPanel Spacing="9">
+                    <TextBlock FontSize="15" FontWeight="Black" Foreground="{StaticResource VexTextBrush}" Text="Диагностика" />
+                    <TextBlock x:Name="AppDataPathText" FontSize="11" Foreground="{StaticResource VexSecondaryTextBrush}" Text="Данные приложения: —" TextWrapping="Wrap" />
+                    <TextBlock x:Name="ServiceDataPathText" FontSize="11" Foreground="{StaticResource VexSecondaryTextBrush}" Text="Данные службы: —" TextWrapping="Wrap" />
+                    <TextBlock FontSize="11" Foreground="{StaticResource VexSecondaryTextBrush}" Text="Копируется только redacted local summary без трафика и секретов." TextWrapping="Wrap" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button x:Name="CopyDiagnosticsButton" Click="OnCopySummaryClick" Content="Скопировать отчёт" Style="{StaticResource VexGlassButtonStyle}" />
+                        <Button Click="OnOpenAppDataClick" Content="Данные приложения" Style="{StaticResource VexGlassButtonStyle}" />
+                        <Button Click="OnOpenServiceDataClick" Content="Данные службы" Style="{StaticResource VexGlassButtonStyle}" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

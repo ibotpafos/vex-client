@@ -1,16 +1,13 @@
-import { Host, HStack, RNHostView, Spacer, Text, VStack } from '@expo/ui/swift-ui';
-import { background, clipShape, font, foregroundStyle, frame, glassEffect, padding } from '@expo/ui/swift-ui/modifiers';
+import { Host, HStack, RNHostView, Spacer, Text } from '@expo/ui/swift-ui';
+import { font, foregroundStyle, frame, glassEffect, padding } from '@expo/ui/swift-ui/modifiers';
 import React, { type ReactElement } from 'react';
-import { Image, StyleSheet, View, type ImageSourcePropType } from 'react-native';
+import { StyleSheet } from 'react-native';
 
 type HomeNativeHeaderProps = {
-  logoSource: ImageSourcePropType;
-  planLabel: string | null;
-  showPlan: boolean;
   actions: ReactElement;
 };
 
-export function HomeNativeHeader({ logoSource, planLabel, showPlan, actions }: HomeNativeHeaderProps) {
+export function HomeNativeHeader({ actions }: HomeNativeHeaderProps) {
   return (
     <Host matchContents={{ vertical: true }} colorScheme="dark" style={styles.host}>
       <HStack
@@ -26,34 +23,17 @@ export function HomeNativeHeader({ logoSource, planLabel, showPlan, actions }: H
           }),
         ]}
       >
-        <RNHostView matchContents>
-          <View style={styles.logoShell}>
-            <Image source={logoSource} resizeMode="contain" style={styles.logo} />
-          </View>
-        </RNHostView>
-        <VStack alignment="leading" spacing={4}>
+        <HStack alignment="center" spacing={8}>
           <Text
             modifiers={[
-              font({ size: 34, weight: 'black', design: 'rounded' }),
+              font({ size: 28, weight: 'black', design: 'rounded' }),
               foregroundStyle('#F4FCFD'),
             ]}
           >
             VEX
           </Text>
-          {showPlan && planLabel ? (
-            <Text
-              modifiers={[
-                font({ size: 13, weight: 'bold', design: 'rounded' }),
-                foregroundStyle('#8BF2FF'),
-                padding({ horizontal: 12, vertical: 5 }),
-                background('#183B40'),
-                clipShape('capsule'),
-              ]}
-            >
-              {planLabel}
-            </Text>
-          ) : null}
-        </VStack>
+          <Text modifiers={[font({ size: 22, weight: 'black' }), foregroundStyle('#43D9E7')]}>•</Text>
+        </HStack>
         <Spacer />
         <RNHostView matchContents>{actions}</RNHostView>
       </HStack>
@@ -64,15 +44,5 @@ export function HomeNativeHeader({ logoSource, planLabel, showPlan, actions }: H
 const styles = StyleSheet.create({
   host: {
     width: '100%',
-  },
-  logoShell: {
-    alignItems: 'center',
-    height: 70,
-    justifyContent: 'center',
-    width: 76,
-  },
-  logo: {
-    height: 64,
-    width: 64,
   },
 });

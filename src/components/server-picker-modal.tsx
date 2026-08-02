@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, ScrollView } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { VexPressable } from '@/ui/vex-ui';
 import { X, RefreshCw, CheckCircle2 } from 'lucide-react-native';
 import type { VpnLocation } from '@/api/vexApi';
@@ -35,20 +35,37 @@ export const ServerPickerModal = React.memo(function ServerPickerModal({
   }
 
   return (
-    <ServerPickerContent
-      isVpnBusy={isVpnBusy}
-      locations={locations}
-      selectedLatencyText={selectedLatencyText}
-      selectionMode={selectionMode}
-      selectedLocationId={selectedLocationId}
-      onAutoSelect={onAutoSelect}
-      onClose={onClose}
-      onSelect={onSelect}
-    />
+    <Modal
+      animationType="slide"
+      onRequestClose={onClose}
+      statusBarTranslucent
+      transparent
+      visible
+    >
+      <View style={drawerStyles.overlay}>
+        <Pressable accessibilityLabel="Закрыть выбор сервера" onPress={onClose} style={drawerStyles.backdrop} />
+        <View style={drawerStyles.sheet}>
+          <View style={drawerStyles.handle} />
+          <ServerPickerContent
+            isVpnBusy={isVpnBusy}
+            locations={locations}
+            selectedLatencyText={selectedLatencyText}
+            selectionMode={selectionMode}
+            selectedLocationId={selectedLocationId}
+            onAutoSelect={onAutoSelect}
+            onClose={onClose}
+            onSelect={onSelect}
+            presentation="drawer"
+          />
+        </View>
+      </View>
+    </Modal>
   );
 });
 
-type ServerPickerContentProps = Omit<ServerPickerModalProps, 'visible'>;
+type ServerPickerContentProps = Omit<ServerPickerModalProps, 'visible'> & {
+  presentation?: 'drawer' | 'screen';
+};
 
 export const ServerPickerContent = React.memo(function ServerPickerContent({
   isVpnBusy,
@@ -59,11 +76,12 @@ export const ServerPickerContent = React.memo(function ServerPickerContent({
   onAutoSelect,
   onClose,
   onSelect,
+  presentation = 'screen',
 }: ServerPickerContentProps) {
   const autoSelected = selectionMode === 'auto';
 
   return (
-    <View style={styles.serverModal}>
+    <View style={[styles.serverModal, presentation === 'drawer' && styles.serverDrawer]}>
       <View style={styles.serverModalHeader}>
         <View>
           <Text style={styles.serverModalEyebrow}>VEX VPN</Text>
@@ -97,6 +115,35 @@ export const ServerPickerContent = React.memo(function ServerPickerContent({
       </ScrollView>
     </View>
   );
+});
+
+const drawerStyles = StyleSheet.create({
+  overlay: {
+    backgroundColor: 'rgba(0, 7, 9, 0.58)',
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  backdrop: {
+    flex: 1,
+  },
+  sheet: {
+    backgroundColor: '#031013',
+    borderColor: 'rgba(159, 218, 223, 0.18)',
+    borderTopLeftRadius: 30,
+    borderTopRightRadius: 30,
+    borderWidth: 1,
+    maxHeight: '76%',
+    minHeight: 340,
+    overflow: 'hidden',
+  },
+  handle: {
+    alignSelf: 'center',
+    backgroundColor: 'rgba(184, 200, 203, 0.38)',
+    borderRadius: 999,
+    height: 4,
+    marginTop: 10,
+    width: 42,
+  },
 });
 
 

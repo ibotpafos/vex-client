@@ -17,6 +17,7 @@ import { RenderProfilerOverlay } from '@/debug/render-profiler';
 import { captureError, initSentry } from '@/observability/sentry';
 import { VexNativeActivityIndicator } from '@/ui/native-activity-indicator';
 import { ToastProvider } from '@/ui/toast';
+import { vexTheme } from '@/ui/vex-theme';
 import { VpnConnectionProvider } from '@/vpn/vpn-connection-context';
 
 initSentry();
@@ -210,7 +211,7 @@ const styles = StyleSheet.create({
   },
   bootScreen: {
     alignItems: 'center',
-    backgroundColor: '#020A0B',
+    backgroundColor: vexTheme.colors.background,
     flex: 1,
     gap: 16,
     justifyContent: 'center',
@@ -227,7 +228,7 @@ const styles = StyleSheet.create({
   },
   errorScreen: {
     alignItems: 'center',
-    backgroundColor: '#020A0B',
+    backgroundColor: vexTheme.colors.background,
     flex: 1,
     gap: 14,
     justifyContent: 'center',
@@ -254,7 +255,7 @@ const styles = StyleSheet.create({
   retryButton: {
     alignItems: 'center',
     backgroundColor: '#22D3EE',
-    borderRadius: 8,
+    borderRadius: vexTheme.radius.md,
     minHeight: 48,
     justifyContent: 'center',
     marginTop: 6,

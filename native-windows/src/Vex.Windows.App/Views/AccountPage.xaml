@@ -1,0 +1,364 @@
+<Page
+    x:Class="Vex.Windows.App.Views.AccountPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel
+            MaxWidth="430"
+            Margin="28"
+            HorizontalAlignment="Center"
+            Spacing="14">
+            <Grid Margin="0,4,0,0">
+                <Border
+                    x:Name="AccountAccessBadge"
+                    Padding="10,6"
+                    HorizontalAlignment="Right"
+                    Background="#14FFFFFF"
+                    CornerRadius="16">
+                    <TextBlock
+                        x:Name="AccountAccessBadgeText"
+                        FontSize="11"
+                        FontWeight="Black"
+                        Foreground="{StaticResource VexSecondaryTextBrush}"
+                        Text="НЕТ" />
+                </Border>
+            </Grid>
+
+            <Border
+                x:Name="AccountSummaryPanel"
+                Padding="14"
+                Background="#8008191D"
+                BorderBrush="#14FFFFFF"
+                BorderThickness="1"
+                CornerRadius="14">
+                <StackPanel Spacing="12">
+                    <Grid>
+                        <StackPanel Spacing="5">
+                            <TextBlock
+                                x:Name="AccountStatus"
+                                FontFamily="Segoe UI Variable Display"
+                                FontSize="22"
+                                FontWeight="Black"
+                                Foreground="{StaticResource VexTextBrush}"
+                                Text="Требуется вход"
+                                TextWrapping="Wrap" />
+                            <TextBlock
+                                x:Name="AuthHintText"
+                                FontSize="12"
+                                FontWeight="SemiBold"
+                                Foreground="{StaticResource VexSecondaryTextBrush}"
+                                Text="Войдите, чтобы зарегистрировать этот компьютер."
+                                TextWrapping="Wrap" />
+                        </StackPanel>
+                        <FontIcon
+                            HorizontalAlignment="Right"
+                            FontSize="22"
+                            Foreground="{StaticResource VexMutedBrush}"
+                            Glyph="&#xE77B;" />
+                    </Grid>
+                    <Rectangle Height="1" Fill="#14FFFFFF" />
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="3">
+                            <TextBlock Style="{StaticResource VexEyebrowStyle}" Text="ТАРИФ" />
+                            <TextBlock x:Name="AccountPlanFact" FontWeight="Black" Foreground="{StaticResource VexTextBrush}" Text="—" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Spacing="3">
+                            <TextBlock Style="{StaticResource VexEyebrowStyle}" Text="СТАТУС" />
+                            <TextBlock x:Name="AccountStatusFact" FontWeight="Black" Foreground="{StaticResource VexTextBrush}" Text="Нет" />
+                        </StackPanel>
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <Border
+                x:Name="BillingPanel"
+                Padding="14"
+                Background="#8008191D"
+                BorderBrush="#14FFFFFF"
+                BorderThickness="1"
+                CornerRadius="14"
+                Visibility="Collapsed">
+                <StackPanel Spacing="10">
+                    <TextBlock
+                        x:Name="BillingTitle"
+                        FontSize="16"
+                        FontWeight="Black"
+                        Foreground="{StaticResource VexTextBrush}"
+                        Text="Подписка" />
+                    <TextBlock
+                        x:Name="BillingSubtitle"
+                        FontSize="12"
+                        FontWeight="SemiBold"
+                        Foreground="{StaticResource VexSecondaryTextBrush}"
+                        Text="Проверяем текущий тариф."
+                        TextWrapping="Wrap" />
+                    <TextBlock x:Name="BillingPlan" Text="Тариф: —" />
+                    <TextBlock x:Name="BillingAccess" Text="Доступ: —" />
+                    <TextBlock x:Name="BillingPeriod" Text="Период: —" />
+                    <TextBlock Style="{StaticResource VexEyebrowStyle}" Text="ВЫБЕРИТЕ ТАРИФ" />
+                    <ComboBox
+                        x:Name="PlanSelector"
+                        AutomationProperties.AutomationId="BillingPlanSelector"
+                        DisplayMemberPath="Display"
+                        HorizontalAlignment="Stretch"
+                        PlaceholderText="Выберите тариф"
+                        SelectionChanged="OnPlanSelectionChanged" />
+                    <TextBlock
+                        x:Name="SelectedPlanHint"
+                        FontSize="11"
+                        Foreground="{StaticResource VexSecondaryTextBrush}"
+                        Text="Выберите тариф перед оплатой."
+                        TextWrapping="Wrap" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button
+                            x:Name="CheckoutButton"
+                            Click="OnCheckoutClick"
+                            Content="Продлить"
+                            Style="{StaticResource VexProminentButtonStyle}" />
+                        <Button
+                            x:Name="RefreshBillingButton"
+                            Click="OnRefreshBillingClick"
+                            Content="Обновить"
+                            Style="{StaticResource VexGlassButtonStyle}" />
+                        <Button
+                            x:Name="PortalButton"
+                            Click="OnPortalClick"
+                            Content="Портал"
+                            Style="{StaticResource VexGlassButtonStyle}" />
+                        <Button
+                            x:Name="CancelSubscriptionButton"
+                            Click="OnCancelSubscriptionClick"
+                            Content="Отменить"
+                            Style="{StaticResource VexGlassButtonStyle}"
+                            Visibility="Collapsed" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <Border
+                x:Name="DeviceUsagePanel"
+                Padding="14"
+                Background="#8008191D"
+                BorderBrush="#14FFFFFF"
+                BorderThickness="1"
+                CornerRadius="14"
+                Visibility="Collapsed">
+                <StackPanel Spacing="10">
+                    <TextBlock
+                        FontSize="16"
+                        FontWeight="Black"
+                        Foreground="{StaticResource VexTextBrush}"
+                        Text="Устройства и трафик" />
+                    <TextBlock
+                        x:Name="DeviceUsageSummary"
+                        FontSize="12"
+                        Foreground="{StaticResource VexSecondaryTextBrush}"
+                        Text="Загружаем устройства."
+                        TextWrapping="Wrap" />
+                    <ListView
+                        x:Name="DeviceUsageList"
+                        MaxHeight="260"
+                        AutomationProperties.AutomationId="DeviceUsageList"
+                        Background="Transparent"
+                        SelectionMode="None">
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <Border
+                                    Margin="0,0,0,7"
+                                    Padding="10"
+                                    Background="#2E000000"
+                                    CornerRadius="12">
+                                    <StackPanel Spacing="3">
+                                        <Grid>
+                                            <TextBlock FontWeight="Black" Foreground="{StaticResource VexTextBrush}" Text="{Binding Name}" />
+                                            <TextBlock HorizontalAlignment="Right" FontSize="11" Foreground="{StaticResource VexMutedBrush}" Text="{Binding Status}" />
+                                        </Grid>
+                                        <TextBlock FontSize="11" Foreground="{StaticResource VexSecondaryTextBrush}" Text="{Binding Meta}" TextWrapping="Wrap" />
+                                        <TextBlock FontSize="11" Foreground="{StaticResource VexSecondaryTextBrush}" Text="{Binding Usage}" />
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                </StackPanel>
+            </Border>
+
+            <Border
+                x:Name="PaymentHistoryPanel"
+                Padding="14"
+                Background="#8008191D"
+                BorderBrush="#14FFFFFF"
+                BorderThickness="1"
+                CornerRadius="14"
+                Visibility="Collapsed">
+                <StackPanel Spacing="10">
+                    <TextBlock
+                        FontSize="16"
+                        FontWeight="Black"
+                        Foreground="{StaticResource VexTextBrush}"
+                        Text="История оплат" />
+                    <TextBlock
+                        x:Name="PaymentHistoryEmpty"
+                        FontSize="12"
+                        Foreground="{StaticResource VexSecondaryTextBrush}"
+                        Text="Оплат пока нет."
+                        TextWrapping="Wrap" />
+                    <ListView
+                        x:Name="PaymentHistoryList"
+                        MaxHeight="300"
+                        AutomationProperties.AutomationId="PaymentHistoryList"
+                        Background="Transparent"
+                        SelectionMode="None"
+                        Visibility="Collapsed">
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <Border
+                                    Margin="0,0,0,7"
+                                    Padding="10"
+                                    Background="#2E000000"
+                                    CornerRadius="12">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Spacing="2">
+                                            <TextBlock FontWeight="Black" Foreground="{StaticResource VexTextBrush}" Text="{Binding Title}" />
+                                            <TextBlock FontSize="11" Foreground="{StaticResource VexSecondaryTextBrush}" Text="{Binding Date}" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" HorizontalAlignment="Right" Spacing="2">
+                                            <TextBlock HorizontalAlignment="Right" FontWeight="Black" Foreground="{StaticResource VexTextBrush}" Text="{Binding Amount}" />
+                                            <TextBlock HorizontalAlignment="Right" FontSize="11" Foreground="{StaticResource VexMutedBrush}" Text="{Binding Status}" />
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                </StackPanel>
+            </Border>
+
+            <Border
+                x:Name="AuthPanel"
+                Padding="14"
+                Background="#B308191D"
+                BorderBrush="#3D22D3EE"
+                BorderThickness="1"
+                CornerRadius="22">
+                <StackPanel Spacing="12">
+                    <TextBlock
+                        HorizontalAlignment="Center"
+                        FontSize="25"
+                        FontWeight="Black"
+                        Foreground="{StaticResource VexTextBrush}"
+                        Text="Вход в VEX" />
+                    <TextBlock
+                        HorizontalAlignment="Center"
+                        FontSize="13"
+                        FontWeight="Bold"
+                        Foreground="{StaticResource VexSecondaryTextBrush}"
+                        Text="Продолжите в браузере." />
+
+                    <Button
+                        x:Name="UnlockSessionButton"
+                        Click="OnUnlockSessionClick"
+                        Content="Открыть сохраненную сессию"
+                        HorizontalAlignment="Stretch"
+                        Style="{StaticResource VexProminentButtonStyle}"
+                        Visibility="Collapsed" />
+                    <Button
+                        x:Name="WebsiteSignInButton"
+                        AutomationProperties.AutomationId="WebsiteSignInButton"
+                        Click="OnWebsiteSignInClick"
+                        Content="Войти через сайт"
+                        HorizontalAlignment="Stretch"
+                        Style="{StaticResource VexProminentButtonStyle}" />
+                    <Button
+                        x:Name="WebsiteRegisterButton"
+                        Click="OnWebsiteRegisterClick"
+                        Content="Зарегистрироваться"
+                        HorizontalAlignment="Stretch"
+                        Style="{StaticResource VexGlassButtonStyle}" />
+                    <Button
+                        x:Name="CancelWebsiteAuthButton"
+                        Click="OnCancelWebsiteAuthClick"
+                        Content="Отменить вход на сайте"
+                        HorizontalAlignment="Stretch"
+                        Style="{StaticResource VexGlassButtonStyle}"
+                        Visibility="Collapsed" />
+
+                    <Rectangle Height="1" Fill="#14FFFFFF" />
+                    <TextBlock
+                        FontSize="11"
+                        FontWeight="Black"
+                        Foreground="{StaticResource VexMutedBrush}"
+                        Text="ВХОД ПО EMAIL" />
+                    <TextBox
+                        x:Name="EmailInput"
+                        Header="Email"
+                        InputScope="EmailSmtpAddress"
+                        PlaceholderText="name@example.com" />
+                    <PasswordBox
+                        x:Name="PasswordInput"
+                        Header="Пароль"
+                        PasswordRevealMode="Peek" />
+                    <TextBox
+                        x:Name="EmailOtpCodeInput"
+                        Header="Код из письма"
+                        InputScope="Number"
+                        MaxLength="6"
+                        PlaceholderText="123456"
+                        Visibility="Collapsed" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button
+                            x:Name="SignInButton"
+                            Click="OnSignInClick"
+                            Content="Войти"
+                            Style="{StaticResource VexGlassButtonStyle}" />
+                        <Button
+                            x:Name="RequestOtpButton"
+                            Click="OnRequestOtpClick"
+                            Content="Получить код"
+                            Style="{StaticResource VexGlassButtonStyle}" />
+                        <Button
+                            x:Name="ConfirmOtpButton"
+                            Click="OnConfirmOtpClick"
+                            Content="Войти по коду"
+                            Style="{StaticResource VexProminentButtonStyle}"
+                            Visibility="Collapsed" />
+                        <Button
+                            x:Name="ResendOtpButton"
+                            Click="OnRequestOtpClick"
+                            Content="Новый код"
+                            Style="{StaticResource VexGlassButtonStyle}"
+                            Visibility="Collapsed" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <StackPanel Orientation="Horizontal" Spacing="10">
+                <Button
+                    x:Name="SignOutButton"
+                    Click="OnSignOutClick"
+                    Content="Выйти"
+                    Style="{StaticResource VexGlassButtonStyle}"
+                    Visibility="Collapsed" />
+                <ProgressRing
+                    x:Name="BusyIndicator"
+                    Width="24"
+                    Height="24"
+                    Foreground="{StaticResource VexCyanBrush}"
+                    IsActive="False" />
+            </StackPanel>
+            <InfoBar
+                x:Name="AccountNotice"
+                IsClosable="True"
+                IsOpen="False"
+                Title="VEX VPN" />
+        </StackPanel>
+    </ScrollViewer>
+</Page>

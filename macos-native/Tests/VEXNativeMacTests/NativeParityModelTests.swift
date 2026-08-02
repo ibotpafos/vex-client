@@ -63,6 +63,40 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertEqual(profile.bypassDomains, ["example.ru"])
     }
 
+    func testManagedProfilePreservesAWG3Contract() throws {
+        let data = """
+        {
+          "amnezia_version": 3,
+          "amnezia": {
+            "jc": 4,
+            "s1": 12,
+            "s2": 12,
+            "s3": 12,
+            "s4": 12,
+            "header_protection_key": "header-key",
+            "content_padding_addition": "0",
+            "rekey_after_time": "120-180",
+            "rekey_timeout": "2-4",
+            "reject_after_time": "180-240",
+            "keepalive_timeout": "10-15",
+            "max_handshake_attempts": "20-30"
+          }
+        }
+        """.data(using: .utf8)!
+
+        let profile = try JSONDecoder().decode(ManagedVpnProfile.self, from: data)
+        let config = VPNProfileService.amneziaConfig(profile.amnezia)
+
+        XCTAssertEqual(profile.amneziaVersion, 3)
+        XCTAssertTrue(config.contains("HeaderProtectionKey = header-key\n"))
+        XCTAssertTrue(config.contains("ContentPaddingAddition = 0\n"))
+        XCTAssertTrue(config.contains("RekeyAfterTime = 120-180\n"))
+        XCTAssertTrue(config.contains("RekeyTimeout = 2-4\n"))
+        XCTAssertTrue(config.contains("RejectAfterTime = 180-240\n"))
+        XCTAssertTrue(config.contains("KeepaliveTimeout = 10-15\n"))
+        XCTAssertTrue(config.contains("MaxHandshakeAttempts = 20-30\n"))
+    }
+
     func testManagedProfileRequestsMacOSCompactRoutingPolicy() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let apiURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/VEXAPIClient.swift")

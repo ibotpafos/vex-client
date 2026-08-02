@@ -64,7 +64,8 @@
         "channel": "stable",
         "configSchemaVersion": 1,
         "supportedApiClientVersions": [
-          "expo-1"
+          "expo-1",
+          "windows-native-1"
         ],
         "routingPolicyVersionPrefix": "2026.06."
       },

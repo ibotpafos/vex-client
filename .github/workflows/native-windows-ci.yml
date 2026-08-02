@@ -1,0 +1,187 @@
+name: Native Windows CI
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: "Windows package version (for example 1.2.3.4)"
+        required: true
+      manifest_revision:
+        description: "Monotonic signed update manifest revision"
+        required: true
+      release_notes:
+        description: "User-facing Windows release notes"
+        required: true
+      rollout_percent:
+        description: "Initial stable rollout percentage (0-100)"
+        required: true
+        default: "10"
+      minimum_supported_version:
+        description: "Oldest native Windows version allowed to update"
+        required: false
+      required_version_floor:
+        description: "Anti-rollback version floor (defaults to release version)"
+        required: false
+      required_update:
+        description: "Mark the update as mandatory"
+        required: true
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - "native-windows/**"
+      - "src/api/**"
+      - ".github/workflows/native-windows-ci.yml"
+      - "package.json"
+  push:
+    branches:
+      - main
+    paths:
+      - "native-windows/**"
+      - "src/api/**"
+      - ".github/workflows/native-windows-ci.yml"
+      - "package.json"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Test platform-neutral core
+        run: dotnet run --project native-windows/tests/Vex.Windows.Core.Tests/Vex.Windows.Core.Tests.csproj -c Release
+
+      - name: Audit native dependencies
+        shell: pwsh
+        run: |
+          $output = dotnet list native-windows/src/Vex.Windows.Client/Vex.Windows.Client.csproj package --vulnerable --include-transitive
+          $output
+          if ($LASTEXITCODE -ne 0 -or $output -match "has the following vulnerable packages") {
+            exit 1
+          }
+
+      - name: Validate PowerShell script parse
+        shell: pwsh
+        run: |
+          ./native-windows/scripts/validate-powershell-parse.ps1
+
+      - name: Validate packaging templates
+        shell: pwsh
+        run: |
+          [xml](Get-Content "native-windows/packaging/AppxManifest.xml.template" -Raw) | Out-Null
+          [xml](Get-Content "native-windows/packaging/AppInstaller.template.xml" -Raw) | Out-Null
+
+      - name: Validate native Windows release policy
+        run: |
+          node native-windows/scripts/validate-packaging-static.mjs
+          node scripts/validate_native_windows_xaml.mjs
+
+      - name: Build VPN service
+        run: dotnet build native-windows/src/Vex.Windows.Service/Vex.Windows.Service.csproj -c Release -r win-x64
+
+      - name: Build VPN service for Arm64
+        run: dotnet build native-windows/src/Vex.Windows.Service/Vex.Windows.Service.csproj -c Release -r win-arm64
+
+      - name: Build native WinUI shell
+        run: dotnet build native-windows/src/Vex.Windows.App/Vex.Windows.App.csproj -c Release -r win-x64
+
+      - name: Build native WinUI shell for Arm64
+        run: dotnet build native-windows/src/Vex.Windows.App/Vex.Windows.App.csproj -c Release -r win-arm64
+
+      - name: Upload native shell
+        uses: actions/upload-artifact@v4
+        with:
+          name: vex-native-windows-shell
+          path: |
+            native-windows/src/Vex.Windows.App/bin/Release/net10.0-windows10.0.19041.0/win-x64/**
+            native-windows/src/Vex.Windows.App/bin/Release/net10.0-windows10.0.19041.0/win-arm64/**
+            native-windows/src/Vex.Windows.Service/bin/Release/net10.0-windows10.0.19041.0/win-x64/**
+            native-windows/src/Vex.Windows.Service/bin/Release/net10.0-windows10.0.19041.0/win-arm64/**
+          if-no-files-found: error
+          retention-days: 7
+
+  package_release:
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' &&
+        vars.VEX_WINDOWS_PACKAGE_NAME != '' &&
+        vars.VEX_WINDOWS_PACKAGE_DISPLAY_NAME != '' &&
+        vars.VEX_WINDOWS_PACKAGE_PUBLISHER != '' &&
+        vars.VEX_WINDOWS_PACKAGE_PUBLISHER_DISPLAY_NAME != '' &&
+        vars.VEX_WINDOWS_PACKAGE_BASE_URI != '' &&
+        vars.VEX_WINDOWS_APPINSTALLER_BASE_URI != '' &&
+        vars.VEX_WINDOWS_UPDATE_ORIGIN != '' &&
+        vars.VEX_WINDOWS_UPDATE_KEY_ID != '' &&
+        vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH != '' &&
+        vars.VEX_WINDOWS_SERVICE_WINTUN_PATH != '' &&
+        secrets.VEX_WINDOWS_SIGN_PFX_BASE64 != '' &&
+        secrets.VEX_WINDOWS_SIGN_PFX_PASSWORD != '' &&
+        secrets.VEX_WINDOWS_UPDATE_PUBLIC_KEY_BASE64 != '' &&
+        secrets.VEX_WINDOWS_UPDATE_PRIVATE_KEY_BASE64 != ''
+      }}
+    runs-on: windows-latest
+    needs: build
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Package signed native Windows releases
+        shell: pwsh
+        env:
+          VEX_WINDOWS_RELEASE_VERSION: ${{ inputs.release_version }}
+          VEX_WINDOWS_RELEASE_CHANNEL: stable
+          VEX_WINDOWS_MANIFEST_REVISION: ${{ inputs.manifest_revision }}
+          VEX_WINDOWS_RELEASE_NOTES: ${{ inputs.release_notes }}
+          VEX_WINDOWS_MINIMUM_SUPPORTED_VERSION: ${{ inputs.minimum_supported_version }}
+          VEX_WINDOWS_REQUIRED_VERSION_FLOOR: ${{ inputs.required_version_floor }}
+          VEX_WINDOWS_PACKAGE_NAME: ${{ vars.VEX_WINDOWS_PACKAGE_NAME }}
+          VEX_WINDOWS_PACKAGE_DISPLAY_NAME: ${{ vars.VEX_WINDOWS_PACKAGE_DISPLAY_NAME }}
+          VEX_WINDOWS_PACKAGE_PUBLISHER: ${{ vars.VEX_WINDOWS_PACKAGE_PUBLISHER }}
+          VEX_WINDOWS_PACKAGE_PUBLISHER_DISPLAY_NAME: ${{ vars.VEX_WINDOWS_PACKAGE_PUBLISHER_DISPLAY_NAME }}
+          VEX_WINDOWS_PACKAGE_BASE_URI: ${{ vars.VEX_WINDOWS_PACKAGE_BASE_URI }}
+          VEX_WINDOWS_APPINSTALLER_BASE_URI: ${{ vars.VEX_WINDOWS_APPINSTALLER_BASE_URI }}
+          VEX_WINDOWS_UPDATE_KEY_ID: ${{ vars.VEX_WINDOWS_UPDATE_KEY_ID }}
+          VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH: ${{ vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH }}
+          VEX_WINDOWS_SERVICE_WINTUN_PATH: ${{ vars.VEX_WINDOWS_SERVICE_WINTUN_PATH }}
+          VEX_WINDOWS_SERVICE_PROFILE_KEYRING_PATH: native-windows/packaging/profile-signing-keys.json
+          VEX_WINDOWS_SIGN_PFX_BASE64: ${{ secrets.VEX_WINDOWS_SIGN_PFX_BASE64 }}
+          VEX_WINDOWS_SIGN_PFX_PASSWORD: ${{ secrets.VEX_WINDOWS_SIGN_PFX_PASSWORD }}
+          VEX_WINDOWS_UPDATE_PUBLIC_KEY_BASE64: ${{ secrets.VEX_WINDOWS_UPDATE_PUBLIC_KEY_BASE64 }}
+          VEX_WINDOWS_UPDATE_PRIVATE_KEY_BASE64: ${{ secrets.VEX_WINDOWS_UPDATE_PRIVATE_KEY_BASE64 }}
+          VEX_WINDOWS_UPDATE_ORIGIN: ${{ vars.VEX_WINDOWS_UPDATE_ORIGIN }}
+          VEX_WINDOWS_UPDATE_REQUIRED: ${{ inputs.required_update }}
+          VEX_WINDOWS_ROLLOUT_PERCENT: ${{ inputs.rollout_percent }}
+        run: |
+          ./native-windows/packaging/package-native-windows.ps1 -Architecture x64
+          ./native-windows/packaging/package-native-windows.ps1 -Architecture arm64
+          ./native-windows/packaging/publish-native-windows.ps1
+
+      - name: Upload packaged native Windows release lane
+        uses: actions/upload-artifact@v4
+        with:
+          name: vex-native-windows-packaged-release
+          path: |
+            native-windows/packaging/out/**
+            native-windows/packaging/published/**
+          if-no-files-found: error
+          retention-days: 7

@@ -13,8 +13,6 @@ import { VexScreen, vexSharedStyles, VexPressable } from '@/ui/vex-ui';
 import { vexTheme } from '@/ui/vex-theme';
 import { useVpnConnectionContext } from '@/vpn/vpn-connection-context';
 
-const vexLogo = require('../../assets/vex-logo-header.png');
-
 export default function AccountScreen() {
   const {
     activeProfile,
@@ -42,9 +40,6 @@ export default function AccountScreen() {
             <Settings color="#EAF7F8" size={24} strokeWidth={2.4} />
           </VexPressable>
         )}
-        logoSource={vexLogo}
-        planLabel={accountTierLabel}
-        showPlan={Boolean(session && accountTierLabel)}
       />
 
       {!session ? (
@@ -126,8 +121,11 @@ const styles = StyleSheet.create({
     borderColor: vexTheme.colors.line,
     borderRadius: vexTheme.radius.lg,
     borderWidth: 1,
-    gap: 12,
-    padding: 16,
+    gap: 16,
+    padding: 20,
+    shadowColor: '#000',
+    shadowOpacity: 0.18,
+    shadowRadius: 20,
   },
   accountHero: {
     alignItems: 'center',
@@ -141,9 +139,9 @@ const styles = StyleSheet.create({
     borderColor: vexTheme.colors.accentLine,
     borderRadius: 16,
     borderWidth: 1,
-    height: 46,
+    height: 52,
     justifyContent: 'center',
-    width: 46,
+    width: 52,
   },
   accountCopy: {
     flex: 1,
@@ -157,7 +155,7 @@ const styles = StyleSheet.create({
   },
   accountEmail: {
     color: vexTheme.colors.text,
-    fontSize: 17,
+    fontSize: 18,
     fontWeight: '900',
     marginTop: 2,
   },

@@ -13,6 +13,7 @@ ensure_linked_dir() {
   local cache_path="${VEX_LOCAL_RELEASE_CACHE_ROOT}/${cache_name}"
 
   mkdir -p "$(dirname "${cache_path}")"
+  mkdir -p "$(dirname "${source_path}")"
 
   if [[ -L "${source_path}" ]]; then
     local current_target

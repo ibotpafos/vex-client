@@ -71,9 +71,17 @@ app_helper_version="$(helper_version_from_bundle "${app_helper_installer}")"
 root_helper_version="$(file_contents_or_empty "${ROOT_HELPER_DIR}/version" | /usr/bin/tr -d '[:space:]')"
 helper_plist_run_at_load=""
 helper_plist_keep_alive_successful_exit=""
+helper_plist_keep_alive=""
 if [[ -f "${HELPER_PLIST}" ]]; then
   helper_plist_run_at_load="$(/usr/bin/plutil -extract RunAtLoad raw -o - "${HELPER_PLIST}" 2>/dev/null || true)"
   helper_plist_keep_alive_successful_exit="$(/usr/bin/plutil -extract KeepAlive.SuccessfulExit raw -o - "${HELPER_PLIST}" 2>/dev/null || true)"
+  helper_plist_keep_alive="$(/usr/bin/plutil -extract KeepAlive raw -o - "${HELPER_PLIST}" 2>/dev/null || true)"
+fi
+
+helper_plist_is_persistent=false
+if [[ "${helper_plist_run_at_load}" == "true" \
+  && ( "${helper_plist_keep_alive_successful_exit}" == "false" || "${helper_plist_keep_alive}" == "true" ) ]]; then
+  helper_plist_is_persistent=true
 fi
 
 echo "app_helper_sha=${app_helper_sha}"
@@ -83,6 +91,8 @@ echo "app_helper_version=${app_helper_version}"
 echo "root_helper_version=${root_helper_version}"
 echo "helper_plist_run_at_load=${helper_plist_run_at_load}"
 echo "helper_plist_keep_alive_successful_exit=${helper_plist_keep_alive_successful_exit}"
+echo "helper_plist_keep_alive=${helper_plist_keep_alive}"
+echo "helper_plist_is_persistent=${helper_plist_is_persistent}"
 
 if [[ -z "${app_helper_sha}" ]]; then
   record_failure "bundled helper missing"
@@ -102,11 +112,11 @@ fi
 if [[ -n "${app_helper_version}" && "${app_helper_version}" != "${root_helper_version}" ]]; then
   record_failure "root helper version does not match bundled helper version"
 fi
-if [[ "${helper_plist_run_at_load}" != "true" || "${helper_plist_keep_alive_successful_exit}" != "false" ]]; then
+if [[ "${helper_plist_is_persistent}" != "true" ]]; then
   record_failure "helper LaunchDaemon is not configured to start and stay alive"
 fi
 if [[ -n "${app_helper_sha}" && -n "${root_helper_sha}" && "${app_helper_sha}" != "${root_helper_sha}" ]] \
-  || [[ "${helper_plist_run_at_load}" != "true" || "${helper_plist_keep_alive_successful_exit}" != "false" ]]; then
+  || [[ "${helper_plist_is_persistent}" != "true" ]]; then
   echo "helper_install_action=APP_PATH=${APP_PATH} bash scripts/install_native_macos_helper_from_app.sh"
 fi
 

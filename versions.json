@@ -6,11 +6,11 @@
     "min_config_schema_version": 1
   },
   "android": {
-    "version": "1.0.54",
-    "build": 56,
+    "version": "1.0.55",
+    "build": 57,
     "min_supported_build": 1002930,
     "is_required": true,
-    "release_notes": "Android: добавлены надёжные уведомления через Firebase Cloud Messaging, исправлена регистрация push-токена и сохранены улучшения стабильности VPN.",
+    "release_notes": "Android owner-canary: приложение явно сообщает поддержку AmneziaWG 3 и сохраняет параметры AWG3 в управляемом профиле.",
     "core_version": "0.1.0",
     "config_schema_version": 1,
     "min_config_schema_version": 1

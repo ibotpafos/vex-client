@@ -810,7 +810,16 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
   }
 
   private fun canRequestPackageInstalls(): Boolean {
-    return Build.VERSION.SDK_INT < Build.VERSION_CODES.O || reactContext.packageManager.canRequestPackageInstalls()
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+      return true
+    }
+    return try {
+      reactContext.packageManager.canRequestPackageInstalls()
+    } catch (_: SecurityException) {
+      // Local/dev variants deliberately omit REQUEST_INSTALL_PACKAGES. They must
+      // treat OTA installation as unavailable rather than crash on resume.
+      false
+    }
   }
 
   private fun openUnknownSourcesSettings() {

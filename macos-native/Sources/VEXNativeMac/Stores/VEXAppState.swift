@@ -769,6 +769,10 @@ final class VEXAppState: ObservableObject {
     }
 
     func handleDeepLink(_ url: URL) async {
+        if url.scheme == "vexguard", url.host == nil || url.host?.isEmpty == true {
+            beginWebAuth(mode: .login)
+            return
+        }
         guard !isAuthBusy else { return }
         isAuthBusy = true
         defer { isAuthBusy = false }

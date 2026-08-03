@@ -8,13 +8,19 @@ export const styles = StyleSheet.create({
   shell: {
     gap: vexTheme.spacing.sm,
   },
+  scroll: {
+    flex: 1,
+  },
+  scrollContent: {
+    gap: vexTheme.spacing.sm,
+    paddingBottom: vexTheme.spacing.xl,
+  },
   topActions: {
     alignItems: 'center',
     flexDirection: 'row',
     gap: 8,
   },
   mainContent: {
-    flex: 1,
     gap: vexTheme.spacing.md,
     justifyContent: 'flex-start',
   },

@@ -2,7 +2,7 @@ import { StatusBar } from 'expo-status-bar';
 import { router } from 'expo-router';
 import { Power, Settings } from 'lucide-react-native';
 import React, { useState } from 'react';
-import { Animated, FlatList, Platform, Text, useWindowDimensions, View } from 'react-native';
+import { Animated, FlatList, Platform, ScrollView, Text, useWindowDimensions, View } from 'react-native';
 
 import { HomeNativeHeader } from '@/components/home-native-header';
 import { MobileUpdateNoticeBanner, UpdateCenterButton } from '@/components/update-center';
@@ -94,7 +94,7 @@ export default function App() {
 
   return (
     <VexScreen contentStyle={styles.shell}>
-      <StatusBar style="light" />
+      {Platform.OS !== 'android' ? <StatusBar style="light" /> : null}
       <HomeNativeHeader
         actions={(
           <View style={styles.topActions}>
@@ -118,101 +118,107 @@ export default function App() {
           </View>
         )}
       />
-      <MobileUpdateNoticeBanner onOpen={openUpdateCenter} />
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+        style={styles.scroll}
+      >
+        <MobileUpdateNoticeBanner onOpen={openUpdateCenter} />
 
-      {!session ? (
-        <View style={styles.centerState}>
-          <VexNativeActivityIndicator color="#22D3EE" size="large" />
-          <Text style={styles.centerStateText}>Загружаем VEX</Text>
-        </View>
-      ) : (
-        <View style={styles.mainContent}>
-          <PowerHero
-            connectionPhase={connectionPhase}
-            isConnected={isConnected}
-            isVpnBusy={isVpnBusy}
-            onPowerPress={handlePowerPress}
-            pulseProgress={pulseProgress}
-            spinProgress={spinProgress}
-            powerButtonDisabled={powerButtonDisabled}
-            powerButtonText={powerButtonText}
-            powerSubtext={powerSubtext}
-            reduceMotionVisuals={reduceMotionVisuals}
-          />
-
-          <TrafficStats />
-
-          <View style={styles.locationsSection}>
-            <View style={styles.locationsHeader}>
-              <Text style={styles.locationsTitle}>Локации</Text>
-              <VexPressable
-                disabled={isVpnBusy}
-                onPress={() => {
-                  setServerPickerSnapshot({
-                    latencyText: selectedLatencyText,
-                    locations: availableLocations.map((location) => ({ ...location })),
-                  });
-                  setIsServerPickerVisible(true);
-                }}
-                style={styles.locationsAllButton}
-                title="Все локации"
-                accessibilityLabel="Открыть все локации"
-              >
-                <Text style={styles.locationsAllText}>Все</Text>
-              </VexPressable>
-            </View>
-            <FlatList
-              data={locationPreviews}
-              decelerationRate="fast"
-              horizontal
-              keyExtractor={(location) => location.id}
-              renderItem={({ item: location }) => {
-                const isSelected = location.id === selectedLocation?.id;
-                return (
-                  <View style={[styles.locationCarouselItem, { width: carouselCardWidth }]}>
-                  <ServerChip
-                    disabled={isVpnBusy}
-                    isAutoMode={isSelected && serverSelectionMode === 'auto'}
-                    isSelected={isSelected}
-                    key={location.id}
-                    latencyText={isSelected ? selectedLatencyText : `${Math.max(0, Math.round(location.latencyMs ?? 0))} мс`}
-                    location={location}
-                    onPress={(visibleLatencyText) => {
-                      setServerPickerSnapshot({
-                        latencyText: visibleLatencyText,
-                        locations: availableLocations.map((entry) => ({ ...entry })),
-                      });
-                      setIsServerPickerVisible(true);
-                    }}
-                  />
-                  </View>
-                );
-              }}
-              showsHorizontalScrollIndicator={false}
-              snapToAlignment="start"
-              snapToInterval={carouselCardWidth + vexTheme.spacing.sm}
-              style={styles.locationCarousel}
-            />
+        {!session ? (
+          <View style={styles.centerState}>
+            <VexNativeActivityIndicator color="#22D3EE" size="large" />
+            <Text style={styles.centerStateText}>Загружаем VEX</Text>
           </View>
+        ) : (
+          <View style={styles.mainContent}>
+            <PowerHero
+              connectionPhase={connectionPhase}
+              isConnected={isConnected}
+              isVpnBusy={isVpnBusy}
+              onPowerPress={handlePowerPress}
+              pulseProgress={pulseProgress}
+              spinProgress={spinProgress}
+              powerButtonDisabled={powerButtonDisabled}
+              powerButtonText={powerButtonText}
+              powerSubtext={powerSubtext}
+              reduceMotionVisuals={reduceMotionVisuals}
+            />
 
-          <View pointerEvents="none" style={styles.protocolSpacer} />
-          {activeProfile?.rotationRequired ? (
-            <VexPressable
-              disabled={isKeyRotationBusy || isVpnBusy}
-              onPress={handleRotateKeyPress}
-              style={styles.rotationNotice}
-              hoverStyle={{ opacity: 0.86 }}
-              title="Обновить ключи VPN"
-            >
-              <Text numberOfLines={2} style={styles.vpnNoticeText}>
-                {isKeyRotationBusy ? 'Обновляем VPN-ключ...' : 'Ключ VPN устарел. Нажмите, чтобы обновить.'}
-              </Text>
-            </VexPressable>
-          ) : null}
-          {vpnError ? <Text numberOfLines={2} style={styles.vpnErrorText}>{vpnError}</Text> : null}
+            <TrafficStats />
 
-        </View>
-      )}
+            <View style={styles.locationsSection}>
+              <View style={styles.locationsHeader}>
+                <Text style={styles.locationsTitle}>Локации</Text>
+                <VexPressable
+                  disabled={isVpnBusy}
+                  onPress={() => {
+                    setServerPickerSnapshot({
+                      latencyText: selectedLatencyText,
+                      locations: availableLocations.map((location) => ({ ...location })),
+                    });
+                    setIsServerPickerVisible(true);
+                  }}
+                  style={styles.locationsAllButton}
+                  title="Все локации"
+                  accessibilityLabel="Открыть все локации"
+                >
+                  <Text style={styles.locationsAllText}>Все</Text>
+                </VexPressable>
+              </View>
+              <FlatList
+                data={locationPreviews}
+                decelerationRate="fast"
+                horizontal
+                keyExtractor={(location) => location.id}
+                renderItem={({ item: location }) => {
+                  const isSelected = location.id === selectedLocation?.id;
+                  return (
+                    <View style={[styles.locationCarouselItem, { width: carouselCardWidth }]}>
+                      <ServerChip
+                        disabled={isVpnBusy}
+                        isAutoMode={isSelected && serverSelectionMode === 'auto'}
+                        isSelected={isSelected}
+                        key={location.id}
+                        latencyText={isSelected ? selectedLatencyText : `${Math.max(0, Math.round(location.latencyMs ?? 0))} мс`}
+                        location={location}
+                        onPress={(visibleLatencyText) => {
+                          setServerPickerSnapshot({
+                            latencyText: visibleLatencyText,
+                            locations: availableLocations.map((entry) => ({ ...entry })),
+                          });
+                          setIsServerPickerVisible(true);
+                        }}
+                      />
+                    </View>
+                  );
+                }}
+                showsHorizontalScrollIndicator={false}
+                snapToAlignment="start"
+                snapToInterval={carouselCardWidth + vexTheme.spacing.sm}
+                style={styles.locationCarousel}
+              />
+            </View>
+
+            <View pointerEvents="none" style={styles.protocolSpacer} />
+            {activeProfile?.rotationRequired ? (
+              <VexPressable
+                disabled={isKeyRotationBusy || isVpnBusy}
+                onPress={handleRotateKeyPress}
+                style={styles.rotationNotice}
+                hoverStyle={{ opacity: 0.86 }}
+                title="Обновить ключи VPN"
+              >
+                <Text numberOfLines={2} style={styles.vpnNoticeText}>
+                  {isKeyRotationBusy ? 'Обновляем VPN-ключ...' : 'Ключ VPN устарел. Нажмите, чтобы обновить.'}
+                </Text>
+              </VexPressable>
+            ) : null}
+            {vpnError ? <Text numberOfLines={2} style={styles.vpnErrorText}>{vpnError}</Text> : null}
+          </View>
+        )}
+      </ScrollView>
       <ServerPickerModal
         isVpnBusy={isVpnBusy}
         locations={serverPickerSnapshot?.locations ?? availableLocations}

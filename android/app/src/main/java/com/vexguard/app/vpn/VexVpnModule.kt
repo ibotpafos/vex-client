@@ -810,7 +810,18 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
   }
 
   private fun canRequestPackageInstalls(): Boolean {
-    return Build.VERSION.SDK_INT < Build.VERSION_CODES.O || reactContext.packageManager.canRequestPackageInstalls()
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+      return true
+    }
+
+    return try {
+      reactContext.packageManager.canRequestPackageInstalls()
+    } catch (_: SecurityException) {
+      // Local builds intentionally omit REQUEST_INSTALL_PACKAGES. Android throws
+      // from this API when the manifest does not declare it; treat that as an
+      // unavailable installer instead of aborting the React host on resume.
+      false
+    }
   }
 
   private fun openUnknownSourcesSettings() {

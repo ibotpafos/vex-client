@@ -246,6 +246,10 @@ export const styles = StyleSheet.create({
   serverChipFlagText: {
     fontSize: 30,
   },
+  serverChipCountryIsland: {
+    position: 'absolute',
+    right: 76,
+  },
   serverChipCopy: {
     flex: 1,
     minWidth: 0,
@@ -330,14 +334,14 @@ export const styles = StyleSheet.create({
     borderRadius: 22,
     borderWidth: 1,
     flex: 1,
-    minHeight: 116,
+    minHeight: 100,
     minWidth: 0,
-    padding: 12,
+    padding: 10,
   },
   trafficCardHeader: {
     alignItems: 'center',
     flexDirection: 'row',
-    gap: 9,
+    gap: 7,
   },
   trafficLabel: {
     color: vexTheme.colors.textMuted,
@@ -347,22 +351,22 @@ export const styles = StyleSheet.create({
   },
   trafficValue: {
     color: vexTheme.colors.text,
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '900',
-    marginTop: 8,
+    marginTop: 5,
   },
   trafficSparkline: {
-    marginTop: 6,
+    marginTop: 4,
   },
   trafficDirectionBadge: {
     alignItems: 'center',
     backgroundColor: 'rgba(34,211,238,0.1)',
     borderColor: vexTheme.colors.accent,
-    borderRadius: 22,
+    borderRadius: 18,
     borderWidth: 1,
-    height: 38,
+    height: 34,
     justifyContent: 'center',
-    width: 38,
+    width: 34,
   },
   heroRingFar: {
     borderColor: 'rgba(121,239,247,0.07)',

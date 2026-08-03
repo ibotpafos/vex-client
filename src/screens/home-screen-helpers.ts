@@ -139,7 +139,17 @@ export function availableVpnLocations(locations?: VpnLocation[]): VpnLocation[] 
 }
 
 export function serverLocationLabel(location: VpnLocation): string {
-  return `${location.flagEmoji ? `${location.flagEmoji} ` : ''}${location.city}`;
+  return countryDisplayName(location);
+}
+
+const russianCountryNames: Record<string, string> = {
+  DE: 'Германия',
+  FI: 'Финляндия',
+  NL: 'Нидерланды',
+};
+
+function countryDisplayName(location: VpnLocation): string {
+  return russianCountryNames[location.countryCode.toUpperCase()] ?? location.city;
 }
 
 export function locationStatusText(location: VpnLocation): string {

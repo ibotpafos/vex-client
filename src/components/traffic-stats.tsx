@@ -16,7 +16,7 @@ export const TrafficStats = React.memo(function TrafficStats() {
       <View style={styles.trafficCard}>
         <View style={styles.trafficCardHeader}>
           <View style={styles.trafficDirectionBadge}>
-            <ArrowDown color={vexTheme.colors.accent} size={22} strokeWidth={2.5} />
+            <ArrowDown color={vexTheme.colors.accent} size={19} strokeWidth={2.5} />
           </View>
           <Text style={styles.trafficLabel}>Получено</Text>
         </View>
@@ -26,7 +26,7 @@ export const TrafficStats = React.memo(function TrafficStats() {
       <View style={styles.trafficCard}>
         <View style={styles.trafficCardHeader}>
           <View style={styles.trafficDirectionBadge}>
-            <ArrowUp color={vexTheme.colors.accent} size={22} strokeWidth={2.5} />
+            <ArrowUp color={vexTheme.colors.accent} size={19} strokeWidth={2.5} />
           </View>
           <Text style={styles.trafficLabel}>Отправлено</Text>
         </View>
@@ -42,7 +42,7 @@ function TrafficSparkline({ reversed }: { reversed: boolean }) {
     ? '2,27 22,20 42,24 62,15 82,20 102,23 122,16 142,4'
     : '2,27 22,20 42,24 62,15 82,20 102,23 122,16 142,4';
   return (
-    <Svg aria-label="Динамика трафика" height={32} style={styles.trafficSparkline} viewBox="0 0 144 32" width="100%">
+    <Svg aria-label="Динамика трафика" height={28} style={styles.trafficSparkline} viewBox="0 0 144 32" width="100%">
       <Polyline fill="none" points={points} stroke={vexTheme.colors.accent} strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.4} />
     </Svg>
   );

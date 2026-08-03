@@ -201,6 +201,7 @@ const ServerLocationRow = React.memo(function ServerLocationRow({
   selected,
 }: ServerLocationRowProps) {
   const latencyText = latencyTextOverride || locationLatencyText(location);
+  const locationLabel = serverLocationLabel(location);
   const handlePress = React.useCallback(() => onSelect(location.id), [location.id, onSelect]);
   return (
     <VexPressable
@@ -208,7 +209,7 @@ const ServerLocationRow = React.memo(function ServerLocationRow({
       onPress={handlePress}
       style={[styles.serverRow, selected && styles.serverRowSelected, disabled && !selected && styles.serverRowDisabled]}
       hoverStyle={{ backgroundColor: 'rgba(7,17,19,0.98)', borderColor: 'rgba(34,211,238,0.42)' }}
-      title={`Подключиться к серверу ${location.city}`}
+      title={`Подключиться к серверу ${locationLabel}`}
       accessibilityRole="button"
       accessibilityState={{ selected, disabled }}
       accessibilityLabel={`Подключаться к серверу ${serverLocationLabel(location)}, задержка ${latencyText}`}
@@ -218,7 +219,7 @@ const ServerLocationRow = React.memo(function ServerLocationRow({
           <Text style={styles.serverRowFlag}>{location.flagEmoji || location.countryCode}</Text>
         </View>
         <View style={styles.serverRowCopy}>
-          <Text numberOfLines={1} style={[styles.serverRowName, selected && styles.serverRowNameSelected]}>{location.city}</Text>
+          <Text numberOfLines={1} style={[styles.serverRowName, selected && styles.serverRowNameSelected]}>{locationLabel}</Text>
           <View style={styles.serverRowStatusLine}>
             <View style={[styles.serverHealthDot, location.healthyNodes > 0 && styles.serverHealthDotActive]} />
             <Text numberOfLines={1} style={styles.serverRowStatus}>{locationStatusText(location)}</Text>

@@ -27,7 +27,7 @@ import {
   type RegisterNativeDeviceResultDTO,
 } from './dto';
 import { managedProfileAmneziaConfig } from '../vpn/amneziaConfig';
-import { managedProfileAWGVersion } from '../vpn/profileCapabilities';
+import { withManagedProfileAWGCapability } from '../vpn/profileCapabilities';
 
 const mobileProtocol = 'amneziawg';
 
@@ -108,8 +108,7 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
     }
   }
 
-  const query = new URLSearchParams({ device_id: device.id });
-  query.set('awg_version', String(managedProfileAWGVersion));
+  const query = withManagedProfileAWGCapability(new URLSearchParams({ device_id: device.id }));
   query.set('location', locationId);
   const routingMode = options.routingMode ?? defaultVpnRoutingMode;
   query.set('routing_mode', routingMode);

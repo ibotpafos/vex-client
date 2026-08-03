@@ -8,13 +8,19 @@ export const styles = StyleSheet.create({
   shell: {
     gap: vexTheme.spacing.sm,
   },
+  scroll: {
+    flex: 1,
+  },
+  scrollContent: {
+    gap: vexTheme.spacing.sm,
+    paddingBottom: vexTheme.spacing.xxl,
+  },
   topActions: {
     alignItems: 'center',
     flexDirection: 'row',
     gap: 8,
   },
   mainContent: {
-    flex: 1,
     gap: vexTheme.spacing.md,
     justifyContent: 'flex-start',
   },
@@ -102,7 +108,7 @@ export const styles = StyleSheet.create({
   },
   hero: {
     alignItems: 'center',
-    minHeight: 270,
+    minHeight: 252,
     justifyContent: 'flex-start',
     overflow: 'visible',
   },
@@ -324,7 +330,7 @@ export const styles = StyleSheet.create({
     borderRadius: 22,
     borderWidth: 1,
     flex: 1,
-    minHeight: 116,
+    minHeight: 112,
     minWidth: 0,
     padding: 12,
   },
@@ -335,9 +341,8 @@ export const styles = StyleSheet.create({
   },
   trafficLabel: {
     color: vexTheme.colors.textMuted,
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '900',
-    textTransform: 'uppercase',
   },
   trafficValue: {
     color: vexTheme.colors.text,

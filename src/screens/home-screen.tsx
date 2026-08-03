@@ -2,7 +2,7 @@ import { StatusBar } from 'expo-status-bar';
 import { router } from 'expo-router';
 import { Power, Settings } from 'lucide-react-native';
 import React, { useState } from 'react';
-import { Animated, FlatList, Platform, Text, useWindowDimensions, View } from 'react-native';
+import { Animated, FlatList, Platform, ScrollView, Text, useWindowDimensions, View } from 'react-native';
 
 import { HomeNativeHeader } from '@/components/home-native-header';
 import { MobileUpdateNoticeBanner, UpdateCenterButton } from '@/components/update-center';
@@ -61,7 +61,7 @@ export default function App() {
     : connectionPhase === 'degraded'
       ? 'Восстанавливаем'
     : connectionPhase === 'verifying'
-      ? 'Проверяем'
+      ? 'Подтверждаем'
     : connectionPhase === 'connecting'
     ? 'Отменить'
     : connectionPhase === 'disconnecting'
@@ -77,7 +77,7 @@ export default function App() {
     : connectionPhase === 'degraded'
       ? 'Чиним туннель'
     : connectionPhase === 'verifying'
-      ? 'Ждем handshake'
+      ? 'Ждём подтверждение соединения'
     : connectionPhase === 'switching'
       ? 'Меняем сервер'
     : connectionPhase === 'connecting'
@@ -126,7 +126,12 @@ export default function App() {
           <Text style={styles.centerStateText}>Загружаем VEX</Text>
         </View>
       ) : (
-        <View style={styles.mainContent}>
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+          style={styles.scroll}
+        >
+          <View style={styles.mainContent}>
           <PowerHero
             connectionPhase={connectionPhase}
             isConnected={isConnected}
@@ -211,7 +216,8 @@ export default function App() {
           ) : null}
           {vpnError ? <Text numberOfLines={2} style={styles.vpnErrorText}>{vpnError}</Text> : null}
 
-        </View>
+          </View>
+        </ScrollView>
       )}
       <ServerPickerModal
         isVpnBusy={isVpnBusy}

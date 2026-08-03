@@ -39,7 +39,7 @@ export const TrafficStats = React.memo(function TrafficStats() {
 
 function TrafficSparkline({ reversed }: { reversed: boolean }) {
   const points = reversed
-    ? '2,27 22,20 42,24 62,15 82,20 102,23 122,16 142,4'
+    ? '2,24 22,18 42,22 62,12 82,18 102,15 122,9 142,4'
     : '2,27 22,20 42,24 62,15 82,20 102,23 122,16 142,4';
   return (
     <Svg aria-label="Динамика трафика" height={32} style={styles.trafficSparkline} viewBox="0 0 144 32" width="100%">

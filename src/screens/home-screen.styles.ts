@@ -248,7 +248,7 @@ export const styles = StyleSheet.create({
   },
   serverChipCountryIsland: {
     position: 'absolute',
-    right: 76,
+    right: 0,
   },
   serverChipCopy: {
     flex: 1,

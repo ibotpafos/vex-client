@@ -41,7 +41,7 @@ export const ServerChip = React.memo(function ServerChip({
       accessibilityLabel={`Выбрать сервер. Сейчас ${serverLabel}, задержка ${latencyText}`}
     >
       <View style={styles.serverChipCountryIsland}>
-        <CountryIsland countryCode={location?.countryCode} />
+        <CountryIsland countryCode={location?.countryCode} selected={isSelected} />
       </View>
       <View style={styles.serverChipFlag}>
         <Text style={styles.serverChipFlagText}>{location?.flagEmoji ?? '🌐'}</Text>

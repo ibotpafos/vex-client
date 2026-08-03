@@ -3,9 +3,11 @@ import { router, useFocusEffect } from "expo-router";
 import {
   ChevronRight,
   ChevronLeft,
+  CreditCard,
   Globe2,
   Languages,
   LogOut,
+  MessageSquare,
   Power,
   RefreshCw,
   ServerCog,
@@ -21,7 +23,12 @@ import {
 } from "react-native";
 import { useDesktopUpdate } from "@/components/desktop-update-overlay";
 import { playSelectionHaptic, playLightImpactHaptic } from "@/native/haptics";
-import { HOME_TAB_ROUTE, VPN_APPLICATIONS_ROUTE } from "@/navigation/routes";
+import {
+  HOME_TAB_ROUTE,
+  SUBSCRIPTION_ROUTE,
+  SUPPORT_TAB_ROUTE,
+  VPN_APPLICATIONS_ROUTE,
+} from "@/navigation/routes";
 import { getVpnApplicationSelection } from "@/settings/vpnPreferences";
 import { useToast, type ToastOptions } from "@/ui/toast";
 import { vexColors, VexScreen, vexSharedStyles, VexPressable } from "@/ui/vex-ui";
@@ -371,6 +378,54 @@ export default function SettingsScreen() {
             onValueChange={handleLanguagePress}
             value={language}
           />
+        </View>
+
+        <View style={styles.group}>
+          <Text style={styles.groupTitle}>Аккаунт и помощь</Text>
+          <VexPressable
+            accessibilityLabel="Открыть подписку"
+            accessibilityRole="button"
+            onPress={() => {
+              playSelectionHaptic();
+              router.push(SUBSCRIPTION_ROUTE);
+            }}
+            style={styles.settingRow}
+            hoverStyle={{ backgroundColor: 'rgba(7,17,19,0.96)', borderColor: 'rgba(34,211,238,0.36)' }}
+            title="Подписка"
+          >
+            <View style={styles.rowIcon}>
+              <CreditCard color="#22D3EE" size={21} strokeWidth={2.5} />
+            </View>
+            <View style={styles.rowCopy}>
+              <Text style={styles.rowTitle}>Подписка</Text>
+              <Text numberOfLines={2} style={styles.rowDescription}>
+                Тариф, срок действия и управление подпиской.
+              </Text>
+            </View>
+            <ChevronRight color="#A7B9BD" size={22} strokeWidth={2.5} />
+          </VexPressable>
+          <VexPressable
+            accessibilityLabel="Открыть поддержку"
+            accessibilityRole="button"
+            onPress={() => {
+              playSelectionHaptic();
+              router.push(SUPPORT_TAB_ROUTE);
+            }}
+            style={styles.settingRow}
+            hoverStyle={{ backgroundColor: 'rgba(7,17,19,0.96)', borderColor: 'rgba(34,211,238,0.36)' }}
+            title="Поддержка"
+          >
+            <View style={styles.rowIcon}>
+              <MessageSquare color="#22D3EE" size={21} strokeWidth={2.5} />
+            </View>
+            <View style={styles.rowCopy}>
+              <Text style={styles.rowTitle}>Поддержка</Text>
+              <Text numberOfLines={2} style={styles.rowDescription}>
+                Написать в поддержку VEX и посмотреть ответы.
+              </Text>
+            </View>
+            <ChevronRight color="#A7B9BD" size={22} strokeWidth={2.5} />
+          </VexPressable>
         </View>
 
         <View style={styles.group}>

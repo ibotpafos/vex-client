@@ -96,6 +96,22 @@ class WireGuardController(context: Context) {
           } else {
             configTextExcludingSelf(validatedConfig)
           }
+          if (shouldReuseActiveVpnTunnel(
+              isTunnelUp = backend.getState(tunnel) == Tunnel.State.UP,
+              lastConfigText = lastConfigText,
+              requestedConfigText = configText,
+              antiLeakArmed = antiLeakArmed,
+              antiLeakEnabled = antiLeakEnabled,
+              leakBlockerActive = VexLeakBlockerService.isActive(),
+            )) {
+            // React Native can issue a second connect while auto-connect and a
+            // manual tap race during startup. Re-applying an identical config
+            // makes GoBackend replace a working TUN, briefly cutting traffic.
+            return@withContext VpnConnectionState.Connected(
+              statsOrEmpty(),
+              if (antiLeakEnabled) LeakProtectionState.Armed else LeakProtectionState.Off,
+            )
+          }
           val config = Config.parse(ByteArrayInputStream(configText.toByteArray(StandardCharsets.UTF_8)))
           val state = backend.setState(tunnel, Tunnel.State.UP, config)
           if (state != Tunnel.State.UP) {
@@ -588,6 +604,20 @@ private inline fun <T> List<T>.indexOfFirstAfter(startIndex: Int, predicate: (T)
     }
   }
   return -1
+}
+
+internal fun shouldReuseActiveVpnTunnel(
+  isTunnelUp: Boolean,
+  lastConfigText: String?,
+  requestedConfigText: String,
+  antiLeakArmed: Boolean,
+  antiLeakEnabled: Boolean,
+  leakBlockerActive: Boolean,
+): Boolean {
+  return isTunnelUp &&
+    !leakBlockerActive &&
+    antiLeakArmed == antiLeakEnabled &&
+    lastConfigText == requestedConfigText
 }
 
 sealed interface VpnConnectionState {

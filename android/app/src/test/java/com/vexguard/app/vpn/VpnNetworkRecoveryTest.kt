@@ -19,6 +19,19 @@ class VpnNetworkRecoveryTest {
   }
 
   @Test
+  fun keepsAwg3RecoveryOffTheAwg2Listener() {
+    val config = "[Interface]\nHeaderProtectionKey = header-key\n[Peer]\nEndpoint = fi.example.test:51821"
+
+    assertEquals(
+      listOf(
+        "[Interface]\nHeaderProtectionKey = header-key\n[Peer]\nEndpoint = fi.example.test:51821",
+        "[Interface]\nHeaderProtectionKey = header-key\n[Peer]\nEndpoint = fi.example.test:443",
+      ),
+      VpnNetworkRecovery.configCandidates(config),
+    )
+  }
+
+  @Test
   fun doesNotDuplicateExistingFallbackPort() {
     val config = "[Peer]\nEndpoint = 203.0.113.7:443"
 

@@ -1269,9 +1269,10 @@ static void WindowsProfilePreservesAuthorization()
     Equal("access-secret", handler.Request.Headers.Authorization.Parameter);
     var query = handler.Request.RequestUri!.Query;
     if (!query.Contains("platform=windows", StringComparison.Ordinal) ||
+        !query.Contains("awg_version=3", StringComparison.Ordinal) ||
         !query.Contains("location=fi-1", StringComparison.Ordinal))
     {
-        throw new InvalidOperationException("unexpected profile query");
+        throw new InvalidOperationException("AWG3 profile capability was not sent");
     }
 }
 

@@ -141,7 +141,7 @@ function RootNavigator() {
 
   const navigator = (
     <>
-      <StatusBar style="light" />
+      {Platform.OS !== 'android' ? <StatusBar style="light" /> : null}
       <View style={styles.root}>
         <Stack>
           <Stack.Screen name="index" options={{ headerShown: false }} />

@@ -7,6 +7,7 @@ import { serverLocationLabel } from '../screens/home-screen-helpers';
 import { styles } from '../screens/home-screen.styles';
 import { VexPressable } from '@/ui/vex-ui';
 import { vexTheme } from '@/ui/vex-theme';
+import { CountryIsland } from './country-island';
 
 export interface ServerChipProps {
   disabled: boolean;
@@ -39,6 +40,9 @@ export const ServerChip = React.memo(function ServerChip({
       accessibilityRole="button"
       accessibilityLabel={`Выбрать сервер. Сейчас ${serverLabel}, задержка ${latencyText}`}
     >
+      <View style={styles.serverChipCountryIsland}>
+        <CountryIsland countryCode={location?.countryCode} selected={isSelected} />
+      </View>
       <View style={styles.serverChipFlag}>
         <Text style={styles.serverChipFlagText}>{location?.flagEmoji ?? '🌐'}</Text>
       </View>

@@ -440,6 +440,7 @@ public sealed class VexApiClient : INativeClientApi
             "&routing_mode=" +
             routingMode +
             "&platform=windows" +
+            "&awg_version=3" +
             (string.IsNullOrWhiteSpace(bypassRegion)
                 ? string.Empty
                 : "&bypass_region=" +

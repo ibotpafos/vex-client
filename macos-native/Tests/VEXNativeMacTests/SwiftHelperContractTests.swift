@@ -148,6 +148,8 @@ final class SwiftHelperContractTests: XCTestCase {
         XCTAssertTrue(wrapperScript.contains("certificate leaf[subject.OU]"))
         XCTAssertTrue(wrapperScript.contains("PINNED_VEX_TEAM_ID=\"3JLW9XNU53\""))
         XCTAssertFalse(wrapperScript.contains("INSTALL_LOG"))
+        XCTAssertTrue(runtimeVerifier.contains("KeepAlive raw"))
+        XCTAssertTrue(runtimeVerifier.contains("helper_plist_is_persistent"))
         XCTAssertTrue(runtimeVerifier.contains("--helper-status-probe"))
         XCTAssertFalse(runtimeVerifier.contains("/usr/bin/nc"))
         XCTAssertTrue(appSource.contains("CommandLine.arguments.contains(\"--helper-status-probe\")"))

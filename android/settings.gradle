@@ -45,7 +45,18 @@ extensions.configure(com.facebook.react.ReactSettingsExtension) { ex ->
   if (System.getenv('EXPO_USE_COMMUNITY_AUTOLINKING') == '1') {
     ex.autolinkLibrariesFromCommand()
   } else {
-    ex.autolinkLibrariesFromCommand(expoAutolinking.rnConfigCommand)
+    // Expo's config command requires an explicit target. Without it, a macOS
+    // build produces an iOS-only graph and leaves Android native modules off
+    // :app's classpath. Persist the Android graph in Gradle's expected file
+    // and link from it directly so a stale host-platform cache cannot win.
+    def autolinkingOutput = providers.exec {
+      workingDir(rootDir.getParentFile())
+      commandLine(expoAutolinking.rnConfigCommand + ["--platform", "android"])
+    }.standardOutput.asText.get()
+    def autolinkingConfig = file(".gradle/vex-autolinking.android.json")
+    autolinkingConfig.parentFile.mkdirs()
+    autolinkingConfig.text = autolinkingOutput
+    ex.autolinkLibrariesFromConfigFile(autolinkingConfig)
   }
 }
 expoAutolinking.useExpoModules()

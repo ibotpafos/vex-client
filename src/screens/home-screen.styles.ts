@@ -13,7 +13,7 @@ export const styles = StyleSheet.create({
   },
   scrollContent: {
     gap: vexTheme.spacing.sm,
-    paddingBottom: vexTheme.spacing.xl,
+    paddingBottom: vexTheme.spacing.xxl,
   },
   topActions: {
     alignItems: 'center',
@@ -108,7 +108,7 @@ export const styles = StyleSheet.create({
   },
   hero: {
     alignItems: 'center',
-    minHeight: 270,
+    minHeight: 252,
     justifyContent: 'flex-start',
     overflow: 'visible',
   },
@@ -334,7 +334,7 @@ export const styles = StyleSheet.create({
     borderRadius: 22,
     borderWidth: 1,
     flex: 1,
-    minHeight: 100,
+    minHeight: 112,
     minWidth: 0,
     padding: 10,
   },
@@ -345,9 +345,8 @@ export const styles = StyleSheet.create({
   },
   trafficLabel: {
     color: vexTheme.colors.textMuted,
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '900',
-    textTransform: 'uppercase',
   },
   trafficValue: {
     color: vexTheme.colors.text,

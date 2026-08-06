@@ -850,6 +850,16 @@ function runCreateDeviceRequestTests(): void {
 }
 
 {
+  const baseProfile = profileWithEndpoint('fi.example.com:51821');
+  const attempts = connectionAttemptsForProfile({
+    ...baseProfile,
+    config: `${baseProfile.config}\nHeaderProtectionKey = header-key`,
+  });
+
+  assertDeepEqual(attempts.map(profileEndpoint), ['fi.example.com:51821', 'fi.example.com:443']);
+}
+
+{
   const attempts = connectionAttemptsForProfile(profileWithEndpoint('[2001:db8::1]:51820'));
 
   assertEqual(profileEndpoint(attempts[1]), '[2001:db8::1]:443');

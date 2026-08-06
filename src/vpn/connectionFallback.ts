@@ -1,6 +1,7 @@
 import type { VpnProfile } from './profile';
 
-const endpointFallbackPorts = [443, 51820];
+const awg2EndpointFallbackPorts = [443, 51820];
+const awg3EndpointFallbackPorts = [51821, 443];
 
 export function isVpnTransportFallbackError(error: unknown): boolean {
   const message = errorText(error).toLowerCase();
@@ -19,13 +20,21 @@ export function connectionAttemptsForProfile(profile: VpnProfile): VpnProfile[] 
   if (!attempts.some((attempt) => profileEndpoint(attempt) === profileEndpoint(profile))) {
     attempts.push(profile);
   }
-  for (const port of endpointFallbackPorts) {
+  // An AWG3 profile must never fall back to the shared AWG2 listener. Doing so
+  // can make the tunnel look healthy while silently leaving the AWG3 cohort.
+  for (const port of endpointFallbackPortsFor(profile)) {
     const fallback = profileWithEndpointPort(profile, port);
     if (fallback && !attempts.some((attempt) => profileEndpoint(attempt) === profileEndpoint(fallback))) {
       attempts.push(fallback);
     }
   }
   return attempts;
+}
+
+function endpointFallbackPortsFor(profile: VpnProfile): readonly number[] {
+  return /^HeaderProtectionKey\s*=\s*\S+/m.test(profile.config)
+    ? awg3EndpointFallbackPorts
+    : awg2EndpointFallbackPorts;
 }
 
 function profileWithEndpoint(profile: VpnProfile, endpoint: string): VpnProfile | null {

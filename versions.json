@@ -4,7 +4,7 @@
     "build": 57,
     "min_supported_build": 1002930,
     "is_required": true,
-    "release_notes": "Android owner-canary: приложение явно сообщает поддержку AmneziaWG 3 и сохраняет параметры AWG3 в управляемом профиле.",
+    "release_notes": "Android owner-canary: приложение явно сообщает поддержку AmneziaWG 3 и сохраняет параметры AWG3 в управляемом профиле. Устранено кратковременное отключение VPN при повторном подключении во время запуска приложения.",
     "core_version": "0.1.0",
     "config_schema_version": 1,
     "min_config_schema_version": 1

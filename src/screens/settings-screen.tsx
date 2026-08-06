@@ -21,7 +21,7 @@ import {
   Text,
   View,
 } from "react-native";
-import { playSelectionHaptic, playLightImpactHaptic } from "@/native/haptics";
+import { playSelectionHaptic } from "@/native/haptics";
 import {
   HOME_TAB_ROUTE,
   SUBSCRIPTION_ROUTE,

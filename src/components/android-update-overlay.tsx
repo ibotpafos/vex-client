@@ -1,6 +1,6 @@
 import * as Application from 'expo-application';
 import { Download, ShieldCheck } from 'lucide-react-native';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AppState, Linking, Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { installManualUpdate } from '@/api/manualUpdateInstall';
 import { requiresNativeUpdate } from '@/api/updatePreflight';

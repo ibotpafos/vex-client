@@ -52,7 +52,7 @@ export async function installManualUpdate(
   return { status: 'external_update_opened' };
 }
 
-export function isTrustedIosUpdateUrl(value: string): boolean {
+function isTrustedIosUpdateUrl(value: string): boolean {
   try {
     const url = new URL(value);
     return url.protocol === 'https:' && (

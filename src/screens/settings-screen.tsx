@@ -19,8 +19,7 @@ import {
   Text,
   View,
 } from "react-native";
-import { useDesktopUpdate } from "@/components/desktop-update-overlay";
-import { playSelectionHaptic, playLightImpactHaptic } from "@/native/haptics";
+import { playSelectionHaptic } from "@/native/haptics";
 import { HOME_TAB_ROUTE, VPN_APPLICATIONS_ROUTE } from "@/navigation/routes";
 import { getVpnApplicationSelection } from "@/settings/vpnPreferences";
 import { useToast, type ToastOptions } from "@/ui/toast";
@@ -59,14 +58,8 @@ export default function SettingsScreen() {
     vpnStatus,
   } = useVpnConnectionContext();
 
-  const desktopUpdate = useDesktopUpdate();
   const versionText = appInfo.version || "dev";
   const buildText = appInfo.build ? `Сборка ${appInfo.build}` : null;
-  const desktopReleaseText = desktopUpdate.latestVersion
-    ? `${desktopUpdate.latestVersion} (${desktopUpdate.latestBuild || 0})`
-    : "Проверка обновлений";
-  const shouldShowDesktopRelease =
-    Platform.OS === "web" && appInfo.platform !== "web";
   const isAndroidApp = Platform.OS === "android";
   const automationTitle = isAndroidApp ? "Автоподключение" : "Автозапуск";
   const automationValue = isAutomationEnabled ? "Включено" : "Выключено";
@@ -77,10 +70,6 @@ export default function SettingsScreen() {
   const smartRoutingHint = vpnStatus.state === "connected"
     ? "Применится после переподключения. Российские сервисы пойдут без VPN."
     : "Российские сервисы без VPN, остальное через защищенный туннель.";
-  const updateStatusLabel = desktopStatusLabel(
-    desktopUpdate.status,
-    desktopUpdate.required,
-  );
 
   useFocusEffect(React.useCallback(() => {
     let active = true;
@@ -400,31 +389,7 @@ export default function SettingsScreen() {
                 {appInfo.configSchemaVersion}
               </Text>
             </View>
-            {shouldShowDesktopRelease ? (
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Обновление desktop</Text>
-                <Text
-                  style={styles.detailValue}
-                >{`${desktopReleaseText} · ${desktopUpdate.releaseChannel} · ${updateStatusLabel}`}</Text>
-              </View>
-            ) : null}
           </View>
-          {desktopUpdate.status === "ready" ? (
-            <VexPressable
-              accessibilityRole="button"
-              onPress={() => {
-                playLightImpactHaptic();
-                void desktopUpdate.relaunchToUpdate();
-              }}
-              style={styles.updateActionButton}
-              hoverStyle={{ opacity: 0.88 }}
-              title="Перезапустить VEX и применить обновление"
-            >
-              <Text style={styles.updateActionText}>
-                Перезапустить и установить
-              </Text>
-            </VexPressable>
-          ) : null}
         </View>
 
         <View style={styles.dangerGroup}>
@@ -450,20 +415,9 @@ export default function SettingsScreen() {
   );
 }
 
-function desktopStatusLabel(status: string, required: boolean) {
-  if (required) return "обязательно";
-  if (status === "ready") return "готово";
-  if (status === "downloading") return "скачивается";
-  if (status === "checking") return "проверка";
-  if (status === "error") return "ошибка проверки";
-  return "актуально";
-}
-
 function formatPlatformLabel(platform: string) {
   if (platform === "android") return "Android";
   if (platform === "ios") return "iOS";
-  if (platform === "macos") return "macOS";
-  if (platform === "windows") return "Windows";
   if (platform === "web") return "Web";
   return platform;
 }
@@ -745,19 +699,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "800",
     lineHeight: 16,
-  },
-  updateActionButton: {
-    alignItems: "center",
-    backgroundColor: vexColors.accent,
-    borderRadius: 14,
-    justifyContent: "center",
-    minHeight: 42,
-    paddingHorizontal: 14,
-  },
-  updateActionText: {
-    color: "#031012",
-    fontSize: 15,
-    fontWeight: "900",
   },
   dangerGroup: {
     paddingTop: 2,

@@ -2,7 +2,7 @@ import { billingDurationLabel, billingDurationMonths, billingSummaryFallbackCopy
 import { buildSubscriptionReminders } from '../src/notifications/subscriptionReminderSchedule';
 import { devicePushTokenPath, fcmPushRegistration } from '../src/notifications/pushRegistration';
 import { normalizeApiRequestError, technicalWorksMessage } from '../src/api/error';
-import { installManualUpdate, isTrustedIosUpdateUrl } from '../src/api/manualUpdateInstall';
+import { installManualUpdate } from '../src/api/manualUpdateInstall';
 import { errorMessage } from '../src/utils/error';
 import { assessManualUpdateCenter, canUseOtaUpdate, requiresNativeUpdate, shouldOfferAppUpdate, updateCheckChannel, validateManualUpdatePayloadForBaseUrl } from '../src/api/updatePreflight';
 import {
@@ -20,15 +20,7 @@ import { isEmailOTPExpired, isInvalidOrExpiredEmailOTPError, normalizeEmailOTPCo
 import { loadSessionFromStorage, saveSessionToStorage, type SessionStorageAdapter } from '../src/auth/sessionStoreCore';
 import { isSupportSocketConnecting } from '../src/api/supportSocketState';
 import { optimisticSupportTicket, supportConnectionStatusText, supportHistoryErrorMessage, uniqueSupportMessages, supportChatItems } from '../src/screens/support-helpers';
-import {
-  deleteTauriSensitiveStorageItem,
-  getTauriSensitiveStorageItem,
-  isTauriSensitiveStorageKey,
-  setTauriSensitiveStorageItem,
-  shouldUseMemoryOnlySensitiveWebStorage,
-  type TauriInvoke,
-  type WebStorageAdapter,
-} from '../src/native/secureStoreCore';
+import { shouldUseMemoryOnlySensitiveWebStorage } from '../src/native/secureStoreCore';
 import { safeGetStoredValue } from '../src/settings/safeStorage';
 import {
   hotVpnProfileSchemaVersion,
@@ -48,7 +40,6 @@ import { cleanupFailedVpnConnection } from '../src/vpn/failedConnectionCleanup';
 import { androidExperimentalRoutingEnabled, androidProfilePlatform, androidVpnProfileRequiresRefresh, androidVpnProfileWithinBinderBudget, vpnProfileRouteCount } from '../src/vpn/androidRoutingSafety';
 import { profileResolutionOrder } from '../src/vpn/profileResolutionFallback';
 import { isKeyEpochMismatchError, nextManagedKeyEpoch } from '../src/vpn/keyEpochRecovery';
-import { isVpnDeviceForLocation, type VpnLocationDevice } from '../src/vpn/deviceLocation';
 import { nativeVpnDeviceForClient } from '../src/vpn/nativeDeviceSelection';
 import { assessNativeTunnelHealth, localStatusHealthReasons } from '../src/vpn/nativeTunnelHealth';
 import { hasVerifiedNativeTunnelActivity, resolveNativeTunnelVerified } from '../src/vpn/vpnStatusVerification';
@@ -113,9 +104,9 @@ assertEqual(managedProfileAWGVersion, 3);
 }
 
 {
-  assertEqual(vpnConnectionAnimationsEnabled('android', false), false);
-  assertEqual(vpnConnectionAnimationsEnabled('ios', false), true);
-  assertEqual(vpnConnectionAnimationsEnabled('web', true), false);
+  assertEqual(vpnConnectionAnimationsEnabled('android'), false);
+  assertEqual(vpnConnectionAnimationsEnabled('ios'), true);
+  assertEqual(vpnConnectionAnimationsEnabled('web'), true);
 }
 
 {
@@ -550,108 +541,14 @@ function profileWithEndpoint(endpoint: string): VpnProfile {
 }
 
 async function runAuthStorageWarmStartTests(): Promise<void> {
-  assertEqual(isTauriSensitiveStorageKey('vex.auth.session.v1'), true);
-  assertEqual(isTauriSensitiveStorageKey('vex.auth.device_id'), true);
-  assertEqual(isTauriSensitiveStorageKey('vex.billing.summary.v1'), true);
-  assertEqual(isTauriSensitiveStorageKey('vex.entitlement.v1'), true);
-  assertEqual(isTauriSensitiveStorageKey('vex.vpn.hot_profiles.v1'), true);
-  assertEqual(isTauriSensitiveStorageKey('vex.settings.language.v1'), false);
   assertEqual(
-    shouldUseMemoryOnlySensitiveWebStorage('web', false, 'vex.auth.session.v1', ['vex.auth.session.v1']),
+    shouldUseMemoryOnlySensitiveWebStorage('web', 'vex.auth.session.v1', ['vex.auth.session.v1']),
     true,
   );
   assertEqual(
-    shouldUseMemoryOnlySensitiveWebStorage('web', true, 'vex.auth.session.v1', ['vex.auth.session.v1']),
+    shouldUseMemoryOnlySensitiveWebStorage('android', 'vex.auth.session.v1', ['vex.auth.session.v1']),
     false,
   );
-
-  {
-    const webStorage = memoryWebStorage({ 'vex.auth.session.v1': '{"accessToken":"legacy"}' });
-    const secureStorage = new Map<string, string>();
-    const calls: string[] = [];
-    const value = await getTauriSensitiveStorageItem(
-      'vex.auth.session.v1',
-      tauriSensitiveStorageInvoke(secureStorage, calls),
-      webStorage,
-    );
-
-    assertEqual(value, '{"accessToken":"legacy"}');
-    assertEqual(secureStorage.get('vex.auth.session.v1'), '{"accessToken":"legacy"}');
-    assertEqual(webStorage.getItem('vex.auth.session.v1'), '{"accessToken":"legacy"}');
-    assertDeepEqual(calls, ['get:vex.auth.session.v1', 'set:vex.auth.session.v1']);
-  }
-
-  {
-    const webStorage = memoryWebStorage();
-    const secureStorage = new Map<string, string>([['vex.auth.session.v1', '{"accessToken":"secure"}']]);
-    const value = await getTauriSensitiveStorageItem(
-      'vex.auth.session.v1',
-      tauriSensitiveStorageInvoke(secureStorage),
-      webStorage,
-    );
-
-    assertEqual(value, '{"accessToken":"secure"}');
-  }
-
-  {
-    const webStorage = memoryWebStorage();
-    const failingInvoke: TauriInvoke = async () => {
-      throw new Error('keychain unavailable');
-    };
-    await setTauriSensitiveStorageItem('vex.auth.session.v1', '{"accessToken":"fallback"}', failingInvoke, webStorage);
-
-    assertEqual(webStorage.getItem('vex.auth.session.v1'), '{"accessToken":"fallback"}');
-  }
-
-  {
-    const webStorage = memoryWebStorage();
-    const secureStorage = new Map<string, string>();
-    await setTauriSensitiveStorageItem(
-      'vex.auth.session.v1',
-      '{"accessToken":"mirrored"}',
-      tauriSensitiveStorageInvoke(secureStorage),
-      webStorage,
-    );
-
-    assertEqual(secureStorage.get('vex.auth.session.v1'), '{"accessToken":"mirrored"}');
-    assertEqual(webStorage.getItem('vex.auth.session.v1'), null);
-  }
-
-  {
-    const webStorage = memoryWebStorage({ 'vex.auth.session.v1': '{"accessToken":"legacy-after-failure"}' });
-    const failingInvoke: TauriInvoke = async () => {
-      throw new Error('keychain unavailable');
-    };
-    const value = await getTauriSensitiveStorageItem('vex.auth.session.v1', failingInvoke, webStorage);
-
-    assertEqual(value, '{"accessToken":"legacy-after-failure"}');
-  }
-
-  {
-    const webStorage = memoryWebStorage();
-    const failingInvoke: TauriInvoke = async () => {
-      throw new Error('keychain unavailable');
-    };
-    await assertRejects(
-      () => getTauriSensitiveStorageItem('vex.auth.session.v1', failingInvoke, webStorage),
-      'keychain unavailable',
-    );
-  }
-
-  {
-    const webStorage = memoryWebStorage({ 'vex.auth.device_id': 'legacy-device' });
-    const secureStorage = new Map<string, string>([['vex.auth.device_id', 'secure-device']]);
-    const calls: string[] = [];
-    await deleteTauriSensitiveStorageItem(
-      'vex.auth.device_id',
-      tauriSensitiveStorageInvoke(secureStorage, calls),
-      webStorage,
-    );
-
-    assertEqual(secureStorage.get('vex.auth.device_id'), undefined);
-    assertEqual(webStorage.getItem('vex.auth.device_id'), null);
-    assertDeepEqual(calls, ['delete:vex.auth.device_id']);
-  }
 }
 
 async function runSessionLoadRetryTests(): Promise<void> {
@@ -1003,14 +900,6 @@ assertEqual(isVpnTransportFallbackError(new Error('Подписка не акт�
 
   assertEqual(autoSwitchTargetLocationId('de', locations), 'fi');
   assertEqual(autoSwitchTargetLocationId('fi', locations), null);
-}
-
-{
-  assertEqual(isVpnDeviceForLocation(deviceCandidate({ externalDeviceId: 'phone:de' }), 'de'), true);
-  assertEqual(isVpnDeviceForLocation(deviceCandidate({ nodeId: 'de-1' }), 'de'), true);
-  assertEqual(isVpnDeviceForLocation(deviceCandidate({ endpoint: 'de-1.vexguard.app:443' }), 'de'), true);
-  assertEqual(isVpnDeviceForLocation(deviceCandidate({ nodeId: 'fi-1', endpoint: 'fi-1.vexguard.app:51820' }), 'de'), false);
-  assertEqual(isVpnDeviceForLocation(deviceCandidate({ externalDeviceId: 'phone' }), 'de'), false);
 }
 
 {
@@ -1752,46 +1641,6 @@ function billingPlanCandidates(): BillingPlanSource[] {
   ];
 }
 
-function memoryWebStorage(initial: Record<string, string> = {}): WebStorageAdapter {
-  const values = new Map(Object.entries(initial));
-  return {
-    getItem: (key) => values.get(key) ?? null,
-    setItem: (key, value) => {
-      values.set(key, value);
-    },
-    deleteItem: (key) => {
-      values.delete(key);
-    },
-  };
-}
-
-function tauriSensitiveStorageInvoke(values: Map<string, string>, calls: string[] = []): TauriInvoke {
-  return async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
-    const key = String(args?.key ?? '');
-    if (command === 'secure_storage_get') {
-      calls.push(`get:${key}`);
-      return (values.get(key) ?? null) as T;
-    }
-    if (command === 'secure_storage_set') {
-      calls.push(`set:${key}`);
-      values.set(key, String(args?.value ?? ''));
-      return true as T;
-    }
-    if (command === 'secure_storage_delete') {
-      calls.push(`delete:${key}`);
-      values.delete(key);
-      return true as T;
-    }
-    throw new Error(`unexpected command: ${command}`);
-  };
-}
-
-function deviceCandidate(overrides: Partial<VpnLocationDevice> = {}): VpnLocationDevice {
-  return {
-    ...overrides,
-  };
-}
-
 function vpnDeviceCandidate(overrides: Partial<VpnDevice> = {}): VpnDevice {
   return {
     id: 'dev_1',
@@ -1944,9 +1793,6 @@ async function runManualUpdateInstallTests(): Promise<void> {
     'SHA-256',
   );
 
-  assertEqual(isTrustedIosUpdateUrl('https://apps.apple.com/app/vex/id123'), true);
-  assertEqual(isTrustedIosUpdateUrl('https://testflight.apple.com/join/abc'), true);
-  assertEqual(isTrustedIosUpdateUrl('https://vexguard.app/downloads/VEX.ipa'), false);
   const iosCalls: string[] = [];
   await installManualUpdate({ ...update, downloadUrl: 'https://apps.apple.com/app/vex/id123' }, 'ios', {
     openUrl: async (url) => {
@@ -1954,6 +1800,12 @@ async function runManualUpdateInstallTests(): Promise<void> {
     },
   });
   assertDeepEqual(iosCalls, ['https://apps.apple.com/app/vex/id123']);
+  await assertRejects(
+    () => installManualUpdate({ ...update, downloadUrl: 'https://vexguard.app/downloads/VEX.ipa' }, 'ios', {
+      openUrl: async () => undefined,
+    }),
+    'App Store или TestFlight',
+  );
 }
 
 function runSupportTests(): void {

@@ -72,12 +72,6 @@ function appInstallSource(platform: string): string {
       return 'android_app';
     case 'ios':
       return 'ios_app';
-    case 'macos':
-      return 'macos_app';
-    case 'windows':
-      return 'windows_app';
-    case 'linux':
-      return 'linux_app';
     default:
       return 'web_app';
   }

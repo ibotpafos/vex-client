@@ -14,7 +14,7 @@ import {
   TextInput,
   View,
 } from "react-native";
-import React, { useCallback, useState, useEffect, useRef } from "react";
+import { useCallback, useState, useEffect, useRef } from "react";
 import {
   requestEmailOTP,
   confirmEmailOTP,
@@ -29,7 +29,6 @@ import {
   getBiometricAuthAvailability,
 } from "@/native/biometricAuth";
 import { getOrCreateDeviceId } from "@/native/appInfo";
-import { isTauriRuntime } from "@/native/tauriPlatform";
 import {
   playErrorHaptic,
   playLightImpactHaptic,
@@ -186,43 +185,6 @@ export default function SignInScreen() {
         return;
       }
 
-      if (!isTauriRuntime()) return;
-
-      try {
-        const [{ onOpenUrl, getCurrent }, { invoke }] = await Promise.all([
-          import("@tauri-apps/plugin-deep-link"),
-          import("@tauri-apps/api/core"),
-        ]);
-
-        const readPendingUrls = async () => {
-          if (disposed) {
-            return;
-          }
-          const [currentUrls, pendingUrls] = await Promise.all([
-            getCurrent().catch(() => [] as string[]),
-            invoke<string[]>("take_pending_deep_links").catch(() => []),
-          ]);
-          if (disposed) {
-            return;
-          }
-          handleCallbackUrls([...(currentUrls || []), ...pendingUrls]);
-        };
-
-        await readPendingUrls();
-        if (disposed) {
-          return;
-        }
-
-        unlisten = await onOpenUrl((urls) => {
-          handleCallbackUrls(urls);
-        });
-        if (disposed) {
-          unlisten();
-          return;
-        }
-      } catch (err) {
-        console.error("Failed to initialize deep link listener:", err);
-      }
     }
 
     initDeepLink();

@@ -17,11 +17,6 @@ external/amnezia
 *.key
 *.mobileprovision
 
-src-tauri/target/
-src-tauri/target
-src-tauri/.vex-stamps/
-src-tauri/.vex-stamps
-src-tauri/**/*.log
 
 android/.gradle
 android/build
@@ -47,3 +42,5 @@ native-windows/**/bin/
 native-windows/**/obj/
 native-windows/.build/
 .codex-tmp/
+# macOS native helper local build intermediates
+macos-native/.build-helper/

@@ -413,7 +413,7 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(appState.contains("return session?.accessToken"))
     }
 
-    func testEntitlementAllowsEitherActiveOrVpnAccessLikeTauriClient() {
+    func testEntitlementAllowsEitherActiveOrVpnAccessLikeLegacyDesktopClient() {
         XCTAssertTrue(Entitlement(active: true, vpnAccess: false).hasPaidAccess)
         XCTAssertTrue(Entitlement(active: false, vpnAccess: true).hasPaidAccess)
         XCTAssertFalse(Entitlement(active: false, vpnAccess: false).hasPaidAccess)
@@ -805,7 +805,6 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(helperBuildScript.contains("VEXPrivilegedHelper"))
         XCTAssertTrue(verifyScript.contains("helper_version_from_bundle"))
         XCTAssertTrue(verifyScript.contains("macos-native/HelperResources/vex-helper"))
-        XCTAssertFalse(buildScript.contains("src-tauri/resources"))
         XCTAssertFalse(nativeInstaller.contains("private let helperVersion = \""))
     }
 

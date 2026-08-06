@@ -1,15 +1,6 @@
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
-import {
-  deleteTauriSensitiveStorageItem,
-  getTauriSensitiveStorageItem,
-  isTauriSensitiveStorageKey,
-  setTauriSensitiveStorageItem,
-  shouldUseMemoryOnlySensitiveWebStorage,
-  type TauriInvoke,
-  type WebStorageAdapter,
-} from './secureStoreCore';
-import { isTauriRuntime } from './tauriPlatform';
+import { shouldUseMemoryOnlySensitiveWebStorage } from './secureStoreCore';
 
 export const SENSITIVE_STORAGE_KEYS = [
   'vex.app.install_id.v1',
@@ -38,22 +29,6 @@ function shouldUseWebStorage(): boolean {
   return Platform.OS === 'web';
 }
 
-
-function shouldUseTauriSensitiveStorage(key: string): boolean {
-  return isTauriRuntime() && isTauriSensitiveStorageKey(key);
-}
-
-async function getTauriInvoke(): Promise<TauriInvoke | null> {
-  if (!isTauriRuntime()) {
-    return null;
-  }
-  try {
-    const api = await import('@tauri-apps/api/core');
-    return api.invoke;
-  } catch {
-    return null;
-  }
-}
 
 function getWebStorageItem(key: string): string | null {
   if (Platform.OS !== 'web') {
@@ -91,16 +66,10 @@ function clearWebStorageItems(keys: readonly string[]): void {
   }
 }
 
-const webStorageAdapter: WebStorageAdapter = {
-  getItem: getWebStorageItem,
-  setItem: setWebStorageItem,
-  deleteItem: deleteWebStorageItem,
-};
-
 const webSensitiveMemoryStorage = new Map<string, string>();
 
 function shouldUseMemoryOnlyWebStorage(key: string): boolean {
-  return shouldUseMemoryOnlySensitiveWebStorage(Platform.OS, isTauriRuntime(), key, SENSITIVE_STORAGE_KEYS);
+  return shouldUseMemoryOnlySensitiveWebStorage(Platform.OS, key, SENSITIVE_STORAGE_KEYS);
 }
 
 export async function getItemAsync(key: string): Promise<string | null> {
@@ -116,17 +85,6 @@ export async function getItemAsync(key: string): Promise<string | null> {
     }
     return null;
   }
-  if (shouldUseTauriSensitiveStorage(key)) {
-    const invoke = await getTauriInvoke();
-    if (invoke) {
-      return getTauriSensitiveStorageItem(key, invoke, webStorageAdapter);
-    }
-    const legacyValue = getWebStorageItem(key);
-    if (legacyValue) {
-      return legacyValue;
-    }
-    throw new Error('Tauri secure storage is unavailable.');
-  }
   if (shouldUseWebStorage()) {
     return getWebStorageItem(key);
   }
@@ -138,12 +96,6 @@ export async function setItemAsync(key: string, value: string): Promise<void> {
     webSensitiveMemoryStorage.set(key, value);
     deleteWebStorageItem(key);
     return;
-  }
-  if (shouldUseTauriSensitiveStorage(key)) {
-    const invoke = await getTauriInvoke();
-    if (invoke) {
-      return setTauriSensitiveStorageItem(key, value, invoke, webStorageAdapter);
-    }
   }
   if (shouldUseWebStorage()) {
     setWebStorageItem(key, value);
@@ -157,12 +109,6 @@ export async function deleteItemAsync(key: string): Promise<void> {
     webSensitiveMemoryStorage.delete(key);
     deleteWebStorageItem(key);
     return;
-  }
-  if (shouldUseTauriSensitiveStorage(key)) {
-    const invoke = await getTauriInvoke();
-    if (invoke) {
-      return deleteTauriSensitiveStorageItem(key, invoke, webStorageAdapter);
-    }
   }
   if (shouldUseWebStorage()) {
     deleteWebStorageItem(key);

@@ -23,7 +23,6 @@ import {
   playSuccessHaptic,
   playWarningHaptic,
 } from '@/native/haptics';
-import { listenTauriEvent } from '@/native/tauriEvents';
 import {
   disconnectVpn,
   endVpnLiveActivity,
@@ -69,7 +68,7 @@ import {
 } from '@/vpn/serverSelection';
 import { switchVpnLocation } from '@/vpn/serverSwitch';
 import { useNativeVpnWatchdog } from '@/vpn/useNativeVpnWatchdog';
-import { useVpnProfileState, type VpnProfileRefreshEvent } from '@/vpn/useVpnProfileState';
+import { useVpnProfileState } from '@/vpn/useVpnProfileState';
 import { useVpnDiagnostics } from './useVpnDiagnostics';
 import { useVpnConnectionFlow } from './useVpnConnectionFlow';
 import { useVpnConnectionAnimations } from './useVpnConnectionAnimations';
@@ -93,18 +92,14 @@ import {
   entitlementRefreshMs,
   locationRefreshMs,
   nativeStatusPollMs,
-  tauriNativeStatusPollMs,
   nativeHealthPollMs,
   nativeHealthFailureThreshold,
   nativeReconnectCooldownMs,
   staleHandshakeReconnectSeconds,
   clientDiagnosticsHeartbeatMs,
   profileRefreshMs,
-  vpnStatusChangedEvent,
-  vpnProfileChangedEvent,
   type DiagnosticsSnapshotRef,
   type ConnectionPhase,
-  isTauriRuntime,
   supportsNativeLatencyProbe,
   supportsNativeVpnWatchdog,
   supportsNativeStatusPolling,
@@ -533,11 +528,9 @@ export function useVpnConnection() {
     connectCurrentVpn,
   } = useVpnConnectionFlow({
     antiLeakEnabled,
-    routingMode,
     selectedLocationId,
     serverSelectionMode,
     availableLocations,
-    requestVpnPermission,
     cacheProfile,
     resolveConnectableVpnProfile,
     vpnStatus,
@@ -682,62 +675,6 @@ export function useVpnConnection() {
     });
     return () => subscription.remove();
   }, [refreshManagedProfile, refreshVpnStatus, session, submitClientDiagnosticsEvent]);
-
-  useEffect(() => {
-    if (!isTauriRuntime()) {
-      return undefined;
-    }
-
-    let disposed = false;
-    let unlisten: (() => void) | undefined;
-    listenTauriEvent<VpnStatus>(vpnStatusChangedEvent, (nextStatus) => {
-      setVpnStatus((current) => areVpnStatusesEqual(current, nextStatus) ? current : nextStatus);
-    })
-      .then((cleanup) => {
-        if (disposed) {
-          cleanup();
-          return;
-        }
-        unlisten = cleanup;
-      })
-      .catch(() => undefined);
-
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
-  }, [setVpnStatus]);
-
-  useEffect(() => {
-    let disposed = false;
-    let unlisten: (() => void) | undefined;
-    listenTauriEvent<VpnProfileRefreshEvent>(vpnProfileChangedEvent, (event) => {
-      refreshManagedProfile(event).catch((error) => {
-        void submitClientDiagnosticsEvent('profile_refresh_event_failed', 'error', {
-          error_message: errorMessage(error, 'profile_refresh_event_failed'),
-          profile_refresh_reason: event.reason,
-          profile_refresh_location_id: selectedLocationId,
-        }).catch(() => undefined);
-      });
-    })
-      .then((cleanup) => {
-        if (disposed) {
-          cleanup();
-          return;
-        }
-        unlisten = cleanup;
-      })
-      .catch((error) => {
-        void submitClientDiagnosticsEvent('profile_event_subscribe_failed', 'error', {
-          error_message: errorMessage(error, 'profile_event_subscribe_failed'),
-        }).catch(() => undefined);
-      });
-
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
-  }, [refreshManagedProfile, selectedLocationId, submitClientDiagnosticsEvent]);
 
   useEffect(() => {
     if (!isAppActive || !supportsNativeLatencyProbe()) {
@@ -918,11 +855,7 @@ export function useVpnConnection() {
     if (!isAppActive || !session || !supportsNativeStatusPolling() || Platform.OS === 'android') {
       return undefined;
     }
-    const pollMs = isTauriRuntime()
-      ? tauriNativeStatusPollMs
-      : isConnected
-        ? connectedNativeStatusPollMs
-        : nativeStatusPollMs;
+    const pollMs = isConnected ? connectedNativeStatusPollMs : nativeStatusPollMs;
     const timer = setInterval(() => {
       void refreshVpnStatus('native_status_poll_failed')
         .then((nextStatus) => {

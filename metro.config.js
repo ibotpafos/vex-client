@@ -10,11 +10,9 @@ config.resolver.blockList = exclusionList([
   /\/\.env\..*\.local$/,
   /\/.*\.env\.local$/,
   /\/\.env\.signing\.local$/,
-  /\/\.env\.tauri-updater\.local$/,
   /\/android\/\.gradle\/.*/,
   /\/android\/app\/build\/.*/,
   /\/artifacts\/.*/,
-  /\/src-tauri\/target\/.*/,
 ]);
 
 module.exports = config;

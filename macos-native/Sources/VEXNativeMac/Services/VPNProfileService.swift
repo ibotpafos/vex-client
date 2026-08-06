@@ -24,7 +24,8 @@ struct VPNProfileService {
         locationId: String,
         routingMode: VpnRoutingMode,
         forceRefresh: Bool = false,
-        writeHelperConfig: Bool = true
+        writeHelperConfig: Bool = true,
+        awgVersion: Int = 3
     ) async throws -> PreparedTunnel {
         let normalizedLocationId = normalizeLocationId(locationId)
         let bypassRegion = bypassRegion(for: routingMode)
@@ -35,8 +36,9 @@ struct VPNProfileService {
            !Self.cachedProfileNeedsRefresh(
                 cached,
                 requestedLocationId: normalizedLocationId,
-                requestedRoutingMode: routingMode
-           ) {
+                requestedRoutingMode: routingMode,
+                requestedAwgVersion: awgVersion
+            ) {
             if writeHelperConfig {
                 try cache.writeHelperConfig(helperConfig(cached.config))
             }
@@ -69,6 +71,7 @@ struct VPNProfileService {
 
         var effectiveRoutingMode = routingMode
         var effectiveBypassRegion = bypassRegion
+        let knownProfileVersion = cached?.awgVersion == awgVersion ? cached?.profileVersion : nil
         let managedProfile: ManagedVpnProfile
         do {
             managedProfile = try await api.managedVpnProfile(
@@ -77,7 +80,8 @@ struct VPNProfileService {
                 locationId: normalizedLocationId,
                 routingMode: routingMode,
                 bypassRegion: bypassRegion,
-                knownVersion: cached?.profileVersion
+                knownVersion: knownProfileVersion,
+                awgVersion: awgVersion
             )
         } catch {
             if error.isTimeout,
@@ -103,7 +107,8 @@ struct VPNProfileService {
                     locationId: normalizedLocationId,
                     routingMode: .allExceptRu,
                     bypassRegion: effectiveBypassRegion,
-                    knownVersion: nil
+                    knownVersion: nil,
+                    awgVersion: awgVersion
                 )
                 return try persistManagedProfile(
                     managedProfile,
@@ -113,7 +118,8 @@ struct VPNProfileService {
                     locationId: normalizedLocationId,
                     routingMode: effectiveRoutingMode,
                     bypassRegion: effectiveBypassRegion,
-                    writeHelperConfig: writeHelperConfig
+                    writeHelperConfig: writeHelperConfig,
+                    awgVersion: awgVersion
                 )
             }
             guard routingMode != .fullTunnel, error.isTimeout else {
@@ -126,8 +132,9 @@ struct VPNProfileService {
                !Self.cachedProfileNeedsRefresh(
                     fallbackCached,
                     requestedLocationId: normalizedLocationId,
-                    requestedRoutingMode: .fullTunnel
-               ) {
+                    requestedRoutingMode: .fullTunnel,
+                    requestedAwgVersion: awgVersion
+                ) {
                 if writeHelperConfig {
                     try cache.writeHelperConfig(helperConfig(fallbackCached.config))
                 }
@@ -139,7 +146,8 @@ struct VPNProfileService {
                 locationId: normalizedLocationId,
                 routingMode: .fullTunnel,
                 bypassRegion: nil,
-                knownVersion: nil
+                knownVersion: nil,
+                awgVersion: awgVersion
             )
         }
 
@@ -155,7 +163,8 @@ struct VPNProfileService {
             locationId: normalizedLocationId,
             routingMode: effectiveRoutingMode,
             bypassRegion: effectiveBypassRegion,
-            writeHelperConfig: writeHelperConfig
+            writeHelperConfig: writeHelperConfig,
+            awgVersion: awgVersion
         )
     }
 
@@ -167,7 +176,8 @@ struct VPNProfileService {
         locationId normalizedLocationId: String,
         routingMode effectiveRoutingMode: VpnRoutingMode,
         bypassRegion effectiveBypassRegion: String?,
-        writeHelperConfig: Bool
+        writeHelperConfig: Bool,
+        awgVersion: Int
     ) throws -> PreparedTunnel {
         if managedProfile.revoked == true {
             throw VPNProfileError.deviceRevoked
@@ -175,7 +185,9 @@ struct VPNProfileService {
 
         let config: String
         if managedProfile.unchanged == true {
-            guard let cachedConfig = cached?.config, isValidConfig(cachedConfig) else {
+            guard cached?.awgVersion == awgVersion,
+                  let cachedConfig = cached?.config,
+                  isValidConfig(cachedConfig) else {
                 throw VPNProfileError.unchangedProfileWithoutCache
             }
             config = cachedConfig
@@ -196,7 +208,8 @@ struct VPNProfileService {
             bypassRangesCount: managedProfile.bypassRanges?.filter { !$0.isEmpty }.count ?? 0,
             bypassDomainsCount: managedProfile.bypassDomains?.filter { !$0.isEmpty }.count ?? 0,
             routingPolicyVersion: managedProfile.routingPolicyVersion ?? VEXAppInfo.routingPolicyVersion,
-            rotationRequired: managedProfile.rotationRequired == true
+            rotationRequired: managedProfile.rotationRequired == true,
+            awgVersion: awgVersion
         )
         try cache.save(PreparedTunnelCacheRecord(tunnel: tunnel), locationId: normalizedLocationId, routingMode: effectiveRoutingMode)
         if writeHelperConfig {
@@ -471,6 +484,7 @@ struct VPNProfileService {
         _ cached: PreparedTunnelCacheRecord,
         requestedLocationId: String,
         requestedRoutingMode: VpnRoutingMode,
+        requestedAwgVersion: Int = 3,
         allowStale: Bool = false,
         now: Date = Date()
     ) -> Bool {
@@ -479,6 +493,9 @@ struct VPNProfileService {
             return true
         }
         if cached.routingMode != requestedRoutingMode {
+            return true
+        }
+        if (cached.awgVersion ?? 2) != requestedAwgVersion {
             return true
         }
         if cachedDeviceNodeDoesNotMatchLocation(cached.device, requestedLocationId: requestedLocationId) {

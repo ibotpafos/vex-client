@@ -56,8 +56,6 @@ ensure_linked_dir() {
   echo "linked ${repo_path} -> ${cache_path}"
 }
 
-ensure_linked_dir "src-tauri/target" "src-tauri-target"
-ensure_linked_dir "src-tauri/.vex-stamps" "src-tauri-stamps"
 ensure_linked_dir "android/.gradle" "android-dot-gradle"
 ensure_linked_dir "android/build" "android-build"
 ensure_linked_dir "android/app/build" "android-app-build"

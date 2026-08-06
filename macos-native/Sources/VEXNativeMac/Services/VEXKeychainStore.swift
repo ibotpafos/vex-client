@@ -4,7 +4,7 @@ import Security
 
 struct VEXKeychainStore {
     static let nativeService = "app.vex.vpn.native.sensitive-storage"
-    static let legacyTauriService = "app.vex.vpn.desktop.sensitive-storage"
+    static let legacyDesktopService = "app.vex.vpn.desktop.sensitive-storage"
 
     let service: String
 

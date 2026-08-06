@@ -8,19 +8,22 @@ public struct HelperRuntimeConfiguration: Sendable {
     public var ownerWatchdogInterval: Duration
     public var routeWatchdogInterval: Duration
     public var operationLockStaleAfter: TimeInterval
+    public var handshakeStarveFailOpenTicks: Int
 
     public init(
         maxCommandBytes: Int = 512,
         commandTimeout: TimeInterval = 5,
         ownerWatchdogInterval: Duration = .seconds(4),
         routeWatchdogInterval: Duration = .seconds(2),
-        operationLockStaleAfter: TimeInterval = 120
+        operationLockStaleAfter: TimeInterval = 120,
+        handshakeStarveFailOpenTicks: Int = 10
     ) {
         self.maxCommandBytes = maxCommandBytes
         self.commandTimeout = commandTimeout
         self.ownerWatchdogInterval = ownerWatchdogInterval
         self.routeWatchdogInterval = routeWatchdogInterval
         self.operationLockStaleAfter = operationLockStaleAfter
+        self.handshakeStarveFailOpenTicks = handshakeStarveFailOpenTicks
     }
 }
 
@@ -47,6 +50,7 @@ public actor HelperRuntime {
     private var ownerWatchdogTask: Task<Void, Never>?
     private var routeWatchdogTask: Task<Void, Never>?
     private var unhealthyTunnelTicks = 0
+    private var handshakeStarvedTicks = 0
 
     public init(
         store: HelperStateStore,
@@ -142,8 +146,26 @@ public actor HelperRuntime {
         if tunnelIsHealthy(session) {
             unhealthyTunnelTicks = 0
             try? store.persistSession(session)
+            let establishedHandshake = session.latestHandshake.flatMap { $0 == 0 ? nil : $0 }
+            if establishedHandshake != nil {
+                handshakeStarvedTicks = 0
+                return
+            }
+            handshakeStarvedTicks += 1
+            if handshakeStarvedTicks >= configuration.handshakeStarveFailOpenTicks {
+                do {
+                    try store.withOperationLock(staleAfter: configuration.operationLockStaleAfter) {
+                        try actionDownWithoutLock()
+                    }
+                    handshakeStarvedTicks = 0
+                    logger.warn("route-watchdog", "tunnel never established a handshake; fail-open teardown completed")
+                } catch {
+                    logger.error("route-watchdog", "fail-open teardown will retry: \(error.localizedDescription)")
+                }
+            }
             return
         }
+        handshakeStarvedTicks = 0
         unhealthyTunnelTicks += 1
         do {
             try store.withOperationLock(staleAfter: configuration.operationLockStaleAfter) {

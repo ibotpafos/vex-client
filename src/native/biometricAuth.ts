@@ -1,6 +1,5 @@
 import * as LocalAuthentication from 'expo-local-authentication';
 import { Platform } from 'react-native';
-import { isTauriRuntime } from './tauriPlatform';
 
 export type BiometricAuthAvailability = {
   isAvailable: boolean;
@@ -13,10 +12,6 @@ const unavailableBiometrics: BiometricAuthAvailability = {
 };
 
 export async function getBiometricAuthAvailability(): Promise<BiometricAuthAvailability> {
-  if (isTauriRuntime()) {
-    return getDesktopBiometricAuthAvailability();
-  }
-
   if (!isNativeMobilePlatform()) {
     return unavailableBiometrics;
   }
@@ -38,10 +33,6 @@ export async function getBiometricAuthAvailability(): Promise<BiometricAuthAvail
 }
 
 export async function authenticateWithBiometrics(): Promise<boolean> {
-  if (isTauriRuntime()) {
-    return authenticateWithDesktopBiometrics();
-  }
-
   const availability = await getBiometricAuthAvailability();
   if (!availability.isAvailable) {
     return false;
@@ -65,24 +56,6 @@ function isNativeMobilePlatform(): boolean {
   return Platform.OS === 'ios' || Platform.OS === 'android';
 }
 
-
-async function getDesktopBiometricAuthAvailability(): Promise<BiometricAuthAvailability> {
-  try {
-    const { invoke } = await import('@tauri-apps/api/core');
-    return await invoke<BiometricAuthAvailability>('get_desktop_biometric_auth_availability');
-  } catch {
-    return unavailableBiometrics;
-  }
-}
-
-async function authenticateWithDesktopBiometrics(): Promise<boolean> {
-  try {
-    const { invoke } = await import('@tauri-apps/api/core');
-    return await invoke<boolean>('authenticate_with_desktop_biometrics');
-  } catch {
-    return false;
-  }
-}
 
 function biometricAuthLabel(supportedTypes: LocalAuthentication.AuthenticationType[]): string {
   if (supportedTypes.includes(LocalAuthentication.AuthenticationType.FACIAL_RECOGNITION)) {

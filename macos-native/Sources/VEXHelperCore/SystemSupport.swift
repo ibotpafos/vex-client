@@ -550,17 +550,31 @@ public final class SystemTunnelController: TunnelControlling, @unchecked Sendabl
         return output.joined(separator: "\n")
     }
 
+    private func killLingeringTunnelDaemon() {
+        // A surviving userspace daemon holds the utun channel file descriptor,
+        // which makes `ifconfig destroy` fail with EINVAL and strands the default
+        // route in a dead interface (no internet). Release it before destroying.
+        _ = try? runner.run(CommandSpec(program: "/usr/bin/pkill", arguments: ["-TERM", "-x", "amneziawg-go"], timeout: 2))
+        _ = try? runner.run(CommandSpec(program: "/bin/sleep", arguments: ["1"], timeout: 2))
+        _ = try? runner.run(CommandSpec(program: "/usr/bin/pkill", arguments: ["-9", "-x", "amneziawg-go"], timeout: 2))
+    }
+
     private func fallbackInterfaceCleanup(_ interfaceName: String?) throws {
         guard let interfaceName,
               interfaceName.hasPrefix("utun"),
               interfaceName.dropFirst(4).allSatisfy(\.isNumber) else {
             throw HelperError.missingTunnelMetadata("missing valid interface identity for fallback cleanup")
         }
-        let result = try runner.run(CommandSpec(program: "/sbin/ifconfig", arguments: [interfaceName, "destroy"], timeout: 5))
+        killLingeringTunnelDaemon()
+        var result = try runner.run(CommandSpec(program: "/sbin/ifconfig", arguments: [interfaceName, "destroy"], timeout: 5))
         if !result.succeeded {
-            let probe = try runner.run(CommandSpec(program: "/sbin/ifconfig", arguments: [interfaceName], timeout: 3))
-            guard !probe.succeeded else {
-                throw HelperError.commandFailed("fallback interface cleanup failed for \(interfaceName)")
+            killLingeringTunnelDaemon()
+            result = try runner.run(CommandSpec(program: "/sbin/ifconfig", arguments: [interfaceName, "destroy"], timeout: 5))
+            if !result.succeeded {
+                let probe = try runner.run(CommandSpec(program: "/sbin/ifconfig", arguments: [interfaceName], timeout: 3))
+                guard !probe.succeeded else {
+                    throw HelperError.commandFailed("fallback interface cleanup failed for \(interfaceName)")
+                }
             }
         }
         try? fileSystem.removeItem(at: paths.runtimeSocketPath(for: interfaceName))

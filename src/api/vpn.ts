@@ -6,7 +6,7 @@ import { nativeVpnDeviceForClient } from '@/vpn/nativeDeviceSelection';
 import { isKeyEpochMismatchError, nextManagedKeyEpoch } from '@/vpn/keyEpochRecovery';
 import { defaultVpnRoutingMode, defaultVpnRoutingPolicyVersion, resolvedVpnBypassRegion } from '@/vpn/routingPolicy';
 import { devicePushTokenPath } from '@/notifications/pushRegistration';
-import { jsonRequest, rawRequest, clientVersionHeaders, isTauriRuntime } from './client';
+import { jsonRequest, rawRequest, clientVersionHeaders } from './client';
 import { buildCreateDeviceRequest } from './deviceCreateRequest';
 import {
   type VpnDevice,
@@ -412,19 +412,6 @@ export function currentVpnClient(): VpnClientDescriptor {
   }
   if (Platform.OS === 'ios') {
     return { deviceName: 'iPhone', idempotencyPrefix: 'ios', platform: 'ios' };
-  }
-  if (isTauriRuntime()) {
-    const platform = typeof navigator !== 'undefined' ? `${navigator.platform} ${navigator.userAgent}`.toLowerCase() : '';
-    if (platform.includes('win')) {
-      return { deviceName: 'Windows', idempotencyPrefix: 'windows', platform: 'windows' };
-    }
-    if (platform.includes('linux') || platform.includes('x11') || platform.includes('wayland')) {
-      return { deviceName: 'Linux', idempotencyPrefix: 'linux', platform: 'linux' };
-    }
-    if (platform.includes('mac') || platform.includes('darwin')) {
-      return { deviceName: 'Mac', idempotencyPrefix: 'macos', platform: 'macos' };
-    }
-    return { deviceName: 'Desktop', idempotencyPrefix: 'desktop', platform: 'web' };
   }
   return { deviceName: 'Web', idempotencyPrefix: 'web', platform: 'web' };
 }

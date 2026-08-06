@@ -1,6 +1,6 @@
 import { router } from 'expo-router';
 import { Check, ChevronLeft, Search } from 'lucide-react-native';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,

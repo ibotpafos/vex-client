@@ -7,11 +7,6 @@
     "@expo/ui": "~57.0.8",
     "@sentry/react-native": "^8.21.0",
     "@tanstack/react-query": "^5.101.4",
-    "@tauri-apps/api": "^2.11.1",
-    "@tauri-apps/plugin-deep-link": "^2.4.9",
-    "@tauri-apps/plugin-http": "^2.5.9",
-    "@tauri-apps/plugin-process": "^2.3.1",
-    "@tauri-apps/plugin-updater": "^2.10.1",
     "clsx": "^2.1.1",
     "expo": "^57.0.9",
     "expo-application": "~57.0.2",
@@ -40,7 +35,6 @@
     "react-native-worklets": "0.10.1"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.11.4",
     "@types/react": "^19.2.18",
     "eoas": "^3.1.1",
     "eslint": "^9.39.5",
@@ -80,7 +74,6 @@
     "web:prod-auth": "bash scripts/start_web_prod_auth.sh",
     "dev:prod-api-proxy": "node scripts/dev_prod_api_proxy.mjs",
     "build:web": "expo export -p web",
-    "build:helper": "bash scripts/build_helper.sh",
     "native:macos:build": "bash scripts/build_native_macos_app.sh",
     "native:macos:pkg": "bash scripts/build_native_macos_pkg.sh",
     "native:macos:sparkle": "bash scripts/build_native_macos_sparkle_release.sh",
@@ -97,10 +90,6 @@
     "native:windows:package": "pwsh -ExecutionPolicy Bypass -File native-windows/packaging/package-native-windows.ps1 -Architecture x64",
     "native:windows:package:arm64": "pwsh -ExecutionPolicy Bypass -File native-windows/packaging/package-native-windows.ps1 -Architecture arm64",
     "native:windows:publish": "pwsh -ExecutionPolicy Bypass -File native-windows/packaging/publish-native-windows.ps1",
-    "desktop:web-bundle": "bash scripts/build_desktop_web_bundle.sh",
-    "desktop:storage-smoke": "bash scripts/macos_keychain_sensitive_storage_smoke.sh",
-    "desktop:launch-smoke": "npm run native:macos:preflight",
-    "tauri:cli": "tauri",
     "expo:doctor": "npx expo-doctor@latest",
     "expo:fix": "npx expo install --fix",
     "typecheck": "tsc --noEmit",
@@ -116,8 +105,6 @@
     "android:release": "bash scripts/build_android_release.sh",
     "local:release-cache": "bash scripts/setup_local_release_cache.sh",
     "local:release": "bash scripts/build_all_local_releases.sh",
-    "windows:release": "powershell -ExecutionPolicy Bypass -File scripts/build_windows_release.ps1",
-    "linux:release": "bash scripts/build_linux_release.sh",
     "macos:release": "npm run native:macos:release"
   },
   "resolutions": {

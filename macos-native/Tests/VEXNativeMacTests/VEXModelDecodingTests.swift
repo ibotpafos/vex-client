@@ -23,7 +23,7 @@ final class VEXModelDecodingTests: XCTestCase {
         XCTAssertEqual(location.latencyMs, 7.122)
     }
 
-    func testStoredSessionDecodesTauriPayloadShape() throws {
+    func testStoredSessionDecodesLegacyDesktopPayloadShape() throws {
         let data = """
         {
           "user": {"id": "usr_1", "email": "user@example.com", "status": "active"},
@@ -56,13 +56,13 @@ final class VEXModelDecodingTests: XCTestCase {
         XCTAssertEqual(device.appVersion, "0.1.42")
     }
 
-    func testKeychainDefaultServiceIsNativeNotLegacyTauri() {
+    func testKeychainDefaultServiceIsNativeNotLegacyDesktop() {
         XCTAssertEqual(VEXKeychainStore().service, VEXKeychainStore.nativeService)
-        XCTAssertNotEqual(VEXKeychainStore().service, VEXKeychainStore.legacyTauriService)
+        XCTAssertNotEqual(VEXKeychainStore().service, VEXKeychainStore.legacyDesktopService)
     }
 
-    func testLegacyTauriServiceNameRemainsExplicitForSilentMigrationOnly() {
-        let legacy = VEXKeychainStore(service: VEXKeychainStore.legacyTauriService)
+    func testLegacyDesktopServiceNameRemainsExplicitForSilentMigrationOnly() {
+        let legacy = VEXKeychainStore(service: VEXKeychainStore.legacyDesktopService)
         XCTAssertEqual(legacy.service, "app.vex.vpn.desktop.sensitive-storage")
     }
 }

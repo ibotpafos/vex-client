@@ -7,7 +7,6 @@ export default [
       ".expo/**",
       "dist/**",
       "node_modules/**",
-      "src-tauri/**",
       "android/**",
       "ios/**",
       "external/**",

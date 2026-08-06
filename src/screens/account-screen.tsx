@@ -1,7 +1,6 @@
 import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { Settings, User } from 'lucide-react-native';
-import React from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { hasPaidEntitlement } from '@/api/vexApi';

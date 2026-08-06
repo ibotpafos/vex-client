@@ -51,7 +51,6 @@ run_step() {
 }
 
 load_env_file "${ROOT}/.env.local-release"
-load_env_file "${ROOT}/.env.tauri-updater.local"
 load_env_file "${ROOT}/.env.signing.local"
 
 require_command node
@@ -103,38 +102,6 @@ if platform_selected android; then
   export ANDROID_GRADLE_ARGS="${ANDROID_GRADLE_ARGS:--x lintVitalRelease -x lintVitalAnalyzeRelease -x lintVitalReportRelease}"
   export ANDROID_RELEASE_ABIS="${ANDROID_RELEASE_ABIS:-arm64-v8a}"
   run_step npm run android:release
-fi
-
-if platform_selected linux; then
-  if [[ "${host_os}" == "Linux" ]]; then
-    require_command sha256sum
-    require_command dpkg-deb
-    require_command rustup
-    require_command cargo
-    run_step rustup target add "${LINUX_TARGET:-x86_64-unknown-linux-gnu}"
-    run_step cargo check --manifest-path src-tauri/Cargo.toml --target "${LINUX_TARGET:-x86_64-unknown-linux-gnu}"
-    run_step npm run linux:release
-  elif [[ "${PLATFORMS}" != "auto" ]]; then
-    echo "linux release requires Linux host or a Linux VM/container with Tauri system dependencies" >&2
-    exit 2
-  else
-    echo "skip linux: requires Linux host"
-  fi
-fi
-
-if platform_selected windows; then
-  if command -v pwsh >/dev/null 2>&1; then
-    require_command rustup
-    require_command cargo
-    run_step rustup target add "${WINDOWS_TARGET:-x86_64-pc-windows-msvc}"
-    run_step cargo check --manifest-path src-tauri/Cargo.toml --target "${WINDOWS_TARGET:-x86_64-pc-windows-msvc}"
-    run_step npm run windows:release
-  elif [[ "${PLATFORMS}" != "auto" ]]; then
-    echo "windows release requires PowerShell plus the Windows Rust/MSVC toolchain on a Windows host" >&2
-    exit 2
-  else
-    echo "skip windows: requires Windows host"
-  fi
 fi
 
 echo

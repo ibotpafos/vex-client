@@ -9,7 +9,6 @@ import { AppState, Image, Platform, Pressable, StyleSheet, Text, View, type AppS
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { SessionProvider, useSession } from '@/auth/session-context';
 import { SplashScreenController } from '@/auth/splash-screen-controller';
-import { DesktopUpdateProvider, DesktopUpdateOverlay } from '@/components/desktop-update-overlay';
 import { AndroidUpdateOverlay } from '@/components/android-update-overlay';
 import { IOSUpdateOverlay } from '@/components/ios-update-overlay';
 import { OtaUpdateOverlay } from '@/components/ota-update-overlay';
@@ -71,12 +70,10 @@ export default function RootLayout() {
       <NotificationNavigationBridge />
       <SafeAreaProvider>
         <SessionProvider>
-          <DesktopUpdateProvider>
-            <ToastProvider>
-              <SplashScreenController />
-              <RootNavigator />
-            </ToastProvider>
-          </DesktopUpdateProvider>
+          <ToastProvider>
+            <SplashScreenController />
+            <RootNavigator />
+          </ToastProvider>
         </SessionProvider>
       </SafeAreaProvider>
     </QueryClientProvider>
@@ -200,7 +197,6 @@ function DeferredStartupOverlays() {
       <AndroidUpdateOverlay />
       <IOSUpdateOverlay />
       <OtaUpdateOverlay />
-      <DesktopUpdateOverlay />
     </>
   );
 }

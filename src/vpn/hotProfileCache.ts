@@ -1,6 +1,5 @@
 import { Platform } from 'react-native';
 import type { QueryClient } from '@tanstack/react-query';
-import { isTauriRuntime } from '@/native/tauriPlatform';
 
 import * as SecureStore from '@/native/secureStore';
 import type { VpnProfile } from './profile';
@@ -41,7 +40,7 @@ export function supportsPersistentHotVpnProfiles(): boolean {
   if (Platform.OS === 'android' || Platform.OS === 'ios') {
     return true;
   }
-  return isTauriRuntime();
+  return false;
 }
 
 export async function loadHotVpnProfile(
@@ -162,7 +161,7 @@ export function runtimeProfileKey(): string {
     ? navigator.platform
     : 'native';
   const userAgent = typeof navigator.userAgent === 'string' ? navigator.userAgent : '';
-  return `${platform}:${userAgent.includes('Tauri') ? 'tauri' : 'runtime'}`;
+  return `${platform}:${userAgent || 'runtime'}`;
 }
 
 async function readHotVpnProfileStore(): Promise<HotVpnProfileStore> {

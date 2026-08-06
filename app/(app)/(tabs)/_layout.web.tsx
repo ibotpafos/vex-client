@@ -1,5 +1,5 @@
 import { Slot, usePathname, useRouter } from 'expo-router';
-import React, { useMemo } from 'react';
+import { useMemo } from 'react';
 import { StyleSheet, Text, View, Platform } from 'react-native';
 import { Home, MessageSquareText, User } from 'lucide-react-native';
 import { ACCOUNT_TAB_ROUTE, HOME_TAB_ROUTE, SUPPORT_TAB_ROUTE } from '@/navigation/routes';

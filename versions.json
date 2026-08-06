@@ -1,10 +1,4 @@
 {
-  "desktop": {
-    "version": "0.1.36",
-    "release_notes": "Desktop: стабильнее connect/disconnect на macOS, меньше блокирующих status-запросов к helper, новый helper v23 и устранен WebKit hang в asset protocol.",
-    "config_schema_version": 1,
-    "min_config_schema_version": 1
-  },
   "android": {
     "version": "1.0.54",
     "build": 56,
@@ -66,16 +60,6 @@
         "supportedApiClientVersions": [
           "expo-1",
           "windows-native-1"
-        ],
-        "routingPolicyVersionPrefix": "2026.06."
-      },
-      {
-        "id": "linux-stable-v1",
-        "platform": "linux",
-        "channel": "stable",
-        "configSchemaVersion": 1,
-        "supportedApiClientVersions": [
-          "expo-1"
         ],
         "routingPolicyVersionPrefix": "2026.06."
       },

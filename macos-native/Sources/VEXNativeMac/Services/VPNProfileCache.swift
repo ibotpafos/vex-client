@@ -73,6 +73,7 @@ struct PreparedTunnelCacheRecord: Codable, Equatable {
     var bypassDomainsCount: Int
     var routingPolicyVersion: String
     var fetchedAt: Date?
+    var awgVersion: Int?
 
     init(tunnel: PreparedTunnel) {
         device = tunnel.device
@@ -85,6 +86,7 @@ struct PreparedTunnelCacheRecord: Codable, Equatable {
         bypassDomainsCount = tunnel.bypassDomainsCount
         routingPolicyVersion = tunnel.routingPolicyVersion
         fetchedAt = Date()
+        awgVersion = tunnel.awgVersion
     }
 
     var isFresh: Bool {
@@ -107,7 +109,8 @@ struct PreparedTunnelCacheRecord: Codable, Equatable {
             bypassRangesCount: bypassRangesCount,
             bypassDomainsCount: bypassDomainsCount,
             routingPolicyVersion: routingPolicyVersion,
-            rotationRequired: false
+            rotationRequired: false,
+            awgVersion: awgVersion ?? 3
         )
     }
 }

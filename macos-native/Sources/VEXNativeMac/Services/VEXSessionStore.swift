@@ -10,7 +10,7 @@ struct VEXSessionStore {
     init(
         fileStore: AppSensitiveFileStore = AppSensitiveFileStore(),
         nativeKeychain: VEXKeychainStore = VEXKeychainStore(),
-        legacyKeychain: VEXKeychainStore = VEXKeychainStore(service: VEXKeychainStore.legacyTauriService)
+        legacyKeychain: VEXKeychainStore = VEXKeychainStore(service: VEXKeychainStore.legacyDesktopService)
     ) {
         self.fileStore = fileStore
         self.nativeKeychain = nativeKeychain

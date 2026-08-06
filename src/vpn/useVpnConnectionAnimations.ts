@@ -1,12 +1,12 @@
 import { useEffect, useRef } from 'react';
 import { Animated, Easing, Platform } from 'react-native';
-import { isTauriRuntime, type ConnectionPhase } from '../screens/home-screen-helpers';
+import { type ConnectionPhase } from '../screens/home-screen-helpers';
 import { vpnConnectionAnimationsEnabled } from './vpnAnimationPolicy';
 
 export function useVpnConnectionAnimations(connectionPhase: ConnectionPhase) {
   const pulseProgress = useRef(new Animated.Value(0)).current;
   const spinProgress = useRef(new Animated.Value(0)).current;
-  const animationsEnabled = vpnConnectionAnimationsEnabled(Platform.OS, isTauriRuntime());
+  const animationsEnabled = vpnConnectionAnimationsEnabled(Platform.OS);
 
   useEffect(() => {
     pulseProgress.stopAnimation();

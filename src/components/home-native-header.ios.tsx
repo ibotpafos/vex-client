@@ -1,6 +1,6 @@
 import { Host, HStack, RNHostView, Spacer, Text } from '@expo/ui/swift-ui';
 import { font, foregroundStyle, frame, glassEffect, padding } from '@expo/ui/swift-ui/modifiers';
-import React, { type ReactElement } from 'react';
+import { type ReactElement } from 'react';
 import { StyleSheet } from 'react-native';
 
 type HomeNativeHeaderProps = {

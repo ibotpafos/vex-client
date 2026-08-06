@@ -387,6 +387,34 @@ final class VEXAppState: ObservableObject {
             return try await connectPreparedTunnel(initialTunnel, helper: helper, generation: generation)
         } catch {
             try ensureConnectStillDesired(generation: generation)
+
+            // AWG3 is the primary transport. Keep AWG2 available as a temporary
+            // compatibility fallback for nodes or helpers that cannot handshake it.
+            if initialTunnel.awgVersion == 3 {
+                do {
+                    statusMessage = "AWG3 не подключился. Пробуем резервный AWG2."
+                    let fallbackTunnel = try await profileService.resolveProfile(
+                        accessToken: token,
+                        locationId: initialTunnel.locationId,
+                        routingMode: routingMode,
+                        forceRefresh: true,
+                        awgVersion: 2
+                    )
+                    try ensureConnectStillDesired(generation: generation)
+                    let connectedFallback = try await connectPreparedTunnel(
+                        fallbackTunnel,
+                        helper: helper,
+                        generation: generation
+                    )
+                    statusMessage = "VPN подключен через резервный AWG2."
+                    return connectedFallback
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    // Continue with the existing key/profile and location recovery.
+                }
+            }
+
             let probe = await autopilotService.probe(endpoint: initialTunnel.endpoint)
             let usage = await autopilotService.usage(accessToken: token, deviceId: initialTunnel.device.id)
             let healthReasons = autopilotService.healthReasons(status: helper.status, usage: usage)

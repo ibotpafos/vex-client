@@ -31,9 +31,6 @@ ios/**/*.xcuserstate
 ios/**/*.xcuserdata/
 
 # Desktop build output is not needed for Expo Android/iOS builds
-src-tauri/target/
-src-tauri/gen/
-src-tauri/.vex-stamps/
 
 # local artifacts
 .vex-stamps/

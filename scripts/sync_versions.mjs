@@ -5,7 +5,6 @@ const versionsPath = new URL('../versions.json', import.meta.url);
 const packageJsonPath = new URL('../package.json', import.meta.url);
 const packageLockPath = new URL('../package-lock.json', import.meta.url);
 const appJsonPath = new URL('../app.json', import.meta.url);
-const tauriConfigPath = new URL('../src-tauri/tauri.conf.json', import.meta.url);
 const androidGradlePath = new URL('../android/app/build.gradle', import.meta.url);
 const iosInfoPlistPath = new URL('../ios/VEX/Info.plist', import.meta.url);
 const iosProjectPath = new URL('../ios/VEX.xcodeproj/project.pbxproj', import.meta.url);
@@ -14,7 +13,6 @@ const versions = readJson(versionsPath);
 
 const mobileVersion = String(versions.android.version);
 const mobileBuild = Number(versions.android.build);
-const desktopVersion = String(versions.desktop.version);
 const iosVersion = String(versions.ios.version);
 const iosBuild = String(versions.ios.build);
 
@@ -40,10 +38,6 @@ appJson.expo.version = mobileVersion;
 appJson.expo.android = appJson.expo.android || {};
 appJson.expo.android.versionCode = androidVersionCode;
 writeJson(appJsonPath, appJson);
-
-const tauriConfig = readJson(tauriConfigPath);
-tauriConfig.version = desktopVersion;
-writeJson(tauriConfigPath, tauriConfig);
 
 let androidGradle = fs.readFileSync(androidGradlePath, 'utf8');
 androidGradle = replaceFirst(androidGradle, /versionCode\s+\d+/, `versionCode ${androidVersionCode}`);
@@ -76,7 +70,6 @@ console.log(
       mobileVersion,
       mobileBuild,
       androidVersionCode,
-      desktopVersion,
       iosVersion,
       iosBuild,
       cwd: fileUrlPath(root),

@@ -259,12 +259,12 @@ Copy-Item -LiteralPath $wintunLibraryPath -Destination (Join-Path $packageDir 'w
 Copy-Item -LiteralPath $profileSigningKeyringPath -Destination (Join-Path $packageDir 'profile-signing-keys.json') -Force
 
 $iconMap = @{
-    'StoreLogo.png' = 'StoreLogo.png'
-    'Square150x150Logo.png' = 'Square150x150Logo.png'
-    'Square44x44Logo.png' = 'Square44x44Logo.png'
+    'StoreLogo.png' = 'vex-app-icon-source.png'
+    'Square150x150Logo.png' = 'vex-app-icon-source.png'
+    'Square44x44Logo.png' = 'vex-app-icon-source.png'
 }
 foreach ($targetName in $iconMap.Keys) {
-    $sourcePath = Join-Path $root "src-tauri\icons\$($iconMap[$targetName])"
+    $sourcePath = Join-Path $root "native-windows\src\Vex.Windows.App\Assets\$($iconMap[$targetName])"
     if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
         throw "Required packaging asset is missing: $sourcePath"
     }

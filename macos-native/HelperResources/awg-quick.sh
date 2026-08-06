@@ -122,7 +122,16 @@ get_real_interface() {
 add_if() {
 	export WG_TUN_NAME_FILE="/var/run/amneziawg/$INTERFACE.name"
 	mkdir -p "/var/run/amneziawg/"
-	cmd "${WG_QUICK_USERSPACE_IMPLEMENTATION:-amneziawg-go}" utun
+	# Run the userspace daemon in foreground mode and background it, so it owns
+	# its own TUN/UAPI file descriptors. daemonize() re-execs with inherited fds
+	# and can be reaped when the launching process exits, stranding the tunnel.
+	cmd "${WG_QUICK_USERSPACE_IMPLEMENTATION:-amneziawg-go}" -f utun &
+	local _tries=0
+	while [[ ! -s "/var/run/amneziawg/$INTERFACE.name" ]]; do
+		_tries=$(( _tries + 1 ))
+		[[ $_tries -ge 100 ]] && break
+		sleep 0.1
+	done
 	get_real_interface
 }
 
@@ -155,6 +164,12 @@ del_if() {
 	[[ -z $REAL_INTERFACE ]] || cmd rm -f "/var/run/wireguard/$REAL_INTERFACE.sock"
 	[[ -z $REAL_INTERFACE ]] || cmd rm -f "/var/run/amneziawg/$REAL_INTERFACE.sock"
 	cmd rm -f "/var/run/amneziawg/$INTERFACE.name"
+	# Signal the foreground userspace daemon to shut down cleanly (it tears the
+	# interface down itself); otherwise the channel fd keeps utunN alive and the
+	# helper's fallback `ifconfig destroy` cannot reap it.
+	if [[ -n $REAL_INTERFACE ]]; then
+		pkill -TERM -f "$(basename "${WG_QUICK_USERSPACE_IMPLEMENTATION:-amneziawg-go}")" >/dev/null 2>&1 || true
+	fi
 }
 
 up_if() {

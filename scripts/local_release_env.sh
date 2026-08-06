@@ -3,8 +3,11 @@ set -euo pipefail
 
 SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
 ROOT="$(cd "$(dirname "${SCRIPT_PATH}")/.." && pwd)"
-external_cache_root="/Volumes/D/Downloads/VEX/local-release-cache/vex-client"
-if [[ -d "${external_cache_root}" ]]; then
+# Keep reproducible release caches outside Downloads and under the shared
+# developer-cache root on the external volume.  The legacy location remains
+# supported through the explicit VEX_LOCAL_RELEASE_CACHE_ROOT override.
+external_cache_root="/Volumes/D/projects/.dev-cache/vex/releases/vex-client"
+if [[ -d "/Volumes/D/projects" ]]; then
   DEFAULT_CACHE_ROOT="${external_cache_root}"
 else
   DEFAULT_CACHE_ROOT="${HOME}/Library/Caches/VEX/local-release-cache/vex-client"

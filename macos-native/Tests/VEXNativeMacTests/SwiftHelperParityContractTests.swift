@@ -12,8 +12,6 @@ final class SwiftHelperParityContractTests: XCTestCase {
         XCTAssertTrue(source.contains("struct VpnStatus: Equatable"))
         XCTAssertTrue(source.contains("VEXHelperInstallState"))
 
-        XCTAssertFalse(source.contains("src-tauri/src/bin/helper/main.rs"))
-        XCTAssertFalse(source.contains("src-tauri/src/bin/helper/firewall.rs"))
     }
 
     func testSwiftHelperConnectCommandContract() throws {

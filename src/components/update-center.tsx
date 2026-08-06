@@ -2,15 +2,13 @@ import * as Application from 'expo-application';
 import * as Updates from 'expo-updates';
 import { Download, RefreshCw, ShieldAlert, ShieldCheck, X } from 'lucide-react-native';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { installManualUpdate } from '@/api/manualUpdateInstall';
 import { assessManualUpdateCenter, canUseOtaUpdate, requiresNativeUpdate } from '@/api/updatePreflight';
 import { vexApiBaseUrl, type AppUpdateCheckResult } from '@/api/vexApi';
-import { useDesktopUpdate } from '@/components/desktop-update-overlay';
 import { useMobileAppUpdateQuery } from '@/components/mobile-app-update-query';
 import { getAppInfo, type AppInfo } from '@/native/appInfo';
 import { playErrorHaptic, playLightImpactHaptic, playSelectionHaptic, playSuccessHaptic } from '@/native/haptics';
-import { isTauriRuntime } from '@/native/tauriPlatform';
 import { VexNativeActivityIndicator } from '@/ui/native-activity-indicator';
 import { VexScreen, vexSharedStyles } from '@/ui/vex-ui';
 
@@ -23,9 +21,6 @@ type UpdateCenterButtonProps = {
 };
 
 export function UpdateCenterButton({ visible, onOpen, onClose }: UpdateCenterButtonProps) {
-  if (isTauriRuntime()) {
-    return <DesktopUpdateCenterButton visible={visible} onClose={onClose} onOpen={onOpen} />;
-  }
   if (Platform.OS === 'android' || Platform.OS === 'ios') {
     return <MobileUpdateCenterButton platform={Platform.OS} visible={visible} onClose={onClose} onOpen={onOpen} />;
   }
@@ -111,30 +106,6 @@ function MobileUpdateCenterButton({
   );
 }
 
-function DesktopUpdateCenterButton({ onClose, onOpen, visible }: UpdateCenterButtonProps) {
-  const update = useDesktopUpdate();
-  const needsAttention = Boolean(update.required);
-  const hasUpdate = update.status === 'downloading' || update.status === 'ready';
-
-  if (!needsAttention && !hasUpdate) {
-    return null;
-  }
-
-  return (
-    <>
-      <HeaderButton
-        busy={update.status === 'checking' || update.status === 'downloading'}
-        danger={needsAttention}
-        highlighted={hasUpdate}
-        onPress={onOpen}
-      />
-      <UpdateCenterModal visible={visible} onClose={onClose}>
-        <DesktopUpdateCenterContent />
-      </UpdateCenterModal>
-    </>
-  );
-}
-
 function HeaderButton({
   busy,
   danger,
@@ -163,28 +134,6 @@ function HeaderButton({
       {busy ? <VexNativeActivityIndicator color="#22D3EE" size="small" /> : <Download color={danger ? '#FFB4A8' : highlighted ? '#031012' : '#A7B9BD'} size={23} strokeWidth={2.5} />}
       {danger || highlighted ? <View style={[styles.headerBadge, danger && styles.headerBadgeDanger]} /> : null}
     </Pressable>
-  );
-}
-
-function UpdateCenterModal({
-  children,
-  onClose,
-  visible,
-}: {
-  children: React.ReactNode;
-  onClose: () => void;
-  visible: boolean;
-}) {
-  if (!visible) {
-    return null;
-  }
-
-  return (
-    <Modal animationType="slide" onRequestClose={onClose} presentationStyle="fullScreen" visible={visible}>
-      <UpdateCenterFrame onClose={onClose}>
-        {children}
-      </UpdateCenterFrame>
-    </Modal>
   );
 }
 
@@ -361,66 +310,6 @@ function MobileUpdateCenterContent({
           ? 'Android скачает APK внутри VEX, проверит checksum и подпись приложения, затем откроет системный установщик.'
           : 'iOS откроет официальную страницу обновления.'}
       </Text>
-    </ScrollView>
-  );
-}
-
-function DesktopUpdateCenterContent() {
-  const update = useDesktopUpdate();
-  const progress = update.contentLength > 0
-    ? Math.min(99, Math.max(1, Math.round((update.downloadedBytes / update.contentLength) * 100)))
-    : null;
-  const isUpdaterError = update.status === 'error';
-  const hasReadyUpdate = update.status === 'ready';
-  const canDownloadManually = isUpdaterError && Boolean(update.manualDownloadUrl);
-  const title = hasReadyUpdate
-    ? 'Обновление готово'
-    : update.status === 'downloading'
-      ? 'Скачиваем обновление'
-      : isUpdaterError
-        ? 'Проверка не удалась'
-        : 'VEX обновлен';
-  const message = hasReadyUpdate
-    ? 'Перезапустите приложение, чтобы применить уже загруженную версию.'
-    : update.status === 'downloading'
-      ? 'Tauri updater скачивает подписанный пакет обновления.'
-      : isUpdaterError
-        ? 'Не удалось проверить или скачать desktop update.'
-        : 'Desktop-клиент совместим с текущим каналом обновлений.';
-  const primaryLabel = hasReadyUpdate ? 'Перезапустить' : canDownloadManually ? 'Скачать DMG' : isUpdaterError ? 'Недоступно' : 'Актуально';
-
-  return (
-    <ScrollView contentContainerStyle={styles.content}>
-      <StatusHero assessmentTone={isUpdaterError ? 'danger' : update.required ? 'warning' : 'ok'} title={title} message={message} />
-      <View style={styles.section}>
-        <InfoRow label="Текущая версия" value={update.currentVersion} />
-        <InfoRow label="Доступная версия" value={update.latestVersion || 'Нет новой версии'} />
-        <InfoRow label="Канал" value={update.releaseChannel || 'stable'} />
-        <InfoRow label="Совместимость" tone={update.required ? 'danger' : 'ok'} value={update.required ? 'Требуется обновление' : 'Совместимо'} />
-        <InfoRow label="Подпись" tone={isUpdaterError ? 'warning' : 'ok'} value={isUpdaterError ? 'Нужна ручная установка' : 'Проверяется Tauri updater'} />
-        {progress !== null && update.status === 'downloading' ? <InfoRow label="Загрузка" value={`${progress}%`} /> : null}
-      </View>
-      {update.releaseNotes ? <Text style={styles.notes}>{update.releaseNotes}</Text> : null}
-      {update.error ? <Text style={styles.error}>{update.error}</Text> : null}
-      <View style={styles.actions}>
-        <Pressable disabled={update.status === 'checking' || update.status === 'downloading'} onPress={() => { void update.checkNow(); }} style={styles.secondaryButton}>
-          <RefreshCw color="#A7B9BD" size={18} strokeWidth={2.5} />
-          <Text style={styles.secondaryText}>{update.status === 'checking' ? 'Проверяем' : 'Проверить'}</Text>
-        </Pressable>
-        <Pressable
-          disabled={!hasReadyUpdate && !canDownloadManually}
-          onPress={() => {
-            if (hasReadyUpdate) {
-              void update.relaunchToUpdate();
-              return;
-            }
-            void update.openManualDownload();
-          }}
-          style={[styles.primaryButton, !hasReadyUpdate && !canDownloadManually && styles.primaryButtonDisabled]}
-        >
-          <Text style={styles.primaryText}>{primaryLabel}</Text>
-        </Pressable>
-      </View>
     </ScrollView>
   );
 }

@@ -5,7 +5,6 @@ Report security issues privately. Do not open public GitHub issues for vulnerabi
 This public client repository must not contain:
 
 - VEX admin tokens or production API credentials
-- Tauri updater private keys
 - Authenticode certificates or passwords
 - backend, admin, infrastructure, Ansible, Kamal, database, or deployment configuration
 - production download artifacts copied from private infrastructure

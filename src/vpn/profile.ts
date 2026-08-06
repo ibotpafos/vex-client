@@ -84,7 +84,7 @@ function runtimeProfileKey(): string {
     ? navigator.platform
     : 'native';
   const userAgent = typeof navigator.userAgent === 'string' ? navigator.userAgent : '';
-  return `${platform}:${userAgent.includes('Tauri') ? 'tauri' : 'runtime'}`;
+  return `${platform}:${userAgent || 'runtime'}`;
 }
 
 async function refreshVpnProfile(

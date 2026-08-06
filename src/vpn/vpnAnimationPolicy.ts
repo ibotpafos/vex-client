@@ -1,3 +1,3 @@
-export function vpnConnectionAnimationsEnabled(platform: string, tauriRuntime: boolean): boolean {
-  return platform !== 'android' && !tauriRuntime;
+export function vpnConnectionAnimationsEnabled(platform: string): boolean {
+  return platform !== 'android';
 }

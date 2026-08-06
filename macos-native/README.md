@@ -2,7 +2,7 @@
 
 This is the SwiftUI-native macOS client for VEX. Its privileged
 `VEXPrivilegedHelper` is also implemented in Swift and built as a separate
-SwiftPM executable; the native release does not compile or package Tauri/Rust.
+SwiftPM executable with an independent native helper and release pipeline.
 
 Current scope:
 
@@ -83,7 +83,7 @@ VEX_SPARKLE_PRODUCTION=1 \
 bash scripts/build_native_macos_sparkle_release.sh
 ```
 
-This is the same trust model as the current Tauri updater: Sparkle verifies the
+Sparkle verifies the
 update archive with the Sparkle EdDSA key, while the app itself may still be
 ad-hoc signed for internal/manual distribution. After the app is trusted locally,
 Sparkle updates can work without Apple Developer ID.

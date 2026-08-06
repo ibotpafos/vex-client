@@ -1,10 +1,8 @@
 import { Platform } from 'react-native';
 import { getAppInfo, getOrCreateDeviceId } from '@/native/appInfo';
-import { isTauriRuntime } from '@/native/tauriPlatform';
 import { androidExperimentalRoutingEnabled, androidProfilePlatform } from '@/vpn/androidRoutingSafety';
 import { ApiRequestError, isMaintenanceStatus, normalizeApiRequestError } from './error';
 export { isMaintenanceStatus, isTechnicalWorksError, normalizeApiRequestError, technicalWorksMessage } from './error';
-export { isTauriRuntime };
 
 export type RequestOptions = {
   accessToken?: string;
@@ -20,15 +18,9 @@ const requestTimeoutMs = 30000;
 const getRequestRetryCount = 2;
 const requestRetryDelayMs = 600;
 const shouldLogApiRequests = typeof __DEV__ !== 'undefined' && __DEV__;
-let tauriFetchPromise: Promise<typeof import('@tauri-apps/plugin-http').fetch> | null = null;
 
 export const vexApiBaseUrl = trimTrailingSlash(process.env.EXPO_PUBLIC_VEX_API_BASE_URL || 'https://vexguard.app');
 const apiRequestBaseUrl = vexApiBaseUrl;
-
-async function tauriHttpFetch() {
-  tauriFetchPromise ??= import('@tauri-apps/plugin-http').then((module) => module.fetch);
-  return tauriFetchPromise;
-}
 
 export async function jsonRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
   return JSON.parse(await rawRequest(path, options)) as T;
@@ -88,28 +80,11 @@ async function rawRequestAttempt(path: string, options: RequestOptions, method: 
 
   try {
     let response;
-    const isTauri = isTauriRuntime();
     if (shouldLogApiRequests && !options.suppressErrorLog) {
-      logApiDebug(`API Request: [${init.method || 'GET'}] ${apiRequestBaseUrl}${path} isTauri: ${isTauri}`);
+      logApiDebug(`API Request: [${init.method || 'GET'}] ${apiRequestBaseUrl}${path}`);
     }
     
-    if (isTauri) {
-      try {
-        const tauriFetch = await tauriHttpFetch();
-        response = await withTimeout(
-          tauriFetch(`${apiRequestBaseUrl}${path}`, { headers, method, body: init.body, connectTimeout: timeoutMs }),
-          timeoutMs,
-        );
-      } catch (err: unknown) {
-        if (shouldLogApiRequests && !options.suppressErrorLog) {
-          const message = err instanceof Error ? err.message : String(err);
-          logApiDebug('Tauri fetch error details:', message);
-        }
-        throw err;
-      }
-    } else {
-      response = await fetch(`${apiRequestBaseUrl}${path}`, { ...init, signal: controller.signal });
-    }
+    response = await fetch(`${apiRequestBaseUrl}${path}`, { ...init, signal: controller.signal });
     
     if (shouldLogApiRequests && !options.suppressErrorLog) {
       logApiDebug(`API Response: ${response.status} ${response.statusText}`);
@@ -157,18 +132,6 @@ function isRetryableRequestError(error: unknown): boolean {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  let timeout: ReturnType<typeof setTimeout> | null = null;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => reject(new Error('Превышено время ожидания API.')), timeoutMs);
-  });
-  return Promise.race([promise, timeoutPromise]).finally(() => {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  });
 }
 
 function logApiDebug(...items: unknown[]) {

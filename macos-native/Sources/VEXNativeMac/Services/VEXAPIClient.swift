@@ -206,14 +206,17 @@ struct VEXAPIClient {
         locationId: String,
         routingMode: VpnRoutingMode,
         bypassRegion: String?,
-        knownVersion: Int?
+        knownVersion: Int?,
+        awgVersion: Int = 3
     ) async throws -> ManagedVpnProfile {
         var query = [
             URLQueryItem(name: "device_id", value: deviceId),
             URLQueryItem(name: "location", value: locationId),
             URLQueryItem(name: "routing_mode", value: routingMode.rawValue),
             URLQueryItem(name: "platform", value: "macos"),
-            URLQueryItem(name: "awg_version", value: "3"),
+            awgVersion == 3
+                ? URLQueryItem(name: "awg_version", value: "3")
+                : URLQueryItem(name: "awg_version", value: String(awgVersion)),
         ]
         if let bypassRegion {
             query.append(URLQueryItem(name: "bypass_region", value: bypassRegion))

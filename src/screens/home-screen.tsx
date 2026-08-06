@@ -17,7 +17,7 @@ import type { VpnLocation } from '@/api/vexApi';
 import { ServerChip } from '../components/server-chip';
 import { ServerPickerModal } from '../components/server-picker-modal';
 import { TrafficStats } from '../components/traffic-stats';
-import { isTauriRuntime, type ConnectionPhase } from './home-screen-helpers';
+import { type ConnectionPhase } from './home-screen-helpers';
 import { styles } from './home-screen.styles';
 
 export default function App() {
@@ -52,7 +52,7 @@ export default function App() {
     locations: VpnLocation[];
   } | null>(null);
   const { width: viewportWidth } = useWindowDimensions();
-  const reduceMotionVisuals = isTauriRuntime() || Platform.OS === 'android';
+  const reduceMotionVisuals = Platform.OS === 'android';
 
   const powerButtonText = connectionPhase === 'switching'
     ? 'Переключение'

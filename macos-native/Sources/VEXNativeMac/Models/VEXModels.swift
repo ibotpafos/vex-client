@@ -539,6 +539,7 @@ struct PreparedTunnel: Equatable {
     var bypassDomainsCount: Int
     var routingPolicyVersion: String
     var rotationRequired: Bool
+    var awgVersion: Int = 3
 }
 
 struct ManagedVpnProfile: Codable, Equatable {

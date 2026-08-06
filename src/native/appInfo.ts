@@ -1,13 +1,12 @@
 import * as Application from 'expo-application';
 import { Platform } from 'react-native';
-import { isTauriRuntime as isTauri } from './tauriPlatform';
 import * as SecureStore from '@/native/secureStore';
 
 export type AppInfo = {
   name: string;
   version: string;
   build: string | null;
-  platform: 'android' | 'ios' | 'windows' | 'macos' | 'linux' | 'web';
+  platform: 'android' | 'ios' | 'web';
   channel: string;
   coreVersion: string;
   configSchemaVersion: number;
@@ -20,22 +19,6 @@ export const VEX_CORE_VERSION = "0.1.0";
 
 
 export async function getAppInfo(): Promise<AppInfo> {
-  if (isTauri()) {
-    const [{ getName, getVersion }] = await Promise.all([
-      import('@tauri-apps/api/app'),
-    ]);
-    return {
-      name: await getName(),
-      version: await getVersion(),
-      build: null,
-      platform: detectPlatform(),
-      channel: currentChannel(),
-      coreVersion: VEX_CORE_VERSION,
-      configSchemaVersion: VEX_CONFIG_SCHEMA_VERSION,
-      apiClientVersion: VEX_API_CLIENT_VERSION,
-    };
-  }
-
   return {
     name: Application.applicationName || 'VEX',
     version: Application.nativeApplicationVersion || 'dev',
@@ -90,11 +73,5 @@ function currentChannel(): string {
 function detectPlatform(): AppInfo['platform'] {
   if (Platform.OS === 'android') return 'android';
   if (Platform.OS === 'ios') return 'ios';
-  if (Platform.OS === 'web' && typeof navigator !== 'undefined') {
-    const runtime = `${navigator.platform} ${navigator.userAgent}`.toLowerCase();
-    if (runtime.includes('win')) return 'windows';
-    if (runtime.includes('mac') || runtime.includes('darwin')) return 'macos';
-    if (runtime.includes('linux') || runtime.includes('x11') || runtime.includes('wayland')) return 'linux';
-  }
   return 'web';
 }

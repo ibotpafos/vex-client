@@ -1,7 +1,7 @@
 # VEX Native for Windows
 
-This directory is the native WinUI replacement for the Windows Tauri client.
-The existing Tauri release remains the stable rollback lane until the native
+This directory contains the standalone WinUI client for Windows.
+The native release is the supported Windows desktop lane.
 client passes the full parity and real-device acceptance matrix.
 
 ## Architecture
@@ -19,7 +19,7 @@ client passes the full parity and real-device acceptance matrix.
 - Secure session storage: per-user DPAPI (`CurrentUser`); no access token or
   tunnel private key is stored in plain text. The service IPC credential uses
   machine-scoped DPAPI and install-time ACLs.
-- Distribution: signed MSIX bundle plus `.appinstaller`; Tauri updater metadata
+- Distribution: signed MSIX bundle plus `.appinstaller`; native update metadata
   remains unchanged until native Windows promotion.
 
 ## macOS parity contract
@@ -33,7 +33,7 @@ client passes the full parity and real-device acceptance matrix.
 | Support | Tickets, real-time chat, optimistic send, diagnostics attachment | Reconnect, duplicate event, queued diagnostic retry |
 | Settings | Startup, biometric lock, diagnostics, update center, quit behavior | Reboot, service recovery, required update |
 | Shell | Single instance, protocol activation, system tray, show/hide, connect/disconnect, quit | Repeated launch and tray-only operation |
-| Updates | Signed MSIX/App Installer, staged rollout, required update, rollback | Install-over-Tauri migration, upgrade, downgrade drill |
+| Updates | Signed MSIX/App Installer, staged rollout, required update, rollback | Upgrade and downgrade drill |
 
 ## Delivery phases
 
@@ -48,7 +48,7 @@ client passes the full parity and real-device acceptance matrix.
 5. **Release hardening**: x64/arm64 packages, Authenticode, install/upgrade
    migration, crash and lifecycle matrix, canary rollout.
 6. **Cutover**: promote native metadata only after all parity gates pass; retain
-   the last Tauri build as an explicit rollback release.
+   a previous signed native package as an explicit rollback release.
 
 ## Local checks
 
@@ -180,7 +180,7 @@ service recovery after reboot, and tunnel/DNS/route cleanup tests.
 
 ## Decision record
 
-WinUI 3 was chosen over WPF, Qt, and a second Tauri shell because it is
+WinUI 3 was chosen over WPF and Qt because it is
 Microsoft's current native desktop stack, maps closely to the existing SwiftUI
 architecture, supports modern Windows lifecycle APIs, and removes WebView from
 the critical UI path. A separate service is mandatory because UI crashes,

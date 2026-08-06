@@ -2,14 +2,12 @@ import { Platform } from 'react-native';
 import { hasPaidEntitlement, type Entitlement, type VpnLocation } from '@/api/vexApi';
 import type { VpnStatus } from '@/native/vexVpn';
 import type { VpnProfile } from '@/vpn/profile';
-import { isTauriRuntime } from '@/native/tauriPlatform';
 import { errorMessage } from '@/utils/error';
 
 export const animationKickDelayMs = 80;
 export const activeDeviceRefreshMs = 30_000;
 export const nativeStatusPollMs = 2_500;
 export const connectedNativeStatusPollMs = 5_000;
-export const tauriNativeStatusPollMs = 5_000;
 export const nativeHealthPollMs = 30_000;
 export const nativeHealthFailureThreshold = 2;
 export const nativeReconnectCooldownMs = 120_000;
@@ -21,8 +19,6 @@ export const clientDiagnosticsHeartbeatMs = 5 * 60_000;
 export const clientDiagnosticsErrorCooldownMs = 60_000;
 export const connectAttemptTimeoutMs = 25_000;
 
-export const vpnStatusChangedEvent = 'vpn-status-changed';
-export const vpnProfileChangedEvent = 'vpn-profile-changed';
 
 export type DiagnosticsSnapshotRef = {
   vpnStatus: VpnStatus;
@@ -47,18 +43,16 @@ export type ConnectedVpnAttempt = {
 
 export type ConnectionPhase = 'idle' | 'connecting' | 'connected' | 'verifying' | 'degraded' | 'disconnecting' | 'switching' | 'blocked';
 
-export { isTauriRuntime };
-
 export function supportsNativeLatencyProbe() {
-  return isTauriRuntime() || Platform.OS === 'android';
+  return Platform.OS === 'android';
 }
 
 export function supportsNativeVpnWatchdog() {
-  return isTauriRuntime() || Platform.OS === 'android';
+  return Platform.OS === 'android';
 }
 
 export function supportsNativeStatusPolling() {
-  return isTauriRuntime() || Platform.OS === 'android' || Platform.OS === 'ios';
+  return Platform.OS === 'android' || Platform.OS === 'ios';
 }
 
 export function nextVpnStatusWithState(current: VpnStatus, state: VpnStatus['state']): VpnStatus {

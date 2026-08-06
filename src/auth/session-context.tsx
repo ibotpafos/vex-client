@@ -1,4 +1,4 @@
-import React, { createContext, use, useCallback, useEffect, useMemo, useRef, useState, type PropsWithChildren } from 'react';
+import { createContext, use, useCallback, useEffect, useMemo, useRef, useState, type PropsWithChildren } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { clearSession, loadSession, saveSession } from '@/auth/sessionStore';
 import { loadSessionWithRetry } from '@/auth/sessionLoadRetry';
@@ -45,7 +45,6 @@ export function SessionProvider({ children }: PropsWithChildren) {
     queryClient.removeQueries({ queryKey: ['billing-summary'] });
     queryClient.removeQueries({ queryKey: ['android-update'] });
     queryClient.removeQueries({ queryKey: ['ios-update'] });
-    queryClient.removeQueries({ queryKey: ['desktop-update'] });
   }, [queryClient]);
 
   const applySignOutState = useCallback(async () => {

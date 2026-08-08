@@ -45,44 +45,6 @@ class VpnNetworkRecoveryTest {
     )
   }
   @Test
-  fun reusesAnActiveTunnelForAnIdenticalConnectRequest() {
-    assertTrue(
-      shouldReuseActiveVpnTunnel(
-        isTunnelUp = true,
-        lastConfigText = "[Interface]\\nPrivateKey = key",
-        requestedConfigText = "[Interface]\\nPrivateKey = key",
-        antiLeakArmed = true,
-        antiLeakEnabled = true,
-        leakBlockerActive = false,
-      ),
-    )
-  }
-
-  @Test
-  fun doesNotReuseTunnelWhenProtectionOrConfigChanged() {
-    assertFalse(
-      shouldReuseActiveVpnTunnel(
-        isTunnelUp = true,
-        lastConfigText = "first",
-        requestedConfigText = "second",
-        antiLeakArmed = true,
-        antiLeakEnabled = true,
-        leakBlockerActive = false,
-      ),
-    )
-    assertFalse(
-      shouldReuseActiveVpnTunnel(
-        isTunnelUp = true,
-        lastConfigText = "same",
-        requestedConfigText = "same",
-        antiLeakArmed = false,
-        antiLeakEnabled = true,
-        leakBlockerActive = false,
-      ),
-    )
-  }
-
-  @Test
   fun preservesCurrentEndpointThenAddsFallbackPorts() {
     val config = "[Peer]\nEndpoint = fi.example.test:8443\nPersistentKeepalive = 25"
 

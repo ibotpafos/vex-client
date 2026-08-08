@@ -4,7 +4,8 @@ set -euo pipefail
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 external_dir="${AMNEZIAWG_EXTERNAL_DIR:-"${root_dir}/external/amnezia"}"
 apple_repo_url="${AMNEZIAWG_APPLE_REPO_URL:-https://github.com/amnezia-vpn/amneziawg-apple.git}"
-apple_ref="${AMNEZIAWG_APPLE_REF:-4bafa5958a80c8be76bd89d1e02984c6307769d2}"
+apple_ref="4bafa5958a80c8be76bd89d1e02984c6307769d2"
+go_version="v3.0.20260805"
 reference_repo="${AMNEZIAWG_APPLE_REFERENCE_REPO:-/Users/ibotpafos/projects/VPN/external/amnezia/amneziawg-apple}"
 apple_dir="${external_dir}/amneziawg-apple"
 
@@ -20,6 +21,16 @@ fi
 
 git -C "${apple_dir}" fetch --depth 1 origin "${apple_ref}"
 git -C "${apple_dir}" checkout --detach "${apple_ref}"
+git -C "${apple_dir}" reset --hard "${apple_ref}"
 git -C "${apple_dir}" submodule update --init --recursive --depth 1
+
+bridge_dir="${apple_dir}/Sources/WireGuardKitGo"
+(
+  cd "${bridge_dir}"
+  go mod edit -require="github.com/amnezia-vpn/amneziawg-go/v3@${go_version}"
+  go mod download "github.com/amnezia-vpn/amneziawg-go/v3@${go_version}"
+  go mod verify
+)
+"${root_dir}/scripts/verify_amneziawg_keepalive_upstream.sh" module "${bridge_dir}" "${go_version}"
 
 echo "AMNEZIAWG_APPLE_DIR=${apple_dir}"

@@ -7,7 +7,7 @@ external_dir="${AMNEZIAWG_EXTERNAL_DIR:-"${root_dir}/external/amnezia"}"
 android_repo_url="${AMNEZIAWG_ANDROID_REPO_URL:-https://github.com/amnezia-vpn/amneziawg-android.git}"
 go_repo_url="${AMNEZIAWG_GO_REPO_URL:-https://github.com/amnezia-vpn/amneziawg-go.git}"
 android_ref="${AMNEZIAWG_ANDROID_REF:-f82900455f1aceaa85658686dc2c5e32c2c42a73}"
-go_ref="${AMNEZIAWG_GO_REF:-cf9d2dd202821301f7039093b0a1b3d4b574c47c}"
+go_ref="08d68cdae27762c3e07f36bbb12d2bad32f81926"
 clean_checkout="${AMNEZIAWG_CLEAN:-1}"
 
 apply_patch_once() {
@@ -56,7 +56,7 @@ clone_or_reset() {
 }
 
 clone_or_reset "amneziawg-go" "${go_repo_url}" "${go_ref}" || true
-apply_patch_once "${external_dir}/amneziawg-go" "${root_dir}/patches/amnezia/amneziawg-go-fast-rekey.patch"
+"${root_dir}/scripts/verify_amneziawg_keepalive_upstream.sh" source "${external_dir}/amneziawg-go" "${go_ref}"
 
 if clone_or_reset "amneziawg-android" "${android_repo_url}" "${android_ref}"; then
   git -C "${external_dir}/amneziawg-android" submodule update --init --recursive --depth 1

@@ -13,13 +13,13 @@ set -euo pipefail
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 external_dir="${AMNEZIAWG_EXTERNAL_DIR:-"${root_dir}/external/amnezia"}"
 helper_resource_dir="${PACKAGE_DIR:-"${root_dir}/macos-native/HelperResources"}"
-go_ref="${AMNEZIAWG_GO_REF:-08d68cdae27762c3e07f36bbb12d2bad32f81926}"
+go_ref="08d68cdae27762c3e07f36bbb12d2bad32f81926"
 tools_ref="${AMNEZIAWG_TOOLS_REF:-9f70177d204d5be66c5b043518a57b7d62b3f9d1}"
 
 skip_bootstrap=0
 if [[ "${1:-}" == "--skip-bootstrap" ]]; then skip_bootstrap=1; fi
 
-# 1. Checkouts must be at the pinned refs (with the fast-rekey patch applied).
+# 1. Checkouts must be at the pinned official refs.
 if [[ "${skip_bootstrap}" == "0" ]]; then
   "${root_dir}/scripts/bootstrap_amneziawg_macos.sh"
 fi

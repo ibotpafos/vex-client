@@ -61,11 +61,11 @@ import { managedProfileAWGVersionForPlatform, withManagedProfileAWGCapability } 
 
 const connectedStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0 };
 
-assertEqual(managedProfileAWGVersionForPlatform('ios'), 2);
+assertEqual(managedProfileAWGVersionForPlatform('ios'), 3);
 assertEqual(managedProfileAWGVersionForPlatform('android'), 3);
 assertEqual(
   withManagedProfileAWGCapability(new URLSearchParams({ device_id: 'test-device' }), 'ios').toString(),
-  'device_id=test-device&awg_version=2',
+  'device_id=test-device&awg_version=3',
 );
 assertEqual(
   withManagedProfileAWGCapability(new URLSearchParams({ device_id: 'test-device' }), 'android').toString(),

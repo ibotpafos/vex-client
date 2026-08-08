@@ -1,8 +1,7 @@
-export function managedProfileAWGVersionForPlatform(platform: string): number {
-  // The embedded iOS WireGuard bridge supports AWG2 attributes only. Advertising
-  // AWG3 causes the server to issue HeaderProtectionKey, which the bridge rejects
-  // when the tunnel is parsed after a reconnect.
-  return platform === 'ios' ? 2 : 3;
+export function managedProfileAWGVersionForPlatform(_platform: string): number {
+  // iOS and Android both embed AWG3-capable WireGuard bridges. Keep the capability
+  // explicit at the app boundary so the API can safely select AWG3 for either client.
+  return 3;
 }
 
 export function withManagedProfileAWGCapability(query: URLSearchParams, platform: string): URLSearchParams {

@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_DIR="$ROOT_DIR"
 IOS_DIR="$APP_DIR/ios"
+AMNEZIAWG_APPLE_REF="4bafa5958a80c8be76bd89d1e02984c6307769d2"
 
 fail() {
   echo "error: $*" >&2
@@ -16,6 +17,13 @@ warn() {
 
 command -v xcodebuild >/dev/null || fail "xcodebuild is not installed or not in PATH"
 command -v xcrun >/dev/null || fail "xcrun is not installed or not in PATH"
+
+echo "== AmneziaWG Apple dependency =="
+AMNEZIAWG_APPLE_REF="$AMNEZIAWG_APPLE_REF" "$ROOT_DIR/scripts/bootstrap_amneziawg_ios.sh"
+AMNEZIAWG_APPLE_DIR="$ROOT_DIR/external/amnezia/amneziawg-apple"
+[ "$(git -C "$AMNEZIAWG_APPLE_DIR" rev-parse HEAD)" = "$AMNEZIAWG_APPLE_REF" ] \
+  || fail "AmneziaWG Apple is not pinned to $AMNEZIAWG_APPLE_REF"
+bash "$ROOT_DIR/tests/ios_awg3_parser_contract.sh"
 
 [ -d "$IOS_DIR/VEX.xcworkspace" ] || fail "ios/VEX.xcworkspace is missing; run: npx expo prebuild --platform ios"
 [ -f "$IOS_DIR/Podfile.lock" ] || fail "ios/Podfile.lock is missing; run: cd ios && pod install"

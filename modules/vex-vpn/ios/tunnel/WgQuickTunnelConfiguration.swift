@@ -13,6 +13,7 @@ extension TunnelConfiguration {
     case interfaceHasInvalidDNS(String)
     case interfaceHasInvalidMTU(String)
     case interfaceHasInvalidCustomParam(String)
+    case interfaceHasInvalidHeaderProtectionKey(String)
     case interfaceHasUnrecognizedKey(String)
     case peerHasNoPublicKey
     case peerHasInvalidPublicKey(String)
@@ -153,6 +154,30 @@ extension TunnelConfiguration {
     interface.specialJunk3 = attributes["i3"]
     interface.specialJunk4 = attributes["i4"]
     interface.specialJunk5 = attributes["i5"]
+    if let headerProtectionKeyString = attributes["headerprotectionkey"], !headerProtectionKeyString.isEmpty {
+      guard let headerProtectionKey = PrivateKey(base64Key: headerProtectionKeyString) else {
+        throw WgQuickParseError.interfaceHasInvalidHeaderProtectionKey(headerProtectionKeyString)
+      }
+      interface.headerProtectionKey = headerProtectionKey
+    }
+    if let contentPaddingAdditionString = attributes["contentpaddingaddition"], !contentPaddingAdditionString.isEmpty {
+      interface.contentPaddingAddition = contentPaddingAdditionString
+    }
+    if let rekeyAfterTimeString = attributes["rekeyaftertime"], !rekeyAfterTimeString.isEmpty {
+      interface.rekeyAfterTime = rekeyAfterTimeString
+    }
+    if let rekeyTimeoutString = attributes["rekeytimeout"], !rekeyTimeoutString.isEmpty {
+      interface.rekeyTimeout = rekeyTimeoutString
+    }
+    if let rejectAfterTimeString = attributes["rejectaftertime"], !rejectAfterTimeString.isEmpty {
+      interface.rejectAfterTime = rejectAfterTimeString
+    }
+    if let keepaliveTimeoutString = attributes["keepalivetimeout"], !keepaliveTimeoutString.isEmpty {
+      interface.keepaliveTimeout = keepaliveTimeoutString
+    }
+    if let maxHandshakeAttemptsString = attributes["maxhandshakeattempts"], !maxHandshakeAttemptsString.isEmpty {
+      interface.maxHandshakeAttempts = maxHandshakeAttemptsString
+    }
   }
 
   private static func collate(peerAttributes attributes: [String: String]) throws -> PeerConfiguration {
@@ -184,11 +209,8 @@ extension TunnelConfiguration {
       }
       peer.endpoint = endpoint
     }
-    if let persistentKeepAliveString = attributes["persistentkeepalive"] {
-      guard let persistentKeepAlive = UInt16(persistentKeepAliveString) else {
-        throw WgQuickParseError.peerHasInvalidPersistentKeepAlive(persistentKeepAliveString)
-      }
-      peer.persistentKeepAlive = persistentKeepAlive
+    if let persistentKeepAliveString = attributes["persistentkeepalive"], !persistentKeepAliveString.isEmpty {
+      peer.persistentKeepAlive = persistentKeepAliveString
     }
     return peer
   }
@@ -273,7 +295,14 @@ private enum WgQuickLine {
     "i2",
     "i3",
     "i4",
-    "i5"
+    "i5",
+    "headerprotectionkey",
+    "contentpaddingaddition",
+    "rekeyaftertime",
+    "rekeytimeout",
+    "rejectaftertime",
+    "keepalivetimeout",
+    "maxhandshakeattempts"
   ]
 
   private static let peerSectionKeys: Set<String> = [

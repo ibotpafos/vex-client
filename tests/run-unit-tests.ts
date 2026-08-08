@@ -57,13 +57,18 @@ import type { VpnDevice, VpnDeviceUsage, VpnLocation, SupportMessage } from '../
 import type { VpnStatus } from '../src/native/vexVpn';
 import type { VpnProfile } from '../src/vpn/profile';
 import { managedProfileAmneziaConfig } from '../src/vpn/amneziaConfig';
-import { managedProfileAWGVersion, withManagedProfileAWGCapability } from '../src/vpn/profileCapabilities';
+import { managedProfileAWGVersionForPlatform, withManagedProfileAWGCapability } from '../src/vpn/profileCapabilities';
 
 const connectedStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0 };
 
-assertEqual(managedProfileAWGVersion, 3);
+assertEqual(managedProfileAWGVersionForPlatform('ios'), 2);
+assertEqual(managedProfileAWGVersionForPlatform('android'), 3);
 assertEqual(
-  withManagedProfileAWGCapability(new URLSearchParams({ device_id: 'test-device' })).toString(),
+  withManagedProfileAWGCapability(new URLSearchParams({ device_id: 'test-device' }), 'ios').toString(),
+  'device_id=test-device&awg_version=2',
+);
+assertEqual(
+  withManagedProfileAWGCapability(new URLSearchParams({ device_id: 'test-device' }), 'android').toString(),
   'device_id=test-device&awg_version=3',
 );
 

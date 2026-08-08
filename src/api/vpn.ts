@@ -108,7 +108,7 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
     }
   }
 
-  const query = withManagedProfileAWGCapability(new URLSearchParams({ device_id: device.id }));
+  const query = withManagedProfileAWGCapability(new URLSearchParams({ device_id: device.id }), client.platform);
   query.set('location', locationId);
   const routingMode = options.routingMode ?? defaultVpnRoutingMode;
   query.set('routing_mode', routingMode);

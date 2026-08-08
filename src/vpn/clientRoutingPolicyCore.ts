@@ -36,12 +36,14 @@ export async function cacheValidatedRoutingPolicy(cache: ClientRoutingPolicyCach
   if (!validated.ok) return validated;
   const payload = parsePayload(decodeBase64Url(response.authorization.payload_base64));
   if (!payload || typeof payload.expires_at !== 'string') return invalid('invalid_payload');
+  if (normalizedRegion(payload.region) !== cacheKey.region || normalizedPlatform(payload.platform) !== cacheKey.platform) return invalid('context_mismatch');
   await cache.save(cacheKey, {
     ...validated.policy,
     expiresAt: payload.expires_at,
     payloadBase64: response.authorization.payload_base64,
     signatureBase64: response.authorization.signature_base64,
     keyId: response.authorization.key_id,
+    platform: cacheKey.platform,
   });
   return validated;
 }
@@ -110,4 +112,6 @@ function decodeBase64Url(value: string): Uint8Array | null {
 function parsePayload(value: Uint8Array | null): Record<string, unknown> | null { if (!value) return null; try { const parsed = JSON.parse(new TextDecoder().decode(value)); return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null; } catch { return null; } }
 function timestamp(value: unknown): Date | null { const date = typeof value === 'string' ? new Date(value) : new Date('invalid'); return Number.isFinite(date.getTime()) ? date : null; }
 function isRegion(value: unknown): value is string { return typeof value === 'string' && /^[a-z]{2}$/.test(value.toLowerCase()); }
+function normalizedPlatform(value: unknown): string { return typeof value === 'string' ? value.trim().toLowerCase() : ''; }
+function normalizedRegion(value: unknown): string { return typeof value === 'string' ? value.trim().toLowerCase() : ''; }
 function invalid(reason: string): Readonly<{ ok: false; reason: string }> { return { ok: false, reason }; }

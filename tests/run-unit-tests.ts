@@ -1060,6 +1060,14 @@ async function runClientRoutingPolicyTests(): Promise<void> {
   await cacheValidatedRoutingPolicy(cache, cacheKey, validPolicy, now, routingPolicyTestPins);
   await cacheValidatedRoutingPolicy(cache, cacheKey, withRoutingPolicyPayload(validPolicy, { bypass_ranges: ['not-a-cidr'] }), now, routingPolicyTestPins);
   assertDeepEqual(await cache.load(cacheKey, now), expected);
+  const wrongRegionKey = { region: 'de', platform: 'android' };
+  await cacheValidatedRoutingPolicy(cache, wrongRegionKey, validPolicy, now, routingPolicyTestPins);
+  assertEqual(await cache.load(wrongRegionKey, now), null);
+  assertDeepEqual(await cache.load(cacheKey, now), expected);
+  const wrongPlatformKey = { region: 'ru', platform: 'ios' };
+  await cacheValidatedRoutingPolicy(cache, wrongPlatformKey, validPolicy, now, routingPolicyTestPins);
+  assertEqual(await cache.load(wrongPlatformKey, now), null);
+  assertDeepEqual(await cache.load(cacheKey, now), expected);
   assertEqual(await cache.load(cacheKey, new Date('2026-08-09T10:00:01.000Z')), null);
 }
 

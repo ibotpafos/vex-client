@@ -13,6 +13,7 @@ export type CachedRoutingPolicy = Readonly<{
   payloadBase64: string;
   signatureBase64: string;
   keyId: string;
+  platform: string;
 }>;
 
 export type RoutingPolicyStorage = Readonly<{
@@ -25,7 +26,7 @@ const storageKeyPrefix = 'vex.vpn.routing_policy.v1';
 export class ClientRoutingPolicyCache {
   constructor(private readonly storage: RoutingPolicyStorage) {}
 
-  async load(key: RoutingPolicyCacheKey, now: Date): Promise<Omit<CachedRoutingPolicy, 'expiresAt' | 'payloadBase64' | 'signatureBase64' | 'keyId'> | null> {
+  async load(key: RoutingPolicyCacheKey, now: Date): Promise<Omit<CachedRoutingPolicy, 'expiresAt' | 'payloadBase64' | 'signatureBase64' | 'keyId' | 'platform'> | null> {
     const raw = await this.storage.getItemAsync(storageKey(key)).catch(() => null);
     if (!raw) {
       return null;
@@ -33,7 +34,7 @@ export class ClientRoutingPolicyCache {
     try {
       const parsed = JSON.parse(raw) as CachedRoutingPolicy;
       const expiresAt = new Date(parsed.expiresAt);
-      if (!Number.isFinite(expiresAt.getTime()) || expiresAt.getTime() <= now.getTime() || parsed.region !== key.region) {
+      if (!Number.isFinite(expiresAt.getTime()) || expiresAt.getTime() <= now.getTime() || parsed.region !== key.region || parsed.platform !== key.platform) {
         return null;
       }
       return immutablePolicy(parsed);
@@ -53,6 +54,7 @@ export class ClientRoutingPolicyCache {
       payloadBase64: policy.payloadBase64,
       signatureBase64: policy.signatureBase64,
       keyId: policy.keyId,
+      platform: policy.platform,
     }));
   }
 }
@@ -61,7 +63,7 @@ function storageKey(key: RoutingPolicyCacheKey): string {
   return `${storageKeyPrefix}:${key.platform.trim().toLowerCase()}:${key.region.trim().toLowerCase()}`;
 }
 
-function immutablePolicy(policy: CachedRoutingPolicy): Omit<CachedRoutingPolicy, 'expiresAt' | 'payloadBase64' | 'signatureBase64' | 'keyId'> {
+function immutablePolicy(policy: CachedRoutingPolicy): Omit<CachedRoutingPolicy, 'expiresAt' | 'payloadBase64' | 'signatureBase64' | 'keyId' | 'platform'> {
   return Object.freeze({
     version: policy.version,
     region: policy.region,

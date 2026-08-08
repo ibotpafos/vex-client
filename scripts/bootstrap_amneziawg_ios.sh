@@ -4,7 +4,7 @@ set -euo pipefail
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 external_dir="${AMNEZIAWG_EXTERNAL_DIR:-"${root_dir}/external/amnezia"}"
 apple_repo_url="${AMNEZIAWG_APPLE_REPO_URL:-https://github.com/amnezia-vpn/amneziawg-apple.git}"
-apple_ref="${AMNEZIAWG_APPLE_REF:-0c4d98d1bd927bbba1c3b23c382c3f8881fd6631}"
+apple_ref="${AMNEZIAWG_APPLE_REF:-4bafa5958a80c8be76bd89d1e02984c6307769d2}"
 reference_repo="${AMNEZIAWG_APPLE_REFERENCE_REPO:-/Users/ibotpafos/projects/VPN/external/amnezia/amneziawg-apple}"
 apple_dir="${external_dir}/amneziawg-apple"
 
@@ -18,7 +18,7 @@ if [[ ! -d "${apple_dir}/.git" ]]; then
   git "${clone_args[@]}" "${apple_repo_url}" "${apple_dir}"
 fi
 
-git -C "${apple_dir}" fetch --depth 1 origin "${apple_ref}" || true
+git -C "${apple_dir}" fetch --depth 1 origin "${apple_ref}"
 git -C "${apple_dir}" checkout --detach "${apple_ref}"
 git -C "${apple_dir}" submodule update --init --recursive --depth 1
 

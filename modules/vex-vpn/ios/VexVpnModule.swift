@@ -64,6 +64,21 @@ public class VexVpnModule: Module {
       return VexVpnDiagnostics.readEvents(limit: 50)
     }
 
+    AsyncFunction("verifyP256Signature") { (payloadBase64: String, signatureBase64: String, subjectPublicKeyInfoBase64: String) -> Bool in
+      guard let payload = Data(base64URLEncoded: payloadBase64),
+            let signatureData = Data(base64URLEncoded: signatureBase64),
+            let keyData = Data(base64URLEncoded: subjectPublicKeyInfoBase64) else {
+        return false
+      }
+      do {
+        let key = try P256.Signing.PublicKey(derRepresentation: keyData)
+        let signature = try P256.Signing.ECDSASignature(derRepresentation: signatureData)
+        return key.isValidSignature(signature, for: payload)
+      } catch {
+        return false
+      }
+    }
+
     AsyncFunction("updateLiveActivity") { (payload: [String: Any]) async -> Bool in
       return await VexVpnLiveActivityController.update(payload: payload)
     }
@@ -71,6 +86,17 @@ public class VexVpnModule: Module {
     AsyncFunction("endLiveActivity") { () async -> Bool in
       return await VexVpnLiveActivityController.end()
     }
+  }
+}
+
+private extension Data {
+  init?(base64URLEncoded value: String) {
+    let normalized = value.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+    guard normalized.range(of: "^[A-Za-z0-9+/]+={0,2}$", options: .regularExpression) != nil else {
+      return nil
+    }
+    let padded = normalized + String(repeating: "=", count: (4 - normalized.count % 4) % 4)
+    self.init(base64Encoded: padded)
   }
 }
 

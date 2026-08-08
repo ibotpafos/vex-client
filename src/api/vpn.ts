@@ -1,10 +1,11 @@
 import { Platform } from 'react-native';
 import { getAppInfo, getOrCreateDeviceId } from '@/native/appInfo';
 import { deviceIdentitySignaturePayload, getOrCreateDeviceIdentity } from '@/native/deviceIdentity';
-import { generateWireGuardKeyPair, replaceWireGuardKeyPair, getOrCreateWireGuardKeyPair, type WireGuardKeyPair } from '@/native/vexVpn';
+import { generateWireGuardKeyPair, replaceWireGuardKeyPair, getOrCreateWireGuardKeyPair, verifyP256Signature, type WireGuardKeyPair } from '@/native/vexVpn';
 import { nativeVpnDeviceForClient } from '@/vpn/nativeDeviceSelection';
 import { isKeyEpochMismatchError, nextManagedKeyEpoch } from '@/vpn/keyEpochRecovery';
-import { defaultVpnRoutingMode, defaultVpnRoutingPolicyVersion, resolvedVpnBypassRegion } from '@/vpn/routingPolicy';
+import { defaultVpnBypassRegion, defaultVpnRoutingMode, defaultVpnRoutingPolicyVersion, resolvedVpnBypassRegion } from '@/vpn/routingPolicy';
+import { loadEffectiveRoutingPolicy } from '@/vpn/clientRoutingPolicy';
 import { devicePushTokenPath } from '@/notifications/pushRegistration';
 import { jsonRequest, rawRequest, clientVersionHeaders } from './client';
 import { buildCreateDeviceRequest } from './deviceCreateRequest';
@@ -22,6 +23,7 @@ import {
   type DeviceUsageDTO,
   type DeviceUsageResponseDTO,
   type LocationDTO,
+  type ClientRoutingPolicyDTO,
   type NativeVPNProfileDTO,
   type RegisterDevicePushTokenResultDTO,
   type RegisterNativeDeviceResultDTO,
@@ -108,13 +110,23 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
     }
   }
 
+  const routingMode = options.routingMode ?? defaultVpnRoutingMode;
+  const bypassRegion = resolvedVpnBypassRegion(routingMode, options.bypassRegion);
+  const effectivePolicy = await loadEffectiveRoutingPolicy(accessToken, {
+    region: bypassRegion || defaultVpnBypassRegion,
+    platform: client.platform,
+    now: new Date(),
+  }, verifyP256Signature);
+  const policySupported = effectivePolicy.source !== 'full_tunnel';
   const query = withManagedProfileAWGCapability(new URLSearchParams({ device_id: device.id }));
   query.set('location', locationId);
-  const routingMode = options.routingMode ?? defaultVpnRoutingMode;
-  query.set('routing_mode', routingMode);
-  const bypassRegion = resolvedVpnBypassRegion(routingMode, options.bypassRegion);
-  if (bypassRegion) {
-    query.set('bypass_region', bypassRegion);
+  if (policySupported) {
+    query.set('routing_policy_version', '1');
+  } else {
+    query.set('routing_mode', routingMode);
+    if (bypassRegion) {
+      query.set('bypass_region', bypassRegion);
+    }
   }
   if (typeof options.knownVersion === 'number' && options.knownVersion > 0) {
     query.set('known_version', String(options.knownVersion));
@@ -137,9 +149,9 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
       profileVersion: typeof profile.version === 'number' ? profile.version : options.knownVersion,
       routingMode,
       bypassRegion,
-      bypassRangesCount: profile.bypass_ranges?.filter(Boolean).length ?? 0,
-      bypassDomainsCount: profile.bypass_domains?.filter(Boolean).length ?? 0,
-      routingPolicyVersion: profile.routing_policy_version || defaultVpnRoutingPolicyVersion,
+      bypassRangesCount: policySupported ? effectivePolicy.bypassRanges.length : profile.bypass_ranges?.filter(Boolean).length ?? 0,
+      bypassDomainsCount: policySupported ? effectivePolicy.bypassDomains.length : profile.bypass_domains?.filter(Boolean).length ?? 0,
+      routingPolicyVersion: policySupported ? effectivePolicy.version : profile.routing_policy_version || defaultVpnRoutingPolicyVersion,
       rotationRequired: Boolean(profile.rotation_required),
     };
   }
@@ -155,11 +167,21 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
     profileVersion: typeof profile.version === 'number' ? profile.version : undefined,
     routingMode,
     bypassRegion,
-    bypassRangesCount: profile.bypass_ranges?.filter(Boolean).length ?? 0,
-    bypassDomainsCount: profile.bypass_domains?.filter(Boolean).length ?? 0,
-    routingPolicyVersion: profile.routing_policy_version || defaultVpnRoutingPolicyVersion,
+    bypassRangesCount: policySupported ? effectivePolicy.bypassRanges.length : profile.bypass_ranges?.filter(Boolean).length ?? 0,
+    bypassDomainsCount: policySupported ? effectivePolicy.bypassDomains.length : profile.bypass_domains?.filter(Boolean).length ?? 0,
+    routingPolicyVersion: policySupported ? effectivePolicy.version : profile.routing_policy_version || defaultVpnRoutingPolicyVersion,
     rotationRequired: Boolean(profile.rotation_required),
   };
+}
+
+export async function routingPolicy(accessToken: string, region: string, platform: string): Promise<ClientRoutingPolicyDTO> {
+  const headers = await clientVersionHeaders();
+  const query = new URLSearchParams({ region: region.trim().toLowerCase(), platform: platform.trim().toLowerCase(), schema_version: '1' });
+  return jsonRequest<ClientRoutingPolicyDTO>(`/v1/vpn/routing-policy?${query.toString()}`, {
+    accessToken,
+    headers,
+    suppressErrorLog: true,
+  });
 }
 
 export async function vpnDevices(accessToken: string): Promise<VpnDevice[]> {

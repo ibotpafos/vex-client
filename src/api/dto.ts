@@ -139,6 +139,24 @@ export type NativeVPNProfileDTO = {
   config?: string;
 };
 
+export type ClientRoutingPolicyDTO = {
+  schema?: string;
+  version?: string;
+  region?: string;
+  platform?: string;
+  issued_at?: string;
+  expires_at?: string;
+  bypass_ranges?: string[];
+  bypass_domains?: string[];
+  protected_ranges?: string[];
+  authorization: {
+    algorithm: 'ECDSA_P256_SHA256_DER';
+    key_id: string;
+    payload_base64: string;
+    signature_base64: string;
+  };
+};
+
 export type RegisterNativeDeviceResultDTO = {
   device_registered?: boolean;
   device: DeviceDTO;

@@ -2,6 +2,7 @@ import { NativeEventEmitter, NativeModules, Platform, type NativeModule } from '
 import { requireNativeModule as requireExpoNativeModule } from 'expo';
 import { disconnectWithRecoveryTimeout } from '@/vpn/disconnectRecovery';
 import { resolveNativeTunnelVerified } from '@/vpn/vpnStatusVerification';
+import { verifyP256WithWebCrypto } from '@/vpn/p256Signature';
 
 export type VpnState = 'connected' | 'connecting' | 'disconnecting' | 'disconnected' | 'error' | 'verifying' | 'degraded';
 export type LeakProtectionState = 'off' | 'armed' | 'blocking';
@@ -77,6 +78,7 @@ type VexVpnNativeModule = {
   downloadUpdateApk(downloadUrl: string, checksumSha256?: string | null): Promise<AndroidUpdateDownload>;
   installUpdateApk(filePath: string): Promise<AndroidUpdateInstallResult>;
   getInstalledApplications?(): Promise<InstalledVpnApplication[]>;
+  verifyP256Signature?(payloadBase64: string, signatureBase64: string, subjectPublicKeyInfoBase64: string): Promise<boolean>;
 };
 
 const nativeModule = NativeModules.VexVpn as VexVpnNativeModule | undefined;
@@ -147,6 +149,28 @@ export async function getInstalledVpnApplications(): Promise<InstalledVpnApplica
     : [];
 }
 
+export async function verifyP256Signature(
+  payloadBase64: string,
+  signatureBase64: string,
+  subjectPublicKeyInfoBase64: string,
+): Promise<boolean> {
+  if (Platform.OS === 'android' || Platform.OS === 'ios') {
+    try {
+      const verified = await requireNativeModule().verifyP256Signature?.(
+        payloadBase64,
+        signatureBase64,
+        subjectPublicKeyInfoBase64,
+      );
+      if (typeof verified === 'boolean') {
+        return verified;
+      }
+    } catch {
+      // A missing or malformed native verifier must fail closed.
+    }
+  }
+  return verifyP256WithWebCrypto(payloadBase64, signatureBase64, subjectPublicKeyInfoBase64);
+}
+
 function isInstalledVpnApplication(value: unknown): value is InstalledVpnApplication {
   if (!value || typeof value !== 'object') {
     return false;
@@ -156,6 +180,7 @@ function isInstalledVpnApplication(value: unknown): value is InstalledVpnApplica
     typeof application.packageName === 'string' &&
     typeof application.iconDataUri === 'string';
 }
+
 
 export async function disconnectVpn(options: DisconnectVpnOptions = {}): Promise<VpnStatus> {
   const module = requireNativeModule();

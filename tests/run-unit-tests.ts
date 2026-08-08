@@ -58,6 +58,13 @@ import type { VpnStatus } from '../src/native/vexVpn';
 import type { VpnProfile } from '../src/vpn/profile';
 import { managedProfileAmneziaConfig } from '../src/vpn/amneziaConfig';
 import { managedProfileAWGVersion, withManagedProfileAWGCapability } from '../src/vpn/profileCapabilities';
+import { profileSigningKeys } from '../src/vpn/profileSigningKeys';
+import {
+  cacheValidatedRoutingPolicy,
+  validateRoutingPolicy,
+  type SignedRoutingPolicy,
+} from '../src/vpn/clientRoutingPolicyCore';
+import { ClientRoutingPolicyCache } from '../src/vpn/clientRoutingPolicyCache';
 
 const connectedStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0 };
 
@@ -976,6 +983,145 @@ async function runAsyncTests(): Promise<void> {
   runSupportTests();
   runErrorMessageTests();
   await runServerSwitchTests();
+  await runClientRoutingPolicyTests();
+  runProfileSigningKeyParityTests();
+}
+
+async function runClientRoutingPolicyTests(): Promise<void> {
+  if (!globalThis.crypto?.subtle) {
+    const { webcrypto } = (process as typeof process & {
+      getBuiltinModule: (id: 'node:crypto') => { webcrypto: Crypto };
+    }).getBuiltinModule('node:crypto');
+    Object.defineProperty(globalThis, 'crypto', { configurable: true, value: webcrypto });
+  }
+  const now = new Date('2026-08-08T12:00:00.000Z');
+  const validPolicy = signedRoutingPolicyFixture();
+  const expected = {
+    version: 'v1',
+    region: 'ru',
+    bypassRanges: ['203.0.113.0/24'],
+    bypassDomains: ['gosuslugi.ru'],
+    protectedRanges: ['198.51.100.10/32'],
+  };
+
+  // A broken signature verifier must make this real DER-signed payload fail.
+  assertDeepEqual(await validateRoutingPolicy(validPolicy, now, routingPolicyTestPins), { ok: true, policy: expected });
+  assertDeepEqual(await validateRoutingPolicy({ ...validPolicy, authorization: { ...validPolicy.authorization, key_id: 'unknown' } }, now, routingPolicyTestPins), {
+    ok: false,
+    reason: 'unknown_key',
+  });
+  assertDeepEqual(await validateRoutingPolicy({ ...validPolicy, authorization: { ...validPolicy.authorization, signature_base64: 'MAE=' } }, now, routingPolicyTestPins), {
+    ok: false,
+    reason: 'invalid_signature',
+  });
+  assertDeepEqual(await validateRoutingPolicy({ ...validPolicy, authorization: { ...validPolicy.authorization, payload_base64: '***' } }, now, routingPolicyTestPins), {
+    ok: false,
+    reason: 'invalid_base64',
+  });
+  assertDeepEqual(await validateRoutingPolicy(withRoutingPolicyPayload(validPolicy, { schema: 'vex-routing-policy/v2' }), now, routingPolicyTestPins), {
+    ok: false,
+    reason: 'incompatible_schema',
+  });
+  assertDeepEqual(await validateRoutingPolicy(withRoutingPolicyPayload(validPolicy, { issued_at: '2026-08-08T12:00:01Z' }), now, routingPolicyTestPins), {
+    ok: false,
+    reason: 'issued_in_future',
+  });
+  assertDeepEqual(await validateRoutingPolicy(withRoutingPolicyPayload(validPolicy, { expires_at: '2026-08-08T11:59:59Z' }), now, routingPolicyTestPins), {
+    ok: false,
+    reason: 'expired',
+  });
+  assertDeepEqual(await validateRoutingPolicy(withRoutingPolicyPayload(validPolicy, { bypass_ranges: ['2001:db8::/32'] }), now, routingPolicyTestPins), {
+    ok: false,
+    reason: 'invalid_range',
+  });
+  assertDeepEqual(await validateRoutingPolicy(withRoutingPolicyPayload(validPolicy, { bypass_ranges: ['203.0.113.0/24', '203.0.113.0/24'] }), now, routingPolicyTestPins), {
+    ok: false,
+    reason: 'duplicate_range',
+  });
+  assertDeepEqual(await validateRoutingPolicy(withRoutingPolicyPayload(validPolicy, { bypass_ranges: Array.from({ length: 4097 }, (_, index) => `10.${Math.floor(index / 256)}.${index % 256}.0/24`) }), now, routingPolicyTestPins), {
+    ok: false,
+    reason: 'too_many_ranges',
+  });
+  assertDeepEqual(await validateRoutingPolicy(withRoutingPolicyPayload(validPolicy, { bypass_domains: Array.from({ length: 1025 }, (_, index) => `rule-${index}.example.test`) }), now, routingPolicyTestPins), {
+    ok: false,
+    reason: 'too_many_domains',
+  });
+  assertDeepEqual(await validateRoutingPolicy(withRoutingPolicyPayload(validPolicy, { bypass_domains: ['x'.repeat(1_048_576)] }), now, routingPolicyTestPins), {
+    ok: false,
+    reason: 'payload_too_large',
+  });
+
+  const storage = new Map<string, string>();
+  const cache = new ClientRoutingPolicyCache({
+    getItemAsync: async (key) => storage.get(key) ?? null,
+    setItemAsync: async (key, value) => { storage.set(key, value); },
+  });
+  const cacheKey = { region: 'ru', platform: 'android' };
+  await cacheValidatedRoutingPolicy(cache, cacheKey, validPolicy, now, routingPolicyTestPins);
+  await cacheValidatedRoutingPolicy(cache, cacheKey, withRoutingPolicyPayload(validPolicy, { bypass_ranges: ['not-a-cidr'] }), now, routingPolicyTestPins);
+  assertDeepEqual(await cache.load(cacheKey, now), expected);
+  assertEqual(await cache.load(cacheKey, new Date('2026-08-09T10:00:01.000Z')), null);
+}
+
+const routingPolicyTestPins = {
+  'test-p256-v1': {
+    algorithm: 'ECDSA_P256_SHA256_DER',
+    subjectPublicKeyInfoBase64: 'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEj2a7IDP/CwnhUGjIju+5+VP7yiNf+7g7eTWN41voyaVxXuY6X07eOa26UE3oTQaChxKjcl5z/IRVjUYArwwlNw==',
+  },
+} as const;
+
+function signedRoutingPolicyFixture(): SignedRoutingPolicy {
+  return {
+    schema: 'vex-routing-policy/v1',
+    version: 'v1',
+    region: 'ru',
+    platform: 'android',
+    issued_at: '2026-08-08T10:00:00Z',
+    expires_at: '2026-08-09T10:00:00Z',
+    bypass_ranges: ['203.0.113.0/24'],
+    bypass_domains: ['gosuslugi.ru'],
+    protected_ranges: ['198.51.100.10/32'],
+    authorization: {
+      algorithm: 'ECDSA_P256_SHA256_DER',
+      key_id: 'test-p256-v1',
+      payload_base64: 'eyJzY2hlbWEiOiJ2ZXgtcm91dGluZy1wb2xpY3kvdjEiLCJ2ZXJzaW9uIjoidjEiLCJyZWdpb24iOiJydSIsInBsYXRmb3JtIjoiYW5kcm9pZCIsImlzc3VlZF9hdCI6IjIwMjYtMDgtMDhUMTA6MDA6MDBaIiwiZXhwaXJlc19hdCI6IjIwMjYtMDgtMDlUMTA6MDA6MDBaIiwiYnlwYXNzX3JhbmdlcyI6WyIyMDMuMC4xMTMuMC8yNCJdLCJieXBhc3NfZG9tYWlucyI6WyJnb3N1c2x1Z2kucnUiXSwicHJvdGVjdGVkX3JhbmdlcyI6WyIxOTguNTEuMTAwLjEwLzMyIl19',
+      signature_base64: 'MEUCIArNu1fO5pA9kMPnLvjTqHbV_It85Z8JmhnIcjZQ-wvxAiEAnqlnfWyLHvmCJoRDYCZJWSnal5P4phlW9U83Je7zO2s',
+    },
+  };
+}
+
+function withRoutingPolicyPayload(policy: SignedRoutingPolicy, changes: Record<string, unknown>): SignedRoutingPolicy {
+  const payload = JSON.parse(base64UrlToText(policy.authorization.payload_base64)) as Record<string, unknown>;
+  const nextPayload = JSON.stringify({ ...payload, ...changes });
+  return {
+    ...policy,
+    authorization: {
+      ...policy.authorization,
+      payload_base64: textToBase64Url(nextPayload),
+    },
+  };
+}
+
+function base64UrlToText(value: string): string {
+  const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
+  return atob(normalized + '='.repeat((4 - (normalized.length % 4)) % 4));
+}
+
+function textToBase64Url(value: string): string {
+  return btoa(value).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function runProfileSigningKeyParityTests(): void {
+  const { readFileSync } = (process as typeof process & {
+    getBuiltinModule: (id: 'node:fs') => { readFileSync: (path: string, encoding: string) => string };
+  }).getBuiltinModule('node:fs');
+  const fixture = JSON.parse(readFileSync('native-windows/packaging/profile-signing-keys.json', 'utf8')) as {
+    keys: Array<{ key_id: string; algorithm: string; subject_public_key_info_base64: string }>;
+  };
+  assertDeepEqual(profileSigningKeys, Object.fromEntries(fixture.keys.map((key) => [key.key_id, {
+    algorithm: key.algorithm,
+    subjectPublicKeyInfoBase64: key.subject_public_key_info_base64,
+  }])));
 }
 
 function runAndroidRoutingSafetyTests(): void {

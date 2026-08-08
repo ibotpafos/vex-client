@@ -43,6 +43,9 @@ import java.io.File
 import java.io.ByteArrayOutputStream
 import java.net.URL
 import java.security.MessageDigest
+import java.security.KeyFactory
+import java.security.Signature as JavaSignature
+import java.security.spec.X509EncodedKeySpec
 
 class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext), LifecycleEventListener {
   private val controller = WireGuardController(reactContext)
@@ -320,6 +323,26 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
       } catch (error: Throwable) {
         rejectVpnError(promise, "VPN_LATENCY_FAILED", "VPN latency check failed.", error)
       }
+    }
+  }
+
+  @ReactMethod
+  fun verifyP256Signature(payloadBase64: String, signatureBase64: String, subjectPublicKeyInfoBase64: String, promise: Promise) {
+    try {
+      val payload = decodeBase64Url(payloadBase64)
+      val signature = decodeBase64Url(signatureBase64)
+      val keyData = decodeBase64Url(subjectPublicKeyInfoBase64)
+      if (payload == null || signature == null || keyData == null) {
+        promise.resolve(false)
+        return
+      }
+      val publicKey = KeyFactory.getInstance("EC").generatePublic(X509EncodedKeySpec(keyData))
+      val verifier = JavaSignature.getInstance("SHA256withECDSA")
+      verifier.initVerify(publicKey)
+      verifier.update(payload)
+      promise.resolve(verifier.verify(signature))
+    } catch (_: Throwable) {
+      promise.resolve(false)
     }
   }
 
@@ -879,6 +902,17 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
 
   private fun sha256Hex(value: ByteArray): String {
     return MessageDigest.getInstance("SHA-256").digest(value).joinToString("") { "%02x".format(it) }
+  }
+
+  private fun decodeBase64Url(value: String): ByteArray? {
+    if (!value.matches(Regex("^[A-Za-z0-9+/_-]+={0,2}$"))) {
+      return null
+    }
+    return try {
+      Base64.decode(value.replace('-', '+').replace('_', '/'), Base64.DEFAULT)
+    } catch (_: IllegalArgumentException) {
+      null
+    }
   }
 
   private fun hasVerifiedChecksumSidecar(apkFile: File): Boolean {

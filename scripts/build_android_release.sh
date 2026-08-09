@@ -75,6 +75,10 @@ else
   unset VEX_UPLOAD_STORE_PASSWORD
   unset VEX_UPLOAD_KEY_ALIAS
   unset VEX_UPLOAD_KEY_PASSWORD
+  # A local artifact must never have the production package identity. The
+  # verifier below already expects the dev suffix; pass the same default to
+  # Gradle so the produced APK and its release contract agree.
+  export VEX_DEBUG_APPLICATION_ID_SUFFIX="${VEX_DEBUG_APPLICATION_ID_SUFFIX:-.dev}"
 fi
 
 "${root_dir}/scripts/bootstrap_amneziawg_android.sh"

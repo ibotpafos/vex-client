@@ -58,6 +58,7 @@ import type { VpnStatus } from '../src/native/vexVpn';
 import type { VpnProfile } from '../src/vpn/profile';
 import { managedProfileAmneziaConfig } from '../src/vpn/amneziaConfig';
 import { managedProfileAWGVersion, withManagedProfileAWGCapability } from '../src/vpn/profileCapabilities';
+import { serverPickerActionForSource } from '../src/screens/server-picker-interactions';
 
 const connectedStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0 };
 
@@ -975,7 +976,13 @@ async function runAsyncTests(): Promise<void> {
   runAndroidRoutingSafetyTests();
   runSupportTests();
   runErrorMessageTests();
+  runServerPickerInteractionTests();
   await runServerSwitchTests();
+}
+
+function runServerPickerInteractionTests(): void {
+  assertEqual(serverPickerActionForSource('carousel'), 'select');
+  assertEqual(serverPickerActionForSource('all_locations'), 'open_picker');
 }
 
 function runAndroidRoutingSafetyTests(): void {

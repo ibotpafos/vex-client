@@ -18,6 +18,7 @@ import { ServerChip } from '../components/server-chip';
 import { ServerPickerModal } from '../components/server-picker-modal';
 import { TrafficStats } from '../components/traffic-stats';
 import { type ConnectionPhase } from './home-screen-helpers';
+import { serverPickerActionForSource } from './server-picker-interactions';
 import { styles } from './home-screen.styles';
 
 export default function App() {
@@ -154,6 +155,9 @@ export default function App() {
                 <VexPressable
                   disabled={isVpnBusy}
                   onPress={() => {
+                    if (serverPickerActionForSource('all_locations') !== 'open_picker') {
+                      return;
+                    }
                     setServerPickerSnapshot({
                       latencyText: selectedLatencyText,
                       locations: availableLocations.map((location) => ({ ...location })),
@@ -183,12 +187,11 @@ export default function App() {
                         key={location.id}
                         latencyText={isSelected ? selectedLatencyText : `${Math.max(0, Math.round(location.latencyMs ?? 0))} мс`}
                         location={location}
-                        onPress={(visibleLatencyText) => {
-                          setServerPickerSnapshot({
-                            latencyText: visibleLatencyText,
-                            locations: availableLocations.map((entry) => ({ ...entry })),
-                          });
-                          setIsServerPickerVisible(true);
+                        onPress={() => {
+                          if (serverPickerActionForSource('carousel') !== 'select') {
+                            return;
+                          }
+                          void handleLocationPress(location.id, false);
                         }}
                       />
                     </View>

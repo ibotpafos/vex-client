@@ -59,6 +59,7 @@ import type { VpnProfile } from '../src/vpn/profile';
 import { managedProfileAmneziaConfig } from '../src/vpn/amneziaConfig';
 import { managedProfileAWGVersion, withManagedProfileAWGCapability } from '../src/vpn/profileCapabilities';
 import { serverPickerActionForSource } from '../src/screens/server-picker-interactions';
+import { trafficSessionLabel } from '../src/components/traffic-summary';
 
 const connectedStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0 };
 
@@ -977,12 +978,18 @@ async function runAsyncTests(): Promise<void> {
   runSupportTests();
   runErrorMessageTests();
   runServerPickerInteractionTests();
+  runTrafficSummaryTests();
   await runServerSwitchTests();
 }
 
 function runServerPickerInteractionTests(): void {
   assertEqual(serverPickerActionForSource('carousel'), 'select');
   assertEqual(serverPickerActionForSource('all_locations'), 'open_picker');
+}
+
+function runTrafficSummaryTests(): void {
+  assertEqual(trafficSessionLabel('received'), 'Получено за сессию');
+  assertEqual(trafficSessionLabel('sent'), 'Отправлено за сессию');
 }
 
 function runAndroidRoutingSafetyTests(): void {

@@ -334,9 +334,9 @@ export const styles = StyleSheet.create({
     borderRadius: 22,
     borderWidth: 1,
     flex: 1,
-    minHeight: 112,
+    minHeight: 86,
     minWidth: 0,
-    padding: 10,
+    padding: 12,
   },
   trafficCardHeader: {
     alignItems: 'center',
@@ -351,21 +351,14 @@ export const styles = StyleSheet.create({
   trafficValue: {
     color: vexTheme.colors.text,
     fontSize: 18,
+    fontVariant: ['tabular-nums'],
     fontWeight: '900',
-    marginTop: 5,
+    marginTop: 7,
   },
-  trafficSparkline: {
-    marginTop: 4,
-  },
-  trafficDirectionBadge: {
+  trafficDirectionIcon: {
     alignItems: 'center',
-    backgroundColor: 'rgba(34,211,238,0.1)',
-    borderColor: vexTheme.colors.accent,
-    borderRadius: 18,
-    borderWidth: 1,
-    height: 34,
     justifyContent: 'center',
-    width: 34,
+    width: 24,
   },
   heroRingFar: {
     borderColor: 'rgba(121,239,247,0.07)',

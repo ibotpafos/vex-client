@@ -23,12 +23,15 @@ build_arch() {
   local triple="${arch}-apple-macosx15.0"
   local scratch="${SCRATCH_ROOT}/${arch}"
 
-  /usr/bin/swift build \
+  if ! /usr/bin/swift build \
     --package-path "${PACKAGE_DIR}" \
     --scratch-path "${scratch}" \
     --configuration release \
     --product "${PRODUCT}" \
-    --triple "${triple}" >&2
+    --triple "${triple}" >&2; then
+    echo "Swift helper build failed for ${arch}; refusing to reuse stale output from ${scratch}." >&2
+    return 1
+  fi
 
   /usr/bin/find "${scratch}" -type f -path "*/release/${PRODUCT}" -perm -111 -print -quit
 }

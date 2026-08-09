@@ -1,6 +1,7 @@
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -46,6 +47,46 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
             external_amnezia = checkout / "external" / "amnezia"
             self.assertTrue(external_amnezia.is_symlink())
             self.assertEqual(external_amnezia.resolve(), (cache_root / "external-amnezia").resolve())
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS helper build is macOS-only")
+    def test_swift_helper_build_fails_instead_of_reusing_stale_binaries(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkout = Path(temp_dir) / "checkout"
+            scripts = checkout / "scripts"
+            resources = checkout / "macos-native" / "HelperResources"
+            scripts.mkdir(parents=True)
+            resources.mkdir(parents=True)
+            shutil.copy2(ROOT / "scripts" / "build_swift_macos_helper.sh", scripts)
+
+            source = checkout / "stale-helper.c"
+            source.write_text("int main(void) { return 0; }\n")
+            for arch in ("arm64", "x86_64"):
+                stale_binary = (
+                    checkout
+                    / "macos-native"
+                    / ".build-helper"
+                    / arch
+                    / "stale"
+                    / "release"
+                    / "VEXPrivilegedHelper"
+                )
+                stale_binary.parent.mkdir(parents=True)
+                subprocess.run(
+                    ["/usr/bin/clang", "-arch", arch, str(source), "-o", str(stale_binary)],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+
+            result = subprocess.run(
+                ["bash", str(scripts / "build_swift_macos_helper.sh")],
+                cwd=checkout,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertFalse((resources / "vex-helper").exists())
 
 
 if __name__ == "__main__":

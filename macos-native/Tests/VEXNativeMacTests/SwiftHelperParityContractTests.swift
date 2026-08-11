@@ -101,6 +101,22 @@ final class SwiftHelperParityContractTests: XCTestCase {
         XCTAssertTrue(source.contains("kickstart()"))
     }
 
+    func testRefreshStatusRevalidatesInstallStateAfterAuthorizedStatus() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let source = try String(
+            contentsOf: packageRoot.appendingPathComponent("Sources/VEXNativeMac/VEXHelperClient.swift"),
+            encoding: .utf8
+        )
+        let start = try XCTUnwrap(source.range(of: "func refreshStatus(quiet: Bool = false) async"))
+        let end = try XCTUnwrap(source.range(of: "func connect() async", range: start.upperBound..<source.endIndex))
+        let refreshStatus = String(source[start.lowerBound..<end.lowerBound])
+
+        XCTAssertTrue(
+            refreshStatus.contains("installState = installer.installedState"),
+            "A successful authenticated status response must replace stale helper-install state."
+        )
+    }
+
     private func helperContractSource() throws -> String {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let nativeSources = [

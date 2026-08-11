@@ -77,6 +77,9 @@ final class VEXHelperModel: ObservableObject {
             if status != nextStatus {
                 status = nextStatus
             }
+            if installRequiredMessage != nil {
+                installState = installer.installedState
+            }
             consecutiveStatusFailures = 0
             if !quiet {
                 message = nil

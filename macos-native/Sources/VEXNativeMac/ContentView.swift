@@ -5,6 +5,7 @@ struct ContentView: View {
     @EnvironmentObject private var appState: VEXAppState
     @EnvironmentObject private var helper: VEXHelperModel
     @State private var selection: AppSection = .home
+    @State private var isServerDrawerPresented = false
 
     init(initialSelection: AppSection = .home) {
         _selection = State(initialValue: initialSelection)
@@ -35,9 +36,16 @@ struct ContentView: View {
             }
             selection = section
         }
+        .onReceive(NotificationCenter.default.publisher(for: VEXServerSidebarWindow.toggleNotification)) { _ in
+            guard selection == .home else { return }
+            isServerDrawerPresented.toggle()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: VEXServerSidebarWindow.closeNotification)) { _ in
+            dismissServerDrawer()
+        }
         .onChange(of: selection) { _, nextSelection in
             if nextSelection != .home {
-                VEXServerSidebarWindow.close()
+                dismissServerDrawer()
             }
         }
     }
@@ -56,6 +64,16 @@ struct ContentView: View {
                 .contentTransition(.opacity)
                 .transition(sectionTransition)
                 .animation(sectionTransitionAnimation, value: selection)
+
+            if selection == .home && isServerDrawerPresented {
+                ServerSidebarOverlay(onClose: dismissServerDrawer)
+                    .transition(
+                        accessibilityReduceMotion
+                            ? .opacity
+                            : .move(edge: .trailing).combined(with: .opacity)
+                    )
+                    .zIndex(40)
+            }
 
             VEXScrollEdgeBlur(edge: .top)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -80,6 +98,14 @@ struct ContentView: View {
                 .padding(.bottom, 14)
                 .zIndex(10)
 
+            VEXVersionLabel()
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                .padding(.leading, 20)
+                .padding(.bottom, 20)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+                .zIndex(20)
+
             if selection == .home {
                 VEXWebsiteLink()
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
@@ -94,7 +120,7 @@ struct ContentView: View {
     @ViewBuilder
     private var authenticatedContent: some View {
         if selection == .home {
-            HomePanel(onShowServers: VEXServerSidebarWindow.toggle)
+            HomePanel(onShowServers: presentServerDrawer)
                 .padding(.horizontal, 30)
                 .padding(.top, 82)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -220,7 +246,7 @@ struct ContentView: View {
     private var selectedPanel: some View {
         switch selection {
         case .home:
-            HomePanel(onShowServers: VEXServerSidebarWindow.toggle)
+            HomePanel(onShowServers: presentServerDrawer)
         case .account:
             AccountPanel()
         case .settings:
@@ -234,6 +260,53 @@ struct ContentView: View {
             isAuthenticated: appState.isAuthenticated,
             isLoading: appState.isLoading
         )
+    }
+
+    private func presentServerDrawer() {
+        guard selection == .home else { return }
+        isServerDrawerPresented = true
+    }
+
+    private func dismissServerDrawer() {
+        isServerDrawerPresented = false
+    }
+}
+
+private struct ServerSidebarOverlay: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    let onClose: () -> Void
+
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            Color.black.opacity(0.30)
+                .contentShape(Rectangle())
+                .onTapGesture { dismissServerDrawer() }
+
+            ServerSidebarPanel(onClose: onClose)
+                .frame(width: 360)
+                .frame(maxHeight: .infinity)
+                .shadow(color: .black.opacity(0.24), radius: 22, x: -8, y: 0)
+                .accessibilityAddTraits(.isModal)
+        }
+        .animation(
+            reduceMotion ? .linear(duration: 0.01) : .snappy(duration: 0.28, extraBounce: 0),
+            value: reduceMotion
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Список серверов")
+    }
+
+    private func dismissServerDrawer() {
+        onClose()
+    }
+}
+
+private struct VEXVersionLabel: View {
+    var body: some View {
+        Text("VEX \(VEXAppInfo.version)")
+            .font(.system(size: 11, weight: .semibold, design: .rounded))
+            .foregroundStyle(Color.vexSecondaryText.opacity(0.72))
     }
 }
 

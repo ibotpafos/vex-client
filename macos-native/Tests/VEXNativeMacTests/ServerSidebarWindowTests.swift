@@ -34,44 +34,6 @@ final class ServerSidebarWindowTests: XCTestCase {
         latencyMs: nil
     )
 
-    func testPlacementUsesSpaceToTheRightOfMainWindow() {
-        let frame = ServerSidebarPlacement.frame(
-            mainWindowFrame: NSRect(x: 100, y: 100, width: 920, height: 580),
-            panelSize: NSSize(width: 350, height: 580),
-            visibleFrame: NSRect(x: 0, y: 0, width: 1440, height: 900)
-        )
-
-        XCTAssertEqual(frame.origin.x, 1036)
-        XCTAssertEqual(frame.origin.y, 100)
-    }
-
-    func testPlacementFallsBackToLeftWhenRightSideDoesNotFit() {
-        let frame = ServerSidebarPlacement.frame(
-            mainWindowFrame: NSRect(x: 470, y: 100, width: 920, height: 580),
-            panelSize: NSSize(width: 350, height: 580),
-            visibleFrame: NSRect(x: 0, y: 0, width: 1440, height: 900)
-        )
-
-        XCTAssertEqual(frame.origin.x, 104)
-        XCTAssertEqual(frame.origin.y, 100)
-    }
-
-    func testOpeningFrameStartsTowardMainWindow() {
-        let mainFrame = NSRect(x: 100, y: 100, width: 920, height: 580)
-
-        let rightOpeningFrame = ServerSidebarPlacement.openingFrame(
-            targetFrame: NSRect(x: 1036, y: 100, width: 350, height: 580),
-            mainWindowFrame: mainFrame
-        )
-        let leftOpeningFrame = ServerSidebarPlacement.openingFrame(
-            targetFrame: NSRect(x: -266, y: 100, width: 350, height: 580),
-            mainWindowFrame: mainFrame
-        )
-
-        XCTAssertEqual(rightOpeningFrame.origin.x, 1014)
-        XCTAssertEqual(leftOpeningFrame.origin.x, -244)
-    }
-
     func testSearchMatchesRussianCountryWithLatinQuery() {
         XCTAssertTrue(
             ServerSidebarSearch.matches(
@@ -290,29 +252,22 @@ final class ServerSidebarWindowTests: XCTestCase {
         XCTAssertLessThan(busyCapture.lowerBound, tokenRefresh.lowerBound)
     }
 
-    func testWindowControllerRestoresRequestedContentSizeAfterHosting() throws {
+    func testServerListUsesAnInWindowOverlayInsteadOfASecondWindow() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let sourceURL = packageRoot.appendingPathComponent(
-            "Sources/VEXNativeMac/Support/VEXServerSidebarWindow.swift"
+        let contentURL = packageRoot.appendingPathComponent(
+            "Sources/VEXNativeMac/ContentView.swift"
         )
-        let source = try String(contentsOf: sourceURL, encoding: .utf8)
-
-        XCTAssertTrue(source.contains("panel.setContentSize(panelSize)"))
-        XCTAssertTrue(source.contains("panel.hasShadow = false"))
-        XCTAssertTrue(source.contains("panel.contentView?.layer?.borderWidth = 0"))
-    }
-
-    func testWindowControllerAnimatesSidebarAppearance() throws {
-        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let sourceURL = packageRoot.appendingPathComponent(
-            "Sources/VEXNativeMac/Support/VEXServerSidebarWindow.swift"
+        let appURL = packageRoot.appendingPathComponent(
+            "Sources/VEXNativeMac/VEXNativeMacApp.swift"
         )
-        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let content = try String(contentsOf: contentURL, encoding: .utf8)
+        let app = try String(contentsOf: appURL, encoding: .utf8)
 
-        XCTAssertTrue(source.contains("panel.alphaValue = 0"))
-        XCTAssertTrue(source.contains("NSAnimationContext.runAnimationGroup"))
-        XCTAssertTrue(source.contains("CAMediaTimingFunction(name: .easeOut)"))
-        XCTAssertTrue(source.contains("accessibilityDisplayShouldReduceMotion"))
+        XCTAssertTrue(content.contains("@State private var isServerDrawerPresented"))
+        XCTAssertTrue(content.contains("ServerSidebarOverlay"))
+        XCTAssertTrue(content.contains(".onTapGesture { dismissServerDrawer() }"))
+        XCTAssertFalse(app.contains("ServerSidebarWindowController"))
+        XCTAssertFalse(app.contains("addChildWindow(panel"))
     }
 
     func testLoadingStateUsesAnimatedVEXSpinner() throws {
@@ -450,24 +405,4 @@ final class ServerSidebarWindowTests: XCTestCase {
         XCTAssertTrue(source.contains("return \"Установить системный компонент VEX\""))
     }
 
-    func testPanelMatchesMainWindowHeight() {
-        let size = ServerSidebarPlacement.panelSize(
-            mainWindowFrame: NSRect(x: 100, y: 100, width: 920, height: 580),
-            visibleFrame: NSRect(x: 0, y: 0, width: 1440, height: 900)
-        )
-
-        XCTAssertEqual(size, NSSize(width: 350, height: 580))
-    }
-
-    func testSidebarLifecycleDetachesChildWindowAndObservers() throws {
-        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let sourceURL = packageRoot.appendingPathComponent(
-            "Sources/VEXNativeMac/Support/VEXServerSidebarWindow.swift"
-        )
-        let source = try String(contentsOf: sourceURL, encoding: .utf8)
-
-        XCTAssertTrue(source.contains("removeChildWindow(panel)"))
-        XCTAssertTrue(source.contains("removeWindowObservers()"))
-        XCTAssertTrue(source.contains("panel.orderOut(nil)"))
-    }
 }

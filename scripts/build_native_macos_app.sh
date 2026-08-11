@@ -124,6 +124,14 @@ chmod 755 "${APP_DIR}/Contents/Resources/resources/install-vex-vpn-helper.sh" \
   "${APP_DIR}/Contents/Resources/resources/vex-helper"
 chmod 644 "${APP_DIR}/Contents/Resources/resources/helper-version"
 
+# The privileged installer verifies each executable helper resource before it
+# mutates /Library. Sign them before sealing the enclosing app bundle so a
+# package install cannot fail after the app itself has already been replaced.
+for helper_binary in awg amneziawg-go vex-helper; do
+  /usr/bin/codesign "${CODESIGN_ARGS[@]}" "${APP_DIR}/Contents/Resources/resources/${helper_binary}"
+  /usr/bin/codesign --verify --strict "${APP_DIR}/Contents/Resources/resources/${helper_binary}"
+done
+
 rm -rf "${ICONSET_DIR}"
 mkdir -p "${ICONSET_DIR}"
 sips -z 16 16 "${ICON_SOURCE}" --out "${ICONSET_DIR}/icon_16x16.png" >/dev/null

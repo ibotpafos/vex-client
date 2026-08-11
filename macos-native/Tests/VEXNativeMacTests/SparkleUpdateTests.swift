@@ -273,6 +273,18 @@ final class SparkleUpdateTests: XCTestCase {
         XCTAssertTrue(script.contains("config_path"))
     }
 
+    func testNativeMacBuildSignsEveryExecutableHelperResourceBeforePackaging() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let scriptURL = packageRoot
+            .deletingLastPathComponent()
+            .appendingPathComponent("scripts/build_native_macos_app.sh")
+        let script = try String(contentsOf: scriptURL, encoding: .utf8)
+
+        XCTAssertTrue(script.contains("for helper_binary in awg amneziawg-go vex-helper; do"))
+        XCTAssertTrue(script.contains("codesign \"${CODESIGN_ARGS[@]}\" \"${APP_DIR}/Contents/Resources/resources/${helper_binary}\""))
+        XCTAssertTrue(script.contains("codesign --verify --strict \"${APP_DIR}/Contents/Resources/resources/${helper_binary}\""))
+    }
+
     func testNativeMacProductionPreflightChecksReleaseContracts() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let scriptURL = packageRoot

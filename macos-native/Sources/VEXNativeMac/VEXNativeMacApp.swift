@@ -137,8 +137,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var helper: VEXHelperModel?
     private var appState: VEXAppState?
     private var statusController: VEXStatusItemController?
-    private var serverSidebarController: ServerSidebarWindowController?
-    private var serverSidebarObservers: [NSObjectProtocol] = []
     private var mainWindowConfigurationAttempts = 0
     private var terminationInProgress = false
     private var mainWindowActivationMonitor: Any?
@@ -149,36 +147,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if statusController == nil {
             statusController = VEXStatusItemController(helper: helper, appState: appState)
         }
-        if serverSidebarController == nil {
-            serverSidebarController = ServerSidebarWindowController(appState: appState, helper: helper)
-            installServerSidebarObservers()
-        }
         statusController?.refresh()
-    }
-
-    private func installServerSidebarObservers() {
-        let center = NotificationCenter.default
-        serverSidebarObservers = [
-            center.addObserver(
-                forName: VEXServerSidebarWindow.toggleNotification,
-                object: nil,
-                queue: .main
-            ) { [weak self] _ in
-                Task { @MainActor in
-                    guard let self, let mainWindow = self.mainAppWindow else { return }
-                    self.serverSidebarController?.toggle(relativeTo: mainWindow)
-                }
-            },
-            center.addObserver(
-                forName: VEXServerSidebarWindow.closeNotification,
-                object: nil,
-                queue: .main
-            ) { [weak self] _ in
-                Task { @MainActor in
-                    self?.serverSidebarController?.close()
-                }
-            }
-        ]
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -275,7 +244,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        serverSidebarController?.close()
         return false
     }
 
@@ -295,9 +263,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        serverSidebarController?.close()
-        serverSidebarObservers.forEach(NotificationCenter.default.removeObserver)
-        serverSidebarObservers.removeAll()
         if let mainWindowActivationMonitor {
             NSEvent.removeMonitor(mainWindowActivationMonitor)
             self.mainWindowActivationMonitor = nil

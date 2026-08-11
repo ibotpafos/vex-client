@@ -1013,12 +1013,10 @@ final class NativeParityModelTests: XCTestCase {
         let backgroundURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/BackgroundViews.swift")
         let dockURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/FocusPulseNavigationDock.swift")
         let homeURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/HomePanel.swift")
-        let serverWindowURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Support/VEXServerSidebarWindow.swift")
         let content = try String(contentsOf: contentURL, encoding: .utf8)
         let background = try String(contentsOf: backgroundURL, encoding: .utf8)
         let dock = try String(contentsOf: dockURL, encoding: .utf8)
         let home = try String(contentsOf: homeURL, encoding: .utf8)
-        let serverWindow = try String(contentsOf: serverWindowURL, encoding: .utf8)
 
         XCTAssertTrue(content.contains("VEXBackground(selection: selection)"))
         XCTAssertTrue(content.contains(".contentTransition(.opacity)"))
@@ -1038,12 +1036,10 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(dock.contains("systemName: \"gearshape\""))
         XCTAssertFalse(dock.contains("onShowServers"))
         XCTAssertFalse(dock.contains("globe.europe.africa.fill"))
-        XCTAssertFalse(content.contains("presentedSheet"))
+        XCTAssertTrue(content.contains("@State private var isServerDrawerPresented"))
         XCTAssertTrue(home.contains("FocusPulseLocations("))
-        XCTAssertTrue(content.contains("HomePanel(onShowServers: VEXServerSidebarWindow.toggle)"))
-        XCTAssertFalse(content.contains("isServerDrawerPresented"))
-        XCTAssertTrue(serverWindow.contains("mainWindow.addChildWindow(panel, ordered: .above)"))
-        XCTAssertTrue(serverWindow.contains("ServerSidebarPlacement.frame("))
+        XCTAssertTrue(content.contains("HomePanel(onShowServers: presentServerDrawer)"))
+        XCTAssertTrue(content.contains("ServerSidebarOverlay(onClose: dismissServerDrawer)"))
     }
 
     func testHomeKeepsProtectionControlsInSettingsAndWebsiteInBottomCorner() throws {
@@ -1370,13 +1366,14 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(hero.contains("HelperInstallProgressRing"))
     }
 
-    func testDesktopDoesNotShowBuildLabel() throws {
+    func testDesktopShowsVersionWithoutBuildLabel() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let contentURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/ContentView.swift")
         let content = try String(contentsOf: contentURL, encoding: .utf8)
 
-        XCTAssertFalse(content.contains("VEXVersionLabel()"))
-        XCTAssertFalse(content.contains("VEX \\(VEXAppInfo.version) · build \\(VEXAppInfo.buildNumber)"))
+        XCTAssertTrue(content.contains("VEXVersionLabel()"))
+        XCTAssertTrue(content.contains("VEX \\(VEXAppInfo.version)"))
+        XCTAssertFalse(content.contains("· build"))
     }
 
     func testNativeConnectUsesOneAtomicHelperUpAndWaitsForUsableStatus() throws {

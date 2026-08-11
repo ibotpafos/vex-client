@@ -43,6 +43,8 @@ src_dir="$verified_resources_real"
 
 helper_dir="/Library/Application Support/VEX VPN/helper"
 plist="/Library/LaunchDaemons/app.vex.vpn.helper.plist"
+antileak_anchor="com.vexguard.antileak"
+antileak_anchor_file="/etc/pf.anchors/${antileak_anchor}"
 helper_version_file="$src_dir/helper-version"
 if [[ ! -r "$helper_version_file" ]]; then
   echo "Missing VPN resource: $helper_version_file" >&2
@@ -100,6 +102,81 @@ fi
 if [[ ! -x "$src_dir/awg-quick.sh" ]]; then
   echo "Missing VPN resource: $src_dir/awg-quick.sh" >&2
   exit 1
+fi
+
+# An app-only update must not needlessly restart the privileged daemon. Besides
+# making installation feel slow, restarting a byte-for-byte identical helper
+# can interrupt an otherwise healthy tunnel. We only take this path after the
+# new resources have been verified above, and fall back to the complete
+# fail-open replacement whenever anything about the current helper is unclear.
+codesign_cdhash() {
+  /usr/bin/codesign -d --verbose=4 "$1" 2>&1 \
+    | /usr/bin/sed -n 's/^CDHash=//p' \
+    | /usr/bin/head -n 1
+}
+
+same_signed_code() {
+  local bundled="$1"
+  local installed="$2"
+  local bundled_cdhash
+  local installed_cdhash
+
+  [[ -f "$bundled" && -f "$installed" ]] || return 1
+  bundled_cdhash="$(codesign_cdhash "$bundled")"
+  installed_cdhash="$(codesign_cdhash "$installed")"
+  [[ -n "$bundled_cdhash" && "$bundled_cdhash" == "$installed_cdhash" ]]
+}
+
+helper_resources_are_current() {
+  [[ -S /var/run/vex-helper.sock ]] \
+    && /bin/launchctl print system/app.vex.vpn.helper >/dev/null 2>&1 \
+    && [[ -f "$helper_dir/version" ]] \
+    && /usr/bin/cmp -s "$helper_version_file" "$helper_dir/version" \
+    && /usr/bin/printf '%s\n' "$config_path" | /usr/bin/cmp -s - "$helper_dir/config-path" \
+    || return 1
+
+  for required in awg amneziawg-go awg-quick.sh vex-helper; do
+    if [[ "$required" == "awg-quick.sh" ]]; then
+      /usr/bin/cmp -s "$src_dir/$required" "$helper_dir/$required" || return 1
+    else
+      same_signed_code "$src_dir/$required" "$helper_dir/$required" || return 1
+    fi
+  done
+}
+
+helper_recovery_evidence_present() {
+  for state_path in \
+    "$helper_dir/utun.name" \
+    "$helper_dir/endpoint.txt" \
+    "$helper_dir/awg.pid" \
+    "$helper_dir/antileak.state" \
+    "$helper_dir/antileak.active"; do
+    [[ -e "$state_path" ]] && return 0
+  done
+
+  /usr/bin/find /var/run/amneziawg -maxdepth 1 -name '*.name' -print -quit 2>/dev/null \
+    | /usr/bin/grep -q .
+}
+
+helper_antileak_is_clear() {
+  local pf_info
+  local anchor_rules
+
+  pf_info="$(/sbin/pfctl -s info 2>&1)" || return 1
+  if /usr/bin/printf '%s\n' "$pf_info" | /usr/bin/grep -q "^Status: Disabled"; then
+    return 0
+  fi
+  anchor_rules="$(/sbin/pfctl -a "$antileak_anchor" -sr 2>/dev/null)" || return 1
+  ! /usr/bin/printf '%s\n' "$anchor_rules" | /usr/bin/grep -q '[^[:space:]]'
+}
+
+if helper_resources_are_current && helper_antileak_is_clear; then
+  if helper_recovery_evidence_present; then
+    echo "Recovery evidence is present; helper replacement is required."
+  else
+    echo "Helper resources unchanged; preserving active helper."
+    exit 0
+  fi
 fi
 
 /usr/bin/install -d -o root -g wheel -m 0755 "$helper_dir"
@@ -168,8 +245,6 @@ fi
 # 2. Make the host fail-open before replacing a running helper. Older helper
 # versions could leave the live PF anchor (and its persistent file) blocking
 # after a failed shutdown, so the root installer clears and verifies PF first.
-antileak_anchor="com.vexguard.antileak"
-antileak_anchor_file="/etc/pf.anchors/${antileak_anchor}"
 anchor_tmp="$(/usr/bin/mktemp /etc/pf.anchors/.vex-antileak.XXXXXX)"
 : > "$anchor_tmp"
 /usr/sbin/chown root:wheel "$anchor_tmp"
@@ -208,18 +283,7 @@ if [[ "$anchor_query_status" == "0" ]] \
 fi
 
 recovery_needed=0
-for state_path in \
-  "$helper_dir/utun.name" \
-  "$helper_dir/endpoint.txt" \
-  "$helper_dir/awg.pid" \
-  "$helper_dir/antileak.state" \
-  "$helper_dir/antileak.active"; do
-  if [[ -e "$state_path" ]]; then
-    recovery_needed=1
-    break
-  fi
-done
-if /usr/bin/find /var/run/amneziawg -maxdepth 1 -name '*.name' -print -quit 2>/dev/null | /usr/bin/grep -q .; then
+if helper_recovery_evidence_present; then
   recovery_needed=1
 fi
 

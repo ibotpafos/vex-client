@@ -24,6 +24,18 @@ sha256_or_empty() {
   fi
 }
 
+# The app packaging step re-signs embedded executables. That can change the
+# raw file checksum while preserving the signed executable code. CDHash is the
+# stable CodeDirectory identity used by macOS for this comparison.
+codesign_cdhash_or_empty() {
+  local path="$1"
+  if [[ -f "${path}" ]]; then
+    /usr/bin/codesign -d --verbose=4 "${path}" 2>&1 \
+      | /usr/bin/sed -n 's/^CDHash=//p' \
+      | /usr/bin/head -n 1
+  fi
+}
+
 helper_version_from_bundle() {
   local installer="$1"
   local resource_dir
@@ -67,6 +79,9 @@ app_helper_installer="${APP_PATH}/Contents/Resources/resources/install-vex-vpn-h
 app_helper_sha="$(sha256_or_empty "${app_helper}")"
 source_helper_sha="$(sha256_or_empty "${SOURCE_HELPER}")"
 root_helper_sha="$(sha256_or_empty "${ROOT_HELPER}")"
+app_helper_cdhash="$(codesign_cdhash_or_empty "${app_helper}")"
+source_helper_cdhash="$(codesign_cdhash_or_empty "${SOURCE_HELPER}")"
+root_helper_cdhash="$(codesign_cdhash_or_empty "${ROOT_HELPER}")"
 app_helper_version="$(helper_version_from_bundle "${app_helper_installer}")"
 root_helper_version="$(file_contents_or_empty "${ROOT_HELPER_DIR}/version" | /usr/bin/tr -d '[:space:]')"
 helper_plist_run_at_load=""
@@ -87,6 +102,9 @@ fi
 echo "app_helper_sha=${app_helper_sha}"
 echo "source_helper_sha=${source_helper_sha}"
 echo "root_helper_sha=${root_helper_sha}"
+echo "app_helper_cdhash=${app_helper_cdhash}"
+echo "source_helper_cdhash=${source_helper_cdhash}"
+echo "root_helper_cdhash=${root_helper_cdhash}"
 echo "app_helper_version=${app_helper_version}"
 echo "root_helper_version=${root_helper_version}"
 echo "helper_plist_run_at_load=${helper_plist_run_at_load}"
@@ -103,11 +121,25 @@ fi
 if [[ -z "${root_helper_sha}" ]]; then
   record_failure "root helper missing"
 fi
-if [[ -n "${app_helper_sha}" && -n "${source_helper_sha}" && "${app_helper_sha}" != "${source_helper_sha}" ]]; then
-  record_failure "bundled helper does not match source helper"
+if [[ -z "${app_helper_cdhash}" ]]; then
+  record_failure "bundled helper signed code is unavailable"
 fi
-if [[ -n "${app_helper_sha}" && -n "${root_helper_sha}" && "${app_helper_sha}" != "${root_helper_sha}" ]]; then
-  record_failure "root helper does not match bundled helper"
+if [[ -z "${root_helper_cdhash}" ]]; then
+  record_failure "root helper signed code is unavailable"
+fi
+if [[ -z "${source_helper_cdhash}" ]]; then
+  echo "source_helper_matches_bundle=unknown"
+elif [[ -n "${app_helper_cdhash}" && "${app_helper_cdhash}" == "${source_helper_cdhash}" ]]; then
+  echo "source_helper_matches_bundle=true"
+else
+  # Local Swift builds can have a distinct Mach-O UUID and therefore CDHash
+  # despite representing the same source. The installed app bundle remains
+  # the release authority; report this for maintainers but do not reject a
+  # healthy app-to-root helper pairing.
+  echo "source_helper_matches_bundle=false"
+fi
+if [[ -n "${app_helper_cdhash}" && -n "${root_helper_cdhash}" && "${app_helper_cdhash}" != "${root_helper_cdhash}" ]]; then
+  record_failure "root helper code does not match bundled helper"
 fi
 if [[ -n "${app_helper_version}" && "${app_helper_version}" != "${root_helper_version}" ]]; then
   record_failure "root helper version does not match bundled helper version"
@@ -115,7 +147,7 @@ fi
 if [[ "${helper_plist_is_persistent}" != "true" ]]; then
   record_failure "helper LaunchDaemon is not configured to start and stay alive"
 fi
-if [[ -n "${app_helper_sha}" && -n "${root_helper_sha}" && "${app_helper_sha}" != "${root_helper_sha}" ]] \
+if [[ -n "${app_helper_cdhash}" && -n "${root_helper_cdhash}" && "${app_helper_cdhash}" != "${root_helper_cdhash}" ]] \
   || [[ "${helper_plist_is_persistent}" != "true" ]]; then
   echo "helper_install_action=APP_PATH=${APP_PATH} bash scripts/install_native_macos_helper_from_app.sh"
 fi

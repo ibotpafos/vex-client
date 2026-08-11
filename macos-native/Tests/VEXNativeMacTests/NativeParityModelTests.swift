@@ -1401,7 +1401,9 @@ final class NativeParityModelTests: XCTestCase {
         let script = try String(contentsOf: scriptURL, encoding: .utf8)
 
         XCTAssertTrue(script.contains("app_codesign=ok"))
-        XCTAssertTrue(script.contains("root helper does not match bundled helper"))
+        XCTAssertTrue(script.contains("codesign_cdhash_or_empty"))
+        XCTAssertTrue(script.contains("root helper code does not match bundled helper"))
+        XCTAssertTrue(script.contains("source_helper_matches_bundle"))
         XCTAssertTrue(script.contains("root helper version does not match bundled helper version"))
         XCTAssertTrue(script.contains("helper_version_from_bundle"))
         XCTAssertTrue(script.contains("helper_install_action="))

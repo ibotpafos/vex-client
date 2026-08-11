@@ -890,12 +890,15 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(helperInstaller.contains("resourceMatchesInstalled(\"vex-helper\")"))
         XCTAssertTrue(helperInstaller.contains("resourceMatchesInstalled(\"amneziawg-go\")"))
         XCTAssertTrue(helperInstaller.contains("resourceMatchesInstalled(\"awg\")"))
+        XCTAssertTrue(helperInstaller.contains("codeDirectoryHash"))
+        XCTAssertFalse(helperInstaller.contains("sha256Hex"))
         XCTAssertTrue(helperInstaller.contains("resourceFile(\"helper-version\")"))
         XCTAssertTrue(helperInstaller.contains("trimmingCharacters(in: .whitespacesAndNewlines)"))
         XCTAssertTrue(helperInstaller.contains("PropertyListSerialization.propertyList("))
         XCTAssertTrue(helperInstaller.contains("dictionary[\"RunAtLoad\"] as? Bool == true"))
         XCTAssertTrue(helperInstaller.contains("helperPlistKeepsServiceAvailable(dictionary)"))
-        XCTAssertTrue(helperInstaller.contains("SHA256.hash"))
+        XCTAssertTrue(helperInstaller.contains("SecStaticCodeCreateWithPath"))
+        XCTAssertTrue(helperInstaller.contains("kSecCodeInfoUnique"))
         XCTAssertFalse(helperInstaller.contains("if socketIsConnectable {\n            return\n        }"))
     }
 

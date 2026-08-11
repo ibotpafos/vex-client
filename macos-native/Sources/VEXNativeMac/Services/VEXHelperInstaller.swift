@@ -1,5 +1,4 @@
 import AppKit
-import CryptoKit
 import Foundation
 import Security
 
@@ -131,14 +130,29 @@ struct VEXHelperInstaller {
             return false
         }
         let installed = URL(fileURLWithPath: helperDir).appendingPathComponent(name)
-        return sha256Hex(bundled) == sha256Hex(installed)
+        guard let bundledHash = codeDirectoryHash(bundled),
+              let installedHash = codeDirectoryHash(installed) else {
+            return false
+        }
+        return bundledHash == installedHash
     }
 
-    private func sha256Hex(_ file: URL) -> String? {
-        guard let data = try? Data(contentsOf: file) else {
+    private func codeDirectoryHash(_ file: URL) -> Data? {
+        var staticCode: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(file as CFURL, [], &staticCode) == errSecSuccess,
+              let staticCode else {
             return nil
         }
-        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        var information: CFDictionary?
+        guard SecCodeCopySigningInformation(
+            staticCode,
+            SecCSFlags(rawValue: kSecCSSigningInformation),
+            &information
+        ) == errSecSuccess,
+              let signing = information as? [String: Any] else {
+            return nil
+        }
+        return signing[kSecCodeInfoUnique as String] as? Data
     }
 
     private var socketIsConnectable: Bool {

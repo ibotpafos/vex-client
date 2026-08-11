@@ -1,20 +1,40 @@
 import AppKit
 import SwiftUI
 
-private enum VEXAppResources {
+enum VEXAppResources {
     private static let bundleName = "VEXNativeMac_VEXNativeMac.bundle"
 
-    static let bundle: Bundle? = {
+    static let bundle = resourceBundle(
+        mainBundleURL: Bundle.main.bundleURL,
+        mainResourceURL: Bundle.main.resourceURL
+    )
+
+    static func resourceURL(
+        forResource name: String,
+        withExtension extensionName: String,
+        mainBundleURL: URL = Bundle.main.bundleURL,
+        mainResourceURL: URL? = Bundle.main.resourceURL
+    ) -> URL? {
+        resourceBundle(
+            mainBundleURL: mainBundleURL,
+            mainResourceURL: mainResourceURL
+        )?.url(forResource: name, withExtension: extensionName)
+    }
+
+    private static func resourceBundle(
+        mainBundleURL: URL,
+        mainResourceURL: URL?
+    ) -> Bundle? {
         let candidates = [
-            Bundle.main.resourceURL?.appendingPathComponent(bundleName),
-            Bundle.main.bundleURL.appendingPathComponent(bundleName),
-            Bundle.main.bundleURL
+            mainResourceURL?.appendingPathComponent(bundleName),
+            mainBundleURL.appendingPathComponent(bundleName),
+            mainBundleURL
                 .appendingPathComponent("Contents/Resources", isDirectory: true)
                 .appendingPathComponent(bundleName)
         ].compactMap { $0 }
 
         return candidates.lazy.compactMap(Bundle.init(url:)).first
-    }()
+    }
 }
 
 struct BundleImage: View {

@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 @testable import VEXNativeMac
 
@@ -118,6 +119,30 @@ final class FocusPulsePresentationTests: XCTestCase {
                 "Silhouette for \(countryCode) is not detailed enough"
             )
         }
+    }
+
+    func testPackagedCountrySilhouetteResolvesFromAppResources() throws {
+        let temporaryRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+
+        let appBundleURL = temporaryRoot.appendingPathComponent("VEX Native.app", isDirectory: true)
+        let appResourcesURL = appBundleURL.appendingPathComponent("Contents/Resources", isDirectory: true)
+        let resourceBundleURL = appResourcesURL
+            .appendingPathComponent("VEXNativeMac_VEXNativeMac.bundle", isDirectory: true)
+        let silhouetteURL = resourceBundleURL.appendingPathComponent("country-silhouettes.json")
+        try FileManager.default.createDirectory(at: resourceBundleURL, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: silhouetteURL)
+
+        XCTAssertEqual(
+            VEXAppResources.resourceURL(
+                forResource: "country-silhouettes",
+                withExtension: "json",
+                mainBundleURL: appBundleURL,
+                mainResourceURL: appResourcesURL
+            ),
+            silhouetteURL
+        )
     }
 
     func testWindowHeaderOmitsHomeTitleAndNamesSecondaryPages() {

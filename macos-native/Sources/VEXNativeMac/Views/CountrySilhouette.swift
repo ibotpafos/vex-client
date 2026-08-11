@@ -11,7 +11,10 @@ private struct CountrySilhouetteCatalog: Decodable {
 
 enum CountrySilhouetteStore {
     private static let countries: [String: CountrySilhouetteGeometry] = {
-        guard let url = Bundle.module.url(
+        guard let url = VEXAppResources.resourceURL(
+            forResource: "country-silhouettes",
+            withExtension: "json"
+        ) ?? Bundle.module.url(
             forResource: "country-silhouettes",
             withExtension: "json"
         ),

@@ -59,6 +59,12 @@ final class SparkleUpdateTests: XCTestCase {
         )
     }
 
+    func testInternalDistributionDisablesSparkleUpdater() {
+        XCTAssertFalse(SparkleUpdaterConfiguration.isUpdaterEnabled(distributionMode: "internal"))
+        XCTAssertFalse(SparkleUpdaterConfiguration.isUpdaterEnabled(distributionMode: "test"))
+        XCTAssertTrue(SparkleUpdaterConfiguration.isUpdaterEnabled(distributionMode: "production"))
+    }
+
     func testUnavailableUpdaterDoesNotClaimSparkleWindowWasOpened() {
         let updater = MockNativeUpdaterService(canCheckForUpdates: false)
         let appState = VEXAppState(nativeUpdater: updater)
@@ -214,9 +220,9 @@ final class SparkleUpdateTests: XCTestCase {
         XCTAssertTrue(script.contains("SUAutomaticallyUpdate"))
         XCTAssertTrue(script.contains("<key>SUAllowsAutomaticUpdates</key>"))
         XCTAssertTrue(script.contains("<key>SUVerifyUpdateBeforeExtraction</key>"))
-        XCTAssertTrue(
-            script.contains("<key>SUAutomaticallyUpdate</key>\n  <true/>")
-        )
+        XCTAssertTrue(script.contains("DISTRIBUTION_MODE"))
+        XCTAssertTrue(script.contains("SPARKLE_AUTOMATIC_CHECKS"))
+        XCTAssertTrue(script.contains("VEXNativeDistributionMode"))
         XCTAssertTrue(script.contains("VEX_NATIVE_BUILD must be numeric"))
         XCTAssertTrue(script.contains("Contents/Frameworks/Sparkle.framework"))
         XCTAssertTrue(script.contains("cwILAPfDRcrjrAWmD/VrMzIh983R2hncvI44tfEZauI="))

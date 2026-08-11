@@ -16,6 +16,12 @@ enum NativeUpdateAction: Equatable {
 }
 
 enum SparkleUpdaterConfiguration {
+    static func isUpdaterEnabled(distributionMode: String?) -> Bool {
+        !["internal", "test"].contains(
+            distributionMode?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "production"
+        )
+    }
+
     static func isValidPublicEDKey(_ value: Any?) -> Bool {
         guard let value = value as? String else { return false }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -27,6 +33,11 @@ enum SparkleUpdaterConfiguration {
 @MainActor
 enum NativeUpdaterServiceFactory {
     static func make(bundle: Bundle = .main) -> NativeUpdaterService {
+        guard SparkleUpdaterConfiguration.isUpdaterEnabled(
+            distributionMode: bundle.object(forInfoDictionaryKey: "VEXNativeDistributionMode") as? String
+        ) else {
+            return DisabledNativeUpdaterService()
+        }
         guard SparkleUpdaterConfiguration.isValidPublicEDKey(
             bundle.object(forInfoDictionaryKey: "SUPublicEDKey")
         ) else {

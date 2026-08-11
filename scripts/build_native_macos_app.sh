@@ -16,6 +16,7 @@ SPARKLE_FEED_URL="${VEX_SPARKLE_FEED_URL:-https://vexguard.app/downloads/native-
 SPARKLE_PUBLIC_ED_KEY="${VEX_SPARKLE_PUBLIC_ED_KEY:-cwILAPfDRcrjrAWmD/VrMzIh983R2hncvI44tfEZauI=}"
 CODESIGN_IDENTITY="${VEX_CODESIGN_IDENTITY:--}"
 HELPER_RESOURCE_DIR="${PACKAGE_DIR}/HelperResources"
+DISTRIBUTION_MODE="${VEX_NATIVE_DISTRIBUTION_MODE:-production}"
 
 if [[ -f "${ROOT_DIR}/.env.sparkle.local" ]]; then
   set -a
@@ -41,6 +42,11 @@ fi
 if [[ ! "${APP_BUILD}" =~ ^[0-9]+$ ]]; then
   echo "VEX_NATIVE_BUILD must be numeric; got '${APP_BUILD}'" >&2
   exit 1
+fi
+if [[ "${DISTRIBUTION_MODE}" == "internal" ]]; then
+  SPARKLE_AUTOMATIC_CHECKS="false"
+else
+  SPARKLE_AUTOMATIC_CHECKS="true"
 fi
 if [[ "${SPARKLE_FEED_URL}" != https://* ]]; then
   echo "VEX_SPARKLE_FEED_URL must use HTTPS; got '${SPARKLE_FEED_URL}'" >&2
@@ -192,13 +198,15 @@ cat >"${APP_DIR}/Contents/Info.plist" <<PLIST
   <key>SUPublicEDKey</key>
   <string>$(xml_escape "${SPARKLE_PUBLIC_ED_KEY}")</string>
   <key>SUEnableAutomaticChecks</key>
-  <true/>
+  <${SPARKLE_AUTOMATIC_CHECKS}/>
   <key>SUAllowsAutomaticUpdates</key>
-  <true/>
+  <${SPARKLE_AUTOMATIC_CHECKS}/>
   <key>SUAutomaticallyUpdate</key>
-  <true/>
+  <${SPARKLE_AUTOMATIC_CHECKS}/>
   <key>SUVerifyUpdateBeforeExtraction</key>
   <true/>
+  <key>VEXNativeDistributionMode</key>
+  <string>$(xml_escape "${DISTRIBUTION_MODE}")</string>
 </dict>
 </plist>
 PLIST

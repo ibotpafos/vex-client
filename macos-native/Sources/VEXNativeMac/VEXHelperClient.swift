@@ -148,7 +148,7 @@ final class VEXHelperModel: ObservableObject {
 
     func ensureHelperReady() async throws {
         guard !helperReadinessValidated else { return }
-        try await installer.ensureReady(allowAdminInstall: true)
+        try await installer.ensureReady(allowAdminInstall: false)
         helperReadinessValidated = true
         installState = installer.installedState
     }
@@ -203,7 +203,7 @@ final class VEXHelperModel: ObservableObject {
         defer { isBusy = false }
 
         do {
-            try await installer.ensureReady(allowAdminInstall: true)
+            try await installer.ensureReady(allowAdminInstall: false)
             let response = try await sendCommandWithRetry(command)
             if response.trimmingCharacters(in: .whitespacesAndNewlines) != "ok" {
                 throw VEXHelperError.commandFailed(response)

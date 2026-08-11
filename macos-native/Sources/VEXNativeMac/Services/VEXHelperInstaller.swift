@@ -11,7 +11,7 @@ struct VEXHelperInstaller {
     private let launchdLabel = "app.vex.vpn.helper"
     private let socketPath = "/var/run/vex-helper.sock"
 
-    func ensureReady(allowAdminInstall: Bool = true) async throws {
+    func ensureReady(allowAdminInstall: Bool = false) async throws {
         let currentFilesInstalled = filesAreCurrent
 
         if socketIsConnectable && currentFilesInstalled {
@@ -365,7 +365,7 @@ enum VEXHelperInstallError: LocalizedError {
         case .installFailed(let message):
             return message.isEmpty ? "Не удалось установить VPN helper." : message
         case .adminInstallRequired:
-            return "VPN helper требует установки. Пароль администратора понадобится только при подключении или установке пакета."
+            return "VPN helper устанавливается вместе с VEX. Переустановите приложение через установочный пакет .pkg."
         case .socketUnavailableAfterKickstart:
             return "VPN helper установлен, но сокет не поднялся после launchctl kickstart."
         case .socketUnavailableAfterInstall:

@@ -755,10 +755,18 @@ final class NativeParityModelTests: XCTestCase {
         let helperModel = try String(contentsOf: helperModelURL, encoding: .utf8)
         let helperInstaller = try String(contentsOf: helperInstallerURL, encoding: .utf8)
 
-        XCTAssertTrue(helperInstaller.contains("func ensureReady(allowAdminInstall: Bool = true)"))
+        XCTAssertTrue(helperInstaller.contains("func ensureReady(allowAdminInstall: Bool = false)"))
         XCTAssertTrue(helperModel.contains("try await installer.ensureReady(allowAdminInstall: false)"))
-        XCTAssertTrue(helperModel.contains("try await installer.ensureReady(allowAdminInstall: true)"))
+        XCTAssertFalse(helperModel.contains("try await installer.ensureReady(allowAdminInstall: true)"))
         XCTAssertTrue(helperInstaller.contains("adminInstallRequired"))
+    }
+
+    func testNativeConnectionNeverInstallsHelperFromTheApp() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let helperModelURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/VEXHelperClient.swift")
+        let helperModel = try String(contentsOf: helperModelURL, encoding: .utf8)
+
+        XCTAssertFalse(helperModel.contains("try await installer.ensureReady(allowAdminInstall: true)"))
     }
 
     func testNativeHelperReadyRequiresCurrentFilesEvenWhenSocketResponds() throws {

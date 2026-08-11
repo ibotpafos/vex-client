@@ -196,11 +196,12 @@ struct VPNProfileService {
         } else {
             config = try managedProfileConfig(managedProfile, keyPair: keyPair)
         }
+        let validatedConfig = try Self.validatedConfig(config, awgVersion: awgVersion)
 
         let nextDevice = device.withManagedProfile(managedProfile, locationId: normalizedLocationId)
         let tunnel = PreparedTunnel(
             device: nextDevice,
-            config: config,
+            config: validatedConfig,
             locationId: normalizedLocationId,
             profileVersion: managedProfile.version ?? cached?.profileVersion,
             routingMode: effectiveRoutingMode,
@@ -213,7 +214,7 @@ struct VPNProfileService {
         )
         try cache.save(PreparedTunnelCacheRecord(tunnel: tunnel), locationId: normalizedLocationId, routingMode: effectiveRoutingMode)
         if writeHelperConfig {
-            try cache.writeHelperConfig(helperConfig(config))
+            try cache.writeHelperConfig(helperConfig(validatedConfig))
         }
         return tunnel
     }
@@ -423,6 +424,26 @@ struct VPNProfileService {
         return lines.isEmpty ? "" : "\(lines.joined(separator: "\n"))\n"
     }
 
+    nonisolated static func validatedConfig(_ config: String, awgVersion: Int) throws -> String {
+        guard config.contains("[Interface]"), config.contains("[Peer]") else {
+            throw VPNProfileError.incompleteProfile("config")
+        }
+        guard awgVersion >= 3 else { return config }
+
+        let interfaceValues = interfaceConfigValues(config)
+        guard let headerProtectionKey = interfaceValues["headerprotectionkey"], !headerProtectionKey.isEmpty else {
+            throw VPNProfileError.invalidAWG3Profile("HeaderProtectionKey")
+        }
+        for field in ["S1", "S2", "S3", "S4"] {
+            guard let rawValue = interfaceValues[field.lowercased()],
+                  let value = Int(rawValue),
+                  value >= 12 else {
+                throw VPNProfileError.invalidAWG3Profile(field)
+            }
+        }
+        return config
+    }
+
     private func managedProfileEndpoint(_ profile: ManagedVpnProfile) -> String? {
         guard let server = profile.server, !server.isEmpty else { return nil }
         guard let port = profile.port, port > 0 else { return server }
@@ -471,6 +492,24 @@ struct VPNProfileService {
         }
     }
 
+    nonisolated private static func interfaceConfigValues(_ config: String) -> [String: String] {
+        var isInterfaceSection = false
+        var values: [String: String] = [:]
+        for rawLine in config.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.hasPrefix("[") {
+                isInterfaceSection = line.caseInsensitiveCompare("[Interface]") == .orderedSame
+                continue
+            }
+            guard isInterfaceSection,
+                  let separator = line.firstIndex(of: "=") else { continue }
+            let key = line[..<separator].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let value = line[line.index(after: separator)...].trimmingCharacters(in: .whitespacesAndNewlines)
+            values[key] = value
+        }
+        return values
+    }
+
     nonisolated private static func sanitizedIPv4AllowedIPsLine(_ line: String, separator: String.Index) -> String {
         let prefix = String(line[...separator])
         let values = line[line.index(after: separator)...]
@@ -496,6 +535,9 @@ struct VPNProfileService {
             return true
         }
         if (cached.awgVersion ?? 2) != requestedAwgVersion {
+            return true
+        }
+        if (try? validatedConfig(cached.config, awgVersion: requestedAwgVersion)) == nil {
             return true
         }
         if cachedDeviceNodeDoesNotMatchLocation(cached.device, requestedLocationId: requestedLocationId) {
@@ -598,11 +640,12 @@ struct VPNProfileService {
     }
 }
 
-enum VPNProfileError: LocalizedError {
+enum VPNProfileError: LocalizedError, Equatable {
     case subscriptionInactive
     case deviceRevoked
     case unchangedProfileWithoutCache
     case incompleteProfile(String)
+    case invalidAWG3Profile(String)
 
     var errorDescription: String? {
         switch self {
@@ -614,6 +657,8 @@ enum VPNProfileError: LocalizedError {
             return "Профиль не изменился, но локальный кэш пуст."
         case .incompleteProfile(let field):
             return "Управляемый VPN-профиль неполный: \(field)."
+        case .invalidAWG3Profile(let field):
+            return "Управляемый AWG3-профиль несовместим с AmneziaWG: \(field)."
         }
     }
 }

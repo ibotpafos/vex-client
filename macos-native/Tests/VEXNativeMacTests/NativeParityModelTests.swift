@@ -98,6 +98,70 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(config.contains("MaxHandshakeAttempts = 20-30\n"))
     }
 
+    func testAWG3ConfigRejectsHeaderProtectionWithInsufficientPadding() {
+        let config = """
+        [Interface]
+        PrivateKey = client-private-key
+        Address = 10.64.252.2/32
+        S1 = 11
+        S2 = 12
+        S3 = 12
+        S4 = 12
+        HeaderProtectionKey = header-protection-key
+
+        [Peer]
+        PublicKey = server-public-key
+        Endpoint = de-awg3.vexguard.app:51820
+        AllowedIPs = 0.0.0.0/0
+        """
+
+        XCTAssertThrowsError(try VPNProfileService.validatedConfig(config, awgVersion: 3)) { error in
+            XCTAssertEqual(error as? VPNProfileError, .invalidAWG3Profile("S1"))
+        }
+    }
+
+    @MainActor
+    func testAWG3ProfileKeepsEveryOfficialInterfaceFieldThroughHelperSanitization() throws {
+        let data = """
+        {
+          "amnezia_version": 3,
+          "amnezia": {
+            "jc": 4, "jmin": 40, "jmax": 70,
+            "s1": 12, "s2": 13, "s3": 14, "s4": 15,
+            "h1": "10-20", "h2": "21", "h3": "22", "h4": "23",
+            "i1": "<b 0x0102>", "i2": "<r 8>", "i3": "<rd 8>", "i4": "<rc 8>", "i5": "<t>",
+            "header_protection_key": "header-protection-key",
+            "content_padding_addition": "20-40",
+            "rekey_after_time": "120-180", "rekey_timeout": "2-4", "reject_after_time": "180-240",
+            "keepalive_timeout": "10-15", "max_handshake_attempts": "20-30"
+          }
+        }
+        """.data(using: .utf8)!
+        let profile = try JSONDecoder().decode(ManagedVpnProfile.self, from: data)
+        let config = """
+        [Interface]
+        PrivateKey = client-private-key
+        Address = 10.64.252.2/32
+        \(VPNProfileService.amneziaConfig(profile.amnezia))
+        [Peer]
+        PublicKey = server-public-key
+        Endpoint = de-awg3.vexguard.app:51820
+        AllowedIPs = 0.0.0.0/0, ::/0
+        """
+
+        let helperConfig = VPNProfileService.sanitizedMacOSHelperConfig(config)
+
+        for field in [
+            "Jc = 4", "Jmin = 40", "Jmax = 70", "S1 = 12", "S2 = 13", "S3 = 14", "S4 = 15",
+            "H1 = 10-20", "H2 = 21", "H3 = 22", "H4 = 23", "I1 = <b 0x0102>", "I2 = <r 8>",
+            "I3 = <rd 8>", "I4 = <rc 8>", "I5 = <t>", "HeaderProtectionKey = header-protection-key",
+            "ContentPaddingAddition = 20-40", "RekeyAfterTime = 120-180", "RekeyTimeout = 2-4",
+            "RejectAfterTime = 180-240", "KeepaliveTimeout = 10-15", "MaxHandshakeAttempts = 20-30",
+        ] {
+            XCTAssertTrue(helperConfig.contains(field), "Missing \(field)")
+        }
+    }
+
     func testManagedProfileRequestsMacOSCompactRoutingPolicy() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let apiURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/VEXAPIClient.swift")
@@ -153,7 +217,8 @@ final class NativeParityModelTests: XCTestCase {
             bypassRangesCount: 1,
             bypassDomainsCount: 1,
             routingPolicyVersion: VEXAppInfo.routingPolicyVersion,
-            rotationRequired: false
+            rotationRequired: false,
+            awgVersion: 2
         ))
 
         XCTAssertTrue(VPNProfileService.cachedProfileNeedsRefresh(cached, requestedLocationId: "de", requestedRoutingMode: .allExceptRu))
@@ -169,6 +234,11 @@ final class NativeParityModelTests: XCTestCase {
             config: """
             [Interface]
             PrivateKey = x
+            S1 = 12
+            S2 = 12
+            S3 = 12
+            S4 = 12
+            HeaderProtectionKey = header-protection-key
 
             [Peer]
             PublicKey = y
@@ -181,10 +251,45 @@ final class NativeParityModelTests: XCTestCase {
             bypassRangesCount: 1,
             bypassDomainsCount: 1,
             routingPolicyVersion: VEXAppInfo.routingPolicyVersion,
-            rotationRequired: false
+            rotationRequired: false,
+            awgVersion: 3
         ))
 
         XCTAssertFalse(VPNProfileService.cachedProfileNeedsRefresh(cached, requestedLocationId: "de", requestedRoutingMode: .allExceptRu))
+    }
+
+    func testMalformedAWG3CacheForcesProfileRefresh() throws {
+        let device = try JSONDecoder().decode(VpnDevice.self, from: """
+        {"id":"dev_1","name":"Mac","status":"active","protocol":"amneziawg","external_device_id":"macos-test"}
+        """.data(using: .utf8)!)
+        let cached = PreparedTunnelCacheRecord(tunnel: PreparedTunnel(
+            device: device,
+            config: """
+            [Interface]
+            PrivateKey = x
+            Address = 10.64.252.2/32
+            S1 = 11
+            S2 = 12
+            S3 = 12
+            S4 = 12
+            HeaderProtectionKey = header-protection-key
+
+            [Peer]
+            PublicKey = y
+            AllowedIPs = 0.0.0.0/0
+            """,
+            locationId: "de",
+            profileVersion: 10,
+            routingMode: .fullTunnel,
+            bypassRegion: nil,
+            bypassRangesCount: 0,
+            bypassDomainsCount: 0,
+            routingPolicyVersion: VEXAppInfo.routingPolicyVersion,
+            rotationRequired: false,
+            awgVersion: 3
+        ))
+
+        XCTAssertTrue(VPNProfileService.cachedProfileNeedsRefresh(cached, requestedLocationId: "de", requestedRoutingMode: .fullTunnel))
     }
 
     func testStaleManagedProfileCacheRequiresRefreshBeforeForegroundConnect() throws {
@@ -196,6 +301,11 @@ final class NativeParityModelTests: XCTestCase {
             config: """
             [Interface]
             PrivateKey = x
+            S1 = 12
+            S2 = 12
+            S3 = 12
+            S4 = 12
+            HeaderProtectionKey = header-protection-key
 
             [Peer]
             PublicKey = y
@@ -208,7 +318,8 @@ final class NativeParityModelTests: XCTestCase {
             bypassRangesCount: 0,
             bypassDomainsCount: 0,
             routingPolicyVersion: VEXAppInfo.routingPolicyVersion,
-            rotationRequired: false
+            rotationRequired: false,
+            awgVersion: 3
         ))
         cached.fetchedAt = Date(timeIntervalSinceNow: -10 * 60)
 

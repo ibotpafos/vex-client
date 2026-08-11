@@ -148,8 +148,11 @@ final class FocusPulsePresentationTests: XCTestCase {
     func testWindowHeaderOmitsHomeTitleAndNamesSecondaryPages() {
         XCTAssertNil(AppSection.home.headerTitle)
         XCTAssertEqual(AppSection.account.headerTitle, "Аккаунт")
-        XCTAssertEqual(AppSection.support.headerTitle, "Поддержка")
         XCTAssertEqual(AppSection.settings.headerTitle, "Настройки")
+    }
+
+    func testClientNavigationDoesNotExposeInAppSupportChat() {
+        XCTAssertFalse(AppSection.allCases.map(\.title).contains("Поддержка"))
     }
 
     func testServerStatusDistinguishesUnknownHealthyDegradedAndUnavailable() {

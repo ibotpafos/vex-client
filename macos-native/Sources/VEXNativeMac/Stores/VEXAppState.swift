@@ -153,17 +153,14 @@ final class VEXAppState: ObservableObject {
         } else if biometricUnlockRequired && biometricAvailability.isAvailable && canUnlockStoredSession {
             statusMessage = "Подтвердите вход по \(biometricAvailability.label)."
             autoLaunchEnabled = startupService.isEnabled()
-            observeSupportSocket()
             await loadUpdate()
             await loadRemoteConfig()
             return
         }
         autoLaunchEnabled = startupService.isEnabled()
-        observeSupportSocket()
         await refreshAll()
         await restoreActiveTunnelIfHelperIsConnected(helperStatus)
         scheduleProfileWarmup()
-        connectSupportSocketIfPossible()
     }
 
     func refreshAll() async {
@@ -179,10 +176,9 @@ final class VEXAppState: ObservableObject {
 
         async let userResult = loadUser(token)
         async let locationsResult: Void = refreshLocations(accessToken: token)
-        async let supportResult = loadSupport(token)
         async let billingResult = loadBilling(token)
         async let diagnosticsFlush = diagnosticsService.flush(accessToken: token)
-        _ = await [userResult, locationsResult, supportResult, updateResult, remoteConfigResult, billingResult, diagnosticsFlush]
+        _ = await [userResult, locationsResult, updateResult, remoteConfigResult, billingResult, diagnosticsFlush]
     }
 
     func refreshLocations() async {
@@ -778,16 +774,13 @@ final class VEXAppState: ObservableObject {
         user = storedSession.user
         statusMessage = "Сохраненная сессия открыта."
         await refreshAll()
-        connectSupportSocketIfPossible()
     }
 
     func signOut() {
         try? sessionStore.clearSession()
-        supportSocket.close()
         session = nil
         user = nil
         activeTunnel = nil
-        supportTickets = []
         entitlement = nil
         billingSummary = nil
         authError = nil
@@ -920,7 +913,6 @@ final class VEXAppState: ObservableObject {
     func refreshSupport() async {
         guard let token = accessToken else { return }
         await loadSupport(token)
-        connectSupportSocketIfPossible()
     }
 
     func refreshUpdates() async {
@@ -1330,7 +1322,6 @@ final class VEXAppState: ObservableObject {
         authError = nil
         statusMessage = message
         await refreshAll()
-        connectSupportSocketIfPossible()
     }
 
     private func authenticatedAccessToken() async -> String? {
@@ -1371,7 +1362,6 @@ final class VEXAppState: ObservableObject {
             user = nextSession.user
             authError = nil
             statusMessage = "Сессия обновлена."
-            connectSupportSocketIfPossible()
             return nextSession.accessToken
         } catch {
             if error.isUnauthorizedAPIError {
@@ -1605,25 +1595,6 @@ final class VEXAppState: ObservableObject {
                 // Background warmup is best-effort; foreground connect handles user-visible errors.
             }
         }
-    }
-
-    private func connectSupportSocketIfPossible() {
-        guard let token = accessToken else { return }
-        supportSocket.connect(accessToken: token) { [weak self] tickets in
-            self?.supportTickets = tickets
-        } onTicket: { [weak self] ticket in
-            self?.upsertSupportTicket(ticket)
-        }
-    }
-
-    private func observeSupportSocket() {
-        guard cancellables.isEmpty else { return }
-        supportSocket.$isConnected
-            .sink { [weak self] value in self?.supportSocketConnected = value }
-            .store(in: &cancellables)
-        supportSocket.$isReconnecting
-            .sink { [weak self] value in self?.supportSocketReconnecting = value }
-            .store(in: &cancellables)
     }
 
     private func upsertSupportTicket(_ ticket: SupportTicket) {

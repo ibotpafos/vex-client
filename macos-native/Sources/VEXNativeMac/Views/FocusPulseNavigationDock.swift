@@ -52,15 +52,6 @@ struct FocusPulseNavigationDock: View {
 
             if showsAuthenticatedSections {
                 dockButton(
-                    title: AppSection.support.title,
-                    systemName: "shield.lefthalf.filled",
-                    selected: selection == .support,
-                    section: .support
-                ) {
-                    selection = .support
-                }
-
-                dockButton(
                     title: AppSection.account.title,
                     systemName: "person.fill",
                     selected: selection == .account,

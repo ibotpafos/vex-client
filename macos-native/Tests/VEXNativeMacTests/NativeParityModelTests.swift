@@ -1362,14 +1362,13 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(hero.contains("HelperInstallProgressRing"))
     }
 
-    func testDesktopShowsInstalledVersionInLowerLeftCorner() throws {
+    func testDesktopDoesNotShowBuildLabel() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let contentURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/ContentView.swift")
         let content = try String(contentsOf: contentURL, encoding: .utf8)
 
-        XCTAssertTrue(content.contains("VEXVersionLabel()"))
-        XCTAssertTrue(content.contains("alignment: .bottomLeading"))
-        XCTAssertTrue(content.contains("VEX \\(VEXAppInfo.version) · build \\(VEXAppInfo.buildNumber)"))
+        XCTAssertFalse(content.contains("VEXVersionLabel()"))
+        XCTAssertFalse(content.contains("VEX \\(VEXAppInfo.version) · build \\(VEXAppInfo.buildNumber)"))
     }
 
     func testNativeConnectUsesOneAtomicHelperUpAndWaitsForUsableStatus() throws {

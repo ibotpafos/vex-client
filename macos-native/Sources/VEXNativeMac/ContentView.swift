@@ -80,14 +80,6 @@ struct ContentView: View {
                 .padding(.bottom, 14)
                 .zIndex(10)
 
-            VEXVersionLabel()
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-                .padding(.leading, 20)
-                .padding(.bottom, 20)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-                .zIndex(20)
-
             if selection == .home {
                 VEXWebsiteLink()
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
@@ -105,13 +97,6 @@ struct ContentView: View {
             HomePanel(onShowServers: VEXServerSidebarWindow.toggle)
                 .padding(.horizontal, 30)
                 .padding(.top, 82)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        } else if selection == .support {
-            SupportPanel()
-                .frame(maxWidth: 760, maxHeight: .infinity)
-                .padding(.horizontal, 28)
-                .padding(.top, 62)
-                .padding(.bottom, 110)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else {
             ScrollView {
@@ -238,8 +223,6 @@ struct ContentView: View {
             HomePanel(onShowServers: VEXServerSidebarWindow.toggle)
         case .account:
             AccountPanel()
-        case .support:
-            SupportPanel()
         case .settings:
             VEXSettingsView()
         }
@@ -251,14 +234,6 @@ struct ContentView: View {
             isAuthenticated: appState.isAuthenticated,
             isLoading: appState.isLoading
         )
-    }
-}
-
-private struct VEXVersionLabel: View {
-    var body: some View {
-        Text("VEX \(VEXAppInfo.version) · build \(VEXAppInfo.buildNumber)")
-            .font(.system(size: 11, weight: .semibold, design: .rounded))
-            .foregroundStyle(Color.vexSecondaryText.opacity(0.72))
     }
 }
 

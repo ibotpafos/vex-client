@@ -385,15 +385,29 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(helperConfig.contains("AllowedIPs = 0.0.0.0/0, ::/0"))
     }
 
-    func testAppStateUsesCachedProfileForConnectAndWarmsProfilesInBackground() throws {
+    func testAppStateRefreshesProfileBeforeConnectAndWarmsProfilesInBackground() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let appStateURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Stores/VEXAppState.swift")
         let appState = try String(contentsOf: appStateURL, encoding: .utf8)
 
         XCTAssertTrue(appState.contains("private var profileWarmupTask: Task<Void, Never>?"))
         XCTAssertTrue(appState.contains("scheduleProfileWarmup()"))
-        XCTAssertTrue(appState.contains("forceRefresh: false\n            )\n            try ensureConnectStillDesired"))
+        let connectStart = try XCTUnwrap(appState.range(of: "let (tunnel, tunnelToken) = try await resolveProfileForAuthenticatedSession("))
+        let connectPath = String(appState[connectStart.lowerBound...].prefix(500))
+        XCTAssertTrue(connectPath.contains("forceRefresh: true"))
+        XCTAssertFalse(connectPath.contains("forceRefresh: false"))
         XCTAssertTrue(appState.contains("forceRefresh: true,\n                    writeHelperConfig: false\n                )\n            } catch is CancellationError"))
+    }
+
+    func testAppStateRefreshesProfileBeforeSwitchingConnectedServer() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let appStateURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Stores/VEXAppState.swift")
+        let appState = try String(contentsOf: appStateURL, encoding: .utf8)
+        let switchStart = try XCTUnwrap(appState.range(of: "private func switchConnectedVPNLocation(using helper: VEXHelperModel) async -> Bool"))
+        let switchPath = String(appState[switchStart.lowerBound...].prefix(2_000))
+
+        XCTAssertTrue(switchPath.contains("forceRefresh: true"))
+        XCTAssertFalse(switchPath.contains("forceRefresh: false"))
     }
 
     func testAppStateRestoresActiveTunnelWhenHelperIsAlreadyConnectedOnLaunch() throws {

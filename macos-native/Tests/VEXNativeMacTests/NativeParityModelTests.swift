@@ -1079,6 +1079,18 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(settings.contains(".toggleStyle(VEXSwitchToggleStyle())"))
     }
 
+    func testSettingsExposeConfirmedAccountSignOut() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let settingsURL = packageRoot.appendingPathComponent(
+            "Sources/VEXNativeMac/Views/VEXSettingsView.swift"
+        )
+        let source = try String(contentsOf: settingsURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("Text(\"Выйти из аккаунта\")"))
+        XCTAssertTrue(source.contains("\"Выйти из аккаунта?\","))
+        XCTAssertTrue(source.contains("appState.signOut()"))
+    }
+
     func testSettingsAndAccountKeepBrandedHierarchyWithoutDecorativeOuterSurfaces() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let settingsURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/VEXSettingsView.swift")

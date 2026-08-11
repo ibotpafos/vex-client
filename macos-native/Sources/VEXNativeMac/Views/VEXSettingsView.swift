@@ -3,6 +3,7 @@ import SwiftUI
 struct VEXSettingsView: View {
     @EnvironmentObject private var appState: VEXAppState
     @EnvironmentObject private var helper: VEXHelperModel
+    @State private var isSignOutConfirmationPresented = false
 
     var body: some View {
         VStack(spacing: 12) {
@@ -11,9 +12,21 @@ struct VEXSettingsView: View {
             generalSettings
             interfaceSettings
             helperSettings
+            accountSettings
         }
         .padding(.top, 2)
         .padding(.bottom, 16)
+        .confirmationDialog(
+            "Выйти из аккаунта?",
+            isPresented: $isSignOutConfirmationPresented,
+            titleVisibility: .visible
+        ) {
+            Button("Выйти", role: .destructive) {
+                appState.signOut()
+            }
+        } message: {
+            Text("VPN будет отключён только вручную. Сессия на этом Mac будет удалена.")
+        }
     }
 
     @ViewBuilder
@@ -150,6 +163,36 @@ struct VEXSettingsView: View {
                         "Доступно обновление \($0)"
                     } ?? "Проверить наличие новой версии VEX"
                 )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var accountSettings: some View {
+        if appState.isAuthenticated {
+            SettingsFeatureCard(
+                systemName: "person.crop.circle",
+                title: "Аккаунт",
+                subtitle: "Управление входом на этом Mac"
+            ) {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Выйти из аккаунта")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(Color.vexText)
+                        Text("Удалит сохранённую сессию с этого Mac.")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Color.vexSecondaryText)
+                    }
+                    Spacer(minLength: 12)
+                    Button("Выйти") {
+                        isSignOutConfirmationPresented = true
+                    }
+                    .buttonStyle(.vexGlass)
+                    .tint(.red)
+                    .accessibilityLabel("Выйти из аккаунта")
+                }
+                .padding(.vertical, 8)
             }
         }
     }

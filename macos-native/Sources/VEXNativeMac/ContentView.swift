@@ -278,10 +278,14 @@ private struct ServerSidebarOverlay: View {
     let onClose: () -> Void
 
     var body: some View {
-        ZStack(alignment: .trailing) {
-            Color.black.opacity(0.30)
-                .contentShape(Rectangle())
-                .onTapGesture { dismissServerDrawer() }
+        HStack(spacing: 0) {
+            Button(action: dismissServerDrawer) {
+                Color.clear
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Закрыть список серверов")
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             ServerSidebarPanel(onClose: onClose)
                 .frame(width: 360)
@@ -289,6 +293,8 @@ private struct ServerSidebarOverlay: View {
                 .shadow(color: .black.opacity(0.24), radius: 22, x: -8, y: 0)
                 .accessibilityAddTraits(.isModal)
         }
+        .background(Color.black.opacity(0.30))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .animation(
             reduceMotion ? .linear(duration: 0.01) : .snappy(duration: 0.28, extraBounce: 0),
             value: reduceMotion

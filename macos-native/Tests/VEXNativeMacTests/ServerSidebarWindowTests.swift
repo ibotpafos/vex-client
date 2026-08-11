@@ -265,7 +265,8 @@ final class ServerSidebarWindowTests: XCTestCase {
 
         XCTAssertTrue(content.contains("@State private var isServerDrawerPresented"))
         XCTAssertTrue(content.contains("ServerSidebarOverlay"))
-        XCTAssertTrue(content.contains(".onTapGesture { dismissServerDrawer() }"))
+        XCTAssertTrue(content.contains("Button(action: dismissServerDrawer)"))
+        XCTAssertTrue(content.contains(".accessibilityLabel(\"Закрыть список серверов\")"))
         XCTAssertFalse(app.contains("ServerSidebarWindowController"))
         XCTAssertFalse(app.contains("addChildWindow(panel"))
     }

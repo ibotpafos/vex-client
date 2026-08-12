@@ -44,3 +44,4 @@ native-windows/.build/
 .codex-tmp/
 # macOS native helper local build intermediates
 macos-native/.build-helper/
+macos-native/.build.stale-*/

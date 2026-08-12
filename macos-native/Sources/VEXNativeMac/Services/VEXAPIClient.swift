@@ -218,6 +218,9 @@ struct VEXAPIClient {
                 ? URLQueryItem(name: "awg_version", value: "3")
                 : URLQueryItem(name: "awg_version", value: String(awgVersion)),
         ]
+        if awgVersion >= 3 {
+            query.append(URLQueryItem(name: "awg3_opt_in", value: "true"))
+        }
         if let bypassRegion {
             query.append(URLQueryItem(name: "bypass_region", value: bypassRegion))
         }

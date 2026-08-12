@@ -399,6 +399,7 @@ final class NativeParityModelTests: XCTestCase {
         let api = try String(contentsOf: apiURL, encoding: .utf8)
 
         XCTAssertTrue(api.contains("URLQueryItem(name: \"awg_version\", value: \"3\")"))
+        XCTAssertTrue(api.contains("URLQueryItem(name: \"awg3_opt_in\", value: \"true\")"))
     }
 
     func testSessionRefreshIsSingleFlightAndDoesNotClearNewerSession() throws {

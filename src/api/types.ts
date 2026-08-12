@@ -1,5 +1,3 @@
-import { type BillingPlanOption, type BillingSummary } from './billingSummary';
-import { type SupportTicketDTO } from './dto';
 import { type ManualUpdatePreflightResult } from './updatePreflight';
 import { type VpnRoutingMode } from '@/vpn/routingPolicy';
 
@@ -16,23 +14,6 @@ export type Entitlement = {
   currentPeriodEnd?: string;
   effectiveExpiresAt?: string;
   vpnAccess: boolean;
-};
-
-export type { BillingPlanOption, BillingSummary };
-
-export type CheckoutSession = {
-  id: string;
-  planId: string;
-  provider: string;
-  url: string;
-  status: string;
-};
-
-export type BillingPortalSession = {
-  id: string;
-  provider: string;
-  url: string;
-  createdAt?: string;
 };
 
 export type AndroidUpdateManifest = {
@@ -157,49 +138,6 @@ export type ClientDiagnosticsReportInput = {
   txBytes?: number;
   samples?: Record<string, unknown>;
   samplesJson?: string;
-};
-
-export type SupportMessage = {
-  id: string;
-  ticketId: string;
-  sender: 'user' | 'admin' | 'system';
-  authorId?: string;
-  body: string;
-  createdAt: string;
-};
-
-export type SupportTicket = {
-  id: string;
-  subject: string;
-  message: string;
-  messages?: SupportMessage[];
-  status: string;
-  priority?: string;
-  source: string;
-  adminNote?: string;
-  createdAt: string;
-  updatedAt: string;
-  closedAt?: string;
-};
-
-export type SupportSocketEnvelope = {
-  type: string;
-  ticket?: SupportTicketDTO;
-  tickets?: SupportTicketDTO[];
-  message?: string;
-};
-
-export type SupportSocketHandle = {
-  close: () => void;
-  sendMessage: (message: { body: string; subject?: string; ticketId?: string }) => boolean;
-};
-
-export type SupportSocketOptions = {
-  onError?: (message: string) => void;
-  onOpen?: () => void;
-  onReconnect?: () => void;
-  onSnapshot?: (tickets: SupportTicket[]) => void;
-  onTicket?: (ticket: SupportTicket) => void;
 };
 
 export type PreparedTunnel = {

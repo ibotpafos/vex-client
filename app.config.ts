@@ -18,7 +18,9 @@ export default function appConfig({ config }: ConfigContext): ExpoConfig {
   const updateChannel = env('EXPO_PUBLIC_VEX_UPDATE_CHANNEL', env('EXPO_PUBLIC_VEX_RELEASE_CHANNEL', defaultUpdateChannel));
   const buildProfile = env('VEX_BUILD_PROFILE', updateChannel);
   const projectId = env('VEX_EAS_PROJECT_ID', env('EXPO_PUBLIC_EAS_PROJECT_ID', defaultProjectId));
-  const updatesEnabled = Boolean(projectId) && env('VEX_UPDATES_ENABLED', buildProfile === 'production' ? '1' : '0') === '1';
+  // OTA is an explicit release concern. Keeping it disabled by default lets Expo
+  // tooling inspect the project without accidentally entering the production path.
+  const updatesEnabled = Boolean(projectId) && env('VEX_UPDATES_ENABLED', '0') === '1';
   const updateUrl = resolveUpdateUrl();
   const codeSigningCertificate = env('VEX_OTA_CODE_SIGNING_CERTIFICATE', defaultOtaCodeSigningCertificate);
   const explicitRuntimeVersion = env('VEX_RUNTIME_VERSION', '');
@@ -47,8 +49,6 @@ export default function appConfig({ config }: ConfigContext): ExpoConfig {
       vex: {
         apiBaseUrl: env('EXPO_PUBLIC_VEX_API_BASE_URL', defaultApiBaseUrl),
         appVariant: buildProfile,
-        billingFailedUrl: env('EXPO_PUBLIC_VEX_BILLING_FAILED_URL', `${defaultApiBaseUrl}/v1/billing/mobile-return?status=failed`),
-        billingReturnUrl: env('EXPO_PUBLIC_VEX_BILLING_RETURN_URL', `${defaultApiBaseUrl}/v1/billing/mobile-return?status=success`),
         updateChannel,
       },
     },

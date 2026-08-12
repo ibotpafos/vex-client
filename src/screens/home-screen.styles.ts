@@ -23,6 +23,9 @@ export const styles = StyleSheet.create({
   mainContent: {
     gap: vexTheme.spacing.md,
     justifyContent: 'flex-start',
+    // Keep the primary connect action optically centered on tall phones while
+    // leaving the location carousel reachable without scrolling.
+    paddingTop: 52,
   },
   centerState: {
     alignItems: 'center',

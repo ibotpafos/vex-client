@@ -13,7 +13,6 @@ export default function AppLayout() {
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="settings" options={{ headerShown: false }} />
         <Stack.Screen name="vpn-applications" options={{ headerShown: false }} />
-        <Stack.Screen name="support-chat" options={{ headerShown: false }} />
         <Stack.Screen
           name="server-picker"
           options={{
@@ -42,23 +41,6 @@ export default function AppLayout() {
                   sheetCornerRadius: 24,
                   sheetGrabberVisible: true,
                   sheetInitialDetentIndex: 0,
-                }
-              : null),
-          }}
-        />
-        <Stack.Screen
-          name="subscription"
-          options={{
-            contentStyle: { backgroundColor: Platform.OS === 'ios' ? 'transparent' : vexTheme.colors.background },
-            headerShown: false,
-            presentation: Platform.OS === 'ios' ? 'formSheet' : 'modal',
-            ...(Platform.OS === 'ios'
-              ? {
-                  sheetAllowedDetents: [0.44, 0.64],
-                  sheetCornerRadius: 24,
-                  sheetGrabberVisible: true,
-                  sheetInitialDetentIndex: 0,
-                  sheetLargestUndimmedDetentIndex: 0,
                 }
               : null),
           }}

@@ -24,10 +24,10 @@ import {
 import { playSelectionHaptic } from "@/native/haptics";
 import {
   HOME_TAB_ROUTE,
-  SUBSCRIPTION_ROUTE,
-  SUPPORT_TAB_ROUTE,
   VPN_APPLICATIONS_ROUTE,
 } from "@/navigation/routes";
+import { openExternalUrl } from "@/auth/systemAuth";
+import { vexWebsite } from "@/navigation/website";
 import { getVpnApplicationSelection } from "@/settings/vpnPreferences";
 import { useToast, type ToastOptions } from "@/ui/toast";
 import { vexColors, VexScreen, vexSharedStyles, VexPressable } from "@/ui/vex-ui";
@@ -41,6 +41,12 @@ export default function SettingsScreen() {
   const showSettingsToast = React.useCallback((options: ToastOptions) => {
     showGlobalToast(options);
   }, [showGlobalToast]);
+  const openWebsite = React.useCallback((url: string) => {
+    playSelectionHaptic();
+    void openExternalUrl(url).catch(() => {
+      showSettingsToast({ message: "Не удалось открыть сайт VEX.", variant: "error" });
+    });
+  }, [showSettingsToast]);
 
   const {
     language,
@@ -99,7 +105,7 @@ export default function SettingsScreen() {
 
   return (
     <VexScreen>
-      <View style={vexSharedStyles.topBar}>
+      <View style={styles.screenHeader}>
         <VexPressable
           onPress={() => {
             playSelectionHaptic();
@@ -122,6 +128,7 @@ export default function SettingsScreen() {
 
       <ScrollView
         alwaysBounceVertical={false}
+        contentInsetAdjustmentBehavior="automatic"
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
         style={styles.scroll}
@@ -372,37 +379,35 @@ export default function SettingsScreen() {
         <View style={styles.group}>
           <Text style={styles.groupTitle}>Аккаунт и помощь</Text>
           <VexPressable
-            accessibilityLabel="Открыть подписку"
+            accessibilityLabel="Открыть личный кабинет на сайте"
             accessibilityRole="button"
             onPress={() => {
-              playSelectionHaptic();
-              router.push(SUBSCRIPTION_ROUTE);
+              openWebsite(vexWebsite.dashboard());
             }}
             style={styles.settingRow}
             hoverStyle={{ backgroundColor: 'rgba(7,17,19,0.96)', borderColor: 'rgba(34,211,238,0.36)' }}
-            title="Подписка"
+            title="Личный кабинет"
           >
             <View style={styles.rowIcon}>
               <CreditCard color="#22D3EE" size={21} strokeWidth={2.5} />
             </View>
             <View style={styles.rowCopy}>
-              <Text style={styles.rowTitle}>Подписка</Text>
+              <Text style={styles.rowTitle}>Личный кабинет</Text>
               <Text numberOfLines={2} style={styles.rowDescription}>
-                Тариф, срок действия и управление подпиской.
+                Подписка, оплата и устройства — на сайте VEX.
               </Text>
             </View>
             <ChevronRight color="#A7B9BD" size={22} strokeWidth={2.5} />
           </VexPressable>
           <VexPressable
-            accessibilityLabel="Открыть поддержку"
+            accessibilityLabel="Открыть поддержку на сайте"
             accessibilityRole="button"
             onPress={() => {
-              playSelectionHaptic();
-              router.push(SUPPORT_TAB_ROUTE);
+              openWebsite(vexWebsite.support());
             }}
             style={styles.settingRow}
             hoverStyle={{ backgroundColor: 'rgba(7,17,19,0.96)', borderColor: 'rgba(34,211,238,0.36)' }}
-            title="Поддержка"
+            title="Поддержка на сайте"
           >
             <View style={styles.rowIcon}>
               <MessageSquare color="#22D3EE" size={21} strokeWidth={2.5} />
@@ -410,7 +415,7 @@ export default function SettingsScreen() {
             <View style={styles.rowCopy}>
               <Text style={styles.rowTitle}>Поддержка</Text>
               <Text numberOfLines={2} style={styles.rowDescription}>
-                Написать в поддержку VEX и посмотреть ответы.
+                Открыть сайт VEX и написать в поддержку.
               </Text>
             </View>
             <ChevronRight color="#A7B9BD" size={22} strokeWidth={2.5} />
@@ -547,18 +552,20 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    gap: 12,
-    paddingBottom: 24,
+    gap: 20,
+    paddingBottom: 32,
+  },
+  screenHeader: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    minHeight: 56,
   },
   heroPanel: {
     alignItems: "center",
-    backgroundColor: vexColors.card,
-    borderColor: vexColors.line,
-    borderRadius: 24,
-    borderWidth: 1,
     flexDirection: "row",
     gap: 12,
-    padding: 14,
+    paddingHorizontal: 4,
   },
   heroIcon: {
     alignItems: "center",
@@ -621,38 +628,31 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
   group: {
-    backgroundColor: vexColors.card,
-    borderColor: vexColors.line,
-    borderRadius: 22,
-    borderWidth: 1,
-    gap: 10,
-    padding: 12,
+    gap: 0,
   },
   groupTitle: {
     color: vexColors.muted,
     fontSize: 11,
     fontWeight: "900",
+    marginBottom: 6,
+    paddingHorizontal: 4,
     textTransform: "uppercase",
   },
   settingRow: {
     alignItems: "center",
-    backgroundColor: 'rgba(3, 16, 19, 0.46)',
-    borderColor: 'rgba(159, 218, 223, 0.1)',
-    borderRadius: 18,
-    borderWidth: 1,
+    borderBottomColor: 'rgba(159, 218, 223, 0.14)',
+    borderBottomWidth: 1,
     flexDirection: "row",
     gap: 12,
-    minHeight: 68,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    minHeight: 76,
+    paddingHorizontal: 4,
+    paddingVertical: 10,
   },
   rowIcon: {
     alignItems: "center",
-    backgroundColor: "rgba(17,61,70,0.72)",
-    borderRadius: 14,
-    height: 42,
+    height: 36,
     justifyContent: "center",
-    width: 42,
+    width: 36,
   },
   rowCopy: {
     flex: 1,
@@ -681,26 +681,22 @@ const styles = StyleSheet.create({
   },
   languageSelector: {
     alignSelf: "stretch",
-    backgroundColor: vexColors.field,
-    borderColor: "rgba(96,118,123,0.28)",
-    borderRadius: 12,
-    borderWidth: 1,
     flexDirection: "row",
     gap: 4,
-    minHeight: 42,
-    overflow: "hidden",
-    padding: 4,
+    minHeight: 44,
+    paddingHorizontal: 4,
+    paddingTop: 8,
   },
   languageButton: {
     alignItems: "center",
-    borderRadius: 9,
+    borderRadius: 999,
     flex: 1,
     justifyContent: "center",
     minHeight: 34,
     paddingHorizontal: 10,
   },
   languageButtonActive: {
-    backgroundColor: vexColors.accent,
+    backgroundColor: "rgba(34,211,238,0.16)",
   },
   languageText: {
     color: vexColors.muted,
@@ -708,7 +704,7 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
   languageTextActive: {
-    color: "#031012",
+    color: vexColors.accent,
   },
   infoGrid: {
     flexDirection: "row",

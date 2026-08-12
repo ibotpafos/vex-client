@@ -1,7 +1,7 @@
 import { Redirect } from 'expo-router';
-import { StyleSheet, Text, View } from 'react-native';
+import { Column, Host, Spacer, Text as UniversalText } from '@expo/ui';
+import { StyleSheet } from 'react-native';
 import { useSession } from '@/auth/session-context';
-import { VexNativeActivityIndicator } from '@/ui/native-activity-indicator';
 
 export default function IndexRoute() {
   const { isLoading, session } = useSession();
@@ -15,24 +15,32 @@ export default function IndexRoute() {
 
 function StartupFallback() {
   return (
-    <View style={styles.screen}>
-      <Text style={styles.title}>VEX</Text>
-      <VexNativeActivityIndicator color="#22D3EE" size="large" />
-    </View>
+    <Host colorScheme="dark" seedColor="#22D3EE" style={styles.host} useViewportSizeMeasurement>
+      <Column alignment="center" spacing={16} style={styles.screen}>
+        <Spacer flexible />
+        <UniversalText textStyle={styles.title}>VEX</UniversalText>
+        <UniversalText textStyle={styles.message}>Открываем защищённое подключение…</UniversalText>
+        <Spacer flexible />
+      </Column>
+    </Host>
   );
 }
 
 const styles = StyleSheet.create({
+  host: { flex: 1 },
   screen: {
-    alignItems: 'center',
-    backgroundColor: '#020A0B',
+    backgroundColor: '#041315',
     flex: 1,
-    gap: 18,
-    justifyContent: 'center',
+    paddingHorizontal: 24,
   },
   title: {
-    color: '#F4FCFD',
+    color: '#43D9E7',
     fontSize: 42,
     fontWeight: '900',
+  },
+  message: {
+    color: '#A7B9BD',
+    fontSize: 16,
+    textAlign: 'center',
   },
 });

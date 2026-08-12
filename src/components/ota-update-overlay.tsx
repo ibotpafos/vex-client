@@ -1,10 +1,9 @@
 import * as Updates from 'expo-updates';
-import { DownloadCloud, RefreshCw, X } from 'lucide-react-native';
+import { Button, Column, Host, Text as UniversalText } from '@expo/ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AppState, Platform, Pressable, StyleSheet, Text, View, type AppStateStatus } from 'react-native';
+import { AppState, Platform, StyleSheet, View, type AppStateStatus } from 'react-native';
 import { playErrorHaptic, playLightImpactHaptic, playSelectionHaptic, playSuccessHaptic } from '@/native/haptics';
 import { getVpnStatus } from '@/native/vexVpn';
-import { VexNativeActivityIndicator } from '@/ui/native-activity-indicator';
 import { canAutomaticallyApplyOtaUpdate } from '@/updates/otaAutoApply';
 
 const foregroundCheckThrottleMs = 5 * 60_000;
@@ -176,52 +175,36 @@ function OtaUpdateOverlayContent() {
     return null;
   }
 
-  const isBusy = state.status === 'downloading' || state.status === 'restarting';
   const isReady = state.status === 'ready';
   const isError = state.status === 'error';
+  const title = isReady ? 'Обновление готово' : isError ? 'Обновление не загрузилось' : 'Загружаем обновление';
+  const text = isReady
+    ? 'Быстрое обновление интерфейса уже скачано. VEX применит его автоматически через пару секунд.'
+    : isError
+      ? state.message || 'Проверьте подключение и повторите позже.'
+      : 'Скачиваем исправления без переустановки приложения.';
+  const metadata = [Updates.channel ? `Канал: ${Updates.channel}` : null, Updates.runtimeVersion ? `Runtime: ${Updates.runtimeVersion}` : null]
+    .filter((value): value is string => Boolean(value))
+    .join(' · ');
 
   return (
     <View pointerEvents="box-none" style={styles.overlay}>
-      <View style={styles.card}>
-        <View style={styles.icon}>
-          {isBusy ? <VexNativeActivityIndicator color="#031012" size="small" /> : <DownloadCloud color="#031012" size={23} strokeWidth={2.7} />}
-        </View>
-        <View style={styles.copy}>
-          <Text style={styles.eyebrow}>VEX update</Text>
-          <Text style={styles.title}>{isReady ? 'Обновление готово' : isError ? 'Обновление не загрузилось' : 'Загружаем обновление'}</Text>
-          <Text style={styles.text}>
-            {isReady
-              ? 'Быстрое обновление интерфейса уже скачано. VEX применит его автоматически через пару секунд.'
-              : isError
-                ? state.message || 'Проверьте подключение и повторите позже.'
-                : 'Скачиваем исправления без переустановки приложения.'}
-          </Text>
-          {Updates.channel || Updates.runtimeVersion ? (
-            <Text style={styles.meta}>
-              {Updates.channel ? `Канал: ${Updates.channel}` : null}
-              {Updates.channel && Updates.runtimeVersion ? ' · ' : null}
-              {Updates.runtimeVersion ? `Runtime: ${Updates.runtimeVersion}` : null}
-            </Text>
-          ) : null}
-        </View>
-        <View style={styles.actions}>
+      <Host colorScheme="dark" seedColor="#22D3EE" style={styles.host}>
+        <Column spacing={8} style={styles.card}>
+          <UniversalText textStyle={styles.eyebrow}>VEX update</UniversalText>
+          <UniversalText textStyle={styles.title}>{title}</UniversalText>
+          <UniversalText textStyle={styles.text}>{text}</UniversalText>
+          {metadata ? <UniversalText textStyle={styles.meta}>{metadata}</UniversalText> : null}
           {isReady ? (
-            <Pressable accessibilityRole="button" onPress={handleReload} style={styles.primaryButton}>
-              <RefreshCw color="#031012" size={17} strokeWidth={3} />
-              <Text style={styles.primaryText}>Перезапустить</Text>
-            </Pressable>
+            <Button label="Перезапустить" onPress={handleReload} />
           ) : isError ? (
-            <Pressable accessibilityRole="button" onPress={handleRetry} style={styles.primaryButton}>
-              <Text style={styles.primaryText}>Повторить</Text>
-            </Pressable>
+            <Button label="Повторить" onPress={handleRetry} />
           ) : null}
           {isError ? (
-            <Pressable accessibilityLabel="Скрыть OTA-обновление" accessibilityRole="button" onPress={handleDismiss} style={styles.closeButton}>
-              <X color="#A7B9BD" size={18} strokeWidth={2.6} />
-            </Pressable>
+            <Button label="Позже" onPress={handleDismiss} variant="outlined" />
           ) : null}
-        </View>
-      </View>
+        </Column>
+      </Host>
     </View>
   );
 }
@@ -234,34 +217,21 @@ const styles = StyleSheet.create({
     top: Platform.OS === 'ios' ? 58 : 32,
     zIndex: 50,
   },
-  card: {
-    alignItems: 'center',
+  host: {
     alignSelf: 'center',
+    maxWidth: 560,
+    width: '92%',
+  },
+  card: {
     backgroundColor: 'rgba(7,17,19,0.97)',
     borderColor: 'rgba(34,211,238,0.28)',
     borderRadius: 22,
     borderWidth: 1,
-    flexDirection: 'row',
-    gap: 12,
-    maxWidth: 560,
-    padding: 12,
+    padding: 16,
     shadowColor: '#000000',
     shadowOffset: { height: 12, width: 0 },
     shadowOpacity: 0.28,
     shadowRadius: 24,
-    width: '92%',
-  },
-  icon: {
-    alignItems: 'center',
-    backgroundColor: '#22D3EE',
-    borderRadius: 16,
-    height: 44,
-    justifyContent: 'center',
-    width: 44,
-  },
-  copy: {
-    flex: 1,
-    minWidth: 0,
   },
   eyebrow: {
     color: '#22D3EE',
@@ -288,32 +258,5 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '800',
     marginTop: 5,
-  },
-  actions: {
-    alignItems: 'flex-end',
-    gap: 8,
-  },
-  primaryButton: {
-    alignItems: 'center',
-    backgroundColor: '#22D3EE',
-    borderRadius: 13,
-    flexDirection: 'row',
-    gap: 6,
-    minHeight: 38,
-    paddingHorizontal: 12,
-  },
-  primaryText: {
-    color: '#031012',
-    fontSize: 12,
-    fontWeight: '900',
-  },
-  closeButton: {
-    alignItems: 'center',
-    borderColor: 'rgba(167,185,189,0.22)',
-    borderRadius: 999,
-    borderWidth: 1,
-    height: 32,
-    justifyContent: 'center',
-    width: 32,
   },
 });

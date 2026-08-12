@@ -1,20 +1,28 @@
 import { useQueryClient } from "@tanstack/react-query";
+import {
+  BottomSheet,
+  Button,
+  Column,
+  Host,
+  RNHostView,
+  Spacer,
+  Text as UniversalText,
+  TextInput as UniversalTextInput,
+} from "@expo/ui";
+import {
+  ModalBottomSheet,
+  type ModalBottomSheetRef,
+} from "@expo/ui/jetpack-compose";
+import { fillMaxHeight, padding } from "@expo/ui/jetpack-compose/modifiers";
 import * as WebBrowser from "expo-web-browser";
 import { router } from "expo-router";
-import { StatusBar } from "expo-status-bar";
 import {
-  Image,
-  KeyboardAvoidingView,
   Linking,
   Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
+  useWindowDimensions,
   View,
 } from "react-native";
-import { useCallback, useState, useEffect, useRef } from "react";
+import { useCallback, useState, useEffect, useRef, type ReactNode } from "react";
 import {
   requestEmailOTP,
   confirmEmailOTP,
@@ -36,35 +44,110 @@ import {
   playSuccessHaptic,
   playWarningHaptic,
 } from "@/native/haptics";
-import { VexNativeActivityIndicator } from "@/ui/native-activity-indicator";
-import { vexColors, VexScreen, vexSharedStyles } from "@/ui/vex-ui";
+import { OTPCodeInput } from "@/components/otp-code-input";
+import { UniversalSignInWelcome } from "@/components/universal-sign-in-welcome";
 import { resetVpnProfileCache } from "@/vpn/profile";
 import * as SecureStore from "@/native/secureStore";
 import { generateRandomString, generateChallenge } from "@/auth/pkce";
 import { buildAppWebAuthUrl } from "@/auth/webAuthUrl";
 import {
+  emailOTPRequestErrorMessage,
   isEmailOTPExpired,
+  isEmailOTPRequestCooldownError,
   isInvalidOrExpiredEmailOTPError,
   normalizeEmailOTPCode,
 } from "@/auth/emailOtp";
+import { type AuthEntryStep } from "@/auth/authEntry";
 import {
   openWebAuthUrl,
   supportsWebsiteAuth,
   getDeviceDetails,
   parseQueryString,
   isAppAuthCallbackUrl,
-  useKeyboardVisible,
 } from "@/auth/systemAuth";
-
-const vexLogo = require("../../assets/vex-logo-header.png");
 
 WebBrowser.maybeCompleteAuthSession();
 
+type SignInBottomSheetProps = {
+  children: ReactNode;
+  isPresented: boolean;
+  onDismiss: () => void;
+};
+
+function AndroidSignInBottomSheet({
+  children,
+  isPresented,
+  onDismiss,
+}: SignInBottomSheetProps) {
+  const sheetRef = useRef<ModalBottomSheetRef>(null);
+  const [mounted, setMounted] = useState(isPresented);
+
+  useEffect(() => {
+    if (isPresented) {
+      setMounted(true);
+      return;
+    }
+
+    let cancelled = false;
+    sheetRef.current?.hide().then(() => {
+      if (!cancelled) setMounted(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isPresented]);
+
+  if (!mounted) return null;
+
+  return (
+    <Host style={styles.sheetModalHost} pointerEvents="none">
+      <ModalBottomSheet
+        ref={sheetRef}
+        containerColor="#041315"
+        contentColor="#E9F7F8"
+        onDismissRequest={onDismiss}
+        properties={{
+          shouldDismissOnBackPress: true,
+          shouldDismissOnClickOutside: true,
+        }}
+        scrimColor="#00000099"
+        showDragHandle
+        skipPartiallyExpanded
+      >
+        <Column modifiers={[padding(20, 56, 20, 12), fillMaxHeight()]}>
+          {children}
+        </Column>
+      </ModalBottomSheet>
+    </Host>
+  );
+}
+
+function SignInBottomSheet({ children, isPresented, onDismiss }: SignInBottomSheetProps) {
+  if (Platform.OS === "android") {
+    return (
+      <AndroidSignInBottomSheet isPresented={isPresented} onDismiss={onDismiss}>
+        {children}
+      </AndroidSignInBottomSheet>
+    );
+  }
+
+  return (
+    <BottomSheet
+      isPresented={isPresented}
+      onDismiss={onDismiss}
+      snapPoints={["full"]}
+      testID="sign-in-sheet"
+    >
+      {children}
+    </BottomSheet>
+  );
+}
+
 export default function SignInScreen() {
   const queryClient = useQueryClient();
+  const { width } = useWindowDimensions();
   const { loadError, signIn } = useSession();
-  const isKeyboardVisible = useKeyboardVisible();
-  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [entryStep, setEntryStep] = useState<AuthEntryStep>("welcome");
   const [email, setEmail] = useState("");
   const [emailOTPCode, setEmailOTPCode] = useState("");
   const [emailOTPChallenge, setEmailOTPChallenge] = useState<{
@@ -79,8 +162,7 @@ export default function SignInScreen() {
   const authSubmitInFlight = useRef(false);
   const handledCallbackUrls = useRef(new Set<string>());
   const retryableCallbackUrls = useRef<Record<string, number>>({});
-  const canUseBiometricAuth =
-    authMode === "login" && Boolean(biometricAuthLabel);
+  const canUseBiometricAuth = Boolean(biometricAuthLabel);
 
   useEffect(() => {
     if (loadError && !authError) {
@@ -331,9 +413,13 @@ export default function SignInScreen() {
       router.replace("/");
     } catch (error) {
       playErrorHaptic();
+      if (isEmailOTPRequestCooldownError(error)) {
+        setAuthNotice(emailOTPRequestErrorMessage(error));
+        return;
+      }
       setAuthError(isInvalidOrExpiredEmailOTPError(error)
         ? "Код не подошёл. Проверьте цифры или запросите новый код."
-        : error instanceof Error ? error.message : "Не удалось войти.");
+        : emailOTPRequestErrorMessage(error));
     } finally {
       authSubmitInFlight.current = false;
       setIsAuthBusy(false);
@@ -373,7 +459,11 @@ export default function SignInScreen() {
       playSuccessHaptic();
     } catch (error) {
       playErrorHaptic();
-      setAuthError(error instanceof Error ? error.message : "Не удалось отправить новый код.");
+      if (isEmailOTPRequestCooldownError(error)) {
+        setAuthNotice(emailOTPRequestErrorMessage(error));
+        return;
+      }
+      setAuthError(emailOTPRequestErrorMessage(error));
     } finally {
       authSubmitInFlight.current = false;
       setIsAuthBusy(false);
@@ -421,363 +511,139 @@ export default function SignInScreen() {
     }
   }, [isAuthBusy, queryClient, signIn]);
 
-  return (
-    <VexScreen contentStyle={styles.shell}>
-      <StatusBar style="light" />
-      <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-        style={styles.keyboardLayer}
-      >
-        <ScrollView
-          bounces={false}
-          contentContainerStyle={[
-            styles.scrollContent,
-            isKeyboardVisible && styles.scrollContentWithKeyboard,
-          ]}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-          style={styles.formScroll}
-        >
-          <View
-            style={[
-              styles.authPanel,
-              isKeyboardVisible && styles.authPanelWithKeyboard,
-            ]}
-          >
-            {isKeyboardVisible ? null : (
-              <View style={styles.authIcon}>
-                <Image
-                  source={vexLogo}
-                  resizeMode="contain"
-                  style={styles.authLogo as any}
-                />
-              </View>
-            )}
-            <Text
-              maxFontSizeMultiplier={1.15}
-              style={[
-                styles.authTitle,
-                isKeyboardVisible && styles.authTitleWithKeyboard,
-              ]}
-            >
-              {authMode === "login" ? "Вход в VEX" : "Регистрация"}
-            </Text>
-            {isKeyboardVisible ? null : (
-              <Text maxFontSizeMultiplier={1.05} style={styles.authSubtitle}>
-                Проверка доступа и VPN-профиля.
-              </Text>
-            )}
-            <View style={styles.modeSegment}>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityState={{ selected: authMode === "login" }}
-                onPress={() => {
-                  playSelectionHaptic();
-                  setAuthError(null);
-                  setAuthNotice(null);
-                  setAuthMode("login");
-                }}
-                style={[
-                  styles.modeSegmentButton,
-                  authMode === "login" && styles.modeSegmentButtonActive,
-                ]}
-              >
-                <Text
-                  maxFontSizeMultiplier={1.1}
-                  style={[
-                    styles.modeSegmentText,
-                    authMode === "login" && styles.modeSegmentTextActive,
-                  ]}
-                >
-                  Вход
-                </Text>
-              </Pressable>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityState={{ selected: authMode === "register" }}
-                onPress={() => {
-                  playSelectionHaptic();
-                  setAuthError(null);
-                  setAuthNotice(null);
-                  setAuthMode("register");
-                }}
-                style={[
-                  styles.modeSegmentButton,
-                  authMode === "register" && styles.modeSegmentButtonActive,
-                ]}
-              >
-                <Text
-                  maxFontSizeMultiplier={1.1}
-                  style={[
-                    styles.modeSegmentText,
-                    authMode === "register" && styles.modeSegmentTextActive,
-                  ]}
-                >
-                  Регистрация
-                </Text>
-              </Pressable>
-            </View>
-            <TextInput
+  const sheetTitle = emailOTPChallenge ? "Проверьте почту" : "Войти в VEX";
+  const sheetIntro = "Введите email — пришлём одноразовый код для входа.";
+  const sheetButtonStyle = { width: Math.max(280, width - 40) };
+  const emailContent = (
+    <Column spacing={10} style={styles.sheetContent}>
+      <Spacer flexible />
+      <Column spacing={12}>
+        <UniversalText textStyle={styles.sheetTitle}>{sheetTitle}</UniversalText>
+        {!emailOTPChallenge ? (
+          <UniversalText textStyle={styles.sheetIntro}>{sheetIntro}</UniversalText>
+        ) : null}
+        {emailOTPChallenge ? (
+          <UniversalText textStyle={styles.emailRecipient}>
+            {`Код отправлен на ${emailOTPChallenge.email}`}
+          </UniversalText>
+        ) : (
+          <UniversalTextInput
               autoCapitalize="none"
               autoComplete="off"
-              importantForAutofill="no"
               keyboardType="email-address"
-              maxFontSizeMultiplier={1.05}
               onChangeText={handleEmailChange}
               onFocus={playSelectionHaptic}
               placeholder="Email"
-              placeholderTextColor="#60767B"
-              style={styles.input}
-              textContentType="none"
-              value={email}
+              placeholderTextColor="#A7B9BD"
+              style={styles.emailInput}
+              textStyle={styles.emailInputText}
             />
-            {emailOTPChallenge ? (
-              <TextInput
-                autoComplete="one-time-code"
-                autoCapitalize="none"
-                importantForAutofill="yes"
-                keyboardType="number-pad"
-                maxFontSizeMultiplier={1.05}
-                maxLength={6}
-                onChangeText={(value) => setEmailOTPCode(normalizeEmailOTPCode(value))}
-                onFocus={playSelectionHaptic}
-                placeholder="Код из письма"
-                placeholderTextColor="#60767B"
-                style={styles.input}
-                textContentType="oneTimeCode"
-                value={emailOTPCode}
-              />
-            ) : null}
-            {authNotice ? (
-              <Text maxFontSizeMultiplier={1.15} style={styles.authNotice}>
-                {authNotice}
-              </Text>
-            ) : null}
-            {authError ? (
-              <Text
-                maxFontSizeMultiplier={1.15}
-                selectable
-                style={styles.authError}
-              >
-                {authError}
-              </Text>
-            ) : null}
-            <Pressable
-              disabled={isAuthBusy}
-              onPress={handleAuthSubmit}
-              style={[styles.primaryButton, isAuthBusy && styles.busy]}
-            >
-              {isAuthBusy ? (
-                <VexNativeActivityIndicator color="#031012" />
-              ) : (
-                <Text
-                  maxFontSizeMultiplier={1.1}
-                  style={styles.primaryButtonText}
-                >
-                  {emailOTPChallenge ? "Войти по коду" : "Получить код"}
-                </Text>
-              )}
-            </Pressable>
-            {emailOTPChallenge ? (
-              <Pressable
-                disabled={isAuthBusy}
-                onPress={handleEmailOTPResend}
-                style={[styles.secondaryButton, isAuthBusy && styles.busy]}
-              >
-                <Text maxFontSizeMultiplier={1.1} style={styles.secondaryButtonText}>
-                  Отправить новый код
-                </Text>
-              </Pressable>
-            ) : null}
-            {canUseBiometricAuth ? (
-              <Pressable
-                disabled={isAuthBusy}
-                onPress={handleBiometricAuth}
-                style={[styles.secondaryButton, isAuthBusy && styles.busy]}
-              >
-                {isAuthBusy ? (
-                  <VexNativeActivityIndicator color="#22D3EE" />
-                ) : (
-                  <Text
-                    maxFontSizeMultiplier={1.1}
-                    style={styles.secondaryButtonText}
-                  >
-                    Войти по {biometricAuthLabel}
-                  </Text>
-                )}
-              </Pressable>
-            ) : null}
-            {supportsWebsiteAuth() ? (
-              <Pressable
-                disabled={isAuthBusy}
-                onPress={handleWebAuthStart}
-                style={[styles.secondaryButton, isAuthBusy && styles.busy]}
-              >
-                {isAuthBusy ? (
-                  <VexNativeActivityIndicator color="#22D3EE" />
-                ) : (
-                  <Text
-                    maxFontSizeMultiplier={1.1}
-                    style={styles.secondaryButtonText}
-                  >
-                    Войти через сайт
-                  </Text>
-                )}
-              </Pressable>
-            ) : null}
-          </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
-    </VexScreen>
+        )}
+        {emailOTPChallenge ? (
+          <>
+            <RNHostView matchContents>
+              <View style={{ width: sheetButtonStyle.width }}>
+                <OTPCodeInput disabled={isAuthBusy} onChangeText={setEmailOTPCode} value={emailOTPCode} />
+              </View>
+            </RNHostView>
+          </>
+        ) : null}
+        {authNotice && authNotice !== "Код отправлен на email." ? (
+          <UniversalText textStyle={styles.notice}>{authNotice}</UniversalText>
+        ) : null}
+        {authError ? <UniversalText textStyle={styles.error}>{authError}</UniversalText> : null}
+        <Button
+          disabled={isAuthBusy}
+          label={isAuthBusy ? "Подождите…" : emailOTPChallenge ? "Подтвердить" : "Продолжить"}
+          onPress={() => { void handleAuthSubmit(); }}
+          style={sheetButtonStyle}
+        />
+        {emailOTPChallenge ? (
+          <Button disabled={isAuthBusy} label="Отправить новый код" onPress={() => { void handleEmailOTPResend(); }} style={sheetButtonStyle} variant="text" />
+        ) : null}
+        {canUseBiometricAuth ? (
+          <Button disabled={isAuthBusy} label={`Войти по ${biometricAuthLabel}`} onPress={() => { void handleBiometricAuth(); }} style={sheetButtonStyle} variant="outlined" />
+        ) : null}
+        {!emailOTPChallenge && supportsWebsiteAuth() ? (
+          <Button disabled={isAuthBusy} label="Войти через сайт" onPress={() => { void handleWebAuthStart(); }} style={sheetButtonStyle} variant="outlined" />
+        ) : null}
+      </Column>
+      <Spacer flexible />
+    </Column>
+  );
+
+  return (
+    <Host
+      colorScheme="dark"
+      seedColor="#22D3EE"
+      style={styles.fullScreenHost}
+      useViewportSizeMeasurement
+    >
+      <UniversalSignInWelcome
+        onContinue={() => {
+          playLightImpactHaptic();
+          setAuthError(null);
+          setAuthNotice(null);
+          setEntryStep("email");
+        }}
+      />
+      <SignInBottomSheet
+        isPresented={entryStep === "email"}
+        onDismiss={() => setEntryStep("welcome")}
+      >
+        {emailContent}
+      </SignInBottomSheet>
+    </Host>
   );
 }
 
-const styles = StyleSheet.create({
-  shell: {
-    justifyContent: "center",
+const styles = {
+  error: {
+    color: "#FFB4A8",
+    fontSize: 14,
+    lineHeight: 20,
   },
-  keyboardLayer: {
-    flex: 1,
-    width: "100%",
-  },
-  formScroll: {
-    flex: 1,
-    width: "100%",
-  },
-  scrollContent: {
-    flexGrow: 1,
-    justifyContent: "center",
-    paddingBottom: 12,
-    paddingTop: 8,
-  },
-  scrollContentWithKeyboard: {
-    justifyContent: "flex-start",
-    paddingBottom: 12,
-    paddingTop: 4,
-  },
-  authPanel: {
-    alignItems: "stretch",
-    backgroundColor: vexColors.card,
-    borderColor: vexColors.line,
-    borderRadius: 30,
+  emailInput: {
+    backgroundColor: "#0C2023",
+    borderColor: "#42666D",
+    borderRadius: 14,
     borderWidth: 1,
-    gap: 12,
-    paddingHorizontal: 20,
-    paddingVertical: 24,
-    shadowColor: '#000',
-    shadowOpacity: 0.28,
-    shadowRadius: 28,
-  },
-  authPanelWithKeyboard: {
-    gap: 8,
-    paddingHorizontal: 14,
+    minHeight: 56,
+    paddingHorizontal: 16,
     paddingVertical: 12,
   },
-  authIcon: {
-    alignItems: "center",
-    alignSelf: "center",
-    backgroundColor: vexColors.field,
-    borderColor: vexColors.line,
-    borderRadius: 22,
-    borderWidth: 1,
-    height: 72,
-    justifyContent: "center",
-    width: 72,
+  emailInputText: {
+    color: "#E9F7F8",
+    fontSize: 17,
   },
-  authLogo: {
-    height: 58,
-    width: 58,
-  },
-  authTitle: {
-    color: vexColors.text,
-    fontSize: 28,
-    fontWeight: "900",
-    textAlign: "center",
-  },
-  authTitleWithKeyboard: {
+  emailRecipient: {
+    color: "#A7B9BD",
     fontSize: 16,
+    lineHeight: 22,
   },
-  authSubtitle: {
-    color: vexColors.muted,
-    fontSize: 13,
-    lineHeight: 18,
-    textAlign: "center",
-  },
-  modeSegment: {
-    backgroundColor: vexColors.field,
-    borderColor: "rgba(96,118,123,0.28)",
-    borderRadius: 18,
-    borderWidth: 1,
-    flexDirection: "row",
-    gap: 4,
-    padding: 5,
-  },
-  modeSegmentButton: {
-    alignItems: "center",
-    borderRadius: 13,
+  fullScreenHost: {
     flex: 1,
-    justifyContent: "center",
-    minHeight: 42,
   },
-  modeSegmentButtonActive: {
-    backgroundColor: vexColors.accent,
-  },
-  modeSegmentText: {
-    color: vexColors.muted,
-    fontSize: 12,
-    fontWeight: "900",
-  },
-  modeSegmentTextActive: {
-    color: "#031012",
-  },
-  input: {
-    backgroundColor: vexColors.field,
-    borderColor: vexColors.lineStrong,
-    borderRadius: 18,
-    borderWidth: 1,
-    color: vexColors.text,
-    fontSize: 15,
-    minHeight: 54,
-    paddingHorizontal: 14,
-  },
-  authError: {
-    color: vexColors.danger,
-    fontSize: 12,
-    fontWeight: "700",
-    lineHeight: 16,
-    textAlign: "center",
-  },
-  authNotice: {
-    color: vexColors.accent,
-    fontSize: 12,
-    fontWeight: "800",
-    lineHeight: 16,
-    textAlign: "center",
-  },
-  primaryButton: {
-    ...vexSharedStyles.primaryButton,
-    borderRadius: 18,
-    minHeight: 54,
-  },
-  primaryButtonText: {
-    ...vexSharedStyles.primaryButtonText,
+  notice: {
+    color: "#67E8F9",
     fontSize: 14,
+    lineHeight: 20,
   },
-  busy: {
-    ...vexSharedStyles.busy,
+  sheetContent: {
+    backgroundColor: "#041315",
+    flex: 1,
   },
-  secondaryButton: {
-    alignItems: "center",
-    backgroundColor: "transparent",
-    borderColor: vexColors.accent,
-    borderRadius: 18,
-    borderWidth: 1,
-    justifyContent: "center",
-    minHeight: 50,
+  sheetIntro: {
+    color: "#A7B9BD",
+    fontSize: 16,
+    lineHeight: 22,
   },
-  secondaryButtonText: {
-    color: vexColors.accent,
-    fontSize: 14,
-    fontWeight: "900",
+  sheetTitle: {
+    color: "#F1FBFC",
+    fontSize: 30,
+    fontWeight: "800" as const,
   },
-});
+  sheetModalHost: {
+    position: "absolute" as const,
+  },
+};

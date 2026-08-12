@@ -1,22 +1,6 @@
-import { jsonRequest, vexApiBaseUrl } from './client';
-import { buildBillingSummary } from './billingSummary';
-import {
-  type Entitlement,
-  type BillingSummary,
-  type CheckoutSession,
-  type BillingPortalSession,
-} from './types';
-import {
-  type BillingPlanDTO,
-  type CheckoutSessionDTO,
-  type EntitlementDTO,
-  type PortalSessionDTO,
-} from './dto';
-
-export type CheckoutSessionOptions = {
-  failedUrl?: string;
-  returnUrl?: string;
-};
+import { jsonRequest } from './client';
+import { type Entitlement } from './types';
+import { type EntitlementDTO } from './dto';
 
 export function hasPaidEntitlement(item: Entitlement | null | undefined): item is Entitlement {
   return Boolean(item?.vpnAccess || item?.active);
@@ -28,68 +12,6 @@ export async function entitlement(accessToken: string): Promise<Entitlement> {
     suppressErrorLog: true,
   });
   return parseEntitlement(item);
-}
-
-export async function billingSummary(accessToken: string): Promise<BillingSummary> {
-  const [plans, currentEntitlement] = await Promise.all([
-    billingPlans().catch((): BillingPlanDTO[] => []),
-    entitlement(accessToken).catch((): null => null),
-  ]);
-  return buildBillingSummary(plans, currentEntitlement);
-}
-
-async function billingPlans(): Promise<BillingPlanDTO[]> {
-  return jsonRequest<BillingPlanDTO[]>('/v1/billing/plans', {
-    suppressErrorLog: true,
-    timeout: 75000,
-  });
-}
-
-export async function checkoutSession(accessToken: string, plan: { id: string; provider?: string }, options: CheckoutSessionOptions = {}): Promise<CheckoutSession> {
-  const item = await jsonRequest<CheckoutSessionDTO>('/v1/billing/checkout-session', {
-    method: 'POST',
-    accessToken,
-    idempotencyKey: `android-checkout-${plan.id}-${Date.now()}`,
-    body: {
-      plan_id: plan.id,
-      provider: plan.provider || 'platega',
-      return_url: options.returnUrl || vexApiBaseUrl,
-      failed_url: options.failedUrl || vexApiBaseUrl,
-    },
-  });
-  return parseCheckoutSession(item);
-}
-
-export async function cancelSubscription(accessToken: string): Promise<Entitlement> {
-  const item = await jsonRequest<EntitlementDTO>('/v1/billing/subscription/cancel', {
-    method: 'POST',
-    accessToken,
-    idempotencyKey: `subscription-cancel-${Date.now()}`,
-  });
-  return parseEntitlement(item);
-}
-
-export async function portalSession(accessToken: string): Promise<BillingPortalSession> {
-  const item = await jsonRequest<PortalSessionDTO>('/v1/billing/portal-session', {
-    accessToken,
-    suppressErrorLog: true,
-  });
-  return {
-    id: item.id || '',
-    provider: item.provider || 'manual',
-    url: item.url || '',
-    createdAt: item.created_at || undefined,
-  };
-}
-
-export function parseCheckoutSession(item: CheckoutSessionDTO): CheckoutSession {
-  return {
-    id: item.id,
-    planId: item.plan_id,
-    provider: item.provider,
-    url: item.url,
-    status: item.status,
-  };
 }
 
 export function parseEntitlement(item: EntitlementDTO): Entitlement {

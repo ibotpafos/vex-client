@@ -1,8 +1,8 @@
 import { useQueryClient } from '@tanstack/react-query';
+import { Button, Column, Host, Spacer, Text } from '@expo/ui';
 import { router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { exchangeAppAuthCode } from '@/api/vexApi';
 import {
   authCallbackAttemptKey,
@@ -13,8 +13,6 @@ import {
 import { useSession } from '@/auth/session-context';
 import { loadWithRetry } from '@/auth/sessionLoadRetry';
 import * as SecureStore from '@/native/secureStore';
-import { VexNativeActivityIndicator } from '@/ui/native-activity-indicator';
-import { VexScreen, vexColors } from '@/ui/vex-ui';
 import { resetVpnProfileCache } from '@/vpn/profile';
 
 type CallbackState = 'loading' | 'success' | 'error';
@@ -71,19 +69,18 @@ export default function AuthCallbackScreen() {
   }, [code, queryClient, signIn, state]);
 
   return (
-    <VexScreen contentStyle={styles.screen}>
+    <Host colorScheme="dark" seedColor="#22D3EE" style={styles.host} useViewportSizeMeasurement>
       <StatusBar style="light" />
-      <View style={styles.panel}>
-        {status === 'loading' ? <VexNativeActivityIndicator color="#22D3EE" size="large" /> : null}
-        <Text style={styles.title}>VEX</Text>
-        <Text style={styles.message}>{message}</Text>
+      <Column alignment="center" spacing={16} style={styles.content}>
+        <Spacer flexible />
+        <Text textStyle={styles.title}>VEX</Text>
+        <Text textStyle={styles.message}>{message}</Text>
         {status === 'error' ? (
-          <Pressable accessibilityRole="button" onPress={() => router.replace('/sign-in')} style={styles.button}>
-            <Text style={styles.buttonText}>Вернуться ко входу</Text>
-          </Pressable>
+          <Button label="Вернуться ко входу" onPress={() => router.replace('/sign-in')} />
         ) : null}
-      </View>
-    </VexScreen>
+        <Spacer flexible />
+      </Column>
+    </Host>
   );
 }
 
@@ -94,48 +91,23 @@ function firstParam(value: string | string[] | undefined): string {
   return value || '';
 }
 
-const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
-    justifyContent: 'center',
+const styles = {
+  content: {
+    backgroundColor: '#041315',
+    padding: 24,
   },
-  panel: {
-    alignSelf: 'stretch',
-    alignItems: 'center',
-    backgroundColor: vexColors.card,
-    borderColor: vexColors.line,
-    borderRadius: 28,
-    borderWidth: 1,
-    gap: 14,
-    paddingHorizontal: 24,
-    paddingVertical: 28,
-    shadowColor: '#000',
-    shadowOpacity: 0.25,
-    shadowRadius: 24,
+  host: {
+    flex: 1,
   },
   title: {
-    color: vexColors.text,
+    color: '#43D9E7',
     fontSize: 30,
-    fontWeight: '900',
+    fontWeight: '800' as const,
   },
   message: {
-    color: vexColors.textSoft,
+    color: '#DCECEE',
     fontSize: 15,
     lineHeight: 22,
-    textAlign: 'center',
+    textAlign: 'center' as const,
   },
-  button: {
-    marginTop: 10,
-    minHeight: 48,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 18,
-    backgroundColor: vexColors.accent,
-    paddingHorizontal: 18,
-  },
-  buttonText: {
-    color: '#031012',
-    fontSize: 15,
-    fontWeight: '800',
-  },
-});
+};

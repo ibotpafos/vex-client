@@ -16,6 +16,8 @@ import {
   vpnLocations,
 } from '@/api/vexApi';
 import { useSession } from '@/auth/session-context';
+import { openExternalUrl } from '@/auth/systemAuth';
+import { vexWebsite } from '@/navigation/website';
 import {
   playErrorHaptic,
   playMediumImpactHaptic,
@@ -59,7 +61,6 @@ import {
 import {
   HOME_TAB_ROUTE,
   SERVER_PICKER_ROUTE,
-  SUBSCRIPTION_ROUTE,
   UPDATE_CENTER_ROUTE,
 } from '@/navigation/routes';
 import {
@@ -274,7 +275,9 @@ export function useVpnConnection() {
   }, [setVpnStatus]);
 
   const handleSubscriptionRequired = useCallback(() => {
-    router.push(SUBSCRIPTION_ROUTE);
+    void openExternalUrl(vexWebsite.dashboard()).catch(() => {
+      setVpnError('Не удалось открыть сайт VEX для управления подпиской.');
+    });
   }, []);
 
   const handleProfileRefreshFailedRef = useRef<(event: { error: unknown; locationId: string; reason: string }) => void>(() => {});
@@ -1035,7 +1038,9 @@ export function useVpnConnection() {
     }
     playSelectionHaptic();
     setVpnError(null);
-    router.push(SUBSCRIPTION_ROUTE);
+    void openExternalUrl(vexWebsite.dashboard()).catch(() => {
+      setVpnError('Не удалось открыть сайт VEX для управления подпиской.');
+    });
   }, [session]);
 
   const closeSubscriptionModal = useCallback(() => {

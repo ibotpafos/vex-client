@@ -1,7 +1,7 @@
 import { billingDurationLabel, billingDurationMonths, billingSummaryFallbackCopy, buildBillingSummary, type BillingPlanSource } from '../src/api/billingSummary';
 import { buildSubscriptionReminders } from '../src/notifications/subscriptionReminderSchedule';
 import { devicePushTokenPath, fcmPushRegistration } from '../src/notifications/pushRegistration';
-import { normalizeApiRequestError, technicalWorksMessage } from '../src/api/error';
+import { ApiRequestError, normalizeApiRequestError, technicalWorksMessage } from '../src/api/error';
 import { installManualUpdate } from '../src/api/manualUpdateInstall';
 import { errorMessage } from '../src/utils/error';
 import { assessManualUpdateCenter, canUseOtaUpdate, requiresNativeUpdate, shouldOfferAppUpdate, updateCheckChannel, validateManualUpdatePayloadForBaseUrl } from '../src/api/updatePreflight';
@@ -16,10 +16,8 @@ import { loadSessionWithRetry, loadWithRetry } from '../src/auth/sessionLoadRetr
 import { vpnConnectionAnimationsEnabled } from '../src/vpn/vpnAnimationPolicy';
 import { generateChallenge, generateRandomString } from '../src/auth/pkce';
 import { buildAppWebAuthUrl } from '../src/auth/webAuthUrl';
-import { isEmailOTPExpired, isInvalidOrExpiredEmailOTPError, normalizeEmailOTPCode } from '../src/auth/emailOtp';
+import { emailOTPCells, emailOTPRequestErrorMessage, isEmailOTPExpired, isInvalidOrExpiredEmailOTPError, normalizeEmailOTPCode } from '../src/auth/emailOtp';
 import { loadSessionFromStorage, saveSessionToStorage, type SessionStorageAdapter } from '../src/auth/sessionStoreCore';
-import { isSupportSocketConnecting } from '../src/api/supportSocketState';
-import { optimisticSupportTicket, supportConnectionStatusText, supportHistoryErrorMessage, uniqueSupportMessages, supportChatItems } from '../src/screens/support-helpers';
 import { shouldUseMemoryOnlySensitiveWebStorage } from '../src/native/secureStoreCore';
 import { safeGetStoredValue } from '../src/settings/safeStorage';
 import {
@@ -51,15 +49,68 @@ import { normalizePackageNames } from '../src/vpn/applicationRouting';
 import { assessVpnAutopilotIssue } from '../src/vpn/vpnAutopilotAssessment';
 import { buildCreateDeviceRequest } from '../src/api/deviceCreateRequest';
 import { canAutomaticallyApplyOtaUpdate } from '../src/updates/otaAutoApply';
-import { HOME_TAB_ROUTE, SUPPORT_TAB_ROUTE } from '../src/navigation/routes';
+import { HOME_TAB_ROUTE } from '../src/navigation/routes';
 import { fallbackLocationEndpoint } from '../src/vpn/locationEndpoint';
-import type { VpnDevice, VpnDeviceUsage, VpnLocation, SupportMessage } from '../src/api/vexApi';
+import type { VpnDevice, VpnDeviceUsage, VpnLocation } from '../src/api/vexApi';
 import type { VpnStatus } from '../src/native/vexVpn';
 import type { VpnProfile } from '../src/vpn/profile';
 import { managedProfileAmneziaConfig } from '../src/vpn/amneziaConfig';
 import { managedProfileAWGVersion, withManagedProfileAWGCapability } from '../src/vpn/profileCapabilities';
 import { serverPickerActionForSource } from '../src/screens/server-picker-interactions';
 import { trafficSessionLabel } from '../src/components/traffic-summary';
+import appConfig from '../app.config';
+import type { ConfigContext } from '@expo/config';
+import { vexWebsiteUrl } from '../src/navigation/website';
+import { authEntryStepAfterBack } from '../src/auth/authEntry';
+
+assertEqual(vexWebsiteUrl('/dashboard', 'https://vexguard.app/'), 'https://vexguard.app/dashboard');
+assertEqual(vexWebsiteUrl('/support', 'https://staging.vexguard.app'), 'https://staging.vexguard.app/support');
+assertThrows(() => vexWebsiteUrl('https://example.com', 'https://vexguard.app'), 'Website path must start with /');
+assertThrows(() => vexWebsiteUrl('//example.com', 'https://vexguard.app'), 'Website path must stay on the VEX website');
+assertEqual(authEntryStepAfterBack(false), 'welcome');
+assertEqual(authEntryStepAfterBack(true), 'welcome');
+
+{
+  const configContext: ConfigContext = {
+    config: {},
+    projectRoot: process.cwd(),
+    staticConfigPath: null,
+    packageJsonPath: null,
+  };
+  const savedEnvironment = {
+    VEX_BUILD_PROFILE: process.env.VEX_BUILD_PROFILE,
+    VEX_RUNTIME_VERSION: process.env.VEX_RUNTIME_VERSION,
+    VEX_UPDATES_ENABLED: process.env.VEX_UPDATES_ENABLED,
+  };
+  delete process.env.VEX_BUILD_PROFILE;
+  delete process.env.VEX_RUNTIME_VERSION;
+  delete process.env.VEX_UPDATES_ENABLED;
+
+  const localConfig = appConfig(configContext);
+  assertEqual(localConfig.updates?.enabled, false);
+  assertEqual(localConfig.runtimeVersion, '1.0.55');
+
+  process.env.VEX_BUILD_PROFILE = 'production';
+  process.env.VEX_UPDATES_ENABLED = '1';
+  let missingRuntimeError: unknown;
+  try {
+    appConfig(configContext);
+  } catch (error) {
+    missingRuntimeError = error;
+  }
+  assertEqual((missingRuntimeError as Error | undefined)?.message.includes('VEX_RUNTIME_VERSION is required'), true);
+
+  process.env.VEX_RUNTIME_VERSION = '1.0.55';
+  assertEqual(appConfig(configContext).updates?.enabled, true);
+
+  for (const [key, value] of Object.entries(savedEnvironment)) {
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+}
 
 const connectedStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0 };
 
@@ -125,6 +176,12 @@ assertEqual(
 {
   assertEqual(normalizeEmailOTPCode(' 12-34 56 '), '123456');
   assertEqual(normalizeEmailOTPCode('1234567'), '123456');
+  assertDeepEqual(emailOTPCells('12', 6), ['1', '2', '', '', '', '']);
+  assertDeepEqual(emailOTPCells('1234567', 6), ['1', '2', '3', '4', '5', '6']);
+  assertEqual(
+    emailOTPRequestErrorMessage(new ApiRequestError('email code was already sent; try again in 60 seconds', { status: 429 })),
+    'Код уже отправлен на email. Проверьте почту или запросите новый через минуту.',
+  );
   assertEqual(isEmailOTPExpired('2026-07-14T10:00:00Z', Date.parse('2026-07-14T10:00:01Z')), true);
   assertEqual(isEmailOTPExpired('2026-07-14T10:00:02Z', Date.parse('2026-07-14T10:00:01Z')), false);
   assertEqual(isInvalidOrExpiredEmailOTPError(new Error('invalid or expired email code')), true);
@@ -975,9 +1032,9 @@ async function runAsyncTests(): Promise<void> {
   await runFailedConnectionCleanupTests();
   runNavigationRouteTests();
   runAndroidRoutingSafetyTests();
-  runSupportTests();
   runErrorMessageTests();
   runServerPickerInteractionTests();
+  runServerPickerPresentationTests();
   runTrafficSummaryTests();
   await runServerSwitchTests();
 }
@@ -985,6 +1042,19 @@ async function runAsyncTests(): Promise<void> {
 function runServerPickerInteractionTests(): void {
   assertEqual(serverPickerActionForSource('carousel'), 'select');
   assertEqual(serverPickerActionForSource('all_locations'), 'open_picker');
+}
+
+function runServerPickerPresentationTests(): void {
+  const { readFileSync } = (process as typeof process & {
+    getBuiltinModule: (id: 'node:fs') => { readFileSync: (path: string, encoding: string) => string };
+  }).getBuiltinModule('node:fs');
+  const source = readFileSync('src/components/server-picker-modal.tsx', 'utf8');
+
+  assertEqual(source.includes('<BottomSheet'), true);
+  assertEqual(source.includes('return <ServerPickerContent {...props} />'), false);
+  assertEqual(source.includes('return <AndroidServerPickerSheet {...props} />'), true);
+  assertEqual(source.includes('containerColor="#041315"'), true);
+  assertEqual(source.includes('scrimColor="transparent"'), true);
 }
 
 function runTrafficSummaryTests(): void {
@@ -1722,6 +1792,16 @@ function assertEqual<T>(actual: T, expected: T): void {
   }
 }
 
+function assertThrows(fn: () => unknown, expectedMessage: string): void {
+  let thrown: unknown;
+  try {
+    fn();
+  } catch (error) {
+    thrown = error;
+  }
+  assertEqual((thrown as Error | undefined)?.message, expectedMessage);
+}
+
 function assertDeepEqual<T>(actual: T, expected: T): void {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     throw new Error(`Expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
@@ -1836,45 +1916,9 @@ async function runManualUpdateInstallTests(): Promise<void> {
   );
 }
 
-function runSupportTests(): void {
-  assertEqual(isSupportSocketConnecting({ readyState: 0 }, undefined), true);
-  assertEqual(isSupportSocketConnecting({ readyState: 1 }, undefined), false);
-  assertEqual(isSupportSocketConnecting(
-    { readyState: 7 as WebSocket['readyState'] },
-    { CONNECTING: 7 as typeof WebSocket.CONNECTING },
-  ), true);
-  assertEqual(supportConnectionStatusText('reconnecting'), 'обновляем чат...');
-  assertEqual(supportConnectionStatusText('offline'), 'нужен вход');
-  assertEqual(
-    supportHistoryErrorMessage(
-      'fetch failed: java.net.UnknownHostException: Unable to resolve host "vexguard.app": No address associated with hostname',
-    ),
-    'Нет соединения с сервером VEX. Проверьте интернет или отключите VPN и попробуйте снова.',
-  );
-
-  const t1 = optimisticSupportTicket('Payment Issue', 'I paid but it says expired.');
-  assertEqual(t1.subject, 'Payment Issue');
-  assertEqual(t1.status, 'open');
-  assertEqual(t1.messages?.[0]?.body, 'I paid but it says expired.');
-
-  const now = new Date().toISOString();
-  const m1: SupportMessage = { id: 'm1', ticketId: 't1', sender: 'user', body: 'hello', createdAt: now };
-  const m2: SupportMessage = { id: 'm2', ticketId: 't1', sender: 'user', body: 'hello', createdAt: now };
-  const unique = uniqueSupportMessages([m1, m2]);
-  assertEqual(unique.length, 1);
-
-  const diagMsg1: SupportMessage = { id: 'd1', ticketId: 't1', sender: 'user', body: 'generated_at: 2026\ncheck.dns: ok\nstatus: connected', createdAt: now };
-  const diagMsg2: SupportMessage = { id: 'd2', ticketId: 't1', sender: 'user', body: 'generated_at: 2026\ncheck.dns: fail\nstatus: disconnected', createdAt: now };
-  const chatItemsList = supportChatItems([diagMsg1, diagMsg2]);
-  assertEqual(chatItemsList.length, 1);
-  assertEqual(chatItemsList[0].type, 'diagnosticGroup');
-}
-
 function runNavigationRouteTests(): void {
   assertEqual(HOME_TAB_ROUTE, '/(app)/(tabs)/');
-  assertEqual(SUPPORT_TAB_ROUTE, '/(app)/(tabs)/support');
   assertEqual(HOME_TAB_ROUTE.includes('/index'), false);
-  assertEqual(SUPPORT_TAB_ROUTE.includes('support-chat'), false);
 }
 
 function runErrorMessageTests(): void {

@@ -291,6 +291,23 @@ final class SparkleUpdateTests: XCTestCase {
         XCTAssertTrue(script.contains("codesign --verify --strict \"${APP_DIR}/Contents/Resources/resources/${helper_binary}\""))
     }
 
+    func testNativeMacBuildStagesSwiftPMResourcesInsideSignedAppResources() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let scriptURL = packageRoot
+            .deletingLastPathComponent()
+            .appendingPathComponent("scripts/build_native_macos_app.sh")
+        let script = try String(contentsOf: scriptURL, encoding: .utf8)
+
+        XCTAssertTrue(
+            script.contains("cp -R \"${RESOURCE_BUNDLE}\" \"${APP_DIR}/Contents/Resources/\""),
+            "The resource bundle must live in the sealed Contents/Resources directory."
+        )
+        XCTAssertFalse(
+            script.contains("cp -R \"${RESOURCE_BUNDLE}\" \"${APP_DIR}/\""),
+            "Placing content at the .app root invalidates code signing."
+        )
+    }
+
     func testNativeMacProductionPreflightChecksReleaseContracts() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let scriptURL = packageRoot

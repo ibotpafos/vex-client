@@ -143,6 +143,15 @@ final class FocusPulsePresentationTests: XCTestCase {
             ),
             silhouetteURL
         )
+
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let sourceURL = packageRoot
+            .appendingPathComponent("Sources")
+            .appendingPathComponent("VEXNativeMac")
+            .appendingPathComponent("Views")
+            .appendingPathComponent("CountrySilhouette.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        XCTAssertFalse(source.contains("Bundle.module"))
     }
 
     func testWindowHeaderOmitsHomeTitleAndNamesSecondaryPages() {

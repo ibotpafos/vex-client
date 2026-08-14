@@ -108,6 +108,9 @@ fi
 
 RESOURCE_BUNDLE="$(find "${PACKAGE_DIR}/.build" -type d -path "*/release/${APP_NAME}_${APP_NAME}.bundle" | head -n 1)"
 if [[ -n "${RESOURCE_BUNDLE}" && -d "${RESOURCE_BUNDLE}" ]]; then
+  # Keep SwiftPM assets inside the sealed app resources directory. App code
+  # resolves this bundle through VEXAppResources rather than Bundle.module,
+  # whose generated lookup expects an unsealed bundle beside the .app.
   cp -R "${RESOURCE_BUNDLE}" "${APP_DIR}/Contents/Resources/"
 else
   echo "Missing SwiftPM resource bundle for ${APP_NAME}" >&2

@@ -14,9 +14,6 @@ enum CountrySilhouetteStore {
         guard let url = VEXAppResources.resourceURL(
             forResource: "country-silhouettes",
             withExtension: "json"
-        ) ?? Bundle.module.url(
-            forResource: "country-silhouettes",
-            withExtension: "json"
         ),
         let data = try? Data(contentsOf: url),
         let catalog = try? JSONDecoder().decode(CountrySilhouetteCatalog.self, from: data) else {

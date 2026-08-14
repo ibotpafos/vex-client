@@ -348,7 +348,7 @@ final class VEXAppState: ObservableObject {
                 accessToken: requestToken,
                 locationId: targetLocationId,
                 routingMode: routingMode,
-                forceRefresh: false
+                forceRefresh: true
             )
             try ensureConnectStillDesired(generation: generation)
             let connectedTunnel = try await connectWithAutopilot(
@@ -582,7 +582,7 @@ final class VEXAppState: ObservableObject {
                 accessToken: token,
                 locationId: nextLocationId,
                 routingMode: routingMode,
-                forceRefresh: false
+                forceRefresh: true
             )
             try ensureConnectStillDesired(generation: generation)
             activeTunnel = nextTunnel

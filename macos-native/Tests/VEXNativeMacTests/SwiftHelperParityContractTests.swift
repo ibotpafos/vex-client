@@ -101,6 +101,22 @@ final class SwiftHelperParityContractTests: XCTestCase {
         XCTAssertTrue(source.contains("kickstart()"))
     }
 
+    func testInstalledButUnreachableHelperRequiresRepair() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let helperModel = try String(
+            contentsOf: packageRoot.appendingPathComponent("Sources/VEXNativeMac/VEXHelperClient.swift"),
+            encoding: .utf8
+        )
+        let settings = try String(
+            contentsOf: packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/VEXSettingsView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(helperModel.contains("Системный компонент требует восстановления."))
+        XCTAssertTrue(helperModel.contains("return installState.socketConnectable"))
+        XCTAssertTrue(settings.contains("helper.installState?.socketConnectable != true"))
+    }
+
     private func helperContractSource() throws -> String {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let nativeSources = [

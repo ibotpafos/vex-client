@@ -19,6 +19,7 @@ public struct HelperPathsLayout: Sendable, Equatable {
     public var defaultConfigPath: String
     public var activeConfigPath: String
     public var dnsStatePath: String
+    public var quickDiagnosticPath: String
     public var awgPath: String
     public var pfConfigPath: String
 
@@ -40,6 +41,7 @@ public struct HelperPathsLayout: Sendable, Equatable {
         defaultConfigPath: String = "/etc/amnezia/amneziawg/tun0.conf",
         activeConfigPath: String = "/Library/Application Support/VEX VPN/helper/active.conf",
         dnsStatePath: String = "/Library/Application Support/VEX VPN/helper/dns-baseline.state",
+        quickDiagnosticPath: String = "/Library/Application Support/VEX VPN/helper/awg-quick-stage",
         awgPath: String = "/Library/Application Support/VEX VPN/helper/awg",
         pfConfigPath: String = "/etc/pf.conf"
     ) {
@@ -60,6 +62,7 @@ public struct HelperPathsLayout: Sendable, Equatable {
         self.defaultConfigPath = defaultConfigPath
         self.activeConfigPath = activeConfigPath
         self.dnsStatePath = dnsStatePath
+        self.quickDiagnosticPath = quickDiagnosticPath
         self.awgPath = awgPath
         self.pfConfigPath = pfConfigPath
     }
@@ -206,7 +209,23 @@ public enum HelperError: Error, LocalizedError, Equatable, Sendable {
     }
 
     public var socketMessage: String {
-        "error: \(errorDescription ?? "unknown helper error")\n"
+        if case .commandFailed(let detail) = self,
+           detail.localizedCaseInsensitiveContains("awg-quick up failed") {
+            let knownStages = [
+                "set_config_config_field", "set_config_config_key_private_key",
+                "set_config_config_key_public_key", "set_config_config_key_preshared_key",
+                "set_config_config_key_header_protection_key", "set_config_config_key",
+                "set_config_uapi_rejected", "set_config_local_command", "add_if", "set_config", "address", "mtu", "routes",
+                "endpoint_route", "dns", "monitor",
+            ]
+            if let stage = knownStages.first(where: {
+                detail.localizedCaseInsensitiveContains("at stage \($0)")
+            }) {
+                return "error: awg_quick_up_\(stage)_failed\n"
+            }
+            return "error: awg_quick_up_failed\n"
+        }
+        return "error: \(errorDescription ?? "unknown helper error")\n"
     }
 }
 
@@ -406,11 +425,13 @@ public struct CommandSpec: Equatable, Hashable, Sendable {
     public var program: String
     public var arguments: [String]
     public var timeout: TimeInterval
+    public var environment: [String: String]
 
-    public init(program: String, arguments: [String], timeout: TimeInterval = 15) {
+    public init(program: String, arguments: [String], timeout: TimeInterval = 15, environment: [String: String] = [:]) {
         self.program = program
         self.arguments = arguments
         self.timeout = timeout
+        self.environment = environment
     }
 }
 

@@ -227,7 +227,7 @@ struct VEXSettingsView: View {
 
     @ViewBuilder
     private var helperRepairRow: some View {
-        if helper.installState?.filesCurrent != true {
+        if helper.installState?.filesCurrent != true || helper.installState?.socketConnectable != true {
             HStack(spacing: 10) {
                 SettingsGlyph(systemName: "wrench.and.screwdriver")
                 VStack(alignment: .leading, spacing: 2) {

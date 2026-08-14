@@ -182,11 +182,9 @@ struct VPNProfileService {
         if managedProfile.revoked == true {
             throw VPNProfileError.deviceRevoked
         }
-
         let config: String
         if managedProfile.unchanged == true {
-            guard cached?.awgVersion == awgVersion,
-                  let cachedConfig = cached?.config,
+            guard let cachedConfig = cached?.config,
                   isValidConfig(cachedConfig) else {
                 throw VPNProfileError.unchangedProfileWithoutCache
             }
@@ -196,7 +194,12 @@ struct VPNProfileService {
         } else {
             config = try managedProfileConfig(managedProfile, keyPair: keyPair)
         }
-        let validatedConfig = try Self.validatedConfig(config, awgVersion: awgVersion)
+        let effectiveAWGVersion = Self.effectiveAWGVersion(
+            requested: awgVersion,
+            advertised: managedProfile.amneziaVersion,
+            config: config
+        )
+        let validatedConfig = try Self.validatedConfig(config, awgVersion: effectiveAWGVersion)
 
         let nextDevice = device.withManagedProfile(managedProfile, locationId: normalizedLocationId)
         let tunnel = PreparedTunnel(
@@ -210,13 +213,39 @@ struct VPNProfileService {
             bypassDomainsCount: managedProfile.bypassDomains?.filter { !$0.isEmpty }.count ?? 0,
             routingPolicyVersion: managedProfile.routingPolicyVersion ?? VEXAppInfo.routingPolicyVersion,
             rotationRequired: managedProfile.rotationRequired == true,
-            awgVersion: awgVersion
+            awgVersion: effectiveAWGVersion
         )
         try cache.save(PreparedTunnelCacheRecord(tunnel: tunnel), locationId: normalizedLocationId, routingMode: effectiveRoutingMode)
         if writeHelperConfig {
             try cache.writeHelperConfig(helperConfig(validatedConfig))
         }
         return tunnel
+    }
+
+    /// The backend is the authority for the protocol actually assigned to a
+    /// device. A v3-capable client may be deliberately routed to an AWG2 node
+    /// while the dedicated AWG3 node is unavailable; validate that response as
+    /// AWG2 instead of treating its valid legacy config as malformed AWG3.
+    nonisolated static func effectiveAWGVersion(
+        requested: Int,
+        advertised: Int?,
+        config: String? = nil
+    ) -> Int {
+        switch advertised {
+        case let .some(version) where version == 2 || version == 3:
+            return version
+        default:
+            break
+        }
+        guard let config else { return requested }
+        let interfaceValues = interfaceConfigValues(config)
+        if interfaceValues["headerprotectionkey"]?.isEmpty == false {
+            return 3
+        }
+        if ["jc", "jmin", "jmax", "s1", "s2", "s3", "s4"].contains(where: { interfaceValues[$0] != nil }) {
+            return 2
+        }
+        return requested
     }
 
     func rotateKey(accessToken: String, currentTunnel: PreparedTunnel?) async throws -> PreparedTunnel? {

@@ -20,6 +20,30 @@ final class VEXPrivilegedHelperCoreTests: XCTestCase {
         XCTAssertThrowsError(try HelperCommandFrame.decode(oversized, maxBytes: 512))
     }
 
+    func testAWGQuickLaunchFailureReturnsOnlySanitizedSocketCode() {
+        let error = HelperError.commandFailed("awg-quick up failed with status 1: PrivateKey = should-never-leave-root")
+
+        XCTAssertEqual(error.socketMessage, "error: awg_quick_up_failed\n")
+    }
+
+    func testAWGQuickLaunchFailureReportsOnlyItsSafeStage() {
+        let error = HelperError.commandFailed("awg-quick up failed at stage set_config with status 1")
+
+        XCTAssertEqual(error.socketMessage, "error: awg_quick_up_set_config_failed\n")
+    }
+
+    func testAWGQuickLaunchFailureReportsOnlySanitizedUAPIConfigurationRejection() {
+        let error = HelperError.commandFailed("awg-quick up failed at stage set_config_uapi_rejected with status 1")
+
+        XCTAssertEqual(error.socketMessage, "error: awg_quick_up_set_config_uapi_rejected_failed\n")
+    }
+
+    func testAWGQuickLaunchFailureReportsOnlyInvalidHeaderProtectionKeyCategory() {
+        let error = HelperError.commandFailed("awg-quick up failed at stage set_config_config_key_header_protection_key with status 1")
+
+        XCTAssertEqual(error.socketMessage, "error: awg_quick_up_set_config_config_key_header_protection_key_failed\n")
+    }
+
     func testCommandFramesRejectTruncationInvalidUTF8AndAmbiguousOwnerMetadata() throws {
         XCTAssertEqual(
             try HelperCommandFrame.decode(Array("status\n".utf8), maxBytes: 512),
@@ -250,7 +274,8 @@ final class VEXPrivilegedHelperCoreTests: XCTestCase {
             configPathFile: "/helper/config-path",
             defaultConfigPath: "/user/vex.conf",
             activeConfigPath: "/helper/active.conf",
-            dnsStatePath: "/helper/dns-baseline.state"
+            dnsStatePath: "/helper/dns-baseline.state",
+            quickDiagnosticPath: "/helper/awg-quick-stage"
         )
         let fileSystem = InMemoryFileSystem(files: [
             "/helper/active.conf": "[Interface]\nPrivateKey = key\n[Peer]\nEndpoint = 1.1.1.1:51820\n",
@@ -408,15 +433,24 @@ final class VEXPrivilegedHelperCoreTests: XCTestCase {
             configPathFile: "/helper/config-path",
             defaultConfigPath: "/user/vex.conf",
             activeConfigPath: "/helper/active.conf",
-            dnsStatePath: "/helper/dns-baseline.state"
+            dnsStatePath: "/helper/dns-baseline.state",
+            quickDiagnosticPath: "/helper/awg-quick-stage"
         )
         let fileSystem = InMemoryFileSystem(files: [
             "/helper/config-path": "/user/vex.conf\n",
             "/user/vex.conf": "[Interface]\nPrivateKey = key\n[Peer]\nEndpoint = 1.1.1.1:51820\n"
         ])
         let runner = RecordingCommandRunner([
-            CommandSpec(program: "/helper/awg-quick.sh", arguments: ["up", "/helper/active.conf"]): .init(status: 124),
-            CommandSpec(program: "/helper/awg-quick.sh", arguments: ["down", "/helper/active.conf"]): .init(status: 1)
+            CommandSpec(
+                program: "/helper/awg-quick.sh",
+                arguments: ["up", "/helper/active.conf"],
+                environment: ["VEX_AWG_QUICK_DIAGNOSTIC_PATH": "/helper/awg-quick-stage"]
+            ): .init(status: 124),
+            CommandSpec(
+                program: "/helper/awg-quick.sh",
+                arguments: ["down", "/helper/active.conf"],
+                environment: ["VEX_AWG_QUICK_DIAGNOSTIC_PATH": "/helper/awg-quick-stage"]
+            ): .init(status: 1)
         ])
         let tunnel = SystemTunnelController(
             fileSystem: fileSystem,

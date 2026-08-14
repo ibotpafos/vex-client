@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import Foundation
 import Security
 
@@ -130,11 +131,19 @@ struct VEXHelperInstaller {
             return false
         }
         let installed = URL(fileURLWithPath: helperDir).appendingPathComponent(name)
-        guard let bundledHash = codeDirectoryHash(bundled),
-              let installedHash = codeDirectoryHash(installed) else {
+        switch (codeDirectoryHash(bundled), codeDirectoryHash(installed)) {
+        case let (.some(bundledHash), .some(installedHash)):
+            return bundledHash == installedHash
+        case (.none, .none):
+            return sha256Hex(bundled) == sha256Hex(installed)
+        default:
             return false
         }
-        return bundledHash == installedHash
+    }
+
+    private func sha256Hex(_ file: URL) -> String? {
+        guard let data = try? Data(contentsOf: file) else { return nil }
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
     private func codeDirectoryHash(_ file: URL) -> Data? {

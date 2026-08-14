@@ -193,7 +193,12 @@ final class VEXHelperModel: ObservableObject {
         guard let installState else {
             return nil
         }
-        return installState.filesCurrent ? nil : "Helper требует установки."
+        guard installState.filesCurrent else {
+            return "Helper требует установки."
+        }
+        return installState.socketConnectable
+            ? nil
+            : "Системный компонент требует восстановления."
     }
 
     private func runCommand(_ command: String, busyState: VpnConnectionState, successMessage: String) async {

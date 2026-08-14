@@ -8,6 +8,13 @@ set -e -o pipefail
 shopt -s extglob
 export LC_ALL=C
 
+VEX_AWG_STAGE=""
+record_vex_stage() {
+	[[ -n "${VEX_AWG_QUICK_DIAGNOSTIC_PATH:-}" ]] || return 0
+	[[ "$1" =~ ^(add_if|set_config|set_config_config_field|set_config_config_key|set_config_config_key_private_key|set_config_config_key_public_key|set_config_config_key_preshared_key|set_config_config_key_header_protection_key|set_config_uapi_rejected|set_config_local_command|address|mtu|routes|endpoint_route|dns|monitor)$ ]] || return 0
+	( umask 077; printf '%s\n' "$1" > "${VEX_AWG_QUICK_DIAGNOSTIC_PATH}.tmp" && mv -f "${VEX_AWG_QUICK_DIAGNOSTIC_PATH}.tmp" "${VEX_AWG_QUICK_DIAGNOSTIC_PATH}" ) || true
+}
+
 SELF="${BASH_SOURCE[0]}"
 [[ $SELF == */* ]] || SELF="./$SELF"
 SELF="$(cd "${SELF%/*}" && pwd -P)/${SELF##*/}"
@@ -413,8 +420,56 @@ add_route() {
 	fi
 }
 
+valid_base64_key() {
+	local value="$1" decoded_length
+	[[ ${#value} -eq 44 ]] || return 1
+	decoded_length="$(printf '%s' "$value" | base64 -D 2>/dev/null | wc -c | tr -d '[:space:]')" || return 1
+	[[ "$decoded_length" == "32" ]]
+}
+
+validate_config_keys() {
+	local line key value section="" normalized
+	while IFS= read -r line || [[ -n "$line" ]]; do
+		line="${line%%\#*}"
+		key="${line%%=*}"; key="${key##*([[:space:]])}"; key="${key%%*([[:space:]])}"
+		value="${line#*=}"; value="${value##*([[:space:]])}"; value="${value%%*([[:space:]])}"
+		[[ "$key" == "[Interface]" ]] && section="interface" && continue
+		[[ "$key" == "[Peer]" ]] && section="peer" && continue
+		case "$section:$key" in
+			interface:PrivateKey) normalized="private_key" ;;
+			interface:HeaderProtectionKey) normalized="header_protection_key" ;;
+			peer:PublicKey) normalized="public_key" ;;
+			peer:PresharedKey) normalized="preshared_key" ;;
+			*) continue ;;
+		esac
+		if ! valid_base64_key "$value"; then
+			VEX_AWG_STAGE="set_config_config_key_${normalized}"
+			return 1
+		fi
+	done <<< "$WG_CONFIG"
+	return 0
+}
+
 set_config() {
-	cmd awg setconf "$REAL_INTERFACE" <(echo "$WG_CONFIG")
+	local failure
+	if ! validate_config_keys; then
+		record_vex_stage "$VEX_AWG_STAGE"
+		return 1
+	fi
+	if failure="$(awg setconf "$REAL_INTERFACE" <(printf '%s' "$WG_CONFIG") 2>&1 | awk '
+		BEGIN { code = "set_config_local_command" }
+		/Line unrecognized/ { code = "set_config_config_field" }
+		/[Kk]ey is not the correct length|[Ii]nvalid key/ { code = "set_config_config_key" }
+		/Unable to set device|[Pp]rotocol error|errno=/ { code = "set_config_uapi_rejected" }
+		END { print code }
+	')"; then
+		return 0
+	fi
+	# The command's raw stderr can contain a config line. Keep it in the pipe only;
+	# persist and expose a fixed diagnostic category instead.
+	VEX_AWG_STAGE="$failure"
+	record_vex_stage "$VEX_AWG_STAGE"
+	return 1
 }
 
 save_config() {
@@ -500,19 +555,39 @@ cmd_up() {
 		exit 0
 	fi
 	trap 'del_if; del_routes; del_dns; exit' INT TERM EXIT
+	VEX_AWG_STAGE="add_if"
+	record_vex_stage "$VEX_AWG_STAGE"
 	add_if
 	execute_hooks "${PRE_UP[@]}"
+	VEX_AWG_STAGE="set_config"
+	record_vex_stage "$VEX_AWG_STAGE"
 	set_config
+	VEX_AWG_STAGE="address"
+	record_vex_stage "$VEX_AWG_STAGE"
 	for i in "${ADDRESSES[@]}"; do
 		add_addr "$i"
 	done
+	VEX_AWG_STAGE="mtu"
+	record_vex_stage "$VEX_AWG_STAGE"
 	set_mtu
 	up_if
+	VEX_AWG_STAGE="routes"
+	record_vex_stage "$VEX_AWG_STAGE"
 	for i in $(while read -r _ i; do for i in $i; do [[ $i =~ ^[0-9a-z:.]+/[0-9]+$ ]] && echo "$i"; done; done < <(awg show "$REAL_INTERFACE" allowed-ips) | sort -nr -k 2 -t /); do
 		add_route "$i"
 	done
-	[[ $AUTO_ROUTE4 -eq 1 || $AUTO_ROUTE6 -eq 1 ]] && set_endpoint_direct_route
-	[[ ${#DNS[@]} -gt 0 ]] && set_dns
+	if [[ $AUTO_ROUTE4 -eq 1 || $AUTO_ROUTE6 -eq 1 ]]; then
+		VEX_AWG_STAGE="endpoint_route"
+		record_vex_stage "$VEX_AWG_STAGE"
+		set_endpoint_direct_route
+	fi
+	if [[ ${#DNS[@]} -gt 0 ]]; then
+		VEX_AWG_STAGE="dns"
+		record_vex_stage "$VEX_AWG_STAGE"
+		set_dns
+	fi
+	VEX_AWG_STAGE="monitor"
+	record_vex_stage "$VEX_AWG_STAGE"
 	monitor_daemon
 	execute_hooks "${POST_UP[@]}"
 	trap - INT TERM EXIT

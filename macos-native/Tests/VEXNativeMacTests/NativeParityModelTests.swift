@@ -120,6 +120,38 @@ final class NativeParityModelTests: XCTestCase {
         }
     }
 
+    func testManagedProfileUsesServerAdvertisedAWG2InsteadOfRejectingItAsAWG3() {
+        XCTAssertEqual(
+            VPNProfileService.effectiveAWGVersion(requested: 3, advertised: 2),
+            2
+        )
+        XCTAssertEqual(
+            VPNProfileService.effectiveAWGVersion(requested: 3, advertised: 3),
+            3
+        )
+        XCTAssertEqual(
+            VPNProfileService.effectiveAWGVersion(requested: 3, advertised: nil),
+            3
+        )
+        XCTAssertEqual(
+            VPNProfileService.effectiveAWGVersion(requested: 3, advertised: 0),
+            3
+        )
+
+        let legacyConfig = """
+        [Interface]
+        Jc = 4
+        S1 = 12
+
+        [Peer]
+        PublicKey = server-public-key
+        """
+        XCTAssertEqual(
+            VPNProfileService.effectiveAWGVersion(requested: 3, advertised: nil, config: legacyConfig),
+            2
+        )
+    }
+
     @MainActor
     func testAWG3ProfileKeepsEveryOfficialInterfaceFieldThroughHelperSanitization() throws {
         let data = """
@@ -510,6 +542,7 @@ final class NativeParityModelTests: XCTestCase {
         let api = try String(contentsOf: apiURL, encoding: .utf8)
 
         XCTAssertTrue(api.contains("URLQueryItem(name: \"awg_version\", value: \"3\")"))
+        XCTAssertTrue(api.contains("URLQueryItem(name: \"awg3_opt_in\", value: \"true\")"))
     }
 
     func testSessionRefreshIsSingleFlightAndDoesNotClearNewerSession() throws {
@@ -825,7 +858,7 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertEqual(serverAssessment.samples["health_reasons"], "device_usage_degraded,stale_local_handshake")
     }
 
-    func testAutopilotBuildsEndpointFallbackAttempts() throws {
+    func testAutopilotUsesOnlyServerIssuedEndpoint() throws {
         let device = try JSONDecoder().decode(VpnDevice.self, from: """
         {"id":"dev_1","name":"Mac","status":"active","protocol":"amneziawg","external_device_id":"macos-test","endpoint":"de1.vexguard.app:8443"}
         """.data(using: .utf8)!)
@@ -851,12 +884,8 @@ final class NativeParityModelTests: XCTestCase {
 
         let attempts = VpnAutopilotService().fallbackTunnels(for: tunnel)
 
-        XCTAssertEqual(attempts.map(\.endpoint), [
-            "de1.vexguard.app:8443",
-            "de1.vexguard.app:443",
-            "de1.vexguard.app:51820",
-        ])
-        XCTAssertTrue(attempts[1].config.contains("Endpoint = de1.vexguard.app:443"))
+        XCTAssertEqual(attempts.map(\.endpoint), ["de1.vexguard.app:8443"])
+        XCTAssertEqual(attempts.first?.config, tunnel.config)
     }
 
     func testNativeHelperStartDoesNotRequireAdminPassword() throws {
@@ -891,7 +920,7 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(helperInstaller.contains("resourceMatchesInstalled(\"amneziawg-go\")"))
         XCTAssertTrue(helperInstaller.contains("resourceMatchesInstalled(\"awg\")"))
         XCTAssertTrue(helperInstaller.contains("codeDirectoryHash"))
-        XCTAssertFalse(helperInstaller.contains("sha256Hex"))
+        XCTAssertTrue(helperInstaller.contains("case (.none, .none):"))
         XCTAssertTrue(helperInstaller.contains("resourceFile(\"helper-version\")"))
         XCTAssertTrue(helperInstaller.contains("trimmingCharacters(in: .whitespacesAndNewlines)"))
         XCTAssertTrue(helperInstaller.contains("PropertyListSerialization.propertyList("))
@@ -899,6 +928,8 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(helperInstaller.contains("helperPlistKeepsServiceAvailable(dictionary)"))
         XCTAssertTrue(helperInstaller.contains("SecStaticCodeCreateWithPath"))
         XCTAssertTrue(helperInstaller.contains("kSecCodeInfoUnique"))
+        XCTAssertTrue(helperInstaller.contains("sha256Hex"))
+        XCTAssertTrue(helperInstaller.contains("bundledHash == installedHash"))
         XCTAssertFalse(helperInstaller.contains("if socketIsConnectable {\n            return\n        }"))
     }
 
@@ -1741,6 +1772,8 @@ final class NativeParityModelTests: XCTestCase {
 
         XCTAssertFalse(installer.contains("try? await Task.sleep"))
         XCTAssertFalse(autopilot.contains("try? await Task.sleep"))
+        XCTAssertFalse(autopilot.contains("NWConnection("))
+        XCTAssertTrue(autopilot.contains("return await probeHTTPS()"))
         XCTAssertFalse(api.contains("as! T"))
         XCTAssertTrue(api.contains("as? T"))
     }
@@ -1810,6 +1843,13 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertEqual(
             VEXUserFacingText.status("Command failed: Установка helper отменена пользователем."),
             "Установка helper отменена."
+        )
+    }
+
+    func testUserFacingStatusExplainsSanitizedTunnelStartFailure() {
+        XCTAssertEqual(
+            VEXUserFacingText.status("Command failed: error: awg_quick_up_failed"),
+            "Не удалось запустить VPN-туннель. Проверяем системный компонент."
         )
     }
 }

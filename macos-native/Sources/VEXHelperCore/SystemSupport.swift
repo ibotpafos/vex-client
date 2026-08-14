@@ -108,7 +108,7 @@ public struct ProcessRunner: CommandRunning {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: spec.program)
         process.arguments = spec.arguments
-        process.environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"]
+        process.environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"].merging(spec.environment) { _, requested in requested }
         let stdout = Pipe()
         let stderr = Pipe()
         process.standardOutput = stdout
@@ -455,7 +455,13 @@ public final class SystemTunnelController: TunnelControlling, @unchecked Sendabl
         guard tunnelCleaned else {
             throw HelperError.commandFailed("awg-quick down failed with status \(down.status): \(down.stderr)")
         }
-        try restoreDNSBaseline()
+        // A failed bring-up can leave active.conf behind before DNS baseline
+        // capture has completed. In that case DNS was never changed, so there
+        // is nothing to restore; refusing cleanup would permanently block the
+        // next connection attempt.
+        if fileSystem.fileExists(at: paths.dnsStatePath) {
+            try restoreDNSBaseline()
+        }
         clearRecoveryArtifacts()
         try? fileSystem.removeItem(at: namePath)
         if let persistenceError { throw persistenceError }
@@ -737,10 +743,27 @@ public final class SystemTunnelController: TunnelControlling, @unchecked Sendabl
     }
 
     private func runQuick(_ action: String, configPath: String) throws -> CommandResult {
-        try runner.run(CommandSpec(
+        try? fileSystem.removeItem(at: paths.quickDiagnosticPath)
+        let result = try runner.run(CommandSpec(
             program: paths.awgQuickPath,
-            arguments: [action, configPath]
+            arguments: [action, configPath],
+            environment: ["VEX_AWG_QUICK_DIAGNOSTIC_PATH": paths.quickDiagnosticPath]
         ))
+        guard action == "up", !result.succeeded else { return result }
+        let knownStages = [
+            "add_if", "set_config", "set_config_config_field", "set_config_config_key",
+            "set_config_config_key_private_key", "set_config_config_key_public_key",
+            "set_config_config_key_preshared_key", "set_config_config_key_header_protection_key",
+            "set_config_uapi_rejected", "set_config_local_command", "address", "mtu",
+            "routes", "endpoint_route", "dns", "monitor",
+        ]
+        let recordedStage = (try? fileSystem.readText(at: paths.quickDiagnosticPath))?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        try? fileSystem.removeItem(at: paths.quickDiagnosticPath)
+        guard let recordedStage, knownStages.contains(recordedStage) else {
+            return CommandResult(status: result.status)
+        }
+        return CommandResult(status: result.status, stderr: "at stage \(recordedStage)")
     }
 
     private func routeInterface(for destination: String) -> String? {

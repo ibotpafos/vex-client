@@ -1,9 +1,7 @@
 import Foundation
-import Network
 
 struct VpnAutopilotService {
     private let api: VEXAPIClient
-    private let endpointFallbackPorts: [UInt16] = [443, 51820]
     private let staleHandshakeSeconds: TimeInterval = 180
 
     init(api: VEXAPIClient = VEXAPIClient()) {
@@ -11,9 +9,13 @@ struct VpnAutopilotService {
     }
 
     func probe(endpoint: String?) async -> VpnAutopilotProbeResult {
-        async let endpointProbe = probeEndpoint(endpoint)
-        async let httpsProbe = probeHTTPS()
-        return await endpointProbe.merged(with: httpsProbe)
+        // AmneziaWG is UDP. A TCP connect to the peer's UDP endpoint is not a
+        // reachability check and can wait for the OS timeout after a failure.
+        // The helper handshake/RX/TX and server-observed peer telemetry are
+        // authoritative for tunnel health; this probe only verifies that the
+        // control plane remains reachable.
+        _ = endpoint
+        return await probeHTTPS()
     }
 
     func assess(error: Error? = nil, healthReasons: [NativeTunnelHealthReason] = [], status: VpnStatus? = nil, probe: VpnAutopilotProbeResult = .empty) -> VpnAutopilotAssessment {
@@ -35,8 +37,7 @@ struct VpnAutopilotService {
         } else if probe.httpsOk == false || matches(messages, ["offline", "no internet", "timed out", "timeout", "network connection was lost", "cancelled", "canceled"]) {
             cause = .network
         } else if healthReasons.contains(where: { [.deviceUsageDegraded, .staleLocalHandshake, .localStatusError].contains($0) })
-                    || matches(messages, ["handshake", "endpoint", "peer", "stale"])
-                    || (probe.endpointLatencyMs ?? 0) > 900 {
+                    || matches(messages, ["handshake", "endpoint", "peer", "stale"]) {
             cause = .server
         } else if healthReasons.contains(.leakBlocking) || healthReasons.contains(.localStatusDisconnected) {
             cause = .network
@@ -92,22 +93,10 @@ struct VpnAutopilotService {
     }
 
     func fallbackTunnels(for tunnel: PreparedTunnel) -> [PreparedTunnel] {
-        var attempts: [PreparedTunnel] = []
-        if let lastSuccessfulEndpoint = tunnel.lastSuccessfulEndpoint,
-           let candidate = tunnel.withEndpoint(lastSuccessfulEndpoint) {
-            attempts.append(candidate)
-        }
-        attempts.append(tunnel)
-        for port in endpointFallbackPorts {
-            if let candidate = tunnel.withEndpointPort(port) {
-                attempts.append(candidate)
-            }
-        }
-        var seen = Set<String>()
-        return attempts.filter { attempt in
-            let endpoint = attempt.endpoint ?? attempt.configEndpoint ?? attempt.config
-            return seen.insert(endpoint).inserted
-        }
+        // Profile issuance is the single source of truth for the endpoint.
+        // Retrying arbitrary ports produces invalid configs and masks node
+        // errors; reconnecting fetches a fresh server-issued profile instead.
+        [tunnel]
     }
 
     private func probeHTTPS() async -> VpnAutopilotProbeResult {
@@ -126,28 +115,6 @@ struct VpnAutopilotService {
             return VpnAutopilotProbeResult(httpsOk: status > 0 && status < 500)
         } catch {
             return VpnAutopilotProbeResult(httpsOk: false, httpsProbeError: error.localizedDescription)
-        }
-    }
-
-    private func probeEndpoint(_ endpoint: String?) async -> VpnAutopilotProbeResult {
-        guard let parsed = ParsedEndpoint(endpoint) else { return .empty }
-        let started = Date()
-        return await withTaskGroup(of: VpnAutopilotProbeResult.self) { group in
-            group.addTask {
-                await connectProbe(host: parsed.host, port: parsed.port, started: started)
-            }
-            group.addTask {
-                do {
-                    try await Task.sleep(nanoseconds: 3_000_000_000)
-                } catch {
-                    return .empty
-                }
-                guard !Task.isCancelled else { return .empty }
-                return VpnAutopilotProbeResult(dnsOk: true, endpointLatencyMs: nil, endpointProbeError: "endpoint probe timed out")
-            }
-            let result = await group.next() ?? .empty
-            group.cancelAll()
-            return result
         }
     }
 
@@ -182,44 +149,6 @@ struct VpnAutopilotService {
         case .unknown:
             return "Проблема с туннелем. Пробуем восстановить соединение."
         }
-    }
-}
-
-private func connectProbe(host: String, port: UInt16, started: Date) async -> VpnAutopilotProbeResult {
-    await withCheckedContinuation { continuation in
-        let connection = NWConnection(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port) ?? 443, using: .tcp)
-        let queue = DispatchQueue(label: "app.vex.vpn.native.endpoint-probe")
-        let completion = EndpointProbeCompletion()
-        let finish: @Sendable (VpnAutopilotProbeResult) -> Void = { result in
-            guard completion.markFinished() else { return }
-            connection.cancel()
-            continuation.resume(returning: result)
-        }
-        connection.stateUpdateHandler = { state in
-            switch state {
-            case .ready:
-                finish(VpnAutopilotProbeResult(dnsOk: true, endpointLatencyMs: Date().timeIntervalSince(started) * 1000))
-            case .failed(let error):
-                let message = String(describing: error)
-                finish(VpnAutopilotProbeResult(dnsOk: !message.localizedCaseInsensitiveContains("dns"), endpointLatencyMs: nil, endpointProbeError: message))
-            default:
-                break
-            }
-        }
-        connection.start(queue: queue)
-    }
-}
-
-private final class EndpointProbeCompletion: @unchecked Sendable {
-    private let lock = NSLock()
-    private var finished = false
-
-    func markFinished() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        guard !finished else { return false }
-        finished = true
-        return true
     }
 }
 

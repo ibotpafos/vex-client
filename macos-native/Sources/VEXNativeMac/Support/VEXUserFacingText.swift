@@ -46,6 +46,9 @@ enum VEXUserFacingText {
             return "Установка helper отменена."
         }
         if lower.contains("command failed") {
+            if lower.contains("awg_quick_up_failed") {
+                return "Не удалось запустить VPN-туннель. Проверяем системный компонент."
+            }
             if lower.contains("could not connect") || lower.contains("socket") {
                 return "Helper запускается..."
             }

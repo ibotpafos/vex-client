@@ -49,12 +49,14 @@ struct VEXNativeMacApp: App {
         }
         #endif
 
-        guard CommandLine.arguments.contains("--helper-status-probe") else { return }
+        guard CommandLine.arguments.contains("--helper-status-probe") || CommandLine.arguments.contains("--helper-up-probe") else { return }
         do {
             let response = try sendUnixSocketCommand(
-                "status",
+                CommandLine.arguments.contains("--helper-up-probe")
+                    ? "up-no-antileak owner_pid=\(ProcessInfo.processInfo.processIdentifier)"
+                    : "status",
                 socketPath: "/var/run/vex-helper.sock",
-                timeoutSeconds: 3
+                timeoutSeconds: 30
             )
             FileHandle.standardOutput.write(Data(response.utf8))
             Darwin.exit(response.hasPrefix("state=") && response.contains("operation_in_progress=") ? 0 : 1)

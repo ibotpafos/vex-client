@@ -33,6 +33,7 @@ export type DiagnosticsSnapshotRef = {
 };
 
 export type ConnectedVpnAttempt = {
+  appliedConfigText: string;
   endpointAttempts: string[];
   interfaceUpMs: number;
   nativeStartMs: number;

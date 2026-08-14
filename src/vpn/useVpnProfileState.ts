@@ -8,7 +8,7 @@ import { resetVpnProfileCache, resolveVpnProfile, rotateVpnProfileKey, type VpnP
 import type { ResolveConnectableProfileOptions } from './serverSwitch';
 import { clearHotVpnProfiles, hydrateHotVpnProfilesToQueryCache, loadHotVpnProfileResult, profileFromHotRecord, saveHotVpnProfile } from './hotProfileCache';
 import { shouldUseLocalProfileBeforeOnline } from './connectFlow';
-import type { VpnRoutingMode } from './routingPolicy';
+import { defaultVpnRoutingMode, type VpnRoutingMode } from './routingPolicy';
 import { androidVpnProfileRequiresRefresh, androidVpnProfileWithinBinderBudget } from './androidRoutingSafety';
 
 export type VpnProfileRefreshEvent = {
@@ -63,12 +63,17 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
   const queryClient = useQueryClient();
   const [vpnProfile, setVpnProfile] = useState<VpnProfile | null>(null);
   const [isKeyRotationBusy, setIsKeyRotationBusy] = useState(false);
-  const profileQueryKey = useMemo(() => ['vpn-profile', accessToken, selectedLocationId, routingMode] as const, [accessToken, routingMode, selectedLocationId]);
+  const stableManagedProfile = Platform.OS === 'android' || Platform.OS === 'ios';
+  const profileRequestRoutingMode = stableManagedProfile ? defaultVpnRoutingMode : routingMode;
+  const profileQueryKey = useMemo(
+    () => ['vpn-profile', accessToken, selectedLocationId, profileRequestRoutingMode] as const,
+    [accessToken, profileRequestRoutingMode, selectedLocationId],
+  );
   const fetchSelectedProfile = useCallback(() => resolveVpnProfile(accessToken!, knownEntitlement, selectedLocationId, {
     forceRefresh: true,
-    routingMode,
+    routingMode: profileRequestRoutingMode,
     userId,
-  }), [accessToken, knownEntitlement, routingMode, selectedLocationId, userId]);
+  }), [accessToken, knownEntitlement, profileRequestRoutingMode, selectedLocationId, userId]);
   const activeProfile = vpnProfile;
   const entitlementState = knownEntitlement ?? activeProfile?.entitlement ?? null;
 
@@ -76,28 +81,28 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
     if (!accessToken) {
       return;
     }
-    queryClient.setQueryData(['vpn-profile', accessToken, locationId, profile.routingMode ?? routingMode], profile);
+    queryClient.setQueryData(['vpn-profile', accessToken, locationId, profileRequestRoutingMode], profile);
     if (profile.entitlement) {
       queryClient.setQueryData(['entitlement', accessToken], profile.entitlement);
     }
     if (userId) {
       void saveHotVpnProfile(userId, locationId, profile).catch(() => undefined);
     }
-  }, [accessToken, queryClient, routingMode, userId]);
+  }, [accessToken, profileRequestRoutingMode, queryClient, userId]);
 
   const cachedProfileForLocation = useCallback((locationId: string): VpnProfile | null => {
     if (!accessToken) {
       return null;
     }
-    const cached = queryClient.getQueryData<VpnProfile>(['vpn-profile', accessToken, locationId, routingMode]);
+    const cached = queryClient.getQueryData<VpnProfile>(['vpn-profile', accessToken, locationId, profileRequestRoutingMode]);
     if (cached) {
       return cached;
     }
-    if (vpnProfile?.locationId === locationId && vpnProfile.routingMode === routingMode) {
+    if (vpnProfile?.locationId === locationId) {
       return vpnProfile;
     }
     return null;
-  }, [accessToken, queryClient, routingMode, vpnProfile]);
+  }, [accessToken, profileRequestRoutingMode, queryClient, vpnProfile]);
 
   useEffect(() => {
     if (!accessToken || !userId) {
@@ -106,14 +111,14 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
     void hydrateHotVpnProfilesToQueryCache(userId, accessToken, queryClient)
       .then((records) => {
         const selected = records.find((record) =>
-          record.locationId === selectedLocationId && record.profile.routingMode === routingMode
+          record.locationId === selectedLocationId && record.profile.routingMode === profileRequestRoutingMode
         );
         if (selected) {
           setVpnProfile(selected.profile);
         }
       })
       .catch(() => undefined);
-  }, [accessToken, queryClient, routingMode, selectedLocationId, userId]);
+  }, [accessToken, profileRequestRoutingMode, queryClient, selectedLocationId, userId]);
 
   const refreshProfileInBackground = useCallback((
     locationId: string,
@@ -125,7 +130,7 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
     }
     void resolveVpnProfile(accessToken, currentEntitlement, locationId, {
       forceRefresh: true,
-      routingMode,
+      routingMode: profileRequestRoutingMode,
       userId,
     })
       .then((freshProfile) => {
@@ -151,7 +156,7 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
           reason: baseProfile.hotProfileUsed ? 'hot_profile_refresh_failed' : 'background_profile_refresh_failed',
         });
       });
-  }, [accessToken, cacheProfile, onProfileRefreshFailed, routingMode, userId]);
+  }, [accessToken, cacheProfile, onProfileRefreshFailed, profileRequestRoutingMode, userId]);
 
   const clearProfile = useCallback(() => {
     resetVpnProfileCache();
@@ -232,10 +237,11 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
 
     const preferCached = options.preferCached !== false && options.forceRefresh !== true;
     const cachedProfile = options.cachedProfile ?? cachedProfileForLocation(locationId);
+    const cachedProfileRoutingCompatible = stableManagedProfile || cachedProfile?.routingMode === routingMode;
     let forceRouteBudgetRefresh = androidVpnProfileRequiresRefresh(Platform.OS, cachedProfile?.config);
     if (
       preferCached &&
-      cachedProfile?.routingMode === routingMode &&
+      cachedProfileRoutingCompatible &&
       shouldUseLocalProfileBeforeOnline(cachedProfile, entitlementState) &&
       androidVpnProfileWithinBinderBudget(Platform.OS, cachedProfile.config)
     ) {
@@ -255,7 +261,7 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
     if (preferCached && userId) {
       const hotResult = options.allowPersistentHotProfile === false
         ? { record: null }
-        : await loadHotVpnProfileResult(userId, locationId, routingMode);
+        : await loadHotVpnProfileResult(userId, locationId, profileRequestRoutingMode);
       if (hotResult.rejectedReason && hotResult.rejectedReason !== 'missing') {
         onProfileRefreshFailed?.({
           error: new Error(hotResult.rejectedReason),
@@ -267,7 +273,7 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
       forceRouteBudgetRefresh = forceRouteBudgetRefresh || androidVpnProfileRequiresRefresh(Platform.OS, hotProfile?.config);
       if (
         hotProfile?.hotProfileUsed &&
-        hotProfile.routingMode === routingMode &&
+        (stableManagedProfile || hotProfile.routingMode === routingMode) &&
         shouldUseLocalProfileBeforeOnline(hotProfile, null) &&
         androidVpnProfileWithinBinderBudget(Platform.OS, hotProfile.config)
       ) {
@@ -308,7 +314,7 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
 
     if (forceRouteBudgetRefresh) {
       resetVpnProfileCache();
-      queryClient.removeQueries({ queryKey: ['vpn-profile', accessToken, locationId, routingMode], exact: true });
+      queryClient.removeQueries({ queryKey: ['vpn-profile', accessToken, locationId, profileRequestRoutingMode], exact: true });
       if (userId) {
         await clearHotVpnProfiles(userId).catch(() => undefined);
       }
@@ -319,7 +325,7 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
       : await resolveVpnProfile(accessToken, currentEntitlement, locationId, {
         allowPersistentHotProfile: forceRouteBudgetRefresh ? false : options.allowPersistentHotProfile,
         forceRefresh: options.forceRefresh === true || forceRouteBudgetRefresh,
-        routingMode,
+        routingMode: profileRequestRoutingMode,
         userId,
       });
     if (!profile) {
@@ -344,7 +350,7 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
       }
     }
     return profile;
-  }, [accessToken, cacheProfile, cachedProfileForLocation, entitlementState, onProfileRefreshFailed, onProfileRotationRequired, onSubscriptionRequired, queryClient, refreshProfileInBackground, requestVpnPermission, routingMode, userId]);
+  }, [accessToken, cacheProfile, cachedProfileForLocation, entitlementState, onProfileRefreshFailed, onProfileRotationRequired, onSubscriptionRequired, profileRequestRoutingMode, queryClient, refreshProfileInBackground, requestVpnPermission, routingMode, stableManagedProfile, userId]);
 
   const refreshManagedProfile = useCallback(async (event: VpnProfileRefreshEvent = {}) => {
     if (!accessToken) {
@@ -369,10 +375,13 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
       await onDeviceRevoked();
       return;
     }
-    const nextProfile = await resolveVpnProfile(accessToken, entitlementState, selectedLocationId, { routingMode, userId });
+    const nextProfile = await resolveVpnProfile(accessToken, entitlementState, selectedLocationId, {
+      routingMode: profileRequestRoutingMode,
+      userId,
+    });
     setVpnProfile(nextProfile);
     cacheProfile(selectedLocationId, nextProfile);
-  }, [accessToken, activeProfile?.device?.id, cacheProfile, entitlementState, onDeviceRevoked, onProfileRefreshFailed, queryClient, routingMode, selectedLocationId, userId]);
+  }, [accessToken, activeProfile?.device?.id, cacheProfile, entitlementState, onDeviceRevoked, onProfileRefreshFailed, profileRequestRoutingMode, queryClient, selectedLocationId, userId]);
 
   return {
     activeProfile,

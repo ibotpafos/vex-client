@@ -49,6 +49,7 @@ type UseVpnConnectionFlowInput = {
   serverSelectionMode: ServerSelectionMode;
   availableLocations: VpnLocation[];
   cacheProfile: (locationId: string, profile: VpnProfile) => void;
+  onTunnelConfigApplied?: (configText: string) => void;
   resolveConnectableVpnProfile: (
     locationId: string,
     options?: {
@@ -57,6 +58,7 @@ type UseVpnConnectionFlowInput = {
       requestPermission?: boolean;
     }
   ) => Promise<VpnProfile>;
+  resolveAppliedTunnelConfig: (profile: VpnProfile) => Promise<string>;
   vpnStatus: VpnStatus;
   clientLatencyMs: number | null;
   reportVpnConnectEvent: (profile: VpnProfile, reason: string) => void;
@@ -72,7 +74,9 @@ export function useVpnConnectionFlow({
   serverSelectionMode,
   availableLocations,
   cacheProfile,
+  onTunnelConfigApplied,
   resolveConnectableVpnProfile,
+  resolveAppliedTunnelConfig,
   vpnStatus,
   clientLatencyMs,
   reportVpnConnectEvent,
@@ -82,25 +86,30 @@ export function useVpnConnectionFlow({
   session,
 }: UseVpnConnectionFlowInput) {
 
-  const connectProfileWithEndpointFallback = useCallback(async (profile: VpnProfile) => {
+  const connectResolvedProfile = useCallback(async (
+    profile: VpnProfile,
+    allowEndpointFallback: boolean,
+  ) => {
     if (!vpnProfileAddressMatchesDevice(profile)) {
       throw new Error('VPN connection failed: cached profile address does not match its device assignment.');
-    }
-    if (!androidVpnProfileWithinBinderBudget(Platform.OS, profile.config)) {
-      throw new Error('Android VPN profile exceeds the safe route limit. Refresh the profile before connecting.');
     }
     let lastError: unknown;
     const endpointAttempts: string[] = [];
     const applicationSelection = await getVpnApplicationSelection();
-    for (const attempt of connectionAttemptsForProfile(profile)) {
+    const attempts = allowEndpointFallback ? connectionAttemptsForProfile(profile) : [profile];
+    for (const attempt of attempts) {
       try {
         const endpoint = profileEndpoint(attempt);
         if (endpoint) {
           endpointAttempts.push(endpoint);
         }
+        const appliedConfigText = await resolveAppliedTunnelConfig(attempt);
+        if (!androidVpnProfileWithinBinderBudget(Platform.OS, appliedConfigText)) {
+          throw new Error('Android VPN profile exceeds the safe route limit. Refresh the profile before connecting.');
+        }
         const nativeStartMs = Date.now();
         const startedStatus = await withTimeout(
-          connectVpn(attempt.config, {
+          connectVpn(appliedConfigText, {
             antiLeakEnabled,
             applicationRoutingMode: applicationSelection.mode,
             selectedApplications: applicationSelection.packageNames,
@@ -116,7 +125,9 @@ export function useVpnConnectionFlow({
           minimumHandshakeEpochMillis: nativeStartMs - 2_000,
         });
         const verificationCompletedMs = Date.now();
+        onTunnelConfigApplied?.(appliedConfigText);
         return {
+          appliedConfigText,
           interfaceUpMs,
           endpointAttempts,
           nativeStartMs,
@@ -132,7 +143,15 @@ export function useVpnConnectionFlow({
       }
     }
     throw lastError;
-  }, [antiLeakEnabled]);
+  }, [antiLeakEnabled, onTunnelConfigApplied, resolveAppliedTunnelConfig]);
+
+  const connectProfileWithEndpointFallback = useCallback(async (profile: VpnProfile) => {
+    return connectResolvedProfile(profile, true);
+  }, [connectResolvedProfile]);
+
+  const connectProfileLocally = useCallback(async (profile: VpnProfile) => {
+    return connectResolvedProfile(profile, false);
+  }, [connectResolvedProfile]);
 
   const connectCurrentVpn = useCallback(async ({
     locationId = selectedLocationId,
@@ -286,6 +305,7 @@ export function useVpnConnectionFlow({
   ]);
 
   return {
+    connectProfileLocally,
     connectProfileWithEndpointFallback,
     connectCurrentVpn,
   };

@@ -248,6 +248,9 @@ private final class IosTunnelStore {
 
   func connect(config: String) async throws {
     let manager = try await loadOrCreateManager()
+    let previousDescription = manager.localizedDescription
+    let previousEnabled = manager.isEnabled
+    let previousProtocol = manager.protocolConfiguration as? NETunnelProviderProtocol
     let tunnelProtocol = NETunnelProviderProtocol()
     tunnelProtocol.providerBundleIdentifier = providerBundleIdentifier
     tunnelProtocol.serverAddress = Self.serverAddress(from: config)
@@ -261,10 +264,21 @@ private final class IosTunnelStore {
     manager.protocolConfiguration = tunnelProtocol
     manager.isEnabled = true
 
-    try await save(manager)
-    try await loadFromPreferences(manager)
-    try manager.connection.startVPNTunnel()
-    VexVpnDiagnostics.record("ios_tunnel_start_requested", details: ["providerBundleIdentifier": providerBundleIdentifier])
+    do {
+      try await save(manager)
+      try await loadFromPreferences(manager)
+      try manager.connection.startVPNTunnel()
+      VexVpnDiagnostics.record("ios_tunnel_start_requested", details: ["providerBundleIdentifier": providerBundleIdentifier])
+    } catch {
+      if let previousProtocol {
+        manager.localizedDescription = previousDescription
+        manager.protocolConfiguration = previousProtocol
+        manager.isEnabled = previousEnabled
+        try? await save(manager)
+        try? await loadFromPreferences(manager)
+      }
+      throw error
+    }
   }
 
   func disconnect() async throws {

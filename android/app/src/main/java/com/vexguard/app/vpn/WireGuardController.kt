@@ -96,8 +96,9 @@ class WireGuardController(context: Context) {
           } else {
             configTextExcludingSelf(validatedConfig)
           }
+          val tunnelWasUp = backend.getState(tunnel) == Tunnel.State.UP
           if (shouldReuseActiveVpnTunnel(
-              isTunnelUp = backend.getState(tunnel) == Tunnel.State.UP,
+              isTunnelUp = tunnelWasUp,
               lastConfigText = lastConfigText,
               requestedConfigText = configText,
               antiLeakArmed = antiLeakArmed,
@@ -112,27 +113,39 @@ class WireGuardController(context: Context) {
               if (antiLeakEnabled) LeakProtectionState.Armed else LeakProtectionState.Off,
             )
           }
-          val config = Config.parse(ByteArrayInputStream(configText.toByteArray(StandardCharsets.UTF_8)))
-          val state = backend.setState(tunnel, Tunnel.State.UP, config)
-          if (state != Tunnel.State.UP) {
-            throw IllegalStateException("VPN backend did not enter the UP state.")
-          }
-          selectedUnderlyingNetworkSnapshot()?.let { network ->
-            try {
-              backend.bindTunnelSocketsToNetwork(network)
-              Log.i(TAG, "New VPN sockets bound to $network immediately after tunnel start")
-            } catch (error: Throwable) {
-              // The TUN remains installed and therefore fail-closed. The
-              // connection verifier or the next network callback will retry.
-              Log.e(TAG, "Initial VPN socket bind to $network failed; retaining fail-closed TUN", error)
-            }
-          }
+          val appliedConfig = applyTunnelConfigWithRollback(
+            requestedConfigText = configText,
+            previousConfigText = lastConfigText,
+            tunnelWasUp = tunnelWasUp,
+            antiLeakEnabled = antiLeakEnabled,
+            bindSelectedNetwork = {
+              selectedUnderlyingNetworkSnapshot()?.let { network ->
+                try {
+                  backend.bindTunnelSocketsToNetwork(network)
+                  Log.i(TAG, "New VPN sockets bound to $network immediately after tunnel start")
+                } catch (error: Throwable) {
+                  // The TUN remains installed and therefore fail-closed. The
+                  // connection verifier or the next network callback will retry.
+                  Log.e(TAG, "Initial VPN socket bind to $network failed; retaining fail-closed TUN", error)
+                }
+              }
+            },
+            setTunnelDown = { setTunnelDown() },
+            startLeakBlocker = { VexLeakBlockerService.startAndAwait(appContext, routedApplications) },
+            setTunnelUp = { candidateText ->
+              val config = Config.parse(ByteArrayInputStream(candidateText.toByteArray(StandardCharsets.UTF_8)))
+              val state = backend.setState(tunnel, Tunnel.State.UP, config)
+              if (state != Tunnel.State.UP) {
+                throw IllegalStateException("VPN backend did not enter the UP state.")
+              }
+            },
+          )
           val traffic = statsOrEmpty()
-          lastConfigText = configText
+          lastConfigText = appliedConfig.activeConfigText
           antiLeakArmed = antiLeakEnabled
           VpnConnectionState.Connected(traffic, if (antiLeakEnabled) LeakProtectionState.Armed else LeakProtectionState.Off)
         } catch (error: Throwable) {
-          if (antiLeakEnabled) {
+          if (antiLeakEnabled && !VexLeakBlockerService.isActive()) {
             try {
               setTunnelDown()
             } catch (_: Throwable) {
@@ -618,6 +631,54 @@ internal fun shouldReuseActiveVpnTunnel(
     !leakBlockerActive &&
     antiLeakArmed == antiLeakEnabled &&
     lastConfigText == requestedConfigText
+}
+
+internal data class LocalTunnelApplyResult(
+  val activeConfigText: String,
+  val restoredPreviousConfig: Boolean,
+)
+
+internal fun applyTunnelConfigWithRollback(
+  requestedConfigText: String,
+  previousConfigText: String?,
+  tunnelWasUp: Boolean,
+  antiLeakEnabled: Boolean,
+  bindSelectedNetwork: () -> Unit,
+  setTunnelDown: () -> Unit,
+  startLeakBlocker: () -> Boolean,
+  setTunnelUp: (String) -> Unit,
+): LocalTunnelApplyResult {
+  try {
+    setTunnelUp(requestedConfigText)
+    bindSelectedNetwork()
+    return LocalTunnelApplyResult(
+      activeConfigText = requestedConfigText,
+      restoredPreviousConfig = false,
+    )
+  } catch (requestedError: Throwable) {
+    val rollbackConfigText = previousConfigText
+      ?.takeIf { tunnelWasUp && it != requestedConfigText }
+    if (rollbackConfigText != null) {
+      try {
+        setTunnelUp(rollbackConfigText)
+        bindSelectedNetwork()
+        return LocalTunnelApplyResult(
+          activeConfigText = rollbackConfigText,
+          restoredPreviousConfig = true,
+        )
+      } catch (rollbackError: Throwable) {
+        Log.e(TAG, "Failed to restore previous tunnel config after local policy reconnect error", rollbackError)
+      }
+    }
+    if (antiLeakEnabled) {
+      try {
+        setTunnelDown()
+      } catch (_: Throwable) {
+      }
+      startLeakBlocker()
+    }
+    throw requestedError
+  }
 }
 
 sealed interface VpnConnectionState {

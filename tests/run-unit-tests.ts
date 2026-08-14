@@ -59,6 +59,7 @@ import type { VpnProfile } from '../src/vpn/profile';
 import { managedProfileAmneziaConfig } from '../src/vpn/amneziaConfig';
 import { managedProfileAWGVersion, withManagedProfileAWGCapability } from '../src/vpn/profileCapabilities';
 import { profileSigningKeys } from '../src/vpn/profileSigningKeys';
+import { FULL_TUNNEL_ALLOWED_IPS, buildLocalTunnelConfig, excludeCidrs } from '../src/vpn/applyClientRoutingPolicy';
 import {
   cacheValidatedRoutingPolicy,
   validateRoutingPolicy,
@@ -984,6 +985,7 @@ async function runAsyncTests(): Promise<void> {
   runErrorMessageTests();
   await runServerSwitchTests();
   await runClientRoutingPolicyTests();
+  runApplyClientRoutingPolicyTests();
   runProfileSigningKeyParityTests();
 }
 
@@ -1077,6 +1079,92 @@ const routingPolicyTestPins = {
     subjectPublicKeyInfoBase64: 'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEj2a7IDP/CwnhUGjIju+5+VP7yiNf+7g7eTWN41voyaVxXuY6X07eOa26UE3oTQaChxKjcl5z/IRVjUYArwwlNw==',
   },
 } as const;
+
+function runApplyClientRoutingPolicyTests(): void {
+  const fullTunnelConfig = [
+    '[Interface]',
+    'PrivateKey = client-private-key',
+    'Address = 10.64.1.23/32',
+    'DNS = 1.1.1.1',
+    'Jc = 4',
+    'HeaderProtectionKey = hp-key',
+    '',
+    '[Peer]',
+    'PublicKey = server-public-key',
+    'PresharedKey = shared-secret',
+    'Endpoint = fi.example.test:51821',
+    'AllowedIPs = 0.0.0.0/0, ::/0',
+    'PersistentKeepalive = 25',
+  ].join('\n');
+  const smartPolicy = Object.freeze({
+    version: 'v2',
+    region: 'ru',
+    bypassRanges: Object.freeze(['203.0.113.0/24']),
+    bypassDomains: Object.freeze(['gosuslugi.ru']),
+    protectedRanges: Object.freeze([]),
+    source: 'network' as const,
+  });
+
+  const transformed = buildLocalTunnelConfig(fullTunnelConfig, smartPolicy, 'all_except_ru');
+  assertEqual(readConfigField(transformed, 'PrivateKey'), readConfigField(fullTunnelConfig, 'PrivateKey'));
+  assertEqual(readConfigField(transformed, 'PublicKey'), readConfigField(fullTunnelConfig, 'PublicKey'));
+  assertEqual(readConfigField(transformed, 'Endpoint'), readConfigField(fullTunnelConfig, 'Endpoint'));
+  assertEqual(readConfigField(transformed, 'HeaderProtectionKey'), readConfigField(fullTunnelConfig, 'HeaderProtectionKey'));
+  assertDeepEqual(readAllowedIps(transformed), [...excludeCidrs(['0.0.0.0/0'], smartPolicy.bypassRanges), '::/0']);
+
+  assertDeepEqual(
+    readAllowedIps(buildLocalTunnelConfig(fullTunnelConfig, smartPolicy, 'full_tunnel')),
+    FULL_TUNNEL_ALLOWED_IPS,
+  );
+  assertDeepEqual(
+    readAllowedIps(buildLocalTunnelConfig(fullTunnelConfig, {
+      ...smartPolicy,
+      bypassRanges: Object.freeze([]),
+    }, 'all_except_ru')),
+    FULL_TUNNEL_ALLOWED_IPS,
+  );
+  assertDeepEqual(
+    readAllowedIps(buildLocalTunnelConfig(fullTunnelConfig, {
+      ...smartPolicy,
+      bypassRanges: Object.freeze(['203.0.113.0/24', '203.0.113.0/24']),
+    }, 'all_except_ru')),
+    FULL_TUNNEL_ALLOWED_IPS,
+  );
+  assertDeepEqual(
+    readAllowedIps(buildLocalTunnelConfig(fullTunnelConfig, {
+      ...smartPolicy,
+      bypassRanges: Object.freeze(Array.from(
+        { length: 1_501 },
+        (_, index) => `100.0.${Math.floor(index / 128)}.${(index % 128) * 2}/32`,
+      )),
+    }, 'all_except_ru')),
+    FULL_TUNNEL_ALLOWED_IPS,
+  );
+
+  const protectedPolicy = {
+    ...smartPolicy,
+    bypassRanges: Object.freeze(['203.0.113.0/24']),
+    protectedRanges: Object.freeze(['203.0.113.128/25']),
+  };
+  assertEqual(
+    readAllowedIps(buildLocalTunnelConfig(fullTunnelConfig, protectedPolicy, 'all_except_ru')).includes('203.0.113.128/25'),
+    true,
+  );
+
+  const nextPolicy = {
+    ...smartPolicy,
+    version: 'v3',
+    bypassRanges: Object.freeze(['198.51.100.0/24']),
+  };
+  const firstAppliedConfig = buildLocalTunnelConfig(fullTunnelConfig, smartPolicy, 'all_except_ru');
+  const secondAppliedConfig = buildLocalTunnelConfig(fullTunnelConfig, nextPolicy, 'all_except_ru');
+  assertEqual(firstAppliedConfig === secondAppliedConfig, false);
+
+  assertRejectsSync(
+    () => buildLocalTunnelConfig('[Interface]\nPrivateKey = key\n', smartPolicy, 'all_except_ru'),
+    'single [Peer]',
+  );
+}
 
 function signedRoutingPolicyFixture(): SignedRoutingPolicy {
   return {
@@ -1868,6 +1956,19 @@ function assertDeepEqual<T>(actual: T, expected: T): void {
   }
 }
 
+function assertRejectsSync(fn: () => unknown, expectedMessage: string): void {
+  try {
+    fn();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.includes(expectedMessage)) {
+      throw new Error(`Expected rejection containing ${JSON.stringify(expectedMessage)}, got ${JSON.stringify(message)}`);
+    }
+    return;
+  }
+  throw new Error(`Expected rejection containing ${JSON.stringify(expectedMessage)}`);
+}
+
 async function assertRejects(fn: () => Promise<unknown>, expectedMessage: string): Promise<void> {
   try {
     await fn();
@@ -1879,6 +1980,20 @@ async function assertRejects(fn: () => Promise<unknown>, expectedMessage: string
     return;
   }
   throw new Error(`Expected rejection containing ${JSON.stringify(expectedMessage)}`);
+}
+
+function readConfigField(config: string, field: string): string | undefined {
+  const match = new RegExp(`^${field}\\s*=\\s*(.+)$`, 'mi').exec(config);
+  return match?.[1]?.trim();
+}
+
+function readAllowedIps(config: string): string[] {
+  return config
+    .split(/\r?\n/)
+    .filter((line) => /^AllowedIPs\s*=/i.test(line.trim()))
+    .flatMap((line) => line.substring(line.indexOf('=') + 1).split(','))
+    .map((value) => value.trim())
+    .filter(Boolean);
 }
 async function runPkceTests(): Promise<void> {
   const verifier = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';

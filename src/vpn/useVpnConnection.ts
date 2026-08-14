@@ -31,6 +31,7 @@ import {
   measureEndpointLatency,
   requestVpnPermission,
   updateVpnLiveActivity,
+  verifyP256Signature,
   type VpnStatus,
 } from '@/native/vexVpn';
 import { getFcmAccountPushRegistration } from '@/notifications/expoPush';
@@ -45,6 +46,12 @@ import {
   setServerSelectionMode,
 } from '@/settings/vpnPreferences';
 import {
+  buildLocalTunnelConfig,
+} from '@/vpn/applyClientRoutingPolicy';
+import {
+  loadEffectiveRoutingPolicy,
+} from '@/vpn/clientRoutingPolicy';
+import {
   isVpnTransportFallbackError,
   profileEndpoint,
 } from '@/vpn/connectionFallback';
@@ -52,8 +59,10 @@ import type { VpnProfile } from '@/vpn/profile';
 import { probeNetworkHealth } from '@/vpn/networkHealthProbe';
 import { fallbackLocationEndpoint } from '@/vpn/locationEndpoint';
 import {
+  defaultVpnBypassRegion,
   defaultVpnRoutingMode,
   isSmartRoutingMode,
+  resolvedVpnBypassRegion,
   type VpnRoutingMode,
 } from '@/vpn/routingPolicy';
 import {
@@ -223,7 +232,9 @@ export function useVpnConnection() {
   const autoConnectAttemptedRef = useRef(false);
   const vpnOperationInFlightRef = useRef(false);
   const vpnConnectGenerationRef = useRef(0);
+  const appliedTunnelConfigRef = useRef<string | null>(null);
   const lastRegisteredPushDeviceRef = useRef('');
+  const localRoutingRefreshInFlightRef = useRef(false);
   const [persistedEntitlement, setPersistedEntitlement] = useState<Entitlement | null>(null);
   const [persistedLocations, setPersistedLocations] = useState<VpnLocation[] | null>(null);
   const [persistedDevices, setPersistedDevices] = useState<VpnDevice[] | null>(null);
@@ -235,6 +246,8 @@ export function useVpnConnection() {
   }));
   const [devicesData, setDevicesData] = useState<VpnDevice[] | null>(null);
   const accessToken = session?.accessToken;
+  const supportsLocalRoutingPolicy = Platform.OS === 'android' || Platform.OS === 'ios';
+  const stableProfileQueryRoutingMode = supportsLocalRoutingPolicy ? defaultVpnRoutingMode : routingMode;
   const cacheUserId = session?.user.id ?? '';
   const entitlementQueryKey = useMemo(() => ['entitlement', accessToken] as const, [accessToken]);
   const locationsQueryKey = useMemo(() => ['vpn-locations', accessToken] as const, [accessToken]);
@@ -244,7 +257,7 @@ export function useVpnConnection() {
   const fetchVpnDevices = useCallback(() => vpnDevices(accessToken!), [accessToken]);
 
   const cachedSelectedProfile = accessToken
-    ? queryClient.getQueryData<VpnProfile>(['vpn-profile', accessToken, selectedLocationId, routingMode])
+    ? queryClient.getQueryData<VpnProfile>(['vpn-profile', accessToken, selectedLocationId, stableProfileQueryRoutingMode])
     : undefined;
   const cachedEntitlement = entitlementData ?? persistedEntitlement ?? cachedSelectedProfile?.entitlement ?? null;
   const knownEntitlement = entitlementData ?? cachedEntitlement;
@@ -504,6 +517,20 @@ export function useVpnConnection() {
     submitVpnDiagnostics,
   } = diagnostics;
 
+  const resolveAppliedTunnelConfig = useCallback(async (profile: VpnProfile) => {
+    if (!supportsLocalRoutingPolicy || !accessToken) {
+      return profile.config;
+    }
+    const bypassRegion = resolvedVpnBypassRegion(routingMode, profile.bypassRegion ?? defaultVpnBypassRegion)
+      ?? defaultVpnBypassRegion;
+    const policy = await loadEffectiveRoutingPolicy(accessToken, {
+      region: bypassRegion,
+      platform: Platform.OS,
+      now: new Date(),
+    }, verifyP256Signature);
+    return buildLocalTunnelConfig(profile.config, policy, routingMode);
+  }, [accessToken, routingMode, supportsLocalRoutingPolicy]);
+
   const refreshVpnStatus = useCallback(async (failureEvent: string) => {
     try {
       const nextStatus = await getVpnStatus();
@@ -524,6 +551,7 @@ export function useVpnConnection() {
   handleProfileRefreshFailedRef.current = handleProfileRefreshFailed;
 
   const {
+    connectProfileLocally,
     connectProfileWithEndpointFallback,
     connectCurrentVpn,
   } = useVpnConnectionFlow({
@@ -532,7 +560,11 @@ export function useVpnConnection() {
     serverSelectionMode,
     availableLocations,
     cacheProfile,
+    onTunnelConfigApplied: useCallback((configText: string) => {
+      appliedTunnelConfigRef.current = configText;
+    }, []),
     resolveConnectableVpnProfile,
+    resolveAppliedTunnelConfig,
     vpnStatus,
     clientLatencyMs,
     reportVpnConnectEvent,
@@ -541,6 +573,47 @@ export function useVpnConnection() {
     setVpnStatus,
     session,
   });
+
+  const refreshLocalRoutingPolicy = useCallback(async (reason: string) => {
+    if (!supportsLocalRoutingPolicy || !accessToken || !activeProfile || vpnOperationInFlightRef.current || localRoutingRefreshInFlightRef.current) {
+      return;
+    }
+    localRoutingRefreshInFlightRef.current = true;
+    try {
+      const desiredConfig = await resolveAppliedTunnelConfig(activeProfile);
+      if (!appliedTunnelConfigRef.current) {
+        appliedTunnelConfigRef.current = desiredConfig;
+        return;
+      }
+      if (desiredConfig === appliedTunnelConfigRef.current) {
+        return;
+      }
+      const connected = await connectProfileLocally(activeProfile);
+      appliedTunnelConfigRef.current = connected.appliedConfigText;
+      setActiveProfile(connected.profile);
+      setVpnStatus(connected.status);
+    } catch (error) {
+      const latestStatus = await getVpnStatus().catch(() => null);
+      if (latestStatus) {
+        setVpnStatus(latestStatus);
+      }
+      void submitClientDiagnosticsEvent('local_routing_policy_refresh_failed', 'error', {
+        error_message: errorMessage(error, 'local_routing_policy_refresh_failed'),
+        refresh_reason: reason,
+      }).catch(() => undefined);
+    } finally {
+      localRoutingRefreshInFlightRef.current = false;
+    }
+  }, [
+    accessToken,
+    activeProfile,
+    connectProfileLocally,
+    resolveAppliedTunnelConfig,
+    setActiveProfile,
+    setVpnStatus,
+    submitClientDiagnosticsEvent,
+    supportsLocalRoutingPolicy,
+  ]);
 
   const accountTierLabel = subscriptionTierLabel(entitlementState);
   const accountSummaryText = subscriptionSummaryText(entitlementState);
@@ -658,6 +731,12 @@ export function useVpnConnection() {
   }, [refreshVpnStatus]);
 
   useEffect(() => {
+    if (vpnStatusCore.state === 'disconnected') {
+      appliedTunnelConfigRef.current = null;
+    }
+  }, [vpnStatusCore.state]);
+
+  useEffect(() => {
     if (!session) {
       return undefined;
     }
@@ -666,7 +745,10 @@ export function useVpnConnection() {
       setIsAppActive(isActive);
       if (state === 'active') {
         void refreshVpnStatus('native_status_on_active_failed');
-        refreshManagedProfile({ reason: 'profile_updated' }).catch((error) => {
+        const refreshTask = supportsLocalRoutingPolicy && vpnStatusRef.current.state === 'connected' && activeProfile
+          ? refreshLocalRoutingPolicy('app_active')
+          : refreshManagedProfile({ reason: 'profile_updated' });
+        refreshTask.catch((error) => {
           void submitClientDiagnosticsEvent('profile_refresh_on_active_failed', 'error', {
             error_message: errorMessage(error, 'profile_refresh_on_active_failed'),
           }).catch(() => undefined);
@@ -674,7 +756,14 @@ export function useVpnConnection() {
       }
     });
     return () => subscription.remove();
-  }, [refreshManagedProfile, refreshVpnStatus, session, submitClientDiagnosticsEvent]);
+  }, [activeProfile, refreshLocalRoutingPolicy, refreshManagedProfile, refreshVpnStatus, session, submitClientDiagnosticsEvent, supportsLocalRoutingPolicy]);
+
+  useEffect(() => {
+    if (!supportsLocalRoutingPolicy || !activeProfile || vpnStatusCore.state !== 'connected') {
+      return;
+    }
+    void refreshLocalRoutingPolicy('routing_mode_changed');
+  }, [activeProfile, refreshLocalRoutingPolicy, routingMode, supportsLocalRoutingPolicy, vpnStatusCore.state]);
 
   useEffect(() => {
     if (!isAppActive || !supportsNativeLatencyProbe()) {
@@ -1090,7 +1179,7 @@ export function useVpnConnection() {
     setVpnError(null);
 
     try {
-      const cachedTargetProfile = queryClient.getQueryData<VpnProfile>(['vpn-profile', session.accessToken, targetLocationId, routingMode]);
+      const cachedTargetProfile = queryClient.getQueryData<VpnProfile>(['vpn-profile', session.accessToken, targetLocationId, stableProfileQueryRoutingMode]);
       const result = await switchVpnLocation({
         cachedTargetProfile,
         connectProfile: connectProfileWithEndpointFallback,
@@ -1160,7 +1249,7 @@ export function useVpnConnection() {
     reportVpnConnectEvent,
     reportVpnDisconnectEvent,
     resolveConnectableVpnProfile,
-    routingMode,
+    stableProfileQueryRoutingMode,
     selectedLocationId,
     session,
     setActiveProfile,
@@ -1271,8 +1360,8 @@ export function useVpnConnection() {
     setRoutingMode(savedMode);
     if (vpnStatusRef.current.state !== 'connected') {
       setActiveProfile(null);
+      await queryClient.invalidateQueries({ queryKey: ['vpn-profile', session?.accessToken] });
     }
-    await queryClient.invalidateQueries({ queryKey: ['vpn-profile', session?.accessToken] });
     return savedMode;
   }, [queryClient, session?.accessToken, setActiveProfile]);
 

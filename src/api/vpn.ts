@@ -117,10 +117,10 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
     platform: client.platform,
     now: new Date(),
   }, verifyP256Signature);
-  const policySupported = effectivePolicy.source !== 'full_tunnel';
+  const clientOwnsRoutingPolicy = client.platform === 'android' || client.platform === 'ios';
   const query = withManagedProfileAWGCapability(new URLSearchParams({ device_id: device.id }));
   query.set('location', locationId);
-  if (policySupported) {
+  if (clientOwnsRoutingPolicy) {
     query.set('routing_policy_version', '1');
   } else {
     query.set('routing_mode', routingMode);
@@ -149,9 +149,9 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
       profileVersion: typeof profile.version === 'number' ? profile.version : options.knownVersion,
       routingMode,
       bypassRegion,
-      bypassRangesCount: policySupported ? effectivePolicy.bypassRanges.length : profile.bypass_ranges?.filter(Boolean).length ?? 0,
-      bypassDomainsCount: policySupported ? effectivePolicy.bypassDomains.length : profile.bypass_domains?.filter(Boolean).length ?? 0,
-      routingPolicyVersion: policySupported ? effectivePolicy.version : profile.routing_policy_version || defaultVpnRoutingPolicyVersion,
+      bypassRangesCount: clientOwnsRoutingPolicy ? effectivePolicy.bypassRanges.length : profile.bypass_ranges?.filter(Boolean).length ?? 0,
+      bypassDomainsCount: clientOwnsRoutingPolicy ? effectivePolicy.bypassDomains.length : profile.bypass_domains?.filter(Boolean).length ?? 0,
+      routingPolicyVersion: clientOwnsRoutingPolicy ? effectivePolicy.version : profile.routing_policy_version || defaultVpnRoutingPolicyVersion,
       rotationRequired: Boolean(profile.rotation_required),
     };
   }
@@ -167,9 +167,9 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
     profileVersion: typeof profile.version === 'number' ? profile.version : undefined,
     routingMode,
     bypassRegion,
-    bypassRangesCount: policySupported ? effectivePolicy.bypassRanges.length : profile.bypass_ranges?.filter(Boolean).length ?? 0,
-    bypassDomainsCount: policySupported ? effectivePolicy.bypassDomains.length : profile.bypass_domains?.filter(Boolean).length ?? 0,
-    routingPolicyVersion: policySupported ? effectivePolicy.version : profile.routing_policy_version || defaultVpnRoutingPolicyVersion,
+    bypassRangesCount: clientOwnsRoutingPolicy ? effectivePolicy.bypassRanges.length : profile.bypass_ranges?.filter(Boolean).length ?? 0,
+    bypassDomainsCount: clientOwnsRoutingPolicy ? effectivePolicy.bypassDomains.length : profile.bypass_domains?.filter(Boolean).length ?? 0,
+    routingPolicyVersion: clientOwnsRoutingPolicy ? effectivePolicy.version : profile.routing_policy_version || defaultVpnRoutingPolicyVersion,
     rotationRequired: Boolean(profile.rotation_required),
   };
 }

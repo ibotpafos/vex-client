@@ -12,10 +12,6 @@ def vexBuildValue(String name, String fallback = '') {
     return (findProperty(name) ?: System.getenv(name) ?: fallback).toString()
 }
 
-def vexAndroidApplicationId() {
-    return vexBuildValue('VEX_ANDROID_APPLICATION_ID', 'com.vexguard.app')
-}
-
 def buildConfigString(String value) {
     return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
 }
@@ -226,7 +222,9 @@ android {
 
     namespace 'com.vexguard.app'
     defaultConfig {
-        applicationId vexAndroidApplicationId()
+        // Keep the production package literal so release tooling can resolve
+        // the package identity. Non-production variants use applicationIdSuffix.
+        applicationId "com.vexguard.client"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1005557

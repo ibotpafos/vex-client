@@ -23,6 +23,19 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
         self.assertNotIn('"linux:release"', package)
         self.assertNotIn('"windows:release"', package)
 
+    def test_android_release_workflow_uses_custodied_signing_secrets(self) -> None:
+        workflow = (WORKFLOWS / "android-release.yml").read_text()
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertIn("contents: read", workflow)
+        self.assertNotIn("push:", workflow)
+        for secret in (
+            "ANDROID_RELEASE_KEYSTORE_BASE64",
+            "VEX_UPLOAD_STORE_PASSWORD",
+            "VEX_UPLOAD_KEY_ALIAS",
+            "VEX_UPLOAD_KEY_PASSWORD",
+        ):
+            self.assertIn(f"secrets.{secret}", workflow)
+
     def test_local_release_cache_creates_missing_source_parent(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             checkout = Path(temp_dir) / "checkout"

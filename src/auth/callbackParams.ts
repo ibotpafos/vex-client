@@ -8,6 +8,8 @@ export type AuthCallbackAttempt<T> = {
   promise: Promise<T>;
 };
 
+let sharedAuthCallbackAttempt: AuthCallbackAttempt<unknown> | null = null;
+
 export function authCallbackAttemptKey(input: AuthCallbackInput): string {
   return `${input.code?.trim() || ''}\u0000${input.state?.trim() || ''}`;
 }
@@ -20,7 +22,13 @@ export function getOrCreateAuthCallbackAttempt<T>(
   if (current?.key === key) {
     return current;
   }
-  return { key, promise: start() };
+  if (sharedAuthCallbackAttempt?.key === key) {
+    return sharedAuthCallbackAttempt as AuthCallbackAttempt<T>;
+  }
+
+  const attempt = { key, promise: start() };
+  sharedAuthCallbackAttempt = attempt as AuthCallbackAttempt<unknown>;
+  return attempt;
 }
 
 export function resolveAuthCallbackExchange(

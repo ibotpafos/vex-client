@@ -48,6 +48,7 @@ import { switchVpnLocation } from '../src/vpn/serverSwitch';
 import { normalizePackageNames } from '../src/vpn/applicationRouting';
 import { assessVpnAutopilotIssue } from '../src/vpn/vpnAutopilotAssessment';
 import { buildCreateDeviceRequest } from '../src/api/deviceCreateRequest';
+import { getOrCreateNativeDeviceRegistration } from '../src/api/nativeDeviceRegistration';
 import { canAutomaticallyApplyOtaUpdate } from '../src/updates/otaAutoApply';
 import { HOME_TAB_ROUTE } from '../src/navigation/routes';
 import { fallbackLocationEndpoint } from '../src/vpn/locationEndpoint';
@@ -117,7 +118,7 @@ const connectedStatus: VpnStatus = { state: 'connected', rxBytes: 0, txBytes: 0 
 assertEqual(managedProfileAWGVersion, 3);
 assertEqual(
   withManagedProfileAWGCapability(new URLSearchParams({ device_id: 'test-device' })).toString(),
-  'device_id=test-device&awg_version=3',
+  'device_id=test-device&awg_version=3&awg3_opt_in=true',
 );
 
 {
@@ -1026,6 +1027,7 @@ async function runAsyncTests(): Promise<void> {
   runHotConnectFlowTests();
   runCreateDeviceRequestTests();
   await runPkceTests();
+  await runNativeDeviceRegistrationTests();
   await runManualUpdateInstallTests();
   await runVpnDisconnectRecoveryTests();
   await runVpnHandshakeVerificationTests();
@@ -1036,6 +1038,40 @@ async function runAsyncTests(): Promise<void> {
   runServerPickerInteractionTests();
   runTrafficSummaryTests();
   await runServerSwitchTests();
+}
+
+async function runNativeDeviceRegistrationTests(): Promise<void> {
+  let starts = 0;
+  const first = getOrCreateNativeDeviceRegistration('token-a', 'device-a', async () => {
+    starts += 1;
+    return { id: 'registered-device' };
+  });
+  const concurrent = getOrCreateNativeDeviceRegistration('token-a', 'device-a', async () => {
+    starts += 1;
+    return { id: 'duplicate-device' };
+  });
+  assertEqual(concurrent, first);
+  assertDeepEqual(await concurrent, { id: 'registered-device' });
+  assertEqual(starts, 1);
+
+  const otherUser = getOrCreateNativeDeviceRegistration('token-b', 'device-a', async () => {
+    starts += 1;
+    return { id: 'other-user-device' };
+  });
+  assertDeepEqual(await otherUser, { id: 'other-user-device' });
+  assertEqual(starts, 2);
+
+  const failed = getOrCreateNativeDeviceRegistration('token-c', 'device-c', async () => {
+    starts += 1;
+    throw new Error('registration failed');
+  });
+  await assertRejects(() => failed, 'registration failed');
+  const retried = getOrCreateNativeDeviceRegistration('token-c', 'device-c', async () => {
+    starts += 1;
+    return { id: 'retry-device' };
+  });
+  assertDeepEqual(await retried, { id: 'retry-device' });
+  assertEqual(starts, 4);
 }
 
 function runServerPickerInteractionTests(): void {
@@ -1853,11 +1889,24 @@ async function runPkceTests(): Promise<void> {
   await repeatedAttempt.promise;
   assertEqual(starts, 1);
 
+  const sharedKey = `${key}-shared`;
+  const firstScreenAttempt = getOrCreateAuthCallbackAttempt(null, sharedKey, async () => {
+    starts += 1;
+    return 'first-screen';
+  });
+  const callbackScreenAttempt = getOrCreateAuthCallbackAttempt(null, sharedKey, async () => {
+    starts += 1;
+    return 'callback-screen';
+  });
+  assertEqual(callbackScreenAttempt.promise, firstScreenAttempt.promise);
+  assertEqual(await callbackScreenAttempt.promise, 'first-screen');
+  assertEqual(starts, 2);
+
   const nextAttempt = getOrCreateAuthCallbackAttempt(firstAttempt, `${key}-next`, async () => {
     starts += 1;
   });
   await nextAttempt.promise;
-  assertEqual(starts, 2);
+  assertEqual(starts, 3);
 }
 
 async function runManualUpdateInstallTests(): Promise<void> {

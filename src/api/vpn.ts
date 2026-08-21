@@ -8,6 +8,7 @@ import { defaultVpnRoutingMode, defaultVpnRoutingPolicyVersion, resolvedVpnBypas
 import { devicePushTokenPath } from '@/notifications/pushRegistration';
 import { jsonRequest, rawRequest, clientVersionHeaders } from './client';
 import { buildCreateDeviceRequest } from './deviceCreateRequest';
+import { getOrCreateNativeDeviceRegistration } from './nativeDeviceRegistration';
 import {
   type VpnDevice,
   type VpnLocation,
@@ -91,7 +92,11 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
   const externalDeviceId = baseExternalDeviceId;
   let device = nativeVpnDeviceForClient(allDevices, locationId, externalDeviceId, baseExternalDeviceId);
   if (!device) {
-    device = await registerNativeDevice(accessToken, client, keyPair, locationId, externalDeviceId);
+    device = await getOrCreateNativeDeviceRegistration(
+      accessToken,
+      externalDeviceId,
+      () => registerNativeDevice(accessToken, client, keyPair, locationId, externalDeviceId),
+    );
   }
   if (deviceNeedsLocalKeySync(device, keyPair)) {
     try {

@@ -28,6 +28,12 @@ import {
   vexApiBaseUrl,
 } from "@/api/vexApi";
 import { useSession } from "@/auth/session-context";
+import {
+  authCallbackAttemptKey,
+  getOrCreateAuthCallbackAttempt,
+  resolveAuthCallbackExchange,
+  type AuthCallbackAttempt,
+} from "@/auth/callbackParams";
 import { loadSession } from "@/auth/sessionStore";
 import { loadSessionWithRetry, loadWithRetry } from "@/auth/sessionLoadRetry";
 import {
@@ -134,6 +140,7 @@ export default function SignInScreen() {
   const [isAuthBusy, setIsAuthBusy] = useState(false);
   const [biometricAuthLabel, setBiometricAuthLabel] = useState("");
   const authSubmitInFlight = useRef(false);
+  const callbackAttemptRef = useRef<AuthCallbackAttempt<void> | null>(null);
   const handledCallbackUrls = useRef(new Set<string>());
   const retryableCallbackUrls = useRef<Record<string, number>>({});
   const canUseBiometricAuth = Boolean(biometricAuthLabel);
@@ -160,36 +167,32 @@ export default function SignInScreen() {
         const code = params["code"];
         const state = params["state"];
 
-        if (!code || !state) {
-          throw new Error("Неверные параметры авторизации от сервера.");
-        }
+        const attemptKey = authCallbackAttemptKey({ code, state });
+        const attempt = getOrCreateAuthCallbackAttempt(
+          callbackAttemptRef.current,
+          attemptKey,
+          async () => {
+            const [savedState, savedVerifier] = await Promise.all([
+              loadWithRetry(() => SecureStore.getItemAsync("vex.auth.pkce.state")),
+              loadWithRetry(() => SecureStore.getItemAsync("vex.auth.pkce.verifier")),
+            ]);
+            const exchange = resolveAuthCallbackExchange(
+              { code, state },
+              savedState,
+              savedVerifier,
+            );
+            const sessionData = await exchangeAppAuthCode(exchange.code, exchange.verifier);
 
-        const savedState = await loadWithRetry(() =>
-          SecureStore.getItemAsync("vex.auth.pkce.state"),
+            resetVpnProfileCache();
+            await signIn(sessionData);
+            await SecureStore.deleteItemAsync("vex.auth.pkce.state");
+            await SecureStore.deleteItemAsync("vex.auth.pkce.verifier");
+            await queryClient.invalidateQueries({ queryKey: ["entitlement"] });
+            await queryClient.invalidateQueries({ queryKey: ["vpn-profile"] });
+          },
         );
-        if (!savedState || state !== savedState) {
-          throw new Error(
-            "Несовпадение параметров безопасности (state mismatch).",
-          );
-        }
-
-        const verifier = await loadWithRetry(() =>
-          SecureStore.getItemAsync("vex.auth.pkce.verifier"),
-        );
-        if (!verifier) {
-          throw new Error("Отсутствует сессия PKCE verifier.");
-        }
-
-        const sessionData = await exchangeAppAuthCode(code, verifier);
-
-        resetVpnProfileCache();
-        await signIn(sessionData);
-
-        await SecureStore.deleteItemAsync("vex.auth.pkce.state");
-        await SecureStore.deleteItemAsync("vex.auth.pkce.verifier");
-
-        await queryClient.invalidateQueries({ queryKey: ["entitlement"] });
-        await queryClient.invalidateQueries({ queryKey: ["vpn-profile"] });
+        callbackAttemptRef.current = attempt;
+        await attempt.promise;
         playSuccessHaptic();
         router.replace("/");
       } catch (err) {

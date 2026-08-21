@@ -5,10 +5,13 @@ import {
   Column,
   Host,
   RNHostView,
-  Spacer,
   Text as UniversalText,
   TextInput as UniversalTextInput,
 } from "@expo/ui";
+import {
+  ModalBottomSheet,
+  type ModalBottomSheetRef,
+} from "@expo/ui/jetpack-compose";
 import * as WebBrowser from "expo-web-browser";
 import { router } from "expo-router";
 import {
@@ -70,15 +73,47 @@ type SignInBottomSheetProps = {
 };
 
 function SignInBottomSheet({ children, isPresented, onDismiss }: SignInBottomSheetProps) {
+  const sheetRef = useRef<ModalBottomSheetRef>(null);
+  const [isAndroidSheetMounted, setIsAndroidSheetMounted] = useState(isPresented);
+
+  useEffect(() => {
+    if (isPresented) {
+      setIsAndroidSheetMounted(true);
+      return;
+    }
+    sheetRef.current?.hide().finally(() => setIsAndroidSheetMounted(false));
+  }, [isPresented]);
+
+  if (Platform.OS !== "android") {
+    return (
+      <BottomSheet
+        isPresented={isPresented}
+        onDismiss={onDismiss}
+        snapPoints={["full"]}
+        testID="sign-in-sheet"
+      >
+        {children}
+      </BottomSheet>
+    );
+  }
+
+  if (!isAndroidSheetMounted) {
+    return null;
+  }
+
   return (
-    <BottomSheet
-      isPresented={isPresented}
-      onDismiss={onDismiss}
-      snapPoints={["full"]}
-      testID="sign-in-sheet"
+    <ModalBottomSheet
+      containerColor="#041315"
+      contentColor="#E9F7F8"
+      onDismissRequest={() => {
+        setIsAndroidSheetMounted(false);
+        onDismiss();
+      }}
+      ref={sheetRef}
+      sheetGesturesEnabled
     >
       {children}
-    </BottomSheet>
+    </ModalBottomSheet>
   );
 }
 
@@ -454,8 +489,7 @@ export default function SignInScreen() {
   const sheetIntro = "Введите email — пришлём одноразовый код для входа.";
   const sheetButtonStyle = { width: Math.max(280, width - 40) };
   const emailContent = (
-    <Column spacing={10} style={styles.sheetContent}>
-      <Spacer flexible />
+    <Column spacing={10} style={styles.sheetContent} testID="sign-in-sheet">
       <Column spacing={12}>
         <UniversalText textStyle={styles.sheetTitle}>{sheetTitle}</UniversalText>
         {!emailOTPChallenge ? (
@@ -513,7 +547,6 @@ export default function SignInScreen() {
           </Button>
         ) : null}
       </Column>
-      <Spacer flexible />
     </Column>
   );
 
@@ -529,7 +562,7 @@ export default function SignInScreen() {
           playLightImpactHaptic();
           setAuthError(null);
           setAuthNotice(null);
-          setEntryStep("email");
+          requestAnimationFrame(() => setEntryStep("email"));
         }}
       />
       <SignInBottomSheet
@@ -576,7 +609,8 @@ const styles = {
   },
   sheetContent: {
     backgroundColor: "#041315",
-    flex: 1,
+    paddingBottom: 20,
+    paddingHorizontal: 20,
   },
   sheetIntro: {
     color: "#A7B9BD",

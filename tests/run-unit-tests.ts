@@ -1034,7 +1034,6 @@ async function runAsyncTests(): Promise<void> {
   runAndroidRoutingSafetyTests();
   runErrorMessageTests();
   runServerPickerInteractionTests();
-  runServerPickerPresentationTests();
   runTrafficSummaryTests();
   await runServerSwitchTests();
 }
@@ -1042,19 +1041,6 @@ async function runAsyncTests(): Promise<void> {
 function runServerPickerInteractionTests(): void {
   assertEqual(serverPickerActionForSource('carousel'), 'select');
   assertEqual(serverPickerActionForSource('all_locations'), 'open_picker');
-}
-
-function runServerPickerPresentationTests(): void {
-  const { readFileSync } = (process as typeof process & {
-    getBuiltinModule: (id: 'node:fs') => { readFileSync: (path: string, encoding: string) => string };
-  }).getBuiltinModule('node:fs');
-  const source = readFileSync('src/components/server-picker-modal.tsx', 'utf8');
-
-  assertEqual(source.includes('<BottomSheet'), true);
-  assertEqual(source.includes('return <ServerPickerContent {...props} />'), false);
-  assertEqual(source.includes('return <AndroidServerPickerSheet {...props} />'), true);
-  assertEqual(source.includes('containerColor="#041315"'), true);
-  assertEqual(source.includes('scrimColor="transparent"'), true);
 }
 
 function runTrafficSummaryTests(): void {

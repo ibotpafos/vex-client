@@ -10,6 +10,7 @@ import {
   ListItem as ComposeListItem,
   ModalBottomSheet,
   Text as ComposeText,
+  type ModalBottomSheetRef,
 } from "@expo/ui/jetpack-compose";
 import { clickable } from "@expo/ui/jetpack-compose/modifiers";
 import type { VpnLocation } from "@/api/vexApi";
@@ -36,12 +37,12 @@ export const ServerPickerModal = React.memo(function ServerPickerModal({
   visible,
   ...props
 }: ServerPickerModalProps) {
-  if (!visible) {
-    return null;
+  if (Platform.OS === "android") {
+    return <AndroidServerPickerSheet {...props} visible={visible} />;
   }
 
-  if (Platform.OS === "android") {
-    return <AndroidServerPickerSheet {...props} />;
+  if (!visible) {
+    return null;
   }
 
   return (
@@ -58,14 +59,32 @@ export const ServerPickerModal = React.memo(function ServerPickerModal({
   );
 });
 
-function AndroidServerPickerSheet(props: ServerPickerContentProps) {
+function AndroidServerPickerSheet({ visible, ...props }: ServerPickerContentProps & { visible: boolean }) {
+  const sheetRef = React.useRef<ModalBottomSheetRef>(null);
+  const [isMounted, setIsMounted] = React.useState(visible);
+
+  React.useEffect(() => {
+    if (visible) {
+      setIsMounted(true);
+      return;
+    }
+    sheetRef.current?.hide().finally(() => setIsMounted(false));
+  }, [visible]);
+
+  if (!isMounted) {
+    return null;
+  }
+
   return (
     <Host colorScheme="dark" seedColor="#22D3EE" style={styles.androidSheetHost} pointerEvents="none">
       <ModalBottomSheet
         containerColor="#041315"
         contentColor="#F4FCFD"
-        onDismissRequest={props.onClose}
-        scrimColor="transparent"
+        onDismissRequest={() => {
+          setIsMounted(false);
+          props.onClose();
+        }}
+        ref={sheetRef}
         showDragHandle
       >
         <ServerPickerBody {...props} />
@@ -94,7 +113,7 @@ function ServerPickerBody({
   onSelect,
 }: ServerPickerContentProps) {
   return (
-    <Column spacing={4} style={styles.content}>
+    <Column spacing={4} style={styles.content} testID="server-picker-sheet">
       <UniversalText textStyle={styles.eyebrow}>VEX VPN</UniversalText>
       <UniversalText textStyle={styles.title}>Серверы</UniversalText>
       <UniversalText textStyle={styles.subtitle}>

@@ -162,7 +162,7 @@ export default function App() {
                       latencyText: selectedLatencyText,
                       locations: availableLocations.map((location) => ({ ...location })),
                     });
-                    setIsServerPickerVisible(true);
+                    requestAnimationFrame(() => setIsServerPickerVisible(true));
                   }}
                   style={styles.locationsAllButton}
                   title="Все локации"

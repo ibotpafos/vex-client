@@ -9,11 +9,6 @@ import {
   Text as UniversalText,
   TextInput as UniversalTextInput,
 } from "@expo/ui";
-import {
-  ModalBottomSheet,
-  type ModalBottomSheetRef,
-} from "@expo/ui/jetpack-compose";
-import { fillMaxHeight, padding } from "@expo/ui/jetpack-compose/modifiers";
 import * as WebBrowser from "expo-web-browser";
 import { router } from "expo-router";
 import {
@@ -74,63 +69,7 @@ type SignInBottomSheetProps = {
   onDismiss: () => void;
 };
 
-function AndroidSignInBottomSheet({
-  children,
-  isPresented,
-  onDismiss,
-}: SignInBottomSheetProps) {
-  const sheetRef = useRef<ModalBottomSheetRef>(null);
-  const [mounted, setMounted] = useState(isPresented);
-
-  useEffect(() => {
-    if (isPresented) {
-      setMounted(true);
-      return;
-    }
-
-    let cancelled = false;
-    sheetRef.current?.hide().then(() => {
-      if (!cancelled) setMounted(false);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [isPresented]);
-
-  if (!mounted) return null;
-
-  return (
-    <Host style={styles.sheetModalHost} pointerEvents="none">
-      <ModalBottomSheet
-        ref={sheetRef}
-        containerColor="#041315"
-        contentColor="#E9F7F8"
-        onDismissRequest={onDismiss}
-        properties={{
-          shouldDismissOnBackPress: true,
-          shouldDismissOnClickOutside: true,
-        }}
-        scrimColor="#00000099"
-        showDragHandle
-        skipPartiallyExpanded
-      >
-        <Column modifiers={[padding(20, 56, 20, 12), fillMaxHeight()]}>
-          {children}
-        </Column>
-      </ModalBottomSheet>
-    </Host>
-  );
-}
-
 function SignInBottomSheet({ children, isPresented, onDismiss }: SignInBottomSheetProps) {
-  if (Platform.OS === "android") {
-    return (
-      <AndroidSignInBottomSheet isPresented={isPresented} onDismiss={onDismiss}>
-        {children}
-      </AndroidSignInBottomSheet>
-    );
-  }
-
   return (
     <BottomSheet
       isPresented={isPresented}
@@ -559,13 +498,19 @@ export default function SignInScreen() {
           style={sheetButtonStyle}
         />
         {emailOTPChallenge ? (
-          <Button disabled={isAuthBusy} label="Отправить новый код" onPress={() => { void handleEmailOTPResend(); }} style={sheetButtonStyle} variant="text" />
+          <Button disabled={isAuthBusy} onPress={() => { void handleEmailOTPResend(); }} style={sheetButtonStyle} variant="text">
+            <UniversalText textStyle={styles.secondaryButtonText}>Отправить новый код</UniversalText>
+          </Button>
         ) : null}
         {canUseBiometricAuth ? (
-          <Button disabled={isAuthBusy} label={`Войти по ${biometricAuthLabel}`} onPress={() => { void handleBiometricAuth(); }} style={sheetButtonStyle} variant="outlined" />
+          <Button disabled={isAuthBusy} onPress={() => { void handleBiometricAuth(); }} style={sheetButtonStyle} variant="outlined">
+            <UniversalText textStyle={styles.secondaryButtonText}>{`Войти по ${biometricAuthLabel}`}</UniversalText>
+          </Button>
         ) : null}
         {!emailOTPChallenge && supportsWebsiteAuth() ? (
-          <Button disabled={isAuthBusy} label="Войти через сайт" onPress={() => { void handleWebAuthStart(); }} style={sheetButtonStyle} variant="outlined" />
+          <Button disabled={isAuthBusy} onPress={() => { void handleWebAuthStart(); }} style={sheetButtonStyle} variant="outlined">
+            <UniversalText textStyle={styles.secondaryButtonText}>Войти через сайт</UniversalText>
+          </Button>
         ) : null}
       </Column>
       <Spacer flexible />
@@ -638,12 +583,14 @@ const styles = {
     fontSize: 16,
     lineHeight: 22,
   },
+  secondaryButtonText: {
+    color: "#E9F7F8",
+    fontSize: 16,
+    fontWeight: "600" as const,
+  },
   sheetTitle: {
     color: "#F1FBFC",
     fontSize: 30,
     fontWeight: "800" as const,
-  },
-  sheetModalHost: {
-    position: "absolute" as const,
   },
 };

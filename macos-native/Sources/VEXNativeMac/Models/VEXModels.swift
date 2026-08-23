@@ -296,18 +296,6 @@ struct BillingPlan: Codable, Equatable, Identifiable {
     }
 }
 
-struct BillingPriceQuote: Codable, Equatable {
-    var changeType: String
-    var amountDueMinor: Int
-    var creditAmountMinor: Int
-
-    enum CodingKeys: String, CodingKey {
-        case changeType = "change_type"
-        case amountDueMinor = "amount_due_minor"
-        case creditAmountMinor = "credit_amount_minor"
-    }
-}
-
 struct BillingPlanOption: Codable, Equatable, Identifiable {
     var id: String
     var provider: String
@@ -349,56 +337,6 @@ enum BillingEntitlementStatus: String, Codable, Equatable {
     case active
     case inactive
     case unknown
-}
-
-enum BillingError: LocalizedError {
-    case missingCheckoutURL
-    case missingPortalURL
-    case priceUnavailable
-    case downgradeScheduled
-
-    var errorDescription: String? {
-        switch self {
-        case .missingCheckoutURL:
-            return "Платежная ссылка недоступна."
-        case .missingPortalURL:
-            return "Ссылка управления подпиской недоступна."
-        case .priceUnavailable:
-            return "Сервер не подтвердил цену. Обновите тарифы и попробуйте снова."
-        case .downgradeScheduled:
-            return "Понижение тарифа вступит в силу после окончания текущего периода."
-        }
-    }
-}
-
-struct CheckoutSession: Codable, Equatable {
-    var id: String
-    var planId: String
-    var provider: String
-    var url: String
-    var status: String
-
-    enum CodingKeys: String, CodingKey {
-        case id
-        case planId = "plan_id"
-        case provider
-        case url
-        case status
-    }
-}
-
-struct BillingPortalSession: Codable, Equatable {
-    var id: String?
-    var provider: String?
-    var url: String?
-    var createdAt: String?
-
-    enum CodingKeys: String, CodingKey {
-        case id
-        case provider
-        case url
-        case createdAt = "created_at"
-    }
 }
 
 struct BillingPayment: Codable, Equatable, Identifiable {

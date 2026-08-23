@@ -640,14 +640,7 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertEqual(Set(summary.plans.map(\.action)), ["Сменить"])
     }
 
-    func testBillingCheckoutPinsServerQuoteAndExternalCheckoutURL() {
-        let quote = try! JSONDecoder().decode(
-            BillingPriceQuote.self,
-            from: Data(#"{"change_type":"upgrade","amount_due_minor":12900,"credit_amount_minor":7000}"#.utf8)
-        )
-        XCTAssertEqual(quote.changeType, "upgrade")
-        XCTAssertEqual(quote.amountDueMinor, 12900)
-
+    func testBillingIsExternalOnlyWithDashboardFallback() {
         // Payment is external-only now: the app opens the billing dashboard
         // in the browser instead of hosting the plan picker in-app.
         XCTAssertTrue(BillingPresentation.billingDashboardURL.absoluteString.hasPrefix("https://vexguard.app"))

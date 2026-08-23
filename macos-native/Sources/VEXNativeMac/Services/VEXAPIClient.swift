@@ -89,51 +89,6 @@ struct VEXAPIClient {
         try await json("/v1/billing/plans")
     }
 
-    func billingPriceQuote(accessToken: String, planID: String) async throws -> BillingPriceQuote {
-        try await json(
-            "/v1/billing/change-preview?\(queryString([URLQueryItem(name: "plan_id", value: planID)]))",
-            accessToken: accessToken
-        )
-    }
-
-    func checkoutSession(
-        accessToken: String,
-        plan: BillingPlanOption,
-        expectedAmountMinor: Int,
-        changeMode: String?
-    ) async throws -> CheckoutSession {
-        var body: [String: Any] = [
-            "plan_id": plan.id,
-            "provider": plan.provider,
-            "expected_amount_minor": expectedAmountMinor,
-            "return_url": "\(baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/v1/billing/mobile-return?status=success",
-            "failed_url": "\(baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/v1/billing/mobile-return?status=failed",
-        ]
-        if changeMode == "upgrade" {
-            body["change_mode"] = "upgrade"
-        }
-        return try await json(
-            "/v1/billing/checkout-session",
-            method: "POST",
-            accessToken: accessToken,
-            body: body,
-            idempotencyKey: "native-macos-checkout-\(plan.id)-\(Int(Date().timeIntervalSince1970 * 1000))"
-        )
-    }
-
-    func cancelSubscription(accessToken: String) async throws -> Entitlement {
-        try await json(
-            "/v1/billing/subscription/cancel",
-            method: "POST",
-            accessToken: accessToken,
-            idempotencyKey: "native-macos-subscription-cancel-\(Int(Date().timeIntervalSince1970 * 1000))"
-        )
-    }
-
-    func portalSession(accessToken: String) async throws -> BillingPortalSession {
-        try await json("/v1/billing/portal-session", accessToken: accessToken)
-    }
-
     func billingPayments(accessToken: String, limit: Int = 24) async throws -> [BillingPayment] {
         let safeLimit = min(max(limit, 1), 100)
         return try await json("/v1/billing/payments?\(queryString([URLQueryItem(name: "limit", value: String(safeLimit))]))", accessToken: accessToken)

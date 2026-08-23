@@ -667,6 +667,7 @@ final class VEXAppState: ObservableObject {
             return
         }
         automaticUpdatesPrepared = true
+        nativeUpdater.startUpdater()
         nativeUpdater.checkForUpdatesInBackground()
     }
 
@@ -783,6 +784,16 @@ final class VEXAppState: ObservableObject {
         billingError = nil
         canUnlockStoredSession = sessionStore.hasStoredNativeSession()
         statusMessage = "Вы вышли из аккаунта."
+    }
+
+    func prepareForTermination() {
+        updateMonitorTask?.cancel()
+        updateMonitorTask = nil
+        profileWarmupTask?.cancel()
+        profileWarmupTask = nil
+        webAuthTask?.cancel()
+        webAuthTask = nil
+        supportSocket.close()
     }
 
     func handleDeepLink(_ url: URL) async {

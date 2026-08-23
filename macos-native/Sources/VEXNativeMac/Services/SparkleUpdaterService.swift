@@ -7,6 +7,7 @@ import Sparkle
 protocol NativeUpdaterService: AnyObject {
     var automaticallyChecksForUpdates: Bool { get set }
     var canCheckForUpdates: Bool { get }
+    func startUpdater()
     func checkForUpdates()
     func checkForUpdatesInBackground()
 }
@@ -47,7 +48,7 @@ final class SparkleUpdaterService: NSObject, ObservableObject, NativeUpdaterServ
 
     override init() {
         updaterController = SPUStandardUpdaterController(
-            startingUpdater: true,
+            startingUpdater: false,
             updaterDelegate: nil,
             userDriverDelegate: nil
         )
@@ -61,9 +62,18 @@ final class SparkleUpdaterService: NSObject, ObservableObject, NativeUpdaterServ
         }
     }
 
+    deinit {
+        canCheckObservation?.invalidate()
+        canCheckObservation = nil
+    }
+
     var automaticallyChecksForUpdates: Bool {
         get { updaterController.updater.automaticallyChecksForUpdates }
         set { updaterController.updater.automaticallyChecksForUpdates = newValue }
+    }
+
+    func startUpdater() {
+        updaterController.startUpdater()
     }
 
     func checkForUpdates() {
@@ -92,6 +102,7 @@ final class DisabledNativeUpdaterService: NativeUpdaterService {
     var automaticallyChecksForUpdates = false
     let canCheckForUpdates = false
 
+    func startUpdater() {}
     func checkForUpdates() {}
     func checkForUpdatesInBackground() {}
 }

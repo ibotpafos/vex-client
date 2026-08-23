@@ -292,6 +292,20 @@ final class SparkleUpdateTests: XCTestCase {
         XCTAssertTrue(script.contains("VEX_NATIVE_VERIFY_INSTALLED_RUNTIME"))
         XCTAssertTrue(script.contains("verify_native_macos_runtime.sh"))
         XCTAssertTrue(script.contains("STRICT=1"))
+        XCTAssertTrue(script.contains("for signed_resource in awg amneziawg-go vex-helper; do"))
+        XCTAssertTrue(script.contains("codesign --verify --strict \"${resources_dir}/${signed_resource}\""))
+    }
+
+    func testNativeMacAppBuildSignsExecutableHelperResourcesBeforeAppBundle() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let scriptURL = packageRoot
+            .deletingLastPathComponent()
+            .appendingPathComponent("scripts/build_native_macos_app.sh")
+        let script = try String(contentsOf: scriptURL, encoding: .utf8)
+
+        XCTAssertTrue(script.contains("for signed_resource in awg amneziawg-go vex-helper; do"))
+        XCTAssertTrue(script.contains("codesign \"${CODESIGN_ARGS[@]}\" \"${APP_DIR}/Contents/Resources/resources/${signed_resource}\""))
+        XCTAssertTrue(script.contains("codesign --verify --strict \"${APP_DIR}/Contents/Resources/resources/${signed_resource}\""))
     }
 
     func testNativeMacInternalReleaseScriptDoesNotRequireAppleDeveloperID() throws {
@@ -419,9 +433,14 @@ private final class MockNativeUpdaterService: NativeUpdaterService {
     var canCheckForUpdates: Bool
     private(set) var checkForUpdatesCallCount = 0
     private(set) var checkForUpdatesInBackgroundCallCount = 0
+    private(set) var startUpdaterCallCount = 0
 
     init(canCheckForUpdates: Bool = true) {
         self.canCheckForUpdates = canCheckForUpdates
+    }
+
+    func startUpdater() {
+        startUpdaterCallCount += 1
     }
 
     func checkForUpdates() {

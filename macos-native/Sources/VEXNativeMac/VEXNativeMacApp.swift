@@ -287,6 +287,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return .terminateLater
         }
         terminationInProgress = true
+        appState?.prepareForTermination()
         Task { @MainActor in
             await helper.shutdownForAppTermination()
             sender.reply(toApplicationShouldTerminate: true)

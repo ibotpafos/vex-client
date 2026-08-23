@@ -19,15 +19,12 @@ final class VEXAppState: ObservableObject {
     @Published private(set) var session: AuthSession?
     @Published private(set) var user: VEXUser?
     @Published private(set) var locations: [VpnLocation] = []
-    @Published private(set) var supportTickets: [SupportTicket] = []
     @Published private(set) var entitlement: Entitlement?
     @Published private(set) var billingSummary: BillingSummary?
     @Published private(set) var billingPayments: [BillingPayment] = []
     @Published private(set) var updateCheck: AppUpdateCheckResult?
     @Published private(set) var remoteConfig: AppRemoteConfig?
     @Published private(set) var activeTunnel: PreparedTunnel?
-    @Published private(set) var supportSocketConnected = false
-    @Published private(set) var supportSocketReconnecting = false
     @Published private(set) var isAuthBusy = false
     @Published private(set) var isWaitingForWebAuth = false
     @Published private(set) var isBillingBusy = false
@@ -57,7 +54,6 @@ final class VEXAppState: ObservableObject {
     private let startupService = StartupService()
     private let nativeUpdater: NativeUpdaterService
     private let authService = PKCEAuthService()
-    private let supportSocket = SupportSocketClient()
     private var cancellables: Set<AnyCancellable> = []
     private var webAuthTask: Task<Void, Never>?
     private var profileWarmupTask: Task<Void, Never>?
@@ -153,17 +149,14 @@ final class VEXAppState: ObservableObject {
         } else if biometricUnlockRequired && biometricAvailability.isAvailable && canUnlockStoredSession {
             statusMessage = "Подтвердите вход по \(biometricAvailability.label)."
             autoLaunchEnabled = startupService.isEnabled()
-            observeSupportSocket()
             await loadUpdate()
             await loadRemoteConfig()
             return
         }
         autoLaunchEnabled = startupService.isEnabled()
-        observeSupportSocket()
         await refreshAll()
         await restoreActiveTunnelIfHelperIsConnected(helperStatus)
         scheduleProfileWarmup()
-        connectSupportSocketIfPossible()
     }
 
     func refreshAll() async {
@@ -179,10 +172,9 @@ final class VEXAppState: ObservableObject {
 
         async let userResult = loadUser(token)
         async let locationsResult: Void = refreshLocations(accessToken: token)
-        async let supportResult = loadSupport(token)
         async let billingResult = loadBilling(token)
         async let diagnosticsFlush = diagnosticsService.flush(accessToken: token)
-        _ = await [userResult, locationsResult, supportResult, updateResult, remoteConfigResult, billingResult, diagnosticsFlush]
+        _ = await [userResult, locationsResult, billingResult, updateResult, remoteConfigResult, diagnosticsFlush]
     }
 
     func refreshLocations() async {
@@ -768,16 +760,13 @@ final class VEXAppState: ObservableObject {
         user = storedSession.user
         statusMessage = "Сохраненная сессия открыта."
         await refreshAll()
-        connectSupportSocketIfPossible()
     }
 
     func signOut() {
         try? sessionStore.clearSession()
-        supportSocket.close()
         session = nil
         user = nil
         activeTunnel = nil
-        supportTickets = []
         entitlement = nil
         billingSummary = nil
         authError = nil
@@ -793,7 +782,6 @@ final class VEXAppState: ObservableObject {
         profileWarmupTask = nil
         webAuthTask?.cancel()
         webAuthTask = nil
-        supportSocket.close()
     }
 
     func handleDeepLink(_ url: URL) async {
@@ -846,16 +834,7 @@ final class VEXAppState: ObservableObject {
                 "helper_diagnostics": truncateDiagnosticText(redactedDiagnostics, limit: 900),
             ]
         )
-        await sendSupportMessage("""
-        Диагностика VEX Native macOS
-
-        Сервер: \(selectedLocation?.displayName ?? targetLocationId)
-        VPN: \(helper.status.state.rawValue)
-        Endpoint: \(helper.status.endpoint ?? "unknown")
-        RX/TX: \(helper.status.rxBytes)/\(helper.status.txBytes)
-
-        \(redactedDiagnostics)
-        """)
+        statusMessage = "Диагностика отправлена."
     }
 
     func recoverTunnelIfNeeded(using helper: VEXHelperModel) async {
@@ -891,36 +870,6 @@ final class VEXAppState: ObservableObject {
         statusMessage = assessment.userMessage
         await disconnectVPN(using: helper, reason: "watchdog_recovery")
         await connectVPN(using: helper)
-    }
-
-    func sendSupportMessage(_ body: String, subject requestedSubject: String? = nil) async {
-        let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let token = accessToken else { return }
-        let subject = normalizedSupportSubject(requestedSubject, fallbackBody: trimmed)
-        let pendingTicket = optimisticSupportTicket(subject: subject, body: trimmed)
-        supportTickets.insert(pendingTicket, at: 0)
-        if supportSocket.send(body: trimmed, subject: subject) {
-            statusMessage = "Сообщение отправлено в поддержку."
-            return
-        }
-        do {
-            let ticket = try await api.createSupportTicket(
-                accessToken: token,
-                subject: subject,
-                message: trimmed
-            )
-            replaceOptimisticSupportTicket(pendingTicket, with: ticket)
-            statusMessage = "Сообщение отправлено в поддержку."
-        } catch {
-            supportTickets.removeAll { $0.id == pendingTicket.id }
-            statusMessage = error.localizedDescription
-        }
-    }
-
-    func refreshSupport() async {
-        guard let token = accessToken else { return }
-        await loadSupport(token)
-        connectSupportSocketIfPossible()
     }
 
     func refreshUpdates() async {
@@ -1044,14 +993,6 @@ final class VEXAppState: ObservableObject {
             }
         } catch {
             locationLoadError = error.localizedDescription
-            statusMessage = error.localizedDescription
-        }
-    }
-
-    private func loadSupport(_ token: String) async {
-        do {
-            supportTickets = try await api.supportTickets(accessToken: token)
-        } catch {
             statusMessage = error.localizedDescription
         }
     }
@@ -1253,51 +1194,7 @@ final class VEXAppState: ObservableObject {
     }
 
     func configureSupportPreview() {
-        let previewUser = VEXUser(id: "preview-user", email: "preview@vexguard.app", status: "active")
-        session = AuthSession(user: previewUser, accessToken: "preview-token", expiresAt: nil, refreshToken: nil)
-        user = previewUser
-        locations = FocusPulsePresentation.animationPreviewLocations
-        supportSocketConnected = true
-        supportTickets = [
-            SupportTicket(
-                id: "preview-ticket",
-                subject: "Проверка интерфейса",
-                message: "Привет",
-                messages: [
-                    SupportMessage(
-                        id: "preview-message-1",
-                        ticketId: "preview-ticket",
-                        sender: "admin",
-                        authorId: nil,
-                        body: "Привет",
-                        createdAt: "2026-08-01T12:56:00Z"
-                    ),
-                    SupportMessage(
-                        id: "preview-message-2",
-                        ticketId: "preview-ticket",
-                        sender: "admin",
-                        authorId: nil,
-                        body: "как дела",
-                        createdAt: "2026-08-01T12:56:30Z"
-                    ),
-                    SupportMessage(
-                        id: "preview-message-3",
-                        ticketId: "preview-ticket",
-                        sender: "user",
-                        authorId: "preview-user",
-                        body: "Спасибо, теперь всё работает",
-                        createdAt: "2026-08-01T12:57:00Z"
-                    ),
-                ],
-                status: "open",
-                priority: "normal",
-                source: "macos-native",
-                adminNote: nil,
-                createdAt: "2026-08-01T12:55:00Z",
-                updatedAt: "2026-08-01T12:57:00Z",
-                closedAt: nil
-            ),
-        ]
+        // Support chat was removed from macOS; kept no-op for preview hooks.
     }
     #endif
 
@@ -1334,7 +1231,6 @@ final class VEXAppState: ObservableObject {
         authError = nil
         statusMessage = message
         await refreshAll()
-        connectSupportSocketIfPossible()
     }
 
     private func authenticatedAccessToken() async -> String? {
@@ -1375,7 +1271,6 @@ final class VEXAppState: ObservableObject {
             user = nextSession.user
             authError = nil
             statusMessage = "Сессия обновлена."
-            connectSupportSocketIfPossible()
             return nextSession.accessToken
         } catch {
             if error.isUnauthorizedAPIError {
@@ -1438,11 +1333,9 @@ final class VEXAppState: ObservableObject {
 
     private func expireAuthenticatedSession(message: String) {
         try? sessionStore.clearSession()
-        supportSocket.close()
         session = nil
         user = nil
         activeTunnel = nil
-        supportTickets = []
         entitlement = nil
         billingSummary = nil
         billingPayments = []
@@ -1450,65 +1343,6 @@ final class VEXAppState: ObservableObject {
         billingError = nil
         canUnlockStoredSession = false
         statusMessage = message
-    }
-
-    private func supportSubject(for body: String) -> String {
-        let text = body.replacingOccurrences(of: "\n", with: " ")
-        if text.count <= 42 {
-            return text
-        }
-        return String(text.prefix(42))
-    }
-
-    private func normalizedSupportSubject(_ requestedSubject: String?, fallbackBody: String) -> String {
-        let subject = requestedSubject?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return subject.isEmpty ? supportSubject(for: fallbackBody) : subject
-    }
-
-    private func optimisticSupportTicket(subject: String, body: String) -> SupportTicket {
-        let id = "local-\(UUID().uuidString)"
-        let createdAt = ISO8601DateFormatter().string(from: Date())
-        let message = SupportMessage(
-            id: "\(id)-message",
-            ticketId: id,
-            sender: "user",
-            authorId: user?.id,
-            body: body,
-            createdAt: createdAt
-        )
-        return SupportTicket(
-            id: id,
-            subject: subject,
-            message: body,
-            messages: [message],
-            status: "open",
-            priority: nil,
-            source: "macos-native",
-            adminNote: nil,
-            createdAt: createdAt,
-            updatedAt: createdAt,
-            closedAt: nil
-        )
-    }
-
-    private func replaceOptimisticSupportTicket(_ pendingTicket: SupportTicket, with ticket: SupportTicket) {
-        if let index = supportTickets.firstIndex(where: { $0.id == pendingTicket.id }) {
-            supportTickets[index] = ticket
-        } else {
-            upsertSupportTicket(ticket)
-        }
-    }
-
-    private func supportTicket(_ localTicket: SupportTicket, matchesUserMessageIn remoteTicket: SupportTicket) -> Bool {
-        let localBody = localTicket.message.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !localBody.isEmpty else { return false }
-        if remoteTicket.message.trimmingCharacters(in: .whitespacesAndNewlines) == localBody {
-            return true
-        }
-        return remoteTicket.messages?.contains { message in
-            message.sender.lowercased() == "user" &&
-                message.body.trimmingCharacters(in: .whitespacesAndNewlines) == localBody
-        } ?? false
     }
 
     private func redactSensitiveDiagnostics(_ text: String) -> String {
@@ -1613,36 +1447,6 @@ final class VEXAppState: ObservableObject {
             } catch {
                 // Background warmup is best-effort; foreground connect handles user-visible errors.
             }
-        }
-    }
-
-    private func connectSupportSocketIfPossible() {
-        guard let token = accessToken else { return }
-        supportSocket.connect(accessToken: token) { [weak self] tickets in
-            self?.supportTickets = tickets
-        } onTicket: { [weak self] ticket in
-            self?.upsertSupportTicket(ticket)
-        }
-    }
-
-    private func observeSupportSocket() {
-        guard cancellables.isEmpty else { return }
-        supportSocket.$isConnected
-            .sink { [weak self] value in self?.supportSocketConnected = value }
-            .store(in: &cancellables)
-        supportSocket.$isReconnecting
-            .sink { [weak self] value in self?.supportSocketReconnecting = value }
-            .store(in: &cancellables)
-    }
-
-    private func upsertSupportTicket(_ ticket: SupportTicket) {
-        supportTickets.removeAll { existing in
-            existing.id.hasPrefix("local-") && supportTicket(existing, matchesUserMessageIn: ticket)
-        }
-        if let index = supportTickets.firstIndex(where: { $0.id == ticket.id }) {
-            supportTickets[index] = ticket
-        } else {
-            supportTickets.insert(ticket, at: 0)
         }
     }
 

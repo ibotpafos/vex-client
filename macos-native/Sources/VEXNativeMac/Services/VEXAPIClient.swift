@@ -270,43 +270,6 @@ struct VEXAPIClient {
         )
     }
 
-    func supportTickets(accessToken: String) async throws -> [SupportTicket] {
-        try await json("/v1/support-tickets", accessToken: accessToken)
-    }
-
-    func supportWebSocketURL(accessToken: String) async throws -> URL {
-        let payload: SupportSocketTicketResponse = try await json(
-            "/v1/support-ws-ticket",
-            accessToken: accessToken
-        )
-        guard let ticket = payload.ticket?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !ticket.isEmpty else {
-            throw VEXAPIError.invalidResponse
-        }
-        var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
-        components?.scheme = baseURL.scheme == "https" ? "wss" : "ws"
-        components?.path = "/v1/support-ws"
-        components?.queryItems = [URLQueryItem(name: "ticket", value: ticket)]
-        guard let url = components?.url else {
-            throw VEXAPIError.invalidResponse
-        }
-        return url
-    }
-
-    func createSupportTicket(accessToken: String, subject: String, message: String) async throws -> SupportTicket {
-        try await json(
-            "/v1/support-tickets",
-            method: "POST",
-            accessToken: accessToken,
-            body: [
-                "subject": subject,
-                "message": message,
-                "source": "macos-native",
-            ],
-            idempotencyKey: "native-support-\(UUID().uuidString)"
-        )
-    }
-
     func appUpdateCheck() async throws -> AppUpdateCheckResult {
         var result: AppUpdateCheckResult = try await json(
             "/v1/app/update/check",
@@ -455,10 +418,6 @@ struct VEXAPIClient {
 
 private struct NativeDeviceRegistrationResponse: Decodable {
     var device: VpnDevice
-}
-
-private struct SupportSocketTicketResponse: Decodable {
-    var ticket: String?
 }
 
 private struct EmptyResponse: Decodable {}

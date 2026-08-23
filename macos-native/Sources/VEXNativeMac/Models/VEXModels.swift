@@ -78,52 +78,6 @@ struct VpnLocation: Codable, Equatable, Identifiable {
     }
 }
 
-struct SupportTicket: Codable, Equatable, Identifiable {
-    var id: String
-    var subject: String
-    var message: String
-    var messages: [SupportMessage]?
-    var status: String
-    var priority: String?
-    var source: String
-    var adminNote: String?
-    var createdAt: String
-    var updatedAt: String
-    var closedAt: String?
-
-    enum CodingKeys: String, CodingKey {
-        case id
-        case subject
-        case message
-        case messages
-        case status
-        case priority
-        case source
-        case adminNote = "admin_note"
-        case createdAt = "created_at"
-        case updatedAt = "updated_at"
-        case closedAt = "closed_at"
-    }
-}
-
-struct SupportMessage: Codable, Equatable, Identifiable {
-    var id: String
-    var ticketId: String
-    var sender: String
-    var authorId: String?
-    var body: String
-    var createdAt: String
-
-    enum CodingKeys: String, CodingKey {
-        case id
-        case ticketId = "ticket_id"
-        case sender
-        case authorId = "author_id"
-        case body
-        case createdAt = "created_at"
-    }
-}
-
 struct AppUpdateCheckResult: Codable, Equatable {
     var updateAvailable: Bool
     var required: Bool
@@ -628,13 +582,6 @@ struct WireGuardKeyPair: Codable, Equatable {
     var privateKey: String
     var publicKey: String
     var keyEpoch: Int
-}
-
-struct SupportSocketEnvelope: Codable, Equatable {
-    var type: String
-    var ticket: SupportTicket?
-    var tickets: [SupportTicket]?
-    var message: String?
 }
 
 struct AppRemoteConfig: Codable, Equatable {

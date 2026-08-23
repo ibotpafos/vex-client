@@ -83,8 +83,19 @@ final class SparkleUpdaterService: NSObject, ObservableObject, NativeUpdaterServ
     }
 
     var automaticallyChecksForUpdates: Bool {
-        get { updaterController?.updater.automaticallyChecksForUpdates ?? false }
-        set { updaterController?.updater.automaticallyChecksForUpdates = newValue }
+        get {
+            // Before the lazy controller exists, honor the persisted Sparkle
+            // default so the settings toggle reflects reality.
+            if let controller = updaterController {
+                return controller.updater.automaticallyChecksForUpdates
+            }
+            return UserDefaults.standard.object(forKey: "SUEnableAutomaticChecks") as? Bool ?? true
+        }
+        set {
+            // Constructing the controller on first toggle is safe here: this
+            // runs from a user action in Settings, never the launch drain.
+            ensureController().updater.automaticallyChecksForUpdates = newValue
+        }
     }
 
     func startUpdater() {

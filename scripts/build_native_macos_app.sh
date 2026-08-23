@@ -6,7 +6,6 @@ PACKAGE_DIR="${ROOT_DIR}/macos-native"
 BUILD_DIR="${PACKAGE_DIR}/build"
 APP_NAME="VEXNativeMac"
 APP_DIR="${BUILD_DIR}/${APP_NAME}.app"
-EXECUTABLE="${PACKAGE_DIR}/.build/release/${APP_NAME}"
 ICON_SOURCE="${ROOT_DIR}/assets/vex-app-icon-source.png"
 ICONSET_DIR="${BUILD_DIR}/VEXNative.iconset"
 ICNS_PATH="${APP_DIR}/Contents/Resources/VEXNative.icns"
@@ -77,7 +76,30 @@ fi
 cd "${PACKAGE_DIR}"
 export VEX_CODESIGN_IDENTITY="${CODESIGN_IDENTITY}"
 "${ROOT_DIR}/scripts/build_swift_macos_helper.sh"
-swift build -c release
+
+APP_SCRATCH_ROOT="${PACKAGE_DIR}/.build-app"
+build_app_arch() {
+  local arch="$1"
+  local triple="${arch}-apple-macosx15.0"
+  local scratch="${APP_SCRATCH_ROOT}/${arch}"
+  /usr/bin/swift build \
+    --package-path "${PACKAGE_DIR}" \
+    --scratch-path "${scratch}" \
+    --configuration release \
+    --product "${APP_NAME}" \
+    --triple "${triple}" >&2
+  /usr/bin/find "${scratch}" -type f -path "*/release/${APP_NAME}" -perm -111 -print -quit
+}
+
+arm_executable="$(build_app_arch arm64)"
+x86_executable="$(build_app_arch x86_64)"
+if [[ ! -x "${arm_executable}" || ! -x "${x86_executable}" ]]; then
+  echo "App build did not produce both architecture binaries." >&2
+  exit 1
+fi
+mkdir -p "${APP_SCRATCH_ROOT}"
+EXECUTABLE="${APP_SCRATCH_ROOT}/${APP_NAME}-universal"
+/usr/bin/lipo -create "${arm_executable}" "${x86_executable}" -output "${EXECUTABLE}"
 
 rm -rf "${APP_DIR}"
 mkdir -p "${APP_DIR}/Contents/MacOS"
@@ -89,18 +111,18 @@ if ! otool -l "${APP_DIR}/Contents/MacOS/${APP_NAME}" | grep -q "@executable_pat
   install_name_tool -add_rpath "@executable_path/../Frameworks" "${APP_DIR}/Contents/MacOS/${APP_NAME}"
 fi
 
-SPARKLE_FRAMEWORK="$(find "${PACKAGE_DIR}/.build" -type d -path "*/release/Sparkle.framework" | head -n 1)"
+SPARKLE_FRAMEWORK="$(find "${APP_SCRATCH_ROOT}" -type d -path "*/release/Sparkle.framework" | head -n 1)"
 if [[ -z "${SPARKLE_FRAMEWORK}" || ! -d "${SPARKLE_FRAMEWORK}" ]]; then
   SPARKLE_FRAMEWORK="$(find "${PACKAGE_DIR}/.build/artifacts" -type d -path "*/Sparkle.framework" | head -n 1)"
 fi
 if [[ -n "${SPARKLE_FRAMEWORK}" && -d "${SPARKLE_FRAMEWORK}" ]]; then
   ditto "${SPARKLE_FRAMEWORK}" "${APP_DIR}/Contents/Frameworks/Sparkle.framework"
 else
-  echo "Missing Sparkle.framework. Run 'swift build -c release' in ${PACKAGE_DIR} first." >&2
+  echo "Missing Sparkle.framework for the universal app build." >&2
   exit 1
 fi
 
-RESOURCE_BUNDLE="$(find "${PACKAGE_DIR}/.build" -type d -path "*/release/${APP_NAME}_${APP_NAME}.bundle" | head -n 1)"
+RESOURCE_BUNDLE="$(find "${APP_SCRATCH_ROOT}" -type d -path "*/release/${APP_NAME}_${APP_NAME}.bundle" | head -n 1)"
 if [[ -n "${RESOURCE_BUNDLE}" && -d "${RESOURCE_BUNDLE}" ]]; then
   cp -R "${RESOURCE_BUNDLE}" "${APP_DIR}/Contents/Resources/"
 else

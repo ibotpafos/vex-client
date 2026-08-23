@@ -45,3 +45,4 @@ native-windows/.build/
 # macOS native helper local build intermediates
 macos-native/.build-helper/
 macos-native/.build.stale-*/
+.build-app/

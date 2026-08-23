@@ -1,0 +1,18 @@
+{
+  "android": {
+    "current": {
+      "package": "com.vexguard.client",
+      "certificate_sha256": "0548ea2bafe6179226d2dde5ba50e2a5a6dabac1e90df655c8a58c042d046cca",
+      "introduced_version": "1.0.47",
+      "notes": "Current Android production package after signing-key migration."
+    },
+    "legacy": [
+      {
+        "package": "com.vexguard.app",
+        "certificate_sha256": "cc569dfaa4c2c82379669b7c13606eb268cc3eba90a9c88e20a2d4500daf8470",
+        "last_version": "1.0.46",
+        "notes": "Historical Android package. This keystore was lost; never publish this package with another signer."
+      }
+    ]
+  }
+}

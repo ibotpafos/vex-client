@@ -106,13 +106,6 @@ struct ContentView: View {
                 .padding(.horizontal, 30)
                 .padding(.top, 82)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        } else if selection == .support {
-            SupportPanel()
-                .frame(maxWidth: 760, maxHeight: .infinity)
-                .padding(.horizontal, 28)
-                .padding(.top, 62)
-                .padding(.bottom, 110)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else {
             ScrollView {
                 selectedPanel
@@ -238,8 +231,6 @@ struct ContentView: View {
             HomePanel(onShowServers: VEXServerSidebarWindow.toggle)
         case .account:
             AccountPanel()
-        case .support:
-            SupportPanel()
         case .settings:
             VEXSettingsView()
         }

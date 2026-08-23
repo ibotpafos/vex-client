@@ -3,9 +3,6 @@ import SwiftUI
 
 struct AccountPanel: View {
     @EnvironmentObject private var appState: VEXAppState
-    @State private var selectedFamilyID = ""
-    @State private var selectedPlanIndexes: [String: Int] = [:]
-    @State private var didChooseSubscriptionManually = false
 
     var body: some View {
         VStack(spacing: 12) {
@@ -29,10 +26,6 @@ struct AccountPanel: View {
         .padding(.bottom, 16)
         .task {
             await appState.refreshBilling()
-            synchronizeSelection(with: appState.billingSummary)
-        }
-        .onChange(of: appState.billingSummary) { _, summary in
-            synchronizeSelection(with: summary)
         }
     }
 
@@ -49,110 +42,30 @@ struct AccountPanel: View {
 
     private var subscriptionPicker: some View {
         VStack(alignment: .leading, spacing: 13) {
-                HStack(alignment: .center, spacing: 10) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Подписка")
-                            .font(.system(size: 16, weight: .black))
-                            .foregroundStyle(Color.vexText)
-                        Text("Выберите тариф или продлите текущий")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(Color.vexSecondaryText)
-                    }
-                    Spacer()
-                    if appState.isBillingBusy {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Button {
-                            Task { await appState.refreshBilling() }
-                        } label: {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 15, weight: .bold))
-                                .foregroundStyle(Color.vexSecondaryText)
-                                .frame(width: 28, height: 28)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Обновить данные подписки")
-                        .help("Обновить данные подписки")
-                    }
-                }
-
-                if !billingFamilies.isEmpty {
-                    HStack(spacing: 9) {
-                        ForEach(billingFamilies) { family in
-                            BillingFamilyCard(
-                                family: family,
-                                selected: family.id == selectedFamily?.id,
-                                busy: appState.isBillingBusy
-                            ) {
-                                didChooseSubscriptionManually = true
-                                selectedFamilyID = family.id
-                            }
-                        }
-                    }
-
-                    if let family = selectedFamily, let plan = selectedPlan {
-                        BillingDurationSelector(
-                            family: family,
-                            selectedIndex: selectedPlanIndex,
-                            busy: appState.isBillingBusy,
-                            onSelect: { index in
-                                didChooseSubscriptionManually = true
-                                selectedPlanIndexes = selectedPlanIndexes.merging([family.id: index]) {
-                                    _, newValue in newValue
-                                }
-                            }
-                        )
-
-                        Button {
-                            Task { await appState.startCheckout(for: plan) }
-                        } label: {
-                            HStack(spacing: 8) {
-                                if appState.isBillingBusy {
-                                    ProgressView()
-                                        .controlSize(.small)
-                                } else {
-                                    Image(systemName: "creditcard")
-                                }
-                                Text(appState.isBillingBusy ? "Открываем Platega…" : "Перейти к оплате · \(billingPrice(plan))")
-                                    .font(.system(size: 12, weight: .black))
-                            }
-                            .frame(maxWidth: .infinity, minHeight: 34)
-                        }
-                        .buttonStyle(.vexProminentGlass)
-                        .tint(Color.vexCyan)
-                        .disabled(plan.disabled || appState.isBillingBusy)
-                    }
-                } else {
-                    Text(appState.billingSummary?.emptyMessage ?? "Загружаем доступные тарифы…")
-                        .font(.system(size: 12, weight: .bold))
+            HStack(alignment: .center, spacing: 10) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Подписка")
+                        .font(.system(size: 16, weight: .black))
+                        .foregroundStyle(Color.vexText)
+                    Text("Оплата и управление подпиской — на сайте VEX")
+                        .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(Color.vexSecondaryText)
-                        .frame(maxWidth: .infinity, minHeight: 54, alignment: .center)
                 }
+                Spacer()
+            }
 
-                if canCancelSubscription {
-                    HStack {
-                        Text("Автопродление можно отключить в любой момент.")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(Color.vexMuted)
-                        Spacer()
-                        Button("Отключить") {
-                            Task { await appState.cancelSubscription() }
-                        }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(Color.vexSecondaryText)
-                        .disabled(appState.isBillingBusy)
-                    }
+            Button {
+                NSWorkspace.shared.open(BillingPresentation.billingDashboardURL)
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "creditcard")
+                    Text("Оплатить на сайте")
+                        .font(.system(size: 12, weight: .black))
                 }
-
-                if let error = visibleBillingError {
-                    Text(error)
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(Color(red: 1.0, green: 0.42, blue: 0.42))
-                        .textSelection(.enabled)
-                }
+                .frame(maxWidth: .infinity, minHeight: 34)
+            }
+            .buttonStyle(.vexProminentGlass)
+            .tint(Color.vexCyan)
         }
         .padding(.horizontal, 15)
     }
@@ -218,68 +131,6 @@ struct AccountPanel: View {
         guard let entitlement = appState.entitlement else { return .neutral }
         return entitlement.hasPaidAccess ? .good : .warning
     }
-
-    private var canCancelSubscription: Bool {
-        guard appState.billingSummary?.entitlementStatus == .active else { return false }
-        return (appState.billingSummary?.status ?? "").lowercased() != "canceled"
-    }
-
-    private var visibleBillingError: String? {
-        guard let error = appState.billingError?.trimmingCharacters(in: .whitespacesAndNewlines), !error.isEmpty else {
-            return nil
-        }
-        return error.contains("404 page not found") ? nil : error
-    }
-
-    private var billingFamilies: [BillingPlanFamily] {
-        appState.billingSummary?.families ?? []
-    }
-
-    private var selectedFamily: BillingPlanFamily? {
-        billingFamilies.first(where: { $0.id == selectedFamilyID }) ?? billingFamilies.first
-    }
-
-    private var selectedPlanIndex: Int {
-        guard let family = selectedFamily else { return 0 }
-        return min(max(selectedPlanIndexes[family.id] ?? 0, 0), max(0, family.plans.count - 1))
-    }
-
-    private var selectedPlan: BillingPlanOption? {
-        guard let family = selectedFamily, family.plans.indices.contains(selectedPlanIndex) else { return nil }
-        return family.plans[selectedPlanIndex]
-    }
-
-    private func billingPrice(_ plan: BillingPlanOption) -> String {
-        let formatter = NumberFormatter()
-        formatter.locale = Locale(identifier: "ru_RU")
-        formatter.numberStyle = .currency
-        formatter.currencyCode = plan.currency.uppercased()
-        formatter.maximumFractionDigits = plan.amountCents % 100 == 0 ? 0 : 2
-        return formatter.string(from: NSNumber(value: Double(plan.amountCents) / 100.0))
-            ?? "\(plan.amountCents / 100) \(plan.currency)"
-    }
-
-    private func synchronizeSelection(with summary: BillingSummary?) {
-        guard !didChooseSubscriptionManually,
-              let summary,
-              let currentPlan = summary.currentPlan,
-              let family = summary.families.first(where: {
-                  $0.id.caseInsensitiveCompare(currentPlan.tier) == .orderedSame
-                      || $0.plans.contains(where: { $0.id == currentPlan.id })
-              }) else {
-            return
-        }
-
-        selectedFamilyID = family.id
-        guard let planIndex = family.plans.firstIndex(where: { plan in
-            plan.id == currentPlan.id || plan.months == currentPlan.months
-        }) else {
-            return
-        }
-        selectedPlanIndexes = selectedPlanIndexes.merging([family.id: planIndex]) {
-            _, newValue in newValue
-        }
-    }
 }
 
 private struct AccountHero: View {
@@ -328,142 +179,6 @@ private struct AccountHero: View {
         let letters = pieces.prefix(2).compactMap(\.first)
         let result = String(letters).uppercased()
         return result.isEmpty ? "V" : result
-    }
-}
-
-private struct BillingFamilyCard: View {
-    let family: BillingPlanFamily
-    let selected: Bool
-    let busy: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: 7) {
-                HStack(spacing: 6) {
-                    if selected {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 12, weight: .black))
-                            .foregroundStyle(Color.vexCyan)
-                    }
-                    Text(family.name)
-                        .font(.system(size: 14, weight: .black))
-                        .foregroundStyle(Color.vexText)
-                        .lineLimit(1)
-                    Spacer()
-                }
-                Text("до \(family.deviceLimit) \(deviceWord(family.deviceLimit))")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(Color.vexSecondaryText)
-                    .lineLimit(1)
-            }
-            .padding(11)
-            .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(selected ? Color.vexCyan.opacity(0.10) : Color.white.opacity(0.045))
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(selected ? Color.vexCyan.opacity(0.46) : Color.white.opacity(0.06), lineWidth: 1)
-            }
-        }
-        .buttonStyle(.plain)
-        .disabled(busy)
-        .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-
-    private func deviceWord(_ count: Int) -> String {
-        let mod10 = count % 10
-        let mod100 = count % 100
-        if mod10 == 1 && mod100 != 11 { return "устройство" }
-        if (2...4).contains(mod10) && !(12...14).contains(mod100) { return "устройства" }
-        return "устройств"
-    }
-}
-
-private struct BillingDurationSelector: View {
-    let family: BillingPlanFamily
-    let selectedIndex: Int
-    let busy: Bool
-    let onSelect: (Int) -> Void
-
-    var body: some View {
-        VStack(spacing: 9) {
-            HStack(alignment: .bottom) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Срок")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(Color.vexMuted)
-                        .textCase(.uppercase)
-                    Text(durationText(selectedPlan.months))
-                        .font(.system(size: 13, weight: .black))
-                        .foregroundStyle(Color.vexText)
-                }
-                Spacer()
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text("Цена с сервера")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(Color.vexCyanLight.opacity(0.68))
-                    Text(priceText(selectedPlan))
-                        .font(.system(size: 15, weight: .black))
-                        .foregroundStyle(Color.vexCyanLight)
-                }
-            }
-
-            Slider(
-                value: Binding(
-                    get: { Double(selectedIndex) },
-                    set: { onSelect(Int($0.rounded())) }
-                ),
-                in: 0...Double(max(1, family.plans.count - 1)),
-                step: 1
-            )
-            .tint(Color.vexCyan)
-            .disabled(family.plans.count <= 1 || busy)
-            .accessibilityLabel("Срок подписки \(family.name)")
-            .accessibilityValue("\(durationText(selectedPlan.months)), \(priceText(selectedPlan))")
-
-            HStack {
-                ForEach(Array(family.plans.enumerated()), id: \.element.id) { index, plan in
-                    Text("\(plan.months)")
-                        .font(.system(size: 9, weight: index == selectedIndex ? .black : .bold))
-                        .foregroundStyle(index == selectedIndex ? Color.vexCyanLight : Color.vexMuted)
-                    if index < family.plans.count - 1 {
-                        Spacer()
-                    }
-                }
-            }
-        }
-        .padding(11)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.black.opacity(0.15))
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.white.opacity(0.06), lineWidth: 1)
-        }
-    }
-
-    private var selectedPlan: BillingPlanOption {
-        family.plans[min(max(selectedIndex, 0), family.plans.count - 1)]
-    }
-
-    private func durationText(_ months: Int) -> String {
-        if months == 1 { return "1 месяц" }
-        if (2...4).contains(months) { return "\(months) месяца" }
-        return "\(months) месяцев"
-    }
-
-    private func priceText(_ plan: BillingPlanOption) -> String {
-        let formatter = NumberFormatter()
-        formatter.locale = Locale(identifier: "ru_RU")
-        formatter.numberStyle = .currency
-        formatter.currencyCode = plan.currency.uppercased()
-        formatter.maximumFractionDigits = plan.amountCents % 100 == 0 ? 0 : 2
-        return formatter.string(from: NSNumber(value: Double(plan.amountCents) / 100.0))
-            ?? "\(plan.amountCents / 100) \(plan.currency)"
     }
 }
 

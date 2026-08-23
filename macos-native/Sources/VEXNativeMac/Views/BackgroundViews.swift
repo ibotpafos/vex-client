@@ -85,8 +85,6 @@ private extension AppSection {
             return .vexCyan
         case .account:
             return Color(red: 0.42, green: 0.72, blue: 1.0)
-        case .support:
-            return Color(red: 0.25, green: 0.94, blue: 0.70)
         case .settings:
             return Color(red: 0.55, green: 0.62, blue: 1.0)
         }

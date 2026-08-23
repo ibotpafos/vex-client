@@ -47,6 +47,7 @@ struct VpnLocation: Codable, Equatable, Identifiable {
     var availability: String
     var status: String
     var healthyNodes: Int
+    var awg3Nodes: Int?
     var latencyMs: Double?
 
     var displayName: String {
@@ -74,6 +75,7 @@ struct VpnLocation: Codable, Equatable, Identifiable {
         case availability
         case status
         case healthyNodes = "healthy_nodes"
+        case awg3Nodes = "awg3_nodes"
         case latencyMs = "latency_ms"
     }
 }

@@ -69,7 +69,16 @@ struct VEXAPIClient {
 
     func vpnLocations(accessToken: String) async throws -> [VpnLocation] {
         let locations: [VpnLocation] = try await json("/v1/locations", accessToken: accessToken)
-        return locations.filter { $0.healthyNodes > 0 && $0.availability != "retired" }
+        // macOS client speaks AmneziaWG 3 only: show locations that have
+        // AWG3-capable nodes (older backends without the field keep all
+        // locations; profile requests still pin awg_version=3).
+        return locations.filter { location in
+            guard location.healthyNodes > 0, location.availability != "retired" else { return false }
+            if let awg3Nodes = location.awg3Nodes {
+                return awg3Nodes > 0
+            }
+            return true
+        }
     }
 
     func entitlement(accessToken: String) async throws -> Entitlement {

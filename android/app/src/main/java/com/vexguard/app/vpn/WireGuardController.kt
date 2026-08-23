@@ -6,6 +6,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.VpnService
+import android.os.Build
 import android.os.SystemClock
 import android.system.Os
 import android.system.OsConstants.AF_INET
@@ -201,6 +202,12 @@ class WireGuardController(context: Context) {
   }
 
   private fun measureUnderlyingIcmpLatency(network: Network, host: String): Double? {
+    // Os.setsockoptTimeval / StructTimeval.fromMillis require API 29. Older
+    // releases previously failed implicitly inside the try below and returned
+    // null; keep that exact behavior but make it explicit for lint clarity.
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+      return null
+    }
     var fileDescriptor: FileDescriptor? = null
     try {
       val address = network.getAllByName(host).firstOrNull { it is Inet4Address } ?: return null

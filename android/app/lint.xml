@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+  <!-- Both foreground services are VpnService subclasses with
+       FOREGROUND_SERVICE_SYSTEM_EXEMPTED declared. The per-type permission
+       matrix that this check enforces does not apply to VPN services; adding
+       SCHEDULE_EXACT_ALARM/USE_EXACT_ALARM would also violate Play policy for
+       an app that has no alarm use cases. See AndroidManifest.xml comment. -->
+  <issue id="ForegroundServicePermission" severity="ignore"/>
+</lint>

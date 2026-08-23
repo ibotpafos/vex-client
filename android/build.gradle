@@ -45,6 +45,38 @@ subprojects { subproject ->
     }
   }
 
+  // AGP's bundled lint crashes with "Cannot find a KaModule for the
+  // VirtualFile" (K2 frontend bug, b/332584917 family) while analyzing
+  // .kts build scripts of third-party RN modules such as react-native-worklets.
+  // Because AGP's partial-analysis architecture always schedules
+  // lintAnalyze* for every Android module in the graph, that one crash breaks
+  // :app:lintDebug wholesale. Skip lint analysis only for third-party modules
+  // whose build script is Kotlin DSL; first-party :app and :amneziawg-tunnel
+  // keep full lint coverage.
+  if (subproject.name != 'app' &&
+      subproject.name != 'amneziawg-tunnel' &&
+      subproject.buildFile?.name?.endsWith('.kts') &&
+      subproject.projectDir.path.contains('node_modules')) {
+    subproject.plugins.withId('com.android.library') {
+      subproject.tasks.whenTaskAdded { task ->
+        if (task.name.startsWith('lintAnalyze')) {
+          task.enabled = false
+        }
+      }
+    }
+  }
+
+  subproject.plugins.withId("com.android.application") {
+    subproject.android {
+      lint {
+        checkDependencies = false
+        // Manifest-level suppressions live here because the offending
+        // declarations belong to :app.
+        lintConfig = file("${rootProject.projectDir}/app/lint.xml")
+      }
+    }
+  }
+
   if (subproject.name == "amneziawg-tunnel") {
     subproject.plugins.withId("com.android.library") {
       subproject.android {

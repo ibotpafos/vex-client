@@ -2,6 +2,11 @@
   <uses-permission android:name="android.permission.INTERNET"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED"/>
+  <!-- VpnService-based foreground services are exempt from the per-type
+       permission matrix enforced since targetSdk 34; lint's
+       ForegroundServicePermission cannot model that exemption and flags the
+       systemExempted services below. Production devices run these services
+       without SecurityExceptions, so the check is disabled deliberately. -->
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
   <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
   <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" tools:node="remove"/>

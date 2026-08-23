@@ -21,8 +21,11 @@ export EXPO_PUBLIC_VEX_UPDATE_CHANNEL="${EXPO_PUBLIC_VEX_UPDATE_CHANNEL:-local}"
 export EXPO_PUBLIC_VEX_ANDROID_EXPERIMENTAL_ROUTING="${EXPO_PUBLIC_VEX_ANDROID_EXPERIMENTAL_ROUTING:-1}"
 # Local device builds must never replace or masquerade as a production VEX
 # package. Keep the stable VEX Dev identity even when Gradle is invoked through
-# this wrapper without any caller-provided properties.
-export VEX_ANDROID_APPLICATION_ID="${VEX_ANDROID_APPLICATION_ID:-com.vexguard.app}"
+# this wrapper without any caller-provided properties. The Android applicationId
+# must match app.json (and the literal in android/app/build.gradle); the iOS
+# bundle identifier com.vexguard.app must never leak in here, or the final APK
+# verification fails against a correct artifact.
+export VEX_ANDROID_APPLICATION_ID="${VEX_ANDROID_APPLICATION_ID:-$(node -p "require('${root_dir}/app.json').expo.android.package")}"
 export VEX_DEBUG_APPLICATION_ID_SUFFIX="${VEX_DEBUG_APPLICATION_ID_SUFFIX:-.dev}"
 
 debug_keystore="${root_dir}/android/app/debug.keystore"

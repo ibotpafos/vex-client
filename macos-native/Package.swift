@@ -11,7 +11,7 @@ let package = Package(
         .executable(name: "VEXPrivilegedHelper", targets: ["VEXPrivilegedHelper"])
     ],
     dependencies: [
-        .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.9.4")
+        .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.9.6")
     ],
     targets: [
         .executableTarget(

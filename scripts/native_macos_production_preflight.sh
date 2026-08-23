@@ -63,6 +63,10 @@ done
 require_file "${resources_dir}/helper-version"
 [[ -r "${resources_dir}/helper-version" ]] || fail "resource is not readable: helper-version"
 
+for signed_resource in awg amneziawg-go vex-helper; do
+  codesign --verify --strict "${resources_dir}/${signed_resource}" \
+    || fail "code-signature verification failed for helper resource: ${signed_resource}"
+done
 codesign --verify --deep --strict "${APP_PATH}" || fail "codesign verification failed"
 
 signature_details="$(codesign -dvvv "${APP_PATH}" 2>&1 || true)"

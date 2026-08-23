@@ -217,6 +217,11 @@ cat >"${APP_DIR}/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
+for signed_resource in awg amneziawg-go vex-helper; do
+  codesign --remove-signature "${APP_DIR}/Contents/Resources/resources/${signed_resource}" 2>/dev/null || true
+  codesign "${CODESIGN_ARGS[@]}" "${APP_DIR}/Contents/Resources/resources/${signed_resource}"
+  codesign --verify --strict "${APP_DIR}/Contents/Resources/resources/${signed_resource}"
+done
 codesign "${CODESIGN_ARGS[@]}" "${APP_DIR}/Contents/Frameworks/Sparkle.framework"
 codesign "${CODESIGN_ARGS[@]}" --deep "${APP_DIR}"
 codesign --verify --deep --strict "${APP_DIR}"

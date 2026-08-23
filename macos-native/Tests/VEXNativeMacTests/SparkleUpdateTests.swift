@@ -231,7 +231,7 @@ final class SparkleUpdateTests: XCTestCase {
             encoding: .utf8
         )
 
-        XCTAssertTrue(package.contains("exact: \"2.9.4\""))
+        XCTAssertTrue(package.contains("exact: \"2.9.6\""))
     }
 
     func testNativeAppInfoUsesBundleVersionForUpdateContracts() throws {

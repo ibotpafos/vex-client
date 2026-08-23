@@ -98,13 +98,17 @@ final class SparkleUpdaterService: NSObject, ObservableObject, NativeUpdaterServ
         // the launch-time autorelease drain.
         Task { @MainActor in
             controller.checkForUpdates(nil)
+            startPendingBackgroundCheckIfPossible()
         }
     }
 
     func checkForUpdatesInBackground() {
         guard !backgroundCheckRequested else { return }
         backgroundCheckRequested = true
-        startPendingBackgroundCheckIfPossible()
+        // Controller may not exist yet (lazy init); if it does, run now.
+        if updaterController != nil {
+            startPendingBackgroundCheckIfPossible()
+        }
     }
 
     private func startPendingBackgroundCheckIfPossible() {

@@ -37,7 +37,7 @@ final class SparkleUpdateTests: XCTestCase {
         appState.checkForNativeUpdates()
 
         XCTAssertEqual(updater.checkForUpdatesCallCount, 1)
-        XCTAssertEqual(appState.statusMessage, "Открыли Sparkle проверку обновлений.")
+        XCTAssertEqual(appState.statusMessage, "Проверяем обновления…")
     }
 
     func testSparklePublicKeyValidationRejectsMissingAndPlaceholderValues() {
@@ -63,7 +63,7 @@ final class SparkleUpdateTests: XCTestCase {
     }
 
     func testUnavailableUpdaterDoesNotClaimSparkleWindowWasOpened() {
-        let updater = MockNativeUpdaterService(canCheckForUpdates: false)
+        let updater = MockNativeUpdaterService(canCheckForUpdates: false, isEnabled: false)
         let appState = VEXAppState(nativeUpdater: updater)
 
         appState.checkForNativeUpdates()
@@ -434,13 +434,14 @@ final class SparkleUpdateTests: XCTestCase {
 private final class MockNativeUpdaterService: NativeUpdaterService {
     var automaticallyChecksForUpdates = true
     var canCheckForUpdates: Bool
-    let isEnabled = true
+    let isEnabled: Bool
     private(set) var checkForUpdatesCallCount = 0
     private(set) var checkForUpdatesInBackgroundCallCount = 0
     private(set) var startUpdaterCallCount = 0
 
-    init(canCheckForUpdates: Bool = true) {
+    init(canCheckForUpdates: Bool = true, isEnabled: Bool = true) {
         self.canCheckForUpdates = canCheckForUpdates
+        self.isEnabled = isEnabled
     }
 
     func startUpdater() {

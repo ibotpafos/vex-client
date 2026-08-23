@@ -645,12 +645,14 @@ final class VEXAppState: ObservableObject {
     }
 
     func checkForNativeUpdates() {
-        guard nativeUpdater.canCheckForUpdates else {
+        guard nativeUpdater.isEnabled else {
             statusMessage = "Проверка обновлений временно недоступна."
             return
         }
+        // Lazy path: constructs the Sparkle controller on first explicit
+        // user action (never during launch drain) and starts the check.
         nativeUpdater.checkForUpdates()
-        statusMessage = "Открыли Sparkle проверку обновлений."
+        statusMessage = "Проверяем обновления…"
     }
 
     func prepareAutomaticUpdatesForStartup() {

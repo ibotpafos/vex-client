@@ -19,13 +19,15 @@ struct VPNProfileService {
         self.cache = cache
     }
 
+    nonisolated static let awgVersion = 3
+
     func resolveProfile(
         accessToken: String,
         locationId: String,
         routingMode: VpnRoutingMode,
         forceRefresh: Bool = false,
         writeHelperConfig: Bool = true,
-        awgVersion: Int = 3
+        prevalidatedEntitlement: Entitlement? = nil
     ) async throws -> PreparedTunnel {
         let normalizedLocationId = normalizeLocationId(locationId)
         let bypassRegion = bypassRegion(for: routingMode)
@@ -36,16 +38,20 @@ struct VPNProfileService {
            !Self.cachedProfileNeedsRefresh(
                 cached,
                 requestedLocationId: normalizedLocationId,
-                requestedRoutingMode: routingMode,
-                requestedAwgVersion: awgVersion
-            ) {
+                requestedRoutingMode: routingMode
+           ) {
             if writeHelperConfig {
-                try cache.writeHelperConfig(helperConfig(cached.config))
+                try await writeSanitizedHelperConfig(cached.config)
             }
             return cached.tunnel
         }
 
-        let entitlement = try await api.entitlement(accessToken: accessToken)
+        let entitlement: Entitlement
+        if let prevalidatedEntitlement {
+            entitlement = prevalidatedEntitlement
+        } else {
+            entitlement = try await api.entitlement(accessToken: accessToken)
+        }
         guard entitlement.hasPaidAccess else {
             throw VPNProfileError.subscriptionInactive
         }
@@ -71,7 +77,7 @@ struct VPNProfileService {
 
         var effectiveRoutingMode = routingMode
         var effectiveBypassRegion = bypassRegion
-        let knownProfileVersion = cached?.awgVersion == awgVersion ? cached?.profileVersion : nil
+        let knownProfileVersion = cached?.awgVersion == Self.awgVersion ? cached?.profileVersion : nil
         let managedProfile: ManagedVpnProfile
         do {
             managedProfile = try await api.managedVpnProfile(
@@ -80,8 +86,7 @@ struct VPNProfileService {
                 locationId: normalizedLocationId,
                 routingMode: routingMode,
                 bypassRegion: bypassRegion,
-                knownVersion: knownProfileVersion,
-                awgVersion: awgVersion
+                knownVersion: knownProfileVersion
             )
         } catch {
             if error.isTimeout,
@@ -94,7 +99,7 @@ struct VPNProfileService {
                     allowStale: true
                ) {
                 if writeHelperConfig {
-                    try cache.writeHelperConfig(helperConfig(cached.config))
+                    try await writeSanitizedHelperConfig(cached.config)
                 }
                 return cached.tunnel
             }
@@ -107,10 +112,9 @@ struct VPNProfileService {
                     locationId: normalizedLocationId,
                     routingMode: .allExceptRu,
                     bypassRegion: effectiveBypassRegion,
-                    knownVersion: nil,
-                    awgVersion: awgVersion
+                    knownVersion: nil
                 )
-                return try persistManagedProfile(
+                return try await persistManagedProfile(
                     managedProfile,
                     cached: cached,
                     device: device,
@@ -118,8 +122,7 @@ struct VPNProfileService {
                     locationId: normalizedLocationId,
                     routingMode: effectiveRoutingMode,
                     bypassRegion: effectiveBypassRegion,
-                    writeHelperConfig: writeHelperConfig,
-                    awgVersion: awgVersion
+                    writeHelperConfig: writeHelperConfig
                 )
             }
             guard routingMode != .fullTunnel, error.isTimeout else {
@@ -132,11 +135,10 @@ struct VPNProfileService {
                !Self.cachedProfileNeedsRefresh(
                     fallbackCached,
                     requestedLocationId: normalizedLocationId,
-                    requestedRoutingMode: .fullTunnel,
-                    requestedAwgVersion: awgVersion
-                ) {
+                    requestedRoutingMode: .fullTunnel
+               ) {
                 if writeHelperConfig {
-                    try cache.writeHelperConfig(helperConfig(fallbackCached.config))
+                    try await writeSanitizedHelperConfig(fallbackCached.config)
                 }
                 return fallbackCached.tunnel
             }
@@ -146,8 +148,7 @@ struct VPNProfileService {
                 locationId: normalizedLocationId,
                 routingMode: .fullTunnel,
                 bypassRegion: nil,
-                knownVersion: nil,
-                awgVersion: awgVersion
+                knownVersion: nil
             )
         }
 
@@ -155,7 +156,7 @@ struct VPNProfileService {
             throw VPNProfileError.deviceRevoked
         }
 
-        return try persistManagedProfile(
+        return try await persistManagedProfile(
             managedProfile,
             cached: cached,
             device: device,
@@ -163,8 +164,7 @@ struct VPNProfileService {
             locationId: normalizedLocationId,
             routingMode: effectiveRoutingMode,
             bypassRegion: effectiveBypassRegion,
-            writeHelperConfig: writeHelperConfig,
-            awgVersion: awgVersion
+            writeHelperConfig: writeHelperConfig
         )
     }
 
@@ -176,16 +176,15 @@ struct VPNProfileService {
         locationId normalizedLocationId: String,
         routingMode effectiveRoutingMode: VpnRoutingMode,
         bypassRegion effectiveBypassRegion: String?,
-        writeHelperConfig: Bool,
-        awgVersion: Int
-    ) throws -> PreparedTunnel {
+        writeHelperConfig: Bool
+    ) async throws -> PreparedTunnel {
         if managedProfile.revoked == true {
             throw VPNProfileError.deviceRevoked
         }
 
         let config: String
         if managedProfile.unchanged == true {
-            guard cached?.awgVersion == awgVersion,
+            guard cached?.awgVersion == Self.awgVersion,
                   let cachedConfig = cached?.config,
                   isValidConfig(cachedConfig) else {
                 throw VPNProfileError.unchangedProfileWithoutCache
@@ -194,7 +193,11 @@ struct VPNProfileService {
         } else if let apiConfig = managedProfile.config, isValidConfig(apiConfig) {
             config = apiConfig
         } else {
-            config = try managedProfileConfig(managedProfile, keyPair: keyPair)
+            // Endpoint resolution performs a blocking getaddrinfo; keep it off
+            // the main actor so slow DNS never stalls the UI.
+            config = try await Task.detached(priority: .userInitiated) { [keyPair] in
+                try Self.buildRawManagedProfileConfig(managedProfile, keyPair: keyPair)
+            }.value
         }
 
         let nextDevice = device.withManagedProfile(managedProfile, locationId: normalizedLocationId)
@@ -209,11 +212,11 @@ struct VPNProfileService {
             bypassDomainsCount: managedProfile.bypassDomains?.filter { !$0.isEmpty }.count ?? 0,
             routingPolicyVersion: managedProfile.routingPolicyVersion ?? VEXAppInfo.routingPolicyVersion,
             rotationRequired: managedProfile.rotationRequired == true,
-            awgVersion: awgVersion
+            awgVersion: Self.awgVersion
         )
         try cache.save(PreparedTunnelCacheRecord(tunnel: tunnel), locationId: normalizedLocationId, routingMode: effectiveRoutingMode)
         if writeHelperConfig {
-            try cache.writeHelperConfig(helperConfig(config))
+            try await writeSanitizedHelperConfig(config)
         }
         return tunnel
     }
@@ -235,8 +238,19 @@ struct VPNProfileService {
         )
     }
 
-    func writeHelperConfig(for tunnel: PreparedTunnel) throws {
-        try cache.writeHelperConfig(helperConfig(tunnel.config))
+    func writeHelperConfig(for tunnel: PreparedTunnel) async throws {
+        try await writeSanitizedHelperConfig(tunnel.config)
+    }
+
+    private func writeSanitizedHelperConfig(_ config: String) async throws {
+        let sanitized = await Self.sanitizedHelperConfigOffMain(config)
+        try cache.writeHelperConfig(sanitized)
+    }
+
+    nonisolated private static func sanitizedHelperConfigOffMain(_ config: String) async -> String {
+        await Task.detached(priority: .userInitiated) {
+            Self.sanitizedMacOSHelperConfig(config, endpointResolver: Self.resolveConfigEndpoint)
+        }.value
     }
 
     private func activeDevice(
@@ -366,11 +380,11 @@ struct VPNProfileService {
         }
     }
 
-    private func managedProfileConfig(_ profile: ManagedVpnProfile, keyPair: WireGuardKeyPair) throws -> String {
+    nonisolated private static func buildRawManagedProfileConfig(_ profile: ManagedVpnProfile, keyPair: WireGuardKeyPair) throws -> String {
         guard !keyPair.privateKey.isEmpty else { throw VPNProfileError.incompleteProfile("privateKey") }
         guard let address = profile.assignedIpv4, !address.isEmpty else { throw VPNProfileError.incompleteProfile("assigned_ipv4") }
         guard let endpoint = managedProfileEndpoint(profile), !endpoint.isEmpty else { throw VPNProfileError.incompleteProfile("endpoint") }
-        let configEndpoint = resolvedConfigEndpoint(endpoint)
+        let configEndpoint = resolveConfigEndpoint(endpoint)
         guard let serverPublicKey = profile.serverPublicKey, !serverPublicKey.isEmpty else { throw VPNProfileError.incompleteProfile("server_public_key") }
 
         let dns = clean(profile.dns)
@@ -394,7 +408,7 @@ struct VPNProfileService {
         """
     }
 
-    static func amneziaConfig(_ amnezia: ManagedVpnAmnezia?) -> String {
+    nonisolated static func amneziaConfig(_ amnezia: ManagedVpnAmnezia?) -> String {
         guard let amnezia else { return "" }
         var lines: [String] = []
         addNumber("Jc", amnezia.jc, to: &lines)
@@ -423,14 +437,10 @@ struct VPNProfileService {
         return lines.isEmpty ? "" : "\(lines.joined(separator: "\n"))\n"
     }
 
-    private func managedProfileEndpoint(_ profile: ManagedVpnProfile) -> String? {
+    nonisolated private static func managedProfileEndpoint(_ profile: ManagedVpnProfile) -> String? {
         guard let server = profile.server, !server.isEmpty else { return nil }
         guard let port = profile.port, port > 0 else { return server }
         return "\(server):\(port)"
-    }
-
-    private func helperConfig(_ config: String) -> String {
-        Self.sanitizedMacOSHelperConfig(config, endpointResolver: resolvedConfigEndpoint)
     }
 
     nonisolated static func sanitizedMacOSHelperConfig(
@@ -484,7 +494,6 @@ struct VPNProfileService {
         _ cached: PreparedTunnelCacheRecord,
         requestedLocationId: String,
         requestedRoutingMode: VpnRoutingMode,
-        requestedAwgVersion: Int = 3,
         allowStale: Bool = false,
         now: Date = Date()
     ) -> Bool {
@@ -495,7 +504,8 @@ struct VPNProfileService {
         if cached.routingMode != requestedRoutingMode {
             return true
         }
-        if (cached.awgVersion ?? 2) != requestedAwgVersion {
+        // Legacy cache entries were provisioned for AWG2; force a fresh AWG3 profile.
+        if (cached.awgVersion ?? 2) != awgVersion {
             return true
         }
         if cachedDeviceNodeDoesNotMatchLocation(cached.device, requestedLocationId: requestedLocationId) {
@@ -539,7 +549,7 @@ struct VPNProfileService {
         return false
     }
 
-    private func resolvedConfigEndpoint(_ endpoint: String) -> String {
+    nonisolated private static func resolveConfigEndpoint(_ endpoint: String) -> String {
         guard let parsed = PreparedTunnelEndpoint(endpoint),
               let port = parsed.port,
               parsed.host.rangeOfCharacter(from: CharacterSet.letters) != nil else {
@@ -576,7 +586,7 @@ struct VPNProfileService {
         value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 
-    private func clean(_ values: [String]?) -> [String] {
+    nonisolated private static func clean(_ values: [String]?) -> [String] {
         values?.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty } ?? []
     }
 
@@ -584,13 +594,13 @@ struct VPNProfileService {
         config.contains("[Interface]") && config.contains("[Peer]")
     }
 
-    private static func addNumber(_ key: String, _ value: Int?, to lines: inout [String]) {
+    nonisolated private static func addNumber(_ key: String, _ value: Int?, to lines: inout [String]) {
         if let value, value != 0 {
             lines.append("\(key) = \(value)")
         }
     }
 
-    private static func addString(_ key: String, _ value: String?, to lines: inout [String]) {
+    nonisolated private static func addString(_ key: String, _ value: String?, to lines: inout [String]) {
         let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let normalized, !normalized.isEmpty {
             lines.append("\(key) = \(normalized)")
@@ -664,7 +674,7 @@ extension PreparedTunnel {
     }
 
     var lastSuccessfulEndpoint: String? {
-        nil
+        LastTunnelEndpointStore().endpoint(for: locationId)
     }
 
     func withEndpoint(_ endpoint: String) -> PreparedTunnel? {
@@ -715,8 +725,68 @@ private struct PreparedTunnelEndpoint {
     }
 }
 
-private enum IPv4Resolver {
+/// IPv4 resolver with a small TTL cache and a hard resolution timeout.
+///
+/// Endpoint resolution feeds the PF anti-leak rules and the helper config, so a
+/// hanging DNS server must never stall the connect flow: after
+/// `maxResolutionSeconds` the caller falls back to the hostname endpoint and
+/// amneziawg-go performs its own resolution at tunnel bring-up.
+enum IPv4Resolver {
+    private struct Entry {
+        let address: String
+        let expiresAt: Date
+    }
+
+    static let maxResolutionSeconds: TimeInterval = 3
+    static let cacheTTLSeconds: TimeInterval = 300
+
+    private static let lock = NSLock()
+    private static var entries: [String: Entry] = [:]
+
+    static func cachedAddress(for host: String, now: Date = Date()) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let entry = entries[host] else { return nil }
+        guard entry.expiresAt > now else {
+            entries.removeValue(forKey: host)
+            return nil
+        }
+        return entry.address
+    }
+
+    static func store(_ address: String, for host: String, now: Date = Date()) {
+        lock.lock()
+        defer { lock.unlock() }
+        entries[host] = Entry(address: address, expiresAt: now.addingTimeInterval(cacheTTLSeconds))
+    }
+
     static func resolve(_ host: String) -> String? {
+        if let cached = cachedAddress(for: host) {
+            return cached
+        }
+        guard let resolved = resolveWithTimeout(host) else {
+            return nil
+        }
+        store(resolved, for: host)
+        return resolved
+    }
+
+    private static func resolveWithTimeout(_ host: String) -> String? {
+        let box = ResolutionBox()
+        let semaphore = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .utility).async {
+            box.value = blockingResolve(host)
+            semaphore.signal()
+        }
+        // The writer stores the value before signaling, so a successful wait
+        // guarantees visibility. On timeout the blocked thread is abandoned.
+        guard semaphore.wait(timeout: .now() + maxResolutionSeconds) == .success else {
+            return nil
+        }
+        return box.value
+    }
+
+    private static func blockingResolve(_ host: String) -> String? {
         var hints = addrinfo(
             ai_flags: 0,
             ai_family: AF_INET,
@@ -747,4 +817,8 @@ private enum IPv4Resolver {
         }
         return nil
     }
+}
+
+private final class ResolutionBox: @unchecked Sendable {
+    var value: String?
 }

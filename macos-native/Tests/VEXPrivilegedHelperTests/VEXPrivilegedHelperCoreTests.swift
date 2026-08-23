@@ -430,6 +430,109 @@ final class VEXPrivilegedHelperCoreTests: XCTestCase {
         XCTAssertTrue(fileSystem.fileExists(at: "/helper/dns-baseline.state"))
     }
 
+    func testRefreshedSessionSkipsSubprocessFanOutWhenDaemonIsGone() throws {
+        let paths = HelperPathsLayout(
+            helperDirectory: "/helper",
+            socketPath: "/tmp/helper.sock",
+            ownerSessionPath: "/helper/owner.state",
+            operationLockPath: "/helper/operation.lock",
+            antileakStatePath: "/helper/antileak.state",
+            legacyAntileakStatePath: "/helper/antileak.active",
+            antileakAnchorPath: "/helper/anchor",
+            sessionStatePath: "/helper/session.state",
+            interfacePath: "/helper/utun.name",
+            endpointPath: "/helper/endpoint.txt",
+            runtimeDirectory: "/runtime",
+            amneziaRuntimeDirectory: "/amnezia",
+            awgQuickPath: "/helper/awg-quick.sh",
+            activeConfigPath: "/helper/active.conf",
+            dnsStatePath: "/helper/dns-baseline.state",
+            awgPath: "/helper/awg",
+        )
+        let fileSystem = InMemoryFileSystem(files: [
+            "/helper/session.state": HelperSession(interfaceName: "utun9", endpoint: "1.1.1.1:51820", ownerPID: 42, socketExists: true, antiLeakArmed: false).payload
+        ])
+        let runner = RecordingCommandRunner([:])
+        let tunnel = SystemTunnelController(
+            fileSystem: fileSystem,
+            paths: paths,
+            runner: runner,
+            firewall: PassiveFirewall()
+        )
+
+        let session = try tunnel.refreshedSession(
+            currentSession: HelperSession(interfaceName: "utun9", endpoint: "1.1.1.1:51820", ownerPID: 42, socketExists: true, antiLeakArmed: false)
+        )
+
+        XCTAssertTrue(runner.calls.isEmpty, "A missing UAPI socket must short-circuit without spawning subprocesses")
+        XCTAssertEqual(session?.socketExists, false)
+        XCTAssertNil(session?.routeInterface)
+        XCTAssertEqual(session?.dnsHealthy, false)
+    }
+
+    func testRefreshedSessionStopsAtFailedDumpWithoutRouteLookups() throws {
+        let paths = HelperPathsLayout(
+            helperDirectory: "/helper",
+            socketPath: "/tmp/helper.sock",
+            ownerSessionPath: "/helper/owner.state",
+            operationLockPath: "/helper/operation.lock",
+            antileakStatePath: "/helper/antileak.state",
+            legacyAntileakStatePath: "/helper/antileak.active",
+            antileakAnchorPath: "/helper/anchor",
+            sessionStatePath: "/helper/session.state",
+            interfacePath: "/helper/utun.name",
+            endpointPath: "/helper/endpoint.txt",
+            runtimeDirectory: "/runtime",
+            amneziaRuntimeDirectory: "/amnezia",
+            awgQuickPath: "/helper/awg-quick.sh",
+            activeConfigPath: "/helper/active.conf",
+            dnsStatePath: "/helper/dns-baseline.state",
+            awgPath: "/helper/awg",
+        )
+        let fileSystem = InMemoryFileSystem(files: [
+            "/helper/session.state": HelperSession(interfaceName: "utun9", endpoint: "1.1.1.1:51820", ownerPID: 42, socketExists: true, antiLeakArmed: false).payload,
+            "/runtime/utun9.sock": ""
+        ])
+        let runner = RecordingCommandRunner([
+            CommandSpec(program: "/helper/awg", arguments: ["show", "utun9", "dump"], timeout: 3): .init(status: 1)
+        ])
+        let tunnel = SystemTunnelController(
+            fileSystem: fileSystem,
+            paths: paths,
+            runner: runner,
+            firewall: PassiveFirewall()
+        )
+
+        let session = try tunnel.refreshedSession(
+            currentSession: HelperSession(interfaceName: "utun9", endpoint: "1.1.1.1:51820", ownerPID: 42, socketExists: true, antiLeakArmed: false)
+        )
+
+        XCTAssertEqual(runner.calls.count, 1, "Only the dump command may run; route/DNS lookups must be skipped")
+        XCTAssertEqual(runner.calls.first?.program, "/helper/awg")
+        XCTAssertEqual(session?.socketExists, false)
+        XCTAssertEqual(session?.dnsHealthy, false)
+    }
+
+    func testStatusSnapshotCacheAbsorbsPollBursts() async throws {
+        let fileSystem = InMemoryFileSystem(files: [:])
+        let tunnel = CountingRefreshTunnelController(
+            refreshed: HelperSession(interfaceName: "utun9", endpoint: "1.1.1.1:51820", ownerPID: 42, routeInterface: "utun9", socketExists: true, antiLeakArmed: false)
+        )
+        let runtime = HelperRuntime(
+            store: HelperStateStore(fileSystem: fileSystem, paths: HelperPathsLayout(helperDirectory: "/helper", socketPath: "/tmp/helper.sock", ownerSessionPath: "/helper/owner.state", operationLockPath: "/helper/operation.lock", antileakStatePath: "/helper/antileak.state", legacyAntileakStatePath: "/helper/antileak.active", antileakAnchorPath: "/helper/anchor", sessionStatePath: "/helper/session.state", interfacePath: "/helper/utun.name", endpointPath: "/helper/endpoint.txt", runtimeDirectory: "/runtime")),
+            tunnelController: tunnel,
+            firewallController: PassiveFirewall(),
+            processInspector: StaticProcessInspector(identities: [42: "new"]),
+            sleeper: ManualSleeper()
+        )
+
+        _ = await runtime.snapshotStatus()
+        _ = await runtime.snapshotStatus()
+        _ = await runtime.snapshotStatus()
+
+        XCTAssertEqual(tunnel.refreshCallCount, 1, "Rapid status polls must reuse the cached snapshot")
+    }
+
     func testDisconnectRestoresPersistedDNSBaselineBeforeClearingRecoveryState() throws {
         let paths = HelperPathsLayout(
             helperDirectory: "/helper",
@@ -896,6 +999,35 @@ private struct StaticProcessInspector: ProcessInspecting {
 
 private struct ManualSleeper: AsyncSleeping {
     func sleep(for duration: Duration) async throws {}
+}
+
+private final class CountingRefreshTunnelController: TunnelControlling, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _refreshCallCount = 0
+    private let session: HelperSession?
+
+    init(refreshed: HelperSession?) {
+        self.session = refreshed
+    }
+
+    var refreshCallCount: Int {
+        lock.withLock { _refreshCallCount }
+    }
+
+    func bringUp(currentSession: HelperSession?, armAntiLeak: Bool, ownerPID: Int32?) throws -> HelperSession {
+        session ?? currentSession ?? HelperSession(interfaceName: "", endpoint: "")
+    }
+
+    func bringDown(currentSession: HelperSession?) throws {}
+
+    func repair(currentSession: HelperSession?) throws -> HelperSession? {
+        session ?? currentSession
+    }
+
+    func refreshedSession(currentSession: HelperSession?) throws -> HelperSession? {
+        lock.withLock { _refreshCallCount += 1 }
+        return session
+    }
 }
 
 private final class RepairingTunnelController: TunnelControlling, @unchecked Sendable {

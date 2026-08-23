@@ -352,7 +352,8 @@ final class VEXAppState: ObservableObject {
                 accessToken: requestToken,
                 locationId: targetLocationId,
                 routingMode: routingMode,
-                forceRefresh: false
+                forceRefresh: false,
+                prevalidatedEntitlement: entitlement
             )
             try ensureConnectStillDesired(generation: generation)
             let connectedTunnel = try await connectWithAutopilot(
@@ -363,8 +364,12 @@ final class VEXAppState: ObservableObject {
             )
             try ensureConnectStillDesired(generation: generation)
             activeTunnel = connectedTunnel
-            await api.reportVpnConnect(accessToken: tunnelToken, tunnel: connectedTunnel)
             statusMessage = "VPN подключен через \(selectedLocation?.displayName ?? connectedTunnel.locationId.uppercased())."
+            // Reporting is fire-and-forget: the tunnel is already up, so a slow
+            // API round-trip must neither hold the busy state nor delay feedback.
+            Task { [api] in
+                await api.reportVpnConnect(accessToken: tunnelToken, tunnel: connectedTunnel)
+            }
         } catch is CancellationError {
             await helper.interruptWithDisconnect(releaseAntiLeak: !antiLeakEnabled)
             statusMessage = "Подключение VPN отменено."
@@ -387,33 +392,6 @@ final class VEXAppState: ObservableObject {
             return try await connectPreparedTunnel(initialTunnel, helper: helper, generation: generation)
         } catch {
             try ensureConnectStillDesired(generation: generation)
-
-            // AWG3 is the primary transport. Keep AWG2 available as a temporary
-            // compatibility fallback for nodes or helpers that cannot handshake it.
-            if initialTunnel.awgVersion == 3 {
-                do {
-                    statusMessage = "AWG3 не подключился. Пробуем резервный AWG2."
-                    let fallbackTunnel = try await profileService.resolveProfile(
-                        accessToken: token,
-                        locationId: initialTunnel.locationId,
-                        routingMode: routingMode,
-                        forceRefresh: true,
-                        awgVersion: 2
-                    )
-                    try ensureConnectStillDesired(generation: generation)
-                    let connectedFallback = try await connectPreparedTunnel(
-                        fallbackTunnel,
-                        helper: helper,
-                        generation: generation
-                    )
-                    statusMessage = "VPN подключен через резервный AWG2."
-                    return connectedFallback
-                } catch is CancellationError {
-                    throw CancellationError()
-                } catch {
-                    // Continue with the existing key/profile and location recovery.
-                }
-            }
 
             let probe = await autopilotService.probe(endpoint: initialTunnel.endpoint)
             let usage = await autopilotService.usage(accessToken: token, deviceId: initialTunnel.device.id)
@@ -477,10 +455,13 @@ final class VEXAppState: ObservableObject {
         for attempt in autopilotService.fallbackTunnels(for: tunnel) {
             try ensureConnectStillDesired(generation: generation)
             activeTunnel = attempt
-            try profileService.writeHelperConfig(for: attempt)
+            try await profileService.writeHelperConfig(for: attempt)
             await helper.connect(antiLeakEnabled: antiLeakEnabled)
             try ensureConnectStillDesired(generation: generation)
             if helper.status.isUsableConnectedStatus {
+                if let endpoint = attempt.endpoint {
+                    LastTunnelEndpointStore().save(endpoint, locationId: attempt.locationId)
+                }
                 return attempt
             }
             if helper.status.routeOk, helper.status.socketExists, helper.status.latestHandshake == nil, helper.status.rxBytes == 0 {
@@ -522,12 +503,15 @@ final class VEXAppState: ObservableObject {
         }
         isVpnBusy = true
         await helper.disconnect(releaseAntiLeak: !antiLeakEnabled)
-        if let token = accessToken {
-            await api.reportVpnDisconnect(accessToken: token, tunnel: activeTunnel, reason: reason)
-        }
+        let reportedTunnel = activeTunnel
         activeTunnel = nil
         statusMessage = "VPN отключен."
         isVpnBusy = false
+        if let token = accessToken {
+            Task { [api] in
+                await api.reportVpnDisconnect(accessToken: token, tunnel: reportedTunnel, reason: reason)
+            }
+        }
 
         if desiredVpnState == .connected {
             vpnOperationGeneration += 1
@@ -590,7 +574,7 @@ final class VEXAppState: ObservableObject {
             )
             try ensureConnectStillDesired(generation: generation)
             activeTunnel = nextTunnel
-            try profileService.writeHelperConfig(for: nextTunnel)
+            try await profileService.writeHelperConfig(for: nextTunnel)
             serverSidebarOperation = .connecting
             await helper.disconnect(releaseAntiLeak: false)
             try ensureConnectStillDesired(generation: generation)
@@ -599,10 +583,15 @@ final class VEXAppState: ObservableObject {
             serverSidebarOperation = .verifying
 
             if helper.status.isUsableConnectedStatus {
-                await api.reportVpnDisconnect(accessToken: token, tunnel: previousTunnel, reason: "server_switch")
-                await api.reportVpnConnect(accessToken: token, tunnel: nextTunnel)
+                if let endpoint = nextTunnel.endpoint {
+                    LastTunnelEndpointStore().save(endpoint, locationId: nextTunnel.locationId)
+                }
                 statusMessage = "VPN переключен на \(selectedLocation?.displayName ?? nextTunnel.locationId.uppercased())."
                 serverSidebarOperation = .verified(statusMessage ?? "VPN переключен.")
+                Task { [api] in
+                    await api.reportVpnDisconnect(accessToken: token, tunnel: previousTunnel, reason: "server_switch")
+                    await api.reportVpnConnect(accessToken: token, tunnel: nextTunnel)
+                }
                 return true
             }
 
@@ -614,7 +603,7 @@ final class VEXAppState: ObservableObject {
         } catch {
             activeTunnel = previousTunnel
             if let previousTunnel {
-                try? profileService.writeHelperConfig(for: previousTunnel)
+                try? await profileService.writeHelperConfig(for: previousTunnel)
                 await helper.connect(antiLeakEnabled: antiLeakEnabled)
             }
             let previousRouteRestored =
@@ -1063,9 +1052,13 @@ final class VEXAppState: ObservableObject {
             billingSummary = cachedSummary
         }
 
+        // All three requests start concurrently; payments are awaited separately
+        // so a payments failure never masks the summary/entitlement result.
+        async let plansResult = api.billingPlans()
+        async let entitlementResult = api.entitlement(accessToken: token)
+        async let paymentsResult = api.billingPayments(accessToken: token, limit: 24)
+
         do {
-            async let plansResult = api.billingPlans()
-            async let entitlementResult = api.entitlement(accessToken: token)
             let (plans, currentEntitlement) = try await (plansResult, entitlementResult)
             entitlement = currentEntitlement
             billingSummary = billingService.buildSummary(plans: plans, entitlement: currentEntitlement)
@@ -1082,7 +1075,7 @@ final class VEXAppState: ObservableObject {
         }
 
         do {
-            billingPayments = try await api.billingPayments(accessToken: token, limit: 24)
+            billingPayments = try await paymentsResult
         } catch {
             billingPayments = []
             if billingError == nil {
@@ -1391,14 +1384,16 @@ final class VEXAppState: ObservableObject {
         accessToken token: String,
         locationId: String,
         routingMode: VpnRoutingMode,
-        forceRefresh: Bool
+        forceRefresh: Bool,
+        prevalidatedEntitlement: Entitlement? = nil
     ) async throws -> (PreparedTunnel, String) {
         do {
             let tunnel = try await profileService.resolveProfile(
                 accessToken: token,
                 locationId: locationId,
                 routingMode: routingMode,
-                forceRefresh: forceRefresh
+                forceRefresh: forceRefresh,
+                prevalidatedEntitlement: prevalidatedEntitlement
             )
             return (tunnel, token)
         } catch {
@@ -1593,11 +1588,14 @@ final class VEXAppState: ObservableObject {
         profileWarmupTask?.cancel()
         profileWarmupTask = Task { [profileService] in
             do {
+                // Warmup fills the cache only when it is missing, stale or for a
+                // different location/mode; a fresh cached profile resolves with
+                // zero network round-trips.
                 _ = try await profileService.resolveProfile(
                     accessToken: token,
                     locationId: locationId,
                     routingMode: mode,
-                    forceRefresh: true,
+                    forceRefresh: false,
                     writeHelperConfig: false
                 )
             } catch is CancellationError {

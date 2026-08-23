@@ -1,5 +1,32 @@
 import Foundation
 
+/// Remembers the endpoint that last completed a successful handshake per
+/// location, so reconnect attempts start from a known-good address instead of
+/// replaying the default one and waiting out full handshake timeouts.
+struct LastTunnelEndpointStore {
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    func endpoint(for locationId: String) -> String? {
+        guard !locationId.isEmpty else { return nil }
+        return defaults.string(forKey: Self.key(for: locationId))
+    }
+
+    func save(_ endpoint: String, locationId: String) {
+        let trimmedLocation = locationId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedEndpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedLocation.isEmpty, !trimmedEndpoint.isEmpty else { return }
+        defaults.set(trimmedEndpoint, forKey: Self.key(for: trimmedLocation))
+    }
+
+    private static func key(for locationId: String) -> String {
+        "native.lastSuccessfulEndpoint.\(locationId.lowercased())"
+    }
+}
+
 struct VPNProfileCache {
     private let fileManager = FileManager.default
 
@@ -21,6 +48,11 @@ struct VPNProfileCache {
     func writeHelperConfig(_ config: String) throws {
         let url = helperConfigURL()
         try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        // Rewrites are skipped when the sanitized config is unchanged, so repeated
+        // connect attempts do not touch disk (and trigger file-provider syncs) needlessly.
+        if let current = try? String(contentsOf: url, encoding: .utf8), current == config {
+            return
+        }
         try config.write(to: url, atomically: true, encoding: .utf8)
         try setOwnerOnlyPermissions(url)
     }

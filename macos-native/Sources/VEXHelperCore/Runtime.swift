@@ -9,6 +9,7 @@ public struct HelperRuntimeConfiguration: Sendable {
     public var routeWatchdogInterval: Duration
     public var operationLockStaleAfter: TimeInterval
     public var handshakeStarveFailOpenTicks: Int
+    public var statusCacheTTL: TimeInterval
 
     public init(
         maxCommandBytes: Int = 512,
@@ -16,7 +17,8 @@ public struct HelperRuntimeConfiguration: Sendable {
         ownerWatchdogInterval: Duration = .seconds(4),
         routeWatchdogInterval: Duration = .seconds(2),
         operationLockStaleAfter: TimeInterval = 120,
-        handshakeStarveFailOpenTicks: Int = 10
+        handshakeStarveFailOpenTicks: Int = 10,
+        statusCacheTTL: TimeInterval = 0.25
     ) {
         self.maxCommandBytes = maxCommandBytes
         self.commandTimeout = commandTimeout
@@ -24,6 +26,7 @@ public struct HelperRuntimeConfiguration: Sendable {
         self.routeWatchdogInterval = routeWatchdogInterval
         self.operationLockStaleAfter = operationLockStaleAfter
         self.handshakeStarveFailOpenTicks = handshakeStarveFailOpenTicks
+        self.statusCacheTTL = statusCacheTTL
     }
 }
 
@@ -51,6 +54,8 @@ public actor HelperRuntime {
     private var routeWatchdogTask: Task<Void, Never>?
     private var unhealthyTunnelTicks = 0
     private var handshakeStarvedTicks = 0
+    private var cachedStatusSession: HelperSession?
+    private var cachedStatusAt: Date?
 
     public init(
         store: HelperStateStore,
@@ -116,8 +121,22 @@ public actor HelperRuntime {
     }
 
     public func snapshotStatus() async -> HelperStatusSnapshot {
+        makeStatusSnapshot(from: refreshedStatusSession())
+    }
+
+    /// The app polls status in tight bursts while confirming a connect (up to
+    /// ~5 requests within 750ms). Each uncached refresh spawns several root
+    /// subprocesses, so answers younger than `statusCacheTTL` are reused.
+    private func refreshedStatusSession() -> HelperSession? {
+        let now = dateProvider.now
+        if let cachedStatusSession, let cachedStatusAt,
+           now.timeIntervalSince(cachedStatusAt) < configuration.statusCacheTTL {
+            return cachedStatusSession
+        }
         let session = (try? tunnelController.refreshedSession(currentSession: store.loadSession())) ?? store.loadSession()
-        return makeStatusSnapshot(from: session)
+        cachedStatusSession = session
+        cachedStatusAt = now
+        return session
     }
 
     public func runOwnerWatchdogTick() async {
@@ -265,9 +284,9 @@ public actor HelperRuntime {
     private func execute(command: HelperCommand, peerPID: Int32?) async throws -> HelperCommandResponse {
         switch command {
         case .status:
-            return HelperCommandResponse(payload: makeStatusSnapshot(from: try tunnelController.refreshedSession(currentSession: store.loadSession())).statusResponse)
+            return HelperCommandResponse(payload: makeStatusSnapshot(from: refreshedStatusSession()).statusResponse)
         case .diagnostics:
-            return HelperCommandResponse(payload: makeStatusSnapshot(from: try tunnelController.refreshedSession(currentSession: store.loadSession())).diagnosticsResponse)
+            return HelperCommandResponse(payload: makeStatusSnapshot(from: refreshedStatusSession()).diagnosticsResponse)
         case .up(let armAntiLeak, let ownerPID):
             let verified = try verifiedOwnerPID(requested: ownerPID, peerPID: peerPID)
             try store.withOperationLock(staleAfter: configuration.operationLockStaleAfter) {
@@ -606,23 +625,30 @@ private func setSocketTimeout(_ fd: Int32, seconds: Int) {
 
 private func readCommandBytes(from fd: Int32, maxBytes: Int) throws -> [UInt8] {
     var bytes = [UInt8]()
-    var nextByte: UInt8 = 0
-    while bytes.count <= maxBytes {
-        let count = Darwin.read(fd, &nextByte, 1)
-        if count == 1 {
-            bytes.append(nextByte)
-            if nextByte == 10 {
-                break
+    bytes.reserveCapacity(64)
+    let bufferSize = 256
+    var buffer = [UInt8](repeating: 0, count: bufferSize)
+    readLoop: while bytes.count <= maxBytes {
+        let bytesRead = buffer.withUnsafeMutableBytes { rawBuffer in
+            Darwin.read(fd, rawBuffer.baseAddress, bufferSize)
+        }
+        switch bytesRead {
+        case 0:
+            break readLoop
+        case -1:
+            if errno == EINTR {
+                continue
             }
-            continue
+            throw HelperError.readFailed(String(cString: strerror(errno)))
+        default:
+            let chunk = buffer[..<bytesRead]
+            if let newlineIndex = chunk.firstIndex(of: 10) {
+                bytes.append(contentsOf: chunk[..<newlineIndex])
+                bytes.append(10)
+                break readLoop
+            }
+            bytes.append(contentsOf: chunk)
         }
-        if count == 0 {
-            break
-        }
-        if errno == EINTR {
-            continue
-        }
-        throw HelperError.readFailed(String(cString: strerror(errno)))
     }
     if bytes.count > maxBytes {
         throw HelperError.commandTooLong(limit: maxBytes)

@@ -10,9 +10,18 @@ final class SupportSocketClient: ObservableObject {
     private var task: URLSessionWebSocketTask?
     private var connectionTask: Task<Void, Never>?
     private var reconnectTask: Task<Void, Never>?
+    private var keepaliveTask: Task<Void, Never>?
     private var accessToken: String?
     private var onSnapshot: (([SupportTicket]) -> Void)?
     private var onTicket: ((SupportTicket) -> Void)?
+    private var reconnectAttempt = 0
+
+    private enum ReconnectPolicy {
+        static let baseDelay: Duration = .seconds(3)
+        static let maxDelay: Duration = .seconds(60)
+        static let maxBackoffExponent = 4
+        static let keepalivePingInterval: Duration = .seconds(30)
+    }
 
     init(api: VEXAPIClient = VEXAPIClient()) {
         self.api = api
@@ -25,8 +34,10 @@ final class SupportSocketClient: ObservableObject {
         connectionTask = nil
         reconnectTask?.cancel()
         reconnectTask = nil
+        stopKeepalive()
         isConnected = false
         isReconnecting = false
+        reconnectAttempt = 0
         self.accessToken = accessToken
         self.onSnapshot = onSnapshot
         self.onTicket = onTicket
@@ -38,6 +49,7 @@ final class SupportSocketClient: ObservableObject {
         connectionTask = nil
         reconnectTask?.cancel()
         reconnectTask = nil
+        stopKeepalive()
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
         isConnected = false
@@ -106,6 +118,37 @@ final class SupportSocketClient: ObservableObject {
                 self.isConnected = true
                 self.isReconnecting = false
                 self.lastError = nil
+                self.reconnectAttempt = 0
+                self.startKeepalive(task)
+            }
+        }
+    }
+
+    private func startKeepalive(_ socketTask: URLSessionWebSocketTask) {
+        keepaliveTask?.cancel()
+        keepaliveTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: ReconnectPolicy.keepalivePingInterval)
+                guard !Task.isCancelled else { return }
+                self?.sendKeepalivePing(socketTask)
+            }
+        }
+    }
+
+    private func stopKeepalive() {
+        keepaliveTask?.cancel()
+        keepaliveTask = nil
+    }
+
+    private func sendKeepalivePing(_ socketTask: URLSessionWebSocketTask) {
+        guard task === socketTask else { return }
+        socketTask.sendPing { [weak self, weak socketTask] error in
+            guard let error else { return }
+            Task { @MainActor in
+                guard let self, self.task === socketTask else { return }
+                self.isConnected = false
+                self.lastError = error.localizedDescription
+                self.scheduleReconnect()
             }
         }
     }
@@ -167,10 +210,14 @@ final class SupportSocketClient: ObservableObject {
         guard reconnectTask == nil else { return }
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
+        stopKeepalive()
         isReconnecting = true
+        reconnectAttempt += 1
+        let multiplier = 1 << min(reconnectAttempt - 1, ReconnectPolicy.maxBackoffExponent)
+        let delay = min(ReconnectPolicy.baseDelay * multiplier, ReconnectPolicy.maxDelay)
         reconnectTask = Task { [weak self] in
             do {
-                try await Task.sleep(nanoseconds: 3_000_000_000)
+                try await Task.sleep(for: delay)
             } catch { return }
             guard !Task.isCancelled else { return }
             await MainActor.run {

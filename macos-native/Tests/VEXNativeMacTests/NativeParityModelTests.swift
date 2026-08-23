@@ -281,8 +281,109 @@ final class NativeParityModelTests: XCTestCase {
 
         XCTAssertTrue(appState.contains("private var profileWarmupTask: Task<Void, Never>?"))
         XCTAssertTrue(appState.contains("scheduleProfileWarmup()"))
-        XCTAssertTrue(appState.contains("forceRefresh: false\n            )\n            try ensureConnectStillDesired"))
-        XCTAssertTrue(appState.contains("forceRefresh: true,\n                    writeHelperConfig: false\n                )\n            } catch is CancellationError"))
+        XCTAssertTrue(appState.contains("forceRefresh: false,\n                prevalidatedEntitlement: entitlement\n            )\n            try ensureConnectStillDesired"))
+        XCTAssertTrue(appState.contains("forceRefresh: false,\n                    writeHelperConfig: false\n                )\n            } catch is CancellationError"))
+        XCTAssertFalse(appState.contains("forceRefresh: true,\n                    writeHelperConfig: false"))
+    }
+
+    func testConnectReusesValidatedEntitlementWithoutSecondFetch() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let appStateURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Stores/VEXAppState.swift")
+        let profileServiceURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/VPNProfileService.swift")
+        let appState = try String(contentsOf: appStateURL, encoding: .utf8)
+        let profileService = try String(contentsOf: profileServiceURL, encoding: .utf8)
+
+        XCTAssertTrue(appState.contains("prevalidatedEntitlement: entitlement"))
+        XCTAssertTrue(profileService.contains("prevalidatedEntitlement: Entitlement? = nil"))
+        XCTAssertTrue(profileService.contains("if let prevalidatedEntitlement {"))
+        XCTAssertTrue(profileService.contains("entitlement = try await api.entitlement(accessToken: accessToken)"))
+    }
+
+    func testHelperConfigSanitizationAvoidsMainThreadDNS() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let profileServiceURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/VPNProfileService.swift")
+        let profileService = try String(contentsOf: profileServiceURL, encoding: .utf8)
+
+        XCTAssertTrue(profileService.contains("nonisolated private static func resolveConfigEndpoint"))
+        XCTAssertTrue(profileService.contains("nonisolated private static func sanitizedHelperConfigOffMain"))
+        XCTAssertTrue(profileService.contains("Task.detached(priority: .userInitiated)"))
+        XCTAssertFalse(profileService.contains("endpointResolver: resolvedConfigEndpoint"), "DNS must not run on the main actor")
+    }
+
+    func testDNSResolverCachesAndExpiresEntriesWithoutNetwork() {
+        let host = "dns-cache-test-\(UUID().uuidString).invalid"
+        let base = Date(timeIntervalSince1970: 1_000_000)
+
+        XCTAssertNil(IPv4Resolver.cachedAddress(for: host, now: base))
+
+        IPv4Resolver.store("203.0.113.10", for: host, now: base)
+        XCTAssertEqual(IPv4Resolver.cachedAddress(for: host, now: base.addingTimeInterval(IPv4Resolver.cacheTTLSeconds - 1)), "203.0.113.10")
+
+        XCTAssertNil(IPv4Resolver.cachedAddress(for: host, now: base.addingTimeInterval(IPv4Resolver.cacheTTLSeconds + 1)), "Expired DNS entries must be dropped")
+    }
+
+    func testHelperConfigWriteSkipsUnchangedContent() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let cacheURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/VPNProfileCache.swift")
+        let cache = try String(contentsOf: cacheURL, encoding: .utf8)
+
+        XCTAssertTrue(cache.contains("current == config"), "Unchanged helper config must not be rewritten to disk")
+        XCTAssertTrue(cache.contains("atomically: true"))
+    }
+
+    func testLastSuccessfulEndpointStoreRoundTripsPerLocation() throws {
+        let suiteName = "test-last-endpoint-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = LastTunnelEndpointStore(defaults: defaults)
+
+        XCTAssertNil(store.endpoint(for: "de"))
+
+        store.save("de1.vexguard.app:443", locationId: "de")
+        XCTAssertEqual(store.endpoint(for: "de"), "de1.vexguard.app:443")
+        XCTAssertNil(store.endpoint(for: "fi"), "Endpoints must be scoped per location")
+
+        store.save("", locationId: "fi")
+        XCTAssertNil(store.endpoint(for: "fi"), "Empty endpoints must be rejected")
+    }
+
+    func testConnectFlowPersistsLastSuccessfulEndpointForFasterReconnects() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let appStateURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Stores/VEXAppState.swift")
+        let autopilotURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/VpnAutopilotService.swift")
+        let profileServiceURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/VPNProfileService.swift")
+        let appState = try String(contentsOf: appStateURL, encoding: .utf8)
+        let autopilot = try String(contentsOf: autopilotURL, encoding: .utf8)
+        let profileService = try String(contentsOf: profileServiceURL, encoding: .utf8)
+
+        XCTAssertTrue(appState.contains("LastTunnelEndpointStore().save(endpoint, locationId: attempt.locationId)"))
+        XCTAssertTrue(appState.contains("LastTunnelEndpointStore().save(endpoint, locationId: nextTunnel.locationId)"))
+        XCTAssertTrue(profileService.contains("LastTunnelEndpointStore().endpoint(for: locationId)"))
+        XCTAssertTrue(autopilot.contains("if let lastSuccessfulEndpoint = tunnel.lastSuccessfulEndpoint"), "Autopilot must try the known-good endpoint first")
+    }
+
+    func testVpnReportingNeverBlocksBusyStateOrSuccessFeedback() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let appStateURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Stores/VEXAppState.swift")
+        let appState = try String(contentsOf: appStateURL, encoding: .utf8)
+
+        // Every report call must live inside a fire-and-forget task, never on
+        // the connect/disconnect/switch operation path itself.
+        XCTAssertTrue(appState.contains("Task { [api] in\n                await api.reportVpnConnect(accessToken: tunnelToken, tunnel: connectedTunnel)"))
+        XCTAssertTrue(appState.contains("Task { [api] in\n                await api.reportVpnDisconnect(accessToken: token, tunnel: reportedTunnel, reason: reason)"))
+        XCTAssertTrue(appState.contains("Task { [api] in\n                    await api.reportVpnDisconnect(accessToken: token, tunnel: previousTunnel, reason: \"server_switch\")"))
+        XCTAssertTrue(appState.contains("// Reporting is fire-and-forget"))
+    }
+
+    func testBillingFetchesRunConcurrently() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let appStateURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Stores/VEXAppState.swift")
+        let appState = try String(contentsOf: appStateURL, encoding: .utf8)
+
+        XCTAssertTrue(appState.contains("async let plansResult = api.billingPlans()"))
+        XCTAssertTrue(appState.contains("async let entitlementResult = api.entitlement(accessToken: token)"))
+        XCTAssertTrue(appState.contains("async let paymentsResult = api.billingPayments(accessToken: token, limit: 24)"))
+        XCTAssertTrue(appState.contains("billingPayments = try await paymentsResult"), "Payments must reuse the concurrently started request")
     }
 
     func testAppStateRestoresActiveTunnelWhenHelperIsAlreadyConnectedOnLaunch() throws {
@@ -399,6 +500,58 @@ final class NativeParityModelTests: XCTestCase {
         let api = try String(contentsOf: apiURL, encoding: .utf8)
 
         XCTAssertTrue(api.contains("URLQueryItem(name: \"awg_version\", value: \"3\")"))
+        XCTAssertFalse(api.contains("awgVersion == 3"), "AWG3 must be unconditional, not a branch")
+        XCTAssertFalse(api.contains("awgVersion: Int = 3"), "AWG version is fixed and must not be parameterized")
+    }
+
+    func testConnectFlowDoesNotFallBackToAWG2() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let appStateURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Stores/VEXAppState.swift")
+        let appState = try String(contentsOf: appStateURL, encoding: .utf8)
+
+        XCTAssertFalse(appState.contains("AWG2"), "AWG2 fallback was removed; connect flow must be AWG3-only")
+        XCTAssertFalse(appState.contains("awgVersion: 2"), "AWG2 profile requests must not exist")
+    }
+
+    func testLegacyAWG2CacheRecordsAreInvalidatedForAWG3() throws {
+        let device = try JSONDecoder().decode(VpnDevice.self, from: """
+        {"id":"dev_1","name":"Mac","status":"active","protocol":"amneziawg","external_device_id":"macos-test"}
+        """.data(using: .utf8)!)
+
+        func tunnel(awgVersion: Int) -> PreparedTunnel {
+            PreparedTunnel(
+                device: device,
+                config: "[Interface]\nPrivateKey = x\n\n[Peer]\nPublicKey = y\nEndpoint = de1.vexguard.app:443\n",
+                locationId: "de",
+                profileVersion: 1,
+                routingMode: .allExceptRu,
+                bypassRegion: nil,
+                bypassRangesCount: 0,
+                bypassDomainsCount: 0,
+                routingPolicyVersion: VEXAppInfo.routingPolicyVersion,
+                rotationRequired: false,
+                awgVersion: awgVersion
+            )
+        }
+
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let profileServiceURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/VPNProfileService.swift")
+        let profileService = try String(contentsOf: profileServiceURL, encoding: .utf8)
+
+        XCTAssertTrue(profileService.contains("nonisolated static let awgVersion = 3"))
+        XCTAssertTrue(profileService.contains("(cached.awgVersion ?? 2) != awgVersion"))
+        XCTAssertTrue(VPNProfileService.cachedProfileNeedsRefresh(
+            PreparedTunnelCacheRecord(tunnel: tunnel(awgVersion: 2)),
+            requestedLocationId: "de",
+            requestedRoutingMode: .allExceptRu,
+            allowStale: true
+        ))
+        XCTAssertFalse(VPNProfileService.cachedProfileNeedsRefresh(
+            PreparedTunnelCacheRecord(tunnel: tunnel(awgVersion: 3)),
+            requestedLocationId: "de",
+            requestedRoutingMode: .allExceptRu,
+            allowStale: true
+        ))
     }
 
     func testSessionRefreshIsSingleFlightAndDoesNotClearNewerSession() throws {
@@ -797,7 +950,7 @@ final class NativeParityModelTests: XCTestCase {
         let helperBuildScript = try String(contentsOf: helperBuildScriptURL, encoding: .utf8)
         let verifyScript = try String(contentsOf: verifyScriptURL, encoding: .utf8)
 
-        XCTAssertEqual(helperVersion, "35")
+        XCTAssertEqual(helperVersion, "36")
         XCTAssertTrue(installer.contains("helper_version_file=\"$src_dir/helper-version\""))
         XCTAssertTrue(nativeInstaller.contains("resourceFile(\"helper-version\")"))
         XCTAssertTrue(buildScript.contains("helper-version"))
@@ -1388,6 +1541,9 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(helperRuntime.contains("store.withOperationLock"))
         XCTAssertTrue(helperModel.contains("refreshConnectedStatusUntilStable"))
         XCTAssertTrue(helperModel.contains("status.isUsableConnectedStatus"))
+        XCTAssertTrue(helperModel.contains("private let handshakePatienceDeadline: Duration = .seconds(10)"), "Slow first handshakes must not trigger tunnel teardown")
+        XCTAssertTrue(helperModel.contains("let structurallyUp = status.socketExists"))
+        XCTAssertTrue(helperModel.contains("structurallyUp ? patientDeadline : quickDeadline"))
         XCTAssertTrue(appState.contains("if helper.status.isUsableConnectedStatus"))
         XCTAssertTrue(appState.contains("guard helper.status.isUsableConnectedStatus else"))
         XCTAssertTrue(appState.contains("scheduleProfileWarmup()"))
@@ -1531,6 +1687,20 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(socket.contains("accessToken = nil"))
         XCTAssertTrue(socket.contains("guard !Task.isCancelled, self.accessToken == accessToken else { return }"))
         XCTAssertFalse(socket.contains("task.resume()\n            isConnected = true"))
+    }
+
+    func testSupportSocketReconnectUsesExponentialBackoffAndKeepalive() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let socketURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/SupportSocketClient.swift")
+        let socket = try String(contentsOf: socketURL, encoding: .utf8)
+
+        XCTAssertTrue(socket.contains("reconnectAttempt += 1"))
+        XCTAssertTrue(socket.contains("reconnectAttempt = 0"))
+        XCTAssertTrue(socket.contains("ReconnectPolicy.baseDelay * multiplier"))
+        XCTAssertTrue(socket.contains("static let maxDelay: Duration = .seconds(60)"))
+        XCTAssertTrue(socket.contains("startKeepalive(task)"))
+        XCTAssertTrue(socket.contains("keepalivePingInterval"))
+        XCTAssertFalse(socket.contains("nanoseconds: 3_000_000_000"), "Fixed reconnect delay must be replaced by exponential backoff")
     }
 
     func testViewAndReconnectTasksStopImmediatelyAfterCancellation() throws {

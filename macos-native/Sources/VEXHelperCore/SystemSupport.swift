@@ -474,14 +474,29 @@ public final class SystemTunnelController: TunnelControlling, @unchecked Sendabl
         guard var session = currentSession else { return nil }
         let socketPresent = fileSystem.fileExists(at: paths.runtimeSocketPath(for: session.interfaceName))
             || fileSystem.fileExists(at: paths.amneziaSocketPath(for: session.interfaceName))
-        let dump = try runner.run(CommandSpec(program: paths.awgPath, arguments: ["show", session.interfaceName, "dump"], timeout: 3))
-        session.socketExists = socketPresent && dump.succeeded
-        if dump.succeeded {
-            let peer = dump.stdout.split(whereSeparator: \.isNewline).dropFirst().first?.split(separator: "\t", omittingEmptySubsequences: false)
-            session.latestHandshake = peer.flatMap { $0.count > 4 ? UInt64($0[4]) : nil }
-            session.rxBytes = peer.flatMap { $0.count > 5 ? UInt64($0[5]) : nil } ?? session.rxBytes
-            session.txBytes = peer.flatMap { $0.count > 6 ? UInt64($0[6]) : nil } ?? session.txBytes
+        guard socketPresent else {
+            // Without the userspace daemon's UAPI socket routes and DNS cannot
+            // be healthy; skip the expensive route/scutil subprocess fan-out.
+            session.socketExists = false
+            session.routeInterface = nil
+            session.ipv6RouteInterface = nil
+            session.dnsHealthy = false
+            session.antiLeakArmed = firewall.antileakIsActive()
+            return session
         }
+        let dump = try runner.run(CommandSpec(program: paths.awgPath, arguments: ["show", session.interfaceName, "dump"], timeout: 3))
+        session.socketExists = dump.succeeded
+        guard dump.succeeded else {
+            session.routeInterface = nil
+            session.ipv6RouteInterface = nil
+            session.dnsHealthy = false
+            session.antiLeakArmed = firewall.antileakIsActive()
+            return session
+        }
+        let peer = dump.stdout.split(whereSeparator: \.isNewline).dropFirst().first?.split(separator: "\t", omittingEmptySubsequences: false)
+        session.latestHandshake = peer.flatMap { $0.count > 4 ? UInt64($0[4]) : nil }
+        session.rxBytes = peer.flatMap { $0.count > 5 ? UInt64($0[5]) : nil } ?? session.rxBytes
+        session.txBytes = peer.flatMap { $0.count > 6 ? UInt64($0[6]) : nil } ?? session.txBytes
         session.routeInterface = routeInterface(for: "1.1.1.1")
         session.ipv6RouteInterface = ipv6FullTunnelRouteInterface()
         session.dnsHealthy = dnsIsConfigured(

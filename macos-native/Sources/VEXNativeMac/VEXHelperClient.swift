@@ -15,6 +15,10 @@ final class VEXHelperModel: ObservableObject {
     private var consecutiveStatusFailures = 0
     private var helperReadinessValidated = false
     private let connectStabilizationDeadline: Duration = .milliseconds(750)
+    // Slow links routinely need several seconds for the first handshake. While
+    // the tunnel is structurally up (route + UAPI socket confirmed), keep
+    // waiting instead of tearing down a working tunnel and cycling ports.
+    private let handshakePatienceDeadline: Duration = .seconds(10)
 
     #if DEBUG
     func configureInstallationPreview(_ phase: VEXHelperInstallationPhase) {
@@ -251,19 +255,27 @@ final class VEXHelperModel: ObservableObject {
     }
 
     private func refreshConnectedStatusUntilStable() async -> Bool {
-        let deadline = ContinuousClock.now.advanced(by: connectStabilizationDeadline)
-        repeat {
+        let start = ContinuousClock.now
+        let quickDeadline = start.advanced(by: connectStabilizationDeadline)
+        let patientDeadline = start.advanced(by: handshakePatienceDeadline)
+        while true {
             await refreshStatus(quiet: true)
             if status.isUsableConnectedStatus {
                 return true
             }
+            let structurallyUp = status.socketExists
+                && status.routeOk
+                && (!status.ipv6RouteExpected || status.ipv6RouteOk)
+            guard ContinuousClock.now < (structurallyUp ? patientDeadline : quickDeadline) else {
+                break
+            }
             do {
-                try await Task.sleep(nanoseconds: 160_000_000)
+                try await Task.sleep(nanoseconds: structurallyUp ? 400_000_000 : 160_000_000)
             } catch {
                 return false
             }
             guard !Task.isCancelled else { return false }
-        } while ContinuousClock.now < deadline
+        }
         await refreshStatus(quiet: true)
         return status.isUsableConnectedStatus
     }
@@ -403,23 +415,30 @@ func sendUnixSocketCommand(
     try writeAllToHelperSocket(Array(payload.utf8), fd: fd)
 
     var response = [UInt8]()
-    var byte: UInt8 = 0
-    while response.count < 8192 {
-        let bytesRead = Darwin.read(fd, &byte, 1)
-        if bytesRead == 1 {
-            response.append(byte)
-            if byte == 10 {
-                break
+    response.reserveCapacity(1024)
+    let bufferSize = 1024
+    var buffer = [UInt8](repeating: 0, count: bufferSize)
+    readLoop: while response.count < 8192 {
+        let bytesRead = buffer.withUnsafeMutableBytes { rawBuffer in
+            Darwin.read(fd, rawBuffer.baseAddress, bufferSize)
+        }
+        switch bytesRead {
+        case 0:
+            break readLoop
+        case -1:
+            if errno == EINTR {
+                continue
             }
-            continue
+            throw VEXHelperError.readFailed
+        default:
+            let chunk = buffer[..<bytesRead]
+            if let newlineIndex = chunk.firstIndex(of: 10) {
+                response.append(contentsOf: chunk[..<newlineIndex])
+                response.append(10)
+                break readLoop
+            }
+            response.append(contentsOf: chunk)
         }
-        if bytesRead == 0 {
-            break
-        }
-        if errno == EINTR {
-            continue
-        }
-        throw VEXHelperError.readFailed
     }
 
     return try decodeHelperResponseFrame(

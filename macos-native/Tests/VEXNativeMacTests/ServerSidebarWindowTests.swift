@@ -389,7 +389,7 @@ final class ServerSidebarWindowTests: XCTestCase {
             encoding: .utf8
         )
         let heroStart = try XCTUnwrap(source.range(of: "private struct AccountHero"))
-        let heroEnd = try XCTUnwrap(source.range(of: "private struct BillingFamilyCard"))
+        let heroEnd = try XCTUnwrap(source.range(of: "private struct PaymentHistoryRow"))
         let heroSource = source[heroStart.lowerBound..<heroEnd.lowerBound]
         let pickerStart = try XCTUnwrap(source.range(of: "private var subscriptionPicker"))
         let pickerEnd = try XCTUnwrap(source.range(of: "private var paymentHistory"))
@@ -397,11 +397,10 @@ final class ServerSidebarWindowTests: XCTestCase {
 
         XCTAssertFalse(heroSource.contains("VEXFeatureSurface("))
         XCTAssertFalse(pickerSource.contains("AccountSurfaceCard("))
-        XCTAssertTrue(pickerSource.contains("BillingFamilyCard("))
-        XCTAssertTrue(pickerSource.contains("BillingDurationSelector("))
+        XCTAssertTrue(pickerSource.contains("Оплатить на сайте"))
     }
 
-    func testSubscriptionSelectionFollowsCurrentPlanUntilUserChoosesManually() throws {
+    func testSubscriptionSelectionOpensExternalBillingDashboard() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let source = try String(
             contentsOf: packageRoot.appendingPathComponent(
@@ -410,20 +409,14 @@ final class ServerSidebarWindowTests: XCTestCase {
             encoding: .utf8
         )
 
-        XCTAssertTrue(source.contains("@State private var didChooseSubscriptionManually = false"))
-        XCTAssertTrue(source.contains("synchronizeSelection(with: appState.billingSummary)"))
-        XCTAssertTrue(source.contains("guard !didChooseSubscriptionManually"))
-        XCTAssertTrue(source.contains("plan.id == currentPlan.id || plan.months == currentPlan.months"))
+        // Subscription management is external-only: one button, no in-app picker state.
+        XCTAssertFalse(source.contains("didChooseSubscriptionManually"))
+        XCTAssertFalse(source.contains("startCheckout(for: plan)"))
+        XCTAssertTrue(source.contains("NSWorkspace.shared.open(BillingPresentation.billingDashboardURL)"))
     }
 
     func testSubscriptionAndServerChoicesExposeAccessibleSelectionState() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let account = try String(
-            contentsOf: packageRoot.appendingPathComponent(
-                "Sources/VEXNativeMac/Views/AccountPanel.swift"
-            ),
-            encoding: .utf8
-        )
         let serverRows = try String(
             contentsOf: packageRoot.appendingPathComponent(
                 "Sources/VEXNativeMac/Views/ServerSidebarComponents.swift"
@@ -431,8 +424,6 @@ final class ServerSidebarWindowTests: XCTestCase {
             encoding: .utf8
         )
 
-        XCTAssertTrue(account.contains(".accessibilityAddTraits(selected ? .isSelected : [])"))
-        XCTAssertTrue(account.contains(".accessibilityValue(\"\\(durationText(selectedPlan.months)), \\(priceText(selectedPlan))\")"))
         XCTAssertTrue(serverRows.contains(".accessibilityAddTraits(selected ? .isSelected : [])"))
     }
 

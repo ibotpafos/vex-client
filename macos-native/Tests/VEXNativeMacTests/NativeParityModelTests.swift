@@ -640,27 +640,18 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertEqual(Set(summary.plans.map(\.action)), ["Сменить"])
     }
 
-    func testBillingCheckoutUsesServerQuoteAndOnlyTwoSelfServeFamilies() throws {
-        let quote = try JSONDecoder().decode(
+    func testBillingCheckoutPinsServerQuoteAndExternalCheckoutURL() {
+        let quote = try! JSONDecoder().decode(
             BillingPriceQuote.self,
             from: Data(#"{"change_type":"upgrade","amount_due_minor":12900,"credit_amount_minor":7000}"#.utf8)
         )
         XCTAssertEqual(quote.changeType, "upgrade")
         XCTAssertEqual(quote.amountDueMinor, 12900)
 
-        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let apiClient = try String(
-            contentsOf: packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/VEXAPIClient.swift"),
-            encoding: .utf8
-        )
-        let accountPanel = try String(
-            contentsOf: packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/AccountPanel.swift"),
-            encoding: .utf8
-        )
-        XCTAssertTrue(apiClient.contains("/v1/billing/change-preview"))
-        XCTAssertTrue(apiClient.contains("\"expected_amount_minor\": expectedAmountMinor"))
-        XCTAssertTrue(accountPanel.contains("BillingFamilyCard"))
-        XCTAssertTrue(accountPanel.contains("Slider("))
+        // Payment is external-only now: the app opens the billing dashboard
+        // in the browser instead of hosting the plan picker in-app.
+        XCTAssertTrue(BillingPresentation.billingDashboardURL.absoluteString.hasPrefix("https://vexguard.app"))
+        XCTAssertEqual(BillingPresentation.planName(for: "basic_monthly"), "Базовый · месяц")
     }
 
     func testPaymentHistoryOpensSpecificVEXReceiptInsteadOfProviderReceipt() {
@@ -782,28 +773,6 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertEqual(dictionary["latency_avg_ms"] as? Double, 42)
         XCTAssertEqual(dictionary["rx_bytes"] as? Int, 10)
         XCTAssertEqual((dictionary["samples"] as? [String: String])?["selected_location_id"], "de")
-    }
-
-    func testSupportSocketEnvelopeDecodesSnapshot() throws {
-        let data = """
-        {
-          "type": "support.snapshot",
-          "tickets": [{
-            "id": "ticket_1",
-            "subject": "VPN",
-            "message": "Need help",
-            "status": "open",
-            "source": "macos-native",
-            "created_at": "2026-06-30T00:00:00Z",
-            "updated_at": "2026-06-30T00:00:00Z"
-          }]
-        }
-        """.data(using: .utf8)!
-
-        let envelope = try JSONDecoder().decode(SupportSocketEnvelope.self, from: data)
-
-        XCTAssertEqual(envelope.type, "support.snapshot")
-        XCTAssertEqual(envelope.tickets?.first?.source, "macos-native")
     }
 
     func testUpdateCheckDecodesChecksumAndSignatureMetadata() throws {
@@ -1001,31 +970,6 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertFalse(hero.contains("FocusPulseConnectingOrbit"))
         XCTAssertFalse(hero.contains("VEXMiniSpinner"))
         XCTAssertFalse(hero.contains("repeatForever"))
-    }
-
-    func testSupportMessageBubbleUsesOneMatchingShapeForFillAndBorder() throws {
-        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let supportURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/SupportPanel.swift")
-        let support = try String(contentsOf: supportURL, encoding: .utf8)
-
-        XCTAssertEqual(
-            support.components(separatedBy: "RoundedBubbleShape(isUser: isUserMessage)").count - 1,
-            2
-        )
-        XCTAssertTrue(support.contains(".fill(bubbleBackground)"))
-        XCTAssertTrue(support.contains(".stroke(bubbleBorder, lineWidth: 1)"))
-        XCTAssertFalse(support.contains(".background(bubbleBackground)"))
-    }
-
-    func testSupportPanelUsesGlobalWindowHeaderWithoutLocalHeader() throws {
-        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let supportURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/SupportPanel.swift")
-        let support = try String(contentsOf: supportURL, encoding: .utf8)
-
-        XCTAssertFalse(support.contains("private var supportHeader"))
-        XCTAssertFalse(support.contains("Text(\"Поддержка VEX\")"))
-        XCTAssertTrue(support.contains("!appState.supportSocketConnected"))
-        XCTAssertTrue(support.contains("Live-чат временно отключён"))
     }
 
     func testAppLaunchUsesBrandedAnimatedGateWithReducedMotionFallback() throws {
@@ -1239,14 +1183,12 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(settings.contains("SettingsFeatureCard("))
         XCTAssertFalse(settings.contains("LinearGradient("))
         XCTAssertTrue(account.contains("AccountHero("))
-        XCTAssertTrue(account.contains("BillingFamilyCard("))
         XCTAssertTrue(account.contains("VEXFeatureSurface("))
         XCTAssertFalse(account.contains("VEXFeatureSurface(accent: .vexCyan"))
         XCTAssertFalse(account.contains(".blur(radius: 38)"))
         XCTAssertFalse(account.contains("AccountMetric("))
         XCTAssertFalse(account.contains("receiptUrl"))
-        XCTAssertFalse(account.contains("provider"))
-        XCTAssertTrue(account.contains(".accessibilityLabel(\"Обновить данные подписки\")"))
+        XCTAssertTrue(account.contains("Оплатить на сайте"))
         XCTAssertFalse(settings.contains("title: \"VPN\""))
         XCTAssertFalse(settings.contains("VEXAppInfo.coreVersion"))
         XCTAssertFalse(settings.contains("VEXAppInfo.apiClientVersion"))
@@ -1675,53 +1617,6 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertThrowsError(try service.code(from: duplicateCode))
     }
 
-    func testSupportSocketOnlyMarksConnectedAfterOpenValidation() throws {
-        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let socketURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/SupportSocketClient.swift")
-        let socket = try String(contentsOf: socketURL, encoding: .utf8)
-
-        XCTAssertTrue(socket.contains("validateOpen(task)"))
-        XCTAssertTrue(socket.contains("task.sendPing"))
-        XCTAssertTrue(socket.contains("task?.cancel(with: .goingAway, reason: nil)"))
-        XCTAssertTrue(socket.contains("connectionTask?.cancel()"))
-        XCTAssertTrue(socket.contains("accessToken = nil"))
-        XCTAssertTrue(socket.contains("guard !Task.isCancelled, self.accessToken == accessToken else { return }"))
-        XCTAssertFalse(socket.contains("task.resume()\n            isConnected = true"))
-    }
-
-    func testSupportSocketReconnectUsesExponentialBackoffAndKeepalive() throws {
-        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let socketURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/SupportSocketClient.swift")
-        let socket = try String(contentsOf: socketURL, encoding: .utf8)
-
-        XCTAssertTrue(socket.contains("reconnectAttempt += 1"))
-        XCTAssertTrue(socket.contains("reconnectAttempt = 0"))
-        XCTAssertTrue(socket.contains("ReconnectPolicy.baseDelay * multiplier"))
-        XCTAssertTrue(socket.contains("static let maxDelay: Duration = .seconds(60)"))
-        XCTAssertTrue(socket.contains("startKeepalive(task)"))
-        XCTAssertTrue(socket.contains("keepalivePingInterval"))
-        XCTAssertFalse(socket.contains("nanoseconds: 3_000_000_000"), "Fixed reconnect delay must be replaced by exponential backoff")
-    }
-
-    func testViewAndReconnectTasksStopImmediatelyAfterCancellation() throws {
-        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let homeURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/HomePanel.swift")
-        let socketURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/SupportSocketClient.swift")
-        let helperURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/VEXHelperClient.swift")
-        let home = try String(contentsOf: homeURL, encoding: .utf8)
-        let socket = try String(contentsOf: socketURL, encoding: .utf8)
-        let helper = try String(contentsOf: helperURL, encoding: .utf8)
-
-        XCTAssertTrue(home.contains("catch { return }"))
-        XCTAssertTrue(home.contains("guard !Task.isCancelled else { return }"))
-        XCTAssertFalse(home.contains("try? await Task.sleep(nanoseconds: 30_000_000_000)"))
-        XCTAssertTrue(socket.contains("catch { return }"))
-        XCTAssertTrue(socket.contains("guard !Task.isCancelled else { return }"))
-        XCTAssertFalse(socket.contains("try? await Task.sleep(nanoseconds: 3_000_000_000)"))
-        XCTAssertTrue(helper.contains("try await Task.sleep(nanoseconds: 120_000_000)"))
-        XCTAssertFalse(helper.contains("try? await Task.sleep(nanoseconds: 120_000_000)"))
-    }
-
     func testCustomWindowAndSettingsExposeAccessibleInteractionContracts() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let contentURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/ContentView.swift")
@@ -1742,16 +1637,14 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(background.contains("accessibilityReduceMotion"))
     }
 
-    func testProfileSupportAndHomeShareOneVisualSurfaceHierarchy() throws {
+    func testProfileAndHomeShareOneVisualSurfaceHierarchy() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let contentURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/ContentView.swift")
         let sharedURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/SharedViews.swift")
         let accountURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/AccountPanel.swift")
-        let supportURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Views/SupportPanel.swift")
         let content = try String(contentsOf: contentURL, encoding: .utf8)
         let shared = try String(contentsOf: sharedURL, encoding: .utf8)
         let account = try String(contentsOf: accountURL, encoding: .utf8)
-        let support = try String(contentsOf: supportURL, encoding: .utf8)
 
         XCTAssertTrue(content.contains(".padding(.top, 82)"))
         XCTAssertTrue(content.contains(".padding(.top, 72)"))
@@ -1760,9 +1653,6 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertFalse(account.contains("VEXFeatureSurface(accent: .vexCyan"))
         XCTAssertTrue(account.contains("AccountSurfaceCard(accent: .vexMuted)"))
         XCTAssertFalse(account.contains(".blur(radius: 38)"))
-        XCTAssertEqual(support.components(separatedBy: "VEXFeatureSurface(").count - 1, 1)
-        XCTAssertFalse(support.contains("private var supportHeader"))
-        XCTAssertFalse(support.contains("GlassPanel(cornerRadius: 20)"))
         XCTAssertFalse(shared.contains(".overlay(alignment: .top)"))
         XCTAssertFalse(shared.contains(".stroke(accent.opacity(0.16), lineWidth: 1)"))
         XCTAssertFalse(account.contains(".overlay(alignment: .leading)"))

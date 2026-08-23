@@ -123,7 +123,6 @@ final class FocusPulsePresentationTests: XCTestCase {
     func testWindowHeaderOmitsHomeTitleAndNamesSecondaryPages() {
         XCTAssertNil(AppSection.home.headerTitle)
         XCTAssertEqual(AppSection.account.headerTitle, "Аккаунт")
-        XCTAssertEqual(AppSection.support.headerTitle, "Поддержка")
         XCTAssertEqual(AppSection.settings.headerTitle, "Настройки")
     }
 

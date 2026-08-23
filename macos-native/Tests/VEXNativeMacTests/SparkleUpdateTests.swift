@@ -3,15 +3,18 @@ import XCTest
 
 @MainActor
 final class SparkleUpdateTests: XCTestCase {
-    func testStartupRequestsOneNonInteractiveBackgroundUpdateCheck() {
+    func testStartupDoesNotAutoCheckUpdatesAtLaunch() {
         let updater = MockNativeUpdaterService()
         let appState = VEXAppState(nativeUpdater: updater)
 
         appState.prepareAutomaticUpdatesForStartup()
         appState.prepareAutomaticUpdatesForStartup()
 
-        XCTAssertEqual(updater.checkForUpdatesInBackgroundCallCount, 1)
+        // Sparkle is constructed lazily only on explicit user action; launch
+        // must not schedule background checks (Tahoe launch-drain crash).
+        XCTAssertEqual(updater.checkForUpdatesInBackgroundCallCount, 0)
         XCTAssertEqual(updater.checkForUpdatesCallCount, 0)
+        XCTAssertTrue(updater.startUpdaterCallCount == 0)
     }
 
     func testStartupRespectsUserOptOutFromAutomaticUpdateChecks() {
@@ -431,6 +434,7 @@ final class SparkleUpdateTests: XCTestCase {
 private final class MockNativeUpdaterService: NativeUpdaterService {
     var automaticallyChecksForUpdates = true
     var canCheckForUpdates: Bool
+    let isEnabled = true
     private(set) var checkForUpdatesCallCount = 0
     private(set) var checkForUpdatesInBackgroundCallCount = 0
     private(set) var startUpdaterCallCount = 0

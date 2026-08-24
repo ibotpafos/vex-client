@@ -1476,7 +1476,7 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(helperRuntime.contains("store.withOperationLock"))
         XCTAssertTrue(helperModel.contains("refreshConnectedStatusUntilStable"))
         XCTAssertTrue(helperModel.contains("status.isUsableConnectedStatus"))
-        XCTAssertTrue(helperModel.contains("private let handshakePatienceDeadline: Duration = .seconds(10)"), "Slow first handshakes must not trigger tunnel teardown")
+        XCTAssertTrue(helperModel.contains("private let handshakePatienceDeadline: Duration = .seconds(8)"), "Slow first handshakes must not trigger tunnel teardown")
         XCTAssertTrue(helperModel.contains("let structurallyUp = status.socketExists"))
         XCTAssertTrue(helperModel.contains("structurallyUp ? patientDeadline : quickDeadline"))
         XCTAssertTrue(appState.contains("if helper.status.isUsableConnectedStatus"))

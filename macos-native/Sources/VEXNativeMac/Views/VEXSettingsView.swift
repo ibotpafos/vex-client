@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct VEXSettingsView: View {
@@ -150,6 +151,17 @@ struct VEXSettingsView: View {
                         "Доступно обновление \($0)"
                     } ?? "Проверить наличие новой версии VEX"
                 )
+
+                Button {
+                    if let url = URL(string: "https://vexguard.app/support") {
+                        NSWorkspace.shared.open(url)
+                    }
+                } label: {
+                    Label("Поддержка на сайте", systemImage: "questionmark.circle")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.vexGlass)
+                .help("Открыть поддержку VEX в браузере")
             }
         }
     }

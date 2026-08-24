@@ -14,11 +14,11 @@ final class VEXHelperModel: ObservableObject {
     private var pollTask: Task<Void, Never>?
     private var consecutiveStatusFailures = 0
     private var helperReadinessValidated = false
-    private let connectStabilizationDeadline: Duration = .milliseconds(750)
+    private let connectStabilizationDeadline: Duration = .milliseconds(600)
     // Slow links routinely need several seconds for the first handshake. While
     // the tunnel is structurally up (route + UAPI socket confirmed), keep
     // waiting instead of tearing down a working tunnel and cycling ports.
-    private let handshakePatienceDeadline: Duration = .seconds(10)
+    private let handshakePatienceDeadline: Duration = .seconds(8)
 
     #if DEBUG
     func configureInstallationPreview(_ phase: VEXHelperInstallationPhase) {
@@ -116,7 +116,7 @@ final class VEXHelperModel: ObservableObject {
     func interruptWithDisconnect(releaseAntiLeak: Bool) async {
         status = status.withState(.disconnecting)
         do {
-            try await client.sendExpectingOK("down", timeoutSeconds: 90)
+            try await client.sendExpectingOK("down", timeoutSeconds: 15)
             message = "VPN отключен."
         } catch {
             message = VEXUserFacingText.status("Command failed: \(error.localizedDescription)")
@@ -239,14 +239,17 @@ final class VEXHelperModel: ObservableObject {
 
     private func sendCommandWithRetry(_ command: String) async throws -> String {
         do {
-            return try await client.send(command, timeoutSeconds: isConnectCommand(command) ? 90 : 30)
+            // The helper answers "ok" as soon as awg-quick returns; the
+            // handshake is confirmed separately by status polling, so a long
+            // timeout here only delays user-visible failures.
+            return try await client.send(command, timeoutSeconds: isConnectCommand(command) ? 15 : 10)
         } catch {
             guard isConnectCommand(command), error.isRetryableConnectFailure else {
                 throw error
             }
             helperReadinessValidated = false
             try await ensureHelperReady()
-            return try await client.send(command, timeoutSeconds: 90)
+            return try await client.send(command, timeoutSeconds: 20)
         }
     }
 
@@ -313,7 +316,7 @@ struct VEXHelperClient {
     }
 
     func silentDisconnect(releaseAntiLeak: Bool) async {
-        _ = try? await sendExpectingOK("down", timeoutSeconds: 30)
+        _ = try? await sendExpectingOK("down", timeoutSeconds: 10)
     }
 
     func sendExpectingOK(_ command: String, timeoutSeconds: Int = 5) async throws {

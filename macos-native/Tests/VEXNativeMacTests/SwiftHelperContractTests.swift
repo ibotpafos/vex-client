@@ -98,12 +98,14 @@ final class SwiftHelperContractTests: XCTestCase {
         XCTAssertTrue(source.contains("func send(_ command: String, timeoutSeconds: Int = 5) async throws -> String"))
     }
 
-    func testConnectRetryKeepsTheFullBringUpTimeout() throws {
+    func testConnectRetryKeepsABoundedBringUpTimeout() throws {
         let source = try readText("Sources/VEXNativeMac/VEXHelperClient.swift")
-        let fullTimeoutSend = "return try await client.send(command, timeoutSeconds: 90)"
 
-        XCTAssertEqual(source.components(separatedBy: fullTimeoutSend).count - 1, 1)
-        XCTAssertFalse(source.contains("try await ensureHelperReady()\n            return try await client.send(command)"))
+        // Connect commands stay bounded (15s first attempt, 20s retry); the
+        // handshake itself is confirmed by status polling, not a long socket
+        // timeout that would delay user-visible failures.
+        XCTAssertTrue(source.contains("timeoutSeconds: isConnectCommand(command) ? 15 : 10"))
+        XCTAssertTrue(source.contains("return try await client.send(command, timeoutSeconds: 20)"))
     }
 
     func testShutdownPathTimeoutIsObservableAtTransportLevel() async throws {

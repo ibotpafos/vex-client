@@ -118,19 +118,25 @@ final class SparkleUpdaterService: NSObject, ObservableObject, NativeUpdaterServ
 
     func checkForUpdates() {
         let controller = ensureController()
-        // Sparkle's standard user driver shows its own UI; invoke on the next
-        // run loop turn so we never construct/tear down Sparkle objects during
-        // the launch-time autorelease drain.
+        // Two pitfalls handled here:
+        // 1) Right after start() Sparkle is still in its startup cycle
+        //    (sessionInProgress) - a check issued then is rejected with
+        //    "-checkForUpdates called but .sessionInProgress == YES".
+        // 2) checkForUpdates(nil) must run on the next runloop turn so we
+        //    never construct/tear down Sparkle objects during launch drain.
         Task { @MainActor in
+            // Wait until the startup cycle releases the session.
+            for _ in 0..<50 { // ~5s max
+                if controller.updater.canCheckForUpdates { break }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            guard controller.updater.canCheckForUpdates else { return }
             controller.checkForUpdates(nil)
-            startPendingBackgroundCheckIfPossible()
         }
     }
 
     func checkForUpdatesInBackground() {
-        guard !backgroundCheckRequested else { return }
         backgroundCheckRequested = true
-        // Controller may not exist yet (lazy init); if it does, run now.
         if updaterController != nil {
             startPendingBackgroundCheckIfPossible()
         }
@@ -138,11 +144,13 @@ final class SparkleUpdaterService: NSObject, ObservableObject, NativeUpdaterServ
 
     private func startPendingBackgroundCheckIfPossible() {
         guard backgroundCheckRequested,
-              !backgroundCheckStarted,
               let updater = updaterController?.updater,
               updater.canCheckForUpdates else {
             return
         }
+        // Only the first successful start performs the background check;
+        // afterwards Sparkle's own scheduler takes over.
+        guard !backgroundCheckStarted else { return }
         backgroundCheckStarted = true
         updater.checkForUpdatesInBackground()
     }

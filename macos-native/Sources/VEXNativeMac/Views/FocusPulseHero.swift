@@ -7,13 +7,53 @@ struct FocusPulseHero: View {
     let isBusy: Bool
     let action: () -> Void
 
+    @State private var rxSpeedSamples: [CGFloat] = []
+    @State private var txSpeedSamples: [CGFloat] = []
+    @State private var rxSpeedLevel: CGFloat = 0.2
+    @State private var txPreviousBytes: UInt64?
+    @State private var rxPreviousBytes: UInt64?
+
+    // log scale keeps both idle (~0 B/s) and heavy (~MB/s) traffic readable
+    private static func normalizedSpeed(_ delta: UInt64) -> CGFloat {
+        CGFloat(min(1, max(0.04, log10(Double(delta) + 1) / 7)))
+    }
+
+    private func recordRxSample() {
+        guard let previous = rxPreviousBytes else {
+            rxPreviousBytes = status.rxBytes
+            return
+        }
+        let delta = status.rxBytes >= previous ? status.rxBytes - previous : 0
+        rxPreviousBytes = status.rxBytes
+        let level = Self.normalizedSpeed(delta)
+        rxSpeedLevel = level
+        withAnimation(.smooth(duration: 0.55)) {
+            rxSpeedSamples.append(level)
+            if rxSpeedSamples.count > 12 { rxSpeedSamples.removeFirst(rxSpeedSamples.count - 12) }
+        }
+    }
+
+    private func recordTxSample() {
+        guard let previous = txPreviousBytes else {
+            txPreviousBytes = status.txBytes
+            return
+        }
+        let delta = status.txBytes >= previous ? status.txBytes - previous : 0
+        txPreviousBytes = status.txBytes
+        let level = Self.normalizedSpeed(delta)
+        withAnimation(.smooth(duration: 0.55)) {
+            txSpeedSamples.append(level)
+            if txSpeedSamples.count > 12 { txSpeedSamples.removeFirst(txSpeedSamples.count - 12) }
+        }
+    }
+
     var body: some View {
         HStack(spacing: 0) {
             FocusPulseTrafficCard(
                 title: "Получено",
                 bytes: status.rxBytes,
                 systemName: "arrow.down",
-                samples: [0.22, 0.34, 0.18, 0.46, 0.30, 0.62, 0.42, 0.74]
+                samples: rxSpeedSamples
             )
 
             Spacer(minLength: 36)
@@ -23,6 +63,7 @@ struct FocusPulseHero: View {
                 requiresHelperInstall: requiresHelperInstall,
                 installationPhase: installationPhase,
                 isBusy: isBusy,
+                rxLevel: rxSpeedLevel,
                 action: action
             )
             .frame(width: 244)
@@ -34,12 +75,14 @@ struct FocusPulseHero: View {
                 title: "Отправлено",
                 bytes: status.txBytes,
                 systemName: "arrow.up",
-                samples: [0.18, 0.30, 0.24, 0.56, 0.38, 0.28, 0.46, 0.76]
+                samples: txSpeedSamples
             )
         }
         .frame(maxWidth: 752)
         .frame(maxWidth: .infinity)
         .frame(height: 252)
+        .onChange(of: status.rxBytes, initial: true) { _, _ in recordRxSample() }
+        .onChange(of: status.txBytes, initial: true) { _, _ in recordTxSample() }
         .accessibilityElement(children: .contain)
     }
 
@@ -51,28 +94,47 @@ struct FocusPulseHero: View {
 private struct FocusPulseWaves: View {
     let tint: Color
     let isConnected: Bool
+    let trafficLevel: CGFloat
+
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+
+    // 0...1 traffic level drives orbit breathing; idle keeps a gentle base pulse.
+    private var pulseScale: CGFloat {
+        isConnected ? 1.0 + trafficLevel * 0.16 : 1.0
+    }
+
+    private var pulseOpacityBoost: Double {
+        isConnected ? Double(trafficLevel) * 0.14 : 0
+    }
 
     var body: some View {
-        ZStack {
-            RadialGradient(
-                colors: [
-                    tint.opacity(isConnected ? 0.20 : 0.13),
-                    tint.opacity(0.045),
-                    Color.clear,
-                ],
-                center: .center,
-                startRadius: 12,
-                endRadius: 250
-            )
+        TimelineView(.animation(minimumInterval: 1.0 / 24.0, paused: accessibilityReduceMotion)) { context in
+            let seconds = context.date.timeIntervalSinceReferenceDate
+            ZStack {
+                RadialGradient(
+                    colors: [
+                        tint.opacity((isConnected ? 0.20 : 0.13) + pulseOpacityBoost * 0.5),
+                        tint.opacity(0.045),
+                        Color.clear,
+                    ],
+                    center: .center,
+                    startRadius: 12,
+                    endRadius: 250
+                )
 
-            ForEach(0..<6, id: \.self) { index in
-                let diameter = 176 + CGFloat(index) * 46
-                Circle()
-                    .stroke(
-                        tint.opacity(max(0.028, (isConnected ? 0.21 : 0.14) - Double(index) * 0.026)),
-                        lineWidth: index == 0 ? 1.4 : 1
+                ForEach(0..<6, id: \.self) { index in
+                    let ring = OrbitRingGeometry(
+                        index: index,
+                        seconds: seconds,
+                        isConnected: isConnected,
+                        trafficLevel: trafficLevel
                     )
-                    .frame(width: diameter, height: diameter)
+
+                    Circle()
+                        .stroke(tint.opacity(ring.opacity), lineWidth: ring.lineWidth)
+                        .frame(width: ring.diameter, height: ring.diameter)
+                        .scaleEffect(ring.scale)
+                }
             }
         }
         .animation(.snappy(duration: 0.16), value: isConnected)
@@ -81,14 +143,45 @@ private struct FocusPulseWaves: View {
     }
 }
 
+/// Precomputed ring metrics: keeps the SwiftUI body cheap to type-check and
+/// the breathing math unit-testable.
+struct OrbitRingGeometry {
+    let diameter: CGFloat
+    let scale: CGFloat
+    let opacity: Double
+    let lineWidth: CGFloat
+
+    init(index: Int, seconds: TimeInterval, isConnected: Bool, trafficLevel: CGFloat) {
+        let baseDiameter = 176 + CGFloat(index) * 46
+        let speed = isConnected ? 0.9 : 0.45
+        let phase = seconds * speed + Double(index) * 0.62
+        // sin normalized back to 0...1
+        let breathe = sin(phase * 2 * .pi) * 0.5 + 0.5
+
+        let pulseScale = isConnected ? 1.0 + trafficLevel * 0.16 : 1.0
+        let breatheAmplitude = isConnected ? 0.035 : 0.02
+        self.diameter = baseDiameter
+        self.scale = pulseScale + CGFloat(breathe * breatheAmplitude)
+
+        let opacityBoost = isConnected ? Double(trafficLevel) * 0.14 : 0
+        let fade = 0.028 <= (isConnected ? 0.21 : 0.14) - Double(index) * 0.026
+            ? (isConnected ? 0.21 : 0.14) - Double(index) * 0.026
+            : 0.028
+        self.opacity = max(0.028, fade + opacityBoost * (1.0 - Double(index) / 6.0))
+        self.lineWidth = index == 0 ? 1.4 : 1
+    }
+}
+
 private struct FocusPulsePowerControl: View {
     let status: VpnStatus
     let requiresHelperInstall: Bool
     let installationPhase: VEXHelperInstallationPhase
     let isBusy: Bool
+    let rxLevel: CGFloat
     let action: () -> Void
 
     @State private var isPowerHovered = false
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
 
     var body: some View {
         VStack(spacing: 10) {
@@ -139,7 +232,8 @@ private struct FocusPulsePowerControl: View {
             .background(alignment: .center) {
                 FocusPulseWaves(
                     tint: tint,
-                    isConnected: status.isUsableConnectedStatus
+                    isConnected: status.isUsableConnectedStatus,
+                    trafficLevel: rxLevel
                 )
                 .frame(width: 470, height: 252)
             }

@@ -5,6 +5,7 @@ import {
   reportVpnConnect,
   reportVpnDisconnect,
   vpnDeviceUsage,
+  type ClientConnectionTelemetryInput,
   type VpnDeviceUsage,
 } from '@/api/vexApi';
 import { uploadClientDiagnostics } from '@/diagnostics/clientDiagnostics';
@@ -73,7 +74,12 @@ export function useVpnDiagnostics({
     void submitProfileDiagnosticsEvent(event).catch(() => undefined);
   }, [submitProfileDiagnosticsEvent]);
 
-  const submitVpnDiagnostics = useCallback(async (reason: string, status: string, samples: Record<string, unknown> = {}) => {
+  const submitVpnDiagnostics = useCallback(async (
+    reason: string,
+    status: string,
+    samples: Record<string, unknown> = {},
+    telemetry: Partial<ClientConnectionTelemetryInput> = {},
+  ) => {
     if (!session?.accessToken || !activeProfileDeviceId) {
       return;
     }
@@ -96,6 +102,7 @@ export function useVpnDiagnostics({
       routingPolicyVersion: latest.routingPolicyVersion,
       selectedLocationId: latest.selectedLocationId,
       usage,
+      ...telemetry,
       samples: {
         profile_version: latest.profileVersion,
         connection_phase: connectionPhase,

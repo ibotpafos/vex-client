@@ -12,6 +12,7 @@ import {
 } from '@/vpn/connectionFallback';
 import {
   explicitConnectProfileResolutionOptions,
+  vpnConnectTelemetry,
   vpnConnectTimingSamples,
 } from '@/vpn/connectFlow';
 import {
@@ -256,6 +257,14 @@ export function useVpnConnectionFlow({
         endpoint: connected.profile.device?.endpoint,
         vpnStatus: nextStatus,
         latencyMs: clientLatencyMs,
+        ...vpnConnectTelemetry({
+          connectedProfile: connected.profile,
+          endpointAttempts: connected.endpointAttempts,
+          initialProfile: profile,
+          locationFallback: connectedLocationId !== profileLocationId,
+          tapStartedAt,
+          verificationCompletedMs: connected.verificationCompletedMs,
+        }),
         samples: {
           ...vpnConnectTimingSamples({
             endpointAttempts: connected.endpointAttempts,

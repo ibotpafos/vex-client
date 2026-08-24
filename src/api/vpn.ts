@@ -8,6 +8,7 @@ import { defaultVpnRoutingMode, defaultVpnRoutingPolicyVersion, resolvedVpnBypas
 import { devicePushTokenPath } from '@/notifications/pushRegistration';
 import { jsonRequest, rawRequest, clientVersionHeaders } from './client';
 import { buildCreateDeviceRequest } from './deviceCreateRequest';
+import { clientDiagnosticsRequestBody } from './clientDiagnosticsRequest';
 import { getOrCreateNativeDeviceRegistration } from './nativeDeviceRegistration';
 import {
   type VpnDevice,
@@ -223,25 +224,7 @@ export async function submitClientDiagnostics(accessToken: string, report: Clien
     accessToken,
     suppressErrorLog: true,
     timeout: 12_000,
-    body: {
-      device_id: report.deviceId,
-      platform: report.platform,
-      app_version: report.appVersion,
-      reason: report.reason,
-      status: report.status,
-      vpn_state: report.vpnState,
-      endpoint: report.endpoint,
-      observed_public_ip: report.observedPublicIp,
-      dns_ok: report.dnsOk,
-      https_ok: report.httpsOk,
-      packet_loss_percent: report.packetLossPercent,
-      latency_avg_ms: report.latencyAverageMs,
-      latency_max_ms: report.latencyMaxMs,
-      rx_bytes: report.rxBytes,
-      tx_bytes: report.txBytes,
-      samples: report.samples,
-      samples_json: report.samplesJson,
-    },
+    body: clientDiagnosticsRequestBody(report),
   });
 }
 

@@ -17,7 +17,8 @@ struct ServerSidebarPanel: View {
 
     var body: some View {
         ZStack {
-            Color.vexBackground
+            VEXBackground(selection: .home)
+                .allowsHitTesting(false)
             VStack(alignment: .leading, spacing: 12) {
                 header
                 search

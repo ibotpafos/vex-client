@@ -17,18 +17,7 @@ struct ServerSidebarPanel: View {
 
     var body: some View {
         ZStack {
-            // Opaque base: the panel window itself is clear, and WindowServer
-            // routes clicks through fully transparent pixels regardless of
-            // SwiftUI hit-testing (same reason the main window paints a solid
-            // backing color). This layer keeps every pixel clickable.
             Color.vexBackground
-            VEXBackground().allowsHitTesting(false)
-            // Full-surface AppKit hit-test sink for areas between controls.
-            Rectangle()
-                .fill(Color.clear)
-                .contentShape(Rectangle())
-                .onTapGesture {}
-                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 12) {
                 header
                 search
@@ -484,8 +473,7 @@ struct ServerSidebarPanel: View {
     }
 
     private func latencyText(_ location: VpnLocation) -> String? {
-        guard let latency = location.latencyMs else { return nil }
-        return "\(Int(latency.rounded())) мс"
+        FocusPulsePresentation.latencyText(location.latencyMs)
     }
 
     private func nodeCountText(_ count: Int) -> String {

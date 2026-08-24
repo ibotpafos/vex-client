@@ -220,8 +220,8 @@ private struct FocusPulseLocationCard: View {
 
                 Spacer(minLength: 8)
 
-                if let latency = location.latencyMs {
-                    Text("\(Int(latency.rounded())) мс")
+                if let latency = FocusPulsePresentation.latencyText(location.latencyMs) {
+                    Text(latency)
                         .font(.system(size: 12, weight: .black))
                         .foregroundStyle(Color.vexCyanLight)
                 }

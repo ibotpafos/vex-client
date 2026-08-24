@@ -142,16 +142,12 @@ final class ServerSidebarWindowController: NSObject {
         )
         panel.contentViewController = NSHostingController(rootView: rootView)
         panel.setContentSize(panelSize)
-        // Solid backing color: WindowServer drops clicks on fully transparent
-        // pixels even when SwiftUI hit-testing says otherwise. The main window
-        // already uses this technique for the same reason.
-        panel.backgroundColor = NSColor(
-            red: 0.008,
-            green: 0.039,
-            blue: 0.043,
-            alpha: 1
-        )
-        panel.isOpaque = false
+        // The panel must be opaque: for a borderless NSWindow, WindowServer
+        // routes clicks straight through any pixel whose backing is not opaque,
+        // regardless of the SwiftUI content behind it. That was the "app
+        // disappears on click" bug. The main window uses the same trick.
+        panel.backgroundColor = NSColor(red: 0.008, green: 0.039, blue: 0.043, alpha: 1)
+        panel.isOpaque = true
         panel.hasShadow = false
         panel.hidesOnDeactivate = false
         panel.isMovable = false

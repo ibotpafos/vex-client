@@ -178,6 +178,12 @@ enum FocusPulsePresentation {
         }
     }
 
+    /// Rounded ping in milliseconds with the unit, e.g. "7 мс".
+    static func latencyText(_ latencyMs: Double?) -> String? {
+        guard let latencyMs else { return nil }
+        return "\(Int(latencyMs.rounded())) мс"
+    }
+
     static func featuredLocations(
         _ locations: [VpnLocation],
         selectedLocationId: String,

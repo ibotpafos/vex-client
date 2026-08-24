@@ -321,20 +321,18 @@ final class VEXAppState: ObservableObject {
             return
         }
         isVpnBusy = true
+        defer { isVpnBusy = false }
 
         guard let token = await authenticatedAccessToken() else {
             statusMessage = "Сначала войдите в аккаунт."
-            isVpnBusy = false
             return
         }
         guard let requestToken = await ensureEntitlementForConnect(accessToken: token) else {
-            isVpnBusy = false
             return
         }
         guard entitlement?.hasPaidAccess == true else {
             statusMessage = entitlement == nil ? "Не удалось проверить подписку." : "Для VPN нужна активная подписка."
             await submitDiagnostics(reason: "entitlement_missing_before_connect", status: "auth_error", helperStatus: helper.status, samples: ["message": statusMessage ?? ""])
-            isVpnBusy = false
             return
         }
         do {
@@ -371,7 +369,6 @@ final class VEXAppState: ObservableObject {
             activeTunnel = nil
             await submitDiagnostics(reason: "vpn_connect_failed", status: "error", helperStatus: helper.status, samples: ["error": error.localizedDescription])
         }
-        isVpnBusy = false
 
         if desiredVpnState == .disconnected, helper.status.state != .disconnected {
             await performDisconnectVPN(using: helper, reason: "user", generation: vpnOperationGeneration)
@@ -765,16 +762,11 @@ final class VEXAppState: ObservableObject {
     }
 
     func signOut() {
-        try? sessionStore.clearSession()
-        session = nil
-        user = nil
-        activeTunnel = nil
-        entitlement = nil
-        billingSummary = nil
-        authError = nil
-        billingError = nil
-        canUnlockStoredSession = sessionStore.hasStoredNativeSession()
-        statusMessage = "Вы вышли из аккаунта."
+        resetAuthenticatedState(
+            clearsSessionStore: true,
+            message: "Вы вышли из аккаунта.",
+            authError: nil
+        )
     }
 
     func prepareForTermination() {
@@ -885,26 +877,10 @@ final class VEXAppState: ObservableObject {
     }
 
     private func loadUser(_ token: String) async {
-        do {
-            user = try await api.me(accessToken: token)
-        } catch {
-            if error.isUnauthorizedAPIError {
-                guard let refreshedToken = await refreshSessionForRetry() else {
-                    return
-                }
-                do {
-                    user = try await api.me(accessToken: refreshedToken)
-                } catch {
-                    if error.isUnauthorizedAPIError {
-                        expireAuthenticatedSession(message: "Сессия истекла. Войдите снова.")
-                    } else {
-                        statusMessage = error.localizedDescription
-                    }
-                }
-            } else {
-                statusMessage = error.localizedDescription
-            }
-        }
+        await withSessionRetry(operation: { currentToken in
+            self.user = try await self.api.me(accessToken: currentToken)
+            return ()
+        })
     }
 
     private func refreshLocations(accessToken token: String) async {
@@ -979,33 +955,47 @@ final class VEXAppState: ObservableObject {
         }
     }
 
-    private func ensureEntitlementForConnect(accessToken token: String) async -> String? {
-        if entitlement?.hasPaidAccess == true {
-            return token
-        }
+    /// Shared 401-retry pipeline: runs `operation`, and on an unauthorized
+    /// error refreshes the session once and retries with the new token. A
+    /// second unauthorized failure expires the session; any other failure is
+    /// surfaced through `statusMessage` unless `showsErrors` is false.
+    private func withSessionRetry<T>(
+        showsErrors: Bool = true,
+        operation: (String) async throws -> T
+    ) async -> T? {
+        guard let token = await authenticatedAccessToken() else { return nil }
         do {
-            entitlement = try await api.entitlement(accessToken: token)
-            return token
+            return try await operation(token)
         } catch {
             guard error.isUnauthorizedAPIError else {
-                statusMessage = error.localizedDescription
+                if showsErrors { statusMessage = error.localizedDescription }
                 return nil
             }
-            guard let refreshedToken = await refreshSessionForRetry() else {
-                return nil
-            }
+            guard let refreshedToken = await refreshSessionForRetry() else { return nil }
             do {
-                entitlement = try await api.entitlement(accessToken: refreshedToken)
-                return refreshedToken
+                return try await operation(refreshedToken)
             } catch {
                 if error.isUnauthorizedAPIError {
                     expireAuthenticatedSession(message: "Сессия истекла. Войдите снова.")
-                } else {
+                } else if showsErrors {
                     statusMessage = error.localizedDescription
                 }
                 return nil
             }
         }
+    }
+
+    private func ensureEntitlementForConnect(accessToken token: String) async -> String? {
+        if entitlement?.hasPaidAccess == true {
+            return token
+        }
+        // On success this returns the token even when access is not paid;
+        // the paid-access gate lives in the connect flow itself.
+        return await withSessionRetry(operation: { refreshedToken in
+            let entitlement = try await self.api.entitlement(accessToken: refreshedToken)
+            self.entitlement = entitlement
+            return refreshedToken
+        })
     }
 
     private func loadUpdate(reportErrors: Bool = true) async {
@@ -1221,6 +1211,9 @@ final class VEXAppState: ObservableObject {
         forceRefresh: Bool,
         prevalidatedEntitlement: Entitlement? = nil
     ) async throws -> (PreparedTunnel, String) {
+        // Unlike the fire-and-forget loaders this must THROW on failure (the
+        // connect flow distinguishes cancellation from hard errors), so it
+        // keeps its own retry shape instead of withSessionRetry.
         do {
             let tunnel = try await profileService.resolveProfile(
                 accessToken: token,
@@ -1260,16 +1253,36 @@ final class VEXAppState: ObservableObject {
     }
 
     private func expireAuthenticatedSession(message: String) {
-        try? sessionStore.clearSession()
+        resetAuthenticatedState(
+            clearsSessionStore: true,
+            message: message,
+            authError: message
+        )
+    }
+
+    /// Single source of truth for tearing down authenticated state. Both
+    /// explicit sign-out and session expiry must reset the same fields;
+    /// divergence here previously leaked `billingPayments` on sign-out.
+    private func resetAuthenticatedState(
+        clearsSessionStore: Bool,
+        message: String,
+        authError: String?
+    ) {
+        if clearsSessionStore {
+            try? sessionStore.clearSession()
+        }
         session = nil
         user = nil
         activeTunnel = nil
         entitlement = nil
         billingSummary = nil
         billingPayments = []
-        authError = message
+        self.authError = authError
         billingError = nil
-        canUnlockStoredSession = false
+        canUnlockStoredSession =
+            clearsSessionStore == false
+            ? canUnlockStoredSession
+            : sessionStore.hasStoredNativeSession()
         statusMessage = message
     }
 

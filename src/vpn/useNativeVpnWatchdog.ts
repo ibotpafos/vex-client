@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { errorMessage } from '@/utils/error';
 
-import type { VpnDeviceUsage, VpnLocation } from '../api/vexApi';
+import type { ClientConnectionTelemetryInput, VpnDeviceUsage, VpnLocation } from '../api/vexApi';
 import type { VpnStatus } from '../native/vexVpn';
 import { recoverVpnConnection, type RecoverVpnConnectionInput } from './connectionRecovery';
 import { assessNativeTunnelHealth, localStatusHealthReasons } from './nativeTunnelHealth';
 import type { VpnProfile } from './profile';
 import { assessVpnAutopilotIssue, type VpnAutopilotProbeResult } from './vpnAutopilotAssessment';
+import { vpnTransportTelemetry } from './connectFlow';
 
 type MutableBooleanRef = {
   current: boolean;
@@ -38,7 +39,12 @@ type NativeVpnWatchdogInput = {
   sessionAccessToken?: string;
   setCachedProfile: RecoverVpnConnectionInput['setCachedProfile'];
   staleHandshakeSeconds: number;
-  submitDiagnostics: (reason: string, status: string, samples?: Record<string, unknown>) => Promise<void>;
+  submitDiagnostics: (
+    reason: string,
+    status: string,
+    samples?: Record<string, unknown>,
+    telemetry?: Partial<ClientConnectionTelemetryInput>,
+  ) => Promise<void>;
 };
 
 type NativeVpnWatchdog = {
@@ -117,6 +123,7 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
         });
 
         reconnectInFlightRef.current = true;
+        const reconnectStartedAt = Date.now();
         lastReconnectAtRef.current = Date.now();
         resetHealthFailures();
         input.onRecoveryStarted?.('Восстанавливаем VPN');
@@ -130,6 +137,9 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
           selection_mode: input.serverSelectionMode,
           stale_handshake_seconds: input.staleHandshakeSeconds,
           usage_error: usageError,
+        }, {
+          connectionEvent: 'reconnect_started',
+          transportFrom: vpnTransportTelemetry(activeProfile),
         }).catch(() => undefined);
 
         const recovery = await recoverVpnConnection({
@@ -157,6 +167,11 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
             recovery_result: recovery.outcome === 'failover_location' ? 'failover_location' : 'same_location',
             recovery_outcome: recovery.outcome,
             selection_mode: input.serverSelectionMode,
+          }, {
+            connectionEvent: 'reconnect_succeeded',
+            connectDurationMs: Math.max(0, Date.now() - reconnectStartedAt),
+            transportFrom: vpnTransportTelemetry(activeProfile),
+            transportTo: vpnTransportTelemetry(recovery.profile),
           }).catch(() => undefined);
           return;
         }
@@ -169,6 +184,10 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
           recovery_error: errorMessage(recovery.error, 'unknown'),
           recovery_result: 'failed',
           selection_mode: input.serverSelectionMode,
+        }, {
+          connectionEvent: 'reconnect_failed',
+          connectDurationMs: Math.max(0, Date.now() - reconnectStartedAt),
+          transportFrom: vpnTransportTelemetry(activeProfile),
         }).catch(() => undefined);
       } catch (error) {
         await input.submitDiagnostics('native_watchdog_check_failed', 'error', {

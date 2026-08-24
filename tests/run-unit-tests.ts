@@ -30,7 +30,7 @@ import {
   type HotVpnProfileRecord,
 } from '../src/vpn/hotProfileCacheCore';
 import { connectionAttemptsForProfile, isVpnTransportFallbackError, profileEndpoint } from '../src/vpn/connectionFallback';
-import { connectableLocalProfile, explicitConnectProfileResolutionOptions, shouldUseLocalProfileBeforeOnline, vpnConnectTimingSamples } from '../src/vpn/connectFlow';
+import { connectableLocalProfile, explicitConnectProfileResolutionOptions, shouldUseLocalProfileBeforeOnline, vpnConnectTelemetry, vpnConnectTimingSamples } from '../src/vpn/connectFlow';
 import { recoverVpnConnection } from '../src/vpn/connectionRecovery';
 import { disconnectWithRecoveryTimeout } from '../src/vpn/disconnectRecovery';
 import { waitForVerifiedVpnConnection } from '../src/vpn/connectVerification';
@@ -63,6 +63,7 @@ import appConfig from '../app.config';
 import type { ConfigContext } from '@expo/config';
 import { vexWebsiteUrl } from '../src/navigation/website';
 import { authEntryStepAfterBack } from '../src/auth/authEntry';
+import { clientDiagnosticsRequestBody } from '../src/api/clientDiagnosticsRequest';
 
 assertEqual(vexWebsiteUrl('/dashboard', 'https://vexguard.app/'), 'https://vexguard.app/dashboard');
 assertEqual(vexWebsiteUrl('/support', 'https://staging.vexguard.app'), 'https://staging.vexguard.app/support');
@@ -70,6 +71,40 @@ assertThrows(() => vexWebsiteUrl('https://example.com', 'https://vexguard.app'),
 assertThrows(() => vexWebsiteUrl('//example.com', 'https://vexguard.app'), 'Website path must stay on the VEX website');
 assertEqual(authEntryStepAfterBack(false), 'welcome');
 assertEqual(authEntryStepAfterBack(true), 'welcome');
+
+assertDeepEqual(
+  clientDiagnosticsRequestBody({
+    connectionEvent: 'fallback_succeeded',
+    connectDurationMs: 1_250,
+    transportFrom: 'awg3_udp443',
+    transportTo: 'awg2',
+    sessionUptimeSeconds: 120,
+  }),
+  {
+    device_id: undefined,
+    platform: undefined,
+    app_version: undefined,
+    reason: undefined,
+    status: undefined,
+    vpn_state: undefined,
+    connection_event: 'fallback_succeeded',
+    connect_duration_ms: 1_250,
+    transport_from: 'awg3_udp443',
+    transport_to: 'awg2',
+    session_uptime_seconds: 120,
+    endpoint: undefined,
+    observed_public_ip: undefined,
+    dns_ok: undefined,
+    https_ok: undefined,
+    packet_loss_percent: undefined,
+    latency_avg_ms: undefined,
+    latency_max_ms: undefined,
+    rx_bytes: undefined,
+    tx_bytes: undefined,
+    samples: undefined,
+    samples_json: undefined,
+  },
+);
 
 {
   const configContext: ConfigContext = {
@@ -835,6 +870,29 @@ function runHotConnectFlowTests(): void {
     }
   }
 
+  const awg3Initial: VpnProfile = {
+    ...hotProfile,
+    config: `${hotProfile.config}\nHeaderProtectionKey = test-key`,
+    device: { ...hotProfile.device!, endpoint: 'de.example.com:51821', protocol: 'amneziawg' },
+  };
+  const awg3Fallback: VpnProfile = {
+    ...awg3Initial,
+    device: { ...awg3Initial.device!, endpoint: 'de.example.com:443' },
+  };
+  assertDeepEqual(vpnConnectTelemetry({
+    connectedProfile: awg3Fallback,
+    endpointAttempts: ['de.example.com:51821', 'de.example.com:443'],
+    initialProfile: awg3Initial,
+    locationFallback: false,
+    tapStartedAt: 1_000,
+    verificationCompletedMs: 2_250,
+  }), {
+    connectionEvent: 'fallback_succeeded',
+    connectDurationMs: 1_250,
+    transportFrom: 'awg3',
+    transportTo: 'awg3_udp443',
+  });
+
   runVpnConnectTimingSourceContractTests();
 }
 
@@ -858,6 +916,13 @@ function runVpnConnectTimingSourceContractTests(): void {
   assertEqual(diagnosticReason > successfulAttemptGuard, true);
   assertEqual(source.slice(successfulAttemptGuard, diagnosticReason).includes('throw '), true);
   assertEqual(source.indexOf("reason: 'vpn_connect_timing'", diagnosticReason + 1), -1);
+  assertEqual(/reason: 'vpn_connect_timing',[\s\S]*?\.\.\.vpnConnectTelemetry\(\{[\s\S]*?connectedProfile: connected\.profile/.test(source), true);
+
+  const watchdogSource = readFileSync('src/vpn/useNativeVpnWatchdog.ts', 'utf8');
+  assertEqual(watchdogSource.includes("connectionEvent: 'reconnect_started'"), true);
+  assertEqual(watchdogSource.includes("connectionEvent: 'reconnect_succeeded'"), true);
+  assertEqual(watchdogSource.includes("connectionEvent: 'reconnect_failed'"), true);
+  assertEqual(/connectDurationMs:\s*Math\.max\(0, Date\.now\(\) - reconnectStartedAt\)/.test(watchdogSource), true);
 }
 
 function runCreateDeviceRequestTests(): void {

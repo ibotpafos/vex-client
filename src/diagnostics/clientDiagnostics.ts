@@ -21,6 +21,11 @@ export type VpnDiagnosticsSnapshot = {
   bypassRangesCount?: number;
   routingPolicyVersion?: string;
   selectedLocationId?: string;
+  connectionEvent?: ClientDiagnosticsReportInput['connectionEvent'];
+  connectDurationMs?: number;
+  transportFrom?: ClientDiagnosticsReportInput['transportFrom'];
+  transportTo?: ClientDiagnosticsReportInput['transportTo'];
+  sessionUptimeSeconds?: number;
   samples?: Record<string, unknown>;
 };
 
@@ -73,6 +78,11 @@ async function buildClientDiagnosticsReport(snapshot: VpnDiagnosticsSnapshot): P
     reason: snapshot.reason,
     status: snapshot.status,
     vpnState: snapshot.vpnStatus.state,
+    connectionEvent: snapshot.connectionEvent,
+    connectDurationMs: normalizeNumber(snapshot.connectDurationMs),
+    transportFrom: snapshot.transportFrom,
+    transportTo: snapshot.transportTo,
+    sessionUptimeSeconds: normalizeNumber(snapshot.sessionUptimeSeconds),
     endpoint: snapshot.endpoint,
     dnsOk: networkProbe.dnsOk !== false,
     httpsOk: networkProbe.httpsOk !== false,

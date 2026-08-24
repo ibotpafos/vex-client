@@ -194,11 +194,17 @@ final class VEXAppState: ObservableObject {
     }
 
     func selectLocation(_ location: VpnLocation) async {
-        selectedLocationId = location.id
-        serverSelectionMode = "manual"
-        autoServerEnabled = false
+        applyManualSelection(locationId: location.id)
         statusMessage = "Выбран сервер: \(location.displayName)."
         serverSidebarOperation = .selected("Выбран сервер: \(location.displayName).")
+        scheduleProfileWarmup()
+    }
+
+    /// Manual selection = pin the location, leave auto mode, warm the cache.
+    private func applyManualSelection(locationId: String) {
+        selectedLocationId = locationId
+        serverSelectionMode = "manual"
+        autoServerEnabled = false
         scheduleProfileWarmup()
     }
 
@@ -413,9 +419,7 @@ final class VEXAppState: ObservableObject {
                 guard allowsAutomaticFailover, assessment.canFailover, let failoverLocation = bestFailoverLocation(excluding: initialTunnel.locationId) else {
                     throw error
                 }
-                selectedLocationId = failoverLocation.id
-                serverSelectionMode = "manual"
-                autoServerEnabled = false
+                applyManualSelection(locationId: failoverLocation.id)
                 let failoverTunnel = try await profileService.resolveProfile(
                     accessToken: token,
                     locationId: failoverLocation.id,
@@ -845,9 +849,7 @@ final class VEXAppState: ObservableObject {
         let assessment = autopilotService.assess(healthReasons: healthReasons, status: helper.status)
         let failoverLocation = allowsAutomaticFailover ? bestFailoverLocation(excluding: previousLocationId) : nil
         if assessment.canFailover, let failoverLocation {
-            selectedLocationId = failoverLocation.id
-            serverSelectionMode = "manual"
-            autoServerEnabled = false
+            applyManualSelection(locationId: failoverLocation.id)
         }
         await submitDiagnostics(
             reason: "native_watchdog_stale_tunnel",

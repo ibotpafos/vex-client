@@ -30,7 +30,7 @@ import {
   type HotVpnProfileRecord,
 } from '../src/vpn/hotProfileCacheCore';
 import { connectionAttemptsForProfile, isVpnTransportFallbackError, profileEndpoint } from '../src/vpn/connectionFallback';
-import { connectableLocalProfile, explicitConnectProfileResolutionOptions, shouldUseLocalProfileBeforeOnline, vpnConnectTelemetry, vpnConnectTimingSamples } from '../src/vpn/connectFlow';
+import { connectableLocalProfile, explicitConnectProfileResolutionOptions, shouldUseLocalProfileBeforeOnline, vpnConnectTelemetry, vpnConnectTimingSamples, vpnUnexpectedDisconnectTelemetry } from '../src/vpn/connectFlow';
 import { recoverVpnConnection } from '../src/vpn/connectionRecovery';
 import { disconnectWithRecoveryTimeout } from '../src/vpn/disconnectRecovery';
 import { waitForVerifiedVpnConnection } from '../src/vpn/connectVerification';
@@ -892,6 +892,24 @@ function runHotConnectFlowTests(): void {
     transportFrom: 'awg3',
     transportTo: 'awg3_udp443',
   });
+  assertDeepEqual(vpnUnexpectedDisconnectTelemetry({
+    connectedAtMs: 1_000,
+    nextState: 'disconnected',
+    nowMs: 6_500,
+    profile: awg3Fallback,
+    previousState: 'connected',
+  }), {
+    connectionEvent: 'unexpected_disconnect',
+    sessionUptimeSeconds: 5,
+    transportFrom: 'awg3_udp443',
+  });
+  assertEqual(vpnUnexpectedDisconnectTelemetry({
+    connectedAtMs: 1_000,
+    nextState: 'disconnected',
+    nowMs: 6_500,
+    profile: awg3Fallback,
+    previousState: 'disconnecting',
+  }), null);
 
   runVpnConnectTimingSourceContractTests();
 }
@@ -923,6 +941,9 @@ function runVpnConnectTimingSourceContractTests(): void {
   assertEqual(watchdogSource.includes("connectionEvent: 'reconnect_succeeded'"), true);
   assertEqual(watchdogSource.includes("connectionEvent: 'reconnect_failed'"), true);
   assertEqual(/connectDurationMs:\s*Math\.max\(0, Date\.now\(\) - reconnectStartedAt\)/.test(watchdogSource), true);
+  const connectFlowSource = readFileSync('src/vpn/connectFlow.ts', 'utf8');
+  assertEqual(connectFlowSource.includes("connectionEvent: 'unexpected_disconnect'"), true);
+  assertEqual(connectFlowSource.includes('sessionUptimeSeconds'), true);
 }
 
 function runCreateDeviceRequestTests(): void {

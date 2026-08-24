@@ -7,7 +7,7 @@ import { recoverVpnConnection, type RecoverVpnConnectionInput } from './connecti
 import { assessNativeTunnelHealth, localStatusHealthReasons } from './nativeTunnelHealth';
 import type { VpnProfile } from './profile';
 import { assessVpnAutopilotIssue, type VpnAutopilotProbeResult } from './vpnAutopilotAssessment';
-import { vpnTransportTelemetry } from './connectFlow';
+import { vpnTransportTelemetry, vpnUnexpectedDisconnectTelemetry } from './connectFlow';
 
 type MutableBooleanRef = {
   current: boolean;
@@ -52,15 +52,39 @@ type NativeVpnWatchdog = {
 };
 
 export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWatchdog {
+  const activeProfileForStatus = input.activeProfile;
+  const staleHandshakeSecondsForStatus = input.staleHandshakeSeconds;
+  const submitStatusDiagnostics = input.submitDiagnostics;
   const backendHealthFailuresRef = useRef(0);
   const localHealthFailuresRef = useRef(0);
   const lastLocalDegradedStatusRef = useRef<VpnStatus | null>(null);
   const reconnectInFlightRef = useRef(false);
   const lastReconnectAtRef = useRef(0);
+  const connectedAtRef = useRef<number | null>(null);
 
   const recordNativeStatus = useCallback((currentStatus: VpnStatus, nextStatus: VpnStatus) => {
+    const nowMs = Date.now();
+    if (nextStatus.state === 'connected' && connectedAtRef.current === null) {
+      connectedAtRef.current = nowMs;
+    }
+    if (activeProfileForStatus && connectedAtRef.current !== null) {
+      const telemetry = vpnUnexpectedDisconnectTelemetry({
+        connectedAtMs: connectedAtRef.current,
+        nextState: nextStatus.state,
+        nowMs,
+        profile: activeProfileForStatus,
+        previousState: currentStatus.state,
+      });
+      if (telemetry) {
+        connectedAtRef.current = null;
+        void submitStatusDiagnostics('native_unexpected_disconnect', 'degraded', {
+          previous_state: currentStatus.state,
+          next_state: nextStatus.state,
+        }, telemetry).catch(() => undefined);
+      }
+    }
     const localHealthReasons = currentStatus.state === 'connected'
-      ? localStatusHealthReasons(nextStatus, Date.now(), input.staleHandshakeSeconds)
+      ? localStatusHealthReasons(nextStatus, nowMs, staleHandshakeSecondsForStatus)
       : [];
     if (localHealthReasons.length > 0) {
       localHealthFailuresRef.current += 1;
@@ -70,7 +94,7 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
     localHealthFailuresRef.current = 0;
     lastLocalDegradedStatusRef.current = null;
     return false;
-  }, [input.staleHandshakeSeconds]);
+  }, [activeProfileForStatus, staleHandshakeSecondsForStatus, submitStatusDiagnostics]);
 
   useEffect(() => {
     const accessToken = input.sessionAccessToken;

@@ -84,6 +84,23 @@ export function vpnConnectTelemetry(input: {
   };
 }
 
+export function vpnUnexpectedDisconnectTelemetry(input: {
+  connectedAtMs: number;
+  nextState: string;
+  nowMs: number;
+  profile: VpnProfile;
+  previousState: string;
+}) {
+  if (input.previousState !== 'connected' || (input.nextState !== 'disconnected' && input.nextState !== 'error')) {
+    return null;
+  }
+  return {
+    connectionEvent: 'unexpected_disconnect' as const,
+    sessionUptimeSeconds: Math.floor(Math.max(0, input.nowMs - input.connectedAtMs) / 1_000),
+    transportFrom: vpnTransportTelemetry(input.profile),
+  };
+}
+
 export function vpnTransportTelemetry(profile: VpnProfile): 'awg3_udp443' | 'awg3' | 'awg2' | 'wireguard' | 'openvpn' | 'unknown' {
   const protocol = profile.device?.protocol?.trim().toLowerCase() ?? '';
   if (protocol.includes('openvpn')) {

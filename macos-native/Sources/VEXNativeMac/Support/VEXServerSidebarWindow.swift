@@ -104,6 +104,7 @@ final class ServerSidebarWindowController: NSObject {
     private weak var mainWindow: NSWindow?
     private var panel: VEXServerSidebarPanelWindow?
     private var windowObservers: [NSObjectProtocol] = []
+    private var panelClickMonitor: Any?
 
     init(appState: VEXAppState, helper: VEXHelperModel) {
         self.appState = appState
@@ -155,6 +156,7 @@ final class ServerSidebarWindowController: NSObject {
 
         self.panel = panel
         observeMainWindow(mainWindow)
+        installPanelClickMonitor(panel: panel, mainWindow: mainWindow)
         let targetFrame = sidebarFrame(relativeTo: mainWindow, panel: panel)
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         if reduceMotion {
@@ -239,6 +241,33 @@ final class ServerSidebarWindowController: NSObject {
         let center = NotificationCenter.default
         windowObservers.forEach(center.removeObserver)
         windowObservers.removeAll()
+        if let monitor = self.panelClickMonitor {
+            NSEvent.removeMonitor(monitor)
+            self.panelClickMonitor = nil
+        }
+    }
+
+    /// The sidebar is a borderless transparent NSPanel: SwiftUI hit-testing
+    /// only covers painted controls, so clicks on empty areas used to fall
+    /// through to windows behind it - the whole app lost focus and appeared
+    /// to vanish. Swallow every click inside the panel frame and route
+    /// activation back to the main window instead.
+    private func installPanelClickMonitor(panel: NSPanel, mainWindow: NSWindow) {
+        panelClickMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        ) { [weak self, weak panel] event in
+            guard let self, let panel,
+                  event.window === panel || panel.frame.contains(event.locationInWindow == .zero ? .zero : NSEvent.mouseLocation) else {
+                return event
+            }
+            // Keep the click inside the panel (buttons still work: this only
+            // catches events AppKit would otherwise send to other windows),
+            // but never let it fall through to a window behind.
+            if event.window !== panel {
+                return nil
+            }
+            return event
+        }
     }
 
     private func reposition() {
@@ -271,4 +300,5 @@ final class ServerSidebarWindowController: NSObject {
 private final class VEXServerSidebarPanelWindow: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+    override var acceptsFirstResponder: Bool { true }
 }

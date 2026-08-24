@@ -18,6 +18,15 @@ struct ServerSidebarPanel: View {
     var body: some View {
         ZStack {
             VEXBackground().allowsHitTesting(false)
+            // Invisible full-surface sink: the panel is borderless and its
+            // background gradients don't hit-test, so without this layer a
+            // click on any empty area falls through to windows behind and
+            // deactivates the whole app.
+            Rectangle()
+                .fill(Color.white.opacity(0.0001))
+                .contentShape(Rectangle())
+                .onTapGesture {}
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 12) {
                 header
                 search

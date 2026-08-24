@@ -209,18 +209,10 @@ final class VEXHelperModel: ObservableObject {
         do {
             try await installer.ensureReady(allowAdminInstall: true)
             let response = try await sendCommandWithRetry(command)
-            if response.trimmingCharacters(in: .whitespacesAndNewlines) != "ok" {
-                throw VEXHelperError.commandFailed(response)
-            }
+            try ensureOK(response)
             installState = installer.installedState
             if isConnectCommand(command) {
-                if await refreshConnectedStatusUntilStable() {
-                    message = successMessage
-                } else if let routeConflictMessage = status.routeConflictMessage {
-                    message = routeConflictMessage
-                } else {
-                    message = "Подключение не подтверждено. Проверяем маршрут..."
-                }
+                await confirmConnect(successMessage: successMessage)
             } else {
                 message = successMessage
                 await refreshStatus(quiet: true)
@@ -228,12 +220,26 @@ final class VEXHelperModel: ObservableObject {
         } catch {
             if isConnectCommand(command) {
                 helperReadinessValidated = false
-            }
-            message = VEXUserFacingText.status("Command failed: \(error.localizedDescription)")
-            if isConnectCommand(command) {
                 await client.silentDisconnect(releaseAntiLeak: true)
             }
+            message = VEXUserFacingText.status("Command failed: \(error.localizedDescription)")
             await refreshStatus(quiet: true)
+        }
+    }
+
+    private func confirmConnect(successMessage: String) async {
+        if await refreshConnectedStatusUntilStable() {
+            message = successMessage
+        } else if let routeConflictMessage = status.routeConflictMessage {
+            message = routeConflictMessage
+        } else {
+            message = "Подключение не подтверждено. Проверяем маршрут..."
+        }
+    }
+
+    private func ensureOK(_ response: String) throws {
+        guard response.trimmingCharacters(in: .whitespacesAndNewlines) == "ok" else {
+            throw VEXHelperError.commandFailed(response)
         }
     }
 
@@ -360,6 +366,16 @@ enum VEXHelperError: LocalizedError {
     }
 }
 
+/// Transport failures that justify one reconnect attempt of the helper pipe.
+private enum RetryableHelperFailure {
+    static let substrings = [
+        "connection refused",
+        "could not connect to helper socket",
+        "could not write helper command",
+        "could not read helper response",
+    ]
+}
+
 private extension Error {
     var isRetryableConnectFailure: Bool {
         if let helperError = self as? VEXHelperError {
@@ -367,20 +383,16 @@ private extension Error {
             case .connectFailed, .writeFailed, .readFailed:
                 return true
             case .commandFailed(let response):
-                let message = response.localizedLowercase
-                return message.contains("could not connect to helper socket")
-                    || message.contains("could not write helper command")
-                    || message.contains("could not read helper response")
-                    || message.contains("connection refused")
+                return RetryableHelperFailure.substrings.contains {
+                    response.localizedLowercase.contains($0)
+                }
             default:
                 return false
             }
         }
-        let message = localizedDescription.localizedLowercase
-        return message.contains("connection refused")
-            || message.contains("could not connect to helper socket")
-            || message.contains("could not write helper command")
-            || message.contains("could not read helper response")
+        return RetryableHelperFailure.substrings.contains {
+            localizedDescription.localizedLowercase.contains($0)
+        }
     }
 }
 

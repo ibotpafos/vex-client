@@ -98,77 +98,85 @@ private struct FocusPulseWaves: View {
 
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
 
-    // 0...1 traffic level drives orbit breathing; idle keeps a gentle base pulse.
-    private var pulseScale: CGFloat {
-        isConnected ? 1.0 + trafficLevel * 0.16 : 1.0
+    private enum RingPhase {
+        case rest, rise, peak, settle
     }
 
-    private var pulseOpacityBoost: Double {
-        isConnected ? Double(trafficLevel) * 0.14 : 0
+    private static let phases: [RingPhase] = [.rest, .rise, .peak, .settle]
+
+    private func scale(for phase: RingPhase, index: Int) -> CGFloat {
+        let base = 1.0 + CGFloat(index) * 0.012
+        let trafficBoost = isConnected ? trafficLevel * 0.10 : 0
+        switch phase {
+        case .rest: return base
+        case .rise: return base + 0.02 + trafficBoost * 0.5
+        case .peak: return base + 0.05 + trafficBoost
+        case .settle: return base + 0.01
+        }
+    }
+
+    private func opacity(for phase: RingPhase, index: Int) -> Double {
+        let fade = max(0.028, (isConnected ? 0.20 : 0.13) - Double(index) * 0.024)
+        let boost = isConnected ? Double(trafficLevel) * 0.12 : 0
+        switch phase {
+        case .rest: return fade
+        case .rise: return fade + 0.03 + boost * 0.5
+        case .peak: return fade + 0.06 + boost
+        case .settle: return fade + 0.015
+        }
+    }
+
+    private func animation(for phase: RingPhase) -> Animation? {
+        guard !accessibilityReduceMotion else { return nil }
+        switch phase {
+        case .rest: return .easeOut(duration: isConnected ? 1.1 : 2.2)
+        case .rise: return .easeInOut(duration: 0.5)
+        case .peak: return .easeInOut(duration: 0.7)
+        case .settle: return .easeIn(duration: 0.45)
+        }
     }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 24.0, paused: accessibilityReduceMotion)) { context in
-            let seconds = context.date.timeIntervalSinceReferenceDate
-            ZStack {
-                RadialGradient(
-                    colors: [
-                        tint.opacity((isConnected ? 0.20 : 0.13) + pulseOpacityBoost * 0.5),
-                        tint.opacity(0.045),
-                        Color.clear,
-                    ],
-                    center: .center,
-                    startRadius: 12,
-                    endRadius: 250
-                )
+        ZStack {
+            RadialGradient(
+                colors: [
+                    tint.opacity(isConnected ? 0.20 : 0.13),
+                    tint.opacity(0.045),
+                    Color.clear,
+                ],
+                center: .center,
+                startRadius: 12,
+                endRadius: 250
+            )
 
-                ForEach(0..<6, id: \.self) { index in
-                    let ring = OrbitRingGeometry(
-                        index: index,
-                        seconds: seconds,
-                        isConnected: isConnected,
-                        trafficLevel: trafficLevel
-                    )
-
-                    Circle()
-                        .stroke(tint.opacity(ring.opacity), lineWidth: ring.lineWidth)
-                        .frame(width: ring.diameter, height: ring.diameter)
-                        .scaleEffect(ring.scale)
-                }
+            ForEach(0..<6, id: \.self) { index in
+                orbitRing(index: index)
             }
         }
-        .animation(.snappy(duration: 0.16), value: isConnected)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
-}
 
-/// Precomputed ring metrics: keeps the SwiftUI body cheap to type-check and
-/// the breathing math unit-testable.
-struct OrbitRingGeometry {
-    let diameter: CGFloat
-    let scale: CGFloat
-    let opacity: Double
-    let lineWidth: CGFloat
-
-    init(index: Int, seconds: TimeInterval, isConnected: Bool, trafficLevel: CGFloat) {
-        let baseDiameter = 176 + CGFloat(index) * 46
-        let speed = isConnected ? 0.9 : 0.45
-        let phase = seconds * speed + Double(index) * 0.62
-        // sin normalized back to 0...1
-        let breathe = sin(phase * 2 * .pi) * 0.5 + 0.5
-
-        let pulseScale = isConnected ? 1.0 + trafficLevel * 0.16 : 1.0
-        let breatheAmplitude = isConnected ? 0.035 : 0.02
-        self.diameter = baseDiameter
-        self.scale = pulseScale + CGFloat(breathe * breatheAmplitude)
-
-        let opacityBoost = isConnected ? Double(trafficLevel) * 0.14 : 0
-        let fade = 0.028 <= (isConnected ? 0.21 : 0.14) - Double(index) * 0.026
-            ? (isConnected ? 0.21 : 0.14) - Double(index) * 0.026
-            : 0.028
-        self.opacity = max(0.028, fade + opacityBoost * (1.0 - Double(index) / 6.0))
-        self.lineWidth = index == 0 ? 1.4 : 1
+    @ViewBuilder
+    private func orbitRing(index: Int) -> some View {
+        let diameter = 176 + CGFloat(index) * 46
+        if accessibilityReduceMotion {
+            Circle()
+                .stroke(
+                    tint.opacity(max(0.028, (isConnected ? 0.21 : 0.14) - Double(index) * 0.026)),
+                    lineWidth: index == 0 ? 1.4 : 1
+                )
+                .frame(width: diameter, height: diameter)
+        } else {
+            PhaseAnimator(Self.phases) { phase in
+                Circle()
+                    .stroke(tint.opacity(opacity(for: phase, index: index)), lineWidth: index == 0 ? 1.4 : 1)
+                    .frame(width: diameter, height: diameter)
+                    .scaleEffect(scale(for: phase, index: index))
+            } animation: { phase in
+                animation(for: phase)
+            }
+        }
     }
 }
 

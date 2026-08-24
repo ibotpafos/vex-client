@@ -68,6 +68,15 @@ final class SparkleUpdaterService: NSObject, ObservableObject, NativeUpdaterServ
             userDriverDelegate: nil
         )
         updaterController = controller
+        // Sparkle requires an explicit start when constructed with
+        // startingUpdater: false - without it checkForUpdates is a no-op.
+        // Safe here: this runs from a user action or post-launch cycle,
+        // never inside the launch-time autorelease drain that crashed Tahoe.
+        do {
+            try controller.updater.start()
+        } catch {
+            statusFallbackForMisconfiguredSparkle(error)
+        }
         canCheckObservation = controller.updater.observe(\.canCheckForUpdates, options: [.initial, .new]) { [weak self] updater, _ in
             Task { @MainActor in
                 self?.canCheckForUpdates = updater.canCheckForUpdates
@@ -75,6 +84,11 @@ final class SparkleUpdaterService: NSObject, ObservableObject, NativeUpdaterServ
             }
         }
         return controller
+    }
+
+    private func statusFallbackForMisconfiguredSparkle(_ error: Error) {
+        // Surface configuration problems instead of failing silently.
+        NSLog("VEX Sparkle: updater failed to start: \(error.localizedDescription)")
     }
 
     deinit {

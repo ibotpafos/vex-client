@@ -146,7 +146,9 @@ final class ServerSidebarWindowController: NSObject {
         // routes clicks straight through any pixel whose backing is not opaque,
         // regardless of the SwiftUI content behind it. That was the "app
         // disappears on click" bug. The main window uses the same trick.
-        panel.backgroundColor = NSColor(red: 0.008, green: 0.039, blue: 0.043, alpha: 1)
+        // Match the backdrop gradient's mid tone so the (clipped) corners blend
+        // with the SwiftUI VEXBackground instead of showing through as black.
+        panel.backgroundColor = NSColor(red: 0.012, green: 0.071, blue: 0.082, alpha: 1)
         panel.isOpaque = true
         panel.hasShadow = false
         panel.hidesOnDeactivate = false

@@ -67,6 +67,19 @@ struct VpnLocation: Codable, Equatable, Identifiable {
         }
     }
 
+    /// Russian status text shared by the home cards and the server sidebar.
+    var localizedStatus: String {
+        switch status.lowercased() {
+        case "active", "online", "healthy":
+            return "доступен"
+        case "maintenance":
+            return "обслуживание"
+        default:
+            let trimmed = status.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? "статус уточняется" : trimmed
+        }
+    }
+
     enum CodingKeys: String, CodingKey {
         case id
         case countryCode = "country_code"

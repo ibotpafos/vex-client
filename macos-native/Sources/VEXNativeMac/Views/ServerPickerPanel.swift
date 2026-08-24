@@ -306,7 +306,7 @@ struct ServerSidebarPanel: View {
                 ServerPickerRow(
                     systemName: "mappin.and.ellipse",
                     title: rowTitle(location),
-                    subtitle: "\(nodeCountText(location.healthyNodes)) · \(localizedStatus(location.status))",
+                    subtitle: "\(nodeCountText(location.healthyNodes)) · \(location.localizedStatus)",
                     trailing: latencyText(location),
                     selected: appState.serverSelectionMode == "manual"
                         && appState.selectedLocationId == location.id,
@@ -486,14 +486,6 @@ struct ServerSidebarPanel: View {
     private func latencyText(_ location: VpnLocation) -> String? {
         guard let latency = location.latencyMs else { return nil }
         return "\(Int(latency.rounded())) мс"
-    }
-
-    private func localizedStatus(_ status: String) -> String {
-        switch status.lowercased() {
-        case "active", "online", "healthy": return "доступен"
-        case "maintenance": return "обслуживание"
-        default: return status.isEmpty ? "статус уточняется" : status
-        }
     }
 
     private func nodeCountText(_ count: Int) -> String {

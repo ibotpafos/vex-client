@@ -322,6 +322,11 @@ private struct FocusPulseLocationCard: View {
             .joined()
     }
 
+    private func nonEmpty(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     private var countryArtworkHovered: Bool {
         #if DEBUG
         return isHovered
@@ -332,18 +337,6 @@ private struct FocusPulseLocationCard: View {
     }
 
     private var availability: String {
-        switch location.status.lowercased() {
-        case "active", "online", "healthy":
-            return "доступен"
-        case "maintenance":
-            return "обслуживание"
-        default:
-            return nonEmpty(location.status) ?? "статус уточняется"
-        }
-    }
-
-    private func nonEmpty(_ value: String) -> String? {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+        location.localizedStatus
     }
 }

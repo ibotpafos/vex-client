@@ -142,7 +142,15 @@ final class ServerSidebarWindowController: NSObject {
         )
         panel.contentViewController = NSHostingController(rootView: rootView)
         panel.setContentSize(panelSize)
-        panel.backgroundColor = .clear
+        // Solid backing color: WindowServer drops clicks on fully transparent
+        // pixels even when SwiftUI hit-testing says otherwise. The main window
+        // already uses this technique for the same reason.
+        panel.backgroundColor = NSColor(
+            red: 0.008,
+            green: 0.039,
+            blue: 0.043,
+            alpha: 1
+        )
         panel.isOpaque = false
         panel.hasShadow = false
         panel.hidesOnDeactivate = false

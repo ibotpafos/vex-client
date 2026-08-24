@@ -17,13 +17,15 @@ struct ServerSidebarPanel: View {
 
     var body: some View {
         ZStack {
+            // Opaque base: the panel window itself is clear, and WindowServer
+            // routes clicks through fully transparent pixels regardless of
+            // SwiftUI hit-testing (same reason the main window paints a solid
+            // backing color). This layer keeps every pixel clickable.
+            Color.vexBackground
             VEXBackground().allowsHitTesting(false)
-            // Invisible full-surface sink: the panel is borderless and its
-            // background gradients don't hit-test, so without this layer a
-            // click on any empty area falls through to windows behind and
-            // deactivates the whole app.
+            // Full-surface AppKit hit-test sink for areas between controls.
             Rectangle()
-                .fill(Color.white.opacity(0.0001))
+                .fill(Color.clear)
                 .contentShape(Rectangle())
                 .onTapGesture {}
                 .accessibilityHidden(true)

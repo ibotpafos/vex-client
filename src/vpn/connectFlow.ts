@@ -1,5 +1,6 @@
 import type { VpnProfile } from './profile';
 import { vpnProfileAddressMatchesDevice } from './profileConsistency';
+import { profileEndpoint } from './connectionFallback';
 
 export const explicitConnectProfileResolutionOptions = {
   forceRefresh: true,
@@ -64,6 +65,68 @@ export function vpnConnectTimingSamples(input: {
     tap_to_verified_ms: Math.max(0, input.verificationCompletedMs - input.tapStartedAt),
     interface_up_to_verified_ms: Math.max(0, input.verificationCompletedMs - input.interfaceUpMs),
   };
+}
+
+export function vpnConnectTelemetry(input: {
+  connectedProfile: VpnProfile;
+  endpointAttempts: string[];
+  initialProfile: VpnProfile;
+  locationFallback: boolean;
+  tapStartedAt: number;
+  verificationCompletedMs: number;
+}) {
+  const fallbackUsed = input.locationFallback || input.endpointAttempts.length > 1;
+  return {
+    connectionEvent: fallbackUsed ? 'fallback_succeeded' as const : 'connect_succeeded' as const,
+    connectDurationMs: Math.max(0, input.verificationCompletedMs - input.tapStartedAt),
+    transportFrom: vpnTransportTelemetry(input.initialProfile),
+    transportTo: vpnTransportTelemetry(input.connectedProfile),
+  };
+}
+
+export function vpnUnexpectedDisconnectTelemetry(input: {
+  connectedAtMs: number;
+  nextState: string;
+  nowMs: number;
+  profile: VpnProfile;
+  previousState: string;
+}) {
+  if (input.previousState !== 'connected' || (input.nextState !== 'disconnected' && input.nextState !== 'error')) {
+    return null;
+  }
+  return {
+    connectionEvent: 'unexpected_disconnect' as const,
+    sessionUptimeSeconds: Math.floor(Math.max(0, input.nowMs - input.connectedAtMs) / 1_000),
+    transportFrom: vpnTransportTelemetry(input.profile),
+  };
+}
+
+export function vpnTransportTelemetry(profile: VpnProfile): 'awg3_udp443' | 'awg3' | 'awg2' | 'wireguard' | 'openvpn' | 'unknown' {
+  const protocol = profile.device?.protocol?.trim().toLowerCase() ?? '';
+  if (protocol.includes('openvpn')) {
+    return 'openvpn';
+  }
+  const hasHeaderProtection = /^HeaderProtectionKey\s*=\s*\S+/m.test(profile.config);
+  if (hasHeaderProtection) {
+    return endpointPort(profileEndpoint(profile)) === 443 ? 'awg3_udp443' : 'awg3';
+  }
+  if (protocol.includes('amnezia') || /^Jc\s*=/m.test(profile.config)) {
+    return 'awg2';
+  }
+  if (protocol.includes('wireguard')) {
+    return 'wireguard';
+  }
+  return 'unknown';
+}
+
+function endpointPort(endpoint?: string): number | undefined {
+  const value = endpoint?.trim() ?? '';
+  const match = /:(\d+)$/.exec(value);
+  if (!match) {
+    return undefined;
+  }
+  const port = Number(match[1]);
+  return Number.isInteger(port) ? port : undefined;
 }
 
 function hasPaidEntitlementLike(item: EntitlementLike | null | undefined): boolean {

@@ -127,6 +127,14 @@ export type ClientDiagnosticsReportInput = {
   reason?: string;
   status?: string;
   vpnState?: string;
+  connectionEvent?: 'connect_started' | 'connect_succeeded' | 'connect_failed' |
+    'fallback_started' | 'fallback_succeeded' | 'fallback_failed' |
+    'reconnect_started' | 'reconnect_succeeded' | 'reconnect_failed' |
+    'unexpected_disconnect';
+  connectDurationMs?: number;
+  transportFrom?: 'awg3_udp443' | 'awg3' | 'awg2' | 'wireguard' | 'openvpn' | 'unknown';
+  transportTo?: 'awg3_udp443' | 'awg3' | 'awg2' | 'wireguard' | 'openvpn' | 'unknown';
+  sessionUptimeSeconds?: number;
   endpoint?: string;
   observedPublicIp?: string;
   dnsOk?: boolean;
@@ -139,6 +147,9 @@ export type ClientDiagnosticsReportInput = {
   samples?: Record<string, unknown>;
   samplesJson?: string;
 };
+
+export type ClientConnectionTelemetryInput = Pick<ClientDiagnosticsReportInput,
+  'connectionEvent' | 'connectDurationMs' | 'transportFrom' | 'transportTo' | 'sessionUptimeSeconds'>;
 
 export type PreparedTunnel = {
   device: VpnDevice;

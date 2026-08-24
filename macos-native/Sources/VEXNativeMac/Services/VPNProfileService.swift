@@ -261,37 +261,26 @@ struct VPNProfileService {
         locationId: String
     ) async throws -> VpnDevice {
         let devices = try await api.vpnDevices(accessToken: accessToken)
-        if let exact = devices.first(where: { isActiveManagedDevice($0) && $0.externalDeviceId == externalDeviceId }) {
-            return try await syncNativeDeviceMetadataIfNeeded(
-                exact,
-                accessToken: accessToken,
-                externalDeviceId: externalDeviceId,
-                publicKey: publicKey,
-                keyEpoch: keyEpoch,
-                locationId: locationId
-            )
-        }
-        if let legacyLocation = devices.first(where: { isActiveManagedDevice($0) && $0.externalDeviceId == "\(externalDeviceId):\(locationId)" }) {
-            return try await syncNativeDeviceMetadataIfNeeded(
-                legacyLocation,
-                accessToken: accessToken,
-                externalDeviceId: externalDeviceId,
-                publicKey: publicKey,
-                keyEpoch: keyEpoch,
-                locationId: locationId
-            )
-        }
-        if let legacyPhysical = devices.first(where: {
-            isActiveManagedDevice($0) && ($0.externalDeviceId ?? "").hasPrefix("\(externalDeviceId):")
-        }) {
-            return try await syncNativeDeviceMetadataIfNeeded(
-                legacyPhysical,
-                accessToken: accessToken,
-                externalDeviceId: externalDeviceId,
-                publicKey: publicKey,
-                keyEpoch: keyEpoch,
-                locationId: locationId
-            )
+
+        // Match in priority order: exact id, then legacy per-location id
+        // ("id:location"), then any legacy physical-device prefix ("id:").
+        let candidates: [(VpnDevice) -> Bool] = [
+            { $0.externalDeviceId == externalDeviceId },
+            { $0.externalDeviceId == "\(externalDeviceId):\(locationId)" },
+            { ($0.externalDeviceId ?? "").hasPrefix("\(externalDeviceId):") },
+        ]
+
+        for matches in candidates {
+            if let device = devices.first(where: { isActiveManagedDevice($0) && matches($0) }) {
+                return try await syncNativeDeviceMetadataIfNeeded(
+                    device,
+                    accessToken: accessToken,
+                    externalDeviceId: externalDeviceId,
+                    publicKey: publicKey,
+                    keyEpoch: keyEpoch,
+                    locationId: locationId
+                )
+            }
         }
         return try await registerNativeDevice(
             accessToken: accessToken,

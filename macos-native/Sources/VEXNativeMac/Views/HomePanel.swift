@@ -212,7 +212,7 @@ private struct FocusPulseLocationCard: View {
                         .font(.system(size: 14, weight: .bold))
                         .foregroundStyle(Color.vexText)
                         .lineLimit(1)
-                    Text("\(location.healthyNodes) узлов · \(availability)")
+                    Text("\(FocusPulsePresentation.nodeCountText(location.healthyNodes)) · \(availability)")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(Color.vexSecondaryText)
                         .lineLimit(1)

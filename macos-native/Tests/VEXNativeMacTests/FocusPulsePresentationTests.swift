@@ -46,6 +46,17 @@ final class FocusPulsePresentationTests: XCTestCase {
         XCTAssertEqual(FocusPulsePresentation.formatBytes(133_588_582), "127,4 МБ")
     }
 
+    func testNodeCountUsesCorrectRussianPluralForms() {
+        XCTAssertEqual(FocusPulsePresentation.nodeCountText(1), "1 узел")
+        XCTAssertEqual(FocusPulsePresentation.nodeCountText(2), "2 узла")
+        XCTAssertEqual(FocusPulsePresentation.nodeCountText(4), "4 узла")
+        XCTAssertEqual(FocusPulsePresentation.nodeCountText(5), "5 узлов")
+        XCTAssertEqual(FocusPulsePresentation.nodeCountText(11), "11 узлов")
+        XCTAssertEqual(FocusPulsePresentation.nodeCountText(14), "14 узлов")
+        XCTAssertEqual(FocusPulsePresentation.nodeCountText(21), "21 узел")
+        XCTAssertEqual(FocusPulsePresentation.nodeCountText(22), "22 узла")
+    }
+
     func testConnectionAnimationOnlyRunsDuringRealTransitions() {
         XCTAssertTrue(
             FocusPulsePresentation.shouldAnimateConnection(

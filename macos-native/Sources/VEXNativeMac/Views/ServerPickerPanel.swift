@@ -497,15 +497,6 @@ struct ServerSidebarPanel: View {
     }
 
     private func nodeCountText(_ count: Int) -> String {
-        let mod100 = count % 100
-        let mod10 = count % 10
-        if mod100 >= 11 && mod100 <= 14 {
-            return "\(count) узлов"
-        }
-        switch mod10 {
-        case 1: return "\(count) узел"
-        case 2...4: return "\(count) узла"
-        default: return "\(count) узлов"
-        }
+        FocusPulsePresentation.nodeCountText(count)
     }
 }

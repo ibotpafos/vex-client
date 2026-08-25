@@ -1,6 +1,5 @@
 import type { VpnProfile } from './profile';
 
-const awg2EndpointFallbackPorts = [443, 51820];
 const awg3EndpointFallbackPorts = [51821, 443];
 
 export function isVpnTransportFallbackError(error: unknown): boolean {
@@ -32,9 +31,10 @@ export function connectionAttemptsForProfile(profile: VpnProfile): VpnProfile[] 
 }
 
 function endpointFallbackPortsFor(profile: VpnProfile): readonly number[] {
-  return /^HeaderProtectionKey\s*=\s*\S+/m.test(profile.config)
-    ? awg3EndpointFallbackPorts
-    : awg2EndpointFallbackPorts;
+  // Every profile is AmneziaWG v3 since the AWG2 retirement: recovery only
+  // ever tries the isolated AWG3 listeners, never the retired 51820 port.
+  void profile;
+  return awg3EndpointFallbackPorts;
 }
 
 function profileWithEndpoint(profile: VpnProfile, endpoint: string): VpnProfile | null {

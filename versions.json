@@ -4,7 +4,9 @@
     "build": 57,
     "min_supported_build": 1002930,
     "is_required": true,
-    "release_notes": "Android owner-canary: приложение явно сообщает поддержку AmneziaWG 3 и сохраняет параметры AWG3 в управляемом профиле. Устранено кратковременное отключение VPN при повторном подключении во время запуска приложения.",
+    "checksum_sha256": "3508338c2c0fc82573729307effa2a72bae4b55682f379e8f29aa21df7dcb079",
+    "signature_url": "/downloads/Vex-Android-1.0.55.apk.sig",
+    "release_notes": "Android: исправлены экран входа и анимация нижних панелей, подключение переведено на AWG3 и улучшена стабильность VPN.",
     "core_version": "0.1.0",
     "config_schema_version": 1,
     "min_config_schema_version": 1
@@ -48,6 +50,7 @@
         "channel": "stable",
         "configSchemaVersion": 1,
         "supportedApiClientVersions": [
+          "native-macos-1",
           "expo-1"
         ],
         "routingPolicyVersionPrefix": "2026.06."
@@ -64,15 +67,38 @@
         "routingPolicyVersionPrefix": "2026.06."
       },
       {
+        "id": "linux-stable-v1",
+        "platform": "linux",
+        "channel": "stable",
+        "configSchemaVersion": 1,
+        "supportedApiClientVersions": [
+          "expo-1"
+        ],
+        "routingPolicyVersionPrefix": "2026.06."
+      },
+      {
         "id": "ios-stable-v1",
         "platform": "ios",
         "channel": "stable",
         "configSchemaVersion": 1,
         "supportedApiClientVersions": [
-          "ios-native-1"
+          "ios-native-1",
+          "expo-1"
         ],
         "routingPolicyVersionPrefix": "2026.06."
       }
     ]
+  },
+  "desktop": {
+    "version": "0.1.36",
+    "platform_versions": {
+      "desktop-web": "0.1.36",
+      "macos": "0.1.47",
+      "windows": "0.1.36",
+      "linux": "0.1.31"
+    },
+    "release_notes": "macOS: исправлен запуск после обновления через Sparkle; ресурсы приложения теперь корректно загружаются из установленного bundle.",
+    "config_schema_version": 1,
+    "min_config_schema_version": 1
   }
 }

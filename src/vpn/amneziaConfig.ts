@@ -15,13 +15,7 @@ export type ManagedAmneziaConfig = {
   i3?: string;
   i4?: string;
   i5?: string;
-  header_protection_key?: string;
-  content_padding_addition?: string;
-  rekey_after_time?: string;
-  rekey_timeout?: string;
-  reject_after_time?: string;
-  keepalive_timeout?: string;
-  max_handshake_attempts?: string;
+  header_protection_key?: string | null;
 };
 
 export function managedProfileAmneziaConfig(amnezia?: ManagedAmneziaConfig): string {
@@ -56,12 +50,6 @@ export function managedProfileAmneziaConfig(amnezia?: ManagedAmneziaConfig): str
   addString('I3', amnezia.i3);
   addString('I4', amnezia.i4);
   addString('I5', amnezia.i5);
-  addString('HeaderProtectionKey', amnezia.header_protection_key);
-  addString('ContentPaddingAddition', amnezia.content_padding_addition);
-  addString('RekeyAfterTime', amnezia.rekey_after_time);
-  addString('RekeyTimeout', amnezia.rekey_timeout);
-  addString('RejectAfterTime', amnezia.reject_after_time);
-  addString('KeepaliveTimeout', amnezia.keepalive_timeout);
-  addString('MaxHandshakeAttempts', amnezia.max_handshake_attempts);
+  addString('HeaderProtectionKey', amnezia.header_protection_key ?? undefined);
   return lines.length ? `${lines.join('\n')}\n` : '';
 }

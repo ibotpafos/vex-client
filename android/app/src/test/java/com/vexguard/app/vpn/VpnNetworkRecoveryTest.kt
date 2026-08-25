@@ -51,24 +51,21 @@ class VpnNetworkRecoveryTest {
     assertEquals(
       listOf(
         "[Peer]\nEndpoint = fi.example.test:8443\nPersistentKeepalive = 25",
+        "[Peer]\nEndpoint = fi.example.test:51821\nPersistentKeepalive = 25",
         "[Peer]\nEndpoint = fi.example.test:443\nPersistentKeepalive = 25",
-        "[Peer]\nEndpoint = fi.example.test:51820\nPersistentKeepalive = 25",
       ),
       VpnNetworkRecovery.configCandidates(config),
     )
   }
 
   @Test
-  fun keepsAwg3RecoveryOffTheAwg2Listener() {
-    val config = "[Interface]\nHeaderProtectionKey = header-key\n[Peer]\nEndpoint = fi.example.test:51821"
+  fun keepsRecoveryOnTheAwg3ListenersOnly() {
+    // Since the AWG2 retirement even configs without HeaderProtectionKey must
+    // never fall through to the retired 51820 listener.
+    val config = "[Peer]\nEndpoint = fi.example.test:8443\nPersistentKeepalive = 25"
+    val candidates = VpnNetworkRecovery.configCandidates(config)
 
-    assertEquals(
-      listOf(
-        "[Interface]\nHeaderProtectionKey = header-key\n[Peer]\nEndpoint = fi.example.test:51821",
-        "[Interface]\nHeaderProtectionKey = header-key\n[Peer]\nEndpoint = fi.example.test:443",
-      ),
-      VpnNetworkRecovery.configCandidates(config),
-    )
+    assertFalse(candidates.any { it.contains(":51820") })
   }
 
   @Test

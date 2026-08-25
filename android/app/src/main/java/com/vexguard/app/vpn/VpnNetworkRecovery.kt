@@ -2,7 +2,6 @@ package com.vexguard.app.vpn
 
 internal object VpnNetworkRecovery {
   private val endpointPattern = Regex("(?m)^Endpoint\\s*=\\s*(.+)$")
-  private val awg3HeaderProtectionPattern = Regex("(?m)^HeaderProtectionKey\\s*=\\s*\\S+")
 
   fun configCandidates(configText: String): List<String> {
     val endpoint = endpointPattern.find(configText)?.groupValues?.getOrNull(1)?.trim()
@@ -13,13 +12,9 @@ internal object VpnNetworkRecovery {
       else -> return listOf(configText)
     }
     val formattedHost = if (host.contains(':')) "[$host]" else host
-    // Keep AWG3 recovery on the isolated listener. Falling through to 51820
-    // would make a recovered tunnel silently rejoin the AWG2 cohort.
-    val fallbackPorts = if (awg3HeaderProtectionPattern.containsMatchIn(configText)) {
-      listOf(51821, 443)
-    } else {
-      listOf(443, 51820)
-    }
+    // All profiles are AmneziaWG v3 since the AWG2 retirement: recovery stays
+    // on the isolated AWG3 listeners and must never fall through to 51820.
+    val fallbackPorts = listOf(51821, 443)
     return sequenceOf(endpoint, *fallbackPorts.map { "$formattedHost:$it" }.toTypedArray())
       .distinct()
       .map { candidate -> configText.replace(endpointPattern, "Endpoint = $candidate") }

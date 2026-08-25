@@ -963,8 +963,14 @@ function runCreateDeviceRequestTests(): void {
 {
   const attempts = connectionAttemptsForProfile(profileWithEndpoint('de.example.com:51820'));
 
-  assertEqual(attempts.length, 2);
-  assertDeepEqual(attempts.map(profileEndpoint), ['de.example.com:51820', 'de.example.com:443']);
+  // AWG2 retirement: recovery never falls through to the retired 51820
+  // listener; only the isolated AWG3 listeners are attempted.
+  assertEqual(attempts.length, 3);
+  assertDeepEqual(attempts.map(profileEndpoint), [
+    'de.example.com:51820',
+    'de.example.com:51821',
+    'de.example.com:443',
+  ]);
 }
 
 {
@@ -973,14 +979,18 @@ function runCreateDeviceRequestTests(): void {
     lastSuccessfulEndpoint: 'de.example.com:443',
   });
 
-  assertDeepEqual(attempts.map(profileEndpoint), ['de.example.com:443', 'de.example.com:51820']);
+  assertDeepEqual(attempts.map(profileEndpoint), [
+    'de.example.com:443',
+    'de.example.com:51820',
+    'de.example.com:51821',
+  ]);
 }
 
 {
   const attempts = connectionAttemptsForProfile(profileWithEndpoint('de.example.com:443'));
 
   assertEqual(attempts.length, 2);
-  assertDeepEqual(attempts.map(profileEndpoint), ['de.example.com:443', 'de.example.com:51820']);
+  assertDeepEqual(attempts.map(profileEndpoint), ['de.example.com:443', 'de.example.com:51821']);
 }
 
 {
@@ -996,7 +1006,7 @@ function runCreateDeviceRequestTests(): void {
 {
   const attempts = connectionAttemptsForProfile(profileWithEndpoint('[2001:db8::1]:51820'));
 
-  assertEqual(profileEndpoint(attempts[1]), '[2001:db8::1]:443');
+  assertEqual(profileEndpoint(attempts[1]), '[2001:db8::1]:51821');
 }
 
 {

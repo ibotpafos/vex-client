@@ -475,7 +475,7 @@ export function managedProfileConfig(profile: NativeVPNProfileDTO, keyPair: Wire
   }
   const dns = profile.dns?.filter(Boolean);
   const allowedIps = profile.allowed_ips?.filter(Boolean);
-  const amnezia = managedProfileAmneziaConfig(profile.amnezia);
+  const amnezia = managedProfileAmneziaConfig(profile.amnezia ?? undefined);
   const presharedKey = profile.preshared_key?.trim();
   return `[Interface]
 PrivateKey = ${keyPair.privateKey}

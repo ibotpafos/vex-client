@@ -9,7 +9,7 @@ export type UserDTO = {
 export type AuthResultDTO = {
   user: UserDTO;
   session: {
-    access_token: string;
+    access_token?: string;
     expires_at?: string;
   };
 };
@@ -36,21 +36,21 @@ export type DeviceDTO = {
   crypto_profile?: string;
   psk_epoch?: number;
   profile_version?: number;
-  psk_rotated_at?: string;
+  psk_rotated_at?: string | null;
   billing_plan_id?: string;
   billing_tier?: string;
-  rate_limit_mbps?: number;
+  rate_limit_mbps?: number | null;
   traffic_priority?: number;
   shield_enabled?: boolean;
   assigned_ipv4?: string;
   node_id?: string;
   node_assignment_reason?: string;
-  node_assigned_at?: string;
-  last_node_change_at?: string;
+  node_assigned_at?: string | null;
+  last_node_change_at?: string | null;
   endpoint?: string;
-  latency_ms?: number;
+  latency_ms?: number | null;
   created_at?: string;
-  revoked_at?: string;
+  revoked_at?: string | null;
 };
 
 export type DeviceUsageResponseDTO = {
@@ -64,15 +64,15 @@ export type DeviceUsageDTO = {
   connection_status?: string;
   connected?: boolean;
   multiple_devices_detected?: boolean;
-  latest_handshake_at?: string;
+  latest_handshake_at?: string | null;
   seconds_since_handshake?: number | null;
   rx_bytes?: number;
   tx_bytes?: number;
   total_bytes?: number;
-  rate_limit_mbps?: number;
+  rate_limit_mbps?: number | null;
   traffic_priority?: number;
-  rx_rate_bps?: number;
-  tx_rate_bps?: number;
+  rx_rate_bps?: number | null;
+  tx_rate_bps?: number | null;
 };
 
 export type LocationDTO = {
@@ -84,7 +84,7 @@ export type LocationDTO = {
   status?: string;
   healthy_nodes?: number;
   endpoint?: string;
-  latency_ms?: number;
+  latency_ms?: number | null;
 };
 
 export type NativeVPNProfileDTO = {
@@ -106,10 +106,10 @@ export type NativeVPNProfileDTO = {
   routing_policy_version?: string;
   authorization?: {
     key_id: string;
-    algorithm: 'ECDSA_P256_SHA256_DER';
+    algorithm: string;
     payload_base64: string;
     signature_base64: string;
-  };
+  } | null;
   amnezia?: {
     jc?: number;
     jmin?: number;
@@ -134,7 +134,7 @@ export type NativeVPNProfileDTO = {
     reject_after_time?: string;
     keepalive_timeout?: string;
     max_handshake_attempts?: string;
-  };
+  } | null;
   amnezia_version?: number;
   config?: string;
 };
@@ -179,7 +179,7 @@ export type SupportTicketDTO = {
   admin_note?: string;
   created_at: string;
   updated_at: string;
-  closed_at?: string;
+  closed_at?: string | null;
 };
 
 export type EntitlementDTO = {
@@ -192,8 +192,8 @@ export type EntitlementDTO = {
   remaining_text?: string;
   status?: string;
   tier?: string;
-  current_period_end?: string;
-  effective_expires_at?: string;
+  current_period_end?: string | null;
+  effective_expires_at?: string | null;
   vpn_access?: boolean;
 };
 
@@ -246,7 +246,7 @@ export type AppUpdateCheckResponseDTO = {
 export type AppRemoteConfigResponseDTO = {
   version?: string;
   signature?: string;
-  releasedAt?: string;
+  releasedAt?: string | null;
   platform?: string;
   channel?: string;
   minSupportedBuild?: number;

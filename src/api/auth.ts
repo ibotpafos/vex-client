@@ -71,7 +71,7 @@ export async function refreshSession(accessToken: string): Promise<AuthSession> 
 export function parseAuth(item: AuthResultDTO): AuthSession {
   return {
     user: parseUser(item.user),
-    accessToken: item.session.access_token,
+    accessToken: item.session.access_token || '',
     expiresAt: item.session.expires_at || undefined,
   };
 }

@@ -107,7 +107,8 @@
     "android:release": "bash scripts/build_android_release.sh",
     "local:release-cache": "bash scripts/setup_local_release_cache.sh",
     "local:release": "bash scripts/build_all_local_releases.sh",
-    "macos:release": "npm run native:macos:release"
+    "macos:release": "npm run native:macos:release",
+    "contract:check": "node scripts/check-generated-contract.mjs"
   },
   "resolutions": {
     "lightningcss": "1.30.1",

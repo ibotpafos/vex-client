@@ -2,6 +2,13 @@ import Foundation
 import LocalAuthentication
 import Security
 
+protocol VEXSessionKeychain {
+    func string(for account: String, allowAuthenticationUI: Bool) -> String?
+    func setString(_ value: String, for account: String, requiresBiometricAuthentication: Bool) throws
+    func delete(account: String) throws
+    func contains(account: String) -> Bool
+}
+
 struct VEXKeychainStore {
     static let nativeService = "app.vex.vpn.native.sensitive-storage"
     static let legacyDesktopService = "app.vex.vpn.desktop.sensitive-storage"
@@ -36,23 +43,34 @@ struct VEXKeychainStore {
         return item as? Data
     }
 
-    func setString(_ value: String, for account: String) throws {
+    func setString(_ value: String, for account: String, requiresBiometricAuthentication: Bool = false) throws {
         guard let data = value.data(using: .utf8) else {
             throw VEXKeychainError.invalidValue
         }
-        try setData(data, for: account)
+        try setData(data, for: account, requiresBiometricAuthentication: requiresBiometricAuthentication)
     }
 
-    func setData(_ data: Data, for account: String) throws {
+    func setData(_ data: Data, for account: String, requiresBiometricAuthentication: Bool = false) throws {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
-        let attributes: [String: Any] = [
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
-        ]
+        var attributes: [String: Any] = [kSecValueData as String: data]
+        if requiresBiometricAuthentication {
+            var error: Unmanaged<CFError>?
+            guard let accessControl = SecAccessControlCreateWithFlags(
+                nil,
+                kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+                .biometryCurrentSet,
+                &error
+            ) else {
+                throw VEXKeychainError.accessControl
+            }
+            attributes[kSecAttrAccessControl as String] = accessControl
+        } else {
+            attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        }
 
         let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
         if updateStatus == errSecSuccess {
@@ -81,16 +99,36 @@ struct VEXKeychainStore {
             throw VEXKeychainError.status(status)
         }
     }
+
+    func contains(account: String) -> Bool {
+        let context = LAContext()
+        context.interactionNotAllowed = true
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecUseAuthenticationContext as String: context,
+        ]
+        let status = SecItemCopyMatching(query as CFDictionary, nil)
+        return status == errSecSuccess || status == errSecInteractionNotAllowed
+    }
 }
+
+extension VEXKeychainStore: VEXSessionKeychain {}
 
 enum VEXKeychainError: LocalizedError {
     case invalidValue
+    case accessControl
     case status(OSStatus)
 
     var errorDescription: String? {
         switch self {
         case .invalidValue:
             return "Некорректное значение Keychain."
+        case .accessControl:
+            return "Не удалось настроить защиту Keychain."
         case .status(let status):
             return "Keychain error \(status)."
         }

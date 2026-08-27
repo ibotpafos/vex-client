@@ -4,60 +4,65 @@ struct VEXSessionStore {
     private let sessionKey = "vex.auth.session.v1"
     private let historyKey = "vex.auth.session.history.v1"
     private let fileStore: AppSensitiveFileStore
-    private let nativeKeychain: VEXKeychainStore
-    private let legacyKeychain: VEXKeychainStore
+    private let nativeKeychain: any VEXSessionKeychain
+    private let legacyKeychain: any VEXSessionKeychain
 
     init(
         fileStore: AppSensitiveFileStore = AppSensitiveFileStore(),
-        nativeKeychain: VEXKeychainStore = VEXKeychainStore(),
-        legacyKeychain: VEXKeychainStore = VEXKeychainStore(service: VEXKeychainStore.legacyDesktopService)
+        nativeKeychain: any VEXSessionKeychain = VEXKeychainStore(),
+        legacyKeychain: any VEXSessionKeychain = VEXKeychainStore(service: VEXKeychainStore.legacyDesktopService)
     ) {
         self.fileStore = fileStore
         self.nativeKeychain = nativeKeychain
         self.legacyKeychain = legacyKeychain
     }
 
-    func loadSession() -> AuthSession? {
-        if let session = readSession(key: sessionKey) {
+    func loadSession(
+        allowAuthenticationUI: Bool = false,
+        requiresBiometricAuthentication: Bool = false
+    ) -> AuthSession? {
+        if let session = migrateNativeKeychainSessionIfAvailable(
+            allowAuthenticationUI: allowAuthenticationUI,
+            requiresBiometricAuthentication: requiresBiometricAuthentication
+        ) {
             return session
         }
-        if let session = readSession(key: historyKey) {
-            return session
-        }
-        if let session = migrateNativeKeychainSessionIfAvailable() {
-            return session
-        }
-        return migrateLegacySessionIfAvailable()
+        return migrateLegacySessionIfAvailable(
+            allowAuthenticationUI: allowAuthenticationUI,
+            requiresBiometricAuthentication: requiresBiometricAuthentication
+        )
     }
 
     func hasStoredNativeSession() -> Bool {
         fileStore.data(for: sessionKey) != nil
             || fileStore.data(for: historyKey) != nil
-            || nativeKeychain.data(for: sessionKey, allowAuthenticationUI: false) != nil
-            || nativeKeychain.data(for: historyKey, allowAuthenticationUI: false) != nil
-            || legacyKeychain.data(for: sessionKey, allowAuthenticationUI: false) != nil
-            || legacyKeychain.data(for: historyKey, allowAuthenticationUI: false) != nil
+            || nativeKeychain.contains(account: sessionKey)
+            || nativeKeychain.contains(account: historyKey)
+            || legacyKeychain.contains(account: sessionKey)
+            || legacyKeychain.contains(account: historyKey)
     }
 
-    func saveSession(_ session: AuthSession) throws {
+    func saveSession(_ session: AuthSession, requiresBiometricAuthentication: Bool = false) throws {
         let data = try JSONEncoder().encode(session)
         guard let payload = String(data: data, encoding: .utf8) else {
             throw VEXKeychainError.invalidValue
         }
-        try fileStore.setString(payload, for: sessionKey)
-        try? fileStore.setString(payload, for: historyKey)
-        try? nativeKeychain.setString(payload, for: sessionKey)
-        try? nativeKeychain.setString(payload, for: historyKey)
+        try nativeKeychain.setString(
+            payload,
+            for: sessionKey,
+            requiresBiometricAuthentication: requiresBiometricAuthentication
+        )
+        try? nativeKeychain.delete(account: historyKey)
+        try deleteLegacyPlaintextFiles()
     }
 
     func clearSession() throws {
-        try fileStore.delete(sessionKey)
-        try fileStore.delete(historyKey)
+        try deleteLegacyPlaintextFiles()
         try? nativeKeychain.delete(account: sessionKey)
         try? nativeKeychain.delete(account: historyKey)
     }
 
-    private func readSession(key: String) -> AuthSession? {
+    private func readLegacyPlaintextSession(key: String) -> AuthSession? {
         guard let payload = fileStore.string(for: key),
               let data = payload.data(using: .utf8) else {
             return nil
@@ -65,35 +70,70 @@ struct VEXSessionStore {
         return try? JSONDecoder().decode(AuthSession.self, from: data)
     }
 
-    private func migrateNativeKeychainSessionIfAvailable() -> AuthSession? {
-        if let session = readNativeKeychainSession(key: sessionKey) ?? readNativeKeychainSession(key: historyKey) {
-            try? saveSession(session)
-            return session
+    private func migrateLegacySessionIfAvailable(
+        allowAuthenticationUI: Bool,
+        requiresBiometricAuthentication: Bool
+    ) -> AuthSession? {
+        if let session = readLegacyPlaintextSession(key: sessionKey) ?? readLegacyPlaintextSession(key: historyKey) {
+            do {
+                try saveSession(session, requiresBiometricAuthentication: requiresBiometricAuthentication)
+                if requiresBiometricAuthentication && !allowAuthenticationUI {
+                    return nil
+                }
+                return session
+            } catch {
+                return nil
+            }
+        }
+        if let session = readLegacyKeychainSession(key: sessionKey, allowAuthenticationUI: allowAuthenticationUI)
+            ?? readLegacyKeychainSession(key: historyKey, allowAuthenticationUI: allowAuthenticationUI) {
+            do {
+                try saveSession(session, requiresBiometricAuthentication: requiresBiometricAuthentication)
+                try? legacyKeychain.delete(account: sessionKey)
+                try? legacyKeychain.delete(account: historyKey)
+                return session
+            } catch {
+                return nil
+            }
         }
         return nil
     }
 
-    private func migrateLegacySessionIfAvailable() -> AuthSession? {
-        if let session = readLegacySession(key: sessionKey) ?? readLegacySession(key: historyKey) {
-            try? saveSession(session)
-            return session
+    private func migrateNativeKeychainSessionIfAvailable(
+        allowAuthenticationUI: Bool,
+        requiresBiometricAuthentication: Bool
+    ) -> AuthSession? {
+        guard let session = readNativeKeychainSession(key: sessionKey, allowAuthenticationUI: allowAuthenticationUI)
+            ?? readNativeKeychainSession(key: historyKey, allowAuthenticationUI: allowAuthenticationUI) else {
+            return nil
         }
-        return nil
+        guard requiresBiometricAuthentication else { return session }
+        do {
+            try saveSession(session, requiresBiometricAuthentication: true)
+            return allowAuthenticationUI ? session : nil
+        } catch {
+            return nil
+        }
     }
 
-    private func readNativeKeychainSession(key: String) -> AuthSession? {
-        guard let payload = nativeKeychain.string(for: key, allowAuthenticationUI: false),
+    private func readNativeKeychainSession(key: String, allowAuthenticationUI: Bool) -> AuthSession? {
+        guard let payload = nativeKeychain.string(for: key, allowAuthenticationUI: allowAuthenticationUI),
               let data = payload.data(using: .utf8) else {
             return nil
         }
         return try? JSONDecoder().decode(AuthSession.self, from: data)
     }
 
-    private func readLegacySession(key: String) -> AuthSession? {
-        guard let payload = legacyKeychain.string(for: key, allowAuthenticationUI: false),
+    private func readLegacyKeychainSession(key: String, allowAuthenticationUI: Bool) -> AuthSession? {
+        guard let payload = legacyKeychain.string(for: key, allowAuthenticationUI: allowAuthenticationUI),
               let data = payload.data(using: .utf8) else {
             return nil
         }
         return try? JSONDecoder().decode(AuthSession.self, from: data)
+    }
+
+    private func deleteLegacyPlaintextFiles() throws {
+        try fileStore.delete(sessionKey)
+        try fileStore.delete(historyKey)
     }
 }

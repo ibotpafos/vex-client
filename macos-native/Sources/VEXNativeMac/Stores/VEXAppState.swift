@@ -148,7 +148,7 @@ final class VEXAppState: ObservableObject {
         startUpdateMonitoring()
         biometricAvailability = biometricAuth.availability()
         canUnlockStoredSession = sessionStore.hasStoredNativeSession()
-        if let storedSession = sessionStore.loadSession() {
+        if let storedSession = sessionStore.loadSession(requiresBiometricAuthentication: biometricUnlockRequired) {
             session = storedSession
             user = storedSession.user
             canUnlockStoredSession = true
@@ -755,6 +755,18 @@ final class VEXAppState: ObservableObject {
         emailOTPChallengeEmail = nil
     }
 
+    func setBiometricUnlockRequired(_ required: Bool) {
+        biometricUnlockRequired = required
+        guard let session else { return }
+        do {
+            try sessionStore.saveSession(session, requiresBiometricAuthentication: required)
+        } catch {
+            biometricUnlockRequired.toggle()
+            authError = error.localizedDescription
+            statusMessage = error.localizedDescription
+        }
+    }
+
     func unlockStoredSessionWithBiometrics() async {
         guard !isAuthBusy else { return }
         guard canUnlockStoredSession else {
@@ -771,7 +783,10 @@ final class VEXAppState: ObservableObject {
             statusMessage = authError
             return
         }
-        guard let storedSession = sessionStore.loadSession() else {
+        guard let storedSession = sessionStore.loadSession(
+            allowAuthenticationUI: true,
+            requiresBiometricAuthentication: biometricUnlockRequired
+        ) else {
             authError = "Не удалось загрузить сохраненную сессию."
             statusMessage = authError
             return
@@ -1167,7 +1182,7 @@ final class VEXAppState: ObservableObject {
     }
 
     private func completeSignIn(_ nextSession: AuthSession, message: String) async throws {
-        try sessionStore.saveSession(nextSession)
+        try sessionStore.saveSession(nextSession, requiresBiometricAuthentication: biometricUnlockRequired)
         session = nextSession
         user = nextSession.user
         startCustomerRealtime(accessToken: nextSession.accessToken)
@@ -1210,7 +1225,7 @@ final class VEXAppState: ObservableObject {
     private func applySessionRefreshResult(_ result: Result<AuthSession, Error>, refreshAccessToken: String) async -> String? {
         do {
             let nextSession = try result.get()
-            try sessionStore.saveSession(nextSession)
+            try sessionStore.saveSession(nextSession, requiresBiometricAuthentication: biometricUnlockRequired)
             session = nextSession
             user = nextSession.user
             startCustomerRealtime(accessToken: nextSession.accessToken)

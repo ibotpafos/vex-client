@@ -904,6 +904,36 @@ final class VEXPrivilegedHelperCoreTests: XCTestCase {
         let receivedCount = await reader.value
         XCTAssertEqual(receivedCount, payload.count)
     }
+
+    func testPFEndpointRulesUseValidatedAddressFamilyAndPort() throws {
+        let paths = HelperPathsLayout()
+
+        for (endpoint, family, host, port) in [
+            ("203.0.113.10:51820", "inet", "203.0.113.10", "51820"),
+            ("de-1.vexguard.app:443", "inet", "de-1.vexguard.app", "443"),
+            ("[2001:db8::1]:443", "inet6", "2001:db8::1", "443"),
+            ("[2001:db8::1]", "inet6", "2001:db8::1", nil)
+        ] {
+            let fileSystem = InMemoryFileSystem(files: [paths.pfConfigPath: ""])
+            let firewall = SystemPFFirewallController(
+                runner: RecordingCommandRunner([:]),
+                fileSystem: fileSystem,
+                paths: paths
+            )
+
+            try firewall.enable(endpoint: endpoint, interfaceName: "utun9")
+            let rules = try fileSystem.readText(at: paths.antileakAnchorPath)
+
+            XCTAssertTrue(rules.contains("pass out quick \(family) proto tcp from any to \(host) port = 443 keep state"))
+            XCTAssertTrue(rules.contains("pass out quick \(family) proto tcp from any to \(host) port = 22 keep state"))
+            if let port {
+                XCTAssertTrue(rules.contains("pass out quick \(family) proto udp from any to \(host) port = \(port) keep state"))
+            } else {
+                XCTAssertFalse(rules.contains("proto udp from any to \(host)"))
+            }
+            XCTAssertFalse(rules.contains("[2001"))
+        }
+    }
 }
 
 private final class InMemoryFileSystem: HelperFileSystem, @unchecked Sendable {

@@ -55,6 +55,8 @@ struct VEXSessionStore {
         try fileStore.delete(historyKey)
         try? nativeKeychain.delete(account: sessionKey)
         try? nativeKeychain.delete(account: historyKey)
+        try? legacyKeychain.delete(account: sessionKey)
+        try? legacyKeychain.delete(account: historyKey)
     }
 
     private func readSession(key: String) -> AuthSession? {

@@ -933,6 +933,27 @@ final class VEXPrivilegedHelperCoreTests: XCTestCase {
             }
             XCTAssertFalse(rules.contains("[2001"))
         }
+
+        for (endpoint, rejectedHost) in [
+            ("[2001:::1]:443", "2001:::1"),
+            ("999.999.999.999:443", "999.999.999.999"),
+            ("a..b:443", "a..b"),
+            ("example-.com:443", "example-.com"),
+            ("host_name.example:443", "host_name.example"),
+            ("[2001:db8::1]443", "2001:db8::1")
+        ] {
+            let fileSystem = InMemoryFileSystem(files: [paths.pfConfigPath: ""])
+            let firewall = SystemPFFirewallController(
+                runner: RecordingCommandRunner([:]),
+                fileSystem: fileSystem,
+                paths: paths
+            )
+
+            try firewall.enable(endpoint: endpoint, interfaceName: "utun9")
+            let rules = try fileSystem.readText(at: paths.antileakAnchorPath)
+
+            XCTAssertFalse(rules.contains("to \(rejectedHost)"), "endpoint \(endpoint) must not generate a PF exception")
+        }
     }
 }
 

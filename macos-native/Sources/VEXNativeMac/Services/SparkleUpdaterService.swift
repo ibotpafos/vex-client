@@ -137,9 +137,11 @@ final class SparkleUpdaterService: NSObject, ObservableObject, NativeUpdaterServ
 
     func checkForUpdatesInBackground() {
         backgroundCheckRequested = true
-        if updaterController != nil {
-            startPendingBackgroundCheckIfPossible()
-        }
+        // This method is only called from the delayed post-launch task or a
+        // user interaction. Creating Sparkle here preserves the Tahoe launch
+        // drain guard while allowing the initial automatic check to run.
+        _ = ensureController()
+        startPendingBackgroundCheckIfPossible()
     }
 
     private func startPendingBackgroundCheckIfPossible() {

@@ -367,18 +367,31 @@ public final class SystemPFFirewallController: PFFirewallControlling, @unchecked
     }
 
     private func validIPv4OrHostname(_ host: String) -> Bool {
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: ".-"))
-        return !host.isEmpty
-            && host.unicodeScalars.allSatisfy(allowed.contains)
-            && host.first != "."
-            && host.last != "."
-            && host.first != "-"
-            && host.last != "-"
+        var address = in_addr()
+        if inet_pton(AF_INET, host, &address) == 1 {
+            return true
+        }
+        if host.allSatisfy({ $0.isNumber || $0 == "." }) {
+            return false
+        }
+        let labels = host.split(separator: ".", omittingEmptySubsequences: false)
+        return host.utf8.count <= 253 && labels.allSatisfy(validHostnameLabel)
     }
 
     private func validIPv6Host(_ host: String) -> Bool {
-        let allowed = CharacterSet(charactersIn: "0123456789abcdefABCDEF:.")
-        return host.contains(":") && host.unicodeScalars.allSatisfy(allowed.contains)
+        var address = in6_addr()
+        return inet_pton(AF_INET6, host, &address) == 1
+    }
+
+    private func validHostnameLabel(_ label: Substring) -> Bool {
+        guard !label.isEmpty, label.utf8.count <= 63,
+              let first = label.utf8.first, let last = label.utf8.last,
+              first != 45, last != 45 else {
+            return false
+        }
+        return label.utf8.allSatisfy { byte in
+            (48...57).contains(byte) || (65...90).contains(byte) || (97...122).contains(byte) || byte == 45
+        }
     }
 }
 

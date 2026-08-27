@@ -1587,7 +1587,7 @@ final class NativeParityModelTests: XCTestCase {
         let appStateURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Stores/VEXAppState.swift")
         let appState = try String(contentsOf: appStateURL, encoding: .utf8)
 
-        XCTAssertTrue(appState.contains("if let storedSession = sessionStore.loadSession()"))
+        XCTAssertTrue(appState.contains("if let storedSession = sessionStore.loadSession(requiresBiometricAuthentication: biometricUnlockRequired)"))
         XCTAssertTrue(appState.contains("user = storedSession.user"))
         XCTAssertTrue(appState.contains("await loadUpdate()"))
         XCTAssertTrue(appState.contains("await loadRemoteConfig()"))

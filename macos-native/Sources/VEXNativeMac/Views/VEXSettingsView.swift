@@ -87,7 +87,10 @@ struct VEXSettingsView: View {
                     systemName: "touchid",
                     title: "Touch ID при запуске",
                     subtitle: appState.biometricAvailability.isAvailable ? "Разблокировка через \(appState.biometricAvailability.label)." : "Биометрия недоступна на этом Mac.",
-                    isOn: $appState.biometricUnlockRequired,
+                    isOn: Binding(
+                        get: { appState.biometricUnlockRequired },
+                        set: { appState.setBiometricUnlockRequired($0) }
+                    ),
                     disabled: !appState.biometricAvailability.isAvailable
                 )
             }

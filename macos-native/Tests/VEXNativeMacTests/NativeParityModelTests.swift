@@ -829,7 +829,7 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertEqual(serverAssessment.samples["health_reasons"], "device_usage_degraded,stale_local_handshake")
     }
 
-    func testAutopilotBuildsEndpointFallbackAttempts() throws {
+    func testAutopilotBuildsAWG3EndpointFallbackAttempts() throws {
         let device = try JSONDecoder().decode(VpnDevice.self, from: """
         {"id":"dev_1","name":"Mac","status":"active","protocol":"amneziawg","external_device_id":"macos-test","endpoint":"de1.vexguard.app:8443"}
         """.data(using: .utf8)!)
@@ -858,9 +858,41 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertEqual(attempts.map(\.endpoint), [
             "de1.vexguard.app:8443",
             "de1.vexguard.app:443",
-            "de1.vexguard.app:51820",
         ])
         XCTAssertTrue(attempts[1].config.contains("Endpoint = de1.vexguard.app:443"))
+    }
+
+    func testAutopilotFormatsIPv6FallbackEndpoint() throws {
+        let device = try JSONDecoder().decode(VpnDevice.self, from: """
+        {"id":"dev_1","name":"Mac","status":"active","protocol":"amneziawg","external_device_id":"macos-test","endpoint":"[2001:db8::1]:8443"}
+        """.data(using: .utf8)!)
+        let tunnel = PreparedTunnel(
+            device: device,
+            config: """
+            [Interface]
+            PrivateKey = x
+            [Peer]
+            PublicKey = y
+            Endpoint = [2001:db8::1]:8443
+
+            """,
+            locationId: "ipv6-fallback-test",
+            profileVersion: 7,
+            routingMode: .allExceptRu,
+            bypassRegion: "ru",
+            bypassRangesCount: 1,
+            bypassDomainsCount: 2,
+            routingPolicyVersion: VEXAppInfo.routingPolicyVersion,
+            rotationRequired: false
+        )
+
+        let attempts = VpnAutopilotService().fallbackTunnels(for: tunnel)
+
+        XCTAssertEqual(attempts.map(\.endpoint), [
+            "[2001:db8::1]:8443",
+            "[2001:db8::1]:443",
+        ])
+        XCTAssertTrue(attempts[1].config.contains("Endpoint = [2001:db8::1]:443"))
     }
 
     func testNativeHelperStartDoesNotRequireAdminPassword() throws {

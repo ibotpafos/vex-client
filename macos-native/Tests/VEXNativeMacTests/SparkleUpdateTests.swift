@@ -3,26 +3,40 @@ import XCTest
 
 @MainActor
 final class SparkleUpdateTests: XCTestCase {
-    func testStartupDoesNotAutoCheckUpdatesAtLaunch() {
+    func testStartupDefersExactlyOneAutomaticBackgroundCheckUntilPostLaunch() async {
         let updater = MockNativeUpdaterService()
-        let appState = VEXAppState(nativeUpdater: updater)
+        let appState = VEXAppState(
+            nativeUpdater: updater,
+            automaticUpdatesStartupDelayNanoseconds: 0
+        )
+        let backgroundCheck = expectation(description: "post-launch background check")
+        updater.onBackgroundCheck = { backgroundCheck.fulfill() }
 
         appState.prepareAutomaticUpdatesForStartup()
         appState.prepareAutomaticUpdatesForStartup()
 
-        // Sparkle is constructed lazily only on explicit user action; launch
-        // must not schedule background checks (Tahoe launch-drain crash).
+        // Sparkle must remain untouched during the launch call itself; the
+        // automatic check runs on a subsequent main-actor task.
         XCTAssertEqual(updater.checkForUpdatesInBackgroundCallCount, 0)
+        XCTAssertEqual(updater.checkForUpdatesCallCount, 0)
+        XCTAssertTrue(updater.startUpdaterCallCount == 0)
+
+        await fulfillment(of: [backgroundCheck], timeout: 1)
+        XCTAssertEqual(updater.checkForUpdatesInBackgroundCallCount, 1)
         XCTAssertEqual(updater.checkForUpdatesCallCount, 0)
         XCTAssertTrue(updater.startUpdaterCallCount == 0)
     }
 
-    func testStartupRespectsUserOptOutFromAutomaticUpdateChecks() {
+    func testStartupRespectsUserOptOutFromAutomaticUpdateChecks() async {
         let updater = MockNativeUpdaterService()
         updater.automaticallyChecksForUpdates = false
-        let appState = VEXAppState(nativeUpdater: updater)
+        let appState = VEXAppState(
+            nativeUpdater: updater,
+            automaticUpdatesStartupDelayNanoseconds: 0
+        )
 
         appState.prepareAutomaticUpdatesForStartup()
+        await Task.yield()
 
         XCTAssertEqual(updater.checkForUpdatesInBackgroundCallCount, 0)
     }
@@ -438,6 +452,7 @@ private final class MockNativeUpdaterService: NativeUpdaterService {
     private(set) var checkForUpdatesCallCount = 0
     private(set) var checkForUpdatesInBackgroundCallCount = 0
     private(set) var startUpdaterCallCount = 0
+    var onBackgroundCheck: (() -> Void)?
 
     init(canCheckForUpdates: Bool = true, isEnabled: Bool = true) {
         self.canCheckForUpdates = canCheckForUpdates
@@ -454,5 +469,6 @@ private final class MockNativeUpdaterService: NativeUpdaterService {
 
     func checkForUpdatesInBackground() {
         checkForUpdatesInBackgroundCallCount += 1
+        onBackgroundCheck?()
     }
 }

@@ -3,7 +3,7 @@ import Network
 
 struct VpnAutopilotService {
     private let api: VEXAPIClient
-    private let endpointFallbackPorts: [UInt16] = [443, 51820]
+    private let endpointFallbackPorts: [UInt16] = [443]
     private let staleHandshakeSeconds: TimeInterval = 180
 
     init(api: VEXAPIClient = VEXAPIClient()) {

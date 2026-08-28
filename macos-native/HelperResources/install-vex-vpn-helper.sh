@@ -72,7 +72,11 @@ fi
 src_dir="$verified_resources_real"
 
 helper_dir="/Library/Application Support/VEX VPN/helper"
+helper_tool_dir="/Library/PrivilegedHelperTools"
+helper_tool="$helper_tool_dir/app.vex.vpn.helper"
+legacy_helper="$helper_dir/vex-helper"
 plist="/Library/LaunchDaemons/app.vex.vpn.helper.plist"
+launchd_label="app.vex.vpn.helper"
 helper_version_file="$src_dir/helper-version"
 if [[ ! -r "$helper_version_file" ]]; then
   echo "Missing VPN resource: $helper_version_file" >&2
@@ -143,6 +147,7 @@ if [[ ! -x "$src_dir/awg-quick.sh" ]]; then
 fi
 
 /usr/bin/install -d -o root -g wheel -m 0755 "$helper_dir"
+/usr/bin/install -d -o root -g wheel -m 0755 "$helper_tool_dir"
 stage_dir="$(/usr/bin/mktemp -d "$helper_dir/.install.XXXXXX")"
 rollback_dir="$(/usr/bin/mktemp -d /var/tmp/vex-helper-rollback.XXXXXX)"
 replacement_started=0
@@ -156,17 +161,27 @@ rollback_install() {
     echo "Helper replacement failed; restoring the previous helper." >&2
     /bin/launchctl bootout system/app.vex.vpn.helper >/dev/null 2>&1 || true
     /usr/bin/killall vex-helper >/dev/null 2>&1 || true
-    for previous in awg amneziawg-go awg-quick.sh vex-helper config-path version; do
+    for previous in awg amneziawg-go awg-quick.sh config-path version; do
       if [[ -e "$rollback_dir/$previous" ]]; then
         /bin/cp -p "$rollback_dir/$previous" "$helper_dir/$previous"
       else
         /bin/rm -f "$helper_dir/$previous"
       fi
     done
+    if [[ -e "$rollback_dir/privileged-helper" ]]; then
+      /bin/cp -p "$rollback_dir/privileged-helper" "$helper_tool"
+    else
+      /bin/rm -f "$helper_tool"
+    fi
+    if [[ -e "$rollback_dir/legacy-helper" ]]; then
+      /bin/cp -p "$rollback_dir/legacy-helper" "$legacy_helper"
+    else
+      /bin/rm -f "$legacy_helper"
+    fi
     if [[ -e "$rollback_dir/helper.plist" ]]; then
       /bin/cp -p "$rollback_dir/helper.plist" "$plist"
       /bin/launchctl bootstrap system "$plist" >/dev/null 2>&1 || true
-      /bin/launchctl kickstart -k system/app.vex.vpn.helper >/dev/null 2>&1 || true
+      /bin/launchctl kickstart -k "system/$launchd_label" >/dev/null 2>&1 || true
     else
       /bin/rm -f "$plist"
     fi
@@ -194,11 +209,17 @@ for required in awg amneziawg-go vex-helper; do
   fi
 done
 
-for previous in awg amneziawg-go awg-quick.sh vex-helper config-path version; do
+for previous in awg amneziawg-go awg-quick.sh config-path version; do
   if [[ -e "$helper_dir/$previous" ]]; then
     /bin/cp -p "$helper_dir/$previous" "$rollback_dir/$previous"
   fi
 done
+if [[ -e "$helper_tool" ]]; then
+  /bin/cp -p "$helper_tool" "$rollback_dir/privileged-helper"
+fi
+if [[ -e "$legacy_helper" ]]; then
+  /bin/cp -p "$legacy_helper" "$rollback_dir/legacy-helper"
+fi
 if [[ -e "$plist" ]]; then
   /bin/cp -p "$plist" "$rollback_dir/helper.plist"
 fi
@@ -285,16 +306,22 @@ replacement_started=1
 /bin/mv -f "$stage_dir/awg" "$helper_dir/awg"
 /bin/mv -f "$stage_dir/amneziawg-go" "$helper_dir/amneziawg-go"
 /bin/mv -f "$stage_dir/awg-quick.sh" "$helper_dir/awg-quick.sh"
-/bin/mv -f "$stage_dir/vex-helper" "$helper_dir/vex-helper"
+/bin/mv -f "$stage_dir/vex-helper" "$helper_tool"
 /bin/mv -f "$stage_dir/config-path" "$helper_dir/config-path"
 /bin/mv -f "$stage_dir/version" "$helper_dir/version"
 /bin/rmdir "$stage_dir"
 
-/bin/chmod 0755 "$helper_dir/awg" "$helper_dir/amneziawg-go" "$helper_dir/awg-quick.sh" "$helper_dir/vex-helper"
+/bin/chmod 0755 "$helper_dir/awg" "$helper_dir/amneziawg-go" "$helper_dir/awg-quick.sh" "$helper_tool"
 /bin/chmod 0644 "$helper_dir/config-path" "$helper_dir/version"
 /usr/sbin/chown -R root:wheel "$helper_dir"
+/usr/sbin/chown root:wheel "$helper_tool"
+/bin/rm -f "$legacy_helper"
 
-if ! /usr/bin/codesign --verify --strict --verbose=2 "$helper_dir/vex-helper" >/dev/null 2>&1; then
+if [[ ! -x "$helper_tool" ]]; then
+  echo "Installed privileged helper is missing at $helper_tool." >&2
+  exit 1
+fi
+if ! /usr/bin/codesign --verify --strict --verbose=2 "$helper_tool" >/dev/null 2>&1; then
   echo "Installed vex-helper failed code-signature verification." >&2
   exit 1
 fi
@@ -318,10 +345,10 @@ cat > "$plist" <<PLIST
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>app.vex.vpn.helper</string>
+  <string>$launchd_label</string>
   <key>ProgramArguments</key>
   <array>
-    <string>$helper_dir/vex-helper</string>
+    <string>$helper_tool</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
@@ -340,12 +367,12 @@ PLIST
 /bin/chmod 644 "$plist"
 
 /bin/launchctl bootstrap system "$plist"
-/bin/launchctl kickstart -k system/app.vex.vpn.helper
+/bin/launchctl kickstart -k "system/$launchd_label"
 
 helper_ready=0
 for _ in {1..50}; do
   if [[ -S /var/run/vex-helper.sock ]] \
-    && /bin/launchctl print system/app.vex.vpn.helper >/dev/null 2>&1; then
+    && /bin/launchctl print "system/$launchd_label" >/dev/null 2>&1; then
     status_response="$(
       /usr/bin/printf 'status\n' \
         | /usr/bin/nc -w 2 -U /var/run/vex-helper.sock 2>/dev/null \
@@ -361,6 +388,17 @@ for _ in {1..50}; do
 done
 if [[ "$helper_ready" != "1" ]]; then
   echo "Installed helper did not become ready for VPN commands." >&2
+  exit 1
+fi
+
+installed_label="$(/usr/bin/plutil -extract Label raw -o - "$plist" 2>/dev/null || true)"
+installed_program="$(/usr/bin/plutil -extract ProgramArguments.0 raw -o - "$plist" 2>/dev/null || true)"
+if [[ "$installed_label" != "$launchd_label" || "$installed_program" != "$helper_tool" ]]; then
+  echo "Installed LaunchDaemon label/program does not match the VEX privileged-helper contract." >&2
+  exit 1
+fi
+if [[ ! -x "$helper_tool" ]] || ! /bin/launchctl print "system/$launchd_label" >/dev/null 2>&1; then
+  echo "Installed privileged helper file or loaded LaunchDaemon assertion failed." >&2
   exit 1
 fi
 

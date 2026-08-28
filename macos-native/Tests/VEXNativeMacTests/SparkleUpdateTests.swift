@@ -3,15 +3,14 @@ import XCTest
 
 @MainActor
 final class SparkleUpdateTests: XCTestCase {
-    func testStartupDoesNotAutoCheckUpdatesAtLaunch() {
+    func testStartupSchedulesDelayedAutomaticUpdatesExactlyOnce() {
         let updater = MockNativeUpdaterService()
         let appState = VEXAppState(nativeUpdater: updater)
 
         appState.prepareAutomaticUpdatesForStartup()
         appState.prepareAutomaticUpdatesForStartup()
 
-        // Sparkle is constructed lazily only on explicit user action; launch
-        // must not schedule background checks (Tahoe launch-drain crash).
+        XCTAssertEqual(updater.prepareAutomaticUpdatesAfterLaunchCallCount, 1)
         XCTAssertEqual(updater.checkForUpdatesInBackgroundCallCount, 0)
         XCTAssertEqual(updater.checkForUpdatesCallCount, 0)
         XCTAssertTrue(updater.startUpdaterCallCount == 0)
@@ -24,6 +23,7 @@ final class SparkleUpdateTests: XCTestCase {
 
         appState.prepareAutomaticUpdatesForStartup()
 
+        XCTAssertEqual(updater.prepareAutomaticUpdatesAfterLaunchCallCount, 1)
         XCTAssertEqual(updater.checkForUpdatesInBackgroundCallCount, 0)
     }
 
@@ -237,6 +237,19 @@ final class SparkleUpdateTests: XCTestCase {
         XCTAssertTrue(package.contains("exact: \"2.9.6\""))
     }
 
+    func testLaunchSmokeRejectsRelaunchAndRequiresAutomaticSparkleStartup() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let scriptURL = packageRoot
+            .deletingLastPathComponent()
+            .appendingPathComponent("scripts/smoke_native_macos_launch.sh")
+        let script = try String(contentsOf: scriptURL, encoding: .utf8)
+
+        XCTAssertTrue(script.contains("initial pid"))
+        XCTAssertTrue(script.contains("new_crash_reports=0"))
+        XCTAssertTrue(script.contains("Sparkle.framework"))
+        XCTAssertTrue(script.contains("vex.sparkle.lastAutomaticStartup"))
+    }
+
     func testNativeAppInfoUsesBundleVersionForUpdateContracts() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let modelsURL = packageRoot
@@ -438,10 +451,15 @@ private final class MockNativeUpdaterService: NativeUpdaterService {
     private(set) var checkForUpdatesCallCount = 0
     private(set) var checkForUpdatesInBackgroundCallCount = 0
     private(set) var startUpdaterCallCount = 0
+    private(set) var prepareAutomaticUpdatesAfterLaunchCallCount = 0
 
     init(canCheckForUpdates: Bool = true, isEnabled: Bool = true) {
         self.canCheckForUpdates = canCheckForUpdates
         self.isEnabled = isEnabled
+    }
+
+    func prepareAutomaticUpdatesAfterLaunch() {
+        prepareAutomaticUpdatesAfterLaunchCallCount += 1
     }
 
     func startUpdater() {

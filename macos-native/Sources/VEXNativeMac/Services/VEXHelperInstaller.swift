@@ -6,7 +6,8 @@ import Security
 struct VEXHelperInstaller {
     typealias ProgressHandler = @MainActor @Sendable (VEXHelperInstallationPhase) -> Void
 
-    private let helperDir = "/Library/Application Support/VEX VPN/helper"
+    private let helperResourceDir = "/Library/Application Support/VEX VPN/helper"
+    private let helperExecutable = "/Library/PrivilegedHelperTools/app.vex.vpn.helper"
     private let helperPlist = "/Library/LaunchDaemons/app.vex.vpn.helper.plist"
     private let launchdLabel = "app.vex.vpn.helper"
     private let socketPath = "/var/run/vex-helper.sock"
@@ -66,17 +67,17 @@ struct VEXHelperInstaller {
             version: installedVersion,
             filesCurrent: filesAreCurrent,
             socketConnectable: socketIsConnectable,
-            helperPath: "\(helperDir)/vex-helper"
+            helperPath: helperExecutable
         )
     }
 
     private var filesAreCurrent: Bool {
         let fm = FileManager.default
         guard fm.fileExists(atPath: helperPlist),
-              fm.fileExists(atPath: "\(helperDir)/vex-helper"),
-              fm.fileExists(atPath: "\(helperDir)/amneziawg-go"),
-              fm.fileExists(atPath: "\(helperDir)/awg"),
-              fm.fileExists(atPath: "\(helperDir)/awg-quick.sh"),
+              fm.fileExists(atPath: helperExecutable),
+              fm.fileExists(atPath: "\(helperResourceDir)/amneziawg-go"),
+              fm.fileExists(atPath: "\(helperResourceDir)/awg"),
+              fm.fileExists(atPath: "\(helperResourceDir)/awg-quick.sh"),
               installedVersion.trimmingCharacters(in: .whitespacesAndNewlines) == helperVersion,
               helperPlistIsCurrent,
               helperBinarySignatureIsValid,
@@ -90,7 +91,7 @@ struct VEXHelperInstaller {
     }
 
     private var installedVersion: String {
-        (try? String(contentsOfFile: "\(helperDir)/version", encoding: .utf8)) ?? ""
+        (try? String(contentsOfFile: "\(helperResourceDir)/version", encoding: .utf8)) ?? ""
     }
 
     private var helperVersion: String {
@@ -109,7 +110,9 @@ struct VEXHelperInstaller {
                 format: nil
               ),
               let dictionary = plist as? [String: Any],
-              dictionary["RunAtLoad"] as? Bool == true else {
+              dictionary["RunAtLoad"] as? Bool == true,
+              dictionary["Label"] as? String == launchdLabel,
+              (dictionary["ProgramArguments"] as? [String])?.first == helperExecutable else {
             return false
         }
         return helperPlistKeepsServiceAvailable(dictionary)
@@ -122,7 +125,7 @@ struct VEXHelperInstaller {
     private var helperBinarySignatureIsValid: Bool {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
-        process.arguments = ["--verify", "--strict", "--verbose=2", "\(helperDir)/vex-helper"]
+        process.arguments = ["--verify", "--strict", "--verbose=2", helperExecutable]
         return (try? process.runAndWait()) == 0
     }
 
@@ -130,7 +133,9 @@ struct VEXHelperInstaller {
         guard let bundled = try? resourceFile(name) else {
             return false
         }
-        let installed = URL(fileURLWithPath: helperDir).appendingPathComponent(name)
+        let installed = name == "vex-helper"
+            ? URL(fileURLWithPath: helperExecutable)
+            : URL(fileURLWithPath: helperResourceDir).appendingPathComponent(name)
         return sha256Hex(bundled) == sha256Hex(installed)
     }
 

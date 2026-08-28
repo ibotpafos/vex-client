@@ -27,7 +27,7 @@ final class VEXHelperModel: ObservableObject {
             version: "33",
             filesCurrent: false,
             socketConnectable: true,
-            helperPath: "/Library/Application Support/VEX VPN/helper/vex-helper"
+            helperPath: "/Library/PrivilegedHelperTools/app.vex.vpn.helper"
         )
     }
     #endif

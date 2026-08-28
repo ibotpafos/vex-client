@@ -8,6 +8,7 @@ protocol NativeUpdaterService: AnyObject {
     var isEnabled: Bool { get }
     var automaticallyChecksForUpdates: Bool { get set }
     var canCheckForUpdates: Bool { get }
+    func prepareAutomaticUpdatesAfterLaunch()
     func startUpdater()
     func checkForUpdates()
     func checkForUpdatesInBackground()
@@ -40,13 +41,14 @@ enum NativeUpdaterServiceFactory {
 
 /// Wraps Sparkle's `SPUStandardUpdaterController`.
 ///
-/// The controller (and its KVO observation) is created **lazily**, only when the
-/// user explicitly triggers an update check. Constructing it at app launch on
-/// macOS 26 (Tahoe) triggers a deterministic `EXC_BAD_ACCESS` (over-release in
-/// the `-[NSApplication run]` autorelease pool drain) inside Sparkle 2.x, so we
-/// must avoid touching Sparkle during startup entirely.
+/// The controller (and its KVO observation) is created lazily. Automatic update
+/// startup is delayed until AppKit has completed its first launch cycles;
+/// constructing `SPUStandardUpdaterController` synchronously from SwiftUI app
+/// initialization triggers an Objective-C over-release in macOS 26's launch
+/// autorelease-pool drain. The delayed path keeps Sparkle automatic checks and
+/// installation enabled without putting Sparkle in that unsafe launch window.
 @MainActor
-final class SparkleUpdaterService: NSObject, ObservableObject, NativeUpdaterService {
+final class SparkleUpdaterService: ObservableObject, NativeUpdaterService {
     @Published private(set) var canCheckForUpdates = false
 
     let isEnabled = true
@@ -55,9 +57,13 @@ final class SparkleUpdaterService: NSObject, ObservableObject, NativeUpdaterServ
     private var canCheckObservation: NSKeyValueObservation?
     private var backgroundCheckRequested = false
     private var backgroundCheckStarted = false
+    private var automaticStartupTask: Task<Void, Never>?
+    private static let automaticStartupDelayNanoseconds: UInt64 = 15_000_000_000
+    static let automaticStartupEvidenceKey = "vex.sparkle.lastAutomaticStartup"
 
-    override init() {
-        super.init()
+    deinit {
+        automaticStartupTask?.cancel()
+        canCheckObservation?.invalidate()
     }
 
     private func ensureController() -> SPUStandardUpdaterController {
@@ -91,9 +97,25 @@ final class SparkleUpdaterService: NSObject, ObservableObject, NativeUpdaterServ
         NSLog("VEX Sparkle: updater failed to start: \(error.localizedDescription)")
     }
 
-    deinit {
-        canCheckObservation?.invalidate()
-        canCheckObservation = nil
+    func prepareAutomaticUpdatesAfterLaunch() {
+        guard automaticStartupTask == nil, updaterController == nil else { return }
+        guard automaticallyChecksForUpdates else { return }
+        automaticStartupTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: Self.automaticStartupDelayNanoseconds)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled, let self else { return }
+            guard self.automaticallyChecksForUpdates else { return }
+            self.startUpdater()
+            self.checkForUpdatesInBackground()
+            UserDefaults.standard.set(
+                Date().timeIntervalSince1970,
+                forKey: Self.automaticStartupEvidenceKey
+            )
+            NSLog("VEX Sparkle: automatic updater started after launch stabilization")
+        }
     }
 
     var automaticallyChecksForUpdates: Bool {
@@ -162,6 +184,7 @@ final class DisabledNativeUpdaterService: NativeUpdaterService {
     var automaticallyChecksForUpdates = false
     let canCheckForUpdates = false
 
+    func prepareAutomaticUpdatesAfterLaunch() {}
     func startUpdater() {}
     func checkForUpdates() {}
     func checkForUpdatesInBackground() {}

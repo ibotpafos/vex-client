@@ -673,13 +673,9 @@ final class VEXAppState: ObservableObject {
     }
 
     func prepareAutomaticUpdatesForStartup() {
-        // Do NOT start Sparkle (or schedule background checks) at launch.
-        // Constructing SPUStandardUpdaterController during app startup triggers
-        // a deterministic EXC_BAD_ACCESS (over-release in the
-        // -[NSApplication run] autorelease pool drain) on macOS 26 (Tahoe).
-        // Sparkle is created lazily only when the user explicitly triggers a
-        // check via the "Check for Updates" menu action.
+        guard !automaticUpdatesPrepared else { return }
         automaticUpdatesPrepared = true
+        nativeUpdater.prepareAutomaticUpdatesAfterLaunch()
     }
 
     func openSignIn() {

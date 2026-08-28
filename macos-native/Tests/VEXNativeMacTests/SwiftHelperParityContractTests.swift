@@ -83,13 +83,13 @@ final class SwiftHelperParityContractTests: XCTestCase {
             version: "0.1.0",
             filesCurrent: true,
             socketConnectable: false,
-            helperPath: "/Library/Application Support/VEX VPN/helper/vex-helper"
+            helperPath: "/Library/PrivilegedHelperTools/app.vex.vpn.helper"
         )
 
         XCTAssertEqual(state.version, "0.1.0")
         XCTAssertTrue(state.filesCurrent)
         XCTAssertFalse(state.socketConnectable)
-        XCTAssertEqual(state.helperPath, "/Library/Application Support/VEX VPN/helper/vex-helper")
+        XCTAssertEqual(state.helperPath, "/Library/PrivilegedHelperTools/app.vex.vpn.helper")
     }
 
     func testHelperInstallerContractContainsLifecycleGuardrails() throws {

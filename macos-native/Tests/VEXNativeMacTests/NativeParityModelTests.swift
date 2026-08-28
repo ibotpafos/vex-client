@@ -890,6 +890,8 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(helperInstaller.contains("trimmingCharacters(in: .whitespacesAndNewlines)"))
         XCTAssertTrue(helperInstaller.contains("PropertyListSerialization.propertyList("))
         XCTAssertTrue(helperInstaller.contains("dictionary[\"RunAtLoad\"] as? Bool == true"))
+        XCTAssertTrue(helperInstaller.contains("dictionary[\"Label\"] as? String == launchdLabel"))
+        XCTAssertTrue(helperInstaller.contains("first == helperExecutable"))
         XCTAssertTrue(helperInstaller.contains("helperPlistKeepsServiceAvailable(dictionary)"))
         XCTAssertTrue(helperInstaller.contains("SHA256.hash"))
         XCTAssertFalse(helperInstaller.contains("if socketIsConnectable {\n            return\n        }"))

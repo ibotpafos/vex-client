@@ -71,7 +71,8 @@ if [[ "$src_dir_real" != "$verified_resources_real" ]]; then
 fi
 src_dir="$verified_resources_real"
 
-helper_dir="/Library/Application Support/VEX VPN/helper"
+helper_root_dir="/Library/Application Support/VEX VPN"
+helper_dir="$helper_root_dir/helper"
 helper_tool_dir="/Library/PrivilegedHelperTools"
 helper_tool="$helper_tool_dir/app.vex.vpn.helper"
 legacy_helper="$helper_dir/vex-helper"
@@ -146,8 +147,16 @@ if [[ ! -x "$src_dir/awg-quick.sh" ]]; then
   exit 1
 fi
 
+/usr/bin/install -d -o root -g wheel -m 0755 "$helper_root_dir"
 /usr/bin/install -d -o root -g wheel -m 0755 "$helper_dir"
 /usr/bin/install -d -o root -g wheel -m 0755 "$helper_tool_dir"
+# install -d does not repair owner/mode on an existing directory. Older VEX
+# packages left the parent root:admin 0700, so the signed app could authenticate
+# to the live socket but could not read the version/resources it uses to decide
+# whether the helper is installed. Normalize only these root-owned code/resource
+# directories; runtime logs remain 0600 and user configuration is untouched.
+/usr/sbin/chown root:wheel "$helper_root_dir" "$helper_dir"
+/bin/chmod 0755 "$helper_root_dir" "$helper_dir"
 stage_dir="$(/usr/bin/mktemp -d "$helper_dir/.install.XXXXXX")"
 rollback_dir="$(/usr/bin/mktemp -d /var/tmp/vex-helper-rollback.XXXXXX)"
 replacement_started=0

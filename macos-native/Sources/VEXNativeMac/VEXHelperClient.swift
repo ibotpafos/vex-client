@@ -206,9 +206,11 @@ final class VEXHelperModel: ObservableObject {
     }
 
     var installRequiredMessage: String? {
-        guard let installState else {
-            return nil
-        }
+        Self.installRequiredMessage(for: installState)
+    }
+
+    nonisolated static func installRequiredMessage(for installState: VEXHelperInstallState?) -> String? {
+        guard let installState else { return nil }
         return installState.filesCurrent ? nil : "Helper требует установки."
     }
 

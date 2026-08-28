@@ -31,6 +31,27 @@ class MacOSReleaseAndInstallPolicyTest(unittest.TestCase):
         self.assertIn("expectedCertificateSHA256", authenticator)
         self.assertNotIn("xattr -dr com.apple.quarantine", installer)
 
+    def test_helper_install_repairs_legacy_private_parent_for_app_state_checks(self) -> None:
+        installer = self.read("macos-native/HelperResources/install-vex-vpn-helper.sh")
+
+        self.assertIn('helper_root_dir="/Library/Application Support/VEX VPN"', installer)
+        self.assertIn('/usr/sbin/chown root:wheel "$helper_root_dir" "$helper_dir"', installer)
+        self.assertIn('/bin/chmod 0755 "$helper_root_dir" "$helper_dir"', installer)
+
+    def test_installed_app_exposes_exact_helper_install_state_probe(self) -> None:
+        app = self.read("macos-native/Sources/VEXNativeMac/VEXNativeMacApp.swift")
+        helper_model = self.read("macos-native/Sources/VEXNativeMac/VEXHelperClient.swift")
+        integration = self.read("scripts/smoke_native_macos_helper_integration.sh")
+
+        self.assertIn('CommandLine.arguments.contains("--helper-install-state-probe")', app)
+        self.assertIn("installRequiredMessage(for: state)", app)
+        self.assertIn("static func installRequiredMessage(for installState:", helper_model)
+        self.assertIn("--helper-install-state-probe", integration)
+        self.assertIn('"$APP_EXECUTABLE" --helper-install-state-probe', integration)
+        self.assertIn('"$APP_EXECUTABLE" --helper-status-probe', integration)
+        self.assertIn("helper_install_required=false", integration)
+        self.assertIn("helper_socket=responds_authenticated", integration)
+
     def test_public_release_requires_distribution_signing_and_notarization(self) -> None:
         release = self.read("scripts/release_native_macos_autonomous.sh")
 

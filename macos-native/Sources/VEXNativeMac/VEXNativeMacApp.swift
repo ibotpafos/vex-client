@@ -49,18 +49,34 @@ struct VEXNativeMacApp: App {
         }
         #endif
 
-        guard CommandLine.arguments.contains("--helper-status-probe") else { return }
-        do {
-            let response = try sendUnixSocketCommand(
-                "status",
-                socketPath: "/var/run/vex-helper.sock",
-                timeoutSeconds: 3
-            )
-            FileHandle.standardOutput.write(Data(response.utf8))
-            Darwin.exit(response.hasPrefix("state=") && response.contains("operation_in_progress=") ? 0 : 1)
-        } catch {
-            FileHandle.standardError.write(Data("helper probe failed: \(error.localizedDescription)\n".utf8))
-            Darwin.exit(1)
+        if CommandLine.arguments.contains("--helper-status-probe") {
+            do {
+                let response = try sendUnixSocketCommand(
+                    "status",
+                    socketPath: "/var/run/vex-helper.sock",
+                    timeoutSeconds: 3
+                )
+                FileHandle.standardOutput.write(Data(response.utf8))
+                Darwin.exit(response.hasPrefix("state=") && response.contains("operation_in_progress=") ? 0 : 1)
+            } catch {
+                FileHandle.standardError.write(Data("helper probe failed: \(error.localizedDescription)\n".utf8))
+                Darwin.exit(1)
+            }
+        }
+
+        if CommandLine.arguments.contains("--helper-install-state-probe") {
+            let state = VEXHelperInstaller().installedState
+            let userVisibleMessage = VEXHelperModel.installRequiredMessage(for: state)
+            let output = [
+                "helper_path=\(state.helperPath)",
+                "helper_version=\(state.version.trimmingCharacters(in: .whitespacesAndNewlines))",
+                "helper_files_current=\(state.filesCurrent)",
+                "helper_socket_connectable=\(state.socketConnectable)",
+                "helper_install_required=\(userVisibleMessage != nil)",
+                "user_visible_message=\(userVisibleMessage ?? "<none>")",
+            ].joined(separator: "\n") + "\n"
+            FileHandle.standardOutput.write(Data(output.utf8))
+            Darwin.exit(state.filesCurrent && state.socketConnectable ? 0 : 1)
         }
     }
 

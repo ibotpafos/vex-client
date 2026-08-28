@@ -10,6 +10,8 @@ REQUIRE_DEVELOPER_ID="${VEX_NATIVE_REQUIRE_DEVELOPER_ID:-0}"
 DISPLAY_MODE="${VEX_NATIVE_DISTRIBUTION_MODE:-internal}"
 MAX_MINIMUM_SYSTEM_MAJOR="${VEX_NATIVE_MAX_MINIMUM_SYSTEM_MAJOR:-15}"
 VERIFY_INSTALLED_RUNTIME="${VEX_NATIVE_VERIFY_INSTALLED_RUNTIME:-0}"
+EXPECTED_APP_CERT_SHA256="${VEX_NATIVE_EXPECTED_APP_CERT_SHA256:-}"
+EXPECTED_INSTALLER_CERT_SHA256="${VEX_NATIVE_EXPECTED_INSTALLER_CERT_SHA256:-}"
 
 if [[ "${PRODUCTION}" == "1" ]]; then
   REQUIRE_DEVELOPER_ID=1
@@ -88,6 +90,21 @@ elif [[ "${REQUIRE_DEVELOPER_ID}" == "1" && "${signing_authority}" != Developer\
   fail "Developer ID Application signature required; found: ${signing_authority:-unknown}"
 fi
 
+if [[ "${DISPLAY_MODE}" == "self-signed-manual-approval" ]]; then
+  [[ "${EXPECTED_APP_CERT_SHA256}" =~ ^[0-9a-fA-F]{64}$ ]] \
+    || fail "self-signed preflight requires VEX_NATIVE_EXPECTED_APP_CERT_SHA256"
+  certificate_dir="$(mktemp -d /var/tmp/vex-self-signed-preflight.XXXXXX)"
+  codesign -d --extract-certificates="${certificate_dir}/certificate" "${APP_PATH}" >/dev/null 2>&1 \
+    || fail "self-signed app certificate extraction failed"
+  actual_app_cert_sha256="$(shasum -a 256 "${certificate_dir}/certificate0" | awk '{print $1}')"
+  /bin/rm -rf "${certificate_dir}"
+  [[ "${actual_app_cert_sha256}" == "${EXPECTED_APP_CERT_SHA256}" ]] \
+    || fail "self-signed app certificate fingerprint mismatch"
+  [[ "${signing_authority}" != Developer\ ID\ Application:* ]] \
+    || fail "self-signed channel unexpectedly uses Developer ID Application"
+  echo "preflight note: self-signed app signature is valid and pinned; Gatekeeper approval is still required"
+fi
+
 if [[ -n "${PKG_PATH}" ]]; then
   require_file "${PKG_PATH}"
   pkg_signature_details="$(pkgutil --check-signature "${PKG_PATH}" 2>&1 || true)"
@@ -102,6 +119,23 @@ if [[ -n "${PKG_PATH}" ]]; then
     else
       warn "pkg is unsigned or not trusted: ${PKG_PATH}"
     fi
+  fi
+  if [[ "${DISPLAY_MODE}" == "self-signed-manual-approval" ]]; then
+    [[ "${EXPECTED_INSTALLER_CERT_SHA256}" =~ ^[0-9a-fA-F]{64}$ ]] \
+      || fail "self-signed preflight requires VEX_NATIVE_EXPECTED_INSTALLER_CERT_SHA256"
+    actual_installer_cert_sha256="$(python3 - "${pkg_signature_details}" <<'PY'
+import re
+import sys
+
+match = re.search(r"SHA256 Fingerprint:\s*((?:[0-9A-Fa-f]{2}[ \n\r\t]+){31}[0-9A-Fa-f]{2})", sys.argv[1])
+if not match:
+    raise SystemExit("installer certificate fingerprint is missing")
+print("".join(match.group(1).split()).lower())
+PY
+)"
+    [[ "${actual_installer_cert_sha256}" == "${EXPECTED_INSTALLER_CERT_SHA256}" ]] \
+      || fail "self-signed installer certificate fingerprint mismatch"
+    echo "preflight note: self-signed PKG signature is valid and pinned; it is not notarized"
   fi
 fi
 

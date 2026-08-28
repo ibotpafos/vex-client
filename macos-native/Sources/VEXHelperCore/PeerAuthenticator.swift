@@ -1,4 +1,5 @@
 import Darwin
+import CryptoKit
 import Foundation
 import Security
 import SystemConfiguration
@@ -22,11 +23,13 @@ public protocol PeerAuthenticating: Sendable {
 public struct SystemPeerAuthenticator: PeerAuthenticating {
     private let expectedBundleIdentifier: String
     private let expectedTeamIdentifier: String?
+    private let expectedCertificateSHA256: String?
     private let allowAdHocClient: Bool
 
     public init(
         expectedBundleIdentifier: String = "app.vex.vpn.native",
         expectedTeamIdentifier: String? = ProcessInfo.processInfo.environment["VEX_EXPECTED_TEAM_ID"],
+        expectedCertificateSHA256: String? = ProcessInfo.processInfo.environment["VEX_EXPECTED_CERT_SHA256"],
         allowAdHocClient: Bool = {
             #if DEBUG
             ProcessInfo.processInfo.environment["VEX_HELPER_ALLOW_ADHOC_CLIENT"] == "1"
@@ -37,6 +40,9 @@ public struct SystemPeerAuthenticator: PeerAuthenticating {
     ) {
         self.expectedBundleIdentifier = expectedBundleIdentifier
         self.expectedTeamIdentifier = expectedTeamIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.expectedCertificateSHA256 = expectedCertificateSHA256?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
         self.allowAdHocClient = allowAdHocClient
     }
 
@@ -77,6 +83,17 @@ public struct SystemPeerAuthenticator: PeerAuthenticating {
         let actualTeamIdentifier = signing[kSecCodeInfoTeamIdentifier as String] as? String
         if let expectedTeamIdentifier, !expectedTeamIdentifier.isEmpty {
             return actualTeamIdentifier == expectedTeamIdentifier
+        }
+        if let expectedCertificateSHA256, !expectedCertificateSHA256.isEmpty {
+            guard let certificates = signing[kSecCodeInfoCertificates as String] as? [SecCertificate],
+                  let leaf = certificates.first else {
+                return false
+            }
+            let leafData = SecCertificateCopyData(leaf) as Data
+            let actualFingerprint = SHA256.hash(data: leafData)
+                .map { String(format: "%02x", $0) }
+                .joined()
+            return actualFingerprint == expectedCertificateSHA256
         }
         return allowAdHocClient && (actualTeamIdentifier == nil || actualTeamIdentifier?.isEmpty == true)
     }

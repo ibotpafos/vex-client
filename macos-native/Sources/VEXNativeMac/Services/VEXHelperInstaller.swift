@@ -209,11 +209,22 @@ struct VEXHelperInstaller {
             .appendingPathComponent(".vex", isDirectory: true)
             .appendingPathComponent("vex.conf")
         let user = NSUserName()
-        guard let teamIdentifier = currentAppTeamIdentifier() else {
-            throw VEXHelperError.commandFailed("Приложение должно быть подписано Developer ID перед установкой системного helper.")
+        guard let signingIdentity = currentAppSigningIdentity() else {
+            throw VEXHelperError.commandFailed("Не удалось определить подпись приложения для безопасной установки helper.")
         }
         let appBundle = Bundle.main.bundleURL.path
-        let appRequirement = "anchor apple generic and identifier \"app.vex.vpn.native\" and certificate leaf[subject.OU] = \"\(teamIdentifier)\""
+        let appRequirement: String
+        let identityEnvironment: String
+        if let teamIdentifier = signingIdentity.teamIdentifier {
+            appRequirement = "anchor apple generic and identifier \"app.vex.vpn.native\" and certificate leaf[subject.OU] = \"\(teamIdentifier)\""
+            identityEnvironment = "VEX_EXPECTED_TEAM_ID=\(shellQuote(teamIdentifier))"
+        } else if let certificateSHA1 = signingIdentity.certificateSHA1,
+                  let certificateSHA256 = signingIdentity.certificateSHA256 {
+            appRequirement = "identifier \"app.vex.vpn.native\" and certificate leaf = H\"\(certificateSHA1)\""
+            identityEnvironment = "VEX_EXPECTED_CERT_SHA256=\(shellQuote(certificateSHA256))"
+        } else {
+            throw VEXHelperError.commandFailed("Подпись приложения не содержит проверяемую идентичность VEX.")
+        }
         let shellCommand = [
             "set -euo pipefail",
             "verified_root=$(/usr/bin/mktemp -d /var/tmp/vex-install-app.XXXXXX)",
@@ -222,7 +233,7 @@ struct VEXHelperInstaller {
             "verified_app=\"$verified_root/VEX Native.app\"",
             "/usr/bin/codesign --verify --deep --strict -R=\(shellQuote(appRequirement)) \"$verified_app\"",
             "verified_resources=\"$verified_app/Contents/Resources/resources\"",
-            "VEX_EXPECTED_TEAM_ID=\(shellQuote(teamIdentifier)) /bin/bash \"$verified_resources/install-vex-vpn-helper.sh\" \"$verified_resources\" \(shellQuote(configPath.path)) \(shellQuote(user)) \"$verified_app\"",
+            "\(identityEnvironment) /bin/bash \"$verified_resources/install-vex-vpn-helper.sh\" \"$verified_resources\" \(shellQuote(configPath.path)) \(shellQuote(user)) \"$verified_app\"",
         ].joined(separator: "; ")
         let appleScript = "do shell script \"\(appleScriptString(shellCommand))\" with administrator privileges with prompt \"VEX Inc. устанавливает системный компонент VEX\""
         let phaseTask = Task {
@@ -270,7 +281,7 @@ struct VEXHelperInstaller {
         }
     }
 
-    private func currentAppTeamIdentifier() -> String? {
+    private func currentAppSigningIdentity() -> AppSigningIdentity? {
         var runningCode: SecCode?
         guard SecCodeCopySelf([], &runningCode) == errSecSuccess,
               let runningCode,
@@ -289,12 +300,22 @@ struct VEXHelperInstaller {
             &information
         ) == errSecSuccess,
               let signing = information as? [String: Any],
-              signing[kSecCodeInfoIdentifier as String] as? String == "app.vex.vpn.native",
-              let teamIdentifier = signing[kSecCodeInfoTeamIdentifier as String] as? String,
-              !teamIdentifier.isEmpty else {
+              signing[kSecCodeInfoIdentifier as String] as? String == "app.vex.vpn.native" else {
             return nil
         }
-        return teamIdentifier
+        if let teamIdentifier = signing[kSecCodeInfoTeamIdentifier as String] as? String,
+           !teamIdentifier.isEmpty {
+            return AppSigningIdentity(teamIdentifier: teamIdentifier)
+        }
+        guard let certificates = signing[kSecCodeInfoCertificates as String] as? [SecCertificate],
+              let leaf = certificates.first else {
+            return nil
+        }
+        let leafData = SecCertificateCopyData(leaf) as Data
+        return AppSigningIdentity(
+            certificateSHA1: Insecure.SHA1.hash(data: leafData).hexString,
+            certificateSHA256: SHA256.hash(data: leafData).hexString
+        )
     }
 
     private func verifyCurrentAppBundleSignature() -> Bool {
@@ -339,6 +360,28 @@ private struct AdminInstallResult: Sendable {
     let terminationStatus: Int32
     let standardError: String
     let standardOutput: String
+}
+
+private struct AppSigningIdentity {
+    var teamIdentifier: String?
+    var certificateSHA1: String?
+    var certificateSHA256: String?
+
+    init(
+        teamIdentifier: String? = nil,
+        certificateSHA1: String? = nil,
+        certificateSHA256: String? = nil
+    ) {
+        self.teamIdentifier = teamIdentifier
+        self.certificateSHA1 = certificateSHA1
+        self.certificateSHA256 = certificateSHA256
+    }
+}
+
+private extension Sequence where Element == UInt8 {
+    var hexString: String {
+        map { String(format: "%02x", $0) }.joined()
+    }
 }
 
 struct VEXHelperInstallState: Equatable {

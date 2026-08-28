@@ -15,6 +15,23 @@ if ! /usr/bin/codesign --verify --deep --strict "$verified_app" >/dev/null 2>&1;
   exit 1
 fi
 pinned_team_id="${VEX_EXPECTED_TEAM_ID:-}"
+pinned_certificate_sha256="${VEX_EXPECTED_CERT_SHA256:-}"
+pinned_certificate_sha256="$(/usr/bin/printf '%s' "$pinned_certificate_sha256" | /usr/bin/tr 'A-F' 'a-f')"
+
+code_certificate_sha256() {
+  local code_path="$1"
+  local certificate_prefix
+  certificate_prefix="$(/usr/bin/mktemp /var/tmp/vex-code-certificate.XXXXXX)"
+  /bin/rm -f "$certificate_prefix"
+  if ! /usr/bin/codesign -d --extract-certificates="${certificate_prefix}" "$code_path" >/dev/null 2>&1 \
+    || [[ ! -f "${certificate_prefix}0" ]]; then
+    /bin/rm -f "${certificate_prefix}"*
+    return 1
+  fi
+  /usr/bin/shasum -a 256 "${certificate_prefix}0" | /usr/bin/awk '{print $1}'
+  /bin/rm -f "${certificate_prefix}"*
+}
+
 snapshot_signature_details="$(/usr/bin/codesign -d --verbose=4 "$verified_app" 2>&1 || true)"
 snapshot_identifier="$(
   /usr/bin/printf '%s\n' "$snapshot_signature_details" \
@@ -26,10 +43,23 @@ snapshot_team_id="$(
     | /usr/bin/sed -n 's/^TeamIdentifier=//p' \
     | /usr/bin/head -n 1
 )"
-if [[ "$snapshot_identifier" != "app.vex.vpn.native" \
-      || -z "$pinned_team_id" \
-      || "$snapshot_team_id" != "$pinned_team_id" ]]; then
+snapshot_certificate_sha256="$(code_certificate_sha256 "$verified_app" || true)"
+if [[ "$snapshot_identifier" != "app.vex.vpn.native" ]]; then
   echo "Verified app snapshot identity does not match the pinned VEX application." >&2
+  exit 1
+fi
+if [[ -n "$pinned_team_id" ]]; then
+  if [[ "$snapshot_team_id" != "$pinned_team_id" ]]; then
+    echo "Verified app snapshot Team ID does not match the pinned VEX application." >&2
+    exit 1
+  fi
+elif [[ "$pinned_certificate_sha256" =~ ^[0-9a-fA-F]{64}$ ]]; then
+  if [[ "$snapshot_certificate_sha256" != "$pinned_certificate_sha256" ]]; then
+    echo "Verified app snapshot certificate does not match the pinned VEX certificate." >&2
+    exit 1
+  fi
+else
+  echo "A pinned VEX Team ID or certificate fingerprint is required." >&2
   exit 1
 fi
 verified_resources="$verified_app/Contents/Resources/resources"
@@ -80,6 +110,7 @@ helper_team_id="$(
     | /usr/bin/sed -n 's/^TeamIdentifier=//p' \
     | /usr/bin/head -n 1
 )"
+helper_certificate_sha256="$(code_certificate_sha256 "$src_dir/vex-helper" || true)"
 if [[ -n "$pinned_team_id" ]]; then
   if [[ "$helper_team_id" != "$pinned_team_id" ]]; then
     echo "Helper Team ID does not match pinned VEX_EXPECTED_TEAM_ID." >&2
@@ -91,8 +122,19 @@ if [[ -n "$pinned_team_id" ]]; then
     <key>VEX_EXPECTED_TEAM_ID</key>
     <string>$pinned_team_id</string>
   </dict>"
+elif [[ "$pinned_certificate_sha256" =~ ^[0-9a-fA-F]{64}$ ]]; then
+  if [[ "$helper_certificate_sha256" != "$pinned_certificate_sha256" ]]; then
+    echo "Helper certificate does not match pinned VEX_EXPECTED_CERT_SHA256." >&2
+    exit 1
+  fi
+  auth_environment_plist="
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>VEX_EXPECTED_CERT_SHA256</key>
+    <string>$pinned_certificate_sha256</string>
+  </dict>"
 else
-  echo "Pinned VEX_EXPECTED_TEAM_ID is required for privileged helper installation." >&2
+  echo "Pinned VEX identity is required for privileged helper installation." >&2
   exit 1
 fi
 if [[ ! -x "$src_dir/awg-quick.sh" ]]; then
@@ -145,8 +187,6 @@ printf '%s\n' "$config_path" > "$stage_dir/config-path"
 printf '%s\n' "$helper_version" > "$stage_dir/version"
 /bin/chmod 0644 "$stage_dir/config-path" "$stage_dir/version"
 /usr/sbin/chown root:wheel "$stage_dir/config-path" "$stage_dir/version"
-/usr/bin/xattr -dr com.apple.quarantine "$stage_dir/awg" "$stage_dir/amneziawg-go" "$stage_dir/awg-quick.sh" "$stage_dir/vex-helper" >/dev/null 2>&1 || true
-
 for required in awg amneziawg-go vex-helper; do
   if ! /usr/bin/codesign --verify --strict --verbose=2 "$stage_dir/$required" >/dev/null 2>&1; then
     echo "Staged $required failed code-signature verification." >&2

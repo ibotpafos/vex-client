@@ -16,6 +16,7 @@ SPARKLE_PUBLIC_ED_KEY="${VEX_SPARKLE_PUBLIC_ED_KEY:-cwILAPfDRcrjrAWmD/VrMzIh983R
 CODESIGN_IDENTITY="${VEX_CODESIGN_IDENTITY:--}"
 CODESIGN_KEYCHAIN="${VEX_CODESIGN_KEYCHAIN:-}"
 CODESIGN_TIMESTAMP="${VEX_CODESIGN_TIMESTAMP:-trusted}"
+CODESIGN_ENTITLEMENTS="${VEX_CODESIGN_ENTITLEMENTS:-}"
 HELPER_RESOURCE_DIR="${PACKAGE_DIR}/HelperResources"
 
 if [[ -f "${ROOT_DIR}/.env.sparkle.local" ]]; then
@@ -233,7 +234,12 @@ for signed_resource in awg amneziawg-go vex-helper; do
   codesign --verify --strict "${APP_DIR}/Contents/Resources/resources/${signed_resource}"
 done
 codesign "${CODESIGN_ARGS[@]}" "${APP_DIR}/Contents/Frameworks/Sparkle.framework"
-codesign "${CODESIGN_ARGS[@]}" --deep "${APP_DIR}"
+APP_CODESIGN_ARGS=("${CODESIGN_ARGS[@]}" --deep)
+if [[ -n "${CODESIGN_ENTITLEMENTS}" ]]; then
+  [[ -f "${CODESIGN_ENTITLEMENTS}" ]] || { echo "Missing codesign entitlements: ${CODESIGN_ENTITLEMENTS}" >&2; exit 1; }
+  APP_CODESIGN_ARGS+=(--entitlements "${CODESIGN_ENTITLEMENTS}")
+fi
+codesign "${APP_CODESIGN_ARGS[@]}" "${APP_DIR}"
 codesign --verify --deep --strict "${APP_DIR}"
 
 echo "${APP_DIR}"

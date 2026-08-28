@@ -6,7 +6,9 @@ KEYCHAIN_PASSWORD="${VEX_SELF_SIGNED_KEYCHAIN_PASSWORD:-}"
 P12_PASSWORD="${VEX_SELF_SIGNED_P12_PASSWORD:-}"
 VALID_DAYS="${VEX_SELF_SIGNED_VALID_DAYS:-825}"
 APP_COMMON_NAME="${VEX_SELF_SIGNED_APP_COMMON_NAME:-VEX Self-Signed Application}"
-INSTALLER_COMMON_NAME="${VEX_SELF_SIGNED_INSTALLER_COMMON_NAME:-VEX Self-Signed Installer}"
+SPARKLE_ACCOUNT="${VEX_SPARKLE_KEY_ACCOUNT:-vex-vpn-self-signed}"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SPARKLE_GENERATE_KEYS="${VEX_SPARKLE_GENERATE_KEYS:-${ROOT_DIR}/macos-native/.build/artifacts/sparkle/Sparkle/bin/generate_keys}"
 
 if [[ -z "${OUTPUT_DIR}" || -z "${KEYCHAIN_PASSWORD}" || -z "${P12_PASSWORD}" ]]; then
   echo "usage: VEX_SELF_SIGNED_KEYCHAIN_PASSWORD=... VEX_SELF_SIGNED_P12_PASSWORD=... $0 OUTPUT_DIR" >&2
@@ -14,6 +16,11 @@ if [[ -z "${OUTPUT_DIR}" || -z "${KEYCHAIN_PASSWORD}" || -z "${P12_PASSWORD}" ]]
 fi
 if [[ -e "${OUTPUT_DIR}" ]]; then
   echo "refusing to overwrite existing identity directory: ${OUTPUT_DIR}" >&2
+  exit 2
+fi
+if [[ ! -x "${SPARKLE_GENERATE_KEYS}" ]]; then
+  echo "Sparkle generate_keys is missing: ${SPARKLE_GENERATE_KEYS}" >&2
+  echo "run 'cd macos-native && swift package resolve' first, or set VEX_SPARKLE_GENERATE_KEYS" >&2
   exit 2
 fi
 
@@ -64,37 +71,33 @@ create_identity() {
 }
 
 create_identity application "${APP_COMMON_NAME}" "1.2.840.113635.100.6.1.13" "extendedKeyUsage=codeSigning"
-create_identity installer "${INSTALLER_COMMON_NAME}" "1.2.840.113635.100.6.1.14" ""
-
 security create-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
 security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
-for stem in application installer; do
-  security import "${OUTPUT_DIR}/${stem}.identity.p12" \
-    -k "${KEYCHAIN_PATH}" -P "${P12_PASSWORD}" \
-    -T /usr/bin/codesign -T /usr/bin/productsign >/dev/null
-  security add-trusted-cert -r trustRoot -k "${KEYCHAIN_PATH}" "${OUTPUT_DIR}/${stem}.cert.pem"
-done
+security import "${OUTPUT_DIR}/application.identity.p12" \
+  -k "${KEYCHAIN_PATH}" -P "${P12_PASSWORD}" \
+  -T /usr/bin/codesign >/dev/null
+security add-trusted-cert -r trustRoot -k "${KEYCHAIN_PATH}" "${OUTPUT_DIR}/application.cert.pem"
 security set-key-partition-list -S apple-tool:,apple: -s \
   -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}" >/dev/null
 
 app_sha256="$(openssl x509 -in "${OUTPUT_DIR}/application.cert.pem" -outform der | shasum -a 256 | awk '{print $1}')"
-installer_sha256="$(openssl x509 -in "${OUTPUT_DIR}/installer.cert.pem" -outform der | shasum -a 256 | awk '{print $1}')"
+sparkle_private_key_path="${OUTPUT_DIR}/sparkle-ed25519-private.key"
+"${SPARKLE_GENERATE_KEYS}" --account "${SPARKLE_ACCOUNT}" >/dev/null
+sparkle_public_ed_key="$("${SPARKLE_GENERATE_KEYS}" --account "${SPARKLE_ACCOUNT}" -p)"
+"${SPARKLE_GENERATE_KEYS}" --account "${SPARKLE_ACCOUNT}" -x "${sparkle_private_key_path}" >/dev/null
+chmod 600 "${sparkle_private_key_path}"
 cat >"${OUTPUT_DIR}/release.env" <<EOF
 export VEX_CODESIGN_IDENTITY='${APP_COMMON_NAME}'
 export VEX_CODESIGN_KEYCHAIN='${KEYCHAIN_PATH}'
 export VEX_CODESIGN_TIMESTAMP='none'
-export VEX_INSTALLER_SIGN_IDENTITY='${INSTALLER_COMMON_NAME}'
-export VEX_INSTALLER_SIGN_KEYCHAIN='${KEYCHAIN_PATH}'
-export VEX_INSTALLER_SIGN_TIMESTAMP='none'
 export VEX_SELF_SIGNED_APP_CERT_PATH='${OUTPUT_DIR}/application.cert.pem'
-export VEX_SELF_SIGNED_INSTALLER_CERT_PATH='${OUTPUT_DIR}/installer.cert.pem'
 export VEX_SELF_SIGNED_APP_CERT_SHA256='${app_sha256}'
-export VEX_SELF_SIGNED_INSTALLER_CERT_SHA256='${installer_sha256}'
+export VEX_SPARKLE_PUBLIC_ED_KEY='${sparkle_public_ed_key}'
+export VEX_SPARKLE_PRIVATE_ED_KEY_FILE='${sparkle_private_key_path}'
 EOF
 chmod 600 "${OUTPUT_DIR}/release.env"
 
 echo "Self-signed release identities created in ${OUTPUT_DIR}"
 echo "Keep the directory private and stable; never publish its key or PKCS#12 files."
 echo "Application certificate SHA-256: ${app_sha256}"
-echo "Installer certificate SHA-256: ${installer_sha256}"
 echo "Load non-secret release variables with: source '${OUTPUT_DIR}/release.env'"

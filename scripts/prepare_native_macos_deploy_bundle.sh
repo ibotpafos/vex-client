@@ -40,26 +40,37 @@ self_signed_ready = (
     and manifest.get("distributionMode") == "self-signed-manual-approval"
     and manifest.get("selfSigned") is True
     and manifest.get("signatureVerified") is True
+    and manifest.get("packageSigned") is False
+    and manifest.get("packageTrust") == "unsigned-manual-approval"
+    and manifest.get("automaticUpdates") is True
+    and manifest.get("libraryValidationDisabled") is True
+    and str(manifest.get("feedURL", "")).startswith("https://")
+    and manifest.get("appcast") == "appcast.xml"
+    and len(str(manifest.get("appcastSHA256", ""))) == 64
+    and len(str(manifest.get("sparklePublicEDKey", ""))) == 44
+    and manifest.get("updateSignatureScheme") == "sparkle-ed25519"
     and manifest.get("requiresManualApproval") is True
     and manifest.get("securityProtectionsDisabled") is False
     and manifest.get("appleDeveloperSigned") is False
     and manifest.get("notarized") is False
     and manifest.get("gatekeeperReady") is False
     and len(str(manifest.get("signingCertificateSHA256", ""))) == 64
-    and len(str(manifest.get("installerSigningCertificateSHA256", ""))) == 64
+    and not manifest.get("installerSigningCertificateSHA256")
 )
 if not developer_id_ready and not self_signed_ready:
     raise SystemExit("release-manifest.json is neither Gatekeeper-ready nor an explicit verified self-signed channel")
 print(archive)
 print(package)
 print(manifest.get("channel", "developer-id"))
+print("true" if manifest.get("automaticUpdates") is True else "false")
 PY
 )"
 archive_name="$(printf '%s\n' "${artifact_names}" | sed -n '1p')"
 package_name="$(printf '%s\n' "${artifact_names}" | sed -n '2p')"
 channel="$(printf '%s\n' "${artifact_names}" | sed -n '3p')"
+automatic_updates="$(printf '%s\n' "${artifact_names}" | sed -n '4p')"
 
-if [[ "${channel}" != "self-signed" ]]; then
+if [[ "${channel}" != "self-signed" || "${automatic_updates}" == "true" ]]; then
   require_file "${ARCHIVES_DIR}/appcast.xml"
   require_file "${ARCHIVES_DIR}/appcast.xml.sha256"
 fi

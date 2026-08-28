@@ -13,17 +13,14 @@ fail() {
 
 for name in \
   VEX_NATIVE_VERSION VEX_NATIVE_BUILD VEX_CODESIGN_IDENTITY VEX_CODESIGN_KEYCHAIN \
-  VEX_INSTALLER_SIGN_IDENTITY VEX_INSTALLER_SIGN_KEYCHAIN \
-  VEX_SELF_SIGNED_APP_CERT_PATH VEX_SELF_SIGNED_INSTALLER_CERT_PATH; do
+  VEX_SELF_SIGNED_APP_CERT_PATH VEX_SPARKLE_PUBLIC_ED_KEY VEX_SPARKLE_PRIVATE_ED_KEY_FILE; do
   [[ -n "${!name:-}" ]] || fail "${name} is required"
 done
 [[ "${VEX_CODESIGN_IDENTITY}" != Developer\ ID\ Application:* ]] \
   || fail "self-signed channel refuses Developer ID Application identity"
-[[ "${VEX_INSTALLER_SIGN_IDENTITY}" != Developer\ ID\ Installer:* ]] \
-  || fail "self-signed channel refuses Developer ID Installer identity"
 [[ -f "${VEX_CODESIGN_KEYCHAIN}" ]] || fail "signing keychain is missing"
 [[ -f "${VEX_SELF_SIGNED_APP_CERT_PATH}" ]] || fail "application certificate is missing"
-[[ -f "${VEX_SELF_SIGNED_INSTALLER_CERT_PATH}" ]] || fail "installer certificate is missing"
+[[ -f "${VEX_SPARKLE_PRIVATE_ED_KEY_FILE}" ]] || fail "Sparkle private Ed25519 key is missing"
 [[ "${DOWNLOAD_PREFIX}" == https://* ]] || fail "download URL prefix must use HTTPS"
 
 certificate_sha256() {
@@ -31,7 +28,6 @@ certificate_sha256() {
 }
 
 app_certificate_sha256="$(certificate_sha256 "${VEX_SELF_SIGNED_APP_CERT_PATH}")"
-installer_certificate_sha256="$(certificate_sha256 "${VEX_SELF_SIGNED_INSTALLER_CERT_PATH}")"
 
 old_keychains=()
 while IFS= read -r line; do
@@ -48,13 +44,19 @@ trap restore_keychains EXIT
 security list-keychains -d user -s "${VEX_CODESIGN_KEYCHAIN}" "${old_keychains[@]}"
 
 export VEX_CODESIGN_TIMESTAMP=none
-export VEX_INSTALLER_SIGN_TIMESTAMP=none
+export VEX_CODESIGN_ENTITLEMENTS="${ROOT_DIR}/macos-native/VEXSelfSigned.entitlements"
 export VEX_NATIVE_DISTRIBUTION_MODE=self-signed-manual-approval
 export VEX_NATIVE_PACKAGE_SUFFIX=-self-signed
 export VEX_NOTARIZE=0
 
 bash "${ROOT_DIR}/scripts/build_native_macos_app.sh"
 export VEX_NATIVE_SKIP_APP_BUILD=1
+# PackageKit rejects an outer PKG signed by an untrusted self-signed installer
+# certificate before postinstall. Keep the payload certificate-pinned, but make
+# the outer manual-approval PKG explicitly unsigned.
+unset VEX_INSTALLER_SIGN_IDENTITY
+unset VEX_INSTALLER_SIGN_KEYCHAIN
+unset VEX_INSTALLER_SIGN_TIMESTAMP
 pkg_path="$(bash "${ROOT_DIR}/scripts/build_native_macos_pkg.sh" | tail -n 1)"
 [[ -f "${pkg_path}" ]] || fail "package build did not produce ${pkg_path}"
 
@@ -65,19 +67,9 @@ actual_app_certificate_sha256="$(shasum -a 256 "${certificate_dir}/certificate0"
 [[ "${actual_app_certificate_sha256}" == "${app_certificate_sha256}" ]] \
   || fail "app certificate fingerprint mismatch"
 
-pkg_signature_report="$(pkgutil --check-signature "${pkg_path}")"
-actual_installer_certificate_sha256="$(python3 - "${pkg_signature_report}" <<'PY'
-import re
-import sys
-
-match = re.search(r"SHA256 Fingerprint:\s*((?:[0-9A-Fa-f]{2}[ \n\r\t]+){31}[0-9A-Fa-f]{2})", sys.argv[1])
-if not match:
-    raise SystemExit("installer certificate fingerprint is missing")
-print("".join(match.group(1).split()).lower())
-PY
-)"
-[[ "${actual_installer_certificate_sha256}" == "${installer_certificate_sha256}" ]] \
-  || fail "installer certificate fingerprint mismatch"
+pkg_signature_report="$(pkgutil --check-signature "${pkg_path}" 2>&1 || true)"
+grep -q "Status: no signature" <<<"${pkg_signature_report}" \
+  || fail "manual-approval PKG must be unsigned; PackageKit rejects untrusted self-signed installer certificates"
 
 rm -rf "${RELEASE_DIR}"
 mkdir -p "${RELEASE_DIR}"
@@ -97,6 +89,34 @@ write_sha256() {
 }
 archive_sha256="$(write_sha256 "${archive_path}")"
 package_sha256="$(write_sha256 "${package_release_path}")"
+appcast_tool="${ROOT_DIR}/macos-native/.build/artifacts/sparkle/Sparkle/bin/generate_appcast"
+sign_update_tool="${ROOT_DIR}/macos-native/.build/artifacts/sparkle/Sparkle/bin/sign_update"
+[[ -x "${appcast_tool}" ]] || fail "Sparkle generate_appcast tool is missing"
+[[ -x "${sign_update_tool}" ]] || fail "Sparkle sign_update tool is missing"
+"${appcast_tool}" \
+  --ed-key-file "${VEX_SPARKLE_PRIVATE_ED_KEY_FILE}" \
+  --download-url-prefix "${DOWNLOAD_PREFIX%/}/" \
+  --maximum-deltas 0 \
+  --maximum-versions 1 \
+  -o "${RELEASE_DIR}/appcast.xml" \
+  "${RELEASE_DIR}"
+archive_signature="$(python3 - "${RELEASE_DIR}/appcast.xml" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+
+namespace = "http://www.andymatuschak.org/xml-namespaces/sparkle"
+enclosure = ET.parse(sys.argv[1]).getroot().find("./channel/item/enclosure")
+if enclosure is None:
+    raise SystemExit("appcast latest item has no enclosure")
+signature = enclosure.attrib.get(f"{{{namespace}}}edSignature", "")
+if not signature:
+    raise SystemExit("appcast latest enclosure has no Ed25519 signature")
+print(signature)
+PY
+)"
+"${sign_update_tool}" --verify --ed-key-file "${VEX_SPARKLE_PRIVATE_ED_KEY_FILE}" \
+  "${archive_path}" "${archive_signature}"
+appcast_sha256="$(write_sha256 "${RELEASE_DIR}/appcast.xml")"
 
 python3 - "${RELEASE_DIR}/release-manifest.json" <<PY
 import json
@@ -120,7 +140,16 @@ manifest = {
     "selfSigned": True,
     "signatureVerified": True,
     "signingCertificateSHA256": "${app_certificate_sha256}",
-    "installerSigningCertificateSHA256": "${installer_certificate_sha256}",
+    "packageSigned": False,
+    "packageTrust": "unsigned-manual-approval",
+    "automaticUpdates": True,
+    "libraryValidationDisabled": True,
+    "feedURL": "${DOWNLOAD_PREFIX%/}/appcast.xml",
+    "appcast": "appcast.xml",
+    "appcastSHA256": "${appcast_sha256}",
+    "appcastSHA256Sidecar": "appcast.xml.sha256",
+    "sparklePublicEDKey": "${VEX_SPARKLE_PUBLIC_ED_KEY}",
+    "updateSignatureScheme": "sparkle-ed25519",
     "appleDeveloperSigned": False,
     "notarized": False,
     "gatekeeperReady": False,
@@ -137,8 +166,7 @@ VEX_NATIVE_APP_PATH="${APP_PATH}" \
   VEX_NATIVE_PRODUCTION=0 \
   VEX_NATIVE_REQUIRE_DEVELOPER_ID=0 \
   VEX_NATIVE_EXPECTED_APP_CERT_SHA256="${app_certificate_sha256}" \
-  VEX_NATIVE_EXPECTED_INSTALLER_CERT_SHA256="${installer_certificate_sha256}" \
-  VEX_SPARKLE_ARCHIVES_DIR="${RELEASE_DIR}/no-appcast" \
+  VEX_SPARKLE_ARCHIVES_DIR="${RELEASE_DIR}" \
   bash "${ROOT_DIR}/scripts/native_macos_production_preflight.sh"
 
 VEX_SPARKLE_ARCHIVES_DIR="${RELEASE_DIR}" \

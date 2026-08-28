@@ -48,7 +48,38 @@ class MacOSReleaseAndInstallPolicyTest(unittest.TestCase):
         self.assertIn('"notarized": False', release)
         self.assertIn('"gatekeeperReady": False', release)
         self.assertIn('"requiresManualApproval": True', release)
+        self.assertIn('"packageSigned": False', release)
+        self.assertIn('"packageTrust": "unsigned-manual-approval"', release)
+        self.assertIn("unset VEX_INSTALLER_SIGN_IDENTITY", release)
+        self.assertIn("VEXSelfSigned.entitlements", release)
+        self.assertIn("generate_appcast", release)
+        self.assertIn("sign_update", release)
+        self.assertIn("--verify", release)
+        self.assertIn("VEX_SPARKLE_PRIVATE_ED_KEY_FILE", release)
+        self.assertNotIn('"installerSigningCertificateSHA256"', release)
         self.assertNotIn("notarytool submit", release)
+
+    def test_self_signed_app_keeps_sparkle_with_narrow_runtime_exception(self) -> None:
+        builder = self.read("scripts/build_native_macos_app.sh")
+        preflight = self.read("scripts/native_macos_production_preflight.sh")
+        entitlements = self.read("macos-native/VEXSelfSigned.entitlements")
+
+        self.assertIn('VEX_CODESIGN_ENTITLEMENTS', builder)
+        self.assertIn('--options runtime', builder)
+        self.assertIn('automatic update checks enabled', preflight)
+        self.assertIn('automatic update installation enabled', preflight)
+        self.assertIn('Sparkle public key does not match', preflight)
+        self.assertIn('com.apple.security.cs.disable-library-validation', entitlements)
+
+    def test_self_signed_identity_setup_persists_sparkle_update_key(self) -> None:
+        identity_script = self.read("scripts/create_native_macos_self_signed_identities.sh")
+
+        self.assertIn("generate_keys", identity_script)
+        self.assertIn("vex-vpn-self-signed", identity_script)
+        self.assertIn("VEX_SPARKLE_PUBLIC_ED_KEY", identity_script)
+        self.assertIn("VEX_SPARKLE_PRIVATE_ED_KEY_FILE", identity_script)
+        self.assertNotIn("VEX_SELF_SIGNED_INSTALLER_CERT_PATH", identity_script)
+        self.assertNotIn("VEX_INSTALLER_SIGN_IDENTITY", identity_script)
 
     def test_public_deploy_bundle_contains_the_signed_installer(self) -> None:
         prepare = self.read("scripts/prepare_native_macos_deploy_bundle.sh")
@@ -132,10 +163,18 @@ class MacOSReleaseAndInstallPolicyTest(unittest.TestCase):
                 "packageSHA256": hashlib.sha256(files["VEXNativeMac-1.2.3-45-self-signed.pkg"]).hexdigest(),
                 "selfSigned": True,
                 "signatureVerified": True,
+                "packageSigned": False,
+                "packageTrust": "unsigned-manual-approval",
+                "automaticUpdates": True,
+                "libraryValidationDisabled": True,
+                "feedURL": "https://vexguard.app/downloads/native-macos/appcast.xml",
+                "appcast": "appcast.xml",
+                "appcastSHA256": "c" * 64,
+                "sparklePublicEDKey": "d" * 44,
+                "updateSignatureScheme": "sparkle-ed25519",
                 "requiresManualApproval": True,
                 "securityProtectionsDisabled": False,
                 "signingCertificateSHA256": "a" * 64,
-                "installerSigningCertificateSHA256": "b" * 64,
                 "appleDeveloperSigned": False,
                 "notarized": False,
                 "gatekeeperReady": False,

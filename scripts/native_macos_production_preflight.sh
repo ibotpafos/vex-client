@@ -11,7 +11,6 @@ DISPLAY_MODE="${VEX_NATIVE_DISTRIBUTION_MODE:-internal}"
 MAX_MINIMUM_SYSTEM_MAJOR="${VEX_NATIVE_MAX_MINIMUM_SYSTEM_MAJOR:-15}"
 VERIFY_INSTALLED_RUNTIME="${VEX_NATIVE_VERIFY_INSTALLED_RUNTIME:-0}"
 EXPECTED_APP_CERT_SHA256="${VEX_NATIVE_EXPECTED_APP_CERT_SHA256:-}"
-EXPECTED_INSTALLER_CERT_SHA256="${VEX_NATIVE_EXPECTED_INSTALLER_CERT_SHA256:-}"
 
 if [[ "${PRODUCTION}" == "1" ]]; then
   REQUIRE_DEVELOPER_ID=1
@@ -102,6 +101,20 @@ if [[ "${DISPLAY_MODE}" == "self-signed-manual-approval" ]]; then
     || fail "self-signed app certificate fingerprint mismatch"
   [[ "${signing_authority}" != Developer\ ID\ Application:* ]] \
     || fail "self-signed channel unexpectedly uses Developer ID Application"
+  require_file "${APP_PATH}/Contents/Frameworks/Sparkle.framework"
+  codesign --verify --deep --strict "${APP_PATH}/Contents/Frameworks/Sparkle.framework" \
+    || fail "self-signed Sparkle framework signature verification failed"
+  [[ "$(plist_value "${APP_PATH}/Contents/Info.plist" SUEnableAutomaticChecks)" == "true" ]] \
+    || fail "self-signed app must keep automatic update checks enabled"
+  [[ "$(plist_value "${APP_PATH}/Contents/Info.plist" SUAutomaticallyUpdate)" == "true" ]] \
+    || fail "self-signed app must keep automatic update installation enabled"
+  if [[ -n "${VEX_SPARKLE_PUBLIC_ED_KEY:-}" ]]; then
+    [[ "${sparkle_key}" == "${VEX_SPARKLE_PUBLIC_ED_KEY}" ]] \
+      || fail "self-signed app Sparkle public key does not match the release key"
+  fi
+  entitlement_report="$(codesign -d --entitlements :- "${APP_PATH}" 2>/dev/null || true)"
+  grep -q "com.apple.security.cs.disable-library-validation" <<<"${entitlement_report}" \
+    || fail "self-signed app requires the library-validation runtime exception to load Sparkle without an Apple Team ID"
   echo "preflight note: self-signed app signature is valid and pinned; Gatekeeper approval is still required"
 fi
 
@@ -116,26 +129,16 @@ if [[ -n "${PKG_PATH}" ]]; then
     fi
     if [[ "${DISPLAY_MODE}" == "internal" ]]; then
       echo "preflight note: pkg is unsigned as expected for internal distribution without Apple Developer ID"
+    elif [[ "${DISPLAY_MODE}" == "self-signed-manual-approval" ]]; then
+      echo "preflight note: outer PKG is unsigned as required for the manual-approval channel"
     else
       warn "pkg is unsigned or not trusted: ${PKG_PATH}"
     fi
   fi
   if [[ "${DISPLAY_MODE}" == "self-signed-manual-approval" ]]; then
-    [[ "${EXPECTED_INSTALLER_CERT_SHA256}" =~ ^[0-9a-fA-F]{64}$ ]] \
-      || fail "self-signed preflight requires VEX_NATIVE_EXPECTED_INSTALLER_CERT_SHA256"
-    actual_installer_cert_sha256="$(python3 - "${pkg_signature_details}" <<'PY'
-import re
-import sys
-
-match = re.search(r"SHA256 Fingerprint:\s*((?:[0-9A-Fa-f]{2}[ \n\r\t]+){31}[0-9A-Fa-f]{2})", sys.argv[1])
-if not match:
-    raise SystemExit("installer certificate fingerprint is missing")
-print("".join(match.group(1).split()).lower())
-PY
-)"
-    [[ "${actual_installer_cert_sha256}" == "${EXPECTED_INSTALLER_CERT_SHA256}" ]] \
-      || fail "self-signed installer certificate fingerprint mismatch"
-    echo "preflight note: self-signed PKG signature is valid and pinned; it is not notarized"
+    grep -q "Status: no signature" <<<"${pkg_signature_details}" \
+      || fail "manual-approval PKG must be unsigned; untrusted self-signed installer signatures fail PackageKit trust"
+    echo "preflight note: outer PKG is unsigned for PackageKit manual approval; its app/helper payload is certificate-pinned"
   fi
 fi
 

@@ -16,6 +16,7 @@ APP_BUILD="${VEX_NATIVE_BUILD:-1}"
 PKG_NAME="VEXNativeMac-${APP_VERSION}-${APP_BUILD}.pkg"
 PKG_PATH="${PKG_OUTPUT_DIR}/${PKG_NAME}"
 PKG_SIGN_IDENTITY="${VEX_INSTALLER_SIGN_IDENTITY:-}"
+SKIP_APP_BUILD="${VEX_NATIVE_SKIP_APP_BUILD:-0}"
 
 if [[ -f "${ROOT_DIR}/.env.sparkle.local" ]]; then
   set -a
@@ -34,7 +35,14 @@ if [[ ! "${APP_BUILD}" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
-bash "${BUILD_SCRIPT}"
+if [[ "${SKIP_APP_BUILD}" == "1" ]]; then
+  if [[ ! -d "${APP_DIR}" ]]; then
+    echo "VEX_NATIVE_SKIP_APP_BUILD=1 requires an existing app bundle: ${APP_DIR}" >&2
+    exit 1
+  fi
+else
+  bash "${BUILD_SCRIPT}"
+fi
 
 rm -rf "${PKG_ROOT}" "${PKG_SCRIPTS}" "${PKG_OUTPUT_DIR}"
 mkdir -p "${PKG_ROOT}/Applications" "${PKG_SCRIPTS}" "${PKG_OUTPUT_DIR}"

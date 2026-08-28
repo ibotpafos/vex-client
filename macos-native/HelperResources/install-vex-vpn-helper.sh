@@ -68,12 +68,10 @@ for required in awg amneziawg-go vex-helper; do
     exit 1
   fi
 
-  host_arch="$(/usr/bin/uname -m)"
-  archs="$(/usr/bin/lipo -archs "$src_dir/$required" 2>/dev/null || true)"
-  if [[ " ${archs} " != *" ${host_arch} "* ]]; then
-    echo "Bundled $required does not support ${host_arch} (archs: ${archs:-unknown})." >&2
-    exit 1
-  fi
+  # PackageKit may deny Mach-O inspection tools in its postinstall sandbox.
+  # Universal-architecture coverage is therefore proven before packaging by
+  # native_macos_production_preflight.sh. The pinned app signature above and
+  # each nested signature still protect the exact resources installed here.
 done
 
 helper_signature_details="$(/usr/bin/codesign -d --verbose=4 "$src_dir/vex-helper" 2>&1 || true)"
@@ -304,11 +302,29 @@ PLIST
 /bin/launchctl bootstrap system "$plist"
 /bin/launchctl kickstart -k system/app.vex.vpn.helper
 
+helper_ready=0
+for _ in {1..50}; do
+  if [[ -S /var/run/vex-helper.sock ]] \
+    && /bin/launchctl print system/app.vex.vpn.helper >/dev/null 2>&1; then
+    status_response="$(
+      /usr/bin/printf 'status\n' \
+        | /usr/bin/nc -w 2 -U /var/run/vex-helper.sock 2>/dev/null \
+        | /usr/bin/head -n 1 \
+        || true
+    )"
+    if [[ "$status_response" == state=* ]]; then
+      helper_ready=1
+      break
+    fi
+  fi
+  /bin/sleep 0.1
+done
+if [[ "$helper_ready" != "1" ]]; then
+  echo "Installed helper did not become ready for VPN commands." >&2
+  exit 1
+fi
+
 if [[ "$recovery_needed" == "1" ]]; then
-  for _ in {1..40}; do
-    [[ -S /var/run/vex-helper.sock ]] && break
-    /bin/sleep 0.1
-  done
   recovery_response="$(
     /usr/bin/printf 'down\n' \
       | /usr/bin/nc -w 5 -U /var/run/vex-helper.sock 2>/dev/null \
@@ -317,6 +333,16 @@ if [[ "$recovery_needed" == "1" ]]; then
   )"
   if [[ "$recovery_response" != "ok" ]]; then
     echo "Replacement helper did not confirm network recovery: ${recovery_response:-no response}" >&2
+    exit 1
+  fi
+  recovery_status="$(
+    /usr/bin/printf 'status\n' \
+      | /usr/bin/nc -w 2 -U /var/run/vex-helper.sock 2>/dev/null \
+      | /usr/bin/head -n 1 \
+      || true
+  )"
+  if [[ "$recovery_status" != state=disconnected* ]]; then
+    echo "Replacement helper did not confirm disconnected recovery state." >&2
     exit 1
   fi
 fi

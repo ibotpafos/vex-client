@@ -66,6 +66,10 @@ require_file "${resources_dir}/helper-version"
 for signed_resource in awg amneziawg-go vex-helper; do
   codesign --verify --strict "${resources_dir}/${signed_resource}" \
     || fail "code-signature verification failed for helper resource: ${signed_resource}"
+  for required_arch in arm64 x86_64; do
+    /usr/bin/lipo "${resources_dir}/${signed_resource}" -verify_arch "${required_arch}" \
+      || fail "helper resource ${signed_resource} is missing ${required_arch}"
+  done
 done
 codesign --verify --deep --strict "${APP_PATH}" || fail "codesign verification failed"
 
@@ -104,6 +108,13 @@ fi
 if [[ "${PRODUCTION}" == "1" ]]; then
   xcrun stapler validate "${APP_PATH}" >/dev/null 2>&1 \
     || fail "notarization ticket is missing or invalid"
+  spctl --assess --type execute --verbose=2 "${APP_PATH}" >/dev/null 2>&1 \
+    || fail "Gatekeeper rejected app bundle"
+  [[ -n "${PKG_PATH}" ]] || fail "production preflight requires VEX_NATIVE_PKG_PATH"
+  xcrun stapler validate "${PKG_PATH}" >/dev/null 2>&1 \
+    || fail "pkg notarization ticket is missing or invalid"
+  spctl --assess --type install --verbose=2 "${PKG_PATH}" >/dev/null 2>&1 \
+    || fail "Gatekeeper rejected installer package"
 fi
 
 if [[ -d "${SPARKLE_ARCHIVES_DIR}" ]]; then

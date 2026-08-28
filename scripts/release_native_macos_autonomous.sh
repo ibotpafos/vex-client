@@ -165,8 +165,8 @@ PY
 }
 
 validate_public_release_artifacts() {
-  local app_path manifest_path archive_name archive_path appcast_path signature sign_tool
-  local derived_public_key archive_sha appcast_sha
+  local app_path manifest_path archive_name archive_path package_name package_path appcast_path signature sign_tool
+  local derived_public_key archive_sha package_sha appcast_sha
   app_path="${ROOT_DIR}/macos-native/build/VEXNativeMac.app"
   manifest_path="${ROOT_DIR}/dist/native-macos/deploy/release-manifest.json"
   appcast_path="${ROOT_DIR}/dist/native-macos/deploy/appcast.xml"
@@ -184,20 +184,14 @@ validate_public_release_artifacts() {
     exit 2
   fi
 
-  VEX_NATIVE_APP_PATH="${app_path}" \
-    VEX_NATIVE_PRODUCTION=0 \
-    VEX_NATIVE_REQUIRE_DEVELOPER_ID=0 \
-    VEX_NATIVE_DISTRIBUTION_MODE=public-sparkle-ed25519 \
-    bash "${ROOT_DIR}/scripts/native_macos_production_preflight.sh"
-
-  archive_name="$(python3 - "${manifest_path}" "${VEX_SPARKLE_PUBLIC_ED_KEY}" <<'PY'
+  artifact_names="$(python3 - "${manifest_path}" "${VEX_SPARKLE_PUBLIC_ED_KEY}" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 manifest = json.loads(Path(sys.argv[1]).read_text())
 expected_public_key = sys.argv[2]
-if manifest.get("distributionMode") != "sparkle-ed25519-custom":
+if manifest.get("distributionMode") != "developer-id-notarized":
     raise SystemExit("public release manifest has an invalid distributionMode")
 if manifest.get("updateSignatureScheme") != "sparkle-ed25519":
     raise SystemExit("public release manifest has an invalid updateSignatureScheme")
@@ -205,32 +199,54 @@ if manifest.get("sparklePublicEDKey") != expected_public_key:
     raise SystemExit("public release manifest Sparkle public key mismatch")
 if not manifest.get("archiveSHA256"):
     raise SystemExit("public release manifest is missing archiveSHA256")
+if not manifest.get("packageSHA256"):
+    raise SystemExit("public release manifest is missing packageSHA256")
+if not all(manifest.get(field) is True for field in ("appleDeveloperSigned", "notarized", "gatekeeperReady")):
+    raise SystemExit("public release manifest is not Gatekeeper-ready")
 print(manifest["archive"])
+print(manifest["package"])
 PY
-)"
+  )"
+  archive_name="$(printf '%s\n' "${artifact_names}" | sed -n '1p')"
+  package_name="$(printf '%s\n' "${artifact_names}" | sed -n '2p')"
   archive_path="${ROOT_DIR}/dist/native-macos/deploy/${archive_name}"
+  package_path="${ROOT_DIR}/dist/native-macos/deploy/${package_name}"
   require_file "${archive_path}"
   require_file "${archive_path}.sha256"
+  require_file "${package_path}"
+  require_file "${package_path}.sha256"
+
+  VEX_NATIVE_APP_PATH="${app_path}" \
+    VEX_NATIVE_PKG_PATH="${package_path}" \
+    VEX_NATIVE_PRODUCTION=1 \
+    VEX_NATIVE_REQUIRE_DEVELOPER_ID=1 \
+    VEX_NATIVE_DISTRIBUTION_MODE=developer-id-notarized \
+    bash "${ROOT_DIR}/scripts/native_macos_production_preflight.sh"
+
   archive_sha="$(shasum -a 256 "${archive_path}" | awk '{print $1}')"
+  package_sha="$(shasum -a 256 "${package_path}" | awk '{print $1}')"
   appcast_sha="$(shasum -a 256 "${appcast_path}" | awk '{print $1}')"
 
   (
     cd "${ROOT_DIR}/dist/native-macos/deploy"
     shasum -a 256 -c "${archive_name}.sha256"
+    shasum -a 256 -c "${package_name}.sha256"
     shasum -a 256 -c appcast.xml.sha256
   )
 
-  python3 - "${manifest_path}" "${archive_sha}" "${appcast_sha}" <<'PY'
+  python3 - "${manifest_path}" "${archive_sha}" "${package_sha}" "${appcast_sha}" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 manifest = json.loads(Path(sys.argv[1]).read_text())
-archive_sha, appcast_sha = sys.argv[2:]
+archive_sha, package_sha, appcast_sha = sys.argv[2:]
 if manifest.get("archiveSHA256") != archive_sha:
     raise SystemExit("public release manifest archive SHA-256 mismatch")
 if manifest.get("appcastSHA256") != appcast_sha:
     raise SystemExit("public release manifest appcast SHA-256 mismatch")
+if manifest.get("packageSHA256") != package_sha:
+    raise SystemExit("public release manifest package SHA-256 mismatch")
 PY
 
   signature="$(python3 - "${appcast_path}" "${archive_name}" <<'PY'
@@ -296,6 +312,10 @@ release_values="$(resolve_next_release)"
 export VEX_NATIVE_VERSION="$(printf '%s\n' "${release_values}" | sed -n '1p')"
 export VEX_NATIVE_BUILD="$(printf '%s\n' "${release_values}" | sed -n '2p')"
 export VEX_SPARKLE_PRODUCTION=1
+export VEX_NATIVE_PRODUCTION=1
+export VEX_NATIVE_REQUIRE_DEVELOPER_ID=1
+export VEX_SPARKLE_REQUIRE_DEVELOPER_ID=1
+export VEX_NOTARIZE=1
 
 echo "native macOS autonomous release: ${VEX_NATIVE_VERSION} (${VEX_NATIVE_BUILD})"
 
@@ -303,7 +323,7 @@ if [[ "${RUN_CHECKS}" == "1" ]]; then
   run_native_macos_tests
 fi
 
-bash "${ROOT_DIR}/scripts/build_native_macos_internal_release.sh"
+bash "${ROOT_DIR}/scripts/build_native_macos_public_release.sh"
 bash "${ROOT_DIR}/scripts/prepare_native_macos_deploy_bundle.sh"
 
 if [[ "${RUN_PUBLIC_PREFLIGHT}" == "1" ]]; then
@@ -318,6 +338,8 @@ fi
 mkdir -p "${NATIVE_DOWNLOAD_DIR}"
 cp "${ROOT_DIR}/dist/native-macos/deploy/VEXNativeMac-${VEX_NATIVE_VERSION}-${VEX_NATIVE_BUILD}.zip" "${NATIVE_DOWNLOAD_DIR}/"
 cp "${ROOT_DIR}/dist/native-macos/deploy/VEXNativeMac-${VEX_NATIVE_VERSION}-${VEX_NATIVE_BUILD}.zip.sha256" "${NATIVE_DOWNLOAD_DIR}/"
+cp "${ROOT_DIR}/dist/native-macos/deploy/VEXNativeMac-${VEX_NATIVE_VERSION}-${VEX_NATIVE_BUILD}.pkg" "${NATIVE_DOWNLOAD_DIR}/"
+cp "${ROOT_DIR}/dist/native-macos/deploy/VEXNativeMac-${VEX_NATIVE_VERSION}-${VEX_NATIVE_BUILD}.pkg.sha256" "${NATIVE_DOWNLOAD_DIR}/"
 cp "${ROOT_DIR}/dist/native-macos/deploy/appcast.xml" "${NATIVE_DOWNLOAD_DIR}/"
 cp "${ROOT_DIR}/dist/native-macos/deploy/appcast.xml.sha256" "${NATIVE_DOWNLOAD_DIR}/"
 cp "${ROOT_DIR}/dist/native-macos/deploy/release-manifest.json" "${NATIVE_DOWNLOAD_DIR}/"

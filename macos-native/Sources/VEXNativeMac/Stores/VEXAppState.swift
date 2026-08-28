@@ -462,7 +462,10 @@ final class VEXAppState: ObservableObject {
             } else {
                 lastError = VpnAutopilotRuntimeError.connectFailed(helper.message ?? "VPN connection failed.")
             }
-            await helper.disconnect(releaseAntiLeak: true)
+            let teardownConfirmed = await helper.disconnect(releaseAntiLeak: true)
+            guard teardownConfirmed else {
+                throw VpnAutopilotRuntimeError.connectFailed("previous tunnel teardown was not confirmed")
+            }
         }
         throw lastError
     }
@@ -485,9 +488,14 @@ final class VEXAppState: ObservableObject {
         }
         if isVpnBusy, helper.status.state == .connecting {
             statusMessage = "Отменяем подключение VPN."
-            await helper.interruptWithDisconnect(releaseAntiLeak: !antiLeakEnabled)
+            let disconnected = await helper.interruptWithDisconnect(releaseAntiLeak: !antiLeakEnabled)
             isVpnBusy = false
-            activeTunnel = nil
+            if disconnected {
+                activeTunnel = nil
+                statusMessage = "VPN отключен."
+            } else {
+                statusMessage = helper.message ?? "Не удалось подтвердить отключение VPN."
+            }
             return
         }
         guard !isVpnBusy, !helper.isBusy else {
@@ -495,7 +503,12 @@ final class VEXAppState: ObservableObject {
             return
         }
         isVpnBusy = true
-        await helper.disconnect(releaseAntiLeak: !antiLeakEnabled)
+        let disconnected = await helper.disconnect(releaseAntiLeak: !antiLeakEnabled)
+        guard disconnected else {
+            statusMessage = helper.message ?? "Не удалось подтвердить отключение VPN."
+            isVpnBusy = false
+            return
+        }
         let reportedTunnel = activeTunnel
         activeTunnel = nil
         statusMessage = "VPN отключен."
@@ -569,7 +582,10 @@ final class VEXAppState: ObservableObject {
             activeTunnel = nextTunnel
             try await profileService.writeHelperConfig(for: nextTunnel)
             serverSidebarOperation = .connecting
-            await helper.disconnect(releaseAntiLeak: false)
+            let disconnected = await helper.disconnect(releaseAntiLeak: false)
+            guard disconnected else {
+                throw VpnAutopilotRuntimeError.connectFailed("previous tunnel teardown was not confirmed")
+            }
             try ensureConnectStillDesired(generation: generation)
             await helper.connect(antiLeakEnabled: antiLeakEnabled)
             try ensureConnectStillDesired(generation: generation)

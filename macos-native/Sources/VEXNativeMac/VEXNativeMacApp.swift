@@ -78,6 +78,31 @@ struct VEXNativeMacApp: App {
             FileHandle.standardOutput.write(Data(output.utf8))
             Darwin.exit(state.filesCurrent && state.socketConnectable ? 0 : 1)
         }
+
+        if let probeIndex = CommandLine.arguments.firstIndex(of: "--update-response-probe") {
+            let pathIndex = CommandLine.arguments.index(after: probeIndex)
+            guard pathIndex < CommandLine.arguments.endIndex else {
+                FileHandle.standardError.write(Data("update response probe requires a JSON path\n".utf8))
+                Darwin.exit(2)
+            }
+            do {
+                let data = try Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[pathIndex]))
+                let update = try JSONDecoder().decode(AppUpdateCheckResult.self, from: data)
+                let output = [
+                    "update_available=\(update.updateAvailable)",
+                    "update_required=\(update.required)",
+                    "latest_version=\(update.latestVersion)",
+                    "latest_build=\(update.latestBuild)",
+                    "download_url_present=\(!update.downloadUrl.isEmpty)",
+                    "update_response=valid",
+                ].joined(separator: "\n") + "\n"
+                FileHandle.standardOutput.write(Data(output.utf8))
+                Darwin.exit(0)
+            } catch {
+                FileHandle.standardError.write(Data("update response probe failed: \(error.localizedDescription)\n".utf8))
+                Darwin.exit(1)
+            }
+        }
     }
 
     var body: some Scene {

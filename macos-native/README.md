@@ -27,6 +27,17 @@ bash scripts/build_native_macos_app.sh
 open macos-native/build/VEXNativeMac.app
 ```
 
+## Live-VPN-safe test plan
+
+Before any installer or connection smoke, capture `scutil --nc list` and the
+read-only `--helper-status-probe`. If INCY, VEX, or any other VPN is connected,
+keep that tunnel unchanged: do not run helper `down`, network reset, tunnel
+teardown, route/DNS/PF mutation, installer/postinstall, or cleanup commands.
+Limit verification to bundle/signature inspection, decoder probes, build/tests,
+`--helper-install-state-probe`, and read-only launch/crash observation. Run the
+full install -> connect -> disconnect acceptance only on a disposable host or
+after the active tunnel is no longer part of the protected test baseline.
+
 `build_native_macos_app.sh` first builds a universal Swift helper through
 `scripts/build_swift_macos_helper.sh` and packages resources only from
 `macos-native/HelperResources`.

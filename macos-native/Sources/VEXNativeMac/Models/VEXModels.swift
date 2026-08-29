@@ -110,6 +110,90 @@ struct AppUpdateCheckResult: Codable, Equatable {
     var rolloutPercent: Int?
     var checkedAt: String?
 
+    enum CodingKeys: String, CodingKey {
+        case updateAvailable
+        case required
+        case currentBuildBlocked
+        case latestVersion
+        case latestBuild
+        case minSupportedBuild
+        case minConfigSchemaVersion
+        case downloadUrl
+        case changelog
+        case checksumSha256
+        case signatureUrl
+        case channel
+        case reason
+        case rolloutPercent
+        case checkedAt
+    }
+
+    init(
+        updateAvailable: Bool,
+        required: Bool,
+        currentBuildBlocked: Bool?,
+        latestVersion: String,
+        latestBuild: Int,
+        minSupportedBuild: Int,
+        minConfigSchemaVersion: Int?,
+        downloadUrl: String,
+        changelog: String?,
+        checksumSha256: String?,
+        signatureUrl: String?,
+        channel: String?,
+        reason: String?,
+        rolloutPercent: Int?,
+        checkedAt: String?
+    ) {
+        self.updateAvailable = updateAvailable
+        self.required = required
+        self.currentBuildBlocked = currentBuildBlocked
+        self.latestVersion = latestVersion
+        self.latestBuild = latestBuild
+        self.minSupportedBuild = minSupportedBuild
+        self.minConfigSchemaVersion = minConfigSchemaVersion
+        self.downloadUrl = downloadUrl
+        self.changelog = changelog
+        self.checksumSha256 = checksumSha256
+        self.signatureUrl = signatureUrl
+        self.channel = channel
+        self.reason = reason
+        self.rolloutPercent = rolloutPercent
+        self.checkedAt = checkedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        updateAvailable = try container.decode(Bool.self, forKey: .updateAvailable)
+        required = try container.decodeIfPresent(Bool.self, forKey: .required) ?? false
+        currentBuildBlocked = try container.decodeIfPresent(Bool.self, forKey: .currentBuildBlocked)
+        minConfigSchemaVersion = try container.decodeIfPresent(Int.self, forKey: .minConfigSchemaVersion)
+        changelog = try container.decodeIfPresent(String.self, forKey: .changelog)
+        checksumSha256 = try container.decodeIfPresent(String.self, forKey: .checksumSha256)
+        signatureUrl = try container.decodeIfPresent(String.self, forKey: .signatureUrl)
+        channel = try container.decodeIfPresent(String.self, forKey: .channel)
+        reason = try container.decodeIfPresent(String.self, forKey: .reason)
+        rolloutPercent = try container.decodeIfPresent(Int.self, forKey: .rolloutPercent)
+        checkedAt = try container.decodeIfPresent(String.self, forKey: .checkedAt)
+
+        guard updateAvailable else {
+            latestVersion = try container.decodeIfPresent(String.self, forKey: .latestVersion)
+                ?? VEXAppInfo.version
+            latestBuild = try container.decodeIfPresent(Int.self, forKey: .latestBuild)
+                ?? VEXAppInfo.buildNumber
+            minSupportedBuild = try container.decodeIfPresent(Int.self, forKey: .minSupportedBuild) ?? 0
+            downloadUrl = try container.decodeIfPresent(String.self, forKey: .downloadUrl) ?? ""
+            return
+        }
+
+        // An advertised update must remain fail-closed: without exact version,
+        // build and delivery metadata the UI must not offer an unusable update.
+        latestVersion = try container.decode(String.self, forKey: .latestVersion)
+        latestBuild = try container.decode(Int.self, forKey: .latestBuild)
+        minSupportedBuild = try container.decodeIfPresent(Int.self, forKey: .minSupportedBuild) ?? 0
+        downloadUrl = try container.decode(String.self, forKey: .downloadUrl)
+    }
+
     func isNewerThanInstalledApp(currentVersion: String = VEXAppInfo.version) -> Bool {
         guard updateAvailable else { return false }
         let versionOrder = Self.compareVersion(latestVersion, currentVersion)

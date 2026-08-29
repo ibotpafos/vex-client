@@ -121,7 +121,6 @@ if [[ -z "${console_home:-}" ]]; then
 fi
 
 config_path="${console_home}/.vex/vex.conf"
-mkdir -p "$(dirname "${config_path}")"
 
 VEX_EXPECTED_TEAM_ID="__VEX_TEAM_ID__" VEX_EXPECTED_CERT_SHA256="__VEX_CERT_SHA256__" /bin/bash "${installer}" "${resource_dir}" "${config_path}" "${console_user}" "${verified_app}"
 POSTINSTALL

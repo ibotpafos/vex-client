@@ -6,6 +6,45 @@ config_path="$2"
 _user_name="${3:-}"
 verified_app="${4:-}"
 
+config_owner="$_user_name"
+if [[ -z "$config_owner" ]] || ! /usr/bin/id "$config_owner" >/dev/null 2>&1; then
+  echo "A valid local user is required for the VEX profile path." >&2
+  exit 1
+fi
+config_owner_home="$(
+  /usr/bin/dscl . -read "/Users/$config_owner" NFSHomeDirectory 2>/dev/null \
+    | /usr/bin/awk '{print $2}'
+)"
+config_group="$(/usr/bin/id -gn "$config_owner")"
+expected_config_path="$config_owner_home/.vex/vex.conf"
+if [[ -z "$config_owner_home" ]] || [[ "$config_path" != "$expected_config_path" ]]; then
+  echo "VEX profile path does not match the verified local user home." >&2
+  exit 1
+fi
+config_dir="$(/usr/bin/dirname "$config_path")"
+[[ ! -L "$config_dir" ]] || {
+  echo "VEX profile directory must not be a symbolic link." >&2
+  exit 1
+}
+if [[ -e "$config_dir" && ! -d "$config_dir" ]]; then
+  echo "VEX profile path parent is not a directory." >&2
+  exit 1
+fi
+/usr/bin/install -d -o "$config_owner" -g "$config_group" -m 0700 "$config_dir"
+# install -d preserves an existing directory's owner and mode. Normalize only
+# the dedicated VEX profile directory so the app can atomically refresh its
+# profile; never recurse into the user's home or delete an existing profile.
+/usr/sbin/chown "$config_owner:$config_group" "$config_dir"
+/bin/chmod 0700 "$config_dir"
+if [[ -e "$config_path" ]]; then
+  if [[ -L "$config_path" || ! -f "$config_path" ]]; then
+    echo "Existing VEX profile must be a regular file." >&2
+    exit 1
+  fi
+  /usr/sbin/chown "$config_owner:$config_group" "$config_path"
+  /bin/chmod 0600 "$config_path"
+fi
+
 if [[ -z "$verified_app" || ! -d "$verified_app/Contents/Resources/resources" ]]; then
   echo "A root-owned verified app snapshot is required for helper installation." >&2
   exit 1

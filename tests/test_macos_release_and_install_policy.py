@@ -38,6 +38,18 @@ class MacOSReleaseAndInstallPolicyTest(unittest.TestCase):
         self.assertIn('/usr/sbin/chown root:wheel "$helper_root_dir" "$helper_dir"', installer)
         self.assertIn('/bin/chmod 0755 "$helper_root_dir" "$helper_dir"', installer)
 
+    def test_helper_install_keeps_profile_directory_user_writable_and_private(self) -> None:
+        installer = self.read("macos-native/HelperResources/install-vex-vpn-helper.sh")
+        package = self.read("scripts/build_native_macos_pkg.sh")
+
+        self.assertIn('expected_config_path="$config_owner_home/.vex/vex.conf"', installer)
+        self.assertIn('[[ "$config_path" != "$expected_config_path" ]]', installer)
+        self.assertIn('[[ ! -L "$config_dir" ]]', installer)
+        self.assertIn('/usr/sbin/chown "$config_owner:$config_group" "$config_dir"', installer)
+        self.assertIn('/bin/chmod 0700 "$config_dir"', installer)
+        self.assertIn('/bin/chmod 0600 "$config_path"', installer)
+        self.assertNotIn('mkdir -p "$(dirname "${config_path}")"', package)
+
     def test_installed_app_exposes_exact_helper_install_state_probe(self) -> None:
         app = self.read("macos-native/Sources/VEXNativeMac/VEXNativeMacApp.swift")
         helper_model = self.read("macos-native/Sources/VEXNativeMac/VEXHelperClient.swift")
@@ -51,6 +63,21 @@ class MacOSReleaseAndInstallPolicyTest(unittest.TestCase):
         self.assertIn('"$APP_EXECUTABLE" --helper-status-probe', integration)
         self.assertIn("helper_install_required=false", integration)
         self.assertIn("helper_socket=responds_authenticated", integration)
+
+    def test_startup_update_check_cannot_masquerade_as_helper_failure(self) -> None:
+        models = self.read("macos-native/Sources/VEXNativeMac/Models/VEXModels.swift")
+        app_state = self.read("macos-native/Sources/VEXNativeMac/Stores/VEXAppState.swift")
+        user_text = self.read("macos-native/Sources/VEXNativeMac/Support/VEXUserFacingText.swift")
+        app = self.read("macos-native/Sources/VEXNativeMac/VEXNativeMacApp.swift")
+
+        self.assertIn("init(from decoder: Decoder) throws", models)
+        self.assertIn("guard updateAvailable else", models)
+        self.assertIn("loadUpdate(reportErrors: false)", app_state)
+        self.assertIn("loadUpdate(reportErrors: true)", app_state)
+        self.assertIn('return "Не удалось обновить данные VEX."', user_text)
+        self.assertNotIn('return "Системный компонент VEX запускается..."', user_text)
+        self.assertIn('CommandLine.arguments.firstIndex(of: "--update-response-probe")', app)
+        self.assertIn('"update_response=valid"', app)
 
     def test_public_release_requires_distribution_signing_and_notarization(self) -> None:
         release = self.read("scripts/release_native_macos_autonomous.sh")

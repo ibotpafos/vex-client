@@ -149,7 +149,7 @@ final class VEXAppState: ObservableObject {
         } else if biometricUnlockRequired && biometricAvailability.isAvailable && canUnlockStoredSession {
             statusMessage = "Подтвердите вход по \(biometricAvailability.label)."
             autoLaunchEnabled = startupService.isEnabled()
-            await loadUpdate()
+            await loadUpdate(reportErrors: false)
             await loadRemoteConfig()
             return
         }
@@ -160,7 +160,7 @@ final class VEXAppState: ObservableObject {
     }
 
     func refreshAll() async {
-        async let updateResult: Void = loadUpdate()
+        async let updateResult: Void = loadUpdate(reportErrors: false)
         async let remoteConfigResult: Void = loadRemoteConfig()
         guard let token = await authenticatedAccessToken() else {
             _ = await (updateResult, remoteConfigResult)
@@ -881,7 +881,7 @@ final class VEXAppState: ObservableObject {
     }
 
     func refreshUpdates() async {
-        await loadUpdate()
+        await loadUpdate(reportErrors: true)
         await loadRemoteConfig()
     }
 
@@ -1012,7 +1012,7 @@ final class VEXAppState: ObservableObject {
         })
     }
 
-    private func loadUpdate(reportErrors: Bool = true) async {
+    private func loadUpdate(reportErrors: Bool = false) async {
         do {
             applyUpdateCheck(try await api.appUpdateCheck())
         } catch {

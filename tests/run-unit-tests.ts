@@ -29,7 +29,7 @@ import {
   withLastSuccessfulEndpoint,
   type HotVpnProfileRecord,
 } from '../src/vpn/hotProfileCacheCore';
-import { connectionAttemptsForProfile, isVpnTransportFallbackError, profileEndpoint } from '../src/vpn/connectionFallback';
+import { connectionAttemptsForProfile, isAWG3Profile, isVpnTransportFallbackError, profileEndpoint } from '../src/vpn/connectionFallback';
 import { connectableLocalProfile, explicitConnectProfileResolutionOptions, shouldUseLocalProfileBeforeOnline, vpnConnectTelemetry, vpnConnectTimingSamples, vpnUnexpectedDisconnectTelemetry } from '../src/vpn/connectFlow';
 import { recoverVpnConnection } from '../src/vpn/connectionRecovery';
 import { disconnectWithRecoveryTimeout } from '../src/vpn/disconnectRecovery';
@@ -961,62 +961,58 @@ function runCreateDeviceRequestTests(): void {
 }
 
 {
-  const attempts = connectionAttemptsForProfile(profileWithEndpoint('de.example.com:51820'));
-
-  // AWG2 retirement: recovery never falls through to the retired 51820
-  // listener; only the isolated AWG3 listeners are attempted.
-  assertEqual(attempts.length, 3);
-  assertDeepEqual(attempts.map(profileEndpoint), [
-    'de.example.com:51820',
-    'de.example.com:51821',
-    'de.example.com:443',
-  ]);
-}
-
-{
-  const attempts = connectionAttemptsForProfile({
-    ...profileWithEndpoint('de.example.com:51820'),
-    lastSuccessfulEndpoint: 'de.example.com:443',
-  });
-
-  assertDeepEqual(attempts.map(profileEndpoint), [
-    'de.example.com:443',
-    'de.example.com:51820',
-    'de.example.com:51821',
-  ]);
-}
-
-{
-  const attempts = connectionAttemptsForProfile(profileWithEndpoint('de.example.com:443'));
-
-  assertEqual(attempts.length, 2);
-  assertDeepEqual(attempts.map(profileEndpoint), ['de.example.com:443', 'de.example.com:51821']);
-}
-
-{
-  const baseProfile = profileWithEndpoint('fi.example.com:51821');
-  const attempts = connectionAttemptsForProfile({
+  const baseProfile = profileWithEndpoint('de.example.com:51821');
+  const awg3 = {
     ...baseProfile,
     config: `${baseProfile.config}\nHeaderProtectionKey = header-key`,
-  });
+  };
+  const attempts = connectionAttemptsForProfile(awg3);
 
-  assertDeepEqual(attempts.map(profileEndpoint), ['fi.example.com:51821', 'fi.example.com:443']);
+  assertDeepEqual(attempts.map(profileEndpoint), ['de.example.com:51821', 'de.example.com:443']);
 }
 
 {
-  const attempts = connectionAttemptsForProfile(profileWithEndpoint('[2001:db8::1]:51820'));
+  const baseProfile = profileWithEndpoint('de.example.com:443');
+  const awg3 = {
+    ...baseProfile,
+    config: `${baseProfile.config}\nHeaderProtectionKey = header-key`,
+    lastSuccessfulEndpoint: 'de.example.com:51820',
+  };
+  const attempts = connectionAttemptsForProfile(awg3);
 
-  assertEqual(profileEndpoint(attempts[1]), '[2001:db8::1]:51821');
+  assertDeepEqual(attempts.map(profileEndpoint), ['de.example.com:443', 'de.example.com:51821']);
+  assertEqual(isAWG3Profile(awg3), true);
 }
 
 {
-  const profile: VpnProfile = {
+  const baseProfile = profileWithEndpoint('de.example.com:51820');
+  const awg3OnRetiredPort = {
+    ...baseProfile,
+    config: `${baseProfile.config}\nHeaderProtectionKey = header-key`,
+  };
+  assertThrows(() => connectionAttemptsForProfile(awg3OnRetiredPort), 'VPN recovery rejected the retired AWG2 endpoint. Refresh the AWG3 profile.');
+}
+
+{
+  const baseProfile = profileWithEndpoint('[2001:db8::1]:51821');
+  const awg3 = {
+    ...baseProfile,
+    config: `${baseProfile.config}\nHeaderProtectionKey = header-key`,
+  };
+  const attempts = connectionAttemptsForProfile(awg3);
+
+  assertEqual(profileEndpoint(attempts[1]), '[2001:db8::1]:443');
+}
+
+{
+  const legacyProfile: VpnProfile = {
     config: '[Interface]\nPrivateKey = test\n[Peer]\nAllowedIPs = 0.0.0.0/0\n',
     locationId: 'de',
     source: 'api',
   };
 
-  assertDeepEqual(connectionAttemptsForProfile(profile), [profile]);
+  assertEqual(isAWG3Profile(legacyProfile), false);
+  assertThrows(() => connectionAttemptsForProfile(legacyProfile), 'VPN recovery requires an AWG3 profile with HeaderProtectionKey.');
 }
 
 assertEqual(isVpnTransportFallbackError(new Error('VPN handshake did not complete')), true);

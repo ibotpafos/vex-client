@@ -1,6 +1,21 @@
 import type { VpnProfile } from './profile';
 
-const awg3EndpointFallbackPorts = [51821, 443];
+// The native VEX fleet has retired AWG2. A recovery routine must never make
+// an implicit protocol downgrade by replaying an old 51820 endpoint.
+const awg3EndpointFallbackPorts = [51821, 443] as const;
+const legacyAWG2EndpointPort = 51820;
+const awg3HeaderProtectionPattern = /^HeaderProtectionKey\s*=\s*\S+/m;
+
+export class AWG3RecoveryPolicyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AWG3RecoveryPolicyError';
+  }
+}
+
+export function isAWG3Profile(profile: VpnProfile): boolean {
+  return awg3HeaderProtectionPattern.test(profile.config);
+}
 
 export function isVpnTransportFallbackError(error: unknown): boolean {
   const message = errorText(error).toLowerCase();
@@ -13,28 +28,38 @@ export function isVpnTransportFallbackError(error: unknown): boolean {
 }
 
 export function connectionAttemptsForProfile(profile: VpnProfile): VpnProfile[] {
-  const attempts = profile.lastSuccessfulEndpoint
-    ? [profileWithEndpoint(profile, profile.lastSuccessfulEndpoint) ?? profile]
-    : [profile];
-  if (!attempts.some((attempt) => profileEndpoint(attempt) === profileEndpoint(profile))) {
-    attempts.push(profile);
+  if (!isAWG3Profile(profile)) {
+    throw new AWG3RecoveryPolicyError('VPN recovery requires an AWG3 profile with HeaderProtectionKey.');
   }
-  // An AWG3 profile must never fall back to the shared AWG2 listener. Doing so
-  // can make the tunnel look healthy while silently leaving the AWG3 cohort.
-  for (const port of endpointFallbackPortsFor(profile)) {
+  const primaryEndpoint = profileEndpoint(profile);
+  if (isLegacyAWG2Endpoint(primaryEndpoint)) {
+    throw new AWG3RecoveryPolicyError('VPN recovery rejected the retired AWG2 endpoint. Refresh the AWG3 profile.');
+  }
+
+  const attempts: VpnProfile[] = [];
+  // The cached endpoint is only a short-lived performance hint. Hot profiles
+  // already expire in the secure store; reject a stale AWG2 value here as a
+  // second fail-closed boundary before it reaches the native backend.
+  if (profile.lastSuccessfulEndpoint && !isLegacyAWG2Endpoint(profile.lastSuccessfulEndpoint)) {
+    const cached = profileWithEndpoint(profile, profile.lastSuccessfulEndpoint);
+    if (cached) attempts.push(cached);
+  }
+  attempts.push(profile);
+  for (const port of awg3EndpointFallbackPorts) {
     const fallback = profileWithEndpointPort(profile, port);
-    if (fallback && !attempts.some((attempt) => profileEndpoint(attempt) === profileEndpoint(fallback))) {
-      attempts.push(fallback);
-    }
+    if (fallback) attempts.push(fallback);
   }
-  return attempts;
+
+  const seen = new Set<string>();
+  return attempts.filter((attempt) => {
+    const endpoint = profileEndpoint(attempt);
+    if (!endpoint || isLegacyAWG2Endpoint(endpoint)) return false;
+    return seen.add(endpoint).size > 0;
+  });
 }
 
-function endpointFallbackPortsFor(profile: VpnProfile): readonly number[] {
-  // Every profile is AmneziaWG v3 since the AWG2 retirement: recovery only
-  // ever tries the isolated AWG3 listeners, never the retired 51820 port.
-  void profile;
-  return awg3EndpointFallbackPorts;
+function isLegacyAWG2Endpoint(endpoint?: string): boolean {
+  return parseEndpoint(endpoint)?.port === legacyAWG2EndpointPort;
 }
 
 function profileWithEndpoint(profile: VpnProfile, endpoint: string): VpnProfile | null {

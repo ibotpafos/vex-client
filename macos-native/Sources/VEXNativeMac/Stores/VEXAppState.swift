@@ -61,6 +61,7 @@ final class VEXAppState: ObservableObject {
     private var desiredVpnState: DesiredVpnState = .disconnected
     private var vpnOperationGeneration = 0
     private var updateMonitorTask: Task<Void, Never>?
+    private var customerRealtimeService: CustomerRealtimeService?
     private var automaticUpdatesPrepared = false
     private static let updateRefreshIntervalNanoseconds: UInt64 = 15 * 60 * 1_000_000_000
 
@@ -146,6 +147,7 @@ final class VEXAppState: ObservableObject {
             session = storedSession
             user = storedSession.user
             canUnlockStoredSession = true
+            startCustomerRealtime(accessToken: storedSession.accessToken)
         } else if biometricUnlockRequired && biometricAvailability.isAvailable && canUnlockStoredSession {
             statusMessage = "Подтвердите вход по \(biometricAvailability.label)."
             autoLaunchEnabled = startupService.isEnabled()
@@ -761,6 +763,7 @@ final class VEXAppState: ObservableObject {
         }
         session = storedSession
         user = storedSession.user
+        startCustomerRealtime(accessToken: storedSession.accessToken)
         statusMessage = "Сохраненная сессия открыта."
         await refreshAll()
     }
@@ -774,6 +777,8 @@ final class VEXAppState: ObservableObject {
     }
 
     func prepareForTermination() {
+        customerRealtimeService?.stop()
+        customerRealtimeService = nil
         updateMonitorTask?.cancel()
         updateMonitorTask = nil
         profileWarmupTask?.cancel()
@@ -1147,6 +1152,7 @@ final class VEXAppState: ObservableObject {
         try sessionStore.saveSession(nextSession)
         session = nextSession
         user = nextSession.user
+        startCustomerRealtime(accessToken: nextSession.accessToken)
         canUnlockStoredSession = true
         authError = nil
         statusMessage = message
@@ -1189,6 +1195,7 @@ final class VEXAppState: ObservableObject {
             try sessionStore.saveSession(nextSession)
             session = nextSession
             user = nextSession.user
+            startCustomerRealtime(accessToken: nextSession.accessToken)
             authError = nil
             statusMessage = "Сессия обновлена."
             return nextSession.accessToken
@@ -1270,6 +1277,8 @@ final class VEXAppState: ObservableObject {
         message: String,
         authError: String?
     ) {
+        customerRealtimeService?.stop()
+        customerRealtimeService = nil
         if clearsSessionStore {
             try? sessionStore.clearSession()
         }
@@ -1286,6 +1295,26 @@ final class VEXAppState: ObservableObject {
             ? canUnlockStoredSession
             : sessionStore.hasStoredNativeSession()
         statusMessage = message
+    }
+
+    private func startCustomerRealtime(accessToken: String) {
+        let service = CustomerRealtimeService(
+            baseURL: api.baseURL,
+            onEvent: { [weak self] event, _ in
+                guard let self else { return }
+                if event.type == "customer.session.revoked" {
+                    _ = await self.refreshSessionForRetry()
+                    return
+                }
+                guard event.type == "customer.change" || event.type == "customer.resync" else { return }
+                // Refresh account, billing, locations and derived profile inputs.
+                // This never changes the desired tunnel state or restarts the tunnel.
+                await self.refreshAll()
+            }
+        )
+        customerRealtimeService?.stop()
+        customerRealtimeService = service
+        service.start(accessToken: accessToken)
     }
 
     private func redactSensitiveDiagnostics(_ text: String) -> String {

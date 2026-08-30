@@ -73,6 +73,7 @@ import { useVpnProfileState } from '@/vpn/useVpnProfileState';
 import { useVpnDiagnostics } from './useVpnDiagnostics';
 import { useVpnConnectionFlow } from './useVpnConnectionFlow';
 import { useVpnConnectionAnimations } from './useVpnConnectionAnimations';
+import { useCustomerRealtimeStatus } from '@/realtime/customer-realtime-context';
 import {
   publishVpnTrafficStats,
   readVpnTrafficStatsSnapshot,
@@ -154,6 +155,7 @@ function closeRouteOverlay() {
 export function useVpnConnection() {
   const queryClient = useQueryClient();
   const { session, refreshSession, signOut } = useSession();
+  const customerRealtime = useCustomerRealtimeStatus();
 
   const vpnStatusRef = useRef<VpnStatus>({ state: 'disconnected', rxBytes: 0, txBytes: 0 });
   const [vpnStatusCore, setVpnStatusCore] = useState<VpnStatusCore>(() => vpnStatusCoreFromStatus(vpnStatusRef.current));
@@ -303,6 +305,8 @@ export function useVpnConnection() {
     onProfileRotationRequired: playWarningHaptic,
     onSubscriptionRequired: handleSubscriptionRequired,
     profileRefreshMs,
+    realtimeConnected: customerRealtime.connected,
+    realtimeRevision: customerRealtime.revision,
     requestVpnPermission,
     routingMode,
     selectedLocationId,
@@ -390,14 +394,14 @@ export function useVpnConnection() {
     };
 
     void refreshEntitlement();
-    const timer = setInterval(() => {
+    const timer = customerRealtime.connected ? undefined : setInterval(() => {
       void refreshEntitlement();
     }, entitlementRefreshMs);
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      if (timer) clearInterval(timer);
     };
-  }, [accessToken, entitlementQueryKey, fetchEntitlement, queryClient]);
+  }, [accessToken, customerRealtime.connected, customerRealtime.revision, entitlementQueryKey, fetchEntitlement, queryClient]);
 
   useEffect(() => {
     if (!accessToken || !hasVpnAccess) {
@@ -446,14 +450,14 @@ export function useVpnConnection() {
     };
 
     void refreshDevices();
-    const timer = setInterval(() => {
+    const timer = customerRealtime.connected ? undefined : setInterval(() => {
       void refreshDevices();
     }, activeDeviceRefreshMs);
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      if (timer) clearInterval(timer);
     };
-  }, [accessToken, activeProfile?.device?.id, devicesQueryKey, fetchVpnDevices, isConnected, queryClient]);
+  }, [accessToken, activeProfile?.device?.id, customerRealtime.connected, customerRealtime.revision, devicesQueryKey, fetchVpnDevices, isConnected, queryClient]);
 
   useEffect(() => {
     if (!cacheUserId || !entitlementData) {

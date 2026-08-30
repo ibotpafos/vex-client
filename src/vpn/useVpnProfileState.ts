@@ -25,6 +25,8 @@ type UseVpnProfileStateInput = {
   onProfileRotationRequired: () => void;
   onSubscriptionRequired: () => void;
   profileRefreshMs: number;
+  realtimeConnected?: boolean;
+  realtimeRevision?: number;
   requestVpnPermission: () => Promise<boolean>;
   routingMode: VpnRoutingMode;
   selectedLocationId: string;
@@ -55,6 +57,8 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
     onProfileRotationRequired,
     onSubscriptionRequired,
     profileRefreshMs,
+    realtimeConnected = false,
+    realtimeRevision = 0,
     requestVpnPermission,
     routingMode,
     selectedLocationId,
@@ -188,12 +192,12 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
     };
 
     void refreshProfile();
-    const timer = setInterval(() => {
+    const timer = realtimeConnected ? undefined : setInterval(() => {
       void refreshProfile();
     }, profileRefreshMs);
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      if (timer) clearInterval(timer);
     };
   }, [
     accessToken,
@@ -204,6 +208,8 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
     profileQueryKey,
     profileRefreshMs,
     queryClient,
+    realtimeConnected,
+    realtimeRevision,
     selectedLocationId,
   ]);
 

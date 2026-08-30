@@ -19,6 +19,7 @@ import { RenderProfilerOverlay } from '@/debug/render-profiler';
 import { captureError, initSentry } from '@/observability/sentry';
 import { ToastProvider } from '@/ui/toast';
 import { VpnConnectionProvider } from '@/vpn/vpn-connection-context';
+import { CustomerRealtimeProvider } from '@/realtime/customer-realtime-context';
 
 initSentry();
 
@@ -71,10 +72,12 @@ export default function RootLayout() {
       <NotificationNavigationBridge />
       <SafeAreaProvider>
         <SessionProvider>
-          <ToastProvider>
-            <SplashScreenController />
-            <RootNavigator />
-          </ToastProvider>
+          <CustomerRealtimeProvider>
+            <ToastProvider>
+              <SplashScreenController />
+              <RootNavigator />
+            </ToastProvider>
+          </CustomerRealtimeProvider>
         </SessionProvider>
       </SafeAreaProvider>
     </QueryClientProvider>

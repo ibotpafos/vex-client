@@ -64,6 +64,87 @@ import type { ConfigContext } from '@expo/config';
 import { vexWebsiteUrl } from '../src/navigation/website';
 import { authEntryStepAfterBack } from '../src/auth/authEntry';
 import { clientDiagnosticsRequestBody } from '../src/api/clientDiagnosticsRequest';
+import {
+  customerRealtimeInvalidationRoots,
+  customerRealtimeMetadata,
+  customerRealtimeReconnectDelay,
+  parseCustomerSSE,
+} from '../src/realtime/customerRealtimeCore';
+import { CustomerRealtimeTransport } from '../src/realtime/customerRealtimeTransport';
+
+assertDeepEqual(customerRealtimeMetadata('customer.change', JSON.stringify({
+  domain: 'devices', version: 7, updated_at: '2026-08-30T12:00:00Z',
+})), { domains: ['devices'], reason: '' });
+assertEqual(customerRealtimeMetadata('customer.change', JSON.stringify({
+  domain: 'email', version: 7, updated_at: '2026-08-30T12:00:00Z',
+})), null);
+assertDeepEqual(customerRealtimeInvalidationRoots(['entitlement', 'devices', 'releases']), [
+  'android-update', 'billing-summary', 'entitlement', 'ios-update', 'vpn-devices', 'vpn-profile',
+]);
+assertDeepEqual(parseCustomerSSE('event: customer.change\nid: devices:7\ndata: {"domain":"devices","version":7,"updated_at":"2026-08-30T12:00:00Z"}\n\npartial'), {
+  events: [{ type: 'customer.change', id: 'devices:7', data: '{"domain":"devices","version":7,"updated_at":"2026-08-30T12:00:00Z"}' }],
+  remainder: 'partial',
+});
+assertEqual(customerRealtimeReconnectDelay(0), 1_000);
+assertEqual(customerRealtimeReconnectDelay(10), 30_000);
+
+class FakeRealtimeRequest {
+  readyState = 1;
+  responseText = '';
+  status = 200;
+  onabort: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  onload: (() => void) | null = null;
+  onprogress: (() => void) | null = null;
+  onreadystatechange: (() => void) | null = null;
+  aborted = false;
+  headers: Record<string, string> = {};
+  url = '';
+  abort() { this.aborted = true; this.onabort?.(); }
+  open(_method: string, url: string, _async: boolean) { this.url = url; }
+  send() {}
+  setRequestHeader(name: string, value: string) { this.headers[name] = value; }
+}
+
+{
+  const requests: FakeRealtimeRequest[] = [];
+  const events: string[] = [];
+  const statuses: boolean[] = [];
+  const timers: { callback: () => void; milliseconds: number }[] = [];
+  const transport = new CustomerRealtimeTransport({
+    accessToken: 'session-token',
+    baseUrl: 'https://vexguard.app/',
+    createRequest: () => {
+      const request = new FakeRealtimeRequest();
+      requests.push(request);
+      return request;
+    },
+    onEvent: (event) => events.push(event.type),
+    onSessionRevoked: () => events.push('revoked'),
+    onStatus: (connected) => statuses.push(connected),
+    schedule: (callback, milliseconds) => {
+      timers.push({ callback, milliseconds });
+      return timers.length as unknown as ReturnType<typeof setTimeout>;
+    },
+  });
+  transport.start();
+  assertEqual(requests[0]?.url, 'https://vexguard.app/v1/events');
+  assertEqual(requests[0]?.headers.Authorization, 'Bearer session-token');
+  requests[0]!.responseText = 'event: customer.resync\ndata: {"versions":[],"reason":"initial"}\n\n';
+  requests[0]!.onprogress?.();
+  assertDeepEqual(events, ['customer.resync']);
+  assertEqual(statuses.at(-1), true);
+  requests[0]!.onerror?.();
+  assertEqual(timers[0]?.milliseconds, 1_000);
+  timers[0]!.callback();
+  assertEqual(requests.length, 2);
+  requests[1]!.responseText = 'event: customer.session.revoked\ndata: {"reason":"session_invalid"}\n\n';
+  requests[1]!.onprogress?.();
+  assertDeepEqual(events.slice(-2), ['customer.session.revoked', 'revoked']);
+  assertEqual(timers.length, 1);
+  transport.stop();
+  assertEqual(requests[1]!.aborted, true);
+}
 
 assertEqual(vexWebsiteUrl('/dashboard', 'https://vexguard.app/'), 'https://vexguard.app/dashboard');
 assertEqual(vexWebsiteUrl('/support', 'https://staging.vexguard.app'), 'https://staging.vexguard.app/support');

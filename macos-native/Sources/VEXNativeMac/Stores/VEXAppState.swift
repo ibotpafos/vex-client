@@ -65,6 +65,7 @@ final class VEXAppState: ObservableObject {
     private var customerFallbackTask: Task<Void, Never>?
     private var customerRealtimeConnected = false
     private var customerRefreshInFlight = false
+    private var customerRefreshPending = false
     private var automaticUpdatesPrepared = false
     private static let updateRefreshIntervalNanoseconds: UInt64 = 15 * 60 * 1_000_000_000
     private static let customerFallbackIntervalNanoseconds: UInt64 = 60 * 1_000_000_000
@@ -1345,10 +1346,16 @@ final class VEXAppState: ObservableObject {
     }
 
     private func refreshCustomerState() async {
-        guard !customerRefreshInFlight else { return }
+        if customerRefreshInFlight {
+            customerRefreshPending = true
+            return
+        }
         customerRefreshInFlight = true
         defer { customerRefreshInFlight = false }
-        await refreshAll()
+        repeat {
+            customerRefreshPending = false
+            await refreshAll()
+        } while customerRefreshPending
     }
 
     private func redactSensitiveDiagnostics(_ text: String) -> String {

@@ -26,6 +26,7 @@ public sealed partial class AccountPage : Page
     private string? _selectedPlanId;
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _fallbackRefreshTimer;
     private bool _billingRefreshInFlight;
+    private bool _billingRefreshPending;
 
     public AccountPage()
     {
@@ -547,15 +548,21 @@ public sealed partial class AccountPage : Page
     {
         if (_billingRefreshInFlight)
         {
+            _billingRefreshPending = true;
             return;
         }
         _billingRefreshInFlight = true;
         SetBusy(true);
         try
         {
-            _account = await Coordinator.GetAccountSnapshotAsync(
-                CancellationToken.None);
-            AccountNotice.IsOpen = false;
+            do
+            {
+                _billingRefreshPending = false;
+                _account = await Coordinator.GetAccountSnapshotAsync(
+                    CancellationToken.None);
+                AccountNotice.IsOpen = false;
+            }
+            while (_billingRefreshPending);
         }
         catch (Exception error) when (
             error is HttpRequestException or

@@ -32,10 +32,13 @@ export type CustomerRealtimeTransportOptions = {
 };
 
 export class CustomerRealtimeTransport {
+  private static readonly livenessDeadlineMilliseconds = 45_000;
   private readonly options: CustomerRealtimeTransportOptions;
   private active = false;
   private request: XMLHttpRequestLike | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private watchdogTimer: ReturnType<typeof setTimeout> | null = null;
+  private watchdogGeneration = 0;
   private reconnectAttempt = 0;
   private processedLength = 0;
   private buffer = '';
@@ -54,6 +57,7 @@ export class CustomerRealtimeTransport {
   stop(): void {
     this.active = false;
     this.clearReconnect();
+    this.clearWatchdog();
     const request = this.request;
     this.request = null;
     request?.abort();
@@ -81,12 +85,14 @@ export class CustomerRealtimeTransport {
       if (this.request === request) this.request = null;
     };
     request.send();
+    this.armWatchdog(request);
   }
 
   private consume(request: XMLHttpRequestLike): void {
     if (this.request !== request || request.responseText.length < this.processedLength) return;
     this.buffer += request.responseText.slice(this.processedLength);
     this.processedLength = request.responseText.length;
+    this.armWatchdog(request);
     const parsed = parseCustomerSSE(this.buffer);
     this.buffer = parsed.remainder.slice(-64 * 1024);
     for (const event of parsed.events) {
@@ -97,7 +103,7 @@ export class CustomerRealtimeTransport {
         this.options.onEvent(event);
         this.options.onSessionRevoked();
         this.active = false;
-        this.finish(request, true);
+        this.finish(request, false);
         return;
       }
       this.reconnectAttempt = 0;
@@ -109,9 +115,15 @@ export class CustomerRealtimeTransport {
   private finish(request: XMLHttpRequestLike, sessionRejected: boolean): void {
     if (this.request !== request) return;
     this.request = null;
+    this.clearWatchdog();
     request.abort();
     this.options.onStatus(false);
-    if (sessionRejected || !this.active) return;
+    if (sessionRejected) {
+      this.active = false;
+      this.options.onSessionRevoked();
+      return;
+    }
+    if (!this.active) return;
     const delay = customerRealtimeReconnectDelay(this.reconnectAttempt++);
     const schedule = this.options.schedule ?? setTimeout;
     this.reconnectTimer = schedule(() => {
@@ -124,5 +136,23 @@ export class CustomerRealtimeTransport {
     if (this.reconnectTimer === null) return;
     (this.options.cancelSchedule ?? clearTimeout)(this.reconnectTimer);
     this.reconnectTimer = null;
+  }
+
+  private armWatchdog(request: XMLHttpRequestLike): void {
+    this.clearWatchdog();
+    const generation = this.watchdogGeneration;
+    const schedule = this.options.schedule ?? setTimeout;
+    this.watchdogTimer = schedule(() => {
+      if (generation !== this.watchdogGeneration || this.request !== request) return;
+      this.watchdogTimer = null;
+      this.finish(request, false);
+    }, CustomerRealtimeTransport.livenessDeadlineMilliseconds);
+  }
+
+  private clearWatchdog(): void {
+    this.watchdogGeneration += 1;
+    if (this.watchdogTimer === null) return;
+    (this.options.cancelSchedule ?? clearTimeout)(this.watchdogTimer);
+    this.watchdogTimer = null;
   }
 }

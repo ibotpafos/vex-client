@@ -88,6 +88,7 @@ var tests = new (string Name, Action Run)[]
     ("Windows control plane exposes support socket and app configuration", WindowsControlPlaneExposesSupportAndAppConfiguration),
     ("Windows realtime parser preserves complete SSE frames", WindowsRealtimeParserPreservesFrames),
     ("Windows realtime metadata rejects unknown domains", WindowsRealtimeMetadataRejectsUnknownDomains),
+    ("Windows realtime refresh policy ignores heartbeats", WindowsRealtimeRefreshPolicyIgnoresHeartbeats),
     ("Windows realtime reconnect delay is bounded", WindowsRealtimeReconnectDelayIsBounded),
     ("Windows realtime transport authenticates and emits change events", WindowsRealtimeTransportAuthenticatesAndEmits),
     ("Windows profile request preserves routing mode and bypass region", WindowsProfilePreservesRoutingPreferences),
@@ -191,6 +192,26 @@ static void WindowsRealtimeReconnectDelayIsBounded()
 {
     Equal(TimeSpan.FromSeconds(1), CustomerRealtimeClient.ReconnectDelay(0));
     Equal(TimeSpan.FromSeconds(30), CustomerRealtimeClient.ReconnectDelay(20));
+}
+
+static void WindowsRealtimeRefreshPolicyIgnoresHeartbeats()
+{
+    var heartbeat = new CustomerRealtimeChangedEventArgs(
+        new CustomerRealtimeEvent("customer.heartbeat", string.Empty, "{}"),
+        new CustomerRealtimeMetadata([], string.Empty));
+    Equal(false, CustomerRealtimeRefreshPolicy.ShouldRefreshSettings(heartbeat));
+    Equal(false, CustomerRealtimeRefreshPolicy.ShouldRefreshAccount(heartbeat));
+
+    var billing = new CustomerRealtimeChangedEventArgs(
+        new CustomerRealtimeEvent("customer.change", "billing:2", "{}"),
+        new CustomerRealtimeMetadata(["billing"], string.Empty));
+    Equal(false, CustomerRealtimeRefreshPolicy.ShouldRefreshSettings(billing));
+    Equal(true, CustomerRealtimeRefreshPolicy.ShouldRefreshAccount(billing));
+
+    var releases = new CustomerRealtimeChangedEventArgs(
+        new CustomerRealtimeEvent("customer.change", "releases:3", "{}"),
+        new CustomerRealtimeMetadata(["releases"], string.Empty));
+    Equal(true, CustomerRealtimeRefreshPolicy.ShouldRefreshSettings(releases));
 }
 
 static void WindowsRealtimeTransportAuthenticatesAndEmits() =>

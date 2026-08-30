@@ -192,6 +192,27 @@ public sealed class CustomerRealtimeChangedEventArgs(
     public CustomerRealtimeMetadata Metadata { get; } = metadata;
 }
 
+public static class CustomerRealtimeRefreshPolicy
+{
+    public static bool ShouldRefreshAccount(
+        CustomerRealtimeChangedEventArgs args) =>
+        args.Event.Type == "customer.resync" ||
+        args.Metadata.Domains.Any(domain => domain is
+            "account" or
+            "entitlement" or
+            "billing" or
+            "devices" or
+            "family");
+
+    public static bool ShouldRefreshSettings(
+        CustomerRealtimeChangedEventArgs args) =>
+        args.Event.Type == "customer.resync" ||
+        args.Metadata.Domains.Any(domain => domain is
+            "account" or
+            "releases" or
+            "status");
+}
+
 public sealed class CustomerRealtimeClient : IAsyncDisposable
 {
     private readonly HttpClient _httpClient;

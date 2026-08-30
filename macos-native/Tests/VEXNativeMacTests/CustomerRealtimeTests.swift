@@ -2,6 +2,11 @@ import XCTest
 @testable import VEXNativeMac
 
 final class CustomerRealtimeTests: XCTestCase {
+    func testUnauthorizedResponseRequiresSessionRefresh() {
+        XCTAssertEqual(CustomerRealtimeService.responseAction(statusCode: 401), .refreshSession)
+        XCTAssertEqual(CustomerRealtimeService.responseAction(statusCode: 503), .reconnect)
+        XCTAssertEqual(CustomerRealtimeService.responseAction(statusCode: 200), .stream)
+    }
     func testParserPreservesCompleteFramesAndPartialRemainder() throws {
         var parser = CustomerSSEParser()
         let events = parser.append("event: customer.change\nid: devices:7\ndata: {\"domain\":\"devices\",\"version\":7}\n\npart")

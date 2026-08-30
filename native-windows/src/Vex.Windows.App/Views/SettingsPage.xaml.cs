@@ -34,6 +34,8 @@ public sealed partial class SettingsPage : Page
         AppServices.Current.UpdateService.CurrentSnapshot;
     private WindowsHelloStatus? _windowsHelloStatus;
     private bool _renderingPreferences;
+    private bool _realtimeRefreshInFlight;
+    private bool _realtimeRefreshPending;
 
     public SettingsPage()
     {
@@ -62,8 +64,38 @@ public sealed partial class SettingsPage : Page
 
     private void OnCustomerRealtimeChanged(
         object? sender,
-        CustomerRealtimeChangedEventArgs args) =>
-        DispatcherQueue.TryEnqueue(async () => await RefreshAsync());
+        CustomerRealtimeChangedEventArgs args)
+    {
+        if (!CustomerRealtimeRefreshPolicy.ShouldRefreshSettings(args))
+        {
+            return;
+        }
+        DispatcherQueue.TryEnqueue(RefreshFromRealtimeAsync);
+    }
+
+    private async void RefreshFromRealtimeAsync()
+    {
+        if (_realtimeRefreshInFlight)
+        {
+            _realtimeRefreshPending = true;
+            return;
+        }
+
+        _realtimeRefreshInFlight = true;
+        try
+        {
+            do
+            {
+                _realtimeRefreshPending = false;
+                await RefreshAsync();
+            }
+            while (_realtimeRefreshPending);
+        }
+        finally
+        {
+            _realtimeRefreshInFlight = false;
+        }
+    }
 
     private async void OnRefreshClick(
         object sender,

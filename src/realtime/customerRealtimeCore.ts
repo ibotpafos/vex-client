@@ -76,7 +76,7 @@ export function customerRealtimeInvalidationRoots(input: readonly CustomerRealti
 }
 
 export function parseCustomerSSE(input: string): { events: CustomerSSEEvent[]; remainder: string } {
-  const normalized = input.replaceAll('\r\n', '\n');
+  const normalized = input.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
   const boundary = normalized.lastIndexOf('\n\n');
   if (boundary < 0) return { events: [], remainder: normalized };
   const complete = normalized.slice(0, boundary);

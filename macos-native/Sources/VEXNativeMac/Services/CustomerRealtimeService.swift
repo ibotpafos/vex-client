@@ -108,24 +108,34 @@ struct CustomerRealtimeMetadata: Equatable {
 
 @MainActor
 final class CustomerRealtimeService {
+    enum ResponseAction: Equatable {
+        case stream
+        case refreshSession
+        case reconnect
+    }
+
     typealias EventHandler = @MainActor (CustomerRealtimeEvent, CustomerRealtimeMetadata) async -> Void
     typealias StatusHandler = @MainActor (Bool) -> Void
+    typealias SessionRejectedHandler = @MainActor () async -> Void
 
     private let baseURL: URL
     private let session: URLSession
     private let onEvent: EventHandler
     private let onStatus: StatusHandler
+    private let onSessionRejected: SessionRejectedHandler
     private var streamTask: Task<Void, Never>?
 
     init(
         baseURL: URL,
         session: URLSession = .shared,
         onStatus: @escaping StatusHandler = { _ in },
+        onSessionRejected: @escaping SessionRejectedHandler = {},
         onEvent: @escaping EventHandler
     ) {
         self.baseURL = baseURL
         self.session = session
         self.onStatus = onStatus
+        self.onSessionRejected = onSessionRejected
         self.onEvent = onEvent
     }
 
@@ -147,6 +157,14 @@ final class CustomerRealtimeService {
         min(30, pow(2, Double(min(max(0, attempt), 5))))
     }
 
+    static func responseAction(statusCode: Int) -> ResponseAction {
+        switch statusCode {
+        case 200: .stream
+        case 401: .refreshSession
+        default: .reconnect
+        }
+    }
+
     private func run(accessToken: String) async {
         var attempt = 0
         var lastEventID = ""
@@ -161,7 +179,17 @@ final class CustomerRealtimeService {
                 }
 
                 let (bytes, response) = try await session.bytes(for: request)
-                guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                guard let http = response as? HTTPURLResponse else {
+                    throw URLError(.badServerResponse)
+                }
+                switch Self.responseAction(statusCode: http.statusCode) {
+                case .stream:
+                    break
+                case .refreshSession:
+                    onStatus(false)
+                    await onSessionRejected()
+                    return
+                case .reconnect:
                     throw URLError(.badServerResponse)
                 }
                 onStatus(true)

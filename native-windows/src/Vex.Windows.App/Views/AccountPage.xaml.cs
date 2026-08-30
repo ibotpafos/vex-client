@@ -13,6 +13,8 @@ namespace Vex.Windows.App.Views;
 
 public sealed partial class AccountPage : Page
 {
+    private static readonly TimeSpan FallbackRefreshInterval =
+        TimeSpan.FromSeconds(60);
     private readonly AppServices _services =
         AppServices.Current;
     private NativeClientCoordinator Coordinator =>
@@ -22,6 +24,8 @@ public sealed partial class AccountPage : Page
 
     private NativeAccountSnapshot? _account;
     private string? _selectedPlanId;
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _fallbackRefreshTimer;
+    private bool _billingRefreshInFlight;
 
     public AccountPage()
     {
@@ -35,6 +39,7 @@ public sealed partial class AccountPage : Page
     {
         Auth.StateChanged += OnAuthStateChanged;
         _services.CustomerRealtimeChanged += OnCustomerRealtimeChanged;
+        StartFallbackRefreshTimer();
         if (Coordinator.CurrentState is not null)
         {
             await RefreshBillingAsync();
@@ -48,19 +53,15 @@ public sealed partial class AccountPage : Page
     {
         Auth.StateChanged -= OnAuthStateChanged;
         _services.CustomerRealtimeChanged -= OnCustomerRealtimeChanged;
+        _fallbackRefreshTimer?.Stop();
+        _fallbackRefreshTimer = null;
     }
 
     private void OnCustomerRealtimeChanged(
         object? sender,
         CustomerRealtimeChangedEventArgs args)
     {
-        if (args.Event.Type != "customer.resync" &&
-            !args.Metadata.Domains.Any(domain => domain is
-                "account" or
-                "entitlement" or
-                "billing" or
-                "devices" or
-                "family"))
+        if (!CustomerRealtimeRefreshPolicy.ShouldRefreshAccount(args))
         {
             return;
         }
@@ -544,6 +545,11 @@ public sealed partial class AccountPage : Page
 
     private async Task RefreshBillingAsync()
     {
+        if (_billingRefreshInFlight)
+        {
+            return;
+        }
+        _billingRefreshInFlight = true;
         SetBusy(true);
         try
         {
@@ -569,8 +575,30 @@ public sealed partial class AccountPage : Page
         }
         finally
         {
+            _billingRefreshInFlight = false;
             SetBusy(false);
             Render();
+        }
+    }
+
+    private void StartFallbackRefreshTimer()
+    {
+        _fallbackRefreshTimer ??= DispatcherQueue.CreateTimer();
+        _fallbackRefreshTimer.Interval = FallbackRefreshInterval;
+        _fallbackRefreshTimer.IsRepeating = true;
+        _fallbackRefreshTimer.Tick -= OnFallbackRefreshTimerTick;
+        _fallbackRefreshTimer.Tick += OnFallbackRefreshTimerTick;
+        _fallbackRefreshTimer.Start();
+    }
+
+    private async void OnFallbackRefreshTimerTick(
+        Microsoft.UI.Dispatching.DispatcherQueueTimer sender,
+        object args)
+    {
+        if (!_services.Realtime.IsConnected &&
+            Coordinator.CurrentState is not null)
+        {
+            await RefreshBillingAsync();
         }
     }
 

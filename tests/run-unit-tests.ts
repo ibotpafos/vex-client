@@ -85,6 +85,10 @@ assertDeepEqual(parseCustomerSSE('event: customer.change\nid: devices:7\ndata: {
   events: [{ type: 'customer.change', id: 'devices:7', data: '{"domain":"devices","version":7,"updated_at":"2026-08-30T12:00:00Z"}' }],
   remainder: 'partial',
 });
+assertDeepEqual(parseCustomerSSE('event: customer.heartbeat\rdata: {}\r\r'), {
+  events: [{ type: 'customer.heartbeat', id: '', data: '{}' }],
+  remainder: '',
+});
 assertEqual(customerRealtimeReconnectDelay(0), 1_000);
 assertEqual(customerRealtimeReconnectDelay(10), 30_000);
 
@@ -110,6 +114,7 @@ class FakeRealtimeRequest {
   const requests: FakeRealtimeRequest[] = [];
   const events: string[] = [];
   const statuses: boolean[] = [];
+  let revoked = 0;
   const timers: { callback: () => void; milliseconds: number }[] = [];
   const transport = new CustomerRealtimeTransport({
     accessToken: 'session-token',
@@ -120,7 +125,7 @@ class FakeRealtimeRequest {
       return request;
     },
     onEvent: (event) => events.push(event.type),
-    onSessionRevoked: () => events.push('revoked'),
+    onSessionRevoked: () => { events.push('revoked'); revoked += 1; },
     onStatus: (connected) => statuses.push(connected),
     schedule: (callback, milliseconds) => {
       timers.push({ callback, milliseconds });
@@ -130,20 +135,82 @@ class FakeRealtimeRequest {
   transport.start();
   assertEqual(requests[0]?.url, 'https://vexguard.app/v1/events');
   assertEqual(requests[0]?.headers.Authorization, 'Bearer session-token');
+  const firstWatchdog = timers.find((timer) => timer.milliseconds === 45_000);
+  assertEqual(Boolean(firstWatchdog), true);
   requests[0]!.responseText = 'event: customer.resync\ndata: {"versions":[],"reason":"initial"}\n\n';
   requests[0]!.onprogress?.();
   assertDeepEqual(events, ['customer.resync']);
   assertEqual(statuses.at(-1), true);
   requests[0]!.onerror?.();
-  assertEqual(timers[0]?.milliseconds, 1_000);
-  timers[0]!.callback();
+  const firstReconnect = timers.find((timer) => timer.milliseconds === 1_000);
+  assertEqual(Boolean(firstReconnect), true);
+  firstReconnect!.callback();
   assertEqual(requests.length, 2);
   requests[1]!.responseText = 'event: customer.session.revoked\ndata: {"reason":"session_invalid"}\n\n';
   requests[1]!.onprogress?.();
   assertDeepEqual(events.slice(-2), ['customer.session.revoked', 'revoked']);
-  assertEqual(timers.length, 1);
+  assertEqual(timers.filter((timer) => timer.milliseconds === 1_000).length, 1);
   transport.stop();
   assertEqual(requests[1]!.aborted, true);
+  assertEqual(revoked, 1);
+}
+
+{
+  const requests: FakeRealtimeRequest[] = [];
+  const statuses: boolean[] = [];
+  const timers: { callback: () => void; milliseconds: number }[] = [];
+  let revoked = 0;
+  const transport = new CustomerRealtimeTransport({
+    accessToken: 'rejected-token',
+    baseUrl: 'https://vexguard.app',
+    createRequest: () => {
+      const request = new FakeRealtimeRequest();
+      requests.push(request);
+      return request;
+    },
+    onEvent: () => undefined,
+    onSessionRevoked: () => { revoked += 1; },
+    onStatus: (connected) => statuses.push(connected),
+    schedule: (callback, milliseconds) => {
+      timers.push({ callback, milliseconds });
+      return timers.length as unknown as ReturnType<typeof setTimeout>;
+    },
+  });
+  transport.start();
+  requests[0]!.status = 401;
+  requests[0]!.readyState = 2;
+  requests[0]!.onreadystatechange?.();
+  assertEqual(revoked, 1);
+  assertEqual(statuses.at(-1), false);
+  assertEqual(timers.some((timer) => timer.milliseconds === 1_000), false);
+}
+
+{
+  const requests: FakeRealtimeRequest[] = [];
+  const timers: { callback: () => void; milliseconds: number }[] = [];
+  const statuses: boolean[] = [];
+  const transport = new CustomerRealtimeTransport({
+    accessToken: 'session-token',
+    baseUrl: 'https://vexguard.app',
+    createRequest: () => {
+      const request = new FakeRealtimeRequest();
+      requests.push(request);
+      return request;
+    },
+    onEvent: () => undefined,
+    onSessionRevoked: () => undefined,
+    onStatus: (connected) => statuses.push(connected),
+    schedule: (callback, milliseconds) => {
+      timers.push({ callback, milliseconds });
+      return timers.length as unknown as ReturnType<typeof setTimeout>;
+    },
+  });
+  transport.start();
+  const watchdog = timers.find((timer) => timer.milliseconds === 45_000)!;
+  watchdog.callback();
+  assertEqual(requests[0]!.aborted, true);
+  assertEqual(statuses.at(-1), false);
+  assertEqual(timers.some((timer) => timer.milliseconds === 1_000), true);
 }
 
 assertEqual(vexWebsiteUrl('/dashboard', 'https://vexguard.app/'), 'https://vexguard.app/dashboard');

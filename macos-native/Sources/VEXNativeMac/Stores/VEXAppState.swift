@@ -62,8 +62,12 @@ final class VEXAppState: ObservableObject {
     private var vpnOperationGeneration = 0
     private var updateMonitorTask: Task<Void, Never>?
     private var customerRealtimeService: CustomerRealtimeService?
+    private var customerFallbackTask: Task<Void, Never>?
+    private var customerRealtimeConnected = false
+    private var customerRefreshInFlight = false
     private var automaticUpdatesPrepared = false
     private static let updateRefreshIntervalNanoseconds: UInt64 = 15 * 60 * 1_000_000_000
+    private static let customerFallbackIntervalNanoseconds: UInt64 = 60 * 1_000_000_000
 
     init() {
         #if DEBUG
@@ -779,6 +783,9 @@ final class VEXAppState: ObservableObject {
     func prepareForTermination() {
         customerRealtimeService?.stop()
         customerRealtimeService = nil
+        customerFallbackTask?.cancel()
+        customerFallbackTask = nil
+        customerRealtimeConnected = false
         updateMonitorTask?.cancel()
         updateMonitorTask = nil
         profileWarmupTask?.cancel()
@@ -1279,6 +1286,9 @@ final class VEXAppState: ObservableObject {
     ) {
         customerRealtimeService?.stop()
         customerRealtimeService = nil
+        customerFallbackTask?.cancel()
+        customerFallbackTask = nil
+        customerRealtimeConnected = false
         if clearsSessionStore {
             try? sessionStore.clearSession()
         }
@@ -1300,6 +1310,12 @@ final class VEXAppState: ObservableObject {
     private func startCustomerRealtime(accessToken: String) {
         let service = CustomerRealtimeService(
             baseURL: api.baseURL,
+            onStatus: { [weak self] connected in
+                self?.customerRealtimeConnected = connected
+            },
+            onSessionRejected: { [weak self] in
+                _ = await self?.refreshSessionForRetry()
+            },
             onEvent: { [weak self] event, _ in
                 guard let self else { return }
                 if event.type == "customer.session.revoked" {
@@ -1309,12 +1325,30 @@ final class VEXAppState: ObservableObject {
                 guard event.type == "customer.change" || event.type == "customer.resync" else { return }
                 // Refresh account, billing, locations and derived profile inputs.
                 // This never changes the desired tunnel state or restarts the tunnel.
-                await self.refreshAll()
+                await self.refreshCustomerState()
             }
         )
         customerRealtimeService?.stop()
+        customerFallbackTask?.cancel()
+        customerRealtimeConnected = false
         customerRealtimeService = service
         service.start(accessToken: accessToken)
+        customerFallbackTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: Self.customerFallbackIntervalNanoseconds)
+                guard !Task.isCancelled, let self else { return }
+                if !self.customerRealtimeConnected {
+                    await self.refreshCustomerState()
+                }
+            }
+        }
+    }
+
+    private func refreshCustomerState() async {
+        guard !customerRefreshInFlight else { return }
+        customerRefreshInFlight = true
+        defer { customerRefreshInFlight = false }
+        await refreshAll()
     }
 
     private func redactSensitiveDiagnostics(_ text: String) -> String {

@@ -34,6 +34,7 @@ public sealed partial class AccountPage : Page
     private async void OnLoaded(object sender, RoutedEventArgs args)
     {
         Auth.StateChanged += OnAuthStateChanged;
+        _services.CustomerRealtimeChanged += OnCustomerRealtimeChanged;
         if (Coordinator.CurrentState is not null)
         {
             await RefreshBillingAsync();
@@ -46,6 +47,30 @@ public sealed partial class AccountPage : Page
     private void OnUnloaded(object sender, RoutedEventArgs args)
     {
         Auth.StateChanged -= OnAuthStateChanged;
+        _services.CustomerRealtimeChanged -= OnCustomerRealtimeChanged;
+    }
+
+    private void OnCustomerRealtimeChanged(
+        object? sender,
+        CustomerRealtimeChangedEventArgs args)
+    {
+        if (args.Event.Type != "customer.resync" &&
+            !args.Metadata.Domains.Any(domain => domain is
+                "account" or
+                "entitlement" or
+                "billing" or
+                "devices" or
+                "family"))
+        {
+            return;
+        }
+        DispatcherQueue.TryEnqueue(async () =>
+        {
+            if (Coordinator.CurrentState is not null)
+            {
+                await RefreshBillingAsync();
+            }
+        });
     }
 
     private void OnAuthStateChanged(

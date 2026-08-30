@@ -46,6 +46,19 @@ public sealed class AppServices
         };
         StateStore = new ProtectedClientStateStore();
         var apiClient = new VexApiClient(httpClient, StateStore);
+        var realtimeHttpHandler = new SocketsHttpHandler
+        {
+            AllowAutoRedirect = false,
+            AutomaticDecompression = DecompressionMethods.None,
+            ConnectTimeout = TimeSpan.FromSeconds(10),
+        };
+        realtimeHttpHandler.SslOptions.CertificateRevocationCheckMode =
+            X509RevocationMode.Online;
+        Realtime = new CustomerRealtimeClient(new HttpClient(realtimeHttpHandler)
+        {
+            BaseAddress = apiClient.BaseUri,
+            Timeout = Timeout.InfiniteTimeSpan,
+        });
         VpnClient = new VpnServiceClient(
             new ProtectedAuthorizationStore());
         Coordinator = new NativeClientCoordinator(
@@ -59,6 +72,8 @@ public sealed class AppServices
             StateStore,
             new ProtectedPkceStateStore(),
             apiClient.BaseUri);
+        Auth.StateChanged += OnAuthStateChanged;
+        Realtime.Changed += OnRealtimeChanged;
         UpdateService = new NativeUpdateService(
             StateStore.GetOrCreateInstallationId());
         Preferences = new NativeClientPreferencesStore();
@@ -75,6 +90,7 @@ public sealed class AppServices
                     cancellationToken));
         DiagnosticsQueueService.Current.ConfigureUploader(
             UploadQueuedDiagnosticsAsync);
+        _ = SynchronizeRealtimeAsync();
     }
 
     public static AppServices Current => SharedServices.Value;
@@ -88,6 +104,11 @@ public sealed class AppServices
     public ProtectedClientStateStore StateStore { get; }
 
     public NativeAuthService Auth { get; }
+
+    public CustomerRealtimeClient Realtime { get; }
+
+    public event EventHandler<CustomerRealtimeChangedEventArgs>?
+        CustomerRealtimeChanged;
 
     public NativeUpdateService UpdateService { get; }
 
@@ -118,6 +139,80 @@ public sealed class AppServices
         {
             MainWindow = null;
         }
+    }
+
+    private void OnAuthStateChanged(object? sender, EventArgs args) =>
+        _ = SynchronizeRealtimeAsync();
+
+    private void OnRealtimeChanged(
+        object? sender,
+        CustomerRealtimeChangedEventArgs args) =>
+        _ = HandleRealtimeEventAsync(args);
+
+    private async Task HandleRealtimeEventAsync(
+        CustomerRealtimeChangedEventArgs args)
+    {
+        if (args.Event.Type == "customer.session.revoked")
+        {
+            try
+            {
+                var state = await Coordinator.ForceRefreshSessionAsync(
+                    CancellationToken.None);
+                await Realtime.StartAsync(
+                    state.Session.AccessToken,
+                    CancellationToken.None);
+            }
+            catch (Exception error) when (
+                error is HttpRequestException or
+                    VexApiException or
+                    NativeClientFlowException or
+                    InvalidOperationException)
+            {
+                try
+                {
+                    await Coordinator.SignOutAsync(CancellationToken.None);
+                }
+                catch (Exception signOutError) when (
+                    signOutError is IOException or
+                        UnauthorizedAccessException or
+                        InvalidOperationException)
+                {
+                }
+                finally
+                {
+                    await Realtime.StopAsync();
+                    Auth.ClearStatus();
+                }
+            }
+            return;
+        }
+
+        CustomerRealtimeChanged?.Invoke(this, args);
+    }
+
+    private async Task SynchronizeRealtimeAsync()
+    {
+        NativeClientState? state;
+        try
+        {
+            state = Coordinator.CurrentState;
+        }
+        catch (Exception error) when (
+            error is IOException or
+                UnauthorizedAccessException or
+                System.Security.Cryptography.CryptographicException)
+        {
+            state = null;
+        }
+
+        if (state is null)
+        {
+            await Realtime.StopAsync();
+            return;
+        }
+        await Realtime.StartAsync(
+            state.Session.AccessToken,
+            CancellationToken.None);
     }
 
     private Task UploadQueuedDiagnosticsAsync(

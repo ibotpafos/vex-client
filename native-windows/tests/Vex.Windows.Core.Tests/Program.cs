@@ -86,6 +86,10 @@ var tests = new (string Name, Action Run)[]
     ("Windows control plane exposes macOS parity read APIs", WindowsControlPlaneExposesParityReads),
     ("Windows control plane sends VPN telemetry and diagnostics", WindowsControlPlaneSendsTelemetryAndDiagnostics),
     ("Windows control plane exposes support socket and app configuration", WindowsControlPlaneExposesSupportAndAppConfiguration),
+    ("Windows realtime parser preserves complete SSE frames", WindowsRealtimeParserPreservesFrames),
+    ("Windows realtime metadata rejects unknown domains", WindowsRealtimeMetadataRejectsUnknownDomains),
+    ("Windows realtime reconnect delay is bounded", WindowsRealtimeReconnectDelayIsBounded),
+    ("Windows realtime transport authenticates and emits change events", WindowsRealtimeTransportAuthenticatesAndEmits),
     ("Windows profile request preserves routing mode and bypass region", WindowsProfilePreservesRoutingPreferences),
     ("WireGuard identity generation returns distinct Curve25519 keys", WireGuardIdentityGeneratesKeys),
     ("Windows updater accepts a signed manifest for the active architecture", WindowsUpdaterAcceptsSignedManifest),
@@ -153,6 +157,70 @@ static void NavigationMatchesMac()
     Equal("Поддержка", sections[2].Title);
     Equal(AppSection.Settings, sections[3].Id);
     Equal("Настройки", sections[3].Title);
+}
+
+static void WindowsRealtimeParserPreservesFrames()
+{
+    var parser = new CustomerSseParser();
+    var events = parser.Append(
+        "event: customer.change\nid: devices:7\n" +
+        "data: {\"domain\":\"devices\",\"version\":7}\n\npart");
+
+    Equal(1, events.Count);
+    Equal("customer.change", events[0].Type);
+    Equal("devices:7", events[0].Id);
+    Equal("{\"domain\":\"devices\",\"version\":7}", events[0].Data);
+    Equal("part", parser.Remainder);
+}
+
+static void WindowsRealtimeMetadataRejectsUnknownDomains()
+{
+    Equal<CustomerRealtimeMetadata?>(
+        null,
+        CustomerRealtimeMetadata.Parse(
+            "customer.change",
+            "{\"domain\":\"email\",\"version\":1}"));
+    var metadata = CustomerRealtimeMetadata.Parse(
+        "customer.resync",
+        "{\"versions\":[{\"domain\":\"billing\",\"version\":2}],\"reason\":\"initial\"}");
+    Equal("initial", metadata?.Reason);
+    Equal("billing", metadata?.Domains.Single());
+}
+
+static void WindowsRealtimeReconnectDelayIsBounded()
+{
+    Equal(TimeSpan.FromSeconds(1), CustomerRealtimeClient.ReconnectDelay(0));
+    Equal(TimeSpan.FromSeconds(30), CustomerRealtimeClient.ReconnectDelay(20));
+}
+
+static void WindowsRealtimeTransportAuthenticatesAndEmits() =>
+    WindowsRealtimeTransportAuthenticatesAndEmitsAsync()
+        .GetAwaiter()
+        .GetResult();
+
+static async Task WindowsRealtimeTransportAuthenticatesAndEmitsAsync()
+{
+    var handler = new RealtimeHttpHandler();
+    using var httpClient = new HttpClient(handler)
+    {
+        BaseAddress = new Uri("https://api.example.test"),
+        Timeout = Timeout.InfiniteTimeSpan,
+    };
+    await using var client = new CustomerRealtimeClient(httpClient);
+    var received = new TaskCompletionSource<CustomerRealtimeChangedEventArgs>(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+    client.Changed += (_, args) => received.TrySetResult(args);
+
+    await client.StartAsync("fixture-token", CancellationToken.None);
+    var changed = await received.Task.WaitAsync(TimeSpan.FromSeconds(2));
+    await client.StopAsync();
+
+    Equal("Bearer", handler.AuthorizationScheme);
+    Equal("fixture-token", handler.AuthorizationParameter);
+    Equal("text/event-stream", handler.AcceptMediaType);
+    Equal("/v1/events", handler.RequestPath);
+    Equal("customer.change", changed.Event.Type);
+    Equal("devices", changed.Metadata.Domains.Single());
 }
 
 static void AutomaticLocationReusesHealthyCachedServer()
@@ -2608,7 +2676,8 @@ static void WindowsUpdaterAcceptsSignedManifest()
                     WindowsUpdateConstants.SupportedAlgorithm,
                     Convert.ToBase64String(
                         signingKey.ExportSubjectPublicKeyInfo())),
-            ]));
+            ]),
+        UtcNow: UpdateFixtureNow);
 
     var assessment = WindowsUpdateManifestVerifier.Verify(
         bytes,
@@ -2672,7 +2741,8 @@ static void WindowsUpdaterHonorsStagedRollout()
                     Convert.ToBase64String(
                         signingKey.ExportSubjectPublicKeyInfo())),
             ]),
-        RolloutBucket: 42);
+        RolloutBucket: 42,
+        UtcNow: UpdateFixtureNow);
 
     var assessment = WindowsUpdateManifestVerifier.Verify(
         bytes,
@@ -2832,7 +2902,8 @@ static void WindowsUpdaterStagesAndReusesPackage()
             "stable",
             "x64",
             "1.0.0.0",
-            keyring),
+            keyring,
+            UtcNow: UpdateFixtureNow),
         new Uri("https://downloads.vexguard.app/windows/native/stable/x64/update.json", UriKind.Absolute),
         new Uri("https://downloads.vexguard.app/windows/native/stable/x64/update.json.sig", UriKind.Absolute));
 
@@ -2961,7 +3032,8 @@ static void WindowsUpdaterRedownloadsCachedPackageWhenHashMismatched()
             "stable",
             "x64",
             "1.0.0.0",
-            keyring),
+            keyring,
+            UtcNow: UpdateFixtureNow),
         new Uri("https://downloads.vexguard.app/windows/native/stable/x64/update.json", UriKind.Absolute),
         new Uri("https://downloads.vexguard.app/windows/native/stable/x64/update.json.sig", UriKind.Absolute));
 
@@ -3195,7 +3267,8 @@ static void WindowsUpdaterRejectsExecutablePackageUri()
                             WindowsUpdateConstants.SupportedAlgorithm,
                             Convert.ToBase64String(
                                 signingKey.ExportSubjectPublicKeyInfo())),
-                    ])));
+                    ]),
+                UtcNow: UpdateFixtureNow));
     }
     catch (InvalidOperationException error)
     {
@@ -3206,6 +3279,11 @@ static void WindowsUpdaterRejectsExecutablePackageUri()
         "Windows update package_uri must reference an .msix package.",
         message);
 }
+
+static DateTimeOffset UpdateFixtureNow() =>
+    DateTimeOffset.Parse(
+        "2026-07-28T12:30:00Z",
+        System.Globalization.CultureInfo.InvariantCulture);
 
 static void WindowsUpdaterRejectsStaleSignedManifest()
 {
@@ -3330,6 +3408,39 @@ sealed class FakeHttpMessageHandler(
     {
         Requests.Add(request.RequestUri?.AbsoluteUri ?? string.Empty);
         return Task.FromResult(responder(request));
+    }
+}
+
+sealed class RealtimeHttpHandler : HttpMessageHandler
+{
+    public string? AuthorizationScheme { get; private set; }
+
+    public string? AuthorizationParameter { get; private set; }
+
+    public string? AcceptMediaType { get; private set; }
+
+    public string? RequestPath { get; private set; }
+
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        AuthorizationScheme = request.Headers.Authorization?.Scheme;
+        AuthorizationParameter = request.Headers.Authorization?.Parameter;
+        AcceptMediaType = request.Headers.Accept.SingleOrDefault()?.MediaType;
+        RequestPath = request.RequestUri?.AbsolutePath;
+        var payload =
+            "event: customer.change\n" +
+            "id: devices:9\n" +
+            "data: {\"domain\":\"devices\",\"version\":9}\n\n";
+        return Task.FromResult(
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    payload,
+                    Encoding.UTF8,
+                    "text/event-stream"),
+            });
     }
 }
 

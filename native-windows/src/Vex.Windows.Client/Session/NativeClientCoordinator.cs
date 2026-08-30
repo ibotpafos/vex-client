@@ -125,6 +125,26 @@ public sealed class NativeClientCoordinator
     public ClientStateAccessKind CurrentStateAccess =>
         _stateStore.GetAccessState();
 
+    public async Task<NativeClientState> ForceRefreshSessionAsync(
+        CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var state = RequireCurrentState();
+            var session = await _api.RefreshSessionAsync(
+                state.Session.AccessToken,
+                cancellationToken).ConfigureAwait(false);
+            var refreshed = state with { Session = session };
+            _stateStore.Save(refreshed);
+            return refreshed;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public async Task<IReadOnlyList<VpnLocation>> GetLocationsAsync(
         CancellationToken cancellationToken)
     {

@@ -44,6 +44,7 @@ public sealed partial class HomePage : Page
     {
         _services.VpnUiState.Changed += OnVpnUiStateChanged;
         _services.Preferences.Changed += OnPreferencesChanged;
+        _services.CustomerRealtimeChanged += OnCustomerRealtimeChanged;
         if (IsPreviewMode)
         {
             LoadPreviewLocations();
@@ -59,9 +60,36 @@ public sealed partial class HomePage : Page
     {
         _services.VpnUiState.Changed -= OnVpnUiStateChanged;
         _services.Preferences.Changed -= OnPreferencesChanged;
+        _services.CustomerRealtimeChanged -= OnCustomerRealtimeChanged;
         _refreshTimer?.Stop();
         _refreshTimer = null;
     }
+
+    private void OnCustomerRealtimeChanged(
+        object? sender,
+        CustomerRealtimeChangedEventArgs args)
+    {
+        var domains = args.Metadata.Domains;
+        if (args.Event.Type != "customer.resync" &&
+            !domains.Any(domain => domain is
+                "devices" or
+                "provisioning" or
+                "connection" or
+                "status"))
+        {
+            return;
+        }
+        DispatcherQueue.TryEnqueue(async () =>
+        {
+            if (CoordinatorStateAvailable())
+            {
+                await LoadLocationsAsync();
+            }
+        });
+    }
+
+    private bool CoordinatorStateAvailable() =>
+        _services.Coordinator.CurrentState is not null;
 
     private async void OnPowerButtonClick(
         object sender,

@@ -42,6 +42,7 @@ public sealed partial class SupportPage : Page
         _pageLifetime = new CancellationTokenSource();
         var generation = checked(++_activationGeneration);
         _services.Auth.StateChanged += OnAuthStateChanged;
+        _services.CustomerRealtimeChanged += OnCustomerRealtimeChanged;
         _socket.StateChanged += OnSocketStateChanged;
         _socket.SnapshotReceived += OnSocketSnapshotReceived;
         _socket.TicketReceived += OnSocketTicketReceived;
@@ -53,6 +54,7 @@ public sealed partial class SupportPage : Page
     private async void OnUnloaded(object sender, RoutedEventArgs args)
     {
         _services.Auth.StateChanged -= OnAuthStateChanged;
+        _services.CustomerRealtimeChanged -= OnCustomerRealtimeChanged;
         _socket.StateChanged -= OnSocketStateChanged;
         _socket.SnapshotReceived -= OnSocketSnapshotReceived;
         _socket.TicketReceived -= OnSocketTicketReceived;
@@ -66,6 +68,25 @@ public sealed partial class SupportPage : Page
         _pageLifetime?.Dispose();
         _pageLifetime = null;
         await _socket.StopAsync();
+    }
+
+    private void OnCustomerRealtimeChanged(
+        object? sender,
+        CustomerRealtimeChangedEventArgs args)
+    {
+        if (args.Event.Type != "customer.resync" &&
+            !args.Metadata.Domains.Contains("support"))
+        {
+            return;
+        }
+        DispatcherQueue.TryEnqueue(async () =>
+        {
+            var token = _pageLifetime?.Token;
+            if (token is { IsCancellationRequested: false })
+            {
+                await RefreshAsync(token.Value);
+            }
+        });
     }
 
     private void OnAuthStateChanged(object? sender, EventArgs args) =>

@@ -5,6 +5,7 @@ using System.Text.Json;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.System;
 using Vex.Windows.App.Services;
+using Vex.Windows.Client.Api;
 using Vex.Windows.Client.Session;
 using Vex.Windows.Core.Presentation;
 using Vex.Windows.Core.Vpn;
@@ -47,6 +48,7 @@ public sealed partial class SettingsPage : Page
         _services.Preferences.Changed += OnPreferencesChanged;
         _services.VpnUiState.Changed += OnVpnUiStateChanged;
         _services.UpdateService.Changed += OnUpdateSnapshotChanged;
+        _services.CustomerRealtimeChanged += OnCustomerRealtimeChanged;
         await RefreshAsync();
     }
 
@@ -55,7 +57,13 @@ public sealed partial class SettingsPage : Page
         _services.Preferences.Changed -= OnPreferencesChanged;
         _services.VpnUiState.Changed -= OnVpnUiStateChanged;
         _services.UpdateService.Changed -= OnUpdateSnapshotChanged;
+        _services.CustomerRealtimeChanged -= OnCustomerRealtimeChanged;
     }
+
+    private void OnCustomerRealtimeChanged(
+        object? sender,
+        CustomerRealtimeChangedEventArgs args) =>
+        DispatcherQueue.TryEnqueue(async () => await RefreshAsync());
 
     private async void OnRefreshClick(
         object sender,

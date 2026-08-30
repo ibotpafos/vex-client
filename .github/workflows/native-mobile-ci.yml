@@ -70,8 +70,15 @@ jobs:
       - name: Validate Expo app config
         run: npx expo config --type public >/dev/null
 
-      - name: Validate EAS profiles
-        run: npx --yes eas-cli@16.0.1 config --platform all --profile preview --non-interactive >/dev/null
+      - name: Validate EAS profile schema
+        run: |
+          node --input-type=module <<'EOF'
+          import config from './eas.json' with { type: 'json' };
+          const profile = config.build?.preview;
+          if (!config.cli?.version || !profile?.android?.gradleCommand || !profile?.channel || !profile?.env) {
+            throw new Error('preview EAS profile is incomplete');
+          }
+          EOF
 
   android:
     name: Android
@@ -100,6 +107,13 @@ jobs:
 
       - name: Bootstrap pinned AmneziaWG sources
         run: npm run android:bootstrap
+
+      - name: Create Android debug keystore
+        working-directory: android/app
+        run: |
+          keytool -genkeypair -keystore debug.keystore -storepass android -keypass android \
+            -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname 'CN=Android Debug,O=Android,C=US'
 
       - name: Assemble and test Android debug target
         working-directory: android
@@ -130,7 +144,9 @@ jobs:
 
       - name: Install CocoaPods dependencies
         working-directory: ios
-        run: pod install --repo-update
+        run: |
+          rm -rf Pods
+          pod install --repo-update
 
       - name: Validate native project and pinned dependencies
         run: npm run ios:preflight

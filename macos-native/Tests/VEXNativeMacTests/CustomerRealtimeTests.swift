@@ -2,6 +2,7 @@ import XCTest
 @testable import VEXNativeMac
 
 final class CustomerRealtimeTests: XCTestCase {
+    @MainActor
     func testUnauthorizedResponseRequiresSessionRefresh() {
         XCTAssertEqual(CustomerRealtimeService.responseAction(statusCode: 401), .refreshSession)
         XCTAssertEqual(CustomerRealtimeService.responseAction(statusCode: 503), .reconnect)
@@ -35,6 +36,7 @@ final class CustomerRealtimeTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testReconnectDelayIsBounded() {
         XCTAssertEqual(CustomerRealtimeService.reconnectDelay(attempt: 0), 1)
         XCTAssertEqual(CustomerRealtimeService.reconnectDelay(attempt: 20), 30)

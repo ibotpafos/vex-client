@@ -43,6 +43,7 @@ import {
 import { uploadClientDiagnostics } from '@/diagnostics/clientDiagnostics';
 import type { VpnLocation } from '@/api/vexApi';
 import type { VpnProfile } from '@/vpn/profile';
+import { connectFreshSameLocationProfile } from '@/vpn/sameLocationProfileRecovery';
 
 type UseVpnConnectionFlowInput = {
   antiLeakEnabled: boolean;
@@ -194,6 +195,22 @@ export function useVpnConnectionFlow({
         throw error;
       }
       lastConnectError = error;
+    }
+
+    if (!connected) {
+      try {
+        connected = await connectFreshSameLocationProfile({
+          connectProfile: connectProfileWithEndpointFallback,
+          locationId: profileLocationId,
+          resolveProfile: resolveConnectableVpnProfile,
+        });
+        connectedLocationId = profileLocationId;
+      } catch (error) {
+        lastConnectError = error;
+        if (!isVpnTransportFallbackError(error)) {
+          throw error;
+        }
+      }
     }
 
     for (const fallbackLocation of availableLocations) {

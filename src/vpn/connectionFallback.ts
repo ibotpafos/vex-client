@@ -1,8 +1,23 @@
 import type { VpnProfile } from './profile';
 
-const awg3EndpointFallbackPorts = [51821, 443];
+const awg3EndpointFallbackPorts = [51821, 443] as const;
+const awg3HeaderProtectionPattern = /^HeaderProtectionKey\s*=\s*\S+/m;
+
+export class AWG3RecoveryPolicyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AWG3RecoveryPolicyError';
+  }
+}
+
+export function isAWG3Profile(profile: VpnProfile): boolean {
+  return awg3HeaderProtectionPattern.test(profile.config);
+}
 
 export function isVpnTransportFallbackError(error: unknown): boolean {
+  if (error instanceof AWG3RecoveryPolicyError) {
+    return true;
+  }
   const message = errorText(error).toLowerCase();
   return message.includes('handshake') ||
     message.includes('vpn connection failed') ||
@@ -13,28 +28,31 @@ export function isVpnTransportFallbackError(error: unknown): boolean {
 }
 
 export function connectionAttemptsForProfile(profile: VpnProfile): VpnProfile[] {
-  const attempts = profile.lastSuccessfulEndpoint
-    ? [profileWithEndpoint(profile, profile.lastSuccessfulEndpoint) ?? profile]
-    : [profile];
-  if (!attempts.some((attempt) => profileEndpoint(attempt) === profileEndpoint(profile))) {
-    attempts.push(profile);
+  if (!isAWG3Profile(profile)) {
+    throw new AWG3RecoveryPolicyError('VPN recovery requires an AWG3 profile with HeaderProtectionKey.');
   }
-  // An AWG3 profile must never fall back to the shared AWG2 listener. Doing so
-  // can make the tunnel look healthy while silently leaving the AWG3 cohort.
-  for (const port of endpointFallbackPortsFor(profile)) {
+  if (!profileEndpoint(profile)) {
+    throw new AWG3RecoveryPolicyError('VPN recovery requires a signed AWG3 endpoint.');
+  }
+  const attempts: VpnProfile[] = [];
+  if (profile.lastSuccessfulEndpoint) {
+    const cached = profileWithEndpoint(profile, profile.lastSuccessfulEndpoint);
+    if (cached) attempts.push(cached);
+  }
+  attempts.push(profile);
+  for (const port of awg3EndpointFallbackPorts) {
     const fallback = profileWithEndpointPort(profile, port);
-    if (fallback && !attempts.some((attempt) => profileEndpoint(attempt) === profileEndpoint(fallback))) {
-      attempts.push(fallback);
-    }
+    if (fallback) attempts.push(fallback);
   }
-  return attempts;
-}
 
-function endpointFallbackPortsFor(profile: VpnProfile): readonly number[] {
-  // Every profile is AmneziaWG v3 since the AWG2 retirement: recovery only
-  // ever tries the isolated AWG3 listeners, never the retired 51820 port.
-  void profile;
-  return awg3EndpointFallbackPorts;
+  const seen = new Set<string>();
+  return attempts.filter((attempt) => {
+    const endpoint = profileEndpoint(attempt);
+    if (!endpoint) return false;
+    if (seen.has(endpoint)) return false;
+    seen.add(endpoint);
+    return true;
+  });
 }
 
 function profileWithEndpoint(profile: VpnProfile, endpoint: string): VpnProfile | null {

@@ -829,7 +829,7 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertEqual(serverAssessment.samples["health_reasons"], "device_usage_degraded,stale_local_handshake")
     }
 
-    func testAutopilotBuildsEndpointFallbackAttempts() throws {
+    func testAutopilotBuildsAWG3EndpointFallbackAttempts() throws {
         let device = try JSONDecoder().decode(VpnDevice.self, from: """
         {"id":"dev_1","name":"Mac","status":"active","protocol":"amneziawg","external_device_id":"macos-test","endpoint":"de1.vexguard.app:8443"}
         """.data(using: .utf8)!)
@@ -858,9 +858,9 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertEqual(attempts.map(\.endpoint), [
             "de1.vexguard.app:8443",
             "de1.vexguard.app:443",
-            "de1.vexguard.app:51820",
         ])
         XCTAssertTrue(attempts[1].config.contains("Endpoint = de1.vexguard.app:443"))
+        XCTAssertFalse(attempts.contains { $0.endpoint?.hasSuffix(":51820") == true })
     }
 
     func testNativeHelperStartDoesNotRequireAdminPassword() throws {

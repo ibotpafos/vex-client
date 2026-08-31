@@ -48,6 +48,26 @@ struct CustomerSSEParser {
     }
 }
 
+struct CustomerSSEWireDecoder {
+    private var parser = CustomerSSEParser()
+    private var lineBytes = Data()
+    private var suppressLF = false
+
+    mutating func append(_ byte: UInt8) -> [CustomerRealtimeEvent] {
+        if suppressLF {
+            suppressLF = false
+            if byte == 0x0A { return [] }
+        }
+
+        lineBytes.append(byte)
+        guard byte == 0x0A || byte == 0x0D else { return [] }
+        suppressLF = byte == 0x0D
+        let chunk = String(decoding: lineBytes, as: UTF8.self)
+        lineBytes.removeAll(keepingCapacity: true)
+        return parser.append(chunk)
+    }
+}
+
 struct CustomerRealtimeMetadata: Equatable {
     static let supportedDomains: Set<String> = [
         "account",
@@ -194,10 +214,10 @@ final class CustomerRealtimeService {
                 }
                 onStatus(true)
                 attempt = 0
-                var parser = CustomerSSEParser()
-                for try await line in bytes.lines {
+                var decoder = CustomerSSEWireDecoder()
+                for try await byte in bytes {
                     guard !Task.isCancelled else { return }
-                    for event in parser.append(line + "\n") {
+                    for event in decoder.append(byte) {
                         if !event.id.isEmpty { lastEventID = event.id }
                         guard let metadata = CustomerRealtimeMetadata.parse(type: event.type, data: event.data) else {
                             continue
@@ -205,7 +225,6 @@ final class CustomerRealtimeService {
                         await onEvent(event, metadata)
                     }
                 }
-                _ = parser.append("\n")
                 onStatus(false)
             } catch is CancellationError {
                 return

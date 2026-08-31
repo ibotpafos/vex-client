@@ -14,6 +14,19 @@ final class CustomerRealtimeTests: XCTestCase {
         XCTAssertEqual(parser.remainder, "part")
     }
 
+    func testWireDecoderDispatchesFrameWithoutWaitingForAnotherByte() throws {
+        var decoder = CustomerSSEWireDecoder()
+        let wire = Data("event: customer.resync\ndata: {\"versions\":[],\"reason\":\"initial\"}\n\n".utf8)
+        let events = wire.flatMap { decoder.append($0) }
+        XCTAssertEqual(events, [
+            CustomerRealtimeEvent(
+                type: "customer.resync",
+                id: "",
+                data: "{\"versions\":[],\"reason\":\"initial\"}"
+            ),
+        ])
+    }
+
     func testMetadataRejectsUnknownDomainsAndParsesResync() throws {
         XCTAssertNil(CustomerRealtimeMetadata.parse(type: "customer.change", data: #"{"domain":"email","version":1}"#))
         XCTAssertEqual(

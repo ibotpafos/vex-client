@@ -13,6 +13,8 @@ tunnel state.
 - A stream that delivers no bytes within the liveness deadline becomes
   disconnected and reconnects with bounded backoff.
 - All SSE line endings (`LF`, `CRLF`, and `CR`) are accepted.
+- A complete SSE frame is dispatched as soon as its terminating blank line is
+  received; dispatch must not wait for a later heartbeat or event byte.
 - Heartbeats only prove liveness; they never trigger expensive state refreshes.
 - macOS customer state and the Windows account page use coarse polling only
   while realtime is disconnected.
@@ -20,7 +22,8 @@ tunnel state.
 
 ## Scenarios
 
-1. A valid event marks realtime healthy and refreshes only its customer domain.
+1. A valid event marks realtime healthy and refreshes only its customer domain,
+   including when the server becomes idle immediately after the frame separator.
 2. HTTP 401 runs the same auth lifecycle as a session-revoked event.
 3. A half-open stream misses its deadline, disables realtime health, and
    reconnects while fallback polling resumes.
@@ -35,8 +38,8 @@ tunnel state.
 
 ## Acceptance criteria
 
-- Unit tests cover 401, CR separators, watchdog expiry, event filtering, and
-  reconnect delay.
+- Unit tests cover 401, CR separators, immediate frame dispatch at an idle
+  stream boundary, watchdog expiry, event filtering, and reconnect delay.
 - Expo checks, macOS target build/parser harness, and Windows core tests pass.
 - Windows WinUI and macOS XCTest remain explicit platform-CI gates when their
   toolchains are unavailable on the current host.

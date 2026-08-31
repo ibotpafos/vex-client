@@ -21,7 +21,8 @@ production-download deployment.
 ## Contracts and invariants
 
 - Production release mode always requires Developer ID and notarization.
-- Missing or empty signing inputs stop before the build.
+- Missing or empty signing inputs, including the production-repository token,
+  stop before any secondary repository checkout or release build.
 - Private keys, certificate material, passwords, and profiles never appear in
   workflow output or uploaded artifacts.
 - The temporary keychain and materialized secrets are deleted in an `always()`

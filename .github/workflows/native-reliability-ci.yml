@@ -73,7 +73,7 @@ jobs:
         run: npm run android:bootstrap
       - name: Test bounded Android endpoint recovery
         working-directory: android
-        run: ./gradlew testDebugUnitTest --tests com.vexguard.app.vpn.VpnNetworkRecoveryTest --stacktrace --no-daemon
+        run: ./gradlew :app:testDebugUnitTest --tests com.vexguard.app.vpn.VpnNetworkRecoveryTest --stacktrace --no-daemon
 
   macos:
     name: macOS autopilot recovery

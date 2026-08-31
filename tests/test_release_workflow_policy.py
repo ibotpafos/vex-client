@@ -20,6 +20,7 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
             "actions/setup-java@v4",
             "java-version: \"17\"",
             "npm run android:bootstrap",
+            ":app:testDebugUnitTest",
             "VpnNetworkRecoveryTest",
             "swift build --package-path macos-native --target VEXNativeMac",
             "NativeParityModelTests",

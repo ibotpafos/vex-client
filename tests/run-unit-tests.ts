@@ -29,9 +29,16 @@ import {
   withLastSuccessfulEndpoint,
   type HotVpnProfileRecord,
 } from '../src/vpn/hotProfileCacheCore';
-import { connectionAttemptsForProfile, isVpnTransportFallbackError, profileEndpoint } from '../src/vpn/connectionFallback';
+import { AWG3RecoveryPolicyError, connectionAttemptsForProfile, isAWG3Profile, isVpnTransportFallbackError, profileEndpoint } from '../src/vpn/connectionFallback';
 import { connectableLocalProfile, explicitConnectProfileResolutionOptions, shouldUseLocalProfileBeforeOnline, vpnConnectTelemetry, vpnConnectTimingSamples, vpnUnexpectedDisconnectTelemetry } from '../src/vpn/connectFlow';
 import { recoverVpnConnection } from '../src/vpn/connectionRecovery';
+import { connectFreshSameLocationProfile } from '../src/vpn/sameLocationProfileRecovery';
+import {
+  initialRecoveryBackoffState,
+  recoveryAttemptAllowed,
+  recordRecoveryFailure,
+  resetRecoveryBackoff,
+} from '../src/vpn/recoveryBackoff';
 import { disconnectWithRecoveryTimeout } from '../src/vpn/disconnectRecovery';
 import { waitForVerifiedVpnConnection } from '../src/vpn/connectVerification';
 import { cleanupFailedVpnConnection } from '../src/vpn/failedConnectionCleanup';
@@ -361,8 +368,8 @@ assertEqual(
 }
 
 {
-  assertEqual(fallbackLocationEndpoint('de'), 'de-1.vexguard.app:51820');
-  assertEqual(fallbackLocationEndpoint(' FI '), 'fi-1.vexguard.app:51820');
+  assertEqual(fallbackLocationEndpoint('de'), 'de-1.vexguard.app:51821');
+  assertEqual(fallbackLocationEndpoint(' FI '), 'fi-1.vexguard.app:51821');
   assertEqual(fallbackLocationEndpoint('../bad'), '');
 }
 
@@ -1110,36 +1117,29 @@ function runCreateDeviceRequestTests(): void {
 }
 
 {
-  const attempts = connectionAttemptsForProfile(profileWithEndpoint('de.example.com:51820'));
+  const baseProfile = profileWithEndpoint('de.example.com:51820');
+  const awg3 = { ...baseProfile, config: `${baseProfile.config}\nHeaderProtectionKey = header-key` };
+  const attempts = connectionAttemptsForProfile(awg3);
 
-  // AWG2 retirement: recovery never falls through to the retired 51820
-  // listener; only the isolated AWG3 listeners are attempted.
-  assertEqual(attempts.length, 3);
-  assertDeepEqual(attempts.map(profileEndpoint), [
-    'de.example.com:51820',
-    'de.example.com:51821',
-    'de.example.com:443',
-  ]);
+  assertDeepEqual(attempts.map(profileEndpoint), ['de.example.com:51820', 'de.example.com:51821', 'de.example.com:443']);
+  assertEqual(isAWG3Profile(awg3), true);
 }
 
 {
+  const baseProfile = profileWithEndpoint('de.example.com:443');
   const attempts = connectionAttemptsForProfile({
-    ...profileWithEndpoint('de.example.com:51820'),
-    lastSuccessfulEndpoint: 'de.example.com:443',
+    ...baseProfile,
+    config: `${baseProfile.config}\nHeaderProtectionKey = header-key`,
+    lastSuccessfulEndpoint: 'de.example.com:51821',
   });
 
-  assertDeepEqual(attempts.map(profileEndpoint), [
-    'de.example.com:443',
-    'de.example.com:51820',
-    'de.example.com:51821',
-  ]);
+  assertDeepEqual(attempts.map(profileEndpoint), ['de.example.com:51821', 'de.example.com:443']);
 }
 
 {
-  const attempts = connectionAttemptsForProfile(profileWithEndpoint('de.example.com:443'));
-
-  assertEqual(attempts.length, 2);
-  assertDeepEqual(attempts.map(profileEndpoint), ['de.example.com:443', 'de.example.com:51821']);
+  const baseProfile = profileWithEndpoint('de.example.com:443');
+  const awg3 = { ...baseProfile, config: `${baseProfile.config}\nHeaderProtectionKey = header-key` };
+  assertEqual(connectionAttemptsForProfile(awg3).some((attempt) => profileEndpoint(attempt) === 'de.example.com:51820'), false);
 }
 
 {
@@ -1153,9 +1153,13 @@ function runCreateDeviceRequestTests(): void {
 }
 
 {
-  const attempts = connectionAttemptsForProfile(profileWithEndpoint('[2001:db8::1]:51820'));
+  const baseProfile = profileWithEndpoint('[2001:db8::1]:51821');
+  const attempts = connectionAttemptsForProfile({
+    ...baseProfile,
+    config: `${baseProfile.config}\nHeaderProtectionKey = header-key`,
+  });
 
-  assertEqual(profileEndpoint(attempts[1]), '[2001:db8::1]:51821');
+  assertEqual(profileEndpoint(attempts[1]), '[2001:db8::1]:443');
 }
 
 {
@@ -1165,10 +1169,20 @@ function runCreateDeviceRequestTests(): void {
     source: 'api',
   };
 
-  assertDeepEqual(connectionAttemptsForProfile(profile), [profile]);
+  assertEqual(isAWG3Profile(profile), false);
+  assertThrows(
+    () => connectionAttemptsForProfile(profile),
+    'VPN recovery requires an AWG3 profile with HeaderProtectionKey.',
+  );
+  const awg3WithoutEndpoint = { ...profile, config: `${profile.config}\nHeaderProtectionKey = header-key` };
+  assertThrows(
+    () => connectionAttemptsForProfile(awg3WithoutEndpoint),
+    'VPN recovery requires a signed AWG3 endpoint.',
+  );
 }
 
 assertEqual(isVpnTransportFallbackError(new Error('VPN handshake did not complete')), true);
+assertEqual(isVpnTransportFallbackError(new AWG3RecoveryPolicyError('refresh AWG3 profile')), true);
 assertEqual(isVpnTransportFallbackError(new Error('Подписка не активна.')), false);
 
 {
@@ -1271,7 +1285,55 @@ async function runAsyncTests(): Promise<void> {
   runErrorMessageTests();
   runServerPickerInteractionTests();
   runTrafficSummaryTests();
+  runRecoveryBackoffTests();
+  await testFreshSameLocationProfileConnectsSecondNode();
   await runServerSwitchTests();
+}
+
+async function testFreshSameLocationProfileConnectsSecondNode(): Promise<void> {
+  const calls: string[] = [];
+  const freshProfile = profileForLocation('de', 'de-second.example.com:443');
+  const connected = await connectFreshSameLocationProfile({
+    connectProfile: async (profile) => {
+      calls.push(`connect:${profileEndpoint(profile)}`);
+      return { profile, status: connectedStatus };
+    },
+    locationId: 'de',
+    resolveProfile: async (locationId, options) => {
+      calls.push(`resolve:${locationId}:${options.forceRefresh ? 'fresh' : 'cached'}`);
+      return freshProfile;
+    },
+  });
+
+  assertEqual(profileEndpoint(connected.profile), 'de-second.example.com:443');
+  assertDeepEqual(calls, ['resolve:de:fresh', 'connect:de-second.example.com:443']);
+}
+
+function runRecoveryBackoffTests(): void {
+  const options = {
+    baseDelayMs: 1_000,
+    circuitFailureThreshold: 3,
+    circuitOpenMs: 30_000,
+    jitterRatio: 0.1,
+    maxDelayMs: 8_000,
+  };
+  const first = recordRecoveryFailure(initialRecoveryBackoffState(), 10_000, options, () => 0);
+  assertEqual(first.consecutiveFailures, 1);
+  assertEqual(first.nextAttemptAtMs, 10_900);
+  assertEqual(recoveryAttemptAllowed(first, 10_899), false);
+  assertEqual(recoveryAttemptAllowed(first, 10_900), true);
+
+  const second = recordRecoveryFailure(first, 20_000, options, () => 1);
+  assertEqual(second.consecutiveFailures, 2);
+  assertEqual(second.nextAttemptAtMs, 22_200);
+
+  const opened = recordRecoveryFailure(second, 30_000, options, () => 0.5);
+  assertEqual(opened.consecutiveFailures, 3);
+  assertEqual(opened.circuitOpenUntilMs, 60_000);
+  assertEqual(recoveryAttemptAllowed(opened, 59_999), false);
+  assertEqual(recoveryAttemptAllowed(opened, 60_000), true);
+
+  assertDeepEqual(resetRecoveryBackoff(), initialRecoveryBackoffState());
 }
 
 async function runDevicePSKRotationTests(): Promise<void> {

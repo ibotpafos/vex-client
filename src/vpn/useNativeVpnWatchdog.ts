@@ -8,6 +8,17 @@ import { assessNativeTunnelHealth, localStatusHealthReasons } from './nativeTunn
 import type { VpnProfile } from './profile';
 import { assessVpnAutopilotIssue, type VpnAutopilotProbeResult } from './vpnAutopilotAssessment';
 import { vpnTransportTelemetry, vpnUnexpectedDisconnectTelemetry } from './connectFlow';
+import {
+  initialRecoveryBackoffState,
+  recoveryAttemptAllowed,
+  recordRecoveryFailure,
+  resetRecoveryBackoff,
+} from './recoveryBackoff';
+
+const recoveryCircuitFailureThreshold = 3;
+const recoveryCircuitOpenMultiplier = 20;
+const recoveryMaxBackoffMultiplier = 8;
+const recoveryJitterRatio = 0.2;
 
 type MutableBooleanRef = {
   current: boolean;
@@ -60,6 +71,7 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
   const lastLocalDegradedStatusRef = useRef<VpnStatus | null>(null);
   const reconnectInFlightRef = useRef(false);
   const lastReconnectAtRef = useRef(0);
+  const recoveryBackoffRef = useRef(initialRecoveryBackoffState());
   const connectedAtRef = useRef<number | null>(null);
 
   const recordNativeStatus = useCallback((currentStatus: VpnStatus, nextStatus: VpnStatus) => {
@@ -130,10 +142,14 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
           status: localStatus,
         });
         backendHealthFailuresRef.current = health.healthy ? 0 : backendHealthFailuresRef.current + 1;
+        if (health.healthy && localHealthFailuresRef.current === 0) {
+          recoveryBackoffRef.current = resetRecoveryBackoff();
+        }
 
         const healthFailureCount = Math.max(backendHealthFailuresRef.current, localHealthFailuresRef.current);
-        const cooldownElapsed = Date.now() - lastReconnectAtRef.current > input.reconnectCooldownMs;
-        if (healthFailureCount < input.failureThreshold || !cooldownElapsed) {
+        const nowMs = Date.now();
+        const cooldownElapsed = nowMs - lastReconnectAtRef.current > input.reconnectCooldownMs;
+        if (healthFailureCount < input.failureThreshold || !cooldownElapsed || !recoveryAttemptAllowed(recoveryBackoffRef.current, nowMs)) {
           return;
         }
         const probe = await input.probeHealth?.(activeProfile).catch((error): VpnAutopilotProbeResult => ({
@@ -181,6 +197,7 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
           return;
         }
         if (recovery.ok) {
+          recoveryBackoffRef.current = resetRecoveryBackoff();
           input.onRecoverySucceeded(recovery.profile, recovery.status, recovery.locationId);
           input.reportConnect(recovery.profile);
           void input.submitDiagnostics('native_watchdog_reconnect_result', 'ok', {
@@ -201,12 +218,22 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
         }
 
         input.onRecoveryFailed(assessment.userMessage);
+        recoveryBackoffRef.current = recordRecoveryFailure(recoveryBackoffRef.current, Date.now(), {
+          baseDelayMs: input.reconnectCooldownMs,
+          circuitFailureThreshold: recoveryCircuitFailureThreshold,
+          circuitOpenMs: input.reconnectCooldownMs * recoveryCircuitOpenMultiplier,
+          jitterRatio: recoveryJitterRatio,
+          maxDelayMs: input.reconnectCooldownMs * recoveryMaxBackoffMultiplier,
+        });
         await input.submitDiagnostics('native_watchdog_reconnect_result', 'failed', {
           ...assessment.sample,
           previous_location_id: recovery.previousLocationId,
           next_location_id: recovery.locationId,
           recovery_error: errorMessage(recovery.error, 'unknown'),
           recovery_result: 'failed',
+          recovery_backoff_failures: recoveryBackoffRef.current.consecutiveFailures,
+          recovery_circuit_open_until_ms: recoveryBackoffRef.current.circuitOpenUntilMs || null,
+          recovery_next_attempt_at_ms: recoveryBackoffRef.current.nextAttemptAtMs,
           selection_mode: input.serverSelectionMode,
         }, {
           connectionEvent: 'reconnect_failed',

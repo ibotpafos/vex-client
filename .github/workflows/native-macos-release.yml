@@ -41,17 +41,11 @@ jobs:
       VEX_NOTARY_APPLE_ID: ${{ secrets.VEX_NOTARY_APPLE_ID }}
       VEX_NOTARY_TEAM_ID: ${{ secrets.VEX_NOTARY_TEAM_ID }}
       VEX_NOTARY_PASSWORD: ${{ secrets.VEX_NOTARY_PASSWORD }}
+      VEX_RELEASE_REPOSITORY_TOKEN: ${{ secrets.VEX_RELEASE_REPOSITORY_TOKEN }}
 
     steps:
       - name: Checkout native client
         uses: actions/checkout@v4
-
-      - name: Checkout production downloads repository
-        uses: actions/checkout@v4
-        with:
-          repository: ibotpafos/VPN
-          path: vpn-main
-          token: ${{ secrets.VEX_RELEASE_REPOSITORY_TOKEN }}
 
       - name: Validate release inputs
         shell: bash
@@ -63,11 +57,19 @@ jobs:
             VEX_MACOS_APPLICATION_P12_PASSWORD VEX_MACOS_INSTALLER_P12_BASE64
             VEX_MACOS_INSTALLER_P12_PASSWORD VEX_SPARKLE_PRIVATE_ED_KEY_BASE64
             VEX_NOTARY_APPLE_ID VEX_NOTARY_TEAM_ID VEX_NOTARY_PASSWORD
+            VEX_RELEASE_REPOSITORY_TOKEN
           )
           for name in "${required[@]}"; do
             [[ -n "${!name:-}" ]] || { echo "missing required release input: ${name}" >&2; exit 2; }
           done
           [[ "${VEX_NATIVE_BUILD}" =~ ^[0-9]+$ ]] || { echo "release_build must be numeric" >&2; exit 2; }
+
+      - name: Checkout production downloads repository
+        uses: actions/checkout@v4
+        with:
+          repository: ibotpafos/VPN
+          path: vpn-main
+          token: ${{ env.VEX_RELEASE_REPOSITORY_TOKEN }}
 
       - name: Import signing identities and notarization profile
         id: signing

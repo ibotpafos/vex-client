@@ -64,6 +64,7 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
             "VEX_NOTARY_APPLE_ID",
             "VEX_NOTARY_TEAM_ID",
             "VEX_NOTARY_PASSWORD",
+            "VEX_RELEASE_REPOSITORY_TOKEN",
             "VEX_NOTARY_KEYCHAIN",
             "VEX_NATIVE_PRODUCTION: \"1\"",
             "VEX_NATIVE_REQUIRE_DEVELOPER_ID: \"1\"",
@@ -76,6 +77,10 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
 
         self.assertNotIn("pull_request:", workflow)
         self.assertNotIn("push:", workflow)
+        self.assertLess(
+            workflow.index("- name: Validate release inputs"),
+            workflow.index("- name: Checkout production downloads repository"),
+        )
 
     def test_autonomous_release_cannot_relax_production_signing(self) -> None:
         autonomous = (ROOT / "scripts" / "release_native_macos_autonomous.sh").read_text()

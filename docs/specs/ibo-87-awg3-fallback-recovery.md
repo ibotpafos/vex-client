@@ -34,3 +34,11 @@ Keep one-button VPN connection reliable when an AWG3 port or node stops handshak
 - Server tests prove an offline mapped AWG3 node selects a live same-location node and no-live fallback fails closed.
 - macOS and React Native fallback tests prove that `51820` is never synthesized as a fallback.
 - Targeted tests, client typecheck, diff check, rollback-copy verification, commit, push, PR, and Linear evidence complete successfully.
+
+## Native CI closure
+
+- Every recovery change triggers shared TypeScript, Android/JDK, and macOS/Swift jobs on pull requests and `main`.
+- Android CI runs `VpnNetworkRecoveryTest` on a clean runner with the pinned AmneziaWG bootstrap.
+- macOS CI compiles the package and runs `NativeParityModelTests` on a hosted macOS runner without release signing.
+- Release-only signing and publishing remain restricted to explicit production workflows.
+- Workflow conditions must parse before runner allocation; job-level conditions do not reference the `secrets` context.

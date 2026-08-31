@@ -80,8 +80,12 @@ class VpnNetworkRecoveryTest {
     val config = "[Peer]\nEndpoint = [2001:db8::7]:8443"
 
     assertEquals(
-      "[Peer]\nEndpoint = [2001:db8::7]:443",
-      VpnNetworkRecovery.configCandidates(config)[1],
+      listOf(
+        "[Peer]\nEndpoint = [2001:db8::7]:8443",
+        "[Peer]\nEndpoint = [2001:db8::7]:51821",
+        "[Peer]\nEndpoint = [2001:db8::7]:443",
+      ),
+      VpnNetworkRecovery.configCandidates(config),
     )
   }
 

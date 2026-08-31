@@ -81,6 +81,8 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
+      - name: Select Swift 6.2 toolchain
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
       - name: Resolve Swift package
         run: swift package --package-path macos-native resolve
       - name: Build native macOS client

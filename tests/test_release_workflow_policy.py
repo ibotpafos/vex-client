@@ -23,6 +23,7 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
             "VpnNetworkRecoveryTest",
             "swift build --package-path macos-native --target VEXNativeMac",
             "NativeParityModelTests",
+            "/Applications/Xcode_26.3.app/Contents/Developer",
             "npm run test:unit",
             "npm run typecheck",
             "npm run lint",

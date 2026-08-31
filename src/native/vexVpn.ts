@@ -74,6 +74,8 @@ type VexVpnNativeModule = {
   endLiveActivity?(): Promise<boolean>;
   requestNotificationPermission?(): Promise<boolean>;
   getFirebaseMessagingToken?(): Promise<string>;
+  pendingDevicePushEvents?(): Promise<Record<string, unknown>[]>;
+  acknowledgeDevicePushEvent?(eventID: string): Promise<boolean>;
   downloadUpdateApk(downloadUrl: string, checksumSha256?: string | null): Promise<AndroidUpdateDownload>;
   installUpdateApk(filePath: string): Promise<AndroidUpdateInstallResult>;
   getInstalledApplications?(): Promise<InstalledVpnApplication[]>;
@@ -298,6 +300,16 @@ export async function getFirebaseMessagingToken(): Promise<string> {
     return '';
   }
   return requireNativeModule().getFirebaseMessagingToken?.() ?? '';
+}
+
+export async function pendingDevicePushEvents(): Promise<Record<string, unknown>[]> {
+  if (Platform.OS !== 'android') return [];
+  return requireNativeModule().pendingDevicePushEvents?.() ?? [];
+}
+
+export async function acknowledgeDevicePushEvent(eventID: string): Promise<boolean> {
+  if (Platform.OS !== 'android') return false;
+  return requireNativeModule().acknowledgeDevicePushEvent?.(eventID) ?? false;
 }
 
 export async function downloadAndroidUpdateApk(downloadUrl: string, checksumSha256?: string | null): Promise<AndroidUpdateDownload> {

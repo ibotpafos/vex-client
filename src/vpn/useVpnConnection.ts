@@ -8,6 +8,8 @@ import {
   type VpnDevice,
   type VpnLocation,
   entitlement,
+  acknowledgeStagedDevicePSKProfile,
+  fetchStagedDevicePSKProfile,
   hasPaidEntitlement,
   registerDevicePushToken,
   vexApiBaseUrl,
@@ -27,10 +29,12 @@ import {
 } from '@/native/haptics';
 import {
   disconnectVpn,
+  acknowledgeDevicePushEvent,
   endVpnLiveActivity,
   getVpnStatus,
   listenVpnStatusChanged,
   measureEndpointLatency,
+  pendingDevicePushEvents,
   requestVpnPermission,
   updateVpnLiveActivity,
   type VpnStatus,
@@ -70,6 +74,8 @@ import {
 import { switchVpnLocation } from '@/vpn/serverSwitch';
 import { useNativeVpnWatchdog } from '@/vpn/useNativeVpnWatchdog';
 import { useVpnProfileState } from '@/vpn/useVpnProfileState';
+import { parseDevicePSKRotationEvent, processDevicePSKRotationEvent } from '@/vpn/devicePskRotation';
+import { clearStagedDevicePSKProfile, loadStagedDevicePSKProfile, saveStagedDevicePSKProfile } from '@/vpn/devicePskRotationStore';
 import { useVpnDiagnostics } from './useVpnDiagnostics';
 import { useVpnConnectionFlow } from './useVpnConnectionFlow';
 import { useVpnConnectionAnimations } from './useVpnConnectionAnimations';
@@ -558,6 +564,82 @@ export function useVpnConnection() {
 
   const canCancelConnecting = connectionPhase === 'connecting';
   const powerButtonDisabled = isVpnBusy && !canCancelConnecting;
+  const processingDevicePSKEventsRef = useRef(false);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android' || !session?.accessToken || !activeProfile?.device?.id) {
+      return undefined;
+    }
+    let cancelled = false;
+    const processPendingEvents = async () => {
+      if (cancelled || processingDevicePSKEventsRef.current || vpnOperationInFlightRef.current) return;
+      processingDevicePSKEventsRef.current = true;
+      try {
+        const events = await pendingDevicePushEvents();
+        for (const rawEvent of events) {
+          if (cancelled) return;
+          const event = parseDevicePSKRotationEvent(rawEvent);
+          if (!event) continue;
+          try {
+            const result = await processDevicePSKRotationEvent(event, activeProfile.device!.id, {
+              acknowledge: (staged) => acknowledgeStagedDevicePSKProfile(session.accessToken, staged),
+              activate: async (staged) => {
+                if (!isConnected) {
+                  setActiveProfile(staged.profile);
+                  cacheProfile(staged.profile.locationId, staged.profile);
+                  return;
+                }
+                vpnOperationInFlightRef.current = true;
+                try {
+                  await disconnectVpn({ releaseAntiLeak: false });
+                  const connected = await connectProfileWithEndpointFallback(staged.profile);
+                  setActiveProfile(connected.profile);
+                  cacheProfile(connected.profile.locationId, connected.profile);
+                  setVpnStatus(connected.status);
+                  reportVpnConnectEvent(connected.profile, 'psk_rotation_cutover');
+                } finally {
+                  vpnOperationInFlightRef.current = false;
+                }
+              },
+              clear: clearStagedDevicePSKProfile,
+              fetch: () => fetchStagedDevicePSKProfile(session.accessToken, activeProfile),
+              load: loadStagedDevicePSKProfile,
+              save: saveStagedDevicePSKProfile,
+            });
+            if (result !== 'ignored') {
+              await acknowledgeDevicePushEvent(event.eventId);
+            }
+          } catch (error) {
+            void submitClientDiagnosticsEvent('psk_rotation_event_failed', 'error', {
+              error_message: errorMessage(error, 'psk_rotation_event_failed'),
+            }).catch(() => undefined);
+          }
+        }
+      } catch (error) {
+        void submitClientDiagnosticsEvent('psk_rotation_event_failed', 'error', {
+          error_message: errorMessage(error, 'psk_rotation_event_failed'),
+        }).catch(() => undefined);
+      } finally {
+        processingDevicePSKEventsRef.current = false;
+      }
+    };
+    void processPendingEvents();
+    const timer = setInterval(() => void processPendingEvents(), 5_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [
+    activeProfile,
+    cacheProfile,
+    connectProfileWithEndpointFallback,
+    isConnected,
+    reportVpnConnectEvent,
+    session?.accessToken,
+    setActiveProfile,
+    setVpnStatus,
+    submitClientDiagnosticsEvent,
+  ]);
 
   useEffect(() => {
     void Promise.all([getSelectedVpnLocation(), getServerSelectionMode(), getAntiLeakEnabled(), getVpnRoutingMode()])

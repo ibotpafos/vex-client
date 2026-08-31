@@ -71,6 +71,7 @@ import {
   parseCustomerSSE,
 } from '../src/realtime/customerRealtimeCore';
 import { CustomerRealtimeTransport } from '../src/realtime/customerRealtimeTransport';
+import { processDevicePSKRotationEvent, type StagedDevicePSKProfile } from '../src/vpn/devicePskRotation';
 
 assertDeepEqual(customerRealtimeMetadata('customer.change', JSON.stringify({
   domain: 'devices', version: 7, updated_at: '2026-08-30T12:00:00Z',
@@ -1251,6 +1252,7 @@ void runAsyncTests().catch((error) => {
 });
 
 async function runAsyncTests(): Promise<void> {
+  await runDevicePSKRotationTests();
   await runAuthStorageWarmStartTests();
   await runSessionLoadRetryTests();
   await runSessionStorePersistenceTests();
@@ -1270,6 +1272,66 @@ async function runAsyncTests(): Promise<void> {
   runServerPickerInteractionTests();
   runTrafficSummaryTests();
   await runServerSwitchTests();
+}
+
+async function runDevicePSKRotationTests(): Promise<void> {
+  const staged: StagedDevicePSKProfile = {
+    rotationId: 'pskr-1',
+    deviceId: 'device-1',
+    profileVersion: 8,
+    profileDigest: 'sha256:pending',
+    profile: { ...profileForLocation('de', 'de.example.com:443'), profileVersion: 8 },
+  };
+  const calls: string[] = [];
+  let stored: StagedDevicePSKProfile | null = null;
+  const dependencies = {
+    acknowledge: async (value: StagedDevicePSKProfile) => { calls.push(`ack:${value.rotationId}`); },
+    activate: async (value: StagedDevicePSKProfile) => { calls.push(`activate:${value.rotationId}`); },
+    clear: async () => { calls.push('clear'); stored = null; },
+    fetch: async () => { calls.push('fetch'); return staged; },
+    load: async () => stored,
+    save: async (value: StagedDevicePSKProfile) => { calls.push(`save:${value.rotationId}`); stored = value; },
+  };
+
+  const update = await processDevicePSKRotationEvent({
+    eventId: 'event-update', type: 'profile_updated', deviceId: 'device-1',
+    rotationId: 'pskr-1', profileVersion: 8,
+  }, 'device-1', dependencies);
+  assertEqual(update, 'staged');
+  assertDeepEqual(calls, ['fetch', 'save:pskr-1', 'ack:pskr-1']);
+
+  calls.length = 0;
+  const replay = await processDevicePSKRotationEvent({
+    eventId: 'event-update-replay', type: 'profile_updated', deviceId: 'device-1',
+    rotationId: 'pskr-1', profileVersion: 8,
+  }, 'device-1', dependencies);
+  assertEqual(replay, 'staged');
+  assertDeepEqual(calls, ['save:pskr-1', 'ack:pskr-1']);
+
+  calls.length = 0;
+  const ready = await processDevicePSKRotationEvent({
+    eventId: 'event-ready', type: 'cutover_ready', deviceId: 'device-1',
+    rotationId: 'pskr-1', profileVersion: 8,
+  }, 'device-1', dependencies);
+  assertEqual(ready, 'activated');
+  assertDeepEqual(calls, ['activate:pskr-1', 'clear']);
+
+  calls.length = 0;
+  const stale = await processDevicePSKRotationEvent({
+    eventId: 'event-stale', type: 'profile_updated', deviceId: 'other-device',
+    rotationId: 'pskr-2', profileVersion: 9,
+  }, 'device-1', dependencies);
+  assertEqual(stale, 'ignored');
+  assertDeepEqual(calls, []);
+
+  stored = staged;
+  calls.length = 0;
+  await assertRejects(() => processDevicePSKRotationEvent({
+    eventId: 'event-ready-retry', type: 'cutover_ready', deviceId: 'device-1',
+    rotationId: 'pskr-1', profileVersion: 8,
+  }, 'device-1', { ...dependencies, activate: async () => { calls.push('activate:failed'); throw new Error('activation failed'); } }), 'activation failed');
+  assertEqual(stored?.rotationId, 'pskr-1');
+  assertDeepEqual(calls, ['activate:failed']);
 }
 
 async function runNativeDeviceRegistrationTests(): Promise<void> {

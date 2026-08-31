@@ -110,6 +110,9 @@ maybe_notarize_app() {
   local profile_args=()
   if [[ -n "${VEX_NOTARY_PROFILE:-}" ]]; then
     profile_args=(--keychain-profile "${VEX_NOTARY_PROFILE}")
+    if [[ -n "${VEX_NOTARY_KEYCHAIN:-}" ]]; then
+      profile_args+=(--keychain "${VEX_NOTARY_KEYCHAIN}")
+    fi
   else
     if [[ -z "${VEX_NOTARY_APPLE_ID:-}" || -z "${VEX_NOTARY_TEAM_ID:-}" || -z "${VEX_NOTARY_PASSWORD:-}" ]]; then
       echo "Set VEX_NOTARY_PROFILE or VEX_NOTARY_APPLE_ID/VEX_NOTARY_TEAM_ID/VEX_NOTARY_PASSWORD for notarization." >&2

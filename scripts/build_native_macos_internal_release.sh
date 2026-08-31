@@ -23,8 +23,9 @@ fi
 export VEX_NATIVE_VERSION="${VERSION}"
 export VEX_NATIVE_BUILD="${BUILD}"
 export VEX_SPARKLE_PRODUCTION="${VEX_SPARKLE_PRODUCTION:-1}"
+export VEX_NATIVE_PRODUCTION="${VEX_NATIVE_PRODUCTION:-0}"
 export VEX_NATIVE_DISTRIBUTION_MODE="${VEX_NATIVE_DISTRIBUTION_MODE:-internal}"
-export VEX_NATIVE_REQUIRE_DEVELOPER_ID=0
+export VEX_NATIVE_REQUIRE_DEVELOPER_ID="${VEX_NATIVE_REQUIRE_DEVELOPER_ID:-0}"
 
 bash "${ROOT_DIR}/scripts/build_native_macos_app.sh"
 bash "${ROOT_DIR}/scripts/build_native_macos_pkg.sh"
@@ -32,9 +33,9 @@ bash "${ROOT_DIR}/scripts/build_native_macos_sparkle_release.sh"
 
 pkg_path="$(ls -t "${ROOT_DIR}/macos-native/build/pkg/"*.pkg | head -n 1)"
 VEX_NATIVE_PKG_PATH="${pkg_path}" \
-  VEX_NATIVE_PRODUCTION=0 \
-  VEX_NATIVE_REQUIRE_DEVELOPER_ID=0 \
-  VEX_NATIVE_DISTRIBUTION_MODE=internal \
+  VEX_NATIVE_PRODUCTION="${VEX_NATIVE_PRODUCTION}" \
+  VEX_NATIVE_REQUIRE_DEVELOPER_ID="${VEX_NATIVE_REQUIRE_DEVELOPER_ID}" \
+  VEX_NATIVE_DISTRIBUTION_MODE="${VEX_NATIVE_DISTRIBUTION_MODE:-internal}" \
   bash "${ROOT_DIR}/scripts/native_macos_production_preflight.sh"
 
 echo "Internal macOS release ready:"

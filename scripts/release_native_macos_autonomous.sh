@@ -185,9 +185,9 @@ validate_public_release_artifacts() {
   fi
 
   VEX_NATIVE_APP_PATH="${app_path}" \
-    VEX_NATIVE_PRODUCTION=0 \
-    VEX_NATIVE_REQUIRE_DEVELOPER_ID=0 \
-    VEX_NATIVE_DISTRIBUTION_MODE=public-sparkle-ed25519 \
+    VEX_NATIVE_PRODUCTION=1 \
+    VEX_NATIVE_REQUIRE_DEVELOPER_ID=1 \
+    VEX_NATIVE_DISTRIBUTION_MODE=production \
     bash "${ROOT_DIR}/scripts/native_macos_production_preflight.sh"
 
   archive_name="$(python3 - "${manifest_path}" "${VEX_SPARKLE_PUBLIC_ED_KEY}" <<'PY'
@@ -205,6 +205,9 @@ if manifest.get("sparklePublicEDKey") != expected_public_key:
     raise SystemExit("public release manifest Sparkle public key mismatch")
 if not manifest.get("archiveSHA256"):
     raise SystemExit("public release manifest is missing archiveSHA256")
+for field in ("appleDeveloperSigned", "notarized", "gatekeeperReady"):
+    if manifest.get(field) is not True:
+        raise SystemExit(f"public release manifest requires {field}=true")
 print(manifest["archive"])
 PY
 )"
@@ -296,6 +299,10 @@ release_values="$(resolve_next_release)"
 export VEX_NATIVE_VERSION="$(printf '%s\n' "${release_values}" | sed -n '1p')"
 export VEX_NATIVE_BUILD="$(printf '%s\n' "${release_values}" | sed -n '2p')"
 export VEX_SPARKLE_PRODUCTION=1
+export VEX_NATIVE_PRODUCTION=1
+export VEX_NATIVE_REQUIRE_DEVELOPER_ID=1
+export VEX_NATIVE_DISTRIBUTION_MODE=production
+export VEX_NOTARIZE=1
 
 echo "native macOS autonomous release: ${VEX_NATIVE_VERSION} (${VEX_NATIVE_BUILD})"
 

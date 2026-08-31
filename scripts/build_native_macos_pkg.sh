@@ -17,6 +17,34 @@ PKG_NAME="VEXNativeMac-${APP_VERSION}-${APP_BUILD}.pkg"
 PKG_PATH="${PKG_OUTPUT_DIR}/${PKG_NAME}"
 PKG_SIGN_IDENTITY="${VEX_INSTALLER_SIGN_IDENTITY:-}"
 
+maybe_notarize_pkg() {
+  if [[ "${VEX_NOTARIZE:-0}" != "1" ]]; then
+    return
+  fi
+  if [[ -z "${PKG_SIGN_IDENTITY}" ]]; then
+    echo "VEX_NOTARIZE=1 requires VEX_INSTALLER_SIGN_IDENTITY." >&2
+    exit 2
+  fi
+
+  local profile_args=()
+  if [[ -n "${VEX_NOTARY_PROFILE:-}" ]]; then
+    profile_args=(--keychain-profile "${VEX_NOTARY_PROFILE}")
+    if [[ -n "${VEX_NOTARY_KEYCHAIN:-}" ]]; then
+      profile_args+=(--keychain "${VEX_NOTARY_KEYCHAIN}")
+    fi
+  else
+    if [[ -z "${VEX_NOTARY_APPLE_ID:-}" || -z "${VEX_NOTARY_TEAM_ID:-}" || -z "${VEX_NOTARY_PASSWORD:-}" ]]; then
+      echo "Set VEX_NOTARY_PROFILE or VEX_NOTARY_APPLE_ID/VEX_NOTARY_TEAM_ID/VEX_NOTARY_PASSWORD for package notarization." >&2
+      exit 2
+    fi
+    profile_args=(--apple-id "${VEX_NOTARY_APPLE_ID}" --team-id "${VEX_NOTARY_TEAM_ID}" --password "${VEX_NOTARY_PASSWORD}")
+  fi
+
+  xcrun notarytool submit "${PKG_PATH}" "${profile_args[@]}" --wait
+  xcrun stapler staple "${PKG_PATH}"
+  xcrun stapler validate "${PKG_PATH}"
+}
+
 if [[ -f "${ROOT_DIR}/.env.sparkle.local" ]]; then
   set -a
   # shellcheck source=/dev/null
@@ -104,5 +132,7 @@ if [[ -n "${PKG_SIGN_IDENTITY}" ]]; then
   mv "${SIGNED_PATH}" "${PKG_PATH}"
   pkgutil --check-signature "${PKG_PATH}" >/dev/null
 fi
+
+maybe_notarize_pkg
 
 echo "${PKG_PATH}"

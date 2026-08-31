@@ -1,0 +1,166 @@
+name: Native macOS Production Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: "Semantic version, for example 0.1.87"
+        required: true
+      release_build:
+        description: "Monotonic numeric build"
+        required: true
+      release_notes:
+        description: "User-facing release notes"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-macos-production-release
+  cancel-in-progress: false
+
+jobs:
+  build_notarized_release:
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      VEX_NATIVE_VERSION: ${{ inputs.release_version }}
+      VEX_NATIVE_BUILD: ${{ inputs.release_build }}
+      VEX_NATIVE_CHANGELOG: ${{ inputs.release_notes }}
+      VEX_NATIVE_PRODUCTION: "1"
+      VEX_NATIVE_REQUIRE_DEVELOPER_ID: "1"
+      VEX_NATIVE_DISTRIBUTION_MODE: production
+      VEX_NOTARIZE: "1"
+      VEX_SPARKLE_PUBLIC_ED_KEY: ${{ vars.VEX_SPARKLE_PUBLIC_ED_KEY }}
+      VEX_MACOS_APPLICATION_P12_BASE64: ${{ secrets.VEX_MACOS_APPLICATION_P12_BASE64 }}
+      VEX_MACOS_APPLICATION_P12_PASSWORD: ${{ secrets.VEX_MACOS_APPLICATION_P12_PASSWORD }}
+      VEX_MACOS_INSTALLER_P12_BASE64: ${{ secrets.VEX_MACOS_INSTALLER_P12_BASE64 }}
+      VEX_MACOS_INSTALLER_P12_PASSWORD: ${{ secrets.VEX_MACOS_INSTALLER_P12_PASSWORD }}
+      VEX_SPARKLE_PRIVATE_ED_KEY_BASE64: ${{ secrets.VEX_SPARKLE_PRIVATE_ED_KEY_BASE64 }}
+      VEX_NOTARY_APPLE_ID: ${{ secrets.VEX_NOTARY_APPLE_ID }}
+      VEX_NOTARY_TEAM_ID: ${{ secrets.VEX_NOTARY_TEAM_ID }}
+      VEX_NOTARY_PASSWORD: ${{ secrets.VEX_NOTARY_PASSWORD }}
+
+    steps:
+      - name: Checkout native client
+        uses: actions/checkout@v4
+
+      - name: Checkout production downloads repository
+        uses: actions/checkout@v4
+        with:
+          repository: ibotpafos/VPN
+          path: vpn-main
+          token: ${{ secrets.VEX_RELEASE_REPOSITORY_TOKEN }}
+
+      - name: Validate release inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          required=(
+            VEX_NATIVE_VERSION VEX_NATIVE_BUILD VEX_NATIVE_CHANGELOG
+            VEX_SPARKLE_PUBLIC_ED_KEY VEX_MACOS_APPLICATION_P12_BASE64
+            VEX_MACOS_APPLICATION_P12_PASSWORD VEX_MACOS_INSTALLER_P12_BASE64
+            VEX_MACOS_INSTALLER_P12_PASSWORD VEX_SPARKLE_PRIVATE_ED_KEY_BASE64
+            VEX_NOTARY_APPLE_ID VEX_NOTARY_TEAM_ID VEX_NOTARY_PASSWORD
+          )
+          for name in "${required[@]}"; do
+            [[ -n "${!name:-}" ]] || { echo "missing required release input: ${name}" >&2; exit 2; }
+          done
+          [[ "${VEX_NATIVE_BUILD}" =~ ^[0-9]+$ ]] || { echo "release_build must be numeric" >&2; exit 2; }
+
+      - name: Import signing identities and notarization profile
+        id: signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          keychain="${RUNNER_TEMP}/vex-release.keychain-db"
+          keychain_password="$(openssl rand -hex 32)"
+          app_p12="${RUNNER_TEMP}/vex-application.p12"
+          installer_p12="${RUNNER_TEMP}/vex-installer.p12"
+          sparkle_key="${RUNNER_TEMP}/sparkle-ed25519-private.key"
+          profile="vex-release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+          printf '%s' "${VEX_MACOS_APPLICATION_P12_BASE64}" | base64 --decode > "${app_p12}"
+          printf '%s' "${VEX_MACOS_INSTALLER_P12_BASE64}" | base64 --decode > "${installer_p12}"
+          printf '%s' "${VEX_SPARKLE_PRIVATE_ED_KEY_BASE64}" | base64 --decode > "${sparkle_key}"
+          chmod 600 "${app_p12}" "${installer_p12}" "${sparkle_key}"
+
+          security create-keychain -p "${keychain_password}" "${keychain}"
+          security set-keychain-settings -lut 21600 "${keychain}"
+          security unlock-keychain -p "${keychain_password}" "${keychain}"
+          security list-keychains -d user -s "${keychain}" $(security list-keychains -d user | tr -d '"')
+          security import "${app_p12}" -k "${keychain}" -P "${VEX_MACOS_APPLICATION_P12_PASSWORD}" -T /usr/bin/codesign -T /usr/bin/security
+          security import "${installer_p12}" -k "${keychain}" -P "${VEX_MACOS_INSTALLER_P12_PASSWORD}" -T /usr/bin/productsign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${keychain_password}" "${keychain}"
+
+          app_identity="$(security find-identity -v -p codesigning "${keychain}" | sed -n 's/.*"\(Developer ID Application:.*\)"/\1/p' | head -n 1)"
+          installer_identity="$(security find-certificate -a -c 'Developer ID Installer' -p "${keychain}" | openssl x509 -noout -subject -nameopt RFC2253 | sed -n 's/^subject=CN=\([^,]*\).*/\1/p' | head -n 1)"
+          [[ -n "${app_identity}" ]] || { echo "Developer ID Application identity missing after import" >&2; exit 2; }
+          [[ -n "${installer_identity}" ]] || { echo "Developer ID Installer identity missing after import" >&2; exit 2; }
+
+          xcrun notarytool store-credentials "${profile}" \
+            --apple-id "${VEX_NOTARY_APPLE_ID}" \
+            --team-id "${VEX_NOTARY_TEAM_ID}" \
+            --password "${VEX_NOTARY_PASSWORD}" \
+            --keychain "${keychain}"
+
+          {
+            echo "keychain=${keychain}"
+            echo "app_p12=${app_p12}"
+            echo "installer_p12=${installer_p12}"
+            echo "sparkle_key=${sparkle_key}"
+            echo "notary_profile=${profile}"
+            echo "app_identity=${app_identity}"
+            echo "installer_identity=${installer_identity}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Build and verify notarized release bundle
+        shell: bash
+        env:
+          VEX_VPN_REPO: ${{ github.workspace }}/vpn-main
+          VEX_SPARKLE_PRIVATE_ED_KEY_FILE: ${{ steps.signing.outputs.sparkle_key }}
+          VEX_CODESIGN_IDENTITY: ${{ steps.signing.outputs.app_identity }}
+          VEX_INSTALLER_SIGN_IDENTITY: ${{ steps.signing.outputs.installer_identity }}
+          VEX_NOTARY_PROFILE: ${{ steps.signing.outputs.notary_profile }}
+          VEX_NOTARY_KEYCHAIN: ${{ steps.signing.outputs.keychain }}
+          RUN_DEPLOY: "0"
+          RUN_LIVE_VERIFY: "0"
+          RUN_METADATA_DEPLOY: "0"
+          RUN_PUBLIC_PREFLIGHT: "1"
+        run: bash scripts/release_native_macos_autonomous.sh
+
+      - name: Verify release manifest policy
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          path = Path("dist/native-macos/deploy/release-manifest.json")
+          manifest = json.loads(path.read_text())
+          for field in ("appleDeveloperSigned", "notarized", "gatekeeperReady"):
+              if manifest.get(field) is not True:
+                  raise SystemExit(f"release manifest requires {field}=true")
+          print(f"notarized native macOS release verified: {manifest['version']} ({manifest['build']})")
+          PY
+
+      - name: Upload verified release bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: vex-native-macos-production-${{ inputs.release_version }}-${{ inputs.release_build }}
+          path: |
+            dist/native-macos/deploy/**
+            macos-native/build/pkg/*.pkg
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Remove ephemeral signing material
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          security delete-keychain "${{ steps.signing.outputs.keychain }}" 2>/dev/null
+          rm -f \
+            "${{ steps.signing.outputs.app_p12 }}" \
+            "${{ steps.signing.outputs.installer_p12 }}" \
+            "${{ steps.signing.outputs.sparkle_key }}"

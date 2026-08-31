@@ -21,6 +21,7 @@ class VexFirebaseMessagingService : FirebaseMessagingService() {
   override fun onMessageReceived(message: RemoteMessage) {
     val type = message.data["type"] ?: "unknown"
     Log.i(TAG, "FCM message received type=$type")
+    DevicePushEventQueue.enqueue(this, message.data)
     showNotification(message)
   }
 

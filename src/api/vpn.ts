@@ -25,11 +25,15 @@ import {
   type DeviceUsageResponseDTO,
   type LocationDTO,
   type NativeVPNProfileDTO,
+  type StagedDevicePSKProfileDTO,
+  type AcknowledgeStagedDevicePSKProfileResultDTO,
   type RegisterDevicePushTokenResultDTO,
   type RegisterNativeDeviceResultDTO,
 } from './dto';
 import { managedProfileAmneziaConfig } from '../vpn/amneziaConfig';
 import { withManagedProfileAWGCapability } from '../vpn/profileCapabilities';
+import type { VpnProfile } from '../vpn/profile';
+import type { StagedDevicePSKProfile } from '../vpn/devicePskRotation';
 
 const mobileProtocol = 'amneziawg';
 
@@ -239,6 +243,65 @@ export async function registerDevicePushToken(accessToken: string, deviceId: str
     },
   });
   return parseDevice(response.device || ({} as DeviceDTO));
+}
+
+export async function fetchStagedDevicePSKProfile(accessToken: string, currentProfile: VpnProfile): Promise<StagedDevicePSKProfile> {
+  const device = currentProfile.device;
+  if (!device?.id) {
+    throw new Error('VPN-устройство для staged PSK профиля не найдено.');
+  }
+  const query = new URLSearchParams({ device_id: device.id, platform: currentVpnClient().platform });
+  const response = await jsonRequest<StagedDevicePSKProfileDTO>(`/v1/vpn/psk-rotations/current?${query.toString()}`, {
+    accessToken,
+    headers: await clientVersionHeaders(),
+    suppressErrorLog: true,
+  });
+  if (response.activate !== false || response.profile_version !== response.profile.version) {
+    throw new Error('Сервер вернул некорректный staged AmneziaWG профиль.');
+  }
+  const keyPair = await getOrCreateWireGuardKeyPair();
+  const config = response.profile.config || managedProfileConfig(response.profile, keyPair);
+  return {
+    rotationId: response.rotation_id,
+    deviceId: device.id,
+    profileVersion: response.profile_version,
+    profileDigest: response.profile_digest,
+    profile: {
+      ...currentProfile,
+      config,
+      device: {
+        ...device,
+        assignedIpv4: response.profile.assigned_ipv4 || device.assignedIpv4,
+        endpoint: managedProfileEndpoint(response.profile) || device.endpoint,
+        protocol: response.profile.protocol || device.protocol,
+      },
+      profileVersion: response.profile_version,
+      rotationRequired: false,
+      source: 'api',
+    },
+  };
+}
+
+export async function acknowledgeStagedDevicePSKProfile(
+  accessToken: string,
+  staged: StagedDevicePSKProfile,
+): Promise<void> {
+  const response = await jsonRequest<AcknowledgeStagedDevicePSKProfileResultDTO>(
+    `/v1/vpn/psk-rotations/${encodeURIComponent(staged.rotationId)}/ack`,
+    {
+      method: 'POST',
+      accessToken,
+      idempotencyKey: `psk-stage-ack-${staged.rotationId}-${staged.profileVersion}`,
+      body: {
+        device_id: staged.deviceId,
+        profile_version: staged.profileVersion,
+        profile_digest: staged.profileDigest,
+      },
+    },
+  );
+  if (!response.accepted || response.rotation_id !== staged.rotationId) {
+    throw new Error('Сервер не подтвердил staged AmneziaWG профиль.');
+  }
 }
 
 export async function rotateManagedVpnKey(accessToken: string, deviceId: string, serverCurrentEpoch?: number): Promise<VpnDevice> {

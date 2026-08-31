@@ -168,6 +168,22 @@ export type NativeVPNProfileDTO = {
   config?: string;
 };
 
+export type StagedDevicePSKProfileDTO = {
+  rotation_id: string;
+  activate: false;
+  current_version: number;
+  profile_version: number;
+  profile_digest: string;
+  deadline_at: string;
+  profile: NativeVPNProfileDTO;
+};
+
+export type AcknowledgeStagedDevicePSKProfileResultDTO = {
+  rotation_id: string;
+  accepted: boolean;
+  replayed: boolean;
+};
+
 export type RegisterNativeDeviceResultDTO = {
   device_registered?: boolean;
   device: DeviceDTO;

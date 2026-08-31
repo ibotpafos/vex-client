@@ -380,6 +380,23 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
   }
 
   @ReactMethod
+  fun pendingDevicePushEvents(promise: Promise) {
+    val events = Arguments.createArray()
+    DevicePushEventQueue.pending(reactContext).forEach { item ->
+      val value = Arguments.createMap()
+      item.forEach { (key, field) -> value.putString(key, field) }
+      events.pushMap(value)
+    }
+    promise.resolve(events)
+  }
+
+  @ReactMethod
+  fun acknowledgeDevicePushEvent(eventID: String, promise: Promise) {
+    DevicePushEventQueue.acknowledge(reactContext, eventID)
+    promise.resolve(true)
+  }
+
+  @ReactMethod
   fun downloadUpdateApk(downloadUrl: String, checksumSha256: String?, promise: Promise) {
     scope.launch {
       try {

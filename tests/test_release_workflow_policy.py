@@ -11,6 +11,32 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 
 
 class ReleaseWorkflowPolicyTest(unittest.TestCase):
+    def test_native_reliability_ci_covers_awg3_recovery_targets(self) -> None:
+        workflow = (WORKFLOWS / "native-reliability-ci.yml").read_text()
+        for required in (
+            "pull_request:",
+            "push:",
+            "workflow_dispatch:",
+            "actions/setup-java@v4",
+            "java-version: \"17\"",
+            "npm run android:bootstrap",
+            "VpnNetworkRecoveryTest",
+            "swift build --package-path macos-native --target VEXNativeMac",
+            "NativeParityModelTests",
+            "npm run test:unit",
+            "npm run typecheck",
+            "npm run lint",
+            "npm run test:awg-upstream",
+        ):
+            self.assertIn(required, workflow)
+
+    def test_windows_workflow_job_conditions_do_not_reference_secrets(self) -> None:
+        workflow = (WORKFLOWS / "native-windows-ci.yml").read_text()
+        package_job = workflow.split("  package_release:", 1)[1]
+        condition = package_job.split("    runs-on:", 1)[0]
+        self.assertNotIn("secrets.", condition)
+        self.assertIn("github.event_name == 'workflow_dispatch'", condition)
+
     def test_legacy_desktop_release_workflows_are_removed(self) -> None:
         self.assertFalse((WORKFLOWS / "windows-release.yml").exists())
         self.assertFalse((WORKFLOWS / "linux-release.yml").exists())

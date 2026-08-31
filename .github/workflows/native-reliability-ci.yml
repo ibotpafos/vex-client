@@ -1,0 +1,89 @@
+name: Native Reliability CI
+
+on:
+  pull_request:
+    paths:
+      - "src/vpn/**"
+      - "tests/**"
+      - "android/**"
+      - "macos-native/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/native-reliability-ci.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "src/vpn/**"
+      - "tests/**"
+      - "android/**"
+      - "macos-native/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/native-reliability-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-reliability-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shared:
+    name: Shared recovery contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: Verify shared recovery contract
+        run: |
+          npm run test:unit
+          npm run typecheck
+          npm run lint
+          npm run test:awg-upstream
+
+  android:
+    name: Android network recovery
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache: false
+      - run: npm ci
+      - name: Bootstrap pinned AmneziaWG sources
+        run: npm run android:bootstrap
+      - name: Test bounded Android endpoint recovery
+        working-directory: android
+        run: ./gradlew testDebugUnitTest --tests com.vexguard.app.vpn.VpnNetworkRecoveryTest --stacktrace --no-daemon
+
+  macos:
+    name: macOS autopilot recovery
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve Swift package
+        run: swift package --package-path macos-native resolve
+      - name: Build native macOS client
+        run: swift build --package-path macos-native --target VEXNativeMac
+      - name: Test native macOS recovery policy
+        run: swift test --package-path macos-native --filter NativeParityModelTests

@@ -127,11 +127,7 @@ jobs:
         vars.VEX_WINDOWS_UPDATE_ORIGIN != '' &&
         vars.VEX_WINDOWS_UPDATE_KEY_ID != '' &&
         vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH != '' &&
-        vars.VEX_WINDOWS_SERVICE_WINTUN_PATH != '' &&
-        secrets.VEX_WINDOWS_SIGN_PFX_BASE64 != '' &&
-        secrets.VEX_WINDOWS_SIGN_PFX_PASSWORD != '' &&
-        secrets.VEX_WINDOWS_UPDATE_PUBLIC_KEY_BASE64 != '' &&
-        secrets.VEX_WINDOWS_UPDATE_PRIVATE_KEY_BASE64 != ''
+        vars.VEX_WINDOWS_SERVICE_WINTUN_PATH != ''
       }}
     runs-on: windows-latest
     needs: build

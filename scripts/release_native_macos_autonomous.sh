@@ -186,8 +186,10 @@ validate_public_release_artifacts() {
 
   VEX_NATIVE_APP_PATH="${app_path}" \
     VEX_NATIVE_PRODUCTION=1 \
-    VEX_NATIVE_REQUIRE_DEVELOPER_ID=1 \
-    VEX_NATIVE_DISTRIBUTION_MODE=production \
+    VEX_NATIVE_REQUIRE_DEVELOPER_ID=0 \
+    VEX_NATIVE_DISTRIBUTION_MODE=self-signed \
+    VEX_NATIVE_SIGNING_MODE=self-signed \
+    VEX_SELF_SIGNED_APP_CERT_SHA256="${VEX_SELF_SIGNED_APP_CERT_SHA256}" \
     bash "${ROOT_DIR}/scripts/native_macos_production_preflight.sh"
 
   archive_name="$(python3 - "${manifest_path}" "${VEX_SPARKLE_PUBLIC_ED_KEY}" <<'PY'
@@ -205,9 +207,11 @@ if manifest.get("sparklePublicEDKey") != expected_public_key:
     raise SystemExit("public release manifest Sparkle public key mismatch")
 if not manifest.get("archiveSHA256"):
     raise SystemExit("public release manifest is missing archiveSHA256")
+if manifest.get("selfSigned") is not True:
+    raise SystemExit("public release manifest requires selfSigned=true")
 for field in ("appleDeveloperSigned", "notarized", "gatekeeperReady"):
-    if manifest.get(field) is not True:
-        raise SystemExit(f"public release manifest requires {field}=true")
+    if manifest.get(field) is not False:
+        raise SystemExit(f"self-signed public release manifest requires {field}=false")
 print(manifest["archive"])
 PY
 )"
@@ -294,15 +298,21 @@ if [[ -z "${VEX_SPARKLE_PRIVATE_ED_KEY_FILE:-}" ]]; then
   exit 2
 fi
 require_file "${VEX_SPARKLE_PRIVATE_ED_KEY_FILE}"
+if [[ ! "${VEX_SELF_SIGNED_APP_CERT_SHA256:-}" =~ ^[0-9A-Fa-f]{64}$ ]]; then
+  echo "VEX_SELF_SIGNED_APP_CERT_SHA256 is required for self-signed production" >&2
+  exit 2
+fi
 
 release_values="$(resolve_next_release)"
 export VEX_NATIVE_VERSION="$(printf '%s\n' "${release_values}" | sed -n '1p')"
 export VEX_NATIVE_BUILD="$(printf '%s\n' "${release_values}" | sed -n '2p')"
 export VEX_SPARKLE_PRODUCTION=1
 export VEX_NATIVE_PRODUCTION=1
-export VEX_NATIVE_REQUIRE_DEVELOPER_ID=1
-export VEX_NATIVE_DISTRIBUTION_MODE=production
-export VEX_NOTARIZE=1
+export VEX_NATIVE_SIGNING_MODE=self-signed
+export VEX_NATIVE_REQUIRE_DEVELOPER_ID=0
+export VEX_NATIVE_DISTRIBUTION_MODE=self-signed
+export VEX_NATIVE_BUILD_PKG=0
+export VEX_NOTARIZE=0
 
 echo "native macOS autonomous release: ${VEX_NATIVE_VERSION} (${VEX_NATIVE_BUILD})"
 

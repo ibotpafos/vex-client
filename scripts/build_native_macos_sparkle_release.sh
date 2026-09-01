@@ -134,7 +134,7 @@ write_release_manifest() {
   local download_url="$3"
   local manifest_path="${ARCHIVES_DIR}/release-manifest.json"
   local zip_sha appcast_sha signature_details signing_authority signing_state
-  local notarized_state gatekeeper_ready_state apple_developer_signed_state
+  local notarized_state gatekeeper_ready_state apple_developer_signed_state self_signed_state
   zip_sha="$(sha256_file "${zip_path}")"
   appcast_sha="$(sha256_file "${appcast_path}")"
   signature_details="$(codesign -dvvv "${APP_DIR}" 2>&1 || true)"
@@ -143,12 +143,16 @@ write_release_manifest() {
   notarized_state="False"
   gatekeeper_ready_state="False"
   apple_developer_signed_state="False"
+  self_signed_state="False"
   if [[ "${VEX_NOTARIZE:-0}" == "1" && "${signing_authority}" == "Developer ID Application:"* ]]; then
     notarized_state="True"
     gatekeeper_ready_state="True"
     apple_developer_signed_state="True"
   elif [[ "${signing_authority}" == "Developer ID Application:"* ]]; then
     apple_developer_signed_state="True"
+  fi
+  if [[ "${VEX_NATIVE_SIGNING_MODE:-}" == "self-signed" ]]; then
+    self_signed_state="True"
   fi
 
   python3 - "${manifest_path}" <<PY
@@ -172,6 +176,7 @@ manifest = {
     "updateSignatureScheme": "sparkle-ed25519",
     "codesignIdentity": "${signing_state}",
     "distributionMode": "sparkle-ed25519-custom",
+    "selfSigned": ${self_signed_state},
     "appleDeveloperSigned": ${apple_developer_signed_state},
     "notarized": ${notarized_state},
     "gatekeeperReady": ${gatekeeper_ready_state},

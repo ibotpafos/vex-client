@@ -14,6 +14,8 @@ APP_BUILD="${VEX_NATIVE_BUILD:-1}"
 SPARKLE_FEED_URL="${VEX_SPARKLE_FEED_URL:-https://vexguard.app/downloads/native-macos/appcast.xml}"
 SPARKLE_PUBLIC_ED_KEY="${VEX_SPARKLE_PUBLIC_ED_KEY:-cwILAPfDRcrjrAWmD/VrMzIh983R2hncvI44tfEZauI=}"
 CODESIGN_IDENTITY="${VEX_CODESIGN_IDENTITY:--}"
+CODESIGN_KEYCHAIN="${VEX_CODESIGN_KEYCHAIN:-}"
+CODESIGN_TIMESTAMP="${VEX_CODESIGN_TIMESTAMP:-automatic}"
 HELPER_RESOURCE_DIR="${PACKAGE_DIR}/HelperResources"
 
 if [[ -f "${ROOT_DIR}/.env.sparkle.local" ]]; then
@@ -70,7 +72,13 @@ xml_escape() {
 if [[ "${CODESIGN_IDENTITY}" == "-" ]]; then
   CODESIGN_ARGS=(--force --sign -)
 else
-  CODESIGN_ARGS=(--force --options runtime --timestamp --sign "${CODESIGN_IDENTITY}")
+  CODESIGN_ARGS=(--force --options runtime --sign "${CODESIGN_IDENTITY}")
+  [[ -z "${CODESIGN_KEYCHAIN}" ]] || CODESIGN_ARGS+=(--keychain "${CODESIGN_KEYCHAIN}")
+  if [[ "${CODESIGN_TIMESTAMP}" == "none" ]]; then
+    CODESIGN_ARGS+=(--timestamp=none)
+  else
+    CODESIGN_ARGS+=(--timestamp)
+  fi
 fi
 
 cd "${PACKAGE_DIR}"

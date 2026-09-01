@@ -8,10 +8,12 @@ SPARKLE_ARCHIVES_DIR="${VEX_SPARKLE_ARCHIVES_DIR:-${ROOT_DIR}/macos-native/build
 PRODUCTION="${VEX_NATIVE_PRODUCTION:-0}"
 REQUIRE_DEVELOPER_ID="${VEX_NATIVE_REQUIRE_DEVELOPER_ID:-0}"
 DISPLAY_MODE="${VEX_NATIVE_DISTRIBUTION_MODE:-internal}"
+SIGNING_MODE="${VEX_NATIVE_SIGNING_MODE:-developer-id}"
+SELF_SIGNED_CERT_SHA256="${VEX_SELF_SIGNED_APP_CERT_SHA256:-}"
 MAX_MINIMUM_SYSTEM_MAJOR="${VEX_NATIVE_MAX_MINIMUM_SYSTEM_MAJOR:-15}"
 VERIFY_INSTALLED_RUNTIME="${VEX_NATIVE_VERIFY_INSTALLED_RUNTIME:-0}"
 
-if [[ "${PRODUCTION}" == "1" ]]; then
+if [[ "${PRODUCTION}" == "1" && "${SIGNING_MODE}" != "self-signed" ]]; then
   REQUIRE_DEVELOPER_ID=1
 fi
 
@@ -71,7 +73,21 @@ codesign --verify --deep --strict "${APP_PATH}" || fail "codesign verification f
 
 signature_details="$(codesign -dvvv "${APP_PATH}" 2>&1 || true)"
 signing_authority="$(sed -n 's/^Authority=//p' <<<"${signature_details}" | head -n 1)"
-if grep -q "Signature=adhoc" <<<"${signature_details}"; then
+if [[ "${SIGNING_MODE}" == "self-signed" ]]; then
+  grep -q "Signature=adhoc" <<<"${signature_details}" && fail "self-signed mode refuses an ad-hoc signature"
+  [[ "${SELF_SIGNED_CERT_SHA256}" =~ ^[0-9A-Fa-f]{64}$ ]] || fail "self-signed certificate SHA-256 pin is missing or invalid"
+  cert_dir="$(mktemp -d)"
+  trap 'rm -rf "${cert_dir}"' EXIT
+  codesign -d --extract-certificates="${cert_dir}/cert" "${APP_PATH}" >/dev/null 2>&1 \
+    || fail "cannot extract application signing certificate"
+  require_file "${cert_dir}/cert0"
+  cert_subject="$(openssl x509 -inform DER -in "${cert_dir}/cert0" -noout -subject -nameopt RFC2253 | sed 's/^subject=//')"
+  cert_issuer="$(openssl x509 -inform DER -in "${cert_dir}/cert0" -noout -issuer -nameopt RFC2253 | sed 's/^issuer=//')"
+  [[ "${cert_subject}" == "${cert_issuer}" ]] || fail "application certificate is not self-signed"
+  cert_sha="$(openssl x509 -inform DER -in "${cert_dir}/cert0" -outform DER | shasum -a 256 | awk '{print $1}')"
+  expected_cert_sha="$(printf '%s' "${SELF_SIGNED_CERT_SHA256}" | tr '[:upper:]' '[:lower:]')"
+  [[ "${cert_sha}" == "${expected_cert_sha}" ]] || fail "self-signed application certificate fingerprint mismatch"
+elif grep -q "Signature=adhoc" <<<"${signature_details}"; then
   if [[ "${REQUIRE_DEVELOPER_ID}" == "1" ]]; then
     fail "app is ad-hoc signed; Developer ID signature required"
   fi
@@ -101,7 +117,7 @@ if [[ -n "${PKG_PATH}" ]]; then
   fi
 fi
 
-if [[ "${PRODUCTION}" == "1" ]]; then
+if [[ "${PRODUCTION}" == "1" && "${SIGNING_MODE}" != "self-signed" ]]; then
   xcrun stapler validate "${APP_PATH}" >/dev/null 2>&1 \
     || fail "notarization ticket is missing or invalid"
 fi

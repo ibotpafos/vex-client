@@ -318,8 +318,8 @@ final class SparkleUpdateTests: XCTestCase {
             .appendingPathComponent("scripts/build_native_macos_internal_release.sh")
         let script = try String(contentsOf: scriptURL, encoding: .utf8)
 
-        XCTAssertTrue(script.contains("VEX_NATIVE_REQUIRE_DEVELOPER_ID=0"))
-        XCTAssertTrue(script.contains("VEX_NATIVE_PRODUCTION=0"))
+        XCTAssertTrue(script.contains("VEX_NATIVE_REQUIRE_DEVELOPER_ID=\"${VEX_NATIVE_REQUIRE_DEVELOPER_ID:-0}\""))
+        XCTAssertTrue(script.contains("VEX_NATIVE_PRODUCTION=\"${VEX_NATIVE_PRODUCTION:-0}\""))
         XCTAssertFalse(script.contains("VEX_NATIVE_PRODUCTION=1"))
         XCTAssertTrue(script.contains("VEX_NATIVE_DISTRIBUTION_MODE"))
         XCTAssertTrue(script.contains("build_native_macos_sparkle_release.sh"))

@@ -67,7 +67,7 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
             "VEX_NATIVE_BUILD_PKG: \"0\"",
             "VEX_NOTARIZE: \"0\"",
             "subject=issuer",
-            "security add-trusted-cert -r trustRoot -p codeSign",
+            "SHA-1 hash:",
             "security delete-keychain",
             "if: always()",
             "actions/upload-artifact@v4",
@@ -82,6 +82,7 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
         )
         self.assertNotIn("VEX_NOTARY_APPLE_ID", workflow)
         self.assertNotIn("VEX_MACOS_INSTALLER_P12_BASE64", workflow)
+        self.assertNotIn("security add-trusted-cert", workflow)
 
     def test_autonomous_release_preserves_self_signed_production_contract(self) -> None:
         autonomous = (ROOT / "scripts" / "release_native_macos_autonomous.sh").read_text()

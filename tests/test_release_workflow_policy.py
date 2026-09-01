@@ -51,24 +51,22 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
         self.assertNotIn('"linux:release"', package)
         self.assertNotIn('"windows:release"', package)
 
-    def test_native_macos_release_workflow_is_fail_closed(self) -> None:
+    def test_native_macos_self_signed_release_workflow_is_fail_closed(self) -> None:
         workflow = (WORKFLOWS / "native-macos-release.yml").read_text()
         for required in (
             "workflow_dispatch:",
             "VEX_MACOS_APPLICATION_P12_BASE64",
             "VEX_MACOS_APPLICATION_P12_PASSWORD",
-            "VEX_MACOS_INSTALLER_P12_BASE64",
-            "VEX_MACOS_INSTALLER_P12_PASSWORD",
+            "VEX_SELF_SIGNED_APP_CERT_SHA256",
             "VEX_SPARKLE_PRIVATE_ED_KEY_BASE64",
             "VEX_SPARKLE_PUBLIC_ED_KEY",
-            "VEX_NOTARY_APPLE_ID",
-            "VEX_NOTARY_TEAM_ID",
-            "VEX_NOTARY_PASSWORD",
             "VEX_RELEASE_REPOSITORY_TOKEN",
-            "VEX_NOTARY_KEYCHAIN",
             "VEX_NATIVE_PRODUCTION: \"1\"",
-            "VEX_NATIVE_REQUIRE_DEVELOPER_ID: \"1\"",
-            "VEX_NOTARIZE: \"1\"",
+            "VEX_NATIVE_SIGNING_MODE: self-signed",
+            "VEX_NATIVE_REQUIRE_DEVELOPER_ID: \"0\"",
+            "VEX_NATIVE_BUILD_PKG: \"0\"",
+            "VEX_NOTARIZE: \"0\"",
+            "subject=issuer",
             "security delete-keychain",
             "if: always()",
             "actions/upload-artifact@v4",
@@ -81,22 +79,20 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
             workflow.index("- name: Validate release inputs"),
             workflow.index("- name: Checkout production downloads repository"),
         )
+        self.assertNotIn("VEX_NOTARY_APPLE_ID", workflow)
+        self.assertNotIn("VEX_MACOS_INSTALLER_P12_BASE64", workflow)
 
-    def test_autonomous_release_cannot_relax_production_signing(self) -> None:
+    def test_autonomous_release_preserves_self_signed_production_contract(self) -> None:
         autonomous = (ROOT / "scripts" / "release_native_macos_autonomous.sh").read_text()
         internal = (ROOT / "scripts" / "build_native_macos_internal_release.sh").read_text()
-        package = (ROOT / "scripts" / "build_native_macos_pkg.sh").read_text()
         self.assertIn("export VEX_NATIVE_PRODUCTION=1", autonomous)
-        self.assertIn("export VEX_NATIVE_REQUIRE_DEVELOPER_ID=1", autonomous)
-        self.assertIn("export VEX_NOTARIZE=1", autonomous)
-        self.assertNotIn("export VEX_NATIVE_REQUIRE_DEVELOPER_ID=0", internal)
+        self.assertIn("export VEX_NATIVE_SIGNING_MODE=self-signed", autonomous)
+        self.assertIn("export VEX_NATIVE_REQUIRE_DEVELOPER_ID=0", autonomous)
+        self.assertIn("export VEX_NATIVE_BUILD_PKG=0", autonomous)
+        self.assertIn("export VEX_NOTARIZE=0", autonomous)
         self.assertIn('VEX_NATIVE_PRODUCTION="${VEX_NATIVE_PRODUCTION}"', internal)
         self.assertIn('VEX_NATIVE_REQUIRE_DEVELOPER_ID="${VEX_NATIVE_REQUIRE_DEVELOPER_ID}"', internal)
-        self.assertIn("notarytool submit", package)
-        self.assertIn("stapler staple", package)
-        self.assertIn("VEX_NOTARY_KEYCHAIN", package)
-        sparkle = (ROOT / "scripts" / "build_native_macos_sparkle_release.sh").read_text()
-        self.assertIn("VEX_NOTARY_KEYCHAIN", sparkle)
+        self.assertIn('if [[ "${VEX_NATIVE_BUILD_PKG:-1}" == "1" ]]', internal)
 
     def test_internal_release_preserves_production_preflight_flags(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -118,8 +114,9 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
             preflight = scripts / "native_macos_production_preflight.sh"
             preflight.write_text(
                 "#!/usr/bin/env bash\nset -euo pipefail\n"
-                "printf '%s|%s|%s\\n' \"$VEX_NATIVE_PRODUCTION\" "
+                "printf '%s|%s|%s|%s\\n' \"$VEX_NATIVE_PRODUCTION\" "
                 "\"$VEX_NATIVE_REQUIRE_DEVELOPER_ID\" \"$VEX_NATIVE_DISTRIBUTION_MODE\" "
+                "\"$VEX_NATIVE_SIGNING_MODE\" "
                 '> \"$CAPTURE_PATH\"\n'
             )
             preflight.chmod(0o755)
@@ -129,8 +126,10 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
                 VEX_NATIVE_VERSION="9.9.9",
                 VEX_NATIVE_BUILD="999",
                 VEX_NATIVE_PRODUCTION="1",
-                VEX_NATIVE_REQUIRE_DEVELOPER_ID="1",
-                VEX_NATIVE_DISTRIBUTION_MODE="production",
+                VEX_NATIVE_REQUIRE_DEVELOPER_ID="0",
+                VEX_NATIVE_DISTRIBUTION_MODE="self-signed",
+                VEX_NATIVE_SIGNING_MODE="self-signed",
+                VEX_NATIVE_BUILD_PKG="0",
                 CAPTURE_PATH=str(capture),
             )
             subprocess.run(
@@ -141,7 +140,7 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
-            self.assertEqual(capture.read_text(), "1|1|production\n")
+            self.assertEqual(capture.read_text(), "1|0|self-signed|self-signed\n")
 
     def test_local_release_cache_creates_missing_source_parent(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

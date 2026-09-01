@@ -26,19 +26,25 @@ export VEX_SPARKLE_PRODUCTION="${VEX_SPARKLE_PRODUCTION:-1}"
 export VEX_NATIVE_PRODUCTION="${VEX_NATIVE_PRODUCTION:-0}"
 export VEX_NATIVE_DISTRIBUTION_MODE="${VEX_NATIVE_DISTRIBUTION_MODE:-internal}"
 export VEX_NATIVE_REQUIRE_DEVELOPER_ID="${VEX_NATIVE_REQUIRE_DEVELOPER_ID:-0}"
+export VEX_NATIVE_SIGNING_MODE="${VEX_NATIVE_SIGNING_MODE:-internal}"
+export VEX_NATIVE_BUILD_PKG="${VEX_NATIVE_BUILD_PKG:-1}"
 
 bash "${ROOT_DIR}/scripts/build_native_macos_app.sh"
-bash "${ROOT_DIR}/scripts/build_native_macos_pkg.sh"
+pkg_path=""
+if [[ "${VEX_NATIVE_BUILD_PKG:-1}" == "1" ]]; then
+  bash "${ROOT_DIR}/scripts/build_native_macos_pkg.sh"
+  pkg_path="$(ls -t "${ROOT_DIR}/macos-native/build/pkg/"*.pkg | head -n 1)"
+fi
 bash "${ROOT_DIR}/scripts/build_native_macos_sparkle_release.sh"
 
-pkg_path="$(ls -t "${ROOT_DIR}/macos-native/build/pkg/"*.pkg | head -n 1)"
 VEX_NATIVE_PKG_PATH="${pkg_path}" \
   VEX_NATIVE_PRODUCTION="${VEX_NATIVE_PRODUCTION}" \
   VEX_NATIVE_REQUIRE_DEVELOPER_ID="${VEX_NATIVE_REQUIRE_DEVELOPER_ID}" \
   VEX_NATIVE_DISTRIBUTION_MODE="${VEX_NATIVE_DISTRIBUTION_MODE:-internal}" \
+  VEX_NATIVE_SIGNING_MODE="${VEX_NATIVE_SIGNING_MODE}" \
   bash "${ROOT_DIR}/scripts/native_macos_production_preflight.sh"
 
 echo "Internal macOS release ready:"
 echo "  app: ${ROOT_DIR}/macos-native/build/VEXNativeMac.app"
-echo "  pkg: ${pkg_path}"
+[[ -z "${pkg_path}" ]] || echo "  pkg: ${pkg_path}"
 echo "  sparkle: ${ROOT_DIR}/macos-native/build/sparkle-release/archives"

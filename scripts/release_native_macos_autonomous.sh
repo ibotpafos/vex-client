@@ -12,7 +12,7 @@ VEX_NATIVE_CHANGELOG="${VEX_NATIVE_CHANGELOG:-macOS: обновлён интер
 ALLOW_DIRTY_DEPLOY="${ALLOW_DIRTY_DEPLOY:-0}"
 ALLOW_NO_UPSTREAM_DEPLOY="${ALLOW_NO_UPSTREAM_DEPLOY:-0}"
 ALLOW_DIRTY_SOURCE="${ALLOW_DIRTY_SOURCE:-0}"
-NATIVE_DOWNLOAD_DIR="${VPN_REPO}/web/public/downloads/native-macos"
+NATIVE_DOWNLOAD_DIR="${VPN_REPO}/clients/web/public/downloads/native-macos"
 VPN_RELEASE_DIR="${VPN_RELEASE_DIR:-dist/native-macos}"
 
 require_command() {

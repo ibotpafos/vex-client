@@ -67,6 +67,7 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
             "VEX_NATIVE_REQUIRE_DEVELOPER_ID: \"0\"",
             "VEX_NATIVE_BUILD_PKG: \"0\"",
             "VEX_NOTARIZE: \"0\"",
+            "RUN_PUBLIC_PREFLIGHT: \"0\"",
             "subject=issuer",
             "SHA-1 hash:",
             "security delete-keychain",

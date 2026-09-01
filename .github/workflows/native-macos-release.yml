@@ -25,6 +25,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 60
     env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
       VEX_NATIVE_VERSION: ${{ inputs.release_version }}
       VEX_NATIVE_BUILD: ${{ inputs.release_build }}
       VEX_NATIVE_CHANGELOG: ${{ inputs.release_notes }}

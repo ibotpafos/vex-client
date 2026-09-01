@@ -55,6 +55,7 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
         workflow = (WORKFLOWS / "native-macos-release.yml").read_text()
         for required in (
             "workflow_dispatch:",
+            "/Applications/Xcode_26.3.app/Contents/Developer",
             "VEX_MACOS_APPLICATION_P12_BASE64",
             "VEX_MACOS_APPLICATION_P12_PASSWORD",
             "VEX_SELF_SIGNED_APP_CERT_SHA256",

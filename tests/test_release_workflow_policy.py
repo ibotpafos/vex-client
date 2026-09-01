@@ -94,6 +94,7 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("export VEX_NATIVE_REQUIRE_DEVELOPER_ID=0", autonomous)
         self.assertIn("export VEX_NATIVE_BUILD_PKG=0", autonomous)
         self.assertIn("export VEX_NOTARIZE=0", autonomous)
+        self.assertIn('${VPN_REPO}/clients/web/public/downloads/native-macos', autonomous)
         self.assertIn('VEX_NATIVE_PRODUCTION="${VEX_NATIVE_PRODUCTION}"', internal)
         self.assertIn('VEX_NATIVE_REQUIRE_DEVELOPER_ID="${VEX_NATIVE_REQUIRE_DEVELOPER_ID}"', internal)
         self.assertIn('if [[ "${VEX_NATIVE_BUILD_PKG:-1}" == "1" ]]', internal)

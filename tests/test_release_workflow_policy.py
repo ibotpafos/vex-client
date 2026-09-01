@@ -67,6 +67,7 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
             "VEX_NATIVE_BUILD_PKG: \"0\"",
             "VEX_NOTARIZE: \"0\"",
             "subject=issuer",
+            "security add-trusted-cert -r trustRoot -p codeSign",
             "security delete-keychain",
             "if: always()",
             "actions/upload-artifact@v4",

@@ -88,6 +88,7 @@ jobs:
           security import "${app_p12}" -k "${keychain}" -P "${VEX_MACOS_APPLICATION_P12_PASSWORD}" -T /usr/bin/codesign -T /usr/bin/security
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${keychain_password}" "${keychain}"
           security find-certificate -c 'VEX Self-Signed Application' -p "${keychain}" > "${app_cert}"
+          security add-trusted-cert -r trustRoot -p codeSign -k "${keychain}" "${app_cert}"
           subject="$(openssl x509 -in "${app_cert}" -noout -subject -nameopt RFC2253 | sed 's/^subject=//')"
           issuer="$(openssl x509 -in "${app_cert}" -noout -issuer -nameopt RFC2253 | sed 's/^issuer=//')"
           [[ "${subject}" == "${issuer}" ]] || { echo "self-signed certificate requires subject=issuer" >&2; exit 2; }

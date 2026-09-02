@@ -1,4 +1,5 @@
 using Vex.Windows.Core.Vpn;
+using Vex.Windows.Client.Api;
 
 namespace Vex.Windows.App.Services;
 
@@ -6,6 +7,8 @@ public sealed class VpnUiStateService
 {
     private readonly VpnServiceClient _vpnClient;
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly NativeConnectionTelemetryTracker _connectionTelemetry =
+        new();
 
     public VpnUiStateService(VpnServiceClient vpnClient)
     {
@@ -23,6 +26,9 @@ public sealed class VpnUiStateService
     public ulong SentBytes { get; private set; }
 
     public bool ConnectionDesired { get; private set; }
+
+    public ClientConnectionTelemetrySnapshot ConnectionTelemetry =>
+        _connectionTelemetry.Snapshot(DateTimeOffset.UtcNow);
 
     public async Task<VpnServiceResponse> RefreshAsync(
         CancellationToken cancellationToken) =>
@@ -51,6 +57,10 @@ public sealed class VpnUiStateService
 
     public void MarkConnectionDesired(bool desired)
     {
+        _connectionTelemetry.SetConnectionDesired(
+            desired,
+            Snapshot.Phase,
+            DateTimeOffset.UtcNow);
         ConnectionDesired = desired;
         Changed?.Invoke(this, EventArgs.Empty);
     }
@@ -58,7 +68,14 @@ public sealed class VpnUiStateService
     public void Apply(VpnServiceResponse response)
     {
         ArgumentNullException.ThrowIfNull(response);
+        var previousPhase = Snapshot.Phase;
         Snapshot = response.Snapshot;
+        _connectionTelemetry.Observe(
+            previousPhase,
+            Snapshot,
+            ConnectionDesired,
+            DateTimeOffset.UtcNow,
+            protocol: "amneziawg");
         ReceivedBytes = ToUnsigned(response.Diagnostics?.RxBytes);
         SentBytes = ToUnsigned(response.Diagnostics?.TxBytes);
         Changed?.Invoke(this, EventArgs.Empty);

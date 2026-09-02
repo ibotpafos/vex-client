@@ -220,6 +220,7 @@ public sealed class AppServices
         CancellationToken cancellationToken)
     {
         var snapshot = VpnUiState.Snapshot;
+        var telemetry = VpnUiState.ConnectionTelemetry;
         var report = new ClientDiagnosticsReport(
             DeviceId: Coordinator.CurrentState?.DeviceId,
             Platform: "windows",
@@ -227,7 +228,8 @@ public sealed class AppServices
             Reason: queued.Reason,
             Status: queued.Status,
             VpnState: snapshot.Phase.ToString().ToLowerInvariant(),
-            Endpoint: Sample(queued, "endpoint"),
+            Endpoint: snapshot.Diagnostics?.Endpoint ??
+                Sample(queued, "endpoint"),
             DnsOk: BooleanSample(queued, "dns_ok"),
             HttpsOk: BooleanSample(queued, "https_ok"),
             LatencyAverageMs: DoubleSample(
@@ -239,7 +241,12 @@ public sealed class AppServices
             TxBytes: checked((long)Math.Min(
                 VpnUiState.SentBytes,
                 (ulong)long.MaxValue)),
-            Samples: queued.Samples);
+            Samples: queued.Samples,
+            ConnectionEvent: telemetry.ConnectionEvent,
+            ConnectDurationMs: telemetry.ConnectDurationMs,
+            TransportFrom: telemetry.TransportFrom,
+            TransportTo: telemetry.TransportTo,
+            SessionUptimeSeconds: telemetry.SessionUptimeSeconds);
         return Coordinator.SubmitClientDiagnosticsAsync(
             report,
             cancellationToken);

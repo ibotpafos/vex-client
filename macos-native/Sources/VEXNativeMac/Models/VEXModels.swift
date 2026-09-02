@@ -402,6 +402,11 @@ struct ClientDiagnosticsReport: Codable, Equatable {
     var rxBytes: Int64
     var txBytes: Int64
     var samples: [String: String]
+    var connectionEvent: String? = nil
+    var connectDurationMs: Int? = nil
+    var transportFrom: String? = nil
+    var transportTo: String? = nil
+    var sessionUptimeSeconds: Int? = nil
 
     enum CodingKeys: String, CodingKey {
         case deviceId = "device_id"
@@ -417,6 +422,11 @@ struct ClientDiagnosticsReport: Codable, Equatable {
         case rxBytes = "rx_bytes"
         case txBytes = "tx_bytes"
         case samples
+        case connectionEvent = "connection_event"
+        case connectDurationMs = "connect_duration_ms"
+        case transportFrom = "transport_from"
+        case transportTo = "transport_to"
+        case sessionUptimeSeconds = "session_uptime_seconds"
     }
 }
 
@@ -447,6 +457,38 @@ struct PreparedTunnel: Equatable {
     var routingPolicyVersion: String
     var rotationRequired: Bool
     var awgVersion: Int = 3
+}
+
+extension PreparedTunnel {
+    /// Backend diagnostics transport derived from the profile that is actually
+    /// handed to the native helper, including an endpoint fallback port.
+    var telemetryTransport: String {
+        let normalizedProtocol = device.protocol?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        if normalizedProtocol == "openvpn" {
+            return "openvpn"
+        }
+        if normalizedProtocol == "wireguard" {
+            return "wireguard"
+        }
+        if awgVersion == 2 || normalizedProtocol == "awg2" {
+            return "awg2"
+        }
+        if awgVersion >= 3 || normalizedProtocol == "amneziawg" || normalizedProtocol == "awg3" {
+            return telemetryEndpointPort == 443 ? "awg3_udp443" : "awg3"
+        }
+        return "unknown"
+    }
+
+    private var telemetryEndpointPort: Int? {
+        guard let endpoint = endpoint?.trimmingCharacters(in: .whitespacesAndNewlines),
+              let separator = endpoint.lastIndex(of: ":") else {
+            return nil
+        }
+        let suffix = endpoint[endpoint.index(after: separator)...]
+        return Int(suffix)
+    }
 }
 
 struct ManagedVpnProfile: Codable, Equatable {

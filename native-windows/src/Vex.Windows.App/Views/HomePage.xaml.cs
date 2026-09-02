@@ -116,12 +116,13 @@ public sealed partial class HomePage : Page
                 return;
             }
 
+            _services.VpnUiState.MarkConnectionDesired(true);
             await RunRequestAsync(
                 ConnectWithPreferencesAsync);
-            if (_services.VpnUiState.Snapshot.Phase ==
+            if (_services.VpnUiState.Snapshot.Phase !=
                 VpnConnectionPhase.Connected)
             {
-                _services.VpnUiState.MarkConnectionDesired(true);
+                _services.VpnUiState.MarkConnectionDesired(false);
             }
             return;
         }

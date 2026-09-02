@@ -67,6 +67,13 @@ final class VEXAppState: ObservableObject {
     private var customerRefreshInFlight = false
     private var customerRefreshPending = false
     private var automaticUpdatesPrepared = false
+    private var nativeConnectionAttemptStartedAt: Date?
+    private var nativeConnectionTransportFrom: String?
+    private var nativeFallbackInProgress = false
+    private var nativeConnectedAt: Date?
+    private var nativeCurrentTransport: String?
+    private var nextNativeConnectionKind = "connect"
+    private var retainedNativeTransportFrom: String?
     private static let updateRefreshIntervalNanoseconds: UInt64 = 15 * 60 * 1_000_000_000
     private static let customerFallbackIntervalNanoseconds: UInt64 = 60 * 1_000_000_000
 
@@ -340,12 +347,32 @@ final class VEXAppState: ObservableObject {
             statusMessage = "Сначала войдите в аккаунт."
             return
         }
+        let connectionKind = nextNativeConnectionKind
+        nextNativeConnectionKind = "connect"
+        let transportFrom = retainedNativeTransportFrom ?? nativeCurrentTransport
+        retainedNativeTransportFrom = nil
+        let attemptStartedAt = Date()
+        nativeConnectionAttemptStartedAt = attemptStartedAt
+        nativeConnectionTransportFrom = transportFrom
+        nativeFallbackInProgress = false
         guard let requestToken = await ensureEntitlementForConnect(accessToken: token) else {
+            nativeConnectionAttemptStartedAt = nil
+            nativeConnectionTransportFrom = nil
             return
         }
         guard entitlement?.hasPaidAccess == true else {
             statusMessage = entitlement == nil ? "Не удалось проверить подписку." : "Для VPN нужна активная подписка."
-            await submitDiagnostics(reason: "entitlement_missing_before_connect", status: "auth_error", helperStatus: helper.status, samples: ["message": statusMessage ?? ""])
+            await submitDiagnostics(
+                reason: "entitlement_missing_before_connect",
+                status: "auth_error",
+                helperStatus: helper.status,
+                samples: ["message": statusMessage ?? ""],
+                connectionEvent: "\(connectionKind)_failed",
+                connectDurationMs: elapsedMilliseconds(since: attemptStartedAt),
+                transportFrom: transportFrom
+            )
+            nativeConnectionAttemptStartedAt = nil
+            nativeConnectionTransportFrom = nil
             return
         }
         do {
@@ -367,20 +394,68 @@ final class VEXAppState: ObservableObject {
             )
             try ensureConnectStillDesired(generation: generation)
             activeTunnel = connectedTunnel
+            let connectedAt = Date()
+            let connectDurationMs = elapsedMilliseconds(since: attemptStartedAt, at: connectedAt)
+            let transportTo = connectedTunnel.telemetryTransport
+            let completionEvent = nativeFallbackInProgress
+                ? "fallback_succeeded"
+                : "\(connectionKind)_succeeded"
+            nativeConnectedAt = connectedAt
+            nativeCurrentTransport = transportTo
+            nativeConnectionAttemptStartedAt = nil
+            nativeConnectionTransportFrom = nil
+            nativeFallbackInProgress = false
             statusMessage = "VPN подключен через \(selectedLocation?.displayName ?? connectedTunnel.locationId.uppercased())."
             // Reporting is fire-and-forget: the tunnel is already up, so a slow
             // API round-trip must neither hold the busy state nor delay feedback.
             Task { [api] in
                 await api.reportVpnConnect(accessToken: tunnelToken, tunnel: connectedTunnel)
             }
+            let connectedStatus = helper.status
+            Task { [weak self] in
+                await self?.submitDiagnostics(
+                    reason: "vpn_\(completionEvent)",
+                    status: "ok",
+                    helperStatus: connectedStatus,
+                    connectionEvent: completionEvent,
+                    connectDurationMs: connectDurationMs,
+                    transportFrom: transportFrom,
+                    transportTo: transportTo,
+                    sessionUptimeSeconds: 0
+                )
+            }
         } catch is CancellationError {
             await helper.interruptWithDisconnect(releaseAntiLeak: !antiLeakEnabled)
+            nativeConnectionAttemptStartedAt = nil
+            nativeConnectionTransportFrom = nil
+            nativeFallbackInProgress = false
+            nativeConnectedAt = nil
+            nativeCurrentTransport = nil
             statusMessage = "Подключение VPN отменено."
         } catch {
             statusMessage = connectErrorMessage(error)
             await helper.interruptWithDisconnect(releaseAntiLeak: true)
+            let attemptedTransport = activeTunnel?.telemetryTransport
             activeTunnel = nil
-            await submitDiagnostics(reason: "vpn_connect_failed", status: "error", helperStatus: helper.status, samples: ["error": error.localizedDescription])
+            let connectDurationMs = elapsedMilliseconds(since: attemptStartedAt)
+            let failureEvent = nativeFallbackInProgress
+                ? "fallback_failed"
+                : "\(connectionKind)_failed"
+            nativeConnectionAttemptStartedAt = nil
+            nativeConnectionTransportFrom = nil
+            nativeFallbackInProgress = false
+            nativeConnectedAt = nil
+            nativeCurrentTransport = nil
+            await submitDiagnostics(
+                reason: "vpn_\(failureEvent)",
+                status: "error",
+                helperStatus: helper.status,
+                samples: ["error": error.localizedDescription],
+                connectionEvent: failureEvent,
+                connectDurationMs: connectDurationMs,
+                transportFrom: transportFrom,
+                transportTo: attemptedTransport
+            )
         }
 
         if desiredVpnState == .disconnected, helper.status.state != .disconnected {
@@ -399,12 +474,17 @@ final class VEXAppState: ObservableObject {
             let usage = await autopilotService.usage(accessToken: token, deviceId: initialTunnel.device.id)
             let healthReasons = autopilotService.healthReasons(status: helper.status, usage: usage)
             let assessment = autopilotService.assess(error: error, healthReasons: healthReasons, status: helper.status, probe: probe)
+            nativeFallbackInProgress = true
             statusMessage = assessment.userMessage
             await submitDiagnostics(
                 reason: "vpn_autopilot_initial_failed",
                 status: assessment.diagnosticStatus,
                 helperStatus: helper.status,
-                samples: assessment.samples.merging(["error": error.localizedDescription]) { current, _ in current }
+                samples: assessment.samples.merging(["error": error.localizedDescription]) { current, _ in current },
+                connectionEvent: "fallback_started",
+                connectDurationMs: nativeConnectionAttemptStartedAt.map { elapsedMilliseconds(since: $0) },
+                transportFrom: nativeConnectionTransportFrom,
+                transportTo: initialTunnel.telemetryTransport
             )
 
             if initialTunnel.rotationRequired || assessment.cause == .keyOrProfile,
@@ -441,7 +521,11 @@ final class VEXAppState: ObservableObject {
                     samples: assessment.samples.merging([
                         "previous_location_id": initialTunnel.locationId,
                         "next_location_id": failoverLocation.id,
-                    ]) { current, _ in current }
+                    ]) { current, _ in current },
+                    connectionEvent: "fallback_started",
+                    connectDurationMs: nativeConnectionAttemptStartedAt.map { elapsedMilliseconds(since: $0) },
+                    transportFrom: nativeConnectionTransportFrom,
+                    transportTo: failoverTunnel.telemetryTransport
                 )
                 return try await connectPreparedTunnel(failoverTunnel, helper: helper, generation: generation)
             }
@@ -483,6 +567,7 @@ final class VEXAppState: ObservableObject {
     private func performDisconnectVPN(using helper: VEXHelperModel, reason: String, generation: Int) async {
         if helper.status.state == .disconnected, !helper.isBusy {
             activeTunnel = nil
+            clearNativeConnectionSessionTelemetry()
             statusMessage = "VPN отключен."
             if desiredVpnState == .connected {
                 vpnOperationGeneration += 1
@@ -495,6 +580,7 @@ final class VEXAppState: ObservableObject {
             await helper.interruptWithDisconnect(releaseAntiLeak: !antiLeakEnabled)
             isVpnBusy = false
             activeTunnel = nil
+            clearNativeConnectionSessionTelemetry()
             return
         }
         guard !isVpnBusy, !helper.isBusy else {
@@ -505,6 +591,7 @@ final class VEXAppState: ObservableObject {
         await helper.disconnect(releaseAntiLeak: !antiLeakEnabled)
         let reportedTunnel = activeTunnel
         activeTunnel = nil
+        clearNativeConnectionSessionTelemetry()
         statusMessage = "VPN отключен."
         isVpnBusy = false
         if let token = accessToken {
@@ -587,6 +674,8 @@ final class VEXAppState: ObservableObject {
                     LastTunnelEndpointStore().save(endpoint, locationId: nextTunnel.locationId)
                 }
                 statusMessage = "VPN переключен на \(selectedLocation?.displayName ?? nextTunnel.locationId.uppercased())."
+                nativeConnectedAt = nativeConnectedAt ?? Date()
+                nativeCurrentTransport = nextTunnel.telemetryTransport
                 serverSidebarOperation = .verified(statusMessage ?? "VPN переключен.")
                 Task { [api] in
                     await api.reportVpnDisconnect(accessToken: token, tunnel: previousTunnel, reason: "server_switch")
@@ -608,6 +697,10 @@ final class VEXAppState: ObservableObject {
             }
             let previousRouteRestored =
                 previousTunnel != nil && helper.status.isUsableConnectedStatus
+            if previousRouteRestored, let previousTunnel {
+                nativeConnectedAt = nativeConnectedAt ?? Date()
+                nativeCurrentTransport = previousTunnel.telemetryTransport
+            }
             statusMessage = previousRouteRestored
                 ? "Не удалось переключиться на выбранный сервер. Вернули предыдущий."
                 : "Не удалось переключиться. Проверьте состояние VPN и повторите попытку."
@@ -874,8 +967,14 @@ final class VEXAppState: ObservableObject {
                 "next_location_id": assessment.canFailover ? (failoverLocation?.id ?? previousLocationId) : previousLocationId,
                 "usage_connection_status": usage?.connectionStatus ?? "",
                 "usage_seconds_since_handshake": usage?.secondsSinceHandshake.map(String.init) ?? "",
-            ]) { current, _ in current }
+            ]) { current, _ in current },
+            connectionEvent: "reconnect_started",
+            transportFrom: nativeCurrentTransport,
+            transportTo: activeTunnel?.telemetryTransport,
+            sessionUptimeSeconds: nativeSessionUptimeSeconds()
         )
+        nextNativeConnectionKind = "reconnect"
+        retainedNativeTransportFrom = nativeCurrentTransport
         statusMessage = assessment.userMessage
         await disconnectVPN(using: helper, reason: "watchdog_recovery")
         await connectVPN(using: helper)
@@ -1296,6 +1395,9 @@ final class VEXAppState: ObservableObject {
         session = nil
         user = nil
         activeTunnel = nil
+        clearNativeConnectionSessionTelemetry()
+        nextNativeConnectionKind = "connect"
+        retainedNativeTransportFrom = nil
         entitlement = nil
         billingSummary = nil
         billingPayments = []
@@ -1411,6 +1513,8 @@ final class VEXAppState: ObservableObject {
         guard let helperStatus, helperStatus.isUsableConnectedStatus, activeTunnel == nil else { return }
         await prepareSelectedProfile(forceRefresh: false)
         if let activeTunnel, tunnel(activeTunnel, matches: helperStatus) {
+            nativeConnectedAt = Date()
+            nativeCurrentTransport = activeTunnel.telemetryTransport
             statusMessage = "VPN подключен через \(selectedLocation?.displayName ?? activeTunnel.locationId.uppercased())."
         } else {
             activeTunnel = nil
@@ -1463,7 +1567,17 @@ final class VEXAppState: ObservableObject {
         }
     }
 
-    private func submitDiagnostics(reason: String, status: String, helperStatus: VpnStatus? = nil, samples: [String: String] = [:]) async {
+    private func submitDiagnostics(
+        reason: String,
+        status: String,
+        helperStatus: VpnStatus? = nil,
+        samples: [String: String] = [:],
+        connectionEvent: String? = nil,
+        connectDurationMs: Int? = nil,
+        transportFrom: String? = nil,
+        transportTo: String? = nil,
+        sessionUptimeSeconds: Int? = nil
+    ) async {
         guard let token = accessToken else { return }
         let statusValue = helperStatus
         let report = ClientDiagnosticsReport(
@@ -1479,9 +1593,31 @@ final class VEXAppState: ObservableObject {
                 "selected_location_id": targetLocationId,
                 "routing_mode": routingMode.rawValue,
                 "app": "native-macos",
-            ]) { current, _ in current }
+            ]) { current, _ in current },
+            connectionEvent: connectionEvent,
+            connectDurationMs: connectDurationMs,
+            transportFrom: transportFrom,
+            transportTo: transportTo ?? nativeCurrentTransport,
+            sessionUptimeSeconds: sessionUptimeSeconds ?? nativeSessionUptimeSeconds()
         )
         await diagnosticsService.upload(accessToken: token, report: report)
+    }
+
+    private func elapsedMilliseconds(since startedAt: Date, at observedAt: Date = Date()) -> Int {
+        max(0, Int((observedAt.timeIntervalSince(startedAt) * 1_000).rounded()))
+    }
+
+    private func nativeSessionUptimeSeconds(at observedAt: Date = Date()) -> Int? {
+        guard let nativeConnectedAt else { return nil }
+        return max(0, Int(observedAt.timeIntervalSince(nativeConnectedAt).rounded(.down)))
+    }
+
+    private func clearNativeConnectionSessionTelemetry() {
+        nativeConnectionAttemptStartedAt = nil
+        nativeConnectionTransportFrom = nil
+        nativeFallbackInProgress = false
+        nativeConnectedAt = nil
+        nativeCurrentTransport = nil
     }
 
     private func locationSort(_ left: VpnLocation, _ right: VpnLocation) -> Bool {

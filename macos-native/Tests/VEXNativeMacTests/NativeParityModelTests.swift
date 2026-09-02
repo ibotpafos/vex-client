@@ -755,7 +755,12 @@ final class NativeParityModelTests: XCTestCase {
             latencyAverageMs: 42,
             rxBytes: 10,
             txBytes: 20,
-            samples: ["selected_location_id": "de"]
+            samples: ["selected_location_id": "de"],
+            connectionEvent: "connect_succeeded",
+            connectDurationMs: 1_250,
+            transportFrom: "unknown",
+            transportTo: "awg3_udp443",
+            sessionUptimeSeconds: 9
         )
 
         let dictionary = try report.dictionary()
@@ -765,6 +770,11 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertEqual(dictionary["vpn_state"] as? String, "disconnected")
         XCTAssertEqual(dictionary["latency_avg_ms"] as? Double, 42)
         XCTAssertEqual(dictionary["rx_bytes"] as? Int, 10)
+        XCTAssertEqual(dictionary["connection_event"] as? String, "connect_succeeded")
+        XCTAssertEqual(dictionary["connect_duration_ms"] as? Int, 1_250)
+        XCTAssertEqual(dictionary["transport_from"] as? String, "unknown")
+        XCTAssertEqual(dictionary["transport_to"] as? String, "awg3_udp443")
+        XCTAssertEqual(dictionary["session_uptime_seconds"] as? Int, 9)
         XCTAssertEqual((dictionary["samples"] as? [String: String])?["selected_location_id"], "de")
     }
 
@@ -861,6 +871,8 @@ final class NativeParityModelTests: XCTestCase {
         ])
         XCTAssertTrue(attempts[1].config.contains("Endpoint = de1.vexguard.app:443"))
         XCTAssertFalse(attempts.contains { $0.endpoint?.hasSuffix(":51820") == true })
+        XCTAssertEqual(tunnel.telemetryTransport, "awg3")
+        XCTAssertEqual(attempts[1].telemetryTransport, "awg3_udp443")
     }
 
     func testNativeHelperStartDoesNotRequireAdminPassword() throws {

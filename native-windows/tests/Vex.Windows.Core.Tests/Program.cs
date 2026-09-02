@@ -85,6 +85,7 @@ var tests = new (string Name, Action Run)[]
     ("Windows support history preserves the ticket thread contract", WindowsSupportHistoryUsesContract),
     ("Windows control plane exposes macOS parity read APIs", WindowsControlPlaneExposesParityReads),
     ("Windows control plane sends VPN telemetry and diagnostics", WindowsControlPlaneSendsTelemetryAndDiagnostics),
+    ("Windows diagnostics telemetry tracks the native tunnel lifecycle", WindowsDiagnosticsTelemetryTracksNativeLifecycle),
     ("Windows control plane exposes support socket and app configuration", WindowsControlPlaneExposesSupportAndAppConfiguration),
     ("Windows realtime parser preserves complete SSE frames", WindowsRealtimeParserPreservesFrames),
     ("Windows realtime metadata rejects unknown domains", WindowsRealtimeMetadataRejectsUnknownDomains),
@@ -1769,13 +1770,70 @@ static void WindowsControlPlaneSendsTelemetryAndDiagnostics()
         new ClientDiagnosticsReport(
             "device-1", "windows", "1.0.54", "manual", "ok",
             "connected", "198.51.100.1:51820", true, true, 12.5,
-            10, 20, new Dictionary<string, string> { ["source"] = "settings" }),
+            10, 20, new Dictionary<string, string> { ["source"] = "settings" },
+            ConnectionEvent: "connect_succeeded",
+            ConnectDurationMs: 1_250,
+            TransportFrom: "unknown",
+            TransportTo: "awg3_udp443",
+            SessionUptimeSeconds: 9),
         CancellationToken.None).GetAwaiter().GetResult();
     Equal("/v1/diagnostics/client", handler.Request!.RequestUri!.AbsolutePath);
     if (!handler.Body!.Contains("\"latency_avg_ms\":12.5", StringComparison.Ordinal))
     {
         throw new InvalidOperationException("diagnostics payload is incomplete");
     }
+    if (!handler.Body.Contains("\"connection_event\":\"connect_succeeded\"", StringComparison.Ordinal) ||
+        !handler.Body.Contains("\"connect_duration_ms\":1250", StringComparison.Ordinal) ||
+        !handler.Body.Contains("\"transport_to\":\"awg3_udp443\"", StringComparison.Ordinal) ||
+        !handler.Body.Contains("\"session_uptime_seconds\":9", StringComparison.Ordinal))
+    {
+        throw new InvalidOperationException("diagnostics lifecycle telemetry is incomplete");
+    }
+}
+
+static void WindowsDiagnosticsTelemetryTracksNativeLifecycle()
+{
+    var tracker = new NativeConnectionTelemetryTracker();
+    var startedAt = DateTimeOffset.Parse("2026-09-02T10:00:00Z");
+    tracker.SetConnectionDesired(
+        desired: true,
+        currentPhase: VpnConnectionPhase.Disconnected,
+        observedAt: startedAt);
+
+    var connected = new VpnConnectionSnapshot(
+        VpnConnectionPhase.Connected,
+        "de-1",
+        1,
+        null)
+    {
+        Diagnostics = VpnTunnelDiagnostics.Empty with
+        {
+            Endpoint = "de1.vexguard.app:443",
+        },
+    };
+    tracker.Observe(
+        previousPhase: VpnConnectionPhase.Disconnected,
+        snapshot: connected,
+        connectionDesired: true,
+        observedAt: startedAt.AddMilliseconds(1_250),
+        protocol: "amneziawg");
+
+    var telemetry = tracker.Snapshot(startedAt.AddSeconds(10.25));
+    Equal("connect_succeeded", telemetry.ConnectionEvent);
+    Equal(1_250L, telemetry.ConnectDurationMs);
+    Equal("awg3_udp443", telemetry.TransportTo);
+    Equal(9L, telemetry.SessionUptimeSeconds);
+
+    tracker.Observe(
+        previousPhase: VpnConnectionPhase.Connected,
+        snapshot: VpnConnectionSnapshot.ClientFailure(connected, "tunnel_lost"),
+        connectionDesired: true,
+        observedAt: startedAt.AddSeconds(12.25),
+        protocol: "amneziawg");
+    telemetry = tracker.Snapshot(startedAt.AddSeconds(12.25));
+    Equal("unexpected_disconnect", telemetry.ConnectionEvent);
+    Equal("awg3_udp443", telemetry.TransportFrom);
+    Equal(11L, telemetry.SessionUptimeSeconds);
 }
 
 static void WindowsControlPlaneExposesSupportAndAppConfiguration()

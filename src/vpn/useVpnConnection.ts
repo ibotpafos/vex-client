@@ -303,6 +303,7 @@ export function useVpnConnection() {
     rotateActiveProfile,
     setActiveProfile,
   } = useVpnProfileState({
+    canRefreshInBackground: useCallback(() => !vpnOperationInFlightRef.current, []),
     accessToken: session?.accessToken,
     hasVpnAccess,
     knownEntitlement,

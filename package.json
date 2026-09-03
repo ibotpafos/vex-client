@@ -94,7 +94,7 @@
     "expo:doctor": "npx expo-doctor@latest",
     "expo:fix": "npx expo install --fix",
     "typecheck": "tsc --noEmit",
-    "test:unit": "tsx tests/run-unit-tests.ts && tsx tests/native-google-auth.test.mjs && node tests/email-otp-mfa-contract.mjs && node tests/realtime-session-loop.cjs && node tests/android-package-migration.cjs",
+    "test:unit": "tsx tests/run-unit-tests.ts && tsx tests/native-google-auth.test.mjs && node tests/email-otp-mfa-contract.mjs && node tests/realtime-session-loop.cjs && node tests/android-package-migration.cjs && tsx tests/profile-request-queue.test.ts && node tests/profile-background-contract.cjs",
     "test:awg-upstream": "node tests/amneziawg-upstream-contract.mjs",
     "lint": "eslint .",
     "check": "npm run test:unit && npm run test:awg-upstream && npm run typecheck && npm run lint",

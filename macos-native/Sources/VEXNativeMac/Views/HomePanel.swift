@@ -175,7 +175,7 @@ private struct FocusPulseLocations: View {
                             .popover(isPresented: Binding(
                                 get: { expandedCountryID == country.id },
                                 set: { if !$0 { expandedCountryID = nil } }
-                            ), arrowEdge: .bottom) {
+                            ), arrowEdge: .top) {
                                 countryNodes(country)
                             }
                             .containerRelativeFrame(

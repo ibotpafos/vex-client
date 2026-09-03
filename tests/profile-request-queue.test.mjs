@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import { runProfileRequest, ProfileRequestSupersededError } from '../src/vpn/profileRequestQueue';
+import { runProfileRequest, ProfileRequestSupersededError } from '../src/vpn/profileRequestQueue.ts';
 
 async function main() {
- let finish!: () => void;
- const pending = new Promise<void>(r => { finish=r; });
- const calls: string[] = [];
+ let finish;
+ const pending = new Promise(r => { finish=r; });
+ const calls = [];
  const old = runProfileRequest(async () => { calls.push('old-start'); await pending; calls.push('old-end'); });
  await Promise.resolve();
  const connect = runProfileRequest(async () => { calls.push('connect'); return 'fresh-ip'; });

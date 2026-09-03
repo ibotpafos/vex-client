@@ -5,6 +5,8 @@ import subprocess,tempfile
 R=Path(__file__).resolve().parents[2]
 models=R/'macos-native/Sources/VEXNativeMac/Models'
 s=(models/'VEXModels.swift').read_text(); location=s[s.index('struct VpnLocation:'):s.index('struct AppUpdateCheckResult:')]
+presentation=(models/'FocusPulsePresentation.swift').read_text()
+formatters=presentation[presentation.index('    static func nodeCountText'):presentation.index('    static func featuredLocations')]
 harness=r'''
 func loc(_ id:String,_ code:String,_ healthy:Int=1,_ ping:Double?=10,_ state:String="healthy") -> VpnLocation {
  VpnLocation(id:id,countryCode:code,city:id,flagEmoji:nil,availability:"available",status:state,healthyNodes:healthy,latencyMs:ping)
@@ -31,10 +33,21 @@ precondition(limited.count==2 && limited[1].locations.count==8)
 let nan=loc("nan","DE",1,Double.nan)
 precondition(VEXCountryGroup.make([nan,de],selectedID:"")[0].representative.id=="de")
 precondition(VEXCountryGroup.make([feature,de],selectedID:"",limit:1)[0].representative.id==feature.id)
+precondition(Formatting.nodeCountText(1)=="1 узел")
+precondition(Formatting.nodeCountText(2)=="2 узла")
+precondition(Formatting.nodeCountText(5)=="5 узлов")
+precondition(Formatting.nodeCountText(11)=="11 узлов")
+precondition(Formatting.nodeCountText(21)=="21 узел")
+precondition(Formatting.nodeCountText(22)=="22 узла")
+precondition(Formatting.latencyText(Double.nan)==nil)
+precondition(Formatting.latencyText(Double.infinity)==nil)
+precondition(Formatting.latencyText(-1)==nil)
+precondition(Formatting.latencyText(7.6)=="8 мс")
+print("PASS: Russian node plurals and invalid/rounded ping")
 print("PASS: country grouping, normalization, counts, selected/offline retention, duplicates, unknowns, empty/limit, missing/NaN ping, original IDs")
 '''
 with tempfile.TemporaryDirectory(prefix='vex-country-test-') as d:
- p=Path(d);(p/'main.swift').write_text('import Foundation\n'+location+harness)
+ p=Path(d);(p/'main.swift').write_text('import Foundation\n'+location+'\nenum Formatting {\n'+formatters+'\n}\n'+harness)
  subprocess.run(['swiftc',str(models/'VEXCountryGroup.swift'),str(p/'main.swift'),'-o',str(p/'probe')],check=True)
  subprocess.run([str(p/'probe')],check=True)
 home=(R/'macos-native/Sources/VEXNativeMac/Views/HomePanel.swift').read_text()

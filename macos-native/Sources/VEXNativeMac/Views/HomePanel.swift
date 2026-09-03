@@ -49,10 +49,8 @@ struct HomePanel: View {
         }
         #endif
 
-        return FocusPulsePresentation.featuredLocations(
-            appState.locations,
-            selectedLocationId: appState.selectedLocationId
-        )
+        // Apply the featured limit after grouping, never truncate a country's nodes.
+        return appState.locations
     }
 
     @ViewBuilder
@@ -131,6 +129,11 @@ private struct FocusPulseLocations: View {
     let selectedLocationId: String
     let onSelect: (VpnLocation) -> Void
     let onShowAll: () -> Void
+    @State private var expandedCountryID: String?
+
+    private var countries: [VEXCountryGroup] {
+        VEXCountryGroup.make(locations, selectedID: selectedLocationId)
+    }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -163,16 +166,22 @@ private struct FocusPulseLocations: View {
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(spacing: 12) {
-                        ForEach(locations) { location in
+                        ForEach(countries) { country in
                             FocusPulseLocationCard(
-                                location: location,
-                                selected: location.id == selectedLocationId,
-                                action: { onSelect(location) }
+                                location: country.cardLocation,
+                                selected: country.isSelected,
+                                action: { expandedCountryID = country.id }
                             )
+                            .popover(isPresented: Binding(
+                                get: { expandedCountryID == country.id },
+                                set: { if !$0 { expandedCountryID = nil } }
+                            ), arrowEdge: .bottom) {
+                                countryNodes(country)
+                            }
                             .containerRelativeFrame(
                                 .horizontal,
-                                count: 5,
-                                span: 2,
+                                count: min(max(countries.count, 1), 3),
+                                span: 1,
                                 spacing: 12
                             )
                             .scrollTransition(.interactive, axis: .horizontal) { content, phase in
@@ -190,6 +199,56 @@ private struct FocusPulseLocations: View {
                 .frame(height: 86)
             }
         }
+    }
+
+    private func countryNodes(_ country: VEXCountryGroup) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(country.representative.localizedName)
+                .font(.headline)
+            Text("\(FocusPulsePresentation.nodeCountText(country.availableNodeCount)) · доступно")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            ScrollView {
+                VStack(spacing: 8) {
+                    ForEach(country.locations) { location in
+                        Button {
+                            expandedCountryID = nil
+                            onSelect(location)
+                        } label: {
+                            HStack(spacing: 12) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(location.city.isEmpty ? location.id : location.city)
+                                        .font(.system(size: 13, weight: .semibold))
+                                    Text(location.id)
+                                        .font(.system(size: 11, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                    Text(VEXCountryGroup.isAvailable(location) ? location.localizedStatus : "Недоступен")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer(minLength: 12)
+                                if VEXCountryGroup.isAvailable(location),
+                                   let latency = FocusPulsePresentation.latencyText(location.latencyMs) {
+                                    Text(latency).font(.caption.monospacedDigit())
+                                }
+                                Image(systemName: location.id == selectedLocationId ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle(location.id == selectedLocationId ? Color.vexCyan : Color.secondary)
+                            }
+                            .padding(10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!VEXCountryGroup.isAvailable(location))
+                        .accessibilityLabel("\(location.city), \(location.id), \(location.localizedStatus)")
+                    }
+                }
+            }
+            .frame(maxHeight: min(CGFloat(country.locations.count) * 90, 320))
+        }
+        .padding(16)
+        .frame(width: 360)
     }
 }
 
@@ -337,6 +396,6 @@ private struct FocusPulseLocationCard: View {
     }
 
     private var availability: String {
-        location.localizedStatus
+        location.healthyNodes > 0 ? "доступно" : "нет доступных"
     }
 }

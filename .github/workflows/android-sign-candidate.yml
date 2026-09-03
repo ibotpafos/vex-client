@@ -7,7 +7,7 @@ on:
       - scripts/sign_android_candidate_ci.sh
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write # GitHub requires write access to read draft release assets.
 jobs:
   sign:
     runs-on: ubuntu-latest

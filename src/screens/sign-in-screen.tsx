@@ -17,7 +17,6 @@ import { router } from "expo-router";
 import {
   Linking,
   Platform,
-  TextInput,
   useWindowDimensions,
   View,
 } from "react-native";
@@ -131,7 +130,6 @@ export default function SignInScreen() {
   const [entryStep, setEntryStep] = useState<AuthEntryStep>("welcome");
   const [email, setEmail] = useState("");
   const [emailOTPCode, setEmailOTPCode] = useState("");
-  const [mfaCode, setMfaCode] = useState("");
   const [emailOTPChallenge, setEmailOTPChallenge] = useState<{
     email: string;
     challengeId: string;
@@ -279,7 +277,9 @@ export default function SignInScreen() {
     };
   }, []);
 
-  const handleWebAuthStart = useCallback(async () => {
+  const handleWebAuthStart = useCallback(async (provider?: "google") => {
+    if (authSubmitInFlight.current) return;
+    authSubmitInFlight.current = true;
     playLightImpactHaptic();
     setIsAuthBusy(true);
     setAuthError(null);
@@ -302,6 +302,7 @@ export default function SignInScreen() {
         deviceName,
         platform,
         state,
+        provider,
       });
 
       console.log("Opening Web Auth URL for platform:", platform);
@@ -318,6 +319,7 @@ export default function SignInScreen() {
           : "Не удалось запустить веб-авторизацию.",
       );
     } finally {
+      authSubmitInFlight.current = false;
       setIsAuthBusy(false);
     }
   }, [handleCallbackUrl]);
@@ -325,7 +327,6 @@ export default function SignInScreen() {
   const handleEmailChange = useCallback((value: string) => {
     setEmail(value);
     setEmailOTPCode("");
-    setMfaCode("");
     setEmailOTPChallenge(null);
     setAuthNotice(null);
   }, []);
@@ -378,17 +379,11 @@ export default function SignInScreen() {
         setAuthError("Введите 6 цифр кода из письма.");
         return;
       }
-      if (mfaCode && mfaCode.length !== 6) {
-        setAuthError("Введите 6 цифр кода аутентификатора.");
-        return;
-      }
       const nextSession = await confirmEmailOTP(
         normalizedEmail,
         emailOTPChallenge.challengeId,
         code,
-        mfaCode,
       );
-      setMfaCode("");
       resetVpnProfileCache();
       await signIn(nextSession);
       setEmailOTPCode("");
@@ -404,7 +399,7 @@ export default function SignInScreen() {
         return;
       }
       setAuthError(isInvalidOrExpiredEmailOTPError(error)
-        ? "Проверьте код из письма. Если включена двухфакторная защита, также введите текущий код аутентификатора."
+        ? "Проверьте код из письма или запросите новый."
         : emailOTPRequestErrorMessage(error));
     } finally {
       authSubmitInFlight.current = false;
@@ -414,7 +409,6 @@ export default function SignInScreen() {
     email,
     emailOTPChallenge,
     emailOTPCode,
-    mfaCode,
     isAuthBusy,
     queryClient,
     signIn,
@@ -532,22 +526,6 @@ export default function SignInScreen() {
                 <OTPCodeInput disabled={isAuthBusy} onChangeText={setEmailOTPCode} value={emailOTPCode} />
               </View>
             </RNHostView>
-            <UniversalText textStyle={styles.sheetIntro}>Код аутентификатора — если включена двухфакторная защита</UniversalText>
-            <RNHostView matchContents>
-              <TextInput
-                accessibilityLabel="Код аутентификатора"
-                autoComplete="off"
-                importantForAutofill="no"
-                keyboardType="number-pad"
-                maxLength={6}
-                editable={!isAuthBusy}
-                onChangeText={(value) => setMfaCode(normalizeEmailOTPCode(value))}
-                placeholder="Необязательно, если нет 2FA"
-                placeholderTextColor="#A7B9BD"
-                style={{ width: sheetButtonStyle.width, minHeight: 48, color: "#FFFFFF", borderWidth: 1, borderColor: "#A7B9BD", borderRadius: 12, paddingHorizontal: 12 }}
-                value={mfaCode}
-              />
-            </RNHostView>
           </>
         ) : null}
         {authNotice && authNotice !== "Код отправлен на email." ? (
@@ -568,6 +546,11 @@ export default function SignInScreen() {
         {canUseBiometricAuth ? (
           <Button disabled={isAuthBusy} onPress={() => { void handleBiometricAuth(); }} style={sheetButtonStyle} variant="outlined">
             <UniversalText textStyle={styles.secondaryButtonText}>{`Войти по ${biometricAuthLabel}`}</UniversalText>
+          </Button>
+        ) : null}
+        {!emailOTPChallenge && supportsWebsiteAuth() ? (
+          <Button disabled={isAuthBusy} onPress={() => { void handleWebAuthStart("google"); }} style={sheetButtonStyle} variant="outlined">
+            <UniversalText textStyle={styles.secondaryButtonText}>Войти через Google</UniversalText>
           </Button>
         ) : null}
         {!emailOTPChallenge && supportsWebsiteAuth() ? (

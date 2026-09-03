@@ -683,6 +683,10 @@ final class VEXAppState: ObservableObject {
         beginWebAuth(mode: .login)
     }
 
+    func openGoogleSignIn() {
+        beginWebAuth(mode: .login, provider: .google)
+    }
+
     func openRegistration() {
         beginWebAuth(mode: .register)
     }
@@ -1137,7 +1141,7 @@ final class VEXAppState: ObservableObject {
     }
     #endif
 
-    private func beginWebAuth(mode: WebAuthMode) {
+    private func beginWebAuth(mode: WebAuthMode, provider: WebAuthProvider? = nil) {
         guard !isAuthBusy, !isWaitingForWebAuth else { return }
         authError = nil
         isWaitingForWebAuth = true
@@ -1146,7 +1150,7 @@ final class VEXAppState: ObservableObject {
         webAuthTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let callbackURL = try await authService.startWebAuth(mode: mode)
+                let callbackURL = try await authService.startWebAuth(mode: mode, provider: provider)
                 guard !Task.isCancelled else { return }
                 isAuthBusy = true
                 await finishWebAuthCallback(callbackURL)

@@ -17,6 +17,7 @@ import { router } from "expo-router";
 import {
   Linking,
   Platform,
+  TextInput,
   useWindowDimensions,
   View,
 } from "react-native";
@@ -130,6 +131,7 @@ export default function SignInScreen() {
   const [entryStep, setEntryStep] = useState<AuthEntryStep>("welcome");
   const [email, setEmail] = useState("");
   const [emailOTPCode, setEmailOTPCode] = useState("");
+  const [mfaCode, setMfaCode] = useState("");
   const [emailOTPChallenge, setEmailOTPChallenge] = useState<{
     email: string;
     challengeId: string;
@@ -323,6 +325,7 @@ export default function SignInScreen() {
   const handleEmailChange = useCallback((value: string) => {
     setEmail(value);
     setEmailOTPCode("");
+    setMfaCode("");
     setEmailOTPChallenge(null);
     setAuthNotice(null);
   }, []);
@@ -370,16 +373,22 @@ export default function SignInScreen() {
         return;
       }
       const code = normalizeEmailOTPCode(emailOTPCode);
-      if (!code) {
+      if (code.length !== 6) {
         playWarningHaptic();
-        setAuthError("Введите код из письма.");
+        setAuthError("Введите 6 цифр кода из письма.");
+        return;
+      }
+      if (mfaCode && mfaCode.length !== 6) {
+        setAuthError("Введите 6 цифр кода аутентификатора.");
         return;
       }
       const nextSession = await confirmEmailOTP(
         normalizedEmail,
         emailOTPChallenge.challengeId,
         code,
+        mfaCode,
       );
+      setMfaCode("");
       resetVpnProfileCache();
       await signIn(nextSession);
       setEmailOTPCode("");
@@ -395,7 +404,7 @@ export default function SignInScreen() {
         return;
       }
       setAuthError(isInvalidOrExpiredEmailOTPError(error)
-        ? "Код не подошёл. Проверьте цифры или запросите новый код."
+        ? "Проверьте код из письма. Если включена двухфакторная защита, также введите текущий код аутентификатора."
         : emailOTPRequestErrorMessage(error));
     } finally {
       authSubmitInFlight.current = false;
@@ -405,6 +414,7 @@ export default function SignInScreen() {
     email,
     emailOTPChallenge,
     emailOTPCode,
+    mfaCode,
     isAuthBusy,
     queryClient,
     signIn,
@@ -521,6 +531,22 @@ export default function SignInScreen() {
               <View style={{ width: sheetButtonStyle.width }}>
                 <OTPCodeInput disabled={isAuthBusy} onChangeText={setEmailOTPCode} value={emailOTPCode} />
               </View>
+            </RNHostView>
+            <UniversalText textStyle={styles.sheetIntro}>Код аутентификатора — если включена двухфакторная защита</UniversalText>
+            <RNHostView matchContents>
+              <TextInput
+                accessibilityLabel="Код аутентификатора"
+                autoComplete="off"
+                importantForAutofill="no"
+                keyboardType="number-pad"
+                maxLength={6}
+                editable={!isAuthBusy}
+                onChangeText={(value) => setMfaCode(normalizeEmailOTPCode(value))}
+                placeholder="Необязательно, если нет 2FA"
+                placeholderTextColor="#A7B9BD"
+                style={{ width: sheetButtonStyle.width, minHeight: 48, color: "#FFFFFF", borderWidth: 1, borderColor: "#A7B9BD", borderRadius: 12, paddingHorizontal: 12 }}
+                value={mfaCode}
+              />
             </RNHostView>
           </>
         ) : null}

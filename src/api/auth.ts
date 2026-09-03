@@ -32,13 +32,14 @@ export async function requestEmailOTP(email: string): Promise<EmailOTPChallenge>
   };
 }
 
-export async function confirmEmailOTP(email: string, challengeId: string, code: string): Promise<AuthSession> {
+export async function confirmEmailOTP(email: string, challengeId: string, code: string, mfaCode = ''): Promise<AuthSession> {
   return parseAuth(await jsonRequest<AuthResultDTO>('/v1/auth/email-otp/confirm', {
     method: 'POST',
     body: {
       email,
       challenge_id: challengeId,
       code,
+      ...(mfaCode ? { mfa_code: mfaCode } : {}),
       remember_me: true,
       device_session: true,
     },

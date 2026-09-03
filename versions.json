@@ -1,12 +1,12 @@
 {
   "android": {
-    "version": "1.0.55",
-    "build": 57,
+    "version": "1.0.56",
+    "build": 58,
     "min_supported_build": 1002930,
-    "is_required": true,
-    "checksum_sha256": "3508338c2c0fc82573729307effa2a72bae4b55682f379e8f29aa21df7dcb079",
-    "signature_url": "/downloads/Vex-Android-1.0.55.apk.sig",
-    "release_notes": "Android: исправлены экран входа и анимация нижних панелей, подключение переведено на AWG3 и улучшена стабильность VPN.",
+    "is_required": false,
+    "checksum_sha256": "",
+    "signature_url": "",
+    "release_notes": "Новая установка VEX после смены Android-пакета. Требуется повторный вход. Поддержка AWG 3.1 и группировка локаций.",
     "core_version": "0.1.0",
     "config_schema_version": 1,
     "min_config_schema_version": 1

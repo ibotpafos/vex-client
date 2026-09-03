@@ -1,0 +1,25 @@
+name: Android New Package Signing Verification
+on:
+  push:
+    branches: [codex/android-package-migration-20260904]
+    paths:
+      - .github/workflows/android-signing-custody.yml
+      - scripts/verify_android_signing_secret.sh
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Verify registered signer and private-key usability without exporting secrets
+        env:
+          ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_VPN_RELEASE_KEYSTORE_BASE64 }}
+          VEX_UPLOAD_STORE_PASSWORD: ${{ secrets.VEX_VPN_UPLOAD_STORE_PASSWORD }}
+          VEX_UPLOAD_KEY_ALIAS: ${{ secrets.VEX_VPN_UPLOAD_KEY_ALIAS }}
+          VEX_UPLOAD_KEY_PASSWORD: ${{ secrets.VEX_VPN_UPLOAD_KEY_PASSWORD }}
+        run: bash scripts/verify_android_signing_secret.sh 46dae4f4218c7ae7b9e596fb7592308f29af211e762adbc4ba80ac89d0126c1d

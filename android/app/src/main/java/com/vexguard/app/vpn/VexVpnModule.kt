@@ -482,16 +482,16 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
       return
     }
     statusEmitterJob = scope.launch {
-      while (isActive && listenerCount > 0) {
-        try {
+      pollVpnStatus(
+        shouldContinue = { listenerCount > 0 },
+        poll = {
           val status = controller.status().toWritableMap()
           emitVpnStatusChanged(status)
-          delay(statusPollDelayMs(status))
-        } catch (error: Throwable) {
-          Log.w(TAG, "Native VPN status emitter failed: ${error.message}")
-          delay(STATUS_POLL_ERROR_MS)
-        }
-      }
+          statusPollDelayMs(status)
+        },
+        onError = { error -> Log.w(TAG, "Native VPN status emitter failed: ${error.message}") },
+        errorDelayMs = STATUS_POLL_ERROR_MS,
+      )
     }
   }
 

@@ -19,6 +19,12 @@ assert.ok(android.includes(`go_ref="${awg31GoRef}"`));
 assert.ok(!android.includes('AMNEZIAWG_GO_REF'));
 assert.ok(!android.includes('amneziawg-go-fast-rekey.patch'));
 
+const androidLocalGoPatch = read('patches/amnezia/amneziawg-android-macos-local-go.patch');
+assert.ok(androidLocalGoPatch.includes('+replace github.com/amnezia-vpn/amneziawg-go/v3 => ../../../../amneziawg-go'));
+assert.ok(!androidLocalGoPatch.includes('+replace github.com/amnezia-vpn/amneziawg-go =>'));
+assert.ok(android.includes('go list -m -json github.com/amnezia-vpn/amneziawg-go/v3'));
+assert.ok(android.includes('migrate_legacy_local_go_patch'));
+
 const macos = read('scripts/bootstrap_amneziawg_macos.sh');
 assert.ok(macos.includes(`go_ref="${awg31GoRef}"`));
 assert.ok(macos.includes(`tools_ref="${awg31ToolsRef}"`));

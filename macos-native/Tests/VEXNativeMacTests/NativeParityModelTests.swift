@@ -943,7 +943,7 @@ final class NativeParityModelTests: XCTestCase {
         let helperBuildScript = try String(contentsOf: helperBuildScriptURL, encoding: .utf8)
         let verifyScript = try String(contentsOf: verifyScriptURL, encoding: .utf8)
 
-        XCTAssertEqual(helperVersion, "36")
+        XCTAssertEqual(helperVersion, "37")
         XCTAssertTrue(installer.contains("helper_version_file=\"$src_dir/helper-version\""))
         XCTAssertTrue(nativeInstaller.contains("resourceFile(\"helper-version\")"))
         XCTAssertTrue(buildScript.contains("helper-version"))

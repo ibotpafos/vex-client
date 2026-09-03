@@ -1,4 +1,4 @@
-name: Android Signing Custody Verification
+name: Android Legacy Package Signing Verification
 on:
   push:
     branches: [codex/android-signing-custody-20260904]
@@ -22,4 +22,4 @@ jobs:
           VEX_UPLOAD_STORE_PASSWORD: ${{ secrets.VEX_UPLOAD_STORE_PASSWORD }}
           VEX_UPLOAD_KEY_ALIAS: ${{ secrets.VEX_UPLOAD_KEY_ALIAS }}
           VEX_UPLOAD_KEY_PASSWORD: ${{ secrets.VEX_UPLOAD_KEY_PASSWORD }}
-        run: bash scripts/verify_android_signing_secret.sh 0548ea2bafe6179226d2dde5ba50e2a5a6dabac1e90df655c8a58c042d046cca
+        run: bash scripts/verify_android_signing_secret.sh cc569dfaa4c2c82379669b7c13606eb268cc3eba90a9c88e20a2d4500daf8470

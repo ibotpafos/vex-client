@@ -150,7 +150,7 @@ expected_package="${VEX_ANDROID_APPLICATION_ID}"
 expected_version_code="$(node -p "require('./app.json').expo.android.versionCode")"
 expected_version_name="$(release_version)"
 if [[ "${variant}" == "local" ]]; then
-  expected_package="${VEX_ANDROID_APPLICATION_ID:-com.vexguard.vpn}${VEX_DEBUG_APPLICATION_ID_SUFFIX:-.dev}"
+  expected_package="${VEX_ANDROID_APPLICATION_ID:-com.vexguard.app}${VEX_DEBUG_APPLICATION_ID_SUFFIX:-.dev}"
   expected_version_name="${expected_version_name}.dev"
 fi
 "${root_dir}/scripts/verify_android_apk.sh" \

@@ -224,7 +224,7 @@ android {
     defaultConfig {
         // Keep the production package literal so release tooling can resolve
         // the package identity. Non-production variants use applicationIdSuffix.
-        applicationId "com.vexguard.vpn"
+        applicationId "com.vexguard.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1005658

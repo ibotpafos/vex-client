@@ -1,6 +1,0 @@
-{
-  "package": "com.vexguard.vpn",
-  "certificate_sha256": "46dae4f4218c7ae7b9e596fb7592308f29af211e762adbc4ba80ac89d0126c1d",
-  "status": "migration-candidate-not-published",
-  "previous_package": "com.vexguard.client"
-}

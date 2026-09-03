@@ -30,7 +30,7 @@
       "predictiveBackGestureEnabled": false,
       "softwareKeyboardLayoutMode": "resize",
       "versionCode": 1005658,
-      "package": "com.vexguard.vpn",
+      "package": "com.vexguard.app",
       "intentFilters": [
         {
           "action": "VIEW",

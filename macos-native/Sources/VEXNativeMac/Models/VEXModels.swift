@@ -517,6 +517,8 @@ struct ManagedVpnAmnezia: Codable, Equatable {
     var rejectAfterTime: String?
     var keepaliveTimeout: String?
     var maxHandshakeAttempts: String?
+    var randomTrailers: String?
+    var disableCookies: String?
 
     enum CodingKeys: String, CodingKey {
         case jc, jmin, jmax, s1, s2, s3, s4
@@ -528,6 +530,8 @@ struct ManagedVpnAmnezia: Codable, Equatable {
         case rejectAfterTime = "reject_after_time"
         case keepaliveTimeout = "keepalive_timeout"
         case maxHandshakeAttempts = "max_handshake_attempts"
+        case randomTrailers = "random_trailers"
+        case disableCookies = "disable_cookies"
     }
 }
 

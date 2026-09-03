@@ -423,6 +423,8 @@ struct VPNProfileService {
         addString("RejectAfterTime", amnezia.rejectAfterTime, to: &lines)
         addString("KeepaliveTimeout", amnezia.keepaliveTimeout, to: &lines)
         addString("MaxHandshakeAttempts", amnezia.maxHandshakeAttempts, to: &lines)
+        addString("RandomTrailers", amnezia.randomTrailers, to: &lines)
+        addString("DisableCookies", amnezia.disableCookies, to: &lines)
         return lines.isEmpty ? "" : "\(lines.joined(separator: "\n"))\n"
     }
 

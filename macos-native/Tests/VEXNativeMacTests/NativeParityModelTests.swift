@@ -74,13 +74,16 @@ final class NativeParityModelTests: XCTestCase {
             "s2": 12,
             "s3": 12,
             "s4": 12,
+            "i1": "<r 8><t><rc 8>",
             "header_protection_key": "header-key",
             "content_padding_addition": "0",
             "rekey_after_time": "120-180",
             "rekey_timeout": "2-4",
             "reject_after_time": "180-240",
             "keepalive_timeout": "10-15",
-            "max_handshake_attempts": "20-30"
+            "max_handshake_attempts": "20-30",
+            "random_trailers": "true",
+            "disable_cookies": "false"
           }
         }
         """.data(using: .utf8)!
@@ -89,6 +92,7 @@ final class NativeParityModelTests: XCTestCase {
         let config = VPNProfileService.amneziaConfig(profile.amnezia)
 
         XCTAssertEqual(profile.amneziaVersion, 3)
+        XCTAssertTrue(config.contains("I1 = <r 8><t><rc 8>\n"))
         XCTAssertTrue(config.contains("HeaderProtectionKey = header-key\n"))
         XCTAssertTrue(config.contains("ContentPaddingAddition = 0\n"))
         XCTAssertTrue(config.contains("RekeyAfterTime = 120-180\n"))
@@ -96,6 +100,9 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(config.contains("RejectAfterTime = 180-240\n"))
         XCTAssertTrue(config.contains("KeepaliveTimeout = 10-15\n"))
         XCTAssertTrue(config.contains("MaxHandshakeAttempts = 20-30\n"))
+        XCTAssertTrue(config.contains("RandomTrailers = true\n"))
+        XCTAssertTrue(config.contains("DisableCookies = false\n"))
+        XCTAssertEqual(config.components(separatedBy: "HeaderProtectionKey =").count - 1, 1)
     }
 
     func testManagedProfileRequestsMacOSCompactRoutingPolicy() throws {

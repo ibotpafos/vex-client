@@ -9,3 +9,8 @@ swiftc -o "$BUILD/admission" \
   "$ROOT/macos-native/Tests/AdmissionHarness/main.swift" \
   -framework Security -framework SystemConfiguration -lbsm
 "$BUILD/admission"
+
+swiftc -parse-as-library -o "$BUILD/recovery" \
+  "$ROOT/macos-native/Sources/VEXNativeMac/Services/VpnAdmissionRecovery.swift" \
+  "$ROOT/macos-native/Tests/RecoveryHarness/main.swift"
+"$BUILD/recovery"

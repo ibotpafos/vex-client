@@ -415,7 +415,7 @@ final class VEXAppState: ObservableObject {
                 return try await connectPreparedTunnel(rotatedTunnel, helper: helper, generation: generation)
             }
 
-            do {
+            return try await VpnAdmissionRecovery.retryFreshProfile {
                 try ensureConnectStillDesired(generation: generation)
                 let freshTunnel = try await profileService.resolveProfile(
                     accessToken: token,
@@ -424,7 +424,7 @@ final class VEXAppState: ObservableObject {
                     forceRefresh: true
                 )
                 return try await connectPreparedTunnel(freshTunnel, helper: helper, generation: generation)
-            } catch {
+            } failover: { error in
                 guard allowsAutomaticFailover, assessment.canFailover, let failoverLocation = bestFailoverLocation(excluding: initialTunnel.locationId) else {
                     throw error
                 }

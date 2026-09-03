@@ -19,22 +19,31 @@ vm.runInNewContext(ts.transpileModule(source, {
   },
 });
 
-await exports.confirmEmailOTP('fixture@example.com', 'fixture-challenge', '123456', '654321');
-assert.equal(request.path, '/v1/auth/email-otp/confirm');
-assert.equal(request.body.code, '123456');
-assert.equal(request.body.challenge_id, 'fixture-challenge');
-assert.equal(request.body.mfa_code, '654321', 'native email login must transmit the separate second factor');
-assert.equal(request.body.device_session, true);
-await exports.confirmEmailOTP('fixture@example.com', 'fixture-challenge', '123456');
-assert.ok(!request.body.mfa_code, 'non-MFA login stays compatible');
+// The native client requests a limited device session, never an account-security session.
+for (const unexpectedMfa of [undefined, '654321']) {
+  await exports.confirmEmailOTP('fixture@example.com', 'fixture-challenge', '123456', unexpectedMfa);
+  assert.equal(request.path, '/v1/auth/email-otp/confirm');
+  assert.equal(request.method, 'POST');
+  assert.deepEqual(JSON.parse(JSON.stringify(request.body)), {
+    email: 'fixture@example.com',
+    challenge_id: 'fixture-challenge',
+    code: '123456',
+    remember_me: true,
+    device_session: true,
+  });
+  assert.equal(Object.hasOwn(request.body, 'mfa_code'), false, 'unexpected fourth argument never becomes an MFA payload');
+}
 
 const screen = readFileSync(new URL('../src/screens/sign-in-screen.tsx', import.meta.url), 'utf8');
-assert.match(screen, /value=\{mfaCode\}/);
-assert.match(screen, /confirmEmailOTP\([\s\S]*?emailOTPChallenge\.challengeId,[\s\S]*?code,[\s\S]*?mfaCode/);
-assert.match(screen, /Код аутентификатора/);
+assert.doesNotMatch(screen, /mfaCode|setMfaCode|Код аутентификатора/);
+assert.match(screen, /confirmEmailOTP\(\s*normalizedEmail,\s*emailOTPChallenge\.challengeId,\s*code,?\s*\)/);
+assert.match(screen, /code.length !== 6/);
+assert.match(screen, /handleWebAuthStart\("google"\)/, 'Google uses the separate browser handoff');
+assert.match(screen, /buildAppWebAuthUrl\(/);
+assert.match(screen, /openWebAuthUrl\(webAuthUrl\)/);
 const input = readFileSync(new URL('../src/components/otp-code-input.tsx', import.meta.url), 'utf8');
 assert.equal((input.match(/<TextInput\s/g) || []).length, 1, 'email OTP retains one input');
 assert.match(input, /autoComplete="one-time-code"/);
 assert.match(input, /textContentType="oneTimeCode"/);
 assert.match(input, /importantForAutofill="yes"/);
-console.log('PASS: separate MFA payload, non-MFA compatibility, UI wiring, email autofill hints');
+console.log('PASS: client-only email OTP payload, ignored extra MFA argument, separate Google browser flow, six-digit validation and autofill hints');

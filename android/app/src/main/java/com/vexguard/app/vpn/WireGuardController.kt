@@ -84,28 +84,23 @@ class WireGuardController(context: Context) {
         } else {
           emptyList()
         }
-        try {
-          val validatedConfig = validatedConfigText(wgQuickConfig)
-          val configText = if (routeOnlySelectedApplications) {
-            configTextIncludingSelectedApplications(validatedConfig, routedApplications)
-          } else {
-            configTextExcludingSelf(validatedConfig)
-          }
-          VpnConfigActivation.afterValidation(configText) { config ->
+        VpnConfigActivation.orchestrate(
+          rawConfigText = wgQuickConfig,
+          routeOnlySelectedApplications = routeOnlySelectedApplications,
+          selectedApplications = routedApplications,
+          appPackageName = appContext.packageName,
+          mutate = { admission ->
             // Do not mutate retained routing state until profile admission succeeds.
             lastRoutedApplications = routedApplications
             if (shouldReuseActiveVpnTunnel(
                 isTunnelUp = backend.getState(tunnel) == Tunnel.State.UP,
                 lastConfigText = lastConfigText,
-                requestedConfigText = configText,
+                requestedConfigText = admission.text,
                 antiLeakArmed = antiLeakArmed,
                 antiLeakEnabled = antiLeakEnabled,
                 leakBlockerActive = VexLeakBlockerService.isActive(),
               )) {
-              // React Native can issue a second connect while auto-connect and a
-              // manual tap race during startup. Re-applying an identical config
-              // makes GoBackend replace a working TUN, briefly cutting traffic.
-              return@afterValidation VpnConnectionState.Connected(
+              return@orchestrate VpnConnectionState.Connected(
                 statsOrEmpty(),
                 if (antiLeakEnabled) LeakProtectionState.Armed else LeakProtectionState.Off,
               )
@@ -113,7 +108,7 @@ class WireGuardController(context: Context) {
             if (!VexLeakBlockerService.stopAndAwait(appContext)) {
               throw IllegalStateException("Anti-leak service did not stop before VPN connect.")
             }
-            val state = backend.setState(tunnel, Tunnel.State.UP, config)
+            val state = backend.setState(tunnel, Tunnel.State.UP, admission.config)
             if (state != Tunnel.State.UP) {
               throw IllegalStateException("VPN backend did not enter the UP state.")
             }
@@ -122,30 +117,24 @@ class WireGuardController(context: Context) {
                 backend.bindTunnelSocketsToNetwork(network)
                 Log.i(TAG, "New VPN sockets bound to $network immediately after tunnel start")
               } catch (error: Throwable) {
-                // The TUN remains installed and therefore fail-closed. The
-                // connection verifier or the next network callback will retry.
                 Log.e(TAG, "Initial VPN socket bind to $network failed; retaining fail-closed TUN", error)
               }
             }
             val traffic = statsOrEmpty()
-            lastConfigText = configText
+            lastConfigText = admission.text
             antiLeakArmed = antiLeakEnabled
             VpnConnectionState.Connected(traffic, if (antiLeakEnabled) LeakProtectionState.Armed else LeakProtectionState.Off)
-          }
-        } catch (error: AwgConfigValidationException) {
-          // Parsing occurs before stopping the blocker or invoking setState, so an
-          // invalid replacement cannot tear down a currently working tunnel.
-          throw error
-        } catch (error: Throwable) {
-          if (antiLeakEnabled) {
-            try {
-              setTunnelDown()
-            } catch (_: Throwable) {
+          },
+          onMutationFailure = {
+            if (antiLeakEnabled) {
+              try {
+                setTunnelDown()
+              } catch (_: Throwable) {
+              }
+              antiLeakArmed = VexLeakBlockerService.startAndAwait(appContext, routedApplications)
             }
-            antiLeakArmed = VexLeakBlockerService.startAndAwait(appContext, routedApplications)
-          }
-          throw error
-        }
+          },
+        )
       }
     } finally {
       transitionState = null
@@ -440,81 +429,6 @@ class WireGuardController(context: Context) {
       delay(NETWORK_RECOVERY_HANDSHAKE_POLL_MS)
     }
     return false
-  }
-
-  private fun validatedConfigText(wgQuickConfig: String): String {
-    val value = wgQuickConfig.trim()
-    if (value.isEmpty()) {
-      throw IllegalArgumentException("VPN config is empty.")
-    }
-    if (!value.contains("[Interface]") || !value.contains("[Peer]")) {
-      throw IllegalArgumentException("VPN config is invalid or incomplete.")
-    }
-    return value
-  }
-
-  private fun configTextExcludingSelf(configText: String): String {
-    val packageName = appContext.packageName.takeIf { it.isNotBlank() } ?: return configText
-    val lines = configText.lines().toMutableList()
-    val interfaceIndex = lines.indexOfFirst { it.trim().equals("[Interface]", ignoreCase = true) }
-    if (interfaceIndex < 0) {
-      return configText
-    }
-    val nextSectionIndex = lines.indexOfFirstAfter(interfaceIndex + 1) {
-      val value = it.trim()
-      value.startsWith("[") && value.endsWith("]")
-    }.takeIf { it >= 0 } ?: lines.size
-    val hasIncludedApplications = (interfaceIndex + 1 until nextSectionIndex).any {
-      lines[it].substringBefore("=").trim().equals("IncludedApplications", ignoreCase = true)
-    }
-    if (hasIncludedApplications) {
-      return configText
-    }
-    val excludedIndex = (interfaceIndex + 1 until nextSectionIndex).firstOrNull {
-      lines[it].substringBefore("=").trim().equals("ExcludedApplications", ignoreCase = true)
-    }
-    if (excludedIndex != null) {
-      val prefix = lines[excludedIndex].substringBefore("=")
-      val apps = lines[excludedIndex]
-        .substringAfter("=", "")
-        .split(',')
-        .map { it.trim() }
-        .filter { it.isNotEmpty() }
-        .toMutableList()
-      if (apps.none { it == packageName }) {
-        apps.add(packageName)
-      }
-      lines[excludedIndex] = "${prefix.trim()} = ${apps.joinToString(", ")}"
-      return lines.joinToString("\n")
-    }
-    lines.add(interfaceIndex + 1, "ExcludedApplications = $packageName")
-    return lines.joinToString("\n")
-  }
-
-  private fun configTextIncludingSelectedApplications(configText: String, selectedApplications: List<String>): String {
-    if (selectedApplications.isEmpty()) {
-      throw IllegalArgumentException("Select at least one installed application for VPN routing.")
-    }
-
-    val lines = configText.lines().toMutableList()
-    val interfaceIndex = lines.indexOfFirst { it.trim().equals("[Interface]", ignoreCase = true) }
-    if (interfaceIndex < 0) {
-      return configText
-    }
-    val nextSectionIndex = lines.indexOfFirstAfter(interfaceIndex + 1) {
-      val value = it.trim()
-      value.startsWith("[") && value.endsWith("]")
-    }.takeIf { it >= 0 } ?: lines.size
-    for (index in (nextSectionIndex - 1) downTo (interfaceIndex + 1)) {
-      val key = lines[index].substringBefore("=").trim()
-      if (key.equals("IncludedApplications", ignoreCase = true) ||
-        key.equals("ExcludedApplications", ignoreCase = true)
-      ) {
-        lines.removeAt(index)
-      }
-    }
-    lines.add(interfaceIndex + 1, "IncludedApplications = ${selectedApplications.joinToString(", ")}")
-    return lines.joinToString("\n")
   }
 
   private fun installedSelectedApplications(selectedApplications: List<String>): List<String> {

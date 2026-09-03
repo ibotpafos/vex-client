@@ -207,35 +207,104 @@ class Awg31ConfigCompatibilityTest {
   }
 
   @Test
-  fun productionActivationGateRejectsBeforeTunnelBackendBlockerOrRoutedStateMutation() = runBlocking {
-    val priorRoutedApplications = mutableListOf("com.vexguard.existing")
-    val mutation = RecordingVpnMutation(priorRoutedApplications)
-    val invalidConfig = "[Interface]\nPrivateKey = $privateKey\nRekeyTimeout = 10-2"
+  fun admissionRejectsRawEmptyIncompleteAndMalformedProfilesBeforeMutationOrCleanup() = runBlocking {
+    val validPeer = "[Peer]\nPublicKey = $publicKey\nAllowedIPs = 0.0.0.0/0"
+    val invalidRawProfiles = listOf(
+      "",
+      "[Interface]\nPrivateKey = $privateKey",
+      "[Interface]\nPrivateKey = $privateKey\nRekeyTimeout = 10-2\n$validPeer",
+      "[Interface]\nPrivateKey = invalid-not-base64\n$validPeer",
+      "[Interface]\nPrivateKey = $privateKey\nUnknownCriticalField = required\n$validPeer",
+    )
 
-    try {
-      VpnConfigActivation.afterValidation(invalidConfig) { config ->
-        mutation.replaceRoutedApplications(listOf("com.vexguard.replacement"))
-        mutation.setTunnelDown()
-        mutation.startLeakBlocker()
-        mutation.setBackendUp(config)
+    invalidRawProfiles.forEach { raw ->
+      val recording = RecordingAdmissionBoundary()
+      val routedApplications = mutableListOf("com.vexguard.existing")
+      val before = routedApplications.toList()
+      try {
+        VpnConfigActivation.orchestrate(
+          rawConfigText = raw,
+          routeOnlySelectedApplications = false,
+          selectedApplications = emptyList(),
+          appPackageName = "com.vexguard.app",
+          mutate = { admission ->
+            recording.backendMutations += 1
+            recording.tunnelMutations += 1
+            recording.blockerMutations += 1
+            routedApplications.clear()
+            routedApplications += admission.text
+          },
+          onMutationFailure = {
+            recording.cleanupCalls += 1
+            recording.tunnelMutations += 1
+            recording.blockerMutations += 1
+          },
+        )
+        fail("raw invalid profile was admitted: $raw")
+      } catch (_: AwgConfigValidationException) {
       }
-      fail("invalid replacement passed the controller activation gate")
-    } catch (_: AwgConfigValidationException) {
+      assertEquals(before, routedApplications)
+      assertEquals(0, recording.backendMutations)
+      assertEquals(0, recording.tunnelMutations)
+      assertEquals(0, recording.blockerMutations)
+      assertEquals(0, recording.cleanupCalls)
     }
+  }
 
-    assertEquals(listOf("com.vexguard.existing"), priorRoutedApplications)
-    assertEquals(0, mutation.tunnelMutations)
-    assertEquals(0, mutation.blockerMutations)
-    assertEquals(0, mutation.backendMutations)
+  @Test
+  fun admissionRunsCleanupOnlyForPostAdmissionBackendFailure() = runBlocking {
+    val recording = RecordingAdmissionBoundary()
+    val validRaw = "[Interface]\nPrivateKey = $privateKey\n[Peer]\nPublicKey = $publicKey\nAllowedIPs = 0.0.0.0/0"
 
     try {
-      VpnConfigActivation.parseRecoveryCandidates(invalidConfig)
-      fail("invalid recovery candidate passed the controller recovery gate")
-    } catch (_: AwgConfigValidationException) {
+      VpnConfigActivation.orchestrate(
+        rawConfigText = validRaw,
+        routeOnlySelectedApplications = false,
+        selectedApplications = emptyList(),
+        appPackageName = "com.vexguard.app",
+        mutate = {
+          recording.backendMutations += 1
+          throw IllegalStateException("backend setState failed")
+        },
+        onMutationFailure = {
+          recording.cleanupCalls += 1
+          recording.tunnelMutations += 1
+          recording.blockerMutations += 1
+        },
+      )
+      fail("backend failure was swallowed")
+    } catch (_: IllegalStateException) {
     }
-    assertEquals(0, mutation.tunnelMutations)
-    assertEquals(0, mutation.blockerMutations)
-    assertEquals(0, mutation.backendMutations)
+
+    assertEquals(1, recording.backendMutations)
+    assertEquals(1, recording.cleanupCalls)
+    assertEquals(1, recording.tunnelMutations)
+    assertEquals(1, recording.blockerMutations)
+  }
+
+  @Test
+  fun rejectsEveryMalformedRangeForEveryAwg31RangeFieldAtAdmission() {
+    val fields = listOf(
+      "ContentPaddingAddition",
+      "RekeyAfterTime",
+      "RekeyTimeout",
+      "RejectAfterTime",
+      "KeepaliveTimeout",
+      "MaxHandshakeAttempts",
+    )
+    val malformedValues = listOf("10--40", "not-a-range", "2-", "-4", "10-2", "-1", "1-2-3")
+
+    fields.forEach { field ->
+      malformedValues.forEach { malformedValue ->
+        val raw = "[Interface]\nPrivateKey = $privateKey\n$field = $malformedValue\n[Peer]\nPublicKey = $publicKey\nAllowedIPs = 0.0.0.0/0"
+        assertTrue("official parser unexpectedly rejected $field=$malformedValue", parse(raw).toAwgQuickString().contains("$field = $malformedValue"))
+        try {
+          VpnConfigActivation.prepare(raw, false, emptyList(), "com.vexguard.app")
+          fail("admission accepted $field=$malformedValue")
+        } catch (_: AwgConfigValidationException) {
+        }
+      }
+    }
   }
 
   @Test
@@ -306,27 +375,11 @@ class Awg31ConfigCompatibilityTest {
     val error: Throwable,
   )
 
-  private class RecordingVpnMutation(private val routedApplications: MutableList<String>) {
+  private class RecordingAdmissionBoundary {
+    var backendMutations = 0
     var tunnelMutations = 0
     var blockerMutations = 0
-    var backendMutations = 0
-
-    fun replaceRoutedApplications(replacement: List<String>) {
-      routedApplications.clear()
-      routedApplications.addAll(replacement)
-    }
-
-    fun setTunnelDown() {
-      tunnelMutations += 1
-    }
-
-    fun startLeakBlocker() {
-      blockerMutations += 1
-    }
-
-    fun setBackendUp(@Suppress("UNUSED_PARAMETER") config: Config) {
-      backendMutations += 1
-    }
+    var cleanupCalls = 0
   }
 
   private fun parse(source: String): Config =

@@ -1598,6 +1598,7 @@ async function runVpnDisconnectRecoveryTests(): Promise<void> {
 }
 
 async function runServerSwitchTests(): Promise<void> {
+  await testAdmissionRejectionRetainsPreviousNativeState();
   testNativeTunnelHealthIgnoresConnectedZeroHandshake();
   testNativeTunnelHealthDetectsLocalFailureStates();
   testNativeTunnelHealthDetectsBackendUsageDegradation();
@@ -1731,6 +1732,39 @@ async function testProfileFetchFailureKeepsCurrentTunnel(): Promise<void> {
     assertEqual(result.rollback, 'not_started');
   }
   assertDeepEqual(calls, ['resolve:de', 'persist:fi', 'cache:fi:fi']);
+}
+
+async function testAdmissionRejectionRetainsPreviousNativeState(): Promise<void> {
+  for (const message of ['Invalid RekeyTimeout', 'Invalid MaxHandshakeAttempts']) {
+    for (const hasPreviousProfile of [true, false]) {
+      const previousProfile = hasPreviousProfile ? profileForLocation('fi', 'fi.example.com:51824') : null;
+      const target = { ...profileForLocation('de', 'de.example.com:51824'), source: 'local' as const };
+      const error = Object.assign(new Error(message), { code: 'VPN_CONFIG_INVALID' });
+      const calls: string[] = [];
+      const result = await switchVpnLocation({
+        previousLocationId: 'fi', previousProfile, previousStatus: connectedStatus, targetLocationId: 'de',
+        isRetryableConnectError: isVpnTransportFallbackError,
+        resolveProfile: async () => { calls.push('resolve:de'); return target; },
+        connectProfile: async (profile) => {
+          calls.push(`connect:${profile.locationId}`);
+          if (profile === target) throw error;
+          return { profile, status: connectedStatus };
+        },
+        persistLocation: async (location) => { calls.push(`persist:${location}`); return location; },
+        setCachedProfile: () => { calls.push('cache:fi'); },
+        reportConnect: () => { calls.push('reportConnect'); },
+        reportDisconnect: () => { calls.push('reportDisconnect'); },
+      });
+      assertEqual(result.ok, false);
+      if (!result.ok) {
+        assertEqual(result.rollback, 'not_started');
+        assertEqual(result.status, connectedStatus);
+        assertEqual(result.profile, previousProfile);
+        assertEqual(result.error, error);
+      }
+      assertDeepEqual(calls, ['resolve:de', 'connect:de', 'persist:fi', ...(hasPreviousProfile ? ['cache:fi'] : [])]);
+    }
+  }
 }
 
 async function testTargetHandshakeFailureRollsBackToPreviousProfile(): Promise<void> {

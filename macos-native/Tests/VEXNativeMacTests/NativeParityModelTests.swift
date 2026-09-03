@@ -92,17 +92,41 @@ final class NativeParityModelTests: XCTestCase {
         let config = VPNProfileService.amneziaConfig(profile.amnezia)
 
         XCTAssertEqual(profile.amneziaVersion, 3)
-        XCTAssertTrue(config.contains("I1 = <r 8><t><rc 8>\n"))
-        XCTAssertTrue(config.contains("HeaderProtectionKey = header-key\n"))
-        XCTAssertTrue(config.contains("ContentPaddingAddition = 0\n"))
-        XCTAssertTrue(config.contains("RekeyAfterTime = 120-180\n"))
-        XCTAssertTrue(config.contains("RekeyTimeout = 2-4\n"))
-        XCTAssertTrue(config.contains("RejectAfterTime = 180-240\n"))
-        XCTAssertTrue(config.contains("KeepaliveTimeout = 10-15\n"))
-        XCTAssertTrue(config.contains("MaxHandshakeAttempts = 20-30\n"))
-        XCTAssertTrue(config.contains("RandomTrailers = true\n"))
-        XCTAssertTrue(config.contains("DisableCookies = false\n"))
-        XCTAssertEqual(config.components(separatedBy: "HeaderProtectionKey =").count - 1, 1)
+        let expectedConfig = [
+            "Jc = 4",
+            "S1 = 12",
+            "S2 = 12",
+            "S3 = 12",
+            "S4 = 12",
+            "I1 = <r 8><t><rc 8>",
+            "HeaderProtectionKey = header-key",
+            "ContentPaddingAddition = 0",
+            "RekeyAfterTime = 120-180",
+            "RekeyTimeout = 2-4",
+            "RejectAfterTime = 180-240",
+            "KeepaliveTimeout = 10-15",
+            "MaxHandshakeAttempts = 20-30",
+            "RandomTrailers = true",
+            "DisableCookies = false"
+        ].joined(separator: "\n") + "\n"
+
+        XCTAssertEqual(config, expectedConfig)
+    }
+
+    func testManagedProfileOmitsUnsetAWG3OptionalFields() throws {
+        let data = """
+        {
+          "amnezia": { "jc": 4 }
+        }
+        """.data(using: .utf8)!
+
+        let profile = try JSONDecoder().decode(ManagedVpnProfile.self, from: data)
+        let config = VPNProfileService.amneziaConfig(profile.amnezia)
+
+        XCTAssertEqual(config, "Jc = 4\n")
+        XCTAssertFalse(config.contains("I1 ="))
+        XCTAssertFalse(config.contains("RandomTrailers ="))
+        XCTAssertFalse(config.contains("DisableCookies ="))
     }
 
     func testManagedProfileRequestsMacOSCompactRoutingPolicy() throws {

@@ -165,6 +165,9 @@ class Awg31ConfigCompatibilityTest {
     assertEquals(expected, AwgConfigSafety.parseForActivation(source).toAwgQuickString())
     assertFalse(rendered.contains("RandomTrailers"))
     assertFalse(rendered.contains("DisableCookies"))
+    val uapi = AwgConfigSafety.parseForActivation(source).toAwgUserspaceString()
+    assertFalse(uapi.contains("random_trailers="))
+    assertFalse(uapi.contains("disable_cookies="))
   }
 
   @Test
@@ -195,7 +198,7 @@ class Awg31ConfigCompatibilityTest {
       "MaxHandshakeAttempts",
     )
 
-    listOf("0", "1", "10-40").forEach { value ->
+    listOf("0", "1", "10-40", "4294967295", "0-4294967295").forEach { value ->
       val source = buildString {
         appendLine("[Interface]")
         appendLine("PrivateKey = $privateKey")
@@ -292,7 +295,7 @@ class Awg31ConfigCompatibilityTest {
       "KeepaliveTimeout",
       "MaxHandshakeAttempts",
     )
-    val malformedValues = listOf("10--40", "not-a-range", "2-", "-4", "10-2", "-1", "1-2-3")
+    val malformedValues = listOf("10--40", "not-a-range", "2-", "-4", "10-2", "-1", "1-2-3", "4294967296", "1-4294967296")
 
     fields.forEach { field ->
       malformedValues.forEach { malformedValue ->
@@ -366,6 +369,43 @@ class Awg31ConfigCompatibilityTest {
 
     assertFalse(debug.contains(privateKey))
     assertFalse(debug.contains(headerKey))
+  }
+
+  @Test
+  fun booleanVocabularyReachesActualUapiAndRejectsUnknownBeforeMutation() = runBlocking {
+    for ((field, uapi) in listOf("RandomTrailers" to "random_trailers", "DisableCookies" to "disable_cookies")) {
+      for ((value, bit) in listOf("on" to "1", "1" to "1", "true" to "1", "t" to "1", "yes" to "1", "off" to "0", "0" to "0", "false" to "0", "f" to "0", "no" to "0", "TRUE" to "1")) {
+        val raw = "[Interface]\nPrivateKey = $privateKey\n$field = $value\n[Peer]\nPublicKey = $publicKey\nAllowedIPs = 0.0.0.0/0"
+        val config = VpnConfigActivation.prepare(raw, false, emptyList(), "com.vexguard.app").config
+        assertTrue(config.toAwgQuickString().contains("$field = $value"))
+        assertTrue(config.toAwgUserspaceString().lineSequence().contains("$uapi=$bit"))
+      }
+      for (value in listOf("", "tru", "not-a-bool", "2")) {
+        val raw = "[Interface]\nPrivateKey = $privateKey\n$field = $value\n[Peer]\nPublicKey = $publicKey\nAllowedIPs = 0.0.0.0/0"
+        var mutations = 0
+        try {
+          VpnConfigActivation.orchestrate(raw, false, emptyList(), "com.vexguard.app", { mutations++ }, { mutations++ })
+          fail("invalid flag admitted")
+        } catch (_: AwgConfigValidationException) {}
+        assertEquals(0, mutations)
+      }
+    }
+  }
+
+  @Test
+  fun overflowsKeepPreviousTunnelAndDispatchStableAdmissionCode() = runBlocking {
+    for (field in listOf("ContentPaddingAddition", "RekeyAfterTime", "RekeyTimeout", "RejectAfterTime", "KeepaliveTimeout", "MaxHandshakeAttempts")) {
+      for (value in listOf("4294967296", "1-4294967296")) {
+        var mutations = 0
+        try {
+          VpnConfigActivation.orchestrate("[Interface]\nPrivateKey = $privateKey\n$field = $value\n[Peer]\nPublicKey = $publicKey\nAllowedIPs = 0.0.0.0/0", false, emptyList(), "com.vexguard.app", { mutations++ }, { mutations++ })
+          fail("overflow admitted")
+        } catch (error: AwgConfigValidationException) {
+          VpnErrorDispatcher.dispatch("VPN_CONNECT_FAILED", "failed", error, { code, _, _ -> assertEquals("VPN_CONFIG_INVALID", code) }, { code, _, _ -> assertEquals("VPN_CONFIG_INVALID", code) }, { code, _, _ -> assertEquals("VPN_CONFIG_INVALID", code) })
+        }
+        assertEquals(0, mutations)
+      }
+    }
   }
 
   private data class DeliveredVpnError(

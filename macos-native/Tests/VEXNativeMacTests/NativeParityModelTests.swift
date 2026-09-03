@@ -89,7 +89,7 @@ final class NativeParityModelTests: XCTestCase {
         """.data(using: .utf8)!
 
         let profile = try JSONDecoder().decode(ManagedVpnProfile.self, from: data)
-        let config = VPNProfileService.amneziaConfig(profile.amnezia)
+        let config = try VPNProfileService.amneziaConfig(profile.amnezia)
 
         XCTAssertEqual(profile.amneziaVersion, 3)
         let expectedConfig = [
@@ -106,8 +106,8 @@ final class NativeParityModelTests: XCTestCase {
             "RejectAfterTime = 180-240",
             "KeepaliveTimeout = 10-15",
             "MaxHandshakeAttempts = 20-30",
-            "RandomTrailers = true",
-            "DisableCookies = false"
+            "RandomTrailers = on",
+            "DisableCookies = off"
         ].joined(separator: "\n") + "\n"
 
         XCTAssertEqual(config, expectedConfig)
@@ -121,7 +121,7 @@ final class NativeParityModelTests: XCTestCase {
         """.data(using: .utf8)!
 
         let profile = try JSONDecoder().decode(ManagedVpnProfile.self, from: data)
-        let config = VPNProfileService.amneziaConfig(profile.amnezia)
+        let config = try VPNProfileService.amneziaConfig(profile.amnezia)
 
         XCTAssertEqual(config, "Jc = 4\n")
         XCTAssertFalse(config.contains("I1 ="))
@@ -888,10 +888,17 @@ final class NativeParityModelTests: XCTestCase {
 
         XCTAssertEqual(attempts.map(\.endpoint), [
             "de1.vexguard.app:8443",
-            "de1.vexguard.app:443",
         ])
-        XCTAssertTrue(attempts[1].config.contains("Endpoint = de1.vexguard.app:443"))
+        XCTAssertEqual(attempts[0].config, tunnel.config)
         XCTAssertFalse(attempts.contains { $0.endpoint?.hasSuffix(":51820") == true })
+        var cached = tunnel
+        cached.locationId = "admission-test-" + UUID().uuidString
+        LastTunnelEndpointStore().save("retired.example:443", locationId: cached.locationId)
+        defer { UserDefaults.standard.removeObject(forKey: "native.lastSuccessfulEndpoint." + cached.locationId.lowercased()) }
+        XCTAssertEqual(VpnAutopilotService().fallbackTunnels(for: cached).map(\.endpoint), [tunnel.endpoint])
+        let ipv6 = tunnel.withEndpoint("[2001:db8::1]:51824")!
+        XCTAssertEqual(VpnAutopilotService().fallbackTunnels(for: ipv6).map(\.endpoint), ["[2001:db8::1]:51824"])
+
     }
 
     func testNativeHelperStartDoesNotRequireAdminPassword() throws {

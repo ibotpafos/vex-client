@@ -3,7 +3,6 @@ import Network
 
 struct VpnAutopilotService {
     private let api: VEXAPIClient
-    private let endpointFallbackPorts: [UInt16] = [443]
     private let staleHandshakeSeconds: TimeInterval = 180
 
     init(api: VEXAPIClient = VEXAPIClient()) {
@@ -92,22 +91,9 @@ struct VpnAutopilotService {
     }
 
     func fallbackTunnels(for tunnel: PreparedTunnel) -> [PreparedTunnel] {
-        var attempts: [PreparedTunnel] = []
-        if let lastSuccessfulEndpoint = tunnel.lastSuccessfulEndpoint,
-           let candidate = tunnel.withEndpoint(lastSuccessfulEndpoint) {
-            attempts.append(candidate)
-        }
-        attempts.append(tunnel)
-        for port in endpointFallbackPorts {
-            if let candidate = tunnel.withEndpointPort(port) {
-                attempts.append(candidate)
-            }
-        }
-        var seen = Set<String>()
-        return attempts.filter { attempt in
-            let endpoint = attempt.endpoint ?? attempt.configEndpoint ?? attempt.config
-            return seen.insert(endpoint).inserted
-        }
+        // Only the endpoint in this complete profile is authorized. Cached
+        // success from an older profile never adds an alternative listener.
+        return [tunnel]
     }
 
     private func probeHTTPS() async -> VpnAutopilotProbeResult {

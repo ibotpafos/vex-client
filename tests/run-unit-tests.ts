@@ -29,7 +29,7 @@ import {
   withLastSuccessfulEndpoint,
   type HotVpnProfileRecord,
 } from '../src/vpn/hotProfileCacheCore';
-import { AWG3RecoveryPolicyError, connectionAttemptsForProfile, isAWG3Profile, isVpnTransportFallbackError, profileEndpoint } from '../src/vpn/connectionFallback';
+import { AWG3RecoveryPolicyError, connectSuppliedProfile, connectionAttemptsForProfile, isAWG3Profile, isVpnTransportFallbackError, profileEndpoint } from '../src/vpn/connectionFallback';
 import { connectableLocalProfile, explicitConnectProfileResolutionOptions, shouldUseLocalProfileBeforeOnline, vpnConnectTelemetry, vpnConnectTimingSamples, vpnUnexpectedDisconnectTelemetry } from '../src/vpn/connectFlow';
 import { recoverVpnConnection } from '../src/vpn/connectionRecovery';
 import { connectFreshSameLocationProfile } from '../src/vpn/sameLocationProfileRecovery';
@@ -1121,7 +1121,7 @@ function runCreateDeviceRequestTests(): void {
   const awg3 = { ...baseProfile, config: `${baseProfile.config}\nHeaderProtectionKey = header-key` };
   const attempts = connectionAttemptsForProfile(awg3);
 
-  assertDeepEqual(attempts.map(profileEndpoint), ['de.example.com:51820', 'de.example.com:51821', 'de.example.com:443']);
+  assertDeepEqual(attempts.map(profileEndpoint), ['de.example.com:51820']);
   assertEqual(isAWG3Profile(awg3), true);
 }
 
@@ -1133,7 +1133,7 @@ function runCreateDeviceRequestTests(): void {
     lastSuccessfulEndpoint: 'de.example.com:51821',
   });
 
-  assertDeepEqual(attempts.map(profileEndpoint), ['de.example.com:51821', 'de.example.com:443']);
+  assertDeepEqual(attempts.map(profileEndpoint), ['de.example.com:443']);
 }
 
 {
@@ -1149,7 +1149,7 @@ function runCreateDeviceRequestTests(): void {
     config: `${baseProfile.config}\nHeaderProtectionKey = header-key`,
   });
 
-  assertDeepEqual(attempts.map(profileEndpoint), ['fi.example.com:51821', 'fi.example.com:443']);
+  assertDeepEqual(attempts.map(profileEndpoint), ['fi.example.com:51821']);
 }
 
 {
@@ -1159,7 +1159,7 @@ function runCreateDeviceRequestTests(): void {
     config: `${baseProfile.config}\nHeaderProtectionKey = header-key`,
   });
 
-  assertEqual(profileEndpoint(attempts[1]), '[2001:db8::1]:443');
+  assertDeepEqual(attempts.map(profileEndpoint), ['[2001:db8::1]:51821']);
 }
 
 {
@@ -1480,6 +1480,20 @@ async function runFailedConnectionCleanupTests(): Promise<void> {
   await cleanupFailedVpnConnection(true, disconnect);
   await cleanupFailedVpnConnection(false, disconnect);
   assertDeepEqual(calls, [false, true]);
+  for (const message of ['Invalid RekeyTimeout', 'Invalid MaxHandshakeAttempts']) {
+    const admissionError = Object.assign(new Error(message), { code: 'VPN_CONFIG_INVALID' });
+    let nativeCalls = 0;
+    let previousConnected = true;
+    const base = profileWithEndpoint('[2001:db8::1]:51824');
+    const profile = { ...base, config: `${base.config}\nHeaderProtectionKey = fixture`, lastSuccessfulEndpoint: '[2001:db8::2]:443' };
+    try {
+      await connectSuppliedProfile(profile, async () => { nativeCalls++; throw admissionError; });
+    } catch (error) {
+      await cleanupFailedVpnConnection(true, async () => { previousConnected = false; }, error);
+    }
+    assertEqual(nativeCalls, 1);
+    assertEqual(previousConnected, true);
+  }
 }
 
 async function runVpnHandshakeVerificationTests(): Promise<void> {
@@ -2333,4 +2347,10 @@ function runErrorMessageTests(): void {
   assertEqual(isCurrentSessionMutation(2, 2, 'token-a', 'token-a'), true);
   assertEqual(isCurrentSessionMutation(2, 3, 'token-a', 'token-a'), false);
   assertEqual(isCurrentSessionMutation(2, 2, 'token-a', 'token-b'), false);
+}
+
+// React Native rejection object: an existing native tunnel must survive admission.
+for (const message of ['Invalid RekeyTimeout', 'Invalid MaxHandshakeAttempts']) {
+  const error = Object.assign(new Error(message), { code: 'VPN_CONFIG_INVALID' });
+  assertEqual(isVpnTransportFallbackError(error), false);
 }

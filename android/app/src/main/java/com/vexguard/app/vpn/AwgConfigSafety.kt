@@ -16,6 +16,9 @@ internal object AwgConfigSafety {
     "keepalivetimeout",
     "maxhandshakeattempts",
   )
+  private val booleanFields = setOf("randomtrailers", "disablecookies")
+  private val booleanTokens = setOf("on", "off", "1", "0", "true", "false", "t", "f", "yes", "no")
+  private val uint32Max = BigInteger("4294967295")
   private val integerOrRange = Regex("^(\\d+)(?:-(\\d+))?$")
 
   fun parseForActivation(configText: String): Config = try {
@@ -39,14 +42,18 @@ internal object AwgConfigSafety {
           val separator = line.indexOf('=')
           if (separator <= 0) return@forEach
           val name = line.substring(0, separator).trim()
-          if (name.lowercase() !in rangeFields) return@forEach
           val value = line.substring(separator + 1).trim()
+          if (name.lowercase() in booleanFields) {
+            if (value.lowercase() !in booleanTokens) throw AwgConfigValidationException("Invalid $name; expected a boolean token.")
+            return@forEach
+          }
+          if (name.lowercase() !in rangeFields) return@forEach
           val match = integerOrRange.matchEntire(value)
             ?: throw AwgConfigValidationException("Invalid $name; expected a non-negative integer or ascending integer range.")
           val lower = BigInteger(match.groupValues[1])
           val upperText = match.groupValues[2]
           val upper = if (upperText.isEmpty()) null else BigInteger(upperText)
-          if (upper != null && upper < lower) {
+          if (lower > uint32Max || (upper != null && (upper > uint32Max || upper < lower))) {
             throw AwgConfigValidationException("Invalid $name; expected a non-negative ascending integer range.")
           }
         }

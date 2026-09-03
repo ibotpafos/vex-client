@@ -1,0 +1,25 @@
+name: Android Signing Custody Verification
+on:
+  push:
+    branches: [codex/android-signing-custody-20260904]
+    paths:
+      - .github/workflows/android-signing-custody.yml
+      - scripts/verify_android_signing_secret.sh
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Verify registered signer and private-key usability without exporting secrets
+        env:
+          ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+          VEX_UPLOAD_STORE_PASSWORD: ${{ secrets.VEX_UPLOAD_STORE_PASSWORD }}
+          VEX_UPLOAD_KEY_ALIAS: ${{ secrets.VEX_UPLOAD_KEY_ALIAS }}
+          VEX_UPLOAD_KEY_PASSWORD: ${{ secrets.VEX_UPLOAD_KEY_PASSWORD }}
+        run: bash scripts/verify_android_signing_secret.sh 0548ea2bafe6179226d2dde5ba50e2a5a6dabac1e90df655c8a58c042d046cca

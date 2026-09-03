@@ -17,11 +17,12 @@ import type { VpnLocation } from "@/api/vexApi";
 import type { ServerSelectionMode } from "@/vpn/serverSelection";
 import {
   locationLatencyText,
-  locationStatusText,
-  serverLocationLabel,
 } from "../screens/home-screen-helpers";
 
+import { isLocationAvailable } from "../screens/country-groups";
+
 export interface ServerPickerModalProps {
+  countryTitle?: string;
   isVpnBusy: boolean;
   locations: VpnLocation[];
   selectedLatencyText?: string;
@@ -104,6 +105,7 @@ export const ServerPickerContent = React.memo(function ServerPickerContent(props
 });
 
 function ServerPickerBody({
+  countryTitle,
   isVpnBusy,
   locations,
   selectedLatencyText,
@@ -115,12 +117,12 @@ function ServerPickerBody({
   return (
     <Column spacing={4} style={styles.content} testID="server-picker-sheet">
       <UniversalText textStyle={styles.eyebrow}>VEX VPN</UniversalText>
-      <UniversalText textStyle={styles.title}>Серверы</UniversalText>
+      <UniversalText textStyle={styles.title}>{countryTitle ?? "Серверы"}</UniversalText>
       <UniversalText textStyle={styles.subtitle}>
-        Ближайший стабильный узел для текущей сессии.
+        {countryTitle ? "Выберите сервер этой страны." : "Выберите страну и сервер для текущей сессии."}
       </UniversalText>
       <Column spacing={0}>
-        <ServerPickerRow
+        {!countryTitle ? <ServerPickerRow
           leading="↻"
           onPress={isVpnBusy ? undefined : onAutoSelect}
           supportingText="Лучший доступный сервер"
@@ -128,7 +130,7 @@ function ServerPickerBody({
           trailing={selectionMode === "auto" ? "✓" : undefined}
         >
           Автоматически
-        </ServerPickerRow>
+        </ServerPickerRow> : null}
         {locations.map((location) => {
           const selected = selectionMode === "manual" && location.id === selectedLocationId;
           const latency = selected && selectedLatencyText
@@ -138,12 +140,12 @@ function ServerPickerBody({
             <ServerPickerRow
               key={location.id}
               leading={location.flagEmoji || location.countryCode}
-              onPress={isVpnBusy ? undefined : () => onSelect(location.id)}
-              supportingText={`${locationStatusText(location)} · ${latency}`}
+              onPress={isVpnBusy || !isLocationAvailable(location) ? undefined : () => onSelect(location.id)}
+              supportingText={`${isLocationAvailable(location) ? "Доступен" : "Недоступен"} · ${latency} · ID: ${location.id}`}
               testID={`server-picker-${location.id}`}
               trailing={selected ? "✓" : undefined}
             >
-              {serverLocationLabel(location)}
+              {location.city || location.id}
             </ServerPickerRow>
           );
         })}

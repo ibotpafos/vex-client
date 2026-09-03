@@ -1,3 +1,4 @@
+import './country-groups.test';
 import { billingDurationLabel, billingDurationMonths, billingSummaryFallbackCopy, buildBillingSummary, type BillingPlanSource } from '../src/api/billingSummary';
 import { buildSubscriptionReminders } from '../src/notifications/subscriptionReminderSchedule';
 import { devicePushTokenPath, fcmPushRegistration } from '../src/notifications/pushRegistration';
@@ -1431,7 +1432,7 @@ async function runNativeDeviceRegistrationTests(): Promise<void> {
 }
 
 function runServerPickerInteractionTests(): void {
-  assertEqual(serverPickerActionForSource('carousel'), 'select');
+  assertEqual(serverPickerActionForSource('carousel'), 'open_picker');
   assertEqual(serverPickerActionForSource('all_locations'), 'open_picker');
 }
 

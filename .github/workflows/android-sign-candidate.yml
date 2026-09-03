@@ -1,0 +1,32 @@
+name: Android legacy app signed candidate
+on:
+  push:
+    branches: [codex/android-app-restoration-20260904]
+    paths:
+      - .github/workflows/android-sign-candidate.yml
+      - scripts/sign_android_candidate_ci.sh
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Verify legacy private key and sign fixed input
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+          VEX_UPLOAD_STORE_PASSWORD: ${{ secrets.VEX_UPLOAD_STORE_PASSWORD }}
+          VEX_UPLOAD_KEY_ALIAS: ${{ secrets.VEX_UPLOAD_KEY_ALIAS }}
+          VEX_UPLOAD_KEY_PASSWORD: ${{ secrets.VEX_UPLOAD_KEY_PASSWORD }}
+        run: bash scripts/sign_android_candidate_ci.sh 0047dd05d60839b0febaacf4803500c3f9daad893d5315c88299396c3c480af9 internal-app-signing-20260904-1005658
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: signed-app-candidate
+          path: signed-candidate/
+          if-no-files-found: error
+          retention-days: 14

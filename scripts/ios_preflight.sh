@@ -24,6 +24,7 @@ AMNEZIAWG_APPLE_DIR="$ROOT_DIR/external/amnezia/amneziawg-apple"
 [ "$(git -C "$AMNEZIAWG_APPLE_DIR" rev-parse HEAD)" = "$AMNEZIAWG_APPLE_REF" ] \
   || fail "AmneziaWG Apple is not pinned to $AMNEZIAWG_APPLE_REF"
 bash "$ROOT_DIR/tests/ios_awg3_parser_contract.sh"
+bash "$ROOT_DIR/tests/ios_tunnel_runtime_status_contract.sh"
 
 [ -d "$IOS_DIR/VEX.xcworkspace" ] || fail "ios/VEX.xcworkspace is missing; run: npx expo prebuild --platform ios"
 [ -f "$IOS_DIR/Podfile.lock" ] || fail "ios/Podfile.lock is missing; run: cd ios && pod install"

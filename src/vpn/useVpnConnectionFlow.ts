@@ -48,7 +48,10 @@ import { submitClientDiagnostics, type VpnLocation } from '@/api/vexApi';
 import { dynamicRouteRuntime } from '@/vpn/dynamicRouteRuntime';
 import { routeTransport, type DynamicRouteAttempt, type DynamicRouteCandidate } from '@/vpn/dynamicRouteCore';
 import type { VpnProfile } from '@/vpn/profile';
-import { connectFreshSameLocationProfile } from '@/vpn/sameLocationProfileRecovery';
+import {
+  connectAcrossFallbackLocations,
+  connectFreshSameLocationProfile,
+} from '@/vpn/sameLocationProfileRecovery';
 
 type UseVpnConnectionFlowInput = {
   antiLeakEnabled: boolean;
@@ -255,36 +258,19 @@ export function useVpnConnectionFlow({
       }
     }
 
-    for (const fallbackLocation of availableLocations) {
-      if (connected?.status.state === 'connected' || fallbackLocation.id === profileLocationId) {
-        continue;
-      }
-      const fallbackProfile = await resolveConnectableVpnProfile(fallbackLocation.id, {
-        preferCached: true,
-        requestPermission: false,
+    if (!connected) {
+      const fallbackResult = await connectAcrossFallbackLocations({
+        connectProfile: connectProfileWithEndpointFallback,
+        excludedLocationId: profileLocationId,
+        isRetryableError: isVpnTransportFallbackError,
+        locations: availableLocations,
+        resolveProfile: resolveConnectableVpnProfile,
       });
-      try {
-        connected = await connectProfileWithEndpointFallback(fallbackProfile);
-        connectedLocationId = fallbackLocation.id;
-      } catch (error) {
-        lastConnectError = error;
-        if (!isVpnTransportFallbackError(error)) {
-          throw error;
-        }
-        const freshFallbackProfile = await resolveConnectableVpnProfile(fallbackLocation.id, {
-          forceRefresh: true,
-          preferCached: false,
-          requestPermission: false,
-        });
-        try {
-          connected = await connectProfileWithEndpointFallback(freshFallbackProfile);
-          connectedLocationId = fallbackLocation.id;
-        } catch (freshError) {
-          lastConnectError = freshError;
-          if (!isVpnTransportFallbackError(freshError)) {
-            throw freshError;
-          }
-        }
+      if (fallbackResult.connected && fallbackResult.locationId) {
+        connected = fallbackResult.connected;
+        connectedLocationId = fallbackResult.locationId;
+      } else if (fallbackResult.lastError) {
+        lastConnectError = fallbackResult.lastError;
       }
     }
 

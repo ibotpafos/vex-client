@@ -20,12 +20,14 @@ public class VexVpnModule: Module {
       return true
     }
 
-    AsyncFunction("connect") { (config: String) async throws -> [String: Any] in
+    AsyncFunction("connect") { (config: String, antiLeakEnabled: Bool) async throws -> [String: Any] in
+      _ = antiLeakEnabled
       try await self.tunnelStore.connect(config: config)
       return await self.tunnelStore.currentStatus()
     }
 
-    AsyncFunction("disconnect") { () async throws -> [String: Any] in
+    AsyncFunction("disconnect") { (releaseAntiLeak: Bool) async throws -> [String: Any] in
+      _ = releaseAntiLeak
       try await self.tunnelStore.disconnect()
       return await self.tunnelStore.currentStatus()
     }
@@ -238,6 +240,7 @@ private final class IosTunnelStore {
     try await save(manager)
     try await loadFromPreferences(manager)
     try manager.connection.startVPNTunnel()
+    try await waitForConnected(manager)
     VexVpnDiagnostics.record("ios_tunnel_start_requested", details: ["providerBundleIdentifier": providerBundleIdentifier])
   }
 
@@ -250,17 +253,68 @@ private final class IosTunnelStore {
   func currentStatus() async -> [String: Any] {
     let manager = try? await loadExistingManager()
     let status = manager?.connection.status ?? .disconnected
+    let runtimeStatus = status == .connected
+      ? await runtimeStatus(manager: manager)
+      : nil
     var result: [String: Any] = [
       "state": Self.stateName(status),
       "nativeState": status.rawValue,
-      "rxBytes": 0,
-      "txBytes": 0
+      "rxBytes": runtimeStatus?.rxBytes ?? 0,
+      "txBytes": runtimeStatus?.txBytes ?? 0
     ]
     if status == .connected {
-      result["verified"] = false
-      result["verificationReason"] = "handshake_pending"
+      let verified = runtimeStatus?.isVerified == true
+      result["verified"] = verified
+      if let latestHandshakeEpochMillis = runtimeStatus?.latestHandshakeEpochMillis {
+        result["latestHandshakeEpochMillis"] = latestHandshakeEpochMillis
+      }
+      if !verified {
+        result["verificationReason"] = "handshake_pending"
+      }
     }
     return result
+  }
+
+  private func runtimeStatus(manager: NETunnelProviderManager?) async -> IosTunnelRuntimeStatus? {
+    guard let session = manager?.connection as? NETunnelProviderSession else {
+      return nil
+    }
+    return await withCheckedContinuation { continuation in
+      do {
+        try session.sendProviderMessage(Data([0])) { data in
+          guard let data,
+                let runtimeConfiguration = String(data: data, encoding: .utf8) else {
+            continuation.resume(returning: nil)
+            return
+          }
+          continuation.resume(returning: IosTunnelRuntimeStatus.parse(runtimeConfiguration))
+        }
+      } catch {
+        VexVpnDiagnostics.record("ios_tunnel_runtime_status_failed", details: [
+          "error": error.localizedDescription
+        ])
+        continuation.resume(returning: nil)
+      }
+    }
+  }
+
+  private func waitForConnected(_ manager: NETunnelProviderManager) async throws {
+    for _ in 0..<150 {
+      switch manager.connection.status {
+      case .connected:
+        return
+      case .invalid:
+        throw IosTunnelException(message: "VPN configuration became invalid during startup.")
+      case .disconnecting:
+        throw IosTunnelException(message: "VPN tunnel started disconnecting before it connected.")
+      case .connecting, .disconnected, .reasserting:
+        break
+      @unknown default:
+        break
+      }
+      try await Task.sleep(nanoseconds: 100_000_000)
+    }
+    throw IosTunnelException(message: "VPN tunnel did not enter the connected state before timeout.")
   }
 
   private func loadOrCreateManager() async throws -> NETunnelProviderManager {

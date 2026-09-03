@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Builds the modern AmneziaWG 3.1 userspace toolchain for macOS (universal
+# Builds the modern AmneziaWG 3.1 v3.1.20260828 userspace toolchain for macOS (universal
 # arm64 + x86_64) from the pinned refs and installs it into HelperResources,
 # which build_native_macos_app.sh bundles into the helper resources dir.
 #
@@ -36,7 +36,7 @@ fi
 scratch="$(mktemp -d)"
 trap 'rm -rf "${scratch}"' EXIT
 
-echo "== building amneziawg-go (AmneziaWG 3.1) universal =="
+echo "== building amneziawg-go (AmneziaWG 3.1 v3.1.20260828) universal =="
 (cd "${external_dir}/amneziawg-go"
   GOARCH=arm64 go build -o "${scratch}/amneziawg-go-arm64" .
   GOARCH=amd64 go build -o "${scratch}/amneziawg-go-amd64" .
@@ -44,7 +44,7 @@ echo "== building amneziawg-go (AmneziaWG 3.1) universal =="
 lipo -create -output "${scratch}/amneziawg-go-universal" \
   "${scratch}/amneziawg-go-arm64" "${scratch}/amneziawg-go-amd64"
 
-echo "== building amneziawg-tools (awg v3.1.20260828) universal =="
+echo "== building amneziawg-tools (awg v3.1.20260812) universal =="
 (
   cd "${external_dir}/amneziawg-tools/src"
   make clean >/dev/null
@@ -72,4 +72,4 @@ chmod 755 "${helper_resource_dir}/awg" "${helper_resource_dir}/amneziawg-go"
 echo "  awg           md5=$(md5 -q "${helper_resource_dir}/awg")  $(shasum -a 256 "${helper_resource_dir}/awg" | awk '{print $1}')"
 echo "  amneziawg-go  md5=$(md5 -q "${helper_resource_dir}/amneziawg-go")  $(shasum -a 256 "${helper_resource_dir}/amneziawg-go" | awk '{print $1}')"
 echo
-echo "done. HelperResources now carries the pinned AmneziaWG 3.1 toolchain."
+echo "done. HelperResources now carries the pinned AmneziaWG 3.1 v3.1.20260828 toolchain."

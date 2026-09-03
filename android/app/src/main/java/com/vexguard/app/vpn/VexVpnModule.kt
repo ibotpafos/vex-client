@@ -624,15 +624,16 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
   }
 
   private fun rejectVpnError(promise: Promise, code: String, fallbackMessage: String, error: Throwable) {
-    val message = VpnLogRedaction.redact(
-      error.message?.takeIf { it.isNotBlank() }
-        ?: error.cause?.message?.takeIf { it.isNotBlank() }
-        ?: "${error::class.java.simpleName}: $fallbackMessage",
+    VpnErrorDispatcher.dispatch(
+      code = code,
+      fallbackMessage = fallbackMessage,
+      error = error,
+      log = { dispatchedCode, message, sanitizedError -> Log.e(TAG, "$dispatchedCode: $message", sanitizedError) },
+      telemetry = { dispatchedCode, message, sanitizedError ->
+        recordNonFatalVpnError(dispatchedCode, message, sanitizedError)
+      },
+      reject = { dispatchedCode, message, sanitizedError -> promise.reject(dispatchedCode, message, sanitizedError) },
     )
-    val sanitizedError = VpnLogRedaction.sanitizedThrowable(message)
-    Log.e(TAG, "$code: $message", sanitizedError)
-    recordNonFatalVpnError(code, message, sanitizedError)
-    promise.reject(code, message, sanitizedError)
   }
 
   private fun recordNonFatalVpnError(code: String, message: String, error: Throwable) {

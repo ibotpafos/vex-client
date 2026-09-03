@@ -84,7 +84,6 @@ class WireGuardController(context: Context) {
         } else {
           emptyList()
         }
-        lastRoutedApplications = routedApplications
         try {
           val validatedConfig = validatedConfigText(wgQuickConfig)
           val configText = if (routeOnlySelectedApplications) {
@@ -92,44 +91,47 @@ class WireGuardController(context: Context) {
           } else {
             configTextExcludingSelf(validatedConfig)
           }
-          val config = AwgConfigSafety.parseForActivation(configText)
-          if (shouldReuseActiveVpnTunnel(
-              isTunnelUp = backend.getState(tunnel) == Tunnel.State.UP,
-              lastConfigText = lastConfigText,
-              requestedConfigText = configText,
-              antiLeakArmed = antiLeakArmed,
-              antiLeakEnabled = antiLeakEnabled,
-              leakBlockerActive = VexLeakBlockerService.isActive(),
-            )) {
-            // React Native can issue a second connect while auto-connect and a
-            // manual tap race during startup. Re-applying an identical config
-            // makes GoBackend replace a working TUN, briefly cutting traffic.
-            return@withContext VpnConnectionState.Connected(
-              statsOrEmpty(),
-              if (antiLeakEnabled) LeakProtectionState.Armed else LeakProtectionState.Off,
-            )
-          }
-          if (!VexLeakBlockerService.stopAndAwait(appContext)) {
-            throw IllegalStateException("Anti-leak service did not stop before VPN connect.")
-          }
-          val state = backend.setState(tunnel, Tunnel.State.UP, config)
-          if (state != Tunnel.State.UP) {
-            throw IllegalStateException("VPN backend did not enter the UP state.")
-          }
-          selectedUnderlyingNetworkSnapshot()?.let { network ->
-            try {
-              backend.bindTunnelSocketsToNetwork(network)
-              Log.i(TAG, "New VPN sockets bound to $network immediately after tunnel start")
-            } catch (error: Throwable) {
-              // The TUN remains installed and therefore fail-closed. The
-              // connection verifier or the next network callback will retry.
-              Log.e(TAG, "Initial VPN socket bind to $network failed; retaining fail-closed TUN", error)
+          VpnConfigActivation.afterValidation(configText) { config ->
+            // Do not mutate retained routing state until profile admission succeeds.
+            lastRoutedApplications = routedApplications
+            if (shouldReuseActiveVpnTunnel(
+                isTunnelUp = backend.getState(tunnel) == Tunnel.State.UP,
+                lastConfigText = lastConfigText,
+                requestedConfigText = configText,
+                antiLeakArmed = antiLeakArmed,
+                antiLeakEnabled = antiLeakEnabled,
+                leakBlockerActive = VexLeakBlockerService.isActive(),
+              )) {
+              // React Native can issue a second connect while auto-connect and a
+              // manual tap race during startup. Re-applying an identical config
+              // makes GoBackend replace a working TUN, briefly cutting traffic.
+              return@afterValidation VpnConnectionState.Connected(
+                statsOrEmpty(),
+                if (antiLeakEnabled) LeakProtectionState.Armed else LeakProtectionState.Off,
+              )
             }
+            if (!VexLeakBlockerService.stopAndAwait(appContext)) {
+              throw IllegalStateException("Anti-leak service did not stop before VPN connect.")
+            }
+            val state = backend.setState(tunnel, Tunnel.State.UP, config)
+            if (state != Tunnel.State.UP) {
+              throw IllegalStateException("VPN backend did not enter the UP state.")
+            }
+            selectedUnderlyingNetworkSnapshot()?.let { network ->
+              try {
+                backend.bindTunnelSocketsToNetwork(network)
+                Log.i(TAG, "New VPN sockets bound to $network immediately after tunnel start")
+              } catch (error: Throwable) {
+                // The TUN remains installed and therefore fail-closed. The
+                // connection verifier or the next network callback will retry.
+                Log.e(TAG, "Initial VPN socket bind to $network failed; retaining fail-closed TUN", error)
+              }
+            }
+            val traffic = statsOrEmpty()
+            lastConfigText = configText
+            antiLeakArmed = antiLeakEnabled
+            VpnConnectionState.Connected(traffic, if (antiLeakEnabled) LeakProtectionState.Armed else LeakProtectionState.Off)
           }
-          val traffic = statsOrEmpty()
-          lastConfigText = configText
-          antiLeakArmed = antiLeakEnabled
-          VpnConnectionState.Connected(traffic, if (antiLeakEnabled) LeakProtectionState.Armed else LeakProtectionState.Off)
         } catch (error: AwgConfigValidationException) {
           // Parsing occurs before stopping the blocker or invoking setState, so an
           // invalid replacement cannot tear down a currently working tunnel.
@@ -352,6 +354,13 @@ class WireGuardController(context: Context) {
 
   private suspend fun recoverTunnelAfterNetworkChange(previous: Network, selected: Network) = tunnelMutex.withLock {
     val configText = lastConfigText ?: return@withLock
+    // Parse every candidate before reading or mutating tunnel/backend/blocker state.
+    val recoveryCandidates = try {
+      VpnConfigActivation.parseRecoveryCandidates(configText)
+    } catch (error: AwgConfigValidationException) {
+      Log.e(TAG, "VPN network recovery rejected invalid profile: ${error.message}")
+      return@withLock
+    }
     if (backend.getState(tunnel) != Tunnel.State.UP && !VexLeakBlockerService.isActive()) {
       return@withLock
     }
@@ -383,11 +392,11 @@ class WireGuardController(context: Context) {
       }
       var recoveredConfig: Config? = null
       var recoveredConfigText: String? = null
-      for (candidateText in VpnNetworkRecovery.configCandidates(configText)) {
+      for (candidate in recoveryCandidates) {
         val candidateEndpoint = Regex("(?m)^Endpoint\\s*=\\s*(.+)$")
-          .find(candidateText)?.groupValues?.getOrNull(1)?.trim().orEmpty()
+          .find(candidate.text)?.groupValues?.getOrNull(1)?.trim().orEmpty()
         Log.i(TAG, "Trying VPN network recovery endpoint $candidateEndpoint")
-        val candidateConfig = AwgConfigSafety.parseForActivation(candidateText)
+        val candidateConfig = candidate.config
         // Android permits only one active VpnService per user. Hand ownership back
         // from the leak blocker before establishing the real tunnel, otherwise the
         // backend can handshake while the system keeps the blocker routing table.
@@ -399,7 +408,7 @@ class WireGuardController(context: Context) {
         Log.i(TAG, "VPN network recovery endpoint $candidateEndpoint verified=$handshakeVerified")
         if (handshakeVerified) {
           recoveredConfig = candidateConfig
-          recoveredConfigText = candidateText
+          recoveredConfigText = candidate.text
           break
         }
         setTunnelDown()

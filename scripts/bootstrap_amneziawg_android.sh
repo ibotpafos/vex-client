@@ -6,8 +6,8 @@ external_dir="${AMNEZIAWG_EXTERNAL_DIR:-"${root_dir}/external/amnezia"}"
 
 android_repo_url="${AMNEZIAWG_ANDROID_REPO_URL:-https://github.com/amnezia-vpn/amneziawg-android.git}"
 go_repo_url="${AMNEZIAWG_GO_REPO_URL:-https://github.com/amnezia-vpn/amneziawg-go.git}"
-android_ref="${AMNEZIAWG_ANDROID_REF:-f82900455f1aceaa85658686dc2c5e32c2c42a73}"
-go_ref="08d68cdae27762c3e07f36bbb12d2bad32f81926"
+android_ref="5c16489e2cd9ed3a0a7a27c7445bba5238132f86"
+go_ref="b5928efb6ca19f0153958460c3d141f04abc5c2e"
 clean_checkout="${AMNEZIAWG_CLEAN:-1}"
 
 apply_patch_once() {

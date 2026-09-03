@@ -16,10 +16,8 @@ import android.system.OsConstants.SOL_SOCKET
 import android.system.OsConstants.SO_RCVTIMEO
 import android.system.StructTimeval
 import android.util.Log
-import java.io.ByteArrayInputStream
 import java.io.FileDescriptor
 import java.net.Inet4Address
-import java.nio.charset.StandardCharsets
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -88,15 +86,13 @@ class WireGuardController(context: Context) {
         }
         lastRoutedApplications = routedApplications
         try {
-          if (!VexLeakBlockerService.stopAndAwait(appContext)) {
-            throw IllegalStateException("Anti-leak service did not stop before VPN connect.")
-          }
           val validatedConfig = validatedConfigText(wgQuickConfig)
           val configText = if (routeOnlySelectedApplications) {
             configTextIncludingSelectedApplications(validatedConfig, routedApplications)
           } else {
             configTextExcludingSelf(validatedConfig)
           }
+          val config = AwgConfigSafety.parseForActivation(configText)
           if (shouldReuseActiveVpnTunnel(
               isTunnelUp = backend.getState(tunnel) == Tunnel.State.UP,
               lastConfigText = lastConfigText,
@@ -113,7 +109,9 @@ class WireGuardController(context: Context) {
               if (antiLeakEnabled) LeakProtectionState.Armed else LeakProtectionState.Off,
             )
           }
-          val config = Config.parse(ByteArrayInputStream(configText.toByteArray(StandardCharsets.UTF_8)))
+          if (!VexLeakBlockerService.stopAndAwait(appContext)) {
+            throw IllegalStateException("Anti-leak service did not stop before VPN connect.")
+          }
           val state = backend.setState(tunnel, Tunnel.State.UP, config)
           if (state != Tunnel.State.UP) {
             throw IllegalStateException("VPN backend did not enter the UP state.")
@@ -132,6 +130,10 @@ class WireGuardController(context: Context) {
           lastConfigText = configText
           antiLeakArmed = antiLeakEnabled
           VpnConnectionState.Connected(traffic, if (antiLeakEnabled) LeakProtectionState.Armed else LeakProtectionState.Off)
+        } catch (error: AwgConfigValidationException) {
+          // Parsing occurs before stopping the blocker or invoking setState, so an
+          // invalid replacement cannot tear down a currently working tunnel.
+          throw error
         } catch (error: Throwable) {
           if (antiLeakEnabled) {
             try {
@@ -385,7 +387,7 @@ class WireGuardController(context: Context) {
         val candidateEndpoint = Regex("(?m)^Endpoint\\s*=\\s*(.+)$")
           .find(candidateText)?.groupValues?.getOrNull(1)?.trim().orEmpty()
         Log.i(TAG, "Trying VPN network recovery endpoint $candidateEndpoint")
-        val candidateConfig = Config.parse(ByteArrayInputStream(candidateText.toByteArray(StandardCharsets.UTF_8)))
+        val candidateConfig = AwgConfigSafety.parseForActivation(candidateText)
         // Android permits only one active VpnService per user. Hand ownership back
         // from the leak blocker before establishing the real tunnel, otherwise the
         // backend can handshake while the system keeps the blocker routing table.

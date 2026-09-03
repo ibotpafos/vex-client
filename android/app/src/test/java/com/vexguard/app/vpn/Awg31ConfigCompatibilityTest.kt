@@ -15,6 +15,7 @@ class Awg31ConfigCompatibilityTest {
   private val privateKey = Base64.getEncoder().encodeToString(ByteArray(32) { 1.toByte() })
   private val publicKey = Base64.getEncoder().encodeToString(ByteArray(32) { 2.toByte() })
   private val headerKey = Base64.getEncoder().encodeToString(ByteArray(32) { 3.toByte() })
+  private val presharedKey = Base64.getEncoder().encodeToString(ByteArray(32) { 4.toByte() })
 
   @Test
   fun roundTripsCompleteAwg31Interface() {
@@ -34,6 +35,10 @@ class Awg31ConfigCompatibilityTest {
       H3 = 3000001-3000099
       H4 = 4000001-4000099
       I1 = <r 8><t><rc 8>
+      I2 = <r 9><t><rc 9>
+      I3 = <r 10><t><rc 10>
+      I4 = <r 11><t><rc 11>
+      I5 = <r 12><t><rc 12>
       HeaderProtectionKey = $headerKey
       ContentPaddingAddition = 10-40
       RekeyAfterTime = 120-180
@@ -46,33 +51,90 @@ class Awg31ConfigCompatibilityTest {
 
       [Peer]
       PublicKey = $publicKey
+      PresharedKey = $presharedKey
       Endpoint = 192.0.2.1:51824
       AllowedIPs = 0.0.0.0/0
+      PersistentKeepalive = 25
     """.trimIndent()
+    val expected = """
+      [Interface]
+      Address = 10.64.249.2/32
+      Jc = 6
+      Jmin = 10
+      Jmax = 50
+      S1 = 12
+      S2 = 12
+      S3 = 12
+      S4 = 12
+      H1 = 1000001-1000099
+      H2 = 2000001-2000099
+      H3 = 3000001-3000099
+      H4 = 4000001-4000099
+      I1 = <r 8><t><rc 8>
+      I2 = <r 9><t><rc 9>
+      I3 = <r 10><t><rc 10>
+      I4 = <r 11><t><rc 11>
+      I5 = <r 12><t><rc 12>
+      HeaderProtectionKey = $headerKey
+      ContentPaddingAddition = 10-40
+      RekeyAfterTime = 120-180
+      RekeyTimeout = 2-4
+      RejectAfterTime = 180-240
+      KeepaliveTimeout = 10-15
+      MaxHandshakeAttempts = 10-15
+      RandomTrailers = true
+      DisableCookies = false
+      PrivateKey = $privateKey
 
-    val rendered = parse(source).toAwgQuickString()
-    listOf(
-      "HeaderProtectionKey = $headerKey",
-      "ContentPaddingAddition = 10-40",
-      "RekeyAfterTime = 120-180",
-      "RekeyTimeout = 2-4",
-      "RejectAfterTime = 180-240",
-      "KeepaliveTimeout = 10-15",
-      "MaxHandshakeAttempts = 10-15",
-      "RandomTrailers = true",
-      "DisableCookies = false",
-    ).forEach { assertTrue("missing $it", rendered.contains(it)) }
-    assertTrue(rendered.contains("PrivateKey = $privateKey\n"))
+      [Peer]
+      AllowedIPs = 0.0.0.0/0
+      Endpoint = 192.0.2.1:51824
+      PersistentKeepalive = 25
+      PreSharedKey = $presharedKey
+      PublicKey = $publicKey
+    """.trimIndent() + "\n"
+
+    assertEquals(expected, parse(source).toAwgQuickString())
+    assertEquals(expected, AwgConfigSafety.parseForActivation(source).toAwgQuickString())
   }
 
   @Test
   fun acceptsLegacyAwg30WithoutAwg31OnlyFlags() {
-    val source = "[Interface]\nPrivateKey = $privateKey\nAddress = 10.64.252.2/32\nJc = 4\nS1 = 12\nS2 = 12\nS3 = 12\nS4 = 12\nHeaderProtectionKey = $headerKey\n\n[Peer]\nPublicKey = $publicKey\nEndpoint = 192.0.2.1:443\nAllowedIPs = 0.0.0.0/0\n"
-    val rendered = parse(source).toAwgQuickString()
+    val source = """
+      [Interface]
+      PrivateKey = $privateKey
+      Address = 10.64.252.2/32
+      Jc = 4
+      S1 = 12
+      S2 = 12
+      S3 = 12
+      S4 = 12
+      HeaderProtectionKey = $headerKey
 
-    assertTrue(rendered.contains("HeaderProtectionKey = $headerKey"))
-    assertFalse(rendered.contains("RandomTrailers"))
-    assertFalse(rendered.contains("DisableCookies"))
+      [Peer]
+      PublicKey = $publicKey
+      Endpoint = 192.0.2.1:443
+      AllowedIPs = 0.0.0.0/0
+    """.trimIndent()
+    val expected = """
+      [Interface]
+      Address = 10.64.252.2/32
+      Jc = 4
+      S1 = 12
+      S2 = 12
+      S3 = 12
+      S4 = 12
+      HeaderProtectionKey = $headerKey
+      PrivateKey = $privateKey
+
+      [Peer]
+      AllowedIPs = 0.0.0.0/0
+      Endpoint = 192.0.2.1:443
+      PublicKey = $publicKey
+    """.trimIndent() + "\n"
+
+    assertEquals(expected, parse(source).toAwgQuickString())
+    assertEquals(expected, AwgConfigSafety.parseForActivation(source).toAwgQuickString())
   }
 
   @Test
@@ -93,19 +155,81 @@ class Awg31ConfigCompatibilityTest {
   }
 
   @Test
-  fun preservesMalformedAwg31RangeSyntaxAsReportedByOfficialParser() {
-    val rendered = parse(
-      "[Interface]\nPrivateKey = $privateKey\nContentPaddingAddition = 10--40\nRekeyAfterTime = not-a-range\nRekeyTimeout = 2--4\nRejectAfterTime = 180--240\nKeepaliveTimeout = 10--15\nMaxHandshakeAttempts = 10--15",
-    ).toAwgQuickString()
+  fun rejectsMalformedAwg31RangesBeforeActivationWithoutChangingPriorState() {
+    val fields = listOf(
+      "ContentPaddingAddition",
+      "RekeyAfterTime",
+      "RekeyTimeout",
+      "RejectAfterTime",
+      "KeepaliveTimeout",
+      "MaxHandshakeAttempts",
+    )
+    val malformedValues = listOf("10--40", "not-a-range", "2-", "-4", "10-2", "-1", "1-2-3")
 
-    listOf(
-      "ContentPaddingAddition = 10--40",
-      "RekeyAfterTime = not-a-range",
-      "RekeyTimeout = 2--4",
-      "RejectAfterTime = 180--240",
-      "KeepaliveTimeout = 10--15",
-      "MaxHandshakeAttempts = 10--15",
-    ).forEach { assertTrue("official parser changed $it", rendered.contains(it)) }
+    fields.forEach { field ->
+      malformedValues.forEach { malformedValue ->
+        val source = "[Interface]\nPrivateKey = $privateKey\n$field = $malformedValue"
+        assertTrue("official parser unexpectedly rejected $field=$malformedValue", parse(source).toAwgQuickString().contains("$field = $malformedValue"))
+
+        var backendActivationCalls = 0
+        val priorTunnelState = "UP"
+        try {
+          AwgConfigSafety.parseForActivation(source)
+          backendActivationCalls += 1
+          fail("activation config accepted $field=$malformedValue")
+        } catch (_: AwgConfigValidationException) {
+        }
+        assertEquals(0, backendActivationCalls)
+        assertEquals("UP", priorTunnelState)
+      }
+    }
+  }
+
+  @Test
+  fun acceptsDocumentedAwg31IntegerAndAscendingRangeForms() {
+    val fields = listOf(
+      "ContentPaddingAddition",
+      "RekeyAfterTime",
+      "RekeyTimeout",
+      "RejectAfterTime",
+      "KeepaliveTimeout",
+      "MaxHandshakeAttempts",
+    )
+
+    listOf("0", "1", "10-40").forEach { value ->
+      val source = buildString {
+        appendLine("[Interface]")
+        appendLine("PrivateKey = $privateKey")
+        fields.forEach { appendLine("$it = $value") }
+      }
+      val rendered = AwgConfigSafety.parseForActivation(source).toAwgQuickString()
+      fields.forEach { assertTrue("missing $it=$value", rendered.contains("$it = $value")) }
+    }
+  }
+
+  @Test
+  fun redactsConfigurationSecretsAtTheErrorReportingBoundary() {
+    val rawError = """
+      backend error
+      PrivateKey = $privateKey
+      PresharedKey = $presharedKey
+      HeaderProtectionKey = $headerKey
+      Endpoint = 192.0.2.1:51824
+    """.trimIndent()
+
+    val redacted = VpnLogRedaction.redact(rawError)
+    val sanitizedThrowable = VpnLogRedaction.sanitizedThrowable(redacted)
+
+    assertFalse(redacted.contains(privateKey))
+    assertFalse(redacted.contains(presharedKey))
+    assertFalse(redacted.contains(headerKey))
+    assertFalse(sanitizedThrowable.stackTraceToString().contains(privateKey))
+    assertFalse(sanitizedThrowable.stackTraceToString().contains(presharedKey))
+    assertFalse(sanitizedThrowable.stackTraceToString().contains(headerKey))
+    assertTrue(redacted.contains("Endpoint = 192.0.2.1:51824"))
+    assertTrue(redacted.contains("PrivateKey = [REDACTED]"))
+    assertTrue(redacted.contains("PresharedKey = [REDACTED]"))
+    assertTrue(redacted.contains("HeaderProtectionKey = [REDACTED]"))
   }
 
   @Test

@@ -32,7 +32,7 @@ import {
 import { AWG3RecoveryPolicyError, connectionAttemptsForProfile, isAWG3Profile, isVpnTransportFallbackError, profileEndpoint } from '../src/vpn/connectionFallback';
 import { connectableLocalProfile, explicitConnectProfileResolutionOptions, shouldUseLocalProfileBeforeOnline, vpnConnectTelemetry, vpnConnectTimingSamples, vpnUnexpectedDisconnectTelemetry } from '../src/vpn/connectFlow';
 import { recoverVpnConnection } from '../src/vpn/connectionRecovery';
-import { connectFreshSameLocationProfile } from '../src/vpn/sameLocationProfileRecovery';
+import { connectAcrossFallbackLocations, connectFreshSameLocationProfile } from '../src/vpn/sameLocationProfileRecovery';
 import {
   initialRecoveryBackoffState,
   recoveryAttemptAllowed,
@@ -1287,6 +1287,7 @@ async function runAsyncTests(): Promise<void> {
   runTrafficSummaryTests();
   runRecoveryBackoffTests();
   await testFreshSameLocationProfileConnectsSecondNode();
+  await testFallbackLocationResolutionContinuesAfterRetryableFailure();
   await runServerSwitchTests();
 }
 
@@ -1307,6 +1308,39 @@ async function testFreshSameLocationProfileConnectsSecondNode(): Promise<void> {
 
   assertEqual(profileEndpoint(connected.profile), 'de-second.example.com:443');
   assertDeepEqual(calls, ['resolve:de:fresh', 'connect:de-second.example.com:443']);
+}
+
+async function testFallbackLocationResolutionContinuesAfterRetryableFailure(): Promise<void> {
+  const calls: string[] = [];
+  const nlProfile = profileForLocation('nl', 'nl.example.com:443');
+  const result = await connectAcrossFallbackLocations({
+    connectProfile: async (profile) => {
+      calls.push(`connect:${profile.locationId}`);
+      return { profile, status: connectedStatus };
+    },
+    excludedLocationId: 'de',
+    isRetryableError: isVpnTransportFallbackError,
+    locations: [{ id: 'de' }, { id: 'fi' }, { id: 'nl' }],
+    resolveProfile: async (locationId, options) => {
+      calls.push(`resolve:${locationId}:${options.forceRefresh ? 'fresh' : 'cached'}`);
+      if (locationId === 'fi') {
+        throw new Error('network timeout');
+      }
+      return nlProfile;
+    },
+  });
+
+  assertEqual(result.locationId, 'nl');
+  if (!result.connected) {
+    throw new Error('Expected fallback connection to succeed.');
+  }
+  assertEqual(profileEndpoint(result.connected.profile), 'nl.example.com:443');
+  assertDeepEqual(calls, [
+    'resolve:fi:cached',
+    'resolve:fi:fresh',
+    'resolve:nl:cached',
+    'connect:nl',
+  ]);
 }
 
 function runRecoveryBackoffTests(): void {
@@ -1410,12 +1444,19 @@ async function runNativeDeviceRegistrationTests(): Promise<void> {
   assertDeepEqual(await concurrent, { id: 'registered-device' });
   assertEqual(starts, 1);
 
+  const refreshed = getOrCreateNativeDeviceRegistration('token-a', 'device-a', async () => {
+    starts += 1;
+    return { id: 'refreshed-device' };
+  });
+  assertDeepEqual(await refreshed, { id: 'refreshed-device' });
+  assertEqual(starts, 2);
+
   const otherUser = getOrCreateNativeDeviceRegistration('token-b', 'device-a', async () => {
     starts += 1;
     return { id: 'other-user-device' };
   });
   assertDeepEqual(await otherUser, { id: 'other-user-device' });
-  assertEqual(starts, 2);
+  assertEqual(starts, 3);
 
   const failed = getOrCreateNativeDeviceRegistration('token-c', 'device-c', async () => {
     starts += 1;
@@ -1427,7 +1468,7 @@ async function runNativeDeviceRegistrationTests(): Promise<void> {
     return { id: 'retry-device' };
   });
   assertDeepEqual(await retried, { id: 'retry-device' });
-  assertEqual(starts, 4);
+  assertEqual(starts, 5);
 }
 
 function runServerPickerInteractionTests(): void {

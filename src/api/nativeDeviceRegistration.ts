@@ -24,10 +24,11 @@ export function getOrCreateNativeDeviceRegistration<T>(
     promise: start(),
   };
   sharedRegistrationAttempt = attempt as NativeDeviceRegistrationAttempt<unknown>;
-  void attempt.promise.catch(() => {
+  const clearCompletedAttempt = () => {
     if (sharedRegistrationAttempt === attempt) {
       sharedRegistrationAttempt = null;
     }
-  });
+  };
+  void attempt.promise.then(clearCompletedAttempt, clearCompletedAttempt);
   return attempt.promise;
 }

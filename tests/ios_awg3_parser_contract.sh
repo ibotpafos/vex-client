@@ -20,7 +20,7 @@ rg -Fq 'interface.headerProtectionKey = headerProtectionKey' "${parser}"
 rg -Fq 'interface.contentPaddingAddition = contentPaddingAdditionString' "${parser}"
 rg -Fq 'interface.maxHandshakeAttempts = maxHandshakeAttemptsString' "${parser}"
 rg -Fq 'peer.persistentKeepAlive = persistentKeepAliveString' "${parser}"
-rg -Fq 'apple_ref="${AMNEZIAWG_APPLE_REF:-4bafa5958a80c8be76bd89d1e02984c6307769d2}"' "${bootstrap}"
+rg -Fq 'apple_ref="4bafa5958a80c8be76bd89d1e02984c6307769d2"' "${bootstrap}"
 
 swift build --package-path "${root_dir}/external/amnezia/amneziawg-apple" --target WireGuardKit
 swiftc -typecheck \

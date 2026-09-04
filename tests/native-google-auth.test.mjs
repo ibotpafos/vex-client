@@ -14,6 +14,7 @@ assert.equal(google.searchParams.get('code_challenge'), input.challenge);
 const screen = readFileSync('src/screens/sign-in-screen.tsx', 'utf8');
 assert.match(screen, /handleWebAuthStart\("google"\)/);
 assert.match(screen, /Войти через Google/);
+assert.doesNotMatch(screen, /console\.(?:log|warn|error)\([^;]*\burl\s*\)/i);
 assert.doesNotMatch(screen, /mfaCode|setMfaCode|Код аутентификатора/);
 assert.match(screen, /code.length !== 6/);
 const api = readFileSync('src/api/auth.ts', 'utf8');

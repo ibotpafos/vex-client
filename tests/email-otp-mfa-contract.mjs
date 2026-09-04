@@ -43,7 +43,7 @@ assert.match(screen, /buildAppWebAuthUrl\(/);
 assert.match(screen, /openWebAuthUrl\(webAuthUrl\)/);
 const input = readFileSync(new URL('../src/components/otp-code-input.tsx', import.meta.url), 'utf8');
 assert.equal((input.match(/<TextInput\s/g) || []).length, 1, 'email OTP retains one input');
-assert.match(input, /autoComplete="one-time-code"/);
+assert.match(input, /autoComplete=\{Platform.OS === 'android' \? 'email-otp' : 'one-time-code'\}/);
 assert.match(input, /textContentType="oneTimeCode"/);
 assert.match(input, /importantForAutofill="yes"/);
 console.log('PASS: client-only email OTP payload, ignored extra MFA argument, separate Google browser flow, six-digit validation and autofill hints');

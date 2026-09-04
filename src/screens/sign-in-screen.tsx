@@ -157,7 +157,7 @@ export default function SignInScreen() {
       if (handledCallbackUrls.current.has(url)) return;
       handledCallbackUrls.current.add(url);
 
-      console.log("Received callback URL:", url);
+      console.log("Received auth callback");
       playLightImpactHaptic();
       setIsAuthBusy(true);
       setAuthError(null);

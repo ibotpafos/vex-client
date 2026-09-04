@@ -6,7 +6,7 @@ import { fcmPushRegistration, type FcmPushRegistration } from '@/notifications/p
 
 const androidAccountEventsChannelId = 'vex_updates';
 
-export async function getFcmAccountPushRegistration(): Promise<FcmPushRegistration | null> {
+export async function getFcmAccountPushRegistration(allowPermissionPrompt = true): Promise<FcmPushRegistration | null> {
   if (Platform.OS === 'web') {
     return null;
   }
@@ -18,7 +18,7 @@ export async function getFcmAccountPushRegistration(): Promise<FcmPushRegistrati
     });
   }
 
-  const permission = await ensureNotificationPermission();
+  const permission = await ensureNotificationPermission(allowPermissionPrompt);
   if (!permission) {
     return null;
   }
@@ -26,12 +26,13 @@ export async function getFcmAccountPushRegistration(): Promise<FcmPushRegistrati
   return fcmPushRegistration(await getFirebaseMessagingToken());
 }
 
-async function ensureNotificationPermission(): Promise<boolean> {
+async function ensureNotificationPermission(allowPermissionPrompt: boolean): Promise<boolean> {
   const current = await Notifications.getPermissionsAsync();
   if (current.granted) {
     return true;
   }
 
+  if (!allowPermissionPrompt || !current.canAskAgain) return false;
   const requested = await Notifications.requestPermissionsAsync();
   return requested.granted;
 }

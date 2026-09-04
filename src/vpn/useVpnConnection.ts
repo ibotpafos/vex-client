@@ -17,6 +17,7 @@ import {
   vpnDevices,
   vpnLocations,
 } from '@/api/vexApi';
+import { startPushRegistrationLoop } from '@/notifications/pushRegistrationLoop';
 import { useSession } from '@/auth/session-context';
 import { openExternalUrl } from '@/auth/systemAuth';
 import { vexWebsite } from '@/navigation/website';
@@ -238,7 +239,6 @@ export function useVpnConnection() {
   const autoConnectAttemptedRef = useRef(false);
   const vpnOperationInFlightRef = useRef(false);
   const vpnConnectGenerationRef = useRef(0);
-  const lastRegisteredPushDeviceRef = useRef('');
   const [persistedEntitlement, setPersistedEntitlement] = useState<Entitlement | null>(null);
   const [persistedLocations, setPersistedLocations] = useState<VpnLocation[] | null>(null);
   const [persistedDevices, setPersistedDevices] = useState<VpnDevice[] | null>(null);
@@ -722,32 +722,19 @@ export function useVpnConnection() {
 
 
   useEffect(() => {
-    if (Platform.OS === 'web' || !session?.accessToken || !activeProfileDeviceId) {
+    if (Platform.OS === 'web' || !isAppActive || !session?.accessToken || !activeProfileDeviceId) {
       return undefined;
     }
-    const registrationKey = `${activeProfileDeviceId}:${activeProfile?.profileVersion ?? 0}`;
-    if (lastRegisteredPushDeviceRef.current === registrationKey) {
-      return;
-    }
-    lastRegisteredPushDeviceRef.current = registrationKey;
-
-    let cancelled = false;
-    const registerAccountPushToken = async () => {
-      const registration = await getFcmAccountPushRegistration().catch(() => null);
-      if (cancelled || !registration) {
-        return;
-      }
-      await registerDevicePushToken(session.accessToken, activeProfileDeviceId, registration);
-      await queryClient.invalidateQueries({ queryKey: ['vpn-devices', session.accessToken] });
-    };
-
-    void registerAccountPushToken().catch(() => {
-      lastRegisteredPushDeviceRef.current = '';
+    // Recreated on foreground, account or device changes. Polling also picks up
+    // token rotation from FirebaseMessagingService while this screen is active.
+    const worker = startPushRegistrationLoop({
+      getRegistration: getFcmAccountPushRegistration,
+      register: async (registration) => {
+        await registerDevicePushToken(session.accessToken, activeProfileDeviceId, registration);
+      },
     });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeProfile?.profileVersion, activeProfileDeviceId, queryClient, session?.accessToken]);
+    return () => worker.stop();
+  }, [activeProfile?.profileVersion, activeProfileDeviceId, isAppActive, session?.accessToken]);
 
   useEffect(() => {
     void refreshVpnStatus('native_status_startup_failed');

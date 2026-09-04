@@ -13,12 +13,14 @@ public final class UpdaterProbe extends Instrumentation {
  private void report(String s){Bundle b=new Bundle();b.putString("stream",s+"\n");sendStatus(0,b);}
  public void onStart(){
   try {
+   // R10 R8 mapping: MainApplication.getReactHost -> d, ReactHost -> w, currentContext -> h.
    Context ctx=getTargetContext();ClassLoader cl=ctx.getClassLoader();
+   if(ctx.getPackageManager().getPackageInfo(ctx.getPackageName(),0).versionCode!=1005660)throw new AssertionError("Probe requires exact R10 build");
    Class<?> rc=cl.loadClass("com.facebook.react.bridge.ReactApplicationContext");
    android.content.Intent launch=new android.content.Intent().setClassName(ctx.getPackageName(), "com.vexguard.app.MainActivity").addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
    startActivitySync(launch);
-   Object app=ctx.getApplicationContext();Object host=app.getClass().getMethod("getReactHost").invoke(app);
-   Method currentContext=cl.loadClass("com.facebook.react.ReactHost").getMethod("getCurrentReactContext");
+   Object app=ctx.getApplicationContext();Object host=app.getClass().getMethod("d").invoke(app);
+   Method currentContext=cl.loadClass("com.facebook.react.w").getMethod("h");
    Object context=null;for(int i=0;i<300 && context==null;i++){context=currentContext.invoke(host);if(context==null)Thread.sleep(100);}
    if(context==null)throw new AssertionError("Real React host not ready");
    Class<?> mod=cl.loadClass("com.vexguard.app.vpn.VexVpnModule");
@@ -30,7 +32,7 @@ public final class UpdaterProbe extends Instrumentation {
    try { download.invoke(module,url,"0000000000000000000000000000000000000000000000000000000000000000");throw new AssertionError("bad checksum accepted"); }
    catch(InvocationTargetException e){if(!String.valueOf(e.getCause().getMessage()).contains("checksum mismatch"))throw e;report("BAD_CHECKSUM_REJECTED=PASS");}
    Object result=download.invoke(module,url,sha);
-   Method getFile=result.getClass().getDeclaredMethod("getFile");getFile.setAccessible(true);File file=(File)getFile.invoke(result);
+   Method getFile=result.getClass().getDeclaredMethod("b");getFile.setAccessible(true);File file=(File)getFile.invoke(result);
    report("NATIVE_DOWNLOAD_IDENTITY_CHECK=PASS bytes="+file.length());
    Class<?> promise=cl.loadClass("com.facebook.react.bridge.Promise");CountDownLatch done=new CountDownLatch(1);AtomicBoolean failed=new AtomicBoolean(false);
    Object callback=Proxy.newProxyInstance(cl,new Class[]{promise},(p,m,a)->{if(m.getName().equals("resolve")){report("INSTALL_RESULT="+String.valueOf(a[0]));done.countDown();}else if(m.getName().equals("reject")){failed.set(true);report("INSTALL_REJECTED="+String.valueOf(a[0]));done.countDown();}return null;});

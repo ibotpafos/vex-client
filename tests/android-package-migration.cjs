@@ -7,13 +7,13 @@ const versions = JSON.parse(fs.readFileSync(path.join(root, 'versions.json'))).a
 const gradle = fs.readFileSync(path.join(root, 'android/app/build.gradle'), 'utf8');
 const config = fs.readFileSync(path.join(root, 'app.config.ts'), 'utf8');
 assert.equal(app.android.package, 'com.vexguard.app');
-assert.equal(app.android.versionCode, 1005660);
+assert.equal(app.android.versionCode, 1005662);
 assert.equal(app.version, '1.0.56');
 assert.match(gradle, /applicationId "com\.vexguard\.app"/);
-assert.match(gradle, /versionCode 1005660/);
+assert.match(gradle, /versionCode 1005662/);
 assert.match(config, /env\('VEX_ANDROID_APPLICATION_ID', 'com\.vexguard\.app'\)/);
 assert.equal(versions.version, app.version);
-assert.equal(versions.build, 60);
+assert.equal(versions.build, 62);
 assert.equal(versions.is_required, false);
 assert.equal(versions.checksum_sha256, '');
 assert.equal(versions.signature_url, '');

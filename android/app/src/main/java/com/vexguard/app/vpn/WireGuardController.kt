@@ -39,6 +39,7 @@ class WireGuardController(context: Context) {
   private val recoveryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private val connectivityManager = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
   private val availableUnderlyingNetworks = linkedSetOf<Network>()
+  private val underlyingNetworkCapabilities = linkedMapOf<Network, NetworkCapabilities>()
   @Volatile private var transitionState: String? = null
   @Volatile private var networkRecoveryPending = false
   private var antiLeakArmed = false
@@ -283,6 +284,15 @@ class WireGuardController(context: Context) {
       override fun onAvailable(network: Network) {
         synchronized(availableUnderlyingNetworks) {
           availableUnderlyingNetworks.add(network)
+          // Capabilities are delivered next. Synchronous queries here can return
+          // null on a newly available network and permanently skip recovery.
+        }
+      }
+
+      override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
+        synchronized(availableUnderlyingNetworks) {
+          if (network !in availableUnderlyingNetworks) return
+          underlyingNetworkCapabilities[network] = NetworkCapabilities(networkCapabilities)
           selectUnderlyingNetworkLocked()
         }
       }
@@ -290,6 +300,7 @@ class WireGuardController(context: Context) {
       override fun onLost(network: Network) {
         synchronized(availableUnderlyingNetworks) {
           availableUnderlyingNetworks.remove(network)
+          underlyingNetworkCapabilities.remove(network)
           selectUnderlyingNetworkLocked()
         }
       }
@@ -299,7 +310,7 @@ class WireGuardController(context: Context) {
   private fun selectUnderlyingNetworkLocked() {
     val selected = availableUnderlyingNetworks
       .mapNotNull { network ->
-        connectivityManager.getNetworkCapabilities(network)?.let { capabilities -> network to capabilities }
+        underlyingNetworkCapabilities[network]?.let { capabilities -> network to capabilities }
       }
       .filterNot { (_, capabilities) -> capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN) }
       .maxByOrNull { (_, capabilities) -> underlyingNetworkPreference(capabilities) }
@@ -331,7 +342,6 @@ class WireGuardController(context: Context) {
       }
       .maxByOrNull { (_, capabilities) -> underlyingNetworkPreference(capabilities) }
       ?.first
-      ?.also { selectedUnderlyingNetwork = it }
   }
 
   private fun underlyingNetworkPreference(capabilities: NetworkCapabilities): Int = when {

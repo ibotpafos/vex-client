@@ -1,0 +1,12 @@
+const fs=require('node:fs'),assert=require('node:assert/strict');
+const path=process.argv[2]||'android/app/src/main/java/com/vexguard/app/vpn/WireGuardController.kt';
+const source=fs.readFileSync(path,'utf8');
+const callback=source.slice(source.indexOf('private fun registerUnderlyingNetworkCallback()'),source.indexOf('private fun scheduleNetworkRecovery('));
+assert.match(callback,/override fun onCapabilitiesChanged/);
+assert.match(callback,/underlyingNetworkCapabilities\[network\] = NetworkCapabilities\(networkCapabilities\)/);
+assert.match(callback,/underlyingNetworkCapabilities.remove\(network\)/);
+assert.doesNotMatch(callback,/connectivityManager.getNetworkCapabilities/);
+assert.match(callback,/underlyingNetworkCapabilities\[network\]/);
+const snapshot=source.slice(source.indexOf('private fun selectedUnderlyingNetworkSnapshot()'),source.indexOf('private fun underlyingNetworkPreference('));
+assert.doesNotMatch(snapshot,/selectedUnderlyingNetwork =/);
+console.log('CALLBACK_CAPABILITIES_SNAPSHOT=PASS');

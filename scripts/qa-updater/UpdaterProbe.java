@@ -24,8 +24,9 @@ public final class UpdaterProbe extends Instrumentation {
    Object context=null;for(int i=0;i<300 && context==null;i++){context=currentContext.invoke(host);if(context==null)Thread.sleep(100);}
    if(context==null)throw new AssertionError("Real React host not ready");
    Class<?> mod=cl.loadClass("com.vexguard.app.vpn.VexVpnModule");
-   Object module=context.getClass().getMethod("getNativeModule",Class.class).invoke(context,mod);
+   Object module=null;for(int i=0;i<300 && module==null;i++){module=context.getClass().getMethod("getNativeModule",String.class).invoke(context,"VexVpn");if(module==null)Thread.sleep(100);}
    if(module==null)throw new AssertionError("Installed native module not ready");
+   final Object installedModule=module;
    Method download=mod.getDeclaredMethod("downloadAndVerifyApk",String.class,String.class);download.setAccessible(true);
    String url="https://vexguard.app/downloads/qa-updater-ca94acb1d7d72ff9.apk";
    String sha="ca94acb1d7d72ff9dadd55eb24eb96272f29b88963969bfa81036cfca1f70acb";
@@ -36,7 +37,7 @@ public final class UpdaterProbe extends Instrumentation {
    report("NATIVE_DOWNLOAD_IDENTITY_CHECK=PASS bytes="+file.length());
    Class<?> promise=cl.loadClass("com.facebook.react.bridge.Promise");CountDownLatch done=new CountDownLatch(1);AtomicBoolean failed=new AtomicBoolean(false);
    Object callback=Proxy.newProxyInstance(cl,new Class[]{promise},(p,m,a)->{if(m.getName().equals("resolve")){report("INSTALL_RESULT="+String.valueOf(a[0]));done.countDown();}else if(m.getName().equals("reject")){failed.set(true);report("INSTALL_REJECTED="+String.valueOf(a[0]));done.countDown();}return null;});
-   runOnMainSync(()->{try{mod.getMethod("installUpdateApk",String.class,promise).invoke(module,file.getAbsolutePath(),callback);}catch(Exception e){failed.set(true);report("INSTALL_INVOKE_FAILED="+e.getClass().getSimpleName());done.countDown();}});
+   runOnMainSync(()->{try{mod.getMethod("installUpdateApk",String.class,promise).invoke(installedModule,file.getAbsolutePath(),callback);}catch(Exception e){failed.set(true);report("INSTALL_INVOKE_FAILED="+e.getClass().getSimpleName());done.countDown();}});
    if(!done.await(20,TimeUnit.SECONDS))throw new AssertionError("install timeout");
    if(failed.get())throw new AssertionError("Installer request failed");
    Bundle finish=new Bundle();finish.putString("stream","DOWNLOAD_CHECKS_PASSED_INSTALL_REQUESTED: permission grant, installer UI and post-install are separate checks\n");finish(-1,finish);

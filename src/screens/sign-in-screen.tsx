@@ -27,6 +27,7 @@ import {
   exchangeAppAuthCode,
   vexApiBaseUrl,
 } from "@/api/vexApi";
+import { signInWithGoogleAndroid, isGoogleSignInCancelled } from "@/native/googleAuth";
 import { useSession } from "@/auth/session-context";
 import {
   authCallbackAttemptKey,
@@ -324,6 +325,38 @@ export default function SignInScreen() {
     }
   }, [handleCallbackUrl]);
 
+  const handleGoogleSignIn = useCallback(async () => {
+    if (Platform.OS !== "android") {
+      await handleWebAuthStart("google");
+      return;
+    }
+    if (authSubmitInFlight.current) return;
+    authSubmitInFlight.current = true;
+    setIsAuthBusy(true);
+    setAuthError(null);
+    setAuthNotice(null);
+    playLightImpactHaptic();
+    try {
+      const nextSession = await signInWithGoogleAndroid();
+      resetVpnProfileCache();
+      await signIn(nextSession);
+      setEmailOTPCode("");
+      setEmailOTPChallenge(null);
+      await queryClient.invalidateQueries({ queryKey: ["entitlement"] });
+      await queryClient.invalidateQueries({ queryKey: ["vpn-profile"] });
+      playSuccessHaptic();
+      router.replace("/");
+    } catch (error) {
+      if (!isGoogleSignInCancelled(error)) {
+        playErrorHaptic();
+        setAuthError("Не удалось войти через Google. Проверьте интернет и повторите вход.");
+      }
+    } finally {
+      authSubmitInFlight.current = false;
+      setIsAuthBusy(false);
+    }
+  }, [handleWebAuthStart, queryClient, signIn]);
+
   const handleEmailChange = useCallback((value: string) => {
     setEmail(value);
     setEmailOTPCode("");
@@ -549,7 +582,7 @@ export default function SignInScreen() {
           </Button>
         ) : null}
         {!emailOTPChallenge && supportsWebsiteAuth() ? (
-          <Button disabled={isAuthBusy} onPress={() => { void handleWebAuthStart("google"); }} style={sheetButtonStyle} variant="outlined">
+          <Button disabled={isAuthBusy} onPress={handleGoogleSignIn} style={sheetButtonStyle} variant="outlined">
             <UniversalText textStyle={styles.secondaryButtonText}>Войти через Google</UniversalText>
           </Button>
         ) : null}

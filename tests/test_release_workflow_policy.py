@@ -172,5 +172,15 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
             self.assertEqual(external_amnezia.resolve(), (cache_root / "external-amnezia").resolve())
 
 
+class NativeMobileCiWorkflowTest(unittest.TestCase):
+    def test_native_mobile_ci_bootstraps_clean_runner_prerequisites(self) -> None:
+        workflow = (WORKFLOWS / "native-mobile-ci.yml").read_text()
+        self.assertIn("Create Android debug keystore", workflow)
+        self.assertIn("keytool -genkeypair", workflow)
+        self.assertIn("rm -rf Pods", workflow)
+        self.assertNotIn("eas-cli@16.0.1 config", workflow)
+        self.assertIn("Validate EAS profile schema", workflow)
+
+
 if __name__ == "__main__":
     unittest.main()

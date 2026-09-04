@@ -1,0 +1,187 @@
+name: Native Mobile CI
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "app/**"
+      - "modules/**"
+      - "tests/**"
+      - "android/**"
+      - "ios/**"
+      - "macos-native/**"
+      - "scripts/**"
+      - "app.config.ts"
+      - "app.json"
+      - "eas.json"
+      - "package.json"
+      - "package-lock.json"
+      - "tsconfig.json"
+      - ".github/workflows/native-mobile-ci.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "src/**"
+      - "app/**"
+      - "modules/**"
+      - "tests/**"
+      - "android/**"
+      - "ios/**"
+      - "macos-native/**"
+      - "scripts/**"
+      - "app.config.ts"
+      - "app.json"
+      - "eas.json"
+      - "package.json"
+      - "package-lock.json"
+      - "tsconfig.json"
+      - ".github/workflows/native-mobile-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-mobile-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  shared-expo:
+    name: Shared Expo
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - name: Lint, typecheck, and unit tests
+        run: npm run check
+
+      - name: Validate Expo app config
+        run: npx expo config --type public >/dev/null
+
+      - name: Validate EAS profile schema
+        run: |
+          node --input-type=module <<'EOF'
+          import config from './eas.json' with { type: 'json' };
+          const profile = config.build?.preview;
+          if (!config.cli?.version || !profile?.android?.gradleCommand || !profile?.channel || !profile?.env) {
+            throw new Error('preview EAS profile is incomplete');
+          }
+          EOF
+
+  android:
+    name: Android
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache: false
+
+      - run: npm ci
+
+      - name: Bootstrap pinned AmneziaWG sources
+        run: npm run android:bootstrap
+
+      - name: Create Android debug keystore
+        working-directory: android/app
+        run: |
+          keytool -genkeypair -keystore debug.keystore -storepass android -keypass android \
+            -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname 'CN=Android Debug,O=Android,C=US'
+
+      - name: Assemble and test Android debug target
+        working-directory: android
+        env:
+          VEX_BUILD_PROFILE: development
+          EXPO_PUBLIC_VEX_UPDATE_CHANNEL: development
+          VEX_UPDATES_ENABLED: "0"
+        run: ./gradlew :app:assembleDebug :app:testDebugUnitTest --stacktrace --no-daemon
+
+  ios:
+    name: iOS
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: false
+
+      - run: npm ci
+
+      - name: Install CocoaPods dependencies
+        working-directory: ios
+        run: |
+          rm -rf Pods
+          pod install --repo-update
+
+      - name: Validate native project and pinned dependencies
+        run: npm run ios:preflight
+
+      - name: Build AmneziaWG bridge
+        run: npm run ios:build-amneziawg-bridge
+
+      - name: Compile iOS targets without signing
+        env:
+          VEX_BUILD_PROFILE: development
+          EXPO_PUBLIC_VEX_UPDATE_CHANNEL: development
+          VEX_UPDATES_ENABLED: "0"
+        run: |
+          xcodebuild \
+            -workspace ios/VEX.xcworkspace \
+            -scheme VEX \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+  native-macos:
+    name: Native macOS
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve Swift package
+        run: swift package --package-path macos-native resolve
+
+      - name: Test native macOS package
+        run: swift test --package-path macos-native
+
+      - name: Build native macOS products
+        run: swift build --package-path macos-native --configuration release

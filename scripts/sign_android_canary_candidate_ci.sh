@@ -4,7 +4,7 @@ set +x
 expected_input="${1:?Fixed input SHA256 required}"
 tag="${2:?Private draft input tag required}"
 expected_build="${3-}"
-case "$expected_build" in 1005661|1005662) ;; *) echo "Unsupported candidate build" >&2; exit 2 ;; esac
+case "$expected_build" in 1005662|1005663) ;; *) echo "Unsupported candidate build" >&2; exit 2 ;; esac
 expected_signer=cc569dfaa4c2c82379669b7c13606eb268cc3eba90a9c88e20a2d4500daf8470
 bash scripts/verify_android_signing_secret.sh "$expected_signer"
 umask 077

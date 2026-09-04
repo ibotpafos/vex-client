@@ -38,8 +38,8 @@ function MobileUpdateNoticeBannerContent({ onOpen, platform }: { onOpen: () => v
   const buildNumber = currentNativeBuild();
   const updateQuery = useMobileAppUpdateQuery(platform, buildNumber);
   const update = updateQuery.data ?? null;
-  const nativeUpdateRequired = requiresNativeUpdate(update);
-  const shouldShow = nativeUpdateRequired;
+  const shouldShow = requiresNativeUpdate(update);
+  const mandatoryUpdate = Boolean(update?.required || update?.currentBuildBlocked);
 
   if (!shouldShow) {
     return null;
@@ -59,7 +59,7 @@ function MobileUpdateNoticeBannerContent({ onOpen, platform }: { onOpen: () => v
 
   return (
     <Pressable
-      accessibilityLabel={migration ? 'Скачать новую Android-сборку' : 'Открыть обязательное обновление'}
+      accessibilityLabel={migration ? 'Скачать новую Android-сборку' : mandatoryUpdate ? 'Открыть обязательное обновление' : 'Открыть обновление'}
       accessibilityRole="button"
       onPress={handlePress}
       style={[styles.noticeBanner, migration && styles.noticeBannerMigration]}
@@ -68,7 +68,7 @@ function MobileUpdateNoticeBannerContent({ onOpen, platform }: { onOpen: () => v
         <ShieldAlert color="#031012" size={20} strokeWidth={2.7} />
       </View>
       <View style={styles.noticeCopy}>
-        <Text style={styles.noticeTitle}>{migration ? 'Нужно поставить новую сборку VEX' : 'Требуется обновление VEX'}</Text>
+        <Text style={styles.noticeTitle}>{migration ? 'Нужно поставить новую сборку VEX' : mandatoryUpdate ? 'Требуется обновление VEX' : 'Доступно обновление VEX'}</Text>
         <Text numberOfLines={2} style={styles.noticeText}>
           {migration
             ? 'Скачайте новый APK, войдите в аккаунт и затем удалите старое приложение.'

@@ -1,4 +1,4 @@
-name: Android updater canary signed pair
+name: Android updater UI fixed signed pair
 on:
   push:
     branches: [codex/android-app-restoration-20260904]
@@ -15,10 +15,10 @@ jobs:
     strategy:
       matrix:
         include:
-          - build: '1005661'
-            sha: dda5b40107502e067a9d399ff72f62ca0f32b0a197174a90b4e4167aec0b9b1c
           - build: '1005662'
-            sha: 797d05b8c9fed77fda4cc777ddd402df214740b4e6e20bc5444dc63e7b0c246e
+            sha: 76bdd9ac2abc50505e4b0789d3a7ac87ffcebca530c119f9a524d8207d97824b
+          - build: '1005663'
+            sha: 7136d0e0836566cb6e681658dae2ec4f385c7986ac6ef10ea72f0f68f5e84314
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -32,7 +32,7 @@ jobs:
           VEX_UPLOAD_KEY_PASSWORD: ${{ secrets.VEX_UPLOAD_KEY_PASSWORD }}
           INPUT_SHA: ${{ matrix.sha }}
           INPUT_BUILD: ${{ matrix.build }}
-        run: bash scripts/sign_android_canary_candidate_ci.sh "$INPUT_SHA" "internal-canary-20260904-$INPUT_BUILD" "$INPUT_BUILD"
+        run: bash scripts/sign_android_canary_candidate_ci.sh "$INPUT_SHA" "internal-ui-fix-20260904-$INPUT_BUILD" "$INPUT_BUILD"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: signed-canary-${{ matrix.build }}

@@ -916,6 +916,7 @@ export function useVpnConnection() {
     onRecoveryStarted: handleNativeWatchdogRecoveryStarted,
     onRecoverySucceeded: handleNativeWatchdogRecovery,
     operationInFlightRef: vpnOperationInFlightRef,
+    isCurrentLocation: useCallback((locationId: string) => selectedLocationIdRef.current === locationId, []),
     persistLocation: setSelectedVpnLocation,
     probeHealth: probeVpnAutopilotHealth,
     pollMs: nativeHealthPollMs,

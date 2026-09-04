@@ -117,17 +117,19 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
     if (!accessToken || !userId) {
       return;
     }
+    let cancelled = false;
     void hydrateHotVpnProfilesToQueryCache(userId, accessToken, queryClient)
       .then((records) => {
         const selected = records.find((record) =>
           record.locationId === selectedLocationId && record.profile.routingMode === routingMode
         );
-        if (selected) {
+        if (!cancelled && selected && backgroundRequestIsCurrent(accessToken, selectedLocationId)) {
           setVpnProfile(selected.profile);
         }
       })
       .catch(() => undefined);
-  }, [accessToken, queryClient, routingMode, selectedLocationId, userId]);
+    return () => { cancelled = true; };
+  }, [accessToken, backgroundRequestIsCurrent, queryClient, routingMode, selectedLocationId, userId]);
 
   const refreshProfileInBackground = useCallback((
     locationId: string,

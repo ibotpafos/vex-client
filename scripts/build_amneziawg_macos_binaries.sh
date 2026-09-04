@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Builds the modern AmneziaWG 3.0 userspace toolchain for macOS (universal
+# Builds the modern AmneziaWG 3.1 v3.1.20260828 userspace toolchain for macOS (universal
 # arm64 + x86_64) from the pinned refs and installs it into HelperResources,
 # which build_native_macos_app.sh bundles into the helper resources dir.
 #
@@ -13,8 +13,8 @@ set -euo pipefail
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 external_dir="${AMNEZIAWG_EXTERNAL_DIR:-"${root_dir}/external/amnezia"}"
 helper_resource_dir="${PACKAGE_DIR:-"${root_dir}/macos-native/HelperResources"}"
-go_ref="08d68cdae27762c3e07f36bbb12d2bad32f81926"
-tools_ref="${AMNEZIAWG_TOOLS_REF:-9f70177d204d5be66c5b043518a57b7d62b3f9d1}"
+go_ref="b5928efb6ca19f0153958460c3d141f04abc5c2e"
+tools_ref="ee0f0a9aa34ff0a0da4b3433b9512781cfe02843"
 
 skip_bootstrap=0
 if [[ "${1:-}" == "--skip-bootstrap" ]]; then skip_bootstrap=1; fi
@@ -36,7 +36,7 @@ fi
 scratch="$(mktemp -d)"
 trap 'rm -rf "${scratch}"' EXIT
 
-echo "== building amneziawg-go (AmneziaWG 3.0) universal =="
+echo "== building amneziawg-go (AmneziaWG 3.1 v3.1.20260828) universal =="
 (cd "${external_dir}/amneziawg-go"
   GOARCH=arm64 go build -o "${scratch}/amneziawg-go-arm64" .
   GOARCH=amd64 go build -o "${scratch}/amneziawg-go-amd64" .
@@ -44,7 +44,7 @@ echo "== building amneziawg-go (AmneziaWG 3.0) universal =="
 lipo -create -output "${scratch}/amneziawg-go-universal" \
   "${scratch}/amneziawg-go-arm64" "${scratch}/amneziawg-go-amd64"
 
-echo "== building amneziawg-tools (awg v3.0.20260805) universal =="
+echo "== building amneziawg-tools (awg v3.1.20260812) universal =="
 (
   cd "${external_dir}/amneziawg-tools/src"
   make clean >/dev/null
@@ -72,4 +72,4 @@ chmod 755 "${helper_resource_dir}/awg" "${helper_resource_dir}/amneziawg-go"
 echo "  awg           md5=$(md5 -q "${helper_resource_dir}/awg")  $(shasum -a 256 "${helper_resource_dir}/awg" | awk '{print $1}')"
 echo "  amneziawg-go  md5=$(md5 -q "${helper_resource_dir}/amneziawg-go")  $(shasum -a 256 "${helper_resource_dir}/amneziawg-go" | awk '{print $1}')"
 echo
-echo "done. HelperResources now carries the pinned AmneziaWG 3.0 toolchain."
+echo "done. HelperResources now carries the pinned AmneziaWG 3.1 v3.1.20260828 toolchain."

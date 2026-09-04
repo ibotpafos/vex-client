@@ -3,6 +3,12 @@ import expo from "eslint-config-expo/flat.js";
 export default [
   ...expo,
   {
+    files: ["tests/**/*.cjs"],
+    languageOptions: {
+      globals: { __dirname: "readonly", __filename: "readonly" }
+    }
+  },
+  {
     ignores: [
       ".expo/**",
       "dist/**",

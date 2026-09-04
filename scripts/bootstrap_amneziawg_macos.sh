@@ -6,8 +6,8 @@ external_dir="${AMNEZIAWG_EXTERNAL_DIR:-"${root_dir}/external/amnezia"}"
 
 go_repo_url="${AMNEZIAWG_GO_REPO_URL:-https://github.com/amnezia-vpn/amneziawg-go.git}"
 tools_repo_url="${AMNEZIAWG_TOOLS_REPO_URL:-https://github.com/amnezia-vpn/amneziawg-tools.git}"
-go_ref="08d68cdae27762c3e07f36bbb12d2bad32f81926"
-tools_ref="${AMNEZIAWG_TOOLS_REF:-9f70177d204d5be66c5b043518a57b7d62b3f9d1}"
+go_ref="b5928efb6ca19f0153958460c3d141f04abc5c2e"
+tools_ref="ee0f0a9aa34ff0a0da4b3433b9512781cfe02843"
 clean_checkout="${AMNEZIAWG_CLEAN:-1}"
 
 clone_or_reset() {

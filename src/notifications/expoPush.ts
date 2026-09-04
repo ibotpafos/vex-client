@@ -3,10 +3,15 @@ import { Platform } from 'react-native';
 
 import { getFirebaseMessagingToken } from '@/native/vexVpn';
 import { fcmPushRegistration, type FcmPushRegistration } from '@/notifications/pushRegistration';
+import { createNotificationPermissionGate } from '@/notifications/notificationPermission';
 
 const androidAccountEventsChannelId = 'vex_updates';
+const ensureNotificationPermission = createNotificationPermissionGate({
+  get: () => Notifications.getPermissionsAsync(),
+  request: () => Notifications.requestPermissionsAsync(),
+});
 
-export async function getFcmAccountPushRegistration(): Promise<FcmPushRegistration | null> {
+export async function getFcmAccountPushRegistration(allowPermissionPrompt = true): Promise<FcmPushRegistration | null> {
   if (Platform.OS === 'web') {
     return null;
   }
@@ -18,20 +23,10 @@ export async function getFcmAccountPushRegistration(): Promise<FcmPushRegistrati
     });
   }
 
-  const permission = await ensureNotificationPermission();
+  const permission = await ensureNotificationPermission(allowPermissionPrompt);
   if (!permission) {
     return null;
   }
 
   return fcmPushRegistration(await getFirebaseMessagingToken());
-}
-
-async function ensureNotificationPermission(): Promise<boolean> {
-  const current = await Notifications.getPermissionsAsync();
-  if (current.granted) {
-    return true;
-  }
-
-  const requested = await Notifications.requestPermissionsAsync();
-  return requested.granted;
 }

@@ -1,6 +1,6 @@
 {
   "name": "vex-client",
-  "version": "1.0.55",
+  "version": "1.0.56",
   "private": true,
   "main": "expo-router/entry",
   "dependencies": {
@@ -94,7 +94,7 @@
     "expo:doctor": "npx expo-doctor@latest",
     "expo:fix": "npx expo install --fix",
     "typecheck": "tsc --noEmit",
-    "test:unit": "tsx tests/run-unit-tests.ts",
+    "test:unit": "tsx tests/run-unit-tests.ts && tsx tests/native-google-auth.test.mjs && tsx tests/push-registration-loop.test.mjs && node tests/email-otp-mfa-contract.mjs && node tests/realtime-session-loop.cjs && node tests/android-package-migration.cjs && tsx tests/profile-request-queue.test.mjs && node tests/profile-background-contract.cjs && node tests/android-network-callback-contract.cjs && node tests/profile-render-lag.test.mjs && node tests/watchdog-stale-effect.test.mjs && node tests/handshake-transition.test.mjs && node tests/email-otp-platform.test.cjs && tsx tests/android-update-ui-policy.test.mjs && node tests/android-upgrade-compatibility.cjs && tsx tests/notification-permission.test.mjs",
     "test:awg-upstream": "node tests/amneziawg-upstream-contract.mjs",
     "lint": "eslint .",
     "check": "npm run test:unit && npm run test:awg-upstream && npm run typecheck && npm run lint",
@@ -108,7 +108,8 @@
     "local:release-cache": "bash scripts/setup_local_release_cache.sh",
     "local:release": "bash scripts/build_all_local_releases.sh",
     "macos:release": "npm run native:macos:release",
-    "contract:check": "node scripts/check-generated-contract.mjs"
+    "contract:check": "node scripts/check-generated-contract.mjs",
+    "android:verify-upgrade": "node scripts/verify_android_upgrade.cjs"
   },
   "resolutions": {
     "lightningcss": "1.30.1",

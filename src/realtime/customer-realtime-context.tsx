@@ -58,7 +58,8 @@ export function CustomerRealtimeProvider({ children }: PropsWithChildren) {
         for (const root of customerRealtimeInvalidationRoots(domains)) {
           void queryClient.invalidateQueries({ queryKey: [root] });
         }
-        if (domains.includes('account')) void refreshSession().catch(() => undefined);
+        // Data resync is not credential expiry: rotating here revokes tokens
+        // used by in-flight VPN requests and reconnects SSE into another resync.
         setRevision((current) => current + 1);
       },
     });

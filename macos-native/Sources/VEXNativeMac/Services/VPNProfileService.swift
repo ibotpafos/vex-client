@@ -386,7 +386,7 @@ struct VPNProfileService {
         Address = \(address)
         DNS = \((dns.isEmpty ? ["1.1.1.1", "8.8.8.8"] : dns).joined(separator: ", "))
         MTU = 1360
-        \(Self.amneziaConfig(profile.amnezia))
+        \(try Self.amneziaConfig(profile.amnezia))
 
         [Peer]
         PublicKey = \(serverPublicKey)
@@ -397,7 +397,7 @@ struct VPNProfileService {
         """
     }
 
-    nonisolated static func amneziaConfig(_ amnezia: ManagedVpnAmnezia?) -> String {
+    nonisolated static func amneziaConfig(_ amnezia: ManagedVpnAmnezia?) throws -> String {
         guard let amnezia else { return "" }
         var lines: [String] = []
         addNumber("Jc", amnezia.jc, to: &lines)
@@ -423,6 +423,8 @@ struct VPNProfileService {
         addString("RejectAfterTime", amnezia.rejectAfterTime, to: &lines)
         addString("KeepaliveTimeout", amnezia.keepaliveTimeout, to: &lines)
         addString("MaxHandshakeAttempts", amnezia.maxHandshakeAttempts, to: &lines)
+        try NativeAwgBoolean.append("RandomTrailers", amnezia.randomTrailers, to: &lines)
+        try NativeAwgBoolean.append("DisableCookies", amnezia.disableCookies, to: &lines)
         return lines.isEmpty ? "" : "\(lines.joined(separator: "\n"))\n"
     }
 

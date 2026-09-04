@@ -8,6 +8,8 @@ SCRATCH_ROOT="${PACKAGE_DIR}/.build-helper"
 PRODUCT="VEXPrivilegedHelper"
 OUTPUT="${RESOURCE_DIR}/vex-helper"
 CODESIGN_IDENTITY="${VEX_CODESIGN_IDENTITY:--}"
+CODESIGN_KEYCHAIN="${VEX_CODESIGN_KEYCHAIN:-}"
+CODESIGN_TIMESTAMP="${VEX_CODESIGN_TIMESTAMP:-automatic}"
 
 if [[ "${CODESIGN_IDENTITY}" == "-" ]]; then
   detected_identity="$(
@@ -54,12 +56,14 @@ trap cleanup EXIT
 if [[ "${CODESIGN_IDENTITY}" == "-" ]]; then
   /usr/bin/codesign --force --sign - "${temporary_output}"
 else
-  /usr/bin/codesign \
-    --force \
-    --options runtime \
-    --timestamp \
-    --sign "${CODESIGN_IDENTITY}" \
-    "${temporary_output}"
+  signing_args=(--force --options runtime --sign "${CODESIGN_IDENTITY}")
+  [[ -z "${CODESIGN_KEYCHAIN}" ]] || signing_args+=(--keychain "${CODESIGN_KEYCHAIN}")
+  if [[ "${CODESIGN_TIMESTAMP}" == "none" ]]; then
+    signing_args+=(--timestamp=none)
+  else
+    signing_args+=(--timestamp)
+  fi
+  /usr/bin/codesign "${signing_args[@]}" "${temporary_output}"
 fi
 /usr/bin/codesign --verify --strict --verbose=2 "${temporary_output}"
 

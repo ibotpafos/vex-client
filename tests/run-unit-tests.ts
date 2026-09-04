@@ -1,3 +1,4 @@
+import './country-groups.test';
 import { billingDurationLabel, billingDurationMonths, billingSummaryFallbackCopy, buildBillingSummary, type BillingPlanSource } from '../src/api/billingSummary';
 import { buildSubscriptionReminders } from '../src/notifications/subscriptionReminderSchedule';
 import { devicePushTokenPath, fcmPushRegistration } from '../src/notifications/pushRegistration';
@@ -29,7 +30,7 @@ import {
   withLastSuccessfulEndpoint,
   type HotVpnProfileRecord,
 } from '../src/vpn/hotProfileCacheCore';
-import { AWG3RecoveryPolicyError, connectionAttemptsForProfile, isAWG3Profile, isVpnTransportFallbackError, profileEndpoint } from '../src/vpn/connectionFallback';
+import { AWG3RecoveryPolicyError, connectSuppliedProfile, connectionAttemptsForProfile, isAWG3Profile, isVpnTransportFallbackError, profileEndpoint } from '../src/vpn/connectionFallback';
 import { connectableLocalProfile, explicitConnectProfileResolutionOptions, shouldUseLocalProfileBeforeOnline, vpnConnectTelemetry, vpnConnectTimingSamples, vpnUnexpectedDisconnectTelemetry } from '../src/vpn/connectFlow';
 import { recoverVpnConnection } from '../src/vpn/connectionRecovery';
 import { connectFreshSameLocationProfile } from '../src/vpn/sameLocationProfileRecovery';
@@ -280,7 +281,7 @@ assertDeepEqual(
 
   const localConfig = appConfig(configContext);
   assertEqual(localConfig.updates?.enabled, false);
-  assertEqual(localConfig.runtimeVersion, '1.0.55');
+  assertEqual(localConfig.runtimeVersion, '1.0.56');
 
   process.env.VEX_BUILD_PROFILE = 'production';
   process.env.VEX_UPDATES_ENABLED = '1';
@@ -1121,7 +1122,7 @@ function runCreateDeviceRequestTests(): void {
   const awg3 = { ...baseProfile, config: `${baseProfile.config}\nHeaderProtectionKey = header-key` };
   const attempts = connectionAttemptsForProfile(awg3);
 
-  assertDeepEqual(attempts.map(profileEndpoint), ['de.example.com:51820', 'de.example.com:51821', 'de.example.com:443']);
+  assertDeepEqual(attempts.map(profileEndpoint), ['de.example.com:51820']);
   assertEqual(isAWG3Profile(awg3), true);
 }
 
@@ -1133,7 +1134,7 @@ function runCreateDeviceRequestTests(): void {
     lastSuccessfulEndpoint: 'de.example.com:51821',
   });
 
-  assertDeepEqual(attempts.map(profileEndpoint), ['de.example.com:51821', 'de.example.com:443']);
+  assertDeepEqual(attempts.map(profileEndpoint), ['de.example.com:443']);
 }
 
 {
@@ -1149,7 +1150,7 @@ function runCreateDeviceRequestTests(): void {
     config: `${baseProfile.config}\nHeaderProtectionKey = header-key`,
   });
 
-  assertDeepEqual(attempts.map(profileEndpoint), ['fi.example.com:51821', 'fi.example.com:443']);
+  assertDeepEqual(attempts.map(profileEndpoint), ['fi.example.com:51821']);
 }
 
 {
@@ -1159,7 +1160,7 @@ function runCreateDeviceRequestTests(): void {
     config: `${baseProfile.config}\nHeaderProtectionKey = header-key`,
   });
 
-  assertEqual(profileEndpoint(attempts[1]), '[2001:db8::1]:443');
+  assertDeepEqual(attempts.map(profileEndpoint), ['[2001:db8::1]:51821']);
 }
 
 {
@@ -1431,7 +1432,7 @@ async function runNativeDeviceRegistrationTests(): Promise<void> {
 }
 
 function runServerPickerInteractionTests(): void {
-  assertEqual(serverPickerActionForSource('carousel'), 'select');
+  assertEqual(serverPickerActionForSource('carousel'), 'open_picker');
   assertEqual(serverPickerActionForSource('all_locations'), 'open_picker');
 }
 
@@ -1480,6 +1481,20 @@ async function runFailedConnectionCleanupTests(): Promise<void> {
   await cleanupFailedVpnConnection(true, disconnect);
   await cleanupFailedVpnConnection(false, disconnect);
   assertDeepEqual(calls, [false, true]);
+  for (const message of ['Invalid RekeyTimeout', 'Invalid MaxHandshakeAttempts']) {
+    const admissionError = Object.assign(new Error(message), { code: 'VPN_CONFIG_INVALID' });
+    let nativeCalls = 0;
+    let previousConnected = true;
+    const base = profileWithEndpoint('[2001:db8::1]:51824');
+    const profile = { ...base, config: `${base.config}\nHeaderProtectionKey = fixture`, lastSuccessfulEndpoint: '[2001:db8::2]:443' };
+    try {
+      await connectSuppliedProfile(profile, async () => { nativeCalls++; throw admissionError; });
+    } catch (error) {
+      await cleanupFailedVpnConnection(true, async () => { previousConnected = false; }, error);
+    }
+    assertEqual(nativeCalls, 1);
+    assertEqual(previousConnected, true);
+  }
 }
 
 async function runVpnHandshakeVerificationTests(): Promise<void> {
@@ -1584,6 +1599,8 @@ async function runVpnDisconnectRecoveryTests(): Promise<void> {
 }
 
 async function runServerSwitchTests(): Promise<void> {
+  await testSwitchRollbackRestoresBackendPlacement();
+  await testAdmissionRejectionRestoresPreviousPlacement();
   testNativeTunnelHealthIgnoresConnectedZeroHandshake();
   testNativeTunnelHealthDetectsLocalFailureStates();
   testNativeTunnelHealthDetectsBackendUsageDegradation();
@@ -1719,6 +1736,40 @@ async function testProfileFetchFailureKeepsCurrentTunnel(): Promise<void> {
   assertDeepEqual(calls, ['resolve:de', 'persist:fi', 'cache:fi:fi']);
 }
 
+async function testAdmissionRejectionRestoresPreviousPlacement(): Promise<void> {
+  for (const message of ['Invalid RekeyTimeout', 'Invalid MaxHandshakeAttempts']) {
+    for (const hasPreviousProfile of [true, false]) {
+      const restoredProfile = profileForLocation('fi', 'fi.example.com:51824');
+      const previousProfile = hasPreviousProfile ? restoredProfile : null;
+      const target = { ...profileForLocation('de', 'de.example.com:51824'), source: 'local' as const };
+      const error = Object.assign(new Error(message), { code: 'VPN_CONFIG_INVALID' });
+      const calls: string[] = [];
+      const result = await switchVpnLocation({
+        previousLocationId: 'fi', previousProfile, previousStatus: connectedStatus, targetLocationId: 'de',
+        isRetryableConnectError: isVpnTransportFallbackError,
+        resolveProfile: async (location) => { calls.push(`resolve:${location}`); return location === 'fi' ? restoredProfile : target; },
+        connectProfile: async (profile) => {
+          calls.push(`connect:${profile.locationId}`);
+          if (profile === target) throw error;
+          return { profile, status: connectedStatus };
+        },
+        persistLocation: async (location) => { calls.push(`persist:${location}`); return location; },
+        setCachedProfile: () => { calls.push('cache:fi'); },
+        reportConnect: () => { calls.push('reportConnect'); },
+        reportDisconnect: () => { calls.push('reportDisconnect'); },
+      });
+      assertEqual(result.ok, false);
+      if (!result.ok) {
+        assertEqual(result.rollback, 'reconnected');
+        assertEqual(result.status, connectedStatus);
+        assertEqual(result.profile, restoredProfile);
+        assertEqual(result.error, error);
+      }
+      assertDeepEqual(calls, ['resolve:de', 'connect:de', 'persist:fi', ...(hasPreviousProfile ? ['cache:fi'] : []), 'resolve:fi', 'connect:fi', 'cache:fi', 'reportConnect']);
+    }
+  }
+}
+
 async function testTargetHandshakeFailureRollsBackToPreviousProfile(): Promise<void> {
   const previousProfile = profileForLocation('fi', 'fi.example.com:51820');
   const targetProfile = profileForLocation('de', 'de.example.com:51820');
@@ -1745,7 +1796,7 @@ async function testTargetHandshakeFailureRollsBackToPreviousProfile(): Promise<v
     },
     resolveProfile: async (locationId) => {
       calls.push(`resolve:${locationId}`);
-      return targetProfile;
+      return locationId === 'fi' ? previousProfile : targetProfile;
     },
     setCachedProfile: (locationId, profile) => {
       calls.push(`cache:${locationId}:${profile.locationId}`);
@@ -1763,6 +1814,7 @@ async function testTargetHandshakeFailureRollsBackToPreviousProfile(): Promise<v
     'connect:de',
     'persist:fi',
     'cache:fi:fi',
+    'resolve:fi',
     'connect:fi',
     'cache:fi:fi',
     'reportConnect:fi',
@@ -2333,4 +2385,55 @@ function runErrorMessageTests(): void {
   assertEqual(isCurrentSessionMutation(2, 2, 'token-a', 'token-a'), true);
   assertEqual(isCurrentSessionMutation(2, 3, 'token-a', 'token-a'), false);
   assertEqual(isCurrentSessionMutation(2, 2, 'token-a', 'token-b'), false);
+}
+
+// React Native rejection object: an existing native tunnel must survive admission.
+for (const message of ['Invalid RekeyTimeout', 'Invalid MaxHandshakeAttempts']) {
+  const error = Object.assign(new Error(message), { code: 'VPN_CONFIG_INVALID' });
+  assertEqual(isVpnTransportFallbackError(error), false);
+}
+
+async function testSwitchRollbackRestoresBackendPlacement(): Promise<void> {
+  for (const admission of [false, true]) {
+    for (const restoreFailure of [false, true]) {
+      let backendLocation = 'fi';
+      let tunnelLocation = 'fi';
+      const calls: string[] = [];
+      const previousProfile = profileForLocation('fi', 'fi-cached.example.com:51820');
+      const restoredProfile = profileForLocation('fi', 'fi-fresh.example.com:51820');
+      const targetProfile = profileForLocation('de', 'de.example.com:51820');
+      const result = await switchVpnLocation({
+        previousLocationId: 'fi', previousProfile, previousStatus: connectedStatus, targetLocationId: 'de',
+        resolveProfile: async (locationId, options) => {
+          calls.push(`issue:${locationId}`);
+          assertEqual(options.forceRefresh, true);
+          if (locationId === 'fi' && restoreFailure) throw new Error('restore issuance unavailable');
+          backendLocation = locationId;
+          return locationId === 'fi' ? restoredProfile : targetProfile;
+        },
+        connectProfile: async (profile) => {
+          calls.push(`connect:${profile.locationId}`);
+          if (profile.locationId === 'de') throw Object.assign(new Error(admission ? 'Invalid RekeyTimeout' : 'handshake timeout'), admission ? { code: 'VPN_CONFIG_INVALID' } : {});
+          assertEqual(profile, restoredProfile);
+          tunnelLocation = profile.locationId;
+          return { profile, status: connectedStatus };
+        },
+        isRetryableConnectError: isVpnTransportFallbackError,
+        persistLocation: async (locationId) => locationId,
+        setCachedProfile: () => undefined,
+      });
+      assertEqual(result.ok, false);
+      if (result.ok) throw new Error('target unexpectedly connected');
+      if (restoreFailure) {
+        assertEqual(result.rollback, 'failed');
+        assertEqual(result.status, null);
+        assertDeepEqual(calls, ['issue:de','connect:de','issue:fi']);
+      } else {
+        assertEqual(backendLocation, tunnelLocation);
+        assertEqual(result.rollback, 'reconnected');
+        assertEqual(result.profile, restoredProfile);
+        assertDeepEqual(calls, ['issue:de','connect:de','issue:fi','connect:fi']);
+      }
+    }
+  }
 }

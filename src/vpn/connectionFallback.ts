@@ -1,6 +1,5 @@
 import type { VpnProfile } from './profile';
 
-const awg3EndpointFallbackPorts = [51821, 443] as const;
 const awg3HeaderProtectionPattern = /^HeaderProtectionKey\s*=\s*\S+/m;
 
 export class AWG3RecoveryPolicyError extends Error {
@@ -15,6 +14,7 @@ export function isAWG3Profile(profile: VpnProfile): boolean {
 }
 
 export function isVpnTransportFallbackError(error: unknown): boolean {
+  if (isVpnAdmissionError(error)) return false;
   if (error instanceof AWG3RecoveryPolicyError) {
     return true;
   }
@@ -34,99 +34,34 @@ export function connectionAttemptsForProfile(profile: VpnProfile): VpnProfile[] 
   if (!profileEndpoint(profile)) {
     throw new AWG3RecoveryPolicyError('VPN recovery requires a signed AWG3 endpoint.');
   }
-  const attempts: VpnProfile[] = [];
-  if (profile.lastSuccessfulEndpoint) {
-    const cached = profileWithEndpoint(profile, profile.lastSuccessfulEndpoint);
-    if (cached) attempts.push(cached);
-  }
-  attempts.push(profile);
-  for (const port of awg3EndpointFallbackPorts) {
-    const fallback = profileWithEndpointPort(profile, port);
-    if (fallback) attempts.push(fallback);
-  }
-
-  const seen = new Set<string>();
-  return attempts.filter((attempt) => {
-    const endpoint = profileEndpoint(attempt);
-    if (!endpoint) return false;
-    if (seen.has(endpoint)) return false;
-    seen.add(endpoint);
-    return true;
-  });
+  // The current contract supplies one endpoint. A cache is not authorization.
+  return [profile];
 }
 
-function profileWithEndpoint(profile: VpnProfile, endpoint: string): VpnProfile | null {
-  const nextEndpoint = endpoint.trim();
-  if (!nextEndpoint) {
-    return null;
+/** Production native-attempt boundary; admission errors retain the existing tunnel. */
+export async function connectSuppliedProfile<T>(profile: VpnProfile, connect: (attempt: VpnProfile) => Promise<T>): Promise<T> {
+  let lastError: unknown;
+  for (const attempt of connectionAttemptsForProfile(profile)) {
+    try { return await connect(attempt); }
+    catch (error) {
+      if (!isVpnTransportFallbackError(error)) throw error;
+      lastError = error;
+    }
   }
-  const nextConfig = replaceConfigEndpoint(profile.config, nextEndpoint);
-  if (!nextConfig) {
-    return null;
-  }
-  return {
-    ...profile,
-    config: nextConfig,
-    device: profile.device ? { ...profile.device, endpoint: nextEndpoint } : profile.device,
-  };
+  throw lastError;
+}
+
+export function isVpnAdmissionError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null &&
+    'code' in error && error.code === 'VPN_CONFIG_INVALID';
 }
 
 export function profileEndpoint(profile: VpnProfile): string | undefined {
   return profile.device?.endpoint || configEndpoint(profile.config);
 }
 
-function profileWithEndpointPort(profile: VpnProfile, port: number): VpnProfile | null {
-  const endpoint = profileEndpoint(profile);
-  const parsed = parseEndpoint(endpoint);
-  if (!parsed || parsed.port === port) {
-    return null;
-  }
-
-  const nextEndpoint = formatEndpoint(parsed.host, port);
-  const nextConfig = replaceConfigEndpoint(profile.config, nextEndpoint);
-  if (!nextConfig) {
-    return null;
-  }
-
-  return {
-    ...profile,
-    config: nextConfig,
-    device: profile.device ? { ...profile.device, endpoint: nextEndpoint } : profile.device,
-  };
-}
-
 function configEndpoint(config: string): string | undefined {
   return /^Endpoint\s*=\s*(.+)$/m.exec(config)?.[1]?.trim();
-}
-
-function replaceConfigEndpoint(config: string, endpoint: string): string | null {
-  if (!/^Endpoint\s*=/m.test(config)) {
-    return null;
-  }
-  return config.replace(/^Endpoint\s*=\s*.+$/m, `Endpoint = ${endpoint}`);
-}
-
-function parseEndpoint(endpoint?: string): { host: string; port?: number } | null {
-  const value = endpoint?.trim();
-  if (!value) {
-    return null;
-  }
-  if (value.startsWith('[') && value.includes(']:')) {
-    const host = value.slice(1, value.indexOf(']')).trim();
-    const port = Number(value.slice(value.lastIndexOf(':') + 1));
-    return host && Number.isFinite(port) ? { host, port } : null;
-  }
-  const lastColon = value.lastIndexOf(':');
-  if (lastColon <= 0 || lastColon === value.length - 1 || value.indexOf(':') !== lastColon) {
-    return { host: value };
-  }
-  const host = value.slice(0, lastColon).trim();
-  const port = Number(value.slice(lastColon + 1));
-  return host && Number.isFinite(port) ? { host, port } : null;
-}
-
-function formatEndpoint(host: string, port: number): string {
-  return host.includes(':') && !host.startsWith('[') ? `[${host}]:${port}` : `${host}:${port}`;
 }
 
 function errorText(error: unknown): string {

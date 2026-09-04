@@ -482,16 +482,16 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
       return
     }
     statusEmitterJob = scope.launch {
-      while (isActive && listenerCount > 0) {
-        try {
+      pollVpnStatus(
+        shouldContinue = { listenerCount > 0 },
+        poll = {
           val status = controller.status().toWritableMap()
           emitVpnStatusChanged(status)
-          delay(statusPollDelayMs(status))
-        } catch (error: Throwable) {
-          Log.w(TAG, "Native VPN status emitter failed: ${error.message}")
-          delay(STATUS_POLL_ERROR_MS)
-        }
-      }
+          statusPollDelayMs(status)
+        },
+        onError = { error -> Log.w(TAG, "Native VPN status emitter failed: ${error.message}") },
+        errorDelayMs = STATUS_POLL_ERROR_MS,
+      )
     }
   }
 
@@ -624,12 +624,16 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
   }
 
   private fun rejectVpnError(promise: Promise, code: String, fallbackMessage: String, error: Throwable) {
-    val message = error.message?.takeIf { it.isNotBlank() }
-      ?: error.cause?.message?.takeIf { it.isNotBlank() }
-      ?: "${error::class.java.simpleName}: $fallbackMessage"
-    Log.e(TAG, "$code: $message", error)
-    recordNonFatalVpnError(code, message, error)
-    promise.reject(code, message, error)
+    VpnErrorDispatcher.dispatch(
+      code = code,
+      fallbackMessage = fallbackMessage,
+      error = error,
+      log = { dispatchedCode, message, sanitizedError -> Log.e(TAG, "$dispatchedCode: $message", sanitizedError) },
+      telemetry = { dispatchedCode, message, sanitizedError ->
+        recordNonFatalVpnError(dispatchedCode, message, sanitizedError)
+      },
+      reject = { dispatchedCode, message, sanitizedError -> promise.reject(dispatchedCode, message, sanitizedError) },
+    )
   }
 
   private fun recordNonFatalVpnError(code: String, message: String, error: Throwable) {

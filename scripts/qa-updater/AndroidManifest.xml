@@ -1,0 +1,5 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="app.vex.updaterqa" android:versionCode="1" android:versionName="1">
+<uses-sdk android:minSdkVersion="24" android:targetSdkVersion="36"/>
+<application android:label="VEX updater QA" android:hasCode="true"/>
+<instrumentation android:name="app.vex.updaterqa.UpdaterProbe" android:targetPackage="com.vexguard.app" android:functionalTest="true"/>
+</manifest>

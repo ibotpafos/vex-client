@@ -9,6 +9,8 @@ final class VEXHelperModel: ObservableObject {
     @Published private(set) var installState: VEXHelperInstallState?
     @Published private(set) var installationPhase: VEXHelperInstallationPhase = .idle
 
+    private(set) var lastConnectAdmissionRejected = false
+
     private let client = VEXHelperClient()
     private let installer = VEXHelperInstaller()
     private var pollTask: Task<Void, Never>?
@@ -203,6 +205,7 @@ final class VEXHelperModel: ObservableObject {
     private func runCommand(_ command: String, busyState: VpnConnectionState, successMessage: String) async {
         guard !isBusy else { return }
         isBusy = true
+        if isConnectCommand(command) { lastConnectAdmissionRejected = false }
         status = status.withState(busyState)
         defer { isBusy = false }
 
@@ -219,8 +222,11 @@ final class VEXHelperModel: ObservableObject {
             }
         } catch {
             if isConnectCommand(command) {
-                helperReadinessValidated = false
-                await client.silentDisconnect(releaseAntiLeak: true)
+                lastConnectAdmissionRejected = error.localizedDescription.contains("VPN_CONFIG_INVALID")
+                if !lastConnectAdmissionRejected {
+                    helperReadinessValidated = false
+                    await client.silentDisconnect(releaseAntiLeak: true)
+                }
             }
             message = VEXUserFacingText.status("Command failed: \(error.localizedDescription)")
             await refreshStatus(quiet: true)

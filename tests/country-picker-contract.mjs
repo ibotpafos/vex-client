@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+const source = path => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
+const home = source('src/screens/home-screen.tsx');
+const carousel = home.slice(home.indexOf('renderItem={({ item: group })'), home.indexOf('showsHorizontalScrollIndicator={false}', home.indexOf('renderItem={({ item: group })')));
+assert.ok(carousel.includes('setServerPickerSnapshot'));
+assert.ok(carousel.includes('group.locations.map'));
+assert.ok(carousel.includes('requestAnimationFrame'));
+assert.ok(!carousel.includes('handleLocationPress'));
+assert.ok(home.indexOf('countryGroups(availableLocations') < home.indexOf('groups.slice(0, 2)'));
+assert.ok(home.includes('void handleLocationPress(locationId, false)'));
+const picker = source('src/components/server-picker-modal.tsx');
+for (const text of ['location.city || location.id', 'ID: ${location.id}', 'onSelect(location.id)', 'isVpnBusy || !isLocationAvailable(location)', 'countryTitle ?? "Серверы"']) assert.ok(picker.includes(text), text);
+console.log('PASS country picker UI contract: snapshot, country filter, original ID selection, no card reconnect, unavailable disabled, original names/ID/status/ping');

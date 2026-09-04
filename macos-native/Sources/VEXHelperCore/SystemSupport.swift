@@ -340,12 +340,19 @@ public final class SystemTunnelController: TunnelControlling, @unchecked Sendabl
     }
 
     public func bringUp(currentSession: HelperSession?, armAntiLeak: Bool, ownerPID: Int32?) throws -> HelperSession {
+        // Admission is read-only and precedes even prior-session cleanup.
+        let sanitized: String
+        do {
+            let sourceConfigPath = try resolvedConfigPath()
+            sanitized = try sanitizedConfig(from: fileSystem.readText(at: sourceConfigPath))
+            try AwgConfigAdmission.validate(sanitized)
+        } catch {
+            throw HelperError.protocolViolation("VPN_CONFIG_INVALID: next profile admission failed")
+        }
         if currentSession != nil || hasManagedState() || firewall.antileakIsActive() {
             try bringDown(currentSession: currentSession)
         }
 
-        let sourceConfigPath = try resolvedConfigPath()
-        let sanitized = try sanitizedConfig(from: fileSystem.readText(at: sourceConfigPath))
         try captureDNSBaseline()
         do {
             try fileSystem.writeTextAtomically(sanitized, to: paths.activeConfigPath, mode: 0o600)

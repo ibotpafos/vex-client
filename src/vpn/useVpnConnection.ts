@@ -172,7 +172,13 @@ export function useVpnConnection() {
   const [antiLeakEnabled, setAntiLeakEnabledState] = useState(true);
   const [routingMode, setRoutingMode] = useState<VpnRoutingMode>(defaultVpnRoutingMode);
   const [serverSelectionMode, setServerSelectionModeState] = useState<ServerSelectionMode>('auto');
-  const [selectedLocationId, setSelectedLocationId] = useState('de');
+  const [selectedLocationId, setSelectedLocationState] = useState('de');
+  const selectedLocationIdRef = useRef('de');
+  const setSelectedLocationId = useCallback((locationId: string) => {
+    // Publish placement before unlocking a VPN operation, not on the next render.
+    selectedLocationIdRef.current = locationId;
+    setSelectedLocationState(locationId);
+  }, []);
   const [isUpdateCenterVisible, setIsUpdateCenterVisible] = useState(false);
   const [isAppActive, setIsAppActive] = useState(AppState.currentState === 'active');
 
@@ -303,7 +309,7 @@ export function useVpnConnection() {
     rotateActiveProfile,
     setActiveProfile,
   } = useVpnProfileState({
-    canRefreshInBackground: useCallback(() => !vpnOperationInFlightRef.current, []),
+    canRefreshInBackground: useCallback((locationId: string) => !vpnOperationInFlightRef.current && selectedLocationIdRef.current === locationId, []),
     accessToken: session?.accessToken,
     hasVpnAccess,
     knownEntitlement,

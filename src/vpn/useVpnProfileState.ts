@@ -19,7 +19,7 @@ export type VpnProfileRefreshEvent = {
 
 type UseVpnProfileStateInput = {
   accessToken?: string;
-  canRefreshInBackground?: () => boolean;
+  canRefreshInBackground?: (locationId: string) => boolean;
   hasVpnAccess: boolean;
   knownEntitlement: Entitlement | null;
   onDeviceRevoked: () => Promise<void>;
@@ -72,7 +72,7 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
   currentRequestScope.current = { accessToken, selectedLocationId, canRefreshInBackground };
   const backgroundRequestIsCurrent = useCallback((token: string | undefined, location: string) => {
     const current = currentRequestScope.current;
-    return current.accessToken === token && current.selectedLocationId === location && current.canRefreshInBackground?.() !== false;
+    return current.accessToken === token && current.selectedLocationId === location && current.canRefreshInBackground?.(location) !== false;
   }, []);
   const [vpnProfile, setVpnProfile] = useState<VpnProfile | null>(null);
   const [isKeyRotationBusy, setIsKeyRotationBusy] = useState(false);

@@ -1,6 +1,5 @@
 import type { VpnStatus } from '../native/vexVpn';
 import type { VpnProfile } from './profile';
-import { isVpnAdmissionError } from './connectionFallback';
 
 export type ResolveConnectableProfileOptions = {
   allowPersistentHotProfile?: boolean;
@@ -106,8 +105,9 @@ async function rollbackToPreviousLocation(
     input.setCachedProfile(input.previousLocationId, input.previousProfile);
   }
 
-  // Admission guarantees the native transition never began, even without a cached profile.
-  if (!targetConnectStarted || isVpnAdmissionError(error)) {
+  // A failed profile fetch did not reach the native transition. Once target
+  // issuance succeeds, even native admission rejection needs placement rollback.
+  if (!targetConnectStarted) {
     return {
       ok: false,
       error,
@@ -117,18 +117,12 @@ async function rollbackToPreviousLocation(
     };
   }
 
-  if (!input.previousProfile?.config) {
-    return {
-      ok: false,
-      error,
-      profile: input.previousProfile,
-      rollback: 'unavailable',
-      status: null,
-    };
-  }
-
   try {
-    const rollback = await input.connectProfile(input.previousProfile);
+    const previous = await input.resolveProfile(input.previousLocationId, {
+      forceRefresh: true,
+      requestPermission: false,
+    });
+    const rollback = await input.connectProfile(previous);
     input.setCachedProfile(input.previousLocationId, rollback.profile);
     input.reportConnect?.(rollback.profile);
     return {

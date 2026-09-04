@@ -14,7 +14,7 @@ printf '%s  %s\n' "$expected_input" "$work/input.apk" | sha256sum -c -
 tools="$(find "$ANDROID_HOME/build-tools" -mindepth 2 -maxdepth 2 -name apksigner | sort -V | tail -1)"
 [[ -x "$tools" ]] || { echo APKSIGNER_MISSING; exit 2; }
 badging="$("$(dirname "$tools")/aapt" dump badging "$work/input.apk")"
-grep -q "^package: name='com.vexguard.app' versionCode='1005660' versionName='1.0.56'" <<< "$badging"
+grep -q "^package: name='com.vexguard.app' versionCode='1005664' versionName='1.0.56'" <<< "$badging"
 export KEYSTORE_DEST="$work/store.jks"
 python3 - <<'PY'
 import base64, os

@@ -23,7 +23,7 @@ jobs:
           VEX_UPLOAD_STORE_PASSWORD: ${{ secrets.VEX_UPLOAD_STORE_PASSWORD }}
           VEX_UPLOAD_KEY_ALIAS: ${{ secrets.VEX_UPLOAD_KEY_ALIAS }}
           VEX_UPLOAD_KEY_PASSWORD: ${{ secrets.VEX_UPLOAD_KEY_PASSWORD }}
-        run: bash scripts/sign_android_updater_qa_ci.sh 8fc69ac626a324c474e87e83fd0ba385ca2c77e5aaf1d6b189b5ec1aae7ff544 internal-updater-qa-20260904-v2
+        run: bash scripts/sign_android_updater_qa_ci.sh 47a18466b1b079dc6d133b3daf3c3b94697b691f7ac1fd0e37dc52cf923479d9 internal-updater-qa-20260904-v3
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: signed-updater-qa

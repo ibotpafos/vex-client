@@ -15,9 +15,15 @@ public final class UpdaterProbe extends Instrumentation {
   try {
    Context ctx=getTargetContext();ClassLoader cl=ctx.getClassLoader();
    Class<?> rc=cl.loadClass("com.facebook.react.bridge.ReactApplicationContext");
-   Object context=rc.getConstructor(Context.class).newInstance(ctx);
+   android.content.Intent launch=new android.content.Intent().setClassName(ctx.getPackageName(), "com.vexguard.app.MainActivity").addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+   startActivitySync(launch);
+   Object app=ctx.getApplicationContext();Object host=app.getClass().getMethod("getReactHost").invoke(app);
+   Method currentContext=cl.loadClass("com.facebook.react.ReactHost").getMethod("getCurrentReactContext");
+   Object context=null;for(int i=0;i<300 && context==null;i++){context=currentContext.invoke(host);if(context==null)Thread.sleep(100);}
+   if(context==null)throw new AssertionError("Real React host not ready");
    Class<?> mod=cl.loadClass("com.vexguard.app.vpn.VexVpnModule");
-   Object module=mod.getConstructor(rc).newInstance(context);
+   Object module=context.getClass().getMethod("getNativeModule",Class.class).invoke(context,mod);
+   if(module==null)throw new AssertionError("Installed native module not ready");
    Method download=mod.getDeclaredMethod("downloadAndVerifyApk",String.class,String.class);download.setAccessible(true);
    String url="https://vexguard.app/downloads/qa-updater-ca94acb1d7d72ff9.apk";
    String sha="ca94acb1d7d72ff9dadd55eb24eb96272f29b88963969bfa81036cfca1f70acb";

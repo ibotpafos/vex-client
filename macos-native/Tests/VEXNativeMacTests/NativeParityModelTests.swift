@@ -378,19 +378,19 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertNil(store.endpoint(for: "fi"), "Empty endpoints must be rejected")
     }
 
-    func testConnectFlowPersistsLastSuccessfulEndpointForFasterReconnects() throws {
+    func testConnectFlowPersistsLastSuccessfulEndpointMetadata() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let appStateURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Stores/VEXAppState.swift")
-        let autopilotURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/VpnAutopilotService.swift")
         let profileServiceURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/VPNProfileService.swift")
         let appState = try String(contentsOf: appStateURL, encoding: .utf8)
-        let autopilot = try String(contentsOf: autopilotURL, encoding: .utf8)
         let profileService = try String(contentsOf: profileServiceURL, encoding: .utf8)
 
         XCTAssertTrue(appState.contains("LastTunnelEndpointStore().save(endpoint, locationId: attempt.locationId)"))
         XCTAssertTrue(appState.contains("LastTunnelEndpointStore().save(endpoint, locationId: nextTunnel.locationId)"))
         XCTAssertTrue(profileService.contains("LastTunnelEndpointStore().endpoint(for: locationId)"))
-        XCTAssertTrue(autopilot.contains("if let lastSuccessfulEndpoint = tunnel.lastSuccessfulEndpoint"), "Autopilot must try the known-good endpoint first")
+        // Retained endpoint metadata must not authorize a listener absent from
+        // the complete current profile. The fallback behavior is tested below
+        // with a retired cached endpoint and an unchanged admitted config.
     }
 
     func testVpnReportingNeverBlocksBusyStateOrSuccessFeedback() throws {
@@ -895,7 +895,9 @@ final class NativeParityModelTests: XCTestCase {
         cached.locationId = "admission-test-" + UUID().uuidString
         LastTunnelEndpointStore().save("retired.example:443", locationId: cached.locationId)
         defer { UserDefaults.standard.removeObject(forKey: "native.lastSuccessfulEndpoint." + cached.locationId.lowercased()) }
-        XCTAssertEqual(VpnAutopilotService().fallbackTunnels(for: cached).map(\.endpoint), [tunnel.endpoint])
+        let cachedAttempts = VpnAutopilotService().fallbackTunnels(for: cached)
+        XCTAssertEqual(cachedAttempts.map(\.endpoint), [tunnel.endpoint])
+        XCTAssertEqual(cachedAttempts.map(\.config), [cached.config])
         let ipv6 = tunnel.withEndpoint("[2001:db8::1]:51824")!
         XCTAssertEqual(VpnAutopilotService().fallbackTunnels(for: ipv6).map(\.endpoint), ["[2001:db8::1]:51824"])
 

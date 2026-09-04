@@ -6,6 +6,7 @@ import java.lang.reflect.*;
 import java.io.File;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class UpdaterProbe extends Instrumentation {
  public void onCreate(Bundle args){super.onCreate(args);start();}
@@ -25,11 +26,12 @@ public final class UpdaterProbe extends Instrumentation {
    Object result=download.invoke(module,url,sha);
    Method getFile=result.getClass().getDeclaredMethod("getFile");getFile.setAccessible(true);File file=(File)getFile.invoke(result);
    report("NATIVE_DOWNLOAD_IDENTITY_CHECK=PASS bytes="+file.length());
-   Class<?> promise=cl.loadClass("com.facebook.react.bridge.Promise");CountDownLatch done=new CountDownLatch(1);
-   Object callback=Proxy.newProxyInstance(cl,new Class[]{promise},(p,m,a)->{if(m.getName().equals("resolve")){report("INSTALL_RESULT="+String.valueOf(a[0]));done.countDown();}else if(m.getName().equals("reject")){report("INSTALL_REJECTED="+String.valueOf(a[0]));done.countDown();}return null;});
-   runOnMainSync(()->{try{mod.getMethod("installUpdateApk",String.class,promise).invoke(module,file.getAbsolutePath(),callback);}catch(Exception e){report("INSTALL_INVOKE_FAILED="+e.getClass().getSimpleName());done.countDown();}});
+   Class<?> promise=cl.loadClass("com.facebook.react.bridge.Promise");CountDownLatch done=new CountDownLatch(1);AtomicBoolean failed=new AtomicBoolean(false);
+   Object callback=Proxy.newProxyInstance(cl,new Class[]{promise},(p,m,a)->{if(m.getName().equals("resolve")){report("INSTALL_RESULT="+String.valueOf(a[0]));done.countDown();}else if(m.getName().equals("reject")){failed.set(true);report("INSTALL_REJECTED="+String.valueOf(a[0]));done.countDown();}return null;});
+   runOnMainSync(()->{try{mod.getMethod("installUpdateApk",String.class,promise).invoke(module,file.getAbsolutePath(),callback);}catch(Exception e){failed.set(true);report("INSTALL_INVOKE_FAILED="+e.getClass().getSimpleName());done.countDown();}});
    if(!done.await(20,TimeUnit.SECONDS))throw new AssertionError("install timeout");
-   Bundle finish=new Bundle();finish.putString("stream","PROBE_FINISHED\n");finish(-1,finish);
+   if(failed.get())throw new AssertionError("Installer request failed");
+   Bundle finish=new Bundle();finish.putString("stream","DOWNLOAD_CHECKS_PASSED_INSTALL_REQUESTED: permission grant, installer UI and post-install are separate checks\n");finish(-1,finish);
   }catch(Throwable e){Bundle b=new Bundle();b.putString("stream","PROBE_FAILED="+e.toString()+"\n");finish(0,b);}
  }
 }

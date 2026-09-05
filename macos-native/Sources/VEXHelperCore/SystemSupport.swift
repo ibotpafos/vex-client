@@ -301,16 +301,20 @@ public final class SystemPFFirewallController: PFFirewallControlling, @unchecked
             .contains { $0.trimmingCharacters(in: .whitespaces) == "Status: Disabled" }
     }
 
+    private struct PFEndpoint {
+        let host: String
+        let port: UInt16?
+        let addressFamily: String
+    }
+
     private func buildRules(endpoint: String, interfaceName: String) -> String {
-        let host = endpoint.split(separator: ":", maxSplits: 1).first.map(String.init) ?? endpoint
-        let port = endpoint.split(separator: ":", maxSplits: 1).dropFirst().first.map(String.init) ?? ""
         var rules = "set block-policy drop\npass quick on lo0 all\npass out quick on \(interfaceName) all\n"
-        if !host.isEmpty {
-            if !port.isEmpty {
-                rules += "pass out quick inet proto udp from any to \(host) port = \(port) keep state\n"
+        if let endpoint = pfEndpoint(from: endpoint) {
+            if let port = endpoint.port {
+                rules += "pass out quick \(endpoint.addressFamily) proto udp from any to \(endpoint.host) port = \(port) keep state\n"
             }
-            rules += "pass out quick inet proto tcp from any to \(host) port = 443 keep state\n"
-            rules += "pass out quick inet proto tcp from any to \(host) port = 22 keep state\n"
+            rules += "pass out quick \(endpoint.addressFamily) proto tcp from any to \(endpoint.host) port = 443 keep state\n"
+            rules += "pass out quick \(endpoint.addressFamily) proto tcp from any to \(endpoint.host) port = 22 keep state\n"
         }
         for protectedHost in ["94.141.160.212", "31.77.199.171"] {
             rules += "pass out quick inet proto tcp from any to \(protectedHost) port = 443 keep state\n"
@@ -318,6 +322,76 @@ public final class SystemPFFirewallController: PFFirewallControlling, @unchecked
         }
         rules += "block drop out all\n"
         return rules
+    }
+
+    private func pfEndpoint(from endpoint: String) -> PFEndpoint? {
+        let value = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        if value.first == "[" {
+            guard let closingBracket = value.firstIndex(of: "]") else { return nil }
+            let host = String(value[value.index(after: value.startIndex)..<closingBracket])
+            let suffix = value[value.index(after: closingBracket)...]
+            let port: UInt16?
+            if suffix.isEmpty {
+                port = nil
+            } else {
+                guard suffix.first == ":", let parsedPort = validPort(String(suffix.dropFirst())) else { return nil }
+                port = parsedPort
+            }
+            guard validIPv6Host(host) else { return nil }
+            return PFEndpoint(host: host, port: port, addressFamily: "inet6")
+        }
+
+        let parts = value.split(separator: ":", omittingEmptySubsequences: false)
+        let host: String
+        let port: UInt16?
+        switch parts.count {
+        case 1:
+            host = String(parts[0])
+            port = nil
+        case 2:
+            host = String(parts[0])
+            guard let parsedPort = validPort(String(parts[1])) else { return nil }
+            port = parsedPort
+        default:
+            return nil
+        }
+        guard validIPv4OrHostname(host) else { return nil }
+        return PFEndpoint(host: host, port: port, addressFamily: "inet")
+    }
+
+    private func validPort(_ value: String) -> UInt16? {
+        guard !value.isEmpty, value.allSatisfy(\.isNumber), let port = UInt16(value), port > 0 else {
+            return nil
+        }
+        return port
+    }
+
+    private func validIPv4OrHostname(_ host: String) -> Bool {
+        var address = in_addr()
+        if inet_pton(AF_INET, host, &address) == 1 {
+            return true
+        }
+        if host.allSatisfy({ $0.isNumber || $0 == "." }) {
+            return false
+        }
+        let labels = host.split(separator: ".", omittingEmptySubsequences: false)
+        return host.utf8.count <= 253 && labels.allSatisfy(validHostnameLabel)
+    }
+
+    private func validIPv6Host(_ host: String) -> Bool {
+        var address = in6_addr()
+        return inet_pton(AF_INET6, host, &address) == 1
+    }
+
+    private func validHostnameLabel(_ label: Substring) -> Bool {
+        guard !label.isEmpty, label.utf8.count <= 63,
+              let first = label.utf8.first, let last = label.utf8.last,
+              first != 45, last != 45 else {
+            return false
+        }
+        return label.utf8.allSatisfy { byte in
+            (48...57).contains(byte) || (65...90).contains(byte) || (97...122).contains(byte) || byte == 45
+        }
     }
 }
 

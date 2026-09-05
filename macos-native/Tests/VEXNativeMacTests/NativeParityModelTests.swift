@@ -863,6 +863,39 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertFalse(attempts.contains { $0.endpoint?.hasSuffix(":51820") == true })
     }
 
+    func testAutopilotFormatsIPv6FallbackEndpoint() throws {
+        let device = try JSONDecoder().decode(VpnDevice.self, from: """
+        {"id":"dev_1","name":"Mac","status":"active","protocol":"amneziawg","external_device_id":"macos-test","endpoint":"[2001:db8::1]:8443"}
+        """.data(using: .utf8)!)
+        let tunnel = PreparedTunnel(
+            device: device,
+            config: """
+            [Interface]
+            PrivateKey = x
+            [Peer]
+            PublicKey = y
+            Endpoint = [2001:db8::1]:8443
+
+            """,
+            locationId: "ipv6-fallback-test",
+            profileVersion: 7,
+            routingMode: .allExceptRu,
+            bypassRegion: "ru",
+            bypassRangesCount: 1,
+            bypassDomainsCount: 2,
+            routingPolicyVersion: VEXAppInfo.routingPolicyVersion,
+            rotationRequired: false
+        )
+
+        let attempts = VpnAutopilotService().fallbackTunnels(for: tunnel)
+
+        XCTAssertEqual(attempts.map(\.endpoint), [
+            "[2001:db8::1]:8443",
+            "[2001:db8::1]:443",
+        ])
+        XCTAssertTrue(attempts[1].config.contains("Endpoint = [2001:db8::1]:443"))
+    }
+
     func testNativeHelperStartDoesNotRequireAdminPassword() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let helperModelURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/VEXHelperClient.swift")

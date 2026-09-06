@@ -25,9 +25,21 @@ export VEX_DEBUG_APPLICATION_ID_SUFFIX="${VEX_DEBUG_APPLICATION_ID_SUFFIX:-.dev}
 cd "${root_dir}/android"
 output_apk="${root_dir}/android/app/build/outputs/apk/local/app-local.apk"
 rm -f "${output_apk}"
+if [[ "${VEX_ANDROID_LOCAL_OPTIMIZE:-0}" == "1" ]]; then
+  local_optimization_args=(
+    -Pandroid.enableMinifyInLocalBuilds=true
+    -Pandroid.enableShrinkResourcesInLocalBuilds=true
+  )
+else
+  local_optimization_args=(
+    -Pandroid.enableMinifyInLocalBuilds=false
+    -Pandroid.enableShrinkResourcesInLocalBuilds=false
+  )
+fi
 ./gradlew :app:assembleLocal \
   -PreactNativeArchitectures="${REACT_NATIVE_ARCHITECTURES:-arm64-v8a}" \
   -PVEX_ANDROID_FAST_ABI="${VEX_ANDROID_FAST_ABI:-arm64-v8a}" \
+  "${local_optimization_args[@]}" \
   "$@"
 
 expected_version_code="$(node -p "require('../app.json').expo.android.versionCode")"

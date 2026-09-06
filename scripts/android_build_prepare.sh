@@ -101,20 +101,37 @@ resolve_android_sdk() {
 
 prepare_debug_keystore() {
   local debug_keystore="${vex_android_root}/android/app/debug.keystore"
-  if [[ -f "${debug_keystore}" ]]; then
-    return 0
+  local shared_keystore="${VEX_LOCAL_RELEASE_CACHE_ROOT}/android-debug.keystore"
+  local seed_keystore="${VEX_ANDROID_DEBUG_KEYSTORE_SOURCE:-}"
+
+  if [[ -n "${seed_keystore}" ]]; then
+    if [[ ! -f "${seed_keystore}" ]]; then
+      echo "VEX_ANDROID_DEBUG_KEYSTORE_SOURCE does not exist: ${seed_keystore}" >&2
+      return 1
+    fi
+    cp "${seed_keystore}" "${shared_keystore}"
   fi
 
-  "${JAVA_HOME}/bin/keytool" -genkeypair -v \
-    -storetype JKS \
-    -keystore "${debug_keystore}" \
-    -storepass android \
-    -alias androiddebugkey \
-    -keypass android \
-    -keyalg RSA \
-    -keysize 2048 \
-    -validity 10000 \
-    -dname "CN=Android Debug,O=Android,C=US"
+  if [[ ! -f "${shared_keystore}" ]]; then
+    if [[ -f "${debug_keystore}" ]]; then
+      cp "${debug_keystore}" "${shared_keystore}"
+    else
+      "${JAVA_HOME}/bin/keytool" -genkeypair -v \
+        -storetype JKS \
+        -keystore "${shared_keystore}" \
+        -storepass android \
+        -alias androiddebugkey \
+        -keypass android \
+        -keyalg RSA \
+        -keysize 2048 \
+        -validity 10000 \
+        -dname "CN=Android Debug,O=Android,C=US"
+    fi
+  fi
+
+  if [[ ! -f "${debug_keystore}" ]] || ! cmp -s "${shared_keystore}" "${debug_keystore}"; then
+    cp "${shared_keystore}" "${debug_keystore}"
+  fi
 }
 
 resolve_java_home

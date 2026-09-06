@@ -3,6 +3,7 @@ import { hasPaidEntitlement, type Entitlement, type VpnLocation } from '@/api/ve
 import type { VpnStatus } from '@/native/vexVpn';
 import type { VpnProfile } from '@/vpn/profile';
 import { errorMessage } from '@/utils/error';
+import { locationDisplayName, selectableVpnLocations } from '@/vpn/serverSelection';
 
 export const animationKickDelayMs = 80;
 export const activeDeviceRefreshMs = 30_000;
@@ -128,22 +129,11 @@ export function locationLatencyText(location: VpnLocation | undefined, liveLaten
 }
 
 export function availableVpnLocations(locations?: VpnLocation[]): VpnLocation[] {
-  const source = locations?.length ? locations : fallbackVpnLocations;
-  return source.filter((location) => location.availability !== 'retired');
+  return selectableVpnLocations(locations);
 }
 
 export function serverLocationLabel(location: VpnLocation): string {
-  return countryDisplayName(location);
-}
-
-const russianCountryNames: Record<string, string> = {
-  DE: 'Германия',
-  FI: 'Финляндия',
-  NL: 'Нидерланды',
-};
-
-function countryDisplayName(location: VpnLocation): string {
-  return russianCountryNames[location.countryCode.toUpperCase()] ?? location.city;
+  return locationDisplayName(location);
 }
 
 export function locationStatusText(location: VpnLocation): string {
@@ -165,33 +155,6 @@ export function formatBytes(value: number) {
   if (mb < 1024) return `${mb.toFixed(mb >= 100 ? 0 : 1)} МБ`;
   return `${(mb / 1024).toFixed(1)} ГБ`;
 }
-
-export const fallbackVpnLocations: VpnLocation[] = [
-  {
-    id: 'de',
-    countryCode: 'DE',
-    city: 'Germany',
-    displayName: 'Germany',
-    flagEmoji: '🇩🇪',
-    availability: 'available',
-    priority: 10,
-    status: 'healthy',
-    healthyNodes: 1,
-    capabilities: [],
-  },
-  {
-    id: 'fi',
-    countryCode: 'FI',
-    city: 'Finland',
-    displayName: 'Finland',
-    flagEmoji: '🇫🇮',
-    availability: 'available',
-    priority: 20,
-    status: 'healthy',
-    healthyNodes: 1,
-    capabilities: [],
-  },
-];
 
 export function subscriptionTierLabel(entitlementState: Entitlement | null): string | null {
   if (!hasPaidEntitlement(entitlementState)) {

@@ -56,7 +56,6 @@ import {
 } from '@/vpn/connectionFallback';
 import type { VpnProfile } from '@/vpn/profile';
 import { probeNetworkHealth } from '@/vpn/networkHealthProbe';
-import { fallbackLocationEndpoint } from '@/vpn/locationEndpoint';
 import {
   defaultVpnRoutingMode,
   isSmartRoutingMode,
@@ -69,6 +68,7 @@ import {
 } from '@/navigation/routes';
 import {
   autoSwitchTargetLocationId,
+  reconcileLocationSelection,
   type ServerSelectionMode,
 } from '@/vpn/serverSelection';
 import { switchVpnLocation } from '@/vpn/serverSwitch';
@@ -172,7 +172,7 @@ export function useVpnConnection() {
   const [antiLeakEnabled, setAntiLeakEnabledState] = useState(true);
   const [routingMode, setRoutingMode] = useState<VpnRoutingMode>(defaultVpnRoutingMode);
   const [serverSelectionMode, setServerSelectionModeState] = useState<ServerSelectionMode>('auto');
-  const [selectedLocationId, setSelectedLocationId] = useState('de');
+  const [selectedLocationId, setSelectedLocationId] = useState('');
   const [isUpdateCenterVisible, setIsUpdateCenterVisible] = useState(false);
   const [isAppActive, setIsAppActive] = useState(AppState.currentState === 'active');
 
@@ -644,7 +644,7 @@ export function useVpnConnection() {
   useEffect(() => {
     void Promise.all([getSelectedVpnLocation(), getServerSelectionMode(), getAntiLeakEnabled(), getVpnRoutingMode()])
       .then(([locationId, mode, enabled, storedRoutingMode]) => {
-        setSelectedLocationId(locationId);
+        setSelectedLocationId(locationId ?? '');
         setServerSelectionModeState(mode);
         setAntiLeakEnabledState(enabled);
         setRoutingMode(storedRoutingMode);
@@ -653,11 +653,19 @@ export function useVpnConnection() {
   }, [setVpnStatus]);
 
   useEffect(() => {
-    if (!selectedLocation || selectedLocation.id === selectedLocationId) {
+    if (availableLocations.length === 0) {
       return;
     }
-    setSelectedLocationId(selectedLocation.id);
-  }, [selectedLocation, selectedLocationId]);
+    const reconciled = reconcileLocationSelection(serverSelectionMode, selectedLocationId || null, availableLocations);
+    if (reconciled.selectedLocationId !== selectedLocationId) {
+      setSelectedLocationId(reconciled.selectedLocationId);
+      void setSelectedVpnLocation(reconciled.selectedLocationId).catch(() => undefined);
+    }
+    if (reconciled.mode !== serverSelectionMode) {
+      setServerSelectionModeState(reconciled.mode);
+      void setServerSelectionMode(reconciled.mode).catch(() => undefined);
+    }
+  }, [availableLocations, selectedLocationId, serverSelectionMode]);
 
   useEffect(() => {
     diagnosticsSnapshotRef.current = {
@@ -771,11 +779,7 @@ export function useVpnConnection() {
     }
 
     const probeTargets = baseAvailableLocations
-      .map((location) => ({
-        endpoint: location.endpoint || fallbackLocationEndpoint(location.countryCode),
-        location,
-      }))
-      .filter((target) => Boolean(target.endpoint));
+      .flatMap((location) => location.endpoint ? [{ endpoint: location.endpoint, location }] : []);
     if (probeTargets.length === 0) {
       return undefined;
     }
@@ -1263,7 +1267,12 @@ export function useVpnConnection() {
       playWarningHaptic();
       return;
     }
-    const normalizedLocationId = locationId.trim().toLowerCase() || 'de';
+    const normalizedLocationId = locationId.trim();
+    if (!normalizedLocationId) {
+      playErrorHaptic();
+      setVpnError('Сервер не выбран. Обновите список и попробуйте снова.');
+      return;
+    }
     playSelectionHaptic();
     try {
       const nextMode = await setServerSelectionMode('manual');

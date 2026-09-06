@@ -35,6 +35,7 @@ import { withManagedProfileAWGCapability } from '../vpn/profileCapabilities';
 import type { VpnProfile } from '../vpn/profile';
 import type { StagedDevicePSKProfile } from '../vpn/devicePskRotation';
 import { normalizeLocationCatalog } from '../vpn/locationCatalog';
+import { requireVpnLocationId } from '../vpn/locationId';
 
 const mobileProtocol = 'amneziawg';
 
@@ -440,7 +441,7 @@ function normalizedPublicKey(value?: string): string {
 }
 
 function normalizeLocationId(locationId?: string): string {
-  return locationId?.trim().toLowerCase() || 'de';
+  return requireVpnLocationId(locationId);
 }
 
 function nativeDeviceName(client: VpnClientDescriptor): string {

@@ -61,5 +61,6 @@ function nativeDeviceLocationId(deviceId: string, locationId: string): string {
 }
 
 function normalizeLocationId(locationId?: string): string {
-  return locationId?.trim().toLowerCase() || 'de';
+  return comparableVpnLocationId(locationId);
 }
+import { comparableVpnLocationId } from './locationId';

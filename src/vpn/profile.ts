@@ -2,6 +2,7 @@ import { entitlement, hasPaidEntitlement, preparedTunnel, rotateManagedVpnKey, t
 import { loadHotVpnProfile, profileFromHotRecord, saveHotVpnProfile } from './hotProfileCache';
 import { defaultVpnBypassRegion, defaultVpnRoutingMode, defaultVpnRoutingPolicyVersion, type VpnRoutingMode } from './routingPolicy';
 import { vpnProfileAddressMatchesDevice } from './profileConsistency';
+import { requireVpnLocationId } from './locationId';
 
 export type VpnProfile = {
   config: string;
@@ -26,7 +27,7 @@ let cachedProfile: { key: string; profile: VpnProfile } | null = null;
 export async function resolveVpnProfile(
   accessToken?: string,
   knownEntitlement?: Entitlement | null,
-  locationId = 'de',
+  locationId = '',
   options: { allowPersistentHotProfile?: boolean; forceRefresh?: boolean; routingMode?: VpnRoutingMode; userId?: string } = {},
 ): Promise<VpnProfile> {
   const token = accessToken?.trim() || '';
@@ -91,7 +92,7 @@ async function refreshVpnProfile(
   token: string,
   options: { cachedConfig?: string; knownVersion?: number; locationId?: string; routingMode?: VpnRoutingMode },
   knownEntitlement?: Entitlement | null,
-  locationId = 'de',
+  locationId = '',
   userId?: string,
 ): Promise<VpnProfile> {
   const currentEntitlement = knownEntitlement ?? await entitlement(token);
@@ -128,7 +129,7 @@ function profileCacheKey(token: string, locationId: string, routingMode: VpnRout
 }
 
 function normalizeLocationId(locationId: string): string {
-  return locationId.trim().toLowerCase() || 'de';
+  return requireVpnLocationId(locationId);
 }
 
 function isManagedClientOwnedDevice(device: VpnDevice): boolean {

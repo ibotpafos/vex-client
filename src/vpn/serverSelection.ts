@@ -6,6 +6,28 @@ export function normalizeServerSelectionMode(value?: string | null): ServerSelec
   return value === 'manual' ? 'manual' : 'auto';
 }
 
+export function selectableVpnLocations(locations?: VpnLocation[]): VpnLocation[] {
+  return (locations ?? []).filter((location) => location.availability !== 'retired' && location.healthyNodes > 0);
+}
+
+export function locationDisplayName(location: VpnLocation): string {
+  return location.displayName || location.city;
+}
+
+export function reconcileLocationSelection(
+  mode: ServerSelectionMode,
+  selectedLocationId: string | null,
+  locations: VpnLocation[],
+): { mode: ServerSelectionMode; selectedLocationId: string } {
+  const selected = selectedLocationId
+    ? locations.find((location) => normalizeLocationId(location.id) === normalizeLocationId(selectedLocationId))
+    : undefined;
+  if (mode === 'manual' && selected) {
+    return { mode, selectedLocationId: selected.id };
+  }
+  return { mode: 'auto', selectedLocationId: chooseBestVpnLocation(locations)?.id ?? '' };
+}
+
 export function chooseBestVpnLocation(locations: VpnLocation[]): VpnLocation | undefined {
   return locations
     .map((location, index) => ({ location, index }))

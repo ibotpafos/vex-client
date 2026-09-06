@@ -25,6 +25,7 @@ import {
   hotVpnProfileTtlMs,
   hotVpnProfileRejectionReason,
   isUsableHotVpnProfileRecord,
+  normalizeHotProfileLocationId,
   profileFromHotRecord,
   withLastSuccessfulEndpoint,
   type HotVpnProfileRecord,
@@ -50,7 +51,13 @@ import { assessNativeTunnelHealth, localStatusHealthReasons } from '../src/vpn/n
 import { hasVerifiedNativeTunnelActivity, resolveNativeTunnelVerified } from '../src/vpn/vpnStatusVerification';
 import { probeNetworkHealth } from '../src/vpn/networkHealthProbe';
 import { defaultVpnBypassRegion, defaultVpnRoutingMode, defaultVpnRoutingPolicyVersion, isSmartRoutingMode, normalizeVpnRoutingMode, resolvedVpnBypassRegion, vpnRoutingModeFromSmartMode } from '../src/vpn/routingPolicy';
-import { autoSwitchTargetLocationId, chooseBestVpnLocation } from '../src/vpn/serverSelection';
+import {
+  autoSwitchTargetLocationId,
+  chooseBestVpnLocation,
+  locationDisplayName,
+  reconcileLocationSelection,
+  selectableVpnLocations,
+} from '../src/vpn/serverSelection';
 import { switchVpnLocation } from '../src/vpn/serverSwitch';
 import { normalizePackageNames } from '../src/vpn/applicationRouting';
 import { assessVpnAutopilotIssue } from '../src/vpn/vpnAutopilotAssessment';
@@ -58,7 +65,6 @@ import { buildCreateDeviceRequest } from '../src/api/deviceCreateRequest';
 import { getOrCreateNativeDeviceRegistration } from '../src/api/nativeDeviceRegistration';
 import { canAutomaticallyApplyOtaUpdate } from '../src/updates/otaAutoApply';
 import { HOME_TAB_ROUTE } from '../src/navigation/routes';
-import { fallbackLocationEndpoint } from '../src/vpn/locationEndpoint';
 import type { VpnDevice, VpnDeviceUsage, VpnLocation } from '../src/api/vexApi';
 import type { VpnStatus } from '../src/native/vexVpn';
 import type { VpnProfile } from '../src/vpn/profile';
@@ -260,6 +266,17 @@ assertDeepEqual(
   ]).map((location) => location.id),
   ['ready'],
 );
+assertDeepEqual(selectableVpnLocations(undefined), []);
+assertDeepEqual(selectableVpnLocations([]), []);
+assertEqual(locationDisplayName({ ...catalogFixture, displayName: 'Managed Name' }), 'Managed Name');
+assertDeepEqual(
+  reconcileLocationSelection('manual', 'removed-id', [catalogFixture]),
+  { mode: 'auto', selectedLocationId: catalogFixture.id },
+);
+assertDeepEqual(
+  reconcileLocationSelection('auto', null, [catalogFixture]),
+  { mode: 'auto', selectedLocationId: catalogFixture.id },
+);
 
 assertEqual(vexWebsiteUrl('/dashboard', 'https://vexguard.app/'), 'https://vexguard.app/dashboard');
 assertEqual(vexWebsiteUrl('/support', 'https://staging.vexguard.app'), 'https://staging.vexguard.app/support');
@@ -405,12 +422,6 @@ assertEqual(
   assertEqual(isEmailOTPExpired('2026-07-14T10:00:00Z', Date.parse('2026-07-14T10:00:01Z')), true);
   assertEqual(isEmailOTPExpired('2026-07-14T10:00:02Z', Date.parse('2026-07-14T10:00:01Z')), false);
   assertEqual(isInvalidOrExpiredEmailOTPError(new Error('invalid or expired email code')), true);
-}
-
-{
-  assertEqual(fallbackLocationEndpoint('de'), 'de-1.vexguard.app:51821');
-  assertEqual(fallbackLocationEndpoint(' FI '), 'fi-1.vexguard.app:51821');
-  assertEqual(fallbackLocationEndpoint('../bad'), '');
 }
 
 {
@@ -1133,27 +1144,37 @@ function runVpnConnectTimingSourceContractTests(): void {
 function runCreateDeviceRequestTests(): void {
   const request = buildCreateDeviceRequest(
     { deviceName: 'Mac', idempotencyPrefix: 'macos', platform: 'macos' },
-    ' DE ',
+    ' Edge-A ',
     ' macos-stable-device ',
     { platform: 'macos', version: '1.0.48' },
   );
   const repeated = buildCreateDeviceRequest(
     { deviceName: 'Mac', idempotencyPrefix: 'macos', platform: 'macos' },
-    'de',
+    'Edge-A',
     'macos-stable-device',
     { platform: 'macos', version: '1.0.48' },
   );
 
-  assertEqual(request.idempotencyKey, 'macos-macos-stable-device-de-device');
+  assertEqual(request.idempotencyKey, 'macos-macos-stable-device-Edge-A-device');
   assertEqual(repeated.idempotencyKey, request.idempotencyKey);
   assertDeepEqual(request.body, {
     name: 'Mac',
-    location: 'de',
+    location: 'Edge-A',
     protocol: 'amneziawg',
     external_device_id: 'macos-stable-device',
     platform: 'macos',
     app_version: '1.0.48',
   });
+  assertThrows(
+    () => buildCreateDeviceRequest(
+      { deviceName: 'Mac', idempotencyPrefix: 'macos', platform: 'macos' },
+      undefined,
+      'macos-stable-device',
+      { platform: 'macos', version: '1.0.48' },
+    ),
+    'VPN location ID is required.',
+  );
+  assertThrows(() => normalizeHotProfileLocationId('  '), 'VPN location ID is required.');
 }
 
 {

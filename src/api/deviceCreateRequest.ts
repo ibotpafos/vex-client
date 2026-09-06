@@ -29,7 +29,7 @@ export function buildCreateDeviceRequest(
     app_version: string;
   };
 } {
-  const normalizedLocation = normalizeLocationId(location);
+  const normalizedLocation = requireVpnLocationId(location);
   const normalizedExternalDeviceId = externalDeviceId.trim();
   return {
     idempotencyKey: `${client.idempotencyPrefix}-${normalizedExternalDeviceId}-${normalizedLocation}-device`,
@@ -43,7 +43,4 @@ export function buildCreateDeviceRequest(
     },
   };
 }
-
-function normalizeLocationId(locationId?: string): string {
-  return locationId?.trim().toLowerCase() || 'de';
-}
+import { requireVpnLocationId } from '../vpn/locationId';

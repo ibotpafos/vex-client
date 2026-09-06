@@ -3,7 +3,7 @@ import { View, Text } from 'react-native';
 import { Check, Circle, Gauge } from 'lucide-react-native';
 import type { VpnLocation } from '@/api/vexApi';
 import { useRenderProfilerMark } from '@/debug/render-profiler';
-import { serverLocationLabel } from '../screens/home-screen-helpers';
+import { homeLocationCardLabel } from '../screens/home-location-previews';
 import { styles } from '../screens/home-screen.styles';
 import { VexPressable } from '@/ui/vex-ui';
 import { vexTheme } from '@/ui/vex-theme';
@@ -27,7 +27,7 @@ export const ServerChip = React.memo(function ServerChip({
   onPress,
 }: ServerChipProps) {
   useRenderProfilerMark('ServerChip');
-  const locationLabel = location ? serverLocationLabel(location) : 'Не выбран';
+  const locationLabel = location ? homeLocationCardLabel(location) : 'Не выбран';
   const serverLabel = isAutoMode && location ? `Авто: ${locationLabel}` : locationLabel;
   const visibleServerLabel = locationLabel;
   return (

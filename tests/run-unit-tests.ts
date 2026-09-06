@@ -72,12 +72,23 @@ import { managedProfileAmneziaConfig } from '../src/vpn/amneziaConfig';
 import { managedProfileAWGVersion, withManagedProfileAWGCapability } from '../src/vpn/profileCapabilities';
 import { serverPickerActionForSource } from '../src/screens/server-picker-interactions';
 import { serverPickerLocationRows } from '../src/components/server-picker-model';
+import {
+  homeLocationCardLabel,
+  homeLocationPreviews,
+  serverLocationTechnicalLabel,
+} from '../src/screens/home-location-previews';
 import { trafficSessionLabel } from '../src/components/traffic-summary';
 import appConfig from '../app.config';
 import type { ConfigContext } from '@expo/config';
 import { vexWebsiteUrl } from '../src/navigation/website';
 import { authEntryStepAfterBack } from '../src/auth/authEntry';
 import { clientDiagnosticsRequestBody } from '../src/api/clientDiagnosticsRequest';
+import { normalizeLocationCatalog } from '../src/vpn/locationCatalog';
+import { createLocationCatalogRefresher } from '../src/vpn/locationCatalogRefresh';
+import {
+  locationCatalogCacheSchemaVersion,
+  validCachedValueForUser,
+} from '../src/vpn/vpnQueryCachePolicy';
 import {
   customerRealtimeInvalidationRoots,
   customerRealtimeMetadata,
@@ -227,12 +238,6 @@ class FakeRealtimeRequest {
   assertEqual(statuses.at(-1), false);
   assertEqual(timers.some((timer) => timer.milliseconds === 1_000), true);
 }
-import { normalizeLocationCatalog } from '../src/vpn/locationCatalog';
-import { createLocationCatalogRefresher } from '../src/vpn/locationCatalogRefresh';
-import {
-  locationCatalogCacheSchemaVersion,
-  validCachedValueForUser,
-} from '../src/vpn/vpnQueryCachePolicy';
 
 const catalogFixture: VpnLocation = {
   id: 'edge-a',
@@ -267,6 +272,20 @@ assertDeepEqual(twentyPickerRows[19], {
   selected: true,
   testID: 'server-picker-edge-20',
 });
+const homeCatalogLocations = [
+  { ...catalogFixture, id: 'de-feature', countryCode: 'DE', city: 'Feature Lab', displayName: 'VEX AWG 3.1 Features' },
+  { ...catalogFixture, id: 'de', countryCode: 'DE', city: 'Frankfurt', displayName: 'Germany' },
+  { ...catalogFixture, id: 'fi', countryCode: 'FI', city: 'Helsinki', displayName: 'Finland' },
+  { ...catalogFixture, id: 'nl', countryCode: 'NL', city: 'Amsterdam', displayName: 'Amsterdam' },
+];
+assertDeepEqual(
+  homeLocationPreviews(homeCatalogLocations, homeCatalogLocations[0]).map((location) => location.id),
+  ['de-feature', 'fi', 'nl'],
+);
+assertEqual(homeLocationCardLabel(homeCatalogLocations[3]), 'Нидерланды');
+assertEqual(serverLocationTechnicalLabel(homeCatalogLocations[1]), null);
+assertEqual(serverLocationTechnicalLabel(homeCatalogLocations[3]), 'Amsterdam');
+assertEqual(serverLocationTechnicalLabel(homeCatalogLocations[0]), 'VEX AWG 3.1 Features');
 assertDeepEqual(
   validCachedValueForUser(
     { savedAtMs: 1, schemaVersion: 2, userId: 'user-a', value: [catalogFixture] },

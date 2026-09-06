@@ -19,8 +19,11 @@ import type { ServerSelectionMode } from "@/vpn/serverSelection";
 import {
   locationLatencyText,
   locationStatusText,
-  serverLocationLabel,
 } from "../screens/home-screen-helpers";
+import {
+  homeLocationCardLabel,
+  serverLocationTechnicalLabel,
+} from "../screens/home-location-previews";
 import { serverPickerLocationRows } from "./server-picker-model";
 
 export interface ServerPickerModalProps {
@@ -136,16 +139,18 @@ function ServerPickerBody({
         const latency = selected && selectedLatencyText
           ? selectedLatencyText
           : locationLatencyText(location);
+        const technicalLabel = serverLocationTechnicalLabel(location);
+        const statusText = `${locationStatusText(location)} · ${latency}`;
         return (
           <ServerPickerRow
             key={location.id}
             leading={location.flagEmoji || location.countryCode}
             onPress={isVpnBusy ? undefined : () => onSelect(location.id)}
-            supportingText={`${locationStatusText(location)} · ${latency}`}
+            supportingText={technicalLabel ? `${technicalLabel} · ${statusText}` : statusText}
             testID={testID}
             trailing={selected ? "✓" : undefined}
           >
-            {serverLocationLabel(location)}
+            {homeLocationCardLabel(location)}
           </ServerPickerRow>
         );
       })}

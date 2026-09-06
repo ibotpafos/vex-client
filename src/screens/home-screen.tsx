@@ -12,7 +12,6 @@ import { VexNativeActivityIndicator } from '@/ui/native-activity-indicator';
 import { vexTheme } from '@/ui/vex-theme';
 import { VexScreen, vexSharedStyles, VexPressable } from '@/ui/vex-ui';
 import { useVpnConnectionContext } from '@/vpn/vpn-connection-context';
-import type { VpnLocation } from '@/api/vexApi';
 
 import { ServerChip } from '../components/server-chip';
 import { ServerPickerModal } from '../components/server-picker-modal';
@@ -20,6 +19,7 @@ import { TrafficStats } from '../components/traffic-stats';
 import { type ConnectionPhase } from './home-screen-helpers';
 import { serverPickerActionForSource } from './server-picker-interactions';
 import { styles } from './home-screen.styles';
+import { homeLocationPreviews } from './home-location-previews';
 
 export default function App() {
   useRenderProfilerMark('HomeScreen');
@@ -44,14 +44,14 @@ export default function App() {
     handleLocationPress,
     handleAutoServerSelectionPress,
     availableLocations,
+    isLocationsRefreshing,
+    locationsRefreshError,
+    refreshLocationsForPicker,
+    retryLocations,
     openUpdateCenter,
     closeUpdateCenter,
   } = useVpnConnectionContext();
   const [isServerPickerVisible, setIsServerPickerVisible] = useState(false);
-  const [serverPickerSnapshot, setServerPickerSnapshot] = useState<{
-    latencyText: string;
-    locations: VpnLocation[];
-  } | null>(null);
   const { width: viewportWidth } = useWindowDimensions();
   const reduceMotionVisuals = Platform.OS === 'android';
 
@@ -86,10 +86,7 @@ export default function App() {
       : connectionPhase === 'disconnecting'
         ? 'Завершаем'
         : 'VPN выключен';
-  const locationPreviews = [
-    selectedLocation,
-    ...availableLocations.filter((location) => location.id !== selectedLocation?.id),
-  ].filter((location): location is VpnLocation => Boolean(location)).slice(0, 2);
+  const locationPreviews = homeLocationPreviews(availableLocations, selectedLocation);
   const carouselWidth = Math.min(viewportWidth - (viewportWidth <= 360 ? 16 : 24), 430);
   const carouselCardWidth = carouselWidth - 44;
 
@@ -158,10 +155,7 @@ export default function App() {
                     if (serverPickerActionForSource('all_locations') !== 'open_picker') {
                       return;
                     }
-                    setServerPickerSnapshot({
-                      latencyText: selectedLatencyText,
-                      locations: availableLocations.map((location) => ({ ...location })),
-                    });
+                    void refreshLocationsForPicker().catch(() => undefined);
                     requestAnimationFrame(() => setIsServerPickerVisible(true));
                   }}
                   style={styles.locationsAllButton}
@@ -224,8 +218,10 @@ export default function App() {
       </ScrollView>
       <ServerPickerModal
         isVpnBusy={isVpnBusy}
-        locations={serverPickerSnapshot?.locations ?? availableLocations}
-        selectedLatencyText={serverPickerSnapshot?.latencyText ?? selectedLatencyText}
+        isRefreshing={isLocationsRefreshing}
+        locations={availableLocations}
+        refreshError={locationsRefreshError}
+        selectedLatencyText={selectedLatencyText}
         selectionMode={serverSelectionMode}
         selectedLocationId={selectedLocationId}
         visible={isServerPickerVisible}
@@ -234,6 +230,9 @@ export default function App() {
           void handleAutoServerSelectionPress(false);
         }}
         onClose={() => setIsServerPickerVisible(false)}
+        onRetry={() => {
+          void retryLocations().catch(() => undefined);
+        }}
         onSelect={(locationId) => {
           setIsServerPickerVisible(false);
           void handleLocationPress(locationId, false);

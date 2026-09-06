@@ -1396,6 +1396,10 @@ export function useVpnConnection() {
   }, [refreshLocations]);
 
   const retryLocations = useCallback(() => refreshLocations('retry').then(() => undefined), [refreshLocations]);
+  const refreshLocationsForPicker = useCallback(
+    () => refreshLocations('picker_open').then(() => undefined),
+    [refreshLocations],
+  );
 
   const closeServerPicker = useCallback(() => {
     playSelectionHaptic();
@@ -1458,6 +1462,7 @@ export function useVpnConnection() {
     isLocationsRefreshing,
     locationsRefreshError,
     retryLocations,
+    refreshLocationsForPicker,
     handleSignOut,
     handlePowerPress,
     openSubscriptionModal,

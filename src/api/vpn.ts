@@ -34,6 +34,7 @@ import { managedProfileAmneziaConfig } from '../vpn/amneziaConfig';
 import { withManagedProfileAWGCapability } from '../vpn/profileCapabilities';
 import type { VpnProfile } from '../vpn/profile';
 import type { StagedDevicePSKProfile } from '../vpn/devicePskRotation';
+import { normalizeLocationCatalog } from '../vpn/locationCatalog';
 
 const mobileProtocol = 'amneziawg';
 
@@ -179,7 +180,7 @@ export async function vpnDevices(accessToken: string): Promise<VpnDevice[]> {
 
 export async function vpnLocations(accessToken: string): Promise<VpnLocation[]> {
   const response = await jsonRequest<LocationDTO[]>('/v1/locations', { accessToken, suppressErrorLog: true });
-  return response.map(parseLocation).filter((location) => location.healthyNodes > 0 && location.availability !== 'retired');
+  return normalizeLocationCatalog(response);
 }
 
 export async function vpnDeviceUsage(accessToken: string): Promise<VpnDeviceUsage[]> {
@@ -504,20 +505,6 @@ export function parseDeviceUsage(item: DeviceUsageDTO): VpnDeviceUsage {
     rxBytes: typeof item.rx_bytes === 'number' ? item.rx_bytes : 0,
     txBytes: typeof item.tx_bytes === 'number' ? item.tx_bytes : 0,
     totalBytes: typeof item.total_bytes === 'number' ? item.total_bytes : 0,
-  };
-}
-
-export function parseLocation(item: LocationDTO): VpnLocation {
-  return {
-    id: item.id,
-    countryCode: item.country_code || item.id.toUpperCase(),
-    city: item.city || item.id.toUpperCase(),
-    flagEmoji: item.flag_emoji || undefined,
-    availability: item.availability || 'available',
-    status: item.status || 'unknown',
-    healthyNodes: typeof item.healthy_nodes === 'number' ? item.healthy_nodes : 0,
-    endpoint: item.endpoint || undefined,
-    latencyMs: typeof item.latency_ms === 'number' ? item.latency_ms : undefined,
   };
 }
 

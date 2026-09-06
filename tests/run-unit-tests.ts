@@ -220,6 +220,46 @@ class FakeRealtimeRequest {
   assertEqual(statuses.at(-1), false);
   assertEqual(timers.some((timer) => timer.milliseconds === 1_000), true);
 }
+import { normalizeLocationCatalog } from '../src/vpn/locationCatalog';
+
+const catalogFixture: VpnLocation = {
+  id: 'edge-a',
+  countryCode: 'XY',
+  city: 'First',
+  displayName: 'First Edge',
+  availability: 'available',
+  priority: 10,
+  status: 'healthy',
+  healthyNodes: 1,
+  capabilities: ['awg31'],
+};
+
+assertDeepEqual(
+  normalizeLocationCatalog([
+    { id: 'edge-b', country_code: 'ZZ', city: 'Second', priority: 20, availability: 'available', status: 'healthy', healthy_nodes: 1 },
+    { id: 'edge-a', country_code: 'XY', city: 'First', display_name: 'First Edge', priority: 10, capabilities: ['awg31'], availability: 'available', status: 'healthy', healthy_nodes: 1 },
+  ]).map((location) => [location.id, location.displayName]),
+  [['edge-a', 'First Edge'], ['edge-b', 'Second']],
+);
+assertThrows(
+  () => normalizeLocationCatalog([
+    { id: 'duplicate', country_code: 'ZZ', city: 'One', availability: 'available', healthy_nodes: 1 },
+    { id: 'DUPLICATE', country_code: 'ZZ', city: 'Two', availability: 'available', healthy_nodes: 1 },
+  ]),
+  'Invalid VPN location catalog: duplicate location id: DUPLICATE',
+);
+assertThrows(
+  () => normalizeLocationCatalog([{ id: 'broken', country_code: '', city: 'Nowhere', availability: 'available', healthy_nodes: 1 }]),
+  'Invalid VPN location catalog: entry 0 has invalid country_code',
+);
+assertDeepEqual(
+  normalizeLocationCatalog([
+    { id: 'retired', country_code: 'XY', city: 'Old', availability: 'retired', healthy_nodes: 1 },
+    { id: 'offline', country_code: 'XY', city: 'Offline', availability: 'available', healthy_nodes: 0 },
+    { id: 'ready', country_code: 'XY', city: 'Ready', availability: 'available', healthy_nodes: 1 },
+  ]).map((location) => location.id),
+  ['ready'],
+);
 
 assertEqual(vexWebsiteUrl('/dashboard', 'https://vexguard.app/'), 'https://vexguard.app/dashboard');
 assertEqual(vexWebsiteUrl('/support', 'https://staging.vexguard.app'), 'https://staging.vexguard.app/support');
@@ -2078,9 +2118,12 @@ function locationCandidate(id: string, overrides: Partial<VpnLocation> = {}): Vp
     id,
     countryCode: id.toUpperCase(),
     city: id.toUpperCase(),
+    displayName: id.toUpperCase(),
     availability: 'available',
+    priority: 100,
     status: 'healthy',
     healthyNodes: 1,
+    capabilities: [],
     ...overrides,
   };
 }

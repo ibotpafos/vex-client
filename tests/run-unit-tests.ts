@@ -1539,6 +1539,16 @@ async function runLocationCatalogRefreshTests(): Promise<void> {
   assertEqual(unchangedResult.locations, unchangedPrior);
   assertDeepEqual(unchangedCommits, []);
 
+  const transientEmptyCommits: VpnLocation[][] = [];
+  const transientEmpty = createLocationCatalogRefresher({
+    fetchCatalog: async () => [],
+    commitCatalog: async (locations) => { transientEmptyCommits.push(locations); },
+    currentCatalog: () => unchangedPrior,
+  });
+  const transientEmptyResult = await transientEmpty.refresh('interval');
+  assertEqual(transientEmptyResult.locations, unchangedPrior);
+  assertDeepEqual(transientEmptyCommits, []);
+
   const changedCommits: VpnLocation[][] = [];
   const changedCatalog = [{ ...catalogFixture, status: 'degraded' }];
   const changed = createLocationCatalogRefresher({

@@ -54,7 +54,10 @@ export function createLocationCatalogRefresher(options: LocationCatalogRefresher
         try {
           const locations = await options.fetchCatalog();
           const current = options.currentCatalog?.() ?? lastCatalog;
-          const stableLocations = current && areLocationCatalogsEqual(current, locations)
+          const stableLocations = current && (
+            (current.length > 0 && locations.length === 0)
+            || areLocationCatalogsEqual(current, locations)
+          )
             ? current
             : locations;
           if (stableLocations === locations) {

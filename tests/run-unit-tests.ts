@@ -72,10 +72,12 @@ import type { VpnProfile } from '../src/vpn/profile';
 import { managedProfileAmneziaConfig } from '../src/vpn/amneziaConfig';
 import { managedProfileAWGVersion, withManagedProfileAWGCapability } from '../src/vpn/profileCapabilities';
 import { serverPickerActionForSource } from '../src/screens/server-picker-interactions';
+import { isServerChipTap } from '../src/screens/server-chip-interaction';
 import { serverPickerLocationRows } from '../src/components/server-picker-model';
 import {
   homeLocationCardLabel,
   homeLocationPreviews,
+  stableHomeLocationPreviews,
   serverLocationTechnicalLabel,
 } from '../src/screens/home-location-previews';
 import { trafficSessionLabel } from '../src/components/traffic-summary';
@@ -85,7 +87,8 @@ import { vexWebsiteUrl } from '../src/navigation/website';
 import { authEntryStepAfterBack } from '../src/auth/authEntry';
 import { clientDiagnosticsRequestBody } from '../src/api/clientDiagnosticsRequest';
 import { normalizeLocationCatalog } from '../src/vpn/locationCatalog';
-import { createLocationCatalogRefresher } from '../src/vpn/locationCatalogRefresh';
+import { createLocationCatalogRefresher, isVisibleLocationCatalogRefresh } from '../src/vpn/locationCatalogRefresh';
+import { stabilizedLocationLatency } from '../src/vpn/locationLatencyStability';
 import {
   locationCatalogCacheSchemaVersion,
   validCachedValueForUser,
@@ -287,6 +290,23 @@ assertEqual(homeLocationCardLabel(homeCatalogLocations[3]), 'Нидерланд�
 assertEqual(serverLocationTechnicalLabel(homeCatalogLocations[1]), null);
 assertEqual(serverLocationTechnicalLabel(homeCatalogLocations[3]), 'Amsterdam');
 assertEqual(serverLocationTechnicalLabel(homeCatalogLocations[0]), 'VEX AWG 3.1 Features');
+const initialHomePreviews = homeLocationPreviews(homeCatalogLocations, homeCatalogLocations[0]);
+assertEqual(
+  stableHomeLocationPreviews(
+    initialHomePreviews,
+    homeCatalogLocations.map((location, index) => ({ ...location, latencyMs: 20 + index * 10 })),
+    { ...homeCatalogLocations[0], latencyMs: 20 },
+  ),
+  initialHomePreviews,
+);
+assertEqual(
+  stableHomeLocationPreviews(
+    initialHomePreviews,
+    homeCatalogLocations.map((location) => location.id === 'nl' ? { ...location, status: 'degraded' } : location),
+    homeCatalogLocations[0],
+  ) === initialHomePreviews,
+  false,
+);
 assertDeepEqual(
   validCachedValueForUser(
     { savedAtMs: 1, schemaVersion: 2, userId: 'user-a', value: [catalogFixture] },
@@ -344,6 +364,30 @@ assertDeepEqual(
   reconcileLocationSelection('auto', null, [catalogFixture]),
   { mode: 'auto', selectedLocationId: catalogFixture.id },
 );
+assertDeepEqual(
+  reconcileLocationSelection('auto', 'edge-current', [
+    { ...catalogFixture, id: 'edge-current', latencyMs: 90 },
+    { ...catalogFixture, id: 'edge-faster', latencyMs: 15 },
+  ]),
+  { mode: 'auto', selectedLocationId: 'edge-current' },
+);
+assertDeepEqual(
+  reconcileLocationSelection('auto', 'edge-current', [
+    { ...catalogFixture, id: 'edge-current', healthyNodes: 0, latencyMs: 5 },
+    { ...catalogFixture, id: 'edge-healthy', latencyMs: 30 },
+  ]),
+  { mode: 'auto', selectedLocationId: 'edge-healthy' },
+);
+assertEqual(isVisibleLocationCatalogRefresh('interval', true), false);
+assertEqual(isVisibleLocationCatalogRefresh('foreground', true), false);
+assertEqual(isVisibleLocationCatalogRefresh('picker_open', true), true);
+assertEqual(isVisibleLocationCatalogRefresh('startup', false), true);
+assertEqual(stabilizedLocationLatency(undefined, 8), 10);
+assertEqual(stabilizedLocationLatency(10, 17), 10);
+assertEqual(stabilizedLocationLatency(10, 31), 30);
+assertEqual(stabilizedLocationLatency(30, Number.NaN), 30);
+assertEqual(isServerChipTap({ x: 20, y: 20 }, { x: 24, y: 26 }), true);
+assertEqual(isServerChipTap({ x: 20, y: 20 }, { x: 80, y: 22 }), false);
 assertEqual(reconcileHydratedLocationSelection(false, 'manual', catalogFixture.id, [catalogFixture]), null);
 assertDeepEqual(
   reconcileHydratedLocationSelection(true, 'manual', catalogFixture.id, [catalogFixture]),
@@ -1483,6 +1527,27 @@ async function runLocationCatalogRefreshTests(): Promise<void> {
   });
   await empty.refresh('foreground');
   assertDeepEqual(emptyCommits, [[]]);
+
+  const unchangedCommits: VpnLocation[][] = [];
+  const unchangedPrior = [{ ...catalogFixture, capabilities: [...catalogFixture.capabilities] }];
+  const unchanged = createLocationCatalogRefresher({
+    fetchCatalog: async () => [{ ...catalogFixture, capabilities: [...catalogFixture.capabilities] }],
+    commitCatalog: async (locations) => { unchangedCommits.push(locations); },
+    currentCatalog: () => unchangedPrior,
+  });
+  const unchangedResult = await unchanged.refresh('interval');
+  assertEqual(unchangedResult.locations, unchangedPrior);
+  assertDeepEqual(unchangedCommits, []);
+
+  const changedCommits: VpnLocation[][] = [];
+  const changedCatalog = [{ ...catalogFixture, status: 'degraded' }];
+  const changed = createLocationCatalogRefresher({
+    fetchCatalog: async () => changedCatalog,
+    commitCatalog: async (locations) => { changedCommits.push(locations); },
+    currentCatalog: () => unchangedPrior,
+  });
+  await changed.refresh('interval');
+  assertDeepEqual(changedCommits, [changedCatalog]);
 }
 
 async function testFreshSameLocationProfileConnectsSecondNode(): Promise<void> {

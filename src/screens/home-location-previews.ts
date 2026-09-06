@@ -27,6 +27,38 @@ export function homeLocationPreviews(
   });
 }
 
+export function stableHomeLocationPreviews(
+  previous: VpnLocation[],
+  availableLocations: VpnLocation[],
+  selectedLocation?: VpnLocation | null,
+): VpnLocation[] {
+  const next = homeLocationPreviews(availableLocations, selectedLocation);
+  if (previous.length !== next.length) {
+    return next;
+  }
+  return previous.every((location, index) => sameHomeLocationCard(location, next[index]))
+    ? previous
+    : next;
+}
+
+function sameHomeLocationCard(left: VpnLocation, right?: VpnLocation): boolean {
+  if (!right) {
+    return false;
+  }
+  return left.id === right.id
+    && left.countryCode === right.countryCode
+    && left.city === right.city
+    && left.displayName === right.displayName
+    && left.flagEmoji === right.flagEmoji
+    && left.availability === right.availability
+    && left.priority === right.priority
+    && left.status === right.status
+    && left.healthyNodes === right.healthyNodes
+    && left.endpoint === right.endpoint
+    && left.capabilities.length === right.capabilities.length
+    && left.capabilities.every((capability, index) => capability === right.capabilities[index]);
+}
+
 export function homeLocationCardLabel(location: VpnLocation): string {
   const countryCode = location.countryCode.trim().toUpperCase();
   if (countryCode) {

@@ -22,7 +22,7 @@ export function reconcileLocationSelection(
   const selected = selectedLocationId
     ? locations.find((location) => normalizeLocationId(location.id) === normalizeLocationId(selectedLocationId))
     : undefined;
-  if (mode === 'manual' && selected) {
+  if (selected && isSelectableLocation(selected)) {
     return { mode, selectedLocationId: selected.id };
   }
   return { mode: 'auto', selectedLocationId: chooseBestVpnLocation(locations)?.id ?? '' };

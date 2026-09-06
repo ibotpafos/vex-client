@@ -24,6 +24,13 @@ export type LocationCatalogDiagnostics = {
   errorCategory?: 'contract' | 'network';
 };
 
+export function isVisibleLocationCatalogRefresh(
+  reason: LocationCatalogRefreshReason,
+  hasCatalog: boolean,
+): boolean {
+  return !hasCatalog || reason === 'picker_open' || reason === 'retry';
+}
+
 type LocationCatalogRefresherOptions = {
   fetchCatalog: () => Promise<VpnLocation[]>;
   commitCatalog: (locations: VpnLocation[]) => Promise<void> | void;
@@ -34,6 +41,7 @@ type LocationCatalogRefresherOptions = {
 
 export function createLocationCatalogRefresher(options: LocationCatalogRefresherOptions) {
   let inFlight: Promise<LocationCatalogRefreshResult> | null = null;
+  let lastCatalog: VpnLocation[] | null = null;
   const now = options.now ?? Date.now;
 
   return {
@@ -45,17 +53,24 @@ export function createLocationCatalogRefresher(options: LocationCatalogRefresher
       const operation = (async () => {
         try {
           const locations = await options.fetchCatalog();
-          await options.commitCatalog(locations);
+          const current = options.currentCatalog?.() ?? lastCatalog;
+          const stableLocations = current && areLocationCatalogsEqual(current, locations)
+            ? current
+            : locations;
+          if (stableLocations === locations) {
+            await options.commitCatalog(locations);
+          }
+          lastCatalog = stableLocations;
           options.onDiagnostics?.({
             reason,
             outcome: 'success',
             durationMs: Math.max(0, now() - startedAt),
             source: 'network',
-            entryCount: locations.length,
+            entryCount: stableLocations.length,
           });
-          return { locations, source: 'network' as const, reason };
+          return { locations: stableLocations, source: 'network' as const, reason };
         } catch (error) {
-          const prior = options.currentCatalog?.() ?? [];
+          const prior = options.currentCatalog?.() ?? lastCatalog ?? [];
           options.onDiagnostics?.({
             reason,
             outcome: 'error',
@@ -73,4 +88,26 @@ export function createLocationCatalogRefresher(options: LocationCatalogRefresher
       return inFlight;
     },
   };
+}
+
+function areLocationCatalogsEqual(left: VpnLocation[], right: VpnLocation[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  return left.every((location, index) => {
+    const candidate = right[index];
+    return Boolean(candidate)
+      && location.id === candidate.id
+      && location.countryCode === candidate.countryCode
+      && location.city === candidate.city
+      && location.displayName === candidate.displayName
+      && location.flagEmoji === candidate.flagEmoji
+      && location.availability === candidate.availability
+      && location.priority === candidate.priority
+      && location.status === candidate.status
+      && location.healthyNodes === candidate.healthyNodes
+      && location.endpoint === candidate.endpoint
+      && location.capabilities.length === candidate.capabilities.length
+      && location.capabilities.every((capability, capabilityIndex) => capability === candidate.capabilities[capabilityIndex]);
+  });
 }

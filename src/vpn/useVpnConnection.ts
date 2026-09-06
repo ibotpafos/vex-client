@@ -82,9 +82,11 @@ import { useVpnConnectionAnimations } from './useVpnConnectionAnimations';
 import { useCustomerRealtimeStatus } from '@/realtime/customer-realtime-context';
 import {
   createLocationCatalogRefresher,
+  isVisibleLocationCatalogRefresh,
   type LocationCatalogDiagnostics,
   type LocationCatalogRefreshReason,
 } from './locationCatalogRefresh';
+import { stabilizedLocationLatency } from './locationLatencyStability';
 import {
   publishVpnTrafficStats,
   readVpnTrafficStatsSnapshot,
@@ -141,8 +143,9 @@ function publishDeviceLocationLatencies(measurements: readonly (readonly [string
       continue;
     }
     const [locationId, latency] = measurement;
-    if (deviceLocationLatencyCache[locationId] !== latency) {
-      deviceLocationLatencyCache[locationId] = latency;
+    const stableLatency = stabilizedLocationLatency(deviceLocationLatencyCache[locationId], latency);
+    if (stableLatency !== null && deviceLocationLatencyCache[locationId] !== stableLatency) {
+      deviceLocationLatencyCache[locationId] = stableLatency;
       changed = true;
     }
   }
@@ -281,7 +284,13 @@ export function useVpnConnection() {
     onDiagnostics: (event) => catalogDiagnosticsRef.current(event),
   }), [catalogOwner, fetchLocationCatalog]);
   const refreshLocations = useCallback(async (reason: LocationCatalogRefreshReason) => {
-    setIsLocationsRefreshing(true);
+    const showRefresh = isVisibleLocationCatalogRefresh(
+      reason,
+      Boolean(catalogSnapshotRef.current?.length),
+    );
+    if (showRefresh) {
+      setIsLocationsRefreshing(true);
+    }
     try {
       const result = await locationCatalogRefresher.refresh(reason);
       setLocationsRefreshError(null);
@@ -290,7 +299,9 @@ export function useVpnConnection() {
       setLocationsRefreshError(error);
       throw error;
     } finally {
-      setIsLocationsRefreshing(false);
+      if (showRefresh) {
+        setIsLocationsRefreshing(false);
+      }
     }
   }, [locationCatalogRefresher]);
 
@@ -884,7 +895,7 @@ export function useVpnConnection() {
       try {
         const nextLatency = await measureEndpointLatency(activeDevice.endpoint || '');
         if (!cancelled) {
-          setClientLatencyMs(typeof nextLatency === 'number' && Number.isFinite(nextLatency) ? nextLatency : null);
+          setClientLatencyMs((currentLatency) => stabilizedLocationLatency(currentLatency, nextLatency));
         }
       } catch {
         if (!cancelled) {

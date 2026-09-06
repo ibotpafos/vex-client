@@ -68,7 +68,7 @@ import {
 } from '@/navigation/routes';
 import {
   autoSwitchTargetLocationId,
-  reconcileLocationSelection,
+  reconcileHydratedLocationSelection,
   type ServerSelectionMode,
 } from '@/vpn/serverSelection';
 import { switchVpnLocation } from '@/vpn/serverSwitch';
@@ -177,6 +177,7 @@ export function useVpnConnection() {
   const [antiLeakEnabled, setAntiLeakEnabledState] = useState(true);
   const [routingMode, setRoutingMode] = useState<VpnRoutingMode>(defaultVpnRoutingMode);
   const [serverSelectionMode, setServerSelectionModeState] = useState<ServerSelectionMode>('auto');
+  const [areVpnPreferencesHydrated, setAreVpnPreferencesHydrated] = useState(false);
   const [selectedLocationId, setSelectedLocationId] = useState('');
   const [isUpdateCenterVisible, setIsUpdateCenterVisible] = useState(false);
   const [isAppActive, setIsAppActive] = useState(AppState.currentState === 'active');
@@ -688,21 +689,34 @@ export function useVpnConnection() {
     submitClientDiagnosticsEvent,
   ]);
   useEffect(() => {
+    let active = true;
     void Promise.all([getSelectedVpnLocation(), getServerSelectionMode(), getAntiLeakEnabled(), getVpnRoutingMode()])
       .then(([locationId, mode, enabled, storedRoutingMode]) => {
+        if (!active) return;
         setSelectedLocationId(locationId ?? '');
         setServerSelectionModeState(mode);
         setAntiLeakEnabledState(enabled);
         setRoutingMode(storedRoutingMode);
       })
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => {
+        if (active) setAreVpnPreferencesHydrated(true);
+      });
+    return () => {
+      active = false;
+    };
   }, [setVpnStatus]);
 
   useEffect(() => {
-    if (availableLocations.length === 0) {
+    const reconciled = reconcileHydratedLocationSelection(
+      areVpnPreferencesHydrated,
+      serverSelectionMode,
+      selectedLocationId || null,
+      availableLocations,
+    );
+    if (!reconciled) {
       return;
     }
-    const reconciled = reconcileLocationSelection(serverSelectionMode, selectedLocationId || null, availableLocations);
     if (reconciled.selectedLocationId !== selectedLocationId) {
       setSelectedLocationId(reconciled.selectedLocationId);
       void setSelectedVpnLocation(reconciled.selectedLocationId).catch(() => undefined);
@@ -711,7 +725,7 @@ export function useVpnConnection() {
       setServerSelectionModeState(reconciled.mode);
       void setServerSelectionMode(reconciled.mode).catch(() => undefined);
     }
-  }, [availableLocations, selectedLocationId, serverSelectionMode]);
+  }, [areVpnPreferencesHydrated, availableLocations, selectedLocationId, serverSelectionMode]);
 
   useEffect(() => {
     diagnosticsSnapshotRef.current = {

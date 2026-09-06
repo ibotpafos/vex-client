@@ -28,6 +28,18 @@ export function reconcileLocationSelection(
   return { mode: 'auto', selectedLocationId: chooseBestVpnLocation(locations)?.id ?? '' };
 }
 
+export function reconcileHydratedLocationSelection(
+  preferencesHydrated: boolean,
+  mode: ServerSelectionMode,
+  selectedLocationId: string | null,
+  locations: VpnLocation[],
+): { mode: ServerSelectionMode; selectedLocationId: string } | null {
+  if (!preferencesHydrated || locations.length === 0) {
+    return null;
+  }
+  return reconcileLocationSelection(mode, selectedLocationId, locations);
+}
+
 export function chooseBestVpnLocation(locations: VpnLocation[]): VpnLocation | undefined {
   return locations
     .map((location, index) => ({ location, index }))

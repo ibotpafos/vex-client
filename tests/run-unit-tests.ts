@@ -55,6 +55,7 @@ import {
   autoSwitchTargetLocationId,
   chooseBestVpnLocation,
   locationDisplayName,
+  reconcileHydratedLocationSelection,
   reconcileLocationSelection,
   selectableVpnLocations,
 } from '../src/vpn/serverSelection';
@@ -342,6 +343,11 @@ assertDeepEqual(
 assertDeepEqual(
   reconcileLocationSelection('auto', null, [catalogFixture]),
   { mode: 'auto', selectedLocationId: catalogFixture.id },
+);
+assertEqual(reconcileHydratedLocationSelection(false, 'manual', catalogFixture.id, [catalogFixture]), null);
+assertDeepEqual(
+  reconcileHydratedLocationSelection(true, 'manual', catalogFixture.id, [catalogFixture]),
+  { mode: 'manual', selectedLocationId: catalogFixture.id },
 );
 
 assertEqual(vexWebsiteUrl('/dashboard', 'https://vexguard.app/'), 'https://vexguard.app/dashboard');

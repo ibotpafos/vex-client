@@ -1,3 +1,5 @@
+import { requireVpnLocationId } from '../vpn/locationId';
+
 export type DeviceCreatePlatform = 'android' | 'ios' | 'windows' | 'macos' | 'linux' | 'web';
 
 export type DeviceCreateClientDescriptor = {
@@ -43,4 +45,3 @@ export function buildCreateDeviceRequest(
     },
   };
 }
-import { requireVpnLocationId } from '../vpn/locationId';

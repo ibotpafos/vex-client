@@ -81,6 +81,11 @@ import { useVpnConnectionFlow } from './useVpnConnectionFlow';
 import { useVpnConnectionAnimations } from './useVpnConnectionAnimations';
 import { useCustomerRealtimeStatus } from '@/realtime/customer-realtime-context';
 import {
+  createLocationCatalogRefresher,
+  type LocationCatalogDiagnostics,
+  type LocationCatalogRefreshReason,
+} from './locationCatalogRefresh';
+import {
   publishVpnTrafficStats,
   readVpnTrafficStatsSnapshot,
   resetVpnTrafficStats,
@@ -239,18 +244,54 @@ export function useVpnConnection() {
   const [entitlementData, setEntitlementData] = useState<Entitlement | null>(null);
   const [entitlementError, setEntitlementError] = useState<unknown>(null);
   const [locationsData, setLocationsData] = useState<VpnLocation[] | null>(null);
+  const [locationsRefreshError, setLocationsRefreshError] = useState<unknown>(null);
+  const [isLocationsRefreshing, setIsLocationsRefreshing] = useState(false);
   const [deviceLocationLatencies, setDeviceLocationLatencies] = useState<Record<string, number>>(() => ({
     ...deviceLocationLatencyCache,
   }));
   const [devicesData, setDevicesData] = useState<VpnDevice[] | null>(null);
   const accessToken = session?.accessToken;
   const cacheUserId = session?.user.id ?? '';
+  const catalogOwner = `${cacheUserId}:${accessToken ?? ''}`;
   const entitlementQueryKey = useMemo(() => ['entitlement', accessToken] as const, [accessToken]);
   const locationsQueryKey = useMemo(() => ['vpn-locations', accessToken] as const, [accessToken]);
   const devicesQueryKey = useMemo(() => ['vpn-devices', accessToken] as const, [accessToken]);
   const fetchEntitlement = useCallback(() => entitlement(accessToken!), [accessToken]);
   const fetchVpnLocations = useCallback(() => vpnLocations(accessToken!), [accessToken]);
   const fetchVpnDevices = useCallback(() => vpnDevices(accessToken!), [accessToken]);
+  const catalogSnapshotRef = useRef<VpnLocation[] | null>(null);
+  const catalogOwnerRef = useRef(catalogOwner);
+  const catalogDiagnosticsRef = useRef<(event: LocationCatalogDiagnostics) => void>(() => {});
+  catalogSnapshotRef.current = locationsData ?? persistedLocations;
+  catalogOwnerRef.current = catalogOwner;
+  const fetchLocationCatalog = useCallback(() => queryClient.fetchQuery({
+    queryKey: locationsQueryKey,
+    queryFn: fetchVpnLocations,
+    staleTime: 0,
+  }), [fetchVpnLocations, locationsQueryKey, queryClient]);
+  const locationCatalogRefresher = useMemo(() => createLocationCatalogRefresher({
+    fetchCatalog: fetchLocationCatalog,
+    commitCatalog: (locations) => {
+      if (catalogOwnerRef.current === catalogOwner) {
+        setLocationsData(locations);
+      }
+    },
+    currentCatalog: () => catalogSnapshotRef.current,
+    onDiagnostics: (event) => catalogDiagnosticsRef.current(event),
+  }), [catalogOwner, fetchLocationCatalog]);
+  const refreshLocations = useCallback(async (reason: LocationCatalogRefreshReason) => {
+    setIsLocationsRefreshing(true);
+    try {
+      const result = await locationCatalogRefresher.refresh(reason);
+      setLocationsRefreshError(null);
+      return result;
+    } catch (error) {
+      setLocationsRefreshError(error);
+      throw error;
+    } finally {
+      setIsLocationsRefreshing(false);
+    }
+  }, [locationCatalogRefresher]);
 
   const cachedSelectedProfile = accessToken
     ? queryClient.getQueryData<VpnProfile>(['vpn-profile', accessToken, selectedLocationId, routingMode])
@@ -325,10 +366,11 @@ export function useVpnConnection() {
 
   useEffect(() => {
     let cancelled = false;
+    setPersistedEntitlement(null);
+    setPersistedLocations(null);
+    setPersistedDevices(null);
+    setLocationsData(null);
     if (!cacheUserId) {
-      setPersistedEntitlement(null);
-      setPersistedLocations(null);
-      setPersistedDevices(null);
       return undefined;
     }
 
@@ -412,30 +454,18 @@ export function useVpnConnection() {
   useEffect(() => {
     if (!accessToken || !hasVpnAccess) {
       setLocationsData(null);
+      setLocationsRefreshError(null);
       return undefined;
     }
 
-    let cancelled = false;
-    const refreshLocations = async () => {
-      const value = await queryClient.fetchQuery({
-        queryKey: locationsQueryKey,
-        queryFn: fetchVpnLocations,
-        staleTime: locationRefreshMs,
-      }).catch(() => null);
-      if (!cancelled && value) {
-        setLocationsData(value);
-      }
-    };
-
-    void refreshLocations();
+    void refreshLocations('startup').catch(() => undefined);
     const timer = setInterval(() => {
-      void refreshLocations();
+      void refreshLocations('interval').catch(() => undefined);
     }, locationRefreshMs);
     return () => {
-      cancelled = true;
       clearInterval(timer);
     };
-  }, [accessToken, fetchVpnLocations, hasVpnAccess, locationsQueryKey, queryClient]);
+  }, [accessToken, hasVpnAccess, refreshLocations]);
 
   useEffect(() => {
     if (!accessToken || !activeProfile?.device?.id || !isConnected) {
@@ -497,6 +527,12 @@ export function useVpnConnection() {
     setVpnError(null);
   }, [signOut, clearProfile, setVpnStatus]);
 
+  const refreshSessionAndCatalog = useCallback(async () => {
+    const refreshed = await refreshSession();
+    void refreshLocations('session_refresh').catch(() => undefined);
+    return refreshed;
+  }, [refreshLocations, refreshSession]);
+
   const diagnostics = useVpnDiagnostics({
     session,
     activeProfileDeviceId,
@@ -506,7 +542,7 @@ export function useVpnConnection() {
     diagnosticsSnapshotRef,
     entitlementQueryError: entitlementError,
     cachedEntitlement,
-    refreshSession,
+    refreshSession: refreshSessionAndCatalog,
   });
 
   const {
@@ -516,6 +552,16 @@ export function useVpnConnection() {
     submitClientDiagnosticsEvent,
     submitVpnDiagnostics,
   } = diagnostics;
+
+  catalogDiagnosticsRef.current = (event) => {
+    void submitClientDiagnosticsEvent('vpn_location_catalog_refresh', event.outcome, {
+      refresh_reason: event.reason,
+      refresh_duration_ms: event.durationMs,
+      catalog_source: event.source,
+      catalog_entry_count: event.entryCount,
+      catalog_error_category: event.errorCategory,
+    }).catch(() => undefined);
+  };
 
   const refreshVpnStatus = useCallback(async (failureEvent: string) => {
     try {
@@ -563,7 +609,8 @@ export function useVpnConnection() {
   const selectedLatencyText = locationLatencyText(selectedLocation);
 
   const canCancelConnecting = connectionPhase === 'connecting';
-  const powerButtonDisabled = isVpnBusy && !canCancelConnecting;
+  const powerButtonDisabled = (isVpnBusy && !canCancelConnecting)
+    || (!selectedLocation && !isConnected && !isLeakBlocked);
   const processingDevicePSKEventsRef = useRef(false);
 
   useEffect(() => {
@@ -640,7 +687,6 @@ export function useVpnConnection() {
     setVpnStatus,
     submitClientDiagnosticsEvent,
   ]);
-
   useEffect(() => {
     void Promise.all([getSelectedVpnLocation(), getServerSelectionMode(), getAntiLeakEnabled(), getVpnRoutingMode()])
       .then(([locationId, mode, enabled, storedRoutingMode]) => {
@@ -762,6 +808,7 @@ export function useVpnConnection() {
       const isActive = state === 'active';
       setIsAppActive(isActive);
       if (state === 'active') {
+        void refreshLocations('foreground').catch(() => undefined);
         void refreshVpnStatus('native_status_on_active_failed');
         refreshManagedProfile({ reason: 'profile_updated' }).catch((error) => {
           void submitClientDiagnosticsEvent('profile_refresh_on_active_failed', 'error', {
@@ -771,7 +818,7 @@ export function useVpnConnection() {
       }
     });
     return () => subscription.remove();
-  }, [refreshManagedProfile, refreshVpnStatus, session, submitClientDiagnosticsEvent]);
+  }, [refreshLocations, refreshManagedProfile, refreshVpnStatus, session, submitClientDiagnosticsEvent]);
 
   useEffect(() => {
     if (!isAppActive || !supportsNativeLatencyProbe()) {
@@ -1337,6 +1384,7 @@ export function useVpnConnection() {
   }, [availableLocations, isConnected, isVpnBusy, selectedLocationId, switchConnectedVpnLocation]);
 
   const openServerPicker = useCallback((visibleLatencyText?: string, visibleLocationId?: string) => {
+    void refreshLocations('picker_open').catch(() => undefined);
     playSelectionHaptic();
     router.push({
       pathname: SERVER_PICKER_ROUTE,
@@ -1345,7 +1393,9 @@ export function useVpnConnection() {
         activeLocationId: visibleLocationId || '',
       },
     });
-  }, []);
+  }, [refreshLocations]);
+
+  const retryLocations = useCallback(() => refreshLocations('retry').then(() => undefined), [refreshLocations]);
 
   const closeServerPicker = useCallback(() => {
     playSelectionHaptic();
@@ -1405,6 +1455,9 @@ export function useVpnConnection() {
     selectedLatencyText,
     canCancelConnecting,
     powerButtonDisabled,
+    isLocationsRefreshing,
+    locationsRefreshError,
+    retryLocations,
     handleSignOut,
     handlePowerPress,
     openSubscriptionModal,

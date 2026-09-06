@@ -71,6 +71,7 @@ import type { VpnProfile } from '../src/vpn/profile';
 import { managedProfileAmneziaConfig } from '../src/vpn/amneziaConfig';
 import { managedProfileAWGVersion, withManagedProfileAWGCapability } from '../src/vpn/profileCapabilities';
 import { serverPickerActionForSource } from '../src/screens/server-picker-interactions';
+import { serverPickerLocationRows } from '../src/components/server-picker-model';
 import { trafficSessionLabel } from '../src/components/traffic-summary';
 import appConfig from '../app.config';
 import type { ConfigContext } from '@expo/config';
@@ -227,6 +228,11 @@ class FakeRealtimeRequest {
   assertEqual(timers.some((timer) => timer.milliseconds === 1_000), true);
 }
 import { normalizeLocationCatalog } from '../src/vpn/locationCatalog';
+import { createLocationCatalogRefresher } from '../src/vpn/locationCatalogRefresh';
+import {
+  locationCatalogCacheSchemaVersion,
+  validCachedValueForUser,
+} from '../src/vpn/vpnQueryCachePolicy';
 
 const catalogFixture: VpnLocation = {
   id: 'edge-a',
@@ -246,6 +252,47 @@ assertDeepEqual(
     { id: 'edge-a', country_code: 'XY', city: 'First', display_name: 'First Edge', priority: 10, capabilities: ['awg31'], availability: 'available', status: 'healthy', healthy_nodes: 1 },
   ]).map((location) => [location.id, location.displayName]),
   [['edge-a', 'First Edge'], ['edge-b', 'Second']],
+);
+assertEqual(locationCatalogCacheSchemaVersion, 2);
+const twentyCatalogLocations = Array.from({ length: 20 }, (_, index) => ({
+  ...catalogFixture,
+  id: `edge-${index + 1}`,
+  displayName: `Edge ${index + 1}`,
+  priority: index + 1,
+}));
+const twentyPickerRows = serverPickerLocationRows(twentyCatalogLocations, 'manual', 'edge-20');
+assertEqual(twentyPickerRows.length, 20);
+assertDeepEqual(twentyPickerRows[19], {
+  location: twentyCatalogLocations[19],
+  selected: true,
+  testID: 'server-picker-edge-20',
+});
+assertDeepEqual(
+  validCachedValueForUser(
+    { savedAtMs: 1, schemaVersion: 2, userId: 'user-a', value: [catalogFixture] },
+    'user-a',
+    locationCatalogCacheSchemaVersion,
+    (value): value is VpnLocation[] => Array.isArray(value),
+  ),
+  [catalogFixture],
+);
+assertEqual(
+  validCachedValueForUser(
+    { savedAtMs: 1, schemaVersion: 2, userId: 'user-a', value: [catalogFixture] },
+    'user-b',
+    locationCatalogCacheSchemaVersion,
+    (value): value is VpnLocation[] => Array.isArray(value),
+  ),
+  null,
+);
+assertEqual(
+  validCachedValueForUser(
+    { savedAtMs: 1, schemaVersion: 1, userId: 'user-a', value: [catalogFixture] },
+    'user-a',
+    locationCatalogCacheSchemaVersion,
+    (value): value is VpnLocation[] => Array.isArray(value),
+  ),
+  null,
 );
 assertThrows(
   () => normalizeLocationCatalog([
@@ -1349,6 +1396,68 @@ async function runAsyncTests(): Promise<void> {
   runRecoveryBackoffTests();
   await testFreshSameLocationProfileConnectsSecondNode();
   await runServerSwitchTests();
+  await runLocationCatalogRefreshTests();
+}
+
+async function runLocationCatalogRefreshTests(): Promise<void> {
+  let resolvePending!: (value: VpnLocation[]) => void;
+  const pending = new Promise<VpnLocation[]>((resolve) => {
+    resolvePending = resolve;
+  });
+  let calls = 0;
+  const commits: VpnLocation[][] = [];
+  const diagnostics: Record<string, unknown>[] = [];
+  const refresher = createLocationCatalogRefresher({
+    fetchCatalog: () => {
+      calls += 1;
+      return pending;
+    },
+    commitCatalog: async (locations) => {
+      commits.push(locations);
+    },
+    now: () => 0,
+    onDiagnostics: (event) => diagnostics.push(event),
+  });
+  const first = refresher.refresh('startup');
+  const second = refresher.refresh('picker_open');
+  assertEqual(calls, 1);
+  resolvePending([catalogFixture]);
+  assertDeepEqual(await first, await second);
+  assertDeepEqual(commits, [[catalogFixture]]);
+  assertDeepEqual(diagnostics[0], {
+    reason: 'startup',
+    outcome: 'success',
+    durationMs: 0,
+    source: 'network',
+    entryCount: 1,
+  });
+
+  const prior = [catalogFixture];
+  const failureEvents: Record<string, unknown>[] = [];
+  const failing = createLocationCatalogRefresher({
+    fetchCatalog: async () => { throw new Error('secret response body'); },
+    commitCatalog: async () => { throw new Error('must not commit'); },
+    currentCatalog: () => prior,
+    now: () => 10,
+    onDiagnostics: (event) => failureEvents.push(event),
+  });
+  await assertRejects(() => failing.refresh('retry'), 'secret response body');
+  assertDeepEqual(failureEvents, [{
+    reason: 'retry',
+    outcome: 'error',
+    durationMs: 0,
+    source: 'stale_cache',
+    entryCount: 1,
+    errorCategory: 'network',
+  }]);
+
+  const emptyCommits: VpnLocation[][] = [];
+  const empty = createLocationCatalogRefresher({
+    fetchCatalog: async () => [],
+    commitCatalog: async (locations) => { emptyCommits.push(locations); },
+  });
+  await empty.refresh('foreground');
+  assertDeepEqual(emptyCommits, [[]]);
 }
 
 async function testFreshSameLocationProfileConnectsSecondNode(): Promise<void> {

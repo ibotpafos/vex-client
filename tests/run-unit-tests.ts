@@ -501,7 +501,7 @@ assertDeepEqual(
 
   const localConfig = appConfig(configContext);
   assertEqual(localConfig.updates?.enabled, false);
-  assertEqual(localConfig.runtimeVersion, '1.0.56');
+  assertEqual(localConfig.runtimeVersion, '1.0.57');
 
   process.env.VEX_BUILD_PROFILE = 'production';
   process.env.VEX_UPDATES_ENABLED = '1';

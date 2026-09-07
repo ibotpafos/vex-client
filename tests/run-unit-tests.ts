@@ -513,7 +513,12 @@ assertDeepEqual(
   assertEqual((missingRuntimeError as Error | undefined)?.message.includes('VEX_RUNTIME_VERSION is required'), true);
 
   process.env.VEX_RUNTIME_VERSION = '1.0.55';
-  assertEqual(appConfig(configContext).updates?.enabled, true);
+  const productionConfig = appConfig(configContext);
+  assertEqual(productionConfig.updates?.enabled, true);
+  assertEqual(
+    productionConfig.updates?.requestHeaders?.['expo-app-id'],
+    productionConfig.extra?.eas?.projectId,
+  );
 
   for (const [key, value] of Object.entries(savedEnvironment)) {
     if (value === undefined) {

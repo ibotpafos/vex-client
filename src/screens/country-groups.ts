@@ -43,3 +43,34 @@ export function countryGroups(locations: VpnLocation[], selectedID: string, sele
     };
   }).sort((a, b) => Number(b.isSelected) - Number(a.isSelected) || a.id.localeCompare(b.id)).slice(0, Math.max(0, limit));
 }
+
+/** Keep FlatList data and item identities stable when polling returns the same catalog. */
+export function stableCountryGroups(previous: CountryGroup[], next: CountryGroup[]): CountryGroup[] {
+  if (previous.length !== next.length) return next;
+  const stable = next.map((group, index) => sameCountryGroup(previous[index], group) ? previous[index] : group);
+  return stable.every((group, index) => group === previous[index]) ? previous : stable;
+}
+
+function sameCountryGroup(left: CountryGroup | undefined, right: CountryGroup): boolean {
+  if (!left || left.id !== right.id || left.isSelected !== right.isSelected || left.availableNodeCount !== right.availableNodeCount) return false;
+  if (!sameLocationCard(left.representative, right.representative) || left.locations.length !== right.locations.length) return false;
+  return left.locations.every((location, index) => sameLocationCard(location, right.locations[index]));
+}
+
+function sameLocationCard(left: VpnLocation, right: VpnLocation | undefined): boolean {
+  const leftCapabilities = left.capabilities ?? [];
+  const rightCapabilities = right?.capabilities ?? [];
+  return Boolean(right)
+    && left.id === right!.id
+    && left.countryCode === right!.countryCode
+    && left.city === right!.city
+    && left.displayName === right!.displayName
+    && left.flagEmoji === right!.flagEmoji
+    && left.availability === right!.availability
+    && left.priority === right!.priority
+    && left.status === right!.status
+    && left.healthyNodes === right!.healthyNodes
+    && left.endpoint === right!.endpoint
+    && leftCapabilities.length === rightCapabilities.length
+    && leftCapabilities.every((capability, index) => capability === rightCapabilities[index]);
+}

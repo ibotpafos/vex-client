@@ -1,9 +1,10 @@
 import { StatusBar } from 'expo-status-bar';
 import { router } from 'expo-router';
 import { Power, Settings } from 'lucide-react-native';
-import React, { useState } from 'react';
-import { Animated, FlatList, Platform, ScrollView, Text, useWindowDimensions, View } from 'react-native';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import { Animated, FlatList, Platform, ScrollView, Text, useWindowDimensions, View, type ListRenderItem } from 'react-native';
 
+import type { VpnLocation } from '@/api/vexApi';
 import { HomeNativeHeader } from '@/components/home-native-header';
 import { MobileUpdateNoticeBanner, UpdateCenterButton } from '@/components/update-center';
 import { useRenderProfilerMark } from '@/debug/render-profiler';
@@ -12,15 +13,17 @@ import { VexNativeActivityIndicator } from '@/ui/native-activity-indicator';
 import { vexTheme } from '@/ui/vex-theme';
 import { VexScreen, vexSharedStyles, VexPressable } from '@/ui/vex-ui';
 import { useVpnConnectionContext } from '@/vpn/vpn-connection-context';
-import type { VpnLocation } from '@/api/vexApi';
 
 import { ServerChip } from '../components/server-chip';
 import { ServerPickerModal } from '../components/server-picker-modal';
 import { TrafficStats } from '../components/traffic-stats';
 import { type ConnectionPhase, locationLatencyText, serverLocationLabel } from './home-screen-helpers';
-import { countryGroups } from './country-groups';
+import { countryGroups, stableCountryGroups, type CountryGroup } from './country-groups';
 import { serverPickerActionForSource } from './server-picker-interactions';
 import { styles } from './home-screen.styles';
+import {
+  locationCarouselItemLayout,
+} from './home-location-previews';
 
 export default function App() {
   useRenderProfilerMark('HomeScreen');
@@ -45,6 +48,10 @@ export default function App() {
     handleLocationPress,
     handleAutoServerSelectionPress,
     availableLocations,
+    isLocationsRefreshing,
+    locationsRefreshError,
+    refreshLocationsForPicker,
+    retryLocations,
     openUpdateCenter,
     closeUpdateCenter,
   } = useVpnConnectionContext();
@@ -88,10 +95,55 @@ export default function App() {
       : connectionPhase === 'disconnecting'
         ? 'Завершаем'
         : 'VPN выключен';
-  const groups = countryGroups(availableLocations, selectedLocationId, selectedLocation);
+  const groupsRef = useRef<CountryGroup[]>([]);
+  const groups = stableCountryGroups(
+    groupsRef.current,
+    countryGroups(availableLocations, selectedLocationId, selectedLocation),
+  );
+  groupsRef.current = groups;
   const locationPreviews = groups.slice(0, 2);
   const carouselWidth = Math.min(viewportWidth - (viewportWidth <= 360 ? 16 : 24), 430);
   const carouselCardWidth = carouselWidth - 44;
+  const carouselSnapInterval = carouselCardWidth + vexTheme.spacing.sm;
+  const locationPreviewCount = locationPreviews.length;
+  const getLocationItemLayout = useCallback(
+    (_data: ArrayLike<CountryGroup> | null | undefined, index: number) => (
+      locationCarouselItemLayout(carouselCardWidth, vexTheme.spacing.sm, index)
+    ),
+    [carouselCardWidth],
+  );
+  const carouselContentContainerStyle = useMemo(
+    () => ({ paddingRight: carouselWidth - carouselCardWidth }),
+    [carouselCardWidth, carouselWidth],
+  );
+  const renderLocationPreview = useCallback<ListRenderItem<CountryGroup>>(({ item: group }) => {
+    const location = group.representative;
+    return (
+      <LocationCarouselItem
+        availableNodeCount={group.availableNodeCount}
+        disabled={isVpnBusy}
+        isAutoMode={group.isSelected && serverSelectionMode === 'auto'}
+        isSelected={group.isSelected}
+        latencyText={group.isSelected ? selectedLatencyText : locationLatencyText(location)}
+        location={location}
+        onSelect={() => {
+          if (serverPickerActionForSource('carousel') !== 'open_picker') return;
+          setServerPickerSnapshot({
+            latencyText: selectedLatencyText,
+            countryTitle: serverLocationLabel(location),
+            locations: group.locations.map((member) => ({ ...member })),
+          });
+          requestAnimationFrame(() => setIsServerPickerVisible(true));
+        }}
+        width={carouselCardWidth}
+      />
+    );
+  }, [
+    carouselCardWidth,
+    isVpnBusy,
+    selectedLatencyText,
+    serverSelectionMode,
+  ]);
 
   return (
     <VexScreen contentStyle={styles.shell}>
@@ -162,6 +214,7 @@ export default function App() {
                       latencyText: selectedLatencyText,
                       locations: groups.flatMap((group) => group.locations.map((location) => ({ ...location }))),
                     });
+                    void refreshLocationsForPicker().catch(() => undefined);
                     requestAnimationFrame(() => setIsServerPickerVisible(true));
                   }}
                   style={styles.locationsAllButton}
@@ -172,41 +225,23 @@ export default function App() {
                 </VexPressable>
               </View>
               <FlatList
+                bounces={false}
+                contentContainerStyle={carouselContentContainerStyle}
                 data={locationPreviews}
                 decelerationRate="fast"
+                disableIntervalMomentum
+                getItemLayout={getLocationItemLayout}
                 horizontal
-                keyExtractor={(group) => group.id}
-                renderItem={({ item: group }) => {
-                  const location = group.representative;
-                  const isSelected = group.isSelected;
-                  return (
-                    <View style={[styles.locationCarouselItem, { width: carouselCardWidth }]}>
-                      <ServerChip
-                        disabled={isVpnBusy}
-                        isAutoMode={isSelected && serverSelectionMode === 'auto'}
-                        isSelected={isSelected}
-                        key={group.id}
-                        availableNodeCount={group.availableNodeCount}
-                        latencyText={isSelected ? selectedLatencyText : locationLatencyText(location)}
-                        location={location}
-                        onPress={() => {
-                          if (serverPickerActionForSource('carousel') !== 'open_picker') {
-                            return;
-                          }
-                          setServerPickerSnapshot({
-                            latencyText: selectedLatencyText,
-                            countryTitle: serverLocationLabel(location),
-                            locations: group.locations.map((member) => ({ ...member })),
-                          });
-                          requestAnimationFrame(() => setIsServerPickerVisible(true));
-                        }}
-                      />
-                    </View>
-                  );
-                }}
+                initialNumToRender={locationPreviewCount}
+                keyExtractor={countryGroupKeyExtractor}
+                maxToRenderPerBatch={locationPreviewCount}
+                nestedScrollEnabled
+                overScrollMode="never"
+                removeClippedSubviews={false}
+                renderItem={renderLocationPreview}
                 showsHorizontalScrollIndicator={false}
                 snapToAlignment="start"
-                snapToInterval={carouselCardWidth + vexTheme.spacing.sm}
+                snapToInterval={carouselSnapInterval}
                 style={styles.locationCarousel}
               />
             </View>
@@ -232,7 +267,9 @@ export default function App() {
       <ServerPickerModal
         isVpnBusy={isVpnBusy}
         countryTitle={serverPickerSnapshot?.countryTitle}
+        isRefreshing={isLocationsRefreshing}
         locations={serverPickerSnapshot?.locations ?? availableLocations}
+        refreshError={locationsRefreshError}
         selectedLatencyText={serverPickerSnapshot?.latencyText ?? selectedLatencyText}
         selectionMode={serverSelectionMode}
         selectedLocationId={selectedLocationId}
@@ -242,6 +279,9 @@ export default function App() {
           void handleAutoServerSelectionPress(false);
         }}
         onClose={() => setIsServerPickerVisible(false)}
+        onRetry={() => {
+          void retryLocations().catch(() => undefined);
+        }}
         onSelect={(locationId) => {
           setIsServerPickerVisible(false);
           void handleLocationPress(locationId, false);
@@ -250,6 +290,48 @@ export default function App() {
     </VexScreen>
   );
 }
+
+function countryGroupKeyExtractor(group: CountryGroup): string {
+  return group.id;
+}
+
+type LocationCarouselItemProps = {
+  availableNodeCount: number;
+  disabled: boolean;
+  isAutoMode: boolean;
+  isSelected: boolean;
+  latencyText: string;
+  location: VpnLocation;
+  onSelect: (locationId: string) => void;
+  width: number;
+};
+
+const LocationCarouselItem = React.memo(function LocationCarouselItem({
+  availableNodeCount,
+  disabled,
+  isAutoMode,
+  isSelected,
+  latencyText,
+  location,
+  onSelect,
+  width,
+}: LocationCarouselItemProps) {
+  const handlePress = useCallback(() => onSelect(location.id), [location.id, onSelect]);
+  const itemStyle = useMemo(() => [styles.locationCarouselItem, { width }], [width]);
+  return (
+    <View style={itemStyle}>
+      <ServerChip
+        availableNodeCount={availableNodeCount}
+        disabled={disabled}
+        isAutoMode={isAutoMode}
+        isSelected={isSelected}
+        latencyText={latencyText}
+        location={location}
+        onPress={handlePress}
+      />
+    </View>
+  );
+});
 
 type PowerHeroProps = {
   connectionPhase: ConnectionPhase;

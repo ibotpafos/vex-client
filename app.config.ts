@@ -41,7 +41,7 @@ export default function appConfig({ config }: ConfigContext): ExpoConfig {
       enabled: updatesEnabled,
       checkAutomatically: 'ON_LOAD',
       fallbackToCacheTimeout: 0,
-      ...(updatesEnabled ? buildUpdatesConfig(updateUrl, updateChannel, codeSigningCertificate) : {}),
+      ...(updatesEnabled ? buildUpdatesConfig(updateUrl, updateChannel, codeSigningCertificate, projectId) : {}),
     },
     extra: {
       ...baseConfig.expo.extra,
@@ -138,10 +138,16 @@ function resolveUpdateUrl(): string {
   return defaultOtaUpdateUrl;
 }
 
-function buildUpdatesConfig(updateUrl: string, channel: string, codeSigningCertificate: string): NonNullable<ExpoConfig['updates']> {
+function buildUpdatesConfig(
+  updateUrl: string,
+  channel: string,
+  codeSigningCertificate: string,
+  projectId: string,
+): NonNullable<ExpoConfig['updates']> {
   const config: NonNullable<ExpoConfig['updates']> = {
     url: updateUrl,
     requestHeaders: {
+      'expo-app-id': projectId,
       'expo-channel-name': channel,
     },
   };

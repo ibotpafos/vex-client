@@ -1,4 +1,5 @@
 import type { VpnProfile } from './profile';
+import { comparableVpnLocationId, requireVpnLocationId } from './locationId';
 
 export const hotVpnProfilesStorageKey = 'vex.vpn.hot_profiles.v1';
 export const hotVpnProfileSchemaVersion = 2;
@@ -98,15 +99,15 @@ export function hotVpnProfileRejectionReason(
 
 export function hotVpnProfileStoreKey(userId: string, locationId: string, runtimeKey: string, routingMode?: string): string {
   const normalizedRoutingMode = routingMode?.trim().toLowerCase();
-  return `${userId.trim()}:${runtimeKey}:${normalizeLocationId(locationId)}:${normalizedRoutingMode || 'default'}`;
+  return `${userId.trim()}:${runtimeKey}:${comparableVpnLocationId(requireVpnLocationId(locationId))}:${normalizedRoutingMode || 'default'}`;
 }
 
 export function normalizeHotProfileLocationId(locationId: string): string {
-  return normalizeLocationId(locationId);
+  return requireVpnLocationId(locationId);
 }
 
 function normalizeLocationId(locationId: string): string {
-  return locationId.trim().toLowerCase() || 'de';
+  return comparableVpnLocationId(locationId);
 }
 
 function normalizeOptionalEndpoint(endpoint?: string): string | undefined {

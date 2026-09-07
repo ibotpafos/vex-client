@@ -8,23 +8,32 @@ import {
 } from "@expo/ui";
 import {
   ListItem as ComposeListItem,
+  LazyColumn,
   ModalBottomSheet,
   Text as ComposeText,
   type ModalBottomSheetRef,
 } from "@expo/ui/jetpack-compose";
-import { clickable } from "@expo/ui/jetpack-compose/modifiers";
+import { clickable, height, testID as composeTestID } from "@expo/ui/jetpack-compose/modifiers";
 import type { VpnLocation } from "@/api/vexApi";
 import type { ServerSelectionMode } from "@/vpn/serverSelection";
 import {
   locationLatencyText,
+  locationStatusText,
 } from "../screens/home-screen-helpers";
+import {
+  homeLocationCardLabel,
+  serverLocationTechnicalLabel,
+} from "../screens/home-location-previews";
+import { serverPickerLocationRows } from "./server-picker-model";
 
 import { isLocationAvailable } from "../screens/country-groups";
 
 export interface ServerPickerModalProps {
   countryTitle?: string;
   isVpnBusy: boolean;
+  isRefreshing?: boolean;
   locations: VpnLocation[];
+  refreshError?: unknown;
   selectedLatencyText?: string;
   selectionMode: ServerSelectionMode;
   selectedLocationId: string;
@@ -32,6 +41,7 @@ export interface ServerPickerModalProps {
   onAutoSelect: () => void;
   onClose: () => void;
   onSelect: (locationId: string) => void;
+  onRetry?: () => void;
 }
 
 export const ServerPickerModal = React.memo(function ServerPickerModal({
@@ -112,8 +122,54 @@ function ServerPickerBody({
   selectedLocationId,
   selectionMode,
   onAutoSelect,
+  onRetry,
   onSelect,
+  isRefreshing,
+  refreshError,
 }: ServerPickerContentProps) {
+  const locationRows = serverPickerLocationRows(locations, selectionMode, selectedLocationId);
+  const rows = (
+    <>
+      {!countryTitle ? <ServerPickerRow
+        leading="↻"
+        onPress={isVpnBusy || locations.length === 0 ? undefined : onAutoSelect}
+        supportingText="Лучший доступный сервер"
+        testID="server-picker-auto"
+        trailing={selectionMode === "auto" ? "✓" : undefined}
+      >
+        Автоматически
+      </ServerPickerRow> : null}
+      {locationRows.map(({ location, selected, testID }) => {
+        const latency = selected && selectedLatencyText
+          ? selectedLatencyText
+          : locationLatencyText(location);
+        const technicalLabel = serverLocationTechnicalLabel(location);
+        const statusText = `${locationStatusText(location)} · ${latency}`;
+        return (
+          <ServerPickerRow
+            key={location.id}
+            leading={location.flagEmoji || location.countryCode}
+            onPress={isVpnBusy || !isLocationAvailable(location) ? undefined : () => onSelect(location.id)}
+            supportingText={technicalLabel ? `${technicalLabel} · ${statusText}` : statusText}
+            testID={testID}
+            trailing={selected ? "✓" : undefined}
+          >
+            {homeLocationCardLabel(location)}
+          </ServerPickerRow>
+        );
+      })}
+      {locations.length === 0 ? (
+        <ServerPickerRow
+          leading="↻"
+          onPress={isVpnBusy || isRefreshing ? undefined : onRetry}
+          supportingText={refreshError ? "Не удалось обновить список" : "Список серверов пока пуст"}
+          testID="server-picker-retry"
+        >
+          {isRefreshing ? "Обновляем…" : "Повторить"}
+        </ServerPickerRow>
+      ) : null}
+    </>
+  );
   return (
     <Column spacing={4} style={styles.content} testID="server-picker-sheet">
       <UniversalText textStyle={styles.eyebrow}>VEX VPN</UniversalText>
@@ -121,35 +177,13 @@ function ServerPickerBody({
       <UniversalText textStyle={styles.subtitle}>
         {countryTitle ? "Выберите сервер этой страны." : "Выберите страну и сервер для текущей сессии."}
       </UniversalText>
-      <Column spacing={0}>
-        {!countryTitle ? <ServerPickerRow
-          leading="↻"
-          onPress={isVpnBusy ? undefined : onAutoSelect}
-          supportingText="Лучший доступный сервер"
-          testID="server-picker-auto"
-          trailing={selectionMode === "auto" ? "✓" : undefined}
-        >
-          Автоматически
-        </ServerPickerRow> : null}
-        {locations.map((location) => {
-          const selected = selectionMode === "manual" && location.id === selectedLocationId;
-          const latency = selected && selectedLatencyText
-            ? selectedLatencyText
-            : locationLatencyText(location);
-          return (
-            <ServerPickerRow
-              key={location.id}
-              leading={location.flagEmoji || location.countryCode}
-              onPress={isVpnBusy || !isLocationAvailable(location) ? undefined : () => onSelect(location.id)}
-              supportingText={`${isLocationAvailable(location) ? "Доступен" : "Недоступен"} · ${latency} · ID: ${location.id}`}
-              testID={`server-picker-${location.id}`}
-              trailing={selected ? "✓" : undefined}
-            >
-              {location.city || location.id}
-            </ServerPickerRow>
-          );
-        })}
-      </Column>
+      {Platform.OS === "android" ? (
+        <LazyColumn contentPadding={{ bottom: 24 }} modifiers={[height(280)]}>
+          {rows}
+        </LazyColumn>
+      ) : (
+        <Column spacing={0}>{rows}</Column>
+      )}
     </Column>
   );
 }
@@ -159,6 +193,7 @@ function ServerPickerRow({
   leading,
   onPress,
   supportingText,
+  testID,
   trailing,
 }: {
   children: string;
@@ -171,7 +206,7 @@ function ServerPickerRow({
   return (
     <ComposeListItem
       colors={styles.rowColors}
-      modifiers={onPress ? [clickable(onPress)] : undefined}
+      modifiers={[composeTestID(testID), ...(onPress ? [clickable(onPress)] : [])]}
       shadowElevation={0}
       tonalElevation={0}
     >

@@ -1,4 +1,4 @@
-import { countryGroups, availableNodeCountText, isLocationAvailable } from '../src/screens/country-groups';
+import { countryGroups, availableNodeCountText, isLocationAvailable, stableCountryGroups } from '../src/screens/country-groups';
 import { serverPickerActionForSource } from '../src/screens/server-picker-interactions';
 import type { VpnLocation } from '../src/api/types';
 const assert = {
@@ -9,7 +9,7 @@ const assert = {
     if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error(`Expected ${JSON.stringify(expected)}, received ${JSON.stringify(actual)}`);
   },
 };
-const location = (id: string, countryCode = 'DE', extra: Partial<VpnLocation> = {}): VpnLocation => ({ id, countryCode, city: id, availability: 'available', status: 'healthy', healthyNodes: 1, ...extra });
+const location = (id: string, countryCode = 'DE', extra: Partial<VpnLocation> = {}): VpnLocation => ({ id, countryCode, city: id, displayName: id, flagEmoji: '', availability: 'available', priority: 0, status: 'healthy', healthyNodes: 1, capabilities: [], ...extra });
 const features = location('de-features', ' de ', { city: 'AWG 3.1 Features', healthyNodes: 2 });
 const selected = location('de-offline', 'DE', { status: 'offline', healthyNodes: 7 });
 const input = [features, location('de-normal'), features, location('fi', 'FI'), selected];
@@ -25,6 +25,15 @@ assert.equal(countryGroups([location('unknown-a', ''), location('unknown-b', '?'
 assert.equal(countryGroups([features], selected.id, selected)[0].locations.length, 2);
 assert.equal(countryGroups([], '').length, 0);
 assert.equal(countryGroups(input, '', undefined, 0).length, 0);
+const firstSnapshot = countryGroups(input, selected.id, selected);
+const equivalentSnapshot = countryGroups(input.map(item => ({ ...item })), selected.id, { ...selected });
+const stableSnapshot = stableCountryGroups(firstSnapshot, equivalentSnapshot);
+assert.equal(stableSnapshot, firstSnapshot);
+assert.equal(stableSnapshot[0], firstSnapshot[0]);
+const changedSnapshot = countryGroups(input.map(item => item.id === 'fi' ? { ...item, healthyNodes: 2 } : { ...item }), selected.id, { ...selected });
+const partiallyStableSnapshot = stableCountryGroups(firstSnapshot, changedSnapshot);
+assert.equal(partiallyStableSnapshot[0], firstSnapshot[0]);
+assert.equal(partiallyStableSnapshot[1] === firstSnapshot[1], false);
 for (const availability of ['maintenance', 'unavailable', 'retired']) assert.equal(isLocationAvailable(location('x', 'DE', { availability })), false);
 for (const status of ['offline', 'unknown']) assert.equal(isLocationAvailable(location('x', 'DE', { status })), false);
 for (const healthyNodes of [-1, NaN, Infinity, 0]) assert.equal(isLocationAvailable(location('x', 'DE', { healthyNodes })), false);

@@ -16,7 +16,6 @@ const serverSelectionModeKey = 'vex.settings.vpn.server_selection_mode.v1';
 const selectedVpnLocationKey = 'vex.settings.vpn.location.v1';
 const vpnApplicationRoutingModeKey = 'vex.settings.vpn.application_routing_mode.v1';
 const selectedVpnApplicationsKey = 'vex.settings.vpn.selected_applications.v1';
-const defaultVpnLocation = 'de';
 const androidRoutingExperiment = androidExperimentalRoutingEnabled(
   Platform.OS,
   process.env.EXPO_PUBLIC_VEX_ANDROID_EXPERIMENTAL_ROUTING,
@@ -110,13 +109,16 @@ export async function setServerSelectionMode(mode: ServerSelectionMode): Promise
   return normalized;
 }
 
-export async function getSelectedVpnLocation(): Promise<string> {
-  const value = (await safeGetSetting(selectedVpnLocationKey))?.trim().toLowerCase();
-  return value || defaultVpnLocation;
+export async function getSelectedVpnLocation(): Promise<string | null> {
+  const value = (await safeGetSetting(selectedVpnLocationKey))?.trim();
+  return value || null;
 }
 
 export async function setSelectedVpnLocation(locationId: string): Promise<string> {
-  const normalized = locationId.trim().toLowerCase() || defaultVpnLocation;
+  const normalized = locationId.trim();
+  if (!normalized) {
+    throw new Error('VPN location ID must not be empty.');
+  }
   await SecureStore.setItemAsync(selectedVpnLocationKey, normalized);
   return normalized;
 }

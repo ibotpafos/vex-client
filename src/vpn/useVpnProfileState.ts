@@ -181,7 +181,7 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
   }, [userId]);
 
   useEffect(() => {
-    if (!accessToken || !hasVpnAccess) {
+    if (!accessToken || !hasVpnAccess || !selectedLocationId) {
       setVpnProfile(null);
       return undefined;
     }

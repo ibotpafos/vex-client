@@ -6,6 +6,7 @@ expected_package="${2:?expected package is required}"
 expected_version_code="${3:?expected version code is required}"
 expected_version_name="${4:?expected version name is required}"
 expected_abis="${5:-}"
+bundle_requirement="${6:-required}"
 
 if [[ ! -f "${apk_path}" ]]; then
   echo "APK is missing: ${apk_path}" >&2
@@ -35,10 +36,11 @@ actual_version_name="$(printf '%s\n' "${package_line}" | sed -n "s/.*versionName
 # Consume the complete unzip listing before printing the match. Exiting awk
 # early closes the pipe while unzip is still writing; with `set -o pipefail`
 # Linux reports that expected SIGPIPE as exit 141 after a successful build.
-bundle_size="$(unzip -l "${apk_path}" assets/index.android.bundle | awk '$NF == "assets/index.android.bundle" && !size { size = $1 } END { if (size) print size }')"
+bundle_size="$({ unzip -l "${apk_path}" assets/index.android.bundle 2>/dev/null || true; } | awk '$NF == "assets/index.android.bundle" && !size { size = $1 } END { if (size) print size }')"
 actual_abis="$(unzip -Z1 "${apk_path}" | sed -n 's#^lib/\([^/]*\)/.*#\1#p' | sort -u)"
 
-if [[ ! "${bundle_size:-}" =~ ^[0-9]+$ || "${bundle_size}" -lt 100000 ]]; then
+if [[ "${bundle_requirement}" == "required" ]] \
+  && { [[ ! "${bundle_size:-}" =~ ^[0-9]+$ ]] || [[ "${bundle_size:-0}" -lt 100000 ]]; }; then
   echo "APK does not contain a complete assets/index.android.bundle: ${apk_path}" >&2
   exit 1
 fi
@@ -71,7 +73,8 @@ if [[ -n "${expected_abis}" ]]; then
   done
 fi
 
-printf 'Verified APK: %s %s (%s), ABIs %s, JS bundle %s bytes, sha256 %s\n' \
+bundle_description="${bundle_size:-external Metro bundle}"
+printf 'Verified APK: %s %s (%s), ABIs %s, JS bundle %s, sha256 %s\n' \
   "${actual_package}" "${actual_version_name}" "${actual_version_code}" \
   "$(printf '%s' "${actual_abis}" | tr '\n' ',' | sed 's/,$//')" \
-  "${bundle_size}" "${hash_after}"
+  "${bundle_description}" "${hash_after}"

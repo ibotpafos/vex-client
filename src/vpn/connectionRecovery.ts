@@ -1,6 +1,7 @@
 import type { VpnLocation } from '../api/vexApi';
 import type { VpnProfile } from './profile';
 import { chooseBestVpnLocation } from './serverSelection';
+import { comparableVpnLocationId } from './locationId';
 import type { ConnectedVpnProfile, ResolveConnectableProfileOptions } from './serverSwitch';
 import { assessVpnAutopilotIssue } from './vpnAutopilotAssessment';
 
@@ -171,5 +172,5 @@ function shouldRotateProfile(input: RecoverVpnConnectionInput, error: unknown): 
 }
 
 function normalizeLocationId(locationId: string): string {
-  return locationId.trim().toLowerCase() || 'de';
+  return comparableVpnLocationId(locationId);
 }

@@ -12,6 +12,9 @@ export default function ServerPickerScreen() {
     handleAutoServerSelectionPress,
     handleLocationPress,
     isVpnBusy,
+    isLocationsRefreshing,
+    locationsRefreshError,
+    retryLocations,
     selectedLatencyText,
     selectedLocationId,
     serverSelectionMode,
@@ -22,13 +25,16 @@ export default function ServerPickerScreen() {
       <StatusBar style="light" />
       <ServerPickerContent
         isVpnBusy={isVpnBusy}
+        isRefreshing={isLocationsRefreshing}
         locations={availableLocations}
+        refreshError={locationsRefreshError}
         selectedLatencyText={params.activeLatencyText || selectedLatencyText}
         selectionMode={serverSelectionMode}
         selectedLocationId={selectedLocationId}
         onAutoSelect={handleAutoServerSelectionPress}
         onClose={closeServerPicker}
         onSelect={handleLocationPress}
+        onRetry={retryLocations}
       />
     </>
   );

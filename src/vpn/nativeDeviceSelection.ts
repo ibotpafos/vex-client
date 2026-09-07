@@ -1,3 +1,5 @@
+import { comparableVpnLocationId } from './locationId';
+
 const mobileProtocol = 'amneziawg';
 
 export type NativeVpnDevice = {
@@ -61,5 +63,5 @@ function nativeDeviceLocationId(deviceId: string, locationId: string): string {
 }
 
 function normalizeLocationId(locationId?: string): string {
-  return locationId?.trim().toLowerCase() || 'de';
+  return comparableVpnLocationId(locationId);
 }

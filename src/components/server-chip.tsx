@@ -1,14 +1,15 @@
-import React from 'react';
-import { View, Text } from 'react-native';
+import React, { useRef } from 'react';
+import { View, Text, type GestureResponderEvent } from 'react-native';
 import { Check, Circle, Gauge } from 'lucide-react-native';
 import type { VpnLocation } from '@/api/vexApi';
 import { useRenderProfilerMark } from '@/debug/render-profiler';
-import { serverLocationLabel } from '../screens/home-screen-helpers';
+import { homeLocationCardLabel } from '../screens/home-location-previews';
 import { styles } from '../screens/home-screen.styles';
 import { VexPressable } from '@/ui/vex-ui';
 import { vexTheme } from '@/ui/vex-theme';
 import { availableNodeCountText } from '../screens/country-groups';
 import { CountryIsland } from './country-island';
+import { isServerChipTap, type TouchPoint } from '../screens/server-chip-interaction';
 
 export interface ServerChipProps {
   availableNodeCount?: number;
@@ -30,13 +31,36 @@ export const ServerChip = React.memo(function ServerChip({
   onPress,
 }: ServerChipProps) {
   useRenderProfilerMark('ServerChip');
-  const locationLabel = location ? serverLocationLabel(location) : 'Не выбран';
+  const touchStartRef = useRef<TouchPoint | null>(null);
+  const touchMovedRef = useRef(false);
+  const locationLabel = location ? homeLocationCardLabel(location) : 'Не выбран';
   const serverLabel = isAutoMode && location ? `Авто: ${locationLabel}` : locationLabel;
   const visibleServerLabel = locationLabel;
   return (
     <VexPressable
       disabled={disabled}
-      onPress={() => onPress(latencyText)}
+      onPress={() => {
+        if (!touchMovedRef.current) {
+          onPress(latencyText);
+        }
+      }}
+      onPressIn={(event: GestureResponderEvent) => {
+        touchStartRef.current = {
+          x: event.nativeEvent.pageX,
+          y: event.nativeEvent.pageY,
+        };
+        touchMovedRef.current = false;
+      }}
+      onTouchMove={(event: GestureResponderEvent) => {
+        const touchStart = touchStartRef.current;
+        if (!touchStart) {
+          return;
+        }
+        touchMovedRef.current = !isServerChipTap(touchStart, {
+          x: event.nativeEvent.pageX,
+          y: event.nativeEvent.pageY,
+        });
+      }}
       style={[styles.serverChip, isSelected && styles.serverChipSelected, disabled && styles.serverChipDisabled]}
       hoverStyle={{ backgroundColor: 'rgba(7,17,19,0.96)', borderColor: 'rgba(34,211,238,0.4)' }}
       title="Выбрать сервер подключения"

@@ -108,6 +108,7 @@ export type LocationDTO = {
   id: string;
   country_code?: string;
   city?: string;
+  display_name?: string;
   flag_emoji?: string;
   availability?: string;
   priority?: number;
@@ -117,6 +118,7 @@ export type LocationDTO = {
   awg3_nodes?: number;
   average_load_percent?: number;
   available_slots?: number;
+  capabilities?: string[];
   endpoint?: string;
   latency_ms?: number | null;
 };

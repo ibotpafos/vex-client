@@ -46,9 +46,24 @@ export function countryGroups(locations: VpnLocation[], selectedID: string, sele
 
 /** Keep FlatList data and item identities stable when polling returns the same catalog. */
 export function stableCountryGroups(previous: CountryGroup[], next: CountryGroup[]): CountryGroup[] {
-  if (previous.length !== next.length) return next;
-  const stable = next.map((group, index) => sameCountryGroup(previous[index], group) ? previous[index] : group);
-  return stable.every((group, index) => group === previous[index]) ? previous : stable;
+  if (previous.length === 0) return next;
+
+  const previousByID = new Map(previous.map(group => [group.id, group]));
+  const nextByID = new Map(next.map(group => [group.id, group]));
+  const ordered = previous
+    .map(group => nextByID.get(group.id))
+    .filter((group): group is CountryGroup => Boolean(group));
+  const knownIDs = new Set(previousByID.keys());
+  ordered.push(...next.filter(group => !knownIDs.has(group.id)));
+
+  const stable = ordered.map(group => {
+    const prior = previousByID.get(group.id);
+    return sameCountryGroup(prior, group) ? prior! : group;
+  });
+  return stable.length === previous.length
+    && stable.every((group, index) => group === previous[index])
+    ? previous
+    : stable;
 }
 
 function sameCountryGroup(left: CountryGroup | undefined, right: CountryGroup): boolean {

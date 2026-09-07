@@ -34,6 +34,12 @@ const changedSnapshot = countryGroups(input.map(item => item.id === 'fi' ? { ...
 const partiallyStableSnapshot = stableCountryGroups(firstSnapshot, changedSnapshot);
 assert.equal(partiallyStableSnapshot[0], firstSnapshot[0]);
 assert.equal(partiallyStableSnapshot[1] === firstSnapshot[1], false);
+const selectionOrderInput = [location('de', 'DE'), location('fi', 'FI'), location('nl', 'NL')];
+const initialSelectionOrder = countryGroups(selectionOrderInput, 'de');
+const reorderedBySelection = countryGroups(selectionOrderInput, 'nl');
+const stableSelectionOrder = stableCountryGroups(initialSelectionOrder, reorderedBySelection);
+assert.deepEqual(stableSelectionOrder.map(group => group.id), initialSelectionOrder.map(group => group.id));
+assert.equal(stableSelectionOrder.find(group => group.id === 'country:NL')?.isSelected, true);
 for (const availability of ['maintenance', 'unavailable', 'retired']) assert.equal(isLocationAvailable(location('x', 'DE', { availability })), false);
 for (const status of ['offline', 'unknown']) assert.equal(isLocationAvailable(location('x', 'DE', { status })), false);
 for (const healthyNodes of [-1, NaN, Infinity, 0]) assert.equal(isLocationAvailable(location('x', 'DE', { healthyNodes })), false);

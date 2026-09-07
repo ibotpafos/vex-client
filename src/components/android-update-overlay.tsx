@@ -3,11 +3,11 @@ import { Button, Column, Host, List, ListItem, Spacer, Text as UniversalText } f
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AppState, Linking, Modal, Platform, StyleSheet } from 'react-native';
 import { installManualUpdate } from '@/api/manualUpdateInstall';
-import { requiresNativeUpdate } from '@/api/updatePreflight';
 import { validateManualUpdatePayload, type AppUpdateCheckResult } from '@/api/vexApi';
 import { useMobileAppUpdateQuery } from '@/components/mobile-app-update-query';
 import { playErrorHaptic, playLightImpactHaptic, playSelectionHaptic, playSuccessHaptic } from '@/native/haptics';
 import * as SecureStore from '@/native/secureStore';
+import { shouldShowUpdateSheet, type AndroidDownloadState as DownloadState } from '@/updates/androidUpdateSheet';
 
 const androidBuild = currentAndroidBuild();
 const androidSigningMigrationLandingUrl = 'https://vexguard.app/download';
@@ -17,14 +17,6 @@ type PendingAndroidInstall = {
   build: number;
   resumeAttempted: boolean;
 };
-
-type DownloadState =
-  | { status: 'idle' }
-  | { status: 'ready'; build: number }
-  | { status: 'installing'; build: number }
-  | { status: 'permission_required'; build: number }
-  | { status: 'installer_opened'; build: number }
-  | { status: 'error'; build: number; message: string };
 
 export function AndroidUpdateOverlay() {
   if (Platform.OS !== 'android') {
@@ -184,6 +176,7 @@ function AndroidUpdateOverlayContent() {
   }
 
   const isReady = downloadState.status === 'ready';
+  const isInstalling = downloadState.status === 'installing';
   const isError = downloadState.status === 'error';
   const needsInstallPermission = downloadState.status === 'permission_required';
   const canRetry = isError && preflight.ok;
@@ -195,12 +188,16 @@ function AndroidUpdateOverlayContent() {
       ? 'Новая Android-сборка VEX'
       : needsInstallPermission
         ? 'Разрешите установку APK'
+        : isInstalling
+          ? 'Скачиваем обновление'
         : isReady
           ? 'Обновление готово'
           : update.required
             ? 'Нужно обновить VEX'
             : 'Готовим обновление';
-  const text = isReady
+  const text = isInstalling
+    ? 'Скачиваем и проверяем новую версию. После загрузки откроется установщик Android.'
+    : isReady
     ? signingMigration
       ? 'Это новая сборка с другой подписью. Скачайте APK, установите его как новое приложение, войдите в аккаунт и после проверки доступа удалите старый VEX.'
       : update.currentBuildBlocked
@@ -214,7 +211,9 @@ function AndroidUpdateOverlayContent() {
           ? 'Откройте сайт VEX, скачайте новую сборку, установите ее и удалите старую после входа в аккаунт.'
           : 'VEX готовит ссылку на новую версию.';
 
-  const primaryLabel = isReady
+  const primaryLabel = isInstalling
+    ? 'Скачиваем…'
+    : isReady
     ? signingMigration
       ? 'Скачать с сайта'
       : update.currentBuildBlocked
@@ -267,34 +266,6 @@ export function parsePendingAndroidInstall(value: string | null): PendingAndroid
   } catch {
     return null;
   }
-}
-
-function shouldShowUpdateSheet(
-  update: AppUpdateCheckResult | null,
-  downloadState: DownloadState,
-  dismissedBuild: number | null,
-  installerOpenedBuild: number | null,
-  preflight: { ok: boolean; error?: string },
-): boolean {
-  if (!update?.updateAvailable) {
-    return false;
-  }
-  if (!requiresNativeUpdate(update)) {
-    return false;
-  }
-  if (installerOpenedBuild === update.latestBuild) {
-    return false;
-  }
-  if (!update.required && dismissedBuild === update.latestBuild) {
-    return false;
-  }
-  if (!preflight.ok) {
-    return update.required;
-  }
-  if (update.required) {
-    return true;
-  }
-  return downloadState.status === 'ready';
 }
 
 function isAndroidSigningKeyMigration(update: AppUpdateCheckResult | null): boolean {

@@ -85,6 +85,19 @@ struct SignInPanel: View {
 
     private var signInActions: some View {
         VStack(spacing: 10) {
+            Button {
+                appState.openGoogleSignIn()
+            } label: {
+                Text("Войти через Google")
+                    .font(.system(size: 16, weight: .black))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 52)
+            }
+            .buttonStyle(.vexGlass)
+            .controlSize(.large)
+            .disabled(appState.isAuthBusy || appState.isWaitingForWebAuth)
+
+
             if appState.canUnlockStoredSession {
                 Button {
                     Task {

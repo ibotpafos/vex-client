@@ -45,6 +45,16 @@ export async function confirmEmailOTP(email: string, challengeId: string, code: 
   }));
 }
 
+// The backend validates Google's signature, audience, issuer and verified email.
+export async function exchangeGoogleIDToken(idToken: string): Promise<AuthSession> {
+  if (!idToken.trim()) throw new Error('Google не вернул подтверждение входа.');
+  return parseAuth(await jsonRequest<AuthResultDTO>('/v1/auth/oauth/google', {
+    method: 'POST',
+    body: { id_token: idToken, remember_me: true, trial_code: 'incy' },
+    suppressErrorLog: true,
+  }));
+}
+
 export async function exchangeAppAuthCode(code: string, codeVerifier: string): Promise<AuthSession> {
   return parseAuth(await jsonRequest<AuthResultDTO>('/v1/auth/token', {
     method: 'POST',

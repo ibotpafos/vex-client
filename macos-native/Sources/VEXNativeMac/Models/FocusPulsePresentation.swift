@@ -180,7 +180,7 @@ enum FocusPulsePresentation {
 
     /// Rounded ping in milliseconds with the unit, e.g. "7 мс".
     static func latencyText(_ latencyMs: Double?) -> String? {
-        guard let latencyMs else { return nil }
+        guard let latencyMs, latencyMs.isFinite, latencyMs >= 0, latencyMs < Double(Int.max) else { return nil }
         return "\(Int(latencyMs.rounded())) мс"
     }
 

@@ -45,17 +45,31 @@ class VpnNetworkRecoveryTest {
     )
   }
   @Test
-  fun preservesCurrentEndpointThenAddsFallbackPorts() {
+  fun preservesOnlyTheExplicitEndpoint() {
     val config = "[Peer]\nEndpoint = fi.example.test:8443\nPersistentKeepalive = 25"
 
     assertEquals(
-      listOf(
-        "[Peer]\nEndpoint = fi.example.test:8443\nPersistentKeepalive = 25",
-        "[Peer]\nEndpoint = fi.example.test:51821\nPersistentKeepalive = 25",
-        "[Peer]\nEndpoint = fi.example.test:443\nPersistentKeepalive = 25",
-      ),
+      listOf("[Peer]\nEndpoint = fi.example.test:8443\nPersistentKeepalive = 25"),
       VpnNetworkRecovery.configCandidates(config),
     )
+  }
+
+  @Test
+  fun preservesEveryAwg31FieldAcrossRecoveryCandidates() {
+    val config = "[Interface]\nI1 = <r 8><t><rc 8>\nHeaderProtectionKey = synthetic\nContentPaddingAddition = 10-40\nRandomTrailers = true\nDisableCookies = false\n[Peer]\nEndpoint = de.example.test:51824"
+    val candidates = VpnNetworkRecovery.configCandidates(config)
+    val endpointPattern = Regex("(?m)^Endpoint\\s*=\\s*.+$")
+    val expectedOutsideEndpoint = config.replace(endpointPattern, "Endpoint = <candidate>")
+
+    candidates.forEach { candidate ->
+      assertEquals(expectedOutsideEndpoint, candidate.replace(endpointPattern, "Endpoint = <candidate>"))
+      assertTrue(candidate.contains("I1 = <r 8><t><rc 8>"))
+      assertTrue(candidate.contains("HeaderProtectionKey = synthetic"))
+      assertTrue(candidate.contains("ContentPaddingAddition = 10-40"))
+      assertTrue(candidate.contains("RandomTrailers = true"))
+      assertTrue(candidate.contains("DisableCookies = false"))
+      assertFalse(candidate.contains(":51820"))
+    }
   }
 
   @Test
@@ -69,24 +83,10 @@ class VpnNetworkRecoveryTest {
   }
 
   @Test
-  fun doesNotDuplicateExistingFallbackPort() {
-    val config = "[Peer]\nEndpoint = 203.0.113.7:443"
-
-    assertEquals(2, VpnNetworkRecovery.configCandidates(config).size)
-  }
-
-  @Test
-  fun formatsIpv6EndpointsWithBrackets() {
+  fun preservesExplicitIpv6EndpointWithoutSynthesizingAlternates() {
     val config = "[Peer]\nEndpoint = [2001:db8::7]:8443"
 
-    assertEquals(
-      listOf(
-        "[Peer]\nEndpoint = [2001:db8::7]:8443",
-        "[Peer]\nEndpoint = [2001:db8::7]:51821",
-        "[Peer]\nEndpoint = [2001:db8::7]:443",
-      ),
-      VpnNetworkRecovery.configCandidates(config),
-    )
+    assertEquals(listOf(config), VpnNetworkRecovery.configCandidates(config))
   }
 
   @Test

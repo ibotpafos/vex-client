@@ -8,7 +8,7 @@ import com.facebook.react.uimanager.ViewManager
 @Suppress("OVERRIDE_DEPRECATION")
 class VexVpnPackage : ReactPackage {
   override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> {
-    return listOf(VexVpnModule(reactContext))
+    return listOf(VexVpnModule(reactContext), VexGoogleAuthModule(reactContext))
   }
 
   override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> {

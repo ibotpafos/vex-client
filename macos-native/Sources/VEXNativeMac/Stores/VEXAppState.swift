@@ -378,8 +378,10 @@ final class VEXAppState: ObservableObject {
             statusMessage = "Подключение VPN отменено."
         } catch {
             statusMessage = connectErrorMessage(error)
-            await helper.interruptWithDisconnect(releaseAntiLeak: true)
-            activeTunnel = nil
+            if !error.localizedDescription.contains("VPN_CONFIG_INVALID") {
+                await helper.interruptWithDisconnect(releaseAntiLeak: true)
+                activeTunnel = nil
+            }
             await submitDiagnostics(reason: "vpn_connect_failed", status: "error", helperStatus: helper.status, samples: ["error": error.localizedDescription])
         }
 
@@ -389,10 +391,10 @@ final class VEXAppState: ObservableObject {
     }
 
     private func connectWithAutopilot(initialTunnel: PreparedTunnel, accessToken token: String, helper: VEXHelperModel, generation: Int) async throws -> PreparedTunnel {
-        activeTunnel = initialTunnel
         do {
             return try await connectPreparedTunnel(initialTunnel, helper: helper, generation: generation)
         } catch {
+            if error.localizedDescription.contains("VPN_CONFIG_INVALID") { throw error }
             try ensureConnectStillDesired(generation: generation)
 
             let probe = await autopilotService.probe(endpoint: initialTunnel.endpoint)
@@ -413,7 +415,7 @@ final class VEXAppState: ObservableObject {
                 return try await connectPreparedTunnel(rotatedTunnel, helper: helper, generation: generation)
             }
 
-            do {
+            return try await VpnAdmissionRecovery.retryFreshProfile {
                 try ensureConnectStillDesired(generation: generation)
                 let freshTunnel = try await profileService.resolveProfile(
                     accessToken: token,
@@ -422,7 +424,7 @@ final class VEXAppState: ObservableObject {
                     forceRefresh: true
                 )
                 return try await connectPreparedTunnel(freshTunnel, helper: helper, generation: generation)
-            } catch {
+            } failover: { error in
                 guard allowsAutomaticFailover, assessment.canFailover, let failoverLocation = bestFailoverLocation(excluding: initialTunnel.locationId) else {
                     throw error
                 }
@@ -454,9 +456,11 @@ final class VEXAppState: ObservableObject {
         try await helper.ensureHelperReady()
         for attempt in autopilotService.fallbackTunnels(for: tunnel) {
             try ensureConnectStillDesired(generation: generation)
-            activeTunnel = attempt
             try await profileService.writeHelperConfig(for: attempt)
             await helper.connect(antiLeakEnabled: antiLeakEnabled)
+            if helper.lastConnectAdmissionRejected {
+                throw VpnAutopilotRuntimeError.connectFailed("VPN_CONFIG_INVALID: next profile admission failed")
+            }
             try ensureConnectStillDesired(generation: generation)
             if helper.status.isUsableConnectedStatus {
                 if let endpoint = attempt.endpoint {
@@ -573,16 +577,18 @@ final class VEXAppState: ObservableObject {
                 forceRefresh: false
             )
             try ensureConnectStillDesired(generation: generation)
-            activeTunnel = nextTunnel
             try await profileService.writeHelperConfig(for: nextTunnel)
             serverSidebarOperation = .connecting
-            await helper.disconnect(releaseAntiLeak: false)
-            try ensureConnectStillDesired(generation: generation)
+            // The helper admits the complete next profile before replacing the old tunnel.
             await helper.connect(antiLeakEnabled: antiLeakEnabled)
+            if helper.lastConnectAdmissionRejected {
+                throw VpnAutopilotRuntimeError.connectFailed("VPN_CONFIG_INVALID: next profile admission failed")
+            }
             try ensureConnectStillDesired(generation: generation)
             serverSidebarOperation = .verifying
 
             if helper.status.isUsableConnectedStatus {
+                activeTunnel = nextTunnel
                 if let endpoint = nextTunnel.endpoint {
                     LastTunnelEndpointStore().save(endpoint, locationId: nextTunnel.locationId)
                 }
@@ -602,7 +608,7 @@ final class VEXAppState: ObservableObject {
             return false
         } catch {
             activeTunnel = previousTunnel
-            if let previousTunnel {
+            if let previousTunnel, !error.localizedDescription.contains("VPN_CONFIG_INVALID") {
                 try? await profileService.writeHelperConfig(for: previousTunnel)
                 await helper.connect(antiLeakEnabled: antiLeakEnabled)
             }
@@ -675,6 +681,10 @@ final class VEXAppState: ObservableObject {
 
     func openSignIn() {
         beginWebAuth(mode: .login)
+    }
+
+    func openGoogleSignIn() {
+        beginWebAuth(mode: .login, provider: .google)
     }
 
     func openRegistration() {
@@ -1131,7 +1141,7 @@ final class VEXAppState: ObservableObject {
     }
     #endif
 
-    private func beginWebAuth(mode: WebAuthMode) {
+    private func beginWebAuth(mode: WebAuthMode, provider: WebAuthProvider? = nil) {
         guard !isAuthBusy, !isWaitingForWebAuth else { return }
         authError = nil
         isWaitingForWebAuth = true
@@ -1140,7 +1150,7 @@ final class VEXAppState: ObservableObject {
         webAuthTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let callbackURL = try await authService.startWebAuth(mode: mode)
+                let callbackURL = try await authService.startWebAuth(mode: mode, provider: provider)
                 guard !Task.isCancelled else { return }
                 isAuthBusy = true
                 await finishWebAuthCallback(callbackURL)

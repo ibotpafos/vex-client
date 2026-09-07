@@ -5,6 +5,7 @@ on:
     paths:
       - "src/vpn/**"
       - "tests/**"
+      - "scripts/verify_android_upgrade.cjs"
       - "android/**"
       - "macos-native/**"
       - "package.json"
@@ -16,6 +17,7 @@ on:
     paths:
       - "src/vpn/**"
       - "tests/**"
+      - "scripts/verify_android_upgrade.cjs"
       - "android/**"
       - "macos-native/**"
       - "package.json"

@@ -209,11 +209,8 @@ struct VEXHelperInstaller {
             .appendingPathComponent(".vex", isDirectory: true)
             .appendingPathComponent("vex.conf")
         let user = NSUserName()
-        guard let teamIdentifier = currentAppTeamIdentifier() else {
-            throw VEXHelperError.commandFailed("Приложение должно быть подписано Developer ID перед установкой системного helper.")
-        }
         let appBundle = Bundle.main.bundleURL.path
-        let appRequirement = "anchor apple generic and identifier \"app.vex.vpn.native\" and certificate leaf[subject.OU] = \"\(teamIdentifier)\""
+        let appRequirement = Self.appSigningRequirement
         let shellCommand = [
             "set -euo pipefail",
             "verified_root=$(/usr/bin/mktemp -d /var/tmp/vex-install-app.XXXXXX)",
@@ -222,7 +219,7 @@ struct VEXHelperInstaller {
             "verified_app=\"$verified_root/VEX Native.app\"",
             "/usr/bin/codesign --verify --deep --strict -R=\(shellQuote(appRequirement)) \"$verified_app\"",
             "verified_resources=\"$verified_app/Contents/Resources/resources\"",
-            "VEX_EXPECTED_TEAM_ID=\(shellQuote(teamIdentifier)) /bin/bash \"$verified_resources/install-vex-vpn-helper.sh\" \"$verified_resources\" \(shellQuote(configPath.path)) \(shellQuote(user)) \"$verified_app\"",
+            "/bin/bash \"$verified_resources/install-vex-vpn-helper.sh\" \"$verified_resources\" \(shellQuote(configPath.path)) \(shellQuote(user)) \"$verified_app\"",
         ].joined(separator: "; ")
         let appleScript = "do shell script \"\(appleScriptString(shellCommand))\" with administrator privileges with prompt \"VEX Inc. устанавливает системный компонент VEX\""
         let phaseTask = Task {
@@ -270,37 +267,13 @@ struct VEXHelperInstaller {
         }
     }
 
-    private func currentAppTeamIdentifier() -> String? {
-        var runningCode: SecCode?
-        guard SecCodeCopySelf([], &runningCode) == errSecSuccess,
-              let runningCode,
-              SecCodeCheckValidity(runningCode, SecCSFlags(rawValue: kSecCSStrictValidate), nil) == errSecSuccess else {
-            return nil
-        }
-        var staticCode: SecStaticCode?
-        guard SecCodeCopyStaticCode(runningCode, [], &staticCode) == errSecSuccess,
-              let staticCode else {
-            return nil
-        }
-        var information: CFDictionary?
-        guard SecCodeCopySigningInformation(
-            staticCode,
-            SecCSFlags(rawValue: kSecCSSigningInformation),
-            &information
-        ) == errSecSuccess,
-              let signing = information as? [String: Any],
-              signing[kSecCodeInfoIdentifier as String] as? String == "app.vex.vpn.native",
-              let teamIdentifier = signing[kSecCodeInfoTeamIdentifier as String] as? String,
-              !teamIdentifier.isEmpty else {
-            return nil
-        }
-        return teamIdentifier
-    }
+    // Keep identical to SystemPeerAuthenticator and the root installer policy.
+    static let appSigningRequirement = "identifier \"app.vex.vpn.native\" and (certificate leaf = H\"c6fd1853a177fbcfb04c5d4f78fbe405777b3a3e\" or (anchor apple generic and certificate leaf[subject.OU] = \"3JLW9XNU53\"))"
 
     private func verifyCurrentAppBundleSignature() -> Bool {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
-        process.arguments = ["--verify", "--deep", "--strict", Bundle.main.bundleURL.path]
+        process.arguments = ["--verify", "--deep", "--strict", "-R=\(Self.appSigningRequirement)", Bundle.main.bundleURL.path]
         return (try? process.runAndWait()) == 0
     }
 

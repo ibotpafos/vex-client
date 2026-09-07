@@ -26,7 +26,10 @@ import {
 } from "../screens/home-location-previews";
 import { serverPickerLocationRows } from "./server-picker-model";
 
+import { isLocationAvailable } from "../screens/country-groups";
+
 export interface ServerPickerModalProps {
+  countryTitle?: string;
   isVpnBusy: boolean;
   isRefreshing?: boolean;
   locations: VpnLocation[];
@@ -112,6 +115,7 @@ export const ServerPickerContent = React.memo(function ServerPickerContent(props
 });
 
 function ServerPickerBody({
+  countryTitle,
   isVpnBusy,
   locations,
   selectedLatencyText,
@@ -126,7 +130,7 @@ function ServerPickerBody({
   const locationRows = serverPickerLocationRows(locations, selectionMode, selectedLocationId);
   const rows = (
     <>
-      <ServerPickerRow
+      {!countryTitle ? <ServerPickerRow
         leading="↻"
         onPress={isVpnBusy || locations.length === 0 ? undefined : onAutoSelect}
         supportingText="Лучший доступный сервер"
@@ -134,7 +138,7 @@ function ServerPickerBody({
         trailing={selectionMode === "auto" ? "✓" : undefined}
       >
         Автоматически
-      </ServerPickerRow>
+      </ServerPickerRow> : null}
       {locationRows.map(({ location, selected, testID }) => {
         const latency = selected && selectedLatencyText
           ? selectedLatencyText
@@ -145,7 +149,7 @@ function ServerPickerBody({
           <ServerPickerRow
             key={location.id}
             leading={location.flagEmoji || location.countryCode}
-            onPress={isVpnBusy ? undefined : () => onSelect(location.id)}
+            onPress={isVpnBusy || !isLocationAvailable(location) ? undefined : () => onSelect(location.id)}
             supportingText={technicalLabel ? `${technicalLabel} · ${statusText}` : statusText}
             testID={testID}
             trailing={selected ? "✓" : undefined}
@@ -169,9 +173,9 @@ function ServerPickerBody({
   return (
     <Column spacing={4} style={styles.content} testID="server-picker-sheet">
       <UniversalText textStyle={styles.eyebrow}>VEX VPN</UniversalText>
-      <UniversalText textStyle={styles.title}>Серверы</UniversalText>
+      <UniversalText textStyle={styles.title}>{countryTitle ?? "Серверы"}</UniversalText>
       <UniversalText textStyle={styles.subtitle}>
-        Ближайший стабильный узел для текущей сессии.
+        {countryTitle ? "Выберите сервер этой страны." : "Выберите страну и сервер для текущей сессии."}
       </UniversalText>
       {Platform.OS === "android" ? (
         <LazyColumn contentPadding={{ bottom: 24 }} modifiers={[height(280)]}>

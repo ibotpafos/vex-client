@@ -1,0 +1,32 @@
+name: Android updater QA signed instrumentation
+on:
+  push:
+    branches: [codex/android-app-restoration-20260904]
+    paths:
+      - .github/workflows/android-updater-qa-sign.yml
+      - scripts/sign_android_updater_qa_ci.sh
+  workflow_dispatch:
+permissions:
+  contents: write # GitHub requires write access to read draft release assets.
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Verify legacy private key and sign fixed input
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+          VEX_UPLOAD_STORE_PASSWORD: ${{ secrets.VEX_UPLOAD_STORE_PASSWORD }}
+          VEX_UPLOAD_KEY_ALIAS: ${{ secrets.VEX_UPLOAD_KEY_ALIAS }}
+          VEX_UPLOAD_KEY_PASSWORD: ${{ secrets.VEX_UPLOAD_KEY_PASSWORD }}
+        run: bash scripts/sign_android_updater_qa_ci.sh d114a9bfff167d48350c2de16a1be850643364dbf3450f1b89aebea5c351bc7d internal-updater-qa-20260904-v5
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: signed-updater-qa
+          path: signed-candidate/
+          if-no-files-found: error
+          retention-days: 14

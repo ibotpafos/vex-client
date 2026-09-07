@@ -10,27 +10,28 @@ if [[ -z "$verified_app" || ! -d "$verified_app/Contents/Resources/resources" ]]
   echo "A root-owned verified app snapshot is required for helper installation." >&2
   exit 1
 fi
-if ! /usr/bin/codesign --verify --deep --strict "$verified_app" >/dev/null 2>&1; then
-  echo "Verified app snapshot failed code-signature validation." >&2
+# Fixed trust roots; VEX_EXPECTED_TEAM_ID and certificate environment overrides
+# deliberately have no effect. SHA256 of the local DER certificate:
+# 441f6e9034ee7582c1ca3579ea805f91f68c3135ec2f59cddc00173fe689dca1
+local_requirement='certificate leaf = H"c6fd1853a177fbcfb04c5d4f78fbe405777b3a3e"'
+apple_requirement='anchor apple generic and certificate leaf[subject.OU] = "3JLW9XNU53"'
+app_requirement="identifier \"app.vex.vpn.native\" and ($local_requirement or ($apple_requirement))"
+# Only the root-created private snapshot may supply executable installer inputs.
+snapshot_parent="$(/usr/bin/dirname "$verified_app")"
+if [[ "$EUID" != 0 || -L "$verified_app" || -L "$snapshot_parent" \
+      || "$(/usr/bin/stat -f '%u:%Lp' "$snapshot_parent")" != "0:700" ]]; then
+  echo "A private root-owned app snapshot is required." >&2
   exit 1
 fi
-pinned_team_id="${VEX_EXPECTED_TEAM_ID:-}"
-snapshot_signature_details="$(/usr/bin/codesign -d --verbose=4 "$verified_app" 2>&1 || true)"
-snapshot_identifier="$(
-  /usr/bin/printf '%s\n' "$snapshot_signature_details" \
-    | /usr/bin/sed -n 's/^Identifier=//p' \
-    | /usr/bin/head -n 1
-)"
-snapshot_team_id="$(
-  /usr/bin/printf '%s\n' "$snapshot_signature_details" \
-    | /usr/bin/sed -n 's/^TeamIdentifier=//p' \
-    | /usr/bin/head -n 1
-)"
-if [[ "$snapshot_identifier" != "app.vex.vpn.native" \
-      || -z "$pinned_team_id" \
-      || "$snapshot_team_id" != "$pinned_team_id" ]]; then
-  echo "Verified app snapshot identity does not match the pinned VEX application." >&2
+if ! /usr/bin/codesign --verify --deep --strict -R="$app_requirement" "$verified_app" >/dev/null 2>&1; then
+  echo "Verified app snapshot identity or signature does not match pinned VEX policy." >&2
   exit 1
+fi
+# All Mach-O resources must match the same signing branch as the enclosing app.
+if /usr/bin/codesign --verify --strict -R="$local_requirement" "$verified_app" >/dev/null 2>&1; then
+  resource_requirement="$local_requirement"
+else
+  resource_requirement="$apple_requirement"
 fi
 verified_resources="$verified_app/Contents/Resources/resources"
 src_dir_real="$(cd "$src_dir" && /bin/pwd -P)"
@@ -63,7 +64,7 @@ for required in awg amneziawg-go vex-helper; do
     exit 1
   fi
 
-  if ! /usr/bin/codesign --verify --strict --verbose=2 "$src_dir/$required" >/dev/null 2>&1; then
+  if ! /usr/bin/codesign --verify --strict --verbose=2 -R="$resource_requirement" "$src_dir/$required" >/dev/null 2>&1; then
     echo "Bundled $required is not code-signature valid. Rebuild VEX resources before installing." >&2
     exit 1
   fi
@@ -76,27 +77,8 @@ for required in awg amneziawg-go vex-helper; do
   fi
 done
 
-helper_signature_details="$(/usr/bin/codesign -d --verbose=4 "$src_dir/vex-helper" 2>&1 || true)"
-helper_team_id="$(
-  /usr/bin/printf '%s\n' "$helper_signature_details" \
-    | /usr/bin/sed -n 's/^TeamIdentifier=//p' \
-    | /usr/bin/head -n 1
-)"
-if [[ -n "$pinned_team_id" ]]; then
-  if [[ "$helper_team_id" != "$pinned_team_id" ]]; then
-    echo "Helper Team ID does not match pinned VEX_EXPECTED_TEAM_ID." >&2
-    exit 1
-  fi
-  auth_environment_plist="
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>VEX_EXPECTED_TEAM_ID</key>
-    <string>$pinned_team_id</string>
-  </dict>"
-else
-  echo "Pinned VEX_EXPECTED_TEAM_ID is required for privileged helper installation." >&2
-  exit 1
-fi
+# The helper uses its compiled-in policy; no caller-controlled auth environment.
+auth_environment_plist=""
 if [[ ! -x "$src_dir/awg-quick.sh" ]]; then
   echo "Missing VPN resource: $src_dir/awg-quick.sh" >&2
   exit 1
@@ -150,7 +132,7 @@ printf '%s\n' "$helper_version" > "$stage_dir/version"
 /usr/bin/xattr -dr com.apple.quarantine "$stage_dir/awg" "$stage_dir/amneziawg-go" "$stage_dir/awg-quick.sh" "$stage_dir/vex-helper" >/dev/null 2>&1 || true
 
 for required in awg amneziawg-go vex-helper; do
-  if ! /usr/bin/codesign --verify --strict --verbose=2 "$stage_dir/$required" >/dev/null 2>&1; then
+  if ! /usr/bin/codesign --verify --strict --verbose=2 -R="$resource_requirement" "$stage_dir/$required" >/dev/null 2>&1; then
     echo "Staged $required failed code-signature verification." >&2
     exit 1
   fi
@@ -256,7 +238,7 @@ replacement_started=1
 /bin/chmod 0644 "$helper_dir/config-path" "$helper_dir/version"
 /usr/sbin/chown -R root:wheel "$helper_dir"
 
-if ! /usr/bin/codesign --verify --strict --verbose=2 "$helper_dir/vex-helper" >/dev/null 2>&1; then
+if ! /usr/bin/codesign --verify --strict --verbose=2 -R="$resource_requirement" "$helper_dir/vex-helper" >/dev/null 2>&1; then
   echo "Installed vex-helper failed code-signature verification." >&2
   exit 1
 fi

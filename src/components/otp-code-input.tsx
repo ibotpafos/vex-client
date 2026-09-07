@@ -1,5 +1,5 @@
 import { forwardRef, useImperativeHandle, useRef } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { emailOTPCells, normalizeEmailOTPCode } from '@/auth/emailOtp';
 import { vexColors } from '@/ui/vex-ui';
 
@@ -52,7 +52,7 @@ export const OTPCodeInput = forwardRef<OTPCodeInputHandle, OTPCodeInputProps>(fu
         ref={inputRef}
         accessibilityElementsHidden
         autoCapitalize="none"
-        autoComplete="one-time-code"
+        autoComplete={Platform.OS === 'android' ? 'email-otp' : 'one-time-code'}
         importantForAutofill="yes"
         keyboardType="number-pad"
         maxLength={length}

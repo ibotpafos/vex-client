@@ -22,8 +22,8 @@ final class PKCEAuthService: NSObject, ASWebAuthenticationPresentationContextPro
         super.init()
     }
 
-    func startWebAuth(mode: WebAuthMode = .login) async throws -> URL {
-        let url = try makeWebAuthURL(mode: mode)
+    func startWebAuth(mode: WebAuthMode = .login, provider: WebAuthProvider? = nil) async throws -> URL {
+        let url = try makeWebAuthURL(mode: mode, provider: provider)
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 let session = ASWebAuthenticationSession(url: url, callbackURLScheme: "vexguard") { [weak self] callbackURL, error in
@@ -64,7 +64,7 @@ final class PKCEAuthService: NSObject, ASWebAuthenticationPresentationContextPro
         NSApp.keyWindow ?? NSApp.mainWindow ?? NSApp.windows.first { $0.isVisible } ?? ASPresentationAnchor()
     }
 
-    private func makeWebAuthURL(mode: WebAuthMode) throws -> URL {
+    func makeWebAuthURL(mode: WebAuthMode, provider: WebAuthProvider? = nil) throws -> URL {
         let verifier = randomString(length: 64)
         let state = randomString(length: 16)
         defaults.set(verifier, forKey: verifierKey)
@@ -80,6 +80,9 @@ final class PKCEAuthService: NSObject, ASWebAuthenticationPresentationContextPro
             URLQueryItem(name: "platform", value: "macos"),
             URLQueryItem(name: "mode", value: mode.rawValue),
         ]
+        if let provider {
+            components?.queryItems?.append(URLQueryItem(name: "provider", value: provider.rawValue))
+        }
         guard let url = components?.url else {
             throw VEXAPIError.invalidResponse
         }
@@ -138,6 +141,10 @@ final class PKCEAuthService: NSObject, ASWebAuthenticationPresentationContextPro
         _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
         return String(bytes.map { alphabet[Int($0) % alphabet.count] })
     }
+}
+
+enum WebAuthProvider: String {
+    case google
 }
 
 enum WebAuthMode: String {

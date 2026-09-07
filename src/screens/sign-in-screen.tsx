@@ -27,6 +27,7 @@ import {
   exchangeAppAuthCode,
   vexApiBaseUrl,
 } from "@/api/vexApi";
+import { signInWithGoogleAndroid, isGoogleSignInCancelled } from "@/native/googleAuth";
 import { useSession } from "@/auth/session-context";
 import {
   authCallbackAttemptKey,
@@ -157,7 +158,7 @@ export default function SignInScreen() {
       if (handledCallbackUrls.current.has(url)) return;
       handledCallbackUrls.current.add(url);
 
-      console.log("Received callback URL:", url);
+      console.log("Received auth callback");
       playLightImpactHaptic();
       setIsAuthBusy(true);
       setAuthError(null);
@@ -277,7 +278,9 @@ export default function SignInScreen() {
     };
   }, []);
 
-  const handleWebAuthStart = useCallback(async () => {
+  const handleWebAuthStart = useCallback(async (provider?: "google") => {
+    if (authSubmitInFlight.current) return;
+    authSubmitInFlight.current = true;
     playLightImpactHaptic();
     setIsAuthBusy(true);
     setAuthError(null);
@@ -300,6 +303,7 @@ export default function SignInScreen() {
         deviceName,
         platform,
         state,
+        provider,
       });
 
       console.log("Opening Web Auth URL for platform:", platform);
@@ -316,9 +320,42 @@ export default function SignInScreen() {
           : "Не удалось запустить веб-авторизацию.",
       );
     } finally {
+      authSubmitInFlight.current = false;
       setIsAuthBusy(false);
     }
   }, [handleCallbackUrl]);
+
+  const handleGoogleSignIn = useCallback(async () => {
+    if (Platform.OS !== "android") {
+      await handleWebAuthStart("google");
+      return;
+    }
+    if (authSubmitInFlight.current) return;
+    authSubmitInFlight.current = true;
+    setIsAuthBusy(true);
+    setAuthError(null);
+    setAuthNotice(null);
+    playLightImpactHaptic();
+    try {
+      const nextSession = await signInWithGoogleAndroid();
+      resetVpnProfileCache();
+      await signIn(nextSession);
+      setEmailOTPCode("");
+      setEmailOTPChallenge(null);
+      await queryClient.invalidateQueries({ queryKey: ["entitlement"] });
+      await queryClient.invalidateQueries({ queryKey: ["vpn-profile"] });
+      playSuccessHaptic();
+      router.replace("/");
+    } catch (error) {
+      if (!isGoogleSignInCancelled(error)) {
+        playErrorHaptic();
+        setAuthError("Не удалось войти через Google. Проверьте интернет и повторите вход.");
+      }
+    } finally {
+      authSubmitInFlight.current = false;
+      setIsAuthBusy(false);
+    }
+  }, [handleWebAuthStart, queryClient, signIn]);
 
   const handleEmailChange = useCallback((value: string) => {
     setEmail(value);
@@ -370,9 +407,9 @@ export default function SignInScreen() {
         return;
       }
       const code = normalizeEmailOTPCode(emailOTPCode);
-      if (!code) {
+      if (code.length !== 6) {
         playWarningHaptic();
-        setAuthError("Введите код из письма.");
+        setAuthError("Введите 6 цифр кода из письма.");
         return;
       }
       const nextSession = await confirmEmailOTP(
@@ -395,7 +432,7 @@ export default function SignInScreen() {
         return;
       }
       setAuthError(isInvalidOrExpiredEmailOTPError(error)
-        ? "Код не подошёл. Проверьте цифры или запросите новый код."
+        ? "Проверьте код из письма или запросите новый."
         : emailOTPRequestErrorMessage(error));
     } finally {
       authSubmitInFlight.current = false;
@@ -542,6 +579,11 @@ export default function SignInScreen() {
         {canUseBiometricAuth ? (
           <Button disabled={isAuthBusy} onPress={() => { void handleBiometricAuth(); }} style={sheetButtonStyle} variant="outlined">
             <UniversalText textStyle={styles.secondaryButtonText}>{`Войти по ${biometricAuthLabel}`}</UniversalText>
+          </Button>
+        ) : null}
+        {!emailOTPChallenge && supportsWebsiteAuth() ? (
+          <Button disabled={isAuthBusy} onPress={handleGoogleSignIn} style={sheetButtonStyle} variant="outlined">
+            <UniversalText textStyle={styles.secondaryButtonText}>Войти через Google</UniversalText>
           </Button>
         ) : null}
         {!emailOTPChallenge && supportsWebsiteAuth() ? (

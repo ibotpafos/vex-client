@@ -1,11 +1,12 @@
 import * as Application from 'expo-application';
 import { Button, Column, Host, List, ListItem, Spacer, Text as UniversalText } from '@expo/ui';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, Linking, Modal, Platform, StyleSheet } from 'react-native';
 import { installManualUpdate } from '@/api/manualUpdateInstall';
 import { requiresNativeUpdate } from '@/api/updatePreflight';
 import { validateManualUpdatePayload, type AppUpdateCheckResult } from '@/api/vexApi';
 import { useMobileAppUpdateQuery } from '@/components/mobile-app-update-query';
+import { createAndroidUpdateInstallGate } from '@/components/android-update-install-gate';
 import { playErrorHaptic, playLightImpactHaptic, playSelectionHaptic, playSuccessHaptic } from '@/native/haptics';
 import * as SecureStore from '@/native/secureStore';
 
@@ -35,6 +36,7 @@ export function AndroidUpdateOverlay() {
 }
 
 function AndroidUpdateOverlayContent() {
+  const installGate = useRef(createAndroidUpdateInstallGate()).current;
   const updateQuery = useMobileAppUpdateQuery('android', androidBuild);
   const update = updateQuery.data ?? null;
   const [downloadState, setDownloadState] = useState<DownloadState>({ status: 'idle' });
@@ -69,12 +71,13 @@ function AndroidUpdateOverlayContent() {
   const signingMigration = isAndroidSigningKeyMigration(update);
   const canOpenManualDownload = signingMigration;
   const handleDismiss = useCallback(() => {
+    if (installGate.isRunning()) return;
     if (update?.latestBuild) {
       playSelectionHaptic();
       setDismissedBuild(update.latestBuild);
       void SecureStore.deleteItemAsync(pendingAndroidInstallKey).catch(() => undefined);
     }
-  }, [update?.latestBuild]);
+  }, [installGate, update?.latestBuild]);
 
   const handleOpenManualDownload = useCallback(async () => {
     if (!update) {
@@ -95,30 +98,32 @@ function AndroidUpdateOverlayContent() {
   }, [update]);
 
   const performInstall = useCallback(async (build: number, resumeAttempted: boolean) => {
-    playLightImpactHaptic();
-    try {
-      if (!update || update.latestBuild !== build) {
-        throw new Error('Данные обновления недоступны.');
+    await installGate.run(async () => {
+      playLightImpactHaptic();
+      try {
+        if (!update || update.latestBuild !== build) {
+          throw new Error('Данные обновления недоступны.');
+        }
+        setDownloadState({ status: 'installing', build });
+        await SecureStore.setItemAsync(pendingAndroidInstallKey, JSON.stringify({ build, resumeAttempted }));
+        const result = await installManualUpdate(update, 'android');
+        if (result.status === 'install_permission_required') {
+          setDownloadState({ status: 'permission_required', build: update.latestBuild });
+          return;
+        }
+        await SecureStore.deleteItemAsync(pendingAndroidInstallKey).catch(() => undefined);
+        setInstallerOpenedBuild(update.latestBuild);
+        setDismissedBuild(update.latestBuild);
+        setDownloadState({ status: 'installer_opened', build: update.latestBuild });
+        playSuccessHaptic();
+      } catch (error) {
+        await SecureStore.deleteItemAsync(pendingAndroidInstallKey).catch(() => undefined);
+        playErrorHaptic();
+        const message = error instanceof Error && error.message ? error.message : 'Не удалось открыть ссылку обновления.';
+        setDownloadState({ status: 'error', build, message });
       }
-      setDownloadState({ status: 'installing', build });
-      await SecureStore.setItemAsync(pendingAndroidInstallKey, JSON.stringify({ build, resumeAttempted }));
-      const result = await installManualUpdate(update, 'android');
-      if (result.status === 'install_permission_required') {
-        setDownloadState({ status: 'permission_required', build: update.latestBuild });
-        return;
-      }
-      await SecureStore.deleteItemAsync(pendingAndroidInstallKey).catch(() => undefined);
-      setInstallerOpenedBuild(update.latestBuild);
-      setDismissedBuild(update.latestBuild);
-      setDownloadState({ status: 'installer_opened', build: update.latestBuild });
-      playSuccessHaptic();
-    } catch (error) {
-      await SecureStore.deleteItemAsync(pendingAndroidInstallKey).catch(() => undefined);
-      playErrorHaptic();
-      const message = error instanceof Error && error.message ? error.message : 'Не удалось открыть ссылку обновления.';
-      setDownloadState({ status: 'error', build, message });
-    }
-  }, [update]);
+    });
+  }, [installGate, update]);
 
   const handleInstall = useCallback(async () => {
     if (downloadState.status !== 'ready' && downloadState.status !== 'permission_required') {
@@ -135,7 +140,7 @@ function AndroidUpdateOverlayContent() {
     let restoring = false;
 
     const restorePendingInstall = async () => {
-      if (cancelled || restoring) {
+      if (cancelled || restoring || installGate.isRunning()) {
         return;
       }
       restoring = true;
@@ -143,17 +148,12 @@ function AndroidUpdateOverlayContent() {
         const pending = parsePendingAndroidInstall(
           await SecureStore.getItemAsync(pendingAndroidInstallKey).catch(() => null),
         );
-        if (!pending || pending.build !== update.latestBuild) {
+        if (cancelled || installGate.isRunning() || !pending || pending.build !== update.latestBuild) {
           return;
         }
         setDownloadState({ status: 'permission_required', build: pending.build });
-        if (!pending.resumeAttempted) {
-          await SecureStore.setItemAsync(
-            pendingAndroidInstallKey,
-            JSON.stringify({ ...pending, resumeAttempted: true }),
-          );
-          await performInstall(pending.build, true);
-        }
+        // Native onHostResume owns automatic permission-return installation.
+        // JS restores the retry UI only, avoiding a second download/installer.
       } finally {
         restoring = false;
       }
@@ -169,7 +169,7 @@ function AndroidUpdateOverlayContent() {
       cancelled = true;
       subscription.remove();
     };
-  }, [performInstall, update?.latestBuild]);
+  }, [installGate, update?.latestBuild]);
 
   const handleRetryDownload = useCallback(() => {
     if (!update?.latestBuild || !preflight.ok) {
@@ -194,12 +194,12 @@ function AndroidUpdateOverlayContent() {
     : signingMigration
       ? 'Новая Android-сборка VEX'
       : needsInstallPermission
-        ? 'Разрешите установку APK'
+        ? 'Продолжите установку'
         : isReady
           ? 'Обновление готово'
-          : update.required
-            ? 'Нужно обновить VEX'
-            : 'Готовим обновление';
+          : isError
+            ? 'Ошибка обновления'
+            : 'Загружаем обновление';
   const text = isReady
     ? signingMigration
       ? 'Это новая сборка с другой подписью. Скачайте APK, установите его как новое приложение, войдите в аккаунт и после проверки доступа удалите старый VEX.'
@@ -207,12 +207,12 @@ function AndroidUpdateOverlayContent() {
         ? 'Установите предложенную стабильную версию, чтобы вернуться на поддерживаемую сборку.'
         : 'VEX скачает APK, проверит checksum и подпись приложения, затем откроет системный установщик.'
     : needsInstallPermission
-      ? 'Android открыл настройки установки из этого источника. Включите разрешение для VEX, вернитесь сюда и нажмите продолжить установку.'
+      ? 'Если Android запросил разрешение установки, включите его для VEX и вернитесь в приложение. Если установка не открылась или была отменена, нажмите «Продолжить установку».'
       : isError
         ? 'Не удалось подготовить обновление. Проверьте подключение и попробуйте позже.'
         : signingMigration
           ? 'Откройте сайт VEX, скачайте новую сборку, установите ее и удалите старую после входа в аккаунт.'
-          : 'VEX готовит ссылку на новую версию.';
+          : 'VEX скачивает и проверяет APK. Дождитесь открытия установщика Android.';
 
   const primaryLabel = isReady
     ? signingMigration
@@ -240,12 +240,12 @@ function AndroidUpdateOverlayContent() {
           {update.changelog ? <UniversalText textStyle={styles.notes}>{update.changelog}</UniversalText> : null}
           <List>
             <ListItem supportingText={`Новая: ${update.latestVersion} (${update.latestBuild})`}>
-              Сейчас: {Application.nativeApplicationVersion || 'dev'} ({androidBuild || 0})
+              {`Сейчас: ${Application.nativeApplicationVersion || 'dev'} (${androidBuild || 0})`}
             </ListItem>
           </List>
           {!preflight.ok ? <UniversalText textStyle={styles.error}>{preflight.error}</UniversalText> : null}
           {isError ? <UniversalText textStyle={styles.error}>{downloadState.message}</UniversalText> : null}
-          <Button label={update.required ? 'Закрыть' : 'Позже'} onPress={handleDismiss} variant="outlined" />
+          <Button disabled={downloadState.status === 'installing'} label={update.required ? 'Закрыть' : 'Позже'} onPress={handleDismiss} variant="outlined" />
           <Button disabled={primaryDisabled} label={primaryLabel} onPress={handlePrimary} />
           <Spacer flexible />
         </Column>
@@ -294,7 +294,10 @@ function shouldShowUpdateSheet(
   if (update.required) {
     return true;
   }
-  return downloadState.status === 'ready';
+  return downloadState.status === 'ready'
+    || downloadState.status === 'installing'
+    || downloadState.status === 'permission_required'
+    || downloadState.status === 'error';
 }
 
 function isAndroidSigningKeyMigration(update: AppUpdateCheckResult | null): boolean {

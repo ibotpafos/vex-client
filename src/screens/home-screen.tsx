@@ -17,13 +17,12 @@ import { useVpnConnectionContext } from '@/vpn/vpn-connection-context';
 import { ServerChip } from '../components/server-chip';
 import { ServerPickerModal } from '../components/server-picker-modal';
 import { TrafficStats } from '../components/traffic-stats';
-import { type ConnectionPhase } from './home-screen-helpers';
+import { type ConnectionPhase, locationLatencyText, serverLocationLabel } from './home-screen-helpers';
+import { countryGroups, stableCountryGroups, type CountryGroup } from './country-groups';
 import { serverPickerActionForSource } from './server-picker-interactions';
 import { styles } from './home-screen.styles';
 import {
-  homeLocationPreviews,
   locationCarouselItemLayout,
-  stableHomeLocationPreviews,
 } from './home-location-previews';
 
 export default function App() {
@@ -57,6 +56,11 @@ export default function App() {
     closeUpdateCenter,
   } = useVpnConnectionContext();
   const [isServerPickerVisible, setIsServerPickerVisible] = useState(false);
+  const [serverPickerSnapshot, setServerPickerSnapshot] = useState<{
+    latencyText: string;
+    countryTitle?: string;
+    locations: VpnLocation[];
+  } | null>(null);
   const { width: viewportWidth } = useWindowDimensions();
   const reduceMotionVisuals = Platform.OS === 'android';
 
@@ -91,19 +95,19 @@ export default function App() {
       : connectionPhase === 'disconnecting'
         ? 'Завершаем'
         : 'VPN выключен';
-  const locationPreviewsRef = useRef<ReturnType<typeof homeLocationPreviews>>([]);
-  const locationPreviews = stableHomeLocationPreviews(
-    locationPreviewsRef.current,
-    availableLocations,
-    selectedLocation,
+  const groupsRef = useRef<CountryGroup[]>([]);
+  const groups = stableCountryGroups(
+    groupsRef.current,
+    countryGroups(availableLocations, selectedLocationId, selectedLocation),
   );
-  locationPreviewsRef.current = locationPreviews;
+  groupsRef.current = groups;
+  const locationPreviews = groups;
   const carouselWidth = Math.min(viewportWidth - (viewportWidth <= 360 ? 16 : 24), 430);
   const carouselCardWidth = carouselWidth - 44;
   const carouselSnapInterval = carouselCardWidth + vexTheme.spacing.sm;
   const locationPreviewCount = locationPreviews.length;
   const getLocationItemLayout = useCallback(
-    (_data: ArrayLike<VpnLocation> | null | undefined, index: number) => (
+    (_data: ArrayLike<CountryGroup> | null | undefined, index: number) => (
       locationCarouselItemLayout(carouselCardWidth, vexTheme.spacing.sm, index)
     ),
     [carouselCardWidth],
@@ -112,33 +116,32 @@ export default function App() {
     () => ({ paddingRight: carouselWidth - carouselCardWidth }),
     [carouselCardWidth, carouselWidth],
   );
-  const handleLocationPressRef = useRef(handleLocationPress);
-  handleLocationPressRef.current = handleLocationPress;
-  const handleCarouselLocationPress = useCallback((locationId: string) => {
-    if (serverPickerActionForSource('carousel') !== 'select') {
-      return;
-    }
-    void handleLocationPressRef.current(locationId, false);
-  }, []);
-  const renderLocationPreview = useCallback<ListRenderItem<VpnLocation>>(({ item: location }) => {
-    const isSelected = location.id === selectedLocation?.id;
+  const renderLocationPreview = useCallback<ListRenderItem<CountryGroup>>(({ item: group }) => {
+    const location = group.representative;
     return (
       <LocationCarouselItem
+        availableNodeCount={group.availableNodeCount}
         disabled={isVpnBusy}
-        isAutoMode={isSelected && serverSelectionMode === 'auto'}
-        isSelected={isSelected}
-        latencyText={isSelected ? selectedLatencyText : `${Math.max(0, Math.round(location.latencyMs ?? 0))} мс`}
+        isAutoMode={group.isSelected && serverSelectionMode === 'auto'}
+        isSelected={group.isSelected}
+        latencyText={group.isSelected ? selectedLatencyText : locationLatencyText(location)}
         location={location}
-        onSelect={handleCarouselLocationPress}
+        onSelect={() => {
+          if (serverPickerActionForSource('carousel') !== 'open_picker') return;
+          setServerPickerSnapshot({
+            latencyText: selectedLatencyText,
+            countryTitle: serverLocationLabel(location),
+            locations: group.locations.map((member) => ({ ...member })),
+          });
+          requestAnimationFrame(() => setIsServerPickerVisible(true));
+        }}
         width={carouselCardWidth}
       />
     );
   }, [
     carouselCardWidth,
-    handleCarouselLocationPress,
     isVpnBusy,
     selectedLatencyText,
-    selectedLocation?.id,
     serverSelectionMode,
   ]);
 
@@ -207,6 +210,10 @@ export default function App() {
                     if (serverPickerActionForSource('all_locations') !== 'open_picker') {
                       return;
                     }
+                    setServerPickerSnapshot({
+                      latencyText: selectedLatencyText,
+                      locations: groups.flatMap((group) => group.locations.map((location) => ({ ...location }))),
+                    });
                     void refreshLocationsForPicker().catch(() => undefined);
                     requestAnimationFrame(() => setIsServerPickerVisible(true));
                   }}
@@ -226,7 +233,7 @@ export default function App() {
                 getItemLayout={getLocationItemLayout}
                 horizontal
                 initialNumToRender={locationPreviewCount}
-                keyExtractor={locationKeyExtractor}
+                keyExtractor={countryGroupKeyExtractor}
                 maxToRenderPerBatch={locationPreviewCount}
                 nestedScrollEnabled
                 overScrollMode="never"
@@ -259,10 +266,11 @@ export default function App() {
       </ScrollView>
       <ServerPickerModal
         isVpnBusy={isVpnBusy}
+        countryTitle={serverPickerSnapshot?.countryTitle}
         isRefreshing={isLocationsRefreshing}
-        locations={availableLocations}
+        locations={serverPickerSnapshot?.locations ?? availableLocations}
         refreshError={locationsRefreshError}
-        selectedLatencyText={selectedLatencyText}
+        selectedLatencyText={serverPickerSnapshot?.latencyText ?? selectedLatencyText}
         selectionMode={serverSelectionMode}
         selectedLocationId={selectedLocationId}
         visible={isServerPickerVisible}
@@ -283,11 +291,12 @@ export default function App() {
   );
 }
 
-function locationKeyExtractor(location: VpnLocation): string {
-  return location.id;
+function countryGroupKeyExtractor(group: CountryGroup): string {
+  return group.id;
 }
 
 type LocationCarouselItemProps = {
+  availableNodeCount: number;
   disabled: boolean;
   isAutoMode: boolean;
   isSelected: boolean;
@@ -298,6 +307,7 @@ type LocationCarouselItemProps = {
 };
 
 const LocationCarouselItem = React.memo(function LocationCarouselItem({
+  availableNodeCount,
   disabled,
   isAutoMode,
   isSelected,
@@ -311,6 +321,7 @@ const LocationCarouselItem = React.memo(function LocationCarouselItem({
   return (
     <View style={itemStyle}>
       <ServerChip
+        availableNodeCount={availableNodeCount}
         disabled={disabled}
         isAutoMode={isAutoMode}
         isSelected={isSelected}

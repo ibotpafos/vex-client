@@ -5,6 +5,7 @@ export type AppWebAuthUrlInput = {
   deviceName: string;
   platform: string;
   state: string;
+  provider?: 'google';
 };
 
 export function buildAppWebAuthUrl(input: AppWebAuthUrlInput): string {
@@ -15,6 +16,7 @@ export function buildAppWebAuthUrl(input: AppWebAuthUrlInput): string {
     device_id: input.deviceId,
     device_name: input.deviceName,
     platform: input.platform,
+    ...(input.provider ? { provider: input.provider } : {}),
   }).toString()}`;
 }
 

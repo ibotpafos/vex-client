@@ -177,7 +177,7 @@ final class VEXPrivilegedHelperCoreTests: XCTestCase {
         )
         let fileSystem = InMemoryFileSystem(files: [
             "/helper/config-path": "/helper/vex.conf\n",
-            "/helper/vex.conf": "[Interface]\nAddress = 10.0.0.2/32\n[Peer]\nEndpoint = 1.1.1.1:51820\nAllowedIPs = 0.0.0.0/0\n",
+            "/helper/vex.conf": "[Interface]\nPrivateKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\nAddress = 10.0.0.2/32\n[Peer]\nPublicKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\nEndpoint = 1.1.1.1:51820\nAllowedIPs = 0.0.0.0/0\n",
             "/amnezia/active.name": "utun9\n",
             "/helper/dns-baseline.state": "\n",
             "/runtime/utun9.sock": ""
@@ -412,7 +412,7 @@ final class VEXPrivilegedHelperCoreTests: XCTestCase {
         )
         let fileSystem = InMemoryFileSystem(files: [
             "/helper/config-path": "/user/vex.conf\n",
-            "/user/vex.conf": "[Interface]\nPrivateKey = key\n[Peer]\nEndpoint = 1.1.1.1:51820\n"
+            "/user/vex.conf": "[Interface]\nPrivateKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\nAddress = 10.0.0.2/32\n[Peer]\nPublicKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\nEndpoint = 1.1.1.1:51820\nAllowedIPs = 0.0.0.0/0\n"
         ])
         let runner = RecordingCommandRunner([
             CommandSpec(program: "/helper/awg-quick.sh", arguments: ["up", "/helper/active.conf"]): .init(status: 124),

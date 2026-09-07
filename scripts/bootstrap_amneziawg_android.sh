@@ -6,8 +6,8 @@ external_dir="${AMNEZIAWG_EXTERNAL_DIR:-"${root_dir}/external/amnezia"}"
 
 android_repo_url="${AMNEZIAWG_ANDROID_REPO_URL:-https://github.com/amnezia-vpn/amneziawg-android.git}"
 go_repo_url="${AMNEZIAWG_GO_REPO_URL:-https://github.com/amnezia-vpn/amneziawg-go.git}"
-android_ref="${AMNEZIAWG_ANDROID_REF:-f82900455f1aceaa85658686dc2c5e32c2c42a73}"
-go_ref="08d68cdae27762c3e07f36bbb12d2bad32f81926"
+android_ref="5c16489e2cd9ed3a0a7a27c7445bba5238132f86"
+go_ref="b5928efb6ca19f0153958460c3d141f04abc5c2e"
 clean_checkout="${AMNEZIAWG_CLEAN:-1}"
 
 apply_patch_once() {
@@ -24,6 +24,27 @@ apply_patch_once() {
 
   echo "Cannot apply patch cleanly: ${patch}" >&2
   exit 1
+}
+
+# Earlier VEX patches replaced the pre-v3 module name and did not select the
+# engine actually imported by the pinned wrapper. Reverse that exact legacy
+# patch first; refuse unrelated edits rather than resetting a reused checkout.
+migrate_legacy_local_go_patch() {
+  local dir="$1" patch="$2" legacy
+  if git -C "${dir}" apply --check "${patch}" >/dev/null 2>&1 ||
+     git -C "${dir}" apply --reverse --check "${patch}" >/dev/null 2>&1; then
+    return
+  fi
+  legacy="$(mktemp)"
+  sed 's@replace github.com/amnezia-vpn/amneziawg-go/v3 =>@replace github.com/amnezia-vpn/amneziawg-go =>@' "${patch}" > "${legacy}"
+  if git -C "${dir}" apply --reverse --check "${legacy}" >/dev/null 2>&1; then
+    git -C "${dir}" apply --reverse "${legacy}"
+  else
+    rm -f "${legacy}"
+    echo "Local Go patch differs from both supported forms" >&2
+    exit 1
+  fi
+  rm -f "${legacy}"
 }
 
 clone_or_reset() {
@@ -61,7 +82,19 @@ clone_or_reset "amneziawg-go" "${go_repo_url}" "${go_ref}" || true
 if clone_or_reset "amneziawg-android" "${android_repo_url}" "${android_ref}"; then
   git -C "${external_dir}/amneziawg-android" submodule update --init --recursive --depth 1
 fi
+migrate_legacy_local_go_patch "${external_dir}/amneziawg-android" "${root_dir}/patches/amnezia/amneziawg-android-macos-local-go.patch"
 apply_patch_once "${external_dir}/amneziawg-android" "${root_dir}/patches/amnezia/amneziawg-android-macos-local-go.patch"
 apply_patch_once "${external_dir}/amneziawg-android" "${root_dir}/patches/amnezia/amneziawg-android-vpn-foreground-service.patch"
+
+# Check the effective module graph, not only the text of a potentially unused replace.
+(cd "${external_dir}/amneziawg-android/tunnel/tools/libwg-go" &&
+  go list -m -json github.com/amnezia-vpn/amneziawg-go/v3) |
+  python3 -c 'import json, pathlib, sys
+module = json.load(sys.stdin)
+expected = pathlib.Path(sys.argv[1]).resolve()
+replacement = module.get("Replace", {})
+if module.get("Path") != "github.com/amnezia-vpn/amneziawg-go/v3" or not replacement.get("Dir") or pathlib.Path(replacement["Dir"]).resolve() != expected:
+    sys.exit("Pinned AWG Go v3 module did not resolve to the verified local checkout")
+print("AMNEZIAWG_GO_V3_LOCAL_REPLACEMENT=verified")' "${external_dir}/amneziawg-go"
 
 echo "AMNEZIAWG_TUNNEL_DIR=${external_dir}/amneziawg-android/tunnel"

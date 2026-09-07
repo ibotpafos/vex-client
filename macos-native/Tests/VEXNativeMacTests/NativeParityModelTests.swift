@@ -74,28 +74,59 @@ final class NativeParityModelTests: XCTestCase {
             "s2": 12,
             "s3": 12,
             "s4": 12,
+            "i1": "<r 8><t><rc 8>",
             "header_protection_key": "header-key",
             "content_padding_addition": "0",
             "rekey_after_time": "120-180",
             "rekey_timeout": "2-4",
             "reject_after_time": "180-240",
             "keepalive_timeout": "10-15",
-            "max_handshake_attempts": "20-30"
+            "max_handshake_attempts": "20-30",
+            "random_trailers": "true",
+            "disable_cookies": "false"
           }
         }
         """.data(using: .utf8)!
 
         let profile = try JSONDecoder().decode(ManagedVpnProfile.self, from: data)
-        let config = VPNProfileService.amneziaConfig(profile.amnezia)
+        let config = try VPNProfileService.amneziaConfig(profile.amnezia)
 
         XCTAssertEqual(profile.amneziaVersion, 3)
-        XCTAssertTrue(config.contains("HeaderProtectionKey = header-key\n"))
-        XCTAssertTrue(config.contains("ContentPaddingAddition = 0\n"))
-        XCTAssertTrue(config.contains("RekeyAfterTime = 120-180\n"))
-        XCTAssertTrue(config.contains("RekeyTimeout = 2-4\n"))
-        XCTAssertTrue(config.contains("RejectAfterTime = 180-240\n"))
-        XCTAssertTrue(config.contains("KeepaliveTimeout = 10-15\n"))
-        XCTAssertTrue(config.contains("MaxHandshakeAttempts = 20-30\n"))
+        let expectedConfig = [
+            "Jc = 4",
+            "S1 = 12",
+            "S2 = 12",
+            "S3 = 12",
+            "S4 = 12",
+            "I1 = <r 8><t><rc 8>",
+            "HeaderProtectionKey = header-key",
+            "ContentPaddingAddition = 0",
+            "RekeyAfterTime = 120-180",
+            "RekeyTimeout = 2-4",
+            "RejectAfterTime = 180-240",
+            "KeepaliveTimeout = 10-15",
+            "MaxHandshakeAttempts = 20-30",
+            "RandomTrailers = on",
+            "DisableCookies = off"
+        ].joined(separator: "\n") + "\n"
+
+        XCTAssertEqual(config, expectedConfig)
+    }
+
+    func testManagedProfileOmitsUnsetAWG3OptionalFields() throws {
+        let data = """
+        {
+          "amnezia": { "jc": 4 }
+        }
+        """.data(using: .utf8)!
+
+        let profile = try JSONDecoder().decode(ManagedVpnProfile.self, from: data)
+        let config = try VPNProfileService.amneziaConfig(profile.amnezia)
+
+        XCTAssertEqual(config, "Jc = 4\n")
+        XCTAssertFalse(config.contains("I1 ="))
+        XCTAssertFalse(config.contains("RandomTrailers ="))
+        XCTAssertFalse(config.contains("DisableCookies ="))
     }
 
     func testManagedProfileRequestsMacOSCompactRoutingPolicy() throws {
@@ -347,19 +378,19 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertNil(store.endpoint(for: "fi"), "Empty endpoints must be rejected")
     }
 
-    func testConnectFlowPersistsLastSuccessfulEndpointForFasterReconnects() throws {
+    func testConnectFlowPersistsLastSuccessfulEndpointMetadata() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let appStateURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Stores/VEXAppState.swift")
-        let autopilotURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/VpnAutopilotService.swift")
         let profileServiceURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/VPNProfileService.swift")
         let appState = try String(contentsOf: appStateURL, encoding: .utf8)
-        let autopilot = try String(contentsOf: autopilotURL, encoding: .utf8)
         let profileService = try String(contentsOf: profileServiceURL, encoding: .utf8)
 
         XCTAssertTrue(appState.contains("LastTunnelEndpointStore().save(endpoint, locationId: attempt.locationId)"))
         XCTAssertTrue(appState.contains("LastTunnelEndpointStore().save(endpoint, locationId: nextTunnel.locationId)"))
         XCTAssertTrue(profileService.contains("LastTunnelEndpointStore().endpoint(for: locationId)"))
-        XCTAssertTrue(autopilot.contains("if let lastSuccessfulEndpoint = tunnel.lastSuccessfulEndpoint"), "Autopilot must try the known-good endpoint first")
+        // Retained endpoint metadata must not authorize a listener absent from
+        // the complete current profile. The fallback behavior is tested below
+        // with a retired cached endpoint and an unchanged admitted config.
     }
 
     func testVpnReportingNeverBlocksBusyStateOrSuccessFeedback() throws {
@@ -857,10 +888,19 @@ final class NativeParityModelTests: XCTestCase {
 
         XCTAssertEqual(attempts.map(\.endpoint), [
             "de1.vexguard.app:8443",
-            "de1.vexguard.app:443",
         ])
-        XCTAssertTrue(attempts[1].config.contains("Endpoint = de1.vexguard.app:443"))
+        XCTAssertEqual(attempts[0].config, tunnel.config)
         XCTAssertFalse(attempts.contains { $0.endpoint?.hasSuffix(":51820") == true })
+        var cached = tunnel
+        cached.locationId = "admission-test-" + UUID().uuidString
+        LastTunnelEndpointStore().save("retired.example:443", locationId: cached.locationId)
+        defer { UserDefaults.standard.removeObject(forKey: "native.lastSuccessfulEndpoint." + cached.locationId.lowercased()) }
+        let cachedAttempts = VpnAutopilotService().fallbackTunnels(for: cached)
+        XCTAssertEqual(cachedAttempts.map(\.endpoint), [tunnel.endpoint])
+        XCTAssertEqual(cachedAttempts.map(\.config), [cached.config])
+        let ipv6 = tunnel.withEndpoint("[2001:db8::1]:51824")!
+        XCTAssertEqual(VpnAutopilotService().fallbackTunnels(for: ipv6).map(\.endpoint), ["[2001:db8::1]:51824"])
+
     }
 
     func testNativeHelperStartDoesNotRequireAdminPassword() throws {
@@ -912,7 +952,7 @@ final class NativeParityModelTests: XCTestCase {
         let helperBuildScript = try String(contentsOf: helperBuildScriptURL, encoding: .utf8)
         let verifyScript = try String(contentsOf: verifyScriptURL, encoding: .utf8)
 
-        XCTAssertEqual(helperVersion, "36")
+        XCTAssertEqual(helperVersion, "37")
         XCTAssertTrue(installer.contains("helper_version_file=\"$src_dir/helper-version\""))
         XCTAssertTrue(nativeInstaller.contains("resourceFile(\"helper-version\")"))
         XCTAssertTrue(buildScript.contains("helper-version"))

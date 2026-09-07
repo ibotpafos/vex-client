@@ -6,7 +6,7 @@ import {
   withLastSuccessfulEndpoint,
 } from '@/vpn/hotProfileCache';
 import {
-  connectionAttemptsForProfile,
+  connectSuppliedProfile,
   isVpnTransportFallbackError,
   profileEndpoint,
 } from '@/vpn/connectionFallback';
@@ -91,49 +91,40 @@ export function useVpnConnectionFlow({
     if (!androidVpnProfileWithinBinderBudget(Platform.OS, profile.config)) {
       throw new Error('Android VPN profile exceeds the safe route limit. Refresh the profile before connecting.');
     }
-    let lastError: unknown;
     const endpointAttempts: string[] = [];
     const applicationSelection = await getVpnApplicationSelection();
-    for (const attempt of connectionAttemptsForProfile(profile)) {
-      try {
-        const endpoint = profileEndpoint(attempt);
-        if (endpoint) {
-          endpointAttempts.push(endpoint);
-        }
-        const nativeStartMs = Date.now();
-        const startedStatus = await withTimeout(
-          connectVpn(attempt.config, {
-            antiLeakEnabled,
-            applicationRoutingMode: applicationSelection.mode,
-            selectedApplications: applicationSelection.packageNames,
-          }),
-          connectAttemptTimeoutMs,
-          'VPN connect timed out.',
-        );
-        const interfaceUpMs = Date.now();
-        const status = await waitForVerifiedVpnConnection(startedStatus, getVpnStatus, {
-          // The native backend can briefly expose the previous peer timestamp
-          // while replacing a tunnel. Require activity from this attempt. The
-          // small tolerance covers second-resolution backend timestamps.
-          minimumHandshakeEpochMillis: nativeStartMs - 2_000,
-        });
-        const verificationCompletedMs = Date.now();
-        return {
-          interfaceUpMs,
-          endpointAttempts,
-          nativeStartMs,
-          profile: withLastSuccessfulEndpoint(attempt, endpoint),
-          status,
-          verificationCompletedMs,
-        };
-      } catch (error) {
-        lastError = error;
-        if (!isVpnTransportFallbackError(error)) {
-          throw error;
-        }
+    return connectSuppliedProfile(profile, async (attempt) => {
+      const endpoint = profileEndpoint(attempt);
+      if (endpoint) {
+        endpointAttempts.push(endpoint);
       }
-    }
-    throw lastError;
+      const nativeStartMs = Date.now();
+      const startedStatus = await withTimeout(
+        connectVpn(attempt.config, {
+          antiLeakEnabled,
+          applicationRoutingMode: applicationSelection.mode,
+          selectedApplications: applicationSelection.packageNames,
+        }),
+        connectAttemptTimeoutMs,
+        'VPN connect timed out.',
+      );
+      const interfaceUpMs = Date.now();
+      const status = await waitForVerifiedVpnConnection(startedStatus, getVpnStatus, {
+        // The native backend can briefly expose the previous peer timestamp
+        // while replacing a tunnel. Require activity from this attempt. The
+        // small tolerance covers second-resolution backend timestamps.
+        minimumHandshakeEpochMillis: nativeStartMs - 2_000,
+      });
+      const verificationCompletedMs = Date.now();
+      return {
+        interfaceUpMs,
+        endpointAttempts,
+        nativeStartMs,
+        profile: withLastSuccessfulEndpoint(attempt, endpoint),
+        status,
+        verificationCompletedMs,
+      };
+    });
   }, [antiLeakEnabled]);
 
   const connectCurrentVpn = useCallback(async ({
@@ -247,7 +238,7 @@ export function useVpnConnectionFlow({
     }
 
     if (!connected || connected.status.state !== 'connected') {
-      await cleanupFailedVpnConnection(antiLeakEnabled, disconnectVpn).catch(() => undefined);
+      await cleanupFailedVpnConnection(antiLeakEnabled, disconnectVpn, lastConnectError).catch(() => undefined);
       throw lastConnectError ?? new Error('VPN не подключился.');
     }
 

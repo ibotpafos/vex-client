@@ -134,35 +134,42 @@ struct VEXSettingsView: View {
                         set: { appState.automaticallyChecksForUpdates = $0 }
                     )
                 )
-                Button {
-                    appState.checkForNativeUpdates()
-                } label: {
-                    Label(
-                        appState.hasNewerNativeUpdate ? "Установить обновление" : "Проверить обновления",
-                        systemImage: appState.hasNewerNativeUpdate
-                            ? "arrow.down.circle.fill"
-                            : "arrow.triangle.2.circlepath"
-                    )
-                    .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.vexGlass)
-                .help(
-                    appState.availableNativeUpdateVersion.map {
-                        "Доступно обновление \($0)"
-                    } ?? "Проверить наличие новой версии VEX"
-                )
-
-                Button {
-                    if let url = URL(string: "https://vexguard.app/support") {
-                        NSWorkspace.shared.open(url)
-                    }
-                } label: {
-                    Label("Поддержка на сайте", systemImage: "questionmark.circle")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.vexGlass)
-                .help("Открыть поддержку VEX в браузере")
+                updateActions
+                    .padding(.top, 8)
             }
+        }
+    }
+
+    private var updateActions: some View {
+        VStack(spacing: 10) {
+            Button {
+                appState.checkForNativeUpdates()
+            } label: {
+                Label(
+                    appState.hasNewerNativeUpdate ? "Установить обновление" : "Проверить обновления",
+                    systemImage: appState.hasNewerNativeUpdate
+                        ? "arrow.down.circle.fill"
+                        : "arrow.triangle.2.circlepath"
+                )
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.vexGlass)
+            .help(
+                appState.availableNativeUpdateVersion.map {
+                    "Доступно обновление \($0)"
+                } ?? "Проверить наличие новой версии VEX"
+            )
+
+            Button {
+                if let url = URL(string: "https://vexguard.app/support") {
+                    NSWorkspace.shared.open(url)
+                }
+            } label: {
+                Label("Поддержка на сайте", systemImage: "questionmark.circle")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.vexGlass)
+            .help("Открыть поддержку VEX в браузере")
         }
     }
 

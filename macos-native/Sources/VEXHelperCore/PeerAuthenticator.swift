@@ -20,25 +20,11 @@ public protocol PeerAuthenticating: Sendable {
 }
 
 public struct SystemPeerAuthenticator: PeerAuthenticating {
-    private let expectedBundleIdentifier: String
-    private let expectedTeamIdentifier: String?
-    private let allowAdHocClient: Bool
+    // Trust anchors are compiled in; caller/launchd environment cannot broaden them.
+    public static let localCertificateSHA256 = "441f6e9034ee7582c1ca3579ea805f91f68c3135ec2f59cddc00173fe689dca1"
+    public static let clientRequirement = "identifier \"app.vex.vpn.native\" and (certificate leaf = H\"c6fd1853a177fbcfb04c5d4f78fbe405777b3a3e\" or (anchor apple generic and certificate leaf[subject.OU] = \"3JLW9XNU53\"))"
 
-    public init(
-        expectedBundleIdentifier: String = "app.vex.vpn.native",
-        expectedTeamIdentifier: String? = ProcessInfo.processInfo.environment["VEX_EXPECTED_TEAM_ID"],
-        allowAdHocClient: Bool = {
-            #if DEBUG
-            ProcessInfo.processInfo.environment["VEX_HELPER_ALLOW_ADHOC_CLIENT"] == "1"
-            #else
-            false
-            #endif
-        }()
-    ) {
-        self.expectedBundleIdentifier = expectedBundleIdentifier
-        self.expectedTeamIdentifier = expectedTeamIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.allowAdHocClient = allowAdHocClient
-    }
+    public init() {}
 
     public func authenticate(_ peer: PeerCredentials) -> Bool {
         if peer.effectiveUID == 0 {
@@ -70,15 +56,16 @@ public struct SystemPeerAuthenticator: PeerAuthenticating {
                   &information
               ) == errSecSuccess,
               let signing = information as? [String: Any],
-              signing[kSecCodeInfoIdentifier as String] as? String == expectedBundleIdentifier else {
+              signing[kSecCodeInfoIdentifier as String] as? String == "app.vex.vpn.native" else {
             return false
         }
 
-        let actualTeamIdentifier = signing[kSecCodeInfoTeamIdentifier as String] as? String
-        if let expectedTeamIdentifier, !expectedTeamIdentifier.isEmpty {
-            return actualTeamIdentifier == expectedTeamIdentifier
-        }
-        return allowAdHocClient && (actualTeamIdentifier == nil || actualTeamIdentifier?.isEmpty == true)
+        var requirement: SecRequirement?
+        guard SecRequirementCreateWithString(Self.clientRequirement as CFString, [], &requirement) == errSecSuccess,
+              let requirement else { return false }
+        // Evaluate the requirement against the live audit-token code, not a PID or path.
+        return SecCodeCheckValidity(guest, SecCSFlags(rawValue: kSecCSStrictValidate), requirement) == errSecSuccess
+
     }
 }
 

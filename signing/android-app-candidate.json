@@ -1,0 +1,6 @@
+{
+  "package": "com.vexguard.app",
+  "certificate_sha256": "cc569dfaa4c2c82379669b7c13606eb268cc3eba90a9c88e20a2d4500daf8470",
+  "status": "restored-legacy-signer-candidate-not-published",
+  "previous_package": "com.vexguard.client"
+}

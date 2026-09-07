@@ -7,10 +7,12 @@ import { homeLocationCardLabel } from '../screens/home-location-previews';
 import { styles } from '../screens/home-screen.styles';
 import { VexPressable } from '@/ui/vex-ui';
 import { vexTheme } from '@/ui/vex-theme';
+import { availableNodeCountText } from '../screens/country-groups';
 import { CountryIsland } from './country-island';
 import { isServerChipTap, type TouchPoint } from '../screens/server-chip-interaction';
 
 export interface ServerChipProps {
+  availableNodeCount?: number;
   disabled: boolean;
   isAutoMode: boolean;
   isSelected?: boolean;
@@ -20,6 +22,7 @@ export interface ServerChipProps {
 }
 
 export const ServerChip = React.memo(function ServerChip({
+  availableNodeCount = 0,
   disabled,
   isAutoMode,
   isSelected = true,
@@ -62,7 +65,7 @@ export const ServerChip = React.memo(function ServerChip({
       hoverStyle={{ backgroundColor: 'rgba(7,17,19,0.96)', borderColor: 'rgba(34,211,238,0.4)' }}
       title="Выбрать сервер подключения"
       accessibilityRole="button"
-      accessibilityLabel={`Выбрать сервер. Сейчас ${serverLabel}, задержка ${latencyText}`}
+      accessibilityLabel={`Открыть серверы: ${serverLabel}, ${availableNodeCountText(availableNodeCount)}, задержка ${latencyText}`}
     >
       <View style={styles.serverChipCountryIsland}>
         <CountryIsland countryCode={location?.countryCode} selected={isSelected} />
@@ -74,7 +77,7 @@ export const ServerChip = React.memo(function ServerChip({
         <Text numberOfLines={1} style={styles.serverChipLabel}>
           {visibleServerLabel}
         </Text>
-        <Text style={styles.serverChipCaption}>{isAutoMode ? 'Автоматический выбор' : '1 узел · доступен'}</Text>
+        <Text style={styles.serverChipCaption}>{availableNodeCountText(availableNodeCount)} · {availableNodeCount > 0 ? 'доступно' : 'нет доступных'}</Text>
       </View>
       <View style={styles.serverLatencyPill}>
         <Gauge color={vexTheme.colors.accentStrong} size={13} strokeWidth={2.6} />

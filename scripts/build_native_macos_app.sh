@@ -72,7 +72,14 @@ xml_escape() {
 if [[ "${CODESIGN_IDENTITY}" == "-" ]]; then
   CODESIGN_ARGS=(--force --sign -)
 else
-  CODESIGN_ARGS=(--force --options runtime --sign "${CODESIGN_IDENTITY}")
+  # This pinned local identity has no Apple TeamIdentifier. Hardened-runtime
+  # library validation would reject its bundled Sparkle framework at launch.
+  # Retain the existing local-development runtime model; Apple releases keep HR.
+  if [[ "${CODESIGN_IDENTITY}" == "C6FD1853A177FBCFB04C5D4F78FBE405777B3A3E" ]]; then
+    CODESIGN_ARGS=(--force --sign "${CODESIGN_IDENTITY}")
+  else
+    CODESIGN_ARGS=(--force --options runtime --sign "${CODESIGN_IDENTITY}")
+  fi
   [[ -z "${CODESIGN_KEYCHAIN}" ]] || CODESIGN_ARGS+=(--keychain "${CODESIGN_KEYCHAIN}")
   if [[ "${CODESIGN_TIMESTAMP}" == "none" ]]; then
     CODESIGN_ARGS+=(--timestamp=none)

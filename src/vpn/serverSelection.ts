@@ -6,6 +6,44 @@ export function normalizeServerSelectionMode(value?: string | null): ServerSelec
   return value === 'manual' ? 'manual' : 'auto';
 }
 
+export function selectableVpnLocations(locations?: VpnLocation[]): VpnLocation[] {
+  return (locations ?? []).filter((location) => location.availability !== 'retired' && location.healthyNodes > 0);
+}
+
+export function visibleVpnLocations(locations?: VpnLocation[]): VpnLocation[] {
+  return (locations ?? []).filter((location) => location.availability.trim().toLowerCase() !== 'retired');
+}
+
+export function locationDisplayName(location: VpnLocation): string {
+  return location.displayName || location.city;
+}
+
+export function reconcileLocationSelection(
+  mode: ServerSelectionMode,
+  selectedLocationId: string | null,
+  locations: VpnLocation[],
+): { mode: ServerSelectionMode; selectedLocationId: string } {
+  const selected = selectedLocationId
+    ? locations.find((location) => normalizeLocationId(location.id) === normalizeLocationId(selectedLocationId))
+    : undefined;
+  if (selected && isSelectableLocation(selected)) {
+    return { mode, selectedLocationId: selected.id };
+  }
+  return { mode: 'auto', selectedLocationId: chooseBestVpnLocation(locations)?.id ?? '' };
+}
+
+export function reconcileHydratedLocationSelection(
+  preferencesHydrated: boolean,
+  mode: ServerSelectionMode,
+  selectedLocationId: string | null,
+  locations: VpnLocation[],
+): { mode: ServerSelectionMode; selectedLocationId: string } | null {
+  if (!preferencesHydrated || locations.length === 0) {
+    return null;
+  }
+  return reconcileLocationSelection(mode, selectedLocationId, locations);
+}
+
 export function chooseBestVpnLocation(locations: VpnLocation[]): VpnLocation | undefined {
   return locations
     .map((location, index) => ({ location, index }))

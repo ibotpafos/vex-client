@@ -77,7 +77,7 @@ type _AppUpdateCheckResponseDTOContract = VexApiSpecExpect<_AppUpdateCheckRespon
 export interface AuthResultDTOSpec {
   user: UserDTOSpec
   session: { id: string } & { user_id: string } & { access_token?: string } & { expires_at: string } & { revoked_at?: null | string } & { created_at: string }
-  access_grant?: null | { id: string } & { user_id: string } & { status: string } & { device_limit: number } & { tier: string } & { rate_limit_mbps?: null | number } & { traffic_priority: number } & { expires_at?: null | string } & { active_devices: number } & { remaining_devices: number } & { active: boolean } & { created_at: string } & { updated_at: string }
+  access_grant?: null | { policy_sync_pending?: boolean } & { id: string } & { user_id: string } & { status: string } & { device_limit: number } & { tier: string } & { rate_limit_mbps?: null | number } & { traffic_priority: number } & { expires_at?: null | string } & { active_devices: number } & { remaining_devices: number } & { active: boolean } & { created_at: string } & { updated_at: string }
 }
 type _AuthResultDTOContract = VexApiSpecExpect<AuthResultDTOSpec extends AuthResultDTO ? true : false>
 
@@ -157,6 +157,8 @@ export interface DeviceIdentityChallengeDTOSpec {
 type _DeviceIdentityChallengeDTOContract = VexApiSpecExpect<DeviceIdentityChallengeDTOSpec extends DeviceIdentityChallengeDTO ? true : false>
 
 export interface DeviceUsageDTOSpec {
+  connection_sampled_at?: null | string
+  connection_freshness?: string
   device_id: string
   user_id: string
   node_id: string
@@ -239,9 +241,11 @@ export interface LocationDTOSpec {
   id: string
   country_code: string
   city: string
+  display_name: string
   flag_emoji?: string
   availability: string
   priority: number
+  capabilities: string[]
   status: string
   node_count: number
   healthy_nodes: number
@@ -267,7 +271,7 @@ export interface NativeVPNProfileDTOSpec {
   assigned_ipv4?: string
   dns?: string[]
   allowed_ips?: string[]
-  amnezia?: null | { jc?: number } & { jmin?: number } & { jmax?: number } & { s1?: number } & { s2?: number } & { s3?: number } & { s4?: number } & { h1?: string } & { h2?: string } & { h3?: string } & { h4?: string } & { i1?: string } & { i2?: string } & { i3?: string } & { i4?: string } & { i5?: string } & { header_protection_key?: string }
+  amnezia?: null | Record<string, unknown>
   amnezia_version?: number
   expires_at?: null | string
   config?: string
@@ -315,6 +319,9 @@ type _SupportMessageDTOContract = VexApiSpecExpect<SupportMessageDTOSpec extends
 export interface SupportTicketDTOSpec {
   id: string
   user_id: string
+  user_email?: string
+  user_online?: null | boolean
+  user_last_seen_at?: null | string
   subject: string
   message: string
   messages?: SupportMessageDTOSpec[]

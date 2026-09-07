@@ -102,10 +102,13 @@ export type VpnLocation = {
   id: string;
   countryCode: string;
   city: string;
+  displayName: string;
   flagEmoji?: string;
   availability: string;
+  priority: number;
   status: string;
   healthyNodes: number;
+  capabilities: string[];
   endpoint?: string;
   latencyMs?: number;
 };

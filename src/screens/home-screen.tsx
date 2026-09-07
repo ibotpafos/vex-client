@@ -1,9 +1,10 @@
 import { StatusBar } from 'expo-status-bar';
 import { router } from 'expo-router';
 import { Power, Settings } from 'lucide-react-native';
-import React, { useState } from 'react';
-import { Animated, FlatList, Platform, ScrollView, Text, useWindowDimensions, View } from 'react-native';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import { Animated, FlatList, Platform, ScrollView, Text, useWindowDimensions, View, type ListRenderItem } from 'react-native';
 
+import type { VpnLocation } from '@/api/vexApi';
 import { HomeNativeHeader } from '@/components/home-native-header';
 import { MobileUpdateNoticeBanner, UpdateCenterButton } from '@/components/update-center';
 import { useRenderProfilerMark } from '@/debug/render-profiler';
@@ -12,7 +13,6 @@ import { VexNativeActivityIndicator } from '@/ui/native-activity-indicator';
 import { vexTheme } from '@/ui/vex-theme';
 import { VexScreen, vexSharedStyles, VexPressable } from '@/ui/vex-ui';
 import { useVpnConnectionContext } from '@/vpn/vpn-connection-context';
-import type { VpnLocation } from '@/api/vexApi';
 
 import { ServerChip } from '../components/server-chip';
 import { ServerPickerModal } from '../components/server-picker-modal';
@@ -20,6 +20,11 @@ import { TrafficStats } from '../components/traffic-stats';
 import { type ConnectionPhase } from './home-screen-helpers';
 import { serverPickerActionForSource } from './server-picker-interactions';
 import { styles } from './home-screen.styles';
+import {
+  homeLocationPreviews,
+  locationCarouselItemLayout,
+  stableHomeLocationPreviews,
+} from './home-location-previews';
 
 export default function App() {
   useRenderProfilerMark('HomeScreen');
@@ -44,14 +49,14 @@ export default function App() {
     handleLocationPress,
     handleAutoServerSelectionPress,
     availableLocations,
+    isLocationsRefreshing,
+    locationsRefreshError,
+    refreshLocationsForPicker,
+    retryLocations,
     openUpdateCenter,
     closeUpdateCenter,
   } = useVpnConnectionContext();
   const [isServerPickerVisible, setIsServerPickerVisible] = useState(false);
-  const [serverPickerSnapshot, setServerPickerSnapshot] = useState<{
-    latencyText: string;
-    locations: VpnLocation[];
-  } | null>(null);
   const { width: viewportWidth } = useWindowDimensions();
   const reduceMotionVisuals = Platform.OS === 'android';
 
@@ -86,12 +91,56 @@ export default function App() {
       : connectionPhase === 'disconnecting'
         ? 'Завершаем'
         : 'VPN выключен';
-  const locationPreviews = [
+  const locationPreviewsRef = useRef<ReturnType<typeof homeLocationPreviews>>([]);
+  const locationPreviews = stableHomeLocationPreviews(
+    locationPreviewsRef.current,
+    availableLocations,
     selectedLocation,
-    ...availableLocations.filter((location) => location.id !== selectedLocation?.id),
-  ].filter((location): location is VpnLocation => Boolean(location)).slice(0, 2);
+  );
+  locationPreviewsRef.current = locationPreviews;
   const carouselWidth = Math.min(viewportWidth - (viewportWidth <= 360 ? 16 : 24), 430);
   const carouselCardWidth = carouselWidth - 44;
+  const carouselSnapInterval = carouselCardWidth + vexTheme.spacing.sm;
+  const locationPreviewCount = locationPreviews.length;
+  const getLocationItemLayout = useCallback(
+    (_data: ArrayLike<VpnLocation> | null | undefined, index: number) => (
+      locationCarouselItemLayout(carouselCardWidth, vexTheme.spacing.sm, index)
+    ),
+    [carouselCardWidth],
+  );
+  const carouselContentContainerStyle = useMemo(
+    () => ({ paddingRight: carouselWidth - carouselCardWidth }),
+    [carouselCardWidth, carouselWidth],
+  );
+  const handleLocationPressRef = useRef(handleLocationPress);
+  handleLocationPressRef.current = handleLocationPress;
+  const handleCarouselLocationPress = useCallback((locationId: string) => {
+    if (serverPickerActionForSource('carousel') !== 'select') {
+      return;
+    }
+    void handleLocationPressRef.current(locationId, false);
+  }, []);
+  const renderLocationPreview = useCallback<ListRenderItem<VpnLocation>>(({ item: location }) => {
+    const isSelected = location.id === selectedLocation?.id;
+    return (
+      <LocationCarouselItem
+        disabled={isVpnBusy}
+        isAutoMode={isSelected && serverSelectionMode === 'auto'}
+        isSelected={isSelected}
+        latencyText={isSelected ? selectedLatencyText : `${Math.max(0, Math.round(location.latencyMs ?? 0))} мс`}
+        location={location}
+        onSelect={handleCarouselLocationPress}
+        width={carouselCardWidth}
+      />
+    );
+  }, [
+    carouselCardWidth,
+    handleCarouselLocationPress,
+    isVpnBusy,
+    selectedLatencyText,
+    selectedLocation?.id,
+    serverSelectionMode,
+  ]);
 
   return (
     <VexScreen contentStyle={styles.shell}>
@@ -158,10 +207,7 @@ export default function App() {
                     if (serverPickerActionForSource('all_locations') !== 'open_picker') {
                       return;
                     }
-                    setServerPickerSnapshot({
-                      latencyText: selectedLatencyText,
-                      locations: availableLocations.map((location) => ({ ...location })),
-                    });
+                    void refreshLocationsForPicker().catch(() => undefined);
                     requestAnimationFrame(() => setIsServerPickerVisible(true));
                   }}
                   style={styles.locationsAllButton}
@@ -172,34 +218,23 @@ export default function App() {
                 </VexPressable>
               </View>
               <FlatList
+                bounces={false}
+                contentContainerStyle={carouselContentContainerStyle}
                 data={locationPreviews}
                 decelerationRate="fast"
+                disableIntervalMomentum
+                getItemLayout={getLocationItemLayout}
                 horizontal
-                keyExtractor={(location) => location.id}
-                renderItem={({ item: location }) => {
-                  const isSelected = location.id === selectedLocation?.id;
-                  return (
-                    <View style={[styles.locationCarouselItem, { width: carouselCardWidth }]}>
-                      <ServerChip
-                        disabled={isVpnBusy}
-                        isAutoMode={isSelected && serverSelectionMode === 'auto'}
-                        isSelected={isSelected}
-                        key={location.id}
-                        latencyText={isSelected ? selectedLatencyText : `${Math.max(0, Math.round(location.latencyMs ?? 0))} мс`}
-                        location={location}
-                        onPress={() => {
-                          if (serverPickerActionForSource('carousel') !== 'select') {
-                            return;
-                          }
-                          void handleLocationPress(location.id, false);
-                        }}
-                      />
-                    </View>
-                  );
-                }}
+                initialNumToRender={locationPreviewCount}
+                keyExtractor={locationKeyExtractor}
+                maxToRenderPerBatch={locationPreviewCount}
+                nestedScrollEnabled
+                overScrollMode="never"
+                removeClippedSubviews={false}
+                renderItem={renderLocationPreview}
                 showsHorizontalScrollIndicator={false}
                 snapToAlignment="start"
-                snapToInterval={carouselCardWidth + vexTheme.spacing.sm}
+                snapToInterval={carouselSnapInterval}
                 style={styles.locationCarousel}
               />
             </View>
@@ -224,8 +259,10 @@ export default function App() {
       </ScrollView>
       <ServerPickerModal
         isVpnBusy={isVpnBusy}
-        locations={serverPickerSnapshot?.locations ?? availableLocations}
-        selectedLatencyText={serverPickerSnapshot?.latencyText ?? selectedLatencyText}
+        isRefreshing={isLocationsRefreshing}
+        locations={availableLocations}
+        refreshError={locationsRefreshError}
+        selectedLatencyText={selectedLatencyText}
         selectionMode={serverSelectionMode}
         selectedLocationId={selectedLocationId}
         visible={isServerPickerVisible}
@@ -234,6 +271,9 @@ export default function App() {
           void handleAutoServerSelectionPress(false);
         }}
         onClose={() => setIsServerPickerVisible(false)}
+        onRetry={() => {
+          void retryLocations().catch(() => undefined);
+        }}
         onSelect={(locationId) => {
           setIsServerPickerVisible(false);
           void handleLocationPress(locationId, false);
@@ -242,6 +282,45 @@ export default function App() {
     </VexScreen>
   );
 }
+
+function locationKeyExtractor(location: VpnLocation): string {
+  return location.id;
+}
+
+type LocationCarouselItemProps = {
+  disabled: boolean;
+  isAutoMode: boolean;
+  isSelected: boolean;
+  latencyText: string;
+  location: VpnLocation;
+  onSelect: (locationId: string) => void;
+  width: number;
+};
+
+const LocationCarouselItem = React.memo(function LocationCarouselItem({
+  disabled,
+  isAutoMode,
+  isSelected,
+  latencyText,
+  location,
+  onSelect,
+  width,
+}: LocationCarouselItemProps) {
+  const handlePress = useCallback(() => onSelect(location.id), [location.id, onSelect]);
+  const itemStyle = useMemo(() => [styles.locationCarouselItem, { width }], [width]);
+  return (
+    <View style={itemStyle}>
+      <ServerChip
+        disabled={disabled}
+        isAutoMode={isAutoMode}
+        isSelected={isSelected}
+        latencyText={latencyText}
+        location={location}
+        onPress={handlePress}
+      />
+    </View>
+  );
+});
 
 type PowerHeroProps = {
   connectionPhase: ConnectionPhase;

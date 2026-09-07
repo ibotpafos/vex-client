@@ -25,6 +25,7 @@ import {
   hotVpnProfileTtlMs,
   hotVpnProfileRejectionReason,
   isUsableHotVpnProfileRecord,
+  normalizeHotProfileLocationId,
   profileFromHotRecord,
   withLastSuccessfulEndpoint,
   type HotVpnProfileRecord,
@@ -50,7 +51,15 @@ import { assessNativeTunnelHealth, localStatusHealthReasons } from '../src/vpn/n
 import { hasVerifiedNativeTunnelActivity, resolveNativeTunnelVerified } from '../src/vpn/vpnStatusVerification';
 import { probeNetworkHealth } from '../src/vpn/networkHealthProbe';
 import { defaultVpnBypassRegion, defaultVpnRoutingMode, defaultVpnRoutingPolicyVersion, isSmartRoutingMode, normalizeVpnRoutingMode, resolvedVpnBypassRegion, vpnRoutingModeFromSmartMode } from '../src/vpn/routingPolicy';
-import { autoSwitchTargetLocationId, chooseBestVpnLocation } from '../src/vpn/serverSelection';
+import {
+  autoSwitchTargetLocationId,
+  chooseBestVpnLocation,
+  locationDisplayName,
+  reconcileHydratedLocationSelection,
+  reconcileLocationSelection,
+  selectableVpnLocations,
+} from '../src/vpn/serverSelection';
+import * as serverSelectionModule from '../src/vpn/serverSelection';
 import { switchVpnLocation } from '../src/vpn/serverSwitch';
 import { normalizePackageNames } from '../src/vpn/applicationRouting';
 import { assessVpnAutopilotIssue } from '../src/vpn/vpnAutopilotAssessment';
@@ -58,19 +67,35 @@ import { buildCreateDeviceRequest } from '../src/api/deviceCreateRequest';
 import { getOrCreateNativeDeviceRegistration } from '../src/api/nativeDeviceRegistration';
 import { canAutomaticallyApplyOtaUpdate } from '../src/updates/otaAutoApply';
 import { HOME_TAB_ROUTE } from '../src/navigation/routes';
-import { fallbackLocationEndpoint } from '../src/vpn/locationEndpoint';
 import type { VpnDevice, VpnDeviceUsage, VpnLocation } from '../src/api/vexApi';
 import type { VpnStatus } from '../src/native/vexVpn';
 import type { VpnProfile } from '../src/vpn/profile';
 import { managedProfileAmneziaConfig } from '../src/vpn/amneziaConfig';
 import { managedProfileAWGVersion, withManagedProfileAWGCapability } from '../src/vpn/profileCapabilities';
 import { serverPickerActionForSource } from '../src/screens/server-picker-interactions';
+import { isServerChipTap } from '../src/screens/server-chip-interaction';
+import { serverPickerLocationRows } from '../src/components/server-picker-model';
+import {
+  homeLocationCardLabel,
+  homeLocationPreviews,
+  stableHomeLocationPreviews,
+  serverLocationTechnicalLabel,
+} from '../src/screens/home-location-previews';
+import * as homeLocationPreviewModule from '../src/screens/home-location-previews';
 import { trafficSessionLabel } from '../src/components/traffic-summary';
 import appConfig from '../app.config';
 import type { ConfigContext } from '@expo/config';
 import { vexWebsiteUrl } from '../src/navigation/website';
 import { authEntryStepAfterBack } from '../src/auth/authEntry';
 import { clientDiagnosticsRequestBody } from '../src/api/clientDiagnosticsRequest';
+import { normalizeLocationCatalog } from '../src/vpn/locationCatalog';
+import { createLocationCatalogRefresher, isVisibleLocationCatalogRefresh } from '../src/vpn/locationCatalogRefresh';
+import { stabilizedLocationLatency } from '../src/vpn/locationLatencyStability';
+import {
+  locationCatalogCacheSchemaVersion,
+  validCachedValueForUser,
+} from '../src/vpn/vpnQueryCachePolicy';
+import * as vpnQueryCachePolicyModule from '../src/vpn/vpnQueryCachePolicy';
 import {
   customerRealtimeInvalidationRoots,
   customerRealtimeMetadata,
@@ -221,6 +246,201 @@ class FakeRealtimeRequest {
   assertEqual(timers.some((timer) => timer.milliseconds === 1_000), true);
 }
 
+const catalogFixture: VpnLocation = {
+  id: 'edge-a',
+  countryCode: 'XY',
+  city: 'First',
+  displayName: 'First Edge',
+  availability: 'available',
+  priority: 10,
+  status: 'healthy',
+  healthyNodes: 1,
+  capabilities: ['awg31'],
+};
+
+assertDeepEqual(
+  normalizeLocationCatalog([
+    { id: 'edge-b', country_code: 'ZZ', city: 'Second', priority: 20, availability: 'available', status: 'healthy', healthy_nodes: 1 },
+    { id: 'edge-a', country_code: 'XY', city: 'First', display_name: 'First Edge', priority: 10, capabilities: ['awg31'], availability: 'available', status: 'healthy', healthy_nodes: 1 },
+  ]).map((location) => [location.id, location.displayName]),
+  [['edge-a', 'First Edge'], ['edge-b', 'Second']],
+);
+assertEqual(locationCatalogCacheSchemaVersion, 2);
+const shouldResetVpnCacheForSession = (
+  vpnQueryCachePolicyModule as unknown as Record<string, unknown>
+).shouldResetVpnCacheForSession;
+assertEqual(typeof shouldResetVpnCacheForSession, 'function');
+if (typeof shouldResetVpnCacheForSession === 'function') {
+  assertEqual(
+    shouldResetVpnCacheForSession(
+      { userId: 'user-a', accessToken: 'old-token' },
+      { userId: 'user-a', accessToken: 'new-token' },
+    ),
+    false,
+  );
+  assertEqual(
+    shouldResetVpnCacheForSession(
+      { userId: 'user-a', accessToken: 'old-token' },
+      { userId: 'user-b', accessToken: 'new-token' },
+    ),
+    true,
+  );
+}
+const twentyCatalogLocations = Array.from({ length: 20 }, (_, index) => ({
+  ...catalogFixture,
+  id: `edge-${index + 1}`,
+  displayName: `Edge ${index + 1}`,
+  priority: index + 1,
+}));
+const twentyPickerRows = serverPickerLocationRows(twentyCatalogLocations, 'manual', 'edge-20');
+assertEqual(twentyPickerRows.length, 20);
+assertDeepEqual(twentyPickerRows[19], {
+  location: twentyCatalogLocations[19],
+  selected: true,
+  testID: 'server-picker-edge-20',
+});
+const homeCatalogLocations = [
+  { ...catalogFixture, id: 'de-feature', countryCode: 'DE', city: 'Feature Lab', displayName: 'VEX AWG 3.1 Features' },
+  { ...catalogFixture, id: 'de', countryCode: 'DE', city: 'Frankfurt', displayName: 'Germany' },
+  { ...catalogFixture, id: 'fi', countryCode: 'FI', city: 'Helsinki', displayName: 'Finland' },
+  { ...catalogFixture, id: 'nl', countryCode: 'NL', city: 'Amsterdam', displayName: 'Amsterdam' },
+];
+assertDeepEqual(
+  homeLocationPreviews(homeCatalogLocations, homeCatalogLocations[0]).map((location) => location.id),
+  ['de-feature', 'fi', 'nl'],
+);
+assertEqual(homeLocationCardLabel(homeCatalogLocations[3]), 'Нидерланды');
+assertEqual(serverLocationTechnicalLabel(homeCatalogLocations[1]), null);
+assertEqual(serverLocationTechnicalLabel(homeCatalogLocations[3]), 'Amsterdam');
+assertEqual(serverLocationTechnicalLabel(homeCatalogLocations[0]), 'VEX AWG 3.1 Features');
+const locationCarouselItemLayout = (
+  homeLocationPreviewModule as unknown as Record<string, unknown>
+).locationCarouselItemLayout;
+assertEqual(typeof locationCarouselItemLayout, 'function');
+if (typeof locationCarouselItemLayout === 'function') {
+  assertDeepEqual(
+    locationCarouselItemLayout(364, 8, 2),
+    { index: 2, length: 372, offset: 744 },
+  );
+}
+const initialHomePreviews = homeLocationPreviews(homeCatalogLocations, homeCatalogLocations[0]);
+assertEqual(
+  stableHomeLocationPreviews(
+    initialHomePreviews,
+    homeCatalogLocations.map((location, index) => ({ ...location, latencyMs: 20 + index * 10 })),
+    { ...homeCatalogLocations[0], latencyMs: 20 },
+  ),
+  initialHomePreviews,
+);
+assertEqual(
+  stableHomeLocationPreviews(
+    initialHomePreviews,
+    homeCatalogLocations.map((location) => location.id === 'nl' ? { ...location, status: 'degraded' } : location),
+    homeCatalogLocations[0],
+  ) === initialHomePreviews,
+  false,
+);
+assertDeepEqual(
+  validCachedValueForUser(
+    { savedAtMs: 1, schemaVersion: 2, userId: 'user-a', value: [catalogFixture] },
+    'user-a',
+    locationCatalogCacheSchemaVersion,
+    (value): value is VpnLocation[] => Array.isArray(value),
+  ),
+  [catalogFixture],
+);
+assertEqual(
+  validCachedValueForUser(
+    { savedAtMs: 1, schemaVersion: 2, userId: 'user-a', value: [catalogFixture] },
+    'user-b',
+    locationCatalogCacheSchemaVersion,
+    (value): value is VpnLocation[] => Array.isArray(value),
+  ),
+  null,
+);
+assertEqual(
+  validCachedValueForUser(
+    { savedAtMs: 1, schemaVersion: 1, userId: 'user-a', value: [catalogFixture] },
+    'user-a',
+    locationCatalogCacheSchemaVersion,
+    (value): value is VpnLocation[] => Array.isArray(value),
+  ),
+  null,
+);
+assertThrows(
+  () => normalizeLocationCatalog([
+    { id: 'duplicate', country_code: 'ZZ', city: 'One', availability: 'available', healthy_nodes: 1 },
+    { id: 'DUPLICATE', country_code: 'ZZ', city: 'Two', availability: 'available', healthy_nodes: 1 },
+  ]),
+  'Invalid VPN location catalog: duplicate location id: DUPLICATE',
+);
+assertThrows(
+  () => normalizeLocationCatalog([{ id: 'broken', country_code: '', city: 'Nowhere', availability: 'available', healthy_nodes: 1 }]),
+  'Invalid VPN location catalog: entry 0 has invalid country_code',
+);
+assertDeepEqual(
+  normalizeLocationCatalog([
+    { id: 'retired', country_code: 'XY', city: 'Old', availability: 'retired', healthy_nodes: 1 },
+    { id: 'offline', country_code: 'XY', city: 'Offline', availability: 'available', healthy_nodes: 0 },
+    { id: 'ready', country_code: 'XY', city: 'Ready', availability: 'available', healthy_nodes: 1 },
+  ]).map((location) => location.id),
+  ['offline', 'ready'],
+);
+assertDeepEqual(selectableVpnLocations(undefined), []);
+assertDeepEqual(selectableVpnLocations([]), []);
+const visibleVpnLocations = (
+  serverSelectionModule as unknown as Record<string, unknown>
+).visibleVpnLocations;
+assertEqual(typeof visibleVpnLocations, 'function');
+if (typeof visibleVpnLocations === 'function') {
+  assertDeepEqual(
+    visibleVpnLocations([
+      { ...catalogFixture, id: 'offline', healthyNodes: 0 },
+      { ...catalogFixture, id: 'ready' },
+      { ...catalogFixture, id: 'retired', availability: 'retired' },
+    ]).map((location: VpnLocation) => location.id),
+    ['offline', 'ready'],
+  );
+}
+assertEqual(locationDisplayName({ ...catalogFixture, displayName: 'Managed Name' }), 'Managed Name');
+assertDeepEqual(
+  reconcileLocationSelection('manual', 'removed-id', [catalogFixture]),
+  { mode: 'auto', selectedLocationId: catalogFixture.id },
+);
+assertDeepEqual(
+  reconcileLocationSelection('auto', null, [catalogFixture]),
+  { mode: 'auto', selectedLocationId: catalogFixture.id },
+);
+assertDeepEqual(
+  reconcileLocationSelection('auto', 'edge-current', [
+    { ...catalogFixture, id: 'edge-current', latencyMs: 90 },
+    { ...catalogFixture, id: 'edge-faster', latencyMs: 15 },
+  ]),
+  { mode: 'auto', selectedLocationId: 'edge-current' },
+);
+assertDeepEqual(
+  reconcileLocationSelection('auto', 'edge-current', [
+    { ...catalogFixture, id: 'edge-current', healthyNodes: 0, latencyMs: 5 },
+    { ...catalogFixture, id: 'edge-healthy', latencyMs: 30 },
+  ]),
+  { mode: 'auto', selectedLocationId: 'edge-healthy' },
+);
+assertEqual(isVisibleLocationCatalogRefresh('interval', true), false);
+assertEqual(isVisibleLocationCatalogRefresh('foreground', true), false);
+assertEqual(isVisibleLocationCatalogRefresh('picker_open', true), true);
+assertEqual(isVisibleLocationCatalogRefresh('startup', false), true);
+assertEqual(stabilizedLocationLatency(undefined, 8), 10);
+assertEqual(stabilizedLocationLatency(10, 17), 10);
+assertEqual(stabilizedLocationLatency(10, 31), 30);
+assertEqual(stabilizedLocationLatency(30, Number.NaN), 30);
+assertEqual(isServerChipTap({ x: 20, y: 20 }, { x: 24, y: 26 }), true);
+assertEqual(isServerChipTap({ x: 20, y: 20 }, { x: 80, y: 22 }), false);
+assertEqual(reconcileHydratedLocationSelection(false, 'manual', catalogFixture.id, [catalogFixture]), null);
+assertDeepEqual(
+  reconcileHydratedLocationSelection(true, 'manual', catalogFixture.id, [catalogFixture]),
+  { mode: 'manual', selectedLocationId: catalogFixture.id },
+);
+
 assertEqual(vexWebsiteUrl('/dashboard', 'https://vexguard.app/'), 'https://vexguard.app/dashboard');
 assertEqual(vexWebsiteUrl('/support', 'https://staging.vexguard.app'), 'https://staging.vexguard.app/support');
 assertThrows(() => vexWebsiteUrl('https://example.com', 'https://vexguard.app'), 'Website path must start with /');
@@ -365,12 +585,6 @@ assertEqual(
   assertEqual(isEmailOTPExpired('2026-07-14T10:00:00Z', Date.parse('2026-07-14T10:00:01Z')), true);
   assertEqual(isEmailOTPExpired('2026-07-14T10:00:02Z', Date.parse('2026-07-14T10:00:01Z')), false);
   assertEqual(isInvalidOrExpiredEmailOTPError(new Error('invalid or expired email code')), true);
-}
-
-{
-  assertEqual(fallbackLocationEndpoint('de'), 'de-1.vexguard.app:51821');
-  assertEqual(fallbackLocationEndpoint(' FI '), 'fi-1.vexguard.app:51821');
-  assertEqual(fallbackLocationEndpoint('../bad'), '');
 }
 
 {
@@ -1093,27 +1307,37 @@ function runVpnConnectTimingSourceContractTests(): void {
 function runCreateDeviceRequestTests(): void {
   const request = buildCreateDeviceRequest(
     { deviceName: 'Mac', idempotencyPrefix: 'macos', platform: 'macos' },
-    ' DE ',
+    ' Edge-A ',
     ' macos-stable-device ',
     { platform: 'macos', version: '1.0.48' },
   );
   const repeated = buildCreateDeviceRequest(
     { deviceName: 'Mac', idempotencyPrefix: 'macos', platform: 'macos' },
-    'de',
+    'Edge-A',
     'macos-stable-device',
     { platform: 'macos', version: '1.0.48' },
   );
 
-  assertEqual(request.idempotencyKey, 'macos-macos-stable-device-de-device');
+  assertEqual(request.idempotencyKey, 'macos-macos-stable-device-Edge-A-device');
   assertEqual(repeated.idempotencyKey, request.idempotencyKey);
   assertDeepEqual(request.body, {
     name: 'Mac',
-    location: 'de',
+    location: 'Edge-A',
     protocol: 'amneziawg',
     external_device_id: 'macos-stable-device',
     platform: 'macos',
     app_version: '1.0.48',
   });
+  assertThrows(
+    () => buildCreateDeviceRequest(
+      { deviceName: 'Mac', idempotencyPrefix: 'macos', platform: 'macos' },
+      undefined,
+      'macos-stable-device',
+      { platform: 'macos', version: '1.0.48' },
+    ),
+    'VPN location ID is required.',
+  );
+  assertThrows(() => normalizeHotProfileLocationId('  '), 'VPN location ID is required.');
 }
 
 {
@@ -1288,6 +1512,99 @@ async function runAsyncTests(): Promise<void> {
   runRecoveryBackoffTests();
   await testFreshSameLocationProfileConnectsSecondNode();
   await runServerSwitchTests();
+  await runLocationCatalogRefreshTests();
+}
+
+async function runLocationCatalogRefreshTests(): Promise<void> {
+  let resolvePending!: (value: VpnLocation[]) => void;
+  const pending = new Promise<VpnLocation[]>((resolve) => {
+    resolvePending = resolve;
+  });
+  let calls = 0;
+  const commits: VpnLocation[][] = [];
+  const diagnostics: Record<string, unknown>[] = [];
+  const refresher = createLocationCatalogRefresher({
+    fetchCatalog: () => {
+      calls += 1;
+      return pending;
+    },
+    commitCatalog: async (locations) => {
+      commits.push(locations);
+    },
+    now: () => 0,
+    onDiagnostics: (event) => diagnostics.push(event),
+  });
+  const first = refresher.refresh('startup');
+  const second = refresher.refresh('picker_open');
+  assertEqual(calls, 1);
+  resolvePending([catalogFixture]);
+  assertDeepEqual(await first, await second);
+  assertDeepEqual(commits, [[catalogFixture]]);
+  assertDeepEqual(diagnostics[0], {
+    reason: 'startup',
+    outcome: 'success',
+    durationMs: 0,
+    source: 'network',
+    entryCount: 1,
+  });
+
+  const prior = [catalogFixture];
+  const failureEvents: Record<string, unknown>[] = [];
+  const failing = createLocationCatalogRefresher({
+    fetchCatalog: async () => { throw new Error('secret response body'); },
+    commitCatalog: async () => { throw new Error('must not commit'); },
+    currentCatalog: () => prior,
+    now: () => 10,
+    onDiagnostics: (event) => failureEvents.push(event),
+  });
+  await assertRejects(() => failing.refresh('retry'), 'secret response body');
+  assertDeepEqual(failureEvents, [{
+    reason: 'retry',
+    outcome: 'error',
+    durationMs: 0,
+    source: 'stale_cache',
+    entryCount: 1,
+    errorCategory: 'network',
+  }]);
+
+  const emptyCommits: VpnLocation[][] = [];
+  const empty = createLocationCatalogRefresher({
+    fetchCatalog: async () => [],
+    commitCatalog: async (locations) => { emptyCommits.push(locations); },
+  });
+  await empty.refresh('foreground');
+  assertDeepEqual(emptyCommits, [[]]);
+
+  const unchangedCommits: VpnLocation[][] = [];
+  const unchangedPrior = [{ ...catalogFixture, capabilities: [...catalogFixture.capabilities] }];
+  const unchanged = createLocationCatalogRefresher({
+    fetchCatalog: async () => [{ ...catalogFixture, capabilities: [...catalogFixture.capabilities] }],
+    commitCatalog: async (locations) => { unchangedCommits.push(locations); },
+    currentCatalog: () => unchangedPrior,
+  });
+  const unchangedResult = await unchanged.refresh('interval');
+  assertEqual(unchangedResult.locations, unchangedPrior);
+  assertDeepEqual(unchangedCommits, []);
+
+  const transientEmptyCommits: VpnLocation[][] = [];
+  const transientEmpty = createLocationCatalogRefresher({
+    fetchCatalog: async () => [],
+    commitCatalog: async (locations) => { transientEmptyCommits.push(locations); },
+    currentCatalog: () => unchangedPrior,
+  });
+  const transientEmptyResult = await transientEmpty.refresh('interval');
+  assertEqual(transientEmptyResult.locations, unchangedPrior);
+  assertDeepEqual(transientEmptyCommits, []);
+
+  const changedCommits: VpnLocation[][] = [];
+  const changedCatalog = [{ ...catalogFixture, status: 'degraded' }];
+  const changed = createLocationCatalogRefresher({
+    fetchCatalog: async () => changedCatalog,
+    commitCatalog: async (locations) => { changedCommits.push(locations); },
+    currentCatalog: () => unchangedPrior,
+  });
+  await changed.refresh('interval');
+  assertDeepEqual(changedCommits, [changedCatalog]);
 }
 
 async function testFreshSameLocationProfileConnectsSecondNode(): Promise<void> {
@@ -2078,9 +2395,12 @@ function locationCandidate(id: string, overrides: Partial<VpnLocation> = {}): Vp
     id,
     countryCode: id.toUpperCase(),
     city: id.toUpperCase(),
+    displayName: id.toUpperCase(),
     availability: 'available',
+    priority: 100,
     status: 'healthy',
     healthyNodes: 1,
+    capabilities: [],
     ...overrides,
   };
 }

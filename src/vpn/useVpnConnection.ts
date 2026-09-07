@@ -343,7 +343,7 @@ export function useVpnConnection() {
     await disconnectVpn({ releaseAntiLeak: true }).catch(() => undefined);
     setVpnStatus({ state: 'disconnected', rxBytes: 0, txBytes: 0, leakProtection: 'off' });
     setVpnError('Устройство отключено администратором.');
-  }, [setSelectedLocationId]);
+  }, [setVpnStatus]);
 
   const handleSubscriptionRequired = useCallback(() => {
     void openExternalUrl(vexWebsite.dashboard()).catch(() => {
@@ -740,7 +740,7 @@ export function useVpnConnection() {
     return () => {
       active = false;
     };
-  }, [setVpnStatus]);
+  }, [setSelectedLocationId]);
 
   useEffect(() => {
     const reconciled = reconcileHydratedLocationSelection(

@@ -101,7 +101,7 @@ export default function App() {
     countryGroups(availableLocations, selectedLocationId, selectedLocation),
   );
   groupsRef.current = groups;
-  const locationPreviews = groups.slice(0, 2);
+  const locationPreviews = groups;
   const carouselWidth = Math.min(viewportWidth - (viewportWidth <= 360 ? 16 : 24), 430);
   const carouselCardWidth = carouselWidth - 44;
   const carouselSnapInterval = carouselCardWidth + vexTheme.spacing.sm;

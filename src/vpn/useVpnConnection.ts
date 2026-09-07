@@ -343,7 +343,7 @@ export function useVpnConnection() {
     await disconnectVpn({ releaseAntiLeak: true }).catch(() => undefined);
     setVpnStatus({ state: 'disconnected', rxBytes: 0, txBytes: 0, leakProtection: 'off' });
     setVpnError('Устройство отключено администратором.');
-  }, [setVpnStatus]);
+  }, [setSelectedLocationId]);
 
   const handleSubscriptionRequired = useCallback(() => {
     void openExternalUrl(vexWebsite.dashboard()).catch(() => {
@@ -760,7 +760,7 @@ export function useVpnConnection() {
       setServerSelectionModeState(reconciled.mode);
       void setServerSelectionMode(reconciled.mode).catch(() => undefined);
     }
-  }, [areVpnPreferencesHydrated, availableLocations, selectedLocationId, serverSelectionMode]);
+  }, [areVpnPreferencesHydrated, availableLocations, selectedLocationId, serverSelectionMode, setSelectedLocationId]);
 
   useEffect(() => {
     diagnosticsSnapshotRef.current = {
@@ -979,7 +979,7 @@ export function useVpnConnection() {
     if (locationId !== selectedLocationId) {
       setSelectedLocationId(locationId);
     }
-  }, [selectedLocationId, setActiveProfile, setVpnStatus]);
+  }, [selectedLocationId, setActiveProfile, setSelectedLocationId, setVpnStatus]);
 
   const { recordNativeStatus } = useNativeVpnWatchdog({
     activeDeviceId: activeProfileDeviceId,
@@ -1343,6 +1343,7 @@ export function useVpnConnection() {
     selectedLocationId,
     session,
     setActiveProfile,
+    setSelectedLocationId,
     setVpnStatus,
   ]);
 
@@ -1390,7 +1391,7 @@ export function useVpnConnection() {
     }
     clearProfile();
     setVpnError(null);
-  }, [availableLocations, clearProfile, isConnected, isVpnBusy, selectedLocationId, switchConnectedVpnLocation]);
+  }, [availableLocations, clearProfile, isConnected, isVpnBusy, selectedLocationId, setSelectedLocationId, switchConnectedVpnLocation]);
 
   const handleAutoServerSelectionPress = useCallback(async (closeOverlay = true) => {
     if (isVpnBusy) {

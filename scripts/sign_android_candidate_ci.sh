@@ -14,16 +14,16 @@ printf '%s  %s\n' "$expected_input" "$work/input.apk" | sha256sum -c -
 tools="$(find "$ANDROID_HOME/build-tools" -mindepth 2 -maxdepth 2 -name apksigner | sort -V | tail -1)"
 [[ -x "$tools" ]] || { echo APKSIGNER_MISSING; exit 2; }
 badging="$("$(dirname "$tools")/aapt" dump badging "$work/input.apk")"
-grep -q "^package: name='com.vexguard.app' versionCode='1005664' versionName='1.0.56'" <<< "$badging"
+grep -q "^package: name='com.vexguard.app' versionCode='1005765' versionName='1.0.57'" <<< "$badging"
 export KEYSTORE_DEST="$work/store.jks"
 python3 - <<'PY'
 import base64, os
 with open(os.environ['KEYSTORE_DEST'], 'wb') as f:
     f.write(base64.b64decode(os.environ['ANDROID_RELEASE_KEYSTORE_BASE64'], validate=True))
 PY
-"$tools" sign --ks "$KEYSTORE_DEST" --ks-key-alias "$VEX_UPLOAD_KEY_ALIAS" --ks-pass env:VEX_UPLOAD_STORE_PASSWORD --key-pass env:VEX_UPLOAD_KEY_PASSWORD --out signed-candidate/VEX-Android-1.0.56.apk "$work/input.apk"
-"$tools" verify --verbose --print-certs signed-candidate/VEX-Android-1.0.56.apk > signed-candidate/signature.txt
+"$tools" sign --ks "$KEYSTORE_DEST" --ks-key-alias "$VEX_UPLOAD_KEY_ALIAS" --ks-pass env:VEX_UPLOAD_STORE_PASSWORD --key-pass env:VEX_UPLOAD_KEY_PASSWORD --out signed-candidate/VEX-Android-1.0.57.apk "$work/input.apk"
+"$tools" verify --verbose --print-certs signed-candidate/VEX-Android-1.0.57.apk > signed-candidate/signature.txt
 grep -q "certificate SHA-256 digest: $expected_signer" signed-candidate/signature.txt
 keytool -exportcert -keystore "$KEYSTORE_DEST" -storepass:env VEX_UPLOAD_STORE_PASSWORD -alias "$VEX_UPLOAD_KEY_ALIAS" -file signed-candidate/certificate.der >"$work/export.log" 2>&1
-sha256sum signed-candidate/VEX-Android-1.0.56.apk > signed-candidate/checksum.txt
+sha256sum signed-candidate/VEX-Android-1.0.57.apk > signed-candidate/checksum.txt
 echo ANDROID_PACKAGE_AND_SIGNER=PASS

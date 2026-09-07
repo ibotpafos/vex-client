@@ -23,7 +23,7 @@ jobs:
           VEX_UPLOAD_STORE_PASSWORD: ${{ secrets.VEX_UPLOAD_STORE_PASSWORD }}
           VEX_UPLOAD_KEY_ALIAS: ${{ secrets.VEX_UPLOAD_KEY_ALIAS }}
           VEX_UPLOAD_KEY_PASSWORD: ${{ secrets.VEX_UPLOAD_KEY_PASSWORD }}
-        run: bash scripts/sign_android_candidate_ci.sh 577f296e19fec8965de5ebb98ffda4343c0306ea9a5e4cad177f840b50672f59 internal-app-signing-20260907-1005765-location-stability
+        run: bash scripts/sign_android_candidate_ci.sh 83f1508a355d294d3323b0a87e918f16b772d35554e2c2be52bf56e2b09bea40 internal-app-signing-20260907-1005765-location-stability
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: signed-app-candidate

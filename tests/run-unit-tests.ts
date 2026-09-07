@@ -59,6 +59,7 @@ import {
   reconcileLocationSelection,
   selectableVpnLocations,
 } from '../src/vpn/serverSelection';
+import * as serverSelectionModule from '../src/vpn/serverSelection';
 import { switchVpnLocation } from '../src/vpn/serverSwitch';
 import { normalizePackageNames } from '../src/vpn/applicationRouting';
 import { assessVpnAutopilotIssue } from '../src/vpn/vpnAutopilotAssessment';
@@ -80,6 +81,7 @@ import {
   stableHomeLocationPreviews,
   serverLocationTechnicalLabel,
 } from '../src/screens/home-location-previews';
+import * as homeLocationPreviewModule from '../src/screens/home-location-previews';
 import { trafficSessionLabel } from '../src/components/traffic-summary';
 import appConfig from '../app.config';
 import type { ConfigContext } from '@expo/config';
@@ -93,6 +95,7 @@ import {
   locationCatalogCacheSchemaVersion,
   validCachedValueForUser,
 } from '../src/vpn/vpnQueryCachePolicy';
+import * as vpnQueryCachePolicyModule from '../src/vpn/vpnQueryCachePolicy';
 import {
   customerRealtimeInvalidationRoots,
   customerRealtimeMetadata,
@@ -263,6 +266,26 @@ assertDeepEqual(
   [['edge-a', 'First Edge'], ['edge-b', 'Second']],
 );
 assertEqual(locationCatalogCacheSchemaVersion, 2);
+const shouldResetVpnCacheForSession = (
+  vpnQueryCachePolicyModule as unknown as Record<string, unknown>
+).shouldResetVpnCacheForSession;
+assertEqual(typeof shouldResetVpnCacheForSession, 'function');
+if (typeof shouldResetVpnCacheForSession === 'function') {
+  assertEqual(
+    shouldResetVpnCacheForSession(
+      { userId: 'user-a', accessToken: 'old-token' },
+      { userId: 'user-a', accessToken: 'new-token' },
+    ),
+    false,
+  );
+  assertEqual(
+    shouldResetVpnCacheForSession(
+      { userId: 'user-a', accessToken: 'old-token' },
+      { userId: 'user-b', accessToken: 'new-token' },
+    ),
+    true,
+  );
+}
 const twentyCatalogLocations = Array.from({ length: 20 }, (_, index) => ({
   ...catalogFixture,
   id: `edge-${index + 1}`,
@@ -290,6 +313,16 @@ assertEqual(homeLocationCardLabel(homeCatalogLocations[3]), 'Нидерланд�
 assertEqual(serverLocationTechnicalLabel(homeCatalogLocations[1]), null);
 assertEqual(serverLocationTechnicalLabel(homeCatalogLocations[3]), 'Amsterdam');
 assertEqual(serverLocationTechnicalLabel(homeCatalogLocations[0]), 'VEX AWG 3.1 Features');
+const locationCarouselItemLayout = (
+  homeLocationPreviewModule as unknown as Record<string, unknown>
+).locationCarouselItemLayout;
+assertEqual(typeof locationCarouselItemLayout, 'function');
+if (typeof locationCarouselItemLayout === 'function') {
+  assertDeepEqual(
+    locationCarouselItemLayout(364, 8, 2),
+    { index: 2, length: 372, offset: 744 },
+  );
+}
 const initialHomePreviews = homeLocationPreviews(homeCatalogLocations, homeCatalogLocations[0]);
 assertEqual(
   stableHomeLocationPreviews(
@@ -351,10 +384,24 @@ assertDeepEqual(
     { id: 'offline', country_code: 'XY', city: 'Offline', availability: 'available', healthy_nodes: 0 },
     { id: 'ready', country_code: 'XY', city: 'Ready', availability: 'available', healthy_nodes: 1 },
   ]).map((location) => location.id),
-  ['ready'],
+  ['offline', 'ready'],
 );
 assertDeepEqual(selectableVpnLocations(undefined), []);
 assertDeepEqual(selectableVpnLocations([]), []);
+const visibleVpnLocations = (
+  serverSelectionModule as unknown as Record<string, unknown>
+).visibleVpnLocations;
+assertEqual(typeof visibleVpnLocations, 'function');
+if (typeof visibleVpnLocations === 'function') {
+  assertDeepEqual(
+    visibleVpnLocations([
+      { ...catalogFixture, id: 'offline', healthyNodes: 0 },
+      { ...catalogFixture, id: 'ready' },
+      { ...catalogFixture, id: 'retired', availability: 'retired' },
+    ]).map((location: VpnLocation) => location.id),
+    ['offline', 'ready'],
+  );
+}
 assertEqual(locationDisplayName({ ...catalogFixture, displayName: 'Managed Name' }), 'Managed Name');
 assertDeepEqual(
   reconcileLocationSelection('manual', 'removed-id', [catalogFixture]),

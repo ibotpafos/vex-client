@@ -27,6 +27,11 @@ export function homeLocationPreviews(
   });
 }
 
+export function locationCarouselItemLayout(cardWidth: number, itemGap: number, index: number) {
+  const length = cardWidth + itemGap;
+  return { index, length, offset: length * index };
+}
+
 export function stableHomeLocationPreviews(
   previous: VpnLocation[],
   availableLocations: VpnLocation[],

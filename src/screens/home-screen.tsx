@@ -20,7 +20,11 @@ import { TrafficStats } from '../components/traffic-stats';
 import { type ConnectionPhase } from './home-screen-helpers';
 import { serverPickerActionForSource } from './server-picker-interactions';
 import { styles } from './home-screen.styles';
-import { homeLocationPreviews, stableHomeLocationPreviews } from './home-location-previews';
+import {
+  homeLocationPreviews,
+  locationCarouselItemLayout,
+  stableHomeLocationPreviews,
+} from './home-location-previews';
 
 export default function App() {
   useRenderProfilerMark('HomeScreen');
@@ -98,9 +102,11 @@ export default function App() {
   const carouselCardWidth = carouselWidth - 44;
   const carouselSnapInterval = carouselCardWidth + vexTheme.spacing.sm;
   const locationPreviewCount = locationPreviews.length;
-  const carouselSnapOffsets = useMemo(
-    () => Array.from({ length: locationPreviewCount }, (_, index) => index * carouselSnapInterval),
-    [carouselSnapInterval, locationPreviewCount],
+  const getLocationItemLayout = useCallback(
+    (_data: ArrayLike<VpnLocation> | null | undefined, index: number) => (
+      locationCarouselItemLayout(carouselCardWidth, vexTheme.spacing.sm, index)
+    ),
+    [carouselCardWidth],
   );
   const carouselContentContainerStyle = useMemo(
     () => ({ paddingRight: carouselWidth - carouselCardWidth }),
@@ -217,6 +223,7 @@ export default function App() {
                 data={locationPreviews}
                 decelerationRate="fast"
                 disableIntervalMomentum
+                getItemLayout={getLocationItemLayout}
                 horizontal
                 initialNumToRender={locationPreviewCount}
                 keyExtractor={locationKeyExtractor}
@@ -227,7 +234,7 @@ export default function App() {
                 renderItem={renderLocationPreview}
                 showsHorizontalScrollIndicator={false}
                 snapToAlignment="start"
-                snapToOffsets={carouselSnapOffsets}
+                snapToInterval={carouselSnapInterval}
                 style={styles.locationCarousel}
               />
             </View>

@@ -8,6 +8,20 @@ export type VpnQueryCacheEntry<T> = {
   value: T;
 };
 
+export type VpnCacheSession = {
+  userId?: string | null;
+  accessToken?: string | null;
+};
+
+export function shouldResetVpnCacheForSession(
+  previous: VpnCacheSession | null,
+  next: VpnCacheSession,
+): boolean {
+  const previousUserId = previous?.userId?.trim() ?? '';
+  const nextUserId = next.userId?.trim() ?? '';
+  return previous === null ? nextUserId !== '' : previousUserId !== nextUserId;
+}
+
 export function validCachedValueForUser<T>(
   entry: VpnQueryCacheEntry<unknown> | undefined,
   userId: string,

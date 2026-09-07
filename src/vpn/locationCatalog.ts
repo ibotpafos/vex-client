@@ -16,7 +16,7 @@ export function normalizeLocationCatalog(items: LocationDTO[]): VpnLocation[] {
   const seenIds = new Set<string>();
   const normalized = items.map((item, index) => normalizeLocation(item, index, seenIds));
   return normalized
-    .filter((location) => location.availability.toLowerCase() !== 'retired' && location.healthyNodes > 0)
+    .filter((location) => location.availability.toLowerCase() !== 'retired')
     .sort(compareLocations);
 }
 

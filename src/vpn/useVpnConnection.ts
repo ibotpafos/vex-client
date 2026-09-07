@@ -69,9 +69,12 @@ import {
 import {
   autoSwitchTargetLocationId,
   reconcileHydratedLocationSelection,
+  selectableVpnLocations,
   type ServerSelectionMode,
+  visibleVpnLocations,
 } from '@/vpn/serverSelection';
 import { switchVpnLocation } from '@/vpn/serverSwitch';
+import { shouldResetVpnCacheForSession, type VpnCacheSession } from '@/vpn/vpnQueryCachePolicy';
 import { useNativeVpnWatchdog } from '@/vpn/useNativeVpnWatchdog';
 import { useVpnProfileState } from '@/vpn/useVpnProfileState';
 import { parseDevicePSKRotationEvent, processDevicePSKRotationEvent } from '@/vpn/devicePskRotation';
@@ -123,7 +126,6 @@ import {
   errorMessage,
   isAuthenticationError,
   disconnectedVpnStatus,
-  availableVpnLocations,
   formatBytes,
   locationLatencyText,
   serverLocationLabel,
@@ -184,6 +186,7 @@ export function useVpnConnection() {
   const [selectedLocationId, setSelectedLocationId] = useState('');
   const [isUpdateCenterVisible, setIsUpdateCenterVisible] = useState(false);
   const [isAppActive, setIsAppActive] = useState(AppState.currentState === 'active');
+  const cacheSessionRef = useRef<VpnCacheSession | null>(null);
 
   const diagnosticsSnapshotRef = useRef<DiagnosticsSnapshotRef>({
     vpnStatus: vpnStatusRef.current,
@@ -313,13 +316,14 @@ export function useVpnConnection() {
   const hasVpnAccess = hasPaidEntitlement(knownEntitlement);
 
   const locationSource = locationsData ?? persistedLocations ?? undefined;
-  const baseAvailableLocations = useMemo(() => availableVpnLocations(locationSource), [locationSource]);
-  const availableLocations = useMemo(() => baseAvailableLocations.map((location) => {
+  const baseCatalogLocations = useMemo(() => visibleVpnLocations(locationSource), [locationSource]);
+  const catalogLocations = useMemo(() => baseCatalogLocations.map((location) => {
     const measuredLatency = deviceLocationLatencies[location.id];
     return typeof measuredLatency === 'number' && Number.isFinite(measuredLatency)
       ? { ...location, latencyMs: measuredLatency }
       : location;
-  }), [baseAvailableLocations, deviceLocationLatencies]);
+  }), [baseCatalogLocations, deviceLocationLatencies]);
+  const availableLocations = useMemo(() => selectableVpnLocations(catalogLocations), [catalogLocations]);
 
   useEffect(() => {
     const listener = (snapshot: Record<string, number>) => setDeviceLocationLatencies(snapshot);
@@ -377,6 +381,13 @@ export function useVpnConnection() {
     : undefined;
 
   useEffect(() => {
+    const nextCacheSession = { userId: cacheUserId };
+    const shouldReset = shouldResetVpnCacheForSession(cacheSessionRef.current, nextCacheSession);
+    cacheSessionRef.current = nextCacheSession;
+    if (!shouldReset) {
+      return undefined;
+    }
+
     let cancelled = false;
     setPersistedEntitlement(null);
     setPersistedLocations(null);
@@ -392,9 +403,6 @@ export function useVpnConnection() {
           return;
         }
         setPersistedEntitlement(value);
-        if (session?.accessToken) {
-          queryClient.setQueryData(['entitlement', session.accessToken], (current: Entitlement | undefined) => current ?? value);
-        }
       })
       .catch(() => undefined);
 
@@ -404,9 +412,6 @@ export function useVpnConnection() {
           return;
         }
         setPersistedLocations(value);
-        if (session?.accessToken) {
-          queryClient.setQueryData(['vpn-locations', session.accessToken], (current: VpnLocation[] | undefined) => current ?? value);
-        }
       })
       .catch(() => undefined);
 
@@ -416,16 +421,28 @@ export function useVpnConnection() {
           return;
         }
         setPersistedDevices(value);
-        if (session?.accessToken) {
-          queryClient.setQueryData(['vpn-devices', session.accessToken], (current: VpnDevice[] | undefined) => current ?? value);
-        }
       })
       .catch(() => undefined);
 
     return () => {
       cancelled = true;
     };
-  }, [cacheUserId, queryClient, session?.accessToken]);
+  }, [cacheUserId]);
+
+  useEffect(() => {
+    if (!accessToken) {
+      return;
+    }
+    if (persistedEntitlement) {
+      queryClient.setQueryData(['entitlement', accessToken], (current: Entitlement | undefined) => current ?? persistedEntitlement);
+    }
+    if (persistedLocations) {
+      queryClient.setQueryData(['vpn-locations', accessToken], (current: VpnLocation[] | undefined) => current ?? persistedLocations);
+    }
+    if (persistedDevices) {
+      queryClient.setQueryData(['vpn-devices', accessToken], (current: VpnDevice[] | undefined) => current ?? persistedDevices);
+    }
+  }, [accessToken, persistedDevices, persistedEntitlement, persistedLocations, queryClient]);
 
   useEffect(() => {
     if (!accessToken) {
@@ -615,7 +632,7 @@ export function useVpnConnection() {
 
   const accountTierLabel = subscriptionTierLabel(entitlementState);
   const accountSummaryText = subscriptionSummaryText(entitlementState);
-  const selectedLocation = availableLocations.find((location) => location.id === selectedLocationId) ?? availableLocations[0];
+  const selectedLocation = catalogLocations.find((location) => location.id === selectedLocationId) ?? availableLocations[0];
   // Home and the server picker must use the same device-to-location probe.
   // clientLatencyMs remains diagnostic telemetry for the active device only.
   const selectedLatencyText = locationLatencyText(selectedLocation);
@@ -850,7 +867,7 @@ export function useVpnConnection() {
       return undefined;
     }
 
-    const probeTargets = baseAvailableLocations
+    const probeTargets = baseCatalogLocations
       .flatMap((location) => location.endpoint ? [{ endpoint: location.endpoint, location }] : []);
     if (probeTargets.length === 0) {
       return undefined;
@@ -882,7 +899,7 @@ export function useVpnConnection() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [baseAvailableLocations, isAppActive]);
+  }, [baseCatalogLocations, isAppActive]);
 
   useEffect(() => {
     if (!isAppActive || !supportsNativeLatencyProbe() || !activeDevice?.endpoint) {
@@ -1345,6 +1362,11 @@ export function useVpnConnection() {
       setVpnError('Сервер не выбран. Обновите список и попробуйте снова.');
       return;
     }
+    if (!availableLocations.some((location) => location.id === normalizedLocationId)) {
+      playWarningHaptic();
+      setVpnError('Этот сервер временно недоступен. Выберите другую локацию.');
+      return;
+    }
     playSelectionHaptic();
     try {
       const nextMode = await setServerSelectionMode('manual');
@@ -1373,7 +1395,7 @@ export function useVpnConnection() {
     }
     clearProfile();
     setVpnError(null);
-  }, [clearProfile, isConnected, isVpnBusy, selectedLocationId, switchConnectedVpnLocation]);
+  }, [availableLocations, clearProfile, isConnected, isVpnBusy, selectedLocationId, switchConnectedVpnLocation]);
 
   const handleAutoServerSelectionPress = useCallback(async (closeOverlay = true) => {
     if (isVpnBusy) {
@@ -1502,7 +1524,7 @@ export function useVpnConnection() {
     handleSmartRoutingToggle,
     clearProfile,
     setVpnError,
-    availableLocations,
+    availableLocations: catalogLocations,
   };
 }
 

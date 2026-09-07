@@ -10,6 +10,10 @@ export function selectableVpnLocations(locations?: VpnLocation[]): VpnLocation[]
   return (locations ?? []).filter((location) => location.availability !== 'retired' && location.healthyNodes > 0);
 }
 
+export function visibleVpnLocations(locations?: VpnLocation[]): VpnLocation[] {
+  return (locations ?? []).filter((location) => location.availability.trim().toLowerCase() !== 'retired');
+}
+
 export function locationDisplayName(location: VpnLocation): string {
   return location.displayName || location.city;
 }

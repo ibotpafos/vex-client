@@ -70,6 +70,7 @@ if [[ "$variant" == "release" ]]; then
   require_env VEX_UPLOAD_STORE_PASSWORD
   require_env VEX_UPLOAD_KEY_ALIAS
   require_env VEX_UPLOAD_KEY_PASSWORD
+  "${root_dir}/scripts/verify_android_observability.sh" env
 else
   unset VEX_UPLOAD_STORE_FILE
   unset VEX_UPLOAD_STORE_PASSWORD
@@ -159,6 +160,9 @@ fi
   "${expected_version_code}" \
   "${expected_version_name}" \
   "${ORG_GRADLE_PROJECT_reactNativeArchitectures}"
+if [[ "${variant}" == "release" ]]; then
+  "${root_dir}/scripts/verify_android_observability.sh" apk "${output_apk}"
+fi
 
 mkdir -p "${root_dir}/${artifacts_dir}"
 

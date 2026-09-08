@@ -5,6 +5,7 @@ on:
     paths:
       - .github/workflows/android-sign-candidate.yml
       - scripts/sign_android_candidate_ci.sh
+      - scripts/verify_android_observability.sh
   workflow_dispatch:
 permissions:
   contents: write # GitHub requires write access to read draft release assets.

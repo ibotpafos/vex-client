@@ -4,13 +4,14 @@ set +x
 expected_input="${1:?Fixed input SHA256 required}"
 tag="${2:?Private draft input tag required}"
 expected_signer=cc569dfaa4c2c82379669b7c13606eb268cc3eba90a9c88e20a2d4500daf8470
-bash scripts/verify_android_signing_secret.sh "$expected_signer"
 umask 077
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 mkdir -p signed-candidate
 gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern input.apk --dir "$work"
 printf '%s  %s\n' "$expected_input" "$work/input.apk" | sha256sum -c -
+bash scripts/verify_android_observability.sh apk "$work/input.apk"
+bash scripts/verify_android_signing_secret.sh "$expected_signer"
 tools="$(find "$ANDROID_HOME/build-tools" -mindepth 2 -maxdepth 2 -name apksigner | sort -V | tail -1)"
 [[ -x "$tools" ]] || { echo APKSIGNER_MISSING; exit 2; }
 badging="$("$(dirname "$tools")/aapt" dump badging "$work/input.apk")"

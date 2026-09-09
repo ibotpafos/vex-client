@@ -36,7 +36,11 @@ export function UniversalUpdateCenterContent({
       <Column spacing={8} style={styles.content}>
         <List>
           <ListItem leading="‹" onPress={onClose}>Обновления</ListItem>
-          <ListItem supportingText={statusMessage}>{statusTitle}</ListItem>
+        </List>
+        <Text textStyle={styles.eyebrow}>СИСТЕМА</Text>
+        <Text textStyle={styles.title}>{statusTitle}</Text>
+        <Text textStyle={styles.message}>{statusMessage}</Text>
+        <List>
           {values.map((item) => (
             <ListItem key={item.label} supportingText={item.value}>{item.label}</ListItem>
           ))}
@@ -59,7 +63,14 @@ export function UniversalUpdateCenterContent({
 const styles = {
   content: {
     backgroundColor: "#041315",
-    paddingBottom: 12,
+    paddingBottom: 20,
+    paddingHorizontal: 20,
+  },
+  eyebrow: {
+    color: "#43D9E7",
+    fontSize: 12,
+    fontWeight: "700" as const,
+    letterSpacing: 1.2,
   },
   footnote: {
     color: "#A7B9BD",
@@ -68,5 +79,16 @@ const styles = {
   },
   host: {
     flex: 1,
+  },
+  message: {
+    color: "#A7B9BD",
+    fontSize: 15,
+    lineHeight: 21,
+  },
+  title: {
+    color: "#F2F8F8",
+    fontSize: 28,
+    fontWeight: "700" as const,
+    letterSpacing: -0.5,
   },
 };

@@ -16,6 +16,7 @@ import type { VpnLocation } from '@/api/vexApi';
 import { VexWordmark } from '@/components/vex-wordmark';
 import { VexPressable } from '@/ui/vex-ui';
 import type { ConnectionPhase } from '@/screens/home-screen-helpers';
+import type { ServerSelectionMode } from '@/vpn/serverSelection';
 import {
   homeConnectionPresentation,
   homeLocationBackdropKey,
@@ -40,6 +41,7 @@ type LocationHomeHeroProps = {
   onSettingsPress: () => void;
   powerButtonDisabled: boolean;
   pulseProgress: Animated.Value;
+  selectionMode: ServerSelectionMode;
 };
 
 export function LocationHomeHero({
@@ -53,10 +55,11 @@ export function LocationHomeHero({
   onSettingsPress,
   powerButtonDisabled,
   pulseProgress,
+  selectionMode,
 }: LocationHomeHeroProps) {
   const safeAreaInsets = useSafeAreaInsets();
   const presentation = homeConnectionPresentation(connectionPhase);
-  const locationCopy = location ? homeLocationCopy(location, latencyText) : null;
+  const locationCopy = location ? homeLocationCopy(location, latencyText, selectionMode) : null;
   const backgroundSource = locationBackgrounds[homeLocationBackdropKey(location)];
   const reduceMotion = Platform.OS === 'android';
   const portalScale = pulseProgress.interpolate({
@@ -97,18 +100,6 @@ export function LocationHomeHero({
             <Settings color="#EAF7F8" size={25} strokeWidth={2.15} />
           </VexPressable>
         </View>
-      </View>
-
-      <View accessibilityLiveRegion="polite" style={styles.statusRow}>
-        <View
-          style={[
-            styles.statusDot,
-            presentation.tone === 'connected' && styles.statusDotConnected,
-            presentation.tone === 'busy' && styles.statusDotBusy,
-            presentation.tone === 'warning' && styles.statusDotWarning,
-          ]}
-        />
-        <Text style={styles.statusText}>{presentation.status}</Text>
       </View>
 
       <View style={styles.portalStage}>
@@ -229,42 +220,12 @@ const styles = StyleSheet.create({
   headerButtonPressed: {
     opacity: 0.68,
   },
-  statusRow: {
-    alignItems: 'center',
-    alignSelf: 'center',
-    flexDirection: 'row',
-    gap: 10,
-    marginTop: 3,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-  },
-  statusDot: {
-    backgroundColor: '#AFC0C4',
-    borderRadius: 999,
-    height: 10,
-    width: 10,
-  },
-  statusDotConnected: {
-    backgroundColor: '#66E0B2',
-  },
-  statusDotBusy: {
-    backgroundColor: '#79EFF7',
-  },
-  statusDotWarning: {
-    backgroundColor: '#F3C969',
-  },
-  statusText: {
-    color: '#EAF3F5',
-    fontSize: 15,
-    fontWeight: '600',
-    letterSpacing: 0.2,
-  },
   portalStage: {
     alignItems: 'center',
     flex: 1,
     justifyContent: 'center',
     minHeight: 280,
-    paddingTop: 86,
+    paddingTop: 38,
   },
   portalFrame: {
     alignItems: 'center',

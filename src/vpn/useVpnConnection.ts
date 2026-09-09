@@ -1224,14 +1224,20 @@ export function useVpnConnection() {
     }
     setVpnError(null);
 
+    const targetLocationId = autoSwitchTargetLocationId(selectedLocationId, availableLocations);
+
     if (!isConnected) {
+      if (targetLocationId) {
+        const persistedLocationId = await setSelectedVpnLocation(targetLocationId);
+        setSelectedLocationId(persistedLocationId);
+        clearProfile();
+      }
       if (closeOverlay) {
         closeRouteOverlay();
       }
       return;
     }
 
-    const targetLocationId = autoSwitchTargetLocationId(selectedLocationId, availableLocations);
     if (!targetLocationId) {
       if (closeOverlay) {
         closeRouteOverlay();
@@ -1239,7 +1245,7 @@ export function useVpnConnection() {
       return;
     }
     await switchConnectedVpnLocation(targetLocationId, closeOverlay);
-  }, [availableLocations, isConnected, isVpnBusy, selectedLocationId, switchConnectedVpnLocation]);
+  }, [availableLocations, clearProfile, isConnected, isVpnBusy, selectedLocationId, switchConnectedVpnLocation]);
 
   const openServerPicker = useCallback((visibleLatencyText?: string, visibleLocationId?: string) => {
     playSelectionHaptic();

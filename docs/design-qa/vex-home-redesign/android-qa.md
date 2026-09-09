@@ -16,6 +16,7 @@ Date: 2026-09-09
 - Annotated standalone `VPN выключен` row is removed; connection state is carried by the main action.
 - Default mode renders `Автоматически` with the resolved country, server/city, and latency below it.
 - Germany, Finland, and the Netherlands render as country cards. Multi-server countries expand in place; no persistent `Выбрать вручную` row remains.
+- Country cards have a native 10 dp list gap (29–32 physical px on the Xiaomi); rows inside an expanded country remain contiguous.
 - Manual selection of the second Finland server passed, and returning to automatic selection passed.
 
 ## Real VPN proof

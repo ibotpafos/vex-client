@@ -1,4 +1,5 @@
 import type { VpnLocation } from '@/api/vexApi';
+import type { ServerSelectionMode } from '@/vpn/serverSelection';
 
 import type { ConnectionPhase } from './home-screen-helpers';
 
@@ -19,10 +20,19 @@ export type HomeConnectionPresentation = {
   tone: 'idle' | 'busy' | 'connected' | 'warning';
 };
 
-const locationCopyByCountry: Record<string, { city: string; country: string }> = {
-  DE: { city: 'Франкфурт', country: 'Германия' },
-  FI: { city: 'Хельсинки', country: 'Финляндия' },
-  NL: { city: 'Амстердам', country: 'Нидерланды' },
+const countryNameByCode: Record<string, string> = {
+  DE: 'Германия',
+  FI: 'Финляндия',
+  NL: 'Нидерланды',
+};
+
+const cityNameByKey: Record<string, string> = {
+  amsterdam: 'Амстердам',
+  finland: 'Хельсинки',
+  frankfurt: 'Франкфурт',
+  germany: 'Франкфурт',
+  helsinki: 'Хельсинки',
+  netherlands: 'Амстердам',
 };
 
 export function homeLocationBackdropKey(location?: VpnLocation): HomeLocationBackdropKey {
@@ -38,13 +48,23 @@ export function homeLocationBackdropKey(location?: VpnLocation): HomeLocationBac
   return 'fallback';
 }
 
-export function homeLocationCopy(location: VpnLocation, latencyText: string): {
+export function homeLocationCopy(location: VpnLocation, latencyText: string, selectionMode: ServerSelectionMode = 'manual'): {
   city: string;
   countryAndLatency: string;
 } {
-  const localized = locationCopyByCountry[location.countryCode.trim().toUpperCase()];
-  const city = localized?.city ?? (location.city.trim() || location.id.toUpperCase());
-  const country = localized?.country ?? location.countryCode.trim().toUpperCase();
+  const rawCity = location.city.trim();
+  const internalServerLabel = /\b(?:vex|awg|features?)\b/i.test(rawCity);
+  const city = internalServerLabel
+    ? 'Сервер'
+    : cityNameByKey[rawCity.toLowerCase()] ?? (rawCity || location.id.toUpperCase());
+  const countryCode = location.countryCode.trim().toUpperCase();
+  const country = countryNameByCode[countryCode] ?? countryCode;
+  if (selectionMode === 'auto') {
+    return {
+      city: 'Автоматически',
+      countryAndLatency: `${country} · ${internalServerLabel ? 'лучший сервер' : city} · ${latencyText}`,
+    };
+  }
   return {
     city,
     countryAndLatency: `${country} · ${latencyText}`,

@@ -6,9 +6,13 @@ import { VexPressable } from '@/ui/vex-ui';
 import type { ServerSelectionMode } from '@/vpn/serverSelection';
 import {
   locationStatusText,
-  serverLocationLabel,
 } from '../screens/home-screen-helpers';
-import { serverPickerRowPresentation } from '../screens/server-picker-interactions';
+import {
+  groupVpnLocationsByCountry,
+  serverCountLabel,
+  serverPickerLocationTitle,
+  serverPickerRowPresentation,
+} from '../screens/server-picker-interactions';
 
 export interface ServerPickerModalProps {
   isVpnBusy: boolean;
@@ -58,39 +62,79 @@ export const ServerPickerContent = React.memo(function ServerPickerContent({
   onAutoSelect,
   onSelect,
 }: ServerPickerContentProps) {
+  const countryGroups = React.useMemo(() => groupVpnLocationsByCountry(locations), [locations]);
+  const [expandedCountryCode, setExpandedCountryCode] = React.useState<string | null>(null);
+
   return (
     <View style={styles.content}>
       <Text style={styles.eyebrow}>ЛОКАЦИЯ</Text>
       <Text style={styles.title}>Выберите сервер</Text>
-      <Text style={styles.subtitle}>VEX покажет доступность и задержку каждого направления.</Text>
+      <Text style={styles.subtitle}>VEX выберет лучший сервер автоматически. Страну и конкретный сервер можно указать вручную.</Text>
       <ServerPickerRow
         disabled={isVpnBusy}
         leading="↻"
         onPress={onAutoSelect}
         selected={selectionMode === 'auto'}
-        supportingText="Лучший доступный сервер"
+        supportingText="Лучший сервер среди всех стран"
         testID="server-picker-auto"
-        title="Лучший сервер"
+        title="Автоматически"
       />
-      {locations.map((location) => {
-        const selected = selectionMode === 'manual' && location.id === selectedLocationId;
-        const presentation = serverPickerRowPresentation(location, {
+      {countryGroups.map((group) => {
+        const countrySelected = selectionMode === 'manual'
+          && group.locations.some((location) => location.id === selectedLocationId);
+        const expanded = expandedCountryCode === group.countryCode;
+        const bestLocation = group.bestLocation;
+        const bestPresentation = bestLocation ? serverPickerRowPresentation(bestLocation, {
           busy: isVpnBusy,
-          selected,
+          selected: bestLocation.id === selectedLocationId,
           selectedLatencyText,
-        });
+        }) : null;
+        const serverCount = group.locations.length;
+        const bestLocationOrdinal = bestLocation
+          ? group.locations.findIndex((location) => location.id === bestLocation.id) + 1
+          : undefined;
         return (
-          <ServerPickerRow
-            accessibilityLabel={presentation.accessibilityLabel}
-            disabled={presentation.disabled}
-            key={location.id}
-            leading={location.flagEmoji || location.countryCode}
-            onPress={() => onSelect(location.id)}
-            selected={presentation.selected}
-            supportingText={`${locationStatusText(location)} · ${presentation.latency}`}
-            testID={`server-picker-${location.id}`}
-            title={serverLocationLabel(location)}
-          />
+          <View key={group.countryCode} style={[styles.countryCard, countrySelected && styles.countryCardSelected]}>
+            <ServerPickerRow
+              disabled={!bestLocation || Boolean(bestPresentation?.disabled)}
+              leading={group.flagEmoji || group.countryCode}
+              onPress={() => {
+                if (serverCount === 1 && bestLocation) {
+                  onSelect(bestLocation.id);
+                  return;
+                }
+                setExpandedCountryCode(expanded ? null : group.countryCode);
+              }}
+              selected={serverCount === 1 && countrySelected}
+              supportingText={bestLocation
+                ? `${serverCountLabel(serverCount)} · лучший ${serverPickerLocationTitle(bestLocation, bestLocationOrdinal)} · ${bestPresentation?.latency}`
+                : 'Нет доступных серверов'}
+              testID={`server-picker-country-${group.countryCode.toLowerCase()}`}
+              title={group.title}
+              trailing={serverCount > 1 ? `${countrySelected ? '✓  ' : ''}${expanded ? '⌃' : '⌄'}` : undefined}
+            />
+            {expanded ? group.locations.map((location, index) => {
+              const selected = selectionMode === 'manual' && location.id === selectedLocationId;
+              const presentation = serverPickerRowPresentation(location, {
+                busy: isVpnBusy,
+                selected,
+                selectedLatencyText,
+              });
+              return (
+                <ServerPickerRow
+                  accessibilityLabel={presentation.accessibilityLabel}
+                  disabled={presentation.disabled}
+                  key={location.id}
+                  leading={location.id === bestLocation?.id ? '★' : '•'}
+                  onPress={() => onSelect(location.id)}
+                  selected={presentation.selected}
+                  supportingText={`${locationStatusText(location)} · ${presentation.latency}${location.id === bestLocation?.id ? ' · лучший' : ''}`}
+                  testID={`server-picker-${location.id}`}
+                  title={serverPickerLocationTitle(location, index + 1)}
+                />
+              );
+            }) : null}
+          </View>
         );
       })}
       {locations.length === 0 ? (
@@ -109,6 +153,7 @@ function ServerPickerRow({
   supportingText,
   testID,
   title,
+  trailing,
 }: {
   accessibilityLabel?: string;
   disabled: boolean;
@@ -118,6 +163,7 @@ function ServerPickerRow({
   supportingText: string;
   testID: string;
   title: string;
+  trailing?: string;
 }) {
   return (
     <VexPressable
@@ -133,7 +179,7 @@ function ServerPickerRow({
         <Text style={styles.rowTitle}>{title}</Text>
         <Text style={styles.rowMeta}>{supportingText}</Text>
       </View>
-      <Text style={styles.trailing}>{selected ? '✓' : ''}</Text>
+      <Text style={styles.trailing}>{selected ? '✓' : trailing ?? ''}</Text>
     </VexPressable>
   );
 }
@@ -171,6 +217,16 @@ const styles = StyleSheet.create({
     paddingBottom: 22,
     paddingHorizontal: 20,
     paddingTop: 14,
+  },
+  countryCard: {
+    borderColor: 'rgba(103,232,249,0.12)',
+    borderRadius: 18,
+    borderWidth: 1,
+    marginTop: 8,
+    overflow: 'hidden',
+  },
+  countryCardSelected: {
+    borderColor: 'rgba(103,232,249,0.34)',
   },
   eyebrow: {
     color: '#67E8F9',

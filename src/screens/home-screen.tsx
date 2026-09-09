@@ -91,6 +91,7 @@ export default function App() {
           }}
           powerButtonDisabled={powerButtonDisabled}
           pulseProgress={pulseProgress}
+          selectionMode={serverSelectionMode}
         >
           <MobileUpdateNoticeBanner onOpen={openUpdateCenter} />
           {activeProfile?.rotationRequired ? (

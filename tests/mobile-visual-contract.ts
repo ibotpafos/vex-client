@@ -2,8 +2,13 @@ import {
   mobileStateNoticePresentation,
   vexMobileType,
 } from '../src/ui/vex-mobile-visual';
-import { homeBrandPresentation } from '../src/screens/home-screen-visual';
-import { serverPickerRowPresentation } from '../src/screens/server-picker-interactions';
+import { homeBrandPresentation, homeLocationCopy } from '../src/screens/home-screen-visual';
+import {
+  groupVpnLocationsByCountry,
+  serverCountLabel,
+  serverPickerLocationTitle,
+  serverPickerRowPresentation,
+} from '../src/screens/server-picker-interactions';
 import type { VpnLocation } from '../src/api/vexApi';
 import { settingsSectionModel } from '../src/screens/settings-screen-copy';
 import {
@@ -36,6 +41,18 @@ const germanyLocation: VpnLocation = {
   latencyMs: 18,
   status: 'healthy',
 };
+assertDeepEqual(homeLocationCopy(germanyLocation, '18 мс', 'auto'), {
+  city: 'Автоматически',
+  countryAndLatency: 'Германия · Франкфурт · 18 мс',
+});
+assertDeepEqual(homeLocationCopy(germanyLocation, '18 мс', 'manual'), {
+  city: 'Франкфурт',
+  countryAndLatency: 'Германия · 18 мс',
+});
+assertDeepEqual(homeLocationCopy({ ...germanyLocation, city: 'VEX AWG 3.1 Features' }, '18 мс', 'auto'), {
+  city: 'Автоматически',
+  countryAndLatency: 'Германия · лучший сервер · 18 мс',
+});
 assertDeepEqual(serverPickerRowPresentation(germanyLocation, {
   busy: false,
   selected: true,
@@ -46,6 +63,38 @@ assertDeepEqual(serverPickerRowPresentation(germanyLocation, {
   latency: '7 мс',
   selected: true,
 });
+const germanyBackupLocation: VpnLocation = {
+  ...germanyLocation,
+  city: 'Berlin',
+  healthyNodes: 2,
+  id: 'de-berlin',
+  latencyMs: 26,
+};
+const finlandLocation: VpnLocation = {
+  ...germanyLocation,
+  city: 'Helsinki',
+  countryCode: 'FI',
+  flagEmoji: '🇫🇮',
+  id: 'fi-helsinki',
+  latencyMs: 22,
+};
+assertDeepEqual(
+  groupVpnLocationsByCountry([germanyBackupLocation, finlandLocation, germanyLocation]).map((group) => ({
+    bestLocationId: group.bestLocation?.id,
+    countryCode: group.countryCode,
+    locationIds: group.locations.map((location) => location.id),
+  })),
+  [
+    { bestLocationId: 'de', countryCode: 'DE', locationIds: ['de', 'de-berlin'] },
+    { bestLocationId: 'fi-helsinki', countryCode: 'FI', locationIds: ['fi-helsinki'] },
+  ],
+);
+assertEqual(serverCountLabel(1), '1 сервер');
+assertEqual(serverCountLabel(2), '2 сервера');
+assertEqual(serverCountLabel(5), '5 серверов');
+assertEqual(serverCountLabel(11), '11 серверов');
+assertEqual(serverPickerLocationTitle({ ...germanyLocation, city: 'Germany' }), 'Франкфурт');
+assertEqual(serverPickerLocationTitle({ ...germanyLocation, city: 'VEX AWG 3.1 Features' }, 2), 'Сервер 2');
 assertDeepEqual(settingsSectionModel('ios').map((section) => section.id), [
   'connection',
   'routing',

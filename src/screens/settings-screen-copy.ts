@@ -11,10 +11,10 @@ export type SettingsRowId =
   | 'sign-out'
   | 'version';
 
-export function settingsSectionModel(platform: 'android' | 'ios'): ReadonlyArray<{
+export function settingsSectionModel(platform: 'android' | 'ios'): readonly {
   id: SettingsSectionId;
   rows: readonly SettingsRowId[];
-}> {
+}[] {
   return [
     { id: 'connection', rows: ['automation'] },
     {

@@ -21,6 +21,7 @@ import {
 import {
   groupVpnLocationsByCountry,
   serverCountLabel,
+  serverPickerCountryGapDp,
   serverPickerLocationTitle,
   serverPickerRowPresentation,
 } from "../screens/server-picker-interactions";
@@ -127,7 +128,7 @@ function ServerPickerBody({
       <UniversalText textStyle={styles.subtitle}>
         VEX выберет лучший сервер автоматически. Страну и конкретный сервер можно указать вручную.
       </UniversalText>
-      <Column spacing={0}>
+      <Column spacing={serverPickerCountryGapDp()}>
         <ServerPickerRow
           leading="↻"
           onPress={isVpnBusy ? undefined : onAutoSelect}
@@ -248,7 +249,6 @@ const styles = {
     borderColor: "rgba(103,232,249,0.12)",
     borderRadius: 18,
     borderWidth: 1,
-    marginTop: 8,
     overflow: "hidden" as const,
   },
   eyebrow: {

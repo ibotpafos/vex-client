@@ -8,6 +8,7 @@ Key verified states:
 - no separate disconnected status row;
 - automatic best-server selection by default;
 - country-grouped server cards with compact in-place expansion;
+- distinct native spacing between country cards while keeping each expanded country internally unified;
 - manual server selection and restoration of automatic mode;
 - real Android tunnel connection, validated DNS/HTTPS traffic, and clean disconnect.
 

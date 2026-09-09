@@ -6,6 +6,7 @@ import { homeBrandPresentation, homeLocationCopy } from '../src/screens/home-scr
 import {
   groupVpnLocationsByCountry,
   serverCountLabel,
+  serverPickerCountryGapDp,
   serverPickerLocationTitle,
   serverPickerRowPresentation,
 } from '../src/screens/server-picker-interactions';
@@ -95,6 +96,7 @@ assertEqual(serverCountLabel(5), '5 серверов');
 assertEqual(serverCountLabel(11), '11 серверов');
 assertEqual(serverPickerLocationTitle({ ...germanyLocation, city: 'Germany' }), 'Франкфурт');
 assertEqual(serverPickerLocationTitle({ ...germanyLocation, city: 'VEX AWG 3.1 Features' }, 2), 'Сервер 2');
+assertTrue(serverPickerCountryGapDp() >= 8, 'Android country cards must have a visible gap');
 assertDeepEqual(settingsSectionModel('ios').map((section) => section.id), [
   'connection',
   'routing',
@@ -130,5 +132,11 @@ function assertEqual<T>(actual: T, expected: T): void {
 function assertDeepEqual<T>(actual: T, expected: T): void {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     throw new Error(`Expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+  }
+}
+
+function assertTrue(actual: boolean, message: string): void {
+  if (!actual) {
+    throw new Error(message);
   }
 }

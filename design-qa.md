@@ -17,7 +17,8 @@ Date: 2026-09-09
 - Browser expanded country card: `docs/design-qa/vex-mobile-system/browser-server-picker-expanded-final.png`.
 - Physical Android home: `docs/design-qa/vex-mobile-system/android-home-auto-final.png`.
 - Physical Android connected state: `docs/design-qa/vex-mobile-system/android-home-connected-final.png`.
-- Physical Android expanded picker: `docs/design-qa/vex-mobile-system/android-server-picker-expanded-final.png`.
+- Physical Android separated picker: `docs/design-qa/vex-mobile-system/android-server-picker-separated.png`.
+- Physical Android expanded picker: `docs/design-qa/vex-mobile-system/android-server-picker-separated-expanded.png`.
 
 ## Interaction QA
 
@@ -32,6 +33,7 @@ Date: 2026-09-09
 
 - No clipped controls, unexpected wrapping, broken radii, or unreadable foreground contrast were found at the target viewport.
 - Country cards remain one row while collapsed, removing the persistent manual-selection row that consumed vertical space.
+- Android country cards use native Compose list spacing: adjacent countries measured 29–32 physical px apart, while server rows inside one expanded country remain connected.
 - Internal development-style server names are replaced with neutral `Сервер N` labels in the picker.
 - No actionable P0, P1, or P2 visual differences remain. The heavier system-font wordmark is accepted P3 mobile readability polish.
 

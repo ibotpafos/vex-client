@@ -101,6 +101,10 @@ export function serverCountLabel(count: number): string {
   return `${normalized} ${noun}`;
 }
 
+export function serverPickerCountryGapDp(): number {
+  return 10;
+}
+
 function countryTitle(countryCode: string, fallback?: string): string {
   return ({ DE: 'Германия', FI: 'Финляндия', NL: 'Нидерланды' } as Record<string, string>)[countryCode]
     ?? fallback

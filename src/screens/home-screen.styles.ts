@@ -5,8 +5,18 @@ import { vexTheme } from '@/ui/vex-theme';
 export const maxContentWidth = 430;
 
 export const styles = StyleSheet.create({
+  screen: {
+    alignItems: 'center',
+    backgroundColor: vexTheme.colors.background,
+    flex: 1,
+  },
   shell: {
-    gap: vexTheme.spacing.sm,
+    flex: 1,
+    gap: 0,
+    maxWidth: maxContentWidth,
+    overflow: 'hidden',
+    paddingBottom: 0,
+    width: '100%',
   },
   scroll: {
     flex: 1,

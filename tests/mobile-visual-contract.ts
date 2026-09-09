@@ -2,6 +2,7 @@ import {
   mobileStateNoticePresentation,
   vexMobileType,
 } from '../src/ui/vex-mobile-visual';
+import { homeBrandPresentation } from '../src/screens/home-screen-visual';
 
 assertDeepEqual(mobileStateNoticePresentation('error'), {
   accent: '#FF9EAA',
@@ -13,6 +14,11 @@ assertDeepEqual(mobileStateNoticePresentation('success'), {
 });
 assertEqual(vexMobileType.wordmark.letterSpacing, 8);
 assertEqual(vexMobileType.wordmark.fontWeight, '700');
+assertDeepEqual(homeBrandPresentation(), {
+  accessibilityLabel: 'VEX VPN',
+  usesEmblem: false,
+  wordmark: 'VEX',
+});
 
 function assertEqual<T>(actual: T, expected: T): void {
   if (actual !== expected) {

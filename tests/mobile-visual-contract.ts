@@ -5,6 +5,7 @@ import {
 import { homeBrandPresentation } from '../src/screens/home-screen-visual';
 import { serverPickerRowPresentation } from '../src/screens/server-picker-interactions';
 import type { VpnLocation } from '../src/api/vexApi';
+import { settingsSectionModel } from '../src/screens/settings-screen-copy';
 
 assertDeepEqual(mobileStateNoticePresentation('error'), {
   accent: '#FF9EAA',
@@ -41,6 +42,21 @@ assertDeepEqual(serverPickerRowPresentation(germanyLocation, {
   latency: '7 мс',
   selected: true,
 });
+assertDeepEqual(settingsSectionModel('ios').map((section) => section.id), [
+  'connection',
+  'routing',
+  'interface',
+  'account',
+  'about',
+]);
+assertEqual(
+  settingsSectionModel('ios').flatMap((section) => section.rows).includes('applications'),
+  false,
+);
+assertEqual(
+  settingsSectionModel('android').flatMap((section) => section.rows).includes('applications'),
+  true,
+);
 
 function assertEqual<T>(actual: T, expected: T): void {
   if (actual !== expected) {

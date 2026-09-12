@@ -41,7 +41,7 @@ export async function waitForVerifiedVpnConnection(
   let latestStatus = initialStatus;
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    await withDeadline(() => wait(pollMs), remaining());
+    if (attempt > 0) await withDeadline(() => wait(pollMs), remaining());
     latestStatus = await withDeadline(readStatus, remaining());
     remaining();
     // Android can emit a transition snapshot while the native status reader

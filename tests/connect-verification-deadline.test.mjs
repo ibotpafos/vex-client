@@ -4,6 +4,29 @@ import { waitForVerifiedVpnConnection } from '../src/vpn/connectVerification.ts'
 
 const pending = { state: 'connected', rxBytes: 0, txBytes: 0, verified: false };
 
+test('a ready fresh handshake is read before the first polling delay', async () => {
+  const result = await waitForVerifiedVpnConnection(pending, async () => ({
+    ...pending, verified: true, latestHandshakeEpochMillis: 1000,
+  }), {
+    minimumHandshakeEpochMillis: 1000,
+    wait: async () => { throw new Error('unnecessary initial polling delay'); },
+  });
+  assert.equal(result.latestHandshakeEpochMillis, 1000);
+});
+
+test('an old handshake still waits and cannot satisfy a new attempt', async () => {
+  let reads = 0;
+  let waits = 0;
+  const result = await waitForVerifiedVpnConnection(pending, async () => ({
+    ...pending, verified: true, latestHandshakeEpochMillis: ++reads === 1 ? 900 : 1000,
+  }), {
+    minimumHandshakeEpochMillis: 1000,
+    wait: async () => { waits++; },
+  });
+  assert.equal(waits, 1);
+  assert.equal(result.latestHandshakeEpochMillis, 1000);
+});
+
 test('a stalled native status read cannot hold connection verification forever', async () => {
   const verification = waitForVerifiedVpnConnection(pending, () => new Promise(() => {}), {
     pollMs: 0, timeoutMs: 20,

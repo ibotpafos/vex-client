@@ -12,12 +12,30 @@ type NetworkHealthProbeInput = {
 const defaultProbeTimeoutMs = 5000;
 
 export async function probeNetworkHealth(input: NetworkHealthProbeInput): Promise<VpnAutopilotProbeResult> {
-  const endpointProbe = await probeEndpoint(input);
-  const httpsProbe = await probeHttps(input);
-  return {
-    ...endpointProbe,
-    ...httpsProbe,
-  };
+  const timeoutMs = input.timeoutMs ?? defaultProbeTimeoutMs;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new Error('Network probe timeout must be positive.');
+  }
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<void>((resolve) => {
+    timer = setTimeout(() => { resolve(); controller.abort(); }, timeoutMs);
+  });
+  try {
+    const [endpointProbe, httpsProbe] = await Promise.all([
+      Promise.race([
+        probeEndpoint(input),
+        deadline.then((): VpnAutopilotProbeResult => ({ endpointLatencyMs: null, endpointProbeError: 'endpoint_probe_timeout' })),
+      ]),
+      Promise.race([
+        probeHttps(input, controller.signal),
+        deadline.then((): VpnAutopilotProbeResult => ({ httpsOk: false, httpsProbeError: 'https_probe_timeout' })),
+      ]),
+    ]);
+    return { ...endpointProbe, ...httpsProbe };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function probeEndpoint(input: NetworkHealthProbeInput): Promise<VpnAutopilotProbeResult> {
@@ -27,39 +45,36 @@ async function probeEndpoint(input: NetworkHealthProbeInput): Promise<VpnAutopil
   try {
     const endpointLatencyMs = await input.measureEndpointLatency(input.endpoint);
     return {
-      dnsOk: endpointLatencyMs !== null,
+      // Latency can target an IP directly. A missing measurement is not
+      // evidence that DNS failed, and a successful one is not a DNS probe.
       endpointLatencyMs,
     };
   } catch (error) {
     return {
-      dnsOk: !errorLooksLikeDns(error),
+      dnsOk: errorLooksLikeDns(error) ? false : undefined,
       endpointLatencyMs: null,
       endpointProbeError: errorMessage(error, 'network_probe_failed'),
     };
   }
 }
 
-async function probeHttps(input: NetworkHealthProbeInput): Promise<VpnAutopilotProbeResult> {
+async function probeHttps(input: NetworkHealthProbeInput, signal: AbortSignal): Promise<VpnAutopilotProbeResult> {
   const fetchImpl = input.fetchImpl ?? globalThis.fetch;
   if (!fetchImpl || !input.apiBaseUrl) {
     return {};
   }
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), input.timeoutMs ?? defaultProbeTimeoutMs);
   try {
     const response = await fetchImpl(probeUrl(input.apiBaseUrl), {
       cache: 'no-store',
       method: 'GET',
-      signal: controller.signal,
+      signal,
     });
     return { httpsOk: response.ok || response.status < 500 };
   } catch (error) {
     return {
       httpsOk: false,
-      httpsProbeError: errorMessage(error, 'network_probe_failed'),
+      httpsProbeError: signal.aborted ? 'https_probe_timeout' : errorMessage(error, 'network_probe_failed'),
     };
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
@@ -83,4 +98,3 @@ function errorLooksLikeDns(error: unknown): boolean {
     message.includes('name resolution') ||
     message.includes('unable to resolve host');
 }
-

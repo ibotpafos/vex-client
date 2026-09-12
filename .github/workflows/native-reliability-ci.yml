@@ -78,7 +78,7 @@ jobs:
         run: ./gradlew :app:testDebugUnitTest --tests com.vexguard.app.vpn.VpnNetworkRecoveryTest --stacktrace --no-daemon
 
   macos:
-    name: macOS autopilot recovery
+    name: macOS affected suites
     runs-on: macos-15
     timeout-minutes: 40
     steps:
@@ -89,5 +89,9 @@ jobs:
         run: swift package --package-path macos-native resolve
       - name: Build native macOS client
         run: swift build --package-path macos-native --target VEXNativeMac
-      - name: Test native macOS recovery policy
-        run: swift test --package-path macos-native --filter NativeParityModelTests
+      - name: Test affected native macOS behavior
+        run: |
+          swift test --package-path macos-native --filter NativeParityModelTests
+          swift test --package-path macos-native --filter VEXSessionStoreTests
+          swift test --package-path macos-native --filter SparkleUpdateTests
+          swift test --package-path macos-native --filter VEXPrivilegedHelperCoreTests/testPFEndpointRulesUseValidatedAddressFamilyAndPort

@@ -79,10 +79,11 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
   const profileQueryKey = useMemo(() => ['vpn-profile', accessToken, selectedLocationId, routingMode] as const, [accessToken, routingMode, selectedLocationId]);
   const fetchSelectedProfile = useCallback(() => resolveVpnProfile(accessToken!, knownEntitlement, selectedLocationId, {
     forceRefresh: true,
+    revalidateProfile: queryClient.getQueryData<VpnProfile>(profileQueryKey),
     shouldFetch: () => backgroundRequestIsCurrent(accessToken, selectedLocationId),
     routingMode,
     userId,
-  }), [accessToken, backgroundRequestIsCurrent, knownEntitlement, routingMode, selectedLocationId, userId]);
+  }), [accessToken, backgroundRequestIsCurrent, knownEntitlement, profileQueryKey, queryClient, routingMode, selectedLocationId, userId]);
   const activeProfile = vpnProfile;
   const entitlementState = knownEntitlement ?? activeProfile?.entitlement ?? null;
 
@@ -141,6 +142,7 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
     }
     void resolveVpnProfile(accessToken, currentEntitlement, locationId, {
       forceRefresh: true,
+      revalidateProfile: baseProfile,
       shouldFetch: () => backgroundRequestIsCurrent(accessToken, locationId),
       routingMode,
       userId,

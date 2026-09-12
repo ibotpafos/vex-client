@@ -155,6 +155,13 @@ export type ClientConnectionTelemetryInput = Pick<ClientDiagnosticsReportInput,
   'connectionEvent' | 'connectDurationMs' | 'transportFrom' | 'transportTo' | 'sessionUptimeSeconds'>;
 
 export type PreparedTunnel = {
+  resolutionTiming?: {
+    startedAtMs: number;
+    localPrepareMs: number;
+    deviceLookupMs: number;
+    profileRequestMs: number;
+    queueWaitMs?: number;
+  };
   device: VpnDevice;
   config: string;
   profileVersion?: number;

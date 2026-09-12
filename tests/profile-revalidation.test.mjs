@@ -17,7 +17,7 @@ test('managed profile revalidation always reaches API and rejects revocation or 
  for(const scenario of ['unchanged','revoked','replacement','epoch','repair']){
   const queries=[];
   const current={...device,...(scenario==='replacement'?{id:'replacement'}:{}),...(scenario==='epoch'?{keyEpoch:3}:{})};
-  const stubs={clientVersionHeaders:async()=>({}),getOrCreateWireGuardKeyPair:async()=>({publicKey:'public'}),getOrCreateDeviceId:async()=> 'runtime',nativeVpnDeviceForClient:()=>current,
+  const stubs={clientVersionHeaders:async()=>({}),getOrCreateWireGuardKeyPair:async()=>({publicKey:'public'}),getOrCreateDeviceId:async()=> 'runtime',nativeVpnDeviceForClient:devices=>devices.length?undefined:current,
    withManagedProfileAWGCapability:q=>q,defaultVpnRoutingMode:'smart',defaultVpnRoutingPolicyVersion:'v1',resolvedVpnBypassRegion:()=>'',requireVpnLocationId:x=>x,
    canRevalidateDevice,jsonRequest:async path=>{if(path==='/v1/devices')return [];queries.push(path);return scenario==='revoked'?{revoked:true}:{unchanged:true,version:7};}};
   const run=new Function(...Object.keys(stubs),source+';return managedVpnProfile;')(...Object.values(stubs));

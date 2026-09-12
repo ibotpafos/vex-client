@@ -7,6 +7,7 @@ import { isKeyEpochMismatchError, nextManagedKeyEpoch } from '@/vpn/keyEpochReco
 import { defaultVpnRoutingMode, defaultVpnRoutingPolicyVersion, resolvedVpnBypassRegion } from '@/vpn/routingPolicy';
 import { devicePushTokenPath } from '@/notifications/pushRegistration';
 import { jsonRequest, rawRequest, clientVersionHeaders } from './client';
+import { ApiRequestError } from './error';
 import { buildCreateDeviceRequest } from './deviceCreateRequest';
 import { clientDiagnosticsRequestBody } from './clientDiagnosticsRequest';
 import { getOrCreateNativeDeviceRegistration } from './nativeDeviceRegistration';
@@ -92,52 +93,79 @@ async function preparedTunnelFromDeviceConfig(accessToken: string, client: VpnCl
 }
 
 async function managedVpnProfile(accessToken: string, client: VpnClientDescriptor, options: PreparedTunnelOptions): Promise<PreparedTunnel> {
-  const versionHeaders = await clientVersionHeaders();
-  let keyPair = await getOrCreateWireGuardKeyPair();
+  const startedAtMs = Date.now();
+  const [versionHeaders, initialKeyPair, runtimeDeviceId] = await Promise.all([
+    clientVersionHeaders(), getOrCreateWireGuardKeyPair(), getOrCreateDeviceId(),
+  ]);
+  const resolutionTiming = { startedAtMs, localPrepareMs: Math.max(0, Date.now() - startedAtMs), deviceLookupMs: 0, profileRequestMs: 0 };
+  const requestProfile = async (deviceId: string, knownVersion?: number) => {
+    const started = Date.now();
+    try {
+      return await requestManagedVpnProfile(accessToken, deviceId, locationId, routingMode, bypassRegion, versionHeaders, knownVersion);
+    } finally {
+      resolutionTiming.profileRequestMs += Math.max(0, Date.now() - started);
+    }
+  };
+  let keyPair = initialKeyPair;
   const locationId = normalizeLocationId(options.locationId);
-  const [allDevices, runtimeDeviceId] = await Promise.all([vpnDevices(accessToken), getOrCreateDeviceId()]);
   const baseExternalDeviceId = nativeDeviceId(runtimeDeviceId);
   const externalDeviceId = baseExternalDeviceId;
-  let device = nativeVpnDeviceForClient(allDevices, locationId, externalDeviceId, baseExternalDeviceId);
-  if (!device) {
-    device = await getOrCreateNativeDeviceRegistration(
-      accessToken,
-      externalDeviceId,
-      () => registerNativeDevice(accessToken, client, keyPair, locationId, externalDeviceId),
-    );
-  }
-  if (deviceNeedsLocalKeySync(device, keyPair)) {
-    try {
-      device = await syncManagedVpnKey(accessToken, device.id, keyPair);
-    } catch (error) {
-      if (!isKeyEpochMismatchError(error)) {
+  const routingMode = options.routingMode ?? defaultVpnRoutingMode;
+  const bypassRegion = resolvedVpnBypassRegion(routingMode, options.bypassRegion);
+  let device: VpnDevice | undefined;
+  let profile: NativeVPNProfileDTO | undefined;
+  let revalidateCachedConfig = false;
+  const cachedDevice = options.cachedDevice;
+  if (options.cachedConfig && Number.isInteger(options.knownVersion) && (options.knownVersion ?? 0) > 0 &&
+      cachedDevice && Number.isInteger(cachedDevice.keyEpoch) && (cachedDevice.keyEpoch ?? 0) > 0 &&
+      canRevalidateDevice(cachedDevice, cachedDevice, keyPair?.publicKey ?? '') &&
+      nativeVpnDeviceForClient([cachedDevice], locationId, externalDeviceId, baseExternalDeviceId)) {
+    // A cached device is only a request hint. The authorized profile response
+    // must confirm its exact key identity before we can skip /v1/devices.
+    const candidate = await requestProfile(cachedDevice.id, options.knownVersion)
+      .catch((error: unknown) => {
+        if (error instanceof ApiRequestError && error.status === 404) return null;
         throw error;
-      }
-      // Web authorization can create the managed device before the native key
-      // exists. Epoch 1 then belongs to that placeholder, so install the first
-      // real client key through the normal transactional rotation to epoch 2.
-      device = await rotateManagedVpnKey(accessToken, device.id, device.keyEpoch);
-      keyPair = await getOrCreateWireGuardKeyPair();
+      });
+    if (candidate?.revoked) throw new Error('Устройство отключено администратором.');
+    if (candidate && candidate.device_id === cachedDevice.id && candidate.client_public_key === keyPair?.publicKey &&
+        candidate.client_key_epoch === cachedDevice.keyEpoch &&
+        (!candidate.unchanged || (!candidate.rotation_required && candidate.version === options.knownVersion))) {
+      device = cachedDevice;
+      profile = candidate;
+      revalidateCachedConfig = true;
     }
   }
-
-  const query = withManagedProfileAWGCapability(new URLSearchParams({ device_id: device.id }));
-  query.set('location', locationId);
-  const routingMode = options.routingMode ?? defaultVpnRoutingMode;
-  query.set('routing_mode', routingMode);
-  const bypassRegion = resolvedVpnBypassRegion(routingMode, options.bypassRegion);
-  if (bypassRegion) {
-    query.set('bypass_region', bypassRegion);
+  if (!device || !profile) {
+    // Older servers and changed/replaced identities retain the full lookup and
+    // transactional key-recovery path. Unconditional repair always enters here.
+    const lookupStarted = Date.now();
+    const allDevices = await vpnDevices(accessToken);
+    resolutionTiming.deviceLookupMs = Math.max(0, Date.now() - lookupStarted);
+    device = nativeVpnDeviceForClient(allDevices, locationId, externalDeviceId, baseExternalDeviceId);
+    if (!device) {
+      device = await getOrCreateNativeDeviceRegistration(
+        accessToken,
+        externalDeviceId,
+        () => registerNativeDevice(accessToken, client, keyPair, locationId, externalDeviceId),
+      );
+    }
+    if (deviceNeedsLocalKeySync(device, keyPair)) {
+      try {
+        device = await syncManagedVpnKey(accessToken, device.id, keyPair);
+      } catch (error) {
+        if (!isKeyEpochMismatchError(error)) {
+          throw error;
+        }
+        // Web authorization can create a placeholder before the native key.
+        // Recover through the normal transactional rotation to the next epoch.
+        device = await rotateManagedVpnKey(accessToken, device.id, device.keyEpoch);
+        keyPair = await getOrCreateWireGuardKeyPair();
+      }
+    }
+    revalidateCachedConfig = Boolean(options.cachedConfig) && canRevalidateDevice(options.cachedDevice, device, keyPair?.publicKey ?? '');
+    profile = await requestProfile(device.id, revalidateCachedConfig ? options.knownVersion : undefined);
   }
-  const revalidateCachedConfig = Boolean(options.cachedConfig) && canRevalidateDevice(options.cachedDevice, device, keyPair?.publicKey ?? '');
-  if (revalidateCachedConfig && typeof options.knownVersion === 'number' && options.knownVersion > 0) {
-    query.set('known_version', String(options.knownVersion));
-  }
-  const profile = await jsonRequest<NativeVPNProfileDTO>(`/v1/vpn/profile?${query.toString()}`, {
-    accessToken,
-    headers: versionHeaders,
-    suppressErrorLog: true,
-  });
   if (profile.revoked) {
     throw new Error('Устройство отключено администратором.');
   }
@@ -147,6 +175,7 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
     }
     return {
       config: options.cachedConfig,
+      resolutionTiming,
       device,
       profileVersion: typeof profile.version === 'number' ? profile.version : options.knownVersion,
       routingMode,
@@ -159,6 +188,7 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
   }
   const config = profile.config || managedProfileConfig(profile, keyPair);
   return {
+    resolutionTiming,
     config,
     device: {
       ...device,
@@ -174,6 +204,16 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
     routingPolicyVersion: profile.routing_policy_version || defaultVpnRoutingPolicyVersion,
     rotationRequired: Boolean(profile.rotation_required),
   };
+}
+
+function requestManagedVpnProfile(
+  accessToken: string, deviceId: string, locationId: string, routingMode: string,
+  bypassRegion: string | undefined, headers: Record<string, string>, knownVersion?: number,
+): Promise<NativeVPNProfileDTO> {
+  const query = withManagedProfileAWGCapability(new URLSearchParams({device_id: deviceId, location: locationId, routing_mode: routingMode}));
+  if (bypassRegion) query.set('bypass_region', bypassRegion);
+  if (typeof knownVersion === 'number' && knownVersion > 0) query.set('known_version', String(knownVersion));
+  return jsonRequest<NativeVPNProfileDTO>(`/v1/vpn/profile?${query.toString()}`, {accessToken, headers, suppressErrorLog:true});
 }
 
 export async function vpnDevices(accessToken: string): Promise<VpnDevice[]> {

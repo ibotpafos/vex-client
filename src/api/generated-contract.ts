@@ -263,6 +263,8 @@ export interface NativeVPNProfileDTOSpec {
   revoked: boolean
   rotation_required: boolean
   device_id?: string
+  client_public_key?: string
+  client_key_epoch?: number
   protocol?: string
   server?: string
   port?: number

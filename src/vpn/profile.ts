@@ -1,13 +1,14 @@
 import { entitlement, hasPaidEntitlement, preparedTunnel, rotateManagedVpnKey, type Entitlement, type VpnDevice } from '../api/vexApi';
-import { loadHotVpnProfile, profileFromHotRecord, saveHotVpnProfile } from './hotProfileCache';
+import { loadHotVpnProfile, profileFromHotRecord } from './hotProfileCache';
 import { defaultVpnBypassRegion, defaultVpnRoutingMode, defaultVpnRoutingPolicyVersion, type VpnRoutingMode } from './routingPolicy';
 import { runProfileRequest } from './profileRequestQueue';
 import { vpnProfileAddressMatchesDevice } from './profileConsistency';
 import { requireVpnLocationId } from './locationId';
 import { profileRevalidationOptions } from './profileRevalidation';
-import type { PreparedTunnelOptions } from '../api/types';
+import type { PreparedTunnel, PreparedTunnelOptions } from '../api/types';
 
 export type VpnProfile = {
+  resolutionTiming?: PreparedTunnel['resolutionTiming'];
   config: string;
   device?: VpnDevice;
   entitlement?: Entitlement;
@@ -46,7 +47,7 @@ export async function resolveVpnProfile(
       if (hotProfile) {
         const profile = profileFromHotRecord(hotProfile);
         if (profile.routingMode !== routingMode || !vpnProfileAddressMatchesDevice(profile)) {
-          return refreshVpnProfile(token, { routingMode }, knownEntitlement, normalizedLocationId, options.userId, options.shouldFetch);
+          return refreshVpnProfile(token, { routingMode }, knownEntitlement, normalizedLocationId, options.shouldFetch);
         }
         cachedProfile = { key: cacheKey, profile };
         return profile;
@@ -55,7 +56,7 @@ export async function resolveVpnProfile(
   }
 
   if (token) {
-    return refreshVpnProfile(token, { ...profileRevalidationOptions(options.revalidateProfile, normalizedLocationId, routingMode), routingMode }, knownEntitlement, normalizedLocationId, options.userId, options.shouldFetch);
+    return refreshVpnProfile(token, { ...profileRevalidationOptions(options.revalidateProfile, normalizedLocationId, routingMode), routingMode }, knownEntitlement, normalizedLocationId, options.shouldFetch);
   }
 
   throw new Error('Сначала войдите в аккаунт.');
@@ -96,7 +97,6 @@ async function refreshVpnProfile(
   options: PreparedTunnelOptions,
   knownEntitlement?: Entitlement | null,
   locationId = '',
-  userId?: string,
   shouldFetch?: () => boolean,
 ): Promise<VpnProfile> {
   const currentEntitlement = knownEntitlement ?? await entitlement(token);
@@ -106,8 +106,14 @@ async function refreshVpnProfile(
 
   const selectedLocationId = normalizeLocationId(options.locationId || locationId);
   const routingMode = options.routingMode ?? defaultVpnRoutingMode;
-  const tunnel = await runProfileRequest(() => preparedTunnel(token, undefined, { ...options, locationId: selectedLocationId, routingMode }), shouldFetch);
+  const queuedAtMs = Date.now();
+  let queueWaitMs = 0;
+  const tunnel = await runProfileRequest(() => {
+    queueWaitMs = Math.max(0, Date.now() - queuedAtMs);
+    return preparedTunnel(token, undefined, { ...options, locationId: selectedLocationId, routingMode });
+  }, shouldFetch);
   const profile: VpnProfile = {
+    resolutionTiming: tunnel.resolutionTiming ? { ...tunnel.resolutionTiming, queueWaitMs } : undefined,
     config: tunnel.config,
     device: tunnel.device,
     entitlement: currentEntitlement,
@@ -122,9 +128,8 @@ async function refreshVpnProfile(
     source: 'api',
   };
   cachedProfile = { key: profileCacheKey(token, selectedLocationId, routingMode), profile };
-  if (userId) {
-    await saveHotVpnProfile(userId, selectedLocationId, profile).catch(() => undefined);
-  }
+  // useVpnProfileState owns persistent caching after scope validation. Returning
+  // a ready profile must not wait for a duplicate secure-store read/write here.
   return profile;
 }
 

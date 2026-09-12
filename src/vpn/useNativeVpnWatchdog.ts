@@ -186,7 +186,7 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
         lastReconnectAtRef.current = Date.now();
         resetHealthFailures();
         input.onRecoveryStarted?.('Восстанавливаем VPN');
-        await submitDiagnostics('native_watchdog_reconnect', 'degraded', {
+        void submitDiagnostics('native_watchdog_reconnect', 'degraded', {
           ...assessment.sample,
           active_usage: activeUsage,
           local_status: localStatus,
@@ -245,7 +245,7 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
           jitterRatio: recoveryJitterRatio,
           maxDelayMs: input.reconnectCooldownMs * recoveryMaxBackoffMultiplier,
         });
-        await submitDiagnostics('native_watchdog_reconnect_result', 'failed', {
+        void submitDiagnostics('native_watchdog_reconnect_result', 'failed', {
           ...assessment.sample,
           previous_location_id: recovery.previousLocationId,
           next_location_id: recovery.locationId,
@@ -262,7 +262,7 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
         }).catch(() => undefined);
       } catch (error) {
         if (!isCurrent()) return;
-        await submitDiagnostics('native_watchdog_check_failed', 'error', {
+        void submitDiagnostics('native_watchdog_check_failed', 'error', {
           watchdog_error: errorMessage(error, 'native_watchdog_check_failed'),
         }).catch(() => undefined);
         backendHealthFailuresRef.current = 0;

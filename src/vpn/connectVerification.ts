@@ -4,6 +4,8 @@ type HandshakeVerificationOptions = {
   attempts?: number;
   minimumHandshakeEpochMillis?: number;
   pollMs?: number;
+  timeoutMs?: number;
+  now?: () => number;
   wait?: (delayMs: number) => Promise<void>;
 };
 
@@ -25,11 +27,23 @@ export async function waitForVerifiedVpnConnection(
   const attempts = Math.max(1, options.attempts ?? defaultHandshakeAttempts);
   const pollMs = Math.max(0, options.pollMs ?? defaultHandshakePollMs);
   const wait = options.wait ?? delay;
+  const now = options.now ?? Date.now;
+  const timeoutMs = options.timeoutMs ?? 10_000;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new Error('VPN handshake timeout must be positive.');
+  }
+  const deadline = now() + timeoutMs;
+  const remaining = () => {
+    const budget = deadline - now();
+    if (budget <= 0) throw new Error('VPN handshake timed out.');
+    return budget;
+  };
   let latestStatus = initialStatus;
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    await wait(pollMs);
-    latestStatus = await readStatus();
+    await withDeadline(() => wait(pollMs), remaining());
+    latestStatus = await withDeadline(readStatus, remaining());
+    remaining();
     // Android can emit a transition snapshot while the native status reader
     // holds tunnelMutex. It is not a terminal disconnect, and must not roll a
     // working server switch back. Keep the same bounded verification budget.
@@ -45,6 +59,20 @@ export async function waitForVerifiedVpnConnection(
   }
 
   throw new Error('VPN handshake timed out.');
+}
+
+async function withDeadline<T>(operation: () => Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(operation),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('VPN handshake timed out.')), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 function isHandshakeVerifiedForAttempt(status: VpnStatus, minimumHandshakeEpochMillis?: number): boolean {

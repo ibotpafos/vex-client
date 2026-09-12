@@ -24,10 +24,13 @@ for(const stage of ['usage','probe','diagnostics','render-lag','other-operation'
  render=value=>{cursor=0;run(value);};render(input);
  await tick();
  if(stage==='usage'){interval();await tick();assert.equal(fetches,1,'health checks must not overlap');}
- if(stage==='diagnostics'||stage==='success'||stage==='phase-render')assert.equal(operation.current,true,'shared lease acquired before awaited diagnostics');
+ if(stage==='diagnostics'||stage==='success'||stage==='phase-render'){
+   assert.deepEqual(events,['recover','native','UI'],'recovery must finish while diagnostic upload is still pending');
+   assert.equal(operation.current,false,'diagnostic upload must not hold the shared operation lease');
+ }
  if(stage==='render-lag')current=false;else if(stage==='other-operation')operation.current=true;else if(stage!=='success'&&stage!=='phase-render')cleanup();
  release();await tick();await tick();
- assert.deepEqual(events,(stage==='success'||stage==='phase-render')?['recover','native','UI']:[],stage+' must not activate a disposed/stale profile');
+ assert.deepEqual(events,(stage==='diagnostics'||stage==='success'||stage==='phase-render')?['recover','native','UI']:[],stage+' must not activate a disposed/stale profile');
  assert.equal(operation.current,stage==='other-operation','only owner releases operation lease');
  operation.current=false;
  cleanup();

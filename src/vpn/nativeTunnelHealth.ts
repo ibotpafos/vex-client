@@ -23,7 +23,12 @@ export type NativeTunnelHealthAssessment = {
 export function assessNativeTunnelHealth(input: NativeTunnelHealthInput): NativeTunnelHealthAssessment {
   const reasons: NativeTunnelHealthReason[] = [];
 
-  if (deviceUsageNeedsReconnect(input.deviceUsage, input.staleHandshakeSeconds)) {
+  const handshake = input.status?.latestHandshakeEpochMillis ?? 0;
+  const freshLocalHandshake = input.status?.state === 'connected' && handshake > 0 && handshake <= input.nowMs &&
+    input.nowMs - handshake <= input.staleHandshakeSeconds * 1000;
+  // Server usage is sampled asynchronously. Do not tear down a transport with
+  // fresh local handshake evidence because an older usage sample says stale.
+  if (!freshLocalHandshake && deviceUsageNeedsReconnect(input.deviceUsage, input.staleHandshakeSeconds)) {
     reasons.push('device_usage_degraded');
   }
 

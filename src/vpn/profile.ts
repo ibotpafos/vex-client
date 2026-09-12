@@ -4,6 +4,8 @@ import { defaultVpnBypassRegion, defaultVpnRoutingMode, defaultVpnRoutingPolicyV
 import { runProfileRequest } from './profileRequestQueue';
 import { vpnProfileAddressMatchesDevice } from './profileConsistency';
 import { requireVpnLocationId } from './locationId';
+import { profileRevalidationOptions } from './profileRevalidation';
+import type { PreparedTunnelOptions } from '../api/types';
 
 export type VpnProfile = {
   config: string;
@@ -29,7 +31,7 @@ export async function resolveVpnProfile(
   accessToken?: string,
   knownEntitlement?: Entitlement | null,
   locationId = '',
-  options: { allowPersistentHotProfile?: boolean; forceRefresh?: boolean; shouldFetch?: () => boolean; routingMode?: VpnRoutingMode; userId?: string } = {},
+  options: { allowPersistentHotProfile?: boolean; forceRefresh?: boolean; shouldFetch?: () => boolean; routingMode?: VpnRoutingMode; userId?: string; revalidateProfile?: VpnProfile | null } = {},
 ): Promise<VpnProfile> {
   const token = accessToken?.trim() || '';
   const normalizedLocationId = normalizeLocationId(locationId);
@@ -53,7 +55,7 @@ export async function resolveVpnProfile(
   }
 
   if (token) {
-    return refreshVpnProfile(token, { routingMode }, knownEntitlement, normalizedLocationId, options.userId, options.shouldFetch);
+    return refreshVpnProfile(token, { ...profileRevalidationOptions(options.revalidateProfile, normalizedLocationId, routingMode), routingMode }, knownEntitlement, normalizedLocationId, options.userId, options.shouldFetch);
   }
 
   throw new Error('Сначала войдите в аккаунт.');
@@ -91,7 +93,7 @@ function runtimeProfileKey(): string {
 
 async function refreshVpnProfile(
   token: string,
-  options: { cachedConfig?: string; knownVersion?: number; locationId?: string; routingMode?: VpnRoutingMode },
+  options: PreparedTunnelOptions,
   knownEntitlement?: Entitlement | null,
   locationId = '',
   userId?: string,

@@ -36,6 +36,7 @@ import type { VpnProfile } from '../vpn/profile';
 import type { StagedDevicePSKProfile } from '../vpn/devicePskRotation';
 import { normalizeLocationCatalog } from '../vpn/locationCatalog';
 import { requireVpnLocationId } from '../vpn/locationId';
+import { canRevalidateDevice } from '../vpn/profileRevalidation';
 
 const mobileProtocol = 'amneziawg';
 
@@ -128,7 +129,8 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
   if (bypassRegion) {
     query.set('bypass_region', bypassRegion);
   }
-  if (typeof options.knownVersion === 'number' && options.knownVersion > 0) {
+  const revalidateCachedConfig = Boolean(options.cachedConfig) && canRevalidateDevice(options.cachedDevice, device, keyPair?.publicKey ?? '');
+  if (revalidateCachedConfig && typeof options.knownVersion === 'number' && options.knownVersion > 0) {
     query.set('known_version', String(options.knownVersion));
   }
   const profile = await jsonRequest<NativeVPNProfileDTO>(`/v1/vpn/profile?${query.toString()}`, {
@@ -140,7 +142,7 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
     throw new Error('Устройство отключено администратором.');
   }
   if (profile.unchanged) {
-    if (!options.cachedConfig) {
+    if (!revalidateCachedConfig || !options.cachedConfig) {
       throw new Error('Управляемый VPN-профиль не изменился, но локальный cache пуст.');
     }
     return {

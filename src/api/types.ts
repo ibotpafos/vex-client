@@ -167,6 +167,7 @@ export type PreparedTunnel = {
 };
 
 export type PreparedTunnelOptions = {
+  cachedDevice?: VpnDevice;
   cachedConfig?: string;
   knownVersion?: number;
   locationId?: string;

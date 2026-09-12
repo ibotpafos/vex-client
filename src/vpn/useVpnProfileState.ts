@@ -342,6 +342,7 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
       : await resolveVpnProfile(accessToken, currentEntitlement, locationId, {
         allowPersistentHotProfile: forceRouteBudgetRefresh ? false : options.allowPersistentHotProfile,
         forceRefresh: options.forceRefresh === true || forceRouteBudgetRefresh,
+        revalidateProfile: options.validateCachedProfile && !forceRouteBudgetRefresh ? cachedProfile : undefined,
         routingMode,
         userId,
       });

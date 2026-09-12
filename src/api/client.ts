@@ -27,16 +27,43 @@ export async function jsonRequest<T>(path: string, options: RequestOptions = {})
 }
 
 export async function rawRequest(path: string, options: RequestOptions = {}): Promise<string> {
+  const controller = new AbortController();
+  const timeoutMs = options.timeout ?? requestTimeoutMs;
+  const deadline = Date.now() + timeoutMs;
+  let timeout: ReturnType<typeof setTimeout>;
+  const expired = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort();
+      reject(new ApiRequestError('Превышено время ожидания API.'));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([requestWithinDeadline(path, options, controller.signal, deadline), expired]);
+  } catch (error) {
+    throw normalizeApiRequestError(error);
+  } finally {
+    clearTimeout(timeout!);
+  }
+}
+
+function requireRequestTime(signal: AbortSignal, deadline: number): void {
+  if (signal.aborted || Date.now() >= deadline) {
+    throw new ApiRequestError('Превышено время ожидания API.');
+  }
+}
+
+async function requestWithinDeadline(path: string, options: RequestOptions, signal: AbortSignal, deadline: number): Promise<string> {
   const method = options.method ?? 'GET';
   const maxAttempts = method === 'GET' ? getRequestRetryCount + 1 : 1;
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      return await rawRequestAttempt(path, options, method);
+      requireRequestTime(signal, deadline);
+      return await rawRequestAttempt(path, options, method, signal, deadline);
     } catch (error) {
       lastError = error;
-      if (attempt >= maxAttempts || !isRetryableRequestError(error)) {
+      if (signal.aborted || Date.now() >= deadline || attempt >= maxAttempts || !isRetryableRequestError(error)) {
         throw normalizeApiRequestError(error);
       }
       await delay(requestRetryDelayMs * attempt);
@@ -46,10 +73,7 @@ export async function rawRequest(path: string, options: RequestOptions = {}): Pr
   throw normalizeApiRequestError(lastError);
 }
 
-async function rawRequestAttempt(path: string, options: RequestOptions, method: string): Promise<string> {
-  const controller = new AbortController();
-  const timeoutMs = options.timeout ?? requestTimeoutMs;
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+async function rawRequestAttempt(path: string, options: RequestOptions, method: string, signal: AbortSignal, deadline: number): Promise<string> {
   const headers: Record<string, string> = {
     Accept: 'application/json',
   };
@@ -62,6 +86,7 @@ async function rawRequestAttempt(path: string, options: RequestOptions, method: 
   
   // Merge client headers
   const versionHeaders = await clientVersionHeaders();
+  requireRequestTime(signal, deadline);
   Object.assign(headers, versionHeaders);
   
   if (options.headers) {
@@ -84,12 +109,14 @@ async function rawRequestAttempt(path: string, options: RequestOptions, method: 
       logApiDebug(`API Request: [${init.method || 'GET'}] ${apiRequestBaseUrl}${path}`);
     }
     
-    response = await fetch(`${apiRequestBaseUrl}${path}`, { ...init, signal: controller.signal });
+    response = await fetch(`${apiRequestBaseUrl}${path}`, { ...init, signal });
+    requireRequestTime(signal, deadline);
     
     if (shouldLogApiRequests && !options.suppressErrorLog) {
       logApiDebug(`API Response: ${response.status} ${response.statusText}`);
     }
     const text = await response.text();
+    requireRequestTime(signal, deadline);
     if (!response.ok) {
       if (shouldLogApiRequests && !options.suppressErrorLog) {
         logApiDebug(`API Error Response: ${text}`);
@@ -110,8 +137,6 @@ async function rawRequestAttempt(path: string, options: RequestOptions, method: 
       throw new ApiRequestError('Превышено время ожидания API.');
     }
     throw error;
-  } finally {
-    clearTimeout(timeout);
   }
 }
 

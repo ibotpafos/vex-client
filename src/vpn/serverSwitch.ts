@@ -5,6 +5,7 @@ export type ResolveConnectableProfileOptions = {
   allowPersistentHotProfile?: boolean;
   cachedProfile?: VpnProfile | null;
   forceRefresh?: boolean;
+  validateCachedProfile?: boolean;
   preferCached?: boolean;
   requestPermission?: boolean;
 };

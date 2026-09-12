@@ -76,12 +76,14 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
   const backendHealthFailuresRef = useRef(0);
   const localHealthFailuresRef = useRef(0);
   const lastLocalDegradedStatusRef = useRef<VpnStatus | null>(null);
+  const lastLocalStatusRef = useRef<{status: VpnStatus; deviceId?: string; locationId?: string; profileVersion?: number} | null>(null);
   const reconnectInFlightRef = useRef(false);
   const lastReconnectAtRef = useRef(0);
   const recoveryBackoffRef = useRef(initialRecoveryBackoffState());
   const connectedAtRef = useRef<number | null>(null);
 
   const recordNativeStatus = useCallback((currentStatus: VpnStatus, nextStatus: VpnStatus) => {
+    lastLocalStatusRef.current = {status: nextStatus, deviceId: activeProfileForStatus?.device?.id, locationId: activeProfileForStatus?.locationId, profileVersion: activeProfileForStatus?.profileVersion};
     const nowMs = Date.now();
     if (nextStatus.state === 'connected' && connectedAtRef.current === null) {
       connectedAtRef.current = nowMs;
@@ -142,14 +144,19 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
         let activeUsage: VpnDeviceUsage | undefined;
         let usageError: string | undefined;
         try {
-          const usageRows = await input.fetchDeviceUsage(accessToken);
+          const usageRows = localHealthFailuresRef.current >= input.failureThreshold
+            ? []
+            : await input.fetchDeviceUsage(accessToken);
           activeUsage = usageRows.find((usage) => usage.deviceId === activeDeviceId);
         } catch (error) {
           usageError = errorMessage(error, 'usage_check_failed');
         }
 
         if (!isCurrent() || input.operationInFlightRef.current) return;
-        const localStatus = lastLocalDegradedStatusRef.current ?? undefined;
+        const latestLocal = lastLocalStatusRef.current;
+        const localStatus = latestLocal?.deviceId === activeDeviceId && latestLocal?.locationId === input.activeLocationId && latestLocal?.profileVersion === activeProfile.profileVersion
+          ? latestLocal.status
+          : lastLocalDegradedStatusRef.current ?? undefined;
         const health = assessNativeTunnelHealth({
           deviceUsage: activeUsage,
           nowMs: Date.now(),
@@ -167,7 +174,7 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
         if (healthFailureCount < input.failureThreshold || !cooldownElapsed || !recoveryAttemptAllowed(recoveryBackoffRef.current, nowMs)) {
           return;
         }
-        const probe = await input.probeHealth?.(activeProfile).catch((error): VpnAutopilotProbeResult => ({
+        const probe = localHealthFailuresRef.current >= input.failureThreshold ? undefined : await input.probeHealth?.(activeProfile).catch((error): VpnAutopilotProbeResult => ({
           endpointProbeError: errorMessage(error, 'network_probe_failed'),
         }));
         if (!isCurrent() || input.operationInFlightRef.current) return;

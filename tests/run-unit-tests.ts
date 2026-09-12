@@ -576,6 +576,7 @@ assertEqual(
   assertDeepEqual(explicitConnectProfileResolutionOptions, {
     forceRefresh: true,
     preferCached: false,
+    validateCachedProfile: true,
   });
 }
 

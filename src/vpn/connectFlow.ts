@@ -5,6 +5,7 @@ import { profileEndpoint } from './connectionFallback';
 export const explicitConnectProfileResolutionOptions = {
   forceRefresh: true,
   preferCached: false,
+  validateCachedProfile: true,
 } as const;
 
 type EntitlementLike = {

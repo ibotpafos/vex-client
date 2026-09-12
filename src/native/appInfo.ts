@@ -31,24 +31,32 @@ export async function getAppInfo(): Promise<AppInfo> {
   };
 }
 
-export async function getOrCreateDeviceId(): Promise<string> {
-  const key = 'vex.auth.device_id';
-  let deviceId = await SecureStore.getItemAsync(key).catch(() => null);
-  if (!deviceId) {
-    deviceId = `vexd_${createInstallationUUID()}`;
-    await SecureStore.setItemAsync(key, deviceId).catch(() => undefined);
-  }
-  return deviceId;
+const installationIdentities = new Map<string, Promise<string>>();
+
+export function getOrCreateDeviceId(): Promise<string> {
+  return installationIdentity('vex.auth.device_id', 'vexd');
 }
 
-export async function getOrCreateInstallId(): Promise<string> {
-  const key = 'vex.app.install_id.v1';
-  let installId = await SecureStore.getItemAsync(key).catch(() => null);
-  if (!installId) {
-    installId = `vexi_${createInstallationUUID()}`;
-    await SecureStore.setItemAsync(key, installId).catch(() => undefined);
-  }
-  return installId;
+export function getOrCreateInstallId(): Promise<string> {
+  return installationIdentity('vex.app.install_id.v1', 'vexi');
+}
+
+function installationIdentity(key: string, prefix: string): Promise<string> {
+  const existing = installationIdentities.get(key);
+  if (existing) return existing;
+  const pending = (async () => {
+    // A locked/unavailable store is not evidence of a new installation.
+    const stored = await SecureStore.getItemAsync(key);
+    if (stored) return stored;
+    const value = `${prefix}_${createInstallationUUID()}`;
+    await SecureStore.setItemAsync(key, value);
+    return value;
+  })().catch(error => {
+    installationIdentities.delete(key);
+    throw error;
+  });
+  installationIdentities.set(key, pending);
+  return pending;
 }
 
 function createInstallationUUID(): string {

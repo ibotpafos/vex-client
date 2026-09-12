@@ -56,6 +56,7 @@ type UseVpnConnectionFlowInput = {
     options?: {
       preferCached?: boolean;
       forceRefresh?: boolean;
+      validateCachedProfile?: boolean;
       requestPermission?: boolean;
     }
   ) => Promise<VpnProfile>;

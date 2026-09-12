@@ -58,6 +58,10 @@ if [[ "${operation}" == "publish" || "${operation}" == "republish" || "${operati
 fi
 
 profile="${branch}"
+# Production currently exposes the pre-app-id publish API. CLI 3 uses
+# /<app-id>/requestUploadUrl and receives 404; keep the publisher compatible
+# until the server protocol migration is completed and verified.
+ota_cli=(npm exec --yes --package=eoas@2.3.23 -- eoas)
 args=("${operation}" --branch "${branch}" --platform "${platform}")
 if [[ "${operation}" == "publish" ]]; then
   args+=(--nonInteractive)
@@ -77,4 +81,4 @@ exec bash scripts/run_with_local_release_cache.sh env \
   EXPO_PUBLIC_VEX_UPDATE_CHANNEL="${branch}" \
   EXPO_PUBLIC_VEX_ANDROID_EXPERIMENTAL_ROUTING="${EXPO_PUBLIC_VEX_ANDROID_EXPERIMENTAL_ROUTING:-1}" \
   RELEASE_CHANNEL="${branch}" \
-  "${root_dir}/node_modules/.bin/eoas" "${args[@]}"
+  "${ota_cli[@]}" "${args[@]}"

@@ -54,7 +54,20 @@ export function vpnConnectTimingSamples(input: {
   tapStartedAt: number;
   verificationCompletedMs: number;
 }): Record<string, unknown> {
+  const timing = input.profile.resolutionTiming;
+  const stages: Record<string, number> = {};
+  if (input.profile.source === 'api' && timing && timing.startedAtMs >= input.tapStartedAt && timing.startedAtMs <= input.nativeStartMs) {
+    for (const [field, value] of Object.entries({
+      profile_local_prepare_ms: timing.localPrepareMs,
+      profile_device_lookup_ms: timing.deviceLookupMs,
+      profile_request_ms: timing.profileRequestMs,
+      profile_queue_wait_ms: timing.queueWaitMs,
+    })) {
+      if (typeof value === 'number' && Number.isFinite(value) && value >= 0) stages[field] = value;
+    }
+  }
   return {
+    ...stages,
     connect_profile_source: input.profile.source,
     endpoint_attempts: input.endpointAttempts,
     hot_profile_age_ms: input.profile.hotProfileAgeMs ?? null,

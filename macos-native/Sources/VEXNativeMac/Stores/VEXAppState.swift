@@ -67,10 +67,14 @@ final class VEXAppState: ObservableObject {
     private var customerRefreshInFlight = false
     private var customerRefreshPending = false
     private var automaticUpdatesPrepared = false
+    private var automaticUpdatesStartupTask: Task<Void, Never>?
     private static let updateRefreshIntervalNanoseconds: UInt64 = 15 * 60 * 1_000_000_000
     private static let customerFallbackIntervalNanoseconds: UInt64 = 60 * 1_000_000_000
+    private static let automaticUpdatesStartupDelayNanoseconds: UInt64 = 3_000_000_000
+    private let automaticUpdatesStartupDelayNanoseconds: UInt64
 
     init() {
+        automaticUpdatesStartupDelayNanoseconds = Self.automaticUpdatesStartupDelayNanoseconds
         #if DEBUG
         if VEXPreviewMode.suppressesRuntime {
             self.nativeUpdater = DisabledNativeUpdaterService()
@@ -82,8 +86,12 @@ final class VEXAppState: ObservableObject {
         #endif
     }
 
-    init(nativeUpdater: NativeUpdaterService) {
+    init(
+        nativeUpdater: NativeUpdaterService,
+        automaticUpdatesStartupDelayNanoseconds: UInt64 = 3_000_000_000
+    ) {
         self.nativeUpdater = nativeUpdater
+        self.automaticUpdatesStartupDelayNanoseconds = automaticUpdatesStartupDelayNanoseconds
     }
 
     var selectedLocationId: String {
@@ -148,7 +156,7 @@ final class VEXAppState: ObservableObject {
         startUpdateMonitoring()
         biometricAvailability = biometricAuth.availability()
         canUnlockStoredSession = sessionStore.hasStoredNativeSession()
-        if let storedSession = sessionStore.loadSession() {
+        if let storedSession = sessionStore.loadSession(requiresBiometricAuthentication: biometricUnlockRequired) {
             session = storedSession
             user = storedSession.user
             canUnlockStoredSession = true
@@ -670,13 +678,19 @@ final class VEXAppState: ObservableObject {
     }
 
     func prepareAutomaticUpdatesForStartup() {
-        // Do NOT start Sparkle (or schedule background checks) at launch.
-        // Constructing SPUStandardUpdaterController during app startup triggers
-        // a deterministic EXC_BAD_ACCESS (over-release in the
-        // -[NSApplication run] autorelease pool drain) on macOS 26 (Tahoe).
-        // Sparkle is created lazily only when the user explicitly triggers a
-        // check via the "Check for Updates" menu action.
+        guard !automaticUpdatesPrepared else { return }
         automaticUpdatesPrepared = true
+        guard nativeUpdater.isEnabled, nativeUpdater.automaticallyChecksForUpdates else { return }
+
+        // Constructing SPUStandardUpdaterController during app startup triggers
+        // a deterministic EXC_BAD_ACCESS in macOS 26's launch-time autorelease
+        // drain. Leave the drain first, then make exactly one background check.
+        automaticUpdatesStartupTask = Task { [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(nanoseconds: automaticUpdatesStartupDelayNanoseconds)
+            guard !Task.isCancelled, nativeUpdater.automaticallyChecksForUpdates else { return }
+            nativeUpdater.checkForUpdatesInBackground()
+        }
     }
 
     func openSignIn() {
@@ -755,6 +769,18 @@ final class VEXAppState: ObservableObject {
         emailOTPChallengeEmail = nil
     }
 
+    func setBiometricUnlockRequired(_ required: Bool) {
+        biometricUnlockRequired = required
+        guard let session else { return }
+        do {
+            try sessionStore.saveSession(session, requiresBiometricAuthentication: required)
+        } catch {
+            biometricUnlockRequired.toggle()
+            authError = error.localizedDescription
+            statusMessage = error.localizedDescription
+        }
+    }
+
     func unlockStoredSessionWithBiometrics() async {
         guard !isAuthBusy else { return }
         guard canUnlockStoredSession else {
@@ -771,7 +797,10 @@ final class VEXAppState: ObservableObject {
             statusMessage = authError
             return
         }
-        guard let storedSession = sessionStore.loadSession() else {
+        guard let storedSession = sessionStore.loadSession(
+            allowAuthenticationUI: true,
+            requiresBiometricAuthentication: biometricUnlockRequired
+        ) else {
             authError = "Не удалось загрузить сохраненную сессию."
             statusMessage = authError
             return
@@ -1167,7 +1196,7 @@ final class VEXAppState: ObservableObject {
     }
 
     private func completeSignIn(_ nextSession: AuthSession, message: String) async throws {
-        try sessionStore.saveSession(nextSession)
+        try sessionStore.saveSession(nextSession, requiresBiometricAuthentication: biometricUnlockRequired)
         session = nextSession
         user = nextSession.user
         startCustomerRealtime(accessToken: nextSession.accessToken)
@@ -1210,7 +1239,7 @@ final class VEXAppState: ObservableObject {
     private func applySessionRefreshResult(_ result: Result<AuthSession, Error>, refreshAccessToken: String) async -> String? {
         do {
             let nextSession = try result.get()
-            try sessionStore.saveSession(nextSession)
+            try sessionStore.saveSession(nextSession, requiresBiometricAuthentication: biometricUnlockRequired)
             session = nextSession
             user = nextSession.user
             startCustomerRealtime(accessToken: nextSession.accessToken)

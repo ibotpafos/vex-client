@@ -53,6 +53,7 @@ import {
 import type { VpnProfile } from '@/vpn/profile';
 import { probeNetworkHealth } from '@/vpn/networkHealthProbe';
 import { fallbackLocationEndpoint } from '@/vpn/locationEndpoint';
+import { foregroundLatencyTargets } from '@/vpn/foregroundLatencyTargets';
 import {
   defaultVpnRoutingMode,
   isSmartRoutingMode,
@@ -92,6 +93,7 @@ import {
   connectedNativeStatusPollMs,
   entitlementRefreshMs,
   locationRefreshMs,
+  foregroundLocationProbeMs,
   nativeStatusPollMs,
   nativeHealthPollMs,
   nativeHealthFailureThreshold,
@@ -684,7 +686,12 @@ export function useVpnConnection() {
       return undefined;
     }
 
-    const probeTargets = baseAvailableLocations
+    const probeTargets = foregroundLatencyTargets({
+      activeEndpoint: activeDevice?.endpoint,
+      locations: baseAvailableLocations,
+      selectedLocationId,
+      serverSelectionMode,
+    })
       .map((location) => ({
         endpoint: location.endpoint || fallbackLocationEndpoint(location.countryCode),
         location,
@@ -715,12 +722,12 @@ export function useVpnConnection() {
     void refreshLocationLatencies();
     const timer = setInterval(() => {
       void refreshLocationLatencies();
-    }, 30_000);
+    }, foregroundLocationProbeMs);
     return () => {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [baseAvailableLocations, isAppActive]);
+  }, [activeDevice?.endpoint, baseAvailableLocations, isAppActive, selectedLocationId, serverSelectionMode]);
 
   useEffect(() => {
     if (!isAppActive || !supportsNativeLatencyProbe() || !activeDevice?.endpoint) {

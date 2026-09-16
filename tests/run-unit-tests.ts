@@ -30,6 +30,7 @@ import {
   type HotVpnProfileRecord,
 } from '../src/vpn/hotProfileCacheCore';
 import { connectionAttemptsForProfile, isVpnTransportFallbackError, profileEndpoint } from '../src/vpn/connectionFallback';
+import { foregroundLatencyTargets } from '../src/vpn/foregroundLatencyTargets';
 import { connectableLocalProfile, explicitConnectProfileResolutionOptions, shouldUseLocalProfileBeforeOnline, vpnConnectTelemetry, vpnConnectTimingSamples, vpnUnexpectedDisconnectTelemetry } from '../src/vpn/connectFlow';
 import { recoverVpnConnection } from '../src/vpn/connectionRecovery';
 import { disconnectWithRecoveryTimeout } from '../src/vpn/disconnectRecovery';
@@ -1023,6 +1024,35 @@ function runCreateDeviceRequestTests(): void {
 
 assertEqual(isVpnTransportFallbackError(new Error('VPN handshake did not complete')), true);
 assertEqual(isVpnTransportFallbackError(new Error('Подписка не активна.')), false);
+assertEqual(isVpnTransportFallbackError(new Error('Network request failed')), false);
+assertEqual(isVpnTransportFallbackError(new Error('Unexpected timeout while parsing profile')), false);
+assertEqual(isVpnTransportFallbackError(new Error('Network is unreachable')), true);
+
+{
+  const locations = [
+    { ...locationCandidate('de'), endpoint: 'de.example.com:51820' },
+    { ...locationCandidate('fi'), endpoint: 'fi.example.com:51820' },
+    { ...locationCandidate('nl'), endpoint: 'NL.EXAMPLE.COM:51820' },
+  ];
+  assertDeepEqual(
+    foregroundLatencyTargets({
+      activeEndpoint: 'fi.example.com:51820',
+      locations,
+      selectedLocationId: 'fi',
+      serverSelectionMode: 'manual',
+    }).map((location) => location.id),
+    [],
+  );
+  assertDeepEqual(
+    foregroundLatencyTargets({
+      activeEndpoint: 'fi.example.com:51820',
+      locations,
+      selectedLocationId: 'fi',
+      serverSelectionMode: 'auto',
+    }).map((location) => location.id),
+    ['de', 'nl'],
+  );
+}
 
 {
   const best = chooseBestVpnLocation([

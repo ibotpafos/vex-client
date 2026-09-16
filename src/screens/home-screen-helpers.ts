@@ -15,6 +15,7 @@ export const nativeReconnectCooldownMs = 120_000;
 export const staleHandshakeReconnectSeconds = 180;
 export const entitlementRefreshMs = 2 * 60_000;
 export const locationRefreshMs = 2 * 60_000;
+export const foregroundLocationProbeMs = 2 * 60_000;
 export const profileRefreshMs = 2 * 60_000;
 export const clientDiagnosticsHeartbeatMs = 5 * 60_000;
 export const clientDiagnosticsErrorCooldownMs = 60_000;
@@ -49,7 +50,10 @@ export function supportsNativeLatencyProbe() {
 }
 
 export function supportsNativeVpnWatchdog() {
-  return Platform.OS === 'android';
+  // iOS already supplies status polling and uses the same verified reconnect
+  // flow. Keeping it out of the watchdog left post-background disconnects as
+  // telemetry-only events instead of bounded, cooldown-protected recovery.
+  return Platform.OS === 'android' || Platform.OS === 'ios';
 }
 
 export function supportsNativeStatusPolling() {

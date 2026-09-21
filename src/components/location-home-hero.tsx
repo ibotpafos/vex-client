@@ -33,7 +33,7 @@ const locationBackgrounds: Partial<Record<HomeLocationBackdropKey, ImageSourcePr
 type LocationHomeHeroProps = {
   children?: ReactNode;
   connectionPhase: ConnectionPhase;
-  accountTierLabel?: string;
+  accountTierLabel?: string | null;
   headerActions?: ReactNode;
   location?: VpnLocation;
   latencyText: string;

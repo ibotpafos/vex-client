@@ -14,6 +14,7 @@ import type {
   CheckoutSessionDTO,
   DeviceDTO,
   DeviceIdentityChallengeDTO,
+  DeviceTrafficQuotaDTO,
   DeviceUsageDTO,
   DeviceUsageResponseDTO,
   EmailOTPChallengeDTO,
@@ -181,11 +182,22 @@ export interface DeviceUsageDTOSpec {
 }
 type _DeviceUsageDTOContract = VexApiSpecExpect<DeviceUsageDTOSpec extends DeviceUsageDTO ? true : false>
 
+export interface DeviceTrafficQuotaDTOSpec {
+  used_bytes: number
+  limit_bytes: number
+  reset_at: string
+  mobile_multiplier: number
+  limit_reached: boolean
+  post_limit_rate_mbps: number
+}
+type _DeviceTrafficQuotaDTOContract = VexApiSpecExpect<DeviceTrafficQuotaDTOSpec extends DeviceTrafficQuotaDTO ? true : false>
+
 export interface DeviceUsageResponseDTOSpec {
   client_ip?: string
   current_device_id?: string
   current_device_by?: string
   usage: DeviceUsageDTOSpec[]
+  traffic_quota?: DeviceTrafficQuotaDTOSpec
 }
 type _DeviceUsageResponseDTOContract = VexApiSpecExpect<DeviceUsageResponseDTOSpec extends DeviceUsageResponseDTO ? true : false>
 

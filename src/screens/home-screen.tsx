@@ -29,6 +29,7 @@ export default function App() {
     connectionPhase,
     pulseProgress,
     activeProfile,
+    accountTierLabel,
     selectedLocation,
     selectedLatencyText,
     powerButtonDisabled,
@@ -73,6 +74,7 @@ export default function App() {
         </View>
       ) : (
         <LocationHomeHero
+          accountTierLabel={accountTierLabel}
           connectionPhase={connectionPhase}
           headerActions={(
             <UpdateCenterButton

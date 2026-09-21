@@ -149,10 +149,10 @@ export function useVpnConnectionFlow({
     let lastProfileError: unknown;
     for (const candidate of profileResolutionOrder(initialLocationId, availableLocations)) {
       try {
-        // A cached managed profile can outlive its server-side device. Using it
-        // before validation makes Android report a connected TUN even after the
-        // peer has been revoked, which fail-closes all user traffic. An explicit
-        // connect must therefore resolve an authoritative profile first.
+        // Start with the locally validated profile. Revocation events and the
+        // two-minute background refresh clear it; handshake verification below
+        // still prevents a stale peer from being reported as connected. A failed
+        // local attempt is retried with a fresh same-location profile.
         profile = await resolveConnectableVpnProfile(candidate.id, explicitConnectProfileResolutionOptions);
         profileLocationId = candidate.id;
         break;

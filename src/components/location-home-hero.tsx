@@ -31,6 +31,7 @@ const locationBackgrounds: Partial<Record<HomeLocationBackdropKey, ImageSourcePr
 };
 
 type LocationHomeHeroProps = {
+  accountTierLabel?: string;
   children?: ReactNode;
   connectionPhase: ConnectionPhase;
   headerActions?: ReactNode;
@@ -45,6 +46,7 @@ type LocationHomeHeroProps = {
 };
 
 export function LocationHomeHero({
+  accountTierLabel,
   children,
   connectionPhase,
   headerActions,
@@ -85,6 +87,7 @@ export function LocationHomeHero({
       <View style={styles.header}>
         <View accessibilityLabel="VEX VPN" pointerEvents="none" style={styles.brand}>
           <VexWordmark accessibilityHidden />
+          {accountTierLabel ? <Text style={styles.brandTier}>· {accountTierLabel}</Text> : null}
         </View>
         <View style={styles.headerActions}>
           {headerActions}
@@ -201,10 +204,17 @@ const styles = StyleSheet.create({
   },
   brand: {
     alignItems: 'center',
+    flexDirection: 'row',
+    gap: 6,
     justifyContent: 'center',
     left: 0,
     position: 'absolute',
     right: 0,
+  },
+  brandTier: {
+    color: 'rgba(226, 241, 244, 0.74)',
+    fontSize: 12,
+    fontWeight: '700',
   },
   headerActions: {
     alignItems: 'center',

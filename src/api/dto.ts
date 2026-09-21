@@ -80,6 +80,17 @@ export type DeviceUsageResponseDTO = {
   client_ip?: string;
   current_device_id?: string;
   current_device_by?: string;
+  traffic_quota?: DeviceTrafficQuotaDTO | null;
+};
+
+export type DeviceTrafficQuotaDTO = {
+  device_id: string;
+  used_bytes: number;
+  limit_bytes: number;
+  reset_at: string;
+  multiplier: number;
+  limit_reached: boolean;
+  effective_rate_limit_mbps?: number | null;
 };
 
 export type DeviceUsageDTO = {
@@ -145,10 +156,10 @@ export type NativeVPNProfileDTO = {
   expires_at?: string | null;
   authorization?: {
     key_id: string;
-    algorithm: 'ECDSA_P256_SHA256_DER';
+    algorithm: string;
     payload_base64: string;
     signature_base64: string;
-  };
+  } | null;
   amnezia?: {
     jc?: number;
     jmin?: number;
@@ -174,7 +185,7 @@ export type NativeVPNProfileDTO = {
 
 export type StagedDevicePSKProfileDTO = {
   rotation_id: string;
-  activate: false;
+  activate: boolean;
   current_version: number;
   profile_version: number;
   profile_digest: string;

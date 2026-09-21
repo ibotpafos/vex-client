@@ -5,6 +5,7 @@ import { Platform, Text, View } from 'react-native';
 
 import type { VpnLocation } from '@/api/vexApi';
 import { LocationHomeHero } from '@/components/location-home-hero';
+import { TrafficQuotaSummary } from '@/components/traffic-quota-summary';
 import { MobileUpdateNoticeBanner, UpdateCenterButton } from '@/components/update-center';
 import { useRenderProfilerMark } from '@/debug/render-profiler';
 import { playSelectionHaptic } from '@/native/haptics';
@@ -20,6 +21,8 @@ export default function App() {
   useRenderProfilerMark('HomeScreen');
   const {
     session,
+    accountTierLabel,
+    trafficQuota,
     vpnError,
     isVpnBusy,
     isKeyRotationBusy,
@@ -73,6 +76,7 @@ export default function App() {
         </View>
       ) : (
         <LocationHomeHero
+          accountTierLabel={accountTierLabel ?? undefined}
           connectionPhase={connectionPhase}
           headerActions={(
             <UpdateCenterButton
@@ -94,6 +98,7 @@ export default function App() {
           selectionMode={serverSelectionMode}
         >
           <MobileUpdateNoticeBanner onOpen={openUpdateCenter} />
+          {trafficQuota ? <TrafficQuotaSummary quota={trafficQuota} /> : null}
           {activeProfile?.rotationRequired ? (
             <VexPressable
               disabled={isKeyRotationBusy || isVpnBusy}

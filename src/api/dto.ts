@@ -80,6 +80,16 @@ export type DeviceUsageResponseDTO = {
   client_ip?: string;
   current_device_id?: string;
   current_device_by?: string;
+  traffic_quota?: DeviceTrafficQuotaDTO;
+};
+
+export type DeviceTrafficQuotaDTO = {
+  used_bytes: number;
+  limit_bytes: number;
+  reset_at: string;
+  mobile_multiplier: number;
+  limit_reached: boolean;
+  post_limit_rate_mbps: number;
 };
 
 export type DeviceUsageDTO = {

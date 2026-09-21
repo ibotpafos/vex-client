@@ -150,7 +150,7 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
             )
             self.assertEqual(capture.read_text(), "1|0|self-signed|self-signed\n")
 
-    def test_local_release_cache_creates_missing_source_parent(self) -> None:
+    def test_local_release_cache_keeps_mutable_sources_worktree_local(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             checkout = Path(temp_dir) / "checkout"
             scripts = checkout / "scripts"
@@ -159,6 +159,14 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
                 shutil.copy2(ROOT / "scripts" / name, scripts / name)
 
             cache_root = Path(temp_dir) / "cache"
+            legacy_source_cache = cache_root / "external-amnezia"
+            legacy_source_cache.mkdir(parents=True)
+            sentinel = legacy_source_cache / "keep-me.txt"
+            sentinel.write_text("shared cache stays intact\n")
+            external_parent = checkout / "external"
+            external_parent.mkdir(parents=True)
+            (external_parent / "amnezia").symlink_to(legacy_source_cache)
+
             env = os.environ.copy()
             env["VEX_LOCAL_RELEASE_CACHE_ROOT"] = str(cache_root)
             subprocess.run(
@@ -171,8 +179,9 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
             )
 
             external_amnezia = checkout / "external" / "amnezia"
-            self.assertTrue(external_amnezia.is_symlink())
-            self.assertEqual(external_amnezia.resolve(), (cache_root / "external-amnezia").resolve())
+            self.assertTrue(external_amnezia.is_dir())
+            self.assertFalse(external_amnezia.is_symlink())
+            self.assertTrue(sentinel.exists())
 
 
 if __name__ == "__main__":

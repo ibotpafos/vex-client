@@ -56,10 +56,39 @@ ensure_linked_dir() {
   echo "linked ${repo_path} -> ${cache_path}"
 }
 
+ensure_local_source_dir() {
+  local repo_path="$1"
+  local legacy_cache_name="$2"
+  local source_path="${ROOT}/${repo_path}"
+  local legacy_cache_path="${VEX_LOCAL_RELEASE_CACHE_ROOT}/${legacy_cache_name}"
+
+  mkdir -p "$(dirname "${source_path}")"
+
+  if [[ -L "${source_path}" ]]; then
+    local current_target
+    current_target="$(readlink "${source_path}")"
+    if [[ "${current_target}" != "${legacy_cache_path}" ]]; then
+      echo "refusing to replace existing symlink: ${repo_path} -> ${current_target}" >&2
+      exit 1
+    fi
+
+    # Source checkouts are mutable: bootstrap pins revisions and applies local
+    # patches. Sharing them between worktrees lets concurrent Android/iOS/macOS
+    # builds race on checkout/reset. Remove only the legacy symlink; never touch
+    # the cache target so older worktrees can still finish safely.
+    rm "${source_path}"
+  elif [[ -e "${source_path}" ]] && [[ ! -d "${source_path}" ]]; then
+    echo "refusing to replace non-directory path: ${repo_path}" >&2
+    exit 1
+  fi
+
+  mkdir -p "${source_path}"
+}
+
 ensure_linked_dir "android/.gradle" "android-dot-gradle"
 ensure_linked_dir "android/build" "android-build"
 ensure_linked_dir "android/app/build" "android-app-build"
 ensure_linked_dir "android/app/.cxx" "android-app-cxx"
-ensure_linked_dir "external/amnezia" "external-amnezia"
+ensure_local_source_dir "external/amnezia" "external-amnezia"
 
 echo "local release cache setup complete"

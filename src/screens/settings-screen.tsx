@@ -29,6 +29,7 @@ import {
 import { openExternalUrl } from "@/auth/systemAuth";
 import { vexWebsite } from "@/navigation/website";
 import { getVpnApplicationSelection } from "@/settings/vpnPreferences";
+import { VexSection } from "@/components/vex-settings-section";
 import { useToast, type ToastOptions } from "@/ui/toast";
 import { vexColors, VexScreen, vexSharedStyles, VexPressable } from "@/ui/vex-ui";
 import { useVpnConnectionContext } from "@/vpn/vpn-connection-context";
@@ -133,23 +134,6 @@ export default function SettingsScreen() {
         showsVerticalScrollIndicator={false}
         style={styles.scroll}
       >
-        <View style={styles.heroPanel}>
-          <View style={styles.heroIcon}>
-            <Smartphone color="#031012" size={24} strokeWidth={2.6} />
-          </View>
-          <View style={styles.heroCopy}>
-            <Text style={styles.heroEyebrow}>VEX VPN</Text>
-            <Text style={styles.heroTitle}>{versionText}</Text>
-            <View style={styles.chipRow}>
-              <Text style={styles.statusChip}>
-                {formatPlatformLabel(appInfo.platform)}
-              </Text>
-              {buildText ? <Text style={styles.statusChip}>{buildText}</Text> : null}
-              <Text style={styles.statusChip}>{appInfo.channel}</Text>
-            </View>
-          </View>
-        </View>
-
         {remoteConfig?.incidentBanner ? (
           <View style={styles.noticePanel}>
             <Text style={styles.noticeTitle}>Статус сервиса</Text>
@@ -157,8 +141,7 @@ export default function SettingsScreen() {
           </View>
         ) : null}
 
-        <View style={styles.group}>
-          <Text style={styles.groupTitle}>Подключение</Text>
+        <VexSection title="Подключение">
           <VexPressable
             disabled={isSavingAutomation}
             onPress={() => handleAutomationToggle(!isAutomationEnabled)}
@@ -195,6 +178,9 @@ export default function SettingsScreen() {
               />
             </View>
           </VexPressable>
+        </VexSection>
+
+        <VexSection title="Маршрутизация">
           {isAndroidApp ? (
             <VexPressable
               accessibilityLabel="Выбор приложений для VPN"
@@ -355,10 +341,9 @@ export default function SettingsScreen() {
               />
             </View>
           </VexPressable>
-        </View>
+        </VexSection>
 
-        <View style={styles.group}>
-          <Text style={styles.groupTitle}>Интерфейс</Text>
+        <VexSection title="Интерфейс">
           <View style={styles.settingRow}>
             <View style={styles.rowIcon}>
               <Languages color="#22D3EE" size={21} strokeWidth={2.5} />
@@ -374,10 +359,9 @@ export default function SettingsScreen() {
             onValueChange={handleLanguagePress}
             value={language}
           />
-        </View>
+        </VexSection>
 
-        <View style={styles.group}>
-          <Text style={styles.groupTitle}>Аккаунт и помощь</Text>
+        <VexSection title="Аккаунт и помощь">
           <VexPressable
             accessibilityLabel="Открыть личный кабинет на сайте"
             accessibilityRole="button"
@@ -420,10 +404,30 @@ export default function SettingsScreen() {
             </View>
             <ChevronRight color="#A7B9BD" size={22} strokeWidth={2.5} />
           </VexPressable>
-        </View>
+          <VexPressable
+            accessibilityRole="button"
+            disabled={isSigningOut}
+            onPress={handleSignOut}
+            style={[styles.signOutButton, isSigningOut && styles.signOutButtonBusy]}
+            hoverStyle={{ backgroundColor: 'rgba(255,159,159,0.12)' }}
+            title="Выйти из текущей учетной записи"
+          >
+            <LogOut color="#FF9F9F" size={22} strokeWidth={2.5} />
+            <Text style={styles.signOutText}>
+              {isSigningOut ? "Выходим" : "Выйти из аккаунта"}
+            </Text>
+          </VexPressable>
+        </VexSection>
 
-        <View style={styles.group}>
-          <Text style={styles.groupTitle}>Система</Text>
+        <VexSection title="О приложении">
+          <View style={styles.detailList}>
+            <View style={styles.detailRow}>
+              <Text style={styles.detailLabel}>Версия</Text>
+              <Text style={styles.detailValue}>
+                {[versionText, buildText, formatPlatformLabel(appInfo.platform), appInfo.channel].filter(Boolean).join(' · ')}
+              </Text>
+            </View>
+          </View>
           <View style={styles.infoGrid}>
             <View style={styles.infoTile}>
               <ServerCog color="#A7B9BD" size={18} strokeWidth={2.4} />
@@ -450,26 +454,8 @@ export default function SettingsScreen() {
               </Text>
             </View>
           </View>
-        </View>
+        </VexSection>
 
-        <View style={styles.dangerGroup}>
-          <VexPressable
-            accessibilityRole="button"
-            disabled={isSigningOut}
-            onPress={handleSignOut}
-            style={[
-              styles.signOutButton,
-              isSigningOut && styles.signOutButtonBusy,
-            ]}
-            hoverStyle={{ backgroundColor: 'rgba(255,159,159,0.12)' }}
-            title="Выйти из текущей учетной записи"
-          >
-            <LogOut color="#FF9F9F" size={22} strokeWidth={2.5} />
-            <Text style={styles.signOutText}>
-              {isSigningOut ? "Выходим" : "Выйти из аккаунта"}
-            </Text>
-          </VexPressable>
-        </View>
       </ScrollView>
     </VexScreen>
   );
@@ -552,7 +538,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    gap: 20,
+    gap: 24,
     paddingBottom: 32,
   },
   screenHeader: {
@@ -560,54 +546,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     minHeight: 56,
-  },
-  heroPanel: {
-    alignItems: "center",
-    flexDirection: "row",
-    gap: 12,
-    paddingHorizontal: 4,
-  },
-  heroIcon: {
-    alignItems: "center",
-    backgroundColor: vexColors.accent,
-    borderRadius: 14,
-    height: 42,
-    justifyContent: "center",
-    width: 42,
-  },
-  heroCopy: {
-    flex: 1,
-    minWidth: 0,
-  },
-  heroEyebrow: {
-    color: vexColors.accent,
-    fontSize: 10,
-    fontWeight: "900",
-    textTransform: "uppercase",
-  },
-  heroTitle: {
-    color: vexColors.text,
-    fontSize: 17,
-    fontWeight: "900",
-    marginTop: 2,
-  },
-  chipRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 5,
-    marginTop: 5,
-  },
-  statusChip: {
-    backgroundColor: "rgba(34,211,238,0.12)",
-    borderColor: "rgba(34,211,238,0.22)",
-    borderRadius: 999,
-    borderWidth: 1,
-    color: vexColors.textSoft,
-    fontSize: 10,
-    fontWeight: "800",
-    overflow: "hidden",
-    paddingHorizontal: 7,
-    paddingVertical: 3,
   },
   noticePanel: {
     backgroundColor: "rgba(34,211,238,0.08)",
@@ -627,26 +565,15 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     marginTop: 6,
   },
-  group: {
-    gap: 0,
-  },
-  groupTitle: {
-    color: vexColors.muted,
-    fontSize: 11,
-    fontWeight: "900",
-    marginBottom: 6,
-    paddingHorizontal: 4,
-    textTransform: "uppercase",
-  },
   settingRow: {
     alignItems: "center",
     borderBottomColor: 'rgba(159, 218, 223, 0.14)',
     borderBottomWidth: 1,
     flexDirection: "row",
     gap: 12,
-    minHeight: 76,
-    paddingHorizontal: 4,
-    paddingVertical: 10,
+    minHeight: 68,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
   },
   rowIcon: {
     alignItems: "center",
@@ -659,20 +586,20 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   rowTitle: {
-    color: vexColors.textSoft,
-    fontSize: 13,
-    fontWeight: "900",
+    color: vexColors.text,
+    fontSize: 16,
+    fontWeight: "600",
   },
   rowDescription: {
     color: vexColors.muted,
-    fontSize: 11,
-    lineHeight: 15,
+    fontSize: 13,
+    lineHeight: 18,
     marginTop: 3,
   },
   rowValue: {
     color: vexColors.muted,
-    fontSize: 11,
-    fontWeight: "900",
+    fontSize: 12,
+    fontWeight: "700",
     marginTop: 4,
     textTransform: "uppercase",
   },
@@ -684,8 +611,8 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 4,
     minHeight: 44,
-    paddingHorizontal: 4,
-    paddingTop: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
   },
   languageButton: {
     alignItems: "center",
@@ -709,6 +636,8 @@ const styles = StyleSheet.create({
   infoGrid: {
     flexDirection: "row",
     gap: 8,
+    paddingHorizontal: 14,
+    paddingTop: 12,
   },
   infoTile: {
     backgroundColor: "transparent",
@@ -732,6 +661,8 @@ const styles = StyleSheet.create({
   },
   detailList: {
     gap: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
   },
   detailRow: {
     alignItems: "flex-start",
@@ -751,19 +682,16 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     lineHeight: 16,
   },
-  dangerGroup: {
-    paddingTop: 2,
-  },
   signOutButton: {
     alignItems: "center",
     backgroundColor: vexColors.dangerSoft,
     borderColor: vexColors.dangerLine,
-    borderRadius: 14,
-    borderWidth: 1,
+    borderTopColor: vexColors.dangerLine,
+    borderTopWidth: StyleSheet.hairlineWidth,
     flexDirection: "row",
     gap: 10,
     justifyContent: "center",
-    minHeight: 46,
+    minHeight: 56,
   },
   signOutButtonBusy: {
     opacity: 0.68,

@@ -8,25 +8,23 @@ import {
 } from "@expo/ui";
 import {
   ListItem as ComposeListItem,
-  LazyColumn,
   ModalBottomSheet,
   Text as ComposeText,
   type ModalBottomSheetRef,
 } from "@expo/ui/jetpack-compose";
-import { clickable, height, testID as composeTestID } from "@expo/ui/jetpack-compose/modifiers";
+import { clickable, testID as composeTestID } from "@expo/ui/jetpack-compose/modifiers";
 import type { VpnLocation } from "@/api/vexApi";
 import type { ServerSelectionMode } from "@/vpn/serverSelection";
 import {
-  locationLatencyText,
   locationStatusText,
 } from "../screens/home-screen-helpers";
 import {
-  homeLocationCardLabel,
-  serverLocationTechnicalLabel,
-} from "../screens/home-location-previews";
-import { serverPickerLocationRows } from "./server-picker-model";
-
-import { isLocationAvailable } from "../screens/country-groups";
+  groupVpnLocationsByCountry,
+  serverCountLabel,
+  serverPickerCountryGapDp,
+  serverPickerLocationTitle,
+  serverPickerRowPresentation,
+} from "../screens/server-picker-interactions";
 
 export interface ServerPickerModalProps {
   countryTitle?: string;
@@ -60,7 +58,7 @@ export const ServerPickerModal = React.memo(function ServerPickerModal({
     <BottomSheet
       isPresented={visible}
       onDismiss={props.onClose}
-      snapPoints={["half", "full"]}
+      snapPoints={["full"]}
       testID="server-picker-sheet"
     >
       <Host colorScheme="dark" seedColor="#22D3EE" style={styles.host} useViewportSizeMeasurement>
@@ -97,6 +95,7 @@ function AndroidServerPickerSheet({ visible, ...props }: ServerPickerContentProp
         }}
         ref={sheetRef}
         showDragHandle
+        skipPartiallyExpanded
       >
         <ServerPickerBody {...props} />
       </ModalBottomSheet>
@@ -115,7 +114,6 @@ export const ServerPickerContent = React.memo(function ServerPickerContent(props
 });
 
 function ServerPickerBody({
-  countryTitle,
   isVpnBusy,
   locations,
   selectedLatencyText,
@@ -127,63 +125,95 @@ function ServerPickerBody({
   isRefreshing,
   refreshError,
 }: ServerPickerContentProps) {
-  const locationRows = serverPickerLocationRows(locations, selectionMode, selectedLocationId);
-  const rows = (
-    <>
-      {!countryTitle ? <ServerPickerRow
-        leading="↻"
-        onPress={isVpnBusy || locations.length === 0 ? undefined : onAutoSelect}
-        supportingText="Лучший доступный сервер"
-        testID="server-picker-auto"
-        trailing={selectionMode === "auto" ? "✓" : undefined}
-      >
-        Автоматически
-      </ServerPickerRow> : null}
-      {locationRows.map(({ location, selected, testID }) => {
-        const latency = selected && selectedLatencyText
-          ? selectedLatencyText
-          : locationLatencyText(location);
-        const technicalLabel = serverLocationTechnicalLabel(location);
-        const statusText = `${locationStatusText(location)} · ${latency}`;
-        return (
-          <ServerPickerRow
-            key={location.id}
-            leading={location.flagEmoji || location.countryCode}
-            onPress={isVpnBusy || !isLocationAvailable(location) ? undefined : () => onSelect(location.id)}
-            supportingText={technicalLabel ? `${technicalLabel} · ${statusText}` : statusText}
-            testID={testID}
-            trailing={selected ? "✓" : undefined}
-          >
-            {homeLocationCardLabel(location)}
-          </ServerPickerRow>
-        );
-      })}
-      {locations.length === 0 ? (
-        <ServerPickerRow
-          leading="↻"
-          onPress={isVpnBusy || isRefreshing ? undefined : onRetry}
-          supportingText={refreshError ? "Не удалось обновить список" : "Список серверов пока пуст"}
-          testID="server-picker-retry"
-        >
-          {isRefreshing ? "Обновляем…" : "Повторить"}
-        </ServerPickerRow>
-      ) : null}
-    </>
-  );
+  const countryGroups = React.useMemo(() => groupVpnLocationsByCountry(locations), [locations]);
+  const [expandedCountryCode, setExpandedCountryCode] = React.useState<string | null>(null);
+
   return (
     <Column spacing={4} style={styles.content} testID="server-picker-sheet">
-      <UniversalText textStyle={styles.eyebrow}>VEX VPN</UniversalText>
-      <UniversalText textStyle={styles.title}>{countryTitle ?? "Серверы"}</UniversalText>
+      <UniversalText textStyle={styles.eyebrow}>ЛОКАЦИЯ</UniversalText>
+      <UniversalText textStyle={styles.title}>Выберите сервер</UniversalText>
       <UniversalText textStyle={styles.subtitle}>
-        {countryTitle ? "Выберите сервер этой страны." : "Выберите страну и сервер для текущей сессии."}
+        VEX выберет лучший сервер автоматически. Страну и конкретный сервер можно указать вручную.
       </UniversalText>
-      {Platform.OS === "android" ? (
-        <LazyColumn contentPadding={{ bottom: 24 }} modifiers={[height(280)]}>
-          {rows}
-        </LazyColumn>
-      ) : (
-        <Column spacing={0}>{rows}</Column>
-      )}
+      <Column spacing={serverPickerCountryGapDp()}>
+        <ServerPickerRow
+          leading="↻"
+          onPress={isVpnBusy || locations.length === 0 ? undefined : onAutoSelect}
+          supportingText="Лучший сервер среди всех стран"
+          testID="server-picker-auto"
+          trailing={selectionMode === "auto" ? "✓" : undefined}
+        >
+          Автоматически
+        </ServerPickerRow>
+        {countryGroups.map((group) => {
+          const countrySelected = selectionMode === "manual"
+            && group.locations.some((location) => location.id === selectedLocationId);
+          const expanded = expandedCountryCode === group.countryCode;
+          const bestLocation = group.bestLocation;
+          const bestPresentation = bestLocation ? serverPickerRowPresentation(bestLocation, {
+            busy: isVpnBusy,
+            selected: bestLocation.id === selectedLocationId,
+            selectedLatencyText,
+          }) : null;
+          const serverCount = group.locations.length;
+          const bestLocationOrdinal = bestLocation
+            ? group.locations.findIndex((location) => location.id === bestLocation.id) + 1
+            : undefined;
+          return (
+            <Column key={group.countryCode} spacing={0} style={styles.countryCard}>
+              <ServerPickerRow
+                leading={group.flagEmoji || group.countryCode}
+                onPress={!bestLocation || bestPresentation?.disabled ? undefined : () => {
+                  if (serverCount === 1) {
+                    onSelect(bestLocation.id);
+                    return;
+                  }
+                  setExpandedCountryCode(expanded ? null : group.countryCode);
+                }}
+                supportingText={bestLocation
+                  ? `${serverCountLabel(serverCount)} · лучший ${serverPickerLocationTitle(bestLocation, bestLocationOrdinal)} · ${bestPresentation?.latency}`
+                  : "Нет доступных серверов"}
+                testID={`server-picker-country-${group.countryCode.toLowerCase()}`}
+                trailing={serverCount > 1
+                  ? `${countrySelected ? "✓  " : ""}${expanded ? "⌃" : "⌄"}`
+                  : countrySelected ? "✓" : undefined}
+              >
+                {group.title}
+              </ServerPickerRow>
+              {expanded ? group.locations.map((location, index) => {
+                const selected = selectionMode === "manual" && location.id === selectedLocationId;
+                const presentation = serverPickerRowPresentation(location, {
+                  busy: isVpnBusy,
+                  selected,
+                  selectedLatencyText,
+                });
+                return (
+                  <ServerPickerRow
+                    key={location.id}
+                    leading={location.id === bestLocation?.id ? "★" : "•"}
+                    onPress={presentation.disabled ? undefined : () => onSelect(location.id)}
+                    supportingText={`${locationStatusText(location)} · ${presentation.latency}${location.id === bestLocation?.id ? " · лучший" : ""}`}
+                    testID={`server-picker-${location.id}`}
+                    trailing={presentation.selected ? "✓" : undefined}
+                  >
+                    {serverPickerLocationTitle(location, index + 1)}
+                  </ServerPickerRow>
+                );
+              }) : null}
+            </Column>
+          );
+        })}
+        {locations.length === 0 ? (
+          <ServerPickerRow
+            leading="↻"
+            onPress={isVpnBusy || isRefreshing ? undefined : onRetry}
+            supportingText={refreshError ? "Не удалось обновить список" : "Список серверов пока пуст"}
+            testID="server-picker-retry"
+          >
+            {isRefreshing ? "Обновляем…" : "Повторить"}
+          </ServerPickerRow>
+        ) : null}
+      </Column>
     </Column>
   );
 }
@@ -230,11 +260,24 @@ const styles = {
     paddingHorizontal: 20,
     paddingTop: 20,
   },
+  countryCard: {
+    borderColor: "rgba(103,232,249,0.12)",
+    borderRadius: 18,
+    borderWidth: 1,
+    overflow: "hidden" as const,
+  },
   eyebrow: {
     color: "#67E8F9",
     fontSize: 12,
     fontWeight: "700" as const,
     letterSpacing: 1.2,
+  },
+  empty: {
+    color: "#A7B9BD",
+    fontSize: 14,
+    lineHeight: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 20,
   },
   host: {
     flex: 1,

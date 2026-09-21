@@ -1,6 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  BottomSheet,
   Button,
   Column,
   Host,
@@ -8,10 +7,6 @@ import {
   Text as UniversalText,
   TextInput as UniversalTextInput,
 } from "@expo/ui";
-import {
-  ModalBottomSheet,
-  type ModalBottomSheetRef,
-} from "@expo/ui/jetpack-compose";
 import * as WebBrowser from "expo-web-browser";
 import { router } from "expo-router";
 import {
@@ -20,7 +15,7 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
-import { useCallback, useState, useEffect, useRef, type ReactNode } from "react";
+import { useCallback, useState, useEffect, useRef } from "react";
 import {
   requestEmailOTP,
   confirmEmailOTP,
@@ -51,6 +46,7 @@ import {
 } from "@/native/haptics";
 import { OTPCodeInput } from "@/components/otp-code-input";
 import { UniversalSignInWelcome } from "@/components/universal-sign-in-welcome";
+import { SignInBottomSheet } from "@/components/sign-in-bottom-sheet";
 import { resetVpnProfileCache } from "@/vpn/profile";
 import * as SecureStore from "@/native/secureStore";
 import { generateRandomString, generateChallenge } from "@/auth/pkce";
@@ -72,57 +68,6 @@ import {
 } from "@/auth/systemAuth";
 
 WebBrowser.maybeCompleteAuthSession();
-
-type SignInBottomSheetProps = {
-  children: ReactNode;
-  isPresented: boolean;
-  onDismiss: () => void;
-};
-
-function SignInBottomSheet({ children, isPresented, onDismiss }: SignInBottomSheetProps) {
-  const sheetRef = useRef<ModalBottomSheetRef>(null);
-  const [isAndroidSheetMounted, setIsAndroidSheetMounted] = useState(isPresented);
-
-  useEffect(() => {
-    if (isPresented) {
-      setIsAndroidSheetMounted(true);
-      return;
-    }
-    sheetRef.current?.hide().finally(() => setIsAndroidSheetMounted(false));
-  }, [isPresented]);
-
-  if (Platform.OS !== "android") {
-    return (
-      <BottomSheet
-        isPresented={isPresented}
-        onDismiss={onDismiss}
-        snapPoints={["full"]}
-        testID="sign-in-sheet"
-      >
-        {children}
-      </BottomSheet>
-    );
-  }
-
-  if (!isAndroidSheetMounted) {
-    return null;
-  }
-
-  return (
-    <ModalBottomSheet
-      containerColor="#041315"
-      contentColor="#E9F7F8"
-      onDismissRequest={() => {
-        setIsAndroidSheetMounted(false);
-        onDismiss();
-      }}
-      ref={sheetRef}
-      sheetGesturesEnabled
-    >
-      {children}
-    </ModalBottomSheet>
-  );
-}
 
 export default function SignInScreen() {
   const queryClient = useQueryClient();

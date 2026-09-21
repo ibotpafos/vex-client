@@ -1,6 +1,8 @@
 import { Button, Column, Spacer, Text } from "@expo/ui";
 import { StyleSheet, useWindowDimensions } from "react-native";
 
+import { vexMobileType } from "@/ui/vex-mobile-visual";
+
 type UniversalSignInWelcomeProps = {
   onContinue: () => void;
 };
@@ -13,8 +15,8 @@ export function UniversalSignInWelcome({ onContinue }: UniversalSignInWelcomePro
     <Column alignment="center" spacing={16} style={styles.content}>
       <Spacer flexible />
       <Text textStyle={styles.brand}>VEX</Text>
-      <Text textStyle={styles.title}>Давайте подключимся</Text>
-      <Text textStyle={styles.subtitle}>Войдите, чтобы получить доступ к своему VPN.</Text>
+      <Text textStyle={styles.title}>{"Спокойный интернет.\nГде бы вы ни были."}</Text>
+      <Text textStyle={styles.subtitle}>Подключитесь к своему защищённому пространству VEX.</Text>
       <Spacer flexible />
       <Button
         label="Войти или создать аккаунт"
@@ -34,10 +36,8 @@ const styles = StyleSheet.create({
     paddingTop: 64,
   },
   brand: {
-    color: "#43D9E7",
-    fontSize: 26,
-    fontWeight: "800",
-    letterSpacing: 3,
+    color: "#F2F8F8",
+    ...vexMobileType.wordmark,
   },
   title: {
     color: "#F1FBFC",

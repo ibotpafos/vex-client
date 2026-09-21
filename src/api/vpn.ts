@@ -234,11 +234,8 @@ export async function vpnDeviceUsage(accessToken: string): Promise<VpnDeviceUsag
 }
 
 export async function vpnDeviceUsageSnapshot(accessToken: string, deviceId?: string): Promise<VpnDeviceUsageSnapshot> {
-  const query = new URLSearchParams();
-  if (deviceId?.trim()) {
-    query.set('device_id', deviceId.trim());
-  }
-  const suffix = query.size > 0 ? `?${query.toString()}` : '';
+  const normalizedDeviceId = deviceId?.trim();
+  const suffix = normalizedDeviceId ? `?device_id=${encodeURIComponent(normalizedDeviceId)}` : '';
   const response = await jsonRequest<DeviceUsageResponseDTO>(`/v1/devices/usage${suffix}`, {
     accessToken,
     suppressErrorLog: true,

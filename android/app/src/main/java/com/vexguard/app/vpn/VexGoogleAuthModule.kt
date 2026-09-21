@@ -5,6 +5,7 @@ import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
+import androidx.credentials.exceptions.NoCredentialException
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
@@ -59,6 +60,8 @@ class VexGoogleAuthModule(context: ReactApplicationContext) : ReactContextBaseJa
         }
       } catch (_: GetCredentialCancellationException) {
         promise.reject("GOOGLE_SIGN_IN_CANCELLED", "Google sign-in cancelled")
+      } catch (_: NoCredentialException) {
+        promise.reject("GOOGLE_SIGN_IN_UNAVAILABLE", "No Google account is available")
       } catch (error: CancellationException) {
         promise.reject("GOOGLE_SIGN_IN_CANCELLED", "Google sign-in cancelled")
         throw error

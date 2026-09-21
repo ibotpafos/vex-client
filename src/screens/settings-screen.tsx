@@ -30,6 +30,7 @@ import { openExternalUrl } from "@/auth/systemAuth";
 import { vexWebsite } from "@/navigation/website";
 import { getVpnApplicationSelection } from "@/settings/vpnPreferences";
 import { VexSection } from "@/components/vex-settings-section";
+import { formatQuotaResetAt, formatQuotaUsage } from "@/components/traffic-quota-presentation";
 import { useToast, type ToastOptions } from "@/ui/toast";
 import { vexColors, VexScreen, vexSharedStyles, VexPressable } from "@/ui/vex-ui";
 import { useVpnConnectionContext } from "@/vpn/vpn-connection-context";
@@ -67,8 +68,12 @@ export default function SettingsScreen() {
     handleAntiLeakToggle,
   } = useVexSettings(showSettingsToast);
   const {
+    accountEmail,
+    accountSummaryText,
+    accountTierLabel,
     isSmartRoutingEnabled,
     handleSmartRoutingToggle,
+    trafficQuota,
     vpnStatus,
   } = useVpnConnectionContext();
 
@@ -362,6 +367,43 @@ export default function SettingsScreen() {
         </VexSection>
 
         <VexSection title="Аккаунт и помощь">
+          <View style={styles.accountSummaryCard} testID="settings-account-summary">
+            <Text style={styles.accountPlanTitle}>
+              {accountTierLabel ? `VEX · ${accountTierLabel}` : "VEX"}
+            </Text>
+            {accountSummaryText ? <Text style={styles.accountSubtitle}>{accountSummaryText}</Text> : null}
+            {accountEmail ? (
+              <View style={styles.accountDetailRow}>
+                <Text style={styles.accountDetailLabel}>Email</Text>
+                <Text numberOfLines={1} style={styles.accountDetailValue}>{accountEmail}</Text>
+              </View>
+            ) : null}
+          </View>
+          {trafficQuota ? (
+            <View style={styles.accountQuotaCard} testID="settings-traffic-quota">
+              <View style={styles.accountDetailRow}>
+                <Text style={styles.accountDetailLabel}>Трафик за месяц</Text>
+                <Text style={styles.accountDetailValue}>
+                  {formatQuotaUsage(trafficQuota.usedBytes, trafficQuota.limitBytes)}
+                </Text>
+              </View>
+              <View style={styles.accountDetailRow}>
+                <Text style={styles.accountDetailLabel}>Сброс</Text>
+                <Text style={styles.accountDetailValue}>{formatQuotaResetAt(trafficQuota.resetAt)}</Text>
+              </View>
+              {trafficQuota.multiplier > 1 ? (
+                <View style={styles.accountDetailRow}>
+                  <Text style={styles.accountDetailLabel}>Мобильный трафик</Text>
+                  <Text style={styles.accountDetailValue}>×{trafficQuota.multiplier}</Text>
+                </View>
+              ) : null}
+              {trafficQuota.limitReached ? (
+                <Text accessibilityRole="alert" style={styles.accountQuotaWarning}>
+                  Лимит достигнут · скорость {trafficQuota.effectiveRateLimitMbps ?? 1} Мбит/с
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
           <VexPressable
             accessibilityLabel="Открыть личный кабинет на сайте"
             accessibilityRole="button"
@@ -564,6 +606,56 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 18,
     marginTop: 6,
+  },
+  accountSummaryCard: {
+    borderBottomColor: "rgba(159, 218, 223, 0.14)",
+    borderBottomWidth: 1,
+    gap: 5,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+  },
+  accountPlanTitle: {
+    color: vexColors.text,
+    fontSize: 17,
+    fontWeight: "800",
+  },
+  accountSubtitle: {
+    color: vexColors.muted,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  accountQuotaCard: {
+    borderBottomColor: "rgba(159, 218, 223, 0.14)",
+    borderBottomWidth: 1,
+    gap: 7,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  accountDetailRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 12,
+    justifyContent: "space-between",
+    marginTop: 3,
+  },
+  accountDetailLabel: {
+    color: vexColors.muted,
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  accountDetailValue: {
+    color: vexColors.textSoft,
+    flexShrink: 1,
+    fontSize: 12,
+    fontWeight: "800",
+    textAlign: "right",
+  },
+  accountQuotaWarning: {
+    color: vexColors.danger,
+    fontSize: 12,
+    fontWeight: "800",
+    lineHeight: 17,
+    marginTop: 2,
   },
   settingRow: {
     alignItems: "center",

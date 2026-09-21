@@ -121,6 +121,31 @@ export type VpnDeviceUsage = {
   rxBytes: number;
   txBytes: number;
   totalBytes: number;
+  historicalRxBytes: number;
+  historicalTxBytes: number;
+  historicalTotalBytes: number;
+  lastNonzeroTrafficAt?: string;
+  rateLimitMbps?: number;
+  trafficPriority: number;
+  rxRateBps?: number;
+  txRateBps?: number;
+};
+
+export type VpnTrafficQuota = {
+  deviceId: string;
+  usedBytes: number;
+  limitBytes: number;
+  resetAt: string;
+  multiplier: number;
+  limitReached: boolean;
+  effectiveRateLimitMbps?: number;
+};
+
+export type VpnDeviceUsageSnapshot = {
+  usage: VpnDeviceUsage[];
+  currentDeviceId?: string;
+  currentDeviceBy?: string;
+  trafficQuota?: VpnTrafficQuota;
 };
 
 export type ClientDiagnosticsReportInput = {

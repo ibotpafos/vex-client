@@ -3,8 +3,8 @@ import { vpnProfileAddressMatchesDevice } from './profileConsistency';
 import { profileEndpoint } from './connectionFallback';
 
 export const explicitConnectProfileResolutionOptions = {
-  forceRefresh: true,
-  preferCached: false,
+  forceRefresh: false,
+  preferCached: true,
   validateCachedProfile: true,
 } as const;
 

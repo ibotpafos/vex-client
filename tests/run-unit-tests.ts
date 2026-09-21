@@ -15,6 +15,7 @@ import { sessionLoadFailureDiagnosticsSnapshot } from '../src/auth/sessionDiagno
 import { isCurrentSessionMutation } from '../src/auth/sessionMutationGuard';
 import { loadSessionWithRetry, loadWithRetry } from '../src/auth/sessionLoadRetry';
 import { vpnConnectionAnimationsEnabled } from '../src/vpn/vpnAnimationPolicy';
+import { formatQuotaBytes, formatQuotaUsage, quotaProgress, quotaRemainingBytes } from '../src/components/traffic-quota-presentation';
 import { generateChallenge, generateRandomString } from '../src/auth/pkce';
 import { buildAppWebAuthUrl } from '../src/auth/webAuthUrl';
 import { emailOTPCells, emailOTPRequestErrorMessage, isEmailOTPExpired, isInvalidOrExpiredEmailOTPError, normalizeEmailOTPCode } from '../src/auth/emailOtp';
@@ -575,10 +576,16 @@ assertEqual(
 
 {
   assertDeepEqual(explicitConnectProfileResolutionOptions, {
-    forceRefresh: true,
-    preferCached: false,
+    forceRefresh: false,
+    preferCached: true,
     validateCachedProfile: true,
   });
+  assertEqual(formatQuotaBytes(200 * 1024 ** 3), '200 ГБ');
+  assertEqual(formatQuotaUsage(50 * 1024 ** 3, 200 * 1024 ** 3), '50 ГБ / 200 ГБ');
+  assertEqual(quotaRemainingBytes(50 * 1024 ** 3, 200 * 1024 ** 3), 150 * 1024 ** 3);
+  assertEqual(quotaRemainingBytes(250, 200), 0);
+  assertEqual(quotaProgress(50, 200), 0.25);
+  assertEqual(quotaProgress(250, 200), 1);
 }
 
 {
@@ -2546,8 +2553,12 @@ function vpnDeviceUsageCandidate(overrides: Partial<VpnDeviceUsage> = {}): VpnDe
     deviceId: 'dev_1',
     connectionStatus: 'connected',
     connected: true,
+    historicalRxBytes: 0,
+    historicalTxBytes: 0,
+    historicalTotalBytes: 0,
     rxBytes: 100,
     totalBytes: 300,
+    trafficPriority: 0,
     txBytes: 200,
     ...overrides,
   };

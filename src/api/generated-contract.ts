@@ -7,6 +7,7 @@
 // hand-written DTO in ./dto; a violation fails `npm run typecheck` here.
 
 import type {
+  AcknowledgeStagedDevicePSKProfileResultDTO,
   AppRemoteConfigResponseDTO,
   AppUpdateCheckResponseDTO,
   AuthResultDTO,
@@ -14,6 +15,7 @@ import type {
   CheckoutSessionDTO,
   DeviceDTO,
   DeviceIdentityChallengeDTO,
+  DeviceTrafficQuotaDTO,
   DeviceUsageDTO,
   DeviceUsageResponseDTO,
   EmailOTPChallengeDTO,
@@ -23,12 +25,20 @@ import type {
   PortalSessionDTO,
   RegisterDevicePushTokenResultDTO,
   RegisterNativeDeviceResultDTO,
+  StagedDevicePSKProfileDTO,
   SupportMessageDTO,
   SupportTicketDTO,
   UserDTO,
 } from "./dto"
 
 export type VexApiSpecExpect<T extends true> = T
+
+export interface AcknowledgeStagedDevicePSKProfileResultDTOSpec {
+  rotation_id: string
+  accepted: boolean
+  replayed: boolean
+}
+type _AcknowledgeStagedDevicePSKProfileResultDTOContract = VexApiSpecExpect<AcknowledgeStagedDevicePSKProfileResultDTOSpec extends AcknowledgeStagedDevicePSKProfileResultDTO ? true : false>
 
 export interface AppRemoteConfigResponseDTOSpec {
   version?: string
@@ -77,7 +87,7 @@ type _AppUpdateCheckResponseDTOContract = VexApiSpecExpect<_AppUpdateCheckRespon
 export interface AuthResultDTOSpec {
   user: UserDTOSpec
   session: { id: string } & { user_id: string } & { access_token?: string } & { expires_at: string } & { revoked_at?: null | string } & { created_at: string }
-  access_grant?: null | { policy_sync_pending?: boolean } & { id: string } & { user_id: string } & { status: string } & { device_limit: number } & { tier: string } & { rate_limit_mbps?: null | number } & { traffic_priority: number } & { expires_at?: null | string } & { active_devices: number } & { remaining_devices: number } & { active: boolean } & { created_at: string } & { updated_at: string }
+  subscription_activation?: null | { base_subscription_id: string } & { policy_overlay_id?: string } & { origin: string } & { source_id: string } & { replayed: boolean }
 }
 type _AuthResultDTOContract = VexApiSpecExpect<AuthResultDTOSpec extends AuthResultDTO ? true : false>
 
@@ -156,6 +166,17 @@ export interface DeviceIdentityChallengeDTOSpec {
 }
 type _DeviceIdentityChallengeDTOContract = VexApiSpecExpect<DeviceIdentityChallengeDTOSpec extends DeviceIdentityChallengeDTO ? true : false>
 
+export interface DeviceTrafficQuotaDTOSpec {
+  device_id: string
+  used_bytes: number
+  limit_bytes: number
+  reset_at: string
+  multiplier: number
+  limit_reached: boolean
+  effective_rate_limit_mbps?: null | number
+}
+type _DeviceTrafficQuotaDTOContract = VexApiSpecExpect<DeviceTrafficQuotaDTOSpec extends DeviceTrafficQuotaDTO ? true : false>
+
 export interface DeviceUsageDTOSpec {
   connection_sampled_at?: null | string
   connection_freshness?: string
@@ -185,6 +206,7 @@ export interface DeviceUsageResponseDTOSpec {
   client_ip?: string
   current_device_id?: string
   current_device_by?: string
+  traffic_quota?: null | DeviceTrafficQuotaDTOSpec
   usage: DeviceUsageDTOSpec[]
 }
 type _DeviceUsageResponseDTOContract = VexApiSpecExpect<DeviceUsageResponseDTOSpec extends DeviceUsageResponseDTO ? true : false>
@@ -273,7 +295,7 @@ export interface NativeVPNProfileDTOSpec {
   assigned_ipv4?: string
   dns?: string[]
   allowed_ips?: string[]
-  amnezia?: null | Record<string, unknown>
+  amnezia?: null | { jc?: number } & { jmin?: number } & { jmax?: number } & { s1?: number } & { s2?: number } & { s3?: number } & { s4?: number } & { h1?: string } & { h2?: string } & { h3?: string } & { h4?: string } & { i1?: string } & { i2?: string } & { i3?: string } & { i4?: string } & { i5?: string } & { header_protection_key?: string } & { content_padding_addition?: string } & { rekey_after_time?: string } & { rekey_timeout?: string } & { reject_after_time?: string } & { keepalive_timeout?: string } & { max_handshake_attempts?: string } & { persistent_keepalive?: string }
   amnezia_version?: number
   expires_at?: null | string
   config?: string
@@ -308,6 +330,17 @@ export interface RegisterNativeDeviceResultDTOSpec {
 }
 type _RegisterNativeDeviceResultDTOContract = VexApiSpecExpect<RegisterNativeDeviceResultDTOSpec extends RegisterNativeDeviceResultDTO ? true : false>
 
+export interface StagedDevicePSKProfileDTOSpec {
+  rotation_id: string
+  activate: boolean
+  current_version: number
+  profile_version: number
+  profile_digest: string
+  deadline_at: string
+  profile: { unchanged?: boolean } & { version: number } & { revoked: boolean } & { rotation_required: boolean } & { device_id?: string } & { client_public_key?: string } & { client_key_epoch?: number } & { protocol?: string } & { server?: string } & { port?: number } & { server_public_key?: string } & { preshared_key?: string } & { assigned_ipv4?: string } & { dns?: string[] } & { allowed_ips?: string[] } & { amnezia?: null | { jc?: number } & { jmin?: number } & { jmax?: number } & { s1?: number } & { s2?: number } & { s3?: number } & { s4?: number } & { h1?: string } & { h2?: string } & { h3?: string } & { h4?: string } & { i1?: string } & { i2?: string } & { i3?: string } & { i4?: string } & { i5?: string } & { header_protection_key?: string } & { content_padding_addition?: string } & { rekey_after_time?: string } & { rekey_timeout?: string } & { reject_after_time?: string } & { keepalive_timeout?: string } & { max_handshake_attempts?: string } & { persistent_keepalive?: string } } & { amnezia_version?: number } & { expires_at?: null | string } & { config?: string } & { bypass_ranges?: string[] } & { bypass_domains?: string[] } & { routing_policy_version?: string } & { authorization?: null | { algorithm: string } & { key_id: string } & { payload_base64: string } & { signature_base64: string } }
+}
+type _StagedDevicePSKProfileDTOContract = VexApiSpecExpect<StagedDevicePSKProfileDTOSpec extends StagedDevicePSKProfileDTO ? true : false>
+
 export interface SupportMessageDTOSpec {
   id: string
   ticket_id: string
@@ -332,6 +365,7 @@ export interface SupportTicketDTOSpec {
   assigned_admin_user_id?: string
   source: string
   admin_note?: string
+  has_unread_reply: boolean
   support_rating?: null | number
   support_feedback?: string
   support_rated_at?: null | string

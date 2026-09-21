@@ -15,6 +15,8 @@ import {
   type VpnDevice,
   type VpnLocation,
   type VpnDeviceUsage,
+  type VpnDeviceUsageSnapshot,
+  type VpnTrafficQuota,
   type PreparedTunnel,
   type PreparedTunnelOptions,
   type ClientDiagnosticsReportInput,
@@ -22,6 +24,7 @@ import {
 import {
   type DeviceDTO,
   type DeviceIdentityChallengeDTO,
+  type DeviceTrafficQuotaDTO,
   type DeviceUsageDTO,
   type DeviceUsageResponseDTO,
   type LocationDTO,
@@ -227,8 +230,22 @@ export async function vpnLocations(accessToken: string): Promise<VpnLocation[]> 
 }
 
 export async function vpnDeviceUsage(accessToken: string): Promise<VpnDeviceUsage[]> {
-  const response = await jsonRequest<DeviceUsageResponseDTO>('/v1/devices/usage', { accessToken, suppressErrorLog: true });
-  return (response.usage ?? []).map(parseDeviceUsage);
+  return (await vpnDeviceUsageSnapshot(accessToken)).usage;
+}
+
+export async function vpnDeviceUsageSnapshot(accessToken: string, deviceId?: string): Promise<VpnDeviceUsageSnapshot> {
+  const query = new URLSearchParams();
+  if (deviceId?.trim()) {
+    query.set('device_id', deviceId.trim());
+  }
+  const path = query.size > 0 ? `/v1/devices/usage?${query.toString()}` : '/v1/devices/usage';
+  const response = await jsonRequest<DeviceUsageResponseDTO>(path, { accessToken, suppressErrorLog: true });
+  return {
+    usage: (response.usage ?? []).map(parseDeviceUsage),
+    currentDeviceId: response.current_device_id || undefined,
+    currentDeviceBy: response.current_device_by || undefined,
+    trafficQuota: response.traffic_quota ? parseDeviceTrafficQuota(response.traffic_quota) : undefined,
+  };
 }
 
 export async function reportVpnConnect(accessToken: string, tunnel: PreparedTunnel | { device?: VpnDevice; profileVersion?: number }): Promise<void> {
@@ -548,6 +565,28 @@ export function parseDeviceUsage(item: DeviceUsageDTO): VpnDeviceUsage {
     rxBytes: typeof item.rx_bytes === 'number' ? item.rx_bytes : 0,
     txBytes: typeof item.tx_bytes === 'number' ? item.tx_bytes : 0,
     totalBytes: typeof item.total_bytes === 'number' ? item.total_bytes : 0,
+    historicalRxBytes: typeof item.historical_rx_bytes === 'number' ? item.historical_rx_bytes : 0,
+    historicalTxBytes: typeof item.historical_tx_bytes === 'number' ? item.historical_tx_bytes : 0,
+    historicalTotalBytes: typeof item.historical_total_bytes === 'number' ? item.historical_total_bytes : 0,
+    lastNonzeroTrafficAt: item.last_nonzero_traffic_at || undefined,
+    rateLimitMbps: typeof item.rate_limit_mbps === 'number' ? item.rate_limit_mbps : undefined,
+    trafficPriority: typeof item.traffic_priority === 'number' ? item.traffic_priority : 0,
+    rxRateBps: typeof item.rx_rate_bps === 'number' ? item.rx_rate_bps : undefined,
+    txRateBps: typeof item.tx_rate_bps === 'number' ? item.tx_rate_bps : undefined,
+  };
+}
+
+export function parseDeviceTrafficQuota(item: DeviceTrafficQuotaDTO): VpnTrafficQuota {
+  return {
+    deviceId: item.device_id,
+    usedBytes: typeof item.used_bytes === 'number' ? item.used_bytes : 0,
+    limitBytes: typeof item.limit_bytes === 'number' ? item.limit_bytes : 0,
+    resetAt: item.reset_at,
+    multiplier: typeof item.multiplier === 'number' ? item.multiplier : 1,
+    limitReached: Boolean(item.limit_reached),
+    effectiveRateLimitMbps: typeof item.effective_rate_limit_mbps === 'number'
+      ? item.effective_rate_limit_mbps
+      : undefined,
   };
 }
 

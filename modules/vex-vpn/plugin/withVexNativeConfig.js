@@ -15,6 +15,8 @@ const androidPermissions = [
 
 const notificationChannelMetaName = 'com.google.firebase.messaging.default_notification_channel_id';
 const networkSecurityConfigResource = '@xml/network_security_config';
+const backupRulesResource = '@xml/backup_rules';
+const dataExtractionRulesResource = '@xml/data_extraction_rules';
 const updatesMetaData = {
   'expo.modules.updates.ENABLED': '${vexUpdatesEnabled}',
   'expo.modules.updates.ENABLE_BSDIFF_PATCH_SUPPORT': 'true',
@@ -36,6 +38,9 @@ module.exports = function withVexNativeConfig(config, props = {}) {
     const manifest = mod.modResults.manifest;
     const application = getMainApplication(manifest);
     application.$['android:networkSecurityConfig'] = networkSecurityConfigResource;
+    application.$['android:allowBackup'] = 'false';
+    application.$['android:fullBackupContent'] = backupRulesResource;
+    application.$['android:dataExtractionRules'] = dataExtractionRulesResource;
 
     upsertMetaData(application, notificationChannelMetaName, notificationChannelId);
     Object.entries(updatesMetaData).forEach(([name, value]) => upsertMetaData(application, name, value));
@@ -52,6 +57,8 @@ module.exports = function withVexNativeConfig(config, props = {}) {
       const resXmlDir = path.join(mod.modRequest.platformProjectRoot, 'app/src/main/res/xml');
       fs.mkdirSync(resXmlDir, { recursive: true });
       fs.writeFileSync(path.join(resXmlDir, 'network_security_config.xml'), networkSecurityConfigXml(), 'utf8');
+      fs.writeFileSync(path.join(resXmlDir, 'backup_rules.xml'), backupRulesXml(), 'utf8');
+      fs.writeFileSync(path.join(resXmlDir, 'data_extraction_rules.xml'), dataExtractionRulesXml(), 'utf8');
       return mod;
     },
   ]);
@@ -184,9 +191,39 @@ function networkSecurityConfigXml() {
   return `<?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
   <base-config cleartextTrafficPermitted="false" />
-  <domain-config cleartextTrafficPermitted="true">
-    <domain includeSubdomains="false">94.141.160.212</domain>
-  </domain-config>
 </network-security-config>
+`;
+}
+
+function backupRulesXml() {
+  return `<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+  <exclude domain="root" path="." />
+  <exclude domain="file" path="." />
+  <exclude domain="database" path="." />
+  <exclude domain="sharedpref" path="." />
+  <exclude domain="external" path="." />
+</full-backup-content>
+`;
+}
+
+function dataExtractionRulesXml() {
+  return `<?xml version="1.0" encoding="utf-8"?>
+<data-extraction-rules>
+  <cloud-backup>
+    <exclude domain="root" path="." />
+    <exclude domain="file" path="." />
+    <exclude domain="database" path="." />
+    <exclude domain="sharedpref" path="." />
+    <exclude domain="external" path="." />
+  </cloud-backup>
+  <device-transfer>
+    <exclude domain="root" path="." />
+    <exclude domain="file" path="." />
+    <exclude domain="database" path="." />
+    <exclude domain="sharedpref" path="." />
+    <exclude domain="external" path="." />
+  </device-transfer>
+</data-extraction-rules>
 `;
 }

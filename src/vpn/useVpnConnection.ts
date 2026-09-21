@@ -6,6 +6,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import {
   type Entitlement,
   type VpnDevice,
+  type VpnDeviceUsageSnapshot,
   type VpnLocation,
   entitlement,
   acknowledgeStagedDevicePSKProfile,
@@ -14,6 +15,7 @@ import {
   registerDevicePushToken,
   vexApiBaseUrl,
   vpnDeviceUsage,
+  vpnDeviceUsageSnapshot,
   vpnDevices,
   vpnLocations,
 } from '@/api/vexApi';
@@ -265,6 +267,7 @@ export function useVpnConnection() {
     ...deviceLocationLatencyCache,
   }));
   const [devicesData, setDevicesData] = useState<VpnDevice[] | null>(null);
+  const [deviceUsageSnapshot, setDeviceUsageSnapshot] = useState<VpnDeviceUsageSnapshot | null>(null);
   const accessToken = session?.accessToken;
   const cacheUserId = session?.user.id ?? '';
   const catalogOwner = `${cacheUserId}:${accessToken ?? ''}`;
@@ -388,6 +391,15 @@ export function useVpnConnection() {
   const activeDevice = activeProfile?.device
     ? (devicesData ?? persistedDevices)?.find((device) => device.id === activeProfile.device?.id) ?? activeProfile.device
     : undefined;
+
+  const currentDeviceUsage = useMemo(
+    () => deviceUsageSnapshot?.usage.find((item) => item.deviceId === activeProfileDeviceId) ?? null,
+    [activeProfileDeviceId, deviceUsageSnapshot],
+  );
+  const snapshotTrafficQuota = deviceUsageSnapshot?.trafficQuota;
+  const trafficQuota = snapshotTrafficQuota?.deviceId === activeProfileDeviceId
+    ? snapshotTrafficQuota
+    : null;
 
   useEffect(() => {
     const nextCacheSession = { userId: cacheUserId };
@@ -532,6 +544,27 @@ export function useVpnConnection() {
       if (timer) clearInterval(timer);
     };
   }, [accessToken, activeProfile?.device?.id, customerRealtime.connected, customerRealtime.revision, devicesQueryKey, fetchVpnDevices, isConnected, queryClient]);
+
+  useEffect(() => {
+    if (!accessToken || !activeProfileDeviceId || !isAppActive) return undefined;
+    let cancelled = false;
+    vpnDeviceUsageSnapshot(accessToken, activeProfileDeviceId)
+      .then((value) => {
+        if (!cancelled) setDeviceUsageSnapshot(value);
+      })
+      .catch(() => undefined);
+    const timer = setInterval(() => {
+      vpnDeviceUsageSnapshot(accessToken, activeProfileDeviceId)
+        .then((value) => {
+          if (!cancelled) setDeviceUsageSnapshot(value);
+        })
+        .catch(() => undefined);
+    }, activeDeviceRefreshMs);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [accessToken, activeProfileDeviceId, isAppActive]);
 
   useEffect(() => {
     if (!cacheUserId || !entitlementData) {
@@ -1509,8 +1542,11 @@ export function useVpnConnection() {
     activeProfileConfig,
     activeProfileDeviceId,
     isKeyRotationBusy,
+    accountEmail: session?.user.email ?? '',
     accountTierLabel,
     accountSummaryText,
+    currentDeviceUsage,
+    trafficQuota,
     selectedLocation,
     selectedLatencyText,
     canCancelConnecting,

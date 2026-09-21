@@ -844,6 +844,9 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
   }
 
   private fun openUnknownSourcesSettings() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+      return
+    }
     val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
       data = Uri.parse("package:${reactContext.packageName}")
       addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

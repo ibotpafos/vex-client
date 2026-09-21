@@ -1437,7 +1437,7 @@ export function useVpnConnection() {
       return;
     }
     await switchConnectedVpnLocation(targetLocationId, closeOverlay);
-  }, [availableLocations, clearProfile, isConnected, isVpnBusy, selectedLocationId, switchConnectedVpnLocation]);
+  }, [availableLocations, clearProfile, isConnected, isVpnBusy, selectedLocationId, setSelectedLocationId, switchConnectedVpnLocation]);
 
   const openServerPicker = useCallback((visibleLatencyText?: string, visibleLocationId?: string) => {
     void refreshLocations('picker_open').catch(() => undefined);

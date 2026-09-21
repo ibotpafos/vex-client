@@ -7,6 +7,7 @@ import {
   type Entitlement,
   type VpnDevice,
   type VpnLocation,
+  type VpnDeviceUsageSnapshot,
   entitlement,
   acknowledgeStagedDevicePSKProfile,
   fetchStagedDevicePSKProfile,
@@ -14,6 +15,7 @@ import {
   registerDevicePushToken,
   vexApiBaseUrl,
   vpnDeviceUsage,
+  vpnDeviceUsageSnapshot,
   vpnDevices,
   vpnLocations,
 } from '@/api/vexApi';
@@ -265,6 +267,7 @@ export function useVpnConnection() {
     ...deviceLocationLatencyCache,
   }));
   const [devicesData, setDevicesData] = useState<VpnDevice[] | null>(null);
+  const [deviceUsageSnapshot, setDeviceUsageSnapshot] = useState<VpnDeviceUsageSnapshot | null>(null);
   const accessToken = session?.accessToken;
   const cacheUserId = session?.user.id ?? '';
   const catalogOwner = `${cacheUserId}:${accessToken ?? ''}`;
@@ -534,6 +537,33 @@ export function useVpnConnection() {
   }, [accessToken, activeProfile?.device?.id, customerRealtime.connected, customerRealtime.revision, devicesQueryKey, fetchVpnDevices, isConnected, queryClient]);
 
   useEffect(() => {
+    if (!accessToken) {
+      setDeviceUsageSnapshot(null);
+      return undefined;
+    }
+    if (!isAppActive) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    const refreshUsageSnapshot = async () => {
+      const value = await vpnDeviceUsageSnapshot(accessToken, activeProfileDeviceId || undefined).catch(() => null);
+      if (!cancelled && value) {
+        setDeviceUsageSnapshot(value);
+      }
+    };
+
+    void refreshUsageSnapshot();
+    const timer = setInterval(() => {
+      void refreshUsageSnapshot();
+    }, activeDeviceRefreshMs);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [accessToken, activeProfileDeviceId, isAppActive]);
+
+  useEffect(() => {
     if (!cacheUserId || !entitlementData) {
       return;
     }
@@ -641,6 +671,12 @@ export function useVpnConnection() {
 
   const accountTierLabel = subscriptionTierLabel(entitlementState);
   const accountSummaryText = subscriptionSummaryText(entitlementState);
+  const accountEmail = session?.user.email ?? '';
+  const currentUsageDeviceId = activeProfileDeviceId || deviceUsageSnapshot?.currentDeviceId;
+  const currentDeviceUsage = deviceUsageSnapshot?.usage.find((item) => item.deviceId === currentUsageDeviceId)
+    ?? deviceUsageSnapshot?.usage.find((item) => item.connected)
+    ?? deviceUsageSnapshot?.usage[0];
+  const trafficQuota = deviceUsageSnapshot?.trafficQuota;
   const selectedLocation = catalogLocations.find((location) => location.id === selectedLocationId) ?? availableLocations[0];
   // Home and the server picker must use the same device-to-location probe.
   // clientLatencyMs remains diagnostic telemetry for the active device only.
@@ -1509,8 +1545,11 @@ export function useVpnConnection() {
     activeProfileConfig,
     activeProfileDeviceId,
     isKeyRotationBusy,
+    accountEmail,
     accountTierLabel,
     accountSummaryText,
+    currentDeviceUsage,
+    trafficQuota,
     selectedLocation,
     selectedLatencyText,
     canCancelConnecting,

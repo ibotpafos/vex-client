@@ -19,12 +19,19 @@ export function isVpnTransportFallbackError(error: unknown): boolean {
     return true;
   }
   const message = errorText(error).toLowerCase();
+  // Location/port failover changes a user's exit. Only do it for errors that
+  // identify the transport path; generic errors can be entitlement, profile,
+  // permission, or local application faults and must stay on the selected
+  // location for a clear, recoverable error.
   return message.includes('handshake') ||
     message.includes('vpn connection failed') ||
     message.includes('vpn_connect_failed') ||
-    message.includes('network') ||
-    message.includes('timeout') ||
-    message.includes('timed out');
+    message.includes('vpn connect timed out') ||
+    message.includes('connection timed out') ||
+    message.includes('network is unreachable') ||
+    message.includes('no route to host') ||
+    message.includes('connection refused') ||
+    message.includes('connection reset');
 }
 
 export function connectionAttemptsForProfile(profile: VpnProfile): VpnProfile[] {

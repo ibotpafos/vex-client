@@ -32,6 +32,7 @@ import {
   type HotVpnProfileRecord,
 } from '../src/vpn/hotProfileCacheCore';
 import { AWG3RecoveryPolicyError, connectSuppliedProfile, connectionAttemptsForProfile, isAWG3Profile, isVpnTransportFallbackError, profileEndpoint } from '../src/vpn/connectionFallback';
+import { foregroundLatencyTargets } from '../src/vpn/foregroundLatencyTargets';
 import { connectableLocalProfile, explicitConnectProfileResolutionOptions, shouldUseLocalProfileBeforeOnline, vpnConnectTelemetry, vpnConnectTimingSamples, vpnUnexpectedDisconnectTelemetry } from '../src/vpn/connectFlow';
 import { recoverVpnConnection } from '../src/vpn/connectionRecovery';
 import { connectFreshSameLocationProfile } from '../src/vpn/sameLocationProfileRecovery';
@@ -45,7 +46,7 @@ import { disconnectWithRecoveryTimeout } from '../src/vpn/disconnectRecovery';
 import { waitForVerifiedVpnConnection } from '../src/vpn/connectVerification';
 import { cleanupFailedVpnConnection } from '../src/vpn/failedConnectionCleanup';
 import { androidExperimentalRoutingEnabled, androidProfilePlatform, androidVpnProfileRequiresRefresh, androidVpnProfileWithinBinderBudget, vpnProfileRouteCount } from '../src/vpn/androidRoutingSafety';
-import { profileResolutionOrder } from '../src/vpn/profileResolutionFallback';
+import { isProfileResolutionFallbackError, profileResolutionOrder } from '../src/vpn/profileResolutionFallback';
 import { isKeyEpochMismatchError, nextManagedKeyEpoch } from '../src/vpn/keyEpochRecovery';
 import { nativeVpnDeviceForClient } from '../src/vpn/nativeDeviceSelection';
 import { assessNativeTunnelHealth, localStatusHealthReasons } from '../src/vpn/nativeTunnelHealth';
@@ -501,7 +502,7 @@ assertDeepEqual(
 
   const localConfig = appConfig(configContext);
   assertEqual(localConfig.updates?.enabled, false);
-  assertEqual(localConfig.runtimeVersion, '1.0.57');
+  assertEqual(localConfig.runtimeVersion, localConfig.version);
 
   process.env.VEX_BUILD_PROFILE = 'production';
   process.env.VEX_UPDATES_ENABLED = '1';
@@ -1415,6 +1416,36 @@ function runCreateDeviceRequestTests(): void {
 assertEqual(isVpnTransportFallbackError(new Error('VPN handshake did not complete')), true);
 assertEqual(isVpnTransportFallbackError(new AWG3RecoveryPolicyError('refresh AWG3 profile')), true);
 assertEqual(isVpnTransportFallbackError(new Error('Подписка не активна.')), false);
+assertEqual(isVpnTransportFallbackError(new Error('Network request failed')), false);
+assertEqual(isVpnTransportFallbackError(new Error('Unexpected timeout while parsing profile')), false);
+assertEqual(isVpnTransportFallbackError(new Error('Network is unreachable')), true);
+
+{
+  const locations = [
+    { ...locationCandidate('de'), endpoint: 'de.example.com:51820' },
+    { ...locationCandidate('fi'), endpoint: 'fi.example.com:51820' },
+    { ...locationCandidate('nl'), endpoint: 'NL.EXAMPLE.COM:51820' },
+    locationCandidate('se'),
+  ];
+  assertDeepEqual(
+    foregroundLatencyTargets({
+      activeEndpoint: 'fi.example.com:51820',
+      locations,
+      selectedLocationId: 'fi',
+      serverSelectionMode: 'manual',
+    }).map((location) => location.id),
+    [],
+  );
+  assertDeepEqual(
+    foregroundLatencyTargets({
+      activeEndpoint: 'fi.example.com:51820',
+      locations,
+      selectedLocationId: 'fi',
+      serverSelectionMode: 'auto',
+    }).map((location) => location.id),
+    ['de', 'nl'],
+  );
+}
 
 {
   const best = chooseBestVpnLocation([
@@ -1794,6 +1825,10 @@ assertDeepEqual(
   profileResolutionOrder('de', profileFallbackLocations).map((location) => location.id),
   ['de', 'fi'],
 );
+assertEqual(isProfileResolutionFallbackError(new ApiRequestError('missing location target', { status: 404 })), true);
+assertEqual(isProfileResolutionFallbackError(new ApiRequestError('denied', { status: 401 })), false);
+assertEqual(isProfileResolutionFallbackError(new ApiRequestError('conflict', { status: 409 })), false);
+assertEqual(isProfileResolutionFallbackError(new Error('Network request failed')), false);
 }
 
 async function runFailedConnectionCleanupTests(): Promise<void> {

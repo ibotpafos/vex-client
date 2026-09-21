@@ -111,7 +111,7 @@ async function refreshVpnProfile(
   const tunnel = await runProfileRequest(() => {
     queueWaitMs = Math.max(0, Date.now() - queuedAtMs);
     return preparedTunnel(token, undefined, { ...options, locationId: selectedLocationId, routingMode });
-  }, shouldFetch);
+  }, shouldFetch, shouldFetch ? 'background' : 'foreground');
   const profile: VpnProfile = {
     resolutionTiming: tunnel.resolutionTiming ? { ...tunnel.resolutionTiming, queueWaitMs } : undefined,
     config: tunnel.config,

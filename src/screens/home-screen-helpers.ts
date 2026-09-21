@@ -15,6 +15,7 @@ export const nativeReconnectCooldownMs = 120_000;
 export const staleHandshakeReconnectSeconds = 180;
 export const entitlementRefreshMs = 2 * 60_000;
 export const locationRefreshMs = 2 * 60_000;
+export const foregroundLocationProbeMs = 2 * 60_000;
 export const profileRefreshMs = 2 * 60_000;
 export const clientDiagnosticsHeartbeatMs = 5 * 60_000;
 export const clientDiagnosticsErrorCooldownMs = 60_000;

@@ -46,7 +46,7 @@ import { disconnectWithRecoveryTimeout } from '../src/vpn/disconnectRecovery';
 import { waitForVerifiedVpnConnection } from '../src/vpn/connectVerification';
 import { cleanupFailedVpnConnection } from '../src/vpn/failedConnectionCleanup';
 import { androidExperimentalRoutingEnabled, androidProfilePlatform, androidVpnProfileRequiresRefresh, androidVpnProfileWithinBinderBudget, vpnProfileRouteCount } from '../src/vpn/androidRoutingSafety';
-import { profileResolutionOrder } from '../src/vpn/profileResolutionFallback';
+import { isProfileResolutionFallbackError, profileResolutionOrder } from '../src/vpn/profileResolutionFallback';
 import { isKeyEpochMismatchError, nextManagedKeyEpoch } from '../src/vpn/keyEpochRecovery';
 import { nativeVpnDeviceForClient } from '../src/vpn/nativeDeviceSelection';
 import { assessNativeTunnelHealth, localStatusHealthReasons } from '../src/vpn/nativeTunnelHealth';
@@ -1825,6 +1825,10 @@ assertDeepEqual(
   profileResolutionOrder('de', profileFallbackLocations).map((location) => location.id),
   ['de', 'fi'],
 );
+assertEqual(isProfileResolutionFallbackError(new ApiRequestError('missing location target', { status: 404 })), true);
+assertEqual(isProfileResolutionFallbackError(new ApiRequestError('denied', { status: 401 })), false);
+assertEqual(isProfileResolutionFallbackError(new ApiRequestError('conflict', { status: 409 })), false);
+assertEqual(isProfileResolutionFallbackError(new Error('Network request failed')), false);
 }
 
 async function runFailedConnectionCleanupTests(): Promise<void> {

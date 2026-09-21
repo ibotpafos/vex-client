@@ -29,7 +29,10 @@ import {
 } from '@/native/vexVpn';
 import { waitForVerifiedVpnConnection } from '@/vpn/connectVerification';
 import { cleanupFailedVpnConnection } from '@/vpn/failedConnectionCleanup';
-import { profileResolutionOrder } from '@/vpn/profileResolutionFallback';
+import {
+  isProfileResolutionFallbackError,
+  profileResolutionOrder,
+} from '@/vpn/profileResolutionFallback';
 import { androidVpnProfileWithinBinderBudget } from '@/vpn/androidRoutingSafety';
 import { vpnProfileAddressMatchesDevice } from '@/vpn/profileConsistency';
 import {
@@ -155,6 +158,9 @@ export function useVpnConnectionFlow({
         break;
       } catch (error) {
         lastProfileError = error;
+        if (!isProfileResolutionFallbackError(error)) {
+          throw error;
+        }
       }
     }
     if (!profile) {

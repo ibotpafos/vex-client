@@ -34,12 +34,15 @@ assertDeepEqual(homeBrandPresentation(), {
 });
 const germanyLocation: VpnLocation = {
   availability: 'available',
+  capabilities: [],
   city: 'Frankfurt',
   countryCode: 'DE',
+  displayName: 'Germany · Frankfurt',
   flagEmoji: '🇩🇪',
   healthyNodes: 1,
   id: 'de',
   latencyMs: 18,
+  priority: 10,
   status: 'healthy',
 };
 assertDeepEqual(homeLocationCopy(germanyLocation, '18 мс', 'auto'), {

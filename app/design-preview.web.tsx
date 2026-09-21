@@ -8,11 +8,11 @@ import { ServerPickerModal } from '@/components/server-picker-modal';
 import type { ConnectionPhase } from '@/screens/home-screen-helpers';
 
 const previewLocations: VpnLocation[] = [
-  { id: 'nl-amsterdam-1', countryCode: 'NL', city: 'Амстердам 1', flagEmoji: '🇳🇱', availability: 'available', status: 'healthy', healthyNodes: 1, latencyMs: 42 },
-  { id: 'nl-amsterdam-2', countryCode: 'NL', city: 'Амстердам 2', flagEmoji: '🇳🇱', availability: 'available', status: 'healthy', healthyNodes: 1, latencyMs: 35 },
-  { id: 'de-frankfurt-1', countryCode: 'DE', city: 'Франкфурт 1', flagEmoji: '🇩🇪', availability: 'available', status: 'healthy', healthyNodes: 1, latencyMs: 49 },
-  { id: 'de-frankfurt-2', countryCode: 'DE', city: 'Франкфурт 2', flagEmoji: '🇩🇪', availability: 'available', status: 'healthy', healthyNodes: 1, latencyMs: 31 },
-  { id: 'fi-helsinki-1', countryCode: 'FI', city: 'Хельсинки 1', flagEmoji: '🇫🇮', availability: 'available', status: 'healthy', healthyNodes: 1, latencyMs: 56 },
+  { id: 'nl-amsterdam-1', countryCode: 'NL', city: 'Амстердам 1', displayName: 'Нидерланды · Амстердам 1', flagEmoji: '🇳🇱', availability: 'available', priority: 10, status: 'healthy', healthyNodes: 1, capabilities: [], latencyMs: 42 },
+  { id: 'nl-amsterdam-2', countryCode: 'NL', city: 'Амстердам 2', displayName: 'Нидерланды · Амстердам 2', flagEmoji: '🇳🇱', availability: 'available', priority: 20, status: 'healthy', healthyNodes: 1, capabilities: [], latencyMs: 35 },
+  { id: 'de-frankfurt-1', countryCode: 'DE', city: 'Франкфурт 1', displayName: 'Германия · Франкфурт 1', flagEmoji: '🇩🇪', availability: 'available', priority: 30, status: 'healthy', healthyNodes: 1, capabilities: [], latencyMs: 49 },
+  { id: 'de-frankfurt-2', countryCode: 'DE', city: 'Франкфурт 2', displayName: 'Германия · Франкфурт 2', flagEmoji: '🇩🇪', availability: 'available', priority: 40, status: 'healthy', healthyNodes: 1, capabilities: [], latencyMs: 31 },
+  { id: 'fi-helsinki-1', countryCode: 'FI', city: 'Хельсинки 1', displayName: 'Финляндия · Хельсинки 1', flagEmoji: '🇫🇮', availability: 'available', priority: 50, status: 'healthy', healthyNodes: 1, capabilities: [], latencyMs: 56 },
 ];
 
 export default function DesignPreviewScreen() {

@@ -67,8 +67,12 @@ export default function SettingsScreen() {
     handleAntiLeakToggle,
   } = useVexSettings(showSettingsToast);
   const {
+    accountEmail,
+    accountSummaryText,
+    accountTierLabel,
     isSmartRoutingEnabled,
     handleSmartRoutingToggle,
+    trafficQuota,
     vpnStatus,
   } = useVpnConnectionContext();
 
@@ -362,6 +366,29 @@ export default function SettingsScreen() {
         </VexSection>
 
         <VexSection title="Аккаунт и помощь">
+          <View style={styles.accountCard}>
+            <Text numberOfLines={1} style={styles.accountPlan}>VEX · {accountTierLabel}</Text>
+            {accountEmail ? <Text numberOfLines={1} style={styles.accountEmail}>{accountEmail}</Text> : null}
+            {accountSummaryText ? <Text numberOfLines={2} style={styles.accountSummary}>{accountSummaryText}</Text> : null}
+            {trafficQuota ? (
+              <View style={styles.quotaCard}>
+                <View style={styles.quotaRow}>
+                  <Text style={styles.quotaLabel}>Трафик за месяц</Text>
+                  <Text style={styles.quotaValue}>
+                    {formatQuotaBytes(trafficQuota.usedBytes)} / {formatQuotaBytes(trafficQuota.limitBytes)}
+                  </Text>
+                </View>
+                <Text style={styles.quotaMeta}>
+                  Сброс {formatQuotaResetAt(trafficQuota.resetAt)} · мобильный трафик ×{trafficQuota.mobileMultiplier}
+                </Text>
+                {trafficQuota.limitReached ? (
+                  <Text style={styles.quotaWarning}>
+                    Лимит достигнут · скорость {trafficQuota.postLimitRateMbps} Мбит/с
+                  </Text>
+                ) : null}
+              </View>
+            ) : null}
+          </View>
           <VexPressable
             accessibilityLabel="Открыть личный кабинет на сайте"
             accessibilityRole="button"
@@ -468,6 +495,26 @@ function formatPlatformLabel(platform: string) {
   return platform;
 }
 
+function formatQuotaBytes(bytes: number) {
+  const gib = Math.max(0, bytes) / (1024 ** 3);
+  if (gib >= 10) return `${Math.round(gib)} ГБ`;
+  return `${gib.toFixed(1)} ГБ`;
+}
+
+function formatQuotaResetAt(value: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+  if (!match) return "1-го числа";
+  const monthNames = [
+    "января", "февраля", "марта", "апреля", "мая", "июня",
+    "июля", "августа", "сентября", "октября", "ноября", "декабря",
+  ];
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  return month >= 1 && month <= 12 && day >= 1
+    ? `${day} ${monthNames[month - 1]}`
+    : "1-го числа";
+}
+
 type SettingsNativeSwitchProps = {
   accessibilityLabel: string;
   disabled: boolean;
@@ -564,6 +611,63 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 18,
     marginTop: 6,
+  },
+  accountCard: {
+    gap: 5,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  accountPlan: {
+    color: vexColors.text,
+    fontSize: 18,
+    fontWeight: "900",
+  },
+  accountEmail: {
+    color: vexColors.textSoft,
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  accountSummary: {
+    color: vexColors.muted,
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  quotaCard: {
+    backgroundColor: "rgba(34,211,238,0.07)",
+    borderColor: "rgba(34,211,238,0.18)",
+    borderRadius: 12,
+    borderWidth: 1,
+    gap: 6,
+    marginTop: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  quotaRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 10,
+    justifyContent: "space-between",
+  },
+  quotaLabel: {
+    color: vexColors.muted,
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  quotaValue: {
+    color: vexColors.text,
+    fontSize: 13,
+    fontWeight: "900",
+  },
+  quotaMeta: {
+    color: vexColors.muted,
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  quotaWarning: {
+    color: "#F3C969",
+    fontSize: 12,
+    fontWeight: "900",
+    lineHeight: 17,
   },
   settingRow: {
     alignItems: "center",

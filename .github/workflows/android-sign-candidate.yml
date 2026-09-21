@@ -1,10 +1,5 @@
-name: Android legacy app signed candidate
+name: Android 1.0.58 signed candidate
 on:
-  push:
-    branches: [codex/android-app-restoration-20260904]
-    paths:
-      - .github/workflows/android-sign-candidate.yml
-      - scripts/sign_android_candidate_ci.sh
   workflow_dispatch:
 permissions:
   contents: write # GitHub requires write access to read draft release assets.
@@ -16,17 +11,17 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
-      - name: Verify legacy private key and sign fixed input
+      - name: Verify release key and sign fixed input
         env:
           GH_TOKEN: ${{ github.token }}
           ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
           VEX_UPLOAD_STORE_PASSWORD: ${{ secrets.VEX_UPLOAD_STORE_PASSWORD }}
           VEX_UPLOAD_KEY_ALIAS: ${{ secrets.VEX_UPLOAD_KEY_ALIAS }}
           VEX_UPLOAD_KEY_PASSWORD: ${{ secrets.VEX_UPLOAD_KEY_PASSWORD }}
-        run: bash scripts/sign_android_candidate_ci.sh 66d29903a29c23ecf084c718b3b5a780131638247b81d314a0169d8bfb532e14 internal-app-signing-20260907-1005765-location-stability
+        run: bash scripts/sign_android_candidate_ci.sh d3d3ac4cfac3c5eb5c3f6708b83b8c617c6230d95cfb1d1d778aefbcff29d2dc internal-app-signing-20260921-1005866-quota-ui
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: signed-app-candidate
+          name: signed-app-1.0.58-1005866
           path: signed-candidate/
           if-no-files-found: error
           retention-days: 14

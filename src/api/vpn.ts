@@ -15,6 +15,8 @@ import {
   type VpnDevice,
   type VpnLocation,
   type VpnDeviceUsage,
+  type VpnDeviceUsageSnapshot,
+  type VpnTrafficQuota,
   type PreparedTunnel,
   type PreparedTunnelOptions,
   type ClientDiagnosticsReportInput,
@@ -24,6 +26,7 @@ import {
   type DeviceIdentityChallengeDTO,
   type DeviceUsageDTO,
   type DeviceUsageResponseDTO,
+  type DeviceTrafficQuotaDTO,
   type LocationDTO,
   type NativeVPNProfileDTO,
   type StagedDevicePSKProfileDTO,
@@ -227,8 +230,25 @@ export async function vpnLocations(accessToken: string): Promise<VpnLocation[]> 
 }
 
 export async function vpnDeviceUsage(accessToken: string): Promise<VpnDeviceUsage[]> {
-  const response = await jsonRequest<DeviceUsageResponseDTO>('/v1/devices/usage', { accessToken, suppressErrorLog: true });
-  return (response.usage ?? []).map(parseDeviceUsage);
+  return (await vpnDeviceUsageSnapshot(accessToken)).usage;
+}
+
+export async function vpnDeviceUsageSnapshot(accessToken: string, deviceId?: string): Promise<VpnDeviceUsageSnapshot> {
+  const query = new URLSearchParams();
+  if (deviceId?.trim()) {
+    query.set('device_id', deviceId.trim());
+  }
+  const suffix = query.size > 0 ? `?${query.toString()}` : '';
+  const response = await jsonRequest<DeviceUsageResponseDTO>(`/v1/devices/usage${suffix}`, {
+    accessToken,
+    suppressErrorLog: true,
+  });
+  return {
+    usage: (response.usage ?? []).map(parseDeviceUsage),
+    currentDeviceId: response.current_device_id || undefined,
+    currentDeviceBy: response.current_device_by || undefined,
+    trafficQuota: parseDeviceTrafficQuota(response.traffic_quota),
+  };
 }
 
 export async function reportVpnConnect(accessToken: string, tunnel: PreparedTunnel | { device?: VpnDevice; profileVersion?: number }): Promise<void> {
@@ -548,6 +568,28 @@ export function parseDeviceUsage(item: DeviceUsageDTO): VpnDeviceUsage {
     rxBytes: typeof item.rx_bytes === 'number' ? item.rx_bytes : 0,
     txBytes: typeof item.tx_bytes === 'number' ? item.tx_bytes : 0,
     totalBytes: typeof item.total_bytes === 'number' ? item.total_bytes : 0,
+    historicalRxBytes: typeof item.historical_rx_bytes === 'number' ? item.historical_rx_bytes : undefined,
+    historicalTxBytes: typeof item.historical_tx_bytes === 'number' ? item.historical_tx_bytes : undefined,
+    historicalTotalBytes: typeof item.historical_total_bytes === 'number' ? item.historical_total_bytes : undefined,
+    lastNonzeroTrafficAt: item.last_nonzero_traffic_at || undefined,
+    rateLimitMbps: typeof item.rate_limit_mbps === 'number' ? item.rate_limit_mbps : undefined,
+    trafficPriority: typeof item.traffic_priority === 'number' ? item.traffic_priority : undefined,
+    rxRateBps: typeof item.rx_rate_bps === 'number' ? item.rx_rate_bps : undefined,
+    txRateBps: typeof item.tx_rate_bps === 'number' ? item.tx_rate_bps : undefined,
+  };
+}
+
+export function parseDeviceTrafficQuota(item?: DeviceTrafficQuotaDTO): VpnTrafficQuota | undefined {
+  if (!item) {
+    return undefined;
+  }
+  return {
+    usedBytes: Number.isFinite(item.used_bytes) ? Math.max(0, item.used_bytes) : 0,
+    limitBytes: Number.isFinite(item.limit_bytes) ? Math.max(0, item.limit_bytes) : 0,
+    resetAt: item.reset_at,
+    mobileMultiplier: Number.isFinite(item.mobile_multiplier) ? Math.max(1, item.mobile_multiplier) : 1,
+    limitReached: Boolean(item.limit_reached),
+    postLimitRateMbps: Number.isFinite(item.post_limit_rate_mbps) ? Math.max(0, item.post_limit_rate_mbps) : 0,
   };
 }
 

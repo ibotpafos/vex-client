@@ -88,6 +88,7 @@ export async function saveHotVpnProfile(
   }
   const store = await readHotVpnProfileStore();
   const storedProfile = { ...profile, source: 'local' as const };
+  delete storedProfile.connectPreparationTiming;
   delete storedProfile.hotProfileAgeMs;
   delete storedProfile.hotProfileUsed;
   const record: HotVpnProfileRecord = {

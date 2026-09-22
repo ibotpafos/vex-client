@@ -255,6 +255,31 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
       throw new Error('Сначала войдите в аккаунт.');
     }
 
+    const preparationStartedAtMs = Date.now();
+    let entitlementWaitMs = 0;
+    let hotProfileLookupMs = 0;
+    let keyRotationMs = 0;
+    let permissionWaitMs = 0;
+    const withConnectPreparationTiming = (profile: VpnProfile): VpnProfile => ({
+      ...profile,
+      connectPreparationTiming: {
+        startedAtMs: preparationStartedAtMs,
+        completedAtMs: Date.now(),
+        entitlementWaitMs,
+        hotProfileLookupMs,
+        keyRotationMs,
+        permissionWaitMs,
+      },
+    });
+    const requestPermissionWithTiming = async () => {
+      const startedAtMs = Date.now();
+      try {
+        return await requestVpnPermission();
+      } finally {
+        permissionWaitMs += Math.max(0, Date.now() - startedAtMs);
+      }
+    };
+
     const preferCached = options.preferCached !== false && options.forceRefresh !== true;
     const cachedProfile = options.cachedProfile ?? cachedProfileForLocation(locationId);
     let forceRouteBudgetRefresh = androidVpnProfileRequiresRefresh(Platform.OS, cachedProfile?.config);
@@ -266,21 +291,23 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
     ) {
       const cachedEntitlement = cachedProfile.entitlement ?? entitlementState;
       if (options.requestPermission !== false) {
-        const permissionGranted = await requestVpnPermission();
+        const permissionGranted = await requestPermissionWithTiming();
         if (!permissionGranted) {
           throw new Error('Разрешение Android VPN не выдано.');
         }
       }
-      const localProfile: VpnProfile = { ...cachedProfile, source: 'local' };
+      const localProfile = withConnectPreparationTiming({ ...cachedProfile, source: 'local' });
       cacheProfile(locationId, localProfile);
       refreshProfileInBackground(locationId, cachedEntitlement!, cachedProfile);
       return localProfile;
     }
 
     if (preferCached && userId) {
+      const hotLookupStartedAtMs = Date.now();
       const hotResult = options.allowPersistentHotProfile === false
         ? { record: null }
         : await loadHotVpnProfileResult(userId, locationId, routingMode);
+      hotProfileLookupMs += Math.max(0, Date.now() - hotLookupStartedAtMs);
       if (hotResult.rejectedReason && hotResult.rejectedReason !== 'missing') {
         onProfileRefreshFailed?.({
           error: new Error(hotResult.rejectedReason),
@@ -301,31 +328,38 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
           throw new Error('Подписка не активна.');
         }
         if (options.requestPermission !== false) {
-          const permissionGranted = await requestVpnPermission();
+          const permissionGranted = await requestPermissionWithTiming();
           if (!permissionGranted) {
             throw new Error('Разрешение Android VPN не выдано.');
           }
         }
-        cacheProfile(locationId, hotProfile);
+        const preparedHotProfile = withConnectPreparationTiming(hotProfile);
+        cacheProfile(locationId, preparedHotProfile);
         refreshProfileInBackground(locationId, hotEntitlement, hotProfile);
-        return hotProfile;
+        return preparedHotProfile;
       }
     }
 
-    const currentEntitlement = hasPaidEntitlement(entitlementState)
-      ? entitlementState
-      : await queryClient.fetchQuery<Entitlement>({
-        queryKey: ['entitlement', accessToken],
-        queryFn: () => entitlement(accessToken),
-        staleTime: 5 * 60_000,
-      });
+    let currentEntitlement = entitlementState;
+    if (!hasPaidEntitlement(currentEntitlement)) {
+      const entitlementStartedAtMs = Date.now();
+      try {
+        currentEntitlement = await queryClient.fetchQuery<Entitlement>({
+          queryKey: ['entitlement', accessToken],
+          queryFn: () => entitlement(accessToken),
+          staleTime: 5 * 60_000,
+        });
+      } finally {
+        entitlementWaitMs += Math.max(0, Date.now() - entitlementStartedAtMs);
+      }
+    }
     if (!hasPaidEntitlement(currentEntitlement)) {
       onSubscriptionRequired();
       throw new Error('Подписка не активна.');
     }
 
     if (options.requestPermission !== false) {
-      const permissionGranted = await requestVpnPermission();
+      const permissionGranted = await requestPermissionWithTiming();
       if (!permissionGranted) {
         throw new Error('Разрешение Android VPN не выдано.');
       }
@@ -358,17 +392,22 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
       }
       throw new Error('Сервер вернул слишком большой VPN-профиль. Повторите подключение после обновления профиля.');
     }
-    cacheProfile(locationId, profile);
     if (profile.rotationRequired) {
       setIsKeyRotationBusy(true);
       try {
         onProfileRotationRequired();
-        profile = await rotateVpnProfileKey(accessToken, profile);
-        cacheProfile(locationId, profile);
+        const rotationStartedAtMs = Date.now();
+        try {
+          profile = await rotateVpnProfileKey(accessToken, profile);
+        } finally {
+          keyRotationMs += Math.max(0, Date.now() - rotationStartedAtMs);
+        }
       } finally {
         setIsKeyRotationBusy(false);
       }
     }
+    profile = withConnectPreparationTiming(profile);
+    cacheProfile(locationId, profile);
     return profile;
   }, [accessToken, cacheProfile, cachedProfileForLocation, entitlementState, onProfileRefreshFailed, onProfileRotationRequired, onSubscriptionRequired, queryClient, refreshProfileInBackground, requestVpnPermission, routingMode, userId]);
 

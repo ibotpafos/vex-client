@@ -152,14 +152,20 @@ test('background profile refresh revalidates the cached version before issuing a
 test('connection samples include detailed profile stages only for the current online resolution', () => {
   const samples = load('src/vpn/connectFlow.ts', 'vpnConnectTimingSamples', {});
   const resolutionTiming = {startedAtMs:110,localPrepareMs:3,deviceLookupMs:0,profileRequestMs:45,queueWaitMs:7};
+  const connectPreparationTiming = {startedAtMs:105,completedAtMs:195,entitlementWaitMs:11,hotProfileLookupMs:12,keyRotationMs:13,permissionWaitMs:14};
   const input = {endpointAttempts:[],tapStartedAt:100,nativeStartMs:200,interfaceUpMs:250,verificationCompletedMs:300,
-    profile:{...cached,source:'api',resolutionTiming}};
+    profile:{...cached,source:'api',resolutionTiming,connectPreparationTiming}};
   const current = samples(input);
   assert.equal(current.profile_local_prepare_ms,3);
   assert.equal(current.profile_device_lookup_ms,0);
   assert.equal(current.profile_request_ms,45);
   assert.equal(current.profile_queue_wait_ms,7);
+  assert.equal(current.profile_entitlement_wait_ms,11);
+  assert.equal(current.profile_hot_cache_lookup_ms,12);
+  assert.equal(current.profile_key_rotation_ms,13);
+  assert.equal(current.vpn_permission_wait_ms,14);
   for (const profile of [{...input.profile,source:'local'}, {...input.profile,resolutionTiming:{...resolutionTiming,startedAtMs:50}}]) {
     assert.equal(samples({...input,profile}).profile_request_ms,undefined,'old cached timings must not be attributed to a new connection');
   }
+  assert.equal(samples({...input,profile:{...input.profile,connectPreparationTiming:{...connectPreparationTiming,startedAtMs:50}}}).vpn_permission_wait_ms,undefined,'old connect preparation timings must not be attributed to a new connection');
 });

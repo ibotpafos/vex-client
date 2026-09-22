@@ -55,6 +55,7 @@ export function vpnConnectTimingSamples(input: {
   verificationCompletedMs: number;
 }): Record<string, unknown> {
   const timing = input.profile.resolutionTiming;
+  const preparation = input.profile.connectPreparationTiming;
   const stages: Record<string, number> = {};
   if (input.profile.source === 'api' && timing && timing.startedAtMs >= input.tapStartedAt && timing.startedAtMs <= input.nativeStartMs) {
     for (const [field, value] of Object.entries({
@@ -62,6 +63,22 @@ export function vpnConnectTimingSamples(input: {
       profile_device_lookup_ms: timing.deviceLookupMs,
       profile_request_ms: timing.profileRequestMs,
       profile_queue_wait_ms: timing.queueWaitMs,
+    })) {
+      if (typeof value === 'number' && Number.isFinite(value) && value >= 0) stages[field] = value;
+    }
+  }
+  if (
+    preparation &&
+    preparation.startedAtMs >= input.tapStartedAt &&
+    preparation.startedAtMs <= input.nativeStartMs &&
+    preparation.completedAtMs >= preparation.startedAtMs &&
+    preparation.completedAtMs <= input.nativeStartMs
+  ) {
+    for (const [field, value] of Object.entries({
+      profile_entitlement_wait_ms: preparation.entitlementWaitMs,
+      profile_hot_cache_lookup_ms: preparation.hotProfileLookupMs,
+      profile_key_rotation_ms: preparation.keyRotationMs,
+      vpn_permission_wait_ms: preparation.permissionWaitMs,
     })) {
       if (typeof value === 'number' && Number.isFinite(value) && value >= 0) stages[field] = value;
     }

@@ -9,6 +9,14 @@ import type { PreparedTunnel, PreparedTunnelOptions } from '../api/types';
 
 export type VpnProfile = {
   resolutionTiming?: PreparedTunnel['resolutionTiming'];
+  connectPreparationTiming?: {
+    startedAtMs: number;
+    completedAtMs: number;
+    entitlementWaitMs: number;
+    hotProfileLookupMs: number;
+    keyRotationMs: number;
+    permissionWaitMs: number;
+  };
   config: string;
   device?: VpnDevice;
   entitlement?: Entitlement;

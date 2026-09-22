@@ -24,15 +24,15 @@ build_arch() {
   local arch="$1"
   local triple="${arch}-apple-macosx15.0"
   local scratch="${SCRATCH_ROOT}/${arch}"
-
-  /usr/bin/swift build \
-    --package-path "${PACKAGE_DIR}" \
-    --scratch-path "${scratch}" \
-    --configuration release \
-    --product "${PRODUCT}" \
-    --triple "${triple}" >&2
-
-  /usr/bin/find "${scratch}" -type f -path "*/release/${PRODUCT}" -perm -111 -print -quit
+  local build_args=(--package-path "${PACKAGE_DIR}" --scratch-path "${scratch}"
+    --configuration "${VEX_MACOS_CONFIGURATION:-release}" --product "${PRODUCT}" --triple "${triple}")
+  # errexit is disabled inside command substitution on macOS Bash. Explicitly
+  # propagate failures, so an old executable can never masquerade as this build.
+  /usr/bin/swift build "${build_args[@]}" >&2 || return 1
+  local bin_dir
+  bin_dir="$(/usr/bin/swift build "${build_args[@]}" --show-bin-path)" || return 1
+  [[ -x "${bin_dir}/${PRODUCT}" ]] || return 1
+  printf '%s\n' "${bin_dir}/${PRODUCT}"
 }
 
 mkdir -p "${RESOURCE_DIR}" "${SCRATCH_ROOT}"

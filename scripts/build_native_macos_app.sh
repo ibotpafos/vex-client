@@ -97,13 +97,15 @@ build_app_arch() {
   local arch="$1"
   local triple="${arch}-apple-macosx15.0"
   local scratch="${APP_SCRATCH_ROOT}/${arch}"
-  /usr/bin/swift build \
-    --package-path "${PACKAGE_DIR}" \
-    --scratch-path "${scratch}" \
-    --configuration release \
-    --product "${APP_NAME}" \
-    --triple "${triple}" >&2
-  /usr/bin/find "${scratch}" -type f -path "*/release/${APP_NAME}" -perm -111 -print -quit
+  local build_args=(--package-path "${PACKAGE_DIR}" --scratch-path "${scratch}"
+    --configuration "${VEX_MACOS_CONFIGURATION:-release}" --product "${APP_NAME}" --triple "${triple}")
+  # errexit is disabled inside command substitution on macOS Bash. Explicitly
+  # propagate failures, so an old executable can never masquerade as this build.
+  /usr/bin/swift build "${build_args[@]}" >&2 || return 1
+  local bin_dir
+  bin_dir="$(/usr/bin/swift build "${build_args[@]}" --show-bin-path)" || return 1
+  [[ -x "${bin_dir}/${APP_NAME}" ]] || return 1
+  printf '%s\n' "${bin_dir}/${APP_NAME}"
 }
 
 arm_executable="$(build_app_arch arm64)"
@@ -126,10 +128,7 @@ if ! otool -l "${APP_DIR}/Contents/MacOS/${APP_NAME}" | grep -q "@executable_pat
   install_name_tool -add_rpath "@executable_path/../Frameworks" "${APP_DIR}/Contents/MacOS/${APP_NAME}"
 fi
 
-SPARKLE_FRAMEWORK="$(find "${APP_SCRATCH_ROOT}" -type d -path "*/release/Sparkle.framework" | head -n 1)"
-if [[ -z "${SPARKLE_FRAMEWORK}" || ! -d "${SPARKLE_FRAMEWORK}" ]]; then
-  SPARKLE_FRAMEWORK="$(find "${PACKAGE_DIR}/.build/artifacts" -type d -path "*/Sparkle.framework" | head -n 1)"
-fi
+SPARKLE_FRAMEWORK="$(dirname "${arm_executable}")/Sparkle.framework"
 if [[ -n "${SPARKLE_FRAMEWORK}" && -d "${SPARKLE_FRAMEWORK}" ]]; then
   ditto "${SPARKLE_FRAMEWORK}" "${APP_DIR}/Contents/Frameworks/Sparkle.framework"
 else
@@ -137,7 +136,7 @@ else
   exit 1
 fi
 
-RESOURCE_BUNDLE="$(find "${APP_SCRATCH_ROOT}" -type d -path "*/release/${APP_NAME}_${APP_NAME}.bundle" | head -n 1)"
+RESOURCE_BUNDLE="$(dirname "${arm_executable}")/${APP_NAME}_${APP_NAME}.bundle"
 if [[ -n "${RESOURCE_BUNDLE}" && -d "${RESOURCE_BUNDLE}" ]]; then
   cp -R "${RESOURCE_BUNDLE}" "${APP_DIR}/Contents/Resources/"
 else
@@ -240,5 +239,8 @@ done
 codesign "${CODESIGN_ARGS[@]}" "${APP_DIR}/Contents/Frameworks/Sparkle.framework"
 codesign "${CODESIGN_ARGS[@]}" --deep "${APP_DIR}"
 codesign --verify --deep --strict "${APP_DIR}"
+
+# Runs before any GUI/helper initialization and resolves packaged resources only.
+"${APP_DIR}/Contents/MacOS/${APP_NAME}" --resource-bundle-probe
 
 echo "${APP_DIR}"

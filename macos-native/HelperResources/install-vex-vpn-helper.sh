@@ -42,8 +42,13 @@ if [[ "$src_dir_real" != "$verified_resources_real" ]]; then
 fi
 src_dir="$verified_resources_real"
 
-helper_dir="/Library/Application Support/VEX VPN/helper"
+helper_root_dir="/Library/Application Support/VEX VPN"
+helper_dir="$helper_root_dir/helper"
+helper_tool_dir="/Library/PrivilegedHelperTools"
+helper_tool="$helper_tool_dir/app.vex.vpn.helper"
+legacy_helper="$helper_dir/vex-helper"
 plist="/Library/LaunchDaemons/app.vex.vpn.helper.plist"
+launchd_label="app.vex.vpn.helper"
 helper_version_file="$src_dir/helper-version"
 if [[ ! -r "$helper_version_file" ]]; then
   echo "Missing VPN resource: $helper_version_file" >&2
@@ -69,12 +74,10 @@ for required in awg amneziawg-go vex-helper; do
     exit 1
   fi
 
-  host_arch="$(/usr/bin/uname -m)"
-  archs="$(/usr/bin/lipo -archs "$src_dir/$required" 2>/dev/null || true)"
-  if [[ " ${archs} " != *" ${host_arch} "* ]]; then
-    echo "Bundled $required does not support ${host_arch} (archs: ${archs:-unknown})." >&2
-    exit 1
-  fi
+  # PackageKit may deny Mach-O inspection tools in its postinstall sandbox.
+  # Universal-architecture coverage is therefore proven before packaging by
+  # native_macos_production_preflight.sh. The pinned app signature above and
+  # each nested signature still protect the exact resources installed here.
 done
 
 # The helper uses its compiled-in policy; no caller-controlled auth environment.
@@ -84,7 +87,55 @@ if [[ ! -x "$src_dir/awg-quick.sh" ]]; then
   exit 1
 fi
 
+config_owner="$_user_name"
+if [[ -z "$config_owner" ]] || ! /usr/bin/id "$config_owner" >/dev/null 2>&1; then
+  echo "A valid local user is required for the VEX profile path." >&2
+  exit 1
+fi
+config_owner_home="$(
+  /usr/bin/dscl . -read "/Users/$config_owner" NFSHomeDirectory 2>/dev/null \
+    | /usr/bin/awk '{print $2}'
+)"
+config_group="$(/usr/bin/id -gn "$config_owner")"
+expected_config_path="$config_owner_home/.vex/vex.conf"
+if [[ -z "$config_owner_home" ]] || [[ "$config_path" != "$expected_config_path" ]]; then
+  echo "VEX profile path does not match the verified local user home." >&2
+  exit 1
+fi
+config_dir="$(/usr/bin/dirname "$config_path")"
+[[ ! -L "$config_dir" ]] || {
+  echo "VEX profile directory must not be a symbolic link." >&2
+  exit 1
+}
+if [[ -e "$config_dir" && ! -d "$config_dir" ]]; then
+  echo "VEX profile path parent is not a directory." >&2
+  exit 1
+fi
+/usr/bin/install -d -o "$config_owner" -g "$config_group" -m 0700 "$config_dir"
+# install -d preserves an existing directory's owner and mode. Normalize only
+# the dedicated VEX profile directory so the app can atomically refresh its
+# profile; never recurse into the user's home or delete an existing profile.
+/usr/sbin/chown "$config_owner:$config_group" "$config_dir"
+/bin/chmod 0700 "$config_dir"
+if [[ -e "$config_path" ]]; then
+  if [[ -L "$config_path" || ! -f "$config_path" ]]; then
+    echo "Existing VEX profile must be a regular file." >&2
+    exit 1
+  fi
+  /usr/sbin/chown "$config_owner:$config_group" "$config_path"
+  /bin/chmod 0600 "$config_path"
+fi
+
+/usr/bin/install -d -o root -g wheel -m 0755 "$helper_root_dir"
 /usr/bin/install -d -o root -g wheel -m 0755 "$helper_dir"
+/usr/bin/install -d -o root -g wheel -m 0755 "$helper_tool_dir"
+# install -d does not repair owner/mode on an existing directory. Older VEX
+# packages left the parent root:admin 0700, so the signed app could authenticate
+# to the live socket but could not read the version/resources it uses to decide
+# whether the helper is installed. Normalize only these root-owned code/resource
+# directories; runtime logs remain 0600 and user configuration is untouched.
+/usr/sbin/chown root:wheel "$helper_root_dir" "$helper_dir"
+/bin/chmod 0755 "$helper_root_dir" "$helper_dir"
 stage_dir="$(/usr/bin/mktemp -d "$helper_dir/.install.XXXXXX")"
 rollback_dir="$(/usr/bin/mktemp -d /var/tmp/vex-helper-rollback.XXXXXX)"
 replacement_started=0
@@ -98,17 +149,27 @@ rollback_install() {
     echo "Helper replacement failed; restoring the previous helper." >&2
     /bin/launchctl bootout system/app.vex.vpn.helper >/dev/null 2>&1 || true
     /usr/bin/killall vex-helper >/dev/null 2>&1 || true
-    for previous in awg amneziawg-go awg-quick.sh vex-helper config-path version; do
+    for previous in awg amneziawg-go awg-quick.sh config-path version; do
       if [[ -e "$rollback_dir/$previous" ]]; then
         /bin/cp -p "$rollback_dir/$previous" "$helper_dir/$previous"
       else
         /bin/rm -f "$helper_dir/$previous"
       fi
     done
+    if [[ -e "$rollback_dir/privileged-helper" ]]; then
+      /bin/cp -p "$rollback_dir/privileged-helper" "$helper_tool"
+    else
+      /bin/rm -f "$helper_tool"
+    fi
+    if [[ -e "$rollback_dir/legacy-helper" ]]; then
+      /bin/cp -p "$rollback_dir/legacy-helper" "$legacy_helper"
+    else
+      /bin/rm -f "$legacy_helper"
+    fi
     if [[ -e "$rollback_dir/helper.plist" ]]; then
       /bin/cp -p "$rollback_dir/helper.plist" "$plist"
       /bin/launchctl bootstrap system "$plist" >/dev/null 2>&1 || true
-      /bin/launchctl kickstart -k system/app.vex.vpn.helper >/dev/null 2>&1 || true
+      /bin/launchctl kickstart -k "system/$launchd_label" >/dev/null 2>&1 || true
     else
       /bin/rm -f "$plist"
     fi
@@ -129,8 +190,6 @@ printf '%s\n' "$config_path" > "$stage_dir/config-path"
 printf '%s\n' "$helper_version" > "$stage_dir/version"
 /bin/chmod 0644 "$stage_dir/config-path" "$stage_dir/version"
 /usr/sbin/chown root:wheel "$stage_dir/config-path" "$stage_dir/version"
-/usr/bin/xattr -dr com.apple.quarantine "$stage_dir/awg" "$stage_dir/amneziawg-go" "$stage_dir/awg-quick.sh" "$stage_dir/vex-helper" >/dev/null 2>&1 || true
-
 for required in awg amneziawg-go vex-helper; do
   if ! /usr/bin/codesign --verify --strict --verbose=2 -R="$resource_requirement" "$stage_dir/$required" >/dev/null 2>&1; then
     echo "Staged $required failed code-signature verification." >&2
@@ -138,11 +197,17 @@ for required in awg amneziawg-go vex-helper; do
   fi
 done
 
-for previous in awg amneziawg-go awg-quick.sh vex-helper config-path version; do
+for previous in awg amneziawg-go awg-quick.sh config-path version; do
   if [[ -e "$helper_dir/$previous" ]]; then
     /bin/cp -p "$helper_dir/$previous" "$rollback_dir/$previous"
   fi
 done
+if [[ -e "$helper_tool" ]]; then
+  /bin/cp -p "$helper_tool" "$rollback_dir/privileged-helper"
+fi
+if [[ -e "$legacy_helper" ]]; then
+  /bin/cp -p "$legacy_helper" "$rollback_dir/legacy-helper"
+fi
 if [[ -e "$plist" ]]; then
   /bin/cp -p "$plist" "$rollback_dir/helper.plist"
 fi
@@ -229,16 +294,18 @@ replacement_started=1
 /bin/mv -f "$stage_dir/awg" "$helper_dir/awg"
 /bin/mv -f "$stage_dir/amneziawg-go" "$helper_dir/amneziawg-go"
 /bin/mv -f "$stage_dir/awg-quick.sh" "$helper_dir/awg-quick.sh"
-/bin/mv -f "$stage_dir/vex-helper" "$helper_dir/vex-helper"
+/bin/mv -f "$stage_dir/vex-helper" "$helper_tool"
 /bin/mv -f "$stage_dir/config-path" "$helper_dir/config-path"
 /bin/mv -f "$stage_dir/version" "$helper_dir/version"
 /bin/rmdir "$stage_dir"
 
-/bin/chmod 0755 "$helper_dir/awg" "$helper_dir/amneziawg-go" "$helper_dir/awg-quick.sh" "$helper_dir/vex-helper"
+/bin/chmod 0755 "$helper_dir/awg" "$helper_dir/amneziawg-go" "$helper_dir/awg-quick.sh" "$helper_tool"
 /bin/chmod 0644 "$helper_dir/config-path" "$helper_dir/version"
 /usr/sbin/chown -R root:wheel "$helper_dir"
+/usr/sbin/chown root:wheel "$helper_tool"
+/bin/rm -f "$legacy_helper"
 
-if ! /usr/bin/codesign --verify --strict --verbose=2 -R="$resource_requirement" "$helper_dir/vex-helper" >/dev/null 2>&1; then
+if ! /usr/bin/codesign --verify --strict --verbose=2 -R="$resource_requirement" "$helper_tool" >/dev/null 2>&1; then
   echo "Installed vex-helper failed code-signature verification." >&2
   exit 1
 fi
@@ -262,10 +329,10 @@ cat > "$plist" <<PLIST
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>app.vex.vpn.helper</string>
+  <string>$launchd_label</string>
   <key>ProgramArguments</key>
   <array>
-    <string>$helper_dir/vex-helper</string>
+    <string>$helper_tool</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
@@ -284,13 +351,42 @@ PLIST
 /bin/chmod 644 "$plist"
 
 /bin/launchctl bootstrap system "$plist"
-/bin/launchctl kickstart -k system/app.vex.vpn.helper
+/bin/launchctl kickstart -k "system/$launchd_label"
+
+helper_ready=0
+for _ in {1..50}; do
+  if [[ -S /var/run/vex-helper.sock ]] \
+    && /bin/launchctl print "system/$launchd_label" >/dev/null 2>&1; then
+    status_response="$(
+      /usr/bin/printf 'status\n' \
+        | /usr/bin/nc -w 2 -U /var/run/vex-helper.sock 2>/dev/null \
+        | /usr/bin/head -n 1 \
+        || true
+    )"
+    if [[ "$status_response" == state=* ]]; then
+      helper_ready=1
+      break
+    fi
+  fi
+  /bin/sleep 0.1
+done
+if [[ "$helper_ready" != "1" ]]; then
+  echo "Installed helper did not become ready for VPN commands." >&2
+  exit 1
+fi
+
+installed_label="$(/usr/bin/plutil -extract Label raw -o - "$plist" 2>/dev/null || true)"
+installed_program="$(/usr/bin/plutil -extract ProgramArguments.0 raw -o - "$plist" 2>/dev/null || true)"
+if [[ "$installed_label" != "$launchd_label" || "$installed_program" != "$helper_tool" ]]; then
+  echo "Installed LaunchDaemon label/program does not match the VEX privileged-helper contract." >&2
+  exit 1
+fi
+if [[ ! -x "$helper_tool" ]] || ! /bin/launchctl print "system/$launchd_label" >/dev/null 2>&1; then
+  echo "Installed privileged helper file or loaded LaunchDaemon assertion failed." >&2
+  exit 1
+fi
 
 if [[ "$recovery_needed" == "1" ]]; then
-  for _ in {1..40}; do
-    [[ -S /var/run/vex-helper.sock ]] && break
-    /bin/sleep 0.1
-  done
   recovery_response="$(
     /usr/bin/printf 'down\n' \
       | /usr/bin/nc -w 5 -U /var/run/vex-helper.sock 2>/dev/null \
@@ -299,6 +395,16 @@ if [[ "$recovery_needed" == "1" ]]; then
   )"
   if [[ "$recovery_response" != "ok" ]]; then
     echo "Replacement helper did not confirm network recovery: ${recovery_response:-no response}" >&2
+    exit 1
+  fi
+  recovery_status="$(
+    /usr/bin/printf 'status\n' \
+      | /usr/bin/nc -w 2 -U /var/run/vex-helper.sock 2>/dev/null \
+      | /usr/bin/head -n 1 \
+      || true
+  )"
+  if [[ "$recovery_status" != state=disconnected* ]]; then
+    echo "Replacement helper did not confirm disconnected recovery state." >&2
     exit 1
   fi
 fi

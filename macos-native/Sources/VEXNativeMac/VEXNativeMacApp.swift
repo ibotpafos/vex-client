@@ -13,6 +13,9 @@ enum FocusPulseMainWindowConfiguration {
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.toolbar = nil
+        window.isRestorable = true
+        window.restorationClass = VEXWindowRestoration.self
+        window.collectionBehavior = [.fullScreenPrimary, .managed]
         for buttonType in [
             NSWindow.ButtonType.closeButton,
             .miniaturizeButton,
@@ -29,6 +32,12 @@ enum FocusPulseMainWindowConfiguration {
     }
 }
 
+final class VEXWindowRestoration: NSObject, NSWindowRestoration {
+    static func restoreWindow(withIdentifier identifier: NSUserInterfaceItemIdentifier, state: NSCoder, completionHandler: @escaping (NSWindow?, Error?) -> Void) {
+        completionHandler(nil, nil)
+    }
+}
+
 @main
 struct VEXNativeMacApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -36,6 +45,13 @@ struct VEXNativeMacApp: App {
     @StateObject private var appState = VEXAppState()
 
     init() {
+        if CommandLine.arguments.contains("--resource-bundle-probe") {
+            let loaded = ["DE", "FI", "NL"].allSatisfy {
+                CountrySilhouetteStore.geometry(for: $0)?.rings.isEmpty == false
+            }
+            FileHandle.standardOutput.write(Data("country_resources=\(loaded ? "ok" : "missing")\n".utf8))
+            Darwin.exit(loaded ? 0 : 1)
+        }
         #if DEBUG
         if let request = VEXPreviewRenderer.request() {
             do {
@@ -49,18 +65,59 @@ struct VEXNativeMacApp: App {
         }
         #endif
 
-        guard CommandLine.arguments.contains("--helper-status-probe") else { return }
-        do {
-            let response = try sendUnixSocketCommand(
-                "status",
-                socketPath: "/var/run/vex-helper.sock",
-                timeoutSeconds: 3
-            )
-            FileHandle.standardOutput.write(Data(response.utf8))
-            Darwin.exit(response.hasPrefix("state=") && response.contains("operation_in_progress=") ? 0 : 1)
-        } catch {
-            FileHandle.standardError.write(Data("helper probe failed: \(error.localizedDescription)\n".utf8))
-            Darwin.exit(1)
+        if CommandLine.arguments.contains("--helper-status-probe") {
+            do {
+                let response = try sendUnixSocketCommand(
+                    "status",
+                    socketPath: "/var/run/vex-helper.sock",
+                    timeoutSeconds: 3
+                )
+                FileHandle.standardOutput.write(Data(response.utf8))
+                Darwin.exit(response.hasPrefix("state=") && response.contains("operation_in_progress=") ? 0 : 1)
+            } catch {
+                FileHandle.standardError.write(Data("helper probe failed: \(error.localizedDescription)\n".utf8))
+                Darwin.exit(1)
+            }
+        }
+
+        if CommandLine.arguments.contains("--helper-install-state-probe") {
+            let state = VEXHelperInstaller().installedState
+            let userVisibleMessage = VEXHelperModel.installRequiredMessage(for: state)
+            let output = [
+                "helper_path=\(state.helperPath)",
+                "helper_version=\(state.version.trimmingCharacters(in: .whitespacesAndNewlines))",
+                "helper_files_current=\(state.filesCurrent)",
+                "helper_socket_connectable=\(state.socketConnectable)",
+                "helper_install_required=\(userVisibleMessage != nil)",
+                "user_visible_message=\(userVisibleMessage ?? "<none>")",
+            ].joined(separator: "\n") + "\n"
+            FileHandle.standardOutput.write(Data(output.utf8))
+            Darwin.exit(state.filesCurrent && state.socketConnectable ? 0 : 1)
+        }
+
+        if let probeIndex = CommandLine.arguments.firstIndex(of: "--update-response-probe") {
+            let pathIndex = CommandLine.arguments.index(after: probeIndex)
+            guard pathIndex < CommandLine.arguments.endIndex else {
+                FileHandle.standardError.write(Data("update response probe requires a JSON path\n".utf8))
+                Darwin.exit(2)
+            }
+            do {
+                let data = try Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[pathIndex]))
+                let update = try JSONDecoder().decode(AppUpdateCheckResult.self, from: data)
+                let output = [
+                    "update_available=\(update.updateAvailable)",
+                    "update_required=\(update.required)",
+                    "latest_version=\(update.latestVersion)",
+                    "latest_build=\(update.latestBuild)",
+                    "download_url_present=\(!update.downloadUrl.isEmpty)",
+                    "update_response=valid",
+                ].joined(separator: "\n") + "\n"
+                FileHandle.standardOutput.write(Data(output.utf8))
+                Darwin.exit(0)
+            } catch {
+                FileHandle.standardError.write(Data("update response probe failed: \(error.localizedDescription)\n".utf8))
+                Darwin.exit(1)
+            }
         }
     }
 
@@ -78,6 +135,7 @@ struct VEXNativeMacApp: App {
                 .environmentObject(helper)
                 .environmentObject(appState)
                 .frame(minWidth: 920, minHeight: 580)
+                .disabled(VEXPreviewMode.isOfflineSmoke)
         }
         .defaultSize(width: 920, height: 580)
         .windowStyle(.plain)
@@ -108,6 +166,7 @@ struct VEXNativeMacApp: App {
                 Button("Refresh Status") {
                     Task { await helper.refreshStatus() }
                 }
+                .disabled(VEXPreviewMode.suppressesRuntime)
                 .keyboardShortcut("r")
 
                 Divider()
@@ -115,11 +174,13 @@ struct VEXNativeMacApp: App {
                 Button("Connect") {
                     Task { await appState.connectVPN(using: helper) }
                 }
+                .disabled(VEXPreviewMode.suppressesRuntime)
                 .keyboardShortcut("k", modifiers: [.command, .shift])
 
                 Button("Disconnect") {
                     Task { await appState.disconnectVPN(using: helper) }
                 }
+                .disabled(VEXPreviewMode.suppressesRuntime)
                 .keyboardShortcut("d")
             }
         }
@@ -182,7 +243,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        DeepLinkRegistrationService.registerPreferredHandlers()
+        if !VEXPreviewMode.suppressesRuntime {
+            DeepLinkRegistrationService.registerPreferredHandlers()
+        }
         NSApp.setActivationPolicy(.regular)
         NSRunningApplication.current.activate(
             options: [.activateAllWindows]

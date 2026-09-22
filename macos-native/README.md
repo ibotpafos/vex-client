@@ -20,12 +20,51 @@ Non-goals for this slice:
 - No mandatory notarization.
 - Real PF/route/DNS/launchd fault injection still requires a disposable macOS VM.
 
-Build locally:
+Build and verify locally without touching an active VPN:
 
 ```sh
-bash scripts/build_native_macos_app.sh
-open macos-native/build/VEXNativeMac.app
+./script/build_and_run.sh --verify
 ```
+
+The Codex Run action uses this same entrypoint. It refuses to terminate an
+existing client. Its default launch uses `--offline-smoke`: no session restore,
+helper startup, update checks, deep-link registration, or enabled VPN controls.
+Use `--live` only for an intentional normal launch. A normal launch can attach
+to a retained tunnel, so it is not an isolated verification step.
+
+The packager propagates compiler failures, takes binaries/frameworks/resources
+from the exact successful build output, and runs `--resource-bundle-probe`.
+Country geometry resolves from `Contents/Resources`; a missing resource bundle
+returns a missing-resource result instead of SwiftPM's fatal assertion.
+
+Offline regression tests (Command Line Tools supported):
+
+```sh
+bash scripts/test_native_macos_offline.sh
+python3 scripts/tests/test_macos_packaged_resources.py macos-native/build/VEXNativeMac.app
+```
+
+These tests use intercepted HTTP, temporary files, an in-memory keychain, and
+fake helper sockets. They do not contact the system helper or change network
+state. They complement the full `swift test --package-path macos-native` suite,
+which requires Xcode/XCTest.
+
+Ad-hoc signing is suitable for this offline validation. Installing or using the
+privileged helper requires a signature accepted by its compiled-in signing
+policy; creating an arbitrary self-signed identity does not satisfy that policy.
+See [the consolidation report](../docs/verification/2026-09-22-macos-consolidation.md)
+for source provenance and the exact verification limits.
+
+## Live-VPN-safe test plan
+
+Before any installer or connection smoke, capture `scutil --nc list` and the
+read-only `--helper-status-probe`. If INCY, VEX, or any other VPN is connected,
+keep that tunnel unchanged: do not run helper `down`, network reset, tunnel
+teardown, route/DNS/PF mutation, installer/postinstall, or cleanup commands.
+Limit verification to bundle/signature inspection, decoder probes, build/tests,
+`--helper-install-state-probe`, and read-only launch/crash observation. Run the
+full install -> connect -> disconnect acceptance only on a disposable host or
+after the active tunnel is no longer part of the protected test baseline.
 
 `build_native_macos_app.sh` first builds a universal Swift helper through
 `scripts/build_swift_macos_helper.sh` and packages resources only from

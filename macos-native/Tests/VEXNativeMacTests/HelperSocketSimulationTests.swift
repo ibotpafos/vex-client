@@ -81,6 +81,145 @@ final class HelperSocketSimulationTests: XCTestCase {
             XCTAssertLessThan(started.duration(to: .now), .seconds(2))
         }
     }
+
+    func testDisconnectWaitsUntilHelperConfirmsDisconnectedState() async throws {
+        let server = try SequencedHelperSocket { command, attempt in
+            switch (command, attempt) {
+            case ("down", 0):
+                return "ok\n"
+            case ("status", 1):
+                return "state=connected route_ok=true socket_exists=true rx=1 tx=1\n"
+            case ("status", 2):
+                return "state=disconnected route_ok=false socket_exists=false rx=0 tx=0\n"
+            default:
+                return "error: unexpected command\n"
+            }
+        }
+        defer { server.stop() }
+
+        let status = try await VEXHelperClient(socketPath: server.path)
+            .disconnectAndConfirm(maxStatusAttempts: 3, pollNanoseconds: 1_000_000)
+
+        XCTAssertEqual(status.state, .disconnected)
+        XCTAssertEqual(server.waitForCommands(count: 3), ["down", "status", "status"])
+    }
+
+    func testDisconnectFailsWhenHelperAcknowledgesButTunnelStaysConnected() async throws {
+        let server = try SequencedHelperSocket { command, _ in
+            command == "down"
+                ? "ok\n"
+                : "state=connected route_ok=true socket_exists=true rx=1 tx=1\n"
+        }
+        defer { server.stop() }
+
+        do {
+            _ = try await VEXHelperClient(socketPath: server.path)
+                .disconnectAndConfirm(maxStatusAttempts: 2, pollNanoseconds: 1_000_000)
+            XCTFail("An acknowledged disconnect must not succeed while the helper remains connected")
+        } catch let error as VEXHelperError {
+            guard case .commandFailed(let response) = error else {
+                return XCTFail("Unexpected helper error: \(error)")
+            }
+            XCTAssertTrue(response.contains("disconnect was not confirmed"))
+        }
+    }
+}
+
+private final class SequencedHelperSocket: @unchecked Sendable {
+    let path: String
+
+    private let listener: Int32
+    private let response: @Sendable (String, Int) -> String
+    private let worker = DispatchGroup()
+    private let lock = NSLock()
+    private var commands = [String]()
+    private var stopped = false
+
+    init(response: @escaping @Sendable (String, Int) -> String) throws {
+        path = "/tmp/vex-helper-sequence-\(UUID().uuidString.prefix(8)).sock"
+        self.response = response
+        listener = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard listener >= 0 else { throw POSIXError(.ENOTSOCK) }
+
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let maxPathLength = MemoryLayout.size(ofValue: address.sun_path)
+        _ = withUnsafeMutablePointer(to: &address.sun_path) { pointer in
+            path.withCString { source in
+                strncpy(
+                    UnsafeMutableRawPointer(pointer).assumingMemoryBound(to: CChar.self),
+                    source,
+                    maxPathLength
+                )
+            }
+        }
+        let result = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(listener, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        guard result == 0, Darwin.listen(listener, 4) == 0 else {
+            Darwin.close(listener)
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+
+        worker.enter()
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
+            defer { worker.leave() }
+            while true {
+                let client = Darwin.accept(listener, nil, nil)
+                if client < 0 {
+                    lock.lock()
+                    let shouldStop = stopped
+                    lock.unlock()
+                    if shouldStop { return }
+                    continue
+                }
+
+                var bytes: [UInt8] = []
+                var byte: UInt8 = 0
+                while Darwin.read(client, &byte, 1) == 1 {
+                    if byte == 10 { break }
+                    bytes.append(byte)
+                }
+                let command = String(decoding: bytes, as: UTF8.self)
+                lock.lock()
+                let attempt = commands.count
+                commands.append(command)
+                lock.unlock()
+
+                let payload = response(command, attempt)
+                payload.withCString { pointer in
+                    _ = Darwin.write(client, pointer, strlen(pointer))
+                }
+                Darwin.close(client)
+            }
+        }
+    }
+
+    func waitForCommands(count: Int) -> [String] {
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline {
+            lock.lock()
+            let snapshot = commands
+            lock.unlock()
+            if snapshot.count >= count { return snapshot }
+            usleep(10_000)
+        }
+        lock.lock()
+        defer { lock.unlock() }
+        return commands
+    }
+
+    func stop() {
+        lock.lock()
+        stopped = true
+        lock.unlock()
+        Darwin.shutdown(listener, SHUT_RDWR)
+        Darwin.close(listener)
+        _ = worker.wait(timeout: .now() + 3)
+        unlink(path)
+    }
 }
 
 private final class SimulatedHelperSocket: @unchecked Sendable {

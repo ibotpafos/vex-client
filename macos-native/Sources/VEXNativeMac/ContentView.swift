@@ -134,7 +134,7 @@ struct ContentView: View {
     }
 
     private var focusPulseUIPreview: Bool {
-        VEXPreviewMode.isEnabled
+        VEXPreviewMode.isEnabled || VEXPreviewMode.isOfflineSmoke
     }
 
     private var contentMaxWidth: CGFloat {

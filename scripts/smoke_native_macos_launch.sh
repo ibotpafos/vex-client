@@ -29,9 +29,8 @@ new_crashes_since() {
 [[ -d "${APP_PATH}" ]] || fail "installed app missing at ${APP_PATH}"
 
 # Never stop an existing client: it may own an active tunnel.
-# TODO: add a main-window readiness assertion once UI inspection is available;
-# the current host's AX requests time out after the old crash-recovery dialog,
-# and process survival alone cannot establish that the main window rendered.
+# This checks process/resource survival. Verify the live window separately;
+# process survival alone cannot establish that the main window rendered.
 [[ -z "$(matching_pids)" ]] || fail "an existing VEX client is running; smoke will not terminate it"
 "${APP_PATH}/Contents/MacOS/VEXNativeMac" --resource-bundle-probe || fail "packaged resources unavailable"
 

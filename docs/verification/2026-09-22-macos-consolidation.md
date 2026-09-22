@@ -16,7 +16,7 @@ The user explicitly prohibited connecting the VPN during verification.
 | Reliability / deep audit trees | Base includes Keychain-only session migration, IPv6 PF validation, safe delayed Sparkle startup, Google auth and country node grouping. |
 | `macos-client-install-reliability` at `c6594e7` | Integrated helper path/readiness, explicit teardown confirmation, sparse no-update decoding and operator probes. Retained newer compiled-in signature pins and single delayed Sparkle startup. Legacy release-channel/certificate-generation changes were excluded. |
 | Original dirty checkout at `e3d3906` | Carried device/add-on models, API/UI and window changes into isolation; completed device naming, full list, removal confirmation, busy/session guards and scoped-session web fallback. |
-| `macos-photo-locations-20260909` | Uncommitted photo/motion design experiment remains separate; no missing protocol or account capability found there. |
+| `macos-photo-locations-20260909` | Initially omitted in build 119. After the user's correction, its photo/motion design and three city assets were integrated into build 120, retaining current country/node grouping and reliability fixes. See the photo-design follow-up report. |
 
 CGRX was checked before exploration. Swift and shell coverage is excluded/partial;
 source review, compiler results and executable regressions are the evidence for
@@ -66,7 +66,10 @@ Completed before artifact verification:
   anti-leak state. No access to `/var/run/vex-helper.sock`.
 - Installer contract assertions (27) and shell syntax checks passed.
 
-Final artifact: `macos-native/build/VEXNativeMac.app`, version **0.1.88 (119)**.
+Initial artifact: version **0.1.88 (119)**, superseded by build 120 at the same
+`macos-native/build/VEXNativeMac.app` path. The following observations and hash
+refer to build 119; see [the design follow-up](2026-09-22-macos-photo-design.md)
+for build 120 evidence.
 
 - Release compilation passed for both arm64 and x86_64. The app, helper, `awg`
   and `amneziawg-go` each contain both architectures.

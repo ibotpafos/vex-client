@@ -50,9 +50,13 @@ struct VEXNativeMacApp: App {
                 CountrySilhouetteStore.geometry(for: $0)?.rings.isEmpty == false
             }
             FileHandle.standardOutput.write(Data("country_resources=\(loaded ? "ok" : "missing")\n".utf8))
-            Darwin.exit(loaded ? 0 : 1)
+            let photosLoaded = ["DE", "FI", "NL"].allSatisfy { country in
+                guard let name = LocationPhotoArtwork.assetName(countryCode: country) else { return false }
+                return CountrySilhouetteStore.resourceBundle()?.image(forResource: name) != nil
+            }
+            FileHandle.standardOutput.write(Data("location_photos=\(photosLoaded ? "ok" : "missing")\n".utf8))
+            Darwin.exit(loaded && photosLoaded ? 0 : 1)
         }
-        #if DEBUG
         if let request = VEXPreviewRenderer.request() {
             do {
                 try VEXPreviewRenderer.render(request)
@@ -63,7 +67,6 @@ struct VEXNativeMacApp: App {
                 Darwin.exit(2)
             }
         }
-        #endif
 
         if CommandLine.arguments.contains("--helper-status-probe") {
             do {

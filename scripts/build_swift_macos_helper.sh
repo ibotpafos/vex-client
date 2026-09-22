@@ -10,6 +10,48 @@ OUTPUT="${RESOURCE_DIR}/vex-helper"
 CODESIGN_IDENTITY="${VEX_CODESIGN_IDENTITY:--}"
 CODESIGN_KEYCHAIN="${VEX_CODESIGN_KEYCHAIN:-}"
 CODESIGN_TIMESTAMP="${VEX_CODESIGN_TIMESTAMP:-automatic}"
+LOCAL_SIGNING_IDENTITY="VEX Self-Signed Application"
+LOCAL_SIGNING_DIR="${VEX_LOCAL_SIGNING_DIR:-${HOME}/Library/Application Support/VEX Release/identities/macos-self-signed-v4}"
+LOCAL_SIGNING_KEYCHAIN="${LOCAL_SIGNING_DIR}/VEX-Release-Build.keychain-db"
+SIGNING_SEARCH_LIST_CHANGED=0
+ORIGINAL_SIGNING_KEYCHAINS=()
+
+restore_signing_search_list() {
+  if [[ "${SIGNING_SEARCH_LIST_CHANGED}" == "1" ]]; then
+    /usr/bin/security list-keychains -d user -s "${ORIGINAL_SIGNING_KEYCHAINS[@]}"
+    SIGNING_SEARCH_LIST_CHANGED=0
+  fi
+}
+
+activate_local_signing_keychain() {
+  local line keychain
+  while IFS= read -r line; do
+    keychain="${line#*\"}"
+    keychain="${keychain%\"*}"
+    [[ -z "${keychain}" ]] || ORIGINAL_SIGNING_KEYCHAINS+=("${keychain}")
+  done < <(/usr/bin/security list-keychains -d user)
+  for keychain in "${ORIGINAL_SIGNING_KEYCHAINS[@]}"; do
+    [[ "${keychain}" != "${LOCAL_SIGNING_KEYCHAIN}" ]] || return 0
+  done
+  /usr/bin/security list-keychains -d user -s \
+    "${ORIGINAL_SIGNING_KEYCHAINS[@]}" "${LOCAL_SIGNING_KEYCHAIN}"
+  SIGNING_SEARCH_LIST_CHANGED=1
+}
+
+if [[ "${CODESIGN_IDENTITY}" == "-" ]]; then
+  if [[ -f "${LOCAL_SIGNING_DIR}/application.key.pem" \
+        && -f "${LOCAL_SIGNING_DIR}/application.cert.pem" ]]; then
+    /usr/bin/swift "${ROOT_DIR}/scripts/prepare_vex_local_signing_identity.swift" \
+      "${LOCAL_SIGNING_DIR}" >&2
+    if /usr/bin/security find-identity -v -p codesigning "${LOCAL_SIGNING_KEYCHAIN}" \
+        | /usr/bin/grep -q "${LOCAL_SIGNING_IDENTITY}"; then
+      CODESIGN_IDENTITY="${LOCAL_SIGNING_IDENTITY}"
+      CODESIGN_KEYCHAIN="${CODESIGN_KEYCHAIN:-${LOCAL_SIGNING_KEYCHAIN}}"
+      CODESIGN_TIMESTAMP="none"
+      activate_local_signing_keychain
+    fi
+  fi
+fi
 
 if [[ "${CODESIGN_IDENTITY}" == "-" ]]; then
   detected_identity="$(
@@ -47,6 +89,7 @@ fi
 temporary_output="$(mktemp "${RESOURCE_DIR}/.vex-helper.XXXXXX")"
 cleanup() {
   rm -f "${temporary_output}"
+  restore_signing_search_list
 }
 trap cleanup EXIT
 
@@ -69,6 +112,7 @@ fi
 
 /bin/mv -f "${temporary_output}" "${OUTPUT}"
 trap - EXIT
+restore_signing_search_list
 
 /usr/bin/file "${OUTPUT}"
 /usr/bin/shasum -a 256 "${OUTPUT}"

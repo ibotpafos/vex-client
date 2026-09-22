@@ -17,6 +17,34 @@ CODESIGN_IDENTITY="${VEX_CODESIGN_IDENTITY:--}"
 CODESIGN_KEYCHAIN="${VEX_CODESIGN_KEYCHAIN:-}"
 CODESIGN_TIMESTAMP="${VEX_CODESIGN_TIMESTAMP:-automatic}"
 HELPER_RESOURCE_DIR="${PACKAGE_DIR}/HelperResources"
+LOCAL_SIGNING_IDENTITY="VEX Self-Signed Application"
+LOCAL_SIGNING_DIR="${VEX_LOCAL_SIGNING_DIR:-${HOME}/Library/Application Support/VEX Release/identities/macos-self-signed-v4}"
+LOCAL_SIGNING_KEYCHAIN="${LOCAL_SIGNING_DIR}/VEX-Release-Build.keychain-db"
+SIGNING_SEARCH_LIST_CHANGED=0
+ORIGINAL_SIGNING_KEYCHAINS=()
+
+restore_signing_search_list() {
+  if [[ "${SIGNING_SEARCH_LIST_CHANGED}" == "1" ]]; then
+    /usr/bin/security list-keychains -d user -s "${ORIGINAL_SIGNING_KEYCHAINS[@]}"
+    SIGNING_SEARCH_LIST_CHANGED=0
+  fi
+}
+
+activate_local_signing_keychain() {
+  local line keychain
+  while IFS= read -r line; do
+    keychain="${line#*\"}"
+    keychain="${keychain%\"*}"
+    [[ -z "${keychain}" ]] || ORIGINAL_SIGNING_KEYCHAINS+=("${keychain}")
+  done < <(/usr/bin/security list-keychains -d user)
+  for keychain in "${ORIGINAL_SIGNING_KEYCHAINS[@]}"; do
+    [[ "${keychain}" != "${LOCAL_SIGNING_KEYCHAIN}" ]] || return 0
+  done
+  /usr/bin/security list-keychains -d user -s \
+    "${ORIGINAL_SIGNING_KEYCHAINS[@]}" "${LOCAL_SIGNING_KEYCHAIN}"
+  SIGNING_SEARCH_LIST_CHANGED=1
+  trap restore_signing_search_list EXIT
+}
 
 if [[ -f "${ROOT_DIR}/.env.sparkle.local" ]]; then
   set -a
@@ -28,6 +56,21 @@ if [[ -f "${ROOT_DIR}/.env.sparkle.local" ]]; then
   SPARKLE_FEED_URL="${VEX_SPARKLE_FEED_URL:-${SPARKLE_FEED_URL}}"
   SPARKLE_PUBLIC_ED_KEY="${VEX_SPARKLE_PUBLIC_ED_KEY:-${SPARKLE_PUBLIC_ED_KEY}}"
   CODESIGN_IDENTITY="${VEX_CODESIGN_IDENTITY:-${CODESIGN_IDENTITY}}"
+fi
+
+if [[ "${CODESIGN_IDENTITY}" == "-" ]]; then
+  if [[ -f "${LOCAL_SIGNING_DIR}/application.key.pem" \
+        && -f "${LOCAL_SIGNING_DIR}/application.cert.pem" ]]; then
+    /usr/bin/swift "${ROOT_DIR}/scripts/prepare_vex_local_signing_identity.swift" \
+      "${LOCAL_SIGNING_DIR}" >&2
+    if /usr/bin/security find-identity -v -p codesigning "${LOCAL_SIGNING_KEYCHAIN}" \
+        | /usr/bin/grep -q "${LOCAL_SIGNING_IDENTITY}"; then
+      CODESIGN_IDENTITY="${LOCAL_SIGNING_IDENTITY}"
+      CODESIGN_KEYCHAIN="${CODESIGN_KEYCHAIN:-${LOCAL_SIGNING_KEYCHAIN}}"
+      CODESIGN_TIMESTAMP="none"
+      activate_local_signing_keychain
+    fi
+  fi
 fi
 
 if [[ "${CODESIGN_IDENTITY}" == "-" ]]; then
@@ -75,7 +118,8 @@ else
   # This pinned local identity has no Apple TeamIdentifier. Hardened-runtime
   # library validation would reject its bundled Sparkle framework at launch.
   # Retain the existing local-development runtime model; Apple releases keep HR.
-  if [[ "${CODESIGN_IDENTITY}" == "C6FD1853A177FBCFB04C5D4F78FBE405777B3A3E" ]]; then
+  if [[ "${CODESIGN_IDENTITY}" == "C6FD1853A177FBCFB04C5D4F78FBE405777B3A3E" \
+        || "${CODESIGN_IDENTITY}" == "VEX Self-Signed Application" ]]; then
     CODESIGN_ARGS=(--force --sign "${CODESIGN_IDENTITY}")
   else
     CODESIGN_ARGS=(--force --options runtime --sign "${CODESIGN_IDENTITY}")
@@ -90,6 +134,8 @@ fi
 
 cd "${PACKAGE_DIR}"
 export VEX_CODESIGN_IDENTITY="${CODESIGN_IDENTITY}"
+export VEX_CODESIGN_KEYCHAIN="${CODESIGN_KEYCHAIN}"
+export VEX_CODESIGN_TIMESTAMP="${CODESIGN_TIMESTAMP}"
 "${ROOT_DIR}/scripts/build_swift_macos_helper.sh"
 
 APP_SCRATCH_ROOT="${PACKAGE_DIR}/.build-app"
@@ -244,3 +290,5 @@ codesign --verify --deep --strict "${APP_DIR}"
 "${APP_DIR}/Contents/MacOS/${APP_NAME}" --resource-bundle-probe
 
 echo "${APP_DIR}"
+restore_signing_search_list
+trap - EXIT

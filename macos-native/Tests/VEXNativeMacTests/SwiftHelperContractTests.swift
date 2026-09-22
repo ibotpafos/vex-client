@@ -134,6 +134,7 @@ final class SwiftHelperContractTests: XCTestCase {
         XCTAssertTrue(installerScript.contains("for required in awg amneziawg-go vex-helper; do"))
         XCTAssertFalse(installerScript.contains("VEX_EXPECTED_CERT_SHA256"))
         XCTAssertTrue(installerScript.contains("c6fd1853a177fbcfb04c5d4f78fbe405777b3a3e"))
+        XCTAssertTrue(installerScript.contains("f5817aa3c6875bee8828132e67a74422758f2834"))
         XCTAssertTrue(installerScript.contains("rollback_install"))
         XCTAssertTrue(installerScript.contains("root-owned verified app snapshot"))
         XCTAssertTrue(installerScript.contains("-R=\"$app_requirement\""))

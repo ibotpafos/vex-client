@@ -45,5 +45,33 @@ IDs, offline nodes, stable card order, three-column widths and Reduce Motion.
 The artifact remains at `macos-native/build/VEXNativeMac.app`, version
 **0.1.88 (120)**, and was left open in offline mode.
 
+## Signing correction
+
+Build 120 was ad-hoc signed and the installed helper rejected it. Build 121
+used the newer local certificate, but the running legacy helper is pinned to
+the original VEX release certificate. Build **0.1.88 (122)** restores the
+existing `VEX Self-Signed Application` v4 identity:
+
+- certificate SHA-1 `f5817aa3c6875bee8828132e67a74422758f2834`;
+- certificate SHA-256
+  `967a977828ebb8c4b713abeeb3844248a42bfaa8f08167cf217ca524e7a0e872`;
+- `codesign --verify --deep --strict` and the exact pinned requirement passed;
+- the running installed helper accepted the signed client and returned
+  `state=disconnected`, `route_ok=false`, `socket_exists=false`, and
+  `leak_protection=off` for the read-only status request;
+- the policy matrix accepted the correct certificate and rejected a wrong
+  identifier, ad-hoc signature, tampered binary, and unrelated certificate;
+- universal release build, packaged-resource relocation and 45-second offline
+  launch smoke passed with no crash report;
+- app executable SHA-256:
+  `5a28ed9290f55d213c742968081114548ce98cec0b385d3217992f8960377a05`;
+- the build temporarily adds the private signing keychain to the search list,
+  then restores the original list. Signing keychain and password-file modes
+  are `0600`.
+
+The future helper policy contains fixed pins for this legacy release identity,
+the newer local identity, and Apple Team `3JLW9XNU53`. Environment variables
+cannot broaden the policy.
+
 No VPN connection or helper installation is authorized in this task. Existing
 XCTest, trusted-signing and real tunnel qualification limits still apply.

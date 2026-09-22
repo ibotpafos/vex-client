@@ -7,7 +7,8 @@ SwiftPM executable with an independent native helper and release pipeline.
 Current scope:
 
 - SwiftUI `.app` bundle.
-- Ad-hoc local code signing with `codesign -s -`.
+- Stable local VEX signing when the existing v4 signing materials are present,
+  with ad-hoc signing only as a fallback on machines without them.
 - Helper status polling through `/var/run/vex-helper.sock`.
 - Connect/disconnect commands through the stable text helper protocol.
 - Transactional PF fail-open teardown, owner watchdog and continuous tunnel
@@ -49,9 +50,12 @@ fake helper sockets. They do not contact the system helper or change network
 state. They complement the full `swift test --package-path macos-native` suite,
 which requires Xcode/XCTest.
 
-Ad-hoc signing is suitable for this offline validation. Installing or using the
-privileged helper requires a signature accepted by its compiled-in signing
-policy; creating an arbitrary self-signed identity does not satisfy that policy.
+On the VEX build Mac, the builder unlocks a private build keychain derived from
+the existing `VEX Self-Signed Application` v4 key and restores the original
+user keychain search list when finished. The resulting certificate SHA-256 is
+`967a977828ebb8c4b713abeeb3844248a42bfaa8f08167cf217ca524e7a0e872`.
+The helper policy also retains the newer local certificate and Apple Team ID
+paths. Other machines fall back to ad-hoc signing for offline validation only.
 See [the consolidation report](../docs/verification/2026-09-22-macos-consolidation.md)
 for source provenance and the exact verification limits.
 

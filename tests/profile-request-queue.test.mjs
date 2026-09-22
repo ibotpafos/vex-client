@@ -31,6 +31,61 @@ async function main() {
  assert.equal(await queuedForeground, 'foreground');
  assert.equal(await queuedBackground, 'background');
  assert.deepEqual(priorityCalls, ['blocker','foreground','background']);
+
+ let releasePrefetch;
+ const prefetchGate = new Promise(r => { releasePrefetch = r; });
+ const coalescedCalls = [];
+ const prefetch = runProfileRequest(async () => {
+   coalescedCalls.push('background-prefetch');
+   await prefetchGate;
+   return 'fresh-profile';
+ }, () => true, 'background', 'same-profile');
+ await Promise.resolve();
+ const joinedForeground = runProfileRequest(async () => {
+   coalescedCalls.push('foreground-network');
+   return 'duplicate-profile';
+ }, () => true, 'foreground', 'same-profile');
+ releasePrefetch();
+ assert.equal(await prefetch, 'fresh-profile');
+ assert.equal(await joinedForeground, 'fresh-profile');
+ assert.deepEqual(coalescedCalls, ['background-prefetch']);
+
+ let releaseDifferentPrefetch;
+ const differentPrefetchGate = new Promise(r => { releaseDifferentPrefetch = r; });
+ const differentCalls = [];
+ const differentPrefetch = runProfileRequest(async () => {
+   differentCalls.push('background-revalidate');
+   await differentPrefetchGate;
+   return 'revalidated-profile';
+ }, () => true, 'background', 'revalidate-profile');
+ await Promise.resolve();
+ const freshForeground = runProfileRequest(async () => {
+   differentCalls.push('foreground-fresh');
+   return 'fresh-profile';
+ }, () => true, 'foreground', 'fresh-profile');
+ releaseDifferentPrefetch();
+ await differentPrefetch;
+ assert.equal(await freshForeground, 'fresh-profile');
+ assert.deepEqual(differentCalls, ['background-revalidate','foreground-fresh']);
+
+ let releaseFailedPrefetch;
+ const failedPrefetchGate = new Promise(r => { releaseFailedPrefetch = r; });
+ const retryCalls = [];
+ const failedPrefetch = runProfileRequest(async () => {
+   retryCalls.push('background-failed');
+   await failedPrefetchGate;
+   throw new Error('prefetch failed');
+ }, () => true, 'background', 'retry-profile');
+ const failedPrefetchRejected = assert.rejects(failedPrefetch, /prefetch failed/);
+ await Promise.resolve();
+ const retriedForeground = runProfileRequest(async () => {
+   retryCalls.push('foreground-retry');
+   return 'foreground-profile';
+ }, () => true, 'foreground', 'retry-profile');
+ releaseFailedPrefetch();
+ await failedPrefetchRejected;
+ assert.equal(await retriedForeground, 'foreground-profile');
+ assert.deepEqual(retryCalls, ['background-failed','foreground-retry']);
  console.log('PROFILE_REQUEST_SERIALIZATION_AND_STALE_CANCELLATION=PASS');
 }
 void main();

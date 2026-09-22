@@ -108,10 +108,11 @@ async function refreshVpnProfile(
   const routingMode = options.routingMode ?? defaultVpnRoutingMode;
   const queuedAtMs = Date.now();
   let queueWaitMs = 0;
+  const coalesceKey = profileRequestCoalesceKey(token, selectedLocationId, routingMode, options);
   const tunnel = await runProfileRequest(() => {
     queueWaitMs = Math.max(0, Date.now() - queuedAtMs);
     return preparedTunnel(token, undefined, { ...options, locationId: selectedLocationId, routingMode });
-  }, shouldFetch, shouldFetch ? 'background' : 'foreground');
+  }, shouldFetch, shouldFetch ? 'background' : 'foreground', coalesceKey);
   const profile: VpnProfile = {
     resolutionTiming: tunnel.resolutionTiming ? { ...tunnel.resolutionTiming, queueWaitMs } : undefined,
     config: tunnel.config,
@@ -135,6 +136,15 @@ async function refreshVpnProfile(
 
 function profileCacheKey(token: string, locationId: string, routingMode: VpnRoutingMode): string {
   return `${token}:${runtimeProfileKey()}:${normalizeLocationId(locationId)}:${routingMode}:${defaultVpnBypassRegion}:${defaultVpnRoutingPolicyVersion}`;
+}
+
+function profileRequestCoalesceKey(token: string, locationId: string, routingMode: VpnRoutingMode, options: PreparedTunnelOptions): string {
+  const bypassRegion = (options.bypassRegion ?? defaultVpnBypassRegion).trim().toLowerCase();
+  const cachedDevice = options.cachedDevice;
+  const revalidation = options.cachedConfig && cachedDevice?.id && Number.isInteger(options.knownVersion) && (options.knownVersion ?? 0) > 0
+    ? `revalidate:${cachedDevice.id}:${options.knownVersion}:${cachedDevice.keyEpoch ?? 0}:${cachedDevice.assignedIpv4 ?? ''}`
+    : 'fresh';
+  return `${profileCacheKey(token, locationId, routingMode)}:${bypassRegion}:${revalidation}`;
 }
 
 function normalizeLocationId(locationId: string): string {

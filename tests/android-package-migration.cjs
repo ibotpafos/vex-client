@@ -22,6 +22,6 @@ assert.match(config, /env\('VEX_ANDROID_APPLICATION_ID', 'com\.vexguard\.app'\)/
 assert.equal(versions.version, app.version);
 assert.ok(Number.isInteger(versions.build) && versions.build > 0);
 assert.equal(versions.is_required, false);
-assert.equal(versions.checksum_sha256, '');
-assert.equal(versions.signature_url, '');
-console.log('NEW_PACKAGE_AND_UNPUBLISHED_METADATA=PASS');
+assert.match(versions.checksum_sha256, /^[a-f0-9]{64}$/);
+assert.equal(versions.signature_url, `/downloads/Vex-Android-${versions.version}.apk.sig`);
+console.log('NEW_PACKAGE_AND_RELEASE_METADATA=PASS');

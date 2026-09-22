@@ -1,27 +1,60 @@
-name: Android 1.0.58 signed candidate
+name: Android production signed release
+
 on:
   workflow_dispatch:
+
 permissions:
-  contents: write # GitHub requires write access to read draft release assets.
+  contents: read
+
 jobs:
-  sign:
+  release:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 60
+    env:
+      ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+      VEX_UPLOAD_STORE_PASSWORD: ${{ secrets.VEX_UPLOAD_STORE_PASSWORD }}
+      VEX_UPLOAD_KEY_ALIAS: ${{ secrets.VEX_UPLOAD_KEY_ALIAS }}
+      VEX_UPLOAD_KEY_PASSWORD: ${{ secrets.VEX_UPLOAD_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
-      - name: Verify release key and sign fixed input
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
-          VEX_UPLOAD_STORE_PASSWORD: ${{ secrets.VEX_UPLOAD_STORE_PASSWORD }}
-          VEX_UPLOAD_KEY_ALIAS: ${{ secrets.VEX_UPLOAD_KEY_ALIAS }}
-          VEX_UPLOAD_KEY_PASSWORD: ${{ secrets.VEX_UPLOAD_KEY_PASSWORD }}
-        run: bash scripts/sign_android_candidate_ci.sh d3d3ac4cfac3c5eb5c3f6708b83b8c617c6230d95cfb1d1d778aefbcff29d2dc internal-app-signing-20260921-1005866-quota-ui
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache: false
+      - run: npm ci
+      - name: Verify production signing certificate
+        run: bash scripts/verify_android_signing_secret.sh cc569dfaa4c2c82379669b7c13606eb268cc3eba90a9c88e20a2d4500daf8470
+      - name: Materialize production signing keystore
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 - <<'PY'
+          import base64
+          import os
+          from pathlib import Path
+
+          destination = Path(os.environ["RUNNER_TEMP"]) / "vex-upload.jks"
+          destination.write_bytes(base64.b64decode(os.environ["ANDROID_RELEASE_KEYSTORE_BASE64"], validate=True))
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env_file:
+              env_file.write(f"VEX_UPLOAD_STORE_FILE={destination}\n")
+          PY
+      - name: Build signed production APK
+        run: npm run android:release -- --no-daemon
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: signed-app-1.0.58-1005866
-          path: signed-candidate/
+          name: android-production-${{ github.sha }}
+          path: dist/android/
           if-no-files-found: error
           retention-days: 14

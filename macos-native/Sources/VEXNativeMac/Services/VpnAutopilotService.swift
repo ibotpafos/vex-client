@@ -27,10 +27,12 @@ struct VpnAutopilotService {
             cause = .subscription
         } else if matches(messages, ["разрешение", "permission", "not authorized", "unauthorized"]) {
             cause = .permission
-        } else if matches(messages, ["revoked", "profile", "config", "public key", "private key", "wireguard key", "rotation", "no_handshake", "missing_peer"]) {
+        } else if matches(messages, ["revoked", "profile", "config", "public key", "private key", "wireguard key", "rotation"]) {
             cause = .keyOrProfile
         } else if probe.dnsOk == false || matches(messages, ["dns", "resolve", "lookup", "name resolution", "nodename nor servname"]) {
             cause = .dns
+        } else if matches(messages, ["no_handshake", "missing_peer"]) {
+            cause = .server
         } else if probe.httpsOk == false || matches(messages, ["offline", "no internet", "timed out", "timeout", "network connection was lost", "cancelled", "canceled"]) {
             cause = .network
         } else if healthReasons.contains(where: { [.deviceUsageDegraded, .staleLocalHandshake, .localStatusError].contains($0) })

@@ -60,6 +60,9 @@ final class VEXAppState: ObservableObject {
     private var sessionRefreshTask: (accessToken: String, task: Task<Result<AuthSession, Error>, Never>)?
     private var desiredVpnState: DesiredVpnState = .disconnected
     private var vpnOperationGeneration = 0
+    private var automaticFailoverLocationId: String?
+    private var lastAutomaticRecoveryAt: Date?
+    private let automaticRecoveryCooldown: TimeInterval = 120
     private var updateMonitorTask: Task<Void, Never>?
     private var customerRealtimeService: CustomerRealtimeService?
     private var customerFallbackTask: Task<Void, Never>?
@@ -201,6 +204,7 @@ final class VEXAppState: ObservableObject {
     }
 
     func selectAutoServer() {
+        automaticFailoverLocationId = nil
         serverSelectionMode = "auto"
         autoServerEnabled = true
         statusMessage = "Автовыбор сервера включен."
@@ -217,6 +221,7 @@ final class VEXAppState: ObservableObject {
 
     /// Manual selection = pin the location, leave auto mode, warm the cache.
     private func applyManualSelection(locationId: String) {
+        automaticFailoverLocationId = nil
         selectedLocationId = locationId
         serverSelectionMode = "manual"
         autoServerEnabled = false
@@ -247,6 +252,7 @@ final class VEXAppState: ObservableObject {
         let previousLocationID = selectedLocationId
         let previousSelectionMode = serverSelectionMode
         let previousAutoServerEnabled = autoServerEnabled
+        let previousAutomaticFailoverLocationId = automaticFailoverLocationId
         isServerSelectionBusy = true
         defer { isServerSelectionBusy = false }
 
@@ -261,6 +267,7 @@ final class VEXAppState: ObservableObject {
         selectedLocationId = previousLocationID
         serverSelectionMode = previousSelectionMode
         autoServerEnabled = previousAutoServerEnabled
+        automaticFailoverLocationId = previousAutomaticFailoverLocationId
         scheduleProfileWarmup()
     }
 
@@ -436,7 +443,6 @@ final class VEXAppState: ObservableObject {
                 guard allowsAutomaticFailover, assessment.canFailover, let failoverLocation = bestFailoverLocation(excluding: initialTunnel.locationId) else {
                     throw error
                 }
-                applyManualSelection(locationId: failoverLocation.id)
                 let failoverTunnel = try await profileService.resolveProfile(
                     accessToken: token,
                     locationId: failoverLocation.id,
@@ -453,7 +459,10 @@ final class VEXAppState: ObservableObject {
                         "next_location_id": failoverLocation.id,
                     ]) { current, _ in current }
                 )
-                return try await connectPreparedTunnel(failoverTunnel, helper: helper, generation: generation)
+                let connected = try await connectPreparedTunnel(failoverTunnel, helper: helper, generation: generation)
+                automaticFailoverLocationId = connected.locationId
+                selectedLocationId = connected.locationId
+                return connected
             }
         }
     }
@@ -888,7 +897,10 @@ final class VEXAppState: ObservableObject {
     }
 
     func recoverTunnelIfNeeded(using helper: VEXHelperModel) async {
-        guard autoRecoveryEnabled, helper.status.isUsableConnectedStatus, !helper.isBusy else { return }
+        guard autoRecoveryEnabled, helper.status.isUsableConnectedStatus, !helper.isBusy, !isVpnBusy else { return }
+        if let lastAutomaticRecoveryAt, Date().timeIntervalSince(lastAutomaticRecoveryAt) < automaticRecoveryCooldown {
+            return
+        }
         let usage: VpnDeviceUsage?
         if let token = accessToken {
             usage = await autopilotService.usage(accessToken: token, deviceId: activeTunnel?.device.id)
@@ -897,11 +909,14 @@ final class VEXAppState: ObservableObject {
         }
         let healthReasons = autopilotService.healthReasons(status: helper.status, usage: usage)
         guard tunnelHealthLooksStale(helper.status) || !healthReasons.isEmpty else { return }
+        lastAutomaticRecoveryAt = Date()
         let previousLocationId = targetLocationId
+        let previousAutomaticFailoverLocationId = automaticFailoverLocationId
+        let previousSelectedLocationId = selectedLocationId
         let assessment = autopilotService.assess(healthReasons: healthReasons, status: helper.status)
         let failoverLocation = allowsAutomaticFailover ? bestFailoverLocation(excluding: previousLocationId) : nil
         if assessment.canFailover, let failoverLocation {
-            applyManualSelection(locationId: failoverLocation.id)
+            automaticFailoverLocationId = failoverLocation.id
         }
         await submitDiagnostics(
             reason: "native_watchdog_stale_tunnel",
@@ -918,6 +933,15 @@ final class VEXAppState: ObservableObject {
         statusMessage = assessment.userMessage
         await disconnectVPN(using: helper, reason: "watchdog_recovery")
         await connectVPN(using: helper)
+        if helper.status.isUsableConnectedStatus, let connectedLocationId = activeTunnel?.locationId {
+            if allowsAutomaticFailover {
+                automaticFailoverLocationId = connectedLocationId
+            }
+            selectedLocationId = connectedLocationId
+        } else {
+            automaticFailoverLocationId = previousAutomaticFailoverLocationId
+            selectedLocationId = previousSelectedLocationId
+        }
     }
 
     func refreshUpdates() async {
@@ -1420,8 +1444,14 @@ final class VEXAppState: ObservableObject {
     }
 
     private var targetLocationId: String {
-        if autoServerEnabled, let first = locations.sorted(by: locationSort).first {
-            return first.id
+        if autoServerEnabled {
+            if let automaticFailoverLocationId,
+               locations.contains(where: { $0.id == automaticFailoverLocationId }) {
+                return automaticFailoverLocationId
+            }
+            if let first = locations.sorted(by: locationSort).first {
+                return first.id
+            }
         }
         return selectedLocationId
     }

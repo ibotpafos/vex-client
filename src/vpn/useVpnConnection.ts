@@ -85,6 +85,7 @@ import { parseDevicePSKRotationEvent, processDevicePSKRotationEvent } from '@/vp
 import { clearStagedDevicePSKProfile, loadStagedDevicePSKProfile, saveStagedDevicePSKProfile } from '@/vpn/devicePskRotationStore';
 import { useVpnDiagnostics } from './useVpnDiagnostics';
 import { useVpnConnectionFlow } from './useVpnConnectionFlow';
+import { dynamicRouteRuntime } from './dynamicRouteRuntime';
 import { useVpnConnectionAnimations } from './useVpnConnectionAnimations';
 import { useCustomerRealtimeStatus } from '@/realtime/customer-realtime-context';
 import {
@@ -345,6 +346,7 @@ export function useVpnConnection() {
   }, []);
 
   const handleProfileRevoked = useCallback(async () => {
+    dynamicRouteRuntime.clearActive();
     await disconnectVpn({ releaseAntiLeak: true }).catch(() => undefined);
     setVpnStatus({ state: 'disconnected', rxBytes: 0, txBytes: 0, leakProtection: 'off' });
     setVpnError('Устройство отключено администратором.');
@@ -591,6 +593,7 @@ export function useVpnConnection() {
   }, [cacheUserId, devicesData]);
 
   const handleSignOut = useCallback(async () => {
+    dynamicRouteRuntime.clearActive();
     await signOut();
     clearProfile();
     resetVpnTrafficStats();
@@ -1141,6 +1144,7 @@ export function useVpnConnection() {
       try {
         const latestStatus = await getVpnStatus().catch(() => null);
         const nextStatus = await disconnectVpn({ releaseAntiLeak: true }).catch(disconnectedVpnStatus);
+        dynamicRouteRuntime.clearActive();
         setVpnStatus(nextStatus);
         if (session && activeProfile && (latestStatus?.state === 'connected' || latestStatus?.leakProtection === 'blocking')) {
           reportVpnDisconnectEvent(activeProfile, 'user');
@@ -1170,6 +1174,7 @@ export function useVpnConnection() {
     try {
       if (isConnected || isLeakBlocked) {
         const nextStatus = await disconnectVpn({ releaseAntiLeak: true });
+        dynamicRouteRuntime.clearActive();
         setVpnStatus(nextStatus);
         if (session && activeProfile) {
           reportVpnDisconnectEvent(activeProfile, 'user');
@@ -1181,6 +1186,7 @@ export function useVpnConnection() {
       await connectCurrentVpn({ waitForAnimation: true });
       if (vpnConnectGenerationRef.current !== connectGeneration) {
         const nextStatus = await disconnectVpn({ releaseAntiLeak: true }).catch(disconnectedVpnStatus);
+        dynamicRouteRuntime.clearActive();
         setVpnStatus(nextStatus);
         if (session && activeProfile) {
           reportVpnDisconnectEvent(activeProfile, 'user');

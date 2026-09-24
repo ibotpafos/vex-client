@@ -20,6 +20,16 @@ struct DynamicRouteEngineTests {
     }
 
     @Test
+    func neverRoutesAnOlderProfileThroughAWG3Candidates() throws {
+        let engine = DynamicRouteEngine(defaults: try makeDefaults(), stateKey: "state", policyKey: "policy")
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        var oldTunnel = makeTunnel()
+        oldTunnel.config = oldTunnel.config.replacingOccurrences(of: "HeaderProtectionKey = test\n", with: "")
+        oldTunnel.awgVersion = 2
+        #expect(engine.orderedCandidates(for: oldTunnel, policy: makePolicy(now: now), now: now).isEmpty)
+    }
+
+    @Test
     func quarantinesRouteAfterFailureThreshold() throws {
         let defaults = try makeDefaults()
         let engine = DynamicRouteEngine(defaults: defaults, stateKey: "state", policyKey: "policy")
@@ -98,7 +108,7 @@ struct DynamicRouteEngineTests {
                 provisioningMode: nil, clientKeyOwnership: nil, externalDeviceId: nil,
                 platform: nil, appVersion: nil, pushProvider: nil, hasPushToken: nil
             ),
-            config: "[Interface]\nPrivateKey = test\n[Peer]\nEndpoint = 94.141.160.212:51821\n",
+            config: "[Interface]\nPrivateKey = test\n[Peer]\nHeaderProtectionKey = test\nEndpoint = 94.141.160.212:51821\n",
             locationId: "de", profileVersion: 1, routingMode: .fullTunnel,
             bypassRegion: nil, bypassRangesCount: 0, bypassDomainsCount: 0,
             routingPolicyVersion: "test", rotationRequired: false

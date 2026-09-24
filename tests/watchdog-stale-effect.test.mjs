@@ -9,6 +9,7 @@ for(const stage of ['usage','probe','diagnostics','render-lag','other-operation'
  const operation={current:false};
  const depsEqual=(a,b)=>a&&b&&a.length===b.length&&a.every((v,i)=>Object.is(v,b[i]));
  const stubs={useCallback:(f,deps)=>{const i=cursor++;if(!slots[i]||!depsEqual(slots[i].deps,deps))slots[i]={value:f,deps};return slots[i].value;},
+ Platform:{OS:'android'},dynamicRouteRuntime:{recordActiveFailure:()=>null},routeTransport:()=> 'awg3_direct',
  useRef:v=>{const i=cursor++;return slots[i]??(slots[i]={current:v});},
  useEffect:(f,deps)=>{if(!depsEqual(effectDeps,deps)){cleanup?.();effectDeps=deps;cleanup=f();}},errorMessage:e=>String(e),
  assessNativeTunnelHealth:()=>({healthy:false,reasons:['stale']}),assessVpnAutopilotIssue:()=>({sample:{}}),

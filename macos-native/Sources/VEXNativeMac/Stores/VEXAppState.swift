@@ -506,13 +506,21 @@ final class VEXAppState: ObservableObject {
             let attempt = item.tunnel
             let routeTransport = item.route.map(dynamicRouteTransport)
             try ensureConnectStillDesired(generation: generation)
+            let previousStatus = helper.status
+            let attemptStartedAt = Date()
             try await profileService.writeHelperConfig(for: attempt)
             await helper.connect(antiLeakEnabled: antiLeakEnabled)
             if helper.lastConnectAdmissionRejected {
                 throw VpnAutopilotRuntimeError.connectFailed("VPN_CONFIG_INVALID: next profile admission failed")
             }
             try ensureConnectStillDesired(generation: generation)
-            if tunnel(attempt, matches: helper.status) {
+            if try await verifiedHandshake(
+                for: attempt,
+                helper: helper,
+                previousStatus: previousStatus,
+                startedAt: attemptStartedAt,
+                generation: generation
+            ) {
                 activeResilienceRoute = item.route
                 if let route = item.route, let resiliencePolicy {
                     dynamicRouteEngine.recordSuccess(route, policy: resiliencePolicy)
@@ -550,6 +558,35 @@ final class VEXAppState: ObservableObject {
             await helper.disconnect(releaseAntiLeak: true)
         }
         throw lastError
+    }
+
+    private func verifiedHandshake(
+        for tunnel: PreparedTunnel,
+        helper: VEXHelperModel,
+        previousStatus: VpnStatus,
+        startedAt: Date,
+        generation: Int
+    ) async throws -> Bool {
+        let sameExistingTunnel = self.tunnel(tunnel, matches: previousStatus)
+        let previousHandshake = previousStatus.latestHandshake ?? 0
+        let earliestNewHandshake = UInt64(max(0, Int(startedAt.timeIntervalSince1970) - 2))
+        let deadline = Date().addingTimeInterval(8)
+        while true {
+            try ensureConnectStillDesired(generation: generation)
+            let status = helper.status
+            if self.tunnel(tunnel, matches: status), let handshake = status.latestHandshake {
+                let recentExistingHandshake = sameExistingTunnel
+                    && handshake == previousHandshake
+                    && Date().timeIntervalSince1970 - TimeInterval(handshake) < 180
+                let newHandshake = handshake >= earliestNewHandshake && handshake > previousHandshake
+                if recentExistingHandshake || newHandshake {
+                    return true
+                }
+            }
+            if Date() >= deadline { return false }
+            try await Task.sleep(nanoseconds: 400_000_000)
+            await helper.refreshStatus(quiet: true)
+        }
     }
 
     private func dynamicRouteTransport(_ candidate: ResilienceConnectionCandidate) -> String {

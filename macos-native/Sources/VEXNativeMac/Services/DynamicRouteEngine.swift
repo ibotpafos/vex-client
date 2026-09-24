@@ -55,6 +55,10 @@ final class DynamicRouteEngine {
         policy: ResiliencePolicy,
         now: Date = Date()
     ) -> [ResilienceConnectionCandidate] {
+        guard tunnel.awgVersion >= 3, tunnel.config.range(
+            of: #"(?m)^HeaderProtectionKey\s*=\s*\S+"#,
+            options: .regularExpression
+        ) != nil else { return [] }
         let deviceID = tunnel.device.id.trimmingCharacters(in: .whitespacesAndNewlines)
         let locationID = tunnel.locationId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let nodeID = tunnel.device.nodeId?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()

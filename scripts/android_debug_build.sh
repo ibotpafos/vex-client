@@ -26,7 +26,7 @@ cd "${root_dir}/android"
 
 expected_application_id="$(node -p "require('../app.json').expo.android.package")${VEX_DEBUG_APPLICATION_ID_SUFFIX}"
 expected_version_code="$(node -p "require('../app.json').expo.android.versionCode")"
-expected_version_name="$(node -p "require('../app.json').expo.version + '.debug'")"
+expected_version_name="$(node -p "require('../app.json').expo.version")${VEX_DEBUG_APPLICATION_ID_SUFFIX}"
 "${root_dir}/scripts/verify_android_apk.sh" \
   "${root_dir}/android/app/build/outputs/apk/debug/app-debug.apk" \
   "${expected_application_id}" \

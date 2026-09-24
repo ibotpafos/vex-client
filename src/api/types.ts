@@ -160,8 +160,8 @@ export type ClientDiagnosticsReportInput = {
     'reconnect_started' | 'reconnect_succeeded' | 'reconnect_failed' |
     'unexpected_disconnect';
   connectDurationMs?: number;
-  transportFrom?: 'awg3_udp443' | 'awg3' | 'awg2' | 'wireguard' | 'openvpn' | 'unknown';
-  transportTo?: 'awg3_udp443' | 'awg3' | 'awg2' | 'wireguard' | 'openvpn' | 'unknown';
+  transportFrom?: 'awg3_udp443' | 'awg3_direct' | 'awg3_relay' | 'awg3' | 'awg2' | 'wireguard' | 'openvpn' | 'unknown';
+  transportTo?: 'awg3_udp443' | 'awg3_direct' | 'awg3_relay' | 'awg3' | 'awg2' | 'wireguard' | 'openvpn' | 'unknown';
   sessionUptimeSeconds?: number;
   endpoint?: string;
   observedPublicIp?: string;

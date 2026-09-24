@@ -81,9 +81,26 @@ else
   export VEX_DEBUG_APPLICATION_ID_SUFFIX="${VEX_DEBUG_APPLICATION_ID_SUFFIX:-.dev}"
 fi
 
+if [[ "${root_dir}" == *" "* && -z "${AMNEZIAWG_EXTERNAL_DIR:-}" ]]; then
+  vex_checkout_key="$(printf '%s' "${root_dir}" | cksum | awk '{print $1}')"
+  export AMNEZIAWG_EXTERNAL_DIR="${VEX_LOCAL_RELEASE_CACHE_ROOT:-${TMPDIR:-/tmp}}/amnezia-checkouts/${vex_checkout_key}"
+fi
+if [[ "${AMNEZIAWG_EXTERNAL_DIR:-${root_dir}/external/amnezia}" == *" "* ]]; then
+  echo "AmneziaWG native build directory must not contain spaces" >&2
+  exit 1
+fi
+vex_amnezia_external_dir="${AMNEZIAWG_EXTERNAL_DIR:-${root_dir}/external/amnezia}"
+mkdir -p "${vex_amnezia_external_dir}"
+export AMNEZIAWG_EXTERNAL_DIR="$(realpath "${vex_amnezia_external_dir}")"
 "${root_dir}/scripts/bootstrap_amneziawg_android.sh"
 
-export AMNEZIAWG_TUNNEL_DIR="${AMNEZIAWG_TUNNEL_DIR:-"${root_dir}/external/amnezia/amneziawg-android/tunnel"}"
+export AMNEZIAWG_TUNNEL_DIR="${AMNEZIAWG_TUNNEL_DIR:-"${AMNEZIAWG_EXTERNAL_DIR:-${root_dir}/external/amnezia}/amneziawg-android/tunnel"}"
+if [[ "${AMNEZIAWG_TUNNEL_DIR}" == *" "* ]]; then
+  echo "AMNEZIAWG_TUNNEL_DIR must not contain spaces" >&2
+  exit 1
+fi
+AMNEZIAWG_TUNNEL_DIR="$(realpath "${AMNEZIAWG_TUNNEL_DIR}")"
+export AMNEZIAWG_TUNNEL_DIR
 export ANDROID_HOME="${ANDROID_HOME:-"${HOME}/Library/Android/sdk"}"
 export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-"${ANDROID_HOME}"}"
 export NODE_ENV="${NODE_ENV:-production}"
@@ -151,7 +168,7 @@ expected_version_code="$(node -p "require('./app.json').expo.android.versionCode
 expected_version_name="$(release_version)"
 if [[ "${variant}" == "local" ]]; then
   expected_package="${VEX_ANDROID_APPLICATION_ID:-com.vexguard.app}${VEX_DEBUG_APPLICATION_ID_SUFFIX:-.dev}"
-  expected_version_name="${expected_version_name}.dev"
+  expected_version_name="${expected_version_name}${VEX_DEBUG_APPLICATION_ID_SUFFIX:-.dev}"
 fi
 "${root_dir}/scripts/verify_android_apk.sh" \
   "${output_apk}" \

@@ -6,6 +6,7 @@ const awg3EndpointFallbackPorts = [51821, 443];
 export function isVpnTransportFallbackError(error: unknown): boolean {
   const message = errorText(error).toLowerCase();
   return message.includes('handshake') ||
+    message.includes('vpn backend did not enter the connected state') ||
     message.includes('vpn connection failed') ||
     message.includes('vpn_connect_failed') ||
     message.includes('network') ||
@@ -37,7 +38,7 @@ function endpointFallbackPortsFor(profile: VpnProfile): readonly number[] {
     : awg2EndpointFallbackPorts;
 }
 
-function profileWithEndpoint(profile: VpnProfile, endpoint: string): VpnProfile | null {
+export function profileWithEndpoint(profile: VpnProfile, endpoint: string): VpnProfile | null {
   const nextEndpoint = endpoint.trim();
   if (!nextEndpoint) {
     return null;

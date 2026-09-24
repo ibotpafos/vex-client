@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react';
+import { Platform } from 'react-native';
 import { errorMessage } from '@/utils/error';
 
 import type { ClientConnectionTelemetryInput, VpnDeviceUsage, VpnLocation } from '../api/vexApi';
@@ -8,6 +9,8 @@ import { assessNativeTunnelHealth, localStatusHealthReasons } from './nativeTunn
 import type { VpnProfile } from './profile';
 import { assessVpnAutopilotIssue, type VpnAutopilotProbeResult } from './vpnAutopilotAssessment';
 import { vpnTransportTelemetry, vpnUnexpectedDisconnectTelemetry } from './connectFlow';
+import { dynamicRouteRuntime } from './dynamicRouteRuntime';
+import { routeTransport } from './dynamicRouteCore';
 
 type MutableBooleanRef = {
   current: boolean;
@@ -77,10 +80,16 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
       });
       if (telemetry) {
         connectedAtRef.current = null;
+        const failedRoute = Platform.OS === 'android'
+          ? dynamicRouteRuntime.recordActiveFailure(activeProfileForStatus)
+          : null;
         void submitStatusDiagnostics('native_unexpected_disconnect', 'degraded', {
           previous_state: currentStatus.state,
           next_state: nextStatus.state,
-        }, telemetry).catch(() => undefined);
+        }, failedRoute ? {
+          connectionEvent: 'unexpected_disconnect',
+          transportFrom: routeTransport(failedRoute),
+        } : telemetry).catch(() => undefined);
       }
     }
     const localHealthReasons = currentStatus.state === 'connected'
@@ -145,6 +154,16 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
           probe,
           usageError,
         });
+
+        const failedRoute = Platform.OS === 'android'
+          ? dynamicRouteRuntime.recordActiveFailure(activeProfile)
+          : null;
+        if (failedRoute) {
+          void input.submitDiagnostics('dynamic_route', 'degraded', {}, {
+            connectionEvent: 'unexpected_disconnect',
+            transportFrom: routeTransport(failedRoute),
+          }).catch(() => undefined);
+        }
 
         reconnectInFlightRef.current = true;
         const reconnectStartedAt = Date.now();

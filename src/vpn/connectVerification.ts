@@ -3,6 +3,7 @@ import type { VpnStatus } from '@/native/vexVpn';
 type HandshakeVerificationOptions = {
   attempts?: number;
   minimumHandshakeEpochMillis?: number;
+  previousHandshakeEpochMillis?: number;
   pollMs?: number;
   wait?: (delayMs: number) => Promise<void>;
 };
@@ -18,7 +19,7 @@ export async function waitForVerifiedVpnConnection(
   if (initialStatus.state !== 'connected') {
     throw new Error('VPN backend did not enter the connected state.');
   }
-  if (isHandshakeVerifiedForAttempt(initialStatus, options.minimumHandshakeEpochMillis)) {
+  if (isHandshakeVerifiedForAttempt(initialStatus, options)) {
     return initialStatus;
   }
 
@@ -33,7 +34,7 @@ export async function waitForVerifiedVpnConnection(
     if (latestStatus.state !== 'connected') {
       throw new Error('VPN disconnected before the handshake completed.');
     }
-    if (isHandshakeVerifiedForAttempt(latestStatus, options.minimumHandshakeEpochMillis)) {
+    if (isHandshakeVerifiedForAttempt(latestStatus, options)) {
       return latestStatus;
     }
   }
@@ -41,13 +42,19 @@ export async function waitForVerifiedVpnConnection(
   throw new Error('VPN handshake timed out.');
 }
 
-function isHandshakeVerifiedForAttempt(status: VpnStatus, minimumHandshakeEpochMillis?: number): boolean {
+function isHandshakeVerifiedForAttempt(status: VpnStatus, options: HandshakeVerificationOptions): boolean {
+  const { minimumHandshakeEpochMillis, previousHandshakeEpochMillis } = options;
   if (minimumHandshakeEpochMillis === undefined) {
-    return status.verified !== false;
+    return status.verified !== false &&
+      (previousHandshakeEpochMillis === undefined ||
+        (typeof status.latestHandshakeEpochMillis === 'number' &&
+          status.latestHandshakeEpochMillis > previousHandshakeEpochMillis));
   }
   return status.verified !== false &&
     typeof status.latestHandshakeEpochMillis === 'number' &&
-    status.latestHandshakeEpochMillis >= minimumHandshakeEpochMillis;
+    status.latestHandshakeEpochMillis >= minimumHandshakeEpochMillis &&
+    (previousHandshakeEpochMillis === undefined ||
+      status.latestHandshakeEpochMillis > previousHandshakeEpochMillis);
 }
 
 function delay(delayMs: number): Promise<void> {

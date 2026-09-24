@@ -786,7 +786,10 @@ final class NativeParityModelTests: XCTestCase {
             latencyAverageMs: 42,
             rxBytes: 10,
             txBytes: 20,
-            samples: ["selected_location_id": "de"]
+            samples: ["selected_location_id": "de"],
+            connectionEvent: "fallback_succeeded",
+            transportFrom: "awg3_direct",
+            transportTo: "awg3_relay"
         )
 
         let dictionary = try report.dictionary()
@@ -797,6 +800,9 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertEqual(dictionary["latency_avg_ms"] as? Double, 42)
         XCTAssertEqual(dictionary["rx_bytes"] as? Int, 10)
         XCTAssertEqual((dictionary["samples"] as? [String: String])?["selected_location_id"], "de")
+        XCTAssertEqual(dictionary["connection_event"] as? String, "fallback_succeeded")
+        XCTAssertEqual(dictionary["transport_from"] as? String, "awg3_direct")
+        XCTAssertEqual(dictionary["transport_to"] as? String, "awg3_relay")
     }
 
     func testUpdateCheckDecodesChecksumAndSignatureMetadata() throws {

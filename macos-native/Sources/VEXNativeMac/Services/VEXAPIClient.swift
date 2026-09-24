@@ -103,6 +103,10 @@ struct VEXAPIClient {
         return response.usage ?? []
     }
 
+    func resiliencePolicy(accessToken: String) async throws -> ResiliencePolicy {
+        try await json("/v1/resilience/policy", accessToken: accessToken)
+    }
+
     func registerNativeDevice(
         accessToken: String,
         externalDeviceId: String,

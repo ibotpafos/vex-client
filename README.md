@@ -7,14 +7,24 @@ This repository contains VEX client applications for desktop and mobile. It inte
 ## Repository Layout
 
 - `app/`, `src/`, `assets/` - shared Expo/React Native client app.
-- `macos-native/` and `native-windows/` - standalone native desktop clients.
+- `macos-native/` - active standalone macOS client.
+- `native-windows/` - retained legacy Windows source; no new first-party Windows development or routine releases.
 - `android/`, `ios/`, `modules/` - mobile native projects and local Expo native module.
 
 ## Release Model
 
-Native macOS and Windows releases use their respective native build and
-packaging scripts; Android and iOS use Expo/EAS. Production promotion always
+Native macOS uses its native build and packaging scripts; Android and iOS use
+Expo/EAS. Production promotion always
 stays local in the private VPN repository.
+
+As of 2026-09-25, the first-party native Windows app is frozen by owner
+decision. Do not include it in ordinary feature work, CI or deployment plans.
+Existing Windows source, packages and update metadata remain untouched while
+a separate user migration/retirement decision is prepared. A one-off emergency
+repair requires a new explicit owner request.
+The retained manual Windows workflow does not package a release unless the
+repository variable `VEX_WINDOWS_RELEASE_REOPENED` is explicitly set to `true`
+after that decision.
 
 Local build entrypoints keep heavy caches and generated build directories on
 an external disk, then call the same per-platform scripts used by release
@@ -33,8 +43,7 @@ Useful controls:
 - `VEX_LOCAL_CACHE_MOVE_EXISTING=0 npm run local:release-cache` only reports existing local build directories instead of moving them.
 - `VEX_LOCAL_RELEASE_CACHE_STRICT=0` allows pre-existing cache env vars to override the external disk path. The default is strict external-disk caching.
 
-macOS and Android can build on this macOS workstation. Windows native builds
-and packages require a Windows host with PowerShell and the .NET SDK.
+macOS and Android can build on this macOS workstation.
 
 ## Local Checks
 
@@ -49,10 +58,4 @@ Native macOS release:
 
 ```bash
 npm run native:macos:release
-```
-
-Native Windows packaging requires Windows:
-
-```powershell
-npm run native:windows:package
 ```

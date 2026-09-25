@@ -1,5 +1,7 @@
 name: Native Windows CI
 
+# Archived native Windows lane: manual emergency validation only. Do not run
+# for routine PR/main changes or package a release without a new owner decision.
 on:
   workflow_dispatch:
     inputs:
@@ -27,21 +29,6 @@ on:
         required: true
         type: boolean
         default: false
-  pull_request:
-    paths:
-      - "native-windows/**"
-      - "src/api/**"
-      - ".github/workflows/native-windows-ci.yml"
-      - "package.json"
-  push:
-    branches:
-      - main
-    paths:
-      - "native-windows/**"
-      - "src/api/**"
-      - ".github/workflows/native-windows-ci.yml"
-      - "package.json"
-
 permissions:
   contents: read
 
@@ -118,6 +105,7 @@ jobs:
     if: >-
       ${{
         github.event_name == 'workflow_dispatch' &&
+        vars.VEX_WINDOWS_RELEASE_REOPENED == 'true' &&
         vars.VEX_WINDOWS_PACKAGE_NAME != '' &&
         vars.VEX_WINDOWS_PACKAGE_DISPLAY_NAME != '' &&
         vars.VEX_WINDOWS_PACKAGE_PUBLISHER != '' &&

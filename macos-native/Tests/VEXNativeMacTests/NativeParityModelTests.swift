@@ -1607,13 +1607,15 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(firewall.contains("try fileSystem.removeItem(at: paths.legacyAntileakStatePath)"))
     }
 
-    func testAntiLeakAllowsProtectedControlPlaneHttps() throws {
+    func testAntiLeakUsesSelectedEndpointWithoutStaticNodeIPs() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let firewallURL = packageRoot.appendingPathComponent("Sources/VEXHelperCore/SystemSupport.swift")
         let firewall = try String(contentsOf: firewallURL, encoding: .utf8)
 
-        XCTAssertTrue(firewall.contains("94.141.160.212"))
-        XCTAssertTrue(firewall.contains("31.77.199.171"))
+        XCTAssertTrue(firewall.contains("to \\(endpoint.host) port = 443 keep state"))
+        XCTAssertFalse(firewall.contains("94.141.160.212"))
+        XCTAssertFalse(firewall.contains("13.143.129.79"))
+        XCTAssertFalse(firewall.contains("31.77.199.171"))
         XCTAssertTrue(firewall.contains("port = 443 keep state"))
         XCTAssertTrue(firewall.contains("port = 22 keep state"))
     }

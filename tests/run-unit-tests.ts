@@ -1885,6 +1885,13 @@ function runTrafficSummaryTests(): void {
 }
 
 function runAndroidRoutingSafetyTests(): void {
+  const { readFileSync } = (process as typeof process & {
+    getBuiltinModule: (id: 'node:fs') => { readFileSync: (path: string, encoding: string) => string };
+  }).getBuiltinModule('node:fs');
+  const networkSecurityConfig = readFileSync('android/app/src/main/res/xml/network_security_config.xml', 'utf8');
+  assertEqual(networkSecurityConfig.includes('cleartextTrafficPermitted="true"'), false);
+  assertEqual(/\b(?:\d{1,3}\.){3}\d{1,3}\b/.test(networkSecurityConfig), false);
+
   assertEqual(androidExperimentalRoutingEnabled('android', undefined), false);
   assertEqual(androidExperimentalRoutingEnabled('android', '0'), false);
   assertEqual(androidExperimentalRoutingEnabled('android', '1'), true);

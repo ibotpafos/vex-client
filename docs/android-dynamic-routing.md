@@ -71,3 +71,28 @@ carry user traffic. Android's normal JS fetch is insufficient proof when the
 user has per-app routing enabled. Keep the deterministic route selector and
 watchdog independent of Jev; Jev may only advise an operator from aggregate
 diagnostics.
+
+## Release integration (2026-09-25)
+
+The Android/macOS route changes are integrated with current mobile `main` in
+`codex/dynamic-routing-release-20260925`. The separate green dynamic-IP fix
+PR #49 was merged first, removing hardcoded macOS node IP exceptions. The
+integrated branch passed `npm run check`, generated API contract verification,
+and a Swift debug build. Its local Android QA APK passed package/version,
+arm64-v8a VPN library, embedded JS, SHA-256 and APK v2-signature checks:
+
+- Path: `/Volumes/D/Codex Storage/worktrees/vex-client-dynamic-release-20260925/android/app/build/outputs/apk/local/app-local.apk`
+- SHA-256: `51813a383b63c352bf69388655b6362076c4909ed394668f6d714e0953d04eac`
+- Identity: `com.vexguard.app.dev`, version `1.0.59.dev` / code `1005967`.
+
+This debug-signed QA APK must not be published as a customer release. The
+previously installed `com.vexguard.app.debug` was not signed in, and neither
+build proves direct-to-relay recovery against a deployed server policy. Release
+order is: merge and stage the backward-compatible server policy; run the
+authenticated physical acceptance above; then produce a separately signed
+Android artifact and macOS release with matching version/update metadata.
+Before publication, record the previous verified OTA/update and native package
+versions and prove their rollback path. If either physical data-plane check or
+release acceptance fails, do not publish; keep the previous signed artifact
+and policy preference, or roll back the scoped release using the existing
+release tooling rather than changing tunnel keys or route/DNS/PF state ad hoc.

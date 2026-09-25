@@ -6,7 +6,7 @@ import {
   withLastSuccessfulEndpoint,
 } from '@/vpn/hotProfileCache';
 import {
-  connectSuppliedProfile,
+  connectionAttemptsForProfile,
   isVpnTransportFallbackError,
   profileEndpoint,
 } from '@/vpn/connectionFallback';
@@ -44,7 +44,9 @@ import {
   type ServerSelectionMode,
 } from '@/vpn/serverSelection';
 import { uploadClientDiagnostics } from '@/diagnostics/clientDiagnostics';
-import type { VpnLocation } from '@/api/vexApi';
+import { submitClientDiagnostics, type VpnLocation } from '@/api/vexApi';
+import { dynamicRouteRuntime } from '@/vpn/dynamicRouteRuntime';
+import { routeTransport, type DynamicRouteAttempt, type DynamicRouteCandidate } from '@/vpn/dynamicRouteCore';
 import type { VpnProfile } from '@/vpn/profile';
 import { connectFreshSameLocationProfile } from '@/vpn/sameLocationProfileRecovery';
 
@@ -97,39 +99,81 @@ export function useVpnConnectionFlow({
     }
     const endpointAttempts: string[] = [];
     const applicationSelection = await getVpnApplicationSelection();
-    return connectSuppliedProfile(profile, async (attempt) => {
-      const endpoint = profileEndpoint(attempt);
-      if (endpoint) {
-        endpointAttempts.push(endpoint);
+    if (Platform.OS === 'android' && session?.user.id && session.accessToken) {
+      await dynamicRouteRuntime.prepare(session.user.id, session.accessToken);
+    }
+    const attempts: DynamicRouteAttempt[] = Platform.OS === 'android'
+      ? dynamicRouteRuntime.attempts(profile)
+      : connectionAttemptsForProfile(profile).map((attempt) => ({ profile: attempt }));
+    let previousRouteTransport: 'awg3_direct' | 'awg3_relay' | undefined;
+    let lastError: unknown = new Error('VPN connection failed.');
+    const reportRoute = (candidate: DynamicRouteCandidate, event: 'connect_failed' | 'connect_succeeded' | 'fallback_failed' | 'fallback_succeeded', status: string) => {
+      if (!session?.accessToken) return;
+      void submitClientDiagnostics(session.accessToken, {
+        reason: 'dynamic_route', status, platform: 'android', deviceId: profile.device?.id,
+        connectionEvent: event, transportFrom: previousRouteTransport,
+        transportTo: routeTransport(candidate),
+      }).catch(() => undefined);
+    };
+    for (const { profile: attempt, candidate } of attempts) {
+      try {
+        const endpoint = profileEndpoint(attempt);
+        if (endpoint) {
+          endpointAttempts.push(endpoint);
+        }
+        const previousStatus = Platform.OS === 'android'
+          ? await getVpnStatus().catch(() => null)
+          : null;
+        const nativeStartMs = Date.now();
+        const startedStatus = await withTimeout(
+          connectVpn(attempt.config, {
+            antiLeakEnabled,
+            applicationRoutingMode: applicationSelection.mode,
+            selectedApplications: applicationSelection.packageNames,
+          }),
+          connectAttemptTimeoutMs,
+          'VPN connect timed out.',
+        );
+        const interfaceUpMs = Date.now();
+        const status = await waitForVerifiedVpnConnection(startedStatus, getVpnStatus, {
+          // The native backend can briefly expose the previous peer timestamp
+          // while replacing a tunnel. Require activity from this attempt. The
+          // small tolerance covers second-resolution backend timestamps.
+          minimumHandshakeEpochMillis: nativeStartMs - 2_000,
+          previousHandshakeEpochMillis: previousStatus?.latestHandshakeEpochMillis,
+        });
+        const verificationCompletedMs = Date.now();
+        // TODO(android-route-canary): require DNS and HTTPS over a VPN-bound
+        // socket before calling this full data-plane recovery. A plain JS fetch
+        // can bypass the tunnel in per-app mode, so it cannot prove this safely.
+        if (candidate) {
+          dynamicRouteRuntime.recordSuccess(candidate);
+          reportRoute(candidate, previousRouteTransport ? 'fallback_succeeded' : 'connect_succeeded', 'ok');
+        } else {
+          dynamicRouteRuntime.clearActive();
+        }
+        return {
+          interfaceUpMs,
+          endpointAttempts,
+          nativeStartMs,
+          profile: withLastSuccessfulEndpoint(attempt, endpoint),
+          status,
+          verificationCompletedMs,
+        };
+      } catch (error) {
+        lastError = error;
+        if (!isVpnTransportFallbackError(error)) {
+          throw error;
+        }
+        if (candidate) {
+          dynamicRouteRuntime.recordFailure(candidate);
+          reportRoute(candidate, previousRouteTransport ? 'fallback_failed' : 'connect_failed', 'error');
+          previousRouteTransport = routeTransport(candidate);
+        }
       }
-      const nativeStartMs = Date.now();
-      const startedStatus = await withTimeout(
-        connectVpn(attempt.config, {
-          antiLeakEnabled,
-          applicationRoutingMode: applicationSelection.mode,
-          selectedApplications: applicationSelection.packageNames,
-        }),
-        connectAttemptTimeoutMs,
-        'VPN connect timed out.',
-      );
-      const interfaceUpMs = Date.now();
-      const status = await waitForVerifiedVpnConnection(startedStatus, getVpnStatus, {
-        // The native backend can briefly expose the previous peer timestamp
-        // while replacing a tunnel. Require activity from this attempt. The
-        // small tolerance covers second-resolution backend timestamps.
-        minimumHandshakeEpochMillis: nativeStartMs - 2_000,
-      });
-      const verificationCompletedMs = Date.now();
-      return {
-        interfaceUpMs,
-        endpointAttempts,
-        nativeStartMs,
-        profile: withLastSuccessfulEndpoint(attempt, endpoint),
-        status,
-        verificationCompletedMs,
-      };
-    });
-  }, [antiLeakEnabled]);
+    }
+    throw lastError;
+  }, [antiLeakEnabled, session?.accessToken, session?.user.id]);
 
   const connectCurrentVpn = useCallback(async ({
     locationId = selectedLocationId,

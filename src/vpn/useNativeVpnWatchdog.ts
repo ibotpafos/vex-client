@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react';
+import { Platform } from 'react-native';
 import { errorMessage } from '@/utils/error';
 
 import type { ClientConnectionTelemetryInput, VpnDeviceUsage, VpnLocation } from '../api/vexApi';
@@ -14,6 +15,8 @@ import {
   recordRecoveryFailure,
   resetRecoveryBackoff,
 } from './recoveryBackoff';
+import { dynamicRouteRuntime } from './dynamicRouteRuntime';
+import { routeTransport } from './dynamicRouteCore';
 
 const recoveryCircuitFailureThreshold = 3;
 const recoveryCircuitOpenMultiplier = 20;
@@ -98,10 +101,16 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
       });
       if (telemetry) {
         connectedAtRef.current = null;
+        const failedRoute = Platform.OS === 'android'
+          ? dynamicRouteRuntime.recordActiveFailure(activeProfileForStatus)
+          : null;
         void submitStatusDiagnostics('native_unexpected_disconnect', 'degraded', {
           previous_state: currentStatus.state,
           next_state: nextStatus.state,
-        }, telemetry).catch(() => undefined);
+        }, failedRoute ? {
+          connectionEvent: 'unexpected_disconnect',
+          transportFrom: routeTransport(failedRoute),
+        } : telemetry).catch(() => undefined);
       }
     }
     const localHealthReasons = currentStatus.state === 'connected'
@@ -189,6 +198,16 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
         // any awaited diagnostics or native mutation can overlap user intent.
         input.operationInFlightRef.current = true;
         ownsOperation = true;
+        const failedRoute = Platform.OS === 'android'
+          ? dynamicRouteRuntime.recordActiveFailure(activeProfile)
+          : null;
+        if (failedRoute) {
+          void input.submitDiagnostics('dynamic_route', 'degraded', {}, {
+            connectionEvent: 'unexpected_disconnect',
+            transportFrom: routeTransport(failedRoute),
+          }).catch(() => undefined);
+        }
+
         const reconnectStartedAt = Date.now();
         lastReconnectAtRef.current = Date.now();
         resetHealthFailures();

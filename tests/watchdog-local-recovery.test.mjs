@@ -6,6 +6,7 @@ const source=stripTypeScriptTypes(fs.readFileSync('src/vpn/useNativeVpnWatchdog.
 test('confirmed local failure recovers without waiting for backend usage or a network probe',async()=>{
  let effect,usage=0,probes=0,recovered=0;
  const stubs={useCallback:f=>f,useRef:value=>({current:value}),useEffect:f=>effect=f,setInterval:()=>0,clearInterval:()=>{},errorMessage:String,
+ Platform:{OS:'android'},dynamicRouteRuntime:{recordActiveFailure:()=>null},routeTransport:()=> 'awg3_direct',
  localStatusHealthReasons:()=>['local_status_error'],vpnUnexpectedDisconnectTelemetry:()=>null,vpnTransportTelemetry:()=>({}),
  assessNativeTunnelHealth:()=>({healthy:false,reasons:['local_status_error']}),assessVpnAutopilotIssue:()=>({sample:{}}),
  initialRecoveryBackoffState:()=>({}),recoveryAttemptAllowed:()=>true,resetRecoveryBackoff:()=>({}),recordRecoveryFailure:()=>({}),

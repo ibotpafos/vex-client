@@ -386,7 +386,7 @@ final class NativeParityModelTests: XCTestCase {
         let profileService = try String(contentsOf: profileServiceURL, encoding: .utf8)
 
         XCTAssertTrue(appState.contains("LastTunnelEndpointStore().save(endpoint, locationId: attempt.locationId)"))
-        XCTAssertTrue(appState.contains("LastTunnelEndpointStore().save(endpoint, locationId: nextTunnel.locationId)"))
+        XCTAssertTrue(appState.contains("LastTunnelEndpointStore().save(endpoint, locationId: connectedTunnel.locationId)"))
         XCTAssertTrue(profileService.contains("LastTunnelEndpointStore().endpoint(for: locationId)"))
         // Retained endpoint metadata must not authorize a listener absent from
         // the complete current profile. The fallback behavior is tested below
@@ -439,7 +439,7 @@ final class NativeParityModelTests: XCTestCase {
         let appState = try String(contentsOf: appStateURL, encoding: .utf8)
 
         XCTAssertTrue(appState.contains("guard allowsAutomaticFailover, assessment.canFailover"))
-        XCTAssertTrue(appState.contains("let failoverLocation = allowsAutomaticFailover ? bestFailoverLocation"))
+        XCTAssertTrue(appState.contains("guard allowsAutomaticFailover, assessment.canFailover, let failoverLocation = bestFailoverLocation"))
         XCTAssertTrue(appState.contains("private var allowsAutomaticFailover: Bool"))
         XCTAssertTrue(appState.contains("autoServerEnabled && serverSelectionMode == \"auto\""))
         XCTAssertTrue(appState.contains("if selectedLocation == nil, serverSelectionMode != \"manual\""))
@@ -786,7 +786,10 @@ final class NativeParityModelTests: XCTestCase {
             latencyAverageMs: 42,
             rxBytes: 10,
             txBytes: 20,
-            samples: ["selected_location_id": "de"]
+            samples: ["selected_location_id": "de"],
+            connectionEvent: "fallback_succeeded",
+            transportFrom: "awg3_direct",
+            transportTo: "awg3_relay"
         )
 
         let dictionary = try report.dictionary()
@@ -797,6 +800,9 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertEqual(dictionary["latency_avg_ms"] as? Double, 42)
         XCTAssertEqual(dictionary["rx_bytes"] as? Int, 10)
         XCTAssertEqual((dictionary["samples"] as? [String: String])?["selected_location_id"], "de")
+        XCTAssertEqual(dictionary["connection_event"] as? String, "fallback_succeeded")
+        XCTAssertEqual(dictionary["transport_from"] as? String, "awg3_direct")
+        XCTAssertEqual(dictionary["transport_to"] as? String, "awg3_relay")
     }
 
     func testUpdateCheckDecodesChecksumAndSignatureMetadata() throws {
@@ -1519,7 +1525,8 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(helperModel.contains("private let handshakePatienceDeadline: Duration = .seconds(8)"), "Slow first handshakes must not trigger tunnel teardown")
         XCTAssertTrue(helperModel.contains("let structurallyUp = status.socketExists"))
         XCTAssertTrue(helperModel.contains("structurallyUp ? patientDeadline : quickDeadline"))
-        XCTAssertTrue(appState.contains("if helper.status.isUsableConnectedStatus"))
+        XCTAssertTrue(appState.contains("if try await verifiedHandshake("))
+        XCTAssertTrue(appState.contains("if tunnel(connectedTunnel, matches: helper.status)"))
         XCTAssertTrue(appState.contains("guard helper.status.isUsableConnectedStatus else"))
         XCTAssertTrue(appState.contains("scheduleProfileWarmup()"))
         XCTAssertFalse(appState.contains("await prepareSelectedProfile(forceRefresh: true)"))

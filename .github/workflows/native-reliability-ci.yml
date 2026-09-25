@@ -91,6 +91,7 @@ jobs:
         run: swift build --package-path macos-native --target VEXNativeMac
       - name: Test affected native macOS behavior
         run: |
+          swift test --package-path macos-native --filter DynamicRouteEngineTests
           swift test --package-path macos-native --filter NativeParityModelTests
           swift test --package-path macos-native --filter VEXSessionStoreTests
           swift test --package-path macos-native --filter SparkleUpdateTests

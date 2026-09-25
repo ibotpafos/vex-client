@@ -136,7 +136,26 @@ prepare_debug_keystore() {
 
 resolve_java_home
 resolve_android_sdk
+# Upstream libwg-go's Makefile treats an unescaped space in DESTDIR as a target
+# separator. Keep the native checkout/build directory on a space-free path.
+if [[ "${vex_android_root}" == *" "* && -z "${AMNEZIAWG_EXTERNAL_DIR:-}" ]]; then
+  vex_checkout_key="$(printf '%s' "${vex_android_root}" | cksum | awk '{print $1}')"
+  export AMNEZIAWG_EXTERNAL_DIR="${VEX_LOCAL_RELEASE_CACHE_ROOT}/amnezia-checkouts/${vex_checkout_key}"
+fi
+if [[ "${AMNEZIAWG_EXTERNAL_DIR:-${vex_android_root}/external/amnezia}" == *" "* ]]; then
+  echo "AmneziaWG native build directory must not contain spaces" >&2
+  return 1
+fi
+vex_amnezia_external_dir="${AMNEZIAWG_EXTERNAL_DIR:-${vex_android_root}/external/amnezia}"
+mkdir -p "${vex_amnezia_external_dir}"
+export AMNEZIAWG_EXTERNAL_DIR="$(realpath "${vex_amnezia_external_dir}")"
 "${vex_android_root}/scripts/bootstrap_amneziawg_android.sh"
 
-export AMNEZIAWG_TUNNEL_DIR="${AMNEZIAWG_TUNNEL_DIR:-"${vex_android_root}/external/amnezia/amneziawg-android/tunnel"}"
+export AMNEZIAWG_TUNNEL_DIR="${AMNEZIAWG_TUNNEL_DIR:-"${AMNEZIAWG_EXTERNAL_DIR:-${vex_android_root}/external/amnezia}/amneziawg-android/tunnel"}"
+if [[ "${AMNEZIAWG_TUNNEL_DIR}" == *" "* ]]; then
+  echo "AMNEZIAWG_TUNNEL_DIR must not contain spaces" >&2
+  return 1
+fi
+AMNEZIAWG_TUNNEL_DIR="$(realpath "${AMNEZIAWG_TUNNEL_DIR}")"
+export AMNEZIAWG_TUNNEL_DIR
 prepare_debug_keystore

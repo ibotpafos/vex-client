@@ -15,6 +15,9 @@ export function isAWG3Profile(profile: VpnProfile): boolean {
 
 export function isVpnTransportFallbackError(error: unknown): boolean {
   if (isVpnAdmissionError(error)) return false;
+  // A timed-out native connect may still be running. Starting another route
+  // would queue behind it and could replace a healthy tunnel after JS returns.
+  if (error instanceof Error && error.name === 'TimeoutError') return false;
   if (error instanceof AWG3RecoveryPolicyError) {
     return true;
   }
@@ -24,6 +27,7 @@ export function isVpnTransportFallbackError(error: unknown): boolean {
   // permission, or local application faults and must stay on the selected
   // location for a clear, recoverable error.
   return message.includes('handshake') ||
+    message.includes('vpn backend did not enter the connected state') ||
     message.includes('vpn connection failed') ||
     message.includes('vpn_connect_failed') ||
     message.includes('vpn connect timed out') ||
@@ -61,6 +65,22 @@ export async function connectSuppliedProfile<T>(profile: VpnProfile, connect: (a
 export function isVpnAdmissionError(error: unknown): boolean {
   return typeof error === 'object' && error !== null &&
     'code' in error && error.code === 'VPN_CONFIG_INVALID';
+}
+
+export function profileWithEndpoint(profile: VpnProfile, endpoint: string): VpnProfile | null {
+  const nextEndpoint = endpoint.trim();
+  const endpointMatch = /^(?:\[[0-9a-fA-F:.]+\]|[a-zA-Z0-9.-]+):([0-9]{1,5})$/.exec(nextEndpoint);
+  const endpointLines = profile.config.match(/^Endpoint\s*=\s*.+$/gm);
+  if (!isAWG3Profile(profile) || !endpointMatch || Number(endpointMatch[1]) < 1 ||
+      Number(endpointMatch[1]) > 65535 || endpointLines?.length !== 1) {
+    return null;
+  }
+  const nextConfig = profile.config.replace(/^Endpoint\s*=\s*.+$/m, () => `Endpoint = ${nextEndpoint}`);
+  return {
+    ...profile,
+    config: nextConfig,
+    device: profile.device ? { ...profile.device, endpoint: nextEndpoint } : profile.device,
+  };
 }
 
 export function profileEndpoint(profile: VpnProfile): string | undefined {

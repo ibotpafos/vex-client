@@ -43,7 +43,7 @@ fi
   "$@"
 
 expected_version_code="$(node -p "require('../app.json').expo.android.versionCode")"
-expected_version_name="$(node -p "require('../app.json').expo.version + '.dev'")"
+expected_version_name="$(node -p "require('../app.json').expo.version")${VEX_DEBUG_APPLICATION_ID_SUFFIX}"
 "${root_dir}/scripts/verify_android_apk.sh" \
   "${output_apk}" \
   "${VEX_ANDROID_APPLICATION_ID}${VEX_DEBUG_APPLICATION_ID_SUFFIX}" \

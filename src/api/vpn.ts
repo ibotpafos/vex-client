@@ -248,6 +248,15 @@ export async function vpnDeviceUsageSnapshot(accessToken: string, deviceId?: str
   };
 }
 
+export async function vpnResiliencePolicy(accessToken: string): Promise<unknown> {
+  return jsonRequest<unknown>('/v1/resilience/policy', {
+    accessToken,
+    retryCount: 0,
+    suppressErrorLog: true,
+    timeout: 2_500,
+  });
+}
+
 export async function reportVpnConnect(accessToken: string, tunnel: PreparedTunnel | { device?: VpnDevice; profileVersion?: number }): Promise<void> {
   const deviceId = tunnel.device?.id;
   if (!deviceId) {

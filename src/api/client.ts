@@ -10,6 +10,7 @@ export type RequestOptions = {
   headers?: Record<string, string>;
   idempotencyKey?: string;
   method?: string;
+  retryCount?: number;
   suppressErrorLog?: boolean;
   timeout?: number;
 };
@@ -54,7 +55,7 @@ function requireRequestTime(signal: AbortSignal, deadline: number): void {
 
 async function requestWithinDeadline(path: string, options: RequestOptions, signal: AbortSignal, deadline: number): Promise<string> {
   const method = options.method ?? 'GET';
-  const maxAttempts = method === 'GET' ? getRequestRetryCount + 1 : 1;
+  const maxAttempts = method === 'GET' ? Math.max(0, Math.min(getRequestRetryCount, options.retryCount ?? getRequestRetryCount)) + 1 : 1;
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {

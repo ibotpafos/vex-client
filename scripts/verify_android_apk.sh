@@ -38,6 +38,7 @@ actual_version_name="$(printf '%s\n' "${package_line}" | sed -n "s/.*versionName
 # Linux reports that expected SIGPIPE as exit 141 after a successful build.
 bundle_size="$({ unzip -l "${apk_path}" assets/index.android.bundle 2>/dev/null || true; } | awk '$NF == "assets/index.android.bundle" && !size { size = $1 } END { if (size) print size }')"
 actual_abis="$(unzip -Z1 "${apk_path}" | sed -n 's#^lib/\([^/]*\)/.*#\1#p' | sort -u)"
+apk_entries="$(unzip -Z1 "${apk_path}")"
 
 if [[ "${bundle_requirement}" == "required" ]] \
   && { [[ ! "${bundle_size:-}" =~ ^[0-9]+$ ]] || [[ "${bundle_size:-0}" -lt 100000 ]]; }; then
@@ -70,6 +71,12 @@ if [[ -n "${expected_abis}" ]]; then
         "${abi}" "$(printf '%s' "${actual_abis}" | tr '\n' ',' | sed 's/,$//')" >&2
       exit 1
     fi
+    for library in libwg-go.so libwg.so libwg-quick.so; do
+      if ! printf '%s\n' "${apk_entries}" | grep -Fxq "lib/${abi}/${library}"; then
+        printf 'APK is missing required VPN library %s for %s\n' "${library}" "${abi}" >&2
+        exit 1
+      fi
+    done
   done
 fi
 

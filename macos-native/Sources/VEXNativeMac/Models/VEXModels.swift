@@ -237,6 +237,92 @@ struct VpnDeviceUsageResponse: Codable, Equatable {
     var usage: [VpnDeviceUsage]?
 }
 
+struct ResiliencePolicy: Codable, Equatable {
+    var policyVersion: String
+    var generatedAt: String
+    var expiresAt: String
+    var signature: ResiliencePolicySignature
+    var probe: ResilienceProbePolicy
+    var candidates: [ResilienceConnectionCandidate]
+
+    enum CodingKeys: String, CodingKey {
+        case policyVersion = "policy_version"
+        case generatedAt = "generated_at"
+        case expiresAt = "expires_at"
+        case signature
+        case probe
+        case candidates
+    }
+}
+
+struct ResiliencePolicySignature: Codable, Equatable {
+    var status: String
+    var alg: String?
+    var keyId: String?
+    var value: String?
+    var signedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case alg
+        case keyId = "key_id"
+        case value
+        case signedAt = "signed_at"
+    }
+}
+
+struct ResilienceProbePolicy: Codable, Equatable {
+    var connectTimeoutMs: Int
+    var maxCandidates: Int
+    var failureThreshold: Int?
+    var recoveryThreshold: Int?
+    var quarantineMs: Int?
+    var failbackHoldMs: Int?
+    var checks: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case connectTimeoutMs = "connect_timeout_ms"
+        case maxCandidates = "max_candidates"
+        case failureThreshold = "failure_threshold"
+        case recoveryThreshold = "recovery_threshold"
+        case quarantineMs = "quarantine_ms"
+        case failbackHoldMs = "failback_hold_ms"
+        case checks
+    }
+}
+
+struct ResilienceConnectionCandidate: Codable, Equatable, Identifiable {
+    var id: String
+    var pathId: String?
+    var pathKind: String?
+    var entryNodeId: String?
+    var failureDomain: String?
+    var priority: Int?
+    var deviceId: String
+    var protocolName: String
+    var locationId: String
+    var nodeId: String
+    var endpoint: String
+    var healthScore: Int
+    var expiresAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case pathId = "path_id"
+        case pathKind = "path_kind"
+        case entryNodeId = "entry_node_id"
+        case failureDomain = "failure_domain"
+        case priority
+        case deviceId = "device_id"
+        case protocolName = "protocol"
+        case locationId = "location_id"
+        case nodeId = "node_id"
+        case endpoint
+        case healthScore = "health_score"
+        case expiresAt = "expires_at"
+    }
+}
+
 struct DeviceIdentityChallenge: Codable, Equatable {
     var id: String
     var nonce: String
@@ -402,6 +488,9 @@ struct ClientDiagnosticsReport: Codable, Equatable {
     var rxBytes: Int64
     var txBytes: Int64
     var samples: [String: String]
+    var connectionEvent: String? = nil
+    var transportFrom: String? = nil
+    var transportTo: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case deviceId = "device_id"
@@ -417,6 +506,9 @@ struct ClientDiagnosticsReport: Codable, Equatable {
         case rxBytes = "rx_bytes"
         case txBytes = "tx_bytes"
         case samples
+        case connectionEvent = "connection_event"
+        case transportFrom = "transport_from"
+        case transportTo = "transport_to"
     }
 }
 

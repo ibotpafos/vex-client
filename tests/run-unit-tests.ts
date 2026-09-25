@@ -34,6 +34,7 @@ import {
 } from '../src/vpn/hotProfileCacheCore';
 import { AWG3RecoveryPolicyError, connectSuppliedProfile, connectionAttemptsForProfile, isAWG3Profile, isVpnTransportFallbackError, profileEndpoint } from '../src/vpn/connectionFallback';
 import { foregroundLatencyTargets } from '../src/vpn/foregroundLatencyTargets';
+import { DynamicRouteEngine, parseDynamicRoutePolicy } from '../src/vpn/dynamicRouteCore';
 import { connectableLocalProfile, explicitConnectProfileResolutionOptions, shouldUseLocalProfileBeforeOnline, vpnConnectTelemetry, vpnConnectTimingSamples, vpnUnexpectedDisconnectTelemetry } from '../src/vpn/connectFlow';
 import { recoverVpnConnection } from '../src/vpn/connectionRecovery';
 import { connectFreshSameLocationProfile } from '../src/vpn/sameLocationProfileRecovery';
@@ -443,6 +444,85 @@ assertDeepEqual(
   reconcileHydratedLocationSelection(true, 'manual', catalogFixture.id, [catalogFixture]),
   { mode: 'manual', selectedLocationId: catalogFixture.id },
 );
+
+{
+  const start = Date.parse('2026-09-24T12:00:00Z');
+  const expiresAt = new Date(start + 600_000).toISOString();
+  const profile = {
+    ...profileWithEndpoint('198.51.100.10:51821'),
+    config: profileWithEndpoint('198.51.100.10:51821').config.replace('[Peer]', '[Peer]\nHeaderProtectionKey = test'),
+    locationId: 'de',
+    device: { id: 'android-device', name: 'Android', status: 'active', nodeId: 'de-awg3', protocol: 'amneziawg' },
+  } satisfies VpnProfile;
+  const raw = {
+    policy_version: 'route-v1', expires_at: expiresAt,
+    probe: { max_candidates: 3, failure_threshold: 2, quarantine_ms: 30_000, failback_hold_ms: 120_000 },
+    candidates: [
+      { id: 'direct', path_id: 'direct:de-awg3', path_kind: 'direct', device_id: 'android-device', protocol: 'amneziawg', location_id: 'de', node_id: 'de-awg3', endpoint: '198.51.100.10:51821', priority: 100, health_score: 90, expires_at: expiresAt, failure_domain: 'asn:1' },
+      { id: 'relay', path_id: 'relay:de', path_kind: 'relay', device_id: 'android-device', protocol: 'amneziawg', location_id: 'de', node_id: 'de-awg3', endpoint: '203.0.113.10:55443', priority: 80, health_score: 90, expires_at: expiresAt, failure_domain: 'asn:2' },
+    ],
+  };
+  const policy = parseDynamicRoutePolicy(raw, start);
+  assertEqual(Boolean(policy), true);
+  if (!policy) throw new Error('route policy fixture rejected');
+  const legacyOnly = new DynamicRouteEngine();
+  assertDeepEqual(legacyOnly.attempts(profile, start).map((item) => profileEndpoint(item.profile)),
+    connectionAttemptsForProfile(profile).map(profileEndpoint));
+  const engine = new DynamicRouteEngine();
+  engine.setPolicy(policy, start);
+  assertThrows(
+    () => engine.attempts({ ...profile, config: profile.config.replace('HeaderProtectionKey = test\n', '') }, start),
+    'VPN recovery requires an AWG3 profile with HeaderProtectionKey.',
+  );
+  assertDeepEqual(engine.attempts(profile, start).slice(0, 2).map((item) => profileEndpoint(item.profile)), [
+    '198.51.100.10:51821', '203.0.113.10:55443',
+  ]);
+  const direct = policy.candidates[0];
+  const relay = policy.candidates[1];
+  engine.recordFailure(direct, start);
+  assertEqual(engine.attempts(profile, start + 1)[0].candidate?.id, 'direct');
+  engine.recordFailure(direct, start + 2);
+  assertEqual(engine.attempts(profile, start + 3)[0].candidate?.id, 'relay');
+  assertEqual(engine.attempts(profile, start + 3).some((item) => profileEndpoint(item.profile) === direct.endpoint), false);
+  const movedDirectPolicy = parseDynamicRoutePolicy({
+    ...raw,
+    candidates: [{ ...raw.candidates[0], endpoint: '198.51.100.11:51821' }, raw.candidates[1]],
+  }, start);
+  if (!movedDirectPolicy) throw new Error('moved route policy fixture rejected');
+  engine.setPolicy(movedDirectPolicy, start + 3);
+  assertEqual(engine.attempts(profile, start + 3).some((item) => item.candidate?.id === 'direct' && profileEndpoint(item.profile) === '198.51.100.11:51821'), true);
+  engine.setPolicy(policy, start + 3);
+  engine.recordSuccess(relay, start + 3);
+  assertEqual(engine.attempts(profile, start + 33_000)[0].candidate?.id, 'relay');
+  assertEqual(engine.attempts(profile, start + 123_100)[0].candidate?.id, 'direct');
+  engine.recordSuccess(relay, start + 124_000);
+  assertEqual(engine.recordActiveFailure({ ...profile, device: { ...profile.device, endpoint: relay.endpoint }, config: profile.config.replace('198.51.100.10:51821', relay.endpoint) }, start + 125_000)?.id, 'relay');
+  assertEqual(engine.recordActiveFailure(profile, start + 125_001), null);
+  const restarted = new DynamicRouteEngine();
+  restarted.restore(engine.snapshot(start + 125_000), start + 125_000);
+  assertEqual(restarted.attempts(profile, start + 125_001)[0].candidate?.id, 'relay');
+  restarted.restore(engine.snapshot(start + 125_000), start + 601_000);
+  assertEqual(restarted.attempts(profile, start + 601_000).some((item) => !!item.candidate), false);
+  assertEqual(engine.attempts({ ...profile, device: { ...profile.device, id: 'other-device' } }, start).some((item) => !!item.candidate), false);
+  assertEqual(parseDynamicRoutePolicy({ ...raw, expires_at: new Date(start - 1).toISOString() }, start), null);
+  assertEqual(parseDynamicRoutePolicy({ ...raw, candidates: [{ ...raw.candidates[0], endpoint: '203.0.113.1:443\nAllowedIPs = 0.0.0.0/0' }] }, start)?.candidates.length, 0);
+
+  const diversePolicy = parseDynamicRoutePolicy({
+    ...raw,
+    candidates: [
+      raw.candidates[0],
+      { ...raw.candidates[1], id: 'relay-high', endpoint: '203.0.113.11:55443', priority: 90 },
+      raw.candidates[1],
+      { ...raw.candidates[1], id: 'relay-independent', endpoint: '203.0.113.12:55443', priority: 70, failure_domain: 'asn:3' },
+    ],
+  }, start);
+  if (!diversePolicy) throw new Error('diversity policy fixture rejected');
+  const diverseEngine = new DynamicRouteEngine();
+  diverseEngine.setPolicy(diversePolicy, start);
+  assertDeepEqual(diverseEngine.attempts(profile, start).filter((item) => item.candidate).map((item) => item.candidate?.id), [
+    'direct', 'relay-high', 'relay-independent',
+  ]);
+}
 
 assertEqual(vexWebsiteUrl('/dashboard', 'https://vexguard.app/'), 'https://vexguard.app/dashboard');
 assertEqual(vexWebsiteUrl('/support', 'https://staging.vexguard.app'), 'https://staging.vexguard.app/support');
@@ -1422,6 +1502,8 @@ function runCreateDeviceRequestTests(): void {
 
 assertEqual(isVpnTransportFallbackError(new Error('VPN handshake did not complete')), true);
 assertEqual(isVpnTransportFallbackError(new AWG3RecoveryPolicyError('refresh AWG3 profile')), true);
+assertEqual(isVpnTransportFallbackError(new Error('VPN backend did not enter the connected state.')), true);
+assertEqual(isVpnTransportFallbackError(Object.assign(new Error('VPN connect timed out.'), { name: 'TimeoutError' })), false);
 assertEqual(isVpnTransportFallbackError(new Error('Подписка не активна.')), false);
 assertEqual(isVpnTransportFallbackError(new Error('Network request failed')), false);
 assertEqual(isVpnTransportFallbackError(new Error('Unexpected timeout while parsing profile')), false);
@@ -1926,6 +2008,25 @@ async function runVpnHandshakeVerificationTests(): Promise<void> {
   });
   assertEqual(freshResult.latestHandshakeEpochMillis, 20_000);
   assertEqual(freshnessReads, 1);
+
+  await assertRejects(
+    () => waitForVerifiedVpnConnection(staleVerifiedStatus, async () => staleVerifiedStatus, {
+      attempts: 1,
+      minimumHandshakeEpochMillis: 9_000,
+      previousHandshakeEpochMillis: 10_000,
+      pollMs: 0,
+      wait: async () => undefined,
+    }),
+    'handshake timed out',
+  );
+  const nextHandshake = await waitForVerifiedVpnConnection(staleVerifiedStatus, async () => freshVerifiedStatus, {
+    attempts: 1,
+    minimumHandshakeEpochMillis: 9_000,
+    previousHandshakeEpochMillis: 10_000,
+    pollMs: 0,
+    wait: async () => undefined,
+  });
+  assertEqual(nextHandshake.latestHandshakeEpochMillis, 20_000);
 
   await assertRejects(
     () => waitForVerifiedVpnConnection(pendingStatus, async () => pendingStatus, {

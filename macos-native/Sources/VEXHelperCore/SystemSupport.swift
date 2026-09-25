@@ -316,10 +316,6 @@ public final class SystemPFFirewallController: PFFirewallControlling, @unchecked
             rules += "pass out quick \(endpoint.addressFamily) proto tcp from any to \(endpoint.host) port = 443 keep state\n"
             rules += "pass out quick \(endpoint.addressFamily) proto tcp from any to \(endpoint.host) port = 22 keep state\n"
         }
-        for protectedHost in ["94.141.160.212", "31.77.199.171"] {
-            rules += "pass out quick inet proto tcp from any to \(protectedHost) port = 443 keep state\n"
-            rules += "pass out quick inet proto tcp from any to \(protectedHost) port = 22 keep state\n"
-        }
         rules += "block drop out all\n"
         return rules
     }

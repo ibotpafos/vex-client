@@ -8,7 +8,7 @@ struct DynamicRouteEngineTests {
         let defaults = try makeDefaults()
         let engine = DynamicRouteEngine(defaults: defaults, stateKey: "state", policyKey: "policy")
         let now = Date(timeIntervalSince1970: 1_800_000_000)
-        let tunnel = makeTunnel()
+        let tunnel = try makeTunnel()
         let policy = makePolicy(now: now)
 
         #expect(engine.orderedCandidates(for: tunnel, policy: policy, now: now).map(\.pathId) == ["direct:de-awg3", "ru-timeweb:55443"])
@@ -23,7 +23,7 @@ struct DynamicRouteEngineTests {
     func neverRoutesAnOlderProfileThroughAWG3Candidates() throws {
         let engine = DynamicRouteEngine(defaults: try makeDefaults(), stateKey: "state", policyKey: "policy")
         let now = Date(timeIntervalSince1970: 1_800_000_000)
-        var oldTunnel = makeTunnel()
+        var oldTunnel = try makeTunnel()
         oldTunnel.config = oldTunnel.config.replacingOccurrences(of: "HeaderProtectionKey = test\n", with: "")
         oldTunnel.awgVersion = 2
         #expect(engine.orderedCandidates(for: oldTunnel, policy: makePolicy(now: now), now: now).isEmpty)
@@ -34,7 +34,7 @@ struct DynamicRouteEngineTests {
         let defaults = try makeDefaults()
         let engine = DynamicRouteEngine(defaults: defaults, stateKey: "state", policyKey: "policy")
         let now = Date(timeIntervalSince1970: 1_800_000_000)
-        let tunnel = makeTunnel()
+        let tunnel = try makeTunnel()
         let policy = makePolicy(now: now)
         let direct = try #require(policy.candidates.first { $0.pathId == "direct:de-awg3" })
 
@@ -62,7 +62,7 @@ struct DynamicRouteEngineTests {
         let defaults = try makeDefaults()
         let engine = DynamicRouteEngine(defaults: defaults, stateKey: "state", policyKey: "policy")
         let now = Date(timeIntervalSince1970: 1_800_000_000)
-        let tunnel = makeTunnel()
+        let tunnel = try makeTunnel()
         var policy = makePolicy(now: now)
         policy.probe.maxCandidates = 3
         let expiry = ISO8601DateFormatter().string(from: now.addingTimeInterval(600))
@@ -99,15 +99,13 @@ struct DynamicRouteEngineTests {
         return defaults
     }
 
-    private func makeTunnel() -> PreparedTunnel {
-        PreparedTunnel(
-            device: VpnDevice(
-                id: "device-1", name: "Mac", status: "active", assignedIpv4: nil,
-                nodeId: "de-awg3", protocol: "amneziawg", protocolLabel: nil,
-                endpoint: "94.141.160.212:51821", latencyMs: nil, publicKey: nil,
-                provisioningMode: nil, clientKeyOwnership: nil, externalDeviceId: nil,
-                platform: nil, appVersion: nil, pushProvider: nil, hasPushToken: nil
-            ),
+    private func makeTunnel() throws -> PreparedTunnel {
+        let device = try JSONDecoder().decode(
+            VpnDevice.self,
+            from: Data(#"{"id":"device-1","name":"Mac","status":"active","node_id":"de-awg3","protocol":"amneziawg","endpoint":"94.141.160.212:51821"}"#.utf8)
+        )
+        return PreparedTunnel(
+            device: device,
             config: "[Interface]\nPrivateKey = test\n[Peer]\nHeaderProtectionKey = test\nEndpoint = 94.141.160.212:51821\n",
             locationId: "de", profileVersion: 1, routingMode: .fullTunnel,
             bypassRegion: nil, bypassRangesCount: 0, bypassDomainsCount: 0,

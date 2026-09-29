@@ -32,6 +32,7 @@ import { cleanupFailedVpnConnection } from '@/vpn/failedConnectionCleanup';
 import {
   isProfileResolutionFallbackError,
   profileResolutionOrder,
+  resolveProfileOrSkipMissing,
 } from '@/vpn/profileResolutionFallback';
 import { androidVpnProfileWithinBinderBudget } from '@/vpn/androidRoutingSafety';
 import { vpnProfileAddressMatchesDevice } from '@/vpn/profileConsistency';
@@ -249,20 +250,21 @@ export function useVpnConnectionFlow({
         connectedLocationId = profileLocationId;
       } catch (error) {
         lastConnectError = error;
-        if (!isVpnTransportFallbackError(error)) {
+        if (!isVpnTransportFallbackError(error) && !isProfileResolutionFallbackError(error)) {
           throw error;
         }
       }
     }
 
-    for (const fallbackLocation of availableLocations) {
+    for (const fallbackLocation of profileResolutionOrder(profileLocationId, availableLocations)) {
       if (connected?.status.state === 'connected' || fallbackLocation.id === profileLocationId) {
         continue;
       }
-      const fallbackProfile = await resolveConnectableVpnProfile(fallbackLocation.id, {
+      const fallbackProfile = await resolveProfileOrSkipMissing(() => resolveConnectableVpnProfile(fallbackLocation.id, {
         preferCached: true,
         requestPermission: false,
-      });
+      }));
+      if (!fallbackProfile) continue;
       try {
         connected = await connectProfileWithEndpointFallback(fallbackProfile);
         connectedLocationId = fallbackLocation.id;
@@ -271,11 +273,12 @@ export function useVpnConnectionFlow({
         if (!isVpnTransportFallbackError(error)) {
           throw error;
         }
-        const freshFallbackProfile = await resolveConnectableVpnProfile(fallbackLocation.id, {
+        const freshFallbackProfile = await resolveProfileOrSkipMissing(() => resolveConnectableVpnProfile(fallbackLocation.id, {
           forceRefresh: true,
           preferCached: false,
           requestPermission: false,
-        });
+        }));
+        if (!freshFallbackProfile) continue;
         try {
           connected = await connectProfileWithEndpointFallback(freshFallbackProfile);
           connectedLocationId = fallbackLocation.id;

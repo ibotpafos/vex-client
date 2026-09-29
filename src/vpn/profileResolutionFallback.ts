@@ -9,6 +9,16 @@ export function isProfileResolutionFallbackError(error: unknown): boolean {
   return error instanceof ApiRequestError && error.status === 404;
 }
 
+/** A missing location target is skippable; shared API failures are not. */
+export async function resolveProfileOrSkipMissing<T>(resolve: () => Promise<T>): Promise<T | null> {
+  try {
+    return await resolve();
+  } catch (error) {
+    if (isProfileResolutionFallbackError(error)) return null;
+    throw error;
+  }
+}
+
 export function profileResolutionOrder(
   initialLocationId: string,
   availableLocations: VpnLocation[],

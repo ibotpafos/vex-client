@@ -66,13 +66,15 @@ if [[ -n "${expected_abis}" ]]; then
   for abi in "${required_abis[@]}"; do
     abi="$(printf '%s' "${abi}" | xargs)"
     [[ -n "${abi}" ]] || continue
-    if ! printf '%s\n' "${actual_abis}" | grep -Fxq "${abi}"; then
+    if ! grep -Fxq "${abi}" <<<"${actual_abis}"; then
       printf 'APK is missing required ABI %s; packaged ABIs: %s\n' \
         "${abi}" "$(printf '%s' "${actual_abis}" | tr '\n' ',' | sed 's/,$//')" >&2
       exit 1
     fi
     for library in libwg-go.so libwg.so libwg-quick.so; do
-      if ! printf '%s\n' "${apk_entries}" | grep -Fxq "lib/${abi}/${library}"; then
+      # A pipe into grep -q can return SIGPIPE under pipefail when an APK has
+      # many entries, falsely reporting an already-packaged VPN library missing.
+      if ! grep -Fxq "lib/${abi}/${library}" <<<"${apk_entries}"; then
         printf 'APK is missing required VPN library %s for %s\n' "${library}" "${abi}" >&2
         exit 1
       fi

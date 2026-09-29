@@ -6,32 +6,41 @@ import {
   formatQuotaBytes,
   formatQuotaResetAt,
   formatQuotaUsage,
+  hasQuotaLimit,
+  quotaHeadline,
   quotaProgress,
-  quotaRemainingBytes,
 } from '@/components/traffic-quota-presentation';
 
 export function TrafficQuotaSummary({ quota }: { quota: VpnTrafficQuota }) {
-  const remainingBytes = quotaRemainingBytes(quota.usedBytes, quota.limitBytes);
+  const limited = hasQuotaLimit(quota.limitBytes);
+  const headline = quotaHeadline(quota.usedBytes, quota.limitBytes);
   const progress = quotaProgress(quota.usedBytes, quota.limitBytes);
+  const usage = limited
+    ? formatQuotaUsage(quota.usedBytes, quota.limitBytes)
+    : `Использовано ${formatQuotaBytes(quota.usedBytes)}`;
 
   return (
     <View
-      accessibilityLabel={`Осталось ${formatQuotaBytes(remainingBytes)} из ${formatQuotaBytes(quota.limitBytes)}`}
+      accessibilityLabel={`${headline}. ${usage}`}
       style={styles.card}
       testID="home-traffic-quota"
     >
       <View style={styles.header}>
-        <Text style={styles.remaining}>Осталось {formatQuotaBytes(remainingBytes)}</Text>
-        <Text style={styles.usage}>{formatQuotaUsage(quota.usedBytes, quota.limitBytes)}</Text>
+        <Text style={styles.remaining}>{headline}</Text>
+        <Text style={styles.usage}>{usage}</Text>
       </View>
-      <View style={styles.track}>
-        <View style={[styles.progress, quota.limitReached && styles.progressReached, { width: `${progress * 100}%` }]} />
-      </View>
-      <View style={styles.footer}>
-        <Text style={styles.meta}>Сброс {formatQuotaResetAt(quota.resetAt)}</Text>
-        {quota.multiplier > 1 ? <Text style={styles.meta}>Мобильный трафик ×{quota.multiplier}</Text> : null}
-      </View>
-      {quota.limitReached ? (
+      {limited ? (
+        <View style={styles.track}>
+          <View style={[styles.progress, quota.limitReached && styles.progressReached, { width: `${progress * 100}%` }]} />
+        </View>
+      ) : null}
+      {limited || quota.multiplier > 1 ? (
+        <View style={styles.footer}>
+          {limited ? <Text style={styles.meta}>Сброс {formatQuotaResetAt(quota.resetAt)}</Text> : null}
+          {quota.multiplier > 1 ? <Text style={styles.meta}>Мобильный трафик ×{quota.multiplier}</Text> : null}
+        </View>
+      ) : null}
+      {limited && quota.limitReached ? (
         <Text accessibilityRole="alert" style={styles.warning}>
           Лимит достигнут · скорость {quota.effectiveRateLimitMbps ?? 1} Мбит/с
         </Text>

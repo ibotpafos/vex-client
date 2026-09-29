@@ -7,11 +7,11 @@ export function normalizeServerSelectionMode(value?: string | null): ServerSelec
 }
 
 export function selectableVpnLocations(locations?: VpnLocation[]): VpnLocation[] {
-  return (locations ?? []).filter((location) => location.availability !== 'retired' && location.healthyNodes > 0);
+  return (locations ?? []).filter(isSelectableLocation);
 }
 
 export function visibleVpnLocations(locations?: VpnLocation[]): VpnLocation[] {
-  return (locations ?? []).filter((location) => location.availability.trim().toLowerCase() !== 'retired');
+  return (locations ?? []).filter((location) => location.availability.trim().toLowerCase() === 'available');
 }
 
 export function locationDisplayName(location: VpnLocation): string {
@@ -78,8 +78,8 @@ function compareLocationCandidates(
   return left.index - right.index;
 }
 
-function isSelectableLocation(location: VpnLocation): boolean {
-  return location.availability !== 'retired' && location.healthyNodes > 0;
+export function isSelectableLocation(location: VpnLocation): boolean {
+  return location.availability.trim().toLowerCase() === 'available' && location.healthyNodes > 0;
 }
 
 function locationStatusScore(location: VpnLocation): number {

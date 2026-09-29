@@ -48,7 +48,7 @@ import { disconnectWithRecoveryTimeout } from '../src/vpn/disconnectRecovery';
 import { waitForVerifiedVpnConnection } from '../src/vpn/connectVerification';
 import { cleanupFailedVpnConnection } from '../src/vpn/failedConnectionCleanup';
 import { androidExperimentalRoutingEnabled, androidProfilePlatform, androidVpnProfileRequiresRefresh, androidVpnProfileWithinBinderBudget, vpnProfileRouteCount } from '../src/vpn/androidRoutingSafety';
-import { isProfileResolutionFallbackError, profileResolutionOrder } from '../src/vpn/profileResolutionFallback';
+import { isProfileResolutionFallbackError, profileResolutionOrder, resolveProfileOrSkipMissing } from '../src/vpn/profileResolutionFallback';
 import { isKeyEpochMismatchError, nextManagedKeyEpoch } from '../src/vpn/keyEpochRecovery';
 import { nativeVpnDeviceForClient } from '../src/vpn/nativeDeviceSelection';
 import { assessNativeTunnelHealth, localStatusHealthReasons } from '../src/vpn/nativeTunnelHealth';
@@ -1649,6 +1649,7 @@ async function runAsyncTests(): Promise<void> {
   runTrafficSummaryTests();
   runRecoveryBackoffTests();
   await testFreshSameLocationProfileConnectsSecondNode();
+  await testMissingFallbackProfileSkipsOnly404();
   await runServerSwitchTests();
   await runLocationCatalogRefreshTests();
 }
@@ -1762,6 +1763,38 @@ async function testFreshSameLocationProfileConnectsSecondNode(): Promise<void> {
 
   assertEqual(profileEndpoint(connected.profile), 'de-second.example.com:443');
   assertDeepEqual(calls, ['resolve:de:fresh', 'connect:de-second.example.com:443']);
+}
+
+async function testMissingFallbackProfileSkipsOnly404(): Promise<void> {
+  const locations = [
+    { id: 'de', availability: 'available', healthyNodes: 1 },
+    { id: 'retired', availability: 'retired', healthyNodes: 1 },
+    { id: 'unhealthy', availability: 'available', healthyNodes: 0 },
+    { id: 'fi', availability: 'available', healthyNodes: 1 },
+    { id: 'nl', availability: 'available', healthyNodes: 1 },
+  ] as VpnLocation[];
+  const attempted: string[] = [];
+  let resolved: string | null = null;
+  for (const location of profileResolutionOrder('de', locations).slice(1)) {
+    const profile = await resolveProfileOrSkipMissing(async () => {
+      attempted.push(location.id);
+      if (location.id === 'fi') throw new ApiRequestError('missing target', { status: 404 });
+      return location.id;
+    });
+    if (profile) { resolved = profile; break; }
+  }
+  assertDeepEqual(attempted, ['fi', 'nl']);
+  assertEqual(resolved, 'nl');
+  for (const status of [401, 409, 503]) {
+    await assertRejects(
+      () => resolveProfileOrSkipMissing(async () => { throw new ApiRequestError('shared failure', { status }); }),
+      'shared failure',
+    );
+  }
+  await assertRejects(
+    () => resolveProfileOrSkipMissing(async () => { throw new Error('Network request failed'); }),
+    'Network request failed',
+  );
 }
 
 function runRecoveryBackoffTests(): void {

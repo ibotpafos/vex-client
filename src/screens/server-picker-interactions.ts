@@ -101,6 +101,10 @@ export function serverCountLabel(count: number): string {
   return `${normalized} ${noun}`;
 }
 
+export function serverPickerCountryHint(serverCount: number, latency: string): string {
+  return `${serverCountLabel(serverCount)} · ${latency} · ${serverCount > 1 ? 'открыть список' : 'выбрать'}`;
+}
+
 export function serverPickerCountryGapDp(): number {
   return 10;
 }

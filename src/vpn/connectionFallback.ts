@@ -1,4 +1,5 @@
 import type { VpnProfile } from './profile';
+import { ApiRequestError } from '../api/error';
 
 const awg2EndpointFallbackPorts = [443, 51820];
 const awg3EndpointFallbackPorts = [51821, 443];
@@ -11,6 +12,55 @@ export function isVpnTransportFallbackError(error: unknown): boolean {
     message.includes('network') ||
     message.includes('timeout') ||
     message.includes('timed out');
+}
+
+export function isVpnLocationFailoverError(error: unknown): boolean {
+  if (error instanceof ApiRequestError) {
+    return error.status === 408 || error.status === 429 || Boolean(error.status && error.status >= 500);
+  }
+  if (isVpnTransportFallbackError(error)) return true;
+  const message = errorText(error).toLowerCase();
+  return message.includes('unavailable') || message.includes('overload') ||
+    message.includes('capacity') || message.includes('no healthy') ||
+    message.includes('недоступ') || message.includes('перегруж');
+}
+
+export async function resolveVpnProfileWithLocationFailover(
+  locationIds: readonly string[],
+  resolveProfile: (locationId: string) => Promise<VpnProfile>,
+): Promise<{ locationId: string; profile: VpnProfile }> {
+  let lastError: unknown;
+  for (const locationId of locationIds) {
+    try {
+      return { locationId, profile: await resolveProfile(locationId) };
+    } catch (error) {
+      if (!isVpnLocationFailoverError(error)) throw error;
+      lastError = error;
+    }
+  }
+  throw lastError ?? new Error('VPN profile resolution exhausted.');
+}
+
+export async function tryVpnLocationFailover<T>(
+  locationIds: readonly string[],
+  skippedLocationId: string,
+  resolveProfile: (locationId: string, fresh: boolean) => Promise<VpnProfile>,
+  connectProfile: (profile: VpnProfile) => Promise<T>,
+): Promise<{ locationId: string; result: T }> {
+  let lastError: unknown;
+  for (const locationId of locationIds) {
+    if (locationId === skippedLocationId) continue;
+    for (const fresh of [false, true]) {
+      try {
+        const profile = await resolveProfile(locationId, fresh);
+        return { locationId, result: await connectProfile(profile) };
+      } catch (error) {
+        if (!isVpnLocationFailoverError(error)) throw error;
+        lastError = error;
+      }
+    }
+  }
+  throw lastError ?? new Error('VPN location failover exhausted.');
 }
 
 export function connectionAttemptsForProfile(profile: VpnProfile): VpnProfile[] {

@@ -1,10 +1,12 @@
 {
   "android": {
-    "version": "1.0.55",
-    "build": 57,
+    "version": "1.0.59",
+    "build": 67,
     "min_supported_build": 1002930,
-    "is_required": true,
-    "release_notes": "Android owner-canary: приложение явно сообщает поддержку AmneziaWG 3 и сохраняет параметры AWG3 в управляемом профиле. Устранено кратковременное отключение VPN при повторном подключении во время запуска приложения.",
+    "is_required": false,
+    "checksum_sha256": "7eb5c6b5f9e7a76a69f25612fd85396305f279c399c47fcbbc69190ea3dd4150",
+    "signature_url": "/downloads/Vex-Android-1.0.59.apk.sig",
+    "release_notes": "Android: улучшена диагностика подключения. Приложение теперь точнее измеряет подготовку VPN-профиля и этапы перед запуском туннеля, чтобы быстрее находить и устранять редкие долгие подключения.",
     "core_version": "0.1.0",
     "config_schema_version": 1,
     "min_config_schema_version": 1
@@ -48,6 +50,7 @@
         "channel": "stable",
         "configSchemaVersion": 1,
         "supportedApiClientVersions": [
+          "native-macos-1",
           "expo-1"
         ],
         "routingPolicyVersionPrefix": "2026.06."
@@ -64,15 +67,38 @@
         "routingPolicyVersionPrefix": "2026.06."
       },
       {
+        "id": "linux-stable-v1",
+        "platform": "linux",
+        "channel": "stable",
+        "configSchemaVersion": 1,
+        "supportedApiClientVersions": [
+          "expo-1"
+        ],
+        "routingPolicyVersionPrefix": "2026.06."
+      },
+      {
         "id": "ios-stable-v1",
         "platform": "ios",
         "channel": "stable",
         "configSchemaVersion": 1,
         "supportedApiClientVersions": [
-          "ios-native-1"
+          "ios-native-1",
+          "expo-1"
         ],
         "routingPolicyVersionPrefix": "2026.06."
       }
     ]
+  },
+  "desktop": {
+    "version": "0.1.36",
+    "platform_versions": {
+      "desktop-web": "0.1.36",
+      "macos": "0.1.47",
+      "windows": "0.1.36",
+      "linux": "0.1.31"
+    },
+    "release_notes": "macOS: исправлен запуск после обновления через Sparkle; ресурсы приложения теперь корректно загружаются из установленного bundle.",
+    "config_schema_version": 1,
+    "min_config_schema_version": 1
   }
 }

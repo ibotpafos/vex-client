@@ -5,7 +5,7 @@
 
     <Grid
         x:Name="ShellRoot"
-        Background="{StaticResource VexDetailBackgroundBrush}"
+        Background="{StaticResource VexSidebarBackgroundBrush}"
         Loaded="OnShellRootLoaded"
         RequestedTheme="Dark"
         SizeChanged="OnShellRootSizeChanged">
@@ -15,8 +15,34 @@
             <RowDefinition Height="82" />
         </Grid.RowDefinitions>
 
+        <!-- WindowIntelligenceGlow equivalent: a soft cyan perimeter
+             bloom behind the shell content, mirroring the macOS client. -->
+        <Border
+            x:Name="WindowGlow"
+            Grid.Row="0"
+            Grid.RowSpan="3"
+            Margin="6"
+            IsHitTestVisible="False"
+            CornerRadius="18"
+            BorderThickness="1.5"
+            BorderBrush="{StaticResource VexBorderBrush}">
+            <Border.Background>
+                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                    <GradientStop Color="#0E22D3EE" Offset="0" />
+                    <GradientStop Color="#00021113" Offset="0.5" />
+                    <GradientStop Color="#1222D3EE" Offset="1" />
+                </LinearGradientBrush>
+            </Border.Background>
+            <Border.Shadow>
+                <ThemeShadow
+                    Opacity="0.55"
+                    BlurRadius="26" />
+            </Border.Shadow>
+        </Border>
+
         <Grid
             x:Name="FocusPulseHeader"
+            Grid.Row="0"
             Margin="24,10,24,0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />

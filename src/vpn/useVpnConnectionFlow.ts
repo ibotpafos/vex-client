@@ -8,6 +8,8 @@ import {
 import {
   connectionAttemptsForProfile,
   isVpnTransportFallbackError,
+  tryVpnLocationFailover,
+  resolveVpnProfileWithLocationFailover,
   profileEndpoint,
 } from '@/vpn/connectionFallback';
 import {
@@ -148,25 +150,16 @@ export function useVpnConnectionFlow({
     const initialLocationId = serverSelectionMode === 'auto'
       ? chooseBestVpnLocation(availableLocations)?.id ?? locationId
       : locationId;
-    let profile: VpnProfile | null = null;
-    let profileLocationId = initialLocationId;
-    let lastProfileError: unknown;
-    for (const candidate of profileResolutionOrder(initialLocationId, availableLocations)) {
-      try {
-        // A cached managed profile can outlive its server-side device. Using it
-        // before validation makes Android report a connected TUN even after the
-        // peer has been revoked, which fail-closes all user traffic. An explicit
-        // connect must therefore resolve an authoritative profile first.
-        profile = await resolveConnectableVpnProfile(candidate.id, explicitConnectProfileResolutionOptions);
-        profileLocationId = candidate.id;
-        break;
-      } catch (error) {
-        lastProfileError = error;
-      }
-    }
-    if (!profile) {
-      throw lastProfileError ?? new Error('VPN-профиль недоступен.');
-    }
+    // A cached managed profile can outlive its server-side device. Using it
+    // before validation makes Android report a connected TUN even after the
+    // peer has been revoked, which fail-closes all user traffic. An explicit
+    // connect must therefore resolve an authoritative profile first.
+    const initialResolution = await resolveVpnProfileWithLocationFailover(
+      profileResolutionOrder(initialLocationId, availableLocations).map((candidate) => candidate.id),
+      (candidateId) => resolveConnectableVpnProfile(candidateId, explicitConnectProfileResolutionOptions),
+    );
+    const profile = initialResolution.profile;
+    const profileLocationId = initialResolution.locationId;
     if (!androidVpnProfileWithinBinderBudget(Platform.OS, profile.config)) {
       throw new Error('Android VPN profile exceeds the safe route limit. Refresh the profile before connecting.');
     }
@@ -196,37 +189,21 @@ export function useVpnConnectionFlow({
       lastConnectError = error;
     }
 
-    for (const fallbackLocation of availableLocations) {
-      if (connected?.status.state === 'connected' || fallbackLocation.id === profileLocationId) {
-        continue;
-      }
-      const fallbackProfile = await resolveConnectableVpnProfile(fallbackLocation.id, {
-        preferCached: true,
-        requestPermission: false,
-      });
-      try {
-        connected = await connectProfileWithEndpointFallback(fallbackProfile);
-        connectedLocationId = fallbackLocation.id;
-      } catch (error) {
+    if (!connected || connected.status.state !== 'connected') {
+      const fallback = await tryVpnLocationFailover(
+        profileResolutionOrder(profileLocationId, availableLocations).map((candidate) => candidate.id),
+        profileLocationId,
+        (locationId, fresh) => resolveConnectableVpnProfile(locationId, fresh ? {
+          forceRefresh: true, preferCached: false, requestPermission: false,
+        } : { preferCached: true, requestPermission: false }),
+        connectProfileWithEndpointFallback,
+      ).catch(async (error) => {
         lastConnectError = error;
-        if (!isVpnTransportFallbackError(error)) {
-          throw error;
-        }
-        const freshFallbackProfile = await resolveConnectableVpnProfile(fallbackLocation.id, {
-          forceRefresh: true,
-          preferCached: false,
-          requestPermission: false,
-        });
-        try {
-          connected = await connectProfileWithEndpointFallback(freshFallbackProfile);
-          connectedLocationId = fallbackLocation.id;
-        } catch (freshError) {
-          lastConnectError = freshError;
-          if (!isVpnTransportFallbackError(freshError)) {
-            throw freshError;
-          }
-        }
-      }
+        await cleanupFailedVpnConnection(antiLeakEnabled, disconnectVpn).catch(() => undefined);
+        throw error;
+      });
+      connected = fallback.result;
+      connectedLocationId = fallback.locationId;
     }
 
     if (!connected || connected.status.state !== 'connected') {

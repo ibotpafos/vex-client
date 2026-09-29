@@ -13,6 +13,9 @@ enum FocusPulseMainWindowConfiguration {
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.toolbar = nil
+        window.isRestorable = true
+        window.restorationClass = VEXWindowRestoration.self
+        window.collectionBehavior = [.fullScreenPrimary, .managed]
         for buttonType in [
             NSWindow.ButtonType.closeButton,
             .miniaturizeButton,
@@ -26,6 +29,12 @@ enum FocusPulseMainWindowConfiguration {
         window.ignoresMouseEvents = false
         window.acceptsMouseMovedEvents = true
         window.isReleasedWhenClosed = false
+    }
+}
+
+final class VEXWindowRestoration: NSObject, NSWindowRestoration {
+    static func restoreWindow(withIdentifier identifier: NSUserInterfaceItemIdentifier, state: NSCoder, completionHandler: @escaping (NSWindow?, Error?) -> Void) {
+        completionHandler(nil, nil)
     }
 }
 

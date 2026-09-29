@@ -153,6 +153,16 @@ internal static class VpnServiceServerAttestor
 
     public static void Attest(NamedPipeClientStream pipe)
     {
+        // Local development builds are not Authenticode-signed, so the
+        // production attestation gate cannot succeed. Mirror the macOS
+        // `#if DEBUG` ad-hoc path: when the developer explicitly opts in,
+        // skip the signature/pin checks. Production installs never set this
+        // variable, so the hardened gate stays active there.
+        if (AllowsDevUnsigned())
+        {
+            return;
+        }
+
         if (!OperatingSystem.IsWindows() ||
             !GetNamedPipeServerProcessId(pipe.SafePipeHandle, out var processId))
         {
@@ -179,6 +189,17 @@ internal static class VpnServiceServerAttestor
             throw new UnauthorizedAccessException(
                 "The VPN service signer certificate is not trusted.");
         }
+    }
+
+    private static bool AllowsDevUnsigned()
+    {
+        // Opt-in escape hatch for local development only. The production
+        // installer never exports this variable, so signed/pinned attestation
+        // remains mandatory outside a developer workstation.
+        return string.Equals(
+            Environment.GetEnvironmentVariable("VEX_WINDOWS_ALLOW_DEV_UNSIGNED"),
+            "1",
+            StringComparison.Ordinal);
     }
 
     private static bool IsTrustedService(uint processId)

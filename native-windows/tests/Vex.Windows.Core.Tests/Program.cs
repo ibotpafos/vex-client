@@ -2368,7 +2368,7 @@ static WindowsUpdateAssessment VerifyRollbackManifest(
         {
           "schema": "vex.windows-update-manifest.v1",
           "channel": "stable",
-          "published_at": "2026-07-28T12:00:00Z",
+          "published_at": "2026-08-22T12:00:00Z",
           "manifest_revision": {{manifestRevision}},
           "required_version_floor": "{{requiredVersionFloor}}",
           "signing": {
@@ -2437,7 +2437,7 @@ static WindowsUpdateAssessment VerifyRollbackManifest(
                 ]),
             RollbackState: rollbackState,
             UtcNow: () => DateTimeOffset.Parse(
-                "2026-07-28T13:00:00Z")));
+                "2026-08-23T00:00:00Z")));
 }
 
 static void WindowsUpdaterRejectsManifestRevisionReplay()
@@ -2564,7 +2564,7 @@ static void WindowsUpdaterAcceptsSignedManifest()
         {
           "schema": "vex.windows-update-manifest.v1",
           "channel": "stable",
-          "published_at": "2026-07-28T12:00:00Z",
+          "published_at": "2026-08-22T12:00:00Z",
           "signing": {
             "key_id": "native-update-p256-v1",
             "algorithm": "ECDSA_P256_SHA256_DER"
@@ -2627,7 +2627,7 @@ static void WindowsUpdaterHonorsStagedRollout()
         {
           "schema": "vex.windows-update-manifest.v1",
           "channel": "stable",
-          "published_at": "2026-07-28T12:00:00Z",
+          "published_at": "2026-08-22T12:00:00Z",
           "signing": {
             "key_id": "native-update-p256-v1",
             "algorithm": "ECDSA_P256_SHA256_DER"
@@ -2691,7 +2691,7 @@ static void WindowsUpdaterRejectsTamperedManifest()
         {
           "schema": "vex.windows-update-manifest.v1",
           "channel": "stable",
-          "published_at": "2026-07-28T12:00:00Z",
+          "published_at": "2026-08-22T12:00:00Z",
           "signing": {
             "key_id": "native-update-p256-v1",
             "algorithm": "ECDSA_P256_SHA256_DER"
@@ -2757,7 +2757,7 @@ static void WindowsUpdaterStagesAndReusesPackage()
         {
           "schema": "vex.windows-update-manifest.v1",
           "channel": "stable",
-          "published_at": "2026-07-28T12:00:00Z",
+          "published_at": "2026-08-22T12:00:00Z",
           "signing": {
             "key_id": "native-update-p256-v1",
             "algorithm": "ECDSA_P256_SHA256_DER"
@@ -2886,7 +2886,7 @@ static void WindowsUpdaterRedownloadsCachedPackageWhenHashMismatched()
         {
           "schema": "vex.windows-update-manifest.v1",
           "channel": "stable",
-          "published_at": "2026-07-28T12:00:00Z",
+          "published_at": "2026-08-22T12:00:00Z",
           "signing": {
             "key_id": "native-update-p256-v1",
             "algorithm": "ECDSA_P256_SHA256_DER"
@@ -3142,7 +3142,7 @@ static void WindowsUpdaterRejectsExecutablePackageUri()
         {
           "schema": "vex.windows-update-manifest.v1",
           "channel": "stable",
-          "published_at": "2026-07-28T12:00:00Z",
+          "published_at": "2026-08-22T12:00:00Z",
           "signing": {
             "key_id": "native-update-p256-v1",
             "algorithm": "ECDSA_P256_SHA256_DER"

@@ -94,8 +94,48 @@ struct VEXAPIClient {
         return try await json("/v1/billing/payments?\(queryString([URLQueryItem(name: "limit", value: String(safeLimit))]))", accessToken: accessToken)
     }
 
+    func billingDeviceAddons(accessToken: String) async throws -> [DeviceAddon] {
+        try await json("/v1/billing/device-addons", accessToken: accessToken)
+    }
+
+    func createDeviceAddonCheckout(
+        accessToken: String,
+        returnURL: URL,
+        failedURL: URL
+    ) async throws -> DeviceAddonCheckoutSession {
+        try await json(
+            "/v1/billing/device-addons/checkout",
+            method: "POST",
+            accessToken: accessToken,
+            body: [
+                "provider": "platega",
+                "return_url": returnURL.absoluteString,
+                "failed_url": failedURL.absoluteString,
+            ],
+            idempotencyKey: "native-device-addon-\(UUID().uuidString.lowercased())"
+        )
+    }
+
     func vpnDevices(accessToken: String) async throws -> [VpnDevice] {
         try await json("/v1/devices", accessToken: accessToken)
+    }
+
+    func renameVpnDevice(accessToken: String, deviceId: String, name: String) async throws -> VpnDevice {
+        try await json(
+            "/v1/devices/\(deviceId)",
+            method: "PATCH",
+            accessToken: accessToken,
+            body: ["name": name]
+        )
+    }
+
+    func deleteVpnDevice(accessToken: String, deviceId: String) async throws {
+        _ = try await json(
+            "/v1/devices/\(deviceId)",
+            method: "DELETE",
+            accessToken: accessToken,
+            body: nil
+        ) as EmptyResponse
     }
 
     func vpnDeviceUsage(accessToken: String) async throws -> [VpnDeviceUsage] {

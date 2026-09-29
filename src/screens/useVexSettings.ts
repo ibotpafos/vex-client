@@ -9,6 +9,9 @@ import { getStartupEnabled, setStartupEnabled } from '@/native/vexVpn';
 import { getAndroidAutoConnectEnabled, getAntiLeakEnabled, getServerSelectionMode, setAndroidAutoConnectEnabled, setAntiLeakEnabled, setServerSelectionMode } from '@/settings/vpnPreferences';
 import * as SecureStore from '@/native/secureStore';
 import { useToast, type ToastOptions } from '@/ui/toast';
+import { createExpiringSettingsRemoteConfigLoader } from '@/screens/settings-remote-config-cache';
+
+const loadSettingsRemoteConfig = createExpiringSettingsRemoteConfigLoader(appRemoteConfig, 5 * 60_000);
 
 export const languages = [
   { code: 'ru', label: 'Русский' },
@@ -49,7 +52,7 @@ export function useVexSettings(showToastOverride?: (options: ToastOptions) => vo
         if (!mounted) {
           return;
         }
-        const config = await appRemoteConfig({
+        const config = await loadSettingsRemoteConfig({
           platform: info.platform,
           appVersion: info.version,
           buildNumber: Number.parseInt(info.build || '0', 10) || 0,

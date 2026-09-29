@@ -3,6 +3,7 @@ import { getAppInfo, getOrCreateDeviceId } from '@/native/appInfo';
 import { deviceIdentitySignaturePayload, getOrCreateDeviceIdentity } from '@/native/deviceIdentity';
 import { generateWireGuardKeyPair, replaceWireGuardKeyPair, getOrCreateWireGuardKeyPair, type WireGuardKeyPair } from '@/native/vexVpn';
 import { nativeVpnDeviceForClient } from '@/vpn/nativeDeviceSelection';
+import { isSelectableLocation } from '@/vpn/serverSelection';
 import { isKeyEpochMismatchError, nextManagedKeyEpoch } from '@/vpn/keyEpochRecovery';
 import { defaultVpnRoutingMode, defaultVpnRoutingPolicyVersion, resolvedVpnBypassRegion } from '@/vpn/routingPolicy';
 import { devicePushTokenPath } from '@/notifications/pushRegistration';
@@ -175,7 +176,7 @@ export async function vpnDevices(accessToken: string): Promise<VpnDevice[]> {
 
 export async function vpnLocations(accessToken: string): Promise<VpnLocation[]> {
   const response = await jsonRequest<LocationDTO[]>('/v1/locations', { accessToken, suppressErrorLog: true });
-  return response.map(parseLocation).filter((location) => location.healthyNodes > 0 && location.availability !== 'retired');
+  return response.map(parseLocation).filter(isSelectableLocation);
 }
 
 export async function vpnDeviceUsage(accessToken: string): Promise<VpnDeviceUsage[]> {

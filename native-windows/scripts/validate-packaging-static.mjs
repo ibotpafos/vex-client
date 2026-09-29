@@ -216,7 +216,7 @@ requireText(mainWindowCode, /DefaultWidth = 920;/, "default window width must ma
 requireText(mainWindowCode, /DefaultHeight = 620;/, "default window height must fit the current parity canvas");
 requireText(mainWindowCode, /AppWindow\.SetIcon\(iconPath\)/, "title bar must use the VEX icon");
 const appProject = read(path.join(appRoot, "Vex.Windows.App.csproj"));
-requireText(appProject, /<ApplicationIcon>[\s\S]*icon\.ico/, "native executable icon is missing");
+requireText(appProject, /<ApplicationIcon>[\s\S]*Vex\.ico/, "native executable icon is missing");
 const backgroundUpdater = read(
   path.join(appRoot, "Services", "NativeUpdateBackgroundHost.cs"),
 );

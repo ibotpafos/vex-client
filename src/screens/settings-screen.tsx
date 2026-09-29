@@ -18,6 +18,7 @@ import {
   Platform,
   ScrollView,
   StyleSheet,
+  Switch as ReactNativeSwitch,
   Text,
   View,
 } from "react-native";
@@ -34,6 +35,7 @@ import { useToast, type ToastOptions } from "@/ui/toast";
 import { vexColors, VexScreen, vexSharedStyles, VexPressable } from "@/ui/vex-ui";
 import { useVpnConnectionContext } from "@/vpn/vpn-connection-context";
 import { useVexSettings, languages, type LanguageCode } from "./useVexSettings";
+import { settingsSwitchImplementation } from "./settings-control-policy";
 
 export default function SettingsScreen() {
   const [isSavingSmartRouting, setIsSavingSmartRouting] = React.useState(false);
@@ -483,6 +485,21 @@ function SettingsNativeSwitch({
   testID,
   value,
 }: SettingsNativeSwitchProps) {
+  if (settingsSwitchImplementation(Platform.OS) === 'react-native') {
+    return (
+      <ReactNativeSwitch
+        accessibilityLabel={accessibilityLabel}
+        accessibilityRole="switch"
+        disabled={disabled}
+        onValueChange={onValueChange}
+        testID={testID}
+        thumbColor="#F4FCFD"
+        trackColor={{ false: '#345056', true: '#22D3EE' }}
+        value={value}
+      />
+    );
+  }
+
   return (
     <Host
       accessibilityLabel={accessibilityLabel}

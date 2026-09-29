@@ -4,6 +4,14 @@ import type { VpnStatus } from '@/native/vexVpn';
 import type { VpnProfile } from '@/vpn/profile';
 import { errorMessage } from '@/utils/error';
 
+export {
+  areVpnStatusesEqual,
+  availableVpnLocations,
+  fallbackVpnLocations,
+  vpnLocationFallbackFixturesEnabled,
+  vpnPowerButtonDisabled,
+} from './home-screen-state';
+
 export const animationKickDelayMs = 80;
 export const activeDeviceRefreshMs = 30_000;
 export const nativeStatusPollMs = 2_500;
@@ -57,10 +65,6 @@ export function supportsNativeStatusPolling() {
 
 export function nextVpnStatusWithState(current: VpnStatus, state: VpnStatus['state']): VpnStatus {
   return { ...current, state };
-}
-
-export function areVpnStatusesEqual(left: VpnStatus, right: VpnStatus) {
-  return left.state === right.state && left.rxBytes === right.rxBytes && left.txBytes === right.txBytes;
 }
 
 export { errorMessage };
@@ -127,11 +131,6 @@ export function locationLatencyText(location: VpnLocation | undefined, liveLaten
   return deviceLatencyText(location?.latencyMs);
 }
 
-export function availableVpnLocations(locations?: VpnLocation[]): VpnLocation[] {
-  const source = locations?.length ? locations : fallbackVpnLocations;
-  return source.filter((location) => location.availability !== 'retired');
-}
-
 export function serverLocationLabel(location: VpnLocation): string {
   return countryDisplayName(location);
 }
@@ -165,27 +164,6 @@ export function formatBytes(value: number) {
   if (mb < 1024) return `${mb.toFixed(mb >= 100 ? 0 : 1)} МБ`;
   return `${(mb / 1024).toFixed(1)} ГБ`;
 }
-
-export const fallbackVpnLocations: VpnLocation[] = [
-  {
-    id: 'de',
-    countryCode: 'DE',
-    city: 'Germany',
-    flagEmoji: '🇩🇪',
-    availability: 'available',
-    status: 'healthy',
-    healthyNodes: 1,
-  },
-  {
-    id: 'fi',
-    countryCode: 'FI',
-    city: 'Finland',
-    flagEmoji: '🇫🇮',
-    availability: 'available',
-    status: 'healthy',
-    healthyNodes: 1,
-  },
-];
 
 export function subscriptionTierLabel(entitlementState: Entitlement | null): string | null {
   if (!hasPaidEntitlement(entitlementState)) {

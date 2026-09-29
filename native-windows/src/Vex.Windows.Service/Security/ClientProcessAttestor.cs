@@ -30,6 +30,16 @@ public sealed class ClientProcessAttestor
 
     public bool IsAllowed(NamedPipeServerStream pipe)
     {
+        // Local development builds are not Authenticode-signed, so the
+        // production attestation gate cannot succeed. Mirror the macOS
+        // `#if DEBUG` ad-hoc path: when the developer explicitly opts in,
+        // accept the client without signature/pin checks. Production installs
+        // never set this variable, so the hardened gate stays active there.
+        if (AllowsDevUnsigned())
+        {
+            return true;
+        }
+
         if (!GetNamedPipeClientProcessId(
                 pipe.SafePipeHandle,
                 out var processId))
@@ -79,6 +89,17 @@ public sealed class ClientProcessAttestor
         _logger.LogWarning(
             "VPN IPC client attestation failed with reason {Reason}.",
             reason);
+
+    private static bool AllowsDevUnsigned()
+    {
+        // Opt-in escape hatch for local development only. The production
+        // installer never exports this variable, so signed/pinned attestation
+        // remains mandatory outside a developer workstation.
+        return string.Equals(
+            Environment.GetEnvironmentVariable("VEX_WINDOWS_ALLOW_DEV_UNSIGNED"),
+            "1",
+            StringComparison.Ordinal);
+    }
 
     private bool HasExpectedOwner(Process process)
     {

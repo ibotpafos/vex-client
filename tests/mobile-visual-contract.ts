@@ -6,6 +6,7 @@ import { homeBrandPresentation, homeLocationCopy } from '../src/screens/home-scr
 import {
   groupVpnLocationsByCountry,
   serverCountLabel,
+  serverPickerCountryHint,
   serverPickerCountryGapDp,
   serverPickerLocationTitle,
   serverPickerRowPresentation,
@@ -94,6 +95,8 @@ assertEqual(serverCountLabel(1), '1 сервер');
 assertEqual(serverCountLabel(2), '2 сервера');
 assertEqual(serverCountLabel(5), '5 серверов');
 assertEqual(serverCountLabel(11), '11 серверов');
+assertEqual(serverPickerCountryHint(2, '8 мс'), '2 сервера · 8 мс · открыть список');
+assertEqual(serverPickerCountryHint(1, '35 мс'), '1 сервер · 35 мс · выбрать');
 assertEqual(serverPickerLocationTitle({ ...germanyLocation, city: 'Germany' }), 'Франкфурт');
 assertEqual(serverPickerLocationTitle({ ...germanyLocation, city: 'VEX AWG 3.1 Features' }, 2), 'Сервер 2');
 assertTrue(serverPickerCountryGapDp() >= 8, 'Android country cards must have a visible gap');

@@ -274,3 +274,7 @@ function updateReason(update: ManualUpdateCenterInput['update']): string {
   }
   return explicitReason;
 }
+
+export function androidUpdateDismissLabel(required: boolean): 'Позже' | null {
+  return required ? null : 'Позже';
+}

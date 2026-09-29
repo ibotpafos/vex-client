@@ -40,8 +40,8 @@ function compareLocationCandidates(
   return left.index - right.index;
 }
 
-function isSelectableLocation(location: VpnLocation): boolean {
-  return location.availability !== 'retired' && location.healthyNodes > 0;
+export function isSelectableLocation(location: VpnLocation): boolean {
+  return location.availability === 'available' && location.healthyNodes > 0;
 }
 
 function locationStatusScore(location: VpnLocation): number {

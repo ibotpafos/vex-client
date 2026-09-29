@@ -2,6 +2,7 @@ import { Stack } from 'expo-router';
 import { Platform } from 'react-native';
 
 import { vexTheme } from '@/ui/vex-theme';
+import { stackAnimationForPlatform } from '@/navigation/transitionPolicy';
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -9,7 +10,7 @@ export const unstable_settings = {
 
 export default function AppLayout() {
   return (
-      <Stack>
+      <Stack screenOptions={{ animation: stackAnimationForPlatform(Platform.OS) }}>
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="settings" options={{ headerShown: false }} />
         <Stack.Screen name="vpn-applications" options={{ headerShown: false }} />

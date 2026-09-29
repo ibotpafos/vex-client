@@ -3,7 +3,7 @@ import { Button, Column, Host, List, ListItem, Spacer, Text as UniversalText } f
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AppState, Linking, Modal, Platform, StyleSheet } from 'react-native';
 import { installManualUpdate } from '@/api/manualUpdateInstall';
-import { requiresNativeUpdate } from '@/api/updatePreflight';
+import { androidUpdateDismissLabel, requiresNativeUpdate } from '@/api/updatePreflight';
 import { validateManualUpdatePayload, type AppUpdateCheckResult } from '@/api/vexApi';
 import { useMobileAppUpdateQuery } from '@/components/mobile-app-update-query';
 import { playErrorHaptic, playLightImpactHaptic, playSelectionHaptic, playSuccessHaptic } from '@/native/haptics';
@@ -228,6 +228,7 @@ function AndroidUpdateOverlayContent() {
           ? 'Повторить'
           : 'Подождите';
   const handlePrimary = canOpenManualDownload ? handleOpenManualDownload : isReady || needsInstallPermission ? handleInstall : handleRetryDownload;
+  const dismissLabel = androidUpdateDismissLabel(update.required);
 
   return (
     <Modal animationType="slide" onRequestClose={handleDismiss} visible>
@@ -245,7 +246,7 @@ function AndroidUpdateOverlayContent() {
           </List>
           {!preflight.ok ? <UniversalText textStyle={styles.error}>{preflight.error}</UniversalText> : null}
           {isError ? <UniversalText textStyle={styles.error}>{downloadState.message}</UniversalText> : null}
-          <Button label={update.required ? 'Закрыть' : 'Позже'} onPress={handleDismiss} variant="outlined" />
+          {dismissLabel ? <Button label={dismissLabel} onPress={handleDismiss} variant="outlined" /> : null}
           <Button disabled={primaryDisabled} label={primaryLabel} onPress={handlePrimary} />
           <Spacer flexible />
         </Column>

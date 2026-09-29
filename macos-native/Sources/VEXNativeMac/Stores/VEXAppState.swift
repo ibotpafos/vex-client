@@ -22,6 +22,8 @@ final class VEXAppState: ObservableObject {
     @Published private(set) var entitlement: Entitlement?
     @Published private(set) var billingSummary: BillingSummary?
     @Published private(set) var billingPayments: [BillingPayment] = []
+    @Published private(set) var deviceAddons: [DeviceAddon] = []
+    @Published private(set) var accountDevices: [VpnDevice] = []
     @Published private(set) var updateCheck: AppUpdateCheckResult?
     @Published private(set) var remoteConfig: AppRemoteConfig?
     @Published private(set) var activeTunnel: PreparedTunnel?
@@ -878,6 +880,55 @@ final class VEXAppState: ObservableObject {
         await loadBilling(token)
     }
 
+    func createDeviceAddonCheckout() async -> URL? {
+        guard let token = accessToken else { return nil }
+        guard !isBillingBusy else { return nil }
+        isBillingBusy = true
+        billingError = nil
+        defer { isBillingBusy = false }
+
+        do {
+            let returnURL = BillingPresentation.billingDashboardURL
+                .appending(queryItems: [URLQueryItem(name: "payment", value: "device_addon_pending")])
+            let failedURL = BillingPresentation.billingDashboardURL
+                .appending(queryItems: [URLQueryItem(name: "payment", value: "failed")])
+            let checkout = try await api.createDeviceAddonCheckout(
+                accessToken: token,
+                returnURL: returnURL,
+                failedURL: failedURL
+            )
+            guard let url = URL(string: checkout.url), !checkout.url.isEmpty else {
+                throw VEXAPIError.invalidResponse
+            }
+            return url
+        } catch {
+            billingError = error.localizedDescription
+            statusMessage = error.localizedDescription
+            await submitDiagnostics(reason: "device_addon_checkout_failed", status: "warning", samples: ["error": error.localizedDescription])
+            return nil
+        }
+    }
+
+    func renameDevice(_ device: VpnDevice, name: String) async {
+        guard let token = accessToken else { return }
+        do {
+            let updated = try await api.renameVpnDevice(accessToken: token, deviceId: device.id, name: name)
+            accountDevices = accountDevices.map { $0.id == updated.id ? updated : $0 }
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    func removeDevice(_ device: VpnDevice) async {
+        guard let token = accessToken else { return }
+        do {
+            try await api.deleteVpnDevice(accessToken: token, deviceId: device.id)
+            accountDevices.removeAll { $0.id == device.id }
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
     private func loadUser(_ token: String) async {
         await withSessionRetry(operation: { currentToken in
             self.user = try await self.api.me(accessToken: currentToken)
@@ -915,6 +966,8 @@ final class VEXAppState: ObservableObject {
         async let plansResult = api.billingPlans()
         async let entitlementResult = api.entitlement(accessToken: token)
         async let paymentsResult = api.billingPayments(accessToken: token, limit: 24)
+        async let addonsResult = api.billingDeviceAddons(accessToken: token)
+        async let devicesResult = api.vpnDevices(accessToken: token)
 
         do {
             let (plans, currentEntitlement) = try await (plansResult, entitlementResult)
@@ -940,6 +993,20 @@ final class VEXAppState: ObservableObject {
                 billingError = error.localizedDescription
             }
             await submitDiagnostics(reason: "billing_payments_failed", status: "warning", samples: ["error": error.localizedDescription])
+        }
+
+        do {
+            deviceAddons = try await addonsResult
+        } catch {
+            deviceAddons = []
+            await submitDiagnostics(reason: "device_addons_failed", status: "warning", samples: ["error": error.localizedDescription])
+        }
+
+        do {
+            accountDevices = try await devicesResult
+        } catch {
+            accountDevices = []
+            await submitDiagnostics(reason: "account_devices_failed", status: "warning", samples: ["error": error.localizedDescription])
         }
     }
 
@@ -1279,6 +1346,8 @@ final class VEXAppState: ObservableObject {
         entitlement = nil
         billingSummary = nil
         billingPayments = []
+        deviceAddons = []
+        accountDevices = []
         self.authError = authError
         billingError = nil
         canUnlockStoredSession =

@@ -6,7 +6,7 @@ import * as Notifications from 'expo-notifications';
 import { Stack, type ErrorBoundaryProps } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
-import { AppState, Platform, StyleSheet, View, type AppStateStatus } from 'react-native';
+import { AccessibilityInfo, Animated, AppState, Easing, Platform, StyleSheet, View, type AppStateStatus } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { SessionProvider, useSession } from '@/auth/session-context';
 import { openExternalUrl } from '@/auth/systemAuth';
@@ -19,6 +19,7 @@ import { RenderProfilerOverlay } from '@/debug/render-profiler';
 import { captureError, initSentry } from '@/observability/sentry';
 import { ToastProvider } from '@/ui/toast';
 import { VpnConnectionProvider } from '@/vpn/vpn-connection-context';
+import { bootScreenPresentation } from '@/ui/boot-screen-presentation';
 
 initSentry();
 
@@ -168,15 +169,51 @@ function RootNavigator() {
 }
 
 function BootScreen() {
+  const progress = useState(() => new Animated.Value(0))[0];
+  const presentation = bootScreenPresentation(false);
+
+  useEffect(() => {
+    let active = true;
+    let animation: Animated.CompositeAnimation | null = null;
+    void AccessibilityInfo.isReduceMotionEnabled().then((reduceMotion) => {
+      if (!active) return;
+      const motion = bootScreenPresentation(reduceMotion);
+      progress.setValue(motion.initialOpacity);
+      if (motion.durationMs === 0) return;
+      animation = Animated.timing(progress, {
+        duration: motion.durationMs,
+        easing: Easing.out(Easing.cubic),
+        toValue: 1,
+        useNativeDriver: true,
+      });
+      animation.start();
+    });
+
+    return () => {
+      active = false;
+      animation?.stop();
+    };
+  }, [progress]);
+
   return (
-    <Host colorScheme="dark" seedColor="#22D3EE" style={styles.host} useViewportSizeMeasurement>
-      <Column alignment="center" spacing={16} style={styles.hostContent}>
-        <Spacer flexible />
-        <UniversalText textStyle={styles.bootTitle}>VEX</UniversalText>
-        <UniversalText textStyle={styles.bootMessage}>Готовим защищённое подключение…</UniversalText>
-        <Spacer flexible />
-      </Column>
-    </Host>
+    <View accessibilityLabel="VEX" style={styles.bootScreen}>
+      <Animated.Text
+        style={[
+          styles.bootWordmark,
+          {
+            opacity: progress,
+            transform: [{
+              scale: progress.interpolate({
+                inputRange: [0, 1],
+                outputRange: [presentation.initialScale, 1],
+              }),
+            }],
+          },
+        ]}
+      >
+        {presentation.label}
+      </Animated.Text>
+    </View>
   );
 }
 
@@ -214,15 +251,18 @@ const styles = StyleSheet.create({
     gap: 16,
     paddingHorizontal: 32,
   },
-  bootTitle: {
-    color: '#43D9E7',
-    fontSize: 34,
-    fontWeight: '900',
+  bootScreen: {
+    alignItems: 'center',
+    backgroundColor: '#020A0B',
+    flex: 1,
+    justifyContent: 'center',
   },
-  bootMessage: {
-    color: '#91A8AC',
-    fontSize: 15,
-    textAlign: 'center',
+  bootWordmark: {
+    color: '#F4FCFD',
+    fontSize: 42,
+    fontWeight: '700',
+    letterSpacing: 14,
+    paddingLeft: 14,
   },
   errorTitle: {
     color: '#F4FCFD',

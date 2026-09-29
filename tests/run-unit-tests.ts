@@ -4,7 +4,7 @@ import { devicePushTokenPath, fcmPushRegistration } from '../src/notifications/p
 import { ApiRequestError, normalizeApiRequestError, technicalWorksMessage } from '../src/api/error';
 import { installManualUpdate } from '../src/api/manualUpdateInstall';
 import { errorMessage } from '../src/utils/error';
-import { assessManualUpdateCenter, canUseOtaUpdate, requiresNativeUpdate, shouldOfferAppUpdate, updateCheckChannel, validateManualUpdatePayloadForBaseUrl } from '../src/api/updatePreflight';
+import { androidUpdateDismissLabel, assessManualUpdateCenter, canUseOtaUpdate, requiresNativeUpdate, shouldOfferAppUpdate, updateCheckChannel, validateManualUpdatePayloadForBaseUrl } from '../src/api/updatePreflight';
 import {
   authCallbackAttemptKey,
   getOrCreateAuthCallbackAttempt,
@@ -29,7 +29,9 @@ import {
   withLastSuccessfulEndpoint,
   type HotVpnProfileRecord,
 } from '../src/vpn/hotProfileCacheCore';
-import { connectionAttemptsForProfile, isVpnTransportFallbackError, profileEndpoint } from '../src/vpn/connectionFallback';
+import { connectionAttemptsForProfile, isVpnTransportFallbackError, profileEndpoint, resolveVpnProfileWithLocationFailover, tryVpnLocationFailover } from '../src/vpn/connectionFallback';
+import { entitlementCacheTtlMs, vpnQueryCacheFreshness } from '../src/vpn/vpnQueryCacheCore';
+import { clearDefinitiveEntitlementFailure } from '../src/vpn/entitlementRevocation';
 import { connectableLocalProfile, explicitConnectProfileResolutionOptions, shouldUseLocalProfileBeforeOnline, vpnConnectTelemetry, vpnConnectTimingSamples, vpnUnexpectedDisconnectTelemetry } from '../src/vpn/connectFlow';
 import { recoverVpnConnection } from '../src/vpn/connectionRecovery';
 import { disconnectWithRecoveryTimeout } from '../src/vpn/disconnectRecovery';
@@ -51,6 +53,7 @@ import { buildCreateDeviceRequest } from '../src/api/deviceCreateRequest';
 import { getOrCreateNativeDeviceRegistration } from '../src/api/nativeDeviceRegistration';
 import { canAutomaticallyApplyOtaUpdate } from '../src/updates/otaAutoApply';
 import { HOME_TAB_ROUTE } from '../src/navigation/routes';
+import { stackAnimationForPlatform } from '../src/navigation/transitionPolicy';
 import { fallbackLocationEndpoint } from '../src/vpn/locationEndpoint';
 import type { VpnDevice, VpnDeviceUsage, VpnLocation } from '../src/api/vexApi';
 import type { VpnStatus } from '../src/native/vexVpn';
@@ -64,6 +67,143 @@ import type { ConfigContext } from '@expo/config';
 import { vexWebsiteUrl } from '../src/navigation/website';
 import { authEntryStepAfterBack } from '../src/auth/authEntry';
 import { clientDiagnosticsRequestBody } from '../src/api/clientDiagnosticsRequest';
+import {
+  areVpnStatusesEqual,
+  availableVpnLocations,
+  fallbackVpnLocations,
+  vpnPowerButtonDisabled,
+} from '../src/screens/home-screen-state';
+import {
+  homeConnectionPresentation,
+  homeLocationBackdropKey,
+  homeLocationCopy,
+} from '../src/screens/home-screen-visual';
+import { createExpiringSettingsRemoteConfigLoader } from '../src/screens/settings-remote-config-cache';
+import { settingsSwitchImplementation } from '../src/screens/settings-control-policy';
+import { bootScreenPresentation } from '../src/ui/boot-screen-presentation';
+const amsterdamLocation: VpnLocation = {
+  id: 'nl',
+  countryCode: 'NL',
+  city: 'Amsterdam',
+  flagEmoji: '🇳🇱',
+  availability: 'available',
+  status: 'healthy',
+  healthyNodes: 1,
+  latencyMs: 42,
+};
+assertEqual(homeLocationBackdropKey(amsterdamLocation), 'nl');
+assertDeepEqual(homeLocationCopy(amsterdamLocation, '42 мс'), {
+  city: 'Амстердам',
+  countryAndLatency: 'Нидерланды · 42 мс',
+});
+assertDeepEqual(homeLocationCopy({ ...amsterdamLocation, countryCode: 'FI', city: 'Finland' }, '-- мс'), {
+  city: 'Хельсинки',
+  countryAndLatency: 'Финляндия · -- мс',
+});
+assertEqual(homeLocationBackdropKey({ ...amsterdamLocation, id: 'future', countryCode: 'JP' }), 'fallback');
+assertDeepEqual(homeConnectionPresentation('idle'), {
+  action: 'Подключить',
+  helper: 'Одно касание',
+  status: 'VPN выключен',
+  tone: 'idle',
+});
+assertDeepEqual(homeConnectionPresentation('connected'), {
+  action: 'Подключено',
+  helper: 'Соединение защищено',
+  status: 'VPN включён',
+  tone: 'connected',
+});
+assertDeepEqual(homeConnectionPresentation('connecting'), {
+  action: 'Отменить',
+  helper: 'Создаём защищённый канал',
+  status: 'Подключаем',
+  tone: 'busy',
+});
+const { readFileSync: readSourceFile } = (process as typeof process & {
+  getBuiltinModule: (id: 'node:fs') => { readFileSync: (path: URL, encoding: string) => string };
+}).getBuiltinModule('node:fs');
+const signInScreenSource = readSourceFile(new URL('../src/screens/sign-in-screen.tsx', import.meta.url), 'utf8');
+assertEqual(signInScreenSource.includes('@expo/ui/jetpack-compose'), false);
+const serverPickerModalSource = readSourceFile(new URL('../src/components/server-picker-modal.web.tsx', import.meta.url), 'utf8');
+assertEqual(serverPickerModalSource.includes('@expo/ui/jetpack-compose'), false);
+
+const unchangedTrafficStatus: VpnStatus = {
+  state: 'connected',
+  rxBytes: 0,
+  txBytes: 0,
+  leakProtection: 'off',
+  verified: false,
+};
+assertEqual(areVpnStatusesEqual(unchangedTrafficStatus, { ...unchangedTrafficStatus, verified: true }), false);
+assertEqual(areVpnStatusesEqual(unchangedTrafficStatus, {
+  ...unchangedTrafficStatus,
+  latestHandshakeEpochMillis: 1_777_777,
+}), false);
+assertEqual(vpnQueryCacheFreshness(1_000, 1_000 + entitlementCacheTtlMs, entitlementCacheTtlMs), 'fresh');
+assertEqual(vpnQueryCacheFreshness(1_000, 1_001 + entitlementCacheTtlMs, entitlementCacheTtlMs), 'stale');
+assertEqual(vpnQueryCacheFreshness(1_000, 1_001 + entitlementCacheTtlMs * 2, entitlementCacheTtlMs), 'expired');
+
+const revokedState: {
+  devices: VpnDevice[] | null;
+  entitlement: { active: boolean } | null;
+  locations: VpnLocation[] | null;
+} = {
+  entitlement: { active: true },
+  locations: [{ id: 'de', name: 'Germany' } as unknown as VpnLocation],
+  devices: [{ id: 'device-1' } as VpnDevice],
+};
+const revokedQueries = new Map<string, unknown>([
+  ['entitlement:revoked-token', { active: true }],
+  ['vpn-locations:revoked-token', revokedState.locations],
+  ['vpn-devices:revoked-token', revokedState.devices],
+  ['vpn-profile:revoked-token:de:full_tunnel', { entitlement: { active: true } }],
+  ['vpn-profile:other-token:de:full_tunnel', { entitlement: { active: true } }],
+]);
+clearDefinitiveEntitlementFailure(
+  {
+    removeQueries: ({ queryKey }) => {
+      const queryPrefix = queryKey.join(':');
+      for (const key of revokedQueries.keys()) {
+        if (key === queryPrefix || key.startsWith(`${queryPrefix}:`)) revokedQueries.delete(key);
+      }
+    },
+  },
+  'revoked-token',
+  {
+    clearEntitlement: () => { revokedState.entitlement = null; },
+    clearLocations: () => { revokedState.locations = null; },
+    clearDevices: () => { revokedState.devices = null; },
+  },
+);
+assertDeepEqual(revokedState, { entitlement: null, locations: null, devices: null });
+const revokedCachedProfile = revokedQueries.get('vpn-profile:revoked-token:de:full_tunnel') as
+  | { entitlement?: { active?: boolean } }
+  | undefined;
+assertEqual(revokedCachedProfile?.entitlement?.active === true, false);
+assertEqual(revokedQueries.has('vpn-profile:other-token:de:full_tunnel'), true);
+assertEqual(revokedQueries.size, 1);
+
+assertEqual(areVpnStatusesEqual(unchangedTrafficStatus, {
+  ...unchangedTrafficStatus,
+  leakProtection: 'blocking',
+}), false);
+
+const authoritativeEmptyLocations = availableVpnLocations([], true);
+assertDeepEqual(authoritativeEmptyLocations, []);
+assertDeepEqual(availableVpnLocations(undefined, false), []);
+assertDeepEqual(availableVpnLocations(undefined, true), fallbackVpnLocations);
+assertDeepEqual(availableVpnLocations([
+  { ...fallbackVpnLocations[0], id: 'pilot', availability: 'hidden', healthyNodes: 1 },
+  { ...fallbackVpnLocations[0], id: 'offline', healthyNodes: 0 },
+  fallbackVpnLocations[1],
+]), [fallbackVpnLocations[1]]);
+assertEqual(vpnPowerButtonDisabled({
+  canCancelConnecting: false,
+  hasSelectedLocation: authoritativeEmptyLocations.length > 0,
+  isConnected: false,
+  isLeakBlocked: false,
+  isVpnBusy: false,
+}), true);
 
 assertEqual(vexWebsiteUrl('/dashboard', 'https://vexguard.app/'), 'https://vexguard.app/dashboard');
 assertEqual(vexWebsiteUrl('/support', 'https://staging.vexguard.app'), 'https://staging.vexguard.app/support');
@@ -1046,6 +1186,7 @@ assertEqual(isVpnTransportFallbackError(new Error('Подписка не акт�
   const best = chooseBestVpnLocation([
     locationCandidate('de', { availability: 'retired', latencyMs: 10 }),
     locationCandidate('fi', { healthyNodes: 0, latencyMs: 12 }),
+    locationCandidate('pilot', { availability: 'hidden', latencyMs: 1 }),
     locationCandidate('nl', { latencyMs: 55 }),
   ]);
 
@@ -1105,6 +1246,7 @@ void runAsyncTests().catch((error) => {
 });
 
 async function runAsyncTests(): Promise<void> {
+  await runVpnLocationFailoverTests();
   await runAuthStorageWarmStartTests();
   await runSessionLoadRetryTests();
   await runSessionStorePersistenceTests();
@@ -1118,12 +1260,89 @@ async function runAsyncTests(): Promise<void> {
   await runVpnDisconnectRecoveryTests();
   await runVpnHandshakeVerificationTests();
   await runFailedConnectionCleanupTests();
+  await runSettingsRemoteConfigCacheTests();
   runNavigationRouteTests();
   runAndroidRoutingSafetyTests();
   runErrorMessageTests();
   runServerPickerInteractionTests();
   runTrafficSummaryTests();
   await runServerSwitchTests();
+}
+
+async function runSettingsRemoteConfigCacheTests(): Promise<void> {
+  let now = 1_000;
+  let calls = 0;
+  const load = createExpiringSettingsRemoteConfigLoader(
+    async (input: { buildNumber: number }) => {
+      calls += 1;
+      return { buildNumber: input.buildNumber, request: calls };
+    },
+    300_000,
+    () => now,
+  );
+
+  const first = await load({ buildNumber: 100 });
+  const repeated = await load({ buildNumber: 100 });
+  assertDeepEqual(repeated, first);
+  assertEqual(calls, 1);
+
+  await load({ buildNumber: 101 });
+  assertEqual(calls, 2);
+
+  now += 300_001;
+  await load({ buildNumber: 101 });
+  assertEqual(calls, 3);
+}
+
+assertEqual(settingsSwitchImplementation('android'), 'react-native');
+assertEqual(settingsSwitchImplementation('ios'), 'expo-ui');
+assertEqual(androidUpdateDismissLabel(true), null);
+assertEqual(androidUpdateDismissLabel(false), 'Позже');
+assertDeepEqual(bootScreenPresentation(false), {
+  durationMs: 450,
+  initialOpacity: 0,
+  initialScale: 0.96,
+  label: 'VEX',
+});
+assertDeepEqual(bootScreenPresentation(true), {
+  durationMs: 0,
+  initialOpacity: 1,
+  initialScale: 1,
+  label: 'VEX',
+});
+
+async function runVpnLocationFailoverTests(): Promise<void> {
+  const attempts: string[] = [];
+  const result = await tryVpnLocationFailover(
+    ['de', 'fi', 'nl'],
+    'de',
+    async (locationId, fresh) => {
+      attempts.push(`${locationId}:${fresh ? 'fresh' : 'cached'}`);
+      if (locationId === 'fi') throw new ApiRequestError('capacity unavailable', { status: 503 });
+      return { locationId, config: '[Interface]\nAddress = 10.0.0.2/32' } as VpnProfile;
+    },
+    async (profile) => ({ locationId: profile.locationId }),
+  );
+  assertEqual(result.locationId, 'nl');
+  assertEqual(attempts.join(','), 'fi:cached,fi:fresh,nl:cached');
+  await assertRejects(
+    () => tryVpnLocationFailover(
+      ['de', 'fi', 'nl'],
+      'de',
+      async () => { throw new ApiRequestError('Unauthorized', { status: 401 }); },
+      async () => ({ ok: true }),
+    ),
+    'Unauthorized',
+  );
+  const initialAttempts: string[] = [];
+  await assertRejects(
+    () => resolveVpnProfileWithLocationFailover(['de', 'fi', 'nl'], async (locationId) => {
+      initialAttempts.push(locationId);
+      throw new ApiRequestError('Permission denied: network policy', { status: 403 });
+    }),
+    'Permission denied',
+  );
+  assertEqual(initialAttempts.join(','), 'de');
 }
 
 async function runNativeDeviceRegistrationTests(): Promise<void> {
@@ -2040,6 +2259,9 @@ async function runManualUpdateInstallTests(): Promise<void> {
 function runNavigationRouteTests(): void {
   assertEqual(HOME_TAB_ROUTE, '/(app)/(tabs)/');
   assertEqual(HOME_TAB_ROUTE.includes('/index'), false);
+  assertEqual(stackAnimationForPlatform('android'), 'none');
+  assertEqual(stackAnimationForPlatform('ios'), 'default');
+  assertEqual(stackAnimationForPlatform('web'), 'default');
 }
 
 function runErrorMessageTests(): void {

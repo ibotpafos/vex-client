@@ -85,7 +85,10 @@ import {
   saveCachedEntitlement,
   saveCachedVpnDevices,
   saveCachedVpnLocations,
+  clearVpnQueryCaches,
 } from './vpnQueryCache';
+import { ApiRequestError } from '@/api/error';
+import { clearDefinitiveEntitlementFailure } from './entitlementRevocation';
 
 import {
   activeDeviceRefreshMs,
@@ -105,6 +108,7 @@ import {
   supportsNativeVpnWatchdog,
   supportsNativeStatusPolling,
   nextVpnStatusWithState,
+  vpnPowerButtonDisabled,
   areVpnStatusesEqual,
   errorMessage,
   isAuthenticationError,
@@ -269,10 +273,34 @@ export function useVpnConnection() {
   }, []);
 
   const handleProfileRevoked = useCallback(async () => {
+    if (cacheUserId) await clearVpnQueryCaches(cacheUserId).catch(() => undefined);
+    if (accessToken) {
+      clearDefinitiveEntitlementFailure(queryClient, accessToken, {
+        clearEntitlement: () => {
+          setEntitlementData(null);
+          setPersistedEntitlement(null);
+        },
+        clearLocations: () => {
+          setLocationsData(null);
+          setPersistedLocations(null);
+        },
+        clearDevices: () => {
+          setDevicesData(null);
+          setPersistedDevices(null);
+        },
+      });
+    } else {
+      setEntitlementData(null);
+      setPersistedEntitlement(null);
+      setLocationsData(null);
+      setPersistedLocations(null);
+      setDevicesData(null);
+      setPersistedDevices(null);
+    }
     await disconnectVpn({ releaseAntiLeak: true }).catch(() => undefined);
     setVpnStatus({ state: 'disconnected', rxBytes: 0, txBytes: 0, leakProtection: 'off' });
     setVpnError('Устройство отключено администратором.');
-  }, [setVpnStatus]);
+  }, [accessToken, cacheUserId, queryClient, setVpnStatus]);
 
   const handleSubscriptionRequired = useCallback(() => {
     void openExternalUrl(vexWebsite.dashboard()).catch(() => {
@@ -385,6 +413,23 @@ export function useVpnConnection() {
       } catch (error) {
         if (!cancelled) {
           setEntitlementError(error);
+          if (error instanceof ApiRequestError && error.status === 401) {
+            if (cacheUserId) await clearVpnQueryCaches(cacheUserId).catch(() => undefined);
+            clearDefinitiveEntitlementFailure(queryClient, accessToken, {
+              clearEntitlement: () => {
+                setEntitlementData(null);
+                setPersistedEntitlement(null);
+              },
+              clearLocations: () => {
+                setLocationsData(null);
+                setPersistedLocations(null);
+              },
+              clearDevices: () => {
+                setDevicesData(null);
+                setPersistedDevices(null);
+              },
+            });
+          }
         }
       }
     };
@@ -397,7 +442,7 @@ export function useVpnConnection() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [accessToken, entitlementQueryKey, fetchEntitlement, queryClient]);
+  }, [accessToken, cacheUserId, entitlementQueryKey, fetchEntitlement, queryClient]);
 
   useEffect(() => {
     if (!accessToken || !hasVpnAccess) {
@@ -460,6 +505,12 @@ export function useVpnConnection() {
       return;
     }
     setPersistedEntitlement(entitlementData);
+    if (!hasPaidEntitlement(entitlementData)) {
+      void clearVpnQueryCaches(cacheUserId).catch(() => undefined);
+      setPersistedLocations(null);
+      setPersistedDevices(null);
+      return;
+    }
     void saveCachedEntitlement(cacheUserId, entitlementData).catch(() => undefined);
   }, [cacheUserId, entitlementData]);
 
@@ -553,7 +604,13 @@ export function useVpnConnection() {
   const selectedLatencyText = locationLatencyText(selectedLocation);
 
   const canCancelConnecting = connectionPhase === 'connecting';
-  const powerButtonDisabled = isVpnBusy && !canCancelConnecting;
+  const powerButtonDisabled = vpnPowerButtonDisabled({
+    canCancelConnecting,
+    hasSelectedLocation: Boolean(selectedLocation),
+    isConnected,
+    isLeakBlocked,
+    isVpnBusy,
+  });
 
   useEffect(() => {
     void Promise.all([getSelectedVpnLocation(), getServerSelectionMode(), getAntiLeakEnabled(), getVpnRoutingMode()])

@@ -414,7 +414,8 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(appState.contains("async let plansResult = api.billingPlans()"))
         XCTAssertTrue(appState.contains("async let entitlementResult = api.entitlement(accessToken: token)"))
         XCTAssertTrue(appState.contains("async let paymentsResult = api.billingPayments(accessToken: token, limit: 24)"))
-        XCTAssertTrue(appState.contains("billingPayments = try await paymentsResult"), "Payments must reuse the concurrently started request")
+        XCTAssertTrue(appState.contains("let loaded = try await paymentsResult"), "Payments must reuse the concurrently started request")
+        XCTAssertTrue(appState.contains("billingPayments = loaded"))
     }
 
     func testAppStateRestoresActiveTunnelWhenHelperIsAlreadyConnectedOnLaunch() throws {
@@ -719,7 +720,7 @@ final class NativeParityModelTests: XCTestCase {
         let rowEnd = try XCTUnwrap(accountPanel.range(of: "private struct EmptyPaymentHistory"))
         let rowSource = accountPanel[rowStart.lowerBound..<rowEnd.lowerBound]
         let historyStart = try XCTUnwrap(accountPanel.range(of: "private var paymentHistory"))
-        let historyEnd = try XCTUnwrap(accountPanel.range(of: "private var accessTitle"))
+        let historyEnd = try XCTUnwrap(accountPanel.range(of: "private var deviceManagement"))
         let historySource = accountPanel[historyStart.lowerBound..<historyEnd.lowerBound]
 
         XCTAssertFalse(historySource.contains("BillingPresentation.billingDashboardURL"))
@@ -1027,7 +1028,7 @@ final class NativeParityModelTests: XCTestCase {
 
         XCTAssertTrue(home.contains("requiresHelperInstall: helper.installRequiredMessage != nil"))
         XCTAssertTrue(home.contains("await helper.repairHelper()"))
-        XCTAssertTrue(presentation.contains("return \"Требуется helper\""))
+        XCTAssertTrue(presentation.contains("return \"Нужна установка\""))
         XCTAssertTrue(presentation.contains("return \"Установите системный компонент VEX\""))
         XCTAssertTrue(sidebar.contains("return \"Установить helper\""))
         XCTAssertTrue(sidebar.contains("await helper.repairHelper()"))
@@ -1166,7 +1167,8 @@ final class NativeParityModelTests: XCTestCase {
         )
         XCTAssertTrue(home.contains("ScrollView(.horizontal"))
         XCTAssertTrue(home.contains(".scrollTargetBehavior(.viewAligned)"))
-        XCTAssertTrue(home.contains(".containerRelativeFrame("))
+        XCTAssertTrue(home.contains("FocusPulsePresentation.locationCardWidth("))
+        XCTAssertTrue(home.contains(".frame(width: width, height: 136)"))
         XCTAssertTrue(home.contains(".onHover"))
     }
 
@@ -1242,7 +1244,7 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(content.contains("https://vexguard.app"))
         XCTAssertTrue(content.contains("accessibilityLabel(\"Открыть сайт VEX\")"))
         XCTAssertTrue(content.contains("Color.vexCyanLight.opacity(0.82)"))
-        XCTAssertTrue(content.contains(".padding(.top, 82)"))
+        XCTAssertTrue(content.contains(".padding(.top, 14)"))
         XCTAssertTrue(settings.contains(".toggleStyle(VEXSwitchToggleStyle())"))
     }
 
@@ -1723,7 +1725,7 @@ final class NativeParityModelTests: XCTestCase {
         let shared = try String(contentsOf: sharedURL, encoding: .utf8)
         let account = try String(contentsOf: accountURL, encoding: .utf8)
 
-        XCTAssertTrue(content.contains(".padding(.top, 82)"))
+        XCTAssertTrue(content.contains(".padding(.top, 14)"))
         XCTAssertTrue(content.contains(".padding(.top, 72)"))
         XCTAssertTrue(content.contains(".zIndex(30)"))
         XCTAssertTrue(shared.contains("struct VEXFeatureSurface"))

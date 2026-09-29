@@ -62,7 +62,13 @@ export function nextVpnStatusWithState(current: VpnStatus, state: VpnStatus['sta
 }
 
 export function areVpnStatusesEqual(left: VpnStatus, right: VpnStatus) {
-  return left.state === right.state && left.rxBytes === right.rxBytes && left.txBytes === right.txBytes;
+  return left.state === right.state
+    && left.rxBytes === right.rxBytes
+    && left.txBytes === right.txBytes
+    && left.latestHandshakeEpochMillis === right.latestHandshakeEpochMillis
+    && left.leakProtection === right.leakProtection
+    && left.verified === right.verified
+    && left.verificationReason === right.verificationReason;
 }
 
 export { errorMessage };

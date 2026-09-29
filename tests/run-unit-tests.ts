@@ -15,7 +15,7 @@ import { sessionLoadFailureDiagnosticsSnapshot } from '../src/auth/sessionDiagno
 import { isCurrentSessionMutation } from '../src/auth/sessionMutationGuard';
 import { loadSessionWithRetry, loadWithRetry } from '../src/auth/sessionLoadRetry';
 import { vpnConnectionAnimationsEnabled } from '../src/vpn/vpnAnimationPolicy';
-import { formatQuotaBytes, formatQuotaUsage, quotaProgress, quotaRemainingBytes } from '../src/components/traffic-quota-presentation';
+import { formatQuotaBytes, formatQuotaUsage, hasQuotaLimit, quotaHeadline, quotaProgress, quotaRemainingBytes } from '../src/components/traffic-quota-presentation';
 import { generateChallenge, generateRandomString } from '../src/auth/pkce';
 import { buildAppWebAuthUrl } from '../src/auth/webAuthUrl';
 import { emailOTPCells, emailOTPRequestErrorMessage, isEmailOTPExpired, isInvalidOrExpiredEmailOTPError, normalizeEmailOTPCode } from '../src/auth/emailOtp';
@@ -392,6 +392,11 @@ assertDeepEqual(
 );
 assertDeepEqual(selectableVpnLocations(undefined), []);
 assertDeepEqual(selectableVpnLocations([]), []);
+assertDeepEqual(selectableVpnLocations([
+  { ...catalogFixture, id: 'pilot', availability: 'hidden' },
+  { ...catalogFixture, id: 'offline', healthyNodes: 0 },
+  catalogFixture,
+]), [catalogFixture]);
 const visibleVpnLocations = (
   serverSelectionModule as unknown as Record<string, unknown>
 ).visibleVpnLocations;
@@ -401,6 +406,7 @@ if (typeof visibleVpnLocations === 'function') {
     visibleVpnLocations([
       { ...catalogFixture, id: 'offline', healthyNodes: 0 },
       { ...catalogFixture, id: 'ready' },
+      { ...catalogFixture, id: 'pilot', availability: 'hidden' },
       { ...catalogFixture, id: 'retired', availability: 'retired' },
     ]).map((location: VpnLocation) => location.id),
     ['offline', 'ready'],
@@ -662,6 +668,11 @@ assertEqual(
   });
   assertEqual(formatQuotaBytes(200 * 1024 ** 3), '200 ГБ');
   assertEqual(formatQuotaUsage(50 * 1024 ** 3, 200 * 1024 ** 3), '50 ГБ / 200 ГБ');
+  assertEqual(formatQuotaUsage(2.3 * 1024 ** 2, 0), '2.3 МБ / Без лимита');
+  assertEqual(quotaHeadline(2.3 * 1024 ** 2, 0), 'Безлимитный трафик');
+  assertEqual(hasQuotaLimit(0), false);
+  assertEqual(hasQuotaLimit(200 * 1024 ** 3), true);
+  assertEqual(quotaHeadline(50 * 1024 ** 3, 200 * 1024 ** 3), 'Осталось 150 ГБ');
   assertEqual(quotaRemainingBytes(50 * 1024 ** 3, 200 * 1024 ** 3), 150 * 1024 ** 3);
   assertEqual(quotaRemainingBytes(250, 200), 0);
   assertEqual(quotaProgress(50, 200), 0.25);

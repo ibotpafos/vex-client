@@ -30,7 +30,7 @@ import { openExternalUrl } from "@/auth/systemAuth";
 import { vexWebsite } from "@/navigation/website";
 import { getVpnApplicationSelection } from "@/settings/vpnPreferences";
 import { VexSection } from "@/components/vex-settings-section";
-import { formatQuotaResetAt, formatQuotaUsage } from "@/components/traffic-quota-presentation";
+import { formatQuotaResetAt, formatQuotaUsage, hasQuotaLimit } from "@/components/traffic-quota-presentation";
 import { useToast, type ToastOptions } from "@/ui/toast";
 import { vexColors, VexScreen, vexSharedStyles, VexPressable } from "@/ui/vex-ui";
 import { useVpnConnectionContext } from "@/vpn/vpn-connection-context";
@@ -387,17 +387,19 @@ export default function SettingsScreen() {
                   {formatQuotaUsage(trafficQuota.usedBytes, trafficQuota.limitBytes)}
                 </Text>
               </View>
-              <View style={styles.accountDetailRow}>
-                <Text style={styles.accountDetailLabel}>Сброс</Text>
-                <Text style={styles.accountDetailValue}>{formatQuotaResetAt(trafficQuota.resetAt)}</Text>
-              </View>
+              {hasQuotaLimit(trafficQuota.limitBytes) ? (
+                <View style={styles.accountDetailRow}>
+                  <Text style={styles.accountDetailLabel}>Сброс</Text>
+                  <Text style={styles.accountDetailValue}>{formatQuotaResetAt(trafficQuota.resetAt)}</Text>
+                </View>
+              ) : null}
               {trafficQuota.multiplier > 1 ? (
                 <View style={styles.accountDetailRow}>
                   <Text style={styles.accountDetailLabel}>Мобильный трафик</Text>
                   <Text style={styles.accountDetailValue}>×{trafficQuota.multiplier}</Text>
                 </View>
               ) : null}
-              {trafficQuota.limitReached ? (
+              {hasQuotaLimit(trafficQuota.limitBytes) && trafficQuota.limitReached ? (
                 <Text accessibilityRole="alert" style={styles.accountQuotaWarning}>
                   Лимит достигнут · скорость {trafficQuota.effectiveRateLimitMbps ?? 1} Мбит/с
                 </Text>

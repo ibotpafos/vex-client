@@ -19,8 +19,18 @@ export function formatQuotaBytes(bytes: number) {
   return `${value.toFixed(digits)} ${units[unitIndex]}`;
 }
 
+export function hasQuotaLimit(limitBytes: number) {
+  return Number.isFinite(limitBytes) && limitBytes > 0;
+}
+
 export function formatQuotaUsage(usedBytes: number, limitBytes: number) {
-  return `${formatQuotaBytes(usedBytes)} / ${formatQuotaBytes(limitBytes)}`;
+  return `${formatQuotaBytes(usedBytes)} / ${hasQuotaLimit(limitBytes) ? formatQuotaBytes(limitBytes) : 'Без лимита'}`;
+}
+
+export function quotaHeadline(usedBytes: number, limitBytes: number) {
+  return hasQuotaLimit(limitBytes)
+    ? `Осталось ${formatQuotaBytes(quotaRemainingBytes(usedBytes, limitBytes))}`
+    : 'Безлимитный трафик';
 }
 
 export function formatQuotaResetAt(resetAt: string) {

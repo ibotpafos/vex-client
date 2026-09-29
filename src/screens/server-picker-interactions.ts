@@ -1,5 +1,5 @@
 import type { VpnLocation } from '@/api/vexApi';
-import { chooseBestVpnLocation } from '@/vpn/serverSelection';
+import { chooseBestVpnLocation, selectableVpnLocations } from '@/vpn/serverSelection';
 
 export type ServerPickerSource = 'all_locations' | 'carousel';
 
@@ -45,7 +45,7 @@ export type VpnCountryLocationGroup = {
 
 export function groupVpnLocationsByCountry(locations: VpnLocation[]): VpnCountryLocationGroup[] {
   const groups = new Map<string, VpnLocation[]>();
-  for (const location of locations) {
+  for (const location of selectableVpnLocations(locations)) {
     const countryCode = location.countryCode.trim().toUpperCase() || 'OTHER';
     const current = groups.get(countryCode) ?? [];
     current.push(location);
@@ -99,6 +99,10 @@ export function serverCountLabel(count: number): string {
         ? 'сервера'
         : 'серверов';
   return `${normalized} ${noun}`;
+}
+
+export function serverPickerCountryHint(serverCount: number, latency: string): string {
+  return `${serverCountLabel(serverCount)} · ${latency} · ${serverCount > 1 ? 'открыть список' : 'выбрать'}`;
 }
 
 export function serverPickerCountryGapDp(): number {

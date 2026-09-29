@@ -9,7 +9,7 @@ import {
 } from '../screens/home-screen-helpers';
 import {
   groupVpnLocationsByCountry,
-  serverCountLabel,
+  serverPickerCountryHint,
   serverPickerLocationTitle,
   serverPickerRowPresentation,
 } from '../screens/server-picker-interactions';
@@ -69,9 +69,9 @@ export const ServerPickerContent = React.memo(function ServerPickerContent({
     <View style={styles.content}>
       <Text style={styles.eyebrow}>ЛОКАЦИЯ</Text>
       <Text style={styles.title}>Выберите сервер</Text>
-      <Text style={styles.subtitle}>VEX выберет лучший сервер автоматически. Страну и конкретный сервер можно указать вручную.</Text>
+      <Text style={styles.subtitle}>Оставьте автовыбор или откройте страну и нажмите нужный сервер.</Text>
       <ServerPickerRow
-        disabled={isVpnBusy}
+        disabled={isVpnBusy || countryGroups.length === 0}
         leading="↻"
         onPress={onAutoSelect}
         selected={selectionMode === 'auto'}
@@ -90,9 +90,6 @@ export const ServerPickerContent = React.memo(function ServerPickerContent({
           selectedLatencyText,
         }) : null;
         const serverCount = group.locations.length;
-        const bestLocationOrdinal = bestLocation
-          ? group.locations.findIndex((location) => location.id === bestLocation.id) + 1
-          : undefined;
         return (
           <View key={group.countryCode} style={[styles.countryCard, countrySelected && styles.countryCardSelected]}>
             <ServerPickerRow
@@ -107,7 +104,7 @@ export const ServerPickerContent = React.memo(function ServerPickerContent({
               }}
               selected={serverCount === 1 && countrySelected}
               supportingText={bestLocation
-                ? `${serverCountLabel(serverCount)} · лучший ${serverPickerLocationTitle(bestLocation, bestLocationOrdinal)} · ${bestPresentation?.latency}`
+                ? serverPickerCountryHint(serverCount, bestPresentation?.latency ?? '-- мс')
                 : 'Нет доступных серверов'}
               testID={`server-picker-country-${group.countryCode.toLowerCase()}`}
               title={group.title}
@@ -137,7 +134,7 @@ export const ServerPickerContent = React.memo(function ServerPickerContent({
           </View>
         );
       })}
-      {locations.length === 0 ? (
+      {countryGroups.length === 0 ? (
         <Text accessibilityRole="alert" style={styles.empty}>Серверы временно недоступны. Попробуйте снова позже.</Text>
       ) : null}
     </View>

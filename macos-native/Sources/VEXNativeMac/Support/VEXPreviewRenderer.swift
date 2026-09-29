@@ -2,7 +2,6 @@ import AppKit
 import Foundation
 import SwiftUI
 
-#if DEBUG
 @MainActor
 enum VEXPreviewRenderer {
     struct Request {
@@ -11,6 +10,7 @@ enum VEXPreviewRenderer {
     }
 
     static func request(arguments: [String] = ProcessInfo.processInfo.arguments) -> Request? {
+        guard VEXPreviewMode.suppressesRuntime else { return nil }
         guard let flagIndex = arguments.firstIndex(of: "--render-ui-preview"),
               arguments.indices.contains(flagIndex + 2),
               let section = AppSection(rawValue: arguments[flagIndex + 1]) else {
@@ -26,10 +26,13 @@ enum VEXPreviewRenderer {
         let helper = VEXHelperModel()
         let rendersServerSidebar =
             ProcessInfo.processInfo.environment["VEX_PREVIEW_SERVER_SIDEBAR"] == "1"
+        #if DEBUG
         if ProcessInfo.processInfo.environment["VEX_PREVIEW_HELPER_INSTALLING"] == "1" {
             helper.configureInstallationPreview(.installing)
         }
+        #endif
         let appState = VEXAppState()
+        #if DEBUG
         if rendersServerSidebar {
             appState.configureServerSidebarPreview()
         }
@@ -59,6 +62,7 @@ enum VEXPreviewRenderer {
                 checkedAt: nil
             ))
         }
+        #endif
         let content: AnyView
         let previewSize = rendersServerSidebar
             ? NSSize(width: 350, height: 580)
@@ -153,4 +157,3 @@ enum VEXPreviewRenderer {
         }
     }
 }
-#endif

@@ -10,8 +10,20 @@ private struct CountrySilhouetteCatalog: Decodable {
 }
 
 enum CountrySilhouetteStore {
+    // SwiftPM's generated accessor assumes its build directory or a bundle at
+    // the app root. Packaged apps keep resources in Contents/Resources and must
+    // not depend on the developer's build cache (or fatalError if it is absent).
+    static func resourceBundle(in main: Bundle = .main) -> Bundle? {
+        if main.bundleURL.pathExtension == "app" {
+            return main.resourceURL
+                .map { $0.appendingPathComponent("VEXNativeMac_VEXNativeMac.bundle") }
+                .flatMap(Bundle.init(url:))
+        }
+        return Bundle.module
+    }
+
     private static let countries: [String: CountrySilhouetteGeometry] = {
-        guard let url = Bundle.module.url(
+        guard let url = resourceBundle()?.url(
             forResource: "country-silhouettes",
             withExtension: "json"
         ),

@@ -110,6 +110,90 @@ struct AppUpdateCheckResult: Codable, Equatable {
     var rolloutPercent: Int?
     var checkedAt: String?
 
+    enum CodingKeys: String, CodingKey {
+        case updateAvailable
+        case required
+        case currentBuildBlocked
+        case latestVersion
+        case latestBuild
+        case minSupportedBuild
+        case minConfigSchemaVersion
+        case downloadUrl
+        case changelog
+        case checksumSha256
+        case signatureUrl
+        case channel
+        case reason
+        case rolloutPercent
+        case checkedAt
+    }
+
+    init(
+        updateAvailable: Bool,
+        required: Bool,
+        currentBuildBlocked: Bool?,
+        latestVersion: String,
+        latestBuild: Int,
+        minSupportedBuild: Int,
+        minConfigSchemaVersion: Int?,
+        downloadUrl: String,
+        changelog: String?,
+        checksumSha256: String?,
+        signatureUrl: String?,
+        channel: String?,
+        reason: String?,
+        rolloutPercent: Int?,
+        checkedAt: String?
+    ) {
+        self.updateAvailable = updateAvailable
+        self.required = required
+        self.currentBuildBlocked = currentBuildBlocked
+        self.latestVersion = latestVersion
+        self.latestBuild = latestBuild
+        self.minSupportedBuild = minSupportedBuild
+        self.minConfigSchemaVersion = minConfigSchemaVersion
+        self.downloadUrl = downloadUrl
+        self.changelog = changelog
+        self.checksumSha256 = checksumSha256
+        self.signatureUrl = signatureUrl
+        self.channel = channel
+        self.reason = reason
+        self.rolloutPercent = rolloutPercent
+        self.checkedAt = checkedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        updateAvailable = try container.decode(Bool.self, forKey: .updateAvailable)
+        required = try container.decodeIfPresent(Bool.self, forKey: .required) ?? false
+        currentBuildBlocked = try container.decodeIfPresent(Bool.self, forKey: .currentBuildBlocked)
+        minConfigSchemaVersion = try container.decodeIfPresent(Int.self, forKey: .minConfigSchemaVersion)
+        changelog = try container.decodeIfPresent(String.self, forKey: .changelog)
+        checksumSha256 = try container.decodeIfPresent(String.self, forKey: .checksumSha256)
+        signatureUrl = try container.decodeIfPresent(String.self, forKey: .signatureUrl)
+        channel = try container.decodeIfPresent(String.self, forKey: .channel)
+        reason = try container.decodeIfPresent(String.self, forKey: .reason)
+        rolloutPercent = try container.decodeIfPresent(Int.self, forKey: .rolloutPercent)
+        checkedAt = try container.decodeIfPresent(String.self, forKey: .checkedAt)
+
+        guard updateAvailable else {
+            latestVersion = try container.decodeIfPresent(String.self, forKey: .latestVersion)
+                ?? VEXAppInfo.version
+            latestBuild = try container.decodeIfPresent(Int.self, forKey: .latestBuild)
+                ?? VEXAppInfo.buildNumber
+            minSupportedBuild = try container.decodeIfPresent(Int.self, forKey: .minSupportedBuild) ?? 0
+            downloadUrl = try container.decodeIfPresent(String.self, forKey: .downloadUrl) ?? ""
+            return
+        }
+
+        // An advertised update must remain fail-closed: without exact version,
+        // build and delivery metadata the UI must not offer an unusable update.
+        latestVersion = try container.decode(String.self, forKey: .latestVersion)
+        latestBuild = try container.decode(Int.self, forKey: .latestBuild)
+        minSupportedBuild = try container.decodeIfPresent(Int.self, forKey: .minSupportedBuild) ?? 0
+        downloadUrl = try container.decode(String.self, forKey: .downloadUrl)
+    }
+
     func isNewerThanInstalledApp(currentVersion: String = VEXAppInfo.version) -> Bool {
         guard updateAvailable else { return false }
         let versionOrder = Self.compareVersion(latestVersion, currentVersion)
@@ -349,6 +433,15 @@ struct Entitlement: Codable, Equatable {
     var tier: String?
     var currentPeriodEnd: String?
     var effectiveExpiresAt: String?
+    var deviceLimit = 0
+    var baseDeviceLimit: Int?
+    var addonDeviceSlots: Int?
+    var maxDeviceLimit: Int?
+    var canBuyDeviceAddon = false
+    var deviceAddonPriceMinor: Int?
+    var deviceAddonCurrency: String?
+    var activeDevices = 0
+    var canCreateDevice = false
     var vpnAccess = false
 
     enum CodingKeys: String, CodingKey {
@@ -363,12 +456,131 @@ struct Entitlement: Codable, Equatable {
         case tier
         case currentPeriodEnd = "current_period_end"
         case effectiveExpiresAt = "effective_expires_at"
+        case deviceLimit = "device_limit"
+        case baseDeviceLimit = "base_device_limit"
+        case addonDeviceSlots = "addon_device_slots"
+        case maxDeviceLimit = "max_device_limit"
+        case canBuyDeviceAddon = "can_buy_device_addon"
+        case deviceAddonPriceMinor = "device_addon_price_minor"
+        case deviceAddonCurrency = "device_addon_currency"
+        case activeDevices = "active_devices"
+        case canCreateDevice = "can_create_device"
         case vpnAccess = "vpn_access"
+    }
+
+    init(
+        active: Bool = false,
+        planId: String? = nil,
+        displayName: String? = nil,
+        accountStatus: String? = nil,
+        subscriptionTitle: String? = nil,
+        subscriptionSubtitle: String? = nil,
+        remainingText: String? = nil,
+        status: String? = nil,
+        tier: String? = nil,
+        currentPeriodEnd: String? = nil,
+        effectiveExpiresAt: String? = nil,
+        deviceLimit: Int = 0,
+        baseDeviceLimit: Int? = nil,
+        addonDeviceSlots: Int? = nil,
+        maxDeviceLimit: Int? = nil,
+        canBuyDeviceAddon: Bool = false,
+        deviceAddonPriceMinor: Int? = nil,
+        deviceAddonCurrency: String? = nil,
+        activeDevices: Int = 0,
+        canCreateDevice: Bool = false,
+        vpnAccess: Bool = false
+    ) {
+        self.active = active
+        self.planId = planId
+        self.displayName = displayName
+        self.accountStatus = accountStatus
+        self.subscriptionTitle = subscriptionTitle
+        self.subscriptionSubtitle = subscriptionSubtitle
+        self.remainingText = remainingText
+        self.status = status
+        self.tier = tier
+        self.currentPeriodEnd = currentPeriodEnd
+        self.effectiveExpiresAt = effectiveExpiresAt
+        self.deviceLimit = deviceLimit
+        self.baseDeviceLimit = baseDeviceLimit
+        self.addonDeviceSlots = addonDeviceSlots
+        self.maxDeviceLimit = maxDeviceLimit
+        self.canBuyDeviceAddon = canBuyDeviceAddon
+        self.deviceAddonPriceMinor = deviceAddonPriceMinor
+        self.deviceAddonCurrency = deviceAddonCurrency
+        self.activeDevices = activeDevices
+        self.canCreateDevice = canCreateDevice
+        self.vpnAccess = vpnAccess
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        active = try container.decodeIfPresent(Bool.self, forKey: .active) ?? false
+        planId = try container.decodeIfPresent(String.self, forKey: .planId)
+        displayName = try container.decodeIfPresent(String.self, forKey: .displayName)
+        accountStatus = try container.decodeIfPresent(String.self, forKey: .accountStatus)
+        subscriptionTitle = try container.decodeIfPresent(String.self, forKey: .subscriptionTitle)
+        subscriptionSubtitle = try container.decodeIfPresent(String.self, forKey: .subscriptionSubtitle)
+        remainingText = try container.decodeIfPresent(String.self, forKey: .remainingText)
+        status = try container.decodeIfPresent(String.self, forKey: .status)
+        tier = try container.decodeIfPresent(String.self, forKey: .tier)
+        currentPeriodEnd = try container.decodeIfPresent(String.self, forKey: .currentPeriodEnd)
+        effectiveExpiresAt = try container.decodeIfPresent(String.self, forKey: .effectiveExpiresAt)
+        deviceLimit = try container.decodeIfPresent(Int.self, forKey: .deviceLimit) ?? 0
+        baseDeviceLimit = try container.decodeIfPresent(Int.self, forKey: .baseDeviceLimit)
+        addonDeviceSlots = try container.decodeIfPresent(Int.self, forKey: .addonDeviceSlots)
+        maxDeviceLimit = try container.decodeIfPresent(Int.self, forKey: .maxDeviceLimit)
+        canBuyDeviceAddon = try container.decodeIfPresent(Bool.self, forKey: .canBuyDeviceAddon) ?? false
+        deviceAddonPriceMinor = try container.decodeIfPresent(Int.self, forKey: .deviceAddonPriceMinor)
+        deviceAddonCurrency = try container.decodeIfPresent(String.self, forKey: .deviceAddonCurrency)
+        activeDevices = try container.decodeIfPresent(Int.self, forKey: .activeDevices) ?? 0
+        canCreateDevice = try container.decodeIfPresent(Bool.self, forKey: .canCreateDevice) ?? false
+        vpnAccess = try container.decodeIfPresent(Bool.self, forKey: .vpnAccess) ?? active
     }
 
     var hasPaidAccess: Bool {
         active || vpnAccess
     }
+
+    var remainingDeviceSlots: Int {
+        max(deviceLimit - activeDevices, 0)
+    }
+}
+
+struct DeviceAddon: Codable, Equatable, Identifiable {
+    var id: String
+    var subscriptionId: String
+    var checkoutSessionId: String
+    var paymentId: String?
+    var provider: String
+    var status: String
+    var quantity: Int
+    var unitAmountMinor: Int
+    var amountMinor: Int
+    var currency: String
+    var startsAt: String
+    var expiresAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case subscriptionId = "subscription_id"
+        case checkoutSessionId = "checkout_session_id"
+        case paymentId = "payment_id"
+        case provider
+        case status
+        case quantity
+        case unitAmountMinor = "unit_amount_minor"
+        case amountMinor = "amount_minor"
+        case currency
+        case startsAt = "starts_at"
+        case expiresAt = "expires_at"
+    }
+}
+
+struct DeviceAddonCheckoutSession: Decodable, Equatable {
+    var id: String
+    var url: String
 }
 
 struct BillingPlan: Codable, Equatable, Identifiable {

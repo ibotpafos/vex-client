@@ -29,7 +29,7 @@ final class VEXHelperModel: ObservableObject {
             version: "33",
             filesCurrent: false,
             socketConnectable: true,
-            helperPath: "/Library/Application Support/VEX VPN/helper/vex-helper"
+            helperPath: "/Library/PrivilegedHelperTools/app.vex.vpn.helper"
         )
     }
     #endif
@@ -102,28 +102,40 @@ final class VEXHelperModel: ObservableObject {
         await connect(antiLeakEnabled: false)
     }
 
-    func connect(antiLeakEnabled: Bool) async {
+    @discardableResult
+    func connect(antiLeakEnabled: Bool) async -> Bool {
         let command = antiLeakEnabled ? "up owner_pid=\(ProcessInfo.processInfo.processIdentifier)" : "up-no-antileak owner_pid=\(ProcessInfo.processInfo.processIdentifier)"
-        await runCommand(command, busyState: .connecting, successMessage: "VPN подключен.")
+        return await runCommand(command, busyState: .connecting, successMessage: "VPN подключен.")
     }
 
-    func disconnect() async {
+    @discardableResult
+    func disconnect() async -> Bool {
         await disconnect(releaseAntiLeak: true)
     }
 
-    func disconnect(releaseAntiLeak: Bool) async {
-        await runCommand("down", busyState: .disconnecting, successMessage: "VPN отключен.")
+    @discardableResult
+    func disconnect(releaseAntiLeak: Bool) async -> Bool {
+        _ = releaseAntiLeak
+        return await runCommand("down", busyState: .disconnecting, successMessage: "VPN отключен.")
     }
 
-    func interruptWithDisconnect(releaseAntiLeak: Bool) async {
+    @discardableResult
+    func interruptWithDisconnect(releaseAntiLeak: Bool) async -> Bool {
+        _ = releaseAntiLeak
         status = status.withState(.disconnecting)
         do {
-            try await client.sendExpectingOK("down", timeoutSeconds: 15)
+            status = try await client.disconnectAndConfirm(
+                commandTimeoutSeconds: 15,
+                maxStatusAttempts: 8,
+                pollNanoseconds: 100_000_000
+            )
             message = "VPN отключен."
+            return true
         } catch {
             message = VEXUserFacingText.status("Command failed: \(error.localizedDescription)")
+            await refreshStatus(quiet: true)
+            return false
         }
-        await refreshStatus(quiet: true)
     }
 
     func attachOwnerWatchdog(quiet: Bool = false) async {
@@ -196,14 +208,16 @@ final class VEXHelperModel: ObservableObject {
     }
 
     var installRequiredMessage: String? {
-        guard let installState else {
-            return nil
-        }
+        Self.installRequiredMessage(for: installState)
+    }
+
+    nonisolated static func installRequiredMessage(for installState: VEXHelperInstallState?) -> String? {
+        guard let installState else { return nil }
         return installState.filesCurrent ? nil : "Helper требует установки."
     }
 
-    private func runCommand(_ command: String, busyState: VpnConnectionState, successMessage: String) async {
-        guard !isBusy else { return }
+    private func runCommand(_ command: String, busyState: VpnConnectionState, successMessage: String) async -> Bool {
+        guard !isBusy else { return false }
         isBusy = true
         if isConnectCommand(command) { lastConnectAdmissionRejected = false }
         status = status.withState(busyState)
@@ -211,15 +225,20 @@ final class VEXHelperModel: ObservableObject {
 
         do {
             try await installer.ensureReady(allowAdminInstall: true)
-            let response = try await sendCommandWithRetry(command)
-            try ensureOK(response)
+            if command == "down" {
+                status = try await client.disconnectAndConfirm()
+            } else {
+                let response = try await sendCommandWithRetry(command)
+                try ensureOK(response)
+            }
             installState = installer.installedState
             if isConnectCommand(command) {
-                await confirmConnect(successMessage: successMessage)
+                return await confirmConnect(successMessage: successMessage)
             } else {
                 message = successMessage
                 await refreshStatus(quiet: true)
             }
+            return true
         } catch {
             if isConnectCommand(command) {
                 lastConnectAdmissionRejected = error.localizedDescription.contains("VPN_CONFIG_INVALID")
@@ -230,17 +249,20 @@ final class VEXHelperModel: ObservableObject {
             }
             message = VEXUserFacingText.status("Command failed: \(error.localizedDescription)")
             await refreshStatus(quiet: true)
+            return false
         }
     }
 
-    private func confirmConnect(successMessage: String) async {
+    private func confirmConnect(successMessage: String) async -> Bool {
         if await refreshConnectedStatusUntilStable() {
             message = successMessage
+            return true
         } else if let routeConflictMessage = status.routeConflictMessage {
             message = routeConflictMessage
         } else {
             message = "Подключение не подтверждено. Проверяем маршрут..."
         }
+        return false
     }
 
     private func ensureOK(_ response: String) throws {
@@ -336,6 +358,27 @@ struct VEXHelperClient {
         guard response.trimmingCharacters(in: .whitespacesAndNewlines) == "ok" else {
             throw VEXHelperError.commandFailed(response)
         }
+    }
+
+    func disconnectAndConfirm(
+        commandTimeoutSeconds: Int = 10,
+        maxStatusAttempts: Int = 8,
+        pollNanoseconds: UInt64 = 100_000_000
+    ) async throws -> VpnStatus {
+        try await sendExpectingOK("down", timeoutSeconds: commandTimeoutSeconds)
+        var latest = VpnStatus.disconnected.withState(.disconnecting)
+        for attempt in 0..<max(1, maxStatusAttempts) {
+            let response = try await sendStatus()
+            latest = VpnStatus(helperResponse: response)
+            if HelperDisconnectConfirmation.isExplicitlyDisconnected(response),
+               latest.state == .disconnected, !latest.hasManagedNetworkState {
+                return latest
+            }
+            if attempt + 1 < maxStatusAttempts {
+                try await Task.sleep(nanoseconds: pollNanoseconds)
+            }
+        }
+        throw VEXHelperError.commandFailed("disconnect was not confirmed by helper status")
     }
 }
 

@@ -827,6 +827,39 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertEqual(update.signatureUrl, "/downloads/VEX.dmg.sig")
     }
 
+    func testCompactNoUpdateResponseUsesInstalledBuildDefaults() throws {
+        let data = """
+        {
+          "updateAvailable": false,
+          "required": false,
+          "channel": "self-signed",
+          "checkedAt": "2026-08-29T12:00:00Z",
+          "delivery": "sparkle"
+        }
+        """.data(using: .utf8)!
+
+        let update = try JSONDecoder().decode(AppUpdateCheckResult.self, from: data)
+
+        XCTAssertFalse(update.updateAvailable)
+        XCTAssertFalse(update.required)
+        XCTAssertEqual(update.latestVersion, VEXAppInfo.version)
+        XCTAssertEqual(update.latestBuild, VEXAppInfo.buildNumber)
+        XCTAssertEqual(update.minSupportedBuild, 0)
+        XCTAssertEqual(update.downloadUrl, "")
+    }
+
+    func testAvailableUpdateStillRequiresDeliveryMetadata() throws {
+        let data = """
+        {
+          "updateAvailable": true,
+          "required": false,
+          "channel": "self-signed"
+        }
+        """.data(using: .utf8)!
+
+        XCTAssertThrowsError(try JSONDecoder().decode(AppUpdateCheckResult.self, from: data))
+    }
+
     func testRemoteConfigDecodesSettingsParityContract() throws {
         let data = """
         {
@@ -936,6 +969,8 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(helperInstaller.contains("trimmingCharacters(in: .whitespacesAndNewlines)"))
         XCTAssertTrue(helperInstaller.contains("PropertyListSerialization.propertyList("))
         XCTAssertTrue(helperInstaller.contains("dictionary[\"RunAtLoad\"] as? Bool == true"))
+        XCTAssertTrue(helperInstaller.contains("dictionary[\"Label\"] as? String == launchdLabel"))
+        XCTAssertTrue(helperInstaller.contains("first == helperExecutable"))
         XCTAssertTrue(helperInstaller.contains("helperPlistKeepsServiceAvailable(dictionary)"))
         XCTAssertTrue(helperInstaller.contains("SHA256.hash"))
         XCTAssertFalse(helperInstaller.contains("if socketIsConnectable {\n            return\n        }"))
@@ -1638,7 +1673,7 @@ final class NativeParityModelTests: XCTestCase {
 
         XCTAssertTrue(appState.contains("if let storedSession = sessionStore.loadSession(requiresBiometricAuthentication: biometricUnlockRequired)"))
         XCTAssertTrue(appState.contains("user = storedSession.user"))
-        XCTAssertTrue(appState.contains("await loadUpdate()"))
+        XCTAssertTrue(appState.contains("await loadUpdate(reportErrors: false)"))
         XCTAssertTrue(appState.contains("await loadRemoteConfig()"))
         XCTAssertFalse(appState.contains("session = nil\n            statusMessage = \"Подтвердите вход"))
     }
@@ -1755,7 +1790,7 @@ final class NativeParityModelTests: XCTestCase {
         )
         XCTAssertEqual(
             VEXUserFacingText.status("The data couldn’t be read because it is missing."),
-            "Системный компонент VEX запускается..."
+            "Не удалось обновить данные VEX."
         )
         XCTAssertEqual(
             VEXUserFacingText.status("Command failed: could not connect to helper socket"),

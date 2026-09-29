@@ -34,7 +34,7 @@ import { formatQuotaResetAt, formatQuotaUsage, hasQuotaLimit } from "@/component
 import { useToast, type ToastOptions } from "@/ui/toast";
 import { vexColors, VexScreen, vexSharedStyles, VexPressable } from "@/ui/vex-ui";
 import { useVpnConnectionContext } from "@/vpn/vpn-connection-context";
-import { useVexSettings, languages, type LanguageCode } from "./useVexSettings";
+import { useVexSettings } from "./useVexSettings";
 
 export default function SettingsScreen() {
   const [isSavingSmartRouting, setIsSavingSmartRouting] = React.useState(false);
@@ -51,7 +51,6 @@ export default function SettingsScreen() {
   }, [showSettingsToast]);
 
   const {
-    language,
     isSigningOut,
     isAutomationEnabled,
     isSavingAutomation,
@@ -61,7 +60,6 @@ export default function SettingsScreen() {
     isSavingServerSelection,
     appInfo,
     remoteConfig,
-    handleLanguagePress,
     handleSignOut,
     handleAutomationToggle,
     handleServerSelectionToggle,
@@ -356,14 +354,10 @@ export default function SettingsScreen() {
             <View style={styles.rowCopy}>
               <Text style={styles.rowTitle}>Язык</Text>
               <Text numberOfLines={1} style={styles.rowDescription}>
-                Язык интерфейса приложения.
+                Сейчас доступен только русский интерфейс.
               </Text>
             </View>
           </View>
-          <SettingsLanguagePicker
-            onValueChange={handleLanguagePress}
-            value={language}
-          />
         </VexSection>
 
         <VexSection title="Аккаунт и помощь">
@@ -546,37 +540,6 @@ function SettingsNativeSwitch({
   );
 }
 
-type SettingsLanguagePickerProps = {
-  onValueChange: (value: LanguageCode) => void;
-  value: LanguageCode;
-};
-
-function SettingsLanguagePicker({ onValueChange, value }: SettingsLanguagePickerProps) {
-  return (
-    <View
-      accessibilityLabel="Язык интерфейса"
-      style={styles.languageSelector}
-      testID="settings-language-picker"
-    >
-      {languages.map((item) => {
-        const selected = value === item.code;
-        return (
-          <VexPressable
-            accessibilityRole="button"
-            accessibilityState={{ selected }}
-            key={item.code}
-            onPress={() => onValueChange(item.code)}
-            style={[styles.languageButton, selected && styles.languageButtonActive]}
-            hoverStyle={{ backgroundColor: selected ? '#22D3EE' : 'rgba(34,211,238,0.14)' }}
-          >
-            <Text style={[styles.languageText, selected && styles.languageTextActive]}>{item.label}</Text>
-          </VexPressable>
-        );
-      })}
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   scroll: {
     flex: 1,
@@ -698,33 +661,6 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
   },
   rowValueActive: {
-    color: vexColors.accent,
-  },
-  languageSelector: {
-    alignSelf: "stretch",
-    flexDirection: "row",
-    gap: 4,
-    minHeight: 44,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
-  languageButton: {
-    alignItems: "center",
-    borderRadius: 999,
-    flex: 1,
-    justifyContent: "center",
-    minHeight: 34,
-    paddingHorizontal: 10,
-  },
-  languageButtonActive: {
-    backgroundColor: "rgba(34,211,238,0.16)",
-  },
-  languageText: {
-    color: vexColors.muted,
-    fontSize: 13,
-    fontWeight: "900",
-  },
-  languageTextActive: {
     color: vexColors.accent,
   },
   infoGrid: {

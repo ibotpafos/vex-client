@@ -1,7 +1,7 @@
 import * as Application from 'expo-application';
 import * as Updates from 'expo-updates';
 import { Download, RefreshCw, ShieldAlert, ShieldCheck, X } from 'lucide-react-native';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { installManualUpdate } from '@/api/manualUpdateInstall';
 import { assessManualUpdateCenter, canUseOtaUpdate, requiresNativeUpdate } from '@/api/updatePreflight';
@@ -196,6 +196,8 @@ function MobileUpdateCenterContent({
 }) {
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [isOtaActionBusy, setIsOtaActionBusy] = useState(false);
+  const otaActionRunningRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -225,7 +227,7 @@ function MobileUpdateCenterContent({
   const canStartInstall = platform === 'ios'
     ? Boolean(update?.updateAvailable && update.downloadUrl)
     : nativeUpdateRequired && (assessment.canInstall || canOpenManualDownload);
-  const primaryDisabled = !canStartInstall && assessment.updateAvailable && !otaUpdateAvailable;
+  const primaryDisabled = isOtaActionBusy || (!canStartInstall && assessment.updateAvailable && !otaUpdateAvailable);
 
   const handlePrimaryPress = useCallback(async () => {
     setActionError(null);
@@ -246,8 +248,29 @@ function MobileUpdateCenterContent({
       return;
     }
     if (otaUpdateAvailable) {
-      playLightImpactHaptic();
-      await updateQuery.refetch();
+      if (otaActionRunningRef.current) return;
+      if (!Updates.isEnabled) {
+        setActionError('OTA недоступно в этой сборке. Проверьте установленную версию приложения.');
+        return;
+      }
+      otaActionRunningRef.current = true;
+      setIsOtaActionBusy(true);
+      try {
+        playLightImpactHaptic();
+        const check = await Updates.checkForUpdateAsync();
+        if (!check.isAvailable && !check.isRollBackToEmbedded) {
+          setActionError('Совместимое OTA-обновление для этой сборки не найдено.');
+          return;
+        }
+        await Updates.fetchUpdateAsync();
+        playSuccessHaptic();
+      } catch {
+        playErrorHaptic();
+        setActionError('Не удалось скачать OTA-обновление. Проверьте подключение и повторите.');
+      } finally {
+        otaActionRunningRef.current = false;
+        setIsOtaActionBusy(false);
+      }
       return;
     }
     if (!canStartInstall || !update?.downloadUrl) {
@@ -295,8 +318,8 @@ function MobileUpdateCenterContent({
           <RefreshCw color="#A7B9BD" size={18} strokeWidth={2.5} />
           <Text style={styles.secondaryText}>{updateQuery.isFetching ? 'Проверяем' : 'Проверить'}</Text>
         </Pressable>
-        <Pressable onPress={handlePrimaryPress} style={[styles.primaryButton, primaryDisabled && styles.primaryButtonDisabled]}>
-          <Text style={styles.primaryText}>{assessment.actionLabel}</Text>
+        <Pressable disabled={primaryDisabled} onPress={handlePrimaryPress} style={[styles.primaryButton, primaryDisabled && styles.primaryButtonDisabled]}>
+          <Text style={styles.primaryText}>{isOtaActionBusy ? 'Проверяем OTA' : assessment.actionLabel}</Text>
         </Pressable>
       </View>
       <Text style={styles.footnote}>

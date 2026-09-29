@@ -1,5 +1,6 @@
 import type { VpnLocation } from '@/api/vexApi';
 import { ApiRequestError } from '@/api/error';
+import { isSelectableLocation } from './serverSelection';
 
 export function isProfileResolutionFallbackError(error: unknown): boolean {
   // Resolving another location only helps when the requested location has no
@@ -26,10 +27,7 @@ export function profileResolutionOrder(
   const ordered: VpnLocation[] = [];
   const initial = availableLocations.find((location) => location.id === initialLocationId);
   for (const candidate of [initial, ...availableLocations]) {
-    if (!candidate || candidate.availability === 'retired') {
-      continue;
-    }
-    if (candidate.id !== initialLocationId && candidate.healthyNodes <= 0) {
+    if (!candidate || !isSelectableLocation(candidate)) {
       continue;
     }
     if (!ordered.some((location) => location.id === candidate.id)) {

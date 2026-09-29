@@ -1960,9 +1960,19 @@ const profileFallbackLocations = [
   { id: 'de', availability: 'available', healthyNodes: 1 },
   { id: 'fi', availability: 'available', healthyNodes: 1 },
   { id: 'retired', availability: 'retired', healthyNodes: 1 },
+  { id: 'pilot', availability: 'pilot', healthyNodes: 1 },
+  { id: 'unhealthy', availability: 'available', healthyNodes: 0 },
 ] as any;
 assertDeepEqual(
   profileResolutionOrder('de', profileFallbackLocations).map((location) => location.id),
+  ['de', 'fi'],
+);
+assertDeepEqual(
+  profileResolutionOrder('pilot', profileFallbackLocations).map((location) => location.id),
+  ['de', 'fi'],
+);
+assertDeepEqual(
+  profileResolutionOrder('unhealthy', profileFallbackLocations).map((location) => location.id),
   ['de', 'fi'],
 );
 assertEqual(isProfileResolutionFallbackError(new ApiRequestError('missing location target', { status: 404 })), true);

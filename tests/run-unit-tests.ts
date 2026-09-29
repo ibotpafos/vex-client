@@ -1639,6 +1639,7 @@ async function runAsyncTests(): Promise<void> {
   runRecoveryBackoffTests();
   await testFreshSameLocationProfileConnectsSecondNode();
   await testFallbackLocationResolutionContinuesAfterRetryableFailure();
+  await testFallbackLocationResolutionStopsAfterNonRetryableFailure();
   await runServerSwitchTests();
   await runLocationCatalogRefreshTests();
 }
@@ -1768,7 +1769,7 @@ async function testFallbackLocationResolutionContinuesAfterRetryableFailure(): P
     resolveProfile: async (locationId, options) => {
       calls.push(`resolve:${locationId}:${options.forceRefresh ? 'fresh' : 'cached'}`);
       if (locationId === 'fi') {
-        throw new Error('network timeout');
+        throw new Error('connection timed out');
       }
       return nlProfile;
     },
@@ -1785,6 +1786,27 @@ async function testFallbackLocationResolutionContinuesAfterRetryableFailure(): P
     'resolve:nl:cached',
     'connect:nl',
   ]);
+}
+
+async function testFallbackLocationResolutionStopsAfterNonRetryableFailure(): Promise<void> {
+  const calls: string[] = [];
+  let rejected = false;
+  try {
+    await connectAcrossFallbackLocations({
+      connectProfile: async () => ({ status: connectedStatus }),
+      excludedLocationId: 'de',
+      isRetryableError: isVpnTransportFallbackError,
+      locations: [{ id: 'de' }, { id: 'fi' }, { id: 'nl' }],
+      resolveProfile: async (locationId) => {
+        calls.push(`resolve:${locationId}`);
+        throw new Error('permission denied');
+      },
+    });
+  } catch (error) {
+    rejected = error instanceof Error && error.message === 'permission denied';
+  }
+  assertEqual(rejected, true);
+  assertDeepEqual(calls, ['resolve:fi']);
 }
 
 function runRecoveryBackoffTests(): void {

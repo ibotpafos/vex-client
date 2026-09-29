@@ -1233,14 +1233,10 @@ export function useVpnConnection() {
         try {
           await connectCurrentVpn();
         } catch (error) {
-          if (!cancelled) {
-            handleVpnFailure(error, 'disconnected');
-          }
+          handleVpnFailure(error, 'disconnected');
         } finally {
           vpnOperationInFlightRef.current = false;
-          if (!cancelled) {
-            setIsVpnBusy(false);
-          }
+          setIsVpnBusy(false);
         }
       })
       .catch(() => undefined);

@@ -3,7 +3,7 @@ import type { ServerSelectionMode } from '@/vpn/serverSelection';
 
 import type { ConnectionPhase } from './home-screen-helpers';
 
-export type HomeLocationBackdropKey = 'nl' | 'de' | 'fi' | 'fallback';
+export type HomeLocationBackdropKey = 'nl' | 'de' | 'fi' | 'ru' | 'fallback';
 
 export function homeBrandPresentation() {
   return {
@@ -24,6 +24,7 @@ const countryNameByCode: Record<string, string> = {
   DE: 'Германия',
   FI: 'Финляндия',
   NL: 'Нидерланды',
+  RU: 'Россия',
 };
 
 const cityNameByKey: Record<string, string> = {
@@ -32,17 +33,18 @@ const cityNameByKey: Record<string, string> = {
   frankfurt: 'Франкфурт',
   germany: 'Франкфурт',
   helsinki: 'Хельсинки',
+  moscow: 'Москва',
   netherlands: 'Амстердам',
 };
 
 export function homeLocationBackdropKey(location?: VpnLocation): HomeLocationBackdropKey {
   const countryCode = location?.countryCode.trim().toLowerCase();
-  if (countryCode === 'nl' || countryCode === 'de' || countryCode === 'fi') {
+  if (countryCode === 'nl' || countryCode === 'de' || countryCode === 'fi' || countryCode === 'ru') {
     return countryCode;
   }
 
   const locationID = location?.id.trim().toLowerCase();
-  if (locationID === 'nl' || locationID === 'de' || locationID === 'fi') {
+  if (locationID === 'nl' || locationID === 'de' || locationID === 'fi' || locationID === 'ru') {
     return locationID;
   }
   return 'fallback';

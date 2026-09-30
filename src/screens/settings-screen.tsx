@@ -84,9 +84,14 @@ export default function SettingsScreen() {
     ? "Подключать VPN при открытии приложения."
     : "Запускать VEX вместе с системой.";
   const smartRoutingValue = isSmartRoutingEnabled ? "Включено" : "Выключено";
-  const smartRoutingHint = vpnStatus.state === "connected"
-    ? "Применится после переподключения. Российские сервисы пойдут без VPN."
-    : "Российские сервисы без VPN, остальное через защищенный туннель.";
+  const smartRoutingHint = isSmartRoutingEnabled
+    ? isAndroidApp
+      ? "Часть российских IP напрямую, остальное через VPN."
+      : "Российские IP напрямую, остальное через VPN."
+    : "Весь трафик через VPN.";
+  const smartRoutingDescription = vpnStatus.state === "connected"
+    ? `После переподключения: ${smartRoutingHint}`
+    : smartRoutingHint;
 
   useFocusEffect(React.useCallback(() => {
     let active = true;
@@ -260,9 +265,11 @@ export default function SettingsScreen() {
               handleSmartRoutingToggle(!isSmartRoutingEnabled)
                 .then((mode) => {
                   showSettingsToast({
-                    message: mode === "all_except_ru"
-                      ? "Умный режим включён."
-                      : "Полный VPN для всего трафика включён.",
+                    message: vpnStatus.state === "connected"
+                      ? "Режим сохранён. Переподключите VPN для применения."
+                      : mode === "all_except_ru"
+                        ? "Умный режим включён."
+                        : "Полный VPN для всего трафика включён.",
                     variant: "success",
                   });
                 })
@@ -287,7 +294,7 @@ export default function SettingsScreen() {
             <View style={styles.rowCopy}>
               <Text style={styles.rowTitle}>Умный режим</Text>
               <Text style={styles.rowDescription}>
-                {smartRoutingHint}
+                {smartRoutingDescription}
               </Text>
               <Text
                 style={[

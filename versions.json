@@ -1,7 +1,7 @@
 {
   "android": {
     "version": "1.0.59",
-    "build": 67,
+    "build": 68,
     "min_supported_build": 1002930,
     "is_required": false,
     "checksum_sha256": "7eb5c6b5f9e7a76a69f25612fd85396305f279c399c47fcbbc69190ea3dd4150",

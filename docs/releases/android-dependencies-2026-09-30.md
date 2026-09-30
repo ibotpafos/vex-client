@@ -20,8 +20,9 @@ findings (two high, two moderate); modified lock/install had zero findings.
 This is the npm audit result, not a guarantee that all possible defects are gone.
 `expo install --check`, direct dependency tree, TypeScript, ESLint and upstream
 AmneziaWG contract passed. All 22 functional unit command groups passed.
-The separate existing release-metadata unit gate still rejects the empty
-candidate checksum and was not relaxed. Expo Doctor passed 19 of 20 checks;
+The release-metadata gate initially rejected the empty candidate checksum;
+it was not relaxed. The verified production-signed artifact now supplies the
+actual checksum/signature metadata. Expo Doctor passed 19 of 20 checks;
 its only failed check is unavailable local CocoaPods (`pod` exit 127), not
 an Android dependency failure. Native iOS build acceptance is not claimed.
 
@@ -37,7 +38,10 @@ lockfile restored hashes match baseline; patch reconstruction matches modified.
 Evidence supplements extend the existing version transaction under
 `/private/tmp/vex-android-release-candidate-68-20260930/dependencies/`.
 
-TODO: Build and verify the production-signed APK from this updated dependency
-commit, bind its actual checksum/signature metadata and rerun full release
-checks. On-device signed OTA apply/deferral/rollback, modern Android/network
-transitions and protected customer failure triage remain release gates.
+Production signing run 36707722877 succeeded for source commit 2231c17. Both
+ABIs, production signer, sidecar and upgrade compatibility passed; signed APK
+SHA-256 is b3f8fcd5f947d9dec3a8bf84627912b8cfbf06a23410fcfb267ead9f1f25fdaa.
+Candidate metadata is bound to this artifact; the download is not published.
+
+TODO: Prove on-device signed OTA apply/deferral/rollback, modern Android/network
+transitions and protected customer failure triage before customer release.

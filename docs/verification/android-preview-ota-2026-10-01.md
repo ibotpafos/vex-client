@@ -43,3 +43,15 @@ https://docs.expo.dev/versions/v56.0.0/sdk/ui/universal/host/
 
 Private device logs, APKs and four-role ledgers stay outside Git under
 /Volumes/D/Projects/mobile-transactions/android-release-20260930/preview-ota/.
+
+## Separately approved second preview — physical acceptance
+
+- Tested source: `2ce0a26075ceed1b95cdc8dcfab9024f0673c20e`, Dev APK SHA-256 `68d9b110928914fbcb147ff0de83babd43cede88f0b9f34792da7fa539a3cdc3`. Current follow-up changes remove the now-completed notice TODO and record evidence only; do not relabel the retained APK as a later source.
+- Signed production candidate run36798673929 passed checksum, production signer, both ABIs and upgrade from published1.0.59; it was not released or installed over production.
+- One new Android preview OTA, signed manifest and all33 file bytes verified against retained export. Exact update5934cd56-3f77-dabd-6c56-56fe7a152d3a.
+- Android9: ready notice now visible, including VPN-deferral explanation. 25 connected samples and no native reload. Manual disconnect led to restartCount1 and visible **Обновлено** / **Новая версия запущена и готова к работе.**; notice then expired.
+- One distinct signed rollback: commitTime2026-10-01T01:26:02Z. 16 connected samples with no reload; manual disconnect led to restartCount2 and visible **Стабильная версия восстановлена** / **Безопасная встроенная версия запущена и готова к работе.**; notice then expired.
+- Phone left disconnected with automatic server selection. Installed production APK remains byte-identical to published1.0.59, SHA-256 `7eb5c6b5f9e7a76a69f25612fd85396305f279c399c47fcbbc69190ea3dd4150`.
+- Downloading notice was too brief to capture. No Doze/process-death/network-switch/real-egress/leak/speed/newer-Android acceptance is claimed. Those release gates remain required.
+- Legacy EOAS rollback still carries a CLI timeout flag although its child reaped0 and signed origin proves rollback. Operator regression guard now separates timeout from normal completion; no duplicate write was attempted. Local TTY lifecycle investigation is still open.
+- Production channel, DNS and VPN infrastructure unchanged. No third preview publication is authorized by this test approval.

@@ -1,6 +1,6 @@
 {
   "name": "vex-client",
-  "version": "1.0.60",
+  "version": "1.0.61",
   "private": true,
   "main": "expo-router/entry",
   "dependencies": {
@@ -111,7 +111,8 @@
     "local:release": "bash scripts/build_all_local_releases.sh",
     "macos:release": "npm run native:macos:release",
     "contract:check": "node scripts/check-generated-contract.mjs",
-    "android:verify-upgrade": "node scripts/verify_android_upgrade.cjs"
+    "android:verify-upgrade": "node scripts/verify_android_upgrade.cjs",
+    "eas-build-pre-install": "bash scripts/eas_build_pre_install.sh"
   },
   "resolutions": {
     "lightningcss": "1.30.1",

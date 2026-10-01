@@ -2,77 +2,60 @@
 set -euo pipefail
 set +x
 
-mode="${1:-}"
-expected_host="errors.vexguard.app"
-
-case "${mode}" in
-  env)
-    python3 - "${expected_host}" <<'PY'
+# Validate the same approved project for native and bundled JavaScript SDKs.
+# Never put the ingestion key in output, including parser/archive errors.
+python3 - "$@" <<'PYTHON'
 import os
-import sys
-from urllib.parse import urlparse
-
-expected_host = sys.argv[1]
-dsn = os.environ.get("EXPO_PUBLIC_SENTRY_DSN", "").strip()
-if not dsn:
-    print("EXPO_PUBLIC_SENTRY_DSN is required for a production Android release", file=sys.stderr)
-    raise SystemExit(2)
-
-parsed = urlparse(dsn)
-if (
-    parsed.scheme != "https"
-    or not parsed.username
-    or parsed.password is not None
-    or parsed.hostname != expected_host
-    or parsed.port is not None
-    or parsed.path in ("", "/")
-):
-    print(
-        f"EXPO_PUBLIC_SENTRY_DSN must be an HTTPS Bugsink DSN for {expected_host}",
-        file=sys.stderr,
-    )
-    raise SystemExit(2)
-PY
-    echo "ANDROID_BUGSINK_ENV=PASS host=${expected_host}"
-    ;;
-  apk)
-    apk_path="${2:-}"
-    if [[ -z "${apk_path}" || ! -f "${apk_path}" ]]; then
-      echo "usage: $0 apk <path-to-apk>" >&2
-      exit 2
-    fi
-    python3 - "${apk_path}" "${expected_host}" <<'PY'
 import re
 import sys
 import zipfile
+from urllib.parse import urlsplit
 
-apk_path, expected_host = sys.argv[1:]
-dsn_pattern = re.compile(
-    rb"https://[A-Za-z0-9._~-]+@"
-    + re.escape(expected_host.encode("ascii"))
-    + rb"/[A-Za-z0-9._~-]+"
-)
+HOST = "errors.vexguard.app"
 
-with zipfile.ZipFile(apk_path) as apk:
-    candidates = [
-        name
-        for name in apk.namelist()
-        if re.fullmatch(r"classes\d*\.dex", name)
-        or name in {"resources.arsc", "AndroidManifest.xml"}
-    ]
-    found = any(dsn_pattern.search(apk.read(name)) for name in candidates)
-
-if not found:
-    print(
-        f"Android release APK is missing Bugsink DSN for {expected_host}",
-        file=sys.stderr,
-    )
+def fail(message):
+    print(message, file=sys.stderr)
     raise SystemExit(2)
-PY
-    echo "ANDROID_BUGSINK_APK=PASS host=${expected_host}"
-    ;;
-  *)
-    echo "usage: $0 {env|apk <path-to-apk>}" >&2
-    exit 2
-    ;;
-esac
+
+args = sys.argv[1:]
+if args != ["env"] and not (len(args) == 2 and args[0] == "apk"):
+    fail("usage: verify_android_observability.sh {env|apk <path-to-apk>}")
+dsn = os.environ.get("EXPO_PUBLIC_SENTRY_DSN", "").strip()
+if not dsn:
+    fail("EXPO_PUBLIC_SENTRY_DSN is required for a production Android release")
+try:
+    parsed = urlsplit(dsn)
+    valid = (
+        parsed.scheme == "https"
+        and parsed.hostname == HOST
+        and parsed.password is None
+        and parsed.port is None
+        and re.fullmatch(r"[A-Za-z0-9._~-]+", parsed.username or "")
+        and re.fullmatch(r"/[1-9][0-9]*", parsed.path)
+        and not parsed.query
+        and not parsed.fragment
+        and dsn == f"https://{parsed.username}@{HOST}{parsed.path}"
+    )
+except ValueError:
+    valid = False
+if not valid:
+    fail(f"EXPO_PUBLIC_SENTRY_DSN must be a canonical HTTPS Bugsink DSN for {HOST}")
+if args[0] == "env":
+    print(f"ANDROID_BUGSINK_ENV=PASS host={HOST}")
+    raise SystemExit(0)
+expected = re.compile(re.escape(dsn.encode("ascii")) + rb"(?![0-9])")
+try:
+    with zipfile.ZipFile(args[1]) as apk:
+        # DEX carries BuildConfig; Expo's Hermes/JS asset carries public env.
+        # Either alone leaves one of the SDKs unconfigured.
+        native = any(expected.search(apk.read(n)) for n in apk.namelist()
+                     if re.fullmatch(r"classes[0-9]*\.dex", n))
+        javascript = any(expected.search(apk.read(n)) for n in apk.namelist()
+                         if n in {"assets/index.android.bundle", "assets/index.android.hbc"})
+except (OSError, zipfile.BadZipFile, RuntimeError, EOFError, ValueError):
+    fail("Android release APK cannot be read as a valid archive")
+if not native or not javascript:
+    fail(f"Android release APK is missing the approved Bugsink DSN in "
+         f"native or JavaScript SDK configuration for {HOST}")
+print(f"ANDROID_BUGSINK_APK=PASS host={HOST} native=present javascript=present")
+PYTHON

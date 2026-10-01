@@ -16,6 +16,7 @@ jobs:
       VEX_UPLOAD_KEY_ALIAS: ${{ secrets.VEX_UPLOAD_KEY_ALIAS }}
       VEX_UPLOAD_KEY_PASSWORD: ${{ secrets.VEX_UPLOAD_KEY_PASSWORD }}
       EXPO_PUBLIC_SENTRY_DSN: ${{ secrets.EXPO_PUBLIC_SENTRY_DSN }}
+      EXPO_PUBLIC_SENTRY_ENVIRONMENT: production
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -52,7 +53,9 @@ jobs:
               env_file.write(f"VEX_UPLOAD_STORE_FILE={destination}\n")
           PY
       - name: Build signed production APK
-        run: npm run android:release -- --no-daemon
+        run: |
+          export EXPO_PUBLIC_SENTRY_RELEASE="vex-android@$(node -p "require('./versions.json').android.version")+$(node -p "require('./app.json').expo.android.versionCode")"
+          npm run android:release -- --no-daemon
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: android-production-${{ github.sha }}

@@ -34,6 +34,7 @@ function violations(value) {
     const commands = (job.steps ?? []).map(step => step.run ?? '').join('\n');
     if (/npm run (?:ota:|.*:publish|.*:deploy-release)|package-native-windows\.ps1|publish-native-windows\.ps1|-allowProvisioningUpdates/.test(commands)) failures.push(`no signing/publication: ${lane}`);
     if (lane === 'android' && /(?:^|\n)\s*sdkmanager\s/.test(commands)) failures.push('explicit Android SDK tool path');
+    if (lane === 'android' && !(job.steps ?? []).some(step => step.uses?.startsWith('actions/setup-go@') && step.with?.['go-version'] === '1.25.x')) failures.push('pinned upstream Go toolchain floor');
     const required = {
       shared: ['npm run check', 'npm run build:web', 'actionlint'],
       android: ['sdkmanager', ':app:testDebugUnitTest', 'npm run android:build:debug:fast'],
@@ -56,6 +57,7 @@ if (failures.length) {
     value => { value.jobs.windows = structuredClone(value.jobs.macos); },
     value => { value.jobs.android['runs-on'] = 'ubuntu-latest-16-cores'; },
     value => { value.jobs.android.steps.find(step => step.name === 'Install locked Android build components').run = 'sdkmanager \"platform-tools\"'; },
+    value => { value.jobs.android.steps.find(step => step.uses?.startsWith('actions/setup-go@')).with['go-version'] = '1.24.x'; },
     value => { value.permissions.contents = 'write'; },
     value => { value.jobs.android.env = { SIGNING_KEY: '${{ secrets.PRODUCTION_KEY }}' }; },
     value => { value.jobs.shared.steps[0].with['persist-credentials'] = true; },

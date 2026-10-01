@@ -57,6 +57,9 @@ class VexLeakBlockerService : VpnService() {
       .addRoute("0.0.0.0", 0)
       .addAddress("fd00:255:255::1", 128)
       .addRoute("::", 0)
+      // Without an explicit DNS, Android uses the underlying network resolver.
+      // Keep DNS requests in this dropped-packet tunnel while blocking traffic.
+      .addDnsServer("10.255.255.2")
       .setBlocking(false)
     if (allowedApplications.isEmpty()) {
       try {

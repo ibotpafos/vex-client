@@ -253,7 +253,8 @@ function OtaUpdateOverlayContent() {
 
   return (
     <View pointerEvents="box-none" style={styles.overlay}>
-      <Host colorScheme="dark" seedColor="#22D3EE" style={styles.host}>
+      {/* TODO(android-release): verify ready/completion notices on-device before release; the previous Host measured zero height. */}
+      <Host colorScheme="dark" seedColor="#22D3EE" style={styles.host} matchContents={{ vertical: true }}>
         <Column spacing={8} style={styles.card}>
           <UniversalText textStyle={styles.eyebrow}>VEX update</UniversalText>
           <UniversalText textStyle={styles.title}>{title}</UniversalText>

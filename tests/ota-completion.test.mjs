@@ -40,6 +40,9 @@ test('OTA overlay handles rollback directives and confirms only after reload', (
   assert.match(overlay, /wasOtaCompletionApplied/);
   assert.match(overlay, /Обновлено/);
   assert.match(overlay, /downloadProgress/);
+  // An absolutely positioned native Host otherwise has no intrinsic RN height:
+  // OTA can download/apply correctly while every progress/ready notice is hidden.
+  assert.match(overlay, /<Host[^>]*matchContents=\{\{ vertical: true \}\}/);
 });
 
 test('manual OTA action asks expo-updates, not just the native APK metadata API', () => {

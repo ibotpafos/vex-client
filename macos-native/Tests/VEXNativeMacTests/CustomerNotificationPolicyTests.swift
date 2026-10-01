@@ -14,7 +14,8 @@ final class CustomerNotificationPolicyTests: XCTestCase {
         let notices = policy.consume(event: support.0, metadata: support.1)
 
         XCTAssertEqual(notices.count, 1)
-        XCTAssertEqual(notices[0].domain, "support")
+        XCTAssertEqual(notices[0].title, "Поддержка VEX")
+        XCTAssertEqual(notices[0].body, "Есть изменения в поддержке. Откройте клиент для просмотра.")
         XCTAssertFalse(notices[0].body.contains("must-not-leak"))
         XCTAssertFalse(notices[0].title.contains("must-not-leak"))
     }

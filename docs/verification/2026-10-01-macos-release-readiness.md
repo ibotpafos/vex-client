@@ -3,7 +3,7 @@
 ## Контекст и границы
 
 - База: `origin/main` `4df3066`; native-consolidation кандидат `d02e8ea` принят поверх неё в изолированном release workspace.
-- Универсальная `.app` **0.1.88 (118)** собрана и прошла signature/resource проверки. Это неопубликованный ad-hoc кандидат. Публичное read-only зеркало остаётся **0.1.87+117**, `gatekeeperReady=false`.
+- Универсальная `.app` **0.1.88 (118)** собрана и прошла signature/resource проверки. Это неопубликованный ad-hoc кандидат. Первый сохранённый снимок публичного read-only зеркала: **0.1.87+117**, `gatekeeperReady=false`; это историческое наблюдение, не утверждение о новом опубликованном релизе.
 - Пользователь потребовал не выключать уже подключённый VPN. В этой проверке не выполнялись live helper/GUI/network операции, установка helper, PF/DNS/route изменения, вход в аккаунт или доступ к credentials.
 
 ## Что уже было и что исправлено сейчас
@@ -30,6 +30,16 @@
 - Клиент изолирует старые callbacks поколением потока и token guard; logout, смена аккаунта, явная revocation и завершение сбрасывают уведомления. Same-account refresh сохраняет dedupe. Permission IPC не задерживает обновление entitlement/account.
 - Фактические тела `applySessionRefreshResult`, `loadUser`, `refreshLocations` скомпилированы в fake-transport harness: late logout/account-switch результаты не восстанавливают и не перезаписывают сессию/данные, текущие результаты принимаются. Это не полный XCTest и не GUI acceptance.
 
+## Продолжение: исполнимые lifecycle-регрессии
+
+- Фактические тела SSE callbacks скомпилированы и исполнены с in-memory transport/backend: same-account dedupe, stale callbacks, resync без баннера, support/releases, смена аккаунта и revocation. Первый запуск упал из-за fixture `waitForAdd`, который ожидал любой старый add вместо нужного количества; исправленный count-latch прошёл. Исходная ошибка сохранена отдельно.
+- Отклонение сессии теперь увеличивает `customerRealtimeGeneration` **до** reset/retry; ранее поставленная в очередь доставка больше не проходит guard. Revocation также отменяет старый SSE transport. Это не команда отключения VPN.
+- `deliver` согласует уже полученный snapshot системного разрешения: внешний deny отключает opt-in и удаляет только service-owned notices. Payload содержит только generic title/body; SSE ID остаётся в bounded dedupe, а не в очереди доставки.
+- `withSessionRetry` и `resolveProfileForAuthenticatedSession` связывают ошибки/ответы с токеном и `authenticatedSessionGeneration`: старый 401 не refresh/retry/expire новую сессию. Generation меняется при login/unlock/reset/termination, но не при обычном token refresh. `sessionChanged` из подготовки профиля не вызывает helper disconnect cleanup.
+- Исполнимый fake harness реальных retry/entitlement/profile bodies воспроизвёл ошибки до исправления (exit 1), после исправления все stale-path assertions прошли (exit 0). Рабочие current-session retry/expiry принимаются и до, и после изменений.
+- Реальные `loadUser`/`refreshLocations` прошли same-token re-login fixtures: поздние success/error не меняют пользовательские данные. `loadBilling` получил такие же generation/token/owner guards; его отдельная исполнимая regression входит в текущий offline gate.
+- Эти результаты не доказывают весь `connectWithAutopilot` или реальный tunnel/update/permission UX: next runner отдельно проверяет границы `performConnectVPN` с fake downstream connector. Полный релиз и parity всё ещё не подтверждены.
+
 ## Артефакты транзакции
 
 Четыре роли; буквальные команды, stdout/stderr, статусы и хеши находятся в `VERIFICATION.txt`:
@@ -48,11 +58,12 @@
 - `macos-native/Sources/VEXNativeMac/Services/SparkleUpdaterService.swift`: `TODO(vpn-update-safety)` — VM qualification deferred Sparkle handoff до включения production automatic install.
 - `macos-native/Sources/VEXNativeMac/Models/VEXModels.swift`, `VpnRoutingMode`: per-app provider и isolated routing/leak acceptance отсутствуют. Возврат `nil` при пустом каталоге уже реализован и не является незавершённым TODO.
 - `macos-native/Sources/VEXNativeMac/Services/CustomerNotificationService.swift`: `TODO(notification-acceptance)` — реальный opt-in/permission sheet/banner на изолированном профиле не проверен; fake backend этого не доказывает.
+- `macos-native/Sources/VEXNativeMac/Stores/VEXAppState.swift`: `TODO(authenticated-connect-boundary)` — whole-flow fake-helper acceptance через autopilot awaits ещё не пройден.
 - `macos-native/Sources/VEXNativeMac/Services/CustomerRealtimeService.swift`: APNs/background delivery не реализован; credentials/entitlements/device qualification отсутствуют. Foreground policy и opt-in wiring уже реализованы, это не незавершённый TODO.
 
 ## Следующие действия (не более пяти)
 
-1. Дополнить runtime wiring coverage исполнимым SSE callback/in-memory transport integration; на изолированном профиле отдельно проверить permission/banner. Pure policy, fake delivery и late-session guards уже пройдены.
+1. Выполнить next `qualify-authenticated-connect-boundary.py` на фактическом `performConnectVPN` с fake helper/connector; довести auth-boundary guards через autopilot awaits. SSE callback/in-memory transport уже исполнен; реальный permission/banner остаётся отдельным acceptance.
 2. Запустить полный XCTest с Xcode; реализовать process-scoped provider и APNs с необходимыми signing/entitlement gates.
 3. На отдельном Mac/VM проверить signed helper install/rollback, handshake, IPv4/IPv6/DNS/HTTPS, failover и deferred Sparkle update. Пользователь подтвердил, что стенда пока нет.
 4. Подготовить подписанный/notarized release, обновить согласованную native version metadata; ad-hoc кандидат не устанавливать поверх активного VPN.

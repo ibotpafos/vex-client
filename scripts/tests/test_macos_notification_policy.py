@@ -8,9 +8,13 @@ MAC = ROOT / "macos-native/Sources/VEXNativeMac"
 wire = (MAC / "Services/CustomerRealtimeService.swift").read_text().split("@MainActor\nfinal class CustomerRealtimeService", 1)[0]
 policy = (MAC / "Models/CustomerNotificationPolicy.swift").read_text()
 service = (MAC / "Services/CustomerNotificationService.swift").read_text()
+policy_source = (MAC / "Models/CustomerNotificationPolicy.swift").read_text()
 assert "UNUserNotificationCenterDelegate" in service
 assert "center.delegate = self" in service
 assert "completionHandler([.banner, .list, .sound])" in service
+assert 'identifier: "vex.activity." + domain + "." + id' not in policy_source
+assert "let identifier: String" not in policy_source
+assert "let domain: String" not in policy_source
 harness = r'''
 var policy = CustomerNotificationPolicy()
 func notices(_ type: String, _ id: String, _ data: String) -> [CustomerNotificationPayload] {
@@ -25,7 +29,8 @@ precondition(notices("customer.change", "", "{\"domain\":\"support\",\"version\"
 precondition(notices("customer.change", "x", "{\"domain\":\"unknown\",\"version\":1}").isEmpty)
 precondition(notices("customer.change", "b", "{\"domain\":\"billing\",\"version\":1}").isEmpty)
 let support = notices("customer.change", "s1", "{\"domain\":\"support\",\"version\":1,\"secret\":\"DO_NOT_DISPLAY\"}")
-precondition(support.count == 1 && support[0].domain == "support")
+precondition(support.count == 1 && support[0].title == "Поддержка VEX")
+precondition(support[0] == .init(title: "Поддержка VEX", body: "Есть изменения в поддержке. Откройте клиент для просмотра."))
 precondition(!support[0].body.contains("DO_NOT_DISPLAY"))
 precondition(notices("customer.change", "s1", "{\"domain\":\"support\",\"version\":1}").isEmpty)
 precondition(notices("customer.change", "release1", "{\"domain\":\"releases\",\"version\":1}").count == 1)

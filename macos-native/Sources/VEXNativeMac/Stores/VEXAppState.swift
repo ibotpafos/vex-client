@@ -73,6 +73,8 @@ final class VEXAppState: ObservableObject {
     private var customerFallbackTask: Task<Void, Never>?
     private var customerRealtimeConnected = false
     private var customerRealtimeGeneration = 0
+    private var authenticatedSessionGeneration = 0
+    private enum AuthenticatedOperationError: Error { case sessionChanged }
     private var customerNotificationSessionID: String?
     private var customerNotificationPolicy = CustomerNotificationPolicy()
     private var customerRefreshInFlight = false
@@ -413,6 +415,10 @@ final class VEXAppState: ObservableObject {
             Task { [api] in
                 await api.reportVpnConnect(accessToken: tunnelToken, tunnel: connectedTunnel)
             }
+        } catch AuthenticatedOperationError.sessionChanged {
+            // Account changes invalidate preparation, not an already active VPN.
+            // Never run disconnect cleanup for a stale authentication operation.
+            return
         } catch is CancellationError {
             await helper.interruptWithDisconnect(releaseAntiLeak: !antiLeakEnabled)
             clearActiveTunnelRouteState()
@@ -435,6 +441,9 @@ final class VEXAppState: ObservableObject {
     }
 
     private func connectWithAutopilot(initialTunnel: PreparedTunnel, accessToken token: String, helper: VEXHelperModel, generation: Int) async throws -> PreparedTunnel {
+        // TODO(authenticated-connect-boundary): extend the offline fake-helper
+        // transition harness across every autopilot await before accepting this
+        // flow for release; a guarded profile/retry is not whole-flow acceptance.
         let resiliencePolicy: ResiliencePolicy?
         if let freshPolicy = try? await api.resiliencePolicy(accessToken: token) {
             dynamicRouteEngine.cache(policy: freshPolicy)
@@ -1005,6 +1014,9 @@ final class VEXAppState: ObservableObject {
             statusMessage = authError
             return
         }
+        sessionRefreshTask?.task.cancel()
+        sessionRefreshTask = nil
+        authenticatedSessionGeneration += 1
         session = storedSession
         user = storedSession.user
         startCustomerRealtime(accessToken: storedSession.accessToken)
@@ -1021,6 +1033,9 @@ final class VEXAppState: ObservableObject {
     }
 
     func prepareForTermination() {
+        authenticatedSessionGeneration += 1
+        sessionRefreshTask?.task.cancel()
+        sessionRefreshTask = nil
         customerRealtimeGeneration += 1
         resetCustomerNotificationSession()
         automaticUpdatesStartupTask?.cancel()
@@ -1228,9 +1243,12 @@ final class VEXAppState: ObservableObject {
     }
 
     private func loadUser(_ token: String) async {
+        guard session?.accessToken == token else { return }
+        let operationGeneration = authenticatedSessionGeneration
         await withSessionRetry(operation: { currentToken in
             let loadedUser = try await self.api.me(accessToken: currentToken)
-            guard self.session?.accessToken == currentToken else { return () }
+            guard self.authenticatedSessionGeneration == operationGeneration,
+                self.session?.accessToken == currentToken else { return () }
             self.user = loadedUser
             return ()
         })
@@ -1238,26 +1256,31 @@ final class VEXAppState: ObservableObject {
 
     private func refreshLocations(accessToken token: String) async {
         guard !isLoadingLocations, session?.accessToken == token else { return }
+        let operationGeneration = authenticatedSessionGeneration
         isLoadingLocations = true
         locationLoadError = nil
         defer { isLoadingLocations = false }
 
         do {
             let loadedLocations = try await api.vpnLocations(accessToken: token)
-            guard session?.accessToken == token else { return }
+            guard authenticatedSessionGeneration == operationGeneration,
+                session?.accessToken == token else { return }
             locations = loadedLocations
             lastLocationsRefreshAt = Date()
             if selectedLocation == nil, serverSelectionMode != "manual", let first = locations.first {
                 selectedLocationId = first.id
             }
         } catch {
-            guard session?.accessToken == token else { return }
+            guard authenticatedSessionGeneration == operationGeneration,
+                session?.accessToken == token else { return }
             locationLoadError = error.localizedDescription
             statusMessage = error.localizedDescription
         }
     }
 
     private func loadBilling(_ token: String) async {
+        guard session?.accessToken == token else { return }
+        let operationGeneration = authenticatedSessionGeneration
         let billingUserId = user?.id ?? session?.user.id ?? ""
         let cachedSummary = billingSummaryCache.load(userId: billingUserId)
         if billingSummary == nil, let cachedSummary {
@@ -1274,7 +1297,8 @@ final class VEXAppState: ObservableObject {
 
         do {
             let (plans, currentEntitlement) = try await (plansResult, entitlementResult)
-            guard session?.user.id == billingUserId else { return }
+            guard authenticatedSessionGeneration == operationGeneration,
+                session?.accessToken == token, session?.user.id == billingUserId else { return }
             entitlement = currentEntitlement
             billingSummary = billingService.buildSummary(plans: plans, entitlement: currentEntitlement)
             if let billingSummary {
@@ -1282,7 +1306,8 @@ final class VEXAppState: ObservableObject {
             }
             billingError = nil
         } catch {
-            guard session?.user.id == billingUserId else { return }
+            guard authenticatedSessionGeneration == operationGeneration,
+                session?.accessToken == token, session?.user.id == billingUserId else { return }
             let fallback = cachedSummary ?? billingService.buildSummary(plans: [], entitlement: entitlement)
             billingSummary = fallback
             billingError = error.localizedDescription
@@ -1292,10 +1317,12 @@ final class VEXAppState: ObservableObject {
 
         do {
             let loaded = try await paymentsResult
-            guard session?.user.id == billingUserId else { return }
+            guard authenticatedSessionGeneration == operationGeneration,
+                session?.accessToken == token, session?.user.id == billingUserId else { return }
             billingPayments = loaded
         } catch {
-            guard session?.user.id == billingUserId else { return }
+            guard authenticatedSessionGeneration == operationGeneration,
+                session?.accessToken == token, session?.user.id == billingUserId else { return }
             billingPayments = []
             if billingError == nil {
                 billingError = error.localizedDescription
@@ -1305,11 +1332,13 @@ final class VEXAppState: ObservableObject {
 
         do {
             let loaded = try await addonsResult
-            guard session?.user.id == billingUserId else { return }
+            guard authenticatedSessionGeneration == operationGeneration,
+                session?.accessToken == token, session?.user.id == billingUserId else { return }
             deviceAddons = loaded
             deviceManagementRequiresWeb = false
         } catch {
-            guard session?.user.id == billingUserId else { return }
+            guard authenticatedSessionGeneration == operationGeneration,
+                session?.accessToken == token, session?.user.id == billingUserId else { return }
             deviceAddons = []
             if (error as? VEXAPIError)?.isForbidden == true {
                 deviceManagementRequiresWeb = true
@@ -1320,10 +1349,12 @@ final class VEXAppState: ObservableObject {
 
         do {
             let loaded = try await devicesResult
-            guard session?.user.id == billingUserId else { return }
+            guard authenticatedSessionGeneration == operationGeneration,
+                session?.accessToken == token, session?.user.id == billingUserId else { return }
             accountDevices = loaded
         } catch {
-            guard session?.user.id == billingUserId else { return }
+            guard authenticatedSessionGeneration == operationGeneration,
+                session?.accessToken == token, session?.user.id == billingUserId else { return }
             accountDevices = []
             await submitDiagnostics(reason: "account_devices_failed", status: "warning", samples: ["error": error.localizedDescription])
         }
@@ -1351,18 +1382,37 @@ final class VEXAppState: ObservableObject {
         showsErrors: Bool = true,
         operation: (String) async throws -> T
     ) async -> T? {
-        guard let token = await authenticatedAccessToken() else { return nil }
+        let operationGeneration = authenticatedSessionGeneration
+        let accountID = session?.user.id
+        guard let token = await authenticatedAccessToken(),
+            authenticatedSessionGeneration == operationGeneration,
+            session?.user.id == accountID, session?.accessToken == token else { return nil }
         do {
-            return try await operation(token)
+            let result = try await operation(token)
+            guard authenticatedSessionGeneration == operationGeneration,
+                session?.accessToken == token else { return nil }
+            return result
         } catch {
+            // A late old-token error is inert: never refresh, retry, report, or
+            // expire the replacement session (including same-account re-login).
+            guard authenticatedSessionGeneration == operationGeneration,
+                session?.accessToken == token else { return nil }
             guard error.isUnauthorizedAPIError else {
                 if showsErrors { statusMessage = error.localizedDescription }
                 return nil
             }
-            guard let refreshedToken = await refreshSessionForRetry() else { return nil }
+            guard let refreshedToken = await refreshSessionForRetry(),
+                authenticatedSessionGeneration == operationGeneration,
+                session?.user.id == accountID,
+                session?.accessToken == refreshedToken else { return nil }
             do {
-                return try await operation(refreshedToken)
+                let result = try await operation(refreshedToken)
+                guard authenticatedSessionGeneration == operationGeneration,
+                    session?.accessToken == refreshedToken else { return nil }
+                return result
             } catch {
+                guard authenticatedSessionGeneration == operationGeneration,
+                    session?.accessToken == refreshedToken else { return nil }
                 if error.isUnauthorizedAPIError {
                     expireAuthenticatedSession(message: "Сессия истекла. Войдите снова.")
                 } else if showsErrors {
@@ -1374,6 +1424,8 @@ final class VEXAppState: ObservableObject {
     }
 
     private func ensureEntitlementForConnect(accessToken token: String) async -> String? {
+        guard session?.accessToken == token else { return nil }
+        let operationGeneration = authenticatedSessionGeneration
         if entitlement?.hasPaidAccess == true {
             return token
         }
@@ -1381,6 +1433,10 @@ final class VEXAppState: ObservableObject {
         // the paid-access gate lives in the connect flow itself.
         return await withSessionRetry(operation: { refreshedToken in
             let entitlement = try await self.api.entitlement(accessToken: refreshedToken)
+            guard self.authenticatedSessionGeneration == operationGeneration,
+                self.session?.accessToken == refreshedToken else {
+                throw AuthenticatedOperationError.sessionChanged
+            }
             self.entitlement = entitlement
             return refreshedToken
         })
@@ -1531,6 +1587,9 @@ final class VEXAppState: ObservableObject {
 
     private func completeSignIn(_ nextSession: AuthSession, message: String) async throws {
         try sessionStore.saveSession(nextSession, requiresBiometricAuthentication: biometricUnlockRequired)
+        sessionRefreshTask?.task.cancel()
+        sessionRefreshTask = nil
+        authenticatedSessionGeneration += 1
         session = nextSession
         user = nextSession.user
         startCustomerRealtime(accessToken: nextSession.accessToken)
@@ -1550,11 +1609,11 @@ final class VEXAppState: ObservableObject {
 
     private func refreshSessionForRetry() async -> String? {
         guard let currentSession = session else { return nil }
+        let operationGeneration = authenticatedSessionGeneration
         if let sessionRefreshTask {
-            return await applySessionRefreshResult(
-                await sessionRefreshTask.task.value,
-                refreshAccessToken: sessionRefreshTask.accessToken
-            )
+            let result = await sessionRefreshTask.task.value
+            guard authenticatedSessionGeneration == operationGeneration else { return nil }
+            return await applySessionRefreshResult(result, refreshAccessToken: sessionRefreshTask.accessToken)
         }
         let refreshAccessToken = currentSession.accessToken
         let task = Task<Result<AuthSession, Error>, Never> { [api] in
@@ -1566,6 +1625,7 @@ final class VEXAppState: ObservableObject {
         }
         sessionRefreshTask = (refreshAccessToken, task)
         let result = await task.value
+        guard authenticatedSessionGeneration == operationGeneration else { return nil }
         if sessionRefreshTask?.accessToken == refreshAccessToken {
             sessionRefreshTask = nil
         }
@@ -1606,9 +1666,9 @@ final class VEXAppState: ObservableObject {
         forceRefresh: Bool,
         prevalidatedEntitlement: Entitlement? = nil
     ) async throws -> (PreparedTunnel, String) {
-        // Unlike the fire-and-forget loaders this must THROW on failure (the
-        // connect flow distinguishes cancellation from hard errors), so it
-        // keeps its own retry shape instead of withSessionRetry.
+        let operationGeneration = authenticatedSessionGeneration
+        let accountID = session?.user.id
+        guard session?.accessToken == token else { throw AuthenticatedOperationError.sessionChanged }
         do {
             let tunnel = try await profileService.resolveProfile(
                 accessToken: token,
@@ -1617,12 +1677,18 @@ final class VEXAppState: ObservableObject {
                 forceRefresh: forceRefresh,
                 prevalidatedEntitlement: prevalidatedEntitlement
             )
+            guard authenticatedSessionGeneration == operationGeneration,
+                session?.accessToken == token else { throw AuthenticatedOperationError.sessionChanged }
             return (tunnel, token)
         } catch {
+            guard authenticatedSessionGeneration == operationGeneration,
+                session?.accessToken == token else { throw AuthenticatedOperationError.sessionChanged }
             guard error.isUnauthorizedAPIError else { throw error }
-            guard let refreshedToken = await refreshSessionForRetry() else {
-                throw error
-            }
+            let refreshResult = await refreshSessionForRetry()
+            guard authenticatedSessionGeneration == operationGeneration,
+                session?.user.id == accountID else { throw AuthenticatedOperationError.sessionChanged }
+            guard let refreshedToken = refreshResult else { throw error }
+            guard session?.accessToken == refreshedToken else { throw AuthenticatedOperationError.sessionChanged }
             do {
                 let tunnel = try await profileService.resolveProfile(
                     accessToken: refreshedToken,
@@ -1630,8 +1696,12 @@ final class VEXAppState: ObservableObject {
                     routingMode: routingMode,
                     forceRefresh: true
                 )
+                guard authenticatedSessionGeneration == operationGeneration,
+                    session?.accessToken == refreshedToken else { throw AuthenticatedOperationError.sessionChanged }
                 return (tunnel, refreshedToken)
             } catch {
+                guard authenticatedSessionGeneration == operationGeneration,
+                    session?.accessToken == refreshedToken else { throw AuthenticatedOperationError.sessionChanged }
                 if error.isUnauthorizedAPIError {
                     expireAuthenticatedSession(message: "Сессия истекла. Войдите снова.")
                 }
@@ -1663,6 +1733,7 @@ final class VEXAppState: ObservableObject {
         message: String,
         authError: String?
     ) {
+        authenticatedSessionGeneration += 1
         sessionRefreshTask?.task.cancel()
         sessionRefreshTask = nil
         customerRealtimeGeneration += 1
@@ -1710,8 +1781,11 @@ final class VEXAppState: ObservableObject {
             onSessionRejected: { [weak self] in
                 guard let self, self.customerRealtimeGeneration == streamGeneration,
                     self.accessToken == accessToken else { return }
-                // Stop pending delivery on a rejected token, but keep recent IDs
+                // Invalidate callers queued before rejection, not only delivery
+                // already awaiting notification-center IPC. Preserve recent IDs
                 // if the refreshed session still belongs to the same account.
+                self.customerRealtimeGeneration += 1
+                self.customerRealtimeConnected = false
                 self.customerNotifications.resetSession()
                 _ = await self.refreshSessionForRetry()
             },
@@ -1719,6 +1793,9 @@ final class VEXAppState: ObservableObject {
                 guard let self, self.customerRealtimeGeneration == streamGeneration,
                     self.accessToken == accessToken else { return }
                 if event.type == "customer.session.revoked" {
+                    self.customerRealtimeGeneration += 1
+                    self.customerRealtimeConnected = false
+                    self.customerRealtimeService?.stop()
                     self.resetCustomerNotificationSession()
                     _ = await self.refreshSessionForRetry()
                     return

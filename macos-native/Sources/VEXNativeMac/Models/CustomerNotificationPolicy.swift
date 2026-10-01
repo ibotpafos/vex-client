@@ -3,8 +3,6 @@ import Foundation
 /// Foreground SSE activity notices, NOT APNs or a count of unread messages.
 /// Never copy event.data, account details, or server reasons into a notification.
 struct CustomerNotificationPayload: Equatable {
-    let identifier: String
-    let domain: String
     let title: String
     let body: String
 }
@@ -33,8 +31,6 @@ struct CustomerNotificationPolicy {
         }
         return domains.map { domain in
             CustomerNotificationPayload(
-                identifier: "vex.activity." + domain + "." + id,
-                domain: domain,
                 title: domain == "support" ? "Поддержка VEX" : "Обновления VEX",
                 body: domain == "support"
                     ? "Есть изменения в поддержке. Откройте клиент для просмотра."

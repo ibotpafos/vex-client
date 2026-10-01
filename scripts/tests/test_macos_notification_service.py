@@ -65,7 +65,8 @@ final class FakeBackend: CustomerNotificationBackend {
 @main
 struct Harness {
     static func payload(_ id: String = "vex.activity.support.event") -> CustomerNotificationPayload {
-        .init(identifier: id, domain: "support", title: "Support", body: "Generic")
+        _ = id
+        return .init(title: "Support", body: "Generic")
     }
     @MainActor static func make(_ backend: FakeBackend, _ suffix: String) -> CustomerNotificationService {
         let defaults = UserDefaults(suiteName: "vex-notice-test." + suffix)!
@@ -93,6 +94,20 @@ struct Harness {
         await allowed.0.refreshAuthorization()
         await MainActor.run {
             precondition(!allowed.0.isEnabled && allowed.1.removed.contains(allowed.1.added[0].identifier))
+        }
+
+        let externallyDenied = await MainActor.run { () -> (CustomerNotificationService, FakeBackend) in
+            let backend = FakeBackend(); backend.status = .authorized
+            return (make(backend, "external-denial"), backend)
+        }
+        await externallyDenied.0.setEnabled(true)
+        await externallyDenied.0.deliver([payload("unnecessary-event-id")])
+        await MainActor.run { externallyDenied.1.status = .denied }
+        await externallyDenied.0.deliver([payload("another-unnecessary-event-id")])
+        await MainActor.run {
+            precondition(!externallyDenied.0.isEnabled)
+            precondition(externallyDenied.0.permissionStatus == .denied)
+            precondition(externallyDenied.1.removed.contains(externallyDenied.1.added[0].identifier))
         }
 
         let denied = await MainActor.run { () -> (CustomerNotificationService, FakeBackend) in

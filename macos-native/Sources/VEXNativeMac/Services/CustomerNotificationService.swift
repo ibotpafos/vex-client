@@ -88,19 +88,7 @@ final class CustomerNotificationService: ObservableObject {
         let requestGeneration = generation
         let status = await notificationBackend().notificationSettings()
         guard generation == requestGeneration else { return }
-        permissionStatus = status
-        if status == .denied {
-            // A denied setting invalidates any delivery that was awaiting the
-            // settings reply and removes only this service's tracked notices.
-            generation += 1
-            isEnabled = false
-            defaults.set(false, forKey: Self.enabledDefaultsKey)
-            isBusy = false
-            clearTrackedNotifications()
-        } else if isEnabled && !status.permitsDelivery {
-            isEnabled = false
-            defaults.set(false, forKey: Self.enabledDefaultsKey)
-        }
+        reconcileAuthorizationStatus(status)
     }
 
     func setEnabled(_ enabled: Bool) async {
@@ -161,8 +149,8 @@ final class CustomerNotificationService: ObservableObject {
         guard !previewMode, isEnabled, !payloads.isEmpty else { return }
         let requestGeneration = generation
         let status = await notificationBackend().notificationSettings()
-        guard generation == requestGeneration, isEnabled, status.permitsDelivery else { return }
-        permissionStatus = status
+        guard generation == requestGeneration, isEnabled else { return }
+        guard !reconcileAuthorizationStatus(status) else { return }
 
         for payload in payloads where generation == requestGeneration && isEnabled {
             guard !payload.title.isEmpty, !payload.body.isEmpty else { continue }
@@ -206,6 +194,31 @@ final class CustomerNotificationService: ObservableObject {
         let created = backendFactory?() ?? UserNotificationCenterBackend()
         backend = created
         return created
+    }
+
+    /// Applies a settings snapshot already obtained by the caller.  Keeping this
+    /// synchronous avoids a second notification-center IPC request between the
+    /// check and the delivery decision.
+    ///
+    /// Returns true when notifications must not be delivered for `status`.
+    @discardableResult
+    private func reconcileAuthorizationStatus(_ status: CustomerNotificationPermissionStatus) -> Bool {
+        permissionStatus = status
+        guard !status.permitsDelivery else { return false }
+
+        if status == .denied {
+            // A denied setting invalidates any delivery that was awaiting the
+            // settings reply and removes only this service's tracked notices.
+            generation += 1
+            isEnabled = false
+            defaults.set(false, forKey: Self.enabledDefaultsKey)
+            isBusy = false
+            clearTrackedNotifications()
+        } else if isEnabled {
+            isEnabled = false
+            defaults.set(false, forKey: Self.enabledDefaultsKey)
+        }
+        return true
     }
 
     private func clearTrackedNotifications() {

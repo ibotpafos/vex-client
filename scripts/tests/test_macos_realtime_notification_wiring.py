@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Compile the real refresh guard and assert notification lifecycle wiring offline."""
 from pathlib import Path
+import os
 import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
-app_path = ROOT / "macos-native/Sources/VEXNativeMac/Stores/VEXAppState.swift"
+app_path = Path(os.environ.get("VEX_WIRING_APP_SOURCE", ROOT / "macos-native/Sources/VEXNativeMac/Stores/VEXAppState.swift"))
 source = app_path.read_text()
 start = source.index("    private func applySessionRefreshResult(")
 end = source.index("    private func resolveProfileForAuthenticatedSession(", start)
@@ -25,9 +26,24 @@ enum MockFailure: LocalizedError { case failed; var errorDescription: String? { 
 final class FakeAPI {
     var meResult: Result<User, Error> = .failure(MockFailure.failed)
     var locationsResult: Result<[VpnLocation], Error> = .failure(MockFailure.failed)
-    var delay: UInt64 = 0
-    func me(accessToken: String) async throws -> User { if delay > 0 { try await Task.sleep(nanoseconds: delay) }; return try meResult.get() }
-    func vpnLocations(accessToken: String) async throws -> [VpnLocation] { if delay > 0 { try await Task.sleep(nanoseconds: delay) }; return try locationsResult.get() }
+    var holdMe = false
+    var holdLocations = false
+    var meStarted: CheckedContinuation<Void, Never>?
+    var meRelease: CheckedContinuation<Void, Never>?
+    var locationsStarted: CheckedContinuation<Void, Never>?
+    var locationsRelease: CheckedContinuation<Void, Never>?
+    func me(accessToken: String) async throws -> User {
+        if holdMe { meStarted?.resume(); meStarted = nil; await withCheckedContinuation { continuation in meRelease = continuation } }
+        return try meResult.get()
+    }
+    func vpnLocations(accessToken: String) async throws -> [VpnLocation] {
+        if holdLocations { locationsStarted?.resume(); locationsStarted = nil; await withCheckedContinuation { continuation in locationsRelease = continuation } }
+        return try locationsResult.get()
+    }
+    func waitForMeStart() async { if meRelease != nil { return }; await withCheckedContinuation { continuation in meStarted = continuation } }
+    func waitForLocationsStart() async { if locationsRelease != nil { return }; await withCheckedContinuation { continuation in locationsStarted = continuation } }
+    func releaseMe() { meRelease?.resume(); meRelease = nil }
+    func releaseLocations() { locationsRelease?.resume(); locationsRelease = nil }
 }
 final class MemorySessionStore {
     var saved: [AuthSession] = []
@@ -36,6 +52,7 @@ final class MemorySessionStore {
 extension Error { var isUnauthorizedAPIError: Bool { false } }
 @MainActor final class RefreshHarness {
     var session: AuthSession?
+    var authenticatedSessionGeneration = 0
     var user: User?
     var biometricUnlockRequired = false
     var sessionStore = MemorySessionStore()
@@ -59,17 +76,35 @@ extra = r'''
     func verifyLateUserAndLocationGuards() async {
         let old = AuthSession(user: .init(id: "old"), accessToken: "old-token")
         let replacement = AuthSession(user: .init(id: "new"), accessToken: "new-token")
-        let app = RefreshHarness(); app.session = old; app.user = old.user; app.api.meResult = .success(.init(id: "stale")); app.api.delay = 50_000_000
+        let app = RefreshHarness(); app.session = old; app.user = old.user; app.api.meResult = .success(.init(id: "stale")); app.api.holdMe = true
         let pendingUser = Task { await app.loadUser(old.accessToken) }
-        try? await Task.sleep(nanoseconds: 5_000_000); app.session = replacement; app.user = replacement.user
+        await app.api.waitForMeStart(); app.session = replacement; app.user = replacement.user; app.api.releaseMe()
         _ = await pendingUser.value
         precondition(app.user == replacement.user)
 
-        let locations = RefreshHarness(); locations.session = old; locations.api.locationsResult = .failure(MockFailure.failed); locations.api.delay = 50_000_000
+        let sameTokenUser = RefreshHarness(); sameTokenUser.session = old; sameTokenUser.user = old.user; sameTokenUser.authenticatedSessionGeneration = 10; sameTokenUser.api.meResult = .success(.init(id: "stale-same-token")); sameTokenUser.api.holdMe = true
+        let pendingSameTokenUser = Task { await sameTokenUser.loadUser(old.accessToken) }
+        await sameTokenUser.api.waitForMeStart(); sameTokenUser.authenticatedSessionGeneration += 1; sameTokenUser.session = .init(user: .init(id: "relogin"), accessToken: old.accessToken); sameTokenUser.user = sameTokenUser.session!.user; sameTokenUser.api.releaseMe()
+        _ = await pendingSameTokenUser.value
+        precondition(sameTokenUser.user == .init(id: "relogin"))
+
+        let locations = RefreshHarness(); locations.session = old; locations.api.locationsResult = .failure(MockFailure.failed); locations.api.holdLocations = true
         let pendingLocations = Task { await locations.refreshLocations(accessToken: old.accessToken) }
-        try? await Task.sleep(nanoseconds: 5_000_000); locations.session = nil
+        await locations.api.waitForLocationsStart(); locations.session = nil; locations.api.releaseLocations()
         _ = await pendingLocations.value
         precondition(locations.locations.isEmpty && locations.locationLoadError == nil && locations.statusMessage == nil)
+
+        let sameTokenLocations = RefreshHarness(); sameTokenLocations.session = old; sameTokenLocations.authenticatedSessionGeneration = 20; sameTokenLocations.locations = [.init(id: "keep")]; sameTokenLocations.api.locationsResult = .success([.init(id: "stale")]); sameTokenLocations.api.holdLocations = true
+        let pendingSameTokenLocations = Task { await sameTokenLocations.refreshLocations(accessToken: old.accessToken) }
+        await sameTokenLocations.api.waitForLocationsStart(); sameTokenLocations.authenticatedSessionGeneration += 1; sameTokenLocations.api.releaseLocations()
+        _ = await pendingSameTokenLocations.value
+        precondition(sameTokenLocations.locations == [.init(id: "keep")] && sameTokenLocations.locationLoadError == nil && sameTokenLocations.statusMessage == nil)
+
+        let sameTokenLocationError = RefreshHarness(); sameTokenLocationError.session = old; sameTokenLocationError.authenticatedSessionGeneration = 30; sameTokenLocationError.api.locationsResult = .failure(MockFailure.failed); sameTokenLocationError.api.holdLocations = true
+        let pendingSameTokenLocationError = Task { await sameTokenLocationError.refreshLocations(accessToken: old.accessToken) }
+        await sameTokenLocationError.api.waitForLocationsStart(); sameTokenLocationError.authenticatedSessionGeneration += 1; sameTokenLocationError.api.releaseLocations()
+        _ = await pendingSameTokenLocationError.value
+        precondition(sameTokenLocationError.locationLoadError == nil && sameTokenLocationError.statusMessage == nil)
 
         let current = RefreshHarness(); current.session = old; current.api.meResult = .success(.init(id: "current")); current.api.locationsResult = .success([.init(id: "de")])
         await current.loadUser(old.accessToken); await current.refreshLocations(accessToken: old.accessToken)

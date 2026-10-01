@@ -14,7 +14,8 @@ are not covered by that statement.
 
 - Shared: unit/upstream contracts, TypeScript, ESLint, CI contract negative
   fixtures, pinned/checksummed actionlint and production web export.
-- Android: JDK 17, Go 1.25.x (upstream toolchain floor), SDK 36,
+- Android: JDK 17, Go 1.25.x (module inspection) plus bundled Go 1.25.14
+  with official checksums and the existing Android boottime runtime patch, SDK 36,
   NDK 27.1.12297006, pinned upstream sources, debug
   arm64 APK build plus package/version/ABI verification and all debug unit tests.
 - macOS: native app compilation and affected Swift suites; no helper install

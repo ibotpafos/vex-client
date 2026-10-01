@@ -1,5 +1,6 @@
 import type { VpnLocation } from '@/api/vexApi';
 import { ApiRequestError } from '@/api/error';
+import { isSelectableLocation } from './serverSelection';
 
 export function isProfileResolutionFallbackError(error: unknown): boolean {
   // Resolving another location only helps when the requested location has no
@@ -9,6 +10,16 @@ export function isProfileResolutionFallbackError(error: unknown): boolean {
   return error instanceof ApiRequestError && error.status === 404;
 }
 
+/** A missing location target is skippable; shared API failures are not. */
+export async function resolveProfileOrSkipMissing<T>(resolve: () => Promise<T>): Promise<T | null> {
+  try {
+    return await resolve();
+  } catch (error) {
+    if (isProfileResolutionFallbackError(error)) return null;
+    throw error;
+  }
+}
+
 export function profileResolutionOrder(
   initialLocationId: string,
   availableLocations: VpnLocation[],
@@ -16,10 +27,7 @@ export function profileResolutionOrder(
   const ordered: VpnLocation[] = [];
   const initial = availableLocations.find((location) => location.id === initialLocationId);
   for (const candidate of [initial, ...availableLocations]) {
-    if (!candidate || candidate.availability === 'retired') {
-      continue;
-    }
-    if (candidate.id !== initialLocationId && candidate.healthyNodes <= 0) {
+    if (!candidate || !isSelectableLocation(candidate)) {
       continue;
     }
     if (!ordered.some((location) => location.id === candidate.id)) {

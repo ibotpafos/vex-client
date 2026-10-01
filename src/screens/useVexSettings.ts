@@ -7,25 +7,12 @@ import { getAppInfo, type AppInfo } from '@/native/appInfo';
 import { playErrorHaptic, playLightImpactHaptic, playSelectionHaptic, playSuccessHaptic, playWarningHaptic } from '@/native/haptics';
 import { getStartupEnabled, setStartupEnabled } from '@/native/vexVpn';
 import { getAndroidAutoConnectEnabled, getAntiLeakEnabled, getServerSelectionMode, setAndroidAutoConnectEnabled, setAntiLeakEnabled, setServerSelectionMode } from '@/settings/vpnPreferences';
-import * as SecureStore from '@/native/secureStore';
 import { useToast, type ToastOptions } from '@/ui/toast';
-
-export const languages = [
-  { code: 'ru', label: 'Русский' },
-  { code: 'en', label: 'English' },
-] as const;
-export const languageKey = 'vex.settings.language.v1';
-export type LanguageCode = (typeof languages)[number]['code'];
-
-export function isLanguageCode(value: string | null): value is LanguageCode {
-  return value === 'ru' || value === 'en';
-}
 
 export function useVexSettings(showToastOverride?: (options: ToastOptions) => void) {
   const { signOut } = useSession();
   const { showToast: showGlobalToast } = useToast();
   const showToast = showToastOverride ?? showGlobalToast;
-  const [language, setLanguage] = useState<LanguageCode>('ru');
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [isAutomationEnabled, setIsAutomationEnabled] = useState(false);
   const [isSavingAutomation, setIsSavingAutomation] = useState(false);
@@ -64,13 +51,6 @@ export function useVexSettings(showToastOverride?: (options: ToastOptions) => vo
         }
       })
       .catch(() => undefined);
-    SecureStore.getItemAsync(languageKey)
-      .then((storedLanguage) => {
-        if (mounted && isLanguageCode(storedLanguage)) {
-          setLanguage(storedLanguage);
-        }
-      })
-      .catch(() => undefined);
     const loadAutomationPreference = Platform.OS === 'android'
       ? getAndroidAutoConnectEnabled()
       : getStartupEnabled();
@@ -99,31 +79,6 @@ export function useVexSettings(showToastOverride?: (options: ToastOptions) => vo
       mounted = false;
     };
   }, []);
-
-  const handleLanguagePress = useCallback((nextLanguage: LanguageCode) => {
-    if (nextLanguage === language) {
-      return;
-    }
-    playSelectionHaptic();
-    const previousLanguage = language;
-    setLanguage(nextLanguage);
-    SecureStore.setItemAsync(languageKey, nextLanguage)
-      .then(() => {
-        showToast({
-          message: `Язык изменён: ${languageLabel(nextLanguage)}`,
-          variant: 'success',
-        });
-      })
-      .catch(() => {
-        setLanguage(previousLanguage);
-        playErrorHaptic();
-        showToast({
-          duration: 'long',
-          message: 'Не удалось сохранить язык.',
-          variant: 'error',
-        });
-      });
-  }, [language, showToast]);
 
   const handleSignOut = useCallback(async () => {
     if (isSigningOut) {
@@ -236,7 +191,6 @@ export function useVexSettings(showToastOverride?: (options: ToastOptions) => vo
   }, [isSavingAntiLeak, showToast]);
 
   return {
-    language,
     isSigningOut,
     isAutomationEnabled,
     isSavingAutomation,
@@ -246,14 +200,9 @@ export function useVexSettings(showToastOverride?: (options: ToastOptions) => vo
     isSavingServerSelection,
     appInfo,
     remoteConfig,
-    handleLanguagePress,
     handleSignOut,
     handleAutomationToggle,
     handleServerSelectionToggle,
     handleAntiLeakToggle,
   };
-}
-
-function languageLabel(language: LanguageCode) {
-  return languages.find((item) => item.code === language)?.label ?? language;
 }

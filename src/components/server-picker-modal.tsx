@@ -20,7 +20,7 @@ import {
 } from "../screens/home-screen-helpers";
 import {
   groupVpnLocationsByCountry,
-  serverCountLabel,
+  serverPickerCountryHint,
   serverPickerCountryGapDp,
   serverPickerLocationTitle,
   serverPickerRowPresentation,
@@ -133,12 +133,12 @@ function ServerPickerBody({
       <UniversalText textStyle={styles.eyebrow}>ЛОКАЦИЯ</UniversalText>
       <UniversalText textStyle={styles.title}>Выберите сервер</UniversalText>
       <UniversalText textStyle={styles.subtitle}>
-        VEX выберет лучший сервер автоматически. Страну и конкретный сервер можно указать вручную.
+        Оставьте автовыбор или откройте страну и нажмите нужный сервер.
       </UniversalText>
       <Column spacing={serverPickerCountryGapDp()}>
         <ServerPickerRow
           leading="↻"
-          onPress={isVpnBusy || locations.length === 0 ? undefined : onAutoSelect}
+          onPress={isVpnBusy || countryGroups.length === 0 ? undefined : onAutoSelect}
           supportingText="Лучший сервер среди всех стран"
           testID="server-picker-auto"
           trailing={selectionMode === "auto" ? "✓" : undefined}
@@ -156,9 +156,6 @@ function ServerPickerBody({
             selectedLatencyText,
           }) : null;
           const serverCount = group.locations.length;
-          const bestLocationOrdinal = bestLocation
-            ? group.locations.findIndex((location) => location.id === bestLocation.id) + 1
-            : undefined;
           return (
             <Column key={group.countryCode} spacing={0} style={styles.countryCard}>
               <ServerPickerRow
@@ -171,7 +168,7 @@ function ServerPickerBody({
                   setExpandedCountryCode(expanded ? null : group.countryCode);
                 }}
                 supportingText={bestLocation
-                  ? `${serverCountLabel(serverCount)} · лучший ${serverPickerLocationTitle(bestLocation, bestLocationOrdinal)} · ${bestPresentation?.latency}`
+                  ? serverPickerCountryHint(serverCount, bestPresentation?.latency ?? '-- мс')
                   : "Нет доступных серверов"}
                 testID={`server-picker-country-${group.countryCode.toLowerCase()}`}
                 trailing={serverCount > 1
@@ -203,7 +200,7 @@ function ServerPickerBody({
             </Column>
           );
         })}
-        {locations.length === 0 ? (
+        {countryGroups.length === 0 ? (
           <ServerPickerRow
             leading="↻"
             onPress={isVpnBusy || isRefreshing ? undefined : onRetry}

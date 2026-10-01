@@ -15,7 +15,7 @@ import { sessionLoadFailureDiagnosticsSnapshot } from '../src/auth/sessionDiagno
 import { isCurrentSessionMutation } from '../src/auth/sessionMutationGuard';
 import { loadSessionWithRetry, loadWithRetry } from '../src/auth/sessionLoadRetry';
 import { vpnConnectionAnimationsEnabled } from '../src/vpn/vpnAnimationPolicy';
-import { formatQuotaBytes, formatQuotaUsage, quotaProgress, quotaRemainingBytes } from '../src/components/traffic-quota-presentation';
+import { formatQuotaBytes, formatQuotaUsage, hasQuotaLimit, quotaHeadline, quotaProgress, quotaRemainingBytes } from '../src/components/traffic-quota-presentation';
 import { generateChallenge, generateRandomString } from '../src/auth/pkce';
 import { buildAppWebAuthUrl } from '../src/auth/webAuthUrl';
 import { emailOTPCells, emailOTPRequestErrorMessage, isEmailOTPExpired, isInvalidOrExpiredEmailOTPError, normalizeEmailOTPCode } from '../src/auth/emailOtp';
@@ -48,7 +48,7 @@ import { disconnectWithRecoveryTimeout } from '../src/vpn/disconnectRecovery';
 import { waitForVerifiedVpnConnection } from '../src/vpn/connectVerification';
 import { cleanupFailedVpnConnection } from '../src/vpn/failedConnectionCleanup';
 import { androidExperimentalRoutingEnabled, androidProfilePlatform, androidVpnProfileRequiresRefresh, androidVpnProfileWithinBinderBudget, vpnProfileRouteCount } from '../src/vpn/androidRoutingSafety';
-import { isProfileResolutionFallbackError, profileResolutionOrder } from '../src/vpn/profileResolutionFallback';
+import { isProfileResolutionFallbackError, profileResolutionOrder, resolveProfileOrSkipMissing } from '../src/vpn/profileResolutionFallback';
 import { isKeyEpochMismatchError, nextManagedKeyEpoch } from '../src/vpn/keyEpochRecovery';
 import { nativeVpnDeviceForClient } from '../src/vpn/nativeDeviceSelection';
 import { assessNativeTunnelHealth, localStatusHealthReasons } from '../src/vpn/nativeTunnelHealth';
@@ -392,6 +392,11 @@ assertDeepEqual(
 );
 assertDeepEqual(selectableVpnLocations(undefined), []);
 assertDeepEqual(selectableVpnLocations([]), []);
+assertDeepEqual(selectableVpnLocations([
+  { ...catalogFixture, id: 'pilot', availability: 'hidden' },
+  { ...catalogFixture, id: 'offline', healthyNodes: 0 },
+  catalogFixture,
+]), [catalogFixture]);
 const visibleVpnLocations = (
   serverSelectionModule as unknown as Record<string, unknown>
 ).visibleVpnLocations;
@@ -401,6 +406,7 @@ if (typeof visibleVpnLocations === 'function') {
     visibleVpnLocations([
       { ...catalogFixture, id: 'offline', healthyNodes: 0 },
       { ...catalogFixture, id: 'ready' },
+      { ...catalogFixture, id: 'pilot', availability: 'hidden' },
       { ...catalogFixture, id: 'retired', availability: 'retired' },
     ]).map((location: VpnLocation) => location.id),
     ['offline', 'ready'],
@@ -662,6 +668,11 @@ assertEqual(
   });
   assertEqual(formatQuotaBytes(200 * 1024 ** 3), '200 ГБ');
   assertEqual(formatQuotaUsage(50 * 1024 ** 3, 200 * 1024 ** 3), '50 ГБ / 200 ГБ');
+  assertEqual(formatQuotaUsage(2.3 * 1024 ** 2, 0), '2.3 МБ / Без лимита');
+  assertEqual(quotaHeadline(2.3 * 1024 ** 2, 0), 'Безлимитный трафик');
+  assertEqual(hasQuotaLimit(0), false);
+  assertEqual(hasQuotaLimit(200 * 1024 ** 3), true);
+  assertEqual(quotaHeadline(50 * 1024 ** 3, 200 * 1024 ** 3), 'Осталось 150 ГБ');
   assertEqual(quotaRemainingBytes(50 * 1024 ** 3, 200 * 1024 ** 3), 150 * 1024 ** 3);
   assertEqual(quotaRemainingBytes(250, 200), 0);
   assertEqual(quotaProgress(50, 200), 0.25);
@@ -1638,6 +1649,7 @@ async function runAsyncTests(): Promise<void> {
   runTrafficSummaryTests();
   runRecoveryBackoffTests();
   await testFreshSameLocationProfileConnectsSecondNode();
+  await testMissingFallbackProfileSkipsOnly404();
   await runServerSwitchTests();
   await runLocationCatalogRefreshTests();
 }
@@ -1751,6 +1763,38 @@ async function testFreshSameLocationProfileConnectsSecondNode(): Promise<void> {
 
   assertEqual(profileEndpoint(connected.profile), 'de-second.example.com:443');
   assertDeepEqual(calls, ['resolve:de:fresh', 'connect:de-second.example.com:443']);
+}
+
+async function testMissingFallbackProfileSkipsOnly404(): Promise<void> {
+  const locations = [
+    { id: 'de', availability: 'available', healthyNodes: 1 },
+    { id: 'retired', availability: 'retired', healthyNodes: 1 },
+    { id: 'unhealthy', availability: 'available', healthyNodes: 0 },
+    { id: 'fi', availability: 'available', healthyNodes: 1 },
+    { id: 'nl', availability: 'available', healthyNodes: 1 },
+  ] as VpnLocation[];
+  const attempted: string[] = [];
+  let resolved: string | null = null;
+  for (const location of profileResolutionOrder('de', locations).slice(1)) {
+    const profile = await resolveProfileOrSkipMissing(async () => {
+      attempted.push(location.id);
+      if (location.id === 'fi') throw new ApiRequestError('missing target', { status: 404 });
+      return location.id;
+    });
+    if (profile) { resolved = profile; break; }
+  }
+  assertDeepEqual(attempted, ['fi', 'nl']);
+  assertEqual(resolved, 'nl');
+  for (const status of [401, 409, 503]) {
+    await assertRejects(
+      () => resolveProfileOrSkipMissing(async () => { throw new ApiRequestError('shared failure', { status }); }),
+      'shared failure',
+    );
+  }
+  await assertRejects(
+    () => resolveProfileOrSkipMissing(async () => { throw new Error('Network request failed'); }),
+    'Network request failed',
+  );
 }
 
 function runRecoveryBackoffTests(): void {
@@ -1916,9 +1960,19 @@ const profileFallbackLocations = [
   { id: 'de', availability: 'available', healthyNodes: 1 },
   { id: 'fi', availability: 'available', healthyNodes: 1 },
   { id: 'retired', availability: 'retired', healthyNodes: 1 },
+  { id: 'pilot', availability: 'pilot', healthyNodes: 1 },
+  { id: 'unhealthy', availability: 'available', healthyNodes: 0 },
 ] as any;
 assertDeepEqual(
   profileResolutionOrder('de', profileFallbackLocations).map((location) => location.id),
+  ['de', 'fi'],
+);
+assertDeepEqual(
+  profileResolutionOrder('pilot', profileFallbackLocations).map((location) => location.id),
+  ['de', 'fi'],
+);
+assertDeepEqual(
+  profileResolutionOrder('unhealthy', profileFallbackLocations).map((location) => location.id),
   ['de', 'fi'],
 );
 assertEqual(isProfileResolutionFallbackError(new ApiRequestError('missing location target', { status: 404 })), true);

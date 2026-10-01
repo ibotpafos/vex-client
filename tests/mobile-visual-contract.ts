@@ -2,10 +2,11 @@ import {
   mobileStateNoticePresentation,
   vexMobileType,
 } from '../src/ui/vex-mobile-visual';
-import { homeBrandPresentation, homeLocationCopy } from '../src/screens/home-screen-visual';
+import { homeBrandPresentation, homeLocationBackdropKey, homeLocationCopy } from '../src/screens/home-screen-visual';
 import {
   groupVpnLocationsByCountry,
   serverCountLabel,
+  serverPickerCountryHint,
   serverPickerCountryGapDp,
   serverPickerLocationTitle,
   serverPickerRowPresentation,
@@ -45,6 +46,31 @@ const germanyLocation: VpnLocation = {
   priority: 10,
   status: 'healthy',
 };
+const russiaLocation: VpnLocation = {
+  ...germanyLocation,
+  city: 'Moscow',
+  countryCode: 'RU',
+  displayName: 'Russia · Moscow',
+  flagEmoji: '🇷🇺',
+  id: 'ru-transit',
+};
+assertEqual(homeLocationBackdropKey(russiaLocation), 'ru');
+assertEqual(homeLocationBackdropKey({ ...russiaLocation, countryCode: ' rU ' }), 'ru');
+assertEqual(homeLocationBackdropKey({ ...russiaLocation, countryCode: '', id: ' RU ' }), 'ru');
+assertEqual(homeLocationBackdropKey({ ...russiaLocation, countryCode: 'XX' }), 'fallback');
+assertEqual(homeLocationBackdropKey(), 'fallback');
+for (const countryCode of ['DE', 'FI', 'NL'] as const) {
+  assertEqual(homeLocationBackdropKey({ ...germanyLocation, countryCode }), countryCode.toLowerCase());
+}
+assertDeepEqual(homeLocationCopy(russiaLocation, '18 мс', 'manual'), {
+  city: 'Москва',
+  countryAndLatency: 'Россия · 18 мс',
+});
+assertDeepEqual(homeLocationCopy(russiaLocation, '18 мс', 'auto'), {
+  city: 'Автоматически',
+  countryAndLatency: 'Россия · Москва · 18 мс',
+});
+assertEqual(homeLocationCopy({ ...russiaLocation, city: 'Kazan' }, '18 мс').city, 'Kazan');
 assertDeepEqual(homeLocationCopy(germanyLocation, '18 мс', 'auto'), {
   city: 'Автоматически',
   countryAndLatency: 'Германия · Франкфурт · 18 мс',
@@ -97,6 +123,16 @@ assertEqual(serverCountLabel(1), '1 сервер');
 assertEqual(serverCountLabel(2), '2 сервера');
 assertEqual(serverCountLabel(5), '5 серверов');
 assertEqual(serverCountLabel(11), '11 серверов');
+assertEqual(serverPickerCountryHint(2, '8 мс'), '2 сервера · 8 мс · открыть список');
+assertEqual(serverPickerCountryHint(1, '35 мс'), '1 сервер · 35 мс · выбрать');
+assertDeepEqual(
+  groupVpnLocationsByCountry([
+    { ...finlandLocation, id: 'fi-old', healthyNodes: 0 },
+    { ...finlandLocation, id: 'fi-pilot', availability: 'hidden' },
+    finlandLocation,
+  ]).map((group) => group.locations.map((location) => location.id)),
+  [['fi-helsinki']],
+);
 assertEqual(serverPickerLocationTitle({ ...germanyLocation, city: 'Germany' }), 'Франкфурт');
 assertEqual(serverPickerLocationTitle({ ...germanyLocation, city: 'VEX AWG 3.1 Features' }, 2), 'Сервер 2');
 assertTrue(serverPickerCountryGapDp() >= 8, 'Android country cards must have a visible gap');

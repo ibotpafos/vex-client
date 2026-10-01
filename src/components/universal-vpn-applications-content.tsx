@@ -37,8 +37,6 @@ export function UniversalVpnApplicationsContent({
         <List>
           <ListItem leading="‹" onPress={onBack}>Приложения через VPN</ListItem>
         </List>
-        <Text textStyle={styles.eyebrow}>МАРШРУТИЗАЦИЯ</Text>
-        <Text textStyle={styles.title}>Приложения через VPN</Text>
         <Text textStyle={styles.description}>
           Выберите, какие приложения будут использовать защищённое соединение.
         </Text>
@@ -97,18 +95,6 @@ const styles = {
   },
   host: {
     flex: 1,
-  },
-  eyebrow: {
-    color: "#43D9E7",
-    fontSize: 12,
-    fontWeight: "700" as const,
-    letterSpacing: 1.2,
-  },
-  title: {
-    color: "#F2F8F8",
-    fontSize: 28,
-    fontWeight: "700" as const,
-    letterSpacing: -0.5,
   },
   modeRow: {
     flexDirection: "row" as const,

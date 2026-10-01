@@ -30,11 +30,11 @@ import { openExternalUrl } from "@/auth/systemAuth";
 import { vexWebsite } from "@/navigation/website";
 import { getVpnApplicationSelection } from "@/settings/vpnPreferences";
 import { VexSection } from "@/components/vex-settings-section";
-import { formatQuotaResetAt, formatQuotaUsage } from "@/components/traffic-quota-presentation";
+import { formatQuotaResetAt, formatQuotaUsage, hasQuotaLimit } from "@/components/traffic-quota-presentation";
 import { useToast, type ToastOptions } from "@/ui/toast";
 import { vexColors, VexScreen, vexSharedStyles, VexPressable } from "@/ui/vex-ui";
 import { useVpnConnectionContext } from "@/vpn/vpn-connection-context";
-import { useVexSettings, languages, type LanguageCode } from "./useVexSettings";
+import { useVexSettings } from "./useVexSettings";
 
 export default function SettingsScreen() {
   const [isSavingSmartRouting, setIsSavingSmartRouting] = React.useState(false);
@@ -51,7 +51,6 @@ export default function SettingsScreen() {
   }, [showSettingsToast]);
 
   const {
-    language,
     isSigningOut,
     isAutomationEnabled,
     isSavingAutomation,
@@ -61,7 +60,6 @@ export default function SettingsScreen() {
     isSavingServerSelection,
     appInfo,
     remoteConfig,
-    handleLanguagePress,
     handleSignOut,
     handleAutomationToggle,
     handleServerSelectionToggle,
@@ -86,9 +84,14 @@ export default function SettingsScreen() {
     ? "Подключать VPN при открытии приложения."
     : "Запускать VEX вместе с системой.";
   const smartRoutingValue = isSmartRoutingEnabled ? "Включено" : "Выключено";
-  const smartRoutingHint = vpnStatus.state === "connected"
-    ? "Применится после переподключения. Российские сервисы пойдут без VPN."
-    : "Российские сервисы без VPN, остальное через защищенный туннель.";
+  const smartRoutingHint = isSmartRoutingEnabled
+    ? isAndroidApp
+      ? "Часть российских IP напрямую, остальное через VPN."
+      : "Российские IP напрямую, остальное через VPN."
+    : "Весь трафик через VPN.";
+  const smartRoutingDescription = vpnStatus.state === "connected"
+    ? `После переподключения: ${smartRoutingHint}`
+    : smartRoutingHint;
 
   useFocusEffect(React.useCallback(() => {
     let active = true;
@@ -262,9 +265,11 @@ export default function SettingsScreen() {
               handleSmartRoutingToggle(!isSmartRoutingEnabled)
                 .then((mode) => {
                   showSettingsToast({
-                    message: mode === "all_except_ru"
-                      ? "Умный режим включён."
-                      : "Полный VPN для всего трафика включён.",
+                    message: vpnStatus.state === "connected"
+                      ? "Режим сохранён. Переподключите VPN для применения."
+                      : mode === "all_except_ru"
+                        ? "Умный режим включён."
+                        : "Полный VPN для всего трафика включён.",
                     variant: "success",
                   });
                 })
@@ -289,7 +294,7 @@ export default function SettingsScreen() {
             <View style={styles.rowCopy}>
               <Text style={styles.rowTitle}>Умный режим</Text>
               <Text style={styles.rowDescription}>
-                {smartRoutingHint}
+                {smartRoutingDescription}
               </Text>
               <Text
                 style={[
@@ -356,14 +361,10 @@ export default function SettingsScreen() {
             <View style={styles.rowCopy}>
               <Text style={styles.rowTitle}>Язык</Text>
               <Text numberOfLines={1} style={styles.rowDescription}>
-                Язык интерфейса приложения.
+                Сейчас доступен только русский интерфейс.
               </Text>
             </View>
           </View>
-          <SettingsLanguagePicker
-            onValueChange={handleLanguagePress}
-            value={language}
-          />
         </VexSection>
 
         <VexSection title="Аккаунт и помощь">
@@ -387,17 +388,19 @@ export default function SettingsScreen() {
                   {formatQuotaUsage(trafficQuota.usedBytes, trafficQuota.limitBytes)}
                 </Text>
               </View>
-              <View style={styles.accountDetailRow}>
-                <Text style={styles.accountDetailLabel}>Сброс</Text>
-                <Text style={styles.accountDetailValue}>{formatQuotaResetAt(trafficQuota.resetAt)}</Text>
-              </View>
+              {hasQuotaLimit(trafficQuota.limitBytes) ? (
+                <View style={styles.accountDetailRow}>
+                  <Text style={styles.accountDetailLabel}>Сброс</Text>
+                  <Text style={styles.accountDetailValue}>{formatQuotaResetAt(trafficQuota.resetAt)}</Text>
+                </View>
+              ) : null}
               {trafficQuota.multiplier > 1 ? (
                 <View style={styles.accountDetailRow}>
                   <Text style={styles.accountDetailLabel}>Мобильный трафик</Text>
                   <Text style={styles.accountDetailValue}>×{trafficQuota.multiplier}</Text>
                 </View>
               ) : null}
-              {trafficQuota.limitReached ? (
+              {hasQuotaLimit(trafficQuota.limitBytes) && trafficQuota.limitReached ? (
                 <Text accessibilityRole="alert" style={styles.accountQuotaWarning}>
                   Лимит достигнут · скорость {trafficQuota.effectiveRateLimitMbps ?? 1} Мбит/с
                 </Text>
@@ -544,37 +547,6 @@ function SettingsNativeSwitch({
   );
 }
 
-type SettingsLanguagePickerProps = {
-  onValueChange: (value: LanguageCode) => void;
-  value: LanguageCode;
-};
-
-function SettingsLanguagePicker({ onValueChange, value }: SettingsLanguagePickerProps) {
-  return (
-    <View
-      accessibilityLabel="Язык интерфейса"
-      style={styles.languageSelector}
-      testID="settings-language-picker"
-    >
-      {languages.map((item) => {
-        const selected = value === item.code;
-        return (
-          <VexPressable
-            accessibilityRole="button"
-            accessibilityState={{ selected }}
-            key={item.code}
-            onPress={() => onValueChange(item.code)}
-            style={[styles.languageButton, selected && styles.languageButtonActive]}
-            hoverStyle={{ backgroundColor: selected ? '#22D3EE' : 'rgba(34,211,238,0.14)' }}
-          >
-            <Text style={[styles.languageText, selected && styles.languageTextActive]}>{item.label}</Text>
-          </VexPressable>
-        );
-      })}
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   scroll: {
     flex: 1,
@@ -696,33 +668,6 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
   },
   rowValueActive: {
-    color: vexColors.accent,
-  },
-  languageSelector: {
-    alignSelf: "stretch",
-    flexDirection: "row",
-    gap: 4,
-    minHeight: 44,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
-  languageButton: {
-    alignItems: "center",
-    borderRadius: 999,
-    flex: 1,
-    justifyContent: "center",
-    minHeight: 34,
-    paddingHorizontal: 10,
-  },
-  languageButtonActive: {
-    backgroundColor: "rgba(34,211,238,0.16)",
-  },
-  languageText: {
-    color: vexColors.muted,
-    fontSize: 13,
-    fontWeight: "900",
-  },
-  languageTextActive: {
     color: vexColors.accent,
   },
   infoGrid: {

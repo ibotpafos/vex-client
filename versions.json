@@ -1,12 +1,12 @@
 {
   "android": {
-    "version": "1.0.59",
-    "build": 67,
+    "version": "1.0.60",
+    "build": 68,
     "min_supported_build": 1002930,
     "is_required": false,
-    "checksum_sha256": "7eb5c6b5f9e7a76a69f25612fd85396305f279c399c47fcbbc69190ea3dd4150",
-    "signature_url": "/downloads/Vex-Android-1.0.59.apk.sig",
-    "release_notes": "Android: улучшена диагностика подключения. Приложение теперь точнее измеряет подготовку VPN-профиля и этапы перед запуском туннеля, чтобы быстрее находить и устранять редкие долгие подключения.",
+    "checksum_sha256": "6241710d54eca0eebf931cabebe0ed96bfcc1bcd0787c51be9b7e9d2e8f02e5c",
+    "signature_url": "/downloads/Vex-Android-1.0.60.apk.sig",
+    "release_notes": "Android 1.0.60: исправлены автоподключение и восстановление VPN; нативная защита от утечек при потере туннеля и корректное ручное отключение; улучшены диагностика подключения и уведомления подписанных OTA-обновлений.",
     "core_version": "0.1.0",
     "config_schema_version": 1,
     "min_config_schema_version": 1

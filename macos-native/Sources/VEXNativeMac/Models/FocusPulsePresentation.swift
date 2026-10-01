@@ -109,7 +109,7 @@ enum FocusPulsePresentation {
         requiresHelperInstall: Bool
     ) -> String {
         if requiresHelperInstall {
-            return "Требуется helper"
+            return "Нужна установка"
         }
 
         switch status {
@@ -184,6 +184,27 @@ enum FocusPulsePresentation {
         return "\(Int(latencyMs.rounded())) мс"
     }
 
+    static func locationCardWidth(
+        containerWidth: CGFloat,
+        visibleCardCount: Int,
+        spacing: CGFloat
+    ) -> CGFloat {
+        let count = max(1, min(visibleCardCount, 3))
+        let totalSpacing = CGFloat(max(0, count - 1)) * spacing
+        return max(0, (containerWidth - totalSpacing) / CGFloat(count))
+    }
+
+    static func photoTransitionDuration(reduceMotion: Bool) -> Double {
+        reduceMotion ? 0.08 : 0.45
+    }
+
+    static func selectionTransitionDuration(reduceMotion: Bool) -> Double {
+        reduceMotion ? 0.01 : 0.24
+    }
+
+    static let pulseCanvasSize: CGFloat = 360
+    static let pulseGradientEndRadius: CGFloat = 168
+
     static func featuredLocations(
         _ locations: [VpnLocation],
         selectedLocationId: String,
@@ -192,22 +213,41 @@ enum FocusPulsePresentation {
         guard limit > 0 else { return [] }
 
         let selected = locations.first { $0.id == selectedLocationId }
-        let remainder = locations
-            .filter { $0.id != selectedLocationId }
-            .sorted { lhs, rhs in
-                switch (lhs.latencyMs, rhs.latencyMs) {
-                case let (.some(left), .some(right)):
-                    return left == right ? lhs.id < rhs.id : left < right
-                case (.some, .none):
-                    return true
-                case (.none, .some):
-                    return false
-                case (.none, .none):
-                    return lhs.id < rhs.id
-                }
+        let selectedCountry = selected.map(countryKey)
+        let groups = Dictionary(grouping: locations, by: countryKey)
+        var seenCountries = Set<String>()
+        let countryOrder = locations.compactMap { location -> String? in
+            let country = countryKey(location)
+            return seenCountries.insert(country).inserted ? country : nil
+        }
+        let representatives = countryOrder.compactMap { country -> VpnLocation? in
+            if country == selectedCountry, let selected {
+                return selected
             }
+            return groups[country]?.sorted(by: locationPrecedes).first
+        }
 
-        return ([selected].compactMap { $0 } + remainder).prefix(limit).map { $0 }
+        return representatives.prefix(limit).map { $0 }
+    }
+
+    private static func countryKey(_ location: VpnLocation) -> String {
+        let code = location.countryCode
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased()
+        return code.isEmpty ? location.id : code
+    }
+
+    private static func locationPrecedes(_ lhs: VpnLocation, _ rhs: VpnLocation) -> Bool {
+        switch (lhs.latencyMs, rhs.latencyMs) {
+        case let (.some(left), .some(right)):
+            return left == right ? lhs.id < rhs.id : left < right
+        case (.some, .none):
+            return true
+        case (.none, .some):
+            return false
+        case (.none, .none):
+            return lhs.id < rhs.id
+        }
     }
 
 }

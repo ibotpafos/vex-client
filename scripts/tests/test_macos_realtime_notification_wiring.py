@@ -23,7 +23,7 @@ struct User: Equatable { let id: String }
 struct AuthSession: Equatable { let user: User; let accessToken: String }
 struct VpnLocation: Equatable { let id: String }
 enum MockFailure: LocalizedError { case failed; var errorDescription: String? { "mock failure" } }
-final class FakeAPI {
+@MainActor final class FakeAPI {
     var meResult: Result<User, Error> = .failure(MockFailure.failed)
     var locationsResult: Result<[VpnLocation], Error> = .failure(MockFailure.failed)
     var holdMe = false
@@ -141,7 +141,7 @@ with tempfile.TemporaryDirectory(prefix="vex-realtime-wiring-") as directory:
     path.write_text(harness + method + load_user + refresh_locations + extra + tail)
     executable = path.with_name("probe")
     subprocess.run(["swiftc", "-swift-version", "5", "-parse-as-library", str(path), "-o", str(executable)], check=True)
-    subprocess.run([str(executable)], check=True)
+    subprocess.run([str(executable)], check=True, timeout=30)
 
 # Secondary lifecycle checks bind the real callbacks and reset points, but the
 # compiler probe above is the regression evidence for the late-refresh guard.

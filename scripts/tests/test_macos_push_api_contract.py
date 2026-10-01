@@ -65,8 +65,8 @@ final class FixtureProtocol: URLProtocol {{
 }}
 @main struct Main {{
  static let request=NativePushRegistrationRequest(provider:"apns",token:"00ff10",deviceID:"managed-device",accountID:"fixture-account",accessToken:"fixture-auth",sessionGeneration:7)
- static func apiCall(_ client:VEXAPIClient, mode:String) async -> String {{ FixtureProtocol.reset(mode); do {{ try await client.registerNativePushToken(accessToken:request.accessToken,deviceID:request.deviceID,token:request.token); return "ok" }} catch let e as VEXAPIError {{ switch e {{ case .http(let s,_): return "http-\(s)"; case .technicalWorks:return "technical"; case .invalidResponse:return "invalid" }} }} catch {{ return "other" }} }}
- static func registrarCall(_ registrar:NativePushAPIRegistrar) async -> String {{ do {{ try await registrar.registerNativePush(request); return "ok" }} catch is CancellationError {{ return "cancelled" }} catch {{ return "other" }} }}
+ static func apiCall(_ client:VEXAPIClient, mode:String) async -> String {{ FixtureProtocol.reset(mode); do {{ try await client.registerNativePushToken(accessToken:request.accessToken,deviceID:request.deviceID,token:request.token); return "ok" }} catch let e as VEXAPIError {{ switch e {{ case .http(let s,_): return "http-\(s)"; case .technicalWorks:return "technical"; case .invalidResponse:return "invalid" }} }} catch is DecodingError {{ return "decoding-error" }} catch {{ return "other" }} }}
+ static func registrarCall(_ registrar:NativePushAPIRegistrar) async -> String {{ do {{ try await registrar.registerNativePush(request); return "ok" }} catch is CancellationError {{ return "cancelled" }} catch let e as VEXAPIError {{ if case .http(let status, _) = e {{ return "http-\(status)" }}; return "unexpected-api-error" }} catch {{ return "other" }} }}
  static func main() async {{
   let config=URLSessionConfiguration.ephemeral; config.protocolClasses=[FixtureProtocol.self]
   let client=VEXAPIClient(urlSession:URLSession(configuration:config),baseURL:URL(string:"https://fixture.invalid")!)
@@ -76,8 +76,8 @@ final class FixtureProtocol: URLProtocol {{
   let registrar=NativePushAPIRegistrar(api:client); var current=false; registrar.isCurrent={{ _ in current }}; FixtureProtocol.reset("success"); let stalePreentry=await registrarCall(registrar); let preentryNoRequest=FixtureProtocol.snapshot().0.isEmpty
   current=true; FixtureProtocol.reset("success",hold:true); let inFlight=Task {{ await registrarCall(registrar) }}; await FixtureProtocol.awaitEntry(); current=false; FixtureProtocol.release.signal(); let staleAfterAwait=await inFlight.value
   current=true; FixtureProtocol.reset("unauthorized"); let currentUnauthorized=await registrarCall(registrar)
-  print("post_contract=\(contract) success_response=\(success == "ok") unauthorized=\(unauthorized == "http-401") unavailable=\(unavailable == "technical") malformed_success_decoding_error=\(malformed == "other") stale_preentry_cancelled=\(stalePreentry == "cancelled") stale_preentry_no_request=\(preentryNoRequest) stale_after_await_cancelled=\(staleAfterAwait == "cancelled") current_401_retained=\(currentUnauthorized == "other") fixture_only=true")
-  exit(contract && success=="ok" && unauthorized=="http-401" && unavailable=="technical" && malformed=="other" && stalePreentry=="cancelled" && preentryNoRequest && staleAfterAwait=="cancelled" && currentUnauthorized=="other" ? 0:1)
+  print("post_contract=\(contract) success_response=\(success == "ok") unauthorized=\(unauthorized == "http-401") unavailable=\(unavailable == "technical") malformed_success_decoding_error=\(malformed == "decoding-error") stale_preentry_cancelled=\(stalePreentry == "cancelled") stale_preentry_no_request=\(preentryNoRequest) stale_after_await_cancelled=\(staleAfterAwait == "cancelled") current_401_retained=\(currentUnauthorized == "http-401") fixture_only=true")
+  exit(contract && success=="ok" && unauthorized=="http-401" && unavailable=="technical" && malformed=="decoding-error" && stalePreentry=="cancelled" && preentryNoRequest && staleAfterAwait=="cancelled" && currentUnauthorized=="http-401" ? 0:1)
  }}
 }}'''
 with tempfile.TemporaryDirectory(prefix='vex-push-api-') as d:

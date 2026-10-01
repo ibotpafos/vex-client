@@ -58,6 +58,7 @@ final class VEXAppState: ObservableObject {
     private let profileService = VPNProfileService()
     private let startupService = StartupService()
     private let nativeUpdater: NativeUpdaterService
+    let customerNotifications: CustomerNotificationService
     private let authService = PKCEAuthService()
     private var cancellables: Set<AnyCancellable> = []
     private var webAuthTask: Task<Void, Never>?
@@ -71,6 +72,9 @@ final class VEXAppState: ObservableObject {
     private var customerRealtimeService: CustomerRealtimeService?
     private var customerFallbackTask: Task<Void, Never>?
     private var customerRealtimeConnected = false
+    private var customerRealtimeGeneration = 0
+    private var customerNotificationSessionID: String?
+    private var customerNotificationPolicy = CustomerNotificationPolicy()
     private var customerRefreshInFlight = false
     private var customerRefreshPending = false
     private var automaticUpdatesPrepared = false
@@ -82,6 +86,7 @@ final class VEXAppState: ObservableObject {
 
     init() {
         automaticUpdatesStartupDelayNanoseconds = Self.automaticUpdatesStartupDelayNanoseconds
+        customerNotifications = CustomerNotificationService(previewMode: VEXPreviewMode.suppressesRuntime)
         if VEXPreviewMode.suppressesRuntime {
             self.nativeUpdater = DisabledNativeUpdaterService()
         } else {
@@ -91,10 +96,14 @@ final class VEXAppState: ObservableObject {
 
     init(
         nativeUpdater: NativeUpdaterService,
-        automaticUpdatesStartupDelayNanoseconds: UInt64 = 3_000_000_000
+        automaticUpdatesStartupDelayNanoseconds: UInt64 = 3_000_000_000,
+        customerNotifications: CustomerNotificationService? = nil
     ) {
         self.nativeUpdater = nativeUpdater
         self.automaticUpdatesStartupDelayNanoseconds = automaticUpdatesStartupDelayNanoseconds
+        // Test/preview callers must explicitly inject a fake to enable delivery;
+        // the dependency-injected initializer never resolves the native center.
+        self.customerNotifications = customerNotifications ?? CustomerNotificationService(previewMode: true)
     }
 
     var selectedLocationId: String {
@@ -1012,6 +1021,8 @@ final class VEXAppState: ObservableObject {
     }
 
     func prepareForTermination() {
+        customerRealtimeGeneration += 1
+        resetCustomerNotificationSession()
         automaticUpdatesStartupTask?.cancel()
         automaticUpdatesStartupTask = nil
         customerRealtimeService?.stop()
@@ -1218,24 +1229,29 @@ final class VEXAppState: ObservableObject {
 
     private func loadUser(_ token: String) async {
         await withSessionRetry(operation: { currentToken in
-            self.user = try await self.api.me(accessToken: currentToken)
+            let loadedUser = try await self.api.me(accessToken: currentToken)
+            guard self.session?.accessToken == currentToken else { return () }
+            self.user = loadedUser
             return ()
         })
     }
 
     private func refreshLocations(accessToken token: String) async {
-        guard !isLoadingLocations else { return }
+        guard !isLoadingLocations, session?.accessToken == token else { return }
         isLoadingLocations = true
         locationLoadError = nil
         defer { isLoadingLocations = false }
 
         do {
-            locations = try await api.vpnLocations(accessToken: token)
+            let loadedLocations = try await api.vpnLocations(accessToken: token)
+            guard session?.accessToken == token else { return }
+            locations = loadedLocations
             lastLocationsRefreshAt = Date()
             if selectedLocation == nil, serverSelectionMode != "manual", let first = locations.first {
                 selectedLocationId = first.id
             }
         } catch {
+            guard session?.accessToken == token else { return }
             locationLoadError = error.localizedDescription
             statusMessage = error.localizedDescription
         }
@@ -1550,11 +1566,16 @@ final class VEXAppState: ObservableObject {
         }
         sessionRefreshTask = (refreshAccessToken, task)
         let result = await task.value
-        sessionRefreshTask = nil
+        if sessionRefreshTask?.accessToken == refreshAccessToken {
+            sessionRefreshTask = nil
+        }
         return await applySessionRefreshResult(result, refreshAccessToken: refreshAccessToken)
     }
 
     private func applySessionRefreshResult(_ result: Result<AuthSession, Error>, refreshAccessToken: String) async -> String? {
+        // A refresh can finish after sign-out or another account signs in. Never
+        // restore the old session (or its notifications) across that boundary.
+        guard session?.accessToken == refreshAccessToken else { return session?.accessToken }
         do {
             let nextSession = try result.get()
             try sessionStore.saveSession(nextSession, requiresBiometricAuthentication: biometricUnlockRequired)
@@ -1642,6 +1663,10 @@ final class VEXAppState: ObservableObject {
         message: String,
         authError: String?
     ) {
+        sessionRefreshTask?.task.cancel()
+        sessionRefreshTask = nil
+        customerRealtimeGeneration += 1
+        resetCustomerNotificationSession()
         customerRealtimeService?.stop()
         customerRealtimeService = nil
         customerFallbackTask?.cancel()
@@ -1669,25 +1694,47 @@ final class VEXAppState: ObservableObject {
     }
 
     private func startCustomerRealtime(accessToken: String) {
+        customerRealtimeGeneration += 1
+        let streamGeneration = customerRealtimeGeneration
+        let accountID = session?.user.id
+        if customerNotificationSessionID != accountID {
+            resetCustomerNotificationSession()
+            customerNotificationSessionID = accountID
+        }
         let service = CustomerRealtimeService(
             baseURL: api.baseURL,
             onStatus: { [weak self] connected in
+                guard self?.customerRealtimeGeneration == streamGeneration else { return }
                 self?.customerRealtimeConnected = connected
             },
             onSessionRejected: { [weak self] in
-                _ = await self?.refreshSessionForRetry()
+                guard let self, self.customerRealtimeGeneration == streamGeneration,
+                    self.accessToken == accessToken else { return }
+                // Stop pending delivery on a rejected token, but keep recent IDs
+                // if the refreshed session still belongs to the same account.
+                self.customerNotifications.resetSession()
+                _ = await self.refreshSessionForRetry()
             },
-            // TODO(notification-parity): Consume metadata through a deduplicated
-            // foreground notification policy and explicit opt-in desktop delivery.
-            // SSE refresh is not APNs/background push; that needs separate signing
-            // and device acceptance unavailable on this offline-only host.
-            onEvent: { [weak self] event, _ in
-                guard let self else { return }
+            onEvent: { [weak self] event, metadata in
+                guard let self, self.customerRealtimeGeneration == streamGeneration,
+                    self.accessToken == accessToken else { return }
                 if event.type == "customer.session.revoked" {
+                    self.resetCustomerNotificationSession()
                     _ = await self.refreshSessionForRetry()
                     return
                 }
                 guard event.type == "customer.change" || event.type == "customer.resync" else { return }
+                if self.customerNotificationSessionID?.isEmpty == false {
+                    let payloads = self.customerNotificationPolicy.consume(event: event, metadata: metadata)
+                    // Permission-center IPC must not hold up entitlement/account
+                    // refresh. Both the stream and delivery service recheck their
+                    // generations so queued work cannot cross a session boundary.
+                    Task { [weak self] in
+                        guard let self, self.customerRealtimeGeneration == streamGeneration,
+                            self.accessToken == accessToken else { return }
+                        await self.customerNotifications.deliver(payloads)
+                    }
+                }
                 // Refresh account, billing, locations and derived profile inputs.
                 // This never changes the desired tunnel state or restarts the tunnel.
                 await self.refreshCustomerState()
@@ -1707,6 +1754,12 @@ final class VEXAppState: ObservableObject {
                 }
             }
         }
+    }
+
+    private func resetCustomerNotificationSession() {
+        customerNotificationPolicy.reset()
+        customerNotificationSessionID = nil
+        customerNotifications.resetSession()
     }
 
     private func refreshCustomerState() async {

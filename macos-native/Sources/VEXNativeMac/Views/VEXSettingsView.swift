@@ -11,6 +11,7 @@ struct VEXSettingsView: View {
             incidentBanner
             generalSettings
             interfaceSettings
+            notificationSettings
             helperSettings
         }
         .padding(.top, 2)
@@ -110,6 +111,10 @@ struct VEXSettingsView: View {
                 appState.setInterfaceLanguage(value)
             }
         }
+    }
+
+    private var notificationSettings: some View {
+        CustomerNotificationSettingsSection(service: appState.customerNotifications)
     }
 
     private var helperSettings: some View {
@@ -271,7 +276,7 @@ private struct SettingsHero: View {
     }
 }
 
-private struct SettingsFeatureCard<Content: View>: View {
+struct SettingsFeatureCard<Content: View>: View {
     let systemName: String
     let title: String
     let subtitle: String
@@ -348,7 +353,7 @@ private struct SettingsSection<Content: View>: View {
     }
 }
 
-private struct SettingsToggleRow: View {
+struct SettingsToggleRow: View {
     let systemName: String
     let title: String
     let subtitle: String
@@ -461,7 +466,7 @@ private struct SettingsLanguageRow: View {
     }
 }
 
-private struct SettingsInfoRow: View {
+struct SettingsInfoRow: View {
     let systemName: String
     let title: String
     let value: String

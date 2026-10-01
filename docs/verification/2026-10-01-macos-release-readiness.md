@@ -15,6 +15,7 @@
 | Autoheal/DNS/kill switch | Helper watchdog, anti-leak, diagnostics | Сохранены без live-проверки. |
 | Updates | Sparkle и отложенная launch-safe проверка | Updater откладывает relaunch при unknown/active/transition/busy/managed route; automatic install по умолчанию выключен. |
 | Signing | Локальная сборка | Добавлен explicit inside-out signer; первая проверка ошибочно ожидала XPC, затем исправлена под фактическую схему Downloader+Installer. |
+| Уведомления | Foreground SSE только обновлял данные | Явный opt-in, дедупликация support/releases, нативный permission-gated UserNotifications backend и foreground delegate; никакого APNs или выдуманного счётчика сообщений. |
 
 ## Проверенная безопасность
 
@@ -25,6 +26,9 @@
 - Universal app/helper builder собрал обе архитектуры. Первый signing check упал из-за неверного XPC expectation; после корректировки Downloader+Installer check прошёл во втором запуске.
 - Финальная сборка 0.1.88+118 выполнена после фиксации SHA-256 всех native Swift sources; после сборки эти хеши совпали. App/helper: `x86_64 arm64`; `SUAutomaticallyUpdate=false`; relocatable/missing-resource и update-response probes прошли.
 - Публичный release gate выполнен без installed-runtime проверки: exit 1, `app is ad-hoc signed; Developer ID signature required`. Developer ID Application/Installer identities на этом хосте: 0/0. Не обходить этот gate.
+- Продолжение цели добавило SSE → pure policy → локальные уведомления с явным opt-in (default false). Fake backend исполнил denied/error/preview, disable-during-authorization, поздний add после logout и повторный ID в новом epoch. Метаданные события не попадают в баннер: только общие русские сообщения, backend IDs — transient epoch/sequence.
+- Клиент изолирует старые callbacks поколением потока и token guard; logout, смена аккаунта, явная revocation и завершение сбрасывают уведомления. Same-account refresh сохраняет dedupe. Permission IPC не задерживает обновление entitlement/account.
+- Фактические тела `applySessionRefreshResult`, `loadUser`, `refreshLocations` скомпилированы в fake-transport harness: late logout/account-switch результаты не восстанавливают и не перезаписывают сессию/данные, текущие результаты принимаются. Это не полный XCTest и не GUI acceptance.
 
 ## Артефакты транзакции
 
@@ -43,11 +47,12 @@
 
 - `macos-native/Sources/VEXNativeMac/Services/SparkleUpdaterService.swift`: `TODO(vpn-update-safety)` — VM qualification deferred Sparkle handoff до включения production automatic install.
 - `macos-native/Sources/VEXNativeMac/Models/VEXModels.swift`, `VpnRoutingMode`: per-app provider и isolated routing/leak acceptance отсутствуют. Возврат `nil` при пустом каталоге уже реализован и не является незавершённым TODO.
-- `macos-native/Sources/VEXNativeMac/Stores/VEXAppState.swift`, `startCustomerRealtime`: metadata пока используется только для refresh; следующий офлайн-шаг — дедупликация foreground-уведомлений. Это не background push и не доказанное число непрочитанных сообщений.
+- `macos-native/Sources/VEXNativeMac/Services/CustomerNotificationService.swift`: `TODO(notification-acceptance)` — реальный opt-in/permission sheet/banner на изолированном профиле не проверен; fake backend этого не доказывает.
+- `macos-native/Sources/VEXNativeMac/Services/CustomerRealtimeService.swift`: APNs/background delivery не реализован; credentials/entitlements/device qualification отсутствуют. Foreground policy и opt-in wiring уже реализованы, это не незавершённый TODO.
 
 ## Следующие действия (не более пяти)
 
-1. Добавить чистую foreground notification policy поверх SSE metadata с дедупликацией; затем opt-in desktop delivery. Не выдавать её за APNs или счётчик непрочитанных сообщений.
+1. Дополнить runtime wiring coverage исполнимым SSE callback/in-memory transport integration; на изолированном профиле отдельно проверить permission/banner. Pure policy, fake delivery и late-session guards уже пройдены.
 2. Запустить полный XCTest с Xcode; реализовать process-scoped provider и APNs с необходимыми signing/entitlement gates.
 3. На отдельном Mac/VM проверить signed helper install/rollback, handshake, IPv4/IPv6/DNS/HTTPS, failover и deferred Sparkle update. Пользователь подтвердил, что стенда пока нет.
 4. Подготовить подписанный/notarized release, обновить согласованную native version metadata; ad-hoc кандидат не устанавливать поверх активного VPN.
@@ -59,3 +64,4 @@
 - [Apple: Creating distribution-signed code for macOS / inside-out signing](https://developer.apple.com/documentation/xcode/creating-distribution-signed-code-for-the-mac/)
 - [Sparkle: automatic checks versus installation](https://sparkle-project.org/documentation/customization/)
 - [Sparkle: shouldPostponeRelaunchForUpdate delegate](https://sparkle-project.org/documentation/api-reference/Protocols/SPUUpdaterDelegate.html)
+- [Apple: явное разрешение на уведомления](https://developer.apple.com/documentation/usernotifications/asking-permission-to-use-notifications)

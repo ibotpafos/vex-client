@@ -128,6 +128,9 @@ struct CustomerRealtimeMetadata: Equatable {
 
 @MainActor
 final class CustomerRealtimeService {
+    // TODO(background-notification-parity): APNs registration/provider delivery
+    // is not implemented. Qualify the required signing/entitlement and privacy
+    // contracts plus device acceptance; a running SSE client is not background push.
     enum ResponseAction: Equatable {
         case stream
         case refreshSession

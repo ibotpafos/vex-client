@@ -2,7 +2,11 @@ import Foundation
 
 enum VEXPreviewMode {
     static var suppressesRuntime: Bool {
-        isEnabled || isSignedOutPreview
+        isOfflineSmoke || isEnabled || isSignedOutPreview
+    }
+
+    static var isOfflineSmoke: Bool {
+        ProcessInfo.processInfo.arguments.contains("--offline-smoke")
     }
 
     static var isEnabled: Bool {

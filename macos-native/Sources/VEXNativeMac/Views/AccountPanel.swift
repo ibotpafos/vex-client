@@ -3,6 +3,10 @@ import SwiftUI
 
 struct AccountPanel: View {
     @EnvironmentObject private var appState: VEXAppState
+    @EnvironmentObject private var helper: VEXHelperModel
+    @State private var renamingDevice: VpnDevice?
+    @State private var deviceName = ""
+    @State private var deletingDevice: VpnDevice?
 
     var body: some View {
         VStack(spacing: 12) {
@@ -10,6 +14,7 @@ struct AccountPanel: View {
 
             if appState.accessToken != nil {
                 subscriptionPicker
+                deviceManagement
                 paymentHistory
             } else {
                 Button {
@@ -25,7 +30,35 @@ struct AccountPanel: View {
         .padding(.top, 2)
         .padding(.bottom, 16)
         .task {
+            guard !VEXPreviewMode.suppressesRuntime else { return }
             await appState.refreshBilling()
+        }
+        .alert("Переименовать устройство", isPresented: Binding(
+            get: { renamingDevice != nil },
+            set: { if !$0 { renamingDevice = nil } }
+        )) {
+            TextField("Название", text: $deviceName)
+            Button("Сохранить") {
+                guard let device = renamingDevice else { return }
+                let name = deviceName.trimmingCharacters(in: .whitespacesAndNewlines)
+                Task { await appState.renameDevice(device, name: name) }
+                renamingDevice = nil
+            }
+            .disabled(deviceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            Button("Отмена", role: .cancel) { renamingDevice = nil }
+        }
+        .alert("Удалить устройство?", isPresented: Binding(
+            get: { deletingDevice != nil },
+            set: { if !$0 { deletingDevice = nil } }
+        )) {
+            Button("Удалить", role: .destructive) {
+                guard let device = deletingDevice else { return }
+                Task { await appState.removeDevice(device, using: helper) }
+                deletingDevice = nil
+            }
+            Button("Отмена", role: .cancel) { deletingDevice = nil }
+        } message: {
+            Text("Устройство потеряет доступ к VPN. Для повторного подключения потребуется зарегистрировать его заново.")
         }
     }
 
@@ -98,6 +131,98 @@ struct AccountPanel: View {
         }
     }
 
+    private var deviceManagement: some View {
+        AccountSurfaceCard(accent: .vexCyan) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Устройства")
+                            .font(.system(size: 16, weight: .black))
+                            .foregroundStyle(Color.vexText)
+                        Text(deviceLimitSubtitle)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Color.vexSecondaryText)
+                    }
+                    Spacer()
+                    if let entitlement = appState.entitlement, entitlement.deviceLimit > 0 {
+                        VEXStatusBadge(
+                            text: "\(entitlement.activeDevices)/\(entitlement.deviceLimit)",
+                            tone: entitlement.remainingDeviceSlots > 0 ? .good : .warning
+                        )
+                    }
+                }
+
+                if !appState.accountDevices.isEmpty {
+                    VStack(spacing: 6) {
+                        ForEach(appState.accountDevices) { device in
+                            HStack(spacing: 9) {
+                                Image(systemName: deviceIcon(for: device))
+                                    .font(.system(size: 12, weight: .bold))
+                                    .foregroundStyle(Color.vexCyanLight)
+                                    .frame(width: 24, height: 24)
+                                    .background(Color.vexCyan.opacity(0.10), in: Circle())
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(device.name.isEmpty ? "Устройство VEX" : device.name)
+                                        .font(.system(size: 12, weight: .bold))
+                                        .foregroundStyle(Color.vexText)
+                                    Text(deviceStatusText(device))
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .foregroundStyle(Color.vexMuted)
+                                }
+                                Spacer()
+                            }
+                            .padding(.vertical, 3)
+                            .contextMenu {
+                                if !appState.deviceManagementRequiresWeb {
+                                Button("Переименовать") {
+                                    deviceName = device.name
+                                    renamingDevice = device
+                                }
+                                Button("Удалить устройство", role: .destructive) {
+                                    deletingDevice = device
+                                }
+                                .disabled(!appState.canRemoveDevice(device, using: helper))
+                                .help("Удаление доступно только после подтверждённого отключения VPN на этом Mac.")
+                                }
+                            }
+                            .disabled(appState.isDeviceBusy)
+                        }
+                    }
+                }
+
+                if appState.deviceManagementRequiresWeb {
+                    Link("Управлять устройствами на сайте", destination: BillingPresentation.billingDashboardURL)
+                        .font(.system(size: 12, weight: .semibold))
+                }
+
+                if let entitlement = appState.entitlement, entitlement.canBuyDeviceAddon {
+                    Button {
+                        Task {
+                            if let url = await appState.createDeviceAddonCheckout() {
+                                NSWorkspace.shared.open(url)
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            if appState.isBillingBusy {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Image(systemName: "plus.circle.fill")
+                            }
+                            Text(appState.isBillingBusy ? "Открываем оплату..." : "Добавить устройство · \(deviceAddonPrice(entitlement)) / мес.")
+                                .font(.system(size: 11, weight: .black))
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 32)
+                    }
+                    .buttonStyle(.vexProminentGlass)
+                    .tint(Color.vexCyan)
+                    .disabled(appState.isBillingBusy)
+                }
+            }
+        }
+    }
+
     private var accessTitle: String {
         guard appState.accessToken != nil else { return "Требуется вход" }
         guard let entitlement = appState.entitlement else { return "Проверяем" }
@@ -130,6 +255,50 @@ struct AccountPanel: View {
         guard appState.accessToken != nil else { return .neutral }
         guard let entitlement = appState.entitlement else { return .neutral }
         return entitlement.hasPaidAccess ? .good : .warning
+    }
+
+    private var deviceLimitSubtitle: String {
+        guard let entitlement = appState.entitlement, entitlement.deviceLimit > 0 else {
+            return "Лимит появится после обновления подписки"
+        }
+        let addonSlots = entitlement.addonDeviceSlots ?? appState.deviceAddons
+            .filter { $0.status.lowercased() == "active" }
+            .reduce(0) { $0 + $1.quantity }
+        if addonSlots > 0 {
+            return "Свободно \(entitlement.remainingDeviceSlots) · дополнительных мест: \(addonSlots)"
+        }
+        return "Свободно мест: \(entitlement.remainingDeviceSlots)"
+    }
+
+    private func deviceAddonPrice(_ entitlement: Entitlement) -> String {
+        guard let amount = entitlement.deviceAddonPriceMinor else { return "ещё 1 место" }
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "ru_RU")
+        formatter.numberStyle = .currency
+        formatter.currencyCode = (entitlement.deviceAddonCurrency ?? "RUB").uppercased()
+        formatter.maximumFractionDigits = amount % 100 == 0 ? 0 : 2
+        return formatter.string(from: NSNumber(value: Double(amount) / 100.0)) ?? "\(amount / 100) ₽"
+    }
+
+    private func deviceIcon(for device: VpnDevice) -> String {
+        switch device.platform?.lowercased() {
+        case "macos": return "desktopcomputer"
+        case "ios": return "iphone"
+        case "android": return "smartphone"
+        case "windows": return "pc"
+        default: return "laptopcomputer"
+        }
+    }
+
+    private func deviceStatusText(_ device: VpnDevice) -> String {
+        let platform = device.platform?.uppercased() ?? "VEX"
+        let status: String
+        switch device.status.lowercased() {
+        case "active", "online", "connected": status = "активно"
+        case "revoked", "disabled": status = "отключено"
+        default: status = device.status.isEmpty ? "зарегистрировано" : device.status
+        }
+        return "\(platform) · \(status)"
     }
 }
 

@@ -17,6 +17,61 @@ enum NativeUpdateAction: Equatable {
     case sparkleCheck
 }
 
+/// Snapshot supplied by the app shell immediately before Sparkle is allowed to
+/// replace/relaunch the process. `nil` is deliberately unsafe: a newly started
+/// client must not make an updater-driven quit decision before it has learned
+/// whether the privileged helper owns a tunnel.
+struct NativeVPNUpdateSafetySnapshot: Equatable {
+    var helperState: VpnConnectionState
+    var hasManagedNetworkState: Bool
+    var helperIsBusy: Bool
+    var hasActiveTunnelRoute: Bool
+
+    var permitsUpdateRelaunch: Bool {
+        helperState == .disconnected
+            && !hasManagedNetworkState
+            && !helperIsBusy
+            && !hasActiveTunnelRoute
+    }
+}
+
+@MainActor
+enum NativeVPNUpdateSafetyProvider {
+    private static var snapshotProvider: (() -> NativeVPNUpdateSafetySnapshot?)?
+
+    static func install(_ provider: @escaping () -> NativeVPNUpdateSafetySnapshot?) {
+        snapshotProvider = provider
+    }
+
+    static func currentSnapshot() -> NativeVPNUpdateSafetySnapshot? {
+        snapshotProvider?()
+    }
+}
+
+enum NativeVPNUpdateSafetyPolicy {
+    /// Unknown is not equivalent to disconnected. This is intentionally
+    /// fail-safe so an automatic Sparkle cycle cannot terminate the app during
+    /// helper startup, status loss, or a pre-existing tunnel.
+    static func shouldDeferRelaunch(_ snapshot: NativeVPNUpdateSafetySnapshot?) -> Bool {
+        snapshot?.permitsUpdateRelaunch != true
+    }
+
+    /// Recognize only documented/observed tunnel-style interface names. This
+    /// is a conservative signal for the update gate, not a claim to detect
+    /// every possible VPN implementation.
+    static func hasKnownTunnelInterface(_ value: String?) -> Bool {
+        let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        for prefix in ["utun", "tun", "tap", "ppp", "ipsec"] {
+            guard normalized.hasPrefix(prefix) else { continue }
+            let suffix = normalized.dropFirst(prefix.count)
+            if !suffix.isEmpty && suffix.allSatisfy(\.isNumber) {
+                return true
+            }
+        }
+        return false
+    }
+}
+
 enum SparkleUpdaterConfiguration {
     static func isValidPublicEDKey(_ value: Any?) -> Bool {
         guard let value = value as? String else { return false }
@@ -55,6 +110,7 @@ final class SparkleUpdaterService: NSObject, ObservableObject, NativeUpdaterServ
     private var canCheckObservation: NSKeyValueObservation?
     private var backgroundCheckRequested = false
     private var backgroundCheckStarted = false
+    private var deferredInstallTask: Task<Void, Never>?
 
     override init() {
         super.init()
@@ -64,7 +120,7 @@ final class SparkleUpdaterService: NSObject, ObservableObject, NativeUpdaterServ
         if let controller = updaterController { return controller }
         let controller = SPUStandardUpdaterController(
             startingUpdater: false,
-            updaterDelegate: nil,
+            updaterDelegate: self,
             userDriverDelegate: nil
         )
         updaterController = controller
@@ -92,6 +148,7 @@ final class SparkleUpdaterService: NSObject, ObservableObject, NativeUpdaterServ
     }
 
     deinit {
+        deferredInstallTask?.cancel()
         canCheckObservation?.invalidate()
         canCheckObservation = nil
     }
@@ -155,6 +212,44 @@ final class SparkleUpdaterService: NSObject, ObservableObject, NativeUpdaterServ
         guard !backgroundCheckStarted else { return }
         backgroundCheckStarted = true
         updater.checkForUpdatesInBackground()
+    }
+}
+
+extension SparkleUpdaterService: SPUUpdaterDelegate {
+    /// Sparkle calls this immediately before asking the application to quit and
+    /// relaunch. Holding the supplied block prevents an updater-driven quit;
+    /// it does not change ordinary user-initiated quitting.
+    func updater(
+        _ updater: SPUUpdater,
+        shouldPostponeRelaunchForUpdate item: SUAppcastItem,
+        untilInvokingBlock installHandler: @escaping () -> Void
+    ) -> Bool {
+        guard NativeVPNUpdateSafetyPolicy.shouldDeferRelaunch(
+            NativeVPNUpdateSafetyProvider.currentSnapshot()
+        ) else {
+            return false
+        }
+
+        deferredInstallTask?.cancel()
+        deferredInstallTask = Task { @MainActor [weak self] in
+            // A downloaded update may wait indefinitely while the user keeps
+            // VEX connected. Polling only the in-process snapshot never sends
+            // a helper command or changes network state.
+            // TODO(vpn-update-safety): Exercise the deferred Sparkle handoff
+            // in a disposable macOS VM with a real updater helper before
+            // enabling any production automatic-install policy.
+            while !Task.isCancelled {
+                if !NativeVPNUpdateSafetyPolicy.shouldDeferRelaunch(
+                    NativeVPNUpdateSafetyProvider.currentSnapshot()
+                ) {
+                    installHandler()
+                    return
+                }
+                try? await Task.sleep(for: .seconds(1))
+            }
+            self?.deferredInstallTask = nil
+        }
+        return true
     }
 }
 

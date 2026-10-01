@@ -169,7 +169,7 @@ final class ServerSidebarWindowTests: XCTestCase {
         )
     }
 
-    func testFavoritesAndAvailableFiltersHaveDistinctResults() {
+    func testFavoritesNeverMakeMaintenanceServersSelectable() {
         let locations = [germany, maintenance, finland]
 
         let favorites = ServerSidebarCatalog.filtered(
@@ -185,7 +185,7 @@ final class ServerSidebarWindowTests: XCTestCase {
             favoriteIDs: []
         )
 
-        XCTAssertEqual(favorites.map(\.id), ["fi-helsinki", "nl-amsterdam"])
+        XCTAssertEqual(favorites.map(\.id), ["fi-helsinki"])
         XCTAssertEqual(available.map(\.id), ["fi-helsinki", "de-berlin"])
     }
 

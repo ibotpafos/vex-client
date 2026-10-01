@@ -103,8 +103,8 @@ struct ContentView: View {
     private var authenticatedContent: some View {
         if selection == .home {
             HomePanel(onShowServers: VEXServerSidebarWindow.toggle)
-                .padding(.horizontal, 30)
-                .padding(.top, 82)
+                .padding(.horizontal, 14)
+                .padding(.top, 14)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else {
             ScrollView {
@@ -134,7 +134,7 @@ struct ContentView: View {
     }
 
     private var focusPulseUIPreview: Bool {
-        VEXPreviewMode.isEnabled
+        VEXPreviewMode.isEnabled || VEXPreviewMode.isOfflineSmoke
     }
 
     private var contentMaxWidth: CGFloat {

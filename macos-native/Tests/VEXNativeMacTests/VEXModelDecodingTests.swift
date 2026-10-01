@@ -56,6 +56,53 @@ final class VEXModelDecodingTests: XCTestCase {
         XCTAssertEqual(device.appVersion, "0.1.42")
     }
 
+    func testEntitlementDecodesDeviceAddonCapabilities() throws {
+        let data = """
+        {
+          "active": true,
+          "plan_id": "pro_monthly",
+          "device_limit": 4,
+          "base_device_limit": 3,
+          "addon_device_slots": 1,
+          "max_device_limit": 5,
+          "can_buy_device_addon": true,
+          "device_addon_price_minor": 9900,
+          "device_addon_currency": "RUB",
+          "active_devices": 2,
+          "can_create_device": true
+        }
+        """.data(using: .utf8)!
+
+        let entitlement = try JSONDecoder().decode(Entitlement.self, from: data)
+
+        XCTAssertTrue(entitlement.hasPaidAccess)
+        XCTAssertEqual(entitlement.deviceLimit, 4)
+        XCTAssertEqual(entitlement.baseDeviceLimit, 3)
+        XCTAssertEqual(entitlement.addonDeviceSlots, 1)
+        XCTAssertEqual(entitlement.activeDevices, 2)
+        XCTAssertEqual(entitlement.remainingDeviceSlots, 2)
+        XCTAssertTrue(entitlement.canBuyDeviceAddon)
+        XCTAssertEqual(entitlement.deviceAddonPriceMinor, 9900)
+        XCTAssertEqual(entitlement.deviceAddonCurrency, "RUB")
+    }
+
+    func testEntitlementKeepsBackwardCompatibleDefaults() throws {
+        let data = """
+        {
+          "active": true,
+          "device_limit": 1,
+          "active_devices": 0,
+          "can_create_device": true
+        }
+        """.data(using: .utf8)!
+
+        let entitlement = try JSONDecoder().decode(Entitlement.self, from: data)
+
+        XCTAssertTrue(entitlement.vpnAccess)
+        XCTAssertFalse(entitlement.canBuyDeviceAddon)
+        XCTAssertEqual(entitlement.remainingDeviceSlots, 1)
+    }
+
     func testKeychainDefaultServiceIsNativeNotLegacyDesktop() {
         XCTAssertEqual(VEXKeychainStore().service, VEXKeychainStore.nativeService)
         XCTAssertNotEqual(VEXKeychainStore().service, VEXKeychainStore.legacyDesktopService)

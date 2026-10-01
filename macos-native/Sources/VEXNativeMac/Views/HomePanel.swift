@@ -6,18 +6,19 @@ struct HomePanel: View {
     let onShowServers: () -> Void
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 10) {
             FocusPulseHero(
                 status: helper.status,
                 requiresHelperInstall: helper.installRequiredMessage != nil,
                 installationPhase: helper.installationPhase,
                 isBusy: helper.isBusy || appState.isVpnBusy,
+                selectedLocation: selectedLocation,
                 action: togglePower
             )
 
             FocusPulseLocations(
                 locations: featuredLocations,
-                selectedLocationId: appState.selectedLocationId,
+                selectedLocationId: presentationSelectedLocationId,
                 onSelect: selectLocation,
                 onShowAll: onShowServers
             )
@@ -27,11 +28,7 @@ struct HomePanel: View {
         .frame(maxWidth: 1080, alignment: .top)
         .frame(maxWidth: .infinity, alignment: .top)
         .task {
-            #if DEBUG
-            if VEXPreviewMode.isEnabled {
-                return
-            }
-            #endif
+            if VEXPreviewMode.suppressesRuntime { return }
             while !Task.isCancelled {
                 do {
                     try await Task.sleep(nanoseconds: 30_000_000_000)
@@ -43,14 +40,24 @@ struct HomePanel: View {
     }
 
     private var featuredLocations: [VpnLocation] {
-        #if DEBUG
-        if VEXPreviewMode.isEnabled {
+        if VEXPreviewMode.isEnabled || VEXPreviewMode.isOfflineSmoke {
             return FocusPulsePresentation.animationPreviewLocations
         }
-        #endif
 
         // Apply the featured limit after grouping, never truncate a country's nodes.
         return appState.locations
+    }
+
+    private var presentationSelectedLocationId: String {
+        if VEXPreviewMode.suppressesRuntime {
+            return ProcessInfo.processInfo.environment["VEX_PREVIEW_LOCATION_ID"]
+                ?? featuredLocations.first?.id ?? ""
+        }
+        return appState.selectedLocationId
+    }
+
+    private var selectedLocation: VpnLocation? {
+        featuredLocations.first { $0.id == presentationSelectedLocationId }
     }
 
     @ViewBuilder
@@ -78,26 +85,27 @@ struct HomePanel: View {
         if let routeConflictMessage = helper.status.routeConflictMessage {
             return routeConflictMessage
         }
-        if helper.status.state != .connected,
-           let statusMessage = appState.statusMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !statusMessage.isEmpty,
-           let polished = VEXUserFacingText.status(
-               statusMessage,
-               respecting: helper.status,
-               isBusy: helper.isBusy || appState.isVpnBusy
-           ) {
-            return polished
-        }
-        guard helper.status.state != .connected,
-              let helperMessage = helper.message?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !helperMessage.isEmpty else {
+        guard helper.status.state != .connected else {
             return nil
         }
-        guard let polished = VEXUserFacingText.status(helperMessage),
-              polished != "Системный компонент VEX запускается..." else {
+
+        let candidates = [appState.statusMessage, helper.message]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard let actionableMessage = candidates.first(where: isActionableStatusMessage) else {
             return nil
         }
-        return polished
+        return VEXUserFacingText.status(
+            actionableMessage,
+            respecting: helper.status,
+            isBusy: helper.isBusy || appState.isVpnBusy
+        )
+    }
+
+    private func isActionableStatusMessage(_ message: String) -> Bool {
+        let normalized = message.lowercased()
+        return ["ошиб", "не удалось", "недоступ", "конфликт", "отмен", "failed", "error"]
+            .contains { normalized.contains($0) }
     }
 
     private var installationFailed: Bool {
@@ -132,7 +140,8 @@ private struct FocusPulseLocations: View {
     @State private var expandedCountryID: String?
 
     private var countries: [VEXCountryGroup] {
-        VEXCountryGroup.make(locations, selectedID: selectedLocationId)
+        VEXCountryGroup.make(locations, selectedID: selectedLocationId, limit: locations.count)
+            .sorted { $0.id < $1.id }
     }
 
     var body: some View {
@@ -157,46 +166,50 @@ private struct FocusPulseLocations: View {
                 Button(action: onShowAll) {
                     GlassPanel(cornerRadius: 18, interactive: true, tint: Color.vexCyan.opacity(0.08)) {
                         Label("Выбрать доступный сервер", systemImage: "globe.europe.africa.fill")
-                            .font(.system(size: 15, weight: .bold))
+                            .font(.system(size: 14, weight: .bold))
                             .foregroundStyle(Color.vexText)
                             .frame(maxWidth: .infinity, minHeight: 72)
                     }
                 }
                 .buttonStyle(.plain)
             } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    LazyHStack(spacing: 12) {
-                        ForEach(countries) { country in
-                            FocusPulseLocationCard(
-                                location: country.cardLocation,
-                                selected: country.isSelected,
-                                action: { expandedCountryID = country.id }
-                            )
-                            .popover(isPresented: Binding(
-                                get: { expandedCountryID == country.id },
-                                set: { if !$0 { expandedCountryID = nil } }
-                            ), arrowEdge: .top) {
-                                countryNodes(country)
-                            }
-                            .containerRelativeFrame(
-                                .horizontal,
-                                count: min(max(countries.count, 1), 3),
-                                span: 1,
-                                spacing: 12
-                            )
-                            .scrollTransition(.interactive, axis: .horizontal) { content, phase in
-                                content
-                                    .scaleEffect(phase.isIdentity ? 1 : 0.975)
-                                    .opacity(phase.isIdentity ? 1 : 0.84)
+                GeometryReader { geometry in
+                    let spacing: CGFloat = 12
+                    let cardWidth = FocusPulsePresentation.locationCardWidth(
+                        containerWidth: geometry.size.width,
+                        visibleCardCount: countries.count,
+                        spacing: spacing
+                    )
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        LazyHStack(spacing: spacing) {
+                            ForEach(countries) { country in
+                                FocusPulseLocationCard(
+                                    location: country.cardLocation,
+                                    selected: country.isSelected,
+                                    width: cardWidth,
+                                    action: {
+                                        if country.isSelected {
+                                            expandedCountryID = country.id
+                                        } else {
+                                            onSelect(country.representative)
+                                        }
+                                    }
+                                )
+                                .disabled(country.availableNodeCount == 0 && !country.isSelected)
+                                .popover(isPresented: Binding(
+                                    get: { expandedCountryID == country.id },
+                                    set: { if !$0 { expandedCountryID = nil } }
+                                ), arrowEdge: .top) {
+                                    countryNodes(country)
+                                }
                             }
                         }
+                        .scrollTargetLayout()
                     }
-                    .scrollTargetLayout()
+                    .scrollClipDisabled()
+                    .scrollTargetBehavior(.viewAligned)
                 }
-                .contentMargins(.horizontal, 2, for: .scrollContent)
-                .scrollClipDisabled()
-                .scrollTargetBehavior(.viewAligned)
-                .frame(height: 86)
+                .frame(height: 140)
             }
         }
     }
@@ -256,106 +269,83 @@ private struct FocusPulseLocationCard: View {
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     let location: VpnLocation
     let selected: Bool
+    let width: CGFloat
     let action: () -> Void
 
     @State private var isHovered = false
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 12) {
-                Text(flag)
-                    .font(.system(size: 27))
+            ZStack(alignment: .bottom) {
+                cardArtwork
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(location.localizedName)
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(Color.vexText)
-                        .lineLimit(1)
-                    Text("\(FocusPulsePresentation.nodeCountText(location.healthyNodes)) · \(availability)")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Color.vexSecondaryText)
-                        .lineLimit(1)
-                }
+                LinearGradient(
+                    colors: [Color.clear, Color.vexBackground.opacity(0.90)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
 
-                Spacer(minLength: 8)
+                HStack(alignment: .bottom, spacing: 9) {
+                    Text(flag)
+                        .font(.system(size: 24))
 
-                if let latency = FocusPulsePresentation.latencyText(location.latencyMs) {
-                    Text(latency)
-                        .font(.system(size: 12, weight: .black))
-                        .foregroundStyle(Color.vexCyanLight)
-                }
-
-                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(selected ? Color.vexCyan : Color.vexMuted)
-            }
-            .padding(.horizontal, 16)
-            .frame(maxWidth: .infinity, minHeight: 68)
-            .background {
-                ZStack(alignment: .trailing) {
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(
-                            Color.vexPanelStrong.opacity(
-                                selected ? 0.82 : (isHovered ? 0.76 : 0.64)
-                            )
-                        )
-
-                    ZStack {
-                        CountrySilhouetteShape(countryCode: location.countryCode)
-                            .fill(
-                                LinearGradient(
-                                    colors: [
-                                        Color.vexCyan.opacity(0.30),
-                                        Color.vexCyanLight,
-                                    ],
-                                    startPoint: .bottomLeading,
-                                    endPoint: .topTrailing
-                                ),
-                                style: FillStyle(eoFill: true)
-                            )
-                            .opacity(countryArtworkHovered ? 0.20 : (selected ? 0.085 : 0.048))
-
-                        CountrySilhouetteShape(countryCode: location.countryCode)
-                            .stroke(
-                                Color.vexCyanLight.opacity(
-                                    countryArtworkHovered ? 0.52 : (selected ? 0.18 : 0.10)
-                                ),
-                                lineWidth: countryArtworkHovered ? 0.95 : 0.6
-                            )
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(location.localizedName)
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(Color.vexText)
+                            .lineLimit(1)
+                        Text("\(FocusPulsePresentation.nodeCountText(location.healthyNodes)) · \(availability)")
+                            .font(.system(size: 10.5, weight: .medium))
+                            .foregroundStyle(Color.vexSecondaryText)
+                            .lineLimit(1)
                     }
-                    .frame(width: 82, height: 82)
-                    .scaleEffect(countryArtworkHovered ? 1.28 : 1)
-                    .shadow(
-                        color: countryArtworkHovered ? Color.vexCyan.opacity(0.40) : .clear,
-                        radius: 15
-                    )
-                    .padding(.trailing, 96)
-                    .offset(x: 18, y: 8)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
+
+                    Spacer(minLength: 6)
+
+                    if let latency = FocusPulsePresentation.latencyText(location.latencyMs) {
+                        Text(latency)
+                            .font(.system(size: 12, weight: .black))
+                            .foregroundStyle(Color.vexCyanLight)
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .bottomLeading)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 12)
             }
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .frame(width: width, height: 136)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .stroke(
                         selected
-                            ? Color.vexCyan.opacity(0.82)
-                            : (isHovered ? Color.vexCyan.opacity(0.38) : Color.white.opacity(0.08)),
-                        lineWidth: selected ? 1.4 : 1
+                            ? Color.vexCyan.opacity(0.94)
+                            : (isHovered ? Color.vexCyan.opacity(0.34) : Color.white.opacity(0.10)),
+                        lineWidth: selected ? 1.5 : 1
                     )
             )
+            .overlay(alignment: .topTrailing) {
+                if selected {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .black))
+                        .foregroundStyle(Color.vexCyanLight)
+                        .frame(width: 24, height: 24)
+                        .background(.ultraThinMaterial, in: Circle())
+                        .overlay(Circle().stroke(Color.vexCyan.opacity(0.48), lineWidth: 1))
+                        .padding(10)
+                        .transition(.scale(scale: 0.82).combined(with: .opacity))
+                }
+            }
             .shadow(
                 color: selected || isHovered
-                    ? Color.vexCyan.opacity(isHovered ? 0.18 : 0.10)
-                    : Color.black.opacity(0.12),
-                radius: isHovered ? 18 : 12,
-                y: isHovered ? 8 : 5
+                    ? Color.vexCyan.opacity(isHovered ? 0.14 : 0.08)
+                    : Color.black.opacity(0.10),
+                radius: isHovered ? 12 : 8,
+                y: isHovered ? 5 : 3
             )
         }
         .buttonStyle(.plain)
-        .scaleEffect(isHovered ? 1.012 : 1)
-        .offset(y: isHovered ? -2 : 0)
+        .animation(selectionAnimation, value: selected)
+        .brightness(isHovered ? 0.035 : 0)
         .onHover { hovering in
             withAnimation(
                 accessibilityReduceMotion
@@ -366,7 +356,33 @@ private struct FocusPulseLocationCard: View {
             }
         }
         .accessibilityLabel("\(location.displayName), \(availability)")
+        .accessibilityHint(selected ? "Открыть ручной выбор сервера" : "Выбрать лучший сервер страны")
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private var selectionAnimation: Animation {
+        .easeInOut(
+            duration: FocusPulsePresentation.selectionTransitionDuration(
+                reduceMotion: accessibilityReduceMotion
+            )
+        )
+    }
+
+    @ViewBuilder
+    private var cardArtwork: some View {
+        if let assetName = LocationPhotoArtwork.assetName(countryCode: location.countryCode) {
+            BundleImage(name: assetName, contentMode: .fill)
+                .frame(width: width, height: 136)
+                .clipped()
+                .scaleEffect(isHovered ? 1.035 : 1)
+        } else {
+            ZStack {
+                Color.vexPanelStrong
+                CountrySilhouetteShape(countryCode: location.countryCode)
+                    .fill(Color.vexCyan.opacity(0.12), style: FillStyle(eoFill: true))
+                    .frame(width: 92, height: 92)
+            }
+        }
     }
 
     private var flag: String {
@@ -384,15 +400,6 @@ private struct FocusPulseLocationCard: View {
     private func nonEmpty(_ value: String) -> String? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
-    }
-
-    private var countryArtworkHovered: Bool {
-        #if DEBUG
-        return isHovered
-            || ProcessInfo.processInfo.environment["VEX_PREVIEW_HOVER_LOCATION"] == location.id
-        #else
-        return isHovered
-        #endif
     }
 
     private var availability: String {

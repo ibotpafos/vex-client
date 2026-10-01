@@ -191,7 +191,8 @@ final class SparkleUpdateTests: XCTestCase {
             encoding: .utf8
         )
 
-        XCTAssertTrue(settings.contains("Обновлять VEX автоматически"))
+        XCTAssertTrue(settings.contains("Проверять обновления автоматически"))
+        XCTAssertTrue(settings.contains("Установка ждёт отключения VPN"))
         XCTAssertTrue(settings.contains("appState.automaticallyChecksForUpdates"))
     }
 

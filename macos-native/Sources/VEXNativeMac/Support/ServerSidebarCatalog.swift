@@ -65,7 +65,7 @@ enum ServerSidebarCatalog {
         favoriteIDs: Set<String>
     ) -> [VpnLocation] {
         let searched = locations.filter { location in
-            ServerSidebarSearch.matches(
+            location.isSelectable && ServerSidebarSearch.matches(
                 query: query,
                 values: [
                     location.id,
@@ -137,10 +137,7 @@ enum ServerSidebarCatalog {
     }
 
     static func isAvailable(_ location: VpnLocation) -> Bool {
-        let unavailableStatuses = Set(["maintenance", "offline", "unavailable", "disabled"])
-        return location.healthyNodes > 0
-            && location.availability.lowercased() != "unavailable"
-            && !unavailableStatuses.contains(location.status.lowercased())
+        location.isSelectable
     }
 }
 

@@ -71,9 +71,12 @@ struct VEXSettingsView: View {
                     subtitle: appState.smartRoutingEnabled ? "Российские сервисы идут без VPN." : "Весь трафик идет через VPN.",
                     isOn: Binding(
                         get: { appState.smartRoutingEnabled },
-                        set: { appState.setSmartRoutingEnabled($0) }
+                    set: { appState.setSmartRoutingEnabled($0) }
                     )
                 )
+                Text("Выбор отдельных приложений через VPN пока доступен только на Android.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.vexSecondaryText)
             }
 
             SettingsFeatureCard(
@@ -128,9 +131,9 @@ struct VEXSettingsView: View {
             ) {
                 SettingsToggleRow(
                     systemName: "arrow.down.circle",
-                    title: "Обновлять VEX автоматически",
+                    title: "Проверять обновления автоматически",
                     subtitle: appState.automaticallyChecksForUpdates
-                        ? "Обновления скачиваются в фоне и применяются при перезапуске."
+                        ? "Проверка в фоне. Установка ждёт отключения VPN и не прерывает туннель."
                         : "Автоматическая проверка обновлений выключена.",
                     isOn: Binding(
                         get: { appState.automaticallyChecksForUpdates },

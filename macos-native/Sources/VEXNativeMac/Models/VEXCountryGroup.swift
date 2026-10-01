@@ -20,11 +20,7 @@ struct VEXCountryGroup: Identifiable {
     }
 
     static func isAvailable(_ location: VpnLocation) -> Bool {
-        let status = location.status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let availability = location.availability.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return location.healthyNodes > 0
-            && ["active", "online", "healthy", "degraded"].contains(status)
-            && !["maintenance", "unavailable", "retired"].contains(availability)
+        location.isSelectable
     }
 
     static func make(_ locations: [VpnLocation], selectedID: String, limit: Int = 6) -> [Self] {

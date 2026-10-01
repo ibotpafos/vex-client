@@ -22,6 +22,15 @@ assert.match(config, /env\('VEX_ANDROID_APPLICATION_ID', 'com\.vexguard\.app'\)/
 assert.equal(versions.version, app.version);
 assert.ok(Number.isInteger(versions.build) && versions.build > 0);
 assert.equal(versions.is_required, false);
-assert.match(versions.checksum_sha256, /^[a-f0-9]{64}$/);
-assert.equal(versions.signature_url, `/downloads/Vex-Android-${versions.version}.apk.sig`);
+// A signed candidate has no artifact digest yet. Never attach the previous
+// release's hash/signature to a new version just to make the contract pass.
+// Production promotion must replace both fields with verified artifact values.
+if (versions.release_status === 'candidate') {
+  assert.equal(versions.checksum_sha256, '');
+  assert.equal(versions.signature_url, '');
+} else {
+  assert.equal(versions.release_status ?? 'published', 'published');
+  assert.match(versions.checksum_sha256, /^[a-f0-9]{64}$/);
+  assert.equal(versions.signature_url, `/downloads/Vex-Android-${versions.version}.apk.sig`);
+}
 console.log('NEW_PACKAGE_AND_RELEASE_METADATA=PASS');

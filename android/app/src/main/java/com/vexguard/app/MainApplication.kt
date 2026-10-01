@@ -63,6 +63,8 @@ class MainApplication : Application(), ReactApplication {
         options.dsn = dsn
         options.environment = BuildConfig.SENTRY_ENVIRONMENT.ifBlank { null }
         options.release = BuildConfig.SENTRY_RELEASE.ifBlank { null }
+        options.isSendDefaultPii = false
+        options.isEnableAutoSessionTracking = false
         options.tracesSampleRate = 0.0
       }
       Sentry.configureScope { scope ->

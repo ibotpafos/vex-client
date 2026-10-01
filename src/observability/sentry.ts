@@ -11,6 +11,8 @@ export function initSentry() {
     dsn,
     environment: process.env.EXPO_PUBLIC_SENTRY_ENVIRONMENT,
     release: process.env.EXPO_PUBLIC_SENTRY_RELEASE,
+    sendDefaultPii: false,
+    enableAutoSessionTracking: false,
     tracesSampleRate: 0,
   });
 }

@@ -1557,6 +1557,7 @@ export function useVpnConnection() {
     accountEmail: session?.user.email ?? '',
     accountTierLabel,
     accountSummaryText,
+    entitlementState,
     currentDeviceUsage,
     trafficQuota,
     selectedLocation,

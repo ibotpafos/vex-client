@@ -84,6 +84,9 @@ if clone_or_reset "amneziawg-android" "${android_repo_url}" "${android_ref}"; th
 fi
 migrate_legacy_local_go_patch "${external_dir}/amneziawg-android" "${root_dir}/patches/amnezia/amneziawg-android-macos-local-go.patch"
 apply_patch_once "${external_dir}/amneziawg-android" "${root_dir}/patches/amnezia/amneziawg-android-macos-local-go.patch"
+# The pinned v3.1 engine requires Go >=1.25; keep the bundled compiler and
+# its upstream boottime runtime patch, rather than bypassing runtime preparation.
+apply_patch_once "${external_dir}/amneziawg-android" "${root_dir}/patches/amnezia/amneziawg-android-go125-toolchain.patch"
 apply_patch_once "${external_dir}/amneziawg-android" "${root_dir}/patches/amnezia/amneziawg-android-vpn-foreground-service.patch"
 
 # Check the effective module graph, not only the text of a potentially unused replace.

@@ -25,6 +25,18 @@ assert.ok(!androidLocalGoPatch.includes('+replace github.com/amnezia-vpn/amnezia
 assert.ok(android.includes('go list -m -json github.com/amnezia-vpn/amneziawg-go/v3'));
 assert.ok(android.includes('migrate_legacy_local_go_patch'));
 
+const androidToolchainPatch = read('patches/amnezia/amneziawg-android-go125-toolchain.patch');
+assert.ok(android.includes('amneziawg-android-go125-toolchain.patch'));
+assert.ok(androidToolchainPatch.includes('+GO_VERSION := 1.25.14'));
+// Official go.dev release checksums; preserve the existing patched runtime build.
+for (const checksum of [
+  'b09087a67d5792a8b0fcbf74212d62560c94ac8a8fd750ff920d8cb5f1e20118',
+  '5b26c0b6f308240fca2614fb02f622cfcc8c0cc3b69c78bba4845489a4590259',
+  'a21ae5633a269bcd7e90cf767e48225633795e99d831742cbf3397064fee7712',
+]) assert.ok(androidToolchainPatch.includes(checksum));
+assert.ok(androidLocalGoPatch.includes('goruntime-boottime-over-monotonic.diff'));
+
+
 const macos = read('scripts/bootstrap_amneziawg_macos.sh');
 assert.ok(macos.includes(`go_ref="${awg31GoRef}"`));
 assert.ok(macos.includes(`tools_ref="${awg31ToolsRef}"`));

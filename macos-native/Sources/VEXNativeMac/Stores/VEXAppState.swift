@@ -66,6 +66,12 @@ final class VEXAppState: ObservableObject {
     private let nativePushRegistrar = NativePushAPIRegistrar()
     private lazy var nativePushPSKQueue = NativePushPSKEventQueue()
     private let nativePushIdentityStore = VEXDeviceIdentityStore()
+    private lazy var nativePSKStageStore = NativePSKStagedProfileStore()
+    private lazy var nativePSKConsumer = NativePSKEventConsumer(queue: nativePushPSKQueue, store: nativePSKStageStore)
+    private let nativePSKVerifier = NativeVPNProfileAuthorizationVerifier.bundled()
+    private weak var nativePSKHelper: VEXHelperModel?
+    private var nativePSKPreparedTunnel: PreparedTunnel?
+    private var nativePSKRetryTask: Task<Void, Never>?
     private var nativePushEventOwner: NativePushPSKEventOwner?
     @Published private(set) var nativePushEventError: String?
     lazy var nativePushRegistration = NativePushRegistrationService(registrar: nativePushRegistrar)
@@ -213,10 +219,154 @@ final class VEXAppState: ObservableObject {
             // Generic account invalidation never starts/stops a tunnel or applies
             // a profile received in a push payload.
             await self.refreshCustomerState()
+            await self.processNativePSKEvents()
         }
-        // TODO(apns-psk-stage-ack-cutover): authenticated orchestration must consume
-        // queued metadata, fetch/validate profiles, then stage/ack/cut over. This
-        // queue deliberately performs no profile/VPN/helper action and is not full parity.
+    }
+
+    func configureNativePSKProcessing(using helper: VEXHelperModel) {
+        guard nativePushRuntimeAllowed else { return }
+        nativePSKHelper = helper
+        startNativePSKRetryIfNeeded()
+    }
+
+    /// Product-owned foreground retry, not a Codex/production polling loop. No work
+    /// occurs without signed APNs capability, explicit account consent and a bound device.
+    private func startNativePSKRetryIfNeeded() {
+        guard canUseNativeRemotePush, nativeRemotePushEnabled, nativePushConsentMatchesSession,
+              nativePSKHelper != nil, nativePSKRetryTask == nil else { return }
+        nativePSKRetryTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(nanoseconds: 5_000_000_000) } catch { return }
+                guard let self, self.canUseNativeRemotePush, self.nativeRemotePushEnabled,
+                      self.nativePushConsentMatchesSession else { return }
+                await self.processNativePSKEvents()
+            }
+        }
+    }
+
+    private func processNativePSKEvents() async {
+        guard canUseNativeRemotePush, nativeRemotePushEnabled, nativePushConsentMatchesSession,
+              entitlement?.hasPaidAccess == true,
+              !isVpnBusy, !isDeviceBusy, let helper = nativePSKHelper, !helper.isBusy,
+              let current = session, let deviceID = nativePushDeviceID,
+              let installation = nativePushIdentityStore.existingDeviceId(),
+              let owner = NativePushPSKEventOwner(accountID: current.user.id, installationID: installation),
+              let previous = activeTunnel ?? nativePSKPreparedTunnel, previous.device.id == deviceID else { return }
+        let sessionGeneration = authenticatedSessionGeneration
+        let token = current.accessToken
+        let selectedID = selectedLocationId
+        let requestedRouting = routingMode
+        var expectedVpnGeneration = vpnOperationGeneration
+        nativePushEventOwner = owner
+        let scopeIsCurrent: () -> Bool = { [weak self, weak helper] in
+            guard let self, let helper, self.canUseNativeRemotePush, self.nativeRemotePushEnabled,
+                  self.nativePushConsentMatchesSession, self.entitlement?.hasPaidAccess == true,
+                  self.nativePushDeviceID == deviceID,
+                  self.selectedLocationId == selectedID, self.routingMode == requestedRouting,
+                  self.vpnOperationGeneration == expectedVpnGeneration,
+                  !self.isVpnBusy, !self.isDeviceBusy, !helper.isBusy, !Task.isCancelled else { return false }
+            return (try? self.ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: token, accountID: owner.accountID)) != nil
+        }
+        await nativePSKConsumer.process(owner: owner, managedDeviceID: deviceID, dependencies: .init(
+            scopeIsCurrent: scopeIsCurrent,
+            fetchCurrent: { [api] in try await api.currentPSKRotation(accessToken: token, deviceID: deviceID) },
+            validate: { [weak self] envelope, event in
+                guard let self, scopeIsCurrent() else { throw AuthenticatedOperationError.sessionChanged }
+                let verified = try self.nativePSKVerifier.verifyDetailed(envelope, ownerAccountID: owner.accountID,
+                    managedDeviceID: deviceID, locationID: previous.locationId, routingMode: previous.routingMode.rawValue,
+                    bypassRegion: previous.bypassRegion)
+                // cutover may arrive after the staging deadline; signed policy expiry,
+                // exact event/version/device/digest and local client-key binding still apply.
+                let admissionEvent = NativePushPSKEvent(kind: .profile_updated, eventID: event.eventID,
+                    rotationID: event.rotationID, deviceID: event.deviceID, profileVersion: event.profileVersion, deadlineAt: event.deadlineAt)
+                try NativePSKRotationValidation.validate(envelope: verified.envelope, event: admissionEvent,
+                    managedDeviceID: deviceID, expectedClientPublicKey: self.profileService.existingStagedPSKClientPublicKey(),
+                    requireStagingDeadline: event.kind == .profile_updated)
+                // Reuse the helper's pure AWG admission before persisting or ACKing.
+                // This builds only in memory and issues no helper/DNS/key creation.
+                _ = try self.profileService.prepareStagedPSKProfile(verified, basedOn: previous)
+            },
+            acknowledge: { [api] envelope in
+                try await api.acknowledgePSKRotation(accessToken: token, rotationID: envelope.rotationID,
+                    deviceID: deviceID, profileVersion: envelope.profileVersion, profileDigest: envelope.profileDigest)
+            },
+            activate: { [weak self, weak helper] envelope, _ in
+                guard let self, let helper, scopeIsCurrent() else { throw AuthenticatedOperationError.sessionChanged }
+                expectedVpnGeneration = try await self.applyNativePSKCutover(envelope, previous: previous, owner: owner,
+                    helper: helper, sessionGeneration: sessionGeneration, token: token)
+            },
+            didFail: { [weak self] error in
+                guard let self, scopeIsCurrent() else { return }
+                if case NativePSKEventConsumer.Failure.stagedCleanupPending = error {
+                    self.nativePushEventError = "Профиль применён; очистка сохранённой копии не завершена и будет повторена при выходе из аккаунта."
+                } else if case NativeVPNProfileAuthorizationVerifier.Failure.missingTrustAnchor = error {
+                    self.nativePushEventError = "Для смены ключей нужен доверенный публичный ключ сервера в релизной сборке. Событие сохранено."
+                } else {
+                    self.nativePushEventError = "Смена ключей не завершена. Событие сохранено для безопасного повтора."
+                }
+            }
+        ))
+    }
+
+    /// No helper operation is issued for a confirmed idle tunnel. A connected cutover
+    /// replaces only our exactly matched active profile and retains anti-leak protection.
+    private func applyNativePSKCutover(
+        _ envelope: PSKRotationCurrentResponse, previous: PreparedTunnel, owner: NativePushPSKEventOwner,
+        helper: VEXHelperModel, sessionGeneration: Int, token: String
+    ) async throws -> Int {
+        try ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: token, accountID: owner.accountID)
+        guard entitlement?.hasPaidAccess == true, !isVpnBusy, !isDeviceBusy, !helper.isBusy else { throw CancellationError() }
+        let verified = try nativePSKVerifier.verifyDetailed(envelope, ownerAccountID: owner.accountID,
+            managedDeviceID: previous.device.id, locationID: previous.locationId, routingMode: previous.routingMode.rawValue,
+            bypassRegion: previous.bypassRegion)
+        let next = try profileService.prepareStagedPSKProfile(verified, basedOn: previous)
+        guard helper.status.isUsableConnectedStatus else {
+            guard helper.hasConfirmedIdleStatus, !helper.status.hasManagedNetworkState else { throw CancellationError() }
+            try profileService.promoteStagedPSKProfile(next, owner: owner)
+            activeTunnel = next
+            nativePSKPreparedTunnel = next
+            return vpnOperationGeneration
+        }
+        guard let activeTunnel, activeTunnel == previous, tunnel(previous, matches: helper.status) else {
+            throw CancellationError() // Never replace an unowned/external active tunnel.
+        }
+        isVpnBusy = true
+        defer { isVpnBusy = false }
+        let oldPolicy = activeResiliencePolicy
+        let oldRoute = activeResilienceRoute
+        desiredVpnState = .connected
+        vpnOperationGeneration += 1
+        let generation = vpnOperationGeneration
+        do {
+            let connected = try await connectPreparedTunnel(next, helper: helper, generation: generation,
+                sessionGeneration: sessionGeneration, accessToken: token, accountID: owner.accountID,
+                releaseAntiLeakOnFailure: false, allowEndpointFallback: false)
+            try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration,
+                accessToken: token, accountID: owner.accountID)
+            guard entitlement?.hasPaidAccess == true else { throw CancellationError() }
+            try profileService.promoteStagedPSKProfile(connected, owner: owner)
+            self.activeTunnel = connected
+            nativePSKPreparedTunnel = connected
+            nativePushEventError = nil
+            return generation
+        } catch {
+            // An obsolete task never restores/disconnects a replacement session/tunnel.
+            try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration,
+                accessToken: token, accountID: owner.accountID)
+            guard entitlement?.hasPaidAccess == true else { throw CancellationError() }
+            self.activeTunnel = previous
+            activeResiliencePolicy = oldPolicy
+            activeResilienceRoute = oldRoute
+            if !helper.lastConnectAdmissionRejected {
+                _ = try? await connectPreparedTunnel(previous, helper: helper, generation: generation,
+                    sessionGeneration: sessionGeneration, accessToken: token, accountID: owner.accountID,
+                    releaseAntiLeakOnFailure: false, allowEndpointFallback: false)
+                try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration,
+                    accessToken: token, accountID: owner.accountID)
+            }
+            nativePushEventError = "Не удалось применить смену ключей. Событие сохранено для повтора; защита от утечек не снимается."
+            throw error
+        }
     }
 
     private func observeNativePushSession() {
@@ -230,6 +380,7 @@ final class VEXAppState: ObservableObject {
         }.store(in: &cancellables)
         $activeTunnel.sink { [weak self] tunnel in
             guard let self, let tunnel, let owner = self.session?.user.id else { return }
+            self.nativePSKPreparedTunnel = tunnel
             let generation = self.authenticatedSessionGeneration
             Task { @MainActor [weak self] in
                 self?.bindNativePushDevice(tunnel.device.id, accountID: owner, generation: generation)
@@ -248,6 +399,9 @@ final class VEXAppState: ObservableObject {
 
     private func reconcileNativePushSession() {
         if let owner = nativePushEventOwner, owner.accountID != session?.user.id {
+            nativePSKRetryTask?.cancel()
+            nativePSKRetryTask = nil
+            nativePSKPreparedTunnel = nil
             purgeNativePushPSKEvents()
         }
         guard canUseNativeRemotePush, nativeRemotePushEnabled, nativePushConsentMatchesSession, let currentSession = session else {
@@ -260,6 +414,7 @@ final class VEXAppState: ObservableObject {
             nativePushAccountID = currentSession.user.id
             nativePushSessionGeneration = authenticatedSessionGeneration
         }
+        startNativePSKRetryIfNeeded()
         nativePushRegistration.setRegistrationEnabled(true)
         if !nativePushRegistrationRequested, registerNativePushAction != nil {
             nativePushRegistrationRequested = true
@@ -290,6 +445,9 @@ final class VEXAppState: ObservableObject {
         )
         guard let owner else { return }
         do {
+            // Stages remain after metadata ACK, so an owner tuple index—not the
+            // event queue—is authoritative for deleting old secret profiles.
+            try nativePSKStageStore.purgeAll(owner: owner)
             try nativePushPSKQueue.purge(owner: owner)
             nativePushEventOwner = nil
             nativePushEventError = nil
@@ -299,6 +457,9 @@ final class VEXAppState: ObservableObject {
     }
 
     private func invalidateNativePushSession(resetConsent: Bool = false) {
+        nativePSKRetryTask?.cancel()
+        nativePSKRetryTask = nil
+        nativePSKPreparedTunnel = nil
         if resetConsent {
             purgeNativePushPSKEvents()
             nativeRemotePushEnabled = false
@@ -410,6 +571,7 @@ final class VEXAppState: ObservableObject {
         async let billingResult = loadBilling(token)
         async let diagnosticsFlush = diagnosticsService.flush(accessToken: token)
         _ = await [userResult, locationsResult, billingResult, updateResult, remoteConfigResult, diagnosticsFlush]
+        await processNativePSKEvents()
     }
 
     func refreshLocations() async {
@@ -762,7 +924,9 @@ final class VEXAppState: ObservableObject {
         resiliencePolicy: ResiliencePolicy? = nil,
         sessionGeneration: Int? = nil,
         accessToken token: String? = nil,
-        accountID: String? = nil
+        accountID: String? = nil,
+        releaseAntiLeakOnFailure: Bool = true,
+        allowEndpointFallback: Bool = true
     ) async throws -> PreparedTunnel {
         var lastError: Error = VpnAutopilotRuntimeError.connectFailed("VPN connection failed.")
         try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration, accessToken: token, accountID: accountID)
@@ -778,7 +942,12 @@ final class VEXAppState: ObservableObject {
                 }
             }
         }
-        attempts.append(contentsOf: autopilotService.fallbackTunnels(for: tunnel).map { ($0, nil) })
+        if allowEndpointFallback {
+            attempts.append(contentsOf: autopilotService.fallbackTunnels(for: tunnel).map { ($0, nil) })
+        } else {
+            // A signed staged policy authorizes one endpoint, not transformed ports/routes.
+            attempts = [(tunnel, nil)]
+        }
 
         var seenEndpoints = Set<String>()
         attempts = attempts.filter { item in
@@ -854,7 +1023,7 @@ final class VEXAppState: ObservableObject {
                 lastError = VpnAutopilotRuntimeError.connectFailed(helper.message ?? "VPN connection failed.")
             }
             try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration, accessToken: token, accountID: accountID)
-            let teardownConfirmed = await helper.disconnect(releaseAntiLeak: true)
+            let teardownConfirmed = await helper.disconnect(releaseAntiLeak: releaseAntiLeakOnFailure)
             try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration, accessToken: token, accountID: accountID)
             guard teardownConfirmed else {
                 throw VpnAutopilotRuntimeError.connectFailed("previous tunnel teardown was not confirmed")

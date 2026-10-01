@@ -14,6 +14,11 @@ struct WireGuardKeyStore {
         self.nativeKeychain = nativeKeychain
     }
 
+    /// A PSK event must never create/rotate a client key or migrate Keychain data.
+    func existingForStagedProfile() -> WireGuardKeyPair? {
+        loadFromFile()
+    }
+
     func getOrCreate() throws -> WireGuardKeyPair {
         if let existing = load() {
             return existing

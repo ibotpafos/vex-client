@@ -844,6 +844,7 @@ struct ManagedVpnAmnezia: Codable, Equatable {
     var rejectAfterTime: String?
     var keepaliveTimeout: String?
     var maxHandshakeAttempts: String?
+    var persistentKeepalive: String?
     var randomTrailers: String?
     var disableCookies: String?
 
@@ -857,6 +858,7 @@ struct ManagedVpnAmnezia: Codable, Equatable {
         case rejectAfterTime = "reject_after_time"
         case keepaliveTimeout = "keepalive_timeout"
         case maxHandshakeAttempts = "max_handshake_attempts"
+        case persistentKeepalive = "persistent_keepalive"
         case randomTrailers = "random_trailers"
         case disableCookies = "disable_cookies"
     }

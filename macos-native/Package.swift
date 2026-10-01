@@ -17,6 +17,7 @@ let package = Package(
         .executableTarget(
             name: "VEXNativeMac",
             dependencies: [
+                "VEXHelperCore",
                 .product(name: "Sparkle", package: "Sparkle")
             ],
             path: "Sources/VEXNativeMac",

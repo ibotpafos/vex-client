@@ -10,6 +10,8 @@ ROOT = Path(sys.argv[1]) if len(sys.argv) == 2 else Path(__file__).resolve().par
 APP = ROOT / "macos-native/Sources/VEXNativeMac/Stores/VEXAppState.swift"
 SECURE_STORE = ROOT / "macos-native/Sources/VEXNativeMac/Services/NativePushSecureFileStore.swift"
 QUEUE = ROOT / "macos-native/Sources/VEXNativeMac/Services/NativePushPSKEventQueue.swift"
+STAGE_STORE = ROOT / "macos-native/Sources/VEXNativeMac/Services/NativePSKStagedProfileStore.swift"
+MODELS = ROOT / "macos-native/Sources/VEXNativeMac/Models/VEXModels.swift"
 source = APP.read_text()
 
 
@@ -66,12 +68,16 @@ final class DisposableIdentityStore {{
     var nativePushEventError: String?
     let nativePushIdentityStore: DisposableIdentityStore
     let nativePushPSKQueue: NativePushPSKEventQueue
+    let nativePSKStageStore: NativePSKStagedProfileStore
+    var nativePSKRetryTask: Task<Void, Never>?
+    var nativePSKPreparedTunnel: PreparedTunnel?
     let recorder: RefreshRecorder
     var identityIsCurrent = true
 
     init(root: URL, recorder: RefreshRecorder) {{
         nativePushIdentityStore = DisposableIdentityStore("install-A")
         nativePushPSKQueue = NativePushPSKEventQueue(appDataURL: root)
+        nativePSKStageStore = NativePSKStagedProfileStore(appDataURL: root)
         self.recorder = recorder
     }}
 
@@ -80,6 +86,8 @@ final class DisposableIdentityStore {{
               let current = session, current.user.id == accountID, current.accessToken == accessToken else {{ return nil }}
         return current
     }}
+
+    func processNativePSKEvents() async {{}}
 
     func refreshCustomerState() async {{
         guard let session,
@@ -117,7 +125,11 @@ func drain() async {{ for _ in 0..<32 {{ await Task.yield() }} }}
     let nativePushRegistration = FakeRegistration()
     let nativePushIdentityStore = DisposableIdentityStore("install-A")
     let nativePushPSKQueue: NativePushPSKEventQueue
-    init(root: URL) {{ nativePushPSKQueue = NativePushPSKEventQueue(appDataURL: root) }}
+    let nativePSKStageStore: NativePSKStagedProfileStore
+    var nativePSKRetryTask: Task<Void, Never>?
+    var nativePSKPreparedTunnel: PreparedTunnel?
+    func startNativePSKRetryIfNeeded() {{}}
+    init(root: URL) {{ nativePushPSKQueue = NativePushPSKEventQueue(appDataURL: root); nativePSKStageStore = NativePSKStagedProfileStore(appDataURL: root) }}
 {set_enabled}
 {reconcile}
 {fingerprint}
@@ -226,7 +238,7 @@ with tempfile.TemporaryDirectory(prefix="vex-native-push-intake-", dir="/private
     main = directory / "main.swift"
     binary = directory / "probe"
     main.write_text(fixture)
-    compiled = subprocess.run(["swiftc", "-swift-version", "5", "-parse-as-library", str(SECURE_STORE), str(QUEUE), str(main), "-o", str(binary)], text=True, capture_output=True)
+    compiled = subprocess.run(["swiftc", "-swift-version", "5", "-parse-as-library", str(MODELS), str(SECURE_STORE), str(QUEUE), str(STAGE_STORE), str(main), "-o", str(binary)], text=True, capture_output=True)
     print(compiled.stdout, end="")
     print(compiled.stderr, end="", file=sys.stderr)
     print("appstate_source_sha256=" + hashlib.sha256(APP.read_bytes()).hexdigest())

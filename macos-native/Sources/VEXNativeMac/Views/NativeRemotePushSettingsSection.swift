@@ -7,11 +7,11 @@ struct NativeRemotePushSettingsSection: View {
     var body: some View {
         SettingsFeatureCard(systemName: "arrow.triangle.2.circlepath", title: "Фоновые обновления APNs", subtitle: "Отдельное явное разрешение") {
             SettingsToggleRow(systemName: "network", title: "Обновлять данные по push",
-                subtitle: "Не включает и не выключает VPN.",
+                subtitle: "Сохранять события и безопасно применять подтверждённую смену ключей.",
                 isOn: Binding(get: { appState.nativeRemotePushEnabled }, set: { appState.setNativeRemotePushEnabled($0) }),
                 disabled: !appState.canUseNativeRemotePush)
             Text(appState.canUseNativeRemotePush
-                ? "APNs обновляет данные аккаунта и сохраняет события смены ключей. Применение нового VPN-профиля ещё не реализовано; push не управляет подключением."
+                ? "Push содержит только событие. Новый профиль проверяется, сохраняется и подтверждается серверу до применения. Нужен доверенный публичный ключ сервера; неподдерживаемая политика маршрутизации не применяется."
                 : "Для APNs нужна отдельная подписанная сборка с push entitlement и provisioning profile. В этой офлайн-сборке функция недоступна.")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Color.vexSecondaryText)

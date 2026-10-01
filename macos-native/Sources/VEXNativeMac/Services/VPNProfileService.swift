@@ -1,4 +1,6 @@
 import Foundation
+import CryptoKit
+import VEXHelperCore
 
 @MainActor
 struct VPNProfileService {
@@ -171,6 +173,57 @@ struct VPNProfileService {
             bypassRegion: effectiveBypassRegion,
             writeHelperConfig: writeHelperConfig
         )
+    }
+
+    /// Admission is read-only with respect to identity, cache and helper configuration.
+    func existingStagedPSKClientPublicKey() throws -> String {
+        guard let pair = keyStore.existingForStagedProfile(),
+              let raw = Data(base64Encoded: pair.privateKey), raw.count == 32,
+              let privateKey = try? Curve25519.KeyAgreement.PrivateKey(rawRepresentation: raw),
+              privateKey.publicKey.rawRepresentation.base64EncodedString() == pair.publicKey else {
+            throw VPNProfileError.incompleteProfile("existing client key")
+        }
+        return pair.publicKey
+    }
+
+    /// Builds only in memory from a verified signed policy. No fetch, cache promotion,
+    /// key creation/migration, DNS resolution or helper write is allowed before cutover.
+    func prepareStagedPSKProfile(
+        _ verified: NativeVPNProfileAuthorizationVerifier.Verified,
+        basedOn previous: PreparedTunnel
+    ) throws -> PreparedTunnel {
+        let profile = verified.envelope.profile
+        guard !verified.envelope.activate,
+              profile.deviceId == previous.device.id,
+              let version = profile.version, version == verified.envelope.profileVersion,
+              version > (previous.profileVersion ?? 0),
+              profile.clientPublicKey == (try existingStagedPSKClientPublicKey()),
+              let pair = keyStore.existingForStagedProfile() else {
+            throw VPNProfileError.incompleteProfile("staged profile binding")
+        }
+        let config = try Self.buildRawManagedProfileConfig(
+            profile, keyPair: pair, mtu: verified.mtu,
+            persistentKeepalive: verified.persistentKeepalive, resolveEndpoint: false
+        )
+        try VEXHelperCore.AwgConfigAdmission.validate(config)
+        return PreparedTunnel(
+            device: previous.device.withManagedProfile(profile, locationId: previous.locationId),
+            config: config, locationId: previous.locationId, profileVersion: version,
+            routingMode: previous.routingMode, bypassRegion: previous.bypassRegion,
+            bypassRangesCount: profile.bypassRanges?.count ?? 0,
+            bypassDomainsCount: profile.bypassDomains?.count ?? 0,
+            routingPolicyVersion: profile.routingPolicyVersion ?? previous.routingPolicyVersion,
+            rotationRequired: false, awgVersion: Self.awgVersion
+        )
+    }
+
+    /// Cache promotion is a post-cutover step, scoped to the captured account/install.
+    func promoteStagedPSKProfile(_ tunnel: PreparedTunnel, owner: NativePushPSKEventOwner) throws {
+        guard let cacheOwner = VPNProfileCacheOwner(accountID: owner.accountID, installationID: owner.installationID) else {
+            throw VPNProfileError.incompleteProfile("staged profile owner")
+        }
+        try cache.save(PreparedTunnelCacheRecord(tunnel: tunnel), locationId: tunnel.locationId,
+                       routingMode: tunnel.routingMode, owner: cacheOwner)
     }
 
     private func persistManagedProfile(
@@ -379,11 +432,14 @@ struct VPNProfileService {
         }
     }
 
-    nonisolated private static func buildRawManagedProfileConfig(_ profile: ManagedVpnProfile, keyPair: WireGuardKeyPair) throws -> String {
+    nonisolated private static func buildRawManagedProfileConfig(
+        _ profile: ManagedVpnProfile, keyPair: WireGuardKeyPair,
+        mtu: Int = 1360, persistentKeepalive: Int = 25, resolveEndpoint: Bool = true
+    ) throws -> String {
         guard !keyPair.privateKey.isEmpty else { throw VPNProfileError.incompleteProfile("privateKey") }
         guard let address = profile.assignedIpv4, !address.isEmpty else { throw VPNProfileError.incompleteProfile("assigned_ipv4") }
         guard let endpoint = managedProfileEndpoint(profile), !endpoint.isEmpty else { throw VPNProfileError.incompleteProfile("endpoint") }
-        let configEndpoint = resolveConfigEndpoint(endpoint)
+        let configEndpoint = resolveEndpoint ? resolveConfigEndpoint(endpoint) : endpoint
         guard let serverPublicKey = profile.serverPublicKey, !serverPublicKey.isEmpty else { throw VPNProfileError.incompleteProfile("server_public_key") }
 
         let dns = clean(profile.dns)
@@ -395,14 +451,14 @@ struct VPNProfileService {
         PrivateKey = \(keyPair.privateKey)
         Address = \(address)
         DNS = \((dns.isEmpty ? ["1.1.1.1", "8.8.8.8"] : dns).joined(separator: ", "))
-        MTU = 1360
+        MTU = \(mtu)
         \(try Self.amneziaConfig(profile.amnezia))
 
         [Peer]
         PublicKey = \(serverPublicKey)
         \(presharedLine)Endpoint = \(configEndpoint)
         AllowedIPs = \((allowedIps.isEmpty ? ["0.0.0.0/0"] : allowedIps).joined(separator: ", "))
-        PersistentKeepalive = 25
+        PersistentKeepalive = \(persistentKeepalive)
 
         """
     }

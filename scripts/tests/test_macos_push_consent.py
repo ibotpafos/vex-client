@@ -8,6 +8,8 @@ import tempfile
 
 ROOT = Path(sys.argv[1]) if len(sys.argv) == 2 else Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "macos-native/Sources/VEXNativeMac/Stores/VEXAppState.swift"
+STAGE_STORE = ROOT / "macos-native/Sources/VEXNativeMac/Services/NativePSKStagedProfileStore.swift"
+MODELS = ROOT / "macos-native/Sources/VEXNativeMac/Models/VEXModels.swift"
 text = SOURCE.read_text()
 
 def extract(marker: str) -> str:
@@ -55,6 +57,10 @@ struct FixtureSession {{ var user: FixtureUser; var accessToken: String }}
 @MainActor final class H {{
     let nativePushIdentityStore = FixtureIdentity()
     let nativePushPSKQueue = NativePushPSKEventQueue(appDataURL: URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true))
+    let nativePSKStageStore = NativePSKStagedProfileStore(appDataURL: URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true))
+    var nativePSKRetryTask: Task<Void, Never>?
+    var nativePSKPreparedTunnel: PreparedTunnel?
+    func startNativePSKRetryIfNeeded() {{}}
     var nativePushEventOwner: NativePushPSKEventOwner?
     var nativePushEventError: String?
     var nativePushRuntimeAllowed = true
@@ -144,7 +150,7 @@ with tempfile.TemporaryDirectory(prefix="vex-push-consent-") as directory:
     executable = directory / "fixture"
     swift.write_text(fixture)
     compile_result = subprocess.run(
-        ["swiftc", "-swift-version", "5", "-parse-as-library", str(ROOT / "macos-native/Sources/VEXNativeMac/Services/NativePushSecureFileStore.swift"), str(ROOT / "macos-native/Sources/VEXNativeMac/Services/NativePushPSKEventQueue.swift"), str(swift), "-o", str(executable)],
+        ["swiftc", "-swift-version", "5", "-parse-as-library", str(MODELS), str(ROOT / "macos-native/Sources/VEXNativeMac/Services/NativePushSecureFileStore.swift"), str(ROOT / "macos-native/Sources/VEXNativeMac/Services/NativePushPSKEventQueue.swift"), str(STAGE_STORE), str(swift), "-o", str(executable)],
         text=True, capture_output=True,
     )
     print(compile_result.stdout, end="")

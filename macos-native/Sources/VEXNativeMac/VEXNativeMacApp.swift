@@ -210,6 +210,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func configure(helper: VEXHelperModel, appState: VEXAppState) {
         self.helper = helper
         self.appState = appState
+        appState.configureNativePSKProcessing(using: helper)
         appState.configureNativePushActions(
             register: { [weak appState] in
                 guard appState?.canUseNativeRemotePush == true, !VEXPreviewMode.suppressesRuntime else { return }

@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import CryptoKit
 import SwiftUI
 
 @MainActor
@@ -15,6 +16,8 @@ final class VEXAppState: ObservableObject {
     @AppStorage("native.autoRecoveryEnabled") var autoRecoveryEnabled = true
     @AppStorage("native.biometricUnlockRequired") var biometricUnlockRequired = false
     @AppStorage("native.interfaceLanguage") var interfaceLanguage = "ru"
+    @AppStorage("native.remotePushEnabled") private(set) var nativeRemotePushEnabled = false
+    @AppStorage("native.remotePushConsentAccount") private var nativeRemotePushConsentAccount = ""
 
     @Published private(set) var session: AuthSession?
     @Published private(set) var user: VEXUser?
@@ -46,6 +49,7 @@ final class VEXAppState: ObservableObject {
     @Published private(set) var lastLocationsRefreshAt: Date?
     @Published private(set) var serverSidebarOperation = ServerSidebarOperationState.idle
     @Published var statusMessage: String?
+    @Published private(set) var nativePushRegistrationError: String?
 
     private let sessionStore = VEXSessionStore()
     private let api = VEXAPIClient()
@@ -59,6 +63,16 @@ final class VEXAppState: ObservableObject {
     private let startupService = StartupService()
     private let nativeUpdater: NativeUpdaterService
     let customerNotifications: CustomerNotificationService
+    private let nativePushRegistrar = NativePushAPIRegistrar()
+    lazy var nativePushRegistration = NativePushRegistrationService(registrar: nativePushRegistrar)
+    private let nativePushRuntimeAllowed: Bool
+    private var nativePushDeviceID: String?
+    private var nativePushAccountID: String?
+    private var nativePushSessionGeneration: Int?
+    private var nativeApplePushToken: Data?
+    private var nativePushRegistrationRequested = false
+    private var registerNativePushAction: (() -> Void)?
+    private var unregisterNativePushAction: (() -> Void)?
     private let authService = PKCEAuthService()
     private var cancellables: Set<AnyCancellable> = []
     private var webAuthTask: Task<Void, Never>?
@@ -89,11 +103,13 @@ final class VEXAppState: ObservableObject {
     init() {
         automaticUpdatesStartupDelayNanoseconds = Self.automaticUpdatesStartupDelayNanoseconds
         customerNotifications = CustomerNotificationService(previewMode: VEXPreviewMode.suppressesRuntime)
+        nativePushRuntimeAllowed = !VEXPreviewMode.suppressesRuntime
         if VEXPreviewMode.suppressesRuntime {
             self.nativeUpdater = DisabledNativeUpdaterService()
         } else {
             self.nativeUpdater = NativeUpdaterServiceFactory.make()
         }
+        observeNativePushSession()
     }
 
     init(
@@ -106,6 +122,151 @@ final class VEXAppState: ObservableObject {
         // Test/preview callers must explicitly inject a fake to enable delivery;
         // the dependency-injected initializer never resolves the native center.
         self.customerNotifications = customerNotifications ?? CustomerNotificationService(previewMode: true)
+        nativePushRuntimeAllowed = false
+        observeNativePushSession()
+    }
+
+    var canUseNativeRemotePush: Bool {
+        nativePushRuntimeAllowed && NativeAPNsCapability.signedEnvironment != nil
+    }
+
+    func configureNativePushActions(register: @escaping () -> Void, unregister: @escaping () -> Void) {
+        registerNativePushAction = register
+        unregisterNativePushAction = unregister
+        reconcileNativePushSession()
+    }
+
+    func setNativeRemotePushEnabled(_ enabled: Bool) {
+        guard nativePushRuntimeAllowed else { return }
+        let account = session?.user.id.trimmingCharacters(in: .whitespacesAndNewlines)
+        nativeRemotePushEnabled = enabled && canUseNativeRemotePush && account?.isEmpty == false
+        nativeRemotePushConsentAccount = nativeRemotePushEnabled ? nativePushConsentFingerprint(account!) : ""
+        nativePushRegistrationError = nil
+        if !nativeRemotePushEnabled {
+            nativeApplePushToken = nil
+            nativePushRegistration.clearAuthenticatedSession()
+            if nativePushRegistrationRequested { unregisterNativePushAction?() }
+            nativePushRegistrationRequested = false
+        }
+        reconcileNativePushSession()
+    }
+
+    func receivedNativeApplePushToken(_ data: Data) {
+        guard canUseNativeRemotePush, nativeRemotePushEnabled, nativePushConsentMatchesSession,
+              !data.isEmpty, data.count <= 512 else { return }
+        nativeApplePushToken = data
+        nativePushRegistrationError = nil
+        reconcileNativePushSession()
+    }
+
+    func nativeApplePushRegistrationFailed() {
+        guard nativeRemotePushEnabled, nativePushConsentMatchesSession else { return }
+        nativeApplePushToken = nil
+        nativePushRegistrationError = "Не удалось зарегистрировать APNs. Проверьте подпись сборки и повторите попытку."
+        nativePushRegistration.clearAuthenticatedSession()
+        // Leave the attempt marked: only an explicit retry requests Apple again.
+    }
+
+    func retryNativePushRegistration() {
+        guard canUseNativeRemotePush, nativeRemotePushEnabled, nativePushConsentMatchesSession else { return }
+        nativePushRegistrationError = nil
+        if nativeApplePushToken == nil { nativePushRegistrationRequested = false }
+        reconcileNativePushSession()
+        nativePushRegistration.retryCurrentRegistration()
+    }
+
+    func receivedNativeRemoteNotification(_ userInfo: [String: Any]) {
+        guard canUseNativeRemotePush, nativeRemotePushEnabled, nativePushConsentMatchesSession,
+              let aps = userInfo["aps"] as? [String: Any],
+              (aps["content-available"] as? NSNumber)?.intValue == 1,
+              let currentSession = session else { return }
+        let generation = authenticatedSessionGeneration
+        let accountID = currentSession.user.id
+        let token = currentSession.accessToken
+        Task { [weak self] in
+            guard let self, self.nativeRemotePushEnabled, self.nativePushConsentMatchesSession,
+                  (try? self.ensureAuthenticatedSessionCurrent(generation: generation, accessToken: token, accountID: accountID)) != nil else { return }
+            // Generic account invalidation never starts/stops a tunnel or applies
+            // a profile received in a push payload.
+            await self.refreshCustomerState()
+        }
+        // TODO(apns-psk-parity): Android separately queues validated rotation
+        // events and stages/cuts over matching PSK profiles. Implement that real
+        // server event contract and isolated helper acceptance; generic account
+        // invalidation is not a substitute for rotation/cutover parity.
+    }
+
+    private func observeNativePushSession() {
+        nativePushRegistrar.isCurrent = { [weak self] request in
+            guard let self, self.canUseNativeRemotePush, self.nativeRemotePushEnabled, self.nativePushConsentMatchesSession,
+                  self.nativePushDeviceID == request.deviceID else { return false }
+            return (try? self.ensureAuthenticatedSessionCurrent(generation: request.sessionGeneration, accessToken: request.accessToken, accountID: request.accountID)) != nil
+        }
+        $session.sink { [weak self] _ in
+            Task { @MainActor [weak self] in self?.reconcileNativePushSession() }
+        }.store(in: &cancellables)
+        $activeTunnel.sink { [weak self] tunnel in
+            guard let self, let tunnel, let owner = self.session?.user.id else { return }
+            let generation = self.authenticatedSessionGeneration
+            Task { @MainActor [weak self] in
+                self?.bindNativePushDevice(tunnel.device.id, accountID: owner, generation: generation)
+            }
+        }.store(in: &cancellables)
+    }
+
+    private func bindNativePushDevice(_ deviceID: String, accountID: String, generation: Int) {
+        guard nativePushRuntimeAllowed, !deviceID.isEmpty,
+              (try? ensureAuthenticatedSessionCurrent(generation: generation, accountID: accountID)) != nil else { return }
+        nativePushDeviceID = deviceID
+        nativePushAccountID = accountID
+        nativePushSessionGeneration = generation
+        reconcileNativePushSession()
+    }
+
+    private func reconcileNativePushSession() {
+        guard canUseNativeRemotePush, nativeRemotePushEnabled, nativePushConsentMatchesSession, let currentSession = session else {
+            nativePushRegistration.clearAuthenticatedSession()
+            return
+        }
+        if nativePushAccountID != currentSession.user.id || nativePushSessionGeneration != authenticatedSessionGeneration {
+            nativePushRegistration.clearAuthenticatedSession()
+            nativePushDeviceID = nil
+            nativePushAccountID = currentSession.user.id
+            nativePushSessionGeneration = authenticatedSessionGeneration
+        }
+        nativePushRegistration.setRegistrationEnabled(true)
+        if !nativePushRegistrationRequested, registerNativePushAction != nil {
+            nativePushRegistrationRequested = true
+            registerNativePushAction?()
+        }
+        if let tokenData = nativeApplePushToken, let deviceID = nativePushDeviceID {
+            nativePushRegistration.registerAppleDeviceToken(tokenData, accountID: currentSession.user.id, deviceID: deviceID,
+                accessToken: currentSession.accessToken, sessionGeneration: authenticatedSessionGeneration)
+        }
+    }
+
+    private func nativePushConsentFingerprint(_ accountID: String) -> String {
+        SHA256.hash(data: Data(("vex-native-push-consent\u{0}" + accountID).utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private var nativePushConsentMatchesSession: Bool {
+        guard let accountID = session?.user.id.trimmingCharacters(in: .whitespacesAndNewlines), !accountID.isEmpty else { return false }
+        return nativeRemotePushConsentAccount == nativePushConsentFingerprint(accountID)
+    }
+
+    private func invalidateNativePushSession(resetConsent: Bool = false) {
+        if resetConsent {
+            nativeRemotePushEnabled = false
+            nativeRemotePushConsentAccount = ""
+        }
+        nativePushRegistration.clearAuthenticatedSession()
+        nativeApplePushToken = nil
+        nativePushDeviceID = nil
+        nativePushAccountID = nil
+        nativePushSessionGeneration = nil
+        nativePushRegistrationError = nil
+        if nativePushRegistrationRequested, nativePushRuntimeAllowed { unregisterNativePushAction?() }
+        nativePushRegistrationRequested = false
     }
 
     var selectedLocationId: String {
@@ -1135,6 +1296,7 @@ final class VEXAppState: ObservableObject {
 
     func prepareForTermination() {
         authenticatedSessionGeneration += 1
+        invalidateNativePushSession()
         sessionRefreshTask?.task.cancel()
         sessionRefreshTask = nil
         customerRealtimeGeneration += 1
@@ -1843,6 +2005,7 @@ final class VEXAppState: ObservableObject {
         authError: String?
     ) {
         authenticatedSessionGeneration += 1
+        invalidateNativePushSession(resetConsent: true)
         sessionRefreshTask?.task.cancel()
         sessionRefreshTask = nil
         profileWarmupTask?.cancel()
@@ -2066,7 +2229,7 @@ final class VEXAppState: ObservableObject {
                 // different location/mode; a fresh cached profile resolves with
                 // zero network round-trips. A late result stays in its captured
                 // account/installation namespace, never in a replacement session.
-                _ = try await profileService.resolveProfile(
+                let prepared = try await profileService.resolveProfile(
                     accessToken: token,
                     locationId: locationId,
                     routingMode: mode,
@@ -2074,6 +2237,10 @@ final class VEXAppState: ObservableObject {
                     writeHelperConfig: false,
                     accountID: accountID
                 )
+                try self.ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: token, accountID: accountID)
+                if let accountID {
+                    self.bindNativePushDevice(prepared.device.id, accountID: accountID, generation: sessionGeneration)
+                }
             } catch is CancellationError {
             } catch {
                 // Background warmup is best-effort; foreground connect handles user-visible errors.

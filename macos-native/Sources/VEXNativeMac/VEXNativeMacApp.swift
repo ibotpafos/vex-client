@@ -210,6 +210,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func configure(helper: VEXHelperModel, appState: VEXAppState) {
         self.helper = helper
         self.appState = appState
+        appState.configureNativePushActions(
+            register: { [weak appState] in
+                guard appState?.canUseNativeRemotePush == true, !VEXPreviewMode.suppressesRuntime else { return }
+                NSApplication.shared.registerForRemoteNotifications()
+            },
+            unregister: {
+                guard !VEXPreviewMode.suppressesRuntime else { return }
+                NSApplication.shared.unregisterForRemoteNotifications()
+            }
+        )
         NativeVPNUpdateSafetyProvider.install { [weak helper] in
             // `VpnStatus.disconnected` is the model's initial placeholder.
             // It becomes update-safe only after an authenticated helper reply
@@ -272,6 +282,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         DispatchQueue.main.async {
             self.configureMainWindow()
         }
+    }
+
+    func application(_ application: NSApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        guard !VEXPreviewMode.suppressesRuntime else { return }
+        appState?.receivedNativeApplePushToken(deviceToken)
+    }
+
+    func application(_ application: NSApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        guard !VEXPreviewMode.suppressesRuntime else { return }
+        // Do not log opaque OS errors, device tokens, or account/session details.
+        appState?.nativeApplePushRegistrationFailed()
+    }
+
+    func application(_ application: NSApplication, didReceiveRemoteNotification userInfo: [String: Any]) {
+        guard !VEXPreviewMode.suppressesRuntime else { return }
+        appState?.receivedNativeRemoteNotification(userInfo)
     }
 
     private func configureMainWindow() {

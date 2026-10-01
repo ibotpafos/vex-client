@@ -115,6 +115,16 @@ struct VEXAPIClient {
         try await json("/v1/devices", accessToken: accessToken)
     }
 
+    /// deviceID is the managed server device row, not an installation UUID.
+    func registerNativePushToken(accessToken: String, deviceID: String, token: String) async throws {
+        let _: NativeDeviceRegistrationResponse = try await json(
+            "/v1/vpn/push-token",
+            method: "POST",
+            accessToken: accessToken,
+            body: ["device_id": deviceID, "provider": "apns", "token": token]
+        )
+    }
+
     func renameVpnDevice(accessToken: String, deviceId: String, name: String) async throws -> VpnDevice {
         try await json(
             "/v1/devices/\(deviceId)",

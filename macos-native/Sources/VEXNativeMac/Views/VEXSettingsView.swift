@@ -114,7 +114,10 @@ struct VEXSettingsView: View {
     }
 
     private var notificationSettings: some View {
-        CustomerNotificationSettingsSection(service: appState.customerNotifications)
+        VStack(spacing: 12) {
+            CustomerNotificationSettingsSection(service: appState.customerNotifications)
+            NativeRemotePushSettingsSection(appState: appState, registration: appState.nativePushRegistration)
+        }
     }
 
     private var helperSettings: some View {

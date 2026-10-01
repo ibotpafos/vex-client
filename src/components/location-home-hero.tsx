@@ -28,6 +28,7 @@ const locationBackgrounds: Partial<Record<HomeLocationBackdropKey, ImageSourcePr
   de: require('../../assets/locations/frankfurt-de.png') as ImageSourcePropType,
   fi: require('../../assets/locations/helsinki-fi.png') as ImageSourcePropType,
   nl: require('../../assets/locations/amsterdam-nl.png') as ImageSourcePropType,
+  ru: require('../../assets/locations/moscow-ru.png') as ImageSourcePropType,
 };
 
 type LocationHomeHeroProps = {

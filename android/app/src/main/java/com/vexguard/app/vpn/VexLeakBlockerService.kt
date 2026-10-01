@@ -57,6 +57,9 @@ class VexLeakBlockerService : VpnService() {
       .addRoute("0.0.0.0", 0)
       .addAddress("fd00:255:255::1", 128)
       .addRoute("::", 0)
+      // Without an explicit DNS, Android uses the underlying network resolver.
+      // Keep DNS requests in this dropped-packet tunnel while blocking traffic.
+      .addDnsServer("10.255.255.2")
       .setBlocking(false)
     if (allowedApplications.isEmpty()) {
       try {
@@ -158,7 +161,16 @@ class VexLeakBlockerService : VpnService() {
     }
 
     fun stop(context: Context) {
-      context.stopService(Intent(context, VexLeakBlockerService::class.java))
+      val intent = Intent(context, VexLeakBlockerService::class.java)
+      if (active.get()) {
+        // An active VpnService can remain bound after stopService. Deliver the
+        // existing command so it closes the TUN before releasing the service.
+        ContextCompat.startForegroundService(context, intent.setAction(ACTION_STOP))
+      } else {
+        // Do not create an idle foreground service just to stop it. Cancel any
+        // pending ordinary startup using the existing no-op-safe path.
+        context.stopService(intent)
+      }
     }
 
     suspend fun startAndAwait(

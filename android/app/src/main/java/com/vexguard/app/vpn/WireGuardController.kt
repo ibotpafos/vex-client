@@ -18,11 +18,13 @@ import android.system.StructTimeval
 import android.util.Log
 import java.io.FileDescriptor
 import java.net.Inet4Address
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -61,7 +63,39 @@ class WireGuardController(context: Context) {
         }
       }
     }
+    recoveryScope.launch {
+      // StateFlow replays its current state: do not drop the first value, which
+      // may already be DOWN after a fast loss before this collector starts.
+      tunnel.state.collect { state ->
+        if (state == Tunnel.State.DOWN) protectAfterNativeTunnelLoss()
+      }
+    }
     registerUnderlyingNetworkCallback()
+  }
+
+  private suspend fun protectAfterNativeTunnelLoss() = tunnelMutex.withLock {
+    // Re-read after acquiring the same lock as connect/disconnect/recovery.
+    // A queued DOWN may belong to an intentional handover or manual release.
+    try {
+      if (!shouldProtectAfterNativeTunnelLoss(
+          antiLeakArmed = antiLeakArmed,
+          hasRetainedConfig = lastConfigText != null,
+          leakBlockerActive = VexLeakBlockerService.isActive(),
+          currentState = backend.getState(tunnel),
+        )) return@withLock
+      transitionState = "blocking"
+      // Keep the requested protection armed if service startup fails; a failed
+      // start is not a manual release and must not be reported as Blocking.
+      if (!VexLeakBlockerService.startAndAwait(appContext, lastRoutedApplications)) {
+        Log.e(TAG, "Anti-leak service did not start after native tunnel DOWN")
+      }
+    } catch (cancelled: CancellationException) {
+      throw cancelled
+    } catch (error: Throwable) {
+      Log.e(TAG, "Anti-leak protection failed after native tunnel DOWN", error)
+    } finally {
+      transitionState = null
+    }
   }
 
   fun needsPermission(): Boolean = VpnService.prepare(appContext) != null
@@ -150,7 +184,9 @@ class WireGuardController(context: Context) {
           // Release the separate kill-switch service before entering the native
           // backend. awgTurnOff can block inside vendor code; it must never keep
           // the user's whole phone offline after an explicit disconnect.
-          VexLeakBlockerService.stopAndAwait(appContext)
+          if (!VexLeakBlockerService.stopAndAwait(appContext)) {
+            throw IllegalStateException("Anti-leak service did not stop after explicit VPN disconnect.")
+          }
           antiLeakArmed = false
         }
         setTunnelDown()
@@ -547,6 +583,13 @@ private inline fun <T> List<T>.indexOfFirstAfter(startIndex: Int, predicate: (T)
   }
   return -1
 }
+
+internal fun shouldProtectAfterNativeTunnelLoss(
+  antiLeakArmed: Boolean,
+  hasRetainedConfig: Boolean,
+  leakBlockerActive: Boolean,
+  currentState: Tunnel.State,
+): Boolean = antiLeakArmed && hasRetainedConfig && !leakBlockerActive && currentState == Tunnel.State.DOWN
 
 internal fun shouldReuseActiveVpnTunnel(
   isTunnelUp: Boolean,

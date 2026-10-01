@@ -2,7 +2,7 @@ import {
   mobileStateNoticePresentation,
   vexMobileType,
 } from '../src/ui/vex-mobile-visual';
-import { homeBrandPresentation, homeLocationCopy } from '../src/screens/home-screen-visual';
+import { homeBrandPresentation, homeLocationBackdropKey, homeLocationCopy } from '../src/screens/home-screen-visual';
 import {
   groupVpnLocationsByCountry,
   serverCountLabel,
@@ -46,6 +46,31 @@ const germanyLocation: VpnLocation = {
   priority: 10,
   status: 'healthy',
 };
+const russiaLocation: VpnLocation = {
+  ...germanyLocation,
+  city: 'Moscow',
+  countryCode: 'RU',
+  displayName: 'Russia · Moscow',
+  flagEmoji: '🇷🇺',
+  id: 'ru-transit',
+};
+assertEqual(homeLocationBackdropKey(russiaLocation), 'ru');
+assertEqual(homeLocationBackdropKey({ ...russiaLocation, countryCode: ' rU ' }), 'ru');
+assertEqual(homeLocationBackdropKey({ ...russiaLocation, countryCode: '', id: ' RU ' }), 'ru');
+assertEqual(homeLocationBackdropKey({ ...russiaLocation, countryCode: 'XX' }), 'fallback');
+assertEqual(homeLocationBackdropKey(), 'fallback');
+for (const countryCode of ['DE', 'FI', 'NL'] as const) {
+  assertEqual(homeLocationBackdropKey({ ...germanyLocation, countryCode }), countryCode.toLowerCase());
+}
+assertDeepEqual(homeLocationCopy(russiaLocation, '18 мс', 'manual'), {
+  city: 'Москва',
+  countryAndLatency: 'Россия · 18 мс',
+});
+assertDeepEqual(homeLocationCopy(russiaLocation, '18 мс', 'auto'), {
+  city: 'Автоматически',
+  countryAndLatency: 'Россия · Москва · 18 мс',
+});
+assertEqual(homeLocationCopy({ ...russiaLocation, city: 'Kazan' }, '18 мс').city, 'Kazan');
 assertDeepEqual(homeLocationCopy(germanyLocation, '18 мс', 'auto'), {
   city: 'Автоматически',
   countryAndLatency: 'Германия · Франкфурт · 18 мс',

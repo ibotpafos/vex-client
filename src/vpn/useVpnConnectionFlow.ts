@@ -240,60 +240,66 @@ export function useVpnConnectionFlow({
       lastConnectError = error;
     }
 
-    if (!connected) {
-      try {
-        connected = await connectFreshSameLocationProfile({
-          connectProfile: connectProfileWithEndpointFallback,
-          locationId: profileLocationId,
-          resolveProfile: resolveConnectableVpnProfile,
-        });
-        connectedLocationId = profileLocationId;
-      } catch (error) {
-        lastConnectError = error;
-        if (!isVpnTransportFallbackError(error) && !isProfileResolutionFallbackError(error)) {
-          throw error;
-        }
-      }
-    }
-
-    for (const fallbackLocation of profileResolutionOrder(profileLocationId, availableLocations)) {
-      if (connected?.status.state === 'connected' || fallbackLocation.id === profileLocationId) {
-        continue;
-      }
-      const fallbackProfile = await resolveProfileOrSkipMissing(() => resolveConnectableVpnProfile(fallbackLocation.id, {
-        preferCached: true,
-        requestPermission: false,
-      }));
-      if (!fallbackProfile) continue;
-      try {
-        connected = await connectProfileWithEndpointFallback(fallbackProfile);
-        connectedLocationId = fallbackLocation.id;
-      } catch (error) {
-        lastConnectError = error;
-        if (!isVpnTransportFallbackError(error)) {
-          throw error;
-        }
-        const freshFallbackProfile = await resolveProfileOrSkipMissing(() => resolveConnectableVpnProfile(fallbackLocation.id, {
-          forceRefresh: true,
-          preferCached: false,
-          requestPermission: false,
-        }));
-        if (!freshFallbackProfile) continue;
+    try {
+      if (!connected) {
         try {
-          connected = await connectProfileWithEndpointFallback(freshFallbackProfile);
-          connectedLocationId = fallbackLocation.id;
-        } catch (freshError) {
-          lastConnectError = freshError;
-          if (!isVpnTransportFallbackError(freshError)) {
-            throw freshError;
+          connected = await connectFreshSameLocationProfile({
+            connectProfile: connectProfileWithEndpointFallback,
+            locationId: profileLocationId,
+            resolveProfile: resolveConnectableVpnProfile,
+          });
+          connectedLocationId = profileLocationId;
+        } catch (error) {
+          lastConnectError = error;
+          if (!isVpnTransportFallbackError(error) && !isProfileResolutionFallbackError(error)) {
+            throw error;
           }
         }
       }
-    }
 
-    if (!connected || connected.status.state !== 'connected') {
-      await cleanupFailedVpnConnection(antiLeakEnabled, disconnectVpn, lastConnectError).catch(() => undefined);
-      throw lastConnectError ?? new Error('VPN не подключился.');
+      for (const fallbackLocation of profileResolutionOrder(profileLocationId, availableLocations)) {
+        if (connected?.status.state === 'connected' || fallbackLocation.id === profileLocationId) {
+          continue;
+        }
+        const fallbackProfile = await resolveProfileOrSkipMissing(() => resolveConnectableVpnProfile(fallbackLocation.id, {
+          preferCached: true,
+          requestPermission: false,
+        }));
+        if (!fallbackProfile) continue;
+        try {
+          connected = await connectProfileWithEndpointFallback(fallbackProfile);
+          connectedLocationId = fallbackLocation.id;
+        } catch (error) {
+          lastConnectError = error;
+          if (!isVpnTransportFallbackError(error)) {
+            throw error;
+          }
+          const freshFallbackProfile = await resolveProfileOrSkipMissing(() => resolveConnectableVpnProfile(fallbackLocation.id, {
+            forceRefresh: true,
+            preferCached: false,
+            requestPermission: false,
+          }));
+          if (!freshFallbackProfile) continue;
+          try {
+            connected = await connectProfileWithEndpointFallback(freshFallbackProfile);
+            connectedLocationId = fallbackLocation.id;
+          } catch (freshError) {
+            lastConnectError = freshError;
+            if (!isVpnTransportFallbackError(freshError)) {
+              throw freshError;
+            }
+          }
+        }
+      }
+
+      if (!connected || connected.status.state !== 'connected') {
+        throw lastConnectError ?? new Error('VPN не подключился.');
+      }
+    } catch (error) {
+      // Profile/API failures during recovery must not leave an unverified
+      // native attempt running. Admission errors retain the previous tunnel.
+      await cleanupFailedVpnConnection(antiLeakEnabled, disconnectVpn, error).catch(() => undefined);
+      throw error;
     }
 
     if (connectedLocationId !== selectedLocationId) {

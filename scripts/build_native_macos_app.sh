@@ -17,6 +17,34 @@ CODESIGN_IDENTITY="${VEX_CODESIGN_IDENTITY:--}"
 CODESIGN_KEYCHAIN="${VEX_CODESIGN_KEYCHAIN:-}"
 CODESIGN_TIMESTAMP="${VEX_CODESIGN_TIMESTAMP:-automatic}"
 HELPER_RESOURCE_DIR="${PACKAGE_DIR}/HelperResources"
+LOCAL_SIGNING_IDENTITY="VEX Self-Signed Application"
+LOCAL_SIGNING_DIR="${VEX_LOCAL_SIGNING_DIR:-${HOME}/Library/Application Support/VEX Release/identities/macos-self-signed-v4}"
+LOCAL_SIGNING_KEYCHAIN="${LOCAL_SIGNING_DIR}/VEX-Release-Build.keychain-db"
+SIGNING_SEARCH_LIST_CHANGED=0
+ORIGINAL_SIGNING_KEYCHAINS=()
+
+restore_signing_search_list() {
+  if [[ "${SIGNING_SEARCH_LIST_CHANGED}" == "1" ]]; then
+    /usr/bin/security list-keychains -d user -s "${ORIGINAL_SIGNING_KEYCHAINS[@]}"
+    SIGNING_SEARCH_LIST_CHANGED=0
+  fi
+}
+
+activate_local_signing_keychain() {
+  local line keychain
+  while IFS= read -r line; do
+    keychain="${line#*\"}"
+    keychain="${keychain%\"*}"
+    [[ -z "${keychain}" ]] || ORIGINAL_SIGNING_KEYCHAINS+=("${keychain}")
+  done < <(/usr/bin/security list-keychains -d user)
+  for keychain in "${ORIGINAL_SIGNING_KEYCHAINS[@]}"; do
+    [[ "${keychain}" != "${LOCAL_SIGNING_KEYCHAIN}" ]] || return 0
+  done
+  /usr/bin/security list-keychains -d user -s \
+    "${ORIGINAL_SIGNING_KEYCHAINS[@]}" "${LOCAL_SIGNING_KEYCHAIN}"
+  SIGNING_SEARCH_LIST_CHANGED=1
+  trap restore_signing_search_list EXIT
+}
 
 if [[ -f "${ROOT_DIR}/.env.sparkle.local" ]]; then
   set -a
@@ -28,6 +56,21 @@ if [[ -f "${ROOT_DIR}/.env.sparkle.local" ]]; then
   SPARKLE_FEED_URL="${VEX_SPARKLE_FEED_URL:-${SPARKLE_FEED_URL}}"
   SPARKLE_PUBLIC_ED_KEY="${VEX_SPARKLE_PUBLIC_ED_KEY:-${SPARKLE_PUBLIC_ED_KEY}}"
   CODESIGN_IDENTITY="${VEX_CODESIGN_IDENTITY:-${CODESIGN_IDENTITY}}"
+fi
+
+if [[ "${CODESIGN_IDENTITY}" == "-" ]]; then
+  if [[ -f "${LOCAL_SIGNING_DIR}/application.key.pem" \
+        && -f "${LOCAL_SIGNING_DIR}/application.cert.pem" ]]; then
+    /usr/bin/swift "${ROOT_DIR}/scripts/prepare_vex_local_signing_identity.swift" \
+      "${LOCAL_SIGNING_DIR}" >&2
+    if /usr/bin/security find-identity -v -p codesigning "${LOCAL_SIGNING_KEYCHAIN}" \
+        | /usr/bin/grep -q "${LOCAL_SIGNING_IDENTITY}"; then
+      CODESIGN_IDENTITY="${LOCAL_SIGNING_IDENTITY}"
+      CODESIGN_KEYCHAIN="${CODESIGN_KEYCHAIN:-${LOCAL_SIGNING_KEYCHAIN}}"
+      CODESIGN_TIMESTAMP="none"
+      activate_local_signing_keychain
+    fi
+  fi
 fi
 
 if [[ "${CODESIGN_IDENTITY}" == "-" ]]; then
@@ -75,7 +118,8 @@ else
   # This pinned local identity has no Apple TeamIdentifier. Hardened-runtime
   # library validation would reject its bundled Sparkle framework at launch.
   # Retain the existing local-development runtime model; Apple releases keep HR.
-  if [[ "${CODESIGN_IDENTITY}" == "C6FD1853A177FBCFB04C5D4F78FBE405777B3A3E" ]]; then
+  if [[ "${CODESIGN_IDENTITY}" == "C6FD1853A177FBCFB04C5D4F78FBE405777B3A3E" \
+        || "${CODESIGN_IDENTITY}" == "VEX Self-Signed Application" ]]; then
     CODESIGN_ARGS=(--force --sign "${CODESIGN_IDENTITY}")
   else
     CODESIGN_ARGS=(--force --options runtime --sign "${CODESIGN_IDENTITY}")
@@ -90,6 +134,8 @@ fi
 
 cd "${PACKAGE_DIR}"
 export VEX_CODESIGN_IDENTITY="${CODESIGN_IDENTITY}"
+export VEX_CODESIGN_KEYCHAIN="${CODESIGN_KEYCHAIN}"
+export VEX_CODESIGN_TIMESTAMP="${CODESIGN_TIMESTAMP}"
 "${ROOT_DIR}/scripts/build_swift_macos_helper.sh"
 
 APP_SCRATCH_ROOT="${PACKAGE_DIR}/.build-app"
@@ -97,13 +143,15 @@ build_app_arch() {
   local arch="$1"
   local triple="${arch}-apple-macosx15.0"
   local scratch="${APP_SCRATCH_ROOT}/${arch}"
-  /usr/bin/swift build \
-    --package-path "${PACKAGE_DIR}" \
-    --scratch-path "${scratch}" \
-    --configuration release \
-    --product "${APP_NAME}" \
-    --triple "${triple}" >&2
-  /usr/bin/find "${scratch}" -type f -path "*/release/${APP_NAME}" -perm -111 -print -quit
+  local build_args=(--package-path "${PACKAGE_DIR}" --scratch-path "${scratch}"
+    --configuration "${VEX_MACOS_CONFIGURATION:-release}" --product "${APP_NAME}" --triple "${triple}")
+  # errexit is disabled inside command substitution on macOS Bash. Explicitly
+  # propagate failures, so an old executable can never masquerade as this build.
+  /usr/bin/swift build "${build_args[@]}" >&2 || return 1
+  local bin_dir
+  bin_dir="$(/usr/bin/swift build "${build_args[@]}" --show-bin-path)" || return 1
+  [[ -x "${bin_dir}/${APP_NAME}" ]] || return 1
+  printf '%s\n' "${bin_dir}/${APP_NAME}"
 }
 
 arm_executable="$(build_app_arch arm64)"
@@ -126,10 +174,7 @@ if ! otool -l "${APP_DIR}/Contents/MacOS/${APP_NAME}" | grep -q "@executable_pat
   install_name_tool -add_rpath "@executable_path/../Frameworks" "${APP_DIR}/Contents/MacOS/${APP_NAME}"
 fi
 
-SPARKLE_FRAMEWORK="$(find "${APP_SCRATCH_ROOT}" -type d -path "*/release/Sparkle.framework" | head -n 1)"
-if [[ -z "${SPARKLE_FRAMEWORK}" || ! -d "${SPARKLE_FRAMEWORK}" ]]; then
-  SPARKLE_FRAMEWORK="$(find "${PACKAGE_DIR}/.build/artifacts" -type d -path "*/Sparkle.framework" | head -n 1)"
-fi
+SPARKLE_FRAMEWORK="$(dirname "${arm_executable}")/Sparkle.framework"
 if [[ -n "${SPARKLE_FRAMEWORK}" && -d "${SPARKLE_FRAMEWORK}" ]]; then
   ditto "${SPARKLE_FRAMEWORK}" "${APP_DIR}/Contents/Frameworks/Sparkle.framework"
 else
@@ -137,7 +182,7 @@ else
   exit 1
 fi
 
-RESOURCE_BUNDLE="$(find "${APP_SCRATCH_ROOT}" -type d -path "*/release/${APP_NAME}_${APP_NAME}.bundle" | head -n 1)"
+RESOURCE_BUNDLE="$(dirname "${arm_executable}")/${APP_NAME}_${APP_NAME}.bundle"
 if [[ -n "${RESOURCE_BUNDLE}" && -d "${RESOURCE_BUNDLE}" ]]; then
   cp -R "${RESOURCE_BUNDLE}" "${APP_DIR}/Contents/Resources/"
 else
@@ -241,4 +286,9 @@ codesign "${CODESIGN_ARGS[@]}" "${APP_DIR}/Contents/Frameworks/Sparkle.framework
 codesign "${CODESIGN_ARGS[@]}" --deep "${APP_DIR}"
 codesign --verify --deep --strict "${APP_DIR}"
 
+# Runs before any GUI/helper initialization and resolves packaged resources only.
+"${APP_DIR}/Contents/MacOS/${APP_NAME}" --resource-bundle-probe
+
 echo "${APP_DIR}"
+restore_signing_search_list
+trap - EXIT

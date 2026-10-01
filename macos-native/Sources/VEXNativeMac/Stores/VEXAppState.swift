@@ -22,12 +22,16 @@ final class VEXAppState: ObservableObject {
     @Published private(set) var entitlement: Entitlement?
     @Published private(set) var billingSummary: BillingSummary?
     @Published private(set) var billingPayments: [BillingPayment] = []
+    @Published private(set) var deviceAddons: [DeviceAddon] = []
+    @Published private(set) var accountDevices: [VpnDevice] = []
+    @Published private(set) var deviceManagementRequiresWeb = false
     @Published private(set) var updateCheck: AppUpdateCheckResult?
     @Published private(set) var remoteConfig: AppRemoteConfig?
     @Published private(set) var activeTunnel: PreparedTunnel?
     @Published private(set) var isAuthBusy = false
     @Published private(set) var isWaitingForWebAuth = false
     @Published private(set) var isBillingBusy = false
+    @Published private(set) var isDeviceBusy = false
     @Published private(set) var isVpnBusy = false
     @Published private(set) var isServerSelectionBusy = false
     @Published private(set) var authError: String?
@@ -78,15 +82,11 @@ final class VEXAppState: ObservableObject {
 
     init() {
         automaticUpdatesStartupDelayNanoseconds = Self.automaticUpdatesStartupDelayNanoseconds
-        #if DEBUG
         if VEXPreviewMode.suppressesRuntime {
             self.nativeUpdater = DisabledNativeUpdaterService()
         } else {
             self.nativeUpdater = NativeUpdaterServiceFactory.make()
         }
-        #else
-        self.nativeUpdater = NativeUpdaterServiceFactory.make()
-        #endif
     }
 
     init(
@@ -167,7 +167,7 @@ final class VEXAppState: ObservableObject {
         } else if biometricUnlockRequired && biometricAvailability.isAvailable && canUnlockStoredSession {
             statusMessage = "Подтвердите вход по \(biometricAvailability.label)."
             autoLaunchEnabled = startupService.isEnabled()
-            await loadUpdate()
+            await loadUpdate(reportErrors: false)
             await loadRemoteConfig()
             return
         }
@@ -178,7 +178,7 @@ final class VEXAppState: ObservableObject {
     }
 
     func refreshAll() async {
-        async let updateResult: Void = loadUpdate()
+        async let updateResult: Void = loadUpdate(reportErrors: false)
         async let remoteConfigResult: Void = loadRemoteConfig()
         guard let token = await authenticatedAccessToken() else {
             _ = await (updateResult, remoteConfigResult)
@@ -555,7 +555,10 @@ final class VEXAppState: ObservableObject {
             } else {
                 lastError = VpnAutopilotRuntimeError.connectFailed(helper.message ?? "VPN connection failed.")
             }
-            await helper.disconnect(releaseAntiLeak: true)
+            let teardownConfirmed = await helper.disconnect(releaseAntiLeak: true)
+            guard teardownConfirmed else {
+                throw VpnAutopilotRuntimeError.connectFailed("previous tunnel teardown was not confirmed")
+            }
         }
         throw lastError
     }
@@ -646,9 +649,14 @@ final class VEXAppState: ObservableObject {
         }
         if isVpnBusy, helper.status.state == .connecting {
             statusMessage = "Отменяем подключение VPN."
-            await helper.interruptWithDisconnect(releaseAntiLeak: !antiLeakEnabled)
+            let disconnected = await helper.interruptWithDisconnect(releaseAntiLeak: !antiLeakEnabled)
             isVpnBusy = false
-            clearActiveTunnelRouteState()
+            if disconnected {
+                clearActiveTunnelRouteState()
+                statusMessage = "VPN отключен."
+            } else {
+                statusMessage = helper.message ?? "Не удалось подтвердить отключение VPN."
+            }
             return
         }
         guard !isVpnBusy, !helper.isBusy else {
@@ -656,7 +664,12 @@ final class VEXAppState: ObservableObject {
             return
         }
         isVpnBusy = true
-        await helper.disconnect(releaseAntiLeak: !antiLeakEnabled)
+        let disconnected = await helper.disconnect(releaseAntiLeak: !antiLeakEnabled)
+        guard disconnected else {
+            statusMessage = helper.message ?? "Не удалось подтвердить отключение VPN."
+            isVpnBusy = false
+            return
+        }
         let reportedTunnel = activeTunnel
         clearActiveTunnelRouteState()
         statusMessage = "VPN отключен."
@@ -1084,13 +1097,77 @@ final class VEXAppState: ObservableObject {
     }
 
     func refreshUpdates() async {
-        await loadUpdate()
+        await loadUpdate(reportErrors: true)
         await loadRemoteConfig()
     }
 
     func refreshBilling() async {
         guard let token = accessToken else { return }
         await loadBilling(token)
+    }
+
+    func createDeviceAddonCheckout() async -> URL? {
+        guard !VEXPreviewMode.suppressesRuntime else { return nil }
+        if deviceManagementRequiresWeb { return BillingPresentation.billingDashboardURL }
+        guard let token = accessToken else { return nil }
+        guard !isBillingBusy else { return nil }
+        isBillingBusy = true
+        billingError = nil
+        defer { isBillingBusy = false }
+
+        do {
+            let returnURL = BillingPresentation.billingDashboardURL
+                .appending(queryItems: [URLQueryItem(name: "payment", value: "device_addon_pending")])
+            let failedURL = BillingPresentation.billingDashboardURL
+                .appending(queryItems: [URLQueryItem(name: "payment", value: "failed")])
+            let checkout = try await api.createDeviceAddonCheckout(
+                accessToken: token,
+                returnURL: returnURL,
+                failedURL: failedURL
+            )
+            guard let url = URL(string: checkout.url), url.scheme == "https", url.host != nil else {
+                throw VEXAPIError.invalidResponse
+            }
+            return url
+        } catch {
+            if (error as? VEXAPIError)?.isForbidden == true {
+                deviceManagementRequiresWeb = true
+                return BillingPresentation.billingDashboardURL
+            }
+            billingError = error.localizedDescription
+            statusMessage = error.localizedDescription
+            await submitDiagnostics(reason: "device_addon_checkout_failed", status: "warning", samples: ["error": error.localizedDescription])
+            return nil
+        }
+    }
+
+    func renameDevice(_ device: VpnDevice, name: String) async {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty, !isDeviceBusy, !VEXPreviewMode.suppressesRuntime else { return }
+        isDeviceBusy = true
+        defer { isDeviceBusy = false }
+        let owner = session?.user.id
+        guard let updated = await withSessionRetry(operation: { token in
+            try await self.api.renameVpnDevice(accessToken: token, deviceId: device.id, name: trimmedName)
+        }), session?.user.id == owner else { return }
+        accountDevices = accountDevices.map { $0.id == updated.id ? updated : $0 }
+    }
+
+    func removeDevice(_ device: VpnDevice) async {
+        guard !isDeviceBusy, !VEXPreviewMode.suppressesRuntime else { return }
+        guard activeTunnel?.device.id != device.id else {
+            statusMessage = "Сначала отключите VPN на этом устройстве."
+            return
+        }
+        isDeviceBusy = true
+        defer { isDeviceBusy = false }
+        let owner = session?.user.id
+        guard await withSessionRetry(operation: { token in
+            try await self.api.deleteVpnDevice(accessToken: token, deviceId: device.id)
+            return true
+        }) == true, session?.user.id == owner else { return }
+        accountDevices.removeAll { $0.id == device.id }
+        await refreshBilling()
     }
 
     private func loadUser(_ token: String) async {
@@ -1125,14 +1202,17 @@ final class VEXAppState: ObservableObject {
             billingSummary = cachedSummary
         }
 
-        // All three requests start concurrently; payments are awaited separately
+        // Requests start concurrently; payments are awaited separately
         // so a payments failure never masks the summary/entitlement result.
         async let plansResult = api.billingPlans()
         async let entitlementResult = api.entitlement(accessToken: token)
         async let paymentsResult = api.billingPayments(accessToken: token, limit: 24)
+        async let addonsResult = api.billingDeviceAddons(accessToken: token)
+        async let devicesResult = api.vpnDevices(accessToken: token)
 
         do {
             let (plans, currentEntitlement) = try await (plansResult, entitlementResult)
+            guard session?.user.id == billingUserId else { return }
             entitlement = currentEntitlement
             billingSummary = billingService.buildSummary(plans: plans, entitlement: currentEntitlement)
             if let billingSummary {
@@ -1140,6 +1220,7 @@ final class VEXAppState: ObservableObject {
             }
             billingError = nil
         } catch {
+            guard session?.user.id == billingUserId else { return }
             let fallback = cachedSummary ?? billingService.buildSummary(plans: [], entitlement: entitlement)
             billingSummary = fallback
             billingError = error.localizedDescription
@@ -1148,13 +1229,41 @@ final class VEXAppState: ObservableObject {
         }
 
         do {
-            billingPayments = try await paymentsResult
+            let loaded = try await paymentsResult
+            guard session?.user.id == billingUserId else { return }
+            billingPayments = loaded
         } catch {
+            guard session?.user.id == billingUserId else { return }
             billingPayments = []
             if billingError == nil {
                 billingError = error.localizedDescription
             }
             await submitDiagnostics(reason: "billing_payments_failed", status: "warning", samples: ["error": error.localizedDescription])
+        }
+
+        do {
+            let loaded = try await addonsResult
+            guard session?.user.id == billingUserId else { return }
+            deviceAddons = loaded
+            deviceManagementRequiresWeb = false
+        } catch {
+            guard session?.user.id == billingUserId else { return }
+            deviceAddons = []
+            if (error as? VEXAPIError)?.isForbidden == true {
+                deviceManagementRequiresWeb = true
+            } else {
+                await submitDiagnostics(reason: "device_addons_failed", status: "warning", samples: ["error": error.localizedDescription])
+            }
+        }
+
+        do {
+            let loaded = try await devicesResult
+            guard session?.user.id == billingUserId else { return }
+            accountDevices = loaded
+        } catch {
+            guard session?.user.id == billingUserId else { return }
+            accountDevices = []
+            await submitDiagnostics(reason: "account_devices_failed", status: "warning", samples: ["error": error.localizedDescription])
         }
     }
 
@@ -1215,7 +1324,7 @@ final class VEXAppState: ObservableObject {
         })
     }
 
-    private func loadUpdate(reportErrors: Bool = true) async {
+    private func loadUpdate(reportErrors: Bool = false) async {
         do {
             applyUpdateCheck(try await api.appUpdateCheck())
         } catch {
@@ -1501,6 +1610,9 @@ final class VEXAppState: ObservableObject {
         entitlement = nil
         billingSummary = nil
         billingPayments = []
+        deviceAddons = []
+        accountDevices = []
+        deviceManagementRequiresWeb = false
         self.authError = authError
         billingError = nil
         canUnlockStoredSession =

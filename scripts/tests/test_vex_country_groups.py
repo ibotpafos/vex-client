@@ -43,6 +43,16 @@ precondition(Formatting.latencyText(Double.nan)==nil)
 precondition(Formatting.latencyText(Double.infinity)==nil)
 precondition(Formatting.latencyText(-1)==nil)
 precondition(Formatting.latencyText(7.6)=="8 мс")
+for count in 1...6 {
+ let visible = min(count, 3)
+ let width = Formatting.locationCardWidth(containerWidth: 892, visibleCardCount: count, spacing: 12)
+ precondition(abs(width * Double(visible) + Double(visible - 1) * 12 - 892) < 0.01)
+}
+precondition(Formatting.photoTransitionDuration(reduceMotion: false)==0.45)
+precondition(Formatting.photoTransitionDuration(reduceMotion: true)==0.08)
+precondition(Formatting.selectionTransitionDuration(reduceMotion: true)==0.01)
+precondition(Formatting.pulseGradientEndRadius < Formatting.pulseCanvasSize / 2)
+print("PASS: photographic card widths fit three columns; Reduce Motion removes extended animation")
 print("PASS: Russian node plurals and invalid/rounded ping")
 print("PASS: country grouping, normalization, counts, selected/offline retention, duplicates, unknowns, empty/limit, missing/NaN ping, original IDs")
 '''
@@ -52,6 +62,7 @@ with tempfile.TemporaryDirectory(prefix='vex-country-test-') as d:
  subprocess.run([str(p/'probe')],check=True)
 home=(R/'macos-native/Sources/VEXNativeMac/Views/HomePanel.swift').read_text()
 assert 'return appState.locations' in home and 'ForEach(countries)' in home
-assert 'action: { expandedCountryID = country.id }' in home
+assert 'expandedCountryID = country.id' in home and 'onSelect(country.representative)' in home
+assert '.sorted { $0.id < $1.id }' in home
 assert 'onSelect(location)' in home
-print('PASS: home groups before limit; card opens chooser; explicit node selection retains original ID')
+print('PASS: home groups all nodes; stable country order; selected card opens chooser; node selection retains original ID')

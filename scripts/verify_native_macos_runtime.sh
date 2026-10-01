@@ -3,9 +3,10 @@ set -euo pipefail
 
 APP_PATH="${APP_PATH:-/Applications/VEX Native.app}"
 SOURCE_HELPER="${SOURCE_HELPER:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/macos-native/HelperResources/vex-helper}"
-ROOT_HELPER="${ROOT_HELPER:-/Library/Application Support/VEX VPN/helper/vex-helper}"
-ROOT_HELPER_DIR="$(/usr/bin/dirname "${ROOT_HELPER}")"
+ROOT_HELPER="${ROOT_HELPER:-/Library/PrivilegedHelperTools/app.vex.vpn.helper}"
+ROOT_HELPER_DIR="${ROOT_HELPER_DIR:-/Library/Application Support/VEX VPN/helper}"
 HELPER_PLIST="${HELPER_PLIST:-/Library/LaunchDaemons/app.vex.vpn.helper.plist}"
+HELPER_LABEL="${HELPER_LABEL:-app.vex.vpn.helper}"
 HELPER_SOCKET="${HELPER_SOCKET:-/var/run/vex-helper.sock}"
 STRICT="${STRICT:-0}"
 
@@ -72,10 +73,14 @@ root_helper_version="$(file_contents_or_empty "${ROOT_HELPER_DIR}/version" | /us
 helper_plist_run_at_load=""
 helper_plist_keep_alive_successful_exit=""
 helper_plist_keep_alive=""
+helper_plist_label=""
+helper_plist_program=""
 if [[ -f "${HELPER_PLIST}" ]]; then
   helper_plist_run_at_load="$(/usr/bin/plutil -extract RunAtLoad raw -o - "${HELPER_PLIST}" 2>/dev/null || true)"
   helper_plist_keep_alive_successful_exit="$(/usr/bin/plutil -extract KeepAlive.SuccessfulExit raw -o - "${HELPER_PLIST}" 2>/dev/null || true)"
   helper_plist_keep_alive="$(/usr/bin/plutil -extract KeepAlive raw -o - "${HELPER_PLIST}" 2>/dev/null || true)"
+  helper_plist_label="$(/usr/bin/plutil -extract Label raw -o - "${HELPER_PLIST}" 2>/dev/null || true)"
+  helper_plist_program="$(/usr/bin/plutil -extract ProgramArguments.0 raw -o - "${HELPER_PLIST}" 2>/dev/null || true)"
 fi
 
 helper_plist_is_persistent=false
@@ -92,6 +97,8 @@ echo "root_helper_version=${root_helper_version}"
 echo "helper_plist_run_at_load=${helper_plist_run_at_load}"
 echo "helper_plist_keep_alive_successful_exit=${helper_plist_keep_alive_successful_exit}"
 echo "helper_plist_keep_alive=${helper_plist_keep_alive}"
+echo "helper_plist_label=${helper_plist_label}"
+echo "helper_plist_program=${helper_plist_program}"
 echo "helper_plist_is_persistent=${helper_plist_is_persistent}"
 
 if [[ -z "${app_helper_sha}" ]]; then
@@ -114,6 +121,18 @@ if [[ -n "${app_helper_version}" && "${app_helper_version}" != "${root_helper_ve
 fi
 if [[ "${helper_plist_is_persistent}" != "true" ]]; then
   record_failure "helper LaunchDaemon is not configured to start and stay alive"
+fi
+if [[ "${helper_plist_label}" != "${HELPER_LABEL}" ]]; then
+  record_failure "helper LaunchDaemon label does not match ${HELPER_LABEL}"
+fi
+if [[ "${helper_plist_program}" != "${ROOT_HELPER}" ]]; then
+  record_failure "helper LaunchDaemon program does not use PrivilegedHelperTools"
+fi
+if /bin/launchctl print "system/${HELPER_LABEL}" >/dev/null 2>&1; then
+  echo "helper_launchd_service=loaded"
+else
+  echo "helper_launchd_service=missing"
+  record_failure "helper LaunchDaemon service is not loaded"
 fi
 if [[ -n "${app_helper_sha}" && -n "${root_helper_sha}" && "${app_helper_sha}" != "${root_helper_sha}" ]] \
   || [[ "${helper_plist_is_persistent}" != "true" ]]; then
@@ -141,6 +160,11 @@ echo "active_network_vpns_begin"
 /usr/sbin/scutil --nc list 2>/dev/null | /usr/bin/grep '(Connected)' || true
 echo "active_network_vpns_end"
 
-if [[ "${STRICT}" == "1" && "${failures}" -gt 0 ]]; then
-  exit 1
+if [[ "${failures}" -gt 0 ]]; then
+  echo "verification=failed"
+  if [[ "${STRICT}" == "1" ]]; then
+    exit 1
+  fi
+else
+  echo "verification=ok"
 fi

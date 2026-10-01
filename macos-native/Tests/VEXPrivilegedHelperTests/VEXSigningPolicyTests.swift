@@ -9,6 +9,7 @@ final class VEXSigningPolicyTests: XCTestCase {
         XCTAssertEqual(SecRequirementCreateWithString(SystemPeerAuthenticator.clientRequirement as CFString, [], &requirement), errSecSuccess)
         XCTAssertNotNil(requirement)
         XCTAssertTrue(SystemPeerAuthenticator.clientRequirement.contains("identifier \"app.vex.vpn.native\""))
+        XCTAssertTrue(SystemPeerAuthenticator.clientRequirement.contains("certificate leaf = H\"f5817aa3c6875bee8828132e67a74422758f2834\""))
         XCTAssertTrue(SystemPeerAuthenticator.clientRequirement.contains("certificate leaf = H\"c6fd1853a177fbcfb04c5d4f78fbe405777b3a3e\""))
         XCTAssertTrue(SystemPeerAuthenticator.clientRequirement.contains("anchor apple generic"))
         XCTAssertEqual(SystemPeerAuthenticator.localCertificateSHA256, "441f6e9034ee7582c1ca3579ea805f91f68c3135ec2f59cddc00173fe689dca1")

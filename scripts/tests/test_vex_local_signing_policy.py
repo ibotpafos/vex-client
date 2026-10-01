@@ -9,8 +9,9 @@ import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 GOOD, WRONG_ID = map(pathlib.Path, sys.argv[1:3])
-SHA1 = 'c6fd1853a177fbcfb04c5d4f78fbe405777b3a3e'
-REQUIREMENT = f'identifier "app.vex.vpn.native" and (certificate leaf = H"{SHA1}" or (anchor apple generic and certificate leaf[subject.OU] = "3JLW9XNU53"))'
+LEGACY_SHA1 = 'f5817aa3c6875bee8828132e67a74422758f2834'
+CURRENT_SHA1 = 'c6fd1853a177fbcfb04c5d4f78fbe405777b3a3e'
+REQUIREMENT = f'identifier "app.vex.vpn.native" and (certificate leaf = H"{LEGACY_SHA1}" or certificate leaf = H"{CURRENT_SHA1}" or (anchor apple generic and certificate leaf[subject.OU] = "3JLW9XNU53"))'
 
 
 def run(*args, **kwargs):
@@ -38,8 +39,9 @@ with tempfile.TemporaryDirectory(prefix='vex-signing-policy-') as temporary:
         assert (signature.returncode == 0) == (expectation == 'accept'), signature.stderr
         print(f'{name}: {result.stdout.strip()}; codesign exit={signature.returncode}')
     # Isolate the certificate predicate against an unrelated, valid Apple certificate.
-    wrong_cert = run('/usr/bin/codesign', '--verify', '--strict', '-R=certificate leaf = H"' + SHA1 + '"', '/bin/echo')
-    assert wrong_cert.returncode != 0
+    for sha1 in [LEGACY_SHA1, CURRENT_SHA1]:
+        wrong_cert = run('/usr/bin/codesign', '--verify', '--strict', '-R=certificate leaf = H"' + sha1 + '"', '/bin/echo')
+        assert wrong_cert.returncode != 0
     print('wrong-certificate: reject')
     import os
     env = dict(os.environ, PROBE_EXPECT='reject', VEX_EXPECTED_TEAM_ID='3JLW9XNU53" or true /*', VEX_HELPER_ALLOW_ADHOC_CLIENT='1', VEX_EXPECTED_CERT_SHA256='anything')
@@ -56,6 +58,7 @@ with tempfile.TemporaryDirectory(prefix='vex-signing-policy-') as temporary:
         assert not marker.exists()
     print('shell-input-injection: 5/5 literal round trips; no execution')
     for path in ['macos-native/Sources/VEXHelperCore/PeerAuthenticator.swift', 'macos-native/Sources/VEXNativeMac/Services/VEXHelperInstaller.swift', 'macos-native/HelperResources/install-vex-vpn-helper.sh', 'scripts/install_native_macos_helper_from_app.sh']:
-        assert SHA1 in (ROOT / path).read_text(), path
+        contents = (ROOT / path).read_text()
+        assert LEGACY_SHA1 in contents and CURRENT_SHA1 in contents, path
     print('fixed-pin-consistency: 4/4 files')
 print('PASS: local signing policy matrix')

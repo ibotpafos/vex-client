@@ -19,12 +19,20 @@ private enum VEXAppResources {
 
 struct BundleImage: View {
     let name: String
+    var contentMode: ContentMode = .fit
 
+    @ViewBuilder
     var body: some View {
         if let image = NSImage(named: name) ?? VEXAppResources.bundle?.image(name) {
-            Image(nsImage: image)
-                .resizable()
-                .scaledToFit()
+            if contentMode == .fill {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFit()
+            }
         } else {
             Color.clear
         }

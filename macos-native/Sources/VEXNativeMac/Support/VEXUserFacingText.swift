@@ -25,7 +25,7 @@ enum VEXUserFacingText {
         }
         if lower.contains("data couldn’t be read because it is missing")
             || lower.contains("data couldn't be read because it is missing") {
-            return "Системный компонент VEX запускается..."
+            return "Не удалось обновить данные VEX."
         }
         if lower.contains("helper status unavailable") {
             return "Проверяем helper..."

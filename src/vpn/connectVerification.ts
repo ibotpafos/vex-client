@@ -30,8 +30,14 @@ export async function waitForVerifiedVpnConnection(
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     await wait(pollMs);
     latestStatus = await readStatus();
+    // Android can emit a transition snapshot while the native status reader
+    // holds tunnelMutex. It is not a terminal disconnect, and must not roll a
+    // working server switch back. Keep the same bounded verification budget.
+    if (latestStatus.state === 'connecting' || latestStatus.state === 'verifying') {
+      continue;
+    }
     if (latestStatus.state !== 'connected') {
-      throw new Error('VPN disconnected before the handshake completed.');
+      throw new Error(`VPN disconnected before the handshake completed (${latestStatus.state}).`);
     }
     if (isHandshakeVerifiedForAttempt(latestStatus, options.minimumHandshakeEpochMillis)) {
       return latestStatus;

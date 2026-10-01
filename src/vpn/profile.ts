@@ -1,6 +1,7 @@
 import { entitlement, hasPaidEntitlement, preparedTunnel, rotateManagedVpnKey, type Entitlement, type VpnDevice } from '../api/vexApi';
 import { loadHotVpnProfile, profileFromHotRecord, saveHotVpnProfile } from './hotProfileCache';
 import { defaultVpnBypassRegion, defaultVpnRoutingMode, defaultVpnRoutingPolicyVersion, type VpnRoutingMode } from './routingPolicy';
+import { runProfileRequest } from './profileRequestQueue';
 import { vpnProfileAddressMatchesDevice } from './profileConsistency';
 
 export type VpnProfile = {
@@ -27,7 +28,7 @@ export async function resolveVpnProfile(
   accessToken?: string,
   knownEntitlement?: Entitlement | null,
   locationId = 'de',
-  options: { allowPersistentHotProfile?: boolean; forceRefresh?: boolean; routingMode?: VpnRoutingMode; userId?: string } = {},
+  options: { allowPersistentHotProfile?: boolean; forceRefresh?: boolean; shouldFetch?: () => boolean; routingMode?: VpnRoutingMode; userId?: string } = {},
 ): Promise<VpnProfile> {
   const token = accessToken?.trim() || '';
   const normalizedLocationId = normalizeLocationId(locationId);
@@ -42,7 +43,7 @@ export async function resolveVpnProfile(
       if (hotProfile) {
         const profile = profileFromHotRecord(hotProfile);
         if (profile.routingMode !== routingMode || !vpnProfileAddressMatchesDevice(profile)) {
-          return refreshVpnProfile(token, { routingMode }, knownEntitlement, normalizedLocationId, options.userId);
+          return refreshVpnProfile(token, { routingMode }, knownEntitlement, normalizedLocationId, options.userId, options.shouldFetch);
         }
         cachedProfile = { key: cacheKey, profile };
         return profile;
@@ -51,7 +52,7 @@ export async function resolveVpnProfile(
   }
 
   if (token) {
-    return refreshVpnProfile(token, { routingMode }, knownEntitlement, normalizedLocationId, options.userId);
+    return refreshVpnProfile(token, { routingMode }, knownEntitlement, normalizedLocationId, options.userId, options.shouldFetch);
   }
 
   throw new Error('Сначала войдите в аккаунт.');
@@ -93,6 +94,7 @@ async function refreshVpnProfile(
   knownEntitlement?: Entitlement | null,
   locationId = 'de',
   userId?: string,
+  shouldFetch?: () => boolean,
 ): Promise<VpnProfile> {
   const currentEntitlement = knownEntitlement ?? await entitlement(token);
   if (!hasPaidEntitlement(currentEntitlement)) {
@@ -101,7 +103,7 @@ async function refreshVpnProfile(
 
   const selectedLocationId = normalizeLocationId(options.locationId || locationId);
   const routingMode = options.routingMode ?? defaultVpnRoutingMode;
-  const tunnel = await preparedTunnel(token, undefined, { ...options, locationId: selectedLocationId, routingMode });
+  const tunnel = await runProfileRequest(() => preparedTunnel(token, undefined, { ...options, locationId: selectedLocationId, routingMode }), shouldFetch);
   const profile: VpnProfile = {
     config: tunnel.config,
     device: tunnel.device,

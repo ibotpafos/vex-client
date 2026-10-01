@@ -1,0 +1,4 @@
+<resources>
+    <!-- Public OAuth audience, verified against the deployed VEX web configuration. -->
+    <string name="vex_google_server_client_id" translatable="false">789724768389-9fs43svoqm2khpsrcnvf4k1t5gl9ksgl.apps.googleusercontent.com</string>
+</resources>

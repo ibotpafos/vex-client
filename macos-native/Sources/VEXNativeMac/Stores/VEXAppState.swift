@@ -415,7 +415,7 @@ final class VEXAppState: ObservableObject {
                 return try await connectPreparedTunnel(rotatedTunnel, helper: helper, generation: generation)
             }
 
-            do {
+            return try await VpnAdmissionRecovery.retryFreshProfile {
                 try ensureConnectStillDesired(generation: generation)
                 let freshTunnel = try await profileService.resolveProfile(
                     accessToken: token,
@@ -424,7 +424,7 @@ final class VEXAppState: ObservableObject {
                     forceRefresh: true
                 )
                 return try await connectPreparedTunnel(freshTunnel, helper: helper, generation: generation)
-            } catch {
+            } failover: { error in
                 guard allowsAutomaticFailover, assessment.canFailover, let failoverLocation = bestFailoverLocation(excluding: initialTunnel.locationId) else {
                     throw error
                 }
@@ -681,6 +681,10 @@ final class VEXAppState: ObservableObject {
 
     func openSignIn() {
         beginWebAuth(mode: .login)
+    }
+
+    func openGoogleSignIn() {
+        beginWebAuth(mode: .login, provider: .google)
     }
 
     func openRegistration() {
@@ -1137,7 +1141,7 @@ final class VEXAppState: ObservableObject {
     }
     #endif
 
-    private func beginWebAuth(mode: WebAuthMode) {
+    private func beginWebAuth(mode: WebAuthMode, provider: WebAuthProvider? = nil) {
         guard !isAuthBusy, !isWaitingForWebAuth else { return }
         authError = nil
         isWaitingForWebAuth = true
@@ -1146,7 +1150,7 @@ final class VEXAppState: ObservableObject {
         webAuthTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let callbackURL = try await authService.startWebAuth(mode: mode)
+                let callbackURL = try await authService.startWebAuth(mode: mode, provider: provider)
                 guard !Task.isCancelled else { return }
                 isAuthBusy = true
                 await finishWebAuthCallback(callbackURL)

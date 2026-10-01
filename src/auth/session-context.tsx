@@ -8,6 +8,7 @@ import { refreshSession as refreshApiSession, reportAppInstall, type AuthSession
 import { ApiRequestError } from '@/api/error';
 import { uploadClientDiagnostics } from '@/diagnostics/clientDiagnostics';
 import { errorMessage } from '@/utils/error';
+import { clearGoogleCredentialState } from '@/native/googleAuth';
 import { disconnectVpn } from '@/native/vexVpn';
 
 type SessionContextValue = {
@@ -154,6 +155,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
 
   const signOut = useCallback(async () => {
     await applySignOutState();
+    await clearGoogleCredentialState().catch(() => undefined);
   }, [applySignOutState]);
 
   const refreshSession = useCallback(async () => {

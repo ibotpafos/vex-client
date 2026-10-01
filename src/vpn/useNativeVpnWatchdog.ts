@@ -35,6 +35,7 @@ type NativeVpnWatchdogInput = {
   fetchDeviceUsage: (accessToken: string) => Promise<VpnDeviceUsage[]>;
   isRetryableConnectError: RecoverVpnConnectionInput['isRetryableConnectError'];
   isVpnBusy: boolean;
+  isCurrentLocation?: (locationId: string) => boolean;
   onRecoveryFailed: (message: string) => void;
   onRecoveryStarted?: (message: string) => void;
   onRecoverySucceeded: (profile: VpnProfile, status: VpnStatus, locationId: string) => void;
@@ -65,7 +66,13 @@ type NativeVpnWatchdog = {
 export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWatchdog {
   const activeProfileForStatus = input.activeProfile;
   const staleHandshakeSecondsForStatus = input.staleHandshakeSeconds;
-  const submitStatusDiagnostics = input.submitDiagnostics;
+  // Telemetry phase changes must not dispose the recovery that reported them.
+  const telemetryRef = useRef({ submitDiagnostics: input.submitDiagnostics, reportConnect: input.reportConnect });
+  telemetryRef.current = { submitDiagnostics: input.submitDiagnostics, reportConnect: input.reportConnect };
+  const submitDiagnostics = useCallback((...args: Parameters<NativeVpnWatchdogInput['submitDiagnostics']>) =>
+    telemetryRef.current.submitDiagnostics(...args), []);
+  const reportConnect = useCallback((profile: VpnProfile) => telemetryRef.current.reportConnect(profile), []);
+  const submitStatusDiagnostics = submitDiagnostics;
   const backendHealthFailuresRef = useRef(0);
   const localHealthFailuresRef = useRef(0);
   const lastLocalDegradedStatusRef = useRef<VpnStatus | null>(null);
@@ -119,11 +126,18 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
     }
 
     let disposed = false;
+    const isCurrent = () => !disposed && !input.isVpnBusy &&
+      activeProfile.locationId === input.activeLocationId &&
+      input.isCurrentLocation?.(input.activeLocationId) !== false;
     const checkNativeTunnelHealth = async () => {
-      if (disposed || reconnectInFlightRef.current || input.isVpnBusy || input.operationInFlightRef.current) {
+      if (!isCurrent() || reconnectInFlightRef.current || input.operationInFlightRef.current) {
         return;
       }
 
+      // Serialize health checks as well as recovery; an older check must not
+      // clear the lease of a newer check while its network requests are pending.
+      reconnectInFlightRef.current = true;
+      let ownsOperation = false;
       try {
         let activeUsage: VpnDeviceUsage | undefined;
         let usageError: string | undefined;
@@ -134,6 +148,7 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
           usageError = errorMessage(error, 'usage_check_failed');
         }
 
+        if (!isCurrent() || input.operationInFlightRef.current) return;
         const localStatus = lastLocalDegradedStatusRef.current ?? undefined;
         const health = assessNativeTunnelHealth({
           deviceUsage: activeUsage,
@@ -155,6 +170,7 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
         const probe = await input.probeHealth?.(activeProfile).catch((error): VpnAutopilotProbeResult => ({
           endpointProbeError: errorMessage(error, 'network_probe_failed'),
         }));
+        if (!isCurrent() || input.operationInFlightRef.current) return;
         const assessment = assessVpnAutopilotIssue({
           healthReasons: health.reasons,
           localStatus,
@@ -162,12 +178,15 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
           usageError,
         });
 
-        reconnectInFlightRef.current = true;
+        // Claim the same lease used by explicit connect/switch operations before
+        // any awaited diagnostics or native mutation can overlap user intent.
+        input.operationInFlightRef.current = true;
+        ownsOperation = true;
         const reconnectStartedAt = Date.now();
         lastReconnectAtRef.current = Date.now();
         resetHealthFailures();
         input.onRecoveryStarted?.('Восстанавливаем VPN');
-        await input.submitDiagnostics('native_watchdog_reconnect', 'degraded', {
+        await submitDiagnostics('native_watchdog_reconnect', 'degraded', {
           ...assessment.sample,
           active_usage: activeUsage,
           local_status: localStatus,
@@ -182,6 +201,7 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
           transportFrom: vpnTransportTelemetry(activeProfile),
         }).catch(() => undefined);
 
+        if (!isCurrent()) return;
         const recovery = await recoverVpnConnection({
           activeLocationId: input.activeLocationId,
           activeProfile,
@@ -199,8 +219,8 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
         if (recovery.ok) {
           recoveryBackoffRef.current = resetRecoveryBackoff();
           input.onRecoverySucceeded(recovery.profile, recovery.status, recovery.locationId);
-          input.reportConnect(recovery.profile);
-          void input.submitDiagnostics('native_watchdog_reconnect_result', 'ok', {
+          reportConnect(recovery.profile);
+          void submitDiagnostics('native_watchdog_reconnect_result', 'ok', {
             ...assessment.sample,
             previous_location_id: recovery.previousLocationId,
             next_location_id: recovery.locationId,
@@ -225,7 +245,7 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
           jitterRatio: recoveryJitterRatio,
           maxDelayMs: input.reconnectCooldownMs * recoveryMaxBackoffMultiplier,
         });
-        await input.submitDiagnostics('native_watchdog_reconnect_result', 'failed', {
+        await submitDiagnostics('native_watchdog_reconnect_result', 'failed', {
           ...assessment.sample,
           previous_location_id: recovery.previousLocationId,
           next_location_id: recovery.locationId,
@@ -241,11 +261,13 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
           transportFrom: vpnTransportTelemetry(activeProfile),
         }).catch(() => undefined);
       } catch (error) {
-        await input.submitDiagnostics('native_watchdog_check_failed', 'error', {
+        if (!isCurrent()) return;
+        await submitDiagnostics('native_watchdog_check_failed', 'error', {
           watchdog_error: errorMessage(error, 'native_watchdog_check_failed'),
         }).catch(() => undefined);
         backendHealthFailuresRef.current = 0;
       } finally {
+        if (ownsOperation) input.operationInFlightRef.current = false;
         reconnectInFlightRef.current = false;
       }
     };
@@ -271,6 +293,7 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
     input.fetchDeviceUsage,
     input.isRetryableConnectError,
     input.isVpnBusy,
+    input.isCurrentLocation,
     input.onRecoveryFailed,
     input.onRecoveryStarted,
     input.onRecoverySucceeded,
@@ -279,14 +302,14 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
     input.probeHealth,
     input.pollMs,
     input.reconnectCooldownMs,
-    input.reportConnect,
+    reportConnect,
     input.resolveProfile,
     input.rotateProfile,
     input.serverSelectionMode,
     input.sessionAccessToken,
     input.setCachedProfile,
     input.staleHandshakeSeconds,
-    input.submitDiagnostics,
+    submitDiagnostics,
   ]);
 
   function resetHealthFailures() {

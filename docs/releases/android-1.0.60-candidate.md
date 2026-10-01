@@ -53,3 +53,15 @@ remains open.
 TODO: Finish the approved authenticated preview publisher preflight and prove
 signed apply, connected-VPN deferral and OTA rollback on the attached device.
 Customer release remains gated; the prior TODO and broader acceptance remain.
+
+## Final native-fix signed candidate (2026-10-01)
+
+- Source: `6592a57248767190367e3ca4e353b5b95d330ea6`.
+- Trusted signing workflow: https://github.com/ibotpafos/vex-client/actions/runs/36849992231.
+- APK SHA-256: `6241710d54eca0eebf931cabebe0ed96bfcc1bcd0787c51be9b7e9d2e8f02e5c`.
+- Production package `com.vexguard.app`, version `1.0.60`, versionCode `1006068`, arm64-v8a/armeabi-v7a.
+- Original production certificate verified against installed 1.0.59.
+- Production APK upgrade/startup verified on isolated API35 without clearing data; unauthenticated.
+- Same compiled native source in Dev passed authenticated Android28 connect/background/manual disconnect and HTTPS204.
+- Native backend-DOWN baseline/modified/rollback gates: 2/0/2; four lifecycle cases accepted. No OS-lockdown, process-death or zero-packet-gap claim.
+- Release metadata-only binding changes after signing do not replace the signing source identity with a newer commit. Production publication remains separate from this candidate evidence.

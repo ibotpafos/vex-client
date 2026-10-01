@@ -38,7 +38,21 @@
 - `withSessionRetry` и `resolveProfileForAuthenticatedSession` связывают ошибки/ответы с токеном и `authenticatedSessionGeneration`: старый 401 не refresh/retry/expire новую сессию. Generation меняется при login/unlock/reset/termination, но не при обычном token refresh. `sessionChanged` из подготовки профиля не вызывает helper disconnect cleanup.
 - Исполнимый fake harness реальных retry/entitlement/profile bodies воспроизвёл ошибки до исправления (exit 1), после исправления все stale-path assertions прошли (exit 0). Рабочие current-session retry/expiry принимаются и до, и после изменений.
 - Реальные `loadUser`/`refreshLocations` прошли same-token re-login fixtures: поздние success/error не меняют пользовательские данные. `loadBilling` получил такие же generation/token/owner guards; его отдельная исполнимая regression входит в текущий offline gate.
-- Эти результаты не доказывают весь `connectWithAutopilot` или реальный tunnel/update/permission UX: next runner отдельно проверяет границы `performConnectVPN` с fake downstream connector. Полный релиз и parity всё ещё не подтверждены.
+- Эти результаты не доказывают весь `connectWithAutopilot` или реальный tunnel/update/permission UX. Последующая проверка `performConnectVPN` описана ниже; полный релиз и parity всё ещё не подтверждены.
+
+## Продолжение 4: границы авторизованного подключения
+
+- Записанный runner действительно был запущен первым. Он выявил продолжение старого connect intent после auth boundary (runtime SIGTRAP, exit 251). Ошибка не была подменена анализом текста; исходные stderr/exit сохранены.
+- `ensureAuthenticatedSessionCurrent` проверяет generation, текущий access token и owner; `ensureConnectStillDesired` сначала классифицирует auth invalidation как `sessionChanged`, а не как cancellation с disconnect cleanup. Контекст передаётся через `performConnectVPN`, autopilot, подготовку туннеля, handshake polling и смену локации. Config writing в rotation/fresh/failover откладывается до ближайшей проверенной admission границы; default `writeHelperConfig=true` у service сохранён для совместимости.
+- Фактическое тело `performConnectVPN` исполнено с fake auth/entitlement/connector gates. Поздние ответы не меняют replacement UI/tunnel, не начинают следующий connector и не ставят stale report. Нормальный путь, ordinary same-account refreshed profile token, отмена и сообщение ошибки остаются рабочими в fixtures. Это не live helper acceptance.
+- Фактическое тело `connectPreparedTunnel` и обе проверки контекста исполнены с fake readiness/config/connect/handshake. BASELINE: все четыре `stopped=false`, exit 1; MODIFIED: все `stopped=true`, exit 0; `valid_current=true` в обоих случаях. Уже отправленные до границы readiness/write/connect допускаются (счётчик 1); последующие действия после наблюдаемой границы запрещены. Handshake в этом тесте — fake downstream, а не runtime проверка тела `verifiedHandshake`.
+- Реальное `VpnAdmissionRecovery.retryFreshProfile` сохраняет default retry/failover и config rejection. Новый caller predicate прекращает failover для auth invalidation/cancellation: BASELINE stale/cancel failovers=1/1, MODIFIED=0/0; transient/default=1/1 и normal path=true сохранены. Это только service-level runtime, не вся autopilot orchestration.
+- Исправлены именно fixture-ошибки: отсутствующее добавление extracted auth guard в prepared harness, ранняя проверка queued report без count latch и неправомерное ожидание `nil` вместо replacement UI, записанного после suspension. Ошибки компиляции и ранние SIGTRAP сохранены; окончательные negative checks печатают все outcomes и возвращают exit 1 без crash.
+- Read-only source review не подтвердил нового stale-command дефекта: helper up/down уже отправлены до response-await; post-await guard не может отменить отправленную команду, но предотвращает дальнейшие действия. Нельзя объявлять это атомарным откатом сети. CGRX risk scan partial: native Swift исключён, Python dynamic dispatch неизвестен; Narsil audit не выполнялся.
+- Полная actual-body матрица policy/probe/usage/rotation/fresh/failover остаётся отдельным unfinished gate. `TODO(autopilot-full-runtime)` находится у фактического `connectWithAutopilot`; compile-only подготовка runner не считается исполнением runtime.
+- Read-only production deploy/fleet evidence в этом цикле вернули timeout 20s. Это не доказательство ни аварии, ни здорового fleet. Отчёт release truth остаётся watch; production ничего не менялось.
+
+- После этих native изменений повторно выполнены полный offline aggregate (exit 0), universal app/helper build (exit 0), strict signature/resources/metadata проверки (exit 0). Source hashes зафиксированы и повторно сверены. Public gate снова exit 1: только ad-hoc signature; никакой installed-runtime проверки, установки или публикации.
 
 ## Артефакты транзакции
 
@@ -58,12 +72,12 @@
 - `macos-native/Sources/VEXNativeMac/Services/SparkleUpdaterService.swift`: `TODO(vpn-update-safety)` — VM qualification deferred Sparkle handoff до включения production automatic install.
 - `macos-native/Sources/VEXNativeMac/Models/VEXModels.swift`, `VpnRoutingMode`: per-app provider и isolated routing/leak acceptance отсутствуют. Возврат `nil` при пустом каталоге уже реализован и не является незавершённым TODO.
 - `macos-native/Sources/VEXNativeMac/Services/CustomerNotificationService.swift`: `TODO(notification-acceptance)` — реальный opt-in/permission sheet/banner на изолированном профиле не проверен; fake backend этого не доказывает.
-- `macos-native/Sources/VEXNativeMac/Stores/VEXAppState.swift`: `TODO(authenticated-connect-boundary)` — whole-flow fake-helper acceptance через autopilot awaits ещё не пройден.
+- `macos-native/Sources/VEXNativeMac/Stores/VEXAppState.swift`: `TODO(autopilot-full-runtime)` — actual-body policy/probe/rotation/fresh/failover runtime matrix ещё не исполнена; main/prepared boundary fixtures уже пройдены.
 - `macos-native/Sources/VEXNativeMac/Services/CustomerRealtimeService.swift`: APNs/background delivery не реализован; credentials/entitlements/device qualification отсутствуют. Foreground policy и opt-in wiring уже реализованы, это не незавершённый TODO.
 
 ## Следующие действия (не более пяти)
 
-1. Выполнить next `qualify-authenticated-connect-boundary.py` на фактическом `performConnectVPN` с fake helper/connector; довести auth-boundary guards через autopilot awaits. SSE callback/in-memory transport уже исполнен; реальный permission/banner остаётся отдельным acceptance.
+1. Выполнить next `qualify-autopilot-auth-boundary.py` на фактическом `connectWithAutopilot` с inert downstream continuation gates; завершить policy/probe/rotation/fresh/failover matrix. Main/prepared/auth/recovery fixtures уже исполнены; реальный permission/banner остаётся отдельным acceptance.
 2. Запустить полный XCTest с Xcode; реализовать process-scoped provider и APNs с необходимыми signing/entitlement gates.
 3. На отдельном Mac/VM проверить signed helper install/rollback, handshake, IPv4/IPv6/DNS/HTTPS, failover и deferred Sparkle update. Пользователь подтвердил, что стенда пока нет.
 4. Подготовить подписанный/notarized release, обновить согласованную native version metadata; ad-hoc кандидат не устанавливать поверх активного VPN.

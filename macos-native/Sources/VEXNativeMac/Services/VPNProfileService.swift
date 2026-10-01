@@ -221,7 +221,7 @@ struct VPNProfileService {
         return tunnel
     }
 
-    func rotateKey(accessToken: String, currentTunnel: PreparedTunnel?) async throws -> PreparedTunnel? {
+    func rotateKey(accessToken: String, currentTunnel: PreparedTunnel?, writeHelperConfig: Bool = true) async throws -> PreparedTunnel? {
         guard let currentTunnel else { return nil }
         let nextKey = try keyStore.rotate()
         _ = try await api.rotateManagedVpnKey(
@@ -234,7 +234,8 @@ struct VPNProfileService {
             accessToken: accessToken,
             locationId: currentTunnel.locationId,
             routingMode: currentTunnel.routingMode,
-            forceRefresh: true
+            forceRefresh: true,
+            writeHelperConfig: writeHelperConfig
         )
     }
 

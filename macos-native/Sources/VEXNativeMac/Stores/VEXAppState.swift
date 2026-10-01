@@ -369,16 +369,22 @@ final class VEXAppState: ObservableObject {
             statusMessage = desiredVpnState == .connected ? "Операция VPN уже выполняется." : "Отменяем подключение VPN."
             return
         }
+        let sessionGeneration = authenticatedSessionGeneration
+        let accountID = session?.user.id
         isVpnBusy = true
         defer { isVpnBusy = false }
 
-        guard let token = await authenticatedAccessToken() else {
+        let tokenResult = await authenticatedAccessToken()
+        guard (try? ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accountID: accountID)) != nil else { return }
+        guard let token = tokenResult else {
             statusMessage = "Сначала войдите в аккаунт."
             return
         }
+        guard accessToken == token else { return }
         guard let requestToken = await ensureEntitlementForConnect(accessToken: token) else {
             return
         }
+        guard (try? ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: requestToken, accountID: accountID)) != nil else { return }
         guard entitlement?.hasPaidAccess == true else {
             statusMessage = entitlement == nil ? "Не удалось проверить подписку." : "Для VPN нужна активная подписка."
             await submitDiagnostics(reason: "entitlement_missing_before_connect", status: "auth_error", helperStatus: helper.status, samples: ["message": statusMessage ?? ""])
@@ -390,8 +396,9 @@ final class VEXAppState: ObservableObject {
             statusMessage = NativeLocationSelectionError.unavailable.localizedDescription
             return
         }
+        var operationToken = requestToken
         do {
-            try ensureConnectStillDesired(generation: generation)
+            try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration, accessToken: operationToken, accountID: accountID)
             statusMessage = "Готовим VPN-профиль."
             let (tunnel, tunnelToken) = try await resolveProfileForAuthenticatedSession(
                 accessToken: requestToken,
@@ -400,19 +407,24 @@ final class VEXAppState: ObservableObject {
                 forceRefresh: false,
                 prevalidatedEntitlement: entitlement
             )
-            try ensureConnectStillDesired(generation: generation)
+            operationToken = tunnelToken
+            try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration, accessToken: operationToken, accountID: accountID)
             let connectedTunnel = try await connectWithAutopilot(
                 initialTunnel: tunnel,
                 accessToken: tunnelToken,
                 helper: helper,
-                generation: generation
+                generation: generation,
+                sessionGeneration: sessionGeneration,
+                accountID: accountID
             )
-            try ensureConnectStillDesired(generation: generation)
+            try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration, accessToken: operationToken, accountID: accountID)
             activeTunnel = connectedTunnel
             statusMessage = "VPN подключен через \(selectedLocation?.displayName ?? connectedTunnel.locationId.uppercased())."
             // Reporting is fire-and-forget: the tunnel is already up, so a slow
             // API round-trip must neither hold the busy state nor delay feedback.
-            Task { [api] in
+            Task { [weak self, api] in
+                guard let self,
+                    (try? self.ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: tunnelToken, accountID: accountID)) != nil else { return }
                 await api.reportVpnConnect(accessToken: tunnelToken, tunnel: connectedTunnel)
             }
         } catch AuthenticatedOperationError.sessionChanged {
@@ -420,13 +432,17 @@ final class VEXAppState: ObservableObject {
             // Never run disconnect cleanup for a stale authentication operation.
             return
         } catch is CancellationError {
+            guard (try? ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: operationToken, accountID: accountID)) != nil else { return }
             await helper.interruptWithDisconnect(releaseAntiLeak: !antiLeakEnabled)
+            guard (try? ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: operationToken, accountID: accountID)) != nil else { return }
             clearActiveTunnelRouteState()
             statusMessage = "Подключение VPN отменено."
         } catch {
+            guard (try? ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: operationToken, accountID: accountID)) != nil else { return }
             statusMessage = connectErrorMessage(error)
             if !error.localizedDescription.contains("VPN_CONFIG_INVALID") {
                 await helper.interruptWithDisconnect(releaseAntiLeak: true)
+                guard (try? ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: operationToken, accountID: accountID)) != nil else { return }
                 clearActiveTunnelRouteState()
             } else {
                 activeResilienceRoute = nil
@@ -435,32 +451,45 @@ final class VEXAppState: ObservableObject {
             await submitDiagnostics(reason: "vpn_connect_failed", status: "error", helperStatus: helper.status, samples: ["error": error.localizedDescription])
         }
 
+        guard (try? ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: operationToken, accountID: accountID)) != nil else { return }
         if desiredVpnState == .disconnected, helper.status.state != .disconnected {
             await performDisconnectVPN(using: helper, reason: "user", generation: vpnOperationGeneration)
         }
     }
 
-    private func connectWithAutopilot(initialTunnel: PreparedTunnel, accessToken token: String, helper: VEXHelperModel, generation: Int) async throws -> PreparedTunnel {
-        // TODO(authenticated-connect-boundary): extend the offline fake-helper
-        // transition harness across every autopilot await before accepting this
-        // flow for release; a guarded profile/retry is not whole-flow acceptance.
+    private func connectWithAutopilot(initialTunnel: PreparedTunnel, accessToken token: String, helper: VEXHelperModel, generation: Int, sessionGeneration: Int? = nil, accountID: String? = nil) async throws -> PreparedTunnel {
+        // TODO(autopilot-full-runtime): guards are SDK-built and boundary-tested,
+        // but the complete policy/probe/rotation/fresh/failover chain still needs
+        // an extracted fake-transport runtime matrix before release acceptance.
+        let authGeneration = sessionGeneration ?? authenticatedSessionGeneration
+        let owner = accountID ?? session?.user.id
+        func verifyOperation() throws {
+            try ensureConnectStillDesired(generation: generation, sessionGeneration: authGeneration, accessToken: token, accountID: owner)
+        }
+        try verifyOperation()
         let resiliencePolicy: ResiliencePolicy?
         if let freshPolicy = try? await api.resiliencePolicy(accessToken: token) {
+            try verifyOperation()
             dynamicRouteEngine.cache(policy: freshPolicy)
             resiliencePolicy = freshPolicy
         } else {
+            try verifyOperation()
             resiliencePolicy = dynamicRouteEngine.cachedPolicy()
         }
         activeResiliencePolicy = resiliencePolicy
         activeResilienceRoute = nil
         do {
-            return try await connectPreparedTunnel(initialTunnel, helper: helper, generation: generation, resiliencePolicy: resiliencePolicy)
+            return try await connectPreparedTunnel(initialTunnel, helper: helper, generation: generation, resiliencePolicy: resiliencePolicy, sessionGeneration: authGeneration, accessToken: token, accountID: owner)
         } catch {
+            try verifyOperation()
+            if error is AuthenticatedOperationError || error is CancellationError { throw error }
             if error.localizedDescription.contains("VPN_CONFIG_INVALID") { throw error }
-            try ensureConnectStillDesired(generation: generation)
+            try verifyOperation()
 
             let probe = await autopilotService.probe(endpoint: initialTunnel.endpoint)
+            try verifyOperation()
             let usage = await autopilotService.usage(accessToken: token, deviceId: initialTunnel.device.id)
+            try verifyOperation()
             let healthReasons = autopilotService.healthReasons(status: helper.status, usage: usage)
             let assessment = autopilotService.assess(error: error, healthReasons: healthReasons, status: helper.status, probe: probe)
             statusMessage = assessment.userMessage
@@ -471,22 +500,26 @@ final class VEXAppState: ObservableObject {
                 samples: assessment.samples.merging(["error": error.localizedDescription]) { current, _ in current }
             )
 
+            try verifyOperation()
             if initialTunnel.rotationRequired || assessment.cause == .keyOrProfile,
-               let rotatedTunnel = try await profileService.rotateKey(accessToken: token, currentTunnel: initialTunnel) {
-                try ensureConnectStillDesired(generation: generation)
-                return try await connectPreparedTunnel(rotatedTunnel, helper: helper, generation: generation, resiliencePolicy: resiliencePolicy)
+               let rotatedTunnel = try await profileService.rotateKey(accessToken: token, currentTunnel: initialTunnel, writeHelperConfig: false) {
+                try verifyOperation()
+                return try await connectPreparedTunnel(rotatedTunnel, helper: helper, generation: generation, resiliencePolicy: resiliencePolicy, sessionGeneration: authGeneration, accessToken: token, accountID: owner)
             }
 
-            return try await VpnAdmissionRecovery.retryFreshProfile {
-                try ensureConnectStillDesired(generation: generation)
+            return try await VpnAdmissionRecovery.retryFreshProfile(shouldFailover: { !($0 is AuthenticatedOperationError) && !($0 is CancellationError) }) {
+                try verifyOperation()
                 let freshTunnel = try await profileService.resolveProfile(
                     accessToken: token,
                     locationId: initialTunnel.locationId,
                     routingMode: routingMode,
-                    forceRefresh: true
+                    forceRefresh: true,
+                    writeHelperConfig: false
                 )
-                return try await connectPreparedTunnel(freshTunnel, helper: helper, generation: generation, resiliencePolicy: resiliencePolicy)
+                try verifyOperation()
+                return try await connectPreparedTunnel(freshTunnel, helper: helper, generation: generation, resiliencePolicy: resiliencePolicy, sessionGeneration: authGeneration, accessToken: token, accountID: owner)
             } failover: { error in
+                try verifyOperation()
                 guard allowsAutomaticFailover, assessment.canFailover, let failoverLocation = bestFailoverLocation(excluding: initialTunnel.locationId) else {
                     throw error
                 }
@@ -495,9 +528,10 @@ final class VEXAppState: ObservableObject {
                     accessToken: token,
                     locationId: failoverLocation.id,
                     routingMode: routingMode,
-                    forceRefresh: true
+                    forceRefresh: true,
+                    writeHelperConfig: false
                 )
-                try ensureConnectStillDesired(generation: generation)
+                try verifyOperation()
                 await submitDiagnostics(
                     reason: "vpn_autopilot_failover",
                     status: assessment.diagnosticStatus,
@@ -507,7 +541,8 @@ final class VEXAppState: ObservableObject {
                         "next_location_id": failoverLocation.id,
                     ]) { current, _ in current }
                 )
-                return try await connectPreparedTunnel(failoverTunnel, helper: helper, generation: generation, resiliencePolicy: resiliencePolicy)
+                try verifyOperation()
+                return try await connectPreparedTunnel(failoverTunnel, helper: helper, generation: generation, resiliencePolicy: resiliencePolicy, sessionGeneration: authGeneration, accessToken: token, accountID: owner)
             }
         }
     }
@@ -516,12 +551,16 @@ final class VEXAppState: ObservableObject {
         _ tunnel: PreparedTunnel,
         helper: VEXHelperModel,
         generation: Int,
-        resiliencePolicy: ResiliencePolicy? = nil
+        resiliencePolicy: ResiliencePolicy? = nil,
+        sessionGeneration: Int? = nil,
+        accessToken token: String? = nil,
+        accountID: String? = nil
     ) async throws -> PreparedTunnel {
         var lastError: Error = VpnAutopilotRuntimeError.connectFailed("VPN connection failed.")
+        try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration, accessToken: token, accountID: accountID)
         activeResilienceRoute = nil
-        try ensureConnectStillDesired(generation: generation)
         try await helper.ensureHelperReady()
+        try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration, accessToken: token, accountID: accountID)
 
         var attempts: [(tunnel: PreparedTunnel, route: ResilienceConnectionCandidate?)] = []
         if let resiliencePolicy {
@@ -543,22 +582,29 @@ final class VEXAppState: ObservableObject {
         for item in attempts {
             let attempt = item.tunnel
             let routeTransport = item.route.map(dynamicRouteTransport)
-            try ensureConnectStillDesired(generation: generation)
+            try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration, accessToken: token, accountID: accountID)
             let previousStatus = helper.status
             let attemptStartedAt = Date()
             try await profileService.writeHelperConfig(for: attempt)
+            try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration, accessToken: token, accountID: accountID)
             await helper.connect(antiLeakEnabled: antiLeakEnabled)
+            try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration, accessToken: token, accountID: accountID)
             if helper.lastConnectAdmissionRejected {
                 throw VpnAutopilotRuntimeError.connectFailed("VPN_CONFIG_INVALID: next profile admission failed")
             }
-            try ensureConnectStillDesired(generation: generation)
-            if try await verifiedHandshake(
+            try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration, accessToken: token, accountID: accountID)
+            let handshakeVerified = try await verifiedHandshake(
                 for: attempt,
                 helper: helper,
                 previousStatus: previousStatus,
                 startedAt: attemptStartedAt,
-                generation: generation
-            ) {
+                generation: generation,
+                sessionGeneration: sessionGeneration,
+                accessToken: token,
+                accountID: accountID
+            )
+            try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration, accessToken: token, accountID: accountID)
+            if handshakeVerified {
                 activeResilienceRoute = item.route
                 if let route = item.route, let resiliencePolicy {
                     dynamicRouteEngine.recordSuccess(route, policy: resiliencePolicy)
@@ -568,7 +614,10 @@ final class VEXAppState: ObservableObject {
                         transportFrom: previousRouteTransport,
                         transportTo: routeTransport,
                         status: "ok",
-                        helperStatus: helper.status
+                        helperStatus: helper.status,
+                    sessionGeneration: sessionGeneration,
+                    accessToken: token,
+                    accountID: accountID
                     )
                 }
                 if let endpoint = attempt.endpoint {
@@ -584,7 +633,10 @@ final class VEXAppState: ObservableObject {
                     transportFrom: previousRouteTransport,
                     transportTo: routeTransport,
                     status: "error",
-                    helperStatus: helper.status
+                    helperStatus: helper.status,
+                    sessionGeneration: sessionGeneration,
+                    accessToken: token,
+                    accountID: accountID
                 )
                 previousRouteTransport = routeTransport
             }
@@ -593,7 +645,9 @@ final class VEXAppState: ObservableObject {
             } else {
                 lastError = VpnAutopilotRuntimeError.connectFailed(helper.message ?? "VPN connection failed.")
             }
+            try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration, accessToken: token, accountID: accountID)
             let teardownConfirmed = await helper.disconnect(releaseAntiLeak: true)
+            try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration, accessToken: token, accountID: accountID)
             guard teardownConfirmed else {
                 throw VpnAutopilotRuntimeError.connectFailed("previous tunnel teardown was not confirmed")
             }
@@ -606,14 +660,17 @@ final class VEXAppState: ObservableObject {
         helper: VEXHelperModel,
         previousStatus: VpnStatus,
         startedAt: Date,
-        generation: Int
+        generation: Int,
+        sessionGeneration: Int? = nil,
+        accessToken token: String? = nil,
+        accountID: String? = nil
     ) async throws -> Bool {
         let sameExistingTunnel = self.tunnel(tunnel, matches: previousStatus)
         let previousHandshake = previousStatus.latestHandshake ?? 0
         let earliestNewHandshake = UInt64(max(0, Int(startedAt.timeIntervalSince1970) - 2))
         let deadline = Date().addingTimeInterval(8)
         while true {
-            try ensureConnectStillDesired(generation: generation)
+            try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration, accessToken: token, accountID: accountID)
             let status = helper.status
             if self.tunnel(tunnel, matches: status), let handshake = status.latestHandshake {
                 let recentExistingHandshake = sameExistingTunnel
@@ -626,7 +683,9 @@ final class VEXAppState: ObservableObject {
             }
             if Date() >= deadline { return false }
             try await Task.sleep(nanoseconds: 400_000_000)
+            try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration, accessToken: token, accountID: accountID)
             await helper.refreshStatus(quiet: true)
+            try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration, accessToken: token, accountID: accountID)
         }
     }
 
@@ -648,10 +707,15 @@ final class VEXAppState: ObservableObject {
         transportFrom: String?,
         transportTo: String?,
         status: String,
-        helperStatus: VpnStatus?
+        helperStatus: VpnStatus?,
+        sessionGeneration: Int? = nil,
+        accessToken token: String? = nil,
+        accountID: String? = nil
     ) {
         Task { [weak self] in
             guard let self else { return }
+            if let sessionGeneration,
+                (try? self.ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: token, accountID: accountID)) == nil { return }
             await self.submitDiagnostics(
                 reason: "dynamic_route",
                 status: status,
@@ -728,10 +792,27 @@ final class VEXAppState: ObservableObject {
         }
     }
 
-    private func ensureConnectStillDesired(generation: Int) throws {
-        guard desiredVpnState == .connected, vpnOperationGeneration == generation else {
-            throw CancellationError()
+    private func ensureAuthenticatedSessionCurrent(
+        generation: Int,
+        accessToken token: String? = nil,
+        accountID: String? = nil
+    ) throws {
+        guard authenticatedSessionGeneration == generation else { throw AuthenticatedOperationError.sessionChanged }
+        if let token, session?.accessToken != token { throw AuthenticatedOperationError.sessionChanged }
+        if let accountID, session?.user.id != accountID { throw AuthenticatedOperationError.sessionChanged }
+    }
+
+    private func ensureConnectStillDesired(
+        generation: Int,
+        sessionGeneration: Int? = nil,
+        accessToken token: String? = nil,
+        accountID: String? = nil
+    ) throws {
+        // Auth invalidation must never enter cancellation/disconnect cleanup.
+        if let sessionGeneration {
+            try ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: token, accountID: accountID)
         }
+        guard desiredVpnState == .connected, vpnOperationGeneration == generation else { throw CancellationError() }
     }
 
     func applySelectedLocationIfConnected(using helper: VEXHelperModel) async {
@@ -748,15 +829,20 @@ final class VEXAppState: ObservableObject {
             serverSidebarOperation = .failed(statusMessage ?? "VPN занят.")
             return false
         }
+        let sessionGeneration = authenticatedSessionGeneration
+        let accountID = session?.user.id
         isVpnBusy = true
         defer { isVpnBusy = false }
 
-        guard let token = await authenticatedAccessToken() else {
+        let tokenResult = await authenticatedAccessToken()
+        guard (try? ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accountID: accountID)) != nil else { return false }
+        guard let token = tokenResult else {
             statusMessage = "Сначала войдите в аккаунт."
             serverSidebarOperation = .failed(statusMessage ?? "Сначала войдите в аккаунт.")
             return false
         }
 
+        guard accessToken == token else { return false }
         let previousTunnel = activeTunnel
         let previousResiliencePolicy = activeResiliencePolicy
         let previousResilienceRoute = activeResilienceRoute
@@ -785,18 +871,21 @@ final class VEXAppState: ObservableObject {
                 accessToken: token,
                 locationId: nextLocationId,
                 routingMode: routingMode,
-                forceRefresh: false
+                forceRefresh: false,
+                writeHelperConfig: false
             )
-            try ensureConnectStillDesired(generation: generation)
+            try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration, accessToken: token, accountID: accountID)
             serverSidebarOperation = .connecting
             // The helper admits the complete next profile before replacing the old tunnel.
             let connectedTunnel = try await connectWithAutopilot(
                 initialTunnel: nextTunnel,
                 accessToken: token,
                 helper: helper,
-                generation: generation
+                generation: generation,
+                sessionGeneration: sessionGeneration,
+                accountID: accountID
             )
-            try ensureConnectStillDesired(generation: generation)
+            try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration, accessToken: token, accountID: accountID)
             activeTunnel = connectedTunnel
             serverSidebarOperation = .verifying
 
@@ -806,26 +895,35 @@ final class VEXAppState: ObservableObject {
                 }
                 statusMessage = "VPN переключен на \(selectedLocation?.displayName ?? connectedTunnel.locationId.uppercased())."
                 serverSidebarOperation = .verified(statusMessage ?? "VPN переключен.")
-                Task { [api] in
+                Task { [weak self, api] in
+                    guard let self,
+                        (try? self.ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: token, accountID: accountID)) != nil else { return }
                     await api.reportVpnDisconnect(accessToken: token, tunnel: previousTunnel, reason: "server_switch")
+                    guard (try? self.ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: token, accountID: accountID)) != nil else { return }
                     await api.reportVpnConnect(accessToken: token, tunnel: connectedTunnel)
                 }
                 return true
             }
 
             throw VpnAutopilotRuntimeError.connectFailed(helper.message ?? "VPN switch failed.")
+        } catch AuthenticatedOperationError.sessionChanged {
+            return false
         } catch is CancellationError {
+            guard (try? ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: token, accountID: accountID)) != nil else { return false }
             clearActiveTunnelRouteState()
             statusMessage = "Переключение сервера отменено."
             serverSidebarOperation = .failed(statusMessage ?? "Переключение сервера отменено.")
             return false
         } catch {
+            guard (try? ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: token, accountID: accountID)) != nil else { return false }
             activeTunnel = previousTunnel
             activeResiliencePolicy = previousResiliencePolicy
             activeResilienceRoute = previousResilienceRoute
             if let previousTunnel, !error.localizedDescription.contains("VPN_CONFIG_INVALID") {
                 try? await profileService.writeHelperConfig(for: previousTunnel)
+                guard (try? ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: token, accountID: accountID)) != nil else { return false }
                 await helper.connect(antiLeakEnabled: antiLeakEnabled)
+                guard (try? ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: token, accountID: accountID)) != nil else { return false }
             } else {
                 clearActiveTunnelRouteState()
             }
@@ -1675,6 +1773,7 @@ final class VEXAppState: ObservableObject {
                 locationId: locationId,
                 routingMode: routingMode,
                 forceRefresh: forceRefresh,
+                writeHelperConfig: false,
                 prevalidatedEntitlement: prevalidatedEntitlement
             )
             guard authenticatedSessionGeneration == operationGeneration,
@@ -1694,7 +1793,8 @@ final class VEXAppState: ObservableObject {
                     accessToken: refreshedToken,
                     locationId: locationId,
                     routingMode: routingMode,
-                    forceRefresh: true
+                    forceRefresh: true,
+                    writeHelperConfig: false
                 )
                 guard authenticatedSessionGeneration == operationGeneration,
                     session?.accessToken == refreshedToken else { throw AuthenticatedOperationError.sessionChanged }
@@ -1888,16 +1988,21 @@ final class VEXAppState: ObservableObject {
 
     private func prepareSelectedProfile(forceRefresh: Bool) async {
         guard let token = accessToken, let targetLocationId else { return }
+        let sessionGeneration = authenticatedSessionGeneration
+        let accountID = session?.user.id
         do {
-            activeTunnel = try await profileService.resolveProfile(
+            let prepared = try await profileService.resolveProfile(
                 accessToken: token,
                 locationId: targetLocationId,
                 routingMode: routingMode,
                 forceRefresh: forceRefresh,
                 writeHelperConfig: false
             )
+            guard (try? ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: token, accountID: accountID)) != nil else { return }
+            activeTunnel = prepared
             statusMessage = "Профиль сервера готов."
         } catch {
+            guard (try? ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: token, accountID: accountID)) != nil else { return }
             statusMessage = error.localizedDescription
         }
     }

@@ -4,6 +4,7 @@ import Foundation
 @MainActor
 enum VpnAdmissionRecovery {
     static func retryFreshProfile<T>(
+        shouldFailover: (Error) -> Bool = { _ in true },
         attempt: () async throws -> T,
         failover: (Error) async throws -> T
     ) async throws -> T {
@@ -12,7 +13,7 @@ enum VpnAdmissionRecovery {
         } catch {
             // A fresh-profile admission rejection must not inherit the initial
             // transport assessment or authorize another location/activation.
-            if error.localizedDescription.contains("VPN_CONFIG_INVALID") { throw error }
+            if error.localizedDescription.contains("VPN_CONFIG_INVALID") || !shouldFailover(error) { throw error }
             return try await failover(error)
         }
     }

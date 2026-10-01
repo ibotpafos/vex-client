@@ -23,6 +23,7 @@ set_enabled = extract("    func setNativeRemotePushEnabled(")
 reconcile = extract("    private func reconcileNativePushSession(").replace("private func", "func", 1)
 fingerprint = extract("    private func nativePushConsentFingerprint(").replace("private func", "func", 1)
 matches = extract("    private var nativePushConsentMatchesSession:").replace("private var", "var", 1)
+purge = extract("    private func purgeNativePushPSKEvents(").replace("private func", "func", 1)
 invalidate = extract("    private func invalidateNativePushSession(").replace("private func", "func", 1)
 reset = extract("    private func resetAuthenticatedState(")
 
@@ -33,6 +34,8 @@ assert "invalidateNativePushSession(resetConsent: true)" in reset
 
 fixture = f'''import CryptoKit
 import Foundation
+
+struct FixtureIdentity {{ func existingDeviceId() -> String? {{ nil }} }}
 
 struct FixtureUser {{ var id: String }}
 struct FixtureSession {{ var user: FixtureUser; var accessToken: String }}
@@ -50,6 +53,10 @@ struct FixtureSession {{ var user: FixtureUser; var accessToken: String }}
 }}
 
 @MainActor final class H {{
+    let nativePushIdentityStore = FixtureIdentity()
+    let nativePushPSKQueue = NativePushPSKEventQueue(appDataURL: URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true))
+    var nativePushEventOwner: NativePushPSKEventOwner?
+    var nativePushEventError: String?
     var nativePushRuntimeAllowed = true
     var nativeRemotePushEnabled = false
     var nativeRemotePushConsentAccount = ""
@@ -71,6 +78,7 @@ struct FixtureSession {{ var user: FixtureUser; var accessToken: String }}
 {reconcile}
 {fingerprint}
 {matches}
+{purge}
 {invalidate}
 }}
 
@@ -136,14 +144,14 @@ with tempfile.TemporaryDirectory(prefix="vex-push-consent-") as directory:
     executable = directory / "fixture"
     swift.write_text(fixture)
     compile_result = subprocess.run(
-        ["swiftc", "-swift-version", "5", "-parse-as-library", str(swift), "-o", str(executable)],
+        ["swiftc", "-swift-version", "5", "-parse-as-library", str(ROOT / "macos-native/Sources/VEXNativeMac/Services/NativePushSecureFileStore.swift"), str(ROOT / "macos-native/Sources/VEXNativeMac/Services/NativePushPSKEventQueue.swift"), str(swift), "-o", str(executable)],
         text=True, capture_output=True,
     )
     print(compile_result.stdout, end="")
     print(compile_result.stderr, end="", file=sys.stderr)
     if compile_result.returncode:
         raise SystemExit(compile_result.returncode)
-    run_result = subprocess.run([str(executable)], text=True, capture_output=True)
+    run_result = subprocess.run([str(executable), str(directory / "app-data")], text=True, capture_output=True)
     print("appstate_source_sha256=" + hashlib.sha256(SOURCE.read_bytes()).hexdigest())
     print(run_result.stdout, end="")
     print(run_result.stderr, end="", file=sys.stderr)

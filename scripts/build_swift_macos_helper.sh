@@ -7,7 +7,16 @@ RESOURCE_DIR="${PACKAGE_DIR}/HelperResources"
 SCRATCH_ROOT="${PACKAGE_DIR}/.build-helper"
 PRODUCT="VEXPrivilegedHelper"
 OUTPUT="${RESOURCE_DIR}/vex-helper"
-CODESIGN_IDENTITY="${VEX_CODESIGN_IDENTITY:--}"
+# An explicitly supplied identity (including ad-hoc "-") is an operator choice.
+# Auto-provisioning/discovery may inspect and alter the user keychain, so only
+# perform it when VEX_CODESIGN_IDENTITY was genuinely unset.
+CODESIGN_IDENTITY_EXPLICIT=0
+if [[ -n "${VEX_CODESIGN_IDENTITY+x}" ]]; then
+  CODESIGN_IDENTITY="${VEX_CODESIGN_IDENTITY}"
+  CODESIGN_IDENTITY_EXPLICIT=1
+else
+  CODESIGN_IDENTITY="-"
+fi
 CODESIGN_KEYCHAIN="${VEX_CODESIGN_KEYCHAIN:-}"
 CODESIGN_TIMESTAMP="${VEX_CODESIGN_TIMESTAMP:-automatic}"
 LOCAL_SIGNING_IDENTITY="VEX Self-Signed Application"
@@ -38,7 +47,7 @@ activate_local_signing_keychain() {
   SIGNING_SEARCH_LIST_CHANGED=1
 }
 
-if [[ "${CODESIGN_IDENTITY}" == "-" ]]; then
+if [[ "${CODESIGN_IDENTITY_EXPLICIT}" == "0" && "${CODESIGN_IDENTITY}" == "-" ]]; then
   if [[ -f "${LOCAL_SIGNING_DIR}/application.key.pem" \
         && -f "${LOCAL_SIGNING_DIR}/application.cert.pem" ]]; then
     /usr/bin/swift "${ROOT_DIR}/scripts/prepare_vex_local_signing_identity.swift" \
@@ -53,7 +62,7 @@ if [[ "${CODESIGN_IDENTITY}" == "-" ]]; then
   fi
 fi
 
-if [[ "${CODESIGN_IDENTITY}" == "-" ]]; then
+if [[ "${CODESIGN_IDENTITY_EXPLICIT}" == "0" && "${CODESIGN_IDENTITY}" == "-" ]]; then
   detected_identity="$(
     /usr/bin/security find-identity -v -p codesigning 2>/dev/null \
       | /usr/bin/awk '/Apple Development:/{print $2; exit}' \

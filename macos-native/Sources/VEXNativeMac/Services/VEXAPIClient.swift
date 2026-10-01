@@ -237,6 +237,42 @@ struct VEXAPIClient {
         return try await json("/v1/vpn/profile?\(queryString(query))", accessToken: accessToken)
     }
 
+    /// Fetches the inactive PSK profile staged for this managed server device.
+    func currentPSKRotation(accessToken: String, deviceID: String) async throws -> PSKRotationCurrentResponse {
+        guard Self.isServerUUID(deviceID) else { throw VEXAPIError.invalidRequest }
+        let query = queryString([
+            URLQueryItem(name: "device_id", value: deviceID),
+            URLQueryItem(name: "platform", value: "macos"),
+        ])
+        return try await json("/v1/vpn/psk-rotations/current?\(query)", accessToken: accessToken)
+    }
+
+    /// Acknowledges only exact, locally validated staged PSK material; it does not install a profile.
+    func acknowledgePSKRotation(
+        accessToken: String,
+        rotationID: String,
+        deviceID: String,
+        profileVersion: Int,
+        profileDigest: String
+    ) async throws -> PSKRotationACKResponse {
+        guard Self.isServerUUID(rotationID),
+              Self.isServerUUID(deviceID),
+              profileVersion > 0,
+              Self.isSHA256Digest(profileDigest) else {
+            throw VEXAPIError.invalidRequest
+        }
+        return try await json(
+            "/v1/vpn/psk-rotations/\(rotationID.lowercased())/ack",
+            method: "POST",
+            accessToken: accessToken,
+            body: [
+                "device_id": deviceID,
+                "profile_version": profileVersion,
+                "profile_digest": profileDigest.lowercased(),
+            ]
+        )
+    }
+
     func reportVpnConnect(accessToken: String, tunnel: PreparedTunnel) async {
         guard !tunnel.device.id.isEmpty else { return }
         var body: [String: Any] = [
@@ -419,6 +455,14 @@ struct VEXAPIClient {
         return components.percentEncodedQuery ?? ""
     }
 
+    private static func isServerUUID(_ value: String) -> Bool {
+        value.range(of: "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$", options: .regularExpression) != nil
+    }
+
+    private static func isSHA256Digest(_ value: String) -> Bool {
+        value.range(of: "^sha256:[0-9A-Fa-f]{64}$", options: .regularExpression) != nil
+    }
+
     private func apiErrorPayload(_ data: Data) -> (code: String?, message: String) {
         if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             let code = object["code"] as? String
@@ -466,6 +510,7 @@ private struct AuthSessionPayload: Decodable {
 
 enum VEXAPIError: LocalizedError {
     case invalidResponse
+    case invalidRequest
     case technicalWorks
     case http(status: Int, message: String)
 
@@ -494,6 +539,8 @@ enum VEXAPIError: LocalizedError {
         switch self {
         case .invalidResponse:
             return "Некорректный ответ API."
+        case .invalidRequest:
+            return "Некорректный запрос API."
         case .technicalWorks:
             return Self.technicalWorksMessage
         case .http(let status, let message):

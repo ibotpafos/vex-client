@@ -64,6 +64,10 @@ final class VEXAppState: ObservableObject {
     private let nativeUpdater: NativeUpdaterService
     let customerNotifications: CustomerNotificationService
     private let nativePushRegistrar = NativePushAPIRegistrar()
+    private lazy var nativePushPSKQueue = NativePushPSKEventQueue()
+    private let nativePushIdentityStore = VEXDeviceIdentityStore()
+    private var nativePushEventOwner: NativePushPSKEventOwner?
+    @Published private(set) var nativePushEventError: String?
     lazy var nativePushRegistration = NativePushRegistrationService(registrar: nativePushRegistrar)
     private let nativePushRuntimeAllowed: Bool
     private var nativePushDeviceID: String?
@@ -143,6 +147,7 @@ final class VEXAppState: ObservableObject {
         nativeRemotePushConsentAccount = nativeRemotePushEnabled ? nativePushConsentFingerprint(account!) : ""
         nativePushRegistrationError = nil
         if !nativeRemotePushEnabled {
+            purgeNativePushPSKEvents()
             nativeApplePushToken = nil
             nativePushRegistration.clearAuthenticatedSession()
             if nativePushRegistrationRequested { unregisterNativePushAction?() }
@@ -183,17 +188,35 @@ final class VEXAppState: ObservableObject {
         let generation = authenticatedSessionGeneration
         let accountID = currentSession.user.id
         let token = currentSession.accessToken
+        // APS-only receipt remains generic account invalidation. A present vex
+        // envelope must validate before any refresh or durable event admission.
+        if userInfo["vex"] != nil {
+            guard let event = NativePushPSKEvent.parse(userInfo),
+                  let managedDeviceID = nativePushDeviceID,
+                  event.deviceID == managedDeviceID,
+                  let owner = NativePushPSKEventOwner(accountID: accountID, installationID: nativePushIdentityStore.getOrCreateDeviceId()) else { return }
+            do {
+                // A duplicate is already durable and may trigger an offline retry.
+                _ = try nativePushPSKQueue.enqueue(event, owner: owner)
+                nativePushEventOwner = owner
+                nativePushEventError = nil
+            } catch {
+                nativePushEventError = "Не удалось сохранить событие смены ключей. Профиль не применён."
+                // Never ACK or consume an event that failed durable admission.
+                // Generic account invalidation is still safe: a corrupt inbox
+                // must not suppress all account/access refreshes indefinitely.
+            }
+        }
         Task { [weak self] in
-            guard let self, self.nativeRemotePushEnabled, self.nativePushConsentMatchesSession,
+            guard let self, self.canUseNativeRemotePush, self.nativeRemotePushEnabled, self.nativePushConsentMatchesSession,
                   (try? self.ensureAuthenticatedSessionCurrent(generation: generation, accessToken: token, accountID: accountID)) != nil else { return }
             // Generic account invalidation never starts/stops a tunnel or applies
             // a profile received in a push payload.
             await self.refreshCustomerState()
         }
-        // TODO(apns-psk-parity): Android separately queues validated rotation
-        // events and stages/cuts over matching PSK profiles. Implement that real
-        // server event contract and isolated helper acceptance; generic account
-        // invalidation is not a substitute for rotation/cutover parity.
+        // TODO(apns-psk-stage-ack-cutover): authenticated orchestration must consume
+        // queued metadata, fetch/validate profiles, then stage/ack/cut over. This
+        // queue deliberately performs no profile/VPN/helper action and is not full parity.
     }
 
     private func observeNativePushSession() {
@@ -224,6 +247,9 @@ final class VEXAppState: ObservableObject {
     }
 
     private func reconcileNativePushSession() {
+        if let owner = nativePushEventOwner, owner.accountID != session?.user.id {
+            purgeNativePushPSKEvents()
+        }
         guard canUseNativeRemotePush, nativeRemotePushEnabled, nativePushConsentMatchesSession, let currentSession = session else {
             nativePushRegistration.clearAuthenticatedSession()
             return
@@ -254,8 +280,27 @@ final class VEXAppState: ObservableObject {
         return nativeRemotePushConsentAccount == nativePushConsentFingerprint(accountID)
     }
 
+    private func purgeNativePushPSKEvents() {
+        guard nativePushRuntimeAllowed else { return }
+        // Read an existing installation only; cleanup must not create an identity
+        // or prompt for Keychain access just to remove old metadata.
+        let owner = nativePushEventOwner ?? NativePushPSKEventOwner(
+            accountID: session?.user.id,
+            installationID: nativePushIdentityStore.existingDeviceId()
+        )
+        guard let owner else { return }
+        do {
+            try nativePushPSKQueue.purge(owner: owner)
+            nativePushEventOwner = nil
+            nativePushEventError = nil
+        } catch {
+            nativePushEventError = "Не удалось удалить локальные события смены ключей. Они не будут применены другой учётной записью."
+        }
+    }
+
     private func invalidateNativePushSession(resetConsent: Bool = false) {
         if resetConsent {
+            purgeNativePushPSKEvents()
             nativeRemotePushEnabled = false
             nativeRemotePushConsentAccount = ""
         }

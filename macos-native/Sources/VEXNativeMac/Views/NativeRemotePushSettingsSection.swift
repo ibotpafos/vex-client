@@ -11,7 +11,7 @@ struct NativeRemotePushSettingsSection: View {
                 isOn: Binding(get: { appState.nativeRemotePushEnabled }, set: { appState.setNativeRemotePushEnabled($0) }),
                 disabled: !appState.canUseNativeRemotePush)
             Text(appState.canUseNativeRemotePush
-                ? "APNs обновляет данные аккаунта в запущенном клиенте. Это не счётчик непрочитанных и не подтверждённая обработка ротации VPN-профиля."
+                ? "APNs обновляет данные аккаунта и сохраняет события смены ключей. Применение нового VPN-профиля ещё не реализовано; push не управляет подключением."
                 : "Для APNs нужна отдельная подписанная сборка с push entitlement и provisioning profile. В этой офлайн-сборке функция недоступна.")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Color.vexSecondaryText)
@@ -19,6 +19,9 @@ struct NativeRemotePushSettingsSection: View {
             SettingsInfoRow(systemName: "checkmark.circle", title: "Регистрация", value: statusText,
                 tone: registration.status == .registered ? .good : .neutral)
             if let message = appState.nativePushRegistrationError {
+                Text(message).font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.vexSecondaryText)
+            }
+            if let message = appState.nativePushEventError {
                 Text(message).font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.vexSecondaryText)
             }
             Button("Повторить регистрацию") { appState.retryNativePushRegistration() }

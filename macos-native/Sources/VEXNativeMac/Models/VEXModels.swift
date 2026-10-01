@@ -774,6 +774,8 @@ struct ManagedVpnProfile: Codable, Equatable {
     var revoked: Bool?
     var rotationRequired: Bool?
     var deviceId: String?
+    var clientPublicKey: String?
+    var clientKeyEpoch: Int?
     var `protocol`: String?
     var server: String?
     var port: Int?
@@ -787,6 +789,8 @@ struct ManagedVpnProfile: Codable, Equatable {
     var routingPolicyVersion: String?
     var amnezia: ManagedVpnAmnezia?
     var amneziaVersion: Int?
+    var expiresAt: String?
+    var authorization: ManagedVpnProfileAuthorization?
     var config: String?
 
     enum CodingKeys: String, CodingKey {
@@ -795,6 +799,8 @@ struct ManagedVpnProfile: Codable, Equatable {
         case revoked
         case rotationRequired = "rotation_required"
         case deviceId = "device_id"
+        case clientPublicKey = "client_public_key"
+        case clientKeyEpoch = "client_key_epoch"
         case `protocol`
         case server
         case port
@@ -808,6 +814,8 @@ struct ManagedVpnProfile: Codable, Equatable {
         case routingPolicyVersion = "routing_policy_version"
         case amnezia
         case amneziaVersion = "amnezia_version"
+        case expiresAt = "expires_at"
+        case authorization
         case config
     }
 }
@@ -916,5 +924,54 @@ struct VEXAppInfo: Equatable {
         return bundles
             .compactMap { $0?.object(forInfoDictionaryKey: key) as? String }
             .first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+}
+
+
+/// The server's inactive PSK profile envelope. Every field is required by the API contract.
+struct PSKRotationCurrentResponse: Codable, Equatable {
+    var rotationID: String
+    var activate: Bool
+    var currentVersion: Int
+    var profileVersion: Int
+    var profileDigest: String
+    var deadlineAt: String
+    var profile: ManagedVpnProfile
+
+    enum CodingKeys: String, CodingKey {
+        case rotationID = "rotation_id"
+        case activate
+        case currentVersion = "current_version"
+        case profileVersion = "profile_version"
+        case profileDigest = "profile_digest"
+        case deadlineAt = "deadline_at"
+        case profile
+    }
+}
+
+/// The digest-bound result of acknowledging a staged PSK rotation.
+struct PSKRotationACKResponse: Codable, Equatable {
+    var rotationID: String
+    var accepted: Bool
+    var replayed: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case rotationID = "rotation_id"
+        case accepted
+        case replayed
+    }
+}
+
+struct ManagedVpnProfileAuthorization: Codable, Equatable {
+    var algorithm: String
+    var keyID: String
+    var payloadBase64: String
+    var signatureBase64: String
+
+    enum CodingKeys: String, CodingKey {
+        case algorithm
+        case keyID = "key_id"
+        case payloadBase64 = "payload_base64"
+        case signatureBase64 = "signature_base64"
     }
 }

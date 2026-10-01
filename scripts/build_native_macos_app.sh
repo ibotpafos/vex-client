@@ -13,7 +13,16 @@ APP_VERSION="${VEX_NATIVE_VERSION:-0.1.0}"
 APP_BUILD="${VEX_NATIVE_BUILD:-1}"
 SPARKLE_FEED_URL="${VEX_SPARKLE_FEED_URL:-https://vexguard.app/downloads/native-macos/appcast.xml}"
 SPARKLE_PUBLIC_ED_KEY="${VEX_SPARKLE_PUBLIC_ED_KEY:-cwILAPfDRcrjrAWmD/VrMzIh983R2hncvI44tfEZauI=}"
-CODESIGN_IDENTITY="${VEX_CODESIGN_IDENTITY:--}"
+# An explicitly supplied identity (including ad-hoc "-") is an operator choice.
+# Auto-provisioning/discovery may inspect and alter the user keychain, so only
+# perform it when VEX_CODESIGN_IDENTITY was genuinely unset.
+CODESIGN_IDENTITY_EXPLICIT=0
+if [[ -n "${VEX_CODESIGN_IDENTITY+x}" ]]; then
+  CODESIGN_IDENTITY="${VEX_CODESIGN_IDENTITY}"
+  CODESIGN_IDENTITY_EXPLICIT=1
+else
+  CODESIGN_IDENTITY="-"
+fi
 CODESIGN_KEYCHAIN="${VEX_CODESIGN_KEYCHAIN:-}"
 CODESIGN_TIMESTAMP="${VEX_CODESIGN_TIMESTAMP:-automatic}"
 HELPER_RESOURCE_DIR="${PACKAGE_DIR}/HelperResources"
@@ -55,10 +64,14 @@ if [[ -f "${ROOT_DIR}/.env.sparkle.local" ]]; then
   APP_BUILD="${VEX_NATIVE_BUILD:-${APP_BUILD}}"
   SPARKLE_FEED_URL="${VEX_SPARKLE_FEED_URL:-${SPARKLE_FEED_URL}}"
   SPARKLE_PUBLIC_ED_KEY="${VEX_SPARKLE_PUBLIC_ED_KEY:-${SPARKLE_PUBLIC_ED_KEY}}"
-  CODESIGN_IDENTITY="${VEX_CODESIGN_IDENTITY:-${CODESIGN_IDENTITY}}"
+  # An inherited caller identity takes precedence over local release defaults.
+  if [[ "${CODESIGN_IDENTITY_EXPLICIT}" == "0" && -n "${VEX_CODESIGN_IDENTITY+x}" ]]; then
+    CODESIGN_IDENTITY="${VEX_CODESIGN_IDENTITY}"
+    CODESIGN_IDENTITY_EXPLICIT=1
+  fi
 fi
 
-if [[ "${CODESIGN_IDENTITY}" == "-" ]]; then
+if [[ "${CODESIGN_IDENTITY_EXPLICIT}" == "0" && "${CODESIGN_IDENTITY}" == "-" ]]; then
   if [[ -f "${LOCAL_SIGNING_DIR}/application.key.pem" \
         && -f "${LOCAL_SIGNING_DIR}/application.cert.pem" ]]; then
     /usr/bin/swift "${ROOT_DIR}/scripts/prepare_vex_local_signing_identity.swift" \
@@ -73,7 +86,7 @@ if [[ "${CODESIGN_IDENTITY}" == "-" ]]; then
   fi
 fi
 
-if [[ "${CODESIGN_IDENTITY}" == "-" ]]; then
+if [[ "${CODESIGN_IDENTITY_EXPLICIT}" == "0" && "${CODESIGN_IDENTITY}" == "-" ]]; then
   detected_identity="$(
     /usr/bin/security find-identity -v -p codesigning 2>/dev/null \
       | /usr/bin/awk '/Apple Development:/{print $2; exit}' \

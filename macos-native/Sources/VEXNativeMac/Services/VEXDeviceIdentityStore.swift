@@ -17,6 +17,14 @@ struct VEXDeviceIdentityStore {
         self.nativeKeychain = nativeKeychain
     }
 
+    /// Local cleanup may read an existing installation without creating one or
+    /// consulting Keychain. Legacy migration stays in getOrCreateDeviceId().
+    func existingDeviceId() -> String? {
+        guard let existing = fileStore.string(for: deviceIdKey)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              isNativeManagedDeviceId(existing) else { return nil }
+        return existing
+    }
+
     func getOrCreateDeviceId() -> String {
         if let existing = fileStore.string(for: deviceIdKey)?.trimmingCharacters(in: .whitespacesAndNewlines),
            isNativeManagedDeviceId(existing) {

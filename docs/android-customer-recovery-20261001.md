@@ -58,3 +58,11 @@ OTA/APK publication, DNS or VPN infrastructure mutation was performed in this au
 This change needs a fresh candidate and device acceptance before release.
 Remaining gates: modern Android/Doze/process/network, real tunneled egress/leak/speed,
 brief downloading notice capture, backend release-truth reconciliation and review.
+
+## Physical autoconnect follow-up
+
+The exclusively reserved Android9 device running the e463 Dev APK reproduced a separate defect: enabling startup auto-connect while an already manually connected tunnel existed caused explicit power-off to be undone by an implicit connection. Native DOWN/UP transitions and the still-active Android VPN network were observed; the attempted cold-launch check was stopped by its no-active-VPN precondition. A later launch-only snapshot is retained as invalid autoconnect acceptance, not a cold start.
+
+`handlePowerPress` now consumes the existing `autoConnectAttemptedRef` before manual connect/stop/cancel, an already observed connection satisfies the startup intent, and an asynchronous preference read checks that intent again before starting. This remains one startup attempt per hook lifetime, not a new retry scheduler. Existing success, failure and cancellation cleanup tests plus five actual-callback intent fixtures pass. The source-copy probe observes manual stop followed by implicit reconnect / stays disconnected / implicit reconnect in BASELINE/MODIFIED/ROLLBACK (probe exits0/0/0; regression exits1/0/1). Restored SHA256 is `4d03de2c783d2bb7f0189fb93a9ab51b65d25d3771fe581f78a5a486585cd745`; the native patch reconstructs the modified copy exactly.
+
+Full `npm run check` passed. CGRX coverage/risk output is partial for dynamic hook dispatch and the CommonJS harness; the exact effect and power callback are executed from their AST rather than replaced by copied policy logic. New APK and post-install autoconnect/manual-stop acceptance must be recorded separately; prior e463 full/smart native DNS/HTTPS and WiFi recovery evidence is not silently attributed to a later build. Both terminal preview operations and production1.0.59 are unchanged. Remaining modern authenticated Doze/process, selective-app, complete leak/throughput, fresh trusted signing and backend reconciliation gates still prohibit release.

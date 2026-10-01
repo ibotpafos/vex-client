@@ -1130,6 +1130,8 @@ export function useVpnConnection() {
   }, [refreshSession, setVpnStatus, signOut, submitClientDiagnosticsEvent]);
 
   const handlePowerPress = useCallback(async () => {
+    // A startup preference must never override an explicit connect/stop/cancel.
+    autoConnectAttemptedRef.current = true;
     if (isVpnBusy || vpnOperationInFlightRef.current) {
       if (connectionPhase !== 'connecting') {
         playWarningHaptic();
@@ -1215,14 +1217,22 @@ export function useVpnConnection() {
   ]);
 
   useEffect(() => {
-    if (Platform.OS !== 'android' || autoConnectAttemptedRef.current || isVpnBusy || vpnOperationInFlightRef.current || isConnected || !session || !hasPaidEntitlement(entitlementState)) {
+    if (Platform.OS !== 'android' || autoConnectAttemptedRef.current) {
+      return undefined;
+    }
+    if (isConnected) {
+      // An existing tunnel already satisfies this launch's auto-connect intent.
+      autoConnectAttemptedRef.current = true;
+      return undefined;
+    }
+    if (isVpnBusy || vpnOperationInFlightRef.current || !session || !hasPaidEntitlement(entitlementState)) {
       return undefined;
     }
 
     let cancelled = false;
     getAndroidAutoConnectEnabled()
       .then(async (enabled) => {
-        if (cancelled || !enabled) {
+        if (cancelled || !enabled || autoConnectAttemptedRef.current) {
           return;
         }
         autoConnectAttemptedRef.current = true;

@@ -104,6 +104,15 @@ final class CustomerNotificationService: ObservableObject {
     }
 
     func setEnabled(_ enabled: Bool) async {
+        // Preview/smoke instances are entirely side-effect free: neither
+        // direction may persist a preference or resolve the backend.
+        guard !previewMode else {
+            generation += 1
+            isEnabled = false
+            isBusy = false
+            userVisibleError = nil
+            return
+        }
         generation += 1
         let requestGeneration = generation
         userVisibleError = nil
@@ -115,12 +124,6 @@ final class CustomerNotificationService: ObservableObject {
             // intent, and its defer must not leave the Settings toggle busy.
             isBusy = false
             clearTrackedNotifications()
-            return
-        }
-
-        // Preview/smoke instances must not resolve UNUserNotificationCenter.
-        guard !previewMode else {
-            isEnabled = false
             return
         }
 

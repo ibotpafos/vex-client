@@ -186,18 +186,26 @@ struct Harness {
             precondition(eviction.1.removed.contains(validID))
         }
 
-        let preview = await MainActor.run { () -> (CustomerNotificationService, () -> Int) in
+        let preview = await MainActor.run { () -> (CustomerNotificationService, () -> Bool, () -> Int) in
             var factoryCalls = 0
-            let service = CustomerNotificationService(previewMode: true, backendFactory: {
+            let suite = "vex-notice-test.preview"
+            let defaults = UserDefaults(suiteName: suite)!
+            defaults.removePersistentDomain(forName: suite)
+            defaults.set(true, forKey: CustomerNotificationService.enabledDefaultsKey)
+            let service = CustomerNotificationService(defaults: defaults, previewMode: true, backendFactory: {
                 factoryCalls += 1
                 return FakeBackend()
             })
-            return (service, { factoryCalls })
+            return (service, { defaults.bool(forKey: CustomerNotificationService.enabledDefaultsKey) }, { factoryCalls })
         }
         await preview.0.setEnabled(false)
+        await preview.0.setEnabled(true)
         await preview.0.refreshAuthorization()
         await preview.0.deliver([payload()])
-        await MainActor.run { precondition(!preview.0.isEnabled && preview.1() == 0) }
+        await MainActor.run {
+            preview.0.resetSession()
+            precondition(!preview.0.isEnabled && preview.1() && preview.2() == 0)
+        }
         print("PASS: fake notification backend requires opt-in, cancels late delivery, and evicts late add safely")
     }
 }

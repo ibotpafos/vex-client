@@ -46,3 +46,9 @@ native-windows/.build/
 macos-native/.build-helper/
 macos-native/.build.stale-*/
 .build-app/
+
+# Private local Android UI captures and device logs (never ship or commit).
+/docs/design-qa/vex-home-redesign/
+/docs/design-qa/vex-mobile-flow-qa/
+/docs/design-qa/vex-mobile-system/
+/Изображение Codex *.png

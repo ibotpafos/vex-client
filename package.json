@@ -100,7 +100,7 @@
     "test:unit": "node tests/vpn-status-equality.test.mjs && node tests/android-auto-connect-effect.test.cjs && node tests/connect-recovery-cleanup.test.cjs && node tests/settings-language-and-app-list-contract.mjs && tsx tests/ota-completion.test.mjs && node tests/android-apk-verifier.test.mjs && tsx --test tests/network-health-parallel.test.mjs tests/connect-verification-deadline.test.mjs tests/api-request-deadline.test.mjs tests/installation-identity.test.mjs tests/profile-revalidation.test.mjs tests/profile-issuance-latency.test.mjs tests/native-health-freshness.test.mjs tests/watchdog-local-recovery.test.mjs && tsx tests/run-unit-tests.ts && tsx tests/native-google-auth.test.mjs && tsx tests/push-registration-loop.test.mjs && node tests/email-otp-mfa-contract.mjs && node tests/realtime-session-loop.cjs && node tests/android-package-migration.cjs && node tests/android-observability-release-contract.cjs && tsx tests/profile-request-queue.test.mjs && node tests/profile-background-contract.cjs && node tests/android-network-callback-contract.cjs && node tests/android-leak-blocker-dns-contract.cjs && node tests/profile-render-lag.test.mjs && node tests/watchdog-stale-effect.test.mjs && node tests/handshake-transition.test.mjs && node tests/email-otp-platform.test.cjs && tsx tests/android-update-ui-policy.test.mjs && node tests/android-upgrade-compatibility.cjs && tsx tests/notification-permission.test.mjs && tsx tests/mobile-visual-contract.ts",
     "test:awg-upstream": "node tests/amneziawg-upstream-contract.mjs",
     "lint": "eslint .",
-    "check": "npm run test:unit && npm run test:awg-upstream && npm run typecheck && npm run lint && npm run test:client-ci",
+    "check": "npm run test:unit && npm run test:awg-upstream && npm run typecheck && npm run lint && npm run test:client-ci && npm run test:client-release",
     "ios:signing-preflight": "bash scripts/ios_signing_preflight.sh",
     "ios:device-build": "bash scripts/ios_device_build.sh",
     "versions:sync": "node scripts/sync_versions.mjs",
@@ -114,7 +114,8 @@
     "contract:check": "node scripts/check-generated-contract.mjs",
     "android:verify-upgrade": "node scripts/verify_android_upgrade.cjs",
     "eas-build-pre-install": "bash scripts/eas_build_pre_install.sh",
-    "test:client-ci": "node tests/client-ci-contract.mjs"
+    "test:client-ci": "node tests/client-ci-contract.mjs",
+    "test:client-release": "node tests/client-release-workflow.mjs && python3 -m unittest discover -s tests -p client_release_test.py"
   },
   "resolutions": {
     "lightningcss": "1.30.1",

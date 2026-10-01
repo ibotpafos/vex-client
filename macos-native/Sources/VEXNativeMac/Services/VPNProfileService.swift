@@ -27,11 +27,15 @@ struct VPNProfileService {
         routingMode: VpnRoutingMode,
         forceRefresh: Bool = false,
         writeHelperConfig: Bool = true,
-        prevalidatedEntitlement: Entitlement? = nil
+        prevalidatedEntitlement: Entitlement? = nil,
+        accountID: String? = nil
     ) async throws -> PreparedTunnel {
         let normalizedLocationId = normalizeLocationId(locationId)
         let bypassRegion = bypassRegion(for: routingMode)
-        let cached = cache.load(locationId: normalizedLocationId, routingMode: routingMode)
+        // Never infer ownership from a bearer token: absent/blank ownership disables cache use.
+        let externalDeviceId = identityStore.getOrCreateDeviceId()
+        let cacheOwner = VPNProfileCacheOwner(accountID: accountID, installationID: externalDeviceId)
+        let cached = cacheOwner.flatMap { cache.load(locationId: normalizedLocationId, routingMode: routingMode, owner: $0) }
 
         if !forceRefresh,
            let cached,
@@ -57,7 +61,6 @@ struct VPNProfileService {
         }
 
         let keyPair = try keyStore.getOrCreate()
-        let externalDeviceId = identityStore.getOrCreateDeviceId()
         var device = try await activeDevice(
             accessToken: accessToken,
             externalDeviceId: externalDeviceId,
@@ -117,6 +120,7 @@ struct VPNProfileService {
                 return try await persistManagedProfile(
                     managedProfile,
                     cached: cached,
+                    cacheOwner: cacheOwner,
                     device: device,
                     keyPair: keyPair,
                     locationId: normalizedLocationId,
@@ -131,7 +135,7 @@ struct VPNProfileService {
             effectiveRoutingMode = .fullTunnel
             effectiveBypassRegion = nil
             if !forceRefresh,
-               let fallbackCached = cache.load(locationId: normalizedLocationId, routingMode: .fullTunnel),
+               let fallbackCached = cacheOwner.flatMap { cache.load(locationId: normalizedLocationId, routingMode: .fullTunnel, owner: $0) },
                !Self.cachedProfileNeedsRefresh(
                     fallbackCached,
                     requestedLocationId: normalizedLocationId,
@@ -159,6 +163,7 @@ struct VPNProfileService {
         return try await persistManagedProfile(
             managedProfile,
             cached: cached,
+            cacheOwner: cacheOwner,
             device: device,
             keyPair: keyPair,
             locationId: normalizedLocationId,
@@ -171,6 +176,7 @@ struct VPNProfileService {
     private func persistManagedProfile(
         _ managedProfile: ManagedVpnProfile,
         cached: PreparedTunnelCacheRecord?,
+        cacheOwner: VPNProfileCacheOwner?,
         device: VpnDevice,
         keyPair: WireGuardKeyPair,
         locationId normalizedLocationId: String,
@@ -214,14 +220,16 @@ struct VPNProfileService {
             rotationRequired: managedProfile.rotationRequired == true,
             awgVersion: Self.awgVersion
         )
-        try cache.save(PreparedTunnelCacheRecord(tunnel: tunnel), locationId: normalizedLocationId, routingMode: effectiveRoutingMode)
+        if let cacheOwner {
+            try cache.save(PreparedTunnelCacheRecord(tunnel: tunnel), locationId: normalizedLocationId, routingMode: effectiveRoutingMode, owner: cacheOwner)
+        }
         if writeHelperConfig {
             try await writeSanitizedHelperConfig(config)
         }
         return tunnel
     }
 
-    func rotateKey(accessToken: String, currentTunnel: PreparedTunnel?, writeHelperConfig: Bool = true) async throws -> PreparedTunnel? {
+    func rotateKey(accessToken: String, currentTunnel: PreparedTunnel?, writeHelperConfig: Bool = true, accountID: String? = nil) async throws -> PreparedTunnel? {
         guard let currentTunnel else { return nil }
         let nextKey = try keyStore.rotate()
         _ = try await api.rotateManagedVpnKey(
@@ -235,7 +243,8 @@ struct VPNProfileService {
             locationId: currentTunnel.locationId,
             routingMode: currentTunnel.routingMode,
             forceRefresh: true,
-            writeHelperConfig: writeHelperConfig
+            writeHelperConfig: writeHelperConfig,
+            accountID: accountID
         )
     }
 

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Remembers the endpoint that last completed a successful handshake per
@@ -27,20 +28,58 @@ struct LastTunnelEndpointStore {
     }
 }
 
-struct VPNProfileCache {
-    private let fileManager = FileManager.default
+struct VPNProfileCacheOwner: Codable, Equatable {
+    let accountID: String
+    let installationID: String
 
-    func load(locationId: String, routingMode: VpnRoutingMode) -> PreparedTunnelCacheRecord? {
-        guard let data = try? Data(contentsOf: cacheURL(locationId: locationId, routingMode: routingMode)) else {
+    init?(accountID: String?, installationID: String?) {
+        guard let accountID = Self.normalized(accountID),
+              let installationID = Self.normalized(installationID) else {
             return nil
         }
-        return try? JSONDecoder().decode(PreparedTunnelCacheRecord.self, from: data)
+        self.accountID = accountID
+        self.installationID = installationID
     }
 
-    func save(_ record: PreparedTunnelCacheRecord, locationId: String, routingMode: VpnRoutingMode) throws {
-        let url = cacheURL(locationId: locationId, routingMode: routingMode)
+    private static func normalized(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+struct VPNProfileCache {
+    private let fileManager: FileManager
+    private let dataURL: URL
+
+    init(fileManager: FileManager = .default, appDataURL: URL? = nil) {
+        self.fileManager = fileManager
+        if let appDataURL {
+            self.dataURL = appDataURL
+        } else {
+            let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+                ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
+            self.dataURL = base.appendingPathComponent("VEX Native", isDirectory: true)
+        }
+    }
+
+    func load(locationId: String, routingMode: VpnRoutingMode, owner: VPNProfileCacheOwner) -> PreparedTunnelCacheRecord? {
+        guard let data = try? Data(contentsOf: cacheURL(locationId: locationId, routingMode: routingMode, owner: owner)),
+              let record = try? JSONDecoder().decode(PreparedTunnelCacheRecord.self, from: data),
+              record.cacheOwner == owner else {
+            // Ownerless records are legacy data and deliberately fail closed.
+            return nil
+        }
+        return record
+    }
+
+    func save(_ record: PreparedTunnelCacheRecord, locationId: String, routingMode: VpnRoutingMode, owner: VPNProfileCacheOwner) throws {
+        var ownedRecord = record
+        ownedRecord.cacheOwner = owner
+        let url = cacheURL(locationId: locationId, routingMode: routingMode, owner: owner)
         try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let data = try JSONEncoder().encode(record)
+        try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.deletingLastPathComponent().path)
+        let data = try JSONEncoder().encode(ownedRecord)
         try data.write(to: url, options: [.atomic])
         try setOwnerOnlyPermissions(url)
     }
@@ -48,45 +87,54 @@ struct VPNProfileCache {
     func writeHelperConfig(_ config: String) throws {
         let url = helperConfigURL()
         try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        // Rewrites are skipped when the sanitized config is unchanged, so repeated
-        // connect attempts do not touch disk (and trigger file-provider syncs) needlessly.
-        if let current = try? String(contentsOf: url, encoding: .utf8), current == config {
-            return
-        }
+        if let current = try? String(contentsOf: url, encoding: .utf8), current == config { return }
         try config.write(to: url, atomically: true, encoding: .utf8)
         try setOwnerOnlyPermissions(url)
     }
 
     func readHelperConfig() -> String? {
         let config = try? String(contentsOf: helperConfigURL(), encoding: .utf8)
-        guard let config,
-              config.contains("[Interface]"),
-              config.contains("[Peer]") else {
-            return nil
-        }
+        guard let config, config.contains("[Interface]"), config.contains("[Peer]") else { return nil }
         return config
     }
 
-    private func cacheURL(locationId: String, routingMode: VpnRoutingMode) -> URL {
-        appDataURL()
+    private func cacheURL(locationId: String, routingMode: VpnRoutingMode, owner: VPNProfileCacheOwner) -> URL {
+        dataURL
             .appendingPathComponent("profiles", isDirectory: true)
-            .appendingPathComponent("\(normalized(locationId))-\(routingMode.rawValue).json")
+            .appendingPathComponent(digest(namespaceData(owner)), isDirectory: true)
+            .appendingPathComponent("\(digest(cacheKeyData(locationId: locationId, routingMode: routingMode))).json")
+    }
+
+    private func namespaceData(_ owner: VPNProfileCacheOwner) -> Data {
+        lengthPrefixed([owner.accountID, owner.installationID])
+    }
+
+    private func cacheKeyData(locationId: String, routingMode: VpnRoutingMode) -> Data {
+        lengthPrefixed([normalized(locationId), routingMode.rawValue])
+    }
+
+    private func lengthPrefixed(_ values: [String]) -> Data {
+        var result = Data()
+        for value in values {
+            let bytes = Data(value.utf8)
+            var length = UInt64(bytes.count).bigEndian
+            withUnsafeBytes(of: &length) { result.append(contentsOf: $0) }
+            result.append(bytes)
+        }
+        return result
+    }
+
+    private func digest(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
     private func helperConfigURL() -> URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".vex", isDirectory: true)
-            .appendingPathComponent("vex.conf")
-    }
-
-    private func appDataURL() -> URL {
-        let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
-        return base.appendingPathComponent("VEX Native", isDirectory: true)
+        fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".vex", isDirectory: true).appendingPathComponent("vex.conf")
     }
 
     private func normalized(_ value: String) -> String {
-        value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().isEmpty ? "de" : value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let value = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return value.isEmpty ? "de" : value
     }
 
     private func setOwnerOnlyPermissions(_ url: URL) throws {
@@ -95,6 +143,7 @@ struct VPNProfileCache {
 }
 
 struct PreparedTunnelCacheRecord: Codable, Equatable {
+    var cacheOwner: VPNProfileCacheOwner?
     var device: VpnDevice
     var config: String
     var locationId: String

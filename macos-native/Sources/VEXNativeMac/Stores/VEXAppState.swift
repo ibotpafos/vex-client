@@ -458,9 +458,9 @@ final class VEXAppState: ObservableObject {
     }
 
     private func connectWithAutopilot(initialTunnel: PreparedTunnel, accessToken token: String, helper: VEXHelperModel, generation: Int, sessionGeneration: Int? = nil, accountID: String? = nil) async throws -> PreparedTunnel {
-        // TODO(autopilot-full-runtime): guards are SDK-built and boundary-tested,
-        // but the complete policy/probe/rotation/fresh/failover chain still needs
-        // an extracted fake-transport runtime matrix before release acceptance.
+        // TODO(autopilot-full-runtime): the extracted await/identity matrix passes;
+        // extend throwing rotation/profile/failover cases and run isolated live
+        // tunnel acceptance before claiming end-to-end release qualification.
         let authGeneration = sessionGeneration ?? authenticatedSessionGeneration
         let owner = accountID ?? session?.user.id
         func verifyOperation() throws {
@@ -502,7 +502,7 @@ final class VEXAppState: ObservableObject {
 
             try verifyOperation()
             if initialTunnel.rotationRequired || assessment.cause == .keyOrProfile,
-               let rotatedTunnel = try await profileService.rotateKey(accessToken: token, currentTunnel: initialTunnel, writeHelperConfig: false) {
+               let rotatedTunnel = try await profileService.rotateKey(accessToken: token, currentTunnel: initialTunnel, writeHelperConfig: false, accountID: owner) {
                 try verifyOperation()
                 return try await connectPreparedTunnel(rotatedTunnel, helper: helper, generation: generation, resiliencePolicy: resiliencePolicy, sessionGeneration: authGeneration, accessToken: token, accountID: owner)
             }
@@ -514,7 +514,8 @@ final class VEXAppState: ObservableObject {
                     locationId: initialTunnel.locationId,
                     routingMode: routingMode,
                     forceRefresh: true,
-                    writeHelperConfig: false
+                    writeHelperConfig: false,
+                    accountID: owner
                 )
                 try verifyOperation()
                 return try await connectPreparedTunnel(freshTunnel, helper: helper, generation: generation, resiliencePolicy: resiliencePolicy, sessionGeneration: authGeneration, accessToken: token, accountID: owner)
@@ -529,7 +530,8 @@ final class VEXAppState: ObservableObject {
                     locationId: failoverLocation.id,
                     routingMode: routingMode,
                     forceRefresh: true,
-                    writeHelperConfig: false
+                    writeHelperConfig: false,
+                    accountID: owner
                 )
                 try verifyOperation()
                 await submitDiagnostics(
@@ -872,7 +874,8 @@ final class VEXAppState: ObservableObject {
                 locationId: nextLocationId,
                 routingMode: routingMode,
                 forceRefresh: false,
-                writeHelperConfig: false
+                writeHelperConfig: false,
+                accountID: accountID
             )
             try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration, accessToken: token, accountID: accountID)
             serverSidebarOperation = .connecting
@@ -1774,14 +1777,17 @@ final class VEXAppState: ObservableObject {
                 routingMode: routingMode,
                 forceRefresh: forceRefresh,
                 writeHelperConfig: false,
-                prevalidatedEntitlement: prevalidatedEntitlement
+                prevalidatedEntitlement: prevalidatedEntitlement,
+                accountID: accountID
             )
             guard authenticatedSessionGeneration == operationGeneration,
-                session?.accessToken == token else { throw AuthenticatedOperationError.sessionChanged }
+                session?.accessToken == token,
+                session?.user.id == accountID else { throw AuthenticatedOperationError.sessionChanged }
             return (tunnel, token)
         } catch {
             guard authenticatedSessionGeneration == operationGeneration,
-                session?.accessToken == token else { throw AuthenticatedOperationError.sessionChanged }
+                session?.accessToken == token,
+                session?.user.id == accountID else { throw AuthenticatedOperationError.sessionChanged }
             guard error.isUnauthorizedAPIError else { throw error }
             let refreshResult = await refreshSessionForRetry()
             guard authenticatedSessionGeneration == operationGeneration,
@@ -1794,14 +1800,17 @@ final class VEXAppState: ObservableObject {
                     locationId: locationId,
                     routingMode: routingMode,
                     forceRefresh: true,
-                    writeHelperConfig: false
+                    writeHelperConfig: false,
+                    accountID: accountID
                 )
                 guard authenticatedSessionGeneration == operationGeneration,
-                    session?.accessToken == refreshedToken else { throw AuthenticatedOperationError.sessionChanged }
+                    session?.accessToken == refreshedToken,
+                    session?.user.id == accountID else { throw AuthenticatedOperationError.sessionChanged }
                 return (tunnel, refreshedToken)
             } catch {
                 guard authenticatedSessionGeneration == operationGeneration,
-                    session?.accessToken == refreshedToken else { throw AuthenticatedOperationError.sessionChanged }
+                    session?.accessToken == refreshedToken,
+                    session?.user.id == accountID else { throw AuthenticatedOperationError.sessionChanged }
                 if error.isUnauthorizedAPIError {
                     expireAuthenticatedSession(message: "Сессия истекла. Войдите снова.")
                 }
@@ -1836,6 +1845,8 @@ final class VEXAppState: ObservableObject {
         authenticatedSessionGeneration += 1
         sessionRefreshTask?.task.cancel()
         sessionRefreshTask = nil
+        profileWarmupTask?.cancel()
+        profileWarmupTask = nil
         customerRealtimeGeneration += 1
         resetCustomerNotificationSession()
         customerRealtimeService?.stop()
@@ -1996,7 +2007,8 @@ final class VEXAppState: ObservableObject {
                 locationId: targetLocationId,
                 routingMode: routingMode,
                 forceRefresh: forceRefresh,
-                writeHelperConfig: false
+                writeHelperConfig: false,
+                accountID: accountID
             )
             guard (try? ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: token, accountID: accountID)) != nil else { return }
             activeTunnel = prepared
@@ -2043,17 +2055,24 @@ final class VEXAppState: ObservableObject {
         profileWarmupTask?.cancel()
         guard let token = accessToken, let locationId = targetLocationId else { return }
         let mode = routingMode
-        profileWarmupTask = Task { [profileService] in
+        let sessionGeneration = authenticatedSessionGeneration
+        let accountID = session?.user.id
+        profileWarmupTask = Task { [weak self, profileService] in
             do {
+                try Task.checkCancellation()
+                guard let self else { return }
+                try self.ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: token, accountID: accountID)
                 // Warmup fills the cache only when it is missing, stale or for a
                 // different location/mode; a fresh cached profile resolves with
-                // zero network round-trips.
+                // zero network round-trips. A late result stays in its captured
+                // account/installation namespace, never in a replacement session.
                 _ = try await profileService.resolveProfile(
                     accessToken: token,
                     locationId: locationId,
                     routingMode: mode,
                     forceRefresh: false,
-                    writeHelperConfig: false
+                    writeHelperConfig: false,
+                    accountID: accountID
                 )
             } catch is CancellationError {
             } catch {

@@ -90,3 +90,12 @@
 - [Sparkle: automatic checks versus installation](https://sparkle-project.org/documentation/customization/)
 - [Sparkle: shouldPostponeRelaunchForUpdate delegate](https://sparkle-project.org/documentation/api-reference/Protocols/SPUUpdaterDelegate.html)
 - [Apple: явное разрешение на уведомления](https://developer.apple.com/documentation/usernotifications/asking-permission-to-use-notifications)
+
+
+## Continued offline qualification: cache ownership
+
+The same native candidate now scopes `VPNProfileCache` by hashed account + installation identity and checks the record owner. All eight AppState profile calls pass the immutable operation owner, including warmup and rotation. Unknown ownership skips cache; unowned/legacy records are not assigned a guessed owner. Logout cancels queued warmup; an already dispatched late A result can finish only in its captured A namespace. This does not revoke an already-dispatched server request or promise atomic cancellation.
+
+Actual Swift cache/record runtime (disposable injected filesystem, actual routing enum) reproduces cross-account reuse/late overwrite on pristine source, rejects it on modified source, and reproduces it after source-copy rollback. Same-owner hits and routing separation are retained. The earlier Python cache reimplementation is rejected as runtime evidence. Actual autopilot orchestration/guard/recovery matrix and actual handshake polling with inert downstream fixtures are now in the aggregate offline suite; no real tunnel/peer acceptance is implied. Throwing rotation/profile/failover variants still need extension.
+
+APNs sender dependency exists only as an unintegrated isolated backend candidate with fake-transport tests. Configuration/provider composition, registration compatibility, client opt-in registration and background/unread lifecycle are unfinished. No production APNs delivery is claimed. Per-app routing, isolated installation/network/update acceptance, Xcode XCTest and Developer ID/notarization remain outside verified release readiness.

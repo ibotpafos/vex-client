@@ -60,6 +60,7 @@ struct FixtureSession {{ var user: FixtureUser; var accessToken: String }}
     let nativePSKStageStore = NativePSKStagedProfileStore(appDataURL: URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true))
     var nativePSKRetryTask: Task<Void, Never>?
     var nativePSKPreparedTunnel: PreparedTunnel?
+    var nativeNormalPendingTunnel: PreparedTunnel?
     func startNativePSKRetryIfNeeded() {{}}
     var nativePushEventOwner: NativePushPSKEventOwner?
     var nativePushEventError: String?

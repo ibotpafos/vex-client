@@ -290,6 +290,10 @@ final class VEXAppState: ObservableObject {
         Task { [weak self] in
             guard let self, self.canUseNativeRemotePush, self.nativeRemotePushEnabled, self.nativePushConsentMatchesSession,
                   (try? self.ensureAuthenticatedSessionCurrent(generation: generation, accessToken: token, accountID: accountID)) != nil else { return }
+            // TODO: Add registration/session-bound ordinary profile-change
+            // reconciliation from an authenticated signed profile fetch. APS-only
+            // lifecycle receipts have no profile correlation today; do not invent
+            // a PSK event or apply configuration from an uncorrelated push payload.
             // Generic account invalidation never starts/stops a tunnel or applies
             // a profile received in a push payload.
             await self.refreshCustomerState()

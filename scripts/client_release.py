@@ -154,7 +154,19 @@ def publish(directory, release):
     command("gh", "release", "create", release["tag"], "--repo", REPO, "--verify-tag", "--target", release["source_commit"],
             "--draft", "--latest=false", "--title", f"VEX {release['platform']} {release['version']}", "--notes", release["changelog"])
     command("gh", "release", "upload", release["tag"], "--repo", REPO, *[str(p) for p in sorted(directory.iterdir()) if p.is_file()])
-    remote = json.loads(command("gh", "api", f"repos/{REPO}/releases/tags/{release['tag']}"))
+    # The public tag endpoint does not resolve an unpublished draft. The CLI can
+    # find our authenticated draft; use its locked repository/numeric ID endpoint.
+    draft = json.loads(command("gh", "release", "view", release["tag"], "--repo", REPO,
+                               "--json", "apiUrl,tagName,isDraft,targetCommitish"))
+    if (draft.get("tagName") != release["tag"] or draft.get("isDraft") is not True
+            or draft.get("targetCommitish") != release["source_commit"]
+            or not re.fullmatch(rf"https://api\.github\.com/repos/{re.escape(REPO)}/releases/[1-9]\d*", draft.get("apiUrl", ""))):
+        raise ValueError("Uploaded draft identity mismatch; do not publish")
+    remote = json.loads(command("gh", "api", draft["apiUrl"]))
+    if (remote.get("draft") is not True or remote.get("tag_name") != release["tag"]
+            or remote.get("target_commitish") != release["source_commit"]
+            or type(remote.get("id")) is not int or str(remote["id"]) != draft["apiUrl"].rsplit("/", 1)[-1]):
+        raise ValueError("Remote draft identity mismatch; do not publish")
     expected = {p.name: sha(p) for p in directory.iterdir() if p.is_file()}
     actual = {a["name"]: a for a in remote["assets"]}
     if set(actual) != set(expected) or any(actual[n].get("digest") != "sha256:" + digest for n, digest in expected.items()):

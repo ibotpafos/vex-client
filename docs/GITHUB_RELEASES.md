@@ -31,6 +31,10 @@ public releases remain unchanged; this change is not a new client version.
    GitHub asset digest matches; official provenance attestations accompany them.
    Existing releases are never clobbered, deleted or retagged; platform releases
    do not compete for GitHub global Latest.
+   Inspect the unpublished draft through the CLI's authenticated lookup and its
+   exact repository/numeric release-ID API URL, not the published tag endpoint.
+   Check draft/tag/source/ID identity again before verifying uploaded digests and
+   making the release public; any mismatch leaves the draft unpublished.
 6. GitHub sends its separately HMAC-signed `release.published` event to
    `https://vexguard.app/v1/webhooks/github/releases`. The API validates repository,
    tag, manifest, signer pin and immutable asset digests, and atomically imports

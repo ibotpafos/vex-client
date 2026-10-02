@@ -12,7 +12,9 @@ final class VEXAppState: ObservableObject {
     @AppStorage("native.autoLaunchEnabled") var autoLaunchEnabled = false
     @AppStorage("native.autoServerEnabled") var autoServerEnabled = true
     @AppStorage("native.antiLeakEnabled") var antiLeakEnabled = true
-    @AppStorage("native.smartRoutingEnabled") var smartRoutingEnabled = true
+    @AppStorage("native.smartRoutingEnabled") var smartRoutingEnabled = true {
+        didSet { nativeNormalPendingTunnel = nil }
+    }
     @AppStorage("native.autoRecoveryEnabled") var autoRecoveryEnabled = true
     @AppStorage("native.biometricUnlockRequired") var biometricUnlockRequired = false
     @AppStorage("native.interfaceLanguage") var interfaceLanguage = "ru"
@@ -22,11 +24,19 @@ final class VEXAppState: ObservableObject {
     @Published private(set) var session: AuthSession?
     @Published private(set) var user: VEXUser?
     @Published private(set) var locations: [VpnLocation] = []
-    @Published private(set) var entitlement: Entitlement?
+    @Published private(set) var entitlement: Entitlement? {
+        didSet {
+            if entitlement?.hasPaidAccess != true { nativeNormalPendingTunnel = nil }
+        }
+    }
     @Published private(set) var billingSummary: BillingSummary?
     @Published private(set) var billingPayments: [BillingPayment] = []
     @Published private(set) var deviceAddons: [DeviceAddon] = []
-    @Published private(set) var accountDevices: [VpnDevice] = []
+    @Published private(set) var accountDevices: [VpnDevice] = [] {
+        didSet {
+            if accountDevices != oldValue { nativeNormalPendingTunnel = nil }
+        }
+    }
     @Published private(set) var deviceManagementRequiresWeb = false
     @Published private(set) var updateCheck: AppUpdateCheckResult?
     @Published private(set) var remoteConfig: AppRemoteConfig?
@@ -71,6 +81,75 @@ final class VEXAppState: ObservableObject {
     private let nativePSKVerifier = NativeVPNProfileAuthorizationVerifier.bundled()
     private weak var nativePSKHelper: VEXHelperModel?
     private var nativePSKPreparedTunnel: PreparedTunnel?
+    // Memory-only normal-profile staging. Config contains private key material;
+    // never publish, persist, diagnose, or use it as an implicit connect input.
+    private var nativeNormalPendingStorage: (tunnel: PreparedTunnel, stagedAt: Date, isCurrent: @MainActor () -> Bool)?
+    private var nativeNormalPendingTunnel: PreparedTunnel? {
+        get {
+            guard let pending = nativeNormalPendingStorage,
+                  Date().timeIntervalSince(pending.stagedAt) >= 0,
+                  Date().timeIntervalSince(pending.stagedAt) <= 300,
+                  let expiresAt = pending.tunnel.normalAuthorizationExpiresAt, expiresAt > Date(),
+                  pending.isCurrent() else {
+                nativeNormalPendingStorage = nil
+                return nil
+            }
+            return pending.tunnel
+        }
+        set {
+            nativeNormalPendingStorage = nil
+            guard let candidate = newValue, let source = activeTunnel,
+                  let current = session, let installation = nativePushIdentityStore.existingDeviceId(),
+                  canUseNativeRemotePush, nativeRemotePushEnabled, nativePushConsentMatchesSession,
+                  nativePushRegistration.status == .registered,
+                  nativePushAccountID == current.user.id,
+                  nativePushSessionGeneration == authenticatedSessionGeneration,
+                  nativePushDeviceID == source.device.id,
+                  let device = accountDevices.first(where: { $0.id == source.device.id }),
+                  device.status == "active", device.platform?.lowercased() == "macos",
+                  device.provisioningMode == "managed_native", device.clientKeyOwnership == "client",
+                  device.protocol?.lowercased() == "amneziawg", device.externalDeviceId == installation,
+                  source.device.externalDeviceId == installation,
+                  source.device.publicKey == device.publicKey,
+                  candidate.device.id == device.id, candidate.device.externalDeviceId == installation,
+                  candidate.device.publicKey == device.publicKey,
+                  let expiresAt = candidate.normalAuthorizationExpiresAt, expiresAt > Date(),
+                  // Smart-profile versions are opaque route fingerprints, not a counter.
+                  let sourceVersion = source.profileVersion, sourceVersion > 0,
+                  let version = candidate.profileVersion, version > 0,
+                  (version != sourceVersion || candidate.config != source.config ||
+                   candidate.routingPolicyVersion != source.routingPolicyVersion ||
+                   candidate.bypassRangesCount != source.bypassRangesCount || candidate.bypassDomainsCount != source.bypassDomainsCount),
+                  candidate.locationId == source.locationId, candidate.locationId == targetLocationId,
+                  candidate.routingMode == source.routingMode, candidate.routingMode == routingMode,
+                  candidate.bypassRegion == source.bypassRegion,
+                  entitlement?.hasPaidAccess == true, !isVpnBusy, !isDeviceBusy,
+                  !isServerSelectionBusy, !isNativePSKPreparationBusy else { return }
+            let sessionGeneration = authenticatedSessionGeneration
+            let profileGeneration = nativeNormalProfileReconciliationGeneration
+            let vpnGeneration = vpnOperationGeneration
+            let selectedID = selectedLocationId
+            let prepared = nativePSKPreparedTunnel
+            nativeNormalPendingStorage = (candidate, Date(), { [weak self] in
+                guard let self, self.canUseNativeRemotePush, self.nativeRemotePushEnabled,
+                      self.nativePushConsentMatchesSession, self.nativePushRegistration.status == .registered,
+                      self.nativePushAccountID == current.user.id,
+                      self.nativePushSessionGeneration == sessionGeneration,
+                      self.nativePushDeviceID == device.id,
+                      self.nativePushIdentityStore.existingDeviceId() == installation,
+                      self.nativeNormalProfileReconciliationGeneration == profileGeneration,
+                      self.vpnOperationGeneration == vpnGeneration,
+                      self.activeTunnel == source, self.nativePSKPreparedTunnel == prepared,
+                      self.targetLocationId == candidate.locationId, self.selectedLocationId == selectedID,
+                      self.routingMode == candidate.routingMode,
+                      self.accountDevices.first(where: { $0.id == device.id }) == device,
+                      self.entitlement?.hasPaidAccess == true, !self.isVpnBusy, !self.isDeviceBusy,
+                      !self.isServerSelectionBusy, !self.isNativePSKPreparationBusy else { return false }
+                return (try? self.ensureAuthenticatedSessionCurrent(generation: sessionGeneration,
+                    accessToken: current.accessToken, accountID: current.user.id)) != nil
+            })
+        }
+    }
     private var nativePSKRetryTask: Task<Void, Never>?
     private var nativePushEventOwner: NativePushPSKEventOwner?
     @Published private(set) var nativePushEventError: String?
@@ -90,7 +169,9 @@ final class VEXAppState: ObservableObject {
     private var profileWarmupTask: Task<Void, Never>?
     private var sessionRefreshTask: (accessToken: String, task: Task<Result<AuthSession, Error>, Never>)?
     private var desiredVpnState: DesiredVpnState = .disconnected
-    private var vpnOperationGeneration = 0
+    private var vpnOperationGeneration = 0 {
+        didSet { nativeNormalPendingTunnel = nil }
+    }
     private var activeResiliencePolicy: ResiliencePolicy?
     private var activeResilienceRoute: ResilienceConnectionCandidate?
     private var updateMonitorTask: Task<Void, Never>?
@@ -173,6 +254,7 @@ final class VEXAppState: ObservableObject {
     }
 
     func nativeApplePushRegistrationFailed() {
+        nativeNormalPendingTunnel = nil
         guard nativeRemotePushEnabled, nativePushConsentMatchesSession else { return }
         nativeApplePushToken = nil
         nativePushRegistrationError = "Не удалось зарегистрировать APNs. Проверьте подпись сборки и повторите попытку."
@@ -277,6 +359,10 @@ final class VEXAppState: ObservableObject {
                   let managedDeviceID = nativePushDeviceID,
                   event.deviceID == managedDeviceID,
                   let owner = NativePushPSKEventOwner(accountID: accountID, installationID: nativePushIdentityStore.getOrCreateDeviceId()) else { return }
+            // A validated key-rotation hint supersedes a normal snapshot too.
+            // Do not let an older suspended normal fetch recreate its candidate.
+            nativeNormalPendingTunnel = nil
+            nativeNormalProfileReconciliationGeneration &+= 1
             do {
                 // A duplicate is already durable and may trigger an offline retry.
                 _ = try nativePushPSKQueue.enqueue(event, owner: owner)
@@ -290,6 +376,7 @@ final class VEXAppState: ObservableObject {
             }
         }
         if ordinaryProfileChange {
+            nativeNormalPendingTunnel = nil
             nativeNormalProfileReconciliationGeneration &+= 1
             // Evict synchronously, before any suspension; never derive a profile
             // or PSK event from the uncorrelated APS payload.
@@ -355,11 +442,27 @@ final class VEXAppState: ObservableObject {
                 })
             guard scopeIsCurrent() else { return }
             // No activeTunnel assignment: its observer would rebind registration.
-            if previousActive == nil { nativePSKPreparedTunnel = prepared }
+            if let source = previousActive {
+                guard prepared.device.id == source.device.id,
+                      prepared.device.externalDeviceId == installationID,
+                      source.device.externalDeviceId == installationID,
+                      prepared.device.publicKey == source.device.publicKey,
+                      prepared.locationId == source.locationId, prepared.routingMode == source.routingMode,
+                      prepared.bypassRegion == source.bypassRegion,
+                      let sourceVersion = source.profileVersion, sourceVersion > 0,
+                      let version = prepared.profileVersion, version > 0,
+                      (version != sourceVersion || prepared.config != source.config ||
+                       prepared.routingPolicyVersion != source.routingPolicyVersion ||
+                       prepared.bypassRangesCount != source.bypassRangesCount || prepared.bypassDomainsCount != source.bypassDomainsCount) else { return }
+                nativeNormalPendingTunnel = prepared
+            } else {
+                nativePSKPreparedTunnel = prepared
+            }
             nativePushEventError = nil
             // TODO: Add controlled, owned live-normal-profile cutover with rollback
             // and handshake evidence. Until verified, leave an active tunnel intact;
-            // this path updates only a signed cache and an idle prepared profile.
+            // this path updates only a signed cache, an idle prepared profile,
+            // or a separately scoped memory-only normal candidate.
         } catch {
             guard scopeIsCurrent() else { return }
             nativePushEventError = "Не удалось безопасно обновить VPN-профиль. Активное подключение не изменено."
@@ -513,16 +616,22 @@ final class VEXAppState: ObservableObject {
     }
 
     private func observeNativePushSession() {
+        nativePushRegistration.$status.sink { [weak self] status in
+            if status != .registered { self?.nativeNormalPendingTunnel = nil }
+        }.store(in: &cancellables)
         nativePushRegistrar.isCurrent = { [weak self] request in
             guard let self, self.canUseNativeRemotePush, self.nativeRemotePushEnabled, self.nativePushConsentMatchesSession,
                   self.nativePushDeviceID == request.deviceID else { return false }
             return (try? self.ensureAuthenticatedSessionCurrent(generation: request.sessionGeneration, accessToken: request.accessToken, accountID: request.accountID)) != nil
         }
         $session.sink { [weak self] _ in
+            self?.nativeNormalPendingTunnel = nil
             Task { @MainActor [weak self] in self?.reconcileNativePushSession() }
         }.store(in: &cancellables)
         $activeTunnel.sink { [weak self] tunnel in
-            guard let self, let tunnel, let owner = self.session?.user.id else { return }
+            guard let self else { return }
+            self.nativeNormalPendingTunnel = nil
+            guard let tunnel, let owner = self.session?.user.id else { return }
             self.nativePSKPreparedTunnel = tunnel
             let generation = self.authenticatedSessionGeneration
             Task { @MainActor [weak self] in
@@ -534,6 +643,9 @@ final class VEXAppState: ObservableObject {
     private func bindNativePushDevice(_ deviceID: String, accountID: String, generation: Int) {
         guard nativePushRuntimeAllowed, !deviceID.isEmpty,
               (try? ensureAuthenticatedSessionCurrent(generation: generation, accountID: accountID)) != nil else { return }
+        if nativePushDeviceID != deviceID || nativePushAccountID != accountID || nativePushSessionGeneration != generation {
+            nativeNormalPendingTunnel = nil
+        }
         nativePushDeviceID = deviceID
         nativePushAccountID = accountID
         nativePushSessionGeneration = generation
@@ -541,6 +653,7 @@ final class VEXAppState: ObservableObject {
     }
 
     private func reconcileNativePushSession() {
+        _ = nativeNormalPendingTunnel // Drop any obsolete memory-only owner scope.
         if let owner = nativePushEventOwner, owner.accountID != session?.user.id {
             nativePSKRetryTask?.cancel()
             nativePSKRetryTask = nil
@@ -600,6 +713,7 @@ final class VEXAppState: ObservableObject {
     }
 
     private func invalidateNativePushSession(resetConsent: Bool = false) {
+        nativeNormalPendingTunnel = nil
         nativePSKRetryTask?.cancel()
         nativePSKRetryTask = nil
         nativePSKPreparedTunnel = nil
@@ -620,7 +734,10 @@ final class VEXAppState: ObservableObject {
 
     var selectedLocationId: String {
         get { storedSelectedLocationId }
-        set { storedSelectedLocationId = newValue }
+        set {
+            if storedSelectedLocationId != newValue { nativeNormalPendingTunnel = nil }
+            storedSelectedLocationId = newValue
+        }
     }
 
     var selectedLocation: VpnLocation? {
@@ -1253,6 +1370,7 @@ final class VEXAppState: ObservableObject {
     }
 
     private func clearActiveTunnelRouteState() {
+        nativeNormalPendingTunnel = nil
         activeTunnel = nil
         activeResilienceRoute = nil
         activeResiliencePolicy = nil

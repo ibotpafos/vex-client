@@ -201,7 +201,8 @@ struct VPNProfileService {
             config: config, locationId: locationId, profileVersion: clean.version, routingMode: routingMode,
             bypassRegion: bypass, bypassRangesCount: verified.bypassRangesCount, bypassDomainsCount: verified.bypassDomainsCount,
             routingPolicyVersion: clean.routingPolicyVersion ?? VEXAppInfo.routingPolicyVersion,
-            rotationRequired: false, awgVersion: Self.awgVersion)
+            rotationRequired: false, awgVersion: Self.awgVersion,
+            normalAuthorizationExpiresAt: verified.expiresAt)
         try validateCurrent()
         try cache.save(PreparedTunnelCacheRecord(tunnel: tunnel, normalAuthorizationProfile: profile), locationId: locationId, routingMode: routingMode, owner: owner)
         normalCacheReuse.unblock(owner)
@@ -243,7 +244,8 @@ struct VPNProfileService {
             config: config, locationId: locationId, profileVersion: clean.version, routingMode: routingMode,
             bypassRegion: bypassRegion, bypassRangesCount: verified.bypassRangesCount, bypassDomainsCount: verified.bypassDomainsCount,
             routingPolicyVersion: clean.routingPolicyVersion ?? VEXAppInfo.routingPolicyVersion,
-            rotationRequired: false, awgVersion: Self.awgVersion)
+            rotationRequired: false, awgVersion: Self.awgVersion,
+            normalAuthorizationExpiresAt: verified.expiresAt)
     }
 
     /// Admission is read-only with respect to identity, cache and helper configuration.
@@ -349,7 +351,8 @@ struct VPNProfileService {
             bypassDomainsCount: verified.bypassDomainsCount,
             routingPolicyVersion: profile.routingPolicyVersion ?? VEXAppInfo.routingPolicyVersion,
             rotationRequired: profile.rotationRequired == true,
-            awgVersion: Self.awgVersion
+            awgVersion: Self.awgVersion,
+            normalAuthorizationExpiresAt: verified.expiresAt
         )
         try validateCurrent()
         try cache.save(PreparedTunnelCacheRecord(tunnel: tunnel, normalAuthorizationProfile: managedProfile), locationId: normalizedLocationId, routingMode: effectiveRoutingMode, owner: cacheOwner)

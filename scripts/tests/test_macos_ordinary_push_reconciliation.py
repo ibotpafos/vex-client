@@ -12,8 +12,10 @@ def body(sig):
     return src[a:i]
 receipt=body('    func receivedNativeRemoteNotification(')
 reconcile=body('    private func reconcileNativeNormalProfileChange(') if '    private func reconcileNativeNormalProfileChange(' in src else ''
+pending=body('    private var nativeNormalPendingTunnel: PreparedTunnel?') if '    private var nativeNormalPendingTunnel: PreparedTunnel?' in src else ''
 swift=r'''
 import Foundation
+let fixtureExpiry=Date(timeIntervalSinceReferenceDate:3_200_000_000)
 struct User {let id:String}; struct Session {let user:User;let accessToken:String}
 enum Registration {case registered, other}
 enum AuthenticatedOperationError:Error {case sessionChanged}
@@ -32,7 +34,7 @@ struct NativePushPSKEventOwner {init?(accountID:String,installationID:String){}}
  }
 }
 @MainActor func device()->VpnDevice {try! JSONDecoder().decode(VpnDevice.self,from:Data(#"{"id":"d","status":"active","platform":"macos","provisioning_mode":"managed_native","client_key_ownership":"client","protocol":"amneziawg","external_device_id":"install"}"#.utf8))}
-func tunnel(_ d:VpnDevice)->PreparedTunnel {PreparedTunnel(device:d,config:"inert signed-service port",locationId:"de",profileVersion:7,routingMode:.fullTunnel,bypassRegion:nil,bypassRangesCount:0,bypassDomainsCount:0,routingPolicyVersion:"fixture",rotationRequired:false)}
+func tunnel(_ d:VpnDevice)->PreparedTunnel {PreparedTunnel(device:d,config:"inert signed-service port",locationId:"de",profileVersion:7,routingMode:.fullTunnel,bypassRegion:nil,bypassRangesCount:0,bypassDomainsCount:0,routingPolicyVersion:"fixture",rotationRequired:false,normalAuthorizationExpiresAt:fixtureExpiry)}
 @MainActor final class H {
  var canUseNativeRemotePush=true,nativeRemotePushEnabled=true,nativePushConsentMatchesSession=true
  var isVpnBusy=false,isDeviceBusy=false,isServerSelectionBusy=false,isNativePSKPreparationBusy=false
@@ -44,6 +46,8 @@ func tunnel(_ d:VpnDevice)->PreparedTunnel {PreparedTunnel(device:d,config:"iner
  var accountDevices:[VpnDevice]=[device()]
  var selectedLocationId="de",targetLocationId:String?="de",routingMode:VpnRoutingMode = .fullTunnel
  var activeTunnel:PreparedTunnel?,nativePSKPreparedTunnel:PreparedTunnel?
+ private var nativeNormalPendingStorage: (tunnel: PreparedTunnel, stagedAt: Date, isCurrent: @MainActor () -> Bool)?
+ PENDING
  var nativePushEventOwner:NativePushPSKEventOwner?,nativePushEventError:String?
  var profileWarmupTask:Task<Void,Never>?
  let trace=Trace();let profileService:Profile
@@ -54,6 +58,7 @@ func tunnel(_ d:VpnDevice)->PreparedTunnel {PreparedTunnel(device:d,config:"iner
  }
  func refreshCustomerState()async {trace.actions.append("refresh")}
  func processNativePSKEvents()async {trace.actions.append("psk")}
+ func hasNormalPendingTunnel()->Bool { nativeNormalPendingTunnel != nil }
  RECEIPT
  RECONCILE
 }
@@ -68,7 +73,9 @@ func drain()async {for _ in 0..<128 {await Task.yield()}}
   guard current else {exit(1)}
   let active=H();active.activeTunnel=tunnel(device());let original=active.activeTunnel
   active.receivedNativeRemoteNotification(aps);await drain()
-  precondition(active.activeTunnel==original && active.nativePSKPreparedTunnel==nil && active.profileService.fetches==1)
+  // The legacy fixture returns version 7, identical to the owned active
+  // profile: it remains unstageable while preserving every original result.
+  precondition(active.activeTunnel==original && active.nativePSKPreparedTunnel==nil && !active.hasNormalPendingTunnel() && active.profileService.fetches==1)
   let bad=H();bad.receivedNativeRemoteNotification(["aps":["content-available":1],"vex":["bad":true]]);await drain()
   precondition(bad.trace.actions.isEmpty && bad.profileService.fetches==0 && bad.nativePushIdentityStore.creates==0)
   let psk=H();psk.receivedNativeRemoteNotification(["aps":["content-available":1],"vex":["device_id":"d"]]);await drain()
@@ -99,7 +106,7 @@ func drain()async {for _ in 0..<128 {await Task.yield()}}
   print("ordinary scope matrix PASS late_changes=\(rejected); newer push supersedes old suspended fetch; active unchanged, malformed/PSK no normal fetch, stale session only prior captured-owner eviction; no helper/API/Keychain/VPN use")
  }
 }
-'''.replace('RECEIPT',receipt).replace('RECONCILE',reconcile)
+'''.replace('RECEIPT',receipt).replace('RECONCILE',reconcile).replace('PENDING',pending)
 tmp=Path(os.environ.get('TMPDIR','/Volumes/D/Projects/mobile/macos-release-transaction-20261001/cycle-22-native/tmp'));tmp.mkdir(parents=True,exist_ok=True)
 with tempfile.TemporaryDirectory(prefix='ordinary-push-',dir=tmp) as raw:
     d=Path(raw);(d/'main.swift').write_text(swift)

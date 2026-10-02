@@ -766,6 +766,9 @@ struct PreparedTunnel: Equatable {
     var routingPolicyVersion: String
     var rotationRequired: Bool
     var awgVersion: Int = 3
+    // Derived only from verified normal authorization; never loaded as authority
+    // from cached metadata. Legacy/staged constructors intentionally omit it.
+    var normalAuthorizationExpiresAt: Date? = nil
 }
 
 struct ManagedVpnProfile: Codable, Equatable {

@@ -67,6 +67,7 @@ final class DisposableIdentityStore {{
     var nativePushConsentMatchesSession = true
     var session: FixtureSession?
     var authenticatedSessionGeneration = 1
+    var nativeNormalPendingTunnel: PreparedTunnel?
     var nativeNormalProfileReconciliationGeneration = 0
     var nativePushDeviceID: String?
     var nativePushEventOwner: NativePushPSKEventOwner?
@@ -116,6 +117,7 @@ func drain() async {{ for _ in 0..<32 {{ await Task.yield() }} }}
     func registerAppleDeviceToken(_ data: Data, accountID: String, deviceID: String, accessToken: String, sessionGeneration: Int) {{}}
 }}
 @MainActor final class LifecycleH {{
+    var nativeNormalPendingTunnel: PreparedTunnel?
     var nativePushRuntimeAllowed = true
     var canUseNativeRemotePush = true
     var nativeRemotePushEnabled = false

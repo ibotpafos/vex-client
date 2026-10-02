@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 import XCTest
 @testable import VEXNativeMac
+import VEXHelperCore
 
 final class SwiftHelperContractTests: XCTestCase {
     private func readText(_ relativePath: String) throws -> String {
@@ -88,7 +89,14 @@ final class SwiftHelperContractTests: XCTestCase {
         XCTAssertTrue(runtime.contains("owner_pid \\(requested) does not match socket peer"))
         XCTAssertTrue(auth.contains("LOCAL_PEERTOKEN"))
         XCTAssertTrue(auth.contains("SecCodeCopyGuestWithAttributes"))
-        XCTAssertTrue(auth.contains("expectedTeamIdentifier"))
+        XCTAssertTrue(auth.contains("kSecGuestAttributeAudit as String: peer.auditToken"))
+        XCTAssertTrue(auth.contains("SecRequirementCreateWithString(Self.clientRequirement"))
+        XCTAssertTrue(auth.contains("SecCodeCheckValidity(guest, SecCSFlags(rawValue: kSecCSStrictValidate), requirement)"))
+        XCTAssertTrue(auth.contains("peer.effectiveUID == consoleUID"))
+        XCTAssertEqual(SystemPeerAuthenticator.clientRequirement, VEXHelperInstaller.appSigningRequirement)
+        XCTAssertTrue(SystemPeerAuthenticator.clientRequirement.contains(#"certificate leaf = H"c6fd1853a177fbcfb04c5d4f78fbe405777b3a3e""#))
+        XCTAssertTrue(SystemPeerAuthenticator.clientRequirement.contains(#"anchor apple generic and certificate leaf[subject.OU] = "3JLW9XNU53""#))
+        XCTAssertFalse(auth.contains("ProcessInfo.processInfo.environment"))
     }
 
     func testShutdownHandlingIsBoundedInSwiftShutdownPath() throws {
@@ -135,7 +143,7 @@ final class SwiftHelperContractTests: XCTestCase {
         XCTAssertTrue(installerScript.contains("VEX_EXPECTED_TEAM_ID"))
         XCTAssertTrue(installerScript.contains("rollback_install"))
         XCTAssertTrue(installerScript.contains("root-owned verified app snapshot"))
-        XCTAssertTrue(installerScript.contains("codesign --verify --deep --strict \"$verified_app\""))
+        XCTAssertTrue(installerScript.contains(#"codesign --verify --deep --strict -R="$app_requirement" "$verified_app""#))
         XCTAssertTrue(wrapperScript.contains("resource_dir=\"${APP_PATH}/Contents/Resources/resources\""))
         XCTAssertTrue(wrapperScript.contains("/usr/bin/ditto"))
         XCTAssertTrue(wrapperScript.contains("\\$verified_resources/install-vex-vpn-helper.sh"))
@@ -144,11 +152,13 @@ final class SwiftHelperContractTests: XCTestCase {
         XCTAssertTrue(swiftInstaller.contains("/usr/bin/ditto"))
         XCTAssertTrue(swiftInstaller.contains("verified_resources"))
         XCTAssertTrue(swiftInstaller.contains("certificate leaf[subject.OU]"))
-        XCTAssertTrue(swiftInstaller.contains("SecCodeCopySelf"))
-        XCTAssertTrue(swiftInstaller.contains("kSecCodeInfoTeamIdentifier"))
+        XCTAssertTrue(swiftInstaller.contains(#""--verify", "--deep", "--strict", "-R=\(Self.appSigningRequirement)", Bundle.main.bundleURL.path"#))
+        XCTAssertFalse(swiftInstaller.contains("SecCodeCopySelf"))
+        XCTAssertFalse(swiftInstaller.contains("ProcessInfo.processInfo.environment"))
         XCTAssertFalse(swiftInstaller.contains("/tmp/vex-vpn-install.log"))
         XCTAssertTrue(wrapperScript.contains("certificate leaf[subject.OU]"))
-        XCTAssertTrue(wrapperScript.contains("PINNED_VEX_TEAM_ID=\"3JLW9XNU53\""))
+        XCTAssertTrue(wrapperScript.contains("app_requirement='" + SystemPeerAuthenticator.clientRequirement + "'"))
+        XCTAssertTrue(wrapperScript.contains(#"codesign --verify --deep --strict -R="${app_requirement}" "${APP_PATH}""#))
         XCTAssertFalse(wrapperScript.contains("INSTALL_LOG"))
         XCTAssertTrue(runtimeVerifier.contains("KeepAlive raw"))
         XCTAssertTrue(runtimeVerifier.contains("helper_plist_is_persistent"))

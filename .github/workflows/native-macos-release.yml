@@ -44,7 +44,9 @@ jobs:
 
     steps:
       - name: Checkout native client
-        uses: actions/checkout@v4
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
       - name: Validate release inputs
         shell: bash
@@ -63,8 +65,9 @@ jobs:
           [[ "${VEX_SELF_SIGNED_APP_CERT_SHA256}" =~ ^[0-9A-Fa-f]{64}$ ]] || { echo "invalid self-signed certificate pin" >&2; exit 2; }
 
       - name: Checkout production downloads repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          persist-credentials: false
           repository: ibotpafos/VPN
           path: vpn-main
           token: ${{ env.VEX_RELEASE_REPOSITORY_TOKEN }}
@@ -136,7 +139,7 @@ jobs:
           PY
 
       - name: Upload verified release bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: vex-native-macos-self-signed-${{ inputs.release_version }}-${{ inputs.release_build }}
           path: dist/native-macos/deploy/**

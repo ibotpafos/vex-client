@@ -50,6 +50,7 @@ export GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local
 python3 "$ROOT/scripts/tests/test_macos_psk_staged_profile_store.py"
 python3 "$ROOT/scripts/tests/test_macos_psk_rotation_validation.py"
 python3 "$ROOT/scripts/tests/test_macos_psk_profile_authorization.py"
+python3 "$ROOT/scripts/tests/test_macos_normal_profile_authorization.py"
 python3 "$ROOT/scripts/tests/test_macos_psk_event_consumer.py"
 python3 "$ROOT/scripts/tests/test_macos_psk_profile_preparation.py"
 python3 "$ROOT/scripts/tests/test_macos_psk_appstate_cutover.py"

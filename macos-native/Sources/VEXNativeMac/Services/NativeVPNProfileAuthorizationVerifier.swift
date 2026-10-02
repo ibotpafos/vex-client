@@ -27,6 +27,58 @@ struct NativeVPNProfileAuthorizationVerifier {
         return Self(pinnedPublicKeyDER: anchors)
     }
 
+    struct VerifiedNormalProfile { let profile: ManagedVpnProfile; let mtu: Int; let persistentKeepalive: Int }
+
+    /// Verifies a normal authenticated profile response without giving it PSK
+    /// rotation semantics. Callers must still decide whether to promote it; this
+    /// method performs no I/O, cache, keychain, helper, or tunnel operation.
+    func verifyNormalProfile(_ profile: ManagedVpnProfile, ownerAccountID: String,
+                             managedDeviceID: String, requestedLocationID: String, locationID: String, routingMode: String,
+                             bypassRegion: String? = nil, expectedProfileVersion: Int,
+                             now: Date = Date()) throws -> VerifiedNormalProfile {
+        guard !ownerAccountID.isEmpty, !managedDeviceID.isEmpty, !requestedLocationID.isEmpty, !locationID.isEmpty,
+              expectedProfileVersion > 0, profile.version == expectedProfileVersion, profile.deviceId == managedDeviceID,
+              profile.revoked != true, profile.unchanged != true,
+              let auth = profile.authorization else { throw Failure.missingAuthorization }
+        guard auth.algorithm == "ECDSA_P256_SHA256_DER", let der = keys[auth.keyID] else {
+            throw keys.isEmpty ? Failure.missingTrustAnchor : Failure.malformed
+        }
+        guard auth.keyID.utf8.count <= 128, auth.payloadBase64.utf8.count <= 1_400_000,
+              auth.signatureBase64.utf8.count <= 128,
+              let payload = rawURL(auth.payloadBase64), let signature = rawURL(auth.signatureBase64),
+              payload.count <= 1 << 20 else { throw Failure.malformed }
+        do {
+            let key = try P256.Signing.PublicKey(derRepresentation: der)
+            let sig = try P256.Signing.ECDSASignature(derRepresentation: signature)
+            guard key.isValidSignature(sig, for: payload) else { throw Failure.signature }
+        } catch { throw Failure.signature }
+        let policy: Policy
+        do { let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601; policy = try decoder.decode(Policy.self, from: payload) }
+        catch { throw Failure.malformed }
+        guard policy.schema == "vex.native-vpn-profile.v1", policy.userID == ownerAccountID,
+              policy.deviceID == managedDeviceID, policy.profileVersion == expectedProfileVersion,
+              (policy.routingMode ?? "full_tunnel") == routingMode,
+              policy.requestedLocationID == requestedLocationID,
+              policy.assignedLocationID == locationID, policy.bypassRegion == bypassRegion,
+              policy.issuedAt <= now, policy.expiresAt > now,
+              profile.expiresAt.flatMap(parse) == policy.expiresAt,
+              (policy.routingMode == nil || policy.routingPolicyVersion == profile.routingPolicyVersion),
+              tunnel(policy.tunnel, profile) else { throw policy.expiresAt <= now ? Failure.expired : Failure.policyMismatch }
+        var clean = profile
+        clean.authorization = nil
+        clean.bypassRanges = nil
+        clean.bypassDomains = nil
+        // The opaque outer config is not signed. Future preparation must render
+        // only verified tunnel fields with the already-owned local client key.
+        clean.config = nil
+        if policy.routingMode == nil {
+            guard routingMode == "full_tunnel", policy.bypassRegion == nil,
+                  policy.routingPolicyVersion == nil else { throw Failure.policyMismatch }
+            clean.routingPolicyVersion = nil
+        }
+        return VerifiedNormalProfile(profile: clean, mtu: policy.tunnel.mtu, persistentKeepalive: policy.tunnel.persistentKeepalive)
+    }
+
     func verify(_ envelope: PSKRotationCurrentResponse, ownerAccountID: String, managedDeviceID: String, locationID: String, routingMode: String, bypassRegion: String? = nil, now: Date = Date()) throws -> PSKRotationCurrentResponse {
         try verifyDetailed(envelope, ownerAccountID: ownerAccountID, managedDeviceID: managedDeviceID, locationID: locationID, routingMode: routingMode, bypassRegion: bypassRegion, now: now).envelope
     }
@@ -95,8 +147,8 @@ struct NativeVPNProfileAuthorizationVerifier {
             signed.persistentKeepalive == rendered.persistentKeepalive &&
             rendered.randomTrailers == nil && rendered.disableCookies == nil
     }
-    private struct Policy: Decodable { let schema:String; let userID:String; let deviceID:String; let assignedLocationID:String; let routingMode:String?; let bypassRegion:String?; let routingPolicyVersion:String?; let profileVersion:Int; let issuedAt:Date; let expiresAt:Date; let tunnel:Tunnel
-        enum CodingKeys:String,CodingKey { case schema; case userID="user_id"; case deviceID="device_id"; case assignedLocationID="assigned_location_id"; case routingMode="routing_mode"; case bypassRegion="bypass_region"; case routingPolicyVersion="routing_policy_version"; case profileVersion="profile_version"; case issuedAt="issued_at"; case expiresAt="expires_at"; case tunnel }
+    private struct Policy: Decodable { let schema:String; let userID:String; let deviceID:String; let requestedLocationID:String?; let assignedLocationID:String; let routingMode:String?; let bypassRegion:String?; let routingPolicyVersion:String?; let profileVersion:Int; let issuedAt:Date; let expiresAt:Date; let tunnel:Tunnel
+        enum CodingKeys:String,CodingKey { case schema; case userID="user_id"; case deviceID="device_id"; case requestedLocationID="requested_location_id"; case assignedLocationID="assigned_location_id"; case routingMode="routing_mode"; case bypassRegion="bypass_region"; case routingPolicyVersion="routing_policy_version"; case profileVersion="profile_version"; case issuedAt="issued_at"; case expiresAt="expires_at"; case tunnel }
     }
     private struct Tunnel: Decodable { let `protocol`:String; let endpoint:String; let assignedIPv4:String; let serverPublicKey:String; let presharedKey:String; let dns:[String]; let allowedIPs:[String]; let mtu:Int; let persistentKeepalive:Int; let amnezia: Amnezia?
         enum CodingKeys:String,CodingKey { case `protocol`,endpoint,dns,mtu,amnezia; case assignedIPv4="assigned_ipv4"; case serverPublicKey="server_public_key"; case presharedKey="preshared_key"; case allowedIPs="allowed_ips"; case persistentKeepalive="persistent_keepalive" }

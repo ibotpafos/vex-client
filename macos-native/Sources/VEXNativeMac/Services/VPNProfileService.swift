@@ -237,6 +237,13 @@ struct VPNProfileService {
         bypassRegion effectiveBypassRegion: String?,
         writeHelperConfig: Bool
     ) async throws -> PreparedTunnel {
+        // TODO(normal-signed-profile-admission): verifyNormalProfile now exists,
+        // but normal promotion must bind the captured authenticated session,
+        // device/client key, requested+assigned location, routing and version
+        // before any cache/helper write. Opaque config is not signed; never
+        // promote it merely because its AWG syntax is valid. Staged PSK uses
+        // its separate verified preparation path; ordinary admission remains
+        // unfinished until the injected invalid-proof/no-write gate passes.
         if managedProfile.revoked == true {
             throw VPNProfileError.deviceRevoked
         }

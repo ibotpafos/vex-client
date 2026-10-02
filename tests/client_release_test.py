@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import tempfile
+import subprocess
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -14,6 +15,91 @@ ANDROID_TAG = "android-v" + SOURCE["android"]["version"]
 MAC_TAG = "macos-v" + SOURCE["native_macos"]["version"]
 
 class ReleaseContract(unittest.TestCase):
+    def publish_protocol_fixture(self, root, draft_changes=None, remote_changes=None,
+                                 probe_code=1, probe_stderr=b"release not found", ref_sha=None):
+        expected, _ = self.android_builder_fixture(root)
+        expected["dry_run"] = False
+        release.bundle(root, expected)
+        api = f"https://api.github.com/repos/{release.REPO}/releases/123"
+        draft = {"apiUrl": api, "tagName": expected["tag"], "isDraft": True,
+                 "targetCommitish": expected["source_commit"], **(draft_changes or {})}
+        remote = {"id": 123, "draft": True, "tag_name": expected["tag"],
+                  "target_commitish": expected["source_commit"],
+                  "assets": [{"name": p.name, "digest": "sha256:" + release.sha(p)} for p in root.iterdir()],
+                  **(remote_changes or {})}
+        calls = []
+        self.publish_calls = calls
+
+        def fake_command(*args):
+            calls.append(args)
+            if args[:2] == ("gh", "api"):
+                if args[2] == f"repos/{release.REPO}/git/ref/tags/{expected['tag']}":
+                    return json.dumps({"object": {"type": "commit", "sha": ref_sha or expected["source_commit"]}})
+                if args[2] == api:
+                    return json.dumps(remote)
+                if "/releases/tags/" in args[2]:
+                    # Native GitHub behavior observed for an unpublished draft.
+                    raise subprocess.CalledProcessError(1, args, stderr="Not Found (HTTP 404)")
+            if args[:3] == ("gh", "release", "view") and "--json" in args:
+                return json.dumps(draft)
+            if args[:3] in (("gh", "release", "create"), ("gh", "release", "upload")):
+                return ""
+            if args[:3] == ("gh", "release", "edit"):
+                self.assertIn("--draft=false", args)
+                self.assertIn("--latest=false", args)
+                return ""
+            raise AssertionError(f"Unexpected mocked publish command: {args}")
+
+        probe = subprocess.CompletedProcess(["gh", "release", "view"], probe_code, b"", probe_stderr)
+        with patch.dict("os.environ", {"GITHUB_REF_TYPE": "tag", "GITHUB_REF_NAME": expected["tag"]}), \
+                patch.object(release, "command", fake_command), patch.object(release.subprocess, "run", return_value=probe):
+            result = release.publish(root, expected)
+        return result, calls
+
+    def test_publish_draft_via_numeric_id_only_after_digest_verification(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result, calls = self.publish_protocol_fixture(Path(tmp))
+            self.assertEqual(result["status"], "published")
+            actions = [c[2] for c in calls if c[:2] == ("gh", "release")]
+            self.assertEqual(actions, ["create", "upload", "view", "edit"])
+            self.assertTrue(any(c[:3] == ("gh", "api", f"https://api.github.com/repos/{release.REPO}/releases/123") for c in calls))
+            self.assertFalse(any("/releases/tags/" in c[2] for c in calls if c[:2] == ("gh", "api")))
+
+    def test_publish_rejects_foreign_or_changed_draft_identity(self):
+        fixtures = [("apiUrl", "https://evil.invalid/releases/123"),
+                    ("apiUrl", "https://api.github.com/repos/other/repo/releases/123"),
+                    ("apiUrl", f"https://api.github.com/repos/{release.REPO}/releases/123?redirect=1"),
+                    ("apiUrl", f"https://api.github.com/repos/{release.REPO}/releases/not-numeric"),
+                    ("tagName", "android-v0.0.0"), ("isDraft", False), ("targetCommitish", "b" * 40)]
+        for key, value in fixtures:
+            with self.subTest(key=key, value=value), tempfile.TemporaryDirectory() as tmp:
+                with self.assertRaises(ValueError):
+                    self.publish_protocol_fixture(Path(tmp), draft_changes={key: value})
+                self.assertFalse(any(c[:3] == ("gh", "release", "edit") for c in self.publish_calls))
+
+    def test_publish_rejects_remote_draft_identity_or_asset_mismatch(self):
+        fixtures = [("id", 124), ("id", True), ("draft", False), ("tag_name", "android-v0.0.0"),
+                    ("target_commitish", "b" * 40), ("assets", []),
+                    ("assets", [{"name": "fixture.apk", "digest": "sha256:" + "b" * 64}])]
+        for key, value in fixtures:
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as tmp:
+                with self.assertRaises(ValueError):
+                    self.publish_protocol_fixture(Path(tmp), remote_changes={key: value})
+                self.assertFalse(any(c[:3] == ("gh", "release", "edit") for c in self.publish_calls))
+
+    def test_publish_preserves_existing_release_and_fails_closed_on_probe_error(self):
+        for code, stderr in ((0, b""), (1, b"Forbidden (HTTP 403)"), (1, b"network timeout")):
+            with self.subTest(code=code, stderr=stderr), tempfile.TemporaryDirectory() as tmp:
+                with self.assertRaises(ValueError):
+                    self.publish_protocol_fixture(Path(tmp), probe_code=code, probe_stderr=stderr)
+                self.assertFalse(any(c[:2] == ("gh", "release") for c in self.publish_calls))
+
+    def test_publish_rejects_moved_tag_before_creating_draft(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(ValueError):
+                self.publish_protocol_fixture(Path(tmp), ref_sha="b" * 40)
+            self.assertFalse(any(c[:2] == ("gh", "release") for c in self.publish_calls))
+
     def android_builder_fixture(self, root):
         expected = {**release.plan(ANDROID_TAG, True), "source_commit": "a" * 40}
         name = f"Vex-Android-{expected['version']}-{SOURCE['android']['build']}.apk"

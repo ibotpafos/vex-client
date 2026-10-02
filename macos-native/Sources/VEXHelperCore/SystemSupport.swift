@@ -21,8 +21,14 @@ private final class LockedCommandOutput: @unchecked Sendable {
 
 public final class LocalFileSystem: HelperFileSystem, @unchecked Sendable {
     private let manager = FileManager.default
+    private let syncDescriptor: (Int32) -> Int32
 
-    public init() {}
+    public init() { syncDescriptor = Darwin.fsync }
+
+    // Internal fault-injection seam; production construction always uses fsync.
+    init(syncDescriptor: @escaping (Int32) -> Int32) {
+        self.syncDescriptor = syncDescriptor
+    }
 
     public func createDirectory(at path: String) throws {
         try manager.createDirectory(atPath: path, withIntermediateDirectories: true)
@@ -46,12 +52,16 @@ public final class LocalFileSystem: HelperFileSystem, @unchecked Sendable {
 
     public func writeTextAtomically(_ text: String, to path: String, mode: Int) throws {
         let destination = URL(fileURLWithPath: path)
-        if let parent = destination.deletingLastPathComponent().path.removingPercentEncoding {
-            try createDirectory(at: parent)
+        let parent = destination.deletingLastPathComponent().path
+        try createDirectory(at: parent)
+        // Pin the parent inode before creating/renaming the temporary file.
+        let directoryFD = Darwin.open(parent, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard directoryFD >= 0 else {
+            throw HelperError.io("could not open atomic destination directory")
         }
-        let nonce = UUID().uuidString
-        let tempURL = destination.deletingLastPathComponent().appendingPathComponent(".\(destination.lastPathComponent).\(nonce).tmp")
-        let descriptor = Darwin.open(tempURL.path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, mode_t(mode))
+        defer { _ = Darwin.close(directoryFD) }
+        let tempName = ".\(destination.lastPathComponent).\(UUID().uuidString).tmp"
+        let descriptor = Darwin.openat(directoryFD, tempName, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode_t(mode))
         guard descriptor >= 0 else {
             throw HelperError.io("could not create atomic temp file for \(path): \(String(cString: strerror(errno)))")
         }
@@ -63,36 +73,44 @@ public final class LocalFileSystem: HelperFileSystem, @unchecked Sendable {
                 let count = bytes.withUnsafeBytes {
                     Darwin.write(descriptor, $0.baseAddress!.advanced(by: offset), bytes.count - offset)
                 }
+                if count < 0 && errno == EINTR { continue }
                 guard count > 0 else {
                     throw HelperError.io("could not write atomic temp file for \(path): \(String(cString: strerror(errno)))")
                 }
                 offset += count
             }
-            guard Darwin.fsync(descriptor) == 0 else {
-                throw HelperError.io("could not fsync atomic temp file for \(path)")
-            }
             guard Darwin.fchmod(descriptor, mode_t(mode)) == 0 else {
                 throw HelperError.io("could not chmod atomic temp file for \(path)")
             }
+            guard synchronize(descriptor) == 0 else {
+                throw HelperError.io("could not fsync atomic temp file for \(path)")
+            }
+            // close() failure must not cause a second close of a reused fd.
+            descriptorIsOpen = false
             guard Darwin.close(descriptor) == 0 else {
                 throw HelperError.io("could not close atomic temp file for \(path)")
             }
-            descriptorIsOpen = false
-            guard Darwin.rename(tempURL.path, path) == 0 else {
+            guard Darwin.renameat(directoryFD, tempName, directoryFD, destination.lastPathComponent) == 0 else {
                 throw HelperError.io("could not atomically replace \(path): \(String(cString: strerror(errno)))")
             }
-            let directoryFD = Darwin.open(destination.deletingLastPathComponent().path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
-            if directoryFD >= 0 {
-                _ = Darwin.fsync(directoryFD)
-                _ = Darwin.close(directoryFD)
+            guard synchronize(directoryFD) == 0 else {
+                // The rename may have happened: preserve destination evidence,
+                // report failure, and never authorize a subsequent VPN mutation.
+                throw HelperError.io("could not fsync atomic destination directory")
             }
         } catch {
             if descriptorIsOpen {
                 _ = Darwin.close(descriptor)
             }
-            _ = Darwin.unlink(tempURL.path)
+            _ = Darwin.unlinkat(directoryFD, tempName, 0)
             throw error
         }
+    }
+
+    private func synchronize(_ descriptor: Int32) -> Int32 {
+        var result: Int32
+        repeat { result = syncDescriptor(descriptor) } while result < 0 && errno == EINTR
+        return result
     }
 
     public func removeItem(at path: String) throws {
@@ -613,6 +631,220 @@ public final class SystemTunnelController: TunnelControlling, @unchecked Sendabl
         self.paths = paths
         self.runner = runner
         self.firewall = firewall
+    }
+
+    /// Protected replacement foundation. Deliberately not exposed by the
+    /// helper socket or normal app coordinator until their owner/intent and
+    /// completed-handshake gates are verified on an isolated Mac.
+    // TODO: Bind the authenticated helper RPC and normal coordinator to this
+    // operation and explicit journal recovery; bootstrap/watchdogs must not
+    // apply their legacy fail-open teardown to a pending replacement journal.
+    public func replacePreservingAntiLeak(
+        currentSession: HelperSession?, ownerPID: Int32, expectedConfigSHA256: String
+    ) throws -> HelperSession {
+        let store = HelperStateStore(fileSystem: fileSystem, paths: paths)
+        return try store.withOperationLock(staleAfter: 120) {
+            guard !fileSystem.fileExists(at: replacementJournalPath) else {
+                throw HelperError.commandFailed("protected replacement recovery is pending")
+            }
+            guard ownerPID > 1, let source = currentSession,
+                  source.ownerPID == ownerPID, source.antiLeakArmed,
+                  source.socketExists, validReplacementInterface(source.interfaceName),
+                  firewall.antileakIsActive() else {
+                throw HelperError.ownerVerificationFailed("protected replacement requires an owned armed source")
+            }
+            let sourceConfig = try fileSystem.readText(at: paths.activeConfigPath)
+            guard ProtectedReplacementJournal.digest(sourceConfig) == expectedConfigSHA256,
+                  try endpoint(fromConfigAt: paths.activeConfigPath) == source.endpoint,
+                  try resolvedInterfaceName(logicalInterface: "active") == source.interfaceName,
+                  fileSystem.fileExists(at: paths.runtimeSocketPath(for: source.interfaceName))
+                    || fileSystem.fileExists(at: paths.amneziaSocketPath(for: source.interfaceName)) else {
+                throw HelperError.ownerVerificationFailed("protected replacement source changed")
+            }
+            try AwgConfigAdmission.validate(sourceConfig)
+            let candidate = try sanitizedConfig(from: fileSystem.readText(at: resolvedConfigPath()))
+            try AwgConfigAdmission.validate(candidate)
+            guard sourceConfig != candidate, candidate.utf8.count <= 262_144,
+                  sourceConfig.utf8.count <= 262_144 else {
+                throw HelperError.protocolViolation("protected replacement candidate is unchanged or oversized")
+            }
+            let dns = try fileSystem.readText(at: paths.dnsStatePath)
+            guard !dns.isEmpty, dns.utf8.count <= 262_144 else {
+                throw HelperError.missingTunnelMetadata("protected replacement requires a DNS recovery baseline")
+            }
+            let ownerSnapshot = try protectedOwnerSnapshot(ownerPID: ownerPID)
+            var journal = ProtectedReplacementJournal(
+                ownerPID: ownerPID, sourceSession: source.payload,
+                sourceConfig: sourceConfig, sourceSHA256: expectedConfigSHA256,
+                candidateConfig: candidate, candidateSHA256: ProtectedReplacementJournal.digest(candidate),
+                dnsBaseline: dns, ownerSession: ownerSnapshot
+            )
+            // Atomic source journal and readback precede every PF/quick mutation.
+            // TODO: Validate OS-crash/power-loss durability on an isolated Mac;
+            // fsync plus an offline memory-port test is not that acceptance gate.
+            try persistReplacementJournal(journal)
+            var sourceMayHaveStopped = false
+            do {
+                try requireReplacementState(journal, allowedHashes: [journal.sourceSHA256])
+                // This validates and reloads only the existing armed anchor;
+                // unlike generic bringUp/bringDown it never disables PF.
+                try firewall.updateWhileArmed(endpoint: source.endpoint, interfaceName: source.interfaceName)
+                journal.phase = "replacing"
+                try persistReplacementJournal(journal)
+                try requireReplacementState(journal, allowedHashes: [journal.sourceSHA256])
+                sourceMayHaveStopped = true
+                try checkedReplacementQuick("down")
+                try requireReplacementState(journal, allowedHashes: [journal.sourceSHA256])
+                try fileSystem.writeTextAtomically(candidate, to: paths.activeConfigPath, mode: 0o600)
+                let candidateEndpoint = try endpoint(fromConfigAt: paths.activeConfigPath)
+                try firewall.updateWhileArmed(endpoint: candidateEndpoint, interfaceName: source.interfaceName)
+                try checkedReplacementQuick("up")
+                let result = try finishProtectedSession(ownerPID: ownerPID, store: store)
+                try requireReplacementState(journal, allowedHashes: [journal.candidateSHA256])
+                journal.phase = "committed"
+                try persistReplacementJournal(journal)
+                try fileSystem.removeItem(at: replacementJournalPath)
+                return result
+            } catch {
+                // Never print an underlying command error: awg config/output
+                // can carry key material. The journal remains on failed undo.
+                if sourceMayHaveStopped {
+                    do { _ = try restoreProtectedSource(journal, store: store) }
+                    catch { throw HelperError.commandFailed("protected replacement failed; source recovery remains pending") }
+                    throw HelperError.commandFailed("protected replacement failed; source restored with protection armed")
+                }
+                throw HelperError.commandFailed("protected replacement admission failed; recovery journal retained")
+            }
+        }
+    }
+
+    /// Explicit recovery only, not called from startup or the live coordinator.
+    /// The future authenticated RPC must revalidate process identity and intent.
+    public func recoverProtectedReplacement(ownerPID: Int32) throws -> HelperSession? {
+        let store = HelperStateStore(fileSystem: fileSystem, paths: paths)
+        return try store.withOperationLock(staleAfter: 120) {
+            guard fileSystem.fileExists(at: replacementJournalPath) else { return nil }
+            let journal = try ProtectedReplacementJournal.decode(fileSystem.readText(at: replacementJournalPath))
+            guard journal.ownerPID == ownerPID else {
+                throw HelperError.ownerVerificationFailed("protected recovery owner changed")
+            }
+            try requireReplacementState(journal, allowedHashes: [journal.sourceSHA256, journal.candidateSHA256])
+            if journal.phase == "prepared" {
+                // Admission/journal failure occurred before quick down. A stale
+                // prepared record must not tear down a still-running source.
+                try requireReplacementState(journal, allowedHashes: [journal.sourceSHA256])
+                guard let source = HelperSession(payload: journal.sourceSession),
+                      try resolvedInterfaceName(logicalInterface: "active") == source.interfaceName else {
+                    throw HelperError.ownerVerificationFailed("protected recovery source changed")
+                }
+                let result = try finishProtectedSession(ownerPID: ownerPID, store: store)
+                try requireReplacementState(journal, allowedHashes: [journal.sourceSHA256])
+                try fileSystem.removeItem(at: replacementJournalPath)
+                return result
+            }
+            if journal.phase == "committed",
+               ProtectedReplacementJournal.digest(try fileSystem.readText(at: paths.activeConfigPath)) == journal.candidateSHA256,
+               let persisted = store.loadSession(), persisted.ownerPID == ownerPID {
+                let result = try finishProtectedSession(ownerPID: ownerPID, store: store)
+                try requireReplacementState(journal, allowedHashes: [journal.candidateSHA256])
+                try fileSystem.removeItem(at: replacementJournalPath)
+                return result
+            }
+            return try restoreProtectedSource(journal, store: store)
+        }
+    }
+
+    private var replacementJournalPath: String { paths.helperDirectory + "/replacement-journal.state" }
+
+    private func validReplacementInterface(_ name: String) -> Bool {
+        name.hasPrefix("utun") && !name.dropFirst(4).isEmpty
+            && name.dropFirst(4).utf8.allSatisfy { (48...57).contains($0) }
+    }
+
+    private func persistReplacementJournal(_ journal: ProtectedReplacementJournal) throws {
+        try fileSystem.writeTextAtomically(try journal.encoded(), to: replacementJournalPath, mode: 0o600)
+        let reread = try ProtectedReplacementJournal.decode(fileSystem.readText(at: replacementJournalPath))
+        guard try reread.encoded() == journal.encoded() else {
+            throw HelperError.io("protected replacement journal verification failed")
+        }
+    }
+
+    private func protectedOwnerSnapshot(ownerPID: Int32) throws -> String? {
+        guard fileSystem.fileExists(at: paths.ownerSessionPath) else { return nil }
+        let text = try fileSystem.readText(at: paths.ownerSessionPath)
+        guard text.utf8.count <= 16_384, let owner = OwnerSession(payload: text),
+              owner.pid == ownerPID, !owner.token.isEmpty, !owner.identity.isEmpty,
+              text == owner.payload else {
+            throw HelperError.ownerVerificationFailed("protected replacement owner changed")
+        }
+        return text
+    }
+
+    private func requireReplacementState(_ journal: ProtectedReplacementJournal, allowedHashes: Set<String>) throws {
+        let saved = try ProtectedReplacementJournal.decode(fileSystem.readText(at: replacementJournalPath))
+        guard saved.transactionID == journal.transactionID,
+              saved.phase == journal.phase,
+              saved.ownerPID == journal.ownerPID,
+              saved.ownerSession == journal.ownerSession,
+              saved.sourceSession == journal.sourceSession,
+              saved.dnsBaseline == journal.dnsBaseline,
+              saved.sourceSHA256 == journal.sourceSHA256,
+              saved.candidateSHA256 == journal.candidateSHA256,
+              allowedHashes.contains(ProtectedReplacementJournal.digest(try fileSystem.readText(at: paths.activeConfigPath))),
+              try fileSystem.readText(at: paths.dnsStatePath) == journal.dnsBaseline,
+              firewall.antileakIsActive() else {
+            throw HelperError.ownerVerificationFailed("protected replacement state changed; recovery retained")
+        }
+        guard try protectedOwnerSnapshot(ownerPID: journal.ownerPID) == journal.ownerSession else {
+            throw HelperError.ownerVerificationFailed("protected replacement owner identity or intent changed")
+        }
+    }
+
+    private func checkedReplacementQuick(_ action: String) throws {
+        let result = try runQuick(action, configPath: paths.activeConfigPath)
+        guard result.succeeded else {
+            throw HelperError.commandFailed("protected tunnel operation failed with status \(result.status)")
+        }
+    }
+
+    private func finishProtectedSession(ownerPID: Int32, store: HelperStateStore) throws -> HelperSession {
+        let interface = try resolvedInterfaceName(logicalInterface: "active")
+        guard validReplacementInterface(interface) else {
+            throw HelperError.missingTunnelMetadata("invalid protected replacement interface")
+        }
+        let endpoint = try endpoint(fromConfigAt: paths.activeConfigPath)
+        try firewall.updateWhileArmed(endpoint: endpoint, interfaceName: interface)
+        let base = HelperSession(interfaceName: interface, endpoint: endpoint, ownerPID: ownerPID,
+                                 antiLeakArmed: true, ipv6RouteExpected: configHasIPv6DefaultRoute(paths.activeConfigPath))
+        guard let result = try refreshedSession(currentSession: base), result.socketExists,
+              result.antiLeakArmed, result.dnsHealthy,
+              result.routeInterface == interface,
+              !result.ipv6RouteExpected || result.ipv6RouteInterface == interface else {
+            throw HelperError.commandFailed("protected replacement runtime did not become ready")
+        }
+        // This is helper readiness, NOT a fresh signed-profile handshake proof.
+        try store.persistSession(result)
+        return result
+    }
+
+    private func restoreProtectedSource(_ input: ProtectedReplacementJournal, store: HelperStateStore) throws -> HelperSession {
+        var journal = input
+        try requireReplacementState(journal, allowedHashes: [journal.sourceSHA256, journal.candidateSHA256])
+        journal.phase = "rolling-back"
+        try persistReplacementJournal(journal)
+        // No global daemon-kill fallback: failure keeps PF and the source journal.
+        try checkedReplacementQuick("down")
+        try requireReplacementState(journal, allowedHashes: [journal.sourceSHA256, journal.candidateSHA256])
+        try fileSystem.writeTextAtomically(journal.sourceConfig, to: paths.activeConfigPath, mode: 0o600)
+        guard let source = HelperSession(payload: journal.sourceSession), validReplacementInterface(source.interfaceName) else {
+            throw HelperError.protocolViolation("protected source session is invalid")
+        }
+        try firewall.updateWhileArmed(endpoint: source.endpoint, interfaceName: source.interfaceName)
+        try checkedReplacementQuick("up")
+        let result = try finishProtectedSession(ownerPID: journal.ownerPID, store: store)
+        try requireReplacementState(journal, allowedHashes: [journal.sourceSHA256])
+        try fileSystem.removeItem(at: replacementJournalPath)
+        return result
     }
 
     public func bringUp(currentSession: HelperSession?, armAntiLeak: Bool, ownerPID: Int32?) throws -> HelperSession {

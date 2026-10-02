@@ -74,6 +74,9 @@ public final class HelperStateStore: @unchecked Sendable {
     }
 
     public func operationInProgress(staleAfter: TimeInterval) -> Bool {
+        if HelperOperationLease.isHeld(path: paths.operationLockPath, fileSystem: fileSystem) {
+            return true
+        }
         guard let modified = fileSystem.modificationDate(at: paths.operationLockPath) else {
             return false
         }
@@ -82,15 +85,55 @@ public final class HelperStateStore: @unchecked Sendable {
 
     public func withOperationLock<T>(staleAfter: TimeInterval, _ body: () throws -> T) throws -> T {
         try ensureDirectories()
-        if let modified = fileSystem.modificationDate(at: paths.operationLockPath),
-           dateProvider.now.timeIntervalSince(modified) > staleAfter {
-            try? fileSystem.removeItem(at: paths.operationLockPath)
+        let lease = try HelperOperationLease.acquire(path: paths.operationLockPath, fileSystem: fileSystem)
+        // Retain the descriptor until all persistent cleanup is complete.
+        defer { withExtendedLifetime(lease) {} }
+        if fileSystem.fileExists(at: paths.operationLockPath) {
+            let expired = fileSystem.modificationDate(at: paths.operationLockPath).map {
+                dateProvider.now.timeIntervalSince($0) > staleAfter
+            } ?? false
+            if fileSystem is LocalFileSystem {
+                let previous = try fileSystem.readText(at: paths.operationLockPath)
+                let lines = previous.split(separator: "\n", omittingEmptySubsequences: false)
+                let kernelMarker = lines.count == 4 && lines[3].isEmpty
+                    && lines[0].hasPrefix("pid=")
+                    && Int32(lines[0].dropFirst(4)).map { $0 > 1 } == true
+                    && lines[1] == "lease=kernel-v1"
+                    && lines[2].hasPrefix("token=")
+                    && UUID(uuidString: String(lines[2].dropFirst(6))) != nil
+                if !kernelMarker {
+                    // Legacy helpers do not hold flock. Reclaim only their
+                    // exact known marker after expiry AND confirmed PID death.
+                    // Malformed/unreadable markers and EPERM remain blocked.
+                    guard expired, lines.count == 2, lines[1].isEmpty,
+                          lines[0].hasPrefix("pid="),
+                          let pid = Int32(lines[0].dropFirst(4)), pid > 1,
+                          previous == "pid=\(pid)\n" else {
+                        throw HelperError.operationInProgress
+                    }
+                    let result = kill(pid, 0)
+                    guard result == -1 && errno == ESRCH else {
+                        throw HelperError.operationInProgress
+                    }
+                }
+                // An acquired kernel lease proves the previous v1 operation
+                // no longer holds the inode, even if its marker is still fresh.
+            } else if !expired {
+                throw HelperError.operationInProgress
+            }
+            try fileSystem.removeItem(at: paths.operationLockPath)
         }
         if fileSystem.fileExists(at: paths.operationLockPath) {
             throw HelperError.operationInProgress
         }
-        try fileSystem.writeTextAtomically("pid=\(getpid())\n", to: paths.operationLockPath, mode: 0o600)
-        defer { try? fileSystem.removeItem(at: paths.operationLockPath) }
+        let marker = "pid=\(getpid())\nlease=kernel-v1\ntoken=\(UUID().uuidString)\n"
+        try fileSystem.writeTextAtomically(marker, to: paths.operationLockPath, mode: 0o600)
+        defer {
+            // Never remove a marker that was replaced by another owner.
+            if (try? fileSystem.readText(at: paths.operationLockPath)) == marker {
+                try? fileSystem.removeItem(at: paths.operationLockPath)
+            }
+        }
         return try body()
     }
 }

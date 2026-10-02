@@ -1,16 +1,16 @@
 {
   "android": {
-    "version": "1.0.61",
-    "build": 69,
+    "version": "1.0.62",
+    "build": 70,
     "min_supported_build": 1002930,
     "is_required": false,
-    "checksum_sha256": "b47a0b127745d740cc01e8112a2c838b7157a00d0d6082ae8a2cc83126fcda7f",
-    "signature_url": "/downloads/Vex-Android-1.0.61.apk.sig",
-    "release_notes": "Android 1.0.61: восстановлена отправка ошибок Android в Bugsink; сборка проверяет конфигурацию нативной и JavaScript-диагностики. Сохранены исправления VPN, автоподключения и подписанных OTA-обновлений из 1.0.60.",
+    "release_notes": "Android 1.0.62: обновлена сборка VPN-компонента и добавлены автоматические проверки качества и подписи в GitHub. Сохранены диагностика Bugsink, защита при потере туннеля, автоподключение и подписанные OTA-обновления.",
     "core_version": "0.1.0",
     "config_schema_version": 1,
     "min_config_schema_version": 1,
-    "release_status": "published"
+    "release_status": "candidate",
+    "checksum_sha256": "",
+    "signature_url": ""
   },
   "ios": {
     "version": "1.0.48",

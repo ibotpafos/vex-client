@@ -1,6 +1,6 @@
 {
   "name": "vex-client",
-  "version": "1.0.61",
+  "version": "1.0.62",
   "private": true,
   "main": "expo-router/entry",
   "dependencies": {
@@ -115,7 +115,7 @@
     "android:verify-upgrade": "node scripts/verify_android_upgrade.cjs",
     "eas-build-pre-install": "bash scripts/eas_build_pre_install.sh",
     "test:client-ci": "node tests/client-ci-contract.mjs",
-    "test:client-release": "node tests/client-release-workflow.mjs && python3 -m unittest discover -s tests -p client_release_test.py"
+    "test:client-release": "node tests/android-candidate-workflow.mjs && node tests/client-release-workflow.mjs && python3 -m unittest discover -s tests -p client_release_test.py"
   },
   "resolutions": {
     "lightningcss": "1.30.1",

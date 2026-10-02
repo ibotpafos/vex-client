@@ -32,6 +32,8 @@ export type VpnDiagnosticsSnapshot = {
 let uploadChain: Promise<void> = Promise.resolve();
 let cachedNetworkProbe: {
   endpoint?: string;
+  vpnState: VpnStatus['state'];
+  latestHandshakeEpochMillis?: number;
   measuredAt: number;
   result: Awaited<ReturnType<typeof probeNetworkHealth>>;
 } | null = null;
@@ -70,7 +72,7 @@ async function buildClientDiagnosticsReport(snapshot: VpnDiagnosticsSnapshot): P
   const nativeVpnDiagnostics = await readNativeVpnDiagnostics();
   const usage = snapshot.usage;
   const generatedAt = new Date().toISOString();
-  const networkProbe = await cachedDiagnosticsNetworkProbe(snapshot.endpoint);
+  const networkProbe = await cachedDiagnosticsNetworkProbe(snapshot.endpoint, snapshot.vpnStatus);
   return {
     deviceId: snapshot.deviceId,
     platform: appInfo.platform,
@@ -84,6 +86,9 @@ async function buildClientDiagnosticsReport(snapshot: VpnDiagnosticsSnapshot): P
     transportTo: snapshot.transportTo,
     sessionUptimeSeconds: normalizeNumber(snapshot.sessionUptimeSeconds),
     endpoint: snapshot.endpoint,
+    // TODO(diagnostics-tristate): API/storage still use mandatory booleans.
+    // Preserve legacy wire defaults until backend/readers support unknown;
+    // samples.network_probe retains which checks were actually measured.
     dnsOk: networkProbe.dnsOk !== false,
     httpsOk: networkProbe.httpsOk !== false,
     latencyAverageMs: normalizeNumber(snapshot.latencyMs ?? networkProbe.endpointLatencyMs),
@@ -113,11 +118,16 @@ async function buildClientDiagnosticsReport(snapshot: VpnDiagnosticsSnapshot): P
   };
 }
 
-async function cachedDiagnosticsNetworkProbe(endpoint?: string): Promise<Awaited<ReturnType<typeof probeNetworkHealth>>> {
+async function cachedDiagnosticsNetworkProbe(endpoint: string | undefined, vpnStatus: VpnStatus): Promise<Awaited<ReturnType<typeof probeNetworkHealth>>> {
   const now = Date.now();
+  // TODO(android-network-generation): include transport generation when native
+  // status exposes it; state/handshake do not identify every Wi-Fi/mobile handoff.
   if (
     cachedNetworkProbe
     && cachedNetworkProbe.endpoint === endpoint
+    && cachedNetworkProbe.vpnState === vpnStatus.state
+    && cachedNetworkProbe.latestHandshakeEpochMillis === vpnStatus.latestHandshakeEpochMillis
+    && now >= cachedNetworkProbe.measuredAt
     && now - cachedNetworkProbe.measuredAt <= networkProbeCacheTtlMs
   ) {
     return cachedNetworkProbe.result;
@@ -134,6 +144,8 @@ async function cachedDiagnosticsNetworkProbe(endpoint?: string): Promise<Awaited
     .then((result) => {
       cachedNetworkProbe = {
         endpoint,
+        vpnState: vpnStatus.state,
+        latestHandshakeEpochMillis: vpnStatus.latestHandshakeEpochMillis,
         measuredAt: Date.now(),
         result,
       };

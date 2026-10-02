@@ -81,3 +81,26 @@ Standards: [GitHub security](https://docs.github.com/en/actions/how-tos/secure-y
 [attestations](https://docs.github.com/en/actions/concepts/security/artifact-attestations),
 [Android signing](https://developer.android.com/studio/publish/app-signing),
 [Apple notarization](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution).
+
+## Diagnostic network-cache acceptance
+
+The diagnostics uploader caches a bounded network measurement by endpoint,
+VPN state and the native peer handshake. A connect/disconnect or a fresh peer
+must not reuse a result measured for the previous VPN context. An unchanged
+context may reuse both healthy and failed measurements for 30 seconds; a
+wall-clock rollback invalidates rather than extends that cache.
+
+`node --test tests/diagnostics-network-context.test.cjs` exercises the complete
+TypeScript module with isolated API, storage and native adapters. It checks
+context transitions, same-context reuse, expiry, clock rollback, explicit
+failures and the existing boolean wire contract. It does not operate a VPN,
+authenticate a customer, or prove packet-level recovery on a phone.
+
+The current server diagnostics model stores mandatory `dns_ok`/`https_ok`
+booleans. Keep its legacy wire defaults while retaining the actual optional
+measurement in `samples.network_probe`; sending an absent value alone would
+be decoded as false by the existing backend. Tri-state measurement semantics
+require a separate backward-compatible backend/storage/reader change.
+The native status also needs a transport-generation signal to invalidate
+cache across every Wi-Fi/mobile handoff; state/handshake coverage is not a
+claim that this complete lifecycle matrix has passed.

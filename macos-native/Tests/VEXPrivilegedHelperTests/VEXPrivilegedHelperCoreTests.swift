@@ -177,21 +177,29 @@ final class VEXPrivilegedHelperCoreTests: XCTestCase {
         )
         let fileSystem = InMemoryFileSystem(files: [
             "/helper/config-path": "/helper/vex.conf\n",
-            "/helper/vex.conf": "[Interface]\nPrivateKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\nAddress = 10.0.0.2/32\n[Peer]\nPublicKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\nEndpoint = 1.1.1.1:51820\nAllowedIPs = 0.0.0.0/0\n",
+            "/helper/vex.conf": "[Interface]\nPrivateKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\nAddress = 10.0.0.2/32\n[Peer]\nPublicKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\nEndpoint = 1.1.1.1:51820\nAllowedIPs = 0.0.0.0/0\n",
             "/amnezia/active.name": "utun9\n",
             "/helper/dns-baseline.state": "\n",
             "/runtime/utun9.sock": ""
         ])
         let runner = RecordingCommandRunner([
-            CommandSpec(program: "/helper/awg-quick.sh", arguments: ["up", "/helper/vex.conf"]): .init(status: 0),
-            CommandSpec(program: "/helper/awg-quick.sh", arguments: ["down", "/helper/vex.conf"]): .init(status: 0),
+            CommandSpec(program: "/helper/awg-quick.sh", arguments: ["up", "/helper/active.conf"]): .init(status: 0),
+            CommandSpec(program: "/helper/awg-quick.sh", arguments: ["down", "/helper/active.conf"]): .init(status: 0),
             CommandSpec(program: "/sbin/route", arguments: ["-n", "get", "1.1.1.1"]): .init(status: 0, stdout: "interface: utun9\n"),
             CommandSpec(program: "/usr/sbin/netstat", arguments: ["-rn", "-f", "inet6"]): .init(status: 0)
         ])
         let firewall = FailingEnableFirewall()
         let tunnel = SystemTunnelController(fileSystem: fileSystem, paths: paths, runner: runner, firewall: firewall)
 
-        XCTAssertThrowsError(try tunnel.bringUp(currentSession: nil, armAntiLeak: true, ownerPID: 42))
+        let pristineConfig = try fileSystem.readText(at: "/helper/vex.conf")
+        XCTAssertThrowsError(try tunnel.bringUp(currentSession: nil, armAntiLeak: true, ownerPID: 42)) { error in
+            guard case HelperError.commandFailed(let message) = error else {
+                return XCTFail("expected injected PF failure, not profile admission: \(error)")
+            }
+            XCTAssertEqual(message, "injected PF enable failure")
+        }
+        XCTAssertEqual(try fileSystem.readText(at: "/helper/vex.conf"), pristineConfig)
+        XCTAssertFalse(fileSystem.fileExists(at: "/helper/active.conf"))
         XCTAssertEqual(
             runner.calls.filter { $0.program == "/helper/awg-quick.sh" }.map(\.arguments.first),
             ["up", "down"]
@@ -412,7 +420,7 @@ final class VEXPrivilegedHelperCoreTests: XCTestCase {
         )
         let fileSystem = InMemoryFileSystem(files: [
             "/helper/config-path": "/user/vex.conf\n",
-            "/user/vex.conf": "[Interface]\nPrivateKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\nAddress = 10.0.0.2/32\n[Peer]\nPublicKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\nEndpoint = 1.1.1.1:51820\nAllowedIPs = 0.0.0.0/0\n"
+            "/user/vex.conf": "[Interface]\nPrivateKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\nAddress = 10.0.0.2/32\n[Peer]\nPublicKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\nEndpoint = 1.1.1.1:51820\nAllowedIPs = 0.0.0.0/0\n"
         ])
         let runner = RecordingCommandRunner([
             CommandSpec(program: "/helper/awg-quick.sh", arguments: ["up", "/helper/active.conf"]): .init(status: 124),
@@ -425,7 +433,16 @@ final class VEXPrivilegedHelperCoreTests: XCTestCase {
             firewall: PassiveFirewall()
         )
 
-        XCTAssertThrowsError(try tunnel.bringUp(currentSession: nil, armAntiLeak: false, ownerPID: 42))
+        let pristineConfig = try fileSystem.readText(at: "/user/vex.conf")
+        XCTAssertThrowsError(try tunnel.bringUp(currentSession: nil, armAntiLeak: false, ownerPID: 42)) { error in
+            guard case HelperError.commandFailed(let message) = error else {
+                return XCTFail("expected quick timeout, not profile admission: \(error)")
+            }
+            XCTAssertTrue(message.contains("awg-quick up failed with status 124"))
+        }
+        XCTAssertEqual(try fileSystem.readText(at: "/user/vex.conf"), pristineConfig)
+        XCTAssertEqual(runner.calls.filter { $0.program == "/helper/awg-quick.sh" }.map(\.arguments),
+                       [["up", "/helper/active.conf"], ["down", "/helper/active.conf"]])
         XCTAssertTrue(fileSystem.fileExists(at: "/helper/active.conf"))
         XCTAssertTrue(fileSystem.fileExists(at: "/helper/dns-baseline.state"))
     }

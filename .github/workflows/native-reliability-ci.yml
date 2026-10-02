@@ -126,16 +126,43 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+          fetch-depth: 0
       - name: Check selected Swift toolchain
         run: swift --version
       - name: Resolve Swift package
         run: swift package --package-path macos-native resolve
       - name: Build native macOS client
         run: swift build --package-path macos-native --target VEXNativeMac
-      - name: Test affected native macOS behavior
+      - name: Verify changed helper contracts with real baseline and rollback
+        id: contract
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_COMMIT: ${{ github.event.pull_request.base.sha }}
+        shell: bash
         run: |
-          swift test --package-path macos-native --filter DynamicRouteEngineTests
-          swift test --package-path macos-native --filter NativeParityModelTests
-          swift test --package-path macos-native --filter VEXSessionStoreTests
-          swift test --package-path macos-native --filter SparkleUpdateTests
-          swift test --package-path macos-native --filter VEXPrivilegedHelperCoreTests/testPFEndpointRulesUseValidatedAddressFamilyAndPort
+          set -euo pipefail
+          if git diff --quiet "$BASE_COMMIT" HEAD -- \
+            macos-native/Tests/VEXNativeMacTests/SwiftHelperContractTests.swift \
+            macos-native/Tests/VEXPrivilegedHelperTests/VEXPrivilegedHelperCoreTests.swift; then
+            echo "ran=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "ran=true" >> "$GITHUB_OUTPUT"
+          python3 scripts/verify_macos_contract_transaction.py \
+            --base "$BASE_COMMIT" --output "$RUNNER_TEMP/macos-contract-transaction"
+      - name: Retain only helper transaction evidence
+        if: always() && steps.contract.outputs.ran == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: macos-contract-transaction
+          path: |
+            ${{ runner.temp }}/macos-contract-transaction/MODIFIED_FILE.swift
+            ${{ runner.temp }}/macos-contract-transaction/DIFF_FILE.patch
+            ${{ runner.temp }}/macos-contract-transaction/VERIFICATION.txt
+            ${{ runner.temp }}/macos-contract-transaction/ROLLBACK.sh
+            ${{ runner.temp }}/macos-contract-transaction/RESULT.json
+            ${{ runner.temp }}/macos-contract-transaction/COMMAND_EVENTS.json
+          retention-days: 3
+          if-no-files-found: error
+      - name: Test all native macOS behavior
+        run: swift test --package-path macos-native

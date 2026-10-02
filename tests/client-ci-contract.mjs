@@ -30,11 +30,33 @@ function violations(value) {
     const checkouts = (job.steps ?? []).filter(step => step.uses?.startsWith('actions/checkout@'));
     if (checkouts.length !== 1 || checkouts[0].with?.['persist-credentials'] !== false) failures.push(`credential-free checkout: ${lane}`);
     if (JSON.stringify(job).includes('secrets.')) failures.push(`no production secrets: ${lane}`);
-    if ((job.steps ?? []).some(step => step.uses?.startsWith('actions/upload-artifact@'))) failures.push(`no routine artifact storage: ${lane}`);
+    for (const step of (job.steps ?? []).filter(value => value.uses?.startsWith('actions/upload-artifact@'))) {
+      // The only exception is short-lived, owned-PR transaction evidence. It
+      // contains no compiled binaries and is never consumed by a release job.
+      if (lane !== 'macos' || step.name !== 'Retain only helper transaction evidence'
+        || step.uses !== 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a'
+        || step.if !== "always() && steps.contract.outputs.ran == 'true'"
+        || step.with?.name !== 'macos-contract-transaction'
+        || step.with?.['retention-days'] !== 3
+        || step.with?.path !== [
+          '${{ runner.temp }}/macos-contract-transaction/MODIFIED_FILE.swift',
+          '${{ runner.temp }}/macos-contract-transaction/DIFF_FILE.patch',
+          '${{ runner.temp }}/macos-contract-transaction/VERIFICATION.txt',
+          '${{ runner.temp }}/macos-contract-transaction/ROLLBACK.sh',
+          '${{ runner.temp }}/macos-contract-transaction/RESULT.json',
+          '${{ runner.temp }}/macos-contract-transaction/COMMAND_EVENTS.json',
+        ].join('\n') + '\n') failures.push(`no routine artifact storage: ${lane}`);
+    }
     const commands = (job.steps ?? []).map(step => step.run ?? '').join('\n');
     if (/npm run (?:ota:|.*:publish|.*:deploy-release)|package-native-windows\.ps1|publish-native-windows\.ps1|-allowProvisioningUpdates/.test(commands)) failures.push(`no signing/publication: ${lane}`);
     if (lane === 'android' && /(?:^|\n)\s*sdkmanager\s/.test(commands)) failures.push('explicit Android SDK tool path');
     if (lane === 'android' && !(job.steps ?? []).some(step => step.uses?.startsWith('actions/setup-go@') && step.with?.['go-version'] === '1.25.x')) failures.push('pinned upstream Go toolchain floor');
+    if (lane === 'macos') {
+      if (!(job.steps ?? []).some(step => step.run?.trim() === 'swift test --package-path macos-native')) failures.push('complete macOS suite');
+      const transaction = (job.steps ?? []).find(step => step.id === 'contract');
+      if (transaction?.if !== "github.event_name == 'pull_request'"
+        || transaction?.env?.BASE_COMMIT !== '${{ github.event.pull_request.base.sha }}') failures.push('PR-only transaction baseline');
+    }
     const required = {
       shared: ['npm run check', 'npm run build:web', 'actionlint'],
       android: ['sdkmanager', ':app:testDebugUnitTest', 'npm run android:build:debug:fast'],
@@ -62,6 +84,9 @@ if (failures.length) {
     value => { value.jobs.android.env = { SIGNING_KEY: '${{ secrets.PRODUCTION_KEY }}' }; },
     value => { value.jobs.shared.steps[0].with['persist-credentials'] = true; },
     value => { value.jobs.macos.steps.push({ uses: 'actions/upload-artifact@v4' }); },
+    value => { value.jobs.macos.steps.find(step => step.name === 'Test all native macOS behavior').run += ' --filter SparkleUpdateTests'; },
+    value => { value.jobs.macos.steps.find(step => step.id === 'contract').if = 'always()'; },
+    value => { value.jobs.macos.steps.find(step => step.name === 'Retain only helper transaction evidence').with.path += 'dist/**'; },
   ];
   for (const mutate of mutations) {
     const candidate = structuredClone(config);

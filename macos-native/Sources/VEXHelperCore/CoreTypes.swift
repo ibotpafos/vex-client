@@ -166,6 +166,7 @@ public enum HelperError: Error, LocalizedError, Equatable, Sendable {
     case writeFailed(String)
     case protocolViolation(String)
     case operationInProgress
+    case replacementRecoveryPending
     case commandFailed(String)
     case ownerVerificationFailed(String)
     case missingTunnelMetadata(String)
@@ -192,6 +193,8 @@ public enum HelperError: Error, LocalizedError, Equatable, Sendable {
             return detail
         case .operationInProgress:
             return "operation already in progress"
+        case .replacementRecoveryPending:
+            return "protected replacement recovery pending; network state preserved"
         case .commandFailed(let detail):
             return detail
         case .ownerVerificationFailed(let detail):
@@ -348,6 +351,7 @@ public struct HelperStatusSnapshot: Equatable, Sendable {
     public var txBytes: UInt64
     public var latestHandshake: UInt64
     public var leakProtection: String
+    public var recoveryPending: Bool
 
     public init(
         operationInProgress: Bool,
@@ -362,7 +366,8 @@ public struct HelperStatusSnapshot: Equatable, Sendable {
         rxBytes: UInt64,
         txBytes: UInt64,
         latestHandshake: UInt64,
-        leakProtection: String
+        leakProtection: String,
+        recoveryPending: Bool = false
     ) {
         self.operationInProgress = operationInProgress
         self.interfaceName = interfaceName
@@ -377,9 +382,13 @@ public struct HelperStatusSnapshot: Equatable, Sendable {
         self.txBytes = txBytes
         self.latestHandshake = latestHandshake
         self.leakProtection = leakProtection
+        self.recoveryPending = recoveryPending
     }
 
     public var state: String {
+        if recoveryPending {
+            return "error"
+        }
         if operationInProgress {
             return "connecting"
         }
@@ -394,11 +403,11 @@ public struct HelperStatusSnapshot: Equatable, Sendable {
     }
 
     public var statusResponse: String {
-        "state=\(state) operation_in_progress=\(operationInProgress) iface=\(interfaceName) endpoint=\(endpoint) socket_exists=\(socketExists) route_ok=\(routeOK) route_iface=\(routeInterface) ipv6_route_expected=\(ipv6RouteExpected) ipv6_route_ok=\(ipv6RouteOK) ipv6_route_iface=\(ipv6RouteInterface) rx=\(rxBytes) tx=\(txBytes) latest_handshake=\(latestHandshake) leak_protection=\(leakProtection)\n"
+        "state=\(state) operation_in_progress=\(operationInProgress) iface=\(interfaceName) endpoint=\(endpoint) socket_exists=\(socketExists) route_ok=\(routeOK) route_iface=\(routeInterface) ipv6_route_expected=\(ipv6RouteExpected) ipv6_route_ok=\(ipv6RouteOK) ipv6_route_iface=\(ipv6RouteInterface) rx=\(rxBytes) tx=\(txBytes) latest_handshake=\(latestHandshake) leak_protection=\(leakProtection)\(recoveryPending ? " recovery_pending=true" : "")\n"
     }
 
     public var diagnosticsResponse: String {
-        "operation_in_progress=\(operationInProgress)\niface=\(interfaceName)\nendpoint=\(endpoint)\nsocket_exists=\(socketExists)\nroute_ok=\(routeOK)\nroute_iface=\(routeInterface)\nipv6_route_expected=\(ipv6RouteExpected)\nipv6_route_ok=\(ipv6RouteOK)\nipv6_route_iface=\(ipv6RouteInterface)\nrx=\(rxBytes)\ntx=\(txBytes)\nlatest_handshake=\(latestHandshake)\nleak_protection=\(leakProtection)\n"
+        "operation_in_progress=\(operationInProgress)\niface=\(interfaceName)\nendpoint=\(endpoint)\nsocket_exists=\(socketExists)\nroute_ok=\(routeOK)\nroute_iface=\(routeInterface)\nipv6_route_expected=\(ipv6RouteExpected)\nipv6_route_ok=\(ipv6RouteOK)\nipv6_route_iface=\(ipv6RouteInterface)\nrx=\(rxBytes)\ntx=\(txBytes)\nlatest_handshake=\(latestHandshake)\nleak_protection=\(leakProtection)\n\(recoveryPending ? "recovery_pending=true\n" : "")"
     }
 }
 
@@ -432,14 +441,30 @@ public protocol CommandRunning: Sendable {
     func run(_ spec: CommandSpec) throws -> CommandResult
 }
 
+public enum HelperPathPresence: Equatable, Sendable {
+    case absent
+    case present
+    case unknown
+}
+
 public protocol HelperFileSystem: Sendable {
     func createDirectory(at path: String) throws
     func fileExists(at path: String) -> Bool
+    /// Unlike fileExists, permission and lookup errors must not imply absence.
+    func pathPresence(at path: String) -> HelperPathPresence
     func fileSize(at path: String) -> UInt64?
     func modificationDate(at path: String) -> Date?
     func readText(at path: String) throws -> String
     func writeTextAtomically(_ text: String, to path: String, mode: Int) throws
     func removeItem(at path: String) throws
+}
+
+public extension HelperFileSystem {
+    /// Compatibility for memory ports with infallible dictionary lookups.
+    /// Filesystems with fallible lookup must override this method, as LocalFileSystem does.
+    func pathPresence(at path: String) -> HelperPathPresence {
+        fileExists(at: path) ? .present : .absent
+    }
 }
 
 public protocol ProcessInspecting: Sendable {

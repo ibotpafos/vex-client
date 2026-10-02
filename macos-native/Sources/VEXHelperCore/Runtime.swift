@@ -78,25 +78,38 @@ public actor HelperRuntime {
     }
 
     public func bootstrap() async throws {
+        if store.protectedReplacementRecoveryPending {
+            logger.warn("bootstrap", "protected replacement recovery pending; preserving network and journal")
+            // Keep read-only status available. Ordinary watchdogs remain
+            // fenced until explicit recovery removes the journal durably.
+            startRouteWatchdogLoopIfNeeded()
+            return
+        }
         do {
             try store.ensureDirectories()
         } catch {
             // PF cleanup must not depend on a writable state directory. If the
             // root-owned store is damaged after a crash, flush live anti-leak
             // rules first so launchd retries cannot strand the host offline.
-            logger.error("bootstrap", "state directory unavailable; forcing fail-open cleanup")
+            logger.error("bootstrap", "state directory unavailable; attempting guarded fail-open cleanup")
             do {
-                try firewallController.disable()
-            } catch {
-                logger.error("bootstrap", "emergency PF cleanup failed: \(error.localizedDescription)")
-            }
-            let session = store.loadSession()
-            if session != nil || tunnelController.hasManagedState() {
-                do {
-                    try tunnelController.bringDown(currentSession: session)
-                } catch {
-                    logger.error("bootstrap", "emergency tunnel cleanup failed: \(error.localizedDescription)")
+                try store.withOrdinaryEmergencyCleanupLease {
+                    do {
+                        try firewallController.disable()
+                    } catch {
+                        logger.error("bootstrap", "emergency PF cleanup failed: \(error.localizedDescription)")
+                    }
+                    let session = store.loadSession()
+                    if session != nil || tunnelController.hasManagedState() {
+                        do {
+                            try tunnelController.bringDown(currentSession: session)
+                        } catch {
+                            logger.error("bootstrap", "emergency tunnel cleanup failed: \(error.localizedDescription)")
+                        }
+                    }
                 }
+            } catch {
+                logger.warn("bootstrap", "emergency cleanup deferred: \(error.localizedDescription)")
             }
             throw error
         }
@@ -128,6 +141,11 @@ public actor HelperRuntime {
     /// ~5 requests within 750ms). Each uncached refresh spawns several root
     /// subprocesses, so answers younger than `statusCacheTTL` are reused.
     private func refreshedStatusSession() -> HelperSession? {
+        if store.protectedReplacementRecoveryPending {
+            cachedStatusSession = nil
+            cachedStatusAt = nil
+            return store.loadSession()
+        }
         let now = dateProvider.now
         if let cachedStatusSession, let cachedStatusAt,
            now.timeIntervalSince(cachedStatusAt) < configuration.statusCacheTTL {
@@ -140,91 +158,96 @@ public actor HelperRuntime {
     }
 
     public func runOwnerWatchdogTick() async {
+        guard !store.protectedReplacementRecoveryPending else { return }
         guard let ownerSession = store.loadOwnerSession() else { return }
         let currentIdentity = processInspector.processIdentity(pid: ownerSession.pid)
         guard currentIdentity != ownerSession.identity else { return }
         logger.warn("watchdog", "owner pid \(ownerSession.pid) exited; releasing VEX tunnel")
         do {
-            try store.withOperationLock(staleAfter: configuration.operationLockStaleAfter) {
+            try store.withOrdinaryOperationLock(staleAfter: configuration.operationLockStaleAfter) {
+                guard store.loadOwnerSession() == ownerSession,
+                      processInspector.processIdentity(pid: ownerSession.pid) != ownerSession.identity else { return }
                 try actionDownWithoutLock()
             }
-            store.clearOwnerSession()
         } catch {
             logger.warn("watchdog", "cleanup failed; will retry: \(error.localizedDescription)")
         }
     }
 
     public func runRouteWatchdogTick() async {
-        guard let session = (try? tunnelController.refreshedSession(currentSession: store.loadSession())) ?? store.loadSession() else {
-            unhealthyTunnelTicks += 1
-            if unhealthyTunnelTicks >= 2 {
-                await recoverStrandedAntiLeak()
-            }
-            return
-        }
-        if tunnelIsHealthy(session) {
+        guard !store.protectedReplacementRecoveryPending else {
             unhealthyTunnelTicks = 0
-            try? store.persistSession(session)
-            let establishedHandshake = session.latestHandshake.flatMap { $0 == 0 ? nil : $0 }
-            if establishedHandshake != nil {
-                handshakeStarvedTicks = 0
-                return
-            }
-            handshakeStarvedTicks += 1
-            if handshakeStarvedTicks >= configuration.handshakeStarveFailOpenTicks {
-                do {
-                    try store.withOperationLock(staleAfter: configuration.operationLockStaleAfter) {
-                        try actionDownWithoutLock()
-                    }
-                    handshakeStarvedTicks = 0
-                    logger.warn("route-watchdog", "tunnel never established a handshake; fail-open teardown completed")
-                } catch {
-                    logger.error("route-watchdog", "fail-open teardown will retry: \(error.localizedDescription)")
-                }
-            }
+            handshakeStarvedTicks = 0
             return
         }
-        handshakeStarvedTicks = 0
-        unhealthyTunnelTicks += 1
+        var needsRecovery = false
         do {
-            try store.withOperationLock(staleAfter: configuration.operationLockStaleAfter) {
-                let repaired = try tunnelController.repair(currentSession: session)
-                if let repaired, tunnelIsHealthy(repaired) {
-                    try store.persistSession(repaired)
-                    unhealthyTunnelTicks = 0
+            // Read, refresh, persist, repair and cleanup share one lease, so a
+            // completed replacement cannot be overwritten with a stale session.
+            try store.withOrdinaryOperationLock(staleAfter: configuration.operationLockStaleAfter) {
+                guard let session = (try? tunnelController.refreshedSession(currentSession: store.loadSession())) ?? store.loadSession() else {
+                    unhealthyTunnelTicks += 1
+                    needsRecovery = unhealthyTunnelTicks >= 2
                     return
                 }
-                throw HelperError.commandFailed("tunnel health did not recover after route repair")
-            }
-        } catch {
-            logger.warn("route-watchdog", "repair deferred: \(error.localizedDescription)")
-            if unhealthyTunnelTicks >= 2 {
-                do {
-                    try store.withOperationLock(staleAfter: configuration.operationLockStaleAfter) {
-                        try actionDownWithoutLock()
-                    }
+                try store.requireNoPendingReplacement()
+                if tunnelIsHealthy(session) {
                     unhealthyTunnelTicks = 0
-                    logger.warn("route-watchdog", "tunnel remained unhealthy; fail-open teardown completed")
+                    try store.persistSession(session)
+                    let establishedHandshake = session.latestHandshake.flatMap { $0 == 0 ? nil : $0 }
+                    if establishedHandshake != nil {
+                        handshakeStarvedTicks = 0
+                        return
+                    }
+                    handshakeStarvedTicks += 1
+                    if handshakeStarvedTicks >= configuration.handshakeStarveFailOpenTicks {
+                        try actionDownWithoutLock()
+                        handshakeStarvedTicks = 0
+                        logger.warn("route-watchdog", "tunnel never established a handshake; fail-open teardown completed")
+                    }
+                    return
+                }
+                handshakeStarvedTicks = 0
+                unhealthyTunnelTicks += 1
+                do {
+                    let repaired = try tunnelController.repair(currentSession: session)
+                    if let repaired, tunnelIsHealthy(repaired) {
+                        try store.requireNoPendingReplacement()
+                        try store.persistSession(repaired)
+                        unhealthyTunnelTicks = 0
+                        return
+                    }
+                    throw HelperError.commandFailed("tunnel health did not recover after route repair")
                 } catch {
-                    logger.error("route-watchdog", "fail-open teardown will retry: \(error.localizedDescription)")
+                    logger.warn("route-watchdog", "repair deferred: \(error.localizedDescription)")
+                    if unhealthyTunnelTicks >= 2 {
+                        try actionDownWithoutLock()
+                        unhealthyTunnelTicks = 0
+                        logger.warn("route-watchdog", "tunnel remained unhealthy; fail-open teardown completed")
+                    }
                 }
             }
+        } catch {
+            logger.warn("route-watchdog", "watchdog operation deferred: \(error.localizedDescription)")
         }
+        if needsRecovery { await recoverStrandedAntiLeak() }
     }
 
     public func recoverStrandedAntiLeak() async {
-        let persistedSession = store.loadSession()
-        let firewallActive = firewallController.antileakIsActive()
-        guard firewallActive || persistedSession != nil || tunnelController.hasManagedState() else { return }
-        let currentSession = (try? tunnelController.refreshedSession(currentSession: persistedSession)) ?? persistedSession
-        let owner = store.loadOwnerSession()
-        let ownerIsValid = owner.map { processInspector.processIdentity(pid: $0.pid) == $0.identity } ?? false
-        if let currentSession, tunnelIsHealthy(currentSession), ownerIsValid {
-            return
-        }
-        logger.warn("bootstrap", "managed network state exists without a live owner; starting fail-open recovery")
+        guard !store.protectedReplacementRecoveryPending else { return }
         do {
-            try store.withOperationLock(staleAfter: configuration.operationLockStaleAfter) {
+            try store.withOrdinaryOperationLock(staleAfter: configuration.operationLockStaleAfter) {
+                let persistedSession = store.loadSession()
+                let firewallActive = firewallController.antileakIsActive()
+                guard firewallActive || persistedSession != nil || tunnelController.hasManagedState() else { return }
+                let currentSession = (try? tunnelController.refreshedSession(currentSession: persistedSession)) ?? persistedSession
+                let owner = store.loadOwnerSession()
+                let ownerIsValid = owner.map { processInspector.processIdentity(pid: $0.pid) == $0.identity } ?? false
+                if let currentSession, tunnelIsHealthy(currentSession), ownerIsValid {
+                    return
+                }
+                try store.requireNoPendingReplacement()
+                logger.warn("bootstrap", "managed network state exists without a live owner; starting fail-open recovery")
                 if persistedSession != nil || tunnelController.hasManagedState() {
                     try actionDownWithoutLock()
                 } else {
@@ -238,29 +261,23 @@ public actor HelperRuntime {
     }
 
     public func resumeOwnerWatchdog() async {
-        guard let existing = store.loadOwnerSession() else { return }
-        guard processInspector.processIdentity(pid: existing.pid) == existing.identity else {
-            do {
-                try store.withOperationLock(staleAfter: configuration.operationLockStaleAfter) {
-                    try actionDownWithoutLock()
-                }
-                store.clearOwnerSession()
-            } catch {
-                logger.warn("watchdog", "could not resume owner watchdog cleanly: \(error.localizedDescription)")
-            }
-            return
-        }
+        guard !store.protectedReplacementRecoveryPending else { return }
         do {
-            try armOwnerWatchdog(ownerPID: existing.pid)
-        } catch {
-            logger.error("watchdog", "could not resume owner watchdog: \(error.localizedDescription)")
-            do {
-                try store.withOperationLock(staleAfter: configuration.operationLockStaleAfter) {
+            try store.withOrdinaryOperationLock(staleAfter: configuration.operationLockStaleAfter) {
+                guard let existing = store.loadOwnerSession() else { return }
+                guard processInspector.processIdentity(pid: existing.pid) == existing.identity else {
+                    try actionDownWithoutLock()
+                    return
+                }
+                do {
+                    try armOwnerWatchdogWithoutLock(ownerPID: existing.pid)
+                } catch {
+                    logger.error("watchdog", "could not resume owner watchdog: \(error.localizedDescription)")
                     try actionDownWithoutLock()
                 }
-            } catch {
-                logger.error("watchdog", "fail-open cleanup will retry: \(error.localizedDescription)")
             }
+        } catch {
+            logger.warn("watchdog", "owner watchdog resume deferred: \(error.localizedDescription)")
         }
     }
 
@@ -289,31 +306,31 @@ public actor HelperRuntime {
             return HelperCommandResponse(payload: makeStatusSnapshot(from: refreshedStatusSession()).diagnosticsResponse)
         case .up(let armAntiLeak, let ownerPID):
             let verified = try verifiedOwnerPID(requested: ownerPID, peerPID: peerPID)
-            try store.withOperationLock(staleAfter: configuration.operationLockStaleAfter) {
+            try store.withOrdinaryOperationLock(staleAfter: configuration.operationLockStaleAfter) {
                 let session = try tunnelController.bringUp(currentSession: store.loadSession(), armAntiLeak: armAntiLeak, ownerPID: verified)
                 try store.persistSession(session)
             }
             do {
                 try armOwnerWatchdog(ownerPID: verified)
             } catch {
-                try? store.withOperationLock(staleAfter: configuration.operationLockStaleAfter) {
+                try? store.withOrdinaryOperationLock(staleAfter: configuration.operationLockStaleAfter) {
                     try actionDownWithoutLock()
                 }
                 throw error
             }
             return HelperCommandResponse(payload: "ok\n")
         case .down:
-            try store.withOperationLock(staleAfter: configuration.operationLockStaleAfter) {
+            try store.withOrdinaryOperationLock(staleAfter: configuration.operationLockStaleAfter) {
                 try actionDownWithoutLock()
             }
             return HelperCommandResponse(payload: "ok\n")
         case .shutdown:
-            try store.withOperationLock(staleAfter: configuration.operationLockStaleAfter) {
+            try store.withOrdinaryOperationLock(staleAfter: configuration.operationLockStaleAfter) {
                 try actionDownWithoutLock()
             }
             return HelperCommandResponse(payload: "ok\n", shouldExit: true)
         case .repair:
-            try store.withOperationLock(staleAfter: configuration.operationLockStaleAfter) {
+            try store.withOrdinaryOperationLock(staleAfter: configuration.operationLockStaleAfter) {
                 if let repaired = try tunnelController.repair(currentSession: store.loadSession()) {
                     try store.persistSession(repaired)
                 }
@@ -321,7 +338,7 @@ public actor HelperRuntime {
             return HelperCommandResponse(payload: "ok\n")
         case .attachOwner(let ownerPID):
             let verified = try verifiedOwnerPID(requested: ownerPID, peerPID: peerPID)
-            try store.withOperationLock(staleAfter: configuration.operationLockStaleAfter) {
+            try store.withOrdinaryOperationLock(staleAfter: configuration.operationLockStaleAfter) {
                 guard let verified else {
                     throw HelperError.ownerVerificationFailed("could not verify owner_pid against socket peer")
                 }
@@ -330,7 +347,7 @@ public actor HelperRuntime {
             try armOwnerWatchdog(ownerPID: verified)
             return HelperCommandResponse(payload: "ok\n")
         case .antiLeakOff:
-            try store.withOperationLock(staleAfter: configuration.operationLockStaleAfter) {
+            try store.withOrdinaryOperationLock(staleAfter: configuration.operationLockStaleAfter) {
                 try firewallController.disable()
                 if var session = store.loadSession() {
                     session.antiLeakArmed = false
@@ -342,6 +359,7 @@ public actor HelperRuntime {
     }
 
     private func actionDownWithoutLock() throws {
+        try store.requireNoPendingReplacement()
         let session = store.loadSession()
         do {
             try tunnelController.bringDown(currentSession: session)
@@ -378,7 +396,8 @@ public actor HelperRuntime {
 
     private func makeStatusSnapshot(from session: HelperSession??) -> HelperStatusSnapshot {
         let session = session ?? nil
-        let operation = store.operationInProgress(staleAfter: configuration.operationLockStaleAfter)
+        let recoveryPending = store.protectedReplacementRecoveryPending
+        let operation = !recoveryPending && store.operationInProgress(staleAfter: configuration.operationLockStaleAfter)
         let interfaceName = session?.interfaceName ?? ""
         let routeInterface = session?.routeInterface ?? ""
         let ipv6Expected = session?.ipv6RouteExpected ?? false
@@ -399,7 +418,8 @@ public actor HelperRuntime {
             rxBytes: session?.rxBytes ?? 0,
             txBytes: session?.txBytes ?? 0,
             latestHandshake: session?.latestHandshake ?? 0,
-            leakProtection: (session?.antiLeakArmed ?? false) || firewallController.antileakIsActive() ? "armed" : "off"
+            leakProtection: (session?.antiLeakArmed ?? false) || firewallController.antileakIsActive() ? "armed" : "off",
+            recoveryPending: recoveryPending
         )
     }
 
@@ -425,6 +445,13 @@ public actor HelperRuntime {
     }
 
     private func armOwnerWatchdog(ownerPID: Int32?) throws {
+        try store.withOrdinaryOperationLock(staleAfter: configuration.operationLockStaleAfter) {
+            try armOwnerWatchdogWithoutLock(ownerPID: ownerPID)
+        }
+    }
+
+    private func armOwnerWatchdogWithoutLock(ownerPID: Int32?) throws {
+        try store.requireNoPendingReplacement()
         ownerWatchdogTask?.cancel()
         guard let ownerPID else {
             store.clearOwnerSession()
@@ -515,19 +542,8 @@ public final class UnixSocketServer: @unchecked Sendable {
                     guard let command = try HelperCommandFrame.decode(bytes, maxBytes: configuration.maxCommandBytes) else {
                         return
                     }
-                    if command == "shutdown" {
-                        // Acknowledge immediately so application termination is
-                        // instant. The signed helper remains alive until the
-                        // fail-open teardown has actually completed.
-                        try writeResponse("ok\n", to: client)
-                        let response = await runtime.handle(commandLine: command, peerPID: peer.pid)
-                        if response.shouldExit {
-                            logger.info("socket", "shutdown cleanup completed, exiting helper")
-                            exit(0)
-                        }
-                        logger.warn("socket", "shutdown cleanup deferred to owner watchdog")
-                        return
-                    }
+                    // Shutdown uses the same verified response path: pending
+                    // recovery or failed cleanup must never be acknowledged ok.
                     let response = await runtime.handle(commandLine: command, peerPID: peer.pid)
                     if response.shouldExit {
                         _ = try? writeResponse(response.payload, to: client)

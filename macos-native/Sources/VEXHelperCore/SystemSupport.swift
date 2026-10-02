@@ -38,6 +38,21 @@ public final class LocalFileSystem: HelperFileSystem, @unchecked Sendable {
         manager.fileExists(atPath: path)
     }
 
+    public func pathPresence(at path: String) -> HelperPathPresence {
+        var metadata = stat()
+        if lstat(path, &metadata) == 0 { return .present }
+        guard errno == ENOENT else { return .unknown }
+        // A dangling journal symlink is present (lstat above). A missing leaf
+        // under an inaccessible, non-directory or dangling parent is unknown.
+        let parent = URL(fileURLWithPath: path).deletingLastPathComponent().path
+        guard parent != path else { return .unknown }
+        if lstat(parent, &metadata) == 0 {
+            return (metadata.st_mode & S_IFMT) == S_IFDIR ? .absent : .unknown
+        }
+        guard errno == ENOENT else { return .unknown }
+        return pathPresence(at: parent) == .absent ? .absent : .unknown
+    }
+
     public func fileSize(at path: String) -> UInt64? {
         (try? manager.attributesOfItem(atPath: path)[.size] as? NSNumber)?.uint64Value
     }
@@ -637,16 +652,15 @@ public final class SystemTunnelController: TunnelControlling, @unchecked Sendabl
     /// helper socket or normal app coordinator until their owner/intent and
     /// completed-handshake gates are verified on an isolated Mac.
     // TODO: Bind the authenticated helper RPC and normal coordinator to this
-    // operation and explicit journal recovery; bootstrap/watchdogs must not
-    // apply their legacy fail-open teardown to a pending replacement journal.
+    // operation and explicit journal recovery, with process/intent and fresh
+    // handshake validation. Runtime now isolates pending journals; that guard
+    // alone does not complete recovery or authorize live coordinator cutover.
     public func replacePreservingAntiLeak(
         currentSession: HelperSession?, ownerPID: Int32, expectedConfigSHA256: String
     ) throws -> HelperSession {
         let store = HelperStateStore(fileSystem: fileSystem, paths: paths)
         return try store.withOperationLock(staleAfter: 120) {
-            guard !fileSystem.fileExists(at: replacementJournalPath) else {
-                throw HelperError.commandFailed("protected replacement recovery is pending")
-            }
+            try store.requireNoPendingReplacement()
             guard ownerPID > 1, let source = currentSession,
                   source.ownerPID == ownerPID, source.antiLeakArmed,
                   source.socketExists, validReplacementInterface(source.interfaceName),
@@ -723,7 +737,11 @@ public final class SystemTunnelController: TunnelControlling, @unchecked Sendabl
     public func recoverProtectedReplacement(ownerPID: Int32) throws -> HelperSession? {
         let store = HelperStateStore(fileSystem: fileSystem, paths: paths)
         return try store.withOperationLock(staleAfter: 120) {
-            guard fileSystem.fileExists(at: replacementJournalPath) else { return nil }
+            switch fileSystem.pathPresence(at: replacementJournalPath) {
+            case .absent: return nil
+            case .unknown: throw HelperError.replacementRecoveryPending
+            case .present: break
+            }
             let journal = try ProtectedReplacementJournal.decode(fileSystem.readText(at: replacementJournalPath))
             guard journal.ownerPID == ownerPID else {
                 throw HelperError.ownerVerificationFailed("protected recovery owner changed")

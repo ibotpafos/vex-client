@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Resolve the existing test root before fixtures append not-yet-created paths.
+# /tmp and /var may be symlinks on macOS. Secure-store production code must
+# continue rejecting symlink ancestors rather than weakening its no-follow gate.
+TMPDIR="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
+export TMPDIR
 BUILD="$(mktemp -d "${TMPDIR:-/tmp}/vex-native-offline.XXXXXX")"
 trap 'rm -rf "$BUILD"' EXIT
 SOURCES="$ROOT/macos-native/Sources/VEXNativeMac"
@@ -15,6 +20,7 @@ swiftc -swift-version 5 -parse-as-library -o "$BUILD/offline" \
   "$SOURCES/Services/VEXSessionStore.swift" \
   "$ROOT/macos-native/Tests/OfflineHarness/main.swift"
 "$BUILD/offline"
+python3 "$ROOT/scripts/tests/test_macos_offline_tmpdir.py"
 python3 "$ROOT/scripts/tests/test_macos_build_failures.py"
 python3 "$ROOT/scripts/tests/test_macos_helper_socket.py"
 python3 "$ROOT/scripts/tests/test_vex_country_groups.py"
@@ -58,6 +64,7 @@ python3 "$ROOT/scripts/tests/test_macos_active_normal_pending_stage.py"
 python3 "$ROOT/scripts/tests/test_macos_normal_pending_preflight.py"
 python3 "$ROOT/scripts/tests/test_macos_pf_armed_replacement.py"
 python3 "$ROOT/scripts/tests/test_macos_protected_replacement.py"
+python3 "$ROOT/scripts/tests/test_macos_pending_journal_runtime.py"
 python3 "$ROOT/scripts/tests/test_macos_helper_readiness_refresh.py"
 python3 "$ROOT/scripts/tests/test_macos_normal_cache_model.py"
 python3 "$ROOT/scripts/tests/test_macos_psk_event_consumer.py"

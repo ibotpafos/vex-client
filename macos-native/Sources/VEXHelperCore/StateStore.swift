@@ -20,6 +20,40 @@ public final class HelperStateStore: @unchecked Sendable {
         try fileSystem.createDirectory(at: paths.runtimeDirectory)
     }
 
+    public var protectedReplacementRecoveryPending: Bool {
+        // Any remaining journal, including corrupt, unreadable, symlinked or
+        // committed-but-not-removed data, belongs to explicit recovery only.
+        fileSystem.pathPresence(at: paths.helperDirectory + "/replacement-journal.state") != .absent
+    }
+
+    public func requireNoPendingReplacement() throws {
+        guard !protectedReplacementRecoveryPending else {
+            throw HelperError.replacementRecoveryPending
+        }
+    }
+
+    /// Ordinary operations must never consume protected-replacement evidence.
+    /// The second check closes the race with a replacement acquiring the same
+    /// lease after our fast, non-mutating preflight check.
+    public func withOrdinaryOperationLock<T>(staleAfter: TimeInterval, _ body: () throws -> T) throws -> T {
+        try requireNoPendingReplacement()
+        return try withOperationLock(staleAfter: staleAfter) {
+            try requireNoPendingReplacement()
+            return try body()
+        }
+    }
+
+    /// Startup cleanup may run when directory creation failed. Still take the
+    /// same kernel lease and recheck the journal; inability to lock is not
+    /// permission to mutate network state. No marker/directory writes required.
+    public func withOrdinaryEmergencyCleanupLease<T>(_ body: () throws -> T) throws -> T {
+        try requireNoPendingReplacement()
+        let lease = try HelperOperationLease.acquire(path: paths.operationLockPath, fileSystem: fileSystem)
+        defer { withExtendedLifetime(lease) {} }
+        try requireNoPendingReplacement()
+        return try body()
+    }
+
     public func loadSession() -> HelperSession? {
         if let text = try? fileSystem.readText(at: paths.sessionStatePath), let session = HelperSession(payload: text) {
             return session

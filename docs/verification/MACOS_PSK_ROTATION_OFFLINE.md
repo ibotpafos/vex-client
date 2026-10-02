@@ -33,13 +33,31 @@ routing mode, explicit push consent/capability, idle operation state and paid ac
 
 ## Limits that remain release blockers
 
-- No production public signing key was accessed or provisioned. `native-vpn-profile-public-keys.json`
-  is intentionally absent from the app. Format is `{ "KEY_ID": "standard-base64-SPKI-DER" }`,
-  <=8 P-256 keys / 64 KiB. A production key must be supplied through an approved signing pipeline
-  before codesigning; never bootstrap trust from a response or copy fixture keys into an app.
+- The existing Windows release public keyring was found in
+  `native-windows/packaging/profile-signing-keys.json`, introduced in commit
+  `6fa856ceff073ff356b5df5e67d33401297cb28e`. Its source SHA-256 is
+  `be66fbec7816879c8cb6bb36fa8947263b53c3cc9f829d969361776163896ec1`;
+  key ID is `native-profile-p256-v1` and SPKI DER SHA-256 is
+  `f194a1a8765d9e5490ade0f5f6df7310e187d8a5f2baeddf39eee0165c4c2289`.
+  This is repository/release-pipeline provenance, **not** independent attestation of
+  the currently deployed server key. No private key was read or derived.
+  An offline candidate may explicitly reuse this public repository anchor; publication
+  still requires matching an approved current-server fingerprint/release attestation.
+- `VEX_NATIVE_VPN_PROFILE_PUBLIC_KEYS_FILE` explicitly supplies the dictionary resource
+  `{ "KEY_ID": "standard-base64-SPKI-DER" }`, <=8 P-256 keys / 64 KiB. The builder
+  uses one bounded nonblocking/no-follow regular-file FD read, rejects duplicate IDs
+  and noncanonical Base64, validates **copied bytes** with platform CryptoKit, then
+  signs the bundle. No input means no resource and the verifier remains fail-closed.
+  Never bootstrap trust from a profile response or copy fixture keys into a release.
 - Current backend staged policies omit routing metadata and sign a full tunnel. Legacy full-tunnel
   proof is recognized; it is never relabelled as split/smart routing. Signed split-routing staging
   remains a source TODO and requires a compatible backend contract plus focused regression proof.
+  The actual requested `all_except_ru` + `ru` signed-stage chain gate exited 1 with
+  `FAIL: stage reload ACK`; it did not ACK or activate the mismatched policy. Merely adding
+  routing fields is insufficient: the server currently has no persistent device-routing
+  preference. An authenticated pre-prepare negotiation must snapshot routing claims,
+  preserve the prepare/fetch digest, and keep legacy rotations compatible. Android's
+  legacy smart setting maps to `all_except_ru`; no separate `smart` mode is established.
 - MainActor serialization is not a cross-process file CAS. FD-store sync/mapping defenses are not
   a blanket same-UID attacker or power-loss guarantee. Such stronger acceptance is unproven.
 - Native APNs token CAS/order/unregister, provisioning/signing, enforced per-app routing, extended

@@ -40,6 +40,8 @@ python3 "$ROOT/scripts/tests/test_macos_push_secure_store.py"
 python3 "$ROOT/scripts/tests/test_macos_psk_rotation_api_contract.py"
 python3 "$ROOT/scripts/tests/test_macos_explicit_signing.py"
 python3 "$ROOT/scripts/tests/test_macos_signing_order.py"
+python3 "$ROOT/scripts/tests/test_macos_public_anchor_packaging.py"
+python3 "$ROOT/scripts/tests/test_macos_repository_public_anchor.py"
 
 # PSK source-only runtime gates; no app/helper/VPN launch or live API/APNs.
 export GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local

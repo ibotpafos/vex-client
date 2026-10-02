@@ -186,10 +186,104 @@ sign_native_macos_bundle() {
   codesign --verify --deep --strict "${app_dir}"
 }
 
-# A test-only entry point exercises signing order with a fake codesign binary;
-# it never builds, launches, installs, or contacts the keychain/network.
+# An operator may explicitly provide a public trust-anchor dictionary for a release.
+# The default deliberately bundles nothing: a missing resource fails closed in the
+# verifier. This never reads private keys, keychains, or production services.
+package_native_vpn_profile_public_keys() {
+  local app_dir="$1"
+  local source="${VEX_NATIVE_VPN_PROFILE_PUBLIC_KEYS_FILE:-}"
+  [[ -z "${source}" ]] && return 0
+  /usr/bin/python3 - "${source}" "${app_dir}/Contents/Resources/native-vpn-profile-public-keys.json" <<'PYTHON_VALIDATOR'
+import base64
+import json
+import os
+import stat
+import sys
+
+source, destination = sys.argv[1:]
+try:
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    descriptor = os.open(source, flags)
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError("not a regular file")
+        chunks = []
+        remaining = 64 * 1024 + 1
+        while remaining:
+            chunk = os.read(descriptor, remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+        raise ValueError("input changed during read")
+    raw = b"".join(chunks)
+    if not raw or len(raw) > 64 * 1024 or len(raw) != before.st_size:
+        raise ValueError("invalid size")
+    def reject_duplicates(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate key id")
+            result[key] = value
+        return result
+    anchors = json.loads(raw.decode("utf-8"), object_pairs_hook=reject_duplicates)
+    if not isinstance(anchors, dict) or not 1 <= len(anchors) <= 8:
+        raise ValueError("must contain 1 to 8 anchors")
+    for key_id, encoded in anchors.items():
+        if not isinstance(key_id, str) or not key_id or len(key_id.encode("utf-8")) > 128:
+            raise ValueError("invalid key id")
+        if not isinstance(encoded, str):
+            raise ValueError("invalid public key")
+        der = base64.b64decode(encoded, validate=True)
+        if base64.b64encode(der).decode("ascii") != encoded:
+            raise ValueError("non-canonical public key encoding")
+        # Strict SubjectPublicKeyInfo for id-ecPublicKey / prime256v1 only.
+        expected_prefix = bytes.fromhex("3059301306072a8648ce3d020106082a8648ce3d030107034200")
+        if len(der) != 91 or not der.startswith(expected_prefix) or der[-65] != 4:
+            raise ValueError("not a P-256 SPKI public key")
+    os.makedirs(os.path.dirname(destination), exist_ok=True)
+    with open(destination, "xb") as output:
+        output.write(raw)
+except (OSError, UnicodeError, ValueError, json.JSONDecodeError, base64.binascii.Error):
+    # Do not echo source paths or data: release logs must not disclose input details.
+    raise SystemExit("Invalid native VPN profile public-key resource")
+PYTHON_VALIDATOR
+  # Use the same platform CryptoKit parser as the verifier to reject malformed
+  # P-256 points that merely resemble SPKI DER. Keep compiler diagnostics out of
+  # release logs because they may include operator-provided paths.
+  if ! /usr/bin/swift - "${app_dir}/Contents/Resources/native-vpn-profile-public-keys.json" >/dev/null 2>&1 <<'SWIFT_VALIDATOR'
+import CryptoKit
+import Foundation
+
+let source = CommandLine.arguments[1]
+do {
+    let data = try Data(contentsOf: URL(fileURLWithPath: source))
+    guard let anchors = try JSONSerialization.jsonObject(with: data) as? [String: String] else {
+        throw CocoaError(.coderReadCorrupt)
+    }
+    for (_, value) in anchors {
+        guard let der = Data(base64Encoded: value) else { throw CocoaError(.coderReadCorrupt) }
+        _ = try P256.Signing.PublicKey(derRepresentation: der)
+    }
+} catch { exit(1) }
+SWIFT_VALIDATOR
+  then
+    rm -f "${app_dir}/Contents/Resources/native-vpn-profile-public-keys.json"
+    echo "Invalid native VPN profile public-key resource" >&2
+    return 1
+  fi
+}
+
+# A test-only entry point exercises public-resource packaging and signing order
+# with fake tools; it never builds, launches, installs, or contacts keychains/network.
 if [[ "${VEX_MACOS_SIGNING_TEST_ONLY:-0}" == "1" ]]; then
   : "${VEX_MACOS_SIGNING_TEST_APP_DIR:?VEX_MACOS_SIGNING_TEST_APP_DIR is required}"
+  package_native_vpn_profile_public_keys "${VEX_MACOS_SIGNING_TEST_APP_DIR}"
   sign_native_macos_bundle "${VEX_MACOS_SIGNING_TEST_APP_DIR}"
   exit 0
 fi
@@ -251,6 +345,8 @@ else
   echo "Missing SwiftPM resource bundle for ${APP_NAME}" >&2
   exit 1
 fi
+
+package_native_vpn_profile_public_keys "${APP_DIR}"
 
 mkdir -p "${APP_DIR}/Contents/Resources/resources"
 for resource in install-vex-vpn-helper.sh awg amneziawg-go awg-quick.sh vex-helper helper-version; do

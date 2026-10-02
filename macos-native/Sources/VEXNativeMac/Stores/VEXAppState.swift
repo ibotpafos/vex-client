@@ -99,6 +99,7 @@ final class VEXAppState: ObservableObject {
     private var customerRealtimeConnected = false
     private var customerRealtimeGeneration = 0
     private var authenticatedSessionGeneration = 0
+    private var nativeNormalProfileReconciliationGeneration = 0
     private enum AuthenticatedOperationError: Error { case sessionChanged }
     private var customerNotificationSessionID: String?
     private var customerNotificationPolicy = CustomerNotificationPolicy()
@@ -268,6 +269,7 @@ final class VEXAppState: ObservableObject {
         let generation = authenticatedSessionGeneration
         let accountID = currentSession.user.id
         let token = currentSession.accessToken
+        let ordinaryProfileChange = userInfo["vex"] == nil
         // APS-only receipt remains generic account invalidation. A present vex
         // envelope must validate before any refresh or durable event admission.
         if userInfo["vex"] != nil {
@@ -287,17 +289,80 @@ final class VEXAppState: ObservableObject {
                 // must not suppress all account/access refreshes indefinitely.
             }
         }
+        if ordinaryProfileChange {
+            nativeNormalProfileReconciliationGeneration &+= 1
+            // Evict synchronously, before any suspension; never derive a profile
+            // or PSK event from the uncorrelated APS payload.
+            profileWarmupTask?.cancel()
+            try? profileService.invalidateNormalCache(accountID: accountID)
+        }
+        let profileChangeGeneration = nativeNormalProfileReconciliationGeneration
         Task { [weak self] in
             guard let self, self.canUseNativeRemotePush, self.nativeRemotePushEnabled, self.nativePushConsentMatchesSession,
                   (try? self.ensureAuthenticatedSessionCurrent(generation: generation, accessToken: token, accountID: accountID)) != nil else { return }
-            // TODO: Add registration/session-bound ordinary profile-change
-            // reconciliation from an authenticated signed profile fetch. APS-only
-            // lifecycle receipts have no profile correlation today; do not invent
-            // a PSK event or apply configuration from an uncorrelated push payload.
-            // Generic account invalidation never starts/stops a tunnel or applies
-            // a profile received in a push payload.
+            guard !ordinaryProfileChange || self.nativeNormalProfileReconciliationGeneration == profileChangeGeneration else { return }
             await self.refreshCustomerState()
+            guard (try? self.ensureAuthenticatedSessionCurrent(generation: generation, accessToken: token, accountID: accountID)) != nil else { return }
+            if ordinaryProfileChange {
+                await self.reconcileNativeNormalProfileChange(generation: generation, accessToken: token, accountID: accountID, profileChangeGeneration: profileChangeGeneration)
+            }
             await self.processNativePSKEvents()
+        }
+    }
+
+    /// APS is an invalidation hint only. Fetch an authenticated signed snapshot
+    /// for the existing registered installation; never create/register a device.
+    private func reconcileNativeNormalProfileChange(generation: Int, accessToken: String, accountID: String, profileChangeGeneration: Int) async {
+        guard canUseNativeRemotePush, nativeRemotePushEnabled, nativePushConsentMatchesSession,
+              nativePushRegistration.status == .registered,
+              nativePushAccountID == accountID, nativePushSessionGeneration == generation,
+              nativeNormalProfileReconciliationGeneration == profileChangeGeneration,
+              entitlement?.hasPaidAccess == true, !isVpnBusy, !isDeviceBusy,
+              !isServerSelectionBusy, !isNativePSKPreparationBusy, !Task.isCancelled,
+              let deviceID = nativePushDeviceID,
+              let installationID = nativePushIdentityStore.existingDeviceId(),
+              let device = accountDevices.first(where: { $0.id == deviceID }),
+              device.status == "active", device.platform?.lowercased() == "macos",
+              device.provisioningMode == "managed_native", device.clientKeyOwnership == "client",
+              device.protocol?.lowercased() == "amneziawg", device.externalDeviceId == installationID,
+              let locationID = targetLocationId,
+              (try? ensureAuthenticatedSessionCurrent(generation: generation, accessToken: accessToken, accountID: accountID)) != nil else { return }
+        let selectedID = selectedLocationId
+        let mode = routingMode
+        let vpnGeneration = vpnOperationGeneration
+        let previousActive = activeTunnel
+        let previousPrepared = nativePSKPreparedTunnel
+        let scopeIsCurrent: @MainActor () -> Bool = { [weak self] in
+            guard let self, self.canUseNativeRemotePush, self.nativeRemotePushEnabled,
+                  self.nativePushConsentMatchesSession, self.nativePushRegistration.status == .registered,
+                  self.nativePushAccountID == accountID, self.nativePushSessionGeneration == generation,
+                  self.nativeNormalProfileReconciliationGeneration == profileChangeGeneration,
+                  self.nativePushDeviceID == deviceID, self.nativePushIdentityStore.existingDeviceId() == installationID,
+                  self.entitlement?.hasPaidAccess == true, !self.isVpnBusy, !self.isDeviceBusy,
+                  !self.isServerSelectionBusy, !self.isNativePSKPreparationBusy, !Task.isCancelled,
+                  self.targetLocationId == locationID, self.selectedLocationId == selectedID, self.routingMode == mode,
+                  self.vpnOperationGeneration == vpnGeneration, self.activeTunnel == previousActive,
+                  self.nativePSKPreparedTunnel == previousPrepared,
+                  self.accountDevices.first(where: { $0.id == deviceID }) == device else { return false }
+            return (try? self.ensureAuthenticatedSessionCurrent(generation: generation, accessToken: accessToken, accountID: accountID)) != nil
+        }
+        do {
+            let prepared = try await profileService.refreshRegisteredNormalProfile(
+                accessToken: accessToken, device: device, locationId: locationID,
+                routingMode: mode, accountID: accountID,
+                validateCurrent: {
+                    guard scopeIsCurrent() else { throw AuthenticatedOperationError.sessionChanged }
+                })
+            guard scopeIsCurrent() else { return }
+            // No activeTunnel assignment: its observer would rebind registration.
+            if previousActive == nil { nativePSKPreparedTunnel = prepared }
+            nativePushEventError = nil
+            // TODO: Add controlled, owned live-normal-profile cutover with rollback
+            // and handshake evidence. Until verified, leave an active tunnel intact;
+            // this path updates only a signed cache and an idle prepared profile.
+        } catch {
+            guard scopeIsCurrent() else { return }
+            nativePushEventError = "Не удалось безопасно обновить VPN-профиль. Активное подключение не изменено."
         }
     }
 

@@ -77,6 +77,30 @@ struct OfflineHarness {
         let network = URLSession(configuration: config)
         defer { network.invalidateAndCancel() }
         let api = VEXAPIClient(urlSession: network, baseURL: URL(string: "https://fixture.invalid")!)
+        MockHTTP.responseBody = #"{"version":7}"#
+        let readonlyDeviceID = "11111111-1111-4111-8111-111111111111"
+        _ = try await api.readOnlyManagedVpnProfile(accessToken: "synthetic-token", deviceId: readonlyDeviceID, locationId: "", routingMode: .fullTunnel, bypassRegion: nil)
+        let readonlyRequest = MockHTTP.requests.last!
+        precondition(readonlyRequest.httpMethod == "GET" && readonlyRequest.url?.path == "/v1/vpn/profile/read-only")
+        let readonlyQuery = URLComponents(url: readonlyRequest.url!, resolvingAgainstBaseURL: false)!.queryItems!
+        precondition(readonlyQuery.contains(URLQueryItem(name: "location", value: "")))
+        precondition(readonlyQuery.contains(URLQueryItem(name: "device_id", value: readonlyDeviceID)))
+        precondition(readonlyQuery.contains(URLQueryItem(name: "awg_version", value: "3")))
+        precondition(!readonlyQuery.contains(where: { $0.name == "known_version" }))
+        let readonlyCount = MockHTTP.requests.count
+        do {
+            _ = try await api.readOnlyManagedVpnProfile(accessToken: "synthetic-token", deviceId: readonlyDeviceID, locationId: "de", routingMode: .fullTunnel, bypassRegion: "ru")
+            preconditionFailure("invalid readonly routing admitted")
+        } catch VEXAPIError.invalidRequest {}
+        precondition(MockHTTP.requests.count == readonlyCount)
+        MockHTTP.responseStatus = 404; MockHTTP.responseBody = #"{"error":{"message":"not found"}}"#
+        do {
+            _ = try await api.readOnlyManagedVpnProfile(accessToken: "synthetic-token", deviceId: readonlyDeviceID, locationId: "de", routingMode: .fullTunnel, bypassRegion: nil)
+            preconditionFailure("old server unexpectedly accepted")
+        } catch {}
+        precondition(MockHTTP.requests.count == readonlyCount + 1 && MockHTTP.requests.last?.url?.path == "/v1/vpn/profile/read-only")
+        MockHTTP.responseStatus = 200
+        print("PASS: readonly signed-profile GET contract, empty auto location, invalid inputs/old server fail closed without mutating fallback")
         MockHTTP.responseBody = #"{"id":"device-fixture","name":"My Mac","status":"active"}"#
         let renamed = try await api.renameVpnDevice(accessToken: "fixture-token", deviceId: "device-fixture", name: "My Mac")
         precondition(renamed.name == "My Mac")

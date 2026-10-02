@@ -43,7 +43,7 @@ var wrong=verified;wrong.envelope.profile.deviceId="x";do{_ = try service.prepar
 VPNProfileService.badBuild=true;do{_ = try service.prepareStagedPSKProfile(verified,basedOn:old);need(false,"bad generated config accepted")}catch{};need(cache.saves==0,"bad config cache write");VPNProfileService.badBuild=false
 try service.promoteStagedPSKProfile(staged,owner:NativePushPSKEventOwner(accountID:"a",installationID:"i"));need(cache.saves==1 && cache.owners==1,"exact owner promotion");print("actual extracted preparation runtime passed")
 '''
-with tempfile.TemporaryDirectory(prefix='psk-prepare-',dir='/private/tmp') as d:
+with tempfile.TemporaryDirectory(prefix='psk-prepare-',dir=__import__('os').environ.get('TMPDIR', '/private/tmp')) as d:
  p=pathlib.Path(d);(p/'main.swift').write_text(harness);c=subprocess.run(['swiftc',str(p/'main.swift'),'-o',str(p/'fixture')],text=True,capture_output=True);print(c.stdout,end='');print(c.stderr,end='',file=sys.stderr)
  if c.returncode:raise SystemExit(c.returncode)
  r=subprocess.run([str(p/'fixture')],text=True,capture_output=True);print(r.stdout,end='');print(r.stderr,end='',file=sys.stderr);raise SystemExit(r.returncode)

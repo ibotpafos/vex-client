@@ -3,7 +3,7 @@
 import pathlib, subprocess, tempfile, textwrap, sys
 root=pathlib.Path(sys.argv[1]) if len(sys.argv)==2 else pathlib.Path(__file__).resolve().parents[2]
 src=root/'macos-native/Sources/VEXNativeMac'
-with tempfile.TemporaryDirectory(prefix='native-psk-consumer-',dir='/private/tmp') as temp:
+with tempfile.TemporaryDirectory(prefix='native-psk-consumer-',dir=__import__('os').environ.get('TMPDIR', '/private/tmp')) as temp:
  t=pathlib.Path(temp); main=t/'main.swift'; binary=t/'fixture'
  main.write_text(textwrap.dedent(r'''
  import Foundation
@@ -20,7 +20,7 @@ with tempfile.TemporaryDirectory(prefix='native-psk-consumer-',dir='/private/tmp
    }
    @MainActor static func queue(_ root:URL,_ items:[NativePushPSKEvent], owner:NativePushPSKEventOwner=owner){let q=NativePushPSKEventQueue(appDataURL:root);for e in items {try! q.enqueue(e,owner:owner)}}
    @MainActor static func remaining(_ root:URL,_ owner:NativePushPSKEventOwner=owner)->[NativePushPSKEvent]{try! NativePushPSKEventQueue(appDataURL:root).events(owner:owner)}
-   @MainActor static func run(_ name:String,_ block:(URL)->Void){let d=URL(fileURLWithPath:"/private/tmp/consumer-\(name)-\(UUID().uuidString)",isDirectory:true);defer{try? FileManager.default.removeItem(at:d)};block(d)}
+   @MainActor static func run(_ name:String,_ block:(URL)->Void){let d=URL(fileURLWithPath:(ProcessInfo.processInfo.environment["TMPDIR"] ?? "/private/tmp")+"/consumer-\(name)-\(UUID().uuidString)",isDirectory:true);defer{try? FileManager.default.removeItem(at:d)};block(d)}
    static func main() async {
      run("stage") { d in let l=Log();queue(d,[event(.profile_updated,"u")]);let c=NativePSKEventConsumer(queue:NativePushPSKEventQueue(appDataURL:d),store:NativePSKStagedProfileStore(appDataURL:d));let dp=deps(fetch:{envelope()},ack:{PSKRotationACKResponse(rotationID:rotation,accepted:true,replayed:false)},log:l);Task{@MainActor in await c.process(owner:owner,managedDeviceID:device,dependencies:dp);need(l.v==["fetch","validate","validate","ack"],"stage save/reload before ack order");need(remaining(d).isEmpty,"acked update removed");need(try! NativePSKStagedProfileStore(appDataURL:d).load(owner:owner,managedDeviceID:device,rotationID:rotation) != nil,"stage retained")};RunLoop.current.run(until:Date().addingTimeInterval(0.1)) }
      run("failure") { d in let l=Log();queue(d,[event(.profile_updated,"u")]);let c=NativePSKEventConsumer(queue:NativePushPSKEventQueue(appDataURL:d),store:NativePSKStagedProfileStore(appDataURL:d));let dp=NativePSKEventConsumer.Dependencies(scopeIsCurrent:{true},fetchCurrent:{throw CocoaError(.fileReadUnknown)},validate:{_,_ in l.v.append("validate")},acknowledge:{_ in l.v.append("ack");return PSKRotationACKResponse(rotationID:rotation,accepted:true,replayed:false)},activate:{_,_ in l.v.append("activate")});Task{@MainActor in await c.process(owner:owner,managedDeviceID:device,dependencies:dp);need(remaining(d).count==1&&l.v.isEmpty,"fetch failure retained/no activation")};RunLoop.current.run(until:Date().addingTimeInterval(0.1)) }

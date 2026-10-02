@@ -50,6 +50,7 @@ struct VPNProfileService {
            !normalCacheReuse.isBlocked(owner),
            let pair = keyStore.existingForStagedProfile(),
            let record = cache.load(locationId: normalizedLocationId, routingMode: routingMode, owner: owner) {
+            let cacheGeneration = normalCacheReuse.generation(owner)
             if let prevalidatedEntitlement, !prevalidatedEntitlement.hasPaidAccess {
                 try? invalidateNormalCache(accountID: accountID)
                 throw VPNProfileError.subscriptionInactive
@@ -60,15 +61,22 @@ struct VPNProfileService {
                 locationId: normalizedLocationId, routingMode: routingMode, bypassRegion: bypassRegion)
             try validateCurrent()
             if let prepared {
-                if writeHelperConfig { try await writeSanitizedHelperConfig(prepared.config, validateCurrent: validateCurrent) }
+                if writeHelperConfig {
+                    try await writeSanitizedHelperConfig(prepared.config, validateCurrent: {
+                        try validateCurrent()
+                        try normalCacheReuse.validateGeneration(cacheGeneration, owner: owner)
+                    })
+                }
                 try validateCurrent()
+                try normalCacheReuse.validateGeneration(cacheGeneration, owner: owner)
                 return prepared
             }
         }
         // Never infer ownership from a bearer token: absent/blank ownership disables cache use.
         let externalDeviceId = identityStore.getOrCreateDeviceId()
         let cacheOwner = VPNProfileCacheOwner(accountID: accountID, installationID: externalDeviceId)
-        guard cacheOwner != nil else { throw NativeVPNProfileAuthorizationVerifier.Failure.policyMismatch }
+        guard let cacheOwner else { throw NativeVPNProfileAuthorizationVerifier.Failure.policyMismatch }
+        let cacheGeneration = normalCacheReuse.generation(cacheOwner)
         // Complete responses are still required on a cache miss. Legacy caches,
         // staged-PSK records, expired or unsigned-client-bound policies are misses.
 
@@ -79,6 +87,7 @@ struct VPNProfileService {
             entitlement = try await api.entitlement(accessToken: accessToken)
         }
         try validateCurrent()
+        try normalCacheReuse.validateGeneration(cacheGeneration, owner: cacheOwner)
         guard entitlement.hasPaidAccess else {
             try? invalidateNormalCache(accountID: accountID)
             throw VPNProfileError.subscriptionInactive
@@ -91,10 +100,13 @@ struct VPNProfileService {
             publicKey: keyPair.publicKey,
             keyEpoch: keyPair.keyEpoch,
             locationId: normalizedLocationId,
-            validateCurrent: validateCurrent
+            validateCurrent: {
+                try validateCurrent()
+                try normalCacheReuse.validateGeneration(cacheGeneration, owner: cacheOwner)
+            }
         )
         try validateCurrent()
-
+        try normalCacheReuse.validateGeneration(cacheGeneration, owner: cacheOwner)
         if needsKeySync(device: device, keyPair: keyPair) {
             device = try await api.rotateManagedVpnKey(
                 accessToken: accessToken,
@@ -103,6 +115,7 @@ struct VPNProfileService {
                 prefix: "native-sync-key"
             )
             try validateCurrent()
+            try normalCacheReuse.validateGeneration(cacheGeneration, owner: cacheOwner)
         }
         let managedProfile = try await api.managedVpnProfile(
                 accessToken: accessToken,
@@ -113,6 +126,7 @@ struct VPNProfileService {
                 knownVersion: nil
             )
         try validateCurrent()
+        try normalCacheReuse.validateGeneration(cacheGeneration, owner: cacheOwner)
 
         if managedProfile.revoked == true {
             try? invalidateNormalCache(accountID: accountID)
@@ -129,7 +143,10 @@ struct VPNProfileService {
             routingMode: routingMode,
             bypassRegion: bypassRegion,
             writeHelperConfig: writeHelperConfig,
-            validateCurrent: validateCurrent
+            validateCurrent: {
+                try validateCurrent()
+                try normalCacheReuse.validateGeneration(cacheGeneration, owner: cacheOwner)
+            }
         )
     }
 
@@ -141,6 +158,54 @@ struct VPNProfileService {
               let owner = VPNProfileCacheOwner(accountID: accountID, installationID: installationID) else { return }
         normalCacheReuse.block(owner)
         try cache.removeNormalProfiles(owner: owner)
+    }
+
+    /// Fetches and admits a signed profile without identity, key, helper, or tunnel mutation.
+    func refreshRegisteredNormalProfile(
+        accessToken: String, device: VpnDevice, locationId: String, routingMode: VpnRoutingMode,
+        accountID: String, validateCurrent: @MainActor () throws -> Void = {}
+    ) async throws -> PreparedTunnel {
+        try validateCurrent()
+        let locationId = locationId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let bypass = bypassRegion(for: routingMode)
+        guard device.status == "active", device.platform?.lowercased() == "macos",
+              device.provisioningMode == "managed_native", device.clientKeyOwnership == "client",
+              device.protocol?.lowercased() == "amneziawg",
+              let installation = device.externalDeviceId,
+              let existingInstallation = identityStore.existingDeviceId(), existingInstallation == installation,
+              let owner = VPNProfileCacheOwner(accountID: accountID, installationID: installation),
+              let keyPair = keyStore.existingForStagedProfile(),
+              let raw = Data(base64Encoded: keyPair.privateKey), raw.count == 32,
+              let key = try? Curve25519.KeyAgreement.PrivateKey(rawRepresentation: raw),
+              key.publicKey.rawRepresentation.base64EncodedString() == keyPair.publicKey,
+              device.publicKey == keyPair.publicKey else { throw VPNProfileError.incompleteProfile("registered normal profile") }
+        let cacheGeneration = normalCacheReuse.generation(owner)
+        let profile = try await api.readOnlyManagedVpnProfile(accessToken: accessToken, deviceId: device.id,
+            locationId: locationId, routingMode: routingMode, bypassRegion: bypass)
+        try validateCurrent()
+        try normalCacheReuse.validateGeneration(cacheGeneration, owner: owner)
+        guard profile.revoked != true, profile.unchanged != true, profile.rotationRequired != true else {
+            throw NativeVPNProfileAuthorizationVerifier.Failure.policyMismatch
+        }
+        let verified = try profileAuthorization.verifyNormalProfile(profile, ownerAccountID: owner.accountID,
+            managedDeviceID: device.id, requestedLocationID: locationId, routingMode: routingMode.rawValue,
+            bypassRegion: bypass, expectedProfileVersion: profile.version ?? 0,
+            expectedClientPublicKey: keyPair.publicKey, expectedClientKeyEpoch: keyPair.keyEpoch,
+            expectedInstallationID: installation, requireSignedClientBinding: true)
+        let clean = verified.profile
+        let config = try Self.buildRawManagedProfileConfig(clean, keyPair: keyPair, mtu: verified.mtu,
+            persistentKeepalive: verified.persistentKeepalive, resolveEndpoint: false)
+        try VEXHelperCore.AwgConfigAdmission.validate(config)
+        let tunnel = PreparedTunnel(device: device.withManagedProfile(clean, locationId: verified.assignedLocationID),
+            config: config, locationId: locationId, profileVersion: clean.version, routingMode: routingMode,
+            bypassRegion: bypass, bypassRangesCount: 0, bypassDomainsCount: 0,
+            routingPolicyVersion: clean.routingPolicyVersion ?? VEXAppInfo.routingPolicyVersion,
+            rotationRequired: false, awgVersion: Self.awgVersion)
+        try validateCurrent()
+        try cache.save(PreparedTunnelCacheRecord(tunnel: tunnel, normalAuthorizationProfile: profile), locationId: locationId, routingMode: routingMode, owner: owner)
+        normalCacheReuse.unblock(owner)
+        try validateCurrent()
+        return tunnel
     }
 
     /// Revalidates signed authority, not cached config/freshness flags. The signed
@@ -700,8 +765,19 @@ struct VPNProfileService {
 @MainActor
 final class NativeNormalProfileCacheReuseControl {
     private var blockedOwners: [VPNProfileCacheOwner] = []
+    private var generations: [(owner: VPNProfileCacheOwner, value: UInt64)] = []
+    func generation(_ owner: VPNProfileCacheOwner) -> UInt64 { generations.first { $0.owner == owner }?.value ?? 0 }
+    func validateGeneration(_ expected: UInt64, owner: VPNProfileCacheOwner) throws {
+        guard generation(owner) == expected else { throw NativeVPNProfileAuthorizationVerifier.Failure.policyMismatch }
+    }
     func isBlocked(_ owner: VPNProfileCacheOwner) -> Bool { blockedOwners.contains(owner) }
-    func block(_ owner: VPNProfileCacheOwner) { if !isBlocked(owner) { blockedOwners.append(owner) } }
+    func block(_ owner: VPNProfileCacheOwner) {
+        // Every invalidation, including repeated blocked-owner receipts, fences
+        // prior suspended fetches. Unblock does not reset the monotonic epoch.
+        if let index = generations.firstIndex(where: { $0.owner == owner }) { generations[index].value &+= 1 }
+        else { generations.append((owner, 1)) }
+        if !isBlocked(owner) { blockedOwners.append(owner) }
+    }
     func unblock(_ owner: VPNProfileCacheOwner) { blockedOwners.removeAll { $0 == owner } }
 }
 

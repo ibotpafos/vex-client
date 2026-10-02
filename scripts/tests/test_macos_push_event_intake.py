@@ -2,6 +2,7 @@
 """Offline native-push intake probe using the production receipt body and queue."""
 from pathlib import Path
 import hashlib
+import os
 import subprocess
 import sys
 import tempfile
@@ -57,12 +58,16 @@ final class DisposableIdentityStore {{
     }}
 }}
 
+@MainActor final class InertNormalProfileService {{
+    func invalidateNormalCache(accountID: String?) throws {{}}
+}}
 @MainActor final class H {{
     var canUseNativeRemotePush = true
     var nativeRemotePushEnabled = true
     var nativePushConsentMatchesSession = true
     var session: FixtureSession?
     var authenticatedSessionGeneration = 1
+    var nativeNormalProfileReconciliationGeneration = 0
     var nativePushDeviceID: String?
     var nativePushEventOwner: NativePushPSKEventOwner?
     var nativePushEventError: String?
@@ -70,6 +75,8 @@ final class DisposableIdentityStore {{
     let nativePushPSKQueue: NativePushPSKEventQueue
     let nativePSKStageStore: NativePSKStagedProfileStore
     var nativePSKRetryTask: Task<Void, Never>?
+    var profileWarmupTask: Task<Void, Never>?
+    let profileService = InertNormalProfileService()
     var nativePSKPreparedTunnel: PreparedTunnel?
     let recorder: RefreshRecorder
     var identityIsCurrent = true
@@ -88,6 +95,9 @@ final class DisposableIdentityStore {{
     }}
 
     func processNativePSKEvents() async {{}}
+    // Ordinary reconciliation is tested with its actual body in the separate
+    // ordinary scope matrix. This test retains durable PSK queue acceptance.
+    func reconcileNativeNormalProfileChange(generation: Int, accessToken: String, accountID: String, profileChangeGeneration: Int) async {{}}
 
     func refreshCustomerState() async {{
         guard let session,
@@ -232,7 +242,7 @@ func drain() async {{ for _ in 0..<32 {{ await Task.yield() }} }}
 }}
 '''
 
-with tempfile.TemporaryDirectory(prefix="vex-native-push-intake-", dir="/private/tmp") as directory:
+with tempfile.TemporaryDirectory(prefix="vex-native-push-intake-", dir=os.environ.get("TMPDIR", "/private/tmp")) as directory:
     directory = Path(directory)
     app_data = directory / "app-data"
     main = directory / "main.swift"

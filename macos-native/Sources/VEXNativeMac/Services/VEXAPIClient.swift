@@ -260,6 +260,29 @@ struct VEXAPIClient {
         return try await json("/v1/vpn/profile?\(queryString(query))", accessToken: accessToken)
     }
 
+    /// Read a signed persisted assignment without provisioning, repair or rotation.
+    /// Older servers fail closed: never fall back to the mutating profile endpoint.
+    func readOnlyManagedVpnProfile(
+        accessToken: String, deviceId: String, locationId: String,
+        routingMode: VpnRoutingMode, bypassRegion: String?
+    ) async throws -> ManagedVpnProfile {
+        guard !accessToken.isEmpty, NativePSKIdentifier.device(deviceId),
+              locationId.utf8.count <= 128,
+              locationId == locationId.trimmingCharacters(in: .whitespacesAndNewlines),
+              locationId.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }),
+              (routingMode == .fullTunnel && bypassRegion == nil) ||
+              (routingMode == .allExceptRu && bypassRegion == "ru") else { throw VEXAPIError.invalidRequest }
+        var query = [
+            URLQueryItem(name: "device_id", value: deviceId),
+            URLQueryItem(name: "location", value: locationId),
+            URLQueryItem(name: "routing_mode", value: routingMode.rawValue),
+            URLQueryItem(name: "platform", value: "macos"),
+            URLQueryItem(name: "awg_version", value: "3"),
+        ]
+        if let bypassRegion { query.append(URLQueryItem(name: "bypass_region", value: bypassRegion)) }
+        return try await json("/v1/vpn/profile/read-only?\(queryString(query))", accessToken: accessToken)
+    }
+
     /// Explicit user preparation only. Never call from profile polling/connect.
     /// The receipt is not a profile: signed fetch, durable staging and ACK remain mandatory.
     func preparePSKRotation(

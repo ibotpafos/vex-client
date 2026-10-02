@@ -177,17 +177,20 @@ final class VEXPrivilegedHelperCoreTests: XCTestCase {
         )
         let fileSystem = InMemoryFileSystem(files: [
             "/helper/config-path": "/helper/vex.conf\n",
-            "/helper/vex.conf": "[Interface]\nPrivateKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\nAddress = 10.0.0.2/32\n[Peer]\nPublicKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\nEndpoint = 1.1.1.1:51820\nAllowedIPs = 0.0.0.0/0\n",
-            "/amnezia/active.name": "utun9\n",
-            "/helper/dns-baseline.state": "\n",
-            "/runtime/utun9.sock": ""
+            "/helper/vex.conf": "[Interface]\nPrivateKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\nAddress = 10.0.0.2/32\n[Peer]\nPublicKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\nEndpoint = 1.1.1.1:51820\nAllowedIPs = 0.0.0.0/0\n"
         ])
         let runner = RecordingCommandRunner([
             CommandSpec(program: "/helper/awg-quick.sh", arguments: ["up", "/helper/active.conf"]): .init(status: 0),
             CommandSpec(program: "/helper/awg-quick.sh", arguments: ["down", "/helper/active.conf"]): .init(status: 0),
             CommandSpec(program: "/sbin/route", arguments: ["-n", "get", "1.1.1.1"]): .init(status: 0, stdout: "interface: utun9\n"),
             CommandSpec(program: "/usr/sbin/netstat", arguments: ["-rn", "-f", "inet6"]): .init(status: 0)
-        ])
+        ], onRun: { spec in
+            if spec.program == "/helper/awg-quick.sh", spec.arguments == ["up", "/helper/active.conf"] {
+                // Mimic quick's successful creation, not stale state before bringUp.
+                try fileSystem.writeTextAtomically("utun9\n", to: "/amnezia/active.name", mode: 0o600)
+                try fileSystem.writeTextAtomically("", to: "/runtime/utun9.sock", mode: 0o600)
+            }
+        })
         let firewall = FailingEnableFirewall()
         let tunnel = SystemTunnelController(fileSystem: fileSystem, paths: paths, runner: runner, firewall: firewall)
 
@@ -1044,15 +1047,21 @@ private struct MutableDateProvider: DateProviding {
 
 private final class RecordingCommandRunner: CommandRunning, @unchecked Sendable {
     private let results: [CommandSpec: CommandResult]
+    private let onRun: (@Sendable (CommandSpec) throws -> Void)?
     private let lock = NSLock()
     private(set) var calls: [CommandSpec] = []
 
-    init(_ results: [CommandSpec: CommandResult]) {
+    init(
+        _ results: [CommandSpec: CommandResult],
+        onRun: (@Sendable (CommandSpec) throws -> Void)? = nil
+    ) {
         self.results = results
+        self.onRun = onRun
     }
 
     func run(_ spec: CommandSpec) throws -> CommandResult {
         lock.withLock { calls.append(spec) }
+        try onRun?(spec)
         return results[spec] ?? .init(status: 0)
     }
 }

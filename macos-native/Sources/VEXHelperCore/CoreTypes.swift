@@ -461,7 +461,17 @@ public extension TunnelControlling {
 public protocol PFFirewallControlling: Sendable {
     func antileakIsActive() -> Bool
     func enable(endpoint: String, interfaceName: String) throws
+    /// Replaces rules only in an already armed VEX anti-leak anchor.  The
+    /// default deliberately rejects the operation so existing fakes cannot
+    /// accidentally turn a profile refresh into a firewall transition.
+    func updateWhileArmed(endpoint: String, interfaceName: String) throws
     func disable() throws
+}
+
+public extension PFFirewallControlling {
+    func updateWhileArmed(endpoint: String, interfaceName: String) throws {
+        throw HelperError.commandFailed("PF armed-rule replacement is unsupported by this firewall controller")
+    }
 }
 
 public protocol DateProviding: Sendable {

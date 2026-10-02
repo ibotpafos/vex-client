@@ -235,6 +235,167 @@ public final class SystemPFFirewallController: PFFirewallControlling, @unchecked
         }
     }
 
+    /// Fail-closed replacement for a *currently armed* VEX anchor.  This is
+    /// intentionally separate from `enable`: it never toggles PF, flushes an
+    /// anchor, or reloads the global PF configuration.
+    // TODO: A normal-profile handover must add an operation lock and durable
+    // journal around this primitive before invoking it. This method alone is
+    // not live-PF clearance.
+    public func updateWhileArmed(endpoint: String, interfaceName: String) throws {
+        let candidateRules = try checkedRules(endpoint: endpoint, interfaceName: interfaceName)
+        let previous = try captureArmedAnchor()
+
+        do {
+            // The atomic write leaves either the complete old rules or the
+            // complete candidate rules at the path supplied to pfctl.
+            try fileSystem.writeTextAtomically(candidateRules, to: paths.antileakAnchorPath, mode: 0o644)
+            let load = try runner.run(CommandSpec(
+                program: "/sbin/pfctl",
+                arguments: ["-a", "com.vexguard.antileak", "-f", paths.antileakAnchorPath]
+            ))
+            guard load.succeeded else {
+                throw HelperError.commandFailed("pfctl anti-leak anchor replacement failed with status \(load.status)")
+            }
+            try verifyArmedAnchor(expectedRules: candidateRules)
+            try fileSystem.writeTextAtomically(
+                "status=active\nendpoint=\(endpoint)\niface=\(interfaceName)\n",
+                to: paths.antileakStatePath,
+                mode: 0o600
+            )
+            // A legacy marker is not an authority for this update, but a
+            // stale marker is removed only after the replacement is proven.
+            try fileSystem.removeItem(at: paths.legacyAntileakStatePath)
+            logger.info("antileak", "pf armed anchor rules replaced")
+        } catch {
+            let rollbackFailure = restoreArmedAnchor(previous)
+            if let rollbackFailure {
+                throw HelperError.commandFailed("PF armed-rule replacement failed: \(error.localizedDescription); rollback failed: \(rollbackFailure)")
+            }
+            throw error
+        }
+    }
+
+    private struct ArmedAnchorSnapshot {
+        let anchorRules: String
+        let state: String?
+        let legacyState: String?
+    }
+
+    private func captureArmedAnchor() throws -> ArmedAnchorSnapshot {
+        try verifyPersistentAnchorRegistration()
+        guard fileSystem.fileExists(at: paths.antileakAnchorPath),
+              let size = fileSystem.fileSize(at: paths.antileakAnchorPath), size > 0 else {
+            throw HelperError.commandFailed("PF anti-leak anchor file is not armed")
+        }
+        let anchorRules = try fileSystem.readText(at: paths.antileakAnchorPath)
+        let state = try optionalText(at: paths.antileakStatePath)
+        guard let state, let armed = armedState(from: state), armed.status == "active" else {
+            throw HelperError.commandFailed("PF anti-leak state is not armed")
+        }
+        let expectedRules = try checkedRules(endpoint: armed.endpoint, interfaceName: armed.interfaceName)
+        guard anchorRules == expectedRules else {
+            throw HelperError.commandFailed("PF anti-leak anchor does not match its armed state")
+        }
+        try verifyArmedAnchor(expectedRules: expectedRules)
+        return ArmedAnchorSnapshot(
+            anchorRules: anchorRules,
+            state: state,
+            legacyState: try optionalText(at: paths.legacyAntileakStatePath)
+        )
+    }
+
+    private func optionalText(at path: String) throws -> String? {
+        guard fileSystem.fileExists(at: path) else { return nil }
+        return try fileSystem.readText(at: path)
+    }
+
+    private func verifyPersistentAnchorRegistration() throws {
+        let declaration = "anchor \"com.vexguard.antileak\""
+        let loadDeclaration = "load anchor \"com.vexguard.antileak\" from \"\(paths.antileakAnchorPath)\""
+        let configuration = try fileSystem.readText(at: paths.pfConfigPath)
+        let effectiveLines = configuration.split(whereSeparator: \.isNewline).map { line -> String in
+            String(line.prefix { $0 != "#" }).trimmingCharacters(in: .whitespaces)
+        }
+        guard effectiveLines.contains(declaration), effectiveLines.contains(loadDeclaration) else {
+            throw HelperError.commandFailed("PF anti-leak anchor is not persistently registered")
+        }
+    }
+
+    private func verifyArmedAnchor(expectedRules: String? = nil) throws {
+        guard try pfIsEnabled() else {
+            throw HelperError.commandFailed("PF is disabled; refusing anti-leak rule replacement")
+        }
+        let runtime = try runner.run(CommandSpec(
+            program: "/sbin/pfctl", arguments: ["-a", "com.vexguard.antileak", "-sr"]
+        ))
+        guard runtime.succeeded, !runtime.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw HelperError.commandFailed("PF anti-leak anchor has no loaded rules")
+        }
+        if let expectedRules {
+            // `pfctl -sr` intentionally does not print global `set` options.
+            // Every printed rule must instead be one of this anchor's expected
+            // non-global rules; this rejects an unrelated physical-interface
+            // pass as well as a broad pass inserted before the final block.
+            let expectedRuntimeLines = normalizedArmedRules(expectedRules, excludingSourceOptions: true)
+            let runtimeLines = normalizedArmedRules(runtime.stdout)
+            // Exact ordered rule coverage binds interface, AF, endpoint and
+            // ports too. Missing/extra/reordered or non-default flags fail
+            // closed; a fragment/subset match is not ownership evidence.
+            guard !runtimeLines.isEmpty, runtimeLines == expectedRuntimeLines else {
+                throw HelperError.commandFailed("PF anti-leak anchor does not match expected armed rules")
+            }
+        }
+    }
+
+    private func normalizedArmedRules(_ text: String, excludingSourceOptions: Bool = false) -> [String] {
+        text.split(whereSeparator: \.isNewline).compactMap { line in
+            var tokens = line.split(whereSeparator: \.isWhitespace).map(String.init)
+            guard !tokens.isEmpty else { return nil }
+            if excludingSourceOptions, tokens.first == "set" { return nil }
+            if tokens.first == "pass" {
+                // PF prints its default state/initial-SYN flags even when the
+                // input omits them. Normalize only these exact safe defaults.
+                if tokens.suffix(2).elementsEqual(["keep", "state"]) { tokens.removeLast(2) }
+                if tokens.suffix(2).elementsEqual(["flags", "S/SA"]),
+                   !tokens.contains("udp") { tokens.removeLast(2) }
+            }
+            if let port = tokens.firstIndex(of: "port"), tokens.indices.contains(port + 2), tokens[port + 1] == "=" {
+                if tokens[port + 2] == "https" { tokens[port + 2] = "443" }
+                if tokens[port + 2] == "ssh" { tokens[port + 2] = "22" }
+            }
+            return tokens.joined(separator: " ")
+        }
+    }
+
+    private func restoreArmedAnchor(_ snapshot: ArmedAnchorSnapshot) -> String? {
+        var failures: [String] = []
+        do {
+            try fileSystem.writeTextAtomically(snapshot.anchorRules, to: paths.antileakAnchorPath, mode: 0o644)
+            let reload = try runner.run(CommandSpec(
+                program: "/sbin/pfctl", arguments: ["-a", "com.vexguard.antileak", "-f", paths.antileakAnchorPath]
+            ))
+            if !reload.succeeded { failures.append("pfctl anchor rollback status \(reload.status)") }
+            else { try verifyArmedAnchor(expectedRules: snapshot.anchorRules) }
+        } catch {
+            failures.append(error.localizedDescription)
+        }
+        do {
+            try restoreOptionalText(snapshot.state, at: paths.antileakStatePath, mode: 0o600)
+            try restoreOptionalText(snapshot.legacyState, at: paths.legacyAntileakStatePath, mode: 0o600)
+        } catch {
+            failures.append(error.localizedDescription)
+        }
+        return failures.isEmpty ? nil : failures.joined(separator: "; ")
+    }
+
+    private func restoreOptionalText(_ text: String?, at path: String, mode: Int) throws {
+        if let text {
+            try fileSystem.writeTextAtomically(text, to: path, mode: mode)
+        } else {
+            try fileSystem.removeItem(at: path)
+        }
+    }
+
     private func ensureAnchorRegistered() throws {
         let anchorDeclaration = "anchor \"com.vexguard.antileak\""
         let loadDeclaration = "load anchor \"com.vexguard.antileak\" from \"\(paths.antileakAnchorPath)\""
@@ -291,13 +452,24 @@ public final class SystemPFFirewallController: PFFirewallControlling, @unchecked
         throw HelperError.commandFailed("pf anchor com.vexguard.antileak still contains runtime rules after flush")
     }
 
-    private func pfIsDisabled() throws -> Bool {
+    private func pfIsEnabled() throws -> Bool {
         let result = try runner.run(CommandSpec(program: "/sbin/pfctl", arguments: ["-s", "info"]))
         guard result.succeeded else {
             throw HelperError.commandFailed("pfctl -s info failed with status \(result.status)")
         }
-        return result.stdout
-            .split(whereSeparator: \.isNewline)
+        let statuses = result.stdout.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }.filter { $0.hasPrefix("Status:") }
+        guard statuses.count == 1 else { throw HelperError.commandFailed("PF enabled status is unrecognized") }
+        if statuses[0] == "Status: Enabled" || statuses[0].hasPrefix("Status: Enabled for ") { return true }
+        if statuses[0] == "Status: Disabled" || statuses[0].hasPrefix("Status: Disabled for ") { return false }
+        throw HelperError.commandFailed("PF enabled status is unrecognized")
+    }
+
+    // Retain the pre-existing explicit-disabled contract for normal teardown.
+    private func pfIsDisabled() throws -> Bool {
+        let result = try runner.run(CommandSpec(program: "/sbin/pfctl", arguments: ["-s", "info"]))
+        guard result.succeeded else { throw HelperError.commandFailed("pfctl -s info failed with status \(result.status)") }
+        return result.stdout.split(whereSeparator: \.isNewline)
             .contains { $0.trimmingCharacters(in: .whitespaces) == "Status: Disabled" }
     }
 
@@ -307,9 +479,26 @@ public final class SystemPFFirewallController: PFFirewallControlling, @unchecked
         let addressFamily: String
     }
 
+    private func checkedRules(endpoint: String, interfaceName: String) throws -> String {
+        guard validInterfaceName(interfaceName), let parsedEndpoint = pfEndpoint(from: endpoint),
+              parsedEndpoint.port != nil else {
+            throw HelperError.protocolViolation("invalid PF anti-leak endpoint or interface")
+        }
+        return buildRules(endpoint: parsedEndpoint, interfaceName: interfaceName)
+    }
+
     private func buildRules(endpoint: String, interfaceName: String) -> String {
+        guard let parsedEndpoint = pfEndpoint(from: endpoint) else {
+            // Existing enable behavior deliberately keeps its compatibility
+            // path. New armed replacement calls checkedRules above.
+            return buildRules(endpoint: nil, interfaceName: interfaceName)
+        }
+        return buildRules(endpoint: parsedEndpoint, interfaceName: interfaceName)
+    }
+
+    private func buildRules(endpoint: PFEndpoint?, interfaceName: String) -> String {
         var rules = "set block-policy drop\npass quick on lo0 all\npass out quick on \(interfaceName) all\n"
-        if let endpoint = pfEndpoint(from: endpoint) {
+        if let endpoint {
             if let port = endpoint.port {
                 rules += "pass out quick \(endpoint.addressFamily) proto udp from any to \(endpoint.host) port = \(port) keep state\n"
             }
@@ -318,6 +507,23 @@ public final class SystemPFFirewallController: PFFirewallControlling, @unchecked
         }
         rules += "block drop out all\n"
         return rules
+    }
+
+    private func validInterfaceName(_ value: String) -> Bool {
+        guard value.hasPrefix("utun"), value.utf8.count > 4, value.utf8.count <= 15 else { return false }
+        return value.dropFirst(4).utf8.allSatisfy { (48...57).contains($0) }
+    }
+
+    private struct ArmedState { let status: String; let endpoint: String; let interfaceName: String }
+    private func armedState(from text: String) -> ArmedState? {
+        var values: [String: String] = [:]
+        for line in text.split(whereSeparator: \.isNewline) {
+            let pair = line.split(separator: "=", maxSplits: 1).map(String.init)
+            guard pair.count == 2, values[pair[0]] == nil else { return nil }
+            values[pair[0]] = pair[1]
+        }
+        guard let status = values["status"], let endpoint = values["endpoint"], let interfaceName = values["iface"] else { return nil }
+        return ArmedState(status: status, endpoint: endpoint, interfaceName: interfaceName)
     }
 
     private func pfEndpoint(from endpoint: String) -> PFEndpoint? {

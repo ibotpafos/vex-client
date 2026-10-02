@@ -79,7 +79,18 @@ final class VEXHelperModel: ObservableObject {
         }
     }
 
-    func refreshStatus(quiet: Bool = false) async {
+    /// Readiness already established by the foreground startup/repair path.
+    /// Automatic profile hints must never install, kickstart or repair a helper.
+    var canUseExistingValidatedHelper: Bool {
+        helperReadinessValidated && installState?.filesCurrent == true
+            && installState?.socketConnectable == true
+    }
+
+    /// A failed read can retain the last UI status for continuity, but that cached
+    /// value is not permission to operate on a tunnel. This result reports the
+    /// transport read, not an uncached physical network-state attestation.
+    @discardableResult
+    func refreshStatus(quiet: Bool = false) async -> Bool {
         do {
             let response = try await client.sendStatus()
             let nextStatus = VpnStatus(helperResponse: response)
@@ -92,6 +103,7 @@ final class VEXHelperModel: ObservableObject {
             if !quiet {
                 message = nil
             }
+            return true
         } catch {
             hasConfirmedIdleStatus = false
             consecutiveStatusFailures += 1
@@ -101,6 +113,7 @@ final class VEXHelperModel: ObservableObject {
             if !quiet {
                 message = "Проверяем helper..."
             }
+            return false
         }
     }
 

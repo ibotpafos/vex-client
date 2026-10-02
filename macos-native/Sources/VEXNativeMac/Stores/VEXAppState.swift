@@ -455,17 +455,78 @@ final class VEXAppState: ObservableObject {
                        prepared.routingPolicyVersion != source.routingPolicyVersion ||
                        prepared.bypassRangesCount != source.bypassRangesCount || prepared.bypassDomainsCount != source.bypassDomainsCount) else { return }
                 nativeNormalPendingTunnel = prepared
+                nativePushEventError = nil
+                await processNativeNormalPendingProfile()
             } else {
                 nativePSKPreparedTunnel = prepared
+                nativePushEventError = nil
             }
-            nativePushEventError = nil
-            // TODO: Add controlled, owned live-normal-profile cutover with rollback
-            // and handshake evidence. Until verified, leave an active tunnel intact;
-            // this path updates only a signed cache, an idle prepared profile,
-            // or a separately scoped memory-only normal candidate.
+            // The active-source path remains read-only until the helper has a
+            // protected replacement transaction; generic `up` is not a cutover.
         } catch {
             guard scopeIsCurrent() else { return }
             nativePushEventError = "Не удалось безопасно обновить VPN-профиль. Активное подключение не изменено."
+        }
+    }
+
+    /// Reauthorize a memory-only normal candidate against the current owner and
+    /// an already validated, exactly matched helper. The authenticated read may
+    /// update the signed normal cache, but never the helper or network state.
+    /// No install/helper-config write/up,
+    /// PSK admission/ACK or active-profile promotion is allowed in this preflight.
+    private func processNativeNormalPendingProfile() async {
+        guard let candidate = nativeNormalPendingTunnel, let source = activeTunnel,
+              let helper = nativePSKHelper, helper.canUseExistingValidatedHelper,
+              !helper.isBusy, desiredVpnState == .connected,
+              helper.status.isUsableConnectedStatus, tunnel(source, matches: helper.status),
+              let current = session,
+              let installation = nativePushIdentityStore.existingDeviceId(),
+              let device = accountDevices.first(where: { $0.id == source.device.id }) else { return }
+        let sessionGeneration = authenticatedSessionGeneration
+        let profileGeneration = nativeNormalProfileReconciliationGeneration
+        let vpnGeneration = vpnOperationGeneration
+        let selectedID = selectedLocationId
+        let prepared = nativePSKPreparedTunnel
+        let scopeIsCurrent: @MainActor () -> Bool = { [weak self, weak helper] in
+            guard let self, let helper, self.nativePSKHelper === helper,
+                  helper.canUseExistingValidatedHelper, !helper.isBusy,
+                  self.desiredVpnState == .connected, !Task.isCancelled,
+                  helper.status.isUsableConnectedStatus, self.tunnel(source, matches: helper.status),
+                  self.activeTunnel == source, self.nativePSKPreparedTunnel == prepared,
+                  self.nativeNormalPendingTunnel == candidate,
+                  self.nativeNormalProfileReconciliationGeneration == profileGeneration,
+                  self.vpnOperationGeneration == vpnGeneration,
+                  self.selectedLocationId == selectedID, self.targetLocationId == candidate.locationId,
+                  self.routingMode == candidate.routingMode,
+                  self.nativePushIdentityStore.existingDeviceId() == installation,
+                  self.accountDevices.first(where: { $0.id == device.id }) == device else { return false }
+            return (try? self.ensureAuthenticatedSessionCurrent(generation: sessionGeneration,
+                accessToken: current.accessToken, accountID: current.user.id)) != nil
+        }
+        guard scopeIsCurrent() else { return }
+        // A retained usable UI status after an unsuccessful read is not evidence.
+        guard await helper.refreshStatus(quiet: true), scopeIsCurrent() else { return }
+        do {
+            let authorized = try await profileService.refreshRegisteredNormalProfile(
+                accessToken: current.accessToken, device: device, locationId: candidate.locationId,
+                routingMode: candidate.routingMode, accountID: current.user.id,
+                validateCurrent: {
+                    guard scopeIsCurrent() else { throw AuthenticatedOperationError.sessionChanged }
+                })
+            guard scopeIsCurrent() else { return }
+            // The computed setter rechecks the signed expiry, device/client-key
+            // and route tuple and meaningful change against the active source.
+            nativeNormalPendingTunnel = authorized
+            nativePushEventError = nil
+            // TODO: Replace the owned active normal profile through a helper
+            // transaction preserving PF, source config and DNS baseline, with
+            // handshake/rollback and stale-owner fencing. SystemTunnelController
+            // bringUp currently calls bringDown (PF disable/DNS restore), so do
+            // not connect/promote this candidate through the generic up path.
+        } catch {
+            guard scopeIsCurrent() else { return }
+            nativeNormalPendingTunnel = nil
+            nativePushEventError = "Не удалось повторно проверить VPN-профиль. Активное подключение не изменено."
         }
     }
 

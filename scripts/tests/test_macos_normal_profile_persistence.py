@@ -18,7 +18,10 @@ def extract(name):
         if not n:return source[m.start():j+1]
     raise AssertionError(name)
 names=['resolveProfile','persistManagedProfile','writeSanitizedHelperConfig','buildRawManagedProfileConfig','amneziaConfig','managedProfileEndpoint','clean','addNumber','addString']
+for name in ['prepareVerifiedNormalCache','invalidateNormalCache']:
+    if 'func '+name+'(' in source:names.append(name)
 bodies='\n'.join(extract(n) for n in names)
+control=source[source.index('@MainActor\nfinal class NativeNormalProfileCacheReuseControl'):source.index('\nenum VPNProfileError:')] if 'final class NativeNormalProfileCacheReuseControl' in source else '@MainActor final class NativeNormalProfileCacheReuseControl {}'
 admission=(ROOT/'macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift').read_text().replace('public enum AwgConfigAdmission','enum ActualAwgConfigAdmission')
 device=source[source.index('private extension VpnDevice {'):source.index('\nextension PreparedTunnel {')]
 cache_source=(S/'Services/VPNProfileCache.swift').read_text()
@@ -32,8 +35,10 @@ enum VEXHelperCore { typealias AwgConfigAdmission = ActualAwgConfigAdmission }
 enum VPNProfileError: Error { case subscriptionInactive, deviceRevoked, unchangedProfileWithoutCache, incompleteProfile(String) }
 enum FixtureError: Error { case sessionChanged, cacheFailure }
 CACHE_MODELS
+CONTROL
 @MainActor final class Cache {
- var writes=0;var helperWrites=0;var loads=0;var fail=false;var saved:PreparedTunnelCacheRecord?
+ var writes=0;var helperWrites=0;var loads=0;var removes=0;var fail=false;var failRemove=false;var saved:PreparedTunnelCacheRecord?
+ func removeNormalProfiles(owner:VPNProfileCacheOwner)throws {removes+=1;if failRemove {throw FixtureError.cacheFailure};saved=nil}
  func load(locationId:String,routingMode:VpnRoutingMode,owner:VPNProfileCacheOwner)->PreparedTunnelCacheRecord? {loads+=1;return saved}
  func save(_ r:PreparedTunnelCacheRecord,locationId:String,routingMode:VpnRoutingMode,owner:VPNProfileCacheOwner)throws {
   if fail {throw FixtureError.cacheFailure};precondition(owner.accountID=="owner");writes+=1;var owned=r;owned.cacheOwner=owner;saved=owned
@@ -41,8 +46,8 @@ CACHE_MODELS
  func writeHelperConfig(_ config:String)throws {helperWrites+=1}
 }
 DEVICE
-@MainActor final class FakeIdentity {var reads=0;func getOrCreateDeviceId()->String {reads+=1;return "installation"}}
-@MainActor final class FakeKeys {var reads=0;func getOrCreate()throws->WireGuardKeyPair {reads+=1;return pair}}
+@MainActor final class FakeIdentity {var reads=0;var existingReads=0;var existing:String?="installation";func existingDeviceId()->String? {existingReads+=1;return existing};func getOrCreateDeviceId()->String {reads+=1;return "installation"}}
+@MainActor final class FakeKeys {var reads=0;var existingReads=0;var existing:WireGuardKeyPair?=pair;func existingForStagedProfile()->WireGuardKeyPair? {existingReads+=1;return existing};func getOrCreate()throws->WireGuardKeyPair {reads+=1;return pair}}
 @MainActor final class FakeAPI {
  var response:ManagedVpnProfile?;var mode="working";var profileCalls=0;var lastRequest="";var lastRoute:VpnRoutingMode?;var lastKnown:Int?
  var after:((String)->Void)?
@@ -58,6 +63,7 @@ DEVICE
 @MainActor final class Harness {
  let cache=Cache();static let awgVersion=3
  let api=FakeAPI();let identityStore=FakeIdentity();let keyStore=FakeKeys()
+ let normalCacheReuse=NativeNormalProfileCacheReuseControl()
  private func bypassRegion(for route:VpnRoutingMode)->String? {route == .fullTunnel ? nil:"ru"}
  private func needsKeySync(device:VpnDevice,keyPair:WireGuardKeyPair)->Bool {false}
  private func activeDevice(accessToken:String,externalDeviceId:String,publicKey:String,keyEpoch:Int,locationId:String,validateCurrent:@MainActor ()throws->Void)async throws->VpnDevice {await Task.yield();api.after?("device");return device}
@@ -81,11 +87,12 @@ let pair=WireGuardKeyPair(privateKey:privateKey.rawRepresentation.base64EncodedS
 let k=Data(repeating:7,count:32).base64EncodedString()
 let iso=ISO8601DateFormatter()
 let now=Date()
-let device=try! JSONDecoder().decode(VpnDevice.self,from:JSONSerialization.data(withJSONObject:["id":"device","status":"active","public_key":pair.publicKey,"platform":"macos","provisioning_mode":"managed_native","client_key_ownership":"client"]))
+let device=try! JSONDecoder().decode(VpnDevice.self,from:JSONSerialization.data(withJSONObject:["id":"device","status":"active","public_key":pair.publicKey,"external_device_id":"installation","platform":"macos","provisioning_mode":"managed_native","client_key_ownership":"client"]))
 func url64(_ data:Data)->String {data.base64EncodedString().replacingOccurrences(of:"+",with:"-").replacingOccurrences(of:"/",with:"_").replacingOccurrences(of:"=",with:"")}
-func profile(request:String="de",policyChange:(inout [String:Any])->Void={_ in})throws->ManagedVpnProfile {
+func profile(request:String="de",signedBinding:Bool=false,policyChange:(inout [String:Any])->Void={_ in})throws->ManagedVpnProfile {
  var policy:[String:Any]=["schema":"vex.native-vpn-profile.v1","user_id":"owner","device_id":"device","assigned_location_id":"assigned","routing_mode":"full_tunnel","profile_version":7,"issued_at":iso.string(from:now.addingTimeInterval(-2)),"expires_at":iso.string(from:now.addingTimeInterval(3600)),"tunnel":["protocol":"wireguard","endpoint":"vpn.example:51820","assigned_ipv4":"10.0.0.2/32","server_public_key":k,"preshared_key":k,"dns":["9.9.9.9"],"allowed_ips":["0.0.0.0/0"],"mtu":1420,"persistent_keepalive":55]]
  if !request.isEmpty {policy["requested_location_id"]=request}
+ if signedBinding {policy["installation_id"]="installation";policy["client_public_key"]=pair.publicKey;policy["client_key_epoch"]=pair.keyEpoch}
  policyChange(&policy)
  let payload=try JSONSerialization.data(withJSONObject:policy,options:[.sortedKeys])
  let raw:[String:Any]=["device_id":"device","client_public_key":pair.publicKey,"client_key_epoch":2,"version":7,"protocol":"wireguard","server":"vpn.example","port":51820,"assigned_ipv4":"10.0.0.2/32","server_public_key":k,"preshared_key":k,"dns":["9.9.9.9"],"allowed_ips":["0.0.0.0/0"],"expires_at":iso.string(from:now.addingTimeInterval(3600)),"config":"[Interface]\nPrivateKey = UNSIGNED_EVIL\n[Peer]\nEndpoint = evil.example:1","bypass_domains":["unsigned.example"],"bypass_ranges":["unsigned"],"authorization":["algorithm":"ECDSA_P256_SHA256_DER","key_id":"k","payload_base64":url64(payload),"signature_base64":url64(try signer.signature(for:payload).derRepresentation)]]
@@ -141,13 +148,13 @@ func need(_ b:Bool,_ s:String){if !b {fputs("FAIL: \(s)\n",stderr);exit(1)}}
   print("normal persistence matrix PASS rejects=\(rejects); actual production methods/models/CryptoKit/AWG admission; inert cache/helper only")
   let resolver=Harness();resolver.api.response=original;resolver.cache.saved=good.cache.saved
   _=try await resolver.resolveProfile(accessToken:"fixture",locationId:" De ",routingMode:.fullTunnel,writeHelperConfig:false,accountID:"owner")
-  need(resolver.api.profileCalls==1 && resolver.api.lastRequest=="de" && resolver.api.lastKnown==nil && resolver.cache.loads==0 && resolver.cache.writes==1,"normal resolver fresh full response, not seeded cache")
-  print("actual resolver: normalized request=de, full signed fetch=1, knownVersion=nil, legacy cache loads=0")
+  need(resolver.api.profileCalls==1 && resolver.api.lastRequest=="de" && resolver.api.lastKnown==nil && resolver.cache.loads==1 && resolver.cache.writes==1,"normal resolver fresh full response, not legacy proof cache")
+  print("actual resolver: normalized request=de, full signed fetch=1, knownVersion=nil, legacy signed-without-client-binding cache rejected")
   for route in [VpnRoutingMode.fullTunnel,.allExceptRu] {
    for mode in ["timeout","provision"] {
     let h=Harness();h.api.mode=mode;h.cache.saved=good.cache.saved
     do {_=try await h.resolveProfile(accessToken:"fixture",locationId:"de",routingMode:route,writeHelperConfig:true,accountID:"owner");need(false,"fallback on \(mode)")}catch{}
-    need(h.api.profileCalls==1 && h.api.lastRoute==route && h.cache.loads==0 && h.cache.writes==0 && h.cache.helperWrites==0,"no silent route/timeout fallback")
+    need(h.api.profileCalls==1 && h.api.lastRoute==route && h.cache.loads==1 && h.cache.writes==0 && h.cache.helperWrites==0,"no silent route/timeout fallback")
     print("actual resolver \(route.rawValue)/\(mode): calls=1, cache/helper=0, no route fallback")
    }
   }
@@ -162,11 +169,79 @@ func need(_ b:Bool,_ s:String){if !b {fputs("FAIL: \(s)\n",stderr);exit(1)}}
   do {_=try await missingOwner.resolveProfile(accessToken:"fixture",locationId:"de",routingMode:.fullTunnel,accountID:nil);need(false,"missing resolver owner")}catch{}
   need(missingOwner.identityStore.reads==0 && missingOwner.keyStore.reads==0 && missingOwner.api.profileCalls==0,"owner rejection before identities")
   print("normal resolver matrix PASS; actual resolveProfile body, API/identity/key/active-device ports inert; no live calls")
+  let signed=try profile(signedBinding:true)
+  let online=Harness();online.api.response=signed
+  let first=try await online.resolveProfile(accessToken:"fixture",locationId:"de",routingMode:.fullTunnel,writeHelperConfig:false,accountID:"owner")
+  need(online.cache.saved!.normalAuthorizationProfile?.authorization != nil,"original signature must be persisted")
+  let seed=online.cache.saved!;let fetches=online.api.profileCalls;let writes=online.cache.writes
+  online.api.mode="timeout";online.cache.saved!.config="UNSIGNED_CACHE_POISON"
+  let second=try await online.resolveProfile(accessToken:"fixture",locationId:"de",routingMode:.fullTunnel,writeHelperConfig:false,accountID:"owner")
+  need(second.config==first.config && online.api.profileCalls==fetches && online.cache.writes==writes && online.keyStore.reads==1 && online.identityStore.reads==1,"offline uses signed proof and existing readonly key, not poison/API/creation")
+  print("signed_normal_cache_offline_reuse=true second_profile_fetches=0; cached config ignored and local-key rendered")
+  var cacheRejects=0
+  func badCache(_ label:String,_ record:PreparedTunnelCacheRecord,key:WireGuardKeyPair?=pair,installation:String?="installation",owner:String="owner",request:String="de",route:VpnRoutingMode = .fullTunnel)async {
+   let h=Harness();h.cache.saved=record;h.api.mode="timeout";h.keyStore.existing=key;h.identityStore.existing=installation
+   do {_=try await h.resolveProfile(accessToken:"fixture",locationId:request,routingMode:route,writeHelperConfig:true,accountID:owner);need(false,"invalid cache \(label)")}catch{}
+   need(h.cache.writes==0 && h.cache.helperWrites==0 && h.api.profileCalls==1,"invalid cache must miss and never mutate helper/cache \(label)")
+   cacheRejects+=1;print("cache rejected \(label): no writes; fresh request1, no timeout fallback")
+  }
+  var c=seed;c.normalAuthorizationProfile=nil;await badCache("legacy_missing_proof",c)
+  c=seed;c.normalAuthorizationProfile=original;await badCache("legacy_unsigned_client_binding",c)
+  c=seed;c.normalAuthorizationProfile!.authorization!.signatureBase64="A";await badCache("invalid_signature",c)
+  c=seed;c.normalAuthorizationProfile!.authorization!.keyID="unknown";await badCache("unknown_anchor",c)
+  c=seed;c.normalAuthorizationProfile!.revoked=true;await badCache("revoked",c)
+  c=seed;c.normalAuthorizationProfile!.unchanged=true;await badCache("unchanged",c)
+  c=seed;c.profileVersion=8;await badCache("version_metadata",c)
+  c=seed;c.device.id="other";await badCache("device_id",c)
+  c=seed;c.device.publicKey=k;await badCache("device_public_key",c)
+  c=seed;c.device.externalDeviceId="other";await badCache("device_install",c)
+  c=seed;c.device.status="revoked";await badCache("device_status",c)
+  c=seed;c.normalAuthorizationProfile!.clientPublicKey=k;await badCache("outer_client_key",c)
+  c=seed;c.normalAuthorizationProfile!.clientKeyEpoch=3;await badCache("outer_client_epoch",c)
+  c=seed;c.normalAuthorizationProfile!.server="evil.example";await badCache("outer_endpoint",c)
+  c=seed;c.normalAuthorizationProfile!.allowedIps=["10.0.0.0/8"];await badCache("outer_allowed_ips",c)
+  c=seed;c.locationId="other";await badCache("request_metadata",c)
+  c=seed;c.routingMode = .allExceptRu;await badCache("route_metadata",c)
+  c=seed;c.cacheOwner=VPNProfileCacheOwner(accountID:"other",installationID:"installation");await badCache("owner_metadata",c)
+  await badCache("actual_owner",seed,owner:"other")
+  await badCache("actual_install",seed,installation:"other")
+  await badCache("missing_existing_key",seed,key:nil)
+  await badCache("changed_actual_key",seed,key:WireGuardKeyPair(privateKey:Curve25519.KeyAgreement.PrivateKey().rawRepresentation.base64EncodedString(),publicKey:pair.publicKey,keyEpoch:2))
+  c=seed;c.normalAuthorizationProfile=try profile(signedBinding:true){$0["installation_id"]="other"};await badCache("signed_install",c)
+  c=seed;c.normalAuthorizationProfile=try profile(signedBinding:true){$0["client_public_key"]=k};await badCache("signed_client_key",c)
+  c=seed;c.normalAuthorizationProfile=try profile(signedBinding:true){$0["client_key_epoch"]=3};await badCache("signed_client_epoch",c)
+  c=seed;c.normalAuthorizationProfile=try profile(signedBinding:true){$0["requested_location_id"]="other"};await badCache("signed_request",c)
+  c=seed;c.normalAuthorizationProfile=try profile(signedBinding:true){$0["expires_at"]=iso.string(from:now.addingTimeInterval(-1))};await badCache("signed_expired",c)
+  c=seed;c.normalAuthorizationProfile=try profile(signedBinding:true){$0["issued_at"]=iso.string(from:now.addingTimeInterval(-301))};c.fetchedAt=now.addingTimeInterval(9999);await badCache("signed_age_not_unsigned_fetchedAt",c)
+  let forced=Harness();forced.cache.saved=seed;forced.api.response=signed
+  _=try await forced.resolveProfile(accessToken:"fixture",locationId:"de",routingMode:.fullTunnel,forceRefresh:true,writeHelperConfig:false,accountID:"owner")
+  need(forced.api.profileCalls==1 && forced.cache.loads==0,"force refresh bypasses valid cache")
+  let stale=Harness();stale.cache.saved=seed;var checks=0
+  do {_=try await stale.resolveProfile(accessToken:"fixture",locationId:"de",routingMode:.fullTunnel,writeHelperConfig:true,accountID:"owner",validateCurrent:{checks+=1;if checks==2 {throw FixtureError.sessionChanged}});need(false,"stale cache session")}catch{}
+  need(stale.api.profileCalls==0 && stale.cache.writes==0 && stale.cache.helperWrites==0,"cache late session guard not converted to fresh mutation")
+  let removed=Harness();removed.cache.saved=seed;try removed.invalidateNormalCache(accountID:"owner")
+  need(removed.cache.saved==nil && removed.cache.removes==1 && removed.cache.helperWrites==0,"owner invalidation no helper write")
+  let removeFailure=Harness();removeFailure.cache.saved=seed;removeFailure.cache.failRemove=true
+  do {try removeFailure.invalidateNormalCache(accountID:"owner");need(false,"remove failure")}catch{}
+  removeFailure.api.mode="timeout"
+  do {_=try await removeFailure.resolveProfile(accessToken:"fixture",locationId:"de",routingMode:.fullTunnel,writeHelperConfig:true,accountID:"owner");need(false,"reuse after failed removal")}catch{}
+  need(removeFailure.api.profileCalls==1 && removeFailure.cache.helperWrites==0,"deletion failure must block reuse before fresh request")
+  for cached in [false,true] {
+   let h=Harness();h.cache.failRemove=true;h.cache.saved=cached ? seed:nil
+   do {_=try await h.resolveProfile(accessToken:"fixture",locationId:"de",routingMode:.fullTunnel,writeHelperConfig:false,prevalidatedEntitlement:Entitlement(active:false,vpnAccess:false),accountID:"owner");need(false,"inactive entitlement accepted")}
+   catch VPNProfileError.subscriptionInactive {} catch {need(false,"cache error masked subscriptionInactive")}
+   need(h.api.profileCalls==0 && h.cache.helperWrites==0 && h.cache.removes==1,"inactive rejection must block/remove without helper")
+  }
+  let revoked=Harness();revoked.cache.failRemove=true;var revokedProfile=signed;revokedProfile.revoked=true;revoked.api.response=revokedProfile
+  do {_=try await revoked.resolveProfile(accessToken:"fixture",locationId:"de",routingMode:.fullTunnel,forceRefresh:true,writeHelperConfig:false,accountID:"owner");need(false,"revoked accepted")}
+  catch VPNProfileError.deviceRevoked {} catch {need(false,"cache error masked deviceRevoked")}
+  need(revoked.cache.removes==1 && revoked.cache.helperWrites==0,"revocation invalidation no helper")
+  print("signed cache matrix PASS rejects=\(cacheRejects); force refresh/session/owner eviction/deletion-failure guard; no real cache/Keychain/API/helper/VPN mutation")
  }
 }
-'''.replace('ADMISSION',admission).replace('DEVICE',device).replace('BODIES',bodies).replace('CACHE_MODELS',cache_models)
+'''.replace('ADMISSION',admission).replace('DEVICE',device).replace('BODIES',bodies).replace('CACHE_MODELS',cache_models).replace('CONTROL',control)
 # No application/helper, OS preferences, Keychain, DNS, network, route/PF or VPN use.
-tmp=Path(os.environ.get('TMPDIR','/Volumes/D/Projects/mobile/macos-release-transaction-20261001/cycle-20-native/tmp'));tmp.mkdir(parents=True,exist_ok=True)
+tmp=Path(os.environ.get('TMPDIR','/Volumes/D/Projects/mobile/macos-release-transaction-20261001/cycle-21-native/tmp'));tmp.mkdir(parents=True,exist_ok=True)
 with tempfile.TemporaryDirectory(prefix='normal-persistence-',dir=tmp) as p:
  d=Path(p);(d/'fixture.swift').write_text(harness)
  cmd=['rtk','proxy','swiftc','-swift-version','5','-parse-as-library',str(S/'Models/VEXModels.swift'),str(S/'Services/NativeVPNProfileAuthorizationVerifier.swift'),str(S/'Services/NativeAwgBoolean.swift'),str(d/'fixture.swift'),'-o',str(d/'probe')]

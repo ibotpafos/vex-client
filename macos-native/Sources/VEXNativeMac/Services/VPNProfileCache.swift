@@ -84,6 +84,26 @@ struct VPNProfileCache {
         try setOwnerOnlyPermissions(url)
     }
 
+    /// Deletes only the account/install namespace used for normal signed profiles.
+    func removeNormalProfiles(owner: VPNProfileCacheOwner) throws {
+        let url = dataURL.appendingPathComponent("profiles", isDirectory: true)
+            .appendingPathComponent(digest(namespaceData(owner)), isDirectory: true)
+        // Never follow a replaced namespace or ancestor outside this storage tree.
+        // Callers block reuse before deletion and retain domain errors on failure.
+        guard url.resolvingSymlinksInPath().standardizedFileURL == url.standardizedFileURL else {
+            throw CocoaError(.fileWriteNoPermission)
+        }
+        var ancestor = url.standardizedFileURL
+        while ancestor.path != "/" {
+            if (try? fileManager.attributesOfItem(atPath: ancestor.path)[.type]) as? FileAttributeType == .typeSymbolicLink {
+                throw CocoaError(.fileWriteNoPermission)
+            }
+            ancestor.deleteLastPathComponent()
+        }
+        guard fileManager.fileExists(atPath: url.path) else { return }
+        try fileManager.removeItem(at: url)
+    }
+
     func writeHelperConfig(_ config: String) throws {
         let url = helperConfigURL()
         try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -134,7 +154,7 @@ struct VPNProfileCache {
 
     private func normalized(_ value: String) -> String {
         let value = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return value.isEmpty ? "de" : value
+        return value
     }
 
     private func setOwnerOnlyPermissions(_ url: URL) throws {
@@ -144,6 +164,8 @@ struct VPNProfileCache {
 
 struct PreparedTunnelCacheRecord: Codable, Equatable {
     var cacheOwner: VPNProfileCacheOwner?
+    /// Original authenticated envelope; nil for legacy and staged-PSK records.
+    var normalAuthorizationProfile: ManagedVpnProfile?
     var device: VpnDevice
     var config: String
     var locationId: String
@@ -156,7 +178,8 @@ struct PreparedTunnelCacheRecord: Codable, Equatable {
     var fetchedAt: Date?
     var awgVersion: Int?
 
-    init(tunnel: PreparedTunnel) {
+    init(tunnel: PreparedTunnel, normalAuthorizationProfile: ManagedVpnProfile? = nil) {
+        self.normalAuthorizationProfile = normalAuthorizationProfile
         device = tunnel.device
         config = tunnel.config
         locationId = tunnel.locationId

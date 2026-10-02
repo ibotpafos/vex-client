@@ -2316,6 +2316,9 @@ final class VEXAppState: ObservableObject {
         message: String,
         authError: String?
     ) {
+        // Invalidate storage only; current helper/VPN/PF state is not touched.
+        // The service blocks reuse even when owner-scoped deletion fails.
+        try? profileService.invalidateNormalCache(accountID: session?.user.id)
         authenticatedSessionGeneration += 1
         invalidateNativePushSession(resetConsent: true)
         sessionRefreshTask?.task.cancel()

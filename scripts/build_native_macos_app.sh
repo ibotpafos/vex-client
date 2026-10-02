@@ -103,8 +103,7 @@ if [[ "${SPARKLE_FEED_URL}" != https://* ]]; then
   echo "VEX_SPARKLE_FEED_URL must use HTTPS; got '${SPARKLE_FEED_URL}'" >&2
   exit 1
 fi
-python3 - "${SPARKLE_PUBLIC_ED_KEY}" <<'PY'
-import base64
+printf '%s\n' 'import base64
 import sys
 
 try:
@@ -112,8 +111,7 @@ try:
 except ValueError as error:
     raise SystemExit(f"Sparkle public Ed25519 key is not valid base64: {error}")
 if len(decoded) != 32:
-    raise SystemExit("Sparkle public Ed25519 key must decode to 32 bytes")
-PY
+    raise SystemExit("Sparkle public Ed25519 key must decode to 32 bytes")' | python3 - "${SPARKLE_PUBLIC_ED_KEY}"
 
 xml_escape() {
   local value="$1"
@@ -193,8 +191,7 @@ package_native_vpn_profile_public_keys() {
   local app_dir="$1"
   local source="${VEX_NATIVE_VPN_PROFILE_PUBLIC_KEYS_FILE:-}"
   [[ -z "${source}" ]] && return 0
-  /usr/bin/python3 - "${source}" "${app_dir}/Contents/Resources/native-vpn-profile-public-keys.json" <<'PYTHON_VALIDATOR'
-import base64
+  printf '%s\n' 'import base64
 import json
 import os
 import stat
@@ -251,13 +248,11 @@ try:
         output.write(raw)
 except (OSError, UnicodeError, ValueError, json.JSONDecodeError, base64.binascii.Error):
     # Do not echo source paths or data: release logs must not disclose input details.
-    raise SystemExit("Invalid native VPN profile public-key resource")
-PYTHON_VALIDATOR
+    raise SystemExit("Invalid native VPN profile public-key resource")' | /usr/bin/python3 - "${source}" "${app_dir}/Contents/Resources/native-vpn-profile-public-keys.json"
   # Use the same platform CryptoKit parser as the verifier to reject malformed
   # P-256 points that merely resemble SPKI DER. Keep compiler diagnostics out of
   # release logs because they may include operator-provided paths.
-  if ! /usr/bin/swift - "${app_dir}/Contents/Resources/native-vpn-profile-public-keys.json" >/dev/null 2>&1 <<'SWIFT_VALIDATOR'
-import CryptoKit
+  if ! printf '%s\n' 'import CryptoKit
 import Foundation
 
 let source = CommandLine.arguments[1]
@@ -270,8 +265,7 @@ do {
         guard let der = Data(base64Encoded: value) else { throw CocoaError(.coderReadCorrupt) }
         _ = try P256.Signing.PublicKey(derRepresentation: der)
     }
-} catch { exit(1) }
-SWIFT_VALIDATOR
+} catch { exit(1) }' | /usr/bin/swift - "${app_dir}/Contents/Resources/native-vpn-profile-public-keys.json" >/dev/null 2>&1
   then
     rm -f "${app_dir}/Contents/Resources/native-vpn-profile-public-keys.json"
     echo "Invalid native VPN profile public-key resource" >&2
@@ -378,62 +372,61 @@ sips -z 512 512 "${ICON_SOURCE}" --out "${ICONSET_DIR}/icon_512x512.png" >/dev/n
 sips -z 1024 1024 "${ICON_SOURCE}" --out "${ICONSET_DIR}/icon_512x512@2x.png" >/dev/null
 iconutil -c icns "${ICONSET_DIR}" -o "${ICNS_PATH}"
 
-cat >"${APP_DIR}/Contents/Info.plist" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleDevelopmentRegion</key>
-  <string>en</string>
-  <key>CFBundleExecutable</key>
-  <string>${APP_NAME}</string>
-  <key>CFBundleIdentifier</key>
-  <string>app.vex.vpn.native</string>
-  <key>CFBundleInfoDictionaryVersion</key>
-  <string>6.0</string>
-  <key>CFBundleName</key>
-  <string>VEX Native</string>
-  <key>CFBundleIconFile</key>
-  <string>VEXNative</string>
-  <key>CFBundlePackageType</key>
-  <string>APPL</string>
-  <key>CFBundleURLTypes</key>
-  <array>
-    <dict>
-      <key>CFBundleURLName</key>
-      <string>VEX Auth</string>
-      <key>CFBundleURLSchemes</key>
-      <array>
-        <string>vexguard</string>
-        <string>vex</string>
-      </array>
-    </dict>
-  </array>
-  <key>CFBundleShortVersionString</key>
-  <string>$(xml_escape "${APP_VERSION}")</string>
-  <key>CFBundleVersion</key>
-  <string>$(xml_escape "${APP_BUILD}")</string>
-  <key>LSMinimumSystemVersion</key>
-  <string>15.0</string>
-  <key>LSApplicationCategoryType</key>
-  <string>public.app-category.utilities</string>
-  <key>NSHighResolutionCapable</key>
-  <true/>
-  <key>SUFeedURL</key>
-  <string>$(xml_escape "${SPARKLE_FEED_URL}")</string>
-  <key>SUPublicEDKey</key>
-  <string>$(xml_escape "${SPARKLE_PUBLIC_ED_KEY}")</string>
-  <key>SUEnableAutomaticChecks</key>
-  <true/>
-  <key>SUAllowsAutomaticUpdates</key>
-  <true/>
-  <key>SUAutomaticallyUpdate</key>
-  <false/>
-  <key>SUVerifyUpdateBeforeExtraction</key>
-  <true/>
-</dict>
-</plist>
-PLIST
+printf '%s\n' \
+  '<?xml version="1.0" encoding="UTF-8"?>' \
+  '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+  '<plist version="1.0">' \
+  '<dict>' \
+  '  <key>CFBundleDevelopmentRegion</key>' \
+  '  <string>en</string>' \
+  '  <key>CFBundleExecutable</key>' \
+  "  <string>${APP_NAME}</string>" \
+  '  <key>CFBundleIdentifier</key>' \
+  '  <string>app.vex.vpn.native</string>' \
+  '  <key>CFBundleInfoDictionaryVersion</key>' \
+  '  <string>6.0</string>' \
+  '  <key>CFBundleName</key>' \
+  '  <string>VEX Native</string>' \
+  '  <key>CFBundleIconFile</key>' \
+  '  <string>VEXNative</string>' \
+  '  <key>CFBundlePackageType</key>' \
+  '  <string>APPL</string>' \
+  '  <key>CFBundleURLTypes</key>' \
+  '  <array>' \
+  '    <dict>' \
+  '      <key>CFBundleURLName</key>' \
+  '      <string>VEX Auth</string>' \
+  '      <key>CFBundleURLSchemes</key>' \
+  '      <array>' \
+  '        <string>vexguard</string>' \
+  '        <string>vex</string>' \
+  '      </array>' \
+  '    </dict>' \
+  '  </array>' \
+  '  <key>CFBundleShortVersionString</key>' \
+  "  <string>$(xml_escape "${APP_VERSION}")</string>" \
+  '  <key>CFBundleVersion</key>' \
+  "  <string>$(xml_escape "${APP_BUILD}")</string>" \
+  '  <key>LSMinimumSystemVersion</key>' \
+  '  <string>15.0</string>' \
+  '  <key>LSApplicationCategoryType</key>' \
+  '  <string>public.app-category.utilities</string>' \
+  '  <key>NSHighResolutionCapable</key>' \
+  '  <true/>' \
+  '  <key>SUFeedURL</key>' \
+  "  <string>$(xml_escape "${SPARKLE_FEED_URL}")</string>" \
+  '  <key>SUPublicEDKey</key>' \
+  "  <string>$(xml_escape "${SPARKLE_PUBLIC_ED_KEY}")</string>" \
+  '  <key>SUEnableAutomaticChecks</key>' \
+  '  <true/>' \
+  '  <key>SUAllowsAutomaticUpdates</key>' \
+  '  <true/>' \
+  '  <key>SUAutomaticallyUpdate</key>' \
+  '  <false/>' \
+  '  <key>SUVerifyUpdateBeforeExtraction</key>' \
+  '  <true/>' \
+  '</dict>' \
+  '</plist>' >"${APP_DIR}/Contents/Info.plist"
 
 sign_native_macos_bundle "${APP_DIR}"
 

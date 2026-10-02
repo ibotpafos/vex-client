@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import plistlib
 import pathlib
 import subprocess
 import tempfile
@@ -56,9 +57,27 @@ class MacOSSigningOrderTests(unittest.TestCase):
 
     def test_generated_plist_disables_automatic_install_by_default(self) -> None:
         source = BUILDER.read_text()
-        self.assertIn("<key>SUEnableAutomaticChecks</key>\n  <true/>", source)
-        self.assertIn("<key>SUAllowsAutomaticUpdates</key>\n  <true/>", source)
-        self.assertIn("<key>SUAutomaticallyUpdate</key>\n  <false/>", source)
+        # Execute the real template (no build/sign/app/helper invocation), rather
+        # than coupling this safety assertion to heredoc formatting.
+        start = source.rindex("printf '%s\\n' \\\n")
+        end = source.index('\nsign_native_macos_bundle "${APP_DIR}"', start)
+        escape_start = source.index("xml_escape() {")
+        escape_end = source.index("\n}", escape_start) + 2
+        with tempfile.TemporaryDirectory() as temporary:
+            app = pathlib.Path(temporary) / "template.app"
+            (app / "Contents").mkdir(parents=True)
+            env = os.environ | {"APP_DIR":str(app), "APP_NAME":"VEXNativeMac",
+                "APP_VERSION":"0.1.98", "APP_BUILD":"128",
+                "SPARKLE_FEED_URL":"https://fixture.invalid/feed?a=1&b=2",
+                "SPARKLE_PUBLIC_ED_KEY":"fixture-public-key"}
+            result = subprocess.run(["bash", "-c", source[escape_start:escape_end] + "\n" + source[start:end]], env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            parsed = plistlib.loads((app / "Contents/Info.plist").read_bytes())
+        self.assertIs(parsed["SUEnableAutomaticChecks"], True)
+        self.assertIs(parsed["SUAllowsAutomaticUpdates"], True)
+        self.assertIs(parsed["SUAutomaticallyUpdate"], False)
+        self.assertIs(parsed["SUVerifyUpdateBeforeExtraction"], True)
+        self.assertEqual(parsed["SUFeedURL"], env["SPARKLE_FEED_URL"])
 
     def test_nested_sparkle_code_is_signed_before_framework_and_app(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

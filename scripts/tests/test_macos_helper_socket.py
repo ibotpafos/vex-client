@@ -2,12 +2,14 @@
 from pathlib import Path
 import subprocess
 import tempfile
+import os
 
 ROOT = Path(__file__).resolve().parents[2]
 source = (ROOT / "macos-native/Sources/VEXNativeMac/VEXHelperClient.swift").read_text()
 client = source[source.index("struct VEXHelperClient {"):]
 source = (ROOT / "macos-native/Tests/VEXNativeMacTests/HelperSocketSimulationTests.swift").read_text()
 fixture = source[source.index("private final class SequencedHelperSocket:"):source.index("private final class SimulatedHelperSocket:")]
+fixture = fixture.replace('path = "/tmp/vex-helper-sequence-', 'path = CommandLine.arguments[1] + "/vex-helper-sequence-',1)
 harness = r"""
 @main
 struct SocketHarness {
@@ -19,7 +21,7 @@ struct SocketHarness {
                 : "state=disconnected route_ok=false socket_exists=false\n"
         }
         defer { server.stop() }
-        precondition(server.path.hasPrefix("/tmp/vex-helper-sequence-"))
+        precondition(server.path.hasPrefix(CommandLine.arguments[1] + "/vex-helper-sequence-") && server.path.utf8.count < 104)
         let disconnected = try await VEXHelperClient(socketPath: server.path)
             .disconnectAndConfirm(maxStatusAttempts: 3, pollNanoseconds: 1_000_000)
         precondition(disconnected.state == .disconnected)
@@ -39,9 +41,11 @@ struct SocketHarness {
     }
 }
 """
-with tempfile.TemporaryDirectory(prefix="vex-socket-test-") as directory:
+short_tmp = os.environ.get("VEX_NATIVE_SOCKET_TEST_TMPDIR")
+if short_tmp: Path(short_tmp).mkdir(parents=True,exist_ok=True)
+with tempfile.TemporaryDirectory(prefix="vex-socket-",dir=short_tmp) as directory:
     temporary = Path(directory)
     swift = temporary / "main.swift"
     swift.write_text("import Foundation\nimport Darwin\nimport SwiftUI\n" + client + fixture + harness)
     subprocess.run(["swiftc", "-swift-version", "5", "-parse-as-library", str(swift), str(ROOT / "macos-native/Sources/VEXNativeMac/Services/HelperDisconnectConfirmation.swift"), "-o", str(temporary / "probe")], check=True)
-    subprocess.run([str(temporary / "probe")], check=True, timeout=30)
+    subprocess.run([str(temporary / "probe"), str(temporary)], check=True, timeout=30)

@@ -46,7 +46,9 @@ struct OfflineHarness {
         }
         print("PASS: teardown rejects malformed, incomplete, duplicate and busy helper responses")
 
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("vex-offline-\(UUID().uuidString)")
+        let tempBase = ProcessInfo.processInfo.environment["TMPDIR"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+            ?? FileManager.default.temporaryDirectory
+        let folder = tempBase.appendingPathComponent("vex-offline-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: folder) }
         let files = AppSensitiveFileStore(directoryURL: folder)
         let native = MemoryKeychain(), previous = MemoryKeychain()

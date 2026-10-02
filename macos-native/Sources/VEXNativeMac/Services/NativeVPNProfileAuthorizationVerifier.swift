@@ -43,6 +43,10 @@ struct NativeVPNProfileAuthorizationVerifier {
         guard policy.schema == "vex.native-vpn-profile.v1", policy.userID == ownerAccountID, policy.deviceID == managedDeviceID, policy.profileVersion == envelope.profileVersion, (policy.routingMode ?? "full_tunnel") == routingMode, policy.assignedLocationID == locationID, policy.bypassRegion == bypassRegion, policy.issuedAt <= now, policy.expiresAt > now, envelope.profile.expiresAt.flatMap(parse) == policy.expiresAt, (policy.routingMode == nil || policy.routingPolicyVersion == envelope.profile.routingPolicyVersion), tunnel(policy.tunnel, envelope.profile) else { throw policy.expiresAt <= now ? Failure.expired : Failure.policyMismatch }
         var clean = envelope
         clean.profile.authorization = nil
+        // Only Tunnel.AllowedIPs is signed. Never pass unsigned outer bypass
+        // metadata to preparation, including explicit split-mode policies.
+        clean.profile.bypassRanges = nil
+        clean.profile.bypassDomains = nil
         if policy.routingMode == nil {
             // Current backend staged policies omit routing metadata and sign a full
             // tunnel. Never reinterpret this legacy proof as smart/split routing.
@@ -51,8 +55,6 @@ struct NativeVPNProfileAuthorizationVerifier {
             guard routingMode == "full_tunnel", policy.bypassRegion == nil,
                   policy.routingPolicyVersion == nil else { throw Failure.policyMismatch }
             clean.profile.routingPolicyVersion = nil
-            clean.profile.bypassRanges = nil
-            clean.profile.bypassDomains = nil
         }
         return Verified(envelope: clean, mtu: policy.tunnel.mtu, persistentKeepalive: policy.tunnel.persistentKeepalive)
     }

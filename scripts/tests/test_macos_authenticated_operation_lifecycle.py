@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compile and execute extracted authenticated-operation bodies with fake gates only."""
 from pathlib import Path
-import subprocess, sys, tempfile
+import os, subprocess, sys, tempfile
 SOURCE_REL=Path('macos-native/Sources/VEXNativeMac/Stores/VEXAppState.swift')
 def body(s,m):
  a=s.index(m); b=s.index('{',a); n=1; e=b+1
@@ -19,10 +19,10 @@ struct Entitlement: Equatable { let marker:String; var hasPaidAccess:Bool { fals
 enum AuthenticatedOperationError: Error { case sessionChanged }
 struct FixtureError: Error { let unauthorized:Bool }; extension Error { var isUnauthorizedAPIError:Bool { (self as? FixtureError)?.unauthorized == true } }
 @MainActor final class API { var entitlementHook:(() -> Void)?; var entitlementValue=Entitlement(marker:"old"); func entitlement(accessToken:String) async throws -> Entitlement { entitlementHook?(); return entitlementValue } }
-@MainActor final class Profile { var hook:(() -> Void)?; var nextError:Error?; func resolveProfile(accessToken:String,locationId:String,routingMode:VpnRoutingMode,forceRefresh:Bool,writeHelperConfig:Bool=true,prevalidatedEntitlement:Entitlement?=nil,accountID:String?=nil) async throws -> PreparedTunnel { hook?(); if let nextError { throw nextError }; return PreparedTunnel(marker:accessToken) } }
+@MainActor final class Profile { var hook:(() -> Void)?; var nextError:Error?; func resolveProfile(accessToken:String,locationId:String,routingMode:VpnRoutingMode,forceRefresh:Bool,writeHelperConfig:Bool=true,prevalidatedEntitlement:Entitlement?=nil,accountID:String?=nil,validateCurrent:@MainActor () throws -> Void = {}) async throws -> PreparedTunnel { try validateCurrent(); hook?(); try validateCurrent(); if let nextError { throw nextError }; return PreparedTunnel(marker:accessToken) } }
 @MainActor final class Fixture {
  var session:AuthSession?; var user:User?; var authenticatedSessionGeneration=1; var refreshes=0; var expires=0; var statusMessage:String?; var entitlement:Entitlement?; let api=API(); let profileService=Profile()
- var refreshHook:(() -> String?)?; func authenticatedAccessToken() async -> String? { session?.accessToken }; func refreshSessionForRetry() async -> String? { refreshes += 1; if let refreshHook { return refreshHook() }; return session?.accessToken }; func expireAuthenticatedSession(message:String) { expires += 1; session=nil }
+ var refreshHook:(() -> String?)?; func ensureAuthenticatedSessionCurrent(generation:Int, accessToken:String?=nil, accountID:String?=nil) throws { guard authenticatedSessionGeneration == generation, accessToken.map({ value in session?.accessToken == value }) ?? true, accountID.map({ value in session?.user.id == value }) ?? true else { throw AuthenticatedOperationError.sessionChanged } }; func authenticatedAccessToken() async -> String? { session?.accessToken }; func refreshSessionForRetry() async -> String? { refreshes += 1; if let refreshHook { return refreshHook() }; return session?.accessToken }; func expireAuthenticatedSession(message:String) { expires += 1; session=nil }
 '''+retry+'\n'+ent+'\n'+profile+'''\n}
 @main struct Probe { @MainActor static func main() async {
  let old=AuthSession(user:User(id:"old"),accessToken:"old"); let replacement=AuthSession(user:User(id:"new"),accessToken:"new")
@@ -54,7 +54,7 @@ struct FixtureError: Error { let unauthorized:Bool }; extension Error { var isUn
  for (n,v) in checks { print("\\(n)=\\(v)") }; exit(checks.allSatisfy{$0.1} ? 0:1)
  } }
 '''
- with tempfile.TemporaryDirectory(prefix='vex-auth-lifecycle-') as d:
+ with tempfile.TemporaryDirectory(prefix='vex-auth-lifecycle-', dir=os.environ.get('TMPDIR')) as d:
   p=Path(d); (p/'main.swift').write_text(swift)
   c=subprocess.run(['swiftc','-swift-version','5','-parse-as-library',str(p/'main.swift'),'-o',str(p/'probe')],text=True,capture_output=True)
   if c.returncode: print(c.stderr,file=sys.stderr); return c.returncode

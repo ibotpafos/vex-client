@@ -27,16 +27,21 @@ struct NativeVPNProfileAuthorizationVerifier {
         return Self(pinnedPublicKeyDER: anchors)
     }
 
-    struct VerifiedNormalProfile { let profile: ManagedVpnProfile; let mtu: Int; let persistentKeepalive: Int }
+    struct VerifiedNormalProfile {
+        let profile: ManagedVpnProfile
+        let assignedLocationID: String
+        let mtu: Int
+        let persistentKeepalive: Int
+    }
 
     /// Verifies a normal authenticated profile response without giving it PSK
     /// rotation semantics. Callers must still decide whether to promote it; this
     /// method performs no I/O, cache, keychain, helper, or tunnel operation.
     func verifyNormalProfile(_ profile: ManagedVpnProfile, ownerAccountID: String,
-                             managedDeviceID: String, requestedLocationID: String, locationID: String, routingMode: String,
+                             managedDeviceID: String, requestedLocationID: String, locationID: String? = nil, routingMode: String,
                              bypassRegion: String? = nil, expectedProfileVersion: Int,
                              now: Date = Date()) throws -> VerifiedNormalProfile {
-        guard !ownerAccountID.isEmpty, !managedDeviceID.isEmpty, !requestedLocationID.isEmpty, !locationID.isEmpty,
+        guard !ownerAccountID.isEmpty, !managedDeviceID.isEmpty, locationID != "",
               expectedProfileVersion > 0, profile.version == expectedProfileVersion, profile.deviceId == managedDeviceID,
               profile.revoked != true, profile.unchanged != true,
               let auth = profile.authorization else { throw Failure.missingAuthorization }
@@ -57,9 +62,12 @@ struct NativeVPNProfileAuthorizationVerifier {
         catch { throw Failure.malformed }
         guard policy.schema == "vex.native-vpn-profile.v1", policy.userID == ownerAccountID,
               policy.deviceID == managedDeviceID, policy.profileVersion == expectedProfileVersion,
+              ["wireguard", "amneziawg"].contains(policy.tunnel.protocol),
+              !policy.tunnel.dns.isEmpty, !policy.tunnel.allowedIPs.isEmpty,
               (policy.routingMode ?? "full_tunnel") == routingMode,
-              policy.requestedLocationID == requestedLocationID,
-              policy.assignedLocationID == locationID, policy.bypassRegion == bypassRegion,
+              (policy.requestedLocationID ?? "") == requestedLocationID,
+              !policy.assignedLocationID.isEmpty,
+              (locationID == nil || policy.assignedLocationID == locationID), policy.bypassRegion == bypassRegion,
               policy.issuedAt <= now, policy.expiresAt > now,
               profile.expiresAt.flatMap(parse) == policy.expiresAt,
               (policy.routingMode == nil || policy.routingPolicyVersion == profile.routingPolicyVersion),
@@ -76,7 +84,8 @@ struct NativeVPNProfileAuthorizationVerifier {
                   policy.routingPolicyVersion == nil else { throw Failure.policyMismatch }
             clean.routingPolicyVersion = nil
         }
-        return VerifiedNormalProfile(profile: clean, mtu: policy.tunnel.mtu, persistentKeepalive: policy.tunnel.persistentKeepalive)
+        return VerifiedNormalProfile(profile: clean, assignedLocationID: policy.assignedLocationID,
+                                     mtu: policy.tunnel.mtu, persistentKeepalive: policy.tunnel.persistentKeepalive)
     }
 
     func verify(_ envelope: PSKRotationCurrentResponse, ownerAccountID: String, managedDeviceID: String, locationID: String, routingMode: String, bypassRegion: String? = nil, now: Date = Date()) throws -> PSKRotationCurrentResponse {

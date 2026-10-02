@@ -948,7 +948,7 @@ final class VEXAppState: ObservableObject {
 
             try verifyOperation()
             if initialTunnel.rotationRequired || assessment.cause == .keyOrProfile,
-               let rotatedTunnel = try await profileService.rotateKey(accessToken: token, currentTunnel: initialTunnel, writeHelperConfig: false, accountID: owner) {
+               let rotatedTunnel = try await profileService.rotateKey(accessToken: token, currentTunnel: initialTunnel, writeHelperConfig: false, accountID: owner, validateCurrent: { try verifyOperation() }) {
                 try verifyOperation()
                 return try await connectPreparedTunnel(rotatedTunnel, helper: helper, generation: generation, resiliencePolicy: resiliencePolicy, sessionGeneration: authGeneration, accessToken: token, accountID: owner)
             }
@@ -961,7 +961,8 @@ final class VEXAppState: ObservableObject {
                     routingMode: routingMode,
                     forceRefresh: true,
                     writeHelperConfig: false,
-                    accountID: owner
+                    accountID: owner,
+                    validateCurrent: { try verifyOperation() }
                 )
                 try verifyOperation()
                 return try await connectPreparedTunnel(freshTunnel, helper: helper, generation: generation, resiliencePolicy: resiliencePolicy, sessionGeneration: authGeneration, accessToken: token, accountID: owner)
@@ -977,7 +978,8 @@ final class VEXAppState: ObservableObject {
                     routingMode: routingMode,
                     forceRefresh: true,
                     writeHelperConfig: false,
-                    accountID: owner
+                    accountID: owner,
+                    validateCurrent: { try verifyOperation() }
                 )
                 try verifyOperation()
                 await submitDiagnostics(
@@ -1040,7 +1042,10 @@ final class VEXAppState: ObservableObject {
             try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration, accessToken: token, accountID: accountID)
             let previousStatus = helper.status
             let attemptStartedAt = Date()
-            try await profileService.writeHelperConfig(for: attempt)
+            try await profileService.writeHelperConfig(for: attempt, validateCurrent: { [weak self] in
+                guard let self else { throw AuthenticatedOperationError.sessionChanged }
+                try self.ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration, accessToken: token, accountID: accountID)
+            })
             try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration, accessToken: token, accountID: accountID)
             await helper.connect(antiLeakEnabled: antiLeakEnabled)
             try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration, accessToken: token, accountID: accountID)
@@ -1328,7 +1333,11 @@ final class VEXAppState: ObservableObject {
                 routingMode: routingMode,
                 forceRefresh: false,
                 writeHelperConfig: false,
-                accountID: accountID
+                accountID: accountID,
+                validateCurrent: { [weak self] in
+                    guard let self else { throw AuthenticatedOperationError.sessionChanged }
+                    try self.ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration, accessToken: token, accountID: accountID)
+                }
             )
             try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration, accessToken: token, accountID: accountID)
             serverSidebarOperation = .connecting
@@ -1376,7 +1385,10 @@ final class VEXAppState: ObservableObject {
             activeResiliencePolicy = previousResiliencePolicy
             activeResilienceRoute = previousResilienceRoute
             if let previousTunnel, !error.localizedDescription.contains("VPN_CONFIG_INVALID") {
-                try? await profileService.writeHelperConfig(for: previousTunnel)
+                try? await profileService.writeHelperConfig(for: previousTunnel, validateCurrent: { [weak self] in
+                    guard let self else { throw AuthenticatedOperationError.sessionChanged }
+                    try self.ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: token, accountID: accountID)
+                })
                 guard (try? ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: token, accountID: accountID)) != nil else { return false }
                 await helper.connect(antiLeakEnabled: antiLeakEnabled)
                 guard (try? ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: token, accountID: accountID)) != nil else { return false }
@@ -2232,7 +2244,11 @@ final class VEXAppState: ObservableObject {
                 forceRefresh: forceRefresh,
                 writeHelperConfig: false,
                 prevalidatedEntitlement: prevalidatedEntitlement,
-                accountID: accountID
+                accountID: accountID,
+                validateCurrent: { [weak self] in
+                    guard let self else { throw AuthenticatedOperationError.sessionChanged }
+                    try self.ensureAuthenticatedSessionCurrent(generation: operationGeneration, accessToken: token, accountID: accountID)
+                }
             )
             guard authenticatedSessionGeneration == operationGeneration,
                 session?.accessToken == token,
@@ -2255,7 +2271,11 @@ final class VEXAppState: ObservableObject {
                     routingMode: routingMode,
                     forceRefresh: true,
                     writeHelperConfig: false,
-                    accountID: accountID
+                    accountID: accountID,
+                    validateCurrent: { [weak self] in
+                        guard let self else { throw AuthenticatedOperationError.sessionChanged }
+                        try self.ensureAuthenticatedSessionCurrent(generation: operationGeneration, accessToken: refreshedToken, accountID: accountID)
+                    }
                 )
                 guard authenticatedSessionGeneration == operationGeneration,
                     session?.accessToken == refreshedToken,
@@ -2463,7 +2483,11 @@ final class VEXAppState: ObservableObject {
                 routingMode: routingMode,
                 forceRefresh: forceRefresh,
                 writeHelperConfig: false,
-                accountID: accountID
+                accountID: accountID,
+                validateCurrent: { [weak self] in
+                    guard let self else { throw AuthenticatedOperationError.sessionChanged }
+                    try self.ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: token, accountID: accountID)
+                }
             )
             guard (try? ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: token, accountID: accountID)) != nil else { return }
             activeTunnel = prepared
@@ -2527,7 +2551,11 @@ final class VEXAppState: ObservableObject {
                     routingMode: mode,
                     forceRefresh: false,
                     writeHelperConfig: false,
-                    accountID: accountID
+                    accountID: accountID,
+                    validateCurrent: { [weak self] in
+                        guard let self else { throw AuthenticatedOperationError.sessionChanged }
+                        try self.ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: token, accountID: accountID)
+                    }
                 )
                 try self.ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: token, accountID: accountID)
                 if let accountID {

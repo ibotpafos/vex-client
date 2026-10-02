@@ -8,17 +8,20 @@ struct VPNProfileService {
     private let identityStore: VEXDeviceIdentityStore
     private let keyStore: WireGuardKeyStore
     private let cache: VPNProfileCache
+    private let profileAuthorization: NativeVPNProfileAuthorizationVerifier
 
     init(
         api: VEXAPIClient = VEXAPIClient(),
         identityStore: VEXDeviceIdentityStore = VEXDeviceIdentityStore(),
         keyStore: WireGuardKeyStore = WireGuardKeyStore(),
-        cache: VPNProfileCache = VPNProfileCache()
+        cache: VPNProfileCache = VPNProfileCache(),
+        profileAuthorization: NativeVPNProfileAuthorizationVerifier = .bundled()
     ) {
         self.api = api
         self.identityStore = identityStore
         self.keyStore = keyStore
         self.cache = cache
+        self.profileAuthorization = profileAuthorization
     }
 
     nonisolated static let awgVersion = 3
@@ -30,27 +33,23 @@ struct VPNProfileService {
         forceRefresh: Bool = false,
         writeHelperConfig: Bool = true,
         prevalidatedEntitlement: Entitlement? = nil,
-        accountID: String? = nil
+        accountID: String? = nil,
+        validateCurrent: @MainActor () throws -> Void = {}
     ) async throws -> PreparedTunnel {
-        let normalizedLocationId = normalizeLocationId(locationId)
+        try validateCurrent()
+        guard let accountID = accountID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !accountID.isEmpty else { throw NativeVPNProfileAuthorizationVerifier.Failure.policyMismatch }
+        let normalizedLocationId = locationId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let bypassRegion = bypassRegion(for: routingMode)
         // Never infer ownership from a bearer token: absent/blank ownership disables cache use.
         let externalDeviceId = identityStore.getOrCreateDeviceId()
         let cacheOwner = VPNProfileCacheOwner(accountID: accountID, installationID: externalDeviceId)
-        let cached = cacheOwner.flatMap { cache.load(locationId: normalizedLocationId, routingMode: routingMode, owner: $0) }
-
-        if !forceRefresh,
-           let cached,
-           !Self.cachedProfileNeedsRefresh(
-                cached,
-                requestedLocationId: normalizedLocationId,
-                requestedRoutingMode: routingMode
-           ) {
-            if writeHelperConfig {
-                try await writeSanitizedHelperConfig(cached.config)
-            }
-            return cached.tunnel
-        }
+        guard cacheOwner != nil else { throw NativeVPNProfileAuthorizationVerifier.Failure.policyMismatch }
+        // TODO(normal-signed-cache-reuse): persist the original signed envelope
+        // and reverify/re-render it with the existing local key before enabling
+        // offline/unchanged/timeout reuse. Legacy cache contains unsigned config,
+        // not an admission proof; neither freshness nor owner scoping signs it.
+        // Until then all ordinary resolutions request a complete signed response.
 
         let entitlement: Entitlement
         if let prevalidatedEntitlement {
@@ -58,6 +57,7 @@ struct VPNProfileService {
         } else {
             entitlement = try await api.entitlement(accessToken: accessToken)
         }
+        try validateCurrent()
         guard entitlement.hasPaidAccess else {
             throw VPNProfileError.subscriptionInactive
         }
@@ -68,8 +68,10 @@ struct VPNProfileService {
             externalDeviceId: externalDeviceId,
             publicKey: keyPair.publicKey,
             keyEpoch: keyPair.keyEpoch,
-            locationId: normalizedLocationId
+            locationId: normalizedLocationId,
+            validateCurrent: validateCurrent
         )
+        try validateCurrent()
 
         if needsKeySync(device: device, keyPair: keyPair) {
             device = try await api.rotateManagedVpnKey(
@@ -78,85 +80,17 @@ struct VPNProfileService {
                 keyPair: keyPair,
                 prefix: "native-sync-key"
             )
+            try validateCurrent()
         }
-
-        var effectiveRoutingMode = routingMode
-        var effectiveBypassRegion = bypassRegion
-        let knownProfileVersion = cached?.awgVersion == Self.awgVersion ? cached?.profileVersion : nil
-        let managedProfile: ManagedVpnProfile
-        do {
-            managedProfile = try await api.managedVpnProfile(
+        let managedProfile = try await api.managedVpnProfile(
                 accessToken: accessToken,
                 deviceId: device.id,
                 locationId: normalizedLocationId,
                 routingMode: routingMode,
                 bypassRegion: bypassRegion,
-                knownVersion: knownProfileVersion
-            )
-        } catch {
-            if error.isTimeout,
-               !forceRefresh,
-               let cached,
-               !Self.cachedProfileNeedsRefresh(
-                    cached,
-                    requestedLocationId: normalizedLocationId,
-                    requestedRoutingMode: routingMode,
-                    allowStale: true
-               ) {
-                if writeHelperConfig {
-                    try await writeSanitizedHelperConfig(cached.config)
-                }
-                return cached.tunnel
-            }
-            if routingMode == .fullTunnel, error.isProfileProvisioningUnavailable {
-                effectiveRoutingMode = .allExceptRu
-                effectiveBypassRegion = VEXAppInfo.defaultBypassRegion
-                managedProfile = try await api.managedVpnProfile(
-                    accessToken: accessToken,
-                    deviceId: device.id,
-                    locationId: normalizedLocationId,
-                    routingMode: .allExceptRu,
-                    bypassRegion: effectiveBypassRegion,
-                    knownVersion: nil
-                )
-                return try await persistManagedProfile(
-                    managedProfile,
-                    cached: cached,
-                    cacheOwner: cacheOwner,
-                    device: device,
-                    keyPair: keyPair,
-                    locationId: normalizedLocationId,
-                    routingMode: effectiveRoutingMode,
-                    bypassRegion: effectiveBypassRegion,
-                    writeHelperConfig: writeHelperConfig
-                )
-            }
-            guard routingMode != .fullTunnel, error.isTimeout else {
-                throw error
-            }
-            effectiveRoutingMode = .fullTunnel
-            effectiveBypassRegion = nil
-            if !forceRefresh,
-               let fallbackCached = cacheOwner.flatMap { cache.load(locationId: normalizedLocationId, routingMode: .fullTunnel, owner: $0) },
-               !Self.cachedProfileNeedsRefresh(
-                    fallbackCached,
-                    requestedLocationId: normalizedLocationId,
-                    requestedRoutingMode: .fullTunnel
-               ) {
-                if writeHelperConfig {
-                    try await writeSanitizedHelperConfig(fallbackCached.config)
-                }
-                return fallbackCached.tunnel
-            }
-            managedProfile = try await api.managedVpnProfile(
-                accessToken: accessToken,
-                deviceId: device.id,
-                locationId: normalizedLocationId,
-                routingMode: .fullTunnel,
-                bypassRegion: nil,
                 knownVersion: nil
             )
-        }
+        try validateCurrent()
 
         if managedProfile.revoked == true {
             throw VPNProfileError.deviceRevoked
@@ -164,14 +98,15 @@ struct VPNProfileService {
 
         return try await persistManagedProfile(
             managedProfile,
-            cached: cached,
+            cached: nil,
             cacheOwner: cacheOwner,
             device: device,
             keyPair: keyPair,
             locationId: normalizedLocationId,
-            routingMode: effectiveRoutingMode,
-            bypassRegion: effectiveBypassRegion,
-            writeHelperConfig: writeHelperConfig
+            routingMode: routingMode,
+            bypassRegion: bypassRegion,
+            writeHelperConfig: writeHelperConfig,
+            validateCurrent: validateCurrent
         )
     }
 
@@ -235,61 +170,61 @@ struct VPNProfileService {
         locationId normalizedLocationId: String,
         routingMode effectiveRoutingMode: VpnRoutingMode,
         bypassRegion effectiveBypassRegion: String?,
-        writeHelperConfig: Bool
+        writeHelperConfig: Bool,
+        validateCurrent: @MainActor () throws -> Void = {}
     ) async throws -> PreparedTunnel {
-        // TODO(normal-signed-profile-admission): verifyNormalProfile now exists,
-        // but normal promotion must bind the captured authenticated session,
-        // device/client key, requested+assigned location, routing and version
-        // before any cache/helper write. Opaque config is not signed; never
-        // promote it merely because its AWG syntax is valid. Staged PSK uses
-        // its separate verified preparation path; ordinary admission remains
-        // unfinished until the injected invalid-proof/no-write gate passes.
+        try validateCurrent()
         if managedProfile.revoked == true {
             throw VPNProfileError.deviceRevoked
         }
-
-        let config: String
-        if managedProfile.unchanged == true {
-            guard cached?.awgVersion == Self.awgVersion,
-                  let cachedConfig = cached?.config,
-                  isValidConfig(cachedConfig) else {
-                throw VPNProfileError.unchangedProfileWithoutCache
-            }
-            config = cachedConfig
-        } else if let apiConfig = managedProfile.config, isValidConfig(apiConfig) {
-            config = apiConfig
-        } else {
-            // Endpoint resolution performs a blocking getaddrinfo; keep it off
-            // the main actor so slow DNS never stalls the UI.
-            config = try await Task.detached(priority: .userInitiated) { [keyPair] in
-                try Self.buildRawManagedProfileConfig(managedProfile, keyPair: keyPair)
-            }.value
+        guard let cacheOwner else { throw NativeVPNProfileAuthorizationVerifier.Failure.policyMismatch }
+        // There is no assigned-location outer JSON field. Bind the exact request
+        // separately, then use the assignment authenticated by the signed policy.
+        let verified = try profileAuthorization.verifyNormalProfile(
+            managedProfile, ownerAccountID: cacheOwner.accountID, managedDeviceID: device.id,
+            requestedLocationID: normalizedLocationId, routingMode: effectiveRoutingMode.rawValue,
+            bypassRegion: effectiveBypassRegion, expectedProfileVersion: managedProfile.version ?? 0
+        )
+        guard let privateBytes = Data(base64Encoded: keyPair.privateKey), privateBytes.count == 32,
+              let privateKey = try? Curve25519.KeyAgreement.PrivateKey(rawRepresentation: privateBytes),
+              privateKey.publicKey.rawRepresentation.base64EncodedString() == keyPair.publicKey,
+              managedProfile.clientPublicKey == keyPair.publicKey,
+              managedProfile.clientKeyEpoch == keyPair.keyEpoch,
+              device.publicKey == keyPair.publicKey else {
+            throw VPNProfileError.incompleteProfile("normal client key binding")
         }
-
-        let nextDevice = device.withManagedProfile(managedProfile, locationId: normalizedLocationId)
+        let profile = verified.profile
+        let config = try Self.buildRawManagedProfileConfig(
+            profile, keyPair: keyPair, mtu: verified.mtu,
+            persistentKeepalive: verified.persistentKeepalive, resolveEndpoint: false
+        )
+        try VEXHelperCore.AwgConfigAdmission.validate(config)
+        let nextDevice = device.withManagedProfile(profile, locationId: verified.assignedLocationID)
         let tunnel = PreparedTunnel(
             device: nextDevice,
             config: config,
             locationId: normalizedLocationId,
-            profileVersion: managedProfile.version ?? cached?.profileVersion,
+            profileVersion: profile.version,
             routingMode: effectiveRoutingMode,
             bypassRegion: effectiveBypassRegion,
-            bypassRangesCount: managedProfile.bypassRanges?.filter { !$0.isEmpty }.count ?? 0,
-            bypassDomainsCount: managedProfile.bypassDomains?.filter { !$0.isEmpty }.count ?? 0,
-            routingPolicyVersion: managedProfile.routingPolicyVersion ?? VEXAppInfo.routingPolicyVersion,
-            rotationRequired: managedProfile.rotationRequired == true,
+            bypassRangesCount: 0,
+            bypassDomainsCount: 0,
+            routingPolicyVersion: profile.routingPolicyVersion ?? VEXAppInfo.routingPolicyVersion,
+            rotationRequired: profile.rotationRequired == true,
             awgVersion: Self.awgVersion
         )
-        if let cacheOwner {
-            try cache.save(PreparedTunnelCacheRecord(tunnel: tunnel), locationId: normalizedLocationId, routingMode: effectiveRoutingMode, owner: cacheOwner)
-        }
+        try validateCurrent()
+        try cache.save(PreparedTunnelCacheRecord(tunnel: tunnel), locationId: normalizedLocationId, routingMode: effectiveRoutingMode, owner: cacheOwner)
         if writeHelperConfig {
-            try await writeSanitizedHelperConfig(config)
+            try await writeSanitizedHelperConfig(config, validateCurrent: validateCurrent)
         }
+        try validateCurrent()
         return tunnel
     }
 
-    func rotateKey(accessToken: String, currentTunnel: PreparedTunnel?, writeHelperConfig: Bool = true, accountID: String? = nil) async throws -> PreparedTunnel? {
+    func rotateKey(accessToken: String, currentTunnel: PreparedTunnel?, writeHelperConfig: Bool = true, accountID: String? = nil,
+                   validateCurrent: @MainActor () throws -> Void = {}) async throws -> PreparedTunnel? {
+        try validateCurrent()
         guard let currentTunnel else { return nil }
         let nextKey = try keyStore.rotate()
         _ = try await api.rotateManagedVpnKey(
@@ -298,22 +233,26 @@ struct VPNProfileService {
             keyPair: nextKey,
             prefix: "native-rotate-key"
         )
+        try validateCurrent()
         return try await resolveProfile(
             accessToken: accessToken,
             locationId: currentTunnel.locationId,
             routingMode: currentTunnel.routingMode,
             forceRefresh: true,
             writeHelperConfig: writeHelperConfig,
-            accountID: accountID
+            accountID: accountID,
+            validateCurrent: validateCurrent
         )
     }
 
-    func writeHelperConfig(for tunnel: PreparedTunnel) async throws {
-        try await writeSanitizedHelperConfig(tunnel.config)
+    func writeHelperConfig(for tunnel: PreparedTunnel, validateCurrent: @MainActor () throws -> Void = {}) async throws {
+        try await writeSanitizedHelperConfig(tunnel.config, validateCurrent: validateCurrent)
     }
 
-    private func writeSanitizedHelperConfig(_ config: String) async throws {
+    private func writeSanitizedHelperConfig(_ config: String, validateCurrent: @MainActor () throws -> Void = {}) async throws {
+        try validateCurrent()
         let sanitized = await Self.sanitizedHelperConfigOffMain(config)
+        try validateCurrent()
         try cache.writeHelperConfig(sanitized)
     }
 
@@ -328,9 +267,11 @@ struct VPNProfileService {
         externalDeviceId: String,
         publicKey: String,
         keyEpoch: Int,
-        locationId: String
+        locationId: String,
+        validateCurrent: @MainActor () throws -> Void = {}
     ) async throws -> VpnDevice {
         let devices = try await api.vpnDevices(accessToken: accessToken)
+        try validateCurrent()
 
         // Match in priority order: exact id, then legacy per-location id
         // ("id:location"), then any legacy physical-device prefix ("id:").
@@ -348,7 +289,8 @@ struct VPNProfileService {
                     externalDeviceId: externalDeviceId,
                     publicKey: publicKey,
                     keyEpoch: keyEpoch,
-                    locationId: locationId
+                    locationId: locationId,
+                    validateCurrent: validateCurrent
                 )
             }
         }
@@ -357,7 +299,8 @@ struct VPNProfileService {
             externalDeviceId: externalDeviceId,
             publicKey: publicKey,
             keyEpoch: keyEpoch,
-            locationId: locationId
+            locationId: locationId,
+            validateCurrent: validateCurrent
         )
     }
 
@@ -367,8 +310,10 @@ struct VPNProfileService {
         externalDeviceId: String,
         publicKey: String,
         keyEpoch: Int,
-        locationId: String
+        locationId: String,
+        validateCurrent: @MainActor () throws -> Void = {}
     ) async throws -> VpnDevice {
+        try validateCurrent()
         guard nativeDeviceMetadataNeedsSync(device, externalDeviceId: externalDeviceId) else {
             return device
         }
@@ -377,7 +322,8 @@ struct VPNProfileService {
             externalDeviceId: externalDeviceId,
             publicKey: publicKey,
             keyEpoch: keyEpoch,
-            locationId: locationId
+            locationId: locationId,
+            validateCurrent: validateCurrent
         )
     }
 
@@ -386,13 +332,17 @@ struct VPNProfileService {
         externalDeviceId: String,
         publicKey: String,
         keyEpoch: Int,
-        locationId: String
+        locationId: String,
+        validateCurrent: @MainActor () throws -> Void = {}
     ) async throws -> VpnDevice {
+        try validateCurrent()
         let identityFields = await nativeDeviceIdentityRegistrationFields(
             accessToken: accessToken,
             installationId: externalDeviceId,
-            wireGuardPublicKey: publicKey
+            wireGuardPublicKey: publicKey,
+            validateCurrent: validateCurrent
         )
+        try validateCurrent()
         return try await api.registerNativeDevice(
             accessToken: accessToken,
             externalDeviceId: externalDeviceId,
@@ -412,15 +362,18 @@ struct VPNProfileService {
     private func nativeDeviceIdentityRegistrationFields(
         accessToken: String,
         installationId: String,
-        wireGuardPublicKey: String
+        wireGuardPublicKey: String,
+        validateCurrent: @MainActor () throws -> Void = {}
     ) async -> [String: String] {
         do {
+            try validateCurrent()
             let identity = try identityStore.getOrCreateDeviceIdentity()
             let challenge = try await api.deviceIdentityChallenge(
                 accessToken: accessToken,
                 installationId: installationId,
                 purpose: "register"
             )
+            try validateCurrent()
             let publicKey = identity.publicKeyJWK
             let payload = VEXDeviceIdentity.signaturePayload(
                 challenge: challenge,

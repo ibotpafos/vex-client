@@ -33,8 +33,8 @@ struct NativePushPSKEventOwner { init?(accountID:String,installationID:String) {
 @MainActor final class Reg { var status:Registration = .registered }
 struct HelperStatus { var usable=true; var matches=true; var isUsableConnectedStatus:Bool { usable } }
 @MainActor final class Helper {
- var canUseExistingValidatedHelper=true, isBusy=false, refreshResult=true; var refreshes=0; var status=HelperStatus()
- func refreshStatus(quiet:Bool=true) async -> Bool { refreshes += 1; return refreshResult }
+ var canUseExistingValidatedHelper=true, isBusy=false, refreshResult=true; var refreshes=0; var status=HelperStatus(); var afterRefresh:(()->Void)?
+ func refreshStatus(quiet:Bool=true) async -> Bool { refreshes += 1; await Task.yield(); afterRefresh?(); return refreshResult }
 }
 @MainActor final class Profile {
  var fetches=0, writes=0, connects=0, handshakes=0, acks=0, failSecond=false; var hook:((Int)->Void)?
@@ -73,7 +73,7 @@ func drain() async { for _ in 0..<128 { await Task.yield() } }
  func active()->H { let h=H(); h.activeTunnel=tunnel(device()); h.nativePSKHelper=Helper(); return h }
  let ok=active(); let source=ok.activeTunnel!; ok.receivedNativeRemoteNotification(["aps":["content-available":1]]); await drain()
  let success=ok.profileService.fetches==2 && ok.pending()==candidate(device()) && ok.activeTunnel==source && ok.nativePSKPreparedTunnel==nil && ok.nativePSKHelper!.refreshes==1 && ok.profileService.writes==0 && ok.profileService.connects==0 && ok.profileService.handshakes==0 && ok.profileService.acks==0 && ok.nativePushIdentityStore.creates==0 && ok.nativePushPSKQueue.enqueues==0
- func reject(_ mutate:@escaping @MainActor (H)->Void) async -> Bool { let h=active(); precondition(h.stage(candidate(device()))); let source=h.activeTunnel!; mutate(h); await h.runPreflight(); return h.activeTunnel==source && h.profileService.writes==0 && h.profileService.connects==0 && h.profileService.handshakes==0 && h.profileService.acks==0 && h.nativePushIdentityStore.creates==0 && h.nativePushPSKQueue.enqueues==0 }
+ func reject(_ mutate:@escaping @MainActor (H)->Void) async -> Bool { let h=active(); precondition(h.stage(candidate(device()))); let source=h.activeTunnel!; mutate(h); await h.runPreflight(); return h.activeTunnel==source && h.profileService.fetches==0 && h.profileService.writes==0 && h.profileService.connects==0 && h.profileService.handshakes==0 && h.profileService.acks==0 && h.nativePushIdentityStore.creates==0 && h.nativePushPSKQueue.enqueues==0 }
  let readiness=await reject { $0.nativePSKHelper!.canUseExistingValidatedHelper=false }
  let retainedStatus=await reject { $0.nativePSKHelper!.refreshResult=false }
  let idle=await reject { $0.nativePSKHelper!.status.usable=false }
@@ -81,11 +81,13 @@ func drain() async { for _ in 0..<128 { await Task.yield() } }
  let owner=await reject { $0.session=Session(user:User(id:"b"),accessToken:"t") }
  let deviceChanged=await reject { $0.nativePushIdentityStore.value="other" }
  let route=await reject { $0.targetLocationId="fi" }
- let foreign=active(); precondition(foreign.stage(candidate(device()))); foreign.profileService.hook={ n in if n==1 { foreign.nativePSKHelper=Helper() } }; let foreignOld=foreign.activeTunnel!; await foreign.runPreflight(); let foreignReject=foreign.activeTunnel==foreignOld && foreign.profileService.connects==0
+ let foreign=active(); precondition(foreign.stage(candidate(device()))); foreign.nativePSKHelper!.afterRefresh={ foreign.nativePSKHelper=Helper() }; let foreignOld=foreign.activeTunnel!; await foreign.runPreflight(); let foreignReject=foreign.activeTunnel==foreignOld && foreign.profileService.fetches==0 && foreign.profileService.connects==0
  let expiry=active(); precondition(expiry.stage(candidate(device()))); expiry.nativePSKHelper!.refreshResult=true; expiry.profileService.hook={ n in if n==1 { expiry.expirePendingProof() } }; let old=expiry.activeTunnel!; await expiry.runPreflight(); let expired=expiry.activeTunnel==old && expiry.pending()==nil && expiry.profileService.writes==0 && expiry.profileService.connects==0
- let stale=active(); precondition(stale.stage(candidate(device()))); stale.profileService.hook={ n in if n==2 { stale.authenticatedSessionGeneration+=1 } }; let staleOld=stale.activeTunnel!; await stale.runPreflight(); let staleGuard=stale.activeTunnel==staleOld && stale.pending()==candidate(device()) && stale.profileService.connects==0
- let all=success && readiness && retainedStatus && idle && intent && owner && deviceChanged && route && foreignReject && expired && staleGuard
- print("normal_pending_preflight driver_present=DRIVER_PRESENT success=\(success) fetches=\(ok.profileService.fetches) strict_no_mutation=\(ok.profileService.writes==0 && ok.profileService.connects==0 && ok.profileService.handshakes==0 && ok.profileService.acks==0) rejects=\(readiness && retainedStatus && idle && intent && owner && deviceChanged && route && foreignReject) expiry_clear=\(expired) stale_preserves=\(staleGuard)")
+ let awaitDesired=active(); precondition(awaitDesired.stage(candidate(device()))); awaitDesired.nativePSKHelper!.afterRefresh={ awaitDesired.desiredVpnState = .disconnected }; let awaitDesiredOld=awaitDesired.activeTunnel!; await awaitDesired.runPreflight(); let awaitDesiredReject=awaitDesired.activeTunnel==awaitDesiredOld && awaitDesired.profileService.fetches==0 && awaitDesired.profileService.connects==0
+ let stale=active(); precondition(stale.stage(candidate(device()))); stale.profileService.hook={ n in if n==1 { stale.authenticatedSessionGeneration+=1 } }; let staleOld=stale.activeTunnel!; await stale.runPreflight(); let staleGuard=stale.authenticatedSessionGeneration==2 && stale.activeTunnel==staleOld && stale.pending()==nil && stale.profileService.fetches==1 && stale.profileService.connects==0
+ let failed=active(); let failedOld=failed.activeTunnel!; failed.profileService.failSecond=true; failed.receivedNativeRemoteNotification(["aps":["content-available":1]]); await drain(); let failedOuter=failed.profileService.fetches==2 && failed.activeTunnel==failedOld && failed.pending()==nil && failed.nativePushEventError != nil && failed.profileService.connects==0
+ let all=success && readiness && retainedStatus && idle && intent && owner && deviceChanged && route && foreignReject && awaitDesiredReject && expired && staleGuard && failedOuter
+ print("normal_pending_preflight driver_present=DRIVER_PRESENT success=\(success) fetches=\(ok.profileService.fetches) strict_no_mutation=\(ok.profileService.writes==0 && ok.profileService.connects==0 && ok.profileService.handshakes==0 && ok.profileService.acks==0) rejects=\(readiness && retainedStatus && idle && intent && owner && deviceChanged && route && foreignReject && awaitDesiredReject) expiry_clear=\(expired) stale_current=\(staleGuard) outer_failure=\(failedOuter)")
  exit(DRIVER_PRESENT ? (all ? 0 : 1) : 1)
 } }
 '''.replace("PENDING",pending).replace("RECEIPT",receipt).replace("RECONCILE",reconcile).replace("PREFLIGHT",preflight).replace("VEXHelperModel","Helper").replace("DRIVER_PRESENT","true" if has_preflight else "false").replace("EXPIRY_ARG",",normalAuthorizationExpiresAt:fixtureExpiry" if has_expiry else "").replace("EXPIRE_BODY","func expirePendingProof() { guard var stored=nativeNormalPendingStorage else { return }; stored.tunnel.normalAuthorizationExpiresAt=Date().addingTimeInterval(-1); nativeNormalPendingStorage=stored }" if has_expiry else "func expirePendingProof() {}")

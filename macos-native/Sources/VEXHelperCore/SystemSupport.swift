@@ -65,6 +65,46 @@ public final class LocalFileSystem: HelperFileSystem, @unchecked Sendable {
         try String(contentsOfFile: path, encoding: .utf8)
     }
 
+    public func readPrivateText(at path: String, maxBytes: Int) throws -> String {
+        let components = path.split(separator: "/").map(String.init)
+        guard path.hasPrefix("/"), !path.utf8.contains(0), path.utf8.count <= 4096,
+              !components.isEmpty, !components.contains(".."), !components.contains("."),
+              maxBytes > 0, maxBytes <= 1_048_576 else { throw HelperError.io("invalid private state path or bound") }
+        var directory = Darwin.open("/", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard directory >= 0 else { throw HelperError.io("could not open private state root") }
+        for component in components.dropLast() {
+            let next = Darwin.openat(directory, component, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            _ = Darwin.close(directory)
+            guard next >= 0 else { throw HelperError.io("unsafe private state ancestor") }
+            directory = next
+        }
+        defer { _ = Darwin.close(directory) }
+        let descriptor = Darwin.openat(directory, components.last!, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard descriptor >= 0 else { throw HelperError.io("could not open private state") }
+        defer { _ = Darwin.close(descriptor) }
+        func validate() throws {
+            var info = stat()
+            guard Darwin.fstat(descriptor, &info) == 0, info.st_uid == geteuid(),
+                  info.st_mode & S_IFMT == S_IFREG, info.st_nlink == 1,
+                  info.st_mode & 0o077 == 0, info.st_size >= 0, info.st_size <= off_t(maxBytes) else {
+                throw HelperError.io("unsafe private state file")
+            }
+        }
+        try validate()
+        var bytes = Data(), buffer = [UInt8](repeating: 0, count: 4_096)
+        while true {
+            let count = Darwin.read(descriptor, &buffer, buffer.count)
+            if count < 0 && errno == EINTR { continue }
+            guard count >= 0 else { throw HelperError.io("could not read private state") }
+            if count == 0 { break }
+            bytes.append(buffer, count: count)
+            guard bytes.count <= maxBytes else { throw HelperError.io("private state grew beyond its bound") }
+        }
+        try validate()
+        guard let text = String(data: bytes, encoding: .utf8) else { throw HelperError.io("private state is not UTF-8") }
+        return text
+    }
+
     public func writeTextAtomically(_ text: String, to path: String, mode: Int) throws {
         let destination = URL(fileURLWithPath: path)
         let parent = destination.deletingLastPathComponent().path
@@ -664,7 +704,7 @@ public final class SystemTunnelController: ProtectedTunnelControlling, @unchecke
                 guard journal.ownerSession == owner.payload else {
                     throw HelperError.ownerVerificationFailed("protected recovery owner changed")
                 }
-                return "protected_protocol=1 recovery_pending=true transaction_id=\(journal.transactionID) source_sha256=\(journal.sourceSHA256) candidate_sha256=\(journal.candidateSHA256) owner_token_sha256=\(ownerHash)\n"
+                return "protected_protocol=1 recovery_pending=true transaction_id=\(journal.transactionID) source_sha256=\(journal.sourceSHA256) candidate_sha256=\(journal.candidateSHA256) owner_token_sha256=\(ownerHash) commit_receipt_protocol=1\n"
             }
             guard let session = try refreshedSession(currentSession: store.loadSession()),
                   session.ownerPID == owner.pid, session.socketExists, session.antiLeakArmed,
@@ -675,7 +715,7 @@ public final class SystemTunnelController: ProtectedTunnelControlling, @unchecke
             let source = try fileSystem.readText(at: paths.activeConfigPath)
             try AwgConfigAdmission.validate(source)
             _ = try validateOwner()
-            return "protected_protocol=1 recovery_pending=false source_sha256=\(ProtectedReplacementJournal.digest(source)) owner_token_sha256=\(ownerHash)\n"
+            return "protected_protocol=1 recovery_pending=false source_sha256=\(ProtectedReplacementJournal.digest(source)) owner_token_sha256=\(ownerHash) commit_receipt_protocol=1\n"
         }
     }
 
@@ -699,6 +739,38 @@ public final class SystemTunnelController: ProtectedTunnelControlling, @unchecke
         let owner = try authorizeProtected(request, validateOwner: validateOwner)
         return try recoverProtectedReplacement(ownerPID: owner.pid, authenticatedRequest: request,
             authorize: { _ = try self.authorizeProtected(request, validateOwner: validateOwner) })
+    }
+
+    public func committedProtectedReceipt(request: ProtectedReplacementRequest, validateOwner: () throws -> OwnerSession) throws -> String {
+        let store = HelperStateStore(fileSystem: fileSystem, paths: paths)
+        return try store.withOperationLock(staleAfter: 120) {
+            let owner = try authorizeProtected(request, validateOwner: validateOwner)
+            try store.requireNoPendingReplacement()
+            let text = try fileSystem.readPrivateText(at: replacementCommitReceiptPath, maxBytes: 16_384)
+            let receipt = try ProtectedReplacementCommitReceipt.decode(text)
+            guard receipt.matches(request, owner: owner),
+                  ProtectedReplacementJournal.digest(try fileSystem.readText(at: paths.activeConfigPath)) == receipt.candidateSHA256,
+                  let saved = store.loadSession(), saved.ownerPID == owner.pid,
+                  try resolvedInterfaceName(logicalInterface: "active") == saved.interfaceName,
+                  try endpoint(fromConfigAt: paths.activeConfigPath) == saved.endpoint,
+                  let result = try refreshedSession(currentSession: saved),
+                  result.socketExists, result.antiLeakArmed, result.dnsHealthy,
+                  result.routeInterface == result.interfaceName,
+                  !result.ipv6RouteExpected || result.ipv6RouteInterface == result.interfaceName,
+                  let handshake = result.latestHandshake, handshake >= receipt.latestHandshake,
+                  handshake <= UInt64(max(0, dateProvider.now.timeIntervalSince1970)) + 1 else {
+                throw HelperError.ownerVerificationFailed("protected commit receipt no longer matches the owned healthy candidate")
+            }
+            _ = try authorizeProtected(request, validateOwner: validateOwner)
+            try store.requireNoPendingReplacement()
+            guard try fileSystem.readPrivateText(at: replacementCommitReceiptPath, maxBytes: 16_384) == text,
+                  ProtectedReplacementJournal.digest(try fileSystem.readText(at: paths.activeConfigPath)) == receipt.candidateSHA256 else {
+                throw HelperError.ownerVerificationFailed("protected commit receipt changed during lookup")
+            }
+            // No session write, owner attach, quick command, DNS/PF mutation or
+            // recovery occurs here. This only proves an earlier exact commit.
+            return receipt.response
+        }
     }
 
     public func commitProtected(request: ProtectedReplacementRequest, validateOwner: () throws -> OwnerSession) throws -> HelperSession {
@@ -732,6 +804,12 @@ public final class SystemTunnelController: ProtectedTunnelControlling, @unchecke
             try store.persistSession(result)
             journal.phase = "committed"
             try persistReplacementJournal(journal)
+            try requireReplacementState(journal, allowedHashes: [request.candidateSHA256], authorize: authorize)
+            let receipt = ProtectedReplacementCommitReceipt(request: request, owner: owner, latestHandshake: handshake,
+                handshakeNotBefore: floor, sourceLatestHandshake: source.latestHandshake ?? 0)
+            // The same durable writer/readback used by the root journal records
+            // commit evidence BEFORE deleting recovery data or acknowledging.
+            try persistReplacementCommitReceipt(receipt)
             try requireReplacementState(journal, allowedHashes: [request.candidateSHA256], authorize: authorize)
             try fileSystem.removeItem(at: replacementJournalPath)
             return result
@@ -874,6 +952,14 @@ public final class SystemTunnelController: ProtectedTunnelControlling, @unchecke
             }
             return try restoreProtectedSource(journal, store: store, authorize: authorize)
         }
+    }
+
+    private var replacementCommitReceiptPath: String { paths.helperDirectory + "/replacement-commit-receipt.state" }
+
+    private func persistReplacementCommitReceipt(_ receipt: ProtectedReplacementCommitReceipt) throws {
+        try fileSystem.writeTextAtomically(try receipt.encoded(), to: replacementCommitReceiptPath, mode: 0o600)
+        let reread = try ProtectedReplacementCommitReceipt.decode(fileSystem.readPrivateText(at: replacementCommitReceiptPath, maxBytes: 16_384))
+        guard try reread.encoded() == receipt.encoded() else { throw HelperError.io("protected commit receipt verification failed") }
     }
 
     private var replacementJournalPath: String { paths.helperDirectory + "/replacement-journal.state" }

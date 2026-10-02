@@ -36,11 +36,13 @@ final class NativeProtectedReplacementCoordinator {
         let source: String
         let candidate: String
         let owner: String
+        let supportsCommitReceipt: Bool
+        var commitResponseUncertain = false
         var metadata: String {
             "transaction_id=\(id) source_sha256=\(source) candidate_sha256=\(candidate) owner_token_sha256=\(owner)"
         }
     }
-    // TODO: Add explicitly authorized ownership transfer after an app-process
+    // TODO: Add durable app-side intent/cache reconciliation and explicitly authorized ownership transfer after an app-process
     // crash. Never adopt an old process's journal merely because its PID died;
     // restart/ownership-transfer acceptance requires the isolated runtime gate.
     private var pending: Transaction?
@@ -68,6 +70,11 @@ final class NativeProtectedReplacementCoordinator {
         try current(d)
         if let pending {
             guard pending.source == sourceSHA256 else { throw Failure.recoveryPending }
+            if pending.supportsCommitReceipt && pending.commitResponseUncertain {
+                guard pending.candidate == candidateSHA256 else { throw Failure.recoveryPending }
+                do { return try await confirmDurableCommit(pending, dependencies: d) }
+                catch { try current(d) } // A denied proof is not permission to adopt.
+            }
             try await recover(pending, dependencies: d)
             throw Failure.sourceRestored
         }
@@ -85,7 +92,8 @@ final class NativeProtectedReplacementCoordinator {
         if let expectedOwner = sourceOwnerTokenSHA256 {
             guard Self.isDigest(expectedOwner), owner == expectedOwner else { throw Failure.sourceMismatch }
         }
-        let transaction = Transaction(id: id, source: sourceSHA256, candidate: candidateSHA256, owner: owner)
+        var transaction = Transaction(id: id, source: sourceSHA256, candidate: candidateSHA256, owner: owner,
+                                      supportsCommitReceipt: snapshot["commit_receipt_protocol"] == "1")
         try current(d)
         try d.stageCandidate()
         try current(d)
@@ -97,9 +105,13 @@ final class NativeProtectedReplacementCoordinator {
             guard ready["transaction_id"] == id, ready["candidate_sha256"] == candidateSHA256 else { throw Failure.invalidResponse }
             for _ in 0..<40 {
                 try current(d)
+                transaction.commitResponseUncertain = true
+                pending = transaction
                 let response = try await d.send("protected-commit " + transaction.metadata, 15)
                 try current(d)
                 if response == "error: protected replacement awaiting fresh handshake\n" {
+                    transaction.commitResponseUncertain = false
+                    pending = transaction
                     try await d.wait()
                     continue
                 }
@@ -120,6 +132,12 @@ final class NativeProtectedReplacementCoordinator {
             // Cancellation/account/device/selection changes never trigger a
             // stale rollback or another helper command. Keep recovery evidence.
             guard d.isCurrent(), !Task.isCancelled else { throw Failure.staleIntent }
+            if transaction.supportsCommitReceipt && transaction.commitResponseUncertain {
+                // A lost/malformed ACK may follow a REAL commit. Only the exact
+                // authenticated durable receipt can resolve this ambiguity.
+                do { return try await confirmDurableCommit(transaction, dependencies: d) }
+                catch { try current(d) }
+            }
             do { try await recover(transaction, dependencies: d) }
             catch { throw Failure.recoveryPending }
             throw Failure.sourceRestored
@@ -134,6 +152,11 @@ final class NativeProtectedReplacementCoordinator {
         send: (String, Int) async throws -> String) async throws {
         guard !Task.isCancelled, isCurrent(), pending == nil,
               let committed, committed.receipt == receipt else { throw Failure.staleIntent }
+        if committed.transaction.supportsCommitReceipt {
+            let proof = try await durableCommitReceipt(committed.transaction, isCurrent: isCurrent, send: send)
+            guard pending == nil, self.committed?.receipt == receipt, proof == receipt else { throw Failure.staleIntent }
+            return
+        }
         let snapshot = try fields(await send("protected-snapshot", 15))
         guard !Task.isCancelled, isCurrent(), pending == nil,
               self.committed?.receipt == receipt else { throw Failure.staleIntent }
@@ -142,6 +165,33 @@ final class NativeProtectedReplacementCoordinator {
               snapshot["owner_token_sha256"] == committed.transaction.owner else {
             throw Failure.recoveryPending
         }
+    }
+
+    private func durableCommitReceipt(_ transaction: Transaction, isCurrent: () -> Bool,
+        send: (String, Int) async throws -> String) async throws -> Receipt {
+        guard !Task.isCancelled, isCurrent() else { throw Failure.staleIntent }
+        let proof = try fields(await send("protected-receipt " + transaction.metadata, 15), word: "committed")
+        guard !Task.isCancelled, isCurrent() else { throw Failure.staleIntent }
+        guard Set(proof.keys) == ["commit_receipt_protocol", "transaction_id", "source_sha256", "candidate_sha256", "owner_token_sha256", "latest_handshake"],
+              proof["commit_receipt_protocol"] == "1", proof["transaction_id"] == transaction.id,
+              proof["source_sha256"] == transaction.source, proof["candidate_sha256"] == transaction.candidate,
+              proof["owner_token_sha256"] == transaction.owner,
+              let value = proof["latest_handshake"], let handshake = UInt64(value), handshake > 0,
+              String(handshake) == value, handshake <= UInt64(max(0, Date().timeIntervalSince1970)) + 1 else {
+            throw Failure.invalidResponse
+        }
+        return .init(transactionID: transaction.id, candidateSHA256: transaction.candidate,
+                     latestHandshake: handshake, ownerTokenSHA256: transaction.owner)
+    }
+
+    private func confirmDurableCommit(_ transaction: Transaction, dependencies d: Dependencies) async throws -> Receipt {
+        let receipt = try await durableCommitReceipt(transaction, isCurrent: d.isCurrent, send: d.send)
+        try current(d)
+        guard pending?.id == transaction.id, pending?.source == transaction.source,
+              pending?.candidate == transaction.candidate, pending?.owner == transaction.owner else { throw Failure.staleIntent }
+        pending = nil
+        committed = (transaction, receipt)
+        return receipt
     }
 
     private func recover(_ transaction: Transaction, dependencies d: Dependencies) async throws {

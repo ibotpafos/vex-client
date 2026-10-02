@@ -90,6 +90,7 @@ public enum HelperCommand: Equatable, Sendable {
     case protectedReplace(ProtectedReplacementRequest)
     case protectedCommit(ProtectedReplacementRequest)
     case protectedRecover(ProtectedReplacementRequest)
+    case protectedReceipt(ProtectedReplacementRequest)
 
     public static func parse(_ rawValue: String) throws -> HelperCommand {
         let parts = rawValue.split(whereSeparator: \.isWhitespace).map(String.init)
@@ -106,6 +107,8 @@ public enum HelperCommand: Equatable, Sendable {
             return .protectedReplace(try ProtectedReplacementRequest(metadata: metadata))
         case "protected-commit":
             return .protectedCommit(try ProtectedReplacementRequest(metadata: metadata))
+        case "protected-receipt":
+            return .protectedReceipt(try ProtectedReplacementRequest(metadata: metadata))
         case "protected-recover":
             return .protectedRecover(try ProtectedReplacementRequest(metadata: metadata))
         case "up":
@@ -470,11 +473,20 @@ public protocol HelperFileSystem: Sendable {
     func fileSize(at path: String) -> UInt64?
     func modificationDate(at path: String) -> Date?
     func readText(at path: String) throws -> String
+    func readPrivateText(at path: String, maxBytes: Int) throws -> String
     func writeTextAtomically(_ text: String, to path: String, mode: Int) throws
     func removeItem(at path: String) throws
 }
 
 public extension HelperFileSystem {
+    // Compatibility for inert ports. LocalFileSystem overrides this with strict
+    // descriptor/ownership/type/link/permission checks on the actual disk.
+    func readPrivateText(at path: String, maxBytes: Int) throws -> String {
+        let text = try readText(at: path)
+        guard maxBytes > 0, text.utf8.count <= maxBytes else { throw HelperError.io("private state is oversized") }
+        return text
+    }
+
     /// Compatibility for memory ports with infallible dictionary lookups.
     /// Filesystems with fallible lookup must override this method, as LocalFileSystem does.
     func pathPresence(at path: String) -> HelperPathPresence {

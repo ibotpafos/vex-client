@@ -64,7 +64,7 @@ struct Verified { let envelope: PSKRotationCurrentResponse }
 }
 struct Status { var isUsableConnectedStatus=false; var hasManagedNetworkState=false; var endpoint="" }
 enum FixtureError: Error { case boom }
-enum Mode { case success, connectThrows, promotionThrows, sessionChanges, tokenChanges, accountChanges, vpnGenerationChanges, accessRevoked, selectionChanges, routingChanges, helperChanges, snapshotThrows, snapshotOwnerChanges, snapshotCandidateChanges, snapshotJournal, snapshotScopeChanges }
+enum Mode { case commitReplyLost, success, connectThrows, promotionThrows, sessionChanges, tokenChanges, accountChanges, vpnGenerationChanges, accessRevoked, selectionChanges, routingChanges, helperChanges, snapshotThrows, snapshotOwnerChanges, snapshotCandidateChanges, snapshotJournal, snapshotScopeChanges }
 @MainActor final class Client {
  unowned let app: AppState
  let id="E63DCEBD-109A-4C45-A23C-3F32BF42597A"
@@ -81,13 +81,17 @@ enum Mode { case success, connectThrows, promotionThrows, sessionChanges, tokenC
    let observed = commits > 0 && app.mode != .snapshotCandidateChanges ? candidate : source
    let observedOwner = (app.foreignOwner || (commits > 0 && app.mode == .snapshotOwnerChanges)) ? digest("foreign-owner") : owner
    let pending = journal || (commits > 0 && app.mode == .snapshotJournal)
-   return "protected_protocol=1 recovery_pending=\(pending) source_sha256=\(observed) owner_token_sha256=\(observedOwner) transaction_id=\(id)" + (pending ? " candidate_sha256=\(candidate)" : "") + "\n"
+   return "protected_protocol=1 recovery_pending=\(pending) source_sha256=\(observed) owner_token_sha256=\(observedOwner) transaction_id=\(id)" + (pending ? " candidate_sha256=\(candidate)" : "") + (app.mode == .commitReplyLost ? " commit_receipt_protocol=1" : "") + "\n"
   case "protected-replace":
    replacements += 1; journal=true; try app.boundary()
    return "ready transaction_id=\(id) candidate_sha256=\(candidate)\n"
   case "protected-commit":
    commits += 1; journal=false
+   if app.mode == .commitReplyLost {throw FixtureError.boom}
    return "committed transaction_id=\(id) candidate_sha256=\(candidate) latest_handshake=100\n"
+  case "protected-receipt":
+   guard app.mode == .commitReplyLost,commits==1,!journal else {throw FixtureError.boom}
+   return "committed commit_receipt_protocol=1 transaction_id=\(id) source_sha256=\(source) candidate_sha256=\(candidate) owner_token_sha256=\(owner) latest_handshake=100\n"
   case "protected-recover":
    recoveries += 1; journal=false
    return "recovered transaction_id=\(id)\n"
@@ -276,6 +280,14 @@ enum Mode { case success, connectThrows, promotionThrows, sessionChanges, tokenC
     check("cache-failure-retains-binding-and-invalidation-fences-retry",admitted.canonicalConfig=="next-profile" && h.client.snapshots==1 && h.client.replacements==1 && a.profileService.promotions==1)
    }
   }catch {check("cache-failure-retains-binding-and-invalidation-fences-retry",false)}
+
+
+  do {
+   let (a,h,p)=base(true);a.mode = .commitReplyLost
+   _=try await a.run(p,h)
+   let admitted=try a.nativeAdmittedProfiles.source(for:a.activeTunnel!,scope:try a.nativeAdmittedProfileScopeForFixture(a.activeTunnel!),helper:h)
+   check("lost-commit-ack-promotes-exact-proven-candidate",a.activeTunnel?.id=="next" && admitted.canonicalConfig=="next-profile" && a.profileService.promotions==1 && a.profileService.writes==1 && h.client.replacements==1 && h.client.commits==1 && h.client.recoveries==0 && a.connects==0)
+  }catch {check("lost-commit-ack-promotes-exact-proven-candidate",false)}
 
   print("psk_protected_matrix cases=\(cases) failures=\(failures) live_network_commands=0")
   exit(failures==0 ? 0 : 1)

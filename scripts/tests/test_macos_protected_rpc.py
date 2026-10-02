@@ -24,6 +24,8 @@ prefix = foundation.split("// Child processes only", 1)[0]
 prefix = prefix.replace('var currentIF = "utun7", up = 0, down = 0',
                         'var currentIF = "utun7", up = 0, down = 0\n    var handshake: UInt64 = 1')
 prefix = prefix.replace(r'\t1\t12\t13\t25', r'\t\(handshake)\t12\t13\t25')
+prefix = prefix.replace('var data: [String: String] = [:]', 'var data: [String: String] = [:]; var writtenModes: [String:Int] = [:]')
+prefix = prefix.replace('try beforeWrite?(path, text); data[path] = text;', 'try beforeWrite?(path, text); writtenModes[path]=mode; data[path] = text;')
 HARNESS = r'''
 final class ProcessIdentity: ProcessInspecting, @unchecked Sendable {
     var identity: String? = "fixture-start-1"
@@ -145,6 +147,85 @@ if CommandLine.arguments.count == 5 && CommandLine.arguments[1] == "--serve" {
     exit(0)
 }
 Task {
+
+    let receiptPath=paths.helperDirectory+"/replacement-commit-receipt.state"
+    func committedFixture() async throws -> RPCFixture {
+        let p=try RPCFixture();try await p.replace();p.f.runner.handshake=UInt64(Date().timeIntervalSince1970)
+        let committed=await p.send("protected-commit "+p.metadata)
+        try check(committed.hasPrefix("committed transaction_id="),"fixture committed")
+        return p
+    }
+    await test("durable-receipt-before-journal-removal") {
+        let p=try RPCFixture();try await p.replace();p.f.runner.handshake=UInt64(Date().timeIntervalSince1970)
+        var presentBeforeRemoval=false
+        p.f.files.beforeRemove={path in if path==journalPath {presentBeforeRemoval=p.f.files.data[receiptPath] != nil && p.f.files.writtenModes[receiptPath]==0o600}}
+        let response=await p.send("protected-commit "+p.metadata)
+        try check(response.hasPrefix("committed ") && presentBeforeRemoval,"receipt precedes journal deletion")
+        try check(p.f.files.data[receiptPath]?.contains("PrivateKey")==false && p.f.files.data[receiptPath]?.contains("fixture-intent")==false,"metadata only; no config or owner token")
+        try p.f.protected()
+    }
+    await test("durable-receipt-restart-and-read-only-replay") {
+        let p=try await committedFixture();let up=p.f.runner.up,down=p.f.runner.down,pf=p.f.pf.updates;p.restart()
+        let first=await p.send("protected-receipt "+p.metadata),second=await p.send("protected-receipt "+p.metadata)
+        try check(first.hasPrefix("committed ") && first==second && first.contains("commit_receipt_protocol=1"),"persisted receipt replays after helper runtime recreation")
+        try check(first.contains("source_sha256="+digest(sourceConfig)) && first.contains("candidate_sha256="+digest(candidateConfig)) && first.contains("owner_token_sha256="+digest("fixture-intent")),"exact transaction proof")
+        try check(p.f.runner.up==up && p.f.runner.down==down && p.f.pf.updates==pf,"receipt lookup does not replace or recover")
+        try p.f.protected()
+    }
+    for kind in ["id","source","candidate","owner"] {
+        await test("durable-receipt-reject-"+kind) {
+            let p=try await committedFixture();var metadata=p.metadata
+            let old=kind=="id" ? p.transaction : (kind=="source" ? digest(sourceConfig) : (kind=="candidate" ? digest(candidateConfig) : digest("fixture-intent")))
+            metadata=metadata.replacingOccurrences(of:old,with:kind=="id" ? "A63DCEBD-109A-4C45-A23C-3F32BF42597A" : digest("different-"+kind))
+            let response=await p.send("protected-receipt "+metadata)
+            try check(response.hasPrefix("error:"),"different tuple rejected")
+            try check(p.f.files.data[paths.activeConfigPath]==candidateConfig && p.f.runner.up==1 && p.f.runner.down==1,"physical candidate untouched")
+        }
+    }
+    for kind in ["missing","corrupt","unknown-fields","unreadable","active-bytes","route","dns","socket","handshake","future-handshake","owner-token","owner-start","unauthenticated"] {
+        await test("durable-receipt-fence-"+kind) {
+            let p=try await committedFixture()
+            switch kind {
+            case "missing":p.f.files.data.removeValue(forKey:receiptPath)
+            case "corrupt":p.f.files.data[receiptPath]="{}\n"
+            case "unknown-fields":if let text=p.f.files.data[receiptPath] {p.f.files.data[receiptPath]=text.replacingOccurrences(of:"{",with:"{\"unknown\":true,")}
+            case "unreadable":p.f.files.beforeRead={path in if path==receiptPath {throw HelperError.io("injected receipt read")}}
+            case "active-bytes":p.f.files.data[paths.activeConfigPath]=sourceConfig
+            case "route":p.f.runner.badCandidateRoute=true
+            case "dns":p.f.runner.badCandidateDNS=true
+            case "socket":p.f.files.data.removeValue(forKey:paths.amneziaSocketPath(for:"utun8"))
+            case "handshake":p.f.runner.handshake=1
+            case "future-handshake":p.f.runner.handshake=UInt64(Date().timeIntervalSince1970)+3600
+            case "owner-token":p.f.files.data[paths.ownerSessionPath]=OwnerSession(pid:123,token:"changed",identity:"fixture-start-1").payload
+            case "owner-start":p.process.identity="new-start"
+            default:break
+            }
+            let beforeUp=p.f.runner.up,beforeDown=p.f.runner.down,beforePF=p.f.pf.updates
+            let response=await p.send("protected-receipt "+p.metadata,authenticated:kind != "unauthenticated")
+            try check(response.hasPrefix("error:"),"unproven receipt rejected")
+            try check(p.f.runner.up==beforeUp && p.f.runner.down==beforeDown && p.f.pf.updates==beforePF,"lookup is non-mutating")
+        }
+    }
+    for kind in ["write","readback","delete-journal"] {
+        await test("durable-receipt-io-"+kind+"-retains-recovery") {
+            let p=try RPCFixture();try await p.replace();p.f.runner.handshake=UInt64(Date().timeIntervalSince1970)
+            if kind=="write" {p.f.files.beforeWrite={path,_ in if path==receiptPath {throw HelperError.io("injected receipt write")}}}
+            if kind=="readback" {p.f.files.afterWrite={path,_ in if path==receiptPath {p.f.files.data[path]="{}\n"}}}
+            if kind=="delete-journal" {p.f.files.beforeRemove={path in if path==journalPath {throw HelperError.io("injected journal delete")}}}
+            let response=await p.send("protected-commit "+p.metadata)
+            try check(response.hasPrefix("error:") && p.f.files.data[journalPath]?.contains("committed")==true,"no success without durable receipt and cleanup")
+            let lookup=await p.send("protected-receipt "+p.metadata)
+            try check(lookup.hasPrefix("error:") && p.f.runner.up==1 && p.f.runner.down==1,"pending journal cannot be mistaken for acknowledged commit")
+            try p.f.protected()
+        }
+    }
+    await test("durable-receipt-owner-changes-during-read") {
+        let p=try await committedFixture();var didChange=false
+        p.f.files.beforeRead={path in if path==receiptPath && !didChange {didChange=true;p.f.files.data[paths.ownerSessionPath]=OwnerSession(pid:123,token:"changed",identity:"fixture-start-1").payload}}
+        let response=await p.send("protected-receipt "+p.metadata)
+        try check(response.hasPrefix("error:") && p.f.runner.up==1 && p.f.runner.down==1,"owner rechecked after suspension/read")
+    }
+
     await test("snapshot-read-only") {
         let p = try RPCFixture(); let reply = await p.send("protected-snapshot")
         try check(reply.hasPrefix("protected_protocol=1 recovery_pending=false"), "protocol advertised")
@@ -356,6 +437,12 @@ def socket_matrix(binary: Path) -> int:
                 endpoint = "198.51.100.7:51820" if mode == "recover" else "198.51.100.8:51820"
                 check(mode + "-exact-final-state", "state=connected" in final and "endpoint=" + endpoint in final
                       and "leak_protection=armed" in final and "recovery_pending=true" not in final)
+                if mode == "allow":
+                    lookup = request(path, ("protected-receipt " + metadata).encode())
+                    check(mode + "-durable-receipt", lookup.startswith("committed ") and "commit_receipt_protocol=1" in lookup
+                          and "candidate_sha256=" + candidate in lookup and "PrivateKey" not in lookup)
+                    replay_receipt = request(path, ("protected-receipt " + metadata).encode())
+                    check(mode + "-receipt-repeatable-read", replay_receipt == lookup and lookup.startswith("committed "))
                 replay = request(path, ("protected-replace " + metadata).encode())
                 check(mode + "-consumed-grant-rejected", "grant is absent, stale or consumed" in replay)
             finally:

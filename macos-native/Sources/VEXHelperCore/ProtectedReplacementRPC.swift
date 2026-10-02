@@ -51,6 +51,14 @@ public struct ProtectedReplacementRequest: Equatable, Sendable {
 public protocol ProtectedTunnelControlling: TunnelControlling {
     func protectedReplacementSnapshot(validateOwner: () throws -> OwnerSession) throws -> String
     func replaceProtected(request: ProtectedReplacementRequest, validateOwner: () throws -> OwnerSession) throws -> HelperSession
+    func committedProtectedReceipt(request: ProtectedReplacementRequest, validateOwner: () throws -> OwnerSession) throws -> String
     func commitProtected(request: ProtectedReplacementRequest, validateOwner: () throws -> OwnerSession) throws -> HelperSession
     func recoverProtected(request: ProtectedReplacementRequest, validateOwner: () throws -> OwnerSession) throws -> HelperSession?
+}
+
+// Older fixture/controllers explicitly fail closed; no ordinary-action fallback.
+public extension ProtectedTunnelControlling {
+    func committedProtectedReceipt(request: ProtectedReplacementRequest, validateOwner: () throws -> OwnerSession) throws -> String {
+        throw HelperError.protocolViolation("protected commit receipts are unsupported")
+    }
 }

@@ -310,7 +310,7 @@ public actor HelperRuntime {
 
     private func execute(command: HelperCommand, peerPID: Int32?, authenticatedPeer: PeerCredentials?) async throws -> HelperCommandResponse {
         switch command {
-        case .protectedSnapshot, .protectedReplace, .protectedCommit, .protectedRecover:
+        case .protectedSnapshot, .protectedReplace, .protectedCommit, .protectedRecover, .protectedReceipt:
             guard let peer = authenticatedPeer, peer.pid == peerPID,
                   protectedPeerAuthenticator.authenticate(peer),
                   let owner = store.loadOwnerSession(), owner.pid == peer.pid,
@@ -356,6 +356,8 @@ public actor HelperRuntime {
             case .protectedCommit(let request):
                 let result = try protected.commitProtected(request: request, validateOwner: validateOwner)
                 return .init(payload: "committed transaction_id=\(request.transactionID) candidate_sha256=\(request.candidateSHA256) latest_handshake=\(result.latestHandshake ?? 0)\n")
+            case .protectedReceipt(let request):
+                return .init(payload: try protected.committedProtectedReceipt(request: request, validateOwner: validateOwner))
             case .protectedRecover(let request):
                 guard try protected.recoverProtected(request: request, validateOwner: validateOwner) != nil else {
                     throw HelperError.commandFailed("no matching protected recovery journal")

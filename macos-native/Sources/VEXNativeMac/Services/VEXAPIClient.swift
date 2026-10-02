@@ -125,6 +125,19 @@ struct VEXAPIClient {
         )
     }
 
+    /// CAS deletion: the server must clear only if this exact token remains bound.
+    func unregisterNativePushToken(accessToken: String, deviceID: String, token: String) async throws {
+        guard NativePSKIdentifier.device(deviceID), Self.isCanonicalAPNsToken(token) else {
+            throw VEXAPIError.invalidRequest
+        }
+        let _: NativePushTokenClearResponse = try await json(
+            "/v1/vpn/push-token",
+            method: "DELETE",
+            accessToken: accessToken,
+            body: ["device_id": deviceID, "provider": "apns", "token": token]
+        )
+    }
+
     func renameVpnDevice(accessToken: String, deviceId: String, name: String) async throws -> VpnDevice {
         try await json(
             "/v1/devices/\(deviceId)",
@@ -492,6 +505,10 @@ struct VEXAPIClient {
         value.range(of: "^sha256:[0-9A-Fa-f]{64}$", options: .regularExpression) != nil
     }
 
+    private static func isCanonicalAPNsToken(_ value: String) -> Bool {
+        value.range(of: "^[0-9a-f]{2,1024}$", options: .regularExpression) != nil && value.count.isMultiple(of: 2)
+    }
+
     private func apiErrorPayload(_ data: Data) -> (code: String?, message: String) {
         if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             let code = object["code"] as? String
@@ -504,6 +521,10 @@ struct VEXAPIClient {
 
 private struct NativeDeviceRegistrationResponse: Decodable {
     var device: VpnDevice
+}
+
+private struct NativePushTokenClearResponse: Decodable {
+    let cleared: Bool
 }
 
 private struct EmptyResponse: Decodable {}

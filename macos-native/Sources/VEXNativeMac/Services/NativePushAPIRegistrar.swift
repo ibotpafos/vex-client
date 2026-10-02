@@ -31,4 +31,10 @@ final class NativePushAPIRegistrar: NativePushRegistrationRegistrar {
         try await api.registerNativePushToken(accessToken: request.accessToken, deviceID: request.deviceID, token: request.token)
         guard isCurrent(request) else { throw CancellationError() }
     }
+
+    func unregisterNativePush(_ request: NativePushRegistrationRequest) async throws {
+        // Cleanup deliberately accepts an immutable formerly-authorized tuple;
+        // isCurrent is false after logout/consent withdrawal by design.
+        try await api.unregisterNativePushToken(accessToken: request.accessToken, deviceID: request.deviceID, token: request.token)
+    }
 }

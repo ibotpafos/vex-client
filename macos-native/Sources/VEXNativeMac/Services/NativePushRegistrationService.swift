@@ -16,6 +16,13 @@ struct NativePushRegistrationRequest: Equatable {
 @MainActor
 protocol NativePushRegistrationRegistrar: AnyObject {
     func registerNativePush(_ request: NativePushRegistrationRequest) async throws
+    /// Removes only this exact provider/device/token tuple. Implementations must use server CAS.
+    func unregisterNativePush(_ request: NativePushRegistrationRequest) async throws
+}
+
+extension NativePushRegistrationRegistrar {
+    /// Compatibility stub for test-only legacy registrars; the production registrar overrides it.
+    func unregisterNativePush(_ request: NativePushRegistrationRequest) async throws { throw URLError(.unsupportedURL) }
 }
 
 enum NativePushRegistrationStatus: Equatable {
@@ -40,6 +47,9 @@ final class NativePushRegistrationService: ObservableObject {
     private var completedRequest: NativePushRegistrationRequest?
     private var epoch = 0
     private var work: Task<Void, Never>?
+    /// An exact old tuple awaiting best-effort server cleanup; never a wildcard.
+    private var cleanupRequest: NativePushRegistrationRequest?
+    private var inFlightRequest: NativePushRegistrationRequest?
 
     @Published private(set) var status: NativePushRegistrationStatus = .disabled
 
@@ -53,13 +63,16 @@ final class NativePushRegistrationService: ObservableObject {
     func setRegistrationEnabled(_ enabled: Bool) {
         guard self.enabled != enabled else { return }
         self.enabled = enabled
-        invalidateWork()
         if enabled {
             status = .idle
+            startWorkerIfNeeded()
         } else {
+            captureCleanupForCurrentWork()
             request = nil
             completedRequest = nil
+            epoch &+= 1
             status = .disabled
+            startWorkerIfNeeded()
         }
     }
 
@@ -84,7 +97,6 @@ final class NativePushRegistrationService: ObservableObject {
             // A callback for the last successfully registered tuple is still a
             // newer intent than any queued refreshed-token tuple. Supersede it.
             self.request = request
-            invalidateWork()
             status = .registered
             return
         }
@@ -105,12 +117,16 @@ final class NativePushRegistrationService: ObservableObject {
     }
 
     /// Call on logout, authentication reset, or account/device/session replacement.
+    /// Do not cancel an in-flight URLSession write: cancellation cannot roll back a
+    /// server mutation. The worker serializes its completion before exact cleanup.
     func clearAuthenticatedSession() {
         enabled = false
+        captureCleanupForCurrentWork()
         request = nil
         completedRequest = nil
-        invalidateWork()
+        epoch &+= 1
         status = .disabled
+        startWorkerIfNeeded()
     }
 
     private func makeRequest(
@@ -141,37 +157,68 @@ final class NativePushRegistrationService: ObservableObject {
     }
 
     private func schedule(_ request: NativePushRegistrationRequest) {
-        invalidateWork()
-        let scheduledEpoch = epoch
+        self.request = request
         status = .queued
+        startWorkerIfNeeded()
+    }
+
+    private func captureCleanupForCurrentWork() {
+        // Prefer the last confirmed server tuple, otherwise retain the exact
+        // request whose transport may already have reached the server.
+        cleanupRequest = completedRequest ?? inFlightRequest ?? cleanupRequest
+    }
+
+    private func startWorkerIfNeeded() {
+        guard work == nil else { return }
         work = Task { @MainActor [weak self] in
-            // Yield creates a deterministic queue boundary: an immediate logout,
-            // disable, or session replacement prevents the registrar from starting.
+            // This boundary makes disable-before-delivery deterministic without
+            // relying on cancellation to undo a server write.
             await Task.yield()
-            await self?.deliverIfCurrent(request, epoch: scheduledEpoch)
+            await self?.runWorker()
         }
     }
 
-    private func deliverIfCurrent(_ candidate: NativePushRegistrationRequest, epoch: Int) async {
-        guard isCurrent(candidate, epoch: epoch), completedRequest != candidate else { return }
-        do {
-            try await registrar.registerNativePush(candidate)
-            guard isCurrent(candidate, epoch: epoch) else { return }
-            completedRequest = candidate
-            status = .registered
-        } catch {
-            guard isCurrent(candidate, epoch: epoch) else { return }
-            status = .failed
+    private func runWorker() async {
+        defer { work = nil }
+        while true {
+            if let stale = cleanupRequest {
+                cleanupRequest = nil
+                // Best effort only: a 401/revoked session must leave local push
+                // disabled; never retry in a background loop or resurrect state.
+                try? await registrar.unregisterNativePush(stale)
+                continue
+            }
+            guard enabled, let candidate = request, completedRequest != candidate else { return }
+            inFlightRequest = candidate
+            // Once a different POST actually starts, a prior acknowledgement
+            // cannot stand in for it if a late callback changes intent.
+            if completedRequest != candidate { completedRequest = nil }
+            let deliveryEpoch = epoch
+            do {
+                // TODO(cycle-15): transport timeout after server POST is only
+                // bounded locally; cross-process ordering needs a durable server revision.
+                try await registrar.registerNativePush(candidate)
+                inFlightRequest = nil
+                if isCurrent(candidate, epoch: deliveryEpoch) {
+                    completedRequest = candidate
+                    status = .registered
+                } else {
+                    // The registrar can report CancellationError after its POST;
+                    // no completion may be assumed to mean no server write.
+                    cleanupRequest = candidate
+                }
+            } catch {
+                inFlightRequest = nil
+                if isCurrent(candidate, epoch: deliveryEpoch) {
+                    status = .failed
+                    return
+                }
+                cleanupRequest = candidate
+            }
         }
     }
 
     private func isCurrent(_ candidate: NativePushRegistrationRequest, epoch: Int) -> Bool {
         enabled && self.epoch == epoch && request == candidate
-    }
-
-    private func invalidateWork() {
-        epoch &+= 1
-        work?.cancel()
-        work = nil
     }
 }

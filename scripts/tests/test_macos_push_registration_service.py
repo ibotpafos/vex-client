@@ -4,7 +4,10 @@ from pathlib import Path
 import hashlib, subprocess, sys, tempfile
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / 'macos-native/Sources/VEXNativeMac/Services/NativePushRegistrationService.swift'
-if len(sys.argv) == 2:
+if len(sys.argv) == 3 and sys.argv[1] == "--source-root":
+    candidate = Path(sys.argv[2])
+    SOURCE = candidate / SOURCE.relative_to(ROOT)
+elif len(sys.argv) == 2:
     candidate = Path(sys.argv[1])
     SOURCE = candidate / SOURCE.relative_to(ROOT) if candidate.is_dir() else candidate
 source_hash = hashlib.sha256(SOURCE.read_bytes()).hexdigest()
@@ -13,6 +16,7 @@ import Foundation
 
 @MainActor final class FakeRegistrar: NativePushRegistrationRegistrar {
     var requests: [NativePushRegistrationRequest] = []
+    var unregistered: [NativePushRegistrationRequest] = []
     var failNext = false
     var pause = false
     private var continuation: CheckedContinuation<Void, Never>?
@@ -25,10 +29,10 @@ import Foundation
         if pause { await withCheckedContinuation { continuation = $0 } }
         if failNext { failNext = false; throw FixtureError.failed }
     }
+    func unregisterNativePush(_ request: NativePushRegistrationRequest) async throws { unregistered.append(request) }
     func release() { continuation?.resume(); continuation = nil }
     func waitUntilCallCount(_ count: Int) async {
-        if requests.count >= count { return }
-        await withCheckedContinuation { entryContinuation = $0 }
+        for _ in 0..<10_000 { if requests.count >= count { return }; await Task.yield() }
     }
 }
 enum FixtureError: Error { case failed }
@@ -129,11 +133,51 @@ enum FixtureError: Error { case failed }
         await settle()
         let boundedAndAuthenticated = fake.requests.count == 9 && service.status == .idle
 
+        // Fresh paused registrar proves local disable does not rely on cancellation:
+        // the exact old POST finishes, then exactly that tuple is deleted before a new POST.
+        let orderingFake = FakeRegistrar()
+        let orderingService = NativePushRegistrationService(registrar: orderingFake, maximumTokenBytes: 8)
+        orderingService.setRegistrationEnabled(true)
+        orderingFake.pause = true
+        orderingService.registerAppleDeviceToken(Data([0xaa]), accountID: "old", deviceID: "device-old", accessToken: "auth-old", sessionGeneration: 1)
+        await orderingFake.waitUntilCallCount(1)
+        orderingService.clearAuthenticatedSession()
+        let noDeleteBeforeOldPostCompletes = orderingFake.unregistered.isEmpty && orderingService.status == .disabled
+        orderingService.setRegistrationEnabled(true)
+        orderingService.registerAppleDeviceToken(Data([0xbb]), accountID: "new", deviceID: "device-new", accessToken: "auth-new", sessionGeneration: 2)
+        let newPostHeldBehindOldCleanup = orderingFake.requests.count == 1
+        orderingFake.pause = false; orderingFake.release()
+        await orderingFake.waitUntilCallCount(2)
+        _ = await waitUntilStatus(orderingService, .registered)
+        let exactUnregisterAndOrdering = orderingFake.unregistered.count == 1 && orderingFake.unregistered[0].deviceID == "device-old" && orderingFake.unregistered[0].token == "aa" && orderingFake.requests[1].deviceID == "device-new" && orderingFake.requests[1].token == "bb" && orderingService.status == .registered
+
+        let supersedeFake = FakeRegistrar()
+        let supersedeService = NativePushRegistrationService(registrar: supersedeFake, maximumTokenBytes: 8)
+        supersedeService.setRegistrationEnabled(true)
+        supersedeService.registerAppleDeviceToken(Data([0xa1]), accountID: "s", deviceID: "device-s", accessToken: "auth-s", sessionGeneration: 1)
+        await supersedeFake.waitUntilCallCount(1); _ = await waitUntilStatus(supersedeService, .registered)
+        supersedeFake.pause = true
+        supersedeService.registerAppleDeviceToken(Data([0xb2]), accountID: "s", deviceID: "device-s", accessToken: "auth-s", sessionGeneration: 1)
+        await supersedeFake.waitUntilCallCount(2)
+        // A refreshed callback for the prior successful token is the newest intent.
+        supersedeService.registerAppleDeviceToken(Data([0xa1]), accountID: "s", deviceID: "device-s", accessToken: "auth-s", sessionGeneration: 1)
+        supersedeFake.pause = false; supersedeFake.release()
+        await supersedeFake.waitUntilCallCount(3); _ = await waitUntilStatus(supersedeService, .registered)
+        let lateOldCompletionCannotEmptyLatest = supersedeFake.unregistered.count == 1 && supersedeFake.unregistered[0].token == "b2" && supersedeFake.requests[2].token == "a1" && supersedeService.status == .registered
+
+        let queuedFake = FakeRegistrar()
+        let queuedService = NativePushRegistrationService(registrar: queuedFake, maximumTokenBytes: 8)
+        queuedService.setRegistrationEnabled(true)
+        queuedService.registerAppleDeviceToken(Data([0xcc]), accountID: "q", deviceID: "device-q", accessToken: "auth-q", sessionGeneration: 1)
+        queuedService.clearAuthenticatedSession()
+        await settle()
+        let queuedDisableNoPost = queuedFake.requests.isEmpty && queuedFake.unregistered.isEmpty && queuedService.status == .disabled
+
         print("default_opt_in_disabled=\(defaultDisabled)")
         print("variable_length_lowercase_hex=\(first) same_tuple_deduplicated=\(deduplicated) dedupe_supersedes_queued_refresh=\(dedupeSupersedesQueued) same_tuple_inflight=\(sameTupleInflight) refreshed_token_compatible=\(refreshedToken) refreshed_access_token=\(refreshedAccessToken) device_changed=\(deviceChanged) account_changed=\(accountChanged)")
         print("failure_requires_explicit_retry=\(failed && explicitRetry) obsolete_queue_did_not_start=\(obsoleteQueuedDidNotStart) late_completion_and_error_inert=\(lateCompletionInert)")
-        print("bounded_token_and_authenticated_tuple=\(boundedAndAuthenticated) fake_endpoint_only=true")
-        exit(defaultDisabled && first && deduplicated && dedupeSupersedesQueued && sameTupleInflight && refreshedToken && refreshedAccessToken && deviceChanged && accountChanged && failed && explicitRetry && obsoleteQueuedDidNotStart && lateCompletionInert && boundedAndAuthenticated ? 0 : 1)
+        print("bounded_token_and_authenticated_tuple=\(boundedAndAuthenticated) queued_disable_no_post=\(queuedDisableNoPost) late_old_completion_reapplies_latest=\(lateOldCompletionCannotEmptyLatest) old_post_then_exact_delete_then_new_post=\(noDeleteBeforeOldPostCompletes && newPostHeldBehindOldCleanup && exactUnregisterAndOrdering) fake_endpoint_only=true")
+        exit(defaultDisabled && first && deduplicated && dedupeSupersedesQueued && sameTupleInflight && refreshedToken && refreshedAccessToken && deviceChanged && accountChanged && failed && explicitRetry && obsoleteQueuedDidNotStart && lateCompletionInert && boundedAndAuthenticated && queuedDisableNoPost && lateOldCompletionCannotEmptyLatest && noDeleteBeforeOldPostCompletes && newPostHeldBehindOldCleanup && exactUnregisterAndOrdering ? 0 : 1)
     }
 }
 '''

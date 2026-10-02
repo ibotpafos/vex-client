@@ -26,15 +26,16 @@ final class NativePushAPIRegistrar: NativePushRegistrationRegistrar {
 
     init(api: VEXAPIClient = VEXAPIClient()) { self.api = api }
 
-    func registerNativePush(_ request: NativePushRegistrationRequest) async throws {
+    func registerNativePush(_ request: NativePushRegistrationRequest) async throws -> NativePushRegistrationReceipt {
         guard isCurrent(request) else { throw CancellationError() }
-        try await api.registerNativePushToken(accessToken: request.accessToken, deviceID: request.deviceID, token: request.token)
-        guard isCurrent(request) else { throw CancellationError() }
+        let receipt = try await api.registerNativePushToken(accessToken: request.accessToken, deviceID: request.deviceID, token: request.token)
+        // Return the receipt even after scope changes so the service can issue exact CAS cleanup.
+        return receipt
     }
 
-    func unregisterNativePush(_ request: NativePushRegistrationRequest) async throws {
+    func unregisterNativePush(_ request: NativePushRegistrationRequest, receipt: NativePushRegistrationReceipt) async throws {
         // Cleanup deliberately accepts an immutable formerly-authorized tuple;
         // isCurrent is false after logout/consent withdrawal by design.
-        try await api.unregisterNativePushToken(accessToken: request.accessToken, deviceID: request.deviceID, token: request.token)
+        try await api.unregisterNativePushToken(accessToken: request.accessToken, deviceID: request.deviceID, token: request.token, registrationRevision: receipt.revision)
     }
 }

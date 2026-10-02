@@ -1,5 +1,10 @@
 import Foundation
 
+/// Server-issued push-token compare-and-swap receipt; it is never fabricated locally.
+struct NativePushRegistrationReceipt: Equatable {
+    let revision: Int64
+}
+
 struct VEXAPIClient {
     var urlSession: URLSession = .shared
     var baseURL = URL(string: ProcessInfo.processInfo.environment["VEX_API_BASE_URL"] ?? "https://vexguard.app")!
@@ -116,25 +121,30 @@ struct VEXAPIClient {
     }
 
     /// deviceID is the managed server device row, not an installation UUID.
-    func registerNativePushToken(accessToken: String, deviceID: String, token: String) async throws {
-        let _: NativeDeviceRegistrationResponse = try await json(
+    func registerNativePushToken(accessToken: String, deviceID: String, token: String) async throws -> NativePushRegistrationReceipt {
+        guard NativePSKIdentifier.device(deviceID), Self.isCanonicalAPNsToken(token) else {
+            throw VEXAPIError.invalidRequest
+        }
+        let response: NativePushTokenRegistrationResponse = try await json(
             "/v1/vpn/push-token",
             method: "POST",
             accessToken: accessToken,
             body: ["device_id": deviceID, "provider": "apns", "token": token]
         )
+        guard response.registrationRevision > 0 else { throw VEXAPIError.invalidResponse }
+        return NativePushRegistrationReceipt(revision: response.registrationRevision)
     }
 
-    /// CAS deletion: the server must clear only if this exact token remains bound.
-    func unregisterNativePushToken(accessToken: String, deviceID: String, token: String) async throws {
-        guard NativePSKIdentifier.device(deviceID), Self.isCanonicalAPNsToken(token) else {
+    /// CAS deletion: the server must clear only this exact receipt.
+    func unregisterNativePushToken(accessToken: String, deviceID: String, token: String, registrationRevision: Int64) async throws {
+        guard NativePSKIdentifier.device(deviceID), Self.isCanonicalAPNsToken(token), registrationRevision > 0 else {
             throw VEXAPIError.invalidRequest
         }
         let _: NativePushTokenClearResponse = try await json(
             "/v1/vpn/push-token",
             method: "DELETE",
             accessToken: accessToken,
-            body: ["device_id": deviceID, "provider": "apns", "token": token]
+            body: ["device_id": deviceID, "provider": "apns", "token": token, "registration_revision": registrationRevision]
         )
     }
 
@@ -521,6 +531,11 @@ struct VEXAPIClient {
 
 private struct NativeDeviceRegistrationResponse: Decodable {
     var device: VpnDevice
+}
+
+private struct NativePushTokenRegistrationResponse: Decodable {
+    let registrationRevision: Int64
+    enum CodingKeys: String, CodingKey { case registrationRevision = "registration_revision" }
 }
 
 private struct NativePushTokenClearResponse: Decodable {

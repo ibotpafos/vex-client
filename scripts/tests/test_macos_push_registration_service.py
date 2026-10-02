@@ -14,28 +14,53 @@ source_hash = hashlib.sha256(SOURCE.read_bytes()).hexdigest()
 main = r'''import Combine
 import Foundation
 
+struct NativePushRegistrationReceipt: Equatable { let revision: Int64 }
+
 @MainActor final class FakeRegistrar: NativePushRegistrationRegistrar {
     var requests: [NativePushRegistrationRequest] = []
     var unregistered: [NativePushRegistrationRequest] = []
     var failNext = false
     var pause = false
+    var nextRevision: Int64 = 1
     private var continuation: CheckedContinuation<Void, Never>?
     private var entryContinuation: CheckedContinuation<Void, Never>?
 
-    func registerNativePush(_ request: NativePushRegistrationRequest) async throws {
+    func registerNativePush(_ request: NativePushRegistrationRequest) async throws -> NativePushRegistrationReceipt {
         requests.append(request)
         entryContinuation?.resume()
         entryContinuation = nil
         if pause { await withCheckedContinuation { continuation = $0 } }
         if failNext { failNext = false; throw FixtureError.failed }
+        defer { nextRevision += 1 }
+        return NativePushRegistrationReceipt(revision: nextRevision)
     }
-    func unregisterNativePush(_ request: NativePushRegistrationRequest) async throws { unregistered.append(request) }
+    func unregisterNativePush(_ request: NativePushRegistrationRequest, receipt: NativePushRegistrationReceipt) async throws { unregistered.append(request) }
     func release() { continuation?.resume(); continuation = nil }
     func waitUntilCallCount(_ count: Int) async {
         for _ in 0..<10_000 { if requests.count >= count { return }; await Task.yield() }
     }
 }
 enum FixtureError: Error { case failed }
+
+@MainActor final class SharedRevisionRegistrar: NativePushRegistrationRegistrar {
+    struct Binding { let request: NativePushRegistrationRequest; let revision: Int64 }
+    var binding: Binding?
+    var nextRevision: Int64 = 1
+    var deletes: [(Int64, Bool)] = []
+    var throwAfterWrite = false
+    var invalidReceipt = false
+    func registerNativePush(_ request: NativePushRegistrationRequest) async throws -> NativePushRegistrationReceipt {
+        let receipt = NativePushRegistrationReceipt(revision: invalidReceipt ? 0 : nextRevision)
+        if !invalidReceipt { binding = Binding(request: request, revision: nextRevision); nextRevision += 1 }
+        if throwAfterWrite { throwAfterWrite = false; throw FixtureError.failed }
+        return receipt
+    }
+    func unregisterNativePush(_ request: NativePushRegistrationRequest, receipt: NativePushRegistrationReceipt) async throws {
+        let matches = binding?.request.provider == request.provider && binding?.request.token == request.token && binding?.request.deviceID == request.deviceID && binding?.revision == receipt.revision
+        deletes.append((receipt.revision, matches))
+        if matches { binding = nil }
+    }
+}
 
 @main struct Main {
     @MainActor static func settle(_ turns: Int = 4) async {
@@ -173,11 +198,41 @@ enum FixtureError: Error { case failed }
         await settle()
         let queuedDisableNoPost = queuedFake.requests.isEmpty && queuedFake.unregistered.isEmpty && queuedService.status == .disabled
 
+        // Separate service instances model a process restart: revision 1 cleanup must not clear revision 2.
+        let shared = SharedRevisionRegistrar()
+        let oldService = NativePushRegistrationService(registrar: shared, maximumTokenBytes: 8)
+        oldService.setRegistrationEnabled(true)
+        oldService.registerAppleDeviceToken(Data([0xab]), accountID: "same", deviceID: "device-same", accessToken: "auth", sessionGeneration: 1)
+        _ = await waitUntilStatus(oldService, .registered)
+        let oldReceiptRegistered = shared.binding?.revision == 1
+        let newService = NativePushRegistrationService(registrar: shared, maximumTokenBytes: 8)
+        newService.setRegistrationEnabled(true)
+        newService.registerAppleDeviceToken(Data([0xab]), accountID: "same", deviceID: "device-same", accessToken: "auth", sessionGeneration: 1)
+        _ = await waitUntilStatus(newService, .registered)
+        let newReceiptRegistered = shared.binding?.revision == 2
+        oldService.clearAuthenticatedSession(); await settle(8)
+        let oldDeleteMismatchPreservesNew = shared.deletes.first?.0 == 1 && shared.deletes.first?.1 == false && shared.binding?.revision == 2
+        newService.clearAuthenticatedSession(); await settle(8)
+        let newDeleteExactClears = shared.deletes.count == 2 && shared.deletes[1].0 == 2 && shared.deletes[1].1 && shared.binding == nil
+
+        let noReceiptFake = SharedRevisionRegistrar(); noReceiptFake.throwAfterWrite = true
+        let noReceiptService = NativePushRegistrationService(registrar: noReceiptFake, maximumTokenBytes: 8)
+        noReceiptService.setRegistrationEnabled(true); noReceiptService.registerAppleDeviceToken(Data([0xcd]), accountID: "x", deviceID: "device-x", accessToken: "auth", sessionGeneration: 1)
+        _ = await waitUntilStatus(noReceiptService, .failed); noReceiptService.clearAuthenticatedSession(); await settle(8)
+        let ambiguousNoReceiptNoDelete = noReceiptFake.deletes.isEmpty && noReceiptService.status == .disabled
+
+        let invalidReceiptFake = SharedRevisionRegistrar(); invalidReceiptFake.invalidReceipt = true
+        let invalidReceiptService = NativePushRegistrationService(registrar: invalidReceiptFake, maximumTokenBytes: 8)
+        invalidReceiptService.setRegistrationEnabled(true); invalidReceiptService.registerAppleDeviceToken(Data([0xef]), accountID: "x", deviceID: "device-x", accessToken: "auth", sessionGeneration: 1)
+        _ = await waitUntilStatus(invalidReceiptService, .failed); invalidReceiptService.clearAuthenticatedSession(); await settle(8)
+        let invalidReceiptNoDelete = invalidReceiptFake.deletes.isEmpty && invalidReceiptService.status == .disabled
+
+        print("revision_cas_old_receipt=\(oldReceiptRegistered) new_receipt=\(newReceiptRegistered) old_delete_preserves_new=\(oldDeleteMismatchPreservesNew) newest_delete_clears=\(newDeleteExactClears) ambiguous_no_receipt_no_delete=\(ambiguousNoReceiptNoDelete) invalid_receipt_no_delete=\(invalidReceiptNoDelete)")
         print("default_opt_in_disabled=\(defaultDisabled)")
         print("variable_length_lowercase_hex=\(first) same_tuple_deduplicated=\(deduplicated) dedupe_supersedes_queued_refresh=\(dedupeSupersedesQueued) same_tuple_inflight=\(sameTupleInflight) refreshed_token_compatible=\(refreshedToken) refreshed_access_token=\(refreshedAccessToken) device_changed=\(deviceChanged) account_changed=\(accountChanged)")
         print("failure_requires_explicit_retry=\(failed && explicitRetry) obsolete_queue_did_not_start=\(obsoleteQueuedDidNotStart) late_completion_and_error_inert=\(lateCompletionInert)")
         print("bounded_token_and_authenticated_tuple=\(boundedAndAuthenticated) queued_disable_no_post=\(queuedDisableNoPost) late_old_completion_reapplies_latest=\(lateOldCompletionCannotEmptyLatest) old_post_then_exact_delete_then_new_post=\(noDeleteBeforeOldPostCompletes && newPostHeldBehindOldCleanup && exactUnregisterAndOrdering) fake_endpoint_only=true")
-        exit(defaultDisabled && first && deduplicated && dedupeSupersedesQueued && sameTupleInflight && refreshedToken && refreshedAccessToken && deviceChanged && accountChanged && failed && explicitRetry && obsoleteQueuedDidNotStart && lateCompletionInert && boundedAndAuthenticated && queuedDisableNoPost && lateOldCompletionCannotEmptyLatest && noDeleteBeforeOldPostCompletes && newPostHeldBehindOldCleanup && exactUnregisterAndOrdering ? 0 : 1)
+        exit(defaultDisabled && first && deduplicated && dedupeSupersedesQueued && sameTupleInflight && refreshedToken && refreshedAccessToken && deviceChanged && accountChanged && failed && explicitRetry && obsoleteQueuedDidNotStart && lateCompletionInert && boundedAndAuthenticated && queuedDisableNoPost && lateOldCompletionCannotEmptyLatest && noDeleteBeforeOldPostCompletes && newPostHeldBehindOldCleanup && exactUnregisterAndOrdering && oldReceiptRegistered && newReceiptRegistered && oldDeleteMismatchPreservesNew && newDeleteExactClears && ambiguousNoReceiptNoDelete && invalidReceiptNoDelete ? 0 : 1)
     }
 }
 '''

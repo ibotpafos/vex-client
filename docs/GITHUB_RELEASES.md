@@ -13,6 +13,8 @@ public releases remain unchanged; this change is not a new client version.
    (1..99); the release manifest uses `major*1000000+minor*10000+patch*100+counter`
    as its build, matching the APK versionCode. Planning and bundling share this
    encoding and reject mismatched counters, debug variants and signer reports.
+   Native macOS retains its builder's numeric string counter (CFBundleVersion)
+   without Android encoding; both digit-string and integer counters are checked.
 2. Dispatch **Client signed tag release**, `dry_run=true`, from main. Planning and
    locked dependency/quality checks run without signing secrets or publication.
 3. Once receiver/site acceptance is complete and the repo variable

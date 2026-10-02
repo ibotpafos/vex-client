@@ -71,14 +71,17 @@ class ReleaseContract(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, patch.dict("os.environ", {"VEX_SELF_SIGNED_APP_CERT_SHA256": "c" * 64}):
             root = Path(tmp)
             expected = {**release.plan(MAC_TAG, True), "source_commit": "a" * 40}
-            native = {"version": expected["version"], "build": expected["build"], "archive": "fixture.zip",
+            native = {"version": expected["version"], "build": str(expected["build"]), "archive": "fixture.zip",
                       "updateSignatureScheme": "sparkle-ed25519", "sparklePublicEDKey": "fixture-public-key",
                       "selfSigned": True, "notarized": False, "appleDeveloperSigned": False, "gatekeeperReady": False}
             (root / "fixture.zip").write_bytes(b"contract-fixture-not-a-real-signed-archive")
             (root / "release-manifest.json").write_text(json.dumps(native))
             result = release.bundle(root, expected)
             self.assertEqual(result["build"], SOURCE["native_macos"]["build"])
-            for field, value in (("build", expected["build"] + 1), ("build", str(expected["build"])),
+            (root / "release-manifest.json").write_text(json.dumps({**native, "build": expected["build"]}))
+            self.assertEqual(release.bundle(root, expected)["build"], expected["build"])
+            for field, value in (("build", expected["build"] + 1), ("build", str(expected["build"] + 1)),
+                                 ("build", "invalid"), ("build", True), ("build", float(expected["build"])),
                                  ("notarized", True), ("selfSigned", False), ("updateSignatureScheme", "none")):
                 (root / "release-manifest.json").write_text(json.dumps({**native, field: value}))
                 with self.subTest(field=field), self.assertRaises(ValueError):

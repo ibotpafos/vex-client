@@ -94,12 +94,19 @@ def verify_bundle(directory, expected):
 
 def bundle(directory, release):
     native = json.loads((directory / "release-manifest.json").read_text())
-    if (native["version"] != release["version"] or type(native["build"]) is not int
-            or native["build"] <= 0 or type(release["build"]) is not int):
+    if native["version"] != release["version"] or type(release["build"]) is not int:
         raise ValueError("Builder manifest does not match planned release")
     # The Android builder emits versions.json's counter, not the APK versionCode.
     # Website metadata deliberately uses the encoded code for upgrade ordering.
-    build = android_version_code(native["version"], native["build"]) if release["platform"] == "android" else native["build"]
+    if release["platform"] == "android":
+        build = android_version_code(native["version"], native["build"])
+    else:
+        # The maintained Sparkle builder writes CFBundleVersion as a digit string.
+        build = native["build"]
+        if isinstance(build, str) and re.fullmatch(r"[0-9]+", build):
+            build = int(build)
+        if type(build) is not int or build <= 0:
+            raise ValueError("Builder manifest does not match planned release")
     if build != release["build"]:
         raise ValueError("Builder manifest does not match planned release")
     if release["platform"] == "android":

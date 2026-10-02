@@ -931,6 +931,21 @@ struct VEXAppInfo: Equatable {
 
 
 /// The server's inactive PSK profile envelope. Every field is required by the API contract.
+/// Metadata only: preparation never returns key material or activates a tunnel.
+struct PSKRotationPreparationReceipt: Codable, Equatable {
+    var rotationID: String
+    var profileVersion: Int
+    var profileDigest: String
+    var deadlineAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case rotationID = "rotation_id"
+        case profileVersion = "profile_version"
+        case profileDigest = "profile_digest"
+        case deadlineAt = "deadline_at"
+    }
+}
+
 struct PSKRotationCurrentResponse: Codable, Equatable {
     var rotationID: String
     var activate: Bool

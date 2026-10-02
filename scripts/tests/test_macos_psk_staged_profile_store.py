@@ -52,6 +52,6 @@ with tempfile.TemporaryDirectory(prefix='native-psk-stage-', dir='/private/tmp')
  }}
  '''))
  files=[src/'Models/VEXModels.swift',src/'Services/NativePushPSKEventQueue.swift',src/'Services/NativePushSecureFileStore.swift',src/'Services/NativePSKStagedProfileStore.swift',main]
- c=subprocess.run(['swiftc','-parse-as-library',*map(str,files),'-o',str(binary)],text=True,capture_output=True);print(c.stdout,end='');print(c.stderr,end='',file=sys.stderr)
+ c=subprocess.run(['swiftc', str(__import__("pathlib").Path(__file__).resolve().parents[2]/"macos-native/Sources/VEXNativeMac/Services/NativePSKIdentifier.swift"), '-parse-as-library',*map(str,files),'-o',str(binary)],text=True,capture_output=True);print(c.stdout,end='');print(c.stderr,end='',file=sys.stderr)
  if c.returncode: raise SystemExit(c.returncode)
  r=subprocess.run([str(binary)],text=True,capture_output=True);print(r.stdout,end='');print(r.stderr,end='',file=sys.stderr);raise SystemExit(r.returncode)

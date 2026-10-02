@@ -74,6 +74,7 @@ final class VEXAppState: ObservableObject {
     private var nativePSKRetryTask: Task<Void, Never>?
     private var nativePushEventOwner: NativePushPSKEventOwner?
     @Published private(set) var nativePushEventError: String?
+    @Published private(set) var isNativePSKPreparationBusy = false
     lazy var nativePushRegistration = NativePushRegistrationService(registrar: nativePushRegistrar)
     private let nativePushRuntimeAllowed: Bool
     private var nativePushDeviceID: String?
@@ -186,6 +187,79 @@ final class VEXAppState: ObservableObject {
         nativePushRegistration.retryCurrentRegistration()
     }
 
+    var canPrepareNativePSKRotation: Bool {
+        guard canUseNativeRemotePush, nativeRemotePushEnabled, nativePushConsentMatchesSession,
+              nativePushRegistration.status == .registered, entitlement?.hasPaidAccess == true,
+              !isNativePSKPreparationBusy, !isVpnBusy, !isDeviceBusy,
+              let helper = nativePSKHelper, !helper.isBusy,
+              let current = session, !current.accessToken.isEmpty,
+              let deviceID = nativePushDeviceID,
+              let previous = activeTunnel ?? nativePSKPreparedTunnel,
+              previous.device.id == deviceID, previous.device.status == "active",
+              previous.device.platform?.lowercased() == "macos",
+              previous.device.provisioningMode == "managed_native",
+              previous.device.clientKeyOwnership == "client",
+              previous.device.protocol?.lowercased() == "amneziawg",
+              previous.awgVersion == 3, (previous.profileVersion ?? 0) > 0,
+              previous.locationId == selectedLocationId, previous.routingMode == routingMode,
+              nativePushIdentityStore.existingDeviceId() != nil else { return false }
+        return true
+    }
+
+    /// Foreground, explicit action only; never called by connect/profile polling.
+    /// Prepares an inactive server stage. The existing signed consumer owns ACK/cutover.
+    func prepareNativePSKRotation() {
+        guard canPrepareNativePSKRotation, let current = session,
+              let helper = nativePSKHelper, let deviceID = nativePushDeviceID,
+              let installation = nativePushIdentityStore.existingDeviceId(),
+              let owner = NativePushPSKEventOwner(accountID: current.user.id, installationID: installation),
+              let previous = activeTunnel ?? nativePSKPreparedTunnel,
+              let version = previous.profileVersion else { return }
+        let context = NativePSKPreparation.Context(accountID: owner.accountID, installationID: installation,
+            deviceID: deviceID, profileVersion: version, locationID: previous.locationId,
+            routingMode: previous.routingMode, bypassRegion: previous.bypassRegion,
+            routingPolicyVersion: previous.routingPolicyVersion)
+        let sessionGeneration = authenticatedSessionGeneration
+        let token = current.accessToken
+        let vpnGeneration = vpnOperationGeneration
+        let scopeIsCurrent: () -> Bool = { [weak self, weak helper] in
+            guard let self, let helper, self.canUseNativeRemotePush, self.nativeRemotePushEnabled,
+                  self.nativePushConsentMatchesSession, self.nativePushRegistration.status == .registered,
+                  self.entitlement?.hasPaidAccess == true, self.nativePushDeviceID == deviceID,
+                  self.selectedLocationId == context.locationID, self.routingMode == context.routingMode,
+                  self.vpnOperationGeneration == vpnGeneration, !self.isVpnBusy, !self.isDeviceBusy,
+                  !helper.isBusy, (self.activeTunnel ?? self.nativePSKPreparedTunnel) == previous else { return false }
+            return (try? self.ensureAuthenticatedSessionCurrent(generation: sessionGeneration,
+                        accessToken: token, accountID: owner.accountID)) != nil
+        }
+        isNativePSKPreparationBusy = true
+        nativePushEventError = nil
+        Task { [weak self] in
+            guard let self else { return }
+            defer { self.isNativePSKPreparationBusy = false }
+            do {
+                try await NativePSKPreparation.prepare(context: context, dependencies: .init(
+                    scopeIsCurrent: scopeIsCurrent,
+                    prepare: { [api] context, key in
+                        try await api.preparePSKRotation(accessToken: token, deviceID: context.deviceID,
+                            expectedProfileVersion: context.profileVersion, expectedLocationID: context.locationID,
+                            routingMode: context.routingMode, bypassRegion: context.bypassRegion,
+                            routingPolicyVersion: context.routingPolicyVersion, idempotencyKey: key)
+                    },
+                    enqueue: { [weak self] event in
+                        guard let self, scopeIsCurrent() else { throw NativePSKPreparation.Failure.scopeChanged }
+                        _ = try self.nativePushPSKQueue.enqueue(event, owner: owner)
+                        self.nativePushEventOwner = owner
+                    },
+                    processStagedEvents: { [weak self] in await self?.processNativePSKEvents() }
+                ))
+            } catch {
+                guard scopeIsCurrent() else { return }
+                self.nativePushEventError = "Не удалось подготовить смену ключа. Текущий профиль не заменён; повторите явно."
+            }
+        }
+    }
+
     func receivedNativeRemoteNotification(_ userInfo: [String: Any]) {
         guard canUseNativeRemotePush, nativeRemotePushEnabled, nativePushConsentMatchesSession,
               let aps = userInfo["aps"] as? [String: Any],
@@ -277,7 +351,7 @@ final class VEXAppState: ObservableObject {
                     bypassRegion: previous.bypassRegion)
                 // cutover may arrive after the staging deadline; signed policy expiry,
                 // exact event/version/device/digest and local client-key binding still apply.
-                let admissionEvent = NativePushPSKEvent(kind: .profile_updated, eventID: event.eventID,
+                let admissionEvent = NativePushPSKEvent(kind: event.kind, eventID: event.eventID,
                     rotationID: event.rotationID, deviceID: event.deviceID, profileVersion: event.profileVersion, deadlineAt: event.deadlineAt)
                 try NativePSKRotationValidation.validate(envelope: verified.envelope, event: admissionEvent,
                     managedDeviceID: deviceID, expectedClientPublicKey: self.profileService.existingStagedPSKClientPublicKey(),

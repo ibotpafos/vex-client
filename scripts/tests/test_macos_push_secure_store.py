@@ -75,7 +75,7 @@ import Darwin
 """
 with tempfile.TemporaryDirectory(prefix="vex-secure-store-") as td:
     td=Path(td).resolve(); fixture=td/"main.swift"; binary=td/"probe"; fixture.write_text(MAIN)
-    compiled=subprocess.run(["swiftc","-swift-version","5","-parse-as-library",str(STORE),str(QUEUE),str(fixture),"-o",str(binary)],text=True,capture_output=True)
+    compiled=subprocess.run(["swiftc", str(__import__("pathlib").Path(__file__).resolve().parents[2]/"macos-native/Sources/VEXNativeMac/Services/NativePSKIdentifier.swift"), "-swift-version","5","-parse-as-library",str(STORE),str(QUEUE),str(fixture),"-o",str(binary)],text=True,capture_output=True)
     print(compiled.stdout,end=""); print(compiled.stderr,end="",file=sys.stderr)
     if compiled.returncode: raise SystemExit(compiled.returncode)
     root=str(td/"root"); root="/private"+root if root.startswith("/var/") else root

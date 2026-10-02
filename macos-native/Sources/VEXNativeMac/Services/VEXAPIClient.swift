@@ -237,9 +237,38 @@ struct VEXAPIClient {
         return try await json("/v1/vpn/profile?\(queryString(query))", accessToken: accessToken)
     }
 
+    /// Explicit user preparation only. Never call from profile polling/connect.
+    /// The receipt is not a profile: signed fetch, durable staging and ACK remain mandatory.
+    func preparePSKRotation(
+        accessToken: String, deviceID: String, expectedProfileVersion: Int,
+        expectedLocationID: String, routingMode: VpnRoutingMode, bypassRegion: String?,
+        routingPolicyVersion: String, idempotencyKey: String
+    ) async throws -> PSKRotationPreparationReceipt {
+        guard !accessToken.isEmpty, NativePSKIdentifier.device(deviceID),
+              expectedProfileVersion > 0, expectedProfileVersion < Int.max,
+              !expectedLocationID.isEmpty, expectedLocationID.utf8.count <= 128,
+              expectedLocationID == expectedLocationID.trimmingCharacters(in: .whitespacesAndNewlines),
+              expectedLocationID.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }),
+              routingPolicyVersion.utf8.count <= 128,
+              routingPolicyVersion.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }),
+              !idempotencyKey.isEmpty, idempotencyKey.utf8.count <= 128,
+              idempotencyKey.unicodeScalars.allSatisfy({ CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_").contains($0) }),
+              (routingMode == .fullTunnel && bypassRegion == nil) ||
+              (routingMode == .allExceptRu && bypassRegion == "ru") else { throw VEXAPIError.invalidRequest }
+        var body: [String: Any] = [
+            "device_id": deviceID, "client_platform": "macos",
+            "expected_profile_version": expectedProfileVersion,
+            "expected_location_id": expectedLocationID, "routing_mode": routingMode.rawValue,
+        ]
+        if let bypassRegion { body["bypass_region"] = bypassRegion }
+        if !routingPolicyVersion.isEmpty { body["routing_policy_version"] = routingPolicyVersion }
+        return try await json("/v1/vpn/psk-rotations/prepare-routing", method: "POST",
+                              accessToken: accessToken, body: body, idempotencyKey: idempotencyKey)
+    }
+
     /// Fetches the inactive PSK profile staged for this managed server device.
     func currentPSKRotation(accessToken: String, deviceID: String) async throws -> PSKRotationCurrentResponse {
-        guard Self.isServerUUID(deviceID) else { throw VEXAPIError.invalidRequest }
+        guard NativePSKIdentifier.device(deviceID) else { throw VEXAPIError.invalidRequest }
         let query = queryString([
             URLQueryItem(name: "device_id", value: deviceID),
             URLQueryItem(name: "platform", value: "macos"),
@@ -255,8 +284,8 @@ struct VEXAPIClient {
         profileVersion: Int,
         profileDigest: String
     ) async throws -> PSKRotationACKResponse {
-        guard Self.isServerUUID(rotationID),
-              Self.isServerUUID(deviceID),
+        guard NativePSKIdentifier.rotation(rotationID),
+              NativePSKIdentifier.device(deviceID),
               profileVersion > 0,
               Self.isSHA256Digest(profileDigest) else {
             throw VEXAPIError.invalidRequest

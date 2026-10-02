@@ -29,7 +29,7 @@ struct NativePSKStagedProfileStore {
     }
 
     func stage(_ envelope: PSKRotationCurrentResponse, owner: NativePushPSKEventOwner, managedDeviceID: String, stagedAt: Date = Date()) throws {
-        guard valid(owner), validUUID(managedDeviceID), validEnvelope(envelope, managedDeviceID: managedDeviceID), stagedAt.timeIntervalSinceReferenceDate.isFinite else { throw CocoaError(.fileWriteInvalidFileName) }
+        guard valid(owner), NativePSKIdentifier.device(managedDeviceID), validEnvelope(envelope, managedDeviceID: managedDeviceID), stagedAt.timeIntervalSinceReferenceDate.isFinite else { throw CocoaError(.fileWriteInvalidFileName) }
         var sanitized = envelope
         sanitized.profile.config = nil
         let record = Record(schema: Self.schema, namespace: Self.namespace, ownerFingerprint: fingerprint(owner), managedDeviceID: managedDeviceID, rotationID: envelope.rotationID, envelope: sanitized, stagedAt: stagedAt)
@@ -61,7 +61,7 @@ struct NativePSKStagedProfileStore {
     }
 
     func load(owner: NativePushPSKEventOwner, managedDeviceID: String, rotationID: String) throws -> Record? {
-        guard valid(owner), validUUID(managedDeviceID), validUUID(rotationID) else { throw CocoaError(.fileReadInvalidFileName) }
+        guard valid(owner), NativePSKIdentifier.device(managedDeviceID), NativePSKIdentifier.rotation(rotationID) else { throw CocoaError(.fileReadInvalidFileName) }
         let store = NativePushSecureFileStore(rootURL: root, maxBytes: Self.maxBytes)
         try store.ensureDirectory()
         guard let data = try store.read(fileName(owner: owner, managedDeviceID: managedDeviceID, rotationID: rotationID)) else { return nil }
@@ -70,7 +70,7 @@ struct NativePSKStagedProfileStore {
 
     /// Removes only the exact owned stage; never enumerates neighbouring ownership namespaces.
     func purge(owner: NativePushPSKEventOwner, managedDeviceID: String, rotationID: String) throws {
-        guard valid(owner), validUUID(managedDeviceID), validUUID(rotationID) else { throw CocoaError(.fileWriteInvalidFileName) }
+        guard valid(owner), NativePSKIdentifier.device(managedDeviceID), NativePSKIdentifier.rotation(rotationID) else { throw CocoaError(.fileWriteInvalidFileName) }
         let store = NativePushSecureFileStore(rootURL: root, maxBytes: Self.maxBytes)
         try store.remove(fileName(owner: owner, managedDeviceID: managedDeviceID, rotationID: rotationID))
         var index = try loadIndex(owner: owner, store: store)
@@ -92,7 +92,7 @@ struct NativePSKStagedProfileStore {
         guard let data = try store.read(indexFileName(owner: owner)) else { return OwnerIndex(schema: Self.schema, namespace: Self.indexNamespace, ownerFingerprint: fingerprint(owner), tuples: []) }
         guard data.count <= Self.maxIndexBytes else { throw CocoaError(.fileReadCorruptFile) }
         let index: OwnerIndex; do { index = try JSONDecoder().decode(OwnerIndex.self, from: data) } catch { throw CocoaError(.fileReadCorruptFile) }
-        guard index.schema == Self.schema, index.namespace == Self.indexNamespace, index.ownerFingerprint == fingerprint(owner), index.tuples.count <= Self.maxTuples, Set(index.tuples).count == index.tuples.count, index.tuples.allSatisfy({ validUUID($0.managedDeviceID) && validUUID($0.rotationID) }) else { throw CocoaError(.fileReadCorruptFile) }
+        guard index.schema == Self.schema, index.namespace == Self.indexNamespace, index.ownerFingerprint == fingerprint(owner), index.tuples.count <= Self.maxTuples, Set(index.tuples).count == index.tuples.count, index.tuples.allSatisfy({ NativePSKIdentifier.device($0.managedDeviceID) && NativePSKIdentifier.rotation($0.rotationID) }) else { throw CocoaError(.fileReadCorruptFile) }
         return index
     }
     private func writeIndex(_ index: OwnerIndex, owner: NativePushPSKEventOwner, store: NativePushSecureFileStore) throws {
@@ -170,7 +170,7 @@ struct NativePSKStagedProfileStore {
         return bytes.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "") == value ? bytes : nil
     }
     private func validEnvelope(_ value: PSKRotationCurrentResponse, managedDeviceID: String) -> Bool {
-        guard !value.activate, value.currentVersion > 0, value.profileVersion > value.currentVersion, validUUID(value.rotationID), validDate(value.deadlineAt), value.profile.version == value.profileVersion, value.profile.deviceId == managedDeviceID, value.profile.revoked != true, value.profile.unchanged != true, validPSK(value.profile.presharedKey), value.profile.config == nil, value.profile.authorization.map({ validAuthorization(algorithm: $0.algorithm, keyID: $0.keyID, payload: $0.payloadBase64, signature: $0.signatureBase64) }) ?? true else { return false }
+        guard !value.activate, value.currentVersion > 0, value.profileVersion > value.currentVersion, NativePSKIdentifier.rotation(value.rotationID), validDate(value.deadlineAt), value.profile.version == value.profileVersion, value.profile.deviceId == managedDeviceID, value.profile.revoked != true, value.profile.unchanged != true, validPSK(value.profile.presharedKey), value.profile.config == nil, value.profile.authorization.map({ validAuthorization(algorithm: $0.algorithm, keyID: $0.keyID, payload: $0.payloadBase64, signature: $0.signatureBase64) }) ?? true else { return false }
         let prefix = "sha256:"; let digest = value.profileDigest
         guard digest.hasPrefix(prefix), digest.utf8.count == prefix.utf8.count + 64 else { return false }
         return digest.dropFirst(prefix.count).utf8.allSatisfy { ($0 >= 48 && $0 <= 57) || ($0 >= 65 && $0 <= 70) || ($0 >= 97 && $0 <= 102) }

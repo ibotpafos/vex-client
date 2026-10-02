@@ -150,7 +150,7 @@ with tempfile.TemporaryDirectory(prefix="vex-push-consent-") as directory:
     executable = directory / "fixture"
     swift.write_text(fixture)
     compile_result = subprocess.run(
-        ["swiftc", "-swift-version", "5", "-parse-as-library", str(MODELS), str(ROOT / "macos-native/Sources/VEXNativeMac/Services/NativePushSecureFileStore.swift"), str(ROOT / "macos-native/Sources/VEXNativeMac/Services/NativePushPSKEventQueue.swift"), str(STAGE_STORE), str(swift), "-o", str(executable)],
+        ["swiftc", str(__import__("pathlib").Path(__file__).resolve().parents[2]/"macos-native/Sources/VEXNativeMac/Services/NativePSKIdentifier.swift"),  "-swift-version", "5", "-parse-as-library", str(MODELS), str(ROOT / "macos-native/Sources/VEXNativeMac/Services/NativePushSecureFileStore.swift"), str(ROOT / "macos-native/Sources/VEXNativeMac/Services/NativePushPSKEventQueue.swift"), str(STAGE_STORE), str(swift), "-o", str(executable)],
         text=True, capture_output=True,
     )
     print(compile_result.stdout, end="")

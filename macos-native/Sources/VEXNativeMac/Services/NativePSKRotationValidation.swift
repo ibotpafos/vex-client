@@ -7,8 +7,8 @@ enum NativePSKRotationValidation {
     enum Failure: Error, Equatable { case malformed, eventMismatch, expired, untrustedAuthorization, digestMismatch }
 
     static func validate(envelope: PSKRotationCurrentResponse, event: NativePushPSKEvent, managedDeviceID: String, expectedClientPublicKey: String?, now: Date = Date(), requireStagingDeadline: Bool = true) throws {
-        guard event.kind == .profile_updated,
-              uuid(managedDeviceID), uuid(envelope.rotationID), uuid(event.eventID),
+        guard (!requireStagingDeadline || event.kind == .profile_updated),
+              NativePSKIdentifier.device(managedDeviceID), NativePSKIdentifier.rotation(envelope.rotationID), NativePSKIdentifier.event(event.eventID, rotationID: event.rotationID, kind: event.kind.rawValue),
               envelope.rotationID == event.rotationID, event.deviceID == managedDeviceID,
               event.profileVersion == envelope.profileVersion,
               !envelope.activate, envelope.currentVersion > 0, envelope.profileVersion > envelope.currentVersion,
@@ -34,7 +34,6 @@ enum NativePSKRotationValidation {
         guard serverStableDigest(envelope.profile) == envelope.profileDigest else { throw Failure.digestMismatch }
     }
 
-    private static func uuid(_ v: String) -> Bool { UUID(uuidString: v) != nil }
     private static func key(_ v: String) -> Bool { guard let d = Data(base64Encoded: v), d.count == 32 else { return false }; return d.base64EncodedString() == v }
     private static func date(_ raw: String) -> Date? { let a = ISO8601DateFormatter(); a.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; let b = ISO8601DateFormatter(); b.formatOptions = [.withInternetDateTime]; return a.date(from: raw) ?? b.date(from: raw) }
     private static func endpoint(_ server: String, _ port: Int?) -> Bool {

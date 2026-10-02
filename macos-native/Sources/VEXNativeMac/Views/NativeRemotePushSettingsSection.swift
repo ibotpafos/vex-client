@@ -27,6 +27,13 @@ struct NativeRemotePushSettingsSection: View {
             Button("Повторить регистрацию") { appState.retryNativePushRegistration() }
                 .buttonStyle(.vexGlass)
                 .disabled(!appState.canUseNativeRemotePush || !appState.nativeRemotePushEnabled)
+            Button(appState.isNativePSKPreparationBusy ? "Подготавливаем смену ключа…" : "Подготовить смену ключа VPN") {
+                appState.prepareNativePSKRotation()
+            }
+                .buttonStyle(.vexGlass)
+                .disabled(!appState.canPrepareNativePSKRotation)
+            Text("Только для текущего собственного профиля Mac. Подготовка не включает новый профиль: подпись, сохранение, ACK и подтверждение сервера обязательны.")
+                .font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.vexSecondaryText)
         }
     }
 

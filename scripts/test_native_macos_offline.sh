@@ -6,6 +6,7 @@ trap 'rm -rf "$BUILD"' EXIT
 SOURCES="$ROOT/macos-native/Sources/VEXNativeMac"
 swiftc -swift-version 5 -parse-as-library -o "$BUILD/offline" \
   "$SOURCES/Models/VEXModels.swift" \
+  "$SOURCES/Services/NativePSKIdentifier.swift" \
   "$SOURCES/Services/VEXAPIClient.swift" \
   "$SOURCES/Services/HelperDisconnectConfirmation.swift" \
   "$SOURCES/Services/CustomerRealtimeService.swift" \
@@ -38,6 +39,7 @@ python3 "$ROOT/scripts/tests/test_macos_push_event_queue.py"
 python3 "$ROOT/scripts/tests/test_macos_push_event_intake.py"
 python3 "$ROOT/scripts/tests/test_macos_push_secure_store.py"
 python3 "$ROOT/scripts/tests/test_macos_psk_rotation_api_contract.py"
+python3 "$ROOT/scripts/tests/test_macos_psk_preparation.py"
 python3 "$ROOT/scripts/tests/test_macos_explicit_signing.py"
 python3 "$ROOT/scripts/tests/test_macos_signing_order.py"
 python3 "$ROOT/scripts/tests/test_macos_public_anchor_packaging.py"

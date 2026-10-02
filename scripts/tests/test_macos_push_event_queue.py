@@ -39,7 +39,7 @@ MAIN = r'''import Foundation
 '''
 with tempfile.TemporaryDirectory(prefix='vex-native-push-queue-') as directory:
     directory = Path(directory).resolve(); fixture = directory / 'main.swift'; binary = directory / 'probe'; fixture.write_text(MAIN)
-    compiled = subprocess.run(['swiftc', '-swift-version', '5', '-parse-as-library', str(STORE), str(SOURCE), str(fixture), '-o', str(binary)], text=True, capture_output=True)
+    compiled = subprocess.run(['swiftc', str(__import__("pathlib").Path(__file__).resolve().parents[2]/"macos-native/Sources/VEXNativeMac/Services/NativePSKIdentifier.swift"),  '-swift-version', '5', '-parse-as-library', str(STORE), str(SOURCE), str(fixture), '-o', str(binary)], text=True, capture_output=True)
     print(compiled.stdout, end=''); print(compiled.stderr, end='', file=sys.stderr)
     if compiled.returncode: raise SystemExit(compiled.returncode)
     app_data = str(directory / 'app-data'); app_data = '/private' + app_data if app_data.startswith('/var/') else app_data

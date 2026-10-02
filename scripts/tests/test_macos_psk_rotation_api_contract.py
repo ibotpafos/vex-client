@@ -100,7 +100,7 @@ with tempfile.TemporaryDirectory(prefix="vex-psk-api-") as directory:
     main = directory / "main.swift"
     binary = directory / "probe"
     main.write_text(fixture)
-    compiled = subprocess.run(["swiftc", "-swift-version", "5", "-parse-as-library", str(MODELS), str(API), str(main), "-o", str(binary)], text=True, capture_output=True)
+    compiled = subprocess.run(["swiftc", str(__import__("pathlib").Path(__file__).resolve().parents[2]/"macos-native/Sources/VEXNativeMac/Services/NativePSKIdentifier.swift"),  "-swift-version", "5", "-parse-as-library", str(MODELS), str(API), str(main), "-o", str(binary)], text=True, capture_output=True)
     print(compiled.stdout, end="")
     print(compiled.stderr, end="", file=sys.stderr)
     print("models_sha256=" + hashlib.sha256(MODELS.read_bytes()).hexdigest())

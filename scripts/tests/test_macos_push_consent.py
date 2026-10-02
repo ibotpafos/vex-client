@@ -60,6 +60,7 @@ struct FixtureSession {{ var user: FixtureUser; var accessToken: String }}
     let nativePushIdentityStore = FixtureIdentity()
     let nativePushPSKQueue = NativePushPSKEventQueue(appDataURL: URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true))
     let nativePSKStageStore = NativePSKStagedProfileStore(appDataURL: URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true))
+    let nativeProtectedPromotionStore = NativeProtectedPromotionStore(appDataURL: URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true))
     var nativePSKRetryTask: Task<Void, Never>?
     var nativePSKPreparedTunnel: PreparedTunnel?
     var nativeNormalPendingTunnel: PreparedTunnel?
@@ -162,13 +163,18 @@ struct FixtureSession {{ var user: FixtureUser; var accessToken: String }}
 }}
 '''
 
+promotion_store = ROOT / "macos-native/Sources/VEXNativeMac/Services/NativeProtectedPromotionStore.swift"
+promotion_sources = [str(promotion_store),str(ROOT / "macos-native/Sources/VEXNativeMac/Services/NativeProtectedReplacementCoordinator.swift")] if promotion_store.exists() else []
+if not promotion_store.exists():
+    fixture += "\nstruct NativeProtectedPromotionStore { init(appDataURL:URL){};func purge(accountID:String,installationID:String)throws{} }\n"
+
 with tempfile.TemporaryDirectory(prefix="vex-push-consent-") as directory:
     directory = Path(directory)
     swift = directory / "main.swift"
     executable = directory / "fixture"
     swift.write_text(fixture)
     compile_result = subprocess.run(
-        ["swiftc", str(__import__("pathlib").Path(__file__).resolve().parents[2]/"macos-native/Sources/VEXNativeMac/Services/NativePSKIdentifier.swift"),  "-swift-version", "5", "-parse-as-library", str(MODELS), str(ROOT / "macos-native/Sources/VEXNativeMac/Services/NativePushSecureFileStore.swift"), str(ROOT / "macos-native/Sources/VEXNativeMac/Services/NativePushPSKEventQueue.swift"), str(STAGE_STORE), str(swift), "-o", str(executable)],
+        ["rtk", "proxy", "swiftc", str(__import__("pathlib").Path(__file__).resolve().parents[2]/"macos-native/Sources/VEXNativeMac/Services/NativePSKIdentifier.swift"),  "-swift-version", "5", "-parse-as-library", str(MODELS), str(ROOT / "macos-native/Sources/VEXNativeMac/Services/NativePushSecureFileStore.swift"), str(ROOT / "macos-native/Sources/VEXNativeMac/Services/NativePushPSKEventQueue.swift"), str(STAGE_STORE), *promotion_sources, str(swift), "-o", str(executable)],
         text=True, capture_output=True,
     )
     print(compile_result.stdout, end="")

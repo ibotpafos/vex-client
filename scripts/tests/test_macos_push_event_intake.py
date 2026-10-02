@@ -75,6 +75,7 @@ final class DisposableIdentityStore {{
     let nativePushIdentityStore: DisposableIdentityStore
     let nativePushPSKQueue: NativePushPSKEventQueue
     let nativePSKStageStore: NativePSKStagedProfileStore
+    let nativeProtectedPromotionStore: NativeProtectedPromotionStore
     var nativePSKRetryTask: Task<Void, Never>?
     var profileWarmupTask: Task<Void, Never>?
     let profileService = InertNormalProfileService()
@@ -86,6 +87,7 @@ final class DisposableIdentityStore {{
         nativePushIdentityStore = DisposableIdentityStore("install-A")
         nativePushPSKQueue = NativePushPSKEventQueue(appDataURL: root)
         nativePSKStageStore = NativePSKStagedProfileStore(appDataURL: root)
+        nativeProtectedPromotionStore = NativeProtectedPromotionStore(appDataURL: root)
         self.recorder = recorder
     }}
 
@@ -143,10 +145,11 @@ func drain() async {{ for _ in 0..<32 {{ await Task.yield() }} }}
     let nativePushIdentityStore = DisposableIdentityStore("install-A")
     let nativePushPSKQueue: NativePushPSKEventQueue
     let nativePSKStageStore: NativePSKStagedProfileStore
+    let nativeProtectedPromotionStore: NativeProtectedPromotionStore
     var nativePSKRetryTask: Task<Void, Never>?
     var nativePSKPreparedTunnel: PreparedTunnel?
     func startNativePSKRetryIfNeeded() {{}}
-    init(root: URL) {{ nativePushPSKQueue = NativePushPSKEventQueue(appDataURL: root); nativePSKStageStore = NativePSKStagedProfileStore(appDataURL: root) }}
+    init(root: URL) {{ nativePushPSKQueue = NativePushPSKEventQueue(appDataURL: root); nativePSKStageStore = NativePSKStagedProfileStore(appDataURL: root); nativeProtectedPromotionStore = NativeProtectedPromotionStore(appDataURL: root) }}
 {set_enabled}
 {reconcile}
 {fingerprint}
@@ -255,6 +258,11 @@ func drain() async {{ for _ in 0..<32 {{ await Task.yield() }} }}
 }}
 '''
 
+promotion_store = ROOT / "macos-native/Sources/VEXNativeMac/Services/NativeProtectedPromotionStore.swift"
+promotion_sources = [str(promotion_store),str(ROOT / "macos-native/Sources/VEXNativeMac/Services/NativeProtectedReplacementCoordinator.swift")] if promotion_store.exists() else []
+if not promotion_store.exists():
+    fixture += "\nstruct NativeProtectedPromotionStore { init(appDataURL:URL){};func purge(accountID:String,installationID:String)throws{} }\n"
+
 with tempfile.TemporaryDirectory(prefix="vex-native-push-intake-", dir=os.environ.get("TMPDIR", "/private/tmp")) as directory:
     # Canonicalize the existing directory before appending the nonexistent
     # app-data leaf; secure stores intentionally reject macOS /tmp symlinks.
@@ -263,7 +271,7 @@ with tempfile.TemporaryDirectory(prefix="vex-native-push-intake-", dir=os.enviro
     main = directory / "main.swift"
     binary = directory / "probe"
     main.write_text(fixture)
-    compiled = subprocess.run(["swiftc", str(__import__("pathlib").Path(__file__).resolve().parents[2]/"macos-native/Sources/VEXNativeMac/Services/NativePSKIdentifier.swift"),  "-swift-version", "5", "-parse-as-library", str(MODELS), str(SECURE_STORE), str(QUEUE), str(STAGE_STORE), str(main), "-o", str(binary)], text=True, capture_output=True)
+    compiled = subprocess.run(["rtk", "proxy", "swiftc", str(__import__("pathlib").Path(__file__).resolve().parents[2]/"macos-native/Sources/VEXNativeMac/Services/NativePSKIdentifier.swift"),  "-swift-version", "5", "-parse-as-library", str(MODELS), str(SECURE_STORE), str(QUEUE), str(STAGE_STORE), *promotion_sources, str(main), "-o", str(binary)], text=True, capture_output=True)
     print(compiled.stdout, end="")
     print(compiled.stderr, end="", file=sys.stderr)
     print("appstate_source_sha256=" + hashlib.sha256(APP.read_bytes()).hexdigest())

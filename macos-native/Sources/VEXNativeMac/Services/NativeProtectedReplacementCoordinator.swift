@@ -11,13 +11,26 @@ final class NativeProtectedReplacementCoordinator {
         var stageCandidate: () throws -> Void
         var restoreSource: () throws -> Void
         var wait: () async throws -> Void = { try await Task.sleep(nanoseconds: 500_000_000) }
+        var persistence: Persistence? = nil
     }
+
+    /// Metadata only: exact hashes/nonce and current process+intent, never keys,
+    /// raw tokens, config, or permission to attach a different helper owner.
+    struct Persistence {
+        let scopeFingerprint: String
+        let processInstanceID: String
+        let generation: Int
+        var load: () throws -> Data?
+        var save: (Data) throws -> Void
+        var remove: (Data) throws -> Void
+    }
+    static let processInstanceID = UUID().uuidString
 
     enum Failure: Error {
-        case staleIntent, sourceMismatch, invalidResponse, recoveryPending, sourceRestored, handshakeTimeout
+        case staleIntent, sourceMismatch, invalidResponse, recoveryPending, sourceRestored, handshakeTimeout, persistenceUnavailable
     }
 
-    struct Receipt: Equatable {
+    struct Receipt: Codable, Equatable {
         let transactionID: String
         let candidateSHA256: String
         let latestHandshake: UInt64
@@ -31,7 +44,7 @@ final class NativeProtectedReplacementCoordinator {
         }
     }
 
-    private struct Transaction {
+    private struct Transaction: Codable, Equatable {
         let id: String
         let source: String
         let candidate: String
@@ -42,11 +55,22 @@ final class NativeProtectedReplacementCoordinator {
             "transaction_id=\(id) source_sha256=\(source) candidate_sha256=\(candidate) owner_token_sha256=\(owner)"
         }
     }
-    // TODO: Add durable app-side intent/cache reconciliation and explicitly authorized ownership transfer after an app-process
-    // crash. Never adopt an old process's journal merely because its PID died;
+    private struct StoredIntent: Codable {
+        let schema: Int
+        let scopeFingerprint: String
+        let processInstanceID: String
+        let generation: Int
+        let transaction: Transaction
+        let receipt: Receipt?
+    }
+    // TODO: Add explicitly authorized cross-process ownership transfer and full
+    // app-crash material/intent reconciliation. Retained metadata is NOT admission.
+    // Never adopt an old process's journal merely because its PID died;
     // restart/ownership-transfer acceptance requires the isolated runtime gate.
     private var pending: Transaction?
     private var committed: (transaction: Transaction, receipt: Receipt)?
+    private var activePersistence: Persistence?
+    private(set) var hasUnconfirmedDurableWrite = false
     var hasPendingTransaction: Bool { pending != nil }
 
     static func digest(_ text: String) -> String {
@@ -68,6 +92,20 @@ final class NativeProtectedReplacementCoordinator {
     func replace(sourceSHA256: String, candidateSHA256: String, sourceOwnerTokenSHA256: String? = nil,
                  dependencies d: Dependencies) async throws -> Receipt {
         try current(d)
+        if let persistence = d.persistence {
+            try validatePersistence(persistence)
+            if let stored = try loadIntent(persistence) {
+                guard stored.transaction.source == sourceSHA256, stored.transaction.candidate == candidateSHA256,
+                      stored.transaction.owner == sourceOwnerTokenSHA256,
+                      pending == nil || pending?.id == stored.transaction.id else { throw Failure.recoveryPending }
+                pending = stored.transaction
+            } else if pending != nil || committed != nil {
+                throw Failure.persistenceUnavailable
+            }
+            activePersistence = persistence
+        } else if activePersistence != nil {
+            throw Failure.persistenceUnavailable
+        }
         if let pending {
             guard pending.source == sourceSHA256 else { throw Failure.recoveryPending }
             if pending.supportsCommitReceipt && pending.commitResponseUncertain {
@@ -94,6 +132,10 @@ final class NativeProtectedReplacementCoordinator {
         }
         var transaction = Transaction(id: id, source: sourceSHA256, candidate: candidateSHA256, owner: owner,
                                       supportsCommitReceipt: snapshot["commit_receipt_protocol"] == "1")
+        if d.persistence != nil {
+            guard transaction.supportsCommitReceipt, sourceOwnerTokenSHA256 == owner else { throw Failure.persistenceUnavailable }
+            try persistIntent(transaction, receipt: nil)
+        }
         try current(d)
         try d.stageCandidate()
         try current(d)
@@ -107,11 +149,13 @@ final class NativeProtectedReplacementCoordinator {
                 try current(d)
                 transaction.commitResponseUncertain = true
                 pending = transaction
+                try persistIntent(transaction, receipt: nil)
                 let response = try await d.send("protected-commit " + transaction.metadata, 15)
                 try current(d)
                 if response == "error: protected replacement awaiting fresh handshake\n" {
                     transaction.commitResponseUncertain = false
                     pending = transaction
+                    try persistIntent(transaction, receipt: nil)
                     try await d.wait()
                     continue
                 }
@@ -125,6 +169,7 @@ final class NativeProtectedReplacementCoordinator {
                 let receipt = Receipt(transactionID: id, candidateSHA256: candidateSHA256,
                                       latestHandshake: handshake, ownerTokenSHA256: owner)
                 self.committed = (transaction, receipt)
+                persistConfirmedIntent(transaction, receipt: receipt)
                 return receipt
             }
             throw Failure.handshakeTimeout
@@ -149,7 +194,20 @@ final class NativeProtectedReplacementCoordinator {
     /// this coordinator and the authenticated helper must still own its exact
     /// candidate bytes. A cached UI status is not sufficient evidence.
     func revalidateCommitted(_ receipt: Receipt, isCurrent: () -> Bool,
-        send: (String, Int) async throws -> String) async throws {
+        send: (String, Int) async throws -> String, persistence: Persistence? = nil) async throws {
+        if let persistence {
+            guard !Task.isCancelled, isCurrent(), pending == nil else { throw Failure.staleIntent }
+            guard let stored = try loadIntent(persistence), matches(receipt, transaction: stored.transaction),
+                  stored.receipt == nil || stored.receipt == receipt else { throw Failure.recoveryPending }
+            // Disk metadata grants nothing. The exact authenticated root receipt
+            // below is required even when the coordinator was reconstructed.
+            let proof = try await durableCommitReceipt(stored.transaction, isCurrent: isCurrent, send: send)
+            guard !Task.isCancelled, isCurrent(), pending == nil, proof == receipt,
+                  try persistence.load() == encode(stored) else { throw Failure.staleIntent }
+            activePersistence = persistence
+            committed = (stored.transaction, receipt)
+            return
+        } else if activePersistence != nil { throw Failure.persistenceUnavailable }
         guard !Task.isCancelled, isCurrent(), pending == nil,
               let committed, committed.receipt == receipt else { throw Failure.staleIntent }
         if committed.transaction.supportsCommitReceipt {
@@ -191,7 +249,100 @@ final class NativeProtectedReplacementCoordinator {
               pending?.candidate == transaction.candidate, pending?.owner == transaction.owner else { throw Failure.staleIntent }
         pending = nil
         committed = (transaction, receipt)
+        persistConfirmedIntent(transaction, receipt: receipt)
         return receipt
+    }
+
+    /// Called only after the exact confirmed candidate was saved to the app cache.
+    /// Removal failure retains evidence and the receipt for a cache-only retry.
+    func completeCommitted(_ receipt: Receipt, persistence: Persistence) throws {
+        guard !Task.isCancelled, pending == nil, committed?.receipt == receipt,
+              let stored = try loadIntent(persistence), matches(receipt, transaction: stored.transaction),
+              stored.receipt == nil || stored.receipt == receipt else { throw Failure.recoveryPending }
+        let bytes = try encode(stored)
+        try persistence.remove(bytes)
+        guard try persistence.load() == nil else { throw Failure.persistenceUnavailable }
+        committed = nil
+        activePersistence = nil
+        hasUnconfirmedDurableWrite = false
+    }
+
+    private func matches(_ receipt: Receipt, transaction: Transaction) -> Bool {
+        receipt.transactionID == transaction.id && receipt.candidateSHA256 == transaction.candidate
+            && receipt.ownerTokenSHA256 == transaction.owner && receipt.latestHandshake > 0
+    }
+
+    private func validatePersistence(_ persistence: Persistence) throws {
+        guard Self.isDigest(persistence.scopeFingerprint), persistence.generation >= 0,
+              persistence.processInstanceID == Self.processInstanceID else { throw Failure.staleIntent }
+        if let activePersistence {
+            guard activePersistence.scopeFingerprint == persistence.scopeFingerprint,
+                  activePersistence.processInstanceID == persistence.processInstanceID,
+                  activePersistence.generation == persistence.generation else { throw Failure.staleIntent }
+        }
+    }
+
+    private func encode(_ value: StoredIntent) throws -> Data {
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        var data = try encoder.encode(value); data.append(10)
+        guard data.count <= 16_384 else { throw Failure.persistenceUnavailable }
+        return data
+    }
+
+    static func requireSamePersistentIdentity(_ existing: Data, _ replacement: Data) throws {
+        guard existing.count <= 16_384, replacement.count <= 16_384,
+              let old = try? JSONDecoder().decode(StoredIntent.self, from: existing),
+              let new = try? JSONDecoder().decode(StoredIntent.self, from: replacement),
+              old.schema == 1, new.schema == 1, old.scopeFingerprint == new.scopeFingerprint,
+              old.processInstanceID == new.processInstanceID, old.generation == new.generation,
+              old.transaction.id == new.transaction.id, old.transaction.source == new.transaction.source,
+              old.transaction.candidate == new.transaction.candidate, old.transaction.owner == new.transaction.owner,
+              old.transaction.supportsCommitReceipt == new.transaction.supportsCommitReceipt,
+              old.receipt == nil || old.receipt == new.receipt else { throw Failure.persistenceUnavailable }
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        var canonical = try encoder.encode(old); canonical.append(10)
+        guard canonical == existing else { throw Failure.persistenceUnavailable }
+    }
+
+    static func requireValidPersistentPayload(_ data: Data, scopeFingerprint: String, generation: Int) throws {
+        let persistence = Persistence(scopeFingerprint: scopeFingerprint, processInstanceID: processInstanceID,
+            generation: generation, load: { data }, save: { _ in throw Failure.persistenceUnavailable },
+            remove: { _ in throw Failure.persistenceUnavailable })
+        guard try NativeProtectedReplacementCoordinator().loadIntent(persistence) != nil else { throw Failure.persistenceUnavailable }
+    }
+
+    private func loadIntent(_ persistence: Persistence) throws -> StoredIntent? {
+        try validatePersistence(persistence)
+        guard let bytes = try persistence.load() else { return nil }
+        guard bytes.count <= 16_384, let value = try? JSONDecoder().decode(StoredIntent.self, from: bytes),
+              value.schema == 1, value.scopeFingerprint == persistence.scopeFingerprint,
+              value.processInstanceID == persistence.processInstanceID, value.generation == persistence.generation,
+              value.transaction.supportsCommitReceipt,
+              UUID(uuidString: value.transaction.id)?.uuidString == value.transaction.id,
+              Self.isDigest(value.transaction.source), Self.isDigest(value.transaction.candidate), Self.isDigest(value.transaction.owner),
+              value.transaction.source != value.transaction.candidate,
+              value.receipt.map({ matches($0, transaction: value.transaction) && value.transaction.commitResponseUncertain
+                  && $0.latestHandshake <= UInt64(max(0, Date().timeIntervalSince1970)) + 1 }) ?? true,
+              (try? encode(value)) == bytes else { throw Failure.persistenceUnavailable }
+        return value
+    }
+
+    private func persistIntent(_ transaction: Transaction, receipt: Receipt?) throws {
+        guard let persistence = activePersistence else { return }
+        let value = StoredIntent(schema: 1, scopeFingerprint: persistence.scopeFingerprint,
+            processInstanceID: persistence.processInstanceID, generation: persistence.generation, transaction: transaction, receipt: receipt)
+        let data = try encode(value)
+        try persistence.save(data)
+        guard try persistence.load() == data else { throw Failure.persistenceUnavailable }
+        hasUnconfirmedDurableWrite = false
+    }
+
+    private func persistConfirmedIntent(_ transaction: Transaction, receipt: Receipt) {
+        // Never turn an observed physical commit into a fake rollback or retain
+        // the old UI profile solely because an app metadata write failed. The
+        // already durable pre-commit nonce still permits exact root proof retry.
+        do { try persistIntent(transaction, receipt: receipt) }
+        catch { hasUnconfirmedDurableWrite = true }
     }
 
     private func recover(_ transaction: Transaction, dependencies d: Dependencies) async throws {
@@ -217,6 +368,12 @@ final class NativeProtectedReplacementCoordinator {
         }
         try current(d)
         try d.restoreSource()
+        if let persistence = activePersistence {
+            guard let stored = try loadIntent(persistence), stored.transaction.id == transaction.id else { throw Failure.persistenceUnavailable }
+            try persistence.remove(try encode(stored))
+            guard try persistence.load() == nil else { throw Failure.persistenceUnavailable }
+            activePersistence = nil
+        }
         pending = nil
     }
 

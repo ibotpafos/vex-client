@@ -101,7 +101,7 @@ final class VEXHelperModel: ObservableObject {
 
     func replaceProfilePreservingProtection(sourceSHA256: String, candidateSHA256: String, sourceOwnerTokenSHA256: String? = nil,
         stageCandidate: @escaping () throws -> Void, restoreSource: @escaping () throws -> Void,
-        isCurrent: @escaping () -> Bool) async throws -> NativeProtectedReplacementCoordinator.Receipt {
+        isCurrent: @escaping () -> Bool, persistence: NativeProtectedReplacementCoordinator.Persistence? = nil) async throws -> NativeProtectedReplacementCoordinator.Receipt {
         guard canUseExistingValidatedHelper, !isBusy, isCurrent() else {
             throw NativeProtectedReplacementCoordinator.Failure.staleIntent
         }
@@ -113,13 +113,13 @@ final class VEXHelperModel: ObservableObject {
                 self?.canUseExistingValidatedHelper == true && isCurrent()
             }, send: { [client] command, timeout in
                 try await client.send(command, timeoutSeconds: timeout)
-            }, stageCandidate: stageCandidate, restoreSource: restoreSource))
+            }, stageCandidate: stageCandidate, restoreSource: restoreSource, persistence: persistence))
         _ = await refreshStatus(quiet: true)
         return result
     }
 
     func revalidateProtectedCommit(_ receipt: NativeProtectedReplacementCoordinator.Receipt,
-        isCurrent: @escaping () -> Bool) async throws {
+        isCurrent: @escaping () -> Bool, persistence: NativeProtectedReplacementCoordinator.Persistence? = nil) async throws {
         guard canUseExistingValidatedHelper, !isBusy, isCurrent() else {
             throw NativeProtectedReplacementCoordinator.Failure.staleIntent
         }
@@ -129,7 +129,15 @@ final class VEXHelperModel: ObservableObject {
             self?.canUseExistingValidatedHelper == true && isCurrent()
         }, send: { [client] command, timeout in
             try await client.send(command, timeoutSeconds: timeout)
-        })
+        }, persistence: persistence)
+    }
+
+    func finishProtectedPromotion(_ receipt: NativeProtectedReplacementCoordinator.Receipt,
+        persistence: NativeProtectedReplacementCoordinator.Persistence, isCurrent: () -> Bool) throws {
+        guard canUseExistingValidatedHelper, !isBusy, isCurrent() else {
+            throw NativeProtectedReplacementCoordinator.Failure.staleIntent
+        }
+        try protectedReplacement.completeCommitted(receipt, persistence: persistence)
     }
 
     /// A failed read can retain the last UI status for continuity, but that cached

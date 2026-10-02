@@ -78,13 +78,16 @@ final class VEXAppState: ObservableObject {
     private lazy var nativePushPSKQueue = NativePushPSKEventQueue()
     private let nativePushIdentityStore = VEXDeviceIdentityStore()
     private lazy var nativePSKStageStore = NativePSKStagedProfileStore()
+    private lazy var nativeProtectedPromotionStore = NativeProtectedPromotionStore()
     private lazy var nativePSKConsumer = NativePSKEventConsumer(queue: nativePushPSKQueue, store: nativePSKStageStore)
     private let nativePSKVerifier = NativeVPNProfileAuthorizationVerifier.bundled()
     private weak var nativePSKHelper: VEXHelperModel?
     private var nativePSKPreparedTunnel: PreparedTunnel?
-    // Memory-only confirmed receipt, bound to the original owner and intent.
-    // TODO: Persist/reconcile authenticated commit receipts across app crashes;
-    // cross-process ownership transfer still requires isolated acceptance.
+    // Exact sensitive source/candidate material remains memory-only. The private
+    // durable nonce/hash/intent record fences repeats and survives coordinator
+    // reconstruction; it is never a substitute for signed-profile/root proof.
+    // TODO: Reconcile full app-crash material with explicitly authorized ownership
+    // transfer on an isolated Mac; do not adopt another process from disk metadata.
     private var nativePSKCommittedPromotion: (
         source: PreparedTunnel, candidate: PreparedTunnel, owner: NativePushPSKEventOwner,
         receipt: NativeProtectedReplacementCoordinator.Receipt, generation: Int,
@@ -709,9 +712,12 @@ final class VEXAppState: ObservableObject {
                 return promotion.isCurrent()
                     && self.nativePSKCommittedPromotion?.receipt == promotion.receipt
             }
-            try await helper.revalidateProtectedCommit(promotion.receipt, isCurrent: current)
+            let persistence = try nativePSKPromotionPersistence(previous: previous, next: next, owner: owner,
+                helper: helper, generation: promotion.generation, sessionGeneration: sessionGeneration, token: token)
+            try await helper.revalidateProtectedCommit(promotion.receipt, isCurrent: current, persistence: persistence)
             guard current() else { throw AuthenticatedOperationError.sessionChanged }
             try profileService.promoteStagedPSKProfile(next, owner: owner)
+            try helper.finishProtectedPromotion(promotion.receipt, persistence: persistence, isCurrent: current)
             nativePSKCommittedPromotion = nil
             nativePushEventError = nil
             return promotion.generation
@@ -732,8 +738,14 @@ final class VEXAppState: ObservableObject {
         isVpnBusy = true
         defer { isVpnBusy = false }
         desiredVpnState = .connected
-        vpnOperationGeneration += 1
+        // A retained private intent must use its original generation. A changed
+        // user/session scope will fail the exact persisted binding before RPC.
+        if try !nativeProtectedPromotionStore.hasRecord(accountID: owner.accountID, installationID: owner.installationID) {
+            vpnOperationGeneration += 1
+        }
         let generation = vpnOperationGeneration
+        let persistence = try nativePSKPromotionPersistence(previous: previous, next: next, owner: owner,
+            helper: helper, generation: generation, sessionGeneration: sessionGeneration, token: token)
         let selectedID = selectedLocationId
         let targetID = targetLocationId
         let routeMode = routingMode
@@ -765,7 +777,7 @@ final class VEXAppState: ObservableObject {
                     try profileService.stageProtectedHelperConfig(candidateConfig, validateCurrent: validateCurrent)
                 }, restoreSource: { [profileService] in
                     try profileService.stageProtectedHelperConfig(sourceConfig, validateCurrent: validateCurrent)
-                }, isCurrent: scopeIsCurrent)
+                }, isCurrent: scopeIsCurrent, persistence: persistence)
             candidateCommitted = true
             try validateCurrent()
             let admittedCandidate = try nativeAdmittedProfiles.record(tunnel: next, canonicalConfig: candidateConfig,
@@ -782,6 +794,7 @@ final class VEXAppState: ObservableObject {
                     sessionGeneration: sessionGeneration, accessToken: token, accountID: owner.accountID)) != nil
             })
             try profileService.promoteStagedPSKProfile(next, owner: owner)
+            try helper.finishProtectedPromotion(receipt, persistence: persistence, isCurrent: scopeIsCurrent)
             nativePSKCommittedPromotion = nil
             self.activeTunnel = next
             nativePSKPreparedTunnel = next
@@ -805,6 +818,19 @@ final class VEXAppState: ObservableObject {
                 : "Смена ключей не завершена полностью. Событие сохранено; обычное переподключение не выполнялось."
             throw error
         }
+    }
+
+    private func nativePSKPromotionPersistence(previous: PreparedTunnel, next: PreparedTunnel, owner: NativePushPSKEventOwner,
+        helper: VEXHelperModel, generation: Int, sessionGeneration: Int, token: String) throws -> NativeProtectedReplacementCoordinator.Persistence {
+        // Full value representations are hashed in memory, not stored or logged.
+        // Current process/helper/session/user intent are independently rechecked
+        // at every async boundary and by the root peer/owner authentication.
+        let scope = NativeProtectedPromotionStore.fingerprint(["vex-psk-promotion-intent-v1", owner.accountID,
+            owner.installationID, String(sessionGeneration), NativeProtectedReplacementCoordinator.digest(token),
+            String(reflecting: previous), String(reflecting: next), String(describing: ObjectIdentifier(helper)),
+            selectedLocationId, targetLocationId ?? "", routingMode.rawValue])
+        return try nativeProtectedPromotionStore.persistence(accountID: owner.accountID, installationID: owner.installationID,
+            scopeFingerprint: scope, generation: generation)
     }
 
     private func observeNativePushSession() {
@@ -897,6 +923,7 @@ final class VEXAppState: ObservableObject {
             // Stages remain after metadata ACK, so an owner tuple index—not the
             // event queue—is authoritative for deleting old secret profiles.
             try nativePSKStageStore.purgeAll(owner: owner)
+            try nativeProtectedPromotionStore.purge(accountID: owner.accountID, installationID: owner.installationID)
             try nativePushPSKQueue.purge(owner: owner)
             nativePushEventOwner = nil
             nativePushEventError = nil

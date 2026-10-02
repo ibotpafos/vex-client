@@ -35,12 +35,16 @@ revalidate = extract(helper_source, "    func revalidateProtectedCommit(") if " 
 """
 coordinator = S / "Services/NativeProtectedReplacementCoordinator.swift"
 store = S / "Services/NativeAdmittedProfileStore.swift"
+promotion_store = S / "Services/NativeProtectedPromotionStore.swift"
+durable_supported = promotion_store.exists()
+finish_wrapper = extract(helper_source, "    func finishProtectedPromotion(") if "    func finishProtectedPromotion(" in helper_source else ""
 app_source = (S / "Stores/VEXAppState.swift").read_text()
 scope_body = extract(app_source, "    private func nativeAdmittedProfileScope(") if "    private func nativeAdmittedProfileScope(" in app_source else """
     private func nativeAdmittedProfileScope(for tunnel:PreparedTunnel) throws -> NativeAdmittedProfileStore.Scope {
         .init(accountID: account,installationID: "installation",sessionGeneration: authenticatedSessionGeneration)
     }
 """
+promotion_scope = extract(app_source, "    private func nativePSKPromotionPersistence(") if "    private func nativePSKPromotionPersistence(" in app_source else ""
 LEGACY_STORE_FIXTURE = '\n@MainActor final class NativeAdmittedProfileStore {\n struct Scope: Equatable { let accountID:String; let installationID:String; let sessionGeneration:Int }\n struct Source { let revision=UUID();let tunnel:PreparedTunnel;let canonicalConfig:String;let ownerTokenSHA256:String;let scope:Scope }\n enum Failure:Error { case staleSource }\n private var value:Source?; private weak var helper:AnyObject?\n @discardableResult func record(tunnel:PreparedTunnel,canonicalConfig:String,ownerTokenSHA256:String,scope:Scope,helper:AnyObject)throws->Source { let v=Source(tunnel:tunnel,canonicalConfig:canonicalConfig,ownerTokenSHA256:ownerTokenSHA256,scope:scope);value=v;self.helper=helper;return v }\n func source(for tunnel:PreparedTunnel,scope:Scope,helper:AnyObject)throws->Source { guard let v=value,v.tunnel==tunnel,v.scope==scope,self.helper === helper else {throw Failure.staleSource};return v }\n func isCurrent(_ source:Source,scope:Scope,helper:AnyObject)->Bool { (try? self.source(for:source.tunnel,scope:scope,helper:helper).revision)==source.revision }\n func clear(){value=nil;helper=nil}\n}\n'
 HARNESS = r'''
 import Foundation
@@ -68,7 +72,7 @@ enum Mode { case commitReplyLost, success, connectThrows, promotionThrows, sessi
 @MainActor final class Client {
  unowned let app: AppState
  let id="E63DCEBD-109A-4C45-A23C-3F32BF42597A"
- var replacements=0, commits=0, recoveries=0, snapshots=0, journal=false
+ var replacements=0, commits=0, recoveries=0, snapshots=0, receipts=0, journal=false
  init(_ app: AppState) { self.app=app }
  func digest(_ value: String)->String { SHA256.hash(data:Data(value.utf8)).map { String(format:"%02x",$0) }.joined() }
  func send(_ command:String, timeoutSeconds:Int) async throws -> String {
@@ -81,7 +85,7 @@ enum Mode { case commitReplyLost, success, connectThrows, promotionThrows, sessi
    let observed = commits > 0 && app.mode != .snapshotCandidateChanges ? candidate : source
    let observedOwner = (app.foreignOwner || (commits > 0 && app.mode == .snapshotOwnerChanges)) ? digest("foreign-owner") : owner
    let pending = journal || (commits > 0 && app.mode == .snapshotJournal)
-   return "protected_protocol=1 recovery_pending=\(pending) source_sha256=\(observed) owner_token_sha256=\(observedOwner) transaction_id=\(id)" + (pending ? " candidate_sha256=\(candidate)" : "") + (app.mode == .commitReplyLost ? " commit_receipt_protocol=1" : "") + "\n"
+   return "protected_protocol=1 recovery_pending=\(pending) source_sha256=\(observed) owner_token_sha256=\(observedOwner) transaction_id=\(id)" + (pending ? " candidate_sha256=\(candidate)" : "") + " commit_receipt_protocol=1" + "\n"
   case "protected-replace":
    replacements += 1; journal=true; try app.boundary()
    return "ready transaction_id=\(id) candidate_sha256=\(candidate)\n"
@@ -90,8 +94,13 @@ enum Mode { case commitReplyLost, success, connectThrows, promotionThrows, sessi
    if app.mode == .commitReplyLost {throw FixtureError.boom}
    return "committed transaction_id=\(id) candidate_sha256=\(candidate) latest_handshake=100\n"
   case "protected-receipt":
-   guard app.mode == .commitReplyLost,commits==1,!journal else {throw FixtureError.boom}
-   return "committed commit_receipt_protocol=1 transaction_id=\(id) source_sha256=\(source) candidate_sha256=\(candidate) owner_token_sha256=\(owner) latest_handshake=100\n"
+   receipts += 1
+   if app.mode == .snapshotThrows {throw FixtureError.boom}
+   if app.mode == .snapshotScopeChanges {app.authenticatedSessionGeneration += 1}
+   guard commits==1,!journal,app.mode != .snapshotJournal else {throw FixtureError.boom}
+   let observed = app.mode == .snapshotCandidateChanges ? source : candidate
+   let observedOwner = app.mode == .snapshotOwnerChanges ? digest("foreign-owner") : owner
+   return "committed commit_receipt_protocol=1 transaction_id=\(id) source_sha256=\(source) candidate_sha256=\(observed) owner_token_sha256=\(observedOwner) latest_handshake=100\n"
   case "protected-recover":
    recoveries += 1; journal=false
    return "recovered transaction_id=\(id)\n"
@@ -103,16 +112,18 @@ enum Mode { case commitReplyLost, success, connectThrows, promotionThrows, sessi
  var status=Status(), hasConfirmedIdleStatus=false, isBusy=false, lastConnectAdmissionRejected=false
  var canUseExistingValidatedHelper=true
  let client: Client
- private let protectedReplacement=NativeProtectedReplacementCoordinator()
+ private var protectedReplacement=NativeProtectedReplacementCoordinator()
  var hasPendingProtectedReplacement: Bool { protectedReplacement.hasPendingTransaction }
  init(_ app: AppState) { client=Client(app) }
  func refreshStatus(quiet: Bool) async -> Bool { true }
  WRAPPER
  REVALIDATE
+ FINISH_METHOD
+ func reconstructCoordinatorForFixture(){protectedReplacement=NativeProtectedReplacementCoordinator()}
 }
 @MainActor final class Profile {
  unowned let app: AppState
- var prepares=0, promotions=0, writes=0, sourcePrepares=0, candidatePrepares=0;var sourceDNSChanged=false
+ var prepares=0, promotions=0, writes=0, sourcePrepares=0, candidatePrepares=0;var sourceDNSChanged=false,observedIntentBeforeCache=false
  init(_ app: AppState) { self.app=app }
  func prepareStagedPSKProfile(_ verified: Verified, basedOn old: PreparedTunnel) throws -> PreparedTunnel {
   prepares += 1
@@ -123,6 +134,7 @@ enum Mode { case commitReplyLost, success, connectThrows, promotionThrows, sessi
  }
  func stageProtectedHelperConfig(_ config:String, validateCurrent: @MainActor () throws -> Void) throws { try validateCurrent(); writes += 1 }
  func promoteStagedPSKProfile(_ t: PreparedTunnel, owner: Owner) throws {
+  observedIntentBeforeCache=(try? app.nativeProtectedPromotionStore.hasRecord(accountID:"account",installationID:"installation")) == true
   promotions += 1; if app.mode == .promotionThrows { throw FixtureError.boom }
  }
 }
@@ -142,6 +154,8 @@ enum Mode { case commitReplyLost, success, connectThrows, promotionThrows, sessi
  var session:Session? { .init(user:.init(id:account),accessToken:token) }
  let nativePushIdentityStore=Identity(), nativeAdmittedProfiles=NativeAdmittedProfileStore()
  SCOPE_BODY
+ PROMOTION_SCOPE
+ let nativeProtectedPromotionStore=NativeProtectedPromotionStore(appDataURL:URL(fileURLWithPath:CommandLine.arguments[1]).appendingPathComponent(UUID().uuidString,isDirectory:true))
  lazy var profileService=Profile(self)
  let nativePSKVerifier=Verifier()
  func ensureAuthenticatedSessionCurrent(generation:Int, accessToken:String?=nil, accountID:String?=nil) throws {
@@ -233,7 +247,7 @@ enum Mode { case commitReplyLost, success, connectThrows, promotionThrows, sessi
    let (a,h,p)=base(true); a.mode = .promotionThrows
    _=try? await a.run(p,h); let generation=a.vpnOperationGeneration; a.mode = .success
    let result=try await a.retry(h)
-   check("cache-only-retry",result==generation && a.vpnOperationGeneration==generation && a.nativePSKCommittedPromotion==nil && a.nativePushEventError==nil && a.activeTunnel?.id=="next" && a.connects==0 && h.client.replacements==1 && h.client.commits==1 && h.client.recoveries==0 && h.client.snapshots==2 && a.profileService.promotions==2 && a.profileService.writes==1 && !a.isVpnBusy && !h.isBusy)
+   check("cache-only-retry",result==generation && a.vpnOperationGeneration==generation && a.nativePSKCommittedPromotion==nil && a.nativePushEventError==nil && a.activeTunnel?.id=="next" && a.connects==0 && h.client.replacements==1 && h.client.commits==1 && h.client.recoveries==0 && h.client.snapshots+h.client.receipts==2 && a.profileService.promotions==2 && a.profileService.writes==1 && !a.isVpnBusy && !h.isBusy)
   } catch { check("cache-only-retry",false) }
   do {
    let (a,h,p)=base(true); a.mode = .promotionThrows; _=try? await a.run(p,h)
@@ -289,21 +303,40 @@ enum Mode { case commitReplyLost, success, connectThrows, promotionThrows, sessi
    check("lost-commit-ack-promotes-exact-proven-candidate",a.activeTunnel?.id=="next" && admitted.canonicalConfig=="next-profile" && a.profileService.promotions==1 && a.profileService.writes==1 && h.client.replacements==1 && h.client.commits==1 && h.client.recoveries==0 && a.connects==0)
   }catch {check("lost-commit-ack-promotes-exact-proven-candidate",false)}
 
+  do {
+   let (a,h,p)=base(true);_=try await a.run(p,h)
+   let absent=try a.nativeProtectedPromotionStore.hasRecord(accountID:"account",installationID:"installation")
+   check("durable-intent-before-cache-and-removed-after-success",a.profileService.observedIntentBeforeCache && !absent && a.activeTunnel?.id=="next" && h.client.replacements==1 && h.client.commits==1 && h.client.recoveries==0)
+  }catch{check("durable-intent-before-cache-and-removed-after-success",false)}
+  do {
+   let (a,h,p)=base(true);a.mode = .promotionThrows
+   do{_=try await a.run(p,h)}catch{}
+   let retained=try a.nativeProtectedPromotionStore.hasRecord(accountID:"account",installationID:"installation")
+   h.reconstructCoordinatorForFixture();a.mode = .success
+   do{_=try await a.retry(h)}catch{}
+   let removed=try a.nativeProtectedPromotionStore.hasRecord(accountID:"account",installationID:"installation")
+   check("cache-only-retry-after-coordinator-reconstruction",retained && !removed && a.nativePSKCommittedPromotion==nil && a.activeTunnel?.id=="next" && a.profileService.promotions==2 && a.profileService.writes==1 && h.client.replacements==1 && h.client.commits==1 && h.client.recoveries==0 && a.connects==0)
+  }catch{check("cache-only-retry-after-coordinator-reconstruction",false)}
+
   print("psk_protected_matrix cases=\(cases) failures=\(failures) live_network_commands=0")
   exit(failures==0 ? 0 : 1)
  }
 }
-'''.replace("WRAPPER", wrapper).replace("REVALIDATE", revalidate).replace("CUTOVER", cutover).replace("SCOPE_BODY",scope_body)
+'''.replace("WRAPPER", wrapper).replace("REVALIDATE", revalidate).replace("CUTOVER", cutover).replace("SCOPE_BODY",scope_body).replace("PROMOTION_SCOPE",promotion_scope).replace("FINISH_METHOD",finish_wrapper)
 if not store.exists():
     HARNESS += LEGACY_STORE_FIXTURE
 if not coordinator.exists():
     HARNESS += "\n@MainActor final class NativeProtectedReplacementCoordinator { struct Receipt: Equatable { let transactionID:String; let candidateSHA256:String; let latestHandshake:UInt64 }; var hasPendingTransaction=false }\n"
+
+if not durable_supported:
+    HARNESS += "\nstruct NativeProtectedPromotionStore { init(appDataURL:URL){};func hasRecord(accountID:String,installationID:String)throws->Bool{false} }\n"
 
 scratch = Path(os.environ.get("TMPDIR", "/tmp")).resolve()
 with tempfile.TemporaryDirectory(prefix="psk-protected-", dir=scratch) as raw:
     directory=Path(raw)
     (directory / "main.swift").write_text(HARNESS)
     subprocess.run(["rtk", "proxy", "swiftc", "-swift-version", "5", "-parse-as-library",
-                    *([str(coordinator)] if coordinator.exists() else []), *([str(store)] if store.exists() else []), str(directory / "main.swift"),
+                    *([str(coordinator)] if coordinator.exists() else []), *([str(store)] if store.exists() else []), *([str(promotion_store),str(S / "Services/NativePushSecureFileStore.swift")] if durable_supported else []), str(directory / "main.swift"),
                     "-o", str(directory / "probe")], check=True, timeout=180)
-    raise SystemExit(subprocess.run(["rtk", "proxy", str(directory / "probe")], timeout=60).returncode)
+    data=directory/"data";data.mkdir(mode=0o700)
+    raise SystemExit(subprocess.run(["rtk", "proxy", str(directory / "probe"),str(data)], timeout=60).returncode)

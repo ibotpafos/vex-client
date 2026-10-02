@@ -58,6 +58,7 @@ func tunnel(_ d:VpnDevice)->PreparedTunnel {PreparedTunnel(device:d,config:"iner
  }
  func refreshCustomerState()async {trace.actions.append("refresh")}
  func processNativePSKEvents()async {trace.actions.append("psk")}
+ func processNativeNormalPendingProfile()async {trace.actions.append("normal-pending")}
  func hasNormalPendingTunnel()->Bool { nativeNormalPendingTunnel != nil }
  RECEIPT
  RECONCILE

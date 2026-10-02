@@ -60,6 +60,7 @@ func tunnel(_ d:VpnDevice,version:Int=7)->PreparedTunnel {PreparedTunnel(device:
  }
  func refreshCustomerState()async {trace.actions.append("refresh")}
  func processNativePSKEvents()async {trace.actions.append("psk")}
+ func processNativeNormalPendingProfile()async {trace.actions.append("normal-pending")}
  func stage(_ tunnel:PreparedTunnel)->Bool { nativeNormalPendingTunnel=tunnel; return nativeNormalPendingTunnel != nil }
  func pending()->PreparedTunnel? { nativeNormalPendingTunnel }
  func storageEmpty()->Bool { nativeNormalPendingStorage == nil }

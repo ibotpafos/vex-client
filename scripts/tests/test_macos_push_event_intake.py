@@ -96,6 +96,7 @@ final class DisposableIdentityStore {{
     }}
 
     func processNativePSKEvents() async {{}}
+    func processNativeNormalPendingProfile() async {{}}
     // Ordinary reconciliation is tested with its actual body in the separate
     // ordinary scope matrix. This test retains durable PSK queue acceptance.
     func reconcileNativeNormalProfileChange(generation: Int, accessToken: String, accountID: String, profileChangeGeneration: Int) async {{}}

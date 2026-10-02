@@ -1,10 +1,10 @@
 {
   "android": {
-    "version": "1.0.62",
-    "build": 70,
+    "version": "1.0.63",
+    "build": 71,
     "min_supported_build": 1002930,
     "is_required": false,
-    "release_notes": "Android 1.0.62: обновлена сборка VPN-компонента и добавлены автоматические проверки качества и подписи в GitHub. Сохранены диагностика Bugsink, защита при потере туннеля, автоподключение и подписанные OTA-обновления.",
+    "release_notes": "Android 1.0.63: обновлена сборка VPN-компонента и исправлена автоматическая публикация Android-релизов. Сохранены диагностика Bugsink, защита при потере туннеля, автоподключение и подписанные OTA-обновления.",
     "core_version": "0.1.0",
     "config_schema_version": 1,
     "min_config_schema_version": 1,

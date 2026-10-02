@@ -3,7 +3,7 @@
     "name": "VEX",
     "slug": "vex",
     "scheme": "vexguard",
-    "version": "1.0.62",
+    "version": "1.0.63",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -29,7 +29,7 @@
       },
       "predictiveBackGestureEnabled": false,
       "softwareKeyboardLayoutMode": "resize",
-      "versionCode": 1006270,
+      "versionCode": 1006371,
       "package": "com.vexguard.app",
       "intentFilters": [
         {

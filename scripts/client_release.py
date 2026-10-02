@@ -25,6 +25,16 @@ def command(*args):
     return subprocess.check_output(args, text=True).strip()
 
 
+def android_version_code(version, counter):
+    match = re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", version)
+    if not match or type(counter) is not int or not 1 <= counter <= 99:
+        raise ValueError("Android encoded build policy is violated")
+    major, minor, patch = map(int, match.groups())
+    if max(major, minor, patch) > 99:
+        raise ValueError("Android encoded build policy is violated")
+    return major * 1000000 + minor * 10000 + patch * 100 + counter
+
+
 def plan(tag, dry_run, root=ROOT):
     versions = json.loads((root / "versions.json").read_text())
     match = re.fullmatch(r"(android|macos)-v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", tag)
@@ -43,10 +53,7 @@ def plan(tag, dry_run, root=ROOT):
     if not isinstance(build, int) or isinstance(build, bool) or build <= 0:
         raise ValueError("Positive numeric build required")
     if platform == "android":
-        major, minor, patch = map(int, match.groups()[1:])
-        if not 1 <= build <= 99 or major > 99 or minor > 99 or patch > 99:
-            raise ValueError("Android encoded build policy is violated")
-        build = major * 1000000 + minor * 10000 + patch * 100 + build
+        build = android_version_code(version, build)
         app = json.loads((root / "app.json").read_text())["expo"]
         if (app["version"], app["android"]["versionCode"], app["android"]["package"]) != (version, build, "com.vexguard.app"):
             raise ValueError("Android source/versionCode/package mismatch")
@@ -87,7 +94,13 @@ def verify_bundle(directory, expected):
 
 def bundle(directory, release):
     native = json.loads((directory / "release-manifest.json").read_text())
-    if str(native["version"]) != release["version"] or int(native["build"]) != release["build"]:
+    if (native["version"] != release["version"] or type(native["build"]) is not int
+            or native["build"] <= 0 or type(release["build"]) is not int):
+        raise ValueError("Builder manifest does not match planned release")
+    # The Android builder emits versions.json's counter, not the APK versionCode.
+    # Website metadata deliberately uses the encoded code for upgrade ordering.
+    build = android_version_code(native["version"], native["build"]) if release["platform"] == "android" else native["build"]
+    if build != release["build"]:
         raise ValueError("Builder manifest does not match planned release")
     if release["platform"] == "android":
         if native.get("variant") != "release":

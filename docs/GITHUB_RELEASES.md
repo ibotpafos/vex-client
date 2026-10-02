@@ -9,6 +9,12 @@ public releases remain unchanged; this change is not a new client version.
    supply user-facing notes, and set `release_status` to `candidate`. Android
    `app.json` and the encoded production versionCode must match. Merge the source
    through normal CI first. Do not reuse an existing tag, version or build.
+   The Android builder manifest and APK filename retain the human build counter
+   (1..99); the release manifest uses `major*1000000+minor*10000+patch*100+counter`
+   as its build, matching the APK versionCode. Planning and bundling share this
+   encoding and reject mismatched counters, debug variants and signer reports.
+   Native macOS retains its builder's numeric string counter (CFBundleVersion)
+   without Android encoding; both digit-string and integer counters are checked.
 2. Dispatch **Client signed tag release**, `dry_run=true`, from main. Planning and
    locked dependency/quality checks run without signing secrets or publication.
 3. Once receiver/site acceptance is complete and the repo variable
@@ -32,7 +38,7 @@ public releases remain unchanged; this change is not a new client version.
    deliveries cannot downgrade or republish metadata. Public metadata AND actual
    website download redirect must match before the workflow reports acceptance.
 
-## Activation gates (not yet enabled)
+## Activation gates
 
 Deploy the matching server receiver/website changes with normal exact-source
 acceptance and rollback, then provision a fresh release-only HMAC secret as
@@ -63,6 +69,8 @@ metadata backward. Disable `VEX_CLIENT_AUTOPUBLISH_ENABLED` and deactivate the h
 as the release emergency stop. Use existing guarded admin rollback for a bad stable
 client; the webhook deliberately cannot block builds or change compatibility/flags.
 An old API binary ignores the additive receipt table; existing downloads remain.
+An immutable tag whose build failed is retained for audit; merge the repair and
+use a new version/build/tag instead of moving the failed tag or bypassing CI.
 
 Standards: [GitHub security](https://docs.github.com/en/actions/how-tos/secure-your-work),
 [environments](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments),

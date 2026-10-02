@@ -15,8 +15,10 @@ def body(sig):
 
 receipt = body("    func receivedNativeRemoteNotification(")
 reconcile = body("    private func reconcileNativeNormalProfileChange(")
-preflight = body("    private func processNativeNormalPendingProfile() async")
-pending = body("    private var nativeNormalPendingTunnel: PreparedTunnel?")
+has_preflight = "    private func processNativeNormalPendingProfile() async" in src
+has_expiry = "normalAuthorizationExpiresAt" in (S / "Models/VEXModels.swift").read_text()
+preflight = body("    private func processNativeNormalPendingProfile() async") if has_preflight else "    private func processNativeNormalPendingProfile() async {}"
+pending = body("    private var nativeNormalPendingTunnel: PreparedTunnel?") if "    private var nativeNormalPendingTunnel: PreparedTunnel?" in src else "private var nativeNormalPendingTunnel: PreparedTunnel?"
 
 swift = r'''
 import Foundation
@@ -44,8 +46,8 @@ struct HelperStatus { var usable=true; var matches=true; var isUsableConnectedSt
  }
 }
 @MainActor func device()->VpnDevice { try! JSONDecoder().decode(VpnDevice.self,from:Data(#"{"id":"d","status":"active","platform":"macos","provisioning_mode":"managed_native","client_key_ownership":"client","protocol":"amneziawg","external_device_id":"install"}"#.utf8)) }
-func tunnel(_ d:VpnDevice,version:Int=7)->PreparedTunnel { PreparedTunnel(device:d,config:"source-endpoint",locationId:"de",profileVersion:version,routingMode:.fullTunnel,bypassRegion:nil,bypassRangesCount:0,bypassDomainsCount:0,routingPolicyVersion:"source-policy",rotationRequired:false,normalAuthorizationExpiresAt:fixtureExpiry) }
-func candidate(_ d:VpnDevice)->PreparedTunnel { PreparedTunnel(device:d,config:"candidate-endpoint",locationId:"de",profileVersion:8,routingMode:.fullTunnel,bypassRegion:nil,bypassRangesCount:0,bypassDomainsCount:0,routingPolicyVersion:"candidate-policy",rotationRequired:false,normalAuthorizationExpiresAt:fixtureExpiry) }
+func tunnel(_ d:VpnDevice,version:Int=7)->PreparedTunnel { PreparedTunnel(device:d,config:"source-endpoint",locationId:"de",profileVersion:version,routingMode:.fullTunnel,bypassRegion:nil,bypassRangesCount:0,bypassDomainsCount:0,routingPolicyVersion:"source-policy",rotationRequired:falseEXPIRY_ARG) }
+func candidate(_ d:VpnDevice)->PreparedTunnel { PreparedTunnel(device:d,config:"candidate-endpoint",locationId:"de",profileVersion:8,routingMode:.fullTunnel,bypassRegion:nil,bypassRangesCount:0,bypassDomainsCount:0,routingPolicyVersion:"candidate-policy",rotationRequired:falseEXPIRY_ARG) }
 @MainActor final class H {
  var canUseNativeRemotePush=true,nativeRemotePushEnabled=true,nativePushConsentMatchesSession=true
  var isVpnBusy=false,isDeviceBusy=false,isServerSelectionBusy=false,isNativePSKPreparationBusy=false
@@ -61,7 +63,7 @@ func candidate(_ d:VpnDevice)->PreparedTunnel { PreparedTunnel(device:d,config:"
  func tunnel(_ tunnel:PreparedTunnel,matches status:HelperStatus)->Bool { status.matches && tunnel == activeTunnel }
  func refreshCustomerState()async {}; func processNativePSKEvents()async {}; func stage(_ t:PreparedTunnel)->Bool { nativeNormalPendingTunnel=t; return nativeNormalPendingTunnel != nil }
  func pending()->PreparedTunnel? { nativeNormalPendingTunnel }; func runPreflight()async { await processNativeNormalPendingProfile() }
- func expirePendingProof() { guard var stored=nativeNormalPendingStorage else { return }; stored.tunnel.normalAuthorizationExpiresAt=Date().addingTimeInterval(-1); nativeNormalPendingStorage=stored }
+ EXPIRE_BODY
  RECEIPT
  RECONCILE
  PREFLIGHT
@@ -83,10 +85,10 @@ func drain() async { for _ in 0..<128 { await Task.yield() } }
  let expiry=active(); precondition(expiry.stage(candidate(device()))); expiry.nativePSKHelper!.refreshResult=true; expiry.profileService.hook={ n in if n==1 { expiry.expirePendingProof() } }; let old=expiry.activeTunnel!; await expiry.runPreflight(); let expired=expiry.activeTunnel==old && expiry.pending()==nil && expiry.profileService.writes==0 && expiry.profileService.connects==0
  let stale=active(); precondition(stale.stage(candidate(device()))); stale.profileService.hook={ n in if n==2 { stale.authenticatedSessionGeneration+=1 } }; let staleOld=stale.activeTunnel!; await stale.runPreflight(); let staleGuard=stale.activeTunnel==staleOld && stale.pending()==candidate(device()) && stale.profileService.connects==0
  let all=success && readiness && retainedStatus && idle && intent && owner && deviceChanged && route && foreignReject && expired && staleGuard
- print("normal_pending_preflight success=\(success) fetches=\(ok.profileService.fetches) strict_no_mutation=\(ok.profileService.writes==0 && ok.profileService.connects==0 && ok.profileService.handshakes==0 && ok.profileService.acks==0) rejects=\(readiness && retainedStatus && idle && intent && owner && deviceChanged && route && foreignReject) expiry_clear=\(expired) stale_preserves=\(staleGuard)")
- exit(all ? 0 : 1)
+ print("normal_pending_preflight driver_present=DRIVER_PRESENT success=\(success) fetches=\(ok.profileService.fetches) strict_no_mutation=\(ok.profileService.writes==0 && ok.profileService.connects==0 && ok.profileService.handshakes==0 && ok.profileService.acks==0) rejects=\(readiness && retainedStatus && idle && intent && owner && deviceChanged && route && foreignReject) expiry_clear=\(expired) stale_preserves=\(staleGuard)")
+ exit(DRIVER_PRESENT ? (all ? 0 : 1) : 1)
 } }
-'''.replace("PENDING",pending).replace("RECEIPT",receipt).replace("RECONCILE",reconcile).replace("PREFLIGHT",preflight).replace("VEXHelperModel","Helper")
+'''.replace("PENDING",pending).replace("RECEIPT",receipt).replace("RECONCILE",reconcile).replace("PREFLIGHT",preflight).replace("VEXHelperModel","Helper").replace("DRIVER_PRESENT","true" if has_preflight else "false").replace("EXPIRY_ARG",",normalAuthorizationExpiresAt:fixtureExpiry" if has_expiry else "").replace("EXPIRE_BODY","func expirePendingProof() { guard var stored=nativeNormalPendingStorage else { return }; stored.tunnel.normalAuthorizationExpiresAt=Date().addingTimeInterval(-1); nativeNormalPendingStorage=stored }" if has_expiry else "func expirePendingProof() {}")
 
 tmp=Path(os.environ.get("TMPDIR","/Volumes/D/Projects/mobile/macos-release-transaction-20261001/cycle-25-tests/tmp")); tmp.mkdir(parents=True,exist_ok=True)
 with tempfile.TemporaryDirectory(prefix="normal-preflight-",dir=tmp) as raw:

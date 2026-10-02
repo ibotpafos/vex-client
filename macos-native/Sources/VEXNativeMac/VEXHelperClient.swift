@@ -88,7 +88,18 @@ final class VEXHelperModel: ObservableObject {
             && installState?.socketConnectable == true
     }
 
-    func replaceProfilePreservingProtection(sourceSHA256: String, candidateSHA256: String,
+    func verifyAdmittedSource(_ expectedSHA256: String, isCurrent: @escaping () -> Bool) async throws -> String {
+        guard canUseExistingValidatedHelper, !isBusy, isCurrent() else {
+            throw NativeProtectedReplacementCoordinator.Failure.staleIntent
+        }
+        isBusy = true
+        defer { isBusy = false }
+        return try await protectedReplacement.verifyAdmittedSource(expectedSHA256, isCurrent: { [weak self] in
+            self?.canUseExistingValidatedHelper == true && isCurrent()
+        }, send: { [client] command, timeout in try await client.send(command, timeoutSeconds: timeout) })
+    }
+
+    func replaceProfilePreservingProtection(sourceSHA256: String, candidateSHA256: String, sourceOwnerTokenSHA256: String? = nil,
         stageCandidate: @escaping () throws -> Void, restoreSource: @escaping () throws -> Void,
         isCurrent: @escaping () -> Bool) async throws -> NativeProtectedReplacementCoordinator.Receipt {
         guard canUseExistingValidatedHelper, !isBusy, isCurrent() else {
@@ -97,6 +108,7 @@ final class VEXHelperModel: ObservableObject {
         isBusy = true
         defer { isBusy = false }
         let result = try await protectedReplacement.replace(sourceSHA256: sourceSHA256, candidateSHA256: candidateSHA256,
+            sourceOwnerTokenSHA256: sourceOwnerTokenSHA256,
             dependencies: .init(isCurrent: { [weak self] in
                 self?.canUseExistingValidatedHelper == true && isCurrent()
             }, send: { [client] command, timeout in

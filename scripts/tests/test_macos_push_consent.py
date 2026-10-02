@@ -54,7 +54,9 @@ struct FixtureSession {{ var user: FixtureUser; var accessToken: String }}
     func retryCurrentRegistration() {{}}
 }}
 
+@MainActor final class FixtureAdmission {{ var clears=0;func clear() {{clears+=1}} }}
 @MainActor final class H {{
+    let nativeAdmittedProfiles=FixtureAdmission()
     let nativePushIdentityStore = FixtureIdentity()
     let nativePushPSKQueue = NativePushPSKEventQueue(appDataURL: URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true))
     let nativePSKStageStore = NativePSKStagedProfileStore(appDataURL: URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true))
@@ -129,11 +131,11 @@ struct FixtureSession {{ var user: FixtureUser; var accessToken: String }}
         h.invalidateNativePushSession(resetConsent: true)
         let logoutClears = !h.nativeRemotePushEnabled && h.nativeRemotePushConsentAccount.isEmpty
             && h.nativePushRegistration.clearCount > 0 && h.unregisterCalls == 1
-            && h.nativePSKCommittedPromotion == nil
+            && h.nativePSKCommittedPromotion == nil && h.nativeAdmittedProfiles.clears == 1
 
         h.nativePSKCommittedPromotion = 2
         h.invalidateNativePushSession(resetConsent: false)
-        let terminationClearsPromotion = h.nativePSKCommittedPromotion == nil
+        let terminationClearsPromotion = h.nativePSKCommittedPromotion == nil && h.nativeAdmittedProfiles.clears == 2
         h.nativePSKCommittedPromotion = 3
         h.nativePushRuntimeAllowed = false
         h.purgeNativePushPSKEvents()

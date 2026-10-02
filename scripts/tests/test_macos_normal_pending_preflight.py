@@ -22,6 +22,11 @@ pending = body("    private var nativeNormalPendingTunnel: PreparedTunnel?") if 
 helper_source = (S / "VEXHelperClient.swift").read_text()
 protected_wrapper = body("    func replaceProfilePreservingProtection(", helper_source) if "    func replaceProfilePreservingProtection(" in helper_source else ""
 coordinator = S / "Services/NativeProtectedReplacementCoordinator.swift"
+store = S / "Services/NativeAdmittedProfileStore.swift"
+scope_body = body("    private func nativeAdmittedProfileScope(") if "    private func nativeAdmittedProfileScope(" in src else """
+    private func nativeAdmittedProfileScope(for tunnel:PreparedTunnel) throws -> NativeAdmittedProfileStore.Scope { .init(accountID:session!.user.id,installationID:nativePushIdentityStore.value!,sessionGeneration:authenticatedSessionGeneration) }
+"""
+LEGACY_STORE_FIXTURE = '\n@MainActor final class NativeAdmittedProfileStore {\n struct Scope: Equatable { let accountID:String; let installationID:String; let sessionGeneration:Int }\n struct Source { let revision=UUID();let tunnel:PreparedTunnel;let canonicalConfig:String;let ownerTokenSHA256:String;let scope:Scope }\n enum Failure:Error { case staleSource }\n private var value:Source?; private weak var helper:AnyObject?\n @discardableResult func record(tunnel:PreparedTunnel,canonicalConfig:String,ownerTokenSHA256:String,scope:Scope,helper:AnyObject)throws->Source { let v=Source(tunnel:tunnel,canonicalConfig:canonicalConfig,ownerTokenSHA256:ownerTokenSHA256,scope:scope);value=v;self.helper=helper;return v }\n func source(for tunnel:PreparedTunnel,scope:Scope,helper:AnyObject)throws->Source { guard let v=value,v.tunnel==tunnel,v.scope==scope,self.helper === helper else {throw Failure.staleSource};return v }\n func isCurrent(_ source:Source,scope:Scope,helper:AnyObject)->Bool { (try? self.source(for:source.tunnel,scope:scope,helper:helper).revision)==source.revision }\n func clear(){value=nil;helper=nil}\n}\n'
 
 swift = r'''
 import Foundation
@@ -60,10 +65,11 @@ struct HelperStatus { var usable=true; var matches=true; var isUsableConnectedSt
  PROTECTED_WRAPPER
 }
 @MainActor final class Profile {
+ var sourcePrepares=0,candidatePrepares=0,sourceDNSChanged=false
  var fetches=0, writes=0, connects=0, handshakes=0, acks=0, failSecond=false; var hook:((Int)->Void)?
  func invalidateNormalCache(accountID:String?) throws {}
  func prepareProtectedHelperConfig(for tunnel:PreparedTunnel,validateCurrent:@MainActor () throws -> Void) async throws -> String {
-  try validateCurrent(); await Task.yield(); try validateCurrent(); return tunnel.config
+  try validateCurrent(); await Task.yield(); try validateCurrent();if tunnel.config=="source-endpoint" {sourcePrepares+=1;return sourceDNSChanged ? "DNS-rotated" : tunnel.config};candidatePrepares+=1;return tunnel.config
  }
  func stageProtectedHelperConfig(_ config:String,validateCurrent:@MainActor () throws -> Void) throws { try validateCurrent(); writes += 1 }
  func refreshRegisteredNormalProfile(accessToken:String,device:VpnDevice,locationId:String,routingMode:VpnRoutingMode,accountID:String,validateCurrent:@MainActor () throws -> Void) async throws -> PreparedTunnel {
@@ -86,6 +92,8 @@ func candidate(_ d:VpnDevice)->PreparedTunnel { PreparedTunnel(device:d,config:"
  private var nativeNormalPendingStorage: (tunnel: PreparedTunnel, stagedAt: Date, isCurrent: @MainActor () -> Bool)?
  PENDING
  var nativePushEventOwner:NativePushPSKEventOwner?,nativePushEventError:String?; var profileWarmupTask:Task<Void,Never>?
+ let nativeAdmittedProfiles=NativeAdmittedProfileStore()
+ SCOPE_BODY
  let profileService=Profile(); let nativePushRegistration=Reg(),nativePushIdentityStore=Identity(),nativePushPSKQueue=Queue()
  func ensureAuthenticatedSessionCurrent(generation:Int,accessToken:String,accountID:String)throws { guard generation==authenticatedSessionGeneration,session?.accessToken==accessToken,session?.user.id==accountID else { throw AuthenticatedOperationError.sessionChanged } }
  func tunnel(_ tunnel:PreparedTunnel,matches status:HelperStatus)->Bool { status.matches && tunnel == activeTunnel }
@@ -108,7 +116,7 @@ func candidate(_ d:VpnDevice)->PreparedTunnel { PreparedTunnel(device:d,config:"
  return true
 }
 @main struct Main { @MainActor static func main() async {
- func active()->H { let h=H(); h.activeTunnel=tunnel(device()); h.nativePSKHelper=Helper(); return h }
+ func active()->H { let h=H(); h.activeTunnel=tunnel(device()); h.nativePSKHelper=Helper();try! h.nativeAdmittedProfiles.record(tunnel:h.activeTunnel!,canonicalConfig:"source-endpoint",ownerTokenSHA256:h.nativePSKHelper!.client.digest("fixture-owner"),scope:.init(accountID:"a",installationID:"install",sessionGeneration:1),helper:h.nativePSKHelper!);return h }
  let ok=active(); let source=ok.activeTunnel!; ok.receivedNativeRemoteNotification(["aps":["content-available":1]]); let okFinished=await awaitReceipt(ok)
  let success=okFinished && ok.profileService.fetches==2 && ok.pending()==nil && ok.activeTunnel==candidate(device()) && ok.activeTunnel != source && ok.nativePSKPreparedTunnel==candidate(device()) && ok.nativePSKHelper!.refreshes==2 && ok.nativePSKHelper!.client.replacements==1 && ok.profileService.writes==1 && ok.profileService.connects==0 && ok.profileService.acks==0 && ok.nativePushIdentityStore.creates==0 && ok.nativePushPSKQueue.enqueues==0
  func reject(_ mutate:@escaping @MainActor (H)->Void) async -> Bool { let h=active(); precondition(h.stage(candidate(device()))); let source=h.activeTunnel!; mutate(h); await h.runPreflight(); return h.activeTunnel==source && h.profileService.fetches==0 && h.profileService.writes==0 && h.profileService.connects==0 && h.profileService.handshakes==0 && h.profileService.acks==0 && h.nativePushIdentityStore.creates==0 && h.nativePushPSKQueue.enqueues==0 }
@@ -126,16 +134,23 @@ func candidate(_ d:VpnDevice)->PreparedTunnel { PreparedTunnel(device:d,config:"
  let failed=active(); let failedOld=failed.activeTunnel!; failed.profileService.failSecond=true; failed.receivedNativeRemoteNotification(["aps":["content-available":1]]); let failedFinished=await awaitReceipt(failed); let failedOuter=failedFinished && failed.profileService.fetches==2 && failed.activeTunnel==failedOld && failed.pending()==candidate(device()) && failed.nativePushEventError != nil && failed.profileService.connects==0
  let inflight=active(); precondition(inflight.stage(candidate(device()))); let inflightOld=inflight.activeTunnel!; inflight.nativePSKHelper!.client.afterReplace={ inflight.authenticatedSessionGeneration += 1 }; await inflight.runPreflight()
  let inflightSafe=inflight.activeTunnel==inflightOld && inflight.nativePSKPreparedTunnel==nil && inflight.nativePSKHelper!.hasPendingProtectedReplacement && inflight.profileService.connects==0 && inflight.profileService.acks==0
- let all=success && readiness && retainedStatus && idle && intent && owner && deviceChanged && route && foreignReject && awaitDesiredReject && expired && staleGuard && failedOuter && inflightSafe
+ let dns=active();dns.profileService.sourceDNSChanged=true;precondition(dns.stage(candidate(device())));await dns.runPreflight()
+ let dnsSafe=dns.activeTunnel==candidate(device()) && dns.profileService.sourcePrepares==0 && dns.profileService.candidatePrepares==1 && dns.nativePSKHelper!.client.replacements==1
+ let missing=active();precondition(missing.stage(candidate(device())));let missingSource=missing.activeTunnel;missing.nativeAdmittedProfiles.clear();await missing.runPreflight()
+ let missingSafe=missing.activeTunnel==missingSource && missing.profileService.fetches==0 && missing.profileService.writes==0 && missing.nativePSKHelper!.client.replacements==0
+ print("normal_admitted_binding rotating_DNS=\(dnsSafe) missing_source_fenced=\(missingSafe)")
+ let all=dnsSafe && missingSafe && success && readiness && retainedStatus && idle && intent && owner && deviceChanged && route && foreignReject && awaitDesiredReject && expired && staleGuard && failedOuter && inflightSafe
  print("normal_pending_protected driver_present=DRIVER_PRESENT success=\(success) fetches=\(ok.profileService.fetches) no_generic_connect_or_ack=\(ok.profileService.connects==0 && ok.profileService.acks==0) rejects=\(readiness && retainedStatus && idle && intent && owner && deviceChanged && route && foreignReject && awaitDesiredReject) expiry_clear=\(expired) stale_current=\(staleGuard) outer_failure_retained=\(failedOuter) stale_inflight_retained=\(inflightSafe)")
  exit(DRIVER_PRESENT ? (all ? 0 : 1) : 1)
 } }
-'''.replace("PENDING",pending).replace("RECEIPT",receipt).replace("RECONCILE",reconcile).replace("PREFLIGHT",preflight).replace("PROTECTED_WRAPPER",protected_wrapper).replace("VEXHelperModel","Helper").replace("DRIVER_PRESENT","true" if has_preflight else "false").replace("EXPIRY_ARG",",normalAuthorizationExpiresAt:fixtureExpiry" if has_expiry else "").replace("EXPIRE_BODY","func expirePendingProof() { guard var stored=nativeNormalPendingStorage else { return }; stored.tunnel.normalAuthorizationExpiresAt=Date().addingTimeInterval(-1); nativeNormalPendingStorage=stored }" if has_expiry else "func expirePendingProof() {}")
+'''.replace("SCOPE_BODY",scope_body).replace("PENDING",pending).replace("RECEIPT",receipt).replace("RECONCILE",reconcile).replace("PREFLIGHT",preflight).replace("PROTECTED_WRAPPER",protected_wrapper).replace("VEXHelperModel","Helper").replace("DRIVER_PRESENT","true" if has_preflight else "false").replace("EXPIRY_ARG",",normalAuthorizationExpiresAt:fixtureExpiry" if has_expiry else "").replace("EXPIRE_BODY","func expirePendingProof() { guard var stored=nativeNormalPendingStorage else { return }; stored.tunnel.normalAuthorizationExpiresAt=Date().addingTimeInterval(-1); nativeNormalPendingStorage=stored }" if has_expiry else "func expirePendingProof() {}")
+if not store.exists():
+    swift += LEGACY_STORE_FIXTURE
 if not coordinator.exists():
     swift += "\n@MainActor final class NativeProtectedReplacementCoordinator { var hasPendingTransaction=false }\n"
 
 tmp=Path(os.environ.get("TMPDIR","/Volumes/D/Projects/mobile/macos-release-transaction-20261001/cycle-25-tests/tmp")); tmp.mkdir(parents=True,exist_ok=True)
 with tempfile.TemporaryDirectory(prefix="normal-preflight-",dir=tmp) as raw:
  d=Path(raw); (d/"main.swift").write_text(swift)
- subprocess.run(["rtk","proxy","swiftc","-swift-version","5","-parse-as-library",str(S/"Models/VEXModels.swift"),*([str(coordinator)] if coordinator.exists() else []),str(d/"main.swift"),"-o",str(d/"probe")],check=True)
+ subprocess.run(["rtk","proxy","swiftc","-swift-version","5","-parse-as-library",str(S/"Models/VEXModels.swift"),*([str(coordinator)] if coordinator.exists() else []),*([str(store)] if store.exists() else []),str(d/"main.swift"),"-o",str(d/"probe")],check=True)
  raise SystemExit(subprocess.run(["rtk","proxy",str(d/"probe")]).returncode)

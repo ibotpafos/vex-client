@@ -387,14 +387,13 @@ struct VPNProfileService {
         )
     }
 
-    func writeHelperConfig(for tunnel: PreparedTunnel, validateCurrent: @MainActor () throws -> Void = {}) async throws {
+    @discardableResult
+    func writeHelperConfig(for tunnel: PreparedTunnel, validateCurrent: @MainActor () throws -> Void = {}) async throws -> String {
         try await writeSanitizedHelperConfig(tunnel.config, validateCurrent: validateCurrent)
     }
 
-    // TODO: Bind protected sources to the canonical bytes of their original
-    // successful admission/commit, not a second hostname resolution. This
-    // cross-path binding still needs connect/commit plumbing and rotating-DNS
-    // regression coverage; for now source-digest drift is rejected, not adopted.
+    /// Candidate preparation only; protected sources come from the confirmed
+    /// memory admission, never from a second endpoint resolution here.
     func prepareProtectedHelperConfig(for tunnel: PreparedTunnel, validateCurrent: @MainActor () throws -> Void) async throws -> String {
         try validateCurrent()
         let sanitized = await Self.sanitizedHelperConfigOffMain(tunnel.config)
@@ -410,11 +409,15 @@ struct VPNProfileService {
         try cache.writeHelperConfig(config)
     }
 
-    private func writeSanitizedHelperConfig(_ config: String, validateCurrent: @MainActor () throws -> Void = {}) async throws {
+    @discardableResult
+    private func writeSanitizedHelperConfig(_ config: String, validateCurrent: @MainActor () throws -> Void = {}) async throws -> String {
         try validateCurrent()
         let sanitized = await Self.sanitizedHelperConfigOffMain(config)
         try validateCurrent()
-        try cache.writeHelperConfig(sanitized)
+        let canonical = try SystemTunnelController.sanitizedConfig(from: sanitized)
+        try AwgConfigAdmission.validate(canonical)
+        try cache.writeHelperConfig(canonical)
+        return canonical
     }
 
     nonisolated private static func sanitizedHelperConfigOffMain(_ config: String) async -> String {

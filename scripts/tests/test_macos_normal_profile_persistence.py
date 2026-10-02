@@ -23,6 +23,12 @@ for name in ['prepareVerifiedNormalCache','invalidateNormalCache']:
 bodies='\n'.join(extract(n) for n in names)
 control=source[source.index('@MainActor\nfinal class NativeNormalProfileCacheReuseControl'):source.index('\nenum VPNProfileError:')] if 'final class NativeNormalProfileCacheReuseControl' in source else '@MainActor final class NativeNormalProfileCacheReuseControl {}'
 admission=(ROOT/'macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift').read_text().replace('public enum AwgConfigAdmission','enum ActualAwgConfigAdmission')
+# Execute only the real pure config canonicalizer; no controller/network ports.
+controller_source=(ROOT/'macos-native/Sources/VEXHelperCore/SystemSupport.swift').read_text()
+a=controller_source.index('    public static func sanitizedConfig(');b=controller_source.index('{',a);depth=1;i=b+1
+while depth:
+ depth+=(controller_source[i]=='{')-(controller_source[i]=='}');i+=1
+canonicalizer='enum SystemTunnelController {\n'+controller_source[a:i]+'\n}'
 device=source[source.index('private extension VpnDevice {'):source.index('\nextension PreparedTunnel {')]
 cache_source=(S/'Services/VPNProfileCache.swift').read_text()
 cache_models=cache_source[cache_source.index('struct VPNProfileCacheOwner:'):cache_source.index('\nstruct VPNProfileCache {')]+cache_source[cache_source.index('struct PreparedTunnelCacheRecord:'):]
@@ -32,6 +38,8 @@ import CryptoKit
 enum HelperError: Error { case protocolViolation(String) }
 ADMISSION
 enum VEXHelperCore { typealias AwgConfigAdmission = ActualAwgConfigAdmission }
+typealias AwgConfigAdmission = ActualAwgConfigAdmission
+CANONICALIZER
 enum VPNProfileError: Error { case subscriptionInactive, deviceRevoked, unchangedProfileWithoutCache, incompleteProfile(String) }
 enum FixtureError: Error { case sessionChanged, cacheFailure }
 CACHE_MODELS
@@ -270,7 +278,7 @@ func need(_ b:Bool,_ s:String){if !b {fputs("FAIL: \(s)\n",stderr);exit(1)}}
   print("signed cache matrix PASS rejects=\(cacheRejects); force refresh/session/owner eviction/deletion-failure guard; no real cache/Keychain/API/helper/VPN mutation")
  }
 }
-'''.replace('ADMISSION',admission).replace('DEVICE',device).replace('BODIES',bodies).replace('CACHE_MODELS',cache_models).replace('CONTROL',control)
+'''.replace('ADMISSION',admission).replace('CANONICALIZER',canonicalizer).replace('DEVICE',device).replace('BODIES',bodies).replace('CACHE_MODELS',cache_models).replace('CONTROL',control)
 # No application/helper, OS preferences, Keychain, DNS, network, route/PF or VPN use.
 tmp=Path(os.environ.get('TMPDIR','/Volumes/D/Projects/mobile/macos-release-transaction-20261001/cycle-21-native/tmp'));tmp.mkdir(parents=True,exist_ok=True)
 with tempfile.TemporaryDirectory(prefix='normal-persistence-',dir=tmp) as p:

@@ -70,6 +70,7 @@ final class VEXAppState: ObservableObject {
     private let dynamicRouteEngine = DynamicRouteEngine()
     private let biometricAuth = BiometricAuthService()
     private let profileService = VPNProfileService()
+    private let nativeAdmittedProfiles = NativeAdmittedProfileStore()
     private let startupService = StartupService()
     private let nativeUpdater: NativeUpdaterService
     let customerNotifications: CustomerNotificationService
@@ -480,6 +481,40 @@ final class VEXAppState: ObservableObject {
     /// Reauthorize the signed candidate before a protected helper transaction.
     /// No install, generic up/down, endpoint fallback, or PSK admission/ACK.
     /// Active-profile promotion requires the exact fresh-handshake commit receipt.
+    private func nativeAdmittedProfileScope(for tunnel: PreparedTunnel) throws -> NativeAdmittedProfileStore.Scope {
+        guard let current = session, let installation = nativePushIdentityStore.existingDeviceId(),
+              tunnel.device.externalDeviceId == installation else { throw NativeAdmittedProfileStore.Failure.staleSource }
+        return .init(accountID: current.user.id, installationID: installation,
+                     sessionGeneration: authenticatedSessionGeneration)
+    }
+
+    /// Admission is optional for an ordinary connect (e.g. anti-leak is disabled),
+    /// but mandatory for a later protected cutover. Never infer it from UI/cache.
+    private func rememberNativeAdmittedProfile(_ tunnel: PreparedTunnel, canonicalConfig: String,
+        helper: VEXHelperModel, generation: Int, sessionGeneration: Int?, accessToken token: String?, accountID: String?) async {
+        do {
+            try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration,
+                                          accessToken: token, accountID: accountID)
+            let scope = try nativeAdmittedProfileScope(for: tunnel)
+            let isCurrent: @MainActor () -> Bool = { [weak self, weak helper] in
+                guard let self, let helper, helper.canUseExistingValidatedHelper,
+                      (try? self.nativeAdmittedProfileScope(for: tunnel)) == scope else { return false }
+                return (try? self.ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration,
+                    accessToken: token, accountID: accountID)) != nil
+            }
+            guard isCurrent() else { return }
+            nativeAdmittedProfiles.clear()
+            let owner = try await helper.verifyAdmittedSource(NativeProtectedReplacementCoordinator.digest(canonicalConfig),
+                                                              isCurrent: isCurrent)
+            guard isCurrent() else { return }
+            try nativeAdmittedProfiles.record(tunnel: tunnel, canonicalConfig: canonicalConfig,
+                                              ownerTokenSHA256: owner, scope: scope, helper: helper)
+        } catch {
+            // A denied/missing proof must not disconnect an otherwise verified
+            // ordinary connection. Protected replacement remains fail-closed.
+        }
+    }
+
     private func processNativeNormalPendingProfile() async {
         guard let candidate = nativeNormalPendingTunnel, let source = activeTunnel,
               let helper = nativePSKHelper, helper.canUseExistingValidatedHelper,
@@ -493,6 +528,8 @@ final class VEXAppState: ObservableObject {
         let vpnGeneration = vpnOperationGeneration
         let selectedID = selectedLocationId
         let prepared = nativePSKPreparedTunnel
+        guard let admissionScope = try? nativeAdmittedProfileScope(for: source),
+              let admittedSource = try? nativeAdmittedProfiles.source(for: source, scope: admissionScope, helper: helper) else { return }
         var expectedCandidate = candidate
         var cutoverStarted = false
         let scopeIsCurrent: @MainActor () -> Bool = { [weak self, weak helper] in
@@ -507,7 +544,9 @@ final class VEXAppState: ObservableObject {
                   self.selectedLocationId == selectedID, self.targetLocationId == expectedCandidate.locationId,
                   self.routingMode == expectedCandidate.routingMode,
                   self.nativePushIdentityStore.existingDeviceId() == installation,
-                  self.accountDevices.first(where: { $0.id == device.id }) == device else { return false }
+                  (try? self.nativeAdmittedProfileScope(for: source)) == admissionScope,
+                   self.nativeAdmittedProfiles.isCurrent(admittedSource, scope: admissionScope, helper: helper),
+                   self.accountDevices.first(where: { $0.id == device.id }) == device else { return false }
             return (try? self.ensureAuthenticatedSessionCurrent(generation: sessionGeneration,
                 accessToken: current.accessToken, accountID: current.user.id)) != nil
         }
@@ -530,19 +569,22 @@ final class VEXAppState: ObservableObject {
             let validateCurrent: @MainActor () throws -> Void = {
                 guard scopeIsCurrent() else { throw AuthenticatedOperationError.sessionChanged }
             }
-            let sourceConfig = try await profileService.prepareProtectedHelperConfig(for: source, validateCurrent: validateCurrent)
+            let sourceConfig = admittedSource.canonicalConfig
             let candidateConfig = try await profileService.prepareProtectedHelperConfig(for: authorized, validateCurrent: validateCurrent)
             try validateCurrent()
             cutoverStarted = true
-            _ = try await helper.replaceProfilePreservingProtection(
+            let receipt = try await helper.replaceProfilePreservingProtection(
                 sourceSHA256: NativeProtectedReplacementCoordinator.digest(sourceConfig),
                 candidateSHA256: NativeProtectedReplacementCoordinator.digest(candidateConfig),
+                sourceOwnerTokenSHA256: admittedSource.ownerTokenSHA256,
                 stageCandidate: { [profileService] in
                     try profileService.stageProtectedHelperConfig(candidateConfig, validateCurrent: validateCurrent)
                 }, restoreSource: { [profileService] in
                     try profileService.stageProtectedHelperConfig(sourceConfig, validateCurrent: validateCurrent)
                 }, isCurrent: scopeIsCurrent)
             try validateCurrent()
+            try nativeAdmittedProfiles.record(tunnel: authorized, canonicalConfig: candidateConfig,
+                ownerTokenSHA256: receipt.ownerTokenSHA256, scope: admissionScope, helper: helper)
             nativeNormalPendingTunnel = nil
             activeTunnel = authorized
             nativePSKPreparedTunnel = authorized
@@ -685,6 +727,8 @@ final class VEXAppState: ObservableObject {
               helper.canUseExistingValidatedHelper, nativePSKHelper === helper else {
             throw CancellationError() // Never replace an unowned/external active tunnel.
         }
+        let admissionScope = try nativeAdmittedProfileScope(for: previous)
+        let admittedSource = try nativeAdmittedProfiles.source(for: previous, scope: admissionScope, helper: helper)
         isVpnBusy = true
         defer { isVpnBusy = false }
         desiredVpnState = .connected
@@ -694,11 +738,14 @@ final class VEXAppState: ObservableObject {
         let targetID = targetLocationId
         let routeMode = routingMode
         let prepared = nativePSKPreparedTunnel
+        var candidateCommitted = false
         let scopeIsCurrent: @MainActor () -> Bool = { [weak self, weak helper] in
             guard let self, let helper, self.nativePSKHelper === helper,
                   helper.canUseExistingValidatedHelper, !Task.isCancelled,
                   self.activeTunnel == previous, self.nativePSKPreparedTunnel == prepared,
-                  self.selectedLocationId == selectedID, self.targetLocationId == targetID,
+                   (try? self.nativeAdmittedProfileScope(for: previous)) == admissionScope,
+                   (candidateCommitted || self.nativeAdmittedProfiles.isCurrent(admittedSource, scope: admissionScope, helper: helper)),
+                   self.selectedLocationId == selectedID, self.targetLocationId == targetID,
                   self.routingMode == routeMode, self.entitlement?.hasPaidAccess == true else { return false }
             return (try? self.ensureConnectStillDesired(generation: generation,
                 sessionGeneration: sessionGeneration, accessToken: token, accountID: owner.accountID)) != nil
@@ -706,14 +753,14 @@ final class VEXAppState: ObservableObject {
         let validateCurrent: @MainActor () throws -> Void = {
             guard scopeIsCurrent() else { throw AuthenticatedOperationError.sessionChanged }
         }
-        var candidateCommitted = false
         do {
-            let sourceConfig = try await profileService.prepareProtectedHelperConfig(for: previous, validateCurrent: validateCurrent)
+            let sourceConfig = admittedSource.canonicalConfig
             let candidateConfig = try await profileService.prepareProtectedHelperConfig(for: next, validateCurrent: validateCurrent)
             try validateCurrent()
             let receipt = try await helper.replaceProfilePreservingProtection(
                 sourceSHA256: NativeProtectedReplacementCoordinator.digest(sourceConfig),
                 candidateSHA256: NativeProtectedReplacementCoordinator.digest(candidateConfig),
+                sourceOwnerTokenSHA256: admittedSource.ownerTokenSHA256,
                 stageCandidate: { [profileService] in
                     try profileService.stageProtectedHelperConfig(candidateConfig, validateCurrent: validateCurrent)
                 }, restoreSource: { [profileService] in
@@ -721,11 +768,15 @@ final class VEXAppState: ObservableObject {
                 }, isCurrent: scopeIsCurrent)
             candidateCommitted = true
             try validateCurrent()
+            let admittedCandidate = try nativeAdmittedProfiles.record(tunnel: next, canonicalConfig: candidateConfig,
+                ownerTokenSHA256: receipt.ownerTokenSHA256, scope: admissionScope, helper: helper)
             nativePSKCommittedPromotion = (previous, next, owner, receipt, generation, { [weak self, weak helper] in
                 guard let self, let helper, self.nativePSKHelper === helper,
                       helper.canUseExistingValidatedHelper, !Task.isCancelled,
                       !self.isDeviceBusy, self.activeTunnel == next, self.nativePSKPreparedTunnel == next,
-                      self.selectedLocationId == selectedID, self.targetLocationId == targetID,
+                       (try? self.nativeAdmittedProfileScope(for: next)) == admissionScope,
+                       self.nativeAdmittedProfiles.isCurrent(admittedCandidate, scope: admissionScope, helper: helper),
+                       self.selectedLocationId == selectedID, self.targetLocationId == targetID,
                       self.routingMode == routeMode, self.entitlement?.hasPaidAccess == true else { return false }
                 return (try? self.ensureConnectStillDesired(generation: generation,
                     sessionGeneration: sessionGeneration, accessToken: token, accountID: owner.accountID)) != nil
@@ -855,6 +906,7 @@ final class VEXAppState: ObservableObject {
     }
 
     private func invalidateNativePushSession(resetConsent: Bool = false) {
+        nativeAdmittedProfiles.clear()
         nativePSKCommittedPromotion = nil
         nativeNormalPendingTunnel = nil
         nativePSKRetryTask?.cancel()
@@ -1370,7 +1422,7 @@ final class VEXAppState: ObservableObject {
             try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration, accessToken: token, accountID: accountID)
             let previousStatus = helper.status
             let attemptStartedAt = Date()
-            try await profileService.writeHelperConfig(for: attempt, validateCurrent: { [weak self] in
+            let admittedConfig = try await profileService.writeHelperConfig(for: attempt, validateCurrent: { [weak self] in
                 guard let self else { throw AuthenticatedOperationError.sessionChanged }
                 try self.ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration, accessToken: token, accountID: accountID)
             })
@@ -1393,6 +1445,9 @@ final class VEXAppState: ObservableObject {
             )
             try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration, accessToken: token, accountID: accountID)
             if handshakeVerified {
+                await rememberNativeAdmittedProfile(attempt, canonicalConfig: admittedConfig, helper: helper,
+                    generation: generation, sessionGeneration: sessionGeneration, accessToken: token, accountID: accountID)
+                try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration, accessToken: token, accountID: accountID)
                 activeResilienceRoute = item.route
                 if let route = item.route, let resiliencePolicy {
                     dynamicRouteEngine.recordSuccess(route, policy: resiliencePolicy)
@@ -1516,6 +1571,7 @@ final class VEXAppState: ObservableObject {
     }
 
     private func clearActiveTunnelRouteState() {
+        nativeAdmittedProfiles.clear()
         nativeNormalPendingTunnel = nil
         activeTunnel = nil
         activeResilienceRoute = nil

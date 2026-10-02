@@ -21,6 +21,14 @@ final class NativeProtectedReplacementCoordinator {
         let transactionID: String
         let candidateSHA256: String
         let latestHandshake: UInt64
+        let ownerTokenSHA256: String
+
+        init(transactionID: String, candidateSHA256: String, latestHandshake: UInt64, ownerTokenSHA256: String = "") {
+            self.transactionID = transactionID
+            self.candidateSHA256 = candidateSHA256
+            self.latestHandshake = latestHandshake
+            self.ownerTokenSHA256 = ownerTokenSHA256
+        }
     }
 
     private struct Transaction {
@@ -43,7 +51,20 @@ final class NativeProtectedReplacementCoordinator {
         SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
-    func replace(sourceSHA256: String, candidateSHA256: String, dependencies d: Dependencies) async throws -> Receipt {
+    func verifyAdmittedSource(_ expectedSHA256: String, isCurrent: () -> Bool,
+        send: (String, Int) async throws -> String) async throws -> String {
+        guard !Task.isCancelled, isCurrent(), pending == nil, Self.isDigest(expectedSHA256) else { throw Failure.staleIntent }
+        let snapshot = try fields(await send("protected-snapshot", 15))
+        guard !Task.isCancelled, isCurrent(), pending == nil else { throw Failure.staleIntent }
+        guard snapshot["protected_protocol"] == "1", snapshot["recovery_pending"] == "false",
+              snapshot["source_sha256"] == expectedSHA256,
+              let id = snapshot["transaction_id"], UUID(uuidString: id)?.uuidString == id,
+              let owner = snapshot["owner_token_sha256"], Self.isDigest(owner) else { throw Failure.sourceMismatch }
+        return owner
+    }
+
+    func replace(sourceSHA256: String, candidateSHA256: String, sourceOwnerTokenSHA256: String? = nil,
+                 dependencies d: Dependencies) async throws -> Receipt {
         try current(d)
         if let pending {
             guard pending.source == sourceSHA256 else { throw Failure.recoveryPending }
@@ -61,6 +82,9 @@ final class NativeProtectedReplacementCoordinator {
         guard let id = snapshot["transaction_id"], UUID(uuidString: id)?.uuidString == id,
               let owner = snapshot["owner_token_sha256"], Self.isDigest(owner),
               Self.isDigest(sourceSHA256), Self.isDigest(candidateSHA256) else { throw Failure.invalidResponse }
+        if let expectedOwner = sourceOwnerTokenSHA256 {
+            guard Self.isDigest(expectedOwner), owner == expectedOwner else { throw Failure.sourceMismatch }
+        }
         let transaction = Transaction(id: id, source: sourceSHA256, candidate: candidateSHA256, owner: owner)
         try current(d)
         try d.stageCandidate()
@@ -86,7 +110,8 @@ final class NativeProtectedReplacementCoordinator {
                 }
                 try current(d)
                 pending = nil
-                let receipt = Receipt(transactionID: id, candidateSHA256: candidateSHA256, latestHandshake: handshake)
+                let receipt = Receipt(transactionID: id, candidateSHA256: candidateSHA256,
+                                      latestHandshake: handshake, ownerTokenSHA256: owner)
                 self.committed = (transaction, receipt)
                 return receipt
             }

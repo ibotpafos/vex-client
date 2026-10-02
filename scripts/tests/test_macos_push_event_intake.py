@@ -117,7 +117,9 @@ func drain() async {{ for _ in 0..<32 {{ await Task.yield() }} }}
     func setRegistrationEnabled(_ enabled: Bool) {{}}
     func registerAppleDeviceToken(_ data: Data, accountID: String, deviceID: String, accessToken: String, sessionGeneration: Int) {{}}
 }}
+@MainActor final class FixtureAdmission {{ var clears=0;func clear() {{clears+=1}} }}
 @MainActor final class LifecycleH {{
+    let nativeAdmittedProfiles=FixtureAdmission()
     var nativeNormalPendingTunnel: PreparedTunnel?
     // Opaque presence sentinel: lifecycle bodies clear but never read receipts.
     var nativePSKCommittedPromotion: Int?

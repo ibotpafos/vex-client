@@ -34,13 +34,23 @@ revalidate = extract(helper_source, "    func revalidateProtectedCommit(") if " 
         isCurrent: @escaping () -> Bool) async throws { throw FixtureError.boom }
 """
 coordinator = S / "Services/NativeProtectedReplacementCoordinator.swift"
+store = S / "Services/NativeAdmittedProfileStore.swift"
+app_source = (S / "Stores/VEXAppState.swift").read_text()
+scope_body = extract(app_source, "    private func nativeAdmittedProfileScope(") if "    private func nativeAdmittedProfileScope(" in app_source else """
+    private func nativeAdmittedProfileScope(for tunnel:PreparedTunnel) throws -> NativeAdmittedProfileStore.Scope {
+        .init(accountID: account,installationID: "installation",sessionGeneration: authenticatedSessionGeneration)
+    }
+"""
+LEGACY_STORE_FIXTURE = '\n@MainActor final class NativeAdmittedProfileStore {\n struct Scope: Equatable { let accountID:String; let installationID:String; let sessionGeneration:Int }\n struct Source { let revision=UUID();let tunnel:PreparedTunnel;let canonicalConfig:String;let ownerTokenSHA256:String;let scope:Scope }\n enum Failure:Error { case staleSource }\n private var value:Source?; private weak var helper:AnyObject?\n @discardableResult func record(tunnel:PreparedTunnel,canonicalConfig:String,ownerTokenSHA256:String,scope:Scope,helper:AnyObject)throws->Source { let v=Source(tunnel:tunnel,canonicalConfig:canonicalConfig,ownerTokenSHA256:ownerTokenSHA256,scope:scope);value=v;self.helper=helper;return v }\n func source(for tunnel:PreparedTunnel,scope:Scope,helper:AnyObject)throws->Source { guard let v=value,v.tunnel==tunnel,v.scope==scope,self.helper === helper else {throw Failure.staleSource};return v }\n func isCurrent(_ source:Source,scope:Scope,helper:AnyObject)->Bool { (try? self.source(for:source.tunnel,scope:scope,helper:helper).revision)==source.revision }\n func clear(){value=nil;helper=nil}\n}\n'
 HARNESS = r'''
 import Foundation
 import CryptoKit
 enum AuthenticatedOperationError: Error { case sessionChanged }
 enum Desired { case connected, disconnected }
 struct Owner: Equatable { let accountID: String; var installationID="installation" }; typealias NativePushPSKEventOwner = Owner
-struct Device: Equatable { let id: String }
+struct User { let id:String }; struct Session { let user:User; let accessToken:String }
+@MainActor final class Identity { var value:String?="installation";func existingDeviceId()->String? {value} }
+struct Device: Equatable { let id: String; var externalDeviceId:String?="installation" }
 enum Routing: String { case full, split }
 struct PreparedTunnel: Equatable {
  let id: String; let device: Device; let locationId: String
@@ -69,7 +79,7 @@ enum Mode { case success, connectThrows, promotionThrows, sessionChanges, tokenC
    if commits > 0 && app.mode == .snapshotThrows { throw FixtureError.boom }
    if commits > 0 && app.mode == .snapshotScopeChanges { app.authenticatedSessionGeneration += 1 }
    let observed = commits > 0 && app.mode != .snapshotCandidateChanges ? candidate : source
-   let observedOwner = commits > 0 && app.mode == .snapshotOwnerChanges ? digest("foreign-owner") : owner
+   let observedOwner = (app.foreignOwner || (commits > 0 && app.mode == .snapshotOwnerChanges)) ? digest("foreign-owner") : owner
    let pending = journal || (commits > 0 && app.mode == .snapshotJournal)
    return "protected_protocol=1 recovery_pending=\(pending) source_sha256=\(observed) owner_token_sha256=\(observedOwner) transaction_id=\(id)" + (pending ? " candidate_sha256=\(candidate)" : "") + "\n"
   case "protected-replace":
@@ -98,14 +108,14 @@ enum Mode { case success, connectThrows, promotionThrows, sessionChanges, tokenC
 }
 @MainActor final class Profile {
  unowned let app: AppState
- var prepares=0, promotions=0, writes=0
+ var prepares=0, promotions=0, writes=0, sourcePrepares=0, candidatePrepares=0;var sourceDNSChanged=false
  init(_ app: AppState) { self.app=app }
  func prepareStagedPSKProfile(_ verified: Verified, basedOn old: PreparedTunnel) throws -> PreparedTunnel {
   prepares += 1
   return .init(id:"next",device:old.device,locationId:old.locationId,routingMode:old.routingMode,bypassRegion:old.bypassRegion)
  }
  func prepareProtectedHelperConfig(for tunnel: PreparedTunnel, validateCurrent: @MainActor () throws -> Void) async throws -> String {
-  try validateCurrent(); await Task.yield(); try validateCurrent(); return tunnel.id + "-profile"
+  try validateCurrent(); await Task.yield(); try validateCurrent(); if tunnel.id=="old" {sourcePrepares+=1;return sourceDNSChanged ? "rotated-DNS-profile" : "old-profile"};candidatePrepares+=1;return tunnel.id + "-profile"
  }
  func stageProtectedHelperConfig(_ config:String, validateCurrent: @MainActor () throws -> Void) throws { try validateCurrent(); writes += 1 }
  func promoteStagedPSKProfile(_ t: PreparedTunnel, owner: Owner) throws {
@@ -124,6 +134,10 @@ enum Mode { case success, connectThrows, promotionThrows, sessionChanges, tokenC
  var entitlement:Entitlement? = .init(hasPaidAccess:true), authenticatedSessionGeneration=4
  var token="token", account="account", mode:Mode = .success, connects=0
  var releaseFlags:[Bool]=[], endpointFallbackFlags:[Bool]=[]
+ var foreignOwner=false
+ var session:Session? { .init(user:.init(id:account),accessToken:token) }
+ let nativePushIdentityStore=Identity(), nativeAdmittedProfiles=NativeAdmittedProfileStore()
+ SCOPE_BODY
  lazy var profileService=Profile(self)
  let nativePSKVerifier=Verifier()
  func ensureAuthenticatedSessionCurrent(generation:Int, accessToken:String?=nil, accountID:String?=nil) throws {
@@ -153,6 +167,7 @@ enum Mode { case success, connectThrows, promotionThrows, sessionChanges, tokenC
   connects += 1; releaseFlags.append(releaseAntiLeakOnFailure); endpointFallbackFlags.append(allowEndpointFallback); try boundary(); return t
  }
  CUTOVER
+ func nativeAdmittedProfileScopeForFixture(_ tunnel:PreparedTunnel) throws -> NativeAdmittedProfileStore.Scope {try nativeAdmittedProfileScope(for:tunnel)}
  func run(_ previous:PreparedTunnel,_ helper:VEXHelperModel) async throws -> Int {
   try await applyNativePSKCutover(.init(version:1),previous:previous,owner:.init(accountID:"account"),helper:helper,sessionGeneration:4,token:"token")
  }
@@ -168,6 +183,7 @@ enum Mode { case success, connectThrows, promotionThrows, sessionChanges, tokenC
    let p=PreparedTunnel(id:"old",device:.init(id:"device"),locationId:"loc",routingMode:.full,bypassRegion:nil)
    a.activeTunnel=p; h=VEXHelperModel(a); a.nativePSKHelper=h
    h.status = .init(isUsableConnectedStatus:connected,hasManagedNetworkState:false,endpoint:"old")
+   if connected {try! a.nativeAdmittedProfiles.record(tunnel:p,canonicalConfig:"old-profile",ownerTokenSHA256:h.client.digest("fixture-owner"),scope:try! a.nativeAdmittedProfileScopeForFixture(p),helper:h)}
    return (a,h,p)
   }
   func check(_ name:String,_ ok:Bool) { cases += 1; if !ok { failures += 1 }; print("psk_protected \(name)=\(ok ? "PASS" : "FAIL")") }
@@ -235,11 +251,39 @@ enum Mode { case success, connectThrows, promotionThrows, sessionChanges, tokenC
    do { try await h.revalidateProtectedCommit(.init(transactionID:"unproven",candidateSHA256:"unproven",latestHandshake:100),isCurrent:{true});check("unproven-receipt-rejected",false) }
    catch { check("unproven-receipt-rejected",h.client.snapshots==0 && h.client.replacements==0 && h.client.commits==0) }
   }
+
+  do {
+   let (a,h,p)=base(true);a.profileService.sourceDNSChanged=true
+   _=try await a.run(p,h)
+   let admitted=try a.nativeAdmittedProfiles.source(for:a.activeTunnel!,scope:try a.nativeAdmittedProfileScopeForFixture(a.activeTunnel!),helper:h)
+   check("rotating-source-DNS-exact-admitted-bytes",a.activeTunnel?.id=="next" && h.client.commits==1 && a.profileService.sourcePrepares==0 && a.profileService.candidatePrepares==1 && admitted.canonicalConfig=="next-profile" && admitted.ownerTokenSHA256==h.client.digest("fixture-owner"))
+  } catch {check("rotating-source-DNS-exact-admitted-bytes",false)}
+  for name in ["missing-admission","different-installation","different-helper-instance","changed-owner-intent"] {
+   let (a,h,p)=base(true)
+   switch name {
+   case "missing-admission":a.nativeAdmittedProfiles.clear()
+   case "different-installation":a.nativePushIdentityStore.value="other"
+   case "different-helper-instance":let foreign=VEXHelperModel(a);try! a.nativeAdmittedProfiles.record(tunnel:p,canonicalConfig:"old-profile",ownerTokenSHA256:h.client.digest("fixture-owner"),scope:try! a.nativeAdmittedProfileScopeForFixture(p),helper:foreign)
+   default:a.foreignOwner=true
+   }
+   do {_=try await a.run(p,h);check(name,false)}catch {check(name,a.activeTunnel==p && h.client.replacements==0 && h.client.commits==0 && h.client.recoveries==0 && a.profileService.writes==0 && a.connects==0)}
+  }
+  do {
+   let (a,h,p)=base(true);a.mode = .promotionThrows;_=try? await a.run(p,h)
+   let admitted=try a.nativeAdmittedProfiles.source(for:a.activeTunnel!,scope:try a.nativeAdmittedProfileScopeForFixture(a.activeTunnel!),helper:h)
+   a.nativeAdmittedProfiles.clear();a.mode = .success
+   do {_=try await a.retry(h);check("cache-failure-retains-binding-and-invalidation-fences-retry",false)}catch {
+    check("cache-failure-retains-binding-and-invalidation-fences-retry",admitted.canonicalConfig=="next-profile" && h.client.snapshots==1 && h.client.replacements==1 && a.profileService.promotions==1)
+   }
+  }catch {check("cache-failure-retains-binding-and-invalidation-fences-retry",false)}
+
   print("psk_protected_matrix cases=\(cases) failures=\(failures) live_network_commands=0")
   exit(failures==0 ? 0 : 1)
  }
 }
-'''.replace("WRAPPER", wrapper).replace("REVALIDATE", revalidate).replace("CUTOVER", cutover)
+'''.replace("WRAPPER", wrapper).replace("REVALIDATE", revalidate).replace("CUTOVER", cutover).replace("SCOPE_BODY",scope_body)
+if not store.exists():
+    HARNESS += LEGACY_STORE_FIXTURE
 if not coordinator.exists():
     HARNESS += "\n@MainActor final class NativeProtectedReplacementCoordinator { struct Receipt: Equatable { let transactionID:String; let candidateSHA256:String; let latestHandshake:UInt64 }; var hasPendingTransaction=false }\n"
 
@@ -248,6 +292,6 @@ with tempfile.TemporaryDirectory(prefix="psk-protected-", dir=scratch) as raw:
     directory=Path(raw)
     (directory / "main.swift").write_text(HARNESS)
     subprocess.run(["rtk", "proxy", "swiftc", "-swift-version", "5", "-parse-as-library",
-                    *([str(coordinator)] if coordinator.exists() else []), str(directory / "main.swift"),
+                    *([str(coordinator)] if coordinator.exists() else []), *([str(store)] if store.exists() else []), str(directory / "main.swift"),
                     "-o", str(directory / "probe")], check=True, timeout=180)
     raise SystemExit(subprocess.run(["rtk", "proxy", str(directory / "probe")], timeout=60).returncode)

@@ -1831,3 +1831,69 @@ private extension Data {
         self.init(base64Encoded: base64)
     }
 }
+
+
+final class NativeVPNProfileAuthorizationVerifierTests: XCTestCase {
+    private let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    private func base64URL(_ data: Data) -> String {
+        data.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+    }
+
+    private func signedProfile(counts: [String: Any] = ["bypass_ranges_count": 2, "bypass_domains_count": 3], routingMode: String = "all_except_ru") throws -> (ManagedVpnProfile, NativeVPNProfileAuthorizationVerifier) {
+        let key = P256.Signing.PrivateKey()
+        let expiry = ISO8601DateFormatter().string(from: now.addingTimeInterval(600))
+        let issued = ISO8601DateFormatter().string(from: now.addingTimeInterval(-60))
+        var tunnel: [String: Any] = [
+            "protocol": "wireguard", "endpoint": "de.fixture.invalid:51820", "assigned_ipv4": "10.8.0.2/32",
+            "server_public_key": "server", "preshared_key": "psk", "dns": ["10.8.0.1"],
+            "allowed_ips": ["0.0.0.0/2", "64.0.0.0/2", "128.0.0.0/1"], "mtu": 1280, "persistent_keepalive": 25
+        ]
+        var policy: [String: Any] = [
+            "schema": "vex.native-vpn-profile.v1", "user_id": "account", "device_id": "device",
+            "requested_location_id": "de", "assigned_location_id": "de", "routing_mode": routingMode,
+            "bypass_region": routingMode == "full_tunnel" ? NSNull() : "ru", "routing_policy_version": "v1", "profile_version": 7,
+            "issued_at": issued, "expires_at": expiry, "tunnel": tunnel
+        ]
+        policy.merge(counts) { _, new in new }
+        let payload = try JSONSerialization.data(withJSONObject: policy, options: [.sortedKeys])
+        let signature = try key.signature(for: payload).derRepresentation
+        let profileJSON: [String: Any] = [
+            "version": 7, "device_id": "device", "protocol": "wireguard", "server": "de.fixture.invalid", "port": 51820,
+            "server_public_key": "server", "preshared_key": "psk", "assigned_ipv4": "10.8.0.2/32", "dns": ["10.8.0.1"],
+            "allowed_ips": tunnel["allowed_ips"]!, "routing_policy_version": "v1", "expires_at": expiry,
+            "bypass_ranges": ["unsigned-poison"], "bypass_domains": ["unsigned.invalid"], "config": "unsigned-poison",
+            "authorization": ["algorithm": "ECDSA_P256_SHA256_DER", "key_id": "fixture", "payload": base64URL(payload), "signature": base64URL(signature)]
+        ]
+        let profile = try JSONDecoder().decode(ManagedVpnProfile.self, from: JSONSerialization.data(withJSONObject: profileJSON))
+        return (profile, NativeVPNProfileAuthorizationVerifier(pinnedPublicKeyDER: ["fixture": key.publicKey.derRepresentation]))
+    }
+
+    func testSignedBypassCountsAreDerivedAndUnsignedOuterListsAreStripped() throws {
+        let (profile, verifier) = try signedProfile()
+        let verified = try verifier.verifyNormalProfile(profile, ownerAccountID: "account", managedDeviceID: "device", requestedLocationID: "de", locationID: "de", routingMode: "all_except_ru", bypassRegion: "ru", expectedProfileVersion: 7, requireSignedBypassCounts: true, now: now)
+        XCTAssertEqual(verified.bypassRangesCount, 2)
+        XCTAssertEqual(verified.bypassDomainsCount, 3)
+        XCTAssertEqual(verified.profile.allowedIps, ["0.0.0.0/2", "64.0.0.0/2", "128.0.0.0/1"])
+        XCTAssertNil(verified.profile.bypassRanges)
+        XCTAssertNil(verified.profile.bypassDomains)
+        XCTAssertNil(verified.profile.config)
+    }
+
+    func testRequiredSignedBypassCountsRejectMalformedOrIncompleteMetadata() throws {
+        let cases: [[String: Any]] = [[:], ["bypass_ranges_count": 1], ["bypass_domains_count": 1], ["bypass_ranges_count": -1, "bypass_domains_count": 1], ["bypass_ranges_count": "2", "bypass_domains_count": 1], ["bypass_ranges_count": NSDecimalNumber(string: "9223372036854775808"), "bypass_domains_count": 1]]
+        for counts in cases {
+            let (profile, verifier) = try signedProfile(counts: counts)
+            XCTAssertThrowsError(try verifier.verifyNormalProfile(profile, ownerAccountID: "account", managedDeviceID: "device", requestedLocationID: "de", locationID: "de", routingMode: "all_except_ru", bypassRegion: "ru", expectedProfileVersion: 7, requireSignedBypassCounts: true, now: now), "counts=\\(counts)")
+        }
+    }
+
+    func testLegacyFullTunnelMayOmitSignedBypassCounts() throws {
+        let (profile, verifier) = try signedProfile(counts: [:], routingMode: "full_tunnel")
+        let verified = try verifier.verifyNormalProfile(profile, ownerAccountID: "account", managedDeviceID: "device", requestedLocationID: "de", locationID: "de", routingMode: "full_tunnel", bypassRegion: nil, expectedProfileVersion: 7, now: now)
+        XCTAssertEqual(verified.bypassRangesCount, 0)
+        XCTAssertEqual(verified.bypassDomainsCount, 0)
+        let (nonzero, nonzeroVerifier) = try signedProfile(counts: ["bypass_ranges_count": 1, "bypass_domains_count": 1], routingMode: "full_tunnel")
+        XCTAssertThrowsError(try nonzeroVerifier.verifyNormalProfile(nonzero, ownerAccountID: "account", managedDeviceID: "device", requestedLocationID: "de", locationID: "de", routingMode: "full_tunnel", bypassRegion: nil, expectedProfileVersion: 7, now: now))
+    }
+}

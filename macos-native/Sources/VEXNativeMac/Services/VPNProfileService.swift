@@ -191,14 +191,15 @@ struct VPNProfileService {
             managedDeviceID: device.id, requestedLocationID: locationId, routingMode: routingMode.rawValue,
             bypassRegion: bypass, expectedProfileVersion: profile.version ?? 0,
             expectedClientPublicKey: keyPair.publicKey, expectedClientKeyEpoch: keyPair.keyEpoch,
-            expectedInstallationID: installation, requireSignedClientBinding: true)
+            expectedInstallationID: installation, requireSignedClientBinding: true,
+            requireSignedBypassCounts: routingMode == .allExceptRu)
         let clean = verified.profile
         let config = try Self.buildRawManagedProfileConfig(clean, keyPair: keyPair, mtu: verified.mtu,
             persistentKeepalive: verified.persistentKeepalive, resolveEndpoint: false)
         try VEXHelperCore.AwgConfigAdmission.validate(config)
         let tunnel = PreparedTunnel(device: device.withManagedProfile(clean, locationId: verified.assignedLocationID),
             config: config, locationId: locationId, profileVersion: clean.version, routingMode: routingMode,
-            bypassRegion: bypass, bypassRangesCount: 0, bypassDomainsCount: 0,
+            bypassRegion: bypass, bypassRangesCount: verified.bypassRangesCount, bypassDomainsCount: verified.bypassDomainsCount,
             routingPolicyVersion: clean.routingPolicyVersion ?? VEXAppInfo.routingPolicyVersion,
             rotationRequired: false, awgVersion: Self.awgVersion)
         try validateCurrent()
@@ -229,7 +230,8 @@ struct VPNProfileService {
             managedDeviceID: record.device.id, requestedLocationID: locationId, routingMode: routingMode.rawValue,
             bypassRegion: bypassRegion, expectedProfileVersion: profile.version ?? 0,
             expectedClientPublicKey: keyPair.publicKey, expectedClientKeyEpoch: keyPair.keyEpoch,
-            expectedInstallationID: owner.installationID, requireSignedClientBinding: true, now: now)
+            expectedInstallationID: owner.installationID, requireSignedClientBinding: true,
+            requireSignedBypassCounts: routingMode == .allExceptRu, now: now)
         guard now.timeIntervalSince(verified.issuedAt) >= 0, now.timeIntervalSince(verified.issuedAt) <= 300 else {
             throw NativeVPNProfileAuthorizationVerifier.Failure.expired
         }
@@ -239,7 +241,7 @@ struct VPNProfileService {
         try VEXHelperCore.AwgConfigAdmission.validate(config)
         return PreparedTunnel(device: record.device.withManagedProfile(clean, locationId: verified.assignedLocationID),
             config: config, locationId: locationId, profileVersion: clean.version, routingMode: routingMode,
-            bypassRegion: bypassRegion, bypassRangesCount: 0, bypassDomainsCount: 0,
+            bypassRegion: bypassRegion, bypassRangesCount: verified.bypassRangesCount, bypassDomainsCount: verified.bypassDomainsCount,
             routingPolicyVersion: clean.routingPolicyVersion ?? VEXAppInfo.routingPolicyVersion,
             rotationRequired: false, awgVersion: Self.awgVersion)
     }
@@ -343,8 +345,8 @@ struct VPNProfileService {
             profileVersion: profile.version,
             routingMode: effectiveRoutingMode,
             bypassRegion: effectiveBypassRegion,
-            bypassRangesCount: 0,
-            bypassDomainsCount: 0,
+            bypassRangesCount: verified.bypassRangesCount,
+            bypassDomainsCount: verified.bypassDomainsCount,
             routingPolicyVersion: profile.routingPolicyVersion ?? VEXAppInfo.routingPolicyVersion,
             rotationRequired: profile.rotationRequired == true,
             awgVersion: Self.awgVersion

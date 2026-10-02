@@ -31,6 +31,8 @@ struct NativeVPNProfileAuthorizationVerifier {
         let profile: ManagedVpnProfile
         let assignedLocationID: String
         let clientKeyBindingSigned: Bool
+        let bypassRangesCount: Int
+        let bypassDomainsCount: Int
         let issuedAt: Date
         let expiresAt: Date
         let mtu: Int
@@ -45,6 +47,7 @@ struct NativeVPNProfileAuthorizationVerifier {
                              bypassRegion: String? = nil, expectedProfileVersion: Int,
                              expectedClientPublicKey: String? = nil, expectedClientKeyEpoch: Int? = nil,
                              expectedInstallationID: String? = nil, requireSignedClientBinding: Bool = false,
+                             requireSignedBypassCounts: Bool = false,
                              now: Date = Date()) throws -> VerifiedNormalProfile {
         guard !ownerAccountID.isEmpty, !managedDeviceID.isEmpty, locationID != "",
               expectedProfileVersion > 0, profile.version == expectedProfileVersion, profile.deviceId == managedDeviceID,
@@ -77,6 +80,28 @@ struct NativeVPNProfileAuthorizationVerifier {
               profile.expiresAt.flatMap(parse) == policy.expiresAt,
               (policy.routingMode == nil || policy.routingPolicyVersion == profile.routingPolicyVersion),
               tunnel(policy.tunnel, profile) else { throw policy.expiresAt <= now ? Failure.expired : Failure.policyMismatch }
+        if routingMode == "all_except_ru" {
+            guard !policy.tunnel.allowedIPs.contains("0.0.0.0/0") else { throw Failure.policyMismatch }
+        }
+        // Display metadata is authority only when covered by the signed payload.
+        // Old policies may omit the pair; never infer counts from outer lists.
+        let bypassRangesCount: Int
+        let bypassDomainsCount: Int
+        switch (policy.bypassRangesCount, policy.bypassDomainsCount) {
+        case (nil, nil):
+            guard !requireSignedBypassCounts else { throw Failure.policyMismatch }
+            bypassRangesCount = 0
+            bypassDomainsCount = 0
+        case let (ranges?, domains?):
+            guard ranges >= 0, domains >= 0,
+                  (routingMode != "full_tunnel" || (ranges == 0 && domains == 0)),
+                  (!requireSignedBypassCounts || routingMode != "all_except_ru" || ranges > 0) else {
+                throw Failure.policyMismatch
+            }
+            bypassRangesCount = ranges
+            bypassDomainsCount = domains
+        default: throw Failure.policyMismatch
+        }
         let signedClientBinding = policy.clientPublicKey != nil || policy.clientKeyEpoch != nil || policy.installationID != nil
         if signedClientBinding || requireSignedClientBinding {
             guard let clientPublicKey = policy.clientPublicKey, !clientPublicKey.isEmpty,
@@ -100,7 +125,8 @@ struct NativeVPNProfileAuthorizationVerifier {
             clean.routingPolicyVersion = nil
         }
         return VerifiedNormalProfile(profile: clean, assignedLocationID: policy.assignedLocationID,
-                                     clientKeyBindingSigned: signedClientBinding, issuedAt: policy.issuedAt, expiresAt: policy.expiresAt,
+                                     clientKeyBindingSigned: signedClientBinding, bypassRangesCount: bypassRangesCount,
+                                     bypassDomainsCount: bypassDomainsCount, issuedAt: policy.issuedAt, expiresAt: policy.expiresAt,
                                      mtu: policy.tunnel.mtu, persistentKeepalive: policy.tunnel.persistentKeepalive)
     }
 
@@ -172,8 +198,8 @@ struct NativeVPNProfileAuthorizationVerifier {
             signed.persistentKeepalive == rendered.persistentKeepalive &&
             rendered.randomTrailers == nil && rendered.disableCookies == nil
     }
-    private struct Policy: Decodable { let schema:String; let userID:String; let deviceID:String; let installationID:String?; let clientPublicKey:String?; let clientKeyEpoch:Int?; let requestedLocationID:String?; let assignedLocationID:String; let routingMode:String?; let bypassRegion:String?; let routingPolicyVersion:String?; let profileVersion:Int; let issuedAt:Date; let expiresAt:Date; let tunnel:Tunnel
-        enum CodingKeys:String,CodingKey { case schema; case userID="user_id"; case deviceID="device_id"; case installationID="installation_id"; case clientPublicKey="client_public_key"; case clientKeyEpoch="client_key_epoch"; case requestedLocationID="requested_location_id"; case assignedLocationID="assigned_location_id"; case routingMode="routing_mode"; case bypassRegion="bypass_region"; case routingPolicyVersion="routing_policy_version"; case profileVersion="profile_version"; case issuedAt="issued_at"; case expiresAt="expires_at"; case tunnel }
+    private struct Policy: Decodable { let schema:String; let userID:String; let deviceID:String; let installationID:String?; let clientPublicKey:String?; let clientKeyEpoch:Int?; let requestedLocationID:String?; let assignedLocationID:String; let routingMode:String?; let bypassRegion:String?; let routingPolicyVersion:String?; let bypassRangesCount:Int?; let bypassDomainsCount:Int?; let profileVersion:Int; let issuedAt:Date; let expiresAt:Date; let tunnel:Tunnel
+        enum CodingKeys:String,CodingKey { case schema; case userID="user_id"; case deviceID="device_id"; case installationID="installation_id"; case clientPublicKey="client_public_key"; case clientKeyEpoch="client_key_epoch"; case requestedLocationID="requested_location_id"; case assignedLocationID="assigned_location_id"; case routingMode="routing_mode"; case bypassRegion="bypass_region"; case routingPolicyVersion="routing_policy_version"; case bypassRangesCount="bypass_ranges_count"; case bypassDomainsCount="bypass_domains_count"; case profileVersion="profile_version"; case issuedAt="issued_at"; case expiresAt="expires_at"; case tunnel }
     }
     private struct Tunnel: Decodable { let `protocol`:String; let endpoint:String; let assignedIPv4:String; let serverPublicKey:String; let presharedKey:String; let dns:[String]; let allowedIPs:[String]; let mtu:Int; let persistentKeepalive:Int; let amnezia: Amnezia?
         enum CodingKeys:String,CodingKey { case `protocol`,endpoint,dns,mtu,amnezia; case assignedIPv4="assigned_ipv4"; case serverPublicKey="server_public_key"; case presharedKey="preshared_key"; case allowedIPs="allowed_ips"; case persistentKeepalive="persistent_keepalive" }

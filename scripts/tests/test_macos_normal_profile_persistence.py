@@ -89,13 +89,13 @@ let iso=ISO8601DateFormatter()
 let now=Date()
 let device=try! JSONDecoder().decode(VpnDevice.self,from:JSONSerialization.data(withJSONObject:["id":"device","status":"active","public_key":pair.publicKey,"external_device_id":"installation","platform":"macos","provisioning_mode":"managed_native","client_key_ownership":"client"]))
 func url64(_ data:Data)->String {data.base64EncodedString().replacingOccurrences(of:"+",with:"-").replacingOccurrences(of:"/",with:"_").replacingOccurrences(of:"=",with:"")}
-func profile(request:String="de",signedBinding:Bool=false,policyChange:(inout [String:Any])->Void={_ in})throws->ManagedVpnProfile {
- var policy:[String:Any]=["schema":"vex.native-vpn-profile.v1","user_id":"owner","device_id":"device","assigned_location_id":"assigned","routing_mode":"full_tunnel","profile_version":7,"issued_at":iso.string(from:now.addingTimeInterval(-2)),"expires_at":iso.string(from:now.addingTimeInterval(3600)),"tunnel":["protocol":"wireguard","endpoint":"vpn.example:51820","assigned_ipv4":"10.0.0.2/32","server_public_key":k,"preshared_key":k,"dns":["9.9.9.9"],"allowed_ips":["0.0.0.0/0"],"mtu":1420,"persistent_keepalive":55]]
+func profile(request:String="de",signedBinding:Bool=false,allowed:[String]=["0.0.0.0/0"],policyChange:(inout [String:Any])->Void={_ in})throws->ManagedVpnProfile {
+ var policy:[String:Any]=["schema":"vex.native-vpn-profile.v1","user_id":"owner","device_id":"device","assigned_location_id":"assigned","routing_mode":"full_tunnel","profile_version":7,"issued_at":iso.string(from:now.addingTimeInterval(-2)),"expires_at":iso.string(from:now.addingTimeInterval(3600)),"tunnel":["protocol":"wireguard","endpoint":"vpn.example:51820","assigned_ipv4":"10.0.0.2/32","server_public_key":k,"preshared_key":k,"dns":["9.9.9.9"],"allowed_ips":allowed,"mtu":1420,"persistent_keepalive":55]]
  if !request.isEmpty {policy["requested_location_id"]=request}
  if signedBinding {policy["installation_id"]="installation";policy["client_public_key"]=pair.publicKey;policy["client_key_epoch"]=pair.keyEpoch}
  policyChange(&policy)
  let payload=try JSONSerialization.data(withJSONObject:policy,options:[.sortedKeys])
- let raw:[String:Any]=["device_id":"device","client_public_key":pair.publicKey,"client_key_epoch":2,"version":7,"protocol":"wireguard","server":"vpn.example","port":51820,"assigned_ipv4":"10.0.0.2/32","server_public_key":k,"preshared_key":k,"dns":["9.9.9.9"],"allowed_ips":["0.0.0.0/0"],"expires_at":iso.string(from:now.addingTimeInterval(3600)),"config":"[Interface]\nPrivateKey = UNSIGNED_EVIL\n[Peer]\nEndpoint = evil.example:1","bypass_domains":["unsigned.example"],"bypass_ranges":["unsigned"],"authorization":["algorithm":"ECDSA_P256_SHA256_DER","key_id":"k","payload_base64":url64(payload),"signature_base64":url64(try signer.signature(for:payload).derRepresentation)]]
+ let raw:[String:Any]=["device_id":"device","client_public_key":pair.publicKey,"client_key_epoch":2,"version":7,"protocol":"wireguard","server":"vpn.example","port":51820,"assigned_ipv4":"10.0.0.2/32","server_public_key":k,"preshared_key":k,"dns":["9.9.9.9"],"allowed_ips":allowed,"expires_at":iso.string(from:now.addingTimeInterval(3600)),"config":"[Interface]\nPrivateKey = UNSIGNED_EVIL\n[Peer]\nEndpoint = evil.example:1","bypass_domains":["unsigned.example"],"bypass_ranges":["unsigned"],"authorization":["algorithm":"ECDSA_P256_SHA256_DER","key_id":"k","payload_base64":url64(payload),"signature_base64":url64(try signer.signature(for:payload).derRepresentation)]]
  return try JSONDecoder().decode(ManagedVpnProfile.self,from:JSONSerialization.data(withJSONObject:raw))
 }
 func need(_ b:Bool,_ s:String){if !b {fputs("FAIL: \(s)\n",stderr);exit(1)}}
@@ -109,6 +109,26 @@ func need(_ b:Bool,_ s:String){if !b {fputs("FAIL: \(s)\n",stderr);exit(1)}}
   need(rendered.config.contains("Endpoint = vpn.example:51820") && !rendered.config.contains("UNSIGNED_EVIL") && !rendered.config.contains("evil.example"),"opaque outer config ignored")
   need(rendered.bypassRangesCount==0 && rendered.bypassDomainsCount==0 && rendered.profileVersion==7 && rendered.device.id=="device","unsigned bypass stripped")
   print("valid_signed_normal_profile: local-key rendering, signed MTU/keepalive, opaque config ignored, cache=1/helper=1")
+  var smartProfile=try profile(signedBinding:true,allowed:["0.0.0.0/1","128.0.0.0/2","192.0.0.0/3","224.0.0.0/4"]){$0["routing_mode"]="all_except_ru";$0["bypass_region"]="ru";$0["routing_policy_version"]="r1";$0["bypass_ranges_count"]=2;$0["bypass_domains_count"]=3};smartProfile.routingPolicyVersion="r1"
+  let smartFresh=Harness();let smartFreshTunnel=try await smartFresh.admit(smartProfile,helper:false,route:.allExceptRu,region:"ru")
+  need(smartFreshTunnel.bypassRangesCount==2 && smartFreshTunnel.bypassDomainsCount==3 && smartFreshTunnel.config.contains("AllowedIPs = 0.0.0.0/1, 128.0.0.0/2, 192.0.0.0/3, 224.0.0.0/4"),"fresh smart signed counts and geometry")
+  need(smartFresh.cache.saved!.normalAuthorizationProfile?.bypassRanges==["unsigned"],"signed original retained only for cache proof")
+  print("fresh smart: signed count pair=2/3 and AllowedIPs retained; unsigned outer bypass lists never render")
+  var legacySmart=try profile(signedBinding:true,allowed:["0.0.0.0/1","128.0.0.0/2","192.0.0.0/3","224.0.0.0/4"]){$0["routing_mode"]="all_except_ru";$0["bypass_region"]="ru";$0["routing_policy_version"]="r1"};legacySmart.routingPolicyVersion="r1"
+  let legacyFresh=Harness();legacyFresh.api.response=legacySmart
+  let legacyTunnel=try await legacyFresh.resolveProfile(accessToken:"fixture",locationId:"de",routingMode:.allExceptRu,writeHelperConfig:false,accountID:"owner")
+  need(legacyFresh.api.profileCalls==1 && legacyTunnel.bypassRangesCount==0 && legacyTunnel.bypassDomainsCount==0,"fresh smart legacy omission remains compatible as derived zero")
+  for malformedPolicy in [{ (p: inout [String:Any]) in p["bypass_ranges_count"]=1 }, { (p: inout [String:Any]) in p["bypass_ranges_count"] = -1;p["bypass_domains_count"]=1 }] {
+    var malformed=try profile(signedBinding:true,allowed:["0.0.0.0/1","128.0.0.0/2","192.0.0.0/3","224.0.0.0/4"]){p in p["routing_mode"]="all_except_ru";p["bypass_region"]="ru";p["routing_policy_version"]="r1";malformedPolicy(&p)};malformed.routingPolicyVersion="r1"
+    let rejectedFresh=Harness();rejectedFresh.api.response=malformed
+    do {_=try await rejectedFresh.resolveProfile(accessToken:"fixture",locationId:"de",routingMode:.allExceptRu,writeHelperConfig:false,accountID:"owner");need(false,"malformed smart fresh accepted")}catch{}
+    need(rejectedFresh.api.profileCalls==1 && rejectedFresh.cache.writes==0,"malformed smart fresh no cache write")
+  }
+  var smartOuterRoutePoison=smartProfile;smartOuterRoutePoison.allowedIps=["0.0.0.0/0"]
+  do {_=try await Harness().admit(smartOuterRoutePoison,route:.allExceptRu,region:"ru");need(false,"outer smart route poison accepted")}catch{}
+  var smartSignatureTamper=smartProfile;smartSignatureTamper.authorization!.signatureBase64="A"
+  do {_=try await Harness().admit(smartSignatureTamper,route:.allExceptRu,region:"ru");need(false,"smart signature poison accepted")}catch{}
+  print("public smart fresh: legacy omitted pair=0; partial/negative, raw route poison, and signature tamper rejected")
   let auto=Harness()
   let autoTunnel=try await auto.admit(profile(request:""),request:"")
   need(auto.cache.writes==1 && autoTunnel.locationId=="","auto signed request omission; no guessed assignment input")
@@ -178,6 +198,17 @@ func need(_ b:Bool,_ s:String){if !b {fputs("FAIL: \(s)\n",stderr);exit(1)}}
   let second=try await online.resolveProfile(accessToken:"fixture",locationId:"de",routingMode:.fullTunnel,writeHelperConfig:false,accountID:"owner")
   need(second.config==first.config && online.api.profileCalls==fetches && online.cache.writes==writes && online.keyStore.reads==1 && online.identityStore.reads==1,"offline uses signed proof and existing readonly key, not poison/API/creation")
   print("signed_normal_cache_offline_reuse=true second_profile_fetches=0; cached config ignored and local-key rendered")
+  let smartOnline=Harness();smartOnline.api.response=smartProfile
+  let smartFirst=try await smartOnline.resolveProfile(accessToken:"fixture",locationId:"de",routingMode:.allExceptRu,writeHelperConfig:false,accountID:"owner")
+  let smartFetches=smartOnline.api.profileCalls;smartOnline.api.mode="timeout"
+  let smartCached=try await smartOnline.resolveProfile(accessToken:"fixture",locationId:"de",routingMode:.allExceptRu,writeHelperConfig:false,accountID:"owner")
+  need(smartFirst.bypassRangesCount==2 && smartFirst.bypassDomainsCount==3 && smartCached.bypassRangesCount==2 && smartCached.bypassDomainsCount==3 && smartOnline.api.profileCalls==smartFetches,"smart signed cache preserves derived counts without refetch")
+  print("smart signed cache reuse: fresh/cache count pair=2/3; fetches unchanged")
+  smartOnline.cache.saved!.normalAuthorizationProfile=legacySmart;smartOnline.api.response=legacySmart;smartOnline.api.mode="working"
+  let beforeLegacyMiss=smartOnline.api.profileCalls
+  let legacyAfterCacheMiss=try await smartOnline.resolveProfile(accessToken:"fixture",locationId:"de",routingMode:.allExceptRu,writeHelperConfig:false,accountID:"owner")
+  need(smartOnline.api.profileCalls==beforeLegacyMiss+1 && legacyAfterCacheMiss.bypassRangesCount==0 && legacyAfterCacheMiss.bypassDomainsCount==0,"old smart cache missing counts misses then fresh legacy retry")
+  print("public smart cache: missing signed counts miss then one fresh legacy retry yields derived 0")
   var cacheRejects=0
   func badCache(_ label:String,_ record:PreparedTunnelCacheRecord,key:WireGuardKeyPair?=pair,installation:String?="installation",owner:String="owner",request:String="de",route:VpnRoutingMode = .fullTunnel)async {
    let h=Harness();h.cache.saved=record;h.api.mode="timeout";h.keyStore.existing=key;h.identityStore.existing=installation

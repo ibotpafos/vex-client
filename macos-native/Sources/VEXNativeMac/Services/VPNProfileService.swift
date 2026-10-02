@@ -391,6 +391,25 @@ struct VPNProfileService {
         try await writeSanitizedHelperConfig(tunnel.config, validateCurrent: validateCurrent)
     }
 
+    // TODO: Bind protected sources to the canonical bytes of their original
+    // successful admission/commit, not a second hostname resolution. This
+    // cross-path binding still needs connect/commit plumbing and rotating-DNS
+    // regression coverage; for now source-digest drift is rejected, not adopted.
+    func prepareProtectedHelperConfig(for tunnel: PreparedTunnel, validateCurrent: @MainActor () throws -> Void) async throws -> String {
+        try validateCurrent()
+        let sanitized = await Self.sanitizedHelperConfigOffMain(tunnel.config)
+        try validateCurrent()
+        let canonical = try SystemTunnelController.sanitizedConfig(from: sanitized)
+        try AwgConfigAdmission.validate(canonical)
+        return canonical
+    }
+
+    func stageProtectedHelperConfig(_ config: String, validateCurrent: @MainActor () throws -> Void) throws {
+        try validateCurrent()
+        try AwgConfigAdmission.validate(config)
+        try cache.writeHelperConfig(config)
+    }
+
     private func writeSanitizedHelperConfig(_ config: String, validateCurrent: @MainActor () throws -> Void = {}) async throws {
         try validateCurrent()
         let sanitized = await Self.sanitizedHelperConfigOffMain(config)

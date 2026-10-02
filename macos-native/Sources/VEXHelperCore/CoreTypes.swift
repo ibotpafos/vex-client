@@ -86,6 +86,10 @@ public enum HelperCommand: Equatable, Sendable {
     case diagnostics
     case attachOwner(ownerPID: Int32)
     case antiLeakOff
+    case protectedSnapshot
+    case protectedReplace(ProtectedReplacementRequest)
+    case protectedCommit(ProtectedReplacementRequest)
+    case protectedRecover(ProtectedReplacementRequest)
 
     public static func parse(_ rawValue: String) throws -> HelperCommand {
         let parts = rawValue.split(whereSeparator: \.isWhitespace).map(String.init)
@@ -93,6 +97,17 @@ public enum HelperCommand: Equatable, Sendable {
         let metadata = Array(parts.dropFirst())
 
         switch commandName {
+        case "protected-snapshot":
+            guard metadata.isEmpty else {
+                throw HelperError.protocolViolation("invalid protected replacement metadata")
+            }
+            return .protectedSnapshot
+        case "protected-replace":
+            return .protectedReplace(try ProtectedReplacementRequest(metadata: metadata))
+        case "protected-commit":
+            return .protectedCommit(try ProtectedReplacementRequest(metadata: metadata))
+        case "protected-recover":
+            return .protectedRecover(try ProtectedReplacementRequest(metadata: metadata))
         case "up":
             return .up(armAntiLeak: true, ownerPID: try parseOwnerPIDMetadata(metadata))
         case "up-no-antileak":

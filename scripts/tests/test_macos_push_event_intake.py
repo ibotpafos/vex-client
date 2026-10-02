@@ -119,6 +119,8 @@ func drain() async {{ for _ in 0..<32 {{ await Task.yield() }} }}
 }}
 @MainActor final class LifecycleH {{
     var nativeNormalPendingTunnel: PreparedTunnel?
+    // Opaque presence sentinel: lifecycle bodies clear but never read receipts.
+    var nativePSKCommittedPromotion: Int?
     var nativePushRuntimeAllowed = true
     var canUseNativeRemotePush = true
     var nativeRemotePushEnabled = false
@@ -222,15 +224,21 @@ func drain() async {{ for _ in 0..<32 {{ await Task.yield() }} }}
         lifecycle.setNativeRemotePushEnabled(true)
         lifecycle.nativePushEventOwner = owner
         _ = try lifecycle.nativePushPSKQueue.enqueue(NativePushPSKEvent(kind: .profile_updated, eventID: "disable", rotationID: "r", deviceID: "device-A", profileVersion: 1, deadlineAt: nil), owner: owner)
+        lifecycle.nativePSKCommittedPromotion = 1
         lifecycle.setNativeRemotePushEnabled(false)
         let explicitDisablePurges = try lifecycle.nativePushPSKQueue.events(owner: owner).isEmpty
+            && lifecycle.nativePSKCommittedPromotion == nil
         lifecycle.nativeRemotePushEnabled = true; lifecycle.nativePushEventOwner = owner
         _ = try lifecycle.nativePushPSKQueue.enqueue(NativePushPSKEvent(kind: .profile_updated, eventID: "logout", rotationID: "r", deviceID: "device-A", profileVersion: 1, deadlineAt: nil), owner: owner)
+        lifecycle.nativePSKCommittedPromotion = 2
         lifecycle.invalidateNativePushSession(resetConsent: true)
         let logoutPurges = try lifecycle.nativePushPSKQueue.events(owner: owner).isEmpty
+            && lifecycle.nativePSKCommittedPromotion == nil
         _ = try lifecycle.nativePushPSKQueue.enqueue(NativePushPSKEvent(kind: .profile_updated, eventID: "restart", rotationID: "r", deviceID: "device-A", profileVersion: 1, deadlineAt: nil), owner: owner)
+        lifecycle.nativePSKCommittedPromotion = 3
         lifecycle.invalidateNativePushSession(resetConsent: false)
         let terminationRetains = try lifecycle.nativePushPSKQueue.events(owner: owner).map(\.eventID) == ["restart"]
+            && lifecycle.nativePSKCommittedPromotion == nil
         let previewRoot = root.appendingPathComponent("preview-no-fs", isDirectory: true)
         let preview = LifecycleH(root: previewRoot); preview.nativePushRuntimeAllowed = false; preview.purgeNativePushPSKEvents()
         let previewNoFilesystem = !fm.fileExists(atPath: previewRoot.path)
@@ -246,7 +254,9 @@ func drain() async {{ for _ in 0..<32 {{ await Task.yield() }} }}
 '''
 
 with tempfile.TemporaryDirectory(prefix="vex-native-push-intake-", dir=os.environ.get("TMPDIR", "/private/tmp")) as directory:
-    directory = Path(directory)
+    # Canonicalize the existing directory before appending the nonexistent
+    # app-data leaf; secure stores intentionally reject macOS /tmp symlinks.
+    directory = Path(directory).resolve()
     app_data = directory / "app-data"
     main = directory / "main.swift"
     binary = directory / "probe"

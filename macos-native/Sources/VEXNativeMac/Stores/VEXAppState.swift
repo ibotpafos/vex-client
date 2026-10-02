@@ -81,6 +81,14 @@ final class VEXAppState: ObservableObject {
     private let nativePSKVerifier = NativeVPNProfileAuthorizationVerifier.bundled()
     private weak var nativePSKHelper: VEXHelperModel?
     private var nativePSKPreparedTunnel: PreparedTunnel?
+    // Memory-only confirmed receipt, bound to the original owner and intent.
+    // TODO: Persist/reconcile authenticated commit receipts across app crashes;
+    // cross-process ownership transfer still requires isolated acceptance.
+    private var nativePSKCommittedPromotion: (
+        source: PreparedTunnel, candidate: PreparedTunnel, owner: NativePushPSKEventOwner,
+        receipt: NativeProtectedReplacementCoordinator.Receipt, generation: Int,
+        isCurrent: @MainActor () -> Bool
+    )?
     // Memory-only normal-profile staging. Config contains private key material;
     // never publish, persist, diagnose, or use it as an implicit connect input.
     private var nativeNormalPendingStorage: (tunnel: PreparedTunnel, stagedAt: Date, isCurrent: @MainActor () -> Bool)?
@@ -461,19 +469,17 @@ final class VEXAppState: ObservableObject {
                 nativePSKPreparedTunnel = prepared
                 nativePushEventError = nil
             }
-            // The active-source path remains read-only until the helper has a
-            // protected replacement transaction; generic `up` is not a cutover.
+            // The active-source path uses only the authenticated protected
+            // transaction; generic `up` is never a normal-profile cutover.
         } catch {
             guard scopeIsCurrent() else { return }
             nativePushEventError = "Не удалось безопасно обновить VPN-профиль. Активное подключение не изменено."
         }
     }
 
-    /// Reauthorize a memory-only normal candidate against the current owner and
-    /// an already validated, exactly matched helper. The authenticated read may
-    /// update the signed normal cache, but never the helper or network state.
-    /// No install/helper-config write/up,
-    /// PSK admission/ACK or active-profile promotion is allowed in this preflight.
+    /// Reauthorize the signed candidate before a protected helper transaction.
+    /// No install, generic up/down, endpoint fallback, or PSK admission/ACK.
+    /// Active-profile promotion requires the exact fresh-handshake commit receipt.
     private func processNativeNormalPendingProfile() async {
         guard let candidate = nativeNormalPendingTunnel, let source = activeTunnel,
               let helper = nativePSKHelper, helper.canUseExistingValidatedHelper,
@@ -487,17 +493,19 @@ final class VEXAppState: ObservableObject {
         let vpnGeneration = vpnOperationGeneration
         let selectedID = selectedLocationId
         let prepared = nativePSKPreparedTunnel
+        var expectedCandidate = candidate
+        var cutoverStarted = false
         let scopeIsCurrent: @MainActor () -> Bool = { [weak self, weak helper] in
             guard let self, let helper, self.nativePSKHelper === helper,
-                  helper.canUseExistingValidatedHelper, !helper.isBusy,
+                  helper.canUseExistingValidatedHelper, (!helper.isBusy || cutoverStarted),
                   self.desiredVpnState == .connected, !Task.isCancelled,
-                  helper.status.isUsableConnectedStatus, self.tunnel(source, matches: helper.status),
+                  (cutoverStarted || (helper.status.isUsableConnectedStatus && self.tunnel(source, matches: helper.status))),
                   self.activeTunnel == source, self.nativePSKPreparedTunnel == prepared,
-                  self.nativeNormalPendingTunnel == candidate,
+                  self.nativeNormalPendingTunnel == expectedCandidate,
                   self.nativeNormalProfileReconciliationGeneration == profileGeneration,
                   self.vpnOperationGeneration == vpnGeneration,
-                  self.selectedLocationId == selectedID, self.targetLocationId == candidate.locationId,
-                  self.routingMode == candidate.routingMode,
+                  self.selectedLocationId == selectedID, self.targetLocationId == expectedCandidate.locationId,
+                  self.routingMode == expectedCandidate.routingMode,
                   self.nativePushIdentityStore.existingDeviceId() == installation,
                   self.accountDevices.first(where: { $0.id == device.id }) == device else { return false }
             return (try? self.ensureAuthenticatedSessionCurrent(generation: sessionGeneration,
@@ -516,17 +524,35 @@ final class VEXAppState: ObservableObject {
             guard scopeIsCurrent() else { return }
             // The computed setter rechecks the signed expiry, device/client-key
             // and route tuple and meaningful change against the active source.
+            expectedCandidate = authorized
             nativeNormalPendingTunnel = authorized
+            guard scopeIsCurrent() else { return }
+            let validateCurrent: @MainActor () throws -> Void = {
+                guard scopeIsCurrent() else { throw AuthenticatedOperationError.sessionChanged }
+            }
+            let sourceConfig = try await profileService.prepareProtectedHelperConfig(for: source, validateCurrent: validateCurrent)
+            let candidateConfig = try await profileService.prepareProtectedHelperConfig(for: authorized, validateCurrent: validateCurrent)
+            try validateCurrent()
+            cutoverStarted = true
+            _ = try await helper.replaceProfilePreservingProtection(
+                sourceSHA256: NativeProtectedReplacementCoordinator.digest(sourceConfig),
+                candidateSHA256: NativeProtectedReplacementCoordinator.digest(candidateConfig),
+                stageCandidate: { [profileService] in
+                    try profileService.stageProtectedHelperConfig(candidateConfig, validateCurrent: validateCurrent)
+                }, restoreSource: { [profileService] in
+                    try profileService.stageProtectedHelperConfig(sourceConfig, validateCurrent: validateCurrent)
+                }, isCurrent: scopeIsCurrent)
+            try validateCurrent()
+            nativeNormalPendingTunnel = nil
+            activeTunnel = authorized
+            nativePSKPreparedTunnel = authorized
+            activeResilienceRoute = nil
             nativePushEventError = nil
-            // TODO: Replace the owned active normal profile through a helper
-            // transaction preserving PF, source config and DNS baseline, with
-            // handshake/rollback and stale-owner fencing. SystemTunnelController
-            // bringUp currently calls bringDown (PF disable/DNS restore), so do
-            // not connect/promote this candidate through the generic up path.
         } catch {
             guard scopeIsCurrent() else { return }
-            nativeNormalPendingTunnel = nil
-            nativePushEventError = "Не удалось повторно проверить VPN-профиль. Активное подключение не изменено."
+            nativePushEventError = helper.hasPendingProtectedReplacement
+                ? "Обновление профиля требует защищённого восстановления. Новый профиль не подтверждён; обычное переподключение запрещено."
+                : "Обновление VPN-профиля не завершено. Новый профиль не подтверждён; кандидат сохранён для повторной проверки."
         }
     }
 
@@ -558,7 +584,8 @@ final class VEXAppState: ObservableObject {
               let current = session, let deviceID = nativePushDeviceID,
               let installation = nativePushIdentityStore.existingDeviceId(),
               let owner = NativePushPSKEventOwner(accountID: current.user.id, installationID: installation),
-              let previous = activeTunnel ?? nativePSKPreparedTunnel, previous.device.id == deviceID else { return }
+              let previous = nativePSKCommittedPromotion?.source ?? activeTunnel ?? nativePSKPreparedTunnel,
+              previous.device.id == deviceID else { return }
         let sessionGeneration = authenticatedSessionGeneration
         let token = current.accessToken
         let selectedID = selectedLocationId
@@ -627,6 +654,26 @@ final class VEXAppState: ObservableObject {
             managedDeviceID: previous.device.id, locationID: previous.locationId, routingMode: previous.routingMode.rawValue,
             bypassRegion: previous.bypassRegion)
         let next = try profileService.prepareStagedPSKProfile(verified, basedOn: previous)
+        if let promotion = nativePSKCommittedPromotion {
+            // Reverify the signed envelope against the ORIGINAL source version.
+            // The promoted in-memory candidate is not a new rotation source.
+            guard promotion.owner == owner, promotion.source == previous,
+                  promotion.candidate == next, nativePSKHelper === helper,
+                  promotion.isCurrent() else { throw AuthenticatedOperationError.sessionChanged }
+            isVpnBusy = true
+            defer { isVpnBusy = false }
+            let current: @MainActor () -> Bool = { [weak self] in
+                guard let self else { return false }
+                return promotion.isCurrent()
+                    && self.nativePSKCommittedPromotion?.receipt == promotion.receipt
+            }
+            try await helper.revalidateProtectedCommit(promotion.receipt, isCurrent: current)
+            guard current() else { throw AuthenticatedOperationError.sessionChanged }
+            try profileService.promoteStagedPSKProfile(next, owner: owner)
+            nativePSKCommittedPromotion = nil
+            nativePushEventError = nil
+            return promotion.generation
+        }
         guard helper.status.isUsableConnectedStatus else {
             guard helper.hasConfirmedIdleStatus, !helper.status.hasManagedNetworkState else { throw CancellationError() }
             try profileService.promoteStagedPSKProfile(next, owner: owner)
@@ -634,44 +681,77 @@ final class VEXAppState: ObservableObject {
             nativePSKPreparedTunnel = next
             return vpnOperationGeneration
         }
-        guard let activeTunnel, activeTunnel == previous, tunnel(previous, matches: helper.status) else {
+        guard let activeTunnel, activeTunnel == previous, tunnel(previous, matches: helper.status),
+              helper.canUseExistingValidatedHelper, nativePSKHelper === helper else {
             throw CancellationError() // Never replace an unowned/external active tunnel.
         }
         isVpnBusy = true
         defer { isVpnBusy = false }
-        let oldPolicy = activeResiliencePolicy
-        let oldRoute = activeResilienceRoute
         desiredVpnState = .connected
         vpnOperationGeneration += 1
         let generation = vpnOperationGeneration
+        let selectedID = selectedLocationId
+        let targetID = targetLocationId
+        let routeMode = routingMode
+        let prepared = nativePSKPreparedTunnel
+        let scopeIsCurrent: @MainActor () -> Bool = { [weak self, weak helper] in
+            guard let self, let helper, self.nativePSKHelper === helper,
+                  helper.canUseExistingValidatedHelper, !Task.isCancelled,
+                  self.activeTunnel == previous, self.nativePSKPreparedTunnel == prepared,
+                  self.selectedLocationId == selectedID, self.targetLocationId == targetID,
+                  self.routingMode == routeMode, self.entitlement?.hasPaidAccess == true else { return false }
+            return (try? self.ensureConnectStillDesired(generation: generation,
+                sessionGeneration: sessionGeneration, accessToken: token, accountID: owner.accountID)) != nil
+        }
+        let validateCurrent: @MainActor () throws -> Void = {
+            guard scopeIsCurrent() else { throw AuthenticatedOperationError.sessionChanged }
+        }
+        var candidateCommitted = false
         do {
-            let connected = try await connectPreparedTunnel(next, helper: helper, generation: generation,
-                sessionGeneration: sessionGeneration, accessToken: token, accountID: owner.accountID,
-                releaseAntiLeakOnFailure: false, allowEndpointFallback: false)
-            try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration,
-                accessToken: token, accountID: owner.accountID)
-            guard entitlement?.hasPaidAccess == true else { throw CancellationError() }
-            try profileService.promoteStagedPSKProfile(connected, owner: owner)
-            self.activeTunnel = connected
-            nativePSKPreparedTunnel = connected
+            let sourceConfig = try await profileService.prepareProtectedHelperConfig(for: previous, validateCurrent: validateCurrent)
+            let candidateConfig = try await profileService.prepareProtectedHelperConfig(for: next, validateCurrent: validateCurrent)
+            try validateCurrent()
+            let receipt = try await helper.replaceProfilePreservingProtection(
+                sourceSHA256: NativeProtectedReplacementCoordinator.digest(sourceConfig),
+                candidateSHA256: NativeProtectedReplacementCoordinator.digest(candidateConfig),
+                stageCandidate: { [profileService] in
+                    try profileService.stageProtectedHelperConfig(candidateConfig, validateCurrent: validateCurrent)
+                }, restoreSource: { [profileService] in
+                    try profileService.stageProtectedHelperConfig(sourceConfig, validateCurrent: validateCurrent)
+                }, isCurrent: scopeIsCurrent)
+            candidateCommitted = true
+            try validateCurrent()
+            nativePSKCommittedPromotion = (previous, next, owner, receipt, generation, { [weak self, weak helper] in
+                guard let self, let helper, self.nativePSKHelper === helper,
+                      helper.canUseExistingValidatedHelper, !Task.isCancelled,
+                      !self.isDeviceBusy, self.activeTunnel == next, self.nativePSKPreparedTunnel == next,
+                      self.selectedLocationId == selectedID, self.targetLocationId == targetID,
+                      self.routingMode == routeMode, self.entitlement?.hasPaidAccess == true else { return false }
+                return (try? self.ensureConnectStillDesired(generation: generation,
+                    sessionGeneration: sessionGeneration, accessToken: token, accountID: owner.accountID)) != nil
+            })
+            try profileService.promoteStagedPSKProfile(next, owner: owner)
+            nativePSKCommittedPromotion = nil
+            self.activeTunnel = next
+            nativePSKPreparedTunnel = next
+            activeResilienceRoute = nil
             nativePushEventError = nil
             return generation
         } catch {
-            // An obsolete task never restores/disconnects a replacement session/tunnel.
-            try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration,
-                accessToken: token, accountID: owner.accountID)
-            guard entitlement?.hasPaidAccess == true else { throw CancellationError() }
-            self.activeTunnel = previous
-            activeResiliencePolicy = oldPolicy
-            activeResilienceRoute = oldRoute
-            if !helper.lastConnectAdmissionRejected {
-                _ = try? await connectPreparedTunnel(previous, helper: helper, generation: generation,
-                    sessionGeneration: sessionGeneration, accessToken: token, accountID: owner.accountID,
-                    releaseAntiLeakOnFailure: false, allowEndpointFallback: false)
-                try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration,
-                    accessToken: token, accountID: owner.accountID)
+            // The protected coordinator alone owns rollback. A cache error after
+            // a confirmed commit must not reconnect the old profile or pretend
+            // it is still the active physical tunnel.
+            try validateCurrent()
+            if candidateCommitted {
+                self.activeTunnel = next
+                nativePSKPreparedTunnel = next
+                activeResilienceRoute = nil
+                // Retain the exact receipt/source tuple for authenticated,
+                // cache-only retry; no generic reconnect is a valid fallback.
             }
-            nativePushEventError = "Не удалось применить смену ключей. Событие сохранено для повтора; защита от утечек не снимается."
+            nativePushEventError = helper.hasPendingProtectedReplacement
+                ? "Смена ключей требует защищённого восстановления. Обычное переподключение запрещено; событие сохранено."
+                : "Смена ключей не завершена полностью. Событие сохранено; обычное переподключение не выполнялось."
             throw error
         }
     }
@@ -753,6 +833,7 @@ final class VEXAppState: ObservableObject {
     }
 
     private func purgeNativePushPSKEvents() {
+        nativePSKCommittedPromotion = nil
         guard nativePushRuntimeAllowed else { return }
         // Read an existing installation only; cleanup must not create an identity
         // or prompt for Keychain access just to remove old metadata.
@@ -774,6 +855,7 @@ final class VEXAppState: ObservableObject {
     }
 
     private func invalidateNativePushSession(resetConsent: Bool = false) {
+        nativePSKCommittedPromotion = nil
         nativeNormalPendingTunnel = nil
         nativePSKRetryTask?.cancel()
         nativePSKRetryTask = nil
@@ -1251,6 +1333,9 @@ final class VEXAppState: ObservableObject {
         releaseAntiLeakOnFailure: Bool = true,
         allowEndpointFallback: Bool = true
     ) async throws -> PreparedTunnel {
+        guard !helper.hasPendingProtectedReplacement else {
+            throw NativeProtectedReplacementCoordinator.Failure.recoveryPending
+        }
         var lastError: Error = VpnAutopilotRuntimeError.connectFailed("VPN connection failed.")
         try ensureConnectStillDesired(generation: generation, sessionGeneration: sessionGeneration, accessToken: token, accountID: accountID)
         activeResilienceRoute = nil

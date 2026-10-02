@@ -61,6 +61,9 @@ struct FixtureSession {{ var user: FixtureUser; var accessToken: String }}
     var nativePSKRetryTask: Task<Void, Never>?
     var nativePSKPreparedTunnel: PreparedTunnel?
     var nativeNormalPendingTunnel: PreparedTunnel?
+    // Cleanup only consumes receipt presence; the protected-cutover matrix
+    // executes the full production receipt type and its reconciliation.
+    var nativePSKCommittedPromotion: Int?
     func startNativePSKRetryIfNeeded() {{}}
     var nativePushEventOwner: NativePushPSKEventOwner?
     var nativePushEventError: String?
@@ -122,9 +125,20 @@ struct FixtureSession {{ var user: FixtureUser; var accessToken: String }}
         // proves logout/expiry reaches this exact reset-consent call.
         h.nativePushRegistrationRequested = true
         h.nativeApplePushToken = Data([1])
+        h.nativePSKCommittedPromotion = 1
         h.invalidateNativePushSession(resetConsent: true)
         let logoutClears = !h.nativeRemotePushEnabled && h.nativeRemotePushConsentAccount.isEmpty
             && h.nativePushRegistration.clearCount > 0 && h.unregisterCalls == 1
+            && h.nativePSKCommittedPromotion == nil
+
+        h.nativePSKCommittedPromotion = 2
+        h.invalidateNativePushSession(resetConsent: false)
+        let terminationClearsPromotion = h.nativePSKCommittedPromotion == nil
+        h.nativePSKCommittedPromotion = 3
+        h.nativePushRuntimeAllowed = false
+        h.purgeNativePushPSKEvents()
+        let disabledRuntimeClearsPromotion = h.nativePSKCommittedPromotion == nil
+        h.nativePushRuntimeAllowed = true
 
         install("A", "token-A2", 3)
         h.setNativeRemotePushEnabled(true)
@@ -139,8 +153,9 @@ struct FixtureSession {{ var user: FixtureUser; var accessToken: String }}
         print("legacy_global_fails_closed=\\(legacyFailsClosed)")
         print("a_explicit_same_account=\\(aExplicit) b_cannot_inherit=\\(bCannotInherit)")
         print("logout_reset_body_calls_reset_consent=true logout_clears_flag_hash_and_registrar=\\(logoutClears)")
+        print("committed_promotion_cleared_logout=\\(logoutClears) termination=\\(terminationClearsPromotion) disabled_runtime=\\(disabledRuntimeClearsPromotion)")
         print("explicit_a_and_b_consent=\\(aReconsents && bExplicit) fixture_in_memory_only=true")
-        exit(legacyFailsClosed && aExplicit && bCannotInherit && logoutClears && aReconsents && bExplicit ? 0 : 1)
+        exit(legacyFailsClosed && aExplicit && bCannotInherit && logoutClears && terminationClearsPromotion && disabledRuntimeClearsPromotion && aReconsents && bExplicit ? 0 : 1)
     }}
 }}
 '''

@@ -630,38 +630,126 @@ public final class SystemPFFirewallController: PFFirewallControlling, @unchecked
     }
 }
 
-public final class SystemTunnelController: TunnelControlling, @unchecked Sendable {
+public final class SystemTunnelController: ProtectedTunnelControlling, @unchecked Sendable {
     private let fileSystem: HelperFileSystem
     private let paths: HelperPathsLayout
     private let runner: CommandRunning
     private let firewall: PFFirewallControlling
+    private let dateProvider: DateProviding
 
     public init(
         fileSystem: HelperFileSystem,
         paths: HelperPathsLayout = .init(),
         runner: CommandRunning,
-        firewall: PFFirewallControlling
+        firewall: PFFirewallControlling,
+        dateProvider: DateProviding = SystemDateProvider()
     ) {
         self.fileSystem = fileSystem
         self.paths = paths
         self.runner = runner
         self.firewall = firewall
+        self.dateProvider = dateProvider
     }
 
-    /// Protected replacement foundation. Deliberately not exposed by the
-    /// helper socket or normal app coordinator until their owner/intent and
-    /// completed-handshake gates are verified on an isolated Mac.
-    // TODO: Bind the authenticated helper RPC and normal coordinator to this
-    // operation and explicit journal recovery, with process/intent and fresh
-    // handshake validation. Runtime now isolates pending journals; that guard
-    // alone does not complete recovery or authorize live coordinator cutover.
+    public func protectedReplacementSnapshot(validateOwner: () throws -> OwnerSession) throws -> String {
+        let store = HelperStateStore(fileSystem: fileSystem, paths: paths)
+        return try store.withOperationLock(staleAfter: 120) {
+            let owner = try validateOwner()
+            guard try protectedOwnerSnapshot(ownerPID: owner.pid) == owner.payload else {
+                throw HelperError.ownerVerificationFailed("protected snapshot owner changed")
+            }
+            let ownerHash = ProtectedReplacementJournal.digest(owner.token)
+            if store.protectedReplacementRecoveryPending {
+                let journal = try ProtectedReplacementJournal.decode(fileSystem.readText(at: replacementJournalPath))
+                guard journal.ownerSession == owner.payload else {
+                    throw HelperError.ownerVerificationFailed("protected recovery owner changed")
+                }
+                return "protected_protocol=1 recovery_pending=true transaction_id=\(journal.transactionID) source_sha256=\(journal.sourceSHA256) candidate_sha256=\(journal.candidateSHA256) owner_token_sha256=\(ownerHash)\n"
+            }
+            guard let session = try refreshedSession(currentSession: store.loadSession()),
+                  session.ownerPID == owner.pid, session.socketExists, session.antiLeakArmed,
+                  session.routeInterface == session.interfaceName, session.dnsHealthy,
+                  !session.ipv6RouteExpected || session.ipv6RouteInterface == session.interfaceName else {
+                throw HelperError.ownerVerificationFailed("protected snapshot requires an owned healthy tunnel")
+            }
+            let source = try fileSystem.readText(at: paths.activeConfigPath)
+            try AwgConfigAdmission.validate(source)
+            _ = try validateOwner()
+            return "protected_protocol=1 recovery_pending=false source_sha256=\(ProtectedReplacementJournal.digest(source)) owner_token_sha256=\(ownerHash)\n"
+        }
+    }
+
+    private func authorizeProtected(_ request: ProtectedReplacementRequest, validateOwner: () throws -> OwnerSession) throws -> OwnerSession {
+        let owner = try validateOwner()
+        guard ProtectedReplacementJournal.digest(owner.token) == request.ownerTokenSHA256,
+              try protectedOwnerSnapshot(ownerPID: owner.pid) == owner.payload else {
+            throw HelperError.ownerVerificationFailed("protected operation owner or intent changed")
+        }
+        return owner
+    }
+
+    public func replaceProtected(request: ProtectedReplacementRequest, validateOwner: () throws -> OwnerSession) throws -> HelperSession {
+        let owner = try authorizeProtected(request, validateOwner: validateOwner)
+        return try replacePreservingAntiLeak(currentSession: nil, ownerPID: owner.pid,
+            expectedConfigSHA256: request.sourceSHA256, authenticatedRequest: request,
+            authorize: { _ = try self.authorizeProtected(request, validateOwner: validateOwner) })
+    }
+
+    public func recoverProtected(request: ProtectedReplacementRequest, validateOwner: () throws -> OwnerSession) throws -> HelperSession? {
+        let owner = try authorizeProtected(request, validateOwner: validateOwner)
+        return try recoverProtectedReplacement(ownerPID: owner.pid, authenticatedRequest: request,
+            authorize: { _ = try self.authorizeProtected(request, validateOwner: validateOwner) })
+    }
+
+    public func commitProtected(request: ProtectedReplacementRequest, validateOwner: () throws -> OwnerSession) throws -> HelperSession {
+        let store = HelperStateStore(fileSystem: fileSystem, paths: paths)
+        return try store.withOperationLock(staleAfter: 120) {
+            let owner = try authorizeProtected(request, validateOwner: validateOwner)
+            let authorize = { _ = try self.authorizeProtected(request, validateOwner: validateOwner) }
+            var journal = try ProtectedReplacementJournal.decode(fileSystem.readText(at: replacementJournalPath))
+            guard request.matches(journal), journal.ownerPID == owner.pid,
+                  ["awaiting-handshake", "committed"].contains(journal.phase),
+                  let floor = journal.handshakeNotBefore,
+                  let source = HelperSession(payload: journal.sourceSession) else {
+                throw HelperError.ownerVerificationFailed("protected commit transaction changed")
+            }
+            try requireReplacementState(journal, allowedHashes: [request.candidateSHA256], authorize: authorize)
+            // Bypass Runtime's status cache and never treat structural readiness
+            // or a handshake from the source session as candidate confirmation.
+            guard let saved = store.loadSession(), saved.ownerPID == owner.pid,
+                  try resolvedInterfaceName(logicalInterface: "active") == saved.interfaceName,
+                  try endpoint(fromConfigAt: paths.activeConfigPath) == saved.endpoint,
+                  let result = try refreshedSession(currentSession: saved),
+                  result.socketExists, result.antiLeakArmed, result.dnsHealthy,
+                  result.routeInterface == result.interfaceName,
+                  !result.ipv6RouteExpected || result.ipv6RouteInterface == result.interfaceName,
+                  let handshake = result.latestHandshake, handshake >= floor,
+                  handshake > (source.latestHandshake ?? 0),
+                  handshake <= UInt64(max(0, dateProvider.now.timeIntervalSince1970)) + 1 else {
+                throw HelperError.commandFailed("protected replacement awaiting fresh handshake")
+            }
+            try requireReplacementState(journal, allowedHashes: [request.candidateSHA256], authorize: authorize)
+            try store.persistSession(result)
+            journal.phase = "committed"
+            try persistReplacementJournal(journal)
+            try requireReplacementState(journal, allowedHashes: [request.candidateSHA256], authorize: authorize)
+            try fileSystem.removeItem(at: replacementJournalPath)
+            return result
+        }
+    }
+
+    /// Foundation callers retain their old readiness-only contract. Socket
+    /// callers supply the authenticated tuple and leave a durable handshake gate.
     public func replacePreservingAntiLeak(
-        currentSession: HelperSession?, ownerPID: Int32, expectedConfigSHA256: String
+        currentSession: HelperSession?, ownerPID: Int32, expectedConfigSHA256: String,
+        authenticatedRequest: ProtectedReplacementRequest? = nil,
+        authorize: () throws -> Void = {}
     ) throws -> HelperSession {
         let store = HelperStateStore(fileSystem: fileSystem, paths: paths)
         return try store.withOperationLock(staleAfter: 120) {
+            try authorize()
             try store.requireNoPendingReplacement()
-            guard ownerPID > 1, let source = currentSession,
+            guard ownerPID > 1, let source = authenticatedRequest == nil ? currentSession : store.loadSession(),
                   source.ownerPID == ownerPID, source.antiLeakArmed,
                   source.socketExists, validReplacementInterface(source.interfaceName),
                   firewall.antileakIsActive() else {
@@ -676,7 +764,7 @@ public final class SystemTunnelController: TunnelControlling, @unchecked Sendabl
                 throw HelperError.ownerVerificationFailed("protected replacement source changed")
             }
             try AwgConfigAdmission.validate(sourceConfig)
-            let candidate = try sanitizedConfig(from: fileSystem.readText(at: resolvedConfigPath()))
+            let candidate = try Self.sanitizedConfig(from: fileSystem.readText(at: resolvedConfigPath()))
             try AwgConfigAdmission.validate(candidate)
             guard sourceConfig != candidate, candidate.utf8.count <= 262_144,
                   sourceConfig.utf8.count <= 262_144 else {
@@ -693,37 +781,48 @@ public final class SystemTunnelController: TunnelControlling, @unchecked Sendabl
                 candidateConfig: candidate, candidateSHA256: ProtectedReplacementJournal.digest(candidate),
                 dnsBaseline: dns, ownerSession: ownerSnapshot
             )
+            if let request = authenticatedRequest {
+                journal.transactionID = request.transactionID
+                journal.handshakeNotBefore = UInt64(max(1, dateProvider.now.timeIntervalSince1970))
+                guard request.matches(journal) else {
+                    throw HelperError.ownerVerificationFailed("protected replacement candidate or intent changed")
+                }
+            }
+            try authorize()
             // Atomic source journal and readback precede every PF/quick mutation.
             // TODO: Validate OS-crash/power-loss durability on an isolated Mac;
             // fsync plus an offline memory-port test is not that acceptance gate.
             try persistReplacementJournal(journal)
             var sourceMayHaveStopped = false
             do {
-                try requireReplacementState(journal, allowedHashes: [journal.sourceSHA256])
+                try requireReplacementState(journal, allowedHashes: [journal.sourceSHA256], authorize: authorize)
                 // This validates and reloads only the existing armed anchor;
                 // unlike generic bringUp/bringDown it never disables PF.
                 try firewall.updateWhileArmed(endpoint: source.endpoint, interfaceName: source.interfaceName)
                 journal.phase = "replacing"
                 try persistReplacementJournal(journal)
-                try requireReplacementState(journal, allowedHashes: [journal.sourceSHA256])
+                try requireReplacementState(journal, allowedHashes: [journal.sourceSHA256], authorize: authorize)
                 sourceMayHaveStopped = true
                 try checkedReplacementQuick("down")
-                try requireReplacementState(journal, allowedHashes: [journal.sourceSHA256])
+                try requireReplacementState(journal, allowedHashes: [journal.sourceSHA256], authorize: authorize)
                 try fileSystem.writeTextAtomically(candidate, to: paths.activeConfigPath, mode: 0o600)
                 let candidateEndpoint = try endpoint(fromConfigAt: paths.activeConfigPath)
+                try requireReplacementState(journal, allowedHashes: [journal.candidateSHA256], authorize: authorize)
                 try firewall.updateWhileArmed(endpoint: candidateEndpoint, interfaceName: source.interfaceName)
+                try authorize()
                 try checkedReplacementQuick("up")
-                let result = try finishProtectedSession(ownerPID: ownerPID, store: store)
-                try requireReplacementState(journal, allowedHashes: [journal.candidateSHA256])
-                journal.phase = "committed"
+                let result = try finishProtectedSession(ownerPID: ownerPID, store: store, authorize: authorize)
+                try requireReplacementState(journal, allowedHashes: [journal.candidateSHA256], authorize: authorize)
+                journal.phase = authenticatedRequest == nil ? "committed" : "awaiting-handshake"
                 try persistReplacementJournal(journal)
-                try fileSystem.removeItem(at: replacementJournalPath)
+                try requireReplacementState(journal, allowedHashes: [journal.candidateSHA256], authorize: authorize)
+                if authenticatedRequest == nil { try fileSystem.removeItem(at: replacementJournalPath) }
                 return result
             } catch {
                 // Never print an underlying command error: awg config/output
                 // can carry key material. The journal remains on failed undo.
                 if sourceMayHaveStopped {
-                    do { _ = try restoreProtectedSource(journal, store: store) }
+                    do { _ = try restoreProtectedSource(journal, store: store, authorize: authorize) }
                     catch { throw HelperError.commandFailed("protected replacement failed; source recovery remains pending") }
                     throw HelperError.commandFailed("protected replacement failed; source restored with protection armed")
                 }
@@ -732,43 +831,48 @@ public final class SystemTunnelController: TunnelControlling, @unchecked Sendabl
         }
     }
 
-    /// Explicit recovery only, not called from startup or the live coordinator.
-    /// The future authenticated RPC must revalidate process identity and intent.
-    public func recoverProtectedReplacement(ownerPID: Int32) throws -> HelperSession? {
+    /// Explicit recovery only; startup and ordinary fail-open paths stay fenced.
+    public func recoverProtectedReplacement(ownerPID: Int32,
+        authenticatedRequest: ProtectedReplacementRequest? = nil,
+        authorize: () throws -> Void = {}) throws -> HelperSession? {
         let store = HelperStateStore(fileSystem: fileSystem, paths: paths)
         return try store.withOperationLock(staleAfter: 120) {
+            try authorize()
             switch fileSystem.pathPresence(at: replacementJournalPath) {
             case .absent: return nil
             case .unknown: throw HelperError.replacementRecoveryPending
             case .present: break
             }
             let journal = try ProtectedReplacementJournal.decode(fileSystem.readText(at: replacementJournalPath))
+            if let request = authenticatedRequest, !request.matches(journal) {
+                throw HelperError.ownerVerificationFailed("protected recovery transaction changed")
+            }
             guard journal.ownerPID == ownerPID else {
                 throw HelperError.ownerVerificationFailed("protected recovery owner changed")
             }
-            try requireReplacementState(journal, allowedHashes: [journal.sourceSHA256, journal.candidateSHA256])
+            try requireReplacementState(journal, allowedHashes: [journal.sourceSHA256, journal.candidateSHA256], authorize: authorize)
             if journal.phase == "prepared" {
                 // Admission/journal failure occurred before quick down. A stale
                 // prepared record must not tear down a still-running source.
-                try requireReplacementState(journal, allowedHashes: [journal.sourceSHA256])
+                try requireReplacementState(journal, allowedHashes: [journal.sourceSHA256], authorize: authorize)
                 guard let source = HelperSession(payload: journal.sourceSession),
                       try resolvedInterfaceName(logicalInterface: "active") == source.interfaceName else {
                     throw HelperError.ownerVerificationFailed("protected recovery source changed")
                 }
-                let result = try finishProtectedSession(ownerPID: ownerPID, store: store)
-                try requireReplacementState(journal, allowedHashes: [journal.sourceSHA256])
+                let result = try finishProtectedSession(ownerPID: ownerPID, store: store, authorize: authorize)
+                try requireReplacementState(journal, allowedHashes: [journal.sourceSHA256], authorize: authorize)
                 try fileSystem.removeItem(at: replacementJournalPath)
                 return result
             }
-            if journal.phase == "committed",
+            if authenticatedRequest == nil, journal.phase == "committed",
                ProtectedReplacementJournal.digest(try fileSystem.readText(at: paths.activeConfigPath)) == journal.candidateSHA256,
                let persisted = store.loadSession(), persisted.ownerPID == ownerPID {
-                let result = try finishProtectedSession(ownerPID: ownerPID, store: store)
-                try requireReplacementState(journal, allowedHashes: [journal.candidateSHA256])
+                let result = try finishProtectedSession(ownerPID: ownerPID, store: store, authorize: authorize)
+                try requireReplacementState(journal, allowedHashes: [journal.candidateSHA256], authorize: authorize)
                 try fileSystem.removeItem(at: replacementJournalPath)
                 return result
             }
-            return try restoreProtectedSource(journal, store: store)
+            return try restoreProtectedSource(journal, store: store, authorize: authorize)
         }
     }
 
@@ -798,7 +902,8 @@ public final class SystemTunnelController: TunnelControlling, @unchecked Sendabl
         return text
     }
 
-    private func requireReplacementState(_ journal: ProtectedReplacementJournal, allowedHashes: Set<String>) throws {
+    private func requireReplacementState(_ journal: ProtectedReplacementJournal, allowedHashes: Set<String>, authorize: () throws -> Void = {}) throws {
+        try authorize()
         let saved = try ProtectedReplacementJournal.decode(fileSystem.readText(at: replacementJournalPath))
         guard saved.transactionID == journal.transactionID,
               saved.phase == journal.phase,
@@ -808,6 +913,7 @@ public final class SystemTunnelController: TunnelControlling, @unchecked Sendabl
               saved.dnsBaseline == journal.dnsBaseline,
               saved.sourceSHA256 == journal.sourceSHA256,
               saved.candidateSHA256 == journal.candidateSHA256,
+              saved.handshakeNotBefore == journal.handshakeNotBefore,
               allowedHashes.contains(ProtectedReplacementJournal.digest(try fileSystem.readText(at: paths.activeConfigPath))),
               try fileSystem.readText(at: paths.dnsStatePath) == journal.dnsBaseline,
               firewall.antileakIsActive() else {
@@ -825,12 +931,14 @@ public final class SystemTunnelController: TunnelControlling, @unchecked Sendabl
         }
     }
 
-    private func finishProtectedSession(ownerPID: Int32, store: HelperStateStore) throws -> HelperSession {
+    private func finishProtectedSession(ownerPID: Int32, store: HelperStateStore, authorize: () throws -> Void = {}) throws -> HelperSession {
+        try authorize()
         let interface = try resolvedInterfaceName(logicalInterface: "active")
         guard validReplacementInterface(interface) else {
             throw HelperError.missingTunnelMetadata("invalid protected replacement interface")
         }
         let endpoint = try endpoint(fromConfigAt: paths.activeConfigPath)
+        try authorize()
         try firewall.updateWhileArmed(endpoint: endpoint, interfaceName: interface)
         let base = HelperSession(interfaceName: interface, endpoint: endpoint, ownerPID: ownerPID,
                                  antiLeakArmed: true, ipv6RouteExpected: configHasIPv6DefaultRoute(paths.activeConfigPath))
@@ -841,26 +949,30 @@ public final class SystemTunnelController: TunnelControlling, @unchecked Sendabl
             throw HelperError.commandFailed("protected replacement runtime did not become ready")
         }
         // This is helper readiness, NOT a fresh signed-profile handshake proof.
+        try authorize()
         try store.persistSession(result)
         return result
     }
 
-    private func restoreProtectedSource(_ input: ProtectedReplacementJournal, store: HelperStateStore) throws -> HelperSession {
+    private func restoreProtectedSource(_ input: ProtectedReplacementJournal, store: HelperStateStore, authorize: () throws -> Void = {}) throws -> HelperSession {
         var journal = input
-        try requireReplacementState(journal, allowedHashes: [journal.sourceSHA256, journal.candidateSHA256])
+        try requireReplacementState(journal, allowedHashes: [journal.sourceSHA256, journal.candidateSHA256], authorize: authorize)
         journal.phase = "rolling-back"
         try persistReplacementJournal(journal)
         // No global daemon-kill fallback: failure keeps PF and the source journal.
+        try authorize()
         try checkedReplacementQuick("down")
-        try requireReplacementState(journal, allowedHashes: [journal.sourceSHA256, journal.candidateSHA256])
+        try requireReplacementState(journal, allowedHashes: [journal.sourceSHA256, journal.candidateSHA256], authorize: authorize)
         try fileSystem.writeTextAtomically(journal.sourceConfig, to: paths.activeConfigPath, mode: 0o600)
         guard let source = HelperSession(payload: journal.sourceSession), validReplacementInterface(source.interfaceName) else {
             throw HelperError.protocolViolation("protected source session is invalid")
         }
+        try requireReplacementState(journal, allowedHashes: [journal.sourceSHA256], authorize: authorize)
         try firewall.updateWhileArmed(endpoint: source.endpoint, interfaceName: source.interfaceName)
+        try authorize()
         try checkedReplacementQuick("up")
-        let result = try finishProtectedSession(ownerPID: journal.ownerPID, store: store)
-        try requireReplacementState(journal, allowedHashes: [journal.sourceSHA256])
+        let result = try finishProtectedSession(ownerPID: journal.ownerPID, store: store, authorize: authorize)
+        try requireReplacementState(journal, allowedHashes: [journal.sourceSHA256], authorize: authorize)
         try fileSystem.removeItem(at: replacementJournalPath)
         return result
     }
@@ -870,7 +982,7 @@ public final class SystemTunnelController: TunnelControlling, @unchecked Sendabl
         let sanitized: String
         do {
             let sourceConfigPath = try resolvedConfigPath()
-            sanitized = try sanitizedConfig(from: fileSystem.readText(at: sourceConfigPath))
+            sanitized = try Self.sanitizedConfig(from: fileSystem.readText(at: sourceConfigPath))
             try AwgConfigAdmission.validate(sanitized)
         } catch {
             throw HelperError.protocolViolation("VPN_CONFIG_INVALID: next profile admission failed")
@@ -1076,7 +1188,9 @@ public final class SystemTunnelController: TunnelControlling, @unchecked Sendabl
         throw HelperError.missingTunnelMetadata("VPN config has no endpoint")
     }
 
-    private func sanitizedConfig(from source: String) throws -> String {
+    /// Pure canonicalization shared by the app's digest and helper admission.
+    /// It performs no file access, endpoint resolution, or network operations.
+    public static func sanitizedConfig(from source: String) throws -> String {
         var output = [String]()
         var inInterface = false
         for rawLine in source.split(separator: "\n", omittingEmptySubsequences: false) {

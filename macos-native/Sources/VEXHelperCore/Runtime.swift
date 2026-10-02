@@ -49,6 +49,7 @@ public actor HelperRuntime {
     private let sleeper: AsyncSleeping
     private let logger: HelperLogging
     private let configuration: HelperRuntimeConfiguration
+    private let protectedPeerAuthenticator: PeerAuthenticating
 
     private var ownerWatchdogTask: Task<Void, Never>?
     private var routeWatchdogTask: Task<Void, Never>?
@@ -56,6 +57,13 @@ public actor HelperRuntime {
     private var handshakeStarvedTicks = 0
     private var cachedStatusSession: HelperSession?
     private var cachedStatusAt: Date?
+    private struct ProtectedGrant {
+        let owner: OwnerSession
+        let transactionID: String
+        let sourceSHA256: String
+        let issuedAt: Date
+    }
+    private var protectedGrant: ProtectedGrant?
 
     public init(
         store: HelperStateStore,
@@ -65,7 +73,8 @@ public actor HelperRuntime {
         dateProvider: DateProviding = SystemDateProvider(),
         sleeper: AsyncSleeping = TaskSleeper(),
         logger: HelperLogging = StderrLogger(),
-        configuration: HelperRuntimeConfiguration = .init()
+        configuration: HelperRuntimeConfiguration = .init(),
+        protectedPeerAuthenticator: PeerAuthenticating = SystemPeerAuthenticator()
     ) {
         self.store = store
         self.tunnelController = tunnelController
@@ -75,6 +84,7 @@ public actor HelperRuntime {
         self.sleeper = sleeper
         self.logger = logger
         self.configuration = configuration
+        self.protectedPeerAuthenticator = protectedPeerAuthenticator
     }
 
     public func bootstrap() async throws {
@@ -118,10 +128,10 @@ public actor HelperRuntime {
         startRouteWatchdogLoopIfNeeded()
     }
 
-    public func handle(commandLine: String, peerPID: Int32?) async -> HelperCommandResponse {
+    public func handle(commandLine: String, peerPID: Int32?, authenticatedPeer: PeerCredentials? = nil) async -> HelperCommandResponse {
         do {
             let command = try HelperCommand.parse(commandLine)
-            return try await execute(command: command, peerPID: peerPID)
+            return try await execute(command: command, peerPID: peerPID, authenticatedPeer: authenticatedPeer)
         } catch let error as HelperError {
             if !commandLine.hasPrefix("status") {
                 logger.warn("socket", error.localizedDescription)
@@ -298,8 +308,61 @@ public actor HelperRuntime {
         )
     }
 
-    private func execute(command: HelperCommand, peerPID: Int32?) async throws -> HelperCommandResponse {
+    private func execute(command: HelperCommand, peerPID: Int32?, authenticatedPeer: PeerCredentials?) async throws -> HelperCommandResponse {
         switch command {
+        case .protectedSnapshot, .protectedReplace, .protectedCommit, .protectedRecover:
+            guard let peer = authenticatedPeer, peer.pid == peerPID,
+                  protectedPeerAuthenticator.authenticate(peer),
+                  let owner = store.loadOwnerSession(), owner.pid == peer.pid,
+                  !owner.token.isEmpty, !owner.identity.isEmpty,
+                  processInspector.processIdentity(pid: peer.pid) == owner.identity,
+                  let protected = tunnelController as? ProtectedTunnelControlling else {
+                throw HelperError.ownerVerificationFailed("protected operation requires the authenticated live owner")
+            }
+            let validateOwner: () throws -> OwnerSession = {
+                guard self.store.loadOwnerSession() == owner,
+                      self.processInspector.processIdentity(pid: peer.pid) == owner.identity else {
+                    throw HelperError.ownerVerificationFailed("protected operation owner or intent changed")
+                }
+                return owner
+            }
+            // No generic connect/retry, owner reattachment, fail-open cleanup,
+            // or watchdog-token rotation is permitted in these branches.
+            defer { cachedStatusSession = nil; cachedStatusAt = nil }
+            switch command {
+            case .protectedSnapshot:
+                let snapshot = try protected.protectedReplacementSnapshot(validateOwner: validateOwner)
+                protectedGrant = nil
+                if snapshot.contains(" recovery_pending=false "),
+                   let digestField = snapshot.split(whereSeparator: \.isWhitespace).first(where: { $0.hasPrefix("source_sha256=") }) {
+                    _ = try validateOwner()
+                    let nonce = UUID().uuidString
+                    protectedGrant = ProtectedGrant(owner: owner, transactionID: nonce,
+                        sourceSHA256: String(digestField.dropFirst("source_sha256=".count)), issuedAt: dateProvider.now)
+                    return .init(payload: snapshot.trimmingCharacters(in: .whitespacesAndNewlines) + " transaction_id=\(nonce)\n")
+                }
+                return .init(payload: snapshot)
+            case .protectedReplace(let request):
+                guard let grant = protectedGrant, grant.owner == owner,
+                      grant.transactionID == request.transactionID, grant.sourceSHA256 == request.sourceSHA256,
+                      (0...30).contains(dateProvider.now.timeIntervalSince(grant.issuedAt)) else {
+                    throw HelperError.ownerVerificationFailed("protected replacement grant is absent, stale or consumed")
+                }
+                // A snapshot is a short-lived, one-use intent. Even a rejected
+                // admission consumes it; reconnect/replay must obtain a new one.
+                protectedGrant = nil
+                _ = try protected.replaceProtected(request: request, validateOwner: validateOwner)
+                return .init(payload: "ready transaction_id=\(request.transactionID) candidate_sha256=\(request.candidateSHA256)\n")
+            case .protectedCommit(let request):
+                let result = try protected.commitProtected(request: request, validateOwner: validateOwner)
+                return .init(payload: "committed transaction_id=\(request.transactionID) candidate_sha256=\(request.candidateSHA256) latest_handshake=\(result.latestHandshake ?? 0)\n")
+            case .protectedRecover(let request):
+                guard try protected.recoverProtected(request: request, validateOwner: validateOwner) != nil else {
+                    throw HelperError.commandFailed("no matching protected recovery journal")
+                }
+                return .init(payload: "recovered transaction_id=\(request.transactionID)\n")
+            default: preconditionFailure("protected command dispatch")
+            }
         case .status:
             return HelperCommandResponse(payload: makeStatusSnapshot(from: refreshedStatusSession()).statusResponse)
         case .diagnostics:
@@ -544,7 +607,7 @@ public final class UnixSocketServer: @unchecked Sendable {
                     }
                     // Shutdown uses the same verified response path: pending
                     // recovery or failed cleanup must never be acknowledged ok.
-                    let response = await runtime.handle(commandLine: command, peerPID: peer.pid)
+                    let response = await runtime.handle(commandLine: command, peerPID: peer.pid, authenticatedPeer: peer)
                     if response.shouldExit {
                         _ = try? writeResponse(response.payload, to: client)
                         logger.info("socket", "shutdown requested, exiting helper")

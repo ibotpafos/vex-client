@@ -16,6 +16,8 @@ final class VEXHelperModel: ObservableObject {
 
     private let client = VEXHelperClient()
     private let installer = VEXHelperInstaller()
+    private let protectedReplacement = NativeProtectedReplacementCoordinator()
+    var hasPendingProtectedReplacement: Bool { protectedReplacement.hasPendingTransaction }
     private var pollTask: Task<Void, Never>?
     private var consecutiveStatusFailures = 0
     private var helperReadinessValidated = false
@@ -84,6 +86,38 @@ final class VEXHelperModel: ObservableObject {
     var canUseExistingValidatedHelper: Bool {
         helperReadinessValidated && installState?.filesCurrent == true
             && installState?.socketConnectable == true
+    }
+
+    func replaceProfilePreservingProtection(sourceSHA256: String, candidateSHA256: String,
+        stageCandidate: @escaping () throws -> Void, restoreSource: @escaping () throws -> Void,
+        isCurrent: @escaping () -> Bool) async throws -> NativeProtectedReplacementCoordinator.Receipt {
+        guard canUseExistingValidatedHelper, !isBusy, isCurrent() else {
+            throw NativeProtectedReplacementCoordinator.Failure.staleIntent
+        }
+        isBusy = true
+        defer { isBusy = false }
+        let result = try await protectedReplacement.replace(sourceSHA256: sourceSHA256, candidateSHA256: candidateSHA256,
+            dependencies: .init(isCurrent: { [weak self] in
+                self?.canUseExistingValidatedHelper == true && isCurrent()
+            }, send: { [client] command, timeout in
+                try await client.send(command, timeoutSeconds: timeout)
+            }, stageCandidate: stageCandidate, restoreSource: restoreSource))
+        _ = await refreshStatus(quiet: true)
+        return result
+    }
+
+    func revalidateProtectedCommit(_ receipt: NativeProtectedReplacementCoordinator.Receipt,
+        isCurrent: @escaping () -> Bool) async throws {
+        guard canUseExistingValidatedHelper, !isBusy, isCurrent() else {
+            throw NativeProtectedReplacementCoordinator.Failure.staleIntent
+        }
+        isBusy = true
+        defer { isBusy = false }
+        try await protectedReplacement.revalidateCommitted(receipt, isCurrent: { [weak self] in
+            self?.canUseExistingValidatedHelper == true && isCurrent()
+        }, send: { [client] command, timeout in
+            try await client.send(command, timeoutSeconds: timeout)
+        })
     }
 
     /// A failed read can retain the last UI status for continuity, but that cached

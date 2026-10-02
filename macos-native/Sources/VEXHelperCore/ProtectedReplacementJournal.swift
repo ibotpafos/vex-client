@@ -18,6 +18,9 @@ struct ProtectedReplacementJournal: Codable {
     // Full owner token + process-start identity, not PID alone. Optional for
     // pre-integration journals that were created with no registered owner.
     let ownerSession: String?
+    // Absent in legacy foundation journals. New socket transactions cannot
+    // delete recovery evidence until an uncached post-cutover handshake exists.
+    var handshakeNotBefore: UInt64? = nil
 
     static func digest(_ text: String) -> String {
         SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
@@ -34,7 +37,7 @@ struct ProtectedReplacementJournal: Codable {
               let journal = try? JSONDecoder().decode(Self.self, from: Data(text.utf8)),
               journal.schemaVersion == schema,
               UUID(uuidString: journal.transactionID) != nil,
-              ["prepared", "replacing", "rolling-back", "committed"].contains(journal.phase),
+              ["prepared", "replacing", "awaiting-handshake", "rolling-back", "committed"].contains(journal.phase),
               journal.ownerPID > 1,
               let source = HelperSession(payload: journal.sourceSession),
               source.ownerPID == journal.ownerPID, source.antiLeakArmed,
@@ -51,6 +54,11 @@ struct ProtectedReplacementJournal: Codable {
                   owner.pid == journal.ownerPID, !owner.token.isEmpty,
                   !owner.identity.isEmpty, text == owner.payload else {
                 throw HelperError.protocolViolation("invalid protected replacement journal owner")
+            }
+        }
+        if journal.phase == "awaiting-handshake" || journal.handshakeNotBefore != nil {
+            guard journal.ownerSession != nil, let floor = journal.handshakeNotBefore, floor > 0 else {
+                throw HelperError.protocolViolation("invalid protected replacement handshake journal")
             }
         }
         return journal

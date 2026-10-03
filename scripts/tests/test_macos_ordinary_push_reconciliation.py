@@ -36,6 +36,8 @@ struct NativePushPSKEventOwner {init?(accountID:String,installationID:String){}}
 @MainActor func device()->VpnDevice {try! JSONDecoder().decode(VpnDevice.self,from:Data(#"{"id":"d","status":"active","platform":"macos","provisioning_mode":"managed_native","client_key_ownership":"client","protocol":"amneziawg","external_device_id":"install"}"#.utf8))}
 func tunnel(_ d:VpnDevice)->PreparedTunnel {PreparedTunnel(device:d,config:"inert signed-service port",locationId:"de",profileVersion:7,routingMode:.fullTunnel,bypassRegion:nil,bypassRangesCount:0,bypassDomainsCount:0,routingPolicyVersion:"fixture",rotationRequired:false,normalAuthorizationExpiresAt:fixtureExpiry)}
 @MainActor final class H {
+ // No protected-source restore in these legacy fixtures; durable replay fences have their own actual-store matrix.
+ var hasNativeProtectedSourceRestorationFence=false
  var canUseNativeRemotePush=true,nativeRemotePushEnabled=true,nativePushConsentMatchesSession=true
  var isVpnBusy=false,isDeviceBusy=false,isServerSelectionBusy=false,isNativePSKPreparationBusy=false
  var session:Session?=Session(user:User(id:"a"),accessToken:"t")

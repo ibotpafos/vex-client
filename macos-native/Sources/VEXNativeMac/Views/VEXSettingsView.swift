@@ -54,10 +54,19 @@ struct VEXSettingsView: View {
             HStack {
                 Button("Разрешить перезапуск") { appState.authorizeNativeProtectedRestart(using: helper) }
                 Button("Восстановить профиль") { appState.recoverNativeProtectedRestart(using: helper) }
+                Button("Восстановить исходный туннель") { appState.restoreNativeProtectedSource(using: helper) }
+                Button("Продолжить кандидата") { appState.resumeNativeProtectedCandidate(using: helper) }
             }
             .buttonStyle(.vexGlass)
             .disabled(appState.isVpnBusy || appState.isDeviceBusy || helper.isBusy || appState.session == nil
                 || !helper.canUseExistingValidatedHelper || !appState.canUseNativeRemotePush)
+            if appState.hasNativeProtectedSourceRestorationFence {
+                Button("Подключить новый подписанный профиль") {
+                    Task { await appState.connectAfterNativeProtectedSourceRestoration(using: helper) }
+                }
+                .buttonStyle(.vexGlass)
+                .disabled(appState.isVpnBusy || appState.isDeviceBusy || helper.isBusy || appState.session == nil)
+            }
             Button("Отменить разрешение") { appState.cancelNativeProtectedRestart(using: helper) }
                 .buttonStyle(.vexGlass)
                 .disabled(appState.isVpnBusy || appState.isDeviceBusy || helper.isBusy || appState.session == nil

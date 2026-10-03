@@ -165,6 +165,26 @@ final class VEXHelperModel: ObservableObject {
         hasExplicitRestartConsent = false
     }
 
+
+    func transferProtectedJournal(_ d: NativeProtectedRestartCoordinator.Dependencies) async throws -> NativeProtectedReplacementCoordinator.JournalOwnership {
+        guard canUseExistingValidatedHelper, !isBusy, d.isCurrent() else { throw NativeProtectedRestartCoordinator.Failure.staleIntent }
+        isBusy = true; defer { isBusy = false }
+        let value = try await protectedRestart.transferJournal(restartDependencies(d))
+        hasExplicitRestartConsent = false; return value
+    }
+    func resumeProtectedJournal(_ intent: NativeProtectedReplacementCoordinator.RestartIntent,
+        persistence: NativeProtectedReplacementCoordinator.Persistence, dependencies d: NativeProtectedRestartCoordinator.Dependencies) async throws -> NativeProtectedReplacementCoordinator.Receipt {
+        guard canUseExistingValidatedHelper, !isBusy, d.isCurrent() else { throw NativeProtectedRestartCoordinator.Failure.staleIntent }
+        isBusy = true; defer { isBusy = false }
+        return try await protectedRestart.resumeJournal(intent, persistence: persistence, dependencies: restartDependencies(d))
+    }
+    func restoreProtectedJournal(_ intent: NativeProtectedReplacementCoordinator.RestartIntent,
+        persistence: NativeProtectedReplacementCoordinator.Persistence, dependencies d: NativeProtectedRestartCoordinator.Dependencies) async throws {
+        guard canUseExistingValidatedHelper, !isBusy, d.isCurrent() else { throw NativeProtectedRestartCoordinator.Failure.staleIntent }
+        isBusy = true; defer { isBusy = false }
+        try await protectedRestart.restoreJournal(intent, persistence: persistence, dependencies: restartDependencies(d))
+    }
+
     private func restartDependencies(_ value: NativeProtectedRestartCoordinator.Dependencies) -> NativeProtectedRestartCoordinator.Dependencies {
         .init(isCurrent: { [weak self] in self?.canUseExistingValidatedHelper == true && value.isCurrent() },
             validateMaterial: value.validateMaterial,

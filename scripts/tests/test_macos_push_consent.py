@@ -56,6 +56,8 @@ struct FixtureSession {{ var user: FixtureUser; var accessToken: String }}
 
 @MainActor final class FixtureAdmission {{ var clears=0;func clear() {{clears+=1}} }}
 @MainActor final class H {{
+ // No protected-source restore in these legacy fixtures; durable replay fences have their own actual-store matrix.
+ var hasNativeProtectedSourceRestorationFence=false
     let nativeAdmittedProfiles=FixtureAdmission()
     let nativePushIdentityStore = FixtureIdentity()
     let nativePushPSKQueue = NativePushPSKEventQueue(appDataURL: URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true))

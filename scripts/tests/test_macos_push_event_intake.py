@@ -62,6 +62,8 @@ final class DisposableIdentityStore {{
     func invalidateNormalCache(accountID: String?) throws {{}}
 }}
 @MainActor final class H {{
+ // No protected-source restore in these legacy fixtures; durable replay fences have their own actual-store matrix.
+ var hasNativeProtectedSourceRestorationFence=false
     var canUseNativeRemotePush = true
     var nativeRemotePushEnabled = true
     var nativePushConsentMatchesSession = true
@@ -123,6 +125,8 @@ func drain() async {{ for _ in 0..<32 {{ await Task.yield() }} }}
 }}
 @MainActor final class FixtureAdmission {{ var clears=0;func clear() {{clears+=1}} }}
 @MainActor final class LifecycleH {{
+ // No protected-source restore in these legacy fixtures; durable replay fences have their own actual-store matrix.
+ var hasNativeProtectedSourceRestorationFence=false
     let nativeAdmittedProfiles=FixtureAdmission()
     var nativeNormalPendingTunnel: PreparedTunnel?
     // Opaque presence sentinel: lifecycle bodies clear but never read receipts.

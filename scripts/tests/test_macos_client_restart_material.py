@@ -24,7 +24,7 @@ methods=['func existingStagedPSKClientPublicKey(', 'func prepareStagedPSKProfile
 SERVICE='\n'.join(body(service,x) for x in methods)
 DEVICE=body(service,'private extension VpnDevice {')
 APPBODY=body(app,'    private func applyNativeProtectedRestart(').replace('private func applyNativeProtectedRestart','func applyNativeProtectedRestart')
-WRAPPERS='\n'.join(body(helper,x) for x in ['    func authorizeProtectedRestart(', '    func adoptProtectedRestart(', '    func cancelProtectedRestart(', '    private func restartDependencies(', '    func revalidateProtectedCommit(', '    func finishProtectedPromotion('])
+WRAPPERS='\n'.join(body(helper,x) for x in ['    func authorizeProtectedRestart(', '    func adoptProtectedRestart(', '    func cancelProtectedRestart(', '    func transferProtectedJournal(', '    func resumeProtectedJournal(', '    func restoreProtectedJournal(', '    private func restartDependencies(', '    func revalidateProtectedCommit(', '    func finishProtectedPromotion('] if x in helper)
 HARNESS=r"""
 import Foundation
 import CryptoKit
@@ -81,16 +81,19 @@ final class Identity {var value:String?="fixture-install";func existingDeviceId(
  let client:Client,protectedReplacement=NativeProtectedReplacementCoordinator(),protectedRestart=NativeProtectedRestartCoordinator()
  var canUseExistingValidatedHelper=true,isBusy=false,hasExplicitRestartConsent=false
  init(_ app:AppState){client=Client(app)}
+ func refreshStatus(quiet:Bool) async -> Bool {true}
  WRAPPERS
 }
 @MainActor final class AppState {
- enum NativeProtectedRestartAction {case authorize,recover,cancel}
+ ACTION_ENUM
  var canUseNativeRemotePush=true,nativeRemotePushEnabled=true,nativePushConsentMatchesSession=true,isVpnBusy=false,isDeviceBusy=false
  var entitlement:EntitlementFixture? = .init(hasPaidAccess:true),session:Session? = .init(user:.init(id:"fixture-account"),accessToken:"fixture-token")
  var nativePushDeviceID:String?="11111111-1111-4111-8111-111111111111",accountDevices:[VpnDevice]=[]
  var selectedLocationId="de",targetLocationId:String?="de",routingMode=VpnRoutingMode.fullTunnel,vpnOperationGeneration=0,authenticatedSessionGeneration=4
  var activeTunnel:PreparedTunnel?,nativePSKPreparedTunnel:PreparedTunnel?,desiredVpnState=Desired.disconnected
  var nativePSKCommittedPromotion:Int?,activeResilienceRoute:Int?,nativeProtectedRestartMessage:String?
+ var nativeNormalPendingTunnel:PreparedTunnel?,nativePSKRetryTask:Task<Void,Never>?,profileWarmupTask:Task<Void,Never>?,nativePushRuntimeAllowed=true
+ FENCE_PROPERTY
  let nativePushIdentityStore=Identity(),profileService=VPNProfileService(),nativeAdmittedProfiles=NativeAdmittedProfileStore()
  let nativeProtectedRestartStore:NativeProtectedRestartStore,nativeProtectedPromotionStore:NativeProtectedPromotionStore,nativePSKStageStore:NativePSKStagedProfileStore,nativePSKVerifier:NativeVPNProfileAuthorizationVerifier,nativePushPSKQueue:NativePushPSKEventQueue
  weak var nativePSKHelper:VEXHelperModel?
@@ -307,15 +310,16 @@ final class Identity {var value:String?="fixture-install";func existingDeviceId(
  }
 }
 """
-HARNESS=HARNESS.replace('MATERIAL_NEGATIVES',repr(MATERIAL[1:20]).replace("'",'"')).replace('SIGNED_NEGATIVES',repr(MATERIAL[20:]).replace("'",'"')).replace('APP_NEGATIVES',repr(APP[6:28]).replace("'",'"')).replace('APPBODY',APPBODY).replace('WRAPPERS',WRAPPERS).replace('SERVICE',SERVICE).replace('DEVICE',DEVICE).replace('SANITIZER',body(support,'    public static func sanitizedConfig('))
+HARNESS=HARNESS.replace('ACTION_ENUM',body(app,'    private enum NativeProtectedRestartAction').replace('private enum','enum',1)).replace('MATERIAL_NEGATIVES',repr(MATERIAL[1:20]).replace("'",'"')).replace('SIGNED_NEGATIVES',repr(MATERIAL[20:]).replace("'",'"')).replace('APP_NEGATIVES',repr(APP[6:28]).replace("'",'"')).replace('FENCE_PROPERTY',body(app,'    var hasNativeProtectedSourceRestorationFence:') if '    var hasNativeProtectedSourceRestorationFence:' in app else 'var hasNativeProtectedSourceRestorationFence:Bool {false}').replace('APPBODY',APPBODY).replace('WRAPPERS',WRAPPERS).replace('SERVICE',SERVICE).replace('DEVICE',DEVICE).replace('SANITIZER',body(support,'    public static func sanitizedConfig('))
 admission=(ROOT/'macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift').read_text().replace('public enum AwgConfigAdmission','enum ActualAwgConfigAdmission')
 HARNESS=admission+'\n'+HARNESS
-with tempfile.TemporaryDirectory(prefix='client-restart-material-',dir=Path(os.environ.get('TMPDIR','/private/tmp')).resolve()) as raw:
- d=Path(raw);(d/'main.swift').write_text(HARNESS);data=d/'app-data';data.mkdir(mode=0o700)
- files=[S/'Models/VEXModels.swift']+[P/n for n in ['VPNProfileCache.swift','NativeAwgBoolean.swift','NativePSKIdentifier.swift','NativePushPSKEventQueue.swift','NativePushSecureFileStore.swift','NativePSKStagedProfileStore.swift','NativePSKRotationValidation.swift','NativeVPNProfileAuthorizationVerifier.swift','NativeAdmittedProfileStore.swift','NativeProtectedReplacementCoordinator.swift','NativeProtectedPromotionStore.swift','NativeProtectedRestartStore.swift','NativeProtectedRestartCoordinator.swift']]
- r=subprocess.run(['rtk','proxy','swiftc','-swift-version','5','-parse-as-library',*map(str,files),str(d/'main.swift'),'-o',str(d/'probe')],capture_output=True);sys.stdout.buffer.write(r.stdout);sys.stderr.buffer.write(r.stderr)
- if r.returncode:raise SystemExit(r.returncode)
- r=subprocess.run(['rtk','proxy',str(d/'probe'),str(data)],capture_output=True,timeout=120);sys.stdout.buffer.write(r.stdout);sys.stderr.buffer.write(r.stderr)
- lines=r.stdout.decode().splitlines();seenM=[x.split(' ')[1].split('=')[0] for x in lines if x.startswith('client_restart_material ')];seenA=[x.split(' ')[1].split('=')[0] for x in lines if x.startswith('client_restart_app ')]
- if seenM!=MATERIAL or seenA!=APP:print('client_restart_material case_order_or_coverage=FAIL');raise SystemExit(1)
- raise SystemExit(r.returncode)
+if __name__=='__main__':
+ with tempfile.TemporaryDirectory(prefix='client-restart-material-',dir=Path(os.environ.get('TMPDIR','/private/tmp')).resolve()) as raw:
+  d=Path(raw);(d/'main.swift').write_text(HARNESS);data=d/'app-data';data.mkdir(mode=0o700)
+  files=[S/'Models/VEXModels.swift']+[P/n for n in ['VPNProfileCache.swift','NativeAwgBoolean.swift','NativePSKIdentifier.swift','NativePushPSKEventQueue.swift','NativePushSecureFileStore.swift','NativePSKStagedProfileStore.swift','NativePSKRotationValidation.swift','NativeVPNProfileAuthorizationVerifier.swift','NativeAdmittedProfileStore.swift','NativeProtectedReplacementCoordinator.swift','NativeProtectedPromotionStore.swift','NativeProtectedRestartStore.swift','NativeProtectedRestartCoordinator.swift']]
+  r=subprocess.run(['rtk','proxy','swiftc','-swift-version','5','-parse-as-library',*map(str,files),str(d/'main.swift'),'-o',str(d/'probe')],capture_output=True);sys.stdout.buffer.write(r.stdout);sys.stderr.buffer.write(r.stderr)
+  if r.returncode:raise SystemExit(r.returncode)
+  r=subprocess.run(['rtk','proxy',str(d/'probe'),str(data)],capture_output=True,timeout=120);sys.stdout.buffer.write(r.stdout);sys.stderr.buffer.write(r.stderr)
+  lines=r.stdout.decode().splitlines();seenM=[x.split(' ')[1].split('=')[0] for x in lines if x.startswith('client_restart_material ')];seenA=[x.split(' ')[1].split('=')[0] for x in lines if x.startswith('client_restart_app ')]
+  if seenM!=MATERIAL or seenA!=APP:print('client_restart_material case_order_or_coverage=FAIL');raise SystemExit(1)
+  raise SystemExit(r.returncode)

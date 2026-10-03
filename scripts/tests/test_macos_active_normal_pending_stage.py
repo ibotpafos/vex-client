@@ -38,6 +38,8 @@ struct NativePushPSKEventOwner {init?(accountID:String,installationID:String){}}
 func tunnel(_ d:VpnDevice,version:Int=7)->PreparedTunnel {PreparedTunnel(device:d,config:"inert signed-service port",locationId:"de",profileVersion:version,routingMode:.fullTunnel,bypassRegion:nil,bypassRangesCount:0,bypassDomainsCount:0,routingPolicyVersion:"fixture",rotationRequired:false,normalAuthorizationExpiresAt:fixtureExpiry)}
 @MainActor func signedCandidate(_ version:Int,config:String="inert signed-service port",policy:String="fixture",ranges:Int=0,expiry:Date?=fixtureExpiry)->PreparedTunnel {PreparedTunnel(device:device(),config:config,locationId:"de",profileVersion:version,routingMode:.fullTunnel,bypassRegion:nil,bypassRangesCount:ranges,bypassDomainsCount:0,routingPolicyVersion:policy,rotationRequired:false,normalAuthorizationExpiresAt:expiry)}
 @MainActor final class H {
+ // No protected-source restore in these legacy fixtures; durable replay fences have their own actual-store matrix.
+ var hasNativeProtectedSourceRestorationFence=false
  var canUseNativeRemotePush=true,nativeRemotePushEnabled=true,nativePushConsentMatchesSession=true
  var isVpnBusy=false,isDeviceBusy=false,isServerSelectionBusy=false,isNativePSKPreparationBusy=false
  var session:Session?=Session(user:User(id:"a"),accessToken:"t")

@@ -217,10 +217,13 @@ with tempfile.TemporaryDirectory(prefix='client-restart-',dir=Path(os.environ.ge
  failures=run.returncode
  app=(S/'Stores/VEXAppState.swift').read_text();helper=(S/'VEXHelperClient.swift').read_text();ui=(S/'Views/VEXSettingsView.swift').read_text()
  action=body(app,'    private func applyNativeProtectedRestart(')
+ # Receipt recovery assertions remain scoped to the same branch; journal
+ # continuation has its independent proof matrix, not receipt-ACK admission.
+ receipt_action=action[action.index('        case .recover:'):]
  checks={
  'app-explicit-actions-wired':all(x in ui for x in ['authorizeNativeProtectedRestart','recoverNativeProtectedRestart','cancelNativeProtectedRestart']) and 'authorizeProtectedRestart' in helper,
  'app-retains-before-stage': 'retainNativePSKRestartMaterial(' in body(app,'    private func applyNativePSKCutover(') and action.count('loadMaterial')>0,
- 'app-two-proofs-before-promotion':action.index('adoptProtectedRestart')<action.index('rebindAfterAuthorizedRestart')<action.index('revalidateProtectedCommit')<action.index('promoteStagedPSKProfile')<action.index('finishProtectedPromotion'),
+ 'app-two-proofs-before-promotion':receipt_action.index('adoptProtectedRestart')<receipt_action.index('rebindAfterAuthorizedRestart')<receipt_action.index('revalidateProtectedCommit')<receipt_action.index('promoteStagedPSKProfile')<receipt_action.index('finishProtectedPromotion'),
  'app-fresh-device-and-signed-stage-gates':all(x in action for x in ['accountDevices','nativePSKStageStore.load','nativePSKVerifier.verifyDetailed','existingStagedPSKClientPublicKey','ensureAuthenticatedSessionCurrent']),
  'app-no-normal-connect-or-DNS-recovery':not any(x in action for x in ['connect(using:','disconnect(using:','attachOwnerWatchdog','prepareProtectedHelperConfig','ensureHelperReady','acknowledgePSK']),
  'source-metadata-not-admission':action.index('revalidateProtectedCommit')<action.index('nativeAdmittedProfiles.record')

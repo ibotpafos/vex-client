@@ -96,4 +96,21 @@ struct NativeProtectedPromotionStore {
         try NativePushSecureFileStore(rootURL: root, maxBytes: 16_384)
             .remove(name(accountID: accountID, installationID: installationID))
     }
+
+    @MainActor
+    func rebindJournalAfterAuthorizedRestart(accountID: String, installationID: String,
+        original: NativeProtectedReplacementCoordinator.RestartIntent,
+        ownership: NativeProtectedReplacementCoordinator.JournalOwnership, scopeFingerprint: String,
+        isCurrent: () -> Bool) throws -> Data {
+        let store = NativePushSecureFileStore(rootURL: root, maxBytes: 16_384)
+        let name = try name(accountID: accountID, installationID: installationID)
+        guard !Task.isCancelled, isCurrent(), let existing = try store.read(name) else { throw CocoaError(.fileReadCorruptFile) }
+        let data = try NativeProtectedReplacementCoordinator.reboundJournalIntent(existing,
+            original: original, ownership: ownership, scopeFingerprint: scopeFingerprint)
+        guard !Task.isCancelled, isCurrent(), try store.read(name) == existing else { throw CocoaError(.fileWriteFileExists) }
+        if data != existing { try store.write(data, name: name) }
+        guard !Task.isCancelled, isCurrent(), try store.read(name) == data else { throw CocoaError(.fileWriteUnknown) }
+        return data
+    }
+
 }

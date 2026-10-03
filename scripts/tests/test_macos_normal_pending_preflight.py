@@ -82,6 +82,8 @@ struct HelperStatus { var usable=true; var matches=true; var isUsableConnectedSt
 func tunnel(_ d:VpnDevice,version:Int=7)->PreparedTunnel { PreparedTunnel(device:d,config:"source-endpoint",locationId:"de",profileVersion:version,routingMode:.fullTunnel,bypassRegion:nil,bypassRangesCount:0,bypassDomainsCount:0,routingPolicyVersion:"source-policy",rotationRequired:falseEXPIRY_ARG) }
 func candidate(_ d:VpnDevice)->PreparedTunnel { PreparedTunnel(device:d,config:"candidate-endpoint",locationId:"de",profileVersion:8,routingMode:.fullTunnel,bypassRegion:nil,bypassRangesCount:0,bypassDomainsCount:0,routingPolicyVersion:"candidate-policy",rotationRequired:falseEXPIRY_ARG) }
 @MainActor final class H {
+ // No protected-source restore in these legacy fixtures; durable replay fences have their own actual-store matrix.
+ var hasNativeProtectedSourceRestorationFence=false
  var canUseNativeRemotePush=true,nativeRemotePushEnabled=true,nativePushConsentMatchesSession=true
  var isVpnBusy=false,isDeviceBusy=false,isServerSelectionBusy=false,isNativePSKPreparationBusy=false
  var session:Session?=Session(user:User(id:"a"),accessToken:"t"); var authenticatedSessionGeneration=1,nativePushSessionGeneration:Int?=1,vpnOperationGeneration=1,nativeNormalProfileReconciliationGeneration=0
@@ -139,7 +141,13 @@ func candidate(_ d:VpnDevice)->PreparedTunnel { PreparedTunnel(device:d,config:"
  let missing=active();precondition(missing.stage(candidate(device())));let missingSource=missing.activeTunnel;missing.nativeAdmittedProfiles.clear();await missing.runPreflight()
  let missingSafe=missing.activeTunnel==missingSource && missing.profileService.fetches==0 && missing.profileService.writes==0 && missing.nativePSKHelper!.client.replacements==0
  print("normal_admitted_binding rotating_DNS=\(dnsSafe) missing_source_fenced=\(missingSafe)")
- let all=dnsSafe && missingSafe && success && readiness && retainedStatus && idle && intent && owner && deviceChanged && route && foreignReject && awaitDesiredReject && expired && staleGuard && failedOuter && inflightSafe
+ let entryFence=await reject { $0.hasNativeProtectedSourceRestorationFence=true }
+ let lateFence=active();precondition(lateFence.stage(candidate(device())));let lateFenceSource=lateFence.activeTunnel;lateFence.nativePSKHelper!.afterRefresh={lateFence.hasNativeProtectedSourceRestorationFence=true};await lateFence.runPreflight()
+ let lateFenceSafe=lateFence.activeTunnel==lateFenceSource && lateFence.profileService.fetches==0 && lateFence.profileService.writes==0 && lateFence.nativePSKHelper!.client.replacements==0
+ let fetchedFence=active();precondition(fetchedFence.stage(candidate(device())));let fetchedFenceSource=fetchedFence.activeTunnel;fetchedFence.profileService.hook={n in if n==1 {fetchedFence.hasNativeProtectedSourceRestorationFence=true}};await fetchedFence.runPreflight()
+ let fetchedFenceSafe=fetchedFence.activeTunnel==fetchedFenceSource && fetchedFence.profileService.fetches==1 && fetchedFence.profileService.writes==0 && fetchedFence.nativePSKHelper!.client.replacements==0
+ print("normal_source_replay_fence entry=\(entryFence) after_status=\(lateFenceSafe) after_profile=\(fetchedFenceSafe) live_network_commands=0")
+ let all=entryFence && lateFenceSafe && fetchedFenceSafe && dnsSafe && missingSafe && success && readiness && retainedStatus && idle && intent && owner && deviceChanged && route && foreignReject && awaitDesiredReject && expired && staleGuard && failedOuter && inflightSafe
  print("normal_pending_protected driver_present=DRIVER_PRESENT success=\(success) fetches=\(ok.profileService.fetches) no_generic_connect_or_ack=\(ok.profileService.connects==0 && ok.profileService.acks==0) rejects=\(readiness && retainedStatus && idle && intent && owner && deviceChanged && route && foreignReject && awaitDesiredReject) expiry_clear=\(expired) stale_current=\(staleGuard) outer_failure_retained=\(failedOuter) stale_inflight_retained=\(inflightSafe)")
  exit(DRIVER_PRESENT ? (all ? 0 : 1) : 1)
 } }

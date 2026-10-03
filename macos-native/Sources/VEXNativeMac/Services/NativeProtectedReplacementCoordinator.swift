@@ -30,6 +30,13 @@ final class NativeProtectedReplacementCoordinator {
         case staleIntent, sourceMismatch, invalidResponse, recoveryPending, sourceRestored, handshakeTimeout, persistenceUnavailable
     }
 
+    struct JournalOwnership: Equatable {
+        let transactionID: String
+        let sourceSHA256: String
+        let candidateSHA256: String
+        let ownerTokenSHA256: String
+    }
+
     struct Receipt: Codable, Equatable {
         let transactionID: String
         let candidateSHA256: String
@@ -476,4 +483,32 @@ final class NativeProtectedReplacementCoordinator {
         }
         return result
     }
+
+    /// Separate receipt-nil rebind for an authenticated transferred JOURNAL.
+    /// Ownership is not a commit. Preserve nonce/material/generation exactly.
+    static func reboundJournalIntent(_ existing: Data, original: RestartIntent,
+        ownership: JournalOwnership, scopeFingerprint: String) throws -> Data {
+        let value = try restartValue(existing)
+        guard original.isValid, original.processInstanceID != processInstanceID,
+              isDigest(scopeFingerprint), ownership.transactionID == original.transactionID,
+              ownership.sourceSHA256 == original.sourceSHA256, ownership.candidateSHA256 == original.candidateSHA256,
+              isDigest(ownership.ownerTokenSHA256), ownership.ownerTokenSHA256 != original.ownerTokenSHA256,
+              value.receipt == nil else { throw Failure.persistenceUnavailable }
+        let new = RestartIntent(transactionID: original.transactionID, sourceSHA256: original.sourceSHA256,
+            candidateSHA256: original.candidateSHA256, ownerTokenSHA256: ownership.ownerTokenSHA256,
+            scopeFingerprint: scopeFingerprint, processInstanceID: processInstanceID, generation: original.generation)
+        if restartTuple(value) == new {
+            guard value.transaction.commitResponseUncertain else { throw Failure.persistenceUnavailable }; return existing
+        }
+        guard restartTuple(value) == original else { throw Failure.persistenceUnavailable }
+        let transaction = Transaction(id: original.transactionID, source: original.sourceSHA256,
+            candidate: original.candidateSHA256, owner: ownership.ownerTokenSHA256,
+            supportsCommitReceipt: true, commitResponseUncertain: true)
+        let data = try NativeProtectedReplacementCoordinator().encode(StoredIntent(schema: 1,
+            scopeFingerprint: scopeFingerprint, processInstanceID: processInstanceID,
+            generation: original.generation, transaction: transaction, receipt: nil))
+        try requireValidPersistentPayload(data, scopeFingerprint: scopeFingerprint, generation: original.generation)
+        return data
+    }
+
 }

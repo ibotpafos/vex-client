@@ -151,10 +151,64 @@ struct NativeProtectedRestartStore {
         let store = NativePushSecureFileStore(rootURL: root, maxBytes: 1_048_576)
         try store.remove("restart-capability-" + fingerprint + ".json")
         try store.remove("restart-material-" + fingerprint + ".json")
+        // The metadata-only source replay fence survives logout/private-secret
+        // cleanup. Only new explicit signed normal admission removes it.
+
     }
     static func randomCapability() throws -> String {
         var bytes = [UInt8](repeating: 0, count: 32)
         guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else { throw Failure.unavailable }
         return bytes.map { String(format: "%02x", $0) }.joined()
     }
+
+    struct SourceRestorationFence: Codable, Equatable {
+        let schema: Int
+        let namespace: String
+        let ownerFingerprint: String
+        let original: NativeProtectedReplacementCoordinator.RestartIntent
+        let journalIntent: NativeProtectedReplacementCoordinator.RestartIntent
+        let materialSHA256: String
+    }
+    @MainActor
+    func markSourceRestoration(owner: NativePushPSKEventOwner, material: Material,
+        journalIntent: NativeProtectedReplacementCoordinator.RestartIntent) throws {
+        guard try loadMaterial(owner: owner) == material, journalIntent.isValid,
+              journalIntent.transactionID == material.intent.transactionID,
+              journalIntent.sourceSHA256 == material.intent.sourceSHA256,
+              journalIntent.candidateSHA256 == material.intent.candidateSHA256,
+              journalIntent.generation == material.intent.generation,
+              journalIntent.processInstanceID == NativeProtectedReplacementCoordinator.processInstanceID,
+              journalIntent.ownerTokenSHA256 != material.intent.ownerTokenSHA256 else { throw Failure.mismatch }
+        let value = SourceRestorationFence(schema: 1, namespace: "vex-protected-source-restoration-v1",
+            ownerFingerprint: try fingerprint(owner), original: material.intent,
+            journalIntent: journalIntent, materialSHA256: try materialDigest(material))
+        let data = try encode(value, limit: 16_384), name = "source-restoration-" + value.ownerFingerprint + ".json"
+        let store = NativePushSecureFileStore(rootURL: root, maxBytes: 16_384)
+        if let old = try store.read(name) { guard old == data else { throw Failure.mismatch }; return }
+        try store.write(data, name: name); guard try store.read(name) == data else { throw Failure.unavailable }
+    }
+    func sourceRestorationFence(owner: NativePushPSKEventOwner) throws -> SourceRestorationFence? {
+        let store = NativePushSecureFileStore(rootURL: root, maxBytes: 16_384)
+        guard let data = try store.read("source-restoration-" + fingerprint(owner) + ".json") else { return nil }
+        guard let value = try? JSONDecoder().decode(SourceRestorationFence.self, from: data),
+              value.schema == 1, value.namespace == "vex-protected-source-restoration-v1",
+              value.ownerFingerprint == (try fingerprint(owner)), value.original.isValid, value.journalIntent.isValid,
+              value.original.transactionID == value.journalIntent.transactionID,
+              value.original.sourceSHA256 == value.journalIntent.sourceSHA256,
+              value.original.candidateSHA256 == value.journalIntent.candidateSHA256,
+              value.original.generation == value.journalIntent.generation,
+              value.original.ownerTokenSHA256 != value.journalIntent.ownerTokenSHA256,
+              NativeProtectedReplacementCoordinator.validDigest(value.materialSHA256),
+              (try? encode(value, limit: 16_384)) == data else { throw Failure.mismatch }
+        return value
+    }
+    /// Only after an explicit newly signed/current connect and root admission;
+    /// never expiry, metadata, notification, warmup or startup reconciliation.
+    func removeSourceRestorationFence(owner: NativePushPSKEventOwner, expected: SourceRestorationFence) throws {
+        guard try sourceRestorationFence(owner: owner) == expected else { throw Failure.mismatch }
+        let store = NativePushSecureFileStore(rootURL: root, maxBytes: 16_384)
+        let name = "source-restoration-" + (try fingerprint(owner)) + ".json"
+        try store.remove(name); guard try store.read(name) == nil else { throw Failure.unavailable }
+    }
+
 }

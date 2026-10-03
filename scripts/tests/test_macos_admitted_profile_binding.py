@@ -109,6 +109,10 @@ struct Status {var routeOk=false,socketExists=false;var latestHandshake:UInt64?=
  func writeHelperConfig(for:PreparedTunnel,validateCurrent:@MainActor ()throws->Void)async throws->String {try validateCurrent();writes+=1;await Task.yield();try validateCurrent();return "canonical-resolved-bytes"}
 }
 @MainActor final class H {
+ // No protected-source restore in these legacy fixtures; durable replay fences have their own actual-store matrix.
+ var hasNativeProtectedSourceRestorationFence=false
+ var nativeProtectedRestorationAdmissionGeneration:Int?
+ func completeNativeProtectedSourceRestoration(isCurrent:()->Bool) throws {}
  enum Desired {case connected,disconnected}
  var desiredVpnState:Desired = .connected,vpnOperationGeneration=1,authenticatedSessionGeneration=1
  var session:Session? = .init(user:.init(id:"a"),accessToken:"t")

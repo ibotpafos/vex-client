@@ -143,7 +143,7 @@ final class VEXAppState: ObservableObject {
             let selectedID = selectedLocationId
             let prepared = nativePSKPreparedTunnel
             nativeNormalPendingStorage = (candidate, Date(), { [weak self] in
-                guard let self, self.canUseNativeRemotePush, self.nativeRemotePushEnabled,
+                guard let self, !self.hasNativeProtectedSourceRestorationFence, self.canUseNativeRemotePush, self.nativeRemotePushEnabled,
                       self.nativePushConsentMatchesSession, self.nativePushRegistration.status == .registered,
                       self.nativePushAccountID == current.user.id,
                       self.nativePushSessionGeneration == sessionGeneration,
@@ -397,7 +397,7 @@ final class VEXAppState: ObservableObject {
         }
         let profileChangeGeneration = nativeNormalProfileReconciliationGeneration
         Task { [weak self] in
-            guard let self, self.canUseNativeRemotePush, self.nativeRemotePushEnabled, self.nativePushConsentMatchesSession,
+            guard let self, !self.hasNativeProtectedSourceRestorationFence, self.canUseNativeRemotePush, self.nativeRemotePushEnabled, self.nativePushConsentMatchesSession,
                   (try? self.ensureAuthenticatedSessionCurrent(generation: generation, accessToken: token, accountID: accountID)) != nil else { return }
             guard !ordinaryProfileChange || self.nativeNormalProfileReconciliationGeneration == profileChangeGeneration else { return }
             await self.refreshCustomerState()
@@ -412,6 +412,7 @@ final class VEXAppState: ObservableObject {
     /// APS is an invalidation hint only. Fetch an authenticated signed snapshot
     /// for the existing registered installation; never create/register a device.
     private func reconcileNativeNormalProfileChange(generation: Int, accessToken: String, accountID: String, profileChangeGeneration: Int) async {
+        guard !hasNativeProtectedSourceRestorationFence else { return }
         guard canUseNativeRemotePush, nativeRemotePushEnabled, nativePushConsentMatchesSession,
               nativePushRegistration.status == .registered,
               nativePushAccountID == accountID, nativePushSessionGeneration == generation,
@@ -432,7 +433,7 @@ final class VEXAppState: ObservableObject {
         let previousActive = activeTunnel
         let previousPrepared = nativePSKPreparedTunnel
         let scopeIsCurrent: @MainActor () -> Bool = { [weak self] in
-            guard let self, self.canUseNativeRemotePush, self.nativeRemotePushEnabled,
+            guard let self, !self.hasNativeProtectedSourceRestorationFence, self.canUseNativeRemotePush, self.nativeRemotePushEnabled,
                   self.nativePushConsentMatchesSession, self.nativePushRegistration.status == .registered,
                   self.nativePushAccountID == accountID, self.nativePushSessionGeneration == generation,
                   self.nativeNormalProfileReconciliationGeneration == profileChangeGeneration,
@@ -512,13 +513,52 @@ final class VEXAppState: ObservableObject {
             guard isCurrent() else { return }
             try nativeAdmittedProfiles.record(tunnel: tunnel, canonicalConfig: canonicalConfig,
                                               ownerTokenSHA256: owner, scope: scope, helper: helper)
+            if nativeProtectedRestorationAdmissionGeneration == generation {
+                try completeNativeProtectedSourceRestoration(isCurrent: isCurrent)
+            }
         } catch {
             // A denied/missing proof must not disconnect an otherwise verified
             // ordinary connection. Protected replacement remains fail-closed.
         }
     }
 
+    /// Private-only cleanup after a NEW explicit signed normal connection and
+    /// fresh root admission above. The fence, intent and material grant nothing.
+    /// Any mismatch/removal failure leaves the replay fence durable for retry.
+    private func completeNativeProtectedSourceRestoration(isCurrent: () -> Bool) throws {
+        guard !Task.isCancelled, isCurrent(), let session,
+              let installation = nativePushIdentityStore.existingDeviceId(),
+              let owner = NativePushPSKEventOwner(accountID: session.user.id, installationID: installation),
+              let fence = try nativeProtectedRestartStore.sourceRestorationFence(owner: owner) else {
+            throw NativeProtectedRestartCoordinator.Failure.staleIntent
+        }
+        let persistence = try nativeProtectedPromotionStore.persistence(accountID: owner.accountID,
+            installationID: owner.installationID, scopeFingerprint: fence.journalIntent.scopeFingerprint,
+            generation: fence.journalIntent.generation)
+        if let data = try persistence.load() {
+            guard isCurrent(), try NativeProtectedReplacementCoordinator.restartIntent(data) == fence.journalIntent,
+                  try NativeProtectedReplacementCoordinator.restartReceiptMetadata(data) == nil else {
+                throw NativeProtectedRestartCoordinator.Failure.recoveryPending
+            }
+            try persistence.remove(data)
+        }
+        if let material = try nativeProtectedRestartStore.loadMaterial(owner: owner) {
+            guard isCurrent(), material.intent == fence.original,
+                  try nativeProtectedRestartStore.materialDigest(material) == fence.materialSHA256 else {
+                throw NativeProtectedRestartCoordinator.Failure.recoveryPending
+            }
+            if let cap = try nativeProtectedRestartStore.loadCapability(owner: owner, material: material) {
+                try nativeProtectedRestartStore.removeCapability(owner: owner, expected: cap)
+            }
+            try nativeProtectedRestartStore.removeMaterial(owner: owner, expected: material)
+        }
+        guard !Task.isCancelled, isCurrent() else { throw NativeProtectedRestartCoordinator.Failure.staleIntent }
+        try nativeProtectedRestartStore.removeSourceRestorationFence(owner: owner, expected: fence)
+        nativeProtectedRestartMessage = "Новый подписанный профиль подтверждён helper. Блокировка фонового повторения снята."
+    }
+
     private func processNativeNormalPendingProfile() async {
+        guard !hasNativeProtectedSourceRestorationFence else { return }
         guard let candidate = nativeNormalPendingTunnel, let source = activeTunnel,
               let helper = nativePSKHelper, helper.canUseExistingValidatedHelper,
               !helper.isBusy, desiredVpnState == .connected,
@@ -536,7 +576,7 @@ final class VEXAppState: ObservableObject {
         var expectedCandidate = candidate
         var cutoverStarted = false
         let scopeIsCurrent: @MainActor () -> Bool = { [weak self, weak helper] in
-            guard let self, let helper, self.nativePSKHelper === helper,
+            guard let self, let helper, !self.hasNativeProtectedSourceRestorationFence, self.nativePSKHelper === helper,
                   helper.canUseExistingValidatedHelper, (!helper.isBusy || cutoverStarted),
                   self.desiredVpnState == .connected, !Task.isCancelled,
                   (cutoverStarted || (helper.status.isUsableConnectedStatus && self.tunnel(source, matches: helper.status))),
@@ -610,19 +650,21 @@ final class VEXAppState: ObservableObject {
     /// Product-owned foreground retry, not a Codex/production polling loop. No work
     /// occurs without signed APNs capability, explicit account consent and a bound device.
     private func startNativePSKRetryIfNeeded() {
+        guard !hasNativeProtectedSourceRestorationFence else { return }
         guard canUseNativeRemotePush, nativeRemotePushEnabled, nativePushConsentMatchesSession,
               nativePSKHelper != nil, nativePSKRetryTask == nil else { return }
         nativePSKRetryTask = Task { [weak self] in
             while !Task.isCancelled {
                 do { try await Task.sleep(nanoseconds: 5_000_000_000) } catch { return }
-                guard let self, self.canUseNativeRemotePush, self.nativeRemotePushEnabled,
-                      self.nativePushConsentMatchesSession else { return }
+                guard let self, !self.hasNativeProtectedSourceRestorationFence, self.canUseNativeRemotePush, self.nativeRemotePushEnabled,
+                      self.nativePushConsentMatchesSession, !self.hasNativeProtectedSourceRestorationFence else { return }
                 await self.processNativePSKEvents()
             }
         }
     }
 
     private func processNativePSKEvents() async {
+        guard !hasNativeProtectedSourceRestorationFence else { return }
         guard canUseNativeRemotePush, nativeRemotePushEnabled, nativePushConsentMatchesSession,
               entitlement?.hasPaidAccess == true,
               !isVpnBusy, !isDeviceBusy, let helper = nativePSKHelper, !helper.isBusy,
@@ -687,7 +729,7 @@ final class VEXAppState: ObservableObject {
         ))
     }
 
-    private enum NativeProtectedRestartAction { case authorize, recover, cancel }
+    private enum NativeProtectedRestartAction { case authorize, recover, cancel, restoreSource, resumeCandidate }
 
     func authorizeNativeProtectedRestart(using helper: VEXHelperModel) {
         performNativeProtectedRestart(.authorize, using: helper)
@@ -697,6 +739,22 @@ final class VEXAppState: ObservableObject {
     }
     func cancelNativeProtectedRestart(using helper: VEXHelperModel) {
         performNativeProtectedRestart(.cancel, using: helper)
+    }
+    func restoreNativeProtectedSource(using helper: VEXHelperModel) {
+        performNativeProtectedRestart(.restoreSource, using: helper)
+    }
+    func resumeNativeProtectedCandidate(using helper: VEXHelperModel) {
+        performNativeProtectedRestart(.resumeCandidate, using: helper)
+    }
+    private var nativeProtectedRestorationAdmissionGeneration: Int?
+    /// A local replay fence only, never profile/ownership authority. Unsafe
+    /// custody also blocks background work. Preview performs no filesystem work.
+    var hasNativeProtectedSourceRestorationFence: Bool {
+        guard nativePushRuntimeAllowed, let session,
+              let installation = nativePushIdentityStore.existingDeviceId(),
+              let owner = NativePushPSKEventOwner(accountID: session.user.id, installationID: installation) else { return false }
+        do { return try nativeProtectedRestartStore.sourceRestorationFence(owner: owner) != nil }
+        catch { return true }
     }
     private func performNativeProtectedRestart(_ action: NativeProtectedRestartAction, using helper: VEXHelperModel) {
         guard !isVpnBusy, !isDeviceBusy, !helper.isBusy else { return }
@@ -739,6 +797,9 @@ final class VEXAppState: ObservableObject {
             nativeProtectedRestartMessage = "Разрешение отменено. Защищённая операция и профиль не изменялись."
             return
         }
+        guard action == .restoreSource || !hasNativeProtectedSourceRestorationFence else {
+            throw NativeProtectedRestartCoordinator.Failure.recoveryPending
+        }
         guard canUseNativeRemotePush, nativeRemotePushEnabled, nativePushConsentMatchesSession,
               entitlement?.hasPaidAccess == true, !isVpnBusy, !isDeviceBusy, !helper.isBusy,
               helper.canUseExistingValidatedHelper, nativePSKHelper === helper,
@@ -768,6 +829,12 @@ final class VEXAppState: ObservableObject {
                 && processIntent.sourceSHA256 == material.intent.sourceSHA256
                 && processIntent.candidateSHA256 == material.intent.candidateSHA256
                 && processIntent.generation == generation) else { throw NativeProtectedRestartCoordinator.Failure.staleIntent }
+        if action == .restoreSource || action == .resumeCandidate {
+            guard try nativeProtectedPromotionStore.restartReceiptMetadata(accountID: owner.accountID, installationID: owner.installationID) == nil,
+                  processIntent == material.intent || processIntent.ownerTokenSHA256 != material.intent.ownerTokenSHA256 else {
+                throw NativeProtectedRestartCoordinator.Failure.recoveryPending
+            }
+        }
         vpnOperationGeneration = generation
         isVpnBusy = true
         defer { isVpnBusy = false }
@@ -808,6 +875,70 @@ final class VEXAppState: ObservableObject {
             try await helper.cancelProtectedRestart(dependencies)
             guard current() else { throw NativeProtectedRestartCoordinator.Failure.staleIntent }
             nativeProtectedRestartMessage = "Разрешение отменено. Защищённая операция и профиль не изменялись."
+        case .restoreSource, .resumeCandidate:
+            let persistence = try nativePSKPromotionPersistence(previous: material.source.tunnel, next: material.candidate.tunnel,
+                owner: owner, helper: helper, generation: generation, sessionGeneration: sessionGeneration, token: token)
+            var journalIntent = processIntent
+            if processIntent == material.intent {
+                let ownership = try await helper.transferProtectedJournal(dependencies)
+                try validateMaterial()
+                let data = try nativeProtectedPromotionStore.rebindJournalAfterAuthorizedRestart(accountID: owner.accountID,
+                    installationID: owner.installationID, original: material.intent, ownership: ownership,
+                    scopeFingerprint: persistence.scopeFingerprint, isCurrent: current)
+                journalIntent = try NativeProtectedReplacementCoordinator.restartIntent(data)
+            }
+            if action == .restoreSource {
+                try await helper.restoreProtectedJournal(journalIntent, persistence: persistence, dependencies: dependencies)
+                try validateMaterial()
+                // Do not admit/cache/assign PreparedTunnel source metadata. Keep
+                // the pre-recover durable fence across process restarts and retain
+                // candidate stage/events without ACK or automatic replay.
+                nativeAdmittedProfiles.clear(); nativePSKCommittedPromotion = nil
+                nativeNormalPendingTunnel = nil; nativePSKPreparedTunnel = nil
+                nativePSKRetryTask?.cancel(); nativePSKRetryTask = nil
+                profileWarmupTask?.cancel(); profileWarmupTask = nil
+                expectedActive = nil; activeTunnel = nil
+                _ = await helper.refreshStatus(quiet: true)
+                try validateMaterial()
+                guard let data = try persistence.load(),
+                      try NativeProtectedReplacementCoordinator.restartIntent(data) == journalIntent else {
+                    throw NativeProtectedRestartCoordinator.Failure.recoveryPending
+                }
+                try persistence.remove(data)
+                if let cap = try nativeProtectedRestartStore.loadCapability(owner: owner, material: material) {
+                    try nativeProtectedRestartStore.removeCapability(owner: owner, expected: cap)
+                }
+                try nativeProtectedRestartStore.removeMaterial(owner: owner, expected: material)
+                nativeProtectedRestartMessage = "Исходный туннель подтверждён helper. Профиль не принят из метаданных; фоновые операции заблокированы до нового явного подключения."
+            } else {
+                guard !hasNativeProtectedSourceRestorationFence else { throw NativeProtectedRestartCoordinator.Failure.recoveryPending }
+                let receipt = try await helper.resumeProtectedJournal(journalIntent, persistence: persistence, dependencies: dependencies)
+                try validateMaterial()
+                try await helper.revalidateProtectedCommit(receipt, isCurrent: current, persistence: persistence)
+                try validateMaterial()
+                let candidate = material.candidate.tunnel
+                let scope = try nativeAdmittedProfileScope(for: candidate)
+                _ = try nativeAdmittedProfiles.record(tunnel: candidate, canonicalConfig: material.candidateConfig,
+                    ownerTokenSHA256: receipt.ownerTokenSHA256, scope: scope, helper: helper)
+                expectedActive = candidate; activeTunnel = candidate
+                expectedDesired = .connected; desiredVpnState = .connected
+                nativePSKPreparedTunnel = candidate
+                try profileService.promoteStagedPSKProfile(candidate, owner: owner)
+                for event in try nativePushPSKQueue.events(owner: owner) where event.deviceID == deviceID
+                    && event.rotationID == material.rotationID && event.profileVersion == candidate.profileVersion {
+                    try validateMaterial(); _ = try nativePushPSKQueue.remove(eventID: event.eventID, owner: owner)
+                }
+                try helper.finishProtectedPromotion(receipt, persistence: persistence, isCurrent: current)
+                nativePSKCommittedPromotion = nil; activeResilienceRoute = nil
+                // TODO: Retry exact private post-promotion cleanup independently
+                // of transfer/admission if removal fails after cache completion.
+                if let cap = try nativeProtectedRestartStore.loadCapability(owner: owner, material: material) {
+                    try nativeProtectedRestartStore.removeCapability(owner: owner, expected: cap)
+                }
+                try nativeProtectedRestartStore.removeMaterial(owner: owner, expected: material)
+                try nativePSKStageStore.purge(owner: owner, managedDeviceID: deviceID, rotationID: material.rotationID)
+                nativeProtectedRestartMessage = "Кандидат завершён защищённым helper и дважды подтверждён перед сохранением. Обычное переподключение не выполнялось."
+            }
         case .recover:
             let persistence = try nativePSKPromotionPersistence(previous: material.source.tunnel, next: material.candidate.tunnel,
                 owner: owner, helper: helper, generation: generation, sessionGeneration: sessionGeneration, token: token)
@@ -1094,7 +1225,7 @@ final class VEXAppState: ObservableObject {
             if status != .registered { self?.nativeNormalPendingTunnel = nil }
         }.store(in: &cancellables)
         nativePushRegistrar.isCurrent = { [weak self] request in
-            guard let self, self.canUseNativeRemotePush, self.nativeRemotePushEnabled, self.nativePushConsentMatchesSession,
+            guard let self, !self.hasNativeProtectedSourceRestorationFence, self.canUseNativeRemotePush, self.nativeRemotePushEnabled, self.nativePushConsentMatchesSession,
                   self.nativePushDeviceID == request.deviceID else { return false }
             return (try? self.ensureAuthenticatedSessionCurrent(generation: request.sessionGeneration, accessToken: request.accessToken, accountID: request.accountID)) != nil
         }
@@ -1127,6 +1258,11 @@ final class VEXAppState: ObservableObject {
     }
 
     private func reconcileNativePushSession() {
+        guard !hasNativeProtectedSourceRestorationFence else {
+            nativePSKRetryTask?.cancel(); nativePSKRetryTask = nil
+            nativePushRegistration.clearAuthenticatedSession()
+            return
+        }
         _ = nativeNormalPendingTunnel // Drop any obsolete memory-only owner scope.
         if let owner = nativePushEventOwner, owner.accountID != session?.user.id {
             nativePSKRetryTask?.cancel()
@@ -1420,6 +1556,10 @@ final class VEXAppState: ObservableObject {
     }
 
     func toggleVPNPower(using helper: VEXHelperModel) async {
+        guard !hasNativeProtectedSourceRestorationFence else {
+            statusMessage = "Автоматическое повторение смены профиля заблокировано. Выберите явное новое подключение в настройках восстановления."
+            return
+        }
         guard !isDeviceBusy else {
             statusMessage = "Дождитесь завершения операции с устройством."
             return
@@ -1466,12 +1606,30 @@ final class VEXAppState: ObservableObject {
     }
 
     func connectVPN(using helper: VEXHelperModel) async {
+        guard !hasNativeProtectedSourceRestorationFence else {
+            statusMessage = "Исходный туннель восстановлен. Для нового профиля используйте явное подключение в настройках восстановления."
+            return
+        }
         desiredVpnState = .connected
         vpnOperationGeneration += 1
         await performConnectVPN(using: helper, generation: vpnOperationGeneration)
     }
 
-    private func performConnectVPN(using helper: VEXHelperModel, generation: Int) async {
+    /// Separate foreground intent. A persisted restoration fence is not authority
+    /// to reuse its source metadata or to start a normal/background connection.
+    func connectAfterNativeProtectedSourceRestoration(using helper: VEXHelperModel) async {
+        guard hasNativeProtectedSourceRestorationFence, !isVpnBusy, !isDeviceBusy, !helper.isBusy else { return }
+        desiredVpnState = .connected
+        vpnOperationGeneration += 1
+        let generation = vpnOperationGeneration
+        nativeProtectedRestorationAdmissionGeneration = generation
+        defer { if nativeProtectedRestorationAdmissionGeneration == generation { nativeProtectedRestorationAdmissionGeneration = nil } }
+        await performConnectVPN(using: helper, generation: generation, explicitSourceRestoration: true)
+    }
+
+    private func performConnectVPN(using helper: VEXHelperModel, generation: Int, explicitSourceRestoration: Bool = false) async {
+        guard !hasNativeProtectedSourceRestorationFence || (explicitSourceRestoration
+            && nativeProtectedRestorationAdmissionGeneration == generation) else { return }
         guard !isVpnBusy, !isDeviceBusy, !helper.isBusy else {
             statusMessage = desiredVpnState == .connected ? "Операция VPN уже выполняется." : "Отменяем подключение VPN."
             return
@@ -1511,7 +1669,7 @@ final class VEXAppState: ObservableObject {
                 accessToken: requestToken,
                 locationId: targetLocationId,
                 routingMode: routingMode,
-                forceRefresh: false,
+                forceRefresh: explicitSourceRestoration,
                 prevalidatedEntitlement: entitlement
             )
             operationToken = tunnelToken
@@ -2055,7 +2213,7 @@ final class VEXAppState: ObservableObject {
             activeResilienceRoute = previousResilienceRoute
             if let previousTunnel, !error.localizedDescription.contains("VPN_CONFIG_INVALID") {
                 try? await profileService.writeHelperConfig(for: previousTunnel, validateCurrent: { [weak self] in
-                    guard let self else { throw AuthenticatedOperationError.sessionChanged }
+                    guard let self, !self.hasNativeProtectedSourceRestorationFence else { throw AuthenticatedOperationError.sessionChanged }
                     try self.ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: token, accountID: accountID)
                 })
                 guard (try? ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: token, accountID: accountID)) != nil else { return false }
@@ -2343,6 +2501,7 @@ final class VEXAppState: ObservableObject {
     }
 
     func recoverTunnelIfNeeded(using helper: VEXHelperModel) async {
+        guard !hasNativeProtectedSourceRestorationFence else { return }
         guard autoRecoveryEnabled, !isDeviceBusy, helper.status.isUsableConnectedStatus, !helper.isBusy else { return }
         let usage: VpnDeviceUsage?
         if let token = accessToken {
@@ -2350,6 +2509,7 @@ final class VEXAppState: ObservableObject {
         } else {
             usage = nil
         }
+        guard !hasNativeProtectedSourceRestorationFence else { return }
         let healthReasons = autopilotService.healthReasons(status: helper.status, usage: usage)
         guard tunnelHealthLooksStale(helper.status) || !healthReasons.isEmpty else { return }
         guard let previousLocationId = activeTunnel?.locationId ?? targetLocationId else {
@@ -2382,6 +2542,7 @@ final class VEXAppState: ObservableObject {
                 "usage_seconds_since_handshake": usage?.secondsSinceHandshake.map(String.init) ?? "",
             ]) { current, _ in current }
         )
+        guard !hasNativeProtectedSourceRestorationFence else { return }
         statusMessage = assessment.userMessage
         // Keep the current location selected so connectWithAutopilot can try
         // same-exit dynamic candidates (direct -> relay) before it considers an
@@ -3145,6 +3306,7 @@ final class VEXAppState: ObservableObject {
     }
 
     private func prepareSelectedProfile(forceRefresh: Bool) async {
+        guard !hasNativeProtectedSourceRestorationFence else { return }
         guard let token = accessToken, let targetLocationId else { return }
         let sessionGeneration = authenticatedSessionGeneration
         let accountID = session?.user.id
@@ -3157,11 +3319,12 @@ final class VEXAppState: ObservableObject {
                 writeHelperConfig: false,
                 accountID: accountID,
                 validateCurrent: { [weak self] in
-                    guard let self else { throw AuthenticatedOperationError.sessionChanged }
+                    guard let self, !self.hasNativeProtectedSourceRestorationFence else { throw AuthenticatedOperationError.sessionChanged }
                     try self.ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: token, accountID: accountID)
                 }
             )
             guard (try? ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: token, accountID: accountID)) != nil else { return }
+            guard !hasNativeProtectedSourceRestorationFence else { return }
             activeTunnel = prepared
             statusMessage = "Профиль сервера готов."
         } catch {
@@ -3171,6 +3334,7 @@ final class VEXAppState: ObservableObject {
     }
 
     private func restoreActiveTunnelIfHelperIsConnected(_ helperStatus: VpnStatus?) async {
+        guard !hasNativeProtectedSourceRestorationFence else { return }
         guard let helperStatus, helperStatus.isUsableConnectedStatus, activeTunnel == nil else { return }
         await prepareSelectedProfile(forceRefresh: false)
         if let activeTunnel, tunnel(activeTunnel, matches: helperStatus) {
@@ -3203,6 +3367,7 @@ final class VEXAppState: ObservableObject {
     }
 
     private func scheduleProfileWarmup() {
+        guard !hasNativeProtectedSourceRestorationFence else { return }
         profileWarmupTask?.cancel()
         guard let token = accessToken, let locationId = targetLocationId else { return }
         let mode = routingMode
@@ -3211,7 +3376,7 @@ final class VEXAppState: ObservableObject {
         profileWarmupTask = Task { [weak self, profileService] in
             do {
                 try Task.checkCancellation()
-                guard let self else { return }
+                guard let self, !self.hasNativeProtectedSourceRestorationFence else { return }
                 try self.ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: token, accountID: accountID)
                 // Warmup fills the cache only when it is missing, stale or for a
                 // different location/mode; a fresh cached profile resolves with
@@ -3225,10 +3390,11 @@ final class VEXAppState: ObservableObject {
                     writeHelperConfig: false,
                     accountID: accountID,
                     validateCurrent: { [weak self] in
-                        guard let self else { throw AuthenticatedOperationError.sessionChanged }
+                        guard let self, !self.hasNativeProtectedSourceRestorationFence else { throw AuthenticatedOperationError.sessionChanged }
                         try self.ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: token, accountID: accountID)
                     }
                 )
+                guard !self.hasNativeProtectedSourceRestorationFence else { return }
                 try self.ensureAuthenticatedSessionCurrent(generation: sessionGeneration, accessToken: token, accountID: accountID)
                 if let accountID {
                     self.bindNativePushDevice(prepared.device.id, accountID: accountID, generation: sessionGeneration)

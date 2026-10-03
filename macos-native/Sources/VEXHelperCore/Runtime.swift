@@ -88,7 +88,7 @@ public actor HelperRuntime {
     }
 
     public func bootstrap() async throws {
-        if store.protectedReplacementRecoveryPending {
+        if store.protectedOperationRecoveryPending {
             logger.warn("bootstrap", "protected replacement recovery pending; preserving network and journal")
             // Keep read-only status available. Ordinary watchdogs remain
             // fenced until explicit recovery removes the journal durably.
@@ -133,14 +133,31 @@ public actor HelperRuntime {
             let command = try HelperCommand.parse(commandLine)
             return try await execute(command: command, peerPID: peerPID, authenticatedPeer: authenticatedPeer)
         } catch let error as HelperError {
+            // A misrouted capability must not reach legacy parsers' metadata
+            // diagnostics, socket replies, UI errors or helper logging.
+            if isProtectedRestartInput(commandLine) {
+                let redacted = HelperError.ownerVerificationFailed("protected restart authorization denied")
+                logger.warn("socket", redacted.localizedDescription)
+                return HelperCommandResponse(payload: redacted.socketMessage)
+            }
             if !commandLine.hasPrefix("status") {
                 logger.warn("socket", error.localizedDescription)
             }
             return HelperCommandResponse(payload: error.socketMessage)
         } catch {
+            if isProtectedRestartInput(commandLine) {
+                let redacted = HelperError.ownerVerificationFailed("protected restart authorization denied")
+                logger.warn("socket", redacted.localizedDescription)
+                return HelperCommandResponse(payload: redacted.socketMessage)
+            }
             logger.error("socket", "unexpected error: \(error.localizedDescription)")
             return HelperCommandResponse(payload: HelperError.io(error.localizedDescription).socketMessage)
         }
+    }
+
+    private func isProtectedRestartInput(_ input: String) -> Bool {
+        input.contains("restart_capability=") || input.hasPrefix("protected-authorize-restart")
+            || input.hasPrefix("protected-adopt-restart") || input.hasPrefix("protected-cancel-restart")
     }
 
     public func snapshotStatus() async -> HelperStatusSnapshot {
@@ -151,7 +168,7 @@ public actor HelperRuntime {
     /// ~5 requests within 750ms). Each uncached refresh spawns several root
     /// subprocesses, so answers younger than `statusCacheTTL` are reused.
     private func refreshedStatusSession() -> HelperSession? {
-        if store.protectedReplacementRecoveryPending {
+        if store.protectedOperationRecoveryPending {
             cachedStatusSession = nil
             cachedStatusAt = nil
             return store.loadSession()
@@ -168,7 +185,7 @@ public actor HelperRuntime {
     }
 
     public func runOwnerWatchdogTick() async {
-        guard !store.protectedReplacementRecoveryPending else { return }
+        guard !store.protectedOperationRecoveryPending else { return }
         guard let ownerSession = store.loadOwnerSession() else { return }
         let currentIdentity = processInspector.processIdentity(pid: ownerSession.pid)
         guard currentIdentity != ownerSession.identity else { return }
@@ -185,7 +202,7 @@ public actor HelperRuntime {
     }
 
     public func runRouteWatchdogTick() async {
-        guard !store.protectedReplacementRecoveryPending else {
+        guard !store.protectedOperationRecoveryPending else {
             unhealthyTunnelTicks = 0
             handshakeStarvedTicks = 0
             return
@@ -244,7 +261,7 @@ public actor HelperRuntime {
     }
 
     public func recoverStrandedAntiLeak() async {
-        guard !store.protectedReplacementRecoveryPending else { return }
+        guard !store.protectedOperationRecoveryPending else { return }
         do {
             try store.withOrdinaryOperationLock(staleAfter: configuration.operationLockStaleAfter) {
                 let persistedSession = store.loadSession()
@@ -271,7 +288,7 @@ public actor HelperRuntime {
     }
 
     public func resumeOwnerWatchdog() async {
-        guard !store.protectedReplacementRecoveryPending else { return }
+        guard !store.protectedOperationRecoveryPending else { return }
         do {
             try store.withOrdinaryOperationLock(staleAfter: configuration.operationLockStaleAfter) {
                 guard let existing = store.loadOwnerSession() else { return }
@@ -310,7 +327,55 @@ public actor HelperRuntime {
 
     private func execute(command: HelperCommand, peerPID: Int32?, authenticatedPeer: PeerCredentials?) async throws -> HelperCommandResponse {
         switch command {
+        case .protectedAuthorizeRestart, .protectedAdoptRestart, .protectedCancelRestart:
+            guard let peer = authenticatedPeer, peer.pid == peerPID, peer.pid > 1,
+                  protectedPeerAuthenticator.authenticate(peer),
+                  let identity = processInspector.processIdentity(pid: peer.pid),
+                  let controller = tunnelController as? ProtectedOwnerTransferControlling else {
+                throw HelperError.ownerVerificationFailed("protected restart authorization denied")
+            }
+            let validatePeer: () throws -> OwnerSession = {
+                guard self.protectedPeerAuthenticator.authenticate(peer),
+                      self.processInspector.processIdentity(pid: peer.pid) == identity else {
+                    throw HelperError.ownerVerificationFailed("protected restart authorization denied")
+                }
+                return OwnerSession(pid: peer.pid, token: "", identity: identity)
+            }
+            let validateOwner: () throws -> OwnerSession = {
+                _ = try validatePeer()
+                guard let owner = self.store.loadOwnerSession(), owner.pid == peer.pid,
+                      owner.identity == identity, ProtectedOwnerTransferRecord.validOwner(owner.payload) != nil else {
+                    throw HelperError.ownerVerificationFailed("protected restart authorization denied")
+                }
+                return owner
+            }
+            defer { protectedGrant = nil; cachedStatusSession = nil; cachedStatusAt = nil }
+            // TODO(macOS restart): wire explicit app recovery UI, private
+            // capability custody and current signed-stage/account/install/key
+            // reconciliation. This consent currently requires an existing
+            // journal/receipt; pre-mutation crash coverage is a separate gate.
+            switch command {
+            case .protectedAuthorizeRestart(let request):
+                return .init(payload: try controller.authorizeProtectedRestart(request: request, uid: peer.effectiveUID,
+                    validateOwner: validateOwner))
+            case .protectedCancelRestart(let request):
+                return .init(payload: try controller.cancelProtectedRestart(request: request, uid: peer.effectiveUID,
+                    validateOwner: validateOwner))
+            case .protectedAdoptRestart(let request):
+                let response = try controller.adoptProtectedRestart(request: request, uid: peer.effectiveUID,
+                    validatePeer: validatePeer, validatePreviousIdentity: { previous in
+                        if let current = self.processInspector.processIdentity(pid: previous.pid), current != previous.identity {
+                            throw HelperError.ownerVerificationFailed("protected restart authorization denied")
+                        }
+                    })
+                // No owner attach/rotation, persisted writes, tunnel/PF calls
+                // or ordinary-operation lease after this completed transfer.
+                startOwnerWatchdogLoop()
+                return .init(payload: response)
+            default: preconditionFailure("protected restart command dispatch")
+            }
         case .protectedSnapshot, .protectedReplace, .protectedCommit, .protectedRecover, .protectedReceipt:
+            try store.requireNoPendingOwnerTransfer()
             guard let peer = authenticatedPeer, peer.pid == peerPID,
                   protectedPeerAuthenticator.authenticate(peer),
                   let owner = store.loadOwnerSession(), owner.pid == peer.pid,
@@ -461,7 +526,7 @@ public actor HelperRuntime {
 
     private func makeStatusSnapshot(from session: HelperSession??) -> HelperStatusSnapshot {
         let session = session ?? nil
-        let recoveryPending = store.protectedReplacementRecoveryPending
+        let recoveryPending = store.protectedOperationRecoveryPending
         let operation = !recoveryPending && store.operationInProgress(staleAfter: configuration.operationLockStaleAfter)
         let interfaceName = session?.interfaceName ?? ""
         let routeInterface = session?.routeInterface ?? ""
@@ -527,6 +592,11 @@ public actor HelperRuntime {
         } else if store.loadOwnerSession() == nil {
             try persistOwnerSession(ownerPID: ownerPID)
         }
+        startOwnerWatchdogLoop()
+    }
+
+    private func startOwnerWatchdogLoop() {
+        ownerWatchdogTask?.cancel()
         ownerWatchdogTask = Task { [weak self] in
             while let self, !Task.isCancelled {
                 do {

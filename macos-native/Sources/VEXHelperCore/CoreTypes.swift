@@ -91,6 +91,9 @@ public enum HelperCommand: Equatable, Sendable {
     case protectedCommit(ProtectedReplacementRequest)
     case protectedRecover(ProtectedReplacementRequest)
     case protectedReceipt(ProtectedReplacementRequest)
+    case protectedAuthorizeRestart(ProtectedOwnerTransferRequest)
+    case protectedAdoptRestart(ProtectedOwnerTransferRequest)
+    case protectedCancelRestart(ProtectedOwnerTransferRequest)
 
     public static func parse(_ rawValue: String) throws -> HelperCommand {
         let parts = rawValue.split(whereSeparator: \.isWhitespace).map(String.init)
@@ -98,6 +101,12 @@ public enum HelperCommand: Equatable, Sendable {
         let metadata = Array(parts.dropFirst())
 
         switch commandName {
+        case "protected-authorize-restart":
+            return .protectedAuthorizeRestart(try ProtectedOwnerTransferRequest(metadata: metadata))
+        case "protected-adopt-restart":
+            return .protectedAdoptRestart(try ProtectedOwnerTransferRequest(metadata: metadata))
+        case "protected-cancel-restart":
+            return .protectedCancelRestart(try ProtectedOwnerTransferRequest(metadata: metadata))
         case "protected-snapshot":
             guard metadata.isEmpty else {
                 throw HelperError.protocolViolation("invalid protected replacement metadata")
@@ -185,6 +194,7 @@ public enum HelperError: Error, LocalizedError, Equatable, Sendable {
     case protocolViolation(String)
     case operationInProgress
     case replacementRecoveryPending
+    case ownerTransferPending
     case commandFailed(String)
     case ownerVerificationFailed(String)
     case missingTunnelMetadata(String)
@@ -213,6 +223,8 @@ public enum HelperError: Error, LocalizedError, Equatable, Sendable {
             return "operation already in progress"
         case .replacementRecoveryPending:
             return "protected replacement recovery pending; network state preserved"
+        case .ownerTransferPending:
+            return "protected owner transfer pending; network state preserved"
         case .commandFailed(let detail):
             return detail
         case .ownerVerificationFailed(let detail):

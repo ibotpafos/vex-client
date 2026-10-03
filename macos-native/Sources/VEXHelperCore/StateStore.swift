@@ -26,7 +26,28 @@ public final class HelperStateStore: @unchecked Sendable {
         fileSystem.pathPresence(at: paths.helperDirectory + "/replacement-journal.state") != .absent
     }
 
+    public var protectedOwnershipTransferPending: Bool {
+        let path = paths.helperDirectory + "/protected-owner-transfer.state"
+        guard fileSystem.pathPresence(at: path) != .absent else { return false }
+        // Expiry/corruption/lookup failure is NOT permission to tear down the
+        // tunnel or attach a dead owner. Only explicit transfer/cancellation
+        // clears this fence. A strict completion receipt is evidence only.
+        guard fileSystem.pathPresence(at: path) == .present,
+              let text = try? fileSystem.readPrivateText(at: path, maxBytes: 16_384),
+              let record = try? ProtectedOwnerTransferRecord.decode(text) else { return true }
+        return record.phase != "transferred"
+    }
+
+    public var protectedOperationRecoveryPending: Bool {
+        protectedReplacementRecoveryPending || protectedOwnershipTransferPending
+    }
+
+    public func requireNoPendingOwnerTransfer() throws {
+        guard !protectedOwnershipTransferPending else { throw HelperError.ownerTransferPending }
+    }
+
     public func requireNoPendingReplacement() throws {
+        try requireNoPendingOwnerTransfer()
         guard !protectedReplacementRecoveryPending else {
             throw HelperError.replacementRecoveryPending
         }

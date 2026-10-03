@@ -670,7 +670,7 @@ public final class SystemPFFirewallController: PFFirewallControlling, @unchecked
     }
 }
 
-public final class SystemTunnelController: ProtectedTunnelControlling, @unchecked Sendable {
+public final class SystemTunnelController: ProtectedTunnelControlling, ProtectedOwnerTransferControlling, @unchecked Sendable {
     private let fileSystem: HelperFileSystem
     private let paths: HelperPathsLayout
     private let runner: CommandRunning
@@ -694,6 +694,7 @@ public final class SystemTunnelController: ProtectedTunnelControlling, @unchecke
     public func protectedReplacementSnapshot(validateOwner: () throws -> OwnerSession) throws -> String {
         let store = HelperStateStore(fileSystem: fileSystem, paths: paths)
         return try store.withOperationLock(staleAfter: 120) {
+            try store.requireNoPendingOwnerTransfer()
             let owner = try validateOwner()
             guard try protectedOwnerSnapshot(ownerPID: owner.pid) == owner.payload else {
                 throw HelperError.ownerVerificationFailed("protected snapshot owner changed")
@@ -720,12 +721,31 @@ public final class SystemTunnelController: ProtectedTunnelControlling, @unchecke
     }
 
     private func authorizeProtected(_ request: ProtectedReplacementRequest, validateOwner: () throws -> OwnerSession) throws -> OwnerSession {
+        try HelperStateStore(fileSystem: fileSystem, paths: paths).requireNoPendingOwnerTransfer()
         let owner = try validateOwner()
         guard ProtectedReplacementJournal.digest(owner.token) == request.ownerTokenSHA256,
               try protectedOwnerSnapshot(ownerPID: owner.pid) == owner.payload else {
             throw HelperError.ownerVerificationFailed("protected operation owner or intent changed")
         }
         return owner
+    }
+
+    public func authorizeProtectedRestart(request: ProtectedOwnerTransferRequest, uid: UInt32,
+        validateOwner: () throws -> OwnerSession) throws -> String {
+        try ProtectedOwnerTransferStore(files: fileSystem, paths: paths, clock: dateProvider)
+            .authorize(request, uid: uid, validateOwner: validateOwner)
+    }
+
+    public func adoptProtectedRestart(request: ProtectedOwnerTransferRequest, uid: UInt32,
+        validatePeer: () throws -> OwnerSession, validatePreviousIdentity: (OwnerSession) throws -> Void) throws -> String {
+        try ProtectedOwnerTransferStore(files: fileSystem, paths: paths, clock: dateProvider)
+            .adopt(request, uid: uid, validatePeer: validatePeer, validatePreviousIdentity: validatePreviousIdentity)
+    }
+
+    public func cancelProtectedRestart(request: ProtectedOwnerTransferRequest, uid: UInt32,
+        validateOwner: () throws -> OwnerSession) throws -> String {
+        try ProtectedOwnerTransferStore(files: fileSystem, paths: paths, clock: dateProvider)
+            .cancel(request, uid: uid, validateOwner: validateOwner)
     }
 
     public func replaceProtected(request: ProtectedReplacementRequest, validateOwner: () throws -> OwnerSession) throws -> HelperSession {
@@ -915,6 +935,7 @@ public final class SystemTunnelController: ProtectedTunnelControlling, @unchecke
         authorize: () throws -> Void = {}) throws -> HelperSession? {
         let store = HelperStateStore(fileSystem: fileSystem, paths: paths)
         return try store.withOperationLock(staleAfter: 120) {
+            try store.requireNoPendingOwnerTransfer()
             try authorize()
             switch fileSystem.pathPresence(at: replacementJournalPath) {
             case .absent: return nil

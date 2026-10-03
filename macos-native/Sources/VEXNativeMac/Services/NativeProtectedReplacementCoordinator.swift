@@ -185,7 +185,26 @@ final class NativeProtectedReplacementCoordinator {
             snapshot = ["protected_protocol": "1", "recovery_pending": "false",
                 "source_sha256": prepared.source, "transaction_id": prepared.id,
                 "owner_token_sha256": prepared.owner, "commit_receipt_protocol": "1"]
-        } else { snapshot = try fields(await d.send("protected-snapshot", 15)) }
+        } else {
+            let response = try await d.send("protected-snapshot", 15)
+            // The public Runtime adds a short-lived one-use root grant to the
+            // controller's internal five-field snapshot. That grant, NOT a new
+            // client UUID or a missing old nonce, binds this NEW transaction.
+            guard !response.contains("\r"), !response.contains("\t"),
+                  !response.dropLast().contains(where: { $0.isNewline }) else { throw Failure.invalidResponse }
+            snapshot = try fields(response)
+            guard snapshot["protected_protocol"] == "1", snapshot["recovery_pending"] == "false" else {
+                throw Failure.recoveryPending
+            }
+            let publicKeys: Set<String> = ["protected_protocol", "recovery_pending", "source_sha256",
+                "owner_token_sha256", "transaction_id", "commit_receipt_protocol"]
+            let legacyKeys = publicKeys.subtracting(["commit_receipt_protocol"])
+            guard Set(snapshot.keys) == publicKeys || Set(snapshot.keys) == legacyKeys,
+                  response.dropLast().split(separator: " ", omittingEmptySubsequences: false).count == snapshot.count,
+                  snapshot["commit_receipt_protocol"] == "1" || Set(snapshot.keys) == legacyKeys else {
+                throw Failure.invalidResponse
+            }
+        }
         try current(d)
         guard snapshot["protected_protocol"] == "1", snapshot["recovery_pending"] == "false" else {
             throw Failure.recoveryPending
@@ -193,12 +212,11 @@ final class NativeProtectedReplacementCoordinator {
         guard snapshot["source_sha256"] == sourceSHA256, sourceSHA256 != candidateSHA256 else {
             throw Failure.sourceMismatch
         }
-        // TODO(protected-current-snapshot-intent): the current root healthy
-        // snapshot has five fields and no transaction_id. The first NEW cutover
-        // must allocate/persist its own one-use intent only after exact current
-        // source/owner proof; never reconstruct an existing/missing old nonce.
-        // This initial-cutover path still fails closed until that contract and
-        // actual root/client cross-contract fixtures are verified offline.
+        // Keep the exact authenticated root nonce, including prepared retries.
+        // Persistence/readback precede staging and optional stage authorization.
+        // TODO(protected-runtime-platform-QA): isolated Mac transport/current
+        // console UID/OS crash and power-loss acceptance is still unavailable;
+        // actual Runtime with inert ports is not installed-helper acceptance.
         guard let id = snapshot["transaction_id"], UUID(uuidString: id)?.uuidString == id,
               let owner = snapshot["owner_token_sha256"], Self.isDigest(owner),
               Self.isDigest(sourceSHA256), Self.isDigest(candidateSHA256) else { throw Failure.invalidResponse }

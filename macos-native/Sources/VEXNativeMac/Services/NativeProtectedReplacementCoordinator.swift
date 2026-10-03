@@ -412,6 +412,13 @@ final class NativeProtectedReplacementCoordinator {
             scopeFingerprint: value.scopeFingerprint, processInstanceID: value.processInstanceID, generation: value.generation)
     }
     static func restartIntent(_ data: Data) throws -> RestartIntent { restartTuple(try restartValue(data)) }
+    /// Both pre-send and conservatively consumed opt-in nonces require distinct
+    /// purpose custody. Absence of that file never changes the nonce's protocol.
+    static func stageConsentExpected(_ data: Data, original: RestartIntent) throws -> Bool {
+        let value = try restartValue(data)
+        guard restartTuple(value) == original else { throw Failure.persistenceUnavailable }
+        return value.transaction.stageConsentPending != nil
+    }
     /// Metadata only. The existing current-process loader and fresh root proof
     /// must authenticate this saved receipt before any completion/admission.
     static func restartReceiptMetadata(_ data: Data) throws -> Receipt? { try restartValue(data).receipt }

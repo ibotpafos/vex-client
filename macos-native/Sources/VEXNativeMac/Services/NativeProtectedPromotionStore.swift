@@ -50,6 +50,14 @@ struct NativeProtectedPromotionStore {
         return try NativeProtectedReplacementCoordinator.restartReceiptMetadata(data)
     }
 
+    @MainActor
+    func stageConsentExpected(accountID: String, installationID: String,
+        original: NativeProtectedReplacementCoordinator.RestartIntent) throws -> Bool {
+        guard let data = try NativePushSecureFileStore(rootURL: root, maxBytes: 16_384)
+            .read(name(accountID: accountID, installationID: installationID)) else { throw CocoaError(.fileReadCorruptFile) }
+        return try NativeProtectedReplacementCoordinator.stageConsentExpected(data, original: original)
+    }
+
     /// Only after an exact original-owner root cancellation ACK was durably
     /// retained. Scope may have changed, but no consumed journal/receipt is erased.
     @MainActor

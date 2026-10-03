@@ -94,9 +94,8 @@ final class NativeProtectedRestartCoordinator {
                 // until this marker readback succeeds; never infer from expiry.
                 try current(d)
             }
-            if let cap = try d.store.loadCapability(owner: d.owner, material: d.material) {
-                try d.store.removeCapability(owner: d.owner, expected: cap)
-            }
+            let retirement = try d.store.beginStageCancellation(owner: d.owner, material: d.material, isCurrent: d.isCurrent)
+            try d.store.removeCancelledCapability(owner: d.owner, expected: retirement, isCurrent: d.isCurrent)
             return
         }
         guard d.material.intent.processInstanceID == NativeProtectedReplacementCoordinator.processInstanceID,

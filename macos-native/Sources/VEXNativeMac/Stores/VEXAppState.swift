@@ -781,8 +781,7 @@ final class VEXAppState: ObservableObject {
             // tuple, UID and original kernel peer/start identity before removal.
             guard !isVpnBusy, !isDeviceBusy, !helper.isBusy, helper.canUseExistingValidatedHelper,
                   let session, let installation = nativePushIdentityStore.existingDeviceId(),
-                  let owner = NativePushPSKEventOwner(accountID: session.user.id, installationID: installation),
-                  let material = try nativeProtectedRestartStore.loadMaterial(owner: owner) else {
+                  let owner = NativePushPSKEventOwner(accountID: session.user.id, installationID: installation) else {
                 throw NativeProtectedRestartCoordinator.Failure.staleIntent
             }
             let generation = authenticatedSessionGeneration, token = session.accessToken
@@ -793,15 +792,36 @@ final class VEXAppState: ObservableObject {
                     accessToken: token, accountID: owner.accountID)) != nil
             }
             isVpnBusy = true; defer { isVpnBusy = false }
+            let material = try nativeProtectedRestartStore.loadMaterial(owner: owner)
+            if let retirement = try nativeProtectedRestartStore.stageCancellationRetirement(owner: owner),
+               material == nil || material?.intent == retirement.stage.intent || retirement.phase == "retiring" {
+                // Exact durable cleanup survives disappearance of either secret
+                // file. It does not call root, reauthorize, adopt or admit.
+                guard retirement.stage.intent.processInstanceID == NativeProtectedReplacementCoordinator.processInstanceID,
+                      current() else { throw NativeProtectedRestartCoordinator.Failure.staleIntent }
+                try nativeProtectedRestartStore.validateStageCancellationCustody(owner: owner, expected: retirement)
+                // A present consumed/rebound nonce still vetoes cleanup.
+                try nativeProtectedPromotionStore.removeCancelledStageIntent(accountID: owner.accountID,
+                    installationID: owner.installationID, original: retirement.stage.intent, isCurrent: current)
+                try nativeProtectedRestartStore.finishStageCancellation(owner: owner, expected: retirement, isCurrent: current)
+                try helper.finishCancelledProtectedStage(retirement.stage.intent, isCurrent: current)
+                nativeProtectedRestartMessage = "Разрешение отменено. Защищённая операция и профиль не изменялись."
+                return
+            }
+            guard let material else { throw NativeProtectedRestartCoordinator.Failure.staleIntent }
             try await helper.cancelProtectedRestart(.init(isCurrent: current, validateMaterial: {},
                 send: { _, _ in throw NativeProtectedRestartCoordinator.Failure.unavailable },
                 store: nativeProtectedRestartStore, owner: owner, material: material))
             guard current() else { throw NativeProtectedRestartCoordinator.Failure.staleIntent }
             if let stage = try nativeProtectedRestartStore.stageConsent(owner: owner, material: material) {
                 guard stage.cancelled else { throw NativeProtectedRestartCoordinator.Failure.invalidResponse }
+                guard let retirement = try nativeProtectedRestartStore.stageCancellationRetirement(owner: owner) else {
+                    throw NativeProtectedRestartCoordinator.Failure.invalidResponse
+                }
+                try nativeProtectedRestartStore.validateStageCancellationCustody(owner: owner, expected: retirement)
                 try nativeProtectedPromotionStore.removeCancelledStageIntent(accountID: owner.accountID,
                     installationID: owner.installationID, original: material.intent, isCurrent: current)
-                try nativeProtectedRestartStore.removeMaterial(owner: owner, expected: material)
+                try nativeProtectedRestartStore.finishStageCancellation(owner: owner, expected: retirement, isCurrent: current)
                 try helper.finishCancelledProtectedStage(material.intent, isCurrent: current)
             }
             nativeProtectedRestartMessage = "Разрешение отменено. Защищённая операция и профиль не изменялись."
@@ -877,6 +897,10 @@ final class VEXAppState: ObservableObject {
             store: nativeProtectedRestartStore, owner: owner, material: material)
         switch action {
         case .authorize:
+            guard try !nativeProtectedPromotionStore.stageConsentExpected(accountID: owner.accountID,
+                installationID: owner.installationID, original: material.intent) else {
+                throw NativeProtectedRestartCoordinator.Failure.recoveryPending
+            }
             let expiry = try await helper.authorizeProtectedRestart(dependencies)
             guard current() else { throw NativeProtectedRestartCoordinator.Failure.staleIntent }
             nativeProtectedRestartMessage = "Разрешение на передачу владения сохранено на 120 секунд. Перезапустите приложение явно; установка и переподключение не выполнялись."
@@ -1034,7 +1058,8 @@ final class VEXAppState: ObservableObject {
         }
         try nativeProtectedRestartStore.retain(owner: owner, intent: intent, rotationID: rotationID,
             source: previous, candidate: next, sourceConfig: sourceConfig, candidateConfig: candidateConfig,
-            selectedLocationID: selectedID, targetLocationID: targetID)
+            selectedLocationID: selectedID, targetLocationID: targetID,
+            requiresStageConsent: try NativeProtectedReplacementCoordinator.stageConsentExpected(data, original: intent))
     }
 
     private func nativePSKStageConsent(owner: NativePushPSKEventOwner,

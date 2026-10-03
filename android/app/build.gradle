@@ -229,6 +229,9 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1006573
         versionName "1.0.65"
+        // Derive the native release after the literal version fields so
+        // scripts/sync_versions.mjs remains the single source of version edits.
+        def vexNativeSentryRelease = "vex-android@${versionName}+${versionCode}"
         manifestPlaceholders = [
             vexRuntimeVersion: vexBuildValue('VEX_RUNTIME_VERSION', "1.0.65"),
             vexUpdatesEnabled: vexUpdatesEnabled(),
@@ -241,7 +244,8 @@ android {
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
         buildConfigField "String", "SENTRY_DSN", buildConfigString(vexBuildValue('EXPO_PUBLIC_SENTRY_DSN', ''))
         buildConfigField "String", "SENTRY_ENVIRONMENT", buildConfigString(vexBuildValue('EXPO_PUBLIC_SENTRY_ENVIRONMENT', 'production'))
-        buildConfigField "String", "SENTRY_RELEASE", buildConfigString(vexBuildValue('EXPO_PUBLIC_SENTRY_RELEASE', vexBuildValue('VEX_RUNTIME_VERSION', '1.0.65')))
+        // Native release provenance must not fall back to the OTA runtime.
+        buildConfigField "String", "SENTRY_RELEASE", buildConfigString(vexBuildValue('EXPO_PUBLIC_SENTRY_RELEASE', vexNativeSentryRelease))
     }
     signingConfigs {
         debug {

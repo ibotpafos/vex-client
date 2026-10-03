@@ -146,7 +146,54 @@ jobs:
           export EXPO_PUBLIC_SENTRY_RELEASE="vex-android@${{ needs.prepare.outputs.version }}+${{ needs.prepare.outputs.build }}"
           npm run android:release -- --no-daemon
           (cd android && ./gradlew :app:testDebugUnitTest --no-daemon)
+      - name: Bind separately retained R8 mapping to the signed APK
+        env:
+          RELEASE_SOURCE_COMMIT: ${{ needs.prepare.outputs.source_commit }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE_BUILD: ${{ needs.prepare.outputs.build }}
+        run: |-
+          set -euo pipefail
+          mapping="android/app/build/outputs/mapping/release/mapping.txt"
+          test -s "$mapping"
+          apk_name="$(node -e 'process.stdout.write(require("./dist/android/release-manifest.json").updater)')"
+          apk="dist/android/$apk_name"
+          test -s "$apk"
+          mkdir -p android-r8-provenance
+          cp "$mapping" android-r8-provenance/mapping.txt
+          apk_sha256="$(sha256sum "$apk" | awk '{print $1}')"
+          mapping_sha256="$(sha256sum android-r8-provenance/mapping.txt | awk '{print $1}')"
+          export APK_NAME="$apk_name"
+          export APK_SHA256="$apk_sha256"
+          export MAPPING_SHA256="$mapping_sha256"
+          python3 - <<'PY'
+          import json, os
+          provenance = {
+              "schema_version": 1,
+              "source_commit": os.environ["RELEASE_SOURCE_COMMIT"],
+              "version": os.environ["RELEASE_VERSION"],
+              "build": int(os.environ["RELEASE_BUILD"]),
+              "apk": os.environ["APK_NAME"],
+              "apk_sha256": os.environ["APK_SHA256"],
+              "mapping": "mapping.txt",
+              "mapping_sha256": os.environ["MAPPING_SHA256"],
+          }
+          for value in provenance.values():
+              if value in (None, ""):
+                  raise SystemExit("incomplete Android R8 provenance")
+          with open("android-r8-provenance/provenance.json", "w", encoding="utf-8") as stream:
+              json.dump(provenance, stream, sort_keys=True)
+              stream.write("\n")
+          with open("dist/android/android-r8-provenance.json", "w", encoding="utf-8") as stream:
+              json.dump(provenance, stream, sort_keys=True)
+              stream.write("\n")
+          PY
           python3 scripts/client_release.py bundle --directory dist/android
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: android-r8-mapping-${{ github.sha }}
+          path: android-r8-provenance/*
+          if-no-files-found: error
+          retention-days: 90
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: verified-release-bundle

@@ -8,7 +8,7 @@ import { resetVpnProfileCache, resolveVpnProfile, rotateVpnProfileKey, type VpnP
 import { ProfileRequestSupersededError } from './profileRequestQueue';
 import type { ResolveConnectableProfileOptions } from './serverSwitch';
 import { clearHotVpnProfiles, hydrateHotVpnProfilesToQueryCache, loadHotVpnProfileResult, profileFromHotRecord, saveHotVpnProfile } from './hotProfileCache';
-import { shouldUseLocalProfileBeforeOnline } from './connectFlow';
+import { connectableLocalProfile } from './connectFlow';
 import type { VpnRoutingMode } from './routingPolicy';
 import { androidVpnProfileRequiresRefresh, androidVpnProfileWithinBinderBudget } from './androidRoutingSafety';
 
@@ -283,22 +283,23 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
     const preferCached = options.preferCached !== false && options.forceRefresh !== true;
     const cachedProfile = options.cachedProfile ?? cachedProfileForLocation(locationId);
     let forceRouteBudgetRefresh = androidVpnProfileRequiresRefresh(Platform.OS, cachedProfile?.config);
+    const cachedLocalProfile = preferCached
+      ? connectableLocalProfile(cachedProfile, locationId, entitlementState, routingMode)
+      : null;
     if (
-      preferCached &&
-      cachedProfile?.routingMode === routingMode &&
-      shouldUseLocalProfileBeforeOnline(cachedProfile, entitlementState) &&
-      androidVpnProfileWithinBinderBudget(Platform.OS, cachedProfile.config)
+      cachedLocalProfile &&
+      androidVpnProfileWithinBinderBudget(Platform.OS, cachedLocalProfile.config)
     ) {
-      const cachedEntitlement = cachedProfile.entitlement ?? entitlementState;
+      const cachedEntitlement = cachedLocalProfile.entitlement ?? entitlementState;
       if (options.requestPermission !== false) {
         const permissionGranted = await requestPermissionWithTiming();
         if (!permissionGranted) {
           throw new Error('Разрешение Android VPN не выдано.');
         }
       }
-      const localProfile = withConnectPreparationTiming({ ...cachedProfile, source: 'local' });
+      const localProfile = withConnectPreparationTiming(cachedLocalProfile);
       cacheProfile(locationId, localProfile);
-      refreshProfileInBackground(locationId, cachedEntitlement!, cachedProfile);
+      refreshProfileInBackground(locationId, cachedEntitlement!, cachedLocalProfile);
       return localProfile;
     }
 
@@ -317,13 +318,14 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
       }
       const hotProfile = hotResult.record ? profileFromHotRecord(hotResult.record) : null;
       forceRouteBudgetRefresh = forceRouteBudgetRefresh || androidVpnProfileRequiresRefresh(Platform.OS, hotProfile?.config);
+      const connectableHotProfile = hotProfile?.hotProfileUsed
+        ? connectableLocalProfile(hotProfile, locationId, null, routingMode)
+        : null;
       if (
-        hotProfile?.hotProfileUsed &&
-        hotProfile.routingMode === routingMode &&
-        shouldUseLocalProfileBeforeOnline(hotProfile, null) &&
-        androidVpnProfileWithinBinderBudget(Platform.OS, hotProfile.config)
+        connectableHotProfile &&
+        androidVpnProfileWithinBinderBudget(Platform.OS, connectableHotProfile.config)
       ) {
-        const hotEntitlement = hotProfile.entitlement;
+        const hotEntitlement = connectableHotProfile.entitlement;
         if (!hotEntitlement) {
           throw new Error('Подписка не активна.');
         }
@@ -333,9 +335,9 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
             throw new Error('Разрешение Android VPN не выдано.');
           }
         }
-        const preparedHotProfile = withConnectPreparationTiming(hotProfile);
+        const preparedHotProfile = withConnectPreparationTiming(connectableHotProfile);
         cacheProfile(locationId, preparedHotProfile);
-        refreshProfileInBackground(locationId, hotEntitlement, hotProfile);
+        refreshProfileInBackground(locationId, hotEntitlement, connectableHotProfile);
         return preparedHotProfile;
       }
     }
@@ -373,8 +375,8 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
       }
     }
 
-    let profile = !options.forceRefresh && !forceRouteBudgetRefresh && options.cachedProfile
-      ? options.cachedProfile
+    let profile = !options.forceRefresh && !forceRouteBudgetRefresh && cachedLocalProfile
+      ? cachedLocalProfile
       : await resolveVpnProfile(accessToken, currentEntitlement, locationId, {
         allowPersistentHotProfile: forceRouteBudgetRefresh ? false : options.allowPersistentHotProfile,
         forceRefresh: options.forceRefresh === true || forceRouteBudgetRefresh,

@@ -64,6 +64,34 @@ struct ProtectedPreStageConsent: Codable {
     }
 }
 
+/// Root-private write-ahead cancellation proof, NOT a commit/transfer grant.
+/// Keep the consent bytes immutable: journal/receipt attachment digests and the
+/// legacy ACK remain compatible. Only hashes and the original private owner
+/// payload are duplicated; never a raw capability, profile or key.
+struct ProtectedPreStageCancellationReceipt: Codable {
+    let schemaVersion: Int
+    let consent: ProtectedPreStageConsent
+    let consentSHA256: String
+    let cancelledAt: UInt64
+    let evidenceKind: String
+    let evidenceSHA256: String
+
+    func encoded() throws -> String {
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        return String(decoding: try encoder.encode(self), as: UTF8.self) + "\n"
+    }
+    static func decode(_ text: String) throws -> Self {
+        guard text.utf8.count <= 16_384,
+              let r = try? JSONDecoder().decode(Self.self, from: Data(text.utf8)), r.schemaVersion == 1,
+              let consentText = try? r.consent.encoded(), (try? ProtectedPreStageConsent.decode(consentText)) != nil,
+              r.consentSHA256 == ProtectedReplacementJournal.digest(consentText),
+              r.cancelledAt >= r.consent.issuedAt, r.cancelledAt < 9_000_000_000,
+              ["source", "receipt"].contains(r.evidenceKind), ProtectedOwnerTransferRequest.isDigest(r.evidenceSHA256),
+              (try? r.encoded()) == text else { throw ProtectedPreStageConsent.denied() }
+        return r
+    }
+}
+
 /// Called under the existing kernel lease. Attachment is the journal's optional
 /// digest of this immutable consent; no phase/expiry/dead PID alone consumes it.
 final class ProtectedPreStageConsentStore {
@@ -71,6 +99,7 @@ final class ProtectedPreStageConsentStore {
     private let paths: HelperPathsLayout
     private let clock: DateProviding
     var recordPath: String { paths.helperDirectory + "/protected-pre-stage-consent.state" }
+    var cancellationPath: String { paths.helperDirectory + "/protected-pre-stage-cancel-receipt.state" }
     private var journalPath: String { paths.helperDirectory + "/replacement-journal.state" }
     private var receiptPath: String { paths.helperDirectory + "/replacement-commit-receipt.state" }
     init(files: HelperFileSystem, paths: HelperPathsLayout, clock: DateProviding) {
@@ -79,6 +108,24 @@ final class ProtectedPreStageConsentStore {
     func read() throws -> ProtectedPreStageConsent {
         guard files.pathPresence(at: recordPath) == .present else { throw ProtectedPreStageConsent.denied() }
         return try ProtectedPreStageConsent.decode(files.readPrivateText(at: recordPath, maxBytes: 16_384))
+    }
+    /// One bounded latest receipt. Only a different explicitly authorized
+    /// cancellation may supersede it, never a timer, snapshot or ACK retry.
+    /// A fresh transaction needs the runtime's fresh one-use nonce; superseding
+    /// this metadata does not resurrect any consumed/cancelled runtime grant.
+    func cancellationIfPresent() throws -> ProtectedPreStageCancellationReceipt? {
+        switch files.pathPresence(at: cancellationPath) {
+        case .absent: return nil
+        case .unknown: throw ProtectedPreStageConsent.denied()
+        case .present:
+            return try ProtectedPreStageCancellationReceipt.decode(files.readPrivateText(at: cancellationPath, maxBytes: 16_384))
+        }
+    }
+    func requireNotCancelled(transactionID: String, capabilitySHA256: String? = nil) throws {
+        if let r = try cancellationIfPresent() {
+            guard r.consent.transactionID != transactionID,
+                  capabilitySHA256 == nil || r.consent.capabilitySHA256 != capabilitySHA256 else { throw ProtectedPreStageConsent.denied() }
+        }
     }
     private func live(_ r: ProtectedPreStageConsent) throws {
         let now = clock.now.timeIntervalSince1970
@@ -99,6 +146,8 @@ final class ProtectedPreStageConsentStore {
         let store = HelperStateStore(fileSystem: files, paths: paths, dateProvider: clock)
         return try store.withOperationLock(staleAfter: 120) {
             try store.requireNoPendingReplacement()
+            try requireNotCancelled(transactionID: request.replacement.transactionID,
+                capabilitySHA256: ProtectedReplacementJournal.digest(request.capability))
             let owner = try validateOwner(); try validateSource()
             let staged = try candidate(); try AwgConfigAdmission.validate(staged)
             guard ProtectedOwnerTransferRecord.validOwner(owner.payload) != nil,
@@ -126,6 +175,7 @@ final class ProtectedPreStageConsentStore {
             }
             try live(r); try sourceArtifacts(r); try validateSource()
             guard try validateOwner() == owner, try candidate() == staged else { throw ProtectedPreStageConsent.denied() }
+            try requireNotCancelled(transactionID: r.transactionID, capabilitySHA256: r.capabilitySHA256)
             let text = try r.encoded(); _ = try ProtectedPreStageConsent.decode(text)
             try files.writeTextAtomically(text, to: recordPath, mode: 0o600)
             guard try read().encoded() == text, try validateOwner() == owner, try candidate() == staged else { throw ProtectedPreStageConsent.denied() }
@@ -137,6 +187,7 @@ final class ProtectedPreStageConsentStore {
     /// before journal persistence / any fake or real PF, quick, active/DNS write.
     func attach(request: ProtectedReplacementRequest, uid: UInt32?, owner: OwnerSession,
         journal: ProtectedReplacementJournal, required: Bool, capabilitySHA256: String?) throws -> String? {
+        try requireNotCancelled(transactionID: request.transactionID, capabilitySHA256: capabilitySHA256)
         if files.pathPresence(at: recordPath) == .absent {
             guard !required else { throw ProtectedPreStageConsent.denied() }
             return nil // legacy client with no stage consent, not a fallback
@@ -153,6 +204,7 @@ final class ProtectedPreStageConsentStore {
         return ProtectedReplacementJournal.digest(try r.encoded())
     }
     func verifyPreparedAttachment(_ journal: ProtectedReplacementJournal) throws {
+        try requireNotCancelled(transactionID: journal.transactionID)
         guard let binding = journal.preStageConsentSHA256 else { return }
         let r = try read()
         guard binding == ProtectedReplacementJournal.digest(try r.encoded()),
@@ -175,6 +227,8 @@ final class ProtectedPreStageConsentStore {
     /// Convert a previously live, exactly attached consent into the existing
     /// transfer fence. No attachment => no ownership write, even after owner death.
     func restartAuthorization(_ request: ProtectedOwnerTransferRequest, uid: UInt32) throws -> ProtectedOwnerTransferRecord {
+        try requireNotCancelled(transactionID: request.replacement.transactionID,
+            capabilitySHA256: ProtectedReplacementJournal.digest(request.capability))
         let r = try read(); guard r.matches(request, uid: uid) else { throw ProtectedPreStageConsent.denied() }; try live(r)
         let proof: String, kind: String
         if files.pathPresence(at: journalPath) == .present {
@@ -203,11 +257,29 @@ final class ProtectedPreStageConsentStore {
         let store = HelperStateStore(fileSystem: files, paths: paths, dateProvider: clock)
         return try store.withOperationLock(staleAfter: 120) {
             try store.requireNoPendingReplacement()
-            let owner = try validateOwner(), r = try read()
+            let owner = try validateOwner()
+            let prior = try cancellationIfPresent()
+            if let prior, prior.consent.matches(request, uid: uid), prior.consent.ownerSession == owner.payload {
+                // Lost remove/ACK or client marker write: prove the same root
+                // receipt, not record absence, expiry or a fresh authorization.
+                return try finishCancellation(prior, owner: owner, validateOwner: validateOwner)
+            }
+            let r = try read()
             guard r.ownerSession == owner.payload, r.matches(request, uid: uid) else { throw ProtectedPreStageConsent.denied() }
+            if let prior {
+                guard prior.consent.transactionID != r.transactionID,
+                      prior.consent.capabilitySHA256 != r.capabilitySHA256 else { throw ProtectedPreStageConsent.denied() }
+            }
             // Expiry is never takeover authority, but the same live original
             // owner may cancel an unconsumed record. Only this private file goes.
-            if try !completedAttachment(r) {
+            let evidenceKind: String, evidence: String
+            if try completedAttachment(r) {
+                // Compatibility: retire only this already consumed metadata.
+                // Keep the root commit receipt; client send-intent CAS still
+                // forbids treating this ACK as unconsumed nonce cleanup.
+                evidenceKind = "receipt"
+                evidence = try files.readPrivateText(at: receiptPath, maxBytes: 16_384)
+            } else {
                 // Source recovery may have a new utun/handshake, but not a new
                 // owner/config/DNS. Cancellation only retires private metadata;
                 // it cannot use a candidate or stale UI status as source proof.
@@ -222,11 +294,41 @@ final class ProtectedPreStageConsentStore {
                       try files.readPrivateText(at: paths.interfacePath, maxBytes: 128) == saved.interfaceName + "\n",
                       try files.readPrivateText(at: paths.endpointPath, maxBytes: 1_024) == saved.endpoint + "\n"
                 else { throw ProtectedPreStageConsent.denied() }
+                evidenceKind = "source"
+                evidence = "vex-pre-stage-cancel-source-v1\n" + saved.payload + r.ownerSession
+                    + r.sourceSHA256 + "\n" + r.dnsSHA256 + "\n"
             }
             guard try validateOwner() == owner else { throw ProtectedPreStageConsent.denied() }
-            try files.removeItem(at: recordPath)
-            guard files.pathPresence(at: recordPath) == .absent else { throw ProtectedPreStageConsent.denied() }
-            return "stage-cancelled transaction_id=\(r.transactionID)\n"
+            let now = clock.now.timeIntervalSince1970
+            guard now.isFinite, now >= Double(r.issuedAt), now < 9_000_000_000 else { throw ProtectedPreStageConsent.denied() }
+            let proof = ProtectedPreStageCancellationReceipt(schemaVersion: 1, consent: r,
+                consentSHA256: ProtectedReplacementJournal.digest(try r.encoded()), cancelledAt: UInt64(now),
+                evidenceKind: evidenceKind, evidenceSHA256: ProtectedReplacementJournal.digest(evidence))
+            let text = try proof.encoded(); _ = try ProtectedPreStageCancellationReceipt.decode(text)
+            // WAL + strict private readback precede removal and the first ACK.
+            // Any ambiguous presence/read/write leaves the consent fenced.
+            try files.writeTextAtomically(text, to: cancellationPath, mode: 0o600)
+            guard try cancellationIfPresent()?.encoded() == text, try validateOwner() == owner else { throw ProtectedPreStageConsent.denied() }
+            return try finishCancellation(proof, owner: owner, validateOwner: validateOwner)
         }
+    }
+    private func finishCancellation(_ proof: ProtectedPreStageCancellationReceipt, owner: OwnerSession,
+        validateOwner: () throws -> OwnerSession) throws -> String {
+        let text = try proof.encoded()
+        guard proof.consent.ownerSession == owner.payload,
+              try cancellationIfPresent()?.encoded() == text, try validateOwner() == owner else { throw ProtectedPreStageConsent.denied() }
+        switch files.pathPresence(at: recordPath) {
+        case .unknown: throw ProtectedPreStageConsent.denied()
+        case .present:
+            guard ProtectedReplacementJournal.digest(try read().encoded()) == proof.consentSHA256,
+                  try validateOwner() == owner else { throw ProtectedPreStageConsent.denied() }
+            try files.removeItem(at: recordPath)
+        case .absent: break
+        }
+        guard files.pathPresence(at: recordPath) == .absent,
+              try cancellationIfPresent()?.encoded() == text, try validateOwner() == owner else { throw ProtectedPreStageConsent.denied() }
+        // Exact legacy ACK, only after root WAL/readback and deletion proof.
+        // This replays no grant and writes no owner/journal/receipt/network data.
+        return "stage-cancelled transaction_id=\(proof.consent.transactionID)\n"
     }
 }

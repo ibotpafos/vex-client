@@ -40,11 +40,17 @@ public final class HelperStateStore: @unchecked Sendable {
 
     public var protectedPreStageConsentPending: Bool {
         let stage = ProtectedPreStageConsentStore(files: fileSystem, paths: paths, clock: dateProvider)
+        // A corrupt/unsafe/unknown cancellation proof is not absence. A valid
+        // receipt is inert only once its consent deletion is proved. WAL-only
+        // partial cancellation must still fence watchdog/ordinary cleanup.
+        let cancellation: ProtectedPreStageCancellationReceipt?
+        do { cancellation = try stage.cancellationIfPresent() } catch { return true }
         guard fileSystem.pathPresence(at: stage.recordPath) != .absent else { return false }
         // An unattached/expired/corrupt consent cannot let an ordinary watchdog
         // tear down the source. Only explicit same-live-owner cancellation or
         // a strict completed attachment retires this separate fence.
         guard let r = try? stage.read() else { return true }
+        if cancellation?.consent.transactionID == r.transactionID { return true }
         if (try? stage.completedAttachment(r)) == true { return false }
         let transfer = paths.helperDirectory + "/protected-owner-transfer.state"
         if let text = try? fileSystem.readPrivateText(at: transfer, maxBytes: 16_384),

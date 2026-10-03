@@ -191,6 +191,10 @@ struct NativeProtectedRestartStore {
         // Validate the purpose record before either deletion; it carries no raw
         // capability and is removed only with the exact proved/cancelled material.
         _ = try stageConsent(owner: owner, material: expected)
+        // TODO(stage-cancel-retirement): purpose removal and material removal
+        // below are not one filesystem transaction. Preserve exact cancellation
+        // ACK custody across an error after the first deletion before claiming
+        // cleanup completion; no missing marker may become restart authority.
         try store.remove("stage-consent-" + (try fingerprint(owner)) + ".json")
         let name = "restart-material-" + (try fingerprint(owner)) + ".json"
         try store.remove(name); guard try store.read(name) == nil else { throw Failure.unavailable }

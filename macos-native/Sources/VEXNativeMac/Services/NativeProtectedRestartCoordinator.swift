@@ -89,9 +89,10 @@ final class NativeProtectedRestartCoordinator {
                 // Durable ACK marker BEFORE local deletion permits exact private
                 // cleanup retries; it cannot authorize another stage/adoption.
                 try d.store.markStageCancelled(owner: d.owner, material: d.material, expected: stage)
-                // TODO(stage-cancel-lost-ACK): root cancellation has no tombstone.
-                // If its ACK/this write is lost, retain inert custody; don't infer
-                // cancellation from expiry or retry a replacement without consent.
+                // Root WAL makes this same ACK idempotent after helper response
+                // or marker-write loss. Preserve the existing capability/nonce
+                // until this marker readback succeeds; never infer from expiry.
+                try current(d)
             }
             if let cap = try d.store.loadCapability(owner: d.owner, material: d.material) {
                 try d.store.removeCapability(owner: d.owner, expected: cap)

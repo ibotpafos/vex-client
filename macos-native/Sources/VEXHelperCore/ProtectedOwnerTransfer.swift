@@ -218,6 +218,9 @@ final class ProtectedOwnerTransferStore {
     func authorize(_ request: ProtectedOwnerTransferRequest, uid: UInt32, validateOwner: () throws -> OwnerSession) throws -> String {
         let store = HelperStateStore(fileSystem: files, paths: paths, dateProvider: clock)
         return try store.withOperationLock(staleAfter: 120) {
+            try ProtectedPreStageConsentStore(files: files, paths: paths, clock: clock)
+                .requireNotCancelled(transactionID: request.replacement.transactionID,
+                    capabilitySHA256: ProtectedReplacementJournal.digest(request.capability))
             let owner = try validateOwner()
             guard ProtectedOwnerTransferRecord.validOwner(owner.payload) != nil,
                   ProtectedReplacementJournal.digest(owner.token) == request.replacement.ownerTokenSHA256 else { throw denied() }
@@ -269,6 +272,9 @@ final class ProtectedOwnerTransferStore {
                validatePreviousIdentity: (OwnerSession) throws -> Void) throws -> String {
         let store = HelperStateStore(fileSystem: files, paths: paths, dateProvider: clock)
         return try store.withOperationLock(staleAfter: 120) {
+            let stage = ProtectedPreStageConsentStore(files: files, paths: paths, clock: clock)
+            try stage.requireNotCancelled(transactionID: request.replacement.transactionID,
+                capabilitySHA256: ProtectedReplacementJournal.digest(request.capability))
             let presence = files.pathPresence(at: recordPath)
             var r: ProtectedOwnerTransferRecord
             if presence == .absent || (presence == .present && (try? readRecord()).map {
@@ -303,6 +309,8 @@ final class ProtectedOwnerTransferStore {
             guard let text = r.newOwner, let nextOwner = ProtectedOwnerTransferRecord.validOwner(text),
                   nextOwner.pid == peer.pid, nextOwner.identity == peer.identity else { throw denied() }
             func verify() throws {
+                try stage.requireNotCancelled(transactionID: request.replacement.transactionID,
+                    capabilitySHA256: ProtectedReplacementJournal.digest(request.capability))
                 try self.liveWindow(r)
                 let current = try validatePeer()
                 guard current.pid == nextOwner.pid, current.identity == nextOwner.identity,

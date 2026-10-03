@@ -45,11 +45,11 @@ final class NativeProtectedRestartCoordinator {
         }
         guard Set(result.keys) == keys else { throw Failure.invalidResponse }; return result
     }
-    // TODO(pre-stage-consent): close the crash window before candidate staging
-    // with a separate compatible root-private consent lifecycle. The existing
-    // owner-transfer fence blocks replace and requires a journal/receipt; it
-    // cannot authorize a pre-stage mutation. This pass verifies continuation of
-    // an already authorized journal only, not this unfinished root contract.
+    // TODO(pre-stage-consent-client): the separate root authorize/cancel-stage
+    // RPC and exact journal/receipt attachment are now verified offline. Wire
+    // private material/capability custody and signed/current AppState consent
+    // before protected-replace; don't reuse this post-journal authorize method.
+    // Isolated Mac crash/power-loss/current-console acceptance is still absent.
     func authorize(_ d: Dependencies) async throws -> UInt64 {
         try current(d)
         guard d.material.intent.processInstanceID == NativeProtectedReplacementCoordinator.processInstanceID else { throw Failure.staleIntent }

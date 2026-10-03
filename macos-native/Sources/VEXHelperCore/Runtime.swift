@@ -62,6 +62,9 @@ public actor HelperRuntime {
         let transactionID: String
         let sourceSHA256: String
         let issuedAt: Date
+        var requiresPreStageConsent = false
+        var preStageCapabilitySHA256: String? = nil
+        var preStageCandidateSHA256: String? = nil
     }
     private var protectedGrant: ProtectedGrant?
 
@@ -158,6 +161,7 @@ public actor HelperRuntime {
     private func isProtectedRestartInput(_ input: String) -> Bool {
         input.contains("restart_capability=") || input.hasPrefix("protected-authorize-restart")
             || input.hasPrefix("protected-adopt-restart") || input.hasPrefix("protected-cancel-restart")
+            || input.hasPrefix("protected-authorize-stage") || input.hasPrefix("protected-cancel-stage")
     }
 
     public func snapshotStatus() async -> HelperStatusSnapshot {
@@ -327,6 +331,37 @@ public actor HelperRuntime {
 
     private func execute(command: HelperCommand, peerPID: Int32?, authenticatedPeer: PeerCredentials?) async throws -> HelperCommandResponse {
         switch command {
+        case .protectedAuthorizeStage, .protectedCancelStage:
+            guard let peer = authenticatedPeer, peer.pid == peerPID, peer.pid > 1,
+                  protectedPeerAuthenticator.authenticate(peer), let owner = store.loadOwnerSession(),
+                  owner.pid == peer.pid, processInspector.processIdentity(pid: peer.pid) == owner.identity,
+                  ProtectedOwnerTransferRecord.validOwner(owner.payload) != nil,
+                  let controller = tunnelController as? ProtectedPreStageConsentControlling else {
+                throw ProtectedPreStageConsent.denied()
+            }
+            let validateOwner: () throws -> OwnerSession = {
+                guard self.protectedPeerAuthenticator.authenticate(peer), self.store.loadOwnerSession() == owner,
+                      self.processInspector.processIdentity(pid: peer.pid) == owner.identity else { throw ProtectedPreStageConsent.denied() }
+                return owner
+            }
+            defer { cachedStatusSession = nil; cachedStatusAt = nil }
+            switch command {
+            case .protectedAuthorizeStage(let request):
+                guard let grant = protectedGrant, grant.owner == owner,
+                      grant.transactionID == request.replacement.transactionID,
+                      grant.sourceSHA256 == request.replacement.sourceSHA256,
+                      (0...30).contains(dateProvider.now.timeIntervalSince(grant.issuedAt)) else { throw ProtectedPreStageConsent.denied() }
+                let response = try controller.authorizeProtectedStage(request: request, uid: peer.effectiveUID, validateOwner: validateOwner)
+                var bound = grant; bound.requiresPreStageConsent = true
+                bound.preStageCapabilitySHA256 = ProtectedReplacementJournal.digest(request.capability)
+                bound.preStageCandidateSHA256 = request.replacement.candidateSHA256; protectedGrant = bound
+                return .init(payload: response)
+            case .protectedCancelStage(let request):
+                protectedGrant = nil
+                return .init(payload: try controller.cancelProtectedStage(request: request, uid: peer.effectiveUID,
+                    validateOwner: validateOwner))
+            default: preconditionFailure("protected stage command dispatch")
+            }
         case .protectedAuthorizeRestart, .protectedAdoptRestart, .protectedCancelRestart:
             guard let peer = authenticatedPeer, peer.pid == peerPID, peer.pid > 1,
                   protectedPeerAuthenticator.authenticate(peer),
@@ -350,10 +385,8 @@ public actor HelperRuntime {
                 return owner
             }
             defer { protectedGrant = nil; cachedStatusSession = nil; cachedStatusAt = nil }
-            // TODO(macOS restart): wire explicit app recovery UI, private
-            // capability custody and current signed-stage/account/install/key
-            // reconciliation. This consent currently requires an existing
-            // journal/receipt; pre-mutation crash coverage is a separate gate.
+            // Stage consent uses separate RPCs above. Existing journal/receipt
+            // consent remains compatible and never authorizes the pre-stage gap.
             switch command {
             case .protectedAuthorizeRestart(let request):
                 return .init(payload: try controller.authorizeProtectedRestart(request: request, uid: peer.effectiveUID,
@@ -385,7 +418,7 @@ public actor HelperRuntime {
                 throw HelperError.ownerVerificationFailed("protected operation requires the authenticated live owner")
             }
             let validateOwner: () throws -> OwnerSession = {
-                guard self.store.loadOwnerSession() == owner,
+                guard self.protectedPeerAuthenticator.authenticate(peer), self.store.loadOwnerSession() == owner,
                       self.processInspector.processIdentity(pid: peer.pid) == owner.identity else {
                     throw HelperError.ownerVerificationFailed("protected operation owner or intent changed")
                 }
@@ -416,7 +449,13 @@ public actor HelperRuntime {
                 // A snapshot is a short-lived, one-use intent. Even a rejected
                 // admission consumes it; reconnect/replay must obtain a new one.
                 protectedGrant = nil
-                _ = try protected.replaceProtected(request: request, validateOwner: validateOwner)
+                if grant.requiresPreStageConsent {
+                    guard let stage = tunnelController as? ProtectedPreStageConsentControlling,
+                          grant.preStageCandidateSHA256 == request.candidateSHA256, let capabilityHash = grant.preStageCapabilitySHA256 else { throw ProtectedPreStageConsent.denied() }
+                    _ = try stage.replaceWithPreStageConsent(request: request, uid: peer.effectiveUID, consentCapabilitySHA256: capabilityHash, validateOwner: validateOwner)
+                } else {
+                    _ = try protected.replaceProtected(request: request, validateOwner: validateOwner)
+                }
                 return .init(payload: "ready transaction_id=\(request.transactionID) candidate_sha256=\(request.candidateSHA256)\n")
             case .protectedCommit(let request):
                 let result = try protected.commitProtected(request: request, validateOwner: validateOwner)

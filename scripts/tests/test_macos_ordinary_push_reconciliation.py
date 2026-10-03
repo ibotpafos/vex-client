@@ -65,7 +65,14 @@ func tunnel(_ d:VpnDevice)->PreparedTunnel {PreparedTunnel(device:d,config:"iner
  RECEIPT
  RECONCILE
 }
-func drain()async {for _ in 0..<128 {await Task.yield()}}
+@MainActor func drain(until condition: (@MainActor () -> Bool)? = nil)async {
+ if let condition {
+  // A yield count is not completion under concurrent offline compilation.
+  // Observe the exact nested-push result with a two-second bounded deadline;
+  // keep the original postcondition intact so a real regression still fails.
+  for _ in 0..<2000 {if condition() {return};try? await Task.sleep(nanoseconds:1_000_000)}
+ } else {for _ in 0..<128 {await Task.yield()}}
+}
 @main struct Main {
  @MainActor static func main()async {
   let aps:[String:Any]=["aps":["content-available":1]]
@@ -86,7 +93,7 @@ func drain()async {for _ in 0..<128 {await Task.yield()}}
   let late=H();late.receivedNativeRemoteNotification(aps);late.session=Session(user:User(id:"b"),accessToken:"new");await drain()
   precondition(late.trace.actions==["invalidate:a"] && late.profileService.fetches==0 && late.nativePSKPreparedTunnel==nil)
   let newer=H();newer.profileService.hook={newer.profileService.hook=nil;newer.receivedNativeRemoteNotification(aps)}
-  newer.receivedNativeRemoteNotification(aps);await drain()
+  newer.receivedNativeRemoteNotification(aps);await drain(until: {newer.profileService.fetches==2 && newer.profileService.completions==1 && newer.nativeNormalProfileReconciliationGeneration==2 && newer.nativePSKPreparedTunnel==tunnel(device())})
   precondition(newer.profileService.fetches==2 && newer.profileService.completions==1 && newer.nativeNormalProfileReconciliationGeneration==2 && newer.nativePSKPreparedTunnel==tunnel(device()))
   var rejected=0
   let changes:[(String,@MainActor (H)->Void)]=[

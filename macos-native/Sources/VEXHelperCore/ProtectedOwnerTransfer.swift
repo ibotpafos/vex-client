@@ -156,6 +156,7 @@ final class ProtectedOwnerTransferStore {
             dnsBaseline: original.dnsBaseline, ownerSession: owner.payload)
         rebound.transactionID = original.transactionID; rebound.phase = original.phase
         rebound.handshakeNotBefore = original.handshakeNotBefore
+        rebound.preStageConsentSHA256 = original.preStageConsentSHA256
         return try rebound.encoded()
     }
 
@@ -183,16 +184,18 @@ final class ProtectedOwnerTransferStore {
             original.ownerPID == $0.pid && original.ownerIdentity == $0.identity
                 && original.ownerTokenSHA256 == ProtectedReplacementJournal.digest($0.token)
         }
-        let normalized = ProtectedReplacementCommitReceipt(request: try replacement(r, owner: old), owner: old,
+        var normalized = ProtectedReplacementCommitReceipt(request: try replacement(r, owner: old), owner: old,
             latestHandshake: original.latestHandshake, handshakeNotBefore: original.handshakeNotBefore,
             sourceLatestHandshake: original.sourceLatestHandshake)
+        normalized.preStageConsentSHA256 = original.preStageConsentSHA256
         guard permitted, original.transactionID == r.transactionID, original.sourceSHA256 == r.sourceSHA256,
               original.candidateSHA256 == r.candidateSHA256,
               ProtectedReplacementJournal.digest(try normalized.encoded()) == r.evidenceSHA256,
               r.activeSHA256 == r.candidateSHA256 else { throw denied() }
-        let rebound = ProtectedReplacementCommitReceipt(request: try replacement(r, owner: owner), owner: owner,
+        var rebound = ProtectedReplacementCommitReceipt(request: try replacement(r, owner: owner), owner: owner,
             latestHandshake: original.latestHandshake, handshakeNotBefore: original.handshakeNotBefore,
             sourceLatestHandshake: original.sourceLatestHandshake)
+        rebound.preStageConsentSHA256 = original.preStageConsentSHA256
         return (receiptPath, try rebound.encoded(), 16_384)
     }
 
@@ -266,7 +269,22 @@ final class ProtectedOwnerTransferStore {
                validatePreviousIdentity: (OwnerSession) throws -> Void) throws -> String {
         let store = HelperStateStore(fileSystem: files, paths: paths, dateProvider: clock)
         return try store.withOperationLock(staleAfter: 120) {
-            var r = try readRecord()
+            let presence = files.pathPresence(at: recordPath)
+            var r: ProtectedOwnerTransferRecord
+            if presence == .absent || (presence == .present && (try? readRecord()).map {
+                $0.phase == "transferred" && !$0.matches(request, uid: uid)
+            } == true) {
+                // A durable digest attachment, never an orphaned consent/dead
+                // PID, bridges original pre-stage authority into the existing
+                // transfer fence before the first dependent ownership write.
+                r = try ProtectedPreStageConsentStore(files: files, paths: paths, clock: clock)
+                    .restartAuthorization(request, uid: uid)
+                let previous = OwnerSession(payload: r.oldOwner)!, peer = try validatePeer()
+                guard peer.pid != previous.pid else { throw denied() }
+                try validatePreviousIdentity(previous); try checkArtifacts(r)
+                guard try validatePeer() == peer else { throw denied() }
+                try save(r); try checkArtifacts(r)
+            } else { r = try readRecord() }
             guard r.matches(request, uid: uid) else { throw denied() }
             try liveWindow(r)
             let old = OwnerSession(payload: r.oldOwner)!, peer = try validatePeer()

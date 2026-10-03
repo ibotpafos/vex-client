@@ -670,7 +670,7 @@ public final class SystemPFFirewallController: PFFirewallControlling, @unchecked
     }
 }
 
-public final class SystemTunnelController: ProtectedTunnelControlling, ProtectedOwnerTransferControlling, @unchecked Sendable {
+public final class SystemTunnelController: ProtectedTunnelControlling, ProtectedOwnerTransferControlling, ProtectedPreStageConsentControlling, @unchecked Sendable {
     private let fileSystem: HelperFileSystem
     private let paths: HelperPathsLayout
     private let runner: CommandRunning
@@ -695,6 +695,7 @@ public final class SystemTunnelController: ProtectedTunnelControlling, Protected
         let store = HelperStateStore(fileSystem: fileSystem, paths: paths)
         return try store.withOperationLock(staleAfter: 120) {
             try store.requireNoPendingOwnerTransfer()
+            if !store.protectedReplacementRecoveryPending { try store.requireNoPendingPreStageConsent() }
             let owner = try validateOwner()
             guard try protectedOwnerSnapshot(ownerPID: owner.pid) == owner.payload else {
                 throw HelperError.ownerVerificationFailed("protected snapshot owner changed")
@@ -728,6 +729,42 @@ public final class SystemTunnelController: ProtectedTunnelControlling, Protected
             throw HelperError.ownerVerificationFailed("protected operation owner or intent changed")
         }
         return owner
+    }
+
+    public func authorizeProtectedStage(request: ProtectedOwnerTransferRequest, uid: UInt32,
+        validateOwner: () throws -> OwnerSession) throws -> String {
+        let store = HelperStateStore(fileSystem: fileSystem, paths: paths, dateProvider: dateProvider)
+        return try ProtectedPreStageConsentStore(files: fileSystem, paths: paths, clock: dateProvider)
+            .authorize(request, uid: uid,
+                candidate: { try Self.sanitizedConfig(from: self.fileSystem.readText(at: self.resolvedConfigPath())) },
+                validateOwner: validateOwner, validateSource: {
+                    let owner = try validateOwner()
+                    guard try self.protectedOwnerSnapshot(ownerPID: owner.pid) == owner.payload,
+                          let saved = store.loadSession(), saved.ownerPID == owner.pid,
+                          try self.resolvedInterfaceName(logicalInterface: "active") == saved.interfaceName,
+                          try self.endpoint(fromConfigAt: self.paths.activeConfigPath) == saved.endpoint,
+                          let live = try self.refreshedSession(currentSession: saved),
+                          live.socketExists, live.antiLeakArmed, live.dnsHealthy,
+                          live.routeInterface == live.interfaceName,
+                          !live.ipv6RouteExpected || live.ipv6RouteInterface == live.interfaceName else {
+                        throw ProtectedPreStageConsent.denied()
+                    }
+                    try AwgConfigAdmission.validate(self.fileSystem.readPrivateText(at: self.paths.activeConfigPath, maxBytes: 262_144))
+                })
+    }
+
+    public func cancelProtectedStage(request: ProtectedOwnerTransferRequest, uid: UInt32,
+        validateOwner: () throws -> OwnerSession) throws -> String {
+        try ProtectedPreStageConsentStore(files: fileSystem, paths: paths, clock: dateProvider)
+            .cancel(request, uid: uid, validateOwner: validateOwner)
+    }
+
+    public func replaceWithPreStageConsent(request: ProtectedReplacementRequest, uid: UInt32, consentCapabilitySHA256: String,
+        validateOwner: () throws -> OwnerSession) throws -> HelperSession {
+        let owner = try authorizeProtected(request, validateOwner: validateOwner)
+        return try replacePreservingAntiLeak(currentSession: nil, ownerPID: owner.pid,
+            expectedConfigSHA256: request.sourceSHA256, authenticatedRequest: request, preStageUID: uid, preStageRequired: true, preStageCapabilitySHA256: consentCapabilitySHA256,
+            authorize: { _ = try self.authorizeProtected(request, validateOwner: validateOwner) })
     }
 
     public func authorizeProtectedRestart(request: ProtectedOwnerTransferRequest, uid: UInt32,
@@ -825,8 +862,9 @@ public final class SystemTunnelController: ProtectedTunnelControlling, Protected
             journal.phase = "committed"
             try persistReplacementJournal(journal)
             try requireReplacementState(journal, allowedHashes: [request.candidateSHA256], authorize: authorize)
-            let receipt = ProtectedReplacementCommitReceipt(request: request, owner: owner, latestHandshake: handshake,
+            var receipt = ProtectedReplacementCommitReceipt(request: request, owner: owner, latestHandshake: handshake,
                 handshakeNotBefore: floor, sourceLatestHandshake: source.latestHandshake ?? 0)
+            receipt.preStageConsentSHA256 = journal.preStageConsentSHA256
             // The same durable writer/readback used by the root journal records
             // commit evidence BEFORE deleting recovery data or acknowledging.
             try persistReplacementCommitReceipt(receipt)
@@ -841,6 +879,9 @@ public final class SystemTunnelController: ProtectedTunnelControlling, Protected
     public func replacePreservingAntiLeak(
         currentSession: HelperSession?, ownerPID: Int32, expectedConfigSHA256: String,
         authenticatedRequest: ProtectedReplacementRequest? = nil,
+        preStageUID: UInt32? = nil,
+        preStageRequired: Bool = false,
+        preStageCapabilitySHA256: String? = nil,
         authorize: () throws -> Void = {}
     ) throws -> HelperSession {
         let store = HelperStateStore(fileSystem: fileSystem, paths: paths)
@@ -887,10 +928,22 @@ public final class SystemTunnelController: ProtectedTunnelControlling, Protected
                 }
             }
             try authorize()
+            let consent = ProtectedPreStageConsentStore(files: fileSystem, paths: paths, clock: dateProvider)
+            if let request = authenticatedRequest, let text = journal.ownerSession, let owner = OwnerSession(payload: text) {
+                journal.preStageConsentSHA256 = try consent.attach(request: request, uid: preStageUID, owner: owner, journal: journal, required: preStageRequired, capabilitySHA256: preStageCapabilitySHA256)
+            } else if fileSystem.pathPresence(at: consent.recordPath) != .absent {
+                throw ProtectedPreStageConsent.denied() // never fall back to foundation replacement
+            }
+            try authorize()
             // Atomic source journal and readback precede every PF/quick mutation.
             // TODO: Validate OS-crash/power-loss durability on an isolated Mac;
             // fsync plus an offline memory-port test is not that acceptance gate.
             try persistReplacementJournal(journal)
+            try consent.verifyPreparedAttachment(journal)
+            if journal.preStageConsentSHA256 != nil {
+                guard try Self.sanitizedConfig(from: fileSystem.readText(at: resolvedConfigPath())) == candidate else { throw ProtectedPreStageConsent.denied() }
+                try authorize()
+            }
             var sourceMayHaveStopped = false
             do {
                 try requireReplacementState(journal, allowedHashes: [journal.sourceSHA256], authorize: authorize)
@@ -1021,6 +1074,7 @@ public final class SystemTunnelController: ProtectedTunnelControlling, Protected
               saved.sourceSHA256 == journal.sourceSHA256,
               saved.candidateSHA256 == journal.candidateSHA256,
               saved.handshakeNotBefore == journal.handshakeNotBefore,
+              saved.preStageConsentSHA256 == journal.preStageConsentSHA256,
               allowedHashes.contains(ProtectedReplacementJournal.digest(try fileSystem.readText(at: paths.activeConfigPath))),
               try fileSystem.readText(at: paths.dnsStatePath) == journal.dnsBaseline,
               firewall.antileakIsActive() else {

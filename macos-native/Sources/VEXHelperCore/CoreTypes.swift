@@ -91,6 +91,8 @@ public enum HelperCommand: Equatable, Sendable {
     case protectedCommit(ProtectedReplacementRequest)
     case protectedRecover(ProtectedReplacementRequest)
     case protectedReceipt(ProtectedReplacementRequest)
+    case protectedAuthorizeStage(ProtectedOwnerTransferRequest)
+    case protectedCancelStage(ProtectedOwnerTransferRequest)
     case protectedAuthorizeRestart(ProtectedOwnerTransferRequest)
     case protectedAdoptRestart(ProtectedOwnerTransferRequest)
     case protectedCancelRestart(ProtectedOwnerTransferRequest)
@@ -101,6 +103,10 @@ public enum HelperCommand: Equatable, Sendable {
         let metadata = Array(parts.dropFirst())
 
         switch commandName {
+        case "protected-authorize-stage":
+            return .protectedAuthorizeStage(try ProtectedOwnerTransferRequest(metadata: metadata))
+        case "protected-cancel-stage":
+            return .protectedCancelStage(try ProtectedOwnerTransferRequest(metadata: metadata))
         case "protected-authorize-restart":
             return .protectedAuthorizeRestart(try ProtectedOwnerTransferRequest(metadata: metadata))
         case "protected-adopt-restart":

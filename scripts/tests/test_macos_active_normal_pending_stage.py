@@ -71,13 +71,19 @@ func tunnel(_ d:VpnDevice,version:Int=7)->PreparedTunnel {PreparedTunnel(device:
  RECEIPT
  RECONCILE
 }
-func drain()async {for _ in 0..<128 {await Task.yield()}}
+@MainActor func drain(until condition: (@MainActor () -> Bool)? = nil)async {
+ if let condition {
+  // Counted yields do not prove asynchronous job completion. Bound the exact
+  // existing postcondition, without weakening any positive/negative assertion.
+  for _ in 0..<2000 {if condition() {return};try? await Task.sleep(nanoseconds:1_000_000)}
+ } else {for _ in 0..<128 {await Task.yield()}}
+}
 @main struct Main {
  @MainActor static func main()async {
  let aps:[String:Any]=["aps":["content-available":1]]
-  if !HAS_PENDING { print("active_normal_pending_matrix baseline_property_absent=true");return }
+  if !Bool("HAS_PENDING")! { print("active_normal_pending_matrix baseline_property_absent=true");return }
   func active(_ version:Int=8)->H { let h=H();h.activeTunnel=tunnel(device(),version:7);h.profileService.version=version;return h }
-  let h=active();let original=h.activeTunnel!;h.receivedNativeRemoteNotification(aps);await drain()
+  let h=active();let original=h.activeTunnel!;h.receivedNativeRemoteNotification(aps);await drain(until: {h.pending()==tunnel(device(),version:8) && h.profileService.completions==1})
   let valid=h.pending()==tunnel(device(),version:8) && h.activeTunnel==original && h.nativePSKPreparedTunnel==nil && h.profileService.fetches==1 && h.nativePushIdentityStore.creates==0
   let equal=active();let equalOK = !equal.stage(tunnel(device(),version:7)) && equal.storageEmpty()
   let zero=active();let zeroOK = !zero.stage(tunnel(device(),version:0)) && zero.storageEmpty()
@@ -98,8 +104,8 @@ func drain()async {for _ in 0..<128 {await Task.yield()}}
    {$0.isVpnBusy=true}, {$0.nativePSKPreparedTunnel=tunnel(device())}, {$0.activeTunnel=nil}]
   var cleared=0
   for change in changes { let x=active();precondition(x.stage(tunnel(device(),version:8)));change(x);if x.pending()==nil && x.storageEmpty(){cleared+=1} }
-  let psk=active();precondition(psk.stage(tunnel(device(),version:8)));psk.receivedNativeRemoteNotification(["aps":["content-available":1],"vex":["device_id":"d"]]);await drain();let pskClear=psk.pending()==nil && psk.storageEmpty()
-  let obsolete=active();obsolete.profileService.hook={obsolete.receivedNativeRemoteNotification(["aps":["content-available":1],"vex":["device_id":"d"]])};obsolete.receivedNativeRemoteNotification(aps);await drain();let obsoleteClear=obsolete.pending()==nil && obsolete.storageEmpty()
+  let psk=active();precondition(psk.stage(tunnel(device(),version:8)));psk.receivedNativeRemoteNotification(["aps":["content-available":1],"vex":["device_id":"d"]]);await drain(until: {psk.trace.actions.contains("psk")});let pskClear=psk.pending()==nil && psk.storageEmpty()
+  let obsolete=active();obsolete.profileService.hook={obsolete.receivedNativeRemoteNotification(["aps":["content-available":1],"vex":["device_id":"d"]])};obsolete.receivedNativeRemoteNotification(aps);await drain(until: {obsolete.profileService.fetches==1 && obsolete.nativeNormalProfileReconciliationGeneration==2 && obsolete.trace.actions.filter {$0=="psk"}.count>=2});let obsoleteClear=obsolete.pending()==nil && obsolete.storageEmpty()
   let expired=active();precondition(expired.stage(tunnel(device(),version:8)));expired.shiftPendingStagedAt(Date().addingTimeInterval(-301));let expiredClear=expired.pending()==nil && expired.storageEmpty()
   let backward=active();precondition(backward.stage(tunnel(device(),version:8)));backward.shiftPendingStagedAt(Date().addingTimeInterval(60));let backwardClear=backward.pending()==nil && backward.storageEmpty()
   let proofExpiry=active();precondition(proofExpiry.stage(tunnel(device(),version:8)));proofExpiry.expirePendingProof();let proofExpiryClear=proofExpiry.pending()==nil && proofExpiry.storageEmpty()

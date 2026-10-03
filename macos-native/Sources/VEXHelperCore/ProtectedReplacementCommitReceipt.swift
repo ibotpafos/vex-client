@@ -14,6 +14,7 @@ struct ProtectedReplacementCommitReceipt: Codable {
     let latestHandshake: UInt64
     let handshakeNotBefore: UInt64
     let sourceLatestHandshake: UInt64
+    var preStageConsentSHA256: String? = nil
 
     init(request: ProtectedReplacementRequest, owner: OwnerSession, latestHandshake: UInt64,
          handshakeNotBefore: UInt64, sourceLatestHandshake: UInt64) {
@@ -50,6 +51,9 @@ struct ProtectedReplacementCommitReceipt: Codable {
               // writes; production writes exactly this canonical representation.
               (try? receipt.encoded()) == text else {
             throw HelperError.protocolViolation("invalid protected commit receipt")
+        }
+        if let consent = receipt.preStageConsentSHA256 {
+            guard ProtectedOwnerTransferRequest.isDigest(consent) else { throw HelperError.protocolViolation("invalid protected stage receipt binding") }
         }
         return receipt
     }

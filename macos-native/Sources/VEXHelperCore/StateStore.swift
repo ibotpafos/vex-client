@@ -38,8 +38,29 @@ public final class HelperStateStore: @unchecked Sendable {
         return record.phase != "transferred"
     }
 
+    public var protectedPreStageConsentPending: Bool {
+        let stage = ProtectedPreStageConsentStore(files: fileSystem, paths: paths, clock: dateProvider)
+        guard fileSystem.pathPresence(at: stage.recordPath) != .absent else { return false }
+        // An unattached/expired/corrupt consent cannot let an ordinary watchdog
+        // tear down the source. Only explicit same-live-owner cancellation or
+        // a strict completed attachment retires this separate fence.
+        guard let r = try? stage.read() else { return true }
+        if (try? stage.completedAttachment(r)) == true { return false }
+        let transfer = paths.helperDirectory + "/protected-owner-transfer.state"
+        if let text = try? fileSystem.readPrivateText(at: transfer, maxBytes: 16_384),
+           let t = try? ProtectedOwnerTransferRecord.decode(text), t.phase == "transferred",
+           t.transactionID == r.transactionID, t.sourceSHA256 == r.sourceSHA256,
+           t.candidateSHA256 == r.candidateSHA256, t.oldOwner == r.ownerSession,
+           t.capabilitySHA256 == r.capabilitySHA256, t.uid == r.uid { return false }
+        return true
+    }
+
     public var protectedOperationRecoveryPending: Bool {
-        protectedReplacementRecoveryPending || protectedOwnershipTransferPending
+        protectedReplacementRecoveryPending || protectedOwnershipTransferPending || protectedPreStageConsentPending
+    }
+
+    public func requireNoPendingPreStageConsent() throws {
+        guard !protectedPreStageConsentPending else { throw HelperError.replacementRecoveryPending }
     }
 
     public func requireNoPendingOwnerTransfer() throws {
@@ -58,8 +79,10 @@ public final class HelperStateStore: @unchecked Sendable {
     /// lease after our fast, non-mutating preflight check.
     public func withOrdinaryOperationLock<T>(staleAfter: TimeInterval, _ body: () throws -> T) throws -> T {
         try requireNoPendingReplacement()
+        try requireNoPendingPreStageConsent()
         return try withOperationLock(staleAfter: staleAfter) {
             try requireNoPendingReplacement()
+            try requireNoPendingPreStageConsent()
             return try body()
         }
     }
@@ -69,9 +92,11 @@ public final class HelperStateStore: @unchecked Sendable {
     /// permission to mutate network state. No marker/directory writes required.
     public func withOrdinaryEmergencyCleanupLease<T>(_ body: () throws -> T) throws -> T {
         try requireNoPendingReplacement()
+        try requireNoPendingPreStageConsent()
         let lease = try HelperOperationLease.acquire(path: paths.operationLockPath, fileSystem: fileSystem)
         defer { withExtendedLifetime(lease) {} }
         try requireNoPendingReplacement()
+        try requireNoPendingPreStageConsent()
         return try body()
     }
 

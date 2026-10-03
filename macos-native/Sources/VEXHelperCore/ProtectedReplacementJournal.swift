@@ -21,6 +21,8 @@ struct ProtectedReplacementJournal: Codable {
     // Absent in legacy foundation journals. New socket transactions cannot
     // delete recovery evidence until an uncached post-cutover handshake exists.
     var handshakeNotBefore: UInt64? = nil
+    // Optional additive binding; legacy journals keep their exact encoding.
+    var preStageConsentSHA256: String? = nil
 
     static func digest(_ text: String) -> String {
         SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
@@ -60,6 +62,10 @@ struct ProtectedReplacementJournal: Codable {
             guard journal.ownerSession != nil, let floor = journal.handshakeNotBefore, floor > 0 else {
                 throw HelperError.protocolViolation("invalid protected replacement handshake journal")
             }
+        }
+        if let consent = journal.preStageConsentSHA256 {
+            guard ProtectedOwnerTransferRequest.isDigest(consent), journal.ownerSession != nil,
+                  journal.handshakeNotBefore != nil else { throw HelperError.protocolViolation("invalid protected stage journal binding") }
         }
         return journal
     }

@@ -50,6 +50,21 @@ struct NativeProtectedPromotionStore {
         return try NativeProtectedReplacementCoordinator.restartReceiptMetadata(data)
     }
 
+    /// Only after an exact original-owner root cancellation ACK was durably
+    /// retained. Scope may have changed, but no consumed journal/receipt is erased.
+    @MainActor
+    func removeCancelledStageIntent(accountID: String, installationID: String,
+        original: NativeProtectedReplacementCoordinator.RestartIntent, isCurrent: () -> Bool) throws {
+        let store = NativePushSecureFileStore(rootURL: root, maxBytes: 16_384)
+        let name = try name(accountID: accountID, installationID: installationID)
+        guard !Task.isCancelled, isCurrent() else { throw CocoaError(.fileWriteUnknown) }
+        guard let data = try store.read(name) else { return }
+        try NativeProtectedReplacementCoordinator.requireUnconsumedStageIntent(data, original: original)
+        guard !Task.isCancelled, isCurrent(), try store.read(name) == data else { throw CocoaError(.fileWriteFileExists) }
+        try store.remove(name)
+        guard try store.read(name) == nil else { throw CocoaError(.fileWriteUnknown) }
+    }
+
     /// Not a generic save override. The caller already reverified signed/current
     /// material and the authenticated root receipt using its ephemeral new owner.
     /// Compare/readback fences every private write, including exact retry.

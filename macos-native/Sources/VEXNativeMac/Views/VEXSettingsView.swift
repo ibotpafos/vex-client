@@ -48,6 +48,11 @@ struct VEXSettingsView: View {
             subtitle: "Только незавершённая собственная смена ключей") {
             Text("Разрешите передачу владения до явного перезапуска приложения, затем восстановите подтверждённый профиль в течение 120 секунд. Без сохранённого разрешения чужой или аварийный сеанс не принимается. Это не установка и не переподключение VPN.")
                 .font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.vexSecondaryText)
+            Toggle("Разрешить восстановление защищённых смен ключа", isOn: $appState.nativeProtectedStageConsentEnabled)
+                .disabled(appState.isVpnBusy || appState.isDeviceBusy || helper.isBusy || appState.session == nil
+                    || !helper.canUseExistingValidatedHelper || !appState.canUseNativeRemotePush)
+            Text("Отдельное согласие в этом запуске приложения: приватное разрешение сохраняется до смены профиля на 120 секунд. Выключение переключателя не удаляет уже сохранённое разрешение — используйте отмену. При неподдерживаемом helper обходной путь не выполняется.")
+                .font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.vexSecondaryText)
             if let message = appState.nativeProtectedRestartMessage {
                 Text(message).font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.vexSecondaryText)
             }

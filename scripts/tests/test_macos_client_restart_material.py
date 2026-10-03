@@ -24,7 +24,7 @@ methods=['func existingStagedPSKClientPublicKey(', 'func prepareStagedPSKProfile
 SERVICE='\n'.join(body(service,x) for x in methods)
 DEVICE=body(service,'private extension VpnDevice {')
 APPBODY=body(app,'    private func applyNativeProtectedRestart(').replace('private func applyNativeProtectedRestart','func applyNativeProtectedRestart')
-WRAPPERS='\n'.join(body(helper,x) for x in ['    func authorizeProtectedRestart(', '    func adoptProtectedRestart(', '    func cancelProtectedRestart(', '    func transferProtectedJournal(', '    func resumeProtectedJournal(', '    func restoreProtectedJournal(', '    private func restartDependencies(', '    func revalidateProtectedCommit(', '    func finishProtectedPromotion('] if x in helper)
+WRAPPERS='\n'.join(body(helper,x) for x in ['    func authorizeProtectedRestart(', '    func adoptProtectedRestart(', '    func cancelProtectedRestart(', '    func finishCancelledProtectedStage(', '    func transferProtectedJournal(', '    func resumeProtectedJournal(', '    func restoreProtectedJournal(', '    private func restartDependencies(', '    func revalidateProtectedCommit(', '    func finishProtectedPromotion('] if x in helper)
 HARNESS=r"""
 import Foundation
 import CryptoKit

@@ -28,6 +28,17 @@ struct NativeProtectedRestartStore {
         let expiresAt: UInt64
         let value: String
     }
+    // Separate purpose/ACK custody; the capability bytes are deliberately shared
+    // with restart custody ONLY for the exact root journal/receipt bridge. This
+    // marker never grants admission or permits post-journal TTL renewal.
+    struct StageConsent: Codable, Equatable {
+        let schema: Int
+        let namespace: String
+        let ownerFingerprint: String
+        let intent: NativeProtectedReplacementCoordinator.RestartIntent
+        let materialSHA256: String
+        let cancelled: Bool
+    }
     enum Failure: LocalizedError {
         case unavailable, mismatch, expired
         var errorDescription: String? { "Защищённое восстановление не подтверждено. Данные сохранены для явного повтора." }
@@ -101,6 +112,40 @@ struct NativeProtectedRestartStore {
     func materialDigest(_ value: Material) throws -> String {
         NativeProtectedReplacementCoordinator.digest(String(decoding: try encode(value, limit: 1_048_576), as: UTF8.self))
     }
+    func stageConsent(owner: NativePushPSKEventOwner, material: Material) throws -> StageConsent? {
+        let store = NativePushSecureFileStore(rootURL: root, maxBytes: 16_384)
+        guard let data = try store.read("stage-consent-" + fingerprint(owner) + ".json") else { return nil }
+        guard let value = try? JSONDecoder().decode(StageConsent.self, from: data), value.schema == 1,
+              value.namespace == "vex-protected-stage-consent-v1", value.ownerFingerprint == (try fingerprint(owner)),
+              value.intent == material.intent, value.materialSHA256 == (try materialDigest(material)),
+              try loadMaterial(owner: owner) == material,
+              (try? encode(value, limit: 16_384)) == data else { throw Failure.mismatch }
+        return value
+    }
+    func retainStageConsent(owner: NativePushPSKEventOwner, material: Material) throws {
+        guard try loadMaterial(owner: owner) == material else { throw Failure.mismatch }
+        if let existing = try stageConsent(owner: owner, material: material) {
+            guard !existing.cancelled else { throw Failure.mismatch }; return
+        }
+        // An existing post-journal capability is not permission to change its
+        // purpose. Partial pre-stage writes retain this distinct marker first.
+        guard try loadCapability(owner: owner, material: material) == nil else { throw Failure.mismatch }
+        let value = StageConsent(schema: 1, namespace: "vex-protected-stage-consent-v1",
+            ownerFingerprint: try fingerprint(owner), intent: material.intent,
+            materialSHA256: try materialDigest(material), cancelled: false)
+        let store = NativePushSecureFileStore(rootURL: root, maxBytes: 16_384), data = try encode(value, limit: 16_384)
+        try store.write(data, name: "stage-consent-" + value.ownerFingerprint + ".json")
+        guard try stageConsent(owner: owner, material: material) == value else { throw Failure.unavailable }
+    }
+    func markStageCancelled(owner: NativePushPSKEventOwner, material: Material, expected: StageConsent) throws {
+        guard try stageConsent(owner: owner, material: material) == expected else { throw Failure.mismatch }
+        let value = StageConsent(schema: expected.schema, namespace: expected.namespace,
+            ownerFingerprint: expected.ownerFingerprint, intent: expected.intent,
+            materialSHA256: expected.materialSHA256, cancelled: true)
+        let store = NativePushSecureFileStore(rootURL: root, maxBytes: 16_384)
+        try store.write(encode(value, limit: 16_384), name: "stage-consent-" + value.ownerFingerprint + ".json")
+        guard try stageConsent(owner: owner, material: material) == value else { throw Failure.unavailable }
+    }
     /// Called BEFORE authorize RPC. A lost ACK must retry the same capability;
     /// never overwrite unresolved consent or extend its conservative local TTL.
     func capability(owner: NativePushPSKEventOwner, material: Material, now: UInt64,
@@ -143,6 +188,10 @@ struct NativeProtectedRestartStore {
         guard try loadMaterial(owner: owner) == expected,
               try loadCapability(owner: owner, material: expected) == nil else { throw Failure.mismatch }
         let store = NativePushSecureFileStore(rootURL: root, maxBytes: 1_048_576)
+        // Validate the purpose record before either deletion; it carries no raw
+        // capability and is removed only with the exact proved/cancelled material.
+        _ = try stageConsent(owner: owner, material: expected)
+        try store.remove("stage-consent-" + (try fingerprint(owner)) + ".json")
         let name = "restart-material-" + (try fingerprint(owner)) + ".json"
         try store.remove(name); guard try store.read(name) == nil else { throw Failure.unavailable }
     }
@@ -151,6 +200,7 @@ struct NativeProtectedRestartStore {
         let store = NativePushSecureFileStore(rootURL: root, maxBytes: 1_048_576)
         try store.remove("restart-capability-" + fingerprint + ".json")
         try store.remove("restart-material-" + fingerprint + ".json")
+        try store.remove("stage-consent-" + fingerprint + ".json")
         // The metadata-only source replay fence survives logout/private-secret
         // cleanup. Only new explicit signed normal admission removes it.
 

@@ -130,6 +130,7 @@ func drain() async {{ for _ in 0..<32 {{ await Task.yield() }} }}
     let nativeAdmittedProfiles=FixtureAdmission()
     var nativeNormalPendingTunnel: PreparedTunnel?
     // Opaque presence sentinel: lifecycle bodies clear but never read receipts.
+    var nativeProtectedStageConsentEnabled = false
     var nativePSKCommittedPromotion: Int?
     var nativePushRuntimeAllowed = true
     var canUseNativeRemotePush = true

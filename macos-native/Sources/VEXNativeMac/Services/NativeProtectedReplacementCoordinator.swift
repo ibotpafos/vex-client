@@ -12,6 +12,9 @@ final class NativeProtectedReplacementCoordinator {
         var restoreSource: () throws -> Void
         var wait: () async throws -> Void = { try await Task.sleep(nanoseconds: 500_000_000) }
         var persistence: Persistence? = nil
+        // Uses this transaction's already-authenticated send port while its
+        // helper wrapper owns busy. Never nest another public busy wrapper.
+        var stageConsent: ((RestartIntent, @escaping (String, Int) async throws -> String) async throws -> Void)? = nil
     }
 
     /// Metadata only: exact hashes/nonce and current process+intent, never keys,
@@ -58,6 +61,9 @@ final class NativeProtectedReplacementCoordinator {
         let owner: String
         let supportsCommitReceipt: Bool
         var commitResponseUncertain = false
+        // Optional for byte-compatible legacy intents. Once set it never
+        // downgrades; true means no replace RPC has been sent by this client.
+        var stageConsentPending: Bool? = nil
         var metadata: String {
             "transaction_id=\(id) source_sha256=\(source) candidate_sha256=\(candidate) owner_token_sha256=\(owner)"
         }
@@ -90,13 +96,26 @@ final class NativeProtectedReplacementCoordinator {
             NativeProtectedReplacementCoordinator.validDigest(text)
         }
     }
-    // TODO: Pre-mutation crash consent and explicit journal resume still need
-    // isolated acceptance. A dead PID or retained metadata never authorizes them.
+    // TODO: Isolated Mac crash/power-loss acceptance remains unavailable.
+    // Retained metadata, consent or a dead PID alone never authorizes adoption.
     private var pending: Transaction?
     private var committed: (transaction: Transaction, receipt: Receipt)?
     private var activePersistence: Persistence?
     private(set) var hasUnconfirmedDurableWrite = false
     var hasPendingTransaction: Bool { pending != nil }
+
+    /// Only after root cancelled the exact UNCONSUMED consent and its private
+    /// nonce was removed. No helper/network port and no consumed evidence reset.
+    func completeCancelledStage(_ original: RestartIntent) throws {
+        guard original.isValid, original.processInstanceID == Self.processInstanceID,
+              pending == nil, committed == nil else { throw Failure.recoveryPending }
+        if let p = activePersistence {
+            guard p.scopeFingerprint == original.scopeFingerprint, p.generation == original.generation,
+                  p.processInstanceID == original.processInstanceID, try p.load() == nil else { throw Failure.recoveryPending }
+        }
+        activePersistence = nil
+        hasUnconfirmedDurableWrite = false
+    }
 
     nonisolated static func digest(_ text: String) -> String {
         SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
@@ -117,13 +136,18 @@ final class NativeProtectedReplacementCoordinator {
     func replace(sourceSHA256: String, candidateSHA256: String, sourceOwnerTokenSHA256: String? = nil,
                  dependencies d: Dependencies) async throws -> Receipt {
         try current(d)
+        var prepared: Transaction?
         if let persistence = d.persistence {
             try validatePersistence(persistence)
             if let stored = try loadIntent(persistence) {
                 guard stored.transaction.source == sourceSHA256, stored.transaction.candidate == candidateSHA256,
                       stored.transaction.owner == sourceOwnerTokenSHA256,
                       pending == nil || pending?.id == stored.transaction.id else { throw Failure.recoveryPending }
-                pending = stored.transaction
+                if stored.transaction.stageConsentPending == true {
+                    guard d.stageConsent != nil, stored.receipt == nil,
+                          !stored.transaction.commitResponseUncertain else { throw Failure.recoveryPending }
+                    prepared = stored.transaction
+                } else { pending = stored.transaction }
             } else if pending != nil || committed != nil {
                 throw Failure.persistenceUnavailable
             }
@@ -141,7 +165,14 @@ final class NativeProtectedReplacementCoordinator {
             try await recover(pending, dependencies: d)
             throw Failure.sourceRestored
         }
-        let snapshot = try fields(await d.send("protected-snapshot", 15))
+        let snapshot: [String: String]
+        if let prepared {
+            // Retry the exact original nonce/grant, not a fresh snapshot which
+            // could silently authorize a different transaction after lost ACK.
+            snapshot = ["protected_protocol": "1", "recovery_pending": "false",
+                "source_sha256": prepared.source, "transaction_id": prepared.id,
+                "owner_token_sha256": prepared.owner, "commit_receipt_protocol": "1"]
+        } else { snapshot = try fields(await d.send("protected-snapshot", 15)) }
         try current(d)
         guard snapshot["protected_protocol"] == "1", snapshot["recovery_pending"] == "false" else {
             throw Failure.recoveryPending
@@ -157,6 +188,8 @@ final class NativeProtectedReplacementCoordinator {
         }
         var transaction = Transaction(id: id, source: sourceSHA256, candidate: candidateSHA256, owner: owner,
                                       supportsCommitReceipt: snapshot["commit_receipt_protocol"] == "1")
+        transaction.stageConsentPending = prepared?.stageConsentPending ?? (d.stageConsent == nil ? nil : true)
+        if d.stageConsent != nil { guard d.persistence != nil else { throw Failure.persistenceUnavailable } }
         if d.persistence != nil {
             guard transaction.supportsCommitReceipt, sourceOwnerTokenSHA256 == owner else { throw Failure.persistenceUnavailable }
             try persistIntent(transaction, receipt: nil)
@@ -164,6 +197,18 @@ final class NativeProtectedReplacementCoordinator {
         try current(d)
         try d.stageCandidate()
         try current(d)
+        if transaction.stageConsentPending == true {
+            guard let consent = d.stageConsent, let persistence = d.persistence,
+                  let data = try persistence.load() else { throw Failure.persistenceUnavailable }
+            let intent = try Self.restartIntent(data)
+            // The callback persists exact private material+capability before
+            // authorize-stage and checks the strict ACK. No catch/fallback.
+            try await consent(intent, d.send)
+            try current(d)
+            transaction.stageConsentPending = false
+            try persistIntent(transaction, receipt: nil)
+            try current(d)
+        }
         pending = transaction
         committed = nil
         do {
@@ -323,6 +368,9 @@ final class NativeProtectedReplacementCoordinator {
               old.transaction.id == new.transaction.id, old.transaction.source == new.transaction.source,
               old.transaction.candidate == new.transaction.candidate, old.transaction.owner == new.transaction.owner,
               old.transaction.supportsCommitReceipt == new.transaction.supportsCommitReceipt,
+              old.transaction.stageConsentPending == nil ? new.transaction.stageConsentPending == nil
+                  : (new.transaction.stageConsentPending != nil
+                     && !(old.transaction.stageConsentPending == false && new.transaction.stageConsentPending == true)),
               old.receipt == nil || old.receipt == new.receipt else { throw Failure.persistenceUnavailable }
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         var canonical = try encoder.encode(old); canonical.append(10)
@@ -334,6 +382,15 @@ final class NativeProtectedReplacementCoordinator {
             generation: generation, load: { data }, save: { _ in throw Failure.persistenceUnavailable },
             remove: { _ in throw Failure.persistenceUnavailable })
         guard try NativeProtectedReplacementCoordinator().loadIntent(persistence) != nil else { throw Failure.persistenceUnavailable }
+    }
+
+    /// Cancellation ACK authorizes only exact private cleanup, not admission.
+    static func requireUnconsumedStageIntent(_ data: Data, original: RestartIntent) throws {
+        try requireValidPersistentPayload(data, scopeFingerprint: original.scopeFingerprint, generation: original.generation)
+        guard try restartIntent(data) == original,
+              let stored = try? JSONDecoder().decode(StoredIntent.self, from: data),
+              stored.transaction.stageConsentPending == true,
+              !stored.transaction.commitResponseUncertain, stored.receipt == nil else { throw Failure.recoveryPending }
     }
 
     /// Strict cross-process inspection only. Ordinary load/save remain bound to
@@ -402,6 +459,7 @@ final class NativeProtectedReplacementCoordinator {
               UUID(uuidString: value.transaction.id)?.uuidString == value.transaction.id,
               Self.isDigest(value.transaction.source), Self.isDigest(value.transaction.candidate), Self.isDigest(value.transaction.owner),
               value.transaction.source != value.transaction.candidate,
+              value.transaction.stageConsentPending != true || (!value.transaction.commitResponseUncertain && value.receipt == nil),
               value.receipt.map({ matches($0, transaction: value.transaction) && value.transaction.commitResponseUncertain
                   && $0.latestHandshake <= UInt64(max(0, Date().timeIntervalSince1970)) + 1 }) ?? true,
               (try? encode(value)) == bytes else { throw Failure.persistenceUnavailable }

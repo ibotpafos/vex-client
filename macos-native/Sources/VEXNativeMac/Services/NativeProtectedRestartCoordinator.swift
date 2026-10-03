@@ -45,13 +45,26 @@ final class NativeProtectedRestartCoordinator {
         }
         guard Set(result.keys) == keys else { throw Failure.invalidResponse }; return result
     }
-    // TODO(pre-stage-consent-client): the separate root authorize/cancel-stage
-    // RPC and exact journal/receipt attachment are now verified offline. Wire
-    // private material/capability custody and signed/current AppState consent
-    // before protected-replace; don't reuse this post-journal authorize method.
-    // Isolated Mac crash/power-loss/current-console acceptance is still absent.
+    /// Called only by the explicit opt-in pre-stage transaction, through its
+    /// already-authenticated socket. No unsupported/missing/denied fallback.
+    func authorizeStage(_ d: Dependencies) async throws -> UInt64 {
+        try current(d)
+        guard d.material.intent.processInstanceID == NativeProtectedReplacementCoordinator.processInstanceID else { throw Failure.staleIntent }
+        try d.store.retainStageConsent(owner: d.owner, material: d.material)
+        let capability = try d.store.capability(owner: d.owner, material: d.material, now: d.now(), generate: d.generateCapability)
+        try current(d); try d.store.live(capability, now: d.now())
+        let reply = try fields(await send(command("protected-authorize-stage", capability: capability), d),
+            word: "stage-authorized", keys: ["transaction_id", "expires_at"])
+        try current(d); try d.store.live(capability, now: d.now())
+        guard reply["transaction_id"] == capability.intent.transactionID, let raw = reply["expires_at"],
+              let expiry = UInt64(raw), String(expiry) == raw, expiry >= capability.expiresAt,
+              expiry <= d.now() + 120 else { throw Failure.invalidResponse }
+        return expiry
+    }
+    // TODO: Real Mac crash/power-loss/current-console acceptance is absent.
     func authorize(_ d: Dependencies) async throws -> UInt64 {
         try current(d)
+        guard try d.store.stageConsent(owner: d.owner, material: d.material) == nil else { throw Failure.recoveryPending }
         guard d.material.intent.processInstanceID == NativeProtectedReplacementCoordinator.processInstanceID else { throw Failure.staleIntent }
         let capability = try d.store.capability(owner: d.owner, material: d.material, now: d.now(), generate: d.generateCapability)
         try current(d); try d.store.live(capability, now: d.now())
@@ -65,6 +78,26 @@ final class NativeProtectedRestartCoordinator {
     }
     func cancel(_ d: Dependencies) async throws {
         try current(d)
+        if let stage = try d.store.stageConsent(owner: d.owner, material: d.material) {
+            guard d.material.intent.processInstanceID == NativeProtectedReplacementCoordinator.processInstanceID else { throw Failure.staleIntent }
+            if !stage.cancelled {
+                guard let capability = try d.store.loadCapability(owner: d.owner, material: d.material) else { throw Failure.staleIntent }
+                let reply = try fields(await send(command("protected-cancel-stage", capability: capability), d),
+                    word: "stage-cancelled", keys: ["transaction_id"])
+                try current(d)
+                guard reply["transaction_id"] == capability.intent.transactionID else { throw Failure.invalidResponse }
+                // Durable ACK marker BEFORE local deletion permits exact private
+                // cleanup retries; it cannot authorize another stage/adoption.
+                try d.store.markStageCancelled(owner: d.owner, material: d.material, expected: stage)
+                // TODO(stage-cancel-lost-ACK): root cancellation has no tombstone.
+                // If its ACK/this write is lost, retain inert custody; don't infer
+                // cancellation from expiry or retry a replacement without consent.
+            }
+            if let cap = try d.store.loadCapability(owner: d.owner, material: d.material) {
+                try d.store.removeCapability(owner: d.owner, expected: cap)
+            }
+            return
+        }
         guard d.material.intent.processInstanceID == NativeProtectedReplacementCoordinator.processInstanceID,
               let capability = try d.store.loadCapability(owner: d.owner, material: d.material) else { throw Failure.staleIntent }
         let reply = try fields(await send(command("protected-cancel-restart", capability: capability), d),

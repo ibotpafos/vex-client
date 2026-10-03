@@ -69,6 +69,7 @@ struct FixtureSession {{ var user: FixtureUser; var accessToken: String }}
     var nativeNormalPendingTunnel: PreparedTunnel?
     // Cleanup only consumes receipt presence; the protected-cutover matrix
     // executes the full production receipt type and its reconciliation.
+    var nativeProtectedStageConsentEnabled = false
     var nativePSKCommittedPromotion: Int?
     func startNativePSKRetryIfNeeded() {{}}
     var nativePushEventOwner: NativePushPSKEventOwner?

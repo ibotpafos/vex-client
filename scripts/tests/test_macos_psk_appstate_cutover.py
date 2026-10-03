@@ -54,7 +54,9 @@ enum Desired { case connected, disconnected }
 struct Owner: Equatable { let accountID: String; var installationID="installation" }; typealias NativePushPSKEventOwner = Owner
 struct User { let id:String }; struct Session { let user:User; let accessToken:String }
 @MainActor final class Identity { var value:String?="installation";func existingDeviceId()->String? {value} }
-struct Device: Equatable { let id: String; var externalDeviceId:String?="installation" }
+struct Device: Equatable { let id: String; var externalDeviceId:String?="installation";var status="active",publicKey="fixture" }
+struct FixtureStage {let envelope:PSKRotationCurrentResponse}
+struct FixtureStageStore {func load(owner:Owner,managedDeviceID:String,rotationID:String)throws->FixtureStage? {nil}}
 enum Routing: String { case full, split }
 struct PreparedTunnel: Equatable {
  let id: String; let device: Device; let locationId: String
@@ -129,6 +131,7 @@ enum Mode { case commitReplyLost, commitReplyAndProofLost, success, connectThrow
   prepares += 1
   return .init(id:nextID,device:old.device,locationId:old.locationId,routingMode:old.routingMode,bypassRegion:old.bypassRegion)
  }
+ func existingStagedPSKClientPublicKey()throws->String {"fixture"}
  func prepareProtectedHelperConfig(for tunnel: PreparedTunnel, validateCurrent: @MainActor () throws -> Void) async throws -> String {
   try validateCurrent(); await Task.yield(); try validateCurrent(); if tunnel.id=="old" {sourcePrepares+=1;return sourceDNSChanged ? "rotated-DNS-profile" : "old-profile"};candidatePrepares+=1;return candidateDNSChanged ? "rotated-next-profile" : tunnel.id + "-profile"
  }
@@ -154,6 +157,11 @@ struct FixtureRestartStore {
    receipt:NativeProtectedReplacementCoordinator.Receipt,generation:Int,isCurrent:@MainActor ()->Bool)?
  var desiredVpnState: Desired = .connected, vpnOperationGeneration=10
  var activeResiliencePolicy:String?="old-policy", activeResilienceRoute:String?="old-route"
+ var nativeProtectedStageConsentEnabled=false,canUseNativeRemotePush=false,nativeRemotePushEnabled=false,nativePushConsentMatchesSession=false
+ var nativePushDeviceID:String?,accountDevices:[Device]=[]
+ let nativePSKStageStore=FixtureStageStore()
+ func nativePSKStageConsent(owner:Owner,persistence:NativeProtectedReplacementCoordinator.Persistence,isCurrent:@escaping ()->Bool)->((NativeProtectedReplacementCoordinator.RestartIntent,@escaping (String,Int)async throws->String)async throws->Void)? {nil}
+ func completeNativePSKPrivatePromotion(owner:Owner,receipt:NativeProtectedReplacementCoordinator.Receipt)throws {}
  var isVpnBusy=false, isDeviceBusy=false, antiLeakEnabled=true
  var nativePushEventError:String?, nativePSKHelper:VEXHelperModel?
  var selectedLocationId="loc", targetLocationId:String?="loc", routingMode:Routing = .full

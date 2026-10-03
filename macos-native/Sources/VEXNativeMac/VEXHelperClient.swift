@@ -103,7 +103,8 @@ final class VEXHelperModel: ObservableObject {
 
     func replaceProfilePreservingProtection(sourceSHA256: String, candidateSHA256: String, sourceOwnerTokenSHA256: String? = nil,
         stageCandidate: @escaping () throws -> Void, restoreSource: @escaping () throws -> Void,
-        isCurrent: @escaping () -> Bool, persistence: NativeProtectedReplacementCoordinator.Persistence? = nil) async throws -> NativeProtectedReplacementCoordinator.Receipt {
+        isCurrent: @escaping () -> Bool, persistence: NativeProtectedReplacementCoordinator.Persistence? = nil,
+        stageConsent: ((NativeProtectedReplacementCoordinator.RestartIntent, @escaping (String, Int) async throws -> String) async throws -> Void)? = nil) async throws -> NativeProtectedReplacementCoordinator.Receipt {
         guard canUseExistingValidatedHelper, !isBusy, isCurrent() else {
             throw NativeProtectedReplacementCoordinator.Failure.staleIntent
         }
@@ -115,7 +116,7 @@ final class VEXHelperModel: ObservableObject {
                 self?.canUseExistingValidatedHelper == true && isCurrent()
             }, send: { [client] command, timeout in
                 try await client.send(command, timeoutSeconds: timeout)
-            }, stageCandidate: stageCandidate, restoreSource: restoreSource, persistence: persistence))
+            }, stageCandidate: stageCandidate, restoreSource: restoreSource, persistence: persistence, stageConsent: stageConsent))
         _ = await refreshStatus(quiet: true)
         return result
     }
@@ -163,6 +164,12 @@ final class VEXHelperModel: ObservableObject {
         isBusy = true; defer { isBusy = false }
         try await protectedRestart.cancel(restartDependencies(dependencies))
         hasExplicitRestartConsent = false
+    }
+
+    func finishCancelledProtectedStage(_ original: NativeProtectedReplacementCoordinator.RestartIntent,
+        isCurrent: () -> Bool) throws {
+        guard canUseExistingValidatedHelper, !isBusy, isCurrent() else { throw NativeProtectedRestartCoordinator.Failure.staleIntent }
+        try protectedReplacement.completeCancelledStage(original)
     }
 
 

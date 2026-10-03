@@ -3,6 +3,7 @@ import { getAppInfo } from '@/native/appInfo';
 import * as SecureStore from '@/native/secureStore';
 import { measureEndpointLatency, readNativeVpnDiagnostics, type VpnStatus } from '@/native/vexVpn';
 import { probeNetworkHealth } from '@/vpn/networkHealthProbe';
+import { getOtaProvenance } from './otaProvenance';
 
 const queueKey = 'vex.diagnostics.client.queue.v1';
 const maxQueuedReports = 10;
@@ -114,8 +115,58 @@ async function buildClientDiagnosticsReport(snapshot: VpnDiagnosticsSnapshot): P
         selected_location_id: snapshot.selectedLocationId,
       },
       ...snapshot.samples,
+      ...getOtaProvenance(),
+      ...diagnosticErrorMetadata(snapshot.reason, snapshot.samples),
     },
   };
+}
+
+type DiagnosticErrorClass = 'auth' | 'entitlement' | 'network' | 'timeout' | 'profile_revoked' | 'native_connect' | 'cancelled' | 'unknown';
+type DiagnosticErrorStage = 'profile_resolution' | 'hot_profile' | 'native_connect' | 'verification';
+
+function diagnosticErrorMetadata(reason: string, samples: Record<string, unknown> | undefined): Record<string, DiagnosticErrorClass | DiagnosticErrorStage> {
+  const errorText = diagnosticErrorText(samples);
+  if (!errorText) return {};
+  const stage = diagnosticErrorStage(reason, samples);
+  return {
+    diagnostic_error_class: diagnosticErrorClass(reason, errorText, samples),
+    ...(stage ? { diagnostic_error_stage: stage } : {}),
+  };
+}
+
+function diagnosticErrorText(samples: Record<string, unknown> | undefined): string | undefined {
+  if (!samples) return undefined;
+  for (const [key, value] of Object.entries(samples)) {
+    if ((key === 'error' || key.endsWith('_error')) && typeof value === 'string' && value.trim()) {
+      return value.toLowerCase();
+    }
+  }
+  return undefined;
+}
+
+function diagnosticErrorClass(reason: string, errorText: string, samples: Record<string, unknown> | undefined): DiagnosticErrorClass {
+  const normalizedReason = reason.toLowerCase();
+  if (/401|unauthorized|authentication required/.test(errorText)) return 'auth';
+  if (normalizedReason.includes('entitlement') || hasErrorKey(samples, 'entitlement_error')) return 'entitlement';
+  if (normalizedReason.includes('revoked')) return 'profile_revoked';
+  if (/timeout|timed out|превышено время ожидания/.test(errorText)) return 'timeout';
+  if (/cancel(?:led|ed)|abort/.test(errorText)) return 'cancelled';
+  if (/network request failed|unable to resolve host|fetch failed|network/.test(errorText)) return 'network';
+  if (hasErrorKey(samples, 'connect_error')) return 'native_connect';
+  return 'unknown';
+}
+
+function diagnosticErrorStage(reason: string, samples: Record<string, unknown> | undefined): DiagnosticErrorStage | undefined {
+  const normalizedReason = reason.toLowerCase();
+  if (normalizedReason.includes('hot_profile')) return 'hot_profile';
+  if (normalizedReason.includes('verification')) return 'verification';
+  if (hasErrorKey(samples, 'connect_error')) return 'native_connect';
+  if (normalizedReason.includes('profile') || normalizedReason.includes('entitlement')) return 'profile_resolution';
+  return undefined;
+}
+
+function hasErrorKey(samples: Record<string, unknown> | undefined, key: string): boolean {
+  return typeof samples?.[key] === 'string' && Boolean(samples[key].trim());
 }
 
 async function cachedDiagnosticsNetworkProbe(endpoint: string | undefined, vpnStatus: VpnStatus): Promise<Awaited<ReturnType<typeof probeNetworkHealth>>> {

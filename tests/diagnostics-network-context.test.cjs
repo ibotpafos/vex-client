@@ -37,6 +37,14 @@ function fixture(results) {
         return result;
       },
     },
+    './otaProvenance': {
+      getOtaProvenance: () => ({
+        ota_update_id: '45f1420d-43a7-4c7d-9412-2e7fd4236ad4',
+        ota_runtime_version: '1.0.64',
+        ota_is_embedded_launch: true,
+        ota_is_emergency_launch: true,
+      }),
+    },
   };
   const module = { exports: {} };
   const code = ts.transpileModule(fs.readFileSync(sourcePath, 'utf8'), {
@@ -52,9 +60,10 @@ function fixture(results) {
     reports,
     probes: () => probes,
     clock: (value) => { now = value; },
-    upload: (state, handshake, endpoint = 'HOST:443') => module.exports.uploadClientDiagnostics('TOKEN', {
+    upload: (state, handshake, endpoint = 'HOST:443', samples) => module.exports.uploadClientDiagnostics('TOKEN', {
       reason: 'fixture', status: 'ok', endpoint,
       vpnStatus: { state, latestHandshakeEpochMillis: handshake },
+      samples,
     }),
   };
 }
@@ -65,6 +74,31 @@ test('unknown DNS preserves the legacy boolean wire contract and unmeasured samp
   assert.equal(f.reports[0].dnsOk, true);
   assert.equal(f.reports[0].samples.network_probe.dnsOk, undefined);
   assert.equal(f.reports[0].httpsOk, true);
+});
+
+test('diagnostics attach OTA rollback provenance without a raw emergency reason', async () => {
+  const f = fixture([{ httpsOk: true }]);
+  await f.upload('connected', 100, 'HOST:443', { ota_is_embedded_launch: false });
+  assert.deepEqual(JSON.parse(JSON.stringify({
+    ota_update_id: f.reports[0].samples.ota_update_id,
+    ota_runtime_version: f.reports[0].samples.ota_runtime_version,
+    ota_is_embedded_launch: f.reports[0].samples.ota_is_embedded_launch,
+    ota_is_emergency_launch: f.reports[0].samples.ota_is_emergency_launch,
+  })), {
+    ota_update_id: '45f1420d-43a7-4c7d-9412-2e7fd4236ad4',
+    ota_runtime_version: '1.0.64',
+    ota_is_embedded_launch: true,
+    ota_is_emergency_launch: true,
+  });
+  assert.equal(JSON.stringify(f.reports[0].samples).includes('secret'), false);
+});
+
+test('diagnostics derive only allowlisted error class and stage from an existing raw error sample', async () => {
+  const f = fixture([{ httpsOk: true }]);
+  await f.upload('connected', 100, 'HOST:443', { connect_error: 'Network request failed for customer@example.test' });
+  assert.equal(f.reports[0].samples.diagnostic_error_class, 'network');
+  assert.equal(f.reports[0].samples.diagnostic_error_stage, 'native_connect');
+  assert.equal(f.reports[0].samples.diagnostic_error_class.includes('customer'), false);
 });
 
 test('unknown HTTPS preserves the legacy boolean wire contract and unmeasured sample', async () => {

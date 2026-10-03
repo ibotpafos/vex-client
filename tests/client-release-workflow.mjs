@@ -27,6 +27,14 @@ function check(workflow) {
   assert.equal(workflow.jobs.publish.permissions.contents, 'write');
   assert.ok(workflow.jobs.publish.steps.some(s => s.uses?.startsWith('actions/attest-build-provenance@')));
   assert.ok(workflow.jobs.publish.steps.some(s => s.run?.includes('verify_release_receipt.py')));
+  const r8 = workflow.jobs.android.steps.find(s => s.name === 'Bind separately retained R8 mapping to the signed APK');
+  assert.ok(r8);
+  assert.ok(r8.run.includes("node -e 'process.stdout.write(require(\"./dist/android/release-manifest.json\").updater)'"));
+  assert.ok(r8.run.includes('android-r8-provenance/provenance.json'));
+  assert.ok(r8.run.includes('dist/android/android-r8-provenance.json'));
+  assert.ok(r8.run.includes('client_release.py bundle --directory dist/android'));
+  const mappingArtifact = workflow.jobs.android.steps.find(s => s.with?.name === 'android-r8-mapping-${{ github.sha }}');
+  assert.equal(mappingArtifact.with.path, 'android-r8-provenance/*');
   assert.ok(!JSON.stringify(workflow).includes('VPN_ADMIN_TOKEN'));
   assert.ok(!JSON.stringify(workflow).includes('VEX_RELEASE_REPOSITORY_TOKEN'));
 }

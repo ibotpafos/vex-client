@@ -637,16 +637,21 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
   }
 
   private fun recordNonFatalVpnError(code: String, message: String, error: Throwable) {
-    recordBugsinkVpnError(code, message, error)
+    // Promise/log delivery keeps the already-redacted boundary message. Bugsink
+    // receives fixed diagnostic vocabulary only, never exception text or stacks.
+    recordBugsinkVpnError(code)
   }
 
-  private fun recordBugsinkVpnError(code: String, message: String, error: Throwable) {
+  private fun recordBugsinkVpnError(code: String) {
     try {
+      val category = VpnLogRedaction.telemetryErrorCategory(code)
+      val stage = VpnLogRedaction.telemetryErrorStage(code)
       Sentry.withScope { scope ->
         scope.setTag("vex_platform", "android")
         scope.setTag("vex_vpn_error_code", code)
-        scope.setExtra("vex_vpn_error_message", message)
-        Sentry.captureException(error)
+        scope.setTag("vex_vpn_error_category", category)
+        scope.setTag("vex_vpn_error_stage", stage)
+        Sentry.captureException(VpnLogRedaction.telemetryThrowable(category, stage))
       }
     } catch (_: Throwable) {
       // Observability must never break VPN control flow.

@@ -52,3 +52,7 @@ macos-native/.build.stale-*/
 /docs/design-qa/vex-mobile-flow-qa/
 /docs/design-qa/vex-mobile-system/
 /Изображение Codex *.png
+
+# Python release-test bytecode is generated, never release source.
+__pycache__/
+*.py[cod]

@@ -143,6 +143,22 @@ final class VEXHelperModel: ObservableObject {
         try protectedReplacement.completeCommitted(receipt, persistence: persistence)
     }
 
+    func verifyProtectedPrivateRetirement(_ d: NativeProtectedRestartCoordinator.RetirementDependencies) async throws {
+        guard canUseExistingValidatedHelper, !isBusy, d.isCurrent() else { throw NativeProtectedRestartCoordinator.Failure.staleIntent }
+        isBusy = true; defer { isBusy = false }
+        try await protectedRestart.verifyPromotionRetirement(.init(
+            isCurrent: { [weak self] in self?.canUseExistingValidatedHelper == true && d.isCurrent() },
+            send: { [client] command, timeout in try await client.send(command, timeoutSeconds: timeout) },
+            store: d.store, owner: d.owner, retirement: d.retirement, now: d.now))
+    }
+
+    func finishProtectedPrivateRetirement(_ value: NativeProtectedRestartStore.PromotionRetirement,
+        isCurrent: () -> Bool) throws {
+        guard canUseExistingValidatedHelper, !isBusy, isCurrent() else { throw NativeProtectedRestartCoordinator.Failure.staleIntent }
+        try protectedReplacement.completePrivateRetirement(value.terminalIntent, receipt: value.receipt)
+        hasExplicitRestartConsent = false
+    }
+
     func authorizeProtectedRestart(_ dependencies: NativeProtectedRestartCoordinator.Dependencies) async throws -> UInt64 {
         guard canUseExistingValidatedHelper, !isBusy, dependencies.isCurrent() else { throw NativeProtectedRestartCoordinator.Failure.staleIntent }
         isBusy = true; defer { isBusy = false }

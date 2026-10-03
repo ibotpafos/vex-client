@@ -20,6 +20,7 @@ final class NativeProtectedRestartCoordinator {
     }
     private func current(_ d: Dependencies) throws {
         guard !Task.isCancelled, d.isCurrent(), try d.store.loadMaterial(owner: d.owner) == d.material else { throw Failure.staleIntent }
+        guard try !d.store.promotionRetirementPending(owner: d.owner) else { throw Failure.recoveryPending }
         try d.validateMaterial()
         guard !Task.isCancelled, d.isCurrent() else { throw Failure.staleIntent }
     }
@@ -44,6 +45,52 @@ final class NativeProtectedRestartCoordinator {
                   result.updateValue(String(pair[1]), forKey: String(pair[0])) == nil else { throw Failure.invalidResponse }
         }
         guard Set(result.keys) == keys else { throw Failure.invalidResponse }; return result
+    }
+    struct RetirementDependencies {
+        let isCurrent: () -> Bool
+        let send: (String, Int) async throws -> String
+        let store: NativeProtectedRestartStore
+        let owner: NativePushPSKEventOwner
+        let retirement: NativeProtectedRestartStore.PromotionRetirement
+        var now: () -> UInt64 = { UInt64(max(0, Date().timeIntervalSince1970)) }
+    }
+    private func currentRetirement(_ d: RetirementDependencies) throws {
+        guard !Task.isCancelled, d.isCurrent() else { throw Failure.staleIntent }
+        try d.store.validatePromotionRetirementCustody(owner: d.owner, expected: d.retirement)
+        guard !Task.isCancelled, d.isCurrent() else { throw Failure.staleIntent }
+    }
+    /// Metadata and missing private files confer no authority. Every explicit
+    /// retry obtains TWO exact fresh authenticated read-only terminal proofs,
+    /// including after the nonce/material have gone. No TTL, adopt or mutation.
+    func verifyPromotionRetirement(_ d: RetirementDependencies) async throws {
+        try currentRetirement(d)
+        for _ in 0..<2 {
+            let text: String
+            do {
+                text = try await d.send(d.retirement.kind == "candidate"
+                    ? "protected-receipt" + metadata(d.retirement.terminalIntent) : "protected-snapshot", 15)
+            } catch { throw Failure.unavailable }
+            try currentRetirement(d)
+            let t = d.retirement.terminalIntent
+            if d.retirement.kind == "candidate" {
+                let p = try fields(text, word: "committed", keys:
+                    ["commit_receipt_protocol", "transaction_id", "source_sha256", "candidate_sha256", "owner_token_sha256", "latest_handshake"])
+                guard let receipt = d.retirement.receipt, p["commit_receipt_protocol"] == "1",
+                      p["transaction_id"] == t.transactionID, p["source_sha256"] == t.sourceSHA256,
+                      p["candidate_sha256"] == t.candidateSHA256, p["owner_token_sha256"] == t.ownerTokenSHA256,
+                      let raw = p["latest_handshake"], let handshake = UInt64(raw), String(handshake) == raw,
+                      handshake == receipt.latestHandshake, handshake > 0, handshake <= d.now() + 1 else { throw Failure.invalidResponse }
+            } else if d.retirement.kind == "source" {
+                try healthySnapshot(text, t, hash: t.sourceSHA256)
+            } else {
+                let p = try fields("snapshot " + text, word: "snapshot", keys:
+                    ["protected_protocol", "recovery_pending", "source_sha256", "owner_token_sha256", "commit_receipt_protocol"])
+                guard p["protected_protocol"] == "1", p["commit_receipt_protocol"] == "1",
+                      p["recovery_pending"] == "false", p["source_sha256"] == d.retirement.admittedProfileSHA256,
+                      p["owner_token_sha256"] == d.retirement.admittedOwnerSHA256 else { throw Failure.invalidResponse }
+            }
+        }
+        try currentRetirement(d)
     }
     /// Called only by the explicit opt-in pre-stage transaction, through its
     /// already-authenticated socket. No unsupported/missing/denied fallback.

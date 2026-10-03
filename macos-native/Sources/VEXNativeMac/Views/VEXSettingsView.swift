@@ -76,6 +76,12 @@ struct VEXSettingsView: View {
                 .buttonStyle(.vexGlass)
                 .disabled(appState.isVpnBusy || appState.isDeviceBusy || helper.isBusy || appState.session == nil
                     || !helper.canUseExistingValidatedHelper)
+            if appState.hasNativeProtectedPrivateRetirement {
+                Button("Повторить очистку приватных данных") { appState.cleanupNativeProtectedPrivateData(using: helper) }
+                    .buttonStyle(.vexGlass)
+                    .disabled(appState.isVpnBusy || appState.isDeviceBusy || helper.isBusy || appState.session == nil
+                        || !helper.canUseExistingValidatedHelper)
+            }
         }
     }
 

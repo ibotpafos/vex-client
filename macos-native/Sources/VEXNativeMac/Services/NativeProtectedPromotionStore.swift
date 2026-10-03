@@ -73,6 +73,24 @@ struct NativeProtectedPromotionStore {
         guard try store.read(name) == nil else { throw CocoaError(.fileWriteUnknown) }
     }
 
+    @MainActor
+    func terminalPayload(accountID: String, installationID: String) throws -> Data? {
+        try NativePushSecureFileStore(rootURL: root, maxBytes: 16_384).read(name(accountID: accountID, installationID: installationID))
+    }
+    @MainActor
+    func removeRetiredIntent(accountID: String, installationID: String,
+        intent: NativeProtectedReplacementCoordinator.RestartIntent, nonceSHA256: String,
+        receipt: NativeProtectedReplacementCoordinator.Receipt?, isCurrent: () -> Bool) throws {
+        let store = NativePushSecureFileStore(rootURL: root, maxBytes: 16_384), name = try name(accountID: accountID, installationID: installationID)
+        guard !Task.isCancelled, isCurrent(), intent.isValid,
+              NativeProtectedReplacementCoordinator.validDigest(nonceSHA256) else { throw CocoaError(.fileWriteUnknown) }
+        guard let data = try store.read(name) else { return } // exact WAL is required by caller
+            try NativeProtectedReplacementCoordinator.requireTerminalPersistentPayload(data, intent: intent, receipt: receipt)
+            guard NativeProtectedReplacementCoordinator.digest(String(decoding: data, as: UTF8.self)) == nonceSHA256,
+              !Task.isCancelled, isCurrent(), try store.read(name) == data else { throw CocoaError(.fileWriteFileExists) }
+        try store.remove(name); guard try store.read(name) == nil else { throw CocoaError(.fileWriteUnknown) }
+    }
+
     /// Not a generic save override. The caller already reverified signed/current
     /// material and the authenticated root receipt using its ephemeral new owner.
     /// Compare/readback fences every private write, including exact retry.

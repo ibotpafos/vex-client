@@ -112,7 +112,7 @@ struct Status {var routeOk=false,socketExists=false;var latestHandshake:UInt64?=
  // No protected-source restore in these legacy fixtures; durable replay fences have their own actual-store matrix.
  var hasNativeProtectedSourceRestorationFence=false
  var nativeProtectedRestorationAdmissionGeneration:Int?
- func completeNativeProtectedSourceRestoration(isCurrent:()->Bool) throws {}
+ func completeNativeProtectedSourceRestoration(admittedSource:NativeAdmittedProfileStore.Source?=nil,helper:VEXHelperModel?=nil,isCurrent:()->Bool) throws {}
  enum Desired {case connected,disconnected}
  var desiredVpnState:Desired = .connected,vpnOperationGeneration=1,authenticatedSessionGeneration=1
  var session:Session? = .init(user:.init(id:"a"),accessToken:"t")

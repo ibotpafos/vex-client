@@ -72,6 +72,13 @@ final class NativeAdmittedProfileStore {
         (try? self.source(for: source.tunnel, scope: scope, helper: helper).revision) == source.revision
     }
 
+    /// Private terminal completion only; neither records nor admits a profile.
+    func forgetRetiredCandidate(intentFingerprint: String, generation: Int, helper: AnyObject) {
+        guard let candidate = pendingCandidate, candidateHelper === helper,
+              candidate.intentFingerprint == intentFingerprint, candidate.generation == generation else { return }
+        forgetCandidate(candidate)
+    }
+
     /// Keep the exact resolved bytes before any helper mutation. A later signed
     /// profile/owner/intent mismatch cannot overwrite or silently re-resolve them.
     func recordCandidate(tunnel: PreparedTunnel, canonicalConfig: String, source: Source,

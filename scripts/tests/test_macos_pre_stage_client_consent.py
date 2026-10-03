@@ -165,9 +165,9 @@ MAIN = r'''
    let f=try fresh("success");_=try await f.app.cutover(f.envelope,source:f.source,helper:f.helper)
    let c=f.helper.client
    a("exact-private-custody-before-authorize-before-replace",c.custodyBeforeAuth && c.auths==1 && c.replacements==1 && c.commits==1 && c.proofs==1 && c.busyAtEveryRPC)
-   a("proved-promotion-cleans-capability-material-before-nonce",try f.app.profileService.cache.saves==1 && f.app.nativeProtectedRestartStore.loadMaterial(owner:f.app.owner)==nil && !f.app.nativeProtectedPromotionStore.hasRecord(accountID:f.app.owner.accountID,installationID:f.app.owner.installationID) && f.app.nativePSKCommittedPromotion==nil && f.app.activeTunnel?.profileVersion==2)
+   a("proved-promotion-retires-exact-private-custody-and-nonce",try f.app.profileService.cache.saves==1 && f.app.nativeProtectedRestartStore.loadMaterial(owner:f.app.owner)==nil && !f.app.nativeProtectedPromotionStore.hasRecord(accountID:f.app.owner.accountID,installationID:f.app.owner.installationID) && f.app.nativePSKCommittedPromotion==nil && f.app.activeTunnel?.profileVersion==2)
    a("pre-stage-never-uses-post-journal-authorize-or-adopt",!c.calls.contains{$0.hasPrefix("protected-authorize-restart") || $0.hasPrefix("protected-adopt-restart")} && c.recoveries==0 && VPNProfileService.dnsCalls==0)
-  }catch{a("exact-private-custody-before-authorize-before-replace",false);a("proved-promotion-cleans-capability-material-before-nonce",false);a("pre-stage-never-uses-post-journal-authorize-or-adopt",false)}
+  }catch{a("exact-private-custody-before-authorize-before-replace",false);a("proved-promotion-retires-exact-private-custody-and-nonce",false);a("pre-stage-never-uses-post-journal-authorize-or-adopt",false)}
   do {
    let f=try fresh("legacy",optIn:false);_=try await f.app.cutover(f.envelope,source:f.source,helper:f.helper)
    a("explicit-no-consent-legacy-contract-remains-compatible",f.helper.client.auths==0 && f.helper.client.replacements==1 && f.app.activeTunnel?.profileVersion==2)

@@ -444,7 +444,7 @@ with tempfile.TemporaryDirectory(prefix='client-journal-',dir=Path(os.environ.ge
   not any(x in source for x in ['promoteStagedPSKProfile','nativeAdmittedProfiles.record','activeTunnel = material.source','connectVPN(','prepareSelectedProfile','nativePushPSKQueue.remove']),
   not any(x in coordinator for x in ['ensureHelperReady','disconnect(','resolveProfile','writeHelperConfig','acknowledgePSK','attachOwnerWatchdog']),
   all(x in ui for x in ['restoreNativeProtectedSource','resumeNativeProtectedCandidate','connectAfterNativeProtectedSourceRestoration']),
-  remember.index('verifyAdmittedSource')<remember.index('nativeAdmittedProfiles.record')<remember.index('completeNativeProtectedSourceRestoration') and cleanup.index('removeMaterial')<cleanup.index('removeSourceRestorationFence')
+  remember.index('verifyAdmittedSource')<remember.index('nativeAdmittedProfiles.record')<remember.index('completeNativeProtectedSourceRestoration') and cleanup.index('finishNativeProtectedPrivateRetirement' if 'finishNativeProtectedPrivateRetirement' in cleanup else 'removeMaterial')<cleanup.index('removeSourceRestorationFence')
  ]
  for name,ok in zip(WIRING,checks):print('client_journal '+name+'='+('PASS' if ok else 'FAIL'));failures+=not ok
  seen=[x.split(' ')[1].split('=')[0] for x in r.stdout.decode().splitlines() if x.startswith('client_journal ')]+WIRING

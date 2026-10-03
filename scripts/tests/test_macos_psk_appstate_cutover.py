@@ -145,7 +145,9 @@ enum Mode { case commitReplyLost, commitReplyAndProofLost, success, connectThrow
 // private custody/RPC/material gates have their own compiled runtime matrices.
 struct FixtureRestartIntent { let transactionID:String }
 struct FixtureRestartMaterial { let intent:FixtureRestartIntent }
+enum NativeProtectedRestartCoordinator {enum Failure:Error {case recoveryPending}}
 struct FixtureRestartStore {
+ func promotionRetirementPending(owner:Owner)throws->Bool {false}
  func loadMaterial(owner:Owner)throws->FixtureRestartMaterial? {nil}
  func removeMaterial(owner:Owner,expected:FixtureRestartMaterial)throws {}
 }
@@ -161,7 +163,12 @@ struct FixtureRestartStore {
  var nativePushDeviceID:String?,accountDevices:[Device]=[]
  let nativePSKStageStore=FixtureStageStore()
  func nativePSKStageConsent(owner:Owner,persistence:NativeProtectedReplacementCoordinator.Persistence,isCurrent:@escaping ()->Bool)->((NativeProtectedReplacementCoordinator.RestartIntent,@escaping (String,Int)async throws->String)async throws->Void)? {nil}
- func completeNativePSKPrivatePromotion(owner:Owner,receipt:NativeProtectedReplacementCoordinator.Receipt)throws {}
+ func completeNativePSKPrivatePromotion(owner:Owner,receipt:NativeProtectedReplacementCoordinator.Receipt,
+  helper:VEXHelperModel?=nil,persistence:NativeProtectedReplacementCoordinator.Persistence?=nil,isCurrent:(()->Bool)?=nil)throws {
+  // This legacy matrix has NO restart material/WAL. Preserve its actual strict
+  // helper nonce completion; real terminal private IO is covered by131 cases.
+  if let helper,let persistence,let isCurrent {try helper.finishProtectedPromotion(receipt,persistence:persistence,isCurrent:isCurrent)}
+ }
  var isVpnBusy=false, isDeviceBusy=false, antiLeakEnabled=true
  var nativePushEventError:String?, nativePSKHelper:VEXHelperModel?
  var selectedLocationId="loc", targetLocationId:String?="loc", routingMode:Routing = .full

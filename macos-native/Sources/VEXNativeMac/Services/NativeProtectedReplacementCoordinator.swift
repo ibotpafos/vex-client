@@ -423,6 +423,34 @@ final class NativeProtectedReplacementCoordinator {
     /// must authenticate this saved receipt before any completion/admission.
     static func restartReceiptMetadata(_ data: Data) throws -> Receipt? { try restartValue(data).receipt }
 
+    /// Exact terminal private cleanup only; a root proof is independently
+    /// obtained by the caller. This never rebinds or creates a nonce/admission.
+    static func requireTerminalPersistentPayload(_ data: Data, intent: RestartIntent, receipt: Receipt?) throws {
+        let value = try restartValue(data)
+        guard restartTuple(value) == intent, value.transaction.stageConsentPending != true else { throw Failure.recoveryPending }
+        if let receipt {
+            guard receipt.transactionID == intent.transactionID, receipt.candidateSHA256 == intent.candidateSHA256,
+                  receipt.ownerTokenSHA256 == intent.ownerTokenSHA256, receipt.latestHandshake > 0,
+                  value.receipt == nil || value.receipt == receipt else { throw Failure.recoveryPending }
+        } else { guard value.receipt == nil else { throw Failure.recoveryPending } }
+    }
+
+    /// Private in-memory completion after fresh root proof and exact durable
+    /// retirement. It cannot clear an unrelated pending/committed operation.
+    func completePrivateRetirement(_ intent: RestartIntent, receipt: Receipt?) throws {
+        guard !Task.isCancelled, pending == nil else { throw Failure.recoveryPending }
+        if let committed {
+            guard let receipt, committed.receipt == receipt, committed.transaction.id == intent.transactionID,
+                  committed.transaction.source == intent.sourceSHA256, committed.transaction.candidate == intent.candidateSHA256,
+                  committed.transaction.owner == intent.ownerTokenSHA256 else { throw Failure.recoveryPending }
+        }
+        if let activePersistence {
+            guard activePersistence.scopeFingerprint == intent.scopeFingerprint,
+                  activePersistence.generation == intent.generation, activePersistence.processInstanceID == intent.processInstanceID else { throw Failure.staleIntent }
+        }
+        committed = nil; activePersistence = nil; hasUnconfirmedDurableWrite = false
+    }
+
     /// Called only with a fresh authenticated post-transfer receipt and reverified
     /// signed/current material. The random new-owner digest + transaction bind one
     /// adoption; no invented nonce, handshake, generation or config is permitted.

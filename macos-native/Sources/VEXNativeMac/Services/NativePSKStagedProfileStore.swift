@@ -17,6 +17,7 @@ struct NativePSKStagedProfileStore {
     private struct OwnerIndex: Codable { let schema: Int; let namespace: String; let ownerFingerprint: String; let tuples: [Tuple] }
     private struct Tuple: Codable, Hashable { let managedDeviceID: String; let rotationID: String }
     private let root: URL
+    private let afterRetirementStep: ((String) throws -> Void)?
     private static let maxBytes = 1_048_576
     private static let schema = 1
     private static let namespace = "native-psk-staged-profile-v1"
@@ -24,8 +25,9 @@ struct NativePSKStagedProfileStore {
     private static let maxTuples = 32
     private static let maxIndexBytes = 65_536
 
-    init(fileManager: FileManager = .default, appDataURL: URL? = nil) {
+    init(fileManager: FileManager = .default, appDataURL: URL? = nil, afterRetirementStep: ((String) throws -> Void)? = nil) {
         root = appDataURL ?? (fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")).appendingPathComponent("VEX Native", isDirectory: true)
+        self.afterRetirementStep = afterRetirementStep
     }
 
     func stage(_ envelope: PSKRotationCurrentResponse, owner: NativePushPSKEventOwner, managedDeviceID: String, stagedAt: Date = Date()) throws {
@@ -78,6 +80,62 @@ struct NativePSKStagedProfileStore {
         try writeIndex(index, owner: owner, store: store)
     }
 
+    /// Pin the actual private bytes, not a re-encoded Codable value or expiry.
+    /// Called only after signed/current root proof and cache completion.
+    func retirementDigest(owner: NativePushPSKEventOwner, managedDeviceID: String, rotationID: String) throws -> String? {
+        guard valid(owner), NativePSKIdentifier.device(managedDeviceID), NativePSKIdentifier.rotation(rotationID) else { throw CocoaError(.fileReadInvalidFileName) }
+        let store = NativePushSecureFileStore(rootURL: root, maxBytes: Self.maxBytes)
+        _ = try loadIndex(owner: owner, store: store) // unsafe index vetoes all private retirement before deletion
+        guard let data = try store.read(fileName(owner: owner, managedDeviceID: managedDeviceID, rotationID: rotationID)) else { return nil }
+        _ = try decodeValidated(data, owner: owner, managedDeviceID: managedDeviceID, rotationID: rotationID)
+        return digest(data)
+    }
+
+    private func retirementStep(_ value: String, isCurrent: () -> Bool) throws {
+        guard !Task.isCancelled, isCurrent() else { throw CocoaError(.fileWriteUnknown) }
+        try afterRetirementStep?(value)
+        guard !Task.isCancelled, isCurrent() else { throw CocoaError(.fileWriteUnknown) }
+    }
+
+    /// A terminal WAL authorizes only this exact private tuple. Missing secret
+    /// bytes permit finishing its index; a changed/replaced file is preserved.
+    func purgeRetired(owner: NativePushPSKEventOwner, managedDeviceID: String, rotationID: String,
+        expectedSHA256: String?, isCurrent: () -> Bool) throws {
+        guard !Task.isCancelled, isCurrent(), valid(owner), NativePSKIdentifier.device(managedDeviceID),
+              NativePSKIdentifier.rotation(rotationID) else { throw CocoaError(.fileWriteInvalidFileName) }
+        let store = NativePushSecureFileStore(rootURL: root, maxBytes: Self.maxBytes)
+        let name = fileName(owner: owner, managedDeviceID: managedDeviceID, rotationID: rotationID)
+        _ = try loadIndex(owner: owner, store: store)
+        try retirementStep("stage-before-file-remove", isCurrent: isCurrent)
+        if let bytes = try store.read(name) {
+            _ = try decodeValidated(bytes, owner: owner, managedDeviceID: managedDeviceID, rotationID: rotationID)
+            guard digest(bytes) == expectedSHA256, isCurrent(), try store.read(name) == bytes else { throw CocoaError(.fileWriteFileExists) }
+            try store.remove(name)
+        }
+        try retirementStep("stage-after-file-remove", isCurrent: isCurrent)
+        guard isCurrent(), try store.read(name) == nil else { throw CocoaError(.fileWriteUnknown) }
+        let oldIndex = try store.read(indexFileName(owner: owner))
+        let index = try loadIndex(owner: owner, store: store)
+        let tuple = Tuple(managedDeviceID: managedDeviceID, rotationID: rotationID)
+        guard isCurrent(), try store.read(indexFileName(owner: owner)) == oldIndex else { throw CocoaError(.fileWriteFileExists) }
+        try retirementStep("stage-before-index-write", isCurrent: isCurrent)
+        guard try store.read(indexFileName(owner: owner)) == oldIndex else { throw CocoaError(.fileWriteFileExists) }
+        if index.tuples.contains(tuple) {
+            try writeIndex(OwnerIndex(schema: Self.schema, namespace: Self.indexNamespace,
+                ownerFingerprint: fingerprint(owner), tuples: index.tuples.filter { $0 != tuple }), owner: owner, store: store)
+        }
+        try retirementStep("stage-after-index-write", isCurrent: isCurrent)
+        guard isCurrent(), try retirementAbsent(owner: owner, managedDeviceID: managedDeviceID, rotationID: rotationID) else { throw CocoaError(.fileWriteUnknown) }
+        try retirementStep("stage-after-index-readback", isCurrent: isCurrent)
+    }
+
+    func retirementAbsent(owner: NativePushPSKEventOwner, managedDeviceID: String, rotationID: String) throws -> Bool {
+        guard valid(owner), NativePSKIdentifier.device(managedDeviceID), NativePSKIdentifier.rotation(rotationID) else { throw CocoaError(.fileReadInvalidFileName) }
+        let store = NativePushSecureFileStore(rootURL: root, maxBytes: Self.maxBytes)
+        return try store.read(fileName(owner: owner, managedDeviceID: managedDeviceID, rotationID: rotationID)) == nil
+            && !loadIndex(owner: owner, store: store).tuples.contains(Tuple(managedDeviceID: managedDeviceID, rotationID: rotationID))
+    }
+
     func purgeAll(owner: NativePushPSKEventOwner) throws {
         guard valid(owner) else { throw CocoaError(.fileWriteInvalidFileName) }
         let store = NativePushSecureFileStore(rootURL: root, maxBytes: Self.maxBytes)
@@ -90,7 +148,11 @@ struct NativePSKStagedProfileStore {
     private func indexFileName(owner: NativePushPSKEventOwner) -> String { "staged-index-" + fingerprint(owner) + ".json" }
     private func loadIndex(owner: NativePushPSKEventOwner, store: NativePushSecureFileStore) throws -> OwnerIndex {
         guard let data = try store.read(indexFileName(owner: owner)) else { return OwnerIndex(schema: Self.schema, namespace: Self.indexNamespace, ownerFingerprint: fingerprint(owner), tuples: []) }
-        guard data.count <= Self.maxIndexBytes else { throw CocoaError(.fileReadCorruptFile) }
+        guard data.count <= Self.maxIndexBytes,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(object.keys) == ["schema", "namespace", "ownerFingerprint", "tuples"],
+              let tuples = object["tuples"] as? [[String: Any]],
+              tuples.allSatisfy({ Set($0.keys) == ["managedDeviceID", "rotationID"] }) else { throw CocoaError(.fileReadCorruptFile) }
         let index: OwnerIndex; do { index = try JSONDecoder().decode(OwnerIndex.self, from: data) } catch { throw CocoaError(.fileReadCorruptFile) }
         guard index.schema == Self.schema, index.namespace == Self.indexNamespace, index.ownerFingerprint == fingerprint(owner), index.tuples.count <= Self.maxTuples, Set(index.tuples).count == index.tuples.count, index.tuples.allSatisfy({ NativePSKIdentifier.device($0.managedDeviceID) && NativePSKIdentifier.rotation($0.rotationID) }) else { throw CocoaError(.fileReadCorruptFile) }
         return index

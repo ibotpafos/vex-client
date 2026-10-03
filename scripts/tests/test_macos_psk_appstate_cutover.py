@@ -68,7 +68,7 @@ struct Verified { let envelope: PSKRotationCurrentResponse }
 }
 struct Status { var isUsableConnectedStatus=false; var hasManagedNetworkState=false; var endpoint="" }
 enum FixtureError: Error { case boom }
-enum Mode { case commitReplyLost, success, connectThrows, promotionThrows, sessionChanges, tokenChanges, accountChanges, vpnGenerationChanges, accessRevoked, selectionChanges, routingChanges, helperChanges, snapshotThrows, snapshotOwnerChanges, snapshotCandidateChanges, snapshotJournal, snapshotScopeChanges }
+enum Mode { case commitReplyLost, commitReplyAndProofLost, success, connectThrows, promotionThrows, sessionChanges, tokenChanges, accountChanges, vpnGenerationChanges, accessRevoked, selectionChanges, routingChanges, helperChanges, snapshotThrows, snapshotOwnerChanges, snapshotCandidateChanges, snapshotJournal, snapshotScopeChanges }
 @MainActor final class Client {
  unowned let app: AppState
  let id="E63DCEBD-109A-4C45-A23C-3F32BF42597A"
@@ -91,11 +91,11 @@ enum Mode { case commitReplyLost, success, connectThrows, promotionThrows, sessi
    return "ready transaction_id=\(id) candidate_sha256=\(candidate)\n"
   case "protected-commit":
    commits += 1; journal=false
-   if app.mode == .commitReplyLost {throw FixtureError.boom}
+   if app.mode == .commitReplyLost || app.mode == .commitReplyAndProofLost {throw FixtureError.boom}
    return "committed transaction_id=\(id) candidate_sha256=\(candidate) latest_handshake=100\n"
   case "protected-receipt":
    receipts += 1
-   if app.mode == .snapshotThrows {throw FixtureError.boom}
+   if app.mode == .snapshotThrows || app.mode == .commitReplyAndProofLost {throw FixtureError.boom}
    if app.mode == .snapshotScopeChanges {app.authenticatedSessionGeneration += 1}
    guard commits==1,!journal,app.mode != .snapshotJournal else {throw FixtureError.boom}
    let observed = app.mode == .snapshotCandidateChanges ? source : candidate
@@ -123,14 +123,14 @@ enum Mode { case commitReplyLost, success, connectThrows, promotionThrows, sessi
 }
 @MainActor final class Profile {
  unowned let app: AppState
- var prepares=0, promotions=0, writes=0, sourcePrepares=0, candidatePrepares=0;var sourceDNSChanged=false,observedIntentBeforeCache=false
+ var prepares=0, promotions=0, writes=0, sourcePrepares=0, candidatePrepares=0;var sourceDNSChanged=false,observedIntentBeforeCache=false,candidateDNSChanged=false;var nextID="next"
  init(_ app: AppState) { self.app=app }
  func prepareStagedPSKProfile(_ verified: Verified, basedOn old: PreparedTunnel) throws -> PreparedTunnel {
   prepares += 1
-  return .init(id:"next",device:old.device,locationId:old.locationId,routingMode:old.routingMode,bypassRegion:old.bypassRegion)
+  return .init(id:nextID,device:old.device,locationId:old.locationId,routingMode:old.routingMode,bypassRegion:old.bypassRegion)
  }
  func prepareProtectedHelperConfig(for tunnel: PreparedTunnel, validateCurrent: @MainActor () throws -> Void) async throws -> String {
-  try validateCurrent(); await Task.yield(); try validateCurrent(); if tunnel.id=="old" {sourcePrepares+=1;return sourceDNSChanged ? "rotated-DNS-profile" : "old-profile"};candidatePrepares+=1;return tunnel.id + "-profile"
+  try validateCurrent(); await Task.yield(); try validateCurrent(); if tunnel.id=="old" {sourcePrepares+=1;return sourceDNSChanged ? "rotated-DNS-profile" : "old-profile"};candidatePrepares+=1;return candidateDNSChanged ? "rotated-next-profile" : tunnel.id + "-profile"
  }
  func stageProtectedHelperConfig(_ config:String, validateCurrent: @MainActor () throws -> Void) throws { try validateCurrent(); writes += 1 }
  func promoteStagedPSKProfile(_ t: PreparedTunnel, owner: Owner) throws {
@@ -317,6 +317,55 @@ enum Mode { case commitReplyLost, success, connectThrows, promotionThrows, sessi
    let removed=try a.nativeProtectedPromotionStore.hasRecord(accountID:"account",installationID:"installation")
    check("cache-only-retry-after-coordinator-reconstruction",retained && !removed && a.nativePSKCommittedPromotion==nil && a.activeTunnel?.id=="next" && a.profileService.promotions==2 && a.profileService.writes==1 && h.client.replacements==1 && h.client.commits==1 && h.client.recoveries==0 && a.connects==0)
   }catch{check("cache-only-retry-after-coordinator-reconstruction",false)}
+
+
+  for reconstruct in [false,true] {
+   let (a,h,p)=base(true);a.mode = .commitReplyAndProofLost
+   do{_=try await a.run(p,h)}catch{}
+   let generation=a.vpnOperationGeneration
+   a.profileService.candidateDNSChanged=true;a.mode = .success
+   if reconstruct {h.reconstructCoordinatorForFixture()}
+   do {
+    _=try await a.retry(h)
+    let admitted=try a.nativeAdmittedProfiles.source(for:a.activeTunnel!,scope:try a.nativeAdmittedProfileScopeForFixture(a.activeTunnel!),helper:h)
+    check("uncertain-retry-exact-candidate-DNS-\(reconstruct ? "fresh-coordinator" : "same-coordinator")",admitted.canonicalConfig=="next-profile" && a.profileService.candidatePrepares==1 && a.profileService.writes==1 && a.profileService.promotions==1 && h.client.replacements==1 && h.client.commits==1 && h.client.recoveries==0 && a.connects==0 && a.vpnOperationGeneration==generation)
+   }catch {check("uncertain-retry-exact-candidate-DNS-\(reconstruct ? "fresh-coordinator" : "same-coordinator")",false)}
+  }
+  for change in ["missing-material","different-signed-candidate","selected-location","routing-intent"] {
+   let (a,h,p)=base(true);a.mode = .commitReplyAndProofLost
+   do{_=try await a.run(p,h)}catch{}
+   let receipts=h.client.receipts
+   switch change {
+   case "missing-material":a.nativeAdmittedProfiles.clear();try! a.nativeAdmittedProfiles.record(tunnel:p,canonicalConfig:"old-profile",ownerTokenSHA256:h.client.digest("fixture-owner"),scope:try! a.nativeAdmittedProfileScopeForFixture(p),helper:h)
+   case "different-signed-candidate":a.profileService.nextID="next-new-policy"
+   case "selected-location":a.selectedLocationId="another-location"
+   default:a.routingMode = .split
+   }
+   a.mode = .success
+   do{_=try await a.retry(h);check("pending-material-fence-\(change)-before-DNS-or-RPC",false)}catch {
+    check("pending-material-fence-\(change)-before-DNS-or-RPC",a.profileService.candidatePrepares==1 && a.profileService.writes==1 && h.client.receipts==receipts && h.client.replacements==1 && h.client.commits==1 && h.client.recoveries==0 && a.profileService.promotions==0 && a.connects==0)
+   }
+  }
+  do {
+   let (a,h,p)=base(true);a.mode = .connectThrows
+   do{_=try await a.run(p,h)}catch{}
+   a.mode = .success;_=try await a.run(p,h)
+   check("confirmed-source-recovery-discards-only-old-candidate",a.activeTunnel?.id=="next" && a.profileService.candidatePrepares==2 && h.client.replacements==2 && h.client.commits==1 && h.client.recoveries==1 && a.connects==0)
+  }catch{check("confirmed-source-recovery-discards-only-old-candidate",false)}
+
+
+  for hint in ["candidate-active","apparently-idle"] {
+   let (a,h,p)=base(true);a.mode = .commitReplyAndProofLost
+   do{_=try await a.run(p,h)}catch{}
+   h.status = .init(isUsableConnectedStatus:hint=="candidate-active",hasManagedNetworkState:false,endpoint:"next")
+   h.hasConfirmedIdleStatus=hint=="apparently-idle"
+   h.reconstructCoordinatorForFixture();a.mode = .success;a.profileService.candidateDNSChanged=true
+   do {
+    _=try await a.retry(h)
+    let admitted=try a.nativeAdmittedProfiles.source(for:a.activeTunnel!,scope:try a.nativeAdmittedProfileScopeForFixture(a.activeTunnel!),helper:h)
+    check("pending-exact-proof-not-status-hint-\(hint)",admitted.canonicalConfig=="next-profile" && a.activeTunnel?.id=="next" && a.profileService.candidatePrepares==1 && a.profileService.writes==1 && a.profileService.promotions==1 && h.client.replacements==1 && h.client.commits==1 && h.client.recoveries==0 && h.client.receipts==2 && a.connects==0)
+   }catch {check("pending-exact-proof-not-status-hint-\(hint)",false)}
+  }
 
   print("psk_protected_matrix cases=\(cases) failures=\(failures) live_network_commands=0")
   exit(failures==0 ? 0 : 1)

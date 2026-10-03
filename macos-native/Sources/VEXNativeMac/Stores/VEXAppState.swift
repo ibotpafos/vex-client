@@ -714,22 +714,33 @@ final class VEXAppState: ObservableObject {
             }
             let persistence = try nativePSKPromotionPersistence(previous: previous, next: next, owner: owner,
                 helper: helper, generation: promotion.generation, sessionGeneration: sessionGeneration, token: token)
+            let admissionScope = try nativeAdmittedProfileScope(for: next)
+            guard let material = try nativeAdmittedProfiles.candidate(for: next, scope: admissionScope, helper: helper,
+                intentFingerprint: persistence.scopeFingerprint, generation: promotion.generation) else {
+                throw NativeAdmittedProfileStore.Failure.missingCandidate
+            }
             try await helper.revalidateProtectedCommit(promotion.receipt, isCurrent: current, persistence: persistence)
             guard current() else { throw AuthenticatedOperationError.sessionChanged }
             try profileService.promoteStagedPSKProfile(next, owner: owner)
             try helper.finishProtectedPromotion(promotion.receipt, persistence: persistence, isCurrent: current)
+            nativeAdmittedProfiles.forgetCandidate(material)
             nativePSKCommittedPromotion = nil
             nativePushEventError = nil
             return promotion.generation
         }
-        guard helper.status.isUsableConnectedStatus else {
+        // Status is only a hint during an ambiguous transaction. A retained
+        // intent must go through scoped material and authenticated root proof,
+        // even if the status now shows the candidate or appears idle.
+        let hasRetainedIntent = try nativeProtectedPromotionStore.hasRecord(accountID: owner.accountID, installationID: owner.installationID)
+        guard helper.status.isUsableConnectedStatus || hasRetainedIntent else {
             guard helper.hasConfirmedIdleStatus, !helper.status.hasManagedNetworkState else { throw CancellationError() }
             try profileService.promoteStagedPSKProfile(next, owner: owner)
             activeTunnel = next
             nativePSKPreparedTunnel = next
             return vpnOperationGeneration
         }
-        guard let activeTunnel, activeTunnel == previous, tunnel(previous, matches: helper.status),
+        guard let activeTunnel, activeTunnel == previous,
+              (tunnel(previous, matches: helper.status) || hasRetainedIntent),
               helper.canUseExistingValidatedHelper, nativePSKHelper === helper else {
             throw CancellationError() // Never replace an unowned/external active tunnel.
         }
@@ -740,7 +751,7 @@ final class VEXAppState: ObservableObject {
         desiredVpnState = .connected
         // A retained private intent must use its original generation. A changed
         // user/session scope will fail the exact persisted binding before RPC.
-        if try !nativeProtectedPromotionStore.hasRecord(accountID: owner.accountID, installationID: owner.installationID) {
+        if !hasRetainedIntent {
             vpnOperationGeneration += 1
         }
         let generation = vpnOperationGeneration
@@ -751,12 +762,14 @@ final class VEXAppState: ObservableObject {
         let routeMode = routingMode
         let prepared = nativePSKPreparedTunnel
         var candidateCommitted = false
+        var candidateMaterial: NativeAdmittedProfileStore.Candidate?
         let scopeIsCurrent: @MainActor () -> Bool = { [weak self, weak helper] in
             guard let self, let helper, self.nativePSKHelper === helper,
                   helper.canUseExistingValidatedHelper, !Task.isCancelled,
                   self.activeTunnel == previous, self.nativePSKPreparedTunnel == prepared,
                    (try? self.nativeAdmittedProfileScope(for: previous)) == admissionScope,
-                   (candidateCommitted || self.nativeAdmittedProfiles.isCurrent(admittedSource, scope: admissionScope, helper: helper)),
+                    (candidateCommitted || self.nativeAdmittedProfiles.isCurrent(admittedSource, scope: admissionScope, helper: helper)),
+                    (candidateMaterial.map { self.nativeAdmittedProfiles.isCurrent($0, scope: admissionScope, helper: helper) } ?? true),
                    self.selectedLocationId == selectedID, self.targetLocationId == targetID,
                   self.routingMode == routeMode, self.entitlement?.hasPaidAccess == true else { return false }
             return (try? self.ensureConnectStillDesired(generation: generation,
@@ -767,7 +780,23 @@ final class VEXAppState: ObservableObject {
         }
         do {
             let sourceConfig = admittedSource.canonicalConfig
-            let candidateConfig = try await profileService.prepareProtectedHelperConfig(for: next, validateCurrent: validateCurrent)
+            if let retained = try nativeAdmittedProfiles.candidate(for: next, scope: admissionScope, helper: helper,
+                intentFingerprint: persistence.scopeFingerprint, generation: generation, source: admittedSource) {
+                candidateMaterial = retained
+            } else {
+                // TODO: Full app-crash material reconciliation needs signed-profile
+                // revalidation and explicit process ownership transfer. Missing
+                // memory plus private metadata is not permission to resolve DNS
+                // again or adopt a physical candidate from another process.
+                guard !hasRetainedIntent else { throw NativeAdmittedProfileStore.Failure.missingCandidate }
+                let config = try await profileService.prepareProtectedHelperConfig(for: next, validateCurrent: validateCurrent)
+                try validateCurrent()
+                candidateMaterial = try nativeAdmittedProfiles.recordCandidate(tunnel: next, canonicalConfig: config,
+                    source: admittedSource, scope: admissionScope, helper: helper,
+                    intentFingerprint: persistence.scopeFingerprint, generation: generation)
+            }
+            guard let material = candidateMaterial else { throw NativeAdmittedProfileStore.Failure.missingCandidate }
+            let candidateConfig = material.canonicalConfig
             try validateCurrent()
             let receipt = try await helper.replaceProfilePreservingProtection(
                 sourceSHA256: NativeProtectedReplacementCoordinator.digest(sourceConfig),
@@ -787,7 +816,8 @@ final class VEXAppState: ObservableObject {
                       helper.canUseExistingValidatedHelper, !Task.isCancelled,
                       !self.isDeviceBusy, self.activeTunnel == next, self.nativePSKPreparedTunnel == next,
                        (try? self.nativeAdmittedProfileScope(for: next)) == admissionScope,
-                       self.nativeAdmittedProfiles.isCurrent(admittedCandidate, scope: admissionScope, helper: helper),
+                        self.nativeAdmittedProfiles.isCurrent(admittedCandidate, scope: admissionScope, helper: helper),
+                        self.nativeAdmittedProfiles.isCurrent(material, scope: admissionScope, helper: helper),
                        self.selectedLocationId == selectedID, self.targetLocationId == targetID,
                       self.routingMode == routeMode, self.entitlement?.hasPaidAccess == true else { return false }
                 return (try? self.ensureConnectStillDesired(generation: generation,
@@ -795,6 +825,7 @@ final class VEXAppState: ObservableObject {
             })
             try profileService.promoteStagedPSKProfile(next, owner: owner)
             try helper.finishProtectedPromotion(receipt, persistence: persistence, isCurrent: scopeIsCurrent)
+            nativeAdmittedProfiles.forgetCandidate(material)
             nativePSKCommittedPromotion = nil
             self.activeTunnel = next
             nativePSKPreparedTunnel = next
@@ -812,6 +843,12 @@ final class VEXAppState: ObservableObject {
                 activeResilienceRoute = nil
                 // Retain the exact receipt/source tuple for authenticated,
                 // cache-only retry; no generic reconnect is a valid fallback.
+            } else if !helper.hasPendingProtectedReplacement,
+                      (try? nativeProtectedPromotionStore.hasRecord(accountID: owner.accountID, installationID: owner.installationID)) == false,
+                      let material = candidateMaterial {
+                // Only a confirmed source recovery or a pre-mutation failure
+                // with no durable intent permits a new candidate preparation.
+                nativeAdmittedProfiles.forgetCandidate(material)
             }
             nativePushEventError = helper.hasPendingProtectedReplacement
                 ? "Смена ключей требует защищённого восстановления. Обычное переподключение запрещено; событие сохранено."

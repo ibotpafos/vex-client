@@ -12,4 +12,5 @@ test('Android sign-in sheet has a bounded scroll container and bottom safe-area 
   assert.match(source, /verticalScroll\(\)/);
   assert.match(source, /fillMaxHeight\(\)/);
   assert.match(source, /padding\(0, 0, 0, Math\.max\(20, insets\.bottom \+ 20\)\)/);
+  assert.match(source, /skipPartiallyExpanded/);
 });

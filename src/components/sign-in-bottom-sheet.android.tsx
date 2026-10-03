@@ -36,6 +36,7 @@ export function SignInBottomSheet({ children, isPresented, onDismiss }: SignInBo
       }}
       ref={sheetRef}
       sheetGesturesEnabled
+      skipPartiallyExpanded
     >
       <Column modifiers={[
         fillMaxHeight(),

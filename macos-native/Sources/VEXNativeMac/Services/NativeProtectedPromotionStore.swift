@@ -37,6 +37,39 @@ struct NativeProtectedPromotionStore {
     }
 
     @MainActor
+    func restartIntent(accountID: String, installationID: String) throws -> NativeProtectedReplacementCoordinator.RestartIntent? {
+        guard let data = try NativePushSecureFileStore(rootURL: root, maxBytes: 16_384)
+            .read(name(accountID: accountID, installationID: installationID)) else { return nil }
+        return try NativeProtectedReplacementCoordinator.restartIntent(data)
+    }
+
+    @MainActor
+    func restartReceiptMetadata(accountID: String, installationID: String) throws -> NativeProtectedReplacementCoordinator.Receipt? {
+        guard let data = try NativePushSecureFileStore(rootURL: root, maxBytes: 16_384)
+            .read(name(accountID: accountID, installationID: installationID)) else { return nil }
+        return try NativeProtectedReplacementCoordinator.restartReceiptMetadata(data)
+    }
+
+    /// Not a generic save override. The caller already reverified signed/current
+    /// material and the authenticated root receipt using its ephemeral new owner.
+    /// Compare/readback fences every private write, including exact retry.
+    @MainActor
+    func rebindAfterAuthorizedRestart(accountID: String, installationID: String,
+        original: NativeProtectedReplacementCoordinator.RestartIntent,
+        receipt: NativeProtectedReplacementCoordinator.Receipt, scopeFingerprint: String,
+        isCurrent: () -> Bool) throws -> Data {
+        let store = NativePushSecureFileStore(rootURL: root, maxBytes: 16_384)
+        let name = try name(accountID: accountID, installationID: installationID)
+        guard !Task.isCancelled, isCurrent(), let existing = try store.read(name) else { throw CocoaError(.fileReadCorruptFile) }
+        let rebound = try NativeProtectedReplacementCoordinator.reboundRestartIntent(existing,
+            original: original, receipt: receipt, scopeFingerprint: scopeFingerprint)
+        guard !Task.isCancelled, isCurrent(), try store.read(name) == existing else { throw CocoaError(.fileWriteFileExists) }
+        if rebound != existing { try store.write(rebound, name: name) }
+        guard !Task.isCancelled, isCurrent(), try store.read(name) == rebound else { throw CocoaError(.fileWriteUnknown) }
+        return rebound
+    }
+
+    @MainActor
     func persistence(accountID: String, installationID: String, scopeFingerprint: String, generation: Int)
         throws -> NativeProtectedReplacementCoordinator.Persistence {
         let name = try name(accountID: accountID, installationID: installationID)

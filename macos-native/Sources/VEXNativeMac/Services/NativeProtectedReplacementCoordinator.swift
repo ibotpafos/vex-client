@@ -63,17 +63,35 @@ final class NativeProtectedReplacementCoordinator {
         let transaction: Transaction
         let receipt: Receipt?
     }
-    // TODO: Add explicitly authorized cross-process ownership transfer and full
-    // app-crash material/intent reconciliation. Retained metadata is NOT admission.
-    // Never adopt an old process's journal merely because its PID died;
-    // restart/ownership-transfer acceptance requires the isolated runtime gate.
+    /// Public metadata for an explicitly consented restart. Decoding this tuple
+    /// grants no admission, ownership, receipt or permission to stage a profile.
+    struct RestartIntent: Codable, Equatable {
+        let transactionID: String
+        let sourceSHA256: String
+        let candidateSHA256: String
+        let ownerTokenSHA256: String
+        let scopeFingerprint: String
+        let processInstanceID: String
+        let generation: Int
+        var isValid: Bool {
+            UUID(uuidString: transactionID)?.uuidString == transactionID
+                && UUID(uuidString: processInstanceID)?.uuidString == processInstanceID
+                && [sourceSHA256, candidateSHA256, ownerTokenSHA256, scopeFingerprint].allSatisfy(Self.validDigest)
+                && sourceSHA256 != candidateSHA256 && generation >= 0
+        }
+        private static func validDigest(_ text: String) -> Bool {
+            NativeProtectedReplacementCoordinator.validDigest(text)
+        }
+    }
+    // TODO: Pre-mutation crash consent and explicit journal resume still need
+    // isolated acceptance. A dead PID or retained metadata never authorizes them.
     private var pending: Transaction?
     private var committed: (transaction: Transaction, receipt: Receipt)?
     private var activePersistence: Persistence?
     private(set) var hasUnconfirmedDurableWrite = false
     var hasPendingTransaction: Bool { pending != nil }
 
-    static func digest(_ text: String) -> String {
+    nonisolated static func digest(_ text: String) -> String {
         SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
@@ -311,6 +329,62 @@ final class NativeProtectedReplacementCoordinator {
         guard try NativeProtectedReplacementCoordinator().loadIntent(persistence) != nil else { throw Failure.persistenceUnavailable }
     }
 
+    /// Strict cross-process inspection only. Ordinary load/save remain bound to
+    /// the current process and scope; only the separate proved restart can rebind.
+    private static func restartValue(_ data: Data) throws -> StoredIntent {
+        guard data.count <= 16_384, let value = try? JSONDecoder().decode(StoredIntent.self, from: data),
+              value.schema == 1, value.transaction.supportsCommitReceipt else { throw Failure.persistenceUnavailable }
+        let tuple = restartTuple(value)
+        guard tuple.isValid, value.receipt.map({ $0.transactionID == tuple.transactionID
+            && $0.candidateSHA256 == tuple.candidateSHA256 && $0.ownerTokenSHA256 == tuple.ownerTokenSHA256
+            && $0.latestHandshake > 0 && $0.latestHandshake <= UInt64(max(0, Date().timeIntervalSince1970)) + 1
+            && value.transaction.commitResponseUncertain }) ?? true,
+              try NativeProtectedReplacementCoordinator().encode(value) == data else { throw Failure.persistenceUnavailable }
+        return value
+    }
+    private static func restartTuple(_ value: StoredIntent) -> RestartIntent {
+        .init(transactionID: value.transaction.id, sourceSHA256: value.transaction.source,
+            candidateSHA256: value.transaction.candidate, ownerTokenSHA256: value.transaction.owner,
+            scopeFingerprint: value.scopeFingerprint, processInstanceID: value.processInstanceID, generation: value.generation)
+    }
+    static func restartIntent(_ data: Data) throws -> RestartIntent { restartTuple(try restartValue(data)) }
+    /// Metadata only. The existing current-process loader and fresh root proof
+    /// must authenticate this saved receipt before any completion/admission.
+    static func restartReceiptMetadata(_ data: Data) throws -> Receipt? { try restartValue(data).receipt }
+
+    /// Called only with a fresh authenticated post-transfer receipt and reverified
+    /// signed/current material. The random new-owner digest + transaction bind one
+    /// adoption; no invented nonce, handshake, generation or config is permitted.
+    static func reboundRestartIntent(_ existing: Data, original: RestartIntent, receipt: Receipt,
+        scopeFingerprint: String) throws -> Data {
+        let value = try restartValue(existing)
+        guard original.isValid, original.processInstanceID != processInstanceID, isDigest(scopeFingerprint),
+              receipt.transactionID == original.transactionID, receipt.candidateSHA256 == original.candidateSHA256,
+              isDigest(receipt.ownerTokenSHA256), receipt.ownerTokenSHA256 != original.ownerTokenSHA256,
+              receipt.latestHandshake > 0, receipt.latestHandshake <= UInt64(max(0, Date().timeIntervalSince1970)) + 1 else {
+            throw Failure.persistenceUnavailable
+        }
+        let rebound = RestartIntent(transactionID: original.transactionID, sourceSHA256: original.sourceSHA256,
+            candidateSHA256: original.candidateSHA256, ownerTokenSHA256: receipt.ownerTokenSHA256,
+            scopeFingerprint: scopeFingerprint, processInstanceID: processInstanceID, generation: original.generation)
+        let tuple = restartTuple(value)
+        if tuple == rebound {
+            guard value.receipt == receipt, value.transaction.commitResponseUncertain else { throw Failure.persistenceUnavailable }
+            return existing // exact same process/adoption retry after a lost file ACK
+        }
+        guard tuple == original, value.receipt.map({ $0.latestHandshake == receipt.latestHandshake }) ?? true else {
+            throw Failure.persistenceUnavailable
+        }
+        let transaction = Transaction(id: original.transactionID, source: original.sourceSHA256,
+            candidate: original.candidateSHA256, owner: receipt.ownerTokenSHA256,
+            supportsCommitReceipt: true, commitResponseUncertain: true)
+        let data = try NativeProtectedReplacementCoordinator().encode(StoredIntent(schema: 1,
+            scopeFingerprint: scopeFingerprint, processInstanceID: processInstanceID, generation: original.generation,
+            transaction: transaction, receipt: receipt))
+        try requireValidPersistentPayload(data, scopeFingerprint: scopeFingerprint, generation: original.generation)
+        return data
+    }
+
     private func loadIntent(_ persistence: Persistence) throws -> StoredIntent? {
         try validatePersistence(persistence)
         guard let bytes = try persistence.load() else { return nil }
@@ -381,7 +455,9 @@ final class NativeProtectedReplacementCoordinator {
         guard !Task.isCancelled, d.isCurrent() else { throw Failure.staleIntent }
     }
 
-    private static func isDigest(_ text: String) -> Bool {
+    nonisolated static func validDigest(_ text: String) -> Bool { isDigest(text) }
+
+    nonisolated private static func isDigest(_ text: String) -> Bool {
         text.utf8.count == 64 && text.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
     }
 

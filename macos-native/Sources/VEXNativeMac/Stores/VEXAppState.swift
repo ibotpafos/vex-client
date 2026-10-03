@@ -79,15 +79,15 @@ final class VEXAppState: ObservableObject {
     private let nativePushIdentityStore = VEXDeviceIdentityStore()
     private lazy var nativePSKStageStore = NativePSKStagedProfileStore()
     private lazy var nativeProtectedPromotionStore = NativeProtectedPromotionStore()
+    private lazy var nativeProtectedRestartStore = NativeProtectedRestartStore()
+    @Published private(set) var nativeProtectedRestartMessage: String?
     private lazy var nativePSKConsumer = NativePSKEventConsumer(queue: nativePushPSKQueue, store: nativePSKStageStore)
     private let nativePSKVerifier = NativeVPNProfileAuthorizationVerifier.bundled()
     private weak var nativePSKHelper: VEXHelperModel?
     private var nativePSKPreparedTunnel: PreparedTunnel?
-    // Exact sensitive source/candidate material remains memory-only. The private
-    // durable nonce/hash/intent record fences repeats and survives coordinator
-    // reconstruction; it is never a substitute for signed-profile/root proof.
-    // TODO: Reconcile full app-crash material with explicitly authorized ownership
-    // transfer on an isolated Mac; do not adopt another process from disk metadata.
+    // Sensitive restart material has separate private custody; it is never an
+    // admission. Ordinary repeats remain process-bound. Explicit receipt recovery
+    // requires current signed policy/key/intent and two independent root proofs.
     private var nativePSKCommittedPromotion: (
         source: PreparedTunnel, candidate: PreparedTunnel, owner: NativePushPSKEventOwner,
         receipt: NativeProtectedReplacementCoordinator.Receipt, generation: Int,
@@ -687,6 +687,215 @@ final class VEXAppState: ObservableObject {
         ))
     }
 
+    private enum NativeProtectedRestartAction { case authorize, recover, cancel }
+
+    func authorizeNativeProtectedRestart(using helper: VEXHelperModel) {
+        performNativeProtectedRestart(.authorize, using: helper)
+    }
+    func recoverNativeProtectedRestart(using helper: VEXHelperModel) {
+        performNativeProtectedRestart(.recover, using: helper)
+    }
+    func cancelNativeProtectedRestart(using helper: VEXHelperModel) {
+        performNativeProtectedRestart(.cancel, using: helper)
+    }
+    private func performNativeProtectedRestart(_ action: NativeProtectedRestartAction, using helper: VEXHelperModel) {
+        guard !isVpnBusy, !isDeviceBusy, !helper.isBusy else { return }
+        Task { [weak self, weak helper] in
+            guard let self, let helper else { return }
+            do { try await self.applyNativeProtectedRestart(action, helper: helper) }
+            catch {
+                // Never surface socket/error/payload text, raw capability or keys.
+                self.nativeProtectedRestartMessage = "Восстановление не подтверждено. Данные сохранены; обычное переподключение не выполнялось."
+            }
+        }
+    }
+
+    /// Explicit UI path only, never a status/APNs/launch callback. Stored source
+    /// metadata supplies comparison data, not current device/user authority.
+    private func applyNativeProtectedRestart(_ action: NativeProtectedRestartAction, helper: VEXHelperModel) async throws {
+        if action == .cancel {
+            // Cancelling unused consent grants no profile admission. The original
+            // live owner can cancel even when the signed stage, entitlement or
+            // selection changed/expired; root still checks exact capability,
+            // tuple, UID and original kernel peer/start identity before removal.
+            guard !isVpnBusy, !isDeviceBusy, !helper.isBusy, helper.canUseExistingValidatedHelper,
+                  let session, let installation = nativePushIdentityStore.existingDeviceId(),
+                  let owner = NativePushPSKEventOwner(accountID: session.user.id, installationID: installation),
+                  let material = try nativeProtectedRestartStore.loadMaterial(owner: owner) else {
+                throw NativeProtectedRestartCoordinator.Failure.staleIntent
+            }
+            let generation = authenticatedSessionGeneration, token = session.accessToken
+            let current: @MainActor () -> Bool = { [weak self, weak helper] in
+                guard let self, let helper, helper.canUseExistingValidatedHelper, !Task.isCancelled,
+                      self.nativePushIdentityStore.existingDeviceId() == installation else { return false }
+                return (try? self.ensureAuthenticatedSessionCurrent(generation: generation,
+                    accessToken: token, accountID: owner.accountID)) != nil
+            }
+            isVpnBusy = true; defer { isVpnBusy = false }
+            try await helper.cancelProtectedRestart(.init(isCurrent: current, validateMaterial: {},
+                send: { _, _ in throw NativeProtectedRestartCoordinator.Failure.unavailable },
+                store: nativeProtectedRestartStore, owner: owner, material: material))
+            guard current() else { throw NativeProtectedRestartCoordinator.Failure.staleIntent }
+            nativeProtectedRestartMessage = "Разрешение отменено. Защищённая операция и профиль не изменялись."
+            return
+        }
+        guard canUseNativeRemotePush, nativeRemotePushEnabled, nativePushConsentMatchesSession,
+              entitlement?.hasPaidAccess == true, !isVpnBusy, !isDeviceBusy, !helper.isBusy,
+              helper.canUseExistingValidatedHelper, nativePSKHelper === helper,
+              let session, let installation = nativePushIdentityStore.existingDeviceId(),
+              let owner = NativePushPSKEventOwner(accountID: session.user.id, installationID: installation),
+              let deviceID = nativePushDeviceID,
+              let device = accountDevices.first(where: { $0.id == deviceID && $0.status == "active" }),
+              device.externalDeviceId == installation,
+              let material = try nativeProtectedRestartStore.loadMaterial(owner: owner),
+              material.source.device.id == deviceID, material.candidate.device.id == deviceID,
+              material.source.device.publicKey == device.publicKey,
+              material.candidate.device.publicKey == device.publicKey,
+              material.selectedLocationID == selectedLocationId, material.targetLocationID == targetLocationId,
+              material.source.routingMode == routingMode,
+              material.source.bypassRegion == (routingMode == .allExceptRu ? "ru" : nil),
+              material.intent.generation >= vpnOperationGeneration else { throw NativeProtectedRestartCoordinator.Failure.staleIntent }
+        let generation = material.intent.generation
+        let sessionGeneration = authenticatedSessionGeneration, token = session.accessToken
+        let selectedID = selectedLocationId, targetID = targetLocationId, routeMode = routingMode
+        var expectedActive = activeTunnel
+        var expectedDesired = desiredVpnState
+        let processIntent = try nativeProtectedPromotionStore.restartIntent(accountID: owner.accountID, installationID: owner.installationID)
+        // A completed app rebind can retry only in this exact adopting process.
+        guard let processIntent, processIntent == material.intent ||
+            (processIntent.processInstanceID == NativeProtectedReplacementCoordinator.processInstanceID
+                && processIntent.transactionID == material.intent.transactionID
+                && processIntent.sourceSHA256 == material.intent.sourceSHA256
+                && processIntent.candidateSHA256 == material.intent.candidateSHA256
+                && processIntent.generation == generation) else { throw NativeProtectedRestartCoordinator.Failure.staleIntent }
+        vpnOperationGeneration = generation
+        isVpnBusy = true
+        defer { isVpnBusy = false }
+        let current: @MainActor () -> Bool = { [weak self, weak helper] in
+            guard let self, let helper, self.canUseNativeRemotePush, self.nativeRemotePushEnabled,
+                  self.nativePushConsentMatchesSession, self.nativePSKHelper === helper,
+                  helper.canUseExistingValidatedHelper, !Task.isCancelled, !self.isDeviceBusy,
+                  self.entitlement?.hasPaidAccess == true, self.nativePushDeviceID == deviceID,
+                  self.nativePushIdentityStore.existingDeviceId() == installation,
+                  self.accountDevices.contains(device), self.selectedLocationId == selectedID,
+                  self.targetLocationId == targetID, self.routingMode == routeMode,
+                  self.vpnOperationGeneration == generation, self.activeTunnel == expectedActive,
+                  self.desiredVpnState == expectedDesired else { return false }
+            return (try? self.ensureAuthenticatedSessionCurrent(generation: sessionGeneration,
+                accessToken: token, accountID: owner.accountID)) != nil
+        }
+        let validateMaterial: @MainActor () throws -> Void = { [weak self] in
+            guard let self, current(), let stage = try self.nativePSKStageStore.load(owner: owner,
+                managedDeviceID: deviceID, rotationID: material.rotationID) else { throw NativeProtectedRestartCoordinator.Failure.staleIntent }
+            let verified = try self.nativePSKVerifier.verifyDetailed(stage.envelope, ownerAccountID: owner.accountID,
+                managedDeviceID: deviceID, locationID: targetID ?? "", routingMode: routeMode.rawValue,
+                bypassRegion: routeMode == .allExceptRu ? "ru" : nil)
+            guard device.publicKey == (try self.profileService.existingStagedPSKClientPublicKey()) else { throw NativeProtectedRestartCoordinator.Failure.staleIntent }
+            _ = try self.profileService.verifyProtectedRestartMaterial(material, verified: verified, owner: owner)
+            guard current() else { throw NativeProtectedRestartCoordinator.Failure.staleIntent }
+        }
+        try validateMaterial()
+        let dependencies = NativeProtectedRestartCoordinator.Dependencies(isCurrent: current,
+            validateMaterial: validateMaterial, send: { _, _ in throw NativeProtectedRestartCoordinator.Failure.unavailable },
+            store: nativeProtectedRestartStore, owner: owner, material: material)
+        switch action {
+        case .authorize:
+            let expiry = try await helper.authorizeProtectedRestart(dependencies)
+            guard current() else { throw NativeProtectedRestartCoordinator.Failure.staleIntent }
+            nativeProtectedRestartMessage = "Разрешение на передачу владения сохранено на 120 секунд. Перезапустите приложение явно; установка и переподключение не выполнялись."
+            _ = expiry // expiry is protocol data; no capability or payload enters UI
+        case .cancel:
+            try await helper.cancelProtectedRestart(dependencies)
+            guard current() else { throw NativeProtectedRestartCoordinator.Failure.staleIntent }
+            nativeProtectedRestartMessage = "Разрешение отменено. Защищённая операция и профиль не изменялись."
+        case .recover:
+            let persistence = try nativePSKPromotionPersistence(previous: material.source.tunnel, next: material.candidate.tunnel,
+                owner: owner, helper: helper, generation: generation, sessionGeneration: sessionGeneration, token: token)
+            let receipt: NativeProtectedReplacementCoordinator.Receipt
+            let alreadyRebound = processIntent != material.intent
+            if alreadyRebound {
+                // Same exact adopting process/scope only. Saved receipt metadata
+                // grants nothing; skip expired capability/adoption and obtain TWO
+                // fresh root proofs for cache-only retry through the strict loader.
+                guard let saved = try nativeProtectedPromotionStore.restartReceiptMetadata(accountID: owner.accountID,
+                    installationID: owner.installationID), saved.ownerTokenSHA256 == processIntent.ownerTokenSHA256 else {
+                    throw NativeProtectedRestartCoordinator.Failure.recoveryPending
+                }
+                receipt = saved
+            } else {
+                receipt = try await helper.adoptProtectedRestart(dependencies)
+                try validateMaterial()
+                _ = try nativeProtectedPromotionStore.rebindAfterAuthorizedRestart(accountID: owner.accountID,
+                    installationID: owner.installationID, original: material.intent, receipt: receipt,
+                    scopeFingerprint: persistence.scopeFingerprint, isCurrent: current)
+            }
+            if alreadyRebound {
+                try await helper.revalidateProtectedCommit(receipt, isCurrent: current, persistence: persistence)
+                try validateMaterial()
+            }
+            try await helper.revalidateProtectedCommit(receipt, isCurrent: current, persistence: persistence)
+            try validateMaterial()
+            let candidate = material.candidate.tunnel
+            let scope = try nativeAdmittedProfileScope(for: candidate)
+            _ = try nativeAdmittedProfiles.record(tunnel: candidate, canonicalConfig: material.candidateConfig,
+                ownerTokenSHA256: receipt.ownerTokenSHA256, scope: scope, helper: helper)
+            // Reflect the already proved physical candidate even if cache/cleanup
+            // subsequently fails. Never pretend the old source is still active.
+            expectedActive = candidate; activeTunnel = candidate
+            expectedDesired = .connected; desiredVpnState = .connected
+            nativePSKPreparedTunnel = candidate
+            // Both root proofs precede cache promotion. A failed write retains
+            // exact material/capability for same-process explicit retry.
+            try profileService.promoteStagedPSKProfile(candidate, owner: owner)
+            // Exact already-applied triggers are obsolete only AFTER signed/root
+            // proof and cache success. Preserve unrelated rotations/owners. Queue
+            // failure retains the promotion nonce/material for proof-only retry.
+            for event in try nativePushPSKQueue.events(owner: owner) where event.deviceID == deviceID
+                && event.rotationID == material.rotationID && event.profileVersion == candidate.profileVersion {
+                try validateMaterial()
+                _ = try nativePushPSKQueue.remove(eventID: event.eventID, owner: owner)
+            }
+            try helper.finishProtectedPromotion(receipt, persistence: persistence, isCurrent: current)
+            nativePSKCommittedPromotion = nil; activeResilienceRoute = nil
+            do {
+                if let capability = try nativeProtectedRestartStore.loadCapability(owner: owner, material: material) {
+                    try nativeProtectedRestartStore.removeCapability(owner: owner, expected: capability)
+                }
+                try nativeProtectedRestartStore.removeMaterial(owner: owner, expected: material)
+                try nativePSKStageStore.purge(owner: owner, managedDeviceID: deviceID, rotationID: material.rotationID)
+            } catch {
+                // TODO: Offer exact post-promotion private cleanup retry without
+                // transfer/admission. Physical proof/cache completion already won.
+                nativeProtectedRestartMessage = "Профиль подтверждён и сохранён. Очистка приватных данных не завершена; они не используются для переподключения."
+                return
+            }
+            nativeProtectedRestartMessage = "Профиль подтверждён helper после передачи владения и сохранён. Обычное переподключение не выполнялось."
+        }
+    }
+
+    /// Stage callback runs after the original nonce is durably written but before
+    /// candidate staging. Exact configs are confined to separate private custody.
+    private func retainNativePSKRestartMaterial(owner: NativePushPSKEventOwner, rotationID: String,
+        previous: PreparedTunnel, next: PreparedTunnel, sourceConfig: String, candidateConfig: String,
+        selectedID: String, targetID: String?, persistence: NativeProtectedReplacementCoordinator.Persistence) throws {
+        guard let data = try persistence.load(), let targetID else { throw NativeProtectedRestartStore.Failure.unavailable }
+        let intent = try NativeProtectedReplacementCoordinator.restartIntent(data)
+        guard intent.processInstanceID == NativeProtectedReplacementCoordinator.processInstanceID,
+              intent.scopeFingerprint == persistence.scopeFingerprint, intent.generation == persistence.generation else {
+            throw NativeProtectedRestartStore.Failure.mismatch
+        }
+        if let old = try nativeProtectedRestartStore.loadMaterial(owner: owner), old.intent != intent,
+           try nativeProtectedRestartStore.loadCapability(owner: owner, material: old) == nil {
+            // This callback is reached only after the fresh root snapshot matched
+            // the CURRENT memory admission and durably created a DIFFERENT nonce.
+            // Retire stale private custody, never pending restart consent.
+            try nativeProtectedRestartStore.removeMaterial(owner: owner, expected: old)
+        }
+        try nativeProtectedRestartStore.retain(owner: owner, intent: intent, rotationID: rotationID,
+            source: previous, candidate: next, sourceConfig: sourceConfig, candidateConfig: candidateConfig,
+            selectedLocationID: selectedID, targetLocationID: targetID)
+    }
+
     /// No helper operation is issued for a confirmed idle tunnel. A connected cutover
     /// replaces only our exactly matched active profile and retains anti-leak protection.
     private func applyNativePSKCutover(
@@ -723,6 +932,10 @@ final class VEXAppState: ObservableObject {
             guard current() else { throw AuthenticatedOperationError.sessionChanged }
             try profileService.promoteStagedPSKProfile(next, owner: owner)
             try helper.finishProtectedPromotion(promotion.receipt, persistence: persistence, isCurrent: current)
+            if let retained = try nativeProtectedRestartStore.loadMaterial(owner: owner),
+               retained.intent.transactionID == promotion.receipt.transactionID {
+                try nativeProtectedRestartStore.removeMaterial(owner: owner, expected: retained)
+            }
             nativeAdmittedProfiles.forgetCandidate(material)
             nativePSKCommittedPromotion = nil
             nativePushEventError = nil
@@ -784,10 +997,9 @@ final class VEXAppState: ObservableObject {
                 intentFingerprint: persistence.scopeFingerprint, generation: generation, source: admittedSource) {
                 candidateMaterial = retained
             } else {
-                // TODO: Full app-crash material reconciliation needs signed-profile
-                // revalidation and explicit process ownership transfer. Missing
-                // memory plus private metadata is not permission to resolve DNS
-                // again or adopt a physical candidate from another process.
+                // Ordinary retry is still memory/current-process only. Full
+                // restart uses the separate EXPLICIT signed/root-proof UI path;
+                // private metadata never permits DNS resolution or owner adoption.
                 guard !hasRetainedIntent else { throw NativeAdmittedProfileStore.Failure.missingCandidate }
                 let config = try await profileService.prepareProtectedHelperConfig(for: next, validateCurrent: validateCurrent)
                 try validateCurrent()
@@ -802,7 +1014,10 @@ final class VEXAppState: ObservableObject {
                 sourceSHA256: NativeProtectedReplacementCoordinator.digest(sourceConfig),
                 candidateSHA256: NativeProtectedReplacementCoordinator.digest(candidateConfig),
                 sourceOwnerTokenSHA256: admittedSource.ownerTokenSHA256,
-                stageCandidate: { [profileService] in
+                stageCandidate: { [self, profileService] in
+                    try retainNativePSKRestartMaterial(owner: owner, rotationID: envelope.rotationID,
+                        previous: previous, next: next, sourceConfig: sourceConfig, candidateConfig: candidateConfig,
+                        selectedID: selectedID, targetID: targetID, persistence: persistence)
                     try profileService.stageProtectedHelperConfig(candidateConfig, validateCurrent: validateCurrent)
                 }, restoreSource: { [profileService] in
                     try profileService.stageProtectedHelperConfig(sourceConfig, validateCurrent: validateCurrent)
@@ -825,6 +1040,10 @@ final class VEXAppState: ObservableObject {
             })
             try profileService.promoteStagedPSKProfile(next, owner: owner)
             try helper.finishProtectedPromotion(receipt, persistence: persistence, isCurrent: scopeIsCurrent)
+            if let retained = try nativeProtectedRestartStore.loadMaterial(owner: owner),
+               retained.intent.transactionID == receipt.transactionID {
+                try nativeProtectedRestartStore.removeMaterial(owner: owner, expected: retained)
+            }
             nativeAdmittedProfiles.forgetCandidate(material)
             nativePSKCommittedPromotion = nil
             self.activeTunnel = next
@@ -961,6 +1180,7 @@ final class VEXAppState: ObservableObject {
             // event queue—is authoritative for deleting old secret profiles.
             try nativePSKStageStore.purgeAll(owner: owner)
             try nativeProtectedPromotionStore.purge(accountID: owner.accountID, installationID: owner.installationID)
+            try nativeProtectedRestartStore.purge(owner: owner)
             try nativePushPSKQueue.purge(owner: owner)
             nativePushEventOwner = nil
             nativePushEventError = nil

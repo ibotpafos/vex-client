@@ -61,6 +61,7 @@ struct FixtureSession {{ var user: FixtureUser; var accessToken: String }}
     let nativePushPSKQueue = NativePushPSKEventQueue(appDataURL: URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true))
     let nativePSKStageStore = NativePSKStagedProfileStore(appDataURL: URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true))
     let nativeProtectedPromotionStore = NativeProtectedPromotionStore(appDataURL: URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true))
+    let nativeProtectedRestartStore = NativeProtectedRestartStore(appDataURL: URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true))
     var nativePSKRetryTask: Task<Void, Never>?
     var nativePSKPreparedTunnel: PreparedTunnel?
     var nativeNormalPendingTunnel: PreparedTunnel?
@@ -165,6 +166,11 @@ struct FixtureSession {{ var user: FixtureUser; var accessToken: String }}
 
 promotion_store = ROOT / "macos-native/Sources/VEXNativeMac/Services/NativeProtectedPromotionStore.swift"
 promotion_sources = [str(promotion_store),str(ROOT / "macos-native/Sources/VEXNativeMac/Services/NativeProtectedReplacementCoordinator.swift")] if promotion_store.exists() else []
+restart_store = ROOT / "macos-native/Sources/VEXNativeMac/Services/NativeProtectedRestartStore.swift"
+if restart_store.exists():
+    promotion_sources += [str(restart_store), str(ROOT / "macos-native/Sources/VEXNativeMac/Services/VPNProfileCache.swift")]
+else:
+    fixture += "\nstruct NativeProtectedRestartStore { init(appDataURL:URL){};func purge(owner:NativePushPSKEventOwner)throws{} }\n"
 if not promotion_store.exists():
     fixture += "\nstruct NativeProtectedPromotionStore { init(appDataURL:URL){};func purge(accountID:String,installationID:String)throws{} }\n"
 

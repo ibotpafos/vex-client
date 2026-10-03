@@ -299,6 +299,40 @@ struct VPNProfileService {
                        routingMode: tunnel.routingMode, owner: cacheOwner)
     }
 
+    /// Retained material is not admission. Rebuild every candidate field from a
+    /// freshly verified signed envelope and the EXISTING key; reuse ONLY the
+    /// exact retained endpoint resolution, which the independent root digest
+    /// proof must also authenticate. No DNS, API, key generation or helper write.
+    func verifyProtectedRestartMaterial(_ material: NativeProtectedRestartStore.Material,
+        verified: NativeVPNProfileAuthorizationVerifier.Verified, owner: NativePushPSKEventOwner) throws -> PreparedTunnel {
+        let previous = material.source.tunnel
+        let key = try existingStagedPSKClientPublicKey()
+        guard previous.device.externalDeviceId == owner.installationID, previous.device.publicKey == key,
+              previous.device.status == "active", previous.awgVersion == Self.awgVersion,
+              verified.envelope.rotationID == material.rotationID else { throw NativeProtectedRestartStore.Failure.mismatch }
+        let next = try prepareStagedPSKProfile(verified, basedOn: previous)
+        guard next == material.candidate.tunnel,
+              NativeProtectedReplacementCoordinator.digest(material.sourceConfig) == material.intent.sourceSHA256,
+              NativeProtectedReplacementCoordinator.digest(material.candidateConfig) == material.intent.candidateSHA256 else {
+            throw NativeProtectedRestartStore.Failure.mismatch
+        }
+        try AwgConfigAdmission.validate(material.sourceConfig)
+        try AwgConfigAdmission.validate(material.candidateConfig)
+        let lines = material.candidateConfig.split(whereSeparator: \.isNewline).filter {
+            $0.trimmingCharacters(in: .whitespaces).hasPrefix("Endpoint")
+        }
+        guard lines.count == 1, let separator = lines[0].firstIndex(of: "=") else { throw NativeProtectedRestartStore.Failure.mismatch }
+        let endpoint = String(lines[0][lines[0].index(after: separator)...]).trimmingCharacters(in: .whitespaces)
+        guard let port = verified.envelope.profile.port,
+              endpoint.split(separator: ":", omittingEmptySubsequences: false).last == Substring(String(port)) else {
+            throw NativeProtectedRestartStore.Failure.mismatch
+        }
+        let rebuilt = try SystemTunnelController.sanitizedConfig(from: Self.sanitizedMacOSHelperConfig(next.config,
+            endpointResolver: { _ in endpoint }))
+        guard rebuilt == material.candidateConfig else { throw NativeProtectedRestartStore.Failure.mismatch }
+        return next
+    }
+
     private func persistManagedProfile(
         _ managedProfile: ManagedVpnProfile,
         cached: PreparedTunnelCacheRecord?,

@@ -76,6 +76,7 @@ final class DisposableIdentityStore {{
     let nativePushPSKQueue: NativePushPSKEventQueue
     let nativePSKStageStore: NativePSKStagedProfileStore
     let nativeProtectedPromotionStore: NativeProtectedPromotionStore
+    let nativeProtectedRestartStore: NativeProtectedRestartStore
     var nativePSKRetryTask: Task<Void, Never>?
     var profileWarmupTask: Task<Void, Never>?
     let profileService = InertNormalProfileService()
@@ -88,6 +89,7 @@ final class DisposableIdentityStore {{
         nativePushPSKQueue = NativePushPSKEventQueue(appDataURL: root)
         nativePSKStageStore = NativePSKStagedProfileStore(appDataURL: root)
         nativeProtectedPromotionStore = NativeProtectedPromotionStore(appDataURL: root)
+        nativeProtectedRestartStore = NativeProtectedRestartStore(appDataURL: root)
         self.recorder = recorder
     }}
 
@@ -146,10 +148,11 @@ func drain() async {{ for _ in 0..<32 {{ await Task.yield() }} }}
     let nativePushPSKQueue: NativePushPSKEventQueue
     let nativePSKStageStore: NativePSKStagedProfileStore
     let nativeProtectedPromotionStore: NativeProtectedPromotionStore
+    let nativeProtectedRestartStore: NativeProtectedRestartStore
     var nativePSKRetryTask: Task<Void, Never>?
     var nativePSKPreparedTunnel: PreparedTunnel?
     func startNativePSKRetryIfNeeded() {{}}
-    init(root: URL) {{ nativePushPSKQueue = NativePushPSKEventQueue(appDataURL: root); nativePSKStageStore = NativePSKStagedProfileStore(appDataURL: root); nativeProtectedPromotionStore = NativeProtectedPromotionStore(appDataURL: root) }}
+    init(root: URL) {{ nativePushPSKQueue = NativePushPSKEventQueue(appDataURL: root); nativePSKStageStore = NativePSKStagedProfileStore(appDataURL: root); nativeProtectedPromotionStore = NativeProtectedPromotionStore(appDataURL: root); nativeProtectedRestartStore = NativeProtectedRestartStore(appDataURL: root) }}
 {set_enabled}
 {reconcile}
 {fingerprint}
@@ -260,6 +263,11 @@ func drain() async {{ for _ in 0..<32 {{ await Task.yield() }} }}
 
 promotion_store = ROOT / "macos-native/Sources/VEXNativeMac/Services/NativeProtectedPromotionStore.swift"
 promotion_sources = [str(promotion_store),str(ROOT / "macos-native/Sources/VEXNativeMac/Services/NativeProtectedReplacementCoordinator.swift")] if promotion_store.exists() else []
+restart_store = ROOT / "macos-native/Sources/VEXNativeMac/Services/NativeProtectedRestartStore.swift"
+if restart_store.exists():
+    promotion_sources += [str(restart_store), str(ROOT / "macos-native/Sources/VEXNativeMac/Services/VPNProfileCache.swift")]
+else:
+    fixture += "\nstruct NativeProtectedRestartStore { init(appDataURL:URL){};func purge(owner:NativePushPSKEventOwner)throws{} }\n"
 if not promotion_store.exists():
     fixture += "\nstruct NativeProtectedPromotionStore { init(appDataURL:URL){};func purge(accountID:String,installationID:String)throws{} }\n"
 

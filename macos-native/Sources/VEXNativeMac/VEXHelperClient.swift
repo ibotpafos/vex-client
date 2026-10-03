@@ -17,6 +17,8 @@ final class VEXHelperModel: ObservableObject {
     private let client = VEXHelperClient()
     private let installer = VEXHelperInstaller()
     private let protectedReplacement = NativeProtectedReplacementCoordinator()
+    private let protectedRestart = NativeProtectedRestartCoordinator()
+    private var hasExplicitRestartConsent = false
     var hasPendingProtectedReplacement: Bool { protectedReplacement.hasPendingTransaction }
     private var pollTask: Task<Void, Never>?
     private var consecutiveStatusFailures = 0
@@ -140,6 +142,36 @@ final class VEXHelperModel: ObservableObject {
         try protectedReplacement.completeCommitted(receipt, persistence: persistence)
     }
 
+    func authorizeProtectedRestart(_ dependencies: NativeProtectedRestartCoordinator.Dependencies) async throws -> UInt64 {
+        guard canUseExistingValidatedHelper, !isBusy, dependencies.isCurrent() else { throw NativeProtectedRestartCoordinator.Failure.staleIntent }
+        isBusy = true; defer { isBusy = false }
+        let expiry = try await protectedRestart.authorize(restartDependencies(dependencies))
+        hasExplicitRestartConsent = true
+        return expiry
+    }
+
+    func adoptProtectedRestart(_ dependencies: NativeProtectedRestartCoordinator.Dependencies) async throws -> NativeProtectedReplacementCoordinator.Receipt {
+        guard canUseExistingValidatedHelper, !isBusy, dependencies.isCurrent() else { throw NativeProtectedRestartCoordinator.Failure.staleIntent }
+        isBusy = true; defer { isBusy = false }
+        let receipt = try await protectedRestart.adopt(restartDependencies(dependencies))
+        hasExplicitRestartConsent = false
+        return receipt
+    }
+
+    func cancelProtectedRestart(_ dependencies: NativeProtectedRestartCoordinator.Dependencies) async throws {
+        guard canUseExistingValidatedHelper, !isBusy, dependencies.isCurrent() else { throw NativeProtectedRestartCoordinator.Failure.staleIntent }
+        isBusy = true; defer { isBusy = false }
+        try await protectedRestart.cancel(restartDependencies(dependencies))
+        hasExplicitRestartConsent = false
+    }
+
+    private func restartDependencies(_ value: NativeProtectedRestartCoordinator.Dependencies) -> NativeProtectedRestartCoordinator.Dependencies {
+        .init(isCurrent: { [weak self] in self?.canUseExistingValidatedHelper == true && value.isCurrent() },
+            validateMaterial: value.validateMaterial,
+            send: { [client] command, timeout in try await client.send(command, timeoutSeconds: timeout) },
+            store: value.store, owner: value.owner, material: value.material, now: value.now, generateCapability: value.generateCapability)
+    }
+
     /// A failed read can retain the last UI status for continuity, but that cached
     /// value is not permission to operate on a tunnel. This result reports the
     /// transport read, not an uncached physical network-state attestation.
@@ -226,6 +258,10 @@ final class VEXHelperModel: ObservableObject {
     func shutdownForAppTermination() async {
         pollTask?.cancel()
         pollTask = nil
+        // Explicit bounded handoff must not issue generic teardown on quit.
+        // Root's durable pending-transfer fence independently survives lost ACK,
+        // expiry, crash and helper recreation; it is never inferred from status.
+        guard !hasExplicitRestartConsent else { return }
         do {
             try await client.sendExpectingOK("shutdown", timeoutSeconds: 2)
         } catch {

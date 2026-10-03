@@ -60,7 +60,7 @@ struct PreparedTunnel: Equatable {
  let id: String; let device: Device; let locationId: String
  let routingMode: Routing; let bypassRegion: String?
 }
-struct PSKRotationCurrentResponse { let version: Int }
+struct PSKRotationCurrentResponse { let version: Int; var rotationID:String { "fixture-rotation" } }
 struct Entitlement { var hasPaidAccess: Bool }
 struct Verified { let envelope: PSKRotationCurrentResponse }
 @MainActor final class Verifier {
@@ -138,7 +138,17 @@ enum Mode { case commitReplyLost, commitReplyAndProofLost, success, connectThrow
   promotions += 1; if app.mode == .promotionThrows { throw FixtureError.boom }
  }
 }
+// The legacy cutover matrix keeps its inert ancillary port; actual restart
+// private custody/RPC/material gates have their own compiled runtime matrices.
+struct FixtureRestartIntent { let transactionID:String }
+struct FixtureRestartMaterial { let intent:FixtureRestartIntent }
+struct FixtureRestartStore {
+ func loadMaterial(owner:Owner)throws->FixtureRestartMaterial? {nil}
+ func removeMaterial(owner:Owner,expected:FixtureRestartMaterial)throws {}
+}
 @MainActor final class AppState {
+ let nativeProtectedRestartStore=FixtureRestartStore()
+ func retainNativePSKRestartMaterial(owner:Owner,rotationID:String,previous:PreparedTunnel,next:PreparedTunnel,sourceConfig:String,candidateConfig:String,selectedID:String,targetID:String?,persistence:NativeProtectedReplacementCoordinator.Persistence)throws {}
  var activeTunnel: PreparedTunnel?, nativePSKPreparedTunnel: PreparedTunnel?
  var nativePSKCommittedPromotion: (source:PreparedTunnel,candidate:PreparedTunnel,owner:NativePushPSKEventOwner,
    receipt:NativeProtectedReplacementCoordinator.Receipt,generation:Int,isCurrent:@MainActor ()->Bool)?

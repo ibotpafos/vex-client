@@ -13,6 +13,7 @@ struct VEXSettingsView: View {
             interfaceSettings
             notificationSettings
             helperSettings
+            protectedRestartSettings
         }
         .padding(.top, 2)
         .padding(.bottom, 16)
@@ -39,6 +40,28 @@ struct VEXSettingsView: View {
                     Spacer()
                 }
             }
+        }
+    }
+
+    private var protectedRestartSettings: some View {
+        SettingsFeatureCard(systemName: "lock.arrow.trianglehead.clockwise", title: "Защищённое восстановление",
+            subtitle: "Только незавершённая собственная смена ключей") {
+            Text("Разрешите передачу владения до явного перезапуска приложения, затем восстановите подтверждённый профиль в течение 120 секунд. Без сохранённого разрешения чужой или аварийный сеанс не принимается. Это не установка и не переподключение VPN.")
+                .font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.vexSecondaryText)
+            if let message = appState.nativeProtectedRestartMessage {
+                Text(message).font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.vexSecondaryText)
+            }
+            HStack {
+                Button("Разрешить перезапуск") { appState.authorizeNativeProtectedRestart(using: helper) }
+                Button("Восстановить профиль") { appState.recoverNativeProtectedRestart(using: helper) }
+            }
+            .buttonStyle(.vexGlass)
+            .disabled(appState.isVpnBusy || appState.isDeviceBusy || helper.isBusy || appState.session == nil
+                || !helper.canUseExistingValidatedHelper || !appState.canUseNativeRemotePush)
+            Button("Отменить разрешение") { appState.cancelNativeProtectedRestart(using: helper) }
+                .buttonStyle(.vexGlass)
+                .disabled(appState.isVpnBusy || appState.isDeviceBusy || helper.isBusy || appState.session == nil
+                    || !helper.canUseExistingValidatedHelper)
         }
     }
 

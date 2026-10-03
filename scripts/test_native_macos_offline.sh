@@ -73,6 +73,8 @@ rtk proxy python3 "$ROOT/scripts/tests/test_macos_pre_stage_cancel_receipt.py"
 rtk proxy python3 "$ROOT/scripts/tests/test_macos_pre_stage_cancel_client.py"
 rtk proxy python3 "$ROOT/scripts/tests/test_macos_stage_cancel_retirement.py"
 rtk proxy python3 "$ROOT/scripts/tests/test_macos_post_promotion_retirement.py"
+rtk proxy python3 "$ROOT/scripts/tests/test_macos_legacy_private_retirement.py"
+rtk proxy python3 "$ROOT/scripts/tests/test_macos_legacy_private_retirement.py" "$ROOT" admission
 rtk proxy python3 "$ROOT/scripts/tests/test_macos_client_restart.py"
 rtk proxy python3 "$ROOT/scripts/tests/test_macos_client_restart_material.py"
 rtk proxy python3 "$ROOT/scripts/tests/test_macos_client_journal_continuation.py"

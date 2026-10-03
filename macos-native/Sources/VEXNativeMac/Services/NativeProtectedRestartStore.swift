@@ -426,7 +426,9 @@ struct NativeProtectedRestartStore {
         let materialIntent: NativeProtectedReplacementCoordinator.RestartIntent
         let materialSHA256: String
         let terminalIntent: NativeProtectedReplacementCoordinator.RestartIntent
-        let nonceSHA256: String
+        // nil is permitted ONLY for the explicit legacy/new-normal-admission
+        // variant. Never invent a digest or reconstruct a missing old nonce.
+        let nonceSHA256: String?
         let receipt: NativeProtectedReplacementCoordinator.Receipt?
         let sourceFenceSHA256: String?
         let admittedProfileSHA256: String?
@@ -455,11 +457,12 @@ struct NativeProtectedRestartStore {
               v.materialIntent.candidateSHA256 == v.terminalIntent.candidateSHA256,
               v.materialIntent.generation == v.terminalIntent.generation,
               NativeProtectedReplacementCoordinator.validDigest(v.materialSHA256),
-              NativeProtectedReplacementCoordinator.validDigest(v.nonceSHA256),
+              v.kind == "normal-admission-legacy-no-nonce" ? v.nonceSHA256 == nil
+                : (v.nonceSHA256.map(NativeProtectedReplacementCoordinator.validDigest) == true),
               [v.sourceFenceSHA256, v.admittedProfileSHA256, v.admittedOwnerSHA256, v.capabilitySHA256,
                v.purposeSHA256, v.stagedProfileSHA256].allSatisfy({ $0.map(NativeProtectedReplacementCoordinator.validDigest) ?? true }),
               NativePSKIdentifier.device(v.managedDeviceID), NativePSKIdentifier.rotation(v.rotationID),
-              ["candidate", "source", "normal-admission"].contains(v.kind), ["retiring", "retired"].contains(v.phase),
+              ["candidate", "source", "normal-admission", "normal-admission-legacy-no-nonce"].contains(v.kind), ["retiring", "retired"].contains(v.phase),
               (try? encode(v, limit: 16_384)) == data else { throw Failure.mismatch }
         if v.kind == "candidate" {
             guard let receipt = v.receipt, receipt.transactionID == v.terminalIntent.transactionID,
@@ -469,7 +472,7 @@ struct NativeProtectedRestartStore {
                   v.sourceFenceSHA256 == nil, v.admittedProfileSHA256 == nil, v.admittedOwnerSHA256 == nil else { throw Failure.mismatch }
         } else {
             guard v.receipt == nil, v.sourceFenceSHA256 != nil, v.stagedProfileSHA256 == nil,
-                  v.kind == "normal-admission" ? (v.admittedProfileSHA256 != nil && v.admittedOwnerSHA256 != nil)
+                  v.kind != "source" ? (v.admittedProfileSHA256 != nil && v.admittedOwnerSHA256 != nil)
                     : (v.admittedProfileSHA256 == nil && v.admittedOwnerSHA256 == nil) else { throw Failure.mismatch }
         }
         return v
@@ -497,6 +500,50 @@ struct NativeProtectedRestartStore {
         return try store.read("restart-material-" + fp + ".json") != nil
             || store.read("restart-capability-" + fp + ".json") != nil
             || store.read("stage-consent-" + fp + ".json") != nil
+    }
+    /// Read-only comparison material, NOT authority and NOT a retirement WAL.
+    /// The caller must prove a NEW signed normal admission and the coordinator
+    /// must obtain two fresh authenticated snapshots before writing this value.
+    @MainActor
+    func legacyPromotionRetirementCandidate(owner: NativePushPSKEventOwner, material: Material,
+        sourceFence: SourceRestorationFence, profileSHA256: String, ownerSHA256: String) throws -> PromotionRetirement {
+        guard try loadMaterial(owner: owner) == material,
+              try sourceRestorationFence(owner: owner) == sourceFence,
+              sourceFence.original == material.intent,
+              sourceFence.materialSHA256 == (try materialDigest(material)),
+              NativeProtectedReplacementCoordinator.validDigest(profileSHA256),
+              NativeProtectedReplacementCoordinator.validDigest(ownerSHA256),
+              try NativeProtectedPromotionStore(appDataURL: root).terminalPayload(accountID: owner.accountID,
+                installationID: owner.installationID) == nil else { throw Failure.mismatch }
+        try requireNotRetired(owner: owner, material: material)
+        try requireNotPromoted(owner: owner, material: material)
+        let purpose = try stageConsent(owner: owner, material: material)
+        guard purpose?.cancelled != true else { throw Failure.mismatch }
+        // A missing purpose/capability in a pre-WAL partial cleanup is not
+        // authorization. Pin only present canonical custody; no TTL/generation.
+        let capability = try privateCapability(owner: owner, material: material)
+        return PromotionRetirement(schema: 1, namespace: "vex-protected-promotion-retirement-v1",
+            ownerFingerprint: try fingerprint(owner), materialIntent: material.intent, materialSHA256: try materialDigest(material),
+            terminalIntent: sourceFence.journalIntent, nonceSHA256: nil, receipt: nil,
+            sourceFenceSHA256: try metadataDigest(sourceFence), admittedProfileSHA256: profileSHA256, admittedOwnerSHA256: ownerSHA256,
+            capabilitySHA256: try capability.map { try metadataDigest($0) }, purposeSHA256: try purpose.map { try metadataDigest($0) },
+            stagedProfileSHA256: nil, managedDeviceID: material.source.device.id, rotationID: material.rotationID,
+            kind: "normal-admission-legacy-no-nonce", phase: "retiring")
+    }
+    @MainActor
+    func beginLegacyPromotionRetirement(owner: NativePushPSKEventOwner, material: Material,
+        sourceFence: SourceRestorationFence, expected: PromotionRetirement, isCurrent: () -> Bool) throws -> PromotionRetirement {
+        try retirementStep("promotion-before-WAL-write", isCurrent: isCurrent)
+        guard let profile = expected.admittedProfileSHA256, let ownerHash = expected.admittedOwnerSHA256,
+              try legacyPromotionRetirementCandidate(owner: owner, material: material, sourceFence: sourceFence,
+                profileSHA256: profile, ownerSHA256: ownerHash) == expected else { throw Failure.mismatch }
+        let store = NativePushSecureFileStore(rootURL: root, maxBytes: 16_384)
+        try store.write(encode(expected, limit: 16_384), name: promotionName(owner))
+        try retirementStep("promotion-after-WAL-write", isCurrent: isCurrent)
+        guard try promotionRetirement(owner: owner) == expected else { throw Failure.unavailable }
+        try retirementStep("promotion-after-WAL-readback", isCurrent: isCurrent)
+        try validatePromotionRetirementCustody(owner: owner, expected: expected)
+        return expected
     }
     @MainActor
     func beginPromotionRetirement(owner: NativePushPSKEventOwner, material: Material,
@@ -578,7 +625,8 @@ struct NativeProtectedRestartStore {
             terminalIntent: expected.terminalIntent, nonceSHA256: expected.nonceSHA256, receipt: nil,
             sourceFenceSHA256: expected.sourceFenceSHA256, admittedProfileSHA256: profileSHA256, admittedOwnerSHA256: ownerSHA256,
             capabilitySHA256: expected.capabilitySHA256, purposeSHA256: expected.purposeSHA256, stagedProfileSHA256: nil,
-            managedDeviceID: expected.managedDeviceID, rotationID: expected.rotationID, kind: "normal-admission", phase: expected.phase)
+            managedDeviceID: expected.managedDeviceID, rotationID: expected.rotationID,
+            kind: expected.nonceSHA256 == nil ? "normal-admission-legacy-no-nonce" : "normal-admission", phase: expected.phase)
         let store = NativePushSecureFileStore(rootURL: root, maxBytes: 16_384)
         try store.write(encode(value, limit: 16_384), name: promotionName(owner))
         try retirementStep("promotion-after-normal-proof-write", isCurrent: isCurrent)
@@ -592,9 +640,15 @@ struct NativeProtectedRestartStore {
         try validatePromotionRetirementCustody(owner: owner, expected: expected)
         try retirementStep("promotion-before-nonce-remove", isCurrent: isCurrent)
         try validatePromotionRetirementCustody(owner: owner, expected: expected)
-        try NativeProtectedPromotionStore(appDataURL: root).removeRetiredIntent(accountID: owner.accountID,
-            installationID: owner.installationID, intent: expected.terminalIntent, nonceSHA256: expected.nonceSHA256,
-            receipt: expected.receipt, isCurrent: isCurrent)
+        let persistence = NativeProtectedPromotionStore(appDataURL: root)
+        if let nonceSHA256 = expected.nonceSHA256 {
+            try persistence.removeRetiredIntent(accountID: owner.accountID,
+                installationID: owner.installationID, intent: expected.terminalIntent, nonceSHA256: nonceSHA256,
+                receipt: expected.receipt, isCurrent: isCurrent)
+        } else {
+            guard expected.kind == "normal-admission-legacy-no-nonce",
+                  try persistence.terminalPayload(accountID: owner.accountID, installationID: owner.installationID) == nil else { throw Failure.mismatch }
+        }
         try retirementStep("promotion-after-nonce-remove", isCurrent: isCurrent)
         let store = NativePushSecureFileStore(rootURL: root, maxBytes: 1_048_576), fp = try fingerprint(owner)
         for (step, prefix) in [("capability", "restart-capability-"), ("purpose", "stage-consent-"), ("material", "restart-material-")] {

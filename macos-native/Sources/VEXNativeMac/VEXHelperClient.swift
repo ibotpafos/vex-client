@@ -152,6 +152,15 @@ final class VEXHelperModel: ObservableObject {
             store: d.store, owner: d.owner, retirement: d.retirement, now: d.now))
     }
 
+    func reconcileLegacyProtectedPrivateRetirement(_ d: NativeProtectedRestartCoordinator.LegacyRetirementDependencies) async throws -> NativeProtectedRestartStore.PromotionRetirement {
+        guard canUseExistingValidatedHelper, !isBusy, d.isCurrent() else { throw NativeProtectedRestartCoordinator.Failure.staleIntent }
+        isBusy = true; defer { isBusy = false }
+        return try await protectedRestart.reconcileLegacyPromotionRetirement(.init(
+            isCurrent: { [weak self] in self?.canUseExistingValidatedHelper == true && d.isCurrent() },
+            send: { [client] command, timeout in try await client.send(command, timeoutSeconds: timeout) },
+            store: d.store, owner: d.owner, material: d.material, sourceFence: d.sourceFence, candidate: d.candidate))
+    }
+
     func finishProtectedPrivateRetirement(_ value: NativeProtectedRestartStore.PromotionRetirement,
         isCurrent: () -> Bool) throws {
         guard canUseExistingValidatedHelper, !isBusy, isCurrent() else { throw NativeProtectedRestartCoordinator.Failure.staleIntent }

@@ -517,7 +517,7 @@ final class VEXAppState: ObservableObject {
             let admitted = try nativeAdmittedProfiles.record(tunnel: tunnel, canonicalConfig: canonicalConfig,
                                               ownerTokenSHA256: owner, scope: scope, helper: helper)
             if nativeProtectedRestorationAdmissionGeneration == generation {
-                try completeNativeProtectedSourceRestoration(admittedSource: admitted, helper: helper, isCurrent: isCurrent)
+                try await completeNativeProtectedSourceRestoration(admittedSource: admitted, helper: helper, isCurrent: isCurrent)
             }
         } catch {
             // A denied/missing proof must not disconnect an otherwise verified
@@ -529,7 +529,7 @@ final class VEXAppState: ObservableObject {
     /// fresh root admission above. The fence, intent and material grant nothing.
     /// Any mismatch/removal failure leaves the replay fence durable for retry.
     private func completeNativeProtectedSourceRestoration(admittedSource: NativeAdmittedProfileStore.Source,
-        helper: VEXHelperModel, isCurrent: () -> Bool) throws {
+        helper: VEXHelperModel, isCurrent: @escaping () -> Bool) async throws {
         guard !Task.isCancelled, isCurrent(), let session,
               let installation = nativePushIdentityStore.existingDeviceId(),
               let owner = NativePushPSKEventOwner(accountID: session.user.id, installationID: installation),
@@ -549,19 +549,40 @@ final class VEXAppState: ObservableObject {
             try finishNativeProtectedPrivateRetirement(owner: owner, retirement: rebound, isCurrent: isCurrent)
         } else if let material = try nativeProtectedRestartStore.loadMaterial(owner: owner) {
             guard material.intent == fence.original,
-                  try nativeProtectedRestartStore.materialDigest(material) == fence.materialSHA256,
-                  let nonce = try nativeProtectedPromotionStore.terminalPayload(accountID: owner.accountID,
-                    installationID: owner.installationID) else {
-                // TODO(post-promotion-legacy-orphan): reconcile a pre-WAL partial
-                // legacy cleanup using fresh exact root proof, never missing nonce
-                // as authority. No isolated Mac is available for legacy crash QA.
+                  try nativeProtectedRestartStore.materialDigest(material) == fence.materialSHA256 else {
                 throw NativeProtectedRestartCoordinator.Failure.recoveryPending
             }
-            let retirement = try nativeProtectedRestartStore.beginPromotionRetirement(owner: owner, material: material,
-                terminalIntent: fence.journalIntent, nonce: nonce, sourceFence: fence,
-                admittedProfileSHA256: NativeProtectedReplacementCoordinator.digest(admittedSource.canonicalConfig),
-                admittedOwnerSHA256: admittedSource.ownerTokenSHA256, isCurrent: isCurrent)
-            try finishNativeProtectedPrivateRetirement(owner: owner, retirement: retirement, isCurrent: isCurrent)
+            if let nonce = try nativeProtectedPromotionStore.terminalPayload(accountID: owner.accountID, installationID: owner.installationID) {
+                let retirement = try nativeProtectedRestartStore.beginPromotionRetirement(owner: owner, material: material,
+                    terminalIntent: fence.journalIntent, nonce: nonce, sourceFence: fence,
+                    admittedProfileSHA256: NativeProtectedReplacementCoordinator.digest(admittedSource.canonicalConfig),
+                    admittedOwnerSHA256: admittedSource.ownerTokenSHA256, isCurrent: isCurrent)
+                try finishNativeProtectedPrivateRetirement(owner: owner, retirement: retirement, isCurrent: isCurrent)
+            } else {
+                let key = try profileService.existingStagedPSKClientKeyIdentity()
+                guard key.publicKey == admittedSource.tunnel.device.publicKey else { throw NativeProtectedRestartCoordinator.Failure.staleIntent }
+                let cleanupCurrent: @MainActor () -> Bool = { [weak self, weak helper] in
+                    guard let self, let helper, helper.canUseExistingValidatedHelper, !Task.isCancelled, isCurrent(),
+                          self.nativePushIdentityStore.existingDeviceId() == installation,
+                          let currentKey = try? self.profileService.existingStagedPSKClientKeyIdentity(),
+                          currentKey.publicKey == key.publicKey, currentKey.keyEpoch == key.keyEpoch,
+                          let device = self.accountDevices.first(where: { $0.id == admittedSource.tunnel.device.id }),
+                          device.status == "active", device.externalDeviceId == installation, device.publicKey == key.publicKey,
+                          let scope = try? self.nativeAdmittedProfileScope(for: admittedSource.tunnel) else { return false }
+                    return self.nativeAdmittedProfiles.isCurrent(admittedSource, scope: scope, helper: helper)
+                }
+                guard cleanupCurrent() else { throw NativeProtectedRestartCoordinator.Failure.staleIntent }
+                let candidate = try nativeProtectedRestartStore.legacyPromotionRetirementCandidate(owner: owner, material: material,
+                    sourceFence: fence, profileSHA256: NativeProtectedReplacementCoordinator.digest(admittedSource.canonicalConfig),
+                    ownerSHA256: admittedSource.ownerTokenSHA256)
+                let retirement = try await helper.reconcileLegacyProtectedPrivateRetirement(.init(isCurrent: cleanupCurrent,
+                    send: { _, _ in throw NativeProtectedRestartCoordinator.Failure.unavailable },
+                    store: nativeProtectedRestartStore, owner: owner, material: material, sourceFence: fence, candidate: candidate))
+                // TODO(post-promotion-legacy-platform-QA): exercise actual legacy
+                // process crash/power-loss and console UID on an isolated Mac;
+                // deterministic owned-file IO is not that acceptance evidence.
+                try finishNativeProtectedPrivateRetirement(owner: owner, retirement: retirement, isCurrent: cleanupCurrent)
+            }
         } else {
             // Legacy fully-cleaned source has no private files to retire. Only
             // the actual fresh signed normal admission above can clear its fence.

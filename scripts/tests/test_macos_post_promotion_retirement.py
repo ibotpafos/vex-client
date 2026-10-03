@@ -291,6 +291,14 @@ MMAIN=r'''
 }
 '''
 FILES=[S/'Models/VEXModels.swift']+[P/n for n in ['VPNProfileCache.swift','NativeAwgBoolean.swift','NativePSKIdentifier.swift','NativePushPSKEventQueue.swift','NativePushSecureFileStore.swift','NativePSKStagedProfileStore.swift','NativePSKRotationValidation.swift','NativeVPNProfileAuthorizationVerifier.swift','NativeAdmittedProfileStore.swift','NativeProtectedReplacementCoordinator.swift','NativeProtectedPromotionStore.swift','NativeProtectedRestartStore.swift','NativeProtectedRestartCoordinator.swift']]
+if 'beginLegacyPromotionRetirement(' in (P/'NativeProtectedRestartStore.swift').read_text():
+    # Preserve the no-absence-authority assertion BEFORE admission. C41 changes
+    # only the explicit NEW normal admission result, now with two root proofs.
+    before_admission='let before=try privateHashes(f),n=f.helper.client.calls.count,bad=await retryDenied(f,.restoreSource)'
+    assert JMAIN.count(before_admission)==1
+    JMAIN=JMAIN.replace(before_admission,before_admission+'\n   guard bad,try before==privateHashes(f),f.helper.client.calls.count==n else{return false}')
+    JMAIN=JMAIN.replace('return try bad && before==privateHashes(f) && f.helper.client.calls.count==n && f.app.nativeProtectedRestartStore.sourceRestorationFence(owner:f.app.owner) != nil',
+        'return try bad && clean(f) && f.helper.client.calls.count==n+2 && f.helper.client.admissionProofs==1 && f.app.nativeProtectedRestartStore.sourceRestorationFence(owner:f.app.owner)==nil && f.helper.client.recovers==1 && f.app.profileService.cache.saves==0')
 expected=[('journal',J,JMAIN,104),('main',M,MMAIN,26)]
 if __name__=='__main__':
     total=failed=0;seen=[]
@@ -310,7 +318,7 @@ if __name__=='__main__':
             total+=len(names);seen+=names
     if len(seen)!=len(set(seen)):failed+=1
     app=(S/'Stores/VEXAppState.swift').read_text();ui=(S/'Views/VEXSettingsView.swift').read_text()
-    wiring=all(x in ui for x in ['hasNativeProtectedPrivateRetirement','cleanupNativeProtectedPrivateData']) and 'TODO(post-promotion-legacy-orphan)' in app
+    wiring=all(x in ui for x in ['hasNativeProtectedPrivateRetirement','cleanupNativeProtectedPrivateData']) and ('TODO(post-promotion-legacy-orphan)' in app or ('reconcileLegacyProtectedPrivateRetirement' in app and 'TODO(post-promotion-legacy-platform-QA)' in app))
     print('post_promotion_retirement explicit-private-UI-and-honest-legacy-TODO='+('PASS' if wiring else 'FAIL'))
     total+=1;failed+=not wiring
     print(f'post_promotion_retirement_matrix cases={total} failures={failed} live_network_commands=0')

@@ -21,11 +21,11 @@ def body(text,signature):
  return text[start:e]
 service=(P/'VPNProfileService.swift').read_text();app=(S/'Stores/VEXAppState.swift').read_text();helper=(S/'VEXHelperClient.swift').read_text();support=(ROOT/'macos-native/Sources/VEXHelperCore/SystemSupport.swift').read_text()
 methods=['func existingStagedPSKClientPublicKey(', 'func prepareStagedPSKProfile(', 'func verifyProtectedRestartMaterial(', 'func promoteStagedPSKProfile(', 'nonisolated private static func buildRawManagedProfileConfig(', 'nonisolated static func amneziaConfig(', 'nonisolated private static func managedProfileEndpoint(', 'nonisolated static func sanitizedMacOSHelperConfig(', 'nonisolated private static func configHasIPv6InterfaceAddress(', 'nonisolated private static func sanitizedIPv4AllowedIPsLine(', 'nonisolated private static func clean(', 'nonisolated private static func addNumber(', 'nonisolated private static func addString(']
-SERVICE='\n'.join(body(service,x) for x in methods)
+SERVICE='\n'.join(body(service,x) for x in methods + (['func existingStagedPSKClientKeyIdentity('] if 'func existingStagedPSKClientKeyIdentity(' in service else []))
 DEVICE=body(service,'private extension VpnDevice {')
 APPBODY=body(app,'    private func applyNativeProtectedRestart(').replace('private func applyNativeProtectedRestart','func applyNativeProtectedRestart')
 APPBODY+='\n'+'\n'.join(body(app,x) for x in ['    private func finishNativeProtectedPrivateRetirement('] if x in app)
-WRAPPERS='\n'.join(body(helper,x) for x in ['    func authorizeProtectedRestart(', '    func adoptProtectedRestart(', '    func cancelProtectedRestart(', '    func finishCancelledProtectedStage(', '    func transferProtectedJournal(', '    func resumeProtectedJournal(', '    func restoreProtectedJournal(', '    private func restartDependencies(', '    func revalidateProtectedCommit(', '    func finishProtectedPromotion(', '    func verifyProtectedPrivateRetirement(', '    func finishProtectedPrivateRetirement('] if x in helper)
+WRAPPERS='\n'.join(body(helper,x) for x in ['    func authorizeProtectedRestart(', '    func adoptProtectedRestart(', '    func cancelProtectedRestart(', '    func finishCancelledProtectedStage(', '    func transferProtectedJournal(', '    func resumeProtectedJournal(', '    func restoreProtectedJournal(', '    private func restartDependencies(', '    func revalidateProtectedCommit(', '    func finishProtectedPromotion(', '    func verifyProtectedPrivateRetirement(', '    func reconcileLegacyProtectedPrivateRetirement(', '    func finishProtectedPrivateRetirement('] if x in helper)
 HARNESS=r"""
 import Foundation
 import CryptoKit

@@ -250,13 +250,19 @@ struct VPNProfileService {
 
     /// Admission is read-only with respect to identity, cache and helper configuration.
     func existingStagedPSKClientPublicKey() throws -> String {
+        try existingStagedPSKClientKeyIdentity().publicKey
+    }
+
+    /// Read-only public binding; never exposes private bytes or generates,
+    /// migrates or rotates a key. Used to fence private cleanup across awaits.
+    func existingStagedPSKClientKeyIdentity() throws -> (publicKey: String, keyEpoch: Int) {
         guard let pair = keyStore.existingForStagedProfile(),
               let raw = Data(base64Encoded: pair.privateKey), raw.count == 32,
               let privateKey = try? Curve25519.KeyAgreement.PrivateKey(rawRepresentation: raw),
               privateKey.publicKey.rawRepresentation.base64EncodedString() == pair.publicKey else {
             throw VPNProfileError.incompleteProfile("existing client key")
         }
-        return pair.publicKey
+        return (pair.publicKey, pair.keyEpoch)
     }
 
     /// Builds only in memory from a verified signed policy. No fetch, cache promotion,

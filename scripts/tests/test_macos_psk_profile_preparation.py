@@ -11,6 +11,8 @@ def extract(name):
   if not d:return source[m.start():j+1]
  raise AssertionError(name)
 existing,prepare,promote=map(extract,['existingStagedPSKClientPublicKey','prepareStagedPSKProfile','promoteStagedPSKProfile'])
+if 'func existingStagedPSKClientKeyIdentity(' in source:
+ existing+='\n'+extract('existingStagedPSKClientKeyIdentity')
 assert re.search(r'func existingForStagedProfile\(\) -> WireGuardKeyPair\? \{\s*loadFromFile\(\)\s*\}',keys,re.S)
 harness=r'''import Foundation
 import Darwin

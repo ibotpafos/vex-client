@@ -59,6 +59,44 @@ final class NativeProtectedRestartCoordinator {
         try d.store.validatePromotionRetirementCustody(owner: d.owner, expected: d.retirement)
         guard !Task.isCancelled, d.isCurrent() else { throw Failure.staleIntent }
     }
+    struct LegacyRetirementDependencies {
+        let isCurrent: () -> Bool
+        let send: (String, Int) async throws -> String
+        let store: NativeProtectedRestartStore
+        let owner: NativePushPSKEventOwner
+        let material: NativeProtectedRestartStore.Material
+        let sourceFence: NativeProtectedRestartStore.SourceRestorationFence
+        let candidate: NativeProtectedRestartStore.PromotionRetirement
+    }
+    private func currentLegacyRetirement(_ d: LegacyRetirementDependencies) throws {
+        guard !Task.isCancelled, d.isCurrent(), let profile = d.candidate.admittedProfileSHA256,
+              let owner = d.candidate.admittedOwnerSHA256,
+              try d.store.legacyPromotionRetirementCandidate(owner: d.owner, material: d.material,
+                sourceFence: d.sourceFence, profileSHA256: profile, ownerSHA256: owner) == d.candidate,
+              !Task.isCancelled, d.isCurrent() else { throw Failure.staleIntent }
+    }
+    private func normalRetirementSnapshot(_ text: String, profileSHA256: String?, ownerSHA256: String?) throws {
+        let p = try fields("snapshot " + text, word: "snapshot", keys:
+            ["protected_protocol", "recovery_pending", "source_sha256", "owner_token_sha256", "commit_receipt_protocol"])
+        guard p["protected_protocol"] == "1", p["commit_receipt_protocol"] == "1",
+              p["recovery_pending"] == "false", p["source_sha256"] == profileSHA256,
+              p["owner_token_sha256"] == ownerSHA256 else { throw Failure.invalidResponse }
+    }
+    /// NEW signed normal admission is proved by the caller, never by absence or
+    /// old material. Snapshot comparison precedes the first WAL/private write.
+    func reconcileLegacyPromotionRetirement(_ d: LegacyRetirementDependencies) async throws -> NativeProtectedRestartStore.PromotionRetirement {
+        try currentLegacyRetirement(d)
+        for _ in 0..<2 {
+            let text: String
+            do { text = try await d.send("protected-snapshot", 15) } catch { throw Failure.unavailable }
+            try currentLegacyRetirement(d)
+            try normalRetirementSnapshot(text, profileSHA256: d.candidate.admittedProfileSHA256,
+                ownerSHA256: d.candidate.admittedOwnerSHA256)
+        }
+        try currentLegacyRetirement(d)
+        return try d.store.beginLegacyPromotionRetirement(owner: d.owner, material: d.material,
+            sourceFence: d.sourceFence, expected: d.candidate, isCurrent: d.isCurrent)
+    }
     /// Metadata and missing private files confer no authority. Every explicit
     /// retry obtains TWO exact fresh authenticated read-only terminal proofs,
     /// including after the nonce/material have gone. No TTL, adopt or mutation.
@@ -83,11 +121,8 @@ final class NativeProtectedRestartCoordinator {
             } else if d.retirement.kind == "source" {
                 try healthySnapshot(text, t, hash: t.sourceSHA256)
             } else {
-                let p = try fields("snapshot " + text, word: "snapshot", keys:
-                    ["protected_protocol", "recovery_pending", "source_sha256", "owner_token_sha256", "commit_receipt_protocol"])
-                guard p["protected_protocol"] == "1", p["commit_receipt_protocol"] == "1",
-                      p["recovery_pending"] == "false", p["source_sha256"] == d.retirement.admittedProfileSHA256,
-                      p["owner_token_sha256"] == d.retirement.admittedOwnerSHA256 else { throw Failure.invalidResponse }
+                try normalRetirementSnapshot(text, profileSHA256: d.retirement.admittedProfileSHA256,
+                    ownerSHA256: d.retirement.admittedOwnerSHA256)
             }
         }
         try currentRetirement(d)

@@ -124,11 +124,24 @@ final class NativeProtectedReplacementCoordinator {
     func verifyAdmittedSource(_ expectedSHA256: String, isCurrent: () -> Bool,
         send: (String, Int) async throws -> String) async throws -> String {
         guard !Task.isCancelled, isCurrent(), pending == nil, Self.isDigest(expectedSHA256) else { throw Failure.staleIntent }
-        let snapshot = try fields(await send("protected-snapshot", 15))
+        let text = try await send("protected-snapshot", 15)
+        guard !text.contains("\r"), !text.contains("\t"), !text.dropLast().contains(where: { $0.isNewline }) else { throw Failure.invalidResponse }
+        let snapshot = try fields(text)
+        let currentKeys: Set<String> = ["protected_protocol", "recovery_pending", "source_sha256", "owner_token_sha256", "commit_receipt_protocol"]
+        let legacyKeys = currentKeys.subtracting(["commit_receipt_protocol"]).union(["transaction_id"])
+        // Current root healthy snapshots have no transaction_id. Accept the
+        // previous six-field client contract only with an exact canonical UUID.
+        guard Set(snapshot.keys) == currentKeys || Set(snapshot.keys) == currentKeys.union(["transaction_id"])
+                || Set(snapshot.keys) == legacyKeys,
+              text.dropLast().split(separator: " ", omittingEmptySubsequences: false).count == snapshot.count,
+              snapshot["transaction_id"].map({ UUID(uuidString: $0)?.uuidString == $0 }) ?? true else { throw Failure.invalidResponse }
         guard !Task.isCancelled, isCurrent(), pending == nil else { throw Failure.staleIntent }
         guard snapshot["protected_protocol"] == "1", snapshot["recovery_pending"] == "false",
               snapshot["source_sha256"] == expectedSHA256,
-              let id = snapshot["transaction_id"], UUID(uuidString: id)?.uuidString == id,
+              // Old protected snapshots predate receipt support. Their exact
+              // canonical five-field/UUID contract can prove NORMAL admission,
+              // not receipt support or terminal retirement on an old helper.
+              snapshot["commit_receipt_protocol"] == "1" || Set(snapshot.keys) == legacyKeys,
               let owner = snapshot["owner_token_sha256"], Self.isDigest(owner) else { throw Failure.sourceMismatch }
         return owner
     }
@@ -180,6 +193,12 @@ final class NativeProtectedReplacementCoordinator {
         guard snapshot["source_sha256"] == sourceSHA256, sourceSHA256 != candidateSHA256 else {
             throw Failure.sourceMismatch
         }
+        // TODO(protected-current-snapshot-intent): the current root healthy
+        // snapshot has five fields and no transaction_id. The first NEW cutover
+        // must allocate/persist its own one-use intent only after exact current
+        // source/owner proof; never reconstruct an existing/missing old nonce.
+        // This initial-cutover path still fails closed until that contract and
+        // actual root/client cross-contract fixtures are verified offline.
         guard let id = snapshot["transaction_id"], UUID(uuidString: id)?.uuidString == id,
               let owner = snapshot["owner_token_sha256"], Self.isDigest(owner),
               Self.isDigest(sourceSHA256), Self.isDigest(candidateSHA256) else { throw Failure.invalidResponse }

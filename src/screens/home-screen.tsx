@@ -1,11 +1,12 @@
 import { StatusBar } from 'expo-status-bar';
 import { router } from 'expo-router';
 import React, { useState } from 'react';
-import { Platform, Text, View } from 'react-native';
+import { Platform, ScrollView, Text, View } from 'react-native';
 
 import type { VpnLocation } from '@/api/vexApi';
 import { LocationHomeHero } from '@/components/location-home-hero';
 import { TrafficQuotaSummary } from '@/components/traffic-quota-summary';
+import { SubscriptionRenewalCard } from '@/components/subscription-renewal-card';
 import { MobileUpdateNoticeBanner, UpdateCenterButton } from '@/components/update-center';
 import { useRenderProfilerMark } from '@/debug/render-profiler';
 import { playSelectionHaptic } from '@/native/haptics';
@@ -23,6 +24,7 @@ export default function App() {
     session,
     accountTierLabel,
     trafficQuota,
+    entitlementState,
     vpnError,
     isVpnBusy,
     isKeyRotationBusy,
@@ -75,6 +77,7 @@ export default function App() {
           <Text style={styles.centerStateText}>Загружаем VEX</Text>
         </View>
       ) : (
+        <HomeBody>
         <LocationHomeHero
           accountTierLabel={accountTierLabel ?? undefined}
           connectionPhase={connectionPhase}
@@ -99,6 +102,7 @@ export default function App() {
         >
           <MobileUpdateNoticeBanner onOpen={openUpdateCenter} />
           {trafficQuota ? <TrafficQuotaSummary quota={trafficQuota} /> : null}
+          {Platform.OS === 'android' ? <SubscriptionRenewalCard entitlement={entitlementState} /> : null}
           {activeProfile?.rotationRequired ? (
             <VexPressable
               disabled={isKeyRotationBusy || isVpnBusy}
@@ -119,6 +123,7 @@ export default function App() {
           ) : null}
           {vpnError ? <Text numberOfLines={2} style={styles.vpnErrorText}>{vpnError}</Text> : null}
         </LocationHomeHero>
+        </HomeBody>
       )}
       <ServerPickerModal
         isVpnBusy={isVpnBusy}
@@ -145,4 +150,14 @@ export default function App() {
       </View>
     </View>
   );
+}
+
+// The renewal notice must not push location/help controls outside a small
+// Android screen or a large-font viewport. Other platforms keep their layout.
+function HomeBody({ children }: React.PropsWithChildren) {
+  return Platform.OS === 'android' ? (
+    <ScrollView style={{flex: 1}} contentContainerStyle={{flexGrow: 1}} showsVerticalScrollIndicator={false}>
+      {children}
+    </ScrollView>
+  ) : <>{children}</>;
 }

@@ -408,22 +408,22 @@ export default function SettingsScreen() {
             </View>
           ) : null}
           <VexPressable
-            accessibilityLabel="Открыть личный кабинет на сайте"
+            accessibilityLabel={isAndroidApp ? "Продлить VPN в личном кабинете на сайте" : "Открыть личный кабинет на сайте"}
             accessibilityRole="button"
             onPress={() => {
               openWebsite(vexWebsite.dashboard());
             }}
             style={styles.settingRow}
             hoverStyle={{ backgroundColor: 'rgba(7,17,19,0.96)', borderColor: 'rgba(34,211,238,0.36)' }}
-            title="Личный кабинет"
+            title={isAndroidApp ? "Продлить VPN" : "Личный кабинет"}
           >
             <View style={styles.rowIcon}>
               <CreditCard color="#22D3EE" size={21} strokeWidth={2.5} />
             </View>
             <View style={styles.rowCopy}>
-              <Text style={styles.rowTitle}>Личный кабинет</Text>
+              <Text style={styles.rowTitle}>{isAndroidApp ? "Продлить VPN" : "Личный кабинет"}</Text>
               <Text numberOfLines={2} style={styles.rowDescription}>
-                Подписка, оплата и устройства — на сайте VEX.
+                {isAndroidApp ? "Тарифы, цена и оплата — в личном кабинете на сайте VEX." : "Подписка, оплата и устройства — на сайте VEX."}
               </Text>
             </View>
             <ChevronRight color="#A7B9BD" size={22} strokeWidth={2.5} />

@@ -489,6 +489,10 @@ export default function SettingsScreen() {
           </View>
           <View style={styles.detailList}>
             <View style={styles.detailRow}>
+              <Text style={styles.detailLabel}>OTA</Text>
+              <Text style={styles.detailValue}>{appInfo.otaLaunch === "emergency" ? "Аварийный запуск" : appInfo.otaLaunch === "embedded" ? "Встроенная версия" : appInfo.otaLaunch === "applied" ? "Применённое обновление" : "Нет данных OTA"}{appInfo.otaRuntimeVersion ? ` · runtime ${appInfo.otaRuntimeVersion}` : ""}</Text>
+            </View>
+            <View style={styles.detailRow}>
               <Text style={styles.detailLabel}>API клиент</Text>
               <Text style={styles.detailValue}>{appInfo.apiClientVersion}</Text>
             </View>

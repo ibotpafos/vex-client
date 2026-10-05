@@ -323,16 +323,21 @@ function MobileUpdateCenterContent({
   const otaReadyWithoutMetadata = Boolean(
     ota?.isSupported && ota.status === "ready" && !nativeUpdateRequired,
   );
-  const primaryDisabled =
+  const isCheckingForUpdates =
+    updateQuery.isFetching || isOtaActionBusy || Boolean(ota?.isBusy);
+  const isPrimaryBusy =
     isOtaActionBusy ||
     Boolean(ota?.isBusy) ||
+    (updateQuery.isFetching && !otaReadyWithoutMetadata);
+  const primaryDisabled =
+    isPrimaryBusy ||
     (!otaReadyWithoutMetadata &&
       !canStartInstall &&
       assessment.updateAvailable &&
       !otaUpdateAvailable);
 
   const checkForUpdates = useCallback(async () => {
-    if (otaActionRunningRef.current || ota?.isBusy) return;
+    if (otaActionRunningRef.current || ota?.isBusy || updateQuery.isFetching) return;
     otaActionRunningRef.current = true;
     setIsOtaActionBusy(true);
     try {
@@ -543,7 +548,7 @@ function MobileUpdateCenterContent({
       {actionError ? <Text style={styles.error}>{actionError}</Text> : null}
       <View style={styles.actions}>
         <Pressable
-          disabled={updateQuery.isFetching || isOtaActionBusy || Boolean(ota?.isBusy)}
+          disabled={isCheckingForUpdates}
           onPress={() => {
             void checkForUpdates();
           }}
@@ -551,7 +556,7 @@ function MobileUpdateCenterContent({
         >
           <RefreshCw color="#A7B9BD" size={18} strokeWidth={2.5} />
           <Text style={styles.secondaryText}>
-            {updateQuery.isFetching || isOtaActionBusy || ota?.isBusy ? "Проверяем" : "Проверить"}
+            {isCheckingForUpdates ? "Проверяем" : "Проверить"}
           </Text>
         </Pressable>
         <Pressable
@@ -563,8 +568,8 @@ function MobileUpdateCenterContent({
           ]}
         >
           <Text style={styles.primaryText}>
-            {isOtaActionBusy || ota?.isBusy
-              ? "Проверяем OTA"
+            {isPrimaryBusy
+              ? "Проверяем"
               : otaReadyWithoutMetadata
                 ? "Применить безопасно"
                 : assessment.actionLabel}

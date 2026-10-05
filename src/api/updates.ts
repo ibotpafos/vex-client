@@ -1,6 +1,6 @@
 import { VEX_API_CLIENT_VERSION, VEX_CONFIG_SCHEMA_VERSION } from '@/native/appInfo';
 import { jsonRequest, vexApiBaseUrl, absolutizeUrl } from './client';
-import { validateManualUpdatePayloadForBaseUrl } from './updatePreflight';
+import { normalizeUpdateCheckVersion, validateManualUpdatePayloadForBaseUrl } from './updatePreflight';
 import {
   type AppUpdateCheckResult,
   type AppRemoteConfig,
@@ -25,12 +25,15 @@ export async function appUpdateCheck(input: {
   timeoutMs?: number;
 }): Promise<AppUpdateCheckResult> {
   const { timeoutMs, ...requestBody } = input;
+  const appVersion = normalizeUpdateCheckVersion(input.appVersion);
   const item = await jsonRequest<AppUpdateCheckResponseDTO>('/v1/app/update/check', {
     method: 'POST',
     suppressErrorLog: true,
     timeout: timeoutMs,
+    headers: { 'X-Vex-App-Version': appVersion },
     body: {
       ...requestBody,
+      appVersion,
       apiClientVersion: input.apiClientVersion ?? VEX_API_CLIENT_VERSION,
       configSchemaVersion: input.configSchemaVersion ?? VEX_CONFIG_SCHEMA_VERSION,
     },

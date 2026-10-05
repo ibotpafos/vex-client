@@ -81,9 +81,17 @@ export function validateManualUpdatePayloadForBaseUrl(input: {
   return { ok: true };
 }
 
+// Android debug variants append this fixed local QA application suffix through
+// build.gradle versionNameSuffix. The release API accepts the canonical version;
+// retain every other version verbatim so UI/diagnostics and unknown variants do
+// not get silently rewritten.
+export function normalizeUpdateCheckVersion(appVersion: string): string {
+  return appVersion.trim().replace(/^(\d+\.\d+\.\d+)\.diagnosticfixqa\.dev$/, '$1');
+}
+
 export function updateCheckChannel(channel: string): string {
   const normalized = channel.trim().toLowerCase();
-  if (normalized === 'production' || normalized === 'local' || normalized === 'test') {
+  if (normalized === 'production' || normalized === 'local' || normalized === 'test' || normalized === 'preview') {
     return 'stable';
   }
   return normalized || 'stable';

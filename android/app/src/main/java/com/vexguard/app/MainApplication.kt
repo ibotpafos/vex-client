@@ -63,6 +63,7 @@ class MainApplication : Application(), ReactApplication {
         options.dsn = dsn
         options.environment = BuildConfig.SENTRY_ENVIRONMENT.ifBlank { null }
         options.release = BuildConfig.SENTRY_RELEASE.ifBlank { null }
+        options.dist = BuildConfig.VERSION_CODE.toString()
         options.isSendDefaultPii = false
         options.isEnableAutoSessionTracking = false
         options.tracesSampleRate = 0.0
@@ -71,6 +72,10 @@ class MainApplication : Application(), ReactApplication {
         scope.setTag("react_native_new_arch_enabled", BuildConfig.IS_NEW_ARCHITECTURE_ENABLED.toString())
         scope.setTag("react_native_release_level", BuildConfig.REACT_NATIVE_RELEASE_LEVEL)
         scope.setTag("vex_platform", "android")
+        scope.setTag("vex_native_package", BuildConfig.APPLICATION_ID)
+        scope.setTag("vex_native_version", BuildConfig.VERSION_NAME)
+        scope.setTag("vex_native_build", BuildConfig.VERSION_CODE.toString())
+        scope.setTag("vex_native_release", BuildConfig.SENTRY_RELEASE)
       }
     } catch (_: Throwable) {
       // Sentry/Bugsink must not block app startup when observability is unavailable.

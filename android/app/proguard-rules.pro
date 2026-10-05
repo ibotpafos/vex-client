@@ -12,3 +12,7 @@
 -keep class com.facebook.react.turbomodule.** { *; }
 
 # Add any project specific keep options here:
+
+# Preserve source/line metadata so the separately retained, hash-bound R8
+# mapping can symbolize a signed release without retaining raw diagnostics.
+-keepattributes SourceFile,LineNumberTable

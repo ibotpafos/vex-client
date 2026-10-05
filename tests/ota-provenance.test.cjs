@@ -39,6 +39,34 @@ test('reports bounded OTA identity and launch state', () => {
   });
 });
 
+test('accepts canonical hex-shaped native update ids regardless of UUID version and variant bits', () => {
+  const nativeShapedId = '01ab23cd-4567-0abc-cdef-0123456789ab';
+  const result = provenance({
+    updateId: nativeShapedId,
+    runtimeVersion: '1.0.66',
+    isEmbeddedLaunch: false,
+    isEmergencyLaunch: false,
+    emergencyLaunchReason: null,
+  });
+  assert.equal(result.ota_update_id, nativeShapedId);
+});
+
+test('rejects malformed, absent, and overlong update ids while retaining launch states', () => {
+  const cases = [null, 'not-a-canonical-id', 'a'.repeat(37)];
+  for (const updateId of cases) {
+    const result = provenance({
+      updateId,
+      runtimeVersion: null,
+      isEmbeddedLaunch: true,
+      isEmergencyLaunch: true,
+      emergencyLaunchReason: null,
+    });
+    assert.equal(result.ota_update_id, undefined);
+    assert.equal(result.ota_is_embedded_launch, true);
+    assert.equal(result.ota_is_emergency_launch, true);
+  }
+});
+
 test('omits non-release runtime values and never exports raw emergency errors', () => {
   const rawReason = 'signature verification failed for customer@example.test token=secret';
   const result = provenance({

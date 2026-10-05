@@ -7,7 +7,7 @@ export type OtaProvenance = {
   ota_is_emergency_launch: boolean;
 };
 
-const updateIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const updateIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 // VEX's configured default is a release semver. A SHA-256/1 fingerprint is
 // also safe when Expo's fingerprint runtime-version policy is adopted.
 const runtimeVersionPattern = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]{1,64})?$|^[a-f0-9]{40}(?:[a-f0-9]{24})?$/;

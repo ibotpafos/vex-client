@@ -20,7 +20,7 @@ export function useVexSettings(showToastOverride?: (options: ToastOptions) => vo
   const [isSavingAntiLeak, setIsSavingAntiLeak] = useState(false);
   const [isAutoServerSelectionEnabled, setIsAutoServerSelectionEnabled] = useState(true);
   const [isSavingServerSelection, setIsSavingServerSelection] = useState(false);
-  const [appInfo, setAppInfo] = useState<AppInfo>({ name: 'VEX', version: 'dev', build: '0', platform: 'web', channel: 'stable', coreVersion: '0.1.0', configSchemaVersion: 1, apiClientVersion: 'expo-1' });
+  const [appInfo, setAppInfo] = useState<AppInfo>({ name: 'VEX', version: 'dev', build: '0', platform: 'web', channel: 'stable', coreVersion: '0.1.0', configSchemaVersion: 1, apiClientVersion: 'expo-1', otaRuntimeVersion: null, otaLaunch: 'embedded' });
   const [remoteConfig, setRemoteConfig] = useState<AppRemoteConfig | null>(null);
 
   useEffect(() => {

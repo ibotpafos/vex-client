@@ -1,6 +1,7 @@
 import * as Application from 'expo-application';
 import { Platform } from 'react-native';
 import * as SecureStore from '@/native/secureStore';
+import { getOtaProvenance } from '@/diagnostics/otaProvenance';
 
 export type AppInfo = {
   name: string;
@@ -11,6 +12,8 @@ export type AppInfo = {
   coreVersion: string;
   configSchemaVersion: number;
   apiClientVersion: string;
+  otaRuntimeVersion: string | null;
+  otaLaunch: 'embedded' | 'applied' | 'emergency';
 };
 
 export const VEX_CONFIG_SCHEMA_VERSION = 1;
@@ -19,6 +22,7 @@ export const VEX_CORE_VERSION = "0.1.0";
 
 
 export async function getAppInfo(): Promise<AppInfo> {
+  const ota = getOtaProvenance();
   return {
     name: Application.applicationName || 'VEX',
     version: Application.nativeApplicationVersion || 'dev',
@@ -28,6 +32,8 @@ export async function getAppInfo(): Promise<AppInfo> {
     coreVersion: VEX_CORE_VERSION,
     configSchemaVersion: VEX_CONFIG_SCHEMA_VERSION,
     apiClientVersion: VEX_API_CLIENT_VERSION,
+    otaRuntimeVersion: ota.ota_runtime_version ?? null,
+    otaLaunch: ota.ota_is_emergency_launch ? 'emergency' : ota.ota_is_embedded_launch ? 'embedded' : 'applied',
   };
 }
 

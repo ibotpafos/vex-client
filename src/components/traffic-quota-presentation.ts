@@ -1,3 +1,13 @@
+import type { VpnTrafficQuota } from '../api/types';
+
+// Keep routine quota details in Settings. Home only needs an actionable warning.
+export function shouldShowHomeTrafficQuota(quota: VpnTrafficQuota | null | undefined) {
+  if (!quota || !hasQuotaLimit(quota.limitBytes)) return false;
+  if (!Number.isFinite(quota.usedBytes) || quota.usedBytes < 0) return false;
+  if (quota.limitReached) return true;
+  return quotaRemainingBytes(quota.usedBytes, quota.limitBytes) / quota.limitBytes <= 0.10;
+}
+
 export function quotaRemainingBytes(usedBytes: number, limitBytes: number) {
   return Math.max(0, finitePositive(limitBytes) - finitePositive(usedBytes));
 }

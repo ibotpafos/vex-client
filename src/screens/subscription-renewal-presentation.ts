@@ -1,6 +1,6 @@
 import type { Entitlement } from '../api/types';
 
-const renewalWindowMs = 3 * 24 * 60 * 60 * 1000;
+const renewalWindowMs = 24 * 60 * 60 * 1000;
 
 // Presentation only: never starts checkout, changes access, or schedules a new
 // notification. Unknown/stale entitlement must not masquerade as a trial end.
@@ -19,8 +19,7 @@ export function subscriptionRenewalPresentation(entitlement: Entitlement | null,
   }
   if (!Number.isFinite(expiresAt)) return null;
   if (hasAccess && expired) return null; // May be a stale/offline snapshot.
-  const isTrial = entitlement.status === 'trialing';
-  if (hasAccess && !isTrial && expiresAt - now > renewalWindowMs) return null;
+  if (expiresAt - now > renewalWindowMs) return null;
   const date = new Date(expiresAt).toLocaleString('ru-RU', {
     day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit',
   });

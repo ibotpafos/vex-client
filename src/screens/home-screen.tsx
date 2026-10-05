@@ -6,6 +6,7 @@ import { Platform, ScrollView, Text, View } from 'react-native';
 import type { VpnLocation } from '@/api/vexApi';
 import { LocationHomeHero } from '@/components/location-home-hero';
 import { TrafficQuotaSummary } from '@/components/traffic-quota-summary';
+import { shouldShowHomeTrafficQuota } from '@/components/traffic-quota-presentation';
 import { SubscriptionRenewalCard } from '@/components/subscription-renewal-card';
 import { MobileUpdateNoticeBanner, UpdateCenterButton } from '@/components/update-center';
 import { useRenderProfilerMark } from '@/debug/render-profiler';
@@ -101,7 +102,7 @@ export default function App() {
           selectionMode={serverSelectionMode}
         >
           <MobileUpdateNoticeBanner onOpen={openUpdateCenter} />
-          {trafficQuota ? <TrafficQuotaSummary quota={trafficQuota} /> : null}
+          {trafficQuota && shouldShowHomeTrafficQuota(trafficQuota) ? <TrafficQuotaSummary quota={trafficQuota} /> : null}
           {Platform.OS === 'android' ? <SubscriptionRenewalCard entitlement={entitlementState} /> : null}
           {activeProfile?.rotationRequired ? (
             <VexPressable

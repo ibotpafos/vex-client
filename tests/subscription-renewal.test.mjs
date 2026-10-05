@@ -10,14 +10,14 @@ test('unknown entitlement never becomes an expired or trial account', () => {
   assert.equal(subscriptionRenewalPresentation(null, now), null);
 });
 test('finite access shows actual server expiry and never a fabricated price or trial duration', () => {
-  const result = subscriptionRenewalPresentation({...active, effectiveExpiresAt: '2026-10-03T12:30:00Z'}, now);
+  const result = subscriptionRenewalPresentation({...active, effectiveExpiresAt: '2026-10-02T18:30:00Z'}, now);
   assert.equal(result.action, 'Продлить VPN');
-  assert.match(result.message, /3 октября/);
+  assert.match(result.message, /2 октября/);
   assert.doesNotMatch(JSON.stringify(result), /199|499|3 дня|Бесплатно/);
 });
 test('effective expiry takes precedence over the billing period, including grace', () => {
-  const result = subscriptionRenewalPresentation({...active, currentPeriodEnd: '2026-10-01T00:00:00Z', effectiveExpiresAt: '2026-10-04T00:00:00Z'}, now);
-  assert.match(result.message, /4 октября/);
+  const result = subscriptionRenewalPresentation({...active, currentPeriodEnd: '2026-10-01T00:00:00Z', effectiveExpiresAt: '2026-10-03T00:00:00Z'}, now);
+  assert.match(result.message, /3 октября/);
   assert.doesNotMatch(result.title, /заверш/);
 });
 test('confirmed inactive access explains renewal instead of a connection fault', () => {
@@ -41,9 +41,15 @@ test('permanent, invalid or contradictory expiry does not invent a deadline', ()
     assert.equal(subscriptionRenewalPresentation(value, now), null);
   }
 });
-test('healthy paid access far from expiry has no home upsell; trial and near expiry do', () => {
+test('healthy paid and trial access far from expiry have no home upsell', () => {
   assert.equal(subscriptionRenewalPresentation({...active, effectiveExpiresAt: '2026-11-01T00:00:00Z'}, now), null);
-  assert.ok(subscriptionRenewalPresentation({...active, status: 'trialing', effectiveExpiresAt: '2026-10-07T00:00:00Z'}, now));
+  assert.equal(subscriptionRenewalPresentation({...active, status: 'trialing', effectiveExpiresAt: '2026-10-07T00:00:00Z'}, now), null);
+});
+test('renewal starts at exactly 24 hours for both paid and trial access', () => {
+  for (const status of ['active', 'trialing']) {
+    assert.ok(subscriptionRenewalPresentation({...active, status, effectiveExpiresAt: new Date(now + 86_400_000).toISOString()}, now));
+    assert.equal(subscriptionRenewalPresentation({...active, status, effectiveExpiresAt: new Date(now + 86_400_001).toISOString()}, now), null);
+  }
 });
 test('Android renewal card is wired to existing website path, without token URLs or automatic checkout', () => {
   const home = readFileSync(new URL('../src/screens/home-screen.tsx', import.meta.url), 'utf8');

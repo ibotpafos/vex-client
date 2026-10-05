@@ -140,21 +140,24 @@ export function assessManualUpdateCenter(input: ManualUpdateCenterInput): Manual
 }
 
 export function canUseOtaUpdate(update: ManualUpdateCenterInput['update']): boolean {
-  return Boolean(update?.updateAvailable && update.delivery === 'ota');
+  return Boolean(update?.updateAvailable && update.delivery === 'ota' && !requiresNativeUpdate(update));
 }
 
 export function requiresNativeUpdate(update: ManualUpdateCenterInput['update']): boolean {
   if (!update?.updateAvailable) {
     return false;
   }
+  // Revocation and native compatibility recovery cannot be bypassed by a stale
+  // delivery hint or an already-downloaded OTA.
+  const reason = updateReason(update);
+  if (update.currentBuildBlocked || (reason !== 'update_available' && nativeUpdateReasons.has(reason))) return true;
   if (update.delivery === 'native') {
     return true;
   }
   if (update.delivery === 'ota') {
     return false;
   }
-  const reason = updateReason(update);
-  return Boolean(update.currentBuildBlocked || nativeUpdateReasons.has(reason));
+  return nativeUpdateReasons.has(reason);
 }
 
 function updateCenterTitle(reason: string, required: boolean, currentBuildBlocked: boolean, updateAvailable: boolean, otaAvailable: boolean): string {

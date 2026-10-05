@@ -1,18 +1,49 @@
-import * as Application from 'expo-application';
-import * as Updates from 'expo-updates';
-import { Download, RefreshCw, ShieldAlert, ShieldCheck, X } from 'lucide-react-native';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { installManualUpdate } from '@/api/manualUpdateInstall';
-import { assessManualUpdateCenter, canUseOtaUpdate, requiresNativeUpdate } from '@/api/updatePreflight';
-import { vexApiBaseUrl, type AppUpdateCheckResult } from '@/api/vexApi';
-import { useMobileAppUpdateQuery } from '@/components/mobile-app-update-query';
-import { getAppInfo, type AppInfo } from '@/native/appInfo';
-import { playErrorHaptic, playLightImpactHaptic, playSelectionHaptic, playSuccessHaptic } from '@/native/haptics';
-import { VexNativeActivityIndicator } from '@/ui/native-activity-indicator';
-import { VexScreen, vexSharedStyles } from '@/ui/vex-ui';
+import * as Application from "expo-application";
+import * as Updates from "expo-updates";
+import {
+  Download,
+  RefreshCw,
+  ShieldAlert,
+  ShieldCheck,
+  X,
+} from "lucide-react-native";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  Linking,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
+import { installManualUpdate } from "@/api/manualUpdateInstall";
+import {
+  assessManualUpdateCenter,
+  canUseOtaUpdate,
+  requiresNativeUpdate,
+} from "@/api/updatePreflight";
+import { vexApiBaseUrl, type AppUpdateCheckResult } from "@/api/vexApi";
+import { useMobileAppUpdateQuery } from "@/components/mobile-app-update-query";
+import { getAppInfo, type AppInfo } from "@/native/appInfo";
+import {
+  playErrorHaptic,
+  playLightImpactHaptic,
+  playSelectionHaptic,
+  playSuccessHaptic,
+} from "@/native/haptics";
+import { useOtaPresentation } from "@/components/ota-update-overlay";
+import { shouldShowOtaHeaderAction } from "@/updates/otaPresentation";
+import { VexNativeActivityIndicator } from "@/ui/native-activity-indicator";
+import { VexScreen, vexSharedStyles } from "@/ui/vex-ui";
 
-const androidSigningMigrationLandingUrl = 'https://vexguard.app/download';
+const androidSigningMigrationLandingUrl = "https://vexguard.app/download";
 
 type UpdateCenterButtonProps = {
   visible: boolean;
@@ -20,26 +51,48 @@ type UpdateCenterButtonProps = {
   onClose: () => void;
 };
 
-export function UpdateCenterButton({ visible, onOpen, onClose }: UpdateCenterButtonProps) {
-  if (Platform.OS === 'android' || Platform.OS === 'ios') {
-    return <MobileUpdateCenterButton platform={Platform.OS} visible={visible} onClose={onClose} onOpen={onOpen} />;
+export function UpdateCenterButton({
+  visible,
+  onOpen,
+  onClose,
+}: UpdateCenterButtonProps) {
+  if (Platform.OS === "android" || Platform.OS === "ios") {
+    return (
+      <MobileUpdateCenterButton
+        platform={Platform.OS}
+        visible={visible}
+        onClose={onClose}
+        onOpen={onOpen}
+      />
+    );
   }
   return null;
 }
 
 export function MobileUpdateNoticeBanner({ onOpen }: { onOpen: () => void }) {
-  if (Platform.OS !== 'android' && Platform.OS !== 'ios') {
+  if (Platform.OS !== "android" && Platform.OS !== "ios") {
     return null;
   }
-  return <MobileUpdateNoticeBannerContent onOpen={onOpen} platform={Platform.OS} />;
+  return (
+    <MobileUpdateNoticeBannerContent onOpen={onOpen} platform={Platform.OS} />
+  );
 }
 
-function MobileUpdateNoticeBannerContent({ onOpen, platform }: { onOpen: () => void; platform: 'android' | 'ios' }) {
+function MobileUpdateNoticeBannerContent({
+  onOpen,
+  platform,
+}: {
+  onOpen: () => void;
+  platform: "android" | "ios";
+}) {
   const buildNumber = currentNativeBuild();
   const updateQuery = useMobileAppUpdateQuery(platform, buildNumber);
   const update = updateQuery.data ?? null;
-  const shouldShow = requiresNativeUpdate(update);
-  const mandatoryUpdate = Boolean(update?.required || update?.currentBuildBlocked);
+  const mandatoryUpdate = Boolean(
+    update?.required || update?.currentBuildBlocked,
+  );
+  // Optional APK releases stay discoverable from the header, not as a persistent home banner.
+  const shouldShow = requiresNativeUpdate(update) && mandatoryUpdate;
 
   if (!shouldShow) {
     return null;
@@ -48,7 +101,7 @@ function MobileUpdateNoticeBannerContent({ onOpen, platform }: { onOpen: () => v
   const migration = isAndroidSigningKeyMigration(update);
   const handlePress = () => {
     playSelectionHaptic();
-    if (migration && platform === 'android') {
+    if (migration && platform === "android") {
       void openAndroidSigningMigrationDownload().catch(() => {
         onOpen();
       });
@@ -59,7 +112,13 @@ function MobileUpdateNoticeBannerContent({ onOpen, platform }: { onOpen: () => v
 
   return (
     <Pressable
-      accessibilityLabel={migration ? 'Скачать новую Android-сборку' : mandatoryUpdate ? 'Открыть обязательное обновление' : 'Открыть обновление'}
+      accessibilityLabel={
+        migration
+          ? "Скачать новую Android-сборку"
+          : mandatoryUpdate
+            ? "Открыть обязательное обновление"
+            : "Открыть обновление"
+      }
       accessibilityRole="button"
       onPress={handlePress}
       style={[styles.noticeBanner, migration && styles.noticeBannerMigration]}
@@ -68,14 +127,22 @@ function MobileUpdateNoticeBannerContent({ onOpen, platform }: { onOpen: () => v
         <ShieldAlert color="#031012" size={20} strokeWidth={2.7} />
       </View>
       <View style={styles.noticeCopy}>
-        <Text style={styles.noticeTitle}>{migration ? 'Нужно поставить новую сборку VEX' : mandatoryUpdate ? 'Требуется обновление VEX' : 'Доступно обновление VEX'}</Text>
+        <Text style={styles.noticeTitle}>
+          {migration
+            ? "Нужно поставить новую сборку VEX"
+            : mandatoryUpdate
+              ? "Требуется обновление VEX"
+              : "Доступно обновление VEX"}
+        </Text>
         <Text numberOfLines={2} style={styles.noticeText}>
           {migration
-            ? 'Скачайте новый APK, войдите в аккаунт и затем удалите старое приложение.'
-            : 'Откройте центр обновлений и установите актуальную версию.'}
+            ? "Скачайте новый APK, войдите в аккаунт и затем удалите старое приложение."
+            : "Откройте центр обновлений и установите актуальную версию."}
         </Text>
       </View>
-      <Text style={styles.noticeAction}>{migration ? 'Скачать' : 'Открыть'}</Text>
+      <Text style={styles.noticeAction}>
+        {migration ? "Скачать" : "Открыть"}
+      </Text>
     </Pressable>
   );
 }
@@ -83,26 +150,24 @@ function MobileUpdateNoticeBannerContent({ onOpen, platform }: { onOpen: () => v
 function MobileUpdateCenterButton({
   onOpen,
   platform,
-}: UpdateCenterButtonProps & { platform: 'android' | 'ios' }) {
+}: UpdateCenterButtonProps & { platform: "android" | "ios" }) {
   const buildNumber = currentNativeBuild();
   const updateQuery = useMobileAppUpdateQuery(platform, buildNumber);
   const update = updateQuery.data ?? null;
+  const ota = useOtaPresentation();
   const needsAttention = requiresNativeUpdate(update);
-  const hasUpdate = Boolean(update?.updateAvailable);
-
-  if (!hasUpdate) {
-    return null;
-  }
+  const otaNeedsAttention = Boolean(
+    ota && shouldShowOtaHeaderAction(ota.status),
+  );
+  const hasAttention = Boolean(update?.updateAvailable) || otaNeedsAttention;
 
   return (
-    <>
-      <HeaderButton
-        busy={updateQuery.isFetching}
-        danger={needsAttention}
-        highlighted={hasUpdate}
-        onPress={onOpen}
-      />
-    </>
+    <HeaderButton
+      busy={updateQuery.isFetching || Boolean(ota?.isBusy)}
+      danger={needsAttention || ota?.status === "error"}
+      highlighted={hasAttention}
+      onPress={onOpen}
+    />
   );
 }
 
@@ -119,8 +184,9 @@ function HeaderButton({
 }) {
   return (
     <Pressable
-      accessibilityLabel="Центр обновлений"
+      accessibilityLabel={busy ? "Проверяем обновления" : "Центр обновлений"}
       accessibilityRole="button"
+      accessibilityState={{ busy }}
       onPress={() => {
         playSelectionHaptic();
         onPress();
@@ -131,8 +197,20 @@ function HeaderButton({
         danger && styles.headerButtonDanger,
       ]}
     >
-      {busy ? <VexNativeActivityIndicator color="#22D3EE" size="small" /> : <Download color={danger ? '#FFB4A8' : highlighted ? '#031012' : '#A7B9BD'} size={23} strokeWidth={2.5} />}
-      {danger || highlighted ? <View style={[styles.headerBadge, danger && styles.headerBadgeDanger]} /> : null}
+      {busy ? (
+        <VexNativeActivityIndicator color="#22D3EE" size="small" />
+      ) : (
+        <Download
+          color={danger ? "#FFB4A8" : highlighted ? "#22D3EE" : "#A7B9BD"}
+          size={23}
+          strokeWidth={2.5}
+        />
+      )}
+      {danger || highlighted ? (
+        <View
+          style={[styles.headerBadge, danger && styles.headerBadgeDanger]}
+        />
+      ) : null}
     </Pressable>
   );
 }
@@ -142,7 +220,7 @@ export function MobileUpdateCenterRouteContent({
   platform,
 }: {
   onClose: () => void;
-  platform: 'android' | 'ios';
+  platform: "android" | "ios";
 }) {
   const buildNumber = currentNativeBuild();
   const updateQuery = useMobileAppUpdateQuery(platform, buildNumber);
@@ -173,7 +251,11 @@ function UpdateCenterFrame({
             <Text style={styles.eyebrow}>VEX</Text>
             <Text style={styles.modalTitle}>Обновления</Text>
           </View>
-          <Pressable accessibilityLabel="Закрыть центр обновлений" onPress={onClose} style={styles.closeButton}>
+          <Pressable
+            accessibilityLabel="Закрыть центр обновлений"
+            onPress={onClose}
+            style={styles.closeButton}
+          >
             <X color="#A7B9BD" size={24} strokeWidth={2.5} />
           </Pressable>
         </View>
@@ -190,7 +272,7 @@ function MobileUpdateCenterContent({
   updateQuery,
 }: {
   buildNumber: number;
-  platform: 'android' | 'ios';
+  platform: "android" | "ios";
   update: AppUpdateCheckResult | null;
   updateQuery: ReturnType<typeof useMobileAppUpdateQuery>;
 }) {
@@ -198,6 +280,7 @@ function MobileUpdateCenterContent({
   const [actionError, setActionError] = useState<string | null>(null);
   const [isOtaActionBusy, setIsOtaActionBusy] = useState(false);
   const otaActionRunningRef = useRef(false);
+  const ota = useOtaPresentation();
 
   useEffect(() => {
     let cancelled = false;
@@ -213,21 +296,56 @@ function MobileUpdateCenterContent({
     };
   }, []);
 
-  const assessment = useMemo(() => assessManualUpdateCenter({
-    currentBuild: buildNumber,
-    currentVersion: appInfo?.version || Application.nativeApplicationVersion || 'dev',
-    trustedBaseUrl: vexApiBaseUrl,
-    update,
-  }), [appInfo?.version, buildNumber, update]);
-  const signingMigration = platform === 'android' && isAndroidSigningKeyMigration(update);
+  const assessment = useMemo(
+    () =>
+      assessManualUpdateCenter({
+        currentBuild: buildNumber,
+        currentVersion:
+          appInfo?.version || Application.nativeApplicationVersion || "dev",
+        trustedBaseUrl: vexApiBaseUrl,
+        update,
+      }),
+    [appInfo?.version, buildNumber, update],
+  );
+  const signingMigration =
+    platform === "android" && isAndroidSigningKeyMigration(update);
   const nativeUpdateRequired = requiresNativeUpdate(update);
   const otaUpdateAvailable = canUseOtaUpdate(update);
-  const manualDownloadUrl = signingMigration ? androidSigningMigrationLandingUrl : update?.downloadUrl || '';
+  const manualDownloadUrl = signingMigration
+    ? androidSigningMigrationLandingUrl
+    : update?.downloadUrl || "";
   const canOpenManualDownload = signingMigration && Boolean(manualDownloadUrl);
-  const canStartInstall = platform === 'ios'
-    ? Boolean(update?.updateAvailable && update.downloadUrl)
-    : nativeUpdateRequired && (assessment.canInstall || canOpenManualDownload);
-  const primaryDisabled = isOtaActionBusy || (!canStartInstall && assessment.updateAvailable && !otaUpdateAvailable);
+  const canStartInstall =
+    platform === "ios"
+      ? Boolean(update?.updateAvailable && update.downloadUrl)
+      : nativeUpdateRequired &&
+        (assessment.canInstall || canOpenManualDownload);
+  const otaReadyWithoutMetadata = Boolean(
+    ota?.isSupported && ota.status === "ready" && !nativeUpdateRequired,
+  );
+  const primaryDisabled =
+    isOtaActionBusy ||
+    Boolean(ota?.isBusy) ||
+    (!otaReadyWithoutMetadata &&
+      !canStartInstall &&
+      assessment.updateAvailable &&
+      !otaUpdateAvailable);
+
+  const checkForUpdates = useCallback(async () => {
+    if (otaActionRunningRef.current || ota?.isBusy) return;
+    otaActionRunningRef.current = true;
+    setIsOtaActionBusy(true);
+    try {
+      playLightImpactHaptic();
+      await Promise.all([
+        updateQuery.refetch(),
+        ota?.isSupported ? ota.checkForUpdate(true) : Promise.resolve(),
+      ]);
+    } finally {
+      otaActionRunningRef.current = false;
+      setIsOtaActionBusy(false);
+    }
+  }, [ota, updateQuery]);
 
   const handlePrimaryPress = useCallback(async () => {
     setActionError(null);
@@ -238,35 +356,58 @@ function MobileUpdateCenterContent({
         playSuccessHaptic();
       } catch (error) {
         playErrorHaptic();
-        setActionError(error instanceof Error ? error.message : 'Не удалось открыть страницу загрузки.');
+        setActionError(
+          error instanceof Error
+            ? error.message
+            : "Не удалось открыть страницу загрузки.",
+        );
       }
       return;
     }
-    if (!assessment.updateAvailable) {
-      playLightImpactHaptic();
-      await updateQuery.refetch();
-      return;
-    }
-    if (otaUpdateAvailable) {
-      if (otaActionRunningRef.current) return;
-      if (!Updates.isEnabled) {
-        setActionError('OTA недоступно в этой сборке. Проверьте установленную версию приложения.');
+    // A downloaded OTA can outlive (or be absent from) the API metadata. The shared
+    // controller remains authoritative so this screen cannot start a second fetch flow.
+    if (
+      ota?.isSupported &&
+      shouldShowOtaHeaderAction(ota.status) &&
+      !nativeUpdateRequired
+    ) {
+      if (ota.status === "ready") {
+        await ota.reload();
         return;
       }
+      if (otaActionRunningRef.current || ota.isBusy) return;
       otaActionRunningRef.current = true;
       setIsOtaActionBusy(true);
       try {
         playLightImpactHaptic();
-        const check = await Updates.checkForUpdateAsync();
-        if (!check.isAvailable && !check.isRollBackToEmbedded) {
-          setActionError('Совместимое OTA-обновление для этой сборки не найдено.');
-          return;
-        }
-        await Updates.fetchUpdateAsync();
-        playSuccessHaptic();
-      } catch {
-        playErrorHaptic();
-        setActionError('Не удалось скачать OTA-обновление. Проверьте подключение и повторите.');
+        await ota.checkForUpdate(true);
+      } finally {
+        otaActionRunningRef.current = false;
+        setIsOtaActionBusy(false);
+      }
+      return;
+    }
+    if (!assessment.updateAvailable) {
+      await checkForUpdates();
+      return;
+    }
+    if (otaUpdateAvailable) {
+      if (!ota?.isSupported) {
+        setActionError(
+          "OTA недоступно в этой сборке. Проверьте установленную версию приложения.",
+        );
+        return;
+      }
+      if (ota.status === "ready") {
+        await ota.reload();
+        return;
+      }
+      if (otaActionRunningRef.current || ota.isBusy) return;
+      otaActionRunningRef.current = true;
+      setIsOtaActionBusy(true);
+      try {
+        playLightImpactHaptic();
+        await ota.checkForUpdate(true);
       } finally {
         otaActionRunningRef.current = false;
         setIsOtaActionBusy(false);
@@ -275,7 +416,9 @@ function MobileUpdateCenterContent({
     }
     if (!canStartInstall || !update?.downloadUrl) {
       playErrorHaptic();
-      setActionError(assessment.preflight.error || 'Обновление недоступно для установки.');
+      setActionError(
+        assessment.preflight.error || "Обновление недоступно для установки.",
+      );
       return;
     }
     try {
@@ -289,49 +432,155 @@ function MobileUpdateCenterContent({
       playSuccessHaptic();
     } catch (error) {
       playErrorHaptic();
-      setActionError(error instanceof Error ? error.message : 'Не удалось открыть ссылку обновления.');
+      setActionError(
+        error instanceof Error
+          ? error.message
+          : "Не удалось открыть ссылку обновления.",
+      );
     }
-  }, [assessment.preflight.error, assessment.preflight.ok, assessment.updateAvailable, canStartInstall, otaUpdateAvailable, platform, signingMigration, update, updateQuery]);
+  }, [
+    assessment.preflight.error,
+    assessment.preflight.ok,
+    assessment.updateAvailable,
+    canStartInstall,
+    checkForUpdates,
+    nativeUpdateRequired,
+    ota,
+    otaUpdateAvailable,
+    platform,
+    signingMigration,
+    update,
+    updateQuery,
+  ]);
 
   return (
     <ScrollView contentContainerStyle={styles.content}>
-      <StatusHero assessmentTone={assessment.compatibilityTone} title={assessment.title} message={assessment.message} />
+      <StatusHero
+        assessmentTone={
+          otaReadyWithoutMetadata ? "ok" : assessment.compatibilityTone
+        }
+        title={otaReadyWithoutMetadata ? "Обновление готово" : assessment.title}
+        message={
+          otaReadyWithoutMetadata
+            ? ota?.message ||
+              "Обновление скачано. Применим его безопасно, когда VPN можно отключить."
+            : assessment.message
+        }
+      />
       <View style={styles.section}>
-        <InfoRow label="Текущая версия" value={`${appInfo?.version || Application.nativeApplicationVersion || 'dev'} (${buildNumber || 0})`} />
-        <InfoRow label="Доступная версия" value={update?.updateAvailable ? `${update.latestVersion || 'unknown'} (${update.latestBuild || 0})` : 'Нет новой версии'} />
-        <InfoRow label="Канал" value={update?.channel || appInfo?.channel || 'production'} />
-        <InfoRow label="OTA" tone={Updates.isEnabled ? 'ok' : 'warning'} value={Updates.isEnabled ? `Включено${Updates.runtimeVersion ? `, runtime ${Updates.runtimeVersion}` : ''}` : 'Недоступно в этой сборке'} />
-        <InfoRow label="Совместимость" tone={assessment.compatibilityTone} value={assessment.compatibilityLabel} />
-        <InfoRow label="Подпись" tone={assessment.signatureTone} value={assessment.signatureLabel} />
-        {update?.minSupportedBuild ? <InfoRow label="Минимальная сборка" value={String(update.minSupportedBuild)} /> : null}
-        {update?.rolloutPercent !== undefined ? <InfoRow label="Rollout" value={`${update.rolloutPercent}%`} /> : null}
+        <InfoRow
+          label="Текущая версия"
+          value={`${
+            appInfo?.version || Application.nativeApplicationVersion || "dev"
+          } (${buildNumber || 0})`}
+        />
+        <InfoRow
+          label="Доступная версия"
+          value={
+            update?.updateAvailable
+              ? `${update.latestVersion || "unknown"} (${
+                  update.latestBuild || 0
+                })`
+              : "Нет новой версии"
+          }
+        />
+        <InfoRow
+          label="Канал"
+          value={update?.channel || appInfo?.channel || "production"}
+        />
+        <InfoRow
+          label="OTA"
+          tone={Updates.isEnabled ? "ok" : "warning"}
+          value={
+            Updates.isEnabled
+              ? `Включено${
+                  Updates.runtimeVersion
+                    ? `, runtime ${Updates.runtimeVersion}`
+                    : ""
+                }`
+              : "Недоступно в этой сборке"
+          }
+        />
+        <InfoRow
+          label="Совместимость"
+          tone={assessment.compatibilityTone}
+          value={assessment.compatibilityLabel}
+        />
+        <InfoRow
+          label="Подпись"
+          tone={assessment.signatureTone}
+          value={assessment.signatureLabel}
+        />
+        {update?.minSupportedBuild ? (
+          <InfoRow
+            label="Минимальная сборка"
+            value={String(update.minSupportedBuild)}
+          />
+        ) : null}
+        {update?.rolloutPercent !== undefined ? (
+          <InfoRow label="Rollout" value={`${update.rolloutPercent}%`} />
+        ) : null}
       </View>
-      {update?.changelog ? <Text style={styles.notes}>{update.changelog}</Text> : null}
-      {updateQuery.error ? <Text style={styles.error}>Не удалось проверить обновления. Проверьте подключение.</Text> : null}
-      {!canStartInstall && assessment.updateAvailable && nativeUpdateRequired ? <Text style={styles.error}>{assessment.preflight.error}</Text> : null}
+      {update?.changelog ? (
+        <Text style={styles.notes}>{update.changelog}</Text>
+      ) : null}
+      {updateQuery.error ? (
+        <Text style={styles.error}>
+          Не удалось проверить обновления. Проверьте подключение.
+        </Text>
+      ) : null}
+      {!canStartInstall &&
+      assessment.updateAvailable &&
+      nativeUpdateRequired ? (
+        <Text style={styles.error}>{assessment.preflight.error}</Text>
+      ) : null}
       {canOpenManualDownload && !assessment.preflight.ok ? (
-        <Text style={styles.error}>Автоустановка недоступна для этой старой подписи. Скачайте APK с сайта, установите новую сборку и затем удалите старый VEX.</Text>
+        <Text style={styles.error}>
+          Автоустановка недоступна для этой старой подписи. Скачайте APK с
+          сайта, установите новую сборку и затем удалите старый VEX.
+        </Text>
       ) : null}
       {actionError ? <Text style={styles.error}>{actionError}</Text> : null}
       <View style={styles.actions}>
-        <Pressable disabled={updateQuery.isFetching} onPress={() => { void updateQuery.refetch(); }} style={styles.secondaryButton}>
+        <Pressable
+          disabled={updateQuery.isFetching || isOtaActionBusy || Boolean(ota?.isBusy)}
+          onPress={() => {
+            void checkForUpdates();
+          }}
+          style={styles.secondaryButton}
+        >
           <RefreshCw color="#A7B9BD" size={18} strokeWidth={2.5} />
-          <Text style={styles.secondaryText}>{updateQuery.isFetching ? 'Проверяем' : 'Проверить'}</Text>
+          <Text style={styles.secondaryText}>
+            {updateQuery.isFetching || isOtaActionBusy || ota?.isBusy ? "Проверяем" : "Проверить"}
+          </Text>
         </Pressable>
-        <Pressable disabled={primaryDisabled} onPress={handlePrimaryPress} style={[styles.primaryButton, primaryDisabled && styles.primaryButtonDisabled]}>
-          <Text style={styles.primaryText}>{isOtaActionBusy ? 'Проверяем OTA' : assessment.actionLabel}</Text>
+        <Pressable
+          disabled={primaryDisabled}
+          onPress={handlePrimaryPress}
+          style={[
+            styles.primaryButton,
+            primaryDisabled && styles.primaryButtonDisabled,
+          ]}
+        >
+          <Text style={styles.primaryText}>
+            {isOtaActionBusy || ota?.isBusy
+              ? "Проверяем OTA"
+              : otaReadyWithoutMetadata
+                ? "Применить безопасно"
+                : assessment.actionLabel}
+          </Text>
         </Pressable>
       </View>
       <Text style={styles.footnote}>
         {signingMigration
-          ? 'Android откроет загрузку новой APK-сборки VEX в браузере. После входа в новую сборку удалите старое приложение.'
+          ? "Android откроет загрузку новой APK-сборки VEX в браузере. После входа в новую сборку удалите старое приложение."
           : otaUpdateAvailable && Updates.isEnabled
-          ? 'Быстрые исправления интерфейса, маршрутизации и логики VEX скачиваются через OTA и применяются автоматически без APK/App Store.'
-          : otaUpdateAvailable
-          ? 'Это обновление не требует обязательной установки APK. OTA включится в production-сборке с настроенным expo-updates.'
-          : platform === 'android'
-          ? 'Android скачает APK внутри VEX, проверит checksum и подпись приложения, затем откроет системный установщик.'
-          : 'iOS откроет официальную страницу обновления.'}
+            ? "Быстрые исправления интерфейса, маршрутизации и логики VEX скачиваются через OTA и применяются автоматически без APK/App Store."
+            : otaUpdateAvailable
+              ? "Это обновление не требует обязательной установки APK. OTA включится в production-сборке с настроенным expo-updates."
+              : platform === "android"
+                ? "Android скачает APK внутри VEX, проверит checksum и подпись приложения, затем откроет системный установщик."
+                : "iOS откроет официальную страницу обновления."}
       </Text>
     </ScrollView>
   );
@@ -342,15 +591,19 @@ function StatusHero({
   message,
   title,
 }: {
-  assessmentTone: 'ok' | 'warning' | 'danger';
+  assessmentTone: "ok" | "warning" | "danger";
   message: string;
   title: string;
 }) {
-  const danger = assessmentTone === 'danger';
+  const danger = assessmentTone === "danger";
   return (
     <View style={[styles.hero, danger && styles.heroDanger]}>
       <View style={[styles.heroIcon, danger && styles.heroIconDanger]}>
-        {danger ? <ShieldAlert color="#031012" size={28} strokeWidth={2.7} /> : <ShieldCheck color="#031012" size={28} strokeWidth={2.7} />}
+        {danger ? (
+          <ShieldAlert color="#031012" size={28} strokeWidth={2.7} />
+        ) : (
+          <ShieldCheck color="#031012" size={28} strokeWidth={2.7} />
+        )}
       </View>
       <Text style={styles.heroTitle}>{title}</Text>
       <Text style={styles.heroText}>{message}</Text>
@@ -364,13 +617,21 @@ function InfoRow({
   value,
 }: {
   label: string;
-  tone?: 'ok' | 'warning' | 'danger';
+  tone?: "ok" | "warning" | "danger";
   value: string;
 }) {
   return (
     <View style={styles.infoRow}>
       <Text style={styles.infoLabel}>{label}</Text>
-      <Text numberOfLines={2} style={[styles.infoValue, tone === 'ok' && styles.infoValueOk, tone === 'warning' && styles.infoValueWarning, tone === 'danger' && styles.infoValueDanger]}>
+      <Text
+        numberOfLines={2}
+        style={[
+          styles.infoValue,
+          tone === "ok" && styles.infoValueOk,
+          tone === "warning" && styles.infoValueWarning,
+          tone === "danger" && styles.infoValueDanger,
+        ]}
+      >
         {value}
       </Text>
     </View>
@@ -378,18 +639,23 @@ function InfoRow({
 }
 
 function currentNativeBuild() {
-  const parsed = Number.parseInt(String(Application.nativeBuildVersion ?? '0'), 10);
+  const parsed = Number.parseInt(
+    String(Application.nativeBuildVersion ?? "0"),
+    10,
+  );
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
-function isAndroidSigningKeyMigration(update: AppUpdateCheckResult | null): boolean {
-  const changelog = update?.changelog?.toLowerCase() || '';
+function isAndroidSigningKeyMigration(
+  update: AppUpdateCheckResult | null,
+): boolean {
+  const changelog = update?.changelog?.toLowerCase() || "";
   return (
-    update?.reason === 'android_signing_key_migration' ||
-    changelog.includes('android-signing-key-migration') ||
-    changelog.includes('новую сборку vex') ||
-    changelog.includes('новую подпись') ||
-    changelog.includes('новой подпись')
+    update?.reason === "android_signing_key_migration" ||
+    changelog.includes("android-signing-key-migration") ||
+    changelog.includes("новую сборку vex") ||
+    changelog.includes("новую подпись") ||
+    changelog.includes("новой подпись")
   );
 }
 
@@ -404,49 +670,49 @@ async function openAndroidSigningMigrationDownload(): Promise<void> {
 
 const styles = StyleSheet.create({
   headerButtonHighlighted: {
-    backgroundColor: 'transparent',
-    borderColor: 'transparent',
+    backgroundColor: "transparent",
+    borderColor: "transparent",
   },
   headerButtonDanger: {
-    backgroundColor: 'transparent',
-    borderColor: 'transparent',
+    backgroundColor: "transparent",
+    borderColor: "transparent",
   },
   headerBadge: {
-    backgroundColor: '#031012',
-    borderColor: '#22D3EE',
+    backgroundColor: "#031012",
+    borderColor: "#22D3EE",
     borderRadius: 5,
     borderWidth: 1,
     height: 10,
-    position: 'absolute',
+    position: "absolute",
     right: 7,
     top: 7,
     width: 10,
   },
   headerBadgeDanger: {
-    backgroundColor: '#FF7A7A',
-    borderColor: '#071113',
+    backgroundColor: "#FF7A7A",
+    borderColor: "#071113",
   },
   noticeBanner: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(255,122,122,0.14)',
-    borderColor: 'rgba(255,122,122,0.34)',
+    alignItems: "center",
+    backgroundColor: "rgba(255,122,122,0.14)",
+    borderColor: "rgba(255,122,122,0.34)",
     borderRadius: 18,
     borderWidth: 1,
-    flexDirection: 'row',
+    flexDirection: "row",
     gap: 12,
     paddingHorizontal: 14,
     paddingVertical: 12,
   },
   noticeBannerMigration: {
-    backgroundColor: 'rgba(248,212,119,0.14)',
-    borderColor: 'rgba(248,212,119,0.38)',
+    backgroundColor: "rgba(248,212,119,0.14)",
+    borderColor: "rgba(248,212,119,0.38)",
   },
   noticeIcon: {
-    alignItems: 'center',
-    backgroundColor: '#F8D477',
+    alignItems: "center",
+    backgroundColor: "#F8D477",
     borderRadius: 14,
     height: 34,
-    justifyContent: 'center',
+    justifyContent: "center",
     width: 34,
   },
   noticeCopy: {
@@ -454,55 +720,55 @@ const styles = StyleSheet.create({
     gap: 3,
   },
   noticeTitle: {
-    color: '#F4FCFD',
+    color: "#F4FCFD",
     fontSize: 14,
-    fontWeight: '900',
+    fontWeight: "900",
   },
   noticeText: {
-    color: '#C6D6D9',
+    color: "#C6D6D9",
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: "700",
     lineHeight: 16,
   },
   noticeAction: {
-    color: '#F8D477',
+    color: "#F8D477",
     fontSize: 13,
-    fontWeight: '900',
+    fontWeight: "900",
   },
   modal: {
-    backgroundColor: 'transparent',
+    backgroundColor: "transparent",
     flex: 1,
   },
   routeShell: {
     paddingHorizontal: 18,
-    paddingTop: Platform.OS === 'android' ? 12 : 20,
+    paddingTop: Platform.OS === "android" ? 12 : 20,
   },
   modalHeader: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
     marginBottom: 16,
   },
   eyebrow: {
-    color: '#22D3EE',
+    color: "#22D3EE",
     fontSize: 12,
-    fontWeight: '900',
+    fontWeight: "900",
     letterSpacing: 0,
   },
   modalTitle: {
-    color: '#F4FCFD',
+    color: "#F4FCFD",
     fontSize: 22,
-    fontWeight: '900',
+    fontWeight: "900",
     marginTop: 2,
   },
   closeButton: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    borderColor: 'rgba(255,255,255,0.1)',
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderColor: "rgba(255,255,255,0.1)",
     borderRadius: 14,
     borderWidth: 1,
     height: 42,
-    justifyContent: 'center',
+    justifyContent: "center",
     width: 42,
   },
   content: {
@@ -510,124 +776,124 @@ const styles = StyleSheet.create({
     paddingBottom: 22,
   },
   hero: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(8,25,29,0.84)',
-    borderColor: 'rgba(34,211,238,0.22)',
+    alignItems: "center",
+    backgroundColor: "rgba(8,25,29,0.84)",
+    borderColor: "rgba(34,211,238,0.22)",
     borderRadius: 26,
     borderWidth: 1,
     gap: 12,
     padding: 22,
   },
   heroDanger: {
-    borderColor: 'rgba(255,122,122,0.34)',
+    borderColor: "rgba(255,122,122,0.34)",
   },
   heroIcon: {
-    alignItems: 'center',
-    backgroundColor: '#22D3EE',
+    alignItems: "center",
+    backgroundColor: "#22D3EE",
     borderRadius: 20,
     height: 48,
-    justifyContent: 'center',
+    justifyContent: "center",
     width: 48,
   },
   heroIconDanger: {
-    backgroundColor: '#FFB4A8',
+    backgroundColor: "#FFB4A8",
   },
   heroTitle: {
-    color: '#F4FCFD',
+    color: "#F4FCFD",
     fontSize: 24,
-    fontWeight: '900',
-    textAlign: 'center',
+    fontWeight: "900",
+    textAlign: "center",
   },
   heroText: {
-    color: '#C6D6D9',
+    color: "#C6D6D9",
     fontSize: 15,
-    fontWeight: '700',
+    fontWeight: "700",
     lineHeight: 21,
-    textAlign: 'center',
+    textAlign: "center",
   },
   section: {
-    backgroundColor: 'rgba(7,17,19,0.86)',
-    borderColor: 'rgba(96,118,123,0.32)',
+    backgroundColor: "rgba(7,17,19,0.86)",
+    borderColor: "rgba(96,118,123,0.32)",
     borderRadius: 22,
     borderWidth: 1,
-    overflow: 'hidden',
+    overflow: "hidden",
   },
   infoRow: {
-    alignItems: 'center',
-    borderBottomColor: 'rgba(96,118,123,0.18)',
+    alignItems: "center",
+    borderBottomColor: "rgba(96,118,123,0.18)",
     borderBottomWidth: 1,
-    flexDirection: 'row',
+    flexDirection: "row",
     gap: 12,
-    justifyContent: 'space-between',
+    justifyContent: "space-between",
     minHeight: 52,
     paddingHorizontal: 12,
     paddingVertical: 9,
   },
   infoLabel: {
-    color: '#8FBEC6',
+    color: "#8FBEC6",
     flex: 0.8,
     fontSize: 13,
-    fontWeight: '900',
+    fontWeight: "900",
   },
   infoValue: {
-    color: '#EAF7F8',
+    color: "#EAF7F8",
     flex: 1.2,
     fontSize: 13,
-    fontWeight: '900',
-    textAlign: 'right',
+    fontWeight: "900",
+    textAlign: "right",
   },
   infoValueOk: {
-    color: '#6CF5FF',
+    color: "#6CF5FF",
   },
   infoValueWarning: {
-    color: '#F8D477',
+    color: "#F8D477",
   },
   infoValueDanger: {
-    color: '#FFB4A8',
+    color: "#FFB4A8",
   },
   notes: {
-    backgroundColor: 'rgba(34,211,238,0.08)',
-    borderColor: 'rgba(34,211,238,0.16)',
+    backgroundColor: "rgba(34,211,238,0.08)",
+    borderColor: "rgba(34,211,238,0.16)",
     borderRadius: 18,
     borderWidth: 1,
-    color: '#A7B9BD',
+    color: "#A7B9BD",
     fontSize: 14,
-    fontWeight: '700',
+    fontWeight: "700",
     lineHeight: 20,
     padding: 12,
   },
   error: {
-    color: '#FF9F9F',
+    color: "#FF9F9F",
     fontSize: 13,
-    fontWeight: '800',
-    textAlign: 'center',
+    fontWeight: "800",
+    textAlign: "center",
   },
   actions: {
-    flexDirection: 'row',
+    flexDirection: "row",
     gap: 10,
   },
   secondaryButton: {
-    alignItems: 'center',
-    borderColor: 'rgba(167,185,189,0.24)',
+    alignItems: "center",
+    borderColor: "rgba(167,185,189,0.24)",
     borderRadius: 18,
     borderWidth: 1,
     flex: 1,
-    flexDirection: 'row',
+    flexDirection: "row",
     gap: 8,
-    justifyContent: 'center',
+    justifyContent: "center",
     minHeight: 50,
   },
   secondaryText: {
-    color: '#A7B9BD',
+    color: "#A7B9BD",
     fontSize: 15,
-    fontWeight: '900',
+    fontWeight: "900",
   },
   primaryButton: {
-    alignItems: 'center',
-    backgroundColor: '#22D3EE',
+    alignItems: "center",
+    backgroundColor: "#22D3EE",
     borderRadius: 8,
     flex: 1.25,
-    justifyContent: 'center',
+    justifyContent: "center",
     minHeight: 50,
     paddingHorizontal: 10,
   },
@@ -635,16 +901,16 @@ const styles = StyleSheet.create({
     opacity: 0.46,
   },
   primaryText: {
-    color: '#031012',
+    color: "#031012",
     fontSize: 15,
-    fontWeight: '900',
-    textAlign: 'center',
+    fontWeight: "900",
+    textAlign: "center",
   },
   footnote: {
-    color: '#78969C',
+    color: "#78969C",
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: "700",
     lineHeight: 17,
-    textAlign: 'center',
+    textAlign: "center",
   },
 });

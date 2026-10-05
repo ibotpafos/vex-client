@@ -1,48 +1,95 @@
-import * as Updates from 'expo-updates';
-import { Button, Column, Host, Text as UniversalText } from '@expo/ui';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { AppState, Platform, StyleSheet, View, type AppStateStatus } from 'react-native';
-import { playErrorHaptic, playLightImpactHaptic, playSelectionHaptic, playSuccessHaptic } from '@/native/haptics';
-import * as SecureStore from '@/native/secureStore';
-import { getVpnStatus } from '@/native/vexVpn';
-import { canAutomaticallyApplyOtaUpdate } from '@/updates/otaAutoApply';
-import { createOtaCompletionTarget, parseOtaCompletionTarget, wasOtaCompletionApplied, type OtaCompletionTarget } from '@/updates/otaCompletion';
+import * as Updates from "expo-updates";
+import { Button, Column, Host, Text as UniversalText } from "@expo/ui";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PropsWithChildren,
+} from "react";
+import {
+  AppState,
+  Platform,
+  StyleSheet,
+  View,
+  type AppStateStatus,
+} from "react-native";
+import {
+  playErrorHaptic,
+  playLightImpactHaptic,
+  playSelectionHaptic,
+  playSuccessHaptic,
+} from "@/native/haptics";
+import * as SecureStore from "@/native/secureStore";
+import { getVpnStatus } from "@/native/vexVpn";
+import { canAutomaticallyApplyOtaUpdate } from "@/updates/otaAutoApply";
+import {
+  createOtaCompletionTarget,
+  parseOtaCompletionTarget,
+  wasOtaCompletionApplied,
+  type OtaCompletionTarget,
+} from "@/updates/otaCompletion";
+import {
+  canRunOtaCheck,
+  reloadOtaSafely,
+  shouldShowOtaOverlay,
+  type OtaPresentationStatus,
+} from "@/updates/otaPresentation";
 
 const foregroundCheckThrottleMs = 5 * 60_000;
-const startupCheckDelayMs = 5_000;
+// The provider now mounts before DeferredStartupOverlays. Keep its former effective delay.
+const startupCheckDelayMs = Platform.OS === "android" ? 8_500 : 6_500;
 const autoReloadDelayMs = 2_500;
 const blockedAutoReloadRetryMs = 15_000;
 const completionNoticeMs = 4_000;
-const pendingOtaCompletionKey = 'vex.ota.pending-completion.v1';
+const pendingOtaCompletionKey = "vex.ota.pending-completion.v1";
 
-type OtaStatus = 'idle' | 'checking' | 'downloading' | 'ready' | 'restarting' | 'updated' | 'rolled_back' | 'error';
+type OtaState = { status: OtaPresentationStatus; message?: string };
 
-type OtaState = {
-  status: OtaStatus;
-  message?: string;
+type OtaPresentationValue = OtaState & {
+  progress: number | null;
+  isSupported: boolean;
+  isBusy: boolean;
+  checkForUpdate: (force?: boolean) => Promise<void>;
+  retry: () => void;
+  dismiss: () => void;
+  reload: () => Promise<boolean>;
 };
 
-export function OtaUpdateOverlay() {
-  if ((Platform.OS !== 'android' && Platform.OS !== 'ios') || !Updates.isEnabled) {
-    return null;
-  }
+const OtaPresentationContext = createContext<OtaPresentationValue | null>(null);
 
-  return <OtaUpdateOverlayContent />;
+export function useOtaPresentation(): OtaPresentationValue | null {
+  return useContext(OtaPresentationContext);
 }
 
-function OtaUpdateOverlayContent() {
+export function OtaUpdateProvider({ children }: PropsWithChildren) {
+  if (
+    (Platform.OS !== "android" && Platform.OS !== "ios") ||
+    !Updates.isEnabled
+  )
+    return <>{children}</>;
+  return <OtaUpdateProviderContent>{children}</OtaUpdateProviderContent>;
+}
+
+function OtaUpdateProviderContent({ children }: PropsWithChildren) {
   const updateState = Updates.useUpdates();
-  const [state, setState] = useState<OtaState>({ status: 'idle' });
+  const [state, setState] = useState<OtaState>({ status: "idle" });
   const [dismissed, setDismissed] = useState(false);
   const runningRef = useRef(false);
   const lastCheckAtRef = useRef(0);
-  const statusRef = useRef<OtaStatus>('idle');
+  const statusRef = useRef<OtaPresentationStatus>("idle");
   const nativeBusyRef = useRef(false);
   const newUpdateBusyRef = useRef(false);
   const fetchedTargetRef = useRef<OtaCompletionTarget | null>(null);
   const autoReloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  newUpdateBusyRef.current = updateState.isDownloading || updateState.isUpdatePending;
-  nativeBusyRef.current = updateState.isChecking || newUpdateBusyRef.current;
+  const reloadRunningRef = useRef(false);
+  newUpdateBusyRef.current =
+    updateState.isDownloading || updateState.isUpdatePending;
+  // Pending means a downloaded update is ready; it must not disable the safe Apply action.
+  nativeBusyRef.current = updateState.isChecking || updateState.isDownloading;
 
   const setOtaState = useCallback((nextState: OtaState) => {
     statusRef.current = nextState.status;
@@ -50,11 +97,9 @@ function OtaUpdateOverlayContent() {
   }, []);
 
   useEffect(() => {
-    if (!updateState.isUpdatePending) {
-      return;
-    }
+    if (!updateState.isUpdatePending) return;
     setDismissed(false);
-    setOtaState({ status: 'ready' });
+    setOtaState({ status: "ready" });
   }, [setOtaState, updateState.isUpdatePending]);
 
   useEffect(() => {
@@ -63,208 +108,283 @@ function OtaUpdateOverlayContent() {
       .then(async (stored) => {
         if (!stored || cancelled) return;
         const target = parseOtaCompletionTarget(stored);
-        const applied = !newUpdateBusyRef.current && wasOtaCompletionApplied(target, updateState.currentlyRunning);
-        const cleared = await SecureStore.deleteItemAsync(pendingOtaCompletionKey).then(() => true).catch(() => false);
-        if (!cancelled && cleared && applied) {
-          setOtaState({ status: target?.type === 'rollback' ? 'rolled_back' : 'updated' });
-        }
+        const applied =
+          !newUpdateBusyRef.current &&
+          wasOtaCompletionApplied(target, updateState.currentlyRunning);
+        const cleared = await SecureStore.deleteItemAsync(
+          pendingOtaCompletionKey,
+        )
+          .then(() => true)
+          .catch(() => false);
+        if (!cancelled && cleared && applied)
+          setOtaState({
+            status: target?.type === "rollback" ? "rolled_back" : "updated",
+          });
       })
       .catch(() => undefined);
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [setOtaState, updateState.currentlyRunning]);
 
   useEffect(() => {
-    if (updateState.isDownloading && statusRef.current !== 'ready' && statusRef.current !== 'restarting') {
-      setOtaState({ status: 'downloading' });
-    }
+    if (
+      updateState.isDownloading &&
+      statusRef.current !== "ready" &&
+      statusRef.current !== "restarting"
+    )
+      setOtaState({ status: "downloading" });
   }, [setOtaState, updateState.isDownloading]);
-
   useEffect(() => {
-    if (updateState.downloadError && statusRef.current === 'downloading') {
-      setOtaState({ status: 'error', message: 'Не удалось скачать обновление. Проверьте подключение и повторите.' });
-    }
+    if (updateState.downloadError && statusRef.current === "downloading")
+      setOtaState({
+        status: "error",
+        message:
+          "Не удалось скачать обновление. Проверьте подключение и повторите.",
+      });
   }, [setOtaState, updateState.downloadError]);
-
   useEffect(() => {
-    if (state.status !== 'updated' && state.status !== 'rolled_back') return;
-    const timer = setTimeout(() => setOtaState({ status: 'idle' }), completionNoticeMs);
+    if (state.status !== "updated" && state.status !== "rolled_back") return;
+    const timer = setTimeout(
+      () => setOtaState({ status: "idle" }),
+      completionNoticeMs,
+    );
     return () => clearTimeout(timer);
   }, [setOtaState, state.status]);
 
-  const checkAndFetchUpdate = useCallback(async (force = false) => {
-    if (dismissed || runningRef.current || nativeBusyRef.current ||
-      statusRef.current === 'ready' || statusRef.current === 'restarting' ||
-      statusRef.current === 'updated' || statusRef.current === 'rolled_back') {
-      return;
-    }
-
-    const now = Date.now();
-    if (!force && now - lastCheckAtRef.current < foregroundCheckThrottleMs) {
-      return;
-    }
-
-    runningRef.current = true;
-    lastCheckAtRef.current = now;
-    let nextStatus: OtaStatus = 'checking';
-    setOtaState({ status: nextStatus });
-
-    try {
-      const check = await Updates.checkForUpdateAsync();
-      if (!check.isAvailable && !check.isRollBackToEmbedded) {
-        setOtaState({ status: 'idle' });
+  const checkForUpdate = useCallback(
+    async (force = false) => {
+      if (
+        !canRunOtaCheck({
+          dismissed,
+          force,
+          running: runningRef.current,
+          nativeBusy: nativeBusyRef.current,
+          status: statusRef.current,
+        })
+      )
         return;
-      }
-
-      nextStatus = 'downloading';
+      const now = Date.now();
+      if (!force && now - lastCheckAtRef.current < foregroundCheckThrottleMs)
+        return;
+      runningRef.current = true;
+      lastCheckAtRef.current = now;
+      let nextStatus: OtaPresentationStatus = "checking";
       setOtaState({ status: nextStatus });
-      const fetch = await Updates.fetchUpdateAsync();
-      if (fetch.isNew || fetch.isRollBackToEmbedded) {
-        fetchedTargetRef.current = createOtaCompletionTarget(
-          fetch.isRollBackToEmbedded ? { type: 'rollback' } : { type: 'new', updateId: fetch.manifest?.id },
-          Updates.runtimeVersion,
+      try {
+        const check = await Updates.checkForUpdateAsync();
+        if (!check.isAvailable && !check.isRollBackToEmbedded) {
+          setOtaState({ status: "idle" });
+          return;
+        }
+        nextStatus = "downloading";
+        setOtaState({ status: nextStatus });
+        const fetch = await Updates.fetchUpdateAsync();
+        if (fetch.isNew || fetch.isRollBackToEmbedded) {
+          fetchedTargetRef.current = createOtaCompletionTarget(
+            fetch.isRollBackToEmbedded
+              ? { type: "rollback" }
+              : { type: "new", updateId: fetch.manifest?.id },
+            Updates.runtimeVersion,
+          );
+          playSuccessHaptic();
+          setOtaState({ status: "ready" });
+          return;
+        }
+        setOtaState({ status: "idle" });
+      } catch {
+        setOtaState(
+          nextStatus === "downloading"
+            ? {
+                status: "error",
+                message:
+                  "Не удалось скачать обновление. Проверьте подключение и повторите.",
+              }
+            : { status: "idle" },
         );
-        playSuccessHaptic();
-        setOtaState({ status: 'ready' });
-        return;
+      } finally {
+        runningRef.current = false;
       }
-
-      setOtaState({ status: 'idle' });
-    } catch {
-      if (nextStatus === 'downloading') {
-        setOtaState({ status: 'error', message: 'Не удалось скачать обновление. Проверьте подключение и повторите.' });
-        return;
-      }
-      setOtaState({ status: 'idle' });
-    } finally {
-      runningRef.current = false;
-    }
-  }, [dismissed, setOtaState]);
+    },
+    [dismissed, setOtaState],
+  );
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      checkAndFetchUpdate(true).catch(() => undefined);
+      void checkForUpdate(true);
     }, startupCheckDelayMs);
     return () => clearTimeout(timer);
-  }, [checkAndFetchUpdate]);
-
+  }, [checkForUpdate]);
   useEffect(() => {
-    const handleAppState = (nextState: AppStateStatus) => {
-      if (nextState === 'active') {
-        checkAndFetchUpdate().catch(() => undefined);
-      }
-    };
-
-    const subscription = AppState.addEventListener('change', handleAppState);
+    const subscription = AppState.addEventListener(
+      "change",
+      (nextState: AppStateStatus) => {
+        if (nextState === "active") void checkForUpdate();
+      },
+    );
     return () => subscription.remove();
-  }, [checkAndFetchUpdate]);
+  }, [checkForUpdate]);
 
-  const handleDismiss = useCallback(() => {
-    playSelectionHaptic();
-    setDismissed(true);
-    setOtaState({ status: 'idle' });
-  }, [setOtaState]);
-
-  const handleRetry = useCallback(() => {
+  const retry = useCallback(() => {
     playLightImpactHaptic();
     setDismissed(false);
     lastCheckAtRef.current = 0;
-    checkAndFetchUpdate(true).catch(() => undefined);
-  }, [checkAndFetchUpdate]);
+    void checkForUpdate(true);
+  }, [checkForUpdate]);
 
-  const handleReload = useCallback(async (): Promise<boolean> => {
-    const vpnStatus = await getVpnStatus().catch(() => null);
-    if (!vpnStatus || !canAutomaticallyApplyOtaUpdate(AppState.currentState, vpnStatus)) {
-      const message = !vpnStatus ? 'Не удалось проверить VPN. Обновление подождёт.' :
-        AppState.currentState !== 'active' ? 'Применим обновление, когда VEX снова будет открыт.' :
-        vpnStatus.leakProtection === 'blocking' ? 'Обновление ждёт снятия блокировки трафика.' :
-        'Обновление ждёт отключения VPN, чтобы не прервать соединение.';
-      setOtaState({ status: 'ready', message });
-      return false;
-    }
+  const dismiss = useCallback(() => {
+    playSelectionHaptic();
+    setDismissed(true);
+    setOtaState({ status: "idle" });
+  }, [setOtaState]);
 
-    const target = createOtaCompletionTarget(updateState.downloadedUpdate ?? null, Updates.runtimeVersion) ?? fetchedTargetRef.current;
-    try {
-      playLightImpactHaptic();
-      setOtaState({ status: 'restarting' });
-      if (target) {
-        await SecureStore.setItemAsync(pendingOtaCompletionKey, JSON.stringify(target)).catch(() => undefined);
-      }
-      await Updates.reloadAsync();
-      return true;
-    } catch {
-      await SecureStore.deleteItemAsync(pendingOtaCompletionKey).catch(() => undefined);
-      playErrorHaptic();
-      setOtaState({ status: 'error', message: 'Не удалось применить обновление. Попробуйте ещё раз.' });
-      return false;
-    }
-  }, [setOtaState, updateState.downloadedUpdate]);
+  const reload = useCallback(
+    async (): Promise<boolean> =>
+      reloadOtaSafely({
+        getAppState: () => AppState.currentState,
+        canApply: canAutomaticallyApplyOtaUpdate,
+        getVpnStatus,
+        isReady: () => statusRef.current === "ready" && !runningRef.current,
+        lock: reloadRunningRef,
+        onBlocked: (message) => setOtaState({ status: "ready", message }),
+        performReload: async () => {
+          const target =
+            createOtaCompletionTarget(
+              updateState.downloadedUpdate ?? null,
+              Updates.runtimeVersion,
+            ) ?? fetchedTargetRef.current;
+          try {
+            playLightImpactHaptic();
+            setOtaState({ status: "restarting" });
+            if (target)
+              await SecureStore.setItemAsync(
+                pendingOtaCompletionKey,
+                JSON.stringify(target),
+              ).catch(() => undefined);
+            await Updates.reloadAsync();
+            return true;
+          } catch {
+            await SecureStore.deleteItemAsync(pendingOtaCompletionKey).catch(
+              () => undefined,
+            );
+            playErrorHaptic();
+            setOtaState({
+              status: "error",
+              message: "Не удалось применить обновление. Попробуйте ещё раз.",
+            });
+            return false;
+          }
+        },
+      }),
+    [setOtaState, updateState.downloadedUpdate],
+  );
 
   useEffect(() => {
-    if (state.status !== 'ready') {
-      if (autoReloadTimerRef.current) {
-        clearTimeout(autoReloadTimerRef.current);
-        autoReloadTimerRef.current = null;
-      }
+    if (state.status !== "ready") {
+      if (autoReloadTimerRef.current) clearTimeout(autoReloadTimerRef.current);
       return;
     }
-
     let cancelled = false;
     const attemptAutomaticReload = async () => {
       autoReloadTimerRef.current = null;
-      const reloadStarted = await handleReload();
-      if (!reloadStarted && !cancelled) {
-        autoReloadTimerRef.current = setTimeout(attemptAutomaticReload, blockedAutoReloadRetryMs);
-      }
+      const reloadStarted = await reload();
+      if (!reloadStarted && !cancelled)
+        autoReloadTimerRef.current = setTimeout(
+          attemptAutomaticReload,
+          blockedAutoReloadRetryMs,
+        );
     };
-
-    autoReloadTimerRef.current = setTimeout(attemptAutomaticReload, autoReloadDelayMs);
-
+    autoReloadTimerRef.current = setTimeout(
+      attemptAutomaticReload,
+      autoReloadDelayMs,
+    );
     return () => {
       cancelled = true;
-      if (autoReloadTimerRef.current) {
-        clearTimeout(autoReloadTimerRef.current);
-        autoReloadTimerRef.current = null;
-      }
+      if (autoReloadTimerRef.current) clearTimeout(autoReloadTimerRef.current);
     };
-  }, [handleReload, state.status]);
+  }, [reload, state.status]);
 
-  if (state.status !== 'ready' && state.status !== 'downloading' && state.status !== 'restarting' &&
-    state.status !== 'updated' && state.status !== 'rolled_back' && state.status !== 'error') {
-    return null;
-  }
+  const progress =
+    state.status === "downloading" &&
+    typeof updateState.downloadProgress === "number" &&
+    Number.isFinite(updateState.downloadProgress)
+      ? Math.round(Math.max(0, Math.min(1, updateState.downloadProgress)) * 100)
+      : null;
+  const value = useMemo<OtaPresentationValue>(
+    () => ({
+      ...state,
+      progress,
+      isSupported: true,
+      isBusy:
+        state.status === "checking" ||
+        state.status === "downloading" ||
+        state.status === "restarting" ||
+        updateState.isChecking ||
+        updateState.isDownloading,
+      checkForUpdate,
+      retry,
+      dismiss,
+      reload,
+    }),
+    [
+      checkForUpdate,
+      dismiss,
+      progress,
+      reload,
+      retry,
+      state,
+      updateState.isChecking,
+      updateState.isDownloading,
+    ],
+  );
+  return (
+    <OtaPresentationContext.Provider value={value}>
+      {children}
+    </OtaPresentationContext.Provider>
+  );
+}
 
-  const isReady = state.status === 'ready';
-  const isError = state.status === 'error';
-  const title = state.status === 'updated' ? 'Обновлено' : state.status === 'rolled_back' ? 'Стабильная версия восстановлена' :
-    isReady ? 'Обновление готово' : isError ? 'Обновление не загрузилось' : state.status === 'restarting' ? 'Применяем обновление' : 'Загружаем обновление';
-  const progress = state.status === 'downloading' && typeof updateState.downloadProgress === 'number' && Number.isFinite(updateState.downloadProgress)
-    ? Math.round(Math.max(0, Math.min(1, updateState.downloadProgress)) * 100)
-    : null;
-  const text = state.status === 'updated'
-    ? 'Новая версия запущена и готова к работе.'
-    : state.status === 'rolled_back'
-    ? 'Безопасная встроенная версия запущена и готова к работе.'
-    : isReady
-    ? state.message || 'Обновление скачано. Применим его безопасным перезапуском, не прерывая активный VPN.'
-    : isError
-      ? state.message || 'Проверьте подключение и повторите позже.'
-      : state.status === 'restarting' ? 'Перезапускаем VEX без установки APK.' :
-        progress === null ? 'Скачиваем исправления без переустановки приложения.' : `Скачиваем исправления: ${progress}%.`;
-
+export function OtaUpdateOverlay() {
+  const ota = useOtaPresentation();
+  if (!ota || !shouldShowOtaOverlay(ota.status)) return null;
+  const isError = ota.status === "error";
+  const title =
+    ota.status === "updated"
+      ? "Обновлено"
+      : ota.status === "rolled_back"
+        ? "Стабильная версия восстановлена"
+        : isError
+          ? "Обновление не загрузилось"
+          : ota.status === "restarting"
+            ? "Применяем обновление"
+            : "Загружаем обновление";
+  const text =
+    ota.status === "updated"
+      ? "Новая версия запущена и готова к работе."
+      : ota.status === "rolled_back"
+        ? "Безопасная встроенная версия запущена и готова к работе."
+        : isError
+          ? ota.message || "Проверьте подключение и повторите позже."
+          : ota.status === "restarting"
+            ? "Перезапускаем VEX без установки APK."
+            : ota.progress === null
+              ? "Скачиваем исправления без переустановки приложения."
+              : `Скачиваем исправления: ${ota.progress}%.`;
   return (
     <View pointerEvents="box-none" style={styles.overlay}>
-      <Host colorScheme="dark" seedColor="#22D3EE" style={styles.host} matchContents={{ vertical: true }}>
+      <Host
+        colorScheme="dark"
+        seedColor="#22D3EE"
+        style={styles.host}
+        matchContents={{ vertical: true }}
+      >
         <Column spacing={8} style={styles.card}>
           <UniversalText textStyle={styles.eyebrow}>VEX update</UniversalText>
           <UniversalText textStyle={styles.title}>{title}</UniversalText>
           <UniversalText textStyle={styles.text}>{text}</UniversalText>
-          {isReady ? (
-            <Button label="Перезапустить" onPress={handleReload} />
-          ) : isError ? (
-            <Button label="Повторить" onPress={handleRetry} />
-          ) : null}
+          {isError ? <Button label="Повторить" onPress={ota.retry} /> : null}
           {isError ? (
-            <Button label="Позже" onPress={handleDismiss} variant="outlined" />
+            <Button label="Позже" onPress={ota.dismiss} variant="outlined" />
           ) : null}
         </Column>
       </Host>
@@ -275,44 +395,35 @@ function OtaUpdateOverlayContent() {
 const styles = StyleSheet.create({
   overlay: {
     left: 0,
-    position: 'absolute',
+    position: "absolute",
     right: 0,
-    top: Platform.OS === 'ios' ? 58 : 32,
+    top: Platform.OS === "ios" ? 58 : 32,
     zIndex: 50,
   },
-  host: {
-    alignSelf: 'center',
-    maxWidth: 560,
-    width: '92%',
-  },
+  host: { alignSelf: "center", maxWidth: 560, width: "92%" },
   card: {
-    backgroundColor: 'rgba(7,17,19,0.97)',
-    borderColor: 'rgba(34,211,238,0.28)',
-    borderRadius: 22,
+    backgroundColor: "rgba(7,17,19,0.97)",
+    borderColor: "rgba(34,211,238,0.28)",
+    borderRadius: 18,
     borderWidth: 1,
-    padding: 16,
-    shadowColor: '#000000',
-    shadowOffset: { height: 12, width: 0 },
-    shadowOpacity: 0.28,
-    shadowRadius: 24,
+    padding: 13,
+    shadowColor: "#000000",
+    shadowOffset: { height: 8, width: 0 },
+    shadowOpacity: 0.22,
+    shadowRadius: 18,
   },
   eyebrow: {
-    color: '#22D3EE',
+    color: "#22D3EE",
     fontSize: 10,
-    fontWeight: '900',
+    fontWeight: "900",
     letterSpacing: 0.7,
-    textTransform: 'uppercase',
+    textTransform: "uppercase",
   },
-  title: {
-    color: '#F4FCFD',
-    fontSize: 16,
-    fontWeight: '900',
-    marginTop: 2,
-  },
+  title: { color: "#F4FCFD", fontSize: 15, fontWeight: "900", marginTop: 2 },
   text: {
-    color: '#C6D6D9',
+    color: "#C6D6D9",
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: "700",
     lineHeight: 16,
     marginTop: 3,
   },

@@ -191,6 +191,7 @@ function RootNavigator() {
               <Stack.Screen name="sign-in" options={{ headerShown: false }} />
             </Stack.Protected>
           </Stack>
+          <OtaUpdateOverlay />
           <DeferredStartupOverlays />
           <RenderProfilerOverlay />
         </View>
@@ -244,7 +245,6 @@ function DeferredStartupOverlays() {
     <>
       <AndroidUpdateOverlay />
       <IOSUpdateOverlay />
-      <OtaUpdateOverlay />
     </>
   );
 }

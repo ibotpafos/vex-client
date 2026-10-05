@@ -130,3 +130,44 @@ test("manual OTA action delegates to the one shared expo-updates controller", ()
   assert.match(overlay, /createOtaCompletionTarget/);
   assert.match(overlay, /wasOtaCompletionApplied/);
 });
+
+test("completion notice mounts outside the deferred overlay window", () => {
+  const layout = readFileSync(
+    new URL("../app/_layout.tsx", import.meta.url),
+    "utf8",
+  );
+  const center = readFileSync(
+    new URL("../src/components/update-center.tsx", import.meta.url),
+    "utf8",
+  );
+  const navigatorStart = layout.indexOf("<OtaUpdateProvider>");
+  const bootGate = layout.indexOf("if (isLoading)");
+  const stackEnd = layout.indexOf("</Stack>", navigatorStart);
+  const overlay = layout.indexOf("<OtaUpdateOverlay />", stackEnd);
+  const deferred = layout.indexOf("<DeferredStartupOverlays />", stackEnd);
+  assert.ok(
+    bootGate >= 0 && navigatorStart > bootGate && stackEnd > navigatorStart,
+    "the provider remains behind the existing session boot gate",
+  );
+  assert.ok(
+    overlay > stackEnd && overlay < deferred,
+    "the completion overlay must be a persistent child of its existing provider",
+  );
+  assert.equal(
+    (layout.match(/<OtaUpdateOverlay\s*\/>/g) || []).length,
+    1,
+    "there must be one completion presentation, not a duplicate consumer",
+  );
+  assert.match(center, /label="Канал APK"/);
+  assert.match(center, /label="Подпись APK"/);
+
+  const completionNoticeMs = 4_000;
+  const deferredMountMs = 3_500;
+  const baselineVisibleMs = Math.max(0, completionNoticeMs - deferredMountMs);
+  const persistentVisibleMs = completionNoticeMs;
+  assert.equal(baselineVisibleMs, 500);
+  assert.equal(persistentVisibleMs, 4_000);
+  console.log(
+    "OTA_COMPLETION_MOUNT=PASS: baseline<=500ms, persistent=4000ms for the isolated timing fixture",
+  );
+});

@@ -490,7 +490,7 @@ function MobileUpdateCenterContent({
           }
         />
         <InfoRow
-          label="Канал"
+          label="Канал APK"
           value={update?.channel || appInfo?.channel || "production"}
         />
         <InfoRow
@@ -512,7 +512,7 @@ function MobileUpdateCenterContent({
           value={assessment.compatibilityLabel}
         />
         <InfoRow
-          label="Подпись"
+          label="Подпись APK"
           tone={assessment.signatureTone}
           value={assessment.signatureLabel}
         />

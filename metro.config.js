@@ -5,6 +5,8 @@ const exclusionList = require("metro-config/private/defaults/exclusionList").def
 const config = getDefaultConfig(__dirname);
 
 config.transformer.inlineRequires = true;
+config.resolver.useWatchman = false;
+config.fileMapCacheDirectory = __dirname + "/.metro-file-map-cache";
 
 config.resolver.blockList = exclusionList([
   /\/\.env\..*\.local$/,

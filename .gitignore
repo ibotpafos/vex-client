@@ -56,3 +56,7 @@ macos-native/.build.stale-*/
 # Python release-test bytecode is generated, never release source.
 __pycache__/
 *.py[cod]
+
+# Metro file map cache is local to each checkout.
+.metro-file-map-cache/
+.metro-cache/

@@ -106,13 +106,16 @@ test("center consumes the shared OTA controller and makes a metadata-free ready 
   );
 });
 
-test("idle header icon remains available and manual checking shares OTA plus metadata flow", () => {
+test("header icon is hidden unless a native release or unapplied OTA exists", () => {
   const source = readFileSync("src/components/update-center.tsx", "utf8");
-  assert.doesNotMatch(source, /if \(!hasUpdate\) return null/);
-  assert.match(source, /accessibilityState=\{\{ busy \}\}/);
+  assert.match(source, /shouldOfferAppUpdate\(update, buildNumber\)/);
+  assert.match(source, /const hasUnappliedOta = ota\?\.status === "downloading" \|\| ota\?\.status === "ready";/);
+  assert.match(source, /if \(!hasNativeUpdate && !hasUnappliedOta\) \{\s+return null;/);
+  assert.match(source, /<VexPressable/);
+  assert.match(source, /<Download color="#EAF7F8" size=\{25\} strokeWidth=\{2\.15\}/);
+  assert.doesNotMatch(source, /headerBadge/);
   assert.match(source, /await Promise\.all\(\[/);
   assert.match(source, /ota\?\.isSupported \? ota\.checkForUpdate\(true\) : Promise\.resolve\(\)/);
-  assert.match(source, /if \(!assessment\.updateAvailable\) \{\s+await checkForUpdates\(\);/);
 });
 
 test("background transition during a deferred VPN read forbids reload", async () => {

@@ -5,13 +5,8 @@ const source = readFileSync("src/components/update-center.tsx", "utf8");
 
 assert.match(
   source,
-  /const isCheckingForUpdates =\s*updateQuery\.isFetching \|\| isOtaActionBusy \|\| Boolean\(ota\?\.isBusy\);/,
-  "one busy value must include an in-flight metadata query",
-);
-assert.match(
-  source,
   /const isPrimaryBusy =\s*isOtaActionBusy \|\|\s*Boolean\(ota\?\.isBusy\) \|\|\s*\(updateQuery\.isFetching && !otaReadyWithoutMetadata\);/,
-  "a ready signed OTA must remain actionable while metadata is refreshing",
+  "the one primary action must block duplicate work while metadata is fetching",
 );
 assert.match(
   source,
@@ -23,39 +18,37 @@ assert.match(
   /otaActionRunningRef\.current \|\| ota\?\.isBusy \|\| updateQuery\.isFetching/,
   "manual refresh must not refetch while the query is already in flight",
 );
-assert.match(
-  source,
-  /disabled=\{isCheckingForUpdates\}/,
-  "the secondary action must share the same busy guard",
-);
 const actions = source.slice(
   source.indexOf('<View style={styles.actions}>'),
-  source.indexOf("<Text style={styles.footnote}>"),
+  source.indexOf("</ScrollView>"),
 );
 assert.equal(
-  (actions.match(/isCheckingForUpdates\s*\?\s*"Проверяем"/g) || []).length,
+  (actions.match(/<Pressable/g) || []).length,
   1,
-  "the secondary action must expose query activity",
+  "the update center must not render duplicate check/install actions",
 );
-assert.equal(
-  (actions.match(/isPrimaryBusy\s*\?\s*"Проверяем"/g) || []).length,
-  1,
-  "the primary action must expose only blocking activity",
-);
+assert.match(actions, /isPrimaryBusy\s*\?\s*"Проверяем"/);
+assert.match(actions, /"Проверить обновления"/);
+assert.match(actions, /"Обновить"/);
+assert.match(actions, /"Применить"/);
+assert.match(actions, /"Повторить проверку"/);
+assert.match(source, /if \(needsNativeRecovery\) \{\s*await checkForUpdates\(\);/, "a rejected native payload keeps a single safe refresh action");
 const derive = ({ queryFetching, otaReady, otaBusy, localOtaBusy, nativeRequired }) => {
   const ready = otaReady && !nativeRequired;
-  const checking = queryFetching || otaBusy || localOtaBusy;
   const primaryBusy = otaBusy || localOtaBusy || (queryFetching && !ready);
-  return { checking, primaryBusy, primaryLabel: primaryBusy ? "Проверяем" : ready ? "Применить безопасно" : "Проверить снова" };
+  return {
+    primaryBusy,
+    primaryLabel: primaryBusy ? "Проверяем" : ready ? "Применить" : "Проверить обновления",
+  };
 };
 assert.deepEqual(
   derive({ queryFetching: true, otaReady: false, otaBusy: false, localOtaBusy: false, nativeRequired: false }),
-  { checking: true, primaryBusy: true, primaryLabel: "Проверяем" },
-  "metadata refresh without a ready OTA blocks both actions",
+  { primaryBusy: true, primaryLabel: "Проверяем" },
+  "metadata refresh without a ready OTA blocks the only action",
 );
 assert.deepEqual(
   derive({ queryFetching: true, otaReady: true, otaBusy: false, localOtaBusy: false, nativeRequired: false }),
-  { checking: true, primaryBusy: false, primaryLabel: "Применить безопасно" },
+  { primaryBusy: false, primaryLabel: "Применить" },
   "a signed ready OTA remains safe to apply while metadata refreshes",
 );
 assert.equal(
@@ -63,12 +56,4 @@ assert.equal(
   true,
   "an active OTA operation still blocks reload",
 );
-assert.equal(
-  derive({ queryFetching: true, otaReady: true, otaBusy: false, localOtaBusy: false, nativeRequired: true }).primaryLabel,
-  "Проверяем",
-  "native-required priority prevents ready-OTA apply during metadata refresh",
-);
-
-console.log(
-  "UPDATE_CENTER_BUSY_GUARD=PASS: metadata blocks duplicate checks without blocking a signed ready OTA",
-);
+console.log("UPDATE_CENTER_BUSY_GUARD=PASS: one guarded action prevents duplicate checks while keeping ready OTA apply available");

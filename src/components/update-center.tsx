@@ -1,8 +1,6 @@
 import * as Application from "expo-application";
-import * as Updates from "expo-updates";
 import {
   Download,
-  RefreshCw,
   ShieldAlert,
   ShieldCheck,
   X,
@@ -28,6 +26,7 @@ import {
   assessManualUpdateCenter,
   canUseOtaUpdate,
   requiresNativeUpdate,
+  shouldOfferAppUpdate,
 } from "@/api/updatePreflight";
 import { vexApiBaseUrl, type AppUpdateCheckResult } from "@/api/vexApi";
 import { useMobileAppUpdateQuery } from "@/components/mobile-app-update-query";
@@ -41,7 +40,7 @@ import {
 import { useOtaPresentation } from "@/components/ota-update-overlay";
 import { shouldShowOtaHeaderAction } from "@/updates/otaPresentation";
 import { VexNativeActivityIndicator } from "@/ui/native-activity-indicator";
-import { VexScreen, vexSharedStyles } from "@/ui/vex-ui";
+import { VexPressable, VexScreen } from "@/ui/vex-ui";
 
 const androidSigningMigrationLandingUrl = "https://vexguard.app/download";
 
@@ -155,17 +154,20 @@ function MobileUpdateCenterButton({
   const updateQuery = useMobileAppUpdateQuery(platform, buildNumber);
   const update = updateQuery.data ?? null;
   const ota = useOtaPresentation();
-  const needsAttention = requiresNativeUpdate(update);
-  const otaNeedsAttention = Boolean(
-    ota && shouldShowOtaHeaderAction(ota.status),
+  const hasNativeUpdate = Boolean(
+    update &&
+      shouldOfferAppUpdate(update, buildNumber) &&
+      requiresNativeUpdate(update),
   );
-  const hasAttention = Boolean(update?.updateAvailable) || otaNeedsAttention;
+  const hasUnappliedOta = ota?.status === "downloading" || ota?.status === "ready";
+
+  if (!hasNativeUpdate && !hasUnappliedOta) {
+    return null;
+  }
 
   return (
     <HeaderButton
-      busy={updateQuery.isFetching || Boolean(ota?.isBusy)}
-      danger={needsAttention || ota?.status === "error"}
-      highlighted={hasAttention}
+      busy={ota?.status === "downloading" || Boolean(ota?.isBusy)}
       onPress={onOpen}
     />
   );
@@ -173,45 +175,31 @@ function MobileUpdateCenterButton({
 
 function HeaderButton({
   busy,
-  danger,
-  highlighted,
   onPress,
 }: {
   busy: boolean;
-  danger: boolean;
-  highlighted: boolean;
   onPress: () => void;
 }) {
   return (
-    <Pressable
-      accessibilityLabel={busy ? "Проверяем обновления" : "Центр обновлений"}
+    <VexPressable
+      accessibilityLabel={busy ? "Загружаем обновление" : "Обновление доступно"}
       accessibilityRole="button"
       accessibilityState={{ busy }}
+      hitSlop={12}
+      hoverStyle={styles.headerButtonPressed}
       onPress={() => {
         playSelectionHaptic();
         onPress();
       }}
-      style={[
-        vexSharedStyles.iconButton,
-        highlighted && styles.headerButtonHighlighted,
-        danger && styles.headerButtonDanger,
-      ]}
+      style={styles.headerButton}
+      title="Обновление"
     >
       {busy ? (
-        <VexNativeActivityIndicator color="#22D3EE" size="small" />
+        <VexNativeActivityIndicator color="#EAF7F8" size="small" />
       ) : (
-        <Download
-          color={danger ? "#FFB4A8" : highlighted ? "#22D3EE" : "#A7B9BD"}
-          size={23}
-          strokeWidth={2.5}
-        />
+        <Download color="#EAF7F8" size={25} strokeWidth={2.15} />
       )}
-      {danger || highlighted ? (
-        <View
-          style={[styles.headerBadge, danger && styles.headerBadgeDanger]}
-        />
-      ) : null}
-    </Pressable>
+    </VexPressable>
   );
 }
 
@@ -323,15 +311,19 @@ function MobileUpdateCenterContent({
   const otaReadyWithoutMetadata = Boolean(
     ota?.isSupported && ota.status === "ready" && !nativeUpdateRequired,
   );
-  const isCheckingForUpdates =
-    updateQuery.isFetching || isOtaActionBusy || Boolean(ota?.isBusy);
   const isPrimaryBusy =
     isOtaActionBusy ||
     Boolean(ota?.isBusy) ||
     (updateQuery.isFetching && !otaReadyWithoutMetadata);
+  const needsNativeRecovery =
+    assessment.updateAvailable &&
+    nativeUpdateRequired &&
+    !canStartInstall &&
+    !signingMigration;
   const primaryDisabled =
     isPrimaryBusy ||
-    (!otaReadyWithoutMetadata &&
+    (!needsNativeRecovery &&
+      !otaReadyWithoutMetadata &&
       !canStartInstall &&
       assessment.updateAvailable &&
       !otaUpdateAvailable);
@@ -369,6 +361,10 @@ function MobileUpdateCenterContent({
       }
       return;
     }
+    if (needsNativeRecovery) {
+      await checkForUpdates();
+      return;
+    }
     // A downloaded OTA can outlive (or be absent from) the API metadata. The shared
     // controller remains authoritative so this screen cannot start a second fetch flow.
     if (
@@ -399,7 +395,7 @@ function MobileUpdateCenterContent({
     if (otaUpdateAvailable) {
       if (!ota?.isSupported) {
         setActionError(
-          "OTA недоступно в этой сборке. Проверьте установленную версию приложения.",
+          "Быстрое обновление недоступно в этой сборке. Проверьте установленную версию приложения.",
         );
         return;
       }
@@ -450,12 +446,12 @@ function MobileUpdateCenterContent({
     canStartInstall,
     checkForUpdates,
     nativeUpdateRequired,
+    needsNativeRecovery,
     ota,
     otaUpdateAvailable,
     platform,
     signingMigration,
     update,
-    updateQuery,
   ]);
 
   return (
@@ -474,59 +470,17 @@ function MobileUpdateCenterContent({
       />
       <View style={styles.section}>
         <InfoRow
-          label="Текущая версия"
-          value={`${
-            appInfo?.version || Application.nativeApplicationVersion || "dev"
-          } (${buildNumber || 0})`}
+          label="Ваша версия"
+          value={appInfo?.version || Application.nativeApplicationVersion || "dev"}
         />
-        <InfoRow
-          label="Доступная версия"
-          value={
-            update?.updateAvailable
-              ? `${update.latestVersion || "unknown"} (${
-                  update.latestBuild || 0
-                })`
-              : "Нет новой версии"
-          }
-        />
-        <InfoRow
-          label="Канал APK"
-          value={update?.channel || appInfo?.channel || "production"}
-        />
-        <InfoRow
-          label="OTA"
-          tone={Updates.isEnabled ? "ok" : "warning"}
-          value={
-            Updates.isEnabled
-              ? `Включено${
-                  Updates.runtimeVersion
-                    ? `, runtime ${Updates.runtimeVersion}`
-                    : ""
-                }`
-              : "Недоступно в этой сборке"
-          }
-        />
-        <InfoRow
-          label="Совместимость"
-          tone={assessment.compatibilityTone}
-          value={assessment.compatibilityLabel}
-        />
-        <InfoRow
-          label="Подпись APK"
-          tone={assessment.signatureTone}
-          value={assessment.signatureLabel}
-        />
-        {update?.minSupportedBuild ? (
+        {assessment.updateAvailable ? (
           <InfoRow
-            label="Минимальная сборка"
-            value={String(update.minSupportedBuild)}
+            label="Новая версия"
+            value={update?.latestVersion || "Доступна"}
           />
         ) : null}
-        {update?.rolloutPercent !== undefined ? (
-          <InfoRow label="Rollout" value={`${update.rolloutPercent}%`} />
-        ) : null}
       </View>
-      {update?.changelog ? (
+      {assessment.updateAvailable && update?.changelog ? (
         <Text style={styles.notes}>{update.changelog}</Text>
       ) : null}
       {updateQuery.error ? (
@@ -548,18 +502,6 @@ function MobileUpdateCenterContent({
       {actionError ? <Text style={styles.error}>{actionError}</Text> : null}
       <View style={styles.actions}>
         <Pressable
-          disabled={isCheckingForUpdates}
-          onPress={() => {
-            void checkForUpdates();
-          }}
-          style={styles.secondaryButton}
-        >
-          <RefreshCw color="#A7B9BD" size={18} strokeWidth={2.5} />
-          <Text style={styles.secondaryText}>
-            {isCheckingForUpdates ? "Проверяем" : "Проверить"}
-          </Text>
-        </Pressable>
-        <Pressable
           disabled={primaryDisabled}
           onPress={handlePrimaryPress}
           style={[
@@ -571,22 +513,15 @@ function MobileUpdateCenterContent({
             {isPrimaryBusy
               ? "Проверяем"
               : otaReadyWithoutMetadata
-                ? "Применить безопасно"
-                : assessment.actionLabel}
+                ? "Применить"
+                : needsNativeRecovery
+                  ? "Повторить проверку"
+                  : assessment.updateAvailable
+                    ? "Обновить"
+                    : "Проверить обновления"}
           </Text>
         </Pressable>
       </View>
-      <Text style={styles.footnote}>
-        {signingMigration
-          ? "Android откроет загрузку новой APK-сборки VEX в браузере. После входа в новую сборку удалите старое приложение."
-          : otaUpdateAvailable && Updates.isEnabled
-            ? "Быстрые исправления интерфейса, маршрутизации и логики VEX скачиваются через OTA и применяются автоматически без APK/App Store."
-            : otaUpdateAvailable
-              ? "Это обновление не требует обязательной установки APK. OTA включится в production-сборке с настроенным expo-updates."
-              : platform === "android"
-                ? "Android скачает APK внутри VEX, проверит checksum и подпись приложения, затем откроет системный установщик."
-                : "iOS откроет официальную страницу обновления."}
-      </Text>
     </ScrollView>
   );
 }
@@ -674,28 +609,14 @@ async function openAndroidSigningMigrationDownload(): Promise<void> {
 }
 
 const styles = StyleSheet.create({
-  headerButtonHighlighted: {
-    backgroundColor: "transparent",
-    borderColor: "transparent",
+  headerButton: {
+    alignItems: "center",
+    height: 48,
+    justifyContent: "center",
+    width: 48,
   },
-  headerButtonDanger: {
-    backgroundColor: "transparent",
-    borderColor: "transparent",
-  },
-  headerBadge: {
-    backgroundColor: "#031012",
-    borderColor: "#22D3EE",
-    borderRadius: 5,
-    borderWidth: 1,
-    height: 10,
-    position: "absolute",
-    right: 7,
-    top: 7,
-    width: 10,
-  },
-  headerBadgeDanger: {
-    backgroundColor: "#FF7A7A",
-    borderColor: "#071113",
+  headerButtonPressed: {
+    opacity: 0.68,
   },
   noticeBanner: {
     alignItems: "center",

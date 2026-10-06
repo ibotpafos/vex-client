@@ -158,8 +158,13 @@ test("completion notice mounts outside the deferred overlay window", () => {
     1,
     "there must be one completion presentation, not a duplicate consumer",
   );
-  assert.match(center, /label="Канал APK"/);
-  assert.match(center, /label="Подпись APK"/);
+  assert.match(center, /label="Ваша версия"/);
+  assert.match(center, /assessment\.updateAvailable \? \(/);
+  assert.doesNotMatch(center, /label="Канал APK"|label="Подпись APK"|Минимальная сборка|Rollout/);
+  // Compact presentation must not weaken release priority or show stale metadata.
+  assert.match(center, /shouldOfferAppUpdate\(update, buildNumber\)/);
+  assert.match(center, /requiresNativeUpdate\(update\)/);
+  assert.match(center, /otaReadyWithoutMetadata/);
 
   const completionNoticeMs = 4_000;
   const deferredMountMs = 3_500;

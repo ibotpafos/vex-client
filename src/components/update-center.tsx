@@ -460,12 +460,14 @@ function MobileUpdateCenterContent({
         assessmentTone={
           otaReadyWithoutMetadata ? "ok" : assessment.compatibilityTone
         }
-        title={otaReadyWithoutMetadata ? "Обновление готово" : assessment.title}
+        title={otaReadyWithoutMetadata ? "Обновление готово" : otaUpdateAvailable ? "Доступно обновление" : assessment.title}
         message={
           otaReadyWithoutMetadata
             ? ota?.message ||
               "Обновление скачано. Применим его безопасно, когда VPN можно отключить."
-            : assessment.message
+            : otaUpdateAvailable
+              ? "Обновление установится без переустановки приложения."
+              : assessment.message
         }
       />
       <View style={styles.section}>

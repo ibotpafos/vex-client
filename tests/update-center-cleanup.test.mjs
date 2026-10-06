@@ -22,6 +22,8 @@ assert.match(content, /label="Ваша версия"/);
 assert.match(content, /assessment\.updateAvailable \? \(\s*<InfoRow\s*label="Новая версия"/);
 assert.match(content, /assessment\.updateAvailable && update\?\.changelog/);
 assert.doesNotMatch(content, /Канал APK|Подпись APK|Минимальная сборка|Rollout|runtime \$\{Updates\.runtimeVersion\}/);
+assert.match(content, /otaUpdateAvailable \? "Доступно обновление" : assessment\.title/);
+assert.match(content, /Обновление установится без переустановки приложения/);
 const actions = content.slice(content.indexOf('<View style={styles.actions}>'));
 assert.equal((actions.match(/<Pressable/g) || []).length, 1);
 assert.match(actions, /"Проверить обновления"/);

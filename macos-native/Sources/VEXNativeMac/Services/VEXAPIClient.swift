@@ -238,6 +238,12 @@ struct VEXAPIClient {
         )
     }
 
+    func captureClientNetwork(accessToken: String, report: ClientDiagnosticsReport) async throws -> String {
+        struct Receipt: Decodable { var id: String }
+        let receipt: Receipt = try await json("/v1/diagnostics/client", method: "POST", accessToken: accessToken, body: try report.dictionary(), timeout: 1)
+        return receipt.id
+    }
+
     func appUpdateCheck() async throws -> AppUpdateCheckResult {
         var result: AppUpdateCheckResult = try await json(
             "/v1/app/update/check",
@@ -310,13 +316,14 @@ struct VEXAPIClient {
         method: String = "GET",
         accessToken: String? = nil,
         body: [String: Any]? = nil,
-        idempotencyKey: String? = nil
+        idempotencyKey: String? = nil,
+        timeout: TimeInterval = 12
     ) async throws -> T {
         guard let url = URL(string: "\(baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/\(path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))") else {
             throw VEXAPIError.invalidResponse
         }
         var request = URLRequest(url: url)
-        request.timeoutInterval = 12
+        request.timeoutInterval = timeout
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("macos", forHTTPHeaderField: "X-Vex-Platform")

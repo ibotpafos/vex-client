@@ -15,10 +15,21 @@ function fixture(results) {
   let now = 1_000_000;
   let probes = 0;
   const reports = [];
+  let network = { networkClass: 'cellular', generation: 'ba88893a-0bc5-4c1b-8f69-b9cce50172d0' };
+  let nativeState = 'disconnected';
+  let failSeed = false;
+  const pure = { exports: {} };
+  vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(path.dirname(sourcePath), 'networkObservation.ts'), 'utf8'), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+  }).outputText, { module: pure, exports: pure.exports });
   const modules = {
     '@/api/vexApi': {
       vexApiBaseUrl: 'https://fixture.example',
-      submitClientDiagnostics: async (_token, report) => reports.push(report),
+      submitClientDiagnostics: async (_token, report) => {
+        if (failSeed && report.reason === 'network_before_connect') throw new Error('Offline fixture');
+        reports.push(report);
+        return { id: 'fixture-observation' };
+      },
     },
     '@/native/appInfo': { getAppInfo: async () => ({ platform: 'android', version: '1.0.64', build: '1006472' }) },
     '@/native/secureStore': {
@@ -28,6 +39,8 @@ function fixture(results) {
     },
     '@/native/vexVpn': {
       readNativeVpnDiagnostics: async () => ({}),
+      readVpnNetworkObservation: async () => network,
+      getVpnStatus: async () => ({ state: nativeState }),
       measureEndpointLatency: async () => { throw new Error('Unexpected native latency call'); },
     },
     '@/vpn/networkHealthProbe': {
@@ -37,6 +50,7 @@ function fixture(results) {
         return result;
       },
     },
+    './networkObservation': pure.exports,
     './otaProvenance': {
       getOtaProvenance: () => ({
         ota_update_id: '45f1420d-43a7-4c7d-9412-2e7fd4236ad4',
@@ -58,10 +72,14 @@ function fixture(results) {
   }, { filename: sourcePath });
   return {
     reports,
+    capture: () => module.exports.prepareClientNetworkDiagnostics('TOKEN', 'fixture-device'),
+    network: (generation) => { network = { ...network, generation }; },
+    nativeState: (state) => { nativeState = state; },
+    failSeed: () => { failSeed = true; },
     probes: () => probes,
     clock: (value) => { now = value; },
     upload: (state, handshake, endpoint = 'HOST:443', samples) => module.exports.uploadClientDiagnostics('TOKEN', {
-      reason: 'fixture', status: 'ok', endpoint,
+      reason: 'fixture', status: 'ok', endpoint, deviceId: 'fixture-device',
       vpnStatus: { state, latestHandshakeEpochMillis: handshake },
       samples,
     }),
@@ -165,4 +183,39 @@ test('wall-clock rollback does not keep a future-dated healthy cache', async () 
   await f.upload('connected', 100);
   assert.equal(f.probes(), 2);
   assert.equal(f.reports[1].httpsOk, false);
+});
+
+
+test('pre-connect receipt follows unchanged underlay into connected reports', async () => {
+  const f = fixture([{ httpsOk: true }]);
+  await f.capture();
+  f.nativeState('connected');
+  await f.upload('connected', 100);
+  assert.equal(f.reports[0].reason, 'network_before_connect');
+  assert.equal(f.reports[1].networkObservationId, 'fixture-observation');
+  assert.equal(f.reports[1].networkClass, 'cellular');
+});
+
+test('network handoff drops attribution and invalidates healthy cached probes', async () => {
+  const f = fixture([{ httpsOk: true }, { httpsOk: false }]);
+  await f.capture();
+  await f.upload('connected', 100);
+  f.network('cd88893a-0bc5-4c1b-8f69-b9cce50172d0');
+  await f.upload('connected', 100);
+  assert.equal(f.probes(), 2);
+  assert.equal(f.reports[2].networkObservationId, undefined);
+  assert.equal(f.reports[2].httpsOk, false);
+});
+
+test('an existing VPN and offline capture cannot generate or queue an underlay seed', async () => {
+  const f = fixture([{ httpsOk: true }]);
+  f.nativeState('connected');
+  await f.capture();
+  assert.equal(f.reports.length, 0);
+  f.nativeState('disconnected');
+  f.failSeed();
+  await f.capture();
+  await f.upload('connected', 100);
+  assert.equal(f.reports.length, 1);
+  assert.equal(f.reports[0].networkObservationId, undefined);
 });

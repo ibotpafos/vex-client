@@ -149,6 +149,9 @@ export type VpnDeviceUsageSnapshot = {
 };
 
 export type ClientDiagnosticsReportInput = {
+  networkClass?: 'wifi' | 'cellular' | 'ethernet' | 'unknown';
+  networkObservationId?: string;
+  networkGeneration?: string;
   deviceId?: string;
   platform?: string;
   appVersion?: string;

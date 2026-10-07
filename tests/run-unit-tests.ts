@@ -547,6 +547,9 @@ assertDeepEqual(
   }),
   {
     device_id: undefined,
+    network_class: undefined,
+    network_observation_id: undefined,
+    network_generation: undefined,
     platform: undefined,
     app_version: undefined,
     reason: undefined,

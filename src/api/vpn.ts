@@ -292,12 +292,12 @@ export async function reportVpnDisconnect(accessToken: string, tunnel: { device?
   });
 }
 
-export async function submitClientDiagnostics(accessToken: string, report: ClientDiagnosticsReportInput): Promise<void> {
-  await rawRequest('/v1/diagnostics/client', {
+export async function submitClientDiagnostics(accessToken: string, report: ClientDiagnosticsReportInput, timeout = 12_000): Promise<{ id: string }> {
+  return jsonRequest<{ id: string }>('/v1/diagnostics/client', {
     method: 'POST',
     accessToken,
     suppressErrorLog: true,
-    timeout: 12_000,
+    timeout,
     body: clientDiagnosticsRequestBody(report),
   });
 }

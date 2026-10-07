@@ -4,6 +4,8 @@ import * as SecureStore from '@/native/secureStore';
 import { measureEndpointLatency, readNativeVpnDiagnostics, type VpnStatus } from '@/native/vexVpn';
 import { probeNetworkHealth } from '@/vpn/networkHealthProbe';
 import { getOtaProvenance } from './otaProvenance';
+import { getVpnStatus, readVpnNetworkObservation } from '@/native/vexVpn';
+import { matchingNetworkObservation, type CapturedNetworkObservation } from './networkObservation';
 
 const queueKey = 'vex.diagnostics.client.queue.v1';
 const maxQueuedReports = 10;
@@ -31,9 +33,34 @@ export type VpnDiagnosticsSnapshot = {
 };
 
 let uploadChain: Promise<void> = Promise.resolve();
+let capturedNetwork: CapturedNetworkObservation | null = null;
+let capturedAccessToken: string | undefined;
+let captureGeneration = 0;
+
+export async function prepareClientNetworkDiagnostics(accessToken: string, deviceId: string | undefined): Promise<void> {
+  const attempt = ++captureGeneration;
+  const deadline = Date.now() + 1_500;
+  capturedNetwork = null;
+  capturedAccessToken = undefined;
+  if (!deviceId) return;
+  try {
+    const [network, status, app] = await Promise.all([readVpnNetworkObservation(), getVpnStatus(), getAppInfo()]);
+    if (!network.generation || status.state !== 'disconnected' || Date.now() >= deadline || attempt !== captureGeneration) return;
+    // Never queue this seed: retrying it through a tunnel observes the VPN exit.
+    const response = await submitClientDiagnostics(accessToken, {
+      deviceId, platform: app.platform, appVersion: app.version, reason: 'network_before_connect', status: 'info',
+      vpnState: 'disconnected', networkClass: network.networkClass, networkGeneration: network.generation,
+    }, Math.min(1_000, deadline - Date.now()));
+    const current = await readVpnNetworkObservation();
+    if (attempt !== captureGeneration || Date.now() >= deadline || current.generation !== network.generation || current.networkClass !== network.networkClass || !response.id) return;
+    capturedNetwork = { ...network, id: response.id, deviceId, capturedAt: Date.now() };
+    capturedAccessToken = accessToken;
+  } catch { /* Optional capture must not prevent VPN connection. */ }
+}
 let cachedNetworkProbe: {
   endpoint?: string;
   vpnState: VpnStatus['state'];
+  networkGeneration: string;
   latestHandshakeEpochMillis?: number;
   measuredAt: number;
   result: Awaited<ReturnType<typeof probeNetworkHealth>>;
@@ -48,7 +75,7 @@ export function uploadClientDiagnostics(accessToken: string, snapshot: VpnDiagno
 }
 
 async function uploadClientDiagnosticsNow(accessToken: string, snapshot: VpnDiagnosticsSnapshot): Promise<void> {
-  const report = await buildClientDiagnosticsReport(snapshot);
+  const report = await buildClientDiagnosticsReport(snapshot, accessToken);
   const queuedReports = await readQueuedReports();
   const remainingReports: ClientDiagnosticsReportInput[] = [];
 
@@ -68,14 +95,20 @@ async function uploadClientDiagnosticsNow(accessToken: string, snapshot: VpnDiag
   }
 }
 
-async function buildClientDiagnosticsReport(snapshot: VpnDiagnosticsSnapshot): Promise<ClientDiagnosticsReportInput> {
+async function buildClientDiagnosticsReport(snapshot: VpnDiagnosticsSnapshot, accessToken: string): Promise<ClientDiagnosticsReportInput> {
   const appInfo = await getAppInfo();
   const nativeVpnDiagnostics = await readNativeVpnDiagnostics();
   const usage = snapshot.usage;
   const generatedAt = new Date().toISOString();
-  const networkProbe = await cachedDiagnosticsNetworkProbe(snapshot.endpoint, snapshot.vpnStatus);
+  const beforeProbe = await readVpnNetworkObservation();
+  const networkProbe = await cachedDiagnosticsNetworkProbe(snapshot.endpoint, snapshot.vpnStatus, beforeProbe.generation);
+  const currentNetwork = await readVpnNetworkObservation();
+  const observationId = matchingNetworkObservation(capturedAccessToken === accessToken ? capturedNetwork : null, currentNetwork, snapshot.deviceId, Date.now());
   return {
     deviceId: snapshot.deviceId,
+    networkClass: currentNetwork.networkClass,
+    networkObservationId: observationId,
+    networkGeneration: observationId ? currentNetwork.generation : undefined,
     platform: appInfo.platform,
     appVersion: appInfo.build ? `${appInfo.version}+${appInfo.build}` : appInfo.version,
     reason: snapshot.reason,
@@ -169,13 +202,12 @@ function hasErrorKey(samples: Record<string, unknown> | undefined, key: string):
   return typeof samples?.[key] === 'string' && Boolean(samples[key].trim());
 }
 
-async function cachedDiagnosticsNetworkProbe(endpoint: string | undefined, vpnStatus: VpnStatus): Promise<Awaited<ReturnType<typeof probeNetworkHealth>>> {
+async function cachedDiagnosticsNetworkProbe(endpoint: string | undefined, vpnStatus: VpnStatus, networkGeneration: string): Promise<Awaited<ReturnType<typeof probeNetworkHealth>>> {
   const now = Date.now();
-  // TODO(android-network-generation): include transport generation when native
-  // status exposes it; state/handshake do not identify every Wi-Fi/mobile handoff.
   if (
     cachedNetworkProbe
     && cachedNetworkProbe.endpoint === endpoint
+    && cachedNetworkProbe.networkGeneration === networkGeneration
     && cachedNetworkProbe.vpnState === vpnStatus.state
     && cachedNetworkProbe.latestHandshakeEpochMillis === vpnStatus.latestHandshakeEpochMillis
     && now >= cachedNetworkProbe.measuredAt
@@ -196,6 +228,7 @@ async function cachedDiagnosticsNetworkProbe(endpoint: string | undefined, vpnSt
       cachedNetworkProbe = {
         endpoint,
         vpnState: vpnStatus.state,
+        networkGeneration,
         latestHandshakeEpochMillis: vpnStatus.latestHandshakeEpochMillis,
         measuredAt: Date.now(),
         result,

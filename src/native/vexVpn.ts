@@ -70,6 +70,7 @@ type VexVpnNativeModule = {
   resetWireGuardKeyPair(): Promise<boolean>;
   measureEndpointLatency(endpoint: string): Promise<number | null>;
   readDiagnostics?(): Promise<Record<string, unknown>[]>;
+  networkObservation?(): Promise<{ networkClass: string; generation: string }>;
   updateLiveActivity?(payload: VpnLiveActivityPayload): Promise<boolean>;
   endLiveActivity?(): Promise<boolean>;
   requestNotificationPermission?(): Promise<boolean>;
@@ -82,6 +83,18 @@ type VexVpnNativeModule = {
 };
 
 const nativeModule = NativeModules.VexVpn as VexVpnNativeModule | undefined;
+
+// No IP, SSID, SIM identity or network handle crosses the native boundary.
+// Old native binaries safely return unknown until their signed update arrives.
+export async function readVpnNetworkObservation(): Promise<{ networkClass: 'wifi' | 'cellular' | 'ethernet' | 'unknown'; generation: string }> {
+  try {
+    const observed = await requireNativeModule().networkObservation?.();
+    if (observed && ['wifi', 'cellular', 'ethernet'].includes(observed.networkClass) && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(observed.generation)) {
+      return observed as { networkClass: 'wifi' | 'cellular' | 'ethernet'; generation: string };
+    }
+  } catch { /* Optional diagnostics must not affect VPN admission. */ }
+  return { networkClass: 'unknown', generation: '' };
+}
 const androidStatusCacheTtlMs = 1_200;
 const vpnStatusChangedEvent = 'vpn-status-changed';
 

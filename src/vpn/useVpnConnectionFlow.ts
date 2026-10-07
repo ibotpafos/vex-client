@@ -44,7 +44,7 @@ import {
   chooseBestVpnLocation,
   type ServerSelectionMode,
 } from '@/vpn/serverSelection';
-import { uploadClientDiagnostics } from '@/diagnostics/clientDiagnostics';
+import { prepareClientNetworkDiagnostics, uploadClientDiagnostics } from '@/diagnostics/clientDiagnostics';
 import { submitClientDiagnostics, type VpnLocation } from '@/api/vexApi';
 import { dynamicRouteRuntime } from '@/vpn/dynamicRouteRuntime';
 import { routeTransport, type DynamicRouteAttempt, type DynamicRouteCandidate } from '@/vpn/dynamicRouteCore';
@@ -92,6 +92,9 @@ export function useVpnConnectionFlow({
 }: UseVpnConnectionFlowInput) {
 
   const connectProfileWithEndpointFallback = useCallback(async (profile: VpnProfile) => {
+    if (session?.accessToken) {
+      await withTimeout(prepareClientNetworkDiagnostics(session.accessToken, profile.device?.id), 1_500, 'Optional network observation timed out.').catch(() => undefined);
+    }
     if (!vpnProfileAddressMatchesDevice(profile)) {
       throw new Error('VPN connection failed: cached profile address does not match its device assignment.');
     }

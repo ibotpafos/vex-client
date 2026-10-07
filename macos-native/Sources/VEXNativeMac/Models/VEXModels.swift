@@ -491,6 +491,9 @@ struct ClientDiagnosticsReport: Codable, Equatable {
     var connectionEvent: String? = nil
     var transportFrom: String? = nil
     var transportTo: String? = nil
+    var networkClass: String? = nil
+    var networkObservationId: String? = nil
+    var networkGeneration: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case deviceId = "device_id"
@@ -509,6 +512,9 @@ struct ClientDiagnosticsReport: Codable, Equatable {
         case connectionEvent = "connection_event"
         case transportFrom = "transport_from"
         case transportTo = "transport_to"
+        case networkClass = "network_class"
+        case networkObservationId = "network_observation_id"
+        case networkGeneration = "network_generation"
     }
 }
 

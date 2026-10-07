@@ -370,6 +370,15 @@ final class VEXAppState: ObservableObject {
                 prevalidatedEntitlement: entitlement
             )
             try ensureConnectStillDesired(generation: generation)
+            await withTaskGroup(of: Void.self) { group in
+                let diagnostics = diagnosticsService
+                let state = helper.status.state.rawValue
+                group.addTask { await diagnostics.captureNetwork(accessToken: tunnelToken, deviceId: tunnel.device.id, vpnState: state) }
+                group.addTask { try? await Task.sleep(for: .milliseconds(1_500)) }
+                _ = await group.next()
+                group.cancelAll()
+            }
+            try ensureConnectStillDesired(generation: generation)
             let connectedTunnel = try await connectWithAutopilot(
                 initialTunnel: tunnel,
                 accessToken: tunnelToken,

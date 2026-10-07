@@ -5,6 +5,9 @@ actor DiagnosticsService {
     private let fileManager: FileManager
     private let maxQueuedReports = 10
     private var rateLimitedUntil: Date?
+    private let networkMonitor = ClientNetworkMonitor()
+    private var capturedNetwork: CapturedClientNetwork?
+    private var captureGeneration = 0
 
     init(api: VEXAPIClient = VEXAPIClient(), fileManager: FileManager = .default) {
         self.api = api
@@ -12,6 +15,13 @@ actor DiagnosticsService {
     }
 
     func upload(accessToken: String, report: ClientDiagnosticsReport) async {
+        var report = report
+        let network = networkMonitor.snapshot()
+        report.networkClass = network.networkClass
+        if let capturedNetwork, capturedNetwork.matches(network, device: report.deviceId, token: accessToken, now: Date()) {
+            report.networkObservationId = capturedNetwork.id
+            report.networkGeneration = network.generation
+        }
         guard !isRateLimited else {
             saveQueue(Array((loadQueue() + [report]).suffix(maxQueuedReports)))
             return
@@ -41,6 +51,24 @@ actor DiagnosticsService {
             }
             saveQueue(Array((remaining + [report]).suffix(maxQueuedReports)))
         }
+    }
+
+    func captureNetwork(accessToken: String, deviceId: String, vpnState: String) async {
+        captureGeneration += 1
+        let attempt = captureGeneration
+        capturedNetwork = nil
+        guard vpnState == "disconnected", !isRateLimited else { return }
+        let network = networkMonitor.snapshot()
+        guard network.networkClass != "unknown", !network.generation.isEmpty else { return }
+        var seed = ClientDiagnosticsReport(deviceId: deviceId, reason: "network_before_connect", status: "info", vpnState: "disconnected", rxBytes: 0, txBytes: 0, samples: [:])
+        seed.networkClass = network.networkClass
+        seed.networkGeneration = network.generation
+        let started = Date()
+        // Never queue an observation seed or retry it through the VPN exit.
+        guard let id = try? await api.captureClientNetwork(accessToken: accessToken, report: seed),
+            attempt == captureGeneration, Date().timeIntervalSince(started) < 1.5,
+            networkMonitor.snapshot() == network else { return }
+        capturedNetwork = CapturedClientNetwork(snapshot: network, id: id, deviceId: deviceId, accessToken: accessToken, capturedAt: started)
     }
 
     func flush(accessToken: String) async {

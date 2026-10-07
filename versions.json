@@ -1,10 +1,10 @@
 {
   "android": {
-    "version": "1.0.67",
-    "build": 75,
+    "version": "1.0.68",
+    "build": 76,
     "min_supported_build": 1002930,
     "is_required": false,
-    "release_notes": "Android 1.0.67: главный экран без лишних карточек; предупреждение о трафике при остатке 10%, продление при окончании доступа, компактный центр безопасных обновлений. Обновление необязательное.",
+    "release_notes": "Android 1.0.68: диагностика типа сети и оператора для поиска обрывов VPN; привязка сбрасывается при смене Wi-Fi или мобильной сети. Обновление необязательное.",
     "core_version": "0.1.0",
     "config_schema_version": 1,
     "min_config_schema_version": 1,
@@ -103,12 +103,12 @@
     "min_config_schema_version": 1
   },
   "native_macos": {
-    "version": "0.1.87",
-    "build": 117,
+    "version": "0.1.88",
+    "build": 118,
     "min_supported_build": 1,
     "config_schema_version": 1,
     "core_version": "0.1.0",
-    "release_notes": "macOS: подписанные обновления Sparkle; текущая опубликованная версия.",
-    "release_status": "published"
+    "release_notes": "macOS 0.1.88: диагностика сети до подключения VPN для поиска сбоев у операторов; устаревшая привязка отбрасывается при изменении сетевого пути.",
+    "release_status": "candidate"
   }
 }

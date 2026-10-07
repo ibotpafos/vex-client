@@ -78,6 +78,13 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
   override fun getName(): String = "VexVpn"
 
   @ReactMethod
+  fun networkObservation(promise: Promise) {
+    val result = Arguments.createMap()
+    controller.networkObservation().forEach { (key, value) -> result.putString(key, value) }
+    promise.resolve(result)
+  }
+
+  @ReactMethod
   fun needsPermission(promise: Promise) {
     promise.resolve(controller.needsPermission())
   }

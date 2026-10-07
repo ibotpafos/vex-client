@@ -18,6 +18,7 @@ import android.system.StructTimeval
 import android.util.Log
 import java.io.FileDescriptor
 import java.net.Inet4Address
+import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineScope
@@ -48,6 +49,25 @@ class WireGuardController(context: Context) {
   private var lastRoutedApplications: List<String> = emptyList()
   private var lastConfigText: String? = null
   private var selectedUnderlyingNetwork: Network? = null
+  private var diagnosticNetworkGeneration = UUID.randomUUID().toString()
+  private var diagnosticObservedNetwork: Network? = null
+
+  fun networkObservation(): Map<String, String> = synchronized(availableUnderlyingNetworks) {
+    val network = selectedUnderlyingNetworkSnapshot()
+    // Invalidate even when a read sees a handoff before the callback arrives.
+    if (network != diagnosticObservedNetwork) {
+      diagnosticObservedNetwork = network
+      diagnosticNetworkGeneration = UUID.randomUUID().toString()
+    }
+    val capabilities = network?.let { connectivityManager.getNetworkCapabilities(it) }
+    val networkClass = when {
+      capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true -> "wifi"
+      capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true -> "ethernet"
+      capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true -> "cellular"
+      else -> "unknown"
+    }
+    mapOf("networkClass" to networkClass, "generation" to if (network == null) "" else diagnosticNetworkGeneration)
+  }
   private val networkTransitionTracker = UnderlyingNetworkTransitionTracker<Network>()
   private val networkRecoveryRequests = Channel<Pair<Network, Network>>(Channel.CONFLATED)
 
@@ -356,6 +376,7 @@ class WireGuardController(context: Context) {
       return
     }
     selectedUnderlyingNetwork = selected
+    diagnosticNetworkGeneration = UUID.randomUUID().toString()
     Log.i(TAG, "Underlying network selection changed from $previous to $selected")
     networkTransitionTracker.update(selected)?.let { (recoveryFrom, recoveryTo) ->
       scheduleNetworkRecovery(recoveryFrom, recoveryTo)

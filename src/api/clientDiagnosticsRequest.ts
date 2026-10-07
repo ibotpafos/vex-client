@@ -3,6 +3,9 @@ import type { ClientDiagnosticsReportInput } from './types';
 export function clientDiagnosticsRequestBody(report: ClientDiagnosticsReportInput) {
   return {
     device_id: report.deviceId,
+    network_class: report.networkClass,
+    network_observation_id: report.networkObservationId,
+    network_generation: report.networkGeneration,
     platform: report.platform,
     app_version: report.appVersion,
     reason: report.reason,

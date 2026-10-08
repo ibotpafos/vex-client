@@ -9,6 +9,7 @@ import {
   type VpnDeviceUsage,
 } from '@/api/vexApi';
 import { uploadClientDiagnostics } from '@/diagnostics/clientDiagnostics';
+import { diagnosticFailureSamples } from '@/diagnostics/failureSamples';
 import type { VpnStatus } from '@/native/vexVpn';
 import type { VpnProfile } from '@/vpn/profile';
 import {
@@ -49,8 +50,8 @@ export function useVpnDiagnostics({
     if (!session?.accessToken) {
       return;
     }
-    const message = errorMessage(error, reason);
-    const diagnosticKey = `${reason}:error:${locationId}:${message}`;
+    const failure = diagnosticFailureSamples(error);
+    const diagnosticKey = `${reason}:error:${locationId}:${failure.diagnostic_error_class}:${failure.diagnostic_http_status ?? ''}`;
     const now = Date.now();
     if (now - (lastClientDiagnosticsAtRef.current[diagnosticKey] ?? 0) < clientDiagnosticsErrorCooldownMs) {
       return;
@@ -60,15 +61,16 @@ export function useVpnDiagnostics({
     await uploadClientDiagnostics(session.accessToken, {
       reason,
       status: 'error',
+      deviceId: activeProfileDeviceId,
       vpnStatus,
       latencyMs: clientLatencyMs,
       samples: {
         connection_phase: connectionPhase,
-        error_message: message,
+        ...failure,
         location_id: locationId,
       },
     });
-  }, [clientLatencyMs, connectionPhase, session?.accessToken, vpnStatus]);
+  }, [activeProfileDeviceId, clientLatencyMs, connectionPhase, session?.accessToken, vpnStatus]);
 
   const handleProfileRefreshFailed = useCallback((event: { error: unknown; locationId: string; reason: string }) => {
     void submitProfileDiagnosticsEvent(event).catch(() => undefined);
@@ -115,7 +117,7 @@ export function useVpnDiagnostics({
     if (!session?.accessToken) {
       return;
     }
-    const diagnosticKey = `${reason}:${status}:${String(samples.error_message ?? samples.error ?? '')}`;
+    const diagnosticKey = `${reason}:${status}:${String(samples.diagnostic_error_class ?? '')}:${String(samples.diagnostic_http_status ?? '')}:${String(samples.error_message ?? samples.error ?? '')}`;
     const now = Date.now();
     if (now - (lastClientDiagnosticsAtRef.current[diagnosticKey] ?? 0) < clientDiagnosticsErrorCooldownMs) {
       return;

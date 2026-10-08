@@ -135,7 +135,7 @@ async function rawRequestAttempt(path: string, options: RequestOptions, method: 
       logApiDebug('API Outer Catch Error:', message);
     }
     if (error instanceof Error && error.name === 'AbortError') {
-      throw new ApiRequestError('Превышено время ожидания API.');
+      throw new ApiRequestError('Превышено время ожидания API.', { code: 'request_timeout' });
     }
     throw error;
   }

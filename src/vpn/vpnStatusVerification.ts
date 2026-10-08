@@ -4,7 +4,7 @@ export function hasVerifiedNativeTunnelActivity(status: VpnStatus, platform: str
   const hasHandshake = Boolean(
     status.latestHandshakeEpochMillis && status.latestHandshakeEpochMillis > 0,
   );
-  if (platform === 'android') {
+  if (platform === 'android' || platform === 'ios') {
     return hasHandshake;
   }
   return hasHandshake || status.rxBytes > 0 || status.txBytes > 0;
@@ -12,7 +12,7 @@ export function hasVerifiedNativeTunnelActivity(status: VpnStatus, platform: str
 
 export function resolveNativeTunnelVerified(status: VpnStatus, platform: string): boolean {
   const hasVerifiedActivity = hasVerifiedNativeTunnelActivity(status, platform);
-  if (platform === 'android') {
+  if (platform === 'android' || platform === 'ios') {
     return hasVerifiedActivity;
   }
   return hasVerifiedActivity || status.verified === true;

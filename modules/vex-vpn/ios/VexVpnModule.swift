@@ -256,7 +256,25 @@ private final class IosTunnelStore {
       "rxBytes": 0,
       "txBytes": 0
     ]
-    if status == .connected {
+    if status == .connected, let session = manager?.connection as? NETunnelProviderSession {
+      let connectedDate = session.connectedDate
+      let runtime = await IosTunnelRuntimeReader.read { request, response in
+        try session.sendProviderMessage(request, responseHandler: response)
+      }
+      // A response for a disconnected/replaced session must not verify a newer
+      // connection. Keep state/counters unknown when runtime evidence is absent.
+      let currentState = session.status
+      result["state"] = Self.stateName(currentState)
+      result["nativeState"] = currentState.rawValue
+      if currentState == .connected, let connectedDate,
+         session.connectedDate == connectedDate, let runtime {
+        result["rxBytes"] = runtime.rxBytes
+        result["txBytes"] = runtime.txBytes
+        result["latestHandshakeEpochMillis"] = runtime.latestHandshakeEpochMillis
+        result["verified"] = runtime.latestHandshakeEpochMillis > 0
+      }
+    }
+    if result["state"] as? String == "connected" && result["verified"] as? Bool != true {
       result["verified"] = false
       result["verificationReason"] = "handshake_pending"
     }

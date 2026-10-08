@@ -4,6 +4,19 @@ import { waitForVerifiedVpnConnection } from '../src/vpn/connectVerification.ts'
 
 const pending = { state: 'connected', rxBytes: 0, txBytes: 0, verified: false };
 
+test('an iOS extension may still be connecting when startVPNTunnel returns', async () => {
+  const result = await waitForVerifiedVpnConnection({ ...pending, state: 'connecting' }, async () => ({
+    ...pending, verified: true, latestHandshakeEpochMillis: 1000,
+  }), { minimumHandshakeEpochMillis: 1000, pollMs: 0 });
+  assert.equal(result.latestHandshakeEpochMillis, 1000);
+});
+
+test('a starting extension still needs a handshake before the same deadline', async () => {
+  await assert.rejects(waitForVerifiedVpnConnection({ ...pending, state: 'connecting' }, async () => ({
+    ...pending, state: 'connecting',
+  }), { attempts: 2, pollMs: 0 }), /VPN handshake timed out/);
+});
+
 test('a ready fresh handshake is read before the first polling delay', async () => {
   const result = await waitForVerifiedVpnConnection(pending, async () => ({
     ...pending, verified: true, latestHandshakeEpochMillis: 1000,

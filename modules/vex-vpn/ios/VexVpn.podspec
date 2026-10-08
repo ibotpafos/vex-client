@@ -20,6 +20,7 @@ Pod::Spec.new do |s|
 
   s.source_files = [
     "VexVpnModule.swift",
+    "IosTunnelRuntime.swift",
     "live-activity/*.swift"
   ]
 end

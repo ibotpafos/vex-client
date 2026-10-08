@@ -18,10 +18,10 @@ export async function waitForVerifiedVpnConnection(
   readStatus: () => Promise<VpnStatus>,
   options: HandshakeVerificationOptions = {},
 ): Promise<VpnStatus> {
-  if (initialStatus.state !== 'connected') {
+  if (!['connected', 'connecting', 'verifying'].includes(initialStatus.state)) {
     throw new Error('VPN backend did not enter the connected state.');
   }
-  if (isHandshakeVerifiedForAttempt(initialStatus, options)) {
+  if (initialStatus.state === 'connected' && isHandshakeVerifiedForAttempt(initialStatus, options)) {
     return initialStatus;
   }
 

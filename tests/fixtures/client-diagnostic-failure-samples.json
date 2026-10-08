@@ -1,0 +1,13 @@
+{
+  "schema": "vex.client-diagnostic-failure.v1",
+  "attribution": "client_reported",
+  "cases": [
+    {"kind":"http","status":401,"expected":{"diagnostic_error_class":"http","diagnostic_http_status":401}},
+    {"kind":"http","status":503,"expected":{"diagnostic_error_class":"http","diagnostic_http_status":503}},
+    {"kind":"timeout","expected":{"diagnostic_error_class":"timeout"}},
+    {"kind":"network","expected":{"diagnostic_error_class":"network"}},
+    {"kind":"cancelled","expected":{"diagnostic_error_class":"cancelled"}},
+    {"kind":"response_parse","expected":{"diagnostic_error_class":"response_parse"}},
+    {"kind":"unknown","expected":{"diagnostic_error_class":"unknown"}}
+  ]
+}

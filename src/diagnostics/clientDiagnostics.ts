@@ -6,6 +6,7 @@ import { probeNetworkHealth } from '@/vpn/networkHealthProbe';
 import { getOtaProvenance } from './otaProvenance';
 import { getVpnStatus, readVpnNetworkObservation } from '@/native/vexVpn';
 import { matchingNetworkObservation, type CapturedNetworkObservation } from './networkObservation';
+import type { DiagnosticErrorClass } from './failureSamples';
 
 const queueKey = 'vex.diagnostics.client.queue.v1';
 const maxQueuedReports = 10;
@@ -154,7 +155,6 @@ async function buildClientDiagnosticsReport(snapshot: VpnDiagnosticsSnapshot, ac
   };
 }
 
-type DiagnosticErrorClass = 'auth' | 'entitlement' | 'network' | 'timeout' | 'profile_revoked' | 'native_connect' | 'cancelled' | 'unknown';
 type DiagnosticErrorStage = 'profile_resolution' | 'hot_profile' | 'native_connect' | 'verification';
 
 function diagnosticErrorMetadata(reason: string, samples: Record<string, unknown> | undefined): Record<string, DiagnosticErrorClass | DiagnosticErrorStage> {

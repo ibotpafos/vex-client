@@ -1,4 +1,5 @@
 import './country-groups.test';
+import './diagnostic-failure-samples.test';
 import { billingDurationLabel, billingDurationMonths, billingSummaryFallbackCopy, buildBillingSummary, type BillingPlanSource } from '../src/api/billingSummary';
 import { buildSubscriptionReminders } from '../src/notifications/subscriptionReminderSchedule';
 import { devicePushTokenPath, fcmPushRegistration } from '../src/notifications/pushRegistration';

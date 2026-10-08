@@ -20,6 +20,7 @@ import {
   vpnLocations,
 } from '@/api/vexApi';
 import { startPushRegistrationLoop } from '@/notifications/pushRegistrationLoop';
+import { diagnosticFailureSamples } from '@/diagnostics/failureSamples';
 import { useSession } from '@/auth/session-context';
 import { openExternalUrl } from '@/auth/systemAuth';
 import { vexWebsite } from '@/navigation/website';
@@ -886,7 +887,7 @@ export function useVpnConnection() {
         void refreshVpnStatus('native_status_on_active_failed');
         refreshManagedProfile({ reason: 'profile_updated' }).catch((error) => {
           void submitClientDiagnosticsEvent('profile_refresh_on_active_failed', 'error', {
-            error_message: errorMessage(error, 'profile_refresh_on_active_failed'),
+            ...diagnosticFailureSamples(error),
           }).catch(() => undefined);
         });
       }

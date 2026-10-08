@@ -14,7 +14,14 @@ export class ApiRequestError extends Error {
 
 export function normalizeApiRequestError(error: unknown): Error {
   if (isTechnicalWorksError(error)) {
-    return new Error(technicalWorksMessage);
+    if (error instanceof ApiRequestError) {
+      return new ApiRequestError(technicalWorksMessage, { status: error.status, code: error.code });
+    }
+    const message = error instanceof Error ? error.message.toLowerCase() : '';
+    const code = message.includes('превышено время ожидания api') ? 'request_timeout'
+      : /network request failed|failed to fetch|load failed|unable to resolve host|could not connect|connection refused|connection reset/.test(message)
+        ? 'network_unavailable' : undefined;
+    return new ApiRequestError(technicalWorksMessage, { code });
   }
   if (error instanceof Error) {
     return error;

@@ -273,21 +273,43 @@ final class ServerSidebarWindowTests: XCTestCase {
             encoding: .utf8
         )
 
-        XCTAssertTrue(source.contains("guard !isServerSelectionBusy, !isVpnBusy, !helper.isBusy"))
-        XCTAssertTrue(source.contains("isServerSelectionBusy = true"))
-        XCTAssertTrue(source.contains("selectedLocationId = previousLocationID"))
-        XCTAssertTrue(source.contains("serverSelectionMode = previousSelectionMode"))
-        XCTAssertTrue(source.contains("autoServerEnabled = previousAutoServerEnabled"))
+        func section(from start: String, until end: String) throws -> String {
+            let startRange = try XCTUnwrap(source.range(of: start))
+            let endRange = try XCTUnwrap(source.range(of: end, range: startRange.upperBound..<source.endIndex))
+            return String(source[startRange.lowerBound..<endRange.lowerBound])
+        }
+        let selection = try section(from: "private func performServerSelection(", until: "func setServerSidebarFilter(")
+        XCTAssertTrue(selection.contains("guard !isServerSelectionBusy, !isVpnBusy, !helper.isBusy"))
+        XCTAssertTrue(selection.contains("defer { isServerSelectionBusy = false }"))
+        let selectionBusy = try XCTUnwrap(selection.range(of: "isServerSelectionBusy = true"))
+        let selectionCall = try XCTUnwrap(selection.range(of: "await selection()"))
+        let switchCall = try XCTUnwrap(selection.range(of: "await switchConnectedVPNLocation(using: helper)"))
+        let failedSwitch = try XCTUnwrap(selection.range(of: "guard !switched else { return }"))
+        XCTAssertLessThan(selectionBusy.lowerBound, selectionCall.lowerBound)
+        XCTAssertLessThan(selectionCall.lowerBound, switchCall.lowerBound)
+        XCTAssertLessThan(switchCall.lowerBound, failedSwitch.lowerBound)
+        for assignment in [
+            "selectedLocationId = previousLocationID",
+            "serverSelectionMode = previousSelectionMode",
+            "autoServerEnabled = previousAutoServerEnabled",
+        ] {
+            let rollback = try XCTUnwrap(selection.range(of: assignment))
+            XCTAssertLessThan(failedSwitch.lowerBound, rollback.lowerBound)
+        }
 
-        let switchStart = try XCTUnwrap(
-            source.range(of: "private func switchConnectedVPNLocation")
-        )
-        let switchSource = source[switchStart.lowerBound...]
-        let busyCapture = try XCTUnwrap(switchSource.range(of: "isVpnBusy = true"))
-        let tokenRefresh = try XCTUnwrap(
-            switchSource.range(of: "authenticatedAccessToken()")
-        )
+        let switchSource = try section(from: "private func switchConnectedVPNLocation(", until: "func setAutoLaunchEnabled(")
+        let busyCapture = try XCTUnwrap(switchSource.range(of: "let busyOwner = beginVpnOperation()"))
+        let busyFinish = try XCTUnwrap(switchSource.range(of: "defer { finishVpnOperation(busyOwner) }"))
+        let tokenRefresh = try XCTUnwrap(switchSource.range(of: "authenticatedAccessToken()"))
+        XCTAssertLessThan(busyCapture.lowerBound, busyFinish.lowerBound)
+        XCTAssertLessThan(busyFinish.lowerBound, tokenRefresh.lowerBound)
         XCTAssertLessThan(busyCapture.lowerBound, tokenRefresh.lowerBound)
+        let begin = try section(from: "private func beginVpnOperation(", until: "private func finishVpnOperation(")
+        XCTAssertTrue(begin.contains("let owner = vpnOperationOwnership.begin()"))
+        XCTAssertTrue(begin.contains("isVpnBusy = true"))
+        XCTAssertTrue(begin.contains("return owner"))
+        let finish = try section(from: "private func finishVpnOperation(", until: "private func invalidateVpnOperation(")
+        XCTAssertTrue(finish.contains("if vpnOperationOwnership.finish(owner) { isVpnBusy = false }"))
     }
 
     func testWindowControllerRestoresRequestedContentSizeAfterHosting() throws {

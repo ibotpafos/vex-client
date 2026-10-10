@@ -109,11 +109,30 @@ final class SwiftHelperContractTests: XCTestCase {
     func testConnectRetryKeepsABoundedBringUpTimeout() throws {
         let source = try readText("Sources/VEXNativeMac/VEXHelperClient.swift")
 
+        func section(from start: String, until end: String) throws -> String {
+            let startRange = try XCTUnwrap(source.range(of: start))
+            let endRange = try XCTUnwrap(source.range(of: end, range: startRange.upperBound..<source.endIndex))
+            return String(source[startRange.lowerBound..<endRange.lowerBound])
+        }
+        let retry = try section(from: "private func sendCommandWithRetry(", until: "private func isConnectCommand(")
+
         // Connect commands stay bounded (15s first attempt, 20s retry); the
         // handshake itself is confirmed by status polling, not a long socket
         // timeout that would delay user-visible failures.
-        XCTAssertTrue(source.contains("timeoutSeconds: isConnectCommand(command) ? 15 : 10"))
-        XCTAssertTrue(source.contains("return try await client.send(command, timeoutSeconds: 20)"))
+        XCTAssertTrue(retry.contains("timeoutSeconds: isConnectCommand(command) ? 15 : 10"))
+        let readiness = try XCTUnwrap(retry.range(of: "try await ensureHelperReady(commandGeneration: generation, shouldConnect: shouldConnect)"))
+        let admission = try XCTUnwrap(retry.range(of: "try ensureCurrentHelperCommand(command, generation: generation, shouldConnect: shouldConnect)", range: readiness.upperBound..<retry.endIndex))
+        let send = try XCTUnwrap(retry.range(of: "let response = try await client.send(command, timeoutSeconds: 20)", range: admission.upperBound..<retry.endIndex))
+        let responseFence = try XCTUnwrap(retry.range(of: "try ensureCurrentHelperCommand(command, generation: generation, shouldConnect: shouldConnect)", range: send.upperBound..<retry.endIndex))
+        let returned = try XCTUnwrap(retry.range(of: "return response", range: responseFence.upperBound..<retry.endIndex))
+        XCTAssertLessThan(readiness.lowerBound, admission.lowerBound)
+        XCTAssertLessThan(admission.lowerBound, send.lowerBound)
+        XCTAssertLessThan(send.lowerBound, responseFence.lowerBound)
+        XCTAssertLessThan(responseFence.lowerBound, returned.lowerBound)
+
+        let fence = try section(from: "private func ensureCurrentHelperCommand(", until: "private func confirmConnect(")
+        XCTAssertTrue(fence.contains("helperCommandGeneration == generation"))
+        XCTAssertTrue(fence.contains("!isConnectCommand(command) || (!Task.isCancelled && shouldConnect())"))
     }
 
     func testShutdownPathTimeoutIsObservableAtTransportLevel() async throws {

@@ -53,7 +53,14 @@ internal static class VpnNamedPipeTransportTests
         {
             await server.WaitForConnectionAsync(deadline.Token);
             var buffer = new byte[1];
-            return await server.ReadAsync(buffer, deadline.Token);
+            try { return await server.ReadAsync(buffer, deadline.Token); }
+            catch (IOException error) when (OperatingSystem.IsWindows() &&
+                (error.HResult & 0xffff) is 109 /* ERROR_BROKEN_PIPE */ or 232 /* ERROR_NO_DATA */)
+            {
+                // Windows reports these exact EOF states when an unattested
+                // client closes without writing; Unix returns zero bytes.
+                return 0;
+            }
         });
         var authorizationReads = 0;
         var transport = new VpnNamedPipeTransport(name, _ => throw new UnauthorizedAccessException(),

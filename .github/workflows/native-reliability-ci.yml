@@ -144,6 +144,8 @@ jobs:
       - name: Install locked JavaScript dependencies for the iOS app fixture
         run: npm ci
       - name: Verify iOS bridge arguments with the installed Expo Swift validator
+        env:
+          VEX_SWIFTC: swiftc
         run: node --test tests/ios-expo-bridge-contract.test.cjs
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:

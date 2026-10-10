@@ -65,7 +65,8 @@ function violations(value, packageValue = packageConfig) {
       if (!(job.steps ?? []).some(step => step.run?.trim() === 'swift test --package-path macos-native')) failures.push('complete macOS suite');
       if (!(job.steps ?? []).some(step => step.run?.trim() === 'bash scripts/test_macos_runtime_reliability.sh')) failures.push('macOS runtime cancellation and recovery');
       if (!(job.steps ?? []).some(step => step.run?.includes('bash scripts/test_ios_tunnel_transitions.sh'))) failures.push('iOS transition and parser regressions');
-      if (!(job.steps ?? []).some(step => step.run?.trim() === 'node --test tests/ios-expo-bridge-contract.test.cjs')) failures.push('iOS Expo bridge argument runtime regression');
+      if (!(job.steps ?? []).some(step => step.run?.trim() === 'node --test tests/ios-expo-bridge-contract.test.cjs'
+        && step.env?.VEX_SWIFTC === 'swiftc')) failures.push('iOS Expo bridge argument runtime regression');
       const transaction = (job.steps ?? []).find(step => step.id === 'contract');
       if (transaction?.if !== "github.event_name == 'pull_request'"
         || transaction?.env?.BASE_COMMIT !== '${{ github.event.pull_request.base.sha }}') failures.push('PR-only transaction baseline');
@@ -106,6 +107,7 @@ if (failures.length) {
     value => { value.jobs.macos.steps = value.jobs.macos.steps.filter(step => step.run?.trim() !== 'bash scripts/test_macos_runtime_reliability.sh'); },
     value => { value.jobs.macos.steps.find(step => step.run?.includes('bash scripts/test_ios_tunnel_transitions.sh')).run = 'ruby -c modules/vex-vpn/ios/VexVpn.podspec'; },
     value => { value.jobs.macos.steps = value.jobs.macos.steps.filter(step => step.run?.trim() !== 'node --test tests/ios-expo-bridge-contract.test.cjs'); },
+    value => { delete value.jobs.macos.steps.find(step => step.run?.trim() === 'node --test tests/ios-expo-bridge-contract.test.cjs').env.VEX_SWIFTC; },
     value => { value.jobs.macos.steps.find(step => step.id === 'contract').if = 'always()'; },
     value => { value.jobs.macos.steps.find(step => step.name === 'Retain only helper transaction evidence').with.path += 'dist/**'; },
     (value, packageValue) => { delete packageValue.expo.autolinking.ios.buildFromSource; },

@@ -67,10 +67,12 @@ test('optional platform flags preserve older iOS calls and reject excess argumen
   }
 });
 
-const swift = process.env.VEX_SWIFTC || 'swiftc';
-const swiftVersion = spawnSync(swift, ['--version'], { encoding: 'utf8', timeout: 10_000 });
+// The macOS lane explicitly selects its checked Xcode compiler. Generic Node
+// checks do not invoke a host's optional Swift bootstrap or download shim.
+const swift = process.env.VEX_SWIFTC;
+const swiftVersion = swift ? spawnSync(swift, ['--version'], { encoding: 'utf8', timeout: 30_000 }) : null;
 test('installed Expo Swift validator accepts the source-derived bridge calls', {
-  skip: swiftVersion.error?.code === 'ENOENT' ? 'Swift compiler unavailable; installed predicate contracts still run' : false,
+  skip: !swift ? 'Swift validator runs with the selected compiler in macOS CI' : false,
 }, () => {
   assert.equal(swiftVersion.status, 0, swiftVersion.stderr || String(swiftVersion.error));
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vex-ios-expo-args-'));

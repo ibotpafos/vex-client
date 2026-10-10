@@ -35,6 +35,10 @@ profile over actual IPC, then exercises connect/status/diagnostics, controller
 crash recovery, disconnect followed by restart, and graceful SCM shutdown
 cleanup. It does not exercise the installed signed WinUI application,
 Authenticode admission, the production keyring, or clicking the tray Exit item.
+The peer defaults to 180 seconds and accepts at most 420 seconds for the longer
+SCM drill; the wrapper also bounds the harness process and kills its owned peer
+in `finally`. Portable tests start the actual CLI at 420 seconds, require its
+ready manifest, terminate that exact child, and reject 421 seconds.
 
 The Windows Wintun client owns `10.253.253.2/32` and only routes
 `10.253.253.1/32`. The peer's `10.253.253.1` exists exclusively inside a Go

@@ -65,7 +65,8 @@ public sealed partial class HomePage : Page
         if (_pageLifetime is not null) return;
         _pageLifetime = new CancellationTokenSource();
         var lifetime = _pageLifetime;
-        _uiSettings.AnimationsEnabledChanged += OnAnimationsEnabledChanged;
+        if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 19041))
+            _uiSettings.AnimationsEnabledChanged += OnAnimationsEnabledChanged;
         UpdateResponsiveLayout();
         StartHeroAnimations();
         _services.VpnUiState.Changed += OnVpnUiStateChanged;
@@ -86,7 +87,8 @@ public sealed partial class HomePage : Page
         _pageLifetime?.Cancel();
         _pageLifetime?.Dispose();
         _pageLifetime = null;
-        _uiSettings.AnimationsEnabledChanged -= OnAnimationsEnabledChanged;
+        if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 19041))
+            _uiSettings.AnimationsEnabledChanged -= OnAnimationsEnabledChanged;
         StopHeroAnimations();
         _locationLoadGeneration++;
         _catalogTimer?.Stop();
@@ -276,11 +278,7 @@ public sealed partial class HomePage : Page
             // Startup and periodic background checks keep this snapshot fresh.
             // Connecting must never wait on the updater's network timeout.
             var update = _services.UpdateService.CurrentSnapshot;
-            if (update.UpdateAvailable &&
-                update.Required &&
-                !global::Windows.ApplicationModel.Package.Current.Id.Name.EndsWith(
-                    ".Dev",
-                    StringComparison.Ordinal))
+            if (update.UpdateAvailable && update.Required)
             {
                 ShowNotice(
                     ErrorMessage("required_update"),

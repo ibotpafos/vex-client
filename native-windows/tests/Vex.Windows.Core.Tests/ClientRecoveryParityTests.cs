@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Runtime.ExceptionServices;
 using Vex.Windows.Client.Api;
 using Vex.Windows.Client.Auth;
+using Vex.Windows.Client.Security;
 using Vex.Windows.Client.Session;
 using Vex.Windows.Core.Vpn;
 
@@ -174,6 +175,108 @@ internal static class ClientRecoveryParityTests
             CancellationToken.None, false).GetAwaiter().GetResult());
         Check(fixture.Store.State?.LocationId == "fi-1" && vpn.ConnectCount == 4 && vpn.DisconnectCount == 0,
             "Failed switch did not restore the prior signed grant without premature disconnect.");
+    }
+
+    public static void FailedSwitchPreservesCommittedRotation() =>
+        FailedSwitchPreservesRotation(false, false);
+
+    public static void FailedSwitchPreservesPendingRotation() =>
+        FailedSwitchPreservesRotation(false, true);
+
+    public static void FailedSwitchPreservesCompletedPendingRotation() =>
+        FailedSwitchPreservesRotation(true, false);
+
+    public static void FailedSwitchCannotReplayRevokedEntitlement() =>
+        FailedSwitchCannotReplayRevokedAuthority(true);
+
+    public static void FailedSwitchCannotReplayRevokedProfile() =>
+        FailedSwitchCannotReplayRevokedAuthority(false);
+
+    private static void FailedSwitchCannotReplayRevokedAuthority(bool entitlementRevoked)
+    {
+        var vpn = new SequenceVpnClient();
+        var fixture = Fixture(vpn);
+        fixture.Coordinator.ConnectAsync(CancellationToken.None).GetAwaiter().GetResult();
+        var previous = fixture.Store.State!;
+        var (api, proxy) = NativeApiProxy.Wrap(fixture.Api);
+        if (entitlementRevoked)
+        {
+            fixture.Coordinator.InvalidateCachedEntitlementAsync(CancellationToken.None).GetAwaiter().GetResult();
+            proxy.Overrides[nameof(INativeClientApi.GetBillingEntitlementAsync)] = _ =>
+                Task.FromResult(FakeNativeClientApi.NoVpnEntitlement);
+        }
+        else
+        {
+            proxy.Overrides[nameof(INativeClientApi.GetManagedVpnProfileAsync)] = _ =>
+                Task.FromResult(new ManagedVpnProfile(1, previous.DeviceId, true, false, null));
+        }
+        var coordinator = new NativeClientCoordinator(api, fixture.Store, vpn, "1.0.0", () => InitialTime);
+        ExpectFlow(entitlementRevoked ? "vpn_entitlement_required" : "vpn_profile_revoked", () =>
+            coordinator.SelectLocationAsync("de-1", true, CancellationToken.None).GetAwaiter().GetResult());
+        var retained = fixture.Store.State!;
+        Check(vpn.ConnectCount == 1 && retained.CachedAuthorization is null &&
+            retained.CachedProfileVersion is null && retained.CachedCandidateGrants is null &&
+            retained.CachedCandidatePolicyExpiresAt is null && retained.WarmedProfile is null,
+            "Authoritative revocation replayed or retained the previous signed grant.");
+        Check(retained.Identity == previous.Identity && retained.LocationId == previous.LocationId &&
+            (!entitlementRevoked || retained.CachedEntitlement?.HasPaidAccess == false),
+            "Revocation rollback lost the device identity or restored paid access.");
+    }
+
+    private static void FailedSwitchPreservesRotation(bool initiallyPending, bool rotationTimesOut)
+    {
+        var vpn = new SequenceVpnClient();
+        var fixture = Fixture(vpn);
+        fixture.Coordinator.ConnectAsync(CancellationToken.None).GetAwaiter().GetResult();
+        var previous = fixture.Store.State!;
+        var authorization = previous.CachedAuthorization!;
+        previous = previous with
+        {
+            PendingIdentity = initiallyPending ? WireGuardIdentity.Generate(previous.Identity.KeyEpoch + 1) : null,
+            CachedCandidatePolicyExpiresAt = InitialTime.AddHours(1),
+            CachedCandidateGrants = [new("candidate-1", "node-1", "192.0.2.1:51820",
+                previous.Session.User.Id, previous.DeviceId, previous.LocationId, previous.RoutingMode,
+                previous.BypassRegion, previous.Identity.PublicKey, previous.Identity.KeyEpoch,
+                previous.CachedProfileVersion!.Value, authorization, InitialTime.AddHours(1), InitialTime.AddHours(1))],
+            WarmedProfile = new(previous.Session.User.Id, previous.DeviceId, previous.LocationId,
+                previous.RoutingMode, previous.BypassRegion, previous.Identity.PublicKey,
+                previous.Identity.KeyEpoch, previous.CachedProfileVersion.Value, authorization, InitialTime.AddHours(1)),
+        };
+        fixture.Store.Save(previous);
+        var (api, proxy) = NativeApiProxy.Wrap(fixture.Api);
+        WireGuardIdentity? rotatingIdentity = null;
+        var rotateCalls = 0;
+        proxy.Overrides[nameof(INativeClientApi.RotateManagedVpnKeyAsync)] = args =>
+        {
+            rotatingIdentity = (WireGuardIdentity)args[2]!;
+            rotateCalls++;
+            if (rotationTimesOut) { throw new TaskCanceledException("rotation response timed out"); }
+            return proxy.CallUnderlying(nameof(INativeClientApi.RotateManagedVpnKeyAsync), args);
+        };
+        proxy.Overrides[nameof(INativeClientApi.GetManagedVpnProfileAsync)] = _ =>
+        {
+            if (rotatingIdentity is not null) { throw new HttpRequestException("profile offline after rotation"); }
+            return Task.FromResult(new ManagedVpnProfile(1, previous.DeviceId, false, true, null));
+        };
+        var coordinator = new NativeClientCoordinator(api, fixture.Store, vpn, "1.0.0", () => InitialTime);
+        var failed = false;
+        try { coordinator.SelectLocationAsync("de-1", true, CancellationToken.None).GetAwaiter().GetResult(); }
+        catch (Exception error) when (error is HttpRequestException or TaskCanceledException) { failed = true; }
+        Check(failed && rotateCalls == 1 && rotatingIdentity is not null,
+            "The failed switch did not reach exactly one server-managed rotation.");
+        var retained = fixture.Store.State!;
+        Check(retained.Identity == (rotationTimesOut ? previous.Identity : rotatingIdentity) &&
+            retained.PendingIdentity == (rotationTimesOut ? rotatingIdentity : null),
+            "Failed switch discarded the committed key or ambiguous pending rotation.");
+        Check(fixture.Store.LoadDevice()?.Identity == retained.Identity &&
+            retained.Identity.KeyEpoch == (rotationTimesOut ? previous.Identity.KeyEpoch : previous.Identity.KeyEpoch + 1),
+            "Failed switch lost the durably registered device key epoch.");
+        Check(retained.LocationId == previous.LocationId && retained.CachedProfileVersion is null &&
+            retained.CachedAuthorization is null && retained.CachedCandidateGrants is null &&
+            retained.CachedCandidatePolicyExpiresAt is null && retained.WarmedProfile is null,
+            "Failed switch resurrected authority issued for the previous device key.");
+        Check(vpn.ConnectCount == 1 && vpn.DisconnectCount == 0,
+            "Failed switch replayed the previous key's signed grant after rotation.");
     }
 
     private static void GoogleAuthUsesTheSamePkceContract()

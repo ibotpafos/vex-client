@@ -220,22 +220,45 @@ public sealed partial class NativeClientCoordinator
                     throw new NativeClientFlowException(response.ErrorCode ?? "vpn_server_switch_failed");
                 }
             }
-            catch
+            catch (Exception error)
             {
                 // Session rejection must never resurrect an expired session.
                 if (_stateStore.Load() is not { } latest) { throw; }
-                _stateStore.Save(state with
+                // A failed replacement cannot undo a key rotation already
+                // acknowledged by the server, or erase its uncertain outcome.
+                var previousGrantStillValid = latest.Identity == state.Identity &&
+                    latest.PendingIdentity is null &&
+                    latest.CachedEntitlement?.HasPaidAccess == true &&
+                    latest.CachedEntitlementValidUntil > _utcNow() &&
+                    error is not NativeClientFlowException
+                    {
+                        Code: "vpn_entitlement_required" or "vpn_profile_revoked" or "sign_in_required",
+                    };
+                var restored = state with
                 {
                     Session = latest.Session,
+                    Identity = latest.Identity,
+                    PendingIdentity = latest.PendingIdentity,
                     CachedEntitlement = latest.CachedEntitlement ?? state.CachedEntitlement,
                     CachedEntitlementCheckedAt = latest.CachedEntitlementCheckedAt,
                     CachedEntitlementValidUntil = latest.CachedEntitlementValidUntil,
-                });
-                if (state.CachedAuthorization is not null)
+                };
+                if (!previousGrantStillValid)
                 {
-                    // Restoring the previous signed grant is safe even when
-                    // the replacement failed after admission. Cancellation
-                    // belongs to the caller and never triggers a new tunnel.
+                    restored = restored with
+                    {
+                        CachedProfileVersion = null,
+                        CachedAuthorization = null,
+                        CachedCandidatePolicyExpiresAt = null,
+                        CachedCandidateGrants = null,
+                        WarmedProfile = null,
+                    };
+                }
+                _stateStore.Save(restored);
+                if (previousGrantStillValid && state.CachedAuthorization is not null)
+                {
+                    // The previous signed grant still belongs to this key.
+                    // Cancellation never triggers a new tunnel.
                     if (!cancellationToken.IsCancellationRequested)
                     {
                         await _vpnClient.ConnectAsync(state.CachedAuthorization.ToServiceAuthorization(),

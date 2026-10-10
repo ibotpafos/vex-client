@@ -82,9 +82,12 @@ internal static class Program
             result["ipv4_route_verified"] = before.Ipv4RouteOk;
             result["dns_configuration_verified"] = before.DnsConfigured;
             result["endpoint_native_loopback_bypass"] = before.EndpointBypassOk;
+            result["tunnel_interface_index"] = before.AdapterIndex;
+            result["uapi_rx_before"] = before.RxBytes;
+            result["uapi_tx_before"] = before.TxBytes;
 
             result["stage"] = "tunnel-dns";
-            await ProbeDnsAsync(before.AdapterIndex!.Value, deadline.Token);
+            result["dns_query_attempts"] = await ProbeDnsAsync(before.AdapterIndex!.Value, deadline.Token);
             result["dns_over_tunnel"] = true;
             result["stage"] = "tunnel-https";
             await ProbeHttpsAsync(before.AdapterIndex.Value, directory, deadline.Token);
@@ -113,6 +116,7 @@ internal static class Program
             result["failure_type"] = exception.GetType().FullName;
             if (exception is VpnTunnelException tunnelException) { result["failure_code"] = tunnelException.Code; }
             if (exception is FixtureException fixtureException) { result["failure_code"] = fixtureException.Code; }
+            await ObserveFailureTrafficAsync(runtime, directory, result);
         }
         finally
         {
@@ -219,7 +223,7 @@ internal static class Program
         catch { socket.Dispose(); throw; }
     }
 
-    private static async Task ProbeDnsAsync(int adapterIndex, CancellationToken cancellationToken)
+    private static async Task<int> ProbeDnsAsync(int adapterIndex, CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(15));
@@ -229,12 +233,30 @@ internal static class Program
         var id = RandomNumberGenerator.GetBytes(2); query[0] = id[0]; query[1] = id[1];
         foreach (var label in Host.Split('.')) { query.Add((byte)label.Length); query.AddRange(Encoding.ASCII.GetBytes(label)); }
         query.AddRange([0, 0, 1, 0, 1]);
-        await socket.SendAsync(query.ToArray(), SocketFlags.None, timeout.Token);
         var buffer = new byte[1232];
-        var length = await socket.ReceiveAsync(buffer, SocketFlags.None, timeout.Token);
+        var packet = query.ToArray();
+        var length = 0;
+        var attempts = 0;
+        // UDP can lose the first request while the freshly established tunnel
+        // becomes ready. Retransmit like a resolver, within the same 15s budget.
+        while (length == 0)
+        {
+            timeout.Token.ThrowIfCancellationRequested();
+            attempts++;
+            await socket.SendAsync(packet, SocketFlags.None, timeout.Token);
+            using var attempt = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token);
+            attempt.CancelAfter(TimeSpan.FromSeconds(1));
+            try { length = await socket.ReceiveAsync(buffer, SocketFlags.None, attempt.Token); }
+            catch (OperationCanceledException) when (!timeout.IsCancellationRequested) { }
+        }
         Require(length >= 12 && buffer[0] == id[0] && buffer[1] == id[1] && (buffer[2] & 0x80) != 0 &&
-            (buffer[3] & 0x0f) == 0 && BinaryPrimitives.ReadUInt16BigEndian(buffer.AsSpan(4)) == 1 &&
-            BinaryPrimitives.ReadUInt16BigEndian(buffer.AsSpan(6)) == 1, "fixture_dns_response_invalid");
+            (buffer[2] & 0x02) == 0 && (buffer[3] & 0x0f) == 0 &&
+            BinaryPrimitives.ReadUInt16BigEndian(buffer.AsSpan(4)) == 1 &&
+            BinaryPrimitives.ReadUInt16BigEndian(buffer.AsSpan(6)) == 1 &&
+            BinaryPrimitives.ReadUInt16BigEndian(buffer.AsSpan(8)) == 0 &&
+            BinaryPrimitives.ReadUInt16BigEndian(buffer.AsSpan(10)) == 0, "fixture_dns_response_invalid");
+        Require(length >= packet.Length && buffer.AsSpan(12, packet.Length - 12).SequenceEqual(packet.AsSpan(12)),
+            "fixture_dns_question_invalid");
         var position = 12;
         SkipDnsName(buffer.AsSpan(0, length), ref position);
         Require(position + 4 <= length && buffer[position] == 0 && buffer[position + 1] == 1 &&
@@ -245,6 +267,7 @@ internal static class Program
             BinaryPrimitives.ReadUInt16BigEndian(buffer.AsSpan(position + 2)) == 1 &&
             BinaryPrimitives.ReadUInt16BigEndian(buffer.AsSpan(position + 8)) == 4 &&
             buffer.AsSpan(position + 10, 4).SequenceEqual(IPAddress.Parse(ServerIp).GetAddressBytes()), "fixture_dns_answer_invalid");
+        return attempts;
     }
 
     private static void SkipDnsName(ReadOnlySpan<byte> packet, ref int position)
@@ -304,6 +327,40 @@ internal static class Program
         throw new InvalidOperationException("fixture_peer_status_timeout");
     }
 
+    private static async Task ObserveFailureTrafficAsync(AmneziaServiceTunnelRuntime? runtime, string directory,
+        Dictionary<string, object?> result)
+    {
+        // These are typed numeric counters only, never raw UAPI, config, logs,
+        // addresses from the host, or arbitrary exception messages.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        if (runtime is not null)
+        {
+            try
+            {
+                var diagnostic = (await runtime.GetDiagnosticsAsync(timeout.Token)).Diagnostics;
+                result["failure_uapi_rx_bytes"] = diagnostic?.RxBytes;
+                result["failure_uapi_tx_bytes"] = diagnostic?.TxBytes;
+                result["failure_tunnel_usable"] = diagnostic?.IsUsable;
+            }
+            catch (Exception) { result["failure_uapi_observation_unavailable"] = true; }
+        }
+        try
+        {
+            var peer = JsonSerializer.Deserialize<PeerStatus>(await File.ReadAllTextAsync(Path.Combine(directory, "peer-status.json"), timeout.Token));
+            if (peer is { Schema: "vex.windows-vpn-peer-status.v1" })
+            {
+                result["failure_peer_rx_bytes"] = peer.RxBytes;
+                result["failure_peer_tx_bytes"] = peer.TxBytes;
+                result["failure_peer_dns_requests"] = peer.DnsRequests;
+                result["failure_peer_dns_received"] = peer.DnsReceived;
+                result["failure_peer_dns_rejected"] = peer.DnsRejected;
+                result["failure_peer_dns_write_errors"] = peer.DnsWriteErrors;
+                result["failure_peer_https_requests"] = peer.HttpsRequests;
+            }
+        }
+        catch (Exception) { result["failure_peer_observation_unavailable"] = true; }
+    }
+
     private static void Require(bool condition, string code) { if (!condition) { throw new FixtureException(code); } }
 
     private sealed class FixtureException(string code) : Exception("The isolated VPN fixture rejected this operation.")
@@ -325,5 +382,8 @@ internal static class Program
         [property: JsonPropertyName("rx_bytes")] long RxBytes,
         [property: JsonPropertyName("tx_bytes")] long TxBytes,
         [property: JsonPropertyName("dns_requests")] long DnsRequests,
+        [property: JsonPropertyName("dns_received")] long DnsReceived,
+        [property: JsonPropertyName("dns_rejected")] long DnsRejected,
+        [property: JsonPropertyName("dns_write_errors")] long DnsWriteErrors,
         [property: JsonPropertyName("https_requests")] long HttpsRequests);
 }

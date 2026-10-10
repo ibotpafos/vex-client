@@ -137,23 +137,29 @@ type manifest struct {
 	ClientIP            string `json:"client_ip"`
 }
 type status struct {
-	Schema        string `json:"schema"`
-	HandshakeUnix int64  `json:"handshake_unix"`
-	RxBytes       int64  `json:"rx_bytes"`
-	TxBytes       int64  `json:"tx_bytes"`
-	DNSRequests   int64  `json:"dns_requests"`
-	HTTPSRequests int64  `json:"https_requests"`
+	Schema         string `json:"schema"`
+	HandshakeUnix  int64  `json:"handshake_unix"`
+	RxBytes        int64  `json:"rx_bytes"`
+	TxBytes        int64  `json:"tx_bytes"`
+	DNSRequests    int64  `json:"dns_requests"`
+	DNSReceived    int64  `json:"dns_received"`
+	DNSRejected    int64  `json:"dns_rejected"`
+	DNSWriteErrors int64  `json:"dns_write_errors"`
+	HTTPSRequests  int64  `json:"https_requests"`
 }
 type fixture struct {
-	dev      *device.Device
-	net      *netstack.Net
-	manifest manifest
-	root     []byte
-	cert     tls.Certificate
-	dns      atomic.Int64
-	https    atomic.Int64
-	server   *http.Server
-	closeDNS func() error
+	dev            *device.Device
+	net            *netstack.Net
+	manifest       manifest
+	root           []byte
+	cert           tls.Certificate
+	dns            atomic.Int64
+	dnsReceived    atomic.Int64
+	dnsRejected    atomic.Int64
+	dnsWriteErrors atomic.Int64
+	https          atomic.Int64
+	server         *http.Server
+	closeDNS       func() error
 }
 
 func newFixture() (*fixture, error) {
@@ -254,15 +260,20 @@ func (f *fixture) serve() error {
 			if err != nil {
 				return
 			}
+			f.dnsReceived.Add(1)
 			if addr.(*net.UDPAddr).IP.String() != clientIP {
+				f.dnsRejected.Add(1)
 				continue
 			}
 			response, err := dnsResponse(packet[:n])
 			if err != nil {
+				f.dnsRejected.Add(1)
 				continue
 			}
 			if _, err := u.WriteTo(response, addr); err == nil {
 				f.dns.Add(1)
+			} else {
+				f.dnsWriteErrors.Add(1)
 			}
 		}
 	}()
@@ -303,7 +314,7 @@ func (f *fixture) snapshot() (status, error) {
 	if err != nil {
 		return status{}, err
 	}
-	s := status{Schema: "vex.windows-vpn-peer-status.v1", DNSRequests: f.dns.Load(), HTTPSRequests: f.https.Load()}
+	s := status{Schema: "vex.windows-vpn-peer-status.v1", DNSRequests: f.dns.Load(), DNSReceived: f.dnsReceived.Load(), DNSRejected: f.dnsRejected.Load(), DNSWriteErrors: f.dnsWriteErrors.Load(), HTTPSRequests: f.https.Load()}
 	// Never persist the raw UAPI output, which includes private keys.
 	for _, line := range strings.Split(text, "\n") {
 		name, value, _ := strings.Cut(line, "=")

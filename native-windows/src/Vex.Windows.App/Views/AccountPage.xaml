@@ -3,7 +3,9 @@
     AutomationProperties.AutomationId="AccountPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+        HorizontalScrollMode="Disabled" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Top">
+        <Grid HorizontalAlignment="Stretch">
         <StackPanel MaxWidth="680" Margin="30,28,30,34" HorizontalAlignment="Stretch" Spacing="12">
             <Grid x:Name="AccountSummaryPanel" Padding="15,10">
                 <Grid.ColumnDefinitions>
@@ -218,5 +220,6 @@
             </StackPanel>
             <InfoBar x:Name="AccountNotice" IsClosable="True" IsOpen="False" Title="VEX VPN" />
         </StackPanel>
+        </Grid>
     </ScrollViewer>
 </Page>

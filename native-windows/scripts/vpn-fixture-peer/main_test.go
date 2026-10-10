@@ -103,6 +103,9 @@ func TestEncryptedDNSAndHTTPS(t *testing.T) {
 	if s.HandshakeUnix == 0 || s.RxBytes == 0 || s.TxBytes == 0 || s.DNSRequests < 1 || s.HTTPSRequests != 1 {
 		t.Fatalf("Actual encrypted peer counters missing: %+v", s)
 	}
+	if s.DNSReceived < s.DNSRequests || s.DNSRejected != 0 || s.DNSWriteErrors != 0 {
+		t.Fatalf("DNS receive/reply counters inconsistent: %+v", s)
+	}
 }
 
 func TestFixtureRejectsExternalEndpoint(t *testing.T) {

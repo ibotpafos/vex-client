@@ -28,8 +28,9 @@ internal static class UiPreviewProtocolRegistration
         if (!UiPreviewContext.IsEnabled) return;
         var executable = Path.GetFullPath(Environment.ProcessPath ??
             throw new InvalidOperationException("UI preview executable is unavailable."));
-        // Match the Windows App SDK's encoded protocol activation argument.
-        var command = $"\"{executable}\" \"----ms-protocol:%1\"";
+        // This direct shell registration passes the URI through the launch
+        // fallback in UiPreviewContext, without SDK association/encoding state.
+        var command = $"\"{executable}\" \"%1\"";
         AssertNoExecutableReparse(executable);
         using var parent = OpenWithoutLinks(ParentKey) ??
             throw new InvalidOperationException("Current-user protocol registry is unavailable.");

@@ -52,4 +52,59 @@ if ([System.IntPtr]::Zero.ToInt64() -ne 0 -or ([System.IntPtr](-4)).ToInt64() -n
 if ([Runtime.InteropServices.Marshal]::SizeOf([type][Vex.Windows.Smoke.WindowRect]) -ne 16) {
     throw 'Application smoke native window rectangle layout is invalid.'
 }
+if ([Runtime.InteropServices.Marshal]::SizeOf([type][Vex.Windows.Smoke.WindowPoint]) -ne 8) {
+    throw 'Application smoke native cursor point layout is invalid.'
+}
+
+# Execute the actual pure capture helpers, without desktop interaction.
+foreach ($functionName in @('Wait-SmokeCondition', 'Wait-SmokeCaptureBounds', 'Get-SmokeCaptureCursorPoint')) {
+    $functionAst = $ast.Find({
+        param($node)
+        $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $functionName
+    }, $true)
+    if ($null -eq $functionAst) { throw "Application smoke helper is missing: $functionName" }
+    . ([scriptblock]::Create($functionAst.Extent.Text))
+}
+$desktop = [pscustomobject]@{ Left = -1920; Top = -200; Right = 0; Bottom = 880 }
+$bounds = [pscustomobject]@{ Left = -1840; Top = -140; Right = -900; Bottom = 500 }
+$point = Get-SmokeCaptureCursorPoint -Desktop $desktop -WindowBounds $bounds
+if ($point.X -ne -1918 -or $point.Y -ne -198) {
+    throw 'Application smoke cursor selection mishandles negative desktop origins.'
+}
+$desktop = [pscustomobject]@{ Left = 0; Top = 0; Right = 1024; Bottom = 768 }
+$bounds = [pscustomobject]@{ Left = 0; Top = 0; Right = 700; Bottom = 650 }
+$point = Get-SmokeCaptureCursorPoint -Desktop $desktop -WindowBounds $bounds
+if ($point.X -ne 1021 -or $point.Y -ne 2) {
+    throw 'Application smoke cursor selection does not skip an occupied desktop corner.'
+}
+$noOutsidePointRejected = $false
+try { Get-SmokeCaptureCursorPoint -Desktop $desktop -WindowBounds $desktop | Out-Null }
+catch { $noOutsidePointRejected = $true }
+if (-not $noOutsidePointRejected) { throw 'Application smoke allows a cursor over a full-desktop window.' }
+
+# Model a page entering from outside the window and moving before it settles.
+$script:captureProbeCalls = 0
+function Find-SmokeElement {
+    param([string]$AutomationId)
+    $script:captureProbeCalls++
+    $left = if ($script:captureProbeCalls -lt 5) { 950 }
+        elseif ($script:captureProbeCalls -lt 7) { 130 }
+        else { 120 }
+    [pscustomobject]@{
+        Current = [pscustomobject]@{
+            IsOffscreen = $script:captureProbeCalls -lt 3
+            BoundingRectangle = [pscustomobject]@{
+                IsEmpty = $false; Left = $left; Top = 100; Right = $left + 40; Bottom = 130; Width = 40; Height = 30
+            }
+        }
+    }
+}
+$bounds = [pscustomobject]@{ Left = 50; Top = 50; Right = 960; Bottom = 650 }
+$settleStarted = [DateTime]::UtcNow
+$elements = @(Wait-SmokeCaptureBounds -AutomationIds @('Heading', 'Action') -WindowBounds $bounds)
+if ($elements.Count -ne 2 -or $elements[0].left -ne 120 -or $elements[1].left -ne 120 -or
+    ([DateTime]::UtcNow - $settleStarted).TotalMilliseconds -lt 1500) {
+    throw 'Application smoke capture did not wait for fully visible stable controls.'
+}
+Write-Host 'Application smoke capture geometry verification passed.'
 Write-Host "Application smoke runtime type verification passed: $($checked.Count) types; Windows-only types deferred: $($deferred.Count)."

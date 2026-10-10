@@ -6,10 +6,9 @@ set -euo pipefail
 
 root_dir="$(cd "$(dirname "$0")/.." && pwd)"
 [[ "$(uname -s)" == Darwin ]] || { echo "This SDK compilation requires macOS and Xcode." >&2; exit 1; }
-for command_name in xcodebuild xcrun node pod ruby; do
+for command_name in xcodebuild xcrun node ruby gem; do
   command -v "$command_name" >/dev/null || { echo "Missing iOS compile prerequisite: $command_name" >&2; exit 1; }
 done
-[[ "$(pod --version)" == "1.16.2" ]] || { echo "This fixture requires CocoaPods 1.16.2." >&2; exit 1; }
 [[ -d "$root_dir/node_modules/expo" && -d "$root_dir/node_modules/react-native" ]] || {
   echo "Install the locked JavaScript dependencies with npm ci first." >&2
   exit 1
@@ -18,6 +17,26 @@ xcrun --sdk iphonesimulator --show-sdk-path >/dev/null
 
 fixture_dir="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/vex-ios-module.XXXXXX")"
 trap 'rm -rf "$fixture_dir"' EXIT
+ruby_binary="$(command -v ruby)"
+gem_dir="$fixture_dir/gems"
+export GEM_HOME="$gem_dir"
+export GEM_PATH="$gem_dir"
+export GEM_SPEC_CACHE="$gem_dir/spec-cache"
+export PATH="$gem_dir/bin:$PATH"
+export COCOAPODS_DISABLE_STATS=true
+"$ruby_binary" --version
+# Use the selected Ruby for both gem installation and every pod/xcodeproj call;
+# the runner's globally installed pod may belong to a different Ruby/version.
+"$ruby_binary" -S gem install cocoapods --version 1.16.2 \
+  --install-dir "$gem_dir" --bindir "$gem_dir/bin" --no-document
+pod_binary="$gem_dir/bin/pod"
+"$ruby_binary" -r cocoapods -r xcodeproj -e '
+  abort("Expected isolated CocoaPods 1.16.2") unless Pod::VERSION == "1.16.2"
+  path = Gem.loaded_specs.fetch("cocoapods").full_gem_path
+  abort("CocoaPods must come from the fixture gem directory") unless path.start_with?(File.expand_path(ENV.fetch("GEM_HOME")) + "/")
+  puts "Verified isolated CocoaPods #{Pod::VERSION}: #{path}"
+'
+"$ruby_binary" "$pod_binary" --version
 project_dir="$fixture_dir/project"
 mkdir -p "$project_dir/ios"
 # Copy only the canonical files needed by CocoaPods. In particular, do not copy
@@ -30,7 +49,6 @@ for source_dir in node_modules modules assets; do
 done
 
 export CI=1
-export COCOAPODS_DISABLE_STATS=true
 export EXPO_NO_TELEMETRY=1
 export VEX_BUILD_PROFILE=development
 export VEX_UPDATES_ENABLED=0
@@ -38,11 +56,11 @@ export VEX_UPDATES_ENABLED=0
 cd "$project_dir"
 node -e 'for (const name of ["expo", "expo-modules-core", "react-native"]) console.log(`${name}: ${require(`${name}/package.json`).version}`)'
 echo "Resolving fresh CocoaPods dependencies for the isolated module fixture."
-pod install --project-directory="$project_dir/ios"
+"$ruby_binary" "$pod_binary" install --project-directory="$project_dir/ios"
 
 # A future precompiled-module setting must not silently replace the new bridge
 # or actor with a binary. Require both live files in the generated source phase.
-ruby - "$project_dir/ios/Pods/Pods.xcodeproj" "$root_dir" <<'RUBY'
+"$ruby_binary" - "$project_dir/ios/Pods/Pods.xcodeproj" "$root_dir" <<'RUBY'
 require 'xcodeproj'
 project = Xcodeproj::Project.open(ARGV[0])
 target = project.targets.find { |candidate| candidate.name == 'VexVpn' }
@@ -76,7 +94,7 @@ xcodebuild \
   "SYMROOT=$fixture_dir/build/products" \
   "OBJROOT=$fixture_dir/build/intermediates" \
   build 2>&1 | tee "$compile_log"
-ruby - "$compile_log" <<'RUBY'
+"$ruby_binary" - "$compile_log" <<'RUBY'
 trace = File.read(ARGV[0])
 %w[VexVpnModule.swift IosTunnelTransition.swift].each do |name|
   abort("The fresh SDK build did not report compiling #{name}") unless trace.include?(name)

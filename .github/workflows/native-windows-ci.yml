@@ -132,11 +132,19 @@ jobs:
           $root = Join-Path $env:RUNNER_TEMP 'vex-windows'
           Assert-WindowsPeArchitecture -Path (Join-Path $root 'app-${{ matrix.architecture }}/Vex.Windows.App.exe') -Architecture '${{ matrix.architecture }}'
           Assert-WindowsPeArchitecture -Path (Join-Path $root 'service-${{ matrix.architecture }}/Vex.Windows.Service.exe') -Architecture '${{ matrix.architecture }}'
-          foreach ($asset in @('Assets/icon.ico', 'Assets/country-silhouettes.json', 'Microsoft.UI.Xaml.dll')) {
+          foreach ($asset in @('resources.pri', 'Assets/icon.ico', 'Assets/country-silhouettes.json', 'Assets/vex-logo-header.png', 'Assets/flags/de.svg', 'Assets/flags/fi.svg', 'Assets/flags/nl.svg', 'Microsoft.UI.Xaml.dll')) {
             if (-not (Test-Path -LiteralPath (Join-Path $root "app-${{ matrix.architecture }}/$asset"))) {
               throw "Published WinUI dependency is missing: $asset"
             }
           }
+      - name: Smoke x64 WinUI application startup
+        if: matrix.architecture == 'x64'
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'vex-windows'
+          ./native-windows/scripts/smoke-application.ps1 `
+            -ApplicationPath (Join-Path $root 'app-x64/Vex.Windows.App.exe') `
+            -ResultPath (Join-Path $root 'startup-smoke-x64.json')
       - name: Audit all native dependencies
         shell: pwsh
         run: |
@@ -150,8 +158,8 @@ jobs:
               }
             }
           }
-      - name: Retain manual build artifacts
-        if: github.event_name == 'workflow_dispatch'
+      - name: Retain unsigned review builds and startup evidence
+        if: always() && (github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: vex-native-windows-unsigned-${{ matrix.architecture }}

@@ -241,7 +241,13 @@ prevents later downgrade below that version, so select it before signing.
 
 The separate Native Windows CI workflow runs portable tests plus Windows x64
 and arm64 self-contained publishes for scoped PR/main changes. It verifies
-published native executable architectures and required application assets.
+published native executable architectures, compiled PRI resources, and required
+application assets. On a fresh Windows x64 runner, a bounded startup smoke
+launches the unpackaged UI, observes process survival for ten seconds, and
+terminates it. It refuses hosts with an installed VEX service or saved session;
+it does not provision a service or exercise tunnel connectivity. Unsigned PR
+and manual review builds include a small startup result with selected crash
+event metadata; account state and process dumps are excluded.
 Routine jobs do not access signing secrets. Manual validation needs no release
 inputs; signed release preparation requires `package_release=true`, the main
 branch, release version/revision/notes, and the configured release inputs.

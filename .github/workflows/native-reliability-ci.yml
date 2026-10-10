@@ -12,6 +12,7 @@ on:
       - "tests/**"
       - "scripts/**"
       - "android/**"
+      - "ios/**"
       - "macos-native/**"
       - "patches/**"
       - "package.json"
@@ -30,6 +31,7 @@ on:
       - "tests/**"
       - "scripts/**"
       - "android/**"
+      - "ios/**"
       - "macos-native/**"
       - "patches/**"
       - "package.json"
@@ -119,7 +121,7 @@ jobs:
     name: macOS affected suites
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: macos-15
-    timeout-minutes: 40
+    timeout-minutes: 60
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     steps:
@@ -133,6 +135,14 @@ jobs:
         run: |
           bash scripts/test_ios_tunnel_transitions.sh
           ruby -c modules/vex-vpn/ios/VexVpn.podspec
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "22"
+      - name: Install locked JavaScript dependencies for the iOS compile fixture
+        run: npm ci
+      - name: Compile the actual iOS VPN module without signing
+        timeout-minutes: 25
+        run: bash scripts/test_ios_module_compile.sh
       - name: Resolve Swift package
         run: swift package --package-path macos-native resolve
       - name: Build native macOS client

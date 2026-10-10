@@ -1292,7 +1292,23 @@ public sealed partial class HomePage : Page
 
     private sealed record ServerRowPresentation(VpnLocation Location, string Title, string LocationId,
         string FlagEmoji, string StatusText, string LatencyText, string FavoriteGlyph,
-        string FavoriteHelp, double AvailabilityOpacity, string AccessibleName);
+        string FavoriteHelp, double AvailabilityOpacity, string AccessibleName)
+    {
+        public string? FlagAsset => CountryFlagAsset(Location.CountryCode);
+        public Visibility FlagAssetVisibility => FlagAsset is null ? Visibility.Collapsed : Visibility.Visible;
+        public Visibility FlagFallbackVisibility => FlagAsset is null ? Visibility.Visible : Visibility.Collapsed;
+        public string FlagFallbackText => string.IsNullOrWhiteSpace(Location.CountryCode)
+            ? FlagEmoji : Location.CountryCode.Trim().ToUpperInvariant();
+    }
+
+    private static string? CountryFlagAsset(string? countryCode) =>
+        countryCode?.Trim().ToUpperInvariant() switch
+        {
+            "DE" => "ms-appx:///Assets/flags/de.svg",
+            "FI" => "ms-appx:///Assets/flags/fi.svg",
+            "NL" => "ms-appx:///Assets/flags/nl.svg",
+            _ => null,
+        };
 
     private sealed record LocationCardPresentation(
         ServerCountryGroup Group,
@@ -1369,15 +1385,6 @@ public sealed partial class HomePage : Page
                     selected ? (byte)0xEE : (byte)0xC6),
                 SelectionGlyph: selected ? "\uE73E" : string.Empty);
         }
-
-        private static string? CountryFlagAsset(string? countryCode) =>
-            countryCode?.ToUpperInvariant() switch
-            {
-                "DE" => "ms-appx:///Assets/flags/de.svg",
-                "FI" => "ms-appx:///Assets/flags/fi.svg",
-                "NL" => "ms-appx:///Assets/flags/nl.svg",
-                _ => null,
-            };
 
         private static SolidColorBrush Brush(
             byte alpha,

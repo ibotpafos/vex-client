@@ -224,7 +224,8 @@ internal sealed class NetworkSafetyController
                 $ErrorActionPreference='Stop'
                 $profiles=@(Get-NetFirewallProfile -PolicyStore PersistentStore | Select-Object Name,@{Name='Enabled';Expression={$_.Enabled.ToString()}},@{Name='DefaultOutboundAction';Expression={$_.DefaultOutboundAction.ToString()}})
                 $rules=@(Get-NetFirewallRule -PolicyStore PersistentStore | Where-Object {$_.Direction -eq 'Outbound' -and $_.Action -eq 'Allow' -and $_.Enabled -eq 'True'} | Select-Object -ExpandProperty Name)
-                [pscustomobject]@{Version=2;Profiles=$profiles;DisabledOutboundAllowRuleNames=$rules;OwnedRuleNames=@(ConvertFrom-Json $args[0]);AdapterName=$args[1];ProtectedAddresses=@(ConvertFrom-Json $args[2])} | ConvertTo-Json -Compress -Depth 5
+                $ownedNames=ConvertFrom-Json $args[0];$protectedAddresses=ConvertFrom-Json $args[2]
+                [pscustomobject]@{Version=2;Profiles=$profiles;DisabledOutboundAllowRuleNames=$rules;OwnedRuleNames=@($ownedNames);AdapterName=$args[1];ProtectedAddresses=@($protectedAddresses)} | ConvertTo-Json -Compress -Depth 5
                 """;
             var rollbackJson = await RunPowerShellAsync(captureScript,
                 [JsonSerializer.Serialize(names), adapterName, JsonSerializer.Serialize(addresses.Select(address => address.ToString()))], cancellationToken).ConfigureAwait(false);
@@ -236,7 +237,7 @@ internal sealed class NetworkSafetyController
             {
                 const string armScript = """
                     $ErrorActionPreference='Stop'
-                    $state=ConvertFrom-Json $args[0];$ips=@(ConvertFrom-Json $args[1]);$names=@($state.OwnedRuleNames)
+                    $state=ConvertFrom-Json $args[0];$ips=ConvertFrom-Json $args[1];$names=@($state.OwnedRuleNames)
                     Get-NetFirewallRule -PolicyStore PersistentStore | Where-Object {$_.Name -cin @($state.DisabledOutboundAllowRuleNames)} | Disable-NetFirewallRule | Out-Null
                     New-NetFirewallRule -Name $names[0] -DisplayName 'VEX VPN tunnel' -Group 'VEX VPN AntiLeak' -PolicyStore PersistentStore -Direction Outbound -Action Allow -InterfaceAlias $state.AdapterName -Profile Any | Out-Null
                     New-NetFirewallRule -Name $names[1] -DisplayName 'VEX VPN protected endpoints' -Group 'VEX VPN AntiLeak' -PolicyStore PersistentStore -Direction Outbound -Action Allow -RemoteAddress $ips -InterfaceType Wired,Wireless -Profile Any | Out-Null
@@ -292,7 +293,7 @@ internal sealed class NetworkSafetyController
         };
         WriteAtomic(_firewallStatePath, JsonSerializer.Serialize(state));
         const string script = """
-            $ErrorActionPreference='Stop';$name=$args[0];$ips=@(ConvertFrom-Json $args[1]);$tunnelName=$args[2];$alias=$args[3]
+            $ErrorActionPreference='Stop';$name=$args[0];$ips=ConvertFrom-Json $args[1];$tunnelName=$args[2];$alias=$args[3]
             $rule=Get-NetFirewallRule -PolicyStore PersistentStore | Where-Object {$_.Name -ceq $name}
             if(@($rule).Count -ne 1){throw 'firewall_owned_rule_missing'}
             $rule | Get-NetFirewallAddressFilter | Set-NetFirewallAddressFilter -RemoteAddress $ips | Out-Null
@@ -665,7 +666,10 @@ internal sealed class NetworkSafetyController
         }
         // -Command plus trailing native arguments reparses quotes/metacharacters.
         // Encode only the trusted program and pass all data as JSON through stdin.
-        var wrapper = "$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';[Console]::InputEncoding=[Text.UTF8Encoding]::new($false);[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);$vexArguments=@(ConvertFrom-Json ([Console]::In.ReadToEnd())); & {\n" + script + "\n} @vexArguments";
+        // Windows PowerShell 5.1 emits a JSON array as one pipeline object;
+        // PowerShell 7 enumerates it. Direct assignment preserves the flat array
+        // on both hosts, whereas @(ConvertFrom-Json ...) nests it on 5.1.
+        var wrapper = "$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';[Console]::InputEncoding=[Text.UTF8Encoding]::new($false);[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);$vexArguments=ConvertFrom-Json ([Console]::In.ReadToEnd()); & {\n" + script + "\n} @vexArguments";
         var startInfo = new ProcessStartInfo
         {
             FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe"),

@@ -89,6 +89,8 @@ public interface INativeClientApi
         string accessToken,
         CancellationToken cancellationToken);
 
+    Task<IReadOnlyList<BillingPlan>> GetBillingPlansAsync(CancellationToken cancellationToken);
+
     Task<CheckoutSession> CreateCheckoutSessionAsync(
         string accessToken,
         string planId,
@@ -584,7 +586,9 @@ public sealed class VexApiClient : INativeClientApi
         var entitlementTask = GetBillingEntitlementAsync(
             accessToken,
             cancellationToken);
-        var plans = await plansTask.ConfigureAwait(false);
+        IReadOnlyList<BillingPlan> plans;
+        try { plans = await plansTask.ConfigureAwait(false); }
+        catch (VexApiException) { plans = []; }
         var entitlement = await entitlementTask.ConfigureAwait(false);
         return BillingSummaryBuilder.Build(plans, entitlement);
     }
@@ -969,22 +973,13 @@ public sealed class VexApiClient : INativeClientApi
         }
     }
 
-    private async Task<IReadOnlyList<BillingPlan>> GetBillingPlansAsync(
+    public async Task<IReadOnlyList<BillingPlan>> GetBillingPlansAsync(
         CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
             "/v1/billing/plans");
-        try
-        {
-            return await SendAsync<List<BillingPlan>>(
-                request,
-                cancellationToken).ConfigureAwait(false);
-        }
-        catch (VexApiException)
-        {
-            return [];
-        }
+        return await SendAsync<List<BillingPlan>>(request, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<DeviceIdentityRegistration?> BuildIdentityRegistrationAsync(

@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Security.Cryptography;
 
 namespace Vex.Windows.Client.Api;
 
@@ -185,11 +186,14 @@ public sealed class CustomerSseParser
 
 public sealed class CustomerRealtimeChangedEventArgs(
     CustomerRealtimeEvent realtimeEvent,
-    CustomerRealtimeMetadata metadata) : EventArgs
+    CustomerRealtimeMetadata metadata,
+    string? sourceTokenFingerprint = null) : EventArgs
 {
     public CustomerRealtimeEvent Event { get; } = realtimeEvent;
 
     public CustomerRealtimeMetadata Metadata { get; } = metadata;
+
+    public string? SourceTokenFingerprint { get; } = sourceTokenFingerprint;
 }
 
 public static class CustomerRealtimeRefreshPolicy
@@ -219,6 +223,8 @@ public sealed class CustomerRealtimeClient : IAsyncDisposable
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
     private CancellationTokenSource? _streamLifetime;
     private Task? _streamTask;
+    private string? _streamTokenFingerprint;
+    private string? _rejectedTokenFingerprint;
 
     public CustomerRealtimeClient(HttpClient httpClient)
     {
@@ -232,6 +238,9 @@ public sealed class CustomerRealtimeClient : IAsyncDisposable
 
     public bool IsConnected { get; private set; }
 
+    public static string TokenFingerprint(string token) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
+
     public static TimeSpan ReconnectDelay(int attempt) =>
         TimeSpan.FromSeconds(
             Math.Min(30, Math.Pow(2, Math.Clamp(attempt, 0, 5))));
@@ -244,8 +253,16 @@ public sealed class CustomerRealtimeClient : IAsyncDisposable
         await _lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            var fingerprint = TokenFingerprint(accessToken);
+            // A refresh that returns the rejected token cannot repair its
+            // authorization. Wait for a new credential rather than spinning
+            // through stream rejection and session refresh indefinitely.
+            if (Volatile.Read(ref _rejectedTokenFingerprint) == fingerprint ||
+                _streamTask is { IsCompleted: false } && _streamTokenFingerprint == fingerprint)
+                return;
             await StopCoreAsync().ConfigureAwait(false);
             _streamLifetime = new CancellationTokenSource();
+            _streamTokenFingerprint = fingerprint;
             _streamTask = RunAsync(accessToken, _streamLifetime.Token);
         }
         finally
@@ -279,6 +296,7 @@ public sealed class CustomerRealtimeClient : IAsyncDisposable
         var task = _streamTask;
         _streamLifetime = null;
         _streamTask = null;
+        _streamTokenFingerprint = null;
         lifetime?.Cancel();
         if (task is not null)
         {
@@ -315,9 +333,12 @@ public sealed class CustomerRealtimeClient : IAsyncDisposable
             {
                 return;
             }
-            catch (HttpRequestException)
+            catch (HttpRequestException error)
             {
                 SetConnected(false);
+                // Authentication recovery owns the next stream. Polling an
+                // already rejected token cannot restore the session.
+                if (error.StatusCode == HttpStatusCode.Unauthorized) return;
             }
             catch (IOException)
             {
@@ -355,14 +376,16 @@ public sealed class CustomerRealtimeClient : IAsyncDisposable
             cancellationToken).ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.Unauthorized)
         {
+            Volatile.Write(ref _rejectedTokenFingerprint, TokenFingerprint(accessToken));
             Changed?.Invoke(
                 this,
                 new CustomerRealtimeChangedEventArgs(
                     new CustomerRealtimeEvent(
-                        "customer.session.revoked",
+                        "customer.session.refresh_required",
                         string.Empty,
                         "{\"reason\":\"unauthorized\"}"),
-                    new CustomerRealtimeMetadata([], "unauthorized")));
+                    new CustomerRealtimeMetadata([], "unauthorized"),
+                    TokenFingerprint(accessToken)));
         }
         response.EnsureSuccessStatusCode();
         SetConnected(true);
@@ -395,7 +418,14 @@ public sealed class CustomerRealtimeClient : IAsyncDisposable
                         this,
                         new CustomerRealtimeChangedEventArgs(
                             realtimeEvent,
-                            metadata));
+                            metadata,
+                            TokenFingerprint(accessToken)));
+                    if (realtimeEvent.Type == "customer.session.revoked")
+                    {
+                        Volatile.Write(ref _rejectedTokenFingerprint, TokenFingerprint(accessToken));
+                        throw new HttpRequestException("The realtime session was revoked.",
+                            null, HttpStatusCode.Unauthorized);
+                    }
                 }
             }
         }

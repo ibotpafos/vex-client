@@ -4,7 +4,7 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-        <StackPanel MaxWidth="600" Margin="24,12,24,24" HorizontalAlignment="Stretch" Spacing="12">
+        <StackPanel MaxWidth="680" Margin="30,28,30,34" HorizontalAlignment="Stretch" Spacing="12">
             <Grid x:Name="AccountSummaryPanel" Padding="15,10">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="48" />
@@ -74,7 +74,7 @@
                 <StackPanel Spacing="10">
                     <StackPanel Spacing="3">
                         <TextBlock FontSize="16" FontWeight="Black" Foreground="{StaticResource VexTextBrush}" Text="Оплаты" />
-                        <TextBlock FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource VexSecondaryTextBrush}" Text="Последние операции по подписке" />
+                        <TextBlock x:Name="PaymentHistoryStatusText" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource VexSecondaryTextBrush}" Text="Последние операции по подписке" TextWrapping="Wrap" />
                     </StackPanel>
                     <Border x:Name="PaymentHistoryEmpty" Padding="11" Background="#0AFFFFFF" CornerRadius="14">
                         <Grid>
@@ -83,8 +83,8 @@
                                 <FontIcon Glyph="&#xE7C3;" FontSize="17" Foreground="{StaticResource VexCyanBrush}" />
                             </Border>
                             <StackPanel Grid.Column="1" Margin="11,0,0,0" VerticalAlignment="Center" Spacing="3">
-                                <TextBlock Text="Оплат пока нет" FontSize="13" FontWeight="Black" Foreground="{StaticResource VexTextBrush}" />
-                                <TextBlock Text="Покупки и продления появятся здесь." FontSize="11" FontWeight="SemiBold"
+                                <TextBlock x:Name="PaymentHistoryEmptyTitle" Text="Оплат пока нет" FontSize="13" FontWeight="Black" Foreground="{StaticResource VexTextBrush}" />
+                                <TextBlock x:Name="PaymentHistoryEmptyDescription" Text="Покупки и продления появятся здесь." FontSize="11" FontWeight="SemiBold"
                                     Foreground="{StaticResource VexSecondaryTextBrush}" TextWrapping="Wrap" />
                             </StackPanel>
                         </Grid>
@@ -129,6 +129,7 @@
             <Expander x:Name="DeviceUsagePanel" Header="Устройства и трафик" Background="#7508191D" BorderThickness="0"
                 CornerRadius="16" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Visibility="Collapsed">
                 <StackPanel Spacing="10">
+                    <TextBlock x:Name="DeviceSectionStatusText" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource VexMutedBrush}" TextWrapping="Wrap" Visibility="Collapsed" />
                     <TextBlock x:Name="DeviceUsageSummary" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource VexSecondaryTextBrush}"
                         Text="Загружаем устройства." TextWrapping="Wrap" />
                     <ListView x:Name="DeviceUsageList" AutomationProperties.AutomationId="DeviceUsageList" Background="Transparent"

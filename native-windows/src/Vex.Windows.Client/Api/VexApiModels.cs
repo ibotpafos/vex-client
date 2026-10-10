@@ -75,7 +75,9 @@ public sealed record ManagedVpnProfile(
     [property: JsonPropertyName("rotation_required")] bool RotationRequired,
     [property: JsonPropertyName("authorization")]
         ManagedVpnProfileAuthorization? Authorization,
-    [property: JsonPropertyName("unchanged")] bool Unchanged = false);
+    [property: JsonPropertyName("unchanged")] bool Unchanged = false,
+    [property: JsonPropertyName("client_public_key")] string? ClientPublicKey = null,
+    [property: JsonPropertyName("client_key_epoch")] int? ClientKeyEpoch = null);
 
 internal sealed record DeviceIdentityChallengeResponse(
     [property: JsonPropertyName("id")] string Id,

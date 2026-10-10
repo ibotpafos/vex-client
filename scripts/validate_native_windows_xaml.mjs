@@ -179,7 +179,7 @@ for (const parityToken of [
 }
 
 for (const [pageName, maximum] of [
-  ["AccountPage.xaml", 600],
+  ["AccountPage.xaml", 680],
   ["SupportPage.xaml", 600],
   ["SettingsPage.xaml", 680],
 ]) {

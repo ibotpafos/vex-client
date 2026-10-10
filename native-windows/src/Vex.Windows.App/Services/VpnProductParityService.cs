@@ -69,14 +69,14 @@ public sealed class VpnProductParityService
                     coordinator.CurrentState?.LocationId);
             }
             catch (Exception error) when (!cancellationToken.IsCancellationRequested &&
-                error is HttpRequestException or IOException or TaskCanceledException or TimeoutException)
+                (error is HttpRequestException or IOException or TaskCanceledException or TimeoutException ||
+                    error is VexApiException apiError && (int)apiError.StatusCode is 408 or 429 or >= 500 and <= 599))
             {
-                var state = coordinator.CurrentState;
-                if (!coordinator.CanReconnectFromCachedAuthorization || state is null || state.RoutingMode != routingMode)
+                if (!coordinator.TryGetCachedReconnectLocation(routingMode, bypassRegion: null, out var cachedLocationId))
                 {
                     throw;
                 }
-                locationId = state.LocationId;
+                locationId = cachedLocationId;
             }
         }
         return await coordinator.ConnectWithRecoveryAsync(

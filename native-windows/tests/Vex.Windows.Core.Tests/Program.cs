@@ -17,6 +17,9 @@ using System.Text.Json.Nodes;
 
 var tests = new (string Name, Action Run)[]
 {
+    ("Realtime session recovery preserves outages and rejects stale credential events", CustomerRealtimeSessionTests.Run),
+    ("Account retains authoritative subscription data through optional section failures", ClientAccountSnapshotTests.Run),
+    ("Signed profile warm-up preserves routing, identity, trust and foreground priority", ProfileWarmupTests.Run),
     ("Service repair verifies trusted health, ownership, cancellation and bounded retries", ServiceMaintenanceTests.Run),
     ("Browser authentication cancellation rejects late sessions and preserves fresh attempts", NativeAuthServiceTests.Run),
     ("Startup survives package upgrades and honors Windows ownership and disable states", StartupRegistrationTests.Run),
@@ -3874,6 +3877,9 @@ sealed class FakeNativeClientApi : INativeClientApi
         EntitlementCalls += 1;
         return Task.FromResult(Entitlement);
     }
+
+    public Task<IReadOnlyList<BillingPlan>> GetBillingPlansAsync(CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyList<BillingPlan>>([new("pro_monthly", "Pro", "platega", 49900, "RUB", "monthly", 3, "pro", "active")]);
 
     public Task<BillingSummary> GetBillingSummaryAsync(
         string accessToken,

@@ -149,6 +149,26 @@ Assert ((& $restore $legacy) -eq 'ok') 'Legacy profile-only journal cleanup fail
 Assert (@($script:rules | Where-Object {$_.Name -in @('LegacyTunnel','LegacyBypass')}).Count -eq 0) 'Recognized legacy owned rules not removed'
 Assert (@($script:rules | Where-Object Name -eq 'UnrelatedVexGroup').Count -eq 1) 'Legacy cleanup deleted unrelated same-group rule'
 
+# Exercise exact production capture/arm/verify/restore with 5.1-shaped JSON
+# output too. A non-enumerated array must remain a flat journal/address list.
+function Test-WindowsPowerShellJsonPolicy {
+    function ConvertFrom-Json {
+        [CmdletBinding()]param([Parameter(ValueFromPipeline=$true)]$InputObject)
+        process {
+            $decoded=Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $InputObject -NoEnumerate
+            Write-Output -NoEnumerate $decoded
+        }
+    }
+    $compatJson=& $capture $namesJson 'VEX VPN' $ipsJson
+    $compat=Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $compatJson
+    Assert ($compat.OwnedRuleNames.Count -eq $names.Count -and $compat.OwnedRuleNames[0] -is [string]) '5.1 capture nested the owned rule names'
+    Assert ($compat.ProtectedAddresses.Count -eq $ips.Count -and $compat.ProtectedAddresses[0] -is [string]) '5.1 capture nested protected addresses'
+    & $arm $compatJson $ipsJson | Out-Null
+    Assert ((& $verify $compatJson) -eq 'ok') '5.1 JSON output broadened or broke the bounded firewall policy'
+    Assert ((& $restore $compatJson) -eq 'ok') '5.1-shaped journal could not restore original firewall state'
+}
+Test-WindowsPowerShellJsonPolicy
+
 # Exercise the actual production wrapper over encoded program + JSON stdin.
 Assert ($source -match 'var wrapper = "(.*?)" \+ script \+ "(.*?)";') 'Production argument wrapper missing'
 $prefix = ConvertFrom-Json ('"'+$Matches[1]+'"')
@@ -158,20 +178,35 @@ $tokens = $null; $errors = $null
 [System.Management.Automation.Language.Parser]::ParseInput($wrapper,[ref]$tokens,[ref]$errors) | Out-Null
 Assert ($errors.Count -eq 0) 'Production argument wrapper does not parse'
 $arguments = @('ВЕКС сеть $() ` { "quoted" }', ('line'+[Environment]::NewLine+'break'), ('x'*4096), '')
-$executable = Join-Path $PSHOME $(if($env:OS -eq 'Windows_NT'){'pwsh.exe'}else{'pwsh'})
-$startInfo = [System.Diagnostics.ProcessStartInfo]::new()
-$startInfo.FileName=$executable;$startInfo.UseShellExecute=$false
-$startInfo.RedirectStandardInput=$true;$startInfo.RedirectStandardOutput=$true;$startInfo.RedirectStandardError=$true
-$startInfo.StandardInputEncoding=[Text.UTF8Encoding]::new($false);$startInfo.StandardOutputEncoding=[Text.UTF8Encoding]::new($false);$startInfo.StandardErrorEncoding=[Text.UTF8Encoding]::new($false)
-foreach($option in @('-NoProfile','-NonInteractive','-EncodedCommand',[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($wrapper)))){$startInfo.ArgumentList.Add($option)}
-$process = [System.Diagnostics.Process]::Start($startInfo)
-try {
-    $stdout=$process.StandardOutput.ReadToEndAsync();$stderr=$process.StandardError.ReadToEndAsync()
-    $process.StandardInput.Write((ConvertTo-Json -InputObject $arguments -Compress));$process.StandardInput.Close()
-    if(!$process.WaitForExit(10000)){$process.Kill($true);throw 'Argument transport test timed out'}
-    Assert ($process.ExitCode -eq 0) ('Argument transport failed: '+$stderr.GetAwaiter().GetResult())
-    $actual=@($stdout.GetAwaiter().GetResult() | ConvertFrom-Json)
-    Assert ($actual.Count -eq $arguments.Count) 'Argument count changed during transport'
-    for($i=0;$i -lt $arguments.Count;$i++){Assert ($actual[$i] -ceq $arguments[$i]) "Argument $i changed or executed during transport"}
-} finally {$process.Dispose()}
+$pwsh = Join-Path $PSHOME $(if($IsWindows){'pwsh.exe'}else{'pwsh'})
+$cases = @([pscustomobject]@{Executable=$pwsh;Wrapper=$wrapper})
+# Reproduce 5.1's non-enumerating JSON output on every portable test host.
+$cases += [pscustomobject]@{
+    Executable=$pwsh
+    Wrapper=$wrapper.Replace('ConvertFrom-Json ([Console]::In.ReadToEnd())', 'ConvertFrom-Json ([Console]::In.ReadToEnd()) -NoEnumerate')
+}
+if ($IsWindows) {
+    # Also run the actual host used by the service, rather than only pwsh 7.
+    $cases += [pscustomobject]@{
+        Executable=(Join-Path ([Environment]::GetFolderPath('System')) 'WindowsPowerShell/v1.0/powershell.exe')
+        Wrapper=$wrapper
+    }
+}
+foreach ($case in $cases) {
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName=$case.Executable;$startInfo.UseShellExecute=$false
+    $startInfo.RedirectStandardInput=$true;$startInfo.RedirectStandardOutput=$true;$startInfo.RedirectStandardError=$true
+    $startInfo.StandardInputEncoding=[Text.UTF8Encoding]::new($false);$startInfo.StandardOutputEncoding=[Text.UTF8Encoding]::new($false);$startInfo.StandardErrorEncoding=[Text.UTF8Encoding]::new($false)
+    foreach($option in @('-NoProfile','-NonInteractive','-ExecutionPolicy','AllSigned','-EncodedCommand',[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($case.Wrapper)))){$startInfo.ArgumentList.Add($option)}
+    $process = [System.Diagnostics.Process]::Start($startInfo)
+    try {
+        $stdout=$process.StandardOutput.ReadToEndAsync();$stderr=$process.StandardError.ReadToEndAsync()
+        $process.StandardInput.Write((ConvertTo-Json -InputObject $arguments -Compress));$process.StandardInput.Close()
+        if(!$process.WaitForExit(10000)){$process.Kill($true);throw 'Argument transport test timed out'}
+        Assert ($process.ExitCode -eq 0) ('Argument transport failed: '+$stderr.GetAwaiter().GetResult())
+        $actual=@($stdout.GetAwaiter().GetResult() | ConvertFrom-Json)
+        Assert ($actual.Count -eq $arguments.Count) 'Argument count changed during transport'
+        for($i=0;$i -lt $arguments.Count;$i++){Assert ($actual[$i] -ceq $arguments[$i]) "Argument $i changed or executed during transport"}
+    } finally {$process.Dispose()}
+}
 Write-Output 'Network safety policy regression tests passed' 

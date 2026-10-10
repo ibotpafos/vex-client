@@ -15,6 +15,7 @@ public sealed partial class NativeClientCoordinator
         CancellationToken cancellationToken,
         bool forceFreshProfile = false)
     {
+        CancelProfileWarmup();
         ValidateRoutingMode(routingMode);
         if (locationId is not null) { ValidatePreference(locationId, nameof(locationId)); }
         await _recoveryGate.WaitAsync(cancellationToken).ConfigureAwait(false);

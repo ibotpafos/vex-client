@@ -44,7 +44,7 @@
         <SolidColorBrush x:Key="ToggleSwitchKnobFillOff" Color="{StaticResource VexTextColor}"/>
     </Page.Resources>
     <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
-        <StackPanel x:Name="SettingsContent" MaxWidth="680" Margin="30,4,30,28" HorizontalAlignment="Stretch" SizeChanged="OnSettingsContentSizeChanged" Spacing="12">
+        <StackPanel x:Name="SettingsContent" MaxWidth="680" Margin="30,28,30,28" HorizontalAlignment="Stretch" SizeChanged="OnSettingsContentSizeChanged" Spacing="12">
             <Grid ColumnSpacing="16" Margin="18,8">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="48"/>

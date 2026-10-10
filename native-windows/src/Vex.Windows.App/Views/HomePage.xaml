@@ -13,7 +13,12 @@
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="36" />
                 </Grid.ColumnDefinitions>
-                <TextBlock VerticalAlignment="Center" FontSize="19" Text="{Binding FlagEmoji}" />
+                <Grid Width="30" Height="22" VerticalAlignment="Center" Opacity="{Binding AvailabilityOpacity}">
+                    <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="12" FontWeight="Bold"
+                        Foreground="{StaticResource VexMutedBrush}" Text="{Binding FlagFallbackText}" Visibility="{Binding FlagFallbackVisibility}" />
+                    <Image Width="30" Height="20" Source="{Binding FlagAsset}" Stretch="UniformToFill"
+                        Visibility="{Binding FlagAssetVisibility}" AutomationProperties.AccessibilityView="Raw" />
+                </Grid>
                 <StackPanel Grid.Column="1" Spacing="3" Opacity="{Binding AvailabilityOpacity}">
                     <TextBlock FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource VexTextBrush}" Text="{Binding Title}" />
                     <TextBlock FontFamily="Cascadia Code" FontSize="10" Foreground="{StaticResource VexSecondaryTextBrush}" Text="{Binding LocationId}" />
@@ -73,6 +78,7 @@
         <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
             <StackPanel x:Name="HomeContent" MaxWidth="1080" Margin="30,38,30,12"
                 HorizontalAlignment="Stretch" Spacing="8">
+                <StackPanel Spacing="0">
                 <InfoBar x:Name="FoundationNotice" IsClosable="True" IsOpen="False"
                     Message="" Severity="Informational" Title="VEX VPN" />
 
@@ -84,6 +90,19 @@
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
+                    <!-- Canvas lets the waves extend beyond the power control's
+                         layout slot without clipping them into a square. -->
+                    <Canvas Grid.Column="2" Width="0" Height="0" Margin="0,-20,0,0"
+                        HorizontalAlignment="Center" VerticalAlignment="Center"
+                        IsHitTestVisible="False" AutomationProperties.AccessibilityView="Raw">
+                        <Ellipse x:Name="PowerGlow" Width="270" Height="270" Canvas.Left="-135" Canvas.Top="-135" Fill="#0922D3EE" />
+                        <Ellipse x:Name="Orbit0" Width="176" Height="176" Canvas.Left="-88" Canvas.Top="-88" Stroke="#2422D3EE" StrokeThickness="1.4" />
+                        <Ellipse x:Name="Orbit1" Width="222" Height="222" Canvas.Left="-111" Canvas.Top="-111" Stroke="#1D22D3EE" StrokeThickness="1" />
+                        <Ellipse x:Name="Orbit2" Width="268" Height="268" Canvas.Left="-134" Canvas.Top="-134" Stroke="#1622D3EE" StrokeThickness="1" />
+                        <Ellipse x:Name="Orbit3" Width="314" Height="314" Canvas.Left="-157" Canvas.Top="-157" Stroke="#1022D3EE" StrokeThickness="1" />
+                        <Ellipse x:Name="Orbit4" Width="360" Height="360" Canvas.Left="-180" Canvas.Top="-180" Stroke="#0922D3EE" StrokeThickness="1" />
+                        <Ellipse x:Name="Orbit5" Width="406" Height="406" Canvas.Left="-203" Canvas.Top="-203" Stroke="#0722D3EE" StrokeThickness="1" />
+                    </Canvas>
                     <StackPanel x:Name="ReceivedCard" Width="136" Height="78" Padding="8,6"
                         VerticalAlignment="Center" Spacing="8" AutomationProperties.Name="Полученный трафик">
                         <Grid ColumnSpacing="8">
@@ -104,16 +123,6 @@
 
                     <StackPanel Grid.Column="2" Margin="0,28,0,0" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="10">
                         <Grid Width="152" Height="152">
-                            <Grid Width="470" Height="406" HorizontalAlignment="Center" VerticalAlignment="Center"
-                                IsHitTestVisible="False" AutomationProperties.AccessibilityView="Raw">
-                                <Ellipse x:Name="PowerGlow" Width="270" Height="270" Fill="#0922D3EE" />
-                                <Ellipse x:Name="Orbit0" Width="176" Height="176" Stroke="#2422D3EE" StrokeThickness="1.4" />
-                                <Ellipse x:Name="Orbit1" Width="222" Height="222" Stroke="#1D22D3EE" StrokeThickness="1" />
-                                <Ellipse x:Name="Orbit2" Width="268" Height="268" Stroke="#1622D3EE" StrokeThickness="1" />
-                                <Ellipse x:Name="Orbit3" Width="314" Height="314" Stroke="#1022D3EE" StrokeThickness="1" />
-                                <Ellipse x:Name="Orbit4" Width="360" Height="360" Stroke="#0922D3EE" StrokeThickness="1" />
-                                <Ellipse x:Name="Orbit5" Width="406" Height="406" Stroke="#0722D3EE" StrokeThickness="1" />
-                            </Grid>
                             <Button x:Name="PowerButton" Width="152" Height="152" CornerRadius="76"
                                 AutomationProperties.AutomationId="PowerButton" AutomationProperties.Name="Подключить VPN"
                                 HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"
@@ -163,6 +172,7 @@
                         </Viewbox>
                     </StackPanel>
                 </Grid>
+                </StackPanel>
 
                 <Grid Margin="2,0,2,0">
                     <TextBlock VerticalAlignment="Center" FontSize="18" FontWeight="Bold"

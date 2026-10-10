@@ -39,6 +39,7 @@ public partial class App : Application
         {
             AppServices.Current.BackgroundUpdates.Start();
             AppServices.Current.BackgroundVpn.Start();
+            AppServices.Current.ProfileWarmup.Start();
         }
         _window.ShowShellWindow();
         _window.Activate();
@@ -104,6 +105,7 @@ public partial class App : Application
         _trayIconHost = null;
         AppServices.Current.BackgroundUpdates.Dispose();
         AppServices.Current.BackgroundVpn.Dispose();
+        AppServices.Current.ProfileWarmup.Dispose();
         _window?.RequestExit();
     }
 
@@ -113,6 +115,7 @@ public partial class App : Application
         _trayIconHost = null;
         AppServices.Current.BackgroundUpdates.Dispose();
         AppServices.Current.BackgroundVpn.Dispose();
+        AppServices.Current.ProfileWarmup.Dispose();
         if (_window is not null)
         {
             AppServices.Current.ClearMainWindow(_window);

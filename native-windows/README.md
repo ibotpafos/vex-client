@@ -63,6 +63,31 @@ revocation prevent cached-profile reconnects. Google/email authentication,
 website billing, support message reconciliation and incident configuration
 follow the current macOS product flows.
 
+Home uses the macOS dark/cyan palette, six animated focus rings, traffic
+sparklines, country cards and bottom navigation. Account and Settings retain
+the same centered desktop proportions; narrow windows adapt the cards and
+navigation. System reduced-motion settings disable the focus animation.
+An in-flight connection can be cancelled; its independent disconnect command
+waits for service cleanup rather than merely cancelling the UI pipe read.
+
+An expired realtime access token or server session-invalid event triggers
+bounded refresh attempts. Network failures preserve the session and working
+tunnel; an authoritative refresh rejection signs out and disconnects. Events from an earlier token
+cannot invalidate a newer login. Account loading keeps authoritative
+entitlement visible when optional plans, payments, devices or usage fail,
+with separate cached/unavailable indicators for each affected section.
+
+Disconnected clients warm their selected profile without blocking Connect.
+The warm cache requires the release-pinned P256 keyring, exact signed user,
+device, location and routing scope, and matching HTTPS device-key metadata.
+Warm-up cannot change the active profile or connection preference; login,
+key, routing and connection changes invalidate pending work. Older servers
+without device-key metadata use the ordinary foreground profile flow.
+An exact warmed grant and bounded cached paid entitlement also support cold
+automatic connection during transient catalog failures. A fresh negative
+entitlement supersedes an older paid cache; authentication failures and grants
+for another mode, identity or expired lease never enable this fallback.
+
 The server catalog groups nodes by country, searches localized country/city
 labels, and retains favorites and all/fastest/favorites/available filters.
 An explicit quit waits for confirmed tunnel cleanup and seals pending UI
@@ -77,7 +102,7 @@ assigned exit, then issues the existing P256 profile with an exact endpoint and
 a lease of at most ten minutes. The service uses its release-pinned keyring;
 policy keys supplied by the response do not authorize configuration changes.
 The companion backend implementation is [VPN #741](https://github.com/ibotpafos/VPN/pull/741);
-it must be reviewed and deployed before new path grants can be issued. Servers
+it is merged and must be deployed before new path grants can be issued. Servers
 without this contract retain direct-profile recovery.
 
 After a successful connection, Windows prefetches at most three independently
@@ -298,7 +323,9 @@ node native-windows/scripts/validate-packaging-static.mjs
 ```
 
 PowerShell 7 provides the actual AST parser and release validation tests on
-Linux, macOS and Windows:
+Linux, macOS and Windows. Network-policy tests also exercise non-enumerating
+JSON-array decoding and, on Windows, invoke the service's actual Windows
+PowerShell 5.1 host with its production stdin transport:
 
 ```powershell
 .\native-windows\scripts\validate-powershell-parse.ps1

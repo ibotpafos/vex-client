@@ -67,22 +67,14 @@ public sealed record NativeClientState(
     DateTimeOffset? CachedEntitlementCheckedAt = null,
     DateTimeOffset? CachedEntitlementValidUntil = null,
     IReadOnlyList<CachedSignedCandidateGrant>? CachedCandidateGrants = null,
-    DateTimeOffset? CachedCandidatePolicyExpiresAt = null);
+    DateTimeOffset? CachedCandidatePolicyExpiresAt = null,
+    WarmedProfileGrant? WarmedProfile = null);
 
 public sealed record NativeDeviceState(
     string InstallationId,
     string DeviceId,
     string LocationId,
     WireGuardIdentity Identity);
-
-public sealed record NativeAccountSnapshot(
-    string Email,
-    string LocationId,
-    VexEntitlement Entitlement,
-    BillingSummary BillingSummary,
-    IReadOnlyList<VpnDevice> Devices,
-    IReadOnlyList<VpnDeviceUsage> DeviceUsage,
-    IReadOnlyList<BillingPayment> Payments);
 
 public sealed record NativeSupportSnapshot(
     IReadOnlyList<SupportTicket> Tickets,
@@ -119,7 +111,8 @@ public sealed partial class NativeClientCoordinator
         IVpnControlClient vpnClient,
         string appVersion,
         Func<DateTimeOffset>? utcNow = null,
-        DynamicRouteEngine? dynamicRoutes = null)
+        DynamicRouteEngine? dynamicRoutes = null,
+        Func<VpnSignedProfileVerifier?>? profileWarmupVerifier = null)
     {
         _api = api;
         _stateStore = stateStore;
@@ -127,26 +120,35 @@ public sealed partial class NativeClientCoordinator
         _appVersion = appVersion;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _dynamicRoutes = dynamicRoutes ?? new DynamicRouteEngine();
+        _profileWarmupVerifier = profileWarmupVerifier;
     }
 
     public NativeClientState? CurrentState => _stateStore.Load();
 
     public event EventHandler? SessionChanged;
 
+    public event EventHandler? ProfileScopeChanged;
+
     public ClientStateAccessKind CurrentStateAccess =>
         _stateStore.GetAccessState();
 
     public async Task<NativeClientState> ForceRefreshSessionAsync(
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? expectedAccessToken = null)
     {
+        if (expectedAccessToken is null) CancelProfileWarmup();
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             var state = RequireCurrentState();
+            if (expectedAccessToken is not null && state.Session.AccessToken != expectedAccessToken)
+                throw new NativeClientFlowException("session_changed");
+            if (expectedAccessToken is not null) CancelProfileWarmup();
             var session = await _api.RefreshSessionAsync(
                 state.Session.AccessToken,
                 cancellationToken).ConfigureAwait(false);
             var refreshed = state with { Session = session };
+            cancellationToken.ThrowIfCancellationRequested();
             _stateStore.Save(refreshed);
             SessionChanged?.Invoke(this, EventArgs.Empty);
             return refreshed;
@@ -176,6 +178,7 @@ public sealed partial class NativeClientCoordinator
         CancellationToken cancellationToken,
         bool antiLeakEnabled = true)
     {
+        CancelProfileWarmup();
         ValidatePreference(locationId, nameof(locationId));
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -201,6 +204,7 @@ public sealed partial class NativeClientCoordinator
                     CachedAuthorization = null,
                     CachedCandidatePolicyExpiresAt = null,
                     CachedCandidateGrants = null,
+                    WarmedProfile = null,
                 });
                 return;
             }
@@ -240,7 +244,11 @@ public sealed partial class NativeClientCoordinator
                 throw;
             }
         }
-        finally { _gate.Release(); }
+        finally
+        {
+            _gate.Release();
+            ProfileScopeChanged?.Invoke(this, EventArgs.Empty);
+        }
     }
 
     public async Task SetRoutingPreferencesAsync(
@@ -248,6 +256,7 @@ public sealed partial class NativeClientCoordinator
         string? bypassRegion,
         CancellationToken cancellationToken)
     {
+        CancelProfileWarmup();
         ValidateRoutingMode(routingMode);
         bypassRegion = NormalizeBypassRegion(routingMode, bypassRegion);
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -262,11 +271,13 @@ public sealed partial class NativeClientCoordinator
                 CachedAuthorization = null,
                 CachedCandidatePolicyExpiresAt = null,
                 CachedCandidateGrants = null,
+                WarmedProfile = null,
             });
         }
         finally
         {
             _gate.Release();
+            ProfileScopeChanged?.Invoke(this, EventArgs.Empty);
         }
     }
 
@@ -275,6 +286,7 @@ public sealed partial class NativeClientCoordinator
         string password,
         CancellationToken cancellationToken)
     {
+        CancelProfileWarmup();
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -296,6 +308,7 @@ public sealed partial class NativeClientCoordinator
         VexAuthSession session,
         CancellationToken cancellationToken)
     {
+        CancelProfileWarmup();
         ArgumentNullException.ThrowIfNull(session);
 
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -344,6 +357,7 @@ public sealed partial class NativeClientCoordinator
         bool forceRefresh,
         CancellationToken cancellationToken)
     {
+        CancelProfileWarmup();
         ValidateRoutingMode(routingMode);
         if (locationId is not null)
         {
@@ -458,6 +472,9 @@ public sealed partial class NativeClientCoordinator
 
         state = await EnsureEntitlementAsync(state, cancellationToken)
             .ConfigureAwait(false);
+
+        if (!forceRefresh && candidate is null)
+            state = PromoteWarmedProfile(state);
 
         if (!forceRefresh && candidate is null)
         {
@@ -742,16 +759,21 @@ public sealed partial class NativeClientCoordinator
 
     public async Task InvalidateProfileAsync(CancellationToken cancellationToken)
     {
+        CancelProfileWarmup();
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             if (_stateStore.Load() is { } state)
             {
                 _stateStore.Save(state with { CachedProfileVersion = null, CachedAuthorization = null,
-                    CachedCandidateGrants = null });
+                    CachedCandidateGrants = null, WarmedProfile = null });
             }
         }
-        finally { _gate.Release(); }
+        finally
+        {
+            _gate.Release();
+            ProfileScopeChanged?.Invoke(this, EventArgs.Empty);
+        }
     }
 
     public Task<VpnServiceResponse> GetTunnelStatusAsync(CancellationToken cancellationToken) =>
@@ -981,11 +1003,20 @@ public sealed partial class NativeClientCoordinator
     }
 
     public async Task SignOutAsync(
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? expectedAccessToken = null,
+        Action? onMatchedSignOut = null)
     {
+        if (expectedAccessToken is null) CancelProfileWarmup();
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var matched = false;
         try
         {
+            if (expectedAccessToken is not null && _stateStore.Load()?.Session.AccessToken != expectedAccessToken)
+                return;
+            matched = true;
+            if (expectedAccessToken is not null) CancelProfileWarmup();
+            onMatchedSignOut?.Invoke();
             await _vpnClient.DisconnectAsync(
                 cancellationToken).ConfigureAwait(false);
         }
@@ -993,8 +1024,11 @@ public sealed partial class NativeClientCoordinator
         {
             try
             {
-                _stateStore.Clear();
-                SessionChanged?.Invoke(this, EventArgs.Empty);
+                if (matched)
+                {
+                    _stateStore.Clear();
+                    SessionChanged?.Invoke(this, EventArgs.Empty);
+                }
             }
             finally { _gate.Release(); }
         }
@@ -1010,47 +1044,6 @@ public sealed partial class NativeClientCoordinator
                 LoadAccountSnapshotCoreAsync(state, cancellationToken), cancellationToken).ConfigureAwait(false);
         }
         finally { _gate.Release(); }
-    }
-
-    private async Task<NativeAccountSnapshot> LoadAccountSnapshotCoreAsync(
-        NativeClientState state, CancellationToken cancellationToken)
-    {
-        var summaryTask = _api.GetBillingSummaryAsync(
-            state.Session.AccessToken,
-            cancellationToken);
-        var entitlementTask = _api.GetBillingEntitlementAsync(
-            state.Session.AccessToken,
-            cancellationToken);
-        var userTask = _api.GetCurrentUserAsync(
-            state.Session.AccessToken,
-            cancellationToken);
-        var devicesTask = _api.GetDevicesAsync(
-            state.Session.AccessToken,
-            cancellationToken);
-        var usageTask = _api.GetDeviceUsageAsync(
-            state.Session.AccessToken,
-            cancellationToken);
-        var paymentsTask = _api.GetBillingPaymentsAsync(
-            state.Session.AccessToken,
-            24,
-            cancellationToken);
-        await Task.WhenAll(summaryTask, entitlementTask, userTask, devicesTask, usageTask, paymentsTask)
-            .ConfigureAwait(false);
-        var summary = await summaryTask.ConfigureAwait(false);
-        var entitlement = await entitlementTask.ConfigureAwait(false);
-        var user = await userTask.ConfigureAwait(false);
-        var devices = await devicesTask.ConfigureAwait(false);
-        var usage = await usageTask.ConfigureAwait(false);
-        var payments = await paymentsTask.ConfigureAwait(false);
-        _stateStore.Save(CacheEntitlement(state, entitlement));
-        return new NativeAccountSnapshot(
-            user.Email,
-            state.LocationId,
-            entitlement,
-            summary,
-            devices,
-            usage,
-            payments);
     }
 
     public async Task<CheckoutSession> StartCheckoutAsync(
@@ -1135,7 +1128,7 @@ public sealed partial class NativeClientCoordinator
                 summary,
                 devices,
                 usage,
-                payments);
+                payments) { UserId = user.Id };
         }
         finally
         {

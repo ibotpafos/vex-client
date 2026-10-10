@@ -61,6 +61,7 @@ $result = [ordered]@{
     desktop_checks = [bool]$DesktopChecks
     preview_mode = $PreviewMode
     screenshots = @()
+    navigation_checks = @()
     single_instance_redirected = $false
     close_to_tray = $false
     second_launch_restored_window = $false
@@ -292,13 +293,26 @@ namespace Vex.Windows.Smoke {
         foreach ($page in $pages) {
             $result.stage = "navigation-$($page.ToLowerInvariant())"
             Invoke-SmokeElement -AutomationId "${page}NavigationButton"
-            $expectedPageId = if ($PreviewMode -eq 'signed-out' -and $page -eq 'Home') {
-                'AccountPage'
+            # WinUI Page is a layout container without a PageAutomationPeer.
+            # Require a visible interactive control unique to the loaded page.
+            $expectedControlId = if ($PreviewMode -eq 'signed-out' -and $page -eq 'Home') {
+                'WebsiteSignInButton'
             }
-            else { "${page}Page" }
+            else {
+                switch ($page) {
+                    'Home' { 'PowerButton' }
+                    'Account' { 'RefreshBillingButton' }
+                    'Support' { 'RefreshSupportButton' }
+                    'Settings' { 'AutoLaunchToggle' }
+                }
+            }
             Wait-SmokeCondition -Failure "Preview page did not load: $page" -Condition {
-                $element = Find-SmokeElement -AutomationId $expectedPageId
+                $element = Find-SmokeElement -AutomationId $expectedControlId
                 $null -ne $element -and -not $element.Current.IsOffscreen
+            }
+            $result.navigation_checks += [ordered]@{
+                section = $page
+                visible_control = $expectedControlId
             }
             Save-SmokeScreenshot -Name $page.ToLowerInvariant()
             if ($page -eq 'Home' -and $PreviewMode -eq 'fixtures') {

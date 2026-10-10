@@ -335,9 +335,9 @@ public sealed partial class AccountPage : Page
         var state = Coordinator.CurrentState;
         var signedIn = state is not null;
         if (!signedIn || !string.Equals(
-                _account?.Email,
-                state?.Session.User.Email,
-                StringComparison.OrdinalIgnoreCase))
+                _account?.UserId,
+                state?.Session.User.Id,
+                StringComparison.Ordinal))
         {
             _account = null;
         }
@@ -358,7 +358,7 @@ public sealed partial class AccountPage : Page
                 : waitingForBrowserAuth
                     ? "Подтвердите вход на сайте и вернитесь в VEX."
                     : _services.StateStore.StoredSessionError ??
-                        string.Empty;
+                        (!signedIn ? Auth.Error ?? Auth.Notice : null) ?? string.Empty;
         SignInStatusText.Visibility = string.IsNullOrWhiteSpace(SignInStatusText.Text) || waitingForBrowserAuth
             ? Visibility.Collapsed : Visibility.Visible;
         LoginBrandPanel.Visibility = signedIn ? Visibility.Collapsed : Visibility.Visible;
@@ -475,28 +475,45 @@ public sealed partial class AccountPage : Page
             AccountStatusFact.Text = signedIn ? "Статус: проверяем" : "Статус: нет доступа";
             PaymentHistoryList.Visibility = Visibility.Collapsed;
             PaymentHistoryEmpty.Visibility = Visibility.Visible;
+            PaymentHistoryStatusText.Text = "История пока недоступна.";
+            PaymentHistoryEmptyTitle.Text = "Ожидаем историю оплат";
+            PaymentHistoryEmptyDescription.Text = "Обновите подписку, чтобы загрузить последние операции.";
+            DeviceUsageSummary.Text = "Устройства пока недоступны. Обновите подписку, чтобы повторить загрузку.";
+            DeviceSectionStatusText.Visibility = Visibility.Collapsed;
             return;
         }
 
         var summary = _account.BillingSummary;
         BillingTitle.Text = "Подписка";
-        BillingSubtitle.Text = "Оплата и управление подпиской — на сайте VEX";
-        BillingPlan.Text = $"Тариф: {summary.CurrentPlan?.Name ?? "Не выбран"}";
+        var currentSummary = _account.BillingSummaryStatus.IsCurrent;
+        BillingSubtitle.Text = currentSummary ? "Оплата и управление подпиской — на сайте VEX"
+            : _account.BillingSummaryStatus.HasData ? "Тарифы не обновлены; показаны сохранённые данные."
+                : "Тарифы недоступны. Статус подписки подтверждён сервером; оплата доступна на сайте.";
+        var planName = currentSummary ? summary.CurrentPlan?.Name
+            : _account.Entitlement.DisplayName ?? _account.Entitlement.SubscriptionTitle ?? _account.Entitlement.PlanId;
+        BillingPlan.Text = $"Тариф: {planName ?? "Не выбран"}" + (!currentSummary && _account.BillingSummaryStatus.HasData ? " (сохранённый каталог)" : string.Empty);
         BillingAccess.Text = $"Доступ: {AccessText(_account.Entitlement)}";
-        BillingPeriod.Text = $"Период: {summary.RemainingText ?? summary.CurrentPeriodEnd ?? summary.EffectiveExpiresAt ?? "Уточняется"}";
+        BillingPeriod.Text = $"Период: {(currentSummary ? summary.RemainingText ?? summary.CurrentPeriodEnd ?? summary.EffectiveExpiresAt
+            : _account.Entitlement.RemainingText ?? _account.Entitlement.CurrentPeriodEnd ?? _account.Entitlement.EffectiveExpiresAt) ?? "Уточняется"}";
         CheckoutButton.Visibility = Visibility.Visible;
         AccountPlanFact.Text =
-            summary.CurrentPlan?.Name ?? AccessText(_account.Entitlement);
-        AccountStatusFact.Text =
-            "Статус: " + LocalizeSubscriptionStatus(
-                summary.Status,
-                _account.Entitlement.HasPaidAccess);
+            planName ?? AccessText(_account.Entitlement);
+        AccountStatusFact.Text = "Статус: " + (_account.Entitlement.HasPaidAccess
+            ? LocalizeSubscriptionStatus(currentSummary ? summary.Status : _account.Entitlement.Status, true)
+            : "Нет VPN-доступа");
         RenderDevices(_account);
-        RenderPayments(_account.Payments);
+        RenderPayments(_account);
     }
 
     private void RenderDevices(NativeAccountSnapshot account)
     {
+        var statuses = new List<string>();
+        if (!account.DevicesStatus.IsCurrent)
+            statuses.Add(account.DevicesStatus.HasData ? "Устройства не обновлены; показаны сохранённые данные." : "Список устройств недоступен.");
+        if (!account.DeviceUsageStatus.IsCurrent)
+            statuses.Add(account.DeviceUsageStatus.HasData ? "Трафик не обновлён; показаны сохранённые данные." : "Трафик недоступен.");
+        DeviceSectionStatusText.Text = string.Join(" ", statuses);
+        DeviceSectionStatusText.Visibility = statuses.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
         var usageByDevice = account.DeviceUsage
             .GroupBy(usage => usage.DeviceId)
             .ToDictionary(
@@ -509,7 +526,8 @@ public sealed partial class AccountPage : Page
                 usageByDevice.TryGetValue(device.Id, out var usage);
                 return new DeviceUsageView(
                     device.Name,
-                    LocalizeDeviceStatus(device.Status, usage),
+                    account.DevicesStatus.IsCurrent && account.DeviceUsageStatus.IsCurrent
+                        ? LocalizeDeviceStatus(device.Status, usage) : "Не обновлено",
                     string.Join(
                         " · ",
                         new[]
@@ -519,22 +537,28 @@ public sealed partial class AccountPage : Page
                             device.AppVersion,
                         }.Where(value =>
                             !string.IsNullOrWhiteSpace(value))),
-                    usage is null
-                        ? "Трафик: нет данных"
-                        : $"↓ {FormatBytes(usage.RxBytes)}  ↑ {FormatBytes(usage.TxBytes)}  Всего {FormatBytes(usage.TotalBytes)}");
+                    !account.DeviceUsageStatus.HasData ? "Трафик недоступен"
+                        : usage is null ? "Трафик: нет данных"
+                        : (account.DeviceUsageStatus.IsCurrent ? string.Empty : "Сохранено: ") +
+                            $"↓ {FormatBytes(usage.RxBytes)}  ↑ {FormatBytes(usage.TxBytes)}  Всего {FormatBytes(usage.TotalBytes)}");
             })
             .ToList();
         DeviceUsageList.ItemsSource = rows;
-        DeviceUsageSummary.Text = rows.Count == 0
+        DeviceUsageSummary.Text = !account.DevicesStatus.HasData ? "Список устройств не удалось загрузить. Повторите обновление." : rows.Count == 0
             ? "Зарегистрированных устройств пока нет."
             : $"Устройств: {rows.Count}. Текущее расположение: " +
                 $"{NativeLocationLabel.Russian(account.LocationId)}.";
     }
 
-    private void RenderPayments(
-        IReadOnlyList<BillingPayment> payments)
+    private void RenderPayments(NativeAccountSnapshot account)
     {
-        var rows = payments
+        PaymentHistoryStatusText.Text = account.PaymentsStatus.IsCurrent ? "Последние операции по подписке"
+            : account.PaymentsStatus.HasData ? "История не обновлена; показаны сохранённые оплаты." : "История оплат недоступна. Повторите обновление.";
+        PaymentHistoryEmptyTitle.Text = !account.PaymentsStatus.HasData ? "История оплат недоступна"
+            : account.PaymentsStatus.IsCurrent ? "Оплат пока нет" : "В сохранённой истории оплат нет";
+        PaymentHistoryEmptyDescription.Text = account.PaymentsStatus.IsCurrent
+            ? "Покупки и продления появятся здесь." : "Обновите подписку, чтобы повторить загрузку истории.";
+        var rows = account.Payments
             .OrderByDescending(payment =>
                 ParseTimestamp(
                     payment.PaidAt ?? payment.CreatedAt))
@@ -602,7 +626,21 @@ public sealed partial class AccountPage : Page
                 NativeClientFlowException or IOException or UnauthorizedAccessException or
                 System.Security.Cryptography.CryptographicException or InvalidOperationException)
         {
-            if (!IsCurrentBillingRequest(requestGeneration, requestUserId, pageToken)) return;
+            if (!IsCurrentBillingRequest(requestGeneration, requestUserId, pageToken))
+            {
+                if (error is NativeClientFlowException { Code: "sign_in_required" } &&
+                    !pageToken.IsCancellationRequested && _pageLifetime is not null &&
+                    requestGeneration == _pageGeneration && Coordinator.CurrentState is null)
+                {
+                    AccountNotice.Message = "Сессия истекла. Войдите снова, чтобы продолжить работу с VEX.";
+                    AccountNotice.Severity = InfoBarSeverity.Warning;
+                    AccountNotice.IsOpen = true;
+                }
+                return;
+            }
+            if (_account is not null && Coordinator.CurrentState?.CachedEntitlement is { } entitlement)
+                _account = _account with { Entitlement = entitlement,
+                    BillingSummaryStatus = new(NativeAccountSectionAvailability.Cached, "request_failed") };
             AccountNotice.Message = error switch
             {
                 NativeClientFlowException flow when

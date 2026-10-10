@@ -61,6 +61,16 @@ public sealed class NativeAuthService
         NotifyChanged();
     }
 
+    public void ReportSessionExpired()
+    {
+        lock (_browserSync)
+        {
+            Notice = null;
+            Error = "Сессия VEX истекла или была отозвана. Войдите снова, чтобы продолжить.";
+        }
+        NotifyChanged();
+    }
+
     public async Task SignInWithPasswordAsync(
         string email,
         string password,

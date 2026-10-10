@@ -1,159 +1,105 @@
-using System.ComponentModel;
-using System.Diagnostics;
-using System.Net;
-using System.Runtime.InteropServices;
-using System.Buffers.Binary;
-using System.Security.Cryptography;
-using System.Security.Cryptography.X509Certificates;
-using System.Security.AccessControl;
-using System.Security.Principal;
-using System.Text;
-using System.Text.Json;
 using Vex.Windows.Client.Updates;
+using Vex.Windows.Core.Updates;
 
 namespace Vex.Windows.App.Services;
 
-public sealed class NativeUpdateService
+public sealed partial class NativeUpdateService
 {
-    private static readonly Uri ProductionOrigin =
-        new("https://downloads.vexguard.app/windows/native/", UriKind.Absolute);
-
     private readonly WindowsUpdateCoordinator? _coordinator;
     private readonly string _downloadsFallbackUrl;
     private readonly string _stagingRoot;
-    private readonly int _rolloutBucket;
-    private readonly WindowsUpdateRollbackStateStore _rollbackStateStore;
+    private readonly Action<WindowsUpdateRollbackState> _saveRollbackState;
+    private readonly Action<WindowsStagedProvisioningBundle> _launchBootstrap;
     private readonly SemaphoreSlim _operationGate = new(1, 1);
+    private bool _rollbackPersistenceFailed;
 
-    public NativeUpdateService(string installationId)
+    internal NativeUpdateService(WindowsUpdateCoordinator coordinator,
+        NativeUpdateSnapshot initialSnapshot, string stagingRoot,
+        Action<WindowsUpdateRollbackState> saveRollbackState,
+        Action<WindowsStagedProvisioningBundle> launchBootstrap,
+        WindowsUpdateRollbackState? rollbackState = null)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(installationId);
+        ArgumentNullException.ThrowIfNull(coordinator);
+        ArgumentNullException.ThrowIfNull(initialSnapshot);
+        ArgumentException.ThrowIfNullOrWhiteSpace(stagingRoot);
+        ArgumentNullException.ThrowIfNull(saveRollbackState);
+        ArgumentNullException.ThrowIfNull(launchBootstrap);
+        _coordinator = coordinator;
+        CurrentSnapshot = initialSnapshot.WithRollbackState(rollbackState);
+        _stagingRoot = stagingRoot;
         _downloadsFallbackUrl = "https://vexguard.app/downloads";
-        _rolloutBucket = ComputeRolloutBucket(installationId);
-        _stagingRoot = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "VEX",
-            "VPN",
-            "updates");
-        _rollbackStateStore = new WindowsUpdateRollbackStateStore(
-            Path.Combine(
-                Environment.GetFolderPath(
-                    Environment.SpecialFolder.LocalApplicationData),
-                "VEX",
-                "VPN",
-                "update-rollback-state.bin"));
-
-        var configuration = BuildConfiguration();
-        CurrentSnapshot = configuration.InitialSnapshot;
-        if (configuration.Coordinator is not null)
-        {
-            _coordinator = configuration.Coordinator;
-        }
+        _saveRollbackState = saveRollbackState;
+        _launchBootstrap = launchBootstrap;
     }
 
     public NativeUpdateSnapshot CurrentSnapshot { get; private set; }
-
     public event EventHandler? Changed;
-
     public string DownloadsFallbackUrl => _downloadsFallbackUrl;
 
-    public async Task<NativeUpdateSnapshot> RefreshAsync(
-        CancellationToken cancellationToken)
+    public async Task<NativeUpdateSnapshot> RefreshAsync(CancellationToken cancellationToken)
     {
-        if (_coordinator is null)
-        {
-            return CurrentSnapshot;
-        }
+        if (_coordinator is null) return CurrentSnapshot;
+        await _operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try { return await RefreshCoreAsync(cancellationToken).ConfigureAwait(false); }
+        finally { _operationGate.Release(); }
+    }
 
-        await _operationGate.WaitAsync(cancellationToken)
-            .ConfigureAwait(false);
+    private async Task<NativeUpdateSnapshot> RefreshCoreAsync(CancellationToken cancellationToken)
+    {
+        NativeUpdateSnapshot? verifiedSnapshot = null;
         try
         {
-            var assessment = await _coordinator.CheckForUpdateAsync(
-                cancellationToken);
-            _rollbackStateStore.Save(assessment.RollbackState);
+            var assessment = await _coordinator!.CheckForUpdateAsync(cancellationToken).ConfigureAwait(false);
+            var assessed = assessment.UpdateAvailable
+                ? NativeUpdateSnapshot.Available(assessment.CurrentVersion, assessment.Release!,
+                    assessment.CurrentChannel, assessment.CurrentArchitecture, assessment.Release!.Required)
+                : NativeUpdateSnapshot.NoUpdate(assessment.CurrentVersion, assessment.CurrentChannel,
+                    assessment.CurrentArchitecture, assessment.Reason);
+            verifiedSnapshot = NativeUpdateSnapshot.PreserveRequiredUntilSatisfied(CurrentSnapshot,
+                assessed.WithRollbackState(assessment.RollbackState));
+            cancellationToken.ThrowIfCancellationRequested();
+            _rollbackPersistenceFailed = true;
+            _saveRollbackState(assessment.RollbackState);
             _coordinator.SetRollbackState(assessment.RollbackState);
-            SetSnapshot(assessment.UpdateAvailable
-                ? NativeUpdateSnapshot.Available(
-                    assessment.CurrentVersion,
-                    assessment.Release!,
-                    assessment.CurrentChannel,
-                    assessment.CurrentArchitecture,
-                    assessment.Release!.Required)
-                : NativeUpdateSnapshot.NoUpdate(
-                    assessment.CurrentVersion,
-                    assessment.CurrentChannel,
-                    assessment.CurrentArchitecture,
-                    assessment.Reason));
+            _rollbackPersistenceFailed = false;
+            SetSnapshot(verifiedSnapshot);
         }
-        catch (Exception error) when (
-            error is HttpRequestException or
-            IOException or
-            InvalidOperationException or
-            TaskCanceledException)
+        catch (Exception error) when (!cancellationToken.IsCancellationRequested &&
+            NativeUpdateFailurePolicy.IsExpectedFailure(error))
         {
             SetSnapshot(NativeUpdateSnapshot.ErrorFrom(
-                CurrentSnapshot,
+                verifiedSnapshot is { UpdateAvailable: true, Required: true } ? verifiedSnapshot : CurrentSnapshot,
                 error.Message));
         }
-        finally
-        {
-            _operationGate.Release();
-        }
-
         return CurrentSnapshot;
     }
 
-    public async Task<NativeUpdateSnapshot> PrepareAndLaunchAsync(
-        CancellationToken cancellationToken)
+    public async Task<NativeUpdateSnapshot> PrepareAndLaunchAsync(CancellationToken cancellationToken)
     {
-        if (_coordinator is null)
-        {
-            return CurrentSnapshot;
-        }
-
+        if (_coordinator is null) return CurrentSnapshot;
+        await _operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         var snapshot = CurrentSnapshot;
-        if (!snapshot.UpdateAvailable)
-        {
-            snapshot = await RefreshAsync(cancellationToken);
-            if (!snapshot.UpdateAvailable)
-            {
-                return snapshot;
-            }
-        }
-
-        await _operationGate.WaitAsync(cancellationToken)
-            .ConfigureAwait(false);
         try
         {
+            // A queued launch must use the newest verified release and rollback
+            // persistence result, never a snapshot captured before this gate.
+            if (!snapshot.UpdateAvailable || snapshot.Release is null || _rollbackPersistenceFailed)
+            {
+                snapshot = await RefreshCoreAsync(cancellationToken).ConfigureAwait(false);
+                if (!snapshot.UpdateAvailable || snapshot.Release is null || _rollbackPersistenceFailed) return snapshot;
+            }
             var staged = await _coordinator.DownloadAndStageProvisioningAsync(
-                snapshot.Release!,
-                _stagingRoot,
-                cancellationToken);
-            LaunchElevatedBootstrap(staged);
-            SetSnapshot(NativeUpdateSnapshot.InstallerLaunched(
-                snapshot.CurrentVersion,
-                snapshot.Channel,
-                snapshot.Architecture,
-                snapshot.Release!.Version,
-                staged.PackagePath));
+                snapshot.Release!, _stagingRoot, cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            _launchBootstrap(staged);
+            SetSnapshot(NativeUpdateSnapshot.InstallerLaunched(snapshot, staged.PackagePath));
         }
-        catch (Exception error) when (
-            error is Win32Exception or
-            HttpRequestException or
-            IOException or
-            InvalidOperationException or
-            TaskCanceledException)
+        catch (Exception error) when (!cancellationToken.IsCancellationRequested &&
+            NativeUpdateFailurePolicy.IsExpectedFailure(error))
         {
-            SetSnapshot(NativeUpdateSnapshot.ErrorFrom(
-                snapshot,
-                error.Message));
+            SetSnapshot(NativeUpdateSnapshot.ErrorFrom(snapshot, error.Message));
         }
-        finally
-        {
-            _operationGate.Release();
-        }
-
+        finally { _operationGate.Release(); }
         return CurrentSnapshot;
     }
 
@@ -162,305 +108,6 @@ public sealed class NativeUpdateService
         CurrentSnapshot = snapshot;
         Changed?.Invoke(this, EventArgs.Empty);
     }
-
-    private static void LaunchElevatedBootstrap(
-        WindowsStagedProvisioningBundle staged)
-    {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = "powershell.exe",
-            UseShellExecute = true,
-            Verb = "runas",
-            WorkingDirectory = Path.GetDirectoryName(staged.BootstrapPath),
-        };
-        startInfo.ArgumentList.Add("-NoLogo");
-        startInfo.ArgumentList.Add("-NoProfile");
-        startInfo.ArgumentList.Add("-NonInteractive");
-        startInfo.ArgumentList.Add("-ExecutionPolicy");
-        startInfo.ArgumentList.Add("AllSigned");
-        startInfo.ArgumentList.Add("-File");
-        startInfo.ArgumentList.Add(staged.BootstrapPath);
-        startInfo.ArgumentList.Add("-Action");
-        startInfo.ArgumentList.Add("Install");
-        startInfo.ArgumentList.Add("-PackagePath");
-        startInfo.ArgumentList.Add(staged.PackagePath);
-        startInfo.ArgumentList.Add("-MetadataPath");
-        startInfo.ArgumentList.Add(staged.PackageMetadataPath);
-        startInfo.ArgumentList.Add("-RelaunchAfterInstall");
-        _ = Process.Start(startInfo) ??
-            throw new InvalidOperationException(
-                "Windows update bootstrap could not be launched.");
-    }
-
-    private (
-        WindowsUpdateCoordinator? Coordinator,
-        NativeUpdateSnapshot InitialSnapshot)
-        BuildConfiguration()
-    {
-        var channel = WindowsUpdateManifestVerifier.NormalizeChannel(
-            Environment.GetEnvironmentVariable("VEX_WINDOWS_UPDATE_CHANNEL") ??
-            "stable");
-
-        string architecture;
-        try
-        {
-            architecture = RuntimeInformation.ProcessArchitecture switch
-            {
-                Architecture.X64 => "x64",
-                Architecture.Arm64 => "arm64",
-                _ => throw new InvalidOperationException(
-                    $"Unsupported Windows client architecture '{RuntimeInformation.ProcessArchitecture}'."),
-            };
-        }
-        catch (InvalidOperationException error)
-        {
-            return (
-                null,
-                NativeUpdateSnapshot.Disabled(
-                    currentVersion: CurrentVersion(),
-                    channel: channel,
-                    architecture: "unknown",
-                    reason: error.Message));
-        }
-
-        var trustedOrigin =
-#if DEBUG
-            Uri.TryCreate(
-                Environment.GetEnvironmentVariable("VEX_WINDOWS_UPDATE_ORIGIN"),
-                UriKind.Absolute,
-                out var debugOrigin)
-                ? debugOrigin
-                : ProductionOrigin;
-#else
-            ProductionOrigin;
-#endif
-
-        if (!string.Equals(
-                trustedOrigin.Scheme,
-                "https",
-                StringComparison.OrdinalIgnoreCase))
-        {
-            return (
-                null,
-                NativeUpdateSnapshot.Disabled(
-                    CurrentVersion(),
-                    channel,
-                    architecture,
-                    "Pinned update origin must use https."));
-        }
-
-        var keyringPath =
-#if DEBUG
-            Environment.GetEnvironmentVariable("VEX_WINDOWS_UPDATE_KEYRING_PATH") ??
-            Path.Combine(AppContext.BaseDirectory, "update-signing-keyring.json");
-#else
-            Path.Combine(AppContext.BaseDirectory, "update-signing-keyring.json");
-#endif
-
-        if (!File.Exists(keyringPath))
-        {
-            return (
-                null,
-                NativeUpdateSnapshot.Disabled(
-                    CurrentVersion(),
-                    channel,
-                    architecture,
-                    $"Pinned update keyring is missing at '{keyringPath}'."));
-        }
-
-        var keyring = WindowsUpdateKeyring.Parse(
-            File.ReadAllText(keyringPath));
-        var manifestUri = new Uri(
-            trustedOrigin,
-            $"{channel}/{architecture}/update.json");
-        var signatureUri = new Uri(
-            trustedOrigin,
-            $"{channel}/{architecture}/update.json.sig");
-        WindowsUpdateRollbackState? rollbackState;
-        try
-        {
-            rollbackState = _rollbackStateStore.Load();
-        }
-        catch (InvalidOperationException error)
-        {
-            return (
-                null,
-                NativeUpdateSnapshot.Disabled(
-                    CurrentVersion(),
-                    channel,
-                    architecture,
-                    error.Message));
-        }
-
-        var options = new WindowsUpdateVerificationOptions(
-            trustedOrigin,
-            channel,
-            architecture,
-            CurrentVersion(),
-            keyring,
-            _rolloutBucket,
-            rollbackState);
-
-        var handler = new SocketsHttpHandler
-        {
-            AllowAutoRedirect = false,
-            AutomaticDecompression =
-                DecompressionMethods.Brotli |
-                DecompressionMethods.GZip |
-                DecompressionMethods.Deflate,
-            ConnectTimeout = TimeSpan.FromSeconds(10),
-        };
-        handler.SslOptions.CertificateRevocationCheckMode =
-            X509RevocationMode.Online;
-        var httpClient = new HttpClient(handler)
-        {
-            Timeout = TimeSpan.FromSeconds(30),
-        };
-        var coordinator = new WindowsUpdateCoordinator(
-            httpClient,
-            options,
-            manifestUri,
-            signatureUri);
-        return (
-            coordinator,
-            NativeUpdateSnapshot.Configured(
-                CurrentVersion(),
-                channel,
-                architecture));
-    }
-
-    private static string CurrentVersion() =>
-        typeof(App).Assembly.GetName().Version?.ToString() ??
-        "0.0.0.0";
-
-    private static int ComputeRolloutBucket(string installationId)
-    {
-        var digest = SHA256.HashData(
-            Encoding.UTF8.GetBytes(installationId));
-        return (int)(
-            BinaryPrimitives.ReadUInt32BigEndian(digest) %
-            100);
-    }
-}
-
-internal sealed class WindowsUpdateRollbackStateStore
-{
-    private static readonly byte[] Entropy =
-        Encoding.UTF8.GetBytes("VEX Windows update rollback state v1");
-    private readonly string _path;
-
-    public WindowsUpdateRollbackStateStore(string path)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        _path = path;
-    }
-
-    public WindowsUpdateRollbackState? Load()
-    {
-        if (!File.Exists(_path))
-        {
-            return null;
-        }
-
-        try
-        {
-            var protectedBytes = File.ReadAllBytes(_path);
-            var clearBytes = ProtectedData.Unprotect(
-                protectedBytes,
-                Entropy,
-                DataProtectionScope.CurrentUser);
-            try
-            {
-                var state = JsonSerializer.Deserialize<
-                    WindowsUpdateRollbackState>(clearBytes) ??
-                    throw InvalidState();
-                if (state.HighestManifestRevision < 0 ||
-                    string.IsNullOrWhiteSpace(state.RequiredVersionFloor))
-                {
-                    throw InvalidState();
-                }
-
-                _ = WindowsUpdateManifestVerifier.ParseVersion(
-                    state.RequiredVersionFloor,
-                    "persisted_required_version_floor");
-                return state;
-            }
-            finally
-            {
-                CryptographicOperations.ZeroMemory(clearBytes);
-            }
-        }
-        catch (Exception error) when (
-            error is IOException or
-                UnauthorizedAccessException or
-                CryptographicException or
-                JsonException or
-                InvalidOperationException)
-        {
-            throw InvalidState(error);
-        }
-    }
-
-    public void Save(WindowsUpdateRollbackState state)
-    {
-        ArgumentNullException.ThrowIfNull(state);
-        var clearBytes = JsonSerializer.SerializeToUtf8Bytes(state);
-        try
-        {
-            var protectedBytes = ProtectedData.Protect(
-                clearBytes,
-                Entropy,
-                DataProtectionScope.CurrentUser);
-            var directory = Path.GetDirectoryName(_path) ??
-                throw InvalidState();
-            Directory.CreateDirectory(directory);
-            var temporaryPath = $"{_path}.{Guid.NewGuid():N}.tmp";
-            try
-            {
-                File.WriteAllBytes(temporaryPath, protectedBytes);
-                RestrictToCurrentUser(temporaryPath);
-                File.Move(temporaryPath, _path, overwrite: true);
-            }
-            finally
-            {
-                File.Delete(temporaryPath);
-                CryptographicOperations.ZeroMemory(protectedBytes);
-            }
-        }
-        finally
-        {
-            CryptographicOperations.ZeroMemory(clearBytes);
-        }
-    }
-
-    private static void RestrictToCurrentUser(string path)
-    {
-        var identity = WindowsIdentity.GetCurrent().User ??
-            throw InvalidState();
-        var security = new FileSecurity();
-        security.SetAccessRuleProtection(
-            isProtected: true,
-            preserveInheritance: false);
-        security.AddAccessRule(new FileSystemAccessRule(
-            identity,
-            FileSystemRights.FullControl,
-            AccessControlType.Allow));
-        security.AddAccessRule(new FileSystemAccessRule(
-            new SecurityIdentifier(
-                WellKnownSidType.LocalSystemSid,
-                null),
-            FileSystemRights.FullControl,
-            AccessControlType.Allow));
-        FileSystemAclExtensions.SetAccessControl(
-            new FileInfo(path),
-            security);
-    }
-
-    private static InvalidOperationException InvalidState(
-        Exception? inner = null) =>
-        new(
-            "Windows update rollback state is missing or invalid; updates are disabled.",
-            inner);
 }
 
 public sealed record NativeUpdateSnapshot(
@@ -474,6 +121,42 @@ public sealed record NativeUpdateSnapshot(
     string? Message,
     string? StagedPackagePath)
 {
+    public string? RequiredVersionFloor { get; init; }
+    public string? RequiredTargetVersion { get; init; }
+
+    internal NativeUpdateSnapshot WithRollbackState(WindowsUpdateRollbackState? state) => state is null
+        ? this
+        : (this with { RequiredVersionFloor = state.RequiredVersionFloor,
+            RequiredTargetVersion = state.RequiredTargetVersion })
+            .WithMinimumRequiredVersion(MaximumVersion(state.RequiredVersionFloor, state.RequiredTargetVersion));
+
+    private NativeUpdateSnapshot WithMinimumRequiredVersion(string? minimum)
+    {
+        if (minimum is null) return this;
+        var version = WindowsUpdateManifestVerifier.ParseVersion(minimum, "required_version");
+        if (WindowsUpdateManifestVerifier.ParseVersion(CurrentVersion, "current_version") >= version) return this;
+        var release = Release is not null &&
+            WindowsUpdateManifestVerifier.ParseVersion(Release.Version, "release.version") >= version ? Release : null;
+        return this with
+        {
+            UpdateAvailable = true,
+            Required = true,
+            Release = release,
+            State = release is null ? "required_update_pending" : State,
+            Message = release is null ? "Для подключения требуется обновление VEX. Проверьте обновления при доступной сети." : Message,
+        };
+    }
+
+    private static string? MaximumVersion(params string?[] versions)
+    {
+        string? maximum = null;
+        foreach (var value in versions)
+            if (value is not null && (maximum is null ||
+                WindowsUpdateManifestVerifier.ParseVersion(value, "required_version") >
+                    WindowsUpdateManifestVerifier.ParseVersion(maximum, "required_version"))) maximum = value;
+        return maximum;
+    }
+
     public static NativeUpdateSnapshot Configured(
         string currentVersion,
         string channel,
@@ -538,35 +221,39 @@ public sealed record NativeUpdateSnapshot(
             Message: release.Changelog,
             StagedPackagePath: null);
 
-    public static NativeUpdateSnapshot InstallerLaunched(
-        string currentVersion,
-        string channel,
-        string architecture,
-        string availableVersion,
-        string stagedPackagePath) =>
-        new(
-            "installer_launched",
-            currentVersion,
-            channel,
-            architecture,
-            UpdateAvailable: true,
-            Release: new WindowsUpdateRelease(
-                availableVersion,
-                architecture,
-                PackageType: "msix",
-                PackageUri: stagedPackagePath,
-                PackageSha256: string.Empty,
-                PackageName: string.Empty,
-                Publisher: string.Empty,
-                AppInstallerUri: null,
-                PackageSizeBytes: null,
-                MinimumSupportedVersion: null,
-                Changelog: null,
-                Required: false,
-                RolloutPercent: null),
-            Required: false,
-            Message: "Пакет обновления проверен и открыт в системном установщике.",
-            StagedPackagePath: stagedPackagePath);
+    public static NativeUpdateSnapshot InstallerLaunched(NativeUpdateSnapshot previous,
+        string stagedPackagePath) => previous with
+        {
+            State = "installer_launched",
+            Message = "Пакет обновления проверен и открыт в системном установщике.",
+            StagedPackagePath = stagedPackagePath,
+        };
+
+    public static NativeUpdateSnapshot InstallerLaunched(string currentVersion, string channel,
+        string architecture, string availableVersion, string stagedPackagePath) =>
+        InstallerLaunched(Available(currentVersion, new WindowsUpdateRelease(
+            availableVersion, architecture, "msix", stagedPackagePath, string.Empty, string.Empty,
+            string.Empty, null, null, null, null, false, null), channel, architecture, false), stagedPackagePath);
+
+    internal static NativeUpdateSnapshot PreserveRequiredUntilSatisfied(
+        NativeUpdateSnapshot previous, NativeUpdateSnapshot verified)
+    {
+        if (!previous.UpdateAvailable || !previous.Required) return verified;
+        var target = MaximumVersion(previous.RequiredTargetVersion, verified.RequiredTargetVersion,
+            previous.Release is { Required: true } ? previous.Release.Version : null);
+        var floor = verified.RequiredVersionFloor ?? previous.RequiredVersionFloor;
+        var requiredVersion = MaximumVersion(floor, target);
+        if (requiredVersion is null ||
+            WindowsUpdateManifestVerifier.ParseVersion(verified.CurrentVersion, "current_version") >=
+                WindowsUpdateManifestVerifier.ParseVersion(requiredVersion, "required_version")) return verified;
+        var snapshot = verified.UpdateAvailable && verified.Release is not null &&
+            WindowsUpdateManifestVerifier.ParseVersion(verified.Release.Version, "release.version") >=
+                WindowsUpdateManifestVerifier.ParseVersion(requiredVersion, "required_version")
+            ? verified
+            : previous with { State = "available", CurrentVersion = verified.CurrentVersion, StagedPackagePath = null };
+        return (snapshot with { Required = true, RequiredVersionFloor = floor, RequiredTargetVersion = target })
+            .WithMinimumRequiredVersion(requiredVersion);
+    }
 
     public static NativeUpdateSnapshot Error(
         string currentVersion,
@@ -591,8 +278,7 @@ public sealed record NativeUpdateSnapshot(
         ArgumentNullException.ThrowIfNull(previous);
         var preserveRequiredUpdate =
             previous.UpdateAvailable &&
-            previous.Required &&
-            previous.Release is not null;
+            previous.Required;
         return preserveRequiredUpdate
             ? previous with
             {
@@ -604,6 +290,6 @@ public sealed record NativeUpdateSnapshot(
                 previous.CurrentVersion,
                 previous.Channel,
                 previous.Architecture,
-                message);
+                message) with { RequiredVersionFloor = previous.RequiredVersionFloor, RequiredTargetVersion = previous.RequiredTargetVersion };
     }
 }

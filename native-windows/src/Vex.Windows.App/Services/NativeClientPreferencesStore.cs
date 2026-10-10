@@ -3,28 +3,6 @@ using System.Text.Json;
 
 namespace Vex.Windows.App.Services;
 
-public sealed record NativeClientPreferences(
-    bool AutoLaunchEnabled,
-    bool AutoServerEnabled,
-    bool SmartRoutingEnabled,
-    bool AntiLeakEnabled,
-    bool AutoRecoveryEnabled,
-    string InterfaceLanguage,
-    string? SelectedLocationId,
-    bool AutoUpdatesEnabled = true)
-{
-    public static NativeClientPreferences Default { get; } =
-        new(
-            AutoLaunchEnabled: false,
-            AutoServerEnabled: true,
-            SmartRoutingEnabled: true,
-            AntiLeakEnabled: true,
-            AutoRecoveryEnabled: true,
-            InterfaceLanguage: "ru",
-            SelectedLocationId: null,
-            AutoUpdatesEnabled: true);
-}
-
 public sealed class NativeClientPreferencesStore
 {
     private static readonly byte[] Entropy =
@@ -95,23 +73,7 @@ public sealed class NativeClientPreferencesStore
                 DataProtectionScope.CurrentUser);
             try
             {
-                var preferences =
-                    JsonSerializer.Deserialize<NativeClientPreferences>(
-                        clearValue,
-                        JsonOptions) ??
-                    NativeClientPreferences.Default;
-                using var document = JsonDocument.Parse(clearValue);
-                if (!document.RootElement.TryGetProperty(
-                        nameof(NativeClientPreferences.AutoUpdatesEnabled),
-                        out _))
-                {
-                    preferences = preferences with
-                    {
-                        AutoUpdatesEnabled = true,
-                    };
-                }
-
-                return Normalize(preferences);
+                return Normalize(NativeClientPreferencesJson.Decode(clearValue));
             }
             finally
             {
@@ -166,5 +128,12 @@ public sealed class NativeClientPreferencesStore
                 string.IsNullOrWhiteSpace(preferences.SelectedLocationId)
                     ? null
                     : preferences.SelectedLocationId.Trim(),
+            FavoriteLocationIds = Vex.Windows.Client.Api.ServerCatalog.NormalizeFavoriteIds(
+                    preferences.FavoriteLocationIds)
+                .Order(StringComparer.Ordinal).ToArray(),
+            ServerCatalogFilter = preferences.ServerCatalogFilter?.ToLowerInvariant() is
+                    "fastest" or "favorites" or "available"
+                ? preferences.ServerCatalogFilter.ToLowerInvariant()
+                : "all",
         };
 }

@@ -7,6 +7,6 @@ public static class VpnConnectionActionPolicy
         ArgumentNullException.ThrowIfNull(snapshot);
         return snapshot.Phase == VpnConnectionPhase.Connected ||
             snapshot.Phase == VpnConnectionPhase.Error &&
-            snapshot.Diagnostics?.AdapterName is not null;
+            VpnRecoveryPolicy.RequiresDisconnect(snapshot);
     }
 }

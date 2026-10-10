@@ -7,8 +7,8 @@ final class SwiftHelperParityContractTests: XCTestCase {
         let source = try helperContractSource()
 
         XCTAssertTrue(source.contains("VEXHelperModel"))
-        XCTAssertTrue(source.contains("func connect(antiLeakEnabled: Bool) async"))
-        XCTAssertTrue(source.contains("func refreshStatus(quiet: Bool = false) async"))
+        XCTAssertTrue(source.contains("func connect(antiLeakEnabled: Bool, shouldConnect: @escaping () -> Bool = { true }) async"), "Existing connect callers must retain a default predicate")
+        XCTAssertTrue(source.contains("func refreshStatus(quiet: Bool = false, commandGeneration: Int? = nil,"), "Routine status polling must retain its defaults")
         XCTAssertTrue(source.contains("struct VpnStatus: Equatable"))
         XCTAssertTrue(source.contains("VEXHelperInstallState"))
 
@@ -22,7 +22,10 @@ final class SwiftHelperParityContractTests: XCTestCase {
         XCTAssertTrue(source.contains("func disconnect(releaseAntiLeak: Bool) async"))
         XCTAssertTrue(source.contains("sendExpectingOK(\"shutdown\", timeoutSeconds: 2)"))
         XCTAssertTrue(source.contains("attach-owner owner_pid="))
-        XCTAssertTrue(source.contains("runCommand(_ command: String, busyState: VpnConnectionState, successMessage: String)"))
+        let normalized = source.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ")
+        XCTAssertTrue(normalized.contains("private func runCommand( _ command: String, busyState: VpnConnectionState, successMessage: String, shouldConnect: @escaping () -> Bool = { true } ) async"))
+        XCTAssertTrue(normalized.contains("try await installer.ensureReady(allowAdminInstall: true) try ensureCurrentHelperCommand(command, generation: operation.generation, shouldConnect: shouldConnect)"), "Readiness must not authorize an obsolete connect")
+        XCTAssertTrue(normalized.contains("try await ensureHelperReady(commandGeneration: generation, shouldConnect: shouldConnect) try ensureCurrentHelperCommand(command, generation: generation, shouldConnect: shouldConnect)"), "Retry readiness must revalidate the caller before sending up")
     }
 
     func testVpnStatusParsesUsableConnectedState() {

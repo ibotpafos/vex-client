@@ -43,6 +43,8 @@ const { isCurrentSessionOperation } = policy('src/auth/sessionOperationGuard.ts'
 const { isCurrentSessionMutation } = policy('src/auth/sessionMutationGuard.ts');
 const { createSessionStore, createSessionMutationQueue, sessionKey, sessionHistoryKey } = policy('src/auth/sessionStoreCore.ts');
 const { SessionOperationSupersededError } = policy('src/vpn/sessionOperation.ts');
+const { ApiRequestError } = policy('src/api/error.ts');
+const { createSessionRestoreRefresh } = policy('src/auth/sessionRestoreRefresh.ts');
 const fallback = policy('src/vpn/connectionFallback.ts');
 const { cleanupFailedVpnConnection } = policy('src/vpn/failedConnectionCleanup.ts', { './connectionFallback': fallback });
 const { connectFreshSameLocationProfile } = policy('src/vpn/sameLocationProfileRecovery.ts');
@@ -58,11 +60,13 @@ function provider({ clear = async () => {}, disconnect = async () => {}, save = 
     sessionRef: { current: session }, sessionRevisionRef: { current: 0 }, sessionOperationsBlockedRef: { current: false },
     setSessionOperationRevision: value => { revision = value; }, clearSession: clear, disconnectVpn: disconnect,
     runSessionTransition: createSessionMutationQueue(), refreshInFlightRef: { current: null }, isCurrentSessionMutation,
+    restoreRefresh: createSessionRestoreRefresh(),
     refreshApiSession: refresh ?? (async () => ({ ...session, accessToken: 'token-A-refreshed' })),
     clearClientData: () => {}, setSession: value => { session = value; }, setIsLoading: () => {},
     saveSession: save, setLoadError: () => {}, loadError: null, uploadClientDiagnostics: async () => {},
   };
   return {
+    restoreRefresh: shared.restoreRefresh,
     signOut: bind(auth.applySignOutState, shared), signIn: bind(auth.signIn, shared),
     refresh: bind(auth.refreshSession, shared), current: () => shared.sessionRef.current,
     guard: () => bind(auth.sessionOperationIsCurrent, { ...shared, sessionOperationRevision: revision, session, isCurrentSessionOperation }),
@@ -202,6 +206,121 @@ function failureHarness(session) {
   return { calls, handleFailure, refresh, status };
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
+
+function restoreHarness({ load, refresh, clear = async () => {}, save = async () => {}, restoreRefresh = createSessionRestoreRefresh() }) {
+  const source = fs.readFileSync(process.env.VEX_SESSION_RESTORE_SOURCE ?? path.join(repo, 'src/auth/session-context.tsx'), 'utf8');
+  const root = ts.createSourceFile('session-context.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let callback;
+  function visit(node) {
+    if (ts.isVariableDeclaration(node) && node.name.getText(root) === 'restoreSession') {
+      callback = node.initializer.getText(root);
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(root);
+  assert.ok(callback, 'missing production startup restoration callback');
+  const state = { session: undefined, loading: true, error: null };
+  const context = {
+    mounted: true, restoreRevision: 0, sessionRevisionRef: { current: 0 }, sessionRef: { current: null },
+    loadSessionWithRetry: operation => operation(), loadSession: load, refreshApiSession: refresh,
+    restoreRefresh,
+    runSessionTransition: createSessionMutationQueue(), saveSession: save, clearSession: clear,
+    ApiRequestError, errorMessage: (error, fallback) => error instanceof Error ? error.message : fallback,
+    setSession: value => { state.session = value; }, setIsLoading: value => { state.loading = value; },
+    setLoadError: value => { state.error = value; },
+  };
+  const code = ts.transpileModule(`return { restore: (${callback}), unmount: () => { mounted = false; } };`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  return { ...new Function(...Object.keys(context), code)(...Object.values(context)), state, context };
+}
+
+test('rejected startup token releases loading even when secure-storage deletion fails', async () => {
+  const h = restoreHarness({
+    load: async () => ({ accessToken: 'rejected-A', user: { id: 'A' } }),
+    refresh: async () => { throw new ApiRequestError('session revoked', { status: 401 }); },
+    clear: async () => { throw new Error('keychain temporarily unavailable'); },
+  });
+  await h.restore();
+  assert.equal(h.state.loading, false, 'startup must not hang on a cleanup failure');
+  assert.equal(h.state.session, null, 'a rejected token is never exposed as an offline session');
+  assert.match(h.state.error, /keychain temporarily unavailable/);
+});
+
+test('unmounted restoration does not rotate or persist a late loaded token', async () => {
+  const load = deferred(); let refreshes = 0, saves = 0;
+  const h = restoreHarness({ load: () => load.promise,
+    refresh: async session => { refreshes++; return session; }, save: async () => { saves++; },
+  });
+  const pending = h.restore(); h.unmount();
+  load.resolve({ accessToken: 'old-A', user: { id: 'A' } }); await pending;
+  assert.equal(refreshes, 0, 'discarded startup must not revoke the token of a new mount');
+  assert.equal(saves, 0); assert.equal(h.state.session, undefined);
+});
+
+test('late rejected refresh from an unmounted provider cannot clear the next mount storage', async () => {
+  const refresh = deferred(); let clears = 0;
+  const h = restoreHarness({ load: async () => ({ accessToken: 'old-A', user: { id: 'A' } }),
+    refresh: () => refresh.promise, clear: async () => { clears++; },
+  });
+  const pending = h.restore(); await flush(); h.unmount();
+  refresh.reject(new ApiRequestError('old token rejected', { status: 401 })); await pending;
+  assert.equal(clears, 0, 'cleanup belongs only to the still-mounted login attempt');
+  assert.equal(h.state.session, undefined);
+});
+
+for (const completeBeforeRemount of [false, true]) {
+  test(`startup rotation survives remount with response ${completeBeforeRemount ? 'already complete' : 'pending'}`, async () => {
+    const response = deferred(), restoreRefresh = createSessionRestoreRefresh();
+    let stored = { accessToken: 'old-A', user: { id: 'A' } }, refreshes = 0, saves = 0, clears = 0;
+    const rotated = { ...stored, accessToken: 'rotated-A' };
+    const dependencies = {
+      restoreRefresh, load: async () => stored,
+      refresh: () => {
+        if (++refreshes > 1) return Promise.reject(new ApiRequestError('old token revoked by rotation', { status: 401 }));
+        return response.promise;
+      },
+      save: async value => { stored = value; saves++; },
+      clear: async () => { stored = null; clears++; },
+    };
+    const oldMount = restoreHarness(dependencies), oldRestore = oldMount.restore();
+    await flush(); oldMount.unmount();
+    if (completeBeforeRemount) { response.resolve(rotated); await oldRestore; }
+    const newMount = restoreHarness(dependencies), newRestore = newMount.restore();
+    await flush(); response.resolve(rotated);
+    await Promise.all([oldRestore, newRestore]);
+    assert.equal(refreshes, 1, 'both mounts share the one rotating refresh');
+    assert.equal(saves, 1, 'only the current mount persists the rotation');
+    assert.equal(clears, 0);
+    assert.equal(stored.accessToken, 'rotated-A');
+    assert.equal(newMount.state.session.accessToken, 'rotated-A');
+    assert.equal(newMount.state.loading, false);
+    assert.equal(oldMount.state.session, undefined);
+  });
+}
+
+test('a startup refresh failure can be retried and cannot clear a newer token flight', async () => {
+  const handoff = createSessionRestoreRefresh(), old = deferred(); let retries = 0;
+  const rejected = assert.rejects(handoff.run('A', () => old.promise), /offline/);
+  const current = handoff.run('B', async () => ({ accessToken: 'rotated-B' }));
+  old.reject(new Error('offline')); await rejected;
+  assert.equal(await handoff.run('B', () => { throw new Error('unexpected duplicate refresh'); }), await current);
+  await assert.rejects(handoff.run('A', async () => { retries++; throw new Error('offline'); }), /offline/);
+  await handoff.run('A', async () => { retries++; return { accessToken: 'rotated-A' }; });
+  assert.equal(retries, 2);
+});
+
+for (const mutation of ['signIn', 'signOut']) {
+  test(`${mutation} invalidates the retained startup refresh handoff`, async () => {
+    const p = provider(), handoff = p.restoreRefresh;
+    await handoff.run('old-A', async () => ({ accessToken: 'rotated-A' }));
+    if (mutation === 'signIn') await p.signIn({ accessToken: 'B', user: { id: 'B' } });
+    else await p.signOut();
+    let calls = 0;
+    await handoff.run('old-A', async () => { calls++; return { accessToken: 'new-A' }; });
+    assert.equal(calls, 1);
+  });
+}
 
 for (const completion of ['reject', 'resolve']) {
   test(`old failure handler cannot publish or log out B after late refresh ${completion}`, async () => {

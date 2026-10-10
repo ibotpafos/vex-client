@@ -26,11 +26,16 @@ public sealed class TrayIconHost : IDisposable
     private readonly ToolStripMenuItem _updateMenuItem;
     private readonly ToolStripMenuItem _exitMenuItem;
     private readonly SemaphoreSlim _requestGate = new(1, 1);
+    private readonly CancellationTokenSource _lifetime = new();
 
     private VpnConnectionSnapshot _snapshot =
         VpnConnectionSnapshot.Disconnected();
     private string? _lastNotifiedUpdateVersion;
     private bool _disposed;
+    private bool _requestInFlight;
+    private bool _cancelInFlight;
+    private bool _exitInFlight;
+    private bool _authRecoveryBalloon;
 
     public TrayIconHost(
         MainWindow window,
@@ -80,8 +85,9 @@ public sealed class TrayIconHost : IDisposable
             ContextMenuStrip = _contextMenu,
         };
         _notifyIcon.MouseClick += OnNotifyIconMouseClick;
-        _notifyIcon.BalloonTipClicked += OnUpdateClick;
+        _notifyIcon.BalloonTipClicked += OnBalloonTipClicked;
         _services.UpdateService.Changed += OnUpdateSnapshotChanged;
+        _services.VpnUiState.Changed += OnVpnStateChanged;
 
         Render();
     }
@@ -94,6 +100,7 @@ public sealed class TrayIconHost : IDisposable
         }
 
         _disposed = true;
+        _lifetime.Cancel();
         _contextMenu.Opening -= OnContextMenuOpening;
         _window.ShellWindowVisibilityChanged -= OnShellWindowVisibilityChanged;
         _toggleConnectionMenuItem.Click -= OnToggleConnectionClick;
@@ -101,8 +108,9 @@ public sealed class TrayIconHost : IDisposable
         _updateMenuItem.Click -= OnUpdateClick;
         _exitMenuItem.Click -= OnExitClick;
         _notifyIcon.MouseClick -= OnNotifyIconMouseClick;
-        _notifyIcon.BalloonTipClicked -= OnUpdateClick;
+        _notifyIcon.BalloonTipClicked -= OnBalloonTipClicked;
         _services.UpdateService.Changed -= OnUpdateSnapshotChanged;
+        _services.VpnUiState.Changed -= OnVpnStateChanged;
         _notifyIcon.Visible = false;
         _notifyIcon.Dispose();
         _contextMenu.Dispose();
@@ -120,7 +128,7 @@ public sealed class TrayIconHost : IDisposable
         await RunSerializedAsync(
             async token =>
             {
-                var response = await _services.VpnClient.GetStatusAsync(token);
+                var response = await _services.VpnUiState.RefreshAsync(token);
                 await ApplyResponseAsync(response);
             },
             cancellationToken).ConfigureAwait(false);
@@ -153,6 +161,7 @@ public sealed class TrayIconHost : IDisposable
 
         _dispatcherQueue.TryEnqueue(() =>
         {
+            if (_disposed) return;
             var update = _services.UpdateService.CurrentSnapshot;
             Render();
             var version = update.Release?.Version;
@@ -167,6 +176,7 @@ public sealed class TrayIconHost : IDisposable
             }
 
             _lastNotifiedUpdateVersion = version;
+            _authRecoveryBalloon = false;
             _notifyIcon.ShowBalloonTip(
                 5000,
                 update.Required
@@ -192,17 +202,49 @@ public sealed class TrayIconHost : IDisposable
         _window.NavigateToSection(AppSection.Settings);
     }
 
-    private async void OnToggleConnectionClick(object? sender, EventArgs args)
+    private async void OnToggleConnectionClick(object? sender, EventArgs args) =>
+        await ToggleConnectionAsync();
+
+    internal async Task ToggleConnectionAsync()
     {
+        if (_disposed || _exitInFlight || _cancelInFlight) return;
+        // Cancellation must bypass the tray gate occupied by the original
+        // connect. The shared VPN gate still serializes the cleanup IPC.
+        if (_services.VpnUiState.IsConnectionInFlight && _services.VpnUiState.ConnectionDesired)
+        {
+            _cancelInFlight = true;
+            try
+            {
+                var response = await _services.VpnUiState.CancelConnectionAsync(
+                    _services.VpnClient.DisconnectAsync, _lifetime.Token).ConfigureAwait(false);
+                await ApplyResponseAsync(response).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) { }
+            finally
+            {
+                _cancelInFlight = false;
+                await InvokeOnUiThreadAsync(Render).ConfigureAwait(false);
+            }
+            return;
+        }
+        if (_requestInFlight) return;
         try
         {
             await RunSerializedAsync(
                 async token =>
                 {
-                    VpnServiceResponse response =
-                        _snapshot.Phase == VpnConnectionPhase.Connected
-                            ? await _services.VpnClient.DisconnectAsync(token)
-                            : await ConnectAfterUpdateCheckAsync(token);
+                    var disconnect = VpnConnectionActionPolicy.ShouldDisconnect(_services.VpnUiState.Snapshot);
+                    if (!disconnect && _services.Coordinator.CurrentState is null)
+                    {
+                        var code = _services.Coordinator.CurrentStateAccess == ClientStateAccessKind.Locked
+                            ? "windows_hello_required" : "sign_in_required";
+                        await ShowAuthenticationRecoveryAsync(code).ConfigureAwait(false);
+                        return;
+                    }
+                    _services.VpnUiState.MarkConnectionDesired(!disconnect);
+                    var response = disconnect
+                        ? await _services.VpnUiState.RunAsync(_services.VpnClient.DisconnectAsync, token)
+                        : await _services.VpnUiState.RunConnectionAsync(ConnectAfterUpdateCheckAsync, token);
                     await ApplyResponseAsync(response);
                 },
                 CancellationToken.None).ConfigureAwait(false);
@@ -210,6 +252,25 @@ public sealed class TrayIconHost : IDisposable
         catch (OperationCanceledException)
         {
         }
+    }
+
+    private async void OnBalloonTipClicked(object? sender, EventArgs args)
+    {
+        if (_disposed) return;
+        if (_authRecoveryBalloon)
+            await _window.ShowAuthenticationRecoveryAsync();
+        else OnUpdateClick(sender, args);
+    }
+
+    private async Task ShowAuthenticationRecoveryAsync(string errorCode)
+    {
+        await _window.ShowAuthenticationRecoveryAsync().ConfigureAwait(false);
+        await InvokeOnUiThreadAsync(() =>
+        {
+            if (_disposed) return;
+            _authRecoveryBalloon = true;
+            _notifyIcon.ShowBalloonTip(5000, "VEX", ErrorMessage(errorCode), ToolTipIcon.Info);
+        }).ConfigureAwait(false);
     }
 
     private void OnToggleWindowClick(object? sender, EventArgs args)
@@ -237,35 +298,75 @@ public sealed class TrayIconHost : IDisposable
             return;
         }
 
-        if (!_window.IsShellWindowVisible)
-        {
-            _window.ShowShellWindow();
-        }
-
+        _window.ShowShellWindow();
         _window.Activate();
         _window.BringToFront();
         Render();
     }
 
-    private void OnExitClick(object? sender, EventArgs args)
+    private async void OnExitClick(object? sender, EventArgs args)
     {
-        if (_disposed)
+        if (_disposed || _exitInFlight) return;
+        _exitInFlight = true;
+        _services.VpnUiState.MarkConnectionDesired(false);
+        Render();
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        timeout.CancelAfter(TimeSpan.FromSeconds(65));
+        try
         {
-            return;
+            var response = await _services.VpnUiState.RunAsync(
+                async token =>
+                {
+                    var cleanup = await _services.VpnClient.DisconnectAsync(token).ConfigureAwait(false);
+                    if (cleanup.Success && cleanup.Snapshot.Phase == VpnConnectionPhase.Disconnected)
+                        _services.VpnUiState.CompleteShutdown();
+                    return cleanup;
+                }, timeout.Token).ConfigureAwait(false);
+            if (!response.Success || response.Snapshot.Phase != VpnConnectionPhase.Disconnected)
+            {
+                await ShowExitFailureAsync(response.ErrorCode).ConfigureAwait(false);
+                return;
+            }
+            await InvokeOnUiThreadAsync(() =>
+            {
+                if (_disposed) return;
+                _notifyIcon.Visible = false;
+                _exitApplication();
+            }).ConfigureAwait(false);
         }
-
-        _exitMenuItem.Enabled = false;
-        _toggleConnectionMenuItem.Enabled = false;
-        _toggleWindowMenuItem.Enabled = false;
-        _notifyIcon.Visible = false;
-        _exitApplication();
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or
+            CryptographicException or HttpRequestException or InvalidOperationException or
+            NativeClientFlowException or VexApiException or VpnIpcProtocolException or OperationCanceledException)
+        {
+            await ShowExitFailureAsync(error is NativeClientFlowException flow ? flow.Code : null)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            _exitInFlight = false;
+            await InvokeOnUiThreadAsync(Render).ConfigureAwait(false);
+        }
     }
+
+    private Task ShowExitFailureAsync(string? errorCode) => InvokeOnUiThreadAsync(() =>
+    {
+        if (_disposed) return;
+        _notifyIcon.Visible = true;
+        _window.ShowShellWindow();
+        _window.Activate();
+        _window.BringToFront();
+        _authRecoveryBalloon = false;
+        _notifyIcon.ShowBalloonTip(5000, "Не удалось завершить VEX",
+            $"Подтвердить отключение VPN не удалось. Повторите выход. {ErrorMessage(errorCode)}",
+            ToolTipIcon.Warning);
+    });
 
     private async Task RunSerializedAsync(
         Func<CancellationToken, Task> operation,
         CancellationToken cancellationToken)
     {
-        await _requestGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
+        await _requestGate.WaitAsync(linked.Token).ConfigureAwait(false);
         try
         {
             if (_disposed)
@@ -273,6 +374,7 @@ public sealed class TrayIconHost : IDisposable
                 return;
             }
 
+            _requestInFlight = true;
             await InvokeOnUiThreadAsync(() =>
             {
                 if (_disposed)
@@ -280,12 +382,10 @@ public sealed class TrayIconHost : IDisposable
                     return;
                 }
 
-                _toggleConnectionMenuItem.Enabled = false;
-                _toggleWindowMenuItem.Enabled = false;
-                _statusMenuItem.Text = "Статус: обновление…";
+                Render();
             }).ConfigureAwait(false);
 
-            await operation(cancellationToken).ConfigureAwait(false);
+            await operation(linked.Token).ConfigureAwait(false);
         }
         catch (Exception error) when (
             error is IOException
@@ -297,14 +397,15 @@ public sealed class TrayIconHost : IDisposable
                 or VexApiException
                 or VpnIpcProtocolException)
         {
-            _snapshot = new VpnConnectionSnapshot(
-                VpnConnectionPhase.Error,
-                _snapshot.LocationId,
-                Sequence: _snapshot.Sequence,
-                ErrorCode: error is NativeClientFlowException flow
-                    ? flow.Code
-                    : "vpn_service_unavailable");
-
+            var errorCode = error is NativeClientFlowException flow
+                ? flow.Code
+                : "vpn_service_unavailable";
+            if (errorCode is "sign_in_required" or "windows_hello_required")
+            {
+                _services.VpnUiState.MarkConnectionDesired(false);
+                await ShowAuthenticationRecoveryAsync(errorCode).ConfigureAwait(false);
+                return;
+            }
             await InvokeOnUiThreadAsync(() =>
             {
                 if (_disposed)
@@ -313,29 +414,30 @@ public sealed class TrayIconHost : IDisposable
                 }
 
                 Render();
+                _authRecoveryBalloon = false;
                 _notifyIcon.ShowBalloonTip(
                     3000,
                     "VEX",
-                    ErrorMessage(_snapshot.ErrorCode),
+                    ErrorMessage(errorCode),
                     ToolTipIcon.Error);
             }).ConfigureAwait(false);
         }
         finally
         {
-            await InvokeOnUiThreadAsync(() =>
+            _requestInFlight = false;
+            try
             {
-                if (!_disposed)
+                await InvokeOnUiThreadAsync(() =>
                 {
-                    Render();
-                }
-            }).ConfigureAwait(false);
-            _requestGate.Release();
+                    if (!_disposed) Render();
+                }).ConfigureAwait(false);
+            }
+            finally { _requestGate.Release(); }
         }
     }
 
     private Task ApplyResponseAsync(VpnServiceResponse response)
     {
-        _snapshot = response.Snapshot;
         return InvokeOnUiThreadAsync(() =>
         {
             if (_disposed)
@@ -346,6 +448,7 @@ public sealed class TrayIconHost : IDisposable
             Render();
             if (!response.Success)
             {
+                _authRecoveryBalloon = false;
                 _notifyIcon.ShowBalloonTip(
                     3000,
                     "VEX",
@@ -358,24 +461,53 @@ public sealed class TrayIconHost : IDisposable
     private async Task<VpnServiceResponse> ConnectAfterUpdateCheckAsync(
         CancellationToken cancellationToken)
     {
-        var update = await _services.UpdateService.RefreshAsync(
-            cancellationToken).ConfigureAwait(false);
+        var update = _services.UpdateService.CurrentSnapshot;
         if (update.UpdateAvailable && update.Required)
         {
             throw new NativeClientFlowException("required_update");
         }
 
-        return await _services.Coordinator.ConnectAsync(
+        return await _services.ProductParity.ConnectAsync(
+            _services.Coordinator, _services.Preferences.Current,
             cancellationToken).ConfigureAwait(false);
+    }
+
+    private void OnVpnStateChanged(object? sender, EventArgs args)
+    {
+        if (_disposed) return;
+        _dispatcherQueue.TryEnqueue(() =>
+        {
+            if (_disposed) return;
+            _snapshot = _services.VpnUiState.Snapshot;
+            Render();
+        });
     }
 
     private void Render()
     {
+        if (_disposed) return;
+        _snapshot = _services.VpnUiState.Snapshot;
         var (statusText, toggleConnectionText, toggleEnabled) =
             BuildMenuState(_snapshot);
+        var canCancel = _services.VpnUiState.IsConnectionInFlight && _services.VpnUiState.ConnectionDesired;
+        if (canCancel)
+        {
+            statusText = "Подключение…";
+            toggleConnectionText = "Отменить подключение";
+            toggleEnabled = true;
+        }
+        else if (_cancelInFlight ||
+            _services.VpnUiState.IsConnectionCleanupInFlight && !_services.VpnUiState.ConnectionDesired)
+        {
+            statusText = "Отключение…";
+            toggleConnectionText = "Отключение…";
+            toggleEnabled = false;
+        }
         _statusMenuItem.Text = $"Статус: {statusText}";
         _toggleConnectionMenuItem.Text = toggleConnectionText;
-        _toggleConnectionMenuItem.Enabled = toggleEnabled && !_disposed;
+        _toggleConnectionMenuItem.Enabled = toggleEnabled && !_disposed &&
+            (!_requestInFlight || canCancel) && !_cancelInFlight && !_exitInFlight;
+        _exitMenuItem.Enabled = !_exitInFlight && !_disposed;
         _toggleWindowMenuItem.Text = _window.IsShellWindowVisible
             ? "Скрыть окно"
             : "Показать окно";
@@ -402,7 +534,7 @@ public sealed class TrayIconHost : IDisposable
             VpnConnectionPhase.Disconnecting =>
                 ("Отключение…", "Отключение…", false),
             VpnConnectionPhase.Error =>
-                ("Нужна проверка", "Повторить", true),
+                ("Нужна проверка", VpnConnectionActionPolicy.ShouldDisconnect(snapshot) ? "Отключить" : "Повторить", true),
             _ =>
                 ("Неизвестное состояние", "Повторить", true),
         };
@@ -423,6 +555,7 @@ public sealed class TrayIconHost : IDisposable
 
     private Task InvokeOnUiThreadAsync(Action action)
     {
+        if (_disposed) return Task.CompletedTask;
         if (_dispatcherQueue.HasThreadAccess)
         {
             action();
@@ -457,12 +590,14 @@ public sealed class TrayIconHost : IDisposable
         "unauthorized" => "Требуется восстановить безопасную установку VEX.",
         "tunnel_runtime_missing" => "Компоненты VPN повреждены или отсутствуют.",
         "tunnel_adapter_timeout" => "Сетевой адаптер VPN не запустился вовремя.",
-        "sign_in_required" => "Сначала войдите в аккаунт на вкладке «Аккаунт».",
+        "sign_in_required" => "Для подключения войдите в VEX на главном экране.",
+        "windows_hello_required" => "Разблокируйте сохраненную сессию через Windows Hello на главном экране.",
         "vpn_profile_unsigned" => "Сервер вернул неподписанный VPN-профиль.",
         "vpn_profile_revoked" => "Это устройство отозвано. Войдите снова.",
         "vpn_key_rotation_required" => "Требуется безопасное обновление ключа устройства.",
         "required_update" => "Перед подключением установите обязательное обновление VEX.",
         "vpn_service_unavailable" => "Служба VEX VPN недоступна. Перезапустите приложение.",
+        "tunnel_cleanup_incomplete" => "Отключение VPN пока не подтверждено. VEX повторит очистку; можно повторить отключение вручную.",
         _ => "Не удалось выполнить операцию VPN.",
     };
 }

@@ -15,7 +15,195 @@ if (-not $principal.IsInRole(
 }
 
 $serviceName = 'VEX VPN Service'
-$dataDirectory = Join-Path $env:ProgramData 'VEX\VPN'
+$serviceControl = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'sc.exe'
+$dataDirectory = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)) 'VEX\VPN'
+
+function Assert-NoReparsePath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $candidate = [IO.Path]::GetFullPath($Path)
+    while (-not [string]::IsNullOrEmpty($candidate)) {
+        if (Test-Path -LiteralPath $candidate) {
+            $item = Get-Item -LiteralPath $candidate -Force
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+                ($null -ne $item.PSObject.Properties['LinkType'] -and $item.LinkType -eq 'HardLink')) {
+                throw 'The VEX installation and state paths cannot contain links or reparse points.'
+            }
+        }
+        $parent = [IO.Path]::GetDirectoryName($candidate)
+        if ($parent -eq $candidate) { break }
+        $candidate = $parent
+    }
+}
+
+function Assert-RemovalState {
+    Assert-NoReparsePath -Path $dataDirectory
+    if (-not (Test-Path -LiteralPath $dataDirectory -PathType Container)) {
+        throw 'The protected VEX removal state is missing. Repair it before removing the service.'
+    }
+    $ownerPath = Join-Path $dataDirectory 'owner-sid'
+    Assert-NoReparsePath -Path $ownerPath
+    $ownerSid = [IO.File]::ReadAllText($ownerPath).Trim()
+    if ($ownerSid -notmatch '^S-1-(?:5-21|12-1)-(\d+-){3}\d+$') { throw 'The VEX removal owner is invalid.' }
+    $pending = [Collections.Generic.Stack[string]]::new()
+    $pending.Push($dataDirectory)
+    $parentDirectory = Split-Path -Parent $dataDirectory
+    $pending.Push($parentDirectory)
+    $count = 0
+    while ($pending.Count -gt 0) {
+        $path = $pending.Pop()
+        Assert-NoReparsePath -Path $path
+        $item = Get-Item -LiteralPath $path -Force
+        if (++$count -gt 10000) { throw 'The VEX private state tree is unexpectedly large.' }
+        $acl = Get-Acl -LiteralPath $path
+        if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -notin @('S-1-5-18', 'S-1-5-32-544') -or
+            ($path -in @($dataDirectory, $parentDirectory) -and -not $acl.AreAccessRulesProtected)) {
+            throw 'VEX removal state does not have a trusted owner and protected root.'
+        }
+        $expected = @{
+            'S-1-5-18' = [long][Security.AccessControl.FileSystemRights]::FullControl
+            'S-1-5-32-544' = [long][Security.AccessControl.FileSystemRights]::FullControl
+        }
+        if (-not (Test-PrivateRuntimePath -Path $path)) {
+            $expected[$ownerSid] = [long]([Security.AccessControl.FileSystemRights]::ReadAndExecute -bor [Security.AccessControl.FileSystemRights]::Synchronize)
+        }
+        $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
+        if ($rules.Count -ne $expected.Count) { throw 'VEX removal state has unexpected access rules.' }
+        foreach ($rule in $rules) {
+            $sid = $rule.IdentityReference.Value
+            if (-not $expected.ContainsKey($sid) -or $rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or
+                [long]$rule.FileSystemRights -ne $expected[$sid]) { throw 'VEX removal state has unexpected access rights.' }
+            $expected.Remove($sid)
+        }
+        if ($expected.Count -ne 0) { throw 'VEX removal state is missing required access rules.' }
+        if ($item.PSIsContainer -and $path -ne $parentDirectory) {
+            foreach ($child in @(Get-ChildItem -LiteralPath $path -Force)) { $pending.Push($child.FullName) }
+        }
+    }
+}
+
+function Test-PrivateRuntimePath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $privateRoot = [IO.Path]::GetFullPath((Join-Path $dataDirectory 'Private')).TrimEnd([IO.Path]::DirectorySeparatorChar)
+    $fullPath = [IO.Path]::GetFullPath($Path)
+    return $fullPath.Equals($privateRoot, [StringComparison]::OrdinalIgnoreCase) -or
+        $fullPath.StartsWith($privateRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Wait-ServiceRemoved {
+    param([Parameter(Mandatory = $true)][string]$Name, [int]$TimeoutSeconds = 20)
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        $service = Get-Service -Name $Name -ErrorAction SilentlyContinue
+        if ($null -eq $service) { return }
+        $service.Dispose()
+        if ([DateTime]::UtcNow -ge $deadline) { throw 'The VEX-owned Windows service remains after removal.' }
+        Start-Sleep -Milliseconds 250
+    } while ($true)
+}
+
+function Get-OwnedMachinePins {
+    param([switch]$Remove)
+    $expected = @{
+        ClientCertificateSha256 = [IO.File]::ReadAllText((Join-Path $dataDirectory 'client-cert-sha256')).Trim()
+        ServiceExecutableSha256 = [IO.File]::ReadAllText((Join-Path $dataDirectory 'service-executable-sha256')).Trim()
+    }
+    $machine = Open-MachinePinRegistry
+    try {
+        $key = $machine.OpenSubKey((Get-MachinePinRegistryPath), [bool]$Remove)
+        if ($null -eq $key) { return }
+        try {
+            foreach ($name in $expected.Keys) {
+                $value = $key.GetValue($name)
+                if ($null -ne $value -and ($value -isnot [string] -or $expected[$name] -notmatch '^[0-9A-Fa-f]{64}$' -or
+                    $value -ne $expected[$name])) { throw 'Foreign VEX machine attestation pins will not be removed.' }
+            }
+            if ($Remove) {
+                foreach ($name in $expected.Keys) { $key.DeleteValue($name, $false) }
+            }
+        }
+        finally { $key.Dispose() }
+    }
+    finally { $machine.Dispose() }
+}
+
+function Open-MachinePinRegistry {
+    return [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry64)
+}
+
+function Get-MachinePinRegistryPath { return 'SOFTWARE\VEX\VPN' }
+
+function Test-CompletedServiceRemoval {
+    Assert-NoReparsePath -Path $dataDirectory
+    # A file, directory or dangling link is remaining state, never evidence of
+    # completed cleanup. Retry the normal guarded path while any root remains.
+    try { $remaining = Get-Item -LiteralPath $dataDirectory -Force -ErrorAction Stop }
+    catch {
+        if ($_.FullyQualifiedErrorId -notlike 'PathNotFound,*') { throw }
+        $remaining = $null
+    }
+    if ($null -ne $remaining) { return $false }
+    foreach ($name in @('VEX VPN Service', 'AmneziaWGTunnel$vex')) {
+        try { $service = Get-Service -Name $name -ErrorAction Stop }
+        catch {
+            if ($_.FullyQualifiedErrorId -notlike 'NoServiceFoundForGivenName,*') { throw }
+            $service = $null
+        }
+        if ($null -ne $service) {
+            $service.Dispose()
+            throw 'VEX cleanup state is missing while an owned service remains. Repair it before removal.'
+        }
+    }
+    $machine = Open-MachinePinRegistry
+    try {
+        $key = $machine.OpenSubKey((Get-MachinePinRegistryPath), $false)
+        if ($null -ne $key) {
+            try {
+                foreach ($name in @('ClientCertificateSha256', 'ServiceExecutableSha256')) {
+                    if ($name -in $key.GetValueNames()) {
+                        throw 'VEX cleanup state is missing while machine attestation pins remain.'
+                    }
+                }
+            }
+            finally { $key.Dispose() }
+        }
+    }
+    finally { $machine.Dispose() }
+    return $true
+}
+
+function Invoke-VendorRemoval {
+    param([Parameter(Mandatory = $true)][string]$Executable)
+    $process = Start-Process -FilePath $Executable -ArgumentList '/uninstalltunnelservice vex' `
+        -PassThru -WindowStyle Hidden -ErrorAction Stop
+    try {
+        if (-not $process.WaitForExit(30000)) {
+            try { $process.Kill(); $null = $process.WaitForExit(5000) } catch { }
+            throw 'The owned AmneziaWG removal process exceeded its deadline.'
+        }
+        if ($process.ExitCode -ne 0) { throw 'The owned AmneziaWG removal process failed.' }
+    }
+    finally { $process.Dispose() }
+}
+
+function Assert-RemovalRuntime {
+    $vendor = Join-Path $InstallDirectory 'amneziawg.exe'
+    if (Test-Path -LiteralPath $vendor -PathType Leaf) {
+        foreach ($pair in @(@($vendor, 'amneziawg-sha256'), @((Join-Path $InstallDirectory 'wintun.dll'), 'wintun-sha256'))) {
+            Assert-NoReparsePath -Path $pair[0]
+            $expected = [IO.File]::ReadAllText((Join-Path $dataDirectory $pair[1])).Trim()
+            if ($expected -notmatch '^[0-9A-Fa-f]{64}$' -or (Get-FileHash -LiteralPath $pair[0] -Algorithm SHA256).Hash -ne $expected) {
+                throw 'The VEX removal runtime does not match its protected release pins.'
+            }
+        }
+    }
+    else {
+        $vendorService = Get-Service -Name 'AmneziaWGTunnel$vex' -ErrorAction SilentlyContinue
+        if ($null -ne $vendorService) {
+            $vendorService.Dispose()
+            throw 'The AmneziaWG runtime is missing while its tunnel service remains.'
+        }
+    }
+}
 
 function Remove-StagingDirectory {
     param([Parameter(Mandatory = $true)][string]$Path)
@@ -23,6 +211,8 @@ function Remove-StagingDirectory {
     $deadline = [DateTime]::UtcNow.AddSeconds(10)
     while (Test-Path -LiteralPath $Path) {
         try {
+            Assert-NoReparsePath -Path $Path
+            foreach ($child in @(Get-ChildItem -LiteralPath $Path -Force)) { Assert-NoReparsePath -Path $child.FullName }
             Remove-Item `
                 -LiteralPath $Path `
                 -Recurse `
@@ -48,43 +238,43 @@ if (-not $installRoot.StartsWith(
     [StringComparison]::OrdinalIgnoreCase)) {
     throw 'VEX must be removed from below the protected Program Files directory.'
 }
-$installInfo = Get-Item -LiteralPath $installRoot
-if (($installInfo.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-    throw 'The VEX installation directory cannot be a reparse point.'
+Assert-NoReparsePath -Path $installRoot
+if (Test-CompletedServiceRemoval) {
+    # The privileged phase previously completed, but user MSIX removal may
+    # have failed or been interrupted. Let the bootstrap retry registration
+    # removal without recreating a service or its deleted authorization state.
+    Write-Host 'VEX service cleanup was already completed and verified.'
+    return
 }
+Assert-RemovalState
+Get-OwnedMachinePins
+Assert-RemovalRuntime
 
 $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
 if ($null -ne $service) {
-    Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
-    $service.Dispose()
+    try {
+        if ($service.Status -ne [ServiceProcess.ServiceControllerStatus]::Stopped) {
+            Stop-Service -Name $serviceName -ErrorAction Stop
+            $service.WaitForStatus([ServiceProcess.ServiceControllerStatus]::Stopped, [TimeSpan]::FromSeconds(30))
+        }
+    }
+    finally { $service.Dispose() }
     $service = $null
-    & sc.exe delete $serviceName | Out-Null
+    & $serviceControl delete $serviceName | Out-Null
     if ($LASTEXITCODE -ne 0) {
         throw 'The VEX VPN service could not be removed.'
     }
 
-    $deadline = [DateTime]::UtcNow.AddSeconds(20)
-    do {
-        $remainingService = Get-Service `
-            -Name $serviceName `
-            -ErrorAction SilentlyContinue
-        if ($null -eq $remainingService) {
-            break
-        }
-
-        $remainingService.Dispose()
-        Start-Sleep -Milliseconds 250
-    } while ([DateTime]::UtcNow -lt $deadline)
-    if ($null -ne $remainingService) {
-        throw 'The VEX VPN service is still marked for deletion.'
-    }
+    Wait-ServiceRemoved -Name $serviceName
 }
 
 $vendorExecutable = Join-Path $InstallDirectory 'amneziawg.exe'
 if (Test-Path -LiteralPath $vendorExecutable -PathType Leaf) {
+    Assert-NoReparsePath -Path $vendorExecutable
     $hashPath = Join-Path $dataDirectory 'amneziawg-sha256'
     $wintunLibrary = Join-Path $InstallDirectory 'wintun.dll'
     $wintunHashPath = Join-Path $dataDirectory 'wintun-sha256'
+    Assert-NoReparsePath -Path $wintunLibrary
     if (-not (Test-Path -LiteralPath $hashPath -PathType Leaf)) {
         throw 'The pinned AmneziaWG release hash is missing.'
     }
@@ -143,11 +333,8 @@ if (Test-Path -LiteralPath $vendorExecutable -PathType Leaf) {
     try {
         if ($null -ne $vendorService) {
             $vendorService.Dispose()
-            & $stagedVendorExecutable /uninstalltunnelservice vex | Out-Null
-            $vendorExitCode = $LASTEXITCODE
-            if ($vendorExitCode -ne 0) {
-                throw "The AmneziaWG tunnel service could not be removed ($vendorExitCode)."
-            }
+            Invoke-VendorRemoval -Executable $stagedVendorExecutable
+            Wait-ServiceRemoved -Name 'AmneziaWGTunnel$vex'
         }
     }
     finally {
@@ -167,5 +354,10 @@ else {
 }
 
 if (Test-Path -LiteralPath $dataDirectory -PathType Container) {
+    # Keep the trusted cleanup pins until every owned service is confirmed gone.
+    Wait-ServiceRemoved -Name $serviceName
+    Wait-ServiceRemoved -Name 'AmneziaWGTunnel$vex'
+    Assert-RemovalState
+    Get-OwnedMachinePins -Remove
     Remove-Item -LiteralPath $dataDirectory -Recurse -Force
 }

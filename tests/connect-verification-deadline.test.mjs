@@ -4,6 +4,61 @@ import { waitForVerifiedVpnConnection } from '../src/vpn/connectVerification.ts'
 
 const pending = { state: 'connected', rxBytes: 0, txBytes: 0, verified: false };
 
+for (const state of ['connecting', 'verifying']) {
+  test(`an initial ${state} status without verification fields cannot return early`, async () => {
+    let reads = 0;
+    const result = await waitForVerifiedVpnConnection({ state, rxBytes: 0, txBytes: 0 }, async () => {
+      reads++;
+      return { ...pending, verified: true };
+    });
+    assert.equal(reads, 1);
+    assert.equal(result.state, 'connected');
+  });
+
+  test(`an initial ${state} status waits for a fresh verified connection`, async () => {
+    let reads = 0;
+    const result = await waitForVerifiedVpnConnection({ ...pending, state, verified: true }, async () => {
+      reads++;
+      return reads === 1
+        ? { ...pending, state }
+        : { ...pending, verified: true, latestHandshakeEpochMillis: 1000 };
+    }, { minimumHandshakeEpochMillis: 1000, pollMs: 0 });
+    assert.equal(reads, 2);
+    assert.equal(result.state, 'connected');
+    assert.equal(result.latestHandshakeEpochMillis, 1000);
+  });
+
+  test(`an initial ${state} status retains the verification deadline`, async () => {
+    await assert.rejects(waitForVerifiedVpnConnection({ ...pending, state }, () => new Promise(() => {}), {
+      timeoutMs: 20,
+    }), /VPN handshake timed out/);
+  });
+}
+
+for (const state of ['disconnected', 'disconnecting', 'error']) {
+  test(`an initial ${state} status rejects without polling`, async () => {
+    let reads = 0;
+    await assert.rejects(waitForVerifiedVpnConnection({ ...pending, state }, async () => {
+      reads++;
+      return { ...pending, verified: true };
+    }), /VPN backend did not enter/);
+    assert.equal(reads, 0);
+  });
+}
+
+test('an iOS extension may still be connecting when startVPNTunnel returns', async () => {
+  const result = await waitForVerifiedVpnConnection({ ...pending, state: 'connecting' }, async () => ({
+    ...pending, verified: true, latestHandshakeEpochMillis: 1000,
+  }), { minimumHandshakeEpochMillis: 1000, pollMs: 0 });
+  assert.equal(result.latestHandshakeEpochMillis, 1000);
+});
+
+test('a starting extension still needs a handshake before the same deadline', async () => {
+  await assert.rejects(waitForVerifiedVpnConnection({ ...pending, state: 'connecting' }, async () => ({
+    ...pending, state: 'connecting',
+  }), { attempts: 2, pollMs: 0 }), /VPN handshake timed out/);
+});
+
 test('a ready fresh handshake is read before the first polling delay', async () => {
   const result = await waitForVerifiedVpnConnection(pending, async () => ({
     ...pending, verified: true, latestHandshakeEpochMillis: 1000,

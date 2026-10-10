@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Vex.Windows.Client.Api;
+using Vex.Windows.Client.Session;
 
 namespace Vex.Windows.App.Services;
 
@@ -15,11 +17,16 @@ public sealed partial class DiagnosticsQueueService
 
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly string _queuePath;
+    private readonly Func<DateTimeOffset> _utcNow;
+    private DateTimeOffset? _rateLimitedUntil;
     private Func<QueuedDiagnosticsReport, CancellationToken, Task>?
         _uploader;
 
-    public DiagnosticsQueueService(string? queuePath = null)
+    public DiagnosticsQueueService(
+        string? queuePath = null,
+        Func<DateTimeOffset>? utcNow = null)
     {
+        _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _queuePath = queuePath ??
             Path.Combine(
                 Environment.GetFolderPath(
@@ -28,7 +35,12 @@ public sealed partial class DiagnosticsQueueService
                 "client-diagnostics-queue.json");
     }
 
-    public static DiagnosticsQueueService Current { get; } = new();
+    public static DiagnosticsQueueService Current { get; private set; } = new();
+
+#if DEBUG
+    internal static void UseIsolatedPreview(string directory) =>
+        Current = new DiagnosticsQueueService(Path.Combine(directory, "diagnostics-queue.json"));
+#endif
 
     public string QueuePath => _queuePath;
 
@@ -47,12 +59,15 @@ public sealed partial class DiagnosticsQueueService
     {
         var report = new QueuedDiagnosticsReport(
             Guid.NewGuid().ToString("N"),
-            DateTimeOffset.UtcNow,
+            _utcNow(),
             NormalizeField(reason, "manual_support_diagnostics"),
             NormalizeField(status, "info"),
-            samples.ToDictionary(
-                item => NormalizeKey(item.Key),
-                item => Redact(item.Value ?? string.Empty),
+            samples.GroupBy(item => NormalizeKey(item.Key), StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(
+                group => group.Key,
+                group => IsSensitiveKey(group.Key)
+                    ? "[REDACTED]"
+                    : Redact(group.Last().Value ?? string.Empty),
                 StringComparer.OrdinalIgnoreCase),
             0);
 
@@ -93,37 +108,61 @@ public sealed partial class DiagnosticsQueueService
         try
         {
             var queue = await ReadQueueAsync(cancellationToken);
-            var remaining = new List<QueuedDiagnosticsReport>();
+            if (_rateLimitedUntil > _utcNow())
+            {
+                return new DiagnosticsFlushResult(0, queue.Count, "diagnostics_rate_limited");
+            }
             var uploaded = 0;
             string? lastError = null;
-            foreach (var report in queue)
+            for (var index = 0; index < queue.Count;)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                var report = queue[index];
+                var accepted = false;
                 try
                 {
                     await _uploader(report, cancellationToken);
-                    uploaded++;
+                    accepted = true;
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
                 }
                 catch (Exception error) when (
                     error is HttpRequestException or
                         IOException or
-                        TaskCanceledException or
-                        InvalidOperationException)
+                        OperationCanceledException or
+                        InvalidOperationException or
+                        VexApiException or NativeClientFlowException)
                 {
-                    lastError = error.Message;
-                    remaining.Add(
-                        report with
-                        {
-                            AttemptCount = checked(
-                                report.AttemptCount + 1),
-                        });
+                    lastError = Redact(error.Message);
+                    queue[index] = report with
+                    {
+                        AttemptCount = report.AttemptCount == int.MaxValue
+                            ? int.MaxValue
+                            : report.AttemptCount + 1,
+                    };
+                    await WriteQueueAsync(queue, CancellationToken.None);
+                    if (error is VexApiException { StatusCode: System.Net.HttpStatusCode.TooManyRequests })
+                    {
+                        _rateLimitedUntil = _utcNow().AddSeconds(60);
+                        break;
+                    }
+                    index++;
+                }
+                if (accepted)
+                {
+                    queue.RemoveAt(index);
+                    // Persist each acknowledgement even if navigation cancels
+                    // the next upload, so a later flush does not send it twice.
+                    await WriteQueueAsync(queue, CancellationToken.None);
+                    uploaded++;
                 }
             }
 
-            await WriteQueueAsync(remaining, cancellationToken);
             return new DiagnosticsFlushResult(
                 uploaded,
-                remaining.Count,
+                queue.Count,
                 lastError);
         }
         finally
@@ -158,6 +197,11 @@ public sealed partial class DiagnosticsQueueService
             result,
             "$1=[REDACTED]");
         result = EmailRegex().Replace(result, "[REDACTED_EMAIL]");
+        result = IPv6CandidateRegex().Replace(result, match =>
+            System.Net.IPAddress.TryParse(match.Value, out var address) &&
+            address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6
+                ? "[REDACTED_IP]"
+                : match.Value);
         result = IpAddressRegex().Replace(result, "[REDACTED_IP]");
         return result;
     }
@@ -180,10 +224,7 @@ public sealed partial class DiagnosticsQueueService
                     cancellationToken) ??
                 [];
         }
-        catch (Exception error) when (
-            error is JsonException or
-                IOException or
-                UnauthorizedAccessException)
+        catch (JsonException)
         {
             var corruptPath =
                 $"{_queuePath}.corrupt-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}";
@@ -233,6 +274,14 @@ public sealed partial class DiagnosticsQueueService
             : normalized[..Math.Min(normalized.Length, 80)];
     }
 
+    private static bool IsSensitiveKey(string key)
+    {
+        key = key.Replace('-', '_').Replace('.', '_');
+        return new[] { "authorization", "access_token", "refresh_token",
+                "private_key", "preshared_key", "password", "secret" }
+            .Any(field => key == field || key.EndsWith('_' + field, StringComparison.Ordinal));
+    }
+
     private static string NormalizeField(
         string value,
         string fallback)
@@ -258,6 +307,9 @@ public sealed partial class DiagnosticsQueueService
     [GeneratedRegex(
         @"(?<![A-Fa-f0-9:])(?:\d{1,3}\.){3}\d{1,3}(?![A-Fa-f0-9:])")]
     private static partial Regex IpAddressRegex();
+
+    [GeneratedRegex(@"(?<![\w:])(?:[0-9A-Fa-f]{0,4}:){2,}[0-9A-Fa-f:.]*(?:%[0-9A-Za-z_.-]+)?(?![\w:])")]
+    private static partial Regex IPv6CandidateRegex();
 }
 
 public sealed record QueuedDiagnosticsReport(

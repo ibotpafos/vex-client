@@ -1,8 +1,10 @@
 # VEX Native for Windows
 
 This directory contains the standalone WinUI client for Windows.
-The native release is the supported Windows desktop lane.
-client passes the full parity and real-device acceptance matrix.
+Development reopened on 2026-10-10 to deliver native macOS feature parity.
+The earlier 2026-09-25 pause is superseded for source work and unsigned CI.
+Promotion requires the full parity and real-device acceptance matrix below;
+existing published Windows artifacts remain available until those gates pass.
 
 ## Architecture
 
@@ -16,24 +18,152 @@ client passes the full parity and real-device acceptance matrix.
   the authenticated `VexVpn.Service.v2` named pipe. It owns the
   AmneziaWG process, Wintun adapter, routes, DNS, anti-leak policy, recovery,
   and tunnel diagnostics. The UI must never perform privileged tunnel changes.
-- Secure session storage: per-user DPAPI (`CurrentUser`); no access token or
-  tunnel private key is stored in plain text. The service IPC credential uses
-  machine-scoped DPAPI and install-time ACLs.
-- Distribution: signed MSIX bundle plus `.appinstaller`; native update metadata
+- Secure session storage: per-user DPAPI (`CurrentUser`) protects persisted
+  access tokens and device identity keys. The service IPC credential uses
+  machine-scoped DPAPI and install-time ACLs. The native tunnel configuration
+  required by AmneziaWG is restricted to LocalSystem.
+- Distribution: signed x64/arm64 MSIX packages plus `.appinstaller`; native update metadata
   remains unchanged until native Windows promotion.
 
 ## macOS parity contract
 
 | Surface | Required Windows behavior | Acceptance evidence |
 | --- | --- | --- |
-| Authentication | Browser PKCE/deep link, email OTP, refresh, logout, Windows Hello unlock on Windows 11 | Cold start, expired token, duplicate callback, offline recovery |
+| Authentication | Browser/Google PKCE/deep link, email OTP, refresh, logout, Windows Hello unlock on Windows 11 | Cold start, expired token, duplicate callback, offline recovery |
 | Home | Status restoration, connect/disconnect, autopilot, manual location, latency, server switching | Real tunnel traffic, kill/restart, sleep/wake, network handover |
 | VPN safety | Wintun/AmneziaWG lifecycle, DNS and route cleanup, anti-leak, control-plane bypass | IPv4/IPv6/DNS leak checks and protected-host access |
-| Account | User, devices, usage, entitlement, plans, checkout, cancellation, portal, payment history | Production read-only API contract fixtures and browser return |
-| Support | Tickets, real-time chat, optimistic send, diagnostics attachment | Reconnect, duplicate event, queued diagnostic retry |
+| Account | User, devices, usage, entitlement and the shared website billing dashboard | Production read-only API contract fixtures and browser return |
+| Support | Open the shared VEX support website from Settings, matching macOS | Website action available with or without a signed-in session |
 | Settings | Startup, biometric lock, diagnostics, update center, quit behavior | Reboot, service recovery, required update |
 | Shell | Single instance, protocol activation, system tray, show/hide, connect/disconnect, quit | Repeated launch and tray-only operation |
 | Updates | Signed MSIX/App Installer, staged rollout, required update, rollback | Upgrade and downgrade drill |
+
+## Current parity implementation and remaining acceptance
+
+The Windows service admits the same AWG3.1 header protection, padding, timing
+and boolean configuration fields as macOS. A connection requires a recent
+handshake from the configured peer through AmneziaWG UAPI, verified routes,
+DNS and anti-leak policy. Physical-interface changes reconcile owned bypass
+routes; service shutdown restores the recorded firewall and route state.
+DNS lookup has a four-second budget. Recovery first reconciles the last numeric
+address bound to the exact signed endpoint, peer key and authorization lease;
+status reads use known addresses without DNS. A cold service or a newly observed
+authenticated peer reconciles that numeric route before reporting health.
+Bypass verification checks both the effective interface and next-hop gateway,
+and preserves routes owned by other applications. The anti-leak endpoint rule
+permits only UDP to the signed port; a separate control-plane rule permits HTTPS.
+Control-plane DNS metadata survives restart only for the configured host set,
+the admitted endpoint and peer, and its unexpired lease. Numeric priming restores
+those escapes before DNS can depend on a damaged tunnel. Removing a bypass
+requires a durable creation receipt and matching route metric and protocol.
+Unconfirmed or legacy routes with ambiguous ownership retain their journal and
+report incomplete cleanup instead of deleting a matching foreign route.
+Disconnect cancels an in-flight repair and fences its service restart.
+The signed authorization deadline also cancels connection and repair waits;
+the runtime rechecks expiry before starting the service and committing a
+connection. A renewed lease has its own deadline and cannot be canceled by an
+older lease callback.
+
+The vendor executable must implement `/installtunnelservice` and
+`/uninstalltunnelservice`. Use the CLI-capable
+`amnezia-vpn/amneziawg-windows-client` 3.1.0 runtime (AWG Go 3.1.20260814),
+qualified separately on each architecture. The distinct
+`amnezia-vpn/amneziawg-windows` project produces an embeddable `tunnel.dll`
+and does not satisfy this executable contract. PE hashes and architecture
+checks establish the selected artifact's identity; the Windows acceptance
+drill must also establish AWG3.1 protocol compatibility.
+
+Monitoring belongs to the application lifetime, so navigation and tray-only
+operation retain status, recovery and diagnostics retries. Recovery preserves
+manual location pins, exhausts qualified ingress paths for the same exit,
+refreshes its signed profile, and allows an alternate exit in automatic mode. Subscription expiry and session
+revocation prevent cached-profile reconnects. Google/email authentication,
+website billing, website support and incident configuration
+follow the current macOS product flows.
+
+Password, email and browser login save the authenticated account before VPN
+provisioning. An unpaid account, a full device quota or unavailable exits can
+still open Account, billing and website support. The first Connect checks
+entitlement and registers a device; device identity and cached grants cannot
+cross accounts. Windows Hello changes are committed only after confirmation
+and a durable protected preference write.
+
+Home uses the macOS dark/cyan palette, six animated focus rings, traffic
+sparklines, country cards and bottom navigation. Account and Settings retain
+the same centered desktop proportions; narrow windows adapt the cards and
+navigation. System reduced-motion settings disable the focus animation.
+An in-flight connection can be cancelled; its independent disconnect command
+waits for service cleanup rather than merely cancelling the UI pipe read.
+Server selection retains its keyboard highlight through catalog refreshes and
+rejects changes during connection or cleanup. The health indicator reflects
+the current catalog, including partial outages and maintenance. Settings keep
+local preferences available during status loading and cancel page reads when
+navigation changes. The desktop minimum size adapts to DPI and the work area.
+
+An expired realtime access token or server session-invalid event triggers
+bounded refresh attempts. Network failures preserve the session and working
+tunnel; an authoritative refresh rejection signs out and disconnects. Events from an earlier token
+cannot invalidate a newer login. Account loading keeps authoritative
+entitlement visible when optional plans, payments, devices or usage fail,
+with separate cached/unavailable indicators for each affected section.
+Silent realtime headers or body reads have a 90-second liveness deadline;
+reconnection retains the last event cursor and does not reject credentials.
+Required updates stay blocked after installer launch and an offline restart
+until the running version satisfies the verified requirement.
+Unreadable protected update records keep Connect blocked while Account and
+Settings remain available for recovery. Downloading the complete verified
+installer bundle has a fifteen-minute deadline; cancellation removes partial
+files and allows another attempt.
+
+Periodic subscription checks bind their result to the current account and
+connection intent. A delayed response cannot disconnect a newer login or
+server selection. Windows Hello locking and temporary network failures preserve
+an admitted tunnel; a current authoritative rejection requests confirmed cleanup.
+
+Disconnected clients warm their selected profile without blocking Connect.
+The warm cache requires the release-pinned P256 keyring, exact signed user,
+device, location and routing scope, and matching HTTPS device-key metadata.
+Warm-up cannot change the active profile or connection preference; login,
+key, routing and connection changes invalidate pending work. Older servers
+without device-key metadata use the ordinary foreground profile flow.
+An exact warmed grant and bounded cached paid entitlement also support cold
+automatic connection during transient catalog failures. A fresh negative
+entitlement supersedes an older paid cache; authentication failures and grants
+for another mode, identity or expired lease never enable this fallback.
+
+The server catalog groups nodes by country, searches localized country/city
+labels, and retains favorites and all/fastest/favorites/available filters.
+An explicit quit waits for confirmed tunnel cleanup and seals pending UI
+operations against a late reconnect; a failed cleanup keeps the app available
+for retry.
+Tray connection attempts without an unlocked session open Home, where the
+existing sign-in or Windows Hello unlock controls are available.
+
+Resilience policies are cached in per-user DPAPI storage and route health uses
+expiry, quarantine and sticky selection. A changed endpoint requires the additive
+`GET /v1/vpn/profile?...&candidate_id=...` backend contract: the server resolves
+the identifier against its qualified topology for the current user, device and
+assigned exit, then issues the existing P256 profile with an exact endpoint and
+a lease of at most ten minutes. The service uses its release-pinned keyring;
+policy keys supplied by the response do not authorize configuration changes.
+The companion backend implementation is [VPN #741](https://github.com/ibotpafos/VPN/pull/741);
+it is merged and must be deployed before new path grants can be issued. Servers
+without this contract retain direct-profile recovery.
+
+After a successful connection, Windows prefetches at most three independently
+signed current-policy grants within an eight-second budget. Its DPAPI-protected
+pool binds user, device, exit, routing, bypass and local key identity. Offline
+failover can use those grants until the earlier signed or policy expiry;
+uncached paths and expired grants require the API. Partial prefetch preserves
+valid existing leases. Recovery permits at most three same-exit path attempts,
+one fresh same-exit profile and one automatic alternate exit: five service
+attempts total, or four when recovery already begins with a fresh profile.
+
+Portable behavioral tests and cross-compilation establish source correctness.
+The scoped Windows CI compiles and publishes both x64 and arm64 WinUI/service
+payloads. Neither proves real-device VPN acceptance: signed installation,
+traffic/leak checks, sleep/wake, network handover, and upgrade/rollback/uninstall
+must still be exercised on Windows before production promotion.
 
 ## Delivery phases
 
@@ -41,9 +171,9 @@ client passes the full parity and real-device acceptance matrix.
    Windows CI, MSIX identity, signed artifact skeleton.
 2. **Tunnel service**: authenticated named pipe, Windows Service installer,
    AmneziaWG/Wintun lifecycle, status restoration, anti-leak, diagnostics.
-3. **Auth and control plane**: PKCE/OTP, Credential Locker, profile/key
+3. **Auth and control plane**: PKCE/OTP, DPAPI-protected identity, profile/key
    lifecycle, locations, entitlement, connect reporting.
-4. **Full product parity**: account/billing, support socket, settings, tray,
+4. **Full product parity**: account/billing, website support, settings, tray,
    Windows Hello, update center.
 5. **Release hardening**: x64/arm64 packages, Authenticode, install/upgrade
    migration, crash and lifecycle matrix, canary rollout.
@@ -52,7 +182,15 @@ client passes the full parity and real-device acceptance matrix.
 
 ## Local checks
 
-The platform-neutral foundation can be checked from macOS:
+The platform-neutral client, PowerShell release checks and cross-compiled
+service can be checked from Linux or macOS with .NET 10, Node, Python 3 and
+PowerShell 7 installed:
+
+```bash
+bash scripts/native_windows_preflight.sh
+```
+
+Individual checks:
 
 ```bash
 dotnet run --project native-windows/tests/Vex.Windows.Core.Tests/Vex.Windows.Core.Tests.csproj
@@ -62,7 +200,8 @@ dotnet build native-windows/src/Vex.Windows.Service/Vex.Windows.Service.csproj -
 The WinUI project requires a Windows host with the Windows SDK:
 
 ```powershell
-dotnet build native-windows/src/Vex.Windows.App/Vex.Windows.App.csproj -c Release -r win-x64
+dotnet publish native-windows/src/Vex.Windows.App/Vex.Windows.App.csproj -c Release -r win-x64 -p:Platform=x64
+dotnet publish native-windows/src/Vex.Windows.App/Vex.Windows.App.csproj -c Release -r win-arm64 -p:Platform=arm64
 ```
 
 Clean Windows development hosts must also install the current Microsoft Visual
@@ -103,13 +242,14 @@ Windows binary.
 
 The MSIX contains the signed service binary and runtime assets, but deliberately
 does not declare a packaged service or LocalSystem service capability. There is
-one service ownership model: the elevated bootstrap provisions and owns the
+one service ownership model: the bootstrap's elevated service phase provisions the
 manual `sc.exe` service. A raw MSIX or `.appinstaller` registration installs or
 updates only the application payload; it does not provision, repair, update, or
 remove the VPN service.
 
 Every initial install, repair, update, rollback, and uninstall must enter
-through the emitted bootstrap from the versioned artifact directory:
+through the emitted bootstrap from the versioned artifact directory, launched
+as the original owning user:
 
 ```powershell
 # Install the signed MSIX, provision ProgramData, and verify the running service.
@@ -132,16 +272,35 @@ through the emitted bootstrap from the versioned artifact directory:
 
 Install/repair creates `%ProgramData%\VEX\VPN` with protected inheritance and
 explicit access for LocalSystem, Administrators, and the owning user SID. A
+separate `Private` subtree containing the tunnel key grants access only to
+LocalSystem and Administrators. Install, repair and removal reject redirected
+state paths and unexpected access rules. A
 fresh 256-bit IPC credential is generated with the Windows CSPRNG and protected
-using machine-scoped DPAPI. The bootstrap verifies all release pins and waits
+using machine-scoped DPAPI. The bootstrap keeps MSIX registration, removal and
+relaunch under that user's token. It elevates only the pinned service operation
+with the original owner SID and checks the package registered for that owner;
+another administrator's credentials do not transfer service ownership. Existing
+package replacements can require two UAC prompts: stop before replacement,
+then provision the new payload. Failed provisioning retains the registered UI
+for verified Repair and reports failure. Rollback validates the retained release
+before stopping the current service and replaces the package in place. If
+registration fails, the unchanged previous package and protected service state
+are verified before restarting its service. Repair stops the controller before
+replacing its authorization. The bootstrap verifies release pins, protected
+authorization, installed payload hashes and SCM configuration, then waits
 for `VEX VPN Service` to reach `Running` before reporting success.
+Removal can be retried after service cleanup has completed but MSIX removal
+failed. The helper accepts that state only when both services, the owned data
+directory and all owned machine pins are absent; ambiguous leftovers still
+stop removal.
 
 The signed public `update.json` release pairs the exact MSIX, bootstrap,
 install/uninstall helpers, and `package-metadata.json` URIs, SHA-256 hashes, and
 sizes. Publishing also emits signed `bootstrap-entry.json` plus
 `bootstrap-entry.json.sig`. Update consumers must stage the MSIX, metadata, and
 all three PowerShell scripts into one directory, verify that signed entry, and
-launch `bootstrap-native-windows.ps1` elevated. Direct launch of the MSIX or
+launch `bootstrap-native-windows.ps1` as the owning user. It requests elevation
+only for its service phases. Direct launch of the MSIX or
 AppInstaller is not a complete VEX VPN installation/update path.
 
 The native app therefore owns the Sparkle-equivalent lifecycle. Automatic
@@ -149,18 +308,89 @@ checks are enabled by default, run shortly after startup and every six hours,
 back off for fifteen minutes after transient failures, and can be disabled in
 Settings. A verified available release is surfaced in the tray and Update
 Center; installation always stages every signed artifact and enters through
-the elevated bootstrap so the app and privileged service advance atomically.
+the original-user bootstrap and its verified elevated service phases. A failed
+service phase does not report a successful update or remove other users' packages.
 The `.appinstaller` intentionally has no package-only background update task.
 
 Packaging still requires the existing x64/arm64 release environment variables,
-Windows SDK (`makeappx`, `makepri`, `signtool`), runtime inputs, and a PFX
+Windows SDK (`makeappx`, `signtool`), runtime inputs, and a PFX
 provided through the CI environment. The temporary PFX is deleted after each
 signing phase. The profile and update private keys remain server/CI-only.
+Architecture-specific runtime paths use
+`VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH_X64`/`_ARM64` and
+`VEX_WINDOWS_SERVICE_WINTUN_PATH_X64`/`_ARM64`. The legacy unsuffixed paths remain
+a fallback, but all executables and Wintun DLLs must match the package PE
+architecture. A single x64 Wintun DLL cannot be reused in an arm64 release.
+The packager removes previous staging contents and stops on any publish error.
+
+For clean hosted release runners, set
+`VEX_WINDOWS_SERVICE_AMNEZIAWG_URI_X64`/`_ARM64` and
+`VEX_WINDOWS_SERVICE_WINTUN_URI_X64`/`_ARM64`, with the corresponding
+`VEX_WINDOWS_SERVICE_AMNEZIAWG_SHA256_X64`/`_ARM64` and
+`VEX_WINDOWS_SERVICE_WINTUN_SHA256_X64`/`_ARM64` pins. The runtime staging helper
+downloads HTTPS assets, verifies their hashes and PE architectures, and sets
+the architecture-specific paths before packaging.
+
+PE, MSIX and bootstrap signatures are timestamped. Override the default
+timestamp service with `VEX_WINDOWS_SIGN_TIMESTAMP_URI` when needed; signing
+or signature verification failure stops packaging.
+
 Each publish must also set a strictly increasing
 `VEX_WINDOWS_MANIFEST_REVISION`. Set
 `VEX_WINDOWS_REQUIRED_VERSION_FLOOR` when raising the persisted minimum
 security floor; otherwise the publisher uses
-`VEX_WINDOWS_MINIMUM_SUPPORTED_VERSION` or `0.0.0.0` for the initial release.
+`VEX_WINDOWS_MINIMUM_SUPPORTED_VERSION` or the release version. A floor increase
+prevents later downgrade below that version, so select it before signing.
+
+The separate Native Windows CI workflow runs portable tests plus Windows x64
+and arm64 self-contained publishes for scoped PR/main changes. It verifies
+published native executable architectures, compiled PRI resources, and required
+application assets. On a fresh Windows x64 runner, a bounded startup smoke
+launches the unpackaged UI, observes process survival for ten seconds, and
+terminates it. It refuses hosts with an installed VEX service or saved session;
+this startup check does not provision a service. Separate Debug-only previews
+exercise authenticated and signed-out navigation, the server picker, compact
+layout, single-instance redirection, close-to-tray, second-launch restoration,
+maximized-window preservation, restoration from minimization through actual
+shell protocol activation and clean exit. Preview state is disposable;
+the Settings drill also changes and restores a local preference and leaves the
+page while its status request is pending, then verifies the resumed refresh.
+HTTP, realtime and service calls use offline fixtures. Release builds cannot
+enable those fixtures. Their PNG captures accompany the unsigned review builds.
+
+A macOS job renders the existing SwiftUI Home, Account, Settings, server sidebar
+and sign-in screens with its native Debug renderer for visual comparison. A
+separate fresh Windows x64 job qualifies the pinned AmneziaWG 3.1.0 CLI and
+Wintun against a memory-only encrypted peer. It checks signed-profile admission,
+SCM/adapter creation, a recent UAPI handshake, tunnel-bound DNS and verified HTTPS,
+traffic counters and owned cleanup. It uses one private /32 route and leaves
+AntiLeak disabled. This establishes local encrypted runtime behavior; public
+Internet, leak protection, roaming and arm64 runtime acceptance remain separate.
+The same fixture exercises a unique unsigned LocalSystem SCM controller with
+the real pipe server and command handler: rejected credentials and tampered
+profiles, signed connection, crash/restart status restoration, durable
+disconnect after restart, and graceful-stop cleanup followed by another
+controller start that must remain disconnected. Its private process
+attestation establishes only fixture ownership; signed installed UI-to-service
+attestation and real tray clicks still require release acceptance. Production
+IPC attestation remains mandatory. Runtime cleanup preserves network protection
+and its journal when stopping the vendor tunnel cannot be confirmed.
+See [the fixture documentation](scripts/vpn-fixture-peer/README.md).
+The fixture also calls the production Windows routing interop for both OS
+loopbacks to check IPv4/IPv6 structure layout, interface, next hop and source
+address without changing routes or sending traffic.
+An additional documentation-address host route exercises the production route
+creator, actual Windows metric/protocol, durable creation receipt and confirmed
+removal without sending traffic. A fifteen-second signed lease verifies
+autonomous SCM/adapter/lease cleanup before any status request.
+
+Unsigned PR and manual review builds include sanitized startup, desktop and
+tunnel results; private fixture keys, account state and process dumps are excluded.
+Routine jobs do not access signing secrets. Manual validation needs no release
+inputs; signed release preparation requires `package_release=true`, the main
+branch, release version/revision/notes, and the configured release inputs.
+Signed output is retained for review; the workflow does not promote it to a
+public update origin.
 
 Cross-platform packaging checks:
 
@@ -168,15 +398,25 @@ Cross-platform packaging checks:
 node native-windows/scripts/validate-packaging-static.mjs
 ```
 
-On Windows, additionally run the actual PowerShell AST parser:
+PowerShell 7 provides the actual AST parser and release validation tests on
+Linux, macOS and Windows. Network-policy tests also exercise non-enumerating
+JSON-array decoding and, on Windows, invoke the service's actual Windows
+PowerShell 5.1 host with its production stdin transport:
 
 ```powershell
 .\native-windows\scripts\validate-powershell-parse.ps1
+.\native-windows\tests\ReleaseValidation.Tests.ps1
+.\native-windows\tests\InstallerSafety.Tests.ps1
 ```
+
+The Windows x64 job also runs the isolated installer and bootstrap tests under
+the exact system Windows PowerShell 5.1 executable used for elevated phases.
 
 Before promotion, both x64 and arm64 still require a clean real-Windows
 install/upgrade/rollback/uninstall drill, Authenticode/MSIX trust verification,
 service recovery after reboot, and tunnel/DNS/route cleanup tests.
+Portable checks and hosted compilation do not establish that real-device
+acceptance has passed.
 
 ## Decision record
 

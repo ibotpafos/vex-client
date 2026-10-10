@@ -165,7 +165,9 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
       }
     }
     recoveryHandler.postDelayed(hardRecovery, CONNECT_HARD_RECOVERY_MS)
-    scope.launch {
+    scope.launchVpnControlOperation(
+      onCompletion = { recoveryHandler.removeCallbacks(hardRecovery) },
+    ) {
       try {
         val status = controller.connect(
           wgQuickConfig,
@@ -179,8 +181,6 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
         rejectVpnError(promise, "VPN_PERMISSION_REQUIRED", "Android VPN permission is required.", error)
       } catch (error: Throwable) {
         rejectVpnError(promise, "VPN_CONNECT_FAILED", "VPN connection failed.", error)
-      } finally {
-        recoveryHandler.removeCallbacks(hardRecovery)
       }
     }
   }
@@ -215,15 +215,15 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
     if (releaseAntiLeak) {
       recoveryHandler.postDelayed(hardRecovery, DISCONNECT_HARD_RECOVERY_MS)
     }
-    scope.launch {
+    scope.launchVpnControlOperation(
+      onCompletion = { recoveryHandler.removeCallbacks(hardRecovery) },
+    ) {
       try {
         val status = controller.disconnect(releaseAntiLeak).toWritableMap()
         emitVpnStatusChanged(status, force = true)
         promise.resolve(status)
       } catch (error: Throwable) {
         rejectVpnError(promise, "VPN_DISCONNECT_FAILED", "VPN disconnect failed.", error)
-      } finally {
-        recoveryHandler.removeCallbacks(hardRecovery)
       }
     }
   }
@@ -674,8 +674,8 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
     private const val CONNECTED_STATUS_POLL_MS = 4_000L
     private const val TRANSITION_STATUS_POLL_MS = 1_500L
     private const val STATUS_POLL_ERROR_MS = 4_000L
-    private const val DISCONNECT_HARD_RECOVERY_MS = 8_000L
-    private const val CONNECT_HARD_RECOVERY_MS = 20_000L
+    private const val DISCONNECT_HARD_RECOVERY_MS = VpnNetworkRecoveryTiming.DISCONNECT_HARD_RECOVERY_MS
+    private const val CONNECT_HARD_RECOVERY_MS = VpnNetworkRecoveryTiming.CONNECT_HARD_RECOVERY_MS
     private const val NETWORK_RECOVERY_HARD_TIMEOUT_RETRY_MS = 5_000L
     private const val UPDATE_DOWNLOAD_CONNECT_TIMEOUT_MS = 30_000
     private const val UPDATE_DOWNLOAD_READ_TIMEOUT_MS = 60_000

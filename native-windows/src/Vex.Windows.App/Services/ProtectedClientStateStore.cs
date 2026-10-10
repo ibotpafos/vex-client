@@ -4,6 +4,7 @@ using System.Text.Json;
 using Vex.Windows.App.Auth;
 using Vex.Windows.Client.Security;
 using Vex.Windows.Client.Session;
+using Vex.Windows.Core.Presentation;
 
 namespace Vex.Windows.App.Services;
 
@@ -30,59 +31,86 @@ public sealed class ProtectedClientStateStore :
     private readonly string _deviceStateFile;
     private readonly string _deviceIdentityFile;
     private readonly string _windowsHelloPreferenceFile;
-    private bool _windowsHelloRequired;
-    private bool _sessionUnlocked;
+    private readonly WindowsHelloSessionState _windowsHello;
+    private bool _sessionCacheUnavailable;
+
+    public string? StoredSessionError { get; private set; }
 
     public ProtectedClientStateStore(
-        WindowsHelloAuthService? windowsHelloAuth = null)
+        WindowsHelloAuthService? windowsHelloAuth = null,
+        string? stateDirectory = null)
     {
         _windowsHelloAuth =
             windowsHelloAuth ??
             new WindowsHelloAuthService();
-        var localData = Environment.GetFolderPath(
-            Environment.SpecialFolder.LocalApplicationData);
-        _stateFile = Path.Combine(
-            localData,
-            "VEX",
-            "VPN",
-            "client-state.bin");
-        _installationIdFile = Path.Combine(
-            localData,
-            "VEX",
-            "VPN",
-            "installation-id.bin");
-        _deviceStateFile = Path.Combine(
-            localData,
-            "VEX",
-            "VPN",
-            "device-state.bin");
-        _deviceIdentityFile = Path.Combine(
-            localData,
-            "VEX",
-            "VPN",
-            "device-identity.bin");
-        _windowsHelloPreferenceFile = Path.Combine(
-            localData,
-            "VEX",
-            "VPN",
-            "windows-hello.bin");
-        _windowsHelloRequired =
-            LoadProtected<StoredWindowsHelloPreference>(
-                _windowsHelloPreferenceFile)?.Enabled ??
-            false;
-        _sessionUnlocked = !_windowsHelloRequired;
+        var directory = stateDirectory ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "VEX", "VPN");
+        _stateFile = Path.Combine(directory, "client-state.bin");
+        _installationIdFile = Path.Combine(directory, "installation-id.bin");
+        _deviceStateFile = Path.Combine(directory, "device-state.bin");
+        _deviceIdentityFile = Path.Combine(directory, "device-identity.bin");
+        _windowsHelloPreferenceFile = Path.Combine(directory, "windows-hello.bin");
+        var helloPreference = ReadProtected<StoredWindowsHelloPreference>(_windowsHelloPreferenceFile);
+        var helloRequired = helloPreference.Kind switch
+        {
+            ProtectedFileReadKind.Missing => false,
+            ProtectedFileReadKind.Available => helloPreference.Value!.Enabled,
+            _ => true,
+        };
+        if (helloPreference.Kind is ProtectedFileReadKind.Unusable or ProtectedFileReadKind.Unavailable)
+        {
+            StoredSessionError = "Параметры Windows Hello недоступны. Сохраненная сессия остается заблокированной.";
+        }
+        _windowsHello = new WindowsHelloSessionState(helloRequired);
     }
+
+#if DEBUG
+    internal async Task LockPreviewSessionAsync()
+    {
+        EnsureAuthenticatedPreview();
+        await _windowsHello.SetRequiredAsync(true, _ => Task.CompletedTask,
+            (_, _) => { }, CancellationToken.None);
+        _windowsHello.SessionCleared();
+    }
+
+    internal async Task RestorePreviewSessionAsync()
+    {
+        EnsureAuthenticatedPreview();
+        await _windowsHello.SetRequiredAsync(false, _ => Task.CompletedTask,
+            (_, _) => { }, CancellationToken.None);
+    }
+
+    private static void EnsureAuthenticatedPreview()
+    {
+        if (!UiPreviewContext.IsEnabled || !UiPreviewContext.IsAuthenticated || UiPreviewContext.StateDirectory is null)
+            throw new InvalidOperationException("Session fixtures require an authenticated isolated UI preview.");
+    }
+#endif
 
     public ClientStateAccessKind GetAccessState()
     {
-        if (!File.Exists(_stateFile))
+        try
+        {
+            File.GetAttributes(_stateFile);
+        }
+        catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException)
         {
             return ClientStateAccessKind.Missing;
         }
-
-        if (!_windowsHelloRequired || _sessionUnlocked)
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
-            return ClientStateAccessKind.Available;
+            _sessionCacheUnavailable = true;
+            StoredSessionError = "Сохраненные данные VEX недоступны. Проверьте доступ к папке приложения и повторите запуск.";
+            return ClientStateAccessKind.Missing;
+        }
+
+        var hello = _windowsHello.Snapshot;
+        if (!hello.IsRequired || hello.IsUnlocked)
+        {
+            return _sessionCacheUnavailable
+                ? ClientStateAccessKind.Missing
+                : ClientStateAccessKind.Available;
         }
 
         return ClientStateAccessKind.Locked;
@@ -96,7 +124,7 @@ public sealed class ProtectedClientStateStore :
         return new WindowsHelloStatus(
             availability.IsAvailable,
             availability.Label,
-            _windowsHelloRequired,
+            _windowsHello.Snapshot.IsRequired,
             GetAccessState());
     }
 
@@ -104,6 +132,7 @@ public sealed class ProtectedClientStateStore :
         nint windowHandle,
         CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (GetAccessState() == ClientStateAccessKind.Missing)
         {
             throw new InvalidOperationException(
@@ -112,95 +141,74 @@ public sealed class ProtectedClientStateStore :
 
         var availability = await _windowsHelloAuth.GetAvailabilityAsync(
             cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
         if (!availability.IsAvailable)
         {
             throw new InvalidOperationException(
                 "Windows Hello недоступен на этом устройстве.");
         }
 
-        var verified = await _windowsHelloAuth.VerifyAsync(
-            windowHandle,
-            "Подтвердите включение Windows Hello для VEX.",
-            cancellationToken).ConfigureAwait(false);
-        if (!verified.Success)
-        {
-            throw new InvalidOperationException(
-                verified.Message);
-        }
-
-        _windowsHelloRequired = true;
-        _sessionUnlocked = true;
-        SaveProtected(
-            _windowsHelloPreferenceFile,
-            new StoredWindowsHelloPreference(
-                Enabled: true));
+        await _windowsHello.SetRequiredAsync(true,
+            token => VerifyHelloAsync(windowHandle,
+                "Подтвердите включение Windows Hello для VEX.", token),
+            PersistHelloPreference, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task UnlockAsync(
         nint windowHandle,
         CancellationToken cancellationToken)
     {
-        if (!_windowsHelloRequired)
-        {
-            _sessionUnlocked = true;
-            return;
-        }
-
-        if (GetAccessState() == ClientStateAccessKind.Missing)
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_windowsHello.Snapshot.IsRequired && GetAccessState() == ClientStateAccessKind.Missing)
         {
             throw new InvalidOperationException(
                 "Сохраненная сессия не найдена.");
         }
 
-        var verified = await _windowsHelloAuth.VerifyAsync(
-            windowHandle,
-            "Подтвердите вход в VEX через Windows Hello.",
+        await _windowsHello.UnlockAsync(
+            token => VerifyHelloAsync(windowHandle,
+                "Подтвердите вход в VEX через Windows Hello.", token),
             cancellationToken).ConfigureAwait(false);
-        if (!verified.Success)
-        {
-            throw new InvalidOperationException(
-                verified.Message);
-        }
-
-        _sessionUnlocked = true;
     }
 
     public async Task DisableWindowsHelloAsync(
         nint windowHandle,
         CancellationToken cancellationToken)
     {
-        if (_windowsHelloRequired)
-        {
-            var verified = await _windowsHelloAuth.VerifyAsync(
-                windowHandle,
-                "Подтвердите отключение Windows Hello для VEX.",
-                cancellationToken).ConfigureAwait(false);
-            if (!verified.Success)
-            {
-                throw new InvalidOperationException(
-                    verified.Message);
-            }
-        }
-
-        _windowsHelloRequired = false;
-        _sessionUnlocked = true;
-        SaveProtected(
-            _windowsHelloPreferenceFile,
-            new StoredWindowsHelloPreference(
-                Enabled: false));
+        await _windowsHello.SetRequiredAsync(false,
+            token => VerifyHelloAsync(windowHandle,
+                "Подтвердите отключение Windows Hello для VEX.", token),
+            PersistHelloPreference, cancellationToken).ConfigureAwait(false);
     }
+
+    private async Task VerifyHelloAsync(nint windowHandle, string message,
+        CancellationToken cancellationToken)
+    {
+        var verified = await _windowsHelloAuth.VerifyAsync(windowHandle, message,
+            cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!verified.Success) throw new InvalidOperationException(verified.Message);
+    }
+
+    private void PersistHelloPreference(bool required, CancellationToken cancellationToken) =>
+        SaveProtected(_windowsHelloPreferenceFile,
+            new StoredWindowsHelloPreference(required), cancellationToken);
 
     public string GetOrCreateInstallationId()
     {
-        if (File.Exists(_installationIdFile))
+        try
         {
-            return UnprotectString(_installationIdFile);
+            var stored = UnprotectString(_installationIdFile);
+            return !string.IsNullOrWhiteSpace(stored)
+                ? stored
+                : throw new JsonException("Сохраненный идентификатор VEX поврежден.");
         }
-
-        var installationId = "win-" +
-            Guid.NewGuid().ToString("N");
-        ProtectString(_installationIdFile, installationId);
-        return installationId;
+        catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException)
+        {
+            var installationId = "win-" + Guid.NewGuid().ToString("N");
+            ProtectString(_installationIdFile, installationId);
+            return installationId;
+        }
     }
 
     public NativeClientState? Load()
@@ -210,27 +218,21 @@ public sealed class ProtectedClientStateStore :
             return null;
         }
 
-        var protectedState = File.ReadAllBytes(_stateFile);
-        var clearState = ProtectedData.Unprotect(
-            protectedState,
-            Entropy,
-            DataProtectionScope.CurrentUser);
-        try
+        var result = ProtectedStateFileReader.Read<NativeClientState>(
+            _stateFile,
+            Unprotect,
+            JsonOptions,
+            NativeClientStateValidation.IsValid);
+        if (result.Kind is ProtectedFileReadKind.Unusable or ProtectedFileReadKind.Unavailable)
         {
-            return JsonSerializer.Deserialize<NativeClientState>(
-                clearState,
-                JsonOptions);
+            _sessionCacheUnavailable = true;
+            StoredSessionError = result.Kind == ProtectedFileReadKind.Unavailable
+                ? "Сохраненные данные VEX недоступны. Проверьте доступ к папке приложения и повторите запуск."
+                : "Сохраненная сессия повреждена или недоступна для этого пользователя Windows. Выполните вход заново.";
+            return null;
         }
-        catch (JsonException error)
-        {
-            throw new InvalidOperationException(
-                "The protected VEX client state is invalid.",
-                error);
-        }
-        finally
-        {
-            CryptographicOperations.ZeroMemory(clearState);
-        }
+        StoredSessionError = null;
+        return result.Value;
     }
 
     public NativeDeviceState? LoadDevice() =>
@@ -242,14 +244,18 @@ public sealed class ProtectedClientStateStore :
         cancellationToken.ThrowIfCancellationRequested();
         var stored = LoadProtected<StoredDeviceIdentity>(
             _deviceIdentityFile);
-        if (stored is not null &&
-            stored.Version == 1 &&
-            stored.KeyType == DeviceIdentity.KeyTypeP256Jwk &&
-            stored.PublicKey is not null &&
-            stored.PrivateKeyD is not null &&
-            stored.PublicKeyX is not null &&
-            stored.PublicKeyY is not null)
+        if (stored is not null)
         {
+            if (stored.Version != 1 ||
+                stored.KeyType != DeviceIdentity.KeyTypeP256Jwk ||
+                string.IsNullOrWhiteSpace(stored.PublicKey) ||
+                string.IsNullOrWhiteSpace(stored.TrustLevel) ||
+                stored.PrivateKeyD is not { Length: 32 } ||
+                stored.PublicKeyX is not { Length: 32 } ||
+                stored.PublicKeyY is not { Length: 32 })
+            {
+                throw new JsonException("Сохраненный ключ устройства VEX поврежден.");
+            }
             return Task.FromResult<DeviceIdentity?>(
                 new DeviceIdentity(
                     stored.PublicKey,
@@ -276,6 +282,8 @@ public sealed class ProtectedClientStateStore :
     public void Save(NativeClientState state)
     {
         ArgumentNullException.ThrowIfNull(state);
+        if (!NativeClientStateValidation.IsValid(state))
+            throw new JsonException("Сохраненная сессия VEX неполна или содержит неподтвержденное VPN-устройство.");
         var clearState = JsonSerializer.SerializeToUtf8Bytes(
             state,
             JsonOptions);
@@ -290,14 +298,18 @@ public sealed class ProtectedClientStateStore :
             var temporaryFile = _stateFile + ".new";
             File.WriteAllBytes(temporaryFile, protectedState);
             File.Move(temporaryFile, _stateFile, overwrite: true);
-            SaveProtected(
-                _deviceStateFile,
-                new NativeDeviceState(
-                    state.InstallationId,
-                    state.DeviceId,
-                    state.LocationId,
-                    state.Identity));
-            _sessionUnlocked = true;
+            if (!state.VpnProvisioningPending)
+                SaveProtected(
+                    _deviceStateFile,
+                    new NativeDeviceState(
+                        state.InstallationId,
+                        state.DeviceId,
+                        state.LocationId,
+                        state.Identity,
+                        state.Session.User.Id));
+            _windowsHello.SessionSaved();
+            _sessionCacheUnavailable = false;
+            StoredSessionError = null;
         }
         finally
         {
@@ -312,34 +324,31 @@ public sealed class ProtectedClientStateStore :
             File.Delete(_stateFile);
         }
 
-        _sessionUnlocked = !_windowsHelloRequired;
+        _windowsHello.SessionCleared();
+        _sessionCacheUnavailable = false;
+        StoredSessionError = null;
     }
 
     private static T? LoadProtected<T>(string path)
     {
-        if (!File.Exists(path))
+        var result = ReadProtected<T>(path);
+        if (result.Error is not null)
         {
-            return default;
+            // Device keys remain strict: a failed read must never generate a
+            // replacement identity over a temporarily inaccessible file.
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(result.Error).Throw();
         }
-
-        var protectedValue = File.ReadAllBytes(path);
-        var clearValue = ProtectedData.Unprotect(
-            protectedValue,
-            Entropy,
-            DataProtectionScope.CurrentUser);
-        try
-        {
-            return JsonSerializer.Deserialize<T>(
-                clearValue,
-                JsonOptions);
-        }
-        finally
-        {
-            CryptographicOperations.ZeroMemory(clearValue);
-        }
+        return result.Value;
     }
 
-    private static void SaveProtected<T>(string path, T value)
+    private static ProtectedFileReadResult<T> ReadProtected<T>(string path) =>
+        ProtectedStateFileReader.Read<T>(path, Unprotect, JsonOptions);
+
+    private static byte[] Unprotect(byte[] value) =>
+        ProtectedData.Unprotect(value, Entropy, DataProtectionScope.CurrentUser);
+
+    private static void SaveProtected<T>(string path, T value,
+        CancellationToken cancellationToken = default)
     {
         var clearValue = JsonSerializer.SerializeToUtf8Bytes(
             value,
@@ -350,8 +359,7 @@ public sealed class ProtectedClientStateStore :
                 clearValue,
                 Entropy,
                 DataProtectionScope.CurrentUser);
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllBytes(path, protectedValue);
+            ProtectedStateFileWriter.Write(path, protectedValue, cancellationToken);
         }
         finally
         {
@@ -404,5 +412,5 @@ public sealed class ProtectedClientStateStore :
         byte[] PublicKeyY);
 
     private sealed record StoredWindowsHelloPreference(
-        bool Enabled);
+        [property: System.Text.Json.Serialization.JsonRequired] bool Enabled);
 }

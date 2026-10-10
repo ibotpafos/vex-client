@@ -148,6 +148,21 @@ final class IosTunnelTransitionTests: XCTestCase {
     XCTAssertEqual(system.starts, ["account-B"])
   }
 
+  func testFailedReloadCannotStartAndReleasesQueueForNextConnect() async throws {
+    let system = FakeTunnelSystem()
+    system.failFirstReload = true
+    let transition = IosTunnelTransition(operations: system.operations)
+    do {
+      try await transition.connect(config: "account-A")
+      XCTFail("A failed preference reload must be reported")
+    } catch FakeTunnelError.reloadFailed {
+    }
+    XCTAssertEqual(system.starts, [])
+    try await transition.connect(config: "account-B")
+    XCTAssertEqual(system.starts, ["account-B"])
+    XCTAssertEqual(system.activeConfig, "account-B")
+  }
+
   func testSequentialConnectAndDisconnectPreserveNormalBehavior() async throws {
     let system = FakeTunnelSystem()
     let transition = IosTunnelTransition(operations: system.operations)
@@ -158,6 +173,51 @@ final class IosTunnelTransitionTests: XCTestCase {
     XCTAssertEqual(system.events, ["load", "configure:account-A", "save-begin:account-A",
                                    "save-end:account-A", "reload:account-A", "start:account-A",
                                    "load-existing", "stop:account-A"])
+  }
+
+  func testDisconnectStopsKnownConnectionWhenPreferencesCannotLoad() async throws {
+    let system = FakeTunnelSystem()
+    let transition = IosTunnelTransition(operations: system.operations)
+    try await transition.connect(config: "account-A")
+    system.failLoadExisting = true
+
+    try await transition.disconnect()
+
+    XCTAssertNil(system.activeConfig, "A preference read failure must not leave the known tunnel running")
+    XCTAssertEqual(system.events.suffix(2), ["load-existing", "stop:account-A"])
+  }
+
+  func testAlreadyCancelledRequestDoesNotSupersedePendingConnect() async throws {
+    let system = FakeTunnelSystem()
+    let gate = system.pause(.load)
+    let transition = IosTunnelTransition(operations: system.operations)
+    let connect = Task { try await transition.connect(config: "account-A") }
+    await gate.waitUntilEntered()
+    let cancelledGate = PreferenceGate()
+    let completion = CancelledRequestCompletion()
+    let cancelled = Task {
+      defer { completion.markFinished() }
+      await cancelledGate.pause()
+      try await transition.connect(config: "cancelled-account")
+    }
+    await cancelledGate.waitUntilEntered()
+    cancelled.cancel()
+    await cancelledGate.open()
+    let deadline = Date().addingTimeInterval(5)
+    while !completion.isFinished {
+      if await transition.generation != 1 { break }
+      guard Date() < deadline else {
+        await gate.open()
+        throw FakeTunnelError.requestTimedOut
+      }
+      await Task.yield()
+    }
+    let generation = await transition.generation
+    XCTAssertEqual(generation, 1)
+    await gate.open()
+    await assertCancelled(cancelled)
+    try await connect.value
+    XCTAssertEqual(system.starts, ["account-A"])
   }
 
   private func waitForRequest(_ generation: UInt64, in transition: IosTunnelTransition<FakeManager>) async throws {
@@ -181,6 +241,8 @@ final class IosTunnelTransitionTests: XCTestCase {
 
 private enum FakeTunnelError: Error {
   case saveFailed
+  case loadFailed
+  case reloadFailed
   case requestTimedOut
 }
 
@@ -226,6 +288,8 @@ private final class FakeTunnelSystem: @unchecked Sendable {
   private var activeSaves = 0
   private var maxActiveSaves = 0
   var failFirstSave = false
+  var failLoadExisting = false
+  var failFirstReload = false
 
   init(storedConfig: String? = nil) {
     preferenceConfig = storedConfig
@@ -258,6 +322,7 @@ private final class FakeTunnelSystem: @unchecked Sendable {
           return preferenceConfig.map { FakeManager(config: $0) }
         }
         await takeGate(.loadExisting)?.pause()
+        if locked({ failLoadExisting }) { throw FakeTunnelError.loadFailed }
         return manager
       },
       configure: { [self] manager, config in
@@ -287,6 +352,11 @@ private final class FakeTunnelSystem: @unchecked Sendable {
       reload: { [self] manager in
         locked { recordedEvents.append("reload:\(manager.config ?? "")") }
         await takeGate(.reload)?.pause()
+        let failed = locked { () -> Bool in
+          if failFirstReload { failFirstReload = false; return true }
+          return false
+        }
+        if failed { throw FakeTunnelError.reloadFailed }
         locked { manager.config = preferenceConfig }
       },
       start: { [self] manager in
@@ -310,4 +380,11 @@ private final class FakeTunnelSystem: @unchecked Sendable {
     defer { lock.unlock() }
     return body()
   }
+}
+
+private final class CancelledRequestCompletion: @unchecked Sendable {
+  private let lock = NSLock()
+  private var finished = false
+  var isFinished: Bool { lock.lock(); defer { lock.unlock() }; return finished }
+  func markFinished() { lock.lock(); finished = true; lock.unlock() }
 }

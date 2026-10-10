@@ -8,7 +8,25 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="../../src/Vex.Windows.App/Services/CustomerRealtimeSessionRecovery.cs" Link="CustomerRealtimeSessionRecovery.cs" />
+    <Compile Include="../../src/Vex.Windows.App/Auth/NativeAuthService.cs" Link="NativeAuthService.cs" />
     <ProjectReference Include="../../src/Vex.Windows.Core/Vex.Windows.Core.csproj" />
     <ProjectReference Include="../../src/Vex.Windows.Client/Vex.Windows.Client.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="../../src/Vex.Windows.Service/Runtime/NetworkSafetyController.cs" Link="NetworkSafetyController.cs" />
+    <Compile Include="../../src/Vex.Windows.Service/WindowsServiceOptions.cs" Link="WindowsServiceOptions.cs" />
+    <Compile Include="../../src/Vex.Windows.App/Services/WindowsServiceMaintenanceService.cs" Link="WindowsServiceMaintenanceService.cs" />
+    <Compile Include="../../src/Vex.Windows.App/Services/UiPreviewContext.cs" Link="UiPreviewContext.cs" />
+    <Compile Include="../../src/Vex.Windows.App/Services/DiagnosticsQueueService.cs" Link="DiagnosticsQueueService.cs" />
+    <Compile Include="../../src/Vex.Windows.App/Services/VpnUiStateService.cs" Link="VpnUiStateService.cs" />
+    <Compile Include="../../src/Vex.Windows.App/Services/ProfileWarmupTrustStore.cs" Link="ProfileWarmupTrustStore.cs" />
+    <Compile Include="../../src/Vex.Windows.App/Services/VpnProductParityService.cs" Link="VpnProductParityService.cs" />
+    <Compile Include="../../src/Vex.Windows.App/Services/NativeClientPreferences.cs" Link="NativeClientPreferences.cs" />
+    <Compile Include="../../src/Vex.Windows.App/Services/NativeUpdateService.cs" Link="NativeUpdateService.cs" />
+    <Compile Include="../../src/Vex.Windows.App/Services/NativeUpdateService.Recovery.cs" Link="NativeUpdateService.Recovery.cs" />
+    <Compile Include="../../src/Vex.Windows.App/Services/NativeClientPreferencesJson.cs" Link="NativeClientPreferencesJson.cs" />
+    <Compile Include="../../src/Vex.Windows.App/Services/ActiveEntitlementMonitor.cs" Link="ActiveEntitlementMonitor.cs" />
   </ItemGroup>
 </Project>

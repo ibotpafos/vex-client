@@ -44,5 +44,11 @@ public sealed record VpnTunnelDiagnostics(
         Ipv4RouteOk &&
         Ipv6RouteOk &&
         DnsConfigured &&
-        EndpointBypassOk;
+        EndpointBypassOk &&
+        LeakProtection != VpnLeakProtectionState.Degraded &&
+        LatestHandshakeAt is not null &&
+        !Findings.Any(finding => finding is
+            "handshake_pending" or "handshake_stale" or
+            "tunnel_peer_status_unavailable" or "tunnel_peer_status_invalid" or
+            "firewall_unverified" or "firewall_policy_unverified");
 }

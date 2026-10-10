@@ -6,7 +6,6 @@ public enum AppSection
 {
     Home,
     Account,
-    Support,
     Settings,
 }
 
@@ -22,7 +21,6 @@ public static class AppSectionCatalog
         [
             new(AppSection.Home, "Главная", "\uE80F"),
             new(AppSection.Account, "Аккаунт", "\uE77B"),
-            new(AppSection.Support, "Поддержка", "\uE8BD"),
             new(AppSection.Settings, "Настройки", "\uE713"),
         ]);
 }

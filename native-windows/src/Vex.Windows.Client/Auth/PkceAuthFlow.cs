@@ -9,6 +9,11 @@ public enum WebAuthMode
     Register,
 }
 
+public enum WebAuthProvider
+{
+    Google,
+}
+
 public sealed record PendingPkceChallenge(
     string Verifier,
     string State);
@@ -31,7 +36,8 @@ public static class PkceAuthFlow
         string deviceName,
         string platform,
         WebAuthMode mode,
-        Func<int, string>? randomString = null)
+        Func<int, string>? randomString = null,
+        WebAuthProvider? provider = null)
     {
         ArgumentNullException.ThrowIfNull(apiBaseUri);
         randomString ??= CreateRandomString;
@@ -64,6 +70,14 @@ public static class PkceAuthFlow
                 QueryItem("platform", platform),
                 QueryItem("mode", mode == WebAuthMode.Register ? "register" : "login"),
             });
+        if (provider is not null)
+        {
+            if (provider != WebAuthProvider.Google)
+            {
+                throw new ArgumentOutOfRangeException(nameof(provider));
+            }
+            builder.Query += "&" + QueryItem("provider", "google");
+        }
 
         return new AppWebAuthRequest(
             builder.Uri,

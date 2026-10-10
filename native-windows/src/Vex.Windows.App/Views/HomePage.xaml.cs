@@ -1,7 +1,15 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
+using Microsoft.UI.Xaml.Data;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Hosting;
+using Microsoft.UI.Composition;
+using System.Numerics;
 using System.Security.Cryptography;
+using Windows.Foundation;
+using Windows.UI.ViewManagement;
 using Vex.Windows.App.Services;
 using Vex.Windows.Client.Api;
 using Vex.Windows.Client.Session;
@@ -14,34 +22,54 @@ namespace Vex.Windows.App.Views;
 
 public sealed partial class HomePage : Page
 {
-    private static readonly TimeSpan RefreshInterval =
-        TimeSpan.FromSeconds(10);
     private readonly AppServices _services = AppServices.Current;
     private readonly List<VpnLocation> _locations = [];
-    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _refreshTimer;
-    private DateTimeOffset _lastRecoveryAttempt = DateTimeOffset.MinValue;
     private bool _serverDialogOpen;
+    private int _busyRequestCount;
+    private bool _requestBusy => _busyRequestCount > 0;
+    private CancellationTokenSource? _pageLifetime;
+    private int _locationLoadGeneration;
+    private bool _catalogLoading;
+    private bool _selectionBusy;
+    private bool _synchronizingFilter;
+    private string? _catalogError;
+    private IReadOnlyList<VpnLocation> _filteredLocations = [];
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _catalogTimer;
+    private Flyout? _countryFlyout;
+    private VpnLocation? _pendingLocation;
+    private readonly UISettings _uiSettings = new();
+    private readonly List<double> _receivedHistory = [];
+    private readonly List<double> _sentHistory = [];
+    private ulong? _previousReceivedBytes;
+    private ulong? _previousSentBytes;
+    private DateTimeOffset _lastTrafficSampleAt;
+    private bool _heroAnimationsStarted;
+    private bool _heroWasConnected;
+    private string? _locationCardsSignature;
+    private int _catalogRenderGeneration;
 
-#if DEBUG
-    private static bool IsPreviewMode =>
-        string.Equals(
-            Environment.GetEnvironmentVariable("VEX_WINDOWS_PREVIEW"),
-            "1",
-            StringComparison.Ordinal);
-#else
-    private static bool IsPreviewMode => false;
-#endif
+    private CollectionViewSource CatalogSource => (CollectionViewSource)Resources["ServerCatalogSource"];
+
+    private static bool IsPreviewMode => UiPreviewContext.IsAuthenticated;
 
     public HomePage()
     {
         InitializeComponent();
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
+        SynchronizeCatalogFilter();
         Render();
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs args)
     {
+        if (_pageLifetime is not null) return;
+        _pageLifetime = new CancellationTokenSource();
+        var lifetime = _pageLifetime;
+        if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 19041))
+            _uiSettings.AnimationsEnabledChanged += OnAnimationsEnabledChanged;
+        UpdateResponsiveLayout();
+        StartHeroAnimations();
         _services.VpnUiState.Changed += OnVpnUiStateChanged;
         _services.Preferences.Changed += OnPreferencesChanged;
         _services.CustomerRealtimeChanged += OnCustomerRealtimeChanged;
@@ -51,19 +79,162 @@ public sealed partial class HomePage : Page
             return;
         }
 
-        StartRefreshTimer();
         await LoadLocationsAsync();
-        await RefreshStatusAsync();
+        if (!lifetime.IsCancellationRequested) await RefreshStatusAsync();
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs args)
     {
+        _pageLifetime?.Cancel();
+        _pageLifetime?.Dispose();
+        _pageLifetime = null;
+        if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 19041))
+            _uiSettings.AnimationsEnabledChanged -= OnAnimationsEnabledChanged;
+        StopHeroAnimations();
+        _locationLoadGeneration++;
+        _catalogTimer?.Stop();
+        _catalogTimer = null;
+        _countryFlyout?.Hide();
+        _countryFlyout = null;
+        if (_serverDialogOpen) ServerPickerDialog.Hide();
         _services.VpnUiState.Changed -= OnVpnUiStateChanged;
         _services.Preferences.Changed -= OnPreferencesChanged;
         _services.CustomerRealtimeChanged -= OnCustomerRealtimeChanged;
-        _refreshTimer?.Stop();
-        _refreshTimer = null;
     }
+
+    private void OnHomeSizeChanged(object sender, SizeChangedEventArgs args) => UpdateResponsiveLayout();
+
+    private void UpdateResponsiveLayout()
+    {
+        if (HomeRoot is null || ReceivedCard is null) return;
+        var compact = HomeRoot.ActualWidth < 620;
+        HomeContent.Margin = new Thickness(compact ? 20 : 30, 38, compact ? 20 : 30, 12);
+        ReceivedCard.Width = SentCard.Width = compact ? 110 : 136;
+        PowerControlColumn.Width = new GridLength(compact ? 216 : 244);
+        RefreshLocationCards();
+        if (_serverDialogOpen) UpdateServerPickerSize();
+    }
+
+    private void UpdateServerPickerSize()
+    {
+        if (XamlRoot is not { } root) return;
+        ServerPickerContent.Width = Math.Clamp(root.Size.Width - 88, 260, 440);
+        ServerPickerContent.MaxHeight = Math.Max(280, root.Size.Height - 96);
+    }
+
+    private IEnumerable<Microsoft.UI.Xaml.Shapes.Ellipse> OrbitRings =>
+        [Orbit0, Orbit1, Orbit2, Orbit3, Orbit4, Orbit5];
+
+    private void OnAnimationsEnabledChanged(UISettings sender, object args) =>
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            StartHeroAnimations();
+            if (!_uiSettings.AnimationsEnabled) SetPowerHover(false);
+        });
+
+    private void StartHeroAnimations()
+    {
+        if (_heroAnimationsStarted) StopHeroAnimations();
+        if (_pageLifetime is null || !_uiSettings.AnimationsEnabled) return;
+        var index = 0;
+        foreach (var ring in OrbitRings)
+        {
+            var visual = ElementCompositionPreview.GetElementVisual(ring);
+            visual.CenterPoint = new Vector3((float)ring.Width / 2, (float)ring.Height / 2, 0);
+            var animation = visual.Compositor.CreateVector3KeyFrameAnimation();
+            animation.InsertKeyFrame(0, Vector3.One);
+            animation.InsertKeyFrame(0.48f, new Vector3(_heroWasConnected ? 1.065f : 1.035f, _heroWasConnected ? 1.065f : 1.035f, 1));
+            animation.InsertKeyFrame(1, Vector3.One);
+            animation.Duration = TimeSpan.FromSeconds(_heroWasConnected ? 3.6 : 4.4);
+            animation.DelayTime = TimeSpan.FromMilliseconds(index++ * 90);
+            animation.IterationBehavior = AnimationIterationBehavior.Forever;
+            visual.StartAnimation("Scale", animation);
+        }
+        _heroAnimationsStarted = true;
+    }
+
+    private void StopHeroAnimations()
+    {
+        foreach (var ring in OrbitRings)
+        {
+            var visual = ElementCompositionPreview.GetElementVisual(ring);
+            visual.StopAnimation("Scale");
+            visual.Scale = Vector3.One;
+        }
+        _heroAnimationsStarted = false;
+    }
+
+    private void RenderOrbitColors(bool connected)
+    {
+        var index = 0;
+        foreach (var ring in OrbitRings)
+        {
+            var opacity = Math.Max(0.028, (connected ? 0.21 : 0.14) - index++ * 0.026);
+            ring.Stroke = HomeBrush((byte)Math.Round(opacity * 255), connected ? (byte)0xB9 : (byte)0x22,
+                connected ? (byte)0xFB : (byte)0xD3, connected ? (byte)0xFF : (byte)0xEE);
+        }
+        PowerGlow.Fill = HomeBrush(connected ? (byte)0x10 : (byte)0x09, 0x22, 0xD3, 0xEE);
+    }
+
+    private void OnPowerPointerEntered(object sender, PointerRoutedEventArgs args) => SetPowerHover(true);
+
+    private void OnPowerPointerExited(object sender, PointerRoutedEventArgs args) => SetPowerHover(false);
+
+    private void SetPowerHover(bool hovered)
+    {
+        var scale = hovered && _uiSettings.AnimationsEnabled && PowerButton.IsEnabled ? 1.035 : 1;
+        PowerButton.RenderTransformOrigin = new Point(0.5, 0.5);
+        PowerButton.RenderTransform = new ScaleTransform { ScaleX = scale, ScaleY = scale };
+    }
+
+    private void RecordTrafficSample()
+    {
+        var received = _services.VpnUiState.ReceivedBytes;
+        var sent = _services.VpnUiState.SentBytes;
+        var now = DateTimeOffset.UtcNow;
+        if (_previousReceivedBytes is null || _previousSentBytes is null ||
+            received < _previousReceivedBytes || sent < _previousSentBytes)
+        {
+            _previousReceivedBytes = received;
+            _previousSentBytes = sent;
+            _lastTrafficSampleAt = now;
+            _receivedHistory.Clear();
+            _sentHistory.Clear();
+        }
+        var elapsed = (now - _lastTrafficSampleAt).TotalSeconds;
+        if (elapsed >= 0.8)
+        {
+            AppendTrafficSample(_receivedHistory, (received - _previousReceivedBytes!.Value) / elapsed);
+            AppendTrafficSample(_sentHistory, (sent - _previousSentBytes!.Value) / elapsed);
+            _previousReceivedBytes = received;
+            _previousSentBytes = sent;
+            _lastTrafficSampleAt = now;
+        }
+        ReceivedSparkline.Points = TrafficPoints(_receivedHistory);
+        SentSparkline.Points = TrafficPoints(_sentHistory);
+    }
+
+    private static void AppendTrafficSample(List<double> history, double bytesPerSecond)
+    {
+        var target = Math.Clamp(0.1 + Math.Log10(bytesPerSecond + 1) / 7 * 0.9, 0.1, 1);
+        history.Add(history.Count == 0 ? target : history[^1] * 0.72 + target * 0.28);
+        if (history.Count > 12) history.RemoveAt(0);
+    }
+
+    private static PointCollection TrafficPoints(List<double> history)
+    {
+        var points = new PointCollection();
+        for (var index = 0; index < 12; index++)
+        {
+            var sampleIndex = index - (12 - history.Count);
+            var level = sampleIndex < 0 ? 0.1 : history[sampleIndex];
+            points.Add(new Point(index * 120.0 / 11, 18 * (1 - level)));
+        }
+        return points;
+    }
+
+    private static SolidColorBrush HomeBrush(byte alpha, byte red, byte green, byte blue) =>
+        new(global::Windows.UI.Color.FromArgb(alpha, red, green, blue));
 
     private void OnCustomerRealtimeChanged(
         object? sender,
@@ -81,7 +252,7 @@ public sealed partial class HomePage : Page
         }
         DispatcherQueue.TryEnqueue(async () =>
         {
-            if (CoordinatorStateAvailable())
+            if (_pageLifetime is not null && CoordinatorStateAvailable())
             {
                 await LoadLocationsAsync();
             }
@@ -89,23 +260,26 @@ public sealed partial class HomePage : Page
     }
 
     private bool CoordinatorStateAvailable() =>
-        _services.Coordinator.CurrentState is not null;
+        _services.Coordinator.CurrentStateAccess == ClientStateAccessKind.Available;
 
     private async void OnPowerButtonClick(
         object sender,
         RoutedEventArgs args)
     {
+        if (_services.VpnUiState.IsConnectionInFlight && _services.VpnUiState.ConnectionDesired)
+        {
+            await RunRequestAsync(token => _services.VpnUiState.CancelConnectionAsync(
+                _services.VpnClient.DisconnectAsync, token), alreadySerialized: true);
+            return;
+        }
+        if (_requestBusy || _selectionBusy) return;
         var snapshot = _services.VpnUiState.Snapshot;
         if (!VpnConnectionActionPolicy.ShouldDisconnect(snapshot))
         {
             // Startup and periodic background checks keep this snapshot fresh.
             // Connecting must never wait on the updater's network timeout.
             var update = _services.UpdateService.CurrentSnapshot;
-            if (update.UpdateAvailable &&
-                update.Required &&
-                !global::Windows.ApplicationModel.Package.Current.Id.Name.EndsWith(
-                    ".Dev",
-                    StringComparison.Ordinal))
+            if (update.UpdateAvailable && update.Required)
             {
                 ShowNotice(
                     ErrorMessage("required_update"),
@@ -116,13 +290,9 @@ public sealed partial class HomePage : Page
                 return;
             }
 
+            _services.VpnUiState.MarkConnectionDesired(true);
             await RunRequestAsync(
-                ConnectWithPreferencesAsync);
-            if (_services.VpnUiState.Snapshot.Phase ==
-                VpnConnectionPhase.Connected)
-            {
-                _services.VpnUiState.MarkConnectionDesired(true);
-            }
+                ConnectWithPreferencesAsync, connectionOperation: true);
             return;
         }
 
@@ -134,40 +304,54 @@ public sealed partial class HomePage : Page
     private async Task RefreshStatusAsync()
     {
         await RunRequestAsync(
-            token => _services.VpnClient.GetStatusAsync(token));
+            token => _services.VpnClient.GetStatusAsync(token), showBusy: false);
     }
 
     private async Task LoadLocationsAsync()
     {
+        var generation = ++_locationLoadGeneration;
+        var cancellationToken = _pageLifetime?.Token ?? CancellationToken.None;
+        _catalogLoading = true;
+        _services.MainWindow?.UpdateServerHealth(_locations, loading: true);
+        RenderCatalogStatus();
         try
         {
             var locations = await _services.ProductParity.GetLocationsAsync(
                 _services.Coordinator,
-                CancellationToken.None);
+                cancellationToken);
+            if (cancellationToken.IsCancellationRequested || generation != _locationLoadGeneration) return;
             _locations.Clear();
             _locations.AddRange(locations);
-            LocationPicker.ItemsSource = _locations;
+            _services.MainWindow?.UpdateServerHealth(_locations);
+            _catalogError = null;
             SelectPreferredLocation();
             RefreshLocationCards();
-            LocationCapabilityText.Text = _locations.Count <= 1
-                ? "Сейчас доступен один сервер."
-                : $"{_locations.Count} доступных серверов.";
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
         catch (Exception error) when (
             error is HttpRequestException
                 or InvalidOperationException
                 or NativeClientFlowException
-                or OperationCanceledException)
+                or OperationCanceledException
+                or VexApiException
+                or IOException
+                or UnauthorizedAccessException
+                or CryptographicException)
         {
-            LocationCapabilityText.Text =
-                "Список серверов временно недоступен.";
+            if (generation != _locationLoadGeneration) return;
+            _catalogError = "Не удалось обновить серверы. Сохранённый список остаётся доступен.";
             ShowNotice(
                 error.InnerException?.Message ?? error.Message,
                 InfoBarSeverity.Warning);
         }
         finally
         {
-            Render();
+            if (generation == _locationLoadGeneration)
+            {
+                _catalogLoading = false;
+                RenderCatalogStatus();
+                Render();
+            }
         }
     }
 
@@ -204,7 +388,7 @@ public sealed partial class HomePage : Page
                 "healthy",
                 17),
         ]);
-        LocationPicker.ItemsSource = _locations;
+        _services.MainWindow?.UpdateServerHealth(_locations);
         SelectPreferredLocation();
         RefreshLocationCards();
         FooterMessage.Text = string.Empty;
@@ -212,14 +396,20 @@ public sealed partial class HomePage : Page
     }
 
     private async Task RunRequestAsync(
-        Func<CancellationToken, Task<VpnServiceResponse>> operation)
+        Func<CancellationToken, Task<VpnServiceResponse>> operation,
+        bool showBusy = true,
+        bool connectionOperation = false,
+        bool alreadySerialized = false)
     {
-        PowerButton.IsEnabled = false;
+        if (showBusy) _busyRequestCount++;
+        Render();
         try
         {
-            var response = await _services.VpnUiState.RunAsync(
-                operation,
-                CancellationToken.None);
+            var response = alreadySerialized
+                ? await operation(CancellationToken.None)
+                : connectionOperation
+                    ? await _services.VpnUiState.RunConnectionAsync(operation, CancellationToken.None)
+                    : await _services.VpnUiState.RunAsync(operation, CancellationToken.None);
             if (response.Success)
             {
                 HideNotice();
@@ -242,6 +432,10 @@ public sealed partial class HomePage : Page
                 }
             }
         }
+        catch (OperationCanceledException) when (connectionOperation)
+        {
+            // Explicit cancellation is followed by confirmed service cleanup.
+        }
         catch (Exception error) when (
             error is IOException
                 or UnauthorizedAccessException
@@ -257,14 +451,6 @@ public sealed partial class HomePage : Page
             var errorCode = error is NativeClientFlowException flow
                 ? flow.Code
                 : "vpn_service_unavailable";
-            var failure = VpnConnectionSnapshot.ClientFailure(
-                _services.VpnUiState.Snapshot,
-                errorCode);
-            _services.VpnUiState.Apply(new VpnServiceResponse(
-                requestId: $"ui-{Guid.NewGuid():N}",
-                success: false,
-                snapshot: failure,
-                errorCode: errorCode));
             if (errorCode == "vpn_service_unavailable")
             {
                 HideNotice();
@@ -278,6 +464,7 @@ public sealed partial class HomePage : Page
         }
         finally
         {
+            if (showBusy) _busyRequestCount--;
             Render();
         }
     }
@@ -286,7 +473,7 @@ public sealed partial class HomePage : Page
     {
         try
         {
-            var directory = Path.Combine(
+            var directory = UiPreviewContext.StateDirectory ?? Path.Combine(
                 Environment.GetFolderPath(
                     Environment.SpecialFolder.LocalApplicationData),
                 "VEX",
@@ -306,20 +493,30 @@ public sealed partial class HomePage : Page
         object sender,
         RoutedEventArgs args)
     {
-        if (_serverDialogOpen)
+        if (_serverDialogOpen || XamlRoot is null)
         {
             return;
         }
 
-        SelectPreferredLocation();
+        SelectPreferredLocation(preserveCatalogSelection: false);
+        ServerPickerDialog.XamlRoot = XamlRoot;
+        UpdateServerPickerSize();
         _serverDialogOpen = true;
+        StartCatalogTimer();
         try
         {
+            if (!IsPreviewMode && !_catalogLoading) _ = LoadLocationsAsync();
             await ServerPickerDialog.ShowAsync();
+        }
+        catch (InvalidOperationException error)
+        {
+            LogUiFailure(error);
+            ShowNotice("Не удалось открыть список серверов. Повторите попытку.", InfoBarSeverity.Warning);
         }
         finally
         {
             _serverDialogOpen = false;
+            _catalogTimer?.Stop();
         }
     }
 
@@ -332,44 +529,66 @@ public sealed partial class HomePage : Page
         object sender,
         RoutedEventArgs args)
     {
+        if (!AdmitLocationSelection()) return;
+        _pendingLocation = null;
         AutoServerRadio.IsChecked = true;
         ManualServerRadio.IsChecked = false;
         OnApplyLocationClick(sender, args);
     }
 
-    private void OnLocationItemClick(
-        object sender,
-        ItemClickEventArgs args)
+    private void OnLocationItemClick(object sender, ItemClickEventArgs args)
     {
-        LocationPicker.SelectedItem = args.ClickedItem;
-        AutoServerRadio.IsChecked = false;
-        ManualServerRadio.IsChecked = true;
-        OnApplyLocationClick(sender, args);
+        if (args.ClickedItem is ServerRowPresentation row) SelectLocationCard(row.Location);
     }
 
-    private void OnLocationCarouselItemClick(
-        object sender,
-        ItemClickEventArgs args)
+    private void OnLocationCardClick(object sender, RoutedEventArgs args)
     {
-        if (args.ClickedItem is LocationCardPresentation card)
-        {
-            SelectLocationCard(card.Location);
-        }
+        if (sender is not Button { Tag: ServerCountryGroup group } button || !AdmitLocationSelection()) return;
+        ShowCountryNodes(button, group);
     }
 
-    private void OnLocationCardClick(
-        object sender,
-        RoutedEventArgs args)
+    private void ShowCountryNodes(Button anchor, ServerCountryGroup group)
     {
-        if (sender is Button { Tag: VpnLocation location })
+        _countryFlyout?.Hide();
+        var panel = new StackPanel { Width = 360, Spacing = 8 };
+        panel.Children.Add(new TextBlock
         {
-            SelectLocationCard(location);
-        }
+            Text = group.Title,
+            FontSize = 19,
+            FontWeight = Microsoft.UI.Text.FontWeights.Bold,
+        });
+        panel.Children.Add(new TextBlock { Text = $"Доступно узлов: {group.AvailableNodeCount}", FontSize = 12 });
+        var list = new ListView
+        {
+            ItemsSource = group.Locations.Select(CreateServerRow).ToArray(),
+            ItemTemplate = (DataTemplate)Resources["ServerRowTemplate"],
+            SelectionMode = ListViewSelectionMode.Single,
+            IsItemClickEnabled = true,
+            MaxHeight = 320,
+            MinHeight = Math.Min(group.Locations.Count * 82, 320),
+        };
+        list.ItemClick += OnLocationItemClick;
+        list.KeyDown += OnLocationPickerKeyDown;
+        panel.Children.Add(list);
+        _countryFlyout = new Flyout { Content = panel, Placement = FlyoutPlacementMode.Top };
+        _countryFlyout.ShowAt(anchor);
     }
 
     private void SelectLocationCard(VpnLocation location)
     {
-        LocationPicker.SelectedItem = location;
+        if (!AdmitLocationSelection()) return;
+        if (!ServerCatalog.IsAvailable(location))
+        {
+            ShowNotice("Этот сервер сейчас недоступен. Выберите другой узел.", InfoBarSeverity.Warning);
+            return;
+        }
+        _countryFlyout?.Hide();
+        // Country cards contain presentation groups. VPN commands always use
+        // the original selected node ID, including when the search hides it.
+        var row = (CatalogSource.Source as IReadOnlyList<ServerCountryPresentation>)?
+            .SelectMany(group => group.Rows).FirstOrDefault(item => item.Location.Id == location.Id);
+        if (row is not null) LocationPicker.SelectedItem = row;
+        _pendingLocation = location;
         AutoServerRadio.IsChecked = false;
         ManualServerRadio.IsChecked = true;
         OnApplyLocationClick(LocationCarousel, new RoutedEventArgs());
@@ -378,12 +597,12 @@ public sealed partial class HomePage : Page
     private void OnLocationCardPointerEntered(
         object sender,
         Microsoft.UI.Xaml.Input.PointerRoutedEventArgs args) =>
-        SetCountryArtworkHover(sender as DependencyObject, true);
+        SetCountryArtworkHover(sender as DependencyObject, true, _uiSettings.AnimationsEnabled);
 
     private void OnLocationCardPointerExited(
         object sender,
         Microsoft.UI.Xaml.Input.PointerRoutedEventArgs args) =>
-        SetCountryArtworkHover(sender as DependencyObject, false);
+        SetCountryArtworkHover(sender as DependencyObject, false, _uiSettings.AnimationsEnabled);
 
     private void OnServerModeChecked(
         object sender,
@@ -397,7 +616,7 @@ public sealed partial class HomePage : Page
         }
 
         var auto = AutoServerRadio.IsChecked == true;
-        LocationPicker.IsEnabled = !auto;
+        LocationPicker.IsEnabled = !_selectionBusy;
         ApplyLocationButton.Content = auto
             ? "Использовать автовыбор"
             : "Применить сервер";
@@ -407,8 +626,10 @@ public sealed partial class HomePage : Page
         object sender,
         RoutedEventArgs args)
     {
+        if (!AdmitLocationSelection()) return;
         var auto = AutoServerRadio.IsChecked == true;
-        var selected = LocationPicker.SelectedItem as VpnLocation;
+        var selected = _pendingLocation ?? (LocationPicker.SelectedItem as ServerRowPresentation)?.Location;
+        _pendingLocation = null;
         if (!auto && selected is null)
         {
             ShowNotice(
@@ -417,58 +638,94 @@ public sealed partial class HomePage : Page
             return;
         }
 
-        var selectedLocationId = auto ? null : selected!.Id;
-        _services.Preferences.Update(current => current with
+        if (!auto && !ServerCatalog.IsAvailable(selected!))
         {
-            AutoServerEnabled = auto,
-            SelectedLocationId = selectedLocationId,
-        });
-        if (auto)
-        {
-            if (_services.VpnUiState.Snapshot.Phase ==
-                VpnConnectionPhase.Connected)
-            {
-                await RunRequestAsync(
-                    token => _services.VpnClient.DisconnectAsync(token));
-                await RunRequestAsync(ConnectWithPreferencesAsync);
-            }
-            ServerPickerDialog.Hide();
-            ShowNotice(
-                "Автоматический выбор сервера включен.",
-                InfoBarSeverity.Success);
-            Render();
+            ShowNotice("Этот сервер сейчас недоступен. Выберите другой узел.", InfoBarSeverity.Warning);
             return;
         }
-
+        var selectedLocationId = auto ? null : selected!.Id;
+        var previousPreferences = _services.Preferences.Current;
+        if (auto)
+        {
+            await ApplyAutomaticSelectionAsync(previousPreferences);
+            return;
+        }
         SetLocationBusy(true);
+        var selectionApplied = false;
+        var preferencesSaved = false;
         try
         {
-            var result = await _services.ProductParity.SelectLocationAsync(
-                _services.Coordinator,
-                selectedLocationId!,
-                reconnectIfConnected:
-                    _services.VpnUiState.Snapshot.Phase ==
-                    VpnConnectionPhase.Connected,
-                CancellationToken.None);
-            ShowNotice(
-                result.Message,
-                result.Applied
-                    ? InfoBarSeverity.Success
-                    : InfoBarSeverity.Informational);
-            if (result.Applied)
+            LocationSelectionResult? result = null;
+            var reconnect = _services.VpnUiState.Snapshot.Phase == VpnConnectionPhase.Connected &&
+                _services.VpnUiState.ConnectionDesired;
+            async Task<VpnServiceResponse> ApplySelectionAsync(CancellationToken token)
             {
-                await RefreshStatusAsync();
+                if (!CanApplySelectionInsideGate(reconnect))
+                {
+                    result = new LocationSelectionResult(false, ErrorMessage("vpn_operation_in_progress"));
+                    return SelectionUnchangedResponse();
+                }
+                token.ThrowIfCancellationRequested();
+                _services.Preferences.Update(current => current with
+                {
+                    AutoServerEnabled = false,
+                    SelectedLocationId = selectedLocationId,
+                });
+                preferencesSaved = true;
+                result = await _services.ProductParity.SelectLocationAsync(
+                    _services.Coordinator,
+                    selectedLocationId!,
+                    reconnectIfConnected:
+                        _services.VpnUiState.Snapshot.Phase ==
+                        VpnConnectionPhase.Connected && _services.VpnUiState.ConnectionDesired,
+                    token,
+                    _services.Preferences.Current.AntiLeakEnabled);
+                selectionApplied = result.Applied;
+                return await _services.VpnClient.GetDiagnosticsAsync(token);
             }
-            ServerPickerDialog.Hide();
+            var response = reconnect
+                ? await _services.VpnUiState.RunConnectionAsync(ApplySelectionAsync, CancellationToken.None, onlyWhenIdle: true)
+                : await _services.VpnUiState.RunAsync(ApplySelectionAsync, CancellationToken.None);
+            ShowNotice(
+                response.Success ? result!.Message : ErrorMessage(response.ErrorCode),
+                response.Success && result!.Applied
+                    ? InfoBarSeverity.Success
+                    : InfoBarSeverity.Warning);
+            if (result!.Applied) ServerPickerDialog.Hide();
         }
         catch (Exception error) when (
             error is InvalidOperationException
                 or NativeClientFlowException
-                or HttpRequestException)
+                or HttpRequestException
+                or VexApiException
+                or IOException
+                or UnauthorizedAccessException
+                or CryptographicException
+                or VpnIpcProtocolException
+                or OperationCanceledException)
         {
-            ShowNotice(
-                error.Message,
-                InfoBarSeverity.Error);
+            if (preferencesSaved && !selectionApplied)
+            {
+                try
+                {
+                    _services.Preferences.Update(current =>
+                        current.AutoServerEnabled == auto && current.SelectedLocationId == selectedLocationId
+                            ? current with
+                            {
+                                AutoServerEnabled = previousPreferences.AutoServerEnabled,
+                                SelectedLocationId = previousPreferences.SelectedLocationId,
+                            }
+                            : current);
+                }
+                catch (Exception restoreError) when (restoreError is IOException or UnauthorizedAccessException or CryptographicException)
+                {
+                    LogUiFailure(restoreError);
+                }
+                SelectPreferredLocation(preserveCatalogSelection: false);
+            }
+            if (error is not OperationCanceledException)
+                ShowNotice(error is NativeClientFlowException { Code: "vpn_operation_in_progress" }
+                    ? ErrorMessage("vpn_operation_in_progress") : error.Message, InfoBarSeverity.Error);
         }
         finally
         {
@@ -477,42 +734,106 @@ public sealed partial class HomePage : Page
         }
     }
 
-    private void StartRefreshTimer()
+    private async Task ApplyAutomaticSelectionAsync(NativeClientPreferences previousPreferences)
     {
-        _refreshTimer ??= DispatcherQueue.CreateTimer();
-        _refreshTimer.Interval = RefreshInterval;
-        _refreshTimer.IsRepeating = true;
-        _refreshTimer.Tick -= OnRefreshTimerTick;
-        _refreshTimer.Tick += OnRefreshTimerTick;
-        _refreshTimer.Start();
+        var restorationFailed = false;
+        var selectionAdmitted = false;
+        SetLocationBusy(true);
+        _busyRequestCount++;
+        Render();
+        try
+        {
+            var reconnect = _services.VpnUiState.Snapshot.Phase == VpnConnectionPhase.Connected &&
+                _services.VpnUiState.ConnectionDesired && !previousPreferences.AutoServerEnabled;
+            async Task<VpnServiceResponse> ApplySelectionAsync(CancellationToken token)
+            {
+                if (!CanApplySelectionInsideGate(reconnect, allowCurrentConnectedTunnel: previousPreferences.AutoServerEnabled))
+                    return SelectionUnchangedResponse();
+                token.ThrowIfCancellationRequested();
+                _services.Preferences.Update(current => current with
+                {
+                    AutoServerEnabled = true,
+                    SelectedLocationId = null,
+                });
+                selectionAdmitted = true;
+                try
+                {
+                    var snapshot = _services.VpnUiState.Snapshot;
+                    if (snapshot.Phase != VpnConnectionPhase.Connected ||
+                        !_services.VpnUiState.ConnectionDesired || previousPreferences.AutoServerEnabled)
+                        return new VpnServiceResponse(Guid.NewGuid().ToString("N"), true, snapshot, null);
+
+                    // The service admits the replacement signed profile before
+                    // replacing the healthy tunnel. A failed switch keeps the
+                    // coordinator's previous authorization and manual pin.
+                    var switched = await ConnectWithPreferencesAsync(token);
+                    if (!switched.Success) restorationFailed = !RestoreSelectionPreferences(previousPreferences, true, null);
+                    return switched;
+                }
+                catch
+                {
+                    restorationFailed = !RestoreSelectionPreferences(previousPreferences, true, null);
+                    throw;
+                }
+            }
+            var response = reconnect
+                ? await _services.VpnUiState.RunConnectionAsync(ApplySelectionAsync, CancellationToken.None, onlyWhenIdle: true)
+                : await _services.VpnUiState.RunAsync(ApplySelectionAsync, CancellationToken.None);
+            if (!selectionAdmitted)
+            {
+                ShowNotice(ErrorMessage("vpn_operation_in_progress"), InfoBarSeverity.Warning);
+            }
+            else if (response.Success)
+            {
+                ServerPickerDialog.Hide();
+                ShowNotice("Автоматический выбор сервера включен.", InfoBarSeverity.Success);
+            }
+            else
+            {
+                ShowNotice(ErrorMessage(response.ErrorCode) + (restorationFailed
+                    ? " Не удалось сохранить прежние настройки сервера. Проверьте доступ к папке VEX."
+                    : string.Empty), InfoBarSeverity.Error);
+            }
+        }
+        catch (Exception error) when (error is InvalidOperationException or NativeClientFlowException or
+            HttpRequestException or VexApiException or IOException or UnauthorizedAccessException or
+            CryptographicException or VpnIpcProtocolException or OperationCanceledException)
+        {
+            LogUiFailure(error);
+            var message = error is NativeClientFlowException flow ? ErrorMessage(flow.Code)
+                : "Не удалось включить автовыбор. Повторите попытку.";
+            if (error is not OperationCanceledException) ShowNotice(message + (restorationFailed
+                ? " Не удалось сохранить прежние настройки сервера. Проверьте доступ к папке VEX."
+                : string.Empty), InfoBarSeverity.Error);
+        }
+        finally
+        {
+            _busyRequestCount--;
+            SetLocationBusy(false);
+            SelectPreferredLocation();
+            Render();
+        }
     }
 
-    private async void OnRefreshTimerTick(
-        Microsoft.UI.Dispatching.DispatcherQueueTimer sender,
-        object args)
+    private bool RestoreSelectionPreferences(NativeClientPreferences previous, bool auto, string? locationId)
     {
-        if (!PowerButton.IsEnabled)
+        try
         {
-            return;
+            _services.Preferences.Update(current =>
+                current.AutoServerEnabled == auto && current.SelectedLocationId == locationId
+                    ? current with
+                    {
+                        AutoServerEnabled = previous.AutoServerEnabled,
+                        SelectedLocationId = previous.SelectedLocationId,
+                    }
+                    : current);
+            return true;
         }
-
-        await RefreshStatusAsync();
-        var preferences = _services.Preferences.Current;
-        var snapshot = _services.VpnUiState.Snapshot;
-        if (!preferences.AutoRecoveryEnabled ||
-            !_services.VpnUiState.ConnectionDesired ||
-            snapshot.Phase is not (
-                VpnConnectionPhase.Disconnected or
-                VpnConnectionPhase.Error) ||
-            DateTimeOffset.UtcNow - _lastRecoveryAttempt <
-                TimeSpan.FromSeconds(30))
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or CryptographicException)
         {
-            return;
+            LogUiFailure(error);
+            return false;
         }
-
-        _lastRecoveryAttempt = DateTimeOffset.UtcNow;
-        await RunRequestAsync(
-            ConnectWithPreferencesAsync);
     }
 
     private async Task<VpnServiceResponse> ConnectWithPreferencesAsync(
@@ -535,7 +856,7 @@ public sealed partial class HomePage : Page
             Render();
         });
 
-    private void SelectPreferredLocation()
+    private void SelectPreferredLocation(bool preserveCatalogSelection = true)
     {
         if (AutoServerRadio is null ||
             ManualServerRadio is null ||
@@ -547,32 +868,57 @@ public sealed partial class HomePage : Page
         var preferences = _services.Preferences.Current;
         AutoServerRadio.IsChecked = preferences.AutoServerEnabled;
         ManualServerRadio.IsChecked = !preferences.AutoServerEnabled;
-        LocationPicker.SelectedItem = _locations.FirstOrDefault(location =>
-                string.Equals(
-                    location.Id,
-                    preferences.SelectedLocationId,
-                    StringComparison.OrdinalIgnoreCase)) ??
-            _locations.FirstOrDefault(location =>
-                string.Equals(
-                    location.Id,
-                    _services.Coordinator.CurrentState?.LocationId,
-                    StringComparison.OrdinalIgnoreCase)) ??
-            _locations.FirstOrDefault();
-        LocationPicker.IsEnabled = !preferences.AutoServerEnabled;
+        SynchronizeCatalogFilter();
+        RenderServerCatalog(preserveCatalogSelection);
+        RenderSelectionControls();
         RefreshLocationCards();
     }
 
     private void SetLocationBusy(bool busy)
     {
-        ApplyLocationButton.IsEnabled = !busy;
-        LocationPicker.IsEnabled =
-            !busy && AutoServerRadio.IsChecked != true;
-        AutoServerRadio.IsEnabled = !busy;
-        ManualServerRadio.IsEnabled = !busy;
+        _selectionBusy = busy;
+        RenderSelectionControls();
+    }
+
+    private bool CanSelectLocation => !_selectionBusy && !_requestBusy &&
+        ServerPickerInteractionPolicy.CanSelect(_services.VpnUiState.Snapshot.Phase,
+            _services.VpnUiState.IsConnectionInFlight, _services.VpnUiState.IsConnectionCleanupInFlight);
+
+    private bool AdmitLocationSelection()
+    {
+        if (CanSelectLocation) return true;
+        ShowNotice(ErrorMessage("vpn_operation_in_progress"), InfoBarSeverity.Warning);
+        return false;
+    }
+
+    private bool CanApplySelectionInsideGate(bool switchingConnectedTunnel, bool allowCurrentConnectedTunnel = false) =>
+        ServerPickerInteractionPolicy.CanSelect(_services.VpnUiState.Snapshot.Phase,
+            !switchingConnectedTunnel && _services.VpnUiState.IsConnectionInFlight,
+            _services.VpnUiState.IsConnectionCleanupInFlight) &&
+        (switchingConnectedTunnel || allowCurrentConnectedTunnel || _services.VpnUiState.Snapshot.Phase != VpnConnectionPhase.Connected ||
+            !_services.VpnUiState.ConnectionDesired);
+
+    private VpnServiceResponse SelectionUnchangedResponse() =>
+        new(Guid.NewGuid().ToString("N"), true, _services.VpnUiState.Snapshot, null);
+
+    private void RenderSelectionControls()
+    {
+        if (LocationPicker is null || AutoServerButton is null) return;
+        var enabled = CanSelectLocation;
+        ApplyLocationButton.IsEnabled = enabled;
+        LocationPicker.IsEnabled = enabled;
+        LocationCarousel.IsEnabled = enabled;
+        AutoServerRadio.IsEnabled = enabled;
+        ManualServerRadio.IsEnabled = enabled;
+        AutoServerButton.IsEnabled = enabled;
+        EmptyLocationButton.IsEnabled = enabled;
+        if (_countryFlyout?.Content is StackPanel panel && panel.Children.LastOrDefault() is ListView list)
+            list.IsEnabled = enabled;
     }
 
     private void Render()
     {
+        RenderSelectionControls();
         var snapshot = _services.VpnUiState.Snapshot;
         (PowerButtonText.Text, StatusText.Text, PowerButton.IsEnabled) = snapshot.Phase switch
         {
@@ -591,18 +937,50 @@ public sealed partial class HomePage : Page
                 ("Нужна проверка", "Нажмите, чтобы повторить", true),
             _ => ("Неизвестное состояние", "Нажмите, чтобы повторить", true),
         };
-        var busy = snapshot.Phase is
+        var canCancel = _services.VpnUiState.IsConnectionInFlight && _services.VpnUiState.ConnectionDesired;
+        if (canCancel)
+        {
+            PowerButtonText.Text = "Подключение…";
+            StatusText.Text = "Нажмите, чтобы отменить подключение";
+            PowerButton.IsEnabled = true;
+        }
+        else if (_services.VpnUiState.IsConnectionCleanupInFlight && !_services.VpnUiState.ConnectionDesired)
+        {
+            PowerButtonText.Text = "Отключение…";
+            StatusText.Text = "Подтверждаем отмену подключения";
+            PowerButton.IsEnabled = false;
+        }
+        else PowerButton.IsEnabled &= !_requestBusy && !_selectionBusy;
+        var busy = _requestBusy || _services.VpnUiState.IsConnectionInFlight ||
+            _services.VpnUiState.IsConnectionCleanupInFlight || snapshot.Phase is
             VpnConnectionPhase.Connecting or
             VpnConnectionPhase.Disconnecting;
         PowerBusyIndicator.IsActive = busy;
         PowerBusyIndicator.Visibility = busy
             ? Visibility.Visible
             : Visibility.Collapsed;
+        var connected = snapshot.Phase == VpnConnectionPhase.Connected;
+        var tint = (Brush)Application.Current.Resources[connected ? "VexCyanLightBrush" : "VexCyanBrush"];
+        PowerRing.Stroke = tint;
+        PowerGlyph.Foreground = tint;
+        PowerGlyph.Opacity = busy ? 0.22 : 1;
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(PowerButton,
+            canCancel ? "Отменить подключение VPN" :
+                VpnConnectionActionPolicy.ShouldDisconnect(snapshot) ? "Отключить VPN" : "Подключить VPN");
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetHelpText(PowerButton, StatusText.Text);
+        if (connected != _heroWasConnected)
+        {
+            _heroWasConnected = connected;
+            StartHeroAnimations();
+        }
+        RenderOrbitColors(connected);
         FooterMessage.Text = snapshot.ErrorCode is null
             ? string.Empty
             : ErrorMessage(snapshot.ErrorCode);
+        FooterNotice.Visibility = string.IsNullOrWhiteSpace(FooterMessage.Text) ? Visibility.Collapsed : Visibility.Visible;
 
         var preferences = _services.Preferences.Current;
+        AutoServerSelectionIcon.Visibility = preferences.AutoServerEnabled ? Visibility.Visible : Visibility.Collapsed;
         var locationId = preferences.AutoServerEnabled
             ? snapshot.LocationId ??
                 _services.Coordinator.CurrentState?.LocationId
@@ -617,6 +995,7 @@ public sealed partial class HomePage : Page
             _services.VpnUiState.ReceivedBytes);
         SentText.Text = FormatBytes(
             _services.VpnUiState.SentBytes);
+        RecordTrafficSample();
         RefreshLocationCards();
     }
 
@@ -636,19 +1015,240 @@ public sealed partial class HomePage : Page
                     _locations.FirstOrDefault()?.Id
                 : preferences.SelectedLocationId ??
                     _services.VpnUiState.Snapshot.LocationId;
-        LocationCarousel.ItemsSource = _locations
-            .Select(location => LocationCardPresentation.Create(
-                location,
-                string.Equals(
-                    location.Id,
-                    selectedId,
-                    StringComparison.OrdinalIgnoreCase)))
+        var groups = ServerCatalog.Groups(_locations, selectedId, limit: 6);
+        var availableWidth = Math.Max(240, Math.Min(1080, HomeRoot.ActualWidth - HomeContent.Margin.Left - HomeContent.Margin.Right));
+        var columns = Math.Min(Math.Max(groups.Count, 1), availableWidth >= 780 ? 3 : availableWidth >= 500 ? 2 : 1);
+        var cardWidth = (availableWidth - (columns - 1) * 12 - 4) / columns;
+        var signature = $"{cardWidth:0.0}|" + string.Join('|', groups.Select(group =>
+            $"{group.Id}:{group.Title}:{group.FlagEmoji}:{group.IsSelected}:{group.Representative.Id}:{group.AvailableNodeCount}:" +
+            string.Join(';', group.Locations.Select(node =>
+                $"{node.Id}:{node.City}:{node.Status}:{node.Availability}:{node.HealthyNodes}:{node.Awg3Nodes}:{node.LatencyMs}"))));
+        if (_locationCardsSignature != signature)
+        {
+            _locationCardsSignature = signature;
+            LocationCarousel.ItemsSource = groups.Select(group => LocationCardPresentation.Create(group, cardWidth)).ToArray();
+        }
+        LocationCarousel.Visibility = groups.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        EmptyLocationButton.Visibility = groups.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private string? PreferredLocationId => _services.Preferences.Current.AutoServerEnabled
+        ? _services.VpnUiState.Snapshot.LocationId ?? _services.Coordinator.CurrentState?.LocationId
+        : _services.Preferences.Current.SelectedLocationId ?? _services.VpnUiState.Snapshot.LocationId;
+
+    private ServerCatalogFilter CurrentCatalogFilter => _services.Preferences.Current.ServerCatalogFilter switch
+    {
+        "fastest" => ServerCatalogFilter.Fastest,
+        "favorites" => ServerCatalogFilter.Favorites,
+        "available" => ServerCatalogFilter.Available,
+        _ => ServerCatalogFilter.All,
+    };
+
+    private void SynchronizeCatalogFilter()
+    {
+        if (ServerFilterPicker is null) return;
+        _synchronizingFilter = true;
+        try
+        {
+            ServerFilterPicker.SelectedIndex = CurrentCatalogFilter switch
+            {
+                ServerCatalogFilter.Fastest => 1,
+                ServerCatalogFilter.Favorites => 2,
+                ServerCatalogFilter.Available => 3,
+                _ => 0,
+            };
+        }
+        finally { _synchronizingFilter = false; }
+    }
+
+    private void RenderServerCatalog(bool preserveSelection = true)
+    {
+        if (LocationPicker is null || ServerSearchBox is null) return;
+        var highlightedId = preserveSelection ? (LocationPicker.SelectedItem as ServerRowPresentation)?.Location.Id : null;
+        var focusedElement = XamlRoot is null ? null : FocusManager.GetFocusedElement(XamlRoot) as DependencyObject;
+        var restoreKeyboardFocus = focusedElement is not Button && IsInsideLocationPicker(focusedElement);
+        var generation = ++_catalogRenderGeneration;
+        var favorites = ServerCatalog.NormalizeFavoriteIds(_services.Preferences.Current.FavoriteLocationIds);
+        _filteredLocations = ServerCatalog.Filter(_locations, ServerSearchBox.Text, CurrentCatalogFilter, favorites);
+        var groups = ServerCatalog.Groups(_filteredLocations, PreferredLocationId)
+            .OrderBy(group => _filteredLocations.ToList().FindIndex(location =>
+                group.Locations.Any(member => member.Id == location.Id)))
+            .Select(group => new ServerCountryPresentation(group.Title,
+                _filteredLocations.Where(location => group.Locations.Any(member => member.Id == location.Id))
+                    .Select(CreateServerRow).ToArray()))
             .ToArray();
+        CatalogSource.Source = groups;
+        LocationPicker.ItemsSource = CatalogSource.View;
+        var rows = groups.SelectMany(group => group.Rows).ToArray();
+        var retainedId = ServerPickerInteractionPolicy.RetainSelection(highlightedId, PreferredLocationId,
+            rows.Select(row => row.Location.Id));
+        LocationPicker.SelectedItem = rows.FirstOrDefault(row => row.Location.Id == retainedId);
+        if (restoreKeyboardFocus && LocationPicker.SelectedItem is ServerRowPresentation retainedRow)
+        {
+            LocationPicker.ScrollIntoView(retainedRow);
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                if (_pageLifetime is null || generation != _catalogRenderGeneration ||
+                    !ReferenceEquals(LocationPicker.SelectedItem, retainedRow)) return;
+                if (LocationPicker.ContainerFromItem(retainedRow) is ListViewItem container)
+                    container.Focus(FocusState.Keyboard);
+                else LocationPicker.Focus(FocusState.Keyboard);
+            });
+        }
+        CatalogCountText.Text = $"Стран: {groups.Length} · серверов: {_filteredLocations.Count}";
+        CatalogEmptyText.Text = CurrentCatalogFilter == ServerCatalogFilter.Favorites && string.IsNullOrWhiteSpace(ServerSearchBox.Text)
+            ? "Избранных серверов пока нет. Нажмите звезду рядом с узлом."
+            : "Ничего не найдено. Измените поиск или фильтр.";
+        CatalogEmptyText.Visibility = _filteredLocations.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        RenderCatalogStatus();
+    }
+
+    private bool IsInsideLocationPicker(DependencyObject? element)
+    {
+        for (; element is not null; element = VisualTreeHelper.GetParent(element))
+            if (ReferenceEquals(element, LocationPicker)) return true;
+        return false;
+    }
+
+    private ServerRowPresentation CreateServerRow(VpnLocation location)
+    {
+        var available = ServerCatalog.IsAvailable(location);
+        var favorite = ServerCatalog.NormalizeFavoriteIds(_services.Preferences.Current.FavoriteLocationIds).Contains(location.Id);
+        var title = string.IsNullOrWhiteSpace(location.City) ? location.Id : location.City;
+        var status = available ? "Доступен" : location.Status?.Trim().ToLowerInvariant() switch
+        {
+            "maintenance" => "Обслуживание",
+            "offline" => "Не в сети",
+            _ => "Недоступен",
+        };
+        return new(location, title, location.Id,
+            string.IsNullOrWhiteSpace(location.FlagEmoji) ? location.CountryCode?.ToUpperInvariant() ?? "◇" : location.FlagEmoji,
+            status, available && location.LatencyMs is { } latency && double.IsFinite(latency) && latency >= 0
+                ? $"{Math.Round(latency):0} мс" : "—",
+            favorite ? "\uE735" : "\uE734",
+            favorite ? $"Убрать {title} из избранного" : $"Добавить {title} в избранное",
+            available ? 1 : 0.52,
+            $"{ServerCatalog.CountryTitle(location)}, {title}, {location.Id}, {status}");
+    }
+
+    private void RenderCatalogStatus()
+    {
+        if (RefreshCatalogButton is null) return;
+        RefreshCatalogButton.IsEnabled = !_catalogLoading;
+        CatalogLoadingIndicator.IsActive = _catalogLoading;
+        CatalogLoadingIndicator.Visibility = _catalogLoading ? Visibility.Visible : Visibility.Collapsed;
+        RefreshCatalogIcon.Visibility = _catalogLoading ? Visibility.Collapsed : Visibility.Visible;
+        LocationCapabilityText.Text = _catalogLoading ? "Обновляем серверы…"
+            : _catalogError ?? (_locations.Count == 0 ? "Серверы ещё не загружены. Нажмите «Обновить»." : "Список обновляется каждые 20 секунд.");
+    }
+
+    private void OnServerSearchTextChanged(object sender, TextChangedEventArgs args) => RenderServerCatalog();
+
+    private void OnServerSearchKeyDown(object sender, KeyRoutedEventArgs args)
+    {
+        if (args.Key is not (global::Windows.System.VirtualKey.Enter or global::Windows.System.VirtualKey.Down)) return;
+        var first = _filteredLocations.FirstOrDefault(ServerCatalog.IsAvailable);
+        if (first is null) return;
+        if (args.Key == global::Windows.System.VirtualKey.Enter) SelectLocationCard(first);
+        else
+        {
+            var rows = (CatalogSource.Source as IReadOnlyList<ServerCountryPresentation>)?.SelectMany(group => group.Rows);
+            LocationPicker.SelectedItem = rows?.FirstOrDefault(row => row.Location.Id == first.Id);
+            LocationPicker.Focus(FocusState.Keyboard);
+            LocationPicker.ScrollIntoView(LocationPicker.SelectedItem);
+        }
+        args.Handled = true;
+    }
+
+    private void OnLocationPickerKeyDown(object sender, KeyRoutedEventArgs args)
+    {
+        if (args.OriginalSource is Button) return;
+        if (args.Key == global::Windows.System.VirtualKey.Enter && sender is ListView { SelectedItem: ServerRowPresentation row })
+        {
+            SelectLocationCard(row.Location);
+            args.Handled = true;
+        }
+        else if (args.Key == global::Windows.System.VirtualKey.Escape)
+        {
+            _countryFlyout?.Hide();
+            ServerPickerDialog.Hide();
+            args.Handled = true;
+        }
+    }
+
+    private void OnServerFilterChanged(object sender, SelectionChangedEventArgs args)
+    {
+        if (_synchronizingFilter || ServerSearchBox is null) return;
+        if (ServerFilterPicker.SelectedItem is ComboBoxItem { Tag: string filter }) SetCatalogFilter(filter);
+    }
+
+    private void SetCatalogFilter(string filter)
+    {
+        try { _services.Preferences.Update(current => current with { ServerCatalogFilter = filter }); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or CryptographicException)
+        {
+            ShowNotice("Не удалось сохранить фильтр серверов.", InfoBarSeverity.Warning);
+            LogUiFailure(error);
+        }
+        SynchronizeCatalogFilter();
+        RenderServerCatalog();
+    }
+
+    private void OnFavoriteLocationClick(object sender, RoutedEventArgs args)
+    {
+        if (sender is not Button { Tag: VpnLocation location }) return;
+        try
+        {
+            _services.Preferences.Update(current =>
+            {
+                var favorites = ServerCatalog.NormalizeFavoriteIds(current.FavoriteLocationIds).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                if (!favorites.Remove(location.Id)) favorites.Add(location.Id.ToLowerInvariant());
+                return current with { FavoriteLocationIds = favorites.Order(StringComparer.Ordinal).ToArray() };
+            });
+            RenderServerCatalog();
+            if (_countryFlyout?.Content is StackPanel panel && panel.Children.LastOrDefault() is ListView list)
+            {
+                list.ItemsSource = (list.ItemsSource as IEnumerable<ServerRowPresentation>)?
+                    .Select(row => CreateServerRow(row.Location)).ToArray();
+            }
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or CryptographicException)
+        {
+            ShowNotice("Не удалось сохранить избранные серверы.", InfoBarSeverity.Warning);
+            LogUiFailure(error);
+        }
+    }
+
+    private async void OnRefreshCatalogClick(object sender, RoutedEventArgs args)
+    {
+        if (_catalogLoading) return;
+        if (IsPreviewMode) LoadPreviewLocations();
+        else await LoadLocationsAsync();
+    }
+
+    private void StartCatalogTimer()
+    {
+        if (IsPreviewMode) return;
+        if (_catalogTimer is null)
+        {
+            _catalogTimer = DispatcherQueue.CreateTimer();
+            _catalogTimer.Interval = TimeSpan.FromSeconds(20);
+            _catalogTimer.IsRepeating = true;
+            _catalogTimer.Tick += OnCatalogTimerTick;
+        }
+        _catalogTimer.Start();
+    }
+
+    private async void OnCatalogTimerTick(Microsoft.UI.Dispatching.DispatcherQueueTimer sender, object args)
+    {
+        if (_serverDialogOpen && _pageLifetime is not null && !_catalogLoading && !_selectionBusy && CoordinatorStateAvailable())
+            await LoadLocationsAsync();
     }
 
     private static void SetCountryArtworkHover(
         DependencyObject? root,
-        bool hovered)
+        bool hovered,
+        bool motionAllowed)
     {
         var artwork = FindDescendant<Microsoft.UI.Xaml.Shapes.Path>(
             root,
@@ -660,14 +1260,24 @@ public sealed partial class HomePage : Page
 
         if (artwork.RenderTransform is ScaleTransform scale)
         {
-            scale.ScaleX = hovered ? 1.22 : 1;
-            scale.ScaleY = hovered ? 1.22 : 1;
+            scale.ScaleX = hovered && motionAllowed ? 1.28 : 1;
+            scale.ScaleY = hovered && motionAllowed ? 1.28 : 1;
         }
         artwork.Opacity = hovered
-            ? Math.Max(artwork.Opacity, 0.25)
+            ? 0.20
             : artwork.DataContext is LocationCardPresentation card
                 ? card.CountryOpacity
                 : 0.08;
+        var surface = FindDescendant<Border>(root, "CountryCardSurface");
+        if (surface?.DataContext is LocationCardPresentation presentation)
+        {
+            surface.BorderBrush = hovered && !presentation.Group.IsSelected
+                ? HomeBrush(0x61, 0x22, 0xD3, 0xEE)
+                : presentation.CardBorder;
+            surface.Background = hovered
+                ? HomeBrush(0xC2, 0x07, 0x11, 0x13)
+                : presentation.CardBackground;
+        }
     }
 
     private static T? FindDescendant<T>(
@@ -744,14 +1354,42 @@ public sealed partial class HomePage : Page
         "vpn_profile_revoked" => "Это устройство отозвано. Войдите снова.",
         "vpn_key_rotation_required" => "Требуется безопасное обновление ключа устройства.",
         "required_update" => "Перед подключением установите обязательное обновление VEX.",
+        "vpn_operation_in_progress" => "Дождитесь завершения текущей операции VPN, затем выберите сервер.",
         "vpn_service_unavailable" => "Системный компонент VEX недоступен. Откройте настройки для восстановления.",
+        "tunnel_cleanup_incomplete" => "Отключение VPN ещё не подтверждено. VEX повторит очистку; можно нажать, чтобы повторить сейчас.",
         _ => "Не удалось выполнить операцию VPN.",
     };
 
+    private sealed record ServerCountryPresentation(string Title, IReadOnlyList<ServerRowPresentation> Rows);
+
+    private sealed record ServerRowPresentation(VpnLocation Location, string Title, string LocationId,
+        string FlagEmoji, string StatusText, string LatencyText, string FavoriteGlyph,
+        string FavoriteHelp, double AvailabilityOpacity, string AccessibleName)
+    {
+        public string? FlagAsset => CountryFlagAsset(Location.CountryCode);
+        public Visibility FlagAssetVisibility => FlagAsset is null ? Visibility.Collapsed : Visibility.Visible;
+        public Visibility FlagFallbackVisibility => FlagAsset is null ? Visibility.Visible : Visibility.Collapsed;
+        public string FlagFallbackText => string.IsNullOrWhiteSpace(Location.CountryCode)
+            ? FlagEmoji : Location.CountryCode.Trim().ToUpperInvariant();
+    }
+
+    private static string? CountryFlagAsset(string? countryCode) =>
+        countryCode?.Trim().ToUpperInvariant() switch
+        {
+            "DE" => "ms-appx:///Assets/flags/de.svg",
+            "FI" => "ms-appx:///Assets/flags/fi.svg",
+            "NL" => "ms-appx:///Assets/flags/nl.svg",
+            _ => null,
+        };
+
     private sealed record LocationCardPresentation(
+        ServerCountryGroup Group,
+        double CardWidth,
+        string AccessibleName,
         VpnLocation Location,
         string FlagEmoji,
         string? FlagAsset,
+        Visibility FlagAssetVisibility,
         string DisplayName,
         string AvailabilityText,
         string LatencyText,
@@ -766,9 +1404,11 @@ public sealed partial class HomePage : Page
         string SelectionGlyph)
     {
         public static LocationCardPresentation Create(
-            VpnLocation location,
-            bool selected)
+            ServerCountryGroup group,
+            double cardWidth)
         {
+            var location = group.Representative;
+            var selected = group.IsSelected;
             var countryCode = !string.IsNullOrWhiteSpace(
                 location.CountryCode)
                 ? location.CountryCode
@@ -777,30 +1417,34 @@ public sealed partial class HomePage : Page
                     StringSplitOptions.RemoveEmptyEntries)
                     .FirstOrDefault();
             return new LocationCardPresentation(
+                Group: group,
+                CardWidth: cardWidth,
+                AccessibleName: $"{group.Title}, доступно узлов: {group.AvailableNodeCount}. Выбрать сервер страны.",
                 Location: location,
-                FlagEmoji: countryCode?.ToUpperInvariant() ?? "◇",
+                FlagEmoji: string.IsNullOrWhiteSpace(group.FlagEmoji) ? "◇" : group.FlagEmoji,
                 FlagAsset: CountryFlagAsset(countryCode),
-                DisplayName: NativeLocationLabel.Russian(location.Id),
-                AvailabilityText:
-                    $"{location.HealthyNodes} узлов · доступен",
-                LatencyText: location.LatencyMs is null
-                    ? "—"
-                    : $"{Math.Round(location.LatencyMs.Value):0} мс",
+                FlagAssetVisibility: CountryFlagAsset(countryCode) is null ? Visibility.Collapsed : Visibility.Visible,
+                DisplayName: group.Title,
+                AvailabilityText: group.AvailableNodeCount > 0
+                    ? $"{group.AvailableNodeCount} узлов · доступно"
+                    : "Нет доступных узлов",
+                LatencyText: ServerCatalog.IsAvailable(location) && location.LatencyMs is { } latency &&
+                    double.IsFinite(latency) && latency >= 0 ? $"{Math.Round(latency):0} мс" : "—",
                 CountryGeometry:
                     CountrySilhouetteGeometry.Create(countryCode),
                 CardBackground: Brush(
-                    selected ? (byte)0xD9 : (byte)0xC4,
+                    selected ? (byte)0xD1 : (byte)0xA3,
                     0x07,
                     0x11,
                     0x13),
                 CardBorder: Brush(
-                    selected ? (byte)0xFF : (byte)0x18,
+                    selected ? (byte)0xD1 : (byte)0x14,
                     selected ? (byte)0x22 : (byte)0xFF,
                     selected ? (byte)0xD3 : (byte)0xFF,
                     selected ? (byte)0xEE : (byte)0xFF),
                 CountryFill: Brush(0xFF, 0x22, 0xD3, 0xEE),
                 CountryStroke: Brush(0xFF, 0xB9, 0xFB, 0xFF),
-                CountryOpacity: selected ? 0.12 : 0.055,
+                CountryOpacity: selected ? 0.085 : 0.048,
                 SelectionFill: Brush(
                     selected ? (byte)0xFF : (byte)0x00,
                     0x22,
@@ -813,15 +1457,6 @@ public sealed partial class HomePage : Page
                     selected ? (byte)0xEE : (byte)0xC6),
                 SelectionGlyph: selected ? "\uE73E" : string.Empty);
         }
-
-        private static string? CountryFlagAsset(string? countryCode) =>
-            countryCode?.ToUpperInvariant() switch
-            {
-                "DE" => "ms-appx:///Assets/flags/de.svg",
-                "FI" => "ms-appx:///Assets/flags/fi.svg",
-                "NL" => "ms-appx:///Assets/flags/nl.svg",
-                _ => null,
-            };
 
         private static SolidColorBrush Brush(
             byte alpha,

@@ -16,6 +16,8 @@ final class VEXHelperModel: ObservableObject {
     private var pollTask: Task<Void, Never>?
     private var consecutiveStatusFailures = 0
     private var helperReadinessValidated = false
+    private var helperCommandGeneration = 0
+    private var helperCommandOwnership = VpnOperationOwnership()
     private let connectStabilizationDeadline: Duration = .milliseconds(600)
     // Slow links routinely need several seconds for the first handshake. While
     // the tunnel is structurally up (route + UAPI socket confirmed), keep
@@ -76,9 +78,12 @@ final class VEXHelperModel: ObservableObject {
         }
     }
 
-    func refreshStatus(quiet: Bool = false) async {
+    func refreshStatus(quiet: Bool = false, commandGeneration: Int? = nil,
+                       shouldConnect: () -> Bool = { true }) async {
+        let generation = commandGeneration ?? helperCommandGeneration
         do {
             let response = try await client.sendStatus()
+            guard helperCommandGeneration == generation, shouldConnect() else { return }
             let nextStatus = VpnStatus(helperResponse: response)
             if status != nextStatus {
                 status = nextStatus
@@ -88,6 +93,7 @@ final class VEXHelperModel: ObservableObject {
                 message = nil
             }
         } catch {
+            guard helperCommandGeneration == generation, shouldConnect() else { return }
             consecutiveStatusFailures += 1
             if consecutiveStatusFailures >= 3, status != .disconnected {
                 status = .disconnected
@@ -103,8 +109,13 @@ final class VEXHelperModel: ObservableObject {
     }
 
     func connect(antiLeakEnabled: Bool) async {
+        await connect(antiLeakEnabled: antiLeakEnabled, shouldConnect: { true })
+    }
+
+    func connect(antiLeakEnabled: Bool, shouldConnect: @escaping () -> Bool = { true }) async {
         let command = antiLeakEnabled ? "up owner_pid=\(ProcessInfo.processInfo.processIdentifier)" : "up-no-antileak owner_pid=\(ProcessInfo.processInfo.processIdentifier)"
-        await runCommand(command, busyState: .connecting, successMessage: "VPN подключен.")
+        await runCommand(command, busyState: .connecting, successMessage: "VPN подключен.",
+                         shouldConnect: shouldConnect)
     }
 
     func disconnect() async {
@@ -116,14 +127,18 @@ final class VEXHelperModel: ObservableObject {
     }
 
     func interruptWithDisconnect(releaseAntiLeak: Bool) async {
+        let operation = beginHelperCommand()
+        defer { finishHelperCommand(operation.owner) }
         status = status.withState(.disconnecting)
         do {
             try await client.sendExpectingOK("down", timeoutSeconds: 15)
+            guard helperCommandGeneration == operation.generation else { return }
             message = "VPN отключен."
         } catch {
+            guard helperCommandGeneration == operation.generation else { return }
             message = VEXUserFacingText.status("Command failed: \(error.localizedDescription)")
         }
-        await refreshStatus(quiet: true)
+        await refreshStatus(quiet: true, commandGeneration: operation.generation)
     }
 
     func attachOwnerWatchdog(quiet: Bool = false) async {
@@ -140,6 +155,8 @@ final class VEXHelperModel: ObservableObject {
     func shutdownForAppTermination() async {
         pollTask?.cancel()
         pollTask = nil
+        let operation = beginHelperCommand()
+        defer { finishHelperCommand(operation.owner) }
         do {
             try await client.sendExpectingOK("shutdown", timeoutSeconds: 2)
         } catch {
@@ -152,9 +169,13 @@ final class VEXHelperModel: ObservableObject {
         try await client.send("diagnostics")
     }
 
-    func ensureHelperReady() async throws {
+    func ensureHelperReady(commandGeneration: Int? = nil,
+                           shouldConnect: () -> Bool = { true }) async throws {
         guard !helperReadinessValidated else { return }
         try await installer.ensureReady(allowAdminInstall: true)
+        if let commandGeneration {
+            try ensureCurrentHelperCommand("up", generation: commandGeneration, shouldConnect: shouldConnect)
+        }
         helperReadinessValidated = true
         installState = installer.installedState
     }
@@ -202,39 +223,76 @@ final class VEXHelperModel: ObservableObject {
         return installState.filesCurrent ? nil : "Helper требует установки."
     }
 
-    private func runCommand(_ command: String, busyState: VpnConnectionState, successMessage: String) async {
-        guard !isBusy else { return }
-        isBusy = true
+    private func runCommand(
+        _ command: String, busyState: VpnConnectionState, successMessage: String,
+        shouldConnect: @escaping () -> Bool = { true }
+    ) async {
+        guard !isBusy, !isConnectCommand(command) || (!Task.isCancelled && shouldConnect()) else { return }
+        let operation = beginHelperCommand()
+        defer { finishHelperCommand(operation.owner) }
         if isConnectCommand(command) { lastConnectAdmissionRejected = false }
         status = status.withState(busyState)
-        defer { isBusy = false }
 
         do {
+            try ensureCurrentHelperCommand(command, generation: operation.generation, shouldConnect: shouldConnect)
             try await installer.ensureReady(allowAdminInstall: true)
-            let response = try await sendCommandWithRetry(command)
+            try ensureCurrentHelperCommand(command, generation: operation.generation, shouldConnect: shouldConnect)
+            let response = try await sendCommandWithRetry(command, generation: operation.generation,
+                                                        shouldConnect: shouldConnect)
+            try ensureCurrentHelperCommand(command, generation: operation.generation, shouldConnect: shouldConnect)
             try ensureOK(response)
             installState = installer.installedState
             if isConnectCommand(command) {
-                await confirmConnect(successMessage: successMessage)
+                try await confirmConnect(successMessage: successMessage, generation: operation.generation,
+                                         shouldConnect: shouldConnect)
             } else {
                 message = successMessage
-                await refreshStatus(quiet: true)
+                await refreshStatus(quiet: true, commandGeneration: operation.generation)
             }
         } catch {
+            guard (try? ensureCurrentHelperCommand(command, generation: operation.generation,
+                                                  shouldConnect: shouldConnect)) != nil else { return }
             if isConnectCommand(command) {
                 lastConnectAdmissionRejected = error.localizedDescription.contains("VPN_CONFIG_INVALID")
                 if !lastConnectAdmissionRejected {
                     helperReadinessValidated = false
                     await client.silentDisconnect(releaseAntiLeak: true)
+                    guard (try? ensureCurrentHelperCommand(command, generation: operation.generation,
+                                                          shouldConnect: shouldConnect)) != nil else { return }
                 }
             }
             message = VEXUserFacingText.status("Command failed: \(error.localizedDescription)")
-            await refreshStatus(quiet: true)
+            await refreshStatus(quiet: true, commandGeneration: operation.generation,
+                                shouldConnect: {
+                                    !isConnectCommand(command) || (!Task.isCancelled && shouldConnect())
+                                })
         }
     }
 
-    private func confirmConnect(successMessage: String) async {
-        if await refreshConnectedStatusUntilStable() {
+    private func beginHelperCommand() -> (generation: Int, owner: UUID) {
+        helperCommandGeneration += 1
+        let owner = helperCommandOwnership.begin()
+        isBusy = true
+        return (helperCommandGeneration, owner)
+    }
+
+    private func finishHelperCommand(_ owner: UUID) {
+        if helperCommandOwnership.finish(owner) { isBusy = false }
+    }
+
+    private func ensureCurrentHelperCommand(
+        _ command: String, generation: Int, shouldConnect: () -> Bool
+    ) throws {
+        guard helperCommandGeneration == generation,
+              !isConnectCommand(command) || (!Task.isCancelled && shouldConnect()) else { throw CancellationError() }
+    }
+
+    private func confirmConnect(successMessage: String, generation: Int,
+                                shouldConnect: () -> Bool) async throws {
+        let connected = try await refreshConnectedStatusUntilStable(generation: generation,
+                                                                   shouldConnect: shouldConnect)
+        try ensureCurrentHelperCommand("up", generation: generation, shouldConnect: shouldConnect)
+        if connected {
             message = successMessage
         } else if let routeConflictMessage = status.routeConflictMessage {
             message = routeConflictMessage
@@ -249,19 +307,24 @@ final class VEXHelperModel: ObservableObject {
         }
     }
 
-    private func sendCommandWithRetry(_ command: String) async throws -> String {
+    private func sendCommandWithRetry(_ command: String, generation: Int,
+                                      shouldConnect: () -> Bool) async throws -> String {
+        try ensureCurrentHelperCommand(command, generation: generation, shouldConnect: shouldConnect)
         do {
-            // The helper answers "ok" as soon as awg-quick returns; the
-            // handshake is confirmed separately by status polling, so a long
-            // timeout here only delays user-visible failures.
-            return try await client.send(command, timeoutSeconds: isConnectCommand(command) ? 15 : 10)
+            // Readiness and caller intent are checked before both sends. The
+            // detached socket write remains a separate transport operation.
+            let response = try await client.send(command, timeoutSeconds: isConnectCommand(command) ? 15 : 10)
+            try ensureCurrentHelperCommand(command, generation: generation, shouldConnect: shouldConnect)
+            return response
         } catch {
-            guard isConnectCommand(command), error.isRetryableConnectFailure else {
-                throw error
-            }
+            try ensureCurrentHelperCommand(command, generation: generation, shouldConnect: shouldConnect)
+            guard isConnectCommand(command), error.isRetryableConnectFailure else { throw error }
             helperReadinessValidated = false
-            try await ensureHelperReady()
-            return try await client.send(command, timeoutSeconds: 20)
+            try await ensureHelperReady(commandGeneration: generation, shouldConnect: shouldConnect)
+            try ensureCurrentHelperCommand(command, generation: generation, shouldConnect: shouldConnect)
+            let response = try await client.send(command, timeoutSeconds: 20)
+            try ensureCurrentHelperCommand(command, generation: generation, shouldConnect: shouldConnect)
+            return response
         }
     }
 
@@ -269,12 +332,16 @@ final class VEXHelperModel: ObservableObject {
         command.hasPrefix("up")
     }
 
-    private func refreshConnectedStatusUntilStable() async -> Bool {
+    private func refreshConnectedStatusUntilStable(generation: Int,
+                                                  shouldConnect: () -> Bool) async throws -> Bool {
         let start = ContinuousClock.now
         let quickDeadline = start.advanced(by: connectStabilizationDeadline)
         let patientDeadline = start.advanced(by: handshakePatienceDeadline)
         while true {
-            await refreshStatus(quiet: true)
+            try ensureCurrentHelperCommand("up", generation: generation, shouldConnect: shouldConnect)
+            await refreshStatus(quiet: true, commandGeneration: generation,
+                                shouldConnect: { !Task.isCancelled && shouldConnect() })
+            try ensureCurrentHelperCommand("up", generation: generation, shouldConnect: shouldConnect)
             if status.isUsableConnectedStatus {
                 return true
             }
@@ -287,11 +354,13 @@ final class VEXHelperModel: ObservableObject {
             do {
                 try await Task.sleep(nanoseconds: structurallyUp ? 400_000_000 : 160_000_000)
             } catch {
-                return false
+                throw error
             }
-            guard !Task.isCancelled else { return false }
+            try ensureCurrentHelperCommand("up", generation: generation, shouldConnect: shouldConnect)
         }
-        await refreshStatus(quiet: true)
+        await refreshStatus(quiet: true, commandGeneration: generation,
+                                shouldConnect: { !Task.isCancelled && shouldConnect() })
+        try ensureCurrentHelperCommand("up", generation: generation, shouldConnect: shouldConnect)
         return status.isUsableConnectedStatus
     }
 }

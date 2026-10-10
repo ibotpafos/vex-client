@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Security.Cryptography;
 
 namespace Vex.Windows.Client.Api;
 
@@ -185,11 +186,14 @@ public sealed class CustomerSseParser
 
 public sealed class CustomerRealtimeChangedEventArgs(
     CustomerRealtimeEvent realtimeEvent,
-    CustomerRealtimeMetadata metadata) : EventArgs
+    CustomerRealtimeMetadata metadata,
+    string? sourceTokenFingerprint = null) : EventArgs
 {
     public CustomerRealtimeEvent Event { get; } = realtimeEvent;
 
     public CustomerRealtimeMetadata Metadata { get; } = metadata;
+
+    public string? SourceTokenFingerprint { get; } = sourceTokenFingerprint;
 }
 
 public static class CustomerRealtimeRefreshPolicy
@@ -215,15 +219,22 @@ public static class CustomerRealtimeRefreshPolicy
 
 public sealed class CustomerRealtimeClient : IAsyncDisposable
 {
+    public static readonly TimeSpan LivenessDeadline = TimeSpan.FromSeconds(90);
     private readonly HttpClient _httpClient;
+    private readonly TimeSpan _livenessTimeout;
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
     private CancellationTokenSource? _streamLifetime;
     private Task? _streamTask;
+    private string? _streamTokenFingerprint;
+    private string? _rejectedTokenFingerprint;
 
-    public CustomerRealtimeClient(HttpClient httpClient)
+    public CustomerRealtimeClient(HttpClient httpClient, TimeSpan? livenessTimeout = null)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
         _httpClient = httpClient;
+        _livenessTimeout = livenessTimeout ?? LivenessDeadline;
+        if (_livenessTimeout <= TimeSpan.Zero || _livenessTimeout.TotalMilliseconds > uint.MaxValue - 1)
+            throw new ArgumentOutOfRangeException(nameof(livenessTimeout));
     }
 
     public event EventHandler<CustomerRealtimeChangedEventArgs>? Changed;
@@ -231,6 +242,9 @@ public sealed class CustomerRealtimeClient : IAsyncDisposable
     public event EventHandler<bool>? ConnectionChanged;
 
     public bool IsConnected { get; private set; }
+
+    public static string TokenFingerprint(string token) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
 
     public static TimeSpan ReconnectDelay(int attempt) =>
         TimeSpan.FromSeconds(
@@ -244,8 +258,16 @@ public sealed class CustomerRealtimeClient : IAsyncDisposable
         await _lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            var fingerprint = TokenFingerprint(accessToken);
+            // A refresh that returns the rejected token cannot repair its
+            // authorization. Wait for a new credential rather than spinning
+            // through stream rejection and session refresh indefinitely.
+            if (Volatile.Read(ref _rejectedTokenFingerprint) == fingerprint ||
+                _streamTask is { IsCompleted: false } && _streamTokenFingerprint == fingerprint)
+                return;
             await StopCoreAsync().ConfigureAwait(false);
             _streamLifetime = new CancellationTokenSource();
+            _streamTokenFingerprint = fingerprint;
             _streamTask = RunAsync(accessToken, _streamLifetime.Token);
         }
         finally
@@ -279,6 +301,7 @@ public sealed class CustomerRealtimeClient : IAsyncDisposable
         var task = _streamTask;
         _streamLifetime = null;
         _streamTask = null;
+        _streamTokenFingerprint = null;
         lifetime?.Cancel();
         if (task is not null)
         {
@@ -307,6 +330,7 @@ public sealed class CustomerRealtimeClient : IAsyncDisposable
                 lastEventId = await ReadStreamAsync(
                     accessToken,
                     lastEventId,
+                    eventId => lastEventId = eventId,
                     cancellationToken).ConfigureAwait(false);
                 attempt = 0;
             }
@@ -315,9 +339,12 @@ public sealed class CustomerRealtimeClient : IAsyncDisposable
             {
                 return;
             }
-            catch (HttpRequestException)
+            catch (HttpRequestException error)
             {
                 SetConnected(false);
+                // Authentication recovery owns the next stream. Polling an
+                // already rejected token cannot restore the session.
+                if (error.StatusCode == HttpStatusCode.Unauthorized) return;
             }
             catch (IOException)
             {
@@ -333,8 +360,30 @@ public sealed class CustomerRealtimeClient : IAsyncDisposable
     private async Task<string> ReadStreamAsync(
         string accessToken,
         string lastEventId,
+        Action<string> recordEventId,
         CancellationToken cancellationToken)
     {
+        using var liveness = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        liveness.CancelAfter(_livenessTimeout);
+        try
+        {
+            return await ReadStreamCoreAsync(accessToken, lastEventId, recordEventId, liveness).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException error) when (!cancellationToken.IsCancellationRequested)
+        {
+            // Transport timeouts are reconnectable failures. Only a real HTTP
+            // 401 or session-invalid frame requests credential recovery.
+            throw new IOException("The realtime stream stopped making progress.", error);
+        }
+    }
+
+    private async Task<string> ReadStreamCoreAsync(
+        string accessToken,
+        string lastEventId,
+        Action<string> recordEventId,
+        CancellationTokenSource liveness)
+    {
+        var cancellationToken = liveness.Token;
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
             "/v1/events");
@@ -355,22 +404,28 @@ public sealed class CustomerRealtimeClient : IAsyncDisposable
             cancellationToken).ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.Unauthorized)
         {
+            Volatile.Write(ref _rejectedTokenFingerprint, TokenFingerprint(accessToken));
             Changed?.Invoke(
                 this,
                 new CustomerRealtimeChangedEventArgs(
                     new CustomerRealtimeEvent(
-                        "customer.session.revoked",
+                        "customer.session.refresh_required",
                         string.Empty,
                         "{\"reason\":\"unauthorized\"}"),
-                    new CustomerRealtimeMetadata([], "unauthorized")));
+                    new CustomerRealtimeMetadata([], "unauthorized"),
+                    TokenFingerprint(accessToken)));
         }
         response.EnsureSuccessStatusCode();
+        liveness.CancelAfter(_livenessTimeout);
         SetConnected(true);
 
         await using var stream = await response.Content
             .ReadAsStreamAsync(cancellationToken)
             .ConfigureAwait(false);
-        using var reader = new StreamReader(stream, Encoding.UTF8);
+        // Reset on bytes rather than complete lines: a frame may arrive in
+        // several reads, and comments/heartbeats also prove transport liveness.
+        using var reader = new StreamReader(
+            new LivenessStream(stream, liveness, _livenessTimeout), Encoding.UTF8);
         var parser = new CustomerSseParser();
         while (true)
         {
@@ -385,6 +440,7 @@ public sealed class CustomerRealtimeClient : IAsyncDisposable
                 if (!string.IsNullOrEmpty(realtimeEvent.Id))
                 {
                     lastEventId = realtimeEvent.Id;
+                    recordEventId(lastEventId);
                 }
                 var metadata = CustomerRealtimeMetadata.Parse(
                     realtimeEvent.Type,
@@ -395,12 +451,61 @@ public sealed class CustomerRealtimeClient : IAsyncDisposable
                         this,
                         new CustomerRealtimeChangedEventArgs(
                             realtimeEvent,
-                            metadata));
+                            metadata,
+                            TokenFingerprint(accessToken)));
+                    if (realtimeEvent.Type == "customer.session.revoked")
+                    {
+                        Volatile.Write(ref _rejectedTokenFingerprint, TokenFingerprint(accessToken));
+                        throw new HttpRequestException("The realtime session was revoked.",
+                            null, HttpStatusCode.Unauthorized);
+                    }
                 }
             }
         }
         SetConnected(false);
         return lastEventId;
+    }
+
+    private sealed class LivenessStream(
+        Stream stream,
+        CancellationTokenSource liveness,
+        TimeSpan timeout) : Stream
+    {
+        public override bool CanRead => stream.CanRead;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            var read = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+            if (read > 0) liveness.CancelAfter(timeout);
+            return read;
+        }
+
+        public override Task<int> ReadAsync(
+            byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            var read = stream.Read(buffer, offset, count);
+            if (read > 0) liveness.CancelAfter(timeout);
+            return read;
+        }
+
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        // The enclosing await-using owns the HTTP response stream.
     }
 
     private void SetConnected(bool connected)

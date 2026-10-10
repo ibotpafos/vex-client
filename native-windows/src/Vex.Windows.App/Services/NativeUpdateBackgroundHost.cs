@@ -66,9 +66,11 @@ public sealed class NativeUpdateBackgroundHost : IDisposable
                 var succeeded = true;
                 if (_preferences.Current.AutoUpdatesEnabled)
                 {
-                    var snapshot = await CheckNowAsync(cancellationToken)
-                        .ConfigureAwait(false);
-                    succeeded = snapshot.State is not "error" and not "disabled";
+                    succeeded = await NativeUpdateFailurePolicy.CheckSafelyAsync(async token =>
+                    {
+                        var snapshot = await CheckNowAsync(token).ConfigureAwait(false);
+                        return snapshot.State is "current" or "available";
+                    }, cancellationToken).ConfigureAwait(false);
                 }
 
                 await Task.Delay(

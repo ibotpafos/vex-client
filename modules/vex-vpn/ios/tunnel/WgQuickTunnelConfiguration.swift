@@ -33,7 +33,7 @@ extension TunnelConfiguration {
     var attributes = [String: String]()
     let lines = wgQuickConfig.split { $0.isNewline }
 
-    for (lineIndex, line) in lines.enumerated() {
+    for line in lines {
       let trimmedLine = WgQuickLine.trim(line)
       let lowercasedLine = trimmedLine.lowercased()
 
@@ -49,8 +49,7 @@ extension TunnelConfiguration {
         }
       }
 
-      let isLastLine = lineIndex == lines.count - 1
-      if isLastLine || lowercasedLine == "[interface]" || lowercasedLine == "[peer]" {
+      if lowercasedLine == "[interface]" || lowercasedLine == "[peer]" {
         if parserState == .inInterfaceSection {
           let interface = try TunnelConfiguration.collate(interfaceAttributes: attributes)
           guard interfaceConfiguration == nil else { throw WgQuickParseError.multipleInterfaces }
@@ -68,6 +67,16 @@ extension TunnelConfiguration {
         parserState = .inPeerSection
         attributes.removeAll()
       }
+    }
+
+    // The final header starts a section too, even when it has no attributes.
+    if parserState == .inInterfaceSection {
+      let interface = try TunnelConfiguration.collate(interfaceAttributes: attributes)
+      guard interfaceConfiguration == nil else { throw WgQuickParseError.multipleInterfaces }
+      interfaceConfiguration = interface
+    } else if parserState == .inPeerSection {
+      let peer = try TunnelConfiguration.collate(peerAttributes: attributes)
+      peerConfigurations.append(peer)
     }
 
     let peerPublicKeys = peerConfigurations.map(\.publicKey)

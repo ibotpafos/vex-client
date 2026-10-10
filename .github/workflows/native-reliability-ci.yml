@@ -151,10 +151,6 @@ jobs:
         with:
           go-version: "1.26.9"
           cache: false
-      - name: Build the canonical iOS simulator app without signing
-        timeout-minutes: 40
-        # The owned fixture enforces the reviewed tracked lock with --deployment.
-        run: bash scripts/test_ios_simulator_build.sh
       - name: Resolve Swift package
         run: swift package --package-path macos-native resolve
       - name: Build native macOS client
@@ -192,3 +188,7 @@ jobs:
           if-no-files-found: error
       - name: Test all native macOS behavior
         run: swift test --package-path macos-native
+      - name: Build the canonical iOS simulator app without signing
+        timeout-minutes: 40
+        # The owned fixture enforces the reviewed tracked lock with --deployment.
+        run: bash scripts/test_ios_simulator_build.sh

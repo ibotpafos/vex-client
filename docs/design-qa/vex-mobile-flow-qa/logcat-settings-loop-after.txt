@@ -1,0 +1,509 @@
+--------- beginning of main
+09-09 16:11:12.098 31290 31322 D WM-DelayedWorkTracker: Scheduling work <redacted-work-id>
+09-09 16:11:12.098 31290 31322 D WM-GreedyScheduler: Starting tracking for <redacted-work-id>
+09-09 16:11:12.099 31290 31308 D WM-ConstraintTracker: ogv: initial state = true
+09-09 16:11:12.099 31290 31308 D WM-BrdcstRcvrCnstrntTrc: ogv: registering receiver
+09-09 16:11:12.101 31290 31308 D WM-ConstraintTracker: ohg: initial state = NetworkState(isConnected=true, isValidated=true, isMetered=false, isNotRoaming=true, isBlocked=false)
+09-09 16:11:12.101 31290 31308 D WM-NetworkStateTracker: Registering network callback
+--------- beginning of system
+09-09 16:11:12.102  1966  3274 D ConnectivityService: requestNetwork for uid/pid:10046/31290 NetworkRequest [ TRACK_DEFAULT id=376, [ Capabilities: INTERNET&NOT_RESTRICTED&TRUSTED Unwanted:  Uid: 10046] ]
+09-09 16:11:12.103 31290 31308 D WM-GreedyScheduler: Constraints met: Scheduling work ID WorkGenerationalId(workSpecId=<redacted-work-id>, generation=2232)
+09-09 16:11:12.103  1966  2103 D WIFI    : got request NetworkRequest [ TRACK_DEFAULT id=376, [ Capabilities: INTERNET&NOT_RESTRICTED&TRUSTED Unwanted:  Uid: 10046] ] with score 60
+09-09 16:11:12.103  1966  2143 D Ethernet: got request NetworkRequest [ TRACK_DEFAULT id=376, [ Capabilities: INTERNET&NOT_RESTRICTED&TRUSTED Unwanted:  Uid: 10046] ] with score 60
+09-09 16:11:12.103  1966  2103 D WIFI_UT : got request NetworkRequest [ TRACK_DEFAULT id=376, [ Capabilities: INTERNET&NOT_RESTRICTED&TRUSTED Unwanted:  Uid: 10046] ] with score 60
+09-09 16:11:12.104  2354  2354 D PhoneSwitcherNetworkRequstListener: got request NetworkRequest [ TRACK_DEFAULT id=376, [ Capabilities: INTERNET&NOT_RESTRICTED&TRUSTED Unwanted:  Uid: 10046] ] with score 60
+09-09 16:11:12.105 31290 32293 D WM-NetworkStateTracker: Network capabilities changed: [ Transports: WIFI Capabilities: NOT_METERED&INTERNET&NOT_RESTRICTED&TRUSTED&NOT_VPN&VALIDATED&NOT_ROAMING&FOREGROUND&NOT_CONGESTED&NOT_SUSPENDED Unwanted:  LinkUpBandwidth>=1048576Kbps LinkDnBandwidth>=1048576Kbps SignalStrength: -32 SSID: "ibotpafos"]
+09-09 16:11:12.105  2717  2717 D QcrilMsgTunnelIfaceManager: handleMessage what = 1
+09-09 16:11:12.106  2717  2717 I QcrilOemhookMsgTunnel: [0]invokeOemRilRequestRaw: serial=1655 length=24
+09-09 16:11:12.108 31290 31308 D WM-Processor: ocz: processing WorkGenerationalId(workSpecId=<redacted-work-id>, generation=2232)
+09-09 16:11:12.108  2717  2749 I QcrilOemhookMsgTunnel: [0]processOemHookResponse serial no: 1655 error: 0length=0
+09-09 16:11:12.108  2717  2717 D QcrilMsgTunnelIfaceManager: handleMessage what = 2
+09-09 16:11:12.109  2717  2717 D QcrilMsgTunnelIfaceManager: handleMessage what = 1
+09-09 16:11:12.109  2717  2749 I QcrilOemhookMsgTunnel: [0]processOemHookIndication length=28
+09-09 16:11:12.109  2717  2717 I QcrilOemhookMsgTunnel: [1]invokeOemRilRequestRaw: serial=1656 length=24
+09-09 16:11:12.110  2717  2717 D QcrilMsgTunnelIfaceManager: handleMessage what = 0
+09-09 16:11:12.111  2717  2749 I QcrilOemhookMsgTunnel: [1]processOemHookResponse serial no: 1656 error: 0length=0
+09-09 16:11:12.111  2717  2717 D QcrilMsgTunnelIfaceManager: handleMessage what = 2
+09-09 16:11:12.113  2717  2749 I QcrilOemhookMsgTunnel: [1]processOemHookIndication length=28
+09-09 16:11:12.114  2717  2717 D QcrilMsgTunnelIfaceManager: handleMessage what = 0
+09-09 16:11:12.118 31290 31290 D WM-WorkerWrapper: Starting work for androidx.work.multiprocess.RemoteListenableDelegatingWorker
+09-09 16:11:12.118 31290 31290 D WM-ListenableWorkerImpl: Binding to com.google.android.googlequicksearchbox, com.google.android.libraries.search.integrations.tiktok.RemoteWorkerService_search
+09-09 16:11:12.121  1966  3274 D CompatibilityInfo: mCompatibilityFlags - 0
+09-09 16:11:12.121  1966  3274 D CompatibilityInfo: applicationDensity - 420
+09-09 16:11:12.121  1966  3274 D CompatibilityInfo: applicationScale - 1.0
+09-09 16:11:12.122 31290 31290 I WM-RemoteWorkerService: Binding to RemoteWorkerService
+09-09 16:11:12.127 31290 31290 D WM-ListenableWorkerImpl: Service connected
+09-09 16:11:12.128 31290 31317 D WM-ListenableWorkerImpl: Executing work request (<redacted-work-id>, com.google.apps.tiktok.contrib.work.TikTokListenableWorker)
+09-09 16:11:12.129 31290 31290 I ekyw    : #sync(). Running Synclets and scheduling next sync.
+09-09 16:11:12.134 31290 31311 I ekyw    : (REDACTED) Running synclets: %s
+09-09 16:11:12.138 31290 31320 I ekyw    : (REDACTED) Starting synclet: %s
+09-09 16:11:12.212  1966  2190 D CompatibilityInfo: mCompatibilityFlags - 0
+09-09 16:11:12.212  1966  2190 D CompatibilityInfo: applicationDensity - 420
+09-09 16:11:12.212  1966  2190 D CompatibilityInfo: applicationScale - 1.0
+09-09 16:11:12.228 31290  7559 I cckv    : (REDACTED) Using GoogleAuthUtil for getToken for 1p app: %s
+09-09 16:11:12.245 31290 31328 I dtos    : (REDACTED) Attempting to cache the data for enabled corpora %s.
+09-09 16:11:12.248 31290 31328 I crpu    : (REDACTED) Starting batch sync for corpora: %s
+09-09 16:11:12.276 31290  7559 I crpu    : (REDACTED) The syncToken for corpus %s is %s and the syncRequestReason is %s
+09-09 16:11:12.277 31290  7559 I crpu    : (REDACTED) The syncToken for corpus %s is %s and the syncRequestReason is %s
+09-09 16:11:12.359  7556  7556 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:11:12.471  7556  7556 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:11:12.484 31290  7559 I crtm    : (REDACTED) Writing data for these Geller corpora: %s
+09-09 16:11:12.498  7556  7556 W main    : type=1400 audit(0.0:407): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:11:12.507 31290  7559 I crtm    : (REDACTED) Wrote %d elements for corpus %s
+09-09 16:11:12.509 31290  7559 I crtm    : (REDACTED) Writing metadata key: %s, corpus: %s
+09-09 16:11:12.511 31290  7559 I crtm    : (REDACTED) Writing metadata key: %s, corpus: %s
+09-09 16:11:12.511  7556  7556 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:11:12.521  7556  7556 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:11:12.527 31290  7559 I crtm    : (REDACTED) Writing data for these Geller corpora: %s
+09-09 16:11:12.529 31290  7559 I crtm    : (REDACTED) Writing metadata key: %s, corpus: %s
+09-09 16:11:12.529  7556  7556 I Input   : injectMotionEvent: MotionEvent { action=ACTION_DOWN, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=14460047, downTime=14460047, deviceId=9, source=0x1002 }
+09-09 16:11:12.531 31290  7559 I crtm    : (REDACTED) Writing metadata key: %s, corpus: %s
+09-09 16:11:12.533 31290  7559 I crtm    : (REDACTED) Writing metadata key: %s, corpus: %s
+09-09 16:11:12.540  7556  7556 I Input   : injectMotionEvent: MotionEvent { action=ACTION_UP, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=14460047, downTime=14460047, deviceId=9, source=0x1002 }
+09-09 16:11:12.544  7556  7556 D AndroidRuntime: Shutting down VM
+09-09 16:11:12.573 31290 31329 I yqo     : PR status onSyncCompleted called in TNG
+09-09 16:11:12.578  1966  2190 D CompatibilityInfo: mCompatibilityFlags - 0
+09-09 16:11:12.578  1966  2190 D CompatibilityInfo: applicationDensity - 420
+09-09 16:11:12.578  1966  2190 D CompatibilityInfo: applicationScale - 1.0
+09-09 16:11:12.579 31290 32244 I yqo     : (REDACTED) PR status onSyncCompleted updated in TNG to %s
+09-09 16:11:12.580  3223  3223 I ewcg    : (REDACTED) Created gRPC endpoint for service %s
+09-09 16:11:12.601  3223  3659 I yjx     : (REDACTED) OnChange called on field %s
+09-09 16:11:12.608 31290  7559 W ebrc    : Hotword settings PDS is not populated - defaulting to DECLINED.
+09-09 16:11:12.608  1966  3274 D CompatibilityInfo: mCompatibilityFlags - 0
+09-09 16:11:12.608  1966  3274 D CompatibilityInfo: applicationDensity - 420
+09-09 16:11:12.608  1966  3274 D CompatibilityInfo: applicationScale - 1.0
+09-09 16:11:12.610 31290 31328 I vpa     : Geller-AiAi egress is not enabled
+09-09 16:11:12.616 31290 31328 E ejme    : (REDACTED) Failed to share %s data to AiAi.
+09-09 16:11:12.616 31290 31328 E ejme    : crms: Geller AiAi data share is not enabled
+09-09 16:11:12.616 31290 31328 E ejme    : 	at vpa.c(PG:28)
+09-09 16:11:12.616 31290 31328 E ejme    : 	at vpa.b(PG:1)
+09-09 16:11:12.616 31290 31328 E ejme    : 	at vpf.a(PG:29)
+09-09 16:11:12.616 31290 31328 E ejme    : 	at elhi.a(PG:17)
+09-09 16:11:12.616 31290 31328 E ejme    : 	at eunw.a(PG:3)
+09-09 16:11:12.616 31290 31328 E ejme    : 	at eupm.run(PG:19)
+09-09 16:11:12.616 31290 31328 E ejme    : 	at cpdz.run(PG:5)
+09-09 16:11:12.616 31290 31328 E ejme    : 	at etkc.run(PG:46)
+09-09 16:11:12.616 31290 31328 E ejme    : 	at cpdl.run(PG:81)
+09-09 16:11:12.616 31290 31328 E ejme    : 	at java.lang.Thread.run(Thread.java:764)
+09-09 16:11:12.616 31290 31328 E ejme    : 	at cpfd.run(PG:63)
+09-09 16:11:12.623 31290 31320 I ekyw    : Scheduling next wakeup
+09-09 16:11:12.623 31290 31320 I ekzv    : Scheduling next periodic WorkManager workers
+09-09 16:11:12.637 31290 31318 D WM-GreedyScheduler: Cancelling work ID <redacted-work-id>
+09-09 16:11:12.639  1966  1966 D CompatibilityInfo: mCompatibilityFlags - 0
+09-09 16:11:12.639  1966  1966 D CompatibilityInfo: applicationDensity - 420
+09-09 16:11:12.639  1966  1966 D CompatibilityInfo: applicationScale - 1.0
+09-09 16:11:12.643 31290 31290 D WM-SystemJobService: onStartJob for WorkGenerationalId(workSpecId=<redacted-work-id>, generation=2232)
+09-09 16:11:12.650 31290 31318 D WM-SystemJobScheduler: Scheduling work ID c94afb87-64dc-429d-8f3f-07fb8e700550Job ID 19965
+09-09 16:11:12.651 31290 31318 D WM-GreedyScheduler: Ignoring {WorkSpec: <redacted-work-id>}. Requires device idle.
+09-09 16:11:12.652 31290 31318 D WM-GreedyScheduler: Ignoring {WorkSpec: <redacted-work-id>}. Requires ContentUri triggers.
+09-09 16:11:12.664 31290 31318 D WM-GreedyScheduler: Cancelling work ID <redacted-work-id>
+09-09 16:11:12.678 31290 31318 D WM-SystemJobScheduler: Scheduling work ID 7a2245f5-9bc1-4e42-a167-a733a8dfdbb3Job ID 19966
+09-09 16:11:12.679 31290 31318 D WM-GreedyScheduler: Ignoring {WorkSpec: <redacted-work-id>}. Requires device idle.
+09-09 16:11:12.679 31290 31318 D WM-GreedyScheduler: Ignoring {WorkSpec: <redacted-work-id>}. Requires ContentUri triggers.
+09-09 16:11:12.686 31290 31318 D WM-GreedyScheduler: Cancelling work ID <redacted-work-id>
+09-09 16:11:12.697 31290 31318 D WM-SystemJobScheduler: Scheduling work ID 7a05f505-7fe9-494e-a910-013093e1c776Job ID 19967
+09-09 16:11:12.703 31290 31318 D WM-GreedyScheduler: Ignoring {WorkSpec: <redacted-work-id>}. Requires device idle.
+09-09 16:11:12.703 31290 31318 D WM-GreedyScheduler: Ignoring {WorkSpec: <redacted-work-id>}. Requires ContentUri triggers.
+09-09 16:11:12.714 31290 31320 I ekzv    : Successfully scheduled next periodic workers
+09-09 16:11:12.717 31290 31318 D WM-Processor: Work WorkGenerationalId(workSpecId=<redacted-work-id>, generation=2232) is already enqueued for processing
+09-09 16:11:12.717 31290 31308 I ekyw    : #sync() complete
+09-09 16:11:12.722 31290 31318 D RemoteListenableDelegatingWorker: Cleaning up
+09-09 16:11:12.726 31290 31318 I WM-WorkerWrapper: Worker result SUCCESS for Work [ id=<redacted-work-id>, tags={ com.google.apps.tiktok.contrib.work.TikTokListenableWorker,com.google.apps.tiktok.sync.impl.workmanager.SyncPeriodicWorker_proc<search>,sync_constraint:charger_unmetered,TikTokWorker#com.google.apps.tiktok.sync.impl.workmanager.SyncPeriodicWorker } ]
+09-09 16:11:12.731 31290 31290 D WM-Processor: ocz <redacted-work-id> executed; reschedule = false
+09-09 16:11:12.731 31290 31290 D WM-GreedyScheduler: Stopping tracking for WorkGenerationalId(workSpecId=<redacted-work-id>, generation=2232)
+09-09 16:11:12.731 31290 31290 D WM-SystemJobService: <redacted-work-id> executed on JobScheduler
+09-09 16:11:12.735 31290 31318 D WM-GreedyScheduler: Cancelling work ID <redacted-work-id>
+09-09 16:11:12.742 31290 31318 D WM-SystemJobScheduler: Scheduling work ID a2ec9603-8cf3-4148-8364-3ac5f6361442Job ID 19968
+09-09 16:11:12.744 31290 31318 D WM-GreedyScheduler: Ignoring {WorkSpec: <redacted-work-id>}. Requires device idle.
+09-09 16:11:12.744 31290 31318 D WM-GreedyScheduler: Ignoring {WorkSpec: <redacted-work-id>}. Requires ContentUri triggers.
+09-09 16:11:12.744 31290 31318 D WM-BrdcstRcvrCnstrntTrc: ogv: unregistering receiver
+09-09 16:11:12.745 31290 31317 D WM-NetworkStateTracker: Unregistering network callback
+09-09 16:11:12.745  1966  2106 D ConnectivityService: releasing NetworkRequest [ TRACK_DEFAULT id=376, [ Capabilities: INTERNET&NOT_RESTRICTED&TRUSTED Unwanted:  Uid: 10046] ] (release request)
+09-09 16:11:12.748  2717  2717 D QcrilMsgTunnelIfaceManager: handleMessage what = 1
+09-09 16:11:12.749  2717  2717 I QcrilOemhookMsgTunnel: [0]invokeOemRilRequestRaw: serial=1657 length=24
+09-09 16:11:12.754  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:11:12.755  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:11:12.761  2717  2749 I QcrilOemhookMsgTunnel: [0]processOemHookResponse serial no: 1657 error: 0length=0
+09-09 16:11:12.762  2717  2717 D QcrilMsgTunnelIfaceManager: handleMessage what = 2
+09-09 16:11:12.763  2717  2717 D QcrilMsgTunnelIfaceManager: handleMessage what = 1
+09-09 16:11:12.763  2717  2749 I QcrilOemhookMsgTunnel: [0]processOemHookIndication length=28
+09-09 16:11:12.763  2717  2717 I QcrilOemhookMsgTunnel: [1]invokeOemRilRequestRaw: serial=1658 length=24
+09-09 16:11:12.763  2717  2717 D QcrilMsgTunnelIfaceManager: handleMessage what = 0
+09-09 16:11:12.764  2717  2749 I QcrilOemhookMsgTunnel: [1]processOemHookResponse serial no: 1658 error: 0length=0
+09-09 16:11:12.764  2717  2717 D QcrilMsgTunnelIfaceManager: handleMessage what = 2
+09-09 16:11:12.766  2717  2749 I QcrilOemhookMsgTunnel: [1]processOemHookIndication length=28
+09-09 16:11:12.766  2717  2717 D QcrilMsgTunnelIfaceManager: handleMessage what = 0
+09-09 16:11:13.246  1966  2103 D WifiStateMachine:  ConnectedState !CMD_RSSI_POLL rt=14460768/91440860 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-31 f=5180 sc=60 link=433 tx=0,6, 0,0, 0,0  rx=0,5 bcn=193115 [on:0 tx:0 rx:0 period:2998] from screen [on:1135325 period:7834506] score=60
+09-09 16:11:13.247  1966  2103 D WifiStateMachine:  L2ConnectedState !CMD_RSSI_POLL rt=14460769/91440860 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-31 f=5180 sc=60 link=433 tx=0,6, 0,0, 0,0  rx=0,5 bcn=193115 [on:0 tx:0 rx:0 period:0] from screen [on:1135325 period:7834506] score=60
+09-09 16:11:13.287  1966  2103 D WifiStateMachine: fetchRssiLinkSpeedAndFrequencyNative rssi=-32 linkspeed=433 freq=5180
+09-09 16:11:13.288  1966  2103 V WifiConfigManager: Updating scan detail cache freq=5180 BSSID=58:ea:1f:8e:60:e4 RSSI=-31 for "ibotpafos"WPA_PSK
+09-09 16:11:13.290  1966  3274 I WifiService: getCurrentNetwork uid=10015
+09-09 16:11:13.367   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:13.376   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 4 lines
+09-09 16:11:13.376   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:13.400  1966  2014 W BroadcastQueue: Background execution not allowed: receiving Intent { act=android.intent.action.DROPBOX_ENTRY_ADDED flg=0x10 (has extras) } to com.google.android.gms/.stats.service.DropBoxEntryAddedReceiver
+09-09 16:11:13.437  6473  6484 I rd.client.debu: Background concurrent copying GC freed 465686(22MB) AllocSpace objects, 14(568KB) LOS objects, 50% free, 20MB/40MB, paused 417us total 242.256ms
+09-09 16:11:13.459  6473  6482 W System  : A resource failed to call close.
+09-09 16:11:13.460  6473  6482 W System  : A resource failed to call end.
+09-09 16:11:13.460  6473  6482 I chatty  : uid=10146(com.vexguard.client.debug) FinalizerDaemon identical 1 line
+09-09 16:11:13.460  6473  6482 W System  : A resource failed to call end.
+09-09 16:11:13.462  6473  6482 W System  : A resource failed to call close.
+09-09 16:11:13.635   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:13.641   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 4 lines
+09-09 16:11:13.641   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:13.688  7577  7577 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:11:13.819  7577  7577 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:11:13.838  7577  7577 W main    : type=1400 audit(0.0:408): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:11:13.854  7577  7577 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:11:13.863  7577  7577 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:11:13.866  7577  7577 I Input   : injectKeyEvent: KeyEvent { action=ACTION_DOWN, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=14461388, downTime=14461388, deviceId=-1, source=0x101 }
+09-09 16:11:13.868  1966  3274 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:11:13.870  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=true repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:11:13.928  6473  6532 I ReactNativeJS: API Request: [POST] https://vexguard.app/v1/app/remote-config
+09-09 16:11:13.942  7577  7577 I Input   : injectKeyEvent: KeyEvent { action=ACTION_UP, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=14461388, downTime=14461388, deviceId=-1, source=0x101 }
+09-09 16:11:13.943  1966  3274 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:11:13.943  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=false repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:11:13.951  7577  7577 D AndroidRuntime: Shutting down VM
+09-09 16:11:14.318  6473  6532 I ReactNativeJS: API Response: 200
+09-09 16:11:14.751  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:11:14.752  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:11:15.083  7591  7591 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:11:15.193  7591  7591 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:11:15.218  7591  7591 W main    : type=1400 audit(0.0:409): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:11:15.229  7591  7591 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:11:15.238  7591  7591 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:11:15.247  7591  7591 I Input   : injectMotionEvent: MotionEvent { action=ACTION_DOWN, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=14462765, downTime=14462765, deviceId=9, source=0x1002 }
+09-09 16:11:15.254  7591  7591 I Input   : injectMotionEvent: MotionEvent { action=ACTION_UP, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=14462765, downTime=14462765, deviceId=9, source=0x1002 }
+09-09 16:11:15.258  7591  7591 D AndroidRuntime: Shutting down VM
+09-09 16:11:15.753  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:11:15.754  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:11:16.027   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:16.033   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 4 lines
+09-09 16:11:16.033   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:16.292  1966  2103 D WifiStateMachine:  ConnectedState !CMD_RSSI_POLL rt=14463814/91443906 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-32 f=5180 sc=60 link=433 tx=5,2, 0,0, 0,0  rx=4,1 bcn=193143 [on:0 tx:0 rx:0 period:3001] from screen [on:1137164 period:7837552] score=60
+09-09 16:11:16.293  1966  2103 D WifiStateMachine:  L2ConnectedState !CMD_RSSI_POLL rt=14463815/91443907 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-32 f=5180 sc=60 link=433 tx=5,2, 0,0, 0,0  rx=4,1 bcn=193143 [on:0 tx:0 rx:0 period:1] from screen [on:1137164 period:7837553] score=60
+09-09 16:11:16.350  1966  2103 D WifiStateMachine: fetchRssiLinkSpeedAndFrequencyNative rssi=-31 linkspeed=433 freq=5180
+09-09 16:11:16.350  1966  2103 V WifiConfigManager: Updating scan detail cache freq=5180 BSSID=58:ea:1f:8e:60:e4 RSSI=-31 for "ibotpafos"WPA_PSK
+09-09 16:11:16.352  1966  3274 I WifiService: getCurrentNetwork uid=10015
+09-09 16:11:16.399  7604  7604 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:11:16.531  7604  7604 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:11:16.558  7604  7604 W main    : type=1400 audit(0.0:410): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:11:16.569  7604  7604 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:11:16.580  7604  7604 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:11:16.581  7604  7604 I Input   : injectKeyEvent: KeyEvent { action=ACTION_DOWN, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=14464103, downTime=14464103, deviceId=-1, source=0x101 }
+09-09 16:11:16.582  1966  3274 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:11:16.585  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=true repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:11:16.603  7604  7604 I Input   : injectKeyEvent: KeyEvent { action=ACTION_UP, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=14464103, downTime=14464103, deviceId=-1, source=0x101 }
+09-09 16:11:16.603  1966  3274 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:11:16.603  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=false repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:11:16.611  7604  7604 D AndroidRuntime: Shutting down VM
+09-09 16:11:17.382  2546  6176 I NearbyDiscovery: (REDACTED) BloomFilterAdvManager: Detected bloom filter but too far away, ignoring. %sm, %s
+09-09 16:11:17.734  7614  7614 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:11:17.738   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:17.743   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 4 lines
+09-09 16:11:17.743   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:17.753  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:11:17.754  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:11:17.769   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:17.801   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 10 lines
+09-09 16:11:17.801   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:17.851  6473  6532 I ReactNativeJS: API Request: [GET] https://vexguard.app/v1/devices
+09-09 16:11:17.853  7614  7614 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:11:17.855   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:17.860   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 4 lines
+09-09 16:11:17.860   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:17.878  7614  7614 W main    : type=1400 audit(0.0:411): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:11:17.890  7614  7614 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:11:17.900  7614  7614 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:11:17.909  7614  7614 I Input   : injectMotionEvent: MotionEvent { action=ACTION_DOWN, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=14465427, downTime=14465427, deviceId=9, source=0x1002 }
+09-09 16:11:17.916  7614  7614 I Input   : injectMotionEvent: MotionEvent { action=ACTION_UP, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=14465427, downTime=14465427, deviceId=9, source=0x1002 }
+09-09 16:11:17.920  7614  7614 D AndroidRuntime: Shutting down VM
+09-09 16:11:18.403  2546  6176 I NearbyDiscovery: (REDACTED) BloomFilterAdvManager: Detected bloom filter but too far away, ignoring. %sm, %s
+09-09 16:11:18.653   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:18.659   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 4 lines
+09-09 16:11:18.659   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:18.754  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:11:18.754  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:11:18.930  6473  6532 I ReactNativeJS: API Response: 200
+09-09 16:11:18.939   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:18.944   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 4 lines
+09-09 16:11:18.944   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:19.099  7625  7625 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:11:19.224  7625  7625 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:11:19.248  7625  7625 W main    : type=1400 audit(0.0:412): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:11:19.264  7625  7625 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:11:19.274  7625  7625 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:11:19.278  7625  7625 I Input   : injectKeyEvent: KeyEvent { action=ACTION_DOWN, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=14466801, downTime=14466801, deviceId=-1, source=0x101 }
+09-09 16:11:19.280  1966  3276 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:11:19.281  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=true repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:11:19.354  7625  7625 I Input   : injectKeyEvent: KeyEvent { action=ACTION_UP, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=14466801, downTime=14466801, deviceId=-1, source=0x101 }
+09-09 16:11:19.355  1966  3276 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:11:19.355  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=false repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:11:19.356  1966  2103 D WifiStateMachine:  ConnectedState !CMD_RSSI_POLL rt=14466877/91446969 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-31 f=5180 sc=60 link=433 tx=3,8, 0,0, 0,0  rx=3,4 bcn=193171 [on:0 tx:0 rx:0 period:3002] from screen [on:1138260 period:7840615] score=60
+09-09 16:11:19.356  1966  2103 D WifiStateMachine:  L2ConnectedState !CMD_RSSI_POLL rt=14466878/91446970 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-31 f=5180 sc=60 link=433 tx=3,8, 0,0, 0,0  rx=3,4 bcn=193171 [on:0 tx:0 rx:0 period:1] from screen [on:1138260 period:7840616] score=60
+09-09 16:11:19.360  7625  7625 D AndroidRuntime: Shutting down VM
+09-09 16:11:19.397  1966  2103 D WifiStateMachine: fetchRssiLinkSpeedAndFrequencyNative rssi=-32 linkspeed=433 freq=5180
+09-09 16:11:19.397  1966  2103 V WifiConfigManager: Updating scan detail cache freq=5180 BSSID=58:ea:1f:8e:60:e4 RSSI=-31 for "ibotpafos"WPA_PSK
+09-09 16:11:19.401  1966  3276 I WifiService: getCurrentNetwork uid=10015
+09-09 16:11:19.594   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:19.767   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 18 lines
+09-09 16:11:19.767   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:19.769  6473  6473 W VexVpn  : Native VPN status emitter failed: StandaloneCoroutine was cancelled
+09-09 16:11:19.774   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:19.848   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 8 lines
+09-09 16:11:19.848   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:19.935  2546  6176 I NearbyDiscovery: (REDACTED) BloomFilterAdvManager: Detected bloom filter but too far away, ignoring. %sm, %s
+09-09 16:11:19.977  6473  6504 I WireGuardController: Underlying endpoint latency host=94.141.160.212 network=100 latencyMs=null
+09-09 16:11:19.977  6473  6735 I WireGuardController: Underlying endpoint latency host=31.77.199.171 network=100 latencyMs=null
+09-09 16:11:19.977  6473  7516 I WireGuardController: Underlying endpoint latency host=31.77.199.171 network=100 latencyMs=null
+09-09 16:11:19.981  6473  6705 I WireGuardController: Underlying endpoint latency host=79.137.197.215 network=100 latencyMs=null
+09-09 16:11:19.981  6473  7516 I WireGuardController: Underlying endpoint latency host=94.141.160.212 network=100 latencyMs=null
+09-09 16:11:20.186  6473  6705 I WireGuardController: Underlying endpoint latency host=94.141.160.212 network=100 latencyMs=null
+09-09 16:11:20.187  6473  6705 I WireGuardController: Underlying endpoint latency host=31.77.199.171 network=100 latencyMs=null
+09-09 16:11:20.188  6473  6504 I WireGuardController: Underlying endpoint latency host=31.77.199.171 network=100 latencyMs=null
+09-09 16:11:20.192  6473  6504 I WireGuardController: Underlying endpoint latency host=79.137.197.215 network=100 latencyMs=null
+09-09 16:11:20.193  6473  6504 I WireGuardController: Underlying endpoint latency host=94.141.160.212 network=100 latencyMs=null
+09-09 16:11:20.194   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:20.268   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 10 lines
+09-09 16:11:20.268   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:20.504  7636  7636 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:11:20.615  7636  7636 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:11:20.638  7636  7636 W main    : type=1400 audit(0.0:413): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:11:20.651  7636  7636 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:11:20.661  7636  7636 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:11:20.669  7636  7636 I Input   : injectMotionEvent: MotionEvent { action=ACTION_DOWN, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=14468187, downTime=14468187, deviceId=9, source=0x1002 }
+09-09 16:11:20.676  7636  7636 I Input   : injectMotionEvent: MotionEvent { action=ACTION_UP, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=14468187, downTime=14468187, deviceId=9, source=0x1002 }
+09-09 16:11:20.681  7636  7636 D AndroidRuntime: Shutting down VM
+09-09 16:11:20.754  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:11:20.755  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:11:21.446   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:21.453   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 4 lines
+09-09 16:11:21.453   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:21.754  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:11:21.755  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:11:21.824  6473  6504 I WireGuardController: Underlying endpoint latency host=31.77.199.171 network=100 latencyMs=null
+09-09 16:11:21.827   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:21.827   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:21.829  7647  7647 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:11:21.831   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:21.833   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 2 lines
+09-09 16:11:21.833   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:21.958  7647  7647 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:11:21.978  7647  7647 W main    : type=1400 audit(0.0:414): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:11:21.988  2546  6176 I NearbyDiscovery: (REDACTED) BloomFilterAdvManager: Detected bloom filter but too far away, ignoring. %sm, %s
+09-09 16:11:21.996  7647  7647 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:11:22.006  7647  7647 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:11:22.008  7647  7647 I Input   : injectKeyEvent: KeyEvent { action=ACTION_DOWN, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=14469531, downTime=14469531, deviceId=-1, source=0x101 }
+09-09 16:11:22.010  1966  6447 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:11:22.011  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=true repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:11:22.098  7647  7647 I Input   : injectKeyEvent: KeyEvent { action=ACTION_UP, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=14469531, downTime=14469531, deviceId=-1, source=0x101 }
+09-09 16:11:22.098  1966  6447 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:11:22.100  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=false repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:11:22.106  7647  7647 D AndroidRuntime: Shutting down VM
+09-09 16:11:22.119   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:22.124   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 4 lines
+09-09 16:11:22.124   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:22.402  1966  2103 D WifiStateMachine:  ConnectedState !CMD_RSSI_POLL rt=14469924/91450016 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-32 f=5180 sc=60 link=433 tx=2,6, 0,0, 0,0  rx=2,7 bcn=193196 [on:0 tx:0 rx:0 period:3002] from screen [on:1139795 period:7843662] score=60
+09-09 16:11:22.403  1966  2103 D WifiStateMachine:  L2ConnectedState !CMD_RSSI_POLL rt=14469925/91450016 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-32 f=5180 sc=60 link=433 tx=2,6, 0,0, 0,0  rx=2,7 bcn=193196 [on:0 tx:0 rx:0 period:0] from screen [on:1139795 period:7843662] score=60
+09-09 16:11:22.441  1966  2103 D WifiStateMachine: fetchRssiLinkSpeedAndFrequencyNative rssi=-31 linkspeed=433 freq=5180
+09-09 16:11:22.441  1966  2103 V WifiConfigManager: Updating scan detail cache freq=5180 BSSID=58:ea:1f:8e:60:e4 RSSI=-31 for "ibotpafos"WPA_PSK
+09-09 16:11:22.443  1966  3276 I WifiService: getCurrentNetwork uid=10015
+09-09 16:11:23.006  2546  6176 I NearbyDiscovery: (REDACTED) BloomFilterAdvManager: Detected bloom filter but too far away, ignoring. %sm, %s
+09-09 16:11:23.239  7657  7657 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:11:23.349  7657  7657 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:11:23.368  7657  7657 W main    : type=1400 audit(0.0:415): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:11:23.384  1966  2104 D WifiHandler.WifiScanningService: handleMessage Received message=159765d sendingUid=1000
+09-09 16:11:23.384  1966  2104 D WifiScanningService: replySucceeded replySucceeded recvdMessage=159765
+09-09 16:11:23.386  7657  7657 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:11:23.389  2799  2799 D wpa_supplicant: nl80211: Drv Event 33 (NL80211_CMD_TRIGGER_SCAN) received for wlan0
+09-09 16:11:23.389  2799  2799 D wpa_supplicant: wlan0: nl80211: Scan trigger
+09-09 16:11:23.389  2799  2799 D wpa_supplicant: wlan0: Event SCAN_STARTED (46) received
+09-09 16:11:23.389  2799  2799 D wpa_supplicant: wlan0: External program started a scan
+09-09 16:11:23.396  7657  7657 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:11:23.404  7657  7657 I Input   : injectMotionEvent: MotionEvent { action=ACTION_DOWN, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=14470921, downTime=14470921, deviceId=9, source=0x1002 }
+09-09 16:11:23.411  7657  7657 I Input   : injectMotionEvent: MotionEvent { action=ACTION_UP, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=14470921, downTime=14470921, deviceId=9, source=0x1002 }
+09-09 16:11:23.415  7657  7657 D AndroidRuntime: Shutting down VM
+09-09 16:11:23.507  2546  6176 I NearbyDiscovery: (REDACTED) BloomFilterAdvManager: Detected bloom filter but too far away, ignoring. %sm, %s
+09-09 16:11:23.753  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:11:23.755  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:11:24.179   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:24.185   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 4 lines
+09-09 16:11:24.185   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:24.570  7669  7669 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:11:24.701  7669  7669 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:11:24.718  7669  7669 W main    : type=1400 audit(0.0:416): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:11:24.736  7669  7669 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:11:24.746  7669  7669 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:11:24.747  7669  7669 I Input   : injectKeyEvent: KeyEvent { action=ACTION_DOWN, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=14472270, downTime=14472270, deviceId=-1, source=0x101 }
+09-09 16:11:24.748  1966  6447 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:11:24.750  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=true repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:11:24.757  7669  7669 I Input   : injectKeyEvent: KeyEvent { action=ACTION_UP, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=14472270, downTime=14472270, deviceId=-1, source=0x101 }
+09-09 16:11:24.758  1966  6447 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:11:24.758  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=false repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:11:24.765  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:11:24.766  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:11:24.887  7669  7669 D AndroidRuntime: Shutting down VM
+09-09 16:11:25.056  2546  6176 I NearbyDiscovery: (REDACTED) BloomFilterAdvManager: Detected bloom filter but too far away, ignoring. %sm, %s
+09-09 16:11:25.140  2799  2799 D wpa_supplicant: nl80211: Drv Event 34 (NL80211_CMD_NEW_SCAN_RESULTS) received for wlan0
+09-09 16:11:25.140  2799  2799 D wpa_supplicant: wlan0: nl80211: New scan results available
+09-09 16:11:25.140  2799  2799 D wpa_supplicant: nl80211: Scan included frequencies: 2412 2417 2422 2427 2432 2437 2442 2447 2452 2457 2462 2467 2472 5180 5200 5220 5240 5260 5280 5300 5320 5500 5520 5540 5560 5580 5600 5620 5640 5660 5680 5700 5720 5745 5765 5785 5805 5825
+09-09 16:11:25.140  2799  2799 D wpa_supplicant: wlan0: Event SCAN_RESULTS (3) received
+09-09 16:11:25.140  2799  2799 D wpa_supplicant: nl80211: Received scan results (14 BSSes)
+09-09 16:11:25.140  2799  2799 D wpa_supplicant: nl80211: Scan results indicate BSS status with 58:ea:1f:8e:60:e4 as associated
+09-09 16:11:25.140  2799  2799 D wpa_supplicant: wlan0: BSS: Start scan result update 84
+09-09 16:11:25.140  2799  2799 D wpa_supplicant: wlan0: BSS: Add new id 346 BSSID f8:f0:82:cf:a7:2e SSID 'SNR-CPE-A72C' freq 2422
+09-09 16:11:25.141  2799  2799 D wpa_supplicant: wlan0: BSS: Add new id 347 BSSID 62:ea:1f:8e:60:e5 SSID '' freq 2412
+09-09 16:11:25.141  2799  2799 D wpa_supplicant: wlan0: BSS: Add new id 348 BSSID 0c:0e:76:01:8b:a3 SSID 'Lovit 131' freq 2462
+09-09 16:11:25.141  2799  2799 D wpa_supplicant: wlan0: BSS: Add new id 349 BSSID f8:f0:82:c8:1d:97 SSID 'SNR-154-5GHZ' freq 5220
+09-09 16:11:25.141   951  2803 I LOWI-8.6.0.31: [LOWI-Scan] lowi_close_record:Scan done in 91422618ms, 14 APs in scan results
+09-09 16:11:25.141  2799  2799 D wpa_supplicant: BSS: last_scan_res_used=14/32
+09-09 16:11:25.141  2799  2799 D wpa_supplicant: wlan0: New scan results available (own=0 ext=1)
+09-09 16:11:25.141  2799  2799 D wpa_supplicant: wlan0: Do not use results from externally requested scan operation for network selection
+09-09 16:11:25.141  2799  2799 D wpa_supplicant: wlan0: Control interface command 'SCAN_RESULTS'
+09-09 16:11:25.141  1966  6447 D WificondControl: Scan result ready event
+09-09 16:11:25.142  2799  2799 D wpa_supplicant: wlan0: Control interface command 'SCAN_RESULTS'
+09-09 16:11:25.144  1966  2104 D WificondControl: get 14 scan results from wificond
+09-09 16:11:25.145  1966  2104 D WifiAsyncChannel.WifiScanningService: sendMessage sendMessage message=159764
+09-09 16:11:25.148  1966  2104 I chatty  : uid=1000(system) WifiScanningSer identical 26 lines
+09-09 16:11:25.148  1966  2104 D WifiAsyncChannel.WifiScanningService: sendMessage sendMessage message=159764
+09-09 16:11:25.149  1966  2104 D WifiAsyncChannel.WifiScanningService: sendMessage sendMessage message=159749
+09-09 16:11:25.149  1966  2104 D WifiAsyncChannel.WifiScanningService: sendMessage sendMessage message=159767
+09-09 16:11:25.150  1966  2104 D WifiAsyncChannel.WifiScanningService: sendMessage sendMessage message=159749
+09-09 16:11:25.151  1966  2103 V WifiConfigManager: getSavedNetworkFromScanDetail Found "ibotpafos"WPA_PSK for ibotpafos[[WPA2-PSK-CCMP][ESS][WPS]]
+09-09 16:11:25.151  1966  2103 V WifiConfigManager: getSavedNetworkFromScanDetail Found "ibotpafos"WPA_PSK for ibotpafos[[WPA2-PSK-CCMP][ESS][WPS]]
+09-09 16:11:25.152  1966  2103 D WifiStateMachine: Supplicant is under steady state: COMPLETED
+09-09 16:11:25.152  1966  2103 V WifiLastResortWatchdog: updateAvailableNetworks: size = 0
+09-09 16:11:25.152  1966  2103 V WifiLastResortWatchdog: mWatchdogAllowedToTrigger: true
+09-09 16:11:25.152  1966  2103 V WifiLastResortWatchdog: mWifiIsConnected: true
+09-09 16:11:25.152  1966  2103 V WifiLastResortWatchdog: mRecentAvailableNetworks: 0
+09-09 16:11:25.152  1966  2103 V WifiLastResortWatchdog: mSsidFailureCount:
+09-09 16:11:25.443  1966  2103 D WifiStateMachine:  ConnectedState !CMD_RSSI_POLL rt=14472964/91453056 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-31 f=5180 sc=60 link=433 tx=2,0, 0,0, 0,0  rx=2,2 bcn=193223 [on:0 tx:0 rx:0 period:3000] from screen [on:1140858 period:7846703] score=60
+09-09 16:11:25.444  1966  2103 D WifiStateMachine:  L2ConnectedState !CMD_RSSI_POLL rt=14472966/91453058 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-31 f=5180 sc=60 link=433 tx=2,0, 0,0, 0,0  rx=2,2 bcn=193223 [on:0 tx:0 rx:0 period:1] from screen [on:1140858 period:7846704] score=60
+09-09 16:11:25.504  1966  2103 D WifiStateMachine: fetchRssiLinkSpeedAndFrequencyNative rssi=-31 linkspeed=433 freq=5180
+09-09 16:11:25.505  1966  2103 V WifiConfigManager: Updating scan detail cache freq=5180 BSSID=58:ea:1f:8e:60:e4 RSSI=-31 for "ibotpafos"WPA_PSK
+09-09 16:11:25.508  1966  3276 I WifiService: getCurrentNetwork uid=10015
+09-09 16:11:26.037  7679  7679 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:11:26.148  7679  7679 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:11:26.168  7679  7679 W main    : type=1400 audit(0.0:417): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:11:26.186  7679  7679 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:11:26.195  7679  7679 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:11:26.203  7679  7679 I Input   : injectMotionEvent: MotionEvent { action=ACTION_DOWN, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=14473721, downTime=14473721, deviceId=9, source=0x1002 }
+09-09 16:11:26.210  7679  7679 I Input   : injectMotionEvent: MotionEvent { action=ACTION_UP, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=14473721, downTime=14473721, deviceId=9, source=0x1002 }
+09-09 16:11:26.214  7679  7679 D AndroidRuntime: Shutting down VM
+09-09 16:11:26.754  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:11:26.755  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:11:26.970   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:26.976   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 4 lines
+09-09 16:11:26.976   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:27.335  6473  6484 I rd.client.debu: Background concurrent copying GC freed 537287(18MB) AllocSpace objects, 9(372KB) LOS objects, 50% free, 21MB/42MB, paused 105us total 269.498ms
+09-09 16:11:27.354  7690  7690 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:11:27.360  6473  6482 W System  : A resource failed to call end.
+09-09 16:11:27.365  6473  6482 I chatty  : uid=10146(com.vexguard.client.debug) FinalizerDaemon identical 7 lines
+09-09 16:11:27.365  6473  6482 W System  : A resource failed to call end.
+09-09 16:11:27.489  7690  7690 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:11:27.508  7690  7690 W main    : type=1400 audit(0.0:418): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:11:27.526  7690  7690 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:11:27.537  7690  7690 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:11:27.540  7690  7690 I Input   : injectKeyEvent: KeyEvent { action=ACTION_DOWN, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=14475062, downTime=14475062, deviceId=-1, source=0x101 }
+09-09 16:11:27.542  1966  3276 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:11:27.543  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=true repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:11:27.548  7690  7690 I Input   : injectKeyEvent: KeyEvent { action=ACTION_UP, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=14475062, downTime=14475062, deviceId=-1, source=0x101 }
+09-09 16:11:27.549  1966  3276 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:11:27.549  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=false repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:11:27.556  7690  7690 D AndroidRuntime: Shutting down VM
+09-09 16:11:27.608   813   813 E HWComposer: presentAndGetReleaseFences: present failed for display 0: NotValidated (7)
+09-09 16:11:27.755  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:11:27.763  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:11:28.509  1966  2103 D WifiStateMachine:  ConnectedState !CMD_RSSI_POLL rt=14476031/91456123 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-31 f=5180 sc=60 link=433 tx=1,1, 0,0, 0,0  rx=1,2 bcn=193233 [on:0 tx:0 rx:0 period:3000] from screen [on:1143075 period:7849769] score=60
+09-09 16:11:28.510  1966  2103 D WifiStateMachine:  L2ConnectedState !CMD_RSSI_POLL rt=14476032/91456123 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-31 f=5180 sc=60 link=433 tx=1,1, 0,0, 0,0  rx=1,2 bcn=193233 [on:0 tx:0 rx:0 period:0] from screen [on:1143075 period:7849769] score=60
+09-09 16:11:28.568  1966  2103 D WifiStateMachine: fetchRssiLinkSpeedAndFrequencyNative rssi=-31 linkspeed=433 freq=5180
+09-09 16:11:28.568  1966  2103 V WifiConfigManager: Updating scan detail cache freq=5180 BSSID=58:ea:1f:8e:60:e4 RSSI=-31 for "ibotpafos"WPA_PSK
+09-09 16:11:28.570  1966  3276 I WifiService: getCurrentNetwork uid=10015
+09-09 16:11:28.682  7700  7700 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:11:28.793  7700  7700 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:11:28.818  7700  7700 W main    : type=1400 audit(0.0:419): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:11:28.830  7700  7700 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:11:28.839  7700  7700 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:11:28.849  7700  7700 I Input   : injectMotionEvent: MotionEvent { action=ACTION_DOWN, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=14476367, downTime=14476367, deviceId=9, source=0x1002 }
+09-09 16:11:28.856  7700  7700 I Input   : injectMotionEvent: MotionEvent { action=ACTION_UP, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=14476367, downTime=14476367, deviceId=9, source=0x1002 }
+09-09 16:11:28.860  7700  7700 D AndroidRuntime: Shutting down VM
+09-09 16:11:29.593   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:29.600   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 4 lines
+09-09 16:11:29.600   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:29.756  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:11:29.758  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:11:30.011  7711  7711 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:11:30.150  7711  7711 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:11:30.178  7711  7711 W main    : type=1400 audit(0.0:420): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:11:30.189  7711  7711 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:11:30.198  7711  7711 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:11:30.202  7711  7711 I Input   : injectKeyEvent: KeyEvent { action=ACTION_DOWN, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=14477724, downTime=14477724, deviceId=-1, source=0x101 }
+09-09 16:11:30.203  1966  6447 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:11:30.223  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=true repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:11:30.271  7711  7711 I Input   : injectKeyEvent: KeyEvent { action=ACTION_UP, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=14477724, downTime=14477724, deviceId=-1, source=0x101 }
+09-09 16:11:30.272  1966  6447 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:11:30.272  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=false repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:11:30.275  7711  7711 D AndroidRuntime: Shutting down VM
+09-09 16:11:30.760  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:11:30.761  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:11:31.402  7721  7721 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:11:31.512  7721  7721 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:11:31.538  7721  7721 W main    : type=1400 audit(0.0:421): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:11:31.551  7721  7721 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:11:31.560  7721  7721 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:11:31.568  7721  7721 I Input   : injectMotionEvent: MotionEvent { action=ACTION_DOWN, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=14479086, downTime=14479086, deviceId=9, source=0x1002 }
+09-09 16:11:31.573  1966  2103 D WifiStateMachine:  ConnectedState !CMD_RSSI_POLL rt=14479095/91459186 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-31 f=5180 sc=60 link=433 tx=0,4, 0,0, 0,0  rx=0,7 bcn=193258 [on:0 tx:0 rx:0 period:3003] from screen [on:1143320 period:7852832] score=60
+09-09 16:11:31.573  1966  2103 D WifiStateMachine:  L2ConnectedState !CMD_RSSI_POLL rt=14479095/91459187 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-31 f=5180 sc=60 link=433 tx=0,4, 0,0, 0,0  rx=0,7 bcn=193258 [on:0 tx:0 rx:0 period:1] from screen [on:1143320 period:7852833] score=60
+09-09 16:11:31.575  7721  7721 I Input   : injectMotionEvent: MotionEvent { action=ACTION_UP, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=14479086, downTime=14479086, deviceId=9, source=0x1002 }
+09-09 16:11:31.579  7721  7721 D AndroidRuntime: Shutting down VM
+09-09 16:11:31.623  1966  2103 D WifiStateMachine: fetchRssiLinkSpeedAndFrequencyNative rssi=-31 linkspeed=433 freq=5180
+09-09 16:11:31.623  1966  2103 V WifiConfigManager: Updating scan detail cache freq=5180 BSSID=58:ea:1f:8e:60:e4 RSSI=-31 for "ibotpafos"WPA_PSK
+09-09 16:11:31.625  1966  6447 I WifiService: getCurrentNetwork uid=10015
+09-09 16:11:32.314   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:32.319   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 4 lines
+09-09 16:11:32.319   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:11:32.728  7732  7732 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:11:32.756  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:11:32.756  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:11:32.858  7732  7732 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:11:32.888  7732  7732 W main    : type=1400 audit(0.0:422): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:11:32.901  7732  7732 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:11:32.911  7732  7732 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:11:32.915  7732  7732 I Input   : injectKeyEvent: KeyEvent { action=ACTION_DOWN, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=14480438, downTime=14480438, deviceId=-1, source=0x101 }
+09-09 16:11:32.917  1966  6447 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:11:32.918  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=true repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:11:32.963  7732  7732 I Input   : injectKeyEvent: KeyEvent { action=ACTION_UP, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=14480438, downTime=14480438, deviceId=-1, source=0x101 }
+09-09 16:11:32.963  1966  6447 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:11:32.963  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=false repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:11:32.969  7732  7732 D AndroidRuntime: Shutting down VM
+09-09 16:11:33.490  2546  6176 I NearbyDiscovery: (REDACTED) BloomFilterAdvManager: Detected bloom filter but too far away, ignoring. %sm, %s
+09-09 16:11:33.738  6473  7375 W Binder  : Caught a RuntimeException from the binder stub implementation.
+09-09 16:11:33.738  6473  7375 W Binder  : java.lang.NullPointerException: Attempt to read from field 'android.view.ThreadedRenderer android.view.View$AttachInfo.mThreadedRenderer' on a null object reference
+09-09 16:11:33.738  6473  7375 W Binder  : 	at android.view.WindowManagerGlobal.dumpGfxInfo(WindowManagerGlobal.java:566)
+09-09 16:11:33.738  6473  7375 W Binder  : 	at android.app.ActivityThread$ApplicationThread.dumpGfxInfo(ActivityThread.java:1354)
+09-09 16:11:33.738  6473  7375 W Binder  : 	at android.app.IApplicationThread$Stub.onTransact(IApplicationThread.java:634)
+09-09 16:11:33.738  6473  7375 W Binder  : 	at android.os.Binder.execTransact(Binder.java:731)
+09-09 16:11:33.754  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:11:33.755  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:11:34.629  1966  2103 D WifiStateMachine:  ConnectedState !CMD_RSSI_POLL rt=14482150/91462242 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-31 f=5180 sc=60 link=433 tx=0,1, 0,0, 0,0  rx=0,2 bcn=193282 [on:0 tx:0 rx:0 period:3004] from screen [on:1143530 period:7855889] score=60
+09-09 16:11:34.631  1966  2103 D WifiStateMachine:  L2ConnectedState !CMD_RSSI_POLL rt=14482152/91462244 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-31 f=5180 sc=60 link=433 tx=0,1, 0,0, 0,0  rx=0,2 bcn=193282 [on:0 tx:0 rx:0 period:1] from screen [on:1143530 period:7855890] score=60
+09-09 16:11:34.686  1966  2103 D WifiStateMachine: fetchRssiLinkSpeedAndFrequencyNative rssi=-31 linkspeed=433 freq=5180
+09-09 16:11:34.686  1966  2103 V WifiConfigManager: Updating scan detail cache freq=5180 BSSID=58:ea:1f:8e:60:e4 RSSI=-31 for "ibotpafos"WPA_PSK
+09-09 16:11:34.691  1966  6447 I WifiService: getCurrentNetwork uid=10015
+09-09 16:11:34.815  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:11:34.818  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:11:36.544  2546  6176 I NearbyDiscovery: (REDACTED) BloomFilterAdvManager: Detected bloom filter but too far away, ignoring. %sm, %s
+09-09 16:11:36.767  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:11:36.769  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:11:37.312  2546  6176 I NearbyDiscovery: (REDACTED) BloomFilterAdvManager: Detected bloom filter but too far away, ignoring. %sm, %s
+09-09 16:11:37.312  2546  7081 I NearbyDiscovery: (REDACTED) loadFastPairModule: checkFeaturesAreAvailable:%d
+09-09 16:11:37.313  2546  7081 I NearbyDiscovery: loadFastPairModule: FastPair module is downloaded. [CONTEXT service_id=265 ]
+09-09 16:11:37.569  2546  6176 I NearbyDiscovery: (REDACTED) BloomFilterAdvManager: Detected bloom filter but too far away, ignoring. %sm, %s
+09-09 16:11:37.694  1966  2103 D WifiStateMachine:  ConnectedState !CMD_RSSI_POLL rt=14485215/91465306 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-31 f=5180 sc=60 link=433 tx=0,1, 0,0, 0,0  rx=0,1 bcn=193307 [on:0 tx:0 rx:0 period:3003] from screen [on:1143724 period:7858954] score=60
+09-09 16:11:37.695  1966  2103 D WifiStateMachine:  L2ConnectedState !CMD_RSSI_POLL rt=14485217/91465308 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-31 f=5180 sc=60 link=433 tx=0,1, 0,0, 0,0  rx=0,1 bcn=193307 [on:0 tx:0 rx:0 period:1] from screen [on:1143724 period:7858955] score=60
+09-09 16:11:37.760  1966  2103 D WifiStateMachine: fetchRssiLinkSpeedAndFrequencyNative rssi=-31 linkspeed=433 freq=5180
+09-09 16:11:37.760  1966  2103 V WifiConfigManager: Updating scan detail cache freq=5180 BSSID=58:ea:1f:8e:60:e4 RSSI=-31 for "ibotpafos"WPA_PSK
+09-09 16:11:37.764  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:11:37.767  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:11:37.771  1966  6447 I WifiService: getCurrentNetwork uid=10015
+09-09 16:11:38.582  2546  6176 I NearbyDiscovery: (REDACTED) BloomFilterAdvManager: Detected bloom filter but too far away, ignoring. %sm, %s

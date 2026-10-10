@@ -1,0 +1,239 @@
+--------- beginning of main
+09-09 16:29:46.149  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:29:46.150  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:29:46.547  9494  9494 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:29:46.657  9494  9494 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:29:46.678  9494  9494 W main    : type=1400 audit(0.0:472): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:29:46.694  9494  9494 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:29:46.703  9494  9494 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:29:46.712  9494  9494 I Input   : injectMotionEvent: MotionEvent { action=ACTION_DOWN, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=15574230, downTime=15574230, deviceId=9, source=0x1002 }
+09-09 16:29:46.718  9494  9494 I Input   : injectMotionEvent: MotionEvent { action=ACTION_UP, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=15574230, downTime=15574230, deviceId=9, source=0x1002 }
+09-09 16:29:46.723  9494  9494 D AndroidRuntime: Shutting down VM
+09-09 16:29:46.996   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+--------- beginning of system
+09-09 16:29:47.019  1966  2014 W BroadcastQueue: Background execution not allowed: receiving Intent { act=android.intent.action.DROPBOX_ENTRY_ADDED flg=0x10 (has extras) } to com.google.android.gms/.stats.service.DropBoxEntryAddedReceiver
+09-09 16:29:47.032   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 10 lines
+09-09 16:29:47.033   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:29:47.150  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:29:47.151  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:29:47.673  9506  9506 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:29:47.789  9506  9506 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:29:47.808  9506  9506 W main    : type=1400 audit(0.0:473): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:29:47.827  9506  9506 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:29:47.837  9506  9506 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:29:47.840  9506  9506 I Input   : injectKeyEvent: KeyEvent { action=ACTION_DOWN, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=15575363, downTime=15575363, deviceId=-1, source=0x101 }
+09-09 16:29:47.842  1966  3274 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:29:47.843  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=true repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:29:47.846  9506  9506 I Input   : injectKeyEvent: KeyEvent { action=ACTION_UP, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=15575363, downTime=15575363, deviceId=-1, source=0x101 }
+09-09 16:29:47.847  1966  3274 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:29:47.847  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=false repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:29:47.850  9506  9506 D AndroidRuntime: Shutting down VM
+09-09 16:29:48.153  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:29:48.154  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:29:48.799  9516  9516 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:29:48.909  9516  9516 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:29:48.928  9516  9516 W main    : type=1400 audit(0.0:474): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:29:48.943  9516  9516 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:29:48.953  9516  9516 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:29:48.960  9516  9516 I Input   : injectMotionEvent: MotionEvent { action=ACTION_DOWN, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=15576478, downTime=15576478, deviceId=9, source=0x1002 }
+09-09 16:29:48.965  9516  9516 I Input   : injectMotionEvent: MotionEvent { action=ACTION_UP, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=15576478, downTime=15576478, deviceId=9, source=0x1002 }
+09-09 16:29:48.968  9516  9516 D AndroidRuntime: Shutting down VM
+09-09 16:29:49.133   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:29:49.147   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 4 lines
+09-09 16:29:49.147   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:29:49.150  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:29:49.151  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:29:49.179   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:29:49.183   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 4 lines
+09-09 16:29:49.183   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:29:49.900  9528  9528 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:29:50.010  9528  9528 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:29:50.038  9528  9528 W main    : type=1400 audit(0.0:475): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:29:50.047  9528  9528 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:29:50.057  9528  9528 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:29:50.060  9528  9528 I Input   : injectKeyEvent: KeyEvent { action=ACTION_DOWN, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=15577583, downTime=15577583, deviceId=-1, source=0x101 }
+09-09 16:29:50.062  1966  3274 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:29:50.063  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=true repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:29:50.064  9528  9528 I Input   : injectKeyEvent: KeyEvent { action=ACTION_UP, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=15577583, downTime=15577583, deviceId=-1, source=0x101 }
+09-09 16:29:50.065  1966  3274 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:29:50.065  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=false repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:29:50.068  9528  9528 D AndroidRuntime: Shutting down VM
+09-09 16:29:50.151  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:29:50.153  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:29:50.327  3062  3062 D BoundBrokerSvc: onUnbind: Intent { act=com.google.android.gms.safetynet.service.START pkg=com.google.android.gms }
+09-09 16:29:50.567  2546  6176 I NearbyDiscovery: (REDACTED) BloomFilterAdvManager: Detected bloom filter but too far away, ignoring. %sm, %s
+09-09 16:29:50.991  9538  9538 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:29:51.065  2546  6176 I NearbyDiscovery: (REDACTED) BloomFilterAdvManager: Detected bloom filter but too far away, ignoring. %sm, %s
+09-09 16:29:51.101  9538  9538 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:29:51.128  9538  9538 W main    : type=1400 audit(0.0:476): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:29:51.141  9538  9538 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:29:51.149  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:29:51.150  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:29:51.151  9538  9538 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:29:51.162  9538  9538 I Input   : injectMotionEvent: MotionEvent { action=ACTION_DOWN, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=15578677, downTime=15578677, deviceId=9, source=0x1002 }
+09-09 16:29:51.165  9538  9538 I Input   : injectMotionEvent: MotionEvent { action=ACTION_UP, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=15578677, downTime=15578677, deviceId=9, source=0x1002 }
+09-09 16:29:51.168  9538  9538 D AndroidRuntime: Shutting down VM
+09-09 16:29:51.360   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:29:51.407   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 10 lines
+09-09 16:29:51.407   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:29:52.093  9551  9551 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:29:52.148  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:29:52.149  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:29:52.208  9551  9551 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:29:52.228  9551  9551 W main    : type=1400 audit(0.0:477): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:29:52.243  9551  9551 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:29:52.253  9551  9551 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:29:52.254  9551  9551 I Input   : injectKeyEvent: KeyEvent { action=ACTION_DOWN, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=15579776, downTime=15579776, deviceId=-1, source=0x101 }
+09-09 16:29:52.255  1966  6540 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:29:52.256  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=true repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:29:52.257  9551  9551 I Input   : injectKeyEvent: KeyEvent { action=ACTION_UP, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=15579776, downTime=15579776, deviceId=-1, source=0x101 }
+09-09 16:29:52.258  1966  6540 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:29:52.258  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=false repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:29:52.260  9551  9551 D AndroidRuntime: Shutting down VM
+09-09 16:29:53.150  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:29:53.151  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:29:53.188  9561  9561 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:29:53.298  9561  9561 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:29:53.318  9561  9561 W main    : type=1400 audit(0.0:478): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:29:53.332  9561  9561 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:29:53.342  9561  9561 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:29:53.348  9561  9561 I Input   : injectMotionEvent: MotionEvent { action=ACTION_DOWN, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=15580865, downTime=15580865, deviceId=9, source=0x1002 }
+09-09 16:29:53.351  9561  9561 I Input   : injectMotionEvent: MotionEvent { action=ACTION_UP, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=15580865, downTime=15580865, deviceId=9, source=0x1002 }
+09-09 16:29:53.353  9561  9561 D AndroidRuntime: Shutting down VM
+09-09 16:29:53.523   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:29:53.566   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 10 lines
+09-09 16:29:53.566   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:29:53.679  9400  9410 I rd.client.debu: Background concurrent copying GC freed 268052(9MB) AllocSpace objects, 1(20KB) LOS objects, 49% free, 13MB/26MB, paused 135us total 163.723ms
+09-09 16:29:54.148  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:29:54.150  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:29:54.294  9574  9574 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:29:54.404  9574  9574 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:29:54.428  9574  9574 W main    : type=1400 audit(0.0:479): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:29:54.439  9574  9574 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:29:54.448  9574  9574 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:29:54.449  9574  9574 I Input   : injectKeyEvent: KeyEvent { action=ACTION_DOWN, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=15581972, downTime=15581972, deviceId=-1, source=0x101 }
+09-09 16:29:54.451  1966  7007 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:29:54.452  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=true repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:29:54.453  9574  9574 I Input   : injectKeyEvent: KeyEvent { action=ACTION_UP, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=15581972, downTime=15581972, deviceId=-1, source=0x101 }
+09-09 16:29:54.453  1966  7007 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:29:54.454  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=false repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:29:54.456  9574  9574 D AndroidRuntime: Shutting down VM
+09-09 16:29:55.152  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:29:55.153  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:29:55.401  9584  9584 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:29:55.510  9584  9584 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:29:55.528  9584  9584 W main    : type=1400 audit(0.0:480): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:29:55.545  9584  9584 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:29:55.555  9584  9584 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:29:55.561  9584  9584 I Input   : injectMotionEvent: MotionEvent { action=ACTION_DOWN, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=15583079, downTime=15583079, deviceId=9, source=0x1002 }
+09-09 16:29:55.564  9584  9584 I Input   : injectMotionEvent: MotionEvent { action=ACTION_UP, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=15583079, downTime=15583079, deviceId=9, source=0x1002 }
+09-09 16:29:55.566  9584  9584 D AndroidRuntime: Shutting down VM
+09-09 16:29:55.752   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:29:55.786   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 10 lines
+09-09 16:29:55.787   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:29:56.148  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:29:56.149  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:29:56.503  9596  9596 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:29:56.613  9596  9596 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:29:56.638  9596  9596 W main    : type=1400 audit(0.0:481): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:29:56.650  9596  9596 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:29:56.660  9596  9596 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:29:56.664  9596  9596 I Input   : injectKeyEvent: KeyEvent { action=ACTION_DOWN, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=15584187, downTime=15584187, deviceId=-1, source=0x101 }
+09-09 16:29:56.665  1966  7007 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:29:56.667  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=true repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:29:56.668  9596  9596 I Input   : injectKeyEvent: KeyEvent { action=ACTION_UP, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=15584187, downTime=15584187, deviceId=-1, source=0x101 }
+09-09 16:29:56.669  1966  7007 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:29:56.669  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=false repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:29:56.678  9596  9596 D AndroidRuntime: Shutting down VM
+09-09 16:29:56.937  2546  6176 I NearbyDiscovery: (REDACTED) BloomFilterAdvManager: Detected bloom filter but too far away, ignoring. %sm, %s
+09-09 16:29:57.154  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:29:57.156  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:29:57.442  2546  6176 I NearbyDiscovery: (REDACTED) BloomFilterAdvManager: Detected bloom filter but too far away, ignoring. %sm, %s
+09-09 16:29:57.599  9606  9606 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:29:57.710  9606  9606 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:29:57.728  9606  9606 W main    : type=1400 audit(0.0:482): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:29:57.747  9606  9606 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:29:57.756  9606  9606 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:29:57.764  9606  9606 I Input   : injectMotionEvent: MotionEvent { action=ACTION_DOWN, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=15585282, downTime=15585282, deviceId=9, source=0x1002 }
+09-09 16:29:57.768  9606  9606 I Input   : injectMotionEvent: MotionEvent { action=ACTION_UP, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=15585282, downTime=15585282, deviceId=9, source=0x1002 }
+09-09 16:29:57.771  9606  9606 D AndroidRuntime: Shutting down VM
+09-09 16:29:57.940   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:29:57.985   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 10 lines
+09-09 16:29:57.985   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:29:58.150  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:29:58.152  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:29:58.705  9618  9618 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:29:58.816  9618  9618 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:29:58.838  9618  9618 W main    : type=1400 audit(0.0:483): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:29:58.853  9618  9618 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:29:58.863  9618  9618 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:29:58.867  9618  9618 I Input   : injectKeyEvent: KeyEvent { action=ACTION_DOWN, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=15586389, downTime=15586389, deviceId=-1, source=0x101 }
+09-09 16:29:58.868  1966  3274 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:29:58.869  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=true repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:29:58.870  9618  9618 I Input   : injectKeyEvent: KeyEvent { action=ACTION_UP, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=15586389, downTime=15586389, deviceId=-1, source=0x101 }
+09-09 16:29:58.871  1966  3274 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:29:58.871  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=false repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:29:58.876  9618  9618 D AndroidRuntime: Shutting down VM
+09-09 16:29:59.157  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:29:59.160  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:29:59.798  9628  9628 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:29:59.909  9628  9628 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:29:59.938  9628  9628 W main    : type=1400 audit(0.0:484): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:29:59.947  9628  9628 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:29:59.956  9628  9628 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:29:59.966  9628  9628 I Input   : injectMotionEvent: MotionEvent { action=ACTION_DOWN, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=15587484, downTime=15587484, deviceId=9, source=0x1002 }
+09-09 16:29:59.970  9628  9628 I Input   : injectMotionEvent: MotionEvent { action=ACTION_UP, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=15587484, downTime=15587484, deviceId=9, source=0x1002 }
+09-09 16:29:59.972  9628  9628 D AndroidRuntime: Shutting down VM
+09-09 16:30:00.001  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.TIME_TICK
+09-09 16:30:00.001  2210  2210 D KeyguardUpdateMonitor: handleTimeUpdate
+09-09 16:30:00.003  2210  2210 D SystemUI_Clock: in updateClock mDemoMode isfalse
+09-09 16:30:00.004  2210  2210 D SystemUI_Clock: in updateClock mDemoMode isfalse
+09-09 16:30:00.151  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:30:00.152   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:30:00.152  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:30:00.152   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:30:00.223   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 9 lines
+09-09 16:30:00.223   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:30:00.902  9640  9640 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:30:01.011  9640  9640 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:30:01.038  9640  9640 W main    : type=1400 audit(0.0:485): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:30:01.048  9640  9640 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:30:01.057  9640  9640 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:30:01.061  9640  9640 I Input   : injectKeyEvent: KeyEvent { action=ACTION_DOWN, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=15588583, downTime=15588583, deviceId=-1, source=0x101 }
+09-09 16:30:01.062  1966  3274 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:30:01.063  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=true repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:30:01.065  9640  9640 I Input   : injectKeyEvent: KeyEvent { action=ACTION_UP, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=15588583, downTime=15588583, deviceId=-1, source=0x101 }
+09-09 16:30:01.065  1966  3274 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:30:01.066  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=false repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:30:01.078  9640  9640 D AndroidRuntime: Shutting down VM
+09-09 16:30:01.155  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:30:01.155  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:30:01.267  2546  6176 I NearbyDiscovery: (REDACTED) BloomFilterAdvManager: Detected bloom filter but too far away, ignoring. %sm, %s
+09-09 16:30:01.999  9650  9650 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:30:02.109  9650  9650 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:30:02.138  9650  9650 W main    : type=1400 audit(0.0:486): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:30:02.148  9650  9650 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:30:02.152  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:30:02.153  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:30:02.158  9650  9650 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:30:02.167  9650  9650 I Input   : injectMotionEvent: MotionEvent { action=ACTION_DOWN, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=15589685, downTime=15589685, deviceId=9, source=0x1002 }
+09-09 16:30:02.171  9650  9650 I Input   : injectMotionEvent: MotionEvent { action=ACTION_UP, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=15589685, downTime=15589685, deviceId=9, source=0x1002 }
+09-09 16:30:02.174  9650  9650 D AndroidRuntime: Shutting down VM
+09-09 16:30:02.348   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:30:02.397   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 10 lines
+09-09 16:30:02.397   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:30:03.150  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:30:03.151  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:30:03.157  9662  9662 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:30:03.270  9662  9662 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:30:03.298  9662  9662 W main    : type=1400 audit(0.0:487): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:30:03.309  9662  9662 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:30:03.319  9662  9662 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:30:03.323  9662  9662 I Input   : injectKeyEvent: KeyEvent { action=ACTION_DOWN, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=15590845, downTime=15590845, deviceId=-1, source=0x101 }
+09-09 16:30:03.324  1966  3274 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:30:03.326  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=true repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:30:03.327  9662  9662 I Input   : injectKeyEvent: KeyEvent { action=ACTION_UP, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=15590845, downTime=15590845, deviceId=-1, source=0x101 }
+09-09 16:30:03.328  1966  3274 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:30:03.328  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=false repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:30:03.337  9662  9662 D AndroidRuntime: Shutting down VM
+09-09 16:30:03.445  9400  9410 I rd.client.debu: Background concurrent copying GC freed 340086(11MB) AllocSpace objects, 0(0B) LOS objects, 49% free, 15MB/30MB, paused 79us total 191.424ms

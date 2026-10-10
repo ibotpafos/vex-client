@@ -1,0 +1,347 @@
+--------- beginning of main
+09-09 16:06:57.263  7298  7298 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:06:57.374  7298  7298 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:06:57.398  7298  7298 W main    : type=1400 audit(0.0:390): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:06:57.412  7298  7298 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:06:57.421  7298  7298 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:06:57.430  7298  7298 I Input   : injectMotionEvent: MotionEvent { action=ACTION_DOWN, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=14204948, downTime=14204948, deviceId=9, source=0x1002 }
+09-09 16:06:57.438  7298  7298 I Input   : injectMotionEvent: MotionEvent { action=ACTION_UP, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=14204948, downTime=14204948, deviceId=9, source=0x1002 }
+09-09 16:06:57.442  7298  7298 D AndroidRuntime: Shutting down VM
+09-09 16:06:57.670  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:06:57.672  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:06:58.258  1966  2103 D WifiStateMachine:  ConnectedState !CMD_RSSI_POLL rt=14205780/91185872 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-35 f=5180 sc=60 link=433 tx=0,0, 0,0, 0,0  rx=0,2 bcn=191119 [on:0 tx:0 rx:0 period:3000] from screen [on:1105317 period:7579518] score=60
+09-09 16:06:58.258  1966  2103 D WifiStateMachine:  L2ConnectedState !CMD_RSSI_POLL rt=14205781/91185872 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-35 f=5180 sc=60 link=433 tx=0,0, 0,0, 0,0  rx=0,2 bcn=191119 [on:0 tx:0 rx:0 period:0] from screen [on:1105317 period:7579518] score=60
+09-09 16:06:58.286   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:06:58.292   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 4 lines
+09-09 16:06:58.292   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+--------- beginning of system
+09-09 16:06:58.309  1966  2014 W BroadcastQueue: Background execution not allowed: receiving Intent { act=android.intent.action.DROPBOX_ENTRY_ADDED flg=0x10 (has extras) } to com.google.android.gms/.stats.service.DropBoxEntryAddedReceiver
+09-09 16:06:58.313  1966  2103 D WifiStateMachine: fetchRssiLinkSpeedAndFrequencyNative rssi=-36 linkspeed=433 freq=5180
+09-09 16:06:58.313  1966  2103 V WifiConfigManager: Updating scan detail cache freq=5180 BSSID=58:ea:1f:8e:60:e4 RSSI=-35 for "ibotpafos"WPA_PSK
+09-09 16:06:58.315  1966  3274 I WifiService: getCurrentNetwork uid=10015
+09-09 16:06:58.545   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:06:58.551   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 4 lines
+09-09 16:06:58.551   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:06:58.603  7309  7309 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:06:58.677  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:06:58.679  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:06:58.735  7309  7309 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:06:58.758  7309  7309 W main    : type=1400 audit(0.0:391): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:06:58.775  7309  7309 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:06:58.786  7309  7309 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:06:58.791  7309  7309 I Input   : injectKeyEvent: KeyEvent { action=ACTION_DOWN, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=14206309, downTime=14206309, deviceId=-1, source=0x101 }
+09-09 16:06:58.793  1966  3274 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:06:58.794  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=true repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:06:58.836  6473  6532 I ReactNativeJS: API Request: [POST] https://vexguard.app/v1/app/remote-config
+09-09 16:06:58.870  7309  7309 I Input   : injectKeyEvent: KeyEvent { action=ACTION_UP, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=14206309, downTime=14206309, deviceId=-1, source=0x101 }
+09-09 16:06:58.871  1966  3274 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:06:58.871  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=false repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:06:58.876  7309  7309 D AndroidRuntime: Shutting down VM
+09-09 16:06:59.102  6473  6484 I rd.client.debu: Background concurrent copying GC freed 327253(16MB) AllocSpace objects, 32(1372KB) LOS objects, 49% free, 19MB/39MB, paused 237us total 256.852ms
+09-09 16:06:59.124  6473  6482 W System  : A resource failed to call end.
+09-09 16:06:59.131  6473  6482 I chatty  : uid=10146(com.vexguard.client.debug) FinalizerDaemon identical 10 lines
+09-09 16:06:59.131  6473  6482 W System  : A resource failed to call end.
+09-09 16:06:59.131  6473  6482 W System  : A resource failed to call close.
+09-09 16:06:59.180  6473  6532 I ReactNativeJS: API Response: 200
+09-09 16:06:59.669  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:06:59.670  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:07:00.002  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.TIME_TICK
+09-09 16:07:00.002  2210  2210 D KeyguardUpdateMonitor: handleTimeUpdate
+09-09 16:07:00.003  7319  7319 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:07:00.005  2210  2210 D SystemUI_Clock: in updateClock mDemoMode isfalse
+09-09 16:07:00.005  2210  2210 D SystemUI_Clock: in updateClock mDemoMode isfalse
+09-09 16:07:00.115  7319  7319 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:07:00.138  7319  7319 W main    : type=1400 audit(0.0:392): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:07:00.153  7319  7319 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:07:00.162  7319  7319 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:07:00.171  7319  7319 I Input   : injectMotionEvent: MotionEvent { action=ACTION_DOWN, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=14207687, downTime=14207687, deviceId=9, source=0x1002 }
+09-09 16:07:00.179  7319  7319 I Input   : injectMotionEvent: MotionEvent { action=ACTION_UP, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=14207687, downTime=14207687, deviceId=9, source=0x1002 }
+09-09 16:07:00.184  7319  7319 D AndroidRuntime: Shutting down VM
+09-09 16:07:00.670  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:07:00.671  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:07:01.032   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:07:01.293   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 10 lines
+09-09 16:07:01.293   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:07:01.317  1966  2103 D WifiStateMachine:  ConnectedState !CMD_RSSI_POLL rt=14208839/91188931 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-36 f=5180 sc=60 link=433 tx=0,0, 0,0, 0,0  rx=0,1 bcn=191142 [on:0 tx:0 rx:0 period:3003] from screen [on:1105550 period:7582577] score=60
+09-09 16:07:01.318  1966  2103 D WifiStateMachine:  L2ConnectedState !CMD_RSSI_POLL rt=14208840/91188932 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-36 f=5180 sc=60 link=433 tx=0,0, 0,0, 0,0  rx=0,1 bcn=191142 [on:0 tx:0 rx:0 period:1] from screen [on:1105550 period:7582578] score=60
+09-09 16:07:01.329  7330  7330 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:07:01.376  1966  2103 D WifiStateMachine: fetchRssiLinkSpeedAndFrequencyNative rssi=-34 linkspeed=433 freq=5180
+09-09 16:07:01.376  1966  2103 V WifiConfigManager: Updating scan detail cache freq=5180 BSSID=58:ea:1f:8e:60:e4 RSSI=-34 for "ibotpafos"WPA_PSK
+09-09 16:07:01.378  1966  6540 I WifiService: getCurrentNetwork uid=10015
+09-09 16:07:01.452  7330  7330 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:07:01.478  7330  7330 W main    : type=1400 audit(0.0:393): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:07:01.489  7330  7330 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:07:01.499  7330  7330 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:07:01.502  7330  7330 I Input   : injectKeyEvent: KeyEvent { action=ACTION_DOWN, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=14209025, downTime=14209025, deviceId=-1, source=0x101 }
+09-09 16:07:01.504  1966  3274 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:07:01.505  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=true repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:07:01.543  7330  7330 I Input   : injectKeyEvent: KeyEvent { action=ACTION_UP, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=14209025, downTime=14209025, deviceId=-1, source=0x101 }
+09-09 16:07:01.544  1966  3274 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:07:01.544  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=false repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:07:01.547  7330  7330 D AndroidRuntime: Shutting down VM
+09-09 16:07:01.568  6473  6532 I ReactNativeJS: API Request: [POST] https://vexguard.app/v1/app/remote-config
+09-09 16:07:01.671  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:07:01.672  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:07:01.781  6473  6532 I ReactNativeJS: API Response: 200
+09-09 16:07:02.670  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:07:02.671  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:07:02.686  7340  7340 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:07:02.798  7340  7340 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:07:02.818  7340  7340 W main    : type=1400 audit(0.0:394): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:07:02.834  7340  7340 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:07:02.843  7340  7340 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:07:02.849  7340  7340 I Input   : injectMotionEvent: MotionEvent { action=ACTION_DOWN, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=14210367, downTime=14210367, deviceId=9, source=0x1002 }
+09-09 16:07:02.857  7340  7340 I Input   : injectMotionEvent: MotionEvent { action=ACTION_UP, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=14210367, downTime=14210367, deviceId=9, source=0x1002 }
+09-09 16:07:02.862  7340  7340 D AndroidRuntime: Shutting down VM
+09-09 16:07:03.672  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:07:03.673   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:07:03.673   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:07:03.673  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:07:03.678   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:07:03.931   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 8 lines
+09-09 16:07:03.931   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:07:04.018  7352  7352 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:07:04.151  7352  7352 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:07:04.178  7352  7352 W main    : type=1400 audit(0.0:395): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:07:04.188  7352  7352 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:07:04.198  7352  7352 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:07:04.201  7352  7352 I Input   : injectKeyEvent: KeyEvent { action=ACTION_DOWN, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=14211723, downTime=14211723, deviceId=-1, source=0x101 }
+09-09 16:07:04.205  1966  3274 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:07:04.206  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=true repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:07:04.217  6473  6532 I ReactNativeJS: API Request: [POST] https://vexguard.app/v1/app/remote-config
+09-09 16:07:04.307  7352  7352 I Input   : injectKeyEvent: KeyEvent { action=ACTION_UP, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=14211723, downTime=14211723, deviceId=-1, source=0x101 }
+09-09 16:07:04.308  1966  3274 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:07:04.308  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=false repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:07:04.318  7352  7352 D AndroidRuntime: Shutting down VM
+09-09 16:07:04.378  1966  2103 D WifiStateMachine:  ConnectedState !CMD_RSSI_POLL rt=14211900/91191991 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-34 f=5180 sc=60 link=433 tx=0,6, 0,0, 0,0  rx=0,7 bcn=191167 [on:0 tx:0 rx:0 period:2993] from screen [on:1106174 period:7585638] score=60
+09-09 16:07:04.378  1966  2103 D WifiStateMachine:  L2ConnectedState !CMD_RSSI_POLL rt=14211900/91191992 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-34 f=5180 sc=60 link=433 tx=0,6, 0,0, 0,0  rx=0,7 bcn=191167 [on:0 tx:0 rx:0 period:0] from screen [on:1106174 period:7585638] score=60
+09-09 16:07:04.413  1966  2103 D WifiStateMachine: fetchRssiLinkSpeedAndFrequencyNative rssi=-35 linkspeed=433 freq=5180
+09-09 16:07:04.413  1966  2103 V WifiConfigManager: Updating scan detail cache freq=5180 BSSID=58:ea:1f:8e:60:e4 RSSI=-34 for "ibotpafos"WPA_PSK
+09-09 16:07:04.415  1966  3274 I WifiService: getCurrentNetwork uid=10015
+09-09 16:07:04.490  6473  6532 I ReactNativeJS: API Response: 200
+09-09 16:07:04.674  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:07:04.676  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:07:05.439  7362  7362 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:07:05.550  7362  7362 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:07:05.568  7362  7362 W main    : type=1400 audit(0.0:396): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:07:05.585  7362  7362 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:07:05.594  7362  7362 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:07:05.601  7362  7362 I Input   : injectMotionEvent: MotionEvent { action=ACTION_DOWN, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=14213119, downTime=14213119, deviceId=9, source=0x1002 }
+09-09 16:07:05.609  7362  7362 I Input   : injectMotionEvent: MotionEvent { action=ACTION_UP, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=14213119, downTime=14213119, deviceId=9, source=0x1002 }
+09-09 16:07:05.613  7362  7362 D AndroidRuntime: Shutting down VM
+09-09 16:07:05.670  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:07:05.671  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:07:05.925  1966  1975 I system_server: Background concurrent copying GC freed 708596(26MB) AllocSpace objects, 63(2MB) LOS objects, 42% free, 22MB/38MB, paused 255us total 253.558ms
+09-09 16:07:06.389   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:07:06.639   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 8 lines
+09-09 16:07:06.639   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:07:06.672  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:07:06.673  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:07:06.713   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:07:06.713   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:07:06.766  7378  7378 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:07:06.896  7378  7378 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:07:06.918  7378  7378 W main    : type=1400 audit(0.0:397): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:07:06.926  6473  6532 I ReactNativeJS: API Request: [POST] https://vexguard.app/v1/app/remote-config
+09-09 16:07:06.934  7378  7378 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:07:06.944  7378  7378 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:07:06.946  7378  7378 I Input   : injectKeyEvent: KeyEvent { action=ACTION_DOWN, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=14214468, downTime=14214468, deviceId=-1, source=0x101 }
+09-09 16:07:06.947  1966  3274 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:07:06.948  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=true repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:07:06.980  7378  7378 I Input   : injectKeyEvent: KeyEvent { action=ACTION_UP, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=14214468, downTime=14214468, deviceId=-1, source=0x101 }
+09-09 16:07:06.980  1966  3274 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:07:06.981  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=false repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:07:06.989  7378  7378 D AndroidRuntime: Shutting down VM
+09-09 16:07:07.212  6473  6532 I ReactNativeJS: API Response: 200
+09-09 16:07:07.418  1966  2103 D WifiStateMachine:  ConnectedState !CMD_RSSI_POLL rt=14214939/91195031 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-35 f=5180 sc=60 link=433 tx=1,7, 0,0, 0,0  rx=1,3 bcn=191192 [on:0 tx:0 rx:0 period:3003] from screen [on:1106913 period:7588677] score=60
+09-09 16:07:07.418  1966  2103 D WifiStateMachine:  L2ConnectedState !CMD_RSSI_POLL rt=14214940/91195032 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-35 f=5180 sc=60 link=433 tx=1,7, 0,0, 0,0  rx=1,3 bcn=191192 [on:0 tx:0 rx:0 period:1] from screen [on:1106913 period:7588678] score=60
+09-09 16:07:07.480  1966  2103 D WifiStateMachine: fetchRssiLinkSpeedAndFrequencyNative rssi=-35 linkspeed=433 freq=5180
+09-09 16:07:07.480  1966  2103 V WifiConfigManager: Updating scan detail cache freq=5180 BSSID=58:ea:1f:8e:60:e4 RSSI=-34 for "ibotpafos"WPA_PSK
+09-09 16:07:07.482  1966  3274 I WifiService: getCurrentNetwork uid=10015
+09-09 16:07:07.675  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:07:07.677  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:07:08.119  7388  7388 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:07:08.228  7388  7388 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:07:08.248  7388  7388 W main    : type=1400 audit(0.0:398): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:07:08.263  7388  7388 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:07:08.273  7388  7388 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:07:08.280  7388  7388 I Input   : injectMotionEvent: MotionEvent { action=ACTION_DOWN, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=14215798, downTime=14215798, deviceId=9, source=0x1002 }
+09-09 16:07:08.287  7388  7388 I Input   : injectMotionEvent: MotionEvent { action=ACTION_UP, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=14215798, downTime=14215798, deviceId=9, source=0x1002 }
+09-09 16:07:08.291  7388  7388 D AndroidRuntime: Shutting down VM
+09-09 16:07:08.673  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:07:08.674  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:07:09.078   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:07:09.332   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 10 lines
+09-09 16:07:09.333   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:07:09.431  7399  7399 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:07:09.561  7399  7399 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:07:09.588  7399  7399 W main    : type=1400 audit(0.0:399): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:07:09.602  7399  7399 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:07:09.602  6473  6532 I ReactNativeJS: API Request: [POST] https://vexguard.app/v1/app/remote-config
+09-09 16:07:09.613  7399  7399 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:07:09.615  7399  7399 I Input   : injectKeyEvent: KeyEvent { action=ACTION_DOWN, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=14217137, downTime=14217137, deviceId=-1, source=0x101 }
+09-09 16:07:09.616  1966  3274 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:07:09.617  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=true repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:07:09.674  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:07:09.675  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:07:09.689  7399  7399 I Input   : injectKeyEvent: KeyEvent { action=ACTION_UP, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=14217137, downTime=14217137, deviceId=-1, source=0x101 }
+09-09 16:07:09.689  1966  3274 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:07:09.690  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=false repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:07:09.698  7399  7399 D AndroidRuntime: Shutting down VM
+09-09 16:07:09.879  6473  6532 I ReactNativeJS: API Response: 200
+09-09 16:07:10.483  1966  2103 D WifiStateMachine:  ConnectedState !CMD_RSSI_POLL rt=14218004/91198096 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-35 f=5180 sc=60 link=433 tx=1,2, 0,0, 0,0  rx=1,3 bcn=191217 [on:0 tx:0 rx:0 period:3000] from screen [on:1107747 period:7591742] score=60
+09-09 16:07:10.483  1966  2103 D WifiStateMachine:  L2ConnectedState !CMD_RSSI_POLL rt=14218005/91198097 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-35 f=5180 sc=60 link=433 tx=1,2, 0,0, 0,0  rx=1,3 bcn=191217 [on:0 tx:0 rx:0 period:1] from screen [on:1107747 period:7591743] score=60
+09-09 16:07:10.538  1966  2103 D WifiStateMachine: fetchRssiLinkSpeedAndFrequencyNative rssi=-36 linkspeed=433 freq=5180
+09-09 16:07:10.539  1966  2103 V WifiConfigManager: Updating scan detail cache freq=5180 BSSID=58:ea:1f:8e:60:e4 RSSI=-35 for "ibotpafos"WPA_PSK
+09-09 16:07:10.540  1966  3274 I WifiService: getCurrentNetwork uid=10015
+09-09 16:07:10.671  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:07:10.672  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:07:10.836  7412  7412 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:07:10.946  7412  7412 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:07:10.968  7412  7412 W main    : type=1400 audit(0.0:400): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:07:10.981  7412  7412 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:07:10.991  7412  7412 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:07:10.998  7412  7412 I Input   : injectMotionEvent: MotionEvent { action=ACTION_DOWN, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=14218516, downTime=14218516, deviceId=9, source=0x1002 }
+09-09 16:07:11.006  7412  7412 I Input   : injectMotionEvent: MotionEvent { action=ACTION_UP, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=14218516, downTime=14218516, deviceId=9, source=0x1002 }
+09-09 16:07:11.010  7412  7412 D AndroidRuntime: Shutting down VM
+09-09 16:07:11.675  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:07:11.677  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:07:11.756   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:07:12.004   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 10 lines
+09-09 16:07:12.004   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:07:12.156  7423  7423 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:07:12.276  6473  6532 I ReactNativeJS: API Request: [POST] https://vexguard.app/v1/app/remote-config
+09-09 16:07:12.286  7423  7423 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:07:12.308  7423  7423 W main    : type=1400 audit(0.0:401): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:07:12.322  7423  7423 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:07:12.333  7423  7423 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:07:12.334  7423  7423 I Input   : injectKeyEvent: KeyEvent { action=ACTION_DOWN, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=14219857, downTime=14219857, deviceId=-1, source=0x101 }
+09-09 16:07:12.335  1966  3274 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:07:12.336  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=true repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:07:12.344  7423  7423 I Input   : injectKeyEvent: KeyEvent { action=ACTION_UP, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=14219857, downTime=14219857, deviceId=-1, source=0x101 }
+09-09 16:07:12.345  1966  3274 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:07:12.345  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=false repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:07:12.348  7423  7423 D AndroidRuntime: Shutting down VM
+09-09 16:07:12.672  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:07:12.673  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:07:12.693  6473  6532 I ReactNativeJS: API Response: 200
+09-09 16:07:13.477  7433  7433 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:07:13.543  1966  2103 D WifiStateMachine:  ConnectedState !CMD_RSSI_POLL rt=14221065/91201157 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-36 f=5180 sc=60 link=433 tx=1,1, 0,0, 0,0  rx=0,9 bcn=191242 [on:0 tx:0 rx:0 period:3003] from screen [on:1108337 period:7594803] score=60
+09-09 16:07:13.543  1966  2103 D WifiStateMachine:  L2ConnectedState !CMD_RSSI_POLL rt=14221066/91201157 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-36 f=5180 sc=60 link=433 tx=1,1, 0,0, 0,0  rx=0,9 bcn=191242 [on:0 tx:0 rx:0 period:0] from screen [on:1108337 period:7594803] score=60
+09-09 16:07:13.585  7433  7433 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:07:13.602  1966  2103 D WifiStateMachine: fetchRssiLinkSpeedAndFrequencyNative rssi=-35 linkspeed=433 freq=5180
+09-09 16:07:13.603  1966  2103 V WifiConfigManager: Updating scan detail cache freq=5180 BSSID=58:ea:1f:8e:60:e4 RSSI=-35 for "ibotpafos"WPA_PSK
+09-09 16:07:13.604  1966  3274 I WifiService: getCurrentNetwork uid=10015
+09-09 16:07:13.608  7433  7433 W main    : type=1400 audit(0.0:402): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:07:13.621  7433  7433 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:07:13.630  7433  7433 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:07:13.638  7433  7433 I Input   : injectMotionEvent: MotionEvent { action=ACTION_DOWN, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=14221156, downTime=14221156, deviceId=9, source=0x1002 }
+09-09 16:07:13.645  7433  7433 I Input   : injectMotionEvent: MotionEvent { action=ACTION_UP, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=14221156, downTime=14221156, deviceId=9, source=0x1002 }
+09-09 16:07:13.650  7433  7433 D AndroidRuntime: Shutting down VM
+09-09 16:07:13.670  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:07:13.672  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:07:14.305  6473  6484 I rd.client.debu: Background concurrent copying GC freed 518573(17MB) AllocSpace objects, 0(0B) LOS objects, 49% free, 21MB/43MB, paused 121us total 274.667ms
+09-09 16:07:14.436   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:07:14.441   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 4 lines
+09-09 16:07:14.441   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:07:14.675  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:07:14.677  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:07:14.685   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:07:14.690   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 4 lines
+09-09 16:07:14.690   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:07:14.821  7445  7445 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:07:14.946  7445  7445 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:07:14.968  7445  7445 W main    : type=1400 audit(0.0:403): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:07:14.974  6473  6532 I ReactNativeJS: API Request: [POST] https://vexguard.app/v1/app/remote-config
+09-09 16:07:14.984  7445  7445 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:07:14.994  7445  7445 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:07:14.995  7445  7445 I Input   : injectKeyEvent: KeyEvent { action=ACTION_DOWN, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=14222517, downTime=14222517, deviceId=-1, source=0x101 }
+09-09 16:07:14.998  1966  6540 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:07:15.005  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=true repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:07:15.012  7445  7445 I Input   : injectKeyEvent: KeyEvent { action=ACTION_UP, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=14222517, downTime=14222517, deviceId=-1, source=0x101 }
+09-09 16:07:15.013  1966  6540 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:07:15.013  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=false repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:07:15.019  7445  7445 D AndroidRuntime: Shutting down VM
+09-09 16:07:15.220  6473  6532 I ReactNativeJS: API Response: 200
+09-09 16:07:15.675  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:07:15.676  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:07:16.163  7455  7455 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:07:16.272  7455  7455 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:07:16.298  7455  7455 W main    : type=1400 audit(0.0:404): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:07:16.310  7455  7455 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:07:16.319  7455  7455 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:07:16.328  7455  7455 I Input   : injectMotionEvent: MotionEvent { action=ACTION_DOWN, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=14223846, downTime=14223846, deviceId=9, source=0x1002 }
+09-09 16:07:16.335  7455  7455 I Input   : injectMotionEvent: MotionEvent { action=ACTION_UP, actionButton=0, id[0]=0, x[0]=954.0, y[0]=158.0, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=14223846, downTime=14223846, deviceId=9, source=0x1002 }
+09-09 16:07:16.340  7455  7455 D AndroidRuntime: Shutting down VM
+09-09 16:07:16.608  1966  2103 D WifiStateMachine:  ConnectedState !CMD_RSSI_POLL rt=14224130/91204221 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-35 f=5180 sc=60 link=433 tx=1,0, 0,0, 0,0  rx=0,9 bcn=191267 [on:0 tx:0 rx:0 period:3004] from screen [on:1108943 period:7597868] score=60
+09-09 16:07:16.608  1966  2103 D WifiStateMachine:  L2ConnectedState !CMD_RSSI_POLL rt=14224130/91204222 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-35 f=5180 sc=60 link=433 tx=1,0, 0,0, 0,0  rx=0,9 bcn=191267 [on:0 tx:0 rx:0 period:0] from screen [on:1108943 period:7597868] score=60
+09-09 16:07:16.666  1966  2103 D WifiStateMachine: fetchRssiLinkSpeedAndFrequencyNative rssi=-35 linkspeed=433 freq=5180
+09-09 16:07:16.666  1966  2103 V WifiConfigManager: Updating scan detail cache freq=5180 BSSID=58:ea:1f:8e:60:e4 RSSI=-35 for "ibotpafos"WPA_PSK
+09-09 16:07:16.670  1966  3274 I WifiService: getCurrentNetwork uid=10015
+09-09 16:07:16.675  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:07:16.676  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:07:17.110   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:07:17.363   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 10 lines
+09-09 16:07:17.363   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:07:17.482  7466  7466 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-09 16:07:17.611  7466  7466 I app_process: The ClassLoaderContext is a special shared library.
+09-09 16:07:17.638  7466  7466 W main    : type=1400 audit(0.0:405): avc: denied { read } for name="u:object_r:vendor_mpctl_prop:s0" dev="tmpfs" ino=6441 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_mpctl_prop:s0 tclass=file permissive=0
+09-09 16:07:17.649  7466  7466 E libc    : Access denied finding property "ro.vendor.at_library"
+09-09 16:07:17.658  6473  6532 I ReactNativeJS: API Request: [POST] https://vexguard.app/v1/app/remote-config
+09-09 16:07:17.659  7466  7466 D AndroidRuntime: Calling main entry com.android.commands.input.Input
+09-09 16:07:17.661  7466  7466 I Input   : injectKeyEvent: KeyEvent { action=ACTION_DOWN, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=14225183, downTime=14225183, deviceId=-1, source=0x101 }
+09-09 16:07:17.662  1966  3274 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:07:17.663  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=true repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:07:17.679  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:07:17.681  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:07:17.681  7466  7466 I Input   : injectKeyEvent: KeyEvent { action=ACTION_UP, keyCode=KEYCODE_BACK, scanCode=0, metaState=0, flags=0x0, repeatCount=0, eventTime=14225183, downTime=14225183, deviceId=-1, source=0x101 }
+09-09 16:07:17.682  1966  6540 D WindowManager: interceptKeyTq keycode=4 interactive=true keyguardActive=false policyFlags=2b000000
+09-09 16:07:17.682  1966  2082 D WindowManager: interceptKeyTi keyCode=4 down=false repeatCount=0 keyguardOn=false mHomePressed=false canceled=false
+09-09 16:07:17.693  7466  7466 D AndroidRuntime: Shutting down VM
+09-09 16:07:17.904  6473  6532 I ReactNativeJS: API Response: 200
+09-09 16:07:17.912   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:07:17.949   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 10 lines
+09-09 16:07:17.949   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:07:18.460  6473  7375 W Binder  : Caught a RuntimeException from the binder stub implementation.
+09-09 16:07:18.460  6473  7375 W Binder  : java.lang.NullPointerException: Attempt to read from field 'android.view.ThreadedRenderer android.view.View$AttachInfo.mThreadedRenderer' on a null object reference
+09-09 16:07:18.460  6473  7375 W Binder  : 	at android.view.WindowManagerGlobal.dumpGfxInfo(WindowManagerGlobal.java:566)
+09-09 16:07:18.460  6473  7375 W Binder  : 	at android.app.ActivityThread$ApplicationThread.dumpGfxInfo(ActivityThread.java:1354)
+09-09 16:07:18.460  6473  7375 W Binder  : 	at android.app.IApplicationThread$Stub.onTransact(IApplicationThread.java:634)
+09-09 16:07:18.460  6473  7375 W Binder  : 	at android.os.Binder.execTransact(Binder.java:731)
+09-09 16:07:18.678  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:07:18.681  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:07:19.671  1966  2103 D WifiStateMachine:  ConnectedState !CMD_RSSI_POLL rt=14227192/91207284 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-35 f=5180 sc=60 link=433 tx=1,0, 0,0, 0,0  rx=0,8 bcn=191292 [on:0 tx:0 rx:0 period:3001] from screen [on:1109571 period:7600930] score=60
+09-09 16:07:19.672  1966  2103 D WifiStateMachine:  L2ConnectedState !CMD_RSSI_POLL rt=14227193/91207285 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-35 f=5180 sc=60 link=433 tx=1,0, 0,0, 0,0  rx=0,8 bcn=191292 [on:0 tx:0 rx:0 period:1] from screen [on:1109571 period:7600931] score=60
+09-09 16:07:19.681  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:07:19.683  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:07:19.734  1966  2103 D WifiStateMachine: fetchRssiLinkSpeedAndFrequencyNative rssi=-34 linkspeed=433 freq=5180
+09-09 16:07:19.734  1966  2103 V WifiConfigManager: Updating scan detail cache freq=5180 BSSID=58:ea:1f:8e:60:e4 RSSI=-34 for "ibotpafos"WPA_PSK
+09-09 16:07:19.736  1966  6540 I WifiService: getCurrentNetwork uid=10015
+09-09 16:07:19.820   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:07:19.831   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 4 lines
+09-09 16:07:19.831   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:07:19.942  6473  6735 I WireGuardController: Underlying endpoint latency host=94.141.160.212 network=100 latencyMs=null
+09-09 16:07:19.943  6473  6735 I WireGuardController: Underlying endpoint latency host=31.77.199.171 network=100 latencyMs=null
+09-09 16:07:19.943  6473  7411 I WireGuardController: Underlying endpoint latency host=31.77.199.171 network=100 latencyMs=null
+09-09 16:07:19.944  6473  6705 I WireGuardController: Underlying endpoint latency host=79.137.197.215 network=100 latencyMs=null
+09-09 16:07:19.944  6473  6504 I WireGuardController: Underlying endpoint latency host=94.141.160.212 network=100 latencyMs=null
+09-09 16:07:20.152  6473  6705 I WireGuardController: Underlying endpoint latency host=94.141.160.212 network=100 latencyMs=null
+09-09 16:07:20.152  6473  7411 I WireGuardController: Underlying endpoint latency host=31.77.199.171 network=100 latencyMs=null
+09-09 16:07:20.152  6473  6705 I WireGuardController: Underlying endpoint latency host=31.77.199.171 network=100 latencyMs=null
+09-09 16:07:20.152  6473  7411 I WireGuardController: Underlying endpoint latency host=79.137.197.215 network=100 latencyMs=null
+09-09 16:07:20.153  6473  6705 I WireGuardController: Underlying endpoint latency host=94.141.160.212 network=100 latencyMs=null
+09-09 16:07:20.157   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:07:20.237   483   483 I chatty  : uid=1000(system) keymaster@3.0-s identical 10 lines
+09-09 16:07:20.237   483   483 W /vendor/bin/hw/android.hardware.keymaster@3.0-service: Not performing software digesting for symmetric cipher keys
+09-09 16:07:20.678  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:07:20.679  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:07:20.998  6473  6705 I WireGuardController: Underlying endpoint latency host=31.77.199.171 network=100 latencyMs=null
+09-09 16:07:21.678  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:07:21.680  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:07:22.681  2210  2210 D KeyguardUpdateMonitor: received broadcast android.intent.action.BATTERY_CHANGED
+09-09 16:07:22.683  2210  2210 D KeyguardUpdateMonitor: handleBatteryUpdate
+09-09 16:07:22.739  1966  2103 D WifiStateMachine:  ConnectedState !CMD_RSSI_POLL rt=14230260/91210352 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-34 f=5180 sc=60 link=433 tx=1,0, 0,0, 0,0  rx=0,7 bcn=191317 [on:0 tx:0 rx:0 period:3003] from screen [on:1110180 period:7603999] score=60
+09-09 16:07:22.740  1966  2103 D WifiStateMachine:  L2ConnectedState !CMD_RSSI_POLL rt=14230262/91210353 6 0 "ibotpafos" 58:ea:1f:8e:60:e4 rssi=-34 f=5180 sc=60 link=433 tx=1,0, 0,0, 0,0  rx=0,7 bcn=191317 [on:0 tx:0 rx:0 period:1] from screen [on:1110180 period:7604000] score=60
+09-09 16:07:22.800  1966  2103 D WifiStateMachine: fetchRssiLinkSpeedAndFrequencyNative rssi=-31 linkspeed=433 freq=5180
+09-09 16:07:22.800  1966  2103 V WifiConfigManager: Updating scan detail cache freq=5180 BSSID=58:ea:1f:8e:60:e4 RSSI=-32 for "ibotpafos"WPA_PSK
+09-09 16:07:22.803  1966  6540 I WifiService: getCurrentNetwork uid=10015

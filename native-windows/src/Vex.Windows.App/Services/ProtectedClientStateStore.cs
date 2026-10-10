@@ -38,38 +38,20 @@ public sealed class ProtectedClientStateStore :
     public string? StoredSessionError { get; private set; }
 
     public ProtectedClientStateStore(
-        WindowsHelloAuthService? windowsHelloAuth = null)
+        WindowsHelloAuthService? windowsHelloAuth = null,
+        string? stateDirectory = null)
     {
         _windowsHelloAuth =
             windowsHelloAuth ??
             new WindowsHelloAuthService();
-        var localData = Environment.GetFolderPath(
-            Environment.SpecialFolder.LocalApplicationData);
-        _stateFile = Path.Combine(
-            localData,
-            "VEX",
-            "VPN",
-            "client-state.bin");
-        _installationIdFile = Path.Combine(
-            localData,
-            "VEX",
-            "VPN",
-            "installation-id.bin");
-        _deviceStateFile = Path.Combine(
-            localData,
-            "VEX",
-            "VPN",
-            "device-state.bin");
-        _deviceIdentityFile = Path.Combine(
-            localData,
-            "VEX",
-            "VPN",
-            "device-identity.bin");
-        _windowsHelloPreferenceFile = Path.Combine(
-            localData,
-            "VEX",
-            "VPN",
-            "windows-hello.bin");
+        var directory = stateDirectory ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "VEX", "VPN");
+        _stateFile = Path.Combine(directory, "client-state.bin");
+        _installationIdFile = Path.Combine(directory, "installation-id.bin");
+        _deviceStateFile = Path.Combine(directory, "device-state.bin");
+        _deviceIdentityFile = Path.Combine(directory, "device-identity.bin");
+        _windowsHelloPreferenceFile = Path.Combine(directory, "windows-hello.bin");
         var helloPreference = ReadProtected<StoredWindowsHelloPreference>(_windowsHelloPreferenceFile);
         _windowsHelloRequired = helloPreference.Kind switch
         {

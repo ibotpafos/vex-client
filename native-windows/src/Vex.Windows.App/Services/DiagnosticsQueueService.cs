@@ -35,7 +35,12 @@ public sealed partial class DiagnosticsQueueService
                 "client-diagnostics-queue.json");
     }
 
-    public static DiagnosticsQueueService Current { get; } = new();
+    public static DiagnosticsQueueService Current { get; private set; } = new();
+
+#if DEBUG
+    internal static void UseIsolatedPreview(string directory) =>
+        Current = new DiagnosticsQueueService(Path.Combine(directory, "diagnostics-queue.json"));
+#endif
 
     public string QueuePath => _queuePath;
 

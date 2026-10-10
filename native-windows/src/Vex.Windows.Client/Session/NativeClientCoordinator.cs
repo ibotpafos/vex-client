@@ -1311,6 +1311,7 @@ public sealed partial class NativeClientCoordinator
         var locations = await _api.GetLocationsAsync(
             session.AccessToken,
             cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
         var existingState = _stateStore.Load();
         var existingDevice = _stateStore.LoadDevice();
         var preferredLocationId =
@@ -1347,6 +1348,7 @@ public sealed partial class NativeClientCoordinator
                     : "auto",
             RoutingMode: existingState?.RoutingMode ?? "full",
             BypassRegion: existingState?.BypassRegion);
+        cancellationToken.ThrowIfCancellationRequested();
         _stateStore.Save(state);
         return state;
     }

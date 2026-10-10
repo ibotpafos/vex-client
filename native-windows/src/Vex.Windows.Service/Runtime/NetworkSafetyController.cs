@@ -14,7 +14,7 @@ internal sealed class NetworkSafetyController
 {
     private static readonly TimeSpan CommandTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan FirewallVerificationLifetime = TimeSpan.FromSeconds(30);
-    private static readonly string[] ControlPlaneHosts = ["vexguard.app", "www.vexguard.app"];
+    private readonly IReadOnlyList<string> _controlPlaneHosts;
     private readonly object _gate = new();
     private readonly SemaphoreSlim _operationGate = new(1, 1);
     private readonly string _firewallStatePath;
@@ -28,6 +28,7 @@ internal sealed class NetworkSafetyController
 
     public NetworkSafetyController(WindowsServiceOptions options)
     {
+        _controlPlaneHosts = options.ControlPlaneBypassHosts.ToArray();
         _firewallStatePath = Path.Combine(options.DataDirectory, "firewall-rollback.json");
         _routeStatePath = Path.Combine(options.DataDirectory, "bypass-routes.json");
         // A journal indicates possible ownership, not proof that protection works.
@@ -56,6 +57,9 @@ internal sealed class NetworkSafetyController
                     var result = await FindBypassRouteAsync(address, !resolved.LiteralEndpoint || !resolved.EndpointAddresses.Contains(address), cancellationToken).ConfigureAwait(false);
                     if (result.Skipped) { continue; }
                     reachable.Add(address);
+                    // Native loopback is already outside the tunnel. Installing
+                    // a physical host route would redirect the local endpoint.
+                    if (result.Loopback) { continue; }
                     var route = new BypassRoute(IPAddress.Parse(result.Address), result.InterfaceIndex, result.NextHop);
                     if (result.Created)
                     {
@@ -547,7 +551,7 @@ internal sealed class NetworkSafetyController
         var endpointHost = ParseEndpointHost(endpoint);
         var addresses = new HashSet<IPAddress>();
         var endpointAddresses = new HashSet<IPAddress>();
-        foreach (var host in ControlPlaneHosts.Prepend(endpointHost).Distinct(StringComparer.OrdinalIgnoreCase))
+        foreach (var host in _controlPlaneHosts.Prepend(endpointHost).Distinct(StringComparer.OrdinalIgnoreCase))
         {
             cancellationToken.ThrowIfCancellationRequested();
             IPAddress[] resolved;
@@ -600,6 +604,9 @@ internal sealed class NetworkSafetyController
     {
         const string script = """
             $ErrorActionPreference='Stop';$ip=$args[0];$family=$args[1];$prefix=$ip+'/'+$args[2]
+            if([System.Net.IPAddress]::IsLoopback([System.Net.IPAddress]::Parse($ip))){
+                [pscustomobject]@{Address=$ip;InterfaceIndex=0;NextHop='';Created=$false;Loopback=$true} | ConvertTo-Json -Compress;return
+            }
             $physical=@(Get-NetAdapter -Physical | Where-Object {$_.Status -eq 'Up'} | Select-Object -ExpandProperty InterfaceIndex)
             # Never use Find-NetRoute: it can choose the running tunnel or our stale host route.
             $default=if($family -eq 'IPv4'){'0.0.0.0/0'}else{'::/0'}
@@ -726,7 +733,7 @@ internal sealed class NetworkSafetyController
 
     private sealed record BypassRoute(IPAddress Address, int InterfaceIndex, string NextHop);
     private sealed record PersistedBypassRoute(string Address, int InterfaceIndex, string NextHop);
-    private sealed record RouteCommandResult(string Address, int InterfaceIndex, string NextHop, bool Created, bool Skipped = false);
+    private sealed record RouteCommandResult(string Address, int InterfaceIndex, string NextHop, bool Created, bool Skipped = false, bool Loopback = false);
     private sealed record ProtectedAddressSet(IPAddress[] Addresses, IPAddress[] EndpointAddresses, bool LiteralEndpoint);
     private sealed record FirewallRollback(int Version, FirewallProfile[] Profiles, string[] DisabledOutboundAllowRuleNames, string[] OwnedRuleNames, string AdapterName, string[] ProtectedAddresses);
     private sealed record FirewallProfile(string Name, string Enabled, string DefaultOutboundAction);

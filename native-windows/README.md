@@ -172,13 +172,14 @@ Windows binary.
 
 The MSIX contains the signed service binary and runtime assets, but deliberately
 does not declare a packaged service or LocalSystem service capability. There is
-one service ownership model: the elevated bootstrap provisions and owns the
+one service ownership model: the bootstrap's elevated service phase provisions the
 manual `sc.exe` service. A raw MSIX or `.appinstaller` registration installs or
 updates only the application payload; it does not provision, repair, update, or
 remove the VPN service.
 
 Every initial install, repair, update, rollback, and uninstall must enter
-through the emitted bootstrap from the versioned artifact directory:
+through the emitted bootstrap from the versioned artifact directory, launched
+as the original owning user:
 
 ```powershell
 # Install the signed MSIX, provision ProgramData, and verify the running service.
@@ -202,7 +203,13 @@ through the emitted bootstrap from the versioned artifact directory:
 Install/repair creates `%ProgramData%\VEX\VPN` with protected inheritance and
 explicit access for LocalSystem, Administrators, and the owning user SID. A
 fresh 256-bit IPC credential is generated with the Windows CSPRNG and protected
-using machine-scoped DPAPI. The bootstrap verifies all release pins and waits
+using machine-scoped DPAPI. The bootstrap keeps MSIX registration, removal and
+relaunch under that user's token. It elevates only the pinned service operation
+with the original owner SID and checks the package registered for that owner;
+another administrator's credentials do not transfer service ownership. Existing
+package replacements can require two UAC prompts: stop before replacement,
+then provision the new payload. Failed provisioning retains the registered UI
+for verified Repair and reports failure. The bootstrap verifies all release pins and waits
 for `VEX VPN Service` to reach `Running` before reporting success.
 
 The signed public `update.json` release pairs the exact MSIX, bootstrap,
@@ -210,7 +217,8 @@ install/uninstall helpers, and `package-metadata.json` URIs, SHA-256 hashes, and
 sizes. Publishing also emits signed `bootstrap-entry.json` plus
 `bootstrap-entry.json.sig`. Update consumers must stage the MSIX, metadata, and
 all three PowerShell scripts into one directory, verify that signed entry, and
-launch `bootstrap-native-windows.ps1` elevated. Direct launch of the MSIX or
+launch `bootstrap-native-windows.ps1` as the owning user. It requests elevation
+only for its service phases. Direct launch of the MSIX or
 AppInstaller is not a complete VEX VPN installation/update path.
 
 The native app therefore owns the Sparkle-equivalent lifecycle. Automatic
@@ -218,7 +226,8 @@ checks are enabled by default, run shortly after startup and every six hours,
 back off for fifteen minutes after transient failures, and can be disabled in
 Settings. A verified available release is surfaced in the tray and Update
 Center; installation always stages every signed artifact and enters through
-the elevated bootstrap so the app and privileged service advance atomically.
+the original-user bootstrap and its verified elevated service phases. A failed
+service phase does not report a successful update or remove other users' packages.
 The `.appinstaller` intentionally has no package-only background update task.
 
 Packaging still requires the existing x64/arm64 release environment variables,
@@ -257,9 +266,25 @@ published native executable architectures, compiled PRI resources, and required
 application assets. On a fresh Windows x64 runner, a bounded startup smoke
 launches the unpackaged UI, observes process survival for ten seconds, and
 terminates it. It refuses hosts with an installed VEX service or saved session;
-it does not provision a service or exercise tunnel connectivity. Unsigned PR
-and manual review builds include a small startup result with selected crash
-event metadata; account state and process dumps are excluded.
+this startup check does not provision a service. Separate Debug-only previews
+exercise authenticated and signed-out navigation, the server picker, compact
+layout, single-instance redirection, close-to-tray, second-launch restoration,
+actual shell protocol activation and clean exit. Preview state is disposable;
+HTTP, realtime and service calls use offline fixtures. Release builds cannot
+enable those fixtures. Their PNG captures accompany the unsigned review builds.
+
+A macOS job renders the existing SwiftUI Home, Account, Settings, server sidebar
+and sign-in screens with its native Debug renderer for visual comparison. A
+separate fresh Windows x64 job qualifies the pinned AmneziaWG 3.1.0 CLI and
+Wintun against a memory-only encrypted peer. It checks signed-profile admission,
+SCM/adapter creation, a recent UAPI handshake, tunnel-bound DNS and verified HTTPS,
+traffic counters and owned cleanup. It uses one private /32 route and leaves
+AntiLeak disabled. This establishes local encrypted runtime behavior; public
+Internet, leak protection, roaming and arm64 runtime acceptance remain separate.
+See [the fixture documentation](scripts/vpn-fixture-peer/README.md).
+
+Unsigned PR and manual review builds include sanitized startup, desktop and
+tunnel results; private fixture keys, account state and process dumps are excluded.
 Routine jobs do not access signing secrets. Manual validation needs no release
 inputs; signed release preparation requires `package_release=true`, the main
 branch, release version/revision/notes, and the configured release inputs.

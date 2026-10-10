@@ -34,7 +34,8 @@ public sealed class AppServices
         };
         httpHandler.SslOptions.CertificateRevocationCheckMode =
             X509RevocationMode.Online;
-        var httpClient = new HttpClient(httpHandler)
+        var httpClient = new HttpClient(UiPreviewContext.IsEnabled
+            ? UiPreviewFixtures.CreateHandler() : httpHandler)
         {
             BaseAddress = new Uri(apiBaseUrl, UriKind.Absolute),
             // Profile issuance performs server-side node selection and may
@@ -44,7 +45,8 @@ public sealed class AppServices
             // signed local cache.
             Timeout = TimeSpan.FromSeconds(40),
         };
-        StateStore = new ProtectedClientStateStore();
+        StateStore = new ProtectedClientStateStore(stateDirectory: UiPreviewContext.StateDirectory);
+        UiPreviewFixtures.Seed(StateStore);
         var apiClient = new VexApiClient(httpClient, StateStore);
         var realtimeHttpHandler = new SocketsHttpHandler
         {
@@ -54,7 +56,8 @@ public sealed class AppServices
         };
         realtimeHttpHandler.SslOptions.CertificateRevocationCheckMode =
             X509RevocationMode.Online;
-        Realtime = new CustomerRealtimeClient(new HttpClient(realtimeHttpHandler)
+        Realtime = new CustomerRealtimeClient(new HttpClient(UiPreviewContext.IsEnabled
+            ? UiPreviewFixtures.CreateHandler() : realtimeHttpHandler)
         {
             BaseAddress = apiClient.BaseUri,
             Timeout = Timeout.InfiniteTimeSpan,
@@ -66,18 +69,25 @@ public sealed class AppServices
             StateStore,
             VpnClient,
             AppVersion,
-            dynamicRoutes: new DynamicRouteEngine(new ProtectedDynamicRouteStore()));
+            dynamicRoutes: new DynamicRouteEngine(new ProtectedDynamicRouteStore(UiPreviewContext.StateDirectory)));
         Auth = new NativeAuthService(
             apiClient,
             Coordinator,
             StateStore,
-            new ProtectedPkceStateStore(),
-            apiClient.BaseUri);
+            new ProtectedPkceStateStore(UiPreviewContext.StateDirectory),
+            apiClient.BaseUri,
+            async uri => !UiPreviewContext.IsEnabled &&
+                await global::Windows.System.Launcher.LaunchUriAsync(uri));
         Auth.StateChanged += OnAuthStateChanged;
         Realtime.Changed += OnRealtimeChanged;
         UpdateService = new NativeUpdateService(
             GetUpdateInstallationId());
-        Preferences = new NativeClientPreferencesStore();
+        Preferences = new NativeClientPreferencesStore(UiPreviewContext.StateDirectory is { } previewDirectory
+            ? Path.Combine(previewDirectory, "preferences.v1.dpapi") : null);
+#if DEBUG
+        if (UiPreviewContext.StateDirectory is { } diagnosticsDirectory)
+            DiagnosticsQueueService.UseIsolatedPreview(diagnosticsDirectory);
+#endif
         BackgroundUpdates = new NativeUpdateBackgroundHost(
             UpdateService,
             Preferences);
@@ -85,7 +95,7 @@ public sealed class AppServices
         VpnUiState = new VpnUiStateService(VpnClient.GetDiagnosticsAsync);
         ProductParity = new VpnProductParityService();
         BackgroundVpn = new NativeVpnBackgroundHost(this);
-        ServiceMaintenance = new WindowsServiceMaintenanceService();
+        ServiceMaintenance = new WindowsServiceMaintenanceService(VpnClient.GetDiagnosticsAsync);
         SupportSocketClient.Current.ConfigureEndpointProvider(
             (_, cancellationToken) =>
                 Coordinator.GetSupportWebSocketUriAsync(
@@ -272,6 +282,7 @@ public sealed class AppServices
 
     private async Task SynchronizeRealtimeAsync()
     {
+        if (UiPreviewContext.IsEnabled) return;
         NativeClientState? state;
         try
         {

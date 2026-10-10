@@ -1,176 +1,362 @@
-<Page
-    x:Class="Vex.Windows.App.Views.SettingsPage"
-    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <ScrollViewer VerticalScrollBarVisibility="Auto">
-        <StackPanel
-            MaxWidth="430"
-            Margin="28"
-            HorizontalAlignment="Center"
-            Spacing="14">
-            <StackPanel Margin="0,4,0,0" Spacing="4">
-                <TextBlock
-                    FontSize="12"
-                    FontWeight="SemiBold"
-                    Foreground="{StaticResource VexSecondaryTextBrush}"
-                    Text="Запуск, VPN, безопасность и системная служба."
-                    TextWrapping="Wrap" />
-            </StackPanel>
-
-            <InfoBar
-                x:Name="SettingsNotice"
-                IsClosable="True"
-                IsOpen="False"
-                Title="VEX VPN" />
-            <InfoBar
-                x:Name="IncidentNotice"
-                IsClosable="False"
-                IsOpen="False"
-                Severity="Warning"
-                Title="Статус сервиса" />
-
-            <Border
-                Padding="14"
-                Background="#8008191D"
-                BorderBrush="#14FFFFFF"
-                BorderThickness="1"
-                CornerRadius="14">
+<Page xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" x:Class="Vex.Windows.App.Views.SettingsPage" AutomationProperties.AutomationId="SettingsPage">
+    <Page.Resources>
+        <Style x:Key="SettingsCardStyle" TargetType="Border">
+            <Setter Property="Background" Value="#7508191D"/>
+            <Setter Property="CornerRadius" Value="16"/>
+            <Setter Property="Padding" Value="14"/>
+            <Setter Property="VerticalAlignment" Value="Top"/>
+        </Style>
+        <Style x:Key="SettingsTitleStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="15"/>
+            <Setter Property="FontWeight" Value="Black"/>
+            <Setter Property="Foreground" Value="{StaticResource VexTextBrush}"/>
+        </Style>
+        <Style x:Key="SettingsRowTitleStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Foreground" Value="{StaticResource VexTextBrush}"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+        <Style x:Key="SettingsDescriptionStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{StaticResource VexSecondaryTextBrush}"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+        <Style x:Key="SettingsGlyphStyle" TargetType="FontIcon">
+            <Setter Property="Width" Value="26"/>
+            <Setter Property="Height" Value="26"/>
+            <Setter Property="FontSize" Value="16"/>
+            <Setter Property="Foreground" Value="{StaticResource VexCyanBrush}"/>
+            <Setter Property="IsHitTestVisible" Value="False"/>
+        </Style>
+        <Style x:Key="SettingsSwitchStyle" TargetType="ToggleSwitch">
+            <Setter Property="MinWidth" Value="0"/>
+            <Setter Property="HorizontalAlignment" Value="Right"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="OffContent" Value=""/>
+            <Setter Property="OnContent" Value=""/>
+        </Style>
+        <SolidColorBrush x:Key="ToggleSwitchFillOn" Color="{StaticResource VexCyanColor}"/>
+        <SolidColorBrush x:Key="ToggleSwitchFillOnPointerOver" Color="{StaticResource VexCyanLightColor}"/>
+        <SolidColorBrush x:Key="ToggleSwitchFillOnPressed" Color="{StaticResource VexCyanColor}"/>
+        <SolidColorBrush x:Key="ToggleSwitchKnobFillOn" Color="{StaticResource VexTextColor}"/>
+        <SolidColorBrush x:Key="ToggleSwitchKnobFillOff" Color="{StaticResource VexTextColor}"/>
+    </Page.Resources>
+    <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+        <StackPanel x:Name="SettingsContent" MaxWidth="680" Margin="30,4,30,28" HorizontalAlignment="Stretch" SizeChanged="OnSettingsContentSizeChanged" Spacing="12">
+            <Grid ColumnSpacing="16" Margin="18,8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="48"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <FontIcon FontSize="25" Foreground="{StaticResource VexCyanLightBrush}" Glyph=""/>
+                <StackPanel Grid.Column="1" Spacing="5">
+                    <TextBlock AutomationProperties.AutomationId="SettingsPageTitle" Style="{StaticResource VexPageTitleStyle}" Text="Настройки VEX"/>
+                    <TextBlock Style="{StaticResource SettingsDescriptionStyle}" Text="Сеть, защита и приложение — в одном месте" FontSize="12"/>
+                </StackPanel>
+            </Grid>
+            <InfoBar x:Name="SettingsNotice" IsClosable="True" IsOpen="False" Title="VEX VPN"/>
+            <InfoBar x:Name="IncidentNotice" IsClosable="False" IsOpen="False" Severity="Warning" Title="Статус сервиса"/>
+            <Grid x:Name="FeatureCardsGrid" ColumnSpacing="12" RowSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition x:Name="ConnectionColumn" Width="*"/>
+                    <ColumnDefinition x:Name="ProtectionColumn" Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <Border Style="{StaticResource SettingsCardStyle}">
+                    <StackPanel Spacing="10">
+                        <Grid ColumnSpacing="10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="26"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <FontIcon Glyph="" Style="{StaticResource SettingsGlyphStyle}"/>
+                            <StackPanel Grid.Column="1" Spacing="2">
+                                <TextBlock Style="{StaticResource SettingsTitleStyle}" Text="Подключение"/>
+                                <TextBlock Style="{StaticResource SettingsDescriptionStyle}" Text="Быстрый запуск и выбор маршрута" FontSize="10"/>
+                            </StackPanel>
+                        </Grid>
+                        <Border Height="1" Background="#12FFFFFF"/>
+                        <StackPanel>
+                            <Grid ColumnSpacing="10" Padding="0,9">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="26"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <FontIcon Glyph="" Style="{StaticResource SettingsGlyphStyle}"/>
+                                <StackPanel Grid.Column="1" Spacing="2">
+                                    <TextBlock Style="{StaticResource SettingsRowTitleStyle}" Text="Запускать вместе с Windows"/>
+                                    <TextBlock x:Name="AutoLaunchDescription" Style="{StaticResource SettingsDescriptionStyle}" Text="Автозапуск выключен."/>
+                                </StackPanel>
+                                <ToggleSwitch x:Name="AutoLaunchToggle" AutomationProperties.AutomationId="AutoLaunchToggle" Grid.Column="2" AutomationProperties.Name="Запускать вместе с Windows" AutomationProperties.HelpText="Автозапуск выключен." Style="{StaticResource SettingsSwitchStyle}" Toggled="OnAutoLaunchToggled"/>
+                            </Grid>
+                            <Grid ColumnSpacing="10" Padding="0,9">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="26"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <FontIcon Glyph="" Style="{StaticResource SettingsGlyphStyle}"/>
+                                <StackPanel Grid.Column="1" Spacing="2">
+                                    <TextBlock Style="{StaticResource SettingsRowTitleStyle}" Text="Автовыбор сервера"/>
+                                    <TextBlock Style="{StaticResource SettingsDescriptionStyle}" Text="Выбирать ближайший доступный узел."/>
+                                </StackPanel>
+                                <ToggleSwitch x:Name="AutoServerToggle" AutomationProperties.AutomationId="AutoServerToggle" Grid.Column="2" AutomationProperties.Name="Автовыбор сервера" AutomationProperties.HelpText="Выбирать ближайший доступный узел." Style="{StaticResource SettingsSwitchStyle}" Toggled="OnPreferenceToggled"/>
+                            </Grid>
+                            <Grid ColumnSpacing="10" Padding="0,9">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="26"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <FontIcon Glyph="" Style="{StaticResource SettingsGlyphStyle}"/>
+                                <StackPanel Grid.Column="1" Spacing="2">
+                                    <TextBlock Style="{StaticResource SettingsRowTitleStyle}" Text="Умный режим"/>
+                                    <TextBlock x:Name="SmartRoutingDescription" Style="{StaticResource SettingsDescriptionStyle}" Text="Локальные сервисы идут без VPN."/>
+                                </StackPanel>
+                                <ToggleSwitch x:Name="SmartRoutingToggle" AutomationProperties.AutomationId="SmartRoutingToggle" Grid.Column="2" AutomationProperties.Name="Умный режим" AutomationProperties.HelpText="Локальные сервисы идут без VPN." Style="{StaticResource SettingsSwitchStyle}" Toggled="OnPreferenceToggled"/>
+                            </Grid>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource SettingsCardStyle}" x:Name="ProtectionCard" Grid.Column="1">
+                    <StackPanel Spacing="10">
+                        <Grid ColumnSpacing="10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="26"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <FontIcon Glyph="" Style="{StaticResource SettingsGlyphStyle}"/>
+                            <StackPanel Grid.Column="1" Spacing="2">
+                                <TextBlock Style="{StaticResource SettingsTitleStyle}" Text="Защита"/>
+                                <TextBlock Style="{StaticResource SettingsDescriptionStyle}" Text="Сеть восстанавливается автоматически" FontSize="10"/>
+                            </StackPanel>
+                        </Grid>
+                        <Border Height="1" Background="#12FFFFFF"/>
+                        <StackPanel>
+                            <Grid ColumnSpacing="10" Padding="0,9">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="26"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <FontIcon Glyph="" Style="{StaticResource SettingsGlyphStyle}"/>
+                                <StackPanel Grid.Column="1" Spacing="2">
+                                    <TextBlock Style="{StaticResource SettingsRowTitleStyle}" Text="Kill Switch"/>
+                                    <TextBlock Style="{StaticResource SettingsDescriptionStyle}" Text="Блокирует утечки трафика при сбое VPN."/>
+                                </StackPanel>
+                                <ToggleSwitch x:Name="AntiLeakToggle" AutomationProperties.AutomationId="AntiLeakToggle" Grid.Column="2" AutomationProperties.Name="Kill Switch" AutomationProperties.HelpText="Блокирует утечки трафика при сбое VPN." Style="{StaticResource SettingsSwitchStyle}" Toggled="OnPreferenceToggled"/>
+                            </Grid>
+                            <Grid ColumnSpacing="10" Padding="0,9">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="26"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <FontIcon Glyph="" Style="{StaticResource SettingsGlyphStyle}"/>
+                                <StackPanel Grid.Column="1" Spacing="2">
+                                    <TextBlock Style="{StaticResource SettingsRowTitleStyle}" Text="Автовосстановление"/>
+                                    <TextBlock Style="{StaticResource SettingsDescriptionStyle}" Text="Проверять и поднимать туннель автоматически."/>
+                                </StackPanel>
+                                <ToggleSwitch x:Name="AutoRecoveryToggle" AutomationProperties.AutomationId="AutoRecoveryToggle" Grid.Column="2" AutomationProperties.Name="Автовосстановление" AutomationProperties.HelpText="Проверять и поднимать туннель автоматически." Style="{StaticResource SettingsSwitchStyle}" Toggled="OnPreferenceToggled"/>
+                            </Grid>
+                            <Grid ColumnSpacing="10" Padding="0,9">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="26"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <FontIcon Glyph="" Style="{StaticResource SettingsGlyphStyle}"/>
+                                <StackPanel Grid.Column="1" Spacing="2">
+                                    <TextBlock Style="{StaticResource SettingsRowTitleStyle}" Text="Windows Hello при запуске"/>
+                                    <TextBlock x:Name="WindowsHelloText" Style="{StaticResource SettingsDescriptionStyle}" Text="Проверяем доступность…"/>
+                                </StackPanel>
+                            </Grid>
+                            <StackPanel HorizontalAlignment="Right" Orientation="Horizontal" Spacing="8">
+                                <Button x:Name="UnlockWindowsHelloButton" AutomationProperties.AutomationId="UnlockWindowsHelloButton" Click="OnUnlockWindowsHelloClick" Content="Разблокировать" Style="{StaticResource VexProminentButtonStyle}" FontSize="12" Padding="10,6"/>
+                                <Button x:Name="EnableWindowsHelloButton" AutomationProperties.AutomationId="EnableWindowsHelloButton" Click="OnEnableWindowsHelloClick" Content="Включить" Style="{StaticResource VexGlassButtonStyle}" FontSize="12" Padding="10,6"/>
+                                <Button x:Name="DisableWindowsHelloButton" AutomationProperties.AutomationId="DisableWindowsHelloButton" Click="OnDisableWindowsHelloClick" Content="Отключить" Style="{StaticResource VexGlassButtonStyle}" FontSize="12" Padding="10,6"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </Grid>
+            <Border Style="{StaticResource SettingsCardStyle}">
                 <StackPanel Spacing="10">
-                    <TextBlock FontSize="15" FontWeight="Black" Foreground="{StaticResource VexTextBrush}" Text="Запуск и VPN" />
-                    <ToggleSwitch
-                        x:Name="AutoLaunchToggle"
-                        Header="Запускать вместе с Windows"
-                        OffContent="Автозапуск выключен"
-                        OnContent="VEX откроется после входа"
-                        Toggled="OnAutoLaunchToggled" />
-                    <ToggleSwitch
-                        x:Name="AutoServerToggle"
-                        Header="Автовыбор сервера"
-                        OffContent="Выбран сервер вручную"
-                        OnContent="Ближайший доступный сервер"
-                        Toggled="OnPreferenceToggled" />
-                    <ToggleSwitch
-                        x:Name="SmartRoutingToggle"
-                        Header="Умный режим"
-                        OffContent="Весь трафик через VPN"
-                        OnContent="Локальные сервисы идут напрямую"
-                        Toggled="OnPreferenceToggled" />
-                    <ToggleSwitch
-                        x:Name="AntiLeakToggle"
-                        Header="Kill Switch"
-                        OffContent="Защита выключена"
-                        OnContent="Блокировать утечки при сбоях"
-                        Toggled="OnPreferenceToggled" />
-                    <ToggleSwitch
-                        x:Name="AutoRecoveryToggle"
-                        Header="Автовосстановление"
-                        OffContent="Только ручное подключение"
-                        OnContent="Проверять и поднимать туннель"
-                        Toggled="OnPreferenceToggled" />
-                    <TextBlock x:Name="SingleInstanceText" Text="Один экземпляр приложения: —" TextWrapping="Wrap" />
-                    <TextBlock x:Name="TrayModeText" Text="Работа в области уведомлений: —" TextWrapping="Wrap" />
-                    <TextBlock x:Name="QuitBehaviorText" Text="Поведение при закрытии: —" TextWrapping="Wrap" />
+                    <Grid ColumnSpacing="10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="26"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <FontIcon Glyph="" Style="{StaticResource SettingsGlyphStyle}"/>
+                        <StackPanel Grid.Column="1" Spacing="2">
+                            <TextBlock Style="{StaticResource SettingsTitleStyle}" Text="Интерфейс"/>
+                            <TextBlock Style="{StaticResource SettingsDescriptionStyle}" Text="Персональные параметры приложения" FontSize="10"/>
+                        </StackPanel>
+                    </Grid>
+                    <Border Height="1" Background="#12FFFFFF"/>
+                    <Grid ColumnSpacing="10" Padding="0,9">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="26"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="154"/>
+                        </Grid.ColumnDefinitions>
+                        <FontIcon Glyph="" Style="{StaticResource SettingsGlyphStyle}"/>
+                        <StackPanel Grid.Column="1" Spacing="2">
+                            <TextBlock Style="{StaticResource SettingsRowTitleStyle}" Text="Язык"/>
+                            <TextBlock Style="{StaticResource SettingsDescriptionStyle}" Text="Язык интерфейса."/>
+                        </StackPanel>
+                        <ComboBox x:Name="LanguagePicker" AutomationProperties.AutomationId="LanguagePicker" Grid.Column="2" HorizontalAlignment="Stretch" VerticalAlignment="Center" AutomationProperties.Name="Язык интерфейса" SelectionChanged="OnLanguageSelectionChanged">
+                            <ComboBoxItem Content="Русский" Tag="ru"/>
+                            <ComboBoxItem Content="English" Tag="en"/>
+                        </ComboBox>
+                    </Grid>
+                    <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Header="Работа приложения в Windows">
+                        <StackPanel Spacing="8">
+                            <TextBlock x:Name="SingleInstanceText" Style="{StaticResource SettingsDescriptionStyle}" Text="Один экземпляр приложения: —"/>
+                            <TextBlock x:Name="TrayModeText" Style="{StaticResource SettingsDescriptionStyle}" Text="Работа в области уведомлений: —"/>
+                            <TextBlock x:Name="QuitBehaviorText" Style="{StaticResource SettingsDescriptionStyle}" Text="Поведение при закрытии: —"/>
+                        </StackPanel>
+                    </Expander>
                 </StackPanel>
             </Border>
-
-            <Border
-                Padding="14"
-                Background="#8008191D"
-                BorderBrush="#14FFFFFF"
-                BorderThickness="1"
-                CornerRadius="14">
+            <Border Style="{StaticResource SettingsCardStyle}">
                 <StackPanel Spacing="10">
-                    <TextBlock FontSize="15" FontWeight="Black" Foreground="{StaticResource VexTextBrush}" Text="Безопасность и интерфейс" />
-                    <TextBlock x:Name="WindowsHelloText" Text="Windows Hello: —" TextWrapping="Wrap" />
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Button x:Name="UnlockWindowsHelloButton" Click="OnUnlockWindowsHelloClick" Content="Разблокировать" Style="{StaticResource VexProminentButtonStyle}" />
-                        <Button x:Name="EnableWindowsHelloButton" Click="OnEnableWindowsHelloClick" Content="Включить Hello" Style="{StaticResource VexGlassButtonStyle}" />
-                        <Button x:Name="DisableWindowsHelloButton" Click="OnDisableWindowsHelloClick" Content="Отключить Hello" Style="{StaticResource VexGlassButtonStyle}" />
-                    </StackPanel>
-                    <ComboBox
-                        x:Name="LanguagePicker"
-                        Header="Язык интерфейса"
-                        HorizontalAlignment="Stretch"
-                        SelectionChanged="OnLanguageSelectionChanged">
-                        <ComboBoxItem Content="Русский" Tag="ru" />
-                        <ComboBoxItem Content="English" Tag="en" />
-                    </ComboBox>
+                    <Grid ColumnSpacing="10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="26"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <FontIcon Glyph="" Style="{StaticResource SettingsGlyphStyle}"/>
+                        <StackPanel Grid.Column="1" Spacing="2">
+                            <TextBlock Style="{StaticResource SettingsTitleStyle}" Text="Системный компонент"/>
+                            <TextBlock Style="{StaticResource SettingsDescriptionStyle}" Text="Состояние локального VPN-движка" FontSize="10"/>
+                        </StackPanel>
+                    </Grid>
+                    <Border Height="1" Background="#12FFFFFF"/>
+                    <Grid ColumnSpacing="10" Padding="0,9">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="26"/>
+                            <ColumnDefinition Width="100"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <FontIcon Glyph="" Style="{StaticResource SettingsGlyphStyle}"/>
+                        <TextBlock Style="{StaticResource SettingsRowTitleStyle}" Text="Статус" Grid.Column="1" VerticalAlignment="Center"/>
+                        <Border x:Name="ServiceStatusBadge" Grid.Column="2" Padding="10,5" HorizontalAlignment="Right" Background="#1222D3EE" CornerRadius="8">
+                            <TextBlock x:Name="ServiceStatusText" FontSize="11" FontWeight="Bold" Foreground="{StaticResource VexCyanLightBrush}" Text="Проверяем" TextWrapping="Wrap"/>
+                        </Border>
+                    </Grid>
+                    <Grid ColumnSpacing="10" Padding="0,9">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="26"/>
+                            <ColumnDefinition Width="100"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <FontIcon Glyph="" Style="{StaticResource SettingsGlyphStyle}"/>
+                        <TextBlock Style="{StaticResource SettingsRowTitleStyle}" Text="Защита сети" Grid.Column="1" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="LeakProtectionText" Style="{StaticResource SettingsDescriptionStyle}" Text="Проверяем" Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                    </Grid>
+                    <Grid ColumnSpacing="10" Padding="0,9">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="26"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <FontIcon Glyph="" Style="{StaticResource SettingsGlyphStyle}"/>
+                        <StackPanel Grid.Column="1" Spacing="8">
+                            <TextBlock Style="{StaticResource SettingsDescriptionStyle}" Text="Служба VEX управляет туннелем и защитой сети."/>
+                            <Grid ColumnSpacing="10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <Button x:Name="RepairServiceButton" AutomationProperties.AutomationId="RepairServiceButton" Click="OnRepairServiceClick" Content="Запустить службу" Style="{StaticResource VexProminentButtonStyle}" HorizontalAlignment="Stretch"/>
+                                <Button x:Name="RefreshSettingsButton" AutomationProperties.AutomationId="RefreshSettingsButton" Click="OnRefreshClick" Content="Обновить статус" Style="{StaticResource VexGlassButtonStyle}" Grid.Column="1" HorizontalAlignment="Stretch"/>
+                                <ProgressRing x:Name="BusyIndicator" Grid.Column="2" Width="24" Height="24" Foreground="{StaticResource VexCyanBrush}" IsActive="False"/>
+                            </Grid>
+                        </StackPanel>
+                    </Grid>
                 </StackPanel>
             </Border>
-
-            <Border
-                Padding="14"
-                Background="#8008191D"
-                BorderBrush="#14FFFFFF"
-                BorderThickness="1"
-                CornerRadius="14">
+            <Border Style="{StaticResource SettingsCardStyle}">
+                <StackPanel Spacing="10">
+                    <Grid ColumnSpacing="10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="26"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <FontIcon Glyph="" Style="{StaticResource SettingsGlyphStyle}"/>
+                        <StackPanel Grid.Column="1" Spacing="2">
+                            <TextBlock Style="{StaticResource SettingsTitleStyle}" Text="Обновления"/>
+                            <TextBlock Style="{StaticResource SettingsDescriptionStyle}" Text="Новые версии без лишних действий" FontSize="10"/>
+                        </StackPanel>
+                    </Grid>
+                    <Border Height="1" Background="#12FFFFFF"/>
+                    <Grid ColumnSpacing="10" Padding="0,9">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="26"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <FontIcon Glyph="" Style="{StaticResource SettingsGlyphStyle}"/>
+                        <StackPanel Grid.Column="1" Spacing="2">
+                            <TextBlock Style="{StaticResource SettingsRowTitleStyle}" Text="Проверять обновления автоматически"/>
+                            <TextBlock x:Name="AutoUpdatesDescription" Style="{StaticResource SettingsDescriptionStyle}" Text="Проверять при запуске и каждые 6 часов."/>
+                        </StackPanel>
+                        <ToggleSwitch x:Name="AutoUpdatesToggle" AutomationProperties.AutomationId="AutoUpdatesToggle" Grid.Column="2" AutomationProperties.Name="Проверять обновления автоматически" AutomationProperties.HelpText="Проверять при запуске и каждые 6 часов." Style="{StaticResource SettingsSwitchStyle}" Toggled="OnAutoUpdatesToggled"/>
+                    </Grid>
+                    <Grid ColumnSpacing="10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="3">
+                            <TextBlock FontSize="9" FontWeight="Black" Foreground="{StaticResource VexMutedBrush}" Text="ТЕКУЩАЯ ВЕРСИЯ"/>
+                            <TextBlock x:Name="AppVersionText" FontSize="12" FontWeight="Bold" Foreground="{StaticResource VexTextBrush}" Text="—" TextWrapping="Wrap"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Spacing="3">
+                            <TextBlock FontSize="9" FontWeight="Black" Foreground="{StaticResource VexMutedBrush}" Text="СТАТУС"/>
+                            <TextBlock x:Name="UpdateStatusText" FontSize="12" FontWeight="Bold" Foreground="{StaticResource VexTextBrush}" Text="—" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </Grid>
+                    <TextBlock x:Name="UpdateVersionText" Style="{StaticResource SettingsDescriptionStyle}" Text="Доступная версия: —"/>
+                    <TextBlock x:Name="UpdateDetailsText" Style="{StaticResource SettingsDescriptionStyle}" Text="Проверяем канал обновлений."/>
+                    <Button x:Name="CheckUpdatesButton" AutomationProperties.AutomationId="CheckUpdatesButton" Click="OnCheckUpdatesClick" Content="Проверить обновления" Style="{StaticResource VexGlassButtonStyle}" HorizontalAlignment="Stretch"/>
+                    <Button x:Name="InstallUpdateButton" AutomationProperties.AutomationId="InstallUpdateButton" Click="OnOpenDownloadsClick" Content="Установить обновление" Style="{StaticResource VexProminentButtonStyle}" HorizontalAlignment="Stretch"/>
+                    <Button x:Name="OpenDownloadsButton" AutomationProperties.AutomationId="OpenDownloadsButton" Click="OnOpenManualDownloadsClick" Content="Открыть центр загрузок" Style="{StaticResource VexGlassButtonStyle}" HorizontalAlignment="Stretch"/>
+                    <Button AutomationProperties.AutomationId="SettingsSupportWebsiteButton" Click="OnOpenSupportWebsiteClick" Content="Поддержка на сайте" Style="{StaticResource VexGlassButtonStyle}" HorizontalAlignment="Stretch"/>
+                </StackPanel>
+            </Border>
+            <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Header="Устройство и сессия">
                 <StackPanel Spacing="9">
-                    <TextBlock FontSize="15" FontWeight="Black" Foreground="{StaticResource VexTextBrush}" Text="Устройство и сессия" />
-                    <TextBlock x:Name="AppVersionText" Text="Версия приложения: —" TextWrapping="Wrap" />
-                    <TextBlock x:Name="SessionText" Text="Сессия: —" TextWrapping="Wrap" />
-                    <TextBlock x:Name="InstallationIdText" Text="Installation ID: —" TextWrapping="Wrap" />
-                    <TextBlock x:Name="DeviceIdText" Text="Device ID: —" TextWrapping="Wrap" />
-                    <TextBlock x:Name="LocationIdText" Text="Локация: —" />
-                    <TextBlock x:Name="IdentityEpochText" Text="Epoch ключа: —" />
-                    <TextBlock x:Name="ProfileCacheText" Text="Кэш профиля: —" TextWrapping="Wrap" />
-                    <TextBlock x:Name="ServiceStatusText" Text="Статус службы: —" TextWrapping="Wrap" />
-                    <TextBlock x:Name="LeakProtectionText" Text="Anti-leak: —" TextWrapping="Wrap" />
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Button x:Name="RepairServiceButton" Click="OnRepairServiceClick" Content="Запустить службу" Style="{StaticResource VexProminentButtonStyle}" />
-                        <Button x:Name="RefreshSettingsButton" Click="OnRefreshClick" Content="Обновить статус" Style="{StaticResource VexGlassButtonStyle}" />
-                        <ProgressRing x:Name="BusyIndicator" Width="24" Height="24" Foreground="{StaticResource VexCyanBrush}" IsActive="False" />
-                    </StackPanel>
+                    <TextBlock x:Name="SessionText" Style="{StaticResource SettingsRowTitleStyle}" Text="Сессия: —"/>
+                    <TextBlock x:Name="InstallationIdText" Style="{StaticResource SettingsDescriptionStyle}" Text="Installation ID: —" IsTextSelectionEnabled="True"/>
+                    <TextBlock x:Name="DeviceIdText" Style="{StaticResource SettingsDescriptionStyle}" Text="Device ID: —" IsTextSelectionEnabled="True"/>
+                    <TextBlock x:Name="LocationIdText" Style="{StaticResource SettingsDescriptionStyle}" Text="Локация: —"/>
+                    <TextBlock x:Name="IdentityEpochText" Style="{StaticResource SettingsDescriptionStyle}" Text="Epoch ключа: —"/>
+                    <TextBlock x:Name="ProfileCacheText" Style="{StaticResource SettingsDescriptionStyle}" Text="Кэш профиля: —"/>
                 </StackPanel>
-            </Border>
-
-            <Border
-                Padding="14"
-                Background="#8008191D"
-                BorderBrush="#14FFFFFF"
-                BorderThickness="1"
-                CornerRadius="14">
-                <StackPanel Spacing="9">
-                    <TextBlock FontSize="15" FontWeight="Black" Foreground="{StaticResource VexTextBrush}" Text="Центр обновлений" />
-                    <ToggleSwitch
-                        x:Name="AutoUpdatesToggle"
-                        Header="Автоматически проверять обновления"
-                        OffContent="Только ручная проверка"
-                        OnContent="Проверять при запуске и каждые 6 часов"
-                        Toggled="OnAutoUpdatesToggled" />
-                    <TextBlock x:Name="UpdateStatusText" Text="Статус: —" TextWrapping="Wrap" />
-                    <TextBlock x:Name="UpdateVersionText" Text="Доступная версия: —" TextWrapping="Wrap" />
-                    <TextBlock x:Name="UpdateDetailsText" FontSize="11" Foreground="{StaticResource VexSecondaryTextBrush}" Text="Проверяем канал обновлений." TextWrapping="Wrap" />
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Button x:Name="CheckUpdatesButton" Click="OnCheckUpdatesClick" Content="Проверить" Style="{StaticResource VexGlassButtonStyle}" />
-                        <Button x:Name="InstallUpdateButton" Click="OnOpenDownloadsClick" Content="Установить" Style="{StaticResource VexProminentButtonStyle}" />
-                        <Button x:Name="OpenDownloadsButton" Click="OnOpenManualDownloadsClick" Content="Ручная ссылка" Style="{StaticResource VexGlassButtonStyle}" />
-                    </StackPanel>
-                    <Button
-                        Click="OnOpenSupportWebsiteClick"
-                        Content="Поддержка на сайте"
-                        HorizontalAlignment="Stretch"
-                        Style="{StaticResource VexGlassButtonStyle}" />
+            </Expander>
+            <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Header="Диагностика">
+                <StackPanel Spacing="10">
+                    <TextBlock x:Name="AppDataPathText" Style="{StaticResource SettingsDescriptionStyle}" Text="Данные приложения: —" IsTextSelectionEnabled="True"/>
+                    <TextBlock x:Name="ServiceDataPathText" Style="{StaticResource SettingsDescriptionStyle}" Text="Данные службы: —" IsTextSelectionEnabled="True"/>
+                    <TextBlock Style="{StaticResource SettingsDescriptionStyle}" Text="Отчёт содержит состояние приложения и службы, без трафика, паролей и ключей."/>
+                    <Button x:Name="CopyDiagnosticsButton" AutomationProperties.AutomationId="CopyDiagnosticsButton" Click="OnCopySummaryClick" Content="Скопировать отчёт" Style="{StaticResource VexGlassButtonStyle}" HorizontalAlignment="Stretch"/>
+                    <Grid ColumnSpacing="10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Button AutomationProperties.AutomationId="SettingsOpenAppDataButton" Click="OnOpenAppDataClick" Content="Данные приложения" Style="{StaticResource VexGlassButtonStyle}" HorizontalAlignment="Stretch"/>
+                        <Button AutomationProperties.AutomationId="SettingsOpenServiceDataButton" Click="OnOpenServiceDataClick" Content="Данные службы" Style="{StaticResource VexGlassButtonStyle}" Grid.Column="1" HorizontalAlignment="Stretch"/>
+                    </Grid>
                 </StackPanel>
-            </Border>
-
-            <Border
-                Padding="14"
-                Background="#8008191D"
-                BorderBrush="#14FFFFFF"
-                BorderThickness="1"
-                CornerRadius="14">
-                <StackPanel Spacing="9">
-                    <TextBlock FontSize="15" FontWeight="Black" Foreground="{StaticResource VexTextBrush}" Text="Диагностика" />
-                    <TextBlock x:Name="AppDataPathText" FontSize="11" Foreground="{StaticResource VexSecondaryTextBrush}" Text="Данные приложения: —" TextWrapping="Wrap" />
-                    <TextBlock x:Name="ServiceDataPathText" FontSize="11" Foreground="{StaticResource VexSecondaryTextBrush}" Text="Данные службы: —" TextWrapping="Wrap" />
-                    <TextBlock FontSize="11" Foreground="{StaticResource VexSecondaryTextBrush}" Text="Копируется только redacted local summary без трафика и секретов." TextWrapping="Wrap" />
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Button x:Name="CopyDiagnosticsButton" Click="OnCopySummaryClick" Content="Скопировать отчёт" Style="{StaticResource VexGlassButtonStyle}" />
-                        <Button Click="OnOpenAppDataClick" Content="Данные приложения" Style="{StaticResource VexGlassButtonStyle}" />
-                        <Button Click="OnOpenServiceDataClick" Content="Данные службы" Style="{StaticResource VexGlassButtonStyle}" />
-                    </StackPanel>
-                </StackPanel>
-            </Border>
+            </Expander>
         </StackPanel>
     </ScrollViewer>
 </Page>

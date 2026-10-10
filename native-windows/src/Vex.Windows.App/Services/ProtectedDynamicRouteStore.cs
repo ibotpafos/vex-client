@@ -7,8 +7,11 @@ namespace Vex.Windows.App.Services;
 public sealed class ProtectedDynamicRouteStore : IDynamicRouteStore
 {
     private static readonly byte[] Entropy = "VEX.Windows.DynamicRoutes.v1"u8.ToArray();
-    private readonly string _directory = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "VEX", "VPN");
+    private readonly string _directory;
+
+    public ProtectedDynamicRouteStore(string? directory = null) =>
+        _directory = directory ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "VEX", "VPN");
 
     public string? Read(string key)
     {

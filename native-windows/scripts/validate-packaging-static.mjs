@@ -296,10 +296,13 @@ for (const [requirement, message] of [
   [/architecture: \[x64, arm64\]/, "Windows compilation must cover both architectures"],
   [/inputs\.package_release/, "signed packaging must require an explicit manual input"],
   [/github\.event_name == 'workflow_dispatch' &&[\s\S]+github\.ref == 'refs\/heads\/main'/, "signed packaging must be manual and main-only"],
-  [/needs: \[portable, build\]/, "signed packaging must wait for portable and Windows validation"],
+  [/needs: \[portable, build, macos_reference, vpn_acceptance\]/, "signed packaging must wait for client, interface and tunnel validation"],
   [/persist-credentials: false/, "CI checkout must not persist credentials"],
   [/ReleaseValidation\.Tests\.ps1/, "release behavior tests must run in CI"],
   [/smoke-application\.ps1/, "Windows x64 startup smoke must run in CI"],
+  [/-DesktopChecks -PreviewMode fixtures/, "authenticated desktop navigation must run in isolated CI previews"],
+  [/-DesktopChecks -PreviewMode signed-out/, "signed-out desktop navigation must run in isolated CI previews"],
+  [/invoke-vpn-acceptance\.ps1 -DisposableRunner/, "qualified real tunnel acceptance must run on a disposable Windows host"],
   [/'Vex\.Windows\.App\.pri'/, "published compiled WinUI resources must be checked"],
 ]) {
   requireText(workflow, requirement, message);

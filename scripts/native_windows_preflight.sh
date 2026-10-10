@@ -27,6 +27,7 @@ node native-windows/scripts/validate-packaging-static.mjs
 pwsh -NoProfile -File native-windows/scripts/validate-powershell-parse.ps1
 pwsh -NoProfile -File native-windows/tests/ReleaseValidation.Tests.ps1
 pwsh -NoProfile -File native-windows/tests/NetworkSafetyPolicy.Tests.ps1
+pwsh -NoProfile -File native-windows/tests/BootstrapOwnership.Tests.ps1
 
 dotnet run --project native-windows/tests/Vex.Windows.Core.Tests/Vex.Windows.Core.Tests.csproj -c Release
 for architecture in x64 arm64; do

@@ -10,14 +10,16 @@
         RequestedTheme="Dark"
         SizeChanged="OnShellRootSizeChanged">
         <Grid.RowDefinitions>
-            <RowDefinition Height="68" />
+            <RowDefinition Height="44" />
             <RowDefinition Height="*" />
-            <RowDefinition Height="82" />
+            <RowDefinition Height="76" />
         </Grid.RowDefinitions>
+
+        <Grid x:Name="AmbientBackdrop" Grid.RowSpan="3" IsHitTestVisible="False" />
 
         <Grid
             x:Name="FocusPulseHeader"
-            Margin="24,10,24,0">
+            Margin="22,0,160,0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
@@ -26,24 +28,19 @@
             <StackPanel
                 VerticalAlignment="Center"
                 Orientation="Horizontal"
-                Spacing="9">
-                <Image
-                    Width="29"
-                    Height="29"
-                    Source="ms-appx:///Assets/vex-logo-header.png"
-                    Stretch="Uniform" />
+                Spacing="8">
                 <TextBlock
                     x:Name="HeaderBrandText"
                     VerticalAlignment="Center"
                     FontFamily="Segoe UI Variable Display"
-                    FontSize="23"
+                    FontSize="17"
                     FontWeight="Black"
-                    Foreground="{StaticResource VexTextBrush}"
+                    Foreground="{StaticResource VexCyanLightBrush}"
                     Text="VEX" />
                 <Ellipse
                     x:Name="ServerHealthDot"
-                    Width="8"
-                    Height="8"
+                    Width="6"
+                    Height="6"
                     Margin="1,2,0,0"
                     Fill="{StaticResource VexMutedBrush}"
                     ToolTipService.ToolTip="Проверяем доступность серверов" />
@@ -52,9 +49,9 @@
                     Margin="3,0,0,0"
                     VerticalAlignment="Center"
                     FontFamily="Segoe UI Variable Display"
-                    FontSize="17"
-                    FontWeight="Bold"
-                    Foreground="{StaticResource VexSubtextBrush}"
+                    FontSize="13"
+                    FontWeight="Black"
+                    Foreground="{StaticResource VexTextBrush}"
                     Text=""
                     Visibility="Collapsed" />
             </StackPanel>
@@ -68,60 +65,60 @@
         <Grid Grid.Row="2">
             <Border
                 x:Name="BottomNavigationDock"
-                Height="58"
-                Padding="6"
+                Height="52"
+                Padding="7"
                 HorizontalAlignment="Center"
                 VerticalAlignment="Top"
                 Background="#E6071113"
-                BorderBrush="#28FFFFFF"
+                BorderBrush="#14FFFFFF"
                 BorderThickness="1"
-                CornerRadius="29">
-                <StackPanel Orientation="Horizontal" Spacing="4">
+                CornerRadius="26">
+                <StackPanel Orientation="Horizontal" Spacing="8">
                     <ToggleButton
                         x:Name="HomeNavigationButton"
-                        Width="50"
-                        Height="46"
+                        Width="46"
+                        Height="38"
                         AutomationProperties.AutomationId="HomeNavigationButton"
                         AutomationProperties.Name="Главная"
                         Click="OnNavigationButtonClick"
                         IsChecked="True"
                         Style="{StaticResource VexDockButtonStyle}"
                         ToolTipService.ToolTip="Главная">
-                        <FontIcon FontSize="19" Glyph="&#xE80F;" />
+                        <FontIcon FontSize="16" Glyph="&#xE80F;" />
                     </ToggleButton>
                     <ToggleButton
                         x:Name="SupportNavigationButton"
-                        Width="50"
-                        Height="46"
+                        Width="46"
+                        Height="38"
                         AutomationProperties.AutomationId="SupportNavigationButton"
                         AutomationProperties.Name="Поддержка"
                         Click="OnNavigationButtonClick"
                         Style="{StaticResource VexDockButtonStyle}"
                         ToolTipService.ToolTip="Поддержка">
-                        <FontIcon FontSize="18" Glyph="&#xE8BD;" />
+                        <FontIcon FontSize="16" Glyph="&#xE8BD;" />
                     </ToggleButton>
                     <ToggleButton
                         x:Name="AccountNavigationButton"
-                        Width="50"
-                        Height="46"
+                        Width="46"
+                        Height="38"
                         AutomationProperties.AutomationId="AccountNavigationButton"
                         AutomationProperties.Name="Аккаунт"
                         Click="OnNavigationButtonClick"
                         Style="{StaticResource VexDockButtonStyle}"
                         ToolTipService.ToolTip="Аккаунт">
-                        <FontIcon FontSize="18" Glyph="&#xE77B;" />
+                        <FontIcon FontSize="16" Glyph="&#xE77B;" />
                     </ToggleButton>
                     <ToggleButton
                         x:Name="SettingsNavigationButton"
-                        Width="50"
-                        Height="46"
+                        Width="46"
+                        Height="38"
                         AutomationProperties.AutomationId="SettingsNavigationButton"
                         AutomationProperties.Name="Настройки"
                         Click="OnNavigationButtonClick"
                         Style="{StaticResource VexDockButtonStyle}"
                         ToolTipService.ToolTip="Настройки">
                         <Grid>
-                            <FontIcon FontSize="18" Glyph="&#xE713;" />
+                            <FontIcon FontSize="16" Glyph="&#xE713;" />
                             <Ellipse
                                 x:Name="UpdateBadgeDot"
                                 Width="7"
@@ -146,6 +143,7 @@
                 Foreground="{StaticResource VexSecondaryTextBrush}"
                 Text="VEX" />
             <HyperlinkButton
+                x:Name="ShellWebsiteLink"
                 Margin="0,0,18,11"
                 HorizontalAlignment="Right"
                 VerticalAlignment="Bottom"
@@ -153,7 +151,7 @@
                 FontSize="11"
                 FontWeight="SemiBold"
                 Foreground="{StaticResource VexMutedBrush}"
-                NavigateUri="https://vexguard.app" />
+                Click="OnWebsiteClick" />
         </Grid>
 
         <!-- Compatibility names retained for existing UI automation. -->

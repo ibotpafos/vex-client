@@ -1,5 +1,6 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using System.Globalization;
 using Windows.System;
 using Vex.Windows.App.Auth;
@@ -27,6 +28,8 @@ public sealed partial class AccountPage : Page
     private bool _billingRefreshInFlight;
     private bool _billingRefreshPending;
     private int _busyOperations;
+    private CancellationTokenSource? _pageLifetime;
+    private int _pageGeneration;
 
     public AccountPage()
     {
@@ -38,6 +41,9 @@ public sealed partial class AccountPage : Page
 
     private async void OnLoaded(object sender, RoutedEventArgs args)
     {
+        if (_pageLifetime is not null) return;
+        _pageLifetime = new CancellationTokenSource();
+        _pageGeneration++;
         Auth.StateChanged += OnAuthStateChanged;
         _services.CustomerRealtimeChanged += OnCustomerRealtimeChanged;
         StartFallbackRefreshTimer();
@@ -52,6 +58,11 @@ public sealed partial class AccountPage : Page
 
     private void OnUnloaded(object sender, RoutedEventArgs args)
     {
+        _pageGeneration++;
+        _pageLifetime?.Cancel();
+        _pageLifetime?.Dispose();
+        _pageLifetime = null;
+        _billingRefreshPending = false;
         Auth.StateChanged -= OnAuthStateChanged;
         _services.CustomerRealtimeChanged -= OnCustomerRealtimeChanged;
         _fallbackRefreshTimer?.Stop();
@@ -68,7 +79,7 @@ public sealed partial class AccountPage : Page
         }
         DispatcherQueue.TryEnqueue(async () =>
         {
-            if (Coordinator.CurrentState is not null)
+            if (_pageLifetime is not null && Coordinator.CurrentState is not null)
             {
                 await RefreshBillingAsync();
             }
@@ -81,6 +92,7 @@ public sealed partial class AccountPage : Page
     {
         DispatcherQueue.TryEnqueue(() =>
         {
+            if (_pageLifetime is null) return;
             Render();
             ApplyAuthState();
             if (Coordinator.CurrentState is not null &&
@@ -203,7 +215,17 @@ public sealed partial class AccountPage : Page
         object sender,
         RoutedEventArgs args)
     {
-        Auth.CancelBrowserAuth();
+        try
+        {
+            Auth.CancelBrowserAuth();
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or
+            System.Security.Cryptography.CryptographicException)
+        {
+            AccountNotice.Message = "Не удалось отменить вход. Повторите позже.";
+            AccountNotice.Severity = InfoBarSeverity.Warning;
+            AccountNotice.IsOpen = true;
+        }
         Render();
         ApplyAuthState();
     }
@@ -228,7 +250,9 @@ public sealed partial class AccountPage : Page
                 await RefreshBillingAsync();
             }
         }
-        catch (InvalidOperationException error)
+        catch (Exception error) when (error is InvalidOperationException or IOException or
+            UnauthorizedAccessException or System.Security.Cryptography.CryptographicException or
+            OperationCanceledException or System.Runtime.InteropServices.COMException)
         {
             AccountNotice.Message = error.Message;
             AccountNotice.Severity = InfoBarSeverity.Warning;
@@ -286,6 +310,7 @@ public sealed partial class AccountPage : Page
         _busyOperations = Math.Max(0, _busyOperations + (busy ? 1 : -1));
         busy = _busyOperations > 0;
         BusyIndicator.IsActive = busy;
+        BusyIndicator.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
         SignInButton.IsEnabled = !busy;
         RequestOtpButton.IsEnabled = !busy;
         ConfirmOtpButton.IsEnabled = !busy;
@@ -295,12 +320,14 @@ public sealed partial class AccountPage : Page
         WebsiteRegisterButton.IsEnabled = !busy;
         CancelWebsiteAuthButton.IsEnabled = !busy;
         UnlockSessionButton.IsEnabled = !busy;
-        SignOutButton.IsEnabled = !busy;
+        var authBusy = _busyOperations > (_billingRefreshInFlight ? 1 : 0);
+        SignOutButton.IsEnabled = !authBusy;
         EmailInput.IsEnabled = !busy;
         PasswordInput.IsEnabled = !busy;
         EmailOtpCodeInput.IsEnabled = !busy;
         RefreshBillingButton.IsEnabled = !busy;
-        CheckoutButton.IsEnabled = !busy;
+        CheckoutButton.IsEnabled = !authBusy;
+        EmailLoginExpander.IsEnabled = !busy;
     }
 
     private void Render()
@@ -319,17 +346,26 @@ public sealed partial class AccountPage : Page
         var waitingForBrowserAuth = Auth.IsWaitingForBrowserAuth;
         var otpChallenge = Auth.EmailOtpChallenge;
 
-        AccountStatus.Text = signedIn
-            ? $"{state!.Session.User.Email} · " +
-                NativeLocationLabel.Russian(state.LocationId)
-            : locked
+        AccountStatus.Text = signedIn ? state!.Session.User.Email : "Аккаунт VEX";
+        AccountInitials.Text = AccountInitialsFor(state?.Session.User.Email);
+        AuthHeadingText.Text = waitingForBrowserAuth ? "Подтвердите вход" : "Вход в VEX";
+        AuthSubtitleText.Text = waitingForBrowserAuth
+            ? "Окно VEX ожидает разрешение на сайте."
+            : "Продолжите в браузере.";
+        SignInStatusText.Text = locked
                 ? _services.StateStore.StoredSessionError ??
                     "Сохраненная сессия заблокирована. Подтвердите Windows Hello или выполните новый вход."
                 : waitingForBrowserAuth
                     ? "Подтвердите вход на сайте и вернитесь в VEX."
                     : _services.StateStore.StoredSessionError ??
-                        "Войдите, чтобы зарегистрировать этот компьютер.";
-        SignInStatusText.Text = AccountStatus.Text;
+                        string.Empty;
+        SignInStatusText.Visibility = string.IsNullOrWhiteSpace(SignInStatusText.Text) || waitingForBrowserAuth
+            ? Visibility.Collapsed : Visibility.Visible;
+        LoginBrandPanel.Visibility = signedIn ? Visibility.Collapsed : Visibility.Visible;
+        BrowserWaitingPanel.Visibility = waitingForBrowserAuth ? Visibility.Visible : Visibility.Collapsed;
+        RegistrationPanel.Visibility = signedIn || waitingForBrowserAuth ? Visibility.Collapsed : Visibility.Visible;
+        EmailLoginExpander.Visibility = signedIn || waitingForBrowserAuth ? Visibility.Collapsed : Visibility.Visible;
+        if (!signedIn && otpChallenge is not null) EmailLoginExpander.IsExpanded = true;
         EmailOtpHintText.Text = otpChallenge is null
             ? string.Empty
             : BuildOtpHint(otpChallenge);
@@ -341,7 +377,7 @@ public sealed partial class AccountPage : Page
             : Visibility.Visible;
         AuthHintText.Text = signedIn
             ? _account?.Entitlement.RemainingText ??
-                (_account?.Entitlement.HasPaidAccess == true
+                (_account is null ? "Данные обновятся автоматически" : _account.Entitlement.HasPaidAccess
                     ? "VPN-доступ активен"
                     : "Оформите подписку для VPN-доступа")
             : otpChallenge is null
@@ -409,11 +445,17 @@ public sealed partial class AccountPage : Page
             : Visibility.Collapsed;
         AccountAccessBadgeText.Text = signedIn
             ? _account?.Entitlement.HasPaidAccess == true
-                ? "АКТИВЕН"
+                ? "Активен"
                 : _account is null
-                    ? "ПРОВЕРКА"
-                    : "НЕТ"
-            : "НЕТ";
+                    ? "Проверка"
+                    : "Нет"
+            : "Нет";
+        var paidAccess = _account?.Entitlement.HasPaidAccess == true;
+        AccountAccessBadge.Background = ColorBrush(paidAccess ? 0x2922D3EEu :
+            _account is null ? 0x14FFFFFFu : 0x26FF9E2Eu);
+        AccountAccessBadgeText.Foreground = ColorBrush(paidAccess ? 0xFFB9FBFFu :
+            _account is null ? 0xFFA7B9BDu : 0xFFFFC25Cu);
+        AccountPlanFact.Foreground = ColorBrush(paidAccess ? 0xFFB9FBFFu : 0xFFA7B9BDu);
 
         if (!signedIn || _account is null)
         {
@@ -424,29 +466,29 @@ public sealed partial class AccountPage : Page
             BillingPlan.Text = "Тариф: —";
             BillingAccess.Text = "Доступ: —";
             BillingPeriod.Text = "Период: —";
-            CheckoutButton.Content = "Оплатить на сайте";
             CheckoutButton.Visibility = signedIn
                 ? Visibility.Visible
                 : Visibility.Collapsed;
             DeviceUsageList.ItemsSource = null;
             PaymentHistoryList.ItemsSource = null;
-            AccountPlanFact.Text = "—";
-            AccountStatusFact.Text = signedIn ? "Проверка" : "Нет";
+            AccountPlanFact.Text = signedIn ? "Проверяем подписку" : "Требуется вход";
+            AccountStatusFact.Text = signedIn ? "Статус: проверяем" : "Статус: нет доступа";
+            PaymentHistoryList.Visibility = Visibility.Collapsed;
+            PaymentHistoryEmpty.Visibility = Visibility.Visible;
             return;
         }
 
         var summary = _account.BillingSummary;
-        BillingTitle.Text = summary.Title;
-        BillingSubtitle.Text = summary.Subtitle;
+        BillingTitle.Text = "Подписка";
+        BillingSubtitle.Text = "Оплата и управление подпиской — на сайте VEX";
         BillingPlan.Text = $"Тариф: {summary.CurrentPlan?.Name ?? "Не выбран"}";
         BillingAccess.Text = $"Доступ: {AccessText(_account.Entitlement)}";
         BillingPeriod.Text = $"Период: {summary.RemainingText ?? summary.CurrentPeriodEnd ?? summary.EffectiveExpiresAt ?? "Уточняется"}";
-        CheckoutButton.Content = "Оплатить на сайте";
         CheckoutButton.Visibility = Visibility.Visible;
         AccountPlanFact.Text =
-            summary.CurrentPlan?.Name ?? "Не выбран";
+            summary.CurrentPlan?.Name ?? AccessText(_account.Entitlement);
         AccountStatusFact.Text =
-            LocalizeSubscriptionStatus(
+            "Статус: " + LocalizeSubscriptionStatus(
                 summary.Status,
                 _account.Entitlement.HasPaidAccess);
         RenderDevices(_account);
@@ -496,16 +538,21 @@ public sealed partial class AccountPage : Page
             .OrderByDescending(payment =>
                 ParseTimestamp(
                     payment.PaidAt ?? payment.CreatedAt))
+            .Take(6)
             .Select(payment => new PaymentHistoryView(
-                string.IsNullOrWhiteSpace(payment.PlanId)
-                    ? "Подписка"
-                    : payment.PlanId.Replace('_', ' '),
+                payment.Id,
+                PaymentPlanName(payment.PlanId),
                 FormatMoney(
                     payment.AmountMinor,
                     payment.Currency),
                 LocalizePaymentStatus(payment.Status),
                 FormatTimestamp(
-                    payment.PaidAt ?? payment.CreatedAt)))
+                    payment.PaidAt ?? payment.CreatedAt),
+                PaymentGlyph(payment.Status),
+                ColorBrush(PaymentIsPaid(payment.Status) ? 0xFFB9FBFFu :
+                    PaymentIsWarning(payment.Status) ? 0xFFFFC25Cu : 0xFFA7B9BDu),
+                ColorBrush(PaymentIsPaid(payment.Status) ? 0x2922D3EEu :
+                    PaymentIsWarning(payment.Status) ? 0x26FF9E2Eu : 0x14FFFFFFu)))
             .ToList();
         PaymentHistoryList.ItemsSource = rows;
         PaymentHistoryList.Visibility = rows.Count == 0
@@ -518,6 +565,7 @@ public sealed partial class AccountPage : Page
 
     private async Task RefreshBillingAsync()
     {
+        if (_pageLifetime is null || Coordinator.CurrentState is null) return;
         if (_billingRefreshInFlight)
         {
             _billingRefreshPending = true;
@@ -525,23 +573,36 @@ public sealed partial class AccountPage : Page
         }
         _billingRefreshInFlight = true;
         SetBusy(true);
+        var requestGeneration = _pageGeneration;
+        string? requestUserId = null;
+        var pageToken = _pageLifetime.Token;
         try
         {
             do
             {
                 _billingRefreshPending = false;
-                _account = await Coordinator.GetAccountSnapshotAsync(
-                    CancellationToken.None);
-                AccountNotice.IsOpen = false;
+                requestUserId = Coordinator.CurrentState?.Session.User.Id;
+                if (requestUserId is null || pageToken.IsCancellationRequested) break;
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(pageToken);
+                timeout.CancelAfter(TimeSpan.FromSeconds(45));
+                var account = await Coordinator.GetAccountSnapshotAsync(timeout.Token);
+                if (IsCurrentBillingRequest(requestGeneration, requestUserId, pageToken))
+                {
+                    _account = account;
+                    if (string.IsNullOrWhiteSpace(Auth.Error)) AccountNotice.IsOpen = false;
+                }
+                if (requestGeneration != _pageGeneration) break;
             }
             while (_billingRefreshPending);
         }
         catch (Exception error) when (
             error is HttpRequestException or
-                TaskCanceledException or
+                OperationCanceledException or
                 VexApiException or
-                NativeClientFlowException)
+                NativeClientFlowException or IOException or UnauthorizedAccessException or
+                System.Security.Cryptography.CryptographicException or InvalidOperationException)
         {
+            if (!IsCurrentBillingRequest(requestGeneration, requestUserId, pageToken)) return;
             AccountNotice.Message = error switch
             {
                 NativeClientFlowException flow when
@@ -557,8 +618,17 @@ public sealed partial class AccountPage : Page
             _billingRefreshInFlight = false;
             SetBusy(false);
             Render();
+            if (_billingRefreshPending && _pageLifetime is not null && Coordinator.CurrentState is not null)
+            {
+                _billingRefreshPending = false;
+                _ = RefreshBillingAsync();
+            }
         }
     }
+
+    private bool IsCurrentBillingRequest(int generation, string? userId, CancellationToken token) =>
+        !token.IsCancellationRequested && _pageLifetime is not null && generation == _pageGeneration &&
+        userId is not null && Coordinator.CurrentState?.Session.User.Id == userId;
 
     private void StartFallbackRefreshTimer()
     {
@@ -604,6 +674,22 @@ public sealed partial class AccountPage : Page
         }
     }
 
+    private async void OnPaymentHistoryItemClick(object sender, ItemClickEventArgs args)
+    {
+        if (args.ClickedItem is not PaymentHistoryView payment) return;
+        try
+        {
+            await LaunchUrlAsync($"https://vexguard.app/dashboard/payments/{Uri.EscapeDataString(payment.Id)}/receipt");
+        }
+        catch (Exception error) when (error is InvalidOperationException or
+            System.Runtime.InteropServices.COMException)
+        {
+            AccountNotice.Message = "Не удалось открыть оплату в кабинете VEX.";
+            AccountNotice.Severity = InfoBarSeverity.Warning;
+            AccountNotice.IsOpen = true;
+        }
+    }
+
     private void ApplyAuthState()
     {
         if (!string.IsNullOrWhiteSpace(Auth.Error))
@@ -635,6 +721,7 @@ public sealed partial class AccountPage : Page
 
     private static async Task LaunchUrlAsync(string? url)
     {
+        if (UiPreviewContext.IsEnabled) return;
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
         {
             throw new InvalidOperationException("billing_url_invalid");
@@ -696,15 +783,56 @@ public sealed partial class AccountPage : Page
     private static string LocalizePaymentStatus(string status) =>
         status.Trim().ToLowerInvariant() switch
         {
-            "paid" or "succeeded" => "Оплачено",
-            "pending" or "processing" => "Обрабатывается",
-            "failed" => "Ошибка",
+            "paid" or "succeeded" or "success" or "completed" or "manual" => "Оплачено",
+            "pending" or "processing" or "open" => "Ожидает оплаты",
+            "failed" or "declined" => "Ошибка",
             "refunded" => "Возврат",
             "canceled" => "Отменено",
             _ => string.IsNullOrWhiteSpace(status)
                 ? "Статус не указан"
                 : status,
         };
+
+    private static bool PaymentIsPaid(string status) => status.Trim().ToLowerInvariant() is
+        "paid" or "succeeded" or "success" or "completed" or "manual";
+
+    private static bool PaymentIsWarning(string status) => status.Trim().ToLowerInvariant() is
+        "pending" or "processing" or "open" or "failed" or "declined";
+
+    private static string PaymentGlyph(string status) => status.Trim().ToLowerInvariant() switch
+    {
+        "paid" or "succeeded" or "success" or "completed" or "manual" => "\uE73E",
+        "pending" or "processing" or "open" => "\uE823",
+        "refunded" => "\uE7A7",
+        "failed" or "declined" => "\uE711",
+        _ => "\uE8C7",
+    };
+
+    private static string PaymentPlanName(string? planId)
+    {
+        if (string.IsNullOrWhiteSpace(planId)) return "Подписка VEX";
+        var normalized = planId.ToLowerInvariant();
+        var tier = normalized.Contains("business") ? "Бизнес" :
+            normalized.Contains("family") || normalized.Contains("team") ? "Team" :
+            normalized.Contains("pro") ? "Pro" : normalized.Contains("basic") ? "Базовый" :
+            CultureInfo.GetCultureInfo("ru-RU").TextInfo.ToTitleCase(planId.Replace('_', ' ').Replace('-', ' '));
+        var period = normalized.Contains("semiannual") ? "6 месяцев" :
+            normalized.Contains("quarter") ? "3 месяца" :
+            normalized.Contains("annual") || normalized.Contains("year") ? "год" :
+            normalized.Contains("month") ? "месяц" : null;
+        return period is null ? tier : $"{tier} · {period}";
+    }
+
+    private static string AccountInitialsFor(string? email)
+    {
+        var name = email?.Split('@')[0] ?? string.Empty;
+        var pieces = name.Split(['.', '_', '-', ' '], StringSplitOptions.RemoveEmptyEntries);
+        return pieces.Length == 0 ? "V" :
+            string.Concat(pieces.Take(2).Select(piece => piece[..1])).ToUpperInvariant();
+    }
+
+    private static SolidColorBrush ColorBrush(uint argb) => new(global::Windows.UI.Color.FromArgb(
+        (byte)(argb >> 24), (byte)(argb >> 16), (byte)(argb >> 8), (byte)argb));
 
     private static string FormatBytes(long? value)
     {
@@ -733,8 +861,6 @@ public sealed partial class AccountPage : Page
         var amount = amountMinor / 100m;
         try
         {
-            var region = new RegionInfo(
-                new CultureInfo("ru-RU").Name);
             var format = (NumberFormatInfo)
                 CultureInfo.GetCultureInfo("ru-RU")
                     .NumberFormat.Clone();
@@ -745,7 +871,7 @@ public sealed partial class AccountPage : Page
                 "EUR" => "€",
                 _ => currency.ToUpperInvariant(),
             };
-            _ = region;
+            format.CurrencyDecimalDigits = amountMinor % 100 == 0 ? 0 : 2;
             return amount.ToString("C", format);
         }
         catch (ArgumentException)
@@ -774,8 +900,12 @@ public sealed partial class AccountPage : Page
         string Usage);
 
     private sealed record PaymentHistoryView(
+        string Id,
         string Title,
         string Amount,
         string Status,
-        string Date);
+        string Date,
+        string Glyph,
+        Brush StatusForeground,
+        Brush StatusBackground);
 }

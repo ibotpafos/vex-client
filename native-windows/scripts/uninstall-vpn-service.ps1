@@ -15,6 +15,7 @@ if (-not $principal.IsInRole(
 }
 
 $serviceName = 'VEX VPN Service'
+$serviceControl = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'sc.exe'
 $dataDirectory = Join-Path $env:ProgramData 'VEX\VPN'
 
 function Remove-StagingDirectory {
@@ -58,7 +59,7 @@ if ($null -ne $service) {
     Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
     $service.Dispose()
     $service = $null
-    & sc.exe delete $serviceName | Out-Null
+    & $serviceControl delete $serviceName | Out-Null
     if ($LASTEXITCODE -ne 0) {
         throw 'The VEX VPN service could not be removed.'
     }

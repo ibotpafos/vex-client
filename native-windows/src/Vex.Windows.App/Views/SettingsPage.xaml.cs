@@ -1,6 +1,7 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.System;
@@ -9,6 +10,7 @@ using Vex.Windows.Client.Api;
 using Vex.Windows.Client.Session;
 using Vex.Windows.Core.Presentation;
 using Vex.Windows.Core.Vpn;
+using Vex.Windows.Core.Vpn.Ipc;
 using WinRT.Interop;
 
 namespace Vex.Windows.App.Views;
@@ -37,6 +39,9 @@ public sealed partial class SettingsPage : Page
     private bool _renderingPreferences;
     private bool _realtimeRefreshInFlight;
     private bool _realtimeRefreshPending;
+    private bool _isLoaded;
+    private int _busyCount;
+    private bool? _serviceAvailable;
 
     public SettingsPage()
     {
@@ -48,26 +53,62 @@ public sealed partial class SettingsPage : Page
 
     private async void OnLoaded(object sender, RoutedEventArgs args)
     {
+        if (_isLoaded)
+        {
+            return;
+        }
+        _isLoaded = true;
         _services.Preferences.Changed += OnPreferencesChanged;
         _services.VpnUiState.Changed += OnVpnUiStateChanged;
         _services.UpdateService.Changed += OnUpdateSnapshotChanged;
         _services.CustomerRealtimeChanged += OnCustomerRealtimeChanged;
+        _services.Coordinator.SessionChanged += OnSessionChanged;
         await RefreshAsync();
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs args)
     {
+        _isLoaded = false;
+        _realtimeRefreshPending = false;
         _services.Preferences.Changed -= OnPreferencesChanged;
         _services.VpnUiState.Changed -= OnVpnUiStateChanged;
         _services.UpdateService.Changed -= OnUpdateSnapshotChanged;
         _services.CustomerRealtimeChanged -= OnCustomerRealtimeChanged;
+        _services.Coordinator.SessionChanged -= OnSessionChanged;
     }
+
+    private void OnSettingsContentSizeChanged(
+        object sender,
+        SizeChangedEventArgs args)
+    {
+        if (ProtectionCard is null || ProtectionColumn is null)
+        {
+            return;
+        }
+        var twoColumns = args.NewSize.Width >= 600;
+        FeatureCardsGrid.ColumnSpacing = twoColumns ? 12 : 0;
+        ProtectionColumn.Width = twoColumns
+            ? new GridLength(1, GridUnitType.Star)
+            : new GridLength(0);
+        Grid.SetColumn(ProtectionCard, twoColumns ? 1 : 0);
+        Grid.SetRow(ProtectionCard, twoColumns ? 0 : 1);
+    }
+
+    private void OnSessionChanged(object? sender, EventArgs args) =>
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (_isLoaded)
+            {
+                _state = _services.Coordinator.CurrentState;
+                Render();
+            }
+        });
 
     private void OnCustomerRealtimeChanged(
         object? sender,
         CustomerRealtimeChangedEventArgs args)
     {
-        if (!CustomerRealtimeRefreshPolicy.ShouldRefreshSettings(args))
+        if (!_isLoaded || !CustomerRealtimeRefreshPolicy.ShouldRefreshSettings(args))
         {
             return;
         }
@@ -76,6 +117,10 @@ public sealed partial class SettingsPage : Page
 
     private async void RefreshFromRealtimeAsync()
     {
+        if (!_isLoaded)
+        {
+            return;
+        }
         if (_realtimeRefreshInFlight)
         {
             _realtimeRefreshPending = true;
@@ -90,7 +135,7 @@ public sealed partial class SettingsPage : Page
                 _realtimeRefreshPending = false;
                 await RefreshAsync();
             }
-            while (_realtimeRefreshPending);
+            while (_isLoaded && _realtimeRefreshPending);
         }
         finally
         {
@@ -127,7 +172,9 @@ public sealed partial class SettingsPage : Page
                 InfoBarSeverity.Success);
         }
         catch (Exception error) when (
-            error is InvalidOperationException
+            error is IOException
+                or CryptographicException
+                or InvalidOperationException
                 or UnauthorizedAccessException
                 or System.Security.SecurityException)
         {
@@ -145,16 +192,35 @@ public sealed partial class SettingsPage : Page
             return;
         }
 
-        var preferences = _services.Preferences.Update(current => current with
+        SetBusy(true);
+        var saved = false;
+        try
         {
-            AutoServerEnabled = AutoServerToggle.IsOn,
-            SmartRoutingEnabled = SmartRoutingToggle.IsOn,
-            AntiLeakEnabled = AntiLeakToggle.IsOn,
-            AutoRecoveryEnabled = AutoRecoveryToggle.IsOn,
-        });
-        if (_services.Coordinator.CurrentState is not null)
-        {
-            try
+            // Save only the control the user changed. Other controls may have
+            // a queued render from a preference change on another page.
+            var preferences = _services.Preferences.Update(current => sender switch
+            {
+                ToggleSwitch toggle when toggle == AutoServerToggle => current with
+                {
+                    AutoServerEnabled = toggle.IsOn,
+                },
+                ToggleSwitch toggle when toggle == SmartRoutingToggle => current with
+                {
+                    SmartRoutingEnabled = toggle.IsOn,
+                },
+                ToggleSwitch toggle when toggle == AntiLeakToggle => current with
+                {
+                    AntiLeakEnabled = toggle.IsOn,
+                },
+                ToggleSwitch toggle when toggle == AutoRecoveryToggle => current with
+                {
+                    AutoRecoveryEnabled = toggle.IsOn,
+                },
+                _ => current,
+            });
+            saved = true;
+            if (ReferenceEquals(sender, SmartRoutingToggle) &&
+                _services.Coordinator.CurrentState is not null)
             {
                 await _services.Coordinator.SetRoutingPreferencesAsync(
                     preferences.SmartRoutingEnabled
@@ -163,47 +229,46 @@ public sealed partial class SettingsPage : Page
                     bypassRegion: null,
                     CancellationToken.None);
             }
-            catch (Exception error) when (
-                error is NativeClientFlowException
-                    or InvalidOperationException
-                    or ArgumentException
-                    or OperationCanceledException)
+            var protectionApplied = false;
+            if (ReferenceEquals(sender, AntiLeakToggle) &&
+                _services.VpnUiState.Snapshot.Phase == VpnConnectionPhase.Connected)
             {
-                ShowNotice(
-                    error.Message,
-                    InfoBarSeverity.Warning);
-                return;
-            }
-        }
-        if (_services.VpnUiState.Snapshot.Phase ==
-            VpnConnectionPhase.Connected)
-        {
-            try
-            {
-                await _services.VpnUiState.RunAsync(
+                var response = await _services.VpnUiState.RunAsync(
                     token => _services.VpnClient.SetAntiLeakAsync(
                         preferences.AntiLeakEnabled,
                         token),
                     CancellationToken.None);
+                if (!response.Success)
+                {
+                    ShowNotice(
+                        "Настройка сохранена, но служба не смогла применить защиту. Повторите подключение.",
+                        InfoBarSeverity.Warning);
+                    return;
+                }
+                protectionApplied = true;
             }
-            catch (Exception error) when (
-                error is IOException
-                    or UnauthorizedAccessException
-                    or InvalidOperationException
-                    or OperationCanceledException)
-            {
-                ShowNotice(
-                    error.Message,
-                    InfoBarSeverity.Warning);
-                return;
-            }
+            ShowNotice(
+                protectionApplied
+                    ? "Настройка защиты сохранена и применена к текущему подключению."
+                    : ReferenceEquals(sender, SmartRoutingToggle) &&
+                        _services.VpnUiState.Snapshot.Phase == VpnConnectionPhase.Connected
+                        ? "Настройка маршрута сохранена и применится при следующем подключении."
+                        : "Настройки VPN сохранены.",
+                InfoBarSeverity.Success);
         }
-        ShowNotice(
-            _services.VpnUiState.Snapshot.Phase ==
-                VpnConnectionPhase.Connected
-                ? "Настройки VPN сохранены и применятся при следующем подключении."
-                : "Настройки VPN сохранены.",
-            InfoBarSeverity.Success);
+        catch (Exception error) when (IsSettingsOperationFailure(error))
+        {
+            ShowNotice(
+                saved
+                    ? "Настройка сохранена, но сейчас не удалось применить её к VPN. Повторите подключение."
+                    : "Не удалось сохранить настройку. Повторите позже.",
+                InfoBarSeverity.Warning);
+        }
+        finally
+        {
+            SetBusy(false);
+            RenderPreferences();
+        }
     }
 
     private void OnLanguageSelectionChanged(
@@ -217,15 +282,23 @@ public sealed partial class SettingsPage : Page
             return;
         }
 
-        _services.Preferences.Update(current => current with
+        try
         {
-            InterfaceLanguage = language,
-        });
-        ShowNotice(
-            language == "en"
-                ? "Language preference saved."
-                : "Русский язык выбран.",
-            InfoBarSeverity.Success);
+            _services.Preferences.Update(current => current with
+            {
+                InterfaceLanguage = language,
+            });
+            ShowNotice(
+                language == "en"
+                    ? "Language preference saved."
+                    : "Русский язык выбран.",
+                InfoBarSeverity.Success);
+        }
+        catch (Exception error) when (IsSettingsOperationFailure(error))
+        {
+            ShowNotice("Не удалось сохранить язык интерфейса.", InfoBarSeverity.Warning);
+            RenderPreferences();
+        }
     }
 
     private async void OnEnableWindowsHelloClick(
@@ -245,8 +318,7 @@ public sealed partial class SettingsPage : Page
             await RefreshAsync();
         }
         catch (Exception error) when (
-            error is InvalidOperationException or
-            OperationCanceledException)
+            IsSettingsOperationFailure(error))
         {
             ShowNotice(
                 error.Message,
@@ -276,8 +348,7 @@ public sealed partial class SettingsPage : Page
             await RefreshAsync();
         }
         catch (Exception error) when (
-            error is InvalidOperationException or
-            OperationCanceledException)
+            IsSettingsOperationFailure(error))
         {
             ShowNotice(
                 error.Message,
@@ -307,8 +378,7 @@ public sealed partial class SettingsPage : Page
             await RefreshAsync();
         }
         catch (Exception error) when (
-            error is InvalidOperationException or
-            OperationCanceledException)
+            IsSettingsOperationFailure(error))
         {
             ShowNotice(
                 error.Message,
@@ -340,24 +410,16 @@ public sealed partial class SettingsPage : Page
             else if (_updateSnapshot.UpdateAvailable)
             {
                 ShowNotice(
-                    "Обновление доступно, но пакет не удалось открыть. Открою центр загрузок как rollback path.",
+                    "Не удалось открыть установщик обновления. Открываем центр загрузок.",
                     InfoBarSeverity.Warning);
-                await Launcher.LaunchUriAsync(
-                    new Uri(
-                        _services.UpdateService.DownloadsFallbackUrl,
-                        UriKind.Absolute));
+                await OpenDownloadsWebsiteAsync();
             }
             else
             {
-                await Launcher.LaunchUriAsync(
-                    new Uri(
-                        _services.UpdateService.DownloadsFallbackUrl,
-                        UriKind.Absolute));
+                await OpenDownloadsWebsiteAsync();
             }
         }
-        catch (Exception error) when (
-            error is InvalidOperationException or
-            OperationCanceledException)
+        catch (Exception error) when (IsSettingsOperationFailure(error))
         {
             ShowNotice(
                 error.Message,
@@ -384,7 +446,7 @@ public sealed partial class SettingsPage : Page
                 _updateSnapshot.UpdateAvailable
                     ? $"Доступна версия {_updateSnapshot.Release?.Version ?? "—"}."
                     : _updateSnapshot.Message ?? "Установлена актуальная версия.",
-                _updateSnapshot.Required
+                _updateSnapshot.Required || _updateSnapshot.State is "error" or "disabled"
                     ? InfoBarSeverity.Warning
                     : InfoBarSeverity.Success);
         }
@@ -411,32 +473,37 @@ public sealed partial class SettingsPage : Page
             return;
         }
 
-        var enabled = AutoUpdatesToggle.IsOn;
-        _services.Preferences.Update(current => current with
-        {
-            AutoUpdatesEnabled = enabled,
-        });
-        if (!enabled)
-        {
-            ShowNotice(
-                "Автоматическая проверка обновлений выключена.",
-                InfoBarSeverity.Success);
-            return;
-        }
-
         SetBusy(true);
         try
         {
+            var enabled = AutoUpdatesToggle.IsOn;
+            _services.Preferences.Update(current => current with
+            {
+                AutoUpdatesEnabled = enabled,
+            });
+            if (!enabled)
+            {
+                ShowNotice(
+                    "Автоматическая проверка обновлений выключена.",
+                    InfoBarSeverity.Success);
+                return;
+            }
             _updateSnapshot =
                 await _services.BackgroundUpdates.CheckNowAsync(
                     CancellationToken.None);
             ShowNotice(
                 _updateSnapshot.UpdateAvailable
                     ? $"Доступна версия {_updateSnapshot.Release?.Version ?? "—"}."
-                    : "Автоматическая проверка включена. Установлена актуальная версия.",
-                _updateSnapshot.Required
+                    : _updateSnapshot.State is "error" or "disabled"
+                        ? _updateSnapshot.Message ?? "Не удалось проверить обновления. Повторите позже."
+                        : "Автоматическая проверка включена. Установлена актуальная версия.",
+                _updateSnapshot.Required || _updateSnapshot.State is "error" or "disabled"
                     ? InfoBarSeverity.Warning
                     : InfoBarSeverity.Success);
+        }
+        catch (Exception error) when (IsSettingsOperationFailure(error))
+        {
+            ShowNotice("Не удалось сохранить или проверить настройку обновлений.", InfoBarSeverity.Warning);
         }
         finally
         {
@@ -448,10 +515,24 @@ public sealed partial class SettingsPage : Page
     private async void OnOpenManualDownloadsClick(
         object sender,
         RoutedEventArgs args) =>
-        await Launcher.LaunchUriAsync(
-            new Uri(
-                _services.UpdateService.DownloadsFallbackUrl,
-                UriKind.Absolute));
+        await OpenDownloadsWebsiteAsync();
+
+    private async Task OpenDownloadsWebsiteAsync()
+    {
+        if (UiPreviewContext.IsEnabled) return;
+        try
+        {
+            if (!await Launcher.LaunchUriAsync(
+                new Uri(_services.UpdateService.DownloadsFallbackUrl, UriKind.Absolute)))
+            {
+                ShowNotice("Не удалось открыть центр загрузок.", InfoBarSeverity.Warning);
+            }
+        }
+        catch (Exception error) when (IsSettingsOperationFailure(error))
+        {
+            ShowNotice("Не удалось открыть центр загрузок.", InfoBarSeverity.Warning);
+        }
+    }
 
     private async void OnRepairServiceClick(
         object sender,
@@ -574,10 +655,15 @@ public sealed partial class SettingsPage : Page
 
         var package = new DataPackage();
         package.SetText(summary);
-        Clipboard.SetContent(package);
-        ShowNotice(
-            "Redacted summary скопирован в буфер обмена.",
-            InfoBarSeverity.Success);
+        try
+        {
+            Clipboard.SetContent(package);
+            ShowNotice("Отчёт скопирован в буфер обмена.", InfoBarSeverity.Success);
+        }
+        catch (Exception error) when (IsSettingsOperationFailure(error))
+        {
+            ShowNotice("Не удалось скопировать отчёт. Повторите позже.", InfoBarSeverity.Warning);
+        }
     }
 
     private void OnOpenAppDataClick(
@@ -593,20 +679,18 @@ public sealed partial class SettingsPage : Page
     private async Task RefreshAsync()
     {
         SetBusy(true);
-        SettingsNotice.IsOpen = false;
-        _state = _services.Coordinator.CurrentState;
         try
         {
+            _state = _services.Coordinator.CurrentState;
             // Control-plane notices and local session security remain available
             // while the privileged VPN service is being repaired.
             try
             {
                 await RefreshVpnStateAsync();
             }
-            catch (Exception error) when (
-                error is IOException or UnauthorizedAccessException or
-                    InvalidOperationException or OperationCanceledException)
+            catch (Exception error) when (IsSettingsOperationFailure(error))
             {
+                _serviceAvailable = false;
                 ShowNotice(
                     "Служба VEX VPN недоступна. Нажмите «Запустить службу» для восстановления.",
                     InfoBarSeverity.Warning);
@@ -618,10 +702,7 @@ public sealed partial class SettingsPage : Page
                 CancellationToken.None);
             await RefreshRemoteConfigAsync();
         }
-        catch (Exception error) when (
-            error is IOException or UnauthorizedAccessException or
-                InvalidOperationException or OperationCanceledException or
-                System.Security.Cryptography.CryptographicException)
+        catch (Exception error) when (IsSettingsOperationFailure(error))
         {
             ShowNotice(
                 "Не удалось обновить настройки. Повторите позже.",
@@ -667,6 +748,7 @@ public sealed partial class SettingsPage : Page
         object sender,
         RoutedEventArgs args)
     {
+        if (UiPreviewContext.IsEnabled) return;
         try
         {
             if (!await Launcher.LaunchUriAsync(new Uri("https://vexguard.app/support")))
@@ -685,6 +767,7 @@ public sealed partial class SettingsPage : Page
         var response = await _services.VpnUiState.RefreshAsync(
             CancellationToken.None);
         _snapshot = response.Snapshot;
+        _serviceAvailable = response.ErrorCode != "vpn_service_unavailable";
     }
 
     private void Render()
@@ -693,8 +776,7 @@ public sealed partial class SettingsPage : Page
         IncidentNotice.Message = _remoteConfig?.IncidentBanner?.Trim() ?? string.Empty;
         IncidentNotice.IsOpen = !string.IsNullOrWhiteSpace(IncidentNotice.Message);
         _snapshot = _services.VpnUiState.Snapshot;
-        AppVersionText.Text =
-            $"Версия приложения: {_services.AppVersion} · канал {_updateSnapshot.Channel} · updater {FormatUpdateStatus()}";
+        AppVersionText.Text = _services.AppVersion;
         SingleInstanceText.Text = "Один экземпляр приложения: включён";
         TrayModeText.Text = "Работа в области уведомлений: приложение остаётся активным, окно можно скрыть и открыть снова";
         QuitBehaviorText.Text = "Поведение при закрытии: окно скрывается в область уведомлений; полный выход — через пункт «Выход»";
@@ -721,13 +803,22 @@ public sealed partial class SettingsPage : Page
                 $"Кэш профиля: version={state.CachedProfileVersion?.ToString() ?? "—"}, signed authorization сохранен",
             _ => "Кэш профиля: пустой",
         };
-        ServiceStatusText.Text = $"Статус службы: {ServiceStatusTextValue()}";
-        LeakProtectionText.Text =
-            $"Anti-leak: {FormatLeakProtection()}";
+        ServiceStatusText.Text = ServiceStatusTextValue();
+        ToolTipService.SetToolTip(ServiceStatusBadge,
+            _snapshot.ErrorCode ?? "Состояние VPN-службы VEX");
+        var serviceWarning = _serviceAvailable == false ||
+            _snapshot.Phase == VpnConnectionPhase.Error;
+        ServiceStatusBadge.Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(
+            serviceWarning
+                ? global::Windows.UI.Color.FromArgb(31, 255, 194, 92)
+                : global::Windows.UI.Color.FromArgb(18, 34, 211, 238));
+        ServiceStatusText.Foreground = serviceWarning
+            ? new Microsoft.UI.Xaml.Media.SolidColorBrush(global::Windows.UI.Color.FromArgb(255, 255, 194, 92))
+            : (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["VexCyanLightBrush"];
+        LeakProtectionText.Text = FormatLeakProtection();
         AppDataPathText.Text = $"Данные приложения: {_appDataPath}";
         ServiceDataPathText.Text = $"Данные службы: {_serviceDataPath}";
-        UpdateStatusText.Text =
-            $"Статус: {FormatUpdateStatus()}";
+        UpdateStatusText.Text = FormatUpdateStatus();
         UpdateVersionText.Text =
             $"Доступная версия: {_updateSnapshot.Release?.Version ?? "—"}";
         UpdateDetailsText.Text =
@@ -738,15 +829,15 @@ public sealed partial class SettingsPage : Page
                 ? Visibility.Visible
                 : Visibility.Collapsed;
         InstallUpdateButton.Content = _updateSnapshot.Required
-            ? "Установить обязательно"
-            : "Установить";
+            ? "Установить обязательное обновление"
+            : "Установить обновление";
 
         var helloAvailable = _windowsHelloStatus?.IsAvailable ?? false;
         var helloRequired = _windowsHelloStatus?.IsRequired ?? false;
         var helloLocked = _windowsHelloStatus?.AccessKind ==
             ClientStateAccessKind.Locked;
         EnableWindowsHelloButton.Visibility =
-            helloAvailable && !helloRequired
+            helloAvailable && !helloRequired && _state is not null
                 ? Visibility.Visible
                 : Visibility.Collapsed;
         DisableWindowsHelloButton.Visibility = helloRequired
@@ -774,23 +865,40 @@ public sealed partial class SettingsPage : Page
         try
         {
             var preferences = _services.Preferences.Current;
-            var startupEnabled = false;
+            var startupStatus = preferences.AutoLaunchEnabled
+                ? StartupRegistrationState.Enabled
+                : StartupRegistrationState.Disabled;
             try
             {
-                startupEnabled = _services.StartupService.IsEnabled();
+                startupStatus = _services.StartupService.GetStatus();
             }
             catch (Exception error) when (
                 error is UnauthorizedAccessException
                     or System.Security.SecurityException
                     or InvalidOperationException)
             {
-                startupEnabled = preferences.AutoLaunchEnabled;
+                // Keep the saved preference when Windows cannot be queried.
             }
 
+            var startupEnabled = startupStatus == StartupRegistrationState.Enabled;
             AutoLaunchToggle.IsOn = startupEnabled;
+            AutoLaunchDescription.Text = startupStatus switch
+            {
+                StartupRegistrationState.Enabled => "Приложение откроется после входа.",
+                StartupRegistrationState.DisabledByUser => "Отключён в настройках автозагрузки Windows.",
+                StartupRegistrationState.DisabledByPolicy => "Запрещён политикой Windows.",
+                StartupRegistrationState.ForeignRegistration => "Запись автозапуска занята другой программой.",
+                _ => "Автозапуск выключен.",
+            };
             AutoUpdatesToggle.IsOn = preferences.AutoUpdatesEnabled;
+            AutoUpdatesDescription.Text = preferences.AutoUpdatesEnabled
+                ? "Проверять при запуске и каждые 6 часов."
+                : "Автоматическая проверка выключена.";
             AutoServerToggle.IsOn = preferences.AutoServerEnabled;
             SmartRoutingToggle.IsOn = preferences.SmartRoutingEnabled;
+            SmartRoutingDescription.Text = preferences.SmartRoutingEnabled
+                ? "Локальные сервисы идут без VPN."
+                : "Весь трафик идёт через VPN.";
             AntiLeakToggle.IsOn = preferences.AntiLeakEnabled;
             AutoRecoveryToggle.IsOn = preferences.AutoRecoveryEnabled;
             LanguagePicker.SelectedIndex =
@@ -805,34 +913,61 @@ public sealed partial class SettingsPage : Page
     }
 
     private void OnPreferencesChanged(object? sender, EventArgs args) =>
-        DispatcherQueue.TryEnqueue(RenderPreferences);
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (_isLoaded)
+            {
+                RenderPreferences();
+            }
+        });
 
     private void OnVpnUiStateChanged(object? sender, EventArgs args) =>
         DispatcherQueue.TryEnqueue(() =>
         {
+            if (!_isLoaded)
+            {
+                return;
+            }
             _snapshot = _services.VpnUiState.Snapshot;
+            if (_snapshot.ErrorCode == "vpn_service_unavailable")
+            {
+                _serviceAvailable = false;
+            }
+            else if (_snapshot.Phase != VpnConnectionPhase.Error)
+            {
+                _serviceAvailable = true;
+            }
             Render();
         });
 
     private void OnUpdateSnapshotChanged(object? sender, EventArgs args) =>
         DispatcherQueue.TryEnqueue(() =>
         {
+            if (!_isLoaded)
+            {
+                return;
+            }
             _updateSnapshot = _services.UpdateService.CurrentSnapshot;
             Render();
         });
 
     private string ServiceStatusTextValue() =>
-        _snapshot.Phase switch
+        _serviceAvailable switch
         {
-            VpnConnectionPhase.Connected =>
-                $"защищено{FormatLocation(_snapshot.LocationId)}",
-            VpnConnectionPhase.Connecting =>
-                $"подключение{FormatLocation(_snapshot.LocationId)}",
-            VpnConnectionPhase.Disconnecting =>
-                "отключение",
-            VpnConnectionPhase.Error =>
-                $"ошибка ({_snapshot.ErrorCode ?? "unknown"})",
-            _ => "не подключено",
+            false => "Служба недоступна",
+            null => "Проверяем",
+            _ => _snapshot.Phase switch
+            {
+                VpnConnectionPhase.Connected =>
+                    $"Защищено{FormatLocation(_snapshot.LocationId)}",
+                VpnConnectionPhase.Connecting =>
+                    $"Подключение{FormatLocation(_snapshot.LocationId)}",
+                VpnConnectionPhase.Disconnecting =>
+                    "Отключение",
+                VpnConnectionPhase.Error =>
+                    "Требуется проверка",
+                _ => "Готов к подключению",
+            },
         };
 
     private string FormatLeakProtection() =>
@@ -852,6 +987,10 @@ public sealed partial class SettingsPage : Page
 
     private void SetBusy(bool busy)
     {
+        // Nested and realtime refreshes must not enable controls while another
+        // page operation still owns them.
+        _busyCount = Math.Max(0, _busyCount + (busy ? 1 : -1));
+        busy = _busyCount > 0;
         BusyIndicator.IsActive = busy;
         RefreshSettingsButton.IsEnabled = !busy;
         OpenDownloadsButton.IsEnabled = !busy;
@@ -860,6 +999,7 @@ public sealed partial class SettingsPage : Page
         RepairServiceButton.IsEnabled = !busy;
         CopyDiagnosticsButton.IsEnabled = !busy;
         AutoLaunchToggle.IsEnabled = !busy;
+        AutoUpdatesToggle.IsEnabled = !busy;
         AutoServerToggle.IsEnabled = !busy;
         SmartRoutingToggle.IsEnabled = !busy;
         AntiLeakToggle.IsEnabled = !busy;
@@ -881,13 +1021,28 @@ public sealed partial class SettingsPage : Page
 
     private void OpenPath(string path)
     {
-        Directory.CreateDirectory(path);
-        Process.Start(
-            new ProcessStartInfo("explorer.exe", $"\"{path}\"")
-            {
-                UseShellExecute = true,
-            });
+        if (UiPreviewContext.IsEnabled) return;
+        try
+        {
+            Directory.CreateDirectory(path);
+            Process.Start(
+                new ProcessStartInfo("explorer.exe", $"\"{path}\"")
+                {
+                    UseShellExecute = true,
+                });
+        }
+        catch (Exception error) when (IsSettingsOperationFailure(error))
+        {
+            ShowNotice("Не удалось открыть папку данных VEX.", InfoBarSeverity.Warning);
+        }
     }
+
+    private static bool IsSettingsOperationFailure(Exception error) =>
+        error is IOException or UnauthorizedAccessException or InvalidOperationException or
+            ArgumentException or OperationCanceledException or CryptographicException or
+            HttpRequestException or NativeClientFlowException or VexApiException or
+            VpnIpcProtocolException or System.ComponentModel.Win32Exception or
+            System.Runtime.InteropServices.COMException;
 
     private static string FormatLocation(string? locationId) =>
         string.IsNullOrWhiteSpace(locationId)
@@ -905,7 +1060,7 @@ public sealed partial class SettingsPage : Page
             "current" =>
                 "актуально",
             "disabled" =>
-                "отключен fail-closed",
+                "автообновление недоступно",
             "error" =>
                 $"ошибка ({_updateSnapshot.Message ?? "unknown"})",
             _ =>
@@ -917,22 +1072,26 @@ public sealed partial class SettingsPage : Page
     {
         if (_windowsHelloStatus is null)
         {
-            return "Windows Hello: проверяем доступность…";
+            return "Проверяем доступность…";
         }
 
         if (!_windowsHelloStatus.IsAvailable)
         {
-            return "Windows Hello: недоступен, локальные секреты защищены DPAPI";
+            return _windowsHelloStatus.IsRequired
+                ? "Сессия защищена Hello. Настройте Windows Hello на этом устройстве."
+                : "Недоступен на этом устройстве. Сессия защищена Windows.";
         }
 
         if (!_windowsHelloStatus.IsRequired)
         {
-            return "Windows Hello: доступен, но не обязателен для открытия локальной сессии";
+            return _state is null
+                ? "Выполните вход, чтобы включить защиту сессии."
+                : "Подтверждать открытие локальной сессии.";
         }
 
         return _windowsHelloStatus.AccessKind == ClientStateAccessKind.Locked
-            ? "Windows Hello: включен, локальная сессия сейчас заблокирована"
-            : "Windows Hello: включен, локальная сессия разблокирована";
+            ? "Включен. Сессия сейчас заблокирована."
+            : "Включен. Сессия разблокирована.";
     }
 
     private nint CurrentWindowHandle()

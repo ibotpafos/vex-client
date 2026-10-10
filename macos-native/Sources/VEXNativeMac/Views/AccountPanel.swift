@@ -25,6 +25,11 @@ struct AccountPanel: View {
         .padding(.top, 2)
         .padding(.bottom, 16)
         .task {
+            #if DEBUG
+            if VEXPreviewMode.suppressesRuntime {
+                return
+            }
+            #endif
             await appState.refreshBilling()
         }
     }

@@ -133,7 +133,7 @@ if (!fs.existsSync(programPath)) {
 } else {
   const programSource = fs.readFileSync(programPath, "utf8");
   for (const token of [
-    'FindOrRegisterForKey("main")',
+    'FindOrRegisterForKey(UiPreviewContext.InstanceKey)',
     "RedirectActivationToAsync",
     "Application.Start",
     "HandleRedirectedActivation",
@@ -178,20 +178,21 @@ for (const parityToken of [
   }
 }
 
-for (const pageName of [
-  "AccountPage.xaml",
-  "SupportPage.xaml",
-  "SettingsPage.xaml",
+for (const [pageName, maximum] of [
+  ["AccountPage.xaml", 600],
+  ["SupportPage.xaml", 600],
+  ["SettingsPage.xaml", 680],
 ]) {
   const pagePath = path.join(appRoot, "Views", pageName);
   const pageSource = fs.readFileSync(pagePath, "utf8");
-  if (/\bWidth="430"/u.test(pageSource) || !/\bMaxWidth="430"/u.test(pageSource)) {
+  if (new RegExp(`\\bWidth="${maximum}"`, "u").test(pageSource) ||
+      !new RegExp(`\\bMaxWidth="${maximum}"`, "u").test(pageSource)) {
     failures.push(
-      `${pagePath}: page content must shrink responsively below the macOS-parity 430px maximum`,
+      `${pagePath}: page content must shrink responsively below its ${maximum}px maximum`,
     );
   }
 }
-if (!/\bMaxWidth="1120"/u.test(homePageSource)) {
+if (!/\bMaxWidth="1080"/u.test(homePageSource)) {
   failures.push(
     `${homePagePath}: the current home composition must use the wide macOS-parity canvas`,
   );
@@ -252,7 +253,7 @@ for (const xamlPath of walk(appRoot).filter((file) => file.endsWith(".xaml"))) {
     );
   }
 
-  for (const match of source.matchAll(/\b[A-Za-z]+="(On[A-Z][A-Za-z0-9_]*)"/gu)) {
+  for (const match of source.matchAll(/\b(?:Click|Loaded|Unloaded|Toggled|SelectionChanged|SizeChanged|TextChanged|Invoked)="(On[A-Z][A-Za-z0-9_]*)"/gu)) {
     const handler = match[1];
     const handlerPattern = new RegExp(`\\b${handler}\\s*\\(`, "u");
     if (!handlerPattern.test(codeBehind)) {

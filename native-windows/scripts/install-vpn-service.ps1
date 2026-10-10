@@ -4,7 +4,7 @@ param(
     [string]$InstallDirectory,
 
     [Parameter(Mandatory = $true)]
-    [ValidatePattern('^S-1-5-21-(\d+-){3}\d+$')]
+    [ValidatePattern('^S-1-(?:5-21|12-1)-(\d+-){3}\d+$')]
     [string]$OwnerSid,
 
     [Parameter(Mandatory = $true)]
@@ -37,6 +37,7 @@ Set-StrictMode -Version Latest
 Add-Type -AssemblyName System.Security
 
 $serviceName = 'VEX VPN Service'
+$serviceControl = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'sc.exe'
 $dataDirectory = Join-Path $env:ProgramData 'VEX\VPN'
 $serviceExecutable = Join-Path $InstallDirectory 'Vex.Windows.Service.exe'
 $clientExecutable = Join-Path $InstallDirectory 'Vex.Windows.App.exe'
@@ -285,25 +286,25 @@ function Install-Service {
     if ($null -ne $existing) {
         Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
         $existing.Dispose()
-        & sc.exe config $serviceName binPath= $binaryPath start= auto obj= LocalSystem |
+        & $serviceControl config $serviceName binPath= $binaryPath start= auto obj= LocalSystem |
             Out-Null
         if ($LASTEXITCODE -ne 0) {
             throw 'The existing VEX VPN service configuration could not be updated.'
         }
     }
     else {
-        & sc.exe create $serviceName binPath= $binaryPath start= auto obj= LocalSystem |
+        & $serviceControl create $serviceName binPath= $binaryPath start= auto obj= LocalSystem |
             Out-Null
         if ($LASTEXITCODE -ne 0) {
             throw 'The VEX VPN service could not be installed.'
         }
     }
 
-    & sc.exe description $serviceName 'Native VEX VPN tunnel controller.' |
+    & $serviceControl description $serviceName 'Native VEX VPN tunnel controller.' |
         Out-Null
-    & sc.exe failure $serviceName reset= 86400 actions= restart/5000/restart/15000/''/0 |
+    & $serviceControl failure $serviceName reset= 86400 actions= restart/5000/restart/15000/''/0 |
         Out-Null
-    & sc.exe failureflag $serviceName 1 | Out-Null
+    & $serviceControl failureflag $serviceName 1 | Out-Null
     Set-ItemProperty `
         -LiteralPath "HKLM:\SYSTEM\CurrentControlSet\Services\$serviceName" `
         -Name ImagePath `

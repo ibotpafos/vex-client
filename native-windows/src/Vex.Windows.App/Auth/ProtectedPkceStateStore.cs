@@ -5,7 +5,7 @@ using Vex.Windows.Client.Auth;
 
 namespace Vex.Windows.App.Auth;
 
-public sealed class ProtectedPkceStateStore
+public sealed class ProtectedPkceStateStore : IPkceStateStore
 {
     private static readonly byte[] Entropy =
         Encoding.UTF8.GetBytes("VEX Windows PKCE v1");
@@ -17,14 +17,12 @@ public sealed class ProtectedPkceStateStore
 
     private readonly string _stateFile;
 
-    public ProtectedPkceStateStore()
+    public ProtectedPkceStateStore(string? stateDirectory = null)
     {
-        var localData = Environment.GetFolderPath(
-            Environment.SpecialFolder.LocalApplicationData);
+        var localData = stateDirectory ?? Path.Combine(Environment.GetFolderPath(
+            Environment.SpecialFolder.LocalApplicationData), "VEX", "VPN");
         _stateFile = Path.Combine(
             localData,
-            "VEX",
-            "VPN",
             "pkce-state.bin");
     }
 

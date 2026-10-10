@@ -35,8 +35,11 @@ public partial class App : Application
             _window,
             AppServices.Current,
             ExitApplication);
-        AppServices.Current.BackgroundUpdates.Start();
-        AppServices.Current.BackgroundVpn.Start();
+        if (!UiPreviewContext.IsEnabled)
+        {
+            AppServices.Current.BackgroundUpdates.Start();
+            AppServices.Current.BackgroundVpn.Start();
+        }
         _window.ShowShellWindow();
         _window.Activate();
         _ = HandleActivationAsync(
@@ -62,6 +65,14 @@ public partial class App : Application
         AppActivationArguments args,
         Uri? launchUri = null)
     {
+        var launchArguments = args.Data is ILaunchActivatedEventArgs launch
+            ? launch.Arguments : null;
+        if (UiPreviewContext.IsEnabled)
+        {
+            if (UiPreviewContext.IsExitCommand(launchArguments)) ExitApplication();
+            // UI-review activations never enter browser authentication.
+            return;
+        }
         var protocolUri = args.Kind switch
         {
             ExtendedActivationKind.Protocol
@@ -107,6 +118,20 @@ public partial class App : Application
             AppServices.Current.ClearMainWindow(_window);
         }
         _window = null;
+        if (UiPreviewContext.IsEnabled)
+        {
+            try
+            {
+                UiPreviewProtocolRegistration.Unregister();
+            }
+            catch (Exception error) when (error is InvalidOperationException or
+                System.Runtime.InteropServices.COMException or UnauthorizedAccessException or
+                System.ComponentModel.Win32Exception or IOException)
+            {
+                Debug.WriteLine($"Preview protocol cleanup failed: {error.GetType().Name}");
+            }
+            UiPreviewContext.Cleanup();
+        }
     }
 
     private static void RegisterProtocolActivations()
@@ -126,6 +151,11 @@ public partial class App : Application
         var logo = exePath + ",0";
         try
         {
+            if (UiPreviewContext.IsEnabled)
+            {
+                UiPreviewProtocolRegistration.Register();
+                return;
+            }
             ActivationRegistrationManager.RegisterForProtocolActivation(
                 "vexguard",
                 logo,

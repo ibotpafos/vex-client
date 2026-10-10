@@ -16,6 +16,12 @@ internal static class VpnUiStateServiceTests
         await ConfirmedShutdownRejectsQueuedConnectionsAsync();
         await FailedLogoutCleanupRemainsRetryableAsync();
         await QueuedCleanupHonorsNewConnectionIntentAsync();
+        await CancelingProfileFetchConfirmsServiceCleanupAsync();
+        await CanceledLateConnectCannotPublishConnectedAsync();
+        await CleanupFailureWithoutAnObservedAdapterRemainsRetryableAsync();
+        await CanceledCleanupCannotOverrideANewerConnectionAsync();
+        await CancelingConnectDoesNotCancelLogoutCleanupAsync();
+        await CancellationStopsTheIndependentServiceConnectAsync();
         ExplicitDisconnectCannotBeRestored();
     }
 
@@ -266,6 +272,212 @@ internal static class VpnUiStateServiceTests
         await queued;
         Assert(!cleanupRan && service.ConnectionDesired && service.Snapshot.Phase == VpnConnectionPhase.Connected,
             "Queued cleanup must recheck the user's newer connect intent after acquiring the shared gate.");
+    }
+
+    private static async Task CancelingProfileFetchConfirmsServiceCleanupAsync()
+    {
+        var service = Create();
+        service.MarkConnectionDesired(true);
+        var entered = Signal();
+        var profileCanceled = false;
+        var connect = service.RunConnectionAsync(async token =>
+        {
+            entered.SetResult();
+            try { await Task.Delay(Timeout.InfiniteTimeSpan, token); }
+            catch (OperationCanceledException) { profileCanceled = true; throw; }
+            throw new InvalidOperationException("A canceled profile fetch cannot complete.");
+        }, CancellationToken.None);
+        await entered.Task;
+        Assert(service.IsConnectionInFlight, "Profile loading must expose a cancellable connection before service IPC.");
+        var cleanupCalls = 0;
+        var response = await service.CancelConnectionAsync(token =>
+        {
+            cleanupCalls++;
+            Assert(!token.IsCancellationRequested && !service.ConnectionDesired,
+                "Cleanup must have an independent token after the connection token is canceled.");
+            return Task.FromResult(Response(VpnConnectionSnapshot.Disconnected(30)));
+        }, CancellationToken.None);
+        await ExpectAsync<OperationCanceledException>(connect);
+        Assert(profileCanceled && cleanupCalls == 1 && response.Success && !service.IsConnectionInFlight &&
+            !service.ConnectionDesired && service.Snapshot.Sequence == 30,
+            "Canceling before an observed adapter must cancel network work and still confirm a service disconnect.");
+    }
+
+    private static async Task CanceledLateConnectCannotPublishConnectedAsync()
+    {
+        var service = Create();
+        service.MarkConnectionDesired(true);
+        var entered = Signal();
+        var lateResponse = Signal();
+        var publishedLateConnect = false;
+        service.Changed += (_, _) => publishedLateConnect |= service.Snapshot.Sequence == 40;
+        var connect = service.RunConnectionAsync(async _ =>
+        {
+            entered.SetResult();
+            // Simulate a service already processing Connect after its client
+            // stopped reading the canceled IPC response.
+            await lateResponse.Task;
+            return Response(new VpnConnectionSnapshot(VpnConnectionPhase.Connected, "de-1", 40, null));
+        }, CancellationToken.None);
+        await entered.Task;
+        var cleanupCalls = 0;
+        var cleanup = service.CancelConnectionAsync(_ =>
+        {
+            cleanupCalls++;
+            return Task.FromResult(Response(VpnConnectionSnapshot.Disconnected(41)));
+        }, CancellationToken.None);
+        Assert(!service.ConnectionDesired, "Cancel intent must take effect while cleanup waits for the operation gate.");
+        lateResponse.SetResult();
+        await ExpectAsync<OperationCanceledException>(connect);
+        await cleanup;
+        Assert(!publishedLateConnect && cleanupCalls == 1 && service.Snapshot.Sequence == 41 &&
+            service.Snapshot.Phase == VpnConnectionPhase.Disconnected,
+            "A late successful connect must never publish Connected after cancellation and confirmed cleanup.");
+    }
+
+    private static async Task CleanupFailureWithoutAnObservedAdapterRemainsRetryableAsync()
+    {
+        var service = Create();
+        service.MarkConnectionDesired(true);
+        var entered = Signal();
+        var connect = service.RunConnectionAsync(async token =>
+        {
+            entered.SetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            throw new InvalidOperationException("Canceled connect cannot complete.");
+        }, CancellationToken.None);
+        await entered.Task;
+        var response = await service.CancelConnectionAsync(_ =>
+            Task.FromException<VpnServiceResponse>(new OperationCanceledException("IPC response timeout")),
+            CancellationToken.None);
+        await ExpectAsync<OperationCanceledException>(connect);
+        Assert(!response.Success && !service.ConnectionDesired && service.Snapshot.Diagnostics?.AdapterName is null &&
+            service.Snapshot.ErrorCode == "tunnel_cleanup_incomplete" &&
+            VpnRecoveryPolicy.RequiresDisconnect(service.Snapshot) &&
+            VpnConnectionActionPolicy.ShouldDisconnect(service.Snapshot),
+            "An unconfirmed disconnect without an observed adapter must preserve retry evidence and a manual disconnect action.");
+        var retried = false;
+        await service.DisconnectIfUnwantedAsync(_ =>
+        {
+            retried = true;
+            return Task.FromResult(Response(VpnConnectionSnapshot.Disconnected(50)));
+        }, CancellationToken.None);
+        Assert(retried && service.Snapshot.Sequence == 50 && !VpnRecoveryPolicy.RequiresDisconnect(service.Snapshot),
+            "Background cleanup must retry the canceled service connection after an IPC timeout.");
+    }
+
+    private static async Task CanceledCleanupCannotOverrideANewerConnectionAsync()
+    {
+        var service = Create();
+        service.MarkConnectionDesired(true);
+        var entered = Signal();
+        var lateResponse = Signal();
+        var oldConnect = service.RunConnectionAsync(async _ =>
+        {
+            entered.SetResult();
+            await lateResponse.Task;
+            return Response(new VpnConnectionSnapshot(VpnConnectionPhase.Connected, "de-1", 60, null));
+        }, CancellationToken.None);
+        await entered.Task;
+        var cleanupRan = false;
+        var oldCleanup = service.CancelConnectionAsync(_ =>
+        {
+            cleanupRan = true;
+            return Task.FromResult(Response(VpnConnectionSnapshot.Disconnected(61)));
+        }, CancellationToken.None);
+        service.MarkConnectionDesired(true);
+        var freshConnect = service.RunConnectionAsync(_ =>
+            Task.FromResult(Response(new VpnConnectionSnapshot(VpnConnectionPhase.Connected, "fi-1", 62, null))),
+            CancellationToken.None);
+        lateResponse.SetResult();
+        await ExpectAsync<OperationCanceledException>(oldConnect);
+        await oldCleanup;
+        await freshConnect;
+        Assert(!cleanupRan && service.ConnectionDesired && service.Snapshot.LocationId == "fi-1" &&
+            service.Snapshot.Sequence == 62 && !service.IsConnectionInFlight,
+            "An older canceled connect or queued disconnect must not cancel, clear, or overwrite a later fresh connection.");
+    }
+
+    private static async Task CancelingConnectDoesNotCancelLogoutCleanupAsync()
+    {
+        var service = Create();
+        service.MarkConnectionDesired(false);
+        var entered = Signal();
+        var confirmed = Signal();
+        using var logoutTimeout = new CancellationTokenSource();
+        var logout = service.RunAsync(async token =>
+        {
+            entered.SetResult();
+            await confirmed.Task.WaitAsync(token);
+            return Response(VpnConnectionSnapshot.Disconnected(70));
+        }, logoutTimeout.Token);
+        await entered.Task;
+        service.MarkConnectionDesired(true);
+        var queuedConnectRan = false;
+        var queuedConnect = service.RunConnectionAsync(_ =>
+        {
+            queuedConnectRan = true;
+            return Task.FromResult(Response(new VpnConnectionSnapshot(VpnConnectionPhase.Connected, "fi-1", 71, null)));
+        }, CancellationToken.None);
+        service.MarkConnectionDesired(false);
+        await ExpectAsync<OperationCanceledException>(queuedConnect);
+        Assert(!logoutTimeout.IsCancellationRequested && !logout.IsCompleted && !queuedConnectRan,
+            "Canceling a queued connection must not cancel an in-flight logout, revocation, or shutdown cleanup operation.");
+        confirmed.SetResult();
+        await logout;
+        Assert(!service.ConnectionDesired && service.Snapshot.Sequence == 70,
+            "A logout cleanup must retain its confirmed result after canceling a separate queued connect.");
+    }
+
+    private static async Task CancellationStopsTheIndependentServiceConnectAsync()
+    {
+        var runtime = new CancelableRuntime();
+        using var handler = new VpnServiceCommandHandler(runtime);
+        var service = Create();
+        service.MarkConnectionDesired(true);
+        Task<VpnServiceResponse>? remoteConnect = null;
+        var connect = service.RunConnectionAsync(async clientToken =>
+        {
+            // The real IPC server gives the handler its own request token, so
+            // canceling the client read alone does not reach the runtime.
+            remoteConnect = handler.HandleAsync(VpnServiceRequest.Connect(
+                "remote-connect", "de-1", "fixture-config"), CancellationToken.None);
+            return await remoteConnect.WaitAsync(clientToken);
+        }, CancellationToken.None);
+        await runtime.Entered.Task;
+        var response = await service.CancelConnectionAsync(token => handler.HandleAsync(
+            VpnServiceRequest.Disconnect("cancel-disconnect"), token), CancellationToken.None);
+        await ExpectAsync<OperationCanceledException>(connect);
+        await ExpectAsync<OperationCanceledException>(remoteConnect!);
+        Assert(runtime.ConnectCanceled && runtime.DisconnectCalls == 1 && response.Success &&
+            !service.ConnectionDesired && service.Snapshot.Phase == VpnConnectionPhase.Disconnected,
+            "Cancel must send real service Disconnect, interrupt its independent handshake operation, and confirm cleanup.");
+    }
+
+    private sealed class CancelableRuntime : IVpnTunnelRuntime
+    {
+        public TaskCompletionSource Entered { get; } = Signal();
+        public bool ConnectCanceled { get; private set; }
+        public int DisconnectCalls { get; private set; }
+
+        public Task<VpnTunnelStatus> GetStatusAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(VpnTunnelStatus.Disconnected());
+
+        public async Task<VpnTunnelStatus> ConnectAsync(string locationId, string tunnelConfig,
+            DateTimeOffset? authorizationExpiresAt, CancellationToken cancellationToken)
+        {
+            Entered.SetResult();
+            try { await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken); }
+            catch (OperationCanceledException) { ConnectCanceled = true; throw; }
+            throw new InvalidOperationException("The canceled service handshake cannot complete.");
+        }
+
+        public Task<VpnTunnelStatus> DisconnectAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            DisconnectCalls++;
+            return Task.FromResult(VpnTunnelStatus.Disconnected());
+        }
     }
 
     private static VpnUiStateService Create() => new(_ =>

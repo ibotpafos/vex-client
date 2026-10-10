@@ -33,6 +33,7 @@ public sealed class TrayIconHost : IDisposable
     private string? _lastNotifiedUpdateVersion;
     private bool _disposed;
     private bool _requestInFlight;
+    private bool _cancelInFlight;
     private bool _exitInFlight;
 
     public TrayIconHost(
@@ -201,6 +202,27 @@ public sealed class TrayIconHost : IDisposable
 
     private async void OnToggleConnectionClick(object? sender, EventArgs args)
     {
+        if (_disposed || _exitInFlight || _cancelInFlight) return;
+        // Cancellation must bypass the tray gate occupied by the original
+        // connect. The shared VPN gate still serializes the cleanup IPC.
+        if (_services.VpnUiState.IsConnectionInFlight && _services.VpnUiState.ConnectionDesired)
+        {
+            _cancelInFlight = true;
+            try
+            {
+                var response = await _services.VpnUiState.CancelConnectionAsync(
+                    _services.VpnClient.DisconnectAsync, _lifetime.Token).ConfigureAwait(false);
+                await ApplyResponseAsync(response).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) { }
+            finally
+            {
+                _cancelInFlight = false;
+                await InvokeOnUiThreadAsync(Render).ConfigureAwait(false);
+            }
+            return;
+        }
+        if (_requestInFlight) return;
         try
         {
             await RunSerializedAsync(
@@ -208,10 +230,9 @@ public sealed class TrayIconHost : IDisposable
                 {
                     var disconnect = VpnConnectionActionPolicy.ShouldDisconnect(_services.VpnUiState.Snapshot);
                     _services.VpnUiState.MarkConnectionDesired(!disconnect);
-                    var response = await _services.VpnUiState.RunAsync(
-                        requestToken => disconnect
-                            ? _services.VpnClient.DisconnectAsync(requestToken)
-                            : ConnectAfterUpdateCheckAsync(requestToken), token);
+                    var response = disconnect
+                        ? await _services.VpnUiState.RunAsync(_services.VpnClient.DisconnectAsync, token)
+                        : await _services.VpnUiState.RunConnectionAsync(ConnectAfterUpdateCheckAsync, token);
                     await ApplyResponseAsync(response);
                 },
                 CancellationToken.None).ConfigureAwait(false);
@@ -333,9 +354,7 @@ public sealed class TrayIconHost : IDisposable
                     return;
                 }
 
-                _toggleConnectionMenuItem.Enabled = false;
-                _toggleWindowMenuItem.Enabled = false;
-                _statusMenuItem.Text = "Статус: обновление…";
+                Render();
             }).ConfigureAwait(false);
 
             await operation(linked.Token).ConfigureAwait(false);
@@ -434,9 +453,24 @@ public sealed class TrayIconHost : IDisposable
         _snapshot = _services.VpnUiState.Snapshot;
         var (statusText, toggleConnectionText, toggleEnabled) =
             BuildMenuState(_snapshot);
+        var canCancel = _services.VpnUiState.IsConnectionInFlight && _services.VpnUiState.ConnectionDesired;
+        if (canCancel)
+        {
+            statusText = "Подключение…";
+            toggleConnectionText = "Отменить подключение";
+            toggleEnabled = true;
+        }
+        else if (_cancelInFlight ||
+            _services.VpnUiState.IsConnectionCleanupInFlight && !_services.VpnUiState.ConnectionDesired)
+        {
+            statusText = "Отключение…";
+            toggleConnectionText = "Отключение…";
+            toggleEnabled = false;
+        }
         _statusMenuItem.Text = $"Статус: {statusText}";
         _toggleConnectionMenuItem.Text = toggleConnectionText;
-        _toggleConnectionMenuItem.Enabled = toggleEnabled && !_disposed && !_requestInFlight && !_exitInFlight;
+        _toggleConnectionMenuItem.Enabled = toggleEnabled && !_disposed &&
+            (!_requestInFlight || canCancel) && !_cancelInFlight && !_exitInFlight;
         _exitMenuItem.Enabled = !_exitInFlight && !_disposed;
         _toggleWindowMenuItem.Text = _window.IsShellWindowVisible
             ? "Скрыть окно"
@@ -526,6 +560,7 @@ public sealed class TrayIconHost : IDisposable
         "vpn_key_rotation_required" => "Требуется безопасное обновление ключа устройства.",
         "required_update" => "Перед подключением установите обязательное обновление VEX.",
         "vpn_service_unavailable" => "Служба VEX VPN недоступна. Перезапустите приложение.",
+        "tunnel_cleanup_incomplete" => "Отключение VPN пока не подтверждено. VEX повторит очистку; можно повторить отключение вручную.",
         _ => "Не удалось выполнить операцию VPN.",
     };
 }

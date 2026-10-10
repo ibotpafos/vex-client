@@ -32,6 +32,36 @@
             <SolidColorBrush x:Key="VexMutedBrush" Color="{StaticResource VexMutedColor}" />
             <SolidColorBrush x:Key="VexBorderBrush" Color="{StaticResource VexBorderColor}" />
             <SolidColorBrush x:Key="SmokeFillColorDefaultBrush" Color="#C9000000" />
+            <SolidColorBrush x:Key="AccentFillColorDefaultBrush" Color="{StaticResource VexCyanColor}" />
+            <SolidColorBrush x:Key="AccentFillColorSecondaryBrush" Color="#D922D3EE" />
+            <SolidColorBrush x:Key="AccentFillColorTertiaryBrush" Color="#B822D3EE" />
+            <SolidColorBrush x:Key="SystemControlHighlightAccentBrush" Color="{StaticResource VexCyanColor}" />
+
+            <Style TargetType="TextBox">
+                <Setter Property="Foreground" Value="{StaticResource VexTextBrush}" />
+                <Setter Property="Background" Value="#66020A0B" />
+                <Setter Property="BorderBrush" Value="#21FFFFFF" />
+                <Setter Property="CornerRadius" Value="10" />
+                <Setter Property="Padding" Value="13,10" />
+                <Setter Property="MinHeight" Value="42" />
+                <Setter Property="FontSize" Value="13" />
+            </Style>
+            <Style TargetType="PasswordBox">
+                <Setter Property="Foreground" Value="{StaticResource VexTextBrush}" />
+                <Setter Property="Background" Value="#66020A0B" />
+                <Setter Property="BorderBrush" Value="#21FFFFFF" />
+                <Setter Property="CornerRadius" Value="10" />
+                <Setter Property="Padding" Value="13,10" />
+                <Setter Property="MinHeight" Value="42" />
+                <Setter Property="FontSize" Value="13" />
+            </Style>
+            <Style TargetType="ComboBox">
+                <Setter Property="Foreground" Value="{StaticResource VexTextBrush}" />
+                <Setter Property="Background" Value="#14FFFFFF" />
+                <Setter Property="BorderBrush" Value="#21FFFFFF" />
+                <Setter Property="CornerRadius" Value="10" />
+                <Setter Property="MinHeight" Value="36" />
+            </Style>
 
             <!-- Keep WinUI interaction states, but match the restrained macOS
                  sidebar selection instead of the default accent-filled pill. -->
@@ -112,10 +142,10 @@
             </Style>
 
             <Style x:Key="VexDockButtonStyle" TargetType="ToggleButton">
-                <Setter Property="Foreground" Value="{StaticResource VexSubtextBrush}" />
+                <Setter Property="Foreground" Value="{StaticResource VexSecondaryTextBrush}" />
                 <Setter Property="Background" Value="Transparent" />
                 <Setter Property="BorderThickness" Value="0" />
-                <Setter Property="CornerRadius" Value="23" />
+                <Setter Property="CornerRadius" Value="19" />
                 <Setter Property="HorizontalContentAlignment" Value="Center" />
                 <Setter Property="VerticalContentAlignment" Value="Center" />
                 <Setter Property="Padding" Value="0" />
@@ -123,6 +153,127 @@
                 <Setter Property="FocusVisualSecondaryBrush" Value="Transparent" />
                 <Setter Property="FocusVisualPrimaryThickness" Value="2" />
                 <Setter Property="FocusVisualSecondaryThickness" Value="0" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ToggleButton">
+                            <Grid x:Name="DockPill" CornerRadius="19">
+                                <VisualStateManager.VisualStateGroups>
+                                    <VisualStateGroup x:Name="CommonStates">
+                                        <VisualState x:Name="Normal">
+                                            <VisualState.Setters>
+                                                <Setter Target="DockSelected.Opacity" Value="0" />
+                                                <Setter Target="DockHover.Opacity" Value="0" />
+                                                <Setter Target="DockPill.Opacity" Value="1" />
+                                                <Setter Target="DockContent.Foreground" Value="{StaticResource VexSecondaryTextBrush}" />
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                        <VisualState x:Name="PointerOver">
+                                            <VisualState.Setters>
+                                                <Setter Target="DockSelected.Opacity" Value="0" />
+                                                <Setter Target="DockHover.Opacity" Value="1" />
+                                                <Setter Target="DockPill.Opacity" Value="1" />
+                                                <Setter Target="DockContent.Foreground" Value="{StaticResource VexTextBrush}" />
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                        <VisualState x:Name="Pressed">
+                                            <VisualState.Setters>
+                                                <Setter Target="DockSelected.Opacity" Value="0" />
+                                                <Setter Target="DockHover.Opacity" Value="1" />
+                                                <Setter Target="DockPill.Opacity" Value="0.75" />
+                                                <Setter Target="DockContent.Foreground" Value="{StaticResource VexTextBrush}" />
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                        <VisualState x:Name="Disabled">
+                                            <VisualState.Setters>
+                                                <Setter Target="DockSelected.Opacity" Value="0" />
+                                                <Setter Target="DockHover.Opacity" Value="0" />
+                                                <Setter Target="DockPill.Opacity" Value="0.4" />
+                                                <Setter Target="DockContent.Foreground" Value="{StaticResource VexSecondaryTextBrush}" />
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                        <VisualState x:Name="Checked">
+                                            <VisualState.Setters>
+                                                <Setter Target="DockSelected.Opacity" Value="1" />
+                                                <Setter Target="DockHover.Opacity" Value="0" />
+                                                <Setter Target="DockPill.Opacity" Value="1" />
+                                                <Setter Target="DockContent.Foreground" Value="{StaticResource VexBackgroundBrush}" />
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                        <VisualState x:Name="CheckedPointerOver">
+                                            <VisualState.Setters>
+                                                <Setter Target="DockSelected.Opacity" Value="1" />
+                                                <Setter Target="DockHover.Opacity" Value="1" />
+                                                <Setter Target="DockPill.Opacity" Value="1" />
+                                                <Setter Target="DockContent.Foreground" Value="{StaticResource VexBackgroundBrush}" />
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                        <VisualState x:Name="CheckedPressed">
+                                            <VisualState.Setters>
+                                                <Setter Target="DockSelected.Opacity" Value="1" />
+                                                <Setter Target="DockHover.Opacity" Value="1" />
+                                                <Setter Target="DockPill.Opacity" Value="0.75" />
+                                                <Setter Target="DockContent.Foreground" Value="{StaticResource VexBackgroundBrush}" />
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                        <VisualState x:Name="CheckedDisabled">
+                                            <VisualState.Setters>
+                                                <Setter Target="DockSelected.Opacity" Value="1" />
+                                                <Setter Target="DockHover.Opacity" Value="0" />
+                                                <Setter Target="DockPill.Opacity" Value="0.4" />
+                                                <Setter Target="DockContent.Foreground" Value="{StaticResource VexBackgroundBrush}" />
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                        <VisualState x:Name="Indeterminate">
+                                            <VisualState.Setters>
+                                                <Setter Target="DockSelected.Opacity" Value="1" />
+                                                <Setter Target="DockHover.Opacity" Value="0" />
+                                                <Setter Target="DockPill.Opacity" Value="1" />
+                                                <Setter Target="DockContent.Foreground" Value="{StaticResource VexBackgroundBrush}" />
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                        <VisualState x:Name="IndeterminatePointerOver">
+                                            <VisualState.Setters>
+                                                <Setter Target="DockSelected.Opacity" Value="1" />
+                                                <Setter Target="DockHover.Opacity" Value="1" />
+                                                <Setter Target="DockPill.Opacity" Value="1" />
+                                                <Setter Target="DockContent.Foreground" Value="{StaticResource VexBackgroundBrush}" />
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                        <VisualState x:Name="IndeterminatePressed">
+                                            <VisualState.Setters>
+                                                <Setter Target="DockSelected.Opacity" Value="1" />
+                                                <Setter Target="DockHover.Opacity" Value="1" />
+                                                <Setter Target="DockPill.Opacity" Value="0.75" />
+                                                <Setter Target="DockContent.Foreground" Value="{StaticResource VexBackgroundBrush}" />
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                        <VisualState x:Name="IndeterminateDisabled">
+                                            <VisualState.Setters>
+                                                <Setter Target="DockSelected.Opacity" Value="1" />
+                                                <Setter Target="DockHover.Opacity" Value="0" />
+                                                <Setter Target="DockPill.Opacity" Value="0.4" />
+                                                <Setter Target="DockContent.Foreground" Value="{StaticResource VexBackgroundBrush}" />
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                    </VisualStateGroup>
+                                </VisualStateManager.VisualStateGroups>
+                                <Border x:Name="DockHover" CornerRadius="19" Background="#14FFFFFF" Opacity="0" />
+                                <Border x:Name="DockSelected" CornerRadius="19" BorderBrush="#38FFFFFF" BorderThickness="1" Opacity="0">
+                                    <Border.Background>
+                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                            <GradientStop Color="#FF65E2F2" Offset="0" />
+                                            <GradientStop Color="{StaticResource VexCyanColor}" Offset="0.8" />
+                                        </LinearGradientBrush>
+                                    </Border.Background>
+                                </Border>
+                                <ContentPresenter x:Name="DockContent"
+                                    HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                                    Foreground="{TemplateBinding Foreground}"
+                                    Content="{TemplateBinding Content}" ContentTemplate="{TemplateBinding ContentTemplate}" />
+                            </Grid>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
             </Style>
 
             <Style x:Key="VexNavigationButtonStyle" TargetType="ToggleButton">

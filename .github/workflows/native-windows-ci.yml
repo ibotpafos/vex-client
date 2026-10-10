@@ -77,6 +77,7 @@ jobs:
           ./native-windows/scripts/validate-powershell-parse.ps1
           ./native-windows/tests/ReleaseValidation.Tests.ps1
           ./native-windows/tests/NetworkSafetyPolicy.Tests.ps1
+          ./native-windows/tests/BootstrapOwnership.Tests.ps1
       - name: Test platform-neutral core and control plane
         run: dotnet run --project native-windows/tests/Vex.Windows.Core.Tests/Vex.Windows.Core.Tests.csproj -c Release
 
@@ -119,6 +120,7 @@ jobs:
           ./native-windows/scripts/validate-powershell-parse.ps1
           ./native-windows/tests/ReleaseValidation.Tests.ps1
           ./native-windows/tests/NetworkSafetyPolicy.Tests.ps1
+          ./native-windows/tests/BootstrapOwnership.Tests.ps1
           node native-windows/scripts/validate-packaging-static.mjs
           node scripts/validate_native_windows_xaml.mjs
       - name: Publish self-contained VPN service
@@ -148,6 +150,55 @@ jobs:
           ./native-windows/scripts/smoke-application.ps1 `
             -ApplicationPath (Join-Path $root 'app-x64/Vex.Windows.App.exe') `
             -ResultPath (Join-Path $root 'startup-smoke-x64.json')
+      - name: Publish isolated Debug interface preview
+        if: matrix.architecture == 'x64'
+        run: dotnet publish native-windows/src/Vex.Windows.App/Vex.Windows.App.csproj -c Debug -r win-x64 -p:Platform=x64 -o "${{ runner.temp }}/vex-ui-preview-app"
+      - name: Verify Release rejects isolated preview controls
+        if: matrix.architecture == 'x64'
+        timeout-minutes: 2
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'vex-windows'
+          $application = Join-Path $root 'app-x64/Vex.Windows.App.exe'
+          foreach ($argument in @('--signed-out-ui-preview', '--focus-pulse-ui-preview', '--ui-smoke-exit', 'vexguard-ui-preview://ui-smoke/activate')) {
+            $process = Start-Process -FilePath $application -ArgumentList $argument -PassThru
+            try {
+              if (-not $process.WaitForExit(10000) -or $process.ExitCode -ne 0) {
+                throw 'Release did not refuse isolated preview control before creating the application.'
+              }
+            }
+            finally {
+              if (-not $process.HasExited) { $process.Kill($true); [void]$process.WaitForExit(5000) }
+              $process.Dispose()
+            }
+            if (Get-Process -Name 'Vex.Windows.App' -ErrorAction SilentlyContinue) {
+              throw 'Release preview control left a running application.'
+            }
+          }
+          @{ schema = 'vex.release-preview-isolation.v1'; rejected_controls = 4; application_absent = $true } |
+            ConvertTo-Json | Set-Content -LiteralPath (Join-Path $root 'release-preview-isolation-x64.json')
+      - name: Exercise authenticated desktop flows and capture interface
+        if: matrix.architecture == 'x64'
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'vex-windows'
+          ./native-windows/scripts/smoke-application.ps1 `
+            -ApplicationPath (Join-Path $env:RUNNER_TEMP 'vex-ui-preview-app/Vex.Windows.App.exe') `
+            -DesktopChecks -PreviewMode fixtures -ObserveSeconds 3 `
+            -ResultPath (Join-Path $root 'desktop-fixtures-x64.json') `
+            -ScreenshotDirectory (Join-Path $root 'screenshots/fixtures')
+      - name: Exercise signed-out desktop flows and capture interface
+        if: matrix.architecture == 'x64'
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'vex-windows'
+          ./native-windows/scripts/smoke-application.ps1 `
+            -ApplicationPath (Join-Path $env:RUNNER_TEMP 'vex-ui-preview-app/Vex.Windows.App.exe') `
+            -DesktopChecks -PreviewMode signed-out -ObserveSeconds 3 `
+            -ResultPath (Join-Path $root 'desktop-signed-out-x64.json') `
+            -ScreenshotDirectory (Join-Path $root 'screenshots/signed-out')
       - name: Audit all native dependencies
         shell: pwsh
         run: |
@@ -167,6 +218,59 @@ jobs:
         with:
           name: vex-native-windows-unsigned-${{ matrix.architecture }}
           path: ${{ runner.temp }}/vex-windows/**
+          if-no-files-found: error
+          retention-days: 7
+
+  macos_reference:
+    name: Capture actual macOS interface reference
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Render existing SwiftUI screens with isolated Debug fixtures
+        run: native-windows/scripts/render-macos-reference.sh "$RUNNER_TEMP/macos-reference"
+      - name: Retain native macOS reference images
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: vex-native-macos-interface-reference
+          path: ${{ runner.temp }}/macos-reference/**
+          if-no-files-found: error
+          retention-days: 7
+
+  vpn_acceptance:
+    name: Windows x64 real encrypted tunnel acceptance
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: 1.26.6
+          cache: true
+          cache-dependency-path: native-windows/scripts/vpn-fixture-peer/go.sum
+      - name: Validate the qualified runtime on a disposable host
+        shell: pwsh
+        run: |
+          ./native-windows/scripts/invoke-vpn-acceptance.ps1 -DisposableRunner `
+            -ResultPath (Join-Path $env:RUNNER_TEMP 'vex-vpn-evidence/vpn-acceptance-x64.json')
+      - name: Retain sanitized tunnel and cleanup evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: vex-native-windows-vpn-acceptance-x64
+          path: |
+            ${{ runner.temp }}/vex-vpn-evidence/vpn-acceptance-x64.json
+            ${{ runner.temp }}/vex-vpn-evidence/vpn-acceptance-x64.json.cleanup.json
           if-no-files-found: error
           retention-days: 7
 
@@ -194,7 +298,7 @@ jobs:
       }}
     runs-on: windows-2025
     timeout-minutes: 45
-    needs: [portable, build]
+    needs: [portable, build, macos_reference, vpn_acceptance]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:

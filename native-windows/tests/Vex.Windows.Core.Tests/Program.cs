@@ -17,6 +17,11 @@ using System.Text.Json.Nodes;
 
 var tests = new (string Name, Action Run)[]
 {
+    ("Service repair verifies trusted health, ownership, cancellation and bounded retries", ServiceMaintenanceTests.Run),
+    ("Browser authentication cancellation rejects late sessions and preserves fresh attempts", NativeAuthServiceTests.Run),
+    ("Startup survives package upgrades and honors Windows ownership and disable states", StartupRegistrationTests.Run),
+    ("Automatic update failures preserve retry and lifetime cancellation", NativeUpdateFailureTests.Run),
+    ("App metadata decodes current server contracts and explicit historical aliases", AppMetadataContractTests.Run),
     ("Protected session cache handles corruption without replacing identity files", ProtectedStateFileTests.Run),
     ("Signed relay candidates preserve authorization and bounded offline recovery", ClientSignedCandidateTests.Run),
     ("Client recovery preserves pins, authority, session and entitlement", ClientRecoveryParityTests.Run),
@@ -435,7 +440,7 @@ static void OfflineErrorRemainsReconnectable()
 {
     var snapshot = new VpnConnectionSnapshot(
         VpnConnectionPhase.Error,
-        "fi-1",
+        null,
         Sequence: 42,
         ErrorCode: "network_unavailable")
     {
@@ -443,6 +448,11 @@ static void OfflineErrorRemainsReconnectable()
     };
 
     Equal(false, VpnConnectionActionPolicy.ShouldDisconnect(snapshot));
+    Equal(true, VpnConnectionActionPolicy.ShouldDisconnect(snapshot with { LocationId = "fi-1" }));
+    Equal(true, VpnConnectionActionPolicy.ShouldDisconnect(snapshot with
+    {
+        Diagnostics = VpnTunnelDiagnostics.Empty with { LeakProtection = VpnLeakProtectionState.Blocking },
+    }));
 }
 
 static void ClientFailurePreservesCleanupEvidence()

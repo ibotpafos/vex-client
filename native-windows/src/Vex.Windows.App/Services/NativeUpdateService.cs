@@ -10,6 +10,7 @@ using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using Vex.Windows.Client.Updates;
+using Vex.Windows.Core.Updates;
 
 namespace Vex.Windows.App.Services;
 
@@ -24,30 +25,39 @@ public sealed class NativeUpdateService
     private readonly int _rolloutBucket;
     private readonly WindowsUpdateRollbackStateStore _rollbackStateStore;
     private readonly SemaphoreSlim _operationGate = new(1, 1);
+    private bool _rollbackPersistenceFailed;
 
     public NativeUpdateService(string installationId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(installationId);
         _downloadsFallbackUrl = "https://vexguard.app/downloads";
         _rolloutBucket = ComputeRolloutBucket(installationId);
-        _stagingRoot = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "VEX",
-            "VPN",
-            "updates");
+        var stateRoot = UiPreviewContext.StateDirectory ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "VEX", "VPN");
+        _stagingRoot = Path.Combine(stateRoot, "updates");
         _rollbackStateStore = new WindowsUpdateRollbackStateStore(
-            Path.Combine(
-                Environment.GetFolderPath(
-                    Environment.SpecialFolder.LocalApplicationData),
-                "VEX",
-                "VPN",
-                "update-rollback-state.bin"));
+            Path.Combine(stateRoot, "update-rollback-state.bin"));
 
-        var configuration = BuildConfiguration();
-        CurrentSnapshot = configuration.InitialSnapshot;
-        if (configuration.Coordinator is not null)
+        if (UiPreviewContext.IsEnabled)
         {
+            CurrentSnapshot = NativeUpdateSnapshot.NoUpdate(CurrentVersion(), "stable",
+                RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(), "Предпросмотр интерфейса");
+            return;
+        }
+
+        try
+        {
+            var configuration = BuildConfiguration();
+            CurrentSnapshot = configuration.InitialSnapshot;
             _coordinator = configuration.Coordinator;
+        }
+        catch (Exception error) when (NativeUpdateFailurePolicy.IsExpectedFailure(error))
+        {
+            // Broken local trust/rollback state disables this updater without
+            // destroying it or preventing account and recovery UI from opening.
+            CurrentSnapshot = NativeUpdateSnapshot.Disabled(CurrentVersion(), "stable",
+                RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(),
+                "Проверка обновлений недоступна: " + error.Message);
         }
     }
 
@@ -67,33 +77,27 @@ public sealed class NativeUpdateService
 
         await _operationGate.WaitAsync(cancellationToken)
             .ConfigureAwait(false);
+        NativeUpdateSnapshot? verifiedSnapshot = null;
         try
         {
             var assessment = await _coordinator.CheckForUpdateAsync(
                 cancellationToken);
+            verifiedSnapshot = assessment.UpdateAvailable
+                ? NativeUpdateSnapshot.Available(assessment.CurrentVersion, assessment.Release!,
+                    assessment.CurrentChannel, assessment.CurrentArchitecture, assessment.Release!.Required)
+                : NativeUpdateSnapshot.NoUpdate(assessment.CurrentVersion, assessment.CurrentChannel,
+                    assessment.CurrentArchitecture, assessment.Reason);
+            _rollbackPersistenceFailed = true;
             _rollbackStateStore.Save(assessment.RollbackState);
             _coordinator.SetRollbackState(assessment.RollbackState);
-            SetSnapshot(assessment.UpdateAvailable
-                ? NativeUpdateSnapshot.Available(
-                    assessment.CurrentVersion,
-                    assessment.Release!,
-                    assessment.CurrentChannel,
-                    assessment.CurrentArchitecture,
-                    assessment.Release!.Required)
-                : NativeUpdateSnapshot.NoUpdate(
-                    assessment.CurrentVersion,
-                    assessment.CurrentChannel,
-                    assessment.CurrentArchitecture,
-                    assessment.Reason));
+            _rollbackPersistenceFailed = false;
+            SetSnapshot(verifiedSnapshot);
         }
-        catch (Exception error) when (
-            error is HttpRequestException or
-            IOException or
-            InvalidOperationException or
-            TaskCanceledException)
+        catch (Exception error) when (!cancellationToken.IsCancellationRequested &&
+            NativeUpdateFailurePolicy.IsExpectedFailure(error))
         {
             SetSnapshot(NativeUpdateSnapshot.ErrorFrom(
-                CurrentSnapshot,
+                verifiedSnapshot is { UpdateAvailable: true, Required: true } ? verifiedSnapshot : CurrentSnapshot,
                 error.Message));
         }
         finally
@@ -113,10 +117,10 @@ public sealed class NativeUpdateService
         }
 
         var snapshot = CurrentSnapshot;
-        if (!snapshot.UpdateAvailable)
+        if (!snapshot.UpdateAvailable || _rollbackPersistenceFailed)
         {
             snapshot = await RefreshAsync(cancellationToken);
-            if (!snapshot.UpdateAvailable)
+            if (!snapshot.UpdateAvailable || _rollbackPersistenceFailed)
             {
                 return snapshot;
             }
@@ -130,7 +134,7 @@ public sealed class NativeUpdateService
                 snapshot.Release!,
                 _stagingRoot,
                 cancellationToken);
-            LaunchElevatedBootstrap(staged);
+            LaunchBootstrap(staged);
             SetSnapshot(NativeUpdateSnapshot.InstallerLaunched(
                 snapshot.CurrentVersion,
                 snapshot.Channel,
@@ -138,12 +142,8 @@ public sealed class NativeUpdateService
                 snapshot.Release!.Version,
                 staged.PackagePath));
         }
-        catch (Exception error) when (
-            error is Win32Exception or
-            HttpRequestException or
-            IOException or
-            InvalidOperationException or
-            TaskCanceledException)
+        catch (Exception error) when (!cancellationToken.IsCancellationRequested &&
+            NativeUpdateFailurePolicy.IsExpectedFailure(error))
         {
             SetSnapshot(NativeUpdateSnapshot.ErrorFrom(
                 snapshot,
@@ -163,14 +163,17 @@ public sealed class NativeUpdateService
         Changed?.Invoke(this, EventArgs.Empty);
     }
 
-    private static void LaunchElevatedBootstrap(
+    private static void LaunchBootstrap(
         WindowsStagedProvisioningBundle staged)
     {
+        using var owner = WindowsIdentity.GetCurrent();
+        var ownerSid = owner.User?.Value ??
+            throw new InvalidOperationException("Не удалось определить владельца установки Windows.");
         var startInfo = new ProcessStartInfo
         {
-            FileName = "powershell.exe",
+            FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),
+                "WindowsPowerShell", "v1.0", "powershell.exe"),
             UseShellExecute = true,
-            Verb = "runas",
             WorkingDirectory = Path.GetDirectoryName(staged.BootstrapPath),
         };
         startInfo.ArgumentList.Add("-NoLogo");
@@ -180,12 +183,16 @@ public sealed class NativeUpdateService
         startInfo.ArgumentList.Add("AllSigned");
         startInfo.ArgumentList.Add("-File");
         startInfo.ArgumentList.Add(staged.BootstrapPath);
+        startInfo.ArgumentList.Add("-Phase");
+        startInfo.ArgumentList.Add("User");
         startInfo.ArgumentList.Add("-Action");
         startInfo.ArgumentList.Add("Install");
         startInfo.ArgumentList.Add("-PackagePath");
         startInfo.ArgumentList.Add(staged.PackagePath);
         startInfo.ArgumentList.Add("-MetadataPath");
         startInfo.ArgumentList.Add(staged.PackageMetadataPath);
+        startInfo.ArgumentList.Add("-OwnerSid");
+        startInfo.ArgumentList.Add(ownerSid);
         startInfo.ArgumentList.Add("-RelaunchAfterInstall");
         _ = Process.Start(startInfo) ??
             throw new InvalidOperationException(
@@ -270,6 +277,19 @@ public sealed class NativeUpdateService
 
         var keyring = WindowsUpdateKeyring.Parse(
             File.ReadAllText(keyringPath));
+        if (keyring.Schema != WindowsUpdateConstants.KeyringSchema || keyring.Keys is not { Count: > 0 } ||
+            keyring.Keys.Any(key => key is null || string.IsNullOrWhiteSpace(key.KeyId) ||
+                key.Algorithm != WindowsUpdateConstants.SupportedAlgorithm ||
+                string.IsNullOrWhiteSpace(key.SubjectPublicKeyInfoBase64)) ||
+            keyring.Keys.Select(key => key.KeyId).Distinct(StringComparer.Ordinal).Count() != keyring.Keys.Count)
+            throw new InvalidOperationException("Pinned update keyring is invalid.");
+        foreach (var key in keyring.Keys)
+        {
+            using var verifier = ECDsa.Create();
+            verifier.ImportSubjectPublicKeyInfo(Convert.FromBase64String(key.SubjectPublicKeyInfoBase64), out _);
+            if (verifier.KeySize != 256)
+                throw new InvalidOperationException("Pinned update key must use P-256.");
+        }
         var manifestUri = new Uri(
             trustedOrigin,
             $"{channel}/{architecture}/update.json");

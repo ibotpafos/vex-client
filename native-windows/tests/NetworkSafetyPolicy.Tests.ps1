@@ -36,7 +36,8 @@ $script:defaults4 = @(
     [pscustomobject]@{InterfaceIndex=10;NextHop='192.168.2.1';RouteMetric=30})
 $script:defaults6 = @([pscustomobject]@{InterfaceIndex=99;NextHop='::';RouteMetric=0})
 $script:hostRoutes = @([pscustomobject]@{DestinationPrefix='203.0.113.1/32';InterfaceIndex=20;NextHop='192.168.1.1'})
-function Get-NetAdapter { param([switch]$Physical) $script:physical }
+$script:physicalLookups = 0
+function Get-NetAdapter { param([switch]$Physical) $script:physicalLookups++; $script:physical }
 function Get-NetIPInterface { param($AddressFamily,$InterfaceIndex) [pscustomobject]@{InterfaceMetric=$(if($InterfaceIndex -eq 10){5}else{40})} }
 function Get-NetRoute {
     [CmdletBinding()]param($AddressFamily,$DestinationPrefix,[int]$InterfaceIndex,$PolicyStore)
@@ -48,7 +49,13 @@ function New-NetRoute {
     param($DestinationPrefix,$InterfaceIndex,$NextHop,$RouteMetric,$PolicyStore)
     $script:hostRoutes += [pscustomobject]@{DestinationPrefix=$DestinationPrefix;InterfaceIndex=$InterfaceIndex;NextHop=$NextHop}
 }
+foreach ($loopback in @('127.0.0.1', '127.10.20.30', '::1')) {
+    $route = (& $findRoute $loopback $(if($loopback.Contains(':')){'IPv6'}else{'IPv4'}) '32' 'False') | ConvertFrom-Json
+    Assert ($route.Loopback -and !$route.Created) 'Loopback endpoint must use its native route without a physical bypass'
+}
+Assert ($script:physicalLookups -eq 0 -and $script:hostRoutes.Count -eq 1) 'Loopback endpoint touched physical route state'
 $route = (& $findRoute '203.0.113.1' 'IPv4' '32' 'False') | ConvertFrom-Json
+Assert ($script:physicalLookups -eq 1) 'External endpoint must still resolve its physical uplink'
 Assert ($route.InterfaceIndex -eq 10 -and $route.NextHop -eq '192.168.2.1' -and $route.Created) 'Stale host route or tunnel selected instead of physical gateway'
 $result = & $install '203.0.113.1' '10' '192.168.2.1' '32'
 Assert ($result -eq 'created') 'New physical bypass not created'

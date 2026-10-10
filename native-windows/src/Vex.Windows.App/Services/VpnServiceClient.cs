@@ -74,6 +74,8 @@ public sealed class VpnServiceClient : IVpnControlClient
         VpnServiceRequest request,
         CancellationToken cancellationToken)
     {
+        if (UiPreviewContext.IsEnabled)
+            return UiPreviewFixtures.ServiceResponse(request);
         var stage = "initialize";
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken);

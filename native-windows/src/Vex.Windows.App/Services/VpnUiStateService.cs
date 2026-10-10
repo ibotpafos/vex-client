@@ -15,6 +15,9 @@ public sealed class VpnUiStateService
     private bool _connectionDesired;
     private bool _hasExplicitConnectionIntent;
     private volatile bool _shutdownComplete;
+    private long _intentVersion;
+    private CancellationTokenSource? _connectionCancellation;
+    private int _connectionCleanupCount;
 
     public VpnUiStateService(
         Func<CancellationToken, Task<VpnServiceResponse>> getDiagnostics)
@@ -41,6 +44,111 @@ public sealed class VpnUiStateService
     public bool HasExplicitConnectionIntent
     {
         get { lock (_intentSync) return _hasExplicitConnectionIntent; }
+    }
+
+    public bool IsConnectionInFlight
+    {
+        get { lock (_intentSync) return _connectionCancellation is not null; }
+    }
+
+    public bool IsConnectionCleanupInFlight => Volatile.Read(ref _connectionCleanupCount) > 0;
+
+    public async Task<VpnServiceResponse> RunConnectionAsync(
+        Func<CancellationToken, Task<VpnServiceResponse>> connect,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(connect);
+        using var connection = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        CancellationTokenSource? previous;
+        long intentVersion;
+        lock (_intentSync)
+        {
+            if (!_connectionDesired || _shutdownComplete)
+                throw new OperationCanceledException("A connection is no longer requested.");
+            intentVersion = _intentVersion;
+            previous = _connectionCancellation;
+            _connectionCancellation = connection;
+        }
+        Cancel(previous);
+        Changed?.Invoke(this, EventArgs.Empty);
+        try
+        {
+            return await RunAsync(async token =>
+            {
+                try
+                {
+                    EnsureCurrentConnection(connection, intentVersion, token);
+                    var response = await connect(token).ConfigureAwait(false);
+                    // Closing an IPC read does not stop the privileged service.
+                    // Never publish a late successful response after cancellation.
+                    EnsureCurrentConnection(connection, intentVersion, token);
+                    return response;
+                }
+                catch (Exception error) when (IsExpectedFailure(error))
+                {
+                    if (!IsCurrentConnection(connection, intentVersion))
+                    {
+                        if (!ConnectionDesired && !_shutdownComplete)
+                            Apply(CleanupIncomplete());
+                        throw new OperationCanceledException("The connection request was canceled.", error, token);
+                    }
+                    throw;
+                }
+            }, connection.Token, recordCancellationFailure: false).ConfigureAwait(false);
+        }
+        finally
+        {
+            lock (_intentSync)
+            {
+                if (ReferenceEquals(_connectionCancellation, connection))
+                    _connectionCancellation = null;
+            }
+            Changed?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    public async Task<VpnServiceResponse> CancelConnectionAsync(
+        Func<CancellationToken, Task<VpnServiceResponse>> disconnect,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(disconnect);
+        Interlocked.Increment(ref _connectionCleanupCount);
+        try
+        {
+            var intentVersion = ChangeConnectionIntent(false);
+            using var cleanup = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cleanup.CancelAfter(TimeSpan.FromSeconds(60));
+            return await RunAsync(async token =>
+            {
+                lock (_intentSync)
+                {
+                    // A new connect may have been requested while cleanup waited.
+                    if (_connectionDesired || _intentVersion != intentVersion)
+                        return new VpnServiceResponse(Guid.NewGuid().ToString("N"), true, Snapshot, null);
+                }
+                try
+                {
+                    // Always send Disconnect, even when the last confirmed snapshot
+                    // predates the service's in-flight Connect request.
+                    var response = await disconnect(token).ConfigureAwait(false);
+                    return response.Success && response.Snapshot.Phase == VpnConnectionPhase.Disconnected &&
+                        !VpnRecoveryPolicy.RequiresDisconnect(response.Snapshot)
+                        ? response
+                        : CleanupIncomplete(response.Snapshot);
+                }
+                catch (Exception error) when (IsExpectedFailure(error))
+                {
+                    // Retain cleanup evidence so the background host can retry after
+                    // an IPC timeout, including when no adapter was observed yet.
+                    return CleanupIncomplete();
+                }
+            }, cleanup.Token).ConfigureAwait(false);
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _connectionCleanupCount);
+            Changed?.Invoke(this, EventArgs.Empty);
+        }
     }
 
     public async Task<VpnServiceResponse> RefreshAsync(
@@ -113,14 +221,23 @@ public sealed class VpnUiStateService
     }
 
     public void MarkConnectionDesired(bool desired)
+        => ChangeConnectionIntent(desired);
+
+    private long ChangeConnectionIntent(bool desired)
     {
+        CancellationTokenSource? connection;
+        long version;
         lock (_intentSync)
         {
             _hasExplicitConnectionIntent = true;
             _connectionDesired = desired && !_shutdownComplete;
+            version = ++_intentVersion;
+            connection = !_connectionDesired ? _connectionCancellation : null;
         }
+        Cancel(connection);
         DesiredChanged?.Invoke(this, EventArgs.Empty);
         Changed?.Invoke(this, EventArgs.Empty);
+        return version;
     }
 
     public void RestoreConnectionDesired()
@@ -148,6 +265,32 @@ public sealed class VpnUiStateService
         value is > 0
             ? (ulong)value.Value
             : 0;
+
+    private bool IsCurrentConnection(CancellationTokenSource connection, long intentVersion)
+    {
+        lock (_intentSync)
+            return _connectionDesired && !_shutdownComplete &&
+                _intentVersion == intentVersion && ReferenceEquals(_connectionCancellation, connection);
+    }
+
+    private void EnsureCurrentConnection(CancellationTokenSource connection, long intentVersion,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!IsCurrentConnection(connection, intentVersion))
+            throw new OperationCanceledException("A newer VPN intent replaced this connection.", cancellationToken);
+    }
+
+    private VpnServiceResponse CleanupIncomplete(VpnConnectionSnapshot? snapshot = null) =>
+        new(Guid.NewGuid().ToString("N"), false,
+            VpnConnectionSnapshot.ClientFailure(snapshot ?? Snapshot, "tunnel_cleanup_incomplete"),
+            "tunnel_cleanup_incomplete");
+
+    private static void Cancel(CancellationTokenSource? cancellation)
+    {
+        try { cancellation?.Cancel(); }
+        catch (ObjectDisposedException) { }
+    }
 
     private static bool IsExpectedFailure(Exception error) => error is
         IOException or UnauthorizedAccessException or CryptographicException or

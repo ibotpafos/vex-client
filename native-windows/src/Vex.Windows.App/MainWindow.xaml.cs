@@ -4,6 +4,9 @@ using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Hosting;
+using Microsoft.UI.Composition;
+using System.Numerics;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Vex.Windows.App.Services;
@@ -18,8 +21,16 @@ public sealed partial class MainWindow : Window
     private const int DefaultWidth = 920;
     private const int DefaultHeight = 620;
     private bool _allowClose;
+    private bool _closed;
     private bool _hasAuthenticatedSession;
+    private long _authGeneration;
     private AppSection _currentSection = AppSection.Home;
+    private readonly CancellationTokenSource _shellLifetime = new();
+    private ContainerVisual? _ambientVisual;
+    private SpriteVisual? _accentVisual;
+    private SpriteVisual? _lightVisual;
+    private CompositionColorGradientStop? _accentStop;
+    private CompositionColorGradientStop? _accentFadeStop;
 
     public MainWindow()
     {
@@ -32,7 +43,7 @@ public sealed partial class MainWindow : Window
         AppWindow.Closing += OnAppWindowClosing;
         ConfigureNavigation();
         _hasAuthenticatedSession = AppServices.Current.Coordinator.CurrentState is not null;
-        NavigateToSection(_hasAuthenticatedSession ? AppSection.Home : AppSection.Account);
+        NavigateToSection(AppSection.Home);
         AppServices.Current.Auth.StateChanged += OnAuthStateChanged;
         AppServices.Current.UpdateService.Changed += OnUpdateSnapshotChanged;
         Closed += OnWindowClosed;
@@ -48,6 +59,11 @@ public sealed partial class MainWindow : Window
         AppSection section,
         bool forceReload = false)
     {
+        if (_closed) return;
+        if (!_hasAuthenticatedSession && section != AppSection.Settings)
+        {
+            section = AppSection.Home;
+        }
         var page = ResolvePage(section);
         if (forceReload ||
             ContentFrame.CurrentSourcePageType != page)
@@ -110,12 +126,26 @@ public sealed partial class MainWindow : Window
         SettingsNavigationButton.Tag = AppSection.Settings;
     }
 
+    private async void OnWebsiteClick(object sender, RoutedEventArgs args)
+    {
+        if (UiPreviewContext.IsEnabled) return;
+        try
+        {
+            await global::Windows.System.Launcher.LaunchUriAsync(new Uri("https://vexguard.app"));
+        }
+        catch (Exception error) when (error is COMException or InvalidOperationException)
+        {
+            Debug.WriteLine($"Website launch unavailable: {error.GetType().Name}");
+        }
+    }
+
     private async void OnShellRootLoaded(
         object sender,
         RoutedEventArgs args)
     {
         ShellVersionText.Text = DisplayVersion();
         RenderUpdateState();
+        InitializeBackdrop();
         await RefreshServerHealthAsync();
     }
 
@@ -138,12 +168,15 @@ public sealed partial class MainWindow : Window
         SizeChangedEventArgs args)
     {
         var compact = args.NewSize.Width < 680;
-        FocusPulseHeader.Margin = compact
-            ? new Thickness(14, 8, 14, 0)
-            : new Thickness(24, 10, 24, 0);
-        HeaderBrandText.Visibility = args.NewSize.Width < 520
-            ? Visibility.Collapsed
-            : Visibility.Visible;
+        var handle = WindowNative.GetWindowHandle(this);
+        var dpi = NativeMethods.GetDpiForWindow(handle);
+        var scale = dpi > 0 ? dpi / 96d : 1d;
+        var captionInset = AppWindow.TitleBar.RightInset / scale;
+        FocusPulseHeader.Margin = new Thickness(compact ? 16 : 22, 0,
+            Math.Max(16, captionInset + 16), 0);
+        ShellVersionText.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        ShellWebsiteLink.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        ResizeBackdrop();
     }
 
     private void ResizeForCurrentDpi()
@@ -232,6 +265,8 @@ public sealed partial class MainWindow : Window
     private void OnAuthStateChanged(object? sender, EventArgs args) =>
         DispatcherQueue.TryEnqueue(() =>
         {
+            if (_closed) return;
+            _authGeneration++;
             var authenticated = AppServices.Current.Coordinator.CurrentState is not null;
             if (authenticated == _hasAuthenticatedSession)
             {
@@ -240,27 +275,34 @@ public sealed partial class MainWindow : Window
             _hasAuthenticatedSession = authenticated;
             if (!authenticated)
             {
-                NavigateToSection(AppSection.Account);
+                NavigateToSection(AppSection.Home);
             }
-            else if (_currentSection == AppSection.Account)
+            else if (_currentSection is AppSection.Home or AppSection.Account)
             {
                 NavigateToSection(AppSection.Home);
             }
+            RenderShellState();
+            _ = RefreshServerHealthAsync();
         });
 
     private void OnWindowClosed(object sender, WindowEventArgs args)
     {
+        _closed = true;
         AppServices.Current.Auth.StateChanged -= OnAuthStateChanged;
         AppServices.Current.UpdateService.Changed -= OnUpdateSnapshotChanged;
         AppWindow.Closing -= OnAppWindowClosing;
         Closed -= OnWindowClosed;
+        _shellLifetime.Cancel();
+        _shellLifetime.Dispose();
+        _ambientVisual?.Dispose();
+        _ambientVisual = null;
     }
 
     private void RenderShellState()
     {
         var pageTitle = _currentSection switch
         {
-            AppSection.Account => "Аккаунт",
+            AppSection.Account when _hasAuthenticatedSession => "Аккаунт",
             AppSection.Support => "Поддержка",
             AppSection.Settings => "Настройки",
             _ => string.Empty,
@@ -278,11 +320,15 @@ public sealed partial class MainWindow : Window
             _currentSection == AppSection.Account;
         SettingsNavigationButton.IsChecked =
             _currentSection == AppSection.Settings;
+        AccountNavigationButton.Visibility = _hasAuthenticatedSession ? Visibility.Visible : Visibility.Collapsed;
+        SupportNavigationButton.Visibility = _hasAuthenticatedSession ? Visibility.Visible : Visibility.Collapsed;
+        RenderBackdrop();
         RenderUpdateState();
     }
 
     private void RenderUpdateState()
     {
+        if (_closed) return;
         var snapshot = AppServices.Current.UpdateService.CurrentSnapshot;
         UpdateBadgeDot.Visibility = snapshot.UpdateAvailable
             ? Visibility.Visible
@@ -305,12 +351,21 @@ public sealed partial class MainWindow : Window
 
     private async Task RefreshServerHealthAsync()
     {
+        if (_closed) return;
+        if (!_hasAuthenticatedSession)
+        {
+            ServerHealthDot.Fill = (SolidColorBrush)Application.Current.Resources["VexMutedBrush"];
+            ToolTipService.SetToolTip(ServerHealthDot, "Статус серверов пока неизвестен");
+            return;
+        }
+        var generation = _authGeneration;
         try
         {
             var locations =
                 await AppServices.Current.ProductParity.GetLocationsAsync(
                     AppServices.Current.Coordinator,
-                    CancellationToken.None);
+                    _shellLifetime.Token);
+            if (_shellLifetime.IsCancellationRequested || generation != _authGeneration || !_hasAuthenticatedSession) return;
             var available = locations.Any(location =>
                 location.HealthyNodes > 0 &&
                 !string.Equals(
@@ -320,9 +375,9 @@ public sealed partial class MainWindow : Window
             ServerHealthDot.Fill = new SolidColorBrush(
                 available
                     ? global::Windows.UI.Color.FromArgb(
-                        0xFF, 0x7C, 0xE7, 0xDD)
+                        0xFF, 0x2E, 0xC7, 0x59)
                     : global::Windows.UI.Color.FromArgb(
-                        0xFF, 0xF5, 0x9E, 0x0B));
+                        0xFF, 0xFF, 0xBF, 0x29));
             ToolTipService.SetToolTip(
                 ServerHealthDot,
                 available
@@ -331,6 +386,7 @@ public sealed partial class MainWindow : Window
         }
         catch
         {
+            if (_shellLifetime.IsCancellationRequested || generation != _authGeneration || !_hasAuthenticatedSession) return;
             ServerHealthDot.Fill = new SolidColorBrush(
                 global::Windows.UI.Color.FromArgb(
                     0xFF, 0x8F, 0xBE, 0xC6));
@@ -343,12 +399,66 @@ public sealed partial class MainWindow : Window
     private Type ResolvePage(AppSection section) =>
         section switch
         {
+            AppSection.Home when !_hasAuthenticatedSession => typeof(AccountPage),
             AppSection.Home => typeof(HomePage),
             AppSection.Account => typeof(AccountPage),
             AppSection.Support => typeof(SupportPage),
             AppSection.Settings => typeof(SettingsPage),
             _ => typeof(HomePage),
         };
+
+    private void InitializeBackdrop()
+    {
+        if (_ambientVisual is not null) return;
+        var compositor = ElementCompositionPreview.GetElementVisual(AmbientBackdrop).Compositor;
+        _ambientVisual = compositor.CreateContainerVisual();
+        var accent = compositor.CreateRadialGradientBrush();
+        accent.EllipseCenter = new Vector2(0.78f, 0.18f);
+        accent.EllipseRadius = new Vector2(0.72f, 1.05f);
+        _accentStop = compositor.CreateColorGradientStop(0, global::Windows.UI.Color.FromArgb(38, 34, 211, 238));
+        _accentFadeStop = compositor.CreateColorGradientStop(0.35f, global::Windows.UI.Color.FromArgb(9, 34, 211, 238));
+        accent.ColorStops.Add(_accentStop);
+        accent.ColorStops.Add(_accentFadeStop);
+        accent.ColorStops.Add(compositor.CreateColorGradientStop(1, global::Windows.UI.Color.FromArgb(0, 34, 211, 238)));
+        _accentVisual = compositor.CreateSpriteVisual();
+        _accentVisual.Brush = accent;
+        _ambientVisual.Children.InsertAtBottom(_accentVisual);
+
+        var light = compositor.CreateRadialGradientBrush();
+        light.EllipseCenter = new Vector2(0.16f, 0.84f);
+        light.EllipseRadius = new Vector2(0.54f, 0.85f);
+        light.ColorStops.Add(compositor.CreateColorGradientStop(0, global::Windows.UI.Color.FromArgb(19, 185, 251, 255)));
+        light.ColorStops.Add(compositor.CreateColorGradientStop(1, global::Windows.UI.Color.FromArgb(0, 185, 251, 255)));
+        _lightVisual = compositor.CreateSpriteVisual();
+        _lightVisual.Brush = light;
+        _ambientVisual.Children.InsertAtTop(_lightVisual);
+        ElementCompositionPreview.SetElementChildVisual(AmbientBackdrop, _ambientVisual);
+        ResizeBackdrop();
+        RenderBackdrop();
+    }
+
+    private void ResizeBackdrop()
+    {
+        if (_ambientVisual is null) return;
+        var size = new Vector2((float)ShellRoot.ActualWidth, (float)ShellRoot.ActualHeight);
+        _ambientVisual.Size = size;
+        if (_accentVisual is not null) _accentVisual.Size = size;
+        if (_lightVisual is not null) _lightVisual.Size = size;
+    }
+
+    private void RenderBackdrop()
+    {
+        if (_accentStop is null || _accentFadeStop is null) return;
+        var color = _currentSection switch
+        {
+            AppSection.Account or AppSection.Support => global::Windows.UI.Color.FromArgb(38, 107, 184, 255),
+            AppSection.Settings => global::Windows.UI.Color.FromArgb(38, 140, 158, 255),
+            _ => global::Windows.UI.Color.FromArgb(38, 34, 211, 238),
+        };
+        _accentStop.Color = color;
+        color.A = 9;
+        _accentFadeStop.Color = color;
+    }
 
     private static partial class NativeMethods
     {

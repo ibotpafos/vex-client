@@ -1,11 +1,14 @@
-using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Navigation;
+using Windows.System;
 using Vex.Windows.App.Services;
 using Vex.Windows.Client.Api;
 using Vex.Windows.Client.Session;
 using Vex.Windows.Core.Presentation;
+using Vex.Windows.Core.Navigation;
 
 namespace Vex.Windows.App.Views;
 
@@ -24,11 +27,14 @@ public sealed partial class SupportPage : Page
     private int _busyOperations;
     private bool _sendInFlight;
     private bool _refreshInFlight;
+    private bool _refreshPending;
     private IReadOnlyList<SupportTicket> _tickets = [];
     private NativeSupportSnapshot? _snapshot;
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _refreshTimer;
     private CancellationTokenSource? _pageLifetime;
+    private CancellationTokenSource? _sessionLifetime;
     private int _activationGeneration;
+    private int _socketGeneration;
 
     private NativeClientCoordinator Coordinator =>
         _services.Coordinator;
@@ -36,6 +42,7 @@ public sealed partial class SupportPage : Page
     public SupportPage()
     {
         InitializeComponent();
+        NavigationCacheMode = NavigationCacheMode.Required;
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
         Render();
@@ -43,9 +50,9 @@ public sealed partial class SupportPage : Page
 
     private async void OnLoaded(object sender, RoutedEventArgs args)
     {
-        _pageLifetime?.Cancel();
-        _pageLifetime?.Dispose();
+        if (_pageLifetime is not null) return;
         _pageLifetime = new CancellationTokenSource();
+        _sessionLifetime = CancellationTokenSource.CreateLinkedTokenSource(_pageLifetime.Token);
         var generation = checked(++_activationGeneration);
         _services.Auth.StateChanged += OnAuthStateChanged;
         _services.CustomerRealtimeChanged += OnCustomerRealtimeChanged;
@@ -71,8 +78,11 @@ public sealed partial class SupportPage : Page
             _activationGeneration++;
         }
         _pageLifetime?.Cancel();
+        _sessionLifetime?.Dispose();
+        _sessionLifetime = null;
         _pageLifetime?.Dispose();
         _pageLifetime = null;
+        _refreshPending = false;
         await _socket.StopAsync();
     }
 
@@ -87,7 +97,7 @@ public sealed partial class SupportPage : Page
         }
         DispatcherQueue.TryEnqueue(async () =>
         {
-            var token = _pageLifetime?.Token;
+            var token = _sessionLifetime?.Token;
             if (token is { IsCancellationRequested: false })
             {
                 await RefreshAsync(token.Value);
@@ -124,6 +134,17 @@ public sealed partial class SupportPage : Page
         catch (OperationCanceledException)
         {
         }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or
+            System.Security.Cryptography.CryptographicException or InvalidOperationException or
+            HttpRequestException or VexApiException or NativeClientFlowException)
+        {
+            if (IsCurrentActivation(generation, cancellationToken))
+            {
+                Render();
+                ShowNotice("Не удалось открыть чат. Попробуйте обновить страницу или откройте поддержку на сайте.",
+                    InfoBarSeverity.Warning);
+            }
+        }
     }
 
     private async Task ActivateSessionAsync(
@@ -139,6 +160,13 @@ public sealed partial class SupportPage : Page
             _tickets = [];
             _pending.Clear();
             _reconciler.Clear();
+            MessageInput.Text = string.Empty;
+            SubjectInput.Text = string.Empty;
+            AttachDiagnosticsCheckBox.IsChecked = false;
+            SupportNotice.IsOpen = false;
+            _sessionLifetime?.Cancel();
+            _sessionLifetime?.Dispose();
+            _sessionLifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         }
         if (state is null)
         {
@@ -154,17 +182,22 @@ public sealed partial class SupportPage : Page
             return;
         }
 
+        _socketGeneration = 0;
+        var sessionToken = _sessionLifetime?.Token ?? cancellationToken;
         await _socket.ConnectAsync(
             state.Session.AccessToken,
-            cancellationToken);
-        await RefreshAsync(cancellationToken);
+            sessionToken);
+        if (!IsCurrentActivation(generation, cancellationToken) ||
+            state.Session.User.Id != Coordinator.CurrentState?.Session.User.Id) return;
+        _socketGeneration = generation;
+        await RefreshAsync(sessionToken);
         if (!IsCurrentActivation(generation, cancellationToken))
         {
             return;
         }
 
         StartRefreshTimer();
-        _ = _diagnostics.FlushAsync(cancellationToken);
+        _ = _diagnostics.FlushAsync(sessionToken);
     }
 
     private bool IsCurrentActivation(
@@ -192,7 +225,7 @@ public sealed partial class SupportPage : Page
             Coordinator.CurrentState is not null)
         {
             var cancellationToken =
-                _pageLifetime?.Token ?? new CancellationToken(canceled: true);
+                _sessionLifetime?.Token ?? new CancellationToken(canceled: true);
             if (cancellationToken.IsCancellationRequested)
             {
                 return;
@@ -207,22 +240,23 @@ public sealed partial class SupportPage : Page
         object sender,
         RoutedEventArgs args) =>
         await RefreshAsync(
-            _pageLifetime?.Token ?? CancellationToken.None);
+            _sessionLifetime?.Token ?? new CancellationToken(canceled: true));
 
     private async void OnSendClick(
         object sender,
         RoutedEventArgs args)
     {
-        if (_sendInFlight || Coordinator.CurrentState is null)
+        var state = Coordinator.CurrentState;
+        if (_sendInFlight || state is null)
         {
             return;
         }
-        var cancellationToken = _pageLifetime?.Token ?? new CancellationToken(canceled: true);
+        var cancellationToken = _sessionLifetime?.Token ?? new CancellationToken(canceled: true);
         if (cancellationToken.IsCancellationRequested)
         {
             return;
         }
-        var userId = Coordinator.CurrentState.Session.User.Id;
+        var userId = state.Session.User.Id;
         var body = MessageInput.Text.Trim();
         if (body.Length == 0)
         {
@@ -259,6 +293,7 @@ public sealed partial class SupportPage : Page
                 cancellationToken);
             if (sentOverSocket)
             {
+                if (!IsCurrentUser(userId, cancellationToken)) return;
                 ReplacePending(
                     pending.Id,
                     pending with
@@ -275,7 +310,7 @@ public sealed partial class SupportPage : Page
                     body,
                     SubjectInput.Text,
                     cancellationToken);
-                if (Coordinator.CurrentState?.Session.User.Id != userId || cancellationToken.IsCancellationRequested)
+                if (!IsCurrentUser(userId, cancellationToken))
                 {
                     return;
                 }
@@ -295,9 +330,11 @@ public sealed partial class SupportPage : Page
                 NativeClientFlowException or IOException or UnauthorizedAccessException or
                 System.Security.Cryptography.CryptographicException or InvalidOperationException)
         {
+            if (_activeUserId != userId) return;
             ReplacePending(
                 pending.Id,
                 pending with { Delivery = PendingDelivery.Failed });
+            if (!IsCurrentUser(userId, cancellationToken)) return;
             ShowNotice(
                 error is NativeClientFlowException flow &&
                     flow.Code == "sign_in_required"
@@ -310,6 +347,39 @@ public sealed partial class SupportPage : Page
             _sendInFlight = false;
             SetBusy(false);
             Render();
+        }
+    }
+
+    private bool IsCurrentUser(string userId, CancellationToken token) =>
+        !token.IsCancellationRequested && _pageLifetime is not null &&
+        Coordinator.CurrentState?.Session.User.Id == userId;
+
+    private void OnDraftChanged(object sender, TextChangedEventArgs args)
+    {
+        if (SendMessageButton is not null) UpdateComposerEnabled();
+    }
+
+    private void OnSendAcceleratorInvoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        if (SendMessageButton.IsEnabled) OnSendClick(sender, new RoutedEventArgs());
+    }
+
+    private void OnOpenAccountClick(object sender, RoutedEventArgs args) =>
+        _services.MainWindow?.NavigateToSection(AppSection.Account);
+
+    private async void OnOpenSupportWebsiteClick(object sender, RoutedEventArgs args)
+    {
+        if (UiPreviewContext.IsEnabled) return;
+        try
+        {
+            if (!await Launcher.LaunchUriAsync(new Uri("https://vexguard.app/support")))
+                ShowNotice("Не удалось открыть поддержку на сайте.", InfoBarSeverity.Warning);
+        }
+        catch (Exception error) when (error is InvalidOperationException or
+            System.Runtime.InteropServices.COMException)
+        {
+            ShowNotice("Не удалось открыть поддержку на сайте.", InfoBarSeverity.Warning);
         }
     }
 
@@ -348,7 +418,7 @@ public sealed partial class SupportPage : Page
 
     private void OnRetryMessageClick(object sender, RoutedEventArgs args)
     {
-        if (BusyIndicator.IsActive || sender is not Button { Tag: string id })
+        if (_sendInFlight || sender is not Button { Tag: string id })
         {
             return;
         }
@@ -370,24 +440,28 @@ public sealed partial class SupportPage : Page
     private async Task RefreshAsync(
         CancellationToken cancellationToken)
     {
-        if (_refreshInFlight || cancellationToken.IsCancellationRequested)
+        if (cancellationToken.IsCancellationRequested) return;
+        if (_refreshInFlight)
         {
+            _refreshPending = true;
             return;
         }
-        if (Coordinator.CurrentState is null)
+        var state = Coordinator.CurrentState;
+        if (state is null)
         {
             Render();
             return;
         }
 
         _refreshInFlight = true;
-        var userId = Coordinator.CurrentState.Session.User.Id;
+        _refreshPending = false;
+        var userId = state.Session.User.Id;
         SetBusy(true);
         Render();
         try
         {
             var snapshot = await Coordinator.GetSupportSnapshotAsync(cancellationToken);
-            if (Coordinator.CurrentState?.Session.User.Id != userId || cancellationToken.IsCancellationRequested)
+            if (!IsCurrentUser(userId, cancellationToken))
             {
                 return;
             }
@@ -400,8 +474,10 @@ public sealed partial class SupportPage : Page
             error is HttpRequestException or
                 OperationCanceledException or
                 VexApiException or
-                NativeClientFlowException)
+                NativeClientFlowException or IOException or UnauthorizedAccessException or
+                System.Security.Cryptography.CryptographicException or InvalidOperationException)
         {
+            if (!IsCurrentUser(userId, cancellationToken)) return;
             if (error is NativeClientFlowException flow &&
                 flow.Code == "sign_in_required")
             {
@@ -420,6 +496,11 @@ public sealed partial class SupportPage : Page
             _refreshInFlight = false;
             SetBusy(false);
             Render();
+            if (_refreshPending && _sessionLifetime is { IsCancellationRequested: false })
+            {
+                _refreshPending = false;
+                _ = RefreshAsync(_sessionLifetime.Token);
+            }
         }
     }
 
@@ -435,7 +516,7 @@ public sealed partial class SupportPage : Page
         var generation = _activationGeneration;
         DispatcherQueue.TryEnqueue(() =>
         {
-            if (generation != _activationGeneration || _pageLifetime is null ||
+            if (generation != _activationGeneration || generation != _socketGeneration || _pageLifetime is null ||
                 Coordinator.CurrentState is null)
             {
                 return;
@@ -453,7 +534,7 @@ public sealed partial class SupportPage : Page
         var generation = _activationGeneration;
         DispatcherQueue.TryEnqueue(() =>
         {
-            if (generation != _activationGeneration || _pageLifetime is null ||
+            if (generation != _activationGeneration || generation != _socketGeneration || _pageLifetime is null ||
                 Coordinator.CurrentState is null)
             {
                 return;
@@ -481,9 +562,14 @@ public sealed partial class SupportPage : Page
     private void Render()
     {
         var state = Coordinator.CurrentState;
-        var signedIn = state is not null;
+        var signedIn = state is not null && state.Session.User.Id == _activeUserId;
         var activeTicket = ActiveTicket(_tickets);
         var messages = DisplayMessagesView(_tickets, _pending);
+        if (!signedIn)
+        {
+            activeTicket = null;
+            messages = [];
+        }
 
         SignInRequiredPanel.Visibility = signedIn
             ? Visibility.Collapsed
@@ -495,23 +581,17 @@ public sealed partial class SupportPage : Page
             ? Visibility.Visible
             : Visibility.Collapsed;
         SupportStatusText.Text = !signedIn
-            ? "Войдите, чтобы открыть чат."
+            ? "Поможем с подключением и аккаунтом"
             : _socket.IsConnected
-                ? $"{state!.Session.User.Email} · онлайн"
+                ? "Команда VEX на связи"
                 : _socket.IsReconnecting
-                    ? $"{state!.Session.User.Email} · переподключение"
-                    : $"{state!.Session.User.Email} · резервный режим";
-        RefreshSupportButton.IsEnabled = signedIn &&
-            !BusyIndicator.IsActive;
+                    ? "Восстанавливаем связь с поддержкой"
+                    : "Сообщения отправляются через защищённое соединение";
+        RefreshSupportButton.IsEnabled = signedIn && !_refreshInFlight;
         SubjectInput.Visibility = activeTicket is null
             ? Visibility.Visible
             : Visibility.Collapsed;
-        SubjectInput.IsEnabled = signedIn && !BusyIndicator.IsActive;
-        MessageInput.IsEnabled = signedIn && !BusyIndicator.IsActive;
-        AttachDiagnosticsCheckBox.IsEnabled =
-            signedIn && !BusyIndicator.IsActive;
-        SendMessageButton.IsEnabled = signedIn &&
-            !BusyIndicator.IsActive;
+        UpdateComposerEnabled();
         TicketSummaryPanel.Visibility = activeTicket is null
             ? Visibility.Collapsed
             : Visibility.Visible;
@@ -535,8 +615,8 @@ public sealed partial class SupportPage : Page
         if (signedIn)
         {
             DraftHintText.Text = activeTicket is null
-                ? "Новый тред получит тему из поля выше или из первой строки сообщения."
-                : "Сообщение уйдёт в активный тред. При потере сети сохранённая диагностика отправится позже.";
+                ? "Ctrl+Enter — отправить. Если тема не указана, используем первую строку сообщения."
+                : "Ctrl+Enter — отправить сообщение в текущее обращение.";
         }
     }
 
@@ -547,9 +627,14 @@ public sealed partial class SupportPage : Page
         BusyIndicator.Visibility = BusyIndicator.IsActive
             ? Visibility.Visible
             : Visibility.Collapsed;
-        var enabled = !BusyIndicator.IsActive && Coordinator.CurrentState is not null;
-        RefreshSupportButton.IsEnabled = enabled;
-        SendMessageButton.IsEnabled = enabled;
+        RefreshSupportButton.IsEnabled = !_refreshInFlight && Coordinator.CurrentState is not null;
+        UpdateComposerEnabled();
+    }
+
+    private void UpdateComposerEnabled()
+    {
+        var enabled = !_sendInFlight && Coordinator.CurrentState is not null;
+        SendMessageButton.IsEnabled = enabled && !string.IsNullOrWhiteSpace(MessageInput.Text);
         SubjectInput.IsEnabled = enabled;
         MessageInput.IsEnabled = enabled;
         AttachDiagnosticsCheckBox.IsEnabled = enabled;
@@ -652,9 +737,11 @@ public sealed partial class SupportPage : Page
                 SupportConversationPresentation.CollapseDiagnostics(message.Body),
                 FormatTimestamp(message.CreatedAt),
                 string.Empty,
-                new SolidColorBrush(Colors.Transparent),
+                ColorBrush(0x00000000),
                 null,
-                Visibility.Collapsed))
+                Visibility.Collapsed,
+                ColorBrush(RenderSender(message.Sender) == "Вы" ? 0x2122D3EEu : 0x7508191Du),
+                RenderSender(message.Sender) == "Вы" ? HorizontalAlignment.Right : HorizontalAlignment.Left))
             .ToList();
         result.AddRange(
             pending.Select(item => new SupportMessageView(
@@ -667,14 +754,13 @@ public sealed partial class SupportPage : Page
                     PendingDelivery.AwaitingConfirmation => "Доставляется…",
                     _ => "Ошибка",
                 },
-                new SolidColorBrush(
-                    item.Delivery == PendingDelivery.Failed
-                        ? Colors.IndianRed
-                        : Colors.Transparent),
+                ColorBrush(item.Delivery == PendingDelivery.Failed ? 0x66FF7A7Au : 0x00000000u),
                 item.Id,
                 item.Delivery == PendingDelivery.Failed
                     ? Visibility.Visible
-                    : Visibility.Collapsed)));
+                    : Visibility.Collapsed,
+                ColorBrush(0x2122D3EEu),
+                HorizontalAlignment.Right)));
         return result;
     }
 
@@ -712,6 +798,9 @@ public sealed partial class SupportPage : Page
             _ => "Вы",
         };
 
+    private static SolidColorBrush ColorBrush(uint argb) => new(global::Windows.UI.Color.FromArgb(
+        (byte)(argb >> 24), (byte)(argb >> 16), (byte)(argb >> 8), (byte)argb));
+
     private sealed record SupportMessageView(
         string Sender,
         string Body,
@@ -719,7 +808,9 @@ public sealed partial class SupportPage : Page
         string Delivery,
         Brush BorderBrush,
         string? PendingId,
-        Visibility RetryVisibility);
+        Visibility RetryVisibility,
+        Brush Background,
+        HorizontalAlignment Alignment);
 
     private sealed record PendingSupportMessage(
         string Id,

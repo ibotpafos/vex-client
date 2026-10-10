@@ -2,7 +2,10 @@
 param(
     [Parameter(Mandatory = $true)][string]$ApplicationPath,
     [Parameter(Mandatory = $true)][string]$ResultPath,
-    [ValidateRange(3, 30)][int]$ObserveSeconds = 10
+    [ValidateRange(3, 30)][int]$ObserveSeconds = 10,
+    [switch]$DesktopChecks,
+    [ValidateSet('signed-out', 'fixtures')][string]$PreviewMode,
+    [string]$ScreenshotDirectory
 )
 
 $ErrorActionPreference = 'Stop'
@@ -15,6 +18,12 @@ if (-not (Test-Path -LiteralPath $ApplicationPath -PathType Leaf)) {
     throw 'Published WinUI application is missing.'
 }
 $ApplicationPath = (Resolve-Path -LiteralPath $ApplicationPath).ProviderPath
+if ($DesktopChecks -and [string]::IsNullOrEmpty($PreviewMode)) {
+    throw 'Desktop checks require an isolated Debug UI preview mode.'
+}
+if (-not $DesktopChecks -and -not [string]::IsNullOrEmpty($PreviewMode)) {
+    throw 'Preview mode requires desktop checks; Release startup runs without preview arguments.'
+}
 # This check is for a clean hosted build machine, not an installed VPN user.
 if (Get-Service -Name 'VEX VPN Service', 'AmneziaWGTunnel$vex' -ErrorAction SilentlyContinue) {
     throw 'Startup smoke requires a host without an installed VEX VPN service.'
@@ -26,23 +35,195 @@ $sessionPath = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 
 if (Test-Path -LiteralPath $sessionPath) {
     throw 'Startup smoke requires a fresh profile without a saved VEX session.'
 }
+$previewProtocolKey = 'Registry::HKEY_CURRENT_USER\Software\Classes\vexguard-ui-preview'
+if ($DesktopChecks -and (Test-Path -LiteralPath $previewProtocolKey)) {
+    throw 'Desktop smoke requires a profile without a previously registered UI preview protocol.'
+}
 
 $startedAt = [DateTime]::UtcNow
 $process = $null
+$ownedProcesses = [Collections.Generic.List[Diagnostics.Process]]::new()
+$previousDpiContext = [nint]::Zero
+$windowHandle = [nint]::Zero
+$previewArguments = if ($PreviewMode -eq 'signed-out') {
+    '--signed-out-ui-preview'
+}
+else {
+    '--focus-pulse-ui-preview'
+}
 $result = [ordered]@{
-    schema = 'vex.windows-startup-smoke.v1'
+    schema = 'vex.windows-startup-smoke.v2'
     started_at_utc = $startedAt.ToString('O')
     observation_seconds = $ObserveSeconds
     process_id = $null
     alive_at_deadline = $false
     main_window_created = $false
+    desktop_checks = [bool]$DesktopChecks
+    preview_mode = $PreviewMode
+    screenshots = @()
+    single_instance_redirected = $false
+    close_to_tray = $false
+    second_launch_restored_window = $false
+    protocol_activation_restored_window = $false
+    preview_protocol_unregistered = $null
+    clean_exit = $false
+    clean_exit_code = $null
+    service_absent_after_checks = $null
+    saved_session_absent_after_checks = $null
+    stage = 'startup'
     exit_code = $null
     failure_type = $null
     crash_events = @()
 }
-try {
-    $process = Start-Process -FilePath $ApplicationPath `
+
+function Wait-SmokeCondition {
+    param(
+        [Parameter(Mandatory = $true)][scriptblock]$Condition,
+        [ValidateRange(1, 15)][int]$TimeoutSeconds = 8,
+        [Parameter(Mandatory = $true)][string]$Failure
+    )
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        if (& $Condition) { return }
+        Start-Sleep -Milliseconds 150
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw $Failure
+}
+
+function Assert-PrimaryInstance {
+    $process.Refresh()
+    if ($process.HasExited) { throw 'Primary preview exited during desktop checks.' }
+    $instances = @(Get-Process -Name 'Vex.Windows.App' -ErrorAction SilentlyContinue)
+    if ($instances.Count -ne 1 -or $instances[0].Id -ne $process.Id) {
+        throw 'Preview activation did not preserve one original application instance.'
+    }
+}
+
+function Invoke-RedirectedLaunch {
+    param([Parameter(Mandatory = $true)][string]$Arguments)
+    $secondary = Start-Process -FilePath $ApplicationPath -ArgumentList $Arguments `
         -WorkingDirectory (Split-Path -Parent $ApplicationPath) -PassThru
+    $ownedProcesses.Add($secondary)
+    if (-not $secondary.WaitForExit(10000)) {
+        throw 'Secondary preview process did not complete bounded activation redirection.'
+    }
+    if ($secondary.ExitCode -ne 0) { throw 'Secondary preview activation exited unsuccessfully.' }
+    Assert-PrimaryInstance
+}
+
+function Find-SmokeElement {
+    param([Parameter(Mandatory = $true)][string]$AutomationId)
+    $root = [Windows.Automation.AutomationElement]::FromHandle($windowHandle)
+    if ($null -eq $root) { return $null }
+    $condition = [Windows.Automation.PropertyCondition]::new(
+        [Windows.Automation.AutomationElement]::AutomationIdProperty, $AutomationId)
+    return $root.FindFirst([Windows.Automation.TreeScope]::Descendants, $condition)
+}
+
+function Invoke-SmokeElement {
+    param([Parameter(Mandatory = $true)][string]$AutomationId)
+    $element = $null
+    Wait-SmokeCondition -Failure "Visible UI element is missing: $AutomationId" -Condition {
+        $script:smokeElement = Find-SmokeElement -AutomationId $AutomationId
+        $null -ne $script:smokeElement -and -not $script:smokeElement.Current.IsOffscreen
+    }
+    $element = $script:smokeElement
+    if (-not $element.Current.IsEnabled) { throw "UI element is disabled: $AutomationId" }
+    $pattern = $null
+    if ($element.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {
+        ([Windows.Automation.InvokePattern]$pattern).Invoke()
+    }
+    elseif ($element.TryGetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern, [ref]$pattern)) {
+        ([Windows.Automation.SelectionItemPattern]$pattern).Select()
+    }
+    elseif ($element.TryGetCurrentPattern([Windows.Automation.TogglePattern]::Pattern, [ref]$pattern)) {
+        ([Windows.Automation.TogglePattern]$pattern).Toggle()
+    }
+    else { throw "UI element has no supported interaction pattern: $AutomationId" }
+}
+
+function Set-SmokeWindowBounds {
+    param([int]$Left, [int]$Top, [int]$Width, [int]$Height)
+    # SWP_ASYNCWINDOWPOS | SWP_NOZORDER | SWP_NOACTIVATE; wait separately with a deadline.
+    if (-not [Vex.Windows.Smoke.NativeMethods]::SetWindowPos(
+        $windowHandle, [nint]::Zero, $Left, $Top, $Width, $Height, 0x4014)) {
+        throw 'Unable to resize the preview window.'
+    }
+    Wait-SmokeCondition -Failure 'Preview window did not reach its requested bounds.' -Condition {
+        $bounds = [Vex.Windows.Smoke.WindowRect]::new()
+        [Vex.Windows.Smoke.NativeMethods]::GetWindowRect($windowHandle, [ref]$bounds) -and
+        $bounds.Left -eq $Left -and $bounds.Top -eq $Top -and
+        ($bounds.Right - $bounds.Left) -eq $Width -and
+        ($bounds.Bottom - $bounds.Top) -eq $Height
+    }
+}
+
+function Save-SmokeScreenshot {
+    param([Parameter(Mandatory = $true)][string]$Name)
+    Assert-PrimaryInstance
+    [void][Vex.Windows.Smoke.NativeMethods]::SetForegroundWindow($windowHandle)
+    Wait-SmokeCondition -Failure 'Preview window is not visible in the foreground.' -Condition {
+        [Vex.Windows.Smoke.NativeMethods]::IsWindowVisible($windowHandle) -and
+        [Vex.Windows.Smoke.NativeMethods]::GetForegroundWindow() -eq $windowHandle
+    }
+    # Capture the actual displayed WinUI surface, including DirectComposition content.
+    # PrintWindow can return an empty image for that surface on hosted Windows runners.
+    Start-Sleep -Milliseconds 650
+    $bounds = [Vex.Windows.Smoke.WindowRect]::new()
+    $boundsAvailable = [Vex.Windows.Smoke.NativeMethods]::DwmGetWindowAttribute(
+        $windowHandle, 9, [ref]$bounds, 16) -eq 0
+    if (-not $boundsAvailable) {
+        $boundsAvailable = [Vex.Windows.Smoke.NativeMethods]::GetWindowRect($windowHandle, [ref]$bounds)
+    }
+    if (-not $boundsAvailable) { throw 'Unable to measure the preview window.' }
+    $width = $bounds.Right - $bounds.Left
+    $height = $bounds.Bottom - $bounds.Top
+    $desktop = [Windows.Forms.SystemInformation]::VirtualScreen
+    if ($width -lt 400 -or $height -lt 300 -or
+        $bounds.Left -lt $desktop.Left -or $bounds.Top -lt $desktop.Top -or
+        $bounds.Right -gt $desktop.Right -or $bounds.Bottom -gt $desktop.Bottom) {
+        throw 'Preview window is too small or extends outside the visible desktop.'
+    }
+    $path = Join-Path $ScreenshotDirectory "$PreviewMode-$Name.png"
+    $bitmap = [Drawing.Bitmap]::new($width, $height)
+    $graphics = [Drawing.Graphics]::FromImage($bitmap)
+    try {
+        $graphics.CopyFromScreen($bounds.Left, $bounds.Top, 0, 0, $bitmap.Size)
+        $colors = [Collections.Generic.HashSet[int]]::new()
+        for ($y = 0; $y -lt $height; $y += 11) {
+            for ($x = 0; $x -lt $width; $x += 11) {
+                [void]$colors.Add($bitmap.GetPixel($x, $y).ToArgb())
+            }
+        }
+        if ($colors.Count -lt 8) { throw 'Preview screenshot is blank or has insufficient rendered content.' }
+        $bitmap.Save($path, [Drawing.Imaging.ImageFormat]::Png)
+        $result.screenshots += [ordered]@{
+            name = $Name
+            file = [IO.Path]::GetFileName($path)
+            width = $width
+            height = $height
+            left = $bounds.Left
+            top = $bounds.Top
+            sampled_colors = $colors.Count
+            sha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+        }
+        Write-Host "WinUI screenshot captured: $PreviewMode-$Name.png ($width x $height)."
+    }
+    finally {
+        $graphics.Dispose()
+        $bitmap.Dispose()
+    }
+}
+
+try {
+    $launch = @{
+        FilePath = $ApplicationPath
+        WorkingDirectory = Split-Path -Parent $ApplicationPath
+        PassThru = $true
+    }
+    if ($DesktopChecks) { $launch.ArgumentList = $previewArguments }
+    $process = Start-Process @launch
+    $ownedProcesses.Add($process)
     $result.process_id = $process.Id
     $deadline = $startedAt.AddSeconds($ObserveSeconds)
     while ([DateTime]::UtcNow -lt $deadline) {
@@ -64,18 +245,163 @@ try {
     $result.alive_at_deadline = $true
     Write-Host "WinUI application remained alive for $ObserveSeconds seconds."
     Write-Host "WinUI main window created: $($result.main_window_created)."
+    if ($DesktopChecks) {
+        if (-not $result.main_window_created) { throw 'Desktop preview did not create a main window.' }
+        $windowHandle = $process.MainWindowHandle
+        Add-Type -AssemblyName UIAutomationClient
+        Add-Type -AssemblyName UIAutomationTypes
+        Add-Type -AssemblyName System.Drawing
+        Add-Type -AssemblyName System.Windows.Forms
+        if (-not ('Vex.Windows.Smoke.NativeMethods' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+namespace Vex.Windows.Smoke {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct WindowRect { public int Left, Top, Right, Bottom; }
+    public static class NativeMethods {
+        [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+        [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
+        [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
+        [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window, out WindowRect rect);
+        [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr window, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
+        [DllImport("user32.dll", EntryPoint = "PostMessageW")] public static extern bool PostMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
+        [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr window, uint attribute, out WindowRect value, int size);
+    }
+}
+'@
+        }
+        $previousDpiContext = [Vex.Windows.Smoke.NativeMethods]::SetThreadDpiAwarenessContext([nint](-4))
+        if ([string]::IsNullOrEmpty($ScreenshotDirectory)) {
+            $ScreenshotDirectory = Join-Path (Split-Path -Parent $ResultPath) 'screenshots'
+        }
+        New-Item -ItemType Directory -Path $ScreenshotDirectory -Force | Out-Null
+        $result.stage = 'initial-screenshot'
+        Save-SmokeScreenshot -Name 'initial'
+        $pages = if ($PreviewMode -eq 'signed-out') { @('Home', 'Settings') }
+            else { @('Home', 'Account', 'Support', 'Settings') }
+        if ($PreviewMode -eq 'signed-out') {
+            foreach ($hiddenNavigationId in @('AccountNavigationButton', 'SupportNavigationButton')) {
+                $element = Find-SmokeElement -AutomationId $hiddenNavigationId
+                if ($null -ne $element -and -not $element.Current.IsOffscreen) {
+                    throw 'Signed-out preview exposes account or support navigation.'
+                }
+            }
+        }
+        foreach ($page in $pages) {
+            $result.stage = "navigation-$($page.ToLowerInvariant())"
+            Invoke-SmokeElement -AutomationId "${page}NavigationButton"
+            $expectedPageId = if ($PreviewMode -eq 'signed-out' -and $page -eq 'Home') {
+                'AccountPage'
+            }
+            else { "${page}Page" }
+            Wait-SmokeCondition -Failure "Preview page did not load: $page" -Condition {
+                $element = Find-SmokeElement -AutomationId $expectedPageId
+                $null -ne $element -and -not $element.Current.IsOffscreen
+            }
+            Save-SmokeScreenshot -Name $page.ToLowerInvariant()
+            if ($page -eq 'Home' -and $PreviewMode -eq 'fixtures') {
+                $result.stage = 'home-compact'
+                $normalBounds = [Vex.Windows.Smoke.WindowRect]::new()
+                if (-not [Vex.Windows.Smoke.NativeMethods]::GetWindowRect($windowHandle, [ref]$normalBounds)) {
+                    throw 'Unable to save the original preview window bounds.'
+                }
+                try {
+                    Set-SmokeWindowBounds -Left $normalBounds.Left -Top $normalBounds.Top -Width 640 -Height 540
+                    Save-SmokeScreenshot -Name 'home-compact'
+                }
+                finally {
+                    Set-SmokeWindowBounds -Left $normalBounds.Left -Top $normalBounds.Top `
+                        -Width ($normalBounds.Right - $normalBounds.Left) `
+                        -Height ($normalBounds.Bottom - $normalBounds.Top)
+                }
+                $result.stage = 'server-picker'
+                Invoke-SmokeElement -AutomationId 'ServerPickerButton'
+                Wait-SmokeCondition -Failure 'Server picker did not open.' -Condition {
+                    $element = Find-SmokeElement -AutomationId 'CloseServerPickerButton'
+                    $null -ne $element -and -not $element.Current.IsOffscreen
+                }
+                Save-SmokeScreenshot -Name 'server-picker'
+                Invoke-SmokeElement -AutomationId 'CloseServerPickerButton'
+                Wait-SmokeCondition -Failure 'Server picker did not close.' -Condition {
+                    $element = Find-SmokeElement -AutomationId 'CloseServerPickerButton'
+                    $null -eq $element -or $element.Current.IsOffscreen
+                }
+            }
+        }
+        $result.stage = 'single-instance'
+        Invoke-RedirectedLaunch -Arguments $previewArguments
+        $result.single_instance_redirected = $true
+        $result.stage = 'close-to-tray'
+        if (-not [Vex.Windows.Smoke.NativeMethods]::PostMessage($windowHandle, 0x10, [nint]::Zero, [nint]::Zero)) {
+            throw 'Unable to request normal window close.'
+        }
+        Wait-SmokeCondition -Failure 'Window close did not hide the preview to its tray.' -Condition {
+            -not [Vex.Windows.Smoke.NativeMethods]::IsWindowVisible($windowHandle)
+        }
+        Assert-PrimaryInstance
+        $result.close_to_tray = $true
+        $result.stage = 'second-launch-restore'
+        Invoke-RedirectedLaunch -Arguments $previewArguments
+        Wait-SmokeCondition -Failure 'Second launch did not restore the hidden preview.' -Condition {
+            [Vex.Windows.Smoke.NativeMethods]::IsWindowVisible($windowHandle)
+        }
+        $result.second_launch_restored_window = $true
+        $result.stage = 'protocol-activation'
+        [void][Vex.Windows.Smoke.NativeMethods]::PostMessage($windowHandle, 0x10, [nint]::Zero, [nint]::Zero)
+        Wait-SmokeCondition -Failure 'Preview could not be hidden before protocol activation.' -Condition {
+            -not [Vex.Windows.Smoke.NativeMethods]::IsWindowVisible($windowHandle)
+        }
+        Start-Process -FilePath 'vexguard-ui-preview://ui-smoke/activate'
+        Wait-SmokeCondition -Failure 'Registered protocol activation did not restore the preview.' -Condition {
+            [Vex.Windows.Smoke.NativeMethods]::IsWindowVisible($windowHandle)
+        }
+        Wait-SmokeCondition -Failure 'Protocol activation left an additional application instance.' -Condition {
+            @(Get-Process -Name 'Vex.Windows.App' -ErrorAction SilentlyContinue).Count -eq 1
+        }
+        Assert-PrimaryInstance
+        $result.protocol_activation_restored_window = $true
+        Save-SmokeScreenshot -Name 'protocol-restored'
+        $result.stage = 'clean-exit'
+        $exitRequest = Start-Process -FilePath $ApplicationPath -ArgumentList '--ui-smoke-exit' `
+            -WorkingDirectory (Split-Path -Parent $ApplicationPath) -PassThru
+        $ownedProcesses.Add($exitRequest)
+        if (-not $exitRequest.WaitForExit(10000) -or $exitRequest.ExitCode -ne 0) {
+            throw 'Preview clean-exit activation failed.'
+        }
+        if (-not $process.WaitForExit(10000)) { throw 'Preview did not exit cleanly within the deadline.' }
+        $result.clean_exit_code = $process.ExitCode
+        $result.exit_code = $process.ExitCode
+        if ($process.ExitCode -ne 0) { throw 'Preview clean close returned a failure exit code.' }
+        $result.clean_exit = $true
+        $result.preview_protocol_unregistered = -not (Test-Path -LiteralPath $previewProtocolKey)
+        $result.service_absent_after_checks = -not [bool](Get-Service -Name 'VEX VPN Service', 'AmneziaWGTunnel$vex' -ErrorAction SilentlyContinue)
+        $result.saved_session_absent_after_checks = -not (Test-Path -LiteralPath $sessionPath)
+        if (-not $result.preview_protocol_unregistered) {
+            throw 'Preview clean exit left its temporary shell protocol registered.'
+        }
+        if (-not $result.service_absent_after_checks -or -not $result.saved_session_absent_after_checks) {
+            throw 'UI preview created VPN service or production session state.'
+        }
+        Write-Host "WinUI desktop checks passed: $PreviewMode; screenshots=$($result.screenshots.Count); single-instance=True; protocol-restored=True; clean-exit=True."
+    }
+    $result.stage = 'completed'
 }
 catch {
     $result.failure_type = $_.Exception.GetType().FullName
     throw
 }
 finally {
-    if ($null -ne $process) {
-        $process.Refresh()
-        if (-not $process.HasExited) {
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-            [void]$process.WaitForExit(5000)
+    foreach ($owned in $ownedProcesses) {
+        $owned.Refresh()
+        if (-not $owned.HasExited) {
+            Stop-Process -Id $owned.Id -Force -ErrorAction SilentlyContinue
+            [void]$owned.WaitForExit(5000)
         }
+    }
+    if ($previousDpiContext -ne [nint]::Zero) {
+        [void][Vex.Windows.Smoke.NativeMethods]::SetThreadDpiAwarenessContext($previousDpiContext)
     }
     # Store only selected event identifiers and fault module/code fields.
     # Raw event messages, stdout, account state and process dumps are excluded.

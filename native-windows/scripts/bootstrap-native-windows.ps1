@@ -1,6 +1,6 @@
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
-    [ValidateSet('Install', 'Repair', 'Verify', 'Uninstall', 'Rollback')]
+    [ValidateSet('Install', 'Repair', 'Verify', 'Uninstall', 'Rollback', 'Prepare')]
     [string]$Action = 'Install',
 
     [string]$PackagePath,
@@ -8,6 +8,11 @@ param(
     [string]$MetadataPath = $(Join-Path $PSScriptRoot 'package-metadata.json'),
 
     [string]$OwnerSid,
+
+    [ValidateSet('User', 'Service')]
+    [string]$Phase = 'User',
+
+    [string]$InstallDirectory,
 
     [string]$RollbackPackagePath,
 
@@ -139,27 +144,142 @@ function Resolve-OwnerSid {
         return $OwnerSid
     }
 
+    if ($Phase -eq 'Service') {
+        throw 'The elevated service phase requires the original user OwnerSid.'
+    }
+    return Get-CurrentUserSid
+}
+
+function Get-CurrentUserSid {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     if ($null -eq $identity.User) {
         throw 'The owning Windows user SID could not be resolved.'
     }
-
     return $identity.User.Value
 }
 
-function Get-InstalledPackage {
-    param([Parameter(Mandatory = $true)][string]$Name)
+function Assert-OriginalUserContext {
+    if ($Phase -ne 'User' -or (Resolve-OwnerSid) -ne (Get-CurrentUserSid)) {
+        throw 'MSIX registration and relaunch must run as the original owning Windows user.'
+    }
+}
 
-    return Get-AppxPackage -Name $Name -AllUsers |
+function Get-InstalledPackage {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [switch]$ServiceScope
+    )
+
+    $parameters = @{ Name = $Name; ErrorAction = 'Stop' }
+    if ($ServiceScope) {
+        $parameters.User = Resolve-OwnerSid
+    }
+    return Get-AppxPackage @parameters |
         Sort-Object Version -Descending |
         Select-Object -First 1
+}
+
+function Quote-NativeArgument {
+    param([Parameter(Mandatory = $true)][string]$Value)
+    if ($Value.Contains('"') -or $Value.Contains([char]0) -or
+        $Value.EndsWith('\')) {
+        throw 'Bootstrap argument contains an unsafe native command-line character.'
+    }
+    return '"' + $Value + '"'
+}
+
+function Get-SystemPowerShellPath {
+    return Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'WindowsPowerShell\v1.0\powershell.exe'
+}
+
+function Invoke-ServicePhase {
+    param(
+        [Parameter(Mandatory = $true)][string]$ServiceAction,
+        [Parameter(Mandatory = $true)][string]$MetadataFile,
+        [string]$ScriptsRoot = $PSScriptRoot,
+        [string]$PackageInstallDirectory
+    )
+    Assert-OriginalUserContext
+    $serviceMetadata = Read-PackageMetadata -Path $MetadataFile
+    $bootstrap = Join-Path $ScriptsRoot ([string]$serviceMetadata.bootstrap_file)
+    Assert-Hash -Path $bootstrap -Expected ([string]$serviceMetadata.bootstrap_sha256) -Description 'service bootstrap'
+    Assert-ScriptSignature -Path $bootstrap -ExpectedCertificateSha256 ([string]$serviceMetadata.client_certificate_sha256)
+    $arguments = @('-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'AllSigned',
+        '-File', $bootstrap, '-Phase', 'Service', '-Action', $ServiceAction,
+        '-MetadataPath', $MetadataFile, '-OwnerSid', (Resolve-OwnerSid))
+    if (-not [string]::IsNullOrWhiteSpace($PackageInstallDirectory)) {
+        $arguments += @('-InstallDirectory', $PackageInstallDirectory)
+    }
+    $nativeArguments = ($arguments | ForEach-Object { Quote-NativeArgument $_ }) -join ' '
+    $process = Start-Process -FilePath (Get-SystemPowerShellPath) `
+        -ArgumentList $nativeArguments -Verb RunAs -PassThru
+    try {
+        if (-not $process.WaitForExit(180000)) {
+            throw 'The elevated service operation did not finish within three minutes. Do not start another installation until it finishes.'
+        }
+        if ($process.ExitCode -ne 0) {
+            throw "The elevated service operation '$ServiceAction' failed. Use the verified installer to repair VEX."
+        }
+    }
+    finally { $process.Dispose() }
+}
+
+function Assert-ServiceOwnership {
+    $ownerPath = Join-Path $env:ProgramData 'VEX\VPN\owner-sid'
+    if (Test-Path -LiteralPath $ownerPath -PathType Leaf) {
+        $installedOwner = [IO.File]::ReadAllText($ownerPath).Trim()
+        if (-not [string]::IsNullOrWhiteSpace($installedOwner) -and $installedOwner -ne (Resolve-OwnerSid)) {
+            throw 'The installed VEX service belongs to another Windows user. Its authorization will not be reassigned.'
+        }
+    }
+}
+
+function Stop-ServiceForPackageUpdate {
+    $service = Get-Service -Name 'VEX VPN Service' -ErrorAction SilentlyContinue
+    if ($null -eq $service) { return }
+    try {
+        if ($service.Status -ne [ServiceProcess.ServiceControllerStatus]::Stopped) {
+            Stop-Service -Name 'VEX VPN Service' -ErrorAction Stop
+            $service.WaitForStatus([ServiceProcess.ServiceControllerStatus]::Stopped, [TimeSpan]::FromSeconds(30))
+        }
+    }
+    finally { $service.Dispose() }
+}
+
+function Invoke-ServiceAction {
+    param([Parameter(Mandatory = $true)]$Metadata)
+    Assert-Administrator
+    if ([string]::IsNullOrWhiteSpace($OwnerSid)) { throw 'Original OwnerSid is required for service operations.' }
+    if ($OwnerSid -notmatch '^S-1-(?:5-21|12-1)-(\d+-){3}\d+$') {
+        throw 'Original OwnerSid must identify a local, domain or Azure AD Windows user.'
+    }
+    Assert-ServiceOwnership
+    if ($Action -eq 'Prepare') {
+        Stop-ServiceForPackageUpdate
+        return
+    }
+    $package = Get-InstalledPackage -Name ([string]$Metadata.package_name) -ServiceScope
+    if ($null -eq $package) { throw 'VEX is not registered for the original user.' }
+    if ([string]::IsNullOrWhiteSpace($InstallDirectory) -or
+        [IO.Path]::GetFullPath($InstallDirectory).TrimEnd('\') -ne [IO.Path]::GetFullPath($package.InstallLocation).TrimEnd('\')) {
+        throw 'The service payload is not the package registered for the original user.'
+    }
+    switch ($Action) {
+        { $_ -in @('Install', 'Repair') } {
+            Invoke-ServiceProvisioning -Metadata $Metadata -InstallDirectory $package.InstallLocation
+            Assert-InstalledState -Metadata $Metadata -InstallDirectory $package.InstallLocation
+        }
+        'Verify' { Assert-InstalledState -Metadata $Metadata -InstallDirectory $package.InstallLocation }
+        'Uninstall' { Invoke-ServiceRemoval -Metadata $Metadata -InstallDirectory $package.InstallLocation }
+        default { throw "Unsupported elevated service action '$Action'." }
+    }
 }
 
 function Invoke-ServiceProvisioning {
     param(
         [Parameter(Mandatory = $true)]$Metadata,
         [Parameter(Mandatory = $true)][string]$InstallDirectory,
-        [Parameter(Mandatory = $true)][string]$ScriptsRoot
+        [string]$ScriptsRoot = $PSScriptRoot
     )
 
     $installer = Join-Path `
@@ -195,12 +315,20 @@ function Install-Package {
         [switch]$ForceUpdate
     )
 
+    Assert-OriginalUserContext
+    if ($ForceUpdate -and $Action -ne 'Rollback') {
+        throw 'Version downgrade is available only through the explicit Rollback action.'
+    }
     $metadata = Read-PackageMetadata -Path $MetadataFile
     Assert-Hash `
         -Path $Path `
         -Expected ([string]$metadata.package_sha256) `
         -Description 'MSIX package'
 
+    $previous = Get-InstalledPackage -Name ([string]$metadata.package_name)
+    if ($null -ne $previous) {
+        Invoke-ServicePhase -ServiceAction 'Prepare' -MetadataFile $MetadataFile -ScriptsRoot $ScriptsRoot
+    }
     $parameters = @{
         Path = $Path
         ForceApplicationShutdown = $true
@@ -216,22 +344,12 @@ function Install-Package {
         throw 'The VEX MSIX package was not registered after installation.'
     }
 
-    try {
-        Invoke-ServiceProvisioning `
-            -Metadata $metadata `
-            -InstallDirectory $package.InstallLocation `
-            -ScriptsRoot $ScriptsRoot
-        Assert-InstalledState `
-            -Metadata $metadata `
-            -InstallDirectory $package.InstallLocation
-    }
-    catch {
-        Remove-AppxPackage `
-            -Package $package.PackageFullName `
-            -AllUsers `
-            -ErrorAction SilentlyContinue
-        throw
-    }
+    # Registration stays in the original user's token. An over-the-shoulder
+    # administrator only provisions the pinned privileged service afterwards.
+    # Keep the registered UI available if provisioning fails so it can offer
+    # verified repair; never remove packages belonging to other users.
+    Invoke-ServicePhase -ServiceAction 'Install' -MetadataFile $MetadataFile -ScriptsRoot $ScriptsRoot `
+        -PackageInstallDirectory $package.InstallLocation
 }
 
 function Assert-InstalledState {
@@ -281,14 +399,11 @@ function Assert-InstalledState {
     }
 }
 
-function Uninstall-Package {
-    param([Parameter(Mandatory = $true)]$Metadata)
-
-    $package = Get-InstalledPackage -Name ([string]$Metadata.package_name)
-    if ($null -eq $package) {
-        return
-    }
-
+function Invoke-ServiceRemoval {
+    param(
+        [Parameter(Mandatory = $true)]$Metadata,
+        [Parameter(Mandatory = $true)][string]$InstallDirectory
+    )
     $uninstaller = Join-Path `
         $PSScriptRoot `
         ([string]$Metadata.uninstall_service_script_file)
@@ -299,13 +414,22 @@ function Uninstall-Package {
     Assert-ScriptSignature `
         -Path $uninstaller `
         -ExpectedCertificateSha256 ([string]$Metadata.client_certificate_sha256)
-    & $uninstaller -InstallDirectory $package.InstallLocation
-    Remove-AppxPackage -Package $package.PackageFullName -AllUsers -ErrorAction Stop
+    & $uninstaller -InstallDirectory $InstallDirectory
+}
+
+function Uninstall-Package {
+    param([Parameter(Mandatory = $true)]$Metadata)
+    Assert-OriginalUserContext
+    $package = Get-InstalledPackage -Name ([string]$Metadata.package_name)
+    if ($null -eq $package) { return }
+    Invoke-ServicePhase -ServiceAction 'Uninstall' -MetadataFile $MetadataPath `
+        -PackageInstallDirectory $package.InstallLocation
+    Remove-AppxPackage -Package $package.PackageFullName -ErrorAction Stop
 }
 
 function Start-PackagedClient {
     param([Parameter(Mandatory = $true)]$Metadata)
-
+    Assert-OriginalUserContext
     $package = Get-InstalledPackage -Name ([string]$Metadata.package_name)
     if ($null -eq $package) {
         throw 'The VEX MSIX package is not installed for relaunch.'
@@ -318,7 +442,6 @@ function Start-PackagedClient {
         -ArgumentList $applicationTarget
 }
 
-Assert-Administrator
 if (-not [string]::IsNullOrWhiteSpace($MyInvocation.MyCommand.Path)) {
     $bootstrapMetadata = Read-PackageMetadata -Path $MetadataPath
     Assert-Hash `
@@ -330,6 +453,16 @@ if (-not [string]::IsNullOrWhiteSpace($MyInvocation.MyCommand.Path)) {
         -ExpectedCertificateSha256 `
             ([string]$bootstrapMetadata.client_certificate_sha256)
 }
+
+if ($Phase -eq 'Service') {
+    $metadata = Read-PackageMetadata -Path $MetadataPath
+    Invoke-ServiceAction -Metadata $metadata
+    Write-Host "VEX elevated service action '$Action' completed and verified."
+    return
+}
+
+Assert-OriginalUserContext
+$OwnerSid = Resolve-OwnerSid
 
 if ($Action -eq 'Rollback') {
     if ([string]::IsNullOrWhiteSpace($RollbackPackagePath)) {
@@ -375,13 +508,8 @@ switch ($Action) {
             Install-Package -Path $PackagePath -MetadataFile $MetadataPath
         }
         else {
-            Invoke-ServiceProvisioning `
-                -Metadata $metadata `
-                -InstallDirectory $package.InstallLocation `
-                -ScriptsRoot $PSScriptRoot
-            Assert-InstalledState `
-                -Metadata $metadata `
-                -InstallDirectory $package.InstallLocation
+            Invoke-ServicePhase -ServiceAction 'Repair' -MetadataFile $MetadataPath `
+                -PackageInstallDirectory $package.InstallLocation
         }
     }
     'Verify' {
@@ -389,13 +517,13 @@ switch ($Action) {
         if ($null -eq $package) {
             throw 'The VEX MSIX package is not installed.'
         }
-        Assert-InstalledState `
-            -Metadata $metadata `
-            -InstallDirectory $package.InstallLocation
+        Invoke-ServicePhase -ServiceAction 'Verify' -MetadataFile $MetadataPath `
+            -PackageInstallDirectory $package.InstallLocation
     }
     'Uninstall' {
         Uninstall-Package -Metadata $metadata
     }
+    default { throw "Unsupported user bootstrap action '$Action'." }
 }
 
 Write-Host "VEX native Windows bootstrap action '$Action' completed and verified."

@@ -795,12 +795,12 @@ namespace Vex.Windows.Smoke {
         Invoke-RedirectedLaunch -Arguments $trayArguments
         $result.tray_auth_recovery_diagnostic = Wait-SmokeTrayRecoveryDiagnostic -Scenario $trayScenario -Access $trayAccess
         Wait-SmokeCondition -Failure 'Actual tray recovery did not show the Home sign-in or Hello unlock controls.' -Condition {
-            $home = Find-SmokeElement -AutomationId 'HomeNavigationButton'
+            $homeNavigationElement = Find-SmokeElement -AutomationId 'HomeNavigationButton'
             $signIn = Find-SmokeElement -AutomationId 'WebsiteSignInButton'
             $unlock = Find-SmokeElement -AutomationId 'UnlockSessionButton'
             [Vex.Windows.Smoke.NativeMethods]::IsWindowVisible($windowHandle) -and
                 -not [Vex.Windows.Smoke.NativeMethods]::IsIconic($windowHandle) -and
-                $null -ne $home -and $null -ne $signIn -and -not $signIn.Current.IsOffscreen -and $signIn.Current.IsEnabled -and
+                $null -ne $homeNavigationElement -and $null -ne $signIn -and -not $signIn.Current.IsOffscreen -and $signIn.Current.IsEnabled -and
                 ($PreviewMode -ne 'fixtures' -or ($null -ne $unlock -and -not $unlock.Current.IsOffscreen -and $unlock.Current.IsEnabled))
         }
         Assert-PrimaryInstance

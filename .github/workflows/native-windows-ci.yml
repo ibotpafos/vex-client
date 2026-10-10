@@ -78,6 +78,8 @@ jobs:
           ./native-windows/tests/ReleaseValidation.Tests.ps1
           ./native-windows/tests/NetworkSafetyPolicy.Tests.ps1
           ./native-windows/tests/BootstrapOwnership.Tests.ps1
+          ./native-windows/tests/VpnAcceptance.Tests.ps1
+          ./native-windows/tests/SmokeApplication.Tests.ps1
       - name: Test platform-neutral core and control plane
         run: dotnet run --project native-windows/tests/Vex.Windows.Core.Tests/Vex.Windows.Core.Tests.csproj -c Release
 
@@ -121,6 +123,8 @@ jobs:
           ./native-windows/tests/ReleaseValidation.Tests.ps1
           ./native-windows/tests/NetworkSafetyPolicy.Tests.ps1
           ./native-windows/tests/BootstrapOwnership.Tests.ps1
+          ./native-windows/tests/VpnAcceptance.Tests.ps1
+          ./native-windows/tests/SmokeApplication.Tests.ps1
           node native-windows/scripts/validate-packaging-static.mjs
           node scripts/validate_native_windows_xaml.mjs
       - name: Publish self-contained VPN service

@@ -70,6 +70,15 @@ foreach ($sid in @($principal.Identity.User, [Security.Principal.SecurityIdentif
 Set-Acl -LiteralPath $fixtureDirectory -AclObject $acl
 [IO.File]::WriteAllText((Join-Path $fixtureDirectory 'owned-fixture'), $fixtureId)
 
+function Resolve-FixtureTool {
+    param([Parameter(Mandatory = $true)][string]$Name)
+    # -CommandType Application returns all PATH matches, including the runner's
+    # preinstalled SDK. ProcessStartInfo needs one executable, in PATH order.
+    $command = Get-Command -Name $Name -CommandType Application | Select-Object -First 1
+    if ($null -eq $command) { throw 'Required fixture SDK executable is missing.' }
+    return $command.Source
+}
+
 function Invoke-FixtureProcess {
     param([string]$FilePath, [string[]]$Arguments, [int]$TimeoutSeconds, [string]$WorkingDirectory)
     $start = [Diagnostics.ProcessStartInfo]::new()
@@ -159,8 +168,8 @@ try {
         $scriptResult[$asset.Replace('.', '_') + '_sha256'] = $hash
         [IO.File]::WriteAllText((Join-Path $fixtureDirectory $(if($asset -eq 'amneziawg.exe'){'amneziawg-sha256'}else{'wintun-sha256'})), $hash)
     }
-    $go = (Get-Command go -CommandType Application).Source
-    $dotnet = (Get-Command dotnet -CommandType Application).Source
+    $go = Resolve-FixtureTool -Name go
+    $dotnet = Resolve-FixtureTool -Name dotnet
     $peerSource = Join-Path $PSScriptRoot 'vpn-fixture-peer'
     $scriptResult.stage = 'peer-build-and-test'
     Invoke-FixtureProcess -FilePath $go -Arguments @('mod', 'verify') -TimeoutSeconds 120 -WorkingDirectory $peerSource

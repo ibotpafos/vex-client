@@ -43,8 +43,8 @@ if ($DesktopChecks -and (Test-Path -LiteralPath $previewProtocolKey)) {
 $startedAt = [DateTime]::UtcNow
 $process = $null
 $ownedProcesses = [Collections.Generic.List[Diagnostics.Process]]::new()
-$previousDpiContext = [nint]::Zero
-$windowHandle = [nint]::Zero
+$previousDpiContext = [System.IntPtr]::Zero
+$windowHandle = [System.IntPtr]::Zero
 $previewArguments = if ($PreviewMode -eq 'signed-out') {
     '--signed-out-ui-preview'
 }
@@ -146,7 +146,7 @@ function Set-SmokeWindowBounds {
     param([int]$Left, [int]$Top, [int]$Width, [int]$Height)
     # SWP_ASYNCWINDOWPOS | SWP_NOZORDER | SWP_NOACTIVATE; wait separately with a deadline.
     if (-not [Vex.Windows.Smoke.NativeMethods]::SetWindowPos(
-        $windowHandle, [nint]::Zero, $Left, $Top, $Width, $Height, 0x4014)) {
+        $windowHandle, [System.IntPtr]::Zero, $Left, $Top, $Width, $Height, 0x4014)) {
         throw 'Unable to resize the preview window.'
     }
     Wait-SmokeCondition -Failure 'Preview window did not reach its requested bounds.' -Condition {
@@ -272,7 +272,7 @@ namespace Vex.Windows.Smoke {
 }
 '@
         }
-        $previousDpiContext = [Vex.Windows.Smoke.NativeMethods]::SetThreadDpiAwarenessContext([nint](-4))
+        $previousDpiContext = [Vex.Windows.Smoke.NativeMethods]::SetThreadDpiAwarenessContext([System.IntPtr](-4))
         if ([string]::IsNullOrEmpty($ScreenshotDirectory)) {
             $ScreenshotDirectory = Join-Path (Split-Path -Parent $ResultPath) 'screenshots'
         }
@@ -334,7 +334,7 @@ namespace Vex.Windows.Smoke {
         Invoke-RedirectedLaunch -Arguments $previewArguments
         $result.single_instance_redirected = $true
         $result.stage = 'close-to-tray'
-        if (-not [Vex.Windows.Smoke.NativeMethods]::PostMessage($windowHandle, 0x10, [nint]::Zero, [nint]::Zero)) {
+        if (-not [Vex.Windows.Smoke.NativeMethods]::PostMessage($windowHandle, 0x10, [System.IntPtr]::Zero, [System.IntPtr]::Zero)) {
             throw 'Unable to request normal window close.'
         }
         Wait-SmokeCondition -Failure 'Window close did not hide the preview to its tray.' -Condition {
@@ -349,7 +349,7 @@ namespace Vex.Windows.Smoke {
         }
         $result.second_launch_restored_window = $true
         $result.stage = 'protocol-activation'
-        [void][Vex.Windows.Smoke.NativeMethods]::PostMessage($windowHandle, 0x10, [nint]::Zero, [nint]::Zero)
+        [void][Vex.Windows.Smoke.NativeMethods]::PostMessage($windowHandle, 0x10, [System.IntPtr]::Zero, [System.IntPtr]::Zero)
         Wait-SmokeCondition -Failure 'Preview could not be hidden before protocol activation.' -Condition {
             -not [Vex.Windows.Smoke.NativeMethods]::IsWindowVisible($windowHandle)
         }
@@ -400,7 +400,7 @@ finally {
             [void]$owned.WaitForExit(5000)
         }
     }
-    if ($previousDpiContext -ne [nint]::Zero) {
+    if ($previousDpiContext -ne [System.IntPtr]::Zero) {
         [void][Vex.Windows.Smoke.NativeMethods]::SetThreadDpiAwarenessContext($previousDpiContext)
     }
     # Store only selected event identifiers and fault module/code fields.

@@ -114,6 +114,24 @@ internal sealed class NetworkSafetyController
         lock (_gate) { return addresses.Any(address => !_expectedBypassRoutes.ContainsKey(address)); }
     }
 
+    public VpnEndpointAddressSnapshot? GetKnownEndpointSnapshot(string endpoint, string serverPublicKey,
+        DateTimeOffset authorizationExpiresAt)
+    {
+        var snapshot = _endpointAddressCache.Snapshot;
+        var now = DateTimeOffset.UtcNow;
+        if (snapshot is null || authorizationExpiresAt <= now || snapshot.ValidUntil != authorizationExpiresAt ||
+            !string.Equals(snapshot.Endpoint, endpoint.Trim(), StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(snapshot.ServerPublicKey, serverPublicKey, StringComparison.Ordinal)) { return null; }
+        // DNS answers alone do not prove that the current physical interface
+        // can reach that address. Only use the routes reconciled for this peer.
+        lock (_gate)
+        {
+            var reachable = snapshot.Addresses.Where(value => IPAddress.TryParse(value, out var address) &&
+                _expectedBypassRoutes.ContainsKey(address)).ToArray();
+            return reachable.Length == 0 ? null : snapshot with { Addresses = reachable };
+        }
+    }
+
     public async Task EnsureKnownEndpointBypassAsync(string endpoint, string? serverPublicKey,
         CancellationToken cancellationToken, DateTimeOffset? authorizationExpiresAt = null)
     {
@@ -736,6 +754,16 @@ internal sealed class NetworkSafetyController
                 continue;
             }
             var bytes = network.GetAddressBytes();
+            if (prefix == 1)
+            {
+                // A full-route half starts at zero; its first address would
+                // be ::1 (loopback) or 0.0.0.1 rather than a tunnel probe.
+                var lowerHalf = (bytes[0] & 128) == 0;
+                probes.Add(IPAddress.Parse(bits == 32
+                    ? lowerHalf ? "1.1.1.1" : "208.67.222.222"
+                    : lowerHalf ? "2606:4700:4700::1111" : "8000::1"));
+                continue;
+            }
             for (var bit = prefix; bit < bits; bit++) { bytes[bit / 8] &= (byte)~(1 << (7 - bit % 8)); }
             if (prefix < bits) { bytes[^1] |= 1; }
             probes.Add(new IPAddress(bytes));
@@ -810,7 +838,7 @@ internal sealed class NetworkSafetyController
     {
         var endpointHost = ParseEndpointHost(endpoint);
         var addresses = new HashSet<IPAddress>();
-        var endpointAddresses = new HashSet<IPAddress>();
+        var endpointAddresses = new List<IPAddress>();
         var controlAddresses = new HashSet<IPAddress>();
         var cachedControl = _controlPlaneAddressCache.Get(endpoint, serverPublicKey, _controlPlaneHosts,
             authorizationExpiresAt, DateTimeOffset.UtcNow);
@@ -839,10 +867,11 @@ internal sealed class NetworkSafetyController
             var freshAnswer = fresh ? resolved.Take(16).ToArray() : [];
             if (host == endpointHost && !IPAddress.TryParse(host, out _))
             {
-                // A fresh authenticated peer may still use an earlier answer.
-                // Keep that exact-scope address until the signed lease expires.
-                resolved = _endpointAddressCache.Get(endpoint, serverPublicKey, DateTimeOffset.UtcNow)
-                    .Concat(resolved).Distinct().Take(16).ToArray();
+                // Prefer current DNS answers for a new vendor start. Retain an
+                // earlier authenticated peer for the running tunnel's bypass,
+                // without pinning every restart to a retired DNS address.
+                resolved = resolved.Concat(_endpointAddressCache.Get(endpoint, serverPublicKey, DateTimeOffset.UtcNow))
+                    .Distinct().Take(16).ToArray();
             }
             return (Host: host, Addresses: resolved.Take(16).ToArray(), FreshAnswer: freshAnswer);
         })).ConfigureAwait(false);
@@ -857,7 +886,7 @@ internal sealed class NetworkSafetyController
                 if (address.AddressFamily is AddressFamily.InterNetwork or AddressFamily.InterNetworkV6)
                 {
                     addresses.Add(address);
-                    if (host == endpointHost) { endpointAddresses.Add(address); }
+                    if (host == endpointHost && !endpointAddresses.Contains(address)) { endpointAddresses.Add(address); }
                     if (_controlPlaneHosts.Contains(host, StringComparer.OrdinalIgnoreCase)) { controlAddresses.Add(address); }
                 }
             }

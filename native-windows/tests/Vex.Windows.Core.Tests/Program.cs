@@ -17,6 +17,10 @@ using System.Text.Json.Nodes;
 
 var tests = new (string Name, Action Run)[]
 {
+    ("Native installer rejects changed bundles and retains verified file locks", WindowsSetupBundleTests.Run),
+    ("VPN access and network failures preserve actionable guidance and safe intent", VpnFailurePresentationTests.Run),
+    ("Release cohorts preserve actionable mandatory targets and strict dependency trust", WindowsReleasePolicyTests.Run),
+    ("Shipping update keys match P256 signatures and reject incompatible key material", WindowsUpdateSignatureSignerTests.Run),
     ("Realtime session recovery preserves outages and rejects stale credential events", CustomerRealtimeSessionTests.Run),
     ("Realtime billing and device events cannot mutate a replacement session", RealtimeScopeIsolationTests.Run),
     ("Periodic entitlement checks preserve current sessions and user connection intent", ActiveEntitlementMonitorTests.Run),
@@ -150,7 +154,9 @@ var tests = new (string Name, Action Run)[]
     ("Native client preserves manual location and routing preferences", NativeClientPreservesManualVpnPreferences),
     ("Native client gates VPN connect on entitlement", NativeClientGatesConnectOnEntitlement),
     ("Native client reports successful connect and disconnect", NativeClientReportsVpnLifecycle),
-};
+}.Concat(VpnServiceImageIdentityTests.All)
+ .Concat(VexApiResponseDeadlineTests.Cases)
+ .Concat(VpnWindowsStartupSafetyTests.All).ToArray();
 
 tests = [.. tests, .. VpnNamedPipeTransportTests.Cases, .. VpnRuntimeLifetimeTests.All, .. VpnRuntimeRecoveryTests.All,
     .. VpnEndpointAddressCacheTests.All, .. VpnAuthorizationDeadlineTests.All, .. VpnControlPlaneAddressCacheTests.All,

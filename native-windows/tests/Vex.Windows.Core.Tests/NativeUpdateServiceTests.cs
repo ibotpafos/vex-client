@@ -22,6 +22,8 @@ internal static class NativeUpdateServiceTests
         await PersistedRequiredFloorRejectsAnOlderInstallTargetAsync();
         await AdvancingFloorCannotRetainAnOlderInstallTargetAsync();
         await InvalidSignaturePreservesKnownRequiredStateAsync();
+        await DependencyMismatchPreventsLaunchAndAllowsVerifiedRetryAsync();
+        await LargeDependencyStagesBeforeBootstrapAsync();
         foreach (var body in new[] { "manifest", "signature" })
         {
             await BodyDeadlineReleasesServiceGateAndAllowsRetryAsync(body);
@@ -31,6 +33,7 @@ internal static class NativeUpdateServiceTests
         {
             "VEX.Native.msix", "bootstrap-native-windows.ps1", "install-vpn-service.ps1",
             "uninstall-vpn-service.ps1", "package-metadata.json",
+            "Microsoft.VCLibs.x64.14.00.Desktop.appx",
         })
         {
             await ArtifactDeadlineReleasesServiceGateAndAllowsRetryAsync(artifact);
@@ -52,6 +55,37 @@ internal static class NativeUpdateServiceTests
         Check(retry.Required && retry.Release == available.Release && fixture.Launched.Count == 2 &&
             fixture.Launched.All(bundle => bundle.Release == available.Release),
             "A cancelled or failed external installer must remain blocked and retry the original verified provisioning bundle.");
+        Check(fixture.Launched.All(bundle => bundle.VclibsDependencyPath is not null &&
+            File.Exists(bundle.VclibsDependencyPath)),
+            "The bootstrap must receive its verified framework beside the signed release artifacts.");
+    }
+
+    private static async Task DependencyMismatchPreventsLaunchAndAllowsVerifiedRetryAsync()
+    {
+        using var fixture = new Fixture();
+        fixture.Publish("2.0.0.0", required: true);
+        await fixture.Service.RefreshAsync(CancellationToken.None);
+        fixture.CorruptDependency = true;
+        var failed = await fixture.Service.PrepareAndLaunchAsync(CancellationToken.None);
+        Check(failed.Required && failed.State == "required_update_error" && fixture.Launched.Count == 0 &&
+            !Directory.EnumerateFiles(fixture.StagingRoot, "*.partial", SearchOption.AllDirectories).Any(),
+            "A dependency whose bytes differ from the signed manifest cannot reach the bootstrap or clear required state.");
+        fixture.CorruptDependency = false;
+        var retry = await fixture.Service.PrepareAndLaunchAsync(CancellationToken.None);
+        Check(retry.State == "installer_launched" && fixture.Launched.Single().VclibsDependencyPath is not null,
+            "Corrected dependency bytes must permit a fresh verified retry.");
+    }
+
+    private static async Task LargeDependencyStagesBeforeBootstrapAsync()
+    {
+        using var fixture = new Fixture();
+        fixture.Publish("2.0.0.0", required: false, largeDependency: true);
+        await fixture.Service.RefreshAsync(CancellationToken.None);
+        var launched = await fixture.Service.PrepareAndLaunchAsync(CancellationToken.None);
+        Check(launched.State == "installer_launched" &&
+            new FileInfo(fixture.Launched.Single().VclibsDependencyPath!).Length >
+                WindowsUpdateConstants.MaxProvisioningArtifactBytes,
+            "A real-sized framework uses the dependency bound rather than the small helper-script limit.");
     }
 
     private static async Task FailedLauncherPreservesRequiredReleaseAsync()
@@ -367,6 +401,7 @@ internal static class NativeUpdateServiceTests
         public StalledStream? Body { get; set; }
         public Func<CancellationToken, Task>? BeforeManifest { get; set; }
         public Exception? LaunchFailure { get; set; }
+        public bool CorruptDependency { get; set; }
         public List<WindowsStagedProvisioningBundle> Launched { get; } = [];
         public List<string> ArtifactRequests { get; } = [];
         public string StagingRoot => _directory;
@@ -405,7 +440,8 @@ internal static class NativeUpdateServiceTests
                 }, StoredRollback);
         }
 
-        public void Publish(string version, bool required, long revision = 1, string floor = "1.0.0.0")
+        public void Publish(string version, bool required, long revision = 1, string floor = "1.0.0.0",
+            bool largeDependency = false)
         {
             string UriFor(string name) => "https://updates.example.test/windows/stable/" + version + "/x64/" + name;
             (string Uri, string Hash, int Size) Artifact(string name)
@@ -420,11 +456,20 @@ internal static class NativeUpdateServiceTests
             var install = Artifact("install-vpn-service.ps1");
             var uninstall = Artifact("uninstall-vpn-service.ps1");
             var metadata = Artifact("package-metadata.json");
+            var dependency = Artifact("Microsoft.VCLibs.x64.14.00.Desktop.appx");
+            if (largeDependency)
+            {
+                var bytes = new byte[WindowsUpdateConstants.MaxProvisioningArtifactBytes + 1];
+                RandomNumberGenerator.Fill(bytes);
+                _artifacts[new Uri(dependency.Uri).AbsolutePath] = bytes;
+                dependency = (dependency.Uri, Convert.ToHexString(SHA256.HashData(bytes)), bytes.Length);
+            }
             var release = new WindowsUpdateRelease(version, "x64", "msix", package.Uri, package.Hash,
                 "VEX.Native.Windows", "CN=VEX", null, package.Size, "1.0.0.0", "test release", required, 100,
                 "elevated_bootstrap", "manual_sc_bootstrap", false, false,
                 bootstrap.Uri, bootstrap.Hash, bootstrap.Size, install.Uri, install.Hash, install.Size,
-                uninstall.Uri, uninstall.Hash, uninstall.Size, metadata.Uri, metadata.Hash, metadata.Size);
+                uninstall.Uri, uninstall.Hash, uninstall.Size, metadata.Uri, metadata.Hash, metadata.Size,
+                dependency.Uri, dependency.Hash, dependency.Size);
             var manifest = new WindowsUpdateManifest(WindowsUpdateConstants.ManifestSchema, "stable", _now.ToString("O"),
                 revision, floor, new("test-update-key", WindowsUpdateConstants.SupportedAlgorithm), [release]);
             _manifest = JsonSerializer.SerializeToUtf8Bytes(manifest,
@@ -462,6 +507,10 @@ internal static class NativeUpdateServiceTests
                     fixture.ArtifactRequests.Add(path);
                     content = Path.GetFileName(path) == fixture.StalledBody
                         ? new StreamContent(fixture.Body!) : new ByteArrayContent(fixture._artifacts[path]);
+                    if (fixture.CorruptDependency && path.EndsWith("/Microsoft.VCLibs.x64.14.00.Desktop.appx", StringComparison.Ordinal))
+                    {
+                        content = new ByteArrayContent(new byte[fixture._artifacts[path].Length]);
+                    }
                 }
                 return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
             }

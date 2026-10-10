@@ -14,7 +14,7 @@ done
 python3 - <<'PY'
 from pathlib import Path
 import xml.etree.ElementTree as ET
-for root in [Path('native-windows/src/Vex.Windows.App'), Path('native-windows/packaging')]:
+for root in [Path('native-windows/src/Vex.Windows.App'), Path('native-windows/src/Vex.Windows.Setup'), Path('native-windows/packaging')]:
     for source in root.rglob('*'):
         if any(part in ('bin', 'obj', 'out', 'published') for part in source.parts):
             continue
@@ -26,6 +26,13 @@ node scripts/validate_native_windows_xaml.mjs
 node native-windows/scripts/validate-packaging-static.mjs
 pwsh -NoProfile -File native-windows/scripts/validate-powershell-parse.ps1
 pwsh -NoProfile -File native-windows/tests/ReleaseValidation.Tests.ps1
+pwsh -NoProfile -File native-windows/tests/ReleaseReadiness.Tests.ps1
+pwsh -NoProfile -File native-windows/tests/VclibsDependency.Tests.ps1
+pwsh -NoProfile -File native-windows/tests/VerifiedBootstrapLaunch.Tests.ps1
+pwsh -NoProfile -File native-windows/tests/VendorStartupMigration.Tests.ps1
+pwsh -NoProfile -File native-windows/tests/SignedInstallAcceptance.Tests.ps1
+pwsh -NoProfile -File native-windows/tests/SetupPackaging.Tests.ps1
+pwsh -NoProfile -File native-windows/tests/WindowsSetupGuard.Tests.ps1
 pwsh -NoProfile -File native-windows/tests/NetworkSafetyPolicy.Tests.ps1
 pwsh -NoProfile -File native-windows/tests/BootstrapOwnership.Tests.ps1
 pwsh -NoProfile -File native-windows/tests/InstallerSafety.Tests.ps1
@@ -38,6 +45,8 @@ dotnet run --project native-windows/tests/Vex.Windows.Core.Tests/Vex.Windows.Cor
 for architecture in x64 arm64; do
   dotnet publish native-windows/src/Vex.Windows.Service/Vex.Windows.Service.csproj \
     -c Release -r "win-$architecture" -p:Platform="$architecture" -p:EnableWindowsTargeting=true
+  dotnet publish native-windows/src/Vex.Windows.Setup/Vex.Windows.Setup.csproj \
+    -c Release -r "win-$architecture" -p:Platform="$architecture"
 done
 
 git diff --check

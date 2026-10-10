@@ -31,7 +31,11 @@ internal static class Program
     {
         if (args.Length == 3 && args[0] == "--fixture-service")
             return await ScmIpcFixture.RunServiceAsync(args);
-        if (args.Length != 4 || args[0] != "--disposable-runner") { return 2; }
+        if (args.Length == 2 && args[0] == "--watchdog-probe")
+            return await FullTunnelAcceptance.RunWatchdogProbeAsync(args[1]);
+        if (args.Length is not (4 or 5) || args[0] != "--disposable-runner" ||
+            (args.Length == 5 && args[4] != "--full-tunnel-checks")) { return 2; }
+        var fullTunnelChecks = args.Length == 5;
         var directory = Path.GetFullPath(args[1]);
         var runtimeDirectory = Path.GetFullPath(args[2]);
         var resultPath = Path.GetFullPath(args[3]);
@@ -42,6 +46,8 @@ internal static class Program
             ["runtime_version"] = "amneziawg-windows-client/3.1.0",
             ["peer_module"] = "amneziawg-go/v3@v3.1.20260814",
             ["anti_leak_enabled"] = false,
+            ["full_tunnel_checks_requested"] = fullTunnelChecks,
+            ["actual_public_internet_vpn_egress_verified"] = false,
             ["dns_over_tunnel"] = false,
             ["https_over_tunnel"] = false,
             ["runtime_disconnect_verified"] = false,
@@ -158,6 +164,12 @@ internal static class Program
                 {
                     using var scmDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(210));
                     await ScmIpcFixture.RunAsync(directory, runtimeDirectory, result, scmDeadline.Token);
+                    if (fullTunnelChecks)
+                    {
+                        result["stage"] = "full-tunnel-acceptance";
+                        using var fullDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(150));
+                        await FullTunnelAcceptance.RunAsync(directory, runtimeDirectory, result, fullDeadline.Token);
+                    }
                 }
                 catch (Exception exception)
                 {
@@ -260,15 +272,17 @@ internal static class Program
             "fixture_tunnel_address_already_present");
     }
 
-    internal static WindowsServiceOptions FixtureOptions(string directory, string runtimeDirectory, string endpoint)
+    internal static WindowsServiceOptions FixtureOptions(string directory, string runtimeDirectory, string endpoint,
+        bool fullTunnel = false)
     {
         var dataDirectory = Path.Combine(directory, "service-state");
-        return new WindowsServiceOptions(dataDirectory, runtimeDirectory,
+        var options = new WindowsServiceOptions(dataDirectory, runtimeDirectory,
             Path.Combine(dataDirectory, "ipc-token.bin"), Path.Combine(dataDirectory, "client-cert-sha256"),
             Path.Combine(dataDirectory, "owner-sid"), Path.Combine(directory, "amneziawg-sha256"),
             Path.Combine(directory, "wintun-sha256"), Path.Combine(directory, "unused-keyring.json"),
             Path.Combine(directory, "unused-keyring-sha256"))
-        { ControlPlaneBypassHosts = [], NativeLocalEndpointAddresses = [IPEndPoint.Parse(endpoint).Address.ToString()] };
+        { NativeLocalEndpointAddresses = [IPEndPoint.Parse(endpoint).Address.ToString()] };
+        return fullTunnel ? options : options with { ControlPlaneBypassHosts = [] };
     }
 
     private static VpnAuthorizedProfile SignedProfile(Manifest manifest, Dictionary<string, object?> result)
@@ -291,7 +305,7 @@ internal static class Program
     }
 
     internal static (VpnProfileAuthorization Authorization, VpnProfileSigningKey SigningKey, VpnAuthorizedProfile Profile)
-        CreateSignedProfile(Manifest manifest, TimeSpan? lifetime = null, ECDsa? profileKey = null)
+        CreateSignedProfile(Manifest manifest, TimeSpan? lifetime = null, ECDsa? profileKey = null, bool fullTunnel = false)
     {
         var leaseLifetime = lifetime ?? TimeSpan.FromMinutes(10);
         Require(leaseLifetime > TimeSpan.Zero && leaseLifetime <= TimeSpan.FromMinutes(10),
@@ -309,7 +323,8 @@ internal static class Program
             tunnel = new
             {
                 protocol = "amneziawg", endpoint = manifest.Endpoint, server_public_key = manifest.ServerPublicKey,
-                assigned_ipv4 = ClientIp + "/32", dns = new[] { ServerIp }, allowed_ips = new[] { ServerIp + "/32" },
+                assigned_ipv4 = ClientIp + "/32", dns = new[] { ServerIp },
+                allowed_ips = fullTunnel ? new[] { "0.0.0.0/0" } : new[] { ServerIp + "/32" },
                 mtu = 1360, persistent_keepalive = 1,
                 amnezia = new
                 {
@@ -343,6 +358,10 @@ internal static class Program
         }
         catch { socket.Dispose(); throw; }
     }
+
+    internal static Task<int> ProbeTunnelDnsAsync(int adapterIndex, CancellationToken token) => ProbeDnsAsync(adapterIndex, token);
+    internal static Task ProbeTunnelHttpsAsync(int adapterIndex, string directory, CancellationToken token) =>
+        ProbeHttpsAsync(adapterIndex, directory, token);
 
     private static async Task<int> ProbeDnsAsync(int adapterIndex, CancellationToken cancellationToken)
     {

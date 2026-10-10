@@ -145,9 +145,11 @@ public sealed class ClientProcessAttestor
     {
         var fileInfo = new WinTrustFileInfo(executable);
         var fileInfoPointer = Marshal.AllocHGlobal(Marshal.SizeOf(fileInfo));
+        var marshalled = false;
         try
         {
             Marshal.StructureToPtr(fileInfo, fileInfoPointer, false);
+            marshalled = true;
             var trustData = WinTrustData.ForFile(fileInfoPointer);
             var action = WinTrustActionGenericVerifyV2;
             var result = WinVerifyTrust(
@@ -160,6 +162,7 @@ public sealed class ClientProcessAttestor
         }
         finally
         {
+            if (marshalled) { Marshal.DestroyStructure<WinTrustFileInfo>(fileInfoPointer); }
             Marshal.FreeHGlobal(fileInfoPointer);
         }
     }

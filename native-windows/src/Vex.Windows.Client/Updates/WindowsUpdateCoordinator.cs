@@ -160,13 +160,30 @@ public sealed class WindowsUpdateCoordinator
             releaseDirectory,
             cancellationToken).ConfigureAwait(false);
 
+        string? dependency = null;
+        if (release.VclibsDependencyUri is not null ||
+            release.VclibsDependencySha256 is not null ||
+            release.VclibsDependencySizeBytes is not null)
+        {
+            var architecture = WindowsUpdateManifestVerifier.NormalizeArchitecture(release.Architecture);
+            dependency = await StageProvisioningArtifactAsync(
+                release.VclibsDependencyUri,
+                release.VclibsDependencySha256,
+                release.VclibsDependencySizeBytes,
+                $"Microsoft.VCLibs.{architecture}.14.00.Desktop.appx",
+                releaseDirectory,
+                cancellationToken,
+                WindowsUpdateConstants.MaxDependencyBytes).ConfigureAwait(false);
+        }
+
         return new WindowsStagedProvisioningBundle(
             package.PackagePath,
             bootstrap,
             installScript,
             uninstallScript,
             metadata,
-            release);
+            release,
+            dependency);
     }
 
     private async Task<WindowsStagedPackage> DownloadAndStagePackageAsync(
@@ -327,7 +344,8 @@ public sealed class WindowsUpdateCoordinator
         long? expectedSize,
         string expectedFileName,
         string releaseDirectory,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        long maximumBytes = WindowsUpdateConstants.MaxProvisioningArtifactBytes)
     {
         if (!Uri.TryCreate(uriValue, UriKind.Absolute, out var uri) ||
             !string.Equals(
@@ -337,7 +355,7 @@ public sealed class WindowsUpdateCoordinator
             string.IsNullOrWhiteSpace(expectedHash) ||
             expectedHash.Length != 64 ||
             expectedSize is null or <= 0 ||
-            expectedSize > WindowsUpdateConstants.MaxProvisioningArtifactBytes)
+            expectedSize > maximumBytes)
         {
             throw new InvalidOperationException(
                 "Windows update provisioning artifact metadata is invalid.");

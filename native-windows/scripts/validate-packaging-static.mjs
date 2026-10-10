@@ -167,6 +167,7 @@ const replacements = {
   "__ARCHITECTURE__": "TARGET_ARCH",
   "__DISPLAY_NAME__": "APP",
   "__PUBLISHER_DISPLAY_NAME__": "ORG",
+  "__VCLIBS_VERSION__": "14.0.33519.0",
 };
 const render = (template, values) =>
   Object.entries(values).reduce(
@@ -219,6 +220,8 @@ for (const architecture of ["x64", "arm64"]) {
     "__PACKAGE_VERSION__": "1.2.3.4",
     "__ARCHITECTURE__": architecture,
     "__PACKAGE_URI__": `https://HOST/${architecture}/APP.msix`,
+    "__VCLIBS_VERSION__": "14.0.33519.0",
+    "__VCLIBS_URI__": `https://HOST/${architecture}/Microsoft.VCLibs.${architecture}.14.00.Desktop.appx`,
   });
   assert.ok(!/__[_A-Z]+__/.test(output), `${architecture} AppInstaller has placeholders`);
   assert.ok(output.includes(`ProcessorArchitecture="${architecture}"`));

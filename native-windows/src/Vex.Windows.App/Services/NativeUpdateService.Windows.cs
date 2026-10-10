@@ -63,24 +63,86 @@ public sealed partial class NativeUpdateService
         startInfo.ArgumentList.Add("-NoProfile");
         startInfo.ArgumentList.Add("-NonInteractive");
         startInfo.ArgumentList.Add("-ExecutionPolicy");
-        startInfo.ArgumentList.Add("AllSigned");
-        startInfo.ArgumentList.Add("-File");
-        startInfo.ArgumentList.Add(staged.BootstrapPath);
-        startInfo.ArgumentList.Add("-Phase");
-        startInfo.ArgumentList.Add("User");
-        startInfo.ArgumentList.Add("-Action");
-        startInfo.ArgumentList.Add("Install");
-        startInfo.ArgumentList.Add("-PackagePath");
-        startInfo.ArgumentList.Add(staged.PackagePath);
-        startInfo.ArgumentList.Add("-MetadataPath");
-        startInfo.ArgumentList.Add(staged.PackageMetadataPath);
-        startInfo.ArgumentList.Add("-OwnerSid");
-        startInfo.ArgumentList.Add(ownerSid);
-        startInfo.ArgumentList.Add("-RelaunchAfterInstall");
+        // Only our literal verifier runs with Bypass. It verifies the signed
+        // release hashes and actual trusted signer before executing any script.
+        // AllSigned can prompt for TrustedPublisher on a clean user profile,
+        // which is incompatible with the unattended NonInteractive launcher.
+        startInfo.ArgumentList.Add("Bypass");
+        startInfo.ArgumentList.Add("-EncodedCommand");
+        var verifierInput = Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            BootstrapPath = staged.BootstrapPath,
+            MetadataPath = staged.PackageMetadataPath,
+            PackagePath = staged.PackagePath,
+            BootstrapSha256 = staged.Release.BootstrapSha256,
+            MetadataSha256 = staged.Release.PackageMetadataSha256,
+            OwnerSid = ownerSid,
+        }));
+        var verifier = VerifiedBootstrapCommand.Replace("__VEX_BOOTSTRAP_INPUT__", verifierInput,
+            StringComparison.Ordinal);
+        startInfo.ArgumentList.Add(Convert.ToBase64String(Encoding.Unicode.GetBytes(verifier)));
         _ = Process.Start(startInfo) ??
             throw new InvalidOperationException(
                 "Windows update bootstrap could not be launched.");
     }
+
+    private const string VerifiedBootstrapCommand = """
+        $ErrorActionPreference = 'Stop'
+        Set-StrictMode -Version Latest
+        # VEX_TRUSTED_POWERSHELL_MODULES_BEGIN
+        $systemModules = [IO.Path]::Combine([Environment]::GetFolderPath([Environment+SpecialFolder]::System), 'WindowsPowerShell', 'v1.0', 'Modules')
+        $env:PSModulePath = $systemModules
+        $requiredCommands = @{
+            'Microsoft.PowerShell.Utility' = 'Get-FileHash'
+            'Microsoft.PowerShell.Security' = 'Get-AuthenticodeSignature'
+            'Microsoft.PowerShell.Management' = 'Get-Content'
+        }
+        foreach ($module in $requiredCommands.Keys) {
+            $provider = Microsoft.PowerShell.Core\Get-Command -Name ($module + '\' + $requiredCommands[$module]) -CommandType Cmdlet -ListImported -ErrorAction SilentlyContinue
+            if ($null -eq $provider) {
+                $manifest = [IO.Path]::Combine($systemModules, $module, ($module + '.psd1'))
+                if (-not [IO.File]::Exists($manifest)) {
+                    $manifest = [IO.Path]::Combine([IO.Path]::GetDirectoryName($systemModules), ($module + '.psd1'))
+                }
+                Microsoft.PowerShell.Core\Import-Module -Name $manifest -Force -ErrorAction Stop
+            }
+        }
+        # VEX_TRUSTED_POWERSHELL_MODULES_END
+        $inputData = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__VEX_BOOTSTRAP_INPUT__')) | Microsoft.PowerShell.Utility\ConvertFrom-Json
+        $heldFiles = [Collections.Generic.List[IDisposable]]::new()
+        try {
+            foreach ($path in @($inputData.BootstrapPath, $inputData.MetadataPath)) {
+                $heldFiles.Add([IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read))
+            }
+            foreach ($pin in @(@($inputData.BootstrapPath, $inputData.BootstrapSha256),
+                                @($inputData.MetadataPath, $inputData.MetadataSha256))) {
+                if ([string]$pin[1] -notmatch '^[A-Fa-f0-9]{64}$' -or
+                    (Microsoft.PowerShell.Utility\Get-FileHash -LiteralPath ([string]$pin[0]) -Algorithm SHA256).Hash -ne [string]$pin[1]) {
+                    throw 'The Windows update bootstrap or metadata failed its signed release hash check.'
+                }
+            }
+            $metadata = Microsoft.PowerShell.Management\Get-Content -LiteralPath $inputData.MetadataPath -Raw | Microsoft.PowerShell.Utility\ConvertFrom-Json
+            if ([string]$metadata.client_certificate_sha256 -notmatch '^[A-Fa-f0-9]{64}$') {
+                throw 'The Windows update metadata signer pin is invalid.'
+            }
+            $signature = Microsoft.PowerShell.Security\Get-AuthenticodeSignature -LiteralPath $inputData.BootstrapPath
+            if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
+                $null -eq $signature.SignerCertificate) {
+                throw 'The Windows update bootstrap Authenticode signature is not trusted.'
+            }
+            $sha256 = [Security.Cryptography.SHA256]::Create()
+            try {
+                $certificatePin = [BitConverter]::ToString($sha256.ComputeHash($signature.SignerCertificate.RawData)).Replace('-', '')
+            }
+            finally { $sha256.Dispose() }
+            if ($certificatePin -ne [string]$metadata.client_certificate_sha256) {
+                throw 'The Windows update bootstrap signer does not match the release.'
+            }
+            & $inputData.BootstrapPath -Phase User -Action Install -PackagePath $inputData.PackagePath -MetadataPath $inputData.MetadataPath -OwnerSid $inputData.OwnerSid -RelaunchAfterInstall
+            if (-not $?) { throw 'The verified Windows update bootstrap failed.' }
+        }
+        finally { foreach ($heldFile in $heldFiles) { $heldFile.Dispose() } }
+        """;
 
     private (
         WindowsUpdateCoordinator? Coordinator,

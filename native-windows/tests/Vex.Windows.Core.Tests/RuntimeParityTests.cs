@@ -148,7 +148,7 @@ internal static class RuntimeParityTests
     private static void Ipv4ProfileSanitizesIpv6()
     {
         var config = Authorize(Profile()).TunnelConfig;
-        Require(config.Contains("AllowedIPs = 0.0.0.0/0\n", StringComparison.Ordinal));
+        Require(config.Contains("AllowedIPs = 0.0.0.0/1, 128.0.0.0/1\n", StringComparison.Ordinal));
         Require(!config.Contains("::/0", StringComparison.Ordinal));
         var profile = Profile();
         profile["tunnel"]!["allowed_ips"] = new JsonArray("::/0");

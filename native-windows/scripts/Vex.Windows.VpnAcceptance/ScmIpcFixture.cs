@@ -186,6 +186,81 @@ internal static class ScmIpcFixture
         }
     }
 
+    internal static async Task RunFullControllerAsync(string directory, string runtimeDirectory,
+        Program.Manifest manifest, VpnProfileSigningKey signingKey, Dictionary<string, object?> result,
+        Func<VpnNamedPipeTransport, WindowsServiceOptions, CancellationToken, Task> checks, CancellationToken token)
+    {
+        using var identity = WindowsIdentity.GetCurrent();
+        Require(OperatingSystem.IsWindows() && identity.User is not null &&
+            new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator), "fixture_scm_requires_administrator");
+        directory = Path.GetFullPath(directory);
+        runtimeDirectory = Path.GetFullPath(runtimeDirectory);
+        var fixtureId = ReadFixtureId(directory);
+        var harnessPath = Path.GetFullPath(Environment.ProcessPath ?? string.Empty);
+        AssertPrivateDirectory(directory, identity.User!.Value);
+        AssertChildPath(directory, runtimeDirectory);
+        AssertChildPath(directory, harnessPath);
+        using var controller = Process.GetCurrentProcess();
+        var settings = new FixtureSettings(fixtureId, "VEX.CI." + fixtureId, "Vex.CI." + fixtureId,
+            controller.Id, controller.StartTime.ToUniversalTime().Ticks, identity.User.Value, harnessPath,
+            HashFile(harnessPath), runtimeDirectory, manifest.Endpoint, signingKey, FullTunnelChecks: true);
+        var options = Program.FixtureOptions(directory, runtimeDirectory, manifest.Endpoint, fullTunnel: true);
+        ProvisionAuthorization(options.AuthorizationFile);
+        await File.WriteAllTextAsync(Path.Combine(directory, SettingsName), JsonSerializer.Serialize(settings), token);
+        var owned = false;
+        try
+        {
+            CreateFixtureService(directory, settings);
+            owned = true;
+            await StartFixtureServiceAsync(directory, settings, token);
+            var transport = CreateTransport(directory, settings, new ProtectedAuthorizationStore(options).Read);
+            await ReadStatusAsync(transport, VpnConnectionPhase.Disconnected, token);
+            await checks(transport, options, token);
+        }
+        catch { ReadStartupFailure(directory, result); throw; }
+        finally
+        {
+            if (owned)
+            {
+                // This process is SCM-owned, outside the calling harness kill
+                // tree. Its one-second controller-death monitor and signed
+                // lease trigger the same independent production cleanup.
+                using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(95));
+                await StopFixtureServiceAsync(directory, settings, cleanup.Token);
+                await AssertTunnelStoppedAsync(options.DataDirectory, cleanup.Token);
+                DeleteFixtureService(directory, settings);
+                await WaitServiceDeletedAsync(settings.ServiceName, cleanup.Token);
+                result["full_owned_cleanup_verified"] = true;
+            }
+        }
+    }
+
+    internal static Task ObserveControllerDeathAsync(Process controller, CancellationTokenSource lifetime) =>
+        MonitorControllerAsync(controller, lifetime);
+
+    internal static void AssertVendorDemandStart()
+    {
+        using var scm = OpenManager(1);
+        using var service = OpenService(scm, WindowsServiceOptions.VendorServiceName, ServiceQueryConfig | ServiceQueryStatus);
+        Require(!service.IsInvalid && QueryStatus(service).CurrentState == Running, "fixture_full_vendor_not_running");
+        QueryServiceConfig(service, IntPtr.Zero, 0, out var size);
+        Require(size > 0 && size <= 64 * 1024, "fixture_full_vendor_config_size_invalid");
+        var buffer = Marshal.AllocHGlobal(checked((int)size));
+        try
+        {
+            Require(QueryServiceConfig(service, buffer, size, out _), "fixture_full_vendor_config_read_failed");
+            var configuration = Marshal.PtrToStructure<ServiceConfiguration>(buffer);
+            Require(configuration.ServiceType == VpnVendorServiceIdentity.OwnProcess &&
+                configuration.StartType == VpnVendorServiceIdentity.DemandStart &&
+                string.Equals(Marshal.PtrToStringUni(configuration.AccountName), "LocalSystem", StringComparison.OrdinalIgnoreCase),
+                "fixture_full_vendor_not_demand_start");
+            var sid = new ServiceSidInfo();
+            Require(QueryServiceConfig2(service, 5, ref sid, (uint)Marshal.SizeOf<ServiceSidInfo>(), out _) &&
+                sid.SidType == VpnVendorServiceIdentity.UnrestrictedServiceSid, "fixture_full_vendor_sid_invalid");
+        }
+        finally { Marshal.FreeHGlobal(buffer); }
+    }
+
     internal static async Task<int> RunServiceAsync(string[] args)
     {
         string? failureDirectory = null;
@@ -219,7 +294,7 @@ internal static class ScmIpcFixture
             Require(IsExpectedProcess(settings.ControllerPid, settings, settings.OwnerSid, settings.ControllerStartTicks),
                 "fixture_scm_controller_invalid");
 
-            var options = Program.FixtureOptions(directory, runtimeDirectory, settings.Endpoint);
+            var options = Program.FixtureOptions(directory, runtimeDirectory, settings.Endpoint, settings.FullTunnelChecks);
             var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings { ContentRootPath = directory, Args = [] });
             builder.Services.AddWindowsService(service => service.ServiceName = settings.ServiceName);
             builder.Logging.ClearProviders();
@@ -626,7 +701,10 @@ internal static class ScmIpcFixture
 
     private sealed record FixtureSettings(string FixtureId, string ServiceName, string PipeName,
         int ControllerPid, long ControllerStartTicks, string OwnerSid, string HarnessPath, string HarnessSha256,
-        string RuntimeDirectory, string Endpoint, VpnProfileSigningKey SigningKey);
+        string RuntimeDirectory, string Endpoint, VpnProfileSigningKey SigningKey, bool FullTunnelChecks = false);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ServiceSidInfo { public uint SidType; }
 
     [StructLayout(LayoutKind.Sequential)]
     private struct ServiceStatusProcess
@@ -661,6 +739,10 @@ internal static class ScmIpcFixture
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool QueryServiceConfig(ServiceHandle service, IntPtr configuration, uint bufferSize, out uint bytesNeeded);
+    [DllImport("advapi32.dll", EntryPoint = "QueryServiceConfig2W", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryServiceConfig2(ServiceHandle service, uint level, ref ServiceSidInfo information,
+        uint bufferSize, out uint bytesNeeded);
     [DllImport("advapi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool QueryServiceStatusEx(ServiceHandle service, int informationLevel,

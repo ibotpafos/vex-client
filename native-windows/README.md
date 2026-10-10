@@ -22,8 +22,11 @@ existing published Windows artifacts remain available until those gates pass.
   access tokens and device identity keys. The service IPC credential uses
   machine-scoped DPAPI and install-time ACLs. The native tunnel configuration
   required by AmneziaWG is restricted to LocalSystem.
-- Distribution: signed x64/arm64 MSIX packages plus `.appinstaller`; native update metadata
-  remains unchanged until native Windows promotion.
+- `Vex.Windows.Setup`: native Windows installer with an embedded immutable release
+  description, verified adjacent bundle and original-user service bootstrap.
+- Distribution: signed x64/arm64 installer bundles containing Setup, MSIX,
+  Microsoft VCLibs and service helpers; native update metadata remains unchanged
+  until native Windows promotion.
 
 ## macOS parity contract
 
@@ -64,8 +67,12 @@ the runtime rechecks expiry before starting the service and committing a
 connection. A renewed lease has its own deadline and cannot be canceled by an
 older lease callback.
 
-The vendor executable must implement `/installtunnelservice` and
-`/uninstalltunnelservice`. Use the CLI-capable
+The vendor executable must implement `/tunnelservice` and
+`/uninstalltunnelservice`. VEX registers its exact LocalSystem tunnel service
+with demand start and an unrestricted service SID, then starts it only after
+network protection is ready. Upgrade stops and unregisters an owned older vendor
+service before replacing the package. Retained registrations cannot restart
+an unauthorized tunnel at boot. Use the CLI-capable
 `amnezia-vpn/amneziawg-windows-client` 3.1.0 runtime (AWG Go 3.1.20260814),
 qualified separately on each architecture. The distinct
 `amnezia-vpn/amneziawg-windows` project produces an embeddable `tunnel.dll`
@@ -208,7 +215,10 @@ Clean Windows development hosts must also install the current Microsoft Visual
 C++ 2015-2022 Redistributable for their architecture before running the core
 tests. `NSec.Cryptography` uses the native libsodium runtime. Release MSIX
 packages declare `Microsoft.VCLibs.140.00.UWPDesktop` so Windows can resolve the
-same prerequisite during packaged installation.
+same prerequisite during packaged installation. Release bundles include the
+architecture-matched, Microsoft-signed framework; bootstrap passes it through
+`Add-AppxPackage -DependencyPath` when needed and preserves a newer installed
+framework belonging to Microsoft.
 
 Windows Hello desktop verification uses the window-bound interop API available
 on Windows 11 (build 22000+). Windows 10 keeps DPAPI protection but does not
@@ -218,7 +228,12 @@ The release packager signs the app and service PE files before signing the
 MSIX. It emits `package-metadata.json` (schema
 `vex.windows-package-output.v2`) with pins for the signing certificate, app,
 service, `amneziawg.exe`, `wintun.dll`, and the profile-signing keyring. It also
-emits a bootstrap plus install/uninstall helpers next to the MSIX. No IPC
+emits a bootstrap plus install/uninstall helpers and the Microsoft framework
+next to the MSIX. After metadata is final, it embeds those exact bytes into
+`VEX.Setup.x64.exe` or `VEX.Setup.arm64.exe` and signs the launcher with the same
+release certificate. Setup verifies its own signature, metadata, MSIX and all
+script pins before enabling installation. Unsigned review launchers without
+embedded metadata refuse installation. No IPC
 credential or other secret is present in those artifacts.
 
 The keyring is release-generated and contains public keys only:
@@ -294,12 +309,19 @@ failed. The helper accepts that state only when both services, the owned data
 directory and all owned machine pins are absent; ambiguous leftovers still
 stop removal.
 
+For a first installation, extract the complete architecture-specific release
+ZIP into one directory, then open `VEX.Setup.x64.exe` or `VEX.Setup.arm64.exe`.
+The native installer provides Install, Repair, Uninstall and Verify actions.
+It keeps verified files locked while the bootstrap runs and requests the
+standard Windows administrator prompt for service changes. The bundle must
+remain complete; moving only the `.exe` discards its pinned installation inputs.
+
 The signed public `update.json` release pairs the exact MSIX, bootstrap,
-install/uninstall helpers, and `package-metadata.json` URIs, SHA-256 hashes, and
-sizes. Publishing also emits signed `bootstrap-entry.json` plus
+install/uninstall helpers, Microsoft framework and `package-metadata.json` URIs,
+SHA-256 hashes and sizes. Publishing also emits signed `bootstrap-entry.json` plus
 `bootstrap-entry.json.sig`. Update consumers must stage the MSIX, metadata, and
-all three PowerShell scripts into one directory, verify that signed entry, and
-launch `bootstrap-native-windows.ps1` as the owning user. It requests elevation
+all three PowerShell scripts and the framework into one directory, verify
+that signed entry, and launch `bootstrap-native-windows.ps1` as the owning user. It requests elevation
 only for its service phases. Direct launch of the MSIX or
 AppInstaller is not a complete VEX VPN installation/update path.
 
@@ -329,7 +351,11 @@ For clean hosted release runners, set
 `VEX_WINDOWS_SERVICE_AMNEZIAWG_SHA256_X64`/`_ARM64` and
 `VEX_WINDOWS_SERVICE_WINTUN_SHA256_X64`/`_ARM64` pins. The runtime staging helper
 downloads HTTPS assets, verifies their hashes and PE architectures, and sets
-the architecture-specific paths before packaging.
+the architecture-specific paths before packaging. VCLibs staging uses the official
+Microsoft download by default. Offline builds can set
+`VEX_WINDOWS_VCLIBS_PATH_X64`/`_ARM64`; alternate HTTPS mirrors require
+`VEX_WINDOWS_VCLIBS_URI_X64`/`_ARM64` and matching SHA-256 pins. Packaging verifies
+Microsoft identity, signature, framework version and architecture.
 
 PE, MSIX and bootstrap signatures are timestamped. Override the default
 timestamp service with `VEX_WINDOWS_SIGN_TIMESTAMP_URI` when needed; signing
@@ -339,7 +365,11 @@ Each publish must also set a strictly increasing
 `VEX_WINDOWS_MANIFEST_REVISION`. Set
 `VEX_WINDOWS_REQUIRED_VERSION_FLOOR` when raising the persisted minimum
 security floor; otherwise the publisher uses
-`VEX_WINDOWS_MINIMUM_SUPPORTED_VERSION` or the release version. A floor increase
+`VEX_WINDOWS_MINIMUM_SUPPORTED_VERSION` or `0.0.0.0`. An optional canary must
+not silently raise every older client to the new release floor. Mandatory
+updates use a 100% rollout; clients below a verified floor bypass the optional
+cohort only when an eligible signed release satisfies that floor. Signing
+requires the exact shipping P-256 public/private key pair and rejects mismatches. A floor increase
 prevents later downgrade below that version, so select it before signing.
 
 The separate Native Windows CI workflow runs portable tests plus Windows x64
@@ -364,8 +394,14 @@ separate fresh Windows x64 job qualifies the pinned AmneziaWG 3.1.0 CLI and
 Wintun against a memory-only encrypted peer. It checks signed-profile admission,
 SCM/adapter creation, a recent UAPI handshake, tunnel-bound DNS and verified HTTPS,
 traffic counters and owned cleanup. It uses one private /32 route and leaves
-AntiLeak disabled. This establishes local encrypted runtime behavior; public
-Internet, leak protection, roaming and arm64 runtime acceptance remain separate.
+AntiLeak disabled by default. The explicit `full_tunnel_checks=true` manual
+mode also verifies full IPv4 routing, actual AntiLeak, tunnel DNS/HTTPS,
+physical control-plane HTTPS, blocked/restored outside TCP, demand-start vendor
+registration, and controller-death cleanup. Its encrypted peer has no public
+Internet forwarding; actual public VPN egress, roaming and physical ARM64
+acceptance remain separate. Full routing uses paired `/1` routes so the vendor
+cannot apply a second `/0` firewall that blocks the VEX API escape. Signed
+IPv6 assignments are materialized only when present and valid.
 The same fixture exercises a unique unsigned LocalSystem SCM controller with
 the real pipe server and command handler: rejected credentials and tampered
 profiles, signed connection, crash/restart status restoration, durable
@@ -389,6 +425,13 @@ tunnel results; private fixture keys, account state and process dumps are exclud
 Routine jobs do not access signing secrets. Manual validation needs no release
 inputs; signed release preparation requires `package_release=true`, the main
 branch, release version/revision/notes, and the configured release inputs.
+Signed preparation fails clearly when required signing inputs are missing.
+On a fresh x64 runner it also validates the actual Setup executable and installs
+through its native Install button, verifies and removes that installation, then
+installs a synthetic preceding package, upgrades, repairs, rolls back,
+reinstalls, opens installed Account/Settings and uninstalls while preserving
+shared Microsoft frameworks. This checks package lifecycle, not an upgrade from
+a prior production binary. Sanitized JSON records exactly which checks passed.
 Signed output is retained for review; the workflow does not promote it to a
 public update origin.
 

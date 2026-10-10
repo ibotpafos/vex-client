@@ -133,6 +133,56 @@ function Invoke-SignTool {
     }
 }
 
+function Publish-SignedSetup {
+    param(
+        [Parameter(Mandatory = $true)][string]$ProjectPath,
+        [Parameter(Mandatory = $true)][string]$MetadataPath,
+        [Parameter(Mandatory = $true)][ValidateSet('x64', 'arm64')][string]$Architecture,
+        [Parameter(Mandatory = $true)][string]$Version,
+        [Parameter(Mandatory = $true)][string]$Configuration,
+        [Parameter(Mandatory = $true)][string]$PublishDirectory,
+        [Parameter(Mandatory = $true)][string]$SetupPath,
+        [Parameter(Mandatory = $true)][string]$SignTool,
+        [Parameter(Mandatory = $true)][string]$PfxBase64,
+        [Parameter(Mandatory = $true)][string]$PfxPassword,
+        [Parameter(Mandatory = $true)][string]$TemporaryPfxPath,
+        [Parameter(Mandatory = $true)][string]$ExpectedCertificateSha256
+    )
+    # Never embed unfinished metadata or admit a stale previous launcher after a
+    # failed publish. The setup bytes are described outside this metadata file
+    # in the signed bootstrap entry to avoid a circular hash.
+    if (Test-Path -LiteralPath $SetupPath) { Remove-Item -LiteralPath $SetupPath -Force }
+    $metadataFile = Get-Item -LiteralPath $MetadataPath -ErrorAction Stop
+    if ($metadataFile.PSIsContainer -or $metadataFile.Length -le 0 -or
+        ($metadataFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'The completed release metadata must be a nonempty regular file for Setup.'
+    }
+    if (Test-Path -LiteralPath $PublishDirectory) { Remove-Item -LiteralPath $PublishDirectory -Recurse -Force }
+    try {
+        dotnet publish $ProjectPath -c $Configuration -r "win-$Architecture" --self-contained true `
+            '-p:PublishSingleFile=true' '-p:IncludeNativeLibrariesForSelfExtract=true' `
+            "-p:ReleaseMetadataPath=$($metadataFile.FullName)" `
+            "-p:Version=$Version" "-p:AssemblyVersion=$Version" "-p:FileVersion=$Version" `
+            -o $PublishDirectory
+        if ($LASTEXITCODE -ne 0) { throw "Native Windows Setup publish failed with exit code $LASTEXITCODE." }
+        $publishedSetup = Join-Path $PublishDirectory 'Vex.Windows.Setup.exe'
+        Assert-WindowsPeArchitecture -Path $publishedSetup -Architecture $Architecture
+        Copy-Item -LiteralPath $publishedSetup -Destination $SetupPath -Force
+        Import-PfxFromBase64 -Base64 $PfxBase64 -DestinationPath $TemporaryPfxPath
+        if ((Get-PfxCertificateSha256 -Path $TemporaryPfxPath -Password $PfxPassword) -ne $ExpectedCertificateSha256) {
+            throw 'The Setup certificate must match the completed release metadata signer pin.'
+        }
+        Invoke-SignTool -SignTool $SignTool -PfxPath $TemporaryPfxPath -Password $PfxPassword -Path $SetupPath
+    }
+    catch {
+        if (Test-Path -LiteralPath $SetupPath -PathType Leaf) { Remove-Item -LiteralPath $SetupPath -Force }
+        throw
+    }
+    finally {
+        if (Test-Path -LiteralPath $TemporaryPfxPath -PathType Leaf) { Remove-Item -LiteralPath $TemporaryPfxPath -Force }
+    }
+}
+
 function New-UpdateKeyringJson {
     param(
         [Parameter(Mandatory = $true)][string]$KeyId,
@@ -153,6 +203,51 @@ function New-UpdateKeyringJson {
     return ($payload | ConvertTo-Json -Depth 6)
 }
 
+function Read-VclibsDependencyIdentity {
+    param([Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][ValidateSet('x64', 'arm64')][string]$Architecture)
+    $file = Get-Item -LiteralPath $Path -ErrorAction Stop
+    if ($file.Length -le 0 -or $file.Length -gt 32MB -or
+        ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'VCLibs must be a bounded regular Microsoft APPX package.'
+    }
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [IO.Compression.ZipFile]::OpenRead($file.FullName)
+    try {
+        $manifests = @($archive.Entries | Where-Object { $_.FullName -ceq 'AppxManifest.xml' })
+        $signatures = @($archive.Entries | Where-Object { $_.FullName -ceq 'AppxSignature.p7x' })
+        if ($manifests.Count -ne 1 -or $manifests[0].Length -le 0 -or $manifests[0].Length -gt 1MB -or
+            $signatures.Count -ne 1 -or $signatures[0].Length -le 0) {
+            throw 'VCLibs manifest or package signature is missing or ambiguous.'
+        }
+        $settings = [Xml.XmlReaderSettings]::new()
+        $settings.DtdProcessing = [Xml.DtdProcessing]::Prohibit
+        $settings.XmlResolver = $null
+        $stream = $manifests[0].Open()
+        $reader = [Xml.XmlReader]::Create($stream, $settings)
+        try {
+            $manifest = [Xml.XmlDocument]::new()
+            $manifest.XmlResolver = $null
+            $manifest.Load($reader)
+        }
+        finally { $reader.Dispose(); $stream.Dispose() }
+        $identity = $manifest.SelectSingleNode('/*[local-name()="Package"]/*[local-name()="Identity"]')
+        $framework = $manifest.SelectSingleNode('/*[local-name()="Package"]/*[local-name()="Properties"]/*[local-name()="Framework"]')
+        $version = $null
+        if ($null -eq $identity -or $null -eq $framework -or $framework.InnerText -cne 'true' -or
+            $identity.GetAttribute('Name') -cne 'Microsoft.VCLibs.140.00.UWPDesktop' -or
+            $identity.GetAttribute('Publisher') -cne 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US' -or
+            $identity.GetAttribute('ProcessorArchitecture') -cne $Architecture -or
+            $identity.GetAttribute('Version') -notmatch '^\d+\.\d+\.\d+\.\d+$' -or
+            -not [version]::TryParse($identity.GetAttribute('Version'), [ref]$version) -or
+            $version -lt [version]'14.0.24217.0') {
+            throw 'VCLibs identity, Microsoft publisher, framework version or architecture is invalid.'
+        }
+        return $version.ToString()
+    }
+    finally { $archive.Dispose() }
+}
+
 $packageName = Get-RequiredEnv 'VEX_WINDOWS_PACKAGE_NAME'
 $displayName = Get-RequiredEnv 'VEX_WINDOWS_PACKAGE_DISPLAY_NAME'
 $publisher = Get-RequiredEnv 'VEX_WINDOWS_PACKAGE_PUBLISHER'
@@ -165,6 +260,8 @@ $amneziaExecutablePath = Get-WindowsRuntimeAssetPath `
     -EnvironmentName 'VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH' -Architecture $Architecture
 $wintunLibraryPath = Get-WindowsRuntimeAssetPath `
     -EnvironmentName 'VEX_WINDOWS_SERVICE_WINTUN_PATH' -Architecture $Architecture
+$vclibsDependencyInput = Get-WindowsRuntimeAssetPath `
+    -EnvironmentName 'VEX_WINDOWS_VCLIBS_PATH' -Architecture $Architecture
 $timestampUri = if ($env:VEX_WINDOWS_SIGN_TIMESTAMP_URI) {
     $env:VEX_WINDOWS_SIGN_TIMESTAMP_URI.Trim()
 }
@@ -207,9 +304,11 @@ $temporaryPfxPath = Join-Path $publishRoot 'codesign.pfx'
 $bootstrapScriptPath = Join-Path $publishRoot 'bootstrap-native-windows.ps1'
 $installServiceScriptPath = Join-Path $publishRoot 'install-vpn-service.ps1'
 $uninstallServiceScriptPath = Join-Path $publishRoot 'uninstall-vpn-service.ps1'
+$vclibsDependencyPath = Join-Path $publishRoot "Microsoft.VCLibs.$Architecture.14.00.Desktop.appx"
 
 Assert-WindowsPeArchitecture -Path $amneziaExecutablePath -Architecture $Architecture
 Assert-WindowsPeArchitecture -Path $wintunLibraryPath -Architecture $Architecture
+$vclibsDependencyVersion = Read-VclibsDependencyIdentity -Path $vclibsDependencyInput -Architecture $Architecture
 
 # A failed publish must never leave a stale binary eligible for signing.
 if (Test-Path -LiteralPath $publishRoot -PathType Container) {
@@ -219,6 +318,12 @@ New-Item -ItemType Directory -Path $publishDir -Force | Out-Null
 New-Item -ItemType Directory -Path $servicePublishDir -Force | Out-Null
 New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
 New-Item -ItemType Directory -Path $assetsDir -Force | Out-Null
+Copy-Item -LiteralPath $vclibsDependencyInput -Destination $vclibsDependencyPath -Force
+if ((Read-VclibsDependencyIdentity -Path $vclibsDependencyPath -Architecture $Architecture) -cne $vclibsDependencyVersion) {
+    throw 'The shipped VCLibs dependency changed identity while staging.'
+}
+& $signtool verify /pa /all $vclibsDependencyPath
+if ($LASTEXITCODE -ne 0) { throw 'The shipped Microsoft VCLibs dependency did not pass trusted package signature verification.' }
 
 dotnet publish `
     (Join-Path $root 'native-windows\src\Vex.Windows.App\Vex.Windows.App.csproj') `
@@ -325,6 +430,7 @@ $manifestContent = $manifestTemplate.
     Replace('__PACKAGE_NAME__', $packageName).
     Replace('__PACKAGE_VERSION__', $normalizedVersion).
     Replace('__PUBLISHER__', $publisher).
+    Replace('__VCLIBS_VERSION__', $vclibsDependencyVersion).
     Replace('__ARCHITECTURE__', $Architecture).
     Replace('__DISPLAY_NAME__', $displayName).
     Replace('__PUBLISHER_DISPLAY_NAME__', $publisherDisplayName)
@@ -365,7 +471,9 @@ $appInstallerContent = $appInstallerTemplate.
     Replace('__PUBLISHER__', $publisher).
     Replace('__PACKAGE_VERSION__', $normalizedVersion).
     Replace('__ARCHITECTURE__', $Architecture).
-    Replace('__PACKAGE_URI__', $packageUri)
+    Replace('__PACKAGE_URI__', $packageUri).
+    Replace('__VCLIBS_VERSION__', $vclibsDependencyVersion).
+    Replace('__VCLIBS_URI__', [Uri]::new($packageBaseUri + [IO.Path]::GetFileName($vclibsDependencyPath)).AbsoluteUri)
 Write-Utf8NoBom -Path $appInstallerPath -Content $appInstallerContent
 
 $scriptsRoot = Join-Path $root 'native-windows\scripts'
@@ -439,6 +547,12 @@ $metadata = [ordered]@{
     amneziawg_sha256 = $amneziaExecutableSha256
     wintun_sha256 = $wintunSha256
     profile_signing_keyring_sha256 = $profileSigningKeyringSha256
+    update_signing_key_id = $updateKeyId
+    update_signing_public_key_base64 = $updatePublicKeyBase64
+    vclibs_dependency_file = [IO.Path]::GetFileName($vclibsDependencyPath)
+    vclibs_dependency_sha256 = ConvertTo-HexSha256 $vclibsDependencyPath
+    vclibs_dependency_size_bytes = (Get-Item -LiteralPath $vclibsDependencyPath).Length
+    vclibs_dependency_version = $vclibsDependencyVersion
     bootstrap_file = [IO.Path]::GetFileName($bootstrapScriptPath)
     bootstrap_sha256 = ConvertTo-HexSha256 $bootstrapScriptPath
     bootstrap_size_bytes = (Get-Item -LiteralPath $bootstrapScriptPath).Length
@@ -460,5 +574,21 @@ Write-Utf8NoBom `
     -Path $metadataPath `
     -Content ($metadata | ConvertTo-Json -Depth 5)
 
+$setupPath = Join-Path $publishRoot "VEX.Setup.$Architecture.exe"
+Publish-SignedSetup `
+    -ProjectPath (Join-Path $root 'native-windows\src\Vex.Windows.Setup\Vex.Windows.Setup.csproj') `
+    -MetadataPath $metadataPath `
+    -Architecture $Architecture `
+    -Version $normalizedVersion `
+    -Configuration $Configuration `
+    -PublishDirectory (Join-Path $publishRoot 'setup-publish') `
+    -SetupPath $setupPath `
+    -SignTool $signtool `
+    -PfxBase64 $pfxBase64 `
+    -PfxPassword $pfxPassword `
+    -TemporaryPfxPath $temporaryPfxPath `
+    -ExpectedCertificateSha256 $clientCertificateSha256
+
+Write-Host "Packaged signed Setup: $setupPath"
 Write-Host "Packaged signed MSIX: $msixPath"
 Write-Host "Metadata: $metadataPath"

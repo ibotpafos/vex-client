@@ -176,7 +176,7 @@ class VexLeakBlockerService : VpnService() {
     suspend fun startAndAwait(
       context: Context,
       allowedApplications: List<String> = emptyList(),
-      timeoutMillis: Long = 2_000L,
+      timeoutMillis: Long = VpnNetworkRecoveryTiming.BLOCKER_TRANSITION_TIMEOUT_MS,
     ): Boolean {
       start(context, allowedApplications)
       return withTimeoutOrNull(timeoutMillis) {
@@ -187,7 +187,10 @@ class VexLeakBlockerService : VpnService() {
       } ?: false
     }
 
-    suspend fun stopAndAwait(context: Context, timeoutMillis: Long = 2_000L): Boolean {
+    suspend fun stopAndAwait(
+      context: Context,
+      timeoutMillis: Long = VpnNetworkRecoveryTiming.BLOCKER_TRANSITION_TIMEOUT_MS,
+    ): Boolean {
       stop(context)
       return withTimeoutOrNull(timeoutMillis) {
         while (active.get()) {

@@ -6,6 +6,7 @@ import { sessionLoadFailureDiagnosticsSnapshot } from '@/auth/sessionDiagnostics
 import { isCurrentSessionMutation } from '@/auth/sessionMutationGuard';
 import { isCurrentSessionOperation } from '@/auth/sessionOperationGuard';
 import { createSessionMutationQueue } from '@/auth/sessionStoreCore';
+import { createSessionRestoreRefresh } from '@/auth/sessionRestoreRefresh';
 import { refreshSession as refreshApiSession, reportAppInstall, type AuthSession } from '@/api/vexApi';
 import { ApiRequestError } from '@/api/error';
 import { uploadClientDiagnostics } from '@/diagnostics/clientDiagnostics';
@@ -24,6 +25,7 @@ type SessionContextValue = {
 };
 
 const SessionContext = createContext<SessionContextValue | null>(null);
+const restoreRefresh = createSessionRestoreRefresh();
 
 export function useSession() {
   const value = use(SessionContext);
@@ -66,6 +68,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
   }, [queryClient]);
 
   const applySignOutState = useCallback(async () => {
+    restoreRefresh.invalidate();
     sessionRevisionRef.current += 1;
     const signOutRevision = sessionRevisionRef.current;
     refreshInFlightRef.current = null;
@@ -97,15 +100,16 @@ export function SessionProvider({ children }: PropsWithChildren) {
     const restoreRevision = sessionRevisionRef.current;
     const restoreSession = async () => {
       let storedSession: AuthSession | null = null;
+      let restoreError: string | null = null;
       try {
         storedSession = await loadSessionWithRetry(loadSession);
       } catch (error) {
-        if (mounted) {
+        if (mounted && restoreRevision === sessionRevisionRef.current) {
           setLoadError(errorMessage(error, 'Не удалось прочитать сохраненную сессию.'));
         }
       }
 
-      if (restoreRevision !== sessionRevisionRef.current) {
+      if (!mounted || restoreRevision !== sessionRevisionRef.current) {
         return;
       }
 
@@ -122,22 +126,29 @@ export function SessionProvider({ children }: PropsWithChildren) {
       // refresh completes. The backend revokes that token as part of refresh.
       let restoredSession: AuthSession | null = storedSession;
       try {
-        restoredSession = await refreshApiSession(storedSession.accessToken);
-        if (restoreRevision !== sessionRevisionRef.current) {
+        restoredSession = await restoreRefresh.run(storedSession.accessToken, refreshApiSession);
+        if (!mounted || restoreRevision !== sessionRevisionRef.current) {
           return;
         }
         await runSessionTransition(async () => {
-          if (restoreRevision !== sessionRevisionRef.current) return;
+          if (!mounted || restoreRevision !== sessionRevisionRef.current) return;
           await saveSession(restoredSession!);
         });
-        if (restoreRevision !== sessionRevisionRef.current) return;
+        if (!mounted || restoreRevision !== sessionRevisionRef.current) return;
       } catch (error) {
-        if (restoreRevision !== sessionRevisionRef.current) {
+        if (!mounted || restoreRevision !== sessionRevisionRef.current) {
           return;
         }
         if (error instanceof ApiRequestError && error.status === 401) {
-          await clearSession();
           restoredSession = null;
+          try {
+            await runSessionTransition(async () => {
+              if (!mounted || restoreRevision !== sessionRevisionRef.current) return;
+              await clearSession();
+            });
+          } catch (cleanupError) {
+            restoreError = errorMessage(cleanupError, 'Не удалось удалить отклоненную сессию.');
+          }
         }
         // Offline startup can still use the stored session and cached profile;
         // a definitively rejected token is cleared so the login screen opens.
@@ -145,7 +156,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
 
       if (mounted && restoreRevision === sessionRevisionRef.current) {
         sessionRef.current = restoredSession;
-        setLoadError(null);
+        setLoadError(restoreError);
         setSession(restoredSession);
         setIsLoading(false);
       }
@@ -166,6 +177,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
   }, [session?.accessToken, session?.user.id]);
 
   const signIn = useCallback(async (nextSession: AuthSession) => {
+    restoreRefresh.invalidate();
     const sessionLoadError = loadError;
     sessionRevisionRef.current += 1;
     const signInRevision = sessionRevisionRef.current;

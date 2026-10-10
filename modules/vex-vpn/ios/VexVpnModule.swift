@@ -20,12 +20,14 @@ public class VexVpnModule: Module {
       return true
     }
 
-    AsyncFunction("connect") { (config: String) async throws -> [String: Any] in
+    // Shared callers pass Android anti-leak flags. Accept them optionally so
+    // Expo's argument validation also permits older iOS callers without flags.
+    AsyncFunction("connect") { (config: String, _: Bool?) async throws -> [String: Any] in
       try await self.tunnelStore.connect(config: config)
       return await self.tunnelStore.currentStatus()
     }
 
-    AsyncFunction("disconnect") { () async throws -> [String: Any] in
+    AsyncFunction("disconnect") { (_: Bool?) async throws -> [String: Any] in
       try await self.tunnelStore.disconnect()
       return await self.tunnelStore.currentStatus()
     }
@@ -247,6 +249,16 @@ private final class IosTunnelStore {
       stop: { manager in
         manager.connection.stopVPNTunnel()
         VexVpnDiagnostics.record("ios_tunnel_stop_requested")
+      },
+      needsRestart: { manager in
+        let status = manager.connection.status
+        return status != .invalid && status != .disconnected
+      },
+      waitUntilStopped: { manager in
+        try await IosTunnelStoppedStatusWait.wait {
+          let status = manager.connection.status
+          return status == .invalid || status == .disconnected
+        }
       }
     ))
   }
@@ -260,19 +272,24 @@ private final class IosTunnelStore {
   }
 
   func currentStatus() async -> [String: Any] {
-    let manager = try? await Self.loadExistingManager()
-    let status = manager?.connection.status ?? .disconnected
-    var result: [String: Any] = [
-      "state": Self.stateName(status),
-      "nativeState": status.rawValue,
-      "rxBytes": 0,
-      "txBytes": 0
-    ]
-    if status == .connected {
-      result["verified"] = false
-      result["verificationReason"] = "handshake_pending"
-    }
-    return result
+    let status = await transition.currentStatus(using: IosTunnelStatusOperations(
+      readState: { manager in
+        let state = manager.connection.status
+        return IosTunnelStatusSnapshot(
+          state: Self.stateName(state),
+          nativeState: state.rawValue,
+          connectedAt: manager.connection.connectedDate
+        )
+      },
+      requestRuntime: { manager, reply in
+        guard let session = manager.connection as? NETunnelProviderSession else {
+          reply(nil)
+          return
+        }
+        try session.sendProviderMessage(Data([0]), responseHandler: reply)
+      }
+    ))
+    return status.toDictionary()
   }
 
   private static func loadOrCreateManager() async throws -> NETunnelProviderManager {
@@ -283,7 +300,13 @@ private final class IosTunnelStore {
   }
 
   private static func loadExistingManager() async throws -> NETunnelProviderManager? {
-    let managers = try await NETunnelProviderManager.loadAllFromPreferences()
+    let managers: [NETunnelProviderManager]
+    do {
+      managers = try await NETunnelProviderManager.loadAllFromPreferences()
+    } catch {
+      VexVpnDiagnostics.record("ios_tunnel_load_failed", details: ["error": error.localizedDescription])
+      throw error
+    }
     return managers.first { manager in
       guard let tunnelProtocol = manager.protocolConfiguration as? NETunnelProviderProtocol else {
         return false

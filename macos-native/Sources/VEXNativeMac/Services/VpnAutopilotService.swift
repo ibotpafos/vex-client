@@ -118,22 +118,21 @@ struct VpnAutopilotService {
     private func probeEndpoint(_ endpoint: String?) async -> VpnAutopilotProbeResult {
         guard let parsed = ParsedEndpoint(endpoint) else { return .empty }
         let started = Date()
-        return await withTaskGroup(of: VpnAutopilotProbeResult.self) { group in
-            group.addTask {
-                await connectProbe(host: parsed.host, port: parsed.port, started: started)
-            }
-            group.addTask {
-                do {
-                    try await Task.sleep(nanoseconds: 3_000_000_000)
-                } catch {
-                    return .empty
+        return await VpnEndpointProbe.run { finish in
+            let connection = NWConnection(host: NWEndpoint.Host(parsed.host), port: NWEndpoint.Port(rawValue: parsed.port) ?? 443, using: .tcp)
+            connection.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    finish(VpnAutopilotProbeResult(dnsOk: true, endpointLatencyMs: Date().timeIntervalSince(started) * 1000))
+                case .failed(let error):
+                    let message = String(describing: error)
+                    finish(VpnAutopilotProbeResult(dnsOk: !message.localizedCaseInsensitiveContains("dns"), endpointProbeError: message))
+                default:
+                    break
                 }
-                guard !Task.isCancelled else { return .empty }
-                return VpnAutopilotProbeResult(dnsOk: true, endpointLatencyMs: nil, endpointProbeError: "endpoint probe timed out")
             }
-            let result = await group.next() ?? .empty
-            group.cancelAll()
-            return result
+            connection.start(queue: DispatchQueue(label: "app.vex.vpn.native.endpoint-probe"))
+            return { connection.cancel() }
         }
     }
 
@@ -171,64 +170,6 @@ struct VpnAutopilotService {
     }
 }
 
-private func connectProbe(host: String, port: UInt16, started: Date) async -> VpnAutopilotProbeResult {
-    await withCheckedContinuation { continuation in
-        let connection = NWConnection(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port) ?? 443, using: .tcp)
-        let queue = DispatchQueue(label: "app.vex.vpn.native.endpoint-probe")
-        let completion = EndpointProbeCompletion()
-        let finish: @Sendable (VpnAutopilotProbeResult) -> Void = { result in
-            guard completion.markFinished() else { return }
-            connection.cancel()
-            continuation.resume(returning: result)
-        }
-        connection.stateUpdateHandler = { state in
-            switch state {
-            case .ready:
-                finish(VpnAutopilotProbeResult(dnsOk: true, endpointLatencyMs: Date().timeIntervalSince(started) * 1000))
-            case .failed(let error):
-                let message = String(describing: error)
-                finish(VpnAutopilotProbeResult(dnsOk: !message.localizedCaseInsensitiveContains("dns"), endpointLatencyMs: nil, endpointProbeError: message))
-            default:
-                break
-            }
-        }
-        connection.start(queue: queue)
-    }
-}
-
-private final class EndpointProbeCompletion: @unchecked Sendable {
-    private let lock = NSLock()
-    private var finished = false
-
-    func markFinished() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        guard !finished else { return false }
-        finished = true
-        return true
-    }
-}
-
-struct VpnAutopilotProbeResult: Equatable {
-    var dnsOk: Bool?
-    var endpointLatencyMs: Double?
-    var endpointProbeError: String?
-    var httpsOk: Bool?
-    var httpsProbeError: String?
-
-    static let empty = VpnAutopilotProbeResult()
-
-    func merged(with other: VpnAutopilotProbeResult) -> VpnAutopilotProbeResult {
-        VpnAutopilotProbeResult(
-            dnsOk: other.dnsOk ?? dnsOk,
-            endpointLatencyMs: other.endpointLatencyMs ?? endpointLatencyMs,
-            endpointProbeError: other.endpointProbeError ?? endpointProbeError,
-            httpsOk: other.httpsOk ?? httpsOk,
-            httpsProbeError: other.httpsProbeError ?? httpsProbeError
-        )
-    }
-}
-
 struct VpnAutopilotAssessment: Equatable {
     var cause: VpnAutopilotCause
     var canFailover: Bool
@@ -255,7 +196,7 @@ enum NativeTunnelHealthReason: String, Equatable {
     case staleLocalHandshake = "stale_local_handshake"
 }
 
-private struct ParsedEndpoint {
+private struct ParsedEndpoint: Sendable {
     var host: String
     var port: UInt16
 

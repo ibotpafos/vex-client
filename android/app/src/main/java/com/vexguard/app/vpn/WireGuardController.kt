@@ -44,7 +44,11 @@ class WireGuardController(context: Context) {
   private val availableUnderlyingNetworks = linkedSetOf<Network>()
   private val underlyingNetworkCapabilities = linkedMapOf<Network, NetworkCapabilities>()
   @Volatile private var transitionState: String? = null
-  @Volatile private var networkRecoveryPending = false
+  private val networkRecoveryWindow = VpnNetworkRecoveryWindow(
+    VpnNetworkRecoveryTiming.MAX_PENDING_MS,
+    SystemClock::elapsedRealtime,
+    { Log.e(TAG, "VPN network recovery exceeded its existing operation budgets; resuming the control watchdog") },
+  )
   private var antiLeakArmed = false
   private var lastRoutedApplications: List<String> = emptyList()
   private var lastConfigText: String? = null
@@ -74,13 +78,7 @@ class WireGuardController(context: Context) {
   init {
     recoveryScope.launch {
       for ((previous, selected) in networkRecoveryRequests) {
-        networkRecoveryPending = true
-        try {
-          delay(NETWORK_RECOVERY_DEBOUNCE_MS)
-          recoverTunnelAfterNetworkChange(previous, selected)
-        } finally {
-          networkRecoveryPending = false
-        }
+        recoverTunnelAfterNetworkChange(previous, selected)
       }
     }
     recoveryScope.launch {
@@ -120,7 +118,7 @@ class WireGuardController(context: Context) {
 
   fun needsPermission(): Boolean = VpnService.prepare(appContext) != null
 
-  fun isNetworkRecoveryPending(): Boolean = networkRecoveryPending
+  fun isNetworkRecoveryPending(): Boolean = networkRecoveryWindow.isPending()
 
   suspend fun connect(
     wgQuickConfig: String,
@@ -408,17 +406,21 @@ class WireGuardController(context: Context) {
     else -> 0
   }
 
-  private suspend fun recoverTunnelAfterNetworkChange(previous: Network, selected: Network) = tunnelMutex.withLock {
-    val configText = lastConfigText ?: return@withLock
+  private suspend fun recoverTunnelAfterNetworkChange(previous: Network, selected: Network) = runVpnNetworkRecovery(
+    tunnelMutex,
+    networkRecoveryWindow,
+    NETWORK_RECOVERY_DEBOUNCE_MS,
+  ) {
+    val configText = lastConfigText ?: return@runVpnNetworkRecovery
     // Parse every candidate before reading or mutating tunnel/backend/blocker state.
     val recoveryCandidates = try {
       VpnConfigActivation.parseRecoveryCandidates(configText)
     } catch (error: AwgConfigValidationException) {
       Log.e(TAG, "VPN network recovery rejected invalid profile: ${error.message}")
-      return@withLock
+      return@runVpnNetworkRecovery
     }
     if (backend.getState(tunnel) != Tunnel.State.UP && !VexLeakBlockerService.isActive()) {
-      return@withLock
+      return@runVpnNetworkRecovery
     }
     transitionState = "connecting"
     Log.i(TAG, "Recovering VPN after underlying network changed from $previous to $selected")
@@ -435,9 +437,9 @@ class WireGuardController(context: Context) {
         }
         if (selectedUnderlyingNetwork != selected) {
           Log.i(TAG, "VPN socket rebind to $selected was superseded by $selectedUnderlyingNetwork")
-          return@withLock
+          return@runVpnNetworkRecovery
         }
-        return@withLock
+        return@runVpnNetworkRecovery
       }
       // Stop the native VPN service cleanly before the blocker takes ownership.
       // If the blocker revokes it first, Android may deliver a delayed onDestroy
@@ -520,9 +522,9 @@ class WireGuardController(context: Context) {
 
   companion object {
     private const val TAG = "WireGuardController"
-    private const val NETWORK_RECOVERY_DEBOUNCE_MS = 750L
-    private const val NETWORK_RECOVERY_HANDSHAKE_ATTEMPTS = 60
-    private const val NETWORK_RECOVERY_HANDSHAKE_POLL_MS = 250L
+    private const val NETWORK_RECOVERY_DEBOUNCE_MS = VpnNetworkRecoveryTiming.DEBOUNCE_MS
+    private const val NETWORK_RECOVERY_HANDSHAKE_ATTEMPTS = VpnNetworkRecoveryTiming.HANDSHAKE_ATTEMPTS
+    private const val NETWORK_RECOVERY_HANDSHAKE_POLL_MS = VpnNetworkRecoveryTiming.HANDSHAKE_POLL_MS
   }
 
   private fun Tunnel.State.toConnectionState(traffic: VpnTraffic, antiLeakEnabled: Boolean): VpnConnectionState {

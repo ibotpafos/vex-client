@@ -7,7 +7,7 @@ harness_dir="$(mktemp -d "${TMPDIR:-/tmp}/vex-ios-transitions.XXXXXX")"
 trap 'rm -rf "$harness_dir"' EXIT
 mkdir -p "$harness_dir/Sources/IosTunnelTransitionHarness" "$harness_dir/Tests/IosTunnelTransitionHarnessTests"
 cp "$root_dir/modules/vex-vpn/ios/IosTunnelTransition.swift" "$harness_dir/Sources/IosTunnelTransitionHarness/"
-cp "$root_dir/tests/ios-tunnel-transitions/IosTunnelTransitionTests.swift" "$harness_dir/Tests/IosTunnelTransitionHarnessTests/"
+cp "$root_dir"/tests/ios-tunnel-transitions/*.swift "$harness_dir/Tests/IosTunnelTransitionHarnessTests/"
 cat > "$harness_dir/Package.swift" <<'SWIFT'
 // swift-tools-version: 6.2
 import PackageDescription
@@ -17,4 +17,5 @@ let package = Package(name: "IosTunnelTransitionHarness", platforms: [.macOS(.v1
 ], swiftLanguageModes: [.v5])
 SWIFT
 swiftc -frontend -parse "$root_dir/modules/vex-vpn/ios/VexVpnModule.swift"
-swift test --package-path "$harness_dir" --filter IosTunnelTransitionTests
+swift test --package-path "$harness_dir" -j 2
+bash "$root_dir/scripts/test_ios_wgquick_parser.sh"

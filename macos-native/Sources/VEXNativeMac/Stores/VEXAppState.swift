@@ -62,6 +62,7 @@ final class VEXAppState: ObservableObject {
     private var sessionRefreshTask: (accessToken: String, task: Task<Result<AuthSession, Error>, Never>)?
     private var desiredVpnState: DesiredVpnState = .disconnected
     private var vpnOperationGeneration = 0
+    private var vpnOperationOwnership = VpnOperationOwnership()
     private var profileAccountGeneration = 0
     private var activeResiliencePolicy: ResiliencePolicy?
     private var activeResilienceRoute: ResilienceConnectionCandidate?
@@ -301,8 +302,12 @@ final class VEXAppState: ObservableObject {
                 desiredVpnState = .disconnected
                 vpnOperationGeneration += 1
                 statusMessage = "Отменяем подключение VPN."
+                let cancellationGeneration = vpnOperationGeneration
+                let accountGeneration = profileAccountGeneration
+                let interruptedOwner = vpnOperationOwnership.currentOwner
                 await helper.interruptWithDisconnect(releaseAntiLeak: !antiLeakEnabled)
-                isVpnBusy = false
+                await finishInterruptedVpnStop(using: helper, generation: cancellationGeneration,
+                    accountGeneration: accountGeneration, interruptedOwner: interruptedOwner)
             case .disconnected:
                 desiredVpnState = .connected
                 vpnOperationGeneration += 1
@@ -322,8 +327,12 @@ final class VEXAppState: ObservableObject {
             desiredVpnState = .disconnected
             vpnOperationGeneration += 1
             statusMessage = "Отменяем подключение VPN."
+            let cancellationGeneration = vpnOperationGeneration
+            let accountGeneration = profileAccountGeneration
+            let interruptedOwner = vpnOperationOwnership.currentOwner
             await helper.interruptWithDisconnect(releaseAntiLeak: !antiLeakEnabled)
-            isVpnBusy = false
+            await finishInterruptedVpnStop(using: helper, generation: cancellationGeneration,
+                accountGeneration: accountGeneration, interruptedOwner: interruptedOwner)
         case .disconnecting:
             desiredVpnState = .connected
             vpnOperationGeneration += 1
@@ -347,8 +356,8 @@ final class VEXAppState: ObservableObject {
             statusMessage = desiredVpnState == .connected ? "Операция VPN уже выполняется." : "Отменяем подключение VPN."
             return
         }
-        isVpnBusy = true
-        defer { isVpnBusy = false }
+        let busyOwner = beginVpnOperation()
+        defer { finishVpnOperation(busyOwner) }
 
         let accountGeneration = profileAccountGeneration
         let accountUserId = session?.user.id
@@ -356,6 +365,9 @@ final class VEXAppState: ObservableObject {
               let accountUserId,
               sessionUserId(for: token) == accountUserId,
               vpnOperationGeneration == generation else {
+            guard profileAccountGeneration == accountGeneration,
+                  vpnOperationGeneration == generation,
+                  session?.user.id == accountUserId else { return }
             statusMessage = "Сначала войдите в аккаунт."
             return
         }
@@ -405,15 +417,21 @@ final class VEXAppState: ObservableObject {
                 await api.reportVpnConnect(accessToken: tunnelToken, tunnel: connectedTunnel)
             }
         } catch is CancellationError {
-            guard session?.user.id == accountUserId, profileAccountGeneration == accountGeneration else { return }
+            guard session?.user.id == accountUserId, profileAccountGeneration == accountGeneration,
+                  vpnOperationGeneration == generation else { return }
             await helper.interruptWithDisconnect(releaseAntiLeak: !antiLeakEnabled)
+            guard session?.user.id == accountUserId, profileAccountGeneration == accountGeneration,
+                  vpnOperationGeneration == generation else { return }
             clearActiveTunnelRouteState()
             statusMessage = "Подключение VPN отменено."
         } catch {
-            guard session?.user.id == accountUserId, profileAccountGeneration == accountGeneration else { return }
+            guard session?.user.id == accountUserId, profileAccountGeneration == accountGeneration,
+                  vpnOperationGeneration == generation else { return }
             statusMessage = connectErrorMessage(error)
             if !error.localizedDescription.contains("VPN_CONFIG_INVALID") {
                 await helper.interruptWithDisconnect(releaseAntiLeak: true)
+                guard session?.user.id == accountUserId, profileAccountGeneration == accountGeneration,
+                      vpnOperationGeneration == generation else { return }
                 clearActiveTunnelRouteState()
             } else {
                 activeResilienceRoute = nil
@@ -544,7 +562,9 @@ final class VEXAppState: ObservableObject {
                 desiredVpnState == .connected && vpnOperationGeneration == generation
             })
             try ensureConnectStillDesired(generation: generation)
-            await helper.connect(antiLeakEnabled: antiLeakEnabled)
+            await helper.connect(antiLeakEnabled: antiLeakEnabled, shouldConnect: { [self] in
+                desiredVpnState == .connected && vpnOperationGeneration == generation
+            })
             if helper.lastConnectAdmissionRejected {
                 throw VpnAutopilotRuntimeError.connectFailed("VPN_CONFIG_INVALID: next profile admission failed")
             }
@@ -670,7 +690,9 @@ final class VEXAppState: ObservableObject {
     }
 
     private func performDisconnectVPN(using helper: VEXHelperModel, reason: String, generation: Int) async {
+        guard vpnOperationGeneration == generation else { return }
         if helper.status.state == .disconnected, !helper.isBusy {
+            invalidateVpnOperation()
             clearActiveTunnelRouteState()
             statusMessage = "VPN отключен."
             if desiredVpnState == .connected {
@@ -679,24 +701,47 @@ final class VEXAppState: ObservableObject {
             }
             return
         }
-        if isVpnBusy, helper.status.state == .connecting {
+        if isVpnBusy, helper.status.state == .connecting || helper.status.state == .connected {
             statusMessage = "Отменяем подключение VPN."
+            let cancellationGeneration = vpnOperationGeneration
+            let accountGeneration = profileAccountGeneration
+            let interruptedOwner = vpnOperationOwnership.currentOwner
             await helper.interruptWithDisconnect(releaseAntiLeak: !antiLeakEnabled)
-            isVpnBusy = false
-            clearActiveTunnelRouteState()
+            await finishInterruptedVpnStop(using: helper, generation: cancellationGeneration,
+                accountGeneration: accountGeneration, interruptedOwner: interruptedOwner)
             return
         }
         guard !isVpnBusy, !helper.isBusy else {
             statusMessage = desiredVpnState == .connected ? "Подключим VPN после текущей операции." : "Отключаем VPN."
             return
         }
-        isVpnBusy = true
-        await helper.disconnect(releaseAntiLeak: !antiLeakEnabled)
+        let busyOwner = beginVpnOperation()
+        defer { finishVpnOperation(busyOwner) }
+        let accountGeneration = profileAccountGeneration
+        let accountUserId = session?.user.id
         let reportedTunnel = activeTunnel
+        let reportToken = accessToken
+        await helper.disconnect(releaseAntiLeak: !antiLeakEnabled)
+        guard vpnOperationOwnership.owns(busyOwner),
+              profileAccountGeneration == accountGeneration,
+              session?.user.id == accountUserId else { return }
+        finishVpnOperation(busyOwner)
+        guard vpnOperationGeneration == generation else {
+            // A connect requested during this down already supplied its intent
+            // and generation. Complete it without manufacturing another one.
+            if desiredVpnState == .connected, !helper.isBusy {
+                await performConnectVPN(using: helper, generation: vpnOperationGeneration)
+            } else if desiredVpnState == .disconnected, helper.status.state == .disconnected {
+                // Complete the latest stop synchronously while this down still
+                // owns the same account; a replacement owner was excluded above.
+                clearActiveTunnelRouteState()
+                statusMessage = "VPN отключен."
+            }
+            return
+        }
         clearActiveTunnelRouteState()
         statusMessage = "VPN отключен."
-        isVpnBusy = false
-        if let token = accessToken {
+        if let token = reportToken {
             Task { [api] in
                 await api.reportVpnDisconnect(accessToken: token, tunnel: reportedTunnel, reason: reason)
             }
@@ -706,6 +751,41 @@ final class VEXAppState: ObservableObject {
             vpnOperationGeneration += 1
             await performConnectVPN(using: helper, generation: vpnOperationGeneration)
         }
+    }
+
+    private func finishInterruptedVpnStop(
+        using helper: VEXHelperModel, generation: Int, accountGeneration: Int,
+        interruptedOwner: UUID?
+    ) async {
+        guard profileAccountGeneration == accountGeneration else { return }
+        if vpnOperationGeneration == generation {
+            invalidateVpnOperation()
+            clearActiveTunnelRouteState()
+            return
+        }
+        guard desiredVpnState == .connected, !helper.isBusy,
+              helper.status.state == .disconnected else { return }
+        let stillOwnsInterruptedWork = interruptedOwner.map { vpnOperationOwnership.owns($0) } ?? false
+        guard stillOwnsInterruptedWork || (vpnOperationOwnership.currentOwner == nil && !isVpnBusy) else { return }
+        if let interruptedOwner { finishVpnOperation(interruptedOwner) }
+        clearActiveTunnelRouteState()
+        // The newer power-on already supplied the desired state and generation.
+        await performConnectVPN(using: helper, generation: vpnOperationGeneration)
+    }
+
+    private func beginVpnOperation() -> UUID {
+        let owner = vpnOperationOwnership.begin()
+        isVpnBusy = true
+        return owner
+    }
+
+    private func finishVpnOperation(_ owner: UUID) {
+        if vpnOperationOwnership.finish(owner) { isVpnBusy = false }
+    }
+
+    private func invalidateVpnOperation() {
+        vpnOperationOwnership.invalidate()
+        isVpnBusy = false
     }
 
     private func ensureConnectStillDesired(generation: Int) throws {
@@ -728,8 +808,8 @@ final class VEXAppState: ObservableObject {
             serverSidebarOperation = .failed(statusMessage ?? "VPN занят.")
             return false
         }
-        isVpnBusy = true
-        defer { isVpnBusy = false }
+        let busyOwner = beginVpnOperation()
+        defer { finishVpnOperation(busyOwner) }
 
         let accountGeneration = profileAccountGeneration
         let accountUserId = session?.user.id
@@ -738,6 +818,9 @@ final class VEXAppState: ObservableObject {
               let accountUserId,
               sessionUserId(for: token) == accountUserId,
               vpnOperationGeneration == startingGeneration else {
+            guard profileAccountGeneration == accountGeneration,
+                  vpnOperationGeneration == startingGeneration,
+                  session?.user.id == accountUserId else { return false }
             statusMessage = "Сначала войдите в аккаунт."
             serverSidebarOperation = .failed(statusMessage ?? "Сначала войдите в аккаунт.")
             return false
@@ -800,7 +883,8 @@ final class VEXAppState: ObservableObject {
 
             throw VpnAutopilotRuntimeError.connectFailed(helper.message ?? "VPN switch failed.")
         } catch is CancellationError {
-            guard session?.user.id == accountUserId, profileAccountGeneration == accountGeneration else { return false }
+            guard session?.user.id == accountUserId, profileAccountGeneration == accountGeneration,
+                  vpnOperationGeneration == generation else { return false }
             clearActiveTunnelRouteState()
             statusMessage = "Переключение сервера отменено."
             serverSidebarOperation = .failed(statusMessage ?? "Переключение сервера отменено.")
@@ -817,7 +901,13 @@ final class VEXAppState: ObservableObject {
                     })
                     try ensureProfileSession(accountUserId: accountUserId, generation: generation)
                 } catch { return false }
-                await helper.connect(antiLeakEnabled: antiLeakEnabled)
+                await helper.connect(antiLeakEnabled: antiLeakEnabled, shouldConnect: { [self] in
+                    desiredVpnState == .connected && session?.user.id == accountUserId
+                        && profileAccountGeneration == accountGeneration && vpnOperationGeneration == generation
+                })
+                guard session?.user.id == accountUserId,
+                      profileAccountGeneration == accountGeneration,
+                      vpnOperationGeneration == generation else { return false }
             } else {
                 clearActiveTunnelRouteState()
             }
@@ -1090,13 +1180,23 @@ final class VEXAppState: ObservableObject {
     }
 
     func recoverTunnelIfNeeded(using helper: VEXHelperModel) async {
-        guard autoRecoveryEnabled, helper.status.isUsableConnectedStatus, !helper.isBusy else { return }
-        let usage: VpnDeviceUsage?
-        if let token = accessToken {
-            usage = await autopilotService.usage(accessToken: token, deviceId: activeTunnel?.device.id)
-        } else {
-            usage = nil
+        guard autoRecoveryEnabled, helper.status.isUsableConnectedStatus,
+              !isVpnBusy, !helper.isBusy, let token = accessToken,
+              let userId = session?.user.id, let observedTunnel = activeTunnel else { return }
+        let intent = VpnRecoveryIntent(userId: userId,
+                                       accountGeneration: profileAccountGeneration,
+                                       operationGeneration: vpnOperationGeneration)
+        func stillOwnsConnectedIntent() -> Bool {
+            !Task.isCancelled && autoRecoveryEnabled && !isVpnBusy && !helper.isBusy
+                && activeTunnel?.device.id == observedTunnel.device.id
+                && intent.matchesConnectedIntent(userId: session?.user.id,
+                    accountGeneration: profileAccountGeneration,
+                    operationGeneration: vpnOperationGeneration,
+                    wantsConnected: desiredVpnState == .connected)
         }
+        guard stillOwnsConnectedIntent() else { return }
+        let usage = await autopilotService.usage(accessToken: token, deviceId: observedTunnel.device.id)
+        guard stillOwnsConnectedIntent() else { return }
         let healthReasons = autopilotService.healthReasons(status: helper.status, usage: usage)
         guard tunnelHealthLooksStale(helper.status) || !healthReasons.isEmpty else { return }
         let previousLocationId = targetLocationId
@@ -1126,12 +1226,19 @@ final class VEXAppState: ObservableObject {
                 "usage_seconds_since_handshake": usage?.secondsSinceHandshake.map(String.init) ?? "",
             ]) { current, _ in current }
         )
+        guard stillOwnsConnectedIntent() else { return }
         statusMessage = assessment.userMessage
         // Keep the current location selected so connectWithAutopilot can try
         // same-exit dynamic candidates (direct -> relay) before it considers an
         // alternate exit. This preserves locality while still allowing the
         // existing autopilot to switch locations if every same-exit path fails.
         await disconnectVPN(using: helper, reason: "watchdog_recovery")
+        guard !Task.isCancelled, autoRecoveryEnabled, !isVpnBusy, !helper.isBusy,
+              helper.status.state == .disconnected,
+              intent.matchesRecoveryDisconnect(userId: session?.user.id,
+                  accountGeneration: profileAccountGeneration,
+                  operationGeneration: vpnOperationGeneration,
+                  wantsConnected: desiredVpnState == .connected) else { return }
         await connectVPN(using: helper)
     }
 
@@ -1732,8 +1839,13 @@ final class VEXAppState: ObservableObject {
 
     private func restoreActiveTunnelIfHelperIsConnected(_ helperStatus: VpnStatus?) async {
         guard let helperStatus, helperStatus.isUsableConnectedStatus, activeTunnel == nil else { return }
+        let generation = vpnOperationGeneration
+        let accountGeneration = profileAccountGeneration
         await prepareSelectedProfile(forceRefresh: false)
+        guard !Task.isCancelled, vpnOperationGeneration == generation,
+              profileAccountGeneration == accountGeneration else { return }
         if let activeTunnel, tunnel(activeTunnel, matches: helperStatus) {
+            desiredVpnState = .connected
             statusMessage = "VPN подключен через \(selectedLocation?.displayName ?? activeTunnel.locationId.uppercased())."
         } else {
             clearActiveTunnelRouteState()

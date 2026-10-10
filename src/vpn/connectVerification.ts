@@ -18,10 +18,10 @@ export async function waitForVerifiedVpnConnection(
   readStatus: () => Promise<VpnStatus>,
   options: HandshakeVerificationOptions = {},
 ): Promise<VpnStatus> {
-  if (initialStatus.state !== 'connected') {
+  if (initialStatus.state !== 'connected' && initialStatus.state !== 'connecting' && initialStatus.state !== 'verifying') {
     throw new Error('VPN backend did not enter the connected state.');
   }
-  if (isHandshakeVerifiedForAttempt(initialStatus, options)) {
+  if (initialStatus.state === 'connected' && isHandshakeVerifiedForAttempt(initialStatus, options)) {
     return initialStatus;
   }
 
@@ -45,9 +45,8 @@ export async function waitForVerifiedVpnConnection(
     if (attempt > 0) await withDeadline(() => wait(pollMs), remaining());
     latestStatus = await withDeadline(readStatus, remaining());
     remaining();
-    // Android can emit a transition snapshot while the native status reader
-    // holds tunnelMutex. It is not a terminal disconnect, and must not roll a
-    // working server switch back. Keep the same bounded verification budget.
+    // Native tunnel activation and status reads can return a pending snapshot.
+    // Keep the same bounded budget until a connected handshake is verified.
     if (latestStatus.state === 'connecting' || latestStatus.state === 'verifying') {
       continue;
     }

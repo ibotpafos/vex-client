@@ -33,7 +33,7 @@ existing published Windows artifacts remain available until those gates pass.
 | Home | Status restoration, connect/disconnect, autopilot, manual location, latency, server switching | Real tunnel traffic, kill/restart, sleep/wake, network handover |
 | VPN safety | Wintun/AmneziaWG lifecycle, DNS and route cleanup, anti-leak, control-plane bypass | IPv4/IPv6/DNS leak checks and protected-host access |
 | Account | User, devices, usage, entitlement and the shared website billing dashboard | Production read-only API contract fixtures and browser return |
-| Support | Tickets, real-time chat, optimistic send, diagnostics attachment | Reconnect, duplicate event, queued diagnostic retry |
+| Support | Open the shared VEX support website from Settings, matching macOS | Website action available with or without a signed-in session |
 | Settings | Startup, biometric lock, diagnostics, update center, quit behavior | Reboot, service recovery, required update |
 | Shell | Single instance, protocol activation, system tray, show/hide, connect/disconnect, quit | Repeated launch and tray-only operation |
 | Updates | Signed MSIX/App Installer, staged rollout, required update, rollback | Upgrade and downgrade drill |
@@ -60,7 +60,7 @@ operation retain status, recovery and diagnostics retries. Recovery preserves
 manual location pins, exhausts qualified ingress paths for the same exit,
 refreshes its signed profile, and allows an alternate exit in automatic mode. Subscription expiry and session
 revocation prevent cached-profile reconnects. Google/email authentication,
-website billing, support message reconciliation and incident configuration
+website billing, website support and incident configuration
 follow the current macOS product flows.
 
 Home uses the macOS dark/cyan palette, six animated focus rings, traffic
@@ -128,7 +128,7 @@ must still be exercised on Windows before production promotion.
    AmneziaWG/Wintun lifecycle, status restoration, anti-leak, diagnostics.
 3. **Auth and control plane**: PKCE/OTP, DPAPI-protected identity, profile/key
    lifecycle, locations, entitlement, connect reporting.
-4. **Full product parity**: account/billing, support socket, settings, tray,
+4. **Full product parity**: account/billing, website support, settings, tray,
    Windows Hello, update center.
 5. **Release hardening**: x64/arm64 packages, Authenticode, install/upgrade
    migration, crash and lifecycle matrix, canary rollout.

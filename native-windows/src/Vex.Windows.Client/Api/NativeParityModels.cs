@@ -92,9 +92,6 @@ public sealed record ClientDiagnosticsReport(
     [property: JsonPropertyName("tx_bytes")] long TxBytes,
     [property: JsonPropertyName("samples")] IReadOnlyDictionary<string, string> Samples);
 
-internal sealed record SupportSocketTicketResponse(
-    [property: JsonPropertyName("ticket")] string? Ticket);
-
 public sealed record ClientAppMetadata(
     string Platform,
     string AppVersion,

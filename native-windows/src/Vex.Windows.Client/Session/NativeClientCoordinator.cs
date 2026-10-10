@@ -76,10 +76,6 @@ public sealed record NativeDeviceState(
     string LocationId,
     WireGuardIdentity Identity);
 
-public sealed record NativeSupportSnapshot(
-    IReadOnlyList<SupportTicket> Tickets,
-    SupportTicket? ActiveTicket);
-
 public sealed class NativeClientFlowException : Exception
 {
     public NativeClientFlowException(string code)
@@ -1136,88 +1132,6 @@ public sealed partial class NativeClientCoordinator
         }
     }
 
-    public async Task<NativeSupportSnapshot> GetSupportSnapshotAsync(
-        CancellationToken cancellationToken)
-    {
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            var state = RequireCurrentState();
-            state = await RefreshIfNeededAsync(
-                state,
-                cancellationToken).ConfigureAwait(false);
-            var tickets = await _api.GetSupportTicketsAsync(
-                state.Session.AccessToken,
-                cancellationToken).ConfigureAwait(false);
-            return BuildSupportSnapshot(tickets);
-        }
-        finally
-        {
-            _gate.Release();
-        }
-    }
-
-    public async Task<SupportTicket> SendSupportMessageAsync(
-        string message,
-        string? subject,
-        CancellationToken cancellationToken)
-    {
-        message = message.Trim();
-        if (message.Length == 0)
-        {
-            throw new ArgumentException(
-                "Support message is required.",
-                nameof(message));
-        }
-
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            var state = _stateStore.Load() ??
-                throw new NativeClientFlowException("sign_in_required");
-            state = await RefreshIfNeededAsync(
-                state,
-                cancellationToken).ConfigureAwait(false);
-            var tickets = await _api.GetSupportTicketsAsync(
-                state.Session.AccessToken,
-                cancellationToken).ConfigureAwait(false);
-            var active = FindActiveSupportTicket(tickets);
-            var resolvedSubject = ResolveSupportSubject(
-                active,
-                subject,
-                message);
-            return await _api.CreateSupportTicketAsync(
-                state.Session.AccessToken,
-                resolvedSubject,
-                message,
-                "windows_native",
-                cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            _gate.Release();
-        }
-    }
-
-    public async Task<Uri> GetSupportWebSocketUriAsync(
-        CancellationToken cancellationToken)
-    {
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            var state = await RefreshIfNeededAsync(
-                RequireCurrentState(),
-                cancellationToken).ConfigureAwait(false);
-            return await _api.GetSupportWebSocketUriAsync(
-                state.Session.AccessToken,
-                cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            _gate.Release();
-        }
-    }
-
     public async Task SubmitClientDiagnosticsAsync(
         ClientDiagnosticsReport report,
         CancellationToken cancellationToken)
@@ -1402,66 +1316,4 @@ public sealed partial class NativeClientCoordinator
         }
     }
 
-    private static NativeSupportSnapshot BuildSupportSnapshot(
-        IReadOnlyList<SupportTicket> tickets) =>
-        new(
-            tickets,
-            FindActiveSupportTicket(tickets));
-
-    private static SupportTicket? FindActiveSupportTicket(
-        IReadOnlyList<SupportTicket> tickets) =>
-        tickets.FirstOrDefault(ticket =>
-            !IsClosedSupportTicket(ticket.Status));
-
-    private static string ResolveSupportSubject(
-        SupportTicket? activeTicket,
-        string? subject,
-        string message)
-    {
-        if (activeTicket is not null)
-        {
-            return activeTicket.Subject;
-        }
-
-        subject = string.IsNullOrWhiteSpace(subject)
-            ? BuildSupportSubject(message)
-            : subject.Trim();
-        if (subject.Length == 0)
-        {
-            throw new ArgumentException(
-                "Support subject is required.",
-                nameof(subject));
-        }
-
-        return subject;
-    }
-
-    private static string BuildSupportSubject(string message)
-    {
-        var firstLine = message
-            .Split(
-                ["\r\n", "\n"],
-                StringSplitOptions.None)
-            .FirstOrDefault(line => !string.IsNullOrWhiteSpace(line))
-            ?.Trim();
-        if (string.IsNullOrEmpty(firstLine))
-        {
-            return "Вопрос в поддержку";
-        }
-
-        return firstLine.Length > 46
-            ? firstLine[..43] + "..."
-            : firstLine;
-    }
-
-    private static bool IsClosedSupportTicket(string status)
-    {
-        status = status.Trim();
-        return status.Equals(
-                   "closed",
-                   StringComparison.OrdinalIgnoreCase) ||
-               status.Equals(
-                   "resolved",
-                   StringComparison.OrdinalIgnoreCase);
-    }
 }

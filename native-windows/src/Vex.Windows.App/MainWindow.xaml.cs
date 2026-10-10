@@ -73,7 +73,6 @@ public sealed partial class MainWindow : Window
 
         HomeNavigationButton.IsChecked = section == AppSection.Home;
         AccountNavigationButton.IsChecked = section == AppSection.Account;
-        SupportNavigationButton.IsChecked = section == AppSection.Support;
         _currentSection = section;
         RenderShellState();
     }
@@ -122,7 +121,6 @@ public sealed partial class MainWindow : Window
     {
         HomeNavigationButton.Tag = AppSection.Home;
         AccountNavigationButton.Tag = AppSection.Account;
-        SupportNavigationButton.Tag = AppSection.Support;
         SettingsNavigationButton.Tag = AppSection.Settings;
     }
 
@@ -303,7 +301,6 @@ public sealed partial class MainWindow : Window
         var pageTitle = _currentSection switch
         {
             AppSection.Account when _hasAuthenticatedSession => "Аккаунт",
-            AppSection.Support => "Поддержка",
             AppSection.Settings => "Настройки",
             _ => string.Empty,
         };
@@ -314,14 +311,11 @@ public sealed partial class MainWindow : Window
 
         HomeNavigationButton.IsChecked =
             _currentSection == AppSection.Home;
-        SupportNavigationButton.IsChecked =
-            _currentSection == AppSection.Support;
         AccountNavigationButton.IsChecked =
             _currentSection == AppSection.Account;
         SettingsNavigationButton.IsChecked =
             _currentSection == AppSection.Settings;
         AccountNavigationButton.Visibility = _hasAuthenticatedSession ? Visibility.Visible : Visibility.Collapsed;
-        SupportNavigationButton.Visibility = _hasAuthenticatedSession ? Visibility.Visible : Visibility.Collapsed;
         RenderBackdrop();
         RenderUpdateState();
     }
@@ -402,7 +396,6 @@ public sealed partial class MainWindow : Window
             AppSection.Home when !_hasAuthenticatedSession => typeof(AccountPage),
             AppSection.Home => typeof(HomePage),
             AppSection.Account => typeof(AccountPage),
-            AppSection.Support => typeof(SupportPage),
             AppSection.Settings => typeof(SettingsPage),
             _ => typeof(HomePage),
         };
@@ -451,7 +444,7 @@ public sealed partial class MainWindow : Window
         if (_accentStop is null || _accentFadeStop is null) return;
         var color = _currentSection switch
         {
-            AppSection.Account or AppSection.Support => global::Windows.UI.Color.FromArgb(38, 107, 184, 255),
+            AppSection.Account => global::Windows.UI.Color.FromArgb(38, 107, 184, 255),
             AppSection.Settings => global::Windows.UI.Color.FromArgb(38, 140, 158, 255),
             _ => global::Windows.UI.Color.FromArgb(38, 34, 211, 238),
         };

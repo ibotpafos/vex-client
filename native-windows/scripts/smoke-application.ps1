@@ -65,6 +65,8 @@ $result = [ordered]@{
     preview_mode = $PreviewMode
     screenshots = @()
     navigation_checks = @()
+    embedded_chat_absent = $false
+    support_website_available = $false
     single_instance_redirected = $false
     close_to_tray = $false
     second_launch_restored_window = $false
@@ -384,6 +386,61 @@ function Save-SmokeScreenshot {
     }
 }
 
+function Save-SmokeSupportWebsiteScreenshot {
+    $viewport = Find-SmokeElement -AutomationId 'SettingsScrollViewer'
+    if ($null -eq $viewport -or $viewport.Current.IsOffscreen) {
+        throw 'Settings scroll viewport is unavailable.'
+    }
+    $pattern = $null
+    if (-not $viewport.TryGetCurrentPattern([Windows.Automation.ScrollPattern]::Pattern, [ref]$pattern)) {
+        throw 'Settings viewport does not provide its scroll interaction pattern.'
+    }
+    $scroll = [Windows.Automation.ScrollPattern]$pattern
+    $originalPercent = $scroll.Current.VerticalScrollPercent
+    $state = @{ requested_percent = $originalPercent }
+    try {
+        Wait-SmokeCondition -TimeoutSeconds 15 -Failure 'Website support link is not fully visible in Settings.' -Condition {
+            $button = Find-SmokeElement -AutomationId 'SettingsSupportWebsiteButton'
+            if ($null -ne $button -and -not $button.Current.IsOffscreen) {
+                $rect = $button.Current.BoundingRectangle
+                $visible = $viewport.Current.BoundingRectangle
+                if (-not $rect.IsEmpty -and $rect.Width -gt 0 -and $rect.Height -gt 0 -and
+                    $rect.Left -ge $visible.Left -and $rect.Right -le $visible.Right -and
+                    $rect.Top -ge $visible.Top -and $rect.Bottom -le $visible.Bottom) {
+                    if (-not $button.Current.IsEnabled -or $button.Current.Name -cne 'Поддержка на сайте') {
+                        throw 'Website support link is disabled or has an unexpected accessible name.'
+                    }
+                    return $true
+                }
+            }
+            if (-not $scroll.Current.VerticallyScrollable) {
+                throw 'Website support link is absent from the non-scrolling Settings viewport.'
+            }
+            $currentPercent = $scroll.Current.VerticalScrollPercent
+            # Await the requested movement before advancing. Half a viewport
+            # keeps successive ranges overlapping so a short link is not skipped.
+            if ([Math]::Abs($currentPercent - $state.requested_percent) -le 0.2) {
+                if ($currentPercent -ge 100) { throw 'Website support link was not found within Settings.' }
+                $step = [Math]::Max(1, [Math]::Min(20, $scroll.Current.VerticalViewSize / 2))
+                $state.requested_percent = [Math]::Min(100, $currentPercent + $step)
+                $scroll.SetScrollPercent([Windows.Automation.ScrollPattern]::NoScroll, $state.requested_percent)
+            }
+            return $false
+        }
+        Save-SmokeScreenshot -Name 'settings-support-link' -StableAutomationIds @('SettingsSupportWebsiteButton')
+        $result.support_website_available = $true
+        Write-Host "WinUI website support checked: $PreviewMode; visible=True; enabled=True; expected-name=True."
+    }
+    finally {
+        if ($originalPercent -ge 0 -and $scroll.Current.VerticallyScrollable) {
+            $scroll.SetScrollPercent([Windows.Automation.ScrollPattern]::NoScroll, $originalPercent)
+            Wait-SmokeCondition -Failure 'Settings scroll position was not restored after support link capture.' -Condition {
+                [Math]::Abs($scroll.Current.VerticalScrollPercent - $originalPercent) -le 0.2
+            }
+        }
+    }
+}
+
 try {
     $launch = @{
         FilePath = $ApplicationPath
@@ -464,12 +521,18 @@ namespace Vex.Windows.Smoke {
         else { @('PowerButton', 'ServerPickerButton') }
         Save-SmokeScreenshot -Name 'initial' -StableAutomationIds $captureControlIds
         $pages = if ($PreviewMode -eq 'signed-out') { @('Home', 'Settings') }
-            else { @('Home', 'Account', 'Support', 'Settings') }
+            else { @('Home', 'Account', 'Settings') }
+        foreach ($removedControlId in @('SupportNavigationButton', 'SupportMessageInput', 'SendSupportMessageButton')) {
+            if ($null -ne (Find-SmokeElement -AutomationId $removedControlId)) {
+                throw 'The desktop still exposes embedded support chat.'
+            }
+        }
+        $result.embedded_chat_absent = $true
         if ($PreviewMode -eq 'signed-out') {
-            foreach ($hiddenNavigationId in @('AccountNavigationButton', 'SupportNavigationButton')) {
+            foreach ($hiddenNavigationId in @('AccountNavigationButton')) {
                 $element = Find-SmokeElement -AutomationId $hiddenNavigationId
                 if ($null -ne $element -and -not $element.Current.IsOffscreen) {
-                    throw 'Signed-out preview exposes account or support navigation.'
+                    throw 'Signed-out preview exposes account navigation.'
                 }
             }
         }
@@ -485,7 +548,6 @@ namespace Vex.Windows.Smoke {
                 switch ($page) {
                     'Home' { 'PowerButton' }
                     'Account' { 'RefreshBillingButton' }
-                    'Support' { 'RefreshSupportButton' }
                     'Settings' { 'AutoLaunchToggle' }
                 }
             }
@@ -504,11 +566,14 @@ namespace Vex.Windows.Smoke {
                 switch ($page) {
                     'Home' { @('PowerButton', 'ServerPickerButton') }
                     'Account' { @('AccountPageTitle', 'RefreshBillingButton') }
-                    'Support' { @('SupportPageTitle', 'RefreshSupportButton') }
                     'Settings' { @('SettingsPageTitle', 'AutoLaunchToggle') }
                 }
             }
             Save-SmokeScreenshot -Name $page.ToLowerInvariant() -StableAutomationIds $captureControlIds
+            if ($page -eq 'Settings') {
+                $result.stage = 'settings-support-link'
+                Save-SmokeSupportWebsiteScreenshot
+            }
             if ($page -eq 'Home' -and $PreviewMode -eq 'fixtures') {
                 $result.stage = 'home-compact'
                 $normalBounds = [Vex.Windows.Smoke.WindowRect]::new()

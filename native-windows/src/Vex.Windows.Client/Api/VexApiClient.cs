@@ -133,21 +133,6 @@ public interface INativeClientApi
         ClientDiagnosticsReport report,
         CancellationToken cancellationToken);
 
-    Task<IReadOnlyList<SupportTicket>> GetSupportTicketsAsync(
-        string accessToken,
-        CancellationToken cancellationToken);
-
-    Task<SupportTicket> CreateSupportTicketAsync(
-        string accessToken,
-        string subject,
-        string message,
-        string source,
-        CancellationToken cancellationToken);
-
-    Task<Uri> GetSupportWebSocketUriAsync(
-        string accessToken,
-        CancellationToken cancellationToken);
-
     Task<AppRemoteConfig> GetRemoteConfigAsync(
         ClientAppMetadata metadata,
         CancellationToken cancellationToken);
@@ -731,89 +716,6 @@ public sealed class VexApiClient : INativeClientApi
         await SendWithoutResponseAsync(
             request,
             cancellationToken).ConfigureAwait(false);
-    }
-
-    public async Task<IReadOnlyList<SupportTicket>> GetSupportTicketsAsync(
-        string accessToken,
-        CancellationToken cancellationToken)
-    {
-        using var request = Authorized(
-            HttpMethod.Get,
-            "/v1/support-tickets",
-            accessToken);
-        var tickets = await SendAsync<List<SupportTicket>?>(
-            request,
-            cancellationToken).ConfigureAwait(false);
-        return (tickets ?? []).Select(SupportModelNormalization.NormalizeTicket).ToArray();
-    }
-
-    public async Task<SupportTicket> CreateSupportTicketAsync(
-        string accessToken,
-        string subject,
-        string message,
-        string source,
-        CancellationToken cancellationToken)
-    {
-        subject = subject.Trim();
-        message = message.Trim();
-        source = source.Trim();
-        if (subject.Length == 0 ||
-            message.Length == 0 ||
-            source.Length == 0)
-        {
-            throw new ArgumentException("Support ticket payload is invalid.");
-        }
-
-        using var request = Authorized(
-            HttpMethod.Post,
-            "/v1/support-tickets",
-            accessToken);
-        request.Headers.Add(
-            "Idempotency-Key",
-            $"native-windows-support-{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}");
-        request.Content = JsonContent.Create(new
-        {
-            subject,
-            message,
-            source,
-        });
-        var ticket = await SendAsync<SupportTicket>(
-            request,
-            cancellationToken).ConfigureAwait(false);
-        return SupportModelNormalization.NormalizeTicket(ticket);
-    }
-
-    public async Task<Uri> GetSupportWebSocketUriAsync(
-        string accessToken,
-        CancellationToken cancellationToken)
-    {
-        using var request = Authorized(
-            HttpMethod.Get,
-            "/v1/support-ws-ticket",
-            accessToken);
-        var response = await SendAsync<SupportSocketTicketResponse>(
-            request,
-            cancellationToken).ConfigureAwait(false);
-        var ticket = response.Ticket?.Trim();
-        if (string.IsNullOrEmpty(ticket))
-        {
-            throw new VexApiException(
-                HttpStatusCode.BadGateway,
-                "support_socket_ticket_invalid");
-        }
-
-        var builder = new UriBuilder(_httpClient.BaseAddress!)
-        {
-            Scheme = _httpClient.BaseAddress!.Scheme == Uri.UriSchemeHttps
-                ? "wss"
-                : "ws",
-            Port = _httpClient.BaseAddress!.IsDefaultPort
-                ? -1
-                : _httpClient.BaseAddress.Port,
-            Path = "/v1/support-ws",
-            Query = "ticket=" + Uri.EscapeDataString(ticket),
-        };
-        return builder.Uri;
     }
 
     public Task<AppRemoteConfig> GetRemoteConfigAsync(

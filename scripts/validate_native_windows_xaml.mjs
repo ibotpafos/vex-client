@@ -180,7 +180,6 @@ for (const parityToken of [
 
 for (const [pageName, maximum] of [
   ["AccountPage.xaml", 680],
-  ["SupportPage.xaml", 600],
   ["SettingsPage.xaml", 680],
 ]) {
   const pagePath = path.join(appRoot, "Views", pageName);

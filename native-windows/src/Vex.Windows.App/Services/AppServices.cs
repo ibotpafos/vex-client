@@ -97,10 +97,6 @@ public sealed class AppServices
         BackgroundVpn = new NativeVpnBackgroundHost(this);
         ProfileWarmup = new NativeProfileWarmupHost(this);
         ServiceMaintenance = new WindowsServiceMaintenanceService(VpnClient.GetDiagnosticsAsync);
-        SupportSocketClient.Current.ConfigureEndpointProvider(
-            (_, cancellationToken) =>
-                Coordinator.GetSupportWebSocketUriAsync(
-                    cancellationToken));
         DiagnosticsQueueService.Current.ConfigureUploader(
             UploadQueuedDiagnosticsAsync);
         Coordinator.SessionChanged += OnCoordinatorSessionChanged;

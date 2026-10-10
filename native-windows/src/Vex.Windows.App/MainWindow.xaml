@@ -87,17 +87,6 @@
                         <FontIcon FontSize="16" Glyph="&#xE80F;" />
                     </ToggleButton>
                     <ToggleButton
-                        x:Name="SupportNavigationButton"
-                        Width="46"
-                        Height="38"
-                        AutomationProperties.AutomationId="SupportNavigationButton"
-                        AutomationProperties.Name="Поддержка"
-                        Click="OnNavigationButtonClick"
-                        Style="{StaticResource VexDockButtonStyle}"
-                        ToolTipService.ToolTip="Поддержка">
-                        <FontIcon FontSize="16" Glyph="&#xE8BD;" />
-                    </ToggleButton>
-                    <ToggleButton
                         x:Name="AccountNavigationButton"
                         Width="46"
                         Height="38"
@@ -163,10 +152,6 @@
             x:Name="AccountNavigationLabel"
             Visibility="Collapsed"
             Text="Аккаунт" />
-        <TextBlock
-            x:Name="SupportNavigationLabel"
-            Visibility="Collapsed"
-            Text="Поддержка" />
         <TextBlock
             x:Name="SettingsNavigationLabel"
             Visibility="Collapsed"

@@ -309,12 +309,18 @@ final class NativeParityModelTests: XCTestCase {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let appStateURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Stores/VEXAppState.swift")
         let appState = try String(contentsOf: appStateURL, encoding: .utf8)
+        let connect = try sourceSection(appState, from: "private func performConnectVPN(", until: "private func connectWithAutopilot(")
+        let warmup = try sourceSection(appState, from: "private func scheduleProfileWarmup()", until: "private func submitDiagnostics(")
 
         XCTAssertTrue(appState.contains("private var profileWarmupTask: Task<Void, Never>?"))
         XCTAssertTrue(appState.contains("scheduleProfileWarmup()"))
-        XCTAssertTrue(appState.contains("forceRefresh: false,\n                prevalidatedEntitlement: entitlement\n            )\n            try ensureConnectStillDesired"))
-        XCTAssertTrue(appState.contains("forceRefresh: false,\n                    writeHelperConfig: false\n                )\n            } catch is CancellationError"))
-        XCTAssertFalse(appState.contains("forceRefresh: true,\n                    writeHelperConfig: false"))
+        XCTAssertTrue(connect.contains("forceRefresh: false,\n                prevalidatedEntitlement: connectEntitlement\n            )\n            try ensureConnectStillDesired"))
+        XCTAssertTrue(warmup.contains("profileWarmupTask?.cancel()"))
+        XCTAssertTrue(warmup.contains("profileWarmupTask = Task { [profileService] in"))
+        XCTAssertTrue(warmup.contains("let proof = entitlementUserId == accountUserId ? entitlement : nil"))
+        XCTAssertTrue(warmup.contains("userId: accountUserId"))
+        XCTAssertTrue(warmup.contains("forceRefresh: false,\n                    writeHelperConfig: false,\n                    prevalidatedEntitlement: proof\n                )\n            } catch is CancellationError"))
+        XCTAssertFalse(warmup.contains("forceRefresh: true"), "Background warmup must retain fresh-cache reuse; recovery paths may force a live refresh")
     }
 
     func testConnectReusesValidatedEntitlementWithoutSecondFetch() throws {
@@ -323,8 +329,14 @@ final class NativeParityModelTests: XCTestCase {
         let profileServiceURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/VPNProfileService.swift")
         let appState = try String(contentsOf: appStateURL, encoding: .utf8)
         let profileService = try String(contentsOf: profileServiceURL, encoding: .utf8)
+        let connect = try sourceSection(appState, from: "private func performConnectVPN(", until: "private func connectWithAutopilot(")
+        let entitlement = try sourceSection(appState, from: "private func ensureEntitlementForConnect(", until: "private func loadUpdate(")
 
-        XCTAssertTrue(appState.contains("prevalidatedEntitlement: entitlement"))
+        XCTAssertTrue(connect.contains("let (requestToken, connectEntitlement) = await ensureEntitlementForConnect(accessToken: token)"))
+        XCTAssertTrue(connect.contains("guard connectEntitlement.hasPaidAccess"))
+        XCTAssertTrue(connect.contains("prevalidatedEntitlement: connectEntitlement"))
+        XCTAssertTrue(entitlement.contains("if entitlementUserId == accountUserId, let entitlement, entitlement.hasPaidAccess"))
+        XCTAssertTrue(entitlement.contains("return (token, entitlement)"))
         XCTAssertTrue(profileService.contains("prevalidatedEntitlement: Entitlement? = nil"))
         XCTAssertTrue(profileService.contains("if let prevalidatedEntitlement {"))
         XCTAssertTrue(profileService.contains("entitlement = try await api.entitlement(accessToken: accessToken)"))
@@ -410,11 +422,18 @@ final class NativeParityModelTests: XCTestCase {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let appStateURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Stores/VEXAppState.swift")
         let appState = try String(contentsOf: appStateURL, encoding: .utf8)
+        let billing = try sourceSection(appState, from: "private func loadBilling(", until: "private func loadRemoteConfig()")
 
-        XCTAssertTrue(appState.contains("async let plansResult = api.billingPlans()"))
-        XCTAssertTrue(appState.contains("async let entitlementResult = api.entitlement(accessToken: token)"))
-        XCTAssertTrue(appState.contains("async let paymentsResult = api.billingPayments(accessToken: token, limit: 24)"))
-        XCTAssertTrue(appState.contains("billingPayments = try await paymentsResult"), "Payments must reuse the concurrently started request")
+        let firstAwait = try XCTUnwrap(billing.range(of: "try await"))
+        for request in [
+            "async let plansResult = api.billingPlans()",
+            "async let entitlementResult = api.entitlement(accessToken: token)",
+            "async let paymentsResult = api.billingPayments(accessToken: token, limit: 24)",
+        ] {
+            let declaration = try XCTUnwrap(billing.range(of: request))
+            XCTAssertLessThan(declaration.upperBound, firstAwait.lowerBound, "All billing requests must start before awaiting a response")
+        }
+        XCTAssertTrue(billing.contains("let payments = try await paymentsResult\n            guard session?.user.id == billingUserId, profileAccountGeneration == accountGeneration else { return }\n            billingPayments = payments"), "Payments must reuse the concurrently started request and publish only to the originating login")
     }
 
     func testAppStateRestoresActiveTunnelWhenHelperIsAlreadyConnectedOnLaunch() throws {
@@ -1781,6 +1800,12 @@ final class NativeParityModelTests: XCTestCase {
             VEXUserFacingText.status("Command failed: Установка helper отменена пользователем."),
             "Установка helper отменена."
         )
+    }
+
+    private func sourceSection(_ source: String, from start: String, until end: String) throws -> String {
+        let startRange = try XCTUnwrap(source.range(of: start), "Missing source section: \(start)")
+        let endRange = try XCTUnwrap(source.range(of: end, range: startRange.upperBound..<source.endIndex), "Missing source section boundary: \(end)")
+        return String(source[startRange.lowerBound..<endRange.lowerBound])
     }
 }
 

@@ -52,7 +52,12 @@ internal static class Program
             Require(manifest.Schema == "vex.windows-vpn-fixture.v1" && manifest.ClientIp == ClientIp && manifest.ServerIp == ServerIp,
                 "fixture_manifest_invalid");
             var endpoint = IPEndPoint.Parse(manifest.Endpoint);
-            Require(endpoint.Address.Equals(IPAddress.Loopback) && endpoint.Port > 0, "fixture_endpoint_invalid");
+            Require(endpoint.Address.AddressFamily == AddressFamily.InterNetwork && endpoint.Port > 0 &&
+                !IPAddress.IsLoopback(endpoint.Address) &&
+                NetworkInterface.GetAllNetworkInterfaces().Any(nic => nic.OperationalStatus == OperationalStatus.Up &&
+                    !nic.Name.Equals("vex", StringComparison.OrdinalIgnoreCase) &&
+                    nic.GetIPProperties().UnicastAddresses.Any(address => address.Address.Equals(endpoint.Address))),
+                "fixture_endpoint_not_host_local");
 
             var dataDirectory = Path.Combine(directory, "service-state");
             Directory.CreateDirectory(dataDirectory);
@@ -60,7 +65,8 @@ internal static class Program
                 Path.Combine(dataDirectory, "ipc-token.bin"), Path.Combine(dataDirectory, "client-cert-sha256"),
                 Path.Combine(dataDirectory, "owner-sid"), Path.Combine(directory, "amneziawg-sha256"),
                 Path.Combine(directory, "wintun-sha256"), Path.Combine(directory, "unused-keyring.json"),
-                Path.Combine(directory, "unused-keyring-sha256")) { ControlPlaneBypassHosts = [] };
+                Path.Combine(directory, "unused-keyring-sha256"))
+                { ControlPlaneBypassHosts = [], NativeLocalEndpointAddresses = [endpoint.Address.ToString()] };
             result["stage"] = "signed-profile-admission";
             var profile = SignedProfile(manifest, result);
             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(110));
@@ -81,7 +87,9 @@ internal static class Program
             result["tunnel_adapter"] = before.AdapterName;
             result["ipv4_route_verified"] = before.Ipv4RouteOk;
             result["dns_configuration_verified"] = before.DnsConfigured;
-            result["endpoint_native_loopback_bypass"] = before.EndpointBypassOk;
+            result["endpoint_native_host_bypass"] = before.EndpointBypassOk;
+            result["endpoint_native_loopback_bypass"] = false;
+            Require(!File.Exists(Path.Combine(dataDirectory, "bypass-routes.json")), "fixture_native_endpoint_route_overridden");
             result["tunnel_interface_index"] = before.AdapterIndex;
             result["uapi_rx_before"] = before.RxBytes;
             result["uapi_tx_before"] = before.TxBytes;

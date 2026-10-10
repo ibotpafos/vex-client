@@ -14,13 +14,49 @@ import (
 	"testing"
 	"time"
 
+	"github.com/amnezia-vpn/amneziawg-go/v3/conn"
 	"github.com/amnezia-vpn/amneziawg-go/v3/device"
 	"github.com/amnezia-vpn/amneziawg-go/v3/tun/netstack"
 	"golang.org/x/net/dns/dnsmessage"
 )
 
 func TestEncryptedDNSAndHTTPS(t *testing.T) {
-	f, err := newFixture()
+	t.Run("loopback", func(t *testing.T) { testEncryptedDNSAndHTTPSAt(t, fixtureLoopback) })
+	address, ok := existingPrivateHostIPv4()
+	if !ok {
+		t.Log("No existing private non-loopback IPv4; host-address subtest unavailable")
+		return
+	}
+	t.Run("host-private", func(t *testing.T) { testEncryptedDNSAndHTTPSAt(t, address) })
+}
+
+func existingPrivateHostIPv4() (netip.Addr, bool) {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addresses, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, assigned := range addresses {
+			text, _, _ := strings.Cut(assigned.String(), "/")
+			address, err := netip.ParseAddr(text)
+			if err == nil && address.Is4() && address.IsPrivate() && validateHostLocalAddress(address) == nil {
+				return address, true
+			}
+		}
+	}
+	return netip.Addr{}, false
+}
+
+func testEncryptedDNSAndHTTPSAt(t *testing.T, endpointAddress netip.Addr) {
+	t.Helper()
+	f, err := newFixtureAt(endpointAddress)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +68,7 @@ func TestEncryptedDNSAndHTTPS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := device.NewDevice(tun, &loopbackBind{}, device.NewLogger(device.LogLevelSilent, ""))
+	d := device.NewDevice(tun, &hostLocalBind{address: endpointAddress}, device.NewLogger(device.LogLevelSilent, ""))
 	defer d.Close()
 	private, _ := base64.StdEncoding.DecodeString(f.manifest.ClientPrivateKey)
 	public, _ := base64.StdEncoding.DecodeString(f.manifest.ServerPublicKey)
@@ -109,13 +145,76 @@ func TestEncryptedDNSAndHTTPS(t *testing.T) {
 }
 
 func TestFixtureRejectsExternalEndpoint(t *testing.T) {
-	b := &loopbackBind{}
-	for _, value := range []string{"203.0.113.1:1234", "[::1]:1234", "vpn.example:1234"} {
+	b := &hostLocalBind{}
+	for _, value := range []string{"203.0.113.1:1234", "[::1]:1234", "vpn.example:1234", "0.0.0.0:1234", "224.0.0.1:1234", serverIP + ":1234", clientIP + ":1234", "127.0.0.2:1234", "127.0.0.1:0"} {
 		if _, err := b.ParseEndpoint(value); err == nil {
 			t.Fatal("external or unsupported endpoint accepted")
 		}
 	}
 	if _, err := b.ParseEndpoint("127.0.0.1:1234"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestFixtureRejectsNonHostBind(t *testing.T) {
+	for _, value := range []string{"0.0.0.0", "224.0.0.1", "255.255.255.255", "192.0.2.1", "198.51.100.1", "203.0.113.1", "198.18.0.1", "127.0.0.2", "169.254.1.1", serverIP, clientIP, "::1", "::ffff:127.0.0.1"} {
+		address := netip.MustParseAddr(value)
+		if _, err := newFixtureAt(address); err == nil {
+			t.Fatal("unsafe fixture bind accepted")
+		}
+		b := &hostLocalBind{address: address}
+		if _, _, err := b.Open(0); err == nil {
+			b.Close()
+			t.Fatal("unsafe bind opened")
+		}
+	}
+	if _, err := newFixtureAt(netip.Addr{}); err == nil {
+		t.Fatal("invalid fixture bind accepted")
+	}
+	// Require rejection by live assignment, not just the documentation policy.
+	found := false
+	for _, value := range []string{"10.252.254.254", "172.31.254.254", "192.168.254.254"} {
+		address := netip.MustParseAddr(value)
+		if validateHostLocalAddress(address) == nil {
+			continue
+		}
+		found = true
+		if _, err := newFixtureAt(address); err == nil {
+			t.Fatal("unassigned private bind accepted")
+		}
+		b := &hostLocalBind{address: address}
+		if _, err := b.ParseEndpoint(value + ":1234"); err == nil {
+			t.Fatal("unassigned private endpoint accepted")
+		}
+		break
+	}
+	if !found {
+		t.Fatal("No unassigned private address candidate")
+	}
+}
+
+func TestFixtureSendRejectsDifferentHostAddress(t *testing.T) {
+	b := &hostLocalBind{}
+	if _, _, err := b.Open(0); err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	for _, value := range []string{"203.0.113.1:1234", "127.0.0.2:1234", serverIP + ":1234"} {
+		endpoint := &conn.StdNetEndpoint{AddrPort: netip.MustParseAddrPort(value)}
+		if err := b.Send([][]byte{{1}}, endpoint); err == nil {
+			t.Fatal("send to a different address accepted")
+		}
+	}
+	if err := b.Send([][]byte{{1}}, nil); err == nil {
+		t.Fatal("nil endpoint accepted")
+	}
+	if address, ok := existingPrivateHostIPv4(); ok {
+		selected := &hostLocalBind{address: address}
+		if _, err := selected.ParseEndpoint("127.0.0.1:1234"); err == nil {
+			t.Fatal("configured host bind accepted loopback destination")
+		}
+		if _, err := selected.ParseEndpoint(address.String() + ":1234"); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

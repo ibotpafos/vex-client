@@ -22,8 +22,13 @@ this is not a production keyring or IPC client attestation test.
 
 The Windows Wintun client owns `10.253.253.2/32` and only routes
 `10.253.253.1/32`. The peer's `10.253.253.1` exists exclusively inside a Go
-memory netstack, never on a host adapter. Its encrypted transport is bound to
-`127.0.0.1`. After a fresh peer handshake, DNS UDP and HTTPS TCP sockets bind to
+memory netstack, never on a host adapter. Its encrypted transport binds only to
+an IPv4 address already assigned to the runner's physical default interface;
+the peer rejects destinations not currently local to that host. This matches
+the qualified vendor's physical-interface UDP binding without sending traffic
+to another machine. A trusted in-process fixture option preserves the native
+host route only after the service validates the address on an active physical
+NIC; production defaults remain unchanged. After a fresh peer handshake, DNS UDP and HTTPS TCP sockets bind to
 the actual Wintun source address and interface index. HTTPS verifies an
 ephemeral root and the normal hostname, then checks a random response nonce.
 Actual UAPI traffic counters must increase and peer DNS/HTTPS counters confirm
@@ -35,7 +40,7 @@ addresses/routes. Private keys stay in an ACL-restricted directory under
 `RUNNER_TEMP`, outside artifacts. Deadlines bound every process; `finally`
 stops only its peer process, uninstalls the previously absent vendor service
 only when its image/config paths still point to this fixture, verifies adapter
-and route cleanup and unchanged physical DNS/firewall profiles, then deletes
+and route cleanup, an unchanged native endpoint route, and unchanged physical DNS/firewall profiles, then deletes
 fixture private material. Failed cleanup retains restricted ownership state
 and fails the job; it never deletes arbitrary foreign state.
 
@@ -57,7 +62,10 @@ IPv6 traffic, Wi-Fi roaming, leak protection, arm64 runtime behavior or a signed
 release. Those still require their own Windows acceptance gates.
 
 The peer's portable tests exercise the same encrypted DNS/TLS path between two
-in-memory AWG endpoints without altering OS networking:
+in-memory AWG endpoints without altering OS networking. Their default outer
+endpoint is `127.0.0.1`; the Windows wrapper explicitly supplies its existing
+physical host address. Both modes bind one specific local address and restrict
+remote destinations to that selected, currently assigned host-local address:
 
 ```sh
 cd native-windows/scripts/vpn-fixture-peer

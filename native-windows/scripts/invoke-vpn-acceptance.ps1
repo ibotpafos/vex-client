@@ -79,6 +79,33 @@ function Resolve-FixtureTool {
     return $command.Source
 }
 
+function Resolve-FixtureHostAddress {
+    # The qualified Windows runtime binds outer UDP to the physical default
+    # interface after startup. Its peer must use an address already local to
+    # that interface; 127.0.0.1 can complete an early handshake then lose data.
+    $physical = @(Get-NetAdapter -Physical | Where-Object Status -eq 'Up' | Select-Object -ExpandProperty InterfaceIndex)
+    $candidate = @(Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' -PolicyStore ActiveStore |
+        Where-Object { $_.InterfaceIndex -in $physical -and $_.NextHop -ne '0.0.0.0' } | ForEach-Object {
+            $interface = Get-NetIPInterface -AddressFamily IPv4 -InterfaceIndex $_.InterfaceIndex
+            [pscustomobject]@{InterfaceIndex=$_.InterfaceIndex;Metric=([int]$_.RouteMetric + [int]$interface.InterfaceMetric)}
+        } | Sort-Object Metric, InterfaceIndex)
+    if ($candidate.Count -eq 0) { throw 'No active physical IPv4 default interface exists for the isolated peer.' }
+    $addresses = @(Get-NetIPAddress -AddressFamily IPv4 -InterfaceIndex $candidate[0].InterfaceIndex -PolicyStore ActiveStore |
+        Where-Object { $_.AddressState -eq 'Preferred' -and -not $_.SkipAsSource -and
+            $_.IPAddress -notin @('10.253.253.1', '10.253.253.2', '0.0.0.0') -and
+            -not [Net.IPAddress]::IsLoopback([Net.IPAddress]::Parse($_.IPAddress)) } | Sort-Object IPAddress)
+    if ($addresses.Count -eq 0) { throw 'The isolated peer requires an already assigned physical IPv4 address.' }
+    return [string]$addresses[0].IPAddress
+}
+
+function Read-FixtureEndpointRoutes {
+    param([string]$Address)
+    @(Get-NetRoute -DestinationPrefix "$Address/32" -PolicyStore ActiveStore |
+        Sort-Object InterfaceIndex, NextHop, RouteMetric | ForEach-Object {
+            "$($_.InterfaceIndex)|$($_.NextHop)|$($_.RouteMetric)"
+        }) | ConvertTo-Json -Compress -AsArray
+}
+
 function Invoke-FixtureProcess {
     param([string]$FilePath, [string[]]$Arguments, [int]$TimeoutSeconds, [string]$WorkingDirectory)
     $start = [Diagnostics.ProcessStartInfo]::new()
@@ -122,6 +149,8 @@ $baseline = Read-FixtureBaseline
 $peer = $null
 $vendorPath = $null
 $runtimeOwned = $false
+$hostAddress = $null
+$nativeEndpointRoutes = $null
 $failure = $null
 $cleanupFailure = $null
 $scriptResult = [ordered]@{
@@ -133,6 +162,7 @@ $scriptResult = [ordered]@{
     vendor_service_removed = $false
     tunnel_adapter_removed = $false
     fixture_route_removed = $false
+    native_endpoint_route_unchanged = $true
     physical_dns_and_firewall_unchanged = $false
     new_wintun_driver_removed = $false
     owned_vendor_log_removed = $false
@@ -185,11 +215,13 @@ try {
         -TimeoutSeconds 240 -WorkingDirectory $repositoryRoot
     $start = [Diagnostics.ProcessStartInfo]::new()
     $scriptResult.stage = 'peer-start'
+    $hostAddress = Resolve-FixtureHostAddress
+    $nativeEndpointRoutes = Read-FixtureEndpointRoutes -Address $hostAddress
     $start.FileName = $peerPath
     $start.UseShellExecute = $false
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
-    foreach ($argument in @('-directory', $fixtureDirectory, '-lifetime', '180s')) { $start.ArgumentList.Add($argument) }
+    foreach ($argument in @('-directory', $fixtureDirectory, '-lifetime', '180s', '-endpoint-address', $hostAddress)) { $start.ArgumentList.Add($argument) }
     $peer = [Diagnostics.Process]::Start($start)
     $peerStdout = $peer.StandardOutput.ReadToEndAsync()
     $peerStderr = $peer.StandardError.ReadToEndAsync()
@@ -233,9 +265,13 @@ finally {
         $scriptResult.cleanup_stage = 'adapter-route-dns-firewall'
         $scriptResult.tunnel_adapter_removed = -not [bool](Get-NetAdapter -IncludeHidden | Where-Object Name -ieq 'vex')
         $scriptResult.fixture_route_removed = @(Get-NetRoute | Where-Object DestinationPrefix -eq '10.253.253.1/32').Count -eq 0
+        if ($null -ne $hostAddress) {
+            $scriptResult.native_endpoint_route_unchanged = (Read-FixtureEndpointRoutes -Address $hostAddress) -ceq $nativeEndpointRoutes
+        }
         $scriptResult.physical_dns_and_firewall_unchanged = (Read-FixtureBaseline) -ceq $baseline
         if (-not $scriptResult.vendor_service_removed -or -not $scriptResult.tunnel_adapter_removed -or
-            -not $scriptResult.fixture_route_removed -or -not $scriptResult.physical_dns_and_firewall_unchanged) {
+            -not $scriptResult.fixture_route_removed -or -not $scriptResult.native_endpoint_route_unchanged -or
+            -not $scriptResult.physical_dns_and_firewall_unchanged) {
             throw 'Fixture-owned state did not fully clean up or physical DNS/firewall changed.'
         }
         $scriptResult.cleanup_stage = 'wintun-driver'

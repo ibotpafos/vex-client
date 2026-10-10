@@ -45,6 +45,8 @@ $process = $null
 $ownedProcesses = [Collections.Generic.List[Diagnostics.Process]]::new()
 $previousDpiContext = [System.IntPtr]::Zero
 $originalCursorPosition = $null
+$protocolDiagnosticPath = $null
+$protocolDiagnosticHash = $null
 $windowHandle = [System.IntPtr]::Zero
 $previewArguments = if ($PreviewMode -eq 'signed-out') {
     '--signed-out-ui-preview'
@@ -67,6 +69,7 @@ $result = [ordered]@{
     close_to_tray = $false
     second_launch_restored_window = $false
     preview_protocol_registration = $null
+    preview_protocol_diagnostic = $null
     protocol_activation_restored_window = $false
     preview_protocol_unregistered = $null
     clean_exit = $false
@@ -115,6 +118,32 @@ function Invoke-RedirectedLaunch {
 }
 
 function Assert-PreviewProtocolRegistration {
+    if ($null -ne $protocolDiagnosticPath -and (Test-Path -LiteralPath $protocolDiagnosticPath -PathType Leaf)) {
+        $diagnosticFile = Get-Item -LiteralPath $protocolDiagnosticPath
+        if ($diagnosticFile.Length -gt 4096 -or
+            ($diagnosticFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw 'Preview protocol diagnostic file is not a bounded regular file.'
+        }
+        $diagnostic = Get-Content -LiteralPath $protocolDiagnosticPath -Raw | ConvertFrom-Json
+        if ($diagnostic.schema -cne 'vex.windows.ui-preview-protocol-diagnostic.v1' -or
+            $diagnostic.process_id -ne $process.Id -or $diagnostic.scheme -cne 'vexguard-ui-preview' -or
+            $diagnostic.stage -notin @('executable-path', 'current-user-classes', 'existing-registration',
+                'create-registration', 'write-registration', 'notify-shell', 'registered') -or
+            $diagnostic.registered -isnot [bool] -or
+            ($null -ne $diagnostic.failure_type -and $diagnostic.failure_type -notmatch '^[A-Za-z0-9_]{1,80}Exception$') -or
+            ($null -ne $diagnostic.native_error_code -and $diagnostic.native_error_code -isnot [long] -and
+                $diagnostic.native_error_code -isnot [int])) {
+            throw 'Preview protocol diagnostic schema or ownership is invalid.'
+        }
+        $script:protocolDiagnosticHash = (Get-FileHash -LiteralPath $protocolDiagnosticPath -Algorithm SHA256).Hash
+        $result.preview_protocol_diagnostic = [ordered]@{
+            stage = $diagnostic.stage
+            registered = $diagnostic.registered
+            failure_type = $diagnostic.failure_type
+            native_error_code = $diagnostic.native_error_code
+        }
+        Write-Host "Preview protocol diagnostic: stage=$($diagnostic.stage); registered=$($diagnostic.registered); type=$($diagnostic.failure_type); native-code=$($diagnostic.native_error_code)."
+    }
     $registration = [ordered]@{
         present = Test-Path -LiteralPath $previewProtocolKey
         owner_matches = $false
@@ -309,6 +338,19 @@ function Save-SmokeScreenshot {
     if (-not [Vex.Windows.Smoke.NativeMethods]::SetCursorPos($cursorPoint.X, $cursorPoint.Y)) {
         throw 'Unable to move the cursor outside the preview window.'
     }
+    $tooltipCondition = [Windows.Automation.AndCondition]::new(
+        [Windows.Automation.PropertyCondition]::new(
+            [Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::ToolTip),
+        [Windows.Automation.PropertyCondition]::new(
+            [Windows.Automation.AutomationElement]::ProcessIdProperty, $process.Id))
+    Wait-SmokeCondition -TimeoutSeconds 15 -Failure 'Preview hover tooltip did not dismiss before capture.' -Condition {
+        $tooltips = [Windows.Automation.AutomationElement]::RootElement.FindAll(
+            [Windows.Automation.TreeScope]::Descendants, $tooltipCondition)
+        foreach ($tooltip in $tooltips) {
+            if (-not $tooltip.Current.IsOffscreen) { return $false }
+        }
+        return $true
+    }
     $visibleElements = @(Wait-SmokeCaptureBounds -AutomationIds $StableAutomationIds -WindowBounds $bounds)
     $path = Join-Path $ScreenshotDirectory "$PreviewMode-$Name.png"
     $bitmap = [Drawing.Bitmap]::new($width, $height)
@@ -352,6 +394,9 @@ try {
     $process = Start-Process @launch
     $ownedProcesses.Add($process)
     $result.process_id = $process.Id
+    if ($DesktopChecks) {
+        $protocolDiagnosticPath = Join-Path ([IO.Path]::GetTempPath()) "vex-ui-preview-protocol-$($process.Id).json"
+    }
     $deadline = $startedAt.AddSeconds($ObserveSeconds)
     while ([DateTime]::UtcNow -lt $deadline) {
         $process.Refresh()
@@ -567,6 +612,13 @@ finally {
     }
     if ($null -ne $originalCursorPosition) {
         [void][Vex.Windows.Smoke.NativeMethods]::SetCursorPos($originalCursorPosition.X, $originalCursorPosition.Y)
+    }
+    if ($null -ne $protocolDiagnosticHash -and (Test-Path -LiteralPath $protocolDiagnosticPath -PathType Leaf)) {
+        $diagnosticFile = Get-Item -LiteralPath $protocolDiagnosticPath
+        if (($diagnosticFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0 -and
+            (Get-FileHash -LiteralPath $protocolDiagnosticPath -Algorithm SHA256).Hash -ceq $protocolDiagnosticHash) {
+            Remove-Item -LiteralPath $protocolDiagnosticPath
+        }
     }
     if ($previousDpiContext -ne [System.IntPtr]::Zero) {
         [void][Vex.Windows.Smoke.NativeMethods]::SetThreadDpiAwarenessContext($previousDpiContext)

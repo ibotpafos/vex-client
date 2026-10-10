@@ -19,6 +19,11 @@ public sealed record WindowsServiceOptions(
     public IReadOnlyList<string> ControlPlaneBypassHosts { get; init; } =
         ["vexguard.app", "www.vexguard.app"];
 
+    // Fixture-only in-process dependency; production never loads this from
+    // client IPC, settings or disk. Each address must still be assigned to an
+    // active physical NIC before its native local route can be used.
+    public IReadOnlyList<string> NativeLocalEndpointAddresses { get; init; } = [];
+
     public static WindowsServiceOptions Load()
     {
         var programData = Environment.GetFolderPath(

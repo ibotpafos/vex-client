@@ -139,6 +139,15 @@ public partial class App : Application
 
     private static void RegisterProtocolActivations()
     {
+        if (UiPreviewContext.IsEnabled)
+        {
+            try { UiPreviewProtocolRegistration.Register(); }
+            catch (Exception error)
+            {
+                Debug.WriteLine($"UI preview protocol registration failed: {error.GetType().Name}");
+            }
+            return;
+        }
         if (HasPackageIdentity())
         {
             // Packaged builds own both URI schemes through AppxManifest.xml.
@@ -154,11 +163,6 @@ public partial class App : Application
         var logo = exePath + ",0";
         try
         {
-            if (UiPreviewContext.IsEnabled)
-            {
-                UiPreviewProtocolRegistration.Register();
-                return;
-            }
             ActivationRegistrationManager.RegisterForProtocolActivation(
                 "vexguard",
                 logo,

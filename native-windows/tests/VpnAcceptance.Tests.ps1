@@ -6,7 +6,7 @@ $source = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '../scripts/invoke-vpn
 $tokens = $null; $errors = $null
 $ast = [Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$errors)
 if ($errors.Count -ne 0) { throw 'VPN acceptance fixture does not parse.' }
-foreach ($name in @('Resolve-FixtureTool', 'Invoke-FixtureProcess')) {
+foreach ($name in @('Resolve-FixtureTool', 'Invoke-FixtureProcess', 'Resolve-FixtureHostAddress', 'Read-FixtureEndpointRoutes')) {
     $functions = @($ast.FindAll({
         param($node)
         $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
@@ -32,6 +32,48 @@ foreach ($name in @('go', 'dotnet')) {
     Invoke-FixtureProcess -FilePath $tool -Arguments @('-NoProfile', '-NonInteractive', '-Command', 'exit 0') -TimeoutSeconds 10
 }
 Write-Output 'VPN acceptance SDK resolution and actual child-process regression passed.'
+
+function Get-NetAdapter {
+    param([switch]$Physical)
+    [pscustomobject]@{Status='Up';InterfaceIndex=10}
+    [pscustomobject]@{Status='Up';InterfaceIndex=20}
+}
+$script:fixtureNativeRoutes = @([pscustomobject]@{InterfaceIndex=10;NextHop='0.0.0.0';RouteMetric=256})
+function Get-NetRoute {
+    param($AddressFamily,$DestinationPrefix,$PolicyStore)
+    if ($DestinationPrefix -eq '0.0.0.0/0') {
+        # A tunnel/virtual default must not be selected. Physical metrics count
+        # both route and interface cost, just like the qualified vendor monitor.
+        [pscustomobject]@{InterfaceIndex=99;NextHop='10.0.0.1';RouteMetric=0}
+        [pscustomobject]@{InterfaceIndex=20;NextHop='192.168.1.1';RouteMetric=1}
+        [pscustomobject]@{InterfaceIndex=10;NextHop='192.168.2.1';RouteMetric=30}
+    } else { $script:fixtureNativeRoutes }
+}
+function Get-NetIPInterface {
+    param($AddressFamily,$InterfaceIndex)
+    [pscustomobject]@{InterfaceMetric=$(if($InterfaceIndex -eq 10){5}else{100})}
+}
+$script:fixtureAddressPresent = $true
+function Get-NetIPAddress {
+    param($AddressFamily,$InterfaceIndex,$PolicyStore)
+    if ($InterfaceIndex -ne 10) { throw 'Fixture selected the wrong physical interface.' }
+    if ($script:fixtureAddressPresent) {
+        [pscustomobject]@{IPAddress='192.168.2.2';AddressState='Preferred';SkipAsSource=$false}
+        [pscustomobject]@{IPAddress='10.253.253.1';AddressState='Preferred';SkipAsSource=$false}
+        [pscustomobject]@{IPAddress='127.0.0.1';AddressState='Preferred';SkipAsSource=$false}
+    }
+}
+$hostAddress = Resolve-FixtureHostAddress
+if ($hostAddress -cne '192.168.2.2') { throw 'Fixture did not select an existing physical source address.' }
+$nativeBefore = Read-FixtureEndpointRoutes -Address $hostAddress
+if ($nativeBefore -cne (Read-FixtureEndpointRoutes -Address $hostAddress)) { throw 'Native endpoint route baseline is unstable.' }
+$script:fixtureNativeRoutes += [pscustomobject]@{InterfaceIndex=10;NextHop='192.168.2.1';RouteMetric=1}
+if ($nativeBefore -ceq (Read-FixtureEndpointRoutes -Address $hostAddress)) { throw 'Native endpoint route mutation escaped cleanup validation.' }
+$script:fixtureAddressPresent = $false
+$rejected = $false
+try { Resolve-FixtureHostAddress | Out-Null } catch { $rejected = $true }
+if (-not $rejected) { throw 'Fixture accepted an interface without a currently assigned source address.' }
+Write-Output 'VPN fixture native physical endpoint selection and unchanged-route regressions passed.'
 
 # Exercise the exact C# DNS query/retransmission/parser against an ephemeral
 # loopback UDP server. Substitute only socket binding and destination port;

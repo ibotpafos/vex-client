@@ -80,6 +80,8 @@ jobs:
           ./native-windows/tests/BootstrapOwnership.Tests.ps1
           ./native-windows/tests/VpnAcceptance.Tests.ps1
           ./native-windows/tests/SmokeApplication.Tests.ps1
+          ./native-windows/tests/UiPreviewProtocolRegistration.Tests.ps1
+          ./native-windows/tests/UiPreviewContext.Tests.ps1
       - name: Test platform-neutral core and control plane
         run: dotnet run --project native-windows/tests/Vex.Windows.Core.Tests/Vex.Windows.Core.Tests.csproj -c Release
 
@@ -125,6 +127,8 @@ jobs:
           ./native-windows/tests/BootstrapOwnership.Tests.ps1
           ./native-windows/tests/VpnAcceptance.Tests.ps1
           ./native-windows/tests/SmokeApplication.Tests.ps1
+          ./native-windows/tests/UiPreviewProtocolRegistration.Tests.ps1
+          ./native-windows/tests/UiPreviewContext.Tests.ps1
           node native-windows/scripts/validate-packaging-static.mjs
           node scripts/validate_native_windows_xaml.mjs
       - name: Publish self-contained VPN service
@@ -164,7 +168,11 @@ jobs:
         run: |
           $root = Join-Path $env:RUNNER_TEMP 'vex-windows'
           $application = Join-Path $root 'app-x64/Vex.Windows.App.exe'
-          foreach ($argument in @('--signed-out-ui-preview', '--focus-pulse-ui-preview', '--ui-smoke-exit', 'vexguard-ui-preview://ui-smoke/activate')) {
+          $arguments = @('--signed-out-ui-preview', '--focus-pulse-ui-preview', '--ui-smoke-exit',
+            'vexguard-ui-preview://ui-smoke/activate', 'vexguard-ui-preview://ui-smoke/unknown',
+            'vexguard-ui-preview://other-host/activate', 'vexguard-ui-preview://ui-smoke/activate?unexpected=1',
+            'vexguard-ui-preview://user@ui-smoke/activate', 'vexguard-ui-preview://ui-smoke/activate#unexpected')
+          foreach ($argument in $arguments) {
             $process = Start-Process -FilePath $application -ArgumentList $argument -PassThru
             try {
               if (-not $process.WaitForExit(10000) -or $process.ExitCode -ne 0) {
@@ -179,7 +187,7 @@ jobs:
               throw 'Release preview control left a running application.'
             }
           }
-          @{ schema = 'vex.release-preview-isolation.v1'; rejected_controls = 4; application_absent = $true } |
+          @{ schema = 'vex.release-preview-isolation.v1'; rejected_controls = $arguments.Count; application_absent = $true } |
             ConvertTo-Json | Set-Content -LiteralPath (Join-Path $root 'release-preview-isolation-x64.json')
       - name: Exercise authenticated desktop flows and capture interface
         if: matrix.architecture == 'x64'

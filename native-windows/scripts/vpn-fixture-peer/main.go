@@ -52,36 +52,102 @@ func advancedConfig(header []byte) string {
 		"random_trailers=1\ndisable_cookies=0\n"
 }
 
-// A narrow Bind prevents even encrypted fixture traffic from leaving loopback.
-// A normal bind can listen/send on all host interfaces.
-type loopbackBind struct {
-	mu  sync.Mutex
-	udp *net.UDPConn
+// A narrow Bind listens on one already assigned host IPv4 and permits only
+// that exact address as a remote endpoint. Encrypted fixture packets stay on
+// this host. Loopback remains the default for portable tests.
+type hostLocalBind struct {
+	address netip.Addr
+	mu      sync.Mutex
+	udp     *net.UDPConn
 }
 
-func (b *loopbackBind) Open(port uint16) ([]conn.ReceiveFunc, uint16, error) {
+var fixtureLoopback = netip.MustParseAddr("127.0.0.1")
+
+func (b *hostLocalBind) selectedAddress() netip.Addr {
+	if !b.address.IsValid() {
+		return fixtureLoopback
+	}
+	return b.address
+}
+
+func validateHostLocalAddress(address netip.Addr) error {
+	if !address.Is4() || address == netip.MustParseAddr(serverIP) || address == netip.MustParseAddr(clientIP) {
+		return errors.New("fixture requires an assigned host IPv4")
+	}
+	if address != fixtureLoopback {
+		if !address.IsGlobalUnicast() || address.IsLoopback() || address.IsLinkLocalUnicast() {
+			return errors.New("fixture rejects special-purpose bind addresses")
+		}
+		for _, prefix := range []string{"0.0.0.0/8", "192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24", "198.18.0.0/15", "240.0.0.0/4"} {
+			if netip.MustParsePrefix(prefix).Contains(address) {
+				return errors.New("fixture rejects special-purpose bind addresses")
+			}
+		}
+	}
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return errors.New("fixture local address inventory unavailable")
+	}
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagUp == 0 || (address != fixtureLoopback && iface.Flags&net.FlagLoopback != 0) {
+			continue
+		}
+		addresses, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, assigned := range addresses {
+			text, _, _ := strings.Cut(assigned.String(), "/")
+			parsed, err := netip.ParseAddr(text)
+			if err == nil && parsed.Unmap() == address {
+				return nil
+			}
+		}
+	}
+	return errors.New("fixture bind address is not currently assigned locally")
+}
+
+func (b *hostLocalBind) validateEndpoint(endpoint netip.AddrPort) error {
+	if !endpoint.IsValid() || endpoint.Port() == 0 || endpoint.Addr() != b.selectedAddress() {
+		return errors.New("fixture rejects a different endpoint address")
+	}
+	// Re-check assignment: removal of a DHCP address must not turn a stale
+	// endpoint into external traffic.
+	return validateHostLocalAddress(endpoint.Addr())
+}
+
+func (b *hostLocalBind) Open(port uint16) ([]conn.ReceiveFunc, uint16, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.udp != nil {
 		return nil, 0, conn.ErrBindAlreadyOpen
 	}
-	u, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: int(port)})
+	address := b.selectedAddress()
+	if err := validateHostLocalAddress(address); err != nil {
+		return nil, 0, err
+	}
+	u, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IP(address.AsSlice()), Port: int(port)})
 	if err != nil {
 		return nil, 0, err
 	}
 	b.udp = u
 	receive := func(packets [][]byte, sizes []int, eps []conn.Endpoint) (int, error) {
-		n, addr, err := u.ReadFromUDPAddrPort(packets[0])
-		if err != nil {
-			return 0, err
+		for {
+			n, addr, err := u.ReadFromUDPAddrPort(packets[0])
+			if err != nil {
+				return 0, err
+			}
+			if err := b.validateEndpoint(addr); err != nil {
+				continue
+			} // No external endpoint roaming.
+			sizes[0] = n
+			eps[0] = &conn.StdNetEndpoint{AddrPort: addr}
+			return 1, nil
 		}
-		sizes[0] = n
-		eps[0] = &conn.StdNetEndpoint{AddrPort: addr}
-		return 1, nil
 	}
 	return []conn.ReceiveFunc{receive}, uint16(u.LocalAddr().(*net.UDPAddr).Port), nil
 }
-func (b *loopbackBind) Close() error {
+func (b *hostLocalBind) Close() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.udp == nil {
@@ -91,26 +157,32 @@ func (b *loopbackBind) Close() error {
 	b.udp = nil
 	return err
 }
-func (b *loopbackBind) SetMark(mark uint32) error {
+func (b *hostLocalBind) SetMark(mark uint32) error {
 	if mark != 0 {
 		return errors.New("fixture rejects socket marks")
 	}
 	return nil
 }
-func (b *loopbackBind) BatchSize() int { return 1 }
-func (b *loopbackBind) ParseEndpoint(value string) (conn.Endpoint, error) {
+func (b *hostLocalBind) BatchSize() int { return 1 }
+func (b *hostLocalBind) ParseEndpoint(value string) (conn.Endpoint, error) {
 	a, err := netip.ParseAddrPort(value)
-	if err != nil || !a.Addr().Is4() || !a.Addr().IsLoopback() {
-		return nil, errors.New("fixture rejects non-loopback endpoint")
+	if err != nil {
+		return nil, errors.New("fixture endpoint must be an IPv4 address and port")
+	}
+	if err := b.validateEndpoint(a); err != nil {
+		return nil, err
 	}
 	return &conn.StdNetEndpoint{AddrPort: a}, nil
 }
-func (b *loopbackBind) Send(packets [][]byte, ep conn.Endpoint) error {
-	if !ep.DstIP().IsLoopback() {
-		return errors.New("fixture rejects non-loopback send")
+func (b *hostLocalBind) Send(packets [][]byte, ep conn.Endpoint) error {
+	if ep == nil {
+		return errors.New("fixture endpoint is missing")
 	}
 	a, err := netip.ParseAddrPort(ep.DstToString())
-	if err != nil {
+	if err != nil || ep.DstIP() != a.Addr() {
+		return errors.New("fixture endpoint is inconsistent")
+	}
+	if err := b.validateEndpoint(a); err != nil {
 		return err
 	}
 	b.mu.Lock()
@@ -120,6 +192,9 @@ func (b *loopbackBind) Send(packets [][]byte, ep conn.Endpoint) error {
 		return net.ErrClosed
 	}
 	for _, packet := range packets {
+		if err := b.validateEndpoint(a); err != nil {
+			return err
+		}
 		if _, err := u.WriteToUDPAddrPort(packet, a); err != nil {
 			return err
 		}
@@ -163,6 +238,13 @@ type fixture struct {
 }
 
 func newFixture() (*fixture, error) {
+	return newFixtureAt(fixtureLoopback)
+}
+
+func newFixtureAt(endpointAddress netip.Addr) (*fixture, error) {
+	if err := validateHostLocalAddress(endpointAddress); err != nil {
+		return nil, err
+	}
 	clientPrivate, serverPrivate, header := make([]byte, 32), make([]byte, 32), make([]byte, 32)
 	for _, value := range [][]byte{clientPrivate, serverPrivate, header} {
 		if _, err := rand.Read(value); err != nil {
@@ -182,7 +264,7 @@ func newFixture() (*fixture, error) {
 		return nil, err
 	}
 	f := &fixture{net: network}
-	f.dev = device.NewDevice(tun, &loopbackBind{}, device.NewLogger(device.LogLevelSilent, ""))
+	f.dev = device.NewDevice(tun, &hostLocalBind{address: endpointAddress}, device.NewLogger(device.LogLevelSilent, ""))
 	failed := true
 	defer func() {
 		if failed {
@@ -210,7 +292,7 @@ func newFixture() (*fixture, error) {
 	if port == "" || port == "0" {
 		return nil, errors.New("fixture port unavailable")
 	}
-	f.manifest = manifest{"vex.windows-vpn-fixture.v1", base64.StdEncoding.EncodeToString(clientPrivate), base64.StdEncoding.EncodeToString(serverPublic), base64.StdEncoding.EncodeToString(header), "127.0.0.1:" + port, serverIP, clientIP}
+	f.manifest = manifest{"vex.windows-vpn-fixture.v1", base64.StdEncoding.EncodeToString(clientPrivate), base64.StdEncoding.EncodeToString(serverPublic), base64.StdEncoding.EncodeToString(header), endpointAddress.String() + ":" + port, serverIP, clientIP}
 	f.root, f.cert, err = fixtureCertificate()
 	if err != nil {
 		return nil, err
@@ -343,6 +425,7 @@ func (f *fixture) close() {
 func run() error {
 	directory := flag.String("directory", "", "fresh private fixture directory")
 	lifetime := flag.Duration("lifetime", 180*time.Second, "finite maximum fixture lifetime")
+	endpointText := flag.String("endpoint-address", "127.0.0.1", "already assigned host IPv4 for the isolated peer")
 	flag.Parse()
 	if *directory == "" || *lifetime < 10*time.Second || *lifetime > 5*time.Minute {
 		return errors.New("invalid fixture options")
@@ -350,7 +433,11 @@ func run() error {
 	if _, err := os.Stat(filepath.Join(*directory, "owned-fixture")); err != nil {
 		return errors.New("fixture ownership marker missing")
 	}
-	f, err := newFixture()
+	endpointAddress, err := netip.ParseAddr(*endpointText)
+	if err != nil {
+		return errors.New("invalid fixture endpoint address")
+	}
+	f, err := newFixtureAt(endpointAddress)
 	if err != nil {
 		return err
 	}

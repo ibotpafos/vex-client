@@ -30,6 +30,8 @@ pwsh -NoProfile -File native-windows/tests/NetworkSafetyPolicy.Tests.ps1
 pwsh -NoProfile -File native-windows/tests/BootstrapOwnership.Tests.ps1
 pwsh -NoProfile -File native-windows/tests/VpnAcceptance.Tests.ps1
 pwsh -NoProfile -File native-windows/tests/SmokeApplication.Tests.ps1
+pwsh -NoProfile -File native-windows/tests/UiPreviewProtocolRegistration.Tests.ps1
+pwsh -NoProfile -File native-windows/tests/UiPreviewContext.Tests.ps1
 
 dotnet run --project native-windows/tests/Vex.Windows.Core.Tests/Vex.Windows.Core.Tests.csproj -c Release
 for architecture in x64 arm64; do

@@ -39,6 +39,15 @@ $script:hostRoutes = @([pscustomobject]@{DestinationPrefix='203.0.113.1/32';Inte
 $script:physicalLookups = 0
 function Get-NetAdapter { param([switch]$Physical) $script:physicalLookups++; $script:physical }
 function Get-NetIPInterface { param($AddressFamily,$InterfaceIndex) [pscustomobject]@{InterfaceMetric=$(if($InterfaceIndex -eq 10){5}else{40})} }
+function Get-NetIPAddress {
+    param($AddressFamily,$IPAddress,$PolicyStore)
+    if($IPAddress -eq '192.168.2.2'){
+        [pscustomobject]@{IPAddress=$IPAddress;InterfaceIndex=10;AddressState='Preferred'}
+    }
+    if($IPAddress -eq '10.253.253.2'){
+        [pscustomobject]@{IPAddress=$IPAddress;InterfaceIndex=99;AddressState='Preferred'}
+    }
+}
 function Get-NetRoute {
     [CmdletBinding()]param($AddressFamily,$DestinationPrefix,[int]$InterfaceIndex,$PolicyStore)
     if ($DestinationPrefix -eq '0.0.0.0/0') { return $script:defaults4 }
@@ -67,6 +76,14 @@ Assert-Rejected {& $findRoute '2001:db8::1' 'IPv6' '128' 'False'} 'Literal IPv6 
 $script:defaults6 += [pscustomobject]@{InterfaceIndex=10;NextHop='fe80::1';RouteMetric=20}
 $route = (& $findRoute '2001:db8::1' 'IPv6' '128' 'False') | ConvertFrom-Json
 Assert ($route.InterfaceIndex -eq 10 -and $route.NextHop -eq 'fe80::1') 'IPv6 bypass gateway incorrect'
+$routesBeforeNative = $script:hostRoutes.Count
+$route = (& $findRoute '192.168.2.2' 'IPv4' '32' 'False' 'True') | ConvertFrom-Json
+Assert ($route.NativeLocal -and !$route.Created -and $route.InterfaceIndex -eq 10) 'Assigned physical endpoint must retain its native local route'
+Assert ($script:hostRoutes.Count -eq $routesBeforeNative) 'Native physical endpoint installed a gateway route'
+Assert-Rejected {& $findRoute '203.0.113.3' 'IPv4' '32' 'False' 'True'} 'Trusted local endpoint option must reject an unassigned external address'
+Assert-Rejected {& $findRoute '10.253.253.2' 'IPv4' '32' 'False' 'True'} 'Trusted local endpoint option must reject a tunnel address'
+$route = (& $findRoute '192.168.2.2' 'IPv4' '32' 'False' 'False') | ConvertFrom-Json
+Assert (!$route.NativeLocal -and $route.NextHop -eq '192.168.2.1') 'Production default must preserve normal bypass admission'
 
 $env:SystemRoot = 'C:\Windows'
 $script:profiles = @('Domain','Private','Public' | ForEach-Object {[pscustomobject]@{Name=$_;Enabled='True';DefaultOutboundAction='Allow'}})

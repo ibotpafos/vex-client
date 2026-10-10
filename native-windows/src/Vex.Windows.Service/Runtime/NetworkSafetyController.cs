@@ -15,6 +15,7 @@ internal sealed class NetworkSafetyController
     private static readonly TimeSpan CommandTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan FirewallVerificationLifetime = TimeSpan.FromSeconds(30);
     private readonly IReadOnlyList<string> _controlPlaneHosts;
+    private readonly HashSet<IPAddress> _nativeLocalEndpointAddresses;
     private readonly object _gate = new();
     private readonly SemaphoreSlim _operationGate = new(1, 1);
     private readonly string _firewallStatePath;
@@ -29,6 +30,7 @@ internal sealed class NetworkSafetyController
     public NetworkSafetyController(WindowsServiceOptions options)
     {
         _controlPlaneHosts = options.ControlPlaneBypassHosts.ToArray();
+        _nativeLocalEndpointAddresses = options.NativeLocalEndpointAddresses.Select(IPAddress.Parse).ToHashSet();
         _firewallStatePath = Path.Combine(options.DataDirectory, "firewall-rollback.json");
         _routeStatePath = Path.Combine(options.DataDirectory, "bypass-routes.json");
         // A journal indicates possible ownership, not proof that protection works.
@@ -54,12 +56,13 @@ internal sealed class NetworkSafetyController
                 // change. A /32 or /128 left by an old Wi-Fi interface is not reusable.
                 foreach (var address in addresses)
                 {
-                    var result = await FindBypassRouteAsync(address, !resolved.LiteralEndpoint || !resolved.EndpointAddresses.Contains(address), cancellationToken).ConfigureAwait(false);
+                    var result = await FindBypassRouteAsync(address, !resolved.LiteralEndpoint || !resolved.EndpointAddresses.Contains(address),
+                        _nativeLocalEndpointAddresses.Contains(address), cancellationToken).ConfigureAwait(false);
                     if (result.Skipped) { continue; }
                     reachable.Add(address);
-                    // Native loopback is already outside the tunnel. Installing
-                    // a physical host route would redirect the local endpoint.
-                    if (result.Loopback) { continue; }
+                    // Native host-local routing is already outside the tunnel.
+                    // A gateway host route would redirect the local endpoint.
+                    if (result.Loopback || result.NativeLocal) { continue; }
                     var route = new BypassRoute(IPAddress.Parse(result.Address), result.InterfaceIndex, result.NextHop);
                     if (result.Created)
                     {
@@ -601,7 +604,8 @@ internal sealed class NetworkSafetyController
         return host;
     }
 
-    private static async Task<RouteCommandResult> FindBypassRouteAsync(IPAddress address, bool allowMissingPhysical, CancellationToken cancellationToken)
+    private static async Task<RouteCommandResult> FindBypassRouteAsync(IPAddress address, bool allowMissingPhysical,
+        bool nativeLocalEndpoint, CancellationToken cancellationToken)
     {
         const string script = """
             $ErrorActionPreference='Stop';$ip=$args[0];$family=$args[1];$prefix=$ip+'/'+$args[2]
@@ -609,6 +613,11 @@ internal sealed class NetworkSafetyController
                 [pscustomobject]@{Address=$ip;InterfaceIndex=0;NextHop='';Created=$false;Loopback=$true} | ConvertTo-Json -Compress;return
             }
             $physical=@(Get-NetAdapter -Physical | Where-Object {$_.Status -eq 'Up'} | Select-Object -ExpandProperty InterfaceIndex)
+            if($args.Count -gt 4 -and $args[4] -eq 'True'){
+                $local=@(Get-NetIPAddress -AddressFamily $family -IPAddress $ip -PolicyStore ActiveStore -ErrorAction SilentlyContinue | Where-Object {$_.IPAddress -eq $ip -and $_.AddressState -eq 'Preferred' -and $_.InterfaceIndex -in $physical})
+                if($local.Count -ne 1){throw 'native_local_endpoint_not_assigned'}
+                [pscustomobject]@{Address=$ip;InterfaceIndex=$local[0].InterfaceIndex;NextHop='';Created=$false;NativeLocal=$true} | ConvertTo-Json -Compress;return
+            }
             # Never use Find-NetRoute: it can choose the running tunnel or our stale host route.
             $default=if($family -eq 'IPv4'){'0.0.0.0/0'}else{'::/0'}
             $candidates=@(Get-NetRoute -AddressFamily $family -DestinationPrefix $default -PolicyStore ActiveStore | Where-Object {$_.InterfaceIndex -in $physical -and $_.NextHop -ne '0.0.0.0' -and $_.NextHop -ne '::'} | ForEach-Object {
@@ -624,7 +633,7 @@ internal sealed class NetworkSafetyController
             [pscustomobject]@{Address=$ip;InterfaceIndex=$best.InterfaceIndex;NextHop=$best.NextHop;Created=($null -eq $existing)} | ConvertTo-Json -Compress
             """;
         var output = await RunPowerShellAsync(script,
-            [address.ToString(), address.AddressFamily == AddressFamily.InterNetwork ? "IPv4" : "IPv6", address.AddressFamily == AddressFamily.InterNetwork ? "32" : "128", allowMissingPhysical.ToString()], cancellationToken).ConfigureAwait(false);
+            [address.ToString(), address.AddressFamily == AddressFamily.InterNetwork ? "IPv4" : "IPv6", address.AddressFamily == AddressFamily.InterNetwork ? "32" : "128", allowMissingPhysical.ToString(), nativeLocalEndpoint.ToString()], cancellationToken).ConfigureAwait(false);
         return JsonSerializer.Deserialize<RouteCommandResult>(output) ?? throw new VpnTunnelException("route_bypass_apply_failed");
     }
 
@@ -737,7 +746,8 @@ internal sealed class NetworkSafetyController
 
     private sealed record BypassRoute(IPAddress Address, int InterfaceIndex, string NextHop);
     private sealed record PersistedBypassRoute(string Address, int InterfaceIndex, string NextHop);
-    private sealed record RouteCommandResult(string Address, int InterfaceIndex, string NextHop, bool Created, bool Skipped = false, bool Loopback = false);
+    private sealed record RouteCommandResult(string Address, int InterfaceIndex, string NextHop, bool Created, bool Skipped = false,
+        bool Loopback = false, bool NativeLocal = false);
     private sealed record ProtectedAddressSet(IPAddress[] Addresses, IPAddress[] EndpointAddresses, bool LiteralEndpoint);
     private sealed record FirewallRollback(int Version, FirewallProfile[] Profiles, string[] DisabledOutboundAllowRuleNames, string[] OwnedRuleNames, string AdapterName, string[] ProtectedAddresses);
     private sealed record FirewallProfile(string Name, string Enabled, string DefaultOutboundAction);

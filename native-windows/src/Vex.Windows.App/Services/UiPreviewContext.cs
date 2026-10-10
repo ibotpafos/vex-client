@@ -24,7 +24,8 @@ internal static class UiPreviewContext
         var signedOut = arguments.Contains("--signed-out-ui-preview", StringComparer.Ordinal);
         var fixtures = arguments.Contains("--focus-pulse-ui-preview", StringComparer.Ordinal);
         var command = arguments.Contains("--ui-smoke-exit", StringComparer.Ordinal) ||
-            IsActivationUri(protocolUri);
+            IsPreviewProtocolUri(protocolUri) ||
+            ParseActivationUri(string.Join(" ", arguments)) is not null;
         IsPreviewRequest = signedOut || fixtures || command;
         if (!IsPreviewRequest) return;
 #if DEBUG
@@ -46,15 +47,20 @@ internal static class UiPreviewContext
         if (string.IsNullOrWhiteSpace(arguments)) return null;
         foreach (var argument in arguments.Split(' ', StringSplitOptions.RemoveEmptyEntries))
         {
-            if (Uri.TryCreate(argument.Trim('"'), UriKind.Absolute, out var uri) && IsActivationUri(uri))
+            if (Uri.TryCreate(argument.Trim('"'), UriKind.Absolute, out var uri) && IsPreviewProtocolUri(uri))
                 return uri;
         }
         return null;
     }
 
-    public static bool IsActivationUri(Uri? uri) =>
+    public static bool IsPreviewProtocolUri(Uri? uri) =>
         uri is { IsAbsoluteUri: true } &&
-        string.Equals(uri.Scheme, ProtocolScheme, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(uri.Scheme, ProtocolScheme, StringComparison.OrdinalIgnoreCase);
+
+    public static bool IsActivationUri(Uri? uri) =>
+        IsPreviewProtocolUri(uri) &&
+        uri!.UserInfo.Length == 0 && uri.Port == -1 &&
+        uri.Query.Length == 0 && uri.Fragment.Length == 0 &&
         string.Equals(uri.Host, "ui-smoke", StringComparison.OrdinalIgnoreCase) &&
         string.Equals(uri.AbsolutePath, "/activate", StringComparison.Ordinal);
 

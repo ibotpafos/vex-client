@@ -11,7 +11,7 @@ cp "$root_dir/tests/ios-tunnel-transitions/IosTunnelTransitionTests.swift" "$har
 cat > "$harness_dir/Package.swift" <<'SWIFT'
 // swift-tools-version: 6.2
 import PackageDescription
-let package = Package(name: "IosTunnelTransitionHarness", targets: [
+let package = Package(name: "IosTunnelTransitionHarness", platforms: [.macOS(.v15)], targets: [
   .target(name: "IosTunnelTransitionHarness"),
   .testTarget(name: "IosTunnelTransitionHarnessTests", dependencies: ["IosTunnelTransitionHarness"])
 ], swiftLanguageModes: [.v5])

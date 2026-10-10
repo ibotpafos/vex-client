@@ -60,7 +60,7 @@ done
 cat > "$harness_dir/Package.swift" <<'SWIFT'
 // swift-tools-version: 6.2
 import PackageDescription
-let package = Package(name: "VEXProfileIdentityHarness", targets: [
+let package = Package(name: "VEXProfileIdentityHarness", platforms: [.macOS(.v15)], targets: [
     .target(name: "VEXNativeMac"),
     .testTarget(name: "VEXNativeMacTests", dependencies: ["VEXNativeMac"])
 ], swiftLanguageModes: [.v5])

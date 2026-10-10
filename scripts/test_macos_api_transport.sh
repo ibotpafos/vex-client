@@ -16,7 +16,7 @@ cp "$root_dir/macos-native/Tests/VEXNativeMacTests/VEXAPITransportTests.swift" "
 cat > "$harness_dir/Package.swift" <<'SWIFT'
 // swift-tools-version: 6.2
 import PackageDescription
-let package = Package(name: "VEXAPITransportHarness", targets: [
+let package = Package(name: "VEXAPITransportHarness", platforms: [.macOS(.v15)], targets: [
     .target(name: "VEXAPITransportHarness"),
     .testTarget(name: "VEXAPITransportHarnessTests", dependencies: ["VEXAPITransportHarness"])
 ], swiftLanguageModes: [.v5])

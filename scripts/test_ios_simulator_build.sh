@@ -22,7 +22,18 @@ done
 simulator_sdk="$(xcrun --sdk iphonesimulator --show-sdk-path)"
 clang_binary="$(xcrun --sdk iphonesimulator --find clang)"
 fixture_dir="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/vex-ios-app.XXXXXX")"
-trap 'rm -rf "$fixture_dir"' EXIT
+cleanup_fixture() {
+  local primary_status=$?
+  trap - EXIT
+  # Go module cache directories are read-only by default. Only this owned cache
+  # needs permissions restored; source packages and toolchains stay untouched.
+  if [[ -d "$fixture_dir/go-mod" ]]; then
+    chmod -R u+w "$fixture_dir/go-mod" || true
+  fi
+  rm -rf "$fixture_dir" || { if [[ "$primary_status" == 0 ]]; then primary_status=1; fi; }
+  exit "$primary_status"
+}
+trap cleanup_fixture EXIT
 
 ruby_binary="$(command -v ruby)"
 gem_dir="$fixture_dir/gems"
@@ -117,7 +128,7 @@ make -C "$bridge_dir" \
   "SDKROOT=$simulator_sdk" "CC=$clang_binary" \
   "CFLAGS_PREFIX=-target arm64-apple-ios16.4-simulator -isysroot $simulator_sdk -arch" \
   build
-xcrun lipo -verify_arch arm64 "$bridge_dir/out/libwg-go.a"
+xcrun lipo "$bridge_dir/out/libwg-go.a" -verify_arch arm64
 xcrun otool -l "$bridge_dir/out/libwg-go.a" > "$fixture_dir/bridge-load-commands.txt"
 "$ruby_binary" - "$fixture_dir/bridge-load-commands.txt" <<'RUBY'
 trace = File.read(ARGV.fetch(0))

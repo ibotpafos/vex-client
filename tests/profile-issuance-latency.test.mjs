@@ -20,6 +20,8 @@ function load(sourcePath, exported, stubs) {
 function managedHarness({response = confirmed, current = device, key = {publicKey:'public'}, headers = async () => ({}), list, options = {}} = {}) {
   const requests = [];
   const run = load('src/api/vpn.ts', 'managedVpnProfile', {
+    Platform:{OS:'android'}, me:async()=>({id:'fixture-owner'}),
+    getOrCreateVpnAccountIdentity:async()=>({installationId:'runtime',externalDeviceId:'runtime',keyScope:'fixture-scope',keyPair:{...(typeof key === 'function' ? key() : key),keyEpoch:2}}),
     clientVersionHeaders:headers, getOrCreateWireGuardKeyPair:async()=>typeof key === 'function' ? key() : key, getOrCreateDeviceId:async()=> 'runtime', nativeVpnDeviceForClient,
     withManagedProfileAWGCapability:q=>q, defaultVpnRoutingMode:'smart', defaultVpnRoutingPolicyVersion:'v1', resolvedVpnBypassRegion:()=>'', requireVpnLocationId:x=>x,
     canRevalidateDevice, ApiRequestError, jsonRequest:async path=> {

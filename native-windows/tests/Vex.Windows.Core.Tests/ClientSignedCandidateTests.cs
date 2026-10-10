@@ -294,7 +294,7 @@ internal static class ClientSignedCandidateTests
             switch (scope)
             {
                 case "identity":
-                    fixture.Store.Save(state with { Identity = WireGuardIdentity.Generate(state.Identity.KeyEpoch + 1) });
+                    fixture.Store.SetExternalSnapshot(state with { Identity = WireGuardIdentity.Generate(state.Identity.KeyEpoch + 1) });
                     break;
                 case "node":
                     fixture.Policy = fixture.Policy with
@@ -304,7 +304,7 @@ internal static class ClientSignedCandidateTests
                     fixture.Coordinator.GetResiliencePolicyAsync(CancellationToken.None).GetAwaiter().GetResult();
                     break;
                 case "user":
-                    fixture.Store.Save(state with
+                    fixture.Store.SetExternalSnapshot(state with
                     {
                         Session = state.Session with { User = state.Session.User with { Id = "another-user" } },
                     });
@@ -445,7 +445,7 @@ internal static class ClientSignedCandidateTests
                     preferences = preferences with { SmartRoutingEnabled = true };
                     break;
                 default:
-                    fixture.Store.Save(state with
+                    fixture.Store.SetExternalSnapshot(state with
                     {
                         Session = state.Session with { User = state.Session.User with { Id = "another-user" } },
                     });

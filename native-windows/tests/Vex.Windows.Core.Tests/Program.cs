@@ -15,6 +15,21 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
+if (args is ["--account-vpn-epoch-regression"])
+{
+    try
+    {
+        AccountVpnIdentityTests.RunRegistrationEpochRegression();
+        Console.WriteLine("PASS authoritative registration epoch replay regression");
+    }
+    catch (Exception error)
+    {
+        Console.Error.WriteLine("FAIL authoritative registration epoch replay regression: " + error.Message);
+        Environment.ExitCode = 1;
+    }
+    return;
+}
+
 var tests = new (string Name, Action Run)[]
 {
     ("Realtime session recovery preserves outages and rejects stale credential events", CustomerRealtimeSessionTests.Run),
@@ -25,6 +40,7 @@ var tests = new (string Name, Action Run)[]
     ("Service repair verifies trusted health, ownership, cancellation and bounded retries", ServiceMaintenanceTests.Run),
     ("Browser authentication cancellation rejects late sessions and preserves fresh attempts", NativeAuthServiceTests.Run),
     ("Authenticated accounts defer VPN registration and preserve session through provisioning failures", AuthenticatedSessionProvisioningTests.Run),
+    ("Account switches retain independent VPN registrations and device keys", AccountVpnIdentityTests.Run),
     ("API errors preserve safe MFA guidance and device quota contracts", VexApiErrorContractTests.Run),
     ("Startup survives package upgrades and honors Windows ownership and disable states", StartupRegistrationTests.Run),
     ("Automatic update failures preserve retry and lifetime cancellation", NativeUpdateFailureTests.Run),
@@ -1476,7 +1492,9 @@ static void WindowsRegistrationUsesVerifiedDeviceIdentity()
     Equal("/v1/devices/identity-challenge", handler.Requests[0].RequestUri!.AbsolutePath);
     Equal("/v1/devices/register", handler.Requests[1].RequestUri!.AbsolutePath);
     Equal(
-        "native-windows-register-win-installation-1-1-verified",
+        "native-windows-register-win-installation-1-1-verified-" +
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")))[..16].ToLowerInvariant() + "-" +
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("win-installation-1")))[..16].ToLowerInvariant(),
         handler.Requests[1].Headers.GetValues("Idempotency-Key").Single());
 
     using var challengeBody = JsonDocument.Parse(handler.Bodies[0]!);
@@ -3442,6 +3460,10 @@ sealed class RoutingHttpHandler : HttpMessageHandler
 
 sealed class MemoryClientStateStore : IClientStateStore
 {
+    public IVpnAccountIdentityStore AccountVpnIdentities { get; }
+    public MemoryClientStateStore(IVpnAccountIdentityStore? identities = null) =>
+        AccountVpnIdentities = identities ?? new MemoryVpnAccountIdentityStore();
+    private NativeDeviceState? _retainedDevice;
     public ClientStateAccessKind GetAccessState() =>
         State is null
             ? ClientStateAccessKind.Missing
@@ -3449,20 +3471,35 @@ sealed class MemoryClientStateStore : IClientStateStore
 
     public string GetOrCreateInstallationId() => "win-installation-1";
 
-    public NativeDeviceState? LoadDevice() =>
-        State is null
-            ? null
-            : new NativeDeviceState(
-                State.InstallationId,
-                State.DeviceId,
-                State.LocationId,
-                State.Identity);
+    public NativeDeviceState? LoadDevice() => _retainedDevice;
 
     public NativeClientState? State { get; private set; }
 
     public NativeClientState? Load() => State;
 
-    public void Save(NativeClientState state) => State = state;
+    public void Save(NativeClientState state)
+    {
+        NativeVpnAccountIdentitySynchronization.Save(AccountVpnIdentities, state);
+        State = state;
+        if (!state.VpnProvisioningPending && state.VpnRegistrationId is null) _retainedDevice = new(state.InstallationId, state.DeviceId,
+            state.LocationId, state.Identity, state.Session.User.Id);
+    }
+
+    // Tests that model an independently committed account/key change update
+    // both authoritative stores explicitly, rather than use a stale session save.
+    public void SetExternalSnapshot(NativeClientState state)
+    {
+        if (state.VpnRegistrationId is not null)
+        {
+            var map = AccountVpnIdentities.Load(state.Session.User.Id);
+            var replacement = new NativeVpnAccountIdentity(state.Session.User.Id, state.VpnRegistrationId,
+                state.VpnExternalDeviceId!, state.Identity, state.DeviceId, state.LocationId, state.PendingIdentity);
+            if (map is null) AccountVpnIdentities.GetOrAdd(replacement);
+            else AccountVpnIdentities.Replace(map, replacement);
+        }
+        State = state;
+    }
+    public void SetLegacyDeviceForTest(NativeDeviceState device) => _retainedDevice = device;
 
     public void Clear() => State = null;
 }

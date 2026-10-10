@@ -9,7 +9,7 @@ protocol VEXSessionKeychain {
     func contains(account: String) -> Bool
 }
 
-struct VEXKeychainStore {
+struct VEXKeychainStore: VEXDeviceIdentityKeychain {
     static let nativeService = "app.vex.vpn.native.sensitive-storage"
     static let legacyDesktopService = "app.vex.vpn.desktop.sensitive-storage"
 
@@ -24,7 +24,17 @@ struct VEXKeychainStore {
         return String(data: data, encoding: .utf8)
     }
 
+    func stringIfPresent(for account: String, allowAuthenticationUI: Bool = true) throws -> String? {
+        guard let data = try dataIfPresent(for: account, allowAuthenticationUI: allowAuthenticationUI) else { return nil }
+        guard let value = String(data: data, encoding: .utf8) else { throw VEXKeychainError.invalidValue }
+        return value
+    }
+
     func data(for account: String, allowAuthenticationUI: Bool = true) -> Data? {
+        try? dataIfPresent(for: account, allowAuthenticationUI: allowAuthenticationUI)
+    }
+
+    private func dataIfPresent(for account: String, allowAuthenticationUI: Bool) throws -> Data? {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -39,8 +49,10 @@ struct VEXKeychainStore {
         }
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess else { return nil }
-        return item as? Data
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else { throw VEXKeychainError.status(status) }
+        guard let item = item as? Data else { throw VEXKeychainError.invalidValue }
+        return item
     }
 
     func setString(_ value: String, for account: String, requiresBiometricAuthentication: Bool = false) throws {

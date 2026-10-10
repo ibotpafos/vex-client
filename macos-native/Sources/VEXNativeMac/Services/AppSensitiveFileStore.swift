@@ -22,6 +22,24 @@ struct AppSensitiveFileStore {
         return String(data: data, encoding: .utf8)
     }
 
+    func stringIfPresent(for key: String) throws -> String? {
+        let data: Data
+        do {
+            data = try Data(contentsOf: fileURL(for: key))
+        } catch {
+            let failure = error as NSError
+            let underlying = failure.userInfo[NSUnderlyingErrorKey] as? NSError
+            if failure.domain == NSCocoaErrorDomain,
+               failure.code == NSFileReadNoSuchFileError,
+               underlying == nil || (underlying?.domain == NSPOSIXErrorDomain && underlying?.code == 2) {
+                return nil
+            }
+            throw error
+        }
+        guard let value = String(data: data, encoding: .utf8) else { throw VEXKeychainError.invalidValue }
+        return value
+    }
+
     func data(for key: String) -> Data? {
         try? Data(contentsOf: fileURL(for: key))
     }

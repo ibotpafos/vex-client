@@ -11,7 +11,7 @@ final class VPNProfileServiceIdentityTests: XCTestCase {
         let fixture = try Fixture()
         defer { fixture.remove() }
         try fixture.cache.save(fixture.record(owner: "account-a"), locationId: "de", routingMode: .fullTunnel)
-        let network = Network(device: try fixture.device(owner: "account-b", id: "device-b"), profile: fixture.profile(deviceId: "device-b"))
+        let network = Network(device: try fixture.device(owner: "account-b", id: "device-b"), profile: fixture.profile(deviceId: "device-b", owner: "account-b"))
 
         let tunnel = try await fixture.service(network).resolveProfile(accessToken: "token-b", userId: "account-b",
             locationId: "de", routingMode: .fullTunnel, writeHelperConfig: false, prevalidatedEntitlement: fixture.paid)
@@ -170,16 +170,16 @@ final class VPNProfileServiceIdentityTests: XCTestCase {
         let record = try fixture.record()
         try fixture.cache.save(record, locationId: "de", routingMode: .fullTunnel)
         let store = WireGuardKeyStore(fileStore: fixture.fileStore)
-        let replacement = WireGuardKeyPair(privateKey: Data(repeating: 21, count: 32).base64EncodedString(),
-            publicKey: Data(repeating: 22, count: 32).base64EncodedString(), keyEpoch: 8)
-        let network = Network(device: record.device, profile: fixture.profile(), onProfile: { try store.save(replacement) })
+        let replacement = WireGuardKeyPair(privateKey: "XasIfmJKikt54X+Lg4AO5m87sSkmGLb9HC+LJ/+I4Os=",
+            publicKey: "3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=", keyEpoch: 8)
+        let network = Network(device: record.device, profile: fixture.profile(), onProfile: { try store.save(replacement, accountUserId: "account-a") })
 
         do {
             _ = try await fixture.service(network).resolveProfile(accessToken: "token-a", userId: "account-a",
                 locationId: "de", routingMode: .fullTunnel, forceRefresh: true, writeHelperConfig: false, prevalidatedEntitlement: fixture.paid)
             XCTFail("A response for the old local key must be rejected")
         } catch VPNProfileError.profileIdentityMismatch { }
-        XCTAssertEqual(try store.getOrCreate(), replacement)
+        XCTAssertEqual(try store.existing(accountUserId: "account-a"), replacement)
         XCTAssertEqual(fixture.cache.load(locationId: "de", routingMode: .fullTunnel, accountUserId: "account-a"), record)
         XCTAssertNil(fixture.cache.readHelperConfig())
     }
@@ -202,15 +202,23 @@ final class VPNProfileServiceIdentityTests: XCTestCase {
 
     private struct Fixture {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("VPNProfileServiceIdentityTests-\(UUID().uuidString)")
-        let keyPair = WireGuardKeyPair(privateKey: Data(repeating: 11, count: 32).base64EncodedString(),
-            publicKey: Data(repeating: 12, count: 32).base64EncodedString(), keyEpoch: 7)
+        let keyPair = WireGuardKeyPair(privateKey: "dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=",
+            publicKey: "hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo=", keyEpoch: 7)
+        let accountBKeyPair = WireGuardKeyPair(privateKey: "XasIfmJKikt54X+Lg4AO5m87sSkmGLb9HC+LJ/+I4Os=",
+            publicKey: "3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=", keyEpoch: 7)
         let paid = Entitlement(active: true, vpnAccess: true)
         var cache: VPNProfileCache { VPNProfileCache(directoryURL: directory, helperConfigURL: directory.appendingPathComponent("helper/vex.conf")) }
         var fileStore: AppSensitiveFileStore { AppSensitiveFileStore(directoryURL: directory.appendingPathComponent("sensitive")) }
 
         init() throws {
-            try WireGuardKeyStore(fileStore: fileStore).save(keyPair)
+            let keys = WireGuardKeyStore(fileStore: fileStore)
+            try keys.save(keyPair)
+            try keys.save(keyPair, accountUserId: "account-a")
+            try keys.save(accountBKeyPair, accountUserId: "account-b")
             try fileStore.setString("vexd_fixture", for: "vex.auth.device_id")
+            let identities = VEXDeviceIdentityStore(fileStore: fileStore)
+            _ = try identities.getOrCreateDeviceScope(accountUserId: "account-a", adoptingLegacyId: "vexd_fixture")
+            _ = try identities.getOrCreateDeviceScope(accountUserId: "account-b", adoptingLegacyId: "vexd_fixture_b")
         }
 
         func remove() { try? FileManager.default.removeItem(at: directory) }
@@ -225,26 +233,30 @@ final class VPNProfileServiceIdentityTests: XCTestCase {
 
         func device(owner: String = "account-a", id: String = "device-a") throws -> VpnDevice {
             let object: [String: Any] = ["id": id, "user_id": owner, "status": "active", "assigned_ipv4": "192.0.2.2/32",
-                "public_key": keyPair.publicKey, "psk_epoch": 7, "protocol": "amneziawg", "provisioning_mode": "managed_native",
-                "client_key_ownership": "client", "external_device_id": "vexd_fixture", "platform": "macos", "app_version": VEXAppInfo.version]
+                "public_key": owner == "account-b" ? accountBKeyPair.publicKey : keyPair.publicKey, "psk_epoch": 7,
+                "protocol": "amneziawg", "provisioning_mode": "managed_native", "client_key_ownership": "client",
+                "external_device_id": owner == "account-b" ? "vexd_fixture_b" : "vexd_fixture", "platform": "macos", "app_version": VEXAppInfo.version]
             return try JSONDecoder().decode(VpnDevice.self, from: JSONSerialization.data(withJSONObject: object))
         }
 
         func record(owner: String = "account-a") throws -> PreparedTunnelCacheRecord {
-            PreparedTunnelCacheRecord(tunnel: PreparedTunnel(device: try device(owner: owner), config: config,
+            PreparedTunnelCacheRecord(tunnel: PreparedTunnel(device: try device(owner: owner), config: config(owner: owner),
                 locationId: "de", profileVersion: 123, routingMode: .fullTunnel, bypassRegion: nil,
                 bypassRangesCount: 9, bypassDomainsCount: 4, routingPolicyVersion: "fixture-policy", rotationRequired: false),
                 accountUserId: owner, localKeyEpoch: keyPair.keyEpoch)
         }
 
-        var config: String {
-            "[Interface]\nPrivateKey = \(keyPair.privateKey)\nAddress = 192.0.2.2/32\n[Peer]\nPublicKey = \(Data(repeating: 13, count: 32).base64EncodedString())\nEndpoint = 192.0.2.1:51820\nAllowedIPs = 0.0.0.0/0\n"
+        var config: String { config(owner: "account-a") }
+        func config(owner: String) -> String {
+            let pair = owner == "account-b" ? accountBKeyPair : keyPair
+            return "[Interface]\nPrivateKey = \(pair.privateKey)\nAddress = 192.0.2.2/32\n[Peer]\nPublicKey = \(Data(repeating: 13, count: 32).base64EncodedString())\nEndpoint = 192.0.2.1:51820\nAllowedIPs = 0.0.0.0/0\n"
         }
 
-        func profile(deviceId: String = "device-a", unchanged: Bool = false) -> [String: Any] {
+        func profile(deviceId: String = "device-a", owner: String = "account-a", unchanged: Bool = false) -> [String: Any] {
+            let pair = owner == "account-b" ? accountBKeyPair : keyPair
             var object: [String: Any] = ["unchanged": unchanged, "version": 123, "device_id": deviceId,
-                "client_public_key": keyPair.publicKey, "client_key_epoch": 7, "revoked": false, "rotation_required": false]
-            if !unchanged { object["config"] = config; object["assigned_ipv4"] = "192.0.2.2/32" }
+                "client_public_key": pair.publicKey, "client_key_epoch": 7, "revoked": false, "rotation_required": false]
+            if !unchanged { object["config"] = config(owner: owner); object["assigned_ipv4"] = "192.0.2.2/32" }
             return object
         }
     }

@@ -65,7 +65,7 @@ function installationIdentity(key: string, prefix: string): Promise<string> {
   return pending;
 }
 
-function createInstallationUUID(): string {
+export function createInstallationUUID(): string {
   const runtimeCrypto = globalThis.crypto;
   if (typeof runtimeCrypto?.randomUUID === 'function') {
     return runtimeCrypto.randomUUID();

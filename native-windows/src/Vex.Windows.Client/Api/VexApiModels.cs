@@ -56,7 +56,9 @@ public sealed record VpnDevice(
     [property: JsonPropertyName("client_key_ownership")] string? ClientKeyOwnership = null,
     [property: JsonPropertyName("external_device_id")] string? ExternalDeviceId = null,
     [property: JsonPropertyName("platform")] string? Platform = null,
-    [property: JsonPropertyName("app_version")] string? AppVersion = null);
+    [property: JsonPropertyName("app_version")] string? AppVersion = null,
+    [property: JsonPropertyName("user_id")] string? UserId = null,
+    [property: JsonPropertyName("psk_epoch")] int? PskEpoch = null);
 
 public sealed record ManagedVpnProfileAuthorization(
     [property: JsonPropertyName("key_id")] string KeyId,

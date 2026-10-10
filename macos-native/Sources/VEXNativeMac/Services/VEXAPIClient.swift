@@ -114,11 +114,17 @@ struct VEXAPIClient {
         publicKey: String,
         keyEpoch: Int,
         locationId: String,
-        identityFields: [String: String] = [:]
+        identityFields: [String: String] = [:],
+        installationId: String? = nil,
+        accountUserId: String? = nil
     ) async throws -> VpnDevice {
+        let logicalInstallationId = installationId ?? externalDeviceId
+        let registrationScope = try accountUserId.map {
+            try VPNAccountScope.storageKey("native-register", accountUserId: $0)
+        } ?? "native-register"
         var body: [String: Any] = [
             "device_id": externalDeviceId,
-            "installation_id": externalDeviceId,
+            "installation_id": logicalInstallationId,
             "device_name": "Mac",
             "platform": "macos",
             "app_version": VEXAppInfo.version,
@@ -133,7 +139,7 @@ struct VEXAPIClient {
             method: "POST",
             accessToken: accessToken,
             body: body,
-            idempotencyKey: "native-register-\(externalDeviceId)-\(VEXAppInfo.version)-\(VEXAppInfo.buildNumber)"
+            idempotencyKey: "\(registrationScope)-\(logicalInstallationId)-\(VEXAppInfo.version)-\(VEXAppInfo.buildNumber)"
         )
         return response.device
     }

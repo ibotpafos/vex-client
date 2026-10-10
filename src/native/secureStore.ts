@@ -7,6 +7,7 @@ export const SENSITIVE_STORAGE_KEYS = [
   'vex.app.install_reported.v1',
   'vex.auth.device_id',
   'vex.auth.device_identity.v1',
+  'vex.vpn.legacy_key_owner.v1',
   'vex.auth.session.v1',
   'vex.auth.session.history.v1',
   'vex.auth.pkce.state',
@@ -23,6 +24,7 @@ const LOGOUT_PRESERVED_STORAGE_KEYS = new Set([
   'vex.app.install_reported.v1',
   'vex.auth.device_id',
   'vex.auth.device_identity.v1',
+  'vex.vpn.legacy_key_owner.v1',
 ]);
 
 function shouldUseWebStorage(): boolean {

@@ -4,7 +4,7 @@ param(
     [string]$InstallDirectory,
 
     [Parameter(Mandatory = $true)]
-    [ValidatePattern('^S-1-5-21-(\d+-){3}\d+$')]
+    [ValidatePattern('^S-1-(?:5-21|12-1)-(\d+-){3}\d+$')]
     [string]$OwnerSid,
 
     [Parameter(Mandatory = $true)]
@@ -37,7 +37,8 @@ Set-StrictMode -Version Latest
 Add-Type -AssemblyName System.Security
 
 $serviceName = 'VEX VPN Service'
-$dataDirectory = Join-Path $env:ProgramData 'VEX\VPN'
+$serviceControl = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'sc.exe'
+$dataDirectory = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)) 'VEX\VPN'
 $serviceExecutable = Join-Path $InstallDirectory 'Vex.Windows.Service.exe'
 $clientExecutable = Join-Path $InstallDirectory 'Vex.Windows.App.exe'
 $amneziaExecutable = Join-Path $InstallDirectory 'amneziawg.exe'
@@ -71,12 +72,10 @@ function Assert-InstallPayload {
         [StringComparison]::OrdinalIgnoreCase)) {
         throw 'VEX must be installed below the protected Program Files directory.'
     }
-    $installInfo = Get-Item -LiteralPath $installRoot
-    if (($installInfo.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-        throw 'The VEX installation directory cannot be a reparse point.'
-    }
+    Assert-NoReparsePath -Path $installRoot
 
     foreach ($path in $requiredFiles) {
+        Assert-NoReparsePath -Path $path
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
             throw "Required signed installation file is missing: $path"
         }
@@ -104,6 +103,62 @@ function Assert-InstallPayload {
         -Path $profileSigningKeyring `
         -ExpectedHash $ProfileSigningKeyringSha256 `
         -Description 'profile signing keyring'
+}
+
+function Assert-NoReparsePath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $candidate = [IO.Path]::GetFullPath($Path)
+    while (-not [string]::IsNullOrEmpty($candidate)) {
+        if (Test-Path -LiteralPath $candidate) {
+            $item = Get-Item -LiteralPath $candidate -Force
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+                ($null -ne $item.PSObject.Properties['LinkType'] -and $item.LinkType -eq 'HardLink')) {
+                throw 'The VEX installation and state paths cannot contain links or reparse points.'
+            }
+        }
+        $parent = [IO.Path]::GetDirectoryName($candidate)
+        if ($parent -eq $candidate) { break }
+        $candidate = $parent
+    }
+}
+
+function Get-PrivateStateItems {
+    Assert-NoReparsePath -Path $dataDirectory
+    if (-not (Test-Path -LiteralPath $dataDirectory)) { return }
+    $pending = [Collections.Generic.Stack[string]]::new()
+    $pending.Push($dataDirectory)
+    $count = 0
+    while ($pending.Count -gt 0) {
+        $path = $pending.Pop()
+        Assert-NoReparsePath -Path $path
+        $item = Get-Item -LiteralPath $path -Force
+        $count++
+        if ($count -gt 10000) { throw 'The VEX private state tree is unexpectedly large.' }
+        $item
+        if ($item.PSIsContainer) {
+            foreach ($child in @(Get-ChildItem -LiteralPath $path -Force)) { $pending.Push($child.FullName) }
+        }
+    }
+}
+
+function Stop-ServiceBeforeProvisioning {
+    $existing = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+    if ($null -eq $existing) { return }
+    try {
+        if ($existing.Status -ne [ServiceProcess.ServiceControllerStatus]::Stopped) {
+            Stop-Service -Name $serviceName -ErrorAction Stop
+            $existing.WaitForStatus([ServiceProcess.ServiceControllerStatus]::Stopped, [TimeSpan]::FromSeconds(30))
+        }
+    }
+    finally { $existing.Dispose() }
+}
+
+function Test-PrivateRuntimePath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $privateRoot = [IO.Path]::GetFullPath((Join-Path $dataDirectory 'Private')).TrimEnd([IO.Path]::DirectorySeparatorChar)
+    $fullPath = [IO.Path]::GetFullPath($Path)
+    return $fullPath.Equals($privateRoot, [StringComparison]::OrdinalIgnoreCase) -or
+        $fullPath.StartsWith($privateRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)
 }
 
 function Assert-PinnedSignature {
@@ -172,62 +227,52 @@ function Wait-ServiceRemoved {
 }
 
 function Set-PrivateDirectoryAcl {
+    # Inspect the complete tree before changing any ACL or following a child.
+    $existingItems = @(Get-PrivateStateItems)
+    Assert-NoReparsePath -Path (Split-Path -Parent $dataDirectory)
     New-Item -ItemType Directory -Path $dataDirectory -Force | Out-Null
-    $acl = [Security.AccessControl.DirectorySecurity]::new()
-    $acl.SetAccessRuleProtection($true, $false)
-
-    $inherit = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
-    $propagation = [Security.AccessControl.PropagationFlags]::None
-    $allow = [Security.AccessControl.AccessControlType]::Allow
-    $systemSid = [Security.Principal.SecurityIdentifier]::new(
-        [Security.Principal.WellKnownSidType]::LocalSystemSid,
-        $null)
-    $administratorsSid = [Security.Principal.SecurityIdentifier]::new(
-        [Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid,
-        $null)
-    $ownerIdentity = [Security.Principal.SecurityIdentifier]::new(
-        $OwnerSid)
-    $rules = @(
-        [Security.AccessControl.FileSystemAccessRule]::new(
-            $systemSid, 'FullControl', $inherit, $propagation, $allow),
-        [Security.AccessControl.FileSystemAccessRule]::new(
-            $administratorsSid, 'FullControl', $inherit, $propagation, $allow),
-        [Security.AccessControl.FileSystemAccessRule]::new(
-            $ownerIdentity, 'ReadAndExecute', $inherit, $propagation, $allow)
-    )
-    foreach ($rule in $rules) {
-        $acl.AddAccessRule($rule)
+    $items = @((Get-Item -LiteralPath (Split-Path -Parent $dataDirectory) -Force)) + @(Get-PrivateStateItems)
+    foreach ($item in $items) {
+        $acl = if ($item.PSIsContainer) { [Security.AccessControl.DirectorySecurity]::new() }
+               else { [Security.AccessControl.FileSecurity]::new() }
+        $acl.SetAccessRuleProtection($true, $false)
+        $administratorsSid = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
+        $acl.SetOwner($administratorsSid)
+        $inherit = if ($item.PSIsContainer) { [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit' }
+                   else { [Security.AccessControl.InheritanceFlags]::None }
+        $identities = @(@('S-1-5-18', 'FullControl'), @('S-1-5-32-544', 'FullControl'))
+        if (-not (Test-PrivateRuntimePath -Path $item.FullName)) { $identities += ,@($OwnerSid, 'ReadAndExecute') }
+        foreach ($pair in $identities) {
+            $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+                [Security.Principal.SecurityIdentifier]::new($pair[0]), $pair[1], $inherit,
+                [Security.AccessControl.PropagationFlags]::None, [Security.AccessControl.AccessControlType]::Allow))
+        }
+        Assert-NoReparsePath -Path $item.FullName
+        Set-Acl -LiteralPath $item.FullName -AclObject $acl
     }
-
-    Set-Acl -LiteralPath $dataDirectory -AclObject $acl
 }
 
 function Assert-PrivateDirectoryAcl {
-    $acl = Get-Acl -LiteralPath $dataDirectory
-    if (-not $acl.AreAccessRulesProtected) {
-        throw 'The VEX ProgramData directory still inherits access rules.'
-    }
-
-    $expectedSids = @(
-        'S-1-5-18',
-        'S-1-5-32-544',
-        $OwnerSid
-    )
-    $actualSids = @(
-        $acl.Access |
-            Where-Object {
-                $_.AccessControlType -eq
-                    [Security.AccessControl.AccessControlType]::Allow
-            } |
-            ForEach-Object {
-                $_.IdentityReference.Translate(
-                    [Security.Principal.SecurityIdentifier]).Value
-            }
-    )
-    foreach ($expectedSid in $expectedSids) {
-        if ($expectedSid -notin $actualSids) {
-            throw "The VEX ProgramData ACL is missing SID '$expectedSid'."
+    foreach ($item in @((Get-Item -LiteralPath (Split-Path -Parent $dataDirectory) -Force)) + @(Get-PrivateStateItems)) {
+        $acl = Get-Acl -LiteralPath $item.FullName
+        if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -notin @('S-1-5-18', 'S-1-5-32-544') -or
+            -not $acl.AreAccessRulesProtected) { throw 'VEX state requires a trusted owner and protected access rules.' }
+        $expected = @{
+            'S-1-5-18' = [long][Security.AccessControl.FileSystemRights]::FullControl
+            'S-1-5-32-544' = [long][Security.AccessControl.FileSystemRights]::FullControl
         }
+        if (-not (Test-PrivateRuntimePath -Path $item.FullName)) {
+            $expected[$OwnerSid] = [long]([Security.AccessControl.FileSystemRights]::ReadAndExecute -bor [Security.AccessControl.FileSystemRights]::Synchronize)
+        }
+        $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
+        if ($rules.Count -ne $expected.Count) { throw 'VEX state has unexpected access rules.' }
+        foreach ($rule in $rules) {
+            $sid = $rule.IdentityReference.Value
+            if (-not $expected.ContainsKey($sid) -or $rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or
+                [long]$rule.FileSystemRights -ne $expected[$sid]) { throw 'VEX state has unexpected access rights.' }
+            $expected.Remove($sid)
+        }
+        if ($expected.Count -ne 0) { throw 'VEX state is missing required access rules.' }
     }
 }
 
@@ -283,27 +328,29 @@ function Install-Service {
     $binaryPath = '"' + $serviceExecutable + '"'
     $existing = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
     if ($null -ne $existing) {
-        Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
         $existing.Dispose()
-        & sc.exe config $serviceName binPath= $binaryPath start= auto obj= LocalSystem |
+        & $serviceControl config $serviceName binPath= $binaryPath start= auto obj= LocalSystem |
             Out-Null
         if ($LASTEXITCODE -ne 0) {
             throw 'The existing VEX VPN service configuration could not be updated.'
         }
     }
     else {
-        & sc.exe create $serviceName binPath= $binaryPath start= auto obj= LocalSystem |
+        & $serviceControl create $serviceName binPath= $binaryPath start= auto obj= LocalSystem |
             Out-Null
         if ($LASTEXITCODE -ne 0) {
             throw 'The VEX VPN service could not be installed.'
         }
     }
 
-    & sc.exe description $serviceName 'Native VEX VPN tunnel controller.' |
+    & $serviceControl description $serviceName 'Native VEX VPN tunnel controller.' |
         Out-Null
-    & sc.exe failure $serviceName reset= 86400 actions= restart/5000/restart/15000/''/0 |
+    if ($LASTEXITCODE -ne 0) { throw 'The VEX service description could not be configured.' }
+    & $serviceControl failure $serviceName reset= 86400 actions= restart/5000/restart/15000/''/0 |
         Out-Null
-    & sc.exe failureflag $serviceName 1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'The VEX service recovery actions could not be configured.' }
+    & $serviceControl failureflag $serviceName 1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'The VEX service recovery flag could not be configured.' }
     Set-ItemProperty `
         -LiteralPath "HKLM:\SYSTEM\CurrentControlSet\Services\$serviceName" `
         -Name ImagePath `
@@ -328,6 +375,8 @@ function Install-Service {
 
 Assert-Administrator
 Assert-InstallPayload
+$null = @(Get-PrivateStateItems)
+Stop-ServiceBeforeProvisioning
 Set-PrivateDirectoryAcl
 Assert-PrivateDirectoryAcl
 Write-ProtectedAuthorization
@@ -359,4 +408,8 @@ $state = [ordered]@{
     (Join-Path $dataDirectory 'bootstrap-state.json'),
     ($state | ConvertTo-Json -Depth 4),
     [Text.UTF8Encoding]::new($false))
+# Newly written files must receive the same explicit private ACL as existing
+# state before the controller can observe the replacement authorization.
+Set-PrivateDirectoryAcl
+Assert-PrivateDirectoryAcl
 Install-Service

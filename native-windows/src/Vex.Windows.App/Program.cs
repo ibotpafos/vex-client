@@ -2,6 +2,9 @@ using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.Windows.AppLifecycle;
 using System.Runtime.InteropServices;
+using Vex.Windows.App.Services;
+using Vex.Windows.Client.Auth;
+using Windows.ApplicationModel.Activation;
 
 namespace Vex.Windows.App;
 
@@ -20,12 +23,24 @@ internal static class Program
 
         var current = AppInstance.GetCurrent();
         var activationArgs = current.GetActivatedEventArgs();
-        _instance = AppInstance.FindOrRegisterForKey("main");
+        var protocolUri = activationArgs.Kind switch
+        {
+            ExtendedActivationKind.Protocol when activationArgs.Data is IProtocolActivatedEventArgs protocol => protocol.Uri,
+            ExtendedActivationKind.Launch when activationArgs.Data is ILaunchActivatedEventArgs launch =>
+                ProtocolActivationUriParser.Parse(launch.Arguments) ?? UiPreviewContext.ParseActivationUri(launch.Arguments),
+            _ => ProtocolActivationUriParser.Parse(string.Join(" ", args)) ?? UiPreviewContext.ParseActivationUri(string.Join(" ", args)),
+        };
+        UiPreviewContext.Initialize(args, protocolUri);
+        if (UiPreviewContext.IsPreviewRequest && !UiPreviewContext.IsSupported) return 0;
+        _instance = AppInstance.FindOrRegisterForKey(UiPreviewContext.InstanceKey);
         if (!_instance.IsCurrent)
         {
             RedirectActivationTo(activationArgs, _instance);
             return 0;
         }
+        // Control-only preview activations cannot create a preview or launch
+        // the normal account/VPN application when no preview is running.
+        if (UiPreviewContext.IsCommandOnly) return 0;
 
         _instance.Activated += OnActivated;
         Application.Start(_ =>

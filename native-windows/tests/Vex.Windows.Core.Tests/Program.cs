@@ -17,6 +17,38 @@ using System.Text.Json.Nodes;
 
 var tests = new (string Name, Action Run)[]
 {
+    ("Realtime session recovery preserves outages and rejects stale credential events", CustomerRealtimeSessionTests.Run),
+    ("Realtime billing and device events cannot mutate a replacement session", RealtimeScopeIsolationTests.Run),
+    ("Periodic entitlement checks preserve current sessions and user connection intent", ActiveEntitlementMonitorTests.Run),
+    ("Account retains authoritative subscription data through optional section failures", ClientAccountSnapshotTests.Run),
+    ("Signed profile warm-up preserves routing, identity, trust and foreground priority", ProfileWarmupTests.Run),
+    ("Service repair verifies trusted health, ownership, cancellation and bounded retries", ServiceMaintenanceTests.Run),
+    ("Browser authentication cancellation rejects late sessions and preserves fresh attempts", NativeAuthServiceTests.Run),
+    ("Authenticated accounts defer VPN registration and preserve session through provisioning failures", AuthenticatedSessionProvisioningTests.Run),
+    ("API errors preserve safe MFA guidance and device quota contracts", VexApiErrorContractTests.Run),
+    ("Startup survives package upgrades and honors Windows ownership and disable states", StartupRegistrationTests.Run),
+    ("Automatic update failures preserve retry and lifetime cancellation", NativeUpdateFailureTests.Run),
+    ("Required updates survive installer launch, restart and offline failures", NativeUpdateServiceTests.Run),
+    ("Unreadable durable update state retains mandatory recovery protection", NativeUpdateRecoveryTests.Run),
+    ("Preferences decode corruption safely and preserve valid legacy choices", NativeClientPreferencesJsonTests.Run),
+    ("App metadata decodes current server contracts and explicit historical aliases", AppMetadataContractTests.Run),
+    ("Protected session cache handles corruption without replacing identity files", ProtectedStateFileTests.Run),
+    ("Windows Hello changes commit durably and reject cancelled verification", WindowsHelloSessionTests.Run),
+    ("Signed relay candidates preserve authorization and bounded offline recovery", ClientSignedCandidateTests.Run),
+    ("Client recovery preserves pins, authority, session and entitlement", ClientRecoveryParityTests.Run),
+    ("Failed server switch retains an acknowledged key rotation", ClientRecoveryParityTests.FailedSwitchPreservesCommittedRotation),
+    ("Failed server switch retains an ambiguous pending key rotation", ClientRecoveryParityTests.FailedSwitchPreservesPendingRotation),
+    ("Failed server switch retains an acknowledged earlier pending rotation", ClientRecoveryParityTests.FailedSwitchPreservesCompletedPendingRotation),
+    ("Failed server switch cannot replay authoritatively revoked entitlement", ClientRecoveryParityTests.FailedSwitchCannotReplayRevokedEntitlement),
+    ("Failed server switch cannot replay an authoritatively revoked profile", ClientRecoveryParityTests.FailedSwitchCannotReplayRevokedProfile),
+    ("Background recovery respects health, user intent, lock and backoff", VpnRecoveryPolicyTests.Run),
+    ("UI VPN operations serialize failures and preserve explicit disconnect", VpnUiStateServiceTests.Run),
+    ("Dynamic routing preserves expiry, quarantine and sticky route policy", DynamicRouteEngineTests.Run),
+    ("Server catalog groups countries and preserves search, filters and favorites", ServerCatalogTests.Run),
+    ("Server picker preserves highlighted nodes and rejects busy selection", ServerPickerInteractionPolicyTests.Run),
+    ("Desktop minimum geometry scales safely to DPI and display work area", DesktopWindowSizingPolicyTests.Run),
+    ("Server health reports all, partial and unavailable catalog states", ServerHealthPresentationTests.Run),
+    ("Queued diagnostics preserve failures, cancellation and rate limits", DiagnosticsQueueTests.Run),
     ("Navigation matches native macOS sections", NavigationMatchesMac),
     ("Windows location labels are localized for presentation", WindowsLocationLabelsAreLocalized),
     ("Automatic location reuses the healthy cached server", AutomaticLocationReusesHealthyCachedServer),
@@ -82,10 +114,9 @@ var tests = new (string Name, Action Run)[]
     ("Windows registration fails closed when the identity challenge fails", WindowsRegistrationFailsClosedWithoutIdentityChallenge),
     ("Windows billing summary uses plans and entitlement contracts", WindowsBillingSummaryUsesContracts),
     ("Windows billing checkout uses the native billing contract", WindowsBillingCheckoutUsesContract),
-    ("Windows support history preserves the ticket thread contract", WindowsSupportHistoryUsesContract),
     ("Windows control plane exposes macOS parity read APIs", WindowsControlPlaneExposesParityReads),
     ("Windows control plane sends VPN telemetry and diagnostics", WindowsControlPlaneSendsTelemetryAndDiagnostics),
-    ("Windows control plane exposes support socket and app configuration", WindowsControlPlaneExposesSupportAndAppConfiguration),
+    ("Windows control plane exposes app configuration and update metadata", WindowsControlPlaneExposesAppConfiguration),
     ("Windows realtime parser preserves complete SSE frames", WindowsRealtimeParserPreservesFrames),
     ("Windows realtime metadata rejects unknown domains", WindowsRealtimeMetadataRejectsUnknownDomains),
     ("Windows realtime refresh policy ignores heartbeats", WindowsRealtimeRefreshPolicyIgnoresHeartbeats),
@@ -119,12 +150,12 @@ var tests = new (string Name, Action Run)[]
     ("Native client preserves manual location and routing preferences", NativeClientPreservesManualVpnPreferences),
     ("Native client gates VPN connect on entitlement", NativeClientGatesConnectOnEntitlement),
     ("Native client reports successful connect and disconnect", NativeClientReportsVpnLifecycle),
-    ("Native client replies through the active support thread", NativeClientRepliesThroughActiveSupportThread),
-    ("Native client derives a support subject for a new thread", NativeClientDerivesSupportSubjectForNewThread),
 };
 
+tests = [.. tests, .. VpnNamedPipeTransportTests.Cases, .. VpnRuntimeLifetimeTests.All, .. VpnRuntimeRecoveryTests.All, .. VpnEndpointAddressCacheTests.All];
+
 var failures = new List<string>();
-foreach (var test in tests)
+foreach (var test in tests.Concat(RuntimeParityTests.All))
 {
     try
     {
@@ -144,20 +175,18 @@ if (failures.Count > 0)
     return;
 }
 
-Console.WriteLine($"PASS {tests.Length} tests");
+Console.WriteLine($"PASS {tests.Length + RuntimeParityTests.All.Length} tests");
 
 static void NavigationMatchesMac()
 {
     var sections = AppSectionCatalog.All;
-    Equal(4, sections.Count);
+    Equal(3, sections.Count);
     Equal(AppSection.Home, sections[0].Id);
     Equal("Главная", sections[0].Title);
     Equal(AppSection.Account, sections[1].Id);
     Equal("Аккаунт", sections[1].Title);
-    Equal(AppSection.Support, sections[2].Id);
-    Equal("Поддержка", sections[2].Title);
-    Equal(AppSection.Settings, sections[3].Id);
-    Equal("Настройки", sections[3].Title);
+    Equal(AppSection.Settings, sections[2].Id);
+    Equal("Настройки", sections[2].Title);
 }
 
 static void WindowsRealtimeParserPreservesFrames()
@@ -425,7 +454,7 @@ static void OfflineErrorRemainsReconnectable()
 {
     var snapshot = new VpnConnectionSnapshot(
         VpnConnectionPhase.Error,
-        "fi-1",
+        null,
         Sequence: 42,
         ErrorCode: "network_unavailable")
     {
@@ -433,6 +462,11 @@ static void OfflineErrorRemainsReconnectable()
     };
 
     Equal(false, VpnConnectionActionPolicy.ShouldDisconnect(snapshot));
+    Equal(true, VpnConnectionActionPolicy.ShouldDisconnect(snapshot with { LocationId = "fi-1" }));
+    Equal(true, VpnConnectionActionPolicy.ShouldDisconnect(snapshot with
+    {
+        Diagnostics = VpnTunnelDiagnostics.Empty with { LeakProtection = VpnLeakProtectionState.Blocking },
+    }));
 }
 
 static void ClientFailurePreservesCleanupEvidence()
@@ -1615,62 +1649,6 @@ static void WindowsBillingCheckoutUsesContract()
     }
 }
 
-static void WindowsSupportHistoryUsesContract()
-{
-    var handler = new RoutingHttpHandler(request => request.RequestUri!.AbsolutePath switch
-    {
-        "/v1/support-tickets" when request.Method == HttpMethod.Get => JsonResponse(
-            """
-            [
-              {
-                "id":"ticket-1",
-                "subject":"Не подключается",
-                "message":"Первое сообщение",
-                "messages":[
-                  {
-                    "id":"message-1",
-                    "ticket_id":"ticket-1",
-                    "sender":"user",
-                    "body":"Первое сообщение",
-                    "created_at":"2026-07-28T10:00:00Z"
-                  },
-                  {
-                    "id":"message-2",
-                    "ticket_id":"ticket-1",
-                    "sender":"admin",
-                    "body":"Проверьте DNS",
-                    "created_at":"2026-07-28T10:03:00Z"
-                  }
-                ],
-                "status":"waiting_user",
-                "priority":"normal",
-                "source":"windows_native",
-                "created_at":"2026-07-28T10:00:00Z",
-                "updated_at":"2026-07-28T10:03:00Z"
-              }
-            ]
-            """),
-        _ => new HttpResponseMessage(HttpStatusCode.NotFound),
-    });
-    var client = new VexApiClient(
-        new HttpClient(handler)
-        {
-            BaseAddress = new Uri("https://api.example.test"),
-        });
-
-    var tickets = client.GetSupportTicketsAsync(
-        "access-secret",
-        CancellationToken.None).GetAwaiter().GetResult();
-
-    Equal(1, tickets.Count);
-    Equal("ticket-1", tickets[0].Id);
-    Equal("Не подключается", tickets[0].Subject);
-    Equal("waiting_user", tickets[0].Status);
-    Equal(2, tickets[0].Messages.Count);
-    Equal("admin", tickets[0].Messages[1].Sender);
-    Equal("access-secret", handler.Requests[0].Headers.Authorization?.Parameter);
-}
-
 static void WindowsControlPlaneExposesParityReads()
 {
     static VexApiClient Client(string response, out RecordingHttpHandler handler)
@@ -1778,19 +1756,8 @@ static void WindowsControlPlaneSendsTelemetryAndDiagnostics()
     }
 }
 
-static void WindowsControlPlaneExposesSupportAndAppConfiguration()
+static void WindowsControlPlaneExposesAppConfiguration()
 {
-    var supportHandler = new RecordingHttpHandler("""{"ticket":"socket-ticket"}""");
-    var supportClient = new VexApiClient(new HttpClient(supportHandler)
-    {
-        BaseAddress = new Uri("https://api.example.test"),
-    });
-    var socketUri = supportClient.GetSupportWebSocketUriAsync(
-        "access-secret",
-        CancellationToken.None).GetAwaiter().GetResult();
-    Equal("wss", socketUri.Scheme);
-    Equal("?ticket=socket-ticket", socketUri.Query);
-
     var metadata = new ClientAppMetadata(
         "windows", "1.0.54", 54, "stable", "1.0.0",
         "Windows 11", "arm64", "native-windows-1", 1);
@@ -2255,88 +2222,6 @@ static void NativeClientReportsVpnLifecycle()
     Equal(1, api.ConnectReportCalls);
     Equal(1, api.DisconnectReportCalls);
     Equal("user", api.DisconnectReasons[0]);
-}
-
-static void NativeClientRepliesThroughActiveSupportThread()
-{
-    var api = new FakeNativeClientApi
-    {
-        SupportTickets =
-        new List<SupportTicket>
-        {
-            new SupportTicket(
-                "ticket-1",
-                "Не подключается",
-                "Первое сообщение",
-                new[]
-                {
-                    new SupportMessage(
-                        "message-1",
-                        "ticket-1",
-                        "user",
-                        null,
-                        "Первое сообщение",
-                        "2026-07-28T10:00:00Z"),
-                },
-                "open",
-                "normal",
-                "windows_native",
-                null,
-                "2026-07-28T10:00:00Z",
-                "2026-07-28T10:00:00Z",
-                null),
-        },
-    };
-    var store = new MemoryClientStateStore();
-    var vpn = new FakeVpnControlClient();
-    var coordinator = new NativeClientCoordinator(
-        api,
-        store,
-        vpn,
-        "1.0.54");
-
-    coordinator.SignInAndProvisionAsync(
-        "user@example.com",
-        "correct horse battery staple",
-        CancellationToken.None).GetAwaiter().GetResult();
-    var snapshot = coordinator.GetSupportSnapshotAsync(
-        CancellationToken.None).GetAwaiter().GetResult();
-    var ticket = coordinator.SendSupportMessageAsync(
-        "Проверьте еще раз, пожалуйста.",
-        null,
-        CancellationToken.None).GetAwaiter().GetResult();
-
-    Equal("ticket-1", snapshot.ActiveTicket!.Id);
-    Equal(1, snapshot.Tickets.Count);
-    Equal(1, api.SupportCreateCalls);
-    Equal("Не подключается", api.SupportSubjects[0]);
-    Equal("Проверьте еще раз, пожалуйста.", api.SupportBodies[0]);
-    Equal(2, ticket.Messages.Count);
-}
-
-static void NativeClientDerivesSupportSubjectForNewThread()
-{
-    var api = new FakeNativeClientApi();
-    var store = new MemoryClientStateStore();
-    var vpn = new FakeVpnControlClient();
-    var coordinator = new NativeClientCoordinator(
-        api,
-        store,
-        vpn,
-        "1.0.54");
-
-    coordinator.SignInAndProvisionAsync(
-        "user@example.com",
-        "correct horse battery staple",
-        CancellationToken.None).GetAwaiter().GetResult();
-    var ticket = coordinator.SendSupportMessageAsync(
-        "Не подключается после обновления\nЛоги приложил ниже.",
-        null,
-        CancellationToken.None).GetAwaiter().GetResult();
-
-    Equal(1, api.SupportCreateCalls);
-    Equal("Не подключается после обновления", api.SupportSubjects[0]);
-    Equal("Не подключается после обновления", ticket.Subject);
 }
 
 static VpnProfileAuthorization CreateSignedProfileAuthorization(
@@ -3673,15 +3558,7 @@ sealed class FakeNativeClientApi : INativeClientApi
 
     public int RotateCalls { get; private set; }
 
-    public List<SupportTicket> SupportTickets { get; set; } = [];
-
-    public int SupportCreateCalls { get; private set; }
-
     public int RefreshCalls { get; private set; }
-
-    public List<string> SupportSubjects { get; } = [];
-
-    public List<string> SupportBodies { get; } = [];
 
     public IReadOnlyList<VpnLocation> Locations { get; init; } =
         [new VpnLocation("fi-1", "Helsinki", "available", 1)];
@@ -3690,7 +3567,7 @@ sealed class FakeNativeClientApi : INativeClientApi
         new(
             true, "pro_monthly", "Pro", "active", "Pro", "Pro",
             "Осталось 30 дней", "active", "pro",
-            "2026-08-31T00:00:00Z", "2026-08-31T00:00:00Z", true);
+            "2099-08-31T00:00:00Z", "2099-08-31T00:00:00Z", true);
 
     public int ConnectReportCalls { get; private set; }
 
@@ -3855,6 +3732,9 @@ sealed class FakeNativeClientApi : INativeClientApi
         return Task.FromResult(Entitlement);
     }
 
+    public Task<IReadOnlyList<BillingPlan>> GetBillingPlansAsync(CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyList<BillingPlan>>([new("pro_monthly", "Pro", "platega", 49900, "RUB", "monthly", 3, "pro", "active")]);
+
     public Task<BillingSummary> GetBillingSummaryAsync(
         string accessToken,
         CancellationToken cancellationToken) =>
@@ -3967,83 +3847,6 @@ sealed class FakeNativeClientApi : INativeClientApi
         ClientDiagnosticsReport report,
         CancellationToken cancellationToken) =>
         Task.CompletedTask;
-
-    public Task<IReadOnlyList<SupportTicket>> GetSupportTicketsAsync(
-        string accessToken,
-        CancellationToken cancellationToken) =>
-        Task.FromResult<IReadOnlyList<SupportTicket>>(SupportTickets);
-
-    public Task<SupportTicket> CreateSupportTicketAsync(
-        string accessToken,
-        string subject,
-        string message,
-        string source,
-        CancellationToken cancellationToken)
-    {
-        SupportCreateCalls += 1;
-        SupportSubjects.Add(subject);
-        SupportBodies.Add(message);
-        var active = SupportTickets.FirstOrDefault(ticket =>
-            ticket.Status is not ("closed" or "resolved"));
-        var now = "2026-07-28T10:05:00Z";
-        if (active is not null)
-        {
-            var updated = active with
-            {
-                Message = message,
-                Messages = active.Messages
-                    .Concat(
-                    [
-                    new SupportMessage(
-                        $"message-{active.Messages.Count + 1}",
-                        active.Id,
-                        "user",
-                        null,
-                        message,
-                        now),
-                    ])
-                    .ToArray(),
-                UpdatedAt = now,
-                Status = "open",
-            };
-            SupportTickets = SupportTickets
-                .Select(ticket => ticket.Id == updated.Id ? updated : ticket)
-                .ToList();
-            return Task.FromResult(updated);
-        }
-
-        var created = new SupportTicket(
-            "ticket-1",
-            subject,
-            message,
-            new[]
-            {
-                new SupportMessage(
-                    "message-1",
-                    "ticket-1",
-                    "user",
-                    null,
-                    message,
-                    now),
-            },
-            "open",
-            "normal",
-            source,
-            null,
-            now,
-            now,
-            null);
-        SupportTickets = SupportTickets
-            .Concat([created])
-            .ToList();
-        return Task.FromResult(created);
-    }
-
-    public Task<Uri> GetSupportWebSocketUriAsync(
-        string accessToken,
-        CancellationToken cancellationToken) =>
-        Task.FromResult(
-            new Uri("wss://api.example.test/v1/support-ws?ticket=fake"));
 
     public Task<AppRemoteConfig> GetRemoteConfigAsync(
         ClientAppMetadata metadata,

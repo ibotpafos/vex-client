@@ -6,6 +6,7 @@ param(
 
     [string]$Configuration = 'Release',
 
+    [ValidatePattern('^[a-z][a-z0-9_-]{0,31}$')]
     [string]$Channel = $(if ($env:VEX_WINDOWS_RELEASE_CHANNEL) { $env:VEX_WINDOWS_RELEASE_CHANNEL } else { 'stable' }),
 
     [string]$Version = $env:VEX_WINDOWS_RELEASE_VERSION,
@@ -15,6 +16,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'ReleaseValidation.ps1')
 
 function Get-RequiredEnv {
     param([Parameter(Mandatory = $true)][string]$Name)
@@ -66,31 +68,6 @@ function Ensure-TrailingSlash {
     param([Parameter(Mandatory = $true)][string]$Value)
 
     return $Value.TrimEnd('/') + '/'
-}
-
-function Normalize-Version {
-    param([Parameter(Mandatory = $true)][string]$Value)
-
-    $parts = $Value.Trim().Split('.', [StringSplitOptions]::RemoveEmptyEntries)
-    if ($parts.Count -lt 2 -or $parts.Count -gt 4) {
-        throw "Windows package version '$Value' must have 2-4 numeric parts."
-    }
-
-    foreach ($part in $parts) {
-        $parsed = 0
-        if (-not [int]::TryParse($part, [ref]$parsed)) {
-            throw "Windows package version '$Value' must be numeric."
-        }
-    }
-
-    if ($parts.Count -eq 2) {
-        return "$($parts[0]).$($parts[1]).0.0"
-    }
-    if ($parts.Count -eq 3) {
-        return "$($parts[0]).$($parts[1]).$($parts[2]).0"
-    }
-
-    return ($parts -join '.')
 }
 
 function ConvertTo-HexSha256 {
@@ -146,9 +123,13 @@ function Invoke-SignTool {
         [Parameter(Mandatory = $true)][string]$Path
     )
 
-    & $SignTool sign /fd SHA256 /f $PfxPath /p $Password $Path
+    & $SignTool sign /fd SHA256 /tr $timestampUri /td SHA256 /f $PfxPath /p $Password $Path
     if ($LASTEXITCODE -ne 0) {
         throw "signtool failed for '$Path'."
+    }
+    & $SignTool verify /pa /all $Path
+    if ($LASTEXITCODE -ne 0) {
+        throw "Authenticode verification failed for '$Path'."
     }
 }
 
@@ -180,8 +161,21 @@ $pfxBase64 = Get-RequiredEnv 'VEX_WINDOWS_SIGN_PFX_BASE64'
 $pfxPassword = Get-RequiredEnv 'VEX_WINDOWS_SIGN_PFX_PASSWORD'
 $updateKeyId = Get-RequiredEnv 'VEX_WINDOWS_UPDATE_KEY_ID'
 $updatePublicKeyBase64 = Get-RequiredEnv 'VEX_WINDOWS_UPDATE_PUBLIC_KEY_BASE64'
-$amneziaExecutablePath = Get-RequiredEnv 'VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH'
-$wintunLibraryPath = Get-RequiredEnv 'VEX_WINDOWS_SERVICE_WINTUN_PATH'
+$amneziaExecutablePath = Get-WindowsRuntimeAssetPath `
+    -EnvironmentName 'VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH' -Architecture $Architecture
+$wintunLibraryPath = Get-WindowsRuntimeAssetPath `
+    -EnvironmentName 'VEX_WINDOWS_SERVICE_WINTUN_PATH' -Architecture $Architecture
+$timestampUri = if ($env:VEX_WINDOWS_SIGN_TIMESTAMP_URI) {
+    $env:VEX_WINDOWS_SIGN_TIMESTAMP_URI.Trim()
+}
+else {
+    'http://timestamp.digicert.com'
+}
+$parsedTimestampUri = $null
+if (-not [Uri]::TryCreate($timestampUri, [UriKind]::Absolute, [ref]$parsedTimestampUri) -or
+    $parsedTimestampUri.Scheme -notin @('http', 'https') -or $parsedTimestampUri.UserInfo) {
+    throw 'VEX_WINDOWS_SIGN_TIMESTAMP_URI must be an absolute HTTP(S) timestamp service URI.'
+}
 $profileSigningKeyringPath = if ($env:VEX_WINDOWS_SERVICE_PROFILE_KEYRING_PATH) {
     $env:VEX_WINDOWS_SERVICE_PROFILE_KEYRING_PATH.Trim()
 }
@@ -195,7 +189,7 @@ if ([string]::IsNullOrWhiteSpace($Version)) {
     throw "VEX_WINDOWS_RELEASE_VERSION is required."
 }
 
-$normalizedVersion = Normalize-Version $Version
+$normalizedVersion = ConvertTo-WindowsPackageVersion $Version
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $publishRoot = Join-Path $OutputRoot "$Channel\$Architecture\$normalizedVersion"
 $publishDir = Join-Path $publishRoot 'publish'
@@ -214,6 +208,13 @@ $bootstrapScriptPath = Join-Path $publishRoot 'bootstrap-native-windows.ps1'
 $installServiceScriptPath = Join-Path $publishRoot 'install-vpn-service.ps1'
 $uninstallServiceScriptPath = Join-Path $publishRoot 'uninstall-vpn-service.ps1'
 
+Assert-WindowsPeArchitecture -Path $amneziaExecutablePath -Architecture $Architecture
+Assert-WindowsPeArchitecture -Path $wintunLibraryPath -Architecture $Architecture
+
+# A failed publish must never leave a stale binary eligible for signing.
+if (Test-Path -LiteralPath $publishRoot -PathType Container) {
+    Remove-Item -LiteralPath $publishRoot -Recurse -Force
+}
 New-Item -ItemType Directory -Path $publishDir -Force | Out-Null
 New-Item -ItemType Directory -Path $servicePublishDir -Force | Out-Null
 New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
@@ -223,26 +224,36 @@ dotnet publish `
     (Join-Path $root 'native-windows\src\Vex.Windows.App\Vex.Windows.App.csproj') `
     -c $Configuration `
     -r "win-$Architecture" `
+    -p:Platform=$Architecture `
     -p:EnableWindowsTargeting=true `
     -p:Version=$normalizedVersion `
     -p:AssemblyVersion=$normalizedVersion `
     -p:FileVersion=$normalizedVersion `
     -p:InformationalVersion=$Version `
     -o $publishDir
+if ($LASTEXITCODE -ne 0) {
+    throw "Native Windows app publish failed with exit code $LASTEXITCODE."
+}
 
 dotnet publish `
     (Join-Path $root 'native-windows\src\Vex.Windows.Service\Vex.Windows.Service.csproj') `
     -c $Configuration `
     -r "win-$Architecture" `
+    -p:Platform=$Architecture `
     -p:EnableWindowsTargeting=true `
     -p:Version=$normalizedVersion `
     -p:AssemblyVersion=$normalizedVersion `
     -p:FileVersion=$normalizedVersion `
     -p:InformationalVersion=$Version `
     -o $servicePublishDir
+if ($LASTEXITCODE -ne 0) {
+    throw "Native Windows service publish failed with exit code $LASTEXITCODE."
+}
 
 Copy-Item -Path (Join-Path $publishDir '*') -Destination $packageDir -Recurse -Force
 Copy-Item -Path (Join-Path $servicePublishDir '*') -Destination $packageDir -Recurse -Force
+Assert-WindowsPeArchitecture -Path (Join-Path $packageDir 'Vex.Windows.App.exe') -Architecture $Architecture
+Assert-WindowsPeArchitecture -Path (Join-Path $packageDir 'Vex.Windows.Service.exe') -Architecture $Architecture
 
 foreach ($requiredAsset in @(
     $amneziaExecutablePath,
@@ -259,9 +270,9 @@ Copy-Item -LiteralPath $wintunLibraryPath -Destination (Join-Path $packageDir 'w
 Copy-Item -LiteralPath $profileSigningKeyringPath -Destination (Join-Path $packageDir 'profile-signing-keys.json') -Force
 
 $iconMap = @{
-    'StoreLogo.png' = 'vex-app-icon-source.png'
-    'Square150x150Logo.png' = 'vex-app-icon-source.png'
-    'Square44x44Logo.png' = 'vex-app-icon-source.png'
+    'StoreLogo.png' = 'StoreLogo.png'
+    'Square150x150Logo.png' = 'Square150x150Logo.png'
+    'Square44x44Logo.png' = 'Square44x44Logo.png'
 }
 foreach ($targetName in $iconMap.Keys) {
     $sourcePath = Join-Path $root "native-windows\src\Vex.Windows.App\Assets\$($iconMap[$targetName])"
@@ -386,9 +397,13 @@ try {
             $signature = Set-AuthenticodeSignature `
                 -LiteralPath $scriptPath `
                 -Certificate $scriptCertificate `
+                -TimestampServer $timestampUri `
                 -HashAlgorithm SHA256
             if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
                 throw "PowerShell Authenticode signing failed for '$scriptPath': $($signature.StatusMessage)"
+            }
+            if ($null -eq $signature.TimeStamperCertificate) {
+                throw "PowerShell Authenticode timestamp is missing for '$scriptPath'."
             }
         }
     }

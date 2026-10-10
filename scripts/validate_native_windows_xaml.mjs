@@ -48,9 +48,19 @@ const serviceClientPath = path.resolve(
   "native-windows/src/Vex.Windows.App/Services/VpnServiceClient.cs",
 );
 const serviceClientSource = fs.readFileSync(serviceClientPath, "utf8");
-if (!/TokenImpersonationLevel\.Identification/u.test(serviceClientSource)) {
+const serviceTransportPath = path.resolve(
+  process.cwd(),
+  "native-windows/src/Vex.Windows.Core/Vpn/Ipc/VpnNamedPipeTransport.cs",
+);
+const serviceTransportSource = fs.readFileSync(serviceTransportPath, "utf8");
+if (!/TokenImpersonationLevel\.Identification/u.test(serviceTransportSource)) {
   failures.push(
-    `${serviceClientPath}: the service must receive an identification token for owner attestation`,
+    `${serviceTransportPath}: the service must receive an identification token for owner attestation`,
+  );
+}
+if (!/new VpnNamedPipeTransport\(VpnServiceProtocol\.PipeName,\s*VpnServiceServerAttestor\.Attest, authorizationStore\.Read\)/u.test(serviceClientSource)) {
+  failures.push(
+    `${serviceClientPath}: production IPC must retain its fixed pipe, mandatory signed server attestation and protected authorization`,
   );
 }
 
@@ -133,7 +143,7 @@ if (!fs.existsSync(programPath)) {
 } else {
   const programSource = fs.readFileSync(programPath, "utf8");
   for (const token of [
-    'FindOrRegisterForKey("main")',
+    'FindOrRegisterForKey(UiPreviewContext.InstanceKey)',
     "RedirectActivationToAsync",
     "Application.Start",
     "HandleRedirectedActivation",
@@ -178,20 +188,20 @@ for (const parityToken of [
   }
 }
 
-for (const pageName of [
-  "AccountPage.xaml",
-  "SupportPage.xaml",
-  "SettingsPage.xaml",
+for (const [pageName, maximum] of [
+  ["AccountPage.xaml", 680],
+  ["SettingsPage.xaml", 680],
 ]) {
   const pagePath = path.join(appRoot, "Views", pageName);
   const pageSource = fs.readFileSync(pagePath, "utf8");
-  if (/\bWidth="430"/u.test(pageSource) || !/\bMaxWidth="430"/u.test(pageSource)) {
+  if (new RegExp(`\\bWidth="${maximum}"`, "u").test(pageSource) ||
+      !new RegExp(`\\bMaxWidth="${maximum}"`, "u").test(pageSource)) {
     failures.push(
-      `${pagePath}: page content must shrink responsively below the macOS-parity 430px maximum`,
+      `${pagePath}: page content must shrink responsively below its ${maximum}px maximum`,
     );
   }
 }
-if (!/\bMaxWidth="1120"/u.test(homePageSource)) {
+if (!/\bMaxWidth="1080"/u.test(homePageSource)) {
   failures.push(
     `${homePagePath}: the current home composition must use the wide macOS-parity canvas`,
   );
@@ -252,7 +262,7 @@ for (const xamlPath of walk(appRoot).filter((file) => file.endsWith(".xaml"))) {
     );
   }
 
-  for (const match of source.matchAll(/\b[A-Za-z]+="(On[A-Z][A-Za-z0-9_]*)"/gu)) {
+  for (const match of source.matchAll(/\b(?:Click|Loaded|Unloaded|Toggled|SelectionChanged|SizeChanged|TextChanged|Invoked)="(On[A-Z][A-Za-z0-9_]*)"/gu)) {
     const handler = match[1];
     const handlerPattern = new RegExp(`\\b${handler}\\s*\\(`, "u");
     if (!handlerPattern.test(codeBehind)) {

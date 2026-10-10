@@ -1,111 +1,300 @@
 name: Native Windows CI
 
-# Archived native Windows lane: manual emergency validation only. Do not run
-# for routine PR/main changes or package a release without a new owner decision.
+# Reopened by the owner on 2026-10-10. Routine validation stays unsigned;
+# the manual packaging job produces artifacts for review, without promotion.
 on:
+  pull_request:
+    paths:
+      - "native-windows/**"
+      - "scripts/*native_windows*"
+      - "versions.json"
+      - ".github/workflows/native-windows-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "native-windows/**"
+      - "scripts/*native_windows*"
+      - "versions.json"
+      - ".github/workflows/native-windows-ci.yml"
   workflow_dispatch:
     inputs:
+      package_release:
+        description: "Prepare signed x64/arm64 artifacts for release review"
+        type: boolean
+        default: false
       release_version:
-        description: "Windows package version (for example 1.2.3.4)"
-        required: true
+        description: "Windows package version (for example 1.2.3.4; packaging only)"
+        required: false
       manifest_revision:
-        description: "Monotonic signed update manifest revision"
-        required: true
+        description: "Monotonic signed update manifest revision (packaging only)"
+        required: false
       release_notes:
-        description: "User-facing Windows release notes"
-        required: true
+        description: "User-facing Windows release notes (packaging only)"
+        required: false
       rollout_percent:
         description: "Initial stable rollout percentage (0-100)"
-        required: true
         default: "10"
       minimum_supported_version:
         description: "Oldest native Windows version allowed to update"
         required: false
       required_version_floor:
-        description: "Anti-rollback version floor (defaults to release version)"
+        description: "Anti-rollback floor (defaults to minimum supported or release version)"
         required: false
       required_update:
         description: "Mark the update as mandatory"
-        required: true
         type: boolean
         default: false
+
 permissions:
   contents: read
 
 concurrency:
-  group: native-windows-${{ github.ref }}
+  group: native-windows-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build:
-    runs-on: windows-latest
-
+  portable:
+    name: Portable client and release contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
-
-      - name: Test platform-neutral core
-        run: dotnet run --project native-windows/tests/Vex.Windows.Core.Tests/Vex.Windows.Core.Tests.csproj -c Release
-
-      - name: Audit native dependencies
-        shell: pwsh
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "22"
+      - name: Validate XAML and packaging contracts
         run: |
-          $output = dotnet list native-windows/src/Vex.Windows.Client/Vex.Windows.Client.csproj package --vulnerable --include-transitive
-          $output
-          if ($LASTEXITCODE -ne 0 -or $output -match "has the following vulnerable packages") {
-            exit 1
-          }
-
-      - name: Validate PowerShell script parse
+          node scripts/validate_native_windows_xaml.mjs
+          node native-windows/scripts/validate-packaging-static.mjs
+      - name: Parse every PowerShell script and test release validation
         shell: pwsh
         run: |
           ./native-windows/scripts/validate-powershell-parse.ps1
+          ./native-windows/tests/ReleaseValidation.Tests.ps1
+          ./native-windows/tests/NetworkSafetyPolicy.Tests.ps1
+          ./native-windows/tests/BootstrapOwnership.Tests.ps1
+          ./native-windows/tests/InstallerSafety.Tests.ps1
+          ./native-windows/tests/VpnAcceptance.Tests.ps1
+          ./native-windows/tests/SmokeApplication.Tests.ps1
+          ./native-windows/tests/UiPreviewProtocolRegistration.Tests.ps1
+          ./native-windows/tests/UiPreviewContext.Tests.ps1
+      - name: Test platform-neutral core and control plane
+        run: dotnet run --project native-windows/tests/Vex.Windows.Core.Tests/Vex.Windows.Core.Tests.csproj -c Release
 
-      - name: Validate packaging templates
+  build:
+    name: Windows ${{ matrix.architecture }} application and VPN service
+    runs-on: windows-2025
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture: [x64, arm64]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "22"
+      - name: Install libsodium Visual C++ prerequisite
+        if: matrix.architecture == 'x64'
         shell: pwsh
         run: |
-          [xml](Get-Content "native-windows/packaging/AppxManifest.xml.template" -Raw) | Out-Null
-          [xml](Get-Content "native-windows/packaging/AppInstaller.template.xml" -Raw) | Out-Null
-
-      - name: Validate native Windows release policy
+          $installer = Join-Path $env:RUNNER_TEMP 'vc-redist-x64.exe'
+          Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vc_redist.x64.exe' -OutFile $installer
+          $signature = Get-AuthenticodeSignature -LiteralPath $installer
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') {
+            throw 'Visual C++ redistributable signature verification failed.'
+          }
+          $process = Start-Process -FilePath $installer -ArgumentList '/install', '/quiet', '/norestart' -Wait -PassThru
+          if ($process.ExitCode -notin @(0, 1638, 3010)) { throw "Visual C++ installation failed: $($process.ExitCode)" }
+      - name: Test native contracts on Windows
+        if: matrix.architecture == 'x64'
+        run: dotnet run --project native-windows/tests/Vex.Windows.Core.Tests/Vex.Windows.Core.Tests.csproj -c Release
+      - name: Validate native surfaces and release scripts
+        shell: pwsh
         run: |
+          ./native-windows/scripts/validate-powershell-parse.ps1
+          ./native-windows/tests/ReleaseValidation.Tests.ps1
+          ./native-windows/tests/NetworkSafetyPolicy.Tests.ps1
+          ./native-windows/tests/BootstrapOwnership.Tests.ps1
+          ./native-windows/tests/InstallerSafety.Tests.ps1
+          ./native-windows/tests/VpnAcceptance.Tests.ps1
+          ./native-windows/tests/SmokeApplication.Tests.ps1
+          ./native-windows/tests/UiPreviewProtocolRegistration.Tests.ps1
+          ./native-windows/tests/UiPreviewContext.Tests.ps1
           node native-windows/scripts/validate-packaging-static.mjs
           node scripts/validate_native_windows_xaml.mjs
-
-      - name: Build VPN service
-        run: dotnet build native-windows/src/Vex.Windows.Service/Vex.Windows.Service.csproj -c Release -r win-x64
-
-      - name: Build VPN service for Arm64
-        run: dotnet build native-windows/src/Vex.Windows.Service/Vex.Windows.Service.csproj -c Release -r win-arm64
-
-      - name: Build native WinUI shell
-        run: dotnet build native-windows/src/Vex.Windows.App/Vex.Windows.App.csproj -c Release -r win-x64
-
-      - name: Build native WinUI shell for Arm64
-        run: dotnet build native-windows/src/Vex.Windows.App/Vex.Windows.App.csproj -c Release -r win-arm64
-
-      - name: Upload native shell
-        uses: actions/upload-artifact@v4
+      - name: Publish self-contained VPN service
+        run: dotnet publish native-windows/src/Vex.Windows.Service/Vex.Windows.Service.csproj -c Release -r win-${{ matrix.architecture }} -p:Platform=${{ matrix.architecture }} -o "${{ runner.temp }}/vex-windows/service-${{ matrix.architecture }}"
+      - name: Publish self-contained WinUI application
+        run: dotnet publish native-windows/src/Vex.Windows.App/Vex.Windows.App.csproj -c Release -r win-${{ matrix.architecture }} -p:Platform=${{ matrix.architecture }} -o "${{ runner.temp }}/vex-windows/app-${{ matrix.architecture }}"
+      - name: Verify published PE architectures and runtime resources
+        shell: pwsh
+        run: |
+          . ./native-windows/packaging/ReleaseValidation.ps1
+          $root = Join-Path $env:RUNNER_TEMP 'vex-windows'
+          Assert-WindowsPeArchitecture -Path (Join-Path $root 'app-${{ matrix.architecture }}/Vex.Windows.App.exe') -Architecture '${{ matrix.architecture }}'
+          Assert-WindowsPeArchitecture -Path (Join-Path $root 'service-${{ matrix.architecture }}/Vex.Windows.Service.exe') -Architecture '${{ matrix.architecture }}'
+          # WindowsPackageType=None produces the assembly-named app PRI.
+          Get-ChildItem -LiteralPath (Join-Path $root 'app-${{ matrix.architecture }}') -Filter '*.pri' |
+            ForEach-Object { Write-Host "Published compiled resource: $($_.Name) ($($_.Length) bytes)" }
+          foreach ($asset in @('Vex.Windows.App.pri', 'Assets/icon.ico', 'Assets/country-silhouettes.json', 'Assets/vex-logo-header.png', 'Assets/flags/de.svg', 'Assets/flags/fi.svg', 'Assets/flags/nl.svg', 'Microsoft.UI.Xaml.dll')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $root "app-${{ matrix.architecture }}/$asset"))) {
+              throw "Published WinUI dependency is missing: $asset"
+            }
+          }
+      - name: Smoke x64 WinUI application startup
+        if: matrix.architecture == 'x64'
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'vex-windows'
+          ./native-windows/scripts/smoke-application.ps1 `
+            -ApplicationPath (Join-Path $root 'app-x64/Vex.Windows.App.exe') `
+            -ResultPath (Join-Path $root 'startup-smoke-x64.json')
+      - name: Publish isolated Debug interface preview
+        if: matrix.architecture == 'x64'
+        run: dotnet publish native-windows/src/Vex.Windows.App/Vex.Windows.App.csproj -c Debug -r win-x64 -p:Platform=x64 -o "${{ runner.temp }}/vex-ui-preview-app"
+      - name: Verify Release rejects isolated preview controls
+        if: matrix.architecture == 'x64'
+        timeout-minutes: 2
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'vex-windows'
+          $application = Join-Path $root 'app-x64/Vex.Windows.App.exe'
+          $arguments = @('--signed-out-ui-preview', '--focus-pulse-ui-preview', '--ui-smoke-exit',
+            'vexguard-ui-preview://ui-smoke/activate', 'vexguard-ui-preview://ui-smoke/unknown',
+            'vexguard-ui-preview://other-host/activate', 'vexguard-ui-preview://ui-smoke/activate?unexpected=1',
+            'vexguard-ui-preview://user@ui-smoke/activate', 'vexguard-ui-preview://ui-smoke/activate#unexpected')
+          foreach ($argument in $arguments) {
+            $process = Start-Process -FilePath $application -ArgumentList $argument -PassThru
+            try {
+              if (-not $process.WaitForExit(10000) -or $process.ExitCode -ne 0) {
+                throw 'Release did not refuse isolated preview control before creating the application.'
+              }
+            }
+            finally {
+              if (-not $process.HasExited) { $process.Kill($true); [void]$process.WaitForExit(5000) }
+              $process.Dispose()
+            }
+            if (Get-Process -Name 'Vex.Windows.App' -ErrorAction SilentlyContinue) {
+              throw 'Release preview control left a running application.'
+            }
+          }
+          @{ schema = 'vex.release-preview-isolation.v1'; rejected_controls = $arguments.Count; application_absent = $true } |
+            ConvertTo-Json | Set-Content -LiteralPath (Join-Path $root 'release-preview-isolation-x64.json')
+      - name: Exercise authenticated desktop flows and capture interface
+        if: matrix.architecture == 'x64'
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'vex-windows'
+          ./native-windows/scripts/smoke-application.ps1 `
+            -ApplicationPath (Join-Path $env:RUNNER_TEMP 'vex-ui-preview-app/Vex.Windows.App.exe') `
+            -DesktopChecks -PreviewMode fixtures -ObserveSeconds 3 `
+            -ResultPath (Join-Path $root 'desktop-fixtures-x64.json') `
+            -ScreenshotDirectory (Join-Path $root 'screenshots/fixtures')
+      - name: Exercise signed-out desktop flows and capture interface
+        if: matrix.architecture == 'x64'
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'vex-windows'
+          ./native-windows/scripts/smoke-application.ps1 `
+            -ApplicationPath (Join-Path $env:RUNNER_TEMP 'vex-ui-preview-app/Vex.Windows.App.exe') `
+            -DesktopChecks -PreviewMode signed-out -ObserveSeconds 3 `
+            -ResultPath (Join-Path $root 'desktop-signed-out-x64.json') `
+            -ScreenshotDirectory (Join-Path $root 'screenshots/signed-out')
+      - name: Audit all native dependencies
+        shell: pwsh
+        run: |
+          foreach ($project in @('Vex.Windows.App', 'Vex.Windows.Client', 'Vex.Windows.Service')) {
+            $output = dotnet package list --project "native-windows/src/$project/$project.csproj" --vulnerable --include-transitive --format json
+            if ($LASTEXITCODE -ne 0) { throw "NuGet audit failed: $project" }
+            $report = $output | ConvertFrom-Json
+            foreach ($framework in $report.projects.frameworks) {
+              foreach ($package in @($framework.topLevelPackages) + @($framework.transitivePackages)) {
+                if ($package.vulnerabilities) { throw "Vulnerable NuGet dependency: $($package.id)" }
+              }
+            }
+          }
+      - name: Retain unsigned review builds and startup evidence
+        if: always() && (github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: vex-native-windows-shell
+          name: vex-native-windows-unsigned-${{ matrix.architecture }}
+          path: ${{ runner.temp }}/vex-windows/**
+          if-no-files-found: error
+          retention-days: 7
+
+  macos_reference:
+    name: Capture actual macOS interface reference
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Render existing SwiftUI screens with isolated Debug fixtures
+        run: native-windows/scripts/render-macos-reference.sh "$RUNNER_TEMP/macos-reference"
+      - name: Retain native macOS reference images
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: vex-native-macos-interface-reference
+          path: ${{ runner.temp }}/macos-reference/**
+          if-no-files-found: error
+          retention-days: 7
+
+  vpn_acceptance:
+    name: Windows x64 real encrypted tunnel acceptance
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: 1.26.6
+          cache: true
+          cache-dependency-path: native-windows/scripts/vpn-fixture-peer/go.sum
+      - name: Validate the qualified runtime on a disposable host
+        shell: pwsh
+        run: |
+          ./native-windows/scripts/invoke-vpn-acceptance.ps1 -DisposableRunner `
+            -ResultPath (Join-Path $env:RUNNER_TEMP 'vex-vpn-evidence/vpn-acceptance-x64.json')
+      - name: Retain sanitized tunnel and cleanup evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: vex-native-windows-vpn-acceptance-x64
           path: |
-            native-windows/src/Vex.Windows.App/bin/Release/net10.0-windows10.0.19041.0/win-x64/**
-            native-windows/src/Vex.Windows.App/bin/Release/net10.0-windows10.0.19041.0/win-arm64/**
-            native-windows/src/Vex.Windows.Service/bin/Release/net10.0-windows10.0.19041.0/win-x64/**
-            native-windows/src/Vex.Windows.Service/bin/Release/net10.0-windows10.0.19041.0/win-arm64/**
+            ${{ runner.temp }}/vex-vpn-evidence/vpn-acceptance-x64.json
+            ${{ runner.temp }}/vex-vpn-evidence/vpn-acceptance-x64.json.cleanup.json
           if-no-files-found: error
           retention-days: 7
 
   package_release:
+    name: Prepare signed Windows release artifacts
     if: >-
       ${{
         github.event_name == 'workflow_dispatch' &&
-        vars.VEX_WINDOWS_RELEASE_REOPENED == 'true' &&
+        inputs.package_release &&
+        github.ref == 'refs/heads/main' &&
         vars.VEX_WINDOWS_PACKAGE_NAME != '' &&
         vars.VEX_WINDOWS_PACKAGE_DISPLAY_NAME != '' &&
         vars.VEX_WINDOWS_PACKAGE_PUBLISHER != '' &&
@@ -114,21 +303,50 @@ jobs:
         vars.VEX_WINDOWS_APPINSTALLER_BASE_URI != '' &&
         vars.VEX_WINDOWS_UPDATE_ORIGIN != '' &&
         vars.VEX_WINDOWS_UPDATE_KEY_ID != '' &&
-        vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH != '' &&
-        vars.VEX_WINDOWS_SERVICE_WINTUN_PATH != ''
+        (vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH != '' ||
+         (vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH_X64 != '' && vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH_ARM64 != '') ||
+         (vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_URI_X64 != '' && vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_URI_ARM64 != '')) &&
+        (vars.VEX_WINDOWS_SERVICE_WINTUN_PATH != '' ||
+         (vars.VEX_WINDOWS_SERVICE_WINTUN_PATH_X64 != '' && vars.VEX_WINDOWS_SERVICE_WINTUN_PATH_ARM64 != '') ||
+         (vars.VEX_WINDOWS_SERVICE_WINTUN_URI_X64 != '' && vars.VEX_WINDOWS_SERVICE_WINTUN_URI_ARM64 != ''))
       }}
-    runs-on: windows-latest
-    needs: build
-
+    runs-on: windows-2025
+    timeout-minutes: 45
+    needs: [portable, build, macos_reference, vpn_acceptance]
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
-
+      - name: Verify release inputs and stage architecture-specific runtimes
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          MANIFEST_REVISION: ${{ inputs.manifest_revision }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+          VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH: ${{ vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH }}
+          VEX_WINDOWS_SERVICE_WINTUN_PATH: ${{ vars.VEX_WINDOWS_SERVICE_WINTUN_PATH }}
+          VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH_X64: ${{ vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH_X64 }}
+          VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH_ARM64: ${{ vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH_ARM64 }}
+          VEX_WINDOWS_SERVICE_WINTUN_PATH_X64: ${{ vars.VEX_WINDOWS_SERVICE_WINTUN_PATH_X64 }}
+          VEX_WINDOWS_SERVICE_WINTUN_PATH_ARM64: ${{ vars.VEX_WINDOWS_SERVICE_WINTUN_PATH_ARM64 }}
+          VEX_WINDOWS_SERVICE_AMNEZIAWG_URI_X64: ${{ vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_URI_X64 }}
+          VEX_WINDOWS_SERVICE_AMNEZIAWG_URI_ARM64: ${{ vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_URI_ARM64 }}
+          VEX_WINDOWS_SERVICE_AMNEZIAWG_SHA256_X64: ${{ vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_SHA256_X64 }}
+          VEX_WINDOWS_SERVICE_AMNEZIAWG_SHA256_ARM64: ${{ vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_SHA256_ARM64 }}
+          VEX_WINDOWS_SERVICE_WINTUN_URI_X64: ${{ vars.VEX_WINDOWS_SERVICE_WINTUN_URI_X64 }}
+          VEX_WINDOWS_SERVICE_WINTUN_URI_ARM64: ${{ vars.VEX_WINDOWS_SERVICE_WINTUN_URI_ARM64 }}
+          VEX_WINDOWS_SERVICE_WINTUN_SHA256_X64: ${{ vars.VEX_WINDOWS_SERVICE_WINTUN_SHA256_X64 }}
+          VEX_WINDOWS_SERVICE_WINTUN_SHA256_ARM64: ${{ vars.VEX_WINDOWS_SERVICE_WINTUN_SHA256_ARM64 }}
+        run: |
+          . ./native-windows/packaging/ReleaseValidation.ps1
+          ConvertTo-WindowsPackageVersion $env:RELEASE_VERSION | Out-Null
+          $revision = 0L
+          if (-not [long]::TryParse($env:MANIFEST_REVISION, [ref]$revision) -or $revision -le 0) { throw 'A positive manifest revision is required.' }
+          if ([string]::IsNullOrWhiteSpace($env:RELEASE_NOTES)) { throw 'Release notes are required.' }
+          ./native-windows/scripts/stage-runtime-assets.ps1 -DestinationRoot (Join-Path $env:RUNNER_TEMP 'vex-native-runtime')
       - name: Package signed native Windows releases
         shell: pwsh
         env:
@@ -145,9 +363,8 @@ jobs:
           VEX_WINDOWS_PACKAGE_BASE_URI: ${{ vars.VEX_WINDOWS_PACKAGE_BASE_URI }}
           VEX_WINDOWS_APPINSTALLER_BASE_URI: ${{ vars.VEX_WINDOWS_APPINSTALLER_BASE_URI }}
           VEX_WINDOWS_UPDATE_KEY_ID: ${{ vars.VEX_WINDOWS_UPDATE_KEY_ID }}
-          VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH: ${{ vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH }}
-          VEX_WINDOWS_SERVICE_WINTUN_PATH: ${{ vars.VEX_WINDOWS_SERVICE_WINTUN_PATH }}
           VEX_WINDOWS_SERVICE_PROFILE_KEYRING_PATH: native-windows/packaging/profile-signing-keys.json
+          VEX_WINDOWS_SIGN_TIMESTAMP_URI: ${{ vars.VEX_WINDOWS_SIGN_TIMESTAMP_URI }}
           VEX_WINDOWS_SIGN_PFX_BASE64: ${{ secrets.VEX_WINDOWS_SIGN_PFX_BASE64 }}
           VEX_WINDOWS_SIGN_PFX_PASSWORD: ${{ secrets.VEX_WINDOWS_SIGN_PFX_PASSWORD }}
           VEX_WINDOWS_UPDATE_PUBLIC_KEY_BASE64: ${{ secrets.VEX_WINDOWS_UPDATE_PUBLIC_KEY_BASE64 }}
@@ -159,9 +376,8 @@ jobs:
           ./native-windows/packaging/package-native-windows.ps1 -Architecture x64
           ./native-windows/packaging/package-native-windows.ps1 -Architecture arm64
           ./native-windows/packaging/publish-native-windows.ps1
-
-      - name: Upload packaged native Windows release lane
-        uses: actions/upload-artifact@v4
+      - name: Retain signed release artifacts for review
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: vex-native-windows-packaged-release
           path: |

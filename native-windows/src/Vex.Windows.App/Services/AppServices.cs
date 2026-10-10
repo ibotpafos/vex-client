@@ -34,17 +34,18 @@ public sealed class AppServices
         };
         httpHandler.SslOptions.CertificateRevocationCheckMode =
             X509RevocationMode.Online;
-        var httpClient = new HttpClient(httpHandler)
+        var httpClient = new HttpClient(UiPreviewContext.IsEnabled
+            ? UiPreviewFixtures.CreateHandler() : httpHandler)
         {
             BaseAddress = new Uri(apiBaseUrl, UriKind.Absolute),
             // Profile issuance performs server-side node selection and may
             // legitimately take longer than ordinary control-plane calls.
-            // macOS hides this behind profile warmup; Windows must still let
-            // the first cold request complete so subsequent connects use the
-            // signed local cache.
+            // Background warm-up usually fills the signed local cache. A cold
+            // foreground request must still have enough time to complete.
             Timeout = TimeSpan.FromSeconds(40),
         };
-        StateStore = new ProtectedClientStateStore();
+        StateStore = new ProtectedClientStateStore(stateDirectory: UiPreviewContext.StateDirectory);
+        UiPreviewFixtures.Seed(StateStore);
         var apiClient = new VexApiClient(httpClient, StateStore);
         var realtimeHttpHandler = new SocketsHttpHandler
         {
@@ -54,7 +55,8 @@ public sealed class AppServices
         };
         realtimeHttpHandler.SslOptions.CertificateRevocationCheckMode =
             X509RevocationMode.Online;
-        Realtime = new CustomerRealtimeClient(new HttpClient(realtimeHttpHandler)
+        Realtime = new CustomerRealtimeClient(new HttpClient(UiPreviewContext.IsEnabled
+            ? UiPreviewFixtures.CreateHandler() : realtimeHttpHandler)
         {
             BaseAddress = apiClient.BaseUri,
             Timeout = Timeout.InfiniteTimeSpan,
@@ -65,35 +67,61 @@ public sealed class AppServices
             apiClient,
             StateStore,
             VpnClient,
-            AppVersion);
+            AppVersion,
+            dynamicRoutes: new DynamicRouteEngine(new ProtectedDynamicRouteStore(UiPreviewContext.StateDirectory)),
+            profileWarmupVerifier: () => UiPreviewContext.IsEnabled ? null : ProfileWarmupTrustStore.Load());
         Auth = new NativeAuthService(
             apiClient,
             Coordinator,
             StateStore,
-            new ProtectedPkceStateStore(),
-            apiClient.BaseUri);
+            new ProtectedPkceStateStore(UiPreviewContext.StateDirectory),
+            apiClient.BaseUri,
+            async uri => !UiPreviewContext.IsEnabled &&
+                await global::Windows.System.Launcher.LaunchUriAsync(uri));
         Auth.StateChanged += OnAuthStateChanged;
         Realtime.Changed += OnRealtimeChanged;
         UpdateService = new NativeUpdateService(
-            StateStore.GetOrCreateInstallationId());
-        Preferences = new NativeClientPreferencesStore();
+            GetUpdateInstallationId());
+        Preferences = new NativeClientPreferencesStore(UiPreviewContext.StateDirectory is { } previewDirectory
+            ? Path.Combine(previewDirectory, "preferences.v1.dpapi") : null);
+#if DEBUG
+        if (UiPreviewContext.StateDirectory is { } diagnosticsDirectory)
+            DiagnosticsQueueService.UseIsolatedPreview(diagnosticsDirectory);
+#endif
         BackgroundUpdates = new NativeUpdateBackgroundHost(
             UpdateService,
             Preferences);
         StartupService = new WindowsStartupService();
-        VpnUiState = new VpnUiStateService(VpnClient);
+        VpnUiState = new VpnUiStateService(VpnClient.GetDiagnosticsAsync);
         ProductParity = new VpnProductParityService();
-        ServiceMaintenance = new WindowsServiceMaintenanceService();
-        SupportSocketClient.Current.ConfigureEndpointProvider(
-            (_, cancellationToken) =>
-                Coordinator.GetSupportWebSocketUriAsync(
-                    cancellationToken));
+        BackgroundVpn = new NativeVpnBackgroundHost(this);
+        ProfileWarmup = new NativeProfileWarmupHost(this);
+        ServiceMaintenance = new WindowsServiceMaintenanceService(VpnClient.GetDiagnosticsAsync);
         DiagnosticsQueueService.Current.ConfigureUploader(
             UploadQueuedDiagnosticsAsync);
+        Coordinator.SessionChanged += OnCoordinatorSessionChanged;
         _ = SynchronizeRealtimeAsync();
     }
 
     public static AppServices Current => SharedServices.Value;
+
+    private string GetUpdateInstallationId()
+    {
+        try
+        {
+            return StateStore.GetOrCreateInstallationId();
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or
+            System.Security.Cryptography.CryptographicException or System.Text.Json.JsonException)
+        {
+            // Keep update recovery available without replacing the identity
+            // used for device provisioning. This fallback stays local.
+            var seed = System.Text.Encoding.UTF8.GetBytes(
+                Environment.MachineName + "\\" + Environment.UserName);
+            return "update-only-" + Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(seed));
+        }
+    }
 
     public string AppVersion { get; }
 
@@ -122,6 +150,10 @@ public sealed class AppServices
 
     public VpnProductParityService ProductParity { get; }
 
+    public NativeVpnBackgroundHost BackgroundVpn { get; }
+
+    public NativeProfileWarmupHost ProfileWarmup { get; }
+
     public WindowsServiceMaintenanceService ServiceMaintenance { get; }
 
     public MainWindow? MainWindow { get; private set; }
@@ -144,6 +176,59 @@ public sealed class AppServices
     private void OnAuthStateChanged(object? sender, EventArgs args) =>
         _ = SynchronizeRealtimeAsync();
 
+    private void OnCoordinatorSessionChanged(object? sender, EventArgs args)
+    {
+        if (Coordinator.CurrentStateAccess == ClientStateAccessKind.Missing)
+        {
+            VpnUiState.MarkConnectionDesired(false);
+            Auth.ReportSessionExpired();
+        }
+        else
+        {
+            if (args is AuthenticatedSessionAcceptedEventArgs)
+                VpnUiState.MarkConnectionDesired(false);
+            Auth.ClearStatus();
+        }
+        BackgroundVpn.Wake();
+    }
+
+    private CustomerRealtimeSessionRecovery? _realtimeSessionRecovery;
+    private readonly SemaphoreSlim _realtimeSynchronization = new(1, 1);
+
+    private CustomerRealtimeSessionRecovery RealtimeSessionRecovery =>
+        LazyInitializer.EnsureInitialized(ref _realtimeSessionRecovery, () =>
+            new CustomerRealtimeSessionRecovery(Coordinator, (_, _) => SynchronizeRealtimeAsync(), Realtime.StopAsync,
+                SignOutRejectedSessionAsync));
+
+    private async Task SignOutRejectedSessionAsync(string expectedAccessToken, CancellationToken cancellationToken)
+    {
+        var matched = false;
+        try
+        {
+            await VpnUiState.RunAsync(async token =>
+            {
+                await Coordinator.SignOutAsync(token, expectedAccessToken, () =>
+                {
+                    matched = true;
+                    VpnUiState.MarkConnectionDesired(false);
+                });
+                return await VpnClient.GetDiagnosticsAsync(token);
+            }, cancellationToken);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or
+            InvalidOperationException or OperationCanceledException or
+            System.Security.Cryptography.CryptographicException or Vex.Windows.Core.Vpn.Ipc.VpnIpcProtocolException)
+        {
+            // Disconnect failures retain explicit cleanup intent for the watchdog.
+        }
+        finally
+        {
+            if (matched && Coordinator.CurrentStateAccess == ClientStateAccessKind.Missing)
+                Auth.ReportSessionExpired();
+            BackgroundVpn.Wake();
+        }
+    }
+
     private void OnRealtimeChanged(
         object? sender,
         CustomerRealtimeChangedEventArgs args) =>
@@ -152,67 +237,95 @@ public sealed class AppServices
     private async Task HandleRealtimeEventAsync(
         CustomerRealtimeChangedEventArgs args)
     {
-        if (args.Event.Type == "customer.session.revoked")
+        if (args.Event.Type is "customer.session.revoked" or "customer.session.refresh_required")
         {
-            try
-            {
-                var state = await Coordinator.ForceRefreshSessionAsync(
-                    CancellationToken.None);
-                await Realtime.StartAsync(
-                    state.Session.AccessToken,
-                    CancellationToken.None);
-            }
-            catch (Exception error) when (
-                error is HttpRequestException or
-                    VexApiException or
-                    NativeClientFlowException or
-                    InvalidOperationException)
-            {
-                try
-                {
-                    await Coordinator.SignOutAsync(CancellationToken.None);
-                }
-                catch (Exception signOutError) when (
-                    signOutError is IOException or
-                        UnauthorizedAccessException or
-                        InvalidOperationException)
-                {
-                }
-                finally
-                {
-                    await Realtime.StopAsync();
-                    Auth.ClearStatus();
-                }
-            }
+            await RealtimeSessionRecovery.HandleAsync(args);
             return;
         }
 
+        if (args.Event.Type == "customer.resync" ||
+            args.Metadata.Domains.Any(domain => domain is "entitlement" or "billing" or "devices" or "provisioning"))
+        {
+            try
+            {
+                var state = Coordinator.CurrentState;
+                if (state is null || args.SourceTokenFingerprint !=
+                    CustomerRealtimeClient.TokenFingerprint(state.Session.AccessToken)) return;
+                var expectedAccessToken = state.Session.AccessToken;
+                await Coordinator.InvalidateCachedEntitlementAsync(CancellationToken.None, expectedAccessToken);
+                if (args.Event.Type == "customer.resync" ||
+                    args.Metadata.Domains.Any(domain => domain is "devices" or "provisioning"))
+                    await Coordinator.InvalidateProfileAsync(CancellationToken.None, expectedAccessToken);
+                if (args.Event.Type == "customer.resync" ||
+                    args.Metadata.Domains.Any(domain => domain is "entitlement" or "billing"))
+                    await Coordinator.ValidateEntitlementAsync(CancellationToken.None, expectedAccessToken);
+            }
+            catch (NativeClientFlowException error) when (
+                Vex.Windows.Core.Vpn.VpnRecoveryPolicy.IsTerminalError(error.Code))
+            {
+                try
+                {
+                    await VpnUiState.RunAsync(async token =>
+                    {
+                        var state = Coordinator.CurrentState;
+                        if (state is null || args.SourceTokenFingerprint !=
+                            CustomerRealtimeClient.TokenFingerprint(state.Session.AccessToken))
+                            return new Vex.Windows.Core.Vpn.VpnServiceResponse(
+                                Guid.NewGuid().ToString("N"), true, VpnUiState.Snapshot, null);
+                        VpnUiState.MarkConnectionDesired(false);
+                        return await VpnClient.DisconnectAsync(token);
+                    }, CancellationToken.None);
+                }
+                catch (Exception cleanupError) when (cleanupError is IOException or
+                    UnauthorizedAccessException or InvalidOperationException or
+                    System.Security.Cryptography.CryptographicException or OperationCanceledException or
+                    Vex.Windows.Core.Vpn.Ipc.VpnIpcProtocolException)
+                {
+                    // Shared state retains the service failure and cleanup evidence.
+                }
+            }
+            catch (Exception error) when (error is NativeClientFlowException or IOException or
+                UnauthorizedAccessException or System.Security.Cryptography.CryptographicException or
+                HttpRequestException or VexApiException or OperationCanceledException)
+            {
+                // The session may have been cleared or locked during the event.
+            }
+        }
+        BackgroundVpn.Wake();
         CustomerRealtimeChanged?.Invoke(this, args);
     }
 
     private async Task SynchronizeRealtimeAsync()
     {
-        NativeClientState? state;
+        if (UiPreviewContext.IsEnabled) return;
+        await _realtimeSynchronization.WaitAsync();
         try
         {
-            state = Coordinator.CurrentState;
-        }
-        catch (Exception error) when (
-            error is IOException or
-                UnauthorizedAccessException or
-                System.Security.Cryptography.CryptographicException)
-        {
-            state = null;
-        }
+            // Read after entering the gate: an older auth notification must
+            // not restart a cleared or replaced session's stream.
+            NativeClientState? state;
+            try
+            {
+                state = Coordinator.CurrentState;
+            }
+            catch (Exception error) when (
+                error is IOException or
+                    UnauthorizedAccessException or
+                    System.Security.Cryptography.CryptographicException)
+            {
+                state = null;
+            }
 
-        if (state is null)
-        {
-            await Realtime.StopAsync();
-            return;
+            if (state is null)
+            {
+                await Realtime.StopAsync();
+                return;
+            }
+            await Realtime.StartAsync(
+                state.Session.AccessToken,
+                CancellationToken.None);
         }
-        await Realtime.StartAsync(
-            state.Session.AccessToken,
-            CancellationToken.None);
+        finally { _realtimeSynchronization.Release(); }
     }
 
     private Task UploadQueuedDiagnosticsAsync(
@@ -220,8 +333,9 @@ public sealed class AppServices
         CancellationToken cancellationToken)
     {
         var snapshot = VpnUiState.Snapshot;
+        var deviceId = Coordinator.CurrentState?.DeviceId;
         var report = new ClientDiagnosticsReport(
-            DeviceId: Coordinator.CurrentState?.DeviceId,
+            DeviceId: string.IsNullOrWhiteSpace(deviceId) ? null : deviceId,
             Platform: "windows",
             AppVersion: AppVersion,
             Reason: queued.Reason,

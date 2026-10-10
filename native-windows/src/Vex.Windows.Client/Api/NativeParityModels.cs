@@ -2,6 +2,46 @@ using System.Text.Json.Serialization;
 
 namespace Vex.Windows.Client.Api;
 
+public sealed record ResiliencePolicy(
+    [property: JsonPropertyName("policy_version")] string PolicyVersion,
+    [property: JsonPropertyName("generated_at")] string GeneratedAt,
+    [property: JsonPropertyName("expires_at")] string ExpiresAt,
+    [property: JsonPropertyName("signature")] ResiliencePolicySignature Signature,
+    [property: JsonPropertyName("probe")] ResilienceProbePolicy Probe,
+    [property: JsonPropertyName("candidates")] IReadOnlyList<ResilienceConnectionCandidate> Candidates);
+
+public sealed record ResiliencePolicySignature(
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("alg")] string? Alg = null,
+    [property: JsonPropertyName("key_id")] string? KeyId = null,
+    [property: JsonPropertyName("value")] string? Value = null,
+    [property: JsonPropertyName("signed_at")] string? SignedAt = null,
+    [property: JsonPropertyName("canonical")] string? Canonical = null);
+
+public sealed record ResilienceProbePolicy(
+    [property: JsonPropertyName("connect_timeout_ms")] int ConnectTimeoutMs,
+    [property: JsonPropertyName("max_candidates")] int MaxCandidates,
+    [property: JsonPropertyName("checks")] IReadOnlyList<string> Checks,
+    [property: JsonPropertyName("failure_threshold")] int? FailureThreshold = null,
+    [property: JsonPropertyName("recovery_threshold")] int? RecoveryThreshold = null,
+    [property: JsonPropertyName("quarantine_ms")] int? QuarantineMs = null,
+    [property: JsonPropertyName("failback_hold_ms")] int? FailbackHoldMs = null);
+
+public sealed record ResilienceConnectionCandidate(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("device_id")] string DeviceId,
+    [property: JsonPropertyName("protocol")] string ProtocolName,
+    [property: JsonPropertyName("location_id")] string LocationId,
+    [property: JsonPropertyName("node_id")] string NodeId,
+    [property: JsonPropertyName("endpoint")] string Endpoint,
+    [property: JsonPropertyName("health_score")] int HealthScore,
+    [property: JsonPropertyName("expires_at")] string ExpiresAt,
+    [property: JsonPropertyName("path_id")] string? PathId = null,
+    [property: JsonPropertyName("path_kind")] string? PathKind = null,
+    [property: JsonPropertyName("entry_node_id")] string? EntryNodeId = null,
+    [property: JsonPropertyName("failure_domain")] string? FailureDomain = null,
+    [property: JsonPropertyName("priority")] int? Priority = null);
+
 public sealed record BillingPayment(
     [property: JsonPropertyName("id")] string Id,
     [property: JsonPropertyName("subscription_id")] string? SubscriptionId,
@@ -52,9 +92,6 @@ public sealed record ClientDiagnosticsReport(
     [property: JsonPropertyName("tx_bytes")] long TxBytes,
     [property: JsonPropertyName("samples")] IReadOnlyDictionary<string, string> Samples);
 
-internal sealed record SupportSocketTicketResponse(
-    [property: JsonPropertyName("ticket")] string? Ticket);
-
 public sealed record ClientAppMetadata(
     string Platform,
     string AppVersion,
@@ -66,35 +103,38 @@ public sealed record ClientAppMetadata(
     string ApiClientVersion,
     int ConfigSchemaVersion);
 
+[JsonConverter(typeof(AppUpdateCheckResultJsonConverter))]
 public sealed record AppUpdateCheckResult(
-    [property: JsonPropertyName("update_available")] bool UpdateAvailable,
+    [property: JsonPropertyName("updateAvailable")] bool UpdateAvailable,
     [property: JsonPropertyName("required")] bool Required,
-    [property: JsonPropertyName("latest_version")] string LatestVersion,
-    [property: JsonPropertyName("latest_build")] int LatestBuild,
-    [property: JsonPropertyName("min_supported_build")] int MinSupportedBuild,
-    [property: JsonPropertyName("download_url")] string DownloadUrl,
-    [property: JsonPropertyName("current_build_blocked")] bool? CurrentBuildBlocked = null,
-    [property: JsonPropertyName("min_config_schema_version")] int? MinConfigSchemaVersion = null,
+    [property: JsonPropertyName("latestVersion")] string LatestVersion,
+    [property: JsonPropertyName("latestBuild")] int LatestBuild,
+    [property: JsonPropertyName("minSupportedBuild")] int MinSupportedBuild,
+    [property: JsonPropertyName("downloadUrl")] string DownloadUrl,
+    [property: JsonPropertyName("currentBuildBlocked")] bool? CurrentBuildBlocked = null,
+    [property: JsonPropertyName("minConfigSchemaVersion")] int? MinConfigSchemaVersion = null,
     [property: JsonPropertyName("changelog")] string? Changelog = null,
-    [property: JsonPropertyName("checksum_sha256")] string? ChecksumSha256 = null,
-    [property: JsonPropertyName("signature_url")] string? SignatureUrl = null,
+    [property: JsonPropertyName("checksumSha256")] string? ChecksumSha256 = null,
+    [property: JsonPropertyName("signatureUrl")] string? SignatureUrl = null,
     [property: JsonPropertyName("channel")] string? Channel = null,
     [property: JsonPropertyName("reason")] string? Reason = null,
-    [property: JsonPropertyName("rollout_percent")] int? RolloutPercent = null,
-    [property: JsonPropertyName("checked_at")] string? CheckedAt = null);
+    [property: JsonPropertyName("rolloutPercent")] int? RolloutPercent = null,
+    [property: JsonPropertyName("checkedAt")] string? CheckedAt = null,
+    [property: JsonPropertyName("delivery")] string? Delivery = null);
 
+[JsonConverter(typeof(AppRemoteConfigJsonConverter))]
 public sealed record AppRemoteConfig(
     [property: JsonPropertyName("version")] string? Version,
     [property: JsonPropertyName("signature")] string? Signature,
-    [property: JsonPropertyName("released_at")] string? ReleasedAt,
+    [property: JsonPropertyName("releasedAt")] string? ReleasedAt,
     [property: JsonPropertyName("platform")] string? Platform,
     [property: JsonPropertyName("channel")] string? Channel,
-    [property: JsonPropertyName("min_supported_build")] int? MinSupportedBuild,
-    [property: JsonPropertyName("recommended_build")] int? RecommendedBuild,
-    [property: JsonPropertyName("recommended_version")] string? RecommendedVersion,
-    [property: JsonPropertyName("core_version")] string? CoreVersion,
-    [property: JsonPropertyName("config_schema_version")] int? ConfigSchemaVersion,
-    [property: JsonPropertyName("min_config_schema_version")] int? MinConfigSchemaVersion,
-    [property: JsonPropertyName("routing_policy_version")] string? RoutingPolicyVersion,
-    [property: JsonPropertyName("feature_flags")] IReadOnlyDictionary<string, bool>? FeatureFlags,
-    [property: JsonPropertyName("incident_banner")] string? IncidentBanner);
+    [property: JsonPropertyName("minSupportedBuild")] int? MinSupportedBuild,
+    [property: JsonPropertyName("recommendedBuild")] int? RecommendedBuild,
+    [property: JsonPropertyName("recommendedVersion")] string? RecommendedVersion,
+    [property: JsonPropertyName("coreVersion")] string? CoreVersion,
+    [property: JsonPropertyName("configSchemaVersion")] int? ConfigSchemaVersion,
+    [property: JsonPropertyName("minConfigSchemaVersion")] int? MinConfigSchemaVersion,
+    [property: JsonPropertyName("routingPolicyVersion")] string? RoutingPolicyVersion,
+    [property: JsonPropertyName("featureFlags")] IReadOnlyDictionary<string, bool>? FeatureFlags,
+    [property: JsonPropertyName("incidentBanner")] string? IncidentBanner);

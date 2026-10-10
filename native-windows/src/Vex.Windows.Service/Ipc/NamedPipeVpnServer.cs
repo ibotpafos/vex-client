@@ -15,7 +15,9 @@ public sealed class NamedPipeVpnServer
 
     private readonly VpnServiceCommandHandler _handler;
     private readonly VpnIpcAuthenticator _authenticator;
-    private readonly ClientProcessAttestor _attestor;
+    private readonly Func<NamedPipeServerStream, bool> _attestClient;
+    private readonly string _pipeName;
+    private readonly SecurityIdentifier? _fixtureClientSid;
     private readonly VpnSignedProfileVerifier _profileVerifier;
     private readonly ILogger<NamedPipeVpnServer> _logger;
 
@@ -25,10 +27,29 @@ public sealed class NamedPipeVpnServer
         ClientProcessAttestor attestor,
         VpnSignedProfileVerifier profileVerifier,
         ILogger<NamedPipeVpnServer> logger)
+        : this(handler, authorizationStore.Read(), attestor.IsAllowed,
+            profileVerifier, logger, VpnServiceProtocol.PipeName, null)
     {
+    }
+
+    // Trusted in-process acceptance host only. Production DI uses the public
+    // constructor above, its fixed pipe and mandatory signed client attestor.
+    internal NamedPipeVpnServer(
+        VpnServiceCommandHandler handler,
+        string authorization,
+        Func<NamedPipeServerStream, bool> attestClient,
+        VpnSignedProfileVerifier profileVerifier,
+        ILogger<NamedPipeVpnServer> logger,
+        string pipeName,
+        SecurityIdentifier? fixtureClientSid)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(pipeName);
+        ArgumentNullException.ThrowIfNull(attestClient);
         _handler = handler;
-        _authenticator = new VpnIpcAuthenticator(authorizationStore.Read());
-        _attestor = attestor;
+        _authenticator = new VpnIpcAuthenticator(authorization);
+        _attestClient = attestClient;
+        _pipeName = pipeName;
+        _fixtureClientSid = fixtureClientSid;
         _profileVerifier = profileVerifier;
         _logger = logger;
     }
@@ -67,7 +88,7 @@ public sealed class NamedPipeVpnServer
         NamedPipeServerStream pipe,
         CancellationToken stoppingToken)
     {
-        if (!_attestor.IsAllowed(pipe))
+        if (!_attestClient(pipe))
         {
             _logger.LogWarning("VPN IPC rejected an unattested client.");
             return;
@@ -139,7 +160,7 @@ public sealed class NamedPipeVpnServer
             timeout.Token).ConfigureAwait(false);
     }
 
-    private static NamedPipeServerStream CreatePipe()
+    private NamedPipeServerStream CreatePipe()
     {
         var security = new PipeSecurity();
         security.AddAccessRule(new PipeAccessRule(
@@ -153,14 +174,14 @@ public sealed class NamedPipeVpnServer
             PipeAccessRights.FullControl,
             AccessControlType.Allow));
         security.AddAccessRule(new PipeAccessRule(
-            new SecurityIdentifier(
+            _fixtureClientSid ?? new SecurityIdentifier(
                 WellKnownSidType.AuthenticatedUserSid,
                 null),
             PipeAccessRights.ReadWrite,
             AccessControlType.Allow));
 
         return NamedPipeServerStreamAcl.Create(
-            VpnServiceProtocol.PipeName,
+            _pipeName,
             PipeDirection.InOut,
             ListenerCount,
             PipeTransmissionMode.Byte,

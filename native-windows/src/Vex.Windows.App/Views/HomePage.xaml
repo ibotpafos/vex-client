@@ -1,359 +1,246 @@
 <Page
     x:Class="Vex.Windows.App.Views.HomePage"
+    AutomationProperties.AutomationId="HomePage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <Grid>
-        <ScrollViewer
-            HorizontalScrollBarVisibility="Disabled"
-            VerticalScrollBarVisibility="Auto">
-            <StackPanel
-                MaxWidth="1120"
-                Margin="26,0,26,8"
-                HorizontalAlignment="Stretch"
-                Spacing="8">
-                <InfoBar
-                    x:Name="FoundationNotice"
-                    IsClosable="True"
-                    IsOpen="False"
-                    Message=""
-                    Severity="Informational"
-                    Title="VEX VPN" />
+    <Page.Resources>
+        <CollectionViewSource x:Key="ServerCatalogSource" IsSourceGrouped="True" ItemsPath="Rows" />
+        <DataTemplate x:Key="ServerRowTemplate">
+            <Grid Padding="8,10" ColumnSpacing="10" AutomationProperties.Name="{Binding AccessibleName}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="30" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="36" />
+                </Grid.ColumnDefinitions>
+                <Grid Width="30" Height="22" VerticalAlignment="Center" Opacity="{Binding AvailabilityOpacity}">
+                    <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="12" FontWeight="Bold"
+                        Foreground="{StaticResource VexMutedBrush}" Text="{Binding FlagFallbackText}" Visibility="{Binding FlagFallbackVisibility}" />
+                    <Image Width="30" Height="20" Source="{Binding FlagAsset}" Stretch="UniformToFill"
+                        Visibility="{Binding FlagAssetVisibility}" AutomationProperties.AccessibilityView="Raw" />
+                </Grid>
+                <StackPanel Grid.Column="1" Spacing="3" Opacity="{Binding AvailabilityOpacity}">
+                    <TextBlock FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource VexTextBrush}" Text="{Binding Title}" />
+                    <TextBlock FontFamily="Cascadia Code" FontSize="10" Foreground="{StaticResource VexSecondaryTextBrush}" Text="{Binding LocationId}" />
+                    <TextBlock FontSize="11" Foreground="{StaticResource VexSecondaryTextBrush}" Text="{Binding StatusText}" />
+                </StackPanel>
+                <TextBlock Grid.Column="2" VerticalAlignment="Center" FontSize="11" FontWeight="Bold"
+                    Foreground="{StaticResource VexCyanLightBrush}" Text="{Binding LatencyText}" />
+                <Button Grid.Column="3" Width="34" Height="34" Padding="4" VerticalAlignment="Center"
+                    AutomationProperties.Name="{Binding FavoriteHelp}" ToolTipService.ToolTip="{Binding FavoriteHelp}"
+                    Click="OnFavoriteLocationClick" Tag="{Binding Location}" Style="{StaticResource VexQuietButtonStyle}">
+                    <FontIcon FontSize="16" Glyph="{Binding FavoriteGlyph}" Foreground="{StaticResource VexCyanBrush}" />
+                </Button>
+            </Grid>
+        </DataTemplate>
+        <LinearGradientBrush x:Key="HomeTrafficStroke" StartPoint="0,0" EndPoint="1,0">
+            <GradientStop Color="#7322D3EE" Offset="0" />
+            <GradientStop Color="#FFB9FBFF" Offset="1" />
+        </LinearGradientBrush>
+        <Style x:Key="HomePlainButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="FocusVisualPrimaryBrush" Value="{StaticResource VexCyanBrush}" />
+            <Setter Property="FocusVisualSecondaryBrush" Value="Transparent" />
+            <Setter Property="FocusVisualPrimaryThickness" Value="2" />
+            <Setter Property="FocusVisualSecondaryThickness" Value="0" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="ButtonSurface" Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="{TemplateBinding CornerRadius}" Padding="{TemplateBinding Padding}">
+                            <VisualStateManager.VisualStateGroups>
+                                <VisualStateGroup x:Name="CommonStates">
+                                    <VisualState x:Name="Normal" />
+                                    <VisualState x:Name="PointerOver" />
+                                    <VisualState x:Name="Pressed">
+                                        <Storyboard><DoubleAnimation Storyboard.TargetName="ButtonSurface"
+                                            Storyboard.TargetProperty="Opacity" To="0.72" Duration="0" /></Storyboard>
+                                    </VisualState>
+                                    <VisualState x:Name="Disabled">
+                                        <Storyboard><DoubleAnimation Storyboard.TargetName="ButtonSurface"
+                                            Storyboard.TargetProperty="Opacity" To="0.46" Duration="0" /></Storyboard>
+                                    </VisualState>
+                                </VisualStateGroup>
+                            </VisualStateManager.VisualStateGroups>
+                            <ContentPresenter Content="{TemplateBinding Content}" ContentTemplate="{TemplateBinding ContentTemplate}"
+                                HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Page.Resources>
+    <Grid x:Name="HomeRoot" SizeChanged="OnHomeSizeChanged">
+        <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+            <StackPanel x:Name="HomeContent" MaxWidth="1080" Margin="30,38,30,12"
+                HorizontalAlignment="Stretch" Spacing="8">
+                <StackPanel Spacing="0">
+                <InfoBar x:Name="FoundationNotice" IsClosable="True" IsOpen="False"
+                    Message="" Severity="Informational" Title="VEX VPN" />
 
-                <Grid
-                    x:Name="FocusPulseHero"
-                    Height="282"
-                    MinWidth="620">
-                    <Ellipse
-                        Width="410"
-                        Height="410"
-                        Opacity="0.42"
-                        Stroke="#1622D3EE"
-                        StrokeThickness="1" />
-                    <Ellipse
-                        Width="330"
-                        Height="330"
-                        Opacity="0.55"
-                        Stroke="#2022D3EE"
-                        StrokeThickness="1" />
-                    <Ellipse
-                        Width="250"
-                        Height="250"
-                        Opacity="0.75"
-                        Stroke="#2822D3EE"
-                        StrokeThickness="1" />
-
-                    <Border
-                        Width="176"
-                        Height="96"
-                        Margin="22,0,0,12"
-                        HorizontalAlignment="Left"
-                        VerticalAlignment="Center"
-                        Background="#B3071113"
-                        BorderBrush="#18FFFFFF"
-                        BorderThickness="1"
-                        CornerRadius="17">
-                        <Grid Padding="14,12">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="42" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <Border
-                                Width="34"
-                                Height="34"
-                                VerticalAlignment="Top"
-                                BorderBrush="{StaticResource VexCyanBrush}"
-                                BorderThickness="2"
-                                CornerRadius="17">
-                                <FontIcon
-                                    FontSize="16"
-                                    Foreground="{StaticResource VexCyanBrush}"
-                                    Glyph="&#xE74B;" />
-                            </Border>
-                            <StackPanel Grid.Column="1" Spacing="2">
-                                <TextBlock
-                                    FontSize="11"
-                                    FontWeight="SemiBold"
-                                    Foreground="{StaticResource VexSecondaryTextBrush}"
-                                    Text="Получено" />
-                                <TextBlock
-                                    x:Name="ReceivedText"
-                                    FontFamily="Segoe UI Variable Display"
-                                    FontSize="20"
-                                    FontWeight="Black"
-                                    Foreground="{StaticResource VexTextBrush}"
-                                    Text="0 Б" />
+                <Grid x:Name="FocusPulseHero" MaxWidth="752" Height="252" HorizontalAlignment="Stretch">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition x:Name="PowerControlColumn" Width="244" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <!-- Canvas lets the waves extend beyond the power control's
+                         layout slot without clipping them into a square. -->
+                    <Canvas Grid.Column="2" Width="0" Height="0" Margin="0,-20,0,0"
+                        HorizontalAlignment="Center" VerticalAlignment="Center"
+                        IsHitTestVisible="False" AutomationProperties.AccessibilityView="Raw">
+                        <Ellipse x:Name="PowerGlow" Width="270" Height="270" Canvas.Left="-135" Canvas.Top="-135" Fill="#0922D3EE" />
+                        <Ellipse x:Name="Orbit0" Width="176" Height="176" Canvas.Left="-88" Canvas.Top="-88" Stroke="#2422D3EE" StrokeThickness="1.4" />
+                        <Ellipse x:Name="Orbit1" Width="222" Height="222" Canvas.Left="-111" Canvas.Top="-111" Stroke="#1D22D3EE" StrokeThickness="1" />
+                        <Ellipse x:Name="Orbit2" Width="268" Height="268" Canvas.Left="-134" Canvas.Top="-134" Stroke="#1622D3EE" StrokeThickness="1" />
+                        <Ellipse x:Name="Orbit3" Width="314" Height="314" Canvas.Left="-157" Canvas.Top="-157" Stroke="#1022D3EE" StrokeThickness="1" />
+                        <Ellipse x:Name="Orbit4" Width="360" Height="360" Canvas.Left="-180" Canvas.Top="-180" Stroke="#0922D3EE" StrokeThickness="1" />
+                        <Ellipse x:Name="Orbit5" Width="406" Height="406" Canvas.Left="-203" Canvas.Top="-203" Stroke="#0722D3EE" StrokeThickness="1" />
+                    </Canvas>
+                    <StackPanel x:Name="ReceivedCard" Width="136" Height="78" Padding="8,6"
+                        VerticalAlignment="Center" Spacing="8" AutomationProperties.Name="Полученный трафик">
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="22" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                            <FontIcon FontSize="14" VerticalAlignment="Center" Foreground="{StaticResource VexCyanBrush}" Glyph="&#xE74B;" />
+                            <StackPanel Grid.Column="1" Spacing="1">
+                                <TextBlock FontSize="10" FontWeight="Medium" Foreground="{StaticResource VexSecondaryTextBrush}" Text="Получено" />
+                                <TextBlock x:Name="ReceivedText" FontSize="16" FontWeight="Bold"
+                                    Foreground="{StaticResource VexTextBrush}" Text="0 Б" TextTrimming="CharacterEllipsis" />
                             </StackPanel>
-                            <Polyline
-                                Grid.ColumnSpan="2"
-                                Margin="0,50,0,0"
-                                Points="0,18 20,14 42,17 62,8 84,13 108,5 136,10"
-                                Stroke="#B87EE9F5"
-                                StrokeThickness="1.5" />
                         </Grid>
-                    </Border>
+                        <Viewbox Height="18" Stretch="Fill" AutomationProperties.AccessibilityView="Raw">
+                            <Polyline x:Name="ReceivedSparkline" Width="120" Height="18" Points="0,16.2 120,16.2"
+                                Stroke="{StaticResource HomeTrafficStroke}" StrokeThickness="1.7"
+                                StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
+                        </Viewbox>
+                    </StackPanel>
 
-                    <Border
-                        Width="176"
-                        Height="96"
-                        Margin="0,0,22,12"
-                        HorizontalAlignment="Right"
-                        VerticalAlignment="Center"
-                        Background="#B3071113"
-                        BorderBrush="#18FFFFFF"
-                        BorderThickness="1"
-                        CornerRadius="17">
-                        <Grid Padding="14,12">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="42" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <Border
-                                Width="34"
-                                Height="34"
-                                VerticalAlignment="Top"
-                                BorderBrush="{StaticResource VexCyanBrush}"
-                                BorderThickness="2"
-                                CornerRadius="17">
-                                <FontIcon
-                                    FontSize="16"
-                                    Foreground="{StaticResource VexCyanBrush}"
-                                    Glyph="&#xE74A;" />
-                            </Border>
-                            <StackPanel Grid.Column="1" Spacing="2">
-                                <TextBlock
-                                    FontSize="11"
-                                    FontWeight="SemiBold"
-                                    Foreground="{StaticResource VexSecondaryTextBrush}"
-                                    Text="Отправлено" />
-                                <TextBlock
-                                    x:Name="SentText"
-                                    FontFamily="Segoe UI Variable Display"
-                                    FontSize="20"
-                                    FontWeight="Black"
-                                    Foreground="{StaticResource VexTextBrush}"
-                                    Text="0 Б" />
+                    <StackPanel Grid.Column="2" Margin="0,28,0,0" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="10">
+                        <Grid Width="152" Height="152">
+                            <Button x:Name="PowerButton" Width="152" Height="152" CornerRadius="76"
+                                AutomationProperties.AutomationId="PowerButton" AutomationProperties.Name="Подключить VPN"
+                                HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"
+                                Click="OnPowerButtonClick" PointerEntered="OnPowerPointerEntered" PointerExited="OnPowerPointerExited"
+                                Style="{StaticResource HomePlainButtonStyle}">
+                                <Grid>
+                                    <Ellipse>
+                                        <Ellipse.Fill>
+                                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                                <GradientStop Color="#FF213033" Offset="0" />
+                                                <GradientStop Color="#FF040A0B" Offset="1" />
+                                            </LinearGradientBrush>
+                                        </Ellipse.Fill>
+                                    </Ellipse>
+                                    <Ellipse Margin="6" Stroke="#1CFFFFFF" StrokeThickness="1" />
+                                    <Ellipse x:Name="PowerRing" Margin="10" Stroke="{StaticResource VexCyanBrush}" StrokeThickness="4.5" />
+                                    <FontIcon x:Name="PowerGlyph" FontSize="42" Foreground="{StaticResource VexCyanBrush}" Glyph="&#xE7E8;" />
+                                    <ProgressRing x:Name="PowerBusyIndicator" Width="66" Height="66"
+                                        Foreground="{StaticResource VexCyanLightBrush}" IsActive="False" Visibility="Collapsed" />
+                                </Grid>
+                            </Button>
+                        </Grid>
+                        <StackPanel Spacing="2" MaxWidth="232" HorizontalAlignment="Center">
+                            <TextBlock x:Name="PowerButtonText" HorizontalAlignment="Center" FontSize="19" FontWeight="Bold"
+                                Foreground="{StaticResource VexTextBrush}" Text="Не подключено" />
+                            <TextBlock x:Name="StatusText" FontSize="11" FontWeight="Medium" TextAlignment="Center"
+                                Foreground="{StaticResource VexSecondaryTextBrush}" Text="Нажмите, чтобы подключить VPN"
+                                TextWrapping="Wrap" MaxLines="2" />
+                        </StackPanel>
+                    </StackPanel>
+
+                    <StackPanel x:Name="SentCard" Grid.Column="4" Width="136" Height="78" Padding="8,6"
+                        VerticalAlignment="Center" Spacing="8" AutomationProperties.Name="Отправленный трафик">
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="22" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                            <FontIcon FontSize="14" VerticalAlignment="Center" Foreground="{StaticResource VexCyanBrush}" Glyph="&#xE74A;" />
+                            <StackPanel Grid.Column="1" Spacing="1">
+                                <TextBlock FontSize="10" FontWeight="Medium" Foreground="{StaticResource VexSecondaryTextBrush}" Text="Отправлено" />
+                                <TextBlock x:Name="SentText" FontSize="16" FontWeight="Bold"
+                                    Foreground="{StaticResource VexTextBrush}" Text="0 Б" TextTrimming="CharacterEllipsis" />
                             </StackPanel>
-                            <Polyline
-                                Grid.ColumnSpan="2"
-                                Margin="0,50,0,0"
-                                Points="0,18 20,14 42,17 62,8 84,13 108,5 136,10"
-                                Stroke="#B87EE9F5"
-                                StrokeThickness="1.5" />
                         </Grid>
-                    </Border>
-
-                    <StackPanel
-                        HorizontalAlignment="Center"
-                        VerticalAlignment="Center"
-                        Spacing="8">
-                        <Button
-                            x:Name="PowerButton"
-                            Width="154"
-                            Height="154"
-                            Padding="0"
-                            AutomationProperties.AutomationId="PowerButton"
-                            AutomationProperties.Name="Подключить VPN"
-                            Background="Transparent"
-                            BorderThickness="0"
-                            Click="OnPowerButtonClick"
-                            CornerRadius="77"
-                            UseSystemFocusVisuals="False">
-                            <Grid>
-                                <Ellipse
-                                    Fill="#E6071113"
-                                    Stroke="#3022D3EE"
-                                    StrokeThickness="12" />
-                                <Ellipse
-                                    Margin="8"
-                                    Stroke="{StaticResource VexCyanBrush}"
-                                    StrokeThickness="5" />
-                                <FontIcon
-                                    x:Name="PowerGlyph"
-                                    FontSize="48"
-                                    Foreground="{StaticResource VexCyanBrush}"
-                                    Glyph="&#xE7E8;" />
-                                <ProgressRing
-                                    x:Name="PowerBusyIndicator"
-                                    Width="126"
-                                    Height="126"
-                                    Foreground="{StaticResource VexCyanLightBrush}"
-                                    IsActive="False"
-                                    Visibility="Collapsed" />
-                            </Grid>
-                        </Button>
-                        <TextBlock
-                            x:Name="PowerButtonText"
-                            HorizontalAlignment="Center"
-                            FontFamily="Segoe UI Variable Display"
-                            FontSize="21"
-                            FontWeight="Black"
-                            Foreground="{StaticResource VexTextBrush}"
-                            Text="Не подключено" />
-                        <TextBlock
-                            x:Name="StatusText"
-                            HorizontalAlignment="Center"
-                            FontSize="12"
-                            FontWeight="SemiBold"
-                            Foreground="{StaticResource VexSecondaryTextBrush}"
-                            Text="Нажмите, чтобы подключить VPN" />
+                        <Viewbox Height="18" Stretch="Fill" AutomationProperties.AccessibilityView="Raw">
+                            <Polyline x:Name="SentSparkline" Width="120" Height="18" Points="0,16.2 120,16.2"
+                                Stroke="{StaticResource HomeTrafficStroke}" StrokeThickness="1.7"
+                                StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
+                        </Viewbox>
                     </StackPanel>
                 </Grid>
+                </StackPanel>
 
-                <Grid Margin="2,0,2,2">
-                    <TextBlock
-                        VerticalAlignment="Center"
-                        FontFamily="Segoe UI Variable Display"
-                        FontSize="20"
-                        FontWeight="Black"
-                        Foreground="{StaticResource VexTextBrush}"
-                        Text="Локации" />
-                    <Button
-                        HorizontalAlignment="Right"
-                        AutomationProperties.AutomationId="ServerPickerButton"
-                        Click="OnServerPickerClick"
-                        Style="{StaticResource VexQuietButtonStyle}">
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                            <TextBlock
-                                FontSize="12"
-                                FontWeight="SemiBold"
-                                Foreground="{StaticResource VexSecondaryTextBrush}"
-                                Text="Все" />
-                            <FontIcon
-                                FontSize="12"
-                                Foreground="{StaticResource VexSecondaryTextBrush}"
-                                Glyph="&#xE76C;" />
+                <Grid Margin="2,0,2,0">
+                    <TextBlock VerticalAlignment="Center" FontSize="18" FontWeight="Bold"
+                        Foreground="{StaticResource VexTextBrush}" Text="Локации" />
+                    <Button HorizontalAlignment="Right" Padding="8,6" CornerRadius="8"
+                        AutomationProperties.AutomationId="ServerPickerButton" AutomationProperties.Name="Все серверы"
+                        Click="OnServerPickerClick" Style="{StaticResource HomePlainButtonStyle}">
+                        <StackPanel Orientation="Horizontal" Spacing="5">
+                            <TextBlock FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource VexSecondaryTextBrush}" Text="Все" />
+                            <FontIcon FontSize="11" Foreground="{StaticResource VexSecondaryTextBrush}" Glyph="&#xE76C;" />
                         </StackPanel>
                     </Button>
                 </Grid>
 
-                <ListView
-                    x:Name="LocationCarousel"
-                    Height="94"
-                    AutomationProperties.Name="Быстрый выбор локации"
-                    Background="Transparent"
-                    IsItemClickEnabled="False"
-                    SelectionMode="None"
-                    ScrollViewer.HorizontalScrollBarVisibility="Hidden"
-                    ScrollViewer.HorizontalScrollMode="Enabled"
-                    ScrollViewer.VerticalScrollBarVisibility="Disabled"
-                    ScrollViewer.VerticalScrollMode="Disabled">
-                    <ListView.ItemsPanel>
-                        <ItemsPanelTemplate>
-                            <StackPanel Orientation="Horizontal" />
-                        </ItemsPanelTemplate>
-                    </ListView.ItemsPanel>
+                <ListView x:Name="LocationCarousel" Height="86" Background="Transparent"
+                    AutomationProperties.Name="Быстрый выбор локации" IsItemClickEnabled="False" SelectionMode="None"
+                    ScrollViewer.HorizontalScrollBarVisibility="Hidden" ScrollViewer.HorizontalScrollMode="Enabled"
+                    ScrollViewer.VerticalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollMode="Disabled">
+                    <ListView.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate></ListView.ItemsPanel>
                     <ListView.ItemContainerStyle>
                         <Style TargetType="ListViewItem">
-                            <Setter Property="Padding" Value="0" />
-                            <Setter Property="Margin" Value="0,0,10,0" />
+                            <Setter Property="Padding" Value="0" /><Setter Property="Margin" Value="0,0,12,0" />
                             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
                             <Setter Property="UseSystemFocusVisuals" Value="False" />
                         </Style>
                     </ListView.ItemContainerStyle>
                     <ListView.ItemTemplate>
                         <DataTemplate>
-                            <Button
-                                Width="300"
-                                Height="82"
-                                Padding="0"
-                                HorizontalContentAlignment="Stretch"
-                                Background="Transparent"
-                                BorderThickness="0"
-                                Click="OnLocationCardClick"
-                                PointerEntered="OnLocationCardPointerEntered"
-                                PointerExited="OnLocationCardPointerExited"
-                                Tag="{Binding Location}">
-                                <Border
-                                    Padding="14,10"
-                                    Background="{Binding CardBackground}"
-                                    BorderBrush="{Binding CardBorder}"
-                                    BorderThickness="1"
-                                    CornerRadius="18">
+                            <Button Width="{Binding CardWidth}" Height="68" Padding="0" CornerRadius="18"
+                                HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"
+                                Click="OnLocationCardClick" PointerEntered="OnLocationCardPointerEntered"
+                                PointerExited="OnLocationCardPointerExited" Tag="{Binding Group}"
+                                AutomationProperties.Name="{Binding AccessibleName}" Style="{StaticResource HomePlainButtonStyle}">
+                                <Border x:Name="CountryCardSurface" Padding="16,0" Background="{Binding CardBackground}"
+                                    BorderBrush="{Binding CardBorder}" BorderThickness="1" CornerRadius="18">
                                     <Grid>
-                                        <Path
-                                            x:Name="CountryArtwork"
-                                            Width="88"
-                                            Height="88"
-                                            Margin="0,-3,76,-3"
-                                            HorizontalAlignment="Right"
-                                            VerticalAlignment="Center"
-                                            Data="{Binding CountryGeometry}"
-                                            Fill="{Binding CountryFill}"
-                                            Opacity="{Binding CountryOpacity}"
-                                            RenderTransformOrigin="0.5,0.5"
-                                            Stretch="Uniform"
-                                            Stroke="{Binding CountryStroke}"
-                                            StrokeThickness="0.75">
-                                            <Path.RenderTransform>
-                                                <ScaleTransform ScaleX="1" ScaleY="1" />
-                                            </Path.RenderTransform>
+                                        <Path x:Name="CountryArtwork" Width="78" Height="62" Margin="0,0,76,0"
+                                            HorizontalAlignment="Right" VerticalAlignment="Center" Data="{Binding CountryGeometry}"
+                                            Fill="{Binding CountryFill}" Opacity="{Binding CountryOpacity}" Stretch="Uniform"
+                                            Stroke="{Binding CountryStroke}" StrokeThickness="0.6" RenderTransformOrigin="0.5,0.5"
+                                            IsHitTestVisible="False" AutomationProperties.AccessibilityView="Raw">
+                                            <Path.RenderTransform><ScaleTransform ScaleX="1" ScaleY="1" /></Path.RenderTransform>
                                         </Path>
-                                        <Grid>
+                                        <Grid ColumnSpacing="12">
                                             <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="42" />
-                                                <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="30" /><ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" /><ColumnDefinition Width="17" />
                                             </Grid.ColumnDefinitions>
-                                            <Grid
-                                                Width="30"
-                                                Height="20"
-                                                VerticalAlignment="Center">
-                                                <TextBlock
-                                                    HorizontalAlignment="Center"
-                                                    VerticalAlignment="Center"
-                                                    FontSize="10"
-                                                    FontWeight="Bold"
-                                                    Foreground="{StaticResource VexSecondaryTextBrush}"
-                                                    Text="{Binding FlagEmoji}" />
-                                                <Border
-                                                    Background="#FF071113"
-                                                    BorderBrush="#20FFFFFF"
-                                                    BorderThickness="1"
-                                                    CornerRadius="3">
-                                                    <Image
-                                                        Source="{Binding FlagAsset}"
-                                                        Stretch="UniformToFill" />
+                                            <Grid Width="30" Height="22" VerticalAlignment="Center">
+                                                <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="24"
+                                                    Foreground="{StaticResource VexTextBrush}" Text="{Binding FlagEmoji}" />
+                                                <Border Background="{StaticResource VexPanelStrongBrush}" Visibility="{Binding FlagAssetVisibility}">
+                                                    <Image Width="30" Height="20" Source="{Binding FlagAsset}" Stretch="UniformToFill" />
                                                 </Border>
                                             </Grid>
-                                            <StackPanel
-                                                Grid.Column="1"
-                                                VerticalAlignment="Center"
-                                                Spacing="2">
-                                                <TextBlock
-                                                    FontFamily="Segoe UI Variable Display"
-                                                    FontSize="15"
-                                                    FontWeight="Black"
-                                                    Foreground="{StaticResource VexTextBrush}"
-                                                    Text="{Binding DisplayName}" />
-                                                <TextBlock
-                                                    FontSize="11"
-                                                    FontWeight="SemiBold"
-                                                    Foreground="{StaticResource VexSecondaryTextBrush}"
-                                                    Text="{Binding AvailabilityText}" />
+                                            <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="4">
+                                                <TextBlock FontSize="14" FontWeight="Bold" Foreground="{StaticResource VexTextBrush}"
+                                                    Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis" />
+                                                <TextBlock FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource VexSecondaryTextBrush}"
+                                                    Text="{Binding AvailabilityText}" TextTrimming="CharacterEllipsis" />
                                             </StackPanel>
-                                            <StackPanel
-                                                Grid.Column="2"
-                                                VerticalAlignment="Center"
-                                                Orientation="Horizontal"
-                                                Spacing="9">
-                                                <TextBlock
-                                                    FontSize="12"
-                                                    FontWeight="Black"
-                                                    Foreground="{StaticResource VexCyanLightBrush}"
-                                                    Text="{Binding LatencyText}" />
-                                                <Border
-                                                    Width="17"
-                                                    Height="17"
-                                                    Background="{Binding SelectionFill}"
-                                                    BorderBrush="{Binding SelectionStroke}"
-                                                    BorderThickness="2"
-                                                    CornerRadius="9">
-                                                    <FontIcon
-                                                        FontSize="9"
-                                                        Foreground="{StaticResource VexBackgroundBrush}"
-                                                        Glyph="{Binding SelectionGlyph}" />
-                                                </Border>
-                                            </StackPanel>
+                                            <TextBlock Grid.Column="2" VerticalAlignment="Center" FontSize="12" FontWeight="Black"
+                                                Foreground="{StaticResource VexCyanLightBrush}" Text="{Binding LatencyText}" />
+                                            <Border Grid.Column="3" Width="17" Height="17" VerticalAlignment="Center"
+                                                Background="{Binding SelectionFill}" BorderBrush="{Binding SelectionStroke}"
+                                                BorderThickness="1.7" CornerRadius="9">
+                                                <FontIcon FontSize="9" Foreground="{StaticResource VexBackgroundBrush}" Glyph="{Binding SelectionGlyph}" />
+                                            </Border>
                                         </Grid>
                                     </Grid>
                                 </Border>
@@ -361,168 +248,125 @@
                         </DataTemplate>
                     </ListView.ItemTemplate>
                 </ListView>
-
-                <TextBlock
-                    x:Name="FooterMessage"
-                    Height="18"
-                    Margin="5,0"
-                    FontSize="11"
-                    FontWeight="SemiBold"
-                    Foreground="{StaticResource VexSecondaryTextBrush}"
-                    Text="" />
+                <Button x:Name="EmptyLocationButton" Height="72" Padding="16,0" HorizontalContentAlignment="Center"
+                    AutomationProperties.Name="Выбрать доступный сервер" Click="OnServerPickerClick"
+                    CornerRadius="18" Style="{StaticResource VexGlassButtonStyle}" Visibility="Collapsed">
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <FontIcon FontSize="19" Foreground="{StaticResource VexCyanBrush}" Glyph="&#xE774;" />
+                        <TextBlock FontSize="15" FontWeight="Bold" Text="Выбрать доступный сервер" />
+                    </StackPanel>
+                </Button>
+                <Grid x:Name="FooterNotice" Margin="4,0" ColumnSpacing="8" Visibility="Collapsed">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="16" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                    <FontIcon FontSize="12" VerticalAlignment="Top" Margin="0,2,0,0"
+                        Foreground="{StaticResource VexCyanBrush}" Glyph="&#xE946;" />
+                    <TextBlock x:Name="FooterMessage" Grid.Column="1" FontSize="12" FontWeight="SemiBold"
+                        Foreground="{StaticResource VexSecondaryTextBrush}" Text="" TextWrapping="Wrap" MaxLines="2" />
+                </Grid>
             </StackPanel>
         </ScrollViewer>
 
         <ContentDialog
             x:Name="ServerPickerDialog"
             AutomationProperties.Name="Выбор сервера VPN"
-            Background="#FF031B1E"
-            CornerRadius="24"
+            Background="{StaticResource VexPanelStrongBrush}"
+            CornerRadius="20"
             DefaultButton="None"
             RequestedTheme="Dark">
-            <Grid
-                Width="420"
-                MinHeight="430"
-                Padding="4">
+            <Grid x:Name="ServerPickerContent" Width="440" MaxHeight="590" Padding="4" RowSpacing="10">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
-
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="52" />
+                        <ColumnDefinition Width="48" />
                     </Grid.ColumnDefinitions>
-                    <StackPanel Spacing="4">
+                    <StackPanel Spacing="3">
                         <TextBlock Style="{StaticResource VexEyebrowStyle}" Text="VEX VPN" />
-                        <TextBlock
-                            FontFamily="Segoe UI Variable Display"
-                            FontSize="28"
-                            FontWeight="Black"
-                            Foreground="{StaticResource VexTextBrush}"
-                            Text="Серверы" />
-                        <TextBlock
-                            FontSize="13"
-                            Foreground="{StaticResource VexSecondaryTextBrush}"
-                            Text="Выберите ближайший стабильный узел."
-                            TextWrapping="Wrap" />
+                        <TextBlock FontFamily="Segoe UI Variable Display" FontSize="24" FontWeight="Bold"
+                            Foreground="{StaticResource VexTextBrush}" Text="Все серверы" />
+                        <TextBlock x:Name="CatalogCountText" FontSize="12" Foreground="{StaticResource VexSecondaryTextBrush}" />
                     </StackPanel>
-                    <Button
-                        Grid.Column="1"
-                        Width="48"
-                        Height="48"
-                        HorizontalAlignment="Right"
-                        VerticalAlignment="Top"
-                        AutomationProperties.Name="Закрыть выбор сервера"
-                        Click="OnCloseServerPickerClick"
-                        Content="✕"
-                        CornerRadius="12"
-                        FontSize="18"
-                        Style="{StaticResource VexGlassButtonStyle}" />
+                    <Button Grid.Column="1" Width="42" Height="42" VerticalAlignment="Top"
+                        AutomationProperties.AutomationId="CloseServerPickerButton"
+                        AutomationProperties.Name="Закрыть выбор сервера" Click="OnCloseServerPickerClick"
+                        Content="✕" CornerRadius="12" FontSize="18" Style="{StaticResource VexGlassButtonStyle}" />
                 </Grid>
-
-                <Button
-                    Grid.Row="1"
-                    Margin="0,18,0,10"
-                    Padding="12,10"
-                    HorizontalContentAlignment="Stretch"
-                    AutomationProperties.Name="Автоматический выбор сервера"
-                    Click="OnAutoServerClick"
+                <Button x:Name="AutoServerButton" Grid.Row="1" Padding="12,10" HorizontalContentAlignment="Stretch"
+                    AutomationProperties.Name="Автоматический выбор сервера" Click="OnAutoServerClick"
                     Style="{StaticResource VexGlassButtonStyle}">
                     <Grid ColumnSpacing="12">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="42" />
+                            <ColumnDefinition Width="40" />
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="24" />
                         </Grid.ColumnDefinitions>
-                        <Border
-                            Width="40"
-                            Height="40"
-                            Background="#2522D3EE"
-                            CornerRadius="10">
-                            <FontIcon
-                                FontSize="18"
-                                Foreground="{StaticResource VexCyanBrush}"
-                                Glyph="&#xE945;" />
-                        </Border>
-                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
-                            <TextBlock
-                                FontSize="15"
-                                FontWeight="Black"
-                                Foreground="{StaticResource VexTextBrush}"
-                                Text="Автовыбор" />
-                            <TextBlock
-                                FontSize="12"
-                                Foreground="{StaticResource VexSecondaryTextBrush}"
-                                Text="VEX выберет лучший сервер" />
+                        <FontIcon VerticalAlignment="Center" FontSize="20" Foreground="{StaticResource VexCyanBrush}" Glyph="&#xE945;" />
+                        <StackPanel Grid.Column="1" Spacing="2">
+                            <TextBlock FontSize="15" FontWeight="Bold" Foreground="{StaticResource VexTextBrush}" Text="Автовыбор" />
+                            <TextBlock FontSize="11" Foreground="{StaticResource VexSecondaryTextBrush}" Text="VEX выберет лучший сервер" />
                         </StackPanel>
-                        <FontIcon
-                            x:Name="AutoServerSelectionIcon"
-                            Grid.Column="2"
-                            VerticalAlignment="Center"
-                            FontSize="15"
-                            Foreground="{StaticResource VexCyanBrush}"
-                            Glyph="&#xE73E;" />
+                        <FontIcon x:Name="AutoServerSelectionIcon" Grid.Column="2" VerticalAlignment="Center"
+                            FontSize="15" Foreground="{StaticResource VexCyanBrush}" Glyph="&#xE73E;" />
                     </Grid>
                 </Button>
-
-                <ListView
-                    x:Name="LocationPicker"
-                    Grid.Row="2"
-                    AutomationProperties.Name="Доступные серверы"
-                    HorizontalAlignment="Stretch"
-                    IsItemClickEnabled="True"
-                    ItemClick="OnLocationItemClick"
-                    SelectionMode="Single">
-                    <ListView.ItemTemplate>
-                        <DataTemplate>
-                            <Grid Padding="12,10" ColumnSpacing="10">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="34" />
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <TextBlock FontSize="20" Text="{Binding FlagEmoji}" />
-                                <StackPanel Grid.Column="1" Spacing="2">
-                                    <TextBlock
-                                        FontSize="14"
-                                        FontWeight="Black"
-                                        Foreground="{StaticResource VexTextBrush}"
-                                        Text="{Binding City}" />
-                                    <TextBlock
-                                        FontSize="11"
-                                        Foreground="{StaticResource VexSecondaryTextBrush}"
-                                        Text="{Binding Availability}" />
-                                </StackPanel>
-                                <TextBlock
-                                    Grid.Column="2"
-                                    VerticalAlignment="Center"
-                                    FontSize="11"
-                                    FontWeight="Bold"
-                                    Foreground="{StaticResource VexCyanLightBrush}"
-                                    Text="{Binding LatencyMs}" />
-                            </Grid>
-                        </DataTemplate>
-                    </ListView.ItemTemplate>
-                </ListView>
-
-                <TextBlock
-                    x:Name="LocationCapabilityText"
-                    Grid.Row="2"
-                    Margin="12,8"
-                    VerticalAlignment="Bottom"
-                    FontSize="11"
-                    Foreground="{StaticResource VexSecondaryTextBrush}"
-                    TextWrapping="Wrap"
-                    Visibility="Collapsed" />
+                <Grid Grid.Row="2" ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="42" />
+                    </Grid.ColumnDefinitions>
+                    <TextBox x:Name="ServerSearchBox" PlaceholderText="Поиск страны или сервера"
+                        AutomationProperties.Name="Поиск страны или сервера" TextChanged="OnServerSearchTextChanged"
+                        KeyDown="OnServerSearchKeyDown" />
+                    <Button x:Name="RefreshCatalogButton" Grid.Column="1" Width="42" Height="38"
+                        AutomationProperties.Name="Обновить серверы" ToolTipService.ToolTip="Обновить серверы"
+                        Click="OnRefreshCatalogClick" Style="{StaticResource VexGlassButtonStyle}">
+                        <Grid>
+                            <FontIcon x:Name="RefreshCatalogIcon" Glyph="&#xE72C;" FontSize="16" />
+                            <ProgressRing x:Name="CatalogLoadingIndicator" Width="20" Height="20" IsActive="False" Visibility="Collapsed" />
+                        </Grid>
+                    </Button>
+                </Grid>
+                <ComboBox x:Name="ServerFilterPicker" Grid.Row="3" HorizontalAlignment="Stretch"
+                    HorizontalContentAlignment="Stretch" AutomationProperties.Name="Фильтр серверов"
+                    SelectionChanged="OnServerFilterChanged">
+                    <ComboBoxItem Content="Все" Tag="all" />
+                    <ComboBoxItem Content="Быстрые" Tag="fastest" />
+                    <ComboBoxItem Content="Избранные" Tag="favorites" />
+                    <ComboBoxItem Content="Доступные" Tag="available" />
+                </ComboBox>
+                <Grid Grid.Row="4">
+                    <ListView x:Name="LocationPicker" MinHeight="144" MaxHeight="310"
+                        AutomationProperties.Name="Серверы по странам" HorizontalAlignment="Stretch"
+                        IsItemClickEnabled="True" ItemClick="OnLocationItemClick" KeyDown="OnLocationPickerKeyDown"
+                        SelectionMode="Single" ItemTemplate="{StaticResource ServerRowTemplate}">
+                        <ListView.GroupStyle>
+                            <GroupStyle>
+                                <GroupStyle.HeaderTemplate>
+                                    <DataTemplate>
+                                        <Grid Padding="8,12,8,4">
+                                            <TextBlock FontSize="13" FontWeight="Bold" Foreground="{StaticResource VexTextBrush}" Text="{Binding Title}" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </GroupStyle.HeaderTemplate>
+                            </GroupStyle>
+                        </ListView.GroupStyle>
+                    </ListView>
+                    <TextBlock x:Name="CatalogEmptyText" Margin="14,24" HorizontalAlignment="Center"
+                        TextAlignment="Center" FontSize="13" Foreground="{StaticResource VexSecondaryTextBrush}"
+                        TextWrapping="Wrap" Visibility="Collapsed" />
+                </Grid>
+                <TextBlock x:Name="LocationCapabilityText" Grid.Row="5" Margin="8,0" FontSize="11"
+                    Foreground="{StaticResource VexSecondaryTextBrush}" TextWrapping="Wrap" />
                 <RadioButton x:Name="AutoServerRadio" Visibility="Collapsed" />
                 <RadioButton x:Name="ManualServerRadio" Visibility="Collapsed" />
-                <Button
-                    x:Name="ApplyLocationButton"
-                    Click="OnApplyLocationClick"
-                    Visibility="Collapsed" />
+                <Button x:Name="ApplyLocationButton" Click="OnApplyLocationClick" Visibility="Collapsed" />
             </Grid>
         </ContentDialog>
     </Grid>

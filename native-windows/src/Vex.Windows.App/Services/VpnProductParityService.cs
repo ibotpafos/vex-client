@@ -29,14 +29,16 @@ public sealed class VpnProductParityService
         NativeClientCoordinator coordinator,
         string locationId,
         bool reconnectIfConnected,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool antiLeakEnabled = true)
     {
         ArgumentNullException.ThrowIfNull(coordinator);
         ArgumentException.ThrowIfNullOrWhiteSpace(locationId);
         await coordinator.SelectLocationAsync(
             locationId,
             reconnectIfConnected,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            antiLeakEnabled).ConfigureAwait(false);
         return new LocationSelectionResult(
             Applied: true,
             "Сервер применён.");
@@ -49,25 +51,61 @@ public sealed class VpnProductParityService
     {
         ArgumentNullException.ThrowIfNull(coordinator);
         ArgumentNullException.ThrowIfNull(preferences);
-        var locationId = preferences.SelectedLocationId;
-        if (preferences.AutoServerEnabled)
-        {
-            var locations = _cachedLocations.Count > 0
-                ? _cachedLocations
-                : await GetLocationsAsync(
-                    coordinator,
-                    cancellationToken).ConfigureAwait(false);
-            locationId = VpnLocationSelector.SelectAutomaticLocation(
-                locations,
-                coordinator.CurrentState?.LocationId);
-        }
         var routingMode = preferences.SmartRoutingEnabled
             ? "split"
             : "full";
-        return await coordinator.ConnectAsync(
+        var locationId = preferences.SelectedLocationId;
+        if (preferences.AutoServerEnabled)
+        {
+            try
+            {
+                var locations = _cachedLocations.Count > 0
+                    ? _cachedLocations
+                    : await GetLocationsAsync(
+                        coordinator,
+                        cancellationToken).ConfigureAwait(false);
+                locationId = VpnLocationSelector.SelectAutomaticLocation(
+                    locations,
+                    coordinator.CurrentState?.LocationId);
+            }
+            catch (Exception error) when (!cancellationToken.IsCancellationRequested &&
+                (error is HttpRequestException or IOException or TaskCanceledException or TimeoutException ||
+                    error is VexApiException apiError && (int)apiError.StatusCode is 408 or 429 or >= 500 and <= 599))
+            {
+                if (!coordinator.TryGetCachedReconnectLocation(routingMode, bypassRegion: null, out var cachedLocationId))
+                {
+                    throw;
+                }
+                locationId = cachedLocationId;
+            }
+        }
+        return await coordinator.ConnectWithRecoveryAsync(
             locationId,
             routingMode,
             preferences.AntiLeakEnabled,
+            preferences.AutoServerEnabled,
             cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<VpnServiceResponse> RecoverAsync(
+        NativeClientCoordinator coordinator,
+        NativeClientPreferences preferences,
+        VpnConnectionSnapshot snapshot,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(coordinator);
+        ArgumentNullException.ThrowIfNull(preferences);
+        if (snapshot.Phase is VpnConnectionPhase.Connecting or VpnConnectionPhase.Disconnecting)
+        {
+            return await coordinator.GetTunnelStatusAsync(cancellationToken).ConfigureAwait(false);
+        }
+        // Recovery preserves the current exit before considering another one.
+        var locationId = snapshot.LocationId ?? coordinator.CurrentState?.LocationId ?? preferences.SelectedLocationId;
+        var cleanup = await coordinator.DisconnectTunnelAsync(cancellationToken).ConfigureAwait(false);
+        if (!cleanup.Success) { return cleanup; }
+        return await coordinator.ConnectWithRecoveryAsync(locationId,
+            preferences.SmartRoutingEnabled ? "split" : "full",
+            preferences.AntiLeakEnabled, preferences.AutoServerEnabled,
+            cancellationToken, forceFreshProfile: true).ConfigureAwait(false);
     }
 }

@@ -24,6 +24,7 @@ public sealed class WindowsHelloAuthService
         }
 
         var availability = await UserConsentVerifier.CheckAvailabilityAsync();
+        cancellationToken.ThrowIfCancellationRequested();
         return availability == UserConsentVerifierAvailability.Available
             ? new WindowsHelloAvailability(
                 true,
@@ -50,6 +51,7 @@ public sealed class WindowsHelloAuthService
             .RequestVerificationForWindowAsync(
                 windowHandle,
                 message);
+        cancellationToken.ThrowIfCancellationRequested();
         return result switch
         {
             UserConsentVerificationResult.Verified =>

@@ -91,7 +91,8 @@ public sealed record WindowsUpdateVerificationOptions(
 
 public sealed record WindowsUpdateRollbackState(
     long HighestManifestRevision,
-    string RequiredVersionFloor);
+    string RequiredVersionFloor,
+    string? RequiredTargetVersion = null);
 
 public sealed record WindowsUpdateAssessment(
     bool UpdateAvailable,

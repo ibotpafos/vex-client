@@ -41,6 +41,11 @@ public interface INativeClientApi
         string accessToken,
         CancellationToken cancellationToken);
 
+    Task<ResiliencePolicy?> GetResiliencePolicyAsync(
+        string accessToken,
+        CancellationToken cancellationToken) =>
+        Task.FromResult<ResiliencePolicy?>(null);
+
     Task<VpnDevice> RegisterNativeDeviceAsync(
         string accessToken,
         string installationId,
@@ -59,6 +64,17 @@ public interface INativeClientApi
         int? knownVersion,
         CancellationToken cancellationToken);
 
+    Task<ManagedVpnProfile> GetManagedVpnCandidateProfileAsync(
+        string accessToken,
+        string deviceId,
+        string locationId,
+        string routingMode,
+        string? bypassRegion,
+        string candidateId,
+        CancellationToken cancellationToken) =>
+        Task.FromException<ManagedVpnProfile>(new VexApiException(
+            HttpStatusCode.NotFound, "vpn_candidate_grant_unavailable"));
+
     Task<VpnDevice> RotateManagedVpnKeyAsync(
         string accessToken,
         string deviceId,
@@ -72,6 +88,8 @@ public interface INativeClientApi
     Task<BillingSummary> GetBillingSummaryAsync(
         string accessToken,
         CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<BillingPlan>> GetBillingPlansAsync(CancellationToken cancellationToken);
 
     Task<CheckoutSession> CreateCheckoutSessionAsync(
         string accessToken,
@@ -115,21 +133,6 @@ public interface INativeClientApi
         ClientDiagnosticsReport report,
         CancellationToken cancellationToken);
 
-    Task<IReadOnlyList<SupportTicket>> GetSupportTicketsAsync(
-        string accessToken,
-        CancellationToken cancellationToken);
-
-    Task<SupportTicket> CreateSupportTicketAsync(
-        string accessToken,
-        string subject,
-        string message,
-        string source,
-        CancellationToken cancellationToken);
-
-    Task<Uri> GetSupportWebSocketUriAsync(
-        string accessToken,
-        CancellationToken cancellationToken);
-
     Task<AppRemoteConfig> GetRemoteConfigAsync(
         ClientAppMetadata metadata,
         CancellationToken cancellationToken);
@@ -171,6 +174,18 @@ public sealed class VexApiClient : INativeClientApi
 
     public Uri BaseUri => _httpClient.BaseAddress!;
 
+    public async Task<ResiliencePolicy?> GetResiliencePolicyAsync(
+        string accessToken,
+        CancellationToken cancellationToken)
+    {
+        using var request = Authorized(
+            HttpMethod.Get,
+            "/v1/resilience/policy",
+            accessToken);
+        return await SendAsync<ResiliencePolicy>(request, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
     public async Task<VexUser> GetCurrentUserAsync(
         string accessToken,
         CancellationToken cancellationToken)
@@ -210,10 +225,7 @@ public sealed class VexApiClient : INativeClientApi
         var response = await SendAsync<AuthResponse>(
             request,
             cancellationToken).ConfigureAwait(false);
-        return new VexAuthSession(
-            response.User,
-            response.Session.AccessToken,
-            response.Session.ExpiresAt);
+        return ValidateAuthSession(response);
     }
 
     public async Task<EmailOtpChallenge> RequestEmailOtpAsync(
@@ -269,10 +281,7 @@ public sealed class VexApiClient : INativeClientApi
         var response = await SendAsync<AuthResponse>(
             request,
             cancellationToken).ConfigureAwait(false);
-        return new VexAuthSession(
-            response.User,
-            response.Session.AccessToken,
-            response.Session.ExpiresAt);
+        return ValidateAuthSession(response);
     }
 
     public async Task<VexAuthSession> ExchangeAppAuthCodeAsync(
@@ -300,10 +309,7 @@ public sealed class VexApiClient : INativeClientApi
         var response = await SendAsync<AuthResponse>(
             request,
             cancellationToken).ConfigureAwait(false);
-        return new VexAuthSession(
-            response.User,
-            response.Session.AccessToken,
-            response.Session.ExpiresAt);
+        return ValidateAuthSession(response);
     }
 
     public async Task<IReadOnlyList<VpnLocation>> GetLocationsAsync(
@@ -335,10 +341,7 @@ public sealed class VexApiClient : INativeClientApi
         var response = await SendAsync<AuthResponse>(
             request,
             cancellationToken).ConfigureAwait(false);
-        return new VexAuthSession(
-            response.User,
-            response.Session.AccessToken,
-            response.Session.ExpiresAt);
+        return ValidateAuthSession(response);
     }
 
     public async Task<VpnDevice> RegisterNativeDeviceAsync(
@@ -418,6 +421,48 @@ public sealed class VexApiClient : INativeClientApi
         int? knownVersion,
         CancellationToken cancellationToken)
     {
+        return await GetManagedVpnProfileCoreAsync(accessToken, deviceId, locationId,
+            routingMode, bypassRegion, knownVersion, null, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<ManagedVpnProfile> GetManagedVpnCandidateProfileAsync(
+        string accessToken,
+        string deviceId,
+        string locationId,
+        string routingMode,
+        string? bypassRegion,
+        string candidateId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(candidateId);
+        if (candidateId.Length > 512 || candidateId.Any(char.IsControl))
+        {
+            throw new ArgumentException("VPN candidate ID is invalid.", nameof(candidateId));
+        }
+        try
+        {
+            return await GetManagedVpnProfileCoreAsync(accessToken, deviceId, locationId,
+                routingMode, bypassRegion, null, candidateId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (VexApiException error) when (error.StatusCode == HttpStatusCode.Conflict)
+        {
+            // The additive candidate-grant contract uses 409 for a stale,
+            // foreign or no-longer-qualified selection. Never expose raw
+            // server error text through the native application.
+            throw new VexApiException(error.StatusCode, "vpn_profile_candidate_rejected");
+        }
+    }
+
+    private async Task<ManagedVpnProfile> GetManagedVpnProfileCoreAsync(
+        string accessToken,
+        string deviceId,
+        string locationId,
+        string routingMode,
+        string? bypassRegion,
+        int? knownVersion,
+        string? candidateId,
+        CancellationToken cancellationToken)
+    {
         ValidateIdentifier(deviceId, nameof(deviceId));
         ValidateIdentifier(locationId, nameof(locationId));
         if (routingMode is not ("full" or "split"))
@@ -441,6 +486,8 @@ public sealed class VexApiClient : INativeClientApi
             routingMode +
             "&platform=windows" +
             "&awg_version=3" +
+            (candidateId is null ? string.Empty :
+                "&candidate_id=" + Uri.EscapeDataString(candidateId)) +
             (string.IsNullOrWhiteSpace(bypassRegion)
                 ? string.Empty
                 : "&bypass_region=" +
@@ -524,7 +571,9 @@ public sealed class VexApiClient : INativeClientApi
         var entitlementTask = GetBillingEntitlementAsync(
             accessToken,
             cancellationToken);
-        var plans = await plansTask.ConfigureAwait(false);
+        IReadOnlyList<BillingPlan> plans;
+        try { plans = await plansTask.ConfigureAwait(false); }
+        catch (VexApiException) { plans = []; }
         var entitlement = await entitlementTask.ConfigureAwait(false);
         return BillingSummaryBuilder.Build(plans, entitlement);
     }
@@ -669,88 +718,6 @@ public sealed class VexApiClient : INativeClientApi
             cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<IReadOnlyList<SupportTicket>> GetSupportTicketsAsync(
-        string accessToken,
-        CancellationToken cancellationToken)
-    {
-        using var request = Authorized(
-            HttpMethod.Get,
-            "/v1/support-tickets",
-            accessToken);
-        var tickets = await SendAsync<List<SupportTicket>?>(
-            request,
-            cancellationToken).ConfigureAwait(false);
-        return tickets ?? [];
-    }
-
-    public async Task<SupportTicket> CreateSupportTicketAsync(
-        string accessToken,
-        string subject,
-        string message,
-        string source,
-        CancellationToken cancellationToken)
-    {
-        subject = subject.Trim();
-        message = message.Trim();
-        source = source.Trim();
-        if (subject.Length == 0 ||
-            message.Length == 0 ||
-            source.Length == 0)
-        {
-            throw new ArgumentException("Support ticket payload is invalid.");
-        }
-
-        using var request = Authorized(
-            HttpMethod.Post,
-            "/v1/support-tickets",
-            accessToken);
-        request.Headers.Add(
-            "Idempotency-Key",
-            $"native-windows-support-{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}");
-        request.Content = JsonContent.Create(new
-        {
-            subject,
-            message,
-            source,
-        });
-        return await SendAsync<SupportTicket>(
-            request,
-            cancellationToken).ConfigureAwait(false);
-    }
-
-    public async Task<Uri> GetSupportWebSocketUriAsync(
-        string accessToken,
-        CancellationToken cancellationToken)
-    {
-        using var request = Authorized(
-            HttpMethod.Get,
-            "/v1/support-ws-ticket",
-            accessToken);
-        var response = await SendAsync<SupportSocketTicketResponse>(
-            request,
-            cancellationToken).ConfigureAwait(false);
-        var ticket = response.Ticket?.Trim();
-        if (string.IsNullOrEmpty(ticket))
-        {
-            throw new VexApiException(
-                HttpStatusCode.BadGateway,
-                "support_socket_ticket_invalid");
-        }
-
-        var builder = new UriBuilder(_httpClient.BaseAddress!)
-        {
-            Scheme = _httpClient.BaseAddress!.Scheme == Uri.UriSchemeHttps
-                ? "wss"
-                : "ws",
-            Port = _httpClient.BaseAddress!.IsDefaultPort
-                ? -1
-                : _httpClient.BaseAddress.Port,
-            Path = "/v1/support-ws",
-            Query = "ticket=" + Uri.EscapeDataString(ticket),
-        };
-        return builder.Uri;
-    }
-
     public Task<AppRemoteConfig> GetRemoteConfigAsync(
         ClientAppMetadata metadata,
         CancellationToken cancellationToken) =>
@@ -827,10 +794,20 @@ public sealed class VexApiClient : INativeClientApi
         {
             throw new VexApiException(
                 response.StatusCode,
-                response.StatusCode == HttpStatusCode.Unauthorized
-                    ? "session_expired"
-                    : "api_request_failed");
+                await ReadKnownErrorAsync(request, response, cancellationToken).ConfigureAwait(false));
         }
+    }
+
+    private static VexAuthSession ValidateAuthSession(AuthResponse response)
+    {
+        if (response.User is null || response.Session is null ||
+            string.IsNullOrWhiteSpace(response.User.Id) ||
+            string.IsNullOrWhiteSpace(response.User.Email) ||
+            string.IsNullOrWhiteSpace(response.Session.AccessToken))
+        {
+            throw new VexApiException(HttpStatusCode.BadGateway, "api_response_invalid");
+        }
+        return new VexAuthSession(response.User, response.Session.AccessToken, response.Session.ExpiresAt);
     }
 
     private async Task<T> SendAsync<T>(
@@ -845,9 +822,7 @@ public sealed class VexApiClient : INativeClientApi
         {
             throw new VexApiException(
                 response.StatusCode,
-                response.StatusCode == HttpStatusCode.Unauthorized
-                    ? "session_expired"
-                    : "api_request_failed");
+                await ReadKnownErrorAsync(request, response, cancellationToken).ConfigureAwait(false));
         }
 
         if (response.Content.Headers.ContentLength >
@@ -896,22 +871,70 @@ public sealed class VexApiClient : INativeClientApi
         }
     }
 
-    private async Task<IReadOnlyList<BillingPlan>> GetBillingPlansAsync(
+    private static async Task<string> ReadKnownErrorAsync(HttpRequestMessage request,
+        HttpResponseMessage response, CancellationToken cancellationToken)
+    {
+        var fallback = response.StatusCode == HttpStatusCode.Unauthorized ? "session_expired" : "api_request_failed";
+        var path = request.RequestUri?.AbsolutePath;
+        var authError = response.StatusCode == HttpStatusCode.Unauthorized &&
+            path is "/v1/auth/login" or "/v1/auth/email-otp/confirm";
+        var quotaError = response.StatusCode == HttpStatusCode.Forbidden && path == "/v1/devices/register";
+        if ((!authError && !quotaError) || response.Content.Headers.ContentLength > 4096)
+            return fallback;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(5));
+        try
+        {
+            await using var source = await response.Content.ReadAsStreamAsync(deadline.Token).ConfigureAwait(false);
+            using var bounded = new MemoryStream();
+            var buffer = new byte[1024];
+            while (true)
+            {
+                var read = await source.ReadAsync(buffer, deadline.Token).ConfigureAwait(false);
+                if (read == 0) break;
+                if (bounded.Length + read > 4096) return fallback;
+                bounded.Write(buffer, 0, read);
+            }
+            using var document = JsonDocument.Parse(bounded.ToArray(), new JsonDocumentOptions { MaxDepth = 8 });
+            if (document.RootElement.ValueKind != JsonValueKind.Object) return fallback;
+            string? code = null, message = null;
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                if (property.Name is not ("code" or "message")) continue;
+                if (property.Value.ValueKind != JsonValueKind.String || property.Value.GetString() is not { Length: <= 64 } value)
+                    return fallback;
+                if (property.Name == "code") { if (code is not null) return fallback; code = value; }
+                else { if (message is not null) return fallback; message = value; }
+            }
+            // Current backend uses normalized HTTP codes and these exact public
+            // messages. Accept only the enumerated contract, never server copy.
+            if (authError)
+                return (code, message) switch
+                {
+                    ("unauthorized", "mfa required") or ("mfa_required", _) => "mfa_required",
+                    ("unauthorized", "invalid mfa code") or ("mfa_invalid", _) => "mfa_invalid",
+                    _ => fallback,
+                };
+            return (code, message) switch
+            {
+                ("forbidden", "device limit reached") or ("device_limit_reached", _) => "vpn_device_limit_reached",
+                _ => fallback,
+            };
+        }
+        catch (Exception error) when (error is JsonException or IOException or HttpRequestException ||
+            error is OperationCanceledException && !cancellationToken.IsCancellationRequested)
+        {
+            return fallback;
+        }
+    }
+
+    public async Task<IReadOnlyList<BillingPlan>> GetBillingPlansAsync(
         CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
             "/v1/billing/plans");
-        try
-        {
-            return await SendAsync<List<BillingPlan>>(
-                request,
-                cancellationToken).ConfigureAwait(false);
-        }
-        catch (VexApiException)
-        {
-            return [];
-        }
+        return await SendAsync<List<BillingPlan>>(request, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<DeviceIdentityRegistration?> BuildIdentityRegistrationAsync(

@@ -14,6 +14,16 @@ public sealed record WindowsServiceOptions(
     public const string ServiceName = "VEX VPN Service";
     public const string VendorServiceName = "AmneziaWGTunnel$vex";
 
+    // Trusted in-process dependency. Production keeps these hosts; an isolated
+    // acceptance fixture supplies an empty list without contacting the service API.
+    public IReadOnlyList<string> ControlPlaneBypassHosts { get; init; } =
+        ["vexguard.app", "www.vexguard.app"];
+
+    // Fixture-only in-process dependency; production never loads this from
+    // client IPC, settings or disk. Each address must still be assigned to an
+    // active physical NIC before its native local route can be used.
+    public IReadOnlyList<string> NativeLocalEndpointAddresses { get; init; } = [];
+
     public static WindowsServiceOptions Load()
     {
         var programData = Environment.GetFolderPath(

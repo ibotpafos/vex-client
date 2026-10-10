@@ -30,10 +30,5 @@ public static class VpnLocationSelector
             .FirstOrDefault();
     }
 
-    private static bool IsEligible(VpnLocation location) =>
-        location.HealthyNodes > 0 &&
-        !string.Equals(
-            location.Availability,
-            "unavailable",
-            StringComparison.OrdinalIgnoreCase);
+    private static bool IsEligible(VpnLocation location) => ServerCatalog.IsAvailable(location);
 }

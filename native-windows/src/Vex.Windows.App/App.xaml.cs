@@ -35,7 +35,12 @@ public partial class App : Application
             _window,
             AppServices.Current,
             ExitApplication);
-        AppServices.Current.BackgroundUpdates.Start();
+        if (!UiPreviewContext.IsEnabled)
+        {
+            AppServices.Current.BackgroundUpdates.Start();
+            AppServices.Current.BackgroundVpn.Start();
+            AppServices.Current.ProfileWarmup.Start();
+        }
         _window.ShowShellWindow();
         _window.Activate();
         _ = HandleActivationAsync(
@@ -61,6 +66,14 @@ public partial class App : Application
         AppActivationArguments args,
         Uri? launchUri = null)
     {
+        var launchArguments = args.Data is ILaunchActivatedEventArgs launch
+            ? launch.Arguments : null;
+        if (UiPreviewContext.IsEnabled)
+        {
+            if (UiPreviewContext.IsExitCommand(launchArguments)) ExitApplication();
+            // UI-review activations never enter browser authentication.
+            return;
+        }
         var protocolUri = args.Kind switch
         {
             ExtendedActivationKind.Protocol
@@ -79,11 +92,11 @@ public partial class App : Application
         await AppServices.Current.Auth.HandleProtocolActivationAsync(
             protocolUri,
             CancellationToken.None);
-        _window?.NavigateToSection(
-            AppServices.Current.Coordinator.CurrentState is null
-                ? AppSection.Account
-                : AppSection.Home,
-            forceReload: true);
+        if (AppServices.Current.Coordinator.CurrentStateAccess !=
+            Vex.Windows.Client.Session.ClientStateAccessKind.Available)
+        {
+            _window?.NavigateToSection(AppSection.Account, forceReload: true);
+        }
     }
 
     private void ExitApplication()
@@ -91,6 +104,8 @@ public partial class App : Application
         _trayIconHost?.Dispose();
         _trayIconHost = null;
         AppServices.Current.BackgroundUpdates.Dispose();
+        AppServices.Current.BackgroundVpn.Dispose();
+        AppServices.Current.ProfileWarmup.Dispose();
         _window?.RequestExit();
     }
 
@@ -99,15 +114,40 @@ public partial class App : Application
         _trayIconHost?.Dispose();
         _trayIconHost = null;
         AppServices.Current.BackgroundUpdates.Dispose();
+        AppServices.Current.BackgroundVpn.Dispose();
+        AppServices.Current.ProfileWarmup.Dispose();
         if (_window is not null)
         {
             AppServices.Current.ClearMainWindow(_window);
         }
         _window = null;
+        if (UiPreviewContext.IsEnabled)
+        {
+            try
+            {
+                UiPreviewProtocolRegistration.Unregister();
+            }
+            catch (Exception error) when (error is InvalidOperationException or
+                System.Runtime.InteropServices.COMException or UnauthorizedAccessException or
+                System.ComponentModel.Win32Exception or IOException)
+            {
+                Debug.WriteLine($"Preview protocol cleanup failed: {error.GetType().Name}");
+            }
+            UiPreviewContext.Cleanup();
+        }
     }
 
     private static void RegisterProtocolActivations()
     {
+        if (UiPreviewContext.IsEnabled)
+        {
+            try { UiPreviewProtocolRegistration.Register(); }
+            catch (Exception error)
+            {
+                Debug.WriteLine($"UI preview protocol registration failed: {error.GetType().Name}");
+            }
+            return;
+        }
         if (HasPackageIdentity())
         {
             // Packaged builds own both URI schemes through AppxManifest.xml.

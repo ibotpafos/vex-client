@@ -24,12 +24,17 @@ public sealed class NativeVpnBackgroundHost : IDisposable, IAsyncDisposable
     private DateTimeOffset? _lastRecoveryAttempt;
     private DateTimeOffset? _lastDisconnectAttempt;
     private readonly VpnConnectionHealthTracker _connectionHealth = new();
+    private readonly ActiveEntitlementMonitor _entitlementMonitor;
     private DateTimeOffset? _lastDiagnosticsFlush;
-    private DateTimeOffset? _lastEntitlementCheck;
     private bool _restored;
     private bool _disposed;
 
-    public NativeVpnBackgroundHost(AppServices services) => _services = services;
+    public NativeVpnBackgroundHost(AppServices services)
+    {
+        _services = services;
+        _entitlementMonitor = new ActiveEntitlementMonitor(services.Coordinator,
+            services.VpnUiState, services.VpnClient.DisconnectAsync);
+    }
 
     public void Start()
     {
@@ -139,30 +144,8 @@ public sealed class NativeVpnBackgroundHost : IDisposable, IAsyncDisposable
         }
     }
 
-    private async Task ValidateActiveEntitlementAsync(CancellationToken cancellationToken)
-    {
-        var now = DateTimeOffset.UtcNow;
-        if (_services.VpnUiState.Snapshot.Phase != VpnConnectionPhase.Connected ||
-            _services.Coordinator.CurrentStateAccess != ClientStateAccessKind.Available ||
-            _lastEntitlementCheck is { } last && now - last < TimeSpan.FromMinutes(1)) return;
-        _lastEntitlementCheck = now;
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(15));
-        try
-        {
-            await _services.Coordinator.ValidateEntitlementAsync(timeout.Token).ConfigureAwait(false);
-        }
-        catch (NativeClientFlowException error) when (VpnRecoveryPolicy.IsTerminalError(error.Code))
-        {
-            _services.VpnUiState.MarkConnectionDesired(false);
-            await _services.VpnUiState.RunAsync(_services.VpnClient.DisconnectAsync,
-                cancellationToken, recordCancellationFailure: false).ConfigureAwait(false);
-        }
-        catch (Exception error) when (IsExpectedFailure(error) && !cancellationToken.IsCancellationRequested)
-        {
-            // Temporary control-plane failures do not invalidate an admitted tunnel.
-        }
-    }
+    private Task ValidateActiveEntitlementAsync(CancellationToken cancellationToken) =>
+        _entitlementMonitor.CheckAsync(cancellationToken);
 
     private async Task CheckAsync(CancellationToken cancellationToken)
     {
@@ -184,7 +167,10 @@ public sealed class NativeVpnBackgroundHost : IDisposable, IAsyncDisposable
             // the app following an unavailable privileged service.
             _services.VpnUiState.MarkConnectionDesired(false);
         }
-        if (!_restored && status.Success)
+        // A transient startup state is not a final restoration decision. The
+        // service can finish recovery before a later authoritative status.
+        if (!_restored && status.Success &&
+            snapshot.Phase is VpnConnectionPhase.Connected or VpnConnectionPhase.Disconnected)
         {
             _restored = true;
             if (!_services.VpnUiState.HasExplicitConnectionIntent &&

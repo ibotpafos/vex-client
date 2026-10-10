@@ -19,6 +19,7 @@ var tests = new (string Name, Action Run)[]
 {
     ("Realtime session recovery preserves outages and rejects stale credential events", CustomerRealtimeSessionTests.Run),
     ("Realtime billing and device events cannot mutate a replacement session", RealtimeScopeIsolationTests.Run),
+    ("Periodic entitlement checks preserve current sessions and user connection intent", ActiveEntitlementMonitorTests.Run),
     ("Account retains authoritative subscription data through optional section failures", ClientAccountSnapshotTests.Run),
     ("Signed profile warm-up preserves routing, identity, trust and foreground priority", ProfileWarmupTests.Run),
     ("Service repair verifies trusted health, ownership, cancellation and bounded retries", ServiceMaintenanceTests.Run),
@@ -28,6 +29,8 @@ var tests = new (string Name, Action Run)[]
     ("Startup survives package upgrades and honors Windows ownership and disable states", StartupRegistrationTests.Run),
     ("Automatic update failures preserve retry and lifetime cancellation", NativeUpdateFailureTests.Run),
     ("Required updates survive installer launch, restart and offline failures", NativeUpdateServiceTests.Run),
+    ("Unreadable durable update state retains mandatory recovery protection", NativeUpdateRecoveryTests.Run),
+    ("Preferences decode corruption safely and preserve valid legacy choices", NativeClientPreferencesJsonTests.Run),
     ("App metadata decodes current server contracts and explicit historical aliases", AppMetadataContractTests.Run),
     ("Protected session cache handles corruption without replacing identity files", ProtectedStateFileTests.Run),
     ("Windows Hello changes commit durably and reject cancelled verification", WindowsHelloSessionTests.Run),
@@ -144,7 +147,7 @@ var tests = new (string Name, Action Run)[]
     ("Native client reports successful connect and disconnect", NativeClientReportsVpnLifecycle),
 };
 
-tests = [.. tests, .. VpnNamedPipeTransportTests.Cases, .. VpnRuntimeLifetimeTests.All];
+tests = [.. tests, .. VpnNamedPipeTransportTests.Cases, .. VpnRuntimeLifetimeTests.All, .. VpnRuntimeRecoveryTests.All, .. VpnEndpointAddressCacheTests.All];
 
 var failures = new List<string>();
 foreach (var test in tests.Concat(RuntimeParityTests.All))

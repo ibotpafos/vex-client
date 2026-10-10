@@ -3,6 +3,8 @@ using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Security;
 using System.Net.Sockets;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Security.Principal;
@@ -51,6 +53,8 @@ internal static class Program
         try
         {
             AssertIsolation(directory);
+            result["stage"] = "native-route-abi";
+            VerifyNativeRouteAbi(result);
             var manifest = JsonSerializer.Deserialize<Manifest>(File.ReadAllText(Path.Combine(directory, "manifest.json")))
                 ?? throw new InvalidOperationException("fixture_manifest_missing");
             Require(manifest.Schema == "vex.windows-vpn-fixture.v1" && manifest.ClientIp == ClientIp && manifest.ServerIp == ServerIp,
@@ -165,6 +169,67 @@ internal static class Program
             await File.WriteAllTextAsync(resultPath, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
         }
         return exitCode;
+    }
+
+    private static void VerifyNativeRouteAbi(Dictionary<string, object?> result)
+    {
+        // Exercise the production P/Invoke and layouts rather than a duplicate
+        // declaration. These are read-only routing queries to OS loopbacks;
+        // they do not send packets or modify an adapter, route or firewall.
+        var controller = typeof(AmneziaServiceTunnelRuntime).Assembly.GetType(
+            "Vex.Windows.Service.Runtime.NetworkSafetyController")
+            ?? throw new FixtureException("fixture_native_route_type_missing");
+        var socketType = controller.GetNestedType("NativeSocketAddress", BindingFlags.NonPublic)
+            ?? throw new FixtureException("fixture_native_route_socket_type_missing");
+        var rowType = controller.GetNestedType("NativeRouteRow", BindingFlags.NonPublic)
+            ?? throw new FixtureException("fixture_native_route_row_type_missing");
+        Require(Marshal.SizeOf(socketType) == 28 && Marshal.SizeOf(rowType) == 104 &&
+            Marshal.OffsetOf(rowType, "InterfaceIndex").ToInt32() == 8 &&
+            Marshal.OffsetOf(rowType, "NextHop").ToInt32() == 44 &&
+            Marshal.OffsetOf(socketType, "Ipv4").ToInt32() == 4 &&
+            Marshal.OffsetOf(socketType, "Ipv6First").ToInt32() == 8 &&
+            Marshal.OffsetOf(socketType, "Ipv6Second").ToInt32() == 16 &&
+            Marshal.OffsetOf(socketType, "ScopeId").ToInt32() == 24,
+            "fixture_native_route_layout_mismatch");
+        var fromAddress = socketType.GetMethod("From", BindingFlags.Public | BindingFlags.Static)
+            ?? throw new FixtureException("fixture_native_route_encoder_missing");
+        var toAddress = socketType.GetMethod("ToAddress", BindingFlags.Public | BindingFlags.Instance)
+            ?? throw new FixtureException("fixture_native_route_decoder_missing");
+        var getRoute = controller.GetMethod("GetBestRoute2", BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new FixtureException("fixture_native_route_import_missing");
+        var indexField = rowType.GetField("InterfaceIndex", BindingFlags.Public | BindingFlags.Instance)
+            ?? throw new FixtureException("fixture_native_route_index_missing");
+        var hopField = rowType.GetField("NextHop", BindingFlags.Public | BindingFlags.Instance)
+            ?? throw new FixtureException("fixture_native_route_hop_missing");
+        foreach (var address in new[] { IPAddress.Loopback, IPAddress.IPv6Loopback })
+        {
+            var destination = fromAddress.Invoke(null, [address])
+                ?? throw new FixtureException("fixture_native_route_encode_failed");
+            Require(address.Equals(toAddress.Invoke(destination, null) as IPAddress),
+                "fixture_native_route_address_roundtrip_failed");
+            object?[] arguments = [IntPtr.Zero, 0u, IntPtr.Zero, destination, 0u,
+                Activator.CreateInstance(rowType), Activator.CreateInstance(socketType)];
+            Require(getRoute.Invoke(null, arguments) is uint status && status == 0,
+                "fixture_native_loopback_route_query_failed");
+            var row = arguments[5] ?? throw new FixtureException("fixture_native_route_row_missing");
+            var index = (int)(indexField.GetValue(row) ?? throw new FixtureException("fixture_native_route_index_missing"));
+            var hop = hopField.GetValue(row) ?? throw new FixtureException("fixture_native_route_hop_missing");
+            var numericHop = toAddress.Invoke(hop, null) as IPAddress;
+            var source = toAddress.Invoke(arguments[6], null) as IPAddress;
+            var family = address.AddressFamily;
+            var loopbackIndexes = NetworkInterface.GetAllNetworkInterfaces()
+                .Where(nic => nic.NetworkInterfaceType == NetworkInterfaceType.Loopback &&
+                    nic.Supports(family == AddressFamily.InterNetwork ? NetworkInterfaceComponent.IPv4 : NetworkInterfaceComponent.IPv6))
+                .Select(nic => family == AddressFamily.InterNetwork
+                    ? nic.GetIPProperties().GetIPv4Properties()?.Index
+                    : nic.GetIPProperties().GetIPv6Properties()?.Index).ToArray();
+            Require(index > 0 && loopbackIndexes.Contains(index) && numericHop is not null &&
+                numericHop.Equals(family == AddressFamily.InterNetwork ? IPAddress.Any : IPAddress.IPv6Any) &&
+                source is not null && source.AddressFamily == family && IPAddress.IsLoopback(source),
+                "fixture_native_loopback_route_mismatch");
+            result[family == AddressFamily.InterNetwork ? "native_ipv4_route_abi_verified" : "native_ipv6_route_abi_verified"] = true;
+        }
+        result["native_route_abi_verified"] = true;
     }
 
     private static void AssertIsolation(string directory)

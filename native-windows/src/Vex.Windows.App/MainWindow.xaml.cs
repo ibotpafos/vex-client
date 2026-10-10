@@ -87,7 +87,8 @@ public sealed partial class MainWindow : Window
     public void ShowShellWindow()
     {
         var handle = WindowNative.GetWindowHandle(this);
-        NativeMethods.ShowWindow(handle, NativeMethods.ShowWindowRestore);
+        NativeMethods.ShowWindow(handle,
+            DesktopWindowShowPolicy.ActivationCommand(NativeMethods.IsIconic(handle)));
         IsShellWindowVisible = true;
         ShellWindowVisibilityChanged?.Invoke(this, EventArgs.Empty);
     }
@@ -505,7 +506,6 @@ public sealed partial class MainWindow : Window
     private static partial class NativeMethods
     {
         public const int ShowWindowHide = 0;
-        public const int ShowWindowRestore = 9;
         public const uint GetMinMaxInfo = 0x0024;
 
         [UnmanagedFunctionPointer(CallingConvention.Winapi)]
@@ -546,6 +546,10 @@ public sealed partial class MainWindow : Window
         public static partial bool ShowWindow(
             nint windowHandle,
             int command);
+
+        [LibraryImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static partial bool IsIconic(nint windowHandle);
 
         [LibraryImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]

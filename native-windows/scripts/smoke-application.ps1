@@ -72,6 +72,8 @@ $result = [ordered]@{
     single_instance_redirected = $false
     close_to_tray = $false
     second_launch_restored_window = $false
+    maximized_window_preserved_on_reopen = $false
+    minimized_window_restored_by_protocol = $false
     preview_protocol_registration = $null
     preview_protocol_diagnostic = $null
     protocol_activation_restored_window = $false
@@ -526,6 +528,9 @@ namespace Vex.Windows.Smoke {
         [DllImport("user32.dll")] public static extern bool GetCursorPos(out WindowPoint point);
         [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
         [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
+        [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr window);
+        [DllImport("user32.dll")] public static extern bool IsZoomed(IntPtr window);
+        [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr window, int command);
         [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window, out WindowRect rect);
         [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr window, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
         [DllImport("user32.dll", EntryPoint = "PostMessageW")] public static extern bool PostMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
@@ -735,6 +740,17 @@ namespace Vex.Windows.Smoke {
         $result.stage = 'single-instance'
         Invoke-RedirectedLaunch -Arguments $previewArguments
         $result.single_instance_redirected = $true
+        $activationBounds = [Vex.Windows.Smoke.WindowRect]::new()
+        if (-not [Vex.Windows.Smoke.NativeMethods]::GetWindowRect($windowHandle, [ref]$activationBounds)) {
+            throw 'Unable to preserve normal window placement before activation checks.'
+        }
+        $result.stage = 'maximize-window'
+        [void][Vex.Windows.Smoke.NativeMethods]::ShowWindow($windowHandle, 3)
+        Wait-SmokeCondition -Failure 'Preview did not maximize before close-to-tray.' -Condition {
+            [Vex.Windows.Smoke.NativeMethods]::IsWindowVisible($windowHandle) -and
+                [Vex.Windows.Smoke.NativeMethods]::IsZoomed($windowHandle) -and
+                -not [Vex.Windows.Smoke.NativeMethods]::IsIconic($windowHandle)
+        }
         $result.stage = 'close-to-tray'
         if (-not [Vex.Windows.Smoke.NativeMethods]::PostMessage($windowHandle, 0x10, [System.IntPtr]::Zero, [System.IntPtr]::Zero)) {
             throw 'Unable to request normal window close.'
@@ -746,12 +762,42 @@ namespace Vex.Windows.Smoke {
         $result.close_to_tray = $true
         $result.stage = 'second-launch-restore'
         Invoke-RedirectedLaunch -Arguments $previewArguments
-        Wait-SmokeCondition -Failure 'Second launch did not restore the hidden preview.' -Condition {
-            [Vex.Windows.Smoke.NativeMethods]::IsWindowVisible($windowHandle)
+        Wait-SmokeCondition -Failure 'Second launch did not preserve the hidden preview maximization.' -Condition {
+            [Vex.Windows.Smoke.NativeMethods]::IsWindowVisible($windowHandle) -and
+                [Vex.Windows.Smoke.NativeMethods]::IsZoomed($windowHandle) -and
+                -not [Vex.Windows.Smoke.NativeMethods]::IsIconic($windowHandle)
         }
         $result.second_launch_restored_window = $true
+        $result.maximized_window_preserved_on_reopen = $true
         $result.stage = 'protocol-registration'
         Assert-PreviewProtocolRegistration
+        $result.stage = 'minimized-protocol-activation'
+        [void][Vex.Windows.Smoke.NativeMethods]::ShowWindow($windowHandle, 6)
+        Wait-SmokeCondition -Failure 'Preview did not minimize before protocol activation.' -Condition {
+            [Vex.Windows.Smoke.NativeMethods]::IsIconic($windowHandle)
+        }
+        Start-Process -FilePath 'vexguard-ui-preview://ui-smoke/activate'
+        Wait-SmokeCondition -Failure 'Protocol activation did not restore the minimized preview to its maximized placement.' -Condition {
+            [Vex.Windows.Smoke.NativeMethods]::IsWindowVisible($windowHandle) -and
+                -not [Vex.Windows.Smoke.NativeMethods]::IsIconic($windowHandle) -and
+                [Vex.Windows.Smoke.NativeMethods]::IsZoomed($windowHandle)
+        }
+        Wait-SmokeCondition -Failure 'Minimized protocol activation left an additional application instance.' -Condition {
+            @(Get-Process -Name 'Vex.Windows.App' -ErrorAction SilentlyContinue).Count -eq 1
+        }
+        Assert-PrimaryInstance
+        $result.minimized_window_restored_by_protocol = $true
+        $result.stage = 'restore-normal-window'
+        [void][Vex.Windows.Smoke.NativeMethods]::ShowWindow($windowHandle, 9)
+        Wait-SmokeCondition -Failure 'Preview did not recover its normal window placement before capture.' -Condition {
+            $restoredBounds = [Vex.Windows.Smoke.WindowRect]::new()
+            [Vex.Windows.Smoke.NativeMethods]::IsWindowVisible($windowHandle) -and
+                -not [Vex.Windows.Smoke.NativeMethods]::IsIconic($windowHandle) -and
+                -not [Vex.Windows.Smoke.NativeMethods]::IsZoomed($windowHandle) -and
+                [Vex.Windows.Smoke.NativeMethods]::GetWindowRect($windowHandle, [ref]$restoredBounds) -and
+                $restoredBounds.Left -eq $activationBounds.Left -and $restoredBounds.Top -eq $activationBounds.Top -and
+                $restoredBounds.Right -eq $activationBounds.Right -and $restoredBounds.Bottom -eq $activationBounds.Bottom
+        }
         $result.stage = 'protocol-activation'
         [void][Vex.Windows.Smoke.NativeMethods]::PostMessage($windowHandle, 0x10, [System.IntPtr]::Zero, [System.IntPtr]::Zero)
         Wait-SmokeCondition -Failure 'Preview could not be hidden before protocol activation.' -Condition {

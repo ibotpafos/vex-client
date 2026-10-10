@@ -126,7 +126,10 @@ for (const requirement of [
   /Copy-Item[\s\S]+-LiteralPath \$wintunLibrary[\s\S]+-Destination \$stagedWintunLibrary/,
   /Get-FileHash[\s\S]+stagedVendorExecutable/,
   /Get-Service[\s\S]+AmneziaWGTunnel\$vex/,
-  /& \$stagedVendorExecutable \/uninstalltunnelservice vex/,
+  /Invoke-VendorRemoval -Executable \$stagedVendorExecutable/,
+  /function Invoke-VendorRemoval[\s\S]+Start-Process[\s\S]+\/uninstalltunnelservice vex/,
+  /WaitForExit\(30000\)/,
+  /WaitForExit\(5000\)/,
 ]) {
   requireText(
     uninstallScript,

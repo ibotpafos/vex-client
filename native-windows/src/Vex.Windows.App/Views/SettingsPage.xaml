@@ -180,9 +180,9 @@
                                 </StackPanel>
                             </Grid>
                             <StackPanel HorizontalAlignment="Right" Orientation="Horizontal" Spacing="8">
-                                <Button x:Name="UnlockWindowsHelloButton" AutomationProperties.AutomationId="UnlockWindowsHelloButton" Click="OnUnlockWindowsHelloClick" Content="Разблокировать" Style="{StaticResource VexProminentButtonStyle}" FontSize="12" Padding="10,6"/>
-                                <Button x:Name="EnableWindowsHelloButton" AutomationProperties.AutomationId="EnableWindowsHelloButton" Click="OnEnableWindowsHelloClick" Content="Включить" Style="{StaticResource VexGlassButtonStyle}" FontSize="12" Padding="10,6"/>
-                                <Button x:Name="DisableWindowsHelloButton" AutomationProperties.AutomationId="DisableWindowsHelloButton" Click="OnDisableWindowsHelloClick" Content="Отключить" Style="{StaticResource VexGlassButtonStyle}" FontSize="12" Padding="10,6"/>
+                                <Button x:Name="UnlockWindowsHelloButton" AutomationProperties.AutomationId="UnlockWindowsHelloButton" AutomationProperties.Name="Разблокировать локальную сессию через Windows Hello" Click="OnUnlockWindowsHelloClick" Content="Разблокировать" Style="{StaticResource VexProminentButtonStyle}" FontSize="12" Padding="10,6"/>
+                                <Button x:Name="EnableWindowsHelloButton" AutomationProperties.AutomationId="EnableWindowsHelloButton" AutomationProperties.Name="Включить Windows Hello при запуске" Click="OnEnableWindowsHelloClick" Content="Включить" Style="{StaticResource VexGlassButtonStyle}" FontSize="12" Padding="10,6"/>
+                                <Button x:Name="DisableWindowsHelloButton" AutomationProperties.AutomationId="DisableWindowsHelloButton" AutomationProperties.Name="Отключить Windows Hello при запуске" Click="OnDisableWindowsHelloClick" Content="Отключить" Style="{StaticResource VexGlassButtonStyle}" FontSize="12" Padding="10,6"/>
                             </StackPanel>
                         </StackPanel>
                     </StackPanel>

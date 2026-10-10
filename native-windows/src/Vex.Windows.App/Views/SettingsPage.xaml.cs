@@ -1,4 +1,5 @@
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using System.Diagnostics;
 using System.Security.Cryptography;
@@ -934,17 +935,29 @@ public sealed partial class SettingsPage : Page
                 StartupRegistrationState.ForeignRegistration => "Запись автозапуска занята другой программой.",
                 _ => "Автозапуск выключен.",
             };
+            AutomationProperties.SetHelpText(AutoLaunchToggle, AutoLaunchDescription.Text);
             AutoUpdatesToggle.IsOn = preferences.AutoUpdatesEnabled;
             AutoUpdatesDescription.Text = preferences.AutoUpdatesEnabled
                 ? "Проверять при запуске и каждые 6 часов."
                 : "Автоматическая проверка выключена.";
+            AutomationProperties.SetHelpText(AutoUpdatesToggle, AutoUpdatesDescription.Text);
             AutoServerToggle.IsOn = preferences.AutoServerEnabled;
+            AutomationProperties.SetHelpText(AutoServerToggle, preferences.AutoServerEnabled
+                ? "Выбирать ближайший доступный узел."
+                : "Сервер выбирается вручную.");
             SmartRoutingToggle.IsOn = preferences.SmartRoutingEnabled;
             SmartRoutingDescription.Text = preferences.SmartRoutingEnabled
                 ? "Локальные сервисы идут без VPN."
                 : "Весь трафик идёт через VPN.";
+            AutomationProperties.SetHelpText(SmartRoutingToggle, SmartRoutingDescription.Text);
             AntiLeakToggle.IsOn = preferences.AntiLeakEnabled;
+            AutomationProperties.SetHelpText(AntiLeakToggle, preferences.AntiLeakEnabled
+                ? "Блокирует утечки трафика при сбое VPN."
+                : "Защита от утечек выключена.");
             AutoRecoveryToggle.IsOn = preferences.AutoRecoveryEnabled;
+            AutomationProperties.SetHelpText(AutoRecoveryToggle, preferences.AutoRecoveryEnabled
+                ? "Проверять и поднимать туннель автоматически."
+                : "Автовосстановление туннеля выключено.");
             LanguagePicker.SelectedIndex =
                 preferences.InterfaceLanguage == "en"
                     ? 1

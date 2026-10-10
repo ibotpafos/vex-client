@@ -73,23 +73,7 @@ public sealed class NativeClientPreferencesStore
                 DataProtectionScope.CurrentUser);
             try
             {
-                var preferences =
-                    JsonSerializer.Deserialize<NativeClientPreferences>(
-                        clearValue,
-                        JsonOptions) ??
-                    NativeClientPreferences.Default;
-                using var document = JsonDocument.Parse(clearValue);
-                if (!document.RootElement.TryGetProperty(
-                        nameof(NativeClientPreferences.AutoUpdatesEnabled),
-                        out _))
-                {
-                    preferences = preferences with
-                    {
-                        AutoUpdatesEnabled = true,
-                    };
-                }
-
-                return Normalize(preferences);
+                return Normalize(NativeClientPreferencesJson.Decode(clearValue));
             }
             finally
             {

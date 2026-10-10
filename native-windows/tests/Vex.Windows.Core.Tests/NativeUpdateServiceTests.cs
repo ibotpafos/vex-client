@@ -27,6 +27,15 @@ internal static class NativeUpdateServiceTests
             await BodyDeadlineReleasesServiceGateAndAllowsRetryAsync(body);
             await CallerCancellationReleasesServiceGateAsync(body);
         }
+        foreach (var artifact in new[]
+        {
+            "VEX.Native.msix", "bootstrap-native-windows.ps1", "install-vpn-service.ps1",
+            "uninstall-vpn-service.ps1", "package-metadata.json",
+        })
+        {
+            await ArtifactDeadlineReleasesServiceGateAndAllowsRetryAsync(artifact);
+            await ArtifactCallerCancellationReleasesServiceGateAsync(artifact);
+        }
     }
 
     private static async Task InstallerLaunchPreservesRequiredReleaseAndRetryAsync()
@@ -280,11 +289,69 @@ internal static class NativeUpdateServiceTests
             "Caller cancellation must release the real operation gate for a later check.");
     }
 
+    private static async Task ArtifactDeadlineReleasesServiceGateAndAllowsRetryAsync(string artifact)
+    {
+        using var fixture = new Fixture(artifactTimeout: TimeSpan.FromSeconds(1));
+        fixture.Publish("2.0.0.0", required: true);
+        fixture.Http.Timeout = TimeSpan.FromMilliseconds(25);
+        var required = await fixture.Service.RefreshAsync(CancellationToken.None);
+        using var stalled = new StalledStream();
+        fixture.StalledBody = artifact;
+        fixture.Body = stalled;
+        var launch = fixture.Service.PrepareAndLaunchAsync(CancellationToken.None);
+        await stalled.Entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var failed = await launch.WaitAsync(TimeSpan.FromSeconds(2));
+        Check(failed.State == "required_update_error" && failed.Required &&
+            failed.Release == required.Release && failed.StagedPackagePath is null && stalled.Cancelled &&
+            fixture.Launched.Count == 0 && fixture.StoredRollback?.RequiredTargetVersion == "2.0.0.0",
+            "A stalled " + artifact + " body must time out without launching or clearing the durable mandatory target.");
+        Check(!Directory.EnumerateFiles(fixture.StagingRoot, "*.partial", SearchOption.AllDirectories).Any(),
+            "A timed-out artifact body must remove its partial staging file.");
+        Check((await fixture.Service.RefreshAsync(CancellationToken.None)
+                .WaitAsync(TimeSpan.FromSeconds(2))).Required,
+            "A timed-out artifact must release the service gate for the next check.");
+        fixture.StalledBody = null;
+        var retried = await fixture.Service.PrepareAndLaunchAsync(CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(2));
+        Check(retried.State == "installer_launched" && retried.Required && fixture.Launched.Count == 1,
+            "The same verified provisioning bundle must remain installable after an artifact timeout.");
+    }
+
+    private static async Task ArtifactCallerCancellationReleasesServiceGateAsync(string artifact)
+    {
+        using var fixture = new Fixture(artifactTimeout: TimeSpan.FromSeconds(5));
+        fixture.Publish("2.0.0.0", required: true);
+        var required = await fixture.Service.RefreshAsync(CancellationToken.None);
+        using var stalled = new StalledStream();
+        using var cancellation = new CancellationTokenSource();
+        fixture.StalledBody = artifact;
+        fixture.Body = stalled;
+        var launch = fixture.Service.PrepareAndLaunchAsync(cancellation.Token);
+        await stalled.Entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        cancellation.Cancel();
+        try
+        {
+            await launch.WaitAsync(TimeSpan.FromSeconds(2));
+            throw new InvalidOperationException("Artifact caller cancellation was swallowed as an updater error.");
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+        Check(stalled.Cancelled && fixture.Launched.Count == 0 &&
+            fixture.Service.CurrentSnapshot == required &&
+            !Directory.EnumerateFiles(fixture.StagingRoot, "*.partial", SearchOption.AllDirectories).Any(),
+            "Cancelling a " + artifact + " body must preserve the exact required snapshot and clean partial staging.");
+        fixture.StalledBody = null;
+        var retried = await fixture.Service.PrepareAndLaunchAsync(CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(2));
+        Check(retried.State == "installer_launched" && fixture.Launched.Count == 1,
+            "Caller cancellation must release the operation gate and permit a verified retry.");
+    }
+
     private sealed class Fixture : IDisposable
     {
         private readonly ECDsa _key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
         private readonly DateTimeOffset _now = DateTimeOffset.UtcNow;
         private readonly TimeSpan? _timeout;
+        private readonly TimeSpan? _artifactTimeout;
         private readonly string _directory = Path.Combine(Path.GetTempPath(), "vex-native-update-" + Guid.NewGuid().ToString("N"));
         private readonly Dictionary<string, byte[]> _artifacts = new(StringComparer.Ordinal);
         private byte[] _manifest = [];
@@ -302,10 +369,12 @@ internal static class NativeUpdateServiceTests
         public Exception? LaunchFailure { get; set; }
         public List<WindowsStagedProvisioningBundle> Launched { get; } = [];
         public List<string> ArtifactRequests { get; } = [];
+        public string StagingRoot => _directory;
 
-        public Fixture(TimeSpan? timeout = null)
+        public Fixture(TimeSpan? timeout = null, TimeSpan? artifactTimeout = null)
         {
             _timeout = timeout;
+            _artifactTimeout = artifactTimeout;
             Http = new HttpClient(new Handler(this)) { Timeout = Timeout.InfiniteTimeSpan };
             Publish("2.0.0.0", required: false);
             Service = NewService("1.0.0.0");
@@ -321,7 +390,7 @@ internal static class NativeUpdateServiceTests
                 RollbackState: StoredRollback, UtcNow: () => _now);
             var coordinator = new WindowsUpdateCoordinator(Http, options,
                 new Uri("https://updates.example.test/windows/stable/x64/update.json"),
-                new Uri("https://updates.example.test/windows/stable/x64/update.json.sig"), _timeout);
+                new Uri("https://updates.example.test/windows/stable/x64/update.json.sig"), _timeout, _artifactTimeout);
             return new NativeUpdateService(coordinator,
                 initial ?? NativeUpdateSnapshot.Configured(currentVersion, "stable", "x64"), _directory,
                 state =>
@@ -391,7 +460,8 @@ internal static class NativeUpdateServiceTests
                 else
                 {
                     fixture.ArtifactRequests.Add(path);
-                    content = new ByteArrayContent(fixture._artifacts[path]);
+                    content = Path.GetFileName(path) == fixture.StalledBody
+                        ? new StreamContent(fixture.Body!) : new ByteArrayContent(fixture._artifacts[path]);
                 }
                 return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
             }

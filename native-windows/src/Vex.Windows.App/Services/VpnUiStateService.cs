@@ -47,6 +47,11 @@ public sealed class VpnUiStateService
         get { lock (_intentSync) return _hasExplicitConnectionIntent; }
     }
 
+    public long ConnectionIntentVersion
+    {
+        get { lock (_intentSync) return _intentVersion; }
+    }
+
     public bool IsConnectionInFlight
     {
         get { lock (_intentSync) return _connectionCancellation is not null; }
@@ -70,7 +75,9 @@ public sealed class VpnUiStateService
                 throw new NativeClientFlowException("vpn_operation_in_progress");
             if (!_connectionDesired || _shutdownComplete)
                 throw new OperationCanceledException("A connection is no longer requested.");
-            intentVersion = _intentVersion;
+            // A server switch is a new intent even while Connected remains
+            // desired. Background admission decisions must see its revision.
+            intentVersion = ++_intentVersion;
             previous = _connectionCancellation;
             _connectionCancellation = connection;
         }
@@ -227,6 +234,25 @@ public sealed class VpnUiStateService
 
     public void MarkConnectionDesired(bool desired)
         => ChangeConnectionIntent(desired);
+
+    // Called under RunAsync's gate when background admission is revoked. User
+    // intent can change before acquiring that gate, or on another UI thread.
+    internal bool TryMarkConnectionUndesired(long expectedIntentVersion)
+    {
+        CancellationTokenSource? connection;
+        lock (_intentSync)
+        {
+            if (_intentVersion != expectedIntentVersion) return false;
+            _hasExplicitConnectionIntent = true;
+            _connectionDesired = false;
+            ++_intentVersion;
+            connection = _connectionCancellation;
+        }
+        Cancel(connection);
+        DesiredChanged?.Invoke(this, EventArgs.Empty);
+        Changed?.Invoke(this, EventArgs.Empty);
+        return true;
+    }
 
     private long ChangeConnectionIntent(bool desired)
     {

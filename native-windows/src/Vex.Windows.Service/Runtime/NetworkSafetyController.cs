@@ -14,12 +14,17 @@ internal sealed class NetworkSafetyController
 {
     private static readonly TimeSpan CommandTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan FirewallVerificationLifetime = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan DnsResolutionTimeout = TimeSpan.FromSeconds(4);
     private readonly IReadOnlyList<string> _controlPlaneHosts;
     private readonly HashSet<IPAddress> _nativeLocalEndpointAddresses;
     private readonly object _gate = new();
     private readonly SemaphoreSlim _operationGate = new(1, 1);
     private readonly string _firewallStatePath;
     private readonly string _routeStatePath;
+    private readonly string _endpointAddressCachePath;
+    private readonly VpnEndpointAddressCache _endpointAddressCache = new();
+    private IReadOnlyDictionary<IPAddress, RouteCommandResult> _expectedBypassRoutes =
+        new Dictionary<IPAddress, RouteCommandResult>();
     private IReadOnlyList<BypassRoute> _activeBypassRoutes = [];
     private bool _firewallArmed;
     private bool _firewallVerified;
@@ -33,19 +38,94 @@ internal sealed class NetworkSafetyController
         _nativeLocalEndpointAddresses = options.NativeLocalEndpointAddresses.Select(IPAddress.Parse).ToHashSet();
         _firewallStatePath = Path.Combine(options.DataDirectory, "firewall-rollback.json");
         _routeStatePath = Path.Combine(options.DataDirectory, "bypass-routes.json");
+        _endpointAddressCachePath = Path.Combine(options.DataDirectory, "endpoint-address-cache.json");
         // A journal indicates possible ownership, not proof that protection works.
         _firewallArmed = File.Exists(_firewallStatePath);
         _activeBypassRoutes = LoadPersistedRoutes();
+        try
+        {
+            if (new FileInfo(_endpointAddressCachePath) is { Exists: true, Length: <= 16 * 1024 })
+            {
+                _endpointAddressCache.Restore(JsonSerializer.Deserialize<VpnEndpointAddressSnapshot>(
+                    File.ReadAllText(_endpointAddressCachePath)), DateTimeOffset.UtcNow);
+            }
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or FormatException)
+        { /* Advisory routing metadata must not prevent service startup. */ }
     }
 
-    public async Task ApplyControlPlaneBypassAsync(string endpoint, CancellationToken cancellationToken)
+    public async Task ApplyControlPlaneBypassAsync(string endpoint, CancellationToken cancellationToken,
+        string? serverPublicKey = null, DateTimeOffset? authorizationExpiresAt = null)
     {
         await _operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var resolved = await ResolveProtectedAddressesAsync(endpoint, cancellationToken).ConfigureAwait(false);
+            // Repair the last admitted numeric peer before asking the tunnel's
+            // currently broken DNS resolver to resolve its own endpoint.
+            IReadOnlyList<IPAddress> cached = IPAddress.TryParse(ParseEndpointHost(endpoint), out var literal) ? [literal]
+                : _endpointAddressCache.Get(endpoint, serverPublicKey, DateTimeOffset.UtcNow);
+            if (cached.Count > 0)
+            {
+                var known = cached.Concat(_controlPlaneAddressCache.Values.SelectMany(value => value)).Distinct().ToArray();
+                await ReconcileBypassRoutesAsync(new ProtectedAddressSet(known, cached.ToArray(),
+                    IPAddress.TryParse(ParseEndpointHost(endpoint), out _), ParseEndpointPort(endpoint),
+                    _controlPlaneAddressCache.Values.SelectMany(value => value).Distinct().ToArray()), cancellationToken).ConfigureAwait(false);
+            }
+            var resolved = await ResolveProtectedAddressesAsync(endpoint, cancellationToken, serverPublicKey).ConfigureAwait(false);
+            await ReconcileBypassRoutesAsync(resolved, cancellationToken).ConfigureAwait(false);
+            if (_endpointAddressCache.RememberResolved(endpoint, serverPublicKey, resolved.EndpointAddresses,
+                authorizationExpiresAt, DateTimeOffset.UtcNow)) { PersistEndpointAddressCache(); }
+        }
+        finally { _operationGate.Release(); }
+    }
+
+    public bool ObserveSelectedPeerEndpoint(string endpoint, string serverPublicKey,
+        string? numericEndpoint, DateTimeOffset? authorizationExpiresAt)
+    {
+        var previous = _endpointAddressCache.Snapshot;
+        if (!_endpointAddressCache.ObserveSelectedPeer(endpoint, serverPublicKey, numericEndpoint,
+            authorizationExpiresAt, DateTimeOffset.UtcNow)) { return false; }
+        var current = _endpointAddressCache.Snapshot!;
+        if (previous is null || previous.Endpoint != current.Endpoint || previous.ServerPublicKey != current.ServerPublicKey ||
+            previous.ValidUntil != current.ValidUntil || !previous.Addresses.SequenceEqual(current.Addresses)) { PersistEndpointAddressCache(); }
+        var addresses = _endpointAddressCache.Get(endpoint, serverPublicKey, DateTimeOffset.UtcNow);
+        lock (_gate) { return addresses.Any(address => !_expectedBypassRoutes.ContainsKey(address)); }
+    }
+
+    public async Task EnsureKnownEndpointBypassAsync(string endpoint, string? serverPublicKey,
+        CancellationToken cancellationToken)
+    {
+        await _operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var endpointAddresses = IPAddress.TryParse(ParseEndpointHost(endpoint), out var literal) ? [literal]
+                : _endpointAddressCache.Get(endpoint, serverPublicKey, DateTimeOffset.UtcNow).ToArray();
+            if (endpointAddresses.Length == 0) { return; }
+            lock (_gate)
+            {
+                if (endpointAddresses.Any(_expectedBypassRoutes.ContainsKey)) { return; }
+            }
+            // Cold service start or a newly authenticated numeric peer. Never
+            // ask DNS from status capture, and do not wait for the watchdog.
+            var control = _controlPlaneAddressCache.Values.SelectMany(value => value).Distinct().ToArray();
+            await ReconcileBypassRoutesAsync(new ProtectedAddressSet(endpointAddresses.Concat(control).Distinct().ToArray(),
+                endpointAddresses, literal is not null, ParseEndpointPort(endpoint), control), cancellationToken).ConfigureAwait(false);
+        }
+        finally { _operationGate.Release(); }
+    }
+
+    private void PersistEndpointAddressCache()
+    {
+        try { WriteAtomic(_endpointAddressCachePath, JsonSerializer.Serialize(_endpointAddressCache.Snapshot)); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        { /* Recovery can use the in-memory binding when advisory persistence fails. */ }
+    }
+
+    private async Task ReconcileBypassRoutesAsync(ProtectedAddressSet resolved, CancellationToken cancellationToken)
+    {
             var addresses = resolved.Addresses;
             var reachable = new List<IPAddress>();
+            var expected = new Dictionary<IPAddress, RouteCommandResult>();
             IReadOnlyList<BypassRoute> previous;
             lock (_gate) { previous = _activeBypassRoutes; }
             var owned = new List<BypassRoute>();
@@ -60,6 +140,7 @@ internal sealed class NetworkSafetyController
                         _nativeLocalEndpointAddresses.Contains(address), cancellationToken).ConfigureAwait(false);
                     if (result.Skipped) { continue; }
                     reachable.Add(address);
+                    expected[address] = result;
                     // Native host-local routing is already outside the tunnel.
                     // A gateway host route would redirect the local endpoint.
                     if (result.Loopback || result.NativeLocal) { continue; }
@@ -83,8 +164,19 @@ internal sealed class NetworkSafetyController
                 {
                     throw new VpnTunnelException("endpoint_physical_route_missing");
                 }
-                await RemoveRoutesAsync(previous.Except(owned), CancellationToken.None).ConfigureAwait(false);
+                await RemoveRoutesAsync(previous.Except(owned), cancellationToken).ConfigureAwait(false);
                 SetOwnedRoutes(owned);
+                // An independently owned more-specific/lower-metric route may
+                // win even on the same NIC. Never delete it or claim protection.
+                foreach (var address in resolved.EndpointAddresses.Where(expected.ContainsKey))
+                {
+                    var route = expected[address];
+                    if (!route.Loopback && !route.NativeLocal)
+                    {
+                        await VerifyEffectiveRouteAsync(address, route, cancellationToken).ConfigureAwait(false);
+                    }
+                }
+                lock (_gate) { _expectedBypassRoutes = expected; }
                 if (_firewallArmed)
                 {
                     using var document = JsonDocument.Parse(File.ReadAllText(_firewallStatePath));
@@ -96,7 +188,12 @@ internal sealed class NetworkSafetyController
                     }
                     else
                     {
-                        await RefreshFirewallBypassAsync(reachable, cancellationToken).ConfigureAwait(false);
+                        await RefreshFirewallBypassAsync(resolved with
+                        {
+                            Addresses = reachable.ToArray(),
+                            EndpointAddresses = resolved.EndpointAddresses.Where(reachable.Contains).ToArray(),
+                            ControlPlaneAddresses = resolved.ControlPlaneAddresses.Where(reachable.Contains).ToArray(),
+                        }, cancellationToken).ConfigureAwait(false);
                     }
                 }
             }
@@ -107,14 +204,14 @@ internal sealed class NetworkSafetyController
                 SetOwnedRoutes(previous.Concat(created));
                 try
                 {
-                    await RemoveRoutesAsync(created, CancellationToken.None).ConfigureAwait(false);
+                    using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                    await RemoveRoutesAsync(created, cleanup.Token).ConfigureAwait(false);
                     SetOwnedRoutes(previous);
                 }
                 catch { /* The journal remains available for the next cleanup. */ }
+                lock (_gate) { _expectedBypassRoutes = new Dictionary<IPAddress, RouteCommandResult>(); }
                 throw;
             }
-        }
-        finally { _operationGate.Release(); }
     }
 
     public async Task RollbackAsync(CancellationToken cancellationToken)
@@ -127,6 +224,7 @@ internal sealed class NetworkSafetyController
             lock (_gate) { routes = _activeBypassRoutes; }
             await RemoveRoutesAsync(routes, cancellationToken).ConfigureAwait(false);
             SetOwnedRoutes([]);
+            lock (_gate) { _expectedBypassRoutes = new Dictionary<IPAddress, RouteCommandResult>(); }
         }
         finally { _operationGate.Release(); }
     }
@@ -136,7 +234,8 @@ internal sealed class NetworkSafetyController
         string? endpoint,
         bool expectsIpv6,
         IReadOnlyList<string>? allowedIps = null,
-        IReadOnlyList<string>? expectedDns = null)
+        IReadOnlyList<string>? expectedDns = null,
+        string? serverPublicKey = null)
     {
         bool armed;
         bool verified;
@@ -175,7 +274,7 @@ internal sealed class NetworkSafetyController
         var dnsConfigured = dnsServers.Length > 0 &&
             (expectedDns is null || dnsServers.ToHashSet(StringComparer.OrdinalIgnoreCase)
                 .SetEquals(expectedDns.Select(NormalizeAddress)));
-        var endpointBypassOk = EndpointBypassesAdapter(endpoint, ipv4Index, ipv6Index);
+        var endpointBypassOk = EndpointBypassesAdapter(endpoint, ipv4Index, ipv6Index, serverPublicKey);
         var findings = new List<string>();
         if (!ipv4RouteOk) { findings.Add("ipv4_route_missing"); }
         if (!ipv6RouteOk) { findings.Add("ipv6_route_missing"); }
@@ -201,12 +300,13 @@ internal sealed class NetworkSafetyController
         }
     }
 
-    public async Task ArmFirewallAsync(string adapterName, string endpoint, CancellationToken cancellationToken)
+    public async Task ArmFirewallAsync(string adapterName, string endpoint, CancellationToken cancellationToken,
+        string? serverPublicKey = null, DateTimeOffset? authorizationExpiresAt = null)
     {
         await _operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var addresses = (await ResolveProtectedAddressesAsync(endpoint, cancellationToken).ConfigureAwait(false)).Addresses;
+            var resolved = await ResolveProtectedAddressesAsync(endpoint, cancellationToken, serverPublicKey).ConfigureAwait(false);
             if (_firewallArmed)
             {
                 using var document = JsonDocument.Parse(File.ReadAllText(_firewallStatePath));
@@ -217,21 +317,24 @@ internal sealed class NetworkSafetyController
                 }
                 else
                 {
-                    await RefreshFirewallBypassAsync(addresses, cancellationToken, adapterName).ConfigureAwait(false);
+                    await RefreshFirewallBypassAsync(resolved, cancellationToken, adapterName).ConfigureAwait(false);
                     return;
                 }
             }
             var prefix = $"VEX.AntiLeak.{Guid.NewGuid():N}.";
-            var names = new[] { prefix + "Tunnel", prefix + "Protected", prefix + "Dhcp4", prefix + "Dhcp6", prefix + "Neighbor" };
+            var names = new[] { prefix + "Tunnel", prefix + "Protected", prefix + "Dhcp4", prefix + "Dhcp6", prefix + "Neighbor", prefix + "ControlPlane" };
             const string captureScript = """
                 $ErrorActionPreference='Stop'
                 $profiles=@(Get-NetFirewallProfile -PolicyStore PersistentStore | Select-Object Name,@{Name='Enabled';Expression={$_.Enabled.ToString()}},@{Name='DefaultOutboundAction';Expression={$_.DefaultOutboundAction.ToString()}})
                 $rules=@(Get-NetFirewallRule -PolicyStore PersistentStore | Where-Object {$_.Direction -eq 'Outbound' -and $_.Action -eq 'Allow' -and $_.Enabled -eq 'True'} | Select-Object -ExpandProperty Name)
-                $ownedNames=ConvertFrom-Json $args[0];$protectedAddresses=ConvertFrom-Json $args[2]
-                [pscustomobject]@{Version=2;Profiles=$profiles;DisabledOutboundAllowRuleNames=$rules;OwnedRuleNames=@($ownedNames);AdapterName=$args[1];ProtectedAddresses=@($protectedAddresses)} | ConvertTo-Json -Compress -Depth 5
+                $ownedNames=ConvertFrom-Json $args[0];$protectedAddresses=ConvertFrom-Json $args[2];$endpointAddresses=ConvertFrom-Json $args[3];$controlAddresses=ConvertFrom-Json $args[5]
+                [pscustomobject]@{Version=3;Profiles=$profiles;DisabledOutboundAllowRuleNames=$rules;OwnedRuleNames=@($ownedNames);AdapterName=$args[1];ProtectedAddresses=@($protectedAddresses);EndpointAddresses=@($endpointAddresses);EndpointPort=[int]$args[4];ControlPlaneAddresses=@($controlAddresses)} | ConvertTo-Json -Compress -Depth 5
                 """;
             var rollbackJson = await RunPowerShellAsync(captureScript,
-                [JsonSerializer.Serialize(names), adapterName, JsonSerializer.Serialize(addresses.Select(address => address.ToString()))], cancellationToken).ConfigureAwait(false);
+                [JsonSerializer.Serialize(names), adapterName, JsonSerializer.Serialize(resolved.Addresses.Select(address => address.ToString())),
+                    JsonSerializer.Serialize(resolved.EndpointAddresses.Select(address => address.ToString())),
+                    resolved.EndpointPort.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    JsonSerializer.Serialize(resolved.ControlPlaneAddresses.Select(address => address.ToString()))], cancellationToken).ConfigureAwait(false);
             var rollback = ParseFirewallRollback(rollbackJson);
             // The complete ownership/restore journal is durable before any mutation.
             WriteAtomic(_firewallStatePath, rollbackJson);
@@ -240,16 +343,18 @@ internal sealed class NetworkSafetyController
             {
                 const string armScript = """
                     $ErrorActionPreference='Stop'
-                    $state=ConvertFrom-Json $args[0];$ips=ConvertFrom-Json $args[1];$names=@($state.OwnedRuleNames)
+                    $state=ConvertFrom-Json $args[0];$names=@($state.OwnedRuleNames)
                     Get-NetFirewallRule -PolicyStore PersistentStore | Where-Object {$_.Name -cin @($state.DisabledOutboundAllowRuleNames)} | Disable-NetFirewallRule | Out-Null
                     New-NetFirewallRule -Name $names[0] -DisplayName 'VEX VPN tunnel' -Group 'VEX VPN AntiLeak' -PolicyStore PersistentStore -Direction Outbound -Action Allow -InterfaceAlias $state.AdapterName -Profile Any | Out-Null
-                    New-NetFirewallRule -Name $names[1] -DisplayName 'VEX VPN protected endpoints' -Group 'VEX VPN AntiLeak' -PolicyStore PersistentStore -Direction Outbound -Action Allow -RemoteAddress $ips -InterfaceType Wired,Wireless -Profile Any | Out-Null
+                    New-NetFirewallRule -Name $names[1] -DisplayName 'VEX VPN protected endpoints' -Group 'VEX VPN AntiLeak' -PolicyStore PersistentStore -Direction Outbound -Action Allow -Protocol UDP -RemotePort $state.EndpointPort -RemoteAddress @($state.EndpointAddresses) -InterfaceType Wired,Wireless -Profile Any | Out-Null
                     New-NetFirewallRule -Name $names[2] -DisplayName 'VEX VPN DHCPv4' -Group 'VEX VPN AntiLeak' -PolicyStore PersistentStore -Direction Outbound -Action Allow -Protocol UDP -LocalPort 68 -RemotePort 67 -Program ($env:SystemRoot+'\System32\svchost.exe') -Service Dhcp -InterfaceType Wired,Wireless -Profile Any | Out-Null
                     New-NetFirewallRule -Name $names[3] -DisplayName 'VEX VPN DHCPv6' -Group 'VEX VPN AntiLeak' -PolicyStore PersistentStore -Direction Outbound -Action Allow -Protocol UDP -LocalPort 546 -RemotePort 547 -Program ($env:SystemRoot+'\System32\svchost.exe') -Service Dhcp -InterfaceType Wired,Wireless -Profile Any | Out-Null
                     New-NetFirewallRule -Name $names[4] -DisplayName 'VEX VPN IPv6 neighbors' -Group 'VEX VPN AntiLeak' -PolicyStore PersistentStore -Direction Outbound -Action Allow -Protocol ICMPv6 -IcmpType 133,135,136 -RemoteAddress 'fe80::/10','ff02::/16' -InterfaceType Wired,Wireless -Profile Any | Out-Null
+                    $control=@($state.ControlPlaneAddresses);$controlEnabled=if($control.Count -gt 0){'True'}else{'False'};if($control.Count -eq 0){$control=@('127.0.0.1')}
+                    New-NetFirewallRule -Name $names[5] -DisplayName 'VEX VPN control plane HTTPS' -Group 'VEX VPN AntiLeak' -PolicyStore PersistentStore -Direction Outbound -Action Allow -Protocol TCP -RemotePort 443 -RemoteAddress $control -Enabled $controlEnabled -InterfaceType Wired,Wireless -Profile Any | Out-Null
                     Set-NetFirewallProfile -Profile Domain,Private,Public -PolicyStore PersistentStore -Enabled True -DefaultOutboundAction Block
                     """;
-                await RunPowerShellAsync(armScript, [rollbackJson, JsonSerializer.Serialize(addresses.Select(value => value.ToString()))], cancellationToken).ConfigureAwait(false);
+                await RunPowerShellAsync(armScript, [rollbackJson], cancellationToken).ConfigureAwait(false);
                 await VerifyFirewallAsync(rollback, cancellationToken).ConfigureAwait(false);
             }
             catch
@@ -285,24 +390,39 @@ internal sealed class NetworkSafetyController
         SetFirewallStatus(armed: false, verified: false);
     }
 
-    private async Task RefreshFirewallBypassAsync(IReadOnlyList<IPAddress> addresses, CancellationToken cancellationToken, string? adapterName = null)
+    private async Task RefreshFirewallBypassAsync(ProtectedAddressSet resolved, CancellationToken cancellationToken, string? adapterName = null)
     {
         SetFirewallStatus(armed: true, verified: false);
         var state = ParseFirewallRollback(File.ReadAllText(_firewallStatePath));
         state = state with
         {
+            Version = 3,
+            // Preserve the exact original baseline when narrowing an armed v2
+            // journal. Disarming and recapturing would restore broad allows.
+            OwnedRuleNames = state.Version == 2 ? state.OwnedRuleNames.Append(state.OwnedRuleNames[0] + ".ControlPlane").ToArray() : state.OwnedRuleNames,
             AdapterName = adapterName ?? state.AdapterName,
-            ProtectedAddresses = addresses.Select(address => address.ToString()).ToArray(),
+            ProtectedAddresses = resolved.Addresses.Select(address => address.ToString()).ToArray(),
+            EndpointAddresses = resolved.EndpointAddresses.Select(address => address.ToString()).ToArray(),
+            EndpointPort = resolved.EndpointPort,
+            ControlPlaneAddresses = resolved.ControlPlaneAddresses.Select(address => address.ToString()).ToArray(),
         };
         WriteAtomic(_firewallStatePath, JsonSerializer.Serialize(state));
         const string script = """
-            $ErrorActionPreference='Stop';$name=$args[0];$ips=ConvertFrom-Json $args[1];$tunnelName=$args[2];$alias=$args[3]
-            $rule=Get-NetFirewallRule -PolicyStore PersistentStore | Where-Object {$_.Name -ceq $name}
+            # Narrow an existing owned policy, including version 2, without recapturing the baseline.
+            $ErrorActionPreference='Stop';$state=ConvertFrom-Json $args[0];$names=@($state.OwnedRuleNames)
+            $rule=Get-NetFirewallRule -PolicyStore PersistentStore | Where-Object {$_.Name -ceq $names[1]}
             if(@($rule).Count -ne 1){throw 'firewall_owned_rule_missing'}
-            $rule | Get-NetFirewallAddressFilter | Set-NetFirewallAddressFilter -RemoteAddress $ips | Out-Null
-            Get-NetFirewallRule -PolicyStore PersistentStore | Where-Object {$_.Name -ceq $tunnelName} | Get-NetFirewallInterfaceFilter | Set-NetFirewallInterfaceFilter -InterfaceAlias $alias | Out-Null
+            $rule | Set-NetFirewallRule -Protocol UDP -RemotePort $state.EndpointPort -RemoteAddress @($state.EndpointAddresses) | Out-Null
+            Get-NetFirewallRule -PolicyStore PersistentStore | Where-Object {$_.Name -ceq $names[0]} | Get-NetFirewallInterfaceFilter | Set-NetFirewallInterfaceFilter -InterfaceAlias $state.AdapterName | Out-Null
+            $control=@($state.ControlPlaneAddresses);$enabled=if($control.Count -gt 0){'True'}else{'False'};if($control.Count -eq 0){$control=@('127.0.0.1')}
+            $controlRule=@(Get-NetFirewallRule -PolicyStore PersistentStore | Where-Object {$_.Name -ceq $names[5]})
+            if($controlRule.Count -eq 0){
+                New-NetFirewallRule -Name $names[5] -DisplayName 'VEX VPN control plane HTTPS' -Group 'VEX VPN AntiLeak' -PolicyStore PersistentStore -Direction Outbound -Action Allow -Protocol TCP -RemotePort 443 -RemoteAddress $control -Enabled $enabled -InterfaceType Wired,Wireless -Profile Any | Out-Null
+            }elseif($controlRule.Count -eq 1){
+                $controlRule | Set-NetFirewallRule -Protocol TCP -RemotePort 443 -RemoteAddress $control -Enabled $enabled | Out-Null
+            }else{throw 'firewall_owned_rule_duplicate'}
             """;
-        await RunPowerShellAsync(script, [state.OwnedRuleNames[1], JsonSerializer.Serialize(addresses.Select(address => address.ToString())), state.OwnedRuleNames[0], state.AdapterName], cancellationToken).ConfigureAwait(false);
+        await RunPowerShellAsync(script, [JsonSerializer.Serialize(state)], cancellationToken).ConfigureAwait(false);
         await VerifyFirewallAsync(state, cancellationToken).ConfigureAwait(false);
     }
 
@@ -318,15 +438,24 @@ internal sealed class NetworkSafetyController
             if((Get-Service MpsSvc).Status -ne 'Running'){throw 'firewall_service_inactive'}
             $profiles=@(Get-NetFirewallProfile -PolicyStore ActiveStore)
             if($profiles.Count -ne 3 -or @( $profiles | Where-Object {$_.Enabled -ne 'True' -or $_.DefaultOutboundAction -ne 'Block'}).Count -ne 0){throw 'firewall_effective_profile_unverified'}
-            $rules=@(Get-NetFirewallRule -PolicyStore ActiveStore | Where-Object {$_.Direction -eq 'Outbound' -and $_.Action -eq 'Allow' -and $_.Enabled -eq 'True'})
-            if(@($rules | Where-Object {$_.Name -cnotin $names}).Count -ne 0){throw 'firewall_external_allow_active'}
+            if($state.Version -ne 3){throw 'firewall_policy_version_unverified'}
+            $rules=@(Get-NetFirewallRule -PolicyStore ActiveStore | Where-Object {$_.Direction -eq 'Outbound' -and $_.Action -eq 'Allow'})
+            if(@($rules | Where-Object {$_.Enabled -eq 'True' -and $_.Name -cnotin $names}).Count -ne 0){throw 'firewall_external_allow_active'}
             foreach($name in $names){if(@($rules | Where-Object {$_.Name -ceq $name}).Count -ne 1){throw 'firewall_owned_allow_missing'}}
+            if(@($rules | Where-Object {$_.Name -cin $names[0..4] -and $_.Enabled -ne 'True'}).Count -ne 0){throw 'firewall_owned_allow_disabled'}
             $tunnel=$rules | Where-Object {$_.Name -ceq $names[0]}
             if(!(Same-Set @($tunnel | Get-NetFirewallInterfaceFilter | Select-Object -ExpandProperty InterfaceAlias) @($state.AdapterName))){throw 'firewall_tunnel_interface_unverified'}
             $protected=$rules | Where-Object {$_.Name -ceq $names[1]}
             $remote=@($protected | Get-NetFirewallAddressFilter | Select-Object -ExpandProperty RemoteAddress | ForEach-Object {[System.Net.IPAddress]::Parse($_).ToString()})
-            if(!(Same-Set $remote @($state.ProtectedAddresses))){throw 'firewall_protected_addresses_unverified'}
-            foreach($i in 1..4){
+            if(!(Same-Set $remote @($state.EndpointAddresses))){throw 'firewall_protected_addresses_unverified'}
+            $endpointPort=$protected | Get-NetFirewallPortFilter
+            if($endpointPort.Protocol -notin @('17','UDP') -or !(Same-Set @($endpointPort.RemotePort) @($state.EndpointPort))){throw 'firewall_endpoint_ports_unverified'}
+            $control=$rules | Where-Object {$_.Name -ceq $names[5]};$controlPort=$control | Get-NetFirewallPortFilter
+            if($controlPort.Protocol -notin @('6','TCP') -or !(Same-Set @($controlPort.RemotePort) @('443'))){throw 'firewall_control_ports_unverified'}
+            $controlAddresses=@($state.ControlPlaneAddresses);$controlEnabled=if($controlAddresses.Count -gt 0){'True'}else{'False'};if($controlAddresses.Count -eq 0){$controlAddresses=@('127.0.0.1')}
+            if($control.Enabled -ne $controlEnabled){throw 'firewall_control_enabled_unverified'}
+            if(!(Same-Set @($control | Get-NetFirewallAddressFilter | Select-Object -ExpandProperty RemoteAddress) $controlAddresses)){throw 'firewall_control_addresses_unverified'}
+            foreach($i in 1..5){
                 $rule=$rules | Where-Object {$_.Name -ceq $names[$i]}
                 if(!(Same-Set @($rule | Get-NetFirewallInterfaceTypeFilter | Select-Object -ExpandProperty InterfaceType) @('Wired','Wireless'))){throw 'firewall_physical_interface_unverified'}
             }
@@ -400,9 +529,13 @@ internal sealed class NetworkSafetyController
     private static FirewallRollback ParseFirewallRollback(string json)
     {
         var state = JsonSerializer.Deserialize<FirewallRollback>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-        if (state is null || state.Version != 2 || state.Profiles is not { Length: 3 } || state.OwnedRuleNames is not { Length: 5 } ||
+        if (state is null || state.Version is not (2 or 3) || state.Profiles is not { Length: 3 } ||
+            state.OwnedRuleNames is null || state.OwnedRuleNames.Length != (state.Version == 2 ? 5 : 6) ||
             state.DisabledOutboundAllowRuleNames is null || state.ProtectedAddresses is not { Length: > 0 } || string.IsNullOrWhiteSpace(state.AdapterName) ||
-            state.OwnedRuleNames.Any(name => !name.StartsWith("VEX.AntiLeak.", StringComparison.Ordinal)))
+            state.OwnedRuleNames.Any(name => string.IsNullOrWhiteSpace(name) || !name.StartsWith("VEX.AntiLeak.", StringComparison.Ordinal)) ||
+            state.OwnedRuleNames.Distinct(StringComparer.Ordinal).Count() != state.OwnedRuleNames.Length ||
+            (state.Version == 3 && (state.EndpointPort is < 1 or > 65535 || state.EndpointAddresses is not { Length: > 0 } ||
+                state.ControlPlaneAddresses is null || state.EndpointAddresses.Concat(state.ControlPlaneAddresses).Any(value => !IPAddress.TryParse(value, out _)))))
         {
             throw new VpnTunnelException("firewall_rollback_state_invalid");
         }
@@ -413,7 +546,7 @@ internal sealed class NetworkSafetyController
     {
         const string script = """
             $ErrorActionPreference='Stop';$state=ConvertFrom-Json $args[0]
-            if($state.Version -eq 2){
+            if($state.Version -in @(2,3)){
                 $profiles=@($state.Profiles);$names=@($state.OwnedRuleNames);$disabled=@($state.DisabledOutboundAllowRuleNames)
                 Get-NetFirewallRule -PolicyStore PersistentStore | Where-Object {$_.Name -cin $names} | Remove-NetFirewallRule
                 $rules=@(Get-NetFirewallRule -PolicyStore PersistentStore | Where-Object {$_.Name -cin $disabled})
@@ -514,19 +647,45 @@ internal sealed class NetworkSafetyController
         return probes;
     }
 
-    private static bool EndpointBypassesAdapter(string? endpoint, int? ipv4TunnelIndex, int? ipv6TunnelIndex)
+    private bool EndpointBypassesAdapter(string? endpoint, int? ipv4TunnelIndex, int? ipv6TunnelIndex,
+        string? serverPublicKey)
     {
         if (string.IsNullOrWhiteSpace(endpoint)) { return false; }
         try
         {
             var host = ParseEndpointHost(endpoint);
-            var addresses = IPAddress.TryParse(host, out var address) ? [address] : Dns.GetHostAddresses(host);
-            var routes = addresses.Select(candidate => (Address: candidate, Index: BestInterface(candidate)))
-                .Where(route => route.Index is not null).ToArray();
-            return routes.Length > 0 && routes.All(route =>
-                route.Index != (route.Address.AddressFamily == AddressFamily.InterNetwork ? ipv4TunnelIndex : ipv6TunnelIndex));
+            // Status must never wait on DNS while holding the runtime gate.
+            var addresses = IPAddress.TryParse(host, out var address) ? [address]
+                : _endpointAddressCache.Get(endpoint, serverPublicKey, DateTimeOffset.UtcNow).ToArray();
+            IReadOnlyDictionary<IPAddress, RouteCommandResult> expected;
+            lock (_gate) { expected = _expectedBypassRoutes; }
+            var qualified = addresses.Where(expected.ContainsKey).ToArray();
+            return qualified.Length > 0 && qualified.All(candidate =>
+                EffectiveRouteMatches(candidate, expected[candidate], ipv4TunnelIndex, ipv6TunnelIndex));
         }
         catch (Exception error) when (error is SocketException or VpnTunnelException or ArgumentException) { return false; }
+    }
+
+    private static bool EffectiveRouteMatches(IPAddress address, RouteCommandResult expected,
+        int? ipv4TunnelIndex, int? ipv6TunnelIndex)
+    {
+        var tunnelIndex = address.AddressFamily == AddressFamily.InterNetwork ? ipv4TunnelIndex : ipv6TunnelIndex;
+        if (expected.Loopback || expected.NativeLocal)
+        {
+            // The fixture-only native-host endpoint is already assigned to an
+            // active physical NIC; installing a gateway route would break it.
+            var localIndex = BestInterface(address);
+            return localIndex is not null && localIndex != tunnelIndex;
+        }
+        var destination = NativeSocketAddress.From(address);
+        if (GetBestRoute2(IntPtr.Zero, 0, IntPtr.Zero, ref destination, 0, out var route, out _) != 0)
+        {
+            return false;
+        }
+        var actualHop = route.NextHop.ToAddress();
+        return route.InterfaceIndex == expected.InterfaceIndex && route.InterfaceIndex != tunnelIndex &&
+            IPAddress.TryParse(expected.NextHop, out var expectedHop) && actualHop is not null &&
+            actualHop.GetAddressBytes().AsSpan().SequenceEqual(expectedHop.GetAddressBytes());
     }
 
     private static int? BestInterface(IPAddress address)
@@ -550,26 +709,44 @@ internal sealed class NetworkSafetyController
         finally { Marshal.FreeHGlobal(pointer); }
     }
 
-    private async Task<ProtectedAddressSet> ResolveProtectedAddressesAsync(string endpoint, CancellationToken cancellationToken)
+    private async Task<ProtectedAddressSet> ResolveProtectedAddressesAsync(string endpoint, CancellationToken cancellationToken,
+        string? serverPublicKey)
     {
         var endpointHost = ParseEndpointHost(endpoint);
         var addresses = new HashSet<IPAddress>();
         var endpointAddresses = new HashSet<IPAddress>();
-        foreach (var host in _controlPlaneHosts.Prepend(endpointHost).Distinct(StringComparer.OrdinalIgnoreCase))
+        var controlAddresses = new HashSet<IPAddress>();
+        var hosts = _controlPlaneHosts.Prepend(endpointHost).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        // Independent names share one bounded resolution window rather than
+        // accumulating an OS resolver timeout for every host.
+        var results = await Task.WhenAll(hosts.Select(async host =>
         {
             cancellationToken.ThrowIfCancellationRequested();
             IPAddress[] resolved;
             try
             {
-                resolved = IPAddress.TryParse(host, out var parsed) ? [parsed] : await Dns.GetHostAddressesAsync(host, cancellationToken).ConfigureAwait(false);
-                if (host != endpointHost) { _controlPlaneAddressCache[host] = resolved; }
+                resolved = IPAddress.TryParse(host, out var parsed) ? [parsed]
+                    : await BoundedDnsResolver.ResolveAsync(host, (name, token) => Dns.GetHostAddressesAsync(name, token),
+                        DnsResolutionTimeout, cancellationToken).ConfigureAwait(false);
             }
-            catch (SocketException) when (host != endpointHost && _controlPlaneAddressCache.ContainsKey(host))
+            catch (Exception error) when (error is SocketException || error is VpnTunnelException { Code: "endpoint_resolution_timeout" })
             {
-                // During Wi-Fi recovery the protected resolver may be inside the
-                // unavailable tunnel. Keep the last resolved control-plane hosts.
-                resolved = _controlPlaneAddressCache[host];
+                resolved = host == endpointHost
+                    ? _endpointAddressCache.Get(endpoint, serverPublicKey, DateTimeOffset.UtcNow).ToArray()
+                    : _controlPlaneAddressCache.GetValueOrDefault(host, []);
             }
+            if (host == endpointHost && !IPAddress.TryParse(host, out _))
+            {
+                // A fresh authenticated peer may still use an earlier answer.
+                // Keep that exact-scope address until the signed lease expires.
+                resolved = _endpointAddressCache.Get(endpoint, serverPublicKey, DateTimeOffset.UtcNow)
+                    .Concat(resolved).Distinct().Take(16).ToArray();
+            }
+            return (Host: host, Addresses: resolved.Take(16).ToArray());
+        })).ConfigureAwait(false);
+        foreach (var (host, resolved) in results)
+        {
+            if (host != endpointHost && resolved.Length > 0) { _controlPlaneAddressCache[host] = resolved; }
             if (host == endpointHost && resolved.Length == 0) { throw new VpnTunnelException("endpoint_resolution_failed"); }
             foreach (var address in resolved)
             {
@@ -577,13 +754,17 @@ internal sealed class NetworkSafetyController
                 {
                     addresses.Add(address);
                     if (host == endpointHost) { endpointAddresses.Add(address); }
+                    if (_controlPlaneHosts.Contains(host, StringComparer.OrdinalIgnoreCase)) { controlAddresses.Add(address); }
                 }
             }
         }
         if (addresses.Count == 0) { throw new VpnTunnelException("endpoint_resolution_failed"); }
         return new ProtectedAddressSet(addresses.ToArray(), endpointAddresses.ToArray(),
-            IPAddress.TryParse(endpointHost, out _));
+            IPAddress.TryParse(endpointHost, out _), ParseEndpointPort(endpoint), controlAddresses.ToArray());
     }
+
+    private static int ParseEndpointPort(string endpoint) => VpnEndpointAddressCache.TryParseEndpoint(endpoint, out _, out var port)
+        ? port : throw new VpnTunnelException("endpoint_invalid");
 
     private static string ParseEndpointHost(string endpoint)
     {
@@ -650,6 +831,24 @@ internal sealed class NetworkSafetyController
             [route.Address.ToString(), route.InterfaceIndex.ToString(System.Globalization.CultureInfo.InvariantCulture), route.NextHop,
                 route.Address.AddressFamily == AddressFamily.InterNetwork ? "32" : "128"], cancellationToken).ConfigureAwait(false);
         return result == "created";
+    }
+
+    private static async Task VerifyEffectiveRouteAsync(IPAddress address, RouteCommandResult expected,
+        CancellationToken cancellationToken)
+    {
+        const string script = """
+            # Verify the effective route after owned stale routes were removed.
+            $ErrorActionPreference='Stop';$ip=$args[0];$idx=[int]$args[1];$hop=[System.Net.IPAddress]::Parse($args[2])
+            $selected=@(Find-NetRoute -RemoteIPAddress $ip -ErrorAction Stop | Where-Object {$null -ne $_.PSObject.Properties['NextHop']})
+            if($selected.Count -ne 1 -or $selected[0].InterfaceIndex -ne $idx){throw 'endpoint_bypass_route_conflict'}
+            $actual=[System.Net.IPAddress]::Parse($selected[0].NextHop)
+            if(($actual.GetAddressBytes() -join ',') -cne ($hop.GetAddressBytes() -join ',')){throw 'endpoint_bypass_route_conflict'}
+            'ok'
+            """;
+        var result = await RunPowerShellAsync(script,
+            [address.ToString(), expected.InterfaceIndex.ToString(System.Globalization.CultureInfo.InvariantCulture), expected.NextHop],
+            cancellationToken).ConfigureAwait(false);
+        if (result != "ok") { throw new VpnTunnelException("endpoint_bypass_route_conflict"); }
     }
 
     private static async Task RemoveRoutesAsync(IEnumerable<BypassRoute> routes, CancellationToken cancellationToken)
@@ -733,6 +932,48 @@ internal sealed class NetworkSafetyController
     private static extern int GetBestInterface(uint destinationAddress, out uint bestInterfaceIndex);
     [DllImport("iphlpapi.dll", SetLastError = true)]
     private static extern int GetBestInterfaceEx(IntPtr destinationAddress, out uint bestInterfaceIndex);
+    [DllImport("iphlpapi.dll", ExactSpelling = true)]
+    private static extern uint GetBestRoute2(IntPtr interfaceLuid, uint interfaceIndex, IntPtr sourceAddress,
+        ref NativeSocketAddress destinationAddress, uint addressSortOptions,
+        out NativeRouteRow bestRoute, out NativeSocketAddress bestSourceAddress);
+
+    // Windows SDK SOCKADDR_INET and MIB_IPFORWARD_ROW2 have fixed ABI offsets.
+    [StructLayout(LayoutKind.Explicit, Size = 28)]
+    private struct NativeSocketAddress
+    {
+        [FieldOffset(0)] public ushort Family;
+        [FieldOffset(4)] public uint Ipv4;
+        [FieldOffset(8)] public ulong Ipv6First;
+        [FieldOffset(16)] public ulong Ipv6Second;
+        [FieldOffset(24)] public uint ScopeId;
+
+        public static NativeSocketAddress From(IPAddress address)
+        {
+            var bytes = address.GetAddressBytes();
+            return address.AddressFamily == AddressFamily.InterNetwork
+                ? new NativeSocketAddress { Family = (ushort)AddressFamily.InterNetwork, Ipv4 = BitConverter.ToUInt32(bytes) }
+                : new NativeSocketAddress { Family = (ushort)AddressFamily.InterNetworkV6,
+                    Ipv6First = BitConverter.ToUInt64(bytes, 0), Ipv6Second = BitConverter.ToUInt64(bytes, 8),
+                    ScopeId = checked((uint)address.ScopeId) };
+        }
+
+        public IPAddress? ToAddress()
+        {
+            if (Family == (ushort)AddressFamily.InterNetwork) { return new IPAddress(BitConverter.GetBytes(Ipv4)); }
+            if (Family != (ushort)AddressFamily.InterNetworkV6) { return null; }
+            var bytes = new byte[16];
+            BitConverter.GetBytes(Ipv6First).CopyTo(bytes, 0);
+            BitConverter.GetBytes(Ipv6Second).CopyTo(bytes, 8);
+            return new IPAddress(bytes, ScopeId);
+        }
+    }
+
+    [StructLayout(LayoutKind.Explicit, Size = 104)]
+    private struct NativeRouteRow
+    {
+        [FieldOffset(8)] public int InterfaceIndex;
+        [FieldOffset(44)] public NativeSocketAddress NextHop;
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     private struct SockaddrIn6
@@ -748,7 +989,10 @@ internal sealed class NetworkSafetyController
     private sealed record PersistedBypassRoute(string Address, int InterfaceIndex, string NextHop);
     private sealed record RouteCommandResult(string Address, int InterfaceIndex, string NextHop, bool Created, bool Skipped = false,
         bool Loopback = false, bool NativeLocal = false);
-    private sealed record ProtectedAddressSet(IPAddress[] Addresses, IPAddress[] EndpointAddresses, bool LiteralEndpoint);
-    private sealed record FirewallRollback(int Version, FirewallProfile[] Profiles, string[] DisabledOutboundAllowRuleNames, string[] OwnedRuleNames, string AdapterName, string[] ProtectedAddresses);
+    private sealed record ProtectedAddressSet(IPAddress[] Addresses, IPAddress[] EndpointAddresses, bool LiteralEndpoint,
+        int EndpointPort, IPAddress[] ControlPlaneAddresses);
+    private sealed record FirewallRollback(int Version, FirewallProfile[] Profiles, string[] DisabledOutboundAllowRuleNames,
+        string[] OwnedRuleNames, string AdapterName, string[] ProtectedAddresses, string[]? EndpointAddresses = null,
+        int EndpointPort = 0, string[]? ControlPlaneAddresses = null);
     private sealed record FirewallProfile(string Name, string Enabled, string DefaultOutboundAction);
 }

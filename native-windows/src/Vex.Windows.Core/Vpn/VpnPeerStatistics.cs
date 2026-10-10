@@ -1,11 +1,13 @@
 using System.Globalization;
+using System.Net;
 
 namespace Vex.Windows.Core.Vpn;
 
 public sealed record VpnPeerStatistics(
     DateTimeOffset? LatestHandshakeAt,
     long RxBytes,
-    long TxBytes)
+    long TxBytes,
+    string? Endpoint = null)
 {
     // Parse only the configured peer. UAPI responses also contain private keys;
     // never retain or log the response in a diagnostic object.
@@ -24,6 +26,7 @@ public sealed record VpnPeerStatistics(
         long handshake = 0;
         long rx = 0;
         long tx = 0;
+        string? endpoint = null;
         foreach (var line in lines)
         {
             var separator = line.IndexOf('=');
@@ -43,6 +46,13 @@ public sealed record VpnPeerStatistics(
             {
                 if (value != "0") { throw new VpnTunnelException("tunnel_peer_status_invalid"); }
                 completed = true;
+            }
+            else if (selected && name == "endpoint")
+            {
+                // Endpoint metadata is optional. Unsupported UAPI representations
+                // cannot seed routing recovery, but do not invalidate peer health.
+                endpoint = IPEndPoint.TryParse(value, out var numeric) && numeric.Port > 0
+                    ? numeric.ToString() : null;
             }
             else if (selected && name is "last_handshake_time_sec" or "rx_bytes" or "tx_bytes")
             {
@@ -67,7 +77,8 @@ public sealed record VpnPeerStatistics(
             return new VpnPeerStatistics(
                 handshake > 0 ? DateTimeOffset.FromUnixTimeSeconds(handshake) : null,
                 rx,
-                tx);
+                tx,
+                endpoint);
         }
         catch (ArgumentOutOfRangeException)
         {

@@ -11,13 +11,15 @@ public sealed class WindowsUpdateCoordinator
     private readonly Uri _manifestUri;
     private readonly Uri _signatureUri;
     private readonly TimeSpan _manifestCheckTimeout;
+    private readonly TimeSpan _artifactStagingTimeout;
 
     public WindowsUpdateCoordinator(
         HttpClient httpClient,
         WindowsUpdateVerificationOptions options,
         Uri manifestUri,
         Uri signatureUri,
-        TimeSpan? manifestCheckTimeout = null)
+        TimeSpan? manifestCheckTimeout = null,
+        TimeSpan? artifactStagingTimeout = null)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
         ArgumentNullException.ThrowIfNull(options);
@@ -32,6 +34,10 @@ public sealed class WindowsUpdateCoordinator
         if (_manifestCheckTimeout <= TimeSpan.Zero ||
             _manifestCheckTimeout.TotalMilliseconds > uint.MaxValue - 1)
             throw new ArgumentOutOfRangeException(nameof(manifestCheckTimeout));
+        _artifactStagingTimeout = artifactStagingTimeout ?? TimeSpan.FromMinutes(15);
+        if (_artifactStagingTimeout <= TimeSpan.Zero ||
+            _artifactStagingTimeout.TotalMilliseconds > uint.MaxValue - 1)
+            throw new ArgumentOutOfRangeException(nameof(artifactStagingTimeout));
     }
 
     public void SetRollbackState(WindowsUpdateRollbackState rollbackState)
@@ -94,6 +100,27 @@ public sealed class WindowsUpdateCoordinator
             CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(release);
+        // ResponseHeadersRead leaves content reads outside HttpClient.Timeout.
+        // Bound the entire bundle, including cached-file hashing and body reads,
+        // so an interrupted download cannot hold the service's operation gate.
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(_artifactStagingTimeout);
+        try
+        {
+            return await DownloadAndStageProvisioningCoreAsync(
+                release, stagingRoot, deadline.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException error) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new HttpRequestException("Windows update artifact staging timed out.", error);
+        }
+    }
+
+    private async Task<WindowsStagedProvisioningBundle> DownloadAndStageProvisioningCoreAsync(
+        WindowsUpdateRelease release,
+        string stagingRoot,
+        CancellationToken cancellationToken)
+    {
         ValidateTrustedArtifactUri(
             new Uri(release.PackageUri, UriKind.Absolute));
         var package = await DownloadAndStagePackageAsync(

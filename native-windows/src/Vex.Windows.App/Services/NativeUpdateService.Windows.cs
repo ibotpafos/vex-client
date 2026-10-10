@@ -9,7 +9,6 @@ using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using Vex.Windows.Client.Updates;
-using Vex.Windows.Core.Updates;
 
 namespace Vex.Windows.App.Services;
 
@@ -40,22 +39,11 @@ public sealed partial class NativeUpdateService
             return;
         }
 
-        WindowsUpdateRollbackState? rollbackState = null;
-        try
-        {
-            rollbackState = _rollbackStateStore.Load();
-            var configuration = BuildConfiguration(rollbackState);
-            CurrentSnapshot = configuration.InitialSnapshot.WithRollbackState(rollbackState);
-            _coordinator = configuration.Coordinator;
-        }
-        catch (Exception error) when (NativeUpdateFailurePolicy.IsExpectedFailure(error))
-        {
-            // Broken local trust/rollback state disables this updater without
-            // destroying it or preventing account and recovery UI from opening.
-            CurrentSnapshot = NativeUpdateSnapshot.Disabled(CurrentVersion(), "stable",
-                RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(),
-                "Проверка обновлений недоступна: " + error.Message).WithRollbackState(rollbackState);
-        }
+        var configuration = InitializeWithDurableRollback(_rollbackStateStore.Load,
+            BuildConfiguration, CurrentVersion(), "stable",
+            RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant());
+        CurrentSnapshot = configuration.InitialSnapshot;
+        _coordinator = configuration.Coordinator;
     }
 
     private static void LaunchBootstrap(
@@ -256,14 +244,19 @@ internal sealed class WindowsUpdateRollbackStateStore
 
     public WindowsUpdateRollbackState? Load()
     {
-        if (!File.Exists(_path))
-        {
-            return null;
-        }
-
         try
         {
-            var protectedBytes = File.ReadAllBytes(_path);
+            byte[] protectedBytes;
+            try
+            {
+                // File.Exists also returns false for access errors. Only an
+                // actually absent record may be treated as a first installation.
+                protectedBytes = File.ReadAllBytes(_path);
+            }
+            catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException)
+            {
+                return null;
+            }
             var clearBytes = ProtectedData.Unprotect(
                 protectedBytes,
                 Entropy,

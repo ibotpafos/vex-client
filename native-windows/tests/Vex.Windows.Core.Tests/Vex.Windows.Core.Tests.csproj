@@ -23,5 +23,8 @@
     <Compile Include="../../src/Vex.Windows.App/Services/VpnProductParityService.cs" Link="VpnProductParityService.cs" />
     <Compile Include="../../src/Vex.Windows.App/Services/NativeClientPreferences.cs" Link="NativeClientPreferences.cs" />
     <Compile Include="../../src/Vex.Windows.App/Services/NativeUpdateService.cs" Link="NativeUpdateService.cs" />
+    <Compile Include="../../src/Vex.Windows.App/Services/NativeUpdateService.Recovery.cs" Link="NativeUpdateService.Recovery.cs" />
+    <Compile Include="../../src/Vex.Windows.App/Services/NativeClientPreferencesJson.cs" Link="NativeClientPreferencesJson.cs" />
+    <Compile Include="../../src/Vex.Windows.App/Services/ActiveEntitlementMonitor.cs" Link="ActiveEntitlementMonitor.cs" />
   </ItemGroup>
 </Project>

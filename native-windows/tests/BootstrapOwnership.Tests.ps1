@@ -32,11 +32,14 @@ $null = New-Item -ItemType Directory -Path $temporary
 function Get-CurrentUserSid { $script:CurrentSid }
 function Get-SystemPowerShellPath { '/trusted-windows/System32/WindowsPowerShell/v1.0/powershell.exe' }
 function Assert-Administrator { }
+function Get-VexDataDirectory { Join-Path $temporary 'VEX/VPN' }
+function Get-Service { param($Name, $ErrorAction) return $null }
 $script:Metadata = [pscustomobject]@{
     package_name = 'VEX.Native'; package_sha256 = 'package-pin'; bootstrap_file = 'bootstrap-native-windows.ps1'
     bootstrap_sha256 = 'bootstrap-pin'; client_certificate_sha256 = 'certificate-pin'
 }
 function Read-PackageMetadata { param($Path) $script:Metadata }
+function Assert-ReleaseArtifacts { param($Path,$MetadataFile,$ScriptsRoot) $script:Metadata }
 $script:HashChecks = @()
 $script:SignatureChecks = @()
 function Assert-Hash { param($Path,$Expected,$Description) $script:HashChecks += [pscustomobject]@{Path=$Path;Expected=$Expected} }

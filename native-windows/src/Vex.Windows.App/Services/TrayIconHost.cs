@@ -267,11 +267,7 @@ public sealed class TrayIconHost : IDisposable
             return;
         }
 
-        if (!_window.IsShellWindowVisible)
-        {
-            _window.ShowShellWindow();
-        }
-
+        _window.ShowShellWindow();
         _window.Activate();
         _window.BringToFront();
         Render();

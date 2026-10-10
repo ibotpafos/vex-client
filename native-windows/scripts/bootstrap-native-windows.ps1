@@ -1,6 +1,6 @@
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
-    [ValidateSet('Install', 'Repair', 'Verify', 'Uninstall', 'Rollback', 'Prepare')]
+    [ValidateSet('Install', 'Repair', 'Verify', 'Uninstall', 'Rollback', 'Prepare', 'Restore')]
     [string]$Action = 'Install',
 
     [string]$PackagePath,
@@ -225,13 +225,108 @@ function Invoke-ServicePhase {
 }
 
 function Assert-ServiceOwnership {
-    $ownerPath = Join-Path $env:ProgramData 'VEX\VPN\owner-sid'
+    $dataDirectory = Get-VexDataDirectory
+    Assert-NoReparsePath -Path $dataDirectory
+    $ownerPath = Join-Path $dataDirectory 'owner-sid'
     if (Test-Path -LiteralPath $ownerPath -PathType Leaf) {
         $installedOwner = [IO.File]::ReadAllText($ownerPath).Trim()
-        if (-not [string]::IsNullOrWhiteSpace($installedOwner) -and $installedOwner -ne (Resolve-OwnerSid)) {
+        if ([string]::IsNullOrWhiteSpace($installedOwner) -or $installedOwner -ne (Resolve-OwnerSid)) {
             throw 'The installed VEX service belongs to another Windows user. Its authorization will not be reassigned.'
         }
     }
+    else {
+        $service = Get-Service -Name 'VEX VPN Service' -ErrorAction SilentlyContinue
+        if ($null -ne $service) {
+            $service.Dispose()
+            throw 'The existing VEX service has no verified owner. Authorization will not be reassigned.'
+        }
+    }
+}
+
+function Get-VexDataDirectory {
+    return Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)) 'VEX\VPN'
+}
+
+function Assert-NoReparsePath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $candidate = [IO.Path]::GetFullPath($Path)
+    while (-not [string]::IsNullOrEmpty($candidate)) {
+        if (Test-Path -LiteralPath $candidate) {
+            $item = Get-Item -LiteralPath $candidate -Force
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+                ($null -ne $item.PSObject.Properties['LinkType'] -and $item.LinkType -eq 'HardLink')) {
+                throw 'The VEX installation and state paths cannot contain links or reparse points.'
+            }
+        }
+        $parent = [IO.Path]::GetDirectoryName($candidate)
+        if ($parent -eq $candidate) { break }
+        $candidate = $parent
+    }
+}
+
+function Assert-PrivateStateAcl {
+    param([Parameter(Mandatory = $true)][string]$Path, [switch]$AllowInherited)
+    Assert-NoReparsePath -Path $Path
+    $acl = Get-Acl -LiteralPath $Path
+    $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+    if ($owner -notin @('S-1-5-18', 'S-1-5-32-544') -or (-not $AllowInherited -and -not $acl.AreAccessRulesProtected)) {
+        throw 'VEX service state must have a trusted owner and protected access rules.'
+    }
+    $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
+    $expected = @{
+        'S-1-5-18' = [long][Security.AccessControl.FileSystemRights]::FullControl
+        'S-1-5-32-544' = [long][Security.AccessControl.FileSystemRights]::FullControl
+    }
+    $privateRoot = [IO.Path]::GetFullPath((Join-Path (Get-VexDataDirectory) 'Private')).TrimEnd([IO.Path]::DirectorySeparatorChar)
+    $fullPath = [IO.Path]::GetFullPath($Path)
+    $private = $fullPath.Equals($privateRoot, [StringComparison]::OrdinalIgnoreCase) -or
+        $fullPath.StartsWith($privateRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)
+    if (-not $private) {
+        $expected[(Resolve-OwnerSid)] = [long]([Security.AccessControl.FileSystemRights]::ReadAndExecute -bor [Security.AccessControl.FileSystemRights]::Synchronize)
+    }
+    if ($rules.Count -ne $expected.Count) { throw 'VEX service state has unexpected access rules.' }
+    foreach ($rule in $rules) {
+        $sid = $rule.IdentityReference.Value
+        if (-not $expected.ContainsKey($sid) -or
+            $rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or
+            [long]$rule.FileSystemRights -ne $expected[$sid]) {
+            throw 'VEX service state has unexpected access rights.'
+        }
+        $expected.Remove($sid)
+    }
+    if ($expected.Count -ne 0) { throw 'VEX service state is missing required access rules.' }
+}
+
+function Assert-PrivateRuntimeState {
+    $root = Join-Path (Get-VexDataDirectory) 'Private'
+    Assert-NoReparsePath -Path $root
+    if (-not (Test-Path -LiteralPath $root)) { return }
+    $pending = [Collections.Generic.Stack[string]]::new()
+    $pending.Push($root)
+    $count = 0
+    while ($pending.Count -gt 0) {
+        $path = $pending.Pop()
+        Assert-PrivateStateAcl -Path $path -AllowInherited:($path -ne $root)
+        if (++$count -gt 10000) { throw 'The VEX private runtime state tree is unexpectedly large.' }
+        $item = Get-Item -LiteralPath $path -Force
+        if ($item.PSIsContainer) {
+            foreach ($child in @(Get-ChildItem -LiteralPath $path -Force)) { $pending.Push($child.FullName) }
+        }
+    }
+}
+
+function Assert-ReleaseArtifacts {
+    param([string]$Path, [string]$MetadataFile, [string]$ScriptsRoot)
+    $release = Read-PackageMetadata -Path $MetadataFile
+    Assert-Hash -Path $Path -Expected ([string]$release.package_sha256) -Description 'MSIX package'
+    foreach ($pair in @(@('bootstrap_file', 'bootstrap_sha256'),
+                         @('install_service_script_file', 'install_service_script_sha256'),
+                         @('uninstall_service_script_file', 'uninstall_service_script_sha256'))) {
+        $scriptPath = Join-Path $ScriptsRoot ([string]$release.($pair[0]))
+        Assert-Hash -Path $scriptPath -Expected ([string]$release.($pair[1])) -Description 'release service script'
+        Assert-ScriptSignature -Path $scriptPath -ExpectedCertificateSha256 ([string]$release.client_certificate_sha256)
+    }
+    return $release
 }
 
 function Stop-ServiceForPackageUpdate {
@@ -270,6 +365,18 @@ function Invoke-ServiceAction {
             Assert-InstalledState -Metadata $Metadata -InstallDirectory $package.InstallLocation
         }
         'Verify' { Assert-InstalledState -Metadata $Metadata -InstallDirectory $package.InstallLocation }
+        'Restore' {
+            # Registration failed before provisioning. Restore only the unchanged
+            # original user's package, using its existing protected release pins.
+            Assert-PrivateStateAcl -Path (Join-Path (Get-VexDataDirectory) 'bootstrap-state.json')
+            $stored = Get-Content -LiteralPath (Join-Path (Get-VexDataDirectory) 'bootstrap-state.json') -Raw | ConvertFrom-Json
+            Assert-InstalledState -Metadata $stored -InstallDirectory $package.InstallLocation -AllowStopped
+            Start-Service -Name 'VEX VPN Service' -ErrorAction Stop
+            $service = Get-Service -Name 'VEX VPN Service' -ErrorAction Stop
+            try { $service.WaitForStatus([ServiceProcess.ServiceControllerStatus]::Running, [TimeSpan]::FromSeconds(30)) }
+            finally { $service.Dispose() }
+            Assert-InstalledState -Metadata $stored -InstallDirectory $package.InstallLocation
+        }
         'Uninstall' { Invoke-ServiceRemoval -Metadata $Metadata -InstallDirectory $package.InstallLocation }
         default { throw "Unsupported elevated service action '$Action'." }
     }
@@ -319,11 +426,7 @@ function Install-Package {
     if ($ForceUpdate -and $Action -ne 'Rollback') {
         throw 'Version downgrade is available only through the explicit Rollback action.'
     }
-    $metadata = Read-PackageMetadata -Path $MetadataFile
-    Assert-Hash `
-        -Path $Path `
-        -Expected ([string]$metadata.package_sha256) `
-        -Description 'MSIX package'
+    $metadata = Assert-ReleaseArtifacts -Path $Path -MetadataFile $MetadataFile -ScriptsRoot $ScriptsRoot
 
     $previous = Get-InstalledPackage -Name ([string]$metadata.package_name)
     if ($null -ne $previous) {
@@ -337,7 +440,19 @@ function Install-Package {
     if ($ForceUpdate) {
         $parameters.ForceUpdateFromAnyVersion = $true
     }
-    Add-AppxPackage @parameters
+    try { Add-AppxPackage @parameters }
+    catch {
+        $registrationError = $_
+        if ($null -ne $previous) {
+            $remaining = Get-InstalledPackage -Name ([string]$metadata.package_name)
+            if ($null -ne $remaining -and $remaining.PackageFullName -eq $previous.PackageFullName -and
+                $remaining.InstallLocation -eq $previous.InstallLocation) {
+                Invoke-ServicePhase -ServiceAction 'Restore' -MetadataFile $MetadataFile -ScriptsRoot $ScriptsRoot `
+                    -PackageInstallDirectory $previous.InstallLocation
+            }
+        }
+        throw $registrationError
+    }
 
     $package = Get-InstalledPackage -Name ([string]$metadata.package_name)
     if ($null -eq $package) {
@@ -355,7 +470,8 @@ function Install-Package {
 function Assert-InstalledState {
     param(
         [Parameter(Mandatory = $true)]$Metadata,
-        [Parameter(Mandatory = $true)][string]$InstallDirectory
+        [Parameter(Mandatory = $true)][string]$InstallDirectory,
+        [switch]$AllowStopped
     )
 
     foreach ($pin in @(
@@ -365,13 +481,17 @@ function Assert-InstalledState {
         @('wintun.dll', 'wintun_sha256', 'Wintun runtime'),
         @('profile-signing-keys.json', 'profile_signing_keyring_sha256', 'profile keyring')
     )) {
+        Assert-NoReparsePath -Path (Join-Path $InstallDirectory $pin[0])
         Assert-Hash `
             -Path (Join-Path $InstallDirectory $pin[0]) `
             -Expected ([string]$Metadata.($pin[1])) `
             -Description $pin[2]
     }
 
-    $dataDirectory = Join-Path $env:ProgramData 'VEX\VPN'
+    $dataDirectory = Get-VexDataDirectory
+    Assert-PrivateStateAcl -Path (Split-Path -Parent $dataDirectory)
+    Assert-PrivateStateAcl -Path $dataDirectory
+    Assert-PrivateRuntimeState
     foreach ($file in @(
         'ipc-token.bin',
         'owner-sid',
@@ -386,16 +506,67 @@ function Assert-InstalledState {
         if (-not (Test-Path -LiteralPath (Join-Path $dataDirectory $file) -PathType Leaf)) {
             throw "Provisioned service state is missing '$file'."
         }
+        Assert-PrivateStateAcl -Path (Join-Path $dataDirectory $file)
+    }
+
+    foreach ($pin in @(@('owner-sid', (Resolve-OwnerSid)),
+        @('client-cert-sha256', $Metadata.client_certificate_sha256),
+        @('app-executable-sha256', $Metadata.app_executable_sha256),
+        @('service-executable-sha256', $Metadata.service_executable_sha256),
+        @('amneziawg-sha256', $Metadata.amneziawg_sha256),
+        @('wintun-sha256', $Metadata.wintun_sha256),
+        @('profile-signing-keys-sha256', $Metadata.profile_signing_keyring_sha256))) {
+        if ([IO.File]::ReadAllText((Join-Path $dataDirectory $pin[0])).Trim() -ne [string]$pin[1]) {
+            throw "Provisioned service pin '$($pin[0])' does not match the installed release."
+        }
+    }
+    $stored = Get-Content -LiteralPath (Join-Path $dataDirectory 'bootstrap-state.json') -Raw | ConvertFrom-Json
+    if ($stored.schema -ne 'vex.windows-service-bootstrap.v1' -or $stored.owner_sid -ne (Resolve-OwnerSid)) {
+        throw 'The provisioned service bootstrap ownership is invalid.'
+    }
+    foreach ($field in @('client_certificate_sha256', 'app_executable_sha256', 'service_executable_sha256',
+        'amneziawg_sha256', 'wintun_sha256', 'profile_signing_keyring_sha256')) {
+        if ([string]$stored.$field -ne [string]$Metadata.$field) { throw "Provisioned bootstrap pin '$field' does not match the release." }
+    }
+    Assert-AuthorizationToken -Path (Join-Path $dataDirectory 'ipc-token.bin')
+    Assert-ScriptSignature -Path (Join-Path $InstallDirectory 'Vex.Windows.App.exe') -ExpectedCertificateSha256 ([string]$Metadata.client_certificate_sha256)
+    Assert-ScriptSignature -Path (Join-Path $InstallDirectory 'Vex.Windows.Service.exe') -ExpectedCertificateSha256 ([string]$Metadata.client_certificate_sha256)
+    Assert-ServiceConfiguration -InstallDirectory $InstallDirectory
+    $machinePins = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\VEX\VPN' -ErrorAction Stop
+    if ($machinePins.ClientCertificateSha256 -ne $Metadata.client_certificate_sha256 -or
+        $machinePins.ServiceExecutableSha256 -ne $Metadata.service_executable_sha256) {
+        throw 'The machine service attestation pins do not match the release.'
     }
 
     $service = Get-Service -Name 'VEX VPN Service' -ErrorAction Stop
     try {
-        if ($service.Status -ne [ServiceProcess.ServiceControllerStatus]::Running) {
+        if (-not $AllowStopped -and $service.Status -ne [ServiceProcess.ServiceControllerStatus]::Running) {
             throw 'VEX VPN Service is installed but is not running.'
         }
     }
     finally {
         $service.Dispose()
+    }
+}
+
+function Assert-AuthorizationToken {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $protectedToken = [IO.File]::ReadAllBytes($Path)
+    $token = [Security.Cryptography.ProtectedData]::Unprotect($protectedToken,
+        [Text.Encoding]::UTF8.GetBytes('VEX VPN IPC v1'), [Security.Cryptography.DataProtectionScope]::LocalMachine)
+    try { if ($token.Length -ne 32) { throw 'The service authorization token is invalid.' } }
+    finally { [Array]::Clear($token, 0, $token.Length) }
+}
+
+function Assert-ServiceConfiguration {
+    param([Parameter(Mandatory = $true)][string]$InstallDirectory)
+    Assert-NoReparsePath -Path $InstallDirectory
+    $configuration = Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Services\VEX VPN Service' -ErrorAction Stop
+    $binary = '"' + (Join-Path $InstallDirectory 'Vex.Windows.Service.exe') + '"'
+    if ([string]$configuration.ImagePath -ne $binary -or $configuration.ObjectName -ne 'LocalSystem' -or
+        $configuration.Start -ne 2 -or $configuration.DelayedAutoStart -ne 1 -or $configuration.Type -ne 16 -or
+        $configuration.FailureActionsOnNonCrashFailures -ne 1) {
+        throw 'The VEX service executable, account or startup configuration is invalid.'
     }
 }
 
@@ -442,6 +613,37 @@ function Start-PackagedClient {
         -ArgumentList $applicationTarget
 }
 
+function Invoke-PackageRollback {
+    if ([string]::IsNullOrWhiteSpace($RollbackPackagePath)) {
+        throw 'RollbackPackagePath is required for rollback.'
+    }
+    if ([string]::IsNullOrWhiteSpace($RollbackMetadataPath)) {
+        $RollbackMetadataPath = Join-Path `
+            (Split-Path -Parent $RollbackPackagePath) `
+            'package-metadata.json'
+    }
+
+    $currentMetadata = Read-PackageMetadata -Path $MetadataPath
+    $rollbackRoot = Split-Path -Parent $RollbackMetadataPath
+    $rollbackMetadata = Assert-ReleaseArtifacts -Path $RollbackPackagePath -MetadataFile $RollbackMetadataPath -ScriptsRoot $rollbackRoot
+    if ($rollbackMetadata.package_name -ne $currentMetadata.package_name) {
+        throw 'Rollback must replace the same VEX package identity.'
+    }
+    # ForceUpdateFromAnyVersion replaces the signed package in place. Removing
+    # the current package first would lose working registration and user state.
+    Install-Package `
+        -Path $RollbackPackagePath `
+        -MetadataFile $RollbackMetadataPath `
+        -ScriptsRoot (Split-Path -Parent $RollbackMetadataPath) `
+        -ForceUpdate
+    if ($RelaunchAfterInstall) {
+        $rollbackMetadata = Read-PackageMetadata -Path $RollbackMetadataPath
+        Start-PackagedClient -Metadata $rollbackMetadata
+    }
+    Write-Host 'VEX native Windows rollback completed and verified.'
+    return
+}
+
 if (-not [string]::IsNullOrWhiteSpace($MyInvocation.MyCommand.Path)) {
     $bootstrapMetadata = Read-PackageMetadata -Path $MetadataPath
     Assert-Hash `
@@ -465,27 +667,7 @@ Assert-OriginalUserContext
 $OwnerSid = Resolve-OwnerSid
 
 if ($Action -eq 'Rollback') {
-    if ([string]::IsNullOrWhiteSpace($RollbackPackagePath)) {
-        throw 'RollbackPackagePath is required for rollback.'
-    }
-    if ([string]::IsNullOrWhiteSpace($RollbackMetadataPath)) {
-        $RollbackMetadataPath = Join-Path `
-            (Split-Path -Parent $RollbackPackagePath) `
-            'package-metadata.json'
-    }
-
-    $currentMetadata = Read-PackageMetadata -Path $MetadataPath
-    Uninstall-Package -Metadata $currentMetadata
-    Install-Package `
-        -Path $RollbackPackagePath `
-        -MetadataFile $RollbackMetadataPath `
-        -ScriptsRoot (Split-Path -Parent $RollbackMetadataPath) `
-        -ForceUpdate
-    if ($RelaunchAfterInstall) {
-        $rollbackMetadata = Read-PackageMetadata -Path $RollbackMetadataPath
-        Start-PackagedClient -Metadata $rollbackMetadata
-    }
-    Write-Host 'VEX native Windows rollback completed and verified.'
+    Invoke-PackageRollback
     return
 }
 

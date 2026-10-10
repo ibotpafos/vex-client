@@ -45,6 +45,14 @@ and boolean configuration fields as macOS. A connection requires a recent
 handshake from the configured peer through AmneziaWG UAPI, verified routes,
 DNS and anti-leak policy. Physical-interface changes reconcile owned bypass
 routes; service shutdown restores the recorded firewall and route state.
+DNS lookup has a four-second budget. Recovery first reconciles the last numeric
+address bound to the exact signed endpoint, peer key and authorization lease;
+status reads use known addresses without DNS. A cold service or a newly observed
+authenticated peer reconciles that numeric route before reporting health.
+Bypass verification checks both the effective interface and next-hop gateway,
+and preserves routes owned by other applications. The anti-leak endpoint rule
+permits only UDP to the signed port; a separate control-plane rule permits HTTPS.
+Disconnect cancels an in-flight repair and fences its service restart.
 
 The vendor executable must implement `/installtunnelservice` and
 `/uninstalltunnelservice`. Use the CLI-capable
@@ -92,6 +100,15 @@ Silent realtime headers or body reads have a 90-second liveness deadline;
 reconnection retains the last event cursor and does not reject credentials.
 Required updates stay blocked after installer launch and an offline restart
 until the running version satisfies the verified requirement.
+Unreadable protected update records keep Connect blocked while Account and
+Settings remain available for recovery. Downloading the complete verified
+installer bundle has a fifteen-minute deadline; cancellation removes partial
+files and allows another attempt.
+
+Periodic subscription checks bind their result to the current account and
+connection intent. A delayed response cannot disconnect a newer login or
+server selection. Windows Hello locking and temporary network failures preserve
+an admitted tunnel; a current authoritative rejection requests confirmed cleanup.
 
 Disconnected clients warm their selected profile without blocking Connect.
 The warm cache requires the release-pinned P256 keyring, exact signed user,
@@ -243,6 +260,9 @@ as the original owning user:
 
 Install/repair creates `%ProgramData%\VEX\VPN` with protected inheritance and
 explicit access for LocalSystem, Administrators, and the owning user SID. A
+separate `Private` subtree containing the tunnel key grants access only to
+LocalSystem and Administrators. Install, repair and removal reject redirected
+state paths and unexpected access rules. A
 fresh 256-bit IPC credential is generated with the Windows CSPRNG and protected
 using machine-scoped DPAPI. The bootstrap keeps MSIX registration, removal and
 relaunch under that user's token. It elevates only the pinned service operation
@@ -250,7 +270,12 @@ with the original owner SID and checks the package registered for that owner;
 another administrator's credentials do not transfer service ownership. Existing
 package replacements can require two UAC prompts: stop before replacement,
 then provision the new payload. Failed provisioning retains the registered UI
-for verified Repair and reports failure. The bootstrap verifies all release pins and waits
+for verified Repair and reports failure. Rollback validates the retained release
+before stopping the current service and replaces the package in place. If
+registration fails, the unchanged previous package and protected service state
+are verified before restarting its service. Repair stops the controller before
+replacing its authorization. The bootstrap verifies release pins, protected
+authorization, installed payload hashes and SCM configuration, then waits
 for `VEX VPN Service` to reach `Running` before reporting success.
 
 The signed public `update.json` release pairs the exact MSIX, bootstrap,
@@ -310,7 +335,8 @@ terminates it. It refuses hosts with an installed VEX service or saved session;
 this startup check does not provision a service. Separate Debug-only previews
 exercise authenticated and signed-out navigation, the server picker, compact
 layout, single-instance redirection, close-to-tray, second-launch restoration,
-actual shell protocol activation and clean exit. Preview state is disposable;
+maximized-window preservation, restoration from minimization through actual
+shell protocol activation and clean exit. Preview state is disposable;
 the Settings drill also changes and restores a local preference and leaves the
 page while its status request is pending, then verifies the resumed refresh.
 HTTP, realtime and service calls use offline fixtures. Release builds cannot
@@ -333,6 +359,9 @@ attestation and real tray clicks still require release acceptance. Production
 IPC attestation remains mandatory. Runtime cleanup preserves network protection
 and its journal when stopping the vendor tunnel cannot be confirmed.
 See [the fixture documentation](scripts/vpn-fixture-peer/README.md).
+The fixture also calls the production Windows routing interop for both OS
+loopbacks to check IPv4/IPv6 structure layout, interface, next hop and source
+address without changing routes or sending traffic.
 
 Unsigned PR and manual review builds include sanitized startup, desktop and
 tunnel results; private fixture keys, account state and process dumps are excluded.
@@ -356,6 +385,7 @@ PowerShell 5.1 host with its production stdin transport:
 ```powershell
 .\native-windows\scripts\validate-powershell-parse.ps1
 .\native-windows\tests\ReleaseValidation.Tests.ps1
+.\native-windows\tests\InstallerSafety.Tests.ps1
 ```
 
 Before promotion, both x64 and arm64 still require a clean real-Windows

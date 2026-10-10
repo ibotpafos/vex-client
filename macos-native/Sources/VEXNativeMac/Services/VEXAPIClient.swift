@@ -1,6 +1,7 @@
 import Foundation
 
 struct VEXAPIClient {
+    var transport = VEXAPITransport()
     var baseURL = URL(string: ProcessInfo.processInfo.environment["VEX_API_BASE_URL"] ?? "https://vexguard.app")!
 
     func me(accessToken: String) async throws -> VEXUser {
@@ -345,8 +346,11 @@ struct VEXAPIClient {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await URLSession.shared.data(for: request)
+            (data, response) = try await transport.data(for: request, timeout: timeout)
         } catch {
+            if (error as? URLError)?.code == .timedOut {
+                throw VEXAPIError.requestTimeout
+            }
             if VEXAPIError.isServerUnavailable(error) {
                 throw VEXAPIError.technicalWorks
             }
@@ -357,10 +361,10 @@ struct VEXAPIClient {
         }
         guard (200..<300).contains(http.statusCode) else {
             let apiError = apiErrorPayload(data)
-            if VEXAPIError.isMaintenanceStatus(http.statusCode) || apiError.code == "maintenance" {
-                throw VEXAPIError.technicalWorks
-            }
-            throw VEXAPIError.http(status: http.statusCode, message: apiError.message)
+            throw VEXAPIError.http(
+                status: http.statusCode, message: apiError.message, code: apiError.code,
+                retryAfter: VEXAPITransport.retryAfter(http.value(forHTTPHeaderField: "Retry-After"))
+            )
         }
         if T.self == EmptyResponse.self, data.isEmpty {
             guard let emptyResponse = EmptyResponse() as? T else {
@@ -429,31 +433,43 @@ private struct AuthSessionPayload: Decodable {
 enum VEXAPIError: LocalizedError {
     case invalidResponse
     case technicalWorks
-    case http(status: Int, message: String)
+    case requestTimeout
+    case http(status: Int, message: String, code: String? = nil, retryAfter: TimeInterval? = nil)
 
     static let technicalWorksMessage = "Идут технические работы. Мы уже переключаем сервисы, попробуйте через пару минут."
 
     var isUnauthorized: Bool {
-        if case .http(let status, _) = self {
-            return status == 401
+        if case .http(let status, _, let code, _) = self {
+            return status == 401 && code != "maintenance"
         }
         return false
     }
 
     var isRateLimited: Bool {
-        if case .http(let status, _) = self {
+        if case .http(let status, _, _, _) = self {
             return status == 429
         }
         return false
+    }
+
+    var code: String? {
+        switch self {
+        case .requestTimeout: return "request_timeout"
+        case .http(_, _, let code, _): return code
+        default: return nil
+        }
     }
 
     var errorDescription: String? {
         switch self {
         case .invalidResponse:
             return "Некорректный ответ API."
-        case .technicalWorks:
+        case .technicalWorks, .requestTimeout:
             return Self.technicalWorksMessage
-        case .http(let status, let message):
+        case .http(let status, let message, let code, _):
+            if Self.isMaintenanceStatus(status) || code == "maintenance" {
+                return Self.technicalWorksMessage
+            }
             return "HTTP \(status): \(message)"
         }
     }
@@ -464,8 +480,13 @@ enum VEXAPIError: LocalizedError {
 
     static func isServerUnavailable(_ error: Error) -> Bool {
         if let apiError = error as? VEXAPIError {
-            if case .technicalWorks = apiError {
+            switch apiError {
+            case .technicalWorks, .requestTimeout:
                 return true
+            case .http(let status, _, let code, _):
+                return isMaintenanceStatus(status) || code == "maintenance"
+            case .invalidResponse:
+                return false
             }
         }
         if let urlError = error as? URLError {
@@ -499,6 +520,8 @@ extension Error {
     }
 
     var isTimeout: Bool {
+        // Keep normalized API deadlines separate from this legacy transport
+        // flag: profile timeout fallback is not qualified for replaced keys.
         if let urlError = self as? URLError {
             return urlError.code == .timedOut
         }
@@ -507,7 +530,8 @@ extension Error {
     }
 
     var isProfileProvisioningUnavailable: Bool {
-        guard case .http(let status, let message) = self as? VEXAPIError else {
+        guard case .http(let status, let message, let code, _) = self as? VEXAPIError,
+              code != "maintenance" else {
             return false
         }
         let normalized = message.localizedLowercase

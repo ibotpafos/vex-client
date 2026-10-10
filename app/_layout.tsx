@@ -33,6 +33,7 @@ import { captureError, initSentry } from "@/observability/sentry";
 import { ToastProvider } from "@/ui/toast";
 import { VpnConnectionProvider } from "@/vpn/vpn-connection-context";
 import { CustomerRealtimeProvider } from "@/realtime/customer-realtime-context";
+import { createApiQueryRetry } from "@/api/queryRetry";
 
 initSentry();
 
@@ -48,7 +49,7 @@ Notifications.setNotificationHandler({
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      retry: 1,
+      retry: createApiQueryRetry(1),
       gcTime: 30 * 60_000,
       refetchOnMount: false,
       refetchOnReconnect: true,

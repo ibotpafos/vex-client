@@ -21,7 +21,7 @@ export function normalizeApiRequestError(error: unknown): Error {
     }
     const message = error instanceof Error ? error.message.toLowerCase() : '';
     const code = message.includes('превышено время ожидания api') ? 'request_timeout'
-      : /network request failed|failed to fetch|load failed|unable to resolve host|could not connect|connection refused|connection reset/.test(message)
+      : /network request failed|failed to fetch|load failed|fetch request has been canceled|unable to resolve host|could not connect|connection refused|connection reset/.test(message)
         ? 'network_unavailable' : undefined;
     return new ApiRequestError(technicalWorksMessage, { code });
   }

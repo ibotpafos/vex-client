@@ -94,7 +94,7 @@ for(const retryAfter of [null,'invalid','-1','1.5']) {
   });
 }
 
-for(const message of ['Failed to fetch','Load failed','connection reset','could not connect']) {
+for(const message of ['Failed to fetch','Load failed','fetch request has been canceled','connection reset','could not connect']) {
   test(`transient transport error retries: ${message}`,async t=>{
     t.mock.timers.enable({apis:['setTimeout','Date'],now:0});let calls=0;
     const raw=client(async()=>{if(++calls===1)throw new TypeError(message);return {ok:true,text:async()=>'ok'};});

@@ -282,12 +282,28 @@ final class ServerSidebarWindowTests: XCTestCase {
         let switchStart = try XCTUnwrap(
             source.range(of: "private func switchConnectedVPNLocation")
         )
-        let switchSource = source[switchStart.lowerBound...]
-        let busyCapture = try XCTUnwrap(switchSource.range(of: "isVpnBusy = true"))
+        let switchEnd = try XCTUnwrap(
+            source.range(of: "func setAutoLaunchEnabled", range: switchStart.upperBound..<source.endIndex)
+        )
+        let switchSource = source[switchStart.lowerBound..<switchEnd.lowerBound]
+        let busyCapture = try XCTUnwrap(switchSource.range(of: "let busyOwner = beginVpnOperation()"))
+        let busyRelease = try XCTUnwrap(switchSource.range(of: "defer { finishVpnOperation(busyOwner) }"))
         let tokenRefresh = try XCTUnwrap(
             switchSource.range(of: "authenticatedAccessToken()")
         )
         XCTAssertLessThan(busyCapture.lowerBound, tokenRefresh.lowerBound)
+        XCTAssertLessThan(busyCapture.lowerBound, busyRelease.lowerBound)
+        XCTAssertLessThan(busyRelease.lowerBound, tokenRefresh.lowerBound)
+
+        let ownershipStart = try XCTUnwrap(source.range(of: "private func beginVpnOperation()"))
+        let ownershipEnd = try XCTUnwrap(
+            source.range(of: "private func invalidateVpnOperation()", range: ownershipStart.upperBound..<source.endIndex)
+        )
+        let ownershipSource = source[ownershipStart.lowerBound..<ownershipEnd.lowerBound]
+        XCTAssertTrue(ownershipSource.contains("let owner = vpnOperationOwnership.begin()"))
+        XCTAssertTrue(ownershipSource.contains("isVpnBusy = true"))
+        XCTAssertTrue(ownershipSource.contains("if vpnOperationOwnership.finish(owner) { isVpnBusy = false }"),
+                      "An obsolete switch must not release the replacement operation's busy state")
     }
 
     func testWindowControllerRestoresRequestedContentSizeAfterHosting() throws {

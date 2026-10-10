@@ -1,6 +1,13 @@
 # Execute the production bootstrap functions with Windows commands mocked.
 # No elevated operations or package registration take place on this host.
 $ErrorActionPreference = 'Stop'
+if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+    # These functions run with mocked Windows providers in both host versions.
+    Add-Type -AssemblyName System.Security
+    Add-Type -AssemblyName System.ServiceProcess
+    $null = [Security.Cryptography.ProtectedData]
+    $null = [ServiceProcess.ServiceControllerStatus]::Running
+}
 $sourcePath = Join-Path $PSScriptRoot '../scripts/bootstrap-native-windows.ps1'
 $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile(

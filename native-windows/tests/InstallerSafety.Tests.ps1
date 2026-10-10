@@ -3,6 +3,14 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $windowsHost = [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT
+if ($windowsHost) {
+    # Extracted functions skip the installer's System.Security import, and the
+    # mocked Get-Service never loads its framework assembly in PowerShell 5.1.
+    Add-Type -AssemblyName System.Security
+    Add-Type -AssemblyName System.ServiceProcess
+    $null = [Security.Cryptography.ProtectedData]
+    $null = [ServiceProcess.ServiceControllerStatus]::Running
+}
 $scripts = Join-Path $PSScriptRoot '../scripts'
 $temporary = Join-Path ([IO.Path]::GetTempPath()) ('vex-installer-safety-' + [guid]::NewGuid().ToString('N'))
 $null = New-Item -ItemType Directory -Path $temporary

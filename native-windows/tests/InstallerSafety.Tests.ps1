@@ -232,12 +232,14 @@ try {
             Assert ($privateRules.Count -eq 2 -and $owner -notin @($privateRules | ForEach-Object { $_.IdentityReference.Value })) 'Private tunnel material must remain readable only by SYSTEM and Administrators'
         }
         $privateAcl = Get-Acl -LiteralPath $privateConfig
-        $privateAcl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($owner, 'ReadAndExecute', [Security.AccessControl.AccessControlType]::Allow))
+        $privateAcl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+            [Security.Principal.SecurityIdentifier]::new($owner), 'ReadAndExecute', [Security.AccessControl.AccessControlType]::Allow))
         Set-Acl -LiteralPath $privateConfig -AclObject $privateAcl
         Assert-Rejected { Assert-PrivateDirectoryAcl } 'Owning-user access to private tunnel material must be rejected'
         Set-PrivateDirectoryAcl
         Assert-PrivateDirectoryAcl
-        $extra = [Security.AccessControl.FileSystemAccessRule]::new('Everyone', 'FullControl', [Security.AccessControl.AccessControlType]::Allow)
+        $extra = [Security.AccessControl.FileSystemAccessRule]::new(
+            [Security.Principal.SecurityIdentifier]::new('S-1-1-0'), 'FullControl', [Security.AccessControl.AccessControlType]::Allow)
         $file = Join-Path $script:dataDirectory 'ipc-token.bin'
         $acl = Get-Acl $file; $acl.AddAccessRule($extra); Set-Acl $file $acl
         Assert-Rejected { Assert-PrivateDirectoryAcl } 'An explicit broad child ACL must be rejected'

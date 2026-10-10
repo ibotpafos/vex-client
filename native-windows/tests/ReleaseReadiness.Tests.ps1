@@ -2,6 +2,8 @@
 # Its signing providers are mocked; no .NET build or real release signing runs.
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+Add-Type -AssemblyName System.IO.Compression
+Add-Type -AssemblyName System.IO.Compression.FileSystem
 $publisher = Join-Path $PSScriptRoot '../packaging/publish-native-windows.ps1'
 . (Join-Path $PSScriptRoot '../packaging/ReleaseValidation.ps1')
 $tokens = $null; $errors = $null
@@ -11,6 +13,12 @@ foreach ($definition in $ast.FindAll({ param($node) $node -is [Management.Automa
     Invoke-Expression $definition.Extent.Text
 }
 function Assert($condition, $message) { if (-not $condition) { throw $message } }
+function Get-TestSha256 {
+    param([Parameter(Mandatory = $true)]$InputValue)
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try { return [BitConverter]::ToString($sha256.ComputeHash($InputValue)).Replace('-', '') }
+    finally { $sha256.Dispose() }
+}
 function Assert-Rejected([scriptblock]$action, [string]$message) {
     $rejected = $false
     try { & $action | Out-Null } catch { $rejected = $true }
@@ -43,8 +51,7 @@ $global:VexReleaseReadinessAuthenticode = @{
     Mode = 'valid'; TargetArchitecture = 'arm64'; Calls = @()
     RawData = [Text.Encoding]::UTF8.GetBytes('Known isolated fixture signing certificate')
 }
-$certificateSha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(
-    $global:VexReleaseReadinessAuthenticode.RawData))
+$certificateSha256 = Get-TestSha256 -InputValue $global:VexReleaseReadinessAuthenticode.RawData
 function Get-AuthenticodeSignature {
     param([Parameter(Mandatory = $true)][string]$LiteralPath)
     $global:VexReleaseReadinessAuthenticode.Calls += $LiteralPath
@@ -159,7 +166,7 @@ try {
                 foreach ($member in $archive.Entries) {
                     $publishedMember = Join-Path $versioned $member.FullName
                     $memberStream = $member.Open()
-                    try { $memberHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($memberStream)) }
+                    try { $memberHash = Get-TestSha256 -InputValue $memberStream }
                     finally { $memberStream.Dispose() }
                     Assert ($member.Length -eq (Get-Item -LiteralPath $publishedMember).Length -and
                         $memberHash -ceq (Get-FileHash -LiteralPath $publishedMember -Algorithm SHA256).Hash) 'Each ZIP member must preserve the exact corresponding published artifact bytes.'

@@ -94,7 +94,9 @@ function Assert-AcceptanceSignature {
     $signature = Get-AuthenticodeSignature -LiteralPath $Path
     if ($signature.Status -ne [Management.Automation.SignatureStatus]::Valid -or
         $null -eq $signature.SignerCertificate) { throw 'Acceptance requires valid Authenticode signatures.' }
-    $actual = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($signature.SignerCertificate.RawData))
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try { $actual = [BitConverter]::ToString($sha256.ComputeHash($signature.SignerCertificate.RawData)).Replace('-', '') }
+    finally { $sha256.Dispose() }
     if ($actual -ine $CertificateSha256) { throw 'Acceptance artifact signer does not match the release pin.' }
 }
 

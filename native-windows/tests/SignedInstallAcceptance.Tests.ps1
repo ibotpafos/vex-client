@@ -1,6 +1,9 @@
+#requires -Version 7
 # Import production functions from the AST; never run the Windows-only entrypoint.
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+Add-Type -AssemblyName System.IO.Compression
+Add-Type -AssemblyName System.IO.Compression.FileSystem
 $sourcePath = Join-Path $PSScriptRoot '../scripts/invoke-signed-install-acceptance.ps1'
 $tokens = $null; $errors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile((Resolve-Path $sourcePath), [ref]$tokens, [ref]$errors)

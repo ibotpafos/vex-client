@@ -342,7 +342,7 @@ jobs:
       - name: Validate the qualified runtime on a disposable host
         shell: pwsh
         env:
-          FULL_TUNNEL_CHECKS: ${{ github.event_name == 'workflow_dispatch' && (inputs.full_tunnel_checks || inputs.package_release) }}
+          FULL_TUNNEL_CHECKS: ${{ github.event_name != 'workflow_dispatch' || inputs.full_tunnel_checks || inputs.package_release }}
         run: |
           $fullChecks = $env:FULL_TUNNEL_CHECKS -eq 'true'
           ./native-windows/scripts/invoke-vpn-acceptance.ps1 -DisposableRunner -FullTunnelChecks:$fullChecks `

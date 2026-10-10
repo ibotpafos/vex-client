@@ -3,6 +3,7 @@
 # signtool trust and Windows Add-AppxPackage performs real signature validation.
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 function Assert($condition, $message) { if (-not $condition) { throw $message } }
 function Assert-Rejected([scriptblock]$body, $message) {

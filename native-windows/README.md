@@ -394,8 +394,9 @@ separate fresh Windows x64 job qualifies the pinned AmneziaWG 3.1.0 CLI and
 Wintun against a memory-only encrypted peer. It checks signed-profile admission,
 SCM/adapter creation, a recent UAPI handshake, tunnel-bound DNS and verified HTTPS,
 traffic counters and owned cleanup. It uses one private /32 route and leaves
-AntiLeak disabled by default. The explicit `full_tunnel_checks=true` manual
-mode also verifies full IPv4 routing, actual AntiLeak, tunnel DNS/HTTPS,
+AntiLeak disabled for its initial narrow-route phase. Ordinary PR/main CI and
+the explicit `full_tunnel_checks=true` manual mode then verify full IPv4
+routing, actual AntiLeak, tunnel DNS/HTTPS,
 physical control-plane HTTPS, blocked/restored outside TCP, demand-start vendor
 registration, and controller-death cleanup. Its encrypted peer has no public
 Internet forwarding; actual public VPN egress, roaming and physical ARM64

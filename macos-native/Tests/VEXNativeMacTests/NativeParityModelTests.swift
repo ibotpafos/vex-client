@@ -319,7 +319,18 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(warmup.contains("profileWarmupTask = Task { [profileService] in"))
         XCTAssertTrue(warmup.contains("let proof = entitlementUserId == accountUserId ? entitlement : nil"))
         XCTAssertTrue(warmup.contains("userId: accountUserId"))
-        XCTAssertTrue(warmup.contains("forceRefresh: false,\n                    writeHelperConfig: false,\n                    prevalidatedEntitlement: proof\n                )\n            } catch is CancellationError"))
+        XCTAssertTrue(warmup.contains("let accountGeneration = profileAccountGeneration"))
+        XCTAssertTrue(warmup.contains("let operationGeneration = vpnOperationGeneration"))
+        XCTAssertTrue(warmup.contains(
+            "forceRefresh: false,\n" +
+            "                    writeHelperConfig: false,\n" +
+            "                    prevalidatedEntitlement: proof,\n" +
+            "                    shouldPersist: { [self] in\n" +
+            "                        session?.user.id == accountUserId && profileAccountGeneration == accountGeneration\n" +
+            "                            && vpnOperationGeneration == operationGeneration\n" +
+            "                    }\n" +
+            "                )\n            } catch is CancellationError"
+        ))
         XCTAssertFalse(warmup.contains("forceRefresh: true"), "Background warmup must retain fresh-cache reuse; recovery paths may force a live refresh")
     }
 

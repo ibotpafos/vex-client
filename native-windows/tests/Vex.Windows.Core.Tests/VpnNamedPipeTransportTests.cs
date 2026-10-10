@@ -49,11 +49,16 @@ internal static class VpnNamedPipeTransportTests
         await using var server = new NamedPipeServerStream(name, PipeDirection.InOut, 1,
             PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var accepted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var received = Task.Run(async () =>
         {
-            await server.WaitForConnectionAsync(deadline.Token);
-            var buffer = new byte[1];
-            try { return await server.ReadAsync(buffer, deadline.Token); }
+            try
+            {
+                await server.WaitForConnectionAsync(deadline.Token);
+                accepted.SetResult();
+                var buffer = new byte[1];
+                return await server.ReadAsync(buffer, deadline.Token);
+            }
             catch (IOException error) when (OperatingSystem.IsWindows() &&
                 (error.HResult & 0xffff) is 109 /* ERROR_BROKEN_PIPE */ or 232 /* ERROR_NO_DATA */)
             {
@@ -61,9 +66,17 @@ internal static class VpnNamedPipeTransportTests
                 // client closes without writing; Unix returns zero bytes.
                 return 0;
             }
+            catch (IOException error)
+            {
+                throw new InvalidOperationException($"Unexpected pipe EOF HResult=0x{error.HResult:X8}.", error);
+            }
         });
         var authorizationReads = 0;
-        var transport = new VpnNamedPipeTransport(name, _ => throw new UnauthorizedAccessException(),
+        var transport = new VpnNamedPipeTransport(name, _ =>
+            {
+                accepted.Task.WaitAsync(TimeSpan.FromSeconds(3)).GetAwaiter().GetResult();
+                throw new UnauthorizedAccessException();
+            },
             () => { authorizationReads++; return Authorization; });
         try { await transport.SendAsync(VpnServiceRequest.Status("attest"), deadline.Token); }
         catch (UnauthorizedAccessException)

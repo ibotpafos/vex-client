@@ -621,7 +621,17 @@ namespace Vex.Windows.Smoke {
                 }
                 $result.settings_preferences_available_during_refresh = $true
 
-                Invoke-SmokeElement -AutomationId 'RefreshSettingsButton'
+                # This status button is below the initial Settings viewport.
+                # Invoke its enabled automation peer without scrolling; retain
+                # the visibility requirement for all ordinary smoke actions.
+                $refreshButton = Find-SmokeElement -AutomationId 'RefreshSettingsButton'
+                $refreshPattern = $null
+                if ($null -eq $refreshButton -or -not $refreshButton.Current.IsEnabled -or
+                    -not $refreshButton.TryGetCurrentPattern(
+                        [Windows.Automation.InvokePattern]::Pattern, [ref]$refreshPattern)) {
+                    throw 'Settings refresh does not expose an enabled invoke pattern.'
+                }
+                ([Windows.Automation.InvokePattern]$refreshPattern).Invoke()
                 Wait-SmokeCondition -TimeoutSeconds 3 -Failure 'Settings did not start the navigation-cancellation refresh.' -Condition {
                     $refreshButton = Find-SmokeElement -AutomationId 'RefreshSettingsButton'
                     $null -ne $refreshButton -and -not $refreshButton.Current.IsEnabled

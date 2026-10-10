@@ -8,7 +8,8 @@ internal static class AppMetadataContractTests
     public static void Run()
     {
         var metadata = new ClientAppMetadata("windows", "1.2.3", 123, "stable", "1.0",
-            "Windows 11", "arm64", "native-windows-1", 1);
+            "Windows 11", "arm64", NativeApiCompatibility.ApiClientVersion,
+            NativeApiCompatibility.ConfigSchemaVersion);
         using var handler = new Handler("""
             {"version":"config-9","releasedAt":"2026-10-10T00:00:00Z","platform":"windows","channel":"stable",
              "minSupportedBuild":100,"recommendedBuild":130,"recommendedVersion":"1.3.0","coreVersion":"3.1",
@@ -68,6 +69,76 @@ internal static class AppMetadataContractTests
             throw new InvalidOperationException("Malformed remote config was admitted.");
         }
         catch (VexApiException error) when (error.Code == "api_response_invalid") { }
+    }
+
+    public static void WindowsApiCompatibilityMatchesPublishedContract()
+    {
+        var repository = FindRepositoryRoot();
+        using var versions = JsonDocument.Parse(File.ReadAllText(Path.Combine(repository, "versions.json")));
+        var windowsContract = versions.RootElement.GetProperty("app")
+            .GetProperty("compatibility_matrix").EnumerateArray()
+            .Single(entry => entry.GetProperty("id").GetString() == "windows-stable-v1");
+        Equal("windows", windowsContract.GetProperty("platform").GetString());
+        Equal("stable", windowsContract.GetProperty("channel").GetString());
+        Equal(windowsContract.GetProperty("configSchemaVersion").GetInt32(),
+            NativeApiCompatibility.ConfigSchemaVersion);
+        var supportedVersions = windowsContract.GetProperty("supportedApiClientVersions")
+            .EnumerateArray().Select(version => version.GetString()).ToArray();
+        if (!supportedVersions.Contains(NativeApiCompatibility.ApiClientVersion, StringComparer.Ordinal))
+            throw new InvalidOperationException("The native Windows API identifier is rejected by versions.json.");
+        if (supportedVersions.Contains("native-windows-1", StringComparer.Ordinal))
+            throw new InvalidOperationException("The regression fixture unexpectedly admits the rejected API identifier.");
+
+        foreach (var architecture in new[] { "x64", "arm64" })
+        {
+            var metadata = new ClientAppMetadata("windows", "0.1.74", 74, "stable", "1.0",
+                "Windows 11", architecture, NativeApiCompatibility.ApiClientVersion,
+                NativeApiCompatibility.ConfigSchemaVersion);
+            using var handler = new Handler("""{"platform":"windows","channel":"stable"}""");
+            var client = new VexApiClient(new HttpClient(handler) { BaseAddress = new Uri("https://api.example.test") });
+            client.GetRemoteConfigAsync(metadata, CancellationToken.None).GetAwaiter().GetResult();
+            AssertCompatibilityRequest(handler.Body!, architecture, supportedVersions);
+            handler.Payload = """
+                {"updateAvailable":false,"required":false,"latestVersion":"0.1.74","latestBuild":74,
+                 "minSupportedBuild":1,"downloadUrl":""}
+                """;
+            client.CheckForAppUpdateAsync(metadata, CancellationToken.None).GetAwaiter().GetResult();
+            AssertCompatibilityRequest(handler.Body!, architecture, supportedVersions);
+        }
+
+        var settings = File.ReadAllText(Path.Combine(repository, "native-windows", "src",
+            "Vex.Windows.App", "Views", "SettingsPage.xaml.cs"));
+        if (!settings.Contains("NativeApiCompatibility.ApiClientVersion", StringComparison.Ordinal)
+            || !settings.Contains("NativeApiCompatibility.ConfigSchemaVersion", StringComparison.Ordinal)
+            || settings.Contains("\"native-windows-1\"", StringComparison.Ordinal))
+            throw new InvalidOperationException("Settings must send the central accepted Windows API compatibility identifiers.");
+    }
+
+    private static void AssertCompatibilityRequest(string body, string architecture, string?[] supportedVersions)
+    {
+        using var request = JsonDocument.Parse(body);
+        var metadata = request.RootElement;
+        Equal("windows", metadata.GetProperty("platform").GetString());
+        Equal("stable", metadata.GetProperty("channel").GetString());
+        Equal(architecture, metadata.GetProperty("arch").GetString());
+        Equal(NativeApiCompatibility.ApiClientVersion, metadata.GetProperty("apiClientVersion").GetString());
+        Equal(NativeApiCompatibility.ConfigSchemaVersion, metadata.GetProperty("configSchemaVersion").GetInt32());
+        if (!supportedVersions.Contains(metadata.GetProperty("apiClientVersion").GetString(), StringComparer.Ordinal))
+            throw new InvalidOperationException("Serialized app metadata is incompatible with the published Windows contract.");
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        foreach (var start in new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory })
+        {
+            for (var directory = new DirectoryInfo(start); directory is not null; directory = directory.Parent)
+            {
+                if (File.Exists(Path.Combine(directory.FullName, "versions.json"))
+                    && Directory.Exists(Path.Combine(directory.FullName, "native-windows")))
+                    return directory.FullName;
+            }
+        }
+        throw new InvalidOperationException("The repository Windows compatibility contract was not found.");
     }
 
     private static void Equal<T>(T expected, T actual)

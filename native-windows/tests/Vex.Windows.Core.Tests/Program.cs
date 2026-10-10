@@ -36,6 +36,7 @@ var tests = new (string Name, Action Run)[]
     ("Unreadable durable update state retains mandatory recovery protection", NativeUpdateRecoveryTests.Run),
     ("Preferences decode corruption safely and preserve valid legacy choices", NativeClientPreferencesJsonTests.Run),
     ("App metadata decodes current server contracts and explicit historical aliases", AppMetadataContractTests.Run),
+    ("Windows app metadata matches the published API compatibility contract on both architectures", AppMetadataContractTests.WindowsApiCompatibilityMatchesPublishedContract),
     ("Protected session cache handles corruption without replacing identity files", ProtectedStateFileTests.Run),
     ("Windows Hello changes commit durably and reject cancelled verification", WindowsHelloSessionTests.Run),
     ("Signed relay candidates preserve authorization and bounded offline recovery", ClientSignedCandidateTests.Run),
@@ -1768,7 +1769,8 @@ static void WindowsControlPlaneExposesAppConfiguration()
 {
     var metadata = new ClientAppMetadata(
         "windows", "1.0.54", 54, "stable", "1.0.0",
-        "Windows 11", "arm64", "native-windows-1", 1);
+        "Windows 11", "arm64", NativeApiCompatibility.ApiClientVersion,
+        NativeApiCompatibility.ConfigSchemaVersion);
     var configHandler = new RecordingHttpHandler(
         """{"version":"1","routing_policy_version":"2026.07.1","incident_banner":"ok"}""");
     var configClient = new VexApiClient(new HttpClient(configHandler)

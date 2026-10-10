@@ -424,6 +424,36 @@ creator, actual Windows metric/protocol, durable creation receipt and confirmed
 removal without sending traffic. A fifteen-second signed lease verifies
 autonomous SCM/adapter/lease cleanup before any status request.
 
+For an installed client with a real test entitlement, use
+`scripts/verify-public-vpn.ps1` from elevated Windows PowerShell 5.1 or PowerShell
+7. Supply the expected public IPv4 exit of the selected remote VPN server, then
+record three observations on the same Windows machine within ten minutes:
+
+```powershell
+$expectedExit = @('REPLACE_WITH_REAL_VPN_EXIT_IPV4')
+$verify = '.\native-windows\scripts\verify-public-vpn.ps1'
+& $verify -Phase Baseline -ExpectedVpnExitIpv4 $expectedExit -ResultPath .\vpn-baseline.json
+# Sign in and connect in the installed VEX application.
+& $verify -Phase Connected -ExpectedVpnExitIpv4 $expectedExit -BaselinePath .\vpn-baseline.json -ResultPath .\vpn-connected.json
+# Disconnect in the application.
+& $verify -Phase Restored -ExpectedVpnExitIpv4 $expectedExit -BaselinePath .\vpn-baseline.json -ConnectedPath .\vpn-connected.json -ResultPath .\vpn-restored.json
+```
+
+This observer does not connect, install, alter network state, or read account
+tokens/private keys. Two independent HTTPS services must agree on the public
+IPv4 address. Connected observations require the owned running VEX controller
+and vendor runtime, matching installed hash pins, the real `vex` adapter, and
+Windows best routes through that adapter before and after both requests. The
+observed exit must match the supplied remote exit and differ from baseline;
+disconnect must restore baseline egress. TLS validation stays enabled, proxy
+configuration and redirects are rejected, and subprocess output/time are bounded.
+Phase files include machine/run identity, freshness and predecessor hashes; they
+are never overwritten and retain only hashes of network addresses. They are local
+observations, not signed attestations. Authentication, DNS leakage, IPv6,
+failure recovery, signed installed IPC and reboot remain explicitly unverified.
+Ordinary CI tests the observer's rejection and parsing behavior without using a
+production session or declaring real public VPN acceptance.
+
 Unsigned PR and manual review builds include sanitized startup, desktop and
 tunnel results; private fixture keys, account state and process dumps are excluded.
 Routine jobs do not access signing secrets. Manual validation needs no release

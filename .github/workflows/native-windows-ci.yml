@@ -96,6 +96,7 @@ jobs:
           ./native-windows/tests/BootstrapOwnership.Tests.ps1
           ./native-windows/tests/InstallerSafety.Tests.ps1
           ./native-windows/tests/VpnAcceptance.Tests.ps1
+          ./native-windows/tests/PublicVpnVerification.Tests.ps1
           ./native-windows/tests/SmokeApplication.Tests.ps1
           ./native-windows/tests/UiPreviewProtocolRegistration.Tests.ps1
           ./native-windows/tests/UiPreviewContext.Tests.ps1
@@ -151,6 +152,7 @@ jobs:
           ./native-windows/tests/BootstrapOwnership.Tests.ps1
           ./native-windows/tests/InstallerSafety.Tests.ps1
           ./native-windows/tests/VpnAcceptance.Tests.ps1
+          ./native-windows/tests/PublicVpnVerification.Tests.ps1
           ./native-windows/tests/SmokeApplication.Tests.ps1
           ./native-windows/tests/UiPreviewProtocolRegistration.Tests.ps1
           ./native-windows/tests/UiPreviewContext.Tests.ps1
@@ -164,7 +166,7 @@ jobs:
           $hostPath = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'WindowsPowerShell/v1.0/powershell.exe'
           & $hostPath -NoLogo -NoProfile -NonInteractive -Command '$PSVersionTable.PSVersion.ToString()'
           if ($LASTEXITCODE -ne 0) { throw 'The production Windows PowerShell host is unavailable.' }
-          foreach ($test in @('InstallerSafety.Tests.ps1', 'BootstrapOwnership.Tests.ps1', 'ReleaseReadiness.Tests.ps1', 'VclibsDependency.Tests.ps1', 'VerifiedBootstrapLaunch.Tests.ps1', 'VendorStartupMigration.Tests.ps1', 'SetupPackaging.Tests.ps1', 'WindowsSetupGuard.Tests.ps1')) {
+          foreach ($test in @('InstallerSafety.Tests.ps1', 'BootstrapOwnership.Tests.ps1', 'ReleaseReadiness.Tests.ps1', 'VclibsDependency.Tests.ps1', 'VerifiedBootstrapLaunch.Tests.ps1', 'VendorStartupMigration.Tests.ps1', 'SetupPackaging.Tests.ps1', 'WindowsSetupGuard.Tests.ps1', 'PublicVpnVerification.Tests.ps1')) {
             & $hostPath -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PWD "native-windows/tests/$test")
             if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 isolated installer test failed: $test" }
           }

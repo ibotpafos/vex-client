@@ -4,6 +4,8 @@ import { clearSession, loadSession, saveSession } from '@/auth/sessionStore';
 import { loadSessionWithRetry } from '@/auth/sessionLoadRetry';
 import { sessionLoadFailureDiagnosticsSnapshot } from '@/auth/sessionDiagnostics';
 import { isCurrentSessionMutation } from '@/auth/sessionMutationGuard';
+import { isCurrentSessionOperation } from '@/auth/sessionOperationGuard';
+import { createSessionMutationQueue } from '@/auth/sessionStoreCore';
 import { refreshSession as refreshApiSession, reportAppInstall, type AuthSession } from '@/api/vexApi';
 import { ApiRequestError } from '@/api/error';
 import { uploadClientDiagnostics } from '@/diagnostics/clientDiagnostics';
@@ -15,6 +17,7 @@ type SessionContextValue = {
   isLoading: boolean;
   loadError: string | null;
   session: AuthSession | null;
+  isCurrentSessionOperation: () => boolean;
   signIn: (nextSession: AuthSession) => Promise<void>;
   signOut: () => Promise<void>;
   refreshSession: () => Promise<AuthSession | null>;
@@ -37,7 +40,21 @@ export function SessionProvider({ children }: PropsWithChildren) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const sessionRef = useRef<AuthSession | null>(null);
   const sessionRevisionRef = useRef(0);
+  const [sessionOperationRevision, setSessionOperationRevision] = useState(0);
+  const sessionOperationsBlockedRef = useRef(false);
+  const sessionTransitionsRef = useRef(createSessionMutationQueue());
+  const runSessionTransition = sessionTransitionsRef.current;
   const refreshInFlightRef = useRef<Promise<AuthSession | null> | null>(null);
+  // Bind callbacks to this login, while allowing its access token to rotate.
+  // The ref changes before logout's first await, so retained VPN callbacks
+  // cannot start a tunnel while storage cleanup or native teardown is pending.
+  const sessionOperationIsCurrent = useCallback(() => isCurrentSessionOperation(
+    sessionOperationRevision,
+    sessionRevisionRef.current,
+    session?.user.id,
+    sessionRef.current?.user.id,
+    sessionOperationsBlockedRef.current,
+  ), [sessionOperationRevision, session?.user.id]);
   const clearClientData = useCallback(() => {
     queryClient.removeQueries({ queryKey: ['entitlement'] });
     queryClient.removeQueries({ queryKey: ['vpn-profile'] });
@@ -50,22 +67,30 @@ export function SessionProvider({ children }: PropsWithChildren) {
 
   const applySignOutState = useCallback(async () => {
     sessionRevisionRef.current += 1;
-    let storageError: unknown;
-    await clearSession().catch((error) => {
-      storageError = error;
-    });
-    // Do not hide a failed native teardown behind a successful-looking logout.
-    // Keeping the authenticated screen mounted lets the user retry while the
-    // disconnect watchdog performs its Android recovery path.
-    await disconnectVpn({ releaseAntiLeak: true });
-    sessionRef.current = null;
-    clearClientData();
-    setSession(null);
-    setIsLoading(false);
-    if (storageError) {
-      throw storageError;
+    const signOutRevision = sessionRevisionRef.current;
+    refreshInFlightRef.current = null;
+    setSessionOperationRevision(sessionRevisionRef.current);
+    sessionOperationsBlockedRef.current = true;
+    try {
+      await runSessionTransition(async () => {
+        let storageError: unknown;
+        await clearSession().catch((error) => {
+          storageError = error;
+        });
+        // A new login waits for this teardown before exposing its session.
+        // Failed teardown keeps the authenticated screen available for retry.
+        await disconnectVpn({ releaseAntiLeak: true });
+        sessionRef.current = null;
+        if (signOutRevision !== sessionRevisionRef.current) return;
+        clearClientData();
+        setSession(null);
+        setIsLoading(false);
+        if (storageError) throw storageError;
+      });
+    } finally {
+      if (signOutRevision === sessionRevisionRef.current) sessionOperationsBlockedRef.current = false;
     }
-  }, [clearClientData]);
+  }, [clearClientData, runSessionTransition]);
 
   useEffect(() => {
     let mounted = true;
@@ -101,7 +126,11 @@ export function SessionProvider({ children }: PropsWithChildren) {
         if (restoreRevision !== sessionRevisionRef.current) {
           return;
         }
-        await saveSession(restoredSession);
+        await runSessionTransition(async () => {
+          if (restoreRevision !== sessionRevisionRef.current) return;
+          await saveSession(restoredSession!);
+        });
+        if (restoreRevision !== sessionRevisionRef.current) return;
       } catch (error) {
         if (restoreRevision !== sessionRevisionRef.current) {
           return;
@@ -127,7 +156,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [runSessionTransition]);
 
   useEffect(() => {
     if (!session?.accessToken || !session.user.id) {
@@ -139,19 +168,35 @@ export function SessionProvider({ children }: PropsWithChildren) {
   const signIn = useCallback(async (nextSession: AuthSession) => {
     const sessionLoadError = loadError;
     sessionRevisionRef.current += 1;
+    const signInRevision = sessionRevisionRef.current;
+    refreshInFlightRef.current = null;
+    setSessionOperationRevision(sessionRevisionRef.current);
+    sessionOperationsBlockedRef.current = true;
     clearClientData();
-    await saveSession(nextSession);
-    sessionRef.current = nextSession;
-    setLoadError(null);
-    setSession(nextSession);
-    setIsLoading(false);
+    try {
+      await runSessionTransition(async () => {
+        if (signInRevision !== sessionRevisionRef.current) return;
+        if (sessionRef.current?.user.id && sessionRef.current.user.id !== nextSession.user.id) {
+          await disconnectVpn({ releaseAntiLeak: true });
+          if (signInRevision !== sessionRevisionRef.current) return;
+        }
+        await saveSession(nextSession);
+        if (signInRevision !== sessionRevisionRef.current) return;
+        sessionRef.current = nextSession;
+        setLoadError(null);
+        setSession(nextSession);
+        setIsLoading(false);
+      });
+    } finally {
+      if (signInRevision === sessionRevisionRef.current) sessionOperationsBlockedRef.current = false;
+    }
     if (sessionLoadError) {
       void uploadClientDiagnostics(
         nextSession.accessToken,
         sessionLoadFailureDiagnosticsSnapshot(sessionLoadError),
       ).catch(() => undefined);
     }
-  }, [clearClientData, loadError]);
+  }, [clearClientData, loadError, runSessionTransition]);
 
   const signOut = useCallback(async () => {
     await applySignOutState();
@@ -169,18 +214,28 @@ export function SessionProvider({ children }: PropsWithChildren) {
     const refreshRevision = sessionRevisionRef.current;
     const refreshOperation = (async () => {
       const refreshedSession = await refreshApiSession(currentSession.accessToken);
-      if (!isCurrentSessionMutation(
-        refreshRevision,
-        sessionRevisionRef.current,
-        currentSession.accessToken,
-        sessionRef.current?.accessToken,
-      )) {
-        return sessionRef.current;
-      }
-      await saveSession(refreshedSession);
-      sessionRef.current = refreshedSession;
-      setSession(refreshedSession);
-      return refreshedSession;
+      return runSessionTransition(async () => {
+        if (!isCurrentSessionMutation(
+          refreshRevision,
+          sessionRevisionRef.current,
+          currentSession.accessToken,
+          sessionRef.current?.accessToken,
+        )) {
+          return sessionRef.current;
+        }
+        await saveSession(refreshedSession);
+        if (!isCurrentSessionMutation(
+          refreshRevision,
+          sessionRevisionRef.current,
+          currentSession.accessToken,
+          sessionRef.current?.accessToken,
+        )) {
+          return sessionRef.current;
+        }
+        sessionRef.current = refreshedSession;
+        setSession(refreshedSession);
+        return refreshedSession;
+      });
     })();
     refreshInFlightRef.current = refreshOperation;
     try {
@@ -190,18 +245,19 @@ export function SessionProvider({ children }: PropsWithChildren) {
         refreshInFlightRef.current = null;
       }
     }
-  }, []);
+  }, [runSessionTransition]);
 
   const value = useMemo(
     () => ({
       isLoading,
       loadError,
       session,
+      isCurrentSessionOperation: sessionOperationIsCurrent,
       signIn,
       signOut,
       refreshSession,
     }),
-    [isLoading, loadError, refreshSession, session, signIn, signOut],
+    [isLoading, loadError, refreshSession, session, sessionOperationIsCurrent, signIn, signOut],
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

@@ -1,5 +1,6 @@
 import type { VpnStatus } from '../native/vexVpn';
 import type { VpnProfile } from './profile';
+import { SessionOperationSupersededError } from './sessionOperation';
 
 export type ResolveConnectableProfileOptions = {
   allowPersistentHotProfile?: boolean;
@@ -19,6 +20,7 @@ export type SwitchVpnLocationInput = {
   cachedTargetProfile?: VpnProfile | null;
   connectProfile: (profile: VpnProfile) => Promise<ConnectedVpnProfile>;
   isRetryableConnectError: (error: unknown) => boolean;
+  isCurrentSessionOperation?: () => boolean;
   persistLocation: (locationId: string) => Promise<string>;
   previousLocationId: string;
   previousProfile: VpnProfile | null;
@@ -50,11 +52,15 @@ export async function switchVpnLocation(input: SwitchVpnLocationInput): Promise<
   let targetConnectStarted = false;
 
   try {
+    requireCurrentSession(input);
     const targetProfile = await resolveTargetProfile(input);
+    requireCurrentSession(input);
     targetConnectStarted = true;
     const connectedTarget = await connectTargetProfile(input, targetProfile);
+    requireCurrentSession(input);
 
     const locationId = await input.persistLocation(input.targetLocationId);
+    requireCurrentSession(input);
     input.setCachedProfile(locationId, connectedTarget.profile);
     input.reportDisconnect?.(input.previousProfile, 'server_switch');
     input.reportConnect?.(connectedTarget.profile);
@@ -66,6 +72,10 @@ export async function switchVpnLocation(input: SwitchVpnLocationInput): Promise<
       status: connectedTarget.status,
     };
   } catch (error) {
+    // A superseded operation must never restore its old account's placement.
+    // The new session owns the native tunnel, preferences and profile cache.
+    requireCurrentSession(input);
+    if (error instanceof SessionOperationSupersededError) throw error;
     return rollbackToPreviousLocation(input, error, targetConnectStarted);
   }
 }
@@ -83,8 +93,13 @@ async function resolveTargetProfile(input: SwitchVpnLocationInput): Promise<VpnP
 
 async function connectTargetProfile(input: SwitchVpnLocationInput, targetProfile: VpnProfile): Promise<ConnectedVpnProfile> {
   try {
-    return await input.connectProfile(targetProfile);
+    requireCurrentSession(input);
+    const connected = await input.connectProfile(targetProfile);
+    requireCurrentSession(input);
+    return connected;
   } catch (error) {
+    requireCurrentSession(input);
+    if (error instanceof SessionOperationSupersededError) throw error;
     if (targetProfile.source !== 'local' || !input.isRetryableConnectError(error)) {
       throw error;
     }
@@ -92,6 +107,7 @@ async function connectTargetProfile(input: SwitchVpnLocationInput, targetProfile
       forceRefresh: true,
       requestPermission: false,
     });
+    requireCurrentSession(input);
     return input.connectProfile(freshProfile);
   }
 }
@@ -101,7 +117,12 @@ async function rollbackToPreviousLocation(
   error: unknown,
   targetConnectStarted: boolean,
 ): Promise<SwitchVpnLocationResult> {
-  await input.persistLocation(input.previousLocationId).catch(() => undefined);
+  requireCurrentSession(input);
+  await input.persistLocation(input.previousLocationId).catch((persistError) => {
+    requireCurrentSession(input);
+    if (persistError instanceof SessionOperationSupersededError) throw persistError;
+  });
+  requireCurrentSession(input);
   if (input.previousProfile) {
     input.setCachedProfile(input.previousLocationId, input.previousProfile);
   }
@@ -123,7 +144,9 @@ async function rollbackToPreviousLocation(
       forceRefresh: true,
       requestPermission: false,
     });
+    requireCurrentSession(input);
     const rollback = await input.connectProfile(previous);
+    requireCurrentSession(input);
     input.setCachedProfile(input.previousLocationId, rollback.profile);
     input.reportConnect?.(rollback.profile);
     return {
@@ -134,6 +157,8 @@ async function rollbackToPreviousLocation(
       status: rollback.status,
     };
   } catch (rollbackError) {
+    requireCurrentSession(input);
+    if (rollbackError instanceof SessionOperationSupersededError) throw rollbackError;
     return {
       ok: false,
       error,
@@ -142,5 +167,11 @@ async function rollbackToPreviousLocation(
       rollbackError,
       status: null,
     };
+  }
+}
+
+function requireCurrentSession(input: SwitchVpnLocationInput): void {
+  if (input.isCurrentSessionOperation && !input.isCurrentSessionOperation()) {
+    throw new SessionOperationSupersededError();
   }
 }

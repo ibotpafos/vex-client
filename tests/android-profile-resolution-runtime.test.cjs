@@ -38,6 +38,7 @@ async function resolveCase({ cached, hot, knownEntitlement = paid, permission = 
     '../api/vexApi': { entitlement: async () => knownEntitlement, hasPaidEntitlement: value => Boolean(value?.active || value?.vpnAccess) },
     './profile': { resetVpnProfileCache: () => {}, resolveVpnProfile: async () => { online++; return fresh; }, rotateVpnProfileKey: async () => fresh },
     './profileRequestQueue': { ProfileRequestSupersededError: class ProfileRequestSupersededError extends Error {} },
+    './sessionOperation': { SessionOperationSupersededError: class SessionOperationSupersededError extends Error {} },
     './serverSwitch': {},
     './hotProfileCache': { clearHotVpnProfiles: async () => {}, hydrateHotVpnProfilesToQueryCache: async () => [], loadHotVpnProfileResult: async () => ({ record: hot ?? null }), profileFromHotRecord: record => ({ ...record, hotProfileUsed: true, source: 'local' }), saveHotVpnProfile: async () => {} },
     './connectFlow': connectFlow,

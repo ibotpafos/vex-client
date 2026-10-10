@@ -147,6 +147,7 @@ struct AppUpdateCheckResult: Codable, Equatable {
 
 struct VpnDevice: Codable, Equatable, Identifiable {
     var id: String
+    var userId: String?
     var name: String
     var status: String
     var assignedIpv4: String?
@@ -156,6 +157,7 @@ struct VpnDevice: Codable, Equatable, Identifiable {
     var endpoint: String?
     var latencyMs: Double?
     var publicKey: String?
+    var keyEpoch: Int?
     var provisioningMode: String?
     var clientKeyOwnership: String?
     var externalDeviceId: String?
@@ -166,6 +168,7 @@ struct VpnDevice: Codable, Equatable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case id
+        case userId = "user_id"
         case name
         case status
         case assignedIpv4 = "assigned_ipv4"
@@ -175,6 +178,7 @@ struct VpnDevice: Codable, Equatable, Identifiable {
         case endpoint
         case latencyMs = "latency_ms"
         case publicKey = "public_key"
+        case keyEpoch = "psk_epoch"
         case provisioningMode = "provisioning_mode"
         case clientKeyOwnership = "client_key_ownership"
         case externalDeviceId = "external_device_id"
@@ -192,6 +196,7 @@ struct VpnDevice: Codable, Equatable, Identifiable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let decodeOnly = try decoder.container(keyedBy: DecodeOnlyKeys.self)
         id = try container.decode(String.self, forKey: .id)
+        userId = try? container.decodeIfPresent(String.self, forKey: .userId)
         name = (try? container.decode(String.self, forKey: .name)) ?? ""
         status = (try? container.decode(String.self, forKey: .status)) ?? ""
         assignedIpv4 = try? container.decodeIfPresent(String.self, forKey: .assignedIpv4)
@@ -201,6 +206,7 @@ struct VpnDevice: Codable, Equatable, Identifiable {
         endpoint = try? container.decodeIfPresent(String.self, forKey: .endpoint)
         latencyMs = try? container.decodeIfPresent(Double.self, forKey: .latencyMs)
         publicKey = try? container.decodeIfPresent(String.self, forKey: .publicKey)
+        keyEpoch = try? container.decodeIfPresent(Int.self, forKey: .keyEpoch)
         provisioningMode = try? container.decodeIfPresent(String.self, forKey: .provisioningMode)
         clientKeyOwnership = try? container.decodeIfPresent(String.self, forKey: .clientKeyOwnership)
         externalDeviceId = try? container.decodeIfPresent(String.self, forKey: .externalDeviceId)
@@ -553,6 +559,8 @@ struct ManagedVpnProfile: Codable, Equatable {
     var revoked: Bool?
     var rotationRequired: Bool?
     var deviceId: String?
+    var clientPublicKey: String?
+    var clientKeyEpoch: Int?
     var `protocol`: String?
     var server: String?
     var port: Int?
@@ -574,6 +582,8 @@ struct ManagedVpnProfile: Codable, Equatable {
         case revoked
         case rotationRequired = "rotation_required"
         case deviceId = "device_id"
+        case clientPublicKey = "client_public_key"
+        case clientKeyEpoch = "client_key_epoch"
         case `protocol`
         case server
         case port

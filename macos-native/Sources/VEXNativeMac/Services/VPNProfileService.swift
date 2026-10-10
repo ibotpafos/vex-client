@@ -23,18 +23,27 @@ struct VPNProfileService {
 
     func resolveProfile(
         accessToken: String,
+        userId: String? = nil,
         locationId: String,
         routingMode: VpnRoutingMode,
         forceRefresh: Bool = false,
         writeHelperConfig: Bool = true,
         prevalidatedEntitlement: Entitlement? = nil
     ) async throws -> PreparedTunnel {
+        try Task.checkCancellation()
         let normalizedLocationId = normalizeLocationId(locationId)
         let bypassRegion = bypassRegion(for: routingMode)
-        let cached = cache.load(locationId: normalizedLocationId, routingMode: routingMode)
+        let suppliedUserId = userId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        var cached = cache.load(locationId: normalizedLocationId, routingMode: routingMode, accountUserId: suppliedUserId)
+        let keyPair = try keyStore.getOrCreate()
+        let externalDeviceId = identityStore.getOrCreateDeviceId()
 
         if !forceRefresh,
+           prevalidatedEntitlement?.hasPaidAccess == true,
+           let suppliedUserId,
            let cached,
+           VPNProfileCacheIdentity.canReuse(cached, accountUserId: suppliedUserId, installationId: externalDeviceId,
+               keyPair: keyPair, locationId: normalizedLocationId, routingMode: routingMode),
            !Self.cachedProfileNeedsRefresh(
                 cached,
                 requestedLocationId: normalizedLocationId,
@@ -44,6 +53,16 @@ struct VPNProfileService {
                 try await writeSanitizedHelperConfig(cached.config)
             }
             return cached.tunnel
+        }
+
+        // A caller without a stable account identity must authenticate before
+        // interpreting even a fresh cache record. Legacy records remain hints.
+        let accountUserId: String
+        if let suppliedUserId, !suppliedUserId.isEmpty {
+            accountUserId = suppliedUserId
+        } else {
+            accountUserId = try await api.me(accessToken: accessToken).id
+            cached = cache.load(locationId: normalizedLocationId, routingMode: routingMode, accountUserId: accountUserId)
         }
 
         let entitlement: Entitlement
@@ -56,8 +75,6 @@ struct VPNProfileService {
             throw VPNProfileError.subscriptionInactive
         }
 
-        let keyPair = try keyStore.getOrCreate()
-        let externalDeviceId = identityStore.getOrCreateDeviceId()
         var device = try await activeDevice(
             accessToken: accessToken,
             externalDeviceId: externalDeviceId,
@@ -65,6 +82,9 @@ struct VPNProfileService {
             keyEpoch: keyPair.keyEpoch,
             locationId: normalizedLocationId
         )
+        guard device.userId == nil || device.userId == accountUserId else {
+            throw VPNProfileError.profileIdentityMismatch
+        }
 
         if needsKeySync(device: device, keyPair: keyPair) {
             device = try await api.rotateManagedVpnKey(
@@ -77,8 +97,14 @@ struct VPNProfileService {
 
         var effectiveRoutingMode = routingMode
         var effectiveBypassRegion = bypassRegion
-        let knownProfileVersion = cached?.awgVersion == Self.awgVersion ? cached?.profileVersion : nil
-        let managedProfile: ManagedVpnProfile
+        let canRevalidate = cached.map {
+            VPNProfileCacheIdentity.canReuse($0, accountUserId: accountUserId, installationId: externalDeviceId,
+                keyPair: keyPair, locationId: normalizedLocationId, routingMode: routingMode, currentDevice: device)
+            && !Self.cachedProfileNeedsRefresh($0, requestedLocationId: normalizedLocationId,
+                requestedRoutingMode: routingMode, allowStale: true)
+        } ?? false
+        let knownProfileVersion = canRevalidate ? cached?.profileVersion : nil
+        var managedProfile: ManagedVpnProfile
         do {
             managedProfile = try await api.managedVpnProfile(
                 accessToken: accessToken,
@@ -92,6 +118,7 @@ struct VPNProfileService {
             if error.isTimeout,
                !forceRefresh,
                let cached,
+               canRevalidate,
                !Self.cachedProfileNeedsRefresh(
                     cached,
                     requestedLocationId: normalizedLocationId,
@@ -117,6 +144,7 @@ struct VPNProfileService {
                 return try await persistManagedProfile(
                     managedProfile,
                     cached: cached,
+                    accountUserId: accountUserId,
                     device: device,
                     keyPair: keyPair,
                     locationId: normalizedLocationId,
@@ -131,7 +159,9 @@ struct VPNProfileService {
             effectiveRoutingMode = .fullTunnel
             effectiveBypassRegion = nil
             if !forceRefresh,
-               let fallbackCached = cache.load(locationId: normalizedLocationId, routingMode: .fullTunnel),
+               let fallbackCached = cache.load(locationId: normalizedLocationId, routingMode: .fullTunnel, accountUserId: accountUserId),
+               VPNProfileCacheIdentity.canReuse(fallbackCached, accountUserId: accountUserId, installationId: externalDeviceId,
+                   keyPair: keyPair, locationId: normalizedLocationId, routingMode: .fullTunnel, currentDevice: device),
                !Self.cachedProfileNeedsRefresh(
                     fallbackCached,
                     requestedLocationId: normalizedLocationId,
@@ -156,9 +186,24 @@ struct VPNProfileService {
             throw VPNProfileError.deviceRevoked
         }
 
+        if managedProfile.unchanged == true {
+            let confirmed = canRevalidate && cached.map {
+                VPNProfileCacheIdentity.confirmsUnchanged(managedProfile, cached: $0, device: device, keyPair: keyPair)
+            } == true
+            if !confirmed {
+                // Older servers omit identity fields on compact responses. A
+                // single unconditional fetch preserves their compatibility.
+                managedProfile = try await api.managedVpnProfile(accessToken: accessToken, deviceId: device.id,
+                    locationId: normalizedLocationId, routingMode: effectiveRoutingMode,
+                    bypassRegion: effectiveBypassRegion, knownVersion: nil)
+                guard managedProfile.unchanged != true else { throw VPNProfileError.profileIdentityMismatch }
+            }
+        }
+
         return try await persistManagedProfile(
             managedProfile,
             cached: cached,
+            accountUserId: accountUserId,
             device: device,
             keyPair: keyPair,
             locationId: normalizedLocationId,
@@ -171,6 +216,7 @@ struct VPNProfileService {
     private func persistManagedProfile(
         _ managedProfile: ManagedVpnProfile,
         cached: PreparedTunnelCacheRecord?,
+        accountUserId: String,
         device: VpnDevice,
         keyPair: WireGuardKeyPair,
         locationId normalizedLocationId: String,
@@ -181,12 +227,21 @@ struct VPNProfileService {
         if managedProfile.revoked == true {
             throw VPNProfileError.deviceRevoked
         }
+        try Task.checkCancellation()
+        guard try keyStore.getOrCreate() == keyPair,
+              managedProfile.deviceId == nil || managedProfile.deviceId == device.id,
+              managedProfile.clientPublicKey == nil || managedProfile.clientPublicKey == keyPair.publicKey,
+              managedProfile.clientKeyEpoch == nil || (managedProfile.clientKeyEpoch ?? 0) > 0 else {
+            throw VPNProfileError.profileIdentityMismatch
+        }
 
         let config: String
         if managedProfile.unchanged == true {
             guard cached?.awgVersion == Self.awgVersion,
                   let cachedConfig = cached?.config,
-                  isValidConfig(cachedConfig) else {
+                  let cached,
+                  VPNProfileCacheIdentity.confirmsUnchanged(managedProfile, cached: cached, device: device, keyPair: keyPair),
+                  VPNProfileCacheIdentity.configMatches(cachedConfig, keyPair: keyPair, device: device) else {
                 throw VPNProfileError.unchangedProfileWithoutCache
             }
             config = cachedConfig
@@ -200,7 +255,12 @@ struct VPNProfileService {
             }.value
         }
 
-        let nextDevice = device.withManagedProfile(managedProfile, locationId: normalizedLocationId)
+        var nextDevice = device.withManagedProfile(managedProfile, locationId: normalizedLocationId)
+        nextDevice.userId = accountUserId
+        nextDevice.keyEpoch = managedProfile.clientKeyEpoch ?? device.keyEpoch
+        guard VPNProfileCacheIdentity.configMatches(config, keyPair: keyPair, device: nextDevice) else {
+            throw VPNProfileError.profileIdentityMismatch
+        }
         let tunnel = PreparedTunnel(
             device: nextDevice,
             config: config,
@@ -208,20 +268,22 @@ struct VPNProfileService {
             profileVersion: managedProfile.version ?? cached?.profileVersion,
             routingMode: effectiveRoutingMode,
             bypassRegion: effectiveBypassRegion,
-            bypassRangesCount: managedProfile.bypassRanges?.filter { !$0.isEmpty }.count ?? 0,
-            bypassDomainsCount: managedProfile.bypassDomains?.filter { !$0.isEmpty }.count ?? 0,
-            routingPolicyVersion: managedProfile.routingPolicyVersion ?? VEXAppInfo.routingPolicyVersion,
+            bypassRangesCount: managedProfile.bypassRanges?.filter { !$0.isEmpty }.count ?? (managedProfile.unchanged == true ? cached?.bypassRangesCount : nil) ?? 0,
+            bypassDomainsCount: managedProfile.bypassDomains?.filter { !$0.isEmpty }.count ?? (managedProfile.unchanged == true ? cached?.bypassDomainsCount : nil) ?? 0,
+            routingPolicyVersion: managedProfile.routingPolicyVersion ?? (managedProfile.unchanged == true ? cached?.routingPolicyVersion : nil) ?? VEXAppInfo.routingPolicyVersion,
             rotationRequired: managedProfile.rotationRequired == true,
             awgVersion: Self.awgVersion
         )
-        try cache.save(PreparedTunnelCacheRecord(tunnel: tunnel), locationId: normalizedLocationId, routingMode: effectiveRoutingMode)
+        try Task.checkCancellation()
+        guard try keyStore.getOrCreate() == keyPair else { throw VPNProfileError.profileIdentityMismatch }
+        try cache.save(PreparedTunnelCacheRecord(tunnel: tunnel, accountUserId: accountUserId, localKeyEpoch: keyPair.keyEpoch), locationId: normalizedLocationId, routingMode: effectiveRoutingMode)
         if writeHelperConfig {
             try await writeSanitizedHelperConfig(config)
         }
         return tunnel
     }
 
-    func rotateKey(accessToken: String, currentTunnel: PreparedTunnel?) async throws -> PreparedTunnel? {
+    func rotateKey(accessToken: String, userId: String? = nil, currentTunnel: PreparedTunnel?, writeHelperConfig: Bool = true) async throws -> PreparedTunnel? {
         guard let currentTunnel else { return nil }
         let nextKey = try keyStore.rotate()
         _ = try await api.rotateManagedVpnKey(
@@ -232,18 +294,24 @@ struct VPNProfileService {
         )
         return try await resolveProfile(
             accessToken: accessToken,
+            userId: userId,
             locationId: currentTunnel.locationId,
             routingMode: currentTunnel.routingMode,
-            forceRefresh: true
+            forceRefresh: true,
+            writeHelperConfig: writeHelperConfig
         )
     }
 
-    func writeHelperConfig(for tunnel: PreparedTunnel) async throws {
-        try await writeSanitizedHelperConfig(tunnel.config)
+    func writeHelperConfig(for tunnel: PreparedTunnel, shouldWrite: () -> Bool = { true }) async throws {
+        let sanitized = await Self.sanitizedHelperConfigOffMain(tunnel.config)
+        try Task.checkCancellation()
+        guard shouldWrite() else { throw CancellationError() }
+        try cache.writeHelperConfig(sanitized)
     }
 
     private func writeSanitizedHelperConfig(_ config: String) async throws {
         let sanitized = await Self.sanitizedHelperConfigOffMain(config)
+        try Task.checkCancellation()
         try cache.writeHelperConfig(sanitized)
     }
 
@@ -603,6 +671,7 @@ enum VPNProfileError: LocalizedError {
     case subscriptionInactive
     case deviceRevoked
     case unchangedProfileWithoutCache
+    case profileIdentityMismatch
     case incompleteProfile(String)
 
     var errorDescription: String? {
@@ -613,6 +682,8 @@ enum VPNProfileError: LocalizedError {
             return "Устройство отключено администратором."
         case .unchangedProfileWithoutCache:
             return "Профиль не изменился, но локальный кэш пуст."
+        case .profileIdentityMismatch:
+            return "VPN-профиль больше не соответствует устройству. Повторите подключение."
         case .incompleteProfile(let field):
             return "Управляемый VPN-профиль неполный: \(field)."
         }

@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { Platform } from 'react-native';
 
 import {
@@ -50,8 +50,10 @@ import { dynamicRouteRuntime } from '@/vpn/dynamicRouteRuntime';
 import { routeTransport, type DynamicRouteAttempt, type DynamicRouteCandidate } from '@/vpn/dynamicRouteCore';
 import type { VpnProfile } from '@/vpn/profile';
 import { connectFreshSameLocationProfile } from '@/vpn/sameLocationProfileRecovery';
+import { SessionOperationSupersededError } from '@/vpn/sessionOperation';
 
 type UseVpnConnectionFlowInput = {
+  isCurrentSessionOperation: () => boolean;
   antiLeakEnabled: boolean;
   selectedLocationId: string;
   serverSelectionMode: ServerSelectionMode;
@@ -76,6 +78,7 @@ type UseVpnConnectionFlowInput = {
 };
 
 export function useVpnConnectionFlow({
+  isCurrentSessionOperation,
   antiLeakEnabled,
   selectedLocationId,
   serverSelectionMode,
@@ -90,10 +93,22 @@ export function useVpnConnectionFlow({
   setVpnStatus,
   session,
 }: UseVpnConnectionFlowInput) {
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+  const requireCurrentSession = useCallback(() => {
+    if (!mountedRef.current || !isCurrentSessionOperation()) {
+      throw new SessionOperationSupersededError();
+    }
+  }, [isCurrentSessionOperation]);
 
   const connectProfileWithEndpointFallback = useCallback(async (profile: VpnProfile) => {
+    requireCurrentSession();
     if (session?.accessToken) {
       await withTimeout(prepareClientNetworkDiagnostics(session.accessToken, profile.device?.id), 1_500, 'Optional network observation timed out.').catch(() => undefined);
+      requireCurrentSession();
     }
     if (!vpnProfileAddressMatchesDevice(profile)) {
       throw new Error('VPN connection failed: cached profile address does not match its device assignment.');
@@ -103,8 +118,10 @@ export function useVpnConnectionFlow({
     }
     const endpointAttempts: string[] = [];
     const applicationSelection = await getVpnApplicationSelection();
+    requireCurrentSession();
     if (Platform.OS === 'android' && session?.user.id && session.accessToken) {
       await dynamicRouteRuntime.prepare(session.user.id, session.accessToken);
+      requireCurrentSession();
     }
     const attempts: DynamicRouteAttempt[] = Platform.OS === 'android'
       ? dynamicRouteRuntime.attempts(profile)
@@ -121,6 +138,7 @@ export function useVpnConnectionFlow({
     };
     for (const { profile: attempt, candidate } of attempts) {
       try {
+        requireCurrentSession();
         const endpoint = profileEndpoint(attempt);
         if (endpoint) {
           endpointAttempts.push(endpoint);
@@ -128,6 +146,7 @@ export function useVpnConnectionFlow({
         const previousStatus = Platform.OS === 'android'
           ? await getVpnStatus().catch(() => null)
           : null;
+        requireCurrentSession();
         const nativeStartMs = Date.now();
         const startedStatus = await withTimeout(
           connectVpn(attempt.config, {
@@ -139,6 +158,7 @@ export function useVpnConnectionFlow({
           'VPN connect timed out.',
         );
         const interfaceUpMs = Date.now();
+        requireCurrentSession();
         const status = await waitForVerifiedVpnConnection(startedStatus, getVpnStatus, {
           // The native backend can briefly expose the previous peer timestamp
           // while replacing a tunnel. Require activity from this attempt. The
@@ -147,6 +167,7 @@ export function useVpnConnectionFlow({
           previousHandshakeEpochMillis: previousStatus?.latestHandshakeEpochMillis,
         });
         const verificationCompletedMs = Date.now();
+        requireCurrentSession();
         // TODO(android-route-canary): require DNS and HTTPS over a VPN-bound
         // socket before calling this full data-plane recovery. A plain JS fetch
         // can bypass the tunnel in per-app mode, so it cannot prove this safely.
@@ -165,6 +186,7 @@ export function useVpnConnectionFlow({
           verificationCompletedMs,
         };
       } catch (error) {
+        requireCurrentSession();
         lastError = error;
         if (!isVpnTransportFallbackError(error)) {
           throw error;
@@ -177,7 +199,7 @@ export function useVpnConnectionFlow({
       }
     }
     throw lastError;
-  }, [antiLeakEnabled, session?.accessToken, session?.user.id]);
+  }, [antiLeakEnabled, requireCurrentSession, session?.accessToken, session?.user.id]);
 
   const connectCurrentVpn = useCallback(async ({
     locationId = selectedLocationId,
@@ -186,6 +208,23 @@ export function useVpnConnectionFlow({
     locationId?: string;
     waitForAnimation?: boolean;
   } = {}) => {
+    requireCurrentSession();
+    const resolveCurrentProfile: typeof resolveConnectableVpnProfile = async (...args) => {
+      requireCurrentSession();
+      try {
+        return await resolveConnectableVpnProfile(...args);
+      } finally {
+        requireCurrentSession();
+      }
+    };
+    const connectCurrentProfile = async (candidate: VpnProfile) => {
+      requireCurrentSession();
+      try {
+        return await connectProfileWithEndpointFallback(candidate);
+      } finally {
+        requireCurrentSession();
+      }
+    };
     const tapStartedAt = Date.now();
     void waitForAnimation;
 
@@ -201,7 +240,7 @@ export function useVpnConnectionFlow({
         // two-minute background refresh clear it; handshake verification below
         // still prevents a stale peer from being reported as connected. A failed
         // local attempt is retried with a fresh same-location profile.
-        profile = await resolveConnectableVpnProfile(candidate.id, explicitConnectProfileResolutionOptions);
+        profile = await resolveCurrentProfile(candidate.id, explicitConnectProfileResolutionOptions);
         profileLocationId = candidate.id;
         break;
       } catch (error) {
@@ -222,8 +261,9 @@ export function useVpnConnectionFlow({
     let lastConnectError: unknown;
 
     try {
-      connected = await connectProfileWithEndpointFallback(profile);
+      connected = await connectCurrentProfile(profile);
     } catch (error) {
+      requireCurrentSession();
       if (profile.hotProfileUsed && session?.accessToken) {
         void uploadClientDiagnostics(session.accessToken, {
           reason: 'hot_profile_connect_failed',
@@ -247,9 +287,9 @@ export function useVpnConnectionFlow({
       if (!connected) {
         try {
           connected = await connectFreshSameLocationProfile({
-            connectProfile: connectProfileWithEndpointFallback,
+            connectProfile: connectCurrentProfile,
             locationId: profileLocationId,
-            resolveProfile: resolveConnectableVpnProfile,
+            resolveProfile: resolveCurrentProfile,
           });
           connectedLocationId = profileLocationId;
         } catch (error) {
@@ -264,27 +304,27 @@ export function useVpnConnectionFlow({
         if (connected?.status.state === 'connected' || fallbackLocation.id === profileLocationId) {
           continue;
         }
-        const fallbackProfile = await resolveProfileOrSkipMissing(() => resolveConnectableVpnProfile(fallbackLocation.id, {
+        const fallbackProfile = await resolveProfileOrSkipMissing(() => resolveCurrentProfile(fallbackLocation.id, {
           preferCached: true,
           requestPermission: false,
         }));
         if (!fallbackProfile) continue;
         try {
-          connected = await connectProfileWithEndpointFallback(fallbackProfile);
+          connected = await connectCurrentProfile(fallbackProfile);
           connectedLocationId = fallbackLocation.id;
         } catch (error) {
           lastConnectError = error;
           if (!isVpnTransportFallbackError(error)) {
             throw error;
           }
-          const freshFallbackProfile = await resolveProfileOrSkipMissing(() => resolveConnectableVpnProfile(fallbackLocation.id, {
+          const freshFallbackProfile = await resolveProfileOrSkipMissing(() => resolveCurrentProfile(fallbackLocation.id, {
             forceRefresh: true,
             preferCached: false,
             requestPermission: false,
           }));
           if (!freshFallbackProfile) continue;
           try {
-            connected = await connectProfileWithEndpointFallback(freshFallbackProfile);
+            connected = await connectCurrentProfile(freshFallbackProfile);
             connectedLocationId = fallbackLocation.id;
           } catch (freshError) {
             lastConnectError = freshError;
@@ -299,6 +339,9 @@ export function useVpnConnectionFlow({
         throw lastConnectError ?? new Error('VPN не подключился.');
       }
     } catch (error) {
+      // Logout owns teardown. A completion from an older login must never
+      // disconnect the tunnel of the account that signed in afterwards.
+      requireCurrentSession();
       // Profile/API failures during recovery must not leave an unverified
       // native attempt running. Admission errors retain the previous tunnel.
       await cleanupFailedVpnConnection(antiLeakEnabled, disconnectVpn, error).catch(() => undefined);
@@ -307,10 +350,12 @@ export function useVpnConnectionFlow({
 
     if (connectedLocationId !== selectedLocationId) {
       const persistedLocationId = await setSelectedVpnLocation(connectedLocationId);
+      requireCurrentSession();
       setSelectedLocationId(persistedLocationId);
       cacheProfile(persistedLocationId, connected.profile);
     }
 
+    requireCurrentSession();
     setActiveProfile(connected.profile);
     if (session?.user.id) {
       void saveHotVpnProfile(session.user.id, connected.profile.locationId || connectedLocationId, connected.profile, {
@@ -355,6 +400,7 @@ export function useVpnConnectionFlow({
     clientLatencyMs,
     connectProfileWithEndpointFallback,
     reportVpnConnectEvent,
+    requireCurrentSession,
     resolveConnectableVpnProfile,
     selectedLocationId,
     setSelectedLocationId,

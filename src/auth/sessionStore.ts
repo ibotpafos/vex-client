@@ -1,17 +1,19 @@
 import * as SecureStore from '../native/secureStore';
 import type { AuthSession } from '../api/vexApi';
 import { resetVpnProfileCache } from '../vpn/profile';
-import { loadSessionFromStorage, saveSessionToStorage } from './sessionStoreCore';
+import { createSessionStore } from './sessionStoreCore';
+
+const store = createSessionStore(SecureStore);
 
 export async function loadSession(): Promise<AuthSession | null> {
-  return loadSessionFromStorage(SecureStore);
+  return store.load();
 }
 
 export async function saveSession(session: AuthSession): Promise<void> {
-  await saveSessionToStorage(session, SecureStore);
+  await store.save(session);
 }
 
 export async function clearSession(): Promise<void> {
   resetVpnProfileCache();
-  await SecureStore.clearSensitiveStorageHistory();
+  await store.clear();
 }

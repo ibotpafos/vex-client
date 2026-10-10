@@ -129,6 +129,10 @@ jobs:
           fetch-depth: 0
       - name: Check selected Swift toolchain
         run: swift --version
+      - name: Test isolated iOS tunnel transition ordering
+        run: |
+          bash scripts/test_ios_tunnel_transitions.sh
+          ruby -c modules/vex-vpn/ios/VexVpn.podspec
       - name: Resolve Swift package
         run: swift package --package-path macos-native resolve
       - name: Build native macOS client

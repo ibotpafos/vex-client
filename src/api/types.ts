@@ -202,6 +202,7 @@ export type PreparedTunnel = {
 };
 
 export type PreparedTunnelOptions = {
+  isCurrentSessionOperation?: () => boolean;
   cachedDevice?: VpnDevice;
   cachedConfig?: string;
   knownVersion?: number;

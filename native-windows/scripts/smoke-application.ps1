@@ -815,6 +815,12 @@ namespace Vex.Windows.Smoke {
             }
             Assert-PrimaryInstance
         }
+        # Tray authentication recovery deliberately opens Home. Subsequent
+        # shell activations preserve that page, so capture its actual controls.
+        $captureControlIds = if ($PreviewMode -eq 'signed-out') {
+            @('AccountSignInTitle', 'WebsiteSignInButton')
+        }
+        else { @('PowerButton', 'ServerPickerButton') }
         $result.stage = 'single-instance'
         Invoke-RedirectedLaunch -Arguments $previewArguments
         $result.single_instance_redirected = $true

@@ -3,6 +3,7 @@ import { Platform } from 'react-native';
 import { useCallback, useMemo } from 'react';
 import { shouldOfferAppUpdate, updateCheckChannel } from '@/api/updatePreflight';
 import { appUpdateCheck, type AppUpdateCheckResult } from '@/api/vexApi';
+import { createApiQueryRetry } from '@/api/queryRetry';
 import { getAppInfo, getOrCreateDeviceId } from '@/native/appInfo';
 
 const appUpdatePollIntervalMs = 5 * 60_000;
@@ -33,7 +34,7 @@ export function useMobileAppUpdateQuery(targetPlatform: 'android' | 'ios', build
     refetchOnReconnect: true,
     refetchInterval: appUpdatePollIntervalMs,
     refetchIntervalInBackground: false,
-    retry: 2,
+    retry: createApiQueryRetry(2),
     select: (update) => shouldOfferAppUpdate(update, buildNumber)
       ? update
       : { ...update, required: false, updateAvailable: false },

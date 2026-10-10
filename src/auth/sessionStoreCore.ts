@@ -9,6 +9,27 @@ export type SessionStorageAdapter = {
   deleteItemAsync: (key: string) => Promise<void>;
 };
 
+export function createSessionMutationQueue() {
+  let tail: Promise<unknown> = Promise.resolve();
+  return <T>(operation: () => Promise<T>): Promise<T> => {
+    const pending = tail.then(operation, operation);
+    tail = pending.then(() => undefined, () => undefined);
+    return pending;
+  };
+}
+
+export function createSessionStore(storage: SessionStorageAdapter & { clearSensitiveStorageHistory: () => Promise<void> }) {
+  // A refresh writes the primary session and its recovery history separately.
+  // Queue the whole mutation so logout and the next login always finish after
+  // both old writes; a rejected operation must not poison subsequent cleanup.
+  const run = createSessionMutationQueue();
+  return {
+    load: () => run(() => loadSessionFromStorage(storage)),
+    save: (session: AuthSession) => run(() => saveSessionToStorage(session, storage)),
+    clear: () => run(() => storage.clearSensitiveStorageHistory()),
+  };
+}
+
 export async function loadSessionFromStorage(storage: SessionStorageAdapter): Promise<AuthSession | null> {
   const raw = await storage.getItemAsync(sessionKey);
   const primarySession = parseStoredSession(raw);

@@ -217,38 +217,50 @@ private final class WireGuardKeyStore {
 }
 
 private final class IosTunnelStore {
-  private let providerBundleIdentifier = "com.vexguard.app.tunnel"
-  private let tunnelDescription = "VEX AmneziaWG"
+  private static let providerBundleIdentifier = "com.vexguard.app.tunnel"
+  private static let tunnelDescription = "VEX AmneziaWG"
+  private let transition: IosTunnelTransition<NETunnelProviderManager>
+
+  init() {
+    transition = IosTunnelTransition(operations: IosTunnelOperations(
+      loadOrCreate: { try await Self.loadOrCreateManager() },
+      loadExisting: { try await Self.loadExistingManager() },
+      configure: { manager, config in
+        let tunnelProtocol = NETunnelProviderProtocol()
+        tunnelProtocol.providerBundleIdentifier = Self.providerBundleIdentifier
+        tunnelProtocol.serverAddress = Self.serverAddress(from: config)
+        tunnelProtocol.providerConfiguration = [
+          "WgQuickConfig": config,
+          "wgQuickConfig": config,
+          "createdAt": ISO8601DateFormatter().string(from: Date())
+        ]
+        manager.localizedDescription = Self.tunnelDescription
+        manager.protocolConfiguration = tunnelProtocol
+        manager.isEnabled = true
+      },
+      save: { try await Self.save($0) },
+      reload: { try await Self.loadFromPreferences($0) },
+      start: { manager in
+        try manager.connection.startVPNTunnel()
+        VexVpnDiagnostics.record("ios_tunnel_start_requested", details: ["providerBundleIdentifier": Self.providerBundleIdentifier])
+      },
+      stop: { manager in
+        manager.connection.stopVPNTunnel()
+        VexVpnDiagnostics.record("ios_tunnel_stop_requested")
+      }
+    ))
+  }
 
   func connect(config: String) async throws {
-    let manager = try await loadOrCreateManager()
-    let tunnelProtocol = NETunnelProviderProtocol()
-    tunnelProtocol.providerBundleIdentifier = providerBundleIdentifier
-    tunnelProtocol.serverAddress = Self.serverAddress(from: config)
-    tunnelProtocol.providerConfiguration = [
-      "WgQuickConfig": config,
-      "wgQuickConfig": config,
-      "createdAt": ISO8601DateFormatter().string(from: Date())
-    ]
-
-    manager.localizedDescription = tunnelDescription
-    manager.protocolConfiguration = tunnelProtocol
-    manager.isEnabled = true
-
-    try await save(manager)
-    try await loadFromPreferences(manager)
-    try manager.connection.startVPNTunnel()
-    VexVpnDiagnostics.record("ios_tunnel_start_requested", details: ["providerBundleIdentifier": providerBundleIdentifier])
+    try await transition.connect(config: config)
   }
 
   func disconnect() async throws {
-    let manager = try await loadExistingManager()
-    manager?.connection.stopVPNTunnel()
-    VexVpnDiagnostics.record("ios_tunnel_stop_requested")
+    try await transition.disconnect()
   }
 
   func currentStatus() async -> [String: Any] {
-    let manager = try? await loadExistingManager()
+    let manager = try? await Self.loadExistingManager()
     let status = manager?.connection.status ?? .disconnected
     var result: [String: Any] = [
       "state": Self.stateName(status),
@@ -263,14 +275,14 @@ private final class IosTunnelStore {
     return result
   }
 
-  private func loadOrCreateManager() async throws -> NETunnelProviderManager {
+  private static func loadOrCreateManager() async throws -> NETunnelProviderManager {
     if let manager = try await loadExistingManager() {
       return manager
     }
     return NETunnelProviderManager()
   }
 
-  private func loadExistingManager() async throws -> NETunnelProviderManager? {
+  private static func loadExistingManager() async throws -> NETunnelProviderManager? {
     let managers = try await NETunnelProviderManager.loadAllFromPreferences()
     return managers.first { manager in
       guard let tunnelProtocol = manager.protocolConfiguration as? NETunnelProviderProtocol else {
@@ -280,7 +292,7 @@ private final class IosTunnelStore {
     }
   }
 
-  private func save(_ manager: NETunnelProviderManager) async throws {
+  private static func save(_ manager: NETunnelProviderManager) async throws {
     try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
       manager.saveToPreferences { error in
         if let error {
@@ -293,7 +305,7 @@ private final class IosTunnelStore {
     }
   }
 
-  private func loadFromPreferences(_ manager: NETunnelProviderManager) async throws {
+  private static func loadFromPreferences(_ manager: NETunnelProviderManager) async throws {
     try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
       manager.loadFromPreferences { error in
         if let error {

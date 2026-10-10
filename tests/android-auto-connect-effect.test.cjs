@@ -32,6 +32,7 @@ async function check({ shouldFail, cancelBeforeStart }) {
   const preference = new Promise((resolve) => { releasePreference = resolve; });
   const context = {
     Platform: { OS: 'android' },
+    isCurrentSessionOperation: () => true,
     autoConnectAttemptedRef: { current: false },
     vpnOperationInFlightRef: { current: false },
     isVpnBusy: false,
@@ -72,6 +73,7 @@ async function checkManualIntent({ initiallyConnected, cancelWhileConnecting = f
   const preference = deferPreference ? new Promise((resolve) => { releasePreference = resolve; }) : Promise.resolve(true);
   const context = {
     Platform: { OS: 'android' }, autoConnectAttemptedRef: { current: false },
+    isCurrentSessionOperation: () => true,
     vpnOperationInFlightRef: { current: false }, vpnConnectGenerationRef: { current: 0 },
     isVpnBusy: cancelWhileConnecting, connectionPhase: cancelWhileConnecting ? 'connecting' : 'connected',
     isConnected: initiallyConnected, isLeakBlocked: false, isKeyRotationBusy: false,

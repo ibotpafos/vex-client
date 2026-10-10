@@ -194,6 +194,7 @@ export interface DeviceUsageDTOSpec {
   historical_rx_bytes: number
   historical_tx_bytes: number
   historical_total_bytes: number
+  traffic_history_pending?: boolean
   last_nonzero_traffic_at?: null | string
   rate_limit_mbps?: null | number
   traffic_priority: number
@@ -347,6 +348,7 @@ export interface SupportMessageDTOSpec {
   sender: string
   author_id?: string
   body: string
+  attachment?: null | { id: string } & { content_type: string } & { size: number }
   created_at: string
 }
 type _SupportMessageDTOContract = VexApiSpecExpect<SupportMessageDTOSpec extends SupportMessageDTO ? true : false>

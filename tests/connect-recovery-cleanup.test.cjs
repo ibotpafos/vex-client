@@ -65,6 +65,7 @@ async function run(scenario) {
   const isMissing = (error) => error?.status === 404;
   const context = {
     Date, Error,
+    requireCurrentSession: () => {},
     selectedLocationId: 'old-selection', serverSelectionMode: 'auto',
     availableLocations: [{ id: 'selected' }, { id: 'alternate' }],
     chooseBestVpnLocation: () => ({ id: 'selected' }),

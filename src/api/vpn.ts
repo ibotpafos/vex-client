@@ -41,13 +41,17 @@ import type { StagedDevicePSKProfile } from '../vpn/devicePskRotation';
 import { normalizeLocationCatalog } from '../vpn/locationCatalog';
 import { requireVpnLocationId } from '../vpn/locationId';
 import { canRevalidateDevice } from '../vpn/profileRevalidation';
+import { SessionOperationSupersededError } from '../vpn/sessionOperation';
 
 const mobileProtocol = 'amneziawg';
 
 export async function preparedTunnel(accessToken: string, client: VpnClientDescriptor = currentVpnClient(), options: PreparedTunnelOptions = {}): Promise<PreparedTunnel> {
+  requireCurrentSession(options.isCurrentSessionOperation);
   try {
     return await managedVpnProfile(accessToken, client, options);
   } catch (error) {
+    requireCurrentSession(options.isCurrentSessionOperation);
+    if (error instanceof SessionOperationSupersededError) throw error;
     if (requiresManagedNativeProfile(client)) {
       throw error;
     }
@@ -96,15 +100,21 @@ async function preparedTunnelFromDeviceConfig(accessToken: string, client: VpnCl
 }
 
 async function managedVpnProfile(accessToken: string, client: VpnClientDescriptor, options: PreparedTunnelOptions): Promise<PreparedTunnel> {
+  const requireCurrentOperation = () => requireCurrentSession(options.isCurrentSessionOperation);
+  requireCurrentOperation();
   const startedAtMs = Date.now();
   const [versionHeaders, initialKeyPair, runtimeDeviceId] = await Promise.all([
     clientVersionHeaders(), getOrCreateWireGuardKeyPair(), getOrCreateDeviceId(),
   ]);
+  requireCurrentOperation();
   const resolutionTiming = { startedAtMs, localPrepareMs: Math.max(0, Date.now() - startedAtMs), deviceLookupMs: 0, profileRequestMs: 0 };
   const requestProfile = async (deviceId: string, knownVersion?: number) => {
     const started = Date.now();
     try {
-      return await requestManagedVpnProfile(accessToken, deviceId, locationId, routingMode, bypassRegion, versionHeaders, knownVersion);
+      requireCurrentOperation();
+      const response = await requestManagedVpnProfile(accessToken, deviceId, locationId, routingMode, bypassRegion, versionHeaders, knownVersion);
+      requireCurrentOperation();
+      return response;
     } finally {
       resolutionTiming.profileRequestMs += Math.max(0, Date.now() - started);
     }
@@ -144,6 +154,7 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
     // transactional key-recovery path. Unconditional repair always enters here.
     const lookupStarted = Date.now();
     const allDevices = await vpnDevices(accessToken);
+    requireCurrentOperation();
     resolutionTiming.deviceLookupMs = Math.max(0, Date.now() - lookupStarted);
     device = nativeVpnDeviceForClient(allDevices, locationId, externalDeviceId, baseExternalDeviceId);
     if (!device) {
@@ -152,18 +163,23 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
         externalDeviceId,
         () => registerNativeDevice(accessToken, client, keyPair, locationId, externalDeviceId),
       );
+      requireCurrentOperation();
     }
     if (deviceNeedsLocalKeySync(device, keyPair)) {
       try {
         device = await syncManagedVpnKey(accessToken, device.id, keyPair);
+        requireCurrentOperation();
       } catch (error) {
+        requireCurrentOperation();
         if (!isKeyEpochMismatchError(error)) {
           throw error;
         }
         // Web authorization can create a placeholder before the native key.
         // Recover through the normal transactional rotation to the next epoch.
-        device = await rotateManagedVpnKey(accessToken, device.id, device.keyEpoch);
+        device = await rotateManagedVpnKey(accessToken, device.id, device.keyEpoch, options.isCurrentSessionOperation);
+        requireCurrentOperation();
         keyPair = await getOrCreateWireGuardKeyPair();
+        requireCurrentOperation();
       }
     }
     revalidateCachedConfig = Boolean(options.cachedConfig) && canRevalidateDevice(options.cachedDevice, device, keyPair?.publicKey ?? '');
@@ -374,8 +390,10 @@ export async function acknowledgeStagedDevicePSKProfile(
   }
 }
 
-export async function rotateManagedVpnKey(accessToken: string, deviceId: string, serverCurrentEpoch?: number): Promise<VpnDevice> {
+export async function rotateManagedVpnKey(accessToken: string, deviceId: string, serverCurrentEpoch?: number, isCurrentSessionOperation?: () => boolean): Promise<VpnDevice> {
+  requireCurrentSession(isCurrentSessionOperation);
   const generatedKeyPair = await generateWireGuardKeyPair();
+  requireCurrentSession(isCurrentSessionOperation);
   if (!generatedKeyPair?.publicKey) {
     throw new Error('Локальный WireGuard ключ недоступен.');
   }
@@ -393,8 +411,16 @@ export async function rotateManagedVpnKey(accessToken: string, deviceId: string,
       key_epoch: keyPair.keyEpoch ?? 1,
     },
   });
+  requireCurrentSession(isCurrentSessionOperation);
   await replaceWireGuardKeyPair(keyPair);
+  requireCurrentSession(isCurrentSessionOperation);
   return parseDevice(response.device);
+}
+
+function requireCurrentSession(isCurrentSessionOperation?: () => boolean): void {
+  if (isCurrentSessionOperation && !isCurrentSessionOperation()) {
+    throw new SessionOperationSupersededError();
+  }
 }
 
 async function syncManagedVpnKey(accessToken: string, deviceId: string, keyPair: WireGuardKeyPair): Promise<VpnDevice> {

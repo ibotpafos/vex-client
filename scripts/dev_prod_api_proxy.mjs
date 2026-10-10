@@ -116,6 +116,7 @@ function applyCors(response, origin) {
   }
   response.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
   response.setHeader('Access-Control-Allow-Headers', 'Authorization,Content-Type,Accept,Idempotency-Key,X-Vex-Platform,X-Vex-App-Version,X-Vex-Build-Number,X-Vex-Core-Version,X-Vex-Channel,X-Vex-Device-ID,X-Vex-OS-Version,X-Vex-API-Client-Version,X-Vex-Config-Schema-Version');
+  response.setHeader('Access-Control-Expose-Headers', 'Retry-After');
 }
 
 function forwardedHeaders(headers) {
@@ -146,6 +147,10 @@ function responseHeadersFor(headers, origin) {
   if (typeof origin === 'string' && allowedOriginPattern.test(origin)) {
     next['Access-Control-Allow-Origin'] = origin;
     next.Vary = 'Origin';
+    const exposed = next['access-control-expose-headers'] || '';
+    next['access-control-expose-headers'] = [...new Set(
+      [...exposed.split(',').map((value) => value.trim()).filter(Boolean), 'Retry-After'],
+    )].join(', ');
   }
   return next;
 }

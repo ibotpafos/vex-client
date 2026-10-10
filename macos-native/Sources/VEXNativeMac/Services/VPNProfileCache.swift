@@ -29,16 +29,33 @@ struct LastTunnelEndpointStore {
 
 struct VPNProfileCache {
     private let fileManager = FileManager.default
+    private let directoryURL: URL?
+    private let helperConfigOverrideURL: URL?
 
-    func load(locationId: String, routingMode: VpnRoutingMode) -> PreparedTunnelCacheRecord? {
-        guard let data = try? Data(contentsOf: cacheURL(locationId: locationId, routingMode: routingMode)) else {
+    init(directoryURL: URL? = nil, helperConfigURL: URL? = nil) {
+        self.directoryURL = directoryURL
+        self.helperConfigOverrideURL = helperConfigURL
+    }
+
+    func load(locationId: String, routingMode: VpnRoutingMode, accountUserId: String? = nil) -> PreparedTunnelCacheRecord? {
+        if let accountUserId,
+           let record = loadRecord(at: cacheURL(locationId: locationId, routingMode: routingMode, accountUserId: accountUserId)) {
+            return record
+        }
+        // Keep legacy records as migration hints. The service must qualify their
+        // account, device and local key before using their configuration/version.
+        return loadRecord(at: cacheURL(locationId: locationId, routingMode: routingMode))
+    }
+
+    private func loadRecord(at url: URL) -> PreparedTunnelCacheRecord? {
+        guard let data = try? Data(contentsOf: url) else {
             return nil
         }
         return try? JSONDecoder().decode(PreparedTunnelCacheRecord.self, from: data)
     }
 
     func save(_ record: PreparedTunnelCacheRecord, locationId: String, routingMode: VpnRoutingMode) throws {
-        let url = cacheURL(locationId: locationId, routingMode: routingMode)
+        let url = cacheURL(locationId: locationId, routingMode: routingMode, accountUserId: record.accountUserId)
         try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let data = try JSONEncoder().encode(record)
         try data.write(to: url, options: [.atomic])
@@ -67,19 +84,26 @@ struct VPNProfileCache {
         return config
     }
 
-    private func cacheURL(locationId: String, routingMode: VpnRoutingMode) -> URL {
-        appDataURL()
-            .appendingPathComponent("profiles", isDirectory: true)
-            .appendingPathComponent("\(normalized(locationId))-\(routingMode.rawValue).json")
+    private func cacheURL(locationId: String, routingMode: VpnRoutingMode, accountUserId: String? = nil) -> URL {
+        var directory = appDataURL().appendingPathComponent("profiles", isDirectory: true)
+        if let accountUserId {
+            // Encode raw UTF8 bytes without case folding or Unicode normalization.
+            // Lowercase hex stays injective on case-insensitive macOS volumes;
+            // base64url names can collide there ("_-" -> Xy0, "ō" -> xY0).
+            let namespace = accountUserId.utf8.map { String(format: "%02x", $0) }.joined()
+            directory.appendPathComponent("account-\(namespace)", isDirectory: true)
+        }
+        return directory.appendingPathComponent("\(normalized(locationId))-\(routingMode.rawValue).json")
     }
 
     private func helperConfigURL() -> URL {
-        FileManager.default.homeDirectoryForCurrentUser
+        helperConfigOverrideURL ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".vex", isDirectory: true)
             .appendingPathComponent("vex.conf")
     }
 
     private func appDataURL() -> URL {
+        if let directoryURL { return directoryURL }
         let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
         return base.appendingPathComponent("VEX Native", isDirectory: true)
@@ -95,6 +119,9 @@ struct VPNProfileCache {
 }
 
 struct PreparedTunnelCacheRecord: Codable, Equatable {
+    var accountUserId: String?
+    var localKeyEpoch: Int?
+    var rotationRequired: Bool?
     var device: VpnDevice
     var config: String
     var locationId: String
@@ -107,7 +134,10 @@ struct PreparedTunnelCacheRecord: Codable, Equatable {
     var fetchedAt: Date?
     var awgVersion: Int?
 
-    init(tunnel: PreparedTunnel) {
+    init(tunnel: PreparedTunnel, accountUserId: String? = nil, localKeyEpoch: Int? = nil) {
+        self.accountUserId = accountUserId
+        self.localKeyEpoch = localKeyEpoch
+        rotationRequired = tunnel.rotationRequired
         device = tunnel.device
         config = tunnel.config
         locationId = tunnel.locationId
@@ -141,7 +171,7 @@ struct PreparedTunnelCacheRecord: Codable, Equatable {
             bypassRangesCount: bypassRangesCount,
             bypassDomainsCount: bypassDomainsCount,
             routingPolicyVersion: routingPolicyVersion,
-            rotationRequired: false,
+            rotationRequired: rotationRequired ?? false,
             awgVersion: awgVersion ?? 3
         )
     }

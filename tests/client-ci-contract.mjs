@@ -6,10 +6,14 @@ const workflow = process.argv[2] ?? '.github/workflows/native-reliability-ci.yml
 const document = YAML.parseDocument(fs.readFileSync(workflow, 'utf8'));
 assert.equal(document.errors.length, 0, 'Workflow must be valid YAML');
 const config = document.toJS();
-const lanes = { shared: 'ubuntu-24.04', android: 'ubuntu-24.04', macos: 'macos-15' };
+const packageConfig = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+const lanes = { shared: 'ubuntu-24.04', android: 'ubuntu-24.04', macos: 'macos-26' };
 
-function violations(value) {
+function violations(value, packageValue = packageConfig) {
   const failures = [];
+  const autolinking = packageValue.expo?.autolinking;
+  if (JSON.stringify(autolinking?.ios?.buildFromSource) !== JSON.stringify(['expo-modules-core'])
+    || autolinking?.buildFromSource !== undefined || autolinking?.android?.buildFromSource !== undefined) failures.push('iOS-only relocatable ExpoModulesCore source selection');
   if (value.permissions?.contents !== 'read' || Object.values(value.permissions ?? {}).includes('write')) failures.push('read-only permissions');
   if (!value.on?.pull_request || !value.on?.push || !Object.hasOwn(value.on ?? {}, 'workflow_dispatch')) failures.push('PR/main/manual triggers');
   if (!value.concurrency?.group || value.concurrency?.['cancel-in-progress'] !== true) failures.push('bounded concurrency');
@@ -52,6 +56,12 @@ function violations(value) {
     if (lane === 'android' && /(?:^|\n)\s*sdkmanager\s/.test(commands)) failures.push('explicit Android SDK tool path');
     if (lane === 'android' && !(job.steps ?? []).some(step => step.uses?.startsWith('actions/setup-go@') && step.with?.['go-version'] === '1.25.x')) failures.push('pinned upstream Go toolchain floor');
     if (lane === 'macos') {
+      if (job.env?.DEVELOPER_DIR !== '/Applications/Xcode_26.6.app/Contents/Developer') failures.push('supported pinned Xcode toolchain');
+      if (!(job.steps ?? []).some(step => step.uses === 'actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16'
+        && step.with?.['go-version'] === '1.26.9' && step.with?.cache === false)) failures.push('pinned iOS bridge Go toolchain');
+      const ios = (job.steps ?? []).find(step => step.name === 'Build the canonical iOS simulator app without signing');
+      if (ios?.run?.trim() !== 'bash scripts/test_ios_simulator_build.sh'
+        || !(ios['timeout-minutes'] > 0 && ios['timeout-minutes'] <= 40)) failures.push('bounded canonical iOS app qualification');
       if (!(job.steps ?? []).some(step => step.run?.trim() === 'swift test --package-path macos-native')) failures.push('complete macOS suite');
       const transaction = (job.steps ?? []).find(step => step.id === 'contract');
       if (transaction?.if !== "github.event_name == 'pull_request'"
@@ -78,6 +88,11 @@ if (failures.length) {
     value => { value.jobs.ios = structuredClone(value.jobs.macos); },
     value => { value.jobs.windows = structuredClone(value.jobs.macos); },
     value => { value.jobs.android['runs-on'] = 'ubuntu-latest-16-cores'; },
+    value => { value.jobs.macos['runs-on'] = 'macos-26-xlarge'; },
+    value => { value.jobs.macos.env.DEVELOPER_DIR = '/Applications/Xcode_26.3.app/Contents/Developer'; },
+    value => { value.jobs.macos.steps.find(step => step.uses?.startsWith('actions/setup-go@')).with['go-version'] = '1.25.x'; },
+    value => { value.jobs.macos.steps.find(step => step.name === 'Build the canonical iOS simulator app without signing').run = 'bash scripts/test_ios_module_compile.sh'; },
+    value => { value.jobs.macos.steps.find(step => step.name === 'Build the canonical iOS simulator app without signing').run += ' --regenerate-lock'; },
     value => { value.jobs.android.steps.find(step => step.name === 'Install locked Android build components').run = 'sdkmanager \"platform-tools\"'; },
     value => { value.jobs.android.steps.find(step => step.uses?.startsWith('actions/setup-go@')).with['go-version'] = '1.24.x'; },
     value => { value.permissions.contents = 'write'; },
@@ -87,11 +102,15 @@ if (failures.length) {
     value => { value.jobs.macos.steps.find(step => step.name === 'Test all native macOS behavior').run += ' --filter SparkleUpdateTests'; },
     value => { value.jobs.macos.steps.find(step => step.id === 'contract').if = 'always()'; },
     value => { value.jobs.macos.steps.find(step => step.name === 'Retain only helper transaction evidence').with.path += 'dist/**'; },
+    (value, packageValue) => { delete packageValue.expo.autolinking.ios.buildFromSource; },
+    (value, packageValue) => { packageValue.expo.autolinking.buildFromSource = ['expo-modules-core']; },
+    (value, packageValue) => { packageValue.expo.autolinking.android = { buildFromSource: ['expo-modules-core'] }; },
   ];
   for (const mutate of mutations) {
     const candidate = structuredClone(config);
-    mutate(candidate);
-    assert.ok(violations(candidate).length > 0, 'Unsafe/incomplete CI fixture must be rejected');
+    const packageCandidate = structuredClone(packageConfig);
+    mutate(candidate, packageCandidate);
+    assert.ok(violations(candidate, packageCandidate).length > 0, 'Unsafe/incomplete CI fixture must be rejected');
   }
   console.log(JSON.stringify({ status: 'pass', lanes: Object.keys(lanes), negativeFixtures: mutations.length }));
 }

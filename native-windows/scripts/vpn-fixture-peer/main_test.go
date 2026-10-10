@@ -6,10 +6,14 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
 	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +23,75 @@ import (
 	"github.com/amnezia-vpn/amneziawg-go/v3/tun/netstack"
 	"golang.org/x/net/dns/dnsmessage"
 )
+
+// Exercise the actual CLI argument admission and startup used by Windows CI.
+// No adapter, route or firewall is created; the peer remains a local netstack.
+func TestPeerCLIExtendedLifetime(t *testing.T) {
+	buildDirectory := t.TempDir()
+	peerPath := filepath.Join(buildDirectory, "qualified-peer.exe")
+	buildContext, cancelBuild := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancelBuild()
+	build := exec.CommandContext(buildContext, "go", "build", "-trimpath", "-buildvcs=false", "-o", peerPath, ".")
+	if err := build.Run(); err != nil {
+		t.Fatal("qualified peer CLI build failed")
+	}
+
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, "owned-fixture"), []byte("test-owned"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	peer := exec.CommandContext(ctx, peerPath, "-directory", directory, "-lifetime", "420s")
+	if err := peer.Start(); err != nil {
+		t.Fatal("qualified peer CLI did not start")
+	}
+	done := make(chan error, 1)
+	go func() { done <- peer.Wait() }()
+	t.Cleanup(func() {
+		_ = peer.Process.Kill() // Only the exact child started above is owned.
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("owned peer process did not terminate")
+		}
+	})
+	ready := false
+	for !ready {
+		if data, err := os.ReadFile(filepath.Join(directory, "manifest.json")); err == nil {
+			var manifest struct {
+				Schema string `json:"schema"`
+			}
+			if json.Unmarshal(data, &manifest) == nil && manifest.Schema == "vex.windows-vpn-fixture.v1" {
+				ready = true
+				break
+			}
+		}
+		select {
+		case <-done:
+			// Keep cleanup's Wait result available without logging CLI output.
+			done <- nil
+			t.Fatal("420-second peer exited before readiness")
+		case <-ctx.Done():
+			t.Fatal("420-second peer did not become ready within its startup bound")
+		case <-time.After(25 * time.Millisecond):
+		}
+	}
+
+	rejectedDirectory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(rejectedDirectory, "owned-fixture"), []byte("test-owned"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	rejectionContext, cancelRejection := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancelRejection()
+	rejected := exec.CommandContext(rejectionContext, peerPath, "-directory", rejectedDirectory, "-lifetime", "421s")
+	if err := rejected.Run(); err == nil || rejectionContext.Err() != nil {
+		t.Fatal("peer CLI did not enforce its finite 420-second maximum")
+	}
+	if _, err := os.Stat(filepath.Join(rejectedDirectory, "manifest.json")); !os.IsNotExist(err) {
+		t.Fatal("over-budget peer created fixture state")
+	}
+}
 
 func TestEncryptedDNSAndHTTPS(t *testing.T) {
 	t.Run("loopback", func(t *testing.T) { testEncryptedDNSAndHTTPSAt(t, fixtureLoopback) })

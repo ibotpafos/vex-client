@@ -427,7 +427,7 @@ func run() error {
 	lifetime := flag.Duration("lifetime", 180*time.Second, "finite maximum fixture lifetime")
 	endpointText := flag.String("endpoint-address", "127.0.0.1", "already assigned host IPv4 for the isolated peer")
 	flag.Parse()
-	if *directory == "" || *lifetime < 10*time.Second || *lifetime > 5*time.Minute {
+	if *directory == "" || *lifetime < 10*time.Second || *lifetime > 7*time.Minute {
 		return errors.New("invalid fixture options")
 	}
 	if _, err := os.Stat(filepath.Join(*directory, "owned-fixture")); err != nil {

@@ -1,10 +1,12 @@
 import SwiftUI
 
 struct FocusPulseHero: View {
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     let status: VpnStatus
     let requiresHelperInstall: Bool
     let installationPhase: VEXHelperInstallationPhase
     let isBusy: Bool
+    let selectedLocation: VpnLocation?
     let action: () -> Void
 
     @State private var rxSpeedSamples: [CGFloat] = []
@@ -48,42 +50,118 @@ struct FocusPulseHero: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            FocusPulseTrafficCard(
-                title: "Получено",
-                bytes: status.rxBytes,
-                systemName: "arrow.down",
-                samples: rxSpeedSamples
-            )
+        ZStack {
+            heroArtwork
 
-            Spacer(minLength: 36)
+            HStack(spacing: 0) {
+                FocusPulseTrafficCard(
+                    title: "Получено",
+                    bytes: status.rxBytes,
+                    systemName: "arrow.down",
+                    samples: rxSpeedSamples
+                )
+                .offset(y: 16)
 
-            FocusPulsePowerControl(
-                status: status,
-                requiresHelperInstall: requiresHelperInstall,
-                installationPhase: installationPhase,
-                isBusy: isBusy,
-                rxLevel: rxSpeedLevel,
-                action: action
-            )
-            .frame(width: 244)
-            .offset(y: 14)
+                Spacer(minLength: 26)
 
-            Spacer(minLength: 36)
+                FocusPulsePowerControl(
+                    status: status,
+                    requiresHelperInstall: requiresHelperInstall,
+                    installationPhase: installationPhase,
+                    isBusy: isBusy,
+                    rxLevel: rxSpeedLevel,
+                    selectedLocation: selectedLocation,
+                    action: action
+                )
+                .frame(width: 300)
+                .offset(y: 30)
 
-            FocusPulseTrafficCard(
-                title: "Отправлено",
-                bytes: status.txBytes,
-                systemName: "arrow.up",
-                samples: txSpeedSamples
-            )
+                Spacer(minLength: 26)
+
+                FocusPulseTrafficCard(
+                    title: "Отправлено",
+                    bytes: status.txBytes,
+                    systemName: "arrow.up",
+                    samples: txSpeedSamples
+                )
+                .offset(y: 16)
+            }
+            .padding(.horizontal, 28)
         }
-        .frame(maxWidth: 752)
         .frame(maxWidth: .infinity)
-        .frame(height: 252)
+        .frame(height: 294)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.white.opacity(0.10), lineWidth: 1)
+        }
+        .shadow(color: Color.black.opacity(0.24), radius: 22, y: 10)
+        .animation(photoAnimation, value: selectedArtworkName)
         .onChange(of: status.rxBytes, initial: true) { _, _ in recordRxSample() }
         .onChange(of: status.txBytes, initial: true) { _, _ in recordTxSample() }
         .accessibilityElement(children: .contain)
+    }
+
+    @ViewBuilder
+    private var heroArtwork: some View {
+        ZStack {
+            if let assetName = selectedArtworkName {
+                BundleImage(name: assetName, contentMode: .fill)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+                    .id(assetName)
+                    .transition(photoTransition)
+            } else {
+                LinearGradient(
+                    colors: [Color.vexPanelStrong, Color.vexBackground],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .transition(.opacity)
+            }
+
+            LinearGradient(
+                colors: [
+                    Color.vexBackground.opacity(0.36),
+                    Color.vexBackground.opacity(0.18),
+                    Color.vexBackground.opacity(0.70),
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+
+            LinearGradient(
+                colors: [
+                    Color.vexBackground.opacity(0.70),
+                    Color.clear,
+                    Color.vexBackground.opacity(0.66),
+                ],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+        }
+    }
+
+    private var selectedArtworkName: String? {
+        selectedLocation.flatMap {
+            LocationPhotoArtwork.assetName(countryCode: $0.countryCode)
+        }
+    }
+
+    private var photoAnimation: Animation {
+        .easeInOut(
+            duration: FocusPulsePresentation.photoTransitionDuration(
+                reduceMotion: accessibilityReduceMotion
+            )
+        )
+    }
+
+    private var photoTransition: AnyTransition {
+        guard !accessibilityReduceMotion else { return .opacity }
+        return .asymmetric(
+            insertion: .opacity.combined(with: .scale(scale: 1.025)),
+            removal: .opacity.combined(with: .scale(scale: 0.99))
+        )
     }
 
     private var tint: Color {
@@ -146,12 +224,24 @@ private struct FocusPulseWaves: View {
                 ],
                 center: .center,
                 startRadius: 12,
-                endRadius: 250
+                endRadius: FocusPulsePresentation.pulseGradientEndRadius
             )
 
             ForEach(0..<6, id: \.self) { index in
                 orbitRing(index: index)
             }
+        }
+        .mask {
+            RadialGradient(
+                stops: [
+                    .init(color: .white, location: 0),
+                    .init(color: .white, location: 0.88),
+                    .init(color: .clear, location: 1),
+                ],
+                center: .center,
+                startRadius: 0,
+                endRadius: FocusPulsePresentation.pulseCanvasSize / 2
+            )
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
@@ -159,7 +249,7 @@ private struct FocusPulseWaves: View {
 
     @ViewBuilder
     private func orbitRing(index: Int) -> some View {
-        let diameter = 176 + CGFloat(index) * 46
+        let diameter = 156 + CGFloat(index) * 32
         if accessibilityReduceMotion {
             Circle()
                 .stroke(
@@ -186,6 +276,7 @@ private struct FocusPulsePowerControl: View {
     let installationPhase: VEXHelperInstallationPhase
     let isBusy: Bool
     let rxLevel: CGFloat
+    let selectedLocation: VpnLocation?
     let action: () -> Void
 
     @State private var isPowerHovered = false
@@ -220,7 +311,7 @@ private struct FocusPulsePowerControl: View {
                         .shadow(color: Color.black.opacity(0.50), radius: 21, y: 10)
 
                     Image(systemName: "power")
-                        .font(.system(size: 42, weight: .medium))
+                        .font(.system(size: 36, weight: .medium))
                         .foregroundStyle(tint)
                         .opacity(installationPhase.isActive ? 0 : (isBusy ? 0.72 : 1))
                         .scaleEffect(isBusy ? 0.94 : 1)
@@ -231,7 +322,7 @@ private struct FocusPulsePowerControl: View {
                             .transition(.scale.combined(with: .opacity))
                     }
                 }
-                .frame(width: 152, height: 152)
+                .frame(width: 120, height: 120)
                 .contentShape(Circle())
                 .animation(.snappy(duration: 0.16), value: status.state)
                 .animation(.snappy(duration: 0.16), value: isBusy)
@@ -243,7 +334,10 @@ private struct FocusPulsePowerControl: View {
                     isConnected: status.isUsableConnectedStatus,
                     trafficLevel: rxLevel
                 )
-                .frame(width: 470, height: 252)
+                .frame(
+                    width: FocusPulsePresentation.pulseCanvasSize,
+                    height: FocusPulsePresentation.pulseCanvasSize
+                )
             }
             .scaleEffect(isPowerHovered ? 1.035 : 1)
             .shadow(
@@ -266,16 +360,48 @@ private struct FocusPulsePowerControl: View {
                 .font(.system(size: 19, weight: .bold))
                 .foregroundStyle(Color.vexText)
 
-                Text(
-                    installationDetail
-                )
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(Color.vexSecondaryText)
-                .lineLimit(2)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 232)
+                if showsInstallationDetail {
+                    Text(installationDetail)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Color.vexSecondaryText)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 232)
+                }
+
+                if let selectedLocation {
+                    Text(selectedLocationSummary(selectedLocation))
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(Color.vexText.opacity(0.92))
+                        .lineLimit(1)
+                        .padding(.top, 3)
+                        .id(selectedLocation.id)
+                        .transition(locationSummaryTransition)
+                }
             }
+            .animation(locationSummaryAnimation, value: selectedLocation?.id)
         }
+    }
+
+    private var locationSummaryAnimation: Animation {
+        .easeInOut(
+            duration: FocusPulsePresentation.photoTransitionDuration(
+                reduceMotion: accessibilityReduceMotion
+            )
+        )
+    }
+
+    private var locationSummaryTransition: AnyTransition {
+        accessibilityReduceMotion
+            ? .opacity
+            : .opacity.combined(with: .move(edge: .bottom))
+    }
+
+    private func selectedLocationSummary(_ location: VpnLocation) -> String {
+        let flag = location.flagEmoji?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let latency = FocusPulsePresentation.latencyText(location.latencyMs)
+            .map { " · \($0)" } ?? ""
+        return "\(flag) \(location.localizedName) · лучший сервер\(latency)"
     }
 
     private var installationTitle: String {
@@ -296,6 +422,13 @@ private struct FocusPulsePowerControl: View {
             status: status.state,
             requiresHelperInstall: requiresHelperInstall
         )
+    }
+
+    private var showsInstallationDetail: Bool {
+        installationPhase != .idle
+            || requiresHelperInstall
+            || status.state == .connecting
+            || status.state == .disconnecting
     }
 
     private var tint: Color {

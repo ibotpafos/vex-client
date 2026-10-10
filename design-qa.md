@@ -46,4 +46,66 @@ Date: 2026-09-09
 - iOS Expo export: passed.
 - Physical iOS visual acceptance remains a release gate; the current delivery is mobile-only and physically verified on Android.
 
+Mobile result: passed
+
+---
+
+# VEX macOS photo locations — design QA
+
+Date: 2026-09-09
+
+## Comparison target
+
+- Source visual truth: `docs/design-qa/macos-photo-locations/source-option-3.png` (1536 × 1024 px).
+- Final implementation: `docs/design-qa/macos-photo-locations/implementation-polish-4.png` (1840 × 1160 px).
+- Final normalized comparison: `docs/design-qa/macos-photo-locations/comparison-polish-4.png`; both panes normalized to the same 1840 × 1160 px viewport before side-by-side review.
+- State: authenticated home preview, disconnected, Germany selected.
+
+## Findings
+
+- No actionable P0, P1, or P2 differences remain after the responsive-grid correction.
+- [P3] The live hero uses the production Frankfurt crop, whose tallest tower is centered more closely than in the concept image. Text and controls remain legible and the real asset framing is accepted.
+
+## Fidelity surfaces
+
+- Typography: system font, hierarchy, weights, and Russian copy match the source closely.
+- Layout: 294 pt hero, restrained connect control, 136 pt photographic cards, explicit three-column sizing, and bottom navigation rhythm match the source.
+- Colors: dark teal, cyan state accent, and restrained overlays match the source.
+- Image quality: purpose-generated wide Frankfurt, Helsinki, and Amsterdam assets are sharp and correctly cropped; no placeholder or synthetic code artwork is used.
+- Copy: country names, node counts, latency, connection state, and best-server label match the intended product behavior.
+
+## Interaction evidence
+
+- Country cards are real buttons. The packaged `.app` was exercised: selecting Germany changed the hero photograph and selection state.
+- Clicking the already-selected Finland card opened the existing server sidebar, grouped by country, for manual selection.
+- Duplicate Germany servers collapse into one home card while remaining individually selectable in the sidebar.
+- Selecting another country keeps the card order stable, preventing the pointer target from jumping after a click.
+- The VPN power action remains connected to the existing helper/app-state flow.
+
+## Comparison history
+
+- Pass 1: found oversized/high connect control and undersized location cards.
+- Fixes: reduced the power control from 152 pt to 128 pt, moved it down, and increased the photo strip from 106 pt to 124 pt.
+- Pass 2: `comparison-pass-2.png` confirms the hero hierarchy and location-strip proportions now track the source; no P0/P1/P2 differences remain.
+- Polish pass 3 found the real cause of the visibly merged cards: an unconstrained intrinsic image width escaped the relative scroll frame. Each card now receives an explicit measured width, so all three columns and both 12 pt gaps fit exactly.
+- Polish pass 4 removed redundant idle helper copy, reduced the orbit field, aligned hero/card radii and selection treatment, and confirmed the final visual in `implementation-polish-4.png`.
+- Focused crop: not required because the normalized 1840 × 580 combined comparison keeps the hero typography, card copy, image crops, borders, and navigation controls readable at 1×.
+
+## Build verification
+
+- Universal production `.app` build completed for arm64 and x86_64.
+- `codesign --verify --deep --strict macos-native/build/VEXNativeMac.app` passed.
+- Photo-render contract passed with 5.56% warm photographic coverage versus 0.13% before implementation.
+- Country-grouping/layout contract passed: one home card per country, stable country order, selected manual server preserved, and three cards fit with two exact 12 pt gaps.
+- `git diff --check` passed.
+- Full `swift test` is locally blocked before test execution because this Mac only has Command Line Tools and its Swift 6.3 toolchain does not provide the legacy `XCTest` module used by the existing test targets. This is an environment gate, not a test assertion failure.
+
+## Country transition polish
+
+- Hero photographs crossfade over 450 ms with a restrained 1.025 insertion scale; the fixed readability gradients no longer animate or double-darken during the transition.
+- Country summary text uses the same timing and a short vertical fade so the label stays synchronized with the photograph.
+- Card border, shadow, and selected chevron settle over 240 ms while the country order remains fixed.
+- Reduce Motion uses an 80 ms opacity-only photo change and an effectively immediate 10 ms card-state update, with no scale or movement.
+- Motion timing contract passed and the final static frame remains visually unchanged in `docs/design-qa/macos-photo-locations/implementation-motion-final.png`.
+
 final result: passed

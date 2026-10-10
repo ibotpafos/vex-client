@@ -424,23 +424,34 @@ class WireGuardController(context: Context) {
     }
     transitionState = "connecting"
     Log.i(TAG, "Recovering VPN after underlying network changed from $previous to $selected")
+    if (backend.getState(tunnel) == Tunnel.State.UP && !VexLeakBlockerService.isActive()) {
+      try {
+        when (VpnSocketRebind.recover(
+          isCurrentNetwork = { synchronized(availableUnderlyingNetworks) { selectedUnderlyingNetwork == selected } },
+          bindSockets = { backend.bindTunnelSocketsToNetwork(selected) },
+          waitBeforeRetry = { delay(it) },
+          onFailure = { error -> Log.e(TAG, "VPN socket rebind failed; retaining fail-closed TUN for retry", error) },
+        )) {
+          VpnSocketRebind.Result.REBOUND -> {
+            Log.i(TAG, "VPN sockets rebound without replacing the TUN interface")
+            return@runVpnNetworkRecovery
+          }
+          VpnSocketRebind.Result.SUPERSEDED -> return@runVpnNetworkRecovery
+          VpnSocketRebind.Result.FAILED -> {
+            // Keep the original TUN installed even after exhausted retries.
+            // Replacing it cannot guarantee an atomic handoff to the blocker.
+            // TODO(vpn-reliability): qualify an atomic fail-closed handoff before
+            // persistent binding failures may trigger a full tunnel rebuild.
+            Log.w(TAG, "VPN socket rebind retries exhausted; retaining fail-closed TUN")
+            return@runVpnNetworkRecovery
+          }
+        }
+      } finally {
+        transitionState = null
+      }
+    }
     val preserveAntiLeak = antiLeakArmed
     try {
-      if (backend.getState(tunnel) == Tunnel.State.UP && !VexLeakBlockerService.isActive()) {
-        try {
-          backend.bindTunnelSocketsToNetwork(selected)
-          Log.i(TAG, "VPN sockets rebound to $selected without replacing the TUN interface")
-        } catch (error: Throwable) {
-          // Keep the existing TUN and its routes installed. That remains fail-closed,
-          // and the next network callback can retry the socket bind safely.
-          Log.e(TAG, "VPN socket rebind to $selected failed; retaining fail-closed TUN", error)
-        }
-        if (selectedUnderlyingNetwork != selected) {
-          Log.i(TAG, "VPN socket rebind to $selected was superseded by $selectedUnderlyingNetwork")
-          return@runVpnNetworkRecovery
-        }
-        return@runVpnNetworkRecovery
-      }
       // Stop the native VPN service cleanly before the blocker takes ownership.
       // If the blocker revokes it first, Android may deliver a delayed onDestroy
       // that tears down a newly established tunnel several seconds later.

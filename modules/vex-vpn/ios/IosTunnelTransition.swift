@@ -222,44 +222,62 @@ struct IosTunnelStatusSnapshot {
 // The provider response is UAPI, which includes private key material. Extract
 // only counters and handshake times; never expose or log the raw response.
 struct IosTunnelRuntimeStatus {
-  private static let maximumSafeInteger = 9_007_199_254_740_991.0
+  private static let maximumSafeInteger: UInt64 = 9_007_199_254_740_991
   private(set) var rxBytes: Double = 0
   private(set) var txBytes: Double = 0
   private(set) var latestHandshakeEpochMillis: Double? = nil
 
   init?(data: Data) {
-    guard let text = String(data: data, encoding: .utf8) else { return nil }
-    var inPeer = false
-    var seconds: UInt64 = 0
-    var nanoseconds: UInt64 = 0
-    func collectHandshake() {
-      guard seconds > 0, nanoseconds < 1_000_000_000 else { return }
-      let timestamp = Double(seconds) * 1_000 + Double(nanoseconds) / 1_000_000
-      guard timestamp <= Self.maximumSafeInteger else { return }
-      latestHandshakeEpochMillis = max(latestHandshakeEpochMillis ?? 0, timestamp)
+    guard data.count <= 128 * 1024,
+          let text = String(data: data, encoding: .utf8) else { return nil }
+    let fields: Set<String> = ["rx_bytes", "tx_bytes", "last_handshake_time_sec", "last_handshake_time_nsec"]
+    var peer: [String: UInt64]?
+    var totalRX: UInt64 = 0
+    var totalTX: UInt64 = 0
+    var peerCount = 0
+
+    func collectPeer() -> Bool {
+      guard let peer, let rx = peer["rx_bytes"], let tx = peer["tx_bytes"],
+            let seconds = peer["last_handshake_time_sec"] else { return false }
+      let nanoseconds = peer["last_handshake_time_nsec"] ?? 0
+      guard nanoseconds < 1_000_000_000, seconds <= Self.maximumSafeInteger / 1000,
+            rx <= Self.maximumSafeInteger - totalRX,
+            tx <= Self.maximumSafeInteger - totalTX else { return false }
+      let timestamp = seconds == 0 ? 0 : seconds * 1000 + nanoseconds / 1_000_000
+      guard timestamp <= Self.maximumSafeInteger else { return false }
+      totalRX += rx
+      totalTX += tx
+      peerCount += 1
+      if timestamp > 0 {
+        latestHandshakeEpochMillis = max(latestHandshakeEpochMillis ?? 0, Double(timestamp))
+      }
+      return true
     }
     for line in text.split(whereSeparator: \.isNewline) {
       let pair = line.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
-      guard pair.count == 2 else { continue }
-      let key = pair[0]
+      guard pair.count == 2 else { return nil }
+      let key = String(pair[0])
       let value = pair[1]
-      if key == "errno", value != "0" { return nil }
       if key == "public_key" {
-        collectHandshake()
-        inPeer = true
-        seconds = 0
-        nanoseconds = 0
-      } else if inPeer, let number = UInt64(value) {
-        switch key {
-        case "rx_bytes": rxBytes = min(Self.maximumSafeInteger, rxBytes + Double(number))
-        case "tx_bytes": txBytes = min(Self.maximumSafeInteger, txBytes + Double(number))
-        case "last_handshake_time_sec": seconds = number
-        case "last_handshake_time_nsec": nanoseconds = number
-        default: break
+        if peer != nil && !collectPeer() { return nil }
+        peer = [:]
+      } else if fields.contains(key) || key == "errno" {
+        // wgGetConfig returns raw IpcGet output, without an errno trailer.
+        // Accept that response while rejecting an explicit nonzero IPC error.
+        if key != "errno" && peer == nil { continue }
+        guard !value.isEmpty, value.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }),
+              let number = UInt64(value), number <= Self.maximumSafeInteger else { return nil }
+        if key == "errno" {
+          guard number == 0 else { return nil }
+        } else {
+          guard peer?[key] == nil else { return nil }
+          peer?[key] = number
         }
       }
     }
-    collectHandshake()
+    guard collectPeer(), peerCount > 0 else { return nil }
+    rxBytes = Double(totalRX)
+    txBytes = Double(totalTX)
   }
 }
 

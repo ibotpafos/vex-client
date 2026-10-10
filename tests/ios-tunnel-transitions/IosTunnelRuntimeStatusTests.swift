@@ -153,17 +153,49 @@ final class IosTunnelRuntimeStatusTests: XCTestCase {
   func testInvalidAndPendingRuntimeCannotVerifyTunnel() throws {
     XCTAssertNil(IosTunnelRuntimeStatus(data: Data([0xff])))
     XCTAssertNil(IosTunnelRuntimeStatus(data: Data("public_key=p\nlast_handshake_time_sec=100\nerrno=5\n".utf8)))
-    let result = try XCTUnwrap(IosTunnelRuntimeStatus(data: Data("public_key=p\nrx_bytes=-1\ntx_bytes=not-a-counter\nlast_handshake_time_sec=0\nerrno=0\n".utf8)))
+    let result = try XCTUnwrap(IosTunnelRuntimeStatus(data: Data("public_key=p\nrx_bytes=0\ntx_bytes=0\nlast_handshake_time_sec=0\nerrno=0\n".utf8)))
     XCTAssertEqual(result.rxBytes, 0)
     XCTAssertEqual(result.txBytes, 0)
     XCTAssertNil(result.latestHandshakeEpochMillis)
   }
 
-  func testRuntimeCountersSaturateWithoutOverflowAndRejectInvalidTimestamp() throws {
-    let result = try XCTUnwrap(IosTunnelRuntimeStatus(data: Data("public_key=p\nrx_bytes=18446744073709551615\ntx_bytes=18446744073709551615\nlast_handshake_time_sec=18446744073709551615\nlast_handshake_time_nsec=1000000000\nerrno=0\n".utf8)))
-    XCTAssertEqual(result.rxBytes, 9_007_199_254_740_991)
-    XCTAssertEqual(result.txBytes, 9_007_199_254_740_991)
-    XCTAssertNil(result.latestHandshakeEpochMillis)
+  func testActualAppleRawResponseWithoutErrnoVerifiesTunnel() async throws {
+    let system = StatusSystem()
+    // WireGuardAdapter.getRuntimeConfiguration -> wgGetConfig -> IpcGet
+    // returns this raw format; only IpcHandle adds an errno trailer.
+    let publicKey = String(repeating: "ab", count: 32)
+    system.immediateReply = Data("private_key=never-export\nlisten_port=51820\npublic_key=\(publicKey)\npreshared_key=never-export\nprotocol_version=1\nendpoint=192.0.2.1:51820\nlast_handshake_time_sec=1700000000\nlast_handshake_time_nsec=123000000\ntx_bytes=20\nrx_bytes=10\npersistent_keepalive_interval=25\nallowed_ip=0.0.0.0/0\n".utf8)
+    let transition = IosTunnelTransition(operations: system.operations)
+    let status = await transition.currentStatus(using: system.statusOperations)
+    XCTAssertTrue(status.verified)
+    XCTAssertEqual(status.rxBytes, 10)
+    XCTAssertEqual(status.txBytes, 20)
+    XCTAssertEqual(status.latestHandshakeEpochMillis, 1_700_000_000_123)
+    XCTAssertFalse(String(describing: status.toDictionary()).contains("never-export"))
+    XCTAssertFalse(String(describing: status.toDictionary()).contains(publicKey))
+  }
+
+  func testMalformedAndIncompleteRuntimeCannotVerifyHandshake() throws {
+    func peer(rx: String = "10", tx: String = "20", seconds: String = "1700000000", nanos: String = "123000000") -> String {
+      "public_key=synthetic\nrx_bytes=\(rx)\ntx_bytes=\(tx)\nlast_handshake_time_sec=\(seconds)\nlast_handshake_time_nsec=\(nanos)\n"
+    }
+    for text in [
+      "", "private_key=never-export\n", peer(rx: "-1"), peer(tx: "NaN"),
+      peer(seconds: "18446744073709551615"), peer(nanos: "1000000000"),
+      peer() + "rx_bytes=1\n", peer() + "errno=5\n", peer() + "truncated-line",
+      peer().replacingOccurrences(of: "tx_bytes=20\n", with: ""),
+      peer(rx: "9007199254740991") + peer(rx: "1"),
+      String(repeating: "x", count: 128 * 1024 + 1),
+    ] {
+      XCTAssertNil(IosTunnelRuntimeStatus(data: Data(text.utf8)))
+    }
+    let secondResolution = peer().replacingOccurrences(of: "last_handshake_time_nsec=123000000\n", with: "")
+    XCTAssertEqual(IosTunnelRuntimeStatus(data: Data(secondResolution.utf8))?.latestHandshakeEpochMillis, 1_700_000_000_000)
+  }
+
+  func testRuntimeRejectsCountersOutsideExactJavaScriptIntegerRange() {
+    XCTAssertNil(IosTunnelRuntimeStatus(data: Data("public_key=p\nrx_bytes=18446744073709551615\ntx_bytes=18446744073709551615\nlast_handshake_time_sec=18446744073709551615\nlast_handshake_time_nsec=1000000000\nerrno=0\n".utf8)))
+    XCTAssertEqual(IosTunnelRuntimeStatus(data: Data("public_key=p\nrx_bytes=9007199254740991\ntx_bytes=0\nlast_handshake_time_sec=1\n".utf8))?.rxBytes, 9_007_199_254_740_991)
   }
 
   private func waitForRequest(in system: StatusSystem) async throws {

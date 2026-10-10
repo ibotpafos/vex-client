@@ -57,7 +57,7 @@ if ([Runtime.InteropServices.Marshal]::SizeOf([type][Vex.Windows.Smoke.WindowPoi
 }
 
 # Execute the actual pure capture helpers, without desktop interaction.
-foreach ($functionName in @('Wait-SmokeCondition', 'Wait-SmokeCaptureBounds', 'Get-SmokeCaptureCursorPoint')) {
+foreach ($functionName in @('Wait-SmokeCondition', 'Wait-SmokeCaptureBounds', 'Get-SmokeCaptureCursorPoint', 'Set-SmokeCaptureFocus')) {
     $functionAst = $ast.Find({
         param($node)
         $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $functionName
@@ -81,6 +81,32 @@ $noOutsidePointRejected = $false
 try { Get-SmokeCaptureCursorPoint -Desktop $desktop -WindowBounds $desktop | Out-Null }
 catch { $noOutsidePointRejected = $true }
 if (-not $noOutsidePointRejected) { throw 'Application smoke allows a cursor over a full-desktop window.' }
+
+# Capture focus must skip headings, clipped controls and disabled actions.
+$script:focusedCaptureControl = $null
+function Find-SmokeElement {
+    param([string]$AutomationId)
+    $element = [pscustomobject]@{
+        Current = [pscustomobject]@{
+            IsOffscreen = $AutomationId -eq 'Hidden'
+            IsEnabled = $AutomationId -ne 'Disabled'
+            IsKeyboardFocusable = $AutomationId -ne 'Heading'
+            AutomationId = $AutomationId
+        }
+    }
+    $element | Add-Member -MemberType ScriptMethod -Name SetFocus -Value {
+        $script:focusedCaptureControl = $this.Current.AutomationId
+    }
+    return $element
+}
+$focused = Set-SmokeCaptureFocus -AutomationIds @('Heading', 'Hidden', 'Disabled', 'Action')
+if ($focused -ne 'Action' -or $script:focusedCaptureControl -ne 'Action') {
+    throw 'Application smoke failed to focus a visible enabled page action.'
+}
+$noFocusTargetRejected = $false
+try { Set-SmokeCaptureFocus -AutomationIds @('Heading', 'Hidden', 'Disabled') | Out-Null }
+catch { $noFocusTargetRejected = $true }
+if (-not $noFocusTargetRejected) { throw 'Application smoke accepts capture without a safe focus target.' }
 
 # Model a page entering from outside the window and moving before it settles.
 $script:captureProbeCalls = 0

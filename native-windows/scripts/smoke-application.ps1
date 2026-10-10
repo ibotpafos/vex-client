@@ -308,6 +308,19 @@ function Get-SmokeCaptureCursorPoint {
     throw 'No visible desktop point exists outside the preview window.'
 }
 
+function Set-SmokeCaptureFocus {
+    param([Parameter(Mandatory = $true)][string[]]$AutomationIds)
+    foreach ($automationId in $AutomationIds) {
+        $element = Find-SmokeElement -AutomationId $automationId
+        if ($null -ne $element -and -not $element.Current.IsOffscreen -and
+            $element.Current.IsEnabled -and $element.Current.IsKeyboardFocusable) {
+            $element.SetFocus()
+            return $automationId
+        }
+    }
+    throw 'No visible enabled page control can receive capture focus.'
+}
+
 function Save-SmokeScreenshot {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
@@ -341,6 +354,20 @@ function Save-SmokeScreenshot {
     $cursorPoint = Get-SmokeCaptureCursorPoint -Desktop $desktop -WindowBounds $bounds
     if (-not [Vex.Windows.Smoke.NativeMethods]::SetCursorPos($cursorPoint.X, $cursorPoint.Y)) {
         throw 'Unable to move the cursor outside the preview window.'
+    }
+    # UIA navigation also focuses the dock, which can retain a keyboard tooltip
+    # after the pointer moves away. Focus a page control without activating it.
+    $focusIds = if ($Name -eq 'account') { @('AccountCheckoutButton') }
+        else { $StableAutomationIds }
+    [void](Set-SmokeCaptureFocus -AutomationIds $focusIds)
+    $pickerClose = Find-SmokeElement -AutomationId 'CloseServerPickerButton'
+    if ($null -eq $pickerClose -or $pickerClose.Current.IsOffscreen) {
+        # Escape dismisses a retained keyboard tooltip. Never send it while the
+        # picker dialog is open, because that would dismiss the captured dialog.
+        if ([Vex.Windows.Smoke.NativeMethods]::GetForegroundWindow() -ne $windowHandle) {
+            throw 'Preview lost foreground focus before tooltip dismissal.'
+        }
+        [Windows.Forms.SendKeys]::SendWait('{ESC}')
     }
     $tooltipCondition = [Windows.Automation.AndCondition]::new(
         [Windows.Automation.PropertyCondition]::new(

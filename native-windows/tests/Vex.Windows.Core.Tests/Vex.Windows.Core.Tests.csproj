@@ -15,6 +15,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="../../src/Vex.Windows.Service/Runtime/NetworkSafetyController.cs" Link="NetworkSafetyController.cs" />
+    <Compile Include="../../src/Vex.Windows.Service/WindowsServiceOptions.cs" Link="WindowsServiceOptions.cs" />
     <Compile Include="../../src/Vex.Windows.App/Services/WindowsServiceMaintenanceService.cs" Link="WindowsServiceMaintenanceService.cs" />
     <Compile Include="../../src/Vex.Windows.App/Services/UiPreviewContext.cs" Link="UiPreviewContext.cs" />
     <Compile Include="../../src/Vex.Windows.App/Services/DiagnosticsQueueService.cs" Link="DiagnosticsQueueService.cs" />

@@ -47,6 +47,8 @@ $previousDpiContext = [System.IntPtr]::Zero
 $originalCursorPosition = $null
 $protocolDiagnosticPath = $null
 $protocolDiagnosticHash = $null
+$trayDiagnosticPath = $null
+$trayDiagnosticHash = $null
 $windowHandle = [System.IntPtr]::Zero
 $previewArguments = if ($PreviewMode -eq 'signed-out') {
     '--signed-out-ui-preview'
@@ -74,6 +76,8 @@ $result = [ordered]@{
     second_launch_restored_window = $false
     maximized_window_preserved_on_reopen = $false
     minimized_window_restored_by_protocol = $false
+    tray_auth_recovery_without_connect = $false
+    tray_auth_recovery_diagnostic = $null
     preview_protocol_registration = $null
     preview_protocol_diagnostic = $null
     protocol_activation_restored_window = $false
@@ -121,6 +125,46 @@ function Invoke-RedirectedLaunch {
     }
     if ($secondary.ExitCode -ne 0) { throw 'Secondary preview activation exited unsuccessfully.' }
     Assert-PrimaryInstance
+}
+
+function Assert-SmokeTrayRecoveryDiagnostic {
+    param(
+        [Parameter(Mandatory = $true)]$Diagnostic,
+        [Parameter(Mandatory = $true)][string]$Scenario,
+        [Parameter(Mandatory = $true)][string]$Access,
+        [Parameter(Mandatory = $true)][string]$Mode,
+        [Parameter(Mandatory = $true)][int]$ProcessId
+    )
+    if ($Diagnostic.schema -cne 'vex.windows.ui-preview-tray-recovery.v1' -or
+        $Diagnostic.process_id -ne $ProcessId -or $Diagnostic.preview_mode -cne $Mode -or
+        $Diagnostic.scenario -cne $Scenario -or $Diagnostic.access -cne $Access -or
+        $Diagnostic.handler_completed -isnot [bool] -or -not $Diagnostic.handler_completed -or
+        $Diagnostic.connect_requests -ne 0 -or $Diagnostic.trusted_connect_requests -ne 0 -or
+        $Diagnostic.connection_desired -isnot [bool] -or $Diagnostic.connection_desired -or
+        $Diagnostic.waiting_for_browser_auth -isnot [bool] -or $Diagnostic.waiting_for_browser_auth) {
+        throw 'Actual tray recovery changed connection intent, sent a connect request, opened browser auth or used the wrong preview state.'
+    }
+}
+
+function Wait-SmokeTrayRecoveryDiagnostic {
+    param([string]$Scenario, [string]$Access)
+    $script:trayRecoveryDiagnostic = $null
+    Wait-SmokeCondition -Failure 'Actual tray recovery did not complete with an isolated diagnostic.' -Condition {
+        if (-not (Test-Path -LiteralPath $trayDiagnosticPath -PathType Leaf)) { return $false }
+        $file = Get-Item -LiteralPath $trayDiagnosticPath
+        if ($file.Length -le 0 -or $file.Length -gt 65536 -or
+            ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw 'Tray recovery diagnostic is not a bounded regular file.'
+        }
+        $diagnostic = Get-Content -LiteralPath $trayDiagnosticPath -Raw | ConvertFrom-Json
+        if ($diagnostic.scenario -cne $Scenario) { return $false }
+        Assert-SmokeTrayRecoveryDiagnostic -Diagnostic $diagnostic -Scenario $Scenario -Access $Access `
+            -Mode $PreviewMode -ProcessId $process.Id
+        $script:trayRecoveryDiagnostic = $diagnostic
+        $script:trayDiagnosticHash = (Get-FileHash -LiteralPath $trayDiagnosticPath -Algorithm SHA256).Hash
+        return $true
+    }
+    return $script:trayRecoveryDiagnostic
 }
 
 function Assert-PreviewProtocolRegistration {
@@ -484,6 +528,7 @@ try {
     $result.process_id = $process.Id
     if ($DesktopChecks) {
         $protocolDiagnosticPath = Join-Path ([IO.Path]::GetTempPath()) "vex-ui-preview-protocol-$($process.Id).json"
+        $trayDiagnosticPath = Join-Path ([IO.Path]::GetTempPath()) "vex-ui-preview-tray-$($process.Id).json"
     }
     $deadline = $startedAt.AddSeconds($ObserveSeconds)
     while ([DateTime]::UtcNow -lt $deadline) {
@@ -737,6 +782,39 @@ namespace Vex.Windows.Smoke {
                 }
             }
         }
+        $result.stage = 'tray-auth-recovery'
+        if (-not [Vex.Windows.Smoke.NativeMethods]::PostMessage($windowHandle, 0x10, [System.IntPtr]::Zero, [System.IntPtr]::Zero)) {
+            throw 'Unable to hide the preview before actual tray recovery.'
+        }
+        Wait-SmokeCondition -Failure 'Preview did not hide before actual tray recovery.' -Condition {
+            -not [Vex.Windows.Smoke.NativeMethods]::IsWindowVisible($windowHandle)
+        }
+        $trayScenario = if ($PreviewMode -eq 'fixtures') { 'locked' } else { 'signed-out' }
+        $trayAccess = if ($PreviewMode -eq 'fixtures') { 'Locked' } else { 'Missing' }
+        $trayArguments = if ($PreviewMode -eq 'fixtures') { '--ui-smoke-tray-connect-locked' } else { '--ui-smoke-tray-connect' }
+        Invoke-RedirectedLaunch -Arguments $trayArguments
+        $result.tray_auth_recovery_diagnostic = Wait-SmokeTrayRecoveryDiagnostic -Scenario $trayScenario -Access $trayAccess
+        Wait-SmokeCondition -Failure 'Actual tray recovery did not show the Home sign-in or Hello unlock controls.' -Condition {
+            $home = Find-SmokeElement -AutomationId 'HomeNavigationButton'
+            $signIn = Find-SmokeElement -AutomationId 'WebsiteSignInButton'
+            $unlock = Find-SmokeElement -AutomationId 'UnlockSessionButton'
+            [Vex.Windows.Smoke.NativeMethods]::IsWindowVisible($windowHandle) -and
+                -not [Vex.Windows.Smoke.NativeMethods]::IsIconic($windowHandle) -and
+                $null -ne $home -and $null -ne $signIn -and -not $signIn.Current.IsOffscreen -and $signIn.Current.IsEnabled -and
+                ($PreviewMode -ne 'fixtures' -or ($null -ne $unlock -and -not $unlock.Current.IsOffscreen -and $unlock.Current.IsEnabled))
+        }
+        Assert-PrimaryInstance
+        $result.tray_auth_recovery_without_connect = $true
+        if ($PreviewMode -eq 'fixtures') {
+            $result.stage = 'tray-auth-recovery-reset'
+            Invoke-RedirectedLaunch -Arguments '--ui-smoke-tray-reset'
+            Wait-SmokeTrayRecoveryDiagnostic -Scenario 'reset' -Access 'Available' | Out-Null
+            Wait-SmokeCondition -Failure 'Locked tray fixture did not restore the authenticated Home after recovery checks.' -Condition {
+                $power = Find-SmokeElement -AutomationId 'PowerButton'
+                $null -ne $power -and -not $power.Current.IsOffscreen -and $power.Current.IsEnabled
+            }
+            Assert-PrimaryInstance
+        }
         $result.stage = 'single-instance'
         Invoke-RedirectedLaunch -Arguments $previewArguments
         $result.single_instance_redirected = $true
@@ -858,6 +936,13 @@ finally {
         if (($diagnosticFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0 -and
             (Get-FileHash -LiteralPath $protocolDiagnosticPath -Algorithm SHA256).Hash -ceq $protocolDiagnosticHash) {
             Remove-Item -LiteralPath $protocolDiagnosticPath
+        }
+    }
+    if ($null -ne $trayDiagnosticHash -and (Test-Path -LiteralPath $trayDiagnosticPath -PathType Leaf)) {
+        $diagnosticFile = Get-Item -LiteralPath $trayDiagnosticPath
+        if (($diagnosticFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0 -and
+            (Get-FileHash -LiteralPath $trayDiagnosticPath -Algorithm SHA256).Hash -ceq $trayDiagnosticHash) {
+            Remove-Item -LiteralPath $trayDiagnosticPath
         }
     }
     if ($previousDpiContext -ne [System.IntPtr]::Zero) {

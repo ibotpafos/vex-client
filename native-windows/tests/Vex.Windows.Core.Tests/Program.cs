@@ -152,7 +152,9 @@ var tests = new (string Name, Action Run)[]
     ("Native client reports successful connect and disconnect", NativeClientReportsVpnLifecycle),
 };
 
-tests = [.. tests, .. VpnNamedPipeTransportTests.Cases, .. VpnRuntimeLifetimeTests.All, .. VpnRuntimeRecoveryTests.All, .. VpnEndpointAddressCacheTests.All];
+tests = [.. tests, .. VpnNamedPipeTransportTests.Cases, .. VpnRuntimeLifetimeTests.All, .. VpnRuntimeRecoveryTests.All,
+    .. VpnEndpointAddressCacheTests.All, .. VpnAuthorizationDeadlineTests.All, .. VpnControlPlaneAddressCacheTests.All,
+    .. NetworkSafetyControllerRecoveryTests.All];
 
 var failures = new List<string>();
 foreach (var test in tests.Concat(RuntimeParityTests.All))

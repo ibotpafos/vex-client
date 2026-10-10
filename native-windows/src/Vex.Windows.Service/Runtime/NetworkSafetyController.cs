@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Vex.Windows.Core.Vpn;
@@ -22,7 +23,12 @@ internal sealed class NetworkSafetyController
     private readonly string _firewallStatePath;
     private readonly string _routeStatePath;
     private readonly string _endpointAddressCachePath;
+    private readonly string _controlPlaneAddressCachePath;
+    private readonly string _routeReceiptsDirectory;
+    private readonly Func<string, IReadOnlyList<string>, CancellationToken, Task<string>> _commandRunner;
+    private readonly Func<string, CancellationToken, Task<IPAddress[]>> _dnsResolver;
     private readonly VpnEndpointAddressCache _endpointAddressCache = new();
+    private readonly VpnControlPlaneAddressCache _controlPlaneAddressCache = new();
     private IReadOnlyDictionary<IPAddress, RouteCommandResult> _expectedBypassRoutes =
         new Dictionary<IPAddress, RouteCommandResult>();
     private IReadOnlyList<BypassRoute> _activeBypassRoutes = [];
@@ -30,15 +36,20 @@ internal sealed class NetworkSafetyController
     private bool _firewallVerified;
     private DateTimeOffset _firewallVerifiedAt;
     private int _verificationPending;
-    private readonly Dictionary<string, IPAddress[]> _controlPlaneAddressCache = new(StringComparer.OrdinalIgnoreCase);
-
-    public NetworkSafetyController(WindowsServiceOptions options)
+    private bool _routeJournalUnverified;
+    public NetworkSafetyController(WindowsServiceOptions options,
+        Func<string, IReadOnlyList<string>, CancellationToken, Task<string>>? commandRunner = null,
+        Func<string, CancellationToken, Task<IPAddress[]>>? dnsResolver = null)
     {
         _controlPlaneHosts = options.ControlPlaneBypassHosts.ToArray();
         _nativeLocalEndpointAddresses = options.NativeLocalEndpointAddresses.Select(IPAddress.Parse).ToHashSet();
         _firewallStatePath = Path.Combine(options.DataDirectory, "firewall-rollback.json");
         _routeStatePath = Path.Combine(options.DataDirectory, "bypass-routes.json");
         _endpointAddressCachePath = Path.Combine(options.DataDirectory, "endpoint-address-cache.json");
+        _controlPlaneAddressCachePath = Path.Combine(options.DataDirectory, "control-plane-address-cache.json");
+        _routeReceiptsDirectory = Path.Combine(options.DataDirectory, "bypass-route-confirmations");
+        _commandRunner = commandRunner ?? RunPowerShellAsync;
+        _dnsResolver = dnsResolver ?? ((host, token) => Dns.GetHostAddressesAsync(host, token));
         // A journal indicates possible ownership, not proof that protection works.
         _firewallArmed = File.Exists(_firewallStatePath);
         _activeBypassRoutes = LoadPersistedRoutes();
@@ -52,6 +63,16 @@ internal sealed class NetworkSafetyController
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or FormatException)
         { /* Advisory routing metadata must not prevent service startup. */ }
+        try
+        {
+            if (new FileInfo(_controlPlaneAddressCachePath) is { Exists: true, Length: <= 64 * 1024 })
+            {
+                _controlPlaneAddressCache.Restore(JsonSerializer.Deserialize<VpnControlPlaneAddressSnapshot>(
+                    File.ReadAllText(_controlPlaneAddressCachePath)), _controlPlaneHosts, DateTimeOffset.UtcNow);
+            }
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or FormatException)
+        { /* Unscoped or expired routing metadata is advisory, never authority. */ }
     }
 
     public async Task ApplyControlPlaneBypassAsync(string endpoint, CancellationToken cancellationToken,
@@ -66,12 +87,13 @@ internal sealed class NetworkSafetyController
                 : _endpointAddressCache.Get(endpoint, serverPublicKey, DateTimeOffset.UtcNow);
             if (cached.Count > 0)
             {
-                var known = cached.Concat(_controlPlaneAddressCache.Values.SelectMany(value => value)).Distinct().ToArray();
+                var control = CachedControlAddresses(endpoint, serverPublicKey, authorizationExpiresAt);
+                var known = cached.Concat(control).Distinct().ToArray();
                 await ReconcileBypassRoutesAsync(new ProtectedAddressSet(known, cached.ToArray(),
                     IPAddress.TryParse(ParseEndpointHost(endpoint), out _), ParseEndpointPort(endpoint),
-                    _controlPlaneAddressCache.Values.SelectMany(value => value).Distinct().ToArray()), cancellationToken).ConfigureAwait(false);
+                    control), cancellationToken).ConfigureAwait(false);
             }
-            var resolved = await ResolveProtectedAddressesAsync(endpoint, cancellationToken, serverPublicKey).ConfigureAwait(false);
+            var resolved = await ResolveProtectedAddressesAsync(endpoint, cancellationToken, serverPublicKey, authorizationExpiresAt).ConfigureAwait(false);
             await ReconcileBypassRoutesAsync(resolved, cancellationToken).ConfigureAwait(false);
             if (_endpointAddressCache.RememberResolved(endpoint, serverPublicKey, resolved.EndpointAddresses,
                 authorizationExpiresAt, DateTimeOffset.UtcNow)) { PersistEndpointAddressCache(); }
@@ -93,7 +115,7 @@ internal sealed class NetworkSafetyController
     }
 
     public async Task EnsureKnownEndpointBypassAsync(string endpoint, string? serverPublicKey,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, DateTimeOffset? authorizationExpiresAt = null)
     {
         await _operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -107,7 +129,7 @@ internal sealed class NetworkSafetyController
             }
             // Cold service start or a newly authenticated numeric peer. Never
             // ask DNS from status capture, and do not wait for the watchdog.
-            var control = _controlPlaneAddressCache.Values.SelectMany(value => value).Distinct().ToArray();
+            var control = CachedControlAddresses(endpoint, serverPublicKey, authorizationExpiresAt);
             await ReconcileBypassRoutesAsync(new ProtectedAddressSet(endpointAddresses.Concat(control).Distinct().ToArray(),
                 endpointAddresses, literal is not null, ParseEndpointPort(endpoint), control), cancellationToken).ConfigureAwait(false);
         }
@@ -121,6 +143,17 @@ internal sealed class NetworkSafetyController
         { /* Recovery can use the in-memory binding when advisory persistence fails. */ }
     }
 
+    private IPAddress[] CachedControlAddresses(string endpoint, string? serverPublicKey, DateTimeOffset? expiresAt) =>
+        _controlPlaneAddressCache.Get(endpoint, serverPublicKey, _controlPlaneHosts, expiresAt, DateTimeOffset.UtcNow)
+            .Values.SelectMany(value => value).Distinct().ToArray();
+
+    private void PersistControlPlaneAddressCache()
+    {
+        try { WriteAtomic(_controlPlaneAddressCachePath, JsonSerializer.Serialize(_controlPlaneAddressCache.Snapshot)); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        { /* Live DNS answers remain usable when advisory persistence fails. */ }
+    }
+
     private async Task ReconcileBypassRoutesAsync(ProtectedAddressSet resolved, CancellationToken cancellationToken)
     {
             var addresses = resolved.Addresses;
@@ -130,6 +163,7 @@ internal sealed class NetworkSafetyController
             lock (_gate) { previous = _activeBypassRoutes; }
             var owned = new List<BypassRoute>();
             var created = new List<BypassRoute>();
+            if (_routeJournalUnverified) { throw new VpnTunnelException("route_ownership_journal_invalid"); }
             try
             {
                 // Re-evaluate the physical default gateway even when the IP did not
@@ -144,7 +178,10 @@ internal sealed class NetworkSafetyController
                     // Native host-local routing is already outside the tunnel.
                     // A gateway host route would redirect the local endpoint.
                     if (result.Loopback || result.NativeLocal) { continue; }
-                    var route = new BypassRoute(IPAddress.Parse(result.Address), result.InterfaceIndex, result.NextHop);
+                    var previousRoute = previous.FirstOrDefault(route => route.Address.Equals(address) &&
+                        route.InterfaceIndex == result.InterfaceIndex && route.NextHop == result.NextHop);
+                    var route = new BypassRoute(IPAddress.Parse(result.Address), result.InterfaceIndex, result.NextHop,
+                        RandomNumberGenerator.GetInt32(128, 65536), Guid.NewGuid().ToString("N"));
                     if (result.Created)
                     {
                         created.Add(route);
@@ -153,8 +190,20 @@ internal sealed class NetworkSafetyController
                         {
                             created.Remove(route);
                         }
+                        else
+                        {
+                            if (!HasCreationReceipt(route)) { throw new VpnTunnelException("route_creation_unconfirmed"); }
+                            created.Remove(route);
+                            route = route with { Confirmed = true };
+                            created.Add(route);
+                        }
                     }
-                    if (created.Contains(route) || previous.Contains(route))
+                    else if (previousRoute is not null && HasCreationReceipt(previousRoute) &&
+                        previousRoute.RouteMetric == result.RouteMetric && IsNetMgmt(result.Protocol))
+                    {
+                        route = previousRoute with { Confirmed = true };
+                    }
+                    if (created.Contains(route) || (previousRoute is not null && route.CreationId == previousRoute.CreationId && HasCreationReceipt(route)))
                     {
                         owned.Add(route);
                     }
@@ -164,7 +213,7 @@ internal sealed class NetworkSafetyController
                 {
                     throw new VpnTunnelException("endpoint_physical_route_missing");
                 }
-                await RemoveRoutesAsync(previous.Except(owned), cancellationToken).ConfigureAwait(false);
+                await RemoveRoutesAsync(previous.Where(old => !owned.Any(current => SameOwnership(old, current))), cancellationToken).ConfigureAwait(false);
                 SetOwnedRoutes(owned);
                 // An independently owned more-specific/lower-metric route may
                 // win even on the same NIC. Never delete it or claim protection.
@@ -220,6 +269,7 @@ internal sealed class NetworkSafetyController
         try
         {
             await DisarmFirewallCoreAsync(cancellationToken).ConfigureAwait(false);
+            if (_routeJournalUnverified) { throw new VpnTunnelException("route_ownership_journal_invalid"); }
             IReadOnlyList<BypassRoute> routes;
             lock (_gate) { routes = _activeBypassRoutes; }
             await RemoveRoutesAsync(routes, cancellationToken).ConfigureAwait(false);
@@ -306,7 +356,7 @@ internal sealed class NetworkSafetyController
         await _operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var resolved = await ResolveProtectedAddressesAsync(endpoint, cancellationToken, serverPublicKey).ConfigureAwait(false);
+            var resolved = await ResolveProtectedAddressesAsync(endpoint, cancellationToken, serverPublicKey, authorizationExpiresAt).ConfigureAwait(false);
             if (_firewallArmed)
             {
                 using var document = JsonDocument.Parse(File.ReadAllText(_firewallStatePath));
@@ -330,7 +380,7 @@ internal sealed class NetworkSafetyController
                 $ownedNames=ConvertFrom-Json $args[0];$protectedAddresses=ConvertFrom-Json $args[2];$endpointAddresses=ConvertFrom-Json $args[3];$controlAddresses=ConvertFrom-Json $args[5]
                 [pscustomobject]@{Version=3;Profiles=$profiles;DisabledOutboundAllowRuleNames=$rules;OwnedRuleNames=@($ownedNames);AdapterName=$args[1];ProtectedAddresses=@($protectedAddresses);EndpointAddresses=@($endpointAddresses);EndpointPort=[int]$args[4];ControlPlaneAddresses=@($controlAddresses)} | ConvertTo-Json -Compress -Depth 5
                 """;
-            var rollbackJson = await RunPowerShellAsync(captureScript,
+            var rollbackJson = await _commandRunner(captureScript,
                 [JsonSerializer.Serialize(names), adapterName, JsonSerializer.Serialize(resolved.Addresses.Select(address => address.ToString())),
                     JsonSerializer.Serialize(resolved.EndpointAddresses.Select(address => address.ToString())),
                     resolved.EndpointPort.ToString(System.Globalization.CultureInfo.InvariantCulture),
@@ -354,7 +404,7 @@ internal sealed class NetworkSafetyController
                     New-NetFirewallRule -Name $names[5] -DisplayName 'VEX VPN control plane HTTPS' -Group 'VEX VPN AntiLeak' -PolicyStore PersistentStore -Direction Outbound -Action Allow -Protocol TCP -RemotePort 443 -RemoteAddress $control -Enabled $controlEnabled -InterfaceType Wired,Wireless -Profile Any | Out-Null
                     Set-NetFirewallProfile -Profile Domain,Private,Public -PolicyStore PersistentStore -Enabled True -DefaultOutboundAction Block
                     """;
-                await RunPowerShellAsync(armScript, [rollbackJson], cancellationToken).ConfigureAwait(false);
+                await _commandRunner(armScript, [rollbackJson], cancellationToken).ConfigureAwait(false);
                 await VerifyFirewallAsync(rollback, cancellationToken).ConfigureAwait(false);
             }
             catch
@@ -422,7 +472,7 @@ internal sealed class NetworkSafetyController
                 $controlRule | Set-NetFirewallRule -Protocol TCP -RemotePort 443 -RemoteAddress $control -Enabled $enabled | Out-Null
             }else{throw 'firewall_owned_rule_duplicate'}
             """;
-        await RunPowerShellAsync(script, [JsonSerializer.Serialize(state)], cancellationToken).ConfigureAwait(false);
+        await _commandRunner(script, [JsonSerializer.Serialize(state)], cancellationToken).ConfigureAwait(false);
         await VerifyFirewallAsync(state, cancellationToken).ConfigureAwait(false);
     }
 
@@ -474,7 +524,7 @@ internal sealed class NetworkSafetyController
             """;
         try
         {
-            var result = await RunPowerShellAsync(script, [JsonSerializer.Serialize(state)], cancellationToken).ConfigureAwait(false);
+            var result = await _commandRunner(script, [JsonSerializer.Serialize(state)], cancellationToken).ConfigureAwait(false);
             if (result != "ok") { throw new VpnTunnelException("firewall_policy_unverified"); }
             SetFirewallStatus(armed: true, verified: true);
         }
@@ -542,7 +592,7 @@ internal sealed class NetworkSafetyController
         return state;
     }
 
-    private static async Task RestoreFirewallAsync(string rollbackJson, CancellationToken cancellationToken)
+    private async Task RestoreFirewallAsync(string rollbackJson, CancellationToken cancellationToken)
     {
         const string script = """
             $ErrorActionPreference='Stop';$state=ConvertFrom-Json $args[0]
@@ -571,7 +621,7 @@ internal sealed class NetworkSafetyController
             if(@($remaining | Where-Object {$_.Name -cin $disabled -and $_.Enabled -ne 'True'}).Count -ne 0){throw 'firewall_rule_restore_failed'}
             'ok'
             """;
-        var result = await RunPowerShellAsync(script, [rollbackJson], cancellationToken).ConfigureAwait(false);
+        var result = await _commandRunner(script, [rollbackJson], cancellationToken).ConfigureAwait(false);
         if (result != "ok") { throw new VpnTunnelException("firewall_restore_unverified"); }
     }
 
@@ -579,27 +629,73 @@ internal sealed class NetworkSafetyController
     {
         try
         {
-            return (JsonSerializer.Deserialize<PersistedBypassRoute[]>(File.ReadAllText(_routeStatePath)) ?? [])
-                .Select(entry => new BypassRoute(IPAddress.Parse(entry.Address), entry.InterfaceIndex, entry.NextHop)).ToArray();
+            if (new FileInfo(_routeStatePath).Length > 256 * 1024) { throw new JsonException(); }
+            using var document = JsonDocument.Parse(File.ReadAllText(_routeStatePath));
+            var legacy = document.RootElement.ValueKind == JsonValueKind.Array;
+            var journal = legacy ? null : JsonSerializer.Deserialize<BypassRouteJournal>(document.RootElement);
+            var entries = legacy ? JsonSerializer.Deserialize<PersistedBypassRoute[]>(document.RootElement)
+                : journal is { Version: 2 } ? journal.Entries : throw new JsonException();
+            if (entries is null || entries.Length > 512) { throw new JsonException(); }
+            var routes = new List<BypassRoute>();
+            foreach (var entry in entries)
+            {
+                var ambiguousLegacy = legacy || entry?.Legacy == true;
+                if (entry is null || !IPAddress.TryParse(entry.Address, out var address) || entry.InterfaceIndex <= 0 ||
+                    !IPAddress.TryParse(entry.NextHop, out _) ||
+                    (!ambiguousLegacy && (entry.RouteMetric is < 128 or > 65535 || !Guid.TryParseExact(entry.CreationId, "N", out _))) ||
+                    (!legacy && ambiguousLegacy && (entry.RouteMetric != 0 || entry.CreationId is not null || entry.Confirmed)))
+                { throw new JsonException(); }
+                routes.Add(new BypassRoute(address, entry.InterfaceIndex, entry.NextHop,
+                    ambiguousLegacy ? 0 : entry.RouteMetric, ambiguousLegacy ? null : entry.CreationId, !ambiguousLegacy && entry.Confirmed));
+            }
+            return routes;
         }
-        catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException or JsonException or FormatException)
+        catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException) { return []; }
+        catch (Exception error) when (error is JsonException or FormatException)
         {
+            _routeJournalUnverified = true;
             return [];
         }
     }
 
     private void SetOwnedRoutes(IEnumerable<BypassRoute> routes)
     {
-        var owned = routes.Distinct().ToArray();
+        var owned = routes.GroupBy(route => (route.Address, route.InterfaceIndex, route.NextHop, route.CreationId))
+            .Select(group => group.OrderByDescending(route => route.Confirmed).First()).ToArray();
         PersistRoutes(owned);
         lock (_gate) { _activeBypassRoutes = owned; }
     }
 
     private void PersistRoutes(IEnumerable<BypassRoute> routes)
     {
-        var entries = routes.Distinct().Select(route => new PersistedBypassRoute(route.Address.ToString(), route.InterfaceIndex, route.NextHop)).ToArray();
+        if (_routeJournalUnverified) { throw new VpnTunnelException("route_ownership_journal_invalid"); }
+        var entries = routes.Distinct().Select(route => new PersistedBypassRoute(route.Address.ToString(), route.InterfaceIndex,
+            route.NextHop, route.RouteMetric, route.CreationId, route.Confirmed, route.CreationId is null)).ToArray();
         if (entries.Length == 0) { File.Delete(_routeStatePath); return; }
-        WriteAtomic(_routeStatePath, JsonSerializer.Serialize(entries));
+        WriteAtomic(_routeStatePath, JsonSerializer.Serialize(new BypassRouteJournal(2, entries)));
+    }
+
+    private string ReceiptPath(BypassRoute route) => route.CreationId is not null && Guid.TryParseExact(route.CreationId, "N", out _)
+        ? Path.Combine(_routeReceiptsDirectory, route.CreationId + ".json") : "";
+
+    private static bool IsNetMgmt(string? protocol) => protocol is "NetMgmt" or "3";
+
+    private static bool SameOwnership(BypassRoute left, BypassRoute right) => left.Address.Equals(right.Address) &&
+        left.InterfaceIndex == right.InterfaceIndex && left.NextHop == right.NextHop &&
+        left.RouteMetric == right.RouteMetric && left.CreationId == right.CreationId;
+
+    private bool HasCreationReceipt(BypassRoute route)
+    {
+        try
+        {
+            var path = ReceiptPath(route);
+            if (path.Length == 0 || new FileInfo(path) is not { Exists: true, Length: <= 4096 }) { return false; }
+            var receipt = JsonSerializer.Deserialize<BypassRouteReceipt>(File.ReadAllText(path));
+            return receipt is not null && receipt.CreationId == route.CreationId && receipt.Address == route.Address.ToString() &&
+                receipt.InterfaceIndex == route.InterfaceIndex && receipt.NextHop == route.NextHop &&
+                receipt.RouteMetric == route.RouteMetric && IsNetMgmt(receipt.Protocol);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException) { return false; }
     }
 
     private static void WriteAtomic(string path, string value)
@@ -710,12 +806,14 @@ internal sealed class NetworkSafetyController
     }
 
     private async Task<ProtectedAddressSet> ResolveProtectedAddressesAsync(string endpoint, CancellationToken cancellationToken,
-        string? serverPublicKey)
+        string? serverPublicKey, DateTimeOffset? authorizationExpiresAt)
     {
         var endpointHost = ParseEndpointHost(endpoint);
         var addresses = new HashSet<IPAddress>();
         var endpointAddresses = new HashSet<IPAddress>();
         var controlAddresses = new HashSet<IPAddress>();
+        var cachedControl = _controlPlaneAddressCache.Get(endpoint, serverPublicKey, _controlPlaneHosts,
+            authorizationExpiresAt, DateTimeOffset.UtcNow);
         var hosts = _controlPlaneHosts.Prepend(endpointHost).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         // Independent names share one bounded resolution window rather than
         // accumulating an OS resolver timeout for every host.
@@ -723,18 +821,22 @@ internal sealed class NetworkSafetyController
         {
             cancellationToken.ThrowIfCancellationRequested();
             IPAddress[] resolved;
+            var fresh = true;
             try
             {
                 resolved = IPAddress.TryParse(host, out var parsed) ? [parsed]
-                    : await BoundedDnsResolver.ResolveAsync(host, (name, token) => Dns.GetHostAddressesAsync(name, token),
+                    : await BoundedDnsResolver.ResolveAsync(host, _dnsResolver,
                         DnsResolutionTimeout, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception error) when (error is SocketException || error is VpnTunnelException { Code: "endpoint_resolution_timeout" })
             {
+                fresh = false;
                 resolved = host == endpointHost
-                    ? _endpointAddressCache.Get(endpoint, serverPublicKey, DateTimeOffset.UtcNow).ToArray()
-                    : _controlPlaneAddressCache.GetValueOrDefault(host, []);
+                    ? _endpointAddressCache.Get(endpoint, serverPublicKey, DateTimeOffset.UtcNow)
+                        .Concat(cachedControl.GetValueOrDefault(host, [])).Distinct().Take(16).ToArray()
+                    : cachedControl.GetValueOrDefault(host, []);
             }
+            var freshAnswer = fresh ? resolved.Take(16).ToArray() : [];
             if (host == endpointHost && !IPAddress.TryParse(host, out _))
             {
                 // A fresh authenticated peer may still use an earlier answer.
@@ -742,11 +844,13 @@ internal sealed class NetworkSafetyController
                 resolved = _endpointAddressCache.Get(endpoint, serverPublicKey, DateTimeOffset.UtcNow)
                     .Concat(resolved).Distinct().Take(16).ToArray();
             }
-            return (Host: host, Addresses: resolved.Take(16).ToArray());
+            return (Host: host, Addresses: resolved.Take(16).ToArray(), FreshAnswer: freshAnswer);
         })).ConfigureAwait(false);
-        foreach (var (host, resolved) in results)
+        var freshControl = new Dictionary<string, IPAddress[]>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (host, resolved, freshAnswer) in results)
         {
-            if (host != endpointHost && resolved.Length > 0) { _controlPlaneAddressCache[host] = resolved; }
+            if (freshAnswer.Length > 0 && _controlPlaneHosts.Contains(host, StringComparer.OrdinalIgnoreCase))
+            { freshControl[host] = freshAnswer; }
             if (host == endpointHost && resolved.Length == 0) { throw new VpnTunnelException("endpoint_resolution_failed"); }
             foreach (var address in resolved)
             {
@@ -758,6 +862,8 @@ internal sealed class NetworkSafetyController
                 }
             }
         }
+        if (_controlPlaneAddressCache.Remember(endpoint, serverPublicKey, _controlPlaneHosts, freshControl,
+            authorizationExpiresAt, DateTimeOffset.UtcNow)) { PersistControlPlaneAddressCache(); }
         if (addresses.Count == 0) { throw new VpnTunnelException("endpoint_resolution_failed"); }
         return new ProtectedAddressSet(addresses.ToArray(), endpointAddresses.ToArray(),
             IPAddress.TryParse(endpointHost, out _), ParseEndpointPort(endpoint), controlAddresses.ToArray());
@@ -785,7 +891,7 @@ internal sealed class NetworkSafetyController
         return host;
     }
 
-    private static async Task<RouteCommandResult> FindBypassRouteAsync(IPAddress address, bool allowMissingPhysical,
+    private async Task<RouteCommandResult> FindBypassRouteAsync(IPAddress address, bool allowMissingPhysical,
         bool nativeLocalEndpoint, CancellationToken cancellationToken)
     {
         const string script = """
@@ -811,29 +917,44 @@ internal sealed class NetworkSafetyController
                 throw 'physical_default_route_missing'
             }
             $existing=Get-NetRoute -DestinationPrefix $prefix -InterfaceIndex $best.InterfaceIndex -PolicyStore ActiveStore -ErrorAction SilentlyContinue | Where-Object {$_.NextHop -eq $best.NextHop} | Select-Object -First 1
-            [pscustomobject]@{Address=$ip;InterfaceIndex=$best.InterfaceIndex;NextHop=$best.NextHop;Created=($null -eq $existing)} | ConvertTo-Json -Compress
+            $metric=if($null -eq $existing){0}else{[int]$existing.RouteMetric};$protocol=if($null -eq $existing){$null}else{$existing.Protocol.ToString()}
+            [pscustomobject]@{Address=$ip;InterfaceIndex=$best.InterfaceIndex;NextHop=$best.NextHop;Created=($null -eq $existing);RouteMetric=$metric;Protocol=$protocol} | ConvertTo-Json -Compress
             """;
-        var output = await RunPowerShellAsync(script,
+        var output = await _commandRunner(script,
             [address.ToString(), address.AddressFamily == AddressFamily.InterNetwork ? "IPv4" : "IPv6", address.AddressFamily == AddressFamily.InterNetwork ? "32" : "128", allowMissingPhysical.ToString(), nativeLocalEndpoint.ToString()], cancellationToken).ConfigureAwait(false);
         return JsonSerializer.Deserialize<RouteCommandResult>(output) ?? throw new VpnTunnelException("route_bypass_apply_failed");
     }
 
-    private static async Task<bool> InstallBypassRouteAsync(BypassRoute route, CancellationToken cancellationToken)
+    private async Task<bool> InstallBypassRouteAsync(BypassRoute route, CancellationToken cancellationToken)
     {
         const string script = """
             $ErrorActionPreference='Stop';$prefix=$args[0]+'/'+$args[3];$idx=[int]$args[1];$hop=$args[2]
             $existing=Get-NetRoute -DestinationPrefix $prefix -InterfaceIndex $idx -PolicyStore ActiveStore -ErrorAction SilentlyContinue | Where-Object {$_.NextHop -eq $hop} | Select-Object -First 1
             if($null -ne $existing){'existing';return}
-            New-NetRoute -DestinationPrefix $prefix -InterfaceIndex $idx -NextHop $hop -RouteMetric 1 -PolicyStore ActiveStore | Out-Null
+            # Receipt proves a completed creation, not the preceding journal intent.
+            $metric=[int]$args[4];$creationId=$args[5];$receiptPath=$args[6]
+            New-NetRoute -DestinationPrefix $prefix -InterfaceIndex $idx -NextHop $hop -RouteMetric $metric -Protocol NetMgmt -PolicyStore ActiveStore | Out-Null
+            $created=@(Get-NetRoute -DestinationPrefix $prefix -InterfaceIndex $idx -PolicyStore ActiveStore | Where-Object {$_.NextHop -eq $hop -and $_.RouteMetric -eq $metric -and $_.Protocol.ToString() -in @('NetMgmt','3')})
+            if($created.Count -ne 1){throw 'route_creation_unconfirmed'}
+            $receipt=[pscustomobject]@{CreationId=$creationId;Address=$args[0];InterfaceIndex=$idx;NextHop=$hop;RouteMetric=$metric;Protocol='NetMgmt'}
+            [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($receiptPath))
+            $temporary=$receiptPath+'.'+[Guid]::NewGuid().ToString('N')+'.tmp'
+            try{
+                $bytes=[Text.UTF8Encoding]::new($false).GetBytes(($receipt | ConvertTo-Json -Compress))
+                $stream=[IO.FileStream]::new($temporary,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None,4096,[IO.FileOptions]::WriteThrough)
+                try{$stream.Write($bytes,0,$bytes.Length);$stream.Flush($true)}finally{$stream.Dispose()}
+                [IO.File]::Move($temporary,$receiptPath)
+            }finally{if([IO.File]::Exists($temporary)){[IO.File]::Delete($temporary)}}
             'created'
             """;
-        var result = await RunPowerShellAsync(script,
+        var result = await _commandRunner(script,
             [route.Address.ToString(), route.InterfaceIndex.ToString(System.Globalization.CultureInfo.InvariantCulture), route.NextHop,
-                route.Address.AddressFamily == AddressFamily.InterNetwork ? "32" : "128"], cancellationToken).ConfigureAwait(false);
+                route.Address.AddressFamily == AddressFamily.InterNetwork ? "32" : "128",
+                route.RouteMetric.ToString(System.Globalization.CultureInfo.InvariantCulture), route.CreationId!, ReceiptPath(route)], cancellationToken).ConfigureAwait(false);
         return result == "created";
     }
 
-    private static async Task VerifyEffectiveRouteAsync(IPAddress address, RouteCommandResult expected,
+    private async Task VerifyEffectiveRouteAsync(IPAddress address, RouteCommandResult expected,
         CancellationToken cancellationToken)
     {
         const string script = """
@@ -845,24 +966,41 @@ internal sealed class NetworkSafetyController
             if(($actual.GetAddressBytes() -join ',') -cne ($hop.GetAddressBytes() -join ',')){throw 'endpoint_bypass_route_conflict'}
             'ok'
             """;
-        var result = await RunPowerShellAsync(script,
+        var result = await _commandRunner(script,
             [address.ToString(), expected.InterfaceIndex.ToString(System.Globalization.CultureInfo.InvariantCulture), expected.NextHop],
             cancellationToken).ConfigureAwait(false);
         if (result != "ok") { throw new VpnTunnelException("endpoint_bypass_route_conflict"); }
     }
 
-    private static async Task RemoveRoutesAsync(IEnumerable<BypassRoute> routes, CancellationToken cancellationToken)
+    private async Task RemoveRoutesAsync(IEnumerable<BypassRoute> routes, CancellationToken cancellationToken)
     {
         const string script = """
             $ErrorActionPreference='Stop';$prefix=$args[0]+'/'+$args[3];$idx=[int]$args[1];$hop=$args[2]
-            Get-NetRoute -DestinationPrefix $prefix -InterfaceIndex $idx -PolicyStore ActiveStore -ErrorAction SilentlyContinue | Where-Object {$_.NextHop -eq $hop} | Remove-NetRoute -Confirm:$false -ErrorAction Stop
-            $remaining=Get-NetRoute -DestinationPrefix $prefix -InterfaceIndex $idx -PolicyStore ActiveStore -ErrorAction SilentlyContinue | Where-Object {$_.NextHop -eq $hop}
-            if($null -ne $remaining){throw 'route_cleanup_failed'}
+            $metric=[int]$args[4];$creationId=$args[5];$receiptPath=$args[6]
+            $candidates=@(Get-NetRoute -PolicyStore ActiveStore -ErrorAction Stop | Where-Object {$_.DestinationPrefix -eq $prefix -and $_.InterfaceIndex -eq $idx -and $_.NextHop -eq $hop})
+            if($metric -eq 0 -or [string]::IsNullOrEmpty($creationId)){
+                # Old tuple-only records cannot distinguish a replacement owner.
+                if($candidates.Count -gt 0){throw 'route_legacy_ownership_unverified'}
+                return
+            }
+            $owned=@($candidates | Where-Object {$_.RouteMetric -eq $metric -and $_.Protocol.ToString() -in @('NetMgmt','3')})
+            if($owned.Count -gt 0){
+                if(![IO.File]::Exists($receiptPath) -or (Get-Item -LiteralPath $receiptPath).Length -gt 4096){throw 'route_creation_receipt_missing'}
+                $receipt=ConvertFrom-Json ([IO.File]::ReadAllText($receiptPath))
+                if($receipt.CreationId -cne $creationId -or $receipt.Address -cne $args[0] -or $receipt.InterfaceIndex -ne $idx -or $receipt.NextHop -cne $hop -or $receipt.RouteMetric -ne $metric -or $receipt.Protocol -cne 'NetMgmt'){throw 'route_creation_receipt_invalid'}
+                $owned | Remove-NetRoute -Confirm:$false -ErrorAction Stop
+            }
+            $remaining=@(Get-NetRoute -PolicyStore ActiveStore -ErrorAction Stop | Where-Object {$_.DestinationPrefix -eq $prefix -and $_.InterfaceIndex -eq $idx -and $_.NextHop -eq $hop -and $_.RouteMetric -eq $metric -and $_.Protocol.ToString() -in @('NetMgmt','3')})
+            if($remaining.Count -ne 0){throw 'route_cleanup_failed'}
+            # A different fingerprint is a foreign replacement, even at the same tuple.
+            if([IO.File]::Exists($receiptPath)){[IO.File]::Delete($receiptPath)}
             """;
         foreach (var route in routes.Reverse())
         {
-            await RunPowerShellAsync(script,
-                [route.Address.ToString(), route.InterfaceIndex.ToString(System.Globalization.CultureInfo.InvariantCulture), route.NextHop, route.Address.AddressFamily == AddressFamily.InterNetwork ? "32" : "128"], cancellationToken).ConfigureAwait(false);
+            await _commandRunner(script,
+                [route.Address.ToString(), route.InterfaceIndex.ToString(System.Globalization.CultureInfo.InvariantCulture), route.NextHop,
+                    route.Address.AddressFamily == AddressFamily.InterNetwork ? "32" : "128",
+                    route.RouteMetric.ToString(System.Globalization.CultureInfo.InvariantCulture), route.CreationId ?? "", ReceiptPath(route)], cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -985,10 +1123,14 @@ internal sealed class NetworkSafetyController
         public uint ScopeId;
     }
 
-    private sealed record BypassRoute(IPAddress Address, int InterfaceIndex, string NextHop);
-    private sealed record PersistedBypassRoute(string Address, int InterfaceIndex, string NextHop);
+    private sealed record BypassRoute(IPAddress Address, int InterfaceIndex, string NextHop,
+        int RouteMetric = 0, string? CreationId = null, bool Confirmed = false);
+    private sealed record PersistedBypassRoute(string Address, int InterfaceIndex, string NextHop,
+        int RouteMetric = 0, string? CreationId = null, bool Confirmed = false, bool Legacy = false);
+    private sealed record BypassRouteJournal(int Version, PersistedBypassRoute[] Entries);
+    private sealed record BypassRouteReceipt(string CreationId, string Address, int InterfaceIndex, string NextHop, int RouteMetric, string Protocol);
     private sealed record RouteCommandResult(string Address, int InterfaceIndex, string NextHop, bool Created, bool Skipped = false,
-        bool Loopback = false, bool NativeLocal = false);
+        bool Loopback = false, bool NativeLocal = false, int RouteMetric = 0, string? Protocol = null);
     private sealed record ProtectedAddressSet(IPAddress[] Addresses, IPAddress[] EndpointAddresses, bool LiteralEndpoint,
         int EndpointPort, IPAddress[] ControlPlaneAddresses);
     private sealed record FirewallRollback(int Version, FirewallProfile[] Profiles, string[] DisabledOutboundAllowRuleNames,

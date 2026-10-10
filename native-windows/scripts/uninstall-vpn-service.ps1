@@ -132,6 +132,45 @@ function Open-MachinePinRegistry {
 
 function Get-MachinePinRegistryPath { return 'SOFTWARE\VEX\VPN' }
 
+function Test-CompletedServiceRemoval {
+    Assert-NoReparsePath -Path $dataDirectory
+    # A file, directory or dangling link is remaining state, never evidence of
+    # completed cleanup. Retry the normal guarded path while any root remains.
+    try { $remaining = Get-Item -LiteralPath $dataDirectory -Force -ErrorAction Stop }
+    catch {
+        if ($_.FullyQualifiedErrorId -notlike 'PathNotFound,*') { throw }
+        $remaining = $null
+    }
+    if ($null -ne $remaining) { return $false }
+    foreach ($name in @('VEX VPN Service', 'AmneziaWGTunnel$vex')) {
+        try { $service = Get-Service -Name $name -ErrorAction Stop }
+        catch {
+            if ($_.FullyQualifiedErrorId -notlike 'NoServiceFoundForGivenName,*') { throw }
+            $service = $null
+        }
+        if ($null -ne $service) {
+            $service.Dispose()
+            throw 'VEX cleanup state is missing while an owned service remains. Repair it before removal.'
+        }
+    }
+    $machine = Open-MachinePinRegistry
+    try {
+        $key = $machine.OpenSubKey((Get-MachinePinRegistryPath), $false)
+        if ($null -ne $key) {
+            try {
+                foreach ($name in @('ClientCertificateSha256', 'ServiceExecutableSha256')) {
+                    if ($name -in $key.GetValueNames()) {
+                        throw 'VEX cleanup state is missing while machine attestation pins remain.'
+                    }
+                }
+            }
+            finally { $key.Dispose() }
+        }
+    }
+    finally { $machine.Dispose() }
+    return $true
+}
+
 function Invoke-VendorRemoval {
     param([Parameter(Mandatory = $true)][string]$Executable)
     $process = Start-Process -FilePath $Executable -ArgumentList '/uninstalltunnelservice vex' `
@@ -200,6 +239,13 @@ if (-not $installRoot.StartsWith(
     throw 'VEX must be removed from below the protected Program Files directory.'
 }
 Assert-NoReparsePath -Path $installRoot
+if (Test-CompletedServiceRemoval) {
+    # The privileged phase previously completed, but user MSIX removal may
+    # have failed or been interrupted. Let the bootstrap retry registration
+    # removal without recreating a service or its deleted authorization state.
+    Write-Host 'VEX service cleanup was already completed and verified.'
+    return
+}
 Assert-RemovalState
 Get-OwnedMachinePins
 Assert-RemovalRuntime

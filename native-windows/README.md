@@ -52,7 +52,17 @@ authenticated peer reconciles that numeric route before reporting health.
 Bypass verification checks both the effective interface and next-hop gateway,
 and preserves routes owned by other applications. The anti-leak endpoint rule
 permits only UDP to the signed port; a separate control-plane rule permits HTTPS.
+Control-plane DNS metadata survives restart only for the configured host set,
+the admitted endpoint and peer, and its unexpired lease. Numeric priming restores
+those escapes before DNS can depend on a damaged tunnel. Removing a bypass
+requires a durable creation receipt and matching route metric and protocol.
+Unconfirmed or legacy routes with ambiguous ownership retain their journal and
+report incomplete cleanup instead of deleting a matching foreign route.
 Disconnect cancels an in-flight repair and fences its service restart.
+The signed authorization deadline also cancels connection and repair waits;
+the runtime rechecks expiry before starting the service and committing a
+connection. A renewed lease has its own deadline and cannot be canceled by an
+older lease callback.
 
 The vendor executable must implement `/installtunnelservice` and
 `/uninstalltunnelservice`. Use the CLI-capable
@@ -126,6 +136,8 @@ labels, and retains favorites and all/fastest/favorites/available filters.
 An explicit quit waits for confirmed tunnel cleanup and seals pending UI
 operations against a late reconnect; a failed cleanup keeps the app available
 for retry.
+Tray connection attempts without an unlocked session open Home, where the
+existing sign-in or Windows Hello unlock controls are available.
 
 Resilience policies are cached in per-user DPAPI storage and route health uses
 expiry, quarantine and sticky selection. A changed endpoint requires the additive
@@ -277,6 +289,10 @@ are verified before restarting its service. Repair stops the controller before
 replacing its authorization. The bootstrap verifies release pins, protected
 authorization, installed payload hashes and SCM configuration, then waits
 for `VEX VPN Service` to reach `Running` before reporting success.
+Removal can be retried after service cleanup has completed but MSIX removal
+failed. The helper accepts that state only when both services, the owned data
+directory and all owned machine pins are absent; ambiguous leftovers still
+stop removal.
 
 The signed public `update.json` release pairs the exact MSIX, bootstrap,
 install/uninstall helpers, and `package-metadata.json` URIs, SHA-256 hashes, and
@@ -353,7 +369,8 @@ Internet, leak protection, roaming and arm64 runtime acceptance remain separate.
 The same fixture exercises a unique unsigned LocalSystem SCM controller with
 the real pipe server and command handler: rejected credentials and tampered
 profiles, signed connection, crash/restart status restoration, durable
-disconnect after restart, and graceful-stop cleanup. Its private process
+disconnect after restart, and graceful-stop cleanup followed by another
+controller start that must remain disconnected. Its private process
 attestation establishes only fixture ownership; signed installed UI-to-service
 attestation and real tray clicks still require release acceptance. Production
 IPC attestation remains mandatory. Runtime cleanup preserves network protection
@@ -362,6 +379,10 @@ See [the fixture documentation](scripts/vpn-fixture-peer/README.md).
 The fixture also calls the production Windows routing interop for both OS
 loopbacks to check IPv4/IPv6 structure layout, interface, next hop and source
 address without changing routes or sending traffic.
+An additional documentation-address host route exercises the production route
+creator, actual Windows metric/protocol, durable creation receipt and confirmed
+removal without sending traffic. A fifteen-second signed lease verifies
+autonomous SCM/adapter/lease cleanup before any status request.
 
 Unsigned PR and manual review builds include sanitized startup, desktop and
 tunnel results; private fixture keys, account state and process dumps are excluded.
@@ -387,6 +408,9 @@ PowerShell 5.1 host with its production stdin transport:
 .\native-windows\tests\ReleaseValidation.Tests.ps1
 .\native-windows\tests\InstallerSafety.Tests.ps1
 ```
+
+The Windows x64 job also runs the isolated installer and bootstrap tests under
+the exact system Windows PowerShell 5.1 executable used for elevated phases.
 
 Before promotion, both x64 and arm64 still require a clean real-Windows
 install/upgrade/rollback/uninstall drill, Authenticode/MSIX trust verification,

@@ -101,6 +101,32 @@ public sealed partial class MainWindow : Window
         ShellWindowVisibilityChanged?.Invoke(this, EventArgs.Empty);
     }
 
+    internal Task ShowAuthenticationRecoveryAsync()
+    {
+        void ShowRecovery()
+        {
+            if (_closed) return;
+            _hasAuthenticatedSession = AppServices.Current.Coordinator.CurrentState is not null;
+            NavigateToSection(AppSection.Home, forceReload: true);
+            ShowShellWindow();
+            Activate();
+            BringToFront();
+        }
+
+        if (DispatcherQueue.HasThreadAccess)
+        {
+            ShowRecovery();
+            return Task.CompletedTask;
+        }
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!DispatcherQueue.TryEnqueue(() =>
+        {
+            try { ShowRecovery(); completion.SetResult(); }
+            catch (Exception error) { completion.SetException(error); }
+        })) completion.SetException(new InvalidOperationException("UI dispatcher is unavailable."));
+        return completion.Task;
+    }
+
     public void RequestExit()
     {
         _allowClose = true;

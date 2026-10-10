@@ -23,7 +23,8 @@ internal static class UiPreviewContext
     {
         var signedOut = arguments.Contains("--signed-out-ui-preview", StringComparer.Ordinal);
         var fixtures = arguments.Contains("--focus-pulse-ui-preview", StringComparer.Ordinal);
-        var command = arguments.Contains("--ui-smoke-exit", StringComparer.Ordinal) ||
+        var command = arguments.Any(argument => argument is "--ui-smoke-exit" or
+            "--ui-smoke-tray-connect" or "--ui-smoke-tray-connect-locked" or "--ui-smoke-tray-reset") ||
             IsPreviewProtocolUri(protocolUri) ||
             ParseActivationUri(string.Join(" ", arguments)) is not null;
         IsPreviewRequest = signedOut || fixtures || command;
@@ -68,6 +69,15 @@ internal static class UiPreviewContext
         IsEnabled && arguments is not null &&
         arguments.Split(' ', StringSplitOptions.RemoveEmptyEntries)
             .Contains("--ui-smoke-exit", StringComparer.Ordinal);
+
+    public static bool IsTrayRecoveryCommand(string? arguments) =>
+        IsEnabled && arguments is not null &&
+        arguments.Split(' ', StringSplitOptions.RemoveEmptyEntries).Any(argument =>
+            argument is "--ui-smoke-tray-connect" or "--ui-smoke-tray-connect-locked" or "--ui-smoke-tray-reset");
+
+    public static bool HasCommand(string? arguments, string command) =>
+        IsEnabled && arguments is not null &&
+        arguments.Split(' ', StringSplitOptions.RemoveEmptyEntries).Contains(command, StringComparer.Ordinal);
 
     public static void Cleanup()
     {

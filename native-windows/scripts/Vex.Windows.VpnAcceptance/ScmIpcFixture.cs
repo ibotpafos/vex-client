@@ -43,7 +43,9 @@ internal static class ScmIpcFixture
         foreach (var key in new[] { "scm_private_pipe_authenticated", "scm_bad_token_rejected",
             "scm_raw_config_rejected", "scm_tampered_profile_rejected", "scm_signed_connect_verified",
             "scm_status_diagnostics_verified", "scm_crash_status_restored", "scm_disconnect_verified",
-            "scm_disconnect_survived_restart", "scm_stop_cleanup_verified", "scm_fixture_service_removed" })
+            "scm_disconnect_survived_restart", "scm_stop_cleanup_verified",
+            "scm_graceful_stop_survived_restart", "scm_authorization_expiry_cleanup_verified",
+            "scm_fixture_service_removed" })
         {
             result[key] = false;
         }
@@ -61,7 +63,8 @@ internal static class ScmIpcFixture
         AssertChildPath(directory, harnessPath);
         var manifest = JsonSerializer.Deserialize<Program.Manifest>(File.ReadAllText(Path.Combine(directory, "manifest.json")))
             ?? throw new Program.FixtureException("fixture_scm_manifest_missing");
-        var signedProfile = Program.CreateSignedProfile(manifest);
+        using var profileKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var signedProfile = Program.CreateSignedProfile(manifest, profileKey: profileKey);
         using var controller = Process.GetCurrentProcess();
         var settings = new FixtureSettings(fixtureId, "VEX.CI." + fixtureId, "Vex.CI." + fixtureId,
             controller.Id, controller.StartTime.ToUniversalTime().Ticks, ownerSid, harnessPath,
@@ -147,6 +150,23 @@ internal static class ScmIpcFixture
             await StopFixtureServiceAsync(directory, settings, token);
             await AssertTunnelStoppedAsync(options.DataDirectory, token);
             result["scm_stop_cleanup_verified"] = true;
+
+            result["stage"] = "scm-graceful-stop-restart";
+            await StartFixtureServiceAsync(directory, settings, token);
+            await ReadStatusAsync(transport, VpnConnectionPhase.Disconnected, token);
+            await AssertTunnelStoppedAsync(options.DataDirectory, token);
+            result["scm_graceful_stop_survived_restart"] = true;
+
+            result["stage"] = "scm-autonomous-authorization-expiry";
+            var expiringProfile = Program.CreateSignedProfile(manifest, TimeSpan.FromSeconds(15), profileKey);
+            await ConnectAsync(transport, expiringProfile.Authorization, manifest.ClientPrivateKey, token);
+            // Read only SCM, adapter and lease/journal state until cleanup is
+            // complete. Status itself enforces expiry and must not make this
+            // autonomous lease callback assertion pass.
+            await AssertTunnelStoppedAsync(options.DataDirectory, token, TimeSpan.FromSeconds(60));
+            await ReadStatusAsync(transport, VpnConnectionPhase.Disconnected, token);
+            result["scm_authorization_expiry_cleanup_verified"] = true;
+            await StopFixtureServiceAsync(directory, settings, token);
         }
         catch
         {
@@ -378,10 +398,11 @@ internal static class ScmIpcFixture
         }
     }
 
-    private static async Task AssertTunnelStoppedAsync(string dataDirectory, CancellationToken token)
+    private static async Task AssertTunnelStoppedAsync(string dataDirectory, CancellationToken token,
+        TimeSpan? budget = null)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
-        timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        timeout.CancelAfter(budget ?? TimeSpan.FromSeconds(10));
         try
         {
             while (true)

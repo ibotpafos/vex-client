@@ -35,6 +35,7 @@ public sealed class TrayIconHost : IDisposable
     private bool _requestInFlight;
     private bool _cancelInFlight;
     private bool _exitInFlight;
+    private bool _authRecoveryBalloon;
 
     public TrayIconHost(
         MainWindow window,
@@ -84,7 +85,7 @@ public sealed class TrayIconHost : IDisposable
             ContextMenuStrip = _contextMenu,
         };
         _notifyIcon.MouseClick += OnNotifyIconMouseClick;
-        _notifyIcon.BalloonTipClicked += OnUpdateClick;
+        _notifyIcon.BalloonTipClicked += OnBalloonTipClicked;
         _services.UpdateService.Changed += OnUpdateSnapshotChanged;
         _services.VpnUiState.Changed += OnVpnStateChanged;
 
@@ -107,7 +108,7 @@ public sealed class TrayIconHost : IDisposable
         _updateMenuItem.Click -= OnUpdateClick;
         _exitMenuItem.Click -= OnExitClick;
         _notifyIcon.MouseClick -= OnNotifyIconMouseClick;
-        _notifyIcon.BalloonTipClicked -= OnUpdateClick;
+        _notifyIcon.BalloonTipClicked -= OnBalloonTipClicked;
         _services.UpdateService.Changed -= OnUpdateSnapshotChanged;
         _services.VpnUiState.Changed -= OnVpnStateChanged;
         _notifyIcon.Visible = false;
@@ -175,6 +176,7 @@ public sealed class TrayIconHost : IDisposable
             }
 
             _lastNotifiedUpdateVersion = version;
+            _authRecoveryBalloon = false;
             _notifyIcon.ShowBalloonTip(
                 5000,
                 update.Required
@@ -200,7 +202,10 @@ public sealed class TrayIconHost : IDisposable
         _window.NavigateToSection(AppSection.Settings);
     }
 
-    private async void OnToggleConnectionClick(object? sender, EventArgs args)
+    private async void OnToggleConnectionClick(object? sender, EventArgs args) =>
+        await ToggleConnectionAsync();
+
+    internal async Task ToggleConnectionAsync()
     {
         if (_disposed || _exitInFlight || _cancelInFlight) return;
         // Cancellation must bypass the tray gate occupied by the original
@@ -229,6 +234,13 @@ public sealed class TrayIconHost : IDisposable
                 async token =>
                 {
                     var disconnect = VpnConnectionActionPolicy.ShouldDisconnect(_services.VpnUiState.Snapshot);
+                    if (!disconnect && _services.Coordinator.CurrentState is null)
+                    {
+                        var code = _services.Coordinator.CurrentStateAccess == ClientStateAccessKind.Locked
+                            ? "windows_hello_required" : "sign_in_required";
+                        await ShowAuthenticationRecoveryAsync(code).ConfigureAwait(false);
+                        return;
+                    }
                     _services.VpnUiState.MarkConnectionDesired(!disconnect);
                     var response = disconnect
                         ? await _services.VpnUiState.RunAsync(_services.VpnClient.DisconnectAsync, token)
@@ -240,6 +252,25 @@ public sealed class TrayIconHost : IDisposable
         catch (OperationCanceledException)
         {
         }
+    }
+
+    private async void OnBalloonTipClicked(object? sender, EventArgs args)
+    {
+        if (_disposed) return;
+        if (_authRecoveryBalloon)
+            await _window.ShowAuthenticationRecoveryAsync();
+        else OnUpdateClick(sender, args);
+    }
+
+    private async Task ShowAuthenticationRecoveryAsync(string errorCode)
+    {
+        await _window.ShowAuthenticationRecoveryAsync().ConfigureAwait(false);
+        await InvokeOnUiThreadAsync(() =>
+        {
+            if (_disposed) return;
+            _authRecoveryBalloon = true;
+            _notifyIcon.ShowBalloonTip(5000, "VEX", ErrorMessage(errorCode), ToolTipIcon.Info);
+        }).ConfigureAwait(false);
     }
 
     private void OnToggleWindowClick(object? sender, EventArgs args)
@@ -324,6 +355,7 @@ public sealed class TrayIconHost : IDisposable
         _window.ShowShellWindow();
         _window.Activate();
         _window.BringToFront();
+        _authRecoveryBalloon = false;
         _notifyIcon.ShowBalloonTip(5000, "Не удалось завершить VEX",
             $"Подтвердить отключение VPN не удалось. Повторите выход. {ErrorMessage(errorCode)}",
             ToolTipIcon.Warning);
@@ -368,6 +400,12 @@ public sealed class TrayIconHost : IDisposable
             var errorCode = error is NativeClientFlowException flow
                 ? flow.Code
                 : "vpn_service_unavailable";
+            if (errorCode is "sign_in_required" or "windows_hello_required")
+            {
+                _services.VpnUiState.MarkConnectionDesired(false);
+                await ShowAuthenticationRecoveryAsync(errorCode).ConfigureAwait(false);
+                return;
+            }
             await InvokeOnUiThreadAsync(() =>
             {
                 if (_disposed)
@@ -376,6 +414,7 @@ public sealed class TrayIconHost : IDisposable
                 }
 
                 Render();
+                _authRecoveryBalloon = false;
                 _notifyIcon.ShowBalloonTip(
                     3000,
                     "VEX",
@@ -409,6 +448,7 @@ public sealed class TrayIconHost : IDisposable
             Render();
             if (!response.Success)
             {
+                _authRecoveryBalloon = false;
                 _notifyIcon.ShowBalloonTip(
                     3000,
                     "VEX",
@@ -550,7 +590,8 @@ public sealed class TrayIconHost : IDisposable
         "unauthorized" => "Требуется восстановить безопасную установку VEX.",
         "tunnel_runtime_missing" => "Компоненты VPN повреждены или отсутствуют.",
         "tunnel_adapter_timeout" => "Сетевой адаптер VPN не запустился вовремя.",
-        "sign_in_required" => "Сначала войдите в аккаунт на вкладке «Аккаунт».",
+        "sign_in_required" => "Для подключения войдите в VEX на главном экране.",
+        "windows_hello_required" => "Разблокируйте сохраненную сессию через Windows Hello на главном экране.",
         "vpn_profile_unsigned" => "Сервер вернул неподписанный VPN-профиль.",
         "vpn_profile_revoked" => "Это устройство отозвано. Войдите снова.",
         "vpn_key_rotation_required" => "Требуется безопасное обновление ключа устройства.",

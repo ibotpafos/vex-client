@@ -57,13 +57,33 @@ if ([Runtime.InteropServices.Marshal]::SizeOf([type][Vex.Windows.Smoke.WindowPoi
 }
 
 # Execute the actual pure capture helpers, without desktop interaction.
-foreach ($functionName in @('Wait-SmokeCondition', 'Wait-SmokeCaptureBounds', 'Get-SmokeCaptureCursorPoint', 'Set-SmokeCaptureFocus')) {
+foreach ($functionName in @('Wait-SmokeCondition', 'Wait-SmokeCaptureBounds', 'Get-SmokeCaptureCursorPoint', 'Set-SmokeCaptureFocus', 'Assert-SmokeTrayRecoveryDiagnostic')) {
     $functionAst = $ast.Find({
         param($node)
         $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $functionName
     }, $true)
     if ($null -eq $functionAst) { throw "Application smoke helper is missing: $functionName" }
     . ([scriptblock]::Create($functionAst.Extent.Text))
+}
+$trayDiagnostic = [ordered]@{
+    schema = 'vex.windows.ui-preview-tray-recovery.v1'; process_id = 123; preview_mode = 'fixtures';
+    scenario = 'locked'; access = 'Locked'; handler_completed = $true;
+    connect_requests = 0; trusted_connect_requests = 0; connection_desired = $false; waiting_for_browser_auth = $false
+}
+Assert-SmokeTrayRecoveryDiagnostic -Diagnostic ([pscustomobject]$trayDiagnostic) -Scenario 'locked' -Access 'Locked' -Mode 'fixtures' -ProcessId 123
+foreach ($invalid in @(
+    @{ key = 'connect_requests'; value = 1 }, @{ key = 'trusted_connect_requests'; value = 1 },
+    @{ key = 'connection_desired'; value = $true }, @{ key = 'waiting_for_browser_auth'; value = $true },
+    @{ key = 'handler_completed'; value = $false }, @{ key = 'process_id'; value = 999 },
+    @{ key = 'access'; value = 'Available' }, @{ key = 'connection_desired'; value = 'false' }
+)) {
+    $badDiagnostic = [ordered]@{}
+    foreach ($key in $trayDiagnostic.Keys) { $badDiagnostic[$key] = $trayDiagnostic[$key] }
+    $badDiagnostic[$invalid.key] = $invalid.value
+    $rejected = $false
+    try { Assert-SmokeTrayRecoveryDiagnostic -Diagnostic ([pscustomobject]$badDiagnostic) -Scenario 'locked' -Access 'Locked' -Mode 'fixtures' -ProcessId 123 }
+    catch { $rejected = $true }
+    if (-not $rejected) { throw "Application smoke accepts invalid actual tray evidence: $($invalid.key)." }
 }
 $desktop = [pscustomobject]@{ Left = -1920; Top = -200; Right = 0; Bottom = 880 }
 $bounds = [pscustomobject]@{ Left = -1840; Top = -140; Right = -900; Bottom = 500 }

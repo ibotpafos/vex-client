@@ -56,6 +56,13 @@ public partial class App : Application
             return;
         }
 
+        if (UiPreviewContext.IsTrayRecoveryCommand(
+            (args.Data as ILaunchActivatedEventArgs)?.Arguments))
+        {
+            _ = HandleActivationAsync(args);
+            return;
+        }
+
         _window.ShowShellWindow();
         _window.Activate();
         _window.BringToFront();
@@ -71,6 +78,27 @@ public partial class App : Application
         if (UiPreviewContext.IsEnabled)
         {
             if (UiPreviewContext.IsExitCommand(launchArguments)) ExitApplication();
+#if DEBUG
+            else if (UiPreviewContext.IsTrayRecoveryCommand(launchArguments) && _trayIconHost is not null)
+            {
+                var services = AppServices.Current;
+                var scenario = UiPreviewContext.HasCommand(launchArguments, "--ui-smoke-tray-connect-locked")
+                    ? "locked" : UiPreviewContext.HasCommand(launchArguments, "--ui-smoke-tray-reset") ? "reset" : "signed-out";
+                if (scenario == "reset")
+                {
+                    await services.StateStore.RestorePreviewSessionAsync();
+                    await _window!.ShowAuthenticationRecoveryAsync();
+                }
+                else
+                {
+                    if (scenario == "locked") await services.StateStore.LockPreviewSessionAsync();
+                    else if (UiPreviewContext.IsAuthenticated)
+                        throw new InvalidOperationException("Signed-out tray checks require a signed-out preview.");
+                    await _trayIconHost.ToggleConnectionAsync();
+                }
+                UiPreviewFixtures.RecordTrayRecovery(scenario, services);
+            }
+#endif
             // UI-review activations never enter browser authentication.
             return;
         }

@@ -65,6 +65,29 @@ public sealed class ProtectedClientStateStore :
         _windowsHello = new WindowsHelloSessionState(helloRequired);
     }
 
+#if DEBUG
+    internal async Task LockPreviewSessionAsync()
+    {
+        EnsureAuthenticatedPreview();
+        await _windowsHello.SetRequiredAsync(true, _ => Task.CompletedTask,
+            (_, _) => { }, CancellationToken.None);
+        _windowsHello.SessionCleared();
+    }
+
+    internal async Task RestorePreviewSessionAsync()
+    {
+        EnsureAuthenticatedPreview();
+        await _windowsHello.SetRequiredAsync(false, _ => Task.CompletedTask,
+            (_, _) => { }, CancellationToken.None);
+    }
+
+    private static void EnsureAuthenticatedPreview()
+    {
+        if (!UiPreviewContext.IsEnabled || !UiPreviewContext.IsAuthenticated || UiPreviewContext.StateDirectory is null)
+            throw new InvalidOperationException("Session fixtures require an authenticated isolated UI preview.");
+    }
+#endif
+
     public ClientStateAccessKind GetAccessState()
     {
         try

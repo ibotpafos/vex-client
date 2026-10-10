@@ -38,7 +38,11 @@ $script:defaults4 = @(
     [pscustomobject]@{InterfaceIndex=20;NextHop='192.168.1.1';RouteMetric=1},
     [pscustomobject]@{InterfaceIndex=10;NextHop='192.168.2.1';RouteMetric=30})
 $script:defaults6 = @([pscustomobject]@{InterfaceIndex=99;NextHop='::';RouteMetric=0})
-$script:hostRoutes = @([pscustomobject]@{DestinationPrefix='203.0.113.1/32';InterfaceIndex=20;NextHop='192.168.1.1';RouteMetric=0})
+$script:hostRoutes = @([pscustomobject]@{DestinationPrefix='203.0.113.1/32';InterfaceIndex=20;NextHop='192.168.1.1';RouteMetric=0;Protocol='NetMgmt'})
+$routeReceiptDirectory=Join-Path ([IO.Path]::GetTempPath()) ('vex-route-policy-'+[Guid]::NewGuid().ToString('N'))
+$routeCreationId='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+$routeReceiptPath=Join-Path $routeReceiptDirectory ($routeCreationId+'.json')
+$routeMetric='51234'
 $script:physicalLookups = 0
 function Get-NetAdapter { param([switch]$Physical) $script:physicalLookups++; $script:physical }
 function Get-NetIPInterface { param($AddressFamily,$InterfaceIndex) [pscustomobject]@{InterfaceMetric=$(if($InterfaceIndex -eq 10){5}else{40})} }
@@ -53,13 +57,15 @@ function Get-NetIPAddress {
 }
 function Get-NetRoute {
     [CmdletBinding()]param($AddressFamily,$DestinationPrefix,[int]$InterfaceIndex,$PolicyStore)
+    if($script:routeQueryFails){throw 'CIM route query unavailable'}
+    if(!$DestinationPrefix){return $script:hostRoutes}
     if ($DestinationPrefix -eq '0.0.0.0/0') { return $script:defaults4 }
     if ($DestinationPrefix -eq '::/0') { return $script:defaults6 }
     $script:hostRoutes | Where-Object {$_.DestinationPrefix -eq $DestinationPrefix -and (!$InterfaceIndex -or $_.InterfaceIndex -eq $InterfaceIndex)}
 }
 function New-NetRoute {
-    param($DestinationPrefix,$InterfaceIndex,$NextHop,$RouteMetric,$PolicyStore)
-    $script:hostRoutes += [pscustomobject]@{DestinationPrefix=$DestinationPrefix;InterfaceIndex=$InterfaceIndex;NextHop=$NextHop;RouteMetric=$RouteMetric}
+    param($DestinationPrefix,$InterfaceIndex,$NextHop,$RouteMetric,$Protocol,$PolicyStore)
+    $script:hostRoutes += [pscustomobject]@{DestinationPrefix=$DestinationPrefix;InterfaceIndex=$InterfaceIndex;NextHop=$NextHop;RouteMetric=$RouteMetric;Protocol=$Protocol}
 }
 function Find-NetRoute {
     [CmdletBinding()]param($RemoteIPAddress)
@@ -70,7 +76,7 @@ function Find-NetRoute {
 function Remove-NetRoute {
     [CmdletBinding(SupportsShouldProcess)]param([Parameter(ValueFromPipeline)]$InputObject)
     process {if($script:skipRouteRemoval){return};$script:hostRoutes=@($script:hostRoutes | Where-Object {
-        $_.DestinationPrefix -ne $InputObject.DestinationPrefix -or $_.InterfaceIndex -ne $InputObject.InterfaceIndex -or $_.NextHop -ne $InputObject.NextHop
+        $_.DestinationPrefix -ne $InputObject.DestinationPrefix -or $_.InterfaceIndex -ne $InputObject.InterfaceIndex -or $_.NextHop -ne $InputObject.NextHop -or $_.RouteMetric -ne $InputObject.RouteMetric -or $_.Protocol -ne $InputObject.Protocol
     })}
 }
 foreach ($loopback in @('127.0.0.1', '127.10.20.30', '::1')) {
@@ -81,9 +87,11 @@ Assert ($script:physicalLookups -eq 0 -and $script:hostRoutes.Count -eq 1) 'Loop
 $route = (& $findRoute '203.0.113.1' 'IPv4' '32' 'False') | ConvertFrom-Json
 Assert ($script:physicalLookups -eq 1) 'External endpoint must still resolve its physical uplink'
 Assert ($route.InterfaceIndex -eq 10 -and $route.NextHop -eq '192.168.2.1' -and $route.Created) 'Stale host route or tunnel selected instead of physical gateway'
-$result = & $install '203.0.113.1' '10' '192.168.2.1' '32'
+$result = & $install '203.0.113.1' '10' '192.168.2.1' '32' $routeMetric $routeCreationId $routeReceiptPath
 Assert ($result -eq 'created') 'New physical bypass not created'
-$result = & $install '203.0.113.1' '10' '192.168.2.1' '32'
+$proof=[IO.File]::ReadAllText($routeReceiptPath) | ConvertFrom-Json
+Assert ($proof.CreationId -ceq $routeCreationId -and $proof.RouteMetric -eq $routeMetric -and $proof.Protocol -ceq 'NetMgmt') 'Creation must durably confirm actual route metadata before acknowledgment'
+$result = & $install '203.0.113.1' '10' '192.168.2.1' '32' $routeMetric $routeCreationId $routeReceiptPath
 Assert ($result -eq 'existing') 'Existing foreign route must not be claimed as newly created'
 $script:effectiveRoute=[pscustomobject]@{InterfaceIndex=10;NextHop='192.168.2.1'}
 Assert ((& $verifyRoute '203.0.113.1' '10' '192.168.2.1') -eq 'ok') 'Correct effective physical interface and gateway should verify'
@@ -95,14 +103,50 @@ $script:effectiveRoute=[pscustomobject]@{InterfaceIndex=20;NextHop='192.168.2.1'
 Assert-Rejected {& $verifyRoute '203.0.113.1' '10' '192.168.2.1'} 'Correct next-hop on a different NIC must fail verification'
 $script:effectiveRoute=[pscustomobject]@{InterfaceIndex=10;NextHop='fe80::1%10'}
 Assert ((& $verifyRoute '2001:db8::1' '10' 'fe80::1') -eq 'ok') 'IPv6 next-hop must compare address bytes while binding the interface separately'
-& $removeRoutes '203.0.113.1' '10' '192.168.2.1' '32' | Out-Null
+& $removeRoutes '203.0.113.1' '10' '192.168.2.1' '32' $routeMetric $routeCreationId $routeReceiptPath | Out-Null
 Assert ($script:hostRoutes.Count -eq 1 -and $script:hostRoutes[0].InterfaceIndex -eq 20) 'Cleanup must remove only the owned route tuple and preserve foreign routes'
 # Reinstall after cleanup for the subsequent physical-uplink assertions.
-Assert ((& $install '203.0.113.1' '10' '192.168.2.1' '32') -eq 'created') 'Owned route should be reusable after verified cleanup'
+Assert ((& $install '203.0.113.1' '10' '192.168.2.1' '32' $routeMetric $routeCreationId $routeReceiptPath) -eq 'created') 'Owned route should be reusable after verified cleanup'
 $script:skipRouteRemoval=$true
-Assert-Rejected {& $removeRoutes '203.0.113.1' '10' '192.168.2.1' '32'} 'A silent owned-route removal failure must not claim verified cleanup'
+Assert-Rejected {& $removeRoutes '203.0.113.1' '10' '192.168.2.1' '32' $routeMetric $routeCreationId $routeReceiptPath} 'A silent owned-route removal failure must not claim verified cleanup'
 $script:skipRouteRemoval=$false
 Assert ($script:hostRoutes.Count -eq 2) 'Failed cleanup must retain ownership and preserve the foreign route'
+$script:routeQueryFails=$true
+Assert-Rejected {& $removeRoutes '203.0.113.1' '10' '192.168.2.1' '32' $routeMetric $routeCreationId $routeReceiptPath} 'Provider read failure must not be mistaken for an absent route'
+$script:routeQueryFails=$false
+Assert ([IO.File]::Exists($routeReceiptPath) -and $script:hostRoutes.Count -eq 2) 'Provider read failure discarded durable creation evidence'
+# A reset removed VEX's route and another owner replaced the identical tuple.
+# Its independent metric/protocol must survive both journal and receipt cleanup.
+($script:hostRoutes | Where-Object InterfaceIndex -eq 10).RouteMetric=333
+& $removeRoutes '203.0.113.1' '10' '192.168.2.1' '32' $routeMetric $routeCreationId $routeReceiptPath | Out-Null
+Assert ($script:hostRoutes.Count -eq 2 -and ![IO.File]::Exists($routeReceiptPath)) 'Foreign same-tuple replacement was removed or old evidence retained'
+$pendingId='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+$pendingPath=Join-Path $routeReceiptDirectory ($pendingId+'.json')
+Assert ((& $install '203.0.113.1' '10' '192.168.2.1' '32' '51235' $pendingId $pendingPath) -eq 'existing') 'Concurrent foreign creation must be acknowledged without acquiring ownership'
+Assert (![IO.File]::Exists($pendingPath)) 'Existing foreign route acquired a creation receipt'
+# Cancellation/crash before that existing acknowledgment leaves a pending plan.
+& $removeRoutes '203.0.113.1' '10' '192.168.2.1' '32' '51235' $pendingId $pendingPath | Out-Null
+Assert ($script:hostRoutes.Count -eq 2) 'Pending-plan rollback deleted a differently fingerprinted foreign route'
+Assert-Rejected {& $removeRoutes '203.0.113.1' '10' '192.168.2.1' '32' '0' '' ''} 'A still-present legacy tuple must remain ambiguous rather than being deleted'
+Assert ($script:hostRoutes.Count -eq 2) 'Legacy cleanup removed an ambiguously owned route'
+$script:hostRoutes=@($script:hostRoutes | Where-Object InterfaceIndex -ne 10)
+& $removeRoutes '203.0.113.1' '10' '192.168.2.1' '32' '0' '' '' | Out-Null
+# Genuine creation with cancellation after the durable receipt remains cleanable.
+Assert ((& $install '203.0.113.1' '10' '192.168.2.1' '32' $routeMetric $routeCreationId $routeReceiptPath) -eq 'created') 'Fresh confirmed route was not created'
+$savedProof=[IO.File]::ReadAllText($routeReceiptPath)
+[IO.File]::Delete($routeReceiptPath)
+Assert-Rejected {& $removeRoutes '203.0.113.1' '10' '192.168.2.1' '32' $routeMetric $routeCreationId $routeReceiptPath} 'Matching planned metadata without completed-creation evidence must not authorize deletion'
+Assert ($script:hostRoutes.Count -eq 2) 'Missing-receipt cleanup removed an ambiguous route'
+[IO.File]::WriteAllText($routeReceiptPath,$savedProof.Replace($routeCreationId,$pendingId))
+Assert-Rejected {& $removeRoutes '203.0.113.1' '10' '192.168.2.1' '32' $routeMetric $routeCreationId $routeReceiptPath} 'Wrong creation receipt must not authorize deletion'
+[IO.File]::WriteAllText($routeReceiptPath,$savedProof)
+& $removeRoutes '203.0.113.1' '10' '192.168.2.1' '32' $routeMetric $routeCreationId $routeReceiptPath | Out-Null
+Assert ($script:hostRoutes.Count -eq 1 -and ![IO.File]::Exists($routeReceiptPath)) 'Late-cancel rollback failed to remove the genuinely confirmed route'
+# Same metric alone is insufficient when the provider protocol changed.
+Assert ((& $install '203.0.113.1' '10' '192.168.2.1' '32' $routeMetric $routeCreationId $routeReceiptPath) -eq 'created') 'Protocol replacement setup failed'
+($script:hostRoutes | Where-Object InterfaceIndex -eq 10).Protocol='Local'
+& $removeRoutes '203.0.113.1' '10' '192.168.2.1' '32' $routeMetric $routeCreationId $routeReceiptPath | Out-Null
+Assert ($script:hostRoutes.Count -eq 2) 'Same-metric foreign protocol replacement was deleted'
 $route = (& $findRoute '2001:db8::1' 'IPv6' '128' 'True') | ConvertFrom-Json
 Assert $route.Skipped 'Optional AAAA should be skipped without a physical IPv6 uplink'
 Assert-Rejected {& $findRoute '2001:db8::1' 'IPv6' '128' 'False'} 'Literal IPv6 endpoint must fail closed without an uplink'
@@ -332,3 +376,4 @@ foreach ($case in $cases) {
     } finally {$process.Dispose()}
 }
 Write-Output 'Network safety policy regression tests passed' 
+if([IO.Directory]::Exists($routeReceiptDirectory)){[IO.Directory]::Delete($routeReceiptDirectory,$true)}

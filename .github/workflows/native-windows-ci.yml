@@ -133,6 +133,18 @@ jobs:
           ./native-windows/tests/UiPreviewContext.Tests.ps1
           node native-windows/scripts/validate-packaging-static.mjs
           node scripts/validate_native_windows_xaml.mjs
+      - name: Exercise isolated installer functions in Windows PowerShell 5.1
+        if: matrix.architecture == 'x64'
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $hostPath = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'WindowsPowerShell/v1.0/powershell.exe'
+          & $hostPath -NoLogo -NoProfile -NonInteractive -Command '$PSVersionTable.PSVersion.ToString()'
+          if ($LASTEXITCODE -ne 0) { throw 'The production Windows PowerShell host is unavailable.' }
+          foreach ($test in @('InstallerSafety.Tests.ps1', 'BootstrapOwnership.Tests.ps1')) {
+            & $hostPath -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PWD "native-windows/tests/$test")
+            if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 isolated installer test failed: $test" }
+          }
       - name: Publish self-contained VPN service
         run: dotnet publish native-windows/src/Vex.Windows.Service/Vex.Windows.Service.csproj -c Release -r win-${{ matrix.architecture }} -p:Platform=${{ matrix.architecture }} -o "${{ runner.temp }}/vex-windows/service-${{ matrix.architecture }}"
       - name: Publish self-contained WinUI application

@@ -33,7 +33,9 @@ pipe connection separately from the longer VPN operation.
 The drill rejects an invalid token, raw configuration and a tampered signed
 profile over actual IPC, then exercises connect/status/diagnostics, controller
 crash recovery, disconnect followed by restart, and graceful SCM shutdown
-cleanup. It does not exercise the installed signed WinUI application,
+cleanup followed by another disconnected restart. A fifteen-second profile
+uses the same ephemeral signing key to verify autonomous vendor/adapter/lease
+cleanup before any post-expiry status request. It does not exercise the installed signed WinUI application,
 Authenticode admission, the production keyring, or clicking the tray Exit item.
 The peer defaults to 180 seconds and accepts at most 420 seconds for the longer
 SCM drill; the wrapper also bounds the harness process and kills its owned peer
@@ -53,6 +55,14 @@ the actual Wintun source address and interface index. HTTPS verifies an
 ephemeral root and the normal hostname, then checks a random response nonce.
 Actual UAPI traffic counters must increase and peer DNS/HTTPS counters confirm
 receipt. A same-host adapter delivery cannot satisfy this test.
+
+Before tunnel creation, the production network controller creates one temporary
+`192.0.2.253/32` documentation-address bypass through the physical gateway.
+The harness refuses an existing route for that prefix on any interface, verifies
+the actual metric and NetMgmt protocol against the confirmed ownership journal
+and durable creation receipt, then rolls back and verifies absence. No packets
+are sent to that address; failed or canceled checks still use independently
+bounded, receipt-checked cleanup.
 
 The wrapper refuses self-hosted runners, existing VPN services/adapters,
 connected Windows VPN profiles, saved VEX service state, or occupied fixture

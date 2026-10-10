@@ -59,6 +59,12 @@ internal static class Program
                 ?? throw new InvalidOperationException("fixture_manifest_missing");
             Require(manifest.Schema == "vex.windows-vpn-fixture.v1" && manifest.ClientIp == ClientIp && manifest.ServerIp == ServerIp,
                 "fixture_manifest_invalid");
+            result["stage"] = "native-owned-route";
+            using (var routeDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(50)))
+            {
+                await NativeRouteOwnershipFixture.RunAsync(directory, runtimeDirectory,
+                    manifest.ServerPublicKey, result, routeDeadline.Token);
+            }
             var endpoint = IPEndPoint.Parse(manifest.Endpoint);
             Require(endpoint.Address.AddressFamily == AddressFamily.InterNetwork && endpoint.Port > 0 &&
                 !IPAddress.IsLoopback(endpoint.Address) &&
@@ -285,9 +291,13 @@ internal static class Program
     }
 
     internal static (VpnProfileAuthorization Authorization, VpnProfileSigningKey SigningKey, VpnAuthorizedProfile Profile)
-        CreateSignedProfile(Manifest manifest)
+        CreateSignedProfile(Manifest manifest, TimeSpan? lifetime = null, ECDsa? profileKey = null)
     {
-        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var leaseLifetime = lifetime ?? TimeSpan.FromMinutes(10);
+        Require(leaseLifetime > TimeSpan.Zero && leaseLifetime <= TimeSpan.FromMinutes(10),
+            "fixture_profile_lifetime_invalid");
+        using var ownedKey = profileKey is null ? ECDsa.Create(ECCurve.NamedCurves.nistP256) : null;
+        var key = profileKey ?? ownedKey!;
         var now = DateTimeOffset.UtcNow;
         var payload = JsonSerializer.SerializeToUtf8Bytes(new
         {
@@ -295,7 +305,7 @@ internal static class Program
             user_id = "ci-fixture-user", device_id = "ci-fixture-device",
             requested_location_id = "ci-fixture", assigned_location_id = "ci-fixture",
             routing_mode = "full", bypass_region = "", routing_policy_version = "ci-fixture-v1",
-            issued_at = now, expires_at = now.AddMinutes(10),
+            issued_at = now, expires_at = now + leaseLifetime,
             tunnel = new
             {
                 protocol = "amneziawg", endpoint = manifest.Endpoint, server_public_key = manifest.ServerPublicKey,

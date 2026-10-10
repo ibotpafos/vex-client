@@ -218,6 +218,70 @@ try {
     $script:timedOut = $false; $script:vendorExit = 1
     Assert-Rejected { Invoke-VendorRemoval -Executable 'isolated-vendor-fixture.exe' } 'Failed vendor removal must not report success'
 
+    $normalDataDirectory = $script:dataDirectory
+    $script:dataDirectory = Join-Path $temporary 'removed-state'
+    $script:leftoverService = $null; $script:leftoverPinNames = @(); $script:serviceProbeFailure = $false
+    function Get-Service {
+        param($Name,$ErrorAction)
+        if ($script:serviceProbeFailure) { throw 'Mock SCM query failure' }
+        if ($Name -ne $script:leftoverService) { return }
+        $service = [pscustomobject]@{}
+        $service | Add-Member ScriptMethod Dispose { }
+        $service
+    }
+    function Open-MachinePinRegistry {
+        $key = [pscustomobject]@{}
+        $key | Add-Member ScriptMethod GetValueNames { return $script:leftoverPinNames }
+        $key | Add-Member ScriptMethod Dispose { }
+        $machine = [pscustomobject]@{ Key = $key }
+        $machine | Add-Member ScriptMethod OpenSubKey { param($Path,$Writable) return $this.Key }
+        $machine | Add-Member ScriptMethod Dispose { }
+        $machine
+    }
+    Assert (Test-CompletedServiceRemoval) 'Absent state, services and pins must permit MSIX removal retry'
+    foreach ($name in @('VEX VPN Service','AmneziaWGTunnel$vex')) {
+        $script:leftoverService = $name
+        Assert-Rejected { Test-CompletedServiceRemoval } 'Missing state with a remaining service must not report completed cleanup'
+    }
+    $script:leftoverService = $null
+    foreach ($name in @('ClientCertificateSha256','ServiceExecutableSha256')) {
+        $script:leftoverPinNames = @($name)
+        Assert-Rejected { Test-CompletedServiceRemoval } 'Missing state with a remaining pin must not report completed cleanup'
+    }
+    $script:leftoverPinNames = @('UnrelatedValue')
+    Assert (Test-CompletedServiceRemoval) 'Unrelated registry values must not be removed or treated as owned pins'
+    $script:serviceProbeFailure = $true
+    Assert-Rejected { Test-CompletedServiceRemoval } 'An unavailable SCM must not be mistaken for absent services'
+    $script:serviceProbeFailure = $false
+    [IO.File]::WriteAllText($script:dataDirectory, 'ambiguous remaining root')
+    Assert ((Test-CompletedServiceRemoval) -eq $false) 'A remaining file at the state root must reject the completed-cleanup path'
+    Remove-Item -LiteralPath $script:dataDirectory
+
+    # Replay the actual bootstrap user phase after the privileged cleanup has
+    # completed and Remove-AppxPackage fails once. The second call must reach
+    # MSIX removal, and a third call must leave the already-removed package alone.
+    $script:retryPhases = 0; $script:retryRemovals = 0; $script:packagePresent = $true
+    function Get-InstalledPackage {
+        param($Name)
+        if ($script:packagePresent) { [pscustomobject]@{ PackageFullName = 'original-user-package'; InstallLocation = $installDirectory } }
+    }
+    function Invoke-ServicePhase {
+        param($ServiceAction,$MetadataFile,$PackageInstallDirectory)
+        $script:retryPhases++
+        Assert (Test-CompletedServiceRemoval) 'Repeat privileged removal must accept only fully completed cleanup'
+    }
+    function Remove-AppxPackage {
+        param($Package,$ErrorAction)
+        $script:retryRemovals++
+        if ($script:retryRemovals -eq 1) { throw 'Mock MSIX removal interrupted after privileged cleanup' }
+        $script:packagePresent = $false
+    }
+    Assert-Rejected { Uninstall-Package -Metadata ([pscustomobject]$metadata) } 'An interrupted MSIX removal must still report failure'
+    Uninstall-Package -Metadata ([pscustomobject]$metadata)
+    Uninstall-Package -Metadata ([pscustomobject]$metadata)
+    Assert ($script:retryPhases -eq 2 -and $script:retryRemovals -eq 2 -and -not $script:packagePresent) 'MSIX removal retry must recover without reprovisioning or repeated removal'
+    $script:dataDirectory = $normalDataDirectory
+
     if ($windowsHost) {
         # Re-import actual ACL and DPAPI functions; no mock may stand in for these.
         Import-ProductionFunctions 'install-vpn-service.ps1'
@@ -272,11 +336,24 @@ try {
             Get-OwnedMachinePins -Remove
             Assert ($null -eq $key.GetValue('ClientCertificateSha256') -and $null -eq $key.GetValue('ServiceExecutableSha256') -and
                 $key.GetValue('UnrelatedValue') -eq 'preserve') 'Uninstall must remove only exact owned attestation values'
+            $script:dataDirectory = Join-Path $temporary 'removed-native-state'
+            # Use the real Windows read-only SCM provider for the completed
+            # cleanup path; registry reads stay confined to the private HKCU key.
+            Remove-Item -LiteralPath Function:Get-Service
+            Assert (Test-CompletedServiceRemoval) 'Native empty owned pins must permit a completed-removal retry'
+            foreach ($name in @('ClientCertificateSha256','ServiceExecutableSha256')) {
+                # Presence is ambiguous even for an empty or unrelated pin.
+                $key.SetValue($name, '')
+                Assert-Rejected { Test-CompletedServiceRemoval } 'A native empty pin must not be mistaken for an absent value'
+                $key.DeleteValue($name)
+            }
+            Assert ($key.GetValue('UnrelatedValue') -eq 'preserve') 'Completed-removal checks changed unrelated registry values'
+            $script:dataDirectory = $normalDataDirectory
         }
         finally { $key.Dispose(); [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree($script:registryFixture, $false) }
         Write-Host 'Native isolated Windows ACL, DPAPI and registry checks passed.'
     }
     else { Write-Host 'Native ACL, DPAPI and registry checks deferred to the disposable Windows CI host.' }
-    Write-Host 'Installer safety regressions passed: rollback, failed registration recovery, release preflight, truthful Verify, stop-before-pins and bounded vendor cleanup.'
+    Write-Host 'Installer safety regressions passed: rollback, failed registration recovery, release preflight, truthful Verify, stop-before-pins, bounded vendor cleanup and interrupted-removal retry.'
 }
 finally { Remove-Item -LiteralPath $temporary -Recurse -Force }

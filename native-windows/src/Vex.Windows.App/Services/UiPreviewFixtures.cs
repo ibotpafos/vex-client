@@ -12,10 +12,44 @@ namespace Vex.Windows.App.Services;
 // production token nor a signed VPN profile, and never contact the service.
 internal static class UiPreviewFixtures
 {
+#if DEBUG
+    private static int _connectRequests;
+    private static int _trustedConnectRequests;
+
+    internal static void RecordTrayRecovery(string scenario, AppServices services)
+    {
+        if (!UiPreviewContext.IsEnabled || UiPreviewContext.StateDirectory is null)
+            throw new InvalidOperationException("Tray diagnostics require isolated UI preview.");
+        var path = Path.Combine(Path.GetTempPath(), $"vex-ui-preview-tray-{Environment.ProcessId}.json");
+        var value = JsonSerializer.Serialize(new
+        {
+            schema = "vex.windows.ui-preview-tray-recovery.v1",
+            process_id = Environment.ProcessId,
+            preview_mode = UiPreviewContext.IsAuthenticated ? "fixtures" : "signed-out",
+            scenario,
+            access = services.Coordinator.CurrentStateAccess.ToString(),
+            connect_requests = Volatile.Read(ref _connectRequests),
+            trusted_connect_requests = Volatile.Read(ref _trustedConnectRequests),
+            connection_desired = services.VpnUiState.ConnectionDesired,
+            waiting_for_browser_auth = services.Auth.IsWaitingForBrowserAuth,
+            handler_completed = true,
+        });
+        File.WriteAllText(path + ".tmp", value);
+        File.Move(path + ".tmp", path, overwrite: true);
+    }
+#endif
+
     public static VpnServiceResponse ServiceResponse(VpnServiceRequest request)
     {
         if (!UiPreviewContext.IsEnabled)
             throw new InvalidOperationException("UI preview is not enabled.");
+#if DEBUG
+        if (request.Operation == VpnServiceOperation.Connect)
+        {
+            Interlocked.Increment(ref _connectRequests);
+            if (request.ProfileAuthorization is not null) Interlocked.Increment(ref _trustedConnectRequests);
+        }
+#endif
         return new VpnServiceResponse(request.RequestId, true,
             VpnConnectionSnapshot.Disconnected() with { Diagnostics = VpnTunnelDiagnostics.Empty }, null);
     }

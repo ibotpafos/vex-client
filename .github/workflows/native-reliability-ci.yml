@@ -120,10 +120,11 @@ jobs:
   macos:
     name: macOS affected suites
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: macos-15
+    # Expo 57 requires Xcode 26.4+; the standard macOS 26 image supplies 26.6.
+    runs-on: macos-26
     timeout-minutes: 60
     env:
-      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:

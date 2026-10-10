@@ -6,7 +6,7 @@ const workflow = process.argv[2] ?? '.github/workflows/native-reliability-ci.yml
 const document = YAML.parseDocument(fs.readFileSync(workflow, 'utf8'));
 assert.equal(document.errors.length, 0, 'Workflow must be valid YAML');
 const config = document.toJS();
-const lanes = { shared: 'ubuntu-24.04', android: 'ubuntu-24.04', macos: 'macos-15' };
+const lanes = { shared: 'ubuntu-24.04', android: 'ubuntu-24.04', macos: 'macos-26' };
 
 function violations(value) {
   const failures = [];
@@ -52,6 +52,7 @@ function violations(value) {
     if (lane === 'android' && /(?:^|\n)\s*sdkmanager\s/.test(commands)) failures.push('explicit Android SDK tool path');
     if (lane === 'android' && !(job.steps ?? []).some(step => step.uses?.startsWith('actions/setup-go@') && step.with?.['go-version'] === '1.25.x')) failures.push('pinned upstream Go toolchain floor');
     if (lane === 'macos') {
+      if (job.env?.DEVELOPER_DIR !== '/Applications/Xcode_26.6.app/Contents/Developer') failures.push('supported pinned Xcode toolchain');
       if (!(job.steps ?? []).some(step => step.run?.trim() === 'swift test --package-path macos-native')) failures.push('complete macOS suite');
       const transaction = (job.steps ?? []).find(step => step.id === 'contract');
       if (transaction?.if !== "github.event_name == 'pull_request'"
@@ -78,6 +79,8 @@ if (failures.length) {
     value => { value.jobs.ios = structuredClone(value.jobs.macos); },
     value => { value.jobs.windows = structuredClone(value.jobs.macos); },
     value => { value.jobs.android['runs-on'] = 'ubuntu-latest-16-cores'; },
+    value => { value.jobs.macos['runs-on'] = 'macos-26-xlarge'; },
+    value => { value.jobs.macos.env.DEVELOPER_DIR = '/Applications/Xcode_26.3.app/Contents/Developer'; },
     value => { value.jobs.android.steps.find(step => step.name === 'Install locked Android build components').run = 'sdkmanager \"platform-tools\"'; },
     value => { value.jobs.android.steps.find(step => step.uses?.startsWith('actions/setup-go@')).with['go-version'] = '1.24.x'; },
     value => { value.permissions.contents = 'write'; },

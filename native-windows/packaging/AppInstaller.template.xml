@@ -9,6 +9,12 @@
         Version="__PACKAGE_VERSION__"
         ProcessorArchitecture="__ARCHITECTURE__"
         Uri="__PACKAGE_URI__" />
+    <Dependencies>
+        <Package Name="Microsoft.VCLibs.140.00.UWPDesktop"
+            Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US"
+            Version="__VCLIBS_VERSION__" ProcessorArchitecture="__ARCHITECTURE__"
+            Uri="__VCLIBS_URI__" />
+    </Dependencies>
     <!-- The signed in-app updater owns automatic checks because every release
          must provision the matching privileged VPN service through the verified
          elevated bootstrap. Raw App Installer package-only updates are unsafe. -->

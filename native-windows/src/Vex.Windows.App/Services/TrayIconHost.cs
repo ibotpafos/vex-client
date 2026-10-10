@@ -36,6 +36,7 @@ public sealed class TrayIconHost : IDisposable
     private bool _cancelInFlight;
     private bool _exitInFlight;
     private bool _authRecoveryBalloon;
+    private bool _accountRecoveryBalloon;
 
     public TrayIconHost(
         MainWindow window,
@@ -177,6 +178,7 @@ public sealed class TrayIconHost : IDisposable
 
             _lastNotifiedUpdateVersion = version;
             _authRecoveryBalloon = false;
+            _accountRecoveryBalloon = false;
             _notifyIcon.ShowBalloonTip(
                 5000,
                 update.Required
@@ -257,7 +259,14 @@ public sealed class TrayIconHost : IDisposable
     private async void OnBalloonTipClicked(object? sender, EventArgs args)
     {
         if (_disposed) return;
-        if (_authRecoveryBalloon)
+        if (_accountRecoveryBalloon)
+        {
+            _window.ShowShellWindow();
+            _window.Activate();
+            _window.BringToFront();
+            _window.NavigateToSection(AppSection.Account);
+        }
+        else if (_authRecoveryBalloon)
             await _window.ShowAuthenticationRecoveryAsync();
         else OnUpdateClick(sender, args);
     }
@@ -269,6 +278,7 @@ public sealed class TrayIconHost : IDisposable
         {
             if (_disposed) return;
             _authRecoveryBalloon = true;
+            _accountRecoveryBalloon = false;
             _notifyIcon.ShowBalloonTip(5000, "VEX", ErrorMessage(errorCode), ToolTipIcon.Info);
         }).ConfigureAwait(false);
     }
@@ -356,6 +366,7 @@ public sealed class TrayIconHost : IDisposable
         _window.Activate();
         _window.BringToFront();
         _authRecoveryBalloon = false;
+        _accountRecoveryBalloon = false;
         _notifyIcon.ShowBalloonTip(5000, "Не удалось завершить VEX",
             $"Подтвердить отключение VPN не удалось. Повторите выход. {ErrorMessage(errorCode)}",
             ToolTipIcon.Warning);
@@ -395,11 +406,9 @@ public sealed class TrayIconHost : IDisposable
                 or InvalidOperationException
                 or NativeClientFlowException
                 or VexApiException
-                or VpnIpcProtocolException)
+                or VpnIpcProtocolException || VpnFailurePresentation.IsNetworkTimeout(error))
         {
-            var errorCode = error is NativeClientFlowException flow
-                ? flow.Code
-                : "vpn_service_unavailable";
+            var errorCode = VpnFailurePresentation.CodeFromException(error);
             if (errorCode is "sign_in_required" or "windows_hello_required")
             {
                 _services.VpnUiState.MarkConnectionDesired(false);
@@ -415,6 +424,7 @@ public sealed class TrayIconHost : IDisposable
 
                 Render();
                 _authRecoveryBalloon = false;
+                _accountRecoveryBalloon = VpnFailurePresentation.RequiresAccountAction(errorCode);
                 _notifyIcon.ShowBalloonTip(
                     3000,
                     "VEX",
@@ -449,6 +459,7 @@ public sealed class TrayIconHost : IDisposable
             if (!response.Success)
             {
                 _authRecoveryBalloon = false;
+                _accountRecoveryBalloon = VpnFailurePresentation.RequiresAccountAction(response.ErrorCode);
                 _notifyIcon.ShowBalloonTip(
                     3000,
                     "VEX",
@@ -585,7 +596,8 @@ public sealed class TrayIconHost : IDisposable
         return completion.Task;
     }
 
-    private static string ErrorMessage(string? errorCode) => errorCode switch
+    private static string ErrorMessage(string? errorCode) =>
+        VpnFailurePresentation.MessageFor(errorCode) ?? (errorCode switch
     {
         "unauthorized" => "Требуется восстановить безопасную установку VEX.",
         "tunnel_runtime_missing" => "Компоненты VPN повреждены или отсутствуют.",
@@ -599,5 +611,5 @@ public sealed class TrayIconHost : IDisposable
         "vpn_service_unavailable" => "Служба VEX VPN недоступна. Перезапустите приложение.",
         "tunnel_cleanup_incomplete" => "Отключение VPN пока не подтверждено. VEX повторит очистку; можно повторить отключение вручную.",
         _ => "Не удалось выполнить операцию VPN.",
-    };
+    });
 }

@@ -794,7 +794,7 @@ public sealed class VexApiClient : INativeClientApi
         {
             throw new VexApiException(
                 response.StatusCode,
-                await ReadKnownErrorAsync(request, response, cancellationToken).ConfigureAwait(false));
+                await ReadKnownErrorAsync(request, response, cancellationToken, cancellationToken).ConfigureAwait(false));
         }
     }
 
@@ -814,6 +814,36 @@ public sealed class VexApiClient : INativeClientApi
         HttpRequestMessage request,
         CancellationToken cancellationToken)
     {
+        // ResponseHeadersRead ends HttpClient's timeout at the headers. Keep
+        // that same budget alive through the bounded success-body read.
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        if (_httpClient.Timeout != Timeout.InfiniteTimeSpan)
+        {
+            deadline.CancelAfter(_httpClient.Timeout);
+        }
+        try
+        {
+            return await SendCoreAsync<T>(request, deadline.Token, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException error) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new TaskCanceledException("The VEX API request was cancelled.", error, cancellationToken);
+        }
+        catch (OperationCanceledException error) when (deadline.IsCancellationRequested)
+        {
+            // Match HttpClient's timeout classification so network recovery
+            // does not confuse an exhausted body deadline with user cancellation.
+            throw new TaskCanceledException("The VEX API request exceeded its configured timeout.",
+                new TimeoutException("The VEX API request deadline elapsed.", error), deadline.Token);
+        }
+    }
+
+    private async Task<T> SendCoreAsync<T>(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken,
+        CancellationToken callerCancellationToken)
+    {
         using var response = await _httpClient.SendAsync(
             request,
             HttpCompletionOption.ResponseHeadersRead,
@@ -822,7 +852,7 @@ public sealed class VexApiClient : INativeClientApi
         {
             throw new VexApiException(
                 response.StatusCode,
-                await ReadKnownErrorAsync(request, response, cancellationToken).ConfigureAwait(false));
+                await ReadKnownErrorAsync(request, response, cancellationToken, callerCancellationToken).ConfigureAwait(false));
         }
 
         if (response.Content.Headers.ContentLength >
@@ -857,6 +887,7 @@ public sealed class VexApiClient : INativeClientApi
             bounded.Write(buffer, 0, read);
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         try
         {
             return JsonSerializer.Deserialize<T>(
@@ -872,7 +903,8 @@ public sealed class VexApiClient : INativeClientApi
     }
 
     private static async Task<string> ReadKnownErrorAsync(HttpRequestMessage request,
-        HttpResponseMessage response, CancellationToken cancellationToken)
+        HttpResponseMessage response, CancellationToken cancellationToken,
+        CancellationToken callerCancellationToken)
     {
         var fallback = response.StatusCode == HttpStatusCode.Unauthorized ? "session_expired" : "api_request_failed";
         var path = request.RequestUri?.AbsolutePath;
@@ -922,7 +954,7 @@ public sealed class VexApiClient : INativeClientApi
             };
         }
         catch (Exception error) when (error is JsonException or IOException or HttpRequestException ||
-            error is OperationCanceledException && !cancellationToken.IsCancellationRequested)
+            error is OperationCanceledException && !callerCancellationToken.IsCancellationRequested)
         {
             return fallback;
         }

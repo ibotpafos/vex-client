@@ -86,11 +86,16 @@ Only the two sanitized result files (`.json` and `.json.cleanup.json`) belong
 in artifacts. Never upload fixture manifests, keys, configs, raw UAPI, process
 dumps or the temporary directory.
 
-**Coverage limits:** AntiLeak is explicitly disabled to preserve the CI control
-channel. This proves real local encrypted traffic and lifecycle on Windows x64;
-it does not prove public Internet reachability, full/split route catalogs,
-IPv6 traffic, Wi-Fi roaming, leak protection, arm64 runtime behavior or a signed
-release. Those still require their own Windows acceptance gates.
+**Coverage:** The initial private `/32` phase disables AntiLeak. Ordinary
+PR/main CI and explicit `-FullTunnelChecks` also exercise paired full IPv4 `/1`
+routes, actual AntiLeak, tunnel DNS/HTTPS, the allowed physical VEX HTTPS control
+route, and blocked/restored outside TCP and supported physical DNS. The same-host
+peer has no public Internet forwarding. These checks do not qualify public VPN
+egress, production authentication, installed signed UI-to-service attestation,
+IPv6 traffic, Wi-Fi roaming, physical ARM64 or reboot. Those remain separate
+Windows acceptance gates. The standalone [public egress verifier](../verify-public-vpn.ps1)
+observes an already connected real Windows client against two public HTTPS
+services; it does not connect the VPN or certify these other gates.
 
 The peer's portable tests exercise the same encrypted DNS/TLS path between two
 in-memory AWG endpoints without altering OS networking. Their default outer

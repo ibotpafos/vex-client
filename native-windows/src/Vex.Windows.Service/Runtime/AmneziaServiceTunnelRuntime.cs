@@ -21,6 +21,7 @@ public sealed class AmneziaServiceTunnelRuntime : IVpnTunnelRuntime, IVpnRuntime
     private readonly WindowsServiceOptions _options;
     private readonly string _privateDataDirectory;
     private readonly string _configurationPath;
+    private readonly string _profileConfigurationPath;
     private readonly string _configurationHashPath;
     private readonly string _locationPath;
     private readonly string _authorizationExpiryPath;
@@ -46,6 +47,7 @@ public sealed class AmneziaServiceTunnelRuntime : IVpnTunnelRuntime, IVpnRuntime
         _configurationPath = Path.Combine(
             _privateDataDirectory,
             "vex.conf");
+        _profileConfigurationPath = Path.Combine(_privateDataDirectory, "vex.profile.conf");
         _configurationHashPath = Path.Combine(
             options.DataDirectory,
             "vex.conf.sha256");
@@ -57,6 +59,7 @@ public sealed class AmneziaServiceTunnelRuntime : IVpnTunnelRuntime, IVpnRuntime
             Path.Combine(_privateDataDirectory, "disconnect-intent"));
         _connectionDesired = !_disconnectIntent.IsRecorded &&
             ReadAuthorizationExpiry() is not null;
+        if (ServiceExists()) { QualifyOwnedVendorService(); }
         RecoverAuthorizationLease();
         NetworkChange.NetworkAddressChanged += OnNetworkAddressChanged;
         _backgroundWork.Run(RunWatchdogAsync);
@@ -246,10 +249,6 @@ public sealed class AmneziaServiceTunnelRuntime : IVpnTunnelRuntime, IVpnRuntime
                         tunnelConfig,
                         configurationHash,
                         locationId);
-                    await RunVendorAsync(
-                        "/installtunnelservice",
-                        _configurationPath,
-                        cancellationToken).ConfigureAwait(false);
                 }
                 else
                 {
@@ -260,6 +259,13 @@ public sealed class AmneziaServiceTunnelRuntime : IVpnTunnelRuntime, IVpnRuntime
                     _authorizationExpiryPath,
                     authorizationExpiresAt.Value.ToString("O"));
                 ArmAuthorizationLease(authorizationExpiresAt.Value);
+                PrepareVendorConfiguration();
+                if (requiresInstall)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    authorization.ThrowIfExpired();
+                    OwnedVendorServiceRegistration.Install(VendorExecutablePath(), _configurationPath);
+                }
                 await StartVendorServiceAsync(cancellationToken)
                     .ConfigureAwait(false);
                 await WaitForConnectedAsync(cancellationToken)
@@ -551,6 +557,8 @@ public sealed class AmneziaServiceTunnelRuntime : IVpnTunnelRuntime, IVpnRuntime
         _backgroundWork.Token.ThrowIfCancellationRequested();
         try
         {
+            QualifyOwnedVendorService();
+            PrepareVendorConfiguration();
             using var service = OpenVendorService();
             void StartService()
             {
@@ -591,6 +599,7 @@ public sealed class AmneziaServiceTunnelRuntime : IVpnTunnelRuntime, IVpnRuntime
 
         try
         {
+            QualifyOwnedVendorService();
             using var service = OpenVendorService();
             service.Refresh();
             if (service.Status == ServiceControllerStatus.Stopped)
@@ -887,7 +896,15 @@ public sealed class AmneziaServiceTunnelRuntime : IVpnTunnelRuntime, IVpnRuntime
     {
         try
         {
-            return File.ReadAllText(_configurationPath);
+            // A legacy numeric/vendor file may be used only when its actual
+            // bytes still match the protected signed-materialization hash.
+            var path = File.Exists(_profileConfigurationPath) ? _profileConfigurationPath : _configurationPath;
+            var config = File.ReadAllText(path);
+            if (!string.Equals(ComputeHash(config), ReadTrimmed(_configurationHashPath), StringComparison.OrdinalIgnoreCase))
+            {
+                throw new VpnTunnelException("tunnel_runtime_integrity_failure");
+            }
+            return config;
         }
         catch (Exception error) when (
             error is FileNotFoundException or DirectoryNotFoundException)
@@ -1054,18 +1071,45 @@ public sealed class AmneziaServiceTunnelRuntime : IVpnTunnelRuntime, IVpnRuntime
         string configurationHash,
         string locationId)
     {
-        WriteAtomic(_configurationPath, tunnelConfig, restrictToSystem: true);
+        WriteAtomic(_profileConfigurationPath, tunnelConfig, restrictToSystem: true);
         WriteAtomic(_configurationHashPath, configurationHash);
         WriteAtomic(_locationPath, locationId);
     }
 
     private bool HasInstalledConfiguration(string configurationHash) =>
         ServiceExists() &&
-        File.Exists(_configurationPath) &&
+        (File.Exists(_profileConfigurationPath) || File.Exists(_configurationPath)) &&
         string.Equals(
             ReadTrimmed(_configurationHashPath),
             configurationHash,
             StringComparison.Ordinal);
+
+    private void PrepareVendorConfiguration()
+    {
+        var config = ReadConfiguration() ?? throw new VpnTunnelException("tunnel_configuration_missing");
+        var endpoint = ReadConfigValue(config, "Endpoint") ?? throw new VpnTunnelException("invalid_tunnel_configuration");
+        var peer = ReadConfigValue(config, "PublicKey") ?? throw new VpnTunnelException("invalid_tunnel_configuration");
+        var expiry = ReadAuthorizationExpiry() ?? throw new VpnTunnelException("profile_expired");
+        var numeric = VpnVendorStartupConfiguration.Materialize(config,
+            ReadTrimmed(_configurationHashPath) ?? "", _networkSafety.GetKnownEndpointSnapshot(endpoint, peer, expiry),
+            expiry, DateTimeOffset.UtcNow);
+        // Migrate an integrity-checked legacy file without losing the original
+        // signed hostname after the separate vendor file becomes numeric.
+        if (!File.Exists(_profileConfigurationPath))
+        {
+            WriteAtomic(_profileConfigurationPath, config, restrictToSystem: true);
+        }
+        WriteAtomic(_configurationPath, numeric, restrictToSystem: true);
+    }
+
+    private void QualifyOwnedVendorService()
+    {
+        EnsureRuntimeFilesExist();
+        if (!OwnedVendorServiceRegistration.QualifyIfPresent(VendorExecutablePath(), _configurationPath))
+        {
+            throw new VpnTunnelException("tunnel_configuration_missing");
+        }
+    }
 
     private static string ComputeHash(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));

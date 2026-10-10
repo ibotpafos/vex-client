@@ -30,6 +30,13 @@ public static class WindowsUpdateManifestVerifier
         var rollbackState = ValidateRollbackState(
             manifest,
             options);
+        var minimumRequiredVersion = ParseVersion(rollbackState.RequiredVersionFloor, "required_version_floor");
+        if (rollbackState.RequiredTargetVersion is { } persistedTarget)
+        {
+            var targetVersion = ParseVersion(persistedTarget, "persisted_required_target_version");
+            if (targetVersion > minimumRequiredVersion)
+                minimumRequiredVersion = targetVersion;
+        }
         var expectedChannel = NormalizeChannel(options.CurrentChannel);
         var expectedArchitecture = NormalizeArchitecture(options.CurrentArchitecture);
         var candidates = manifest.Releases
@@ -44,6 +51,7 @@ public static class WindowsUpdateManifestVerifier
             .OrderByDescending(candidate => candidate.Version)
             .ToArray();
         var rolloutExcluded = false;
+        var targetBelowRequiredVersion = false;
 
         if (candidates.Length == 0)
         {
@@ -69,10 +77,11 @@ public static class WindowsUpdateManifestVerifier
                 continue;
             }
 
-            var rolloutPercent = candidate.Release.RolloutPercent ?? 100;
-            if (options.RolloutBucket >= rolloutPercent)
+            if (candidate.Version < minimumRequiredVersion)
             {
-                rolloutExcluded = true;
+                // Preserve a valid stronger security floor, but never offer a
+                // package which cannot satisfy it or a persisted mandatory target.
+                targetBelowRequiredVersion = true;
                 continue;
             }
 
@@ -88,9 +97,17 @@ public static class WindowsUpdateManifestVerifier
                 }
             }
 
+            var requiredUpdate = candidate.Release.Required || currentVersion < minimumRequiredVersion;
+            var rolloutPercent = candidate.Release.RolloutPercent ?? 100;
+            if (!requiredUpdate && options.RolloutBucket >= rolloutPercent)
+            {
+                rolloutExcluded = true;
+                continue;
+            }
+
             return new WindowsUpdateAssessment(
                 UpdateAvailable: true,
-                Reason: candidate.Release.Required
+                Reason: requiredUpdate
                     ? "required_update_available"
                     : "update_available",
                 CurrentVersion: currentVersion.ToString(),
@@ -106,7 +123,7 @@ public static class WindowsUpdateManifestVerifier
             UpdateAvailable: false,
             Reason: rolloutExcluded
                 ? "rollout_not_selected"
-                : "already_current",
+                : targetBelowRequiredVersion ? "no_eligible_required_target" : "already_current",
             CurrentVersion: currentVersion.ToString(),
             CurrentChannel: expectedChannel,
             CurrentArchitecture: expectedArchitecture,
@@ -438,6 +455,21 @@ public static class WindowsUpdateManifestVerifier
             ".json",
             "package_metadata",
             trustedOrigin);
+        // Older bundles had no dependency descriptor. New publishers always
+        // provide the complete contract; a partial descriptor is never legacy.
+        if (release.VclibsDependencyUri is not null || release.VclibsDependencySha256 is not null ||
+            release.VclibsDependencySizeBytes is not null)
+        {
+            ValidateProvisioningArtifact(
+                release.VclibsDependencyUri,
+                release.VclibsDependencySha256,
+                release.VclibsDependencySizeBytes,
+                ".appx",
+                "vclibs_dependency",
+                trustedOrigin,
+                WindowsUpdateConstants.MaxDependencyBytes,
+                $"Microsoft.VCLibs.{NormalizeArchitecture(release.Architecture)}.14.00.Desktop.appx");
+        }
     }
 
     private static void ValidateProvisioningArtifact(
@@ -446,14 +478,16 @@ public static class WindowsUpdateManifestVerifier
         long? sizeBytes,
         string extension,
         string fieldName,
-        Uri trustedOrigin)
+        Uri trustedOrigin,
+        long maximumSizeBytes = WindowsUpdateConstants.MaxProvisioningArtifactBytes,
+        string? expectedFileName = null)
     {
         if (string.IsNullOrWhiteSpace(uriValue) ||
             string.IsNullOrWhiteSpace(sha256) ||
             sha256.Length != 64 ||
             sha256.Any(character => !Uri.IsHexDigit(character)) ||
             sizeBytes is null or <= 0 ||
-            sizeBytes > WindowsUpdateConstants.MaxProvisioningArtifactBytes)
+            sizeBytes > maximumSizeBytes)
         {
             throw new InvalidOperationException(
                 $"Windows update {fieldName} metadata is invalid.");
@@ -464,6 +498,12 @@ public static class WindowsUpdateManifestVerifier
             trustedOrigin,
             $"{fieldName}_uri");
         RequirePathExtension(uri, extension, $"{fieldName}_uri");
+        if (expectedFileName is not null &&
+            (!string.Equals(Path.GetFileName(uri.LocalPath), expectedFileName, StringComparison.Ordinal) ||
+             uri.UserInfo.Length != 0))
+        {
+            throw new InvalidOperationException($"Windows update {fieldName} URI does not name the expected architecture-specific artifact.");
+        }
     }
 
     private static Uri RequireTrustedUri(

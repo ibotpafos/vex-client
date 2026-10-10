@@ -17,6 +17,10 @@ using System.Text.Json.Nodes;
 
 var tests = new (string Name, Action Run)[]
 {
+    ("Native installer rejects changed bundles and retains verified file locks", WindowsSetupBundleTests.Run),
+    ("VPN access and network failures preserve actionable guidance and safe intent", VpnFailurePresentationTests.Run),
+    ("Release cohorts preserve actionable mandatory targets and strict dependency trust", WindowsReleasePolicyTests.Run),
+    ("Shipping update keys match P256 signatures and reject incompatible key material", WindowsUpdateSignatureSignerTests.Run),
     ("Realtime session recovery preserves outages and rejects stale credential events", CustomerRealtimeSessionTests.Run),
     ("Realtime billing and device events cannot mutate a replacement session", RealtimeScopeIsolationTests.Run),
     ("Periodic entitlement checks preserve current sessions and user connection intent", ActiveEntitlementMonitorTests.Run),
@@ -32,6 +36,7 @@ var tests = new (string Name, Action Run)[]
     ("Unreadable durable update state retains mandatory recovery protection", NativeUpdateRecoveryTests.Run),
     ("Preferences decode corruption safely and preserve valid legacy choices", NativeClientPreferencesJsonTests.Run),
     ("App metadata decodes current server contracts and explicit historical aliases", AppMetadataContractTests.Run),
+    ("Windows app metadata matches the published API compatibility contract on both architectures", AppMetadataContractTests.WindowsApiCompatibilityMatchesPublishedContract),
     ("Protected session cache handles corruption without replacing identity files", ProtectedStateFileTests.Run),
     ("Windows Hello changes commit durably and reject cancelled verification", WindowsHelloSessionTests.Run),
     ("Signed relay candidates preserve authorization and bounded offline recovery", ClientSignedCandidateTests.Run),
@@ -150,7 +155,9 @@ var tests = new (string Name, Action Run)[]
     ("Native client preserves manual location and routing preferences", NativeClientPreservesManualVpnPreferences),
     ("Native client gates VPN connect on entitlement", NativeClientGatesConnectOnEntitlement),
     ("Native client reports successful connect and disconnect", NativeClientReportsVpnLifecycle),
-};
+}.Concat(VpnServiceImageIdentityTests.All)
+ .Concat(VexApiResponseDeadlineTests.Cases)
+ .Concat(VpnWindowsStartupSafetyTests.All).ToArray();
 
 tests = [.. tests, .. VpnNamedPipeTransportTests.Cases, .. VpnRuntimeLifetimeTests.All, .. VpnRuntimeRecoveryTests.All,
     .. VpnEndpointAddressCacheTests.All, .. VpnAuthorizationDeadlineTests.All, .. VpnControlPlaneAddressCacheTests.All,
@@ -1762,7 +1769,8 @@ static void WindowsControlPlaneExposesAppConfiguration()
 {
     var metadata = new ClientAppMetadata(
         "windows", "1.0.54", 54, "stable", "1.0.0",
-        "Windows 11", "arm64", "native-windows-1", 1);
+        "Windows 11", "arm64", NativeApiCompatibility.ApiClientVersion,
+        NativeApiCompatibility.ConfigSchemaVersion);
     var configHandler = new RecordingHttpHandler(
         """{"version":"1","routing_policy_version":"2026.07.1","incident_banner":"ok"}""");
     var configClient = new VexApiClient(new HttpClient(configHandler)

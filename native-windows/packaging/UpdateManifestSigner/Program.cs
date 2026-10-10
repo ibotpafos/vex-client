@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using Vex.Windows.Packaging;
 
 if (args.Length != 1)
 {
@@ -12,40 +13,22 @@ if (string.IsNullOrWhiteSpace(privateKeyBase64))
     return 3;
 }
 
-byte[] privateKey;
-byte[] payload;
+var publicKeyBase64 = Environment.GetEnvironmentVariable("VEX_WINDOWS_UPDATE_PUBLIC_KEY_BASE64");
+if (string.IsNullOrWhiteSpace(publicKeyBase64)) return 5;
+
 try
 {
-    privateKey = Convert.FromBase64String(privateKeyBase64);
-    payload = Convert.FromBase64String(args[0]);
+    var signature = WindowsUpdateSignatureSigner.SignBase64Payload(
+        args[0], privateKeyBase64, publicKeyBase64);
+    Console.WriteLine(signature);
+    return 0;
 }
 catch (FormatException)
 {
     return 4;
 }
-
-using var ecdsa = ECDsa.Create();
-try
+catch (CryptographicException)
 {
-    try
-    {
-        ecdsa.ImportPkcs8PrivateKey(privateKey, out _);
-    }
-    catch (CryptographicException)
-    {
-        ecdsa.ImportECPrivateKey(privateKey, out _);
-    }
-
-    var signature = ecdsa.SignData(
-        payload,
-        HashAlgorithmName.SHA256,
-        DSASignatureFormat.Rfc3279DerSequence);
-    Console.WriteLine(Convert.ToBase64String(signature));
-    CryptographicOperations.ZeroMemory(signature);
-    return 0;
-}
-finally
-{
-    CryptographicOperations.ZeroMemory(privateKey);
-    CryptographicOperations.ZeroMemory(payload);
+    Console.Error.WriteLine("Windows update signing requires matching P-256 keys with complete valid encodings.");
+    return 6;
 }

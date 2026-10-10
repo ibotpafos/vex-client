@@ -18,6 +18,9 @@ internal static class NetworkSafetyControllerRecoveryTests
     public static readonly (string Name, Action Run)[] All =
     [
         ("Actual network controller restores API and endpoint bypass before DNS after service restart", () => ColdPrimingRestoresBothAddressClassesAsync().GetAwaiter().GetResult()),
+        ("Actual network controller exposes only exact leased and reachable numeric startup peers", () => NumericStartupSnapshotIsScopedAsync().GetAwaiter().GetResult()),
+        ("Actual network controller follows fresh DNS rotation while retaining live-peer bypass and offline recovery", () => DnsRotationPrefersFreshStartupPeerAsync().GetAwaiter().GetResult()),
+        ("Actual network controller probes each full-route half away from loopback and zero addresses", FullRouteProbesAvoidLoopback),
         ("Actual network controller classifies a shared DNS host as endpoint and control plane", () => SharedHostKeepsBothAddressClassesAsync().GetAwaiter().GetResult()),
         ("Actual network controller journals pending creation before a cancelled install and uses independent cleanup", () => CancelledInstallUsesPendingOwnershipAsync().GetAwaiter().GetResult()),
         ("Actual network controller cleans confirmed creation after cancellation without dropping its receipt", () => CancelledConfirmedCreationIsCleanedAsync().GetAwaiter().GetResult()),
@@ -26,6 +29,96 @@ internal static class NetworkSafetyControllerRecoveryTests
         ("Actual network controller preserves ambiguous legacy route ownership after cleanup refusal", () => LegacyCleanupRefusalPreservesJournalAsync().GetAwaiter().GetResult()),
         ("Actual network controller retains journal and creation receipt after provider cleanup failure", () => CleanupFailureRetainsOwnershipForRetryAsync().GetAwaiter().GetResult()),
     ];
+
+    private static async Task DnsRotationPrefersFreshStartupPeerAsync()
+    {
+        using var fixture = new Fixture([]);
+        var expiry = DateTimeOffset.UtcNow.AddMinutes(10);
+        const string replacement = "203.0.113.8";
+        fixture.Write("endpoint-address-cache.json", new VpnEndpointAddressSnapshot(Endpoint, Peer, expiry, [EndpointAddress]));
+        fixture.Resolve = (_, _) => Task.FromResult(new[] { IPAddress.Parse(replacement) });
+        var controller = fixture.Create();
+        await controller.ApplyControlPlaneBypassAsync(Endpoint, default, Peer, expiry).WaitAsync(Deadline);
+        var admitted = controller.GetKnownEndpointSnapshot(Endpoint, Peer, expiry);
+        Require(admitted?.Addresses.SequenceEqual([replacement, EndpointAddress]) == true,
+            "A retired cached address took precedence over the current successful DNS answer.");
+        Require(fixture.FindAddresses.Contains(EndpointAddress) && fixture.FindAddresses.Contains(replacement),
+            "DNS rotation lost the current authenticated peer's bypass or skipped the new numeric target.");
+        var configuration = "[Interface]\nPrivateKey = " + Peer + "\nAddress = 10.0.0.2/32\n\n[Peer]\nPublicKey = " +
+            Peer + "\nEndpoint = " + Endpoint + "\nAllowedIPs = 0.0.0.0/0\n";
+        var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(configuration)));
+        var vendor = VpnVendorStartupConfiguration.Materialize(configuration, hash, admitted, expiry, DateTimeOffset.UtcNow);
+        Require(vendor.Contains("Endpoint = " + replacement + ":443", StringComparison.Ordinal),
+            "A vendor restart still materialized the retired peer despite successful DNS rotation.");
+
+        // Recreate the controller as after process restart. Unavailable DNS
+        // must keep the persisted successful answer first, rather than erase it.
+        fixture.Resolve = (_, _) => Task.FromException<IPAddress[]>(new SocketException((int)SocketError.HostNotFound));
+        var recovered = fixture.Create();
+        await recovered.ApplyControlPlaneBypassAsync(Endpoint, default, Peer, expiry).WaitAsync(Deadline);
+        var offline = recovered.GetKnownEndpointSnapshot(Endpoint, Peer, expiry);
+        Require(offline?.Addresses.SequenceEqual([replacement, EndpointAddress]) == true &&
+            VpnVendorStartupConfiguration.Materialize(configuration, hash, offline, expiry, DateTimeOffset.UtcNow)
+                .Contains("Endpoint = " + replacement + ":443", StringComparison.Ordinal),
+            "Cold offline repair lost the successfully rotated startup target.");
+    }
+
+    private static void FullRouteProbesAvoidLoopback()
+    {
+        var method = typeof(NetworkSafetyController).GetMethod("RouteProbes",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static) ??
+            throw new InvalidOperationException("Actual route diagnostics probe method is missing.");
+        var routes = VpnWindowsRouteMaterializer.Materialize(["0.0.0.0/0", "::/0"], true);
+        var probes = (IReadOnlyList<IPAddress>)(method.Invoke(null, [routes]) ??
+            throw new InvalidOperationException("Actual route diagnostics returned no probes."));
+        Require(probes.Count == 4 && probes.All(address => !IPAddress.IsLoopback(address) &&
+            !address.Equals(IPAddress.Any) && !address.Equals(IPAddress.IPv6Any) &&
+            (address.AddressFamily != AddressFamily.InterNetwork || address.GetAddressBytes()[0] != 0)),
+            "Full-coverage diagnostics selected loopback or an unspecified address.");
+        for (var index = 0; index < probes.Count; index++)
+        {
+            var expected = IPAddress.Parse(routes[index].Split('/')[0]);
+            Require(probes[index].AddressFamily == expected.AddressFamily &&
+                (probes[index].GetAddressBytes()[0] & 128) == (expected.GetAddressBytes()[0] & 128),
+                "A full-route probe escaped its admitted address half.");
+        }
+    }
+
+    private static async Task NumericStartupSnapshotIsScopedAsync()
+    {
+        using var fixture = new Fixture([]);
+        var expiry = DateTimeOffset.UtcNow.AddMinutes(10);
+        const string unreachableIpv6 = "2001:db8::7";
+        fixture.Write("endpoint-address-cache.json", new VpnEndpointAddressSnapshot(Endpoint, Peer, expiry,
+            [unreachableIpv6, EndpointAddress]));
+        fixture.Run = (script, args, _) =>
+        {
+            if (IsFind(script)) return Task.FromResult(args[0] == unreachableIpv6
+                ? JsonSerializer.Serialize(new { Address = args[0], InterfaceIndex = 0, NextHop = "::", Created = false, Skipped = true })
+                : RouteResult(args[0]));
+            if (IsVerifyRoute(script)) return Task.FromResult("ok");
+            throw new InvalidOperationException("Unexpected network mutation in numeric startup test.");
+        };
+        var controller = fixture.Create();
+        Require(controller.GetKnownEndpointSnapshot(Endpoint, Peer, expiry) is null,
+            "Advisory DNS metadata became a startup target before physical-route reconciliation.");
+        await controller.ApplyControlPlaneBypassAsync(Endpoint, default, Peer, expiry).WaitAsync(Deadline);
+        var calls = fixture.Calls.Count;
+        var snapshot = controller.GetKnownEndpointSnapshot(Endpoint, Peer, expiry);
+        Require(snapshot?.Addresses.SequenceEqual([EndpointAddress]) == true && snapshot.ValidUntil == expiry,
+            "Startup selected an unreachable IPv6 answer or changed the admitted lease.");
+        Require(controller.GetKnownEndpointSnapshot("other.example.test:443", Peer, expiry) is null &&
+            controller.GetKnownEndpointSnapshot("vpn.example.test:8443", Peer, expiry) is null &&
+            controller.GetKnownEndpointSnapshot(Endpoint, Convert.ToBase64String(new byte[32]), expiry) is null &&
+            controller.GetKnownEndpointSnapshot(Endpoint, Peer, expiry.AddSeconds(1)) is null &&
+            controller.GetKnownEndpointSnapshot(Endpoint, Peer, DateTimeOffset.UtcNow.AddSeconds(-1)) is null,
+            "Startup snapshot escaped its exact hostname, port, peer or lease binding.");
+        Require(fixture.Calls.Count == calls && fixture.DnsCalls.Count == 1,
+            "Reading an admitted numeric startup snapshot performed network or DNS work.");
+        await controller.RollbackAsync(default).WaitAsync(Deadline);
+        Require(controller.GetKnownEndpointSnapshot(Endpoint, Peer, expiry) is null,
+            "A rolled-back physical route remained an admitted vendor startup target.");
+    }
 
     private static async Task ColdPrimingRestoresBothAddressClassesAsync()
     {

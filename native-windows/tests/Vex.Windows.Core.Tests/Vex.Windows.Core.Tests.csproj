@@ -10,6 +10,8 @@
   <ItemGroup>
     <Compile Include="../../src/Vex.Windows.App/Services/CustomerRealtimeSessionRecovery.cs" Link="CustomerRealtimeSessionRecovery.cs" />
     <Compile Include="../../src/Vex.Windows.App/Auth/NativeAuthService.cs" Link="NativeAuthService.cs" />
+    <Compile Include="../../src/Vex.Windows.Setup/SetupBundleVerifier.cs" Link="SetupBundleVerifier.cs" />
+    <Compile Include="../../packaging/UpdateManifestSigner/WindowsUpdateSignatureSigner.cs" Link="WindowsUpdateSignatureSigner.cs" />
     <ProjectReference Include="../../src/Vex.Windows.Core/Vex.Windows.Core.csproj" />
     <ProjectReference Include="../../src/Vex.Windows.Client/Vex.Windows.Client.csproj" />
   </ItemGroup>
@@ -20,6 +22,7 @@
     <Compile Include="../../src/Vex.Windows.App/Services/WindowsServiceMaintenanceService.cs" Link="WindowsServiceMaintenanceService.cs" />
     <Compile Include="../../src/Vex.Windows.App/Services/UiPreviewContext.cs" Link="UiPreviewContext.cs" />
     <Compile Include="../../src/Vex.Windows.App/Services/DiagnosticsQueueService.cs" Link="DiagnosticsQueueService.cs" />
+    <Compile Include="../../src/Vex.Windows.App/Services/VpnFailurePresentation.cs" Link="VpnFailurePresentation.cs" />
     <Compile Include="../../src/Vex.Windows.App/Services/VpnUiStateService.cs" Link="VpnUiStateService.cs" />
     <Compile Include="../../src/Vex.Windows.App/Services/ProfileWarmupTrustStore.cs" Link="ProfileWarmupTrustStore.cs" />
     <Compile Include="../../src/Vex.Windows.App/Services/VpnProductParityService.cs" Link="VpnProductParityService.cs" />

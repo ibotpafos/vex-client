@@ -856,7 +856,12 @@ namespace Vex.Windows.Smoke {
         $result.stage = 'protocol-registration'
         Assert-PreviewProtocolRegistration
         $result.stage = 'minimized-protocol-activation'
-        [void][Vex.Windows.Smoke.NativeMethods]::ShowWindow($windowHandle, 6)
+        # The redirected activation can still be finishing Activate/BringToFront
+        # after ShowWindow made the preview visible. Queue the actual caption
+        # minimize command on the owning UI thread after that callback.
+        if (-not [Vex.Windows.Smoke.NativeMethods]::PostMessage($windowHandle, 0x112, [System.IntPtr]0xF020, [System.IntPtr]::Zero)) {
+            throw 'Unable to queue the preview window minimize command.'
+        }
         Wait-SmokeCondition -Failure 'Preview did not minimize before protocol activation.' -Condition {
             [Vex.Windows.Smoke.NativeMethods]::IsIconic($windowHandle)
         }

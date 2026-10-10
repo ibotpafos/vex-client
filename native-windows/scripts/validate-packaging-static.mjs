@@ -245,8 +245,8 @@ for (const [file, size] of [["StoreLogo.png", 50], ["Square150x150Logo.png", 150
 const backgroundUpdater = read(
   path.join(appRoot, "Services", "NativeUpdateBackgroundHost.cs"),
 );
-const preferencesStore = read(
-  path.join(appRoot, "Services", "NativeClientPreferencesStore.cs"),
+const preferencesModel = read(
+  path.join(appRoot, "Services", "NativeClientPreferences.cs"),
 );
 const settingsPage = read(path.join(appRoot, "Views", "SettingsPage.xaml"));
 const homePageCode = read(path.join(appRoot, "Views", "HomePage.xaml.cs"));
@@ -263,7 +263,7 @@ assert.doesNotMatch(
 for (const [source, requirement, message] of [
   [backgroundUpdater, /NativeUpdateCheckPolicy\.StartupDelay/, "startup update check missing"],
   [backgroundUpdater, /NativeUpdateCheckPolicy\.NextDelay/, "periodic update cadence missing"],
-  [preferencesStore, /AutoUpdatesEnabled:\s*true/, "automatic updates must default on"],
+  [preferencesModel, /AutoUpdatesEnabled:\s*true/, "automatic updates must default on"],
   [settingsPage, /OnAutoUpdatesToggled/, "automatic update preference UI missing"],
 ]) {
   requireText(source, requirement, message);

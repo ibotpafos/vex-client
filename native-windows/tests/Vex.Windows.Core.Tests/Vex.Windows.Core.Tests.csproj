@@ -16,5 +16,7 @@
     <Compile Include="../../src/Vex.Windows.App/Services/DiagnosticsQueueService.cs" Link="DiagnosticsQueueService.cs" />
     <Compile Include="../../src/Vex.Windows.App/Services/SupportSocketClient.cs" Link="SupportSocketClient.cs" />
     <Compile Include="../../src/Vex.Windows.App/Services/VpnUiStateService.cs" Link="VpnUiStateService.cs" />
+    <Compile Include="../../src/Vex.Windows.App/Services/VpnProductParityService.cs" Link="VpnProductParityService.cs" />
+    <Compile Include="../../src/Vex.Windows.App/Services/NativeClientPreferences.cs" Link="NativeClientPreferences.cs" />
   </ItemGroup>
 </Project>

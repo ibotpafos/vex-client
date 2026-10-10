@@ -63,6 +63,7 @@ try {
     }
     $result.alive_at_deadline = $true
     Write-Host "WinUI application remained alive for $ObserveSeconds seconds."
+    Write-Host "WinUI main window created: $($result.main_window_created)."
 }
 catch {
     $result.failure_type = $_.Exception.GetType().FullName

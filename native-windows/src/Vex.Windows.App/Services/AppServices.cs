@@ -197,7 +197,11 @@ public sealed class AppServices
                 error is HttpRequestException or
                     VexApiException or
                     NativeClientFlowException or
-                    InvalidOperationException)
+                    InvalidOperationException or
+                    OperationCanceledException or
+                    IOException or
+                    UnauthorizedAccessException or
+                    System.Security.Cryptography.CryptographicException)
             {
                 VpnUiState.MarkConnectionDesired(false);
                 try
@@ -211,7 +215,10 @@ public sealed class AppServices
                 catch (Exception signOutError) when (
                     signOutError is IOException or
                         UnauthorizedAccessException or
-                        InvalidOperationException)
+                        InvalidOperationException or
+                        OperationCanceledException or
+                        System.Security.Cryptography.CryptographicException or
+                        Vex.Windows.Core.Vpn.Ipc.VpnIpcProtocolException)
                 {
                 }
                 finally
@@ -246,7 +253,8 @@ public sealed class AppServices
                 }
                 catch (Exception cleanupError) when (cleanupError is IOException or
                     UnauthorizedAccessException or InvalidOperationException or
-                    System.Security.Cryptography.CryptographicException or OperationCanceledException)
+                    System.Security.Cryptography.CryptographicException or OperationCanceledException or
+                    Vex.Windows.Core.Vpn.Ipc.VpnIpcProtocolException)
                 {
                     // Shared state retains the service failure and cleanup evidence.
                 }

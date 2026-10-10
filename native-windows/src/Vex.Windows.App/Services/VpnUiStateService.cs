@@ -49,6 +49,23 @@ public sealed class VpnUiStateService
             _getDiagnostics,
             cancellationToken).ConfigureAwait(false);
 
+    public Task<VpnServiceResponse> DisconnectIfUnwantedAsync(
+        Func<CancellationToken, Task<VpnServiceResponse>> disconnect,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(disconnect);
+        return RunAsync(token =>
+        {
+            // A user can request a new connection while cleanup waits for the
+            // operation gate. Honor the most recent intent before sending IPC.
+            if (!HasExplicitConnectionIntent || ConnectionDesired ||
+                !VpnRecoveryPolicy.RequiresDisconnect(Snapshot))
+                return Task.FromResult(new VpnServiceResponse(
+                    Guid.NewGuid().ToString("N"), true, Snapshot, null));
+            return disconnect(token);
+        }, cancellationToken);
+    }
+
     public async Task<VpnServiceResponse> RunAsync(
         Func<CancellationToken, Task<VpnServiceResponse>> operation,
         CancellationToken cancellationToken,

@@ -259,7 +259,9 @@ public sealed partial class AccountPage : Page
             error is IOException or
                 UnauthorizedAccessException or
                 System.Security.Cryptography.CryptographicException or
-                InvalidOperationException)
+                InvalidOperationException or
+                OperationCanceledException or
+                Vex.Windows.Core.Vpn.Ipc.VpnIpcProtocolException)
         {
             AccountNotice.Message =
                 Coordinator.CurrentState is null

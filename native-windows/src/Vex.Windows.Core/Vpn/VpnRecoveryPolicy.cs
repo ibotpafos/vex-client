@@ -11,6 +11,27 @@ public static class VpnRecoveryPolicy
     public static bool IsTerminalError(string? code) => code is
         "vpn_entitlement_required" or "sign_in_required" or "windows_hello_required" or "required_update";
 
+    public static bool RequiresDisconnect(VpnConnectionSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        return snapshot.Phase is VpnConnectionPhase.Connected or
+            VpnConnectionPhase.Connecting or VpnConnectionPhase.Disconnecting ||
+            snapshot.Phase == VpnConnectionPhase.Error &&
+            (snapshot.LocationId is not null || snapshot.Diagnostics?.AdapterName is not null ||
+             snapshot.Diagnostics?.LeakProtection is VpnLeakProtectionState.Armed or
+                 VpnLeakProtectionState.Blocking or VpnLeakProtectionState.Degraded ||
+             snapshot.ErrorCode == "tunnel_cleanup_incomplete");
+    }
+
+    public static bool ShouldEnforceDisconnect(
+        VpnConnectionSnapshot snapshot,
+        bool hasExplicitConnectionIntent,
+        bool connectionDesired,
+        DateTimeOffset now,
+        DateTimeOffset? lastAttempt) =>
+        hasExplicitConnectionIntent && !connectionDesired && RequiresDisconnect(snapshot) &&
+        (lastAttempt is not { } last || now - last >= RecoveryBackoff);
+
     public static bool ShouldRecover(
         VpnConnectionSnapshot snapshot,
         bool connectionDesired,

@@ -51,21 +51,34 @@ public sealed class VpnProductParityService
     {
         ArgumentNullException.ThrowIfNull(coordinator);
         ArgumentNullException.ThrowIfNull(preferences);
-        var locationId = preferences.SelectedLocationId;
-        if (preferences.AutoServerEnabled)
-        {
-            var locations = _cachedLocations.Count > 0
-                ? _cachedLocations
-                : await GetLocationsAsync(
-                    coordinator,
-                    cancellationToken).ConfigureAwait(false);
-            locationId = VpnLocationSelector.SelectAutomaticLocation(
-                locations,
-                coordinator.CurrentState?.LocationId);
-        }
         var routingMode = preferences.SmartRoutingEnabled
             ? "split"
             : "full";
+        var locationId = preferences.SelectedLocationId;
+        if (preferences.AutoServerEnabled)
+        {
+            try
+            {
+                var locations = _cachedLocations.Count > 0
+                    ? _cachedLocations
+                    : await GetLocationsAsync(
+                        coordinator,
+                        cancellationToken).ConfigureAwait(false);
+                locationId = VpnLocationSelector.SelectAutomaticLocation(
+                    locations,
+                    coordinator.CurrentState?.LocationId);
+            }
+            catch (Exception error) when (!cancellationToken.IsCancellationRequested &&
+                error is HttpRequestException or IOException or TaskCanceledException or TimeoutException)
+            {
+                var state = coordinator.CurrentState;
+                if (!coordinator.CanReconnectFromCachedAuthorization || state is null || state.RoutingMode != routingMode)
+                {
+                    throw;
+                }
+                locationId = state.LocationId;
+            }
+        }
         return await coordinator.ConnectWithRecoveryAsync(
             locationId,
             routingMode,

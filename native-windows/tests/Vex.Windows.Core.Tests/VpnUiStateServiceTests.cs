@@ -14,6 +14,8 @@ internal static class VpnUiStateServiceTests
         await TerminalFailuresClearConnectionIntentAsync();
         await RefreshUsesInjectedDiagnosticsAsync();
         await ConfirmedShutdownRejectsQueuedConnectionsAsync();
+        await FailedLogoutCleanupRemainsRetryableAsync();
+        await QueuedCleanupHonorsNewConnectionIntentAsync();
         ExplicitDisconnectCannotBeRestored();
     }
 
@@ -187,13 +189,83 @@ internal static class VpnUiStateServiceTests
             connected = true;
             return Task.FromResult(Response(new VpnConnectionSnapshot(VpnConnectionPhase.Connected, "de-1", 21, null)));
         }, CancellationToken.None);
+        var cleanupRan = false;
+        var queuedCleanup = service.DisconnectIfUnwantedAsync(_ =>
+        {
+            cleanupRan = true;
+            return Task.FromResult(Response(VpnConnectionSnapshot.Disconnected(21)));
+        }, CancellationToken.None);
         cleanupConfirmed.SetResult();
         await exit;
         await ExpectAsync<OperationCanceledException>(queuedConnect);
+        await ExpectAsync<OperationCanceledException>(queuedCleanup);
         service.MarkConnectionDesired(true);
-        Assert(!connected && !service.ConnectionDesired && service.Snapshot.Phase == VpnConnectionPhase.Disconnected &&
+        Assert(!connected && !cleanupRan && !service.ConnectionDesired && service.Snapshot.Phase == VpnConnectionPhase.Disconnected &&
             service.Snapshot.Sequence == 20 && service.Snapshot.ErrorCode is null,
             "A queued connect must not restart the service tunnel after confirmed app shutdown.");
+    }
+
+    private static async Task FailedLogoutCleanupRemainsRetryableAsync()
+    {
+        var service = Create();
+        var active = new VpnConnectionSnapshot(VpnConnectionPhase.Connected, "de-1", 10, null)
+        {
+            Diagnostics = VpnTunnelDiagnostics.Empty with { AdapterName = "VEX", AdapterIndex = 7 },
+        };
+        service.Apply(Response(active));
+        // Missing persisted state after a failed logout establishes unwanted
+        // intent on startup before adoption of the still-running tunnel.
+        service.MarkConnectionDesired(false);
+        service.RestoreConnectionDesired();
+        var attempts = 0;
+        await ExpectAsync<OperationCanceledException>(service.DisconnectIfUnwantedAsync(_ =>
+        {
+            attempts++;
+            return Task.FromException<VpnServiceResponse>(new OperationCanceledException("IPC timeout"));
+        }, CancellationToken.None));
+        Assert(!service.ConnectionDesired && VpnRecoveryPolicy.RequiresDisconnect(service.Snapshot),
+            "An IPC timeout after logout must preserve unwanted intent and active cleanup evidence.");
+        service.Apply(Response(active with { Sequence = 11 }));
+        await service.DisconnectIfUnwantedAsync(_ =>
+        {
+            attempts++;
+            return Task.FromResult(Response(VpnConnectionSnapshot.Disconnected(12)));
+        }, CancellationToken.None);
+        await service.DisconnectIfUnwantedAsync(_ =>
+        {
+            attempts++;
+            throw new InvalidOperationException("A confirmed disconnect must not send more cleanup IPC.");
+        }, CancellationToken.None);
+        Assert(attempts == 2 && !service.ConnectionDesired && service.Snapshot.Phase == VpnConnectionPhase.Disconnected,
+            "A service becoming available after logout must allow bounded cleanup without reconnecting.");
+    }
+
+    private static async Task QueuedCleanupHonorsNewConnectionIntentAsync()
+    {
+        var service = Create();
+        service.Apply(Response(new VpnConnectionSnapshot(VpnConnectionPhase.Connected, "de-1", 5, null)));
+        service.MarkConnectionDesired(false);
+        var entered = Signal();
+        var release = Signal();
+        var first = service.RunAsync(async _ =>
+        {
+            entered.SetResult();
+            await release.Task;
+            return Response(service.Snapshot);
+        }, CancellationToken.None);
+        await entered.Task;
+        var cleanupRan = false;
+        var queued = service.DisconnectIfUnwantedAsync(_ =>
+        {
+            cleanupRan = true;
+            return Task.FromResult(Response(VpnConnectionSnapshot.Disconnected(6)));
+        }, CancellationToken.None);
+        service.MarkConnectionDesired(true);
+        release.SetResult();
+        await first;
+        await queued;
+        Assert(!cleanupRan && service.ConnectionDesired && service.Snapshot.Phase == VpnConnectionPhase.Connected,
+            "Queued cleanup must recheck the user's newer connect intent after acquiring the shared gate.");
     }
 
     private static VpnUiStateService Create() => new(_ =>

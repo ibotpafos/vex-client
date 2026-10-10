@@ -18,6 +18,7 @@ using System.Text.Json.Nodes;
 var tests = new (string Name, Action Run)[]
 {
     ("Protected session cache handles corruption without replacing identity files", ProtectedStateFileTests.Run),
+    ("Signed relay candidates preserve authorization and bounded offline recovery", ClientSignedCandidateTests.Run),
     ("Client recovery preserves pins, authority, session and entitlement", ClientRecoveryParityTests.Run),
     ("Background recovery respects health, user intent, lock and backoff", VpnRecoveryPolicyTests.Run),
     ("UI VPN operations serialize failures and preserve explicit disconnect", VpnUiStateServiceTests.Run),

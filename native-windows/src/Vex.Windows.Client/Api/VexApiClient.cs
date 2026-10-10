@@ -64,6 +64,17 @@ public interface INativeClientApi
         int? knownVersion,
         CancellationToken cancellationToken);
 
+    Task<ManagedVpnProfile> GetManagedVpnCandidateProfileAsync(
+        string accessToken,
+        string deviceId,
+        string locationId,
+        string routingMode,
+        string? bypassRegion,
+        string candidateId,
+        CancellationToken cancellationToken) =>
+        Task.FromException<ManagedVpnProfile>(new VexApiException(
+            HttpStatusCode.NotFound, "vpn_candidate_grant_unavailable"));
+
     Task<VpnDevice> RotateManagedVpnKeyAsync(
         string accessToken,
         string deviceId,
@@ -423,6 +434,48 @@ public sealed class VexApiClient : INativeClientApi
         int? knownVersion,
         CancellationToken cancellationToken)
     {
+        return await GetManagedVpnProfileCoreAsync(accessToken, deviceId, locationId,
+            routingMode, bypassRegion, knownVersion, null, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<ManagedVpnProfile> GetManagedVpnCandidateProfileAsync(
+        string accessToken,
+        string deviceId,
+        string locationId,
+        string routingMode,
+        string? bypassRegion,
+        string candidateId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(candidateId);
+        if (candidateId.Length > 512 || candidateId.Any(char.IsControl))
+        {
+            throw new ArgumentException("VPN candidate ID is invalid.", nameof(candidateId));
+        }
+        try
+        {
+            return await GetManagedVpnProfileCoreAsync(accessToken, deviceId, locationId,
+                routingMode, bypassRegion, null, candidateId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (VexApiException error) when (error.StatusCode == HttpStatusCode.Conflict)
+        {
+            // The additive candidate-grant contract uses 409 for a stale,
+            // foreign or no-longer-qualified selection. Never expose raw
+            // server error text through the native application.
+            throw new VexApiException(error.StatusCode, "vpn_profile_candidate_rejected");
+        }
+    }
+
+    private async Task<ManagedVpnProfile> GetManagedVpnProfileCoreAsync(
+        string accessToken,
+        string deviceId,
+        string locationId,
+        string routingMode,
+        string? bypassRegion,
+        int? knownVersion,
+        string? candidateId,
+        CancellationToken cancellationToken)
+    {
         ValidateIdentifier(deviceId, nameof(deviceId));
         ValidateIdentifier(locationId, nameof(locationId));
         if (routingMode is not ("full" or "split"))
@@ -446,6 +499,8 @@ public sealed class VexApiClient : INativeClientApi
             routingMode +
             "&platform=windows" +
             "&awg_version=3" +
+            (candidateId is null ? string.Empty :
+                "&candidate_id=" + Uri.EscapeDataString(candidateId)) +
             (string.IsNullOrWhiteSpace(bypassRegion)
                 ? string.Empty
                 : "&bypass_region=" +

@@ -65,7 +65,9 @@ public sealed record NativeClientState(
     string? BypassRegion = null,
     VexEntitlement? CachedEntitlement = null,
     DateTimeOffset? CachedEntitlementCheckedAt = null,
-    DateTimeOffset? CachedEntitlementValidUntil = null);
+    DateTimeOffset? CachedEntitlementValidUntil = null,
+    IReadOnlyList<CachedSignedCandidateGrant>? CachedCandidateGrants = null,
+    DateTimeOffset? CachedCandidatePolicyExpiresAt = null);
 
 public sealed record NativeDeviceState(
     string InstallationId,
@@ -97,7 +99,7 @@ public sealed class NativeClientFlowException : Exception
     public string Code { get; }
 }
 
-public sealed class NativeClientCoordinator
+public sealed partial class NativeClientCoordinator
 {
     private static readonly TimeSpan RefreshWindow =
         TimeSpan.FromMinutes(5);
@@ -197,6 +199,8 @@ public sealed class NativeClientCoordinator
                     SelectionMode = "manual",
                     CachedProfileVersion = null,
                     CachedAuthorization = null,
+                    CachedCandidatePolicyExpiresAt = null,
+                    CachedCandidateGrants = null,
                 });
                 return;
             }
@@ -204,8 +208,8 @@ public sealed class NativeClientCoordinator
             {
                 // The privileged service validates the complete replacement
                 // before it replaces the existing working tunnel.
-                var response = await ConnectCoreAsync(locationId, state.RoutingMode,
-                    antiLeakEnabled, false, cancellationToken).ConfigureAwait(false);
+                var response = await ConnectWithRecoveryCoreAsync(locationId, state.RoutingMode,
+                    antiLeakEnabled, false, cancellationToken, false).ConfigureAwait(false);
                 if (!response.Success)
                 {
                     throw new NativeClientFlowException(response.ErrorCode ?? "vpn_server_switch_failed");
@@ -256,6 +260,8 @@ public sealed class NativeClientCoordinator
                 BypassRegion = bypassRegion,
                 CachedProfileVersion = null,
                 CachedAuthorization = null,
+                CachedCandidatePolicyExpiresAt = null,
+                CachedCandidateGrants = null,
             });
         }
         finally
@@ -323,15 +329,15 @@ public sealed class NativeClientCoordinator
             antiLeakEnabled: true,
             cancellationToken).ConfigureAwait(false);
 
-    public Task<VpnServiceResponse> ConnectAsync(
+    public async Task<VpnServiceResponse> ConnectAsync(
         string? locationId,
         string routingMode,
         bool antiLeakEnabled,
         CancellationToken cancellationToken) =>
-        ConnectAuthorizedAsync(locationId, routingMode, antiLeakEnabled,
-            false, cancellationToken);
+        (await ConnectAuthorizedAsync(locationId, routingMode, antiLeakEnabled,
+            false, cancellationToken).ConfigureAwait(false)).Response;
 
-    private async Task<VpnServiceResponse> ConnectAuthorizedAsync(
+    private async Task<ConnectionAttempt> ConnectAuthorizedAsync(
         string? locationId,
         string routingMode,
         bool antiLeakEnabled,
@@ -346,28 +352,8 @@ public sealed class NativeClientCoordinator
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            try
-            {
-                return await ConnectCoreAsync(locationId, routingMode,
-                    antiLeakEnabled, forceRefresh, cancellationToken).ConfigureAwait(false);
-            }
-            catch (VexApiException error) when (
-                error.StatusCode == System.Net.HttpStatusCode.Unauthorized)
-            {
-                await RefreshRejectedSessionAsync(cancellationToken).ConfigureAwait(false);
-                try
-                {
-                    return await ConnectCoreAsync(locationId, routingMode,
-                        antiLeakEnabled, true, cancellationToken).ConfigureAwait(false);
-                }
-                catch (VexApiException retryError) when (
-                    retryError.StatusCode == System.Net.HttpStatusCode.Unauthorized)
-                {
-                    _stateStore.Clear();
-                    SessionChanged?.Invoke(this, EventArgs.Empty);
-                    throw new NativeClientFlowException("sign_in_required");
-                }
-            }
+            return await ConnectAttemptCoreWithSessionRetryAsync(locationId, routingMode,
+                antiLeakEnabled, forceRefresh, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -375,25 +361,51 @@ public sealed class NativeClientCoordinator
         }
     }
 
-    private async Task<VpnServiceResponse> ConnectCoreAsync(
+    private sealed record ConnectionAttempt(
+        VpnServiceResponse Response,
+        NativeClientState State,
+        ManagedVpnProfileAuthorization Authorization);
+
+    private async Task<ConnectionAttempt> ConnectAttemptCoreWithSessionRetryAsync(
+        string? locationId, string routingMode, bool antiLeakEnabled, bool forceRefresh,
+        CancellationToken cancellationToken, ResilienceConnectionCandidate? candidate = null,
+        ResiliencePolicy? selectionPolicy = null, bool deferExpiredGrantRefresh = false)
+    {
+        try
+        {
+            return await ConnectCoreAsync(locationId, routingMode, antiLeakEnabled,
+                forceRefresh, cancellationToken, candidate, selectionPolicy, deferExpiredGrantRefresh).ConfigureAwait(false);
+        }
+        catch (VexApiException error) when (error.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+        {
+            await RefreshRejectedSessionAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                return await ConnectCoreAsync(locationId, routingMode, antiLeakEnabled,
+                    true, cancellationToken, candidate, selectionPolicy, deferExpiredGrantRefresh).ConfigureAwait(false);
+            }
+            catch (VexApiException retryError) when (retryError.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            {
+                _stateStore.Clear();
+                SessionChanged?.Invoke(this, EventArgs.Empty);
+                throw new NativeClientFlowException("sign_in_required");
+            }
+        }
+    }
+
+    private async Task<ConnectionAttempt> ConnectCoreAsync(
         string? locationId,
         string routingMode,
         bool antiLeakEnabled,
         bool forceRefresh,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ResilienceConnectionCandidate? candidate = null,
+        ResiliencePolicy? selectionPolicy = null, bool deferExpiredGrantRefresh = false)
     {
         var state = RequireCurrentState();
         state = await RefreshIfNeededAsync(
             state,
             cancellationToken).ConfigureAwait(false);
-        if (forceRefresh)
-        {
-            state = state with
-            {
-                CachedProfileVersion = null,
-                CachedAuthorization = null,
-            };
-        }
         state = await CompletePendingRotationAsync(
             state,
             cancellationToken).ConfigureAwait(false);
@@ -420,6 +432,7 @@ public sealed class NativeClientCoordinator
             {
                 LocationId = locationId,
                 SelectionMode = "manual",
+                CachedCandidateGrants = null,
             };
         }
 
@@ -439,16 +452,22 @@ public sealed class NativeClientCoordinator
             {
                 RoutingMode = routingMode,
                 BypassRegion = bypassRegion,
+                CachedCandidateGrants = null,
             };
         }
 
         state = await EnsureEntitlementAsync(state, cancellationToken)
             .ConfigureAwait(false);
 
-        if (state.PendingIdentity is null &&
+        if (!forceRefresh && candidate is null)
+        {
+            state = await PreferPolicyGrantAsync(state, selectionPolicy, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (!forceRefresh && candidate is null && state.PendingIdentity is null &&
             state.CachedProfileVersion is > 0 &&
             state.CachedAuthorization is not null &&
-            CachedAuthorizationMatchesTarget(state))
+            CachedAuthorizationMatchesTarget(state) && CachedAuthorityUnexpired(state))
         {
             var cachedResponse = await _vpnClient.ConnectAsync(
                 state.CachedAuthorization!.ToServiceAuthorization(),
@@ -459,71 +478,51 @@ public sealed class NativeClientCoordinator
             {
                 _stateStore.Save(state);
                 _ = ReportCachedConnectAsync(state);
-                return cachedResponse;
+                return new(cachedResponse, state, state.CachedAuthorization!);
             }
 
-            if (!string.Equals(
+            if (deferExpiredGrantRefresh || !string.Equals(
                     cachedResponse.ErrorCode,
                     "profile_expired",
                     StringComparison.Ordinal))
             {
-                return cachedResponse;
+                return new(cachedResponse, state, state.CachedAuthorization!);
             }
 
             state = state with
             {
                 CachedProfileVersion = null,
                 CachedAuthorization = null,
+                CachedCandidatePolicyExpiresAt = null,
+                CachedCandidateGrants = null,
             };
         }
 
         var cachedAuthorizationMatchesTarget =
-            state.CachedAuthorization is not null &&
+            !forceRefresh && candidate is null && state.CachedAuthorization is not null &&
             state.CachedProfileVersion is > 0 &&
-            CachedAuthorizationMatchesTarget(state);
+            CachedAuthorizationMatchesTarget(state) && CachedAuthorityUnexpired(state);
         ManagedVpnProfile profile;
         try
         {
-            profile = await _api.GetManagedVpnProfileAsync(
-                state.Session.AccessToken,
-                state.DeviceId,
-                state.LocationId,
-                state.RoutingMode,
-                state.BypassRegion,
-                !cachedAuthorizationMatchesTarget
-                    ? null
-                    : state.CachedProfileVersion,
-                cancellationToken).ConfigureAwait(false);
+            profile = await GetProfileAsync(state,
+                cachedAuthorizationMatchesTarget ? state.CachedProfileVersion : null,
+                candidate, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception error) when (
-            !cancellationToken.IsCancellationRequested &&
+            candidate is null && !cancellationToken.IsCancellationRequested &&
             cachedAuthorizationMatchesTarget &&
-            error is HttpRequestException
-                or IOException
-                or TaskCanceledException)
+            error is HttpRequestException or IOException or TaskCanceledException)
         {
-            // A previously verified signed profile remains safe for the
-            // service to validate. This keeps reconnect usable during a
-            // transient control-plane timeout; expired or revoked
-            // authorization is still rejected by the privileged service.
-            return await _vpnClient.ConnectAsync(
-                state.CachedAuthorization!.ToServiceAuthorization(),
-                state.Identity.PrivateKey,
-                antiLeakEnabled,
-                cancellationToken).ConfigureAwait(false);
+            var cachedResponse = await _vpnClient.ConnectAsync(
+                state.CachedAuthorization!.ToServiceAuthorization(), state.Identity.PrivateKey,
+                antiLeakEnabled, cancellationToken).ConfigureAwait(false);
+            return new(cachedResponse, state, state.CachedAuthorization);
         }
-        if (profile.Unchanged &&
-            (!cachedAuthorizationMatchesTarget ||
-             state.CachedProfileVersion != profile.Version))
+        if (profile.Unchanged && (candidate is not null || !cachedAuthorizationMatchesTarget ||
+            state.CachedProfileVersion != profile.Version))
         {
-            profile = await _api.GetManagedVpnProfileAsync(
-                state.Session.AccessToken,
-                state.DeviceId,
-                state.LocationId,
-                state.RoutingMode,
-                state.BypassRegion,
-                null,
-                cancellationToken).ConfigureAwait(false);
+            profile = await GetProfileAsync(state, null, candidate, cancellationToken).ConfigureAwait(false);
         }
         if (profile.Revoked)
         {
@@ -556,16 +555,11 @@ public sealed class NativeClientCoordinator
                 PendingIdentity = null,
                 CachedProfileVersion = null,
                 CachedAuthorization = null,
+                CachedCandidatePolicyExpiresAt = null,
+                CachedCandidateGrants = null,
             };
             _stateStore.Save(state);
-            profile = await _api.GetManagedVpnProfileAsync(
-                state.Session.AccessToken,
-                state.DeviceId,
-                state.LocationId,
-                state.RoutingMode,
-                state.BypassRegion,
-                null,
-                cancellationToken).ConfigureAwait(false);
+            profile = await GetProfileAsync(state, null, candidate, cancellationToken).ConfigureAwait(false);
             if (profile.Revoked || profile.RotationRequired)
             {
                 throw new NativeClientFlowException(
@@ -590,12 +584,31 @@ public sealed class NativeClientCoordinator
             authorization = profile.Authorization ??
                 throw new NativeClientFlowException(
                     "vpn_profile_unsigned");
+            if (state.CachedAuthorization is { } previous && !SameGrantTransport(previous, authorization))
+            {
+                state = state with { CachedCandidateGrants = null };
+                if (_stateStore.Load() is { } persisted)
+                {
+                    // Keep the working authorization; a changed signed
+                    // transport invalidates only speculative route leases.
+                    _stateStore.Save(persisted with { CachedCandidateGrants = null });
+                }
+            }
             state = state with
             {
                 CachedProfileVersion = profile.Version,
                 CachedAuthorization = authorization,
+                CachedCandidatePolicyExpiresAt = CandidatePolicyExpiry(state, candidate),
             };
-            _stateStore.Save(state);
+        }
+        if (candidate is null)
+        {
+            state = await PreferPolicyGrantAsync(state, selectionPolicy, cancellationToken).ConfigureAwait(false);
+            authorization = state.CachedAuthorization ?? authorization;
+        }
+        if (candidate is not null && !GrantMatchesCandidate(authorization, state, candidate))
+        {
+            throw new NativeClientFlowException("vpn_candidate_grant_mismatch");
         }
         var response = await _vpnClient.ConnectAsync(
             authorization.ToServiceAuthorization(),
@@ -604,13 +617,14 @@ public sealed class NativeClientCoordinator
             cancellationToken).ConfigureAwait(false);
         if (response.Success)
         {
+            _stateStore.Save(state);
             try
             {
                 await _api.ReportVpnConnectAsync(
                     state.Session.AccessToken,
                     new VpnConnectionTelemetry(
                         state.DeviceId,
-                        profile.Version,
+                        state.CachedProfileVersion ?? profile.Version,
                         "amneziawg",
                         "connect"),
                     cancellationToken).ConfigureAwait(false);
@@ -621,7 +635,30 @@ public sealed class NativeClientCoordinator
                 // Telemetry never changes the already-confirmed tunnel state.
             }
         }
-        return response;
+        return new(response, state, authorization);
+    }
+
+    private Task<ManagedVpnProfile> GetProfileAsync(NativeClientState state, int? knownVersion,
+        ResilienceConnectionCandidate? candidate, CancellationToken cancellationToken)
+    {
+        if (candidate is not null && FindCachedCandidateGrant(state, candidate) is { } cached)
+        {
+            return Task.FromResult(new ManagedVpnProfile(cached.ProfileVersion, state.DeviceId,
+                false, false, cached.Authorization));
+        }
+        return candidate is null
+            ? _api.GetManagedVpnProfileAsync(state.Session.AccessToken, state.DeviceId, state.LocationId,
+                state.RoutingMode, state.BypassRegion, knownVersion, cancellationToken)
+            : RequestCandidateGrantAsync(state, candidate, cancellationToken);
+    }
+
+    private async Task<ManagedVpnProfile> RequestCandidateGrantAsync(NativeClientState state,
+        ResilienceConnectionCandidate candidate, CancellationToken cancellationToken)
+    {
+        using var routeCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        routeCancellation.CancelAfter(TimeSpan.FromSeconds(8));
+        return await _api.GetManagedVpnCandidateProfileAsync(state.Session.AccessToken, state.DeviceId, state.LocationId,
+            state.RoutingMode, state.BypassRegion, candidate.Id, routeCancellation.Token).ConfigureAwait(false);
     }
 
     public async Task<ResiliencePolicy?> GetResiliencePolicyAsync(
@@ -630,26 +667,32 @@ public sealed class NativeClientCoordinator
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var state = await RefreshIfNeededAsync(RequireCurrentState(), cancellationToken)
-                .ConfigureAwait(false);
-            try
-            {
-                var policy = await _api.GetResiliencePolicyAsync(
-                    state.Session.AccessToken, cancellationToken).ConfigureAwait(false);
-                if (policy is not null)
-                {
-                    _dynamicRoutes.CachePolicy(policy);
-                }
-                return policy ?? _dynamicRoutes.CachedPolicy(_utcNow());
-            }
-            catch (Exception error) when (
-                !cancellationToken.IsCancellationRequested &&
-                error is HttpRequestException or IOException or TaskCanceledException)
-            {
-                return _dynamicRoutes.CachedPolicy(_utcNow());
-            }
+            return await GetResiliencePolicyCoreAsync(cancellationToken).ConfigureAwait(false);
         }
         finally { _gate.Release(); }
+    }
+
+    private async Task<ResiliencePolicy?> GetResiliencePolicyCoreAsync(CancellationToken cancellationToken)
+    {
+        var state = await RefreshIfNeededAsync(RequireCurrentState(), cancellationToken)
+            .ConfigureAwait(false);
+        try
+        {
+            var policy = await _api.GetResiliencePolicyAsync(
+                state.Session.AccessToken, cancellationToken).ConfigureAwait(false);
+            if (policy?.Probe is not null && policy.Candidates is not null)
+            {
+                _dynamicRoutes.CachePolicy(policy);
+            }
+            return policy?.Probe is not null && policy.Candidates is not null
+                ? policy : _dynamicRoutes.CachedPolicy(_utcNow());
+        }
+        catch (Exception error) when (
+            !cancellationToken.IsCancellationRequested &&
+            error is HttpRequestException or IOException or TaskCanceledException)
+        {
+            return _dynamicRoutes.CachedPolicy(_utcNow());
+        }
     }
 
     public async Task<IReadOnlyList<VpnDeviceUsage>> GetDeviceUsageAsync(
@@ -704,7 +747,8 @@ public sealed class NativeClientCoordinator
         {
             if (_stateStore.Load() is { } state)
             {
-                _stateStore.Save(state with { CachedProfileVersion = null, CachedAuthorization = null });
+                _stateStore.Save(state with { CachedProfileVersion = null, CachedAuthorization = null,
+                    CachedCandidateGrants = null });
             }
         }
         finally { _gate.Release(); }
@@ -716,108 +760,12 @@ public sealed class NativeClientCoordinator
     public Task<VpnServiceResponse> DisconnectTunnelAsync(CancellationToken cancellationToken) =>
         _vpnClient.DisconnectAsync(cancellationToken);
 
-    /// Tries the admitted profile, one fresh signed profile, then at most one
-    /// alternate exit when automatic selection is enabled. A resilience policy
-    /// is advice: it never authorizes editing the privileged signed endpoint.
-    public async Task<VpnServiceResponse> ConnectWithRecoveryAsync(
-        string? locationId,
-        string routingMode,
-        bool antiLeakEnabled,
-        bool allowsAutomaticFailover,
-        CancellationToken cancellationToken,
-        bool forceFreshProfile = false)
-    {
-        await _recoveryGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            var response = await ConnectAuthorizedAsync(locationId, routingMode,
-                antiLeakEnabled, forceFreshProfile, cancellationToken).ConfigureAwait(false);
-            var initialLocation = CurrentState?.LocationId ?? locationId;
-            if (response.Success || !IsRecoverableConnectError(response.ErrorCode))
-            {
-                if (response.Success)
-                {
-                    RecordAdmittedRouteOutcome(response, _dynamicRoutes.CachedPolicy(_utcNow()));
-                }
-                return response;
-            }
-
-            ResiliencePolicy? policy = null;
-            try { policy = await GetResiliencePolicyAsync(cancellationToken).ConfigureAwait(false); }
-            catch (Exception error) when (
-                !cancellationToken.IsCancellationRequested &&
-                error is VexApiException or HttpRequestException or IOException or TaskCanceledException) { }
-            RecordAdmittedRouteOutcome(response, policy);
-
-            if (!forceFreshProfile)
-            {
-                response = await ConnectAuthorizedAsync(initialLocation, routingMode,
-                    antiLeakEnabled, true, cancellationToken).ConfigureAwait(false);
-                RecordAdmittedRouteOutcome(response, policy);
-            }
-            if (response.Success || !allowsAutomaticFailover ||
-                !VpnAutopilotAssessment.Assess(response.ErrorCode, response.Diagnostics).CanFailover)
-            {
-                return response;
-            }
-
-            var locations = await GetLocationsAsync(cancellationToken).ConfigureAwait(false);
-            var alternate = VpnLocationSelector.SelectAutomaticLocation(
-                locations.Where(candidate => !string.Equals(candidate.Id, initialLocation,
-                    StringComparison.OrdinalIgnoreCase)).ToArray(), null);
-            if (alternate is null) { return response; }
-            response = await ConnectAuthorizedAsync(alternate, routingMode,
-                antiLeakEnabled, true, cancellationToken).ConfigureAwait(false);
-            RecordAdmittedRouteOutcome(response, policy);
-            return response;
-        }
-        finally { _recoveryGate.Release(); }
-    }
-
-    private static bool IsRecoverableConnectError(string? code) => code is
-        "tunnel_no_handshake" or "no_handshake" or "tunnel_handshake_timeout" or
-        "tunnel_network_degraded" or "tunnel_start_failed" or "tunnel_runtime_failure" or
-        "tunnel_adapter_timeout" or "profile_expired";
-
-    private void RecordAdmittedRouteOutcome(VpnServiceResponse response, ResiliencePolicy? policy)
-    {
-        if (policy is null || CurrentState is not { CachedAuthorization: { } authorization } state)
-        {
-            return;
-        }
-        try
-        {
-            var encoded = authorization.PayloadBase64.Replace('-', '+').Replace('_', '/');
-            encoded = encoded.PadRight(encoded.Length + ((4 - encoded.Length % 4) % 4), '=');
-            using var document = JsonDocument.Parse(Convert.FromBase64String(encoded));
-            var root = document.RootElement;
-            var tunnel = root.GetProperty("tunnel");
-            var endpoint = tunnel.GetProperty("endpoint").GetString();
-            var assignedLocation = root.GetProperty("assigned_location_id").GetString() ?? state.LocationId;
-            var hasHeaderKey = tunnel.TryGetProperty("amnezia", out var amnezia) &&
-                amnezia.ValueKind == JsonValueKind.Object &&
-                amnezia.TryGetProperty("header_protection_key", out var headerKey) &&
-                headerKey.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(headerKey.GetString());
-            // Only the endpoint already granted by the signed profile can run.
-            var candidate = _dynamicRoutes.OrderedCandidates(state.DeviceId, assignedLocation,
-                null, "amneziawg", hasHeaderKey, policy, _utcNow())
-                .FirstOrDefault(route => string.Equals(route.Endpoint, endpoint, StringComparison.OrdinalIgnoreCase));
-            if (candidate is null) { return; }
-            if (response.Success) { _dynamicRoutes.RecordSuccess(candidate, policy, _utcNow()); }
-            else { _dynamicRoutes.RecordFailure(candidate, policy, _utcNow()); }
-        }
-        catch (Exception error) when (error is JsonException or FormatException or KeyNotFoundException or
-            IOException or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException)
-        {
-            // Privileged profile verification remains responsible for admission.
-        }
-    }
-
     private async Task<NativeClientState> EnsureEntitlementAsync(
         NativeClientState state, CancellationToken cancellationToken)
     {
         var now = _utcNow();
         if (state.CachedEntitlement?.HasPaidAccess == true &&
+            (KnownEntitlementExpiry(state.CachedEntitlement) is not { } knownExpiry || knownExpiry > now) &&
             state.CachedEntitlementValidUntil > now &&
             state.CachedEntitlementCheckedAt > now - TimeSpan.FromMinutes(5))
         {
@@ -839,6 +787,10 @@ public sealed class NativeClientCoordinator
             !cancellationToken.IsCancellationRequested &&
             error is HttpRequestException or IOException or TaskCanceledException)
         {
+            if (KnownEntitlementExpiry(state.CachedEntitlement) is { } paidExpiry && paidExpiry <= now)
+            {
+                throw new NativeClientFlowException("vpn_entitlement_required");
+            }
             if (state.CachedEntitlement?.HasPaidAccess == true &&
                 state.CachedEntitlementValidUntil > now)
             {
@@ -852,8 +804,7 @@ public sealed class NativeClientCoordinator
     {
         var now = _utcNow();
         var validUntil = entitlement.HasPaidAccess ? now.AddHours(24) : now;
-        if (DateTimeOffset.TryParse(entitlement.EffectiveExpiresAt ?? entitlement.CurrentPeriodEnd,
-                out var expiresAt) && expiresAt < validUntil)
+        if (KnownEntitlementExpiry(entitlement) is { } expiresAt && expiresAt < validUntil)
         {
             validUntil = expiresAt;
         }
@@ -863,6 +814,17 @@ public sealed class NativeClientCoordinator
             CachedEntitlementCheckedAt = now,
             CachedEntitlementValidUntil = validUntil,
         };
+    }
+
+    private static DateTimeOffset? KnownEntitlementExpiry(VexEntitlement? entitlement)
+    {
+        if (entitlement is null) { return null; }
+        // Effective expiry accounts for the authoritative subscription state;
+        // the billing period is the compatible fallback when it is absent.
+        var value = !string.IsNullOrWhiteSpace(entitlement.EffectiveExpiresAt)
+            ? entitlement.EffectiveExpiresAt : entitlement.CurrentPeriodEnd;
+        return DateTimeOffset.TryParse(value, System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AssumeUniversal, out var expiresAt) ? expiresAt : null;
     }
 
     private async Task RefreshRejectedSessionAsync(CancellationToken cancellationToken)
@@ -1029,9 +991,12 @@ public sealed class NativeClientCoordinator
         }
         finally
         {
-            _stateStore.Clear();
-            SessionChanged?.Invoke(this, EventArgs.Empty);
-            _gate.Release();
+            try
+            {
+                _stateStore.Clear();
+                SessionChanged?.Invoke(this, EventArgs.Empty);
+            }
+            finally { _gate.Release(); }
         }
     }
 
@@ -1332,6 +1297,8 @@ public sealed class NativeClientCoordinator
             PendingIdentity = null,
             CachedProfileVersion = null,
             CachedAuthorization = null,
+            CachedCandidatePolicyExpiresAt = null,
+            CachedCandidateGrants = null,
         };
         _stateStore.Save(committed);
         return committed;

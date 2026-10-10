@@ -167,12 +167,12 @@ internal static class ClientRecoveryParityTests
 
     private static void FailedServerSwitchRestoresPreviousGrant()
     {
-        var vpn = new SequenceVpnClient(null, "tunnel_no_handshake", null);
+        var vpn = new SequenceVpnClient(null, "tunnel_no_handshake", "tunnel_no_handshake", null);
         var fixture = Fixture(vpn);
         fixture.Coordinator.ConnectAsync(CancellationToken.None).GetAwaiter().GetResult();
         ExpectFlow("tunnel_no_handshake", () => fixture.Coordinator.SelectLocationAsync("de-1", true,
             CancellationToken.None, false).GetAwaiter().GetResult());
-        Check(fixture.Store.State?.LocationId == "fi-1" && vpn.ConnectCount == 3 && vpn.DisconnectCount == 0,
+        Check(fixture.Store.State?.LocationId == "fi-1" && vpn.ConnectCount == 4 && vpn.DisconnectCount == 0,
             "Failed switch did not restore the prior signed grant without premature disconnect.");
     }
 

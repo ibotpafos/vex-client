@@ -57,8 +57,8 @@ drill must also establish AWG3.1 protocol compatibility.
 
 Monitoring belongs to the application lifetime, so navigation and tray-only
 operation retain status, recovery and diagnostics retries. Recovery preserves
-manual location pins, tries a fresh signed profile for the same exit, and only
-allows an alternate exit in automatic mode. Subscription expiry and session
+manual location pins, exhausts qualified ingress paths for the same exit,
+refreshes its signed profile, and allows an alternate exit in automatic mode. Subscription expiry and session
 revocation prevent cached-profile reconnects. Google/email authentication,
 website billing, support message reconciliation and incident configuration
 follow the current macOS product flows.
@@ -70,12 +70,24 @@ operations against a late reconnect; a failed cleanup keeps the app available
 for retry.
 
 Resilience policies are cached in per-user DPAPI storage and route health uses
-expiry, quarantine and sticky selection. They are advisory: the service still
-requires a signed profile for the exact endpoint. The current profile API
-cannot issue a signed grant for a requested relay/path candidate, and the
-resilience response does not provide a release-pinned trust anchor. Therefore
-switching to a different relay endpoint is a remaining backend contract gap;
-Windows must not substitute an unsigned endpoint into an admitted profile.
+expiry, quarantine and sticky selection. A changed endpoint requires the additive
+`GET /v1/vpn/profile?...&candidate_id=...` backend contract: the server resolves
+the identifier against its qualified topology for the current user, device and
+assigned exit, then issues the existing P256 profile with an exact endpoint and
+a lease of at most ten minutes. The service uses its release-pinned keyring;
+policy keys supplied by the response do not authorize configuration changes.
+The companion backend implementation is [VPN #741](https://github.com/ibotpafos/VPN/pull/741);
+it must be reviewed and deployed before new path grants can be issued. Servers
+without this contract retain direct-profile recovery.
+
+After a successful connection, Windows prefetches at most three independently
+signed current-policy grants within an eight-second budget. Its DPAPI-protected
+pool binds user, device, exit, routing, bypass and local key identity. Offline
+failover can use those grants until the earlier signed or policy expiry;
+uncached paths and expired grants require the API. Partial prefetch preserves
+valid existing leases. Recovery permits at most three same-exit path attempts,
+one fresh same-exit profile and one automatic alternate exit: five service
+attempts total, or four when recovery already begins with a fresh profile.
 
 Portable behavioral tests and cross-compilation establish source correctness.
 The scoped Windows CI compiles and publishes both x64 and arm64 WinUI/service

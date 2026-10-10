@@ -22,8 +22,8 @@ public sealed class NativeVpnBackgroundHost : IDisposable, IAsyncDisposable
     private CancellationTokenSource? _recoveryCancellation;
     private Task? _loop;
     private DateTimeOffset? _lastRecoveryAttempt;
-    private DateTimeOffset? _connectedSince;
-    private long? _connectedSequence;
+    private DateTimeOffset? _lastDisconnectAttempt;
+    private readonly VpnConnectionHealthTracker _connectionHealth = new();
     private DateTimeOffset? _lastDiagnosticsFlush;
     private DateTimeOffset? _lastEntitlementCheck;
     private bool _restored;
@@ -174,22 +174,40 @@ public sealed class NativeVpnBackgroundHost : IDisposable, IAsyncDisposable
         }
         var snapshot = _services.VpnUiState.Snapshot;
         var now = DateTimeOffset.UtcNow;
-        ObserveConnection(snapshot, now);
+        _connectionHealth.Observe(snapshot, now);
+        var sessionAccess = _services.Coordinator.CurrentStateAccess;
+        if (sessionAccess == ClientStateAccessKind.Missing &&
+            VpnRecoveryPolicy.RequiresDisconnect(snapshot) &&
+            (!_services.VpnUiState.HasExplicitConnectionIntent || _services.VpnUiState.ConnectionDesired))
+        {
+            // A persisted session clear is logout evidence even after restarting
+            // the app following an unavailable privileged service.
+            _services.VpnUiState.MarkConnectionDesired(false);
+        }
         if (!_restored && status.Success)
         {
             _restored = true;
             if (!_services.VpnUiState.HasExplicitConnectionIntent &&
-                snapshot.Phase == VpnConnectionPhase.Connected)
+                snapshot.Phase == VpnConnectionPhase.Connected &&
+                sessionAccess is ClientStateAccessKind.Available or ClientStateAccessKind.Locked)
             {
                 _services.VpnUiState.RestoreConnectionDesired();
             }
         }
 
+        if (VpnRecoveryPolicy.ShouldEnforceDisconnect(snapshot,
+            _services.VpnUiState.HasExplicitConnectionIntent,
+            _services.VpnUiState.ConnectionDesired, now, _lastDisconnectAttempt))
+        {
+            await EnforceDisconnectAsync(cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         if (!VpnRecoveryPolicy.ShouldRecover(snapshot,
             _services.VpnUiState.ConnectionDesired,
             _services.Preferences.Current.AutoRecoveryEnabled,
-            _services.Coordinator.CurrentStateAccess == ClientStateAccessKind.Available,
-            now, _connectedSince, _lastRecoveryAttempt)) return;
+            sessionAccess == ClientStateAccessKind.Available,
+            now, _connectionHealth.ConnectedSince, _lastRecoveryAttempt)) return;
         var update = _services.UpdateService.CurrentSnapshot;
         if (update.UpdateAvailable && update.Required) return;
 
@@ -203,14 +221,14 @@ public sealed class NativeVpnBackgroundHost : IDisposable, IAsyncDisposable
                 // The user may have pressed Disconnect while we waited for the gate.
                 var current = _services.VpnUiState.Snapshot;
                 var currentTime = DateTimeOffset.UtcNow;
-                ObserveConnection(current, currentTime);
+                _connectionHealth.Observe(current, currentTime);
                 var preferences = _services.Preferences.Current;
                 var latestUpdate = _services.UpdateService.CurrentSnapshot;
                 if (!VpnRecoveryPolicy.ShouldRecover(current,
                         _services.VpnUiState.ConnectionDesired,
                         preferences.AutoRecoveryEnabled,
                         _services.Coordinator.CurrentStateAccess == ClientStateAccessKind.Available,
-                        currentTime, _connectedSince, _lastRecoveryAttempt) ||
+                        currentTime, _connectionHealth.ConnectedSince, _lastRecoveryAttempt) ||
                     latestUpdate.UpdateAvailable && latestUpdate.Required)
                     return new VpnServiceResponse(Guid.NewGuid().ToString("N"), true, _services.VpnUiState.Snapshot, null);
                 token.ThrowIfCancellationRequested();
@@ -227,17 +245,25 @@ public sealed class NativeVpnBackgroundHost : IDisposable, IAsyncDisposable
         }
     }
 
-    private void ObserveConnection(VpnConnectionSnapshot snapshot, DateTimeOffset now)
+    private async Task EnforceDisconnectAsync(CancellationToken cancellationToken)
     {
-        if (snapshot.Phase == VpnConnectionPhase.Connected)
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(60));
+        var attempted = false;
+        try
         {
-            if (_connectedSequence != snapshot.Sequence) _connectedSince = now;
-            _connectedSequence = snapshot.Sequence;
+            await _services.VpnUiState.DisconnectIfUnwantedAsync(async token =>
+            {
+                attempted = true;
+                _lastDisconnectAttempt = DateTimeOffset.UtcNow;
+                return await _services.VpnClient.DisconnectAsync(token).ConfigureAwait(false);
+            }, timeout.Token).ConfigureAwait(false);
         }
-        else
+        finally
         {
-            _connectedSince = null;
-            _connectedSequence = null;
+            // Back off after completion as well as after a failed/slow attempt.
+            // Cleanup remains permitted with a missing/locked session or update.
+            if (attempted) _lastDisconnectAttempt = DateTimeOffset.UtcNow;
         }
     }
 

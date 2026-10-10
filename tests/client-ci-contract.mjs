@@ -53,6 +53,11 @@ function violations(value) {
     if (lane === 'android' && !(job.steps ?? []).some(step => step.uses?.startsWith('actions/setup-go@') && step.with?.['go-version'] === '1.25.x')) failures.push('pinned upstream Go toolchain floor');
     if (lane === 'macos') {
       if (job.env?.DEVELOPER_DIR !== '/Applications/Xcode_26.6.app/Contents/Developer') failures.push('supported pinned Xcode toolchain');
+      if (!(job.steps ?? []).some(step => step.uses === 'actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16'
+        && step.with?.['go-version'] === '1.26.9' && step.with?.cache === false)) failures.push('pinned iOS bridge Go toolchain');
+      const ios = (job.steps ?? []).find(step => step.name === 'Build the canonical iOS simulator app without signing');
+      if (!ios?.run?.startsWith('bash scripts/test_ios_simulator_build.sh')
+        || !(ios['timeout-minutes'] > 0 && ios['timeout-minutes'] <= 40)) failures.push('bounded canonical iOS app qualification');
       if (!(job.steps ?? []).some(step => step.run?.trim() === 'swift test --package-path macos-native')) failures.push('complete macOS suite');
       const transaction = (job.steps ?? []).find(step => step.id === 'contract');
       if (transaction?.if !== "github.event_name == 'pull_request'"
@@ -81,6 +86,8 @@ if (failures.length) {
     value => { value.jobs.android['runs-on'] = 'ubuntu-latest-16-cores'; },
     value => { value.jobs.macos['runs-on'] = 'macos-26-xlarge'; },
     value => { value.jobs.macos.env.DEVELOPER_DIR = '/Applications/Xcode_26.3.app/Contents/Developer'; },
+    value => { value.jobs.macos.steps.find(step => step.uses?.startsWith('actions/setup-go@')).with['go-version'] = '1.25.x'; },
+    value => { value.jobs.macos.steps.find(step => step.name === 'Build the canonical iOS simulator app without signing').run = 'bash scripts/test_ios_module_compile.sh'; },
     value => { value.jobs.android.steps.find(step => step.name === 'Install locked Android build components').run = 'sdkmanager \"platform-tools\"'; },
     value => { value.jobs.android.steps.find(step => step.uses?.startsWith('actions/setup-go@')).with['go-version'] = '1.24.x'; },
     value => { value.permissions.contents = 'write'; },

@@ -3,19 +3,21 @@ export const technicalWorksMessage = 'Идут технические работ
 export class ApiRequestError extends Error {
   status?: number;
   code?: string;
+  retryAfterMs?: number;
 
-  constructor(message: string, options: { status?: number; code?: string } = {}) {
+  constructor(message: string, options: { status?: number; code?: string; retryAfterMs?: number } = {}) {
     super(message);
     this.name = 'ApiRequestError';
     this.status = options.status;
     this.code = options.code;
+    this.retryAfterMs = options.retryAfterMs;
   }
 }
 
 export function normalizeApiRequestError(error: unknown): Error {
   if (isTechnicalWorksError(error)) {
     if (error instanceof ApiRequestError) {
-      return new ApiRequestError(technicalWorksMessage, { status: error.status, code: error.code });
+      return new ApiRequestError(technicalWorksMessage, { status: error.status, code: error.code, retryAfterMs: error.retryAfterMs });
     }
     const message = error instanceof Error ? error.message.toLowerCase() : '';
     const code = message.includes('превышено время ожидания api') ? 'request_timeout'

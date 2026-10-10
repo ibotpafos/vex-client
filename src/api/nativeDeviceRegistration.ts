@@ -4,30 +4,31 @@ export type NativeDeviceRegistrationAttempt<T> = {
   promise: Promise<T>;
 };
 
-let sharedRegistrationAttempt: NativeDeviceRegistrationAttempt<unknown> | null = null;
+const registrationAttempts = new Map<string, Map<string, Promise<unknown>>>();
 
 export function getOrCreateNativeDeviceRegistration<T>(
   accessToken: string,
   externalDeviceId: string,
   start: () => Promise<T>,
 ): Promise<T> {
-  if (
-    sharedRegistrationAttempt?.accessToken === accessToken &&
-    sharedRegistrationAttempt.externalDeviceId === externalDeviceId
-  ) {
-    return sharedRegistrationAttempt.promise as Promise<T>;
+  let devices = registrationAttempts.get(accessToken);
+  const existing = devices?.get(externalDeviceId);
+  if (existing) return existing as Promise<T>;
+  if (!devices) {
+    devices = new Map();
+    registrationAttempts.set(accessToken, devices);
   }
-
-  const attempt: NativeDeviceRegistrationAttempt<T> = {
-    accessToken,
-    externalDeviceId,
-    promise: start(),
-  };
-  sharedRegistrationAttempt = attempt as NativeDeviceRegistrationAttempt<unknown>;
-  void attempt.promise.catch(() => {
-    if (sharedRegistrationAttempt === attempt) {
-      sharedRegistrationAttempt = null;
+  // Coalesce only requests in flight. A completed result cannot override a
+  // later authoritative device lookup after deletion or binding replacement.
+  const promise = Promise.resolve().then(start);
+  devices.set(externalDeviceId, promise);
+  const pendingDevices = devices;
+  const release = () => {
+    if (pendingDevices.get(externalDeviceId) === promise) {
+      pendingDevices.delete(externalDeviceId);
+      if (pendingDevices.size === 0) registrationAttempts.delete(accessToken);
     }
-  });
-  return attempt.promise;
+  };
+  void promise.then(release, release);
+  return promise;
 }

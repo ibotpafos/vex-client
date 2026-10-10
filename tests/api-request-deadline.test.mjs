@@ -50,3 +50,83 @@ test('response body that ignores abort still cannot hold the caller forever', as
   const result=raw('/v1/devices',{timeout:1000}).catch(()=>{done=true;});
   await settle();t.mock.timers.tick(1000);await settle();assert.equal(done,true);await result;
 });
+
+function failure(status, retryAfter, message = 'temporary') {
+  return {ok:false,status,headers:{get:() => retryAfter},text:async()=>JSON.stringify({message})};
+}
+
+for (const status of [429, 503]) {
+  test(`GET respects Retry-After on HTTP ${status}`, async t => {
+    t.mock.timers.enable({apis:['setTimeout','Date'],now:0});
+    let calls=0;
+    const raw=client(async()=>++calls===1 ? failure(status,'2') : {ok:true,text:async()=>'recovered'});
+    const result=raw('/v1/vpn/profile',{timeout:5000});await settle();
+    t.mock.timers.tick(1999);await settle();assert.equal(calls,1);
+    t.mock.timers.tick(1);await settle();assert.equal(await result,'recovered');assert.equal(calls,2);
+  });
+}
+
+test('HTTP-date Retry-After survives error normalization',async t=>{
+  const now=Date.UTC(2026,9,10);
+  t.mock.timers.enable({apis:['setTimeout','Date'],now});
+  let calls=0;
+  const raw=client(async()=>++calls===1 ? failure(503,new Date(now+3000).toUTCString()) : {ok:true,text:async()=>'ok'});
+  const result=raw('/v1/vpn/profile',{timeout:5000});await settle();
+  t.mock.timers.tick(2999);await settle();assert.equal(calls,1);
+  t.mock.timers.tick(1);await settle();assert.equal(await result,'ok');assert.equal(calls,2);
+});
+
+test('server wait outside the deadline returns the original status without early retry',async t=>{
+  t.mock.timers.enable({apis:['setTimeout','Date'],now:0});
+  let calls=0;
+  const raw=client(async()=>{calls++;return failure(429,'60','slow down');});
+  await assert.rejects(raw('/v1/devices',{timeout:1000}),error=>error.status===429 && error.retryAfterMs===60000 && error.message==='slow down');
+  assert.equal(calls,1);t.mock.timers.tick(60000);await settle();assert.equal(calls,1);
+});
+
+for(const retryAfter of [null,'invalid','-1','1.5']) {
+  test(`invalid or missing Retry-After uses bounded backoff: ${retryAfter}`,async t=>{
+    t.mock.timers.enable({apis:['setTimeout','Date'],now:0});let calls=0;
+    const raw=client(async()=>++calls===1 ? failure(503,retryAfter) : {ok:true,text:async()=>'ok'});
+    const result=raw('/v1/devices',{timeout:2000});await settle();
+    t.mock.timers.tick(599);await settle();assert.equal(calls,1);
+    t.mock.timers.tick(1);await settle();assert.equal(await result,'ok');
+  });
+}
+
+for(const message of ['Failed to fetch','Load failed','connection reset','could not connect']) {
+  test(`transient transport error retries: ${message}`,async t=>{
+    t.mock.timers.enable({apis:['setTimeout','Date'],now:0});let calls=0;
+    const raw=client(async()=>{if(++calls===1)throw new TypeError(message);return {ok:true,text:async()=>'ok'};});
+    const result=raw('/v1/devices',{timeout:2000});await settle();t.mock.timers.tick(600);await settle();
+    assert.equal(await result,'ok');assert.equal(calls,2);
+  });
+}
+
+for(const status of [400,401,403,404,409]) {
+  test(`HTTP ${status} is never retried even with a transport-like message`,async()=>{
+    let calls=0;
+    const raw=client(async()=>{calls++;return failure(status,'0','connection reset');});
+    await assert.rejects(raw('/v1/devices'),error=>error.status===status);assert.equal(calls,1);
+  });
+}
+
+test('POST with idempotency key remains a single attempt',async()=>{
+  let calls=0;
+  const raw=client(async()=>{calls++;return failure(503,'0');});
+  await assert.rejects(raw('/v1/devices/register',{method:'POST',idempotencyKey:'fixture-key',body:{}}),error=>error.status===503);
+  assert.equal(calls,1);
+});
+
+test('retryCount zero disables retry for throttling',async()=>{
+  let calls=0;
+  const raw=client(async()=>{calls++;return failure(429,'0');});
+  await assert.rejects(raw('/v1/devices',{retryCount:0}),error=>error.status===429);assert.equal(calls,1);
+});
+
+test('outer deadline retains the machine-readable request_timeout code',async t=>{
+  t.mock.timers.enable({apis:['setTimeout','Date'],now:0});
+  const raw=client(()=>new Promise(()=>{}));
+  const result=assert.rejects(raw('/v1/devices',{timeout:1000}),error=>error.code==='request_timeout');
+  await settle();t.mock.timers.tick(1000);await settle();await result;
+});

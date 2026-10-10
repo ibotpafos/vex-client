@@ -81,6 +81,7 @@ export type AuthSession = {
 
 export type VpnDevice = {
   id: string;
+  userId?: string;
   name: string;
   status: string;
   assignedIpv4?: string;
@@ -202,6 +203,7 @@ export type PreparedTunnel = {
 };
 
 export type PreparedTunnelOptions = {
+  userId?: string;
   isCurrentSessionOperation?: () => boolean;
   cachedDevice?: VpnDevice;
   cachedConfig?: string;

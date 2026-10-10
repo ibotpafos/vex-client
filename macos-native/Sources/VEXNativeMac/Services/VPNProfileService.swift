@@ -28,21 +28,33 @@ struct VPNProfileService {
         routingMode: VpnRoutingMode,
         forceRefresh: Bool = false,
         writeHelperConfig: Bool = true,
-        prevalidatedEntitlement: Entitlement? = nil
+        prevalidatedEntitlement: Entitlement? = nil,
+        shouldPersist: () -> Bool = { true }
     ) async throws -> PreparedTunnel {
-        try Task.checkCancellation()
+        try ensureProfileRequestCurrent(shouldPersist)
         let normalizedLocationId = normalizeLocationId(locationId)
         let bypassRegion = bypassRegion(for: routingMode)
         let suppliedUserId = userId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        var cached = cache.load(locationId: normalizedLocationId, routingMode: routingMode, accountUserId: suppliedUserId)
-        let keyPair = try keyStore.getOrCreate()
-        let externalDeviceId = identityStore.getOrCreateDeviceId()
+
+        let accountUserId: String
+        if let suppliedUserId, !suppliedUserId.isEmpty {
+            accountUserId = suppliedUserId
+        } else {
+            accountUserId = try await api.me(accessToken: accessToken).id
+            try ensureProfileRequestCurrent(shouldPersist)
+        }
+        guard !accountUserId.isEmpty else { throw VPNProfileError.profileIdentityMismatch }
+        let cached = cache.load(locationId: normalizedLocationId, routingMode: routingMode, accountUserId: accountUserId)
+        let credentials = try await prepareAccountIdentity(accessToken: accessToken, accountUserId: accountUserId,
+            locationId: normalizedLocationId, shouldPersist: shouldPersist)
+        var keyPair = credentials.keyPair
+        let externalDeviceId = credentials.scope.externalDeviceId
 
         if !forceRefresh,
+           !credentials.scope.registrationConfirmationPending,
            prevalidatedEntitlement?.hasPaidAccess == true,
-           let suppliedUserId,
            let cached,
-           VPNProfileCacheIdentity.canReuse(cached, accountUserId: suppliedUserId, installationId: externalDeviceId,
+           VPNProfileCacheIdentity.canReuse(cached, accountUserId: accountUserId, installationId: externalDeviceId,
                keyPair: keyPair, locationId: normalizedLocationId, routingMode: routingMode),
            !Self.cachedProfileNeedsRefresh(
                 cached,
@@ -50,19 +62,10 @@ struct VPNProfileService {
                 requestedRoutingMode: routingMode
            ) {
             if writeHelperConfig {
-                try await writeSanitizedHelperConfig(cached.config)
+                try await writeSanitizedHelperConfig(cached.config, shouldPersist: shouldPersist)
             }
+            try ensureProfileRequestCurrent(shouldPersist)
             return cached.tunnel
-        }
-
-        // A caller without a stable account identity must authenticate before
-        // interpreting even a fresh cache record. Legacy records remain hints.
-        let accountUserId: String
-        if let suppliedUserId, !suppliedUserId.isEmpty {
-            accountUserId = suppliedUserId
-        } else {
-            accountUserId = try await api.me(accessToken: accessToken).id
-            cached = cache.load(locationId: normalizedLocationId, routingMode: routingMode, accountUserId: accountUserId)
         }
 
         let entitlement: Entitlement
@@ -70,6 +73,7 @@ struct VPNProfileService {
             entitlement = prevalidatedEntitlement
         } else {
             entitlement = try await api.entitlement(accessToken: accessToken)
+            try ensureProfileRequestCurrent(shouldPersist)
         }
         guard entitlement.hasPaidAccess else {
             throw VPNProfileError.subscriptionInactive
@@ -80,19 +84,54 @@ struct VPNProfileService {
             externalDeviceId: externalDeviceId,
             publicKey: keyPair.publicKey,
             keyEpoch: keyPair.keyEpoch,
-            locationId: normalizedLocationId
+            locationId: normalizedLocationId,
+            knownDevices: credentials.devices,
+            registrationConfirmationPending: credentials.scope.registrationConfirmationPending,
+            accountUserId: accountUserId,
+            shouldPersist: shouldPersist
         )
+        try ensureProfileRequestCurrent(shouldPersist)
+        // A proven legacy binding collision replaces this account's scoped key.
+        // Registration reuses its owned row; the explicit sync below installs it.
+        guard let currentKeyPair = try keyStore.existing(accountUserId: accountUserId) else { throw VEXKeychainError.invalidValue }
+        keyPair = currentKeyPair
+        guard let resolvedScope = try identityStore.scopedDeviceScope(accountUserId: accountUserId),
+              resolvedScope.externalDeviceId == externalDeviceId else { throw VPNProfileError.profileIdentityMismatch }
         guard device.userId == nil || device.userId == accountUserId else {
             throw VPNProfileError.profileIdentityMismatch
         }
 
         if needsKeySync(device: device, keyPair: keyPair) {
+            // The server expects its next PSK epoch, including after a lost
+            // local key or a server-side PSK rotation.
+            let previousEpoch = device.keyEpoch ?? 0
+            guard previousEpoch >= 0, previousEpoch < Int.max - 1 else { throw VPNProfileError.profileIdentityMismatch }
+            keyPair.keyEpoch = max(previousEpoch + 1, 1)
+            try keyStore.save(keyPair, accountUserId: accountUserId)
             device = try await api.rotateManagedVpnKey(
                 accessToken: accessToken,
                 deviceId: device.id,
                 keyPair: keyPair,
                 prefix: "native-sync-key"
             )
+            try ensureProfileRequestCurrent(shouldPersist)
+        }
+
+        guard device.userId == nil || device.userId == accountUserId,
+              normalized(device.publicKey) == keyPair.publicKey,
+              try keyStore.existing(accountUserId: accountUserId) == keyPair else { throw VPNProfileError.profileIdentityMismatch }
+        if resolvedScope.registrationConfirmationPending {
+            guard let acknowledgedEpoch = device.keyEpoch, acknowledgedEpoch > 0, acknowledgedEpoch < Int.max else {
+                throw VPNProfileError.profileIdentityMismatch
+            }
+            // PSK rotation can advance the server epoch without changing the
+            // acknowledged WireGuard public key. Keep this account's pair.
+            if keyPair.keyEpoch != acknowledgedEpoch {
+                keyPair.keyEpoch = acknowledgedEpoch
+                try keyStore.save(keyPair, accountUserId: accountUserId)
+            }
+            try ensureProfileRequestCurrent(shouldPersist)
+            try identityStore.confirmDeviceScope(accountUserId: accountUserId, expectedInstallationId: resolvedScope.installationId)
         }
 
         var effectiveRoutingMode = routingMode
@@ -115,6 +154,7 @@ struct VPNProfileService {
                 knownVersion: knownProfileVersion
             )
         } catch {
+            try ensureProfileRequestCurrent(shouldPersist)
             if error.isTimeout,
                !forceRefresh,
                let cached,
@@ -126,8 +166,9 @@ struct VPNProfileService {
                     allowStale: true
                ) {
                 if writeHelperConfig {
-                    try await writeSanitizedHelperConfig(cached.config)
+                    try await writeSanitizedHelperConfig(cached.config, shouldPersist: shouldPersist)
                 }
+                try ensureProfileRequestCurrent(shouldPersist)
                 return cached.tunnel
             }
             if routingMode == .fullTunnel, error.isProfileProvisioningUnavailable {
@@ -150,7 +191,8 @@ struct VPNProfileService {
                     locationId: normalizedLocationId,
                     routingMode: effectiveRoutingMode,
                     bypassRegion: effectiveBypassRegion,
-                    writeHelperConfig: writeHelperConfig
+                    writeHelperConfig: writeHelperConfig,
+                    shouldPersist: shouldPersist
                 )
             }
             guard routingMode != .fullTunnel, error.isTimeout else {
@@ -168,8 +210,9 @@ struct VPNProfileService {
                     requestedRoutingMode: .fullTunnel
                ) {
                 if writeHelperConfig {
-                    try await writeSanitizedHelperConfig(fallbackCached.config)
+                    try await writeSanitizedHelperConfig(fallbackCached.config, shouldPersist: shouldPersist)
                 }
+                try ensureProfileRequestCurrent(shouldPersist)
                 return fallbackCached.tunnel
             }
             managedProfile = try await api.managedVpnProfile(
@@ -182,6 +225,7 @@ struct VPNProfileService {
             )
         }
 
+        try ensureProfileRequestCurrent(shouldPersist)
         if managedProfile.revoked == true {
             throw VPNProfileError.deviceRevoked
         }
@@ -209,7 +253,8 @@ struct VPNProfileService {
             locationId: normalizedLocationId,
             routingMode: effectiveRoutingMode,
             bypassRegion: effectiveBypassRegion,
-            writeHelperConfig: writeHelperConfig
+            writeHelperConfig: writeHelperConfig,
+            shouldPersist: shouldPersist
         )
     }
 
@@ -222,13 +267,14 @@ struct VPNProfileService {
         locationId normalizedLocationId: String,
         routingMode effectiveRoutingMode: VpnRoutingMode,
         bypassRegion effectiveBypassRegion: String?,
-        writeHelperConfig: Bool
+        writeHelperConfig: Bool,
+        shouldPersist: () -> Bool
     ) async throws -> PreparedTunnel {
         if managedProfile.revoked == true {
             throw VPNProfileError.deviceRevoked
         }
-        try Task.checkCancellation()
-        guard try keyStore.getOrCreate() == keyPair,
+        try ensureProfileRequestCurrent(shouldPersist)
+        guard try keyStore.existing(accountUserId: accountUserId) == keyPair,
               managedProfile.deviceId == nil || managedProfile.deviceId == device.id,
               managedProfile.clientPublicKey == nil || managedProfile.clientPublicKey == keyPair.publicKey,
               managedProfile.clientKeyEpoch == nil || (managedProfile.clientKeyEpoch ?? 0) > 0 else {
@@ -274,31 +320,52 @@ struct VPNProfileService {
             rotationRequired: managedProfile.rotationRequired == true,
             awgVersion: Self.awgVersion
         )
-        try Task.checkCancellation()
-        guard try keyStore.getOrCreate() == keyPair else { throw VPNProfileError.profileIdentityMismatch }
+        try ensureProfileRequestCurrent(shouldPersist)
+        guard try keyStore.existing(accountUserId: accountUserId) == keyPair else { throw VPNProfileError.profileIdentityMismatch }
         try cache.save(PreparedTunnelCacheRecord(tunnel: tunnel, accountUserId: accountUserId, localKeyEpoch: keyPair.keyEpoch), locationId: normalizedLocationId, routingMode: effectiveRoutingMode)
         if writeHelperConfig {
-            try await writeSanitizedHelperConfig(config)
+            try await writeSanitizedHelperConfig(config, shouldPersist: shouldPersist)
         }
+        try ensureProfileRequestCurrent(shouldPersist)
         return tunnel
     }
 
-    func rotateKey(accessToken: String, userId: String? = nil, currentTunnel: PreparedTunnel?, writeHelperConfig: Bool = true) async throws -> PreparedTunnel? {
+    func rotateKey(accessToken: String, userId: String? = nil, currentTunnel: PreparedTunnel?, writeHelperConfig: Bool = true,
+                   shouldPersist: () -> Bool = { true }) async throws -> PreparedTunnel? {
         guard let currentTunnel else { return nil }
-        let nextKey = try keyStore.rotate()
+        try ensureProfileRequestCurrent(shouldPersist)
+        let accountUserId: String
+        if let userId, !userId.isEmpty { accountUserId = userId }
+        else { accountUserId = try await api.me(accessToken: accessToken).id }
+        try ensureProfileRequestCurrent(shouldPersist)
+        guard !accountUserId.isEmpty,
+              currentTunnel.device.userId == nil || currentTunnel.device.userId == accountUserId else {
+            throw VPNProfileError.profileIdentityMismatch
+        }
+        _ = try await prepareAccountIdentity(accessToken: accessToken, accountUserId: accountUserId,
+            locationId: currentTunnel.locationId, shouldPersist: shouldPersist)
+        try ensureProfileRequestCurrent(shouldPersist)
+        let devices = try await api.vpnDevices(accessToken: accessToken)
+        try ensureProfileRequestCurrent(shouldPersist)
+        guard let liveDevice = devices.first(where: { $0.id == currentTunnel.device.id }),
+              liveDevice.userId == nil || liveDevice.userId == accountUserId,
+              isActiveManagedDevice(liveDevice) else { throw VPNProfileError.profileIdentityMismatch }
+        let nextKey = try keyStore.rotate(accountUserId: accountUserId, previousEpoch: liveDevice.keyEpoch)
         _ = try await api.rotateManagedVpnKey(
             accessToken: accessToken,
             deviceId: currentTunnel.device.id,
             keyPair: nextKey,
             prefix: "native-rotate-key"
         )
+        try ensureProfileRequestCurrent(shouldPersist)
         return try await resolveProfile(
             accessToken: accessToken,
-            userId: userId,
+            userId: accountUserId,
             locationId: currentTunnel.locationId,
             routingMode: currentTunnel.routingMode,
             forceRefresh: true,
-            writeHelperConfig: writeHelperConfig
+            writeHelperConfig: writeHelperConfig,
+            shouldPersist: shouldPersist
         )
     }
 
@@ -309,10 +376,58 @@ struct VPNProfileService {
         try cache.writeHelperConfig(sanitized)
     }
 
-    private func writeSanitizedHelperConfig(_ config: String) async throws {
+    private func writeSanitizedHelperConfig(_ config: String, shouldPersist: () -> Bool) async throws {
         let sanitized = await Self.sanitizedHelperConfigOffMain(config)
-        try Task.checkCancellation()
+        try ensureProfileRequestCurrent(shouldPersist)
         try cache.writeHelperConfig(sanitized)
+    }
+
+    private func ensureProfileRequestCurrent(_ shouldPersist: () -> Bool) throws {
+        try Task.checkCancellation()
+        guard shouldPersist() else { throw CancellationError() }
+    }
+
+    private func prepareAccountIdentity(
+        accessToken: String, accountUserId: String, locationId: String,
+        shouldPersist: () -> Bool
+    ) async throws -> (scope: VEXVpnDeviceScope, keyPair: WireGuardKeyPair, devices: [VpnDevice]?) {
+        try ensureProfileRequestCurrent(shouldPersist)
+        if let scope = try identityStore.scopedDeviceScope(accountUserId: accountUserId) {
+            guard let keyPair = try keyStore.existing(accountUserId: accountUserId) else { throw VEXKeychainError.invalidValue }
+            return (scope, keyPair, nil)
+        }
+        let legacyId = try identityStore.legacyDeviceId()
+        let devices = try await api.vpnDevices(accessToken: accessToken)
+        try ensureProfileRequestCurrent(shouldPersist)
+        guard devices.allSatisfy({ $0.userId == nil || $0.userId == accountUserId }) else {
+            throw VPNProfileError.profileIdentityMismatch
+        }
+        // Another request may have completed the mapping during this lookup.
+        // Creation below has no suspension point and is serialized by MainActor.
+        if let scope = try identityStore.scopedDeviceScope(accountUserId: accountUserId) {
+            guard let keyPair = try keyStore.existing(accountUserId: accountUserId) else { throw VEXKeychainError.invalidValue }
+            return (scope, keyPair, devices)
+        }
+        let ownedLegacy = legacyId.flatMap { candidate in
+            let owned = devices.filter {
+                isActiveManagedDevice($0) && $0.provisioningMode == "managed_native"
+                    && $0.clientKeyOwnership == "client" && normalized($0.platform).lowercased() == "macos"
+                    && physicalInstallation($0.externalDeviceId) == candidate
+            }
+            return owned.first { $0.externalDeviceId == candidate }
+                ?? owned.first { $0.externalDeviceId == "\(candidate):\(locationId)" }
+                ?? owned.first
+        }
+        let keyPair = try keyStore.getOrCreate(accountUserId: accountUserId,
+            adoptingLegacyPublicKey: ownedLegacy?.publicKey)
+        let scope = try identityStore.getOrCreateDeviceScope(accountUserId: accountUserId,
+            adoptingLegacyId: ownedLegacy == nil ? nil : legacyId,
+            registrationConfirmationPending: ownedLegacy != nil)
+        return (scope, keyPair, devices)
+    }
+
+    private func physicalInstallation(_ value: String?) -> String? {
+        value?.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: ":", maxSplits: 1).first.map(String.init)
     }
 
     nonisolated private static func sanitizedHelperConfigOffMain(_ config: String) async -> String {
@@ -326,9 +441,19 @@ struct VPNProfileService {
         externalDeviceId: String,
         publicKey: String,
         keyEpoch: Int,
-        locationId: String
+        locationId: String,
+        knownDevices: [VpnDevice]? = nil,
+        registrationConfirmationPending: Bool,
+        accountUserId: String,
+        shouldPersist: () -> Bool
     ) async throws -> VpnDevice {
-        let devices = try await api.vpnDevices(accessToken: accessToken)
+        let devices: [VpnDevice]
+        if let knownDevices { devices = knownDevices }
+        else { devices = try await api.vpnDevices(accessToken: accessToken) }
+        try ensureProfileRequestCurrent(shouldPersist)
+        guard devices.allSatisfy({ $0.userId == nil || $0.userId == accountUserId }) else {
+            throw VPNProfileError.profileIdentityMismatch
+        }
 
         // Match in priority order: exact id, then legacy per-location id
         // ("id:location"), then any legacy physical-device prefix ("id:").
@@ -346,7 +471,10 @@ struct VPNProfileService {
                     externalDeviceId: externalDeviceId,
                     publicKey: publicKey,
                     keyEpoch: keyEpoch,
-                    locationId: locationId
+                    locationId: locationId,
+                    registrationConfirmationPending: registrationConfirmationPending,
+                    accountUserId: accountUserId,
+                    shouldPersist: shouldPersist
                 )
             }
         }
@@ -355,7 +483,9 @@ struct VPNProfileService {
             externalDeviceId: externalDeviceId,
             publicKey: publicKey,
             keyEpoch: keyEpoch,
-            locationId: locationId
+            locationId: locationId,
+            accountUserId: accountUserId,
+            shouldPersist: shouldPersist
         )
     }
 
@@ -365,17 +495,36 @@ struct VPNProfileService {
         externalDeviceId: String,
         publicKey: String,
         keyEpoch: Int,
-        locationId: String
+        locationId: String,
+        registrationConfirmationPending: Bool,
+        accountUserId: String,
+        shouldPersist: () -> Bool
     ) async throws -> VpnDevice {
-        guard nativeDeviceMetadataNeedsSync(device, externalDeviceId: externalDeviceId) else {
+        guard registrationConfirmationPending || nativeDeviceMetadataNeedsSync(device, externalDeviceId: externalDeviceId) else {
             return device
+        }
+        // A lost registration reply can leave a pending pair behind a later
+        // PSK-only server epoch. Reuse the already authenticated owned DTO;
+        // retain the key material and logical binding when its public key matches.
+        let registrationEpoch: Int
+        if registrationConfirmationPending, normalized(device.publicKey) == publicKey,
+           device.userId == nil || device.userId == accountUserId,
+           device.provisioningMode == "managed_native", device.clientKeyOwnership == "client",
+           normalized(device.platform).lowercased() == "macos",
+           let liveEpoch = device.keyEpoch, liveEpoch > 0, liveEpoch < Int.max {
+            registrationEpoch = liveEpoch
+        } else {
+            registrationEpoch = keyEpoch
         }
         return try await registerNativeDevice(
             accessToken: accessToken,
             externalDeviceId: externalDeviceId,
             publicKey: publicKey,
-            keyEpoch: keyEpoch,
-            locationId: locationId
+            keyEpoch: registrationEpoch,
+            locationId: locationId,
+            accountUserId: accountUserId,
+            ownedLegacyDevice: device,
+            shouldPersist: shouldPersist
         )
     }
 
@@ -384,21 +533,58 @@ struct VPNProfileService {
         externalDeviceId: String,
         publicKey: String,
         keyEpoch: Int,
-        locationId: String
+        locationId: String,
+        accountUserId: String,
+        ownedLegacyDevice: VpnDevice? = nil,
+        shouldPersist: () -> Bool
     ) async throws -> VpnDevice {
-        let identityFields = await nativeDeviceIdentityRegistrationFields(
-            accessToken: accessToken,
-            installationId: externalDeviceId,
-            wireGuardPublicKey: publicKey
-        )
-        return try await api.registerNativeDevice(
-            accessToken: accessToken,
-            externalDeviceId: externalDeviceId,
-            publicKey: publicKey,
-            keyEpoch: keyEpoch,
-            locationId: locationId,
-            identityFields: identityFields
-        )
+        guard let scope = try identityStore.scopedDeviceScope(accountUserId: accountUserId),
+              scope.externalDeviceId == externalDeviceId else { throw VPNProfileError.profileIdentityMismatch }
+        func send(_ scope: VEXVpnDeviceScope, publicKey: String, keyEpoch: Int) async throws -> VpnDevice {
+            try ensureProfileRequestCurrent(shouldPersist)
+            let identityFields = try await nativeDeviceIdentityRegistrationFields(accessToken: accessToken,
+                installationId: scope.installationId, wireGuardPublicKey: publicKey,
+                requiresVerifiedRegistration: scope.registrationConfirmationPending)
+            try ensureProfileRequestCurrent(shouldPersist)
+            return try await api.registerNativeDevice(accessToken: accessToken,
+                externalDeviceId: scope.externalDeviceId, publicKey: publicKey, keyEpoch: keyEpoch,
+                locationId: locationId, identityFields: identityFields,
+                installationId: scope.installationId, accountUserId: accountUserId)
+        }
+        do { return try await send(scope, publicKey: publicKey, keyEpoch: keyEpoch) }
+        catch {
+            try ensureProfileRequestCurrent(shouldPersist)
+            guard case VEXAPIError.http(409, "device_rebind_required", "conflict", _) = error,
+                  let ownedLegacyDevice, isActiveManagedDevice(ownedLegacyDevice),
+                  ownedLegacyDevice.provisioningMode == "managed_native",
+                  ownedLegacyDevice.clientKeyOwnership == "client",
+                  ownedLegacyDevice.userId == nil || ownedLegacyDevice.userId == accountUserId,
+                  normalized(ownedLegacyDevice.platform).lowercased() == "macos",
+                  let legacyId = try identityStore.legacyDeviceId(),
+                  physicalInstallation(ownedLegacyDevice.externalDeviceId) == legacyId,
+                  scope.externalDeviceId == legacyId else { throw error }
+            let liveDevices = try await api.vpnDevices(accessToken: accessToken)
+            try ensureProfileRequestCurrent(shouldPersist)
+            guard liveDevices.allSatisfy({ $0.userId == nil || $0.userId == accountUserId }),
+                  let liveDevice = liveDevices.first(where: { $0.id == ownedLegacyDevice.id }),
+                  isActiveManagedDevice(liveDevice), liveDevice.provisioningMode == "managed_native",
+                  liveDevice.clientKeyOwnership == "client", normalized(liveDevice.platform).lowercased() == "macos",
+                  physicalInstallation(liveDevice.externalDeviceId) == legacyId else { throw VPNProfileError.profileIdentityMismatch }
+            guard let currentScope = try identityStore.scopedDeviceScope(accountUserId: accountUserId),
+                  currentScope.externalDeviceId == legacyId else { throw VPNProfileError.profileIdentityMismatch }
+            if currentScope.installationId != scope.installationId {
+                guard let currentPair = try keyStore.existing(accountUserId: accountUserId) else { throw VEXKeychainError.invalidValue }
+                return try await send(currentScope, publicKey: currentPair.publicKey, keyEpoch: currentPair.keyEpoch)
+            }
+            // Keep the proven owned row as the external identity. Only its
+            // logical binding and scoped key change; no device is transferred.
+            // Persist the fresh key first: a crash must never confirm the new
+            // logical binding with the copied, globally shared legacy key.
+            let freshPair = try keyStore.rotate(accountUserId: accountUserId, previousEpoch: liveDevice.keyEpoch)
+            let repaired = try identityStore.repairLegacyInstallationScope(accountUserId: accountUserId,
+                expectedInstallationId: scope.installationId)
+            return try await send(repaired, publicKey: freshPair.publicKey, keyEpoch: freshPair.keyEpoch)
+        }
     }
 
     private func nativeDeviceMetadataNeedsSync(_ device: VpnDevice, externalDeviceId: String) -> Bool {
@@ -410,8 +596,9 @@ struct VPNProfileService {
     private func nativeDeviceIdentityRegistrationFields(
         accessToken: String,
         installationId: String,
-        wireGuardPublicKey: String
-    ) async -> [String: String] {
+        wireGuardPublicKey: String,
+        requiresVerifiedRegistration: Bool = false
+    ) async throws -> [String: String] {
         do {
             let identity = try identityStore.getOrCreateDeviceIdentity()
             let challenge = try await api.deviceIdentityChallenge(
@@ -419,6 +606,11 @@ struct VPNProfileService {
                 installationId: installationId,
                 purpose: "register"
             )
+            if requiresVerifiedRegistration {
+                guard !challenge.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      !challenge.nonce.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      challenge.purpose == "register" else { throw VEXAPIError.invalidResponse }
+            }
             let publicKey = identity.publicKeyJWK
             let payload = VEXDeviceIdentity.signaturePayload(
                 challenge: challenge,
@@ -426,13 +618,16 @@ struct VPNProfileService {
                 identityPublicKey: publicKey,
                 wireGuardPublicKey: wireGuardPublicKey
             )
-            return [
+            let fields = [
                 "identity_public_key": publicKey,
                 "identity_key_type": VEXDeviceIdentity.keyType,
                 "identity_challenge_id": challenge.id,
                 "identity_signature": try identity.signature(for: payload),
             ]
+            if requiresVerifiedRegistration, fields.values.contains(where: { $0.isEmpty }) { throw VEXAPIError.invalidResponse }
+            return fields
         } catch {
+            if requiresVerifiedRegistration { throw error }
             return [:]
         }
     }

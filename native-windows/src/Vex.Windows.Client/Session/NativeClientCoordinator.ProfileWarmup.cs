@@ -213,7 +213,8 @@ public sealed partial class NativeClientCoordinator
 
     private static bool SameWarmupSnapshot(NativeClientState before, NativeClientState after) =>
         before.Session.AccessToken == after.Session.AccessToken && before.Session.User.Id == after.Session.User.Id &&
-        before.InstallationId == after.InstallationId && before.DeviceId == after.DeviceId && before.LocationId == after.LocationId &&
+        before.InstallationId == after.InstallationId && before.VpnRegistrationId == after.VpnRegistrationId &&
+        before.VpnExternalDeviceId == after.VpnExternalDeviceId && before.DeviceId == after.DeviceId && before.LocationId == after.LocationId &&
         before.RoutingMode == after.RoutingMode && before.BypassRegion == after.BypassRegion &&
         before.Identity == after.Identity && after.PendingIdentity is null &&
         before.CachedProfileVersion == after.CachedProfileVersion && before.CachedAuthorization == after.CachedAuthorization;

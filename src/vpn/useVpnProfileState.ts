@@ -267,7 +267,7 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
     }
     setIsKeyRotationBusy(true);
     try {
-      const nextProfile = await rotateVpnProfileKey(accessToken, profile, isCurrentSessionOperation);
+      const nextProfile = await rotateVpnProfileKey(accessToken, profile, isCurrentSessionOperation, userId);
       requireCurrentSession();
       setVpnProfile(nextProfile);
       cacheProfile(locationId, nextProfile);
@@ -275,7 +275,7 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
     } finally {
       if (isCurrentSessionOperation()) setIsKeyRotationBusy(false);
     }
-  }, [accessToken, cacheProfile, isCurrentSessionOperation, requireCurrentSession, setVpnProfile]);
+  }, [accessToken, cacheProfile, isCurrentSessionOperation, requireCurrentSession, setVpnProfile, userId]);
 
   const resolveConnectableVpnProfile = useCallback(async (
     locationId: string,
@@ -440,7 +440,7 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
         onProfileRotationRequired();
         const rotationStartedAtMs = Date.now();
         try {
-          profile = await rotateVpnProfileKey(accessToken, profile, isCurrentSessionOperation);
+          profile = await rotateVpnProfileKey(accessToken, profile, isCurrentSessionOperation, userId);
           requireCurrentSession();
         } finally {
           keyRotationMs += Math.max(0, Date.now() - rotationStartedAtMs);

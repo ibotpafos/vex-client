@@ -99,7 +99,7 @@ internal static class ClientAccountSnapshotTests
         Check(cached.BillingPlans.Count == 1 && new[] { cached.BillingSummaryStatus, cached.DevicesStatus, cached.DeviceUsageStatus, cached.PaymentsStatus }.All(status => status.Availability == NativeAccountSectionAvailability.Cached),
             "Cached sections were presented as fresh.");
         var state = fixture.Store.State!;
-        fixture.Store.Save(state with { Session = state.Session with { User = new("user-2", "other@example.com", "active") } });
+        fixture.Store.SetExternalSnapshot(state with { Session = state.Session with { User = new("user-2", "other@example.com", "active") } });
         fixture.Proxy.Overrides[nameof(INativeClientApi.GetCurrentUserAsync)] = _ => Task.FromResult(new VexUser("user-2", "other@example.com", "active"));
         var changed = fixture.Coordinator.GetAccountSnapshotAsync(default).GetAwaiter().GetResult();
         Check(changed.Devices.Count == 0 && changed.DeviceUsage.Count == 0 && changed.Payments.Count == 0 &&

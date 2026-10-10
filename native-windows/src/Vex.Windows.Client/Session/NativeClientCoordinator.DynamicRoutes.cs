@@ -34,10 +34,12 @@ public sealed partial class NativeClientCoordinator
 
     private async Task<VpnServiceResponse> ConnectWithRecoveryCoreAsync(
         string? locationId, string routingMode, bool antiLeakEnabled, bool allowsAutomaticFailover,
-        CancellationToken cancellationToken, bool forceFreshProfile)
+        CancellationToken cancellationToken, bool forceFreshProfile, long? expectedAccountIntent = null)
     {
+        var intent = expectedAccountIntent ?? Volatile.Read(ref _accountIntent);
+        EnsureAccountIntent(intent, cancellationToken);
         if (RequireCurrentState().VpnProvisioningPending)
-            await WithSessionRetryCoreAsync(state => EnsureVpnProvisionedAsync(state, locationId, cancellationToken),
+            await WithSessionRetryCoreAsync(state => { EnsureAccountIntent(intent, cancellationToken); return EnsureVpnProvisionedAsync(state, locationId, cancellationToken); },
                 cancellationToken).ConfigureAwait(false);
         ResiliencePolicy? policy = null;
         try { policy = await GetResiliencePolicyCoreAsync(cancellationToken).ConfigureAwait(false); }
@@ -46,8 +48,9 @@ public sealed partial class NativeClientCoordinator
         {
             policy = _dynamicRoutes.CachedPolicy(_utcNow());
         }
+        EnsureAccountIntent(intent, cancellationToken);
         var attempt = await ConnectAttemptCoreWithSessionRetryAsync(locationId, routingMode,
-            antiLeakEnabled, forceFreshProfile, cancellationToken, selectionPolicy: policy, deferExpiredGrantRefresh: true).ConfigureAwait(false);
+            antiLeakEnabled, forceFreshProfile, cancellationToken, selectionPolicy: policy, deferExpiredGrantRefresh: true, expectedAccountIntent: intent).ConfigureAwait(false);
         var initialLocation = attempt.State.LocationId;
         RecordAdmittedRouteOutcome(attempt, policy);
         if (attempt.Response.Success || !IsRecoverableConnectError(attempt.Response.ErrorCode))
@@ -74,7 +77,7 @@ public sealed partial class NativeClientCoordinator
             try
             {
                 attempt = await ConnectAttemptCoreWithSessionRetryAsync(initialLocation, routingMode,
-                    antiLeakEnabled, true, cancellationToken, candidate, deferExpiredGrantRefresh: true).ConfigureAwait(false);
+                    antiLeakEnabled, true, cancellationToken, candidate, deferExpiredGrantRefresh: true, expectedAccountIntent: intent).ConfigureAwait(false);
             }
             catch (VexApiException error) when (error.StatusCode == HttpStatusCode.NotFound ||
                 error.Code == "vpn_profile_candidate_rejected")
@@ -107,7 +110,7 @@ public sealed partial class NativeClientCoordinator
         if (!forceFreshProfile)
         {
             attempt = await ConnectAttemptCoreWithSessionRetryAsync(initialLocation, routingMode,
-                antiLeakEnabled, true, cancellationToken, deferExpiredGrantRefresh: true).ConfigureAwait(false);
+                antiLeakEnabled, true, cancellationToken, deferExpiredGrantRefresh: true, expectedAccountIntent: intent).ConfigureAwait(false);
             RecordAdmittedRouteOutcome(attempt, policy);
         }
         if (attempt.Response.Success || !allowsAutomaticFailover ||
@@ -118,12 +121,13 @@ public sealed partial class NativeClientCoordinator
         }
         var locations = await WithSessionRetryCoreAsync(current =>
             _api.GetLocationsAsync(current.Session.AccessToken, cancellationToken), cancellationToken).ConfigureAwait(false);
+        EnsureAccountIntent(intent, cancellationToken);
         var alternate = VpnLocationSelector.SelectAutomaticLocation(
             locations.Where(candidate => !string.Equals(candidate.Id, initialLocation,
                 StringComparison.OrdinalIgnoreCase)).ToArray(), null);
         if (alternate is null) { return attempt.Response; }
         attempt = await ConnectAttemptCoreWithSessionRetryAsync(alternate, routingMode,
-            antiLeakEnabled, true, cancellationToken, deferExpiredGrantRefresh: true).ConfigureAwait(false);
+            antiLeakEnabled, true, cancellationToken, deferExpiredGrantRefresh: true, expectedAccountIntent: intent).ConfigureAwait(false);
         RecordAdmittedRouteOutcome(attempt, policy);
         await PrefetchCandidateGrantsAsync(attempt, policy, cancellationToken).ConfigureAwait(false);
         return attempt.Response;

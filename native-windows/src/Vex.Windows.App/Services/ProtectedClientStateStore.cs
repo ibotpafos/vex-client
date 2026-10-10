@@ -34,6 +34,18 @@ public sealed class ProtectedClientStateStore :
     private readonly WindowsHelloSessionState _windowsHello;
     private bool _sessionCacheUnavailable;
 
+    public IVpnAccountIdentityStore AccountVpnIdentities { get; }
+
+    public bool HasStoredSession
+    {
+        get
+        {
+            try { File.GetAttributes(_stateFile); return true; }
+            catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException) { return false; }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return true; }
+        }
+    }
+
     public string? StoredSessionError { get; private set; }
 
     public ProtectedClientStateStore(
@@ -49,6 +61,9 @@ public sealed class ProtectedClientStateStore :
         _stateFile = Path.Combine(directory, "client-state.bin");
         _installationIdFile = Path.Combine(directory, "installation-id.bin");
         _deviceStateFile = Path.Combine(directory, "device-state.bin");
+        AccountVpnIdentities = new NativeVpnAccountIdentityFileStore(
+            Path.Combine(directory, "vpn-account-identities.bin"),
+            bytes => ProtectedData.Protect(bytes, Entropy, DataProtectionScope.CurrentUser), Unprotect);
         _deviceIdentityFile = Path.Combine(directory, "device-identity.bin");
         _windowsHelloPreferenceFile = Path.Combine(directory, "windows-hello.bin");
         var helloPreference = ReadProtected<StoredWindowsHelloPreference>(_windowsHelloPreferenceFile);
@@ -231,8 +246,23 @@ public sealed class ProtectedClientStateStore :
                 : "Сохраненная сессия повреждена или недоступна для этого пользователя Windows. Выполните вход заново.";
             return null;
         }
-        StoredSessionError = null;
-        return result.Value;
+        try
+        {
+            var state = result.Value is null
+                ? null
+                : NativeVpnAccountIdentitySynchronization.Restore(AccountVpnIdentities, result.Value);
+            StoredSessionError = null;
+            return state;
+        }
+        catch (Exception error) when (error is JsonException or CryptographicException or IOException or UnauthorizedAccessException ||
+            error is InvalidOperationException { Message: "vpn_identity_missing" or "vpn_identity_changed" })
+        {
+            _sessionCacheUnavailable = true;
+            StoredSessionError = error is IOException or UnauthorizedAccessException
+                ? "Сохраненные данные VEX недоступны. Проверьте доступ к папке приложения и повторите запуск."
+                : "Сохраненная сессия повреждена или недоступна для этого пользователя Windows. Выполните вход заново.";
+            return null;
+        }
     }
 
     public NativeDeviceState? LoadDevice() =>
@@ -284,6 +314,7 @@ public sealed class ProtectedClientStateStore :
         ArgumentNullException.ThrowIfNull(state);
         if (!NativeClientStateValidation.IsValid(state))
             throw new JsonException("Сохраненная сессия VEX неполна или содержит неподтвержденное VPN-устройство.");
+        NativeVpnAccountIdentitySynchronization.Save(AccountVpnIdentities, state);
         var clearState = JsonSerializer.SerializeToUtf8Bytes(
             state,
             JsonOptions);
@@ -293,12 +324,8 @@ public sealed class ProtectedClientStateStore :
                 clearState,
                 Entropy,
                 DataProtectionScope.CurrentUser);
-            var directory = Path.GetDirectoryName(_stateFile)!;
-            Directory.CreateDirectory(directory);
-            var temporaryFile = _stateFile + ".new";
-            File.WriteAllBytes(temporaryFile, protectedState);
-            File.Move(temporaryFile, _stateFile, overwrite: true);
-            if (!state.VpnProvisioningPending)
+            ProtectedStateFileWriter.Write(_stateFile, protectedState);
+            if (!state.VpnProvisioningPending && state.VpnRegistrationId is null)
                 SaveProtected(
                     _deviceStateFile,
                     new NativeDeviceState(

@@ -179,6 +179,12 @@ function vpnApi(operations) {
     '@/vpn/keyEpochRecovery': { nextManagedKeyEpoch: (_, epoch) => (epoch ?? 0) + 1, isKeyEpochMismatchError: error => error.code === 'epoch_mismatch' },
     '@/vpn/routingPolicy': { defaultVpnRoutingMode: 'default', defaultVpnRoutingPolicyVersion: 'v1', resolvedVpnBypassRegion: () => '' },
     '@/notifications/pushRegistration': {}, './client': operations.client, './error': { ApiRequestError: class ApiRequestError extends Error {} },
+    './auth': { me: async () => ({ id: 'fixture-owner' }) },
+    '../native/vpnAccountIdentity': {
+      getOrCreateVpnAccountIdentity: async () => ({ installationId: 'installation-fixture', externalDeviceId: 'installation-fixture', keyScope: 'fixture-scope', keyPair: await operations.native.getOrCreateWireGuardKeyPair() }),
+      withVpnAccountIdentity: async (_, callback) => callback({ keyScope: 'fixture-scope' }),
+      saveVpnAccountKeyPair: async () => operations.native.replaceWireGuardKeyPair(),
+    },
     './deviceCreateRequest': {}, './clientDiagnosticsRequest': {}, './nativeDeviceRegistration': {},
     '../vpn/amneziaConfig': {}, '../vpn/profileCapabilities': { withManagedProfileAWGCapability: query => query },
     '../vpn/locationCatalog': {}, '../vpn/locationId': { requireVpnLocationId: value => value }, '../vpn/profileRevalidation': {},

@@ -21,6 +21,8 @@ internal static class ProfileWarmupTests
         await InvalidAuthorityNeverEntersWarmCacheAsync();
         await PersistedWarmAuthorityIsRevalidatedAsync();
         await ColdAutomaticAppUsesExactWarmAuthorityOfflineAsync();
+        await CachedFullModeGrantWithOmittedBypassWorksOfflineAsync();
+        CachedBypassRejectsNonemptyOrWrongType();
         await ConfirmedNegativeEntitlementSupersedesOlderPaidEvidenceAsync();
         await LateNegativeEntitlementPreservesNewerScopeAndEvidenceAsync();
     }
@@ -122,7 +124,7 @@ internal static class ProfileWarmupTests
             fixture.Request = (_, _, _) => pending.Task;
             var warmup = fixture.Coordinator.WarmProfileAsync(null, "full", null, CancellationToken.None);
             var changed = mutation(fixture.Store.State!);
-            fixture.Store.Save(changed);
+            fixture.Store.SetExternalSnapshot(changed);
             pending.SetResult(profile);
             Check(!await warmup && fixture.Store.State == changed && changed.WarmedProfile is null,
                 "Late warm-up must not overwrite changes to auth, device, location, routing, or key identity.");
@@ -210,9 +212,9 @@ internal static class ProfileWarmupTests
             if (failure == "mode") preferences = preferences with { SmartRoutingEnabled = false };
             if (failure == "expiry") fixture.Now = fixture.Now.AddMinutes(15);
             if (failure == "entitlement") fixture.Store.Save(state with { CachedEntitlement = FakeNativeClientApi.NoVpnEntitlement });
-            if (failure == "user") fixture.Store.Save(state with { Session = state.Session with { User = state.Session.User with { Id = "other-user" } } });
+            if (failure == "user") fixture.Store.SetExternalSnapshot(state with { Session = state.Session with { User = state.Session.User with { Id = "other-user" } } });
             if (failure == "device") fixture.Store.Save(state with { DeviceId = "other-device" });
-            if (failure == "key") fixture.Store.Save(state with { Identity = Vex.Windows.Client.Security.WireGuardIdentity.Generate(2) });
+            if (failure == "key") fixture.Store.SetExternalSnapshot(state with { Identity = Vex.Windows.Client.Security.WireGuardIdentity.Generate(2) });
             if (failure == "trust") fixture.TrustAvailable = false;
             fixture.GoOffline(failure == "auth", failure == "forbidden" ? System.Net.HttpStatusCode.Forbidden : null);
             try
@@ -225,6 +227,51 @@ internal static class ProfileWarmupTests
                 "Actual App fallback must reject wrong mode, expiry, entitlement, identity, key, trust and catalog authentication failures.");
             if (failure == "auth") Check(fixture.Store.State is null, "A terminal refresh 401 must clear rejected session authority.");
         }
+    }
+
+    private static async Task CachedFullModeGrantWithOmittedBypassWorksOfflineAsync()
+    {
+        using var fixture = new Fixture();
+        fixture.Request = (routing, bypass, _) => Task.FromResult(fixture.Profile(routing, bypass,
+            payload => payload.Remove("bypass_region")));
+        Check(await fixture.Coordinator.WarmProfileAsync(null, "full", null, CancellationToken.None),
+            "A real signed full-mode server payload with omitted bypass_region must pass the profile verifier.");
+        var state = fixture.Store.State!;
+        var grant = state.WarmedProfile!;
+        fixture.Store.Save(state with { CachedProfileVersion = grant.ProfileVersion,
+            CachedAuthorization = grant.Authorization, WarmedProfile = null });
+        fixture.GoOffline();
+        var restarted = fixture.NewCoordinator();
+        Check((await new VpnProductParityService().ConnectAsync(restarted,
+                NativeClientPreferences.Default with { SmartRoutingEnabled = false }, CancellationToken.None)).Success &&
+            fixture.Vpn.Authorization?.PayloadBase64 == grant.Authorization.PayloadBase64 && fixture.ProfileCalls == 1,
+            "Cold automatic full-mode Connect must use the exact current cached grant without online profile issuance.");
+    }
+
+    private static void CachedBypassRejectsNonemptyOrWrongType()
+    {
+        foreach (var invalid in new JsonNode?[]
+        {
+            JsonValue.Create("ru"), JsonValue.Create(true), JsonValue.Create(1),
+            null, new JsonArray(), new JsonObject(),
+        })
+        {
+            using var fixture = new Fixture();
+            var profile = fixture.Profile("full", null, payload => payload["bypass_region"] = invalid);
+            fixture.Store.Save(fixture.Store.State! with { CachedProfileVersion = profile.Version,
+                CachedAuthorization = profile.Authorization, CachedEntitlement = new FakeNativeClientApi().Entitlement,
+                CachedEntitlementCheckedAt = fixture.Now, CachedEntitlementValidUntil = fixture.Now.AddHours(12) });
+            Check(!fixture.Coordinator.TryGetCachedReconnectLocation("full", null, out _),
+                "An explicit nonempty or non-string full-mode bypass_region must not enable cached reconnect.");
+        }
+        using var split = new Fixture();
+        var omitted = split.Profile("split", "ru", payload => payload.Remove("bypass_region"));
+        split.Store.Save(split.Store.State! with { RoutingMode = "split", BypassRegion = "ru",
+            CachedProfileVersion = omitted.Version, CachedAuthorization = omitted.Authorization,
+            CachedEntitlement = new FakeNativeClientApi().Entitlement, CachedEntitlementCheckedAt = split.Now,
+            CachedEntitlementValidUntil = split.Now.AddHours(12) });
+        Check(!split.Coordinator.TryGetCachedReconnectLocation("split", "ru", out _),
+            "An omitted split-mode bypass_region cannot authorize the selected nonempty region.");
     }
 
     private static async Task ConfirmedNegativeEntitlementSupersedesOlderPaidEvidenceAsync()

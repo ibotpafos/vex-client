@@ -541,7 +541,16 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(profileService.contains("syncNativeDeviceMetadataIfNeeded"))
         XCTAssertTrue(profileService.contains("nativeDeviceMetadataNeedsSync"))
         XCTAssertTrue(profileService.contains("normalized(device.appVersion) != VEXAppInfo.version"))
-        XCTAssertTrue(api.contains("native-register-\\(externalDeviceId)-\\(VEXAppInfo.version)-\\(VEXAppInfo.buildNumber)"))
+        let registrationStart = try XCTUnwrap(api.range(of: "    func registerNativeDevice("))
+        let registrationEnd = try XCTUnwrap(api.range(of: "    func deviceIdentityChallenge(",
+            range: registrationStart.upperBound..<api.endIndex))
+        let registration = String(api[registrationStart.lowerBound..<registrationEnd.lowerBound])
+        XCTAssertTrue(registration.contains("let logicalInstallationId = installationId ?? externalDeviceId"))
+        XCTAssertTrue(registration.contains("let registrationScope = try accountUserId.map"))
+        XCTAssertTrue(registration.contains("VPNAccountScope.storageKey(\"native-register\", accountUserId: $0)"))
+        XCTAssertTrue(registration.contains("\"device_id\": externalDeviceId"))
+        XCTAssertTrue(registration.contains("\"installation_id\": logicalInstallationId"))
+        XCTAssertTrue(registration.contains("idempotencyKey: \"\\(registrationScope)-\\(logicalInstallationId)-\\(VEXAppInfo.version)-\\(VEXAppInfo.buildNumber)\""))
     }
 
     func testManagedProfileAdvertisesAWG3Capability() throws {

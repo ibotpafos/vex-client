@@ -58,7 +58,7 @@ export async function resolveVpnProfile(
       if (hotProfile) {
         const profile = profileFromHotRecord(hotProfile);
         if (profile.routingMode !== routingMode || !vpnProfileAddressMatchesDevice(profile)) {
-          return refreshVpnProfile(token, { routingMode, isCurrentSessionOperation: options.isCurrentSessionOperation }, knownEntitlement, normalizedLocationId, options.shouldFetch);
+          return refreshVpnProfile(token, { routingMode, userId: options.userId, isCurrentSessionOperation: options.isCurrentSessionOperation }, knownEntitlement, normalizedLocationId, options.shouldFetch);
         }
         cachedProfile = { key: cacheKey, profile };
         return profile;
@@ -67,7 +67,7 @@ export async function resolveVpnProfile(
   }
 
   if (token) {
-    return refreshVpnProfile(token, { ...profileRevalidationOptions(options.revalidateProfile, normalizedLocationId, routingMode), routingMode, isCurrentSessionOperation: options.isCurrentSessionOperation }, knownEntitlement, normalizedLocationId, options.shouldFetch);
+    return refreshVpnProfile(token, { ...profileRevalidationOptions(options.revalidateProfile, normalizedLocationId, routingMode), routingMode, userId: options.userId, isCurrentSessionOperation: options.isCurrentSessionOperation }, knownEntitlement, normalizedLocationId, options.shouldFetch);
   }
 
   throw new Error('Сначала войдите в аккаунт.');
@@ -77,7 +77,7 @@ export function resetVpnProfileCache() {
   cachedProfile = null;
 }
 
-export async function rotateVpnProfileKey(accessToken: string, profile: VpnProfile, isCurrentSessionOperation?: () => boolean): Promise<VpnProfile> {
+export async function rotateVpnProfileKey(accessToken: string, profile: VpnProfile, isCurrentSessionOperation?: () => boolean, userId?: string): Promise<VpnProfile> {
   requireCurrentSession(isCurrentSessionOperation);
   const token = accessToken.trim();
   const device = profile.device;
@@ -88,10 +88,10 @@ export async function rotateVpnProfileKey(accessToken: string, profile: VpnProfi
     throw new Error('Ротация доступна только для managed native устройства.');
   }
 
-  await rotateManagedVpnKey(token, device.id, device.keyEpoch, isCurrentSessionOperation);
+  await rotateManagedVpnKey(token, device.id, device.keyEpoch, isCurrentSessionOperation, userId);
   requireCurrentSession(isCurrentSessionOperation);
   resetVpnProfileCache();
-  return refreshVpnProfile(token, { routingMode: profile.routingMode ?? defaultVpnRoutingMode, isCurrentSessionOperation }, profile.entitlement, profile.locationId);
+  return refreshVpnProfile(token, { routingMode: profile.routingMode ?? defaultVpnRoutingMode, userId, isCurrentSessionOperation }, profile.entitlement, profile.locationId);
 }
 
 function runtimeProfileKey(): string {

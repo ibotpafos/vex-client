@@ -55,6 +55,18 @@ public interface INativeClientApi
         string appVersion,
         CancellationToken cancellationToken);
 
+    Task<VpnDevice> RegisterNativeDeviceAsync(string accessToken, string installationId,
+        string publicKey, int keyEpoch, string locationId, string appVersion,
+        string externalDeviceId, CancellationToken cancellationToken) =>
+        RegisterNativeDeviceAsync(accessToken, installationId, publicKey, keyEpoch,
+            locationId, appVersion, cancellationToken);
+
+    Task<VpnDevice> RegisterNativeDeviceAsync(string accessToken, string installationId,
+        string publicKey, int keyEpoch, string locationId, string appVersion,
+        string externalDeviceId, string accountScope, CancellationToken cancellationToken) =>
+        RegisterNativeDeviceAsync(accessToken, installationId, publicKey, keyEpoch,
+            locationId, appVersion, externalDeviceId, cancellationToken);
+
     Task<ManagedVpnProfile> GetManagedVpnProfileAsync(
         string accessToken,
         string deviceId,
@@ -344,16 +356,41 @@ public sealed class VexApiClient : INativeClientApi
         return ValidateAuthSession(response);
     }
 
-    public async Task<VpnDevice> RegisterNativeDeviceAsync(
+    public Task<VpnDevice> RegisterNativeDeviceAsync(
         string accessToken,
         string installationId,
         string publicKey,
         int keyEpoch,
         string locationId,
         string appVersion,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken) => RegisterNativeDeviceAsync(accessToken,
+            installationId, publicKey, keyEpoch, locationId, appVersion, installationId, cancellationToken);
+
+    public Task<VpnDevice> RegisterNativeDeviceAsync(string accessToken, string installationId,
+        string publicKey, int keyEpoch, string locationId, string appVersion,
+        string externalDeviceId, CancellationToken cancellationToken) =>
+        RegisterNativeDeviceCoreAsync(accessToken, installationId, publicKey, keyEpoch, locationId,
+            appVersion, externalDeviceId, installationId, cancellationToken);
+
+    public Task<VpnDevice> RegisterNativeDeviceAsync(string accessToken, string installationId,
+        string publicKey, int keyEpoch, string locationId, string appVersion,
+        string externalDeviceId, string accountScope, CancellationToken cancellationToken)
+    {
+        if (_deviceIdentityProvider is null)
+            throw new VexApiException(HttpStatusCode.PreconditionFailed, "device_identity_challenge_failed");
+        return RegisterNativeDeviceCoreAsync(accessToken, installationId, publicKey, keyEpoch,
+            locationId, appVersion, externalDeviceId, accountScope, cancellationToken);
+    }
+
+    private async Task<VpnDevice> RegisterNativeDeviceCoreAsync(string accessToken, string installationId,
+        string publicKey, int keyEpoch, string locationId, string appVersion,
+        string externalDeviceId, string accountScope, CancellationToken cancellationToken)
     {
         ValidateIdentifier(installationId, nameof(installationId));
+        var parts = externalDeviceId.Split(':');
+        if (parts.Length is < 1 or > 2)
+            throw new ArgumentException("Invalid external device identifier.", nameof(externalDeviceId));
+        foreach (var part in parts) ValidateIdentifier(part, nameof(externalDeviceId));
         ValidateIdentifier(locationId, nameof(locationId));
         ValidateWireGuardKey(publicKey);
         if (keyEpoch < 1)
@@ -380,10 +417,10 @@ public sealed class VexApiClient : INativeClientApi
 
         request.Headers.Add(
             "Idempotency-Key",
-            $"native-windows-register-{installationId}-{keyEpoch}-{(identityRegistration is null ? "legacy" : "verified")}");
+            $"native-windows-register-{installationId}-{keyEpoch}-{(identityRegistration is null ? "legacy" : "verified")}-{PublicKeyIntent(publicKey)}-{PublicKeyIntent(accountScope)}");
         var payload = new Dictionary<string, object?>
         {
-            ["device_id"] = installationId,
+            ["device_id"] = externalDeviceId,
             ["installation_id"] = installationId,
             ["device_name"] = "Windows",
             ["platform"] = "windows",
@@ -537,7 +574,7 @@ public sealed class VexApiClient : INativeClientApi
             accessToken);
         request.Headers.Add(
             "Idempotency-Key",
-            $"native-windows-rotate-{deviceId}-{identity.KeyEpoch}");
+            $"native-windows-rotate-{deviceId}-{identity.KeyEpoch}-{PublicKeyIntent(identity.PublicKey)}");
         request.Content = JsonContent.Create(new
         {
             device_id = deviceId,
@@ -879,7 +916,8 @@ public sealed class VexApiClient : INativeClientApi
         var authError = response.StatusCode == HttpStatusCode.Unauthorized &&
             path is "/v1/auth/login" or "/v1/auth/email-otp/confirm";
         var quotaError = response.StatusCode == HttpStatusCode.Forbidden && path == "/v1/devices/register";
-        if ((!authError && !quotaError) || response.Content.Headers.ContentLength > 4096)
+        var rebindError = response.StatusCode == HttpStatusCode.Conflict && path == "/v1/devices/register";
+        if ((!authError && !quotaError && !rebindError) || response.Content.Headers.ContentLength > 4096)
             return fallback;
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(TimeSpan.FromSeconds(5));
@@ -908,6 +946,8 @@ public sealed class VexApiClient : INativeClientApi
             }
             // Current backend uses normalized HTTP codes and these exact public
             // messages. Accept only the enumerated contract, never server copy.
+            if (rebindError)
+                return code == "conflict" && message == "device_rebind_required" ? "device_rebind_required" : fallback;
             if (authError)
                 return (code, message) switch
                 {
@@ -927,6 +967,9 @@ public sealed class VexApiClient : INativeClientApi
             return fallback;
         }
     }
+
+    private static string PublicKeyIntent(string publicKey) => Convert.ToHexString(
+        System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(publicKey)))[..16].ToLowerInvariant();
 
     public async Task<IReadOnlyList<BillingPlan>> GetBillingPlansAsync(
         CancellationToken cancellationToken)

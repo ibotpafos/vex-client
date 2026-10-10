@@ -17,8 +17,24 @@ Administrative MSI extraction supplies its actual `amneziawg.exe` and Wintun
 The C# harness references the production VEX Core and Service projects. It signs
 an ephemeral AWG3.1 policy, rejects a tampered signature, uses the real profile
 verifier/materializer, and connects through the actual service runtime and
-vendor SCM tunnel. Admission uses a temporary fixture trust anchor in process;
-this is not a production keyring or IPC client attestation test.
+vendor SCM tunnel. Admission uses a temporary fixture trust anchor in process.
+
+The next phase registers a unique `VEX.CI.<GUID>` LocalSystem controller using
+the unsigned acceptance executable. It runs the production named pipe server,
+command handler, DPAPI authorization store, profile verifier, runtime and
+background service. Its private pipe grants access only to the fixture owner,
+administrators and LocalSystem. Fixture attestation checks the exact owned
+probe/controller PID, image path, SHA256 and process owner SID. This dependency
+is internal to the acceptance host; the production constructor retains its
+fixed pipe and mandatory signed application attestation. The shared application
+transport verifies a server before reading the authorization token and bounds
+pipe connection separately from the longer VPN operation.
+
+The drill rejects an invalid token, raw configuration and a tampered signed
+profile over actual IPC, then exercises connect/status/diagnostics, controller
+crash recovery, disconnect followed by restart, and graceful SCM shutdown
+cleanup. It does not exercise the installed signed WinUI application,
+Authenticode admission, the production keyring, or clicking the tray Exit item.
 
 The Windows Wintun client owns `10.253.253.2/32` and only routes
 `10.253.253.1/32`. The peer's `10.253.253.1` exists exclusively inside a Go
@@ -38,7 +54,8 @@ The wrapper refuses self-hosted runners, existing VPN services/adapters,
 connected Windows VPN profiles, saved VEX service state, or occupied fixture
 addresses/routes. Private keys stay in an ACL-restricted directory under
 `RUNNER_TEMP`, outside artifacts. Deadlines bound every process; `finally`
-stops only its peer process, uninstalls the previously absent vendor service
+stops and deletes only its verified fixture controller, stops its peer process,
+uninstalls the previously absent vendor service
 only when its image/config paths still point to this fixture, verifies adapter
 and route cleanup, an unchanged native endpoint route, and unchanged physical DNS/firewall profiles, then deletes
 fixture private material. Failed cleanup retains restricted ownership state

@@ -794,9 +794,7 @@ public sealed class VexApiClient : INativeClientApi
         {
             throw new VexApiException(
                 response.StatusCode,
-                response.StatusCode == HttpStatusCode.Unauthorized
-                    ? "session_expired"
-                    : "api_request_failed");
+                await ReadKnownErrorAsync(request, response, cancellationToken).ConfigureAwait(false));
         }
     }
 
@@ -824,9 +822,7 @@ public sealed class VexApiClient : INativeClientApi
         {
             throw new VexApiException(
                 response.StatusCode,
-                response.StatusCode == HttpStatusCode.Unauthorized
-                    ? "session_expired"
-                    : "api_request_failed");
+                await ReadKnownErrorAsync(request, response, cancellationToken).ConfigureAwait(false));
         }
 
         if (response.Content.Headers.ContentLength >
@@ -872,6 +868,63 @@ public sealed class VexApiClient : INativeClientApi
             throw new VexApiException(
                 HttpStatusCode.BadGateway,
                 "api_response_invalid");
+        }
+    }
+
+    private static async Task<string> ReadKnownErrorAsync(HttpRequestMessage request,
+        HttpResponseMessage response, CancellationToken cancellationToken)
+    {
+        var fallback = response.StatusCode == HttpStatusCode.Unauthorized ? "session_expired" : "api_request_failed";
+        var path = request.RequestUri?.AbsolutePath;
+        var authError = response.StatusCode == HttpStatusCode.Unauthorized &&
+            path is "/v1/auth/login" or "/v1/auth/email-otp/confirm";
+        var quotaError = response.StatusCode == HttpStatusCode.Forbidden && path == "/v1/devices/register";
+        if ((!authError && !quotaError) || response.Content.Headers.ContentLength > 4096)
+            return fallback;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(5));
+        try
+        {
+            await using var source = await response.Content.ReadAsStreamAsync(deadline.Token).ConfigureAwait(false);
+            using var bounded = new MemoryStream();
+            var buffer = new byte[1024];
+            while (true)
+            {
+                var read = await source.ReadAsync(buffer, deadline.Token).ConfigureAwait(false);
+                if (read == 0) break;
+                if (bounded.Length + read > 4096) return fallback;
+                bounded.Write(buffer, 0, read);
+            }
+            using var document = JsonDocument.Parse(bounded.ToArray(), new JsonDocumentOptions { MaxDepth = 8 });
+            if (document.RootElement.ValueKind != JsonValueKind.Object) return fallback;
+            string? code = null, message = null;
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                if (property.Name is not ("code" or "message")) continue;
+                if (property.Value.ValueKind != JsonValueKind.String || property.Value.GetString() is not { Length: <= 64 } value)
+                    return fallback;
+                if (property.Name == "code") { if (code is not null) return fallback; code = value; }
+                else { if (message is not null) return fallback; message = value; }
+            }
+            // Current backend uses normalized HTTP codes and these exact public
+            // messages. Accept only the enumerated contract, never server copy.
+            if (authError)
+                return (code, message) switch
+                {
+                    ("unauthorized", "mfa required") or ("mfa_required", _) => "mfa_required",
+                    ("unauthorized", "invalid mfa code") or ("mfa_invalid", _) => "mfa_invalid",
+                    _ => fallback,
+                };
+            return (code, message) switch
+            {
+                ("forbidden", "device limit reached") or ("device_limit_reached", _) => "vpn_device_limit_reached",
+                _ => fallback,
+            };
+        }
+        catch (Exception error) when (error is JsonException or IOException or HttpRequestException ||
+            error is OperationCanceledException && !cancellationToken.IsCancellationRequested)
+        {
+            return fallback;
         }
     }
 

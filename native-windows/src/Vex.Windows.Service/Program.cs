@@ -6,6 +6,10 @@ using Vex.Windows.Service.Runtime;
 using Vex.Windows.Service.Security;
 
 var builder = Host.CreateApplicationBuilder(args);
+builder.Services.Configure<HostOptions>(options =>
+{
+    options.ShutdownTimeout = VpnRuntimeLifetimePolicy.HostShutdownTimeout;
+});
 builder.Services.AddWindowsService(options =>
 {
     options.ServiceName = WindowsServiceOptions.ServiceName;

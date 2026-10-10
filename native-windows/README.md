@@ -63,12 +63,24 @@ revocation prevent cached-profile reconnects. Google/email authentication,
 website billing, website support and incident configuration
 follow the current macOS product flows.
 
+Password, email and browser login save the authenticated account before VPN
+provisioning. An unpaid account, a full device quota or unavailable exits can
+still open Account, billing and website support. The first Connect checks
+entitlement and registers a device; device identity and cached grants cannot
+cross accounts. Windows Hello changes are committed only after confirmation
+and a durable protected preference write.
+
 Home uses the macOS dark/cyan palette, six animated focus rings, traffic
 sparklines, country cards and bottom navigation. Account and Settings retain
 the same centered desktop proportions; narrow windows adapt the cards and
 navigation. System reduced-motion settings disable the focus animation.
 An in-flight connection can be cancelled; its independent disconnect command
 waits for service cleanup rather than merely cancelling the UI pipe read.
+Server selection retains its keyboard highlight through catalog refreshes and
+rejects changes during connection or cleanup. The health indicator reflects
+the current catalog, including partial outages and maintenance. Settings keep
+local preferences available during status loading and cancel page reads when
+navigation changes. The desktop minimum size adapts to DPI and the work area.
 
 An expired realtime access token or server session-invalid event triggers
 bounded refresh attempts. Network failures preserve the session and working
@@ -76,6 +88,10 @@ tunnel; an authoritative refresh rejection signs out and disconnects. Events fro
 cannot invalidate a newer login. Account loading keeps authoritative
 entitlement visible when optional plans, payments, devices or usage fail,
 with separate cached/unavailable indicators for each affected section.
+Silent realtime headers or body reads have a 90-second liveness deadline;
+reconnection retains the last event cursor and does not reject credentials.
+Required updates stay blocked after installer launch and an offline restart
+until the running version satisfies the verified requirement.
 
 Disconnected clients warm their selected profile without blocking Connect.
 The warm cache requires the release-pinned P256 keyring, exact signed user,
@@ -295,6 +311,8 @@ this startup check does not provision a service. Separate Debug-only previews
 exercise authenticated and signed-out navigation, the server picker, compact
 layout, single-instance redirection, close-to-tray, second-launch restoration,
 actual shell protocol activation and clean exit. Preview state is disposable;
+the Settings drill also changes and restores a local preference and leaves the
+page while its status request is pending, then verifies the resumed refresh.
 HTTP, realtime and service calls use offline fixtures. Release builds cannot
 enable those fixtures. Their PNG captures accompany the unsigned review builds.
 
@@ -306,6 +324,14 @@ SCM/adapter creation, a recent UAPI handshake, tunnel-bound DNS and verified HTT
 traffic counters and owned cleanup. It uses one private /32 route and leaves
 AntiLeak disabled. This establishes local encrypted runtime behavior; public
 Internet, leak protection, roaming and arm64 runtime acceptance remain separate.
+The same fixture exercises a unique unsigned LocalSystem SCM controller with
+the real pipe server and command handler: rejected credentials and tampered
+profiles, signed connection, crash/restart status restoration, durable
+disconnect after restart, and graceful-stop cleanup. Its private process
+attestation establishes only fixture ownership; signed installed UI-to-service
+attestation and real tray clicks still require release acceptance. Production
+IPC attestation remains mandatory. Runtime cleanup preserves network protection
+and its journal when stopping the vendor tunnel cannot be confirmed.
 See [the fixture documentation](scripts/vpn-fixture-peer/README.md).
 
 Unsigned PR and manual review builds include sanitized startup, desktop and

@@ -36,6 +36,9 @@ public sealed partial class NativeClientCoordinator
         string? locationId, string routingMode, bool antiLeakEnabled, bool allowsAutomaticFailover,
         CancellationToken cancellationToken, bool forceFreshProfile)
     {
+        if (RequireCurrentState().VpnProvisioningPending)
+            await WithSessionRetryCoreAsync(state => EnsureVpnProvisionedAsync(state, locationId, cancellationToken),
+                cancellationToken).ConfigureAwait(false);
         ResiliencePolicy? policy = null;
         try { policy = await GetResiliencePolicyCoreAsync(cancellationToken).ConfigureAwait(false); }
         catch (Exception error) when (!cancellationToken.IsCancellationRequested &&

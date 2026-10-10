@@ -508,6 +508,8 @@ public sealed partial class AccountPage : Page
     private void RenderDevices(NativeAccountSnapshot account)
     {
         var statuses = new List<string>();
+        if (Coordinator.CurrentState?.VpnProvisioningPending == true)
+            statuses.Add("Это устройство будет зарегистрировано для VPN при первом подключении.");
         if (!account.DevicesStatus.IsCurrent)
             statuses.Add(account.DevicesStatus.HasData ? "Устройства не обновлены; показаны сохранённые данные." : "Список устройств недоступен.");
         if (!account.DeviceUsageStatus.IsCurrent)
@@ -546,6 +548,8 @@ public sealed partial class AccountPage : Page
         DeviceUsageList.ItemsSource = rows;
         DeviceUsageSummary.Text = !account.DevicesStatus.HasData ? "Список устройств не удалось загрузить. Повторите обновление." : rows.Count == 0
             ? "Зарегистрированных устройств пока нет."
+            : Coordinator.CurrentState?.VpnProvisioningPending == true
+                ? $"Устройств в аккаунте: {rows.Count}."
             : $"Устройств: {rows.Count}. Текущее расположение: " +
                 $"{NativeLocationLabel.Russian(account.LocationId)}.";
     }

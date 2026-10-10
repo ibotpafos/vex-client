@@ -13,13 +13,14 @@ namespace Vex.Windows.App.Services;
 
 public sealed class VpnServiceClient : IVpnControlClient
 {
-    private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(50);
-
-    private readonly ProtectedAuthorizationStore _authorizationStore;
+    private readonly VpnNamedPipeTransport _transport;
 
     public VpnServiceClient(ProtectedAuthorizationStore authorizationStore)
     {
-        _authorizationStore = authorizationStore;
+        // Production always uses the fixed service pipe and mandatory signed
+        // SCM server attestation. Fixture transport dependencies cannot enter here.
+        _transport = new VpnNamedPipeTransport(VpnServiceProtocol.PipeName,
+            VpnServiceServerAttestor.Attest, authorizationStore.Read);
     }
 
     public Task<VpnServiceResponse> GetStatusAsync(
@@ -76,42 +77,15 @@ public sealed class VpnServiceClient : IVpnControlClient
     {
         if (UiPreviewContext.IsEnabled)
             return UiPreviewFixtures.ServiceResponse(request);
-        var stage = "initialize";
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken);
-        timeout.CancelAfter(RequestTimeout);
-
         try
         {
-            await using var pipe = new NamedPipeClientStream(
-                ".",
-                VpnServiceProtocol.PipeName,
-                PipeDirection.InOut,
-                PipeOptions.Asynchronous | PipeOptions.WriteThrough,
-                TokenImpersonationLevel.Identification);
-            stage = "pipe_connect";
-            await pipe.ConnectAsync(timeout.Token).ConfigureAwait(false);
-            stage = "server_attestation";
-            VpnServiceServerAttestor.Attest(pipe);
-            stage = "authorization_read";
-            var envelope = new VpnIpcRequestEnvelope(
-                _authorizationStore.Read(),
-                request);
-            stage = "request_write";
-            await VpnIpcFrameCodec.WriteRequestAsync(
-                pipe,
-                envelope,
-                timeout.Token).ConfigureAwait(false);
-            stage = "response_read";
-            return await VpnIpcFrameCodec.ReadResponseAsync(
-                pipe,
-                timeout.Token).ConfigureAwait(false);
+            return await _transport.SendAsync(request, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception error)
         {
             VpnServiceServerAttestor.LogFailure(
                 new InvalidOperationException(
-                    $"stage={stage}; {error.GetType().Name}: {error.Message}",
+                    $"VPN IPC failed with {error.GetType().Name}: {error.Message}",
                     error));
             throw;
         }

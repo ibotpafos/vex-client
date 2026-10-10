@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net;
 using System.Text;
+using System.Threading.Channels;
 using Vex.Windows.App.Services;
 using Vex.Windows.Client.Api;
 using Vex.Windows.Client.Auth;
@@ -29,6 +30,10 @@ internal static class CustomerRealtimeSessionTests
         await SessionChangedWhileWaitingForCoordinatorGateAsync(revoked: true);
         await UnauthorizedStreamStopsAfterOneRequestAsync();
         await SameTokenRefreshCannotReplayRejectedStreamAsync();
+        await SilentStreamReconnectsWithoutSessionRecoveryAsync();
+        await PartialBytesAndHeartbeatsResetLivenessAsync();
+        await StopCancelsSilentStreamWithoutReconnectAsync();
+        await SilentResponseHeadersRetryWithoutSessionRecoveryAsync();
     }
 
     private static async Task TransientRefreshFailuresPreserveSessionAsync()
@@ -282,6 +287,116 @@ internal static class CustomerRealtimeSessionTests
             "Pausing rejected credentials prevented a later fresh token from resuming SSE.");
     }
 
+    private static async Task SilentStreamReconnectsWithoutSessionRecoveryAsync()
+    {
+        var firstStream = new QueuedStream();
+        firstStream.Append("event: customer.heartbeat\nid: event-42\ndata: {}\n\n");
+        var reconnected = Signal();
+        var requests = 0;
+        await using var fixture = new Fixture(streamResponse: _ =>
+        {
+            if (Interlocked.Increment(ref requests) == 1) return EventStream(firstStream);
+            reconnected.TrySetResult();
+            return EventStream("event: customer.heartbeat\ndata: {}\n\n");
+        }, livenessTimeout: TimeSpan.FromMilliseconds(400));
+        var disconnected = Result<bool>();
+        fixture.Realtime.ConnectionChanged += (_, connected) =>
+        {
+            if (!connected) disconnected.TrySetResult(!fixture.Realtime.IsConnected &&
+                firstStream.ReadCancelled && firstStream.Disposed && fixture.Handler.Tokens.Count == 1);
+        };
+
+        await fixture.Realtime.StartAsync(OldToken);
+        await firstStream.Waiting.Task.WaitAsync(Deadline);
+        Check(await disconnected.Task.WaitAsync(Deadline),
+            "A silent SSE stream did not cancel/dispose its read and expose disconnected status before backoff.");
+        await reconnected.Task.WaitAsync(Deadline);
+        Check(fixture.Handler.Tokens.Count == 2 && fixture.Handler.Tokens.All(token => token == OldToken) &&
+            fixture.Handler.LastEventIds.SequenceEqual([string.Empty, "event-42"]) &&
+            fixture.Store.State?.Session.AccessToken == OldToken && fixture.Store.ClearCount == 0 &&
+            fixture.RefreshCalls == 0 && fixture.MatchedSignOuts == 0 && fixture.Vpn.DisconnectCount == 0 &&
+            fixture.Events.Count == 0,
+            "SSE liveness recovery refreshed credentials, logged out, disconnected VPN or failed to reconnect.");
+    }
+
+    private static async Task PartialBytesAndHeartbeatsResetLivenessAsync()
+    {
+        var stream = new QueuedStream();
+        await using var fixture = new Fixture(streamResponse: _ => EventStream(stream),
+            livenessTimeout: TimeSpan.FromMilliseconds(600));
+        var heartbeats = 0;
+        var received = Signal();
+        var allHeartbeats = Signal();
+        var disconnects = 0;
+        fixture.Realtime.ConnectionChanged += (_, connected) =>
+        {
+            if (!connected) Interlocked.Increment(ref disconnects);
+        };
+        fixture.Realtime.Changed += (_, args) =>
+        {
+            if (args.Event.Type == "customer.heartbeat")
+            {
+                if (Interlocked.Increment(ref heartbeats) == 6) allHeartbeats.TrySetResult();
+                received.TrySetResult();
+            }
+        };
+
+        await fixture.Realtime.StartAsync(OldToken);
+        await stream.Waiting.Task.WaitAsync(Deadline);
+        // No complete line is delivered for more than one liveness deadline.
+        // Each byte chunk must extend the deadline without triggering refresh.
+        foreach (var chunk in new[] { "event: ", "customer.", "heartbeat", "\ndata: ", "{}", "\n\n" })
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(160));
+            stream.Append(chunk);
+        }
+        await received.Task.WaitAsync(Deadline);
+        foreach (var _ in Enumerable.Range(0, 5))
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(160));
+            stream.Append("event: customer.heartbeat\ndata: {}\n\n");
+        }
+        await allHeartbeats.Task.WaitAsync(Deadline);
+        await fixture.Realtime.StopAsync().WaitAsync(Deadline);
+        Check(heartbeats == 6 && disconnects == 1 && fixture.Handler.Tokens.Count == 1 &&
+            fixture.RefreshCalls == 0 && fixture.Events.Count == 0 && fixture.Store.ClearCount == 0 &&
+            fixture.Vpn.DisconnectCount == 0 && stream.ReadCancelled && stream.Disposed,
+            "Partial stream bytes or active heartbeats failed to extend liveness without account/session refresh.");
+    }
+
+    private static async Task StopCancelsSilentStreamWithoutReconnectAsync()
+    {
+        var stream = new QueuedStream();
+        await using var fixture = new Fixture(streamResponse: _ => EventStream(stream),
+            livenessTimeout: TimeSpan.FromMilliseconds(200));
+        await fixture.Realtime.StartAsync(OldToken);
+        await stream.Waiting.Task.WaitAsync(Deadline);
+        await fixture.Realtime.StopAsync().WaitAsync(Deadline);
+        await Task.Delay(TimeSpan.FromMilliseconds(1150));
+        Check(stream.ReadCancelled && stream.Disposed && !fixture.Realtime.IsConnected &&
+            fixture.Handler.Tokens.Count == 1 && fixture.Events.Count == 0 && fixture.RefreshCalls == 0 &&
+            fixture.Store.ClearCount == 0 && fixture.Vpn.DisconnectCount == 0,
+            "Explicit SSE stop was treated as a liveness/auth failure or reconnected after cancellation.");
+    }
+
+    private static async Task SilentResponseHeadersRetryWithoutSessionRecoveryAsync()
+    {
+        var handler = new SilentHeadersHandler();
+        using var http = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://realtime.example.test"),
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
+        await using var realtime = new CustomerRealtimeClient(http, TimeSpan.FromMilliseconds(200));
+        var authEvents = 0;
+        realtime.Changed += (_, _) => Interlocked.Increment(ref authEvents);
+        await realtime.StartAsync(OldToken);
+        await handler.Retried.Task.WaitAsync(Deadline);
+        await realtime.StopAsync().WaitAsync(Deadline);
+        Check(handler.Requests == 2 && handler.CancelledReads == 2 && authEvents == 0 && !realtime.IsConnected,
+            "Stalled SSE response headers did not time out/retry or were misclassified as rejected credentials.");
+    }
+
     private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
     private static TaskCompletionSource<T> Result<T>() => new(TaskCreationOptions.RunContinuationsAsynchronously);
     private static void Check(bool condition, string message)
@@ -311,7 +426,8 @@ internal static class CustomerRealtimeSessionTests
         public int StopCalls { get; private set; }
         public int MatchedSignOuts { get; private set; }
 
-        public Fixture(bool revoked = false, bool autoRecover = true, string? revokedPayload = null)
+        public Fixture(bool revoked = false, bool autoRecover = true, string? revokedPayload = null,
+            Func<string, HttpResponseMessage>? streamResponse = null, TimeSpan? livenessTimeout = null)
         {
             _autoRecover = autoRecover;
             Store.Save(new NativeClientState(Session(OldToken), "realtime-installation", "device-1", "fi-1",
@@ -324,17 +440,17 @@ internal static class CustomerRealtimeSessionTests
                 return Task.FromResult(Session(NewToken));
             };
             Coordinator = new NativeClientCoordinator(api, Store, Vpn, "1.0.0");
-            Handler = new RecordingSseHandler(token => token == OldToken && !revoked
+            Handler = new RecordingSseHandler(streamResponse ?? (token => token == OldToken && !revoked
                 ? new HttpResponseMessage(HttpStatusCode.Unauthorized)
                 : EventStream(token == OldToken
                     ? "event: customer.session.revoked\ndata: " + (revokedPayload ?? "{\"reason\":\"session_invalid\"}") + "\n\n"
-                    : "event: customer.heartbeat\ndata: {}\n\n"));
+                    : "event: customer.heartbeat\ndata: {}\n\n")));
             _http = new HttpClient(Handler)
             {
                 BaseAddress = new Uri("https://realtime.example.test"),
                 Timeout = Timeout.InfiniteTimeSpan,
             };
-            Realtime = new CustomerRealtimeClient(_http);
+            Realtime = new CustomerRealtimeClient(_http, livenessTimeout);
             Recovery = new CustomerRealtimeSessionRecovery(Coordinator,
                 async (token, cancellationToken) =>
                 {
@@ -388,11 +504,13 @@ internal static class CustomerRealtimeSessionTests
         }
     }
 
-    private static HttpResponseMessage EventStream(string prefix)
+    private static HttpResponseMessage EventStream(string prefix) => EventStream(new PrefixThenWaitStream(prefix));
+
+    private static HttpResponseMessage EventStream(Stream stream)
     {
         var response = new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StreamContent(new PrefixThenWaitStream(prefix)),
+            Content = new StreamContent(stream),
         };
         response.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("text/event-stream");
         return response;
@@ -401,6 +519,7 @@ internal static class CustomerRealtimeSessionTests
     private sealed class RecordingSseHandler(Func<string, HttpResponseMessage> respond) : HttpMessageHandler
     {
         public ConcurrentQueue<string> Tokens { get; } = new();
+        public ConcurrentQueue<string> LastEventIds { get; } = new();
         public TaskCompletionSource FreshRequest { get; } = Signal();
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -410,9 +529,87 @@ internal static class CustomerRealtimeSessionTests
                 "The session regression fixture did not exercise the real authenticated SSE endpoint.");
             var token = request.Headers.Authorization!.Parameter!;
             Tokens.Enqueue(token);
+            LastEventIds.Enqueue(request.Headers.TryGetValues("Last-Event-ID", out var ids) ? ids.Single() : string.Empty);
             if (token == NewToken) FreshRequest.TrySetResult();
             return Task.FromResult(respond(token));
         }
+    }
+
+    private sealed class SilentHeadersHandler : HttpMessageHandler
+    {
+        private int _requests;
+        private int _cancelledReads;
+        public int Requests => Volatile.Read(ref _requests);
+        public int CancelledReads => Volatile.Read(ref _cancelledReads);
+        public TaskCompletionSource Retried { get; } = Signal();
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (Interlocked.Increment(ref _requests) == 2) Retried.TrySetResult();
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                throw new InvalidOperationException("The silent header fixture unexpectedly completed.");
+            }
+            catch (OperationCanceledException)
+            {
+                Interlocked.Increment(ref _cancelledReads);
+                throw;
+            }
+        }
+    }
+
+    private sealed class QueuedStream : Stream
+    {
+        private readonly Channel<byte[]> _chunks = Channel.CreateUnbounded<byte[]>();
+        private byte[]? _current;
+        private int _position;
+        public TaskCompletionSource Waiting { get; } = Signal();
+        public bool ReadCancelled { get; private set; }
+        public bool Disposed { get; private set; }
+        public void Append(string chunk) => Check(_chunks.Writer.TryWrite(Encoding.UTF8.GetBytes(chunk)),
+            "The controlled SSE fixture rejected a byte chunk.");
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => _position; set => throw new NotSupportedException(); }
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                if (_current is null || _position == _current.Length)
+                {
+                    Waiting.TrySetResult();
+                    _current = await _chunks.Reader.ReadAsync(cancellationToken);
+                    _position = 0;
+                }
+                var read = Math.Min(buffer.Length, _current.Length - _position);
+                _current.AsMemory(_position, read).CopyTo(buffer);
+                _position += read;
+                return read;
+            }
+            catch (OperationCanceledException)
+            {
+                ReadCancelled = true;
+                throw;
+            }
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+        protected override void Dispose(bool disposing)
+        {
+            Disposed = true;
+            base.Dispose(disposing);
+        }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     private sealed class PrefixThenWaitStream(string prefix) : Stream

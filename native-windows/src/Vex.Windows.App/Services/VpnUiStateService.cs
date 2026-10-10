@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using Vex.Windows.Client.Api;
 using Vex.Windows.Client.Session;
+using Vex.Windows.Core.Presentation;
 using Vex.Windows.Core.Vpn;
 using Vex.Windows.Core.Vpn.Ipc;
 
@@ -55,7 +56,8 @@ public sealed class VpnUiStateService
 
     public async Task<VpnServiceResponse> RunConnectionAsync(
         Func<CancellationToken, Task<VpnServiceResponse>> connect,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool onlyWhenIdle = false)
     {
         ArgumentNullException.ThrowIfNull(connect);
         using var connection = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -63,6 +65,9 @@ public sealed class VpnUiStateService
         long intentVersion;
         lock (_intentSync)
         {
+            if (onlyWhenIdle && !ServerPickerInteractionPolicy.CanSelect(
+                    Snapshot.Phase, _connectionCancellation is not null, IsConnectionCleanupInFlight))
+                throw new NativeClientFlowException("vpn_operation_in_progress");
             if (!_connectionDesired || _shutdownComplete)
                 throw new OperationCanceledException("A connection is no longer requested.");
             intentVersion = _intentVersion;

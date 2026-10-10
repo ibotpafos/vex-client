@@ -52,17 +52,37 @@ internal static class UiPreviewFixtures
                 ? ResponseFor(path) : null;
             var status = data is null ? HttpStatusCode.ServiceUnavailable : HttpStatusCode.OK;
             data ??= new { code = "ui_preview_read_only" };
-            return Task.FromResult(new HttpResponseMessage(status)
+            var response = new HttpResponseMessage(status)
             {
                 Content = new StringContent(JsonSerializer.Serialize(data), Encoding.UTF8, "application/json"),
                 RequestMessage = request,
-            });
+            };
+            // Exercise real page-loading cancellation and responsiveness with
+            // an isolated slow read; no production network is involved.
+            return path == "/v1/app/remote-config"
+                ? DelayedSettingsResponseAsync(response, cancellationToken)
+                : Task.FromResult(response);
 #else
             throw new InvalidOperationException("UI fixtures are unavailable in Release builds.");
 #endif
         }
 
 #if DEBUG
+        private static async Task<HttpResponseMessage> DelayedSettingsResponseAsync(
+            HttpResponseMessage response, CancellationToken cancellationToken)
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false);
+                return response;
+            }
+            catch
+            {
+                response.Dispose();
+                throw;
+            }
+        }
+
         private static object? ResponseFor(string path)
         {
             var now = DateTimeOffset.UtcNow;

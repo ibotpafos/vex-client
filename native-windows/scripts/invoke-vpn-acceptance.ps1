@@ -55,6 +55,7 @@ $ResultPath = [IO.Path]::GetFullPath($ResultPath)
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).ProviderPath
 . (Join-Path $repositoryRoot 'native-windows/packaging/ReleaseValidation.ps1')
 $fixtureId = [Guid]::NewGuid().ToString('N')
+$controllerServiceName = "VEX.CI.$fixtureId"
 $fixtureDirectory = Join-Path $env:RUNNER_TEMP "vex-vpn-acceptance-$fixtureId"
 if (Test-Path -LiteralPath $fixtureDirectory) { throw 'Fixture directory collision.' }
 [IO.Directory]::CreateDirectory($fixtureDirectory) | Out-Null
@@ -160,6 +161,7 @@ $scriptResult = [ordered]@{
     disposable_hosted_runner = $true
     anti_leak_enabled = $false
     vendor_service_removed = $false
+    fixture_controller_service_removed = $false
     tunnel_adapter_removed = $false
     fixture_route_removed = $false
     native_endpoint_route_unchanged = $true
@@ -221,7 +223,7 @@ try {
     $start.UseShellExecute = $false
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
-    foreach ($argument in @('-directory', $fixtureDirectory, '-lifetime', '180s', '-endpoint-address', $hostAddress)) { $start.ArgumentList.Add($argument) }
+    foreach ($argument in @('-directory', $fixtureDirectory, '-lifetime', '420s', '-endpoint-address', $hostAddress)) { $start.ArgumentList.Add($argument) }
     $peer = [Diagnostics.Process]::Start($start)
     $peerStdout = $peer.StandardOutput.ReadToEndAsync()
     $peerStderr = $peer.StandardError.ReadToEndAsync()
@@ -235,13 +237,51 @@ try {
     $runtimeOwned = $true
     $scriptResult.stage = 'runtime-acceptance'
     Invoke-FixtureProcess -FilePath (Join-Path $harnessDirectory 'Vex.Windows.VpnAcceptance.exe') `
-        -Arguments @('--disposable-runner', $fixtureDirectory, $runtimeDirectory, $ResultPath) -TimeoutSeconds 160
+        -Arguments @('--disposable-runner', $fixtureDirectory, $runtimeDirectory, $ResultPath) -TimeoutSeconds 390
     $harnessResult = Get-Content -LiteralPath $ResultPath -Raw | ConvertFrom-Json
     if (-not $harnessResult.passed) { throw 'Actual VEX tunnel fixture did not pass.' }
 }
 catch { $failure = $_.Exception.GetType().FullName }
 finally {
     try {
+        $scriptResult.cleanup_stage = 'fixture-controller-service'
+        $controller = @(Get-CimInstance Win32_Service | Where-Object Name -ceq $controllerServiceName)
+        if ($controller.Count -gt 0) {
+            $ownedHarness = Join-Path $fixtureDirectory 'harness/Vex.Windows.VpnAcceptance.exe'
+            if ($controller.Count -ne 1 -or
+                -not $controller[0].PathName.Contains($ownedHarness, [StringComparison]::OrdinalIgnoreCase) -or
+                -not $controller[0].PathName.Contains('--fixture-service', [StringComparison]::Ordinal) -or
+                -not $controller[0].PathName.Contains($fixtureDirectory, [StringComparison]::OrdinalIgnoreCase)) {
+                throw 'Fixture controller registration changed; refusing foreign service cleanup.'
+            }
+            $registeredController = Get-Service -Name $controllerServiceName
+            if ($registeredController.Status -ne 'Stopped') {
+                # Stop-Service waits internally without our finite deadline.
+                # Send the SCM control directly, then wait under our own bound.
+                try { $registeredController.Stop() } catch { }
+                try { $registeredController.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(55)) }
+                catch {
+                    # An owned child exceeding its shutdown deadline must not
+                    # recreate the vendor while the outer fixture cleans it up.
+                    $controller = @(Get-CimInstance Win32_Service | Where-Object Name -ceq $controllerServiceName)
+                    if ($controller.Count -ne 1 -or $controller[0].ProcessId -le 0 -or
+                        -not $controller[0].PathName.Contains($ownedHarness, [StringComparison]::OrdinalIgnoreCase)) {
+                        throw 'Cannot prove ownership of the stalled fixture controller.'
+                    }
+                    $ownedProcess = Get-Process -Id $controller[0].ProcessId -ErrorAction Stop
+                    if (-not $ownedProcess.Path.Equals($ownedHarness, [StringComparison]::OrdinalIgnoreCase)) {
+                        throw 'Fixture controller PID was replaced by a foreign executable.'
+                    }
+                    $ownedProcess.Kill()
+                    [void]$ownedProcess.WaitForExit(5000)
+                }
+            }
+            $registeredController.Dispose()
+            Invoke-FixtureProcess -FilePath "$env:SystemRoot/System32/sc.exe" `
+                -Arguments @('delete', $controllerServiceName) -TimeoutSeconds 15
+        }
+        $scriptResult.fixture_controller_service_removed = -not [bool](Get-Service -Name $controllerServiceName -ErrorAction SilentlyContinue)
+        if (-not $scriptResult.fixture_controller_service_removed) { throw 'Owned fixture controller remains registered.' }
         $scriptResult.cleanup_stage = 'vendor-service'
         if ($runtimeOwned -and (Get-Service -Name 'AmneziaWGTunnel$vex' -ErrorAction SilentlyContinue)) {
             # Only this exact service was absent at preflight and created by our
@@ -347,4 +387,4 @@ namespace Vex.Windows.Fixture {
     }
 }
 if (-not $scriptResult.passed) { throw 'Isolated Windows VPN acceptance failed; inspect sanitized acceptance JSON.' }
-Write-Host 'Real VEX signed AWG3.1 profile, fresh UAPI handshake, tunneled DNS/HTTPS and fixture cleanup passed.'
+Write-Host 'Real VEX signed AWG3.1 profile, tunnel DNS/HTTPS, private IPC, SCM lifecycle and fixture cleanup passed.'

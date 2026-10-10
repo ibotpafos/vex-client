@@ -48,9 +48,19 @@ const serviceClientPath = path.resolve(
   "native-windows/src/Vex.Windows.App/Services/VpnServiceClient.cs",
 );
 const serviceClientSource = fs.readFileSync(serviceClientPath, "utf8");
-if (!/TokenImpersonationLevel\.Identification/u.test(serviceClientSource)) {
+const serviceTransportPath = path.resolve(
+  process.cwd(),
+  "native-windows/src/Vex.Windows.Core/Vpn/Ipc/VpnNamedPipeTransport.cs",
+);
+const serviceTransportSource = fs.readFileSync(serviceTransportPath, "utf8");
+if (!/TokenImpersonationLevel\.Identification/u.test(serviceTransportSource)) {
   failures.push(
-    `${serviceClientPath}: the service must receive an identification token for owner attestation`,
+    `${serviceTransportPath}: the service must receive an identification token for owner attestation`,
+  );
+}
+if (!/new VpnNamedPipeTransport\(VpnServiceProtocol\.PipeName,\s*VpnServiceServerAttestor\.Attest, authorizationStore\.Read\)/u.test(serviceClientSource)) {
+  failures.push(
+    `${serviceClientPath}: production IPC must retain its fixed pipe, mandatory signed server attestation and protected authorization`,
   );
 }
 

@@ -183,7 +183,12 @@ public sealed class AppServices
             VpnUiState.MarkConnectionDesired(false);
             Auth.ReportSessionExpired();
         }
-        else Auth.ClearStatus();
+        else
+        {
+            if (args is AuthenticatedSessionAcceptedEventArgs)
+                VpnUiState.MarkConnectionDesired(false);
+            Auth.ClearStatus();
+        }
         BackgroundVpn.Wake();
     }
 
@@ -243,21 +248,33 @@ public sealed class AppServices
         {
             try
             {
-                await Coordinator.InvalidateCachedEntitlementAsync(CancellationToken.None);
+                var state = Coordinator.CurrentState;
+                if (state is null || args.SourceTokenFingerprint !=
+                    CustomerRealtimeClient.TokenFingerprint(state.Session.AccessToken)) return;
+                var expectedAccessToken = state.Session.AccessToken;
+                await Coordinator.InvalidateCachedEntitlementAsync(CancellationToken.None, expectedAccessToken);
                 if (args.Event.Type == "customer.resync" ||
                     args.Metadata.Domains.Any(domain => domain is "devices" or "provisioning"))
-                    await Coordinator.InvalidateProfileAsync(CancellationToken.None);
+                    await Coordinator.InvalidateProfileAsync(CancellationToken.None, expectedAccessToken);
                 if (args.Event.Type == "customer.resync" ||
                     args.Metadata.Domains.Any(domain => domain is "entitlement" or "billing"))
-                    await Coordinator.ValidateEntitlementAsync(CancellationToken.None);
+                    await Coordinator.ValidateEntitlementAsync(CancellationToken.None, expectedAccessToken);
             }
             catch (NativeClientFlowException error) when (
                 Vex.Windows.Core.Vpn.VpnRecoveryPolicy.IsTerminalError(error.Code))
             {
-                VpnUiState.MarkConnectionDesired(false);
                 try
                 {
-                    await VpnUiState.RunAsync(VpnClient.DisconnectAsync, CancellationToken.None);
+                    await VpnUiState.RunAsync(async token =>
+                    {
+                        var state = Coordinator.CurrentState;
+                        if (state is null || args.SourceTokenFingerprint !=
+                            CustomerRealtimeClient.TokenFingerprint(state.Session.AccessToken))
+                            return new Vex.Windows.Core.Vpn.VpnServiceResponse(
+                                Guid.NewGuid().ToString("N"), true, VpnUiState.Snapshot, null);
+                        VpnUiState.MarkConnectionDesired(false);
+                        return await VpnClient.DisconnectAsync(token);
+                    }, CancellationToken.None);
                 }
                 catch (Exception cleanupError) when (cleanupError is IOException or
                     UnauthorizedAccessException or InvalidOperationException or
@@ -316,8 +333,9 @@ public sealed class AppServices
         CancellationToken cancellationToken)
     {
         var snapshot = VpnUiState.Snapshot;
+        var deviceId = Coordinator.CurrentState?.DeviceId;
         var report = new ClientDiagnosticsReport(
-            DeviceId: Coordinator.CurrentState?.DeviceId,
+            DeviceId: string.IsNullOrWhiteSpace(deviceId) ? null : deviceId,
             Platform: "windows",
             AppVersion: AppVersion,
             Reason: queued.Reason,

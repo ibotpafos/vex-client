@@ -67,6 +67,8 @@ $result = [ordered]@{
     navigation_checks = @()
     embedded_chat_absent = $false
     support_website_available = $false
+    settings_preferences_available_during_refresh = $false
+    settings_refresh_cancelled_on_navigation = $false
     single_instance_redirected = $false
     close_to_tray = $false
     second_launch_restored_window = $false
@@ -558,6 +560,96 @@ namespace Vex.Windows.Smoke {
             $result.navigation_checks += [ordered]@{
                 section = $page
                 visible_control = $expectedControlId
+            }
+            if ($page -eq 'Settings') {
+                # The Debug fixture holds the remote-config read for five
+                # seconds. Exercise a local preference without OS registration.
+                Wait-SmokeCondition -TimeoutSeconds 3 -Failure 'Settings blocked local preferences during its slow read-only refresh.' -Condition {
+                    $refreshButton = Find-SmokeElement -AutomationId 'RefreshSettingsButton'
+                    $recoveryToggle = Find-SmokeElement -AutomationId 'AutoRecoveryToggle'
+                    $null -ne $refreshButton -and -not $refreshButton.Current.IsEnabled -and
+                        $null -ne $recoveryToggle -and $recoveryToggle.Current.IsEnabled
+                }
+                $recoveryToggle = Find-SmokeElement -AutomationId 'AutoRecoveryToggle'
+                $recoveryPattern = [Windows.Automation.TogglePattern]$recoveryToggle.GetCurrentPattern(
+                    [Windows.Automation.TogglePattern]::Pattern)
+                $originalRecoveryState = $recoveryPattern.Current.ToggleState
+                if ($originalRecoveryState -eq [Windows.Automation.ToggleState]::Indeterminate) {
+                    throw 'AutoRecovery must expose a two-state preference.'
+                }
+                $resumedRefreshTimer = [Diagnostics.Stopwatch]::StartNew()
+                try {
+                    $recoveryPattern.Toggle()
+                    Wait-SmokeCondition -TimeoutSeconds 3 -Failure 'AutoRecovery did not change while its read-only refresh resumed.' -Condition {
+                        $refreshButton = Find-SmokeElement -AutomationId 'RefreshSettingsButton'
+                        $recoveryToggle = Find-SmokeElement -AutomationId 'AutoRecoveryToggle'
+                        if ($null -eq $refreshButton -or $null -eq $recoveryToggle -or
+                            -not $recoveryToggle.Current.IsEnabled) { return $false }
+                        $pattern = [Windows.Automation.TogglePattern]$recoveryToggle.GetCurrentPattern(
+                            [Windows.Automation.TogglePattern]::Pattern)
+                        $pattern.Current.ToggleState -ne $originalRecoveryState -and
+                            -not $refreshButton.Current.IsEnabled
+                    }
+                }
+                finally {
+                    $recoveryToggle = Find-SmokeElement -AutomationId 'AutoRecoveryToggle'
+                    if ($null -ne $recoveryToggle) {
+                        $recoveryPattern = [Windows.Automation.TogglePattern]$recoveryToggle.GetCurrentPattern(
+                            [Windows.Automation.TogglePattern]::Pattern)
+                        if ($recoveryPattern.Current.ToggleState -ne $originalRecoveryState) {
+                            $resumedRefreshTimer.Restart()
+                            $recoveryPattern.Toggle()
+                        }
+                    }
+                }
+                Wait-SmokeCondition -TimeoutSeconds 3 -Failure 'AutoRecovery was not restored during the delayed refresh.' -Condition {
+                    $refreshButton = Find-SmokeElement -AutomationId 'RefreshSettingsButton'
+                    $recoveryToggle = Find-SmokeElement -AutomationId 'AutoRecoveryToggle'
+                    if ($null -eq $refreshButton -or $null -eq $recoveryToggle -or
+                        -not $recoveryToggle.Current.IsEnabled) { return $false }
+                    $pattern = [Windows.Automation.TogglePattern]$recoveryToggle.GetCurrentPattern(
+                        [Windows.Automation.TogglePattern]::Pattern)
+                    $pattern.Current.ToggleState -eq $originalRecoveryState -and
+                        -not $refreshButton.Current.IsEnabled
+                }
+                Wait-SmokeCondition -Failure 'Settings did not finish its resumed read-only refresh.' -Condition {
+                    $refreshButton = Find-SmokeElement -AutomationId 'RefreshSettingsButton'
+                    $null -ne $refreshButton -and $refreshButton.Current.IsEnabled
+                }
+                if ($resumedRefreshTimer.Elapsed.TotalSeconds -lt 4) {
+                    throw 'Settings abandoned its delayed read instead of resuming after the preference change.'
+                }
+                $result.settings_preferences_available_during_refresh = $true
+
+                Invoke-SmokeElement -AutomationId 'RefreshSettingsButton'
+                Wait-SmokeCondition -TimeoutSeconds 3 -Failure 'Settings did not start the navigation-cancellation refresh.' -Condition {
+                    $refreshButton = Find-SmokeElement -AutomationId 'RefreshSettingsButton'
+                    $null -ne $refreshButton -and -not $refreshButton.Current.IsEnabled
+                }
+                Invoke-SmokeElement -AutomationId 'HomeNavigationButton'
+                $homeControlId = if ($PreviewMode -eq 'signed-out') { 'WebsiteSignInButton' } else { 'PowerButton' }
+                Wait-SmokeCondition -Failure 'Home did not load while Settings was refreshing.' -Condition {
+                    $element = Find-SmokeElement -AutomationId $homeControlId
+                    $null -ne $element -and -not $element.Current.IsOffscreen
+                }
+                Assert-PrimaryInstance
+                $navigationRefreshTimer = [Diagnostics.Stopwatch]::StartNew()
+                Invoke-SmokeElement -AutomationId 'SettingsNavigationButton'
+                Wait-SmokeCondition -Failure 'Settings did not reload after canceling its previous refresh.' -Condition {
+                    $element = Find-SmokeElement -AutomationId 'AutoLaunchToggle'
+                    $refreshButton = Find-SmokeElement -AutomationId 'RefreshSettingsButton'
+                    $null -ne $element -and -not $element.Current.IsOffscreen -and
+                        $null -ne $refreshButton -and -not $refreshButton.Current.IsEnabled
+                }
+                Wait-SmokeCondition -Failure 'Settings did not finish refreshing after navigation cancellation.' -Condition {
+                    $refreshButton = Find-SmokeElement -AutomationId 'RefreshSettingsButton'
+                    $null -ne $refreshButton -and $refreshButton.Current.IsEnabled
+                }
+                if ($navigationRefreshTimer.Elapsed.TotalSeconds -lt 4) {
+                    throw 'Settings did not perform a fresh delayed read after navigation cancellation.'
+                }
+                Assert-PrimaryInstance
+                $result.settings_refresh_cancelled_on_navigation = $true
             }
             $captureControlIds = if ($PreviewMode -eq 'signed-out' -and $page -eq 'Home') {
                 @('AccountSignInTitle', 'WebsiteSignInButton')

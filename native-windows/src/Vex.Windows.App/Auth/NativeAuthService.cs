@@ -80,11 +80,11 @@ public sealed class NativeAuthService
         try
         {
             ClearAuthArtifacts();
-            await _coordinator.SignInAndProvisionAsync(
+            await _coordinator.SignInAsync(
                 email,
                 password,
                 cancellationToken).ConfigureAwait(false);
-            Notice = "Вход выполнен.";
+            Notice = "Вход выполнен. VPN будет подготовлен при подключении.";
             Error = null;
         }
         catch (Exception error) when (
@@ -95,7 +95,7 @@ public sealed class NativeAuthService
                 System.Security.Cryptography.CryptographicException or
                 System.Text.Json.JsonException or
                 HttpRequestException or
-                TaskCanceledException or
+                OperationCanceledException or
                 VexApiException or
                 NativeClientFlowException)
         {
@@ -144,7 +144,7 @@ public sealed class NativeAuthService
         catch (Exception error) when (
             error is ArgumentException or
                 HttpRequestException or
-                TaskCanceledException or
+                OperationCanceledException or
                 VexApiException)
         {
             Notice = null;
@@ -185,11 +185,12 @@ public sealed class NativeAuthService
                 EmailOtpChallenge.ChallengeId,
                 code,
                 cancellationToken).ConfigureAwait(false);
-            await _coordinator.ProvisionAuthenticatedSessionAsync(
+            cancellationToken.ThrowIfCancellationRequested();
+            await _coordinator.AcceptAuthenticatedSessionAsync(
                 session,
                 cancellationToken).ConfigureAwait(false);
             ClearAuthArtifacts();
-            Notice = "Вход по коду выполнен.";
+            Notice = "Вход по коду выполнен. VPN будет подготовлен при подключении.";
             Error = null;
         }
         catch (Exception error) when (
@@ -200,7 +201,7 @@ public sealed class NativeAuthService
                 System.Security.Cryptography.CryptographicException or
                 System.Text.Json.JsonException or
                 HttpRequestException or
-                TaskCanceledException or
+                OperationCanceledException or
                 VexApiException or
                 NativeClientFlowException)
         {
@@ -329,7 +330,7 @@ public sealed class NativeAuthService
                 exchange.CodeVerifier,
                 linked.Token).WaitAsync(linked.Token).ConfigureAwait(false);
             linked.Token.ThrowIfCancellationRequested();
-            await _coordinator.ProvisionAuthenticatedSessionAsync(
+            await _coordinator.AcceptAuthenticatedSessionAsync(
                 session,
                 linked.Token).WaitAsync(linked.Token).ConfigureAwait(false);
             lock (_browserSync)
@@ -341,7 +342,7 @@ public sealed class NativeAuthService
                 _browserAuthInvalidated = true;
                 _browserAttempt = null;
                 var cleared = TryClearPkceState();
-                Notice = "Вход через сайт завершен.";
+                Notice = "Вход через сайт завершен. VPN будет подготовлен при подключении.";
                 Error = cleared ? null : "Вход выполнен, но временные данные входа не удалось удалить.";
             }
             attempt.Cancel();

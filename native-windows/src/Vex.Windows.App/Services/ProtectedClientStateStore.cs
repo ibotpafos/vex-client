@@ -31,8 +31,7 @@ public sealed class ProtectedClientStateStore :
     private readonly string _deviceStateFile;
     private readonly string _deviceIdentityFile;
     private readonly string _windowsHelloPreferenceFile;
-    private bool _windowsHelloRequired;
-    private bool _sessionUnlocked;
+    private readonly WindowsHelloSessionState _windowsHello;
     private bool _sessionCacheUnavailable;
 
     public string? StoredSessionError { get; private set; }
@@ -53,7 +52,7 @@ public sealed class ProtectedClientStateStore :
         _deviceIdentityFile = Path.Combine(directory, "device-identity.bin");
         _windowsHelloPreferenceFile = Path.Combine(directory, "windows-hello.bin");
         var helloPreference = ReadProtected<StoredWindowsHelloPreference>(_windowsHelloPreferenceFile);
-        _windowsHelloRequired = helloPreference.Kind switch
+        var helloRequired = helloPreference.Kind switch
         {
             ProtectedFileReadKind.Missing => false,
             ProtectedFileReadKind.Available => helloPreference.Value!.Enabled,
@@ -63,7 +62,7 @@ public sealed class ProtectedClientStateStore :
         {
             StoredSessionError = "Параметры Windows Hello недоступны. Сохраненная сессия остается заблокированной.";
         }
-        _sessionUnlocked = !_windowsHelloRequired;
+        _windowsHello = new WindowsHelloSessionState(helloRequired);
     }
 
     public ClientStateAccessKind GetAccessState()
@@ -83,7 +82,8 @@ public sealed class ProtectedClientStateStore :
             return ClientStateAccessKind.Missing;
         }
 
-        if (!_windowsHelloRequired || _sessionUnlocked)
+        var hello = _windowsHello.Snapshot;
+        if (!hello.IsRequired || hello.IsUnlocked)
         {
             return _sessionCacheUnavailable
                 ? ClientStateAccessKind.Missing
@@ -101,7 +101,7 @@ public sealed class ProtectedClientStateStore :
         return new WindowsHelloStatus(
             availability.IsAvailable,
             availability.Label,
-            _windowsHelloRequired,
+            _windowsHello.Snapshot.IsRequired,
             GetAccessState());
     }
 
@@ -109,6 +109,7 @@ public sealed class ProtectedClientStateStore :
         nint windowHandle,
         CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (GetAccessState() == ClientStateAccessKind.Missing)
         {
             throw new InvalidOperationException(
@@ -117,83 +118,58 @@ public sealed class ProtectedClientStateStore :
 
         var availability = await _windowsHelloAuth.GetAvailabilityAsync(
             cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
         if (!availability.IsAvailable)
         {
             throw new InvalidOperationException(
                 "Windows Hello недоступен на этом устройстве.");
         }
 
-        var verified = await _windowsHelloAuth.VerifyAsync(
-            windowHandle,
-            "Подтвердите включение Windows Hello для VEX.",
-            cancellationToken).ConfigureAwait(false);
-        if (!verified.Success)
-        {
-            throw new InvalidOperationException(
-                verified.Message);
-        }
-
-        _windowsHelloRequired = true;
-        _sessionUnlocked = true;
-        SaveProtected(
-            _windowsHelloPreferenceFile,
-            new StoredWindowsHelloPreference(
-                Enabled: true));
+        await _windowsHello.SetRequiredAsync(true,
+            token => VerifyHelloAsync(windowHandle,
+                "Подтвердите включение Windows Hello для VEX.", token),
+            PersistHelloPreference, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task UnlockAsync(
         nint windowHandle,
         CancellationToken cancellationToken)
     {
-        if (!_windowsHelloRequired)
-        {
-            _sessionUnlocked = true;
-            return;
-        }
-
-        if (GetAccessState() == ClientStateAccessKind.Missing)
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_windowsHello.Snapshot.IsRequired && GetAccessState() == ClientStateAccessKind.Missing)
         {
             throw new InvalidOperationException(
                 "Сохраненная сессия не найдена.");
         }
 
-        var verified = await _windowsHelloAuth.VerifyAsync(
-            windowHandle,
-            "Подтвердите вход в VEX через Windows Hello.",
+        await _windowsHello.UnlockAsync(
+            token => VerifyHelloAsync(windowHandle,
+                "Подтвердите вход в VEX через Windows Hello.", token),
             cancellationToken).ConfigureAwait(false);
-        if (!verified.Success)
-        {
-            throw new InvalidOperationException(
-                verified.Message);
-        }
-
-        _sessionUnlocked = true;
     }
 
     public async Task DisableWindowsHelloAsync(
         nint windowHandle,
         CancellationToken cancellationToken)
     {
-        if (_windowsHelloRequired)
-        {
-            var verified = await _windowsHelloAuth.VerifyAsync(
-                windowHandle,
-                "Подтвердите отключение Windows Hello для VEX.",
-                cancellationToken).ConfigureAwait(false);
-            if (!verified.Success)
-            {
-                throw new InvalidOperationException(
-                    verified.Message);
-            }
-        }
-
-        _windowsHelloRequired = false;
-        _sessionUnlocked = true;
-        SaveProtected(
-            _windowsHelloPreferenceFile,
-            new StoredWindowsHelloPreference(
-                Enabled: false));
+        await _windowsHello.SetRequiredAsync(false,
+            token => VerifyHelloAsync(windowHandle,
+                "Подтвердите отключение Windows Hello для VEX.", token),
+            PersistHelloPreference, cancellationToken).ConfigureAwait(false);
     }
+
+    private async Task VerifyHelloAsync(nint windowHandle, string message,
+        CancellationToken cancellationToken)
+    {
+        var verified = await _windowsHelloAuth.VerifyAsync(windowHandle, message,
+            cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!verified.Success) throw new InvalidOperationException(verified.Message);
+    }
+
+    private void PersistHelloPreference(bool required, CancellationToken cancellationToken) =>
+        SaveProtected(_windowsHelloPreferenceFile,
+            new StoredWindowsHelloPreference(required), cancellationToken);
 
     public string GetOrCreateInstallationId()
     {
@@ -223,16 +199,7 @@ public sealed class ProtectedClientStateStore :
             _stateFile,
             Unprotect,
             JsonOptions,
-            state => state.Session?.User is not null &&
-                !string.IsNullOrWhiteSpace(state.Session.User.Id) &&
-                !string.IsNullOrWhiteSpace(state.Session.User.Email) &&
-                !string.IsNullOrWhiteSpace(state.Session.AccessToken) &&
-                !string.IsNullOrWhiteSpace(state.InstallationId) &&
-                !string.IsNullOrWhiteSpace(state.DeviceId) &&
-                !string.IsNullOrWhiteSpace(state.LocationId) &&
-                state.Identity is { KeyEpoch: > 0 } &&
-                !string.IsNullOrWhiteSpace(state.Identity.PrivateKey) &&
-                !string.IsNullOrWhiteSpace(state.Identity.PublicKey));
+            NativeClientStateValidation.IsValid);
         if (result.Kind is ProtectedFileReadKind.Unusable or ProtectedFileReadKind.Unavailable)
         {
             _sessionCacheUnavailable = true;
@@ -292,6 +259,8 @@ public sealed class ProtectedClientStateStore :
     public void Save(NativeClientState state)
     {
         ArgumentNullException.ThrowIfNull(state);
+        if (!NativeClientStateValidation.IsValid(state))
+            throw new JsonException("Сохраненная сессия VEX неполна или содержит неподтвержденное VPN-устройство.");
         var clearState = JsonSerializer.SerializeToUtf8Bytes(
             state,
             JsonOptions);
@@ -306,14 +275,16 @@ public sealed class ProtectedClientStateStore :
             var temporaryFile = _stateFile + ".new";
             File.WriteAllBytes(temporaryFile, protectedState);
             File.Move(temporaryFile, _stateFile, overwrite: true);
-            SaveProtected(
-                _deviceStateFile,
-                new NativeDeviceState(
-                    state.InstallationId,
-                    state.DeviceId,
-                    state.LocationId,
-                    state.Identity));
-            _sessionUnlocked = true;
+            if (!state.VpnProvisioningPending)
+                SaveProtected(
+                    _deviceStateFile,
+                    new NativeDeviceState(
+                        state.InstallationId,
+                        state.DeviceId,
+                        state.LocationId,
+                        state.Identity,
+                        state.Session.User.Id));
+            _windowsHello.SessionSaved();
             _sessionCacheUnavailable = false;
             StoredSessionError = null;
         }
@@ -330,7 +301,7 @@ public sealed class ProtectedClientStateStore :
             File.Delete(_stateFile);
         }
 
-        _sessionUnlocked = !_windowsHelloRequired;
+        _windowsHello.SessionCleared();
         _sessionCacheUnavailable = false;
         StoredSessionError = null;
     }
@@ -353,7 +324,8 @@ public sealed class ProtectedClientStateStore :
     private static byte[] Unprotect(byte[] value) =>
         ProtectedData.Unprotect(value, Entropy, DataProtectionScope.CurrentUser);
 
-    private static void SaveProtected<T>(string path, T value)
+    private static void SaveProtected<T>(string path, T value,
+        CancellationToken cancellationToken = default)
     {
         var clearValue = JsonSerializer.SerializeToUtf8Bytes(
             value,
@@ -364,8 +336,7 @@ public sealed class ProtectedClientStateStore :
                 clearValue,
                 Entropy,
                 DataProtectionScope.CurrentUser);
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllBytes(path, protectedValue);
+            ProtectedStateFileWriter.Write(path, protectedValue, cancellationToken);
         }
         finally
         {

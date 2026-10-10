@@ -219,17 +219,22 @@ public static class CustomerRealtimeRefreshPolicy
 
 public sealed class CustomerRealtimeClient : IAsyncDisposable
 {
+    public static readonly TimeSpan LivenessDeadline = TimeSpan.FromSeconds(90);
     private readonly HttpClient _httpClient;
+    private readonly TimeSpan _livenessTimeout;
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
     private CancellationTokenSource? _streamLifetime;
     private Task? _streamTask;
     private string? _streamTokenFingerprint;
     private string? _rejectedTokenFingerprint;
 
-    public CustomerRealtimeClient(HttpClient httpClient)
+    public CustomerRealtimeClient(HttpClient httpClient, TimeSpan? livenessTimeout = null)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
         _httpClient = httpClient;
+        _livenessTimeout = livenessTimeout ?? LivenessDeadline;
+        if (_livenessTimeout <= TimeSpan.Zero || _livenessTimeout.TotalMilliseconds > uint.MaxValue - 1)
+            throw new ArgumentOutOfRangeException(nameof(livenessTimeout));
     }
 
     public event EventHandler<CustomerRealtimeChangedEventArgs>? Changed;
@@ -325,6 +330,7 @@ public sealed class CustomerRealtimeClient : IAsyncDisposable
                 lastEventId = await ReadStreamAsync(
                     accessToken,
                     lastEventId,
+                    eventId => lastEventId = eventId,
                     cancellationToken).ConfigureAwait(false);
                 attempt = 0;
             }
@@ -354,8 +360,30 @@ public sealed class CustomerRealtimeClient : IAsyncDisposable
     private async Task<string> ReadStreamAsync(
         string accessToken,
         string lastEventId,
+        Action<string> recordEventId,
         CancellationToken cancellationToken)
     {
+        using var liveness = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        liveness.CancelAfter(_livenessTimeout);
+        try
+        {
+            return await ReadStreamCoreAsync(accessToken, lastEventId, recordEventId, liveness).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException error) when (!cancellationToken.IsCancellationRequested)
+        {
+            // Transport timeouts are reconnectable failures. Only a real HTTP
+            // 401 or session-invalid frame requests credential recovery.
+            throw new IOException("The realtime stream stopped making progress.", error);
+        }
+    }
+
+    private async Task<string> ReadStreamCoreAsync(
+        string accessToken,
+        string lastEventId,
+        Action<string> recordEventId,
+        CancellationTokenSource liveness)
+    {
+        var cancellationToken = liveness.Token;
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
             "/v1/events");
@@ -388,12 +416,16 @@ public sealed class CustomerRealtimeClient : IAsyncDisposable
                     TokenFingerprint(accessToken)));
         }
         response.EnsureSuccessStatusCode();
+        liveness.CancelAfter(_livenessTimeout);
         SetConnected(true);
 
         await using var stream = await response.Content
             .ReadAsStreamAsync(cancellationToken)
             .ConfigureAwait(false);
-        using var reader = new StreamReader(stream, Encoding.UTF8);
+        // Reset on bytes rather than complete lines: a frame may arrive in
+        // several reads, and comments/heartbeats also prove transport liveness.
+        using var reader = new StreamReader(
+            new LivenessStream(stream, liveness, _livenessTimeout), Encoding.UTF8);
         var parser = new CustomerSseParser();
         while (true)
         {
@@ -408,6 +440,7 @@ public sealed class CustomerRealtimeClient : IAsyncDisposable
                 if (!string.IsNullOrEmpty(realtimeEvent.Id))
                 {
                     lastEventId = realtimeEvent.Id;
+                    recordEventId(lastEventId);
                 }
                 var metadata = CustomerRealtimeMetadata.Parse(
                     realtimeEvent.Type,
@@ -431,6 +464,48 @@ public sealed class CustomerRealtimeClient : IAsyncDisposable
         }
         SetConnected(false);
         return lastEventId;
+    }
+
+    private sealed class LivenessStream(
+        Stream stream,
+        CancellationTokenSource liveness,
+        TimeSpan timeout) : Stream
+    {
+        public override bool CanRead => stream.CanRead;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            var read = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+            if (read > 0) liveness.CancelAfter(timeout);
+            return read;
+        }
+
+        public override Task<int> ReadAsync(
+            byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            var read = stream.Read(buffer, offset, count);
+            if (read > 0) liveness.CancelAfter(timeout);
+            return read;
+        }
+
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        // The enclosing await-using owns the HTTP response stream.
     }
 
     private void SetConnected(bool connected)

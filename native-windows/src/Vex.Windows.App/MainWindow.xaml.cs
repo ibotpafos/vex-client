@@ -12,6 +12,8 @@ using System.Runtime.InteropServices;
 using Vex.Windows.App.Services;
 using Vex.Windows.App.Views;
 using Vex.Windows.Core.Navigation;
+using Vex.Windows.Core.Presentation;
+using Vex.Windows.Client.Api;
 using WinRT.Interop;
 
 namespace Vex.Windows.App;
@@ -24,6 +26,7 @@ public sealed partial class MainWindow : Window
     private bool _closed;
     private bool _hasAuthenticatedSession;
     private long _authGeneration;
+    private long _serverHealthGeneration;
     private AppSection _currentSection = AppSection.Home;
     private readonly CancellationTokenSource _shellLifetime = new();
     private ContainerVisual? _ambientVisual;
@@ -31,14 +34,18 @@ public sealed partial class MainWindow : Window
     private SpriteVisual? _lightVisual;
     private CompositionColorGradientStop? _accentStop;
     private CompositionColorGradientStop? _accentFadeStop;
+    private readonly NativeMethods.WindowSubclassProcedure _minimumSizeProcedure;
+    private nint _minimumSizeWindowHandle;
 
     public MainWindow()
     {
+        _minimumSizeProcedure = OnWindowMessage;
         InitializeComponent();
         Title = "VEX";
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(FocusPulseHeader);
         ConfigureTitleBar();
+        ConfigureMinimumWindowSize();
         ResizeForCurrentDpi();
         AppWindow.Closing += OnAppWindowClosing;
         ConfigureNavigation();
@@ -203,6 +210,39 @@ public sealed partial class MainWindow : Window
             height));
     }
 
+    private void ConfigureMinimumWindowSize()
+    {
+        var handle = WindowNative.GetWindowHandle(this);
+        if (NativeMethods.SetWindowSubclass(handle, _minimumSizeProcedure, 1, 0))
+            _minimumSizeWindowHandle = handle;
+        else Debug.WriteLine("Minimum window size tracking could not be installed.");
+    }
+
+    private nint OnWindowMessage(nint handle, uint message, nuint wParam, nint lParam,
+        nuint subclassId, nuint referenceData)
+    {
+        var result = NativeMethods.DefSubclassProc(handle, message, wParam, lParam);
+        if (message == NativeMethods.GetMinMaxInfo && lParam != 0)
+        {
+            try
+            {
+                var workArea = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Primary).WorkArea;
+                var minimum = DesktopWindowSizingPolicy.MinimumTrackingSize(NativeMethods.GetDpiForWindow(handle),
+                    workArea.Width, workArea.Height);
+                var info = Marshal.PtrToStructure<NativeMethods.MinMaxInfo>(lParam);
+                info.MinimumTrackSize.X = Math.Max(info.MinimumTrackSize.X, minimum.Width);
+                info.MinimumTrackSize.Y = Math.Max(info.MinimumTrackSize.Y, minimum.Height);
+                Marshal.StructureToPtr(info, lParam, fDeleteOld: false);
+            }
+            catch (Exception error)
+            {
+                // A native callback must never unwind into the window manager.
+                Debug.WriteLine($"Minimum window size query failed: {error.GetType().Name}");
+            }
+        }
+        return result;
+    }
+
     private void ConfigureTitleBar()
     {
         var iconPath = Path.Combine(
@@ -286,6 +326,11 @@ public sealed partial class MainWindow : Window
     private void OnWindowClosed(object sender, WindowEventArgs args)
     {
         _closed = true;
+        if (_minimumSizeWindowHandle != 0)
+        {
+            NativeMethods.RemoveWindowSubclass(_minimumSizeWindowHandle, _minimumSizeProcedure, 1);
+            _minimumSizeWindowHandle = 0;
+        }
         AppServices.Current.Auth.StateChanged -= OnAuthStateChanged;
         AppServices.Current.UpdateService.Changed -= OnUpdateSnapshotChanged;
         AppWindow.Closing -= OnAppWindowClosing;
@@ -346,10 +391,10 @@ public sealed partial class MainWindow : Window
     private async Task RefreshServerHealthAsync()
     {
         if (_closed) return;
+        var healthGeneration = ++_serverHealthGeneration;
         if (!_hasAuthenticatedSession)
         {
-            ServerHealthDot.Fill = (SolidColorBrush)Application.Current.Resources["VexMutedBrush"];
-            ToolTipService.SetToolTip(ServerHealthDot, "Статус серверов пока неизвестен");
+            RenderServerHealth(ServerHealthStatus.Unknown);
             return;
         }
         var generation = _authGeneration;
@@ -359,35 +404,39 @@ public sealed partial class MainWindow : Window
                 await AppServices.Current.ProductParity.GetLocationsAsync(
                     AppServices.Current.Coordinator,
                     _shellLifetime.Token);
-            if (_shellLifetime.IsCancellationRequested || generation != _authGeneration || !_hasAuthenticatedSession) return;
-            var available = locations.Any(location =>
-                location.HealthyNodes > 0 &&
-                !string.Equals(
-                    location.Status,
-                    "offline",
-                    StringComparison.OrdinalIgnoreCase));
-            ServerHealthDot.Fill = new SolidColorBrush(
-                available
-                    ? global::Windows.UI.Color.FromArgb(
-                        0xFF, 0x2E, 0xC7, 0x59)
-                    : global::Windows.UI.Color.FromArgb(
-                        0xFF, 0xFF, 0xBF, 0x29));
-            ToolTipService.SetToolTip(
-                ServerHealthDot,
-                available
-                    ? "Серверы VEX доступны"
-                    : "Часть серверов недоступна");
+            if (_shellLifetime.IsCancellationRequested || generation != _authGeneration || !_hasAuthenticatedSession ||
+                healthGeneration != _serverHealthGeneration) return;
+            UpdateServerHealth(locations);
         }
         catch
         {
-            if (_shellLifetime.IsCancellationRequested || generation != _authGeneration || !_hasAuthenticatedSession) return;
-            ServerHealthDot.Fill = new SolidColorBrush(
-                global::Windows.UI.Color.FromArgb(
-                    0xFF, 0x8F, 0xBE, 0xC6));
-            ToolTipService.SetToolTip(
-                ServerHealthDot,
-                "Статус серверов пока неизвестен");
+            if (_shellLifetime.IsCancellationRequested || generation != _authGeneration || !_hasAuthenticatedSession ||
+                healthGeneration != _serverHealthGeneration) return;
+            RenderServerHealth(ServerHealthStatus.Unknown);
         }
+    }
+
+    public void UpdateServerHealth(IReadOnlyList<VpnLocation> locations, bool loading = false)
+    {
+        if (_closed) return;
+        _serverHealthGeneration++;
+        RenderServerHealth(ServerHealthPresentation.Evaluate(locations.Select(location =>
+            new ServerHealthLocation(location.Status, location.Availability, location.HealthyNodes)),
+            _hasAuthenticatedSession, loading));
+    }
+
+    private void RenderServerHealth(ServerHealthStatus status)
+    {
+        ServerHealthDot.Fill = status switch
+        {
+            ServerHealthStatus.Available => new SolidColorBrush(global::Windows.UI.Color.FromArgb(0xFF, 0x2E, 0xC7, 0x59)),
+            ServerHealthStatus.Degraded => new SolidColorBrush(global::Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xBF, 0x29)),
+            ServerHealthStatus.Unavailable => new SolidColorBrush(global::Windows.UI.Color.FromArgb(0xFF, 0xFF, 0x59, 0x61)),
+            _ => (SolidColorBrush)Application.Current.Resources["VexMutedBrush"],
+        };
+        var title = ServerHealthPresentation.Title(status);
+        ToolTipService.SetToolTip(ServerHealthDot, title);
+        AutomationProperties.SetName(HeaderBrandText, $"VEX. {title}");
     }
 
     private Type ResolvePage(AppSection section) =>
@@ -457,6 +506,40 @@ public sealed partial class MainWindow : Window
     {
         public const int ShowWindowHide = 0;
         public const int ShowWindowRestore = 9;
+        public const uint GetMinMaxInfo = 0x0024;
+
+        [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+        public delegate nint WindowSubclassProcedure(nint handle, uint message, nuint wParam,
+            nint lParam, nuint subclassId, nuint referenceData);
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct NativePoint
+        {
+            public int X;
+            public int Y;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct MinMaxInfo
+        {
+            public NativePoint Reserved;
+            public NativePoint MaximumSize;
+            public NativePoint MaximumPosition;
+            public NativePoint MinimumTrackSize;
+            public NativePoint MaximumTrackSize;
+        }
+
+        [DllImport("comctl32.dll", ExactSpelling = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool SetWindowSubclass(nint handle, WindowSubclassProcedure procedure,
+            nuint subclassId, nuint referenceData);
+
+        [DllImport("comctl32.dll", ExactSpelling = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool RemoveWindowSubclass(nint handle, WindowSubclassProcedure procedure, nuint subclassId);
+
+        [DllImport("comctl32.dll", ExactSpelling = true)]
+        public static extern nint DefSubclassProc(nint handle, uint message, nuint wParam, nint lParam);
 
         [LibraryImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]

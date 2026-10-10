@@ -97,7 +97,9 @@ public static class WindowsUpdateManifestVerifier
                 CurrentChannel: expectedChannel,
                 CurrentArchitecture: expectedArchitecture,
                 Release: candidate.Release,
-                RollbackState: rollbackState);
+                RollbackState: candidate.Release.Required
+                    ? RecordRequiredTarget(rollbackState, candidate.Version)
+                    : rollbackState);
         }
 
         return new WindowsUpdateAssessment(
@@ -177,6 +179,13 @@ public static class WindowsUpdateManifestVerifier
         return version;
     }
 
+    private static WindowsUpdateRollbackState RecordRequiredTarget(
+        WindowsUpdateRollbackState state, Version version) =>
+        state.RequiredTargetVersion is { } previous &&
+            ParseVersion(previous, "persisted_required_target_version") >= version
+            ? state
+            : state with { RequiredTargetVersion = version.ToString() };
+
     private static WindowsUpdateRollbackState ValidateRollbackState(
         WindowsUpdateManifest manifest,
         WindowsUpdateVerificationOptions options)
@@ -194,6 +203,8 @@ public static class WindowsUpdateManifestVerifier
             "required_version_floor");
         if (previous is not null)
         {
+            if (previous.RequiredTargetVersion is { } target)
+                _ = ParseVersion(target, "persisted_required_target_version");
             if (manifest.ManifestRevision.Value <
                 previous.HighestManifestRevision)
             {
@@ -213,7 +224,8 @@ public static class WindowsUpdateManifestVerifier
 
         return new WindowsUpdateRollbackState(
             manifest.ManifestRevision.Value,
-            requiredFloor.ToString());
+            requiredFloor.ToString(),
+            previous?.RequiredTargetVersion);
     }
 
     private static void ValidateManifestEnvelope(

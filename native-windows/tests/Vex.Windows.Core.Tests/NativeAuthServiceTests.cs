@@ -36,9 +36,10 @@ internal static class NativeAuthServiceTests
 
         await fixture.Auth.HandleProtocolActivationAsync(Callback(pending), CancellationToken.None);
 
-        Check(fixture.Api.RegisterCalls == 1 && fixture.Store.SaveCount == 1 &&
-            fixture.Store.State?.Session.User.Email == "user@example.com",
-            "A valid browser callback did not provision and persist its session exactly once.");
+        Check(fixture.Api.RegisterCalls == 0 && fixture.Store.SaveCount == 1 &&
+            fixture.Store.State is { VpnProvisioningPending: true, DeviceId: "" } &&
+            fixture.Store.State.Session.User.Email == "user@example.com",
+            "A valid browser callback did not persist its session independently of VPN provisioning.");
         Check(fixture.Pkce.Pending is null && !fixture.Auth.IsWaitingForBrowserAuth &&
             fixture.Auth.Error is null && !string.IsNullOrEmpty(fixture.Auth.Notice),
             "Successful browser login retained its pending challenge or error.");
@@ -87,7 +88,8 @@ internal static class NativeAuthServiceTests
 
         await fixture.Auth.HandleProtocolActivationAsync(Callback(pending), CancellationToken.None);
 
-        Check(fixture.Api.RegisterCalls == 1 && fixture.Store.SaveCount == 1 && fixture.Pkce.Pending is null &&
+        Check(fixture.Api.RegisterCalls == 0 && fixture.Store.SaveCount == 1 &&
+            fixture.Store.State?.VpnProvisioningPending == true && fixture.Pkce.Pending is null &&
             fixture.Auth.Error is null && !fixture.Auth.IsWaitingForBrowserAuth,
             "A valid persisted PKCE callback could not finish after application restart.");
     }
@@ -106,26 +108,18 @@ internal static class NativeAuthServiceTests
             started.TrySetResult();
             return response.Task; // The registration server can complete after local cancellation.
         };
-        await fixture.Auth.StartBrowserAuthAsync(WebAuthMode.Login, CancellationToken.None);
-        var callback = fixture.Auth.HandleProtocolActivationAsync(Callback(RequireChallenge(fixture)),
-            CancellationToken.None);
+        using var cancellation = new CancellationTokenSource();
+        var callback = fixture.Coordinator.ProvisionAuthenticatedSessionAsync(Session(), cancellation.Token);
         await started.Task.WaitAsync(Deadline);
 
-        fixture.Pkce.BeforeClear = () => Check(registrationToken.IsCancellationRequested,
-            "Cancellation attempted disk cleanup before stopping in-flight provisioning.");
-        fixture.Auth.CancelBrowserAuth();
-        var cancellationNotice = fixture.Auth.Notice;
+        cancellation.Cancel();
         Check(registrationToken.IsCancellationRequested,
             "Cancel did not reach the authenticated provisioning operation.");
         response.TrySetResult(new VpnDevice("late-device", "Windows", "active", "public-key"));
-        await callback.WaitAsync(Deadline);
-        await DrainProvisioningAsync(fixture);
+        await ExpectCancelledAsync(callback);
 
         Check(registrations == 1 && fixture.Store.SaveCount == 0 && fixture.Store.State is null,
             "A registration completing after cancellation saved an authenticated session.");
-        Check(fixture.Pkce.Pending is null && fixture.Auth.Notice == cancellationNotice &&
-            fixture.Auth.Error is null && !fixture.Auth.IsWaitingForBrowserAuth,
-            "Late registration overwrote cancellation or restored its challenge.");
     }
 
     private static async Task CancellationDuringLocationsCannotRegisterAsync()
@@ -140,23 +134,18 @@ internal static class NativeAuthServiceTests
             started.TrySetResult();
             return locations.Task;
         };
-        await fixture.Auth.StartBrowserAuthAsync(WebAuthMode.Login, CancellationToken.None);
-        var callback = fixture.Auth.HandleProtocolActivationAsync(Callback(RequireChallenge(fixture)),
-            CancellationToken.None);
+        using var cancellation = new CancellationTokenSource();
+        var callback = fixture.Coordinator.ProvisionAuthenticatedSessionAsync(Session(), cancellation.Token);
         await started.Task.WaitAsync(Deadline);
 
-        fixture.Auth.CancelBrowserAuth();
-        var cancellationNotice = fixture.Auth.Notice;
+        cancellation.Cancel();
         Check(locationsToken.IsCancellationRequested,
             "Cancel did not reach authenticated location discovery.");
         locations.TrySetResult(fixture.Api.Locations);
-        await callback.WaitAsync(Deadline);
-        await DrainProvisioningAsync(fixture);
+        await ExpectCancelledAsync(callback);
 
         Check(fixture.Api.RegisterCalls == 0 && fixture.Store.SaveCount == 0 && fixture.Store.State is null,
             "Location discovery completing after cancellation still registered or saved the session.");
-        Check(fixture.Auth.Notice == cancellationNotice && fixture.Auth.Error is null,
-            "Cancelled location discovery overwrote the cancellation status.");
     }
 
     private static async Task FreshRegistrationSurvivesOldCallbackCompletionAsync()
@@ -220,17 +209,13 @@ internal static class NativeAuthServiceTests
     {
         var fixture = new Fixture();
         var started = Signal();
-        var registration = Result<VpnDevice>();
+        var exchange = Result<VexAuthSession>();
         var exchanges = 0;
         fixture.Proxy.Overrides[nameof(INativeClientApi.ExchangeAppAuthCodeAsync)] = _ =>
         {
             exchanges++;
-            return Task.FromResult(Session());
-        };
-        fixture.Proxy.Overrides[nameof(INativeClientApi.RegisterNativeDeviceAsync)] = _ =>
-        {
             started.TrySetResult();
-            return registration.Task;
+            return exchange.Task;
         };
         await fixture.Auth.StartBrowserAuthAsync(WebAuthMode.Login, CancellationToken.None);
         var oldPending = RequireChallenge(fixture);
@@ -240,7 +225,7 @@ internal static class NativeAuthServiceTests
         fixture.Auth.CancelBrowserAuth();
         var freshAttempt = fixture.Auth.StartBrowserAuthAsync(WebAuthMode.Register, CancellationToken.None);
         var staleCallback = fixture.Auth.HandleProtocolActivationAsync(Callback(oldPending), CancellationToken.None);
-        registration.TrySetResult(new VpnDevice("late-device", "Windows", "active", "public-key"));
+        exchange.TrySetResult(Session());
         await Task.WhenAll(oldCallback, freshAttempt, staleCallback).WaitAsync(Deadline);
         await DrainProvisioningAsync(fixture);
 
@@ -322,6 +307,16 @@ internal static class NativeAuthServiceTests
             await fixture.Coordinator.ValidateEntitlementAsync(deadline.Token);
         }
         catch (NativeClientFlowException error) when (error.Code == "sign_in_required") { }
+    }
+
+    private static async Task ExpectCancelledAsync(Task task)
+    {
+        try
+        {
+            await task.WaitAsync(Deadline);
+            throw new InvalidOperationException("Cancelled provisioning completed successfully.");
+        }
+        catch (OperationCanceledException) { }
     }
 
     private static PendingPkceChallenge RequireChallenge(Fixture fixture) =>

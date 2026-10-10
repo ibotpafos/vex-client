@@ -149,7 +149,7 @@ requireText(
 );
 
 const updateService = read(
-  path.join(windowsRoot, "src", "Vex.Windows.App", "Services", "NativeUpdateService.cs"),
+  path.join(windowsRoot, "src", "Vex.Windows.App", "Services", "NativeUpdateService.Windows.cs"),
 );
 requireText(
   updateService,

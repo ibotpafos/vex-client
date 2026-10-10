@@ -40,7 +40,7 @@ public sealed partial class NativeClientCoordinator
         NativeClientState? captured;
         try { captured = _stateStore.Load(); }
         finally { _gate.Release(); }
-        if (captured is null || captured.PendingIdentity is not null ||
+        if (captured is null || captured.VpnProvisioningPending || captured.PendingIdentity is not null ||
             captured.Session.ExpiresAt <= _utcNow() + RefreshWindow ||
             (locationId is not null && locationId != captured.LocationId)) return false;
         locationId = captured.LocationId;
@@ -156,7 +156,7 @@ public sealed partial class NativeClientCoordinator
             ValidateRoutingMode(routingMode);
             bypassRegion = NormalizeBypassRegion(routingMode, bypassRegion);
             if (_stateStore.GetAccessState() != ClientStateAccessKind.Available || _stateStore.Load() is not { } state ||
-                state.PendingIdentity is not null || !HasBoundedOfflineEntitlement(state)) return false;
+                state.VpnProvisioningPending || state.PendingIdentity is not null || !HasBoundedOfflineEntitlement(state)) return false;
             var target = state with { RoutingMode = routingMode, BypassRegion = bypassRegion };
             var grant = MatchingWarmedProfile(target);
             if (grant is not null && _profileWarmupVerifier?.Invoke() is { } verifier &&

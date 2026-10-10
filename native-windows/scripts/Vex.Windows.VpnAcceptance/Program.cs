@@ -14,6 +14,8 @@ using Vex.Windows.Core.Vpn;
 using Vex.Windows.Service;
 using Vex.Windows.Service.Runtime;
 
+namespace Vex.Windows.VpnAcceptance;
+
 // This executable is deliberately restricted to a fresh GitHub-hosted Windows
 // runner. It invokes the real VEX verifier/materializer/runtime with a temporary
 // trust anchor and an isolated AWG peer; no production API or credentials exist.
@@ -25,6 +27,8 @@ internal static class Program
 
     public static async Task<int> Main(string[] args)
     {
+        if (args.Length == 3 && args[0] == "--fixture-service")
+            return await ScmIpcFixture.RunServiceAsync(args);
         if (args.Length != 4 || args[0] != "--disposable-runner") { return 2; }
         var directory = Path.GetFullPath(args[1]);
         var runtimeDirectory = Path.GetFullPath(args[2]);
@@ -59,14 +63,9 @@ internal static class Program
                     nic.GetIPProperties().UnicastAddresses.Any(address => address.Address.Equals(endpoint.Address))),
                 "fixture_endpoint_not_host_local");
 
-            var dataDirectory = Path.Combine(directory, "service-state");
+            var options = FixtureOptions(directory, runtimeDirectory, manifest.Endpoint);
+            var dataDirectory = options.DataDirectory;
             Directory.CreateDirectory(dataDirectory);
-            var options = new WindowsServiceOptions(dataDirectory, runtimeDirectory,
-                Path.Combine(dataDirectory, "ipc-token.bin"), Path.Combine(dataDirectory, "client-cert-sha256"),
-                Path.Combine(dataDirectory, "owner-sid"), Path.Combine(directory, "amneziawg-sha256"),
-                Path.Combine(directory, "wintun-sha256"), Path.Combine(directory, "unused-keyring.json"),
-                Path.Combine(directory, "unused-keyring-sha256"))
-                { ControlPlaneBypassHosts = [], NativeLocalEndpointAddresses = [endpoint.Address.ToString()] };
             result["stage"] = "signed-profile-admission";
             var profile = SignedProfile(manifest, result);
             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(110));
@@ -142,6 +141,23 @@ internal static class Program
                 catch (Exception exception) { result["cleanup_failure_type"] = exception.GetType().FullName; exitCode = 1; }
                 runtime.Dispose();
             }
+            if (exitCode == 0)
+            {
+                result["stage"] = "scm-private-pipe-lifecycle";
+                try
+                {
+                    using var scmDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(210));
+                    await ScmIpcFixture.RunAsync(directory, runtimeDirectory, result, scmDeadline.Token);
+                }
+                catch (Exception exception)
+                {
+                    result["failure_type"] = exception.GetType().FullName;
+                    if (exception is FixtureException fixtureException) result["failure_code"] = fixtureException.Code;
+                    if (exception is System.ComponentModel.Win32Exception nativeError)
+                        result["failure_native_error"] = nativeError.NativeErrorCode;
+                    exitCode = 1;
+                }
+            }
             result["passed"] = exitCode == 0;
             if (exitCode == 0) { result["stage"] = "completed"; }
             result["completed_at_utc"] = DateTimeOffset.UtcNow;
@@ -173,7 +189,38 @@ internal static class Program
             "fixture_tunnel_address_already_present");
     }
 
+    internal static WindowsServiceOptions FixtureOptions(string directory, string runtimeDirectory, string endpoint)
+    {
+        var dataDirectory = Path.Combine(directory, "service-state");
+        return new WindowsServiceOptions(dataDirectory, runtimeDirectory,
+            Path.Combine(dataDirectory, "ipc-token.bin"), Path.Combine(dataDirectory, "client-cert-sha256"),
+            Path.Combine(dataDirectory, "owner-sid"), Path.Combine(directory, "amneziawg-sha256"),
+            Path.Combine(directory, "wintun-sha256"), Path.Combine(directory, "unused-keyring.json"),
+            Path.Combine(directory, "unused-keyring-sha256"))
+        { ControlPlaneBypassHosts = [], NativeLocalEndpointAddresses = [IPEndPoint.Parse(endpoint).Address.ToString()] };
+    }
+
     private static VpnAuthorizedProfile SignedProfile(Manifest manifest, Dictionary<string, object?> result)
+    {
+        var fixture = CreateSignedProfile(manifest);
+        var verifier = new VpnSignedProfileVerifier([fixture.SigningKey]);
+        var envelope = fixture.Authorization;
+        var tampered = Convert.FromBase64String(envelope.PayloadBase64); tampered[^2] ^= 1;
+        var rejected = false;
+        try { verifier.Authorize(new VpnProfileAuthorization(envelope.KeyId, envelope.Algorithm,
+            Convert.ToBase64String(tampered), envelope.SignatureBase64), manifest.ClientPrivateKey); }
+        catch (VpnTunnelException) { rejected = true; }
+        Require(rejected, "fixture_tampered_profile_admitted");
+        result["tampered_signature_rejected"] = true;
+        var profile = fixture.Profile;
+        Require(profile.TunnelConfig.Contains("RandomTrailers = on", StringComparison.Ordinal) &&
+            profile.TunnelConfig.Contains("DisableCookies = off", StringComparison.Ordinal), "fixture_awg31_flags_not_materialized");
+        result["signed_profile_materialized"] = true;
+        return profile;
+    }
+
+    internal static (VpnProfileAuthorization Authorization, VpnProfileSigningKey SigningKey, VpnAuthorizedProfile Profile)
+        CreateSignedProfile(Manifest manifest)
     {
         using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
         var now = DateTimeOffset.UtcNow;
@@ -200,22 +247,13 @@ internal static class Program
             },
         });
         var signature = key.SignData(payload, HashAlgorithmName.SHA256, DSASignatureFormat.Rfc3279DerSequence);
-        var verifier = new VpnSignedProfileVerifier([new VpnProfileSigningKey("ci-fixture",
-            VpnSignedProfileVerifier.SupportedAlgorithm, Convert.ToBase64String(key.ExportSubjectPublicKeyInfo()))]);
+        var signingKey = new VpnProfileSigningKey("ci-fixture",
+            VpnSignedProfileVerifier.SupportedAlgorithm, Convert.ToBase64String(key.ExportSubjectPublicKeyInfo()));
+        var verifier = new VpnSignedProfileVerifier([signingKey]);
         var envelope = new VpnProfileAuthorization("ci-fixture", VpnSignedProfileVerifier.SupportedAlgorithm,
             Convert.ToBase64String(payload), Convert.ToBase64String(signature));
-        var tampered = payload.ToArray(); tampered[^2] ^= 1;
-        var rejected = false;
-        try { verifier.Authorize(new VpnProfileAuthorization(envelope.KeyId, envelope.Algorithm,
-            Convert.ToBase64String(tampered), envelope.SignatureBase64), manifest.ClientPrivateKey); }
-        catch (VpnTunnelException) { rejected = true; }
-        Require(rejected, "fixture_tampered_profile_admitted");
-        result["tampered_signature_rejected"] = true;
         var profile = verifier.Authorize(envelope, manifest.ClientPrivateKey);
-        Require(profile.TunnelConfig.Contains("RandomTrailers = on", StringComparison.Ordinal) &&
-            profile.TunnelConfig.Contains("DisableCookies = off", StringComparison.Ordinal), "fixture_awg31_flags_not_materialized");
-        result["signed_profile_materialized"] = true;
-        return profile;
+        return (envelope, signingKey, profile);
     }
 
     private static Socket TunnelSocket(SocketType type, ProtocolType protocol, int adapterIndex)
@@ -371,12 +409,12 @@ internal static class Program
 
     private static void Require(bool condition, string code) { if (!condition) { throw new FixtureException(code); } }
 
-    private sealed class FixtureException(string code) : Exception("The isolated VPN fixture rejected this operation.")
+    internal sealed class FixtureException(string code) : Exception("The isolated VPN fixture rejected this operation.")
     {
         public string Code { get; } = code;
     }
 
-    private sealed record Manifest(
+    internal sealed record Manifest(
         [property: JsonPropertyName("schema")] string Schema,
         [property: JsonPropertyName("client_private_key")] string ClientPrivateKey,
         [property: JsonPropertyName("server_public_key")] string ServerPublicKey,

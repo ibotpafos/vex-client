@@ -10,12 +10,14 @@ public sealed class WindowsUpdateCoordinator
     private WindowsUpdateVerificationOptions _options;
     private readonly Uri _manifestUri;
     private readonly Uri _signatureUri;
+    private readonly TimeSpan _manifestCheckTimeout;
 
     public WindowsUpdateCoordinator(
         HttpClient httpClient,
         WindowsUpdateVerificationOptions options,
         Uri manifestUri,
-        Uri signatureUri)
+        Uri signatureUri,
+        TimeSpan? manifestCheckTimeout = null)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
         ArgumentNullException.ThrowIfNull(options);
@@ -26,6 +28,10 @@ public sealed class WindowsUpdateCoordinator
         _options = options;
         _manifestUri = manifestUri;
         _signatureUri = signatureUri;
+        _manifestCheckTimeout = manifestCheckTimeout ?? TimeSpan.FromSeconds(30);
+        if (_manifestCheckTimeout <= TimeSpan.Zero ||
+            _manifestCheckTimeout.TotalMilliseconds > uint.MaxValue - 1)
+            throw new ArgumentOutOfRangeException(nameof(manifestCheckTimeout));
     }
 
     public void SetRollbackState(WindowsUpdateRollbackState rollbackState)
@@ -35,6 +41,21 @@ public sealed class WindowsUpdateCoordinator
     }
 
     public async Task<WindowsUpdateAssessment> CheckForUpdateAsync(
+        CancellationToken cancellationToken)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(_manifestCheckTimeout);
+        try
+        {
+            return await CheckForUpdateCoreAsync(deadline.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException error) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new HttpRequestException("Windows update manifest check timed out.", error);
+        }
+    }
+
+    private async Task<WindowsUpdateAssessment> CheckForUpdateCoreAsync(
         CancellationToken cancellationToken)
     {
         using var manifestResponse = await _httpClient.GetAsync(

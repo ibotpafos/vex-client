@@ -18,20 +18,28 @@ using System.Text.Json.Nodes;
 var tests = new (string Name, Action Run)[]
 {
     ("Realtime session recovery preserves outages and rejects stale credential events", CustomerRealtimeSessionTests.Run),
+    ("Realtime billing and device events cannot mutate a replacement session", RealtimeScopeIsolationTests.Run),
     ("Account retains authoritative subscription data through optional section failures", ClientAccountSnapshotTests.Run),
     ("Signed profile warm-up preserves routing, identity, trust and foreground priority", ProfileWarmupTests.Run),
     ("Service repair verifies trusted health, ownership, cancellation and bounded retries", ServiceMaintenanceTests.Run),
     ("Browser authentication cancellation rejects late sessions and preserves fresh attempts", NativeAuthServiceTests.Run),
+    ("Authenticated accounts defer VPN registration and preserve session through provisioning failures", AuthenticatedSessionProvisioningTests.Run),
+    ("API errors preserve safe MFA guidance and device quota contracts", VexApiErrorContractTests.Run),
     ("Startup survives package upgrades and honors Windows ownership and disable states", StartupRegistrationTests.Run),
     ("Automatic update failures preserve retry and lifetime cancellation", NativeUpdateFailureTests.Run),
+    ("Required updates survive installer launch, restart and offline failures", NativeUpdateServiceTests.Run),
     ("App metadata decodes current server contracts and explicit historical aliases", AppMetadataContractTests.Run),
     ("Protected session cache handles corruption without replacing identity files", ProtectedStateFileTests.Run),
+    ("Windows Hello changes commit durably and reject cancelled verification", WindowsHelloSessionTests.Run),
     ("Signed relay candidates preserve authorization and bounded offline recovery", ClientSignedCandidateTests.Run),
     ("Client recovery preserves pins, authority, session and entitlement", ClientRecoveryParityTests.Run),
     ("Background recovery respects health, user intent, lock and backoff", VpnRecoveryPolicyTests.Run),
     ("UI VPN operations serialize failures and preserve explicit disconnect", VpnUiStateServiceTests.Run),
     ("Dynamic routing preserves expiry, quarantine and sticky route policy", DynamicRouteEngineTests.Run),
     ("Server catalog groups countries and preserves search, filters and favorites", ServerCatalogTests.Run),
+    ("Server picker preserves highlighted nodes and rejects busy selection", ServerPickerInteractionPolicyTests.Run),
+    ("Desktop minimum geometry scales safely to DPI and display work area", DesktopWindowSizingPolicyTests.Run),
+    ("Server health reports all, partial and unavailable catalog states", ServerHealthPresentationTests.Run),
     ("Queued diagnostics preserve failures, cancellation and rate limits", DiagnosticsQueueTests.Run),
     ("Navigation matches native macOS sections", NavigationMatchesMac),
     ("Windows location labels are localized for presentation", WindowsLocationLabelsAreLocalized),
@@ -135,6 +143,8 @@ var tests = new (string Name, Action Run)[]
     ("Native client gates VPN connect on entitlement", NativeClientGatesConnectOnEntitlement),
     ("Native client reports successful connect and disconnect", NativeClientReportsVpnLifecycle),
 };
+
+tests = [.. tests, .. VpnNamedPipeTransportTests.Cases, .. VpnRuntimeLifetimeTests.All];
 
 var failures = new List<string>();
 foreach (var test in tests.Concat(RuntimeParityTests.All))

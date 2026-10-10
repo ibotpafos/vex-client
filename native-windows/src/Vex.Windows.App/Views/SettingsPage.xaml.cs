@@ -42,6 +42,11 @@ public sealed partial class SettingsPage : Page
     private bool _isLoaded;
     private int _busyCount;
     private bool? _serviceAvailable;
+    private CancellationTokenSource? _pageLifetime;
+    private CancellationTokenSource? _refreshCancellation;
+    private int _refreshGeneration;
+    private bool _refreshInFlight;
+    private bool _refreshInterruptedByMutation;
 
     public SettingsPage()
     {
@@ -58,6 +63,7 @@ public sealed partial class SettingsPage : Page
             return;
         }
         _isLoaded = true;
+        _pageLifetime = new CancellationTokenSource();
         _services.Preferences.Changed += OnPreferencesChanged;
         _services.VpnUiState.Changed += OnVpnUiStateChanged;
         _services.UpdateService.Changed += OnUpdateSnapshotChanged;
@@ -69,6 +75,13 @@ public sealed partial class SettingsPage : Page
     private void OnUnloaded(object sender, RoutedEventArgs args)
     {
         _isLoaded = false;
+        _refreshGeneration++;
+        _pageLifetime?.Cancel();
+        _pageLifetime?.Dispose();
+        _pageLifetime = null;
+        _refreshCancellation?.Cancel();
+        _refreshInFlight = false;
+        _refreshInterruptedByMutation = false;
         _realtimeRefreshPending = false;
         _services.Preferences.Changed -= OnPreferencesChanged;
         _services.VpnUiState.Changed -= OnVpnUiStateChanged;
@@ -678,7 +691,19 @@ public sealed partial class SettingsPage : Page
 
     private async Task RefreshAsync()
     {
-        SetBusy(true);
+        if (!_isLoaded || _pageLifetime is null) return;
+        if (_busyCount > 0)
+        {
+            _refreshInterruptedByMutation = true;
+            return;
+        }
+        _refreshCancellation?.Cancel();
+        using var refresh = CancellationTokenSource.CreateLinkedTokenSource(_pageLifetime.Token);
+        refresh.CancelAfter(TimeSpan.FromSeconds(30));
+        _refreshCancellation = refresh;
+        var generation = ++_refreshGeneration;
+        _refreshInFlight = true;
+        RenderBusyState();
         try
         {
             _state = _services.Coordinator.CurrentState;
@@ -686,9 +711,9 @@ public sealed partial class SettingsPage : Page
             // while the privileged VPN service is being repaired.
             try
             {
-                await RefreshVpnStateAsync();
+                await RefreshVpnStateAsync(refresh.Token);
             }
-            catch (Exception error) when (IsSettingsOperationFailure(error))
+            catch (Exception error) when (!refresh.IsCancellationRequested && IsSettingsOperationFailure(error))
             {
                 _serviceAvailable = false;
                 ShowNotice(
@@ -696,26 +721,43 @@ public sealed partial class SettingsPage : Page
                     InfoBarSeverity.Warning);
             }
 
-            _windowsHelloStatus = await _stateStore.GetWindowsHelloStatusAsync(
-                CancellationToken.None);
-            _updateSnapshot = await _services.UpdateService.RefreshAsync(
-                CancellationToken.None);
-            await RefreshRemoteConfigAsync();
+            var hello = await _stateStore.GetWindowsHelloStatusAsync(refresh.Token).WaitAsync(refresh.Token);
+            refresh.Token.ThrowIfCancellationRequested();
+            if (!IsCurrentRefresh(generation)) return;
+            _windowsHelloStatus = hello;
+            var update = await _services.UpdateService.RefreshAsync(refresh.Token);
+            refresh.Token.ThrowIfCancellationRequested();
+            if (!IsCurrentRefresh(generation)) return;
+            _updateSnapshot = update;
+            await RefreshRemoteConfigAsync(refresh.Token);
+        }
+        catch (OperationCanceledException) when (refresh.IsCancellationRequested)
+        {
+            // Leaving the page or starting a newer operation only cancels its
+            // read-only work; it does not report a VPN or preference failure.
         }
         catch (Exception error) when (IsSettingsOperationFailure(error))
         {
-            ShowNotice(
-                "Не удалось обновить настройки. Повторите позже.",
-                InfoBarSeverity.Warning);
+            if (IsCurrentRefresh(generation))
+                ShowNotice(
+                    "Не удалось обновить настройки. Повторите позже.",
+                    InfoBarSeverity.Warning);
         }
         finally
         {
-            SetBusy(false);
-            Render();
+            if (ReferenceEquals(_refreshCancellation, refresh)) _refreshCancellation = null;
+            if (IsCurrentRefresh(generation))
+            {
+                _refreshInFlight = false;
+                RenderBusyState();
+                Render();
+            }
         }
     }
 
-    private async Task RefreshRemoteConfigAsync()
+    private bool IsCurrentRefresh(int generation) => _isLoaded && generation == _refreshGeneration;
+
+    private async Task RefreshRemoteConfigAsync(CancellationToken cancellationToken)
     {
         var version = typeof(App).Assembly.GetName().Version;
         var metadata = new ClientAppMetadata(
@@ -733,10 +775,11 @@ public sealed partial class SettingsPage : Page
             1);
         try
         {
-            _remoteConfig = await _services.Coordinator.GetRemoteConfigAsync(
-                metadata,
-                CancellationToken.None);
+            var configuration = await _services.Coordinator.GetRemoteConfigAsync(metadata, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            _remoteConfig = configuration;
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception error) when (
             error is HttpRequestException or OperationCanceledException or VexApiException)
         {
@@ -762,10 +805,11 @@ public sealed partial class SettingsPage : Page
         }
     }
 
-    private async Task RefreshVpnStateAsync()
+    private async Task RefreshVpnStateAsync(CancellationToken cancellationToken = default)
     {
-        var response = await _services.VpnUiState.RefreshAsync(
-            CancellationToken.None);
+        var response = await _services.VpnUiState.RunAsync(
+            _services.VpnClient.GetDiagnosticsAsync, cancellationToken, recordCancellationFailure: false);
+        cancellationToken.ThrowIfCancellationRequested();
         _snapshot = response.Snapshot;
         _serviceAvailable = response.ErrorCode != "vpn_service_unavailable";
     }
@@ -990,9 +1034,24 @@ public sealed partial class SettingsPage : Page
         // Nested and realtime refreshes must not enable controls while another
         // page operation still owns them.
         _busyCount = Math.Max(0, _busyCount + (busy ? 1 : -1));
-        busy = _busyCount > 0;
-        BusyIndicator.IsActive = busy;
-        RefreshSettingsButton.IsEnabled = !busy;
+        if (busy && _refreshInFlight)
+        {
+            _refreshInterruptedByMutation = true;
+            _refreshCancellation?.Cancel();
+        }
+        RenderBusyState();
+        if (!busy && _busyCount == 0 && _refreshInterruptedByMutation && _isLoaded)
+        {
+            _refreshInterruptedByMutation = false;
+            _ = RefreshAsync();
+        }
+    }
+
+    private void RenderBusyState()
+    {
+        var busy = _busyCount > 0;
+        BusyIndicator.IsActive = busy || _refreshInFlight;
+        RefreshSettingsButton.IsEnabled = !busy && !_refreshInFlight;
         OpenDownloadsButton.IsEnabled = !busy;
         CheckUpdatesButton.IsEnabled = !busy;
         InstallUpdateButton.IsEnabled = !busy;

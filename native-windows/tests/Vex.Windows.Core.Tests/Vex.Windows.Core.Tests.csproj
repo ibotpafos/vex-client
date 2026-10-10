@@ -22,5 +22,6 @@
     <Compile Include="../../src/Vex.Windows.App/Services/ProfileWarmupTrustStore.cs" Link="ProfileWarmupTrustStore.cs" />
     <Compile Include="../../src/Vex.Windows.App/Services/VpnProductParityService.cs" Link="VpnProductParityService.cs" />
     <Compile Include="../../src/Vex.Windows.App/Services/NativeClientPreferences.cs" Link="NativeClientPreferences.cs" />
+    <Compile Include="../../src/Vex.Windows.App/Services/NativeUpdateService.cs" Link="NativeUpdateService.cs" />
   </ItemGroup>
 </Project>

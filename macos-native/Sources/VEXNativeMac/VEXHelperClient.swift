@@ -108,6 +108,10 @@ final class VEXHelperModel: ObservableObject {
         await connect(antiLeakEnabled: false)
     }
 
+    func connect(antiLeakEnabled: Bool) async {
+        await connect(antiLeakEnabled: antiLeakEnabled, shouldConnect: { true })
+    }
+
     func connect(antiLeakEnabled: Bool, shouldConnect: @escaping () -> Bool = { true }) async {
         let command = antiLeakEnabled ? "up owner_pid=\(ProcessInfo.processInfo.processIdentifier)" : "up-no-antileak owner_pid=\(ProcessInfo.processInfo.processIdentifier)"
         await runCommand(command, busyState: .connecting, successMessage: "VPN подключен.",

@@ -132,7 +132,10 @@ jobs:
           $root = Join-Path $env:RUNNER_TEMP 'vex-windows'
           Assert-WindowsPeArchitecture -Path (Join-Path $root 'app-${{ matrix.architecture }}/Vex.Windows.App.exe') -Architecture '${{ matrix.architecture }}'
           Assert-WindowsPeArchitecture -Path (Join-Path $root 'service-${{ matrix.architecture }}/Vex.Windows.Service.exe') -Architecture '${{ matrix.architecture }}'
-          foreach ($asset in @('resources.pri', 'Assets/icon.ico', 'Assets/country-silhouettes.json', 'Assets/vex-logo-header.png', 'Assets/flags/de.svg', 'Assets/flags/fi.svg', 'Assets/flags/nl.svg', 'Microsoft.UI.Xaml.dll')) {
+          # WindowsPackageType=None produces the assembly-named app PRI.
+          Get-ChildItem -LiteralPath (Join-Path $root 'app-${{ matrix.architecture }}') -Filter '*.pri' |
+            ForEach-Object { Write-Host "Published compiled resource: $($_.Name) ($($_.Length) bytes)" }
+          foreach ($asset in @('Vex.Windows.App.pri', 'Assets/icon.ico', 'Assets/country-silhouettes.json', 'Assets/vex-logo-header.png', 'Assets/flags/de.svg', 'Assets/flags/fi.svg', 'Assets/flags/nl.svg', 'Microsoft.UI.Xaml.dll')) {
             if (-not (Test-Path -LiteralPath (Join-Path $root "app-${{ matrix.architecture }}/$asset"))) {
               throw "Published WinUI dependency is missing: $asset"
             }

@@ -300,7 +300,7 @@ for (const [requirement, message] of [
   [/persist-credentials: false/, "CI checkout must not persist credentials"],
   [/ReleaseValidation\.Tests\.ps1/, "release behavior tests must run in CI"],
   [/smoke-application\.ps1/, "Windows x64 startup smoke must run in CI"],
-  [/'resources\.pri'/, "published compiled WinUI resources must be checked"],
+  [/'Vex\.Windows\.App\.pri'/, "published compiled WinUI resources must be checked"],
 ]) {
   requireText(workflow, requirement, message);
 }

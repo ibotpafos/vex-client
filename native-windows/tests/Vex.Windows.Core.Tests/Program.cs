@@ -17,6 +17,15 @@ using System.Text.Json.Nodes;
 
 var tests = new (string Name, Action Run)[]
 {
+    ("Protected session cache handles corruption without replacing identity files", ProtectedStateFileTests.Run),
+    ("Client recovery preserves pins, authority, session and entitlement", ClientRecoveryParityTests.Run),
+    ("Background recovery respects health, user intent, lock and backoff", VpnRecoveryPolicyTests.Run),
+    ("UI VPN operations serialize failures and preserve explicit disconnect", VpnUiStateServiceTests.Run),
+    ("Dynamic routing preserves expiry, quarantine and sticky route policy", DynamicRouteEngineTests.Run),
+    ("Server catalog groups countries and preserves search, filters and favorites", ServerCatalogTests.Run),
+    ("Support conversation reconciles sends without dropping repeated messages", SupportConversationTests.Run),
+    ("Queued diagnostics preserve failures, cancellation and rate limits", DiagnosticsQueueTests.Run),
+    ("Support socket preserves edits and safely cancels reconnect", SupportSocketTests.Run),
     ("Navigation matches native macOS sections", NavigationMatchesMac),
     ("Windows location labels are localized for presentation", WindowsLocationLabelsAreLocalized),
     ("Automatic location reuses the healthy cached server", AutomaticLocationReusesHealthyCachedServer),
@@ -124,7 +133,7 @@ var tests = new (string Name, Action Run)[]
 };
 
 var failures = new List<string>();
-foreach (var test in tests)
+foreach (var test in tests.Concat(RuntimeParityTests.All))
 {
     try
     {
@@ -144,7 +153,7 @@ if (failures.Count > 0)
     return;
 }
 
-Console.WriteLine($"PASS {tests.Length} tests");
+Console.WriteLine($"PASS {tests.Length + RuntimeParityTests.All.Length} tests");
 
 static void NavigationMatchesMac()
 {
@@ -3690,7 +3699,7 @@ sealed class FakeNativeClientApi : INativeClientApi
         new(
             true, "pro_monthly", "Pro", "active", "Pro", "Pro",
             "Осталось 30 дней", "active", "pro",
-            "2026-08-31T00:00:00Z", "2026-08-31T00:00:00Z", true);
+            "2099-08-31T00:00:00Z", "2099-08-31T00:00:00Z", true);
 
     public int ConnectReportCalls { get; private set; }
 

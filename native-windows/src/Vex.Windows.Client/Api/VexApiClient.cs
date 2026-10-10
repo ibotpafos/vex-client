@@ -41,6 +41,11 @@ public interface INativeClientApi
         string accessToken,
         CancellationToken cancellationToken);
 
+    Task<ResiliencePolicy?> GetResiliencePolicyAsync(
+        string accessToken,
+        CancellationToken cancellationToken) =>
+        Task.FromResult<ResiliencePolicy?>(null);
+
     Task<VpnDevice> RegisterNativeDeviceAsync(
         string accessToken,
         string installationId,
@@ -171,6 +176,18 @@ public sealed class VexApiClient : INativeClientApi
 
     public Uri BaseUri => _httpClient.BaseAddress!;
 
+    public async Task<ResiliencePolicy?> GetResiliencePolicyAsync(
+        string accessToken,
+        CancellationToken cancellationToken)
+    {
+        using var request = Authorized(
+            HttpMethod.Get,
+            "/v1/resilience/policy",
+            accessToken);
+        return await SendAsync<ResiliencePolicy>(request, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
     public async Task<VexUser> GetCurrentUserAsync(
         string accessToken,
         CancellationToken cancellationToken)
@@ -210,10 +227,7 @@ public sealed class VexApiClient : INativeClientApi
         var response = await SendAsync<AuthResponse>(
             request,
             cancellationToken).ConfigureAwait(false);
-        return new VexAuthSession(
-            response.User,
-            response.Session.AccessToken,
-            response.Session.ExpiresAt);
+        return ValidateAuthSession(response);
     }
 
     public async Task<EmailOtpChallenge> RequestEmailOtpAsync(
@@ -269,10 +283,7 @@ public sealed class VexApiClient : INativeClientApi
         var response = await SendAsync<AuthResponse>(
             request,
             cancellationToken).ConfigureAwait(false);
-        return new VexAuthSession(
-            response.User,
-            response.Session.AccessToken,
-            response.Session.ExpiresAt);
+        return ValidateAuthSession(response);
     }
 
     public async Task<VexAuthSession> ExchangeAppAuthCodeAsync(
@@ -300,10 +311,7 @@ public sealed class VexApiClient : INativeClientApi
         var response = await SendAsync<AuthResponse>(
             request,
             cancellationToken).ConfigureAwait(false);
-        return new VexAuthSession(
-            response.User,
-            response.Session.AccessToken,
-            response.Session.ExpiresAt);
+        return ValidateAuthSession(response);
     }
 
     public async Task<IReadOnlyList<VpnLocation>> GetLocationsAsync(
@@ -335,10 +343,7 @@ public sealed class VexApiClient : INativeClientApi
         var response = await SendAsync<AuthResponse>(
             request,
             cancellationToken).ConfigureAwait(false);
-        return new VexAuthSession(
-            response.User,
-            response.Session.AccessToken,
-            response.Session.ExpiresAt);
+        return ValidateAuthSession(response);
     }
 
     public async Task<VpnDevice> RegisterNativeDeviceAsync(
@@ -680,7 +685,7 @@ public sealed class VexApiClient : INativeClientApi
         var tickets = await SendAsync<List<SupportTicket>?>(
             request,
             cancellationToken).ConfigureAwait(false);
-        return tickets ?? [];
+        return (tickets ?? []).Select(SupportModelNormalization.NormalizeTicket).ToArray();
     }
 
     public async Task<SupportTicket> CreateSupportTicketAsync(
@@ -713,9 +718,10 @@ public sealed class VexApiClient : INativeClientApi
             message,
             source,
         });
-        return await SendAsync<SupportTicket>(
+        var ticket = await SendAsync<SupportTicket>(
             request,
             cancellationToken).ConfigureAwait(false);
+        return SupportModelNormalization.NormalizeTicket(ticket);
     }
 
     public async Task<Uri> GetSupportWebSocketUriAsync(
@@ -831,6 +837,18 @@ public sealed class VexApiClient : INativeClientApi
                     ? "session_expired"
                     : "api_request_failed");
         }
+    }
+
+    private static VexAuthSession ValidateAuthSession(AuthResponse response)
+    {
+        if (response.User is null || response.Session is null ||
+            string.IsNullOrWhiteSpace(response.User.Id) ||
+            string.IsNullOrWhiteSpace(response.User.Email) ||
+            string.IsNullOrWhiteSpace(response.Session.AccessToken))
+        {
+            throw new VexApiException(HttpStatusCode.BadGateway, "api_response_invalid");
+        }
+        return new VexAuthSession(response.User, response.Session.AccessToken, response.Session.ExpiresAt);
     }
 
     private async Task<T> SendAsync<T>(

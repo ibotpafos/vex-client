@@ -22,6 +22,12 @@
                 IsClosable="True"
                 IsOpen="False"
                 Title="VEX VPN" />
+            <InfoBar
+                x:Name="IncidentNotice"
+                IsClosable="False"
+                IsOpen="False"
+                Severity="Warning"
+                Title="Статус сервиса" />
 
             <Border
                 Padding="14"
@@ -51,7 +57,7 @@
                         Toggled="OnPreferenceToggled" />
                     <ToggleSwitch
                         x:Name="AntiLeakToggle"
-                        Header="Anti-leak"
+                        Header="Kill Switch"
                         OffContent="Защита выключена"
                         OnContent="Блокировать утечки при сбоях"
                         Toggled="OnPreferenceToggled" />
@@ -139,6 +145,11 @@
                         <Button x:Name="InstallUpdateButton" Click="OnOpenDownloadsClick" Content="Установить" Style="{StaticResource VexProminentButtonStyle}" />
                         <Button x:Name="OpenDownloadsButton" Click="OnOpenManualDownloadsClick" Content="Ручная ссылка" Style="{StaticResource VexGlassButtonStyle}" />
                     </StackPanel>
+                    <Button
+                        Click="OnOpenSupportWebsiteClick"
+                        Content="Поддержка на сайте"
+                        HorizontalAlignment="Stretch"
+                        Style="{StaticResource VexGlassButtonStyle}" />
                 </StackPanel>
             </Border>
 

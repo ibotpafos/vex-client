@@ -23,3 +23,32 @@ public sealed record SupportTicket(
     [property: JsonPropertyName("created_at")] string CreatedAt,
     [property: JsonPropertyName("updated_at")] string UpdatedAt,
     [property: JsonPropertyName("closed_at")] string? ClosedAt);
+
+public static class SupportModelNormalization
+{
+    public static SupportTicket NormalizeTicket(SupportTicket ticket)
+    {
+        if (ticket is null || string.IsNullOrWhiteSpace(ticket.Id))
+        {
+            throw new VexApiException(System.Net.HttpStatusCode.BadGateway, "api_response_invalid");
+        }
+        var messages = (ticket.Messages ?? []).Where(message => message is not null &&
+                !string.IsNullOrWhiteSpace(message.Id) && !string.IsNullOrWhiteSpace(message.Body))
+            .Select(message => message with
+            {
+                TicketId = ticket.Id,
+                Sender = message.Sender ?? "user",
+                CreatedAt = message.CreatedAt ?? string.Empty,
+            }).ToArray();
+        return ticket with
+        {
+            Subject = ticket.Subject ?? "Поддержка VEX",
+            Message = ticket.Message ?? string.Empty,
+            Messages = messages,
+            Status = ticket.Status ?? "open",
+            Source = ticket.Source ?? "native",
+            CreatedAt = ticket.CreatedAt ?? string.Empty,
+            UpdatedAt = ticket.UpdatedAt ?? ticket.CreatedAt ?? string.Empty,
+        };
+    }
+}

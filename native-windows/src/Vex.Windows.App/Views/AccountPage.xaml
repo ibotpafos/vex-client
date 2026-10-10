@@ -99,42 +99,22 @@
                     <TextBlock x:Name="BillingPlan" Text="Тариф: —" />
                     <TextBlock x:Name="BillingAccess" Text="Доступ: —" />
                     <TextBlock x:Name="BillingPeriod" Text="Период: —" />
-                    <TextBlock Style="{StaticResource VexEyebrowStyle}" Text="ВЫБЕРИТЕ ТАРИФ" />
-                    <ComboBox
-                        x:Name="PlanSelector"
-                        AutomationProperties.AutomationId="BillingPlanSelector"
-                        DisplayMemberPath="Display"
-                        HorizontalAlignment="Stretch"
-                        PlaceholderText="Выберите тариф"
-                        SelectionChanged="OnPlanSelectionChanged" />
                     <TextBlock
-                        x:Name="SelectedPlanHint"
                         FontSize="11"
                         Foreground="{StaticResource VexSecondaryTextBrush}"
-                        Text="Выберите тариф перед оплатой."
+                        Text="Оплата и управление подпиской — на сайте VEX."
                         TextWrapping="Wrap" />
                     <StackPanel Orientation="Horizontal" Spacing="8">
                         <Button
                             x:Name="CheckoutButton"
-                            Click="OnCheckoutClick"
-                            Content="Продлить"
+                            Click="OnOpenBillingWebsiteClick"
+                            Content="Оплатить на сайте"
                             Style="{StaticResource VexProminentButtonStyle}" />
                         <Button
                             x:Name="RefreshBillingButton"
                             Click="OnRefreshBillingClick"
                             Content="Обновить"
                             Style="{StaticResource VexGlassButtonStyle}" />
-                        <Button
-                            x:Name="PortalButton"
-                            Click="OnPortalClick"
-                            Content="Портал"
-                            Style="{StaticResource VexGlassButtonStyle}" />
-                        <Button
-                            x:Name="CancelSubscriptionButton"
-                            Click="OnCancelSubscriptionClick"
-                            Content="Отменить"
-                            Style="{StaticResource VexGlassButtonStyle}"
-                            Visibility="Collapsed" />
                     </StackPanel>
                 </StackPanel>
             </Border>
@@ -263,6 +243,25 @@
                         Foreground="{StaticResource VexSecondaryTextBrush}"
                         Text="Продолжите в браузере." />
 
+                    <TextBlock
+                        x:Name="SignInStatusText"
+                        FontSize="12"
+                        Foreground="{StaticResource VexSecondaryTextBrush}"
+                        TextWrapping="Wrap" />
+                    <TextBlock
+                        x:Name="EmailOtpHintText"
+                        FontSize="12"
+                        Foreground="{StaticResource VexSecondaryTextBrush}"
+                        TextWrapping="Wrap"
+                        Visibility="Collapsed" />
+                    <Button
+                        x:Name="GoogleSignInButton"
+                        AutomationProperties.AutomationId="GoogleSignInButton"
+                        Click="OnGoogleSignInClick"
+                        Content="Войти через Google"
+                        HorizontalAlignment="Stretch"
+                        Style="{StaticResource VexGlassButtonStyle}" />
+
                     <Button
                         x:Name="UnlockSessionButton"
                         Click="OnUnlockSessionClick"
@@ -309,9 +308,9 @@
                     <TextBox
                         x:Name="EmailOtpCodeInput"
                         Header="Код из письма"
-                        InputScope="Number"
-                        MaxLength="6"
-                        PlaceholderText="123456"
+                        InputScope="Text"
+                        MaxLength="32"
+                        PlaceholderText="Код из письма"
                         Visibility="Collapsed" />
                     <StackPanel Orientation="Horizontal" Spacing="8">
                         <Button

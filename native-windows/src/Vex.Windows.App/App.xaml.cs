@@ -36,6 +36,7 @@ public partial class App : Application
             AppServices.Current,
             ExitApplication);
         AppServices.Current.BackgroundUpdates.Start();
+        AppServices.Current.BackgroundVpn.Start();
         _window.ShowShellWindow();
         _window.Activate();
         _ = HandleActivationAsync(
@@ -79,11 +80,11 @@ public partial class App : Application
         await AppServices.Current.Auth.HandleProtocolActivationAsync(
             protocolUri,
             CancellationToken.None);
-        _window?.NavigateToSection(
-            AppServices.Current.Coordinator.CurrentState is null
-                ? AppSection.Account
-                : AppSection.Home,
-            forceReload: true);
+        if (AppServices.Current.Coordinator.CurrentStateAccess !=
+            Vex.Windows.Client.Session.ClientStateAccessKind.Available)
+        {
+            _window?.NavigateToSection(AppSection.Account, forceReload: true);
+        }
     }
 
     private void ExitApplication()
@@ -91,6 +92,7 @@ public partial class App : Application
         _trayIconHost?.Dispose();
         _trayIconHost = null;
         AppServices.Current.BackgroundUpdates.Dispose();
+        AppServices.Current.BackgroundVpn.Dispose();
         _window?.RequestExit();
     }
 
@@ -99,6 +101,7 @@ public partial class App : Application
         _trayIconHost?.Dispose();
         _trayIconHost = null;
         AppServices.Current.BackgroundUpdates.Dispose();
+        AppServices.Current.BackgroundVpn.Dispose();
         if (_window is not null)
         {
             AppServices.Current.ClearMainWindow(_window);

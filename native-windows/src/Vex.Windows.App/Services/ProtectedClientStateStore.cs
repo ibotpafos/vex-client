@@ -4,6 +4,7 @@ using System.Text.Json;
 using Vex.Windows.App.Auth;
 using Vex.Windows.Client.Security;
 using Vex.Windows.Client.Session;
+using Vex.Windows.Core.Presentation;
 
 namespace Vex.Windows.App.Services;
 
@@ -32,6 +33,9 @@ public sealed class ProtectedClientStateStore :
     private readonly string _windowsHelloPreferenceFile;
     private bool _windowsHelloRequired;
     private bool _sessionUnlocked;
+    private bool _sessionCacheUnavailable;
+
+    public string? StoredSessionError { get; private set; }
 
     public ProtectedClientStateStore(
         WindowsHelloAuthService? windowsHelloAuth = null)
@@ -66,23 +70,42 @@ public sealed class ProtectedClientStateStore :
             "VEX",
             "VPN",
             "windows-hello.bin");
-        _windowsHelloRequired =
-            LoadProtected<StoredWindowsHelloPreference>(
-                _windowsHelloPreferenceFile)?.Enabled ??
-            false;
+        var helloPreference = ReadProtected<StoredWindowsHelloPreference>(_windowsHelloPreferenceFile);
+        _windowsHelloRequired = helloPreference.Kind switch
+        {
+            ProtectedFileReadKind.Missing => false,
+            ProtectedFileReadKind.Available => helloPreference.Value!.Enabled,
+            _ => true,
+        };
+        if (helloPreference.Kind is ProtectedFileReadKind.Unusable or ProtectedFileReadKind.Unavailable)
+        {
+            StoredSessionError = "Параметры Windows Hello недоступны. Сохраненная сессия остается заблокированной.";
+        }
         _sessionUnlocked = !_windowsHelloRequired;
     }
 
     public ClientStateAccessKind GetAccessState()
     {
-        if (!File.Exists(_stateFile))
+        try
         {
+            File.GetAttributes(_stateFile);
+        }
+        catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return ClientStateAccessKind.Missing;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            _sessionCacheUnavailable = true;
+            StoredSessionError = "Сохраненные данные VEX недоступны. Проверьте доступ к папке приложения и повторите запуск.";
             return ClientStateAccessKind.Missing;
         }
 
         if (!_windowsHelloRequired || _sessionUnlocked)
         {
-            return ClientStateAccessKind.Available;
+            return _sessionCacheUnavailable
+                ? ClientStateAccessKind.Missing
+                : ClientStateAccessKind.Available;
         }
 
         return ClientStateAccessKind.Locked;
@@ -192,15 +215,19 @@ public sealed class ProtectedClientStateStore :
 
     public string GetOrCreateInstallationId()
     {
-        if (File.Exists(_installationIdFile))
+        try
         {
-            return UnprotectString(_installationIdFile);
+            var stored = UnprotectString(_installationIdFile);
+            return !string.IsNullOrWhiteSpace(stored)
+                ? stored
+                : throw new JsonException("Сохраненный идентификатор VEX поврежден.");
         }
-
-        var installationId = "win-" +
-            Guid.NewGuid().ToString("N");
-        ProtectString(_installationIdFile, installationId);
-        return installationId;
+        catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException)
+        {
+            var installationId = "win-" + Guid.NewGuid().ToString("N");
+            ProtectString(_installationIdFile, installationId);
+            return installationId;
+        }
     }
 
     public NativeClientState? Load()
@@ -210,27 +237,30 @@ public sealed class ProtectedClientStateStore :
             return null;
         }
 
-        var protectedState = File.ReadAllBytes(_stateFile);
-        var clearState = ProtectedData.Unprotect(
-            protectedState,
-            Entropy,
-            DataProtectionScope.CurrentUser);
-        try
+        var result = ProtectedStateFileReader.Read<NativeClientState>(
+            _stateFile,
+            Unprotect,
+            JsonOptions,
+            state => state.Session?.User is not null &&
+                !string.IsNullOrWhiteSpace(state.Session.User.Id) &&
+                !string.IsNullOrWhiteSpace(state.Session.User.Email) &&
+                !string.IsNullOrWhiteSpace(state.Session.AccessToken) &&
+                !string.IsNullOrWhiteSpace(state.InstallationId) &&
+                !string.IsNullOrWhiteSpace(state.DeviceId) &&
+                !string.IsNullOrWhiteSpace(state.LocationId) &&
+                state.Identity is { KeyEpoch: > 0 } &&
+                !string.IsNullOrWhiteSpace(state.Identity.PrivateKey) &&
+                !string.IsNullOrWhiteSpace(state.Identity.PublicKey));
+        if (result.Kind is ProtectedFileReadKind.Unusable or ProtectedFileReadKind.Unavailable)
         {
-            return JsonSerializer.Deserialize<NativeClientState>(
-                clearState,
-                JsonOptions);
+            _sessionCacheUnavailable = true;
+            StoredSessionError = result.Kind == ProtectedFileReadKind.Unavailable
+                ? "Сохраненные данные VEX недоступны. Проверьте доступ к папке приложения и повторите запуск."
+                : "Сохраненная сессия повреждена или недоступна для этого пользователя Windows. Выполните вход заново.";
+            return null;
         }
-        catch (JsonException error)
-        {
-            throw new InvalidOperationException(
-                "The protected VEX client state is invalid.",
-                error);
-        }
-        finally
-        {
-            CryptographicOperations.ZeroMemory(clearState);
-        }
+        StoredSessionError = null;
+        return result.Value;
     }
 
     public NativeDeviceState? LoadDevice() =>
@@ -242,14 +272,18 @@ public sealed class ProtectedClientStateStore :
         cancellationToken.ThrowIfCancellationRequested();
         var stored = LoadProtected<StoredDeviceIdentity>(
             _deviceIdentityFile);
-        if (stored is not null &&
-            stored.Version == 1 &&
-            stored.KeyType == DeviceIdentity.KeyTypeP256Jwk &&
-            stored.PublicKey is not null &&
-            stored.PrivateKeyD is not null &&
-            stored.PublicKeyX is not null &&
-            stored.PublicKeyY is not null)
+        if (stored is not null)
         {
+            if (stored.Version != 1 ||
+                stored.KeyType != DeviceIdentity.KeyTypeP256Jwk ||
+                string.IsNullOrWhiteSpace(stored.PublicKey) ||
+                string.IsNullOrWhiteSpace(stored.TrustLevel) ||
+                stored.PrivateKeyD is not { Length: 32 } ||
+                stored.PublicKeyX is not { Length: 32 } ||
+                stored.PublicKeyY is not { Length: 32 })
+            {
+                throw new JsonException("Сохраненный ключ устройства VEX поврежден.");
+            }
             return Task.FromResult<DeviceIdentity?>(
                 new DeviceIdentity(
                     stored.PublicKey,
@@ -298,6 +332,8 @@ public sealed class ProtectedClientStateStore :
                     state.LocationId,
                     state.Identity));
             _sessionUnlocked = true;
+            _sessionCacheUnavailable = false;
+            StoredSessionError = null;
         }
         finally
         {
@@ -313,31 +349,27 @@ public sealed class ProtectedClientStateStore :
         }
 
         _sessionUnlocked = !_windowsHelloRequired;
+        _sessionCacheUnavailable = false;
+        StoredSessionError = null;
     }
 
     private static T? LoadProtected<T>(string path)
     {
-        if (!File.Exists(path))
+        var result = ReadProtected<T>(path);
+        if (result.Error is not null)
         {
-            return default;
+            // Device keys remain strict: a failed read must never generate a
+            // replacement identity over a temporarily inaccessible file.
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(result.Error).Throw();
         }
-
-        var protectedValue = File.ReadAllBytes(path);
-        var clearValue = ProtectedData.Unprotect(
-            protectedValue,
-            Entropy,
-            DataProtectionScope.CurrentUser);
-        try
-        {
-            return JsonSerializer.Deserialize<T>(
-                clearValue,
-                JsonOptions);
-        }
-        finally
-        {
-            CryptographicOperations.ZeroMemory(clearValue);
-        }
+        return result.Value;
     }
+
+    private static ProtectedFileReadResult<T> ReadProtected<T>(string path) =>
+        ProtectedStateFileReader.Read<T>(path, Unprotect, JsonOptions);
+
+    private static byte[] Unprotect(byte[] value) =>
+        ProtectedData.Unprotect(value, Entropy, DataProtectionScope.CurrentUser);
 
     private static void SaveProtected<T>(string path, T value)
     {
@@ -404,5 +436,5 @@ public sealed class ProtectedClientStateStore :
         byte[] PublicKeyY);
 
     private sealed record StoredWindowsHelloPreference(
-        bool Enabled);
+        [property: System.Text.Json.Serialization.JsonRequired] bool Enabled);
 }

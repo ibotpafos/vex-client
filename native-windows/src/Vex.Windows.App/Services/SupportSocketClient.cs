@@ -18,6 +18,7 @@ public sealed class SupportSocketClient : IAsyncDisposable
         };
 
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
+    private readonly SemaphoreSlim _sendGate = new(1, 1);
     private readonly Queue<string> _seenEventOrder = new();
     private readonly HashSet<string> _seenEvents =
         new(StringComparer.Ordinal);
@@ -80,6 +81,11 @@ public sealed class SupportSocketClient : IAsyncDisposable
             }
 
             await StopCoreAsync();
+            lock (_seenEvents)
+            {
+                _seenEvents.Clear();
+                _seenEventOrder.Clear();
+            }
             _accessToken = accessToken;
             _reconnectAttempt = 0;
             _lifetime = CancellationTokenSource.CreateLinkedTokenSource(
@@ -99,8 +105,7 @@ public sealed class SupportSocketClient : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         body = body.Trim();
-        if (body.Length == 0 ||
-            _socket is not { State: WebSocketState.Open } socket)
+        if (body.Length == 0)
         {
             return false;
         }
@@ -114,12 +119,24 @@ public sealed class SupportSocketClient : IAsyncDisposable
             JsonOptions);
         try
         {
-            await socket.SendAsync(
-                payload,
-                WebSocketMessageType.Text,
-                endOfMessage: true,
-                cancellationToken);
-            return true;
+            await _sendGate.WaitAsync(cancellationToken);
+            try
+            {
+                if (_socket is not { State: WebSocketState.Open } socket)
+                {
+                    return false;
+                }
+                await socket.SendAsync(
+                    payload,
+                    WebSocketMessageType.Text,
+                    endOfMessage: true,
+                    cancellationToken);
+                return true;
+            }
+            finally
+            {
+                _sendGate.Release();
+            }
         }
         catch (Exception error) when (
             error is WebSocketException or
@@ -141,6 +158,11 @@ public sealed class SupportSocketClient : IAsyncDisposable
         {
             await StopCoreAsync();
             _accessToken = null;
+            lock (_seenEvents)
+            {
+                _seenEvents.Clear();
+                _seenEventOrder.Clear();
+            }
             SetState(false, false, null);
         }
         finally
@@ -196,7 +218,7 @@ public sealed class SupportSocketClient : IAsyncDisposable
                     HttpRequestException or
                     IOException or
                     InvalidOperationException or
-                    JsonException)
+                    JsonException or VexApiException)
             {
                 _reconnectAttempt++;
                 SetState(false, true, error.Message);
@@ -208,9 +230,14 @@ public sealed class SupportSocketClient : IAsyncDisposable
                 var seconds = Math.Min(
                     MaximumReconnectDelay.TotalSeconds,
                     Math.Pow(2, _reconnectAttempt - 1));
-                await Task.Delay(
-                    TimeSpan.FromSeconds(seconds),
-                    cancellationToken);
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(seconds), cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
             }
             finally
             {
@@ -245,14 +272,12 @@ public sealed class SupportSocketClient : IAsyncDisposable
             }
 
             message.Write(buffer, 0, result.Count);
+            if (message.Length > 1024 * 1024)
+            {
+                throw new JsonException("support_socket_message_too_large");
+            }
             if (!result.EndOfMessage)
             {
-                if (message.Length > 1024 * 1024)
-                {
-                    throw new JsonException(
-                        "support_socket_message_too_large");
-                }
-
                 continue;
             }
 
@@ -267,8 +292,9 @@ public sealed class SupportSocketClient : IAsyncDisposable
             payload,
             JsonOptions) ??
             throw new JsonException("support_socket_event_invalid");
-        var eventKey = envelope.EventId ??
-            BuildEventKey(envelope, payload);
+        var eventKey = !string.IsNullOrWhiteSpace(envelope.EventId)
+            ? envelope.EventId
+            : Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(payload));
         if (!RememberEvent(eventKey))
         {
             return;
@@ -280,12 +306,12 @@ public sealed class SupportSocketClient : IAsyncDisposable
                 SnapshotReceived?.Invoke(
                     this,
                     new SupportSocketSnapshotEventArgs(
-                        envelope.Tickets ?? []));
+                        (envelope.Tickets ?? []).Select(SupportModelNormalization.NormalizeTicket).ToList()));
                 break;
             case "support.ticket" when envelope.Ticket is not null:
                 TicketReceived?.Invoke(
                     this,
-                    new SupportSocketTicketEventArgs(envelope.Ticket));
+                    new SupportSocketTicketEventArgs(SupportModelNormalization.NormalizeTicket(envelope.Ticket)));
                 break;
             case "support.error":
                 SetState(
@@ -326,12 +352,14 @@ public sealed class SupportSocketClient : IAsyncDisposable
         {
             try
             {
+                using var closeTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
                 await socket.CloseOutputAsync(
                     WebSocketCloseStatus.NormalClosure,
                     "navigation",
-                    CancellationToken.None);
+                    closeTimeout.Token);
             }
-            catch (WebSocketException)
+            catch (Exception error) when (error is WebSocketException or
+                OperationCanceledException or ObjectDisposedException or InvalidOperationException)
             {
                 // The receive loop owns reconnect/error reporting.
             }
@@ -367,24 +395,6 @@ public sealed class SupportSocketClient : IAsyncDisposable
                 connected,
                 reconnecting,
                 error));
-    }
-
-    private static string BuildEventKey(
-        SupportSocketEnvelope envelope,
-        byte[] payload)
-    {
-        if (envelope.Ticket is { } ticket)
-        {
-            return string.Join(
-                ':',
-                envelope.Type,
-                ticket.Id,
-                ticket.UpdatedAt,
-                ticket.Messages.Count);
-        }
-
-        return Convert.ToHexString(
-            System.Security.Cryptography.SHA256.HashData(payload));
     }
 
     private static string? NullIfEmpty(string? value) =>

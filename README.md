@@ -8,7 +8,7 @@ This repository contains VEX client applications for desktop and mobile. It inte
 
 - `app/`, `src/`, `assets/` - shared Expo/React Native client app.
 - `macos-native/` - active standalone macOS client.
-- `native-windows/` - retained legacy Windows source; no new first-party Windows development or routine releases.
+- `native-windows/` - active standalone Windows client, with WinUI 3 UI and a privileged VPN service.
 - `android/`, `ios/`, `modules/` - mobile native projects and local Expo native module.
 
 ## Release Model
@@ -17,14 +17,17 @@ Native macOS uses its native build and packaging scripts; Android and iOS use
 Expo/EAS. Production promotion always
 stays local in the private VPN repository.
 
-As of 2026-09-25, the first-party native Windows app is frozen by owner
-decision. Do not include it in ordinary feature work, CI or deployment plans.
-Existing Windows source, packages and update metadata remain untouched while
-a separate user migration/retirement decision is prepared. A one-off emergency
-repair requires a new explicit owner request.
-The retained manual Windows workflow does not package a release unless the
-repository variable `VEX_WINDOWS_RELEASE_REOPENED` is explicitly set to `true`
-after that decision.
+The owner reopened native Windows development on 2026-10-10 to reach native
+macOS feature parity, superseding the 2026-09-25 pause. Scoped PR/main CI tests
+the control-plane client and builds/publishes the WinUI application and VPN
+service for x64 and arm64. Signed release preparation is manual, requires the
+`package_release` input and configured signing/runtime inputs, and produces
+reviewable artifacts without promoting public update metadata.
+
+Windows release acceptance still requires a clean real-device install,
+upgrade, rollback, uninstall and tunnel/DNS/route lifecycle drill. Existing
+published Windows packages and update metadata remain available until those
+gates pass. See [native-windows/README.md](native-windows/README.md).
 
 Local build entrypoints keep heavy caches and generated build directories on
 an external disk, then call the same per-platform scripts used by release

@@ -23,10 +23,10 @@ public sealed partial class AccountPage : Page
         _services.Auth;
 
     private NativeAccountSnapshot? _account;
-    private string? _selectedPlanId;
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _fallbackRefreshTimer;
     private bool _billingRefreshInFlight;
     private bool _billingRefreshPending;
+    private int _busyOperations;
 
     public AccountPage()
     {
@@ -164,6 +164,11 @@ public sealed partial class AccountPage : Page
         }
     }
 
+    private async void OnGoogleSignInClick(
+        object sender,
+        RoutedEventArgs args) =>
+        await BeginWebsiteAuthAsync(WebAuthMode.Login, WebAuthProvider.Google);
+
     private async void OnWebsiteSignInClick(
         object sender,
         RoutedEventArgs args) =>
@@ -175,14 +180,16 @@ public sealed partial class AccountPage : Page
         await BeginWebsiteAuthAsync(WebAuthMode.Register);
 
     private async Task BeginWebsiteAuthAsync(
-        WebAuthMode mode)
+        WebAuthMode mode,
+        WebAuthProvider? provider = null)
     {
         SetBusy(true);
         try
         {
             await Auth.StartBrowserAuthAsync(
                 mode,
-                CancellationToken.None);
+                CancellationToken.None,
+                provider);
         }
         finally
         {
@@ -241,11 +248,12 @@ public sealed partial class AccountPage : Page
         SetBusy(true);
         try
         {
-            await Coordinator.SignOutAsync(CancellationToken.None);
-            PasswordInput.Password = string.Empty;
-            EmailOtpCodeInput.Text = string.Empty;
-            _account = null;
-            Auth.ClearStatus();
+            _services.VpnUiState.MarkConnectionDesired(false);
+            await _services.VpnUiState.RunAsync(async token =>
+            {
+                await Coordinator.SignOutAsync(token);
+                return await _services.VpnClient.GetDiagnosticsAsync(token);
+            }, CancellationToken.None);
         }
         catch (Exception error) when (
             error is IOException or
@@ -254,12 +262,18 @@ public sealed partial class AccountPage : Page
                 InvalidOperationException)
         {
             AccountNotice.Message =
-                "Сессия удалена, но VPN-служба не ответила.";
+                Coordinator.CurrentState is null
+                    ? "Сессия удалена, но VPN-служба не ответила."
+                    : "Не удалось завершить выход. Повторите позже.";
             AccountNotice.Severity = InfoBarSeverity.Warning;
             AccountNotice.IsOpen = true;
         }
         finally
         {
+            PasswordInput.Password = string.Empty;
+            EmailOtpCodeInput.Text = string.Empty;
+            _account = null;
+            Auth.ClearStatus();
             SetBusy(false);
             Render();
         }
@@ -267,11 +281,14 @@ public sealed partial class AccountPage : Page
 
     private void SetBusy(bool busy)
     {
+        _busyOperations = Math.Max(0, _busyOperations + (busy ? 1 : -1));
+        busy = _busyOperations > 0;
         BusyIndicator.IsActive = busy;
         SignInButton.IsEnabled = !busy;
         RequestOtpButton.IsEnabled = !busy;
         ConfirmOtpButton.IsEnabled = !busy;
         ResendOtpButton.IsEnabled = !busy;
+        GoogleSignInButton.IsEnabled = !busy;
         WebsiteSignInButton.IsEnabled = !busy;
         WebsiteRegisterButton.IsEnabled = !busy;
         CancelWebsiteAuthButton.IsEnabled = !busy;
@@ -281,17 +298,20 @@ public sealed partial class AccountPage : Page
         PasswordInput.IsEnabled = !busy;
         EmailOtpCodeInput.IsEnabled = !busy;
         RefreshBillingButton.IsEnabled = !busy;
-        CheckoutButton.IsEnabled = !busy &&
-            (PlanSelector.SelectedItem as PlanOptionView)?.Disabled != true;
-        PortalButton.IsEnabled = !busy;
-        CancelSubscriptionButton.IsEnabled = !busy;
-        PlanSelector.IsEnabled = !busy;
+        CheckoutButton.IsEnabled = !busy;
     }
 
     private void Render()
     {
         var state = Coordinator.CurrentState;
         var signedIn = state is not null;
+        if (!signedIn || !string.Equals(
+                _account?.Email,
+                state?.Session.User.Email,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            _account = null;
+        }
         var locked =
             Coordinator.CurrentStateAccess == ClientStateAccessKind.Locked;
         var waitingForBrowserAuth = Auth.IsWaitingForBrowserAuth;
@@ -301,17 +321,34 @@ public sealed partial class AccountPage : Page
             ? $"{state!.Session.User.Email} · " +
                 NativeLocationLabel.Russian(state.LocationId)
             : locked
-                ? "Сохраненная сессия заблокирована. Подтвердите Windows Hello или выполните новый вход."
+                ? _services.StateStore.StoredSessionError ??
+                    "Сохраненная сессия заблокирована. Подтвердите Windows Hello или выполните новый вход."
                 : waitingForBrowserAuth
                     ? "Подтвердите вход на сайте и вернитесь в VEX."
-                    : "Войдите, чтобы зарегистрировать этот компьютер.";
-        AuthHintText.Text = otpChallenge is null
-            ? "Доступны вход через сайт, email OTP и локальная разблокировка сохраненной сессии."
+                    : _services.StateStore.StoredSessionError ??
+                        "Войдите, чтобы зарегистрировать этот компьютер.";
+        SignInStatusText.Text = AccountStatus.Text;
+        EmailOtpHintText.Text = otpChallenge is null
+            ? string.Empty
             : BuildOtpHint(otpChallenge);
+        EmailOtpHintText.Visibility = !signedIn && otpChallenge is not null && !waitingForBrowserAuth
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        GoogleSignInButton.Visibility = signedIn || waitingForBrowserAuth
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+        AuthHintText.Text = signedIn
+            ? _account?.Entitlement.RemainingText ??
+                (_account?.Entitlement.HasPaidAccess == true
+                    ? "VPN-доступ активен"
+                    : "Оформите подписку для VPN-доступа")
+            : otpChallenge is null
+                ? "Доступны вход через сайт, email OTP и локальная разблокировка сохраненной сессии."
+                : BuildOtpHint(otpChallenge);
         UnlockSessionButton.Visibility = locked
             ? Visibility.Visible
             : Visibility.Collapsed;
-        EmailInput.Visibility = signedIn
+        EmailInput.Visibility = signedIn || waitingForBrowserAuth
             ? Visibility.Collapsed
             : Visibility.Visible;
         PasswordInput.Visibility =
@@ -385,16 +422,10 @@ public sealed partial class AccountPage : Page
             BillingPlan.Text = "Тариф: —";
             BillingAccess.Text = "Доступ: —";
             BillingPeriod.Text = "Период: —";
-            CheckoutButton.Content = "Открыть оплату";
+            CheckoutButton.Content = "Оплатить на сайте";
             CheckoutButton.Visibility = signedIn
                 ? Visibility.Visible
                 : Visibility.Collapsed;
-            PortalButton.Visibility = signedIn
-                ? Visibility.Visible
-                : Visibility.Collapsed;
-            CancelSubscriptionButton.Visibility =
-                Visibility.Collapsed;
-            PlanSelector.ItemsSource = null;
             DeviceUsageList.ItemsSource = null;
             PaymentHistoryList.ItemsSource = null;
             AccountPlanFact.Text = "—";
@@ -408,59 +439,16 @@ public sealed partial class AccountPage : Page
         BillingPlan.Text = $"Тариф: {summary.CurrentPlan?.Name ?? "Не выбран"}";
         BillingAccess.Text = $"Доступ: {AccessText(_account.Entitlement)}";
         BillingPeriod.Text = $"Период: {summary.RemainingText ?? summary.CurrentPeriodEnd ?? summary.EffectiveExpiresAt ?? "Уточняется"}";
-        CheckoutButton.Content = summary.CurrentPlan is null
-            ? "Открыть оплату"
-            : summary.CurrentPlan.Action;
-        CheckoutButton.Visibility = summary.Plans.Count > 0
-            ? Visibility.Visible
-            : Visibility.Collapsed;
-        PortalButton.Visibility = Visibility.Visible;
-        CancelSubscriptionButton.Visibility =
-            summary.EntitlementStatus == "active" &&
-            !string.Equals(summary.Status, "canceled", StringComparison.OrdinalIgnoreCase)
-                ? Visibility.Visible
-                : Visibility.Collapsed;
+        CheckoutButton.Content = "Оплатить на сайте";
+        CheckoutButton.Visibility = Visibility.Visible;
         AccountPlanFact.Text =
             summary.CurrentPlan?.Name ?? "Не выбран";
         AccountStatusFact.Text =
             LocalizeSubscriptionStatus(
                 summary.Status,
                 _account.Entitlement.HasPaidAccess);
-        RenderPlans(summary);
         RenderDevices(_account);
         RenderPayments(_account.Payments);
-    }
-
-    private void RenderPlans(BillingSummary summary)
-    {
-        var options = summary.Plans
-            .Select(plan => new PlanOptionView(
-                plan.Id,
-                plan.Name,
-                $"{plan.Name} · {plan.Meta}",
-                plan.Action,
-                plan.Disabled))
-            .ToList();
-        PlanSelector.ItemsSource = options;
-
-        var desiredPlanId = _selectedPlanId ??
-            summary.CurrentPlan?.Id;
-        var selected = options.FirstOrDefault(option =>
-                option.Id == desiredPlanId) ??
-            options.FirstOrDefault(option => !option.Disabled);
-        if (selected is not null)
-        {
-            _selectedPlanId = selected.Id;
-            PlanSelector.SelectedItem = selected;
-            SelectedPlanHint.Text =
-                $"{selected.Action}: {selected.Name}";
-        }
-        else
-        {
-            _selectedPlanId = null;
-            SelectedPlanHint.Text =
-                summary.EmptyMessage;
-        }
     }
 
     private void RenderDevices(NativeAccountSnapshot account)
@@ -524,24 +512,6 @@ public sealed partial class AccountPage : Page
         PaymentHistoryEmpty.Visibility = rows.Count == 0
             ? Visibility.Visible
             : Visibility.Collapsed;
-    }
-
-    private void OnPlanSelectionChanged(
-        object sender,
-        SelectionChangedEventArgs args)
-    {
-        if (PlanSelector.SelectedItem is not PlanOptionView selected)
-        {
-            return;
-        }
-
-        _selectedPlanId = selected.Id;
-        SelectedPlanHint.Text = selected.Disabled
-            ? $"{selected.Name}: сейчас недоступен."
-            : $"{selected.Action}: {selected.Name}";
-        CheckoutButton.IsEnabled =
-            !BusyIndicator.IsActive && !selected.Disabled;
-        CheckoutButton.Content = selected.Action;
     }
 
     private async Task RefreshBillingAsync()
@@ -614,110 +584,21 @@ public sealed partial class AccountPage : Page
         RoutedEventArgs args) =>
         await RefreshBillingAsync();
 
-    private async void OnCheckoutClick(
+    private async void OnOpenBillingWebsiteClick(
         object sender,
         RoutedEventArgs args)
     {
-        var selected = PlanSelector.SelectedItem as PlanOptionView;
-        var planId = selected?.Disabled == false
-            ? selected.Id
-            : null;
-        if (string.IsNullOrWhiteSpace(planId))
-        {
-            AccountNotice.Message =
-                "Выберите доступный тариф перед оплатой.";
-            AccountNotice.Severity = InfoBarSeverity.Warning;
-            AccountNotice.IsOpen = true;
-            return;
-        }
-
-        SetBusy(true);
         try
         {
-            var session = await Coordinator.StartCheckoutAsync(
-                planId,
-                CancellationToken.None);
-            await LaunchUrlAsync(session.Url);
-            await RefreshBillingAsync();
+            await LaunchUrlAsync("https://vexguard.app/dashboard");
         }
         catch (Exception error) when (
-            error is HttpRequestException or
-                TaskCanceledException or
-                VexApiException or
-                NativeClientFlowException or
-                InvalidOperationException)
+            error is InvalidOperationException or
+                System.Runtime.InteropServices.COMException)
         {
-            AccountNotice.Message =
-                "Не удалось открыть оплату.";
+            AccountNotice.Message = "Не удалось открыть сайт оплаты.";
             AccountNotice.Severity = InfoBarSeverity.Error;
             AccountNotice.IsOpen = true;
-        }
-        finally
-        {
-            SetBusy(false);
-            Render();
-        }
-    }
-
-    private async void OnPortalClick(
-        object sender,
-        RoutedEventArgs args)
-    {
-        SetBusy(true);
-        try
-        {
-            var session = await Coordinator.GetBillingPortalSessionAsync(
-                CancellationToken.None);
-            await LaunchUrlAsync(session.Url);
-        }
-        catch (Exception error) when (
-            error is HttpRequestException or
-                TaskCanceledException or
-                VexApiException or
-                NativeClientFlowException or
-                InvalidOperationException)
-        {
-            AccountNotice.Message =
-                "Не удалось открыть портал подписки.";
-            AccountNotice.Severity = InfoBarSeverity.Error;
-            AccountNotice.IsOpen = true;
-        }
-        finally
-        {
-            SetBusy(false);
-            Render();
-        }
-    }
-
-    private async void OnCancelSubscriptionClick(
-        object sender,
-        RoutedEventArgs args)
-    {
-        SetBusy(true);
-        try
-        {
-            _account = await Coordinator.CancelSubscriptionAsync(
-                CancellationToken.None);
-            AccountNotice.Message =
-                "Автопродление отключено.";
-            AccountNotice.Severity = InfoBarSeverity.Success;
-            AccountNotice.IsOpen = true;
-        }
-        catch (Exception error) when (
-            error is HttpRequestException or
-                TaskCanceledException or
-                VexApiException or
-                NativeClientFlowException)
-        {
-            AccountNotice.Message =
-                "Не удалось отменить подписку.";
-            AccountNotice.Severity = InfoBarSeverity.Error;
-            AccountNotice.IsOpen = true;
-        }
-        finally
-        {
-            SetBusy(false);
-            Render();
         }
     }
 
@@ -883,13 +764,6 @@ public sealed partial class AccountPage : Page
             ? value
             : timestamp.ToLocalTime().ToString("dd.MM.yyyy HH:mm");
     }
-
-    private sealed record PlanOptionView(
-        string Id,
-        string Name,
-        string Display,
-        string Action,
-        bool Disabled);
 
     private sealed record DeviceUsageView(
         string Name,

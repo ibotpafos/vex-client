@@ -72,6 +72,11 @@ public sealed class NativeAuthService
         }
         catch (Exception error) when (
             error is ArgumentException or
+                InvalidOperationException or
+                IOException or
+                UnauthorizedAccessException or
+                System.Security.Cryptography.CryptographicException or
+                System.Text.Json.JsonException or
                 HttpRequestException or
                 TaskCanceledException or
                 VexApiException or
@@ -80,6 +85,12 @@ public sealed class NativeAuthService
             Notice = null;
             Error = error switch
             {
+                IOException or UnauthorizedAccessException or
+                    System.Security.Cryptography.CryptographicException or
+                    System.Text.Json.JsonException =>
+                    "Не удалось прочитать сохраненные данные VEX. Проверьте доступ к папке приложения и повторите.",
+                VexApiException api when api.Code.Contains("mfa", StringComparison.OrdinalIgnoreCase) =>
+                    "Для двухфакторной проверки войдите через сайт.",
                 VexApiException api when
                     api.StatusCode == System.Net.HttpStatusCode.Unauthorized =>
                     "Неверный email или пароль.",
@@ -143,8 +154,17 @@ public sealed class NativeAuthService
                     "Сначала запросите код входа.");
             }
 
+            if (!string.Equals(
+                    email.Trim(),
+                    EmailOtpChallenge.Email,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    "Email изменился. Запросите код для нового адреса.");
+            }
+
             var session = await _api.ConfirmEmailOtpAsync(
-                email,
+                EmailOtpChallenge.Email,
                 EmailOtpChallenge.ChallengeId,
                 code,
                 cancellationToken).ConfigureAwait(false);
@@ -158,6 +178,10 @@ public sealed class NativeAuthService
         catch (Exception error) when (
             error is InvalidOperationException or
                 ArgumentException or
+                IOException or
+                UnauthorizedAccessException or
+                System.Security.Cryptography.CryptographicException or
+                System.Text.Json.JsonException or
                 HttpRequestException or
                 TaskCanceledException or
                 VexApiException or
@@ -166,6 +190,12 @@ public sealed class NativeAuthService
             Notice = null;
             Error = error switch
             {
+                IOException or UnauthorizedAccessException or
+                    System.Security.Cryptography.CryptographicException or
+                    System.Text.Json.JsonException =>
+                    "Не удалось прочитать сохраненные данные VEX. Проверьте доступ к папке приложения и повторите.",
+                VexApiException api when api.Code.Contains("mfa", StringComparison.OrdinalIgnoreCase) =>
+                    "Для двухфакторной проверки войдите через сайт.",
                 VexApiException api when
                     api.StatusCode == System.Net.HttpStatusCode.Unauthorized =>
                     "Код недействителен или истек. Запросите новый.",
@@ -186,7 +216,8 @@ public sealed class NativeAuthService
 
     public async Task StartBrowserAuthAsync(
         WebAuthMode mode,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        WebAuthProvider? provider = null)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -196,7 +227,8 @@ public sealed class NativeAuthService
                 _stateStore.GetOrCreateInstallationId(),
                 "Windows",
                 "windows",
-                mode);
+                mode,
+                provider: provider);
             _pkceStateStore.Save(request.PendingChallenge);
             EmailOtpChallenge = null;
             IsWaitingForBrowserAuth = true;
@@ -219,6 +251,7 @@ public sealed class NativeAuthService
                 IOException or
                 UnauthorizedAccessException or
                 System.Security.Cryptography.CryptographicException or
+                System.Text.Json.JsonException or
                 System.Runtime.InteropServices.COMException or
                 InvalidOperationException)
         {
@@ -261,6 +294,10 @@ public sealed class NativeAuthService
         }
         catch (Exception error) when (
             error is InvalidOperationException or
+                IOException or
+                UnauthorizedAccessException or
+                System.Security.Cryptography.CryptographicException or
+                System.Text.Json.JsonException or
                 HttpRequestException or
                 TaskCanceledException or
                 VexApiException or

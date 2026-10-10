@@ -33,6 +33,7 @@ public sealed partial class SettingsPage : Page
     private NativeUpdateSnapshot _updateSnapshot =
         AppServices.Current.UpdateService.CurrentSnapshot;
     private WindowsHelloStatus? _windowsHelloStatus;
+    private AppRemoteConfig? _remoteConfig;
     private bool _renderingPreferences;
     private bool _realtimeRefreshInFlight;
     private bool _realtimeRefreshPending;
@@ -222,7 +223,7 @@ public sealed partial class SettingsPage : Page
         });
         ShowNotice(
             language == "en"
-                ? "English will be applied as localized resources are loaded."
+                ? "Language preference saved."
                 : "Русский язык выбран.",
             InfoBarSeverity.Success);
     }
@@ -237,6 +238,7 @@ public sealed partial class SettingsPage : Page
             await _stateStore.EnableWindowsHelloAsync(
                 CurrentWindowHandle(),
                 CancellationToken.None);
+            _services.Auth.ClearStatus();
             ShowNotice(
                 "Windows Hello включен для локальной сессии VEX.",
                 InfoBarSeverity.Success);
@@ -267,6 +269,7 @@ public sealed partial class SettingsPage : Page
             await _stateStore.UnlockAsync(
                 CurrentWindowHandle(),
                 CancellationToken.None);
+            _services.Auth.ClearStatus();
             ShowNotice(
                 "Локальная сессия разблокирована через Windows Hello.",
                 InfoBarSeverity.Success);
@@ -297,6 +300,7 @@ public sealed partial class SettingsPage : Page
             await _stateStore.DisableWindowsHelloAsync(
                 CurrentWindowHandle(),
                 CancellationToken.None);
+            _services.Auth.ClearStatus();
             ShowNotice(
                 "Windows Hello отключен для локальной сессии VEX.",
                 InfoBarSeverity.Success);
@@ -589,40 +593,90 @@ public sealed partial class SettingsPage : Page
     private async Task RefreshAsync()
     {
         SetBusy(true);
+        SettingsNotice.IsOpen = false;
+        _state = _services.Coordinator.CurrentState;
         try
         {
-            _state = _services.Coordinator.CurrentState;
-            await RefreshVpnStateAsync();
+            // Control-plane notices and local session security remain available
+            // while the privileged VPN service is being repaired.
+            try
+            {
+                await RefreshVpnStateAsync();
+            }
+            catch (Exception error) when (
+                error is IOException or UnauthorizedAccessException or
+                    InvalidOperationException or OperationCanceledException)
+            {
+                ShowNotice(
+                    "Служба VEX VPN недоступна. Нажмите «Запустить службу» для восстановления.",
+                    InfoBarSeverity.Warning);
+            }
+
             _windowsHelloStatus = await _stateStore.GetWindowsHelloStatusAsync(
                 CancellationToken.None);
             _updateSnapshot = await _services.UpdateService.RefreshAsync(
                 CancellationToken.None);
-            SettingsNotice.IsOpen = false;
+            await RefreshRemoteConfigAsync();
         }
         catch (Exception error) when (
-            error is IOException
-                or UnauthorizedAccessException
-                or InvalidOperationException
-                or OperationCanceledException)
+            error is IOException or UnauthorizedAccessException or
+                InvalidOperationException or OperationCanceledException or
+                System.Security.Cryptography.CryptographicException)
         {
-            _snapshot = new VpnConnectionSnapshot(
-                VpnConnectionPhase.Error,
-                _state?.LocationId,
-                Sequence: _snapshot.Sequence,
-                ErrorCode: "vpn_service_unavailable");
-            _updateSnapshot = NativeUpdateSnapshot.Error(
-                _updateSnapshot.CurrentVersion,
-                _updateSnapshot.Channel,
-                _updateSnapshot.Architecture,
-                error.Message);
             ShowNotice(
-                "Служба VEX VPN недоступна. Проверь установку и перезапусти shell.",
+                "Не удалось обновить настройки. Повторите позже.",
                 InfoBarSeverity.Warning);
         }
         finally
         {
             SetBusy(false);
             Render();
+        }
+    }
+
+    private async Task RefreshRemoteConfigAsync()
+    {
+        var version = typeof(App).Assembly.GetName().Version;
+        var metadata = new ClientAppMetadata(
+            "windows",
+            _services.AppVersion,
+            Math.Max(0, version is { Revision: > 0 }
+                ? version.Revision
+                : version?.Build ?? 0),
+            _updateSnapshot.Channel,
+            typeof(VpnConnectionSnapshot).Assembly.GetName().Version?.ToString() ?? "1.0.0",
+            Environment.OSVersion.VersionString,
+            System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture
+                .ToString().ToLowerInvariant(),
+            "native-windows-1",
+            1);
+        try
+        {
+            _remoteConfig = await _services.Coordinator.GetRemoteConfigAsync(
+                metadata,
+                CancellationToken.None);
+        }
+        catch (Exception error) when (
+            error is HttpRequestException or OperationCanceledException or VexApiException)
+        {
+            // Preserve the most recent service notice when temporarily offline.
+        }
+    }
+
+    private async void OnOpenSupportWebsiteClick(
+        object sender,
+        RoutedEventArgs args)
+    {
+        try
+        {
+            if (!await Launcher.LaunchUriAsync(new Uri("https://vexguard.app/support")))
+            {
+                ShowNotice("Не удалось открыть сайт поддержки.", InfoBarSeverity.Warning);
+            }
+        }
+        catch (System.Runtime.InteropServices.COMException)
+        {
+            ShowNotice("Не удалось открыть сайт поддержки.", InfoBarSeverity.Warning);
         }
     }
 
@@ -636,6 +690,8 @@ public sealed partial class SettingsPage : Page
     private void Render()
     {
         RenderPreferences();
+        IncidentNotice.Message = _remoteConfig?.IncidentBanner?.Trim() ?? string.Empty;
+        IncidentNotice.IsOpen = !string.IsNullOrWhiteSpace(IncidentNotice.Message);
         _snapshot = _services.VpnUiState.Snapshot;
         AppVersionText.Text =
             $"Версия приложения: {_services.AppVersion} · канал {_updateSnapshot.Channel} · updater {FormatUpdateStatus()}";

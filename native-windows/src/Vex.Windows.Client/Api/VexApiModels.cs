@@ -38,7 +38,8 @@ public sealed record VpnLocation(
     [property: JsonPropertyName("country_code")] string? CountryCode = null,
     [property: JsonPropertyName("flag_emoji")] string? FlagEmoji = null,
     [property: JsonPropertyName("status")] string? Status = null,
-    [property: JsonPropertyName("latency_ms")] double? LatencyMs = null);
+    [property: JsonPropertyName("latency_ms")] double? LatencyMs = null,
+    [property: JsonPropertyName("awg3_nodes")] int? Awg3Nodes = null);
 
 public sealed record VpnDevice(
     [property: JsonPropertyName("id")] string Id,

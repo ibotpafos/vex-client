@@ -7,13 +7,9 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 if ($null -eq $Paths -or $Paths.Count -eq 0) {
-    $Paths = @(
-        (Join-Path $PSScriptRoot 'bootstrap-native-windows.ps1'),
-        (Join-Path $PSScriptRoot 'install-vpn-service.ps1'),
-        (Join-Path $PSScriptRoot 'uninstall-vpn-service.ps1'),
-        (Join-Path (Join-Path (Join-Path $PSScriptRoot '..') 'packaging') 'package-native-windows.ps1'),
-        (Join-Path (Join-Path (Join-Path $PSScriptRoot '..') 'packaging') 'publish-native-windows.ps1')
-    )
+    $Paths = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot '..') -Filter '*.ps1' -Recurse -File |
+        Where-Object { $_.FullName -notmatch '[\\/](bin|obj|out|published)[\\/]' } |
+        ForEach-Object { $_.FullName })
 }
 
 $parseFailures = New-Object System.Collections.Generic.List[string]

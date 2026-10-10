@@ -11,4 +11,10 @@
     <ProjectReference Include="../../src/Vex.Windows.Core/Vex.Windows.Core.csproj" />
     <ProjectReference Include="../../src/Vex.Windows.Client/Vex.Windows.Client.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="../../src/Vex.Windows.App/Services/DiagnosticsQueueService.cs" Link="DiagnosticsQueueService.cs" />
+    <Compile Include="../../src/Vex.Windows.App/Services/SupportSocketClient.cs" Link="SupportSocketClient.cs" />
+    <Compile Include="../../src/Vex.Windows.App/Services/VpnUiStateService.cs" Link="VpnUiStateService.cs" />
+  </ItemGroup>
 </Project>

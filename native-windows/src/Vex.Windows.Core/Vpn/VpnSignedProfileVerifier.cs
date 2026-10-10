@@ -285,6 +285,10 @@ public sealed class VpnSignedProfileVerifier
             Reject("profile_routing_invalid");
         }
 
+        if (policy.Tunnel is null)
+        {
+            Reject("profile_transport_invalid");
+        }
         if (policy.Tunnel.Protocol != "amneziawg")
         {
             Reject("profile_protocol_unsupported");
@@ -364,7 +368,15 @@ public sealed class VpnSignedProfileVerifier
         }
 
         lines.Add($"Endpoint = {tunnel.Endpoint}");
-        lines.Add($"AllowedIPs = {string.Join(", ", tunnel.AllowedIps)}");
+        // Managed profiles currently assign only IPv4. Match the macOS helper:
+        // do not install unusable IPv6 routes without an IPv6 interface address.
+        var allowedIps = tunnel.AllowedIps.Where(value =>
+            !value.Contains(':')).ToArray();
+        if (allowedIps.Length == 0)
+        {
+            Reject("profile_allowed_ips_invalid");
+        }
+        lines.Add($"AllowedIPs = {string.Join(", ", allowedIps)}");
         lines.Add($"PersistentKeepalive = {tunnel.PersistentKeepalive}");
         lines.Add(string.Empty);
         var configuration = string.Join('\n', lines);
@@ -442,6 +454,10 @@ public sealed class VpnSignedProfileVerifier
         AddressFamily? expectedFamily,
         string errorCode)
     {
+        if (ContainsUnsafeText(value, 256))
+        {
+            Reject(errorCode);
+        }
         var parts = value.Split('/');
         if (parts.Length != 2 ||
             !IPAddress.TryParse(parts[0], out var address) ||
@@ -618,6 +634,33 @@ public sealed class VpnSignedProfileVerifier
         [JsonPropertyName("i5")]
         public string? I5 { get; init; }
 
+        [JsonPropertyName("header_protection_key")]
+        public string? HeaderProtectionKey { get; init; }
+
+        [JsonPropertyName("content_padding_addition")]
+        public string? ContentPaddingAddition { get; init; }
+
+        [JsonPropertyName("rekey_after_time")]
+        public string? RekeyAfterTime { get; init; }
+
+        [JsonPropertyName("rekey_timeout")]
+        public string? RekeyTimeout { get; init; }
+
+        [JsonPropertyName("reject_after_time")]
+        public string? RejectAfterTime { get; init; }
+
+        [JsonPropertyName("keepalive_timeout")]
+        public string? KeepaliveTimeout { get; init; }
+
+        [JsonPropertyName("max_handshake_attempts")]
+        public string? MaxHandshakeAttempts { get; init; }
+
+        [JsonPropertyName("random_trailers")]
+        public string? RandomTrailers { get; init; }
+
+        [JsonPropertyName("disable_cookies")]
+        public string? DisableCookies { get; init; }
+
         public void AppendTo(List<string> lines)
         {
             Append(lines, "Jc", Jc);
@@ -636,6 +679,31 @@ public sealed class VpnSignedProfileVerifier
             Append(lines, "I3", I3);
             Append(lines, "I4", I4);
             Append(lines, "I5", I5);
+            Append(lines, "HeaderProtectionKey", HeaderProtectionKey);
+            Append(lines, "ContentPaddingAddition", ContentPaddingAddition);
+            Append(lines, "RekeyAfterTime", RekeyAfterTime);
+            Append(lines, "RekeyTimeout", RekeyTimeout);
+            Append(lines, "RejectAfterTime", RejectAfterTime);
+            Append(lines, "KeepaliveTimeout", KeepaliveTimeout);
+            Append(lines, "MaxHandshakeAttempts", MaxHandshakeAttempts);
+            AppendBoolean(lines, "RandomTrailers", RandomTrailers);
+            AppendBoolean(lines, "DisableCookies", DisableCookies);
+        }
+
+        private static void AppendBoolean(List<string> lines, string name, string? value)
+        {
+            if (value is null)
+            {
+                return;
+            }
+            var normalized = value.Trim().ToLowerInvariant();
+            var rendered = normalized switch
+            {
+                "on" or "1" or "true" or "t" or "yes" => "on",
+                "off" or "0" or "false" or "f" or "no" => "off",
+                _ => throw new VpnTunnelException("profile_amnezia_parameters_invalid"),
+            };
+            lines.Add($"{name} = {rendered}");
         }
 
         private static void Append<T>(
@@ -651,6 +719,8 @@ public sealed class VpnSignedProfileVerifier
             var rendered = value?.ToString();
             if (rendered?.Length == 0)
             {
+                // Empty optional tokens represent an omitted feature in the
+                // managed API, matching the native macOS renderer.
                 return;
             }
 

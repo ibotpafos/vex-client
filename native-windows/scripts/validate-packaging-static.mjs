@@ -19,6 +19,9 @@ const scriptPaths = [
   path.join(scriptsDirectory, "uninstall-vpn-service.ps1"),
   path.join(packagingDirectory, "package-native-windows.ps1"),
   path.join(packagingDirectory, "publish-native-windows.ps1"),
+  path.join(packagingDirectory, "ReleaseValidation.ps1"),
+  path.join(scriptsDirectory, "stage-runtime-assets.ps1"),
+  path.join(windowsRoot, "tests", "ReleaseValidation.Tests.ps1"),
 ];
 
 for (const scriptPath of scriptPaths) {
@@ -42,6 +45,19 @@ assert.doesNotMatch(
 requireText(packageScript, /Invoke-SignTool[\s\S]+Vex\.Windows\.App\.exe/, "client must be signed");
 requireText(packageScript, /Invoke-SignTool[\s\S]+Vex\.Windows\.Service\.exe/, "service must be signed");
 requireText(packageScript, /schema = 'vex\.windows-package-output\.v2'/, "v2 metadata required");
+for (const requirement of [
+  /Assert-WindowsPeArchitecture[\s\S]+amneziaExecutablePath/,
+  /Assert-WindowsPeArchitecture[\s\S]+wintunLibraryPath/,
+  /Remove-Item -LiteralPath \$publishRoot -Recurse -Force/,
+  /Native Windows app publish failed with exit code/,
+  /Native Windows service publish failed with exit code/,
+  /sign \/fd SHA256 \/tr \$timestampUri \/td SHA256/,
+  /verify \/pa \/all/,
+  /-TimestampServer \$timestampUri/,
+  /TimeStamperCertificate/,
+]) {
+  requireText(packageScript, requirement, `release build safety requirement missing: ${requirement}`);
+}
 for (const metadataRequirement of [
   /install_entrypoint = 'elevated_bootstrap'/,
   /service_ownership = 'manual_sc_bootstrap'/,
@@ -217,6 +233,15 @@ requireText(mainWindowCode, /DefaultHeight = 620;/, "default window height must 
 requireText(mainWindowCode, /AppWindow\.SetIcon\(iconPath\)/, "title bar must use the VEX icon");
 const appProject = read(path.join(appRoot, "Vex.Windows.App.csproj"));
 requireText(appProject, /<ApplicationIcon>[\s\S]*icon\.ico/, "native executable icon is missing");
+const icon = fs.readFileSync(path.join(appRoot, "Assets", "icon.ico"));
+assert.equal(icon.readUInt16LE(0), 0, "ICO header reserved field must be zero");
+assert.equal(icon.readUInt16LE(2), 1, "native executable asset must be an ICO");
+assert.ok(icon.readUInt16LE(4) > 0, "native executable ICO must contain an image");
+for (const [file, size] of [["StoreLogo.png", 50], ["Square150x150Logo.png", 150], ["Square44x44Logo.png", 44]]) {
+  const png = fs.readFileSync(path.join(appRoot, "Assets", file));
+  assert.equal(png.readUInt32BE(16), size, `${file} width must match its MSIX resource size`);
+  assert.equal(png.readUInt32BE(20), size, `${file} height must match its MSIX resource size`);
+}
 const backgroundUpdater = read(
   path.join(appRoot, "Services", "NativeUpdateBackgroundHost.cs"),
 );
@@ -266,6 +291,14 @@ for (const [requirement, message] of [
   [/VEX_WINDOWS_RELEASE_NOTES:.*inputs\.release_notes/, "release notes are not passed to publisher"],
   [/validate-packaging-static\.mjs/, "packaging static validator is not part of CI"],
   [/validate_native_windows_xaml\.mjs/, "XAML validator is not part of CI"],
+  [/pull_request:/, "routine PR validation must be enabled"],
+  [/push:[\s\S]+branches: \[main\]/, "main branch validation must be enabled"],
+  [/architecture: \[x64, arm64\]/, "Windows compilation must cover both architectures"],
+  [/inputs\.package_release/, "signed packaging must require an explicit manual input"],
+  [/github\.event_name == 'workflow_dispatch' &&[\s\S]+github\.ref == 'refs\/heads\/main'/, "signed packaging must be manual and main-only"],
+  [/needs: \[portable, build\]/, "signed packaging must wait for portable and Windows validation"],
+  [/persist-credentials: false/, "CI checkout must not persist credentials"],
+  [/ReleaseValidation\.Tests\.ps1/, "release behavior tests must run in CI"],
 ]) {
   requireText(workflow, requirement, message);
 }

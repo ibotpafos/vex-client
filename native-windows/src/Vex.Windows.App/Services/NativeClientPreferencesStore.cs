@@ -11,7 +11,9 @@ public sealed record NativeClientPreferences(
     bool AutoRecoveryEnabled,
     string InterfaceLanguage,
     string? SelectedLocationId,
-    bool AutoUpdatesEnabled = true)
+    bool AutoUpdatesEnabled = true,
+    IReadOnlyList<string>? FavoriteLocationIds = null,
+    string ServerCatalogFilter = "all")
 {
     public static NativeClientPreferences Default { get; } =
         new(
@@ -166,5 +168,12 @@ public sealed class NativeClientPreferencesStore
                 string.IsNullOrWhiteSpace(preferences.SelectedLocationId)
                     ? null
                     : preferences.SelectedLocationId.Trim(),
+            FavoriteLocationIds = Vex.Windows.Client.Api.ServerCatalog.NormalizeFavoriteIds(
+                    preferences.FavoriteLocationIds)
+                .Order(StringComparer.Ordinal).ToArray(),
+            ServerCatalogFilter = preferences.ServerCatalogFilter?.ToLowerInvariant() is
+                    "fastest" or "favorites" or "available"
+                ? preferences.ServerCatalogFilter.ToLowerInvariant()
+                : "all",
         };
 }

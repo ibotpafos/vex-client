@@ -65,7 +65,8 @@ public sealed class AppServices
             apiClient,
             StateStore,
             VpnClient,
-            AppVersion);
+            AppVersion,
+            dynamicRoutes: new DynamicRouteEngine(new ProtectedDynamicRouteStore()));
         Auth = new NativeAuthService(
             apiClient,
             Coordinator,
@@ -75,14 +76,15 @@ public sealed class AppServices
         Auth.StateChanged += OnAuthStateChanged;
         Realtime.Changed += OnRealtimeChanged;
         UpdateService = new NativeUpdateService(
-            StateStore.GetOrCreateInstallationId());
+            GetUpdateInstallationId());
         Preferences = new NativeClientPreferencesStore();
         BackgroundUpdates = new NativeUpdateBackgroundHost(
             UpdateService,
             Preferences);
         StartupService = new WindowsStartupService();
-        VpnUiState = new VpnUiStateService(VpnClient);
+        VpnUiState = new VpnUiStateService(VpnClient.GetDiagnosticsAsync);
         ProductParity = new VpnProductParityService();
+        BackgroundVpn = new NativeVpnBackgroundHost(this);
         ServiceMaintenance = new WindowsServiceMaintenanceService();
         SupportSocketClient.Current.ConfigureEndpointProvider(
             (_, cancellationToken) =>
@@ -90,10 +92,29 @@ public sealed class AppServices
                     cancellationToken));
         DiagnosticsQueueService.Current.ConfigureUploader(
             UploadQueuedDiagnosticsAsync);
+        Coordinator.SessionChanged += OnCoordinatorSessionChanged;
         _ = SynchronizeRealtimeAsync();
     }
 
     public static AppServices Current => SharedServices.Value;
+
+    private string GetUpdateInstallationId()
+    {
+        try
+        {
+            return StateStore.GetOrCreateInstallationId();
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or
+            System.Security.Cryptography.CryptographicException or System.Text.Json.JsonException)
+        {
+            // Keep update recovery available without replacing the identity
+            // used for device provisioning. This fallback stays local.
+            var seed = System.Text.Encoding.UTF8.GetBytes(
+                Environment.MachineName + "\\" + Environment.UserName);
+            return "update-only-" + Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(seed));
+        }
+    }
 
     public string AppVersion { get; }
 
@@ -122,6 +143,8 @@ public sealed class AppServices
 
     public VpnProductParityService ProductParity { get; }
 
+    public NativeVpnBackgroundHost BackgroundVpn { get; }
+
     public WindowsServiceMaintenanceService ServiceMaintenance { get; }
 
     public MainWindow? MainWindow { get; private set; }
@@ -143,6 +166,14 @@ public sealed class AppServices
 
     private void OnAuthStateChanged(object? sender, EventArgs args) =>
         _ = SynchronizeRealtimeAsync();
+
+    private void OnCoordinatorSessionChanged(object? sender, EventArgs args)
+    {
+        if (Coordinator.CurrentStateAccess == ClientStateAccessKind.Missing)
+            VpnUiState.MarkConnectionDesired(false);
+        Auth.ClearStatus();
+        BackgroundVpn.Wake();
+    }
 
     private void OnRealtimeChanged(
         object? sender,
@@ -168,9 +199,14 @@ public sealed class AppServices
                     NativeClientFlowException or
                     InvalidOperationException)
             {
+                VpnUiState.MarkConnectionDesired(false);
                 try
                 {
-                    await Coordinator.SignOutAsync(CancellationToken.None);
+                    await VpnUiState.RunAsync(async token =>
+                    {
+                        await Coordinator.SignOutAsync(token);
+                        return await VpnClient.GetDiagnosticsAsync(token);
+                    }, CancellationToken.None);
                 }
                 catch (Exception signOutError) when (
                     signOutError is IOException or
@@ -187,6 +223,42 @@ public sealed class AppServices
             return;
         }
 
+        if (args.Event.Type == "customer.resync" ||
+            args.Metadata.Domains.Any(domain => domain is "entitlement" or "billing" or "devices" or "provisioning"))
+        {
+            try
+            {
+                await Coordinator.InvalidateCachedEntitlementAsync(CancellationToken.None);
+                if (args.Event.Type == "customer.resync" ||
+                    args.Metadata.Domains.Any(domain => domain is "devices" or "provisioning"))
+                    await Coordinator.InvalidateProfileAsync(CancellationToken.None);
+                if (args.Event.Type == "customer.resync" ||
+                    args.Metadata.Domains.Any(domain => domain is "entitlement" or "billing"))
+                    await Coordinator.ValidateEntitlementAsync(CancellationToken.None);
+            }
+            catch (NativeClientFlowException error) when (
+                Vex.Windows.Core.Vpn.VpnRecoveryPolicy.IsTerminalError(error.Code))
+            {
+                VpnUiState.MarkConnectionDesired(false);
+                try
+                {
+                    await VpnUiState.RunAsync(VpnClient.DisconnectAsync, CancellationToken.None);
+                }
+                catch (Exception cleanupError) when (cleanupError is IOException or
+                    UnauthorizedAccessException or InvalidOperationException or
+                    System.Security.Cryptography.CryptographicException or OperationCanceledException)
+                {
+                    // Shared state retains the service failure and cleanup evidence.
+                }
+            }
+            catch (Exception error) when (error is NativeClientFlowException or IOException or
+                UnauthorizedAccessException or System.Security.Cryptography.CryptographicException or
+                HttpRequestException or VexApiException or OperationCanceledException)
+            {
+                // The session may have been cleared or locked during the event.
+            }
+        }
+        BackgroundVpn.Wake();
         CustomerRealtimeChanged?.Invoke(this, args);
     }
 

@@ -7,6 +7,7 @@ using System.Security.AccessControl;
 using System.Security.Principal;
 using System.ServiceProcess;
 using System.Text;
+using System.Text.Json;
 using Vex.Windows.Core.Vpn;
 
 namespace Vex.Windows.Service.Runtime;
@@ -15,6 +16,7 @@ public sealed class AmneziaServiceTunnelRuntime : IVpnTunnelRuntime, IDisposable
 {
     private static readonly TimeSpan OperationTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(250);
+    private static readonly TimeSpan MaximumHandshakeAge = TimeSpan.FromSeconds(180);
 
     private readonly WindowsServiceOptions _options;
     private readonly string _privateDataDirectory;
@@ -24,12 +26,14 @@ public sealed class AmneziaServiceTunnelRuntime : IVpnTunnelRuntime, IDisposable
     private readonly string _authorizationExpiryPath;
     private readonly object _leaseGate = new();
     private readonly NetworkSafetyController _networkSafety;
+    private readonly SemaphoreSlim _runtimeGate = new(1, 1);
     private readonly SemaphoreSlim _watchdogGate = new(1, 1);
     private readonly PeriodicTimer _watchdogTimer =
         new(TimeSpan.FromSeconds(15));
     private CancellationTokenSource? _leaseCancellation;
     private readonly CancellationTokenSource _watchdogCancellation = new();
     private int _watchdogSuppressed;
+    private bool _connectionDesired;
 
     public AmneziaServiceTunnelRuntime(WindowsServiceOptions options)
     {
@@ -46,6 +50,7 @@ public sealed class AmneziaServiceTunnelRuntime : IVpnTunnelRuntime, IDisposable
         _authorizationExpiryPath = Path.Combine(
             options.DataDirectory,
             "authorization-expires-at");
+        _connectionDesired = ReadAuthorizationExpiry() is not null;
         RecoverAuthorizationLease();
         NetworkChange.NetworkAddressChanged += OnNetworkAddressChanged;
         _ = RunWatchdogAsync(_watchdogCancellation.Token);
@@ -54,9 +59,20 @@ public sealed class AmneziaServiceTunnelRuntime : IVpnTunnelRuntime, IDisposable
     public async Task<VpnTunnelStatus> GetStatusAsync(
         CancellationToken cancellationToken)
     {
+        await _runtimeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try { return await GetStatusCoreAsync(cancellationToken).ConfigureAwait(false); }
+        finally { _runtimeGate.Release(); }
+    }
+
+    private async Task<VpnTunnelStatus> GetStatusCoreAsync(
+        CancellationToken cancellationToken)
+    {
         cancellationToken.ThrowIfCancellationRequested();
-        if (AuthorizationExpired())
+        var serviceStatus = ReadServiceStatus();
+        if (AuthorizationExpired() ||
+            serviceStatus == ServiceControllerStatus.Running && ReadAuthorizationExpiry() is null)
         {
+            _connectionDesired = false;
             await StopVendorServiceAsync(cancellationToken)
                 .ConfigureAwait(false);
             await _networkSafety.RollbackAsync(CancellationToken.None)
@@ -65,9 +81,8 @@ public sealed class AmneziaServiceTunnelRuntime : IVpnTunnelRuntime, IDisposable
             return VpnTunnelStatus.Disconnected();
         }
 
-        var serviceStatus = ReadServiceStatus();
         var locationId = ReadLocation();
-        var diagnostics = CaptureDiagnostics();
+        var diagnostics = await CaptureDiagnosticsAsync(cancellationToken).ConfigureAwait(false);
 
         if (serviceStatus == ServiceControllerStatus.Running &&
             diagnostics.IsUsable)
@@ -114,6 +129,15 @@ public sealed class AmneziaServiceTunnelRuntime : IVpnTunnelRuntime, IDisposable
         bool enabled,
         CancellationToken cancellationToken)
     {
+        await _runtimeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try { return await SetAntiLeakCoreAsync(enabled, cancellationToken).ConfigureAwait(false); }
+        finally { _runtimeGate.Release(); }
+    }
+
+    private async Task<VpnTunnelStatus> SetAntiLeakCoreAsync(
+        bool enabled,
+        CancellationToken cancellationToken)
+    {
         var config = ReadConfiguration() ??
             throw new VpnTunnelException("tunnel_configuration_missing");
         var endpoint = ReadConfigValue(config, "Endpoint") ??
@@ -136,7 +160,7 @@ public sealed class AmneziaServiceTunnelRuntime : IVpnTunnelRuntime, IDisposable
                 .ConfigureAwait(false);
         }
 
-        return await GetStatusAsync(cancellationToken).ConfigureAwait(false);
+        return await GetStatusCoreAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<VpnTunnelStatus> ConnectAsync(
@@ -158,6 +182,22 @@ public sealed class AmneziaServiceTunnelRuntime : IVpnTunnelRuntime, IDisposable
         bool antiLeakEnabled,
         CancellationToken cancellationToken)
     {
+        await _runtimeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await ConnectCoreAsync(locationId, tunnelConfig,
+                authorizationExpiresAt, antiLeakEnabled, cancellationToken).ConfigureAwait(false);
+        }
+        finally { _runtimeGate.Release(); }
+    }
+
+    private async Task<VpnTunnelStatus> ConnectCoreAsync(
+        string locationId,
+        string tunnelConfig,
+        DateTimeOffset? authorizationExpiresAt,
+        bool antiLeakEnabled,
+        CancellationToken cancellationToken)
+    {
         Interlocked.Increment(ref _watchdogSuppressed);
         try
         {
@@ -171,11 +211,13 @@ public sealed class AmneziaServiceTunnelRuntime : IVpnTunnelRuntime, IDisposable
             EnsureRuntimeFilesExist();
             Directory.CreateDirectory(_options.DataDirectory);
             EnsurePrivateDataDirectory();
+            _connectionDesired = true;
 
             var configurationHash = ComputeHash(tunnelConfig);
             var endpoint = ReadConfigValue(tunnelConfig, "Endpoint") ??
                 throw new VpnTunnelException("invalid_tunnel_configuration");
             var transactionStarted = false;
+            VpnTunnelDiagnostics? verifiedDiagnostics = null;
             try
             {
                 transactionStarted = true;
@@ -184,6 +226,10 @@ public sealed class AmneziaServiceTunnelRuntime : IVpnTunnelRuntime, IDisposable
                     cancellationToken).ConfigureAwait(false);
                 var requiresInstall =
                     !HasInstalledConfiguration(configurationHash);
+                var minimumHandshakeAt = requiresInstall ||
+                    ReadServiceStatus() != ServiceControllerStatus.Running
+                    ? DateTimeOffset.UtcNow.AddSeconds(-2)
+                    : DateTimeOffset.UtcNow - MaximumHandshakeAge;
                 if (requiresInstall)
                 {
                     await ReplaceTunnelAsync(cancellationToken)
@@ -224,11 +270,12 @@ public sealed class AmneziaServiceTunnelRuntime : IVpnTunnelRuntime, IDisposable
                     await _networkSafety.DisarmFirewallOnlyAsync(
                         cancellationToken).ConfigureAwait(false);
                 }
-                await WaitForNetworkSafetyAsync(cancellationToken)
+                verifiedDiagnostics = await WaitForNetworkSafetyAsync(cancellationToken, minimumHandshakeAt)
                     .ConfigureAwait(false);
             }
             catch
             {
+                _connectionDesired = false;
                 if (transactionStarted)
                 {
                     await RollbackFailedConnectAsync().ConfigureAwait(false);
@@ -240,7 +287,7 @@ public sealed class AmneziaServiceTunnelRuntime : IVpnTunnelRuntime, IDisposable
                 VpnConnectionPhase.Connected,
                 locationId,
                 errorCode: null,
-                CaptureDiagnostics());
+                verifiedDiagnostics ?? throw new VpnTunnelException("tunnel_network_degraded"));
         }
         finally
         {
@@ -251,6 +298,15 @@ public sealed class AmneziaServiceTunnelRuntime : IVpnTunnelRuntime, IDisposable
     public async Task<VpnTunnelStatus> DisconnectAsync(
         CancellationToken cancellationToken)
     {
+        await _runtimeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try { return await DisconnectCoreAsync(cancellationToken).ConfigureAwait(false); }
+        finally { _runtimeGate.Release(); }
+    }
+
+    private async Task<VpnTunnelStatus> DisconnectCoreAsync(
+        CancellationToken cancellationToken)
+    {
+        _connectionDesired = false;
         Interlocked.Increment(ref _watchdogSuppressed);
         try
         {
@@ -308,9 +364,9 @@ public sealed class AmneziaServiceTunnelRuntime : IVpnTunnelRuntime, IDisposable
     {
         NetworkChange.NetworkAddressChanged -= OnNetworkAddressChanged;
         _watchdogCancellation.Cancel();
-        _watchdogCancellation.Dispose();
         _watchdogTimer.Dispose();
-        _watchdogGate.Dispose();
+        // Callbacks may still be releasing their gates during synchronous host
+        // disposal. Let their managed semaphores be collected after completion.
         lock (_leaseGate)
         {
             _leaseCancellation?.Cancel();
@@ -339,6 +395,7 @@ public sealed class AmneziaServiceTunnelRuntime : IVpnTunnelRuntime, IDisposable
             _leaseCancellation = cancellation;
         }
 
+        var leaseToken = cancellation.Token;
         _ = Task.Run(async () =>
         {
             try
@@ -346,20 +403,31 @@ public sealed class AmneziaServiceTunnelRuntime : IVpnTunnelRuntime, IDisposable
                 var delay = expiresAt - DateTimeOffset.UtcNow;
                 if (delay > TimeSpan.Zero)
                 {
-                    await Task.Delay(delay, cancellation.Token)
+                    await Task.Delay(delay, leaseToken)
                         .ConfigureAwait(false);
                 }
 
-                await StopVendorServiceAsync(CancellationToken.None)
-                    .ConfigureAwait(false);
-                await _networkSafety.RollbackAsync(CancellationToken.None)
-                    .ConfigureAwait(false);
-                ClearAuthorizationLease();
+                await _runtimeGate.WaitAsync(leaseToken).ConfigureAwait(false);
+                try
+                {
+                    // A renewed authorization can replace the lease while this
+                    // callback is waiting for an in-flight connect to complete.
+                    leaseToken.ThrowIfCancellationRequested();
+                    if (AuthorizationExpired())
+                    {
+                        await StopVendorServiceAsync(CancellationToken.None)
+                            .ConfigureAwait(false);
+                        await _networkSafety.RollbackAsync(CancellationToken.None)
+                            .ConfigureAwait(false);
+                        ClearAuthorizationLease();
+                    }
+                }
+                finally { _runtimeGate.Release(); }
             }
             catch (OperationCanceledException)
             {
             }
-            catch (VpnTunnelException)
+            catch (Exception error) when (error is VpnTunnelException or IOException)
             {
                 // Keep the expired lease marker. The next status request
                 // retries the fail-closed stop instead of treating it as valid.
@@ -510,16 +578,23 @@ public sealed class AmneziaServiceTunnelRuntime : IVpnTunnelRuntime, IDisposable
         }
     }
 
-    private async Task WaitForNetworkSafetyAsync(
-        CancellationToken cancellationToken)
+    private async Task<VpnTunnelDiagnostics> WaitForNetworkSafetyAsync(
+        CancellationToken cancellationToken,
+        DateTimeOffset? minimumHandshakeAt = null)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken);
         timeout.CancelAfter(OperationTimeout);
         try
         {
-            while (!CaptureDiagnostics().IsUsable)
+            while (true)
             {
+                var diagnostics = await CaptureDiagnosticsAsync(timeout.Token).ConfigureAwait(false);
+                if (diagnostics.IsUsable &&
+                    (minimumHandshakeAt is null || diagnostics.LatestHandshakeAt >= minimumHandshakeAt))
+                {
+                    return diagnostics;
+                }
                 await Task.Delay(PollInterval, timeout.Token).ConfigureAwait(false);
                 if (ReadServiceStatus() != ServiceControllerStatus.Running)
                 {
@@ -660,21 +735,54 @@ public sealed class AmneziaServiceTunnelRuntime : IVpnTunnelRuntime, IDisposable
     private static NetworkInterface? FindTunnelAdapter() =>
         NetworkInterface.GetAllNetworkInterfaces().FirstOrDefault(adapter =>
             adapter.OperationalStatus == OperationalStatus.Up &&
-            adapter.Name.Contains("vex", StringComparison.OrdinalIgnoreCase));
+            string.Equals(adapter.Name, "vex", StringComparison.OrdinalIgnoreCase));
 
-    private VpnTunnelDiagnostics CaptureDiagnostics()
+    private async Task<VpnTunnelDiagnostics> CaptureDiagnosticsAsync(
+        CancellationToken cancellationToken)
     {
         var config = ReadConfiguration();
         var endpoint = config is null
             ? null
             : ReadConfigValue(config, "Endpoint");
         var expectsIpv6 = config is not null &&
-            ReadConfigValues(config, "AllowedIPs")
+            ReadConfigValues(config, "Address")
                 .Any(value => value.Contains(':'));
-        return _networkSafety.Capture(
-            FindTunnelAdapter(),
+        var adapter = FindTunnelAdapter();
+        var diagnostics = _networkSafety.Capture(
+            adapter,
             endpoint,
-            expectsIpv6);
+            expectsIpv6,
+            config is null ? [] : ReadConfigValues(config, "AllowedIPs").ToArray(),
+            config is null ? [] : ReadConfigValues(config, "DNS").ToArray());
+        if (adapter is null || config is null) { return diagnostics; }
+        var findings = diagnostics.Findings.ToList();
+        var publicKey = ReadConfigValue(config, "PublicKey");
+        if (publicKey is null)
+        {
+            findings.Add("tunnel_peer_status_unavailable");
+            return diagnostics with { Findings = findings };
+        }
+        try
+        {
+            var peer = await AmneziaPeerStatusClient.ReadAsync(publicKey, cancellationToken).ConfigureAwait(false);
+            if (peer.LatestHandshakeAt is null) { findings.Add("handshake_pending"); }
+            else if (!peer.HasFreshHandshake(DateTimeOffset.UtcNow, MaximumHandshakeAge))
+            {
+                findings.Add("handshake_stale");
+            }
+            return diagnostics with
+            {
+                LatestHandshakeAt = peer.LatestHandshakeAt,
+                RxBytes = peer.RxBytes,
+                TxBytes = peer.TxBytes,
+                Findings = findings,
+            };
+        }
+        catch (VpnTunnelException error)
+        {
+            findings.Add(error.Code);
+            return diagnostics with { Findings = findings };
+        }
     }
 
     private string? ReadConfiguration()
@@ -750,8 +858,7 @@ public sealed class AmneziaServiceTunnelRuntime : IVpnTunnelRuntime, IDisposable
     private async Task RepairAfterNetworkChangeAsync(
         CancellationToken cancellationToken)
     {
-        if (Volatile.Read(ref _watchdogSuppressed) != 0 ||
-            ReadServiceStatus() != ServiceControllerStatus.Running)
+        if (Volatile.Read(ref _watchdogSuppressed) != 0)
         {
             return;
         }
@@ -764,33 +871,44 @@ public sealed class AmneziaServiceTunnelRuntime : IVpnTunnelRuntime, IDisposable
 
         try
         {
-            var config = ReadConfiguration();
-            var endpoint = config is null
-                ? null
-                : ReadConfigValue(config, "Endpoint");
-            if (endpoint is null)
+            if (!await _runtimeGate.WaitAsync(0, cancellationToken).ConfigureAwait(false))
             {
                 return;
             }
-
-            await _networkSafety.ApplyControlPlaneBypassAsync(
-                endpoint,
-                cancellationToken).ConfigureAwait(false);
-            await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken)
-                .ConfigureAwait(false);
-            if (CaptureDiagnostics().IsUsable)
+            try
             {
-                return;
-            }
+                if (AuthorizationExpired() || ReadAuthorizationExpiry() is null || !_connectionDesired)
+                {
+                    await DisconnectCoreAsync(cancellationToken).ConfigureAwait(false);
+                    return;
+                }
+                var config = ReadConfiguration();
+                var endpoint = config is null ? null : ReadConfigValue(config, "Endpoint");
+                if (endpoint is null) { return; }
 
-            await StopVendorServiceAsync(cancellationToken).ConfigureAwait(false);
-            await StartVendorServiceAsync(cancellationToken).ConfigureAwait(false);
-            await WaitForConnectedAsync(cancellationToken).ConfigureAwait(false);
-            await WaitForNetworkSafetyAsync(cancellationToken)
-                .ConfigureAwait(false);
+                await _networkSafety.ApplyControlPlaneBypassAsync(endpoint, cancellationToken).ConfigureAwait(false);
+                if (ReadServiceStatus() == ServiceControllerStatus.Running)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
+                    if ((await CaptureDiagnosticsAsync(cancellationToken).ConfigureAwait(false)).IsUsable)
+                    {
+                        return;
+                    }
+                }
+
+                // Keep a valid desired connection retryable if the previous
+                // restart failed after stopping its vendor service.
+                var minimumHandshakeAt = DateTimeOffset.UtcNow.AddSeconds(-2);
+                await StopVendorServiceAsync(cancellationToken).ConfigureAwait(false);
+                await StartVendorServiceAsync(cancellationToken).ConfigureAwait(false);
+                await WaitForConnectedAsync(cancellationToken).ConfigureAwait(false);
+                await WaitForNetworkSafetyAsync(cancellationToken, minimumHandshakeAt).ConfigureAwait(false);
+            }
+            finally { _runtimeGate.Release(); }
         }
         catch (Exception error) when (
-            error is VpnTunnelException or SocketException or IOException)
+            error is VpnTunnelException or SocketException or IOException or Win32Exception
+                or UnauthorizedAccessException or JsonException)
         {
             // Status/diagnostics expose the degraded state. A bounded next
             // watchdog pass retries without crashing the LocalSystem service.

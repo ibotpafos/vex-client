@@ -2,6 +2,46 @@ using System.Text.Json.Serialization;
 
 namespace Vex.Windows.Client.Api;
 
+public sealed record ResiliencePolicy(
+    [property: JsonPropertyName("policy_version")] string PolicyVersion,
+    [property: JsonPropertyName("generated_at")] string GeneratedAt,
+    [property: JsonPropertyName("expires_at")] string ExpiresAt,
+    [property: JsonPropertyName("signature")] ResiliencePolicySignature Signature,
+    [property: JsonPropertyName("probe")] ResilienceProbePolicy Probe,
+    [property: JsonPropertyName("candidates")] IReadOnlyList<ResilienceConnectionCandidate> Candidates);
+
+public sealed record ResiliencePolicySignature(
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("alg")] string? Alg = null,
+    [property: JsonPropertyName("key_id")] string? KeyId = null,
+    [property: JsonPropertyName("value")] string? Value = null,
+    [property: JsonPropertyName("signed_at")] string? SignedAt = null,
+    [property: JsonPropertyName("canonical")] string? Canonical = null);
+
+public sealed record ResilienceProbePolicy(
+    [property: JsonPropertyName("connect_timeout_ms")] int ConnectTimeoutMs,
+    [property: JsonPropertyName("max_candidates")] int MaxCandidates,
+    [property: JsonPropertyName("checks")] IReadOnlyList<string> Checks,
+    [property: JsonPropertyName("failure_threshold")] int? FailureThreshold = null,
+    [property: JsonPropertyName("recovery_threshold")] int? RecoveryThreshold = null,
+    [property: JsonPropertyName("quarantine_ms")] int? QuarantineMs = null,
+    [property: JsonPropertyName("failback_hold_ms")] int? FailbackHoldMs = null);
+
+public sealed record ResilienceConnectionCandidate(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("device_id")] string DeviceId,
+    [property: JsonPropertyName("protocol")] string ProtocolName,
+    [property: JsonPropertyName("location_id")] string LocationId,
+    [property: JsonPropertyName("node_id")] string NodeId,
+    [property: JsonPropertyName("endpoint")] string Endpoint,
+    [property: JsonPropertyName("health_score")] int HealthScore,
+    [property: JsonPropertyName("expires_at")] string ExpiresAt,
+    [property: JsonPropertyName("path_id")] string? PathId = null,
+    [property: JsonPropertyName("path_kind")] string? PathKind = null,
+    [property: JsonPropertyName("entry_node_id")] string? EntryNodeId = null,
+    [property: JsonPropertyName("failure_domain")] string? FailureDomain = null,
+    [property: JsonPropertyName("priority")] int? Priority = null);
+
 public sealed record BillingPayment(
     [property: JsonPropertyName("id")] string Id,
     [property: JsonPropertyName("subscription_id")] string? SubscriptionId,

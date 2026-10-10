@@ -127,6 +127,12 @@
                                         </Grid>
                                         <TextBlock Foreground="{StaticResource VexTextBrush}" Text="{Binding Body}" TextWrapping="WrapWholeWords" />
                                         <TextBlock FontSize="10" Foreground="{StaticResource VexSecondaryTextBrush}" Text="{Binding CreatedAt}" />
+                                        <Button
+                                            Click="OnRetryMessageClick"
+                                            Content="Повторить отправку"
+                                            Tag="{Binding PendingId}"
+                                            Visibility="{Binding RetryVisibility}"
+                                            Style="{StaticResource VexGlassButtonStyle}" />
                                     </StackPanel>
                                 </Border>
                             </DataTemplate>

@@ -18,6 +18,7 @@ public sealed partial class MainWindow : Window
     private const int DefaultWidth = 920;
     private const int DefaultHeight = 620;
     private bool _allowClose;
+    private bool _hasAuthenticatedSession;
     private AppSection _currentSection = AppSection.Home;
 
     public MainWindow()
@@ -30,8 +31,11 @@ public sealed partial class MainWindow : Window
         ResizeForCurrentDpi();
         AppWindow.Closing += OnAppWindowClosing;
         ConfigureNavigation();
-        ContentFrame.Navigate(typeof(HomePage));
+        _hasAuthenticatedSession = AppServices.Current.Coordinator.CurrentState is not null;
+        NavigateToSection(_hasAuthenticatedSession ? AppSection.Home : AppSection.Account);
+        AppServices.Current.Auth.StateChanged += OnAuthStateChanged;
         AppServices.Current.UpdateService.Changed += OnUpdateSnapshotChanged;
+        Closed += OnWindowClosed;
         RenderShellState();
         IsShellWindowVisible = true;
     }
@@ -173,7 +177,7 @@ public sealed partial class MainWindow : Window
         var iconPath = Path.Combine(
             AppContext.BaseDirectory,
             "Assets",
-            "Vex.ico");
+            "icon.ico");
         if (File.Exists(iconPath))
         {
             AppWindow.SetIcon(iconPath);
@@ -224,6 +228,33 @@ public sealed partial class MainWindow : Window
         object? sender,
         EventArgs args) =>
         DispatcherQueue.TryEnqueue(RenderUpdateState);
+
+    private void OnAuthStateChanged(object? sender, EventArgs args) =>
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            var authenticated = AppServices.Current.Coordinator.CurrentState is not null;
+            if (authenticated == _hasAuthenticatedSession)
+            {
+                return;
+            }
+            _hasAuthenticatedSession = authenticated;
+            if (!authenticated)
+            {
+                NavigateToSection(AppSection.Account);
+            }
+            else if (_currentSection == AppSection.Account)
+            {
+                NavigateToSection(AppSection.Home);
+            }
+        });
+
+    private void OnWindowClosed(object sender, WindowEventArgs args)
+    {
+        AppServices.Current.Auth.StateChanged -= OnAuthStateChanged;
+        AppServices.Current.UpdateService.Changed -= OnUpdateSnapshotChanged;
+        AppWindow.Closing -= OnAppWindowClosing;
+        Closed -= OnWindowClosed;
+    }
 
     private void RenderShellState()
     {

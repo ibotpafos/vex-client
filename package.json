@@ -138,7 +138,12 @@
     "autolinking": {
       "include": [
         "@expo/ui"
-      ]
+      ],
+      "ios": {
+        "buildFromSource": [
+          "expo-modules-core"
+        ]
+      }
     },
     "doctor": {
       "appConfigFieldsNotSyncedCheck": {

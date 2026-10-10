@@ -52,16 +52,22 @@ pod_binary="$gem_dir/bin/pod"
 '
 
 project_dir="$fixture_dir/project"
-mkdir -p "$project_dir"
-cd "$root_dir"
 # Only tracked canonical build inputs are copied: local credentials, Pods,
 # stale external archives and other platform build outputs cannot enter it.
-git ls-files -z -- ios scripts modules assets app src patches ':(top,glob)*' \
-  | tar --null -T - -cf - | tar -xf - -C "$project_dir"
 # Expo's native precompile phases write into installed package directories, so
 # those dependencies also belong to the fixture rather than the source checkout.
-cp -R "$root_dir/node_modules" "$project_dir/node_modules"
-mkdir -p "$project_dir/.metro-cache" "$project_dir/.metro-file-map-cache"
+copy_canonical_project() {
+  local destination="$1"
+  mkdir -p "$destination"
+  (
+    cd "$root_dir"
+    git ls-files -z -- ios scripts modules assets app src patches ':(top,glob)*' \
+      | tar --null -T - -cf - | tar -xf - -C "$destination"
+  )
+  cp -R "$root_dir/node_modules" "$destination/node_modules"
+  mkdir -p "$destination/.metro-cache" "$destination/.metro-file-map-cache"
+}
+copy_canonical_project "$project_dir"
 export CI=1 EXPO_NO_TELEMETRY=1 VEX_BUILD_PROFILE=development VEX_UPDATES_ENABLED=0
 export GOTOOLCHAIN=local GOENV=off GOMAXPROCS=2 GOFLAGS=-p=2
 export GOMODCACHE="$fixture_dir/go-mod" GOCACHE="$fixture_dir/go-build"
@@ -77,21 +83,44 @@ else
   echo "Installing the tracked iOS lock with CocoaPods deployment enforcement."
 fi
 "$ruby_binary" "$pod_binary" "${pod_arguments[@]}"
+"$ruby_binary" - "$project_dir/ios/Pods/Local Podspecs/ExpoModulesCore.podspec.json" <<'RUBY'
+require 'json'
+spec = JSON.parse(File.read(ARGV.fetch(0)))
+abort('ExpoModulesCore must use its supported source build for a relocatable lock') unless spec['static_framework'] == true && spec['source_files'] && !spec['vendored_frameworks']
+puts 'Verified canonical ExpoModulesCore source-build selection.'
+RUBY
 if [[ "$lock_mode" == locked ]]; then
   cmp "$root_dir/ios/Podfile.lock" "$project_dir/ios/Podfile.lock"
   echo "Verified tracked Podfile.lock was preserved exactly by deployment installation."
 else
+  # A lock captured at one absolute path must deploy unchanged at another.
+  # Start from canonical dependencies again, excluding the first install's Pods
+  # and generated npm-package outputs, to expose path-dependent podspec checksums.
+  relocated_project="$fixture_dir/relocated-project"
+  copy_canonical_project "$relocated_project"
+  cp "$project_dir/ios/Podfile.lock" "$relocated_project/ios/Podfile.lock"
+  (
+    cd "$relocated_project"
+    "$ruby_binary" "$pod_binary" install --project-directory="$relocated_project/ios" --deployment
+  )
+  cmp "$project_dir/ios/Podfile.lock" "$relocated_project/ios/Podfile.lock"
+  cmp "$project_dir/ios/Pods/Local Podspecs/ExpoModulesCore.podspec.json" \
+    "$relocated_project/ios/Pods/Local Podspecs/ExpoModulesCore.podspec.json"
+  echo "Verified fresh second-location deployment preserved the generated lock and ExpoModulesCore spec exactly."
+
   # Text only: the generated lock is reviewable/importable from the job log.
   # Input hashes and the payload hash prevent importing a lock from another head.
   "$ruby_binary" - "$project_dir" <<'RUBY'
 require 'base64'
 require 'digest'
 require 'json'
+$stdout.sync = true
 root = ARGV.fetch(0)
 lock = File.binread(File.join(root, 'ios/Podfile.lock'))
 abort('Generated Podfile.lock exceeds the 256 KiB text-export bound') if lock.bytesize > 256 * 1024
 inputs = %w[package.json package-lock.json app.json app.config.ts ios/Podfile ios/Podfile.properties.json modules/vex-vpn/ios/VexVpn.podspec]
 inputs.concat(Dir.chdir(root) { Dir.glob('modules/**/{package.json,expo-module.config.json,*.podspec}') })
+inputs.concat(Dir.chdir(root) { Dir.glob('patches/**/*').select { |path| File.file?(path) } })
 metadata = {
   'sha256' => Digest::SHA256.hexdigest(lock),
   'bytes' => lock.bytesize,
@@ -101,7 +130,7 @@ metadata = {
 }
 puts "VEX_IOS_POD_LOCK_METADATA #{JSON.generate(metadata)}"
 puts 'VEX_IOS_POD_LOCK_BASE64_BEGIN'
-puts Base64.strict_encode64(lock).scan(/.{1,120}/)
+Base64.strict_encode64(lock).scan(/.{1,120}/).each { |line| puts "VEX_IOS_POD_LOCK_BASE64 #{line}" }
 puts 'VEX_IOS_POD_LOCK_BASE64_END'
 RUBY
 fi
@@ -178,6 +207,8 @@ for relative in VEX PlugIns/VexVpnTunnel.appex/VexVpnTunnel PlugIns/VexLiveActiv
 done
 "$ruby_binary" - "$compile_log" <<'RUBY'
 trace = File.read(ARGV.fetch(0))
+abort('Missing actual source compilation of ExpoModulesCore') unless trace.lines.any? { |line| line.include?('SwiftCompile') && line.include?("in target 'ExpoModulesCore' from project 'Pods'") }
+puts 'Verified full-app SDK source compilation: ExpoModulesCore.'
 %w[VexVpnModule.swift IosTunnelTransition.swift AppDelegate.swift PacketTunnelProvider.swift VexLiveActivityWidget.swift].each do |name|
   abort("Missing actual SwiftCompile trace for #{name}") unless trace.lines.any? { |line| line.include?('SwiftCompile') && line.include?(name) }
   puts "Verified full-app SDK compilation trace: #{name}"

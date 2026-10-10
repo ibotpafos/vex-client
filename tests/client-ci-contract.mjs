@@ -6,10 +6,14 @@ const workflow = process.argv[2] ?? '.github/workflows/native-reliability-ci.yml
 const document = YAML.parseDocument(fs.readFileSync(workflow, 'utf8'));
 assert.equal(document.errors.length, 0, 'Workflow must be valid YAML');
 const config = document.toJS();
+const packageConfig = JSON.parse(fs.readFileSync('package.json', 'utf8'));
 const lanes = { shared: 'ubuntu-24.04', android: 'ubuntu-24.04', macos: 'macos-26' };
 
-function violations(value) {
+function violations(value, packageValue = packageConfig) {
   const failures = [];
+  const autolinking = packageValue.expo?.autolinking;
+  if (JSON.stringify(autolinking?.ios?.buildFromSource) !== JSON.stringify(['expo-modules-core'])
+    || autolinking?.buildFromSource !== undefined || autolinking?.android?.buildFromSource !== undefined) failures.push('iOS-only relocatable ExpoModulesCore source selection');
   if (value.permissions?.contents !== 'read' || Object.values(value.permissions ?? {}).includes('write')) failures.push('read-only permissions');
   if (!value.on?.pull_request || !value.on?.push || !Object.hasOwn(value.on ?? {}, 'workflow_dispatch')) failures.push('PR/main/manual triggers');
   if (!value.concurrency?.group || value.concurrency?.['cancel-in-progress'] !== true) failures.push('bounded concurrency');
@@ -97,11 +101,15 @@ if (failures.length) {
     value => { value.jobs.macos.steps.find(step => step.name === 'Test all native macOS behavior').run += ' --filter SparkleUpdateTests'; },
     value => { value.jobs.macos.steps.find(step => step.id === 'contract').if = 'always()'; },
     value => { value.jobs.macos.steps.find(step => step.name === 'Retain only helper transaction evidence').with.path += 'dist/**'; },
+    (value, packageValue) => { delete packageValue.expo.autolinking.ios.buildFromSource; },
+    (value, packageValue) => { packageValue.expo.autolinking.buildFromSource = ['expo-modules-core']; },
+    (value, packageValue) => { packageValue.expo.autolinking.android = { buildFromSource: ['expo-modules-core'] }; },
   ];
   for (const mutate of mutations) {
     const candidate = structuredClone(config);
-    mutate(candidate);
-    assert.ok(violations(candidate).length > 0, 'Unsafe/incomplete CI fixture must be rejected');
+    const packageCandidate = structuredClone(packageConfig);
+    mutate(candidate, packageCandidate);
+    assert.ok(violations(candidate, packageCandidate).length > 0, 'Unsafe/incomplete CI fixture must be rejected');
   }
   console.log(JSON.stringify({ status: 'pass', lanes: Object.keys(lanes), negativeFixtures: mutations.length }));
 }

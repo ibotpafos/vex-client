@@ -147,9 +147,8 @@ jobs:
           cache: false
       - name: Build the canonical iOS simulator app without signing
         timeout-minutes: 40
-        # One reviewed bootstrap run exports the real lock as text. After importing
-        # it, remove this option so CI enforces the tracked lock with --deployment.
-        run: bash scripts/test_ios_simulator_build.sh --regenerate-lock
+        # The owned fixture enforces the reviewed tracked lock with --deployment.
+        run: bash scripts/test_ios_simulator_build.sh
       - name: Resolve Swift package
         run: swift package --package-path macos-native resolve
       - name: Build native macOS client

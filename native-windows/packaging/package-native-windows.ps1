@@ -157,12 +157,20 @@ function Publish-SignedSetup {
         ($metadataFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
         throw 'The completed release metadata must be a nonempty regular file for Setup.'
     }
-    if (Test-Path -LiteralPath $PublishDirectory) { Remove-Item -LiteralPath $PublishDirectory -Recurse -Force }
+    $metadataLock = $null
     try {
+        # The same immutable metadata bytes are embedded and bound into the
+        # signed Win32 ProductVersion for the publisher's release pairing check.
+        $metadataLock = [IO.File]::Open($metadataFile.FullName, [IO.FileMode]::Open,
+            [IO.FileAccess]::Read, [IO.FileShare]::Read)
+        $metadataHash = (Get-FileHash -LiteralPath $metadataFile.FullName -Algorithm SHA256).Hash.ToUpperInvariant()
+        if (Test-Path -LiteralPath $PublishDirectory) { Remove-Item -LiteralPath $PublishDirectory -Recurse -Force }
         dotnet publish $ProjectPath -c $Configuration -r "win-$Architecture" --self-contained true `
             '-p:PublishSingleFile=true' '-p:IncludeNativeLibrariesForSelfExtract=true' `
             "-p:ReleaseMetadataPath=$($metadataFile.FullName)" `
             "-p:Version=$Version" "-p:AssemblyVersion=$Version" "-p:FileVersion=$Version" `
+            "-p:InformationalVersion=$Version+metadata.$metadataHash" `
+            '-p:IncludeSourceRevisionInInformationalVersion=false' `
             -o $PublishDirectory
         if ($LASTEXITCODE -ne 0) { throw "Native Windows Setup publish failed with exit code $LASTEXITCODE." }
         $publishedSetup = Join-Path $PublishDirectory 'Vex.Windows.Setup.exe'
@@ -179,6 +187,7 @@ function Publish-SignedSetup {
         throw
     }
     finally {
+        if ($null -ne $metadataLock) { $metadataLock.Dispose() }
         if (Test-Path -LiteralPath $TemporaryPfxPath -PathType Leaf) { Remove-Item -LiteralPath $TemporaryPfxPath -Force }
     }
 }

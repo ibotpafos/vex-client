@@ -17,6 +17,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <InformationalVersion Condition="'$(InformationalVersion)' == ''">unbound-review-build</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
   <ItemGroup Condition="'$(ReleaseMetadataPath)' != ''">
     <EmbeddedResource Include="$(ReleaseMetadataPath)" LogicalName="Vex.Windows.Setup.ReleaseMetadata.json" />

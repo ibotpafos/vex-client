@@ -51,6 +51,35 @@ $global:VexReleaseReadinessAuthenticode = @{
     Mode = 'valid'; TargetArchitecture = 'arm64'; Calls = @()
     RawData = [Text.Encoding]::UTF8.GetBytes('Known isolated fixture signing certificate')
 }
+$global:VexReleaseReadinessProductVersion = @{ Mode = 'valid'; TargetArchitecture = 'arm64' }
+function Get-Item {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$LiteralPath, [switch]$Force)
+    $item = Microsoft.PowerShell.Management\Get-Item -LiteralPath $LiteralPath -Force:$Force
+    if ($item -is [IO.FileInfo] -and $item.Name -match '^VEX\.Setup\.(x64|arm64)\.exe$') {
+        $architecture = $Matches[1]
+        $metadataPath = Join-Path $item.Directory.FullName 'package-metadata.json'
+        $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
+        $hash = (Get-FileHash -LiteralPath $metadataPath -Algorithm SHA256).Hash.ToUpperInvariant()
+        $productVersion = "$($metadata.version)+metadata.$hash"
+        if ($architecture -ceq $global:VexReleaseReadinessProductVersion.TargetArchitecture) {
+            switch ($global:VexReleaseReadinessProductVersion.Mode) {
+                'stale' { $productVersion = '1.0.0.0+metadata.' + ('0' * 64) }
+                'different-metadata' { $productVersion = "$($metadata.version)+metadata." + ('0' * 64) }
+                'revision-appended' { $productVersion += '+unrequested-source-revision' }
+                'unbound' { $productVersion = 'unbound-review-build' }
+            }
+        }
+        # Unsigned portable fixture bytes have no real Win32 version resource.
+        # Mock only that Windows provider; execute the actual descriptor check.
+        return [pscustomobject]@{
+            PSIsContainer=$item.PSIsContainer; Length=$item.Length; Attributes=$item.Attributes
+            Name=$item.Name; FullName=$item.FullName; Directory=$item.Directory
+            VersionInfo=[pscustomobject]@{ProductVersion=$productVersion}
+        }
+    }
+    return $item
+}
 $certificateSha256 = Get-TestSha256 -InputValue $global:VexReleaseReadinessAuthenticode.RawData
 function Get-AuthenticodeSignature {
     param([Parameter(Mandatory = $true)][string]$LiteralPath)
@@ -109,8 +138,15 @@ try {
             $metadata["${artifact}_sha256"] = (Get-FileHash -LiteralPath $path).Hash
             $metadata["${artifact}_size_bytes"] = (Get-Item -LiteralPath $path).Length
         }
-        [IO.File]::WriteAllBytes((Join-Path $directory "VEX.Setup.$architecture.exe"),
-            [Text.Encoding]::UTF8.GetBytes("Unsigned isolated $architecture native Setup fixture"))
+        # Real architecture headers; Authenticode and Win32 ProductVersion remain
+        # isolated provider mocks, while the actual bounded PE parser runs.
+        $setupBytes = [byte[]]::new(128)
+        [BitConverter]::GetBytes([uint16]0x5A4D).CopyTo($setupBytes, 0)
+        [BitConverter]::GetBytes([uint32]64).CopyTo($setupBytes, 0x3C)
+        [BitConverter]::GetBytes([uint32]0x00004550).CopyTo($setupBytes, 64)
+        $machine = if ($architecture -eq 'arm64') { 0xAA64 } else { 0x8664 }
+        [BitConverter]::GetBytes([uint16]$machine).CopyTo($setupBytes, 68)
+        [IO.File]::WriteAllBytes((Join-Path $directory "VEX.Setup.$architecture.exe"), $setupBytes)
         [IO.File]::WriteAllText((Join-Path $directory 'package-metadata.json'), ($metadata | ConvertTo-Json))
         foreach ($unreferenced in @('do-not-ship.pfx', 'private.env', 'artifact.tmp', 'private-key.pem')) {
             [IO.File]::WriteAllText((Join-Path $directory $unreferenced), "Unreferenced fixture secret: $unreferenced")
@@ -215,11 +251,41 @@ try {
         Assert (-not (Test-Path -LiteralPath $output)) 'Invalid native Setup signer left partial release output behind.'
     }
     $global:VexReleaseReadinessAuthenticode.Mode = 'valid'
+    foreach ($architecture in @('x64', 'arm64')) {
+        $setupPath = Join-Path $packages "$architecture/VEX.Setup.$architecture.exe"
+        $validSetupBytes = [IO.File]::ReadAllBytes($setupPath)
+        foreach ($mode in @('wrong-architecture', 'malformed-pe')) {
+            $invalidSetupBytes = [byte[]]$validSetupBytes.Clone()
+            if ($mode -eq 'wrong-architecture') {
+                $wrongMachine = if ($architecture -eq 'arm64') { 0x8664 } else { 0xAA64 }
+                [BitConverter]::GetBytes([uint16]$wrongMachine).CopyTo($invalidSetupBytes, 68)
+            }
+            else { $invalidSetupBytes[64] = 0 }
+            try {
+                [IO.File]::WriteAllBytes($setupPath, $invalidSetupBytes)
+                $output = Join-Path $temporary "invalid-setup-pe-$architecture-$mode"
+                Assert-Rejected { & $publisher -PackagesRoot $packages -PublishRoot $output } 'Setup with an invalid actual PE architecture/signature must fail even when its certificate and metadata provenance providers are valid.'
+                Assert (-not (Test-Path -LiteralPath $output)) 'Invalid Setup PE left partial release output behind.'
+            }
+            finally { [IO.File]::WriteAllBytes($setupPath, $validSetupBytes) }
+        }
+    }
+    foreach ($architecture in @('x64','arm64')) {
+        $global:VexReleaseReadinessProductVersion.TargetArchitecture = $architecture
+        foreach ($mode in @('stale','different-metadata','revision-appended','unbound')) {
+            $global:VexReleaseReadinessProductVersion.Mode = $mode
+            $output = Join-Path $temporary "invalid-setup-binding-$architecture-$mode"
+            Assert-Rejected { & $publisher -PackagesRoot $packages -PublishRoot $output } 'Same-certificate Setup with old/mismatched/unbound signed metadata provenance must be rejected.'
+            Assert (-not (Test-Path -LiteralPath $output)) 'Invalid signed Setup metadata binding left partial release output behind.'
+        }
+    }
+    $global:VexReleaseReadinessProductVersion.Mode = 'valid'
     Write-Host 'Windows release readiness tests passed: safe rollout/floors, bundled signing inputs, preflight rejection, exact native Setup/bundle publication and secret exclusion.'
 }
 finally {
     Remove-Variable -Name VexReleaseReadinessSigner -Scope Global
     Remove-Variable -Name VexReleaseReadinessAuthenticode -Scope Global
+    Remove-Variable -Name VexReleaseReadinessProductVersion -Scope Global
     foreach ($name in $environmentNames) { [Environment]::SetEnvironmentVariable($name, $previousEnvironment[$name]) }
     if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Recurse -Force }
 }

@@ -231,7 +231,10 @@ service, `amneziawg.exe`, `wintun.dll`, and the profile-signing keyring. It also
 emits a bootstrap plus install/uninstall helpers and the Microsoft framework
 next to the MSIX. After metadata is final, it embeds those exact bytes into
 `VEX.Setup.x64.exe` or `VEX.Setup.arm64.exe` and signs the launcher with the same
-release certificate. Setup verifies its own signature, metadata, MSIX and all
+release certificate. Its signed Windows version resource also binds the exact
+metadata SHA-256; the publisher checks that binding for both architectures and
+rejects a stale launcher even when its certificate still matches. Setup verifies
+its own signature, metadata, MSIX and all
 script pins before enabling installation. Unsigned review launchers without
 embedded metadata refuse installation. No IPC
 credential or other secret is present in those artifacts.

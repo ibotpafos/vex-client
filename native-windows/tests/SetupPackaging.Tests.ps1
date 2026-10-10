@@ -9,6 +9,10 @@ function Assert-Rejected([scriptblock]$body,$message) {
     try { & $body | Out-Null } catch { $rejected=$true }
     Assert $rejected $message
 }
+function Assert-MetadataReleased([string]$Path) {
+    $writer = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite)
+    $writer.Dispose()
+}
 $sourcePath=(Resolve-Path (Join-Path $PSScriptRoot '../packaging/package-native-windows.ps1')).Path
 $tokens=$null; $errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile($sourcePath,[ref]$tokens,[ref]$errors)
@@ -22,6 +26,17 @@ $global:VexSetupPackagingFixture=@{Mode='valid';Arch='x64';Calls=@();SignCalls=@
 function dotnet {
     $Arguments=@($args)
     $global:VexSetupPackagingFixture.Calls += ,@($Arguments)
+    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+        $metadataArgument = [string]($Arguments | Where-Object { [string]$_ -like '-p:ReleaseMetadataPath=*' } | Select-Object -First 1)
+        $metadataFile = $metadataArgument.Substring('-p:ReleaseMetadataPath='.Length)
+        $blocked = $false
+        try {
+            $writer = [IO.File]::Open($metadataFile, [IO.FileMode]::Open, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite)
+            $writer.Dispose()
+        }
+        catch [IO.IOException] { $blocked = $true }
+        Assert $blocked 'Completed metadata must stay immutable between hashing and embedding, including failed Setup publishes'
+    }
     $global:LASTEXITCODE=0
     if ($global:VexSetupPackagingFixture.Mode -eq 'publish-fail') { $global:LASTEXITCODE=9; return }
     if ($global:VexSetupPackagingFixture.Mode -eq 'missing-output') { return }
@@ -66,7 +81,9 @@ try {
             "win-$architecture" -in $call -and '--self-contained' -in $call -and 'true' -in $call -and
             '-p:PublishSingleFile=true' -in $call -and '-p:IncludeNativeLibrariesForSelfExtract=true' -in $call -and
             "-p:ReleaseMetadataPath=$((Get-Item -LiteralPath $metadataPath).FullName)" -in $call -and
-            '-p:AssemblyVersion=2.3.4.5' -in $call -and '-p:FileVersion=2.3.4.5' -in $call) ('Actual Setup publish arguments lost architecture, completed metadata, native runtime or exact version: ' + ($call -join ' | '))
+            '-p:AssemblyVersion=2.3.4.5' -in $call -and '-p:FileVersion=2.3.4.5' -in $call -and
+            "-p:InformationalVersion=2.3.4.5+metadata.$($metadataHash.ToUpperInvariant())" -in $call -and
+            '-p:IncludeSourceRevisionInInformationalVersion=false' -in $call) ('Actual Setup publish arguments lost architecture, completed metadata, native runtime or exact version/hash binding: ' + ($call -join ' | '))
         Assert ($global:VexSetupPackagingFixture.SignCalls.Count -eq 2 -and
             $global:VexSetupPackagingFixture.SignCalls[0][0] -eq 'sign' -and
             '/tr' -in $global:VexSetupPackagingFixture.SignCalls[0] -and $timestampUri -in $global:VexSetupPackagingFixture.SignCalls[0] -and
@@ -74,16 +91,19 @@ try {
             $global:VexSetupPackagingFixture.SignCalls[1][0] -eq 'verify' -and
             '/pa' -in $global:VexSetupPackagingFixture.SignCalls[1] -and '/all' -in $global:VexSetupPackagingFixture.SignCalls[1]) 'Final release Setup did not use real packager sign/timestamp/trust-verification sequence'
         Assert ((Get-FileHash -LiteralPath $metadataPath).Hash -eq $metadataHash) 'Setup publish rewrote completed metadata and created a circular hash'
+        Assert-MetadataReleased $metadataPath
         foreach ($mode in @('publish-fail','missing-output','wrong-arch','sign-fail','verify-fail')) {
             # A previous successful candidate must be cleared before each attempt.
             [IO.File]::WriteAllText($setupPath,'stale previous release setup')
             $global:VexSetupPackagingFixture.Mode=$mode
             Assert-Rejected { Publish-SignedSetup @arguments } ('Broken Setup candidate admitted: '+$mode)
             Assert (-not (Test-Path -LiteralPath $setupPath) -and -not (Test-Path -LiteralPath $pfxPath)) 'Failed Setup publish left a stale/unsigned final launcher or private PFX eligible for release'
+            Assert-MetadataReleased $metadataPath
         }
         $global:VexSetupPackagingFixture.Mode='valid'; $global:VexSetupPackagingFixture.Certificate=('B'*64)
         Assert-Rejected { Publish-SignedSetup @arguments } 'Another signing certificate was accepted for release Setup'
         Assert (-not (Test-Path -LiteralPath $setupPath) -and -not (Test-Path -LiteralPath $pfxPath)) 'Wrong signer left final Setup output or PFX behind'
+        Assert-MetadataReleased $metadataPath
         $global:VexSetupPackagingFixture.Certificate=('A'*64)
         $saved=$arguments.MetadataPath; $arguments.MetadataPath=Join-Path $release 'missing-metadata.json'
         [IO.File]::WriteAllText($setupPath,'stale Setup despite missing metadata')

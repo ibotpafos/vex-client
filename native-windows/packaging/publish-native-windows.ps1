@@ -161,7 +161,8 @@ function Assert-FileHashAndSize {
 function Get-WindowsNativeSetupDescriptor {
     param(
         [Parameter(Mandatory = $true)]$Metadata,
-        [Parameter(Mandatory = $true)][string]$Directory
+        [Parameter(Mandatory = $true)][string]$Directory,
+        [Parameter(Mandatory = $true)][string]$MetadataPath
     )
     if ([string]$Metadata.architecture -cnotin @('x64', 'arm64') -or
         [string]$Metadata.client_certificate_sha256 -notmatch '^[A-Fa-f0-9]{64}$') {
@@ -175,6 +176,7 @@ function Get-WindowsNativeSetupDescriptor {
         ($null -ne $item.PSObject.Properties['LinkType'] -and $item.LinkType -eq 'HardLink')) {
         throw 'Native Setup must be a bounded regular executable.'
     }
+    Assert-WindowsPeArchitecture -Path $path -Architecture ([string]$Metadata.architecture)
     $signature = Get-AuthenticodeSignature -LiteralPath $path
     if ($signature.Status -ne [Management.Automation.SignatureStatus]::Valid -or
         $null -eq $signature.SignerCertificate) {
@@ -185,6 +187,20 @@ function Get-WindowsNativeSetupDescriptor {
     finally { $sha256.Dispose() }
     if ($certificatePin -ine [string]$Metadata.client_certificate_sha256) {
         throw 'Native Setup signer does not match the exact release metadata.'
+    }
+    $metadataItem = Get-Item -LiteralPath $MetadataPath -Force -ErrorAction Stop
+    if ($metadataItem.PSIsContainer -or $metadataItem.Length -le 0 -or $metadataItem.Length -gt 64KB -or
+        ($metadataItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'Native Setup requires bounded regular release metadata.'
+    }
+    $metadataHash = (Get-FileHash -LiteralPath $MetadataPath -Algorithm SHA256).Hash.ToUpperInvariant()
+    $version = ConvertTo-WindowsPackageVersion ([string]$Metadata.version)
+    $expectedProductVersion = "$version+metadata.$metadataHash"
+    # FileInfo.VersionInfo uses Windows FileVersionInfo.GetVersionInfo. The
+    # ProductVersion resource is protected by the Authenticode check above and
+    # binds either PE architecture without running the executable.
+    if ([string]$item.VersionInfo.ProductVersion -cne $expectedProductVersion) {
+        throw 'Native Setup was not built from the exact completed release metadata.'
     }
     return [pscustomobject]@{
         FileName = $name; SourcePath = $path
@@ -337,7 +353,7 @@ foreach ($entry in $metadataEntries) {
         -ExpectedSize ([long]$candidate.vclibs_dependency_size_bytes) -Description 'Microsoft VCLibs dependency'
     # Setup embeds the finished metadata. Its descriptor belongs to the signed
     # release entry, never back inside that metadata (which would create a cycle).
-    $setup = Get-WindowsNativeSetupDescriptor -Metadata $candidate -Directory $entry.SourceFile.Directory.FullName
+    $setup = Get-WindowsNativeSetupDescriptor -Metadata $candidate -Directory $entry.SourceFile.Directory.FullName -MetadataPath $entry.SourceFile.FullName
     $entry | Add-Member -NotePropertyName SetupDescriptor -NotePropertyValue $setup
 }
 

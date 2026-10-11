@@ -9,6 +9,7 @@ on:
       - "scripts/*native_windows*"
       - "versions.json"
       - ".github/workflows/native-windows-ci.yml"
+      - ".github/workflows/native-windows-release-preflight.yml"
   push:
     branches: [main]
     paths:
@@ -16,6 +17,7 @@ on:
       - "scripts/*native_windows*"
       - "versions.json"
       - ".github/workflows/native-windows-ci.yml"
+      - ".github/workflows/native-windows-release-preflight.yml"
   workflow_dispatch:
     inputs:
       package_release:
@@ -86,6 +88,7 @@ jobs:
           ./native-windows/scripts/validate-powershell-parse.ps1
           ./native-windows/tests/ReleaseValidation.Tests.ps1
           ./native-windows/tests/ReleaseReadiness.Tests.ps1
+          ./native-windows/tests/ReleaseInputPreflight.Tests.ps1
           ./native-windows/tests/VclibsDependency.Tests.ps1
           ./native-windows/tests/VerifiedBootstrapLaunch.Tests.ps1
           ./native-windows/tests/VendorStartupMigration.Tests.ps1
@@ -145,6 +148,7 @@ jobs:
           ./native-windows/scripts/validate-powershell-parse.ps1
           ./native-windows/tests/ReleaseValidation.Tests.ps1
           ./native-windows/tests/ReleaseReadiness.Tests.ps1
+          ./native-windows/tests/ReleaseInputPreflight.Tests.ps1
           ./native-windows/tests/VclibsDependency.Tests.ps1
           ./native-windows/tests/VerifiedBootstrapLaunch.Tests.ps1
           ./native-windows/tests/VendorStartupMigration.Tests.ps1

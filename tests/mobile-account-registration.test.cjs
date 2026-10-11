@@ -107,7 +107,7 @@ for (const platform of ['android', 'ios']) test(`${platform}: A logout → B log
   assert.equal(a.device.id, 'device-A'); assert.equal(again.device.id, a.device.id);
   assert.notEqual(b.device.externalDeviceId, legacyId); assert.notEqual(b.device.publicKey, a.device.publicKey);
   assert.equal(h.devices.get('A').length, 1); assert.equal(h.devices.get('B').length, 1); assert.equal(h.registrations.length, 2);
-  assert.match(again.config, new RegExp(legacyPair.privateKey.replace(/[+]/g, '\\+')));
+  assert.ok(again.config.includes(`PrivateKey = ${legacyPair.privateKey}`));
   assert.equal(await h.scoped.getOrCreateVpnAccountIdentity({ userId: 'B', platform, locationId: 'de', loadOwnedDevices: async () => [] }).then(identity => identity.keyPair.publicKey), b.device.publicKey);
   assert.equal(h.saved.get('vex.auth.device_id'), legacyId); assert.equal(h.generations(), 1);
 });

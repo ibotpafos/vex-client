@@ -1,354 +1,74 @@
-name: Native Windows CI
+name: Sign qualified Windows candidate without promotion
 
-# Reopened by the owner on 2026-10-10. Routine validation stays unsigned;
-# the manual packaging job produces artifacts for review, without promotion.
 on:
-  pull_request:
-    paths:
-      - "native-windows/**"
-      - "scripts/*native_windows*"
-      - "versions.json"
-      - ".github/workflows/native-windows-ci.yml"
-  push:
-    branches: [main]
-    paths:
-      - "native-windows/**"
-      - "scripts/*native_windows*"
-      - "versions.json"
-      - ".github/workflows/native-windows-ci.yml"
   workflow_dispatch:
     inputs:
-      package_release:
-        description: "Prepare signed x64/arm64 artifacts for release review"
-        type: boolean
-        default: false
       release_version:
-        description: "Windows package version (for example 1.2.3.4; packaging only)"
-        required: false
-      manifest_revision:
-        description: "Monotonic signed update manifest revision (packaging only)"
-        required: false
-      release_notes:
-        description: "User-facing Windows release notes (packaging only)"
-        required: false
-      rollout_percent:
-        description: "Initial stable rollout percentage (0-100)"
-        default: "10"
-      minimum_supported_version:
-        description: "Oldest native Windows version allowed to update"
-        required: false
-      required_version_floor:
-        description: "Anti-rollback floor (defaults to minimum supported or release version)"
-        required: false
-      required_update:
-        description: "Mark the update as mandatory"
-        type: boolean
-        default: false
+        description: "Four-part Windows candidate version; artifacts only"
+        required: true
+        default: "0.1.36.0"
 
 permissions:
   contents: read
 
 concurrency:
-  group: native-windows-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: windows-signing-a135260-candidate
+  cancel-in-progress: false
 
 jobs:
-  portable:
-    name: Portable client and release contracts
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 10.0.x
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with:
-          node-version: "22"
-      - name: Validate XAML and packaging contracts
-        run: |
-          node scripts/validate_native_windows_xaml.mjs
-          node native-windows/scripts/validate-packaging-static.mjs
-      - name: Parse every PowerShell script and test release validation
-        shell: pwsh
-        run: |
-          ./native-windows/scripts/validate-powershell-parse.ps1
-          ./native-windows/tests/ReleaseValidation.Tests.ps1
-          ./native-windows/tests/NetworkSafetyPolicy.Tests.ps1
-          ./native-windows/tests/BootstrapOwnership.Tests.ps1
-          ./native-windows/tests/InstallerSafety.Tests.ps1
-          ./native-windows/tests/VpnAcceptance.Tests.ps1
-          ./native-windows/tests/SmokeApplication.Tests.ps1
-          ./native-windows/tests/UiPreviewProtocolRegistration.Tests.ps1
-          ./native-windows/tests/UiPreviewContext.Tests.ps1
-      - name: Test platform-neutral core and control plane
-        run: dotnet run --project native-windows/tests/Vex.Windows.Core.Tests/Vex.Windows.Core.Tests.csproj -c Release
-
-  build:
-    name: Windows ${{ matrix.architecture }} application and VPN service
-    runs-on: windows-2025
-    timeout-minutes: 35
-    strategy:
-      fail-fast: false
-      matrix:
-        architecture: [x64, arm64]
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 10.0.x
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with:
-          node-version: "22"
-      - name: Install libsodium Visual C++ prerequisite
-        if: matrix.architecture == 'x64'
-        shell: pwsh
-        run: |
-          $installer = Join-Path $env:RUNNER_TEMP 'vc-redist-x64.exe'
-          Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vc_redist.x64.exe' -OutFile $installer
-          $signature = Get-AuthenticodeSignature -LiteralPath $installer
-          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') {
-            throw 'Visual C++ redistributable signature verification failed.'
-          }
-          $process = Start-Process -FilePath $installer -ArgumentList '/install', '/quiet', '/norestart' -Wait -PassThru
-          if ($process.ExitCode -notin @(0, 1638, 3010)) { throw "Visual C++ installation failed: $($process.ExitCode)" }
-      - name: Test native contracts on Windows
-        if: matrix.architecture == 'x64'
-        run: dotnet run --project native-windows/tests/Vex.Windows.Core.Tests/Vex.Windows.Core.Tests.csproj -c Release
-      - name: Validate native surfaces and release scripts
-        shell: pwsh
-        run: |
-          ./native-windows/scripts/validate-powershell-parse.ps1
-          ./native-windows/tests/ReleaseValidation.Tests.ps1
-          ./native-windows/tests/NetworkSafetyPolicy.Tests.ps1
-          ./native-windows/tests/BootstrapOwnership.Tests.ps1
-          ./native-windows/tests/InstallerSafety.Tests.ps1
-          ./native-windows/tests/VpnAcceptance.Tests.ps1
-          ./native-windows/tests/SmokeApplication.Tests.ps1
-          ./native-windows/tests/UiPreviewProtocolRegistration.Tests.ps1
-          ./native-windows/tests/UiPreviewContext.Tests.ps1
-          node native-windows/scripts/validate-packaging-static.mjs
-          node scripts/validate_native_windows_xaml.mjs
-      - name: Exercise isolated installer functions in Windows PowerShell 5.1
-        if: matrix.architecture == 'x64'
-        timeout-minutes: 3
-        shell: pwsh
-        run: |
-          $hostPath = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'WindowsPowerShell/v1.0/powershell.exe'
-          & $hostPath -NoLogo -NoProfile -NonInteractive -Command '$PSVersionTable.PSVersion.ToString()'
-          if ($LASTEXITCODE -ne 0) { throw 'The production Windows PowerShell host is unavailable.' }
-          foreach ($test in @('InstallerSafety.Tests.ps1', 'BootstrapOwnership.Tests.ps1')) {
-            & $hostPath -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PWD "native-windows/tests/$test")
-            if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 isolated installer test failed: $test" }
-          }
-      - name: Publish self-contained VPN service
-        run: dotnet publish native-windows/src/Vex.Windows.Service/Vex.Windows.Service.csproj -c Release -r win-${{ matrix.architecture }} -p:Platform=${{ matrix.architecture }} -o "${{ runner.temp }}/vex-windows/service-${{ matrix.architecture }}"
-      - name: Publish self-contained WinUI application
-        run: dotnet publish native-windows/src/Vex.Windows.App/Vex.Windows.App.csproj -c Release -r win-${{ matrix.architecture }} -p:Platform=${{ matrix.architecture }} -o "${{ runner.temp }}/vex-windows/app-${{ matrix.architecture }}"
-      - name: Verify published PE architectures and runtime resources
-        shell: pwsh
-        run: |
-          . ./native-windows/packaging/ReleaseValidation.ps1
-          $root = Join-Path $env:RUNNER_TEMP 'vex-windows'
-          Assert-WindowsPeArchitecture -Path (Join-Path $root 'app-${{ matrix.architecture }}/Vex.Windows.App.exe') -Architecture '${{ matrix.architecture }}'
-          Assert-WindowsPeArchitecture -Path (Join-Path $root 'service-${{ matrix.architecture }}/Vex.Windows.Service.exe') -Architecture '${{ matrix.architecture }}'
-          # WindowsPackageType=None produces the assembly-named app PRI.
-          Get-ChildItem -LiteralPath (Join-Path $root 'app-${{ matrix.architecture }}') -Filter '*.pri' |
-            ForEach-Object { Write-Host "Published compiled resource: $($_.Name) ($($_.Length) bytes)" }
-          foreach ($asset in @('Vex.Windows.App.pri', 'Assets/icon.ico', 'Assets/country-silhouettes.json', 'Assets/vex-logo-header.png', 'Assets/flags/de.svg', 'Assets/flags/fi.svg', 'Assets/flags/nl.svg', 'Microsoft.UI.Xaml.dll')) {
-            if (-not (Test-Path -LiteralPath (Join-Path $root "app-${{ matrix.architecture }}/$asset"))) {
-              throw "Published WinUI dependency is missing: $asset"
-            }
-          }
-      - name: Smoke x64 WinUI application startup
-        if: matrix.architecture == 'x64'
-        shell: pwsh
-        run: |
-          $root = Join-Path $env:RUNNER_TEMP 'vex-windows'
-          ./native-windows/scripts/smoke-application.ps1 `
-            -ApplicationPath (Join-Path $root 'app-x64/Vex.Windows.App.exe') `
-            -ResultPath (Join-Path $root 'startup-smoke-x64.json')
-      - name: Publish isolated Debug interface preview
-        if: matrix.architecture == 'x64'
-        run: dotnet publish native-windows/src/Vex.Windows.App/Vex.Windows.App.csproj -c Debug -r win-x64 -p:Platform=x64 -o "${{ runner.temp }}/vex-ui-preview-app"
-      - name: Verify Release rejects isolated preview controls
-        if: matrix.architecture == 'x64'
-        timeout-minutes: 2
-        shell: pwsh
-        run: |
-          $root = Join-Path $env:RUNNER_TEMP 'vex-windows'
-          $application = Join-Path $root 'app-x64/Vex.Windows.App.exe'
-          $arguments = @('--signed-out-ui-preview', '--focus-pulse-ui-preview', '--protected-state-fault-ui-preview', '--ui-smoke-exit',
-            'vexguard-ui-preview://ui-smoke/activate', 'vexguard-ui-preview://ui-smoke/unknown',
-            'vexguard-ui-preview://other-host/activate', 'vexguard-ui-preview://ui-smoke/activate?unexpected=1',
-            'vexguard-ui-preview://user@ui-smoke/activate', 'vexguard-ui-preview://ui-smoke/activate#unexpected')
-          foreach ($argument in $arguments) {
-            $process = Start-Process -FilePath $application -ArgumentList $argument -PassThru
-            try {
-              if (-not $process.WaitForExit(10000) -or $process.ExitCode -ne 0) {
-                throw 'Release did not refuse isolated preview control before creating the application.'
-              }
-            }
-            finally {
-              if (-not $process.HasExited) { $process.Kill($true); [void]$process.WaitForExit(5000) }
-              $process.Dispose()
-            }
-            if (Get-Process -Name 'Vex.Windows.App' -ErrorAction SilentlyContinue) {
-              throw 'Release preview control left a running application.'
-            }
-          }
-          @{ schema = 'vex.release-preview-isolation.v1'; rejected_controls = $arguments.Count; application_absent = $true } |
-            ConvertTo-Json | Set-Content -LiteralPath (Join-Path $root 'release-preview-isolation-x64.json')
-      - name: Exercise authenticated desktop flows and capture interface
-        if: matrix.architecture == 'x64'
-        timeout-minutes: 3
-        shell: pwsh
-        run: |
-          $root = Join-Path $env:RUNNER_TEMP 'vex-windows'
-          ./native-windows/scripts/smoke-application.ps1 `
-            -ApplicationPath (Join-Path $env:RUNNER_TEMP 'vex-ui-preview-app/Vex.Windows.App.exe') `
-            -DesktopChecks -PreviewMode fixtures -ObserveSeconds 3 `
-            -ResultPath (Join-Path $root 'desktop-fixtures-x64.json') `
-            -ScreenshotDirectory (Join-Path $root 'screenshots/fixtures')
-      - name: Exercise actual DPAPI account-map faults and corrupted startup
-        if: matrix.architecture == 'x64'
-        timeout-minutes: 3
-        shell: pwsh
-        run: |
-          $root = Join-Path $env:RUNNER_TEMP 'vex-windows'
-          ./native-windows/scripts/smoke-application.ps1 `
-            -ApplicationPath (Join-Path $env:RUNNER_TEMP 'vex-ui-preview-app/Vex.Windows.App.exe') `
-            -DesktopChecks -PreviewMode protected-state-fault -ObserveSeconds 3 `
-            -ResultPath (Join-Path $root 'protected-state-faults-x64.json') `
-            -ScreenshotDirectory (Join-Path $root 'screenshots/protected-state-fault')
-      - name: Exercise signed-out desktop flows and capture interface
-        if: matrix.architecture == 'x64'
-        timeout-minutes: 3
-        shell: pwsh
-        run: |
-          $root = Join-Path $env:RUNNER_TEMP 'vex-windows'
-          ./native-windows/scripts/smoke-application.ps1 `
-            -ApplicationPath (Join-Path $env:RUNNER_TEMP 'vex-ui-preview-app/Vex.Windows.App.exe') `
-            -DesktopChecks -PreviewMode signed-out -ObserveSeconds 3 `
-            -ResultPath (Join-Path $root 'desktop-signed-out-x64.json') `
-            -ScreenshotDirectory (Join-Path $root 'screenshots/signed-out')
-      - name: Audit all native dependencies
-        shell: pwsh
-        run: |
-          foreach ($project in @('Vex.Windows.App', 'Vex.Windows.Client', 'Vex.Windows.Service')) {
-            $output = dotnet package list --project "native-windows/src/$project/$project.csproj" --vulnerable --include-transitive --format json
-            if ($LASTEXITCODE -ne 0) { throw "NuGet audit failed: $project" }
-            $report = $output | ConvertFrom-Json
-            foreach ($framework in $report.projects.frameworks) {
-              foreach ($package in @($framework.topLevelPackages) + @($framework.transitivePackages)) {
-                if ($package.vulnerabilities) { throw "Vulnerable NuGet dependency: $($package.id)" }
-              }
-            }
-          }
-      - name: Retain unsigned review builds and startup evidence
-        if: always() && (github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request')
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: vex-native-windows-unsigned-${{ matrix.architecture }}
-          path: ${{ runner.temp }}/vex-windows/**
-          if-no-files-found: error
-          retention-days: 7
-
-  macos_reference:
-    name: Capture actual macOS interface reference
-    runs-on: macos-15
-    timeout-minutes: 20
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-      - name: Render existing SwiftUI screens with isolated Debug fixtures
-        run: native-windows/scripts/render-macos-reference.sh "$RUNNER_TEMP/macos-reference"
-      - name: Retain native macOS reference images
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: vex-native-macos-interface-reference
-          path: ${{ runner.temp }}/macos-reference/**
-          if-no-files-found: error
-          retention-days: 7
-
-  vpn_acceptance:
-    name: Windows x64 real encrypted tunnel acceptance
-    runs-on: windows-2025
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 10.0.x
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version: 1.26.6
-          cache: true
-          cache-dependency-path: native-windows/scripts/vpn-fixture-peer/go.sum
-      - name: Validate the qualified runtime on a disposable host
-        shell: pwsh
-        run: |
-          ./native-windows/scripts/invoke-vpn-acceptance.ps1 -DisposableRunner `
-            -ResultPath (Join-Path $env:RUNNER_TEMP 'vex-vpn-evidence/vpn-acceptance-x64.json')
-      - name: Retain sanitized tunnel and cleanup evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: vex-native-windows-vpn-acceptance-x64
-          path: |
-            ${{ runner.temp }}/vex-vpn-evidence/vpn-acceptance-x64.json
-            ${{ runner.temp }}/vex-vpn-evidence/vpn-acceptance-x64.json.cleanup.json
-          if-no-files-found: error
-          retention-days: 7
-
-  package_release:
-    name: Prepare signed Windows release artifacts
+  sign_qualified_candidate:
     if: >-
-      ${{
-        github.event_name == 'workflow_dispatch' &&
-        inputs.package_release &&
-        github.ref == 'refs/heads/main' &&
-        vars.VEX_WINDOWS_PACKAGE_NAME != '' &&
-        vars.VEX_WINDOWS_PACKAGE_DISPLAY_NAME != '' &&
-        vars.VEX_WINDOWS_PACKAGE_PUBLISHER != '' &&
-        vars.VEX_WINDOWS_PACKAGE_PUBLISHER_DISPLAY_NAME != '' &&
-        vars.VEX_WINDOWS_PACKAGE_BASE_URI != '' &&
-        vars.VEX_WINDOWS_APPINSTALLER_BASE_URI != '' &&
-        vars.VEX_WINDOWS_UPDATE_ORIGIN != '' &&
-        vars.VEX_WINDOWS_UPDATE_KEY_ID != '' &&
-        (vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH != '' ||
-         (vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH_X64 != '' && vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH_ARM64 != '') ||
-         (vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_URI_X64 != '' && vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_URI_ARM64 != '')) &&
-        (vars.VEX_WINDOWS_SERVICE_WINTUN_PATH != '' ||
-         (vars.VEX_WINDOWS_SERVICE_WINTUN_PATH_X64 != '' && vars.VEX_WINDOWS_SERVICE_WINTUN_PATH_ARM64 != '') ||
-         (vars.VEX_WINDOWS_SERVICE_WINTUN_URI_X64 != '' && vars.VEX_WINDOWS_SERVICE_WINTUN_URI_ARM64 != ''))
-      }}
+      ${{ github.event_name == 'workflow_dispatch' &&
+          github.repository == 'ibotpafos/vex-client' &&
+          github.ref == 'refs/heads/codex/signing-windows-a135260-20261011' }}
     runs-on: windows-2025
     timeout-minutes: 45
-    needs: [portable, build, macos_reference, vpn_acceptance]
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Checkout the independently qualified application source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          ref: a13526075803986eebc396ec24fdc865d00ab5c0
           persist-credentials: false
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 10.0.x
-      - name: Verify release inputs and stage architecture-specific runtimes
+
+      - name: Bind signing to the exact qualified source before credentials
+        shell: pwsh
+        env:
+          ORCHESTRATOR_SHA: ${{ github.sha }}
+          ORCHESTRATOR_REF: ${{ github.ref }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+          $head = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $head -cne 'a13526075803986eebc396ec24fdc865d00ab5c0') { throw 'Qualified source commit mismatch.' }
+          $tree = (git rev-parse 'HEAD^{tree}').Trim()
+          if ($LASTEXITCODE -ne 0 -or $tree -cne 'a47fd44b6166de98c64263554e6c981c896a8559') { throw 'Qualified source tree mismatch.' }
+          $tracked = @(git status --porcelain=v1 --untracked-files=no)
+          if ($LASTEXITCODE -ne 0 -or $tracked.Count -ne 0) { throw 'Qualified tracked source is not clean.' }
+          $evidence = Join-Path $env:RUNNER_TEMP 'vex-windows-signing-evidence'
+          New-Item -ItemType Directory -Path $evidence -Force | Out-Null
+          [ordered]@{
+            schema = 'vex.windows-candidate-source.v1'; application_commit = $head; application_tree = $tree
+            orchestrator_commit = $env:ORCHESTRATOR_SHA; orchestrator_ref = $env:ORCHESTRATOR_REF
+            tracked_source_clean = $true; repository = 'ibotpafos/vex-client'
+            deploy = $false; promotion = $false; update_manifest_generation = $false
+          } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $evidence 'source-binding.json') -Encoding utf8NoBOM
+
+      - name: Fail closed on missing existing Windows signing inputs
+        id: input_gate
         shell: pwsh
         env:
           RELEASE_VERSION: ${{ inputs.release_version }}
-          MANIFEST_REVISION: ${{ inputs.manifest_revision }}
-          RELEASE_NOTES: ${{ inputs.release_notes }}
+          VEX_WINDOWS_PACKAGE_NAME: ${{ vars.VEX_WINDOWS_PACKAGE_NAME }}
+          VEX_WINDOWS_PACKAGE_DISPLAY_NAME: ${{ vars.VEX_WINDOWS_PACKAGE_DISPLAY_NAME }}
+          VEX_WINDOWS_PACKAGE_PUBLISHER: ${{ vars.VEX_WINDOWS_PACKAGE_PUBLISHER }}
+          VEX_WINDOWS_PACKAGE_PUBLISHER_DISPLAY_NAME: ${{ vars.VEX_WINDOWS_PACKAGE_PUBLISHER_DISPLAY_NAME }}
+          VEX_WINDOWS_PACKAGE_BASE_URI: ${{ vars.VEX_WINDOWS_PACKAGE_BASE_URI }}
+          VEX_WINDOWS_APPINSTALLER_BASE_URI: ${{ vars.VEX_WINDOWS_APPINSTALLER_BASE_URI }}
+          VEX_WINDOWS_UPDATE_KEY_ID: ${{ vars.VEX_WINDOWS_UPDATE_KEY_ID }}
+          VEX_WINDOWS_SIGN_PFX_BASE64: ${{ secrets.VEX_WINDOWS_SIGN_PFX_BASE64 }}
+          VEX_WINDOWS_SIGN_PFX_PASSWORD: ${{ secrets.VEX_WINDOWS_SIGN_PFX_PASSWORD }}
+          VEX_WINDOWS_UPDATE_PUBLIC_KEY_BASE64: ${{ secrets.VEX_WINDOWS_UPDATE_PUBLIC_KEY_BASE64 }}
+          VEX_WINDOWS_UPDATE_PRIVATE_KEY_BASE64: ${{ secrets.VEX_WINDOWS_UPDATE_PRIVATE_KEY_BASE64 }}
           VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH: ${{ vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH }}
           VEX_WINDOWS_SERVICE_WINTUN_PATH: ${{ vars.VEX_WINDOWS_SERVICE_WINTUN_PATH }}
           VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH_X64: ${{ vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH_X64 }}
@@ -357,28 +77,155 @@ jobs:
           VEX_WINDOWS_SERVICE_WINTUN_PATH_ARM64: ${{ vars.VEX_WINDOWS_SERVICE_WINTUN_PATH_ARM64 }}
           VEX_WINDOWS_SERVICE_AMNEZIAWG_URI_X64: ${{ vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_URI_X64 }}
           VEX_WINDOWS_SERVICE_AMNEZIAWG_URI_ARM64: ${{ vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_URI_ARM64 }}
-          VEX_WINDOWS_SERVICE_AMNEZIAWG_SHA256_X64: ${{ vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_SHA256_X64 }}
-          VEX_WINDOWS_SERVICE_AMNEZIAWG_SHA256_ARM64: ${{ vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_SHA256_ARM64 }}
           VEX_WINDOWS_SERVICE_WINTUN_URI_X64: ${{ vars.VEX_WINDOWS_SERVICE_WINTUN_URI_X64 }}
           VEX_WINDOWS_SERVICE_WINTUN_URI_ARM64: ${{ vars.VEX_WINDOWS_SERVICE_WINTUN_URI_ARM64 }}
+          VEX_WINDOWS_SERVICE_AMNEZIAWG_SHA256_X64: ${{ vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_SHA256_X64 }}
+          VEX_WINDOWS_SERVICE_AMNEZIAWG_SHA256_ARM64: ${{ vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_SHA256_ARM64 }}
           VEX_WINDOWS_SERVICE_WINTUN_SHA256_X64: ${{ vars.VEX_WINDOWS_SERVICE_WINTUN_SHA256_X64 }}
           VEX_WINDOWS_SERVICE_WINTUN_SHA256_ARM64: ${{ vars.VEX_WINDOWS_SERVICE_WINTUN_SHA256_ARM64 }}
         run: |
-          . ./native-windows/packaging/ReleaseValidation.ps1
-          ConvertTo-WindowsPackageVersion $env:RELEASE_VERSION | Out-Null
-          $revision = 0L
-          if (-not [long]::TryParse($env:MANIFEST_REVISION, [ref]$revision) -or $revision -le 0) { throw 'A positive manifest revision is required.' }
-          if ([string]::IsNullOrWhiteSpace($env:RELEASE_NOTES)) { throw 'Release notes are required.' }
-          ./native-windows/scripts/stage-runtime-assets.ps1 -DestinationRoot (Join-Path $env:RUNNER_TEMP 'vex-native-runtime')
-      - name: Package signed native Windows releases
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+          $required = @('RELEASE_VERSION', 'VEX_WINDOWS_PACKAGE_NAME', 'VEX_WINDOWS_PACKAGE_DISPLAY_NAME',
+            'VEX_WINDOWS_PACKAGE_PUBLISHER', 'VEX_WINDOWS_PACKAGE_PUBLISHER_DISPLAY_NAME',
+            'VEX_WINDOWS_PACKAGE_BASE_URI', 'VEX_WINDOWS_APPINSTALLER_BASE_URI', 'VEX_WINDOWS_UPDATE_KEY_ID',
+            'VEX_WINDOWS_SIGN_PFX_BASE64', 'VEX_WINDOWS_SIGN_PFX_PASSWORD',
+            'VEX_WINDOWS_UPDATE_PUBLIC_KEY_BASE64', 'VEX_WINDOWS_UPDATE_PRIVATE_KEY_BASE64')
+          $statuses = @($required | ForEach-Object {
+            [ordered]@{ name = $_; present = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) }
+          })
+          $runtimeReady = $true
+          foreach ($architecture in @('X64', 'ARM64')) {
+            foreach ($asset in @('AMNEZIAWG', 'WINTUN')) {
+              $prefix = "VEX_WINDOWS_SERVICE_$asset"
+              $names = @("${prefix}_PATH", "${prefix}_PATH_$architecture", "${prefix}_URI_$architecture", "${prefix}_SHA256_$architecture")
+              foreach ($name in $names) { $statuses += [ordered]@{ name = $name; present = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name)) } }
+              $uri = [Environment]::GetEnvironmentVariable("${prefix}_URI_$architecture")
+              $path = [Environment]::GetEnvironmentVariable("${prefix}_PATH_$architecture")
+              $legacy = [Environment]::GetEnvironmentVariable("${prefix}_PATH")
+              $hash = [Environment]::GetEnvironmentVariable("${prefix}_SHA256_$architecture")
+              $ready = if (-not [string]::IsNullOrWhiteSpace($uri)) { $hash -match '^[0-9A-Fa-f]{64}$' } else { -not [string]::IsNullOrWhiteSpace($path) -or -not [string]::IsNullOrWhiteSpace($legacy) }
+              if (-not $ready) { $runtimeReady = $false }
+            }
+          }
+          $requiredReady = @($statuses | Where-Object { $_.name -in $required -and -not $_.present }).Count -eq 0
+          $versionValid = $env:RELEASE_VERSION -match '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          if ($versionValid) {
+            foreach ($part in $env:RELEASE_VERSION.Split('.')) {
+              $number = 0
+              if (-not [int]::TryParse($part, [ref]$number) -or $number -gt 65535) { $versionValid = $false }
+            }
+          }
+          $passed = $requiredReady -and $runtimeReady -and $versionValid
+          $statuses | ForEach-Object { Write-Host "$($_.name): $(if ($_.present) { 'present' } else { 'missing' })" }
+          [ordered]@{ schema = 'vex.windows-signing-input-gate.v1'; inputs = $statuses
+            required_inputs_present = $requiredReady; runtime_input_groups_ready = $runtimeReady
+            release_version_format_valid = $versionValid; passed = $passed; values_disclosed = $false
+          } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'vex-windows-signing-evidence/input-gate.json') -Encoding utf8NoBOM
+          if (-not $passed) { throw 'Existing Windows signing inputs are incomplete or invalid; see names-only input-gate.json.' }
+
+      - name: Verify the existing trusted publisher and matching update keys
+        id: trust
+        shell: pwsh
+        env:
+          VEX_WINDOWS_PACKAGE_PUBLISHER: ${{ vars.VEX_WINDOWS_PACKAGE_PUBLISHER }}
+          VEX_WINDOWS_SIGN_PFX_BASE64: ${{ secrets.VEX_WINDOWS_SIGN_PFX_BASE64 }}
+          VEX_WINDOWS_SIGN_PFX_PASSWORD: ${{ secrets.VEX_WINDOWS_SIGN_PFX_PASSWORD }}
+          VEX_WINDOWS_UPDATE_PUBLIC_KEY_BASE64: ${{ secrets.VEX_WINDOWS_UPDATE_PUBLIC_KEY_BASE64 }}
+          VEX_WINDOWS_UPDATE_PRIVATE_KEY_BASE64: ${{ secrets.VEX_WINDOWS_UPDATE_PRIVATE_KEY_BASE64 }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+          $pfx = $private = $public = $certificate = $chain = $null
+          $receipt = [ordered]@{ schema = 'vex.windows-signing-trust-preflight.v1'; passed = $false; failure_stage = 'decode'
+            certificate_sha256 = $null; trusted_chain = $false; code_signing_eku = $false; publisher_matches = $false
+            certificate_self_issued = $null; update_keypair_matches = $false; private_key_material_written = $false }
+          try {
+            $pfx = [Convert]::FromBase64String($env:VEX_WINDOWS_SIGN_PFX_BASE64)
+            $private = [Convert]::FromBase64String($env:VEX_WINDOWS_UPDATE_PRIVATE_KEY_BASE64)
+            $public = [Convert]::FromBase64String($env:VEX_WINDOWS_UPDATE_PUBLIC_KEY_BASE64)
+            $receipt.failure_stage = 'publisher_certificate'
+            $certificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new($pfx, $env:VEX_WINDOWS_SIGN_PFX_PASSWORD, [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet)
+            $receipt.certificate_sha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($certificate.RawData))
+            $receipt.certificate_self_issued = $certificate.Subject -ceq $certificate.Issuer
+            $receipt.publisher_matches = $certificate.Subject -ceq $env:VEX_WINDOWS_PACKAGE_PUBLISHER.Trim()
+            $eku = @($certificate.Extensions | Where-Object { $_.Oid.Value -eq '2.5.29.37' })
+            $receipt.code_signing_eku = @($eku | ForEach-Object { $_.EnhancedKeyUsages } | Where-Object { $_.Value -eq '1.3.6.1.5.5.7.3.3' }).Count -gt 0
+            $now = [DateTime]::UtcNow
+            if (-not $certificate.HasPrivateKey -or $receipt.certificate_self_issued -or -not $receipt.publisher_matches -or -not $receipt.code_signing_eku -or $now -lt $certificate.NotBefore.ToUniversalTime() -or $now -gt $certificate.NotAfter.ToUniversalTime()) { throw 'Publisher identity admission failed.' }
+            $receipt.failure_stage = 'trusted_certificate_chain'
+            $chain = [Security.Cryptography.X509Certificates.X509Chain]::new()
+            $chain.ChainPolicy.VerificationFlags = [Security.Cryptography.X509Certificates.X509VerificationFlags]::NoFlag
+            $chain.ChainPolicy.RevocationMode = [Security.Cryptography.X509Certificates.X509RevocationMode]::Online
+            $chain.ChainPolicy.RevocationFlag = [Security.Cryptography.X509Certificates.X509RevocationFlag]::ExcludeRoot
+            $chain.ChainPolicy.UrlRetrievalTimeout = [TimeSpan]::FromSeconds(15)
+            $receipt.trusted_chain = $chain.Build($certificate)
+            if (-not $receipt.trusted_chain) { throw 'Existing publisher chain verification failed.' }
+            $receipt.failure_stage = 'update_keypair'
+            # The span-only import APIs run in C#, avoiding PowerShell argument binding.
+            Add-Type -TypeDefinition @'
+          using System;
+          using System.Security.Cryptography;
+          using System.Text;
+          public static class VexCandidateUpdateKeyAdmission {
+              public static bool Matches(byte[] privateBytes, byte[] publicBytes) {
+                  using var signer = ECDsa.Create();
+                  using var verifier = ECDsa.Create();
+                  int consumed;
+                  try { signer.ImportPkcs8PrivateKey(privateBytes, out consumed); }
+                  catch (CryptographicException) { signer.ImportECPrivateKey(privateBytes, out consumed); }
+                  if (consumed != privateBytes.Length || signer.ExportParameters(false).Curve.Oid.Value != "1.2.840.10045.3.1.7") return false;
+                  verifier.ImportSubjectPublicKeyInfo(publicBytes, out consumed);
+                  if (consumed != publicBytes.Length || !CryptographicOperations.FixedTimeEquals(signer.ExportSubjectPublicKeyInfo(), publicBytes)) return false;
+                  byte[] payload = Encoding.UTF8.GetBytes("vex.windows-a135260-candidate-keypair-test");
+                  byte[] signature = signer.SignData(payload, HashAlgorithmName.SHA256, DSASignatureFormat.Rfc3279DerSequence);
+                  try { return verifier.VerifyData(payload, signature, HashAlgorithmName.SHA256, DSASignatureFormat.Rfc3279DerSequence); }
+                  finally { CryptographicOperations.ZeroMemory(payload); CryptographicOperations.ZeroMemory(signature); }
+              }
+          }
+          '@
+            $receipt.update_keypair_matches = [VexCandidateUpdateKeyAdmission]::Matches($private, $public)
+            if (-not $receipt.update_keypair_matches) { throw 'Existing update keypair verification failed.' }
+            $receipt.passed = $true
+            $receipt.failure_stage = $null
+            "certificate_sha256=$($receipt.certificate_sha256)" | Out-File -LiteralPath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            Write-Host 'Existing CA-trusted publisher and matching P-256 update keys verified.'
+          }
+          catch { throw "Windows signing trust preflight failed at $($receipt.failure_stage); no secret values are included in this diagnostic." }
+          finally {
+            foreach ($bytes in @($pfx, $private, $public)) { if ($null -ne $bytes) { [Array]::Clear($bytes, 0, $bytes.Length) } }
+            foreach ($owned in @($certificate, $chain)) { if ($null -ne $owned) { $owned.Dispose() } }
+            $receipt | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'vex-windows-signing-evidence/trust-preflight.json') -Encoding utf8NoBOM
+          }
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Stage pinned architecture-specific vendor runtimes
+        shell: pwsh
+        env:
+          VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH: ${{ vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH }}
+          VEX_WINDOWS_SERVICE_WINTUN_PATH: ${{ vars.VEX_WINDOWS_SERVICE_WINTUN_PATH }}
+          VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH_X64: ${{ vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH_X64 }}
+          VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH_ARM64: ${{ vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH_ARM64 }}
+          VEX_WINDOWS_SERVICE_WINTUN_PATH_X64: ${{ vars.VEX_WINDOWS_SERVICE_WINTUN_PATH_X64 }}
+          VEX_WINDOWS_SERVICE_WINTUN_PATH_ARM64: ${{ vars.VEX_WINDOWS_SERVICE_WINTUN_PATH_ARM64 }}
+          VEX_WINDOWS_SERVICE_AMNEZIAWG_URI_X64: ${{ vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_URI_X64 }}
+          VEX_WINDOWS_SERVICE_AMNEZIAWG_URI_ARM64: ${{ vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_URI_ARM64 }}
+          VEX_WINDOWS_SERVICE_WINTUN_URI_X64: ${{ vars.VEX_WINDOWS_SERVICE_WINTUN_URI_X64 }}
+          VEX_WINDOWS_SERVICE_WINTUN_URI_ARM64: ${{ vars.VEX_WINDOWS_SERVICE_WINTUN_URI_ARM64 }}
+          VEX_WINDOWS_SERVICE_AMNEZIAWG_SHA256_X64: ${{ vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_SHA256_X64 }}
+          VEX_WINDOWS_SERVICE_AMNEZIAWG_SHA256_ARM64: ${{ vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_SHA256_ARM64 }}
+          VEX_WINDOWS_SERVICE_WINTUN_SHA256_X64: ${{ vars.VEX_WINDOWS_SERVICE_WINTUN_SHA256_X64 }}
+          VEX_WINDOWS_SERVICE_WINTUN_SHA256_ARM64: ${{ vars.VEX_WINDOWS_SERVICE_WINTUN_SHA256_ARM64 }}
+        run: ./native-windows/scripts/stage-runtime-assets.ps1 -DestinationRoot (Join-Path $env:RUNNER_TEMP 'vex-windows-signing-candidate/runtime')
+
+      - name: Build and sign both candidate architectures with the existing packager
         shell: pwsh
         env:
           VEX_WINDOWS_RELEASE_VERSION: ${{ inputs.release_version }}
-          VEX_WINDOWS_RELEASE_CHANNEL: stable
-          VEX_WINDOWS_MANIFEST_REVISION: ${{ inputs.manifest_revision }}
-          VEX_WINDOWS_RELEASE_NOTES: ${{ inputs.release_notes }}
-          VEX_WINDOWS_MINIMUM_SUPPORTED_VERSION: ${{ inputs.minimum_supported_version }}
-          VEX_WINDOWS_REQUIRED_VERSION_FLOOR: ${{ inputs.required_version_floor }}
+          VEX_WINDOWS_RELEASE_CHANNEL: candidate
           VEX_WINDOWS_PACKAGE_NAME: ${{ vars.VEX_WINDOWS_PACKAGE_NAME }}
           VEX_WINDOWS_PACKAGE_DISPLAY_NAME: ${{ vars.VEX_WINDOWS_PACKAGE_DISPLAY_NAME }}
           VEX_WINDOWS_PACKAGE_PUBLISHER: ${{ vars.VEX_WINDOWS_PACKAGE_PUBLISHER }}
@@ -386,25 +233,114 @@ jobs:
           VEX_WINDOWS_PACKAGE_BASE_URI: ${{ vars.VEX_WINDOWS_PACKAGE_BASE_URI }}
           VEX_WINDOWS_APPINSTALLER_BASE_URI: ${{ vars.VEX_WINDOWS_APPINSTALLER_BASE_URI }}
           VEX_WINDOWS_UPDATE_KEY_ID: ${{ vars.VEX_WINDOWS_UPDATE_KEY_ID }}
-          VEX_WINDOWS_SERVICE_PROFILE_KEYRING_PATH: native-windows/packaging/profile-signing-keys.json
-          VEX_WINDOWS_SIGN_TIMESTAMP_URI: ${{ vars.VEX_WINDOWS_SIGN_TIMESTAMP_URI }}
+          VEX_WINDOWS_UPDATE_PUBLIC_KEY_BASE64: ${{ secrets.VEX_WINDOWS_UPDATE_PUBLIC_KEY_BASE64 }}
           VEX_WINDOWS_SIGN_PFX_BASE64: ${{ secrets.VEX_WINDOWS_SIGN_PFX_BASE64 }}
           VEX_WINDOWS_SIGN_PFX_PASSWORD: ${{ secrets.VEX_WINDOWS_SIGN_PFX_PASSWORD }}
-          VEX_WINDOWS_UPDATE_PUBLIC_KEY_BASE64: ${{ secrets.VEX_WINDOWS_UPDATE_PUBLIC_KEY_BASE64 }}
-          VEX_WINDOWS_UPDATE_PRIVATE_KEY_BASE64: ${{ secrets.VEX_WINDOWS_UPDATE_PRIVATE_KEY_BASE64 }}
-          VEX_WINDOWS_UPDATE_ORIGIN: ${{ vars.VEX_WINDOWS_UPDATE_ORIGIN }}
-          VEX_WINDOWS_UPDATE_REQUIRED: ${{ inputs.required_update }}
-          VEX_WINDOWS_ROLLOUT_PERCENT: ${{ inputs.rollout_percent }}
+          VEX_WINDOWS_SIGN_TIMESTAMP_URI: ${{ vars.VEX_WINDOWS_SIGN_TIMESTAMP_URI }}
+          VEX_WINDOWS_SERVICE_PROFILE_KEYRING_PATH: native-windows/packaging/profile-signing-keys.json
         run: |
-          ./native-windows/packaging/package-native-windows.ps1 -Architecture x64
-          ./native-windows/packaging/package-native-windows.ps1 -Architecture arm64
-          ./native-windows/packaging/publish-native-windows.ps1
-      - name: Retain signed release artifacts for review
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+          $packages = Join-Path $env:RUNNER_TEMP 'vex-windows-signing-candidate/packages'
+          foreach ($architecture in @('x64', 'arm64')) {
+            ./native-windows/packaging/package-native-windows.ps1 -Architecture $architecture -Channel candidate -OutputRoot $packages
+          }
+
+      - name: Verify signatures and retain only the complete signed candidate set
+        id: verification
+        shell: pwsh
+        env:
+          EXPECTED_CERTIFICATE_SHA256: ${{ steps.trust.outputs.certificate_sha256 }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+          $packages = Join-Path $env:RUNNER_TEMP 'vex-windows-signing-candidate/packages'
+          $output = Join-Path $env:RUNNER_TEMP 'vex-windows-signed-candidate'
+          $kitRoot = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
+          $signtool = Get-ChildItem -LiteralPath $kitRoot -Directory | Sort-Object Name -Descending |
+            ForEach-Object { $candidate = Join-Path $_.FullName 'x64/signtool.exe'; if (Test-Path -LiteralPath $candidate -PathType Leaf) { $candidate } } | Select-Object -First 1
+          if ([string]::IsNullOrWhiteSpace($signtool)) { throw 'Windows SDK Authenticode verifier is unavailable.' }
+          $receipts = @()
+          foreach ($architecture in @('x64', 'arm64')) {
+            $metadataFiles = @(Get-ChildItem -LiteralPath (Join-Path $packages "candidate/$architecture") -Filter 'package-metadata.json' -File -Recurse)
+            if ($metadataFiles.Count -ne 1) { throw 'Candidate metadata must be unique for each architecture.' }
+            $metadataFile = $metadataFiles[0]
+            $metadata = Get-Content -LiteralPath $metadataFile.FullName -Raw | ConvertFrom-Json
+            if ($metadata.schema -cne 'vex.windows-package-output.v2' -or $metadata.channel -cne 'candidate' -or $metadata.version -cne $env:RELEASE_VERSION -or $metadata.architecture -cne $architecture -or $metadata.client_certificate_sha256 -cne $env:EXPECTED_CERTIFICATE_SHA256) { throw 'Candidate identity binding failed.' }
+            $packageRoot = $metadataFile.Directory.FullName
+            $signedFiles = @(
+              @{ path = 'package/Vex.Windows.App.exe'; hash_field = 'app_executable_sha256' },
+              @{ path = 'package/Vex.Windows.Service.exe'; hash_field = 'service_executable_sha256' },
+              @{ path = $metadata.bootstrap_file; hash_field = 'bootstrap_sha256' },
+              @{ path = $metadata.install_service_script_file; hash_field = 'install_service_script_sha256' },
+              @{ path = $metadata.uninstall_service_script_file; hash_field = 'uninstall_service_script_sha256' })
+            $signatureReceipts = @()
+            foreach ($entry in $signedFiles) {
+              $path = Join-Path $packageRoot $entry.path
+              $signature = Get-AuthenticodeSignature -LiteralPath $path
+              if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or $null -eq $signature.SignerCertificate -or $null -eq $signature.TimeStamperCertificate) { throw 'A candidate file lacks a valid timestamped Authenticode signature.' }
+              $fingerprint = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($signature.SignerCertificate.RawData))
+              if ($fingerprint -cne $env:EXPECTED_CERTIFICATE_SHA256) { throw 'Candidate signer fingerprint differs from the admitted publisher.' }
+              $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+              if ($hash -cne $metadata.($entry.hash_field)) { throw 'Candidate signed-file hash differs from package metadata.' }
+              $signatureReceipts += [ordered]@{ file = $entry.path; sha256 = $hash; certificate_sha256 = $fingerprint; signature_valid = $true; timestamp_present = $true }
+            }
+            $msix = Join-Path $packageRoot $metadata.package_file
+            if ((Get-FileHash -LiteralPath $msix -Algorithm SHA256).Hash -cne $metadata.package_sha256) { throw 'Signed MSIX hash differs from package metadata.' }
+            & $signtool verify /pa /all $msix
+            if ($LASTEXITCODE -ne 0) { throw 'Independent signed MSIX Authenticode verification failed.' }
+            $destination = Join-Path $output $architecture
+            New-Item -ItemType Directory -Path $destination -Force | Out-Null
+            foreach ($name in @($metadata.package_file, $metadata.bootstrap_file, $metadata.install_service_script_file, $metadata.uninstall_service_script_file, 'package-metadata.json')) {
+              Copy-Item -LiteralPath (Join-Path $packageRoot $name) -Destination (Join-Path $destination $name)
+            }
+            $receipts += [ordered]@{ architecture = $architecture; msix_sha256 = $metadata.package_sha256; msix_size_bytes = $metadata.package_size_bytes; independent_msix_signtool_verification = $true; files = $signatureReceipts }
+          }
+          $sourceHead = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $sourceHead -cne 'a13526075803986eebc396ec24fdc865d00ab5c0') { throw 'Signing source commit changed.' }
+          $sourceTree = (git rev-parse 'HEAD^{tree}').Trim()
+          if ($LASTEXITCODE -ne 0 -or $sourceTree -cne 'a47fd44b6166de98c64263554e6c981c896a8559') { throw 'Signing source tree changed.' }
+          git diff --exit-code HEAD -- | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'Signing modified qualified tracked source.' }
+          [ordered]@{ schema = 'vex.windows-signed-candidate-verification.v1'; source_commit = $sourceHead; source_tree = $sourceTree; architectures = $receipts; complete_set = $true; deploy = $false; update_manifest_generation = $false; installed_or_started = $false } |
+            ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'vex-windows-signing-evidence/signature-verification.json') -Encoding utf8NoBOM
+
+      - name: Remove owned signing staging and verify artifact secret exclusion
+        if: always()
+        id: cleanup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+          $staging = Join-Path $env:RUNNER_TEMP 'vex-windows-signing-candidate'
+          if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
+          $artifactRoot = Join-Path $env:RUNNER_TEMP 'vex-windows-signed-candidate'
+          $forbidden = @()
+          if (Test-Path -LiteralPath $artifactRoot) {
+            $forbidden = @(Get-ChildItem -LiteralPath $artifactRoot -File -Recurse | Where-Object { $_.Extension.ToLowerInvariant() -in @('.pfx', '.p12', '.key', '.pem', '.jks', '.keystore') })
+          }
+          $removed = -not (Test-Path -LiteralPath $staging)
+          $evidence = Join-Path $env:RUNNER_TEMP 'vex-windows-signing-evidence'
+          New-Item -ItemType Directory -Path $evidence -Force | Out-Null
+          [ordered]@{ schema = 'vex.windows-candidate-signing-cleanup.v1'; owned_staging_removed = $removed; forbidden_secret_file_count = $forbidden.Count; certificate_store_modified = $false; service_installed = $false; applications_started = $false; network_policy_modified = $false } |
+            ConvertTo-Json | Set-Content -LiteralPath (Join-Path $evidence 'cleanup.json') -Encoding utf8NoBOM
+          if (-not $removed -or $forbidden.Count -ne 0) { throw 'Owned signing material cleanup or artifact exclusion failed.' }
+
+      - name: Retain names-only signing and cleanup evidence
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: vex-native-windows-packaged-release
-          path: |
-            native-windows/packaging/out/**
-            native-windows/packaging/published/**
+          name: vex-windows-signing-a135260-evidence
+          path: ${{ runner.temp }}/vex-windows-signing-evidence/*.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Retain the verified signed candidate without promotion
+        if: ${{ success() && steps.verification.outcome == 'success' && steps.cleanup.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: vex-windows-signed-a135260-candidate
+          path: ${{ runner.temp }}/vex-windows-signed-candidate/**
           if-no-files-found: error
           retention-days: 7

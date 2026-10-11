@@ -111,6 +111,47 @@ function Read-FixtureEndpointRoutes {
         }) | ConvertTo-Json -Compress -AsArray
 }
 
+function Assert-FixtureHarnessResult {
+    param([Parameter(Mandatory = $true)]$Result, [switch]$FullTunnelChecks)
+    foreach ($field in @('schema', 'passed', 'full_tunnel_checks_requested', 'actual_public_internet_vpn_egress_verified')) {
+        if ($null -eq $Result.PSObject.Properties[$field]) { throw 'Fixture summary identity is incomplete.' }
+    }
+    if ($Result.schema -isnot [string] -or $Result.schema -cne 'vex.windows-vpn-acceptance.v1' -or
+        $Result.passed -isnot [bool] -or -not $Result.passed -or
+        $Result.full_tunnel_checks_requested -isnot [bool] -or
+        $Result.full_tunnel_checks_requested -ne [bool]$FullTunnelChecks -or
+        $Result.actual_public_internet_vpn_egress_verified -isnot [bool] -or
+        $Result.actual_public_internet_vpn_egress_verified) { throw 'Fixture summary identity or scope is invalid.' }
+    $required = @('scm_private_pipe_authenticated', 'scm_bad_token_rejected', 'scm_raw_config_rejected',
+        'scm_tampered_profile_rejected', 'scm_signed_connect_verified', 'scm_status_diagnostics_verified',
+        'scm_crash_status_restored', 'scm_disconnect_verified', 'scm_disconnect_survived_restart',
+        'scm_stop_cleanup_verified', 'scm_graceful_stop_survived_restart',
+        'scm_authorization_expiry_cleanup_verified', 'scm_fixture_service_removed')
+    if ($FullTunnelChecks) {
+        $required += @('full_tunnel_dns_verified', 'full_tunnel_https_verified',
+            'full_control_plane_https_bypass_verified', 'full_physical_tcp_prebaseline_verified',
+            'full_physical_tcp_blocked', 'full_physical_tcp_restored', 'full_vendor_demand_start_verified',
+            'full_vendor_routes_verified', 'full_physical_route_retained_verified', 'full_anti_leak_enabled',
+            'full_controller_death_watchdog_verified', 'full_owned_cleanup_verified',
+            'full_active_controller_connected_verified', 'full_active_controller_death_cleanup_verified',
+            'full_active_controller_network_restored_verified', 'full_active_controller_lease_not_expired_verified')
+        foreach ($field in @('full_physical_dns_supported', 'full_physical_dns_blocked', 'full_physical_dns_restored')) {
+            if ($null -eq $Result.PSObject.Properties[$field] -or $Result.$field -isnot [bool]) {
+                throw 'Fixture DNS coverage is incomplete.'
+            }
+        }
+        if ($Result.full_physical_dns_blocked -ne $Result.full_physical_dns_supported -or
+            $Result.full_physical_dns_restored -ne $Result.full_physical_dns_supported) {
+            throw 'Fixture DNS protection or restoration was not verified.'
+        }
+    }
+    foreach ($field in $required) {
+        if ($null -eq $Result.PSObject.Properties[$field] -or $Result.$field -isnot [bool] -or -not $Result.$field) {
+            throw 'Fixture mandatory acceptance evidence is incomplete.'
+        }
+    }
+}
+
 function Invoke-FixtureProcess {
     param([string]$FilePath, [string[]]$Arguments, [int]$TimeoutSeconds, [string]$WorkingDirectory)
     $start = [Diagnostics.ProcessStartInfo]::new()
@@ -246,7 +287,7 @@ try {
     Invoke-FixtureProcess -FilePath (Join-Path $harnessDirectory 'Vex.Windows.VpnAcceptance.exe') `
         -Arguments $harnessArguments -TimeoutSeconds 390
     $harnessResult = Get-Content -LiteralPath $ResultPath -Raw | ConvertFrom-Json
-    if (-not $harnessResult.passed) { throw 'Actual VEX tunnel fixture did not pass.' }
+    Assert-FixtureHarnessResult -Result $harnessResult -FullTunnelChecks:$FullTunnelChecks
 }
 catch { $failure = $_.Exception.GetType().FullName }
 finally {

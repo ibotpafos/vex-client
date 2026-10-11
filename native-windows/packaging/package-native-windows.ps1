@@ -29,6 +29,34 @@ function Get-RequiredEnv {
     return $value.Trim()
 }
 
+function Get-WindowsCheckoutSourceCommit {
+    param([Parameter(Mandatory = $true)][string]$RepositoryRoot)
+
+    # Read the checkout, never a release input or an inherited CI variable.
+    # Generated package outputs are not source. Every other new checkout file
+    # can affect SDK imports or build inputs, including Directory.Build files.
+    try {
+        $commit = @(& git -C $RepositoryRoot rev-parse --verify 'HEAD^{commit}' 2>$null)
+        if ($LASTEXITCODE -ne 0 -or $commit.Count -ne 1 -or
+            [string]$commit[0] -cnotmatch '\A[0-9a-f]{40}\z') {
+            throw 'A native Windows release requires an actual Git checkout commit.'
+        }
+        $changes = @(& git -C $RepositoryRoot status --porcelain --untracked-files=no 2>$null)
+        if ($LASTEXITCODE -ne 0 -or $changes.Count -ne 0) {
+            throw 'A native Windows release requires unchanged tracked checkout files.'
+        }
+        $newSources = @(& git -C $RepositoryRoot ls-files --others --exclude-standard -- . `
+            ':(exclude)native-windows/packaging/out' ':(exclude)native-windows/packaging/published' 2>$null)
+        if ($LASTEXITCODE -ne 0 -or $newSources.Count -ne 0) {
+            throw 'A native Windows release cannot include untracked native build inputs.'
+        }
+        return [string]$commit[0]
+    }
+    catch {
+        throw 'Native Windows source provenance requires a clean, readable Git checkout.'
+    }
+}
+
 function Resolve-WindowsSdkTool {
     param([Parameter(Mandatory = $true)][string]$ToolName)
 
@@ -297,6 +325,7 @@ if ([string]::IsNullOrWhiteSpace($Version)) {
 
 $normalizedVersion = ConvertTo-WindowsPackageVersion $Version
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+$sourceCommit = Get-WindowsCheckoutSourceCommit -RepositoryRoot $root
 $publishRoot = Join-Path $OutputRoot "$Channel\$Architecture\$normalizedVersion"
 $publishDir = Join-Path $publishRoot 'publish'
 $servicePublishDir = Join-Path $publishRoot 'publish-service'
@@ -344,6 +373,7 @@ dotnet publish `
     -p:AssemblyVersion=$normalizedVersion `
     -p:FileVersion=$normalizedVersion `
     -p:InformationalVersion=$Version `
+    -p:SourceRevisionId=$sourceCommit `
     -o $publishDir
 if ($LASTEXITCODE -ne 0) {
     throw "Native Windows app publish failed with exit code $LASTEXITCODE."
@@ -359,6 +389,7 @@ dotnet publish `
     -p:AssemblyVersion=$normalizedVersion `
     -p:FileVersion=$normalizedVersion `
     -p:InformationalVersion=$Version `
+    -p:SourceRevisionId=$sourceCommit `
     -o $servicePublishDir
 if ($LASTEXITCODE -ne 0) {
     throw "Native Windows service publish failed with exit code $LASTEXITCODE."
@@ -534,11 +565,16 @@ finally {
     }
 }
 
+if ((Get-WindowsCheckoutSourceCommit -RepositoryRoot $root) -cne $sourceCommit) {
+    throw 'The native Windows checkout changed during release packaging.'
+}
+
 $metadata = [ordered]@{
     schema = 'vex.windows-package-output.v2'
     channel = $Channel
     architecture = $Architecture
     version = $normalizedVersion
+    source_commit = $sourceCommit
     package_name = $packageName
     publisher = $publisher
     display_name = $displayName
@@ -597,6 +633,17 @@ Publish-SignedSetup `
     -PfxPassword $pfxPassword `
     -TemporaryPfxPath $temporaryPfxPath `
     -ExpectedCertificateSha256 $clientCertificateSha256
+
+try {
+    if ((Get-WindowsCheckoutSourceCommit -RepositoryRoot $root) -cne $sourceCommit) {
+        throw 'The native Windows checkout changed during Setup packaging.'
+    }
+}
+catch {
+    # A failed final source check must not leave an eligible release pair.
+    Remove-Item -LiteralPath $metadataPath, $setupPath -Force -ErrorAction SilentlyContinue
+    throw
+}
 
 Write-Host "Packaged signed Setup: $setupPath"
 Write-Host "Packaged signed MSIX: $msixPath"

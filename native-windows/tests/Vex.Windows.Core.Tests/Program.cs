@@ -15,6 +15,21 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
+if (args is ["--controller-death-receipt-regression"])
+{
+    try
+    {
+        ControllerDeathReceiptTests.Run();
+        Console.WriteLine("PASS active controller death source-linked receipt regression");
+    }
+    catch (Exception error)
+    {
+        Console.Error.WriteLine("FAIL active controller death receipt regression: " + error.Message);
+        Environment.ExitCode = 1;
+    }
+    return;
+}
+
 if (args is ["--account-recovery-epoch-floor-regression"])
 {
     try
@@ -98,6 +113,7 @@ var tests = new (string Name, Action Run)[]
 {
     ("Native installer rejects changed bundles and retains verified file locks", WindowsSetupBundleTests.Run),
     ("Physical AntiLeak probes reject remote failures and preserve caller cancellation", FullTunnelProbeFailurePolicyTests.Run),
+    ("Active controller death requires fresh exact-owner encrypted protection evidence", ControllerDeathReceiptTests.Run),
     ("VPN access and network failures preserve actionable guidance and safe intent", VpnFailurePresentationTests.Run),
     ("Release cohorts preserve actionable mandatory targets and strict dependency trust", WindowsReleasePolicyTests.Run),
     ("Shipping update keys match P256 signatures and reject incompatible key material", WindowsUpdateSignatureSignerTests.Run),

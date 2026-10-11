@@ -25,7 +25,7 @@ namespace Vex.Windows.VpnAcceptance;
 // A separate, private SCM registration exercises the real controller lifetime
 // and IPC. Its unsigned process attestations exist only in this acceptance EXE;
 // the production service still requires its signed app and fixed pipe.
-internal static class ScmIpcFixture
+internal static partial class ScmIpcFixture
 {
     private const string SettingsName = "fixture-settings.json";
     private const uint Running = 4;
@@ -699,7 +699,7 @@ internal static class ScmIpcFixture
         if (!condition) { throw new Program.FixtureException(code); }
     }
 
-    private sealed record FixtureSettings(string FixtureId, string ServiceName, string PipeName,
+    internal sealed record FixtureSettings(string FixtureId, string ServiceName, string PipeName,
         int ControllerPid, long ControllerStartTicks, string OwnerSid, string HarnessPath, string HarnessSha256,
         string RuntimeDirectory, string Endpoint, VpnProfileSigningKey SigningKey, bool FullTunnelChecks = false);
 

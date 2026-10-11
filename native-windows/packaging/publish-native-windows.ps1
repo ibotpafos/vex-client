@@ -324,6 +324,14 @@ if ($releaseArchitectures.Count -ne $requiredArchitectures.Count) {
 $referenceMetadata = $metadataEntries[0].Metadata
 foreach ($entry in $metadataEntries) {
     $candidate = $entry.Metadata
+    $source = $candidate.PSObject.Properties['source_commit']
+    if ($null -eq $source -or $source.Value -isnot [string] -or
+        $source.Value -cnotmatch '\A[0-9a-f]{40}\z') {
+        throw 'Every Windows release candidate requires a canonical Git source_commit.'
+    }
+    if ($source.Value -cne $referenceMetadata.source_commit) {
+        throw 'Windows release architectures must declare the same source_commit.'
+    }
     foreach ($field in @('channel', 'version', 'package_name', 'publisher')) {
         if ([string]$candidate.$field -ne [string]$referenceMetadata.$field) {
             throw "Package identity differs between architectures: '$field'."
@@ -367,6 +375,7 @@ foreach ($entry in $metadataEntries) {
     $channel = [string]$metadata.channel
     $architecture = [string]$metadata.architecture
     $version = [string]$metadata.version
+    $sourceCommit = [string]$metadata.source_commit
     $packageName = [string]$metadata.package_name
     $publisher = [string]$metadata.publisher
     $packageFile = [string]$metadata.package_file
@@ -489,6 +498,7 @@ foreach ($entry in $metadataEntries) {
         schema = 'vex.windows-bootstrap-entry.v1'
         channel = $channel
         version = $version
+        source_commit = $sourceCommit
         architecture = $architecture
         install_entrypoint = 'elevated_bootstrap'
         service_ownership = 'manual_sc_bootstrap'
@@ -572,6 +582,7 @@ foreach ($entry in $metadataEntries) {
     $manifestObject = [ordered]@{
         schema = 'vex.windows-update-manifest.v1'
         channel = $channel
+        source_commit = $sourceCommit
         published_at = [DateTimeOffset]::UtcNow.ToString('O')
         manifest_revision = $manifestRevision
         required_version_floor = $effectiveRequiredVersionFloor
@@ -582,6 +593,7 @@ foreach ($entry in $metadataEntries) {
         releases = @(
             [ordered]@{
                 version = $version
+                source_commit = $sourceCommit
                 architecture = $architecture
                 package_type = 'msix'
                 package_uri = $packageUri

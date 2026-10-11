@@ -12,6 +12,14 @@ if ($errors.Count) { throw ($errors | Out-String) }
 foreach ($definition in $ast.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
     Invoke-Expression $definition.Extent.Text
 }
+$packager = Join-Path $PSScriptRoot '../packaging/package-native-windows.ps1'
+$packagerAst = [Management.Automation.Language.Parser]::ParseFile($packager, [ref]$tokens, [ref]$errors)
+if ($errors.Count) { throw ($errors | Out-String) }
+$sourceDefinition = $packagerAst.FindAll({ param($node)
+    $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Get-WindowsCheckoutSourceCommit'
+}, $false)
+if ($sourceDefinition.Count -ne 1) { throw 'The actual checkout provenance resolver is missing.' }
+Invoke-Expression $sourceDefinition[0].Extent.Text
 function Assert($condition, $message) { if (-not $condition) { throw $message } }
 function Get-TestSha256 {
     param([Parameter(Mandatory = $true)]$InputValue)
@@ -43,7 +51,7 @@ $temporary = Join-Path ([IO.Path]::GetTempPath()) ('vex-release-readiness-' + [g
 $packages = Join-Path $temporary 'packages'
 $environmentNames = @('VEX_WINDOWS_UPDATE_ORIGIN','VEX_WINDOWS_UPDATE_KEY_ID','VEX_WINDOWS_UPDATE_PRIVATE_KEY_BASE64',
     'VEX_WINDOWS_UPDATE_PUBLIC_KEY_BASE64','VEX_WINDOWS_MANIFEST_REVISION','VEX_WINDOWS_RELEASE_NOTES',
-    'VEX_WINDOWS_MINIMUM_SUPPORTED_VERSION','VEX_WINDOWS_REQUIRED_VERSION_FLOOR','VEX_WINDOWS_UPDATE_REQUIRED','VEX_WINDOWS_ROLLOUT_PERCENT')
+    'VEX_WINDOWS_MINIMUM_SUPPORTED_VERSION','VEX_WINDOWS_REQUIRED_VERSION_FLOOR','VEX_WINDOWS_UPDATE_REQUIRED','VEX_WINDOWS_ROLLOUT_PERCENT','GITHUB_SHA')
 $previousEnvironment = @{}
 foreach ($name in $environmentNames) { $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name) }
 $global:VexReleaseReadinessSigner = @{ Mode = 'valid'; Calls = @() }
@@ -109,6 +117,55 @@ function dotnet {
     [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('mocked verified signature'))
 }
 try {
+    # Exercise the actual resolver against a disposable local checkout. No
+    # remote branch, application repository or signing credential is changed.
+    $checkout = Join-Path $temporary 'checkout'
+    $sourceDirectory = Join-Path $checkout 'native-windows/src/Fixture'
+    $null = New-Item -ItemType Directory -Path $sourceDirectory -Force
+    $sourcePath = Join-Path $sourceDirectory 'Source.cs'
+    [IO.File]::WriteAllText($sourcePath, 'Isolated original source')
+    & git -C $checkout init --quiet
+    if ($LASTEXITCODE -ne 0) { throw 'Could not create the isolated provenance checkout.' }
+    & git -C $checkout add -- native-windows/src/Fixture/Source.cs
+    if ($LASTEXITCODE -ne 0) { throw 'Could not stage the isolated provenance source.' }
+    & git -C $checkout -c user.name=VEX-Fixture -c user.email=fixture@example.invalid -c core.hooksPath= -c commit.gpgsign=false commit --quiet -m 'Isolated source provenance fixture'
+    if ($LASTEXITCODE -ne 0) { throw 'Could not create the isolated provenance commit.' }
+    [Environment]::SetEnvironmentVariable('GITHUB_SHA', ('f' * 40))
+    $fixtureSourceCommit = Get-WindowsCheckoutSourceCommit -RepositoryRoot $checkout
+    Assert ($fixtureSourceCommit -cmatch '\A[0-9a-f]{40}\z' -and $fixtureSourceCommit -cne ('f' * 40)) 'Source provenance must read the actual Git checkout and ignore a spoofed CI source variable.'
+    [IO.File]::WriteAllText($sourcePath, 'Changed tracked source')
+    Assert-Rejected { Get-WindowsCheckoutSourceCommit -RepositoryRoot $checkout } 'Uncommitted tracked source must not claim an unchanged commit.'
+    & git -C $checkout add -- native-windows/src/Fixture/Source.cs
+    if ($LASTEXITCODE -ne 0) { throw 'Could not stage the isolated dirty source.' }
+    Assert-Rejected { Get-WindowsCheckoutSourceCommit -RepositoryRoot $checkout } 'Staged uncommitted source must not claim an unchanged commit.'
+    & git -C $checkout restore --staged --worktree -- native-windows/src/Fixture/Source.cs
+    if ($LASTEXITCODE -ne 0) { throw 'Could not restore the isolated source.' }
+    $untrackedSource = Join-Path $sourceDirectory 'Uncommitted.cs'
+    [IO.File]::WriteAllText($untrackedSource, 'Untracked native build input')
+    Assert-Rejected { Get-WindowsCheckoutSourceCommit -RepositoryRoot $checkout } 'Untracked native source must not be silently included in a release.'
+    Remove-Item -LiteralPath $untrackedSource -Force
+    foreach ($relativePath in @('Directory.Build.props','Directory.Build.targets','Directory.Packages.props','global.json',
+        'native-windows/Directory.Build.props','native-windows/Directory.Build.targets','native-windows/Directory.Packages.props','native-windows/global.json',
+        'native-windows/packaging/Directory.Build.targets')) {
+        $implicitInput = Join-Path $checkout $relativePath
+        $null = New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($implicitInput)) -Force
+        try {
+            [IO.File]::WriteAllText($implicitInput, 'Untracked implicit SDK build input')
+            Assert-Rejected { Get-WindowsCheckoutSourceCommit -RepositoryRoot $checkout } 'An untracked ancestor SDK import or configuration file must not claim clean source provenance.'
+        }
+        finally { Remove-Item -LiteralPath $implicitInput -Force }
+    }
+    $generatedDirectory = Join-Path $checkout 'native-windows/packaging/out'
+    $null = New-Item -ItemType Directory -Path $generatedDirectory -Force
+    [IO.File]::WriteAllText((Join-Path $generatedDirectory 'generated-package.bin'), 'Isolated packaging output')
+    $publishedDirectory = Join-Path $checkout 'native-windows/packaging/published'
+    $null = New-Item -ItemType Directory -Path $publishedDirectory -Force
+    [IO.File]::WriteAllText((Join-Path $publishedDirectory 'generated-update.json'), 'Isolated publication output')
+    Assert ((Get-WindowsCheckoutSourceCommit -RepositoryRoot $checkout) -ceq $fixtureSourceCommit) 'Generated packaging outputs must permit subsequent architecture and synthetic-version packaging.'
+    $notCheckout = Join-Path $temporary 'not-a-checkout'
+    $null = New-Item -ItemType Directory -Path $notCheckout -Force
+    Assert-Rejected { Get-WindowsCheckoutSourceCommit -RepositoryRoot $notCheckout } 'A missing Git checkout must not manufacture source provenance.'
+
     [Environment]::SetEnvironmentVariable('VEX_WINDOWS_UPDATE_ORIGIN', 'https://downloads.vexguard.app/windows/native/')
     [Environment]::SetEnvironmentVariable('VEX_WINDOWS_UPDATE_KEY_ID', 'fixture-p256')
     [Environment]::SetEnvironmentVariable('VEX_WINDOWS_UPDATE_PRIVATE_KEY_BASE64', 'fixture-private')
@@ -125,6 +182,7 @@ try {
         $metadata = [ordered]@{
             schema = 'vex.windows-package-output.v2'; channel = 'stable'; architecture = $architecture
             version = '2.0.0.0'; package_name = 'VEX.ReadinessFixture'; publisher = 'CN=VEX Fixture'
+            source_commit = $fixtureSourceCommit
             package_file = 'fixture.msix'; bootstrap_file = 'bootstrap-native-windows.ps1'
             install_service_script_file = 'install-vpn-service.ps1'; uninstall_service_script_file = 'uninstall-vpn-service.ps1'
             vclibs_dependency_file = "Microsoft.VCLibs.$architecture.14.00.Desktop.appx"; vclibs_dependency_version = '14.0.33728.0'
@@ -163,6 +221,9 @@ try {
                 $manifest.releases[0].rollout_percent -eq $(if ($required) { 100 } else { 10 })) 'The actual published manifest must preserve safe optional/mandatory rollout behavior.'
             $versioned = Join-Path $output "stable/2.0.0.0/$architecture"
             $entry = Get-Content -LiteralPath (Join-Path $versioned 'bootstrap-entry.json') -Raw | ConvertFrom-Json
+            $publishedMetadata = Get-Content -LiteralPath (Join-Path $versioned 'package-metadata.json') -Raw | ConvertFrom-Json
+            Assert ($publishedMetadata.source_commit -ceq $fixtureSourceCommit -and $entry.source_commit -ceq $fixtureSourceCommit -and
+                $manifest.source_commit -ceq $fixtureSourceCommit -and $manifest.releases[0].source_commit -ceq $fixtureSourceCommit) 'Package metadata, signed bootstrap entry and signed update manifest must preserve the same declared checkout commit.'
             Assert ($entry.files.vclibs_dependency.uri -eq $manifest.releases[0].vclibs_dependency_uri -and
                 $entry.files.vclibs_dependency.sha256 -eq $manifest.releases[0].vclibs_dependency_sha256 -and
                 $entry.files.vclibs_dependency.size_bytes -eq $manifest.releases[0].vclibs_dependency_size_bytes) 'Signed entry and updater dependency descriptors must agree.'
@@ -215,6 +276,31 @@ try {
     }
     Assert ($global:VexReleaseReadinessAuthenticode.Calls.Count -eq 4) 'Both architectures must pass native Setup signature preflight for each successful publication.'
     Assert ($global:VexReleaseReadinessSigner.Calls.Count -eq 10 -and @($global:VexReleaseReadinessSigner.Calls | Where-Object { $_.Public -ne 'fixture-public' -or $_.Private -ne 'fixture-private' }).Count -eq 0) 'Every signing operation must receive the exact shipping public and private inputs.'
+
+    foreach ($architecture in @('x64','arm64')) {
+        $metadataPath = Join-Path $packages "$architecture/package-metadata.json"
+        $originalMetadata = [IO.File]::ReadAllBytes($metadataPath)
+        foreach ($mode in @('missing','null','different','uppercase','truncated','newline','numeric')) {
+            try {
+                $candidate = [Text.Encoding]::UTF8.GetString($originalMetadata) | ConvertFrom-Json
+                switch ($mode) {
+                    'missing' { $candidate.PSObject.Properties.Remove('source_commit') }
+                    'null' { $candidate.source_commit = $null }
+                    'different' { $candidate.source_commit = ('e' * 40) }
+                    'uppercase' { $candidate.source_commit = ('A' * 40) }
+                    'truncated' { $candidate.source_commit = $fixtureSourceCommit.Substring(1) }
+                    'newline' { $candidate.source_commit = $fixtureSourceCommit + "`n" }
+                    'numeric' { $candidate.source_commit = 123 }
+                }
+                [IO.File]::WriteAllText($metadataPath, ($candidate | ConvertTo-Json))
+                $output = Join-Path $temporary "invalid-source-$architecture-$mode"
+                $signingCalls = $global:VexReleaseReadinessSigner.Calls.Count
+                Assert-Rejected { & $publisher -PackagesRoot $packages -PublishRoot $output } 'Missing, malformed or mixed source commits must reject the entire candidate set.'
+                Assert (-not (Test-Path -LiteralPath $output) -and $global:VexReleaseReadinessSigner.Calls.Count -eq $signingCalls) 'Invalid source provenance must leave no output and perform no signing operation.'
+            }
+            finally { [IO.File]::WriteAllBytes($metadataPath, $originalMetadata) }
+        }
+    }
 
     $output = Join-Path $temporary 'invalid-floor'
     [Environment]::SetEnvironmentVariable('VEX_WINDOWS_REQUIRED_VERSION_FLOOR', '3.0.0.0')
@@ -280,7 +366,7 @@ try {
         }
     }
     $global:VexReleaseReadinessProductVersion.Mode = 'valid'
-    Write-Host 'Windows release readiness tests passed: safe rollout/floors, bundled signing inputs, preflight rejection, exact native Setup/bundle publication and secret exclusion.'
+    Write-Host 'Windows release readiness tests passed: actual checkout provenance, same-source architectures, safe rollout/floors, bundled signing inputs, preflight rejection, exact native Setup/bundle publication and secret exclusion.'
 }
 finally {
     Remove-Variable -Name VexReleaseReadinessSigner -Scope Global

@@ -31,6 +31,8 @@ internal static class Program
     {
         if (args.Length == 3 && args[0] == "--fixture-service")
             return await ScmIpcFixture.RunServiceAsync(args);
+        if (args.Length == 6 && args[0] == "--active-controller-child")
+            return await ControllerDeathAcceptance.RunChildAsync(args[1], args[2], args[3], args[4], args[5]);
         if (args.Length == 2 && args[0] == "--watchdog-probe")
             return await FullTunnelAcceptance.RunWatchdogProbeAsync(args[1]);
         if (args.Length is not (4 or 5) || args[0] != "--disposable-runner" ||

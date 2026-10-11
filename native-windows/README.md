@@ -401,7 +401,9 @@ AntiLeak disabled for its initial narrow-route phase. Ordinary PR/main CI and
 the explicit `full_tunnel_checks=true` manual mode then verify full IPv4
 routing, actual AntiLeak, tunnel DNS/HTTPS,
 physical control-plane HTTPS, blocked/restored outside TCP, demand-start vendor
-registration, and controller-death cleanup. Its encrypted peer has no public
+registration, controller-death detection with an owned idle probe, and graceful
+SCM/tunnel cleanup. Active-tunnel cleanup after controller death remains separate.
+Its encrypted peer has no public
 Internet forwarding; actual public VPN egress, roaming and physical ARM64
 acceptance remain separate. Full routing uses paired `/1` routes so the vendor
 cannot apply a second `/0` firewall that blocks the VEX API escape. Signed

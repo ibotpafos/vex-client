@@ -197,13 +197,9 @@ internal static class FullTunnelAcceptance
     private static async Task<bool> TcpReachableAsync(IPAddress source, int index, IPAddress destination,
         TimeSpan budget, CancellationToken token)
     {
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-        deadline.CancelAfter(budget);
         using var socket = PhysicalSocket(source, index, SocketType.Stream, ProtocolType.Tcp);
-        try { await socket.ConnectAsync(new IPEndPoint(destination, 443), deadline.Token); return true; }
-        catch (OperationCanceledException) when (!token.IsCancellationRequested) { return false; }
-        catch (SocketException error) when (error.SocketErrorCode is SocketError.AccessDenied or SocketError.TimedOut or
-            SocketError.ConnectionRefused or SocketError.HostUnreachable or SocketError.NetworkUnreachable) { return false; }
+        return await PhysicalNetworkProbe.IsReachableAsync(async deadline =>
+            await socket.ConnectAsync(new IPEndPoint(destination, 443), deadline), budget, token);
     }
 
     private static async Task ProbeControlHttpsAsync(IPAddress source, int index, IPAddress destination, CancellationToken token)
@@ -237,26 +233,20 @@ internal static class FullTunnelAcceptance
     private static async Task<bool> PhysicalDnsReachableAsync(IPAddress source, int index, IPAddress destination,
         TimeSpan budget, CancellationToken token)
     {
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-        deadline.CancelAfter(budget);
         using var socket = PhysicalSocket(source, index, SocketType.Dgram, ProtocolType.Udp);
         var packet = new List<byte>([0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0]);
         var id = RandomNumberGenerator.GetBytes(2); packet[0] = id[0]; packet[1] = id[1];
         foreach (var label in ControlHost.Split('.')) { packet.Add((byte)label.Length); packet.AddRange(Encoding.ASCII.GetBytes(label)); }
         packet.AddRange([0, 0, 1, 0, 1]);
-        try
+        return await PhysicalNetworkProbe.IsReachableAsync(async deadline =>
         {
-            await socket.ConnectAsync(new IPEndPoint(destination, 53), deadline.Token);
-            await socket.SendAsync(packet.ToArray(), SocketFlags.None, deadline.Token);
+            await socket.ConnectAsync(new IPEndPoint(destination, 53), deadline);
+            await socket.SendAsync(packet.ToArray(), SocketFlags.None, deadline);
             var response = new byte[1232];
-            var count = await socket.ReceiveAsync(response, SocketFlags.None, deadline.Token);
+            var count = await socket.ReceiveAsync(response, SocketFlags.None, deadline);
             Require(count >= 12 && response[0] == id[0] && response[1] == id[1] && (response[2] & 0x80) != 0 &&
                 BinaryPrimitives.ReadUInt16BigEndian(response.AsSpan(4)) == 1, "fixture_full_physical_dns_response_invalid");
-            return true;
-        }
-        catch (OperationCanceledException) when (!token.IsCancellationRequested) { return false; }
-        catch (SocketException error) when (error.SocketErrorCode is SocketError.AccessDenied or SocketError.TimedOut or
-            SocketError.ConnectionRefused or SocketError.HostUnreachable or SocketError.NetworkUnreachable) { return false; }
+        }, budget, token);
     }
 
     private static async Task VerifyControllerDeathWatchdogAsync(string directory, CancellationToken token)

@@ -301,6 +301,33 @@ try {
     Assert-PublicReject { & $main -Phase Connected -ResultPath $wrongExitPath -BaselinePath $baselinePath -ExpectedVpnExitIpv4 @('8.8.4.4') } 'public_vpn_exit_not_expected_or_not_changed'
     $wrongExit = Read-PublicVpnEvidence $wrongExitPath
     Assert-PublicCheck (-not $wrongExit.Document.passed -and -not $wrongExit.Document.actual_public_internet_vpn_egress_verified) 'Failed observation claims public egress.'
+
+    # Model a slow current phase through its clock dependency, preserving the
+    # exact timestamps of already completed baseline/connected observations.
+    $script:actualTimestampConverter = (Get-Command ConvertTo-PublicVpnTimestamp -CommandType Function).ScriptBlock
+    $script:priorObservationTimestamps = @($baseline.Document.started_at_utc, $baseline.Document.completed_at_utc,
+        $connected.Document.started_at_utc, $connected.Document.completed_at_utc) +
+        @($baseline.Document.observers | ForEach-Object observed_at_utc) +
+        @($connected.Document.observers | ForEach-Object observed_at_utc)
+    function ConvertTo-PublicVpnTimestamp {
+        param($Value)
+        if ($Value -notin $script:priorObservationTimestamps) { return [DateTimeOffset]::UtcNow.AddSeconds(-100) }
+        return & $script:actualTimestampConverter $Value
+    }
+    try {
+        foreach ($latePhase in @('Connected', 'Restored')) {
+            $script:observationIp = $(if ($latePhase -eq 'Connected') { '8.8.4.4' } else { '1.1.1.1' })
+            $latePath = Join-Path $root ('late-' + $latePhase + '.json')
+            $arguments = @{ Phase = $latePhase; ResultPath = $latePath; BaselinePath = $baselinePath;
+                ExpectedVpnExitIpv4 = @('8.8.4.4') }
+            if ($latePhase -eq 'Restored') { $arguments.ConnectedPath = $connectedPath }
+            Assert-PublicReject { & $main @arguments } 'public_vpn_observation_budget_exceeded'
+            $late = Read-PublicVpnEvidence $latePath
+            Assert-PublicCheck (-not $late.Document.passed -and -not $late.Document.actual_public_internet_vpn_egress_verified -and
+                -not $late.Document.restored_baseline_egress_verified) 'Over-budget observation retains a successful acceptance claim.'
+        }
+    }
+    finally { Set-Item -LiteralPath Function:\ConvertTo-PublicVpnTimestamp -Value $script:actualTimestampConverter }
 }
 finally { Remove-Item -LiteralPath $root -Recurse -Force }
 Write-Output ('Public VPN verifier: {0} behavioral checks passed; no live network or VPN state changed.' -f $script:checks)

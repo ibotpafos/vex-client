@@ -25,6 +25,8 @@ var tests = new (string Name, Action Run)[]
     ("Realtime session recovery preserves outages and rejects stale credential events", CustomerRealtimeSessionTests.Run),
     ("Realtime billing and device events cannot mutate a replacement session", RealtimeScopeIsolationTests.Run),
     ("Periodic entitlement checks preserve current sessions and user connection intent", ActiveEntitlementMonitorTests.Run),
+    ("Server-owned Windows beta preserves billing, bounded access and authoritative revocation", WindowsBetaAccessTests.Run),
+    ("Windows beta presentation preserves free access and paid billing", WindowsBetaPresentationTests.Run),
     ("Account retains authoritative subscription data through optional section failures", ClientAccountSnapshotTests.Run),
     ("Signed profile warm-up preserves routing, identity, trust and foreground priority", ProfileWarmupTests.Run),
     ("Service repair verifies trusted health, ownership, cancellation and bounded retries", ServiceMaintenanceTests.Run),

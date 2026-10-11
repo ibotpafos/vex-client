@@ -186,7 +186,7 @@ public sealed partial class NativeClientCoordinator
     }
 
     private bool HasBoundedOfflineEntitlement(NativeClientState state) =>
-        state.CachedEntitlement?.HasPaidAccess == true && state.CachedEntitlementValidUntil > _utcNow() &&
+        state.CachedEntitlement?.HasVpnAccess == true && state.CachedEntitlementValidUntil > _utcNow() &&
         state.CachedEntitlementCheckedAt is { } checkedAt && checkedAt <= _utcNow() &&
         state.CachedEntitlementValidUntil <= checkedAt.AddHours(24) &&
         (KnownEntitlementExpiry(state.CachedEntitlement) is not { } expiry || expiry > _utcNow());

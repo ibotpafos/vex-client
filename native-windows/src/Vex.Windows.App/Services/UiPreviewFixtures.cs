@@ -64,9 +64,20 @@ internal static class UiPreviewFixtures
             new VexAuthSession(new VexUser("ui-preview-user", "preview@example.test", "active"),
                 "isolated-ui-preview-token", now.AddDays(1)),
             "ui-preview-installation", "ui-preview-device", "de-frankfurt",
-            new WireGuardIdentity(key, key, 1)));
+            new WireGuardIdentity(key, key, 1),
+            CachedEntitlement: PreviewEntitlement(now),
+            CachedEntitlementCheckedAt: now,
+            CachedEntitlementValidUntil: now.AddHours(24)));
 #endif
     }
+
+#if DEBUG
+    private static VexEntitlement PreviewEntitlement(DateTimeOffset now) => new(true,
+        "vex-monthly", "VEX", "active", "Подписка VEX", "Все устройства под защитой",
+        "Осталось 30 дней", "active", "premium", now.AddDays(30).ToString("O"),
+        now.AddDays(30).ToString("O"), true,
+        new WindowsBetaAccessGrant(true, "windows", "native", "isolated-ui-preview-beta", null, 5, false));
+#endif
 
     public static HttpMessageHandler CreateHandler() => new OfflineHandler();
 
@@ -120,13 +131,10 @@ internal static class UiPreviewFixtures
         private static object? ResponseFor(string path)
         {
             var now = DateTimeOffset.UtcNow;
-            var nextMonth = now.AddDays(30).ToString("O");
             return path switch
             {
                 "/v1/me" or "/v1/auth/me" => new VexUser("ui-preview-user", "preview@example.test", "active"),
-                "/v1/billing/entitlement" => new VexEntitlement(true, "vex-monthly", "VEX", "active",
-                    "Подписка VEX", "Все устройства под защитой", "Осталось 30 дней", "active",
-                    "premium", nextMonth, nextMonth, true),
+                "/v1/billing/entitlement" => PreviewEntitlement(now),
                 "/v1/billing/plans" => new[] { new BillingPlan("vex-monthly", "VEX", "platega", 29900,
                     "RUB", "month", 5, "premium", "active") },
                 "/v1/billing/payments" => new[] { new BillingPayment("ui-preview-payment", null, null,

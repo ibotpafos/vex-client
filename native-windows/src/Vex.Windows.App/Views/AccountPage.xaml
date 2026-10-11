@@ -32,6 +32,29 @@
                 </Border>
             </Grid>
 
+            <Border x:Name="WindowsBetaPanel" AutomationProperties.AutomationId="AccountWindowsBetaPanel"
+                Padding="15" Background="#1822D3EE" BorderBrush="#3322D3EE" BorderThickness="1"
+                CornerRadius="16" Visibility="Collapsed">
+                <StackPanel Spacing="6">
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                        <TextBlock x:Name="WindowsBetaTitle" FontSize="16" FontWeight="Black"
+                            Foreground="{StaticResource VexTextBrush}" TextWrapping="Wrap" VerticalAlignment="Center" />
+                        <Button x:Name="RefreshBetaAccessButton" AutomationProperties.AutomationId="RefreshBetaAccessButton"
+                            Grid.Column="1" Click="OnRefreshBillingClick" Style="{StaticResource VexQuietButtonStyle}" Padding="8"
+                            AutomationProperties.Name="Обновить VPN-доступ" ToolTipService.ToolTip="Обновить VPN-доступ">
+                            <FontIcon Glyph="&#xE72C;" FontSize="14" />
+                        </Button>
+                    </Grid>
+                    <TextBlock x:Name="WindowsBetaDescription" FontSize="12"
+                        Foreground="{StaticResource VexSecondaryTextBrush}" TextWrapping="Wrap" />
+                    <TextBlock x:Name="WindowsBetaPeriod" FontSize="12" FontWeight="Bold"
+                        Foreground="{StaticResource VexCyanLightBrush}" TextWrapping="Wrap" />
+                    <TextBlock x:Name="WindowsBetaSubscriptionNote" FontSize="11"
+                        Foreground="{StaticResource VexSecondaryTextBrush}" TextWrapping="Wrap" />
+                </StackPanel>
+            </Border>
+
             <Border x:Name="BillingPanel" Padding="15,0,15,4" Visibility="Collapsed">
                 <StackPanel Spacing="13">
                     <Grid>

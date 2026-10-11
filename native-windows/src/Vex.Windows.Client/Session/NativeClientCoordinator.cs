@@ -237,7 +237,7 @@ public sealed partial class NativeClientCoordinator
                 // acknowledged by the server, or erase its uncertain outcome.
                 var previousGrantStillValid = latest.Identity == state.Identity &&
                     latest.PendingIdentity is null &&
-                    latest.CachedEntitlement?.HasPaidAccess == true &&
+                    latest.CachedEntitlement?.HasVpnAccess == true &&
                     latest.CachedEntitlementValidUntil > _utcNow() &&
                     error is not NativeClientFlowException
                     {
@@ -854,7 +854,7 @@ public sealed partial class NativeClientCoordinator
         NativeClientState state, CancellationToken cancellationToken)
     {
         var now = _utcNow();
-        if (state.CachedEntitlement?.HasPaidAccess == true &&
+        if (state.CachedEntitlement?.HasVpnAccess == true &&
             (KnownEntitlementExpiry(state.CachedEntitlement) is not { } knownExpiry || knownExpiry > now) &&
             state.CachedEntitlementValidUntil > now &&
             state.CachedEntitlementCheckedAt > now - TimeSpan.FromMinutes(5))
@@ -867,7 +867,7 @@ public sealed partial class NativeClientCoordinator
                 state.Session.AccessToken, cancellationToken).ConfigureAwait(false);
             state = CacheEntitlement(state, entitlement);
             _stateStore.Save(state);
-            if (!entitlement.HasPaidAccess || state.CachedEntitlementValidUntil <= now)
+            if (!entitlement.HasVpnAccess || state.CachedEntitlementValidUntil <= now)
             {
                 throw new NativeClientFlowException("vpn_entitlement_required");
             }
@@ -881,7 +881,7 @@ public sealed partial class NativeClientCoordinator
             {
                 throw new NativeClientFlowException("vpn_entitlement_required");
             }
-            if (state.CachedEntitlement?.HasPaidAccess == true &&
+            if (state.CachedEntitlement?.HasVpnAccess == true &&
                 state.CachedEntitlementValidUntil > now)
             {
                 return state;
@@ -893,7 +893,7 @@ public sealed partial class NativeClientCoordinator
     private NativeClientState CacheEntitlement(NativeClientState state, VexEntitlement entitlement)
     {
         var now = _utcNow();
-        var validUntil = entitlement.HasPaidAccess ? now.AddHours(24) : now;
+        var validUntil = entitlement.HasVpnAccess ? now.AddHours(24) : now;
         if (KnownEntitlementExpiry(entitlement) is { } expiresAt && expiresAt < validUntil)
         {
             validUntil = expiresAt;
@@ -908,13 +908,10 @@ public sealed partial class NativeClientCoordinator
 
     private static DateTimeOffset? KnownEntitlementExpiry(VexEntitlement? entitlement)
     {
-        if (entitlement is null) { return null; }
-        // Effective expiry accounts for the authoritative subscription state;
-        // the billing period is the compatible fallback when it is absent.
-        var value = !string.IsNullOrWhiteSpace(entitlement.EffectiveExpiresAt)
-            ? entitlement.EffectiveExpiresAt : entitlement.CurrentPeriodEnd;
-        return DateTimeOffset.TryParse(value, System.Globalization.CultureInfo.InvariantCulture,
-            System.Globalization.DateTimeStyles.AssumeUniversal, out var expiresAt) ? expiresAt : null;
+        // Paid billing dates cannot expire an independent Windows beta grant.
+        // Access lasts while either authoritative source is still valid; an
+        // indefinite beta still receives only a bounded 24-hour offline lease.
+        return entitlement?.VpnAccessExpiresAt;
     }
 
     private async Task RefreshRejectedSessionAsync(CancellationToken cancellationToken)

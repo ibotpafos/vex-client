@@ -145,6 +145,33 @@ foreach ($exceptionType in @('Exception', 'IOException', 'UnauthorizedAccessExce
 }
 $progress.failure_type = $null
 
+# Windows replacement may report access denied (5) or sharing violation (32).
+# Only their exact managed type/HRESULT pairs count as the expected conflict.
+function Test-SmokeTraySharingFailure {
+    param([Parameter(Mandatory = $true)][Exception]$ErrorObject)
+    $original = $ErrorObject.GetBaseException()
+    return (($original.GetType() -eq [UnauthorizedAccessException] -and $original.HResult -eq -2147024891) -or
+        ($original.GetType() -eq [IO.IOException] -and $original.HResult -eq -2147024864))
+}
+$denied = [UnauthorizedAccessException]::new('isolated classification fixture')
+$sharing = [IO.IOException]::new('isolated classification fixture', -2147024864)
+foreach ($expected in @($denied, $sharing, [Exception]::new('isolated wrapper', $denied),
+    [Exception]::new('isolated wrapper', [Exception]::new('nested wrapper', $sharing)))) {
+    if (-not (Test-SmokeTraySharingFailure -ErrorObject $expected)) { throw 'Tray sharing control rejects an exact Windows denied-replacement type/HRESULT pair.' }
+}
+$wrongDenied = [UnauthorizedAccessException]::new('isolated classification fixture')
+$wrongDenied.HResult = -2147024864
+$wrongSharing = [IO.IOException]::new('isolated classification fixture', -2147024891)
+$wrongFacility = [IO.IOException]::new('isolated classification fixture', 32)
+$derivedSharing = [IO.DirectoryNotFoundException]::new('isolated classification fixture')
+$derivedSharing.HResult = -2147024864
+foreach ($unexpected in @($wrongDenied, $wrongSharing, $wrongFacility, $derivedSharing,
+    [IO.IOException]::new('isolated classification fixture'), [NullReferenceException]::new(),
+    [Exception]::new('isolated wrapper', [ArgumentException]::new()))) {
+    if (Test-SmokeTraySharingFailure -ErrorObject $unexpected) { throw 'Tray sharing control accepts an unrelated failure or a mismatched Windows type/HRESULT pair.' }
+}
+Write-Host 'Tray sharing exception classification passed: 4 exact/nested positives; 7 unrelated/mismatched negatives.'
+
 $trayTestRoot = Join-Path ([IO.Path]::GetTempPath()) ('vex-tray-diagnostic-tests-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $trayTestRoot | Out-Null
 try {
@@ -272,19 +299,62 @@ public static class TrayDiagnosticWriterHarness
         }
         finally { Remove-Item -LiteralPath ($producerPath + '.tmp') }
         if ($IsWindows) {
+            if (Test-Path -LiteralPath ($producerPath + '.tmp')) { throw 'Tray sharing control refuses a pre-existing temporary receipt.' }
             [IO.File]::WriteAllText($producerPath, ([pscustomobject]$trayDiagnostic | ConvertTo-Json -Compress))
+            $legacyTargetHash = (Get-FileHash -LiteralPath $producerPath -Algorithm SHA256).Hash
             # Hold the actual provider reader used by Get-Content, rather than
             # modelling its Windows FileShare.ReadWrite flags in another helper.
             $legacyReaders = $ExecutionContext.SessionState.InvokeProvider.Content.GetReader($producerPath)
+            if ($legacyReaders.Count -ne 1) { throw 'Tray sharing control did not obtain exactly one provider reader.' }
             $legacy = $legacyReaders[0]
             try {
                 [void]$legacy.Read(1)
+                $flags = [Reflection.BindingFlags]'NonPublic,Instance'
+                $streamField = $legacy.GetType().GetField('_stream', $flags)
+                $shareField = $legacy.GetType().GetField('_share', $flags)
+                if ($null -eq $streamField -or $null -eq $shareField) { throw 'Actual provider reader does not expose its held stream/share state for this qualification.' }
+                $legacyStream = $streamField.GetValue($legacy)
+                $legacyShare = $shareField.GetValue($legacy)
+                if ($legacyStream -isnot [IO.FileStream] -or -not $legacyStream.CanRead -or
+                    $legacyStream.SafeFileHandle.IsClosed -or $legacyStream.SafeFileHandle.IsInvalid -or
+                    $legacyShare -isnot [IO.FileShare] -or ($legacyShare -band [IO.FileShare]::Delete) -ne 0) {
+                    throw 'Tray sharing control lacks a valid held provider handle without delete sharing.'
+                }
+                Write-Host ('Tray sharing control runtime: PowerShell={0}; framework={1}; provider-share={2}; held-open=True.' -f
+                    $PSVersionTable.PSVersion.ToString(), [Runtime.InteropServices.RuntimeInformation]::FrameworkDescription, [int]$legacyShare)
+                $moveSucceeded = $false
                 $rejected = $false
-                try { [Vex.Windows.App.Services.TrayDiagnosticWriterHarness]::Complete() }
-                catch { $rejected = $_.Exception.InnerException -is [IO.IOException] }
-                if (-not $rejected) { throw 'Windows held Get-Content provider reader did not reject the actual producer atomic replacement.' }
+                try {
+                    [Vex.Windows.App.Services.TrayDiagnosticWriterHarness]::Complete()
+                    $moveSucceeded = $true
+                }
+                catch {
+                    $original = $_.Exception.GetBaseException()
+                    $kind = $original.GetType().Name
+                    if ($kind -cnotmatch '^(Exception|[A-Za-z_][A-Za-z0-9_]{0,70}Exception)$') { $kind = 'UnexpectedException' }
+                    Write-Host ('Tray sharing control producer failure: type={0}; HRESULT={1:X8}.' -f $kind, $original.HResult)
+                    $rejected = Test-SmokeTraySharingFailure -ErrorObject $_.Exception
+                }
+                if ($moveSucceeded -or -not $rejected) { throw 'Windows held Get-Content provider reader did not produce an exact denied-sharing failure from the actual writer.' }
+                if (-not $legacyStream.CanRead -or $legacyStream.SafeFileHandle.IsClosed -or
+                    $legacyStream.SafeFileHandle.IsInvalid -or
+                    (Get-FileHash -LiteralPath $producerPath -Algorithm SHA256).Hash -cne $legacyTargetHash) {
+                    throw 'Denied tray replacement lost its held reader or changed the original target.'
+                }
+                # A complete temporary receipt proves the verbatim writer
+                # finished File.WriteAllText and reached the rejected Move.
+                $staged = Read-SmokeTrayDiagnostic -Path ($producerPath + '.tmp')
+                Assert-SmokeTrayRecoveryDiagnostic -Diagnostic $staged -Scenario 'reset' -Access 'Available' -Mode 'fixtures' -ProcessId $PID
             }
             finally { foreach ($reader in $legacyReaders) { $reader.Close(); $reader.Dispose() } }
+            [Vex.Windows.App.Services.TrayDiagnosticWriterHarness]::Complete()
+            $released = Read-SmokeTrayDiagnostic -Path $producerPath
+            Assert-SmokeTrayRecoveryDiagnostic -Diagnostic $released -Scenario 'reset' -Access 'Available' -Mode 'fixtures' -ProcessId $PID
+            Write-Host 'Actual Windows tray legacy control passed: held provider blocks Move, original target unchanged, complete reset temporary receipt retained; closing provider permits the same writer.'
+
+            # Reseed the old locked receipt before the original corrected-reader
+            # positive: its held snapshot and the replaced reset must both read.
+            [IO.File]::WriteAllText($producerPath, ([pscustomobject]$trayDiagnostic | ConvertTo-Json -Compress))
             $held = Open-SmokeTrayDiagnosticRead -Path $producerPath
             try {
                 [Vex.Windows.App.Services.TrayDiagnosticWriterHarness]::Complete()

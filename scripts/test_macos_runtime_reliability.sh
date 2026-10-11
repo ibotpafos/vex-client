@@ -21,7 +21,10 @@ python3 - "$app_state_source" \
     "$test_dir/VpnRecoveryCallerTests.swift" \
     "$helper_source" \
     "$root_dir/macos-native/Tests/RuntimeRecoveryHarness/VpnHelperCallerTests.swift" \
-    "$test_dir/VpnHelperCallerTests.swift" <<'PY'
+    "$test_dir/VpnHelperCallerTests.swift" \
+    "$app_state_source" \
+    "$root_dir/macos-native/Tests/RuntimeRecoveryHarness/SessionUserCallerTests.swift" \
+    "$test_dir/SessionUserCallerTests.swift" <<'PY'
 import pathlib
 import re
 import sys
@@ -35,7 +38,7 @@ for offset in range(1, len(sys.argv), 3):
     assert names, "Missing production-method list"
     methods = []
     for name in names.group(1).split():
-        declaration = re.search(r"^    (?:private )?func " + re.escape(name) + r"\(", source, re.M)
+        declaration = re.search(r"^    (?:private )?func " + re.escape(name) + r"(?:<[^>]+>)?\(", source, re.M)
         assert declaration, f"Missing production method {name}"
         parameter = source.index("(", declaration.start())
         parameter_depth = 1

@@ -105,6 +105,9 @@ public static class UiPreviewContextTestHarness
                 new[] { "--signed-out-ui-preview" },
                 new[] { "--focus-pulse-ui-preview" },
                 new[] { "--signed-out-ui-preview", "--focus-pulse-ui-preview" },
+                new[] { "--protected-state-fault-ui-preview" },
+                new[] { "--protected-state-fault-ui-preview", "--ui-smoke-exit" },
+                new[] { "--focus-pulse-ui-preview", "--protected-state-fault-ui-preview" },
             })
             {
                 Reset();
@@ -112,7 +115,8 @@ public static class UiPreviewContextTestHarness
                 Check(UiPreviewContext.IsPreviewRequest, "A reserved fixture flag escaped preview classification.");
                 if (!expectedDebug)
                 {
-                    Check(!UiPreviewContext.IsEnabled && !UiPreviewContext.IsAuthenticated && UiPreviewContext.StateDirectory is null,
+                    Check(!UiPreviewContext.IsEnabled && !UiPreviewContext.IsAuthenticated &&
+                        !UiPreviewContext.IsProtectedStateFaultPreview && UiPreviewContext.StateDirectory is null,
                         "A Release flag enabled preview fixtures or assigned a data directory.");
                     Check(Environment.GetEnvironmentVariable(EnvironmentName) == EnvironmentSentinel,
                         "A Release flag changed the preview environment.");
@@ -124,10 +128,15 @@ public static class UiPreviewContextTestHarness
                 }
                 else
                 {
-                    var authenticated = flags.Contains("--focus-pulse-ui-preview", StringComparer.Ordinal);
+                    var faults = flags.Contains("--protected-state-fault-ui-preview", StringComparer.Ordinal);
+                    var authenticated = flags.Contains("--focus-pulse-ui-preview", StringComparer.Ordinal) && !faults;
                     Check(UiPreviewContext.IsEnabled && !UiPreviewContext.IsCommandOnly &&
                         UiPreviewContext.IsAuthenticated == authenticated,
                         "Debug fixture flags selected the wrong preview mode.");
+                    Check(UiPreviewContext.IsProtectedStateFaultPreview == faults,
+                        "Debug selected the wrong protected-state fault mode.");
+                    Check(UiPreviewContext.InstanceKey == _debugCommandInstanceKey,
+                        "Primary preview and redirected commands selected different executable instances.");
                     Check(Environment.GetEnvironmentVariable(EnvironmentName) == (authenticated ? "1" : "0"),
                         "Debug preview did not publish the selected fixture mode.");
                     var directory = UiPreviewContext.StateDirectory ?? throw new InvalidOperationException("Debug fixtures lack an isolated directory.");
@@ -200,6 +209,7 @@ public static class UiPreviewContextTestHarness
         UiPreviewContext.Cleanup();
         SetProperty("IsEnabled", false);
         SetProperty("IsAuthenticated", false);
+        SetProperty("IsProtectedStateFaultPreview", false);
         SetProperty("IsPreviewRequest", false);
         SetProperty("IsCommandOnly", false);
         SetProperty("StateDirectory", null);

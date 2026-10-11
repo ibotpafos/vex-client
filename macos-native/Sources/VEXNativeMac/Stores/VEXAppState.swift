@@ -1266,10 +1266,12 @@ final class VEXAppState: ObservableObject {
 
     private func loadUser(_ token: String) async {
         guard let accountUserId = sessionUserId(for: token) else { return }
+        let accountGeneration = profileAccountGeneration
         await withSessionRetry(operation: { currentToken in
             guard self.sessionUserId(for: currentToken) == accountUserId else { throw CancellationError() }
             let nextUser = try await self.api.me(accessToken: currentToken)
-            guard self.session?.user.id == accountUserId else { throw CancellationError() }
+            guard self.session?.user.id == accountUserId,
+                  self.profileAccountGeneration == accountGeneration else { throw CancellationError() }
             self.user = nextUser
             return ()
         })

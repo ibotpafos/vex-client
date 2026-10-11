@@ -45,6 +45,11 @@ public sealed class AppServices
             Timeout = TimeSpan.FromSeconds(40),
         };
         StateStore = new ProtectedClientStateStore(stateDirectory: UiPreviewContext.StateDirectory);
+#if DEBUG
+        if (UiPreviewContext.IsProtectedStateFaultPreview)
+            ProtectedStateFaultPreview.Prepare(StateStore);
+        else
+#endif
         UiPreviewFixtures.Seed(StateStore);
         var apiClient = new VexApiClient(httpClient, StateStore);
         var realtimeHttpHandler = new SocketsHttpHandler

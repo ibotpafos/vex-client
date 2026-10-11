@@ -27,6 +27,11 @@ const LOGOUT_PRESERVED_STORAGE_KEYS = new Set([
   'vex.vpn.legacy_key_owner.v1',
 ]);
 
+const LOGOUT_REQUIRED_STORAGE_KEYS = new Set([
+  'vex.auth.session.v1',
+  'vex.auth.session.history.v1',
+]);
+
 function shouldUseWebStorage(): boolean {
   return Platform.OS === 'web';
 }
@@ -52,13 +57,24 @@ function setWebStorageItem(key: string, value: string): void {
   } catch {}
 }
 
-function deleteWebStorageItem(key: string): void {
+function deleteWebStorageItem(key: string, required = false): void {
   if (Platform.OS !== 'web') {
     return;
   }
   try {
     localStorage.removeItem(key);
-  } catch {}
+  } catch (error) {
+    if (required) throw error;
+  }
+}
+
+async function clearRequiredLegacyWebSession(): Promise<void> {
+  const results = await Promise.allSettled(
+    [...LOGOUT_REQUIRED_STORAGE_KEYS].map(async (key) => deleteWebStorageItem(key, true)),
+  );
+  for (const result of results) {
+    if (result.status === 'rejected') throw result.reason;
+  }
 }
 
 function clearWebStorageItems(keys: readonly string[]): void {
@@ -95,6 +111,9 @@ export async function getItemAsync(key: string): Promise<string | null> {
 
 export async function setItemAsync(key: string, value: string): Promise<void> {
   if (shouldUseMemoryOnlyWebStorage(key)) {
+    // A new login must not leave the previous account in either legacy copy.
+    // History writes are best effort, so verify both before publishing primary.
+    if (key === 'vex.auth.session.v1') await clearRequiredLegacyWebSession();
     webSensitiveMemoryStorage.set(key, value);
     deleteWebStorageItem(key);
     return;
@@ -109,21 +128,30 @@ export async function setItemAsync(key: string, value: string): Promise<void> {
 export async function deleteItemAsync(key: string): Promise<void> {
   if (shouldUseMemoryOnlyWebStorage(key)) {
     webSensitiveMemoryStorage.delete(key);
-    deleteWebStorageItem(key);
+    deleteWebStorageItem(key, LOGOUT_REQUIRED_STORAGE_KEYS.has(key));
     return;
   }
   if (shouldUseWebStorage()) {
-    deleteWebStorageItem(key);
+    deleteWebStorageItem(key, LOGOUT_REQUIRED_STORAGE_KEYS.has(key));
     return;
   }
   return SecureStore.deleteItemAsync(key);
 }
 
 export async function clearSecureKeys(keys: readonly string[]): Promise<void> {
-  await Promise.all(keys.map((key) => deleteItemAsync(key).catch(() => undefined)));
+  const results = await Promise.allSettled(keys.map((key) => deleteItemAsync(key)));
 
   // На вебе сессия могла сохраниться в localStorage в промежуточных версиях.
   clearWebStorageItems(keys);
+
+  // Both durable session copies must be removed before logout can succeed.
+  // Attempt every key first; unrelated cache cleanup remains best effort.
+  for (let index = 0; index < results.length; index += 1) {
+    const result = results[index];
+    if (LOGOUT_REQUIRED_STORAGE_KEYS.has(keys[index]) && result.status === 'rejected') {
+      throw result.reason;
+    }
+  }
 }
 
 export async function clearSensitiveStorageHistory(): Promise<void> {

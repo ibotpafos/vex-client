@@ -14,6 +14,7 @@ internal static class UiPreviewContext
 #endif
     public static bool IsEnabled { get; private set; }
     public static bool IsAuthenticated { get; private set; }
+    public static bool IsProtectedStateFaultPreview { get; private set; }
     public static bool IsPreviewRequest { get; private set; }
     public static bool IsCommandOnly { get; private set; }
     public static string? StateDirectory { get; private set; }
@@ -23,23 +24,25 @@ internal static class UiPreviewContext
     {
         var signedOut = arguments.Contains("--signed-out-ui-preview", StringComparer.Ordinal);
         var fixtures = arguments.Contains("--focus-pulse-ui-preview", StringComparer.Ordinal);
+        var protectedStateFaults = arguments.Contains("--protected-state-fault-ui-preview", StringComparer.Ordinal);
         var command = arguments.Any(argument => argument is "--ui-smoke-exit" or
             "--ui-smoke-tray-connect" or "--ui-smoke-tray-connect-locked" or "--ui-smoke-tray-reset") ||
             IsPreviewProtocolUri(protocolUri) ||
             ParseActivationUri(string.Join(" ", arguments)) is not null;
-        IsPreviewRequest = signedOut || fixtures || command;
+        IsPreviewRequest = signedOut || fixtures || protectedStateFaults || command;
         if (!IsPreviewRequest) return;
 #if DEBUG
-        IsCommandOnly = command && !signedOut && !fixtures;
+        IsCommandOnly = command && !signedOut && !fixtures && !protectedStateFaults;
         var executable = Path.GetFullPath(Environment.ProcessPath ?? AppContext.BaseDirectory);
         InstanceKey = "vex-ui-preview-" + Convert.ToHexString(
             SHA256.HashData(Encoding.UTF8.GetBytes(executable.ToUpperInvariant())))[..24];
         if (IsCommandOnly) return;
 
         IsEnabled = true;
-        IsAuthenticated = fixtures;
+        IsAuthenticated = fixtures && !protectedStateFaults;
+        IsProtectedStateFaultPreview = protectedStateFaults;
         StateDirectory = Path.Combine(Path.GetTempPath(), "VEX.Windows.UiPreview", Guid.NewGuid().ToString("N"));
-        Environment.SetEnvironmentVariable("VEX_WINDOWS_PREVIEW", fixtures ? "1" : "0");
+        Environment.SetEnvironmentVariable("VEX_WINDOWS_PREVIEW", IsAuthenticated ? "1" : "0");
 #endif
     }
 

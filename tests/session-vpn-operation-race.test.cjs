@@ -6,12 +6,12 @@ const vm = require('node:vm');
 const ts = require('typescript');
 
 const repo = path.resolve(__dirname, '..');
-function policy(file, dependencies = {}) {
+function policy(file, dependencies = {}, globals = {}) {
   const code = ts.transpileModule(fs.readFileSync(path.join(repo, file), 'utf8'), {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
   }).outputText;
   const exports = {};
-  vm.runInNewContext(code, { exports, Error, require: name => {
+  vm.runInNewContext(code, { ...globals, exports, Error, require: name => {
     assert.ok(Object.hasOwn(dependencies, name), `unexpected policy import ${name}`);
     return dependencies[name];
   } });
@@ -53,14 +53,14 @@ function deferred() {
   const promise = new Promise((ok, fail) => { resolve = ok; reject = fail; });
   return { promise, resolve, reject };
 }
-function provider({ clear = async () => {}, disconnect = async () => {}, save = async () => {}, refresh } = {}) {
+function provider({ clear = async () => {}, disconnect = async () => {}, save = async () => {}, refresh, restoreRefresh = createSessionRestoreRefresh() } = {}) {
   let session = { accessToken: 'token-A', user: { id: 'A' } };
   let revision = 0;
   const shared = {
     sessionRef: { current: session }, sessionRevisionRef: { current: 0 }, sessionOperationsBlockedRef: { current: false },
     setSessionOperationRevision: value => { revision = value; }, clearSession: clear, disconnectVpn: disconnect,
     runSessionTransition: createSessionMutationQueue(), refreshInFlightRef: { current: null }, isCurrentSessionMutation,
-    restoreRefresh: createSessionRestoreRefresh(),
+    restoreRefresh,
     refreshApiSession: refresh ?? (async () => ({ ...session, accessToken: 'token-A-refreshed' })),
     clearClientData: () => {}, setSession: value => { session = value; }, setIsLoading: () => {},
     saveSession: save, setLoadError: () => {}, loadError: null, uploadClientDiagnostics: async () => {},
@@ -68,7 +68,7 @@ function provider({ clear = async () => {}, disconnect = async () => {}, save = 
   return {
     restoreRefresh: shared.restoreRefresh,
     signOut: bind(auth.applySignOutState, shared), signIn: bind(auth.signIn, shared),
-    refresh: bind(auth.refreshSession, shared), current: () => shared.sessionRef.current,
+    refresh: bind(auth.refreshSession, shared), current: () => shared.sessionRef.current, published: () => session,
     guard: () => bind(auth.sessionOperationIsCurrent, { ...shared, sessionOperationRevision: revision, session, isCurrentSessionOperation }),
     rotateToken: () => { shared.sessionRef.current = { ...shared.sessionRef.current, accessToken: 'token-A-rotated' }; },
   };
@@ -369,6 +369,226 @@ function storageFixture(blockKey, blockToken) {
 }
 const account = (id, accessToken) => ({ accessToken, user: { id, email: `${id}@fixture.invalid` } });
 
+function nativeStorageFixture(blockKey) {
+  const data = new Map(), deletions = [];
+  let blocked = false;
+  const nativeStorage = policy('src/native/secureStore.ts', {
+    'react-native': { Platform: { OS: 'android' } },
+    './secureStoreCore': policy('src/native/secureStoreCore.ts'),
+    'expo-secure-store': {
+      getItemAsync: async key => data.get(key) ?? null,
+      setItemAsync: async (key, value) => { data.set(key, value); },
+      deleteItemAsync: async key => {
+        deletions.push(key);
+        if (blocked && key === blockKey) throw new Error('temporary keychain deletion failure');
+        data.delete(key);
+      },
+    },
+  });
+  return { data, deletions, store: createSessionStore(nativeStorage), block: () => { blocked = true; }, unblock: () => { blocked = false; } };
+}
+
+for (const key of [sessionKey, sessionHistoryKey]) {
+  test(`failed native deletion of ${key} keeps logout retryable until credentials are removed`, async () => {
+    const f = nativeStorageFixture(key); let nativeStops = 0;
+    await f.store.save(account('A', 'token-A'));
+    const preserved = ['vex.app.install_id.v1', 'vex.auth.device_identity.v1', 'vex.vpn.legacy_key_owner.v1', 'vex.vpn.account_registration.v1.41', 'vex.vpn.account_keys.v1.fixture-A'];
+    for (const name of preserved) f.data.set(name, `fixture:${name}`);
+    const p = provider({ clear: f.store.clear, save: f.store.save, disconnect: async () => { nativeStops++; } });
+    const oldGuard = p.guard(); f.block();
+    await assert.rejects(p.signOut(), /temporary keychain deletion failure/);
+    assert.equal(nativeStops, 1, 'failed durable cleanup must still retire the native tunnel');
+    assert.equal(p.current().user.id, 'A'); assert.equal(p.published().user.id, 'A', 'Settings stays mounted to offer logout retry');
+    assert.equal(oldGuard(), false); assert.equal(p.guard()(), true);
+    for (const name of [sessionKey, sessionHistoryKey, 'vex.vpn.hot_profiles.v1']) assert.ok(f.deletions.includes(name), `all cleanup keys attempted: ${name}`);
+    f.unblock(); await p.signOut();
+    assert.equal(nativeStops, 2); assert.equal(p.current(), null); assert.equal(p.published(), null);
+    assert.equal(await f.store.load(), null, 'successful logout cannot restore either credential copy');
+    for (const name of preserved) assert.equal(f.data.get(name), `fixture:${name}`);
+  });
+
+  test(`B login wins after A logout fails deleting ${key}`, async () => {
+    const f = nativeStorageFixture(key);
+    await f.store.save(account('A', 'token-A'));
+    const p = provider({ clear: f.store.clear, save: f.store.save });
+    const oldGuard = p.guard(); f.block();
+    const rejectedLogout = assert.rejects(p.signOut(), /temporary keychain deletion failure/);
+    const login = p.signIn(account('B', 'token-B'));
+    await Promise.all([rejectedLogout, login]);
+    assert.equal(oldGuard(), false); assert.equal(p.current().user.id, 'B'); assert.equal(p.published().user.id, 'B');
+    assert.equal((await f.store.load()).user.id, 'B');
+    for (const name of [sessionKey, sessionHistoryKey]) assert.equal(JSON.parse(f.data.get(name)).user.id, 'B');
+  });
+}
+
+test('ancillary native cache deletion failure does not hide successful credential removal', async () => {
+  const f = nativeStorageFixture('vex.vpn.hot_profiles.v1');
+  await f.store.save(account('A', 'token-A')); f.data.set('vex.vpn.hot_profiles.v1', 'fixture'); f.block();
+  const p = provider({ clear: f.store.clear });
+  await p.signOut(); assert.equal(p.current(), null); assert.equal(await f.store.load(), null);
+});
+
+function legacyWebStorageFixture(blockKey) {
+  const data = new Map(), deletions = [];
+  let blocked = false;
+  const localStorage = {
+    getItem: key => data.get(key) ?? null,
+    setItem: (key, value) => { data.set(key, value); },
+    removeItem: key => {
+      deletions.push(key);
+      if (blocked && key === blockKey) throw new Error('legacy web auth removal blocked');
+      data.delete(key);
+    },
+  };
+  const freshAdapter = () => policy('src/native/secureStore.ts', {
+    'react-native': { Platform: { OS: 'web' } },
+    './secureStoreCore': policy('src/native/secureStoreCore.ts'),
+    'expo-secure-store': {},
+  }, { localStorage });
+  const adapter = freshAdapter();
+  return {
+    data, deletions, adapter, store: createSessionStore(adapter),
+    reload: () => createSessionStore(freshAdapter()).load(),
+    block: () => { blocked = true; }, unblock: () => { blocked = false; },
+    seedAccount: () => { for (const key of [sessionKey, sessionHistoryKey]) data.set(key, JSON.stringify(account('A', 'token-A'))); },
+  };
+}
+
+for (const key of [sessionKey, sessionHistoryKey]) {
+  test(`blocked legacy web ${key} deletion rejects logout until retry prevents reload resurrection`, async () => {
+    const f = legacyWebStorageFixture(key); f.seedAccount(); f.block(); let nativeStops = 0;
+    assert.equal((await f.store.load()).user.id, 'A', 'legacy reads and migration remain available');
+    const p = provider({ clear: f.store.clear, save: f.store.save, disconnect: async () => { nativeStops++; } });
+    const oldGuard = p.guard();
+    await assert.rejects(p.signOut(), /legacy web auth removal blocked/);
+    assert.equal(nativeStops, 1); assert.equal(p.current().user.id, 'A'); assert.equal(p.published().user.id, 'A');
+    assert.equal(oldGuard(), false);
+    for (const name of [sessionKey, sessionHistoryKey, 'vex.vpn.hot_profiles.v1']) assert.ok(f.deletions.includes(name));
+    f.unblock(); await p.signOut();
+    assert.equal(p.current(), null); assert.equal(p.published(), null); assert.equal(nativeStops, 2);
+    assert.equal(await f.reload(), null, 'a fresh web module must not adopt the logged-out legacy account');
+  });
+
+  test(`blocked legacy web ${key} cleanup rejects B admission before any B token reaches memory`, async () => {
+    const f = legacyWebStorageFixture(key); f.seedAccount(); f.block();
+    assert.equal((await f.store.load()).user.id, 'A');
+    const p = provider({ clear: f.store.clear, save: f.store.save });
+    const rejectedLogout = assert.rejects(p.signOut(), /legacy web auth removal blocked/);
+    const rejectedLogin = assert.rejects(p.signIn(account('B', 'token-B')), /legacy web auth removal blocked/);
+    await Promise.all([rejectedLogout, rejectedLogin]);
+    assert.equal(p.current().user.id, 'A'); assert.equal(p.published().user.id, 'A');
+    assert.equal((await f.store.load()).user.id, 'A', 'a rejected login cannot partially publish B in the web adapter');
+    assert.equal((await f.reload()).user.id, 'A', 'the failed login does not claim B survives reload');
+    f.unblock(); await p.signIn(account('B', 'token-B'));
+    assert.equal(p.current().user.id, 'B'); assert.equal(p.published().user.id, 'B');
+    assert.equal((await f.store.load()).user.id, 'B');
+    for (const name of [sessionKey, sessionHistoryKey]) assert.equal(f.data.has(name), false);
+    assert.equal(await f.reload(), null, 'successful web login keeps credentials in memory and removes both old durable copies');
+  });
+
+  test(`queued B login after legacy web ${key} failure waits for old teardown and removes A before admission`, async () => {
+    const f = legacyWebStorageFixture(key); f.seedAccount(); f.block(); await f.store.load();
+    const native = deferred(), reached = deferred();
+    const p = provider({ clear: f.store.clear, save: f.store.save, disconnect: async () => { reached.resolve(); await native.promise; } });
+    const oldGuard = p.guard();
+    const rejectedLogout = assert.rejects(p.signOut(), /legacy web auth removal blocked/);
+    await reached.promise;
+    const login = p.signIn(account('B', 'token-B'));
+    assert.equal(p.current().user.id, 'A');
+    f.unblock(); native.resolve(); await Promise.all([rejectedLogout, login]);
+    assert.equal(oldGuard(), false); assert.equal(p.current().user.id, 'B'); assert.equal(p.published().user.id, 'B');
+    assert.equal((await f.store.load()).user.id, 'B'); assert.equal(await f.reload(), null);
+  });
+}
+
+test('ordinary web cache deletion remains best effort while required auth copies are removed', async () => {
+  const f = legacyWebStorageFixture('vex.vpn.hot_profiles.v1'); f.seedAccount(); f.block();
+  f.data.set('vex.vpn.hot_profiles.v1', 'fixture');
+  const p = provider({ clear: f.store.clear });
+  await p.signOut(); assert.equal(p.current(), null); assert.equal(await f.reload(), null);
+  assert.equal(f.data.get('vex.vpn.hot_profiles.v1'), 'fixture');
+});
+
+test('web primary admission attempts both legacy credential removals before rejecting', async () => {
+  const f = legacyWebStorageFixture(sessionKey); f.seedAccount(); f.block();
+  await assert.rejects(f.adapter.setItemAsync(sessionKey, JSON.stringify(account('B', 'token-B'))), /legacy web auth removal blocked/);
+  assert.ok(f.deletions.includes(sessionKey)); assert.ok(f.deletions.includes(sessionHistoryKey));
+  assert.equal(JSON.parse(await f.adapter.getItemAsync(sessionKey)).user.id, 'A', 'no partial B memory write');
+});
+
+test('a storage deletion rejection without an Error still leaves logout incomplete', async () => {
+  let nativeStops = 0;
+  const p = provider({ clear: () => Promise.reject(undefined), disconnect: async () => { nativeStops++; } });
+  const [result] = await Promise.allSettled([p.signOut()]);
+  assert.equal(result.status, 'rejected'); assert.equal(nativeStops, 1);
+  assert.equal(p.current().user.id, 'A'); assert.equal(p.published().user.id, 'A');
+});
+
+function rotatingRefreshStorageFixture() {
+  const data = new Map(), requests = [];
+  let failNextWrite = false, generation = 0;
+  const store = createSessionStore({
+    getItemAsync: async key => data.get(key) ?? null,
+    setItemAsync: async (key, value) => {
+      if (failNextWrite && key === sessionKey) { failNextWrite = false; throw new Error('temporary keychain write failure'); }
+      data.set(key, value);
+    },
+    deleteItemAsync: async key => { data.delete(key); }, clearSensitiveStorageHistory: async () => { data.clear(); },
+  });
+  const refresh = async token => {
+    requests.push(token);
+    if (token === 'token-A' && generation > 0) throw new ApiRequestError('old token revoked by rotating refresh', { status: 401 });
+    generation++;
+    return account('A', `token-A-refreshed-${generation}`);
+  };
+  return { data, requests, store, refresh, failPrimaryWrite: () => { failNextWrite = true; } };
+}
+
+test('runtime refresh retains its successful rotating response across a failed save and coalesced retry', async () => {
+  const f = rotatingRefreshStorageFixture(); await f.store.save(account('A', 'token-A'));
+  const p = provider({ save: f.store.save, clear: f.store.clear, refresh: f.refresh });
+  f.failPrimaryWrite(); await assert.rejects(p.refresh(), /temporary keychain write failure/);
+  assert.equal(p.current().accessToken, 'token-A');
+  const guard = p.guard();
+  const retried = p.refresh(), coalesced = p.refresh();
+  const [retryResult, coalescedResult] = await Promise.all([retried, coalesced]);
+  assert.equal(retryResult.accessToken, 'token-A-refreshed-1');
+  assert.equal(coalescedResult.accessToken, 'token-A-refreshed-1');
+  assert.deepEqual(f.requests, ['token-A'], 'a successful rotating request must never be sent twice');
+  assert.equal(guard(), true, 'same-account refresh keeps its operation ownership');
+  assert.equal((await f.store.load()).accessToken, 'token-A-refreshed-1');
+  for (const name of [sessionKey, sessionHistoryKey]) assert.equal(JSON.parse(f.data.get(name)).accessToken, 'token-A-refreshed-1');
+  assert.equal((await p.refresh()).accessToken, 'token-A-refreshed-2');
+  assert.deepEqual(f.requests, ['token-A', 'token-A-refreshed-1'], 'a later genuine refresh uses the new token');
+});
+
+test('runtime refresh hands a successful response to the next provider mount after a failed save', async () => {
+  const f = rotatingRefreshStorageFixture(); await f.store.save(account('A', 'token-A'));
+  const p = provider({ save: f.store.save, clear: f.store.clear, refresh: f.refresh });
+  f.failPrimaryWrite(); await assert.rejects(p.refresh(), /temporary keychain write failure/);
+  const mounted = restoreHarness({ load: f.store.load, save: f.store.save, clear: f.store.clear, refresh: f.refresh, restoreRefresh: p.restoreRefresh });
+  await mounted.restore();
+  assert.equal(mounted.state.loading, false); assert.equal(mounted.state.session.accessToken, 'token-A-refreshed-1');
+  assert.deepEqual(f.requests, ['token-A']); assert.equal((await f.store.load()).accessToken, 'token-A-refreshed-1');
+});
+
+for (const mutation of ['signIn', 'signOut']) {
+  test(`${mutation} discards the runtime successful response retained after a failed save`, async () => {
+    const f = rotatingRefreshStorageFixture(); await f.store.save(account('A', 'token-A'));
+    const p = provider({ save: f.store.save, clear: f.store.clear, refresh: f.refresh });
+    f.failPrimaryWrite(); await assert.rejects(p.refresh(), /temporary keychain write failure/);
+    if (mutation === 'signIn') await p.signIn(account('B', 'token-B'));
+    else await p.signOut();
+    const expected = mutation === 'signIn' ? 'B' : null;
+    const restored = await f.store.load();
+    assert.equal(restored?.user.id ?? null, expected); assert.equal(p.current()?.user.id ?? null, expected);
+    let attempts = 0;
+    await p.restoreRefresh.run('token-A', async () => { attempts++; return account('A', 'fresh-explicit-A'); });
+    assert.equal(attempts, 1, 'the invalidated A handoff is no longer reused');
+    assert.equal(p.current()?.user.id ?? null, expected);
+  });
+}
+
 for (const key of [sessionKey, sessionHistoryKey]) {
   for (const mutation of ['refresh', 'signIn']) {
     test(`logout and B login win over delayed A ${mutation} ${key} persistence`, async () => {
@@ -402,6 +622,7 @@ test('B refresh never joins an in-flight refresh from A after logout and login',
   const old = session.refresh(), oldRejected = assert.rejects(old, /401 old A/);
   await session.signOut(); await session.signIn(account('B', 'token-B'));
   const current = session.refresh(), coalesced = session.refresh();
+  await flush();
   assert.deepEqual(requests, ['token-A', 'token-B'], 'unchanged B session still coalesces its own refresh');
   a.reject(new Error('401 old A')); await oldRejected;
   const afterOldFailure = session.refresh();

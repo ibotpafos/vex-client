@@ -182,7 +182,7 @@ jobs:
         run: |
           $root = Join-Path $env:RUNNER_TEMP 'vex-windows'
           $application = Join-Path $root 'app-x64/Vex.Windows.App.exe'
-          $arguments = @('--signed-out-ui-preview', '--focus-pulse-ui-preview', '--ui-smoke-exit',
+          $arguments = @('--signed-out-ui-preview', '--focus-pulse-ui-preview', '--protected-state-fault-ui-preview', '--ui-smoke-exit',
             'vexguard-ui-preview://ui-smoke/activate', 'vexguard-ui-preview://ui-smoke/unknown',
             'vexguard-ui-preview://other-host/activate', 'vexguard-ui-preview://ui-smoke/activate?unexpected=1',
             'vexguard-ui-preview://user@ui-smoke/activate', 'vexguard-ui-preview://ui-smoke/activate#unexpected')
@@ -214,6 +214,17 @@ jobs:
             -DesktopChecks -PreviewMode fixtures -ObserveSeconds 3 `
             -ResultPath (Join-Path $root 'desktop-fixtures-x64.json') `
             -ScreenshotDirectory (Join-Path $root 'screenshots/fixtures')
+      - name: Exercise actual DPAPI account-map faults and corrupted startup
+        if: matrix.architecture == 'x64'
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'vex-windows'
+          ./native-windows/scripts/smoke-application.ps1 `
+            -ApplicationPath (Join-Path $env:RUNNER_TEMP 'vex-ui-preview-app/Vex.Windows.App.exe') `
+            -DesktopChecks -PreviewMode protected-state-fault -ObserveSeconds 3 `
+            -ResultPath (Join-Path $root 'protected-state-faults-x64.json') `
+            -ScreenshotDirectory (Join-Path $root 'screenshots/protected-state-fault')
       - name: Exercise signed-out desktop flows and capture interface
         if: matrix.architecture == 'x64'
         timeout-minutes: 3

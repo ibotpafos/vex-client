@@ -25,27 +25,59 @@ $contract = @($contract | Where-Object { $_ -cnotin @('VEX_WINDOWS_MANIFEST_REVI
 if (($required | Sort-Object) -join ',' -cne ($contract -join ',')) { throw 'Persistent release input membership differs from actual package/publisher contracts.' }
 $allNames = @(Get-ReleasePresenceInputNames)
 $workflow = [IO.File]::ReadAllText((Join-Path $root '.github/workflows/native-windows-release-preflight.yml'))
-$bindings = @([regex]::Matches($workflow,
-    '(?m)^          (VEX_WINDOWS_[A-Z0-9_]+)_PRESENT: \$\{\{ (vars|secrets)\.(VEX_WINDOWS_[A-Z0-9_]+) != '''' \}\}$'))
-if ($bindings.Count -ne $allNames.Count) { throw 'Workflow presence bindings are incomplete or include actual values.' }
 $secrets = @('VEX_WINDOWS_SIGN_PFX_BASE64', 'VEX_WINDOWS_SIGN_PFX_PASSWORD',
     'VEX_WINDOWS_UPDATE_PUBLIC_KEY_BASE64', 'VEX_WINDOWS_UPDATE_PRIVATE_KEY_BASE64')
-foreach ($binding in $bindings) {
-    $name = $binding.Groups[1].Value
-    $context = if ($name -cin $secrets) { 'secrets' } else { 'vars' }
-    if ($name -cnotin $allNames -or $binding.Groups[3].Value -cne $name -or $binding.Groups[2].Value -cne $context) {
-        throw 'Workflow input provenance or boolean mapping is invalid.'
+function Assert-ReleasePreflightWorkflowContract {
+    param([Parameter(Mandatory = $true)][string]$Workflow,
+        [Parameter(Mandatory = $true)][string[]]$Names)
+    $bindings = @([regex]::Matches($Workflow,
+        '(?m)^          (VEX_WINDOWS_[A-Z0-9_]+)_PRESENT: \$\{\{ (vars|secrets)\.(VEX_WINDOWS_[A-Z0-9_]+) != '''' \}\}\r?$'))
+    if ($bindings.Count -ne $Names.Count) { throw 'Workflow presence bindings are incomplete or include actual values.' }
+    foreach ($binding in $bindings) {
+        $name = $binding.Groups[1].Value
+        $context = if ($name -cin $secrets) { 'secrets' } else { 'vars' }
+        if ($name -cnotin $Names -or $binding.Groups[3].Value -cne $name -or $binding.Groups[2].Value -cne $context) {
+            throw 'Workflow input provenance or boolean mapping is invalid.'
+        }
+    }
+    if (@($bindings | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique).Count -ne $Names.Count -or
+        @([regex]::Matches($Workflow, '\$\{\{ (vars|secrets)\.')).Count -ne $Names.Count -or
+        $Workflow -notmatch "(?s)on:\s+workflow_dispatch:\s+permissions:\s+contents: read" -or
+        $Workflow -notmatch "github.event_name == 'workflow_dispatch' &&\s+github.ref == 'refs/heads/main' &&\s+github.repository == 'ibotpafos/vex-client'" -or
+        $Workflow -match '(?m)^  (push|pull_request|pull_request_target|workflow_call):' -or
+        $Workflow -match '(?m)^\s+(package_release|release_version|manifest_revision|release_notes|environment):' -or
+        $Workflow -notmatch 'persist-credentials: false' -or $Workflow -notmatch 'if: always\(\)') {
+        throw 'Manual main-only permission, no-value or artifact-retention gate changed.'
     }
 }
-if (@($bindings | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique).Count -ne $allNames.Count -or
-    @([regex]::Matches($workflow, '\$\{\{ (vars|secrets)\.')).Count -ne $allNames.Count -or
-    $workflow -notmatch "(?s)on:\s+workflow_dispatch:\s+permissions:\s+contents: read" -or
-    $workflow -notmatch "github.event_name == 'workflow_dispatch' &&\s+github.ref == 'refs/heads/main' &&\s+github.repository == 'ibotpafos/vex-client'" -or
-    $workflow -match '(?m)^  (push|pull_request|pull_request_target|workflow_call):' -or
-    $workflow -match '(?m)^\s+(package_release|release_version|manifest_revision|release_notes|environment):' -or
-    $workflow -notmatch 'persist-credentials: false' -or $workflow -notmatch 'if: always\(\)') {
-    throw 'Manual main-only permission, no-value or artifact-retention gate changed.'
+
+# Exercise the same exact matcher against both Git checkout line-ending forms.
+# The validator itself does not normalize input, so CRLF must actually match.
+$lfWorkflow = $workflow.Replace("`r`n", "`n")
+$crlfWorkflow = $lfWorkflow.Replace("`n", "`r`n")
+if ($lfWorkflow.Contains("`r") -or -not $crlfWorkflow.Contains("`r`n")) {
+    throw 'Workflow line-ending regression fixtures are not distinct LF and CRLF.'
 }
+$historicalLfOnlyMatcher = '(?m)^          (VEX_WINDOWS_[A-Z0-9_]+)_PRESENT: \$\{\{ (vars|secrets)\.(VEX_WINDOWS_[A-Z0-9_]+) != '''' \}\}$'
+if ([regex]::Matches($lfWorkflow, $historicalLfOnlyMatcher).Count -ne $allNames.Count -or
+    [regex]::Matches($crlfWorkflow, $historicalLfOnlyMatcher).Count -ne 0) {
+    throw 'Historical LF-only matcher did not reproduce the original CRLF failure.'
+}
+Write-Output 'Historical exact LF-only matcher reproduced 34 LF matches and zero CRLF matches.'
+foreach ($variant in @($lfWorkflow, $crlfWorkflow)) {
+    Assert-ReleasePreflightWorkflowContract -Workflow $variant -Names $allNames
+    foreach ($invalid in @(
+        $variant.Replace('${{ secrets.VEX_WINDOWS_SIGN_PFX_BASE64 != '''' }}', '${{ secrets.VEX_WINDOWS_SIGN_PFX_BASE64 }}'),
+        $variant.Replace('${{ secrets.VEX_WINDOWS_SIGN_PFX_BASE64 != '''' }}', '${{ vars.VEX_WINDOWS_SIGN_PFX_BASE64 != '''' }}'),
+        $variant.Replace('VEX_WINDOWS_SIGN_PFX_BASE64_PRESENT:', 'VEX_WINDOWS_UNKNOWN_PRESENT:')
+    )) {
+        if ($invalid -ceq $variant) { throw 'Workflow negative binding fixture did not change the source.' }
+        $rejected = $false
+        try { Assert-ReleasePreflightWorkflowContract -Workflow $invalid -Names $allNames } catch { $rejected = $true }
+        if (-not $rejected) { throw 'Workflow line-ending support accepted raw values, wrong provenance or unknown binding names.' }
+    }
+}
+Write-Output 'Exact 34 boolean workflow bindings passed LF and CRLF; six raw-value/provenance/name controls rejected.'
 
 $presence = @{}
 foreach ($name in $allNames) { $presence[$name] = $false }

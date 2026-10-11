@@ -121,6 +121,7 @@ public static class UiPreviewContextTestHarness
                     Check(Environment.GetEnvironmentVariable(EnvironmentName) == EnvironmentSentinel,
                         "A Release flag changed the preview environment.");
                     Check(!UiPreviewContext.IsExitCommand("--ui-smoke-exit") &&
+                        !UiPreviewContext.IsMinimizeCommand("--ui-smoke-minimize") &&
                         !UiPreviewContext.IsTrayRecoveryCommand("--ui-smoke-tray-connect") &&
                         !UiPreviewContext.IsTrayRecoveryCommand("--ui-smoke-tray-connect-locked") &&
                         !UiPreviewContext.IsTrayRecoveryCommand("--ui-smoke-tray-reset"),
@@ -146,6 +147,9 @@ public static class UiPreviewContextTestHarness
                     Check(!Directory.Exists(directory), "Initializing preview unexpectedly wrote data to disk.");
                     Check(UiPreviewContext.IsExitCommand("--ui-smoke-exit") && !UiPreviewContext.IsExitCommand("--not-ui-smoke-exit"),
                         "The Debug preview exit command does not match its exact reserved flag.");
+                    Check(UiPreviewContext.IsMinimizeCommand("--ui-smoke-minimize") &&
+                        !UiPreviewContext.IsMinimizeCommand("--ui-smoke-minimize-unknown"),
+                        "The Debug preview minimize command does not match its exact reserved flag.");
                     foreach (var command in new[] { "--ui-smoke-tray-connect", "--ui-smoke-tray-connect-locked", "--ui-smoke-tray-reset" })
                         Check(UiPreviewContext.IsTrayRecoveryCommand(command) && UiPreviewContext.HasCommand(command, command) &&
                             !UiPreviewContext.IsTrayRecoveryCommand(command + "-unknown"),
@@ -158,6 +162,7 @@ public static class UiPreviewContextTestHarness
                 _scenarios++;
             }
             AssertReservedStartup(new[] { "app.exe", "--ui-smoke-exit" }, null, expectedDebug);
+            AssertReservedStartup(new[] { "app.exe", "--ui-smoke-minimize" }, null, expectedDebug);
             foreach (var command in new[] { "--ui-smoke-tray-connect", "--ui-smoke-tray-connect-locked", "--ui-smoke-tray-reset" })
                 AssertReservedStartup(new[] { "app.exe", command }, null, expectedDebug);
             return _scenarios;

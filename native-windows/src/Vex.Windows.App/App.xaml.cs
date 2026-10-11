@@ -60,6 +60,15 @@ public partial class App : Application
             return;
         }
 
+#if DEBUG
+        if (UiPreviewContext.IsMinimizeCommand(
+            (args.Data as ILaunchActivatedEventArgs)?.Arguments))
+        {
+            _window.MinimizePreviewWindow();
+            return;
+        }
+#endif
+
         if (UiPreviewContext.IsTrayRecoveryCommand(
             (args.Data as ILaunchActivatedEventArgs)?.Arguments))
         {

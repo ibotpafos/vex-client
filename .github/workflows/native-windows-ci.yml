@@ -182,7 +182,7 @@ jobs:
         run: |
           $root = Join-Path $env:RUNNER_TEMP 'vex-windows'
           $application = Join-Path $root 'app-x64/Vex.Windows.App.exe'
-          $arguments = @('--signed-out-ui-preview', '--focus-pulse-ui-preview', '--protected-state-fault-ui-preview', '--ui-smoke-exit',
+          $arguments = @('--signed-out-ui-preview', '--focus-pulse-ui-preview', '--protected-state-fault-ui-preview', '--ui-smoke-exit', '--ui-smoke-minimize',
             'vexguard-ui-preview://ui-smoke/activate', 'vexguard-ui-preview://ui-smoke/unknown',
             'vexguard-ui-preview://other-host/activate', 'vexguard-ui-preview://ui-smoke/activate?unexpected=1',
             'vexguard-ui-preview://user@ui-smoke/activate', 'vexguard-ui-preview://ui-smoke/activate#unexpected')

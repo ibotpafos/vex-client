@@ -1000,7 +1000,9 @@ namespace Vex.Windows.Smoke {
         $result.stage = 'protocol-registration'
         Assert-PreviewProtocolRegistration
         $result.stage = 'minimized-protocol-activation'
-        [void][Vex.Windows.Smoke.NativeMethods]::ShowWindow($windowHandle, 6)
+        # A redirected launch can exit after enqueueing its UI activation.
+        # Serialize minimization behind that callback on the same dispatcher.
+        Invoke-RedirectedLaunch -Arguments '--ui-smoke-minimize'
         Wait-SmokeCondition -Failure 'Preview did not minimize before protocol activation.' -Condition {
             [Vex.Windows.Smoke.NativeMethods]::IsIconic($windowHandle)
         }

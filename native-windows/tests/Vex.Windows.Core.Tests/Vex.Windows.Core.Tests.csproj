@@ -12,6 +12,7 @@
     <Compile Include="../../src/Vex.Windows.App/Auth/NativeAuthService.cs" Link="NativeAuthService.cs" />
     <Compile Include="../../src/Vex.Windows.Setup/SetupBundleVerifier.cs" Link="SetupBundleVerifier.cs" />
     <Compile Include="../../packaging/UpdateManifestSigner/WindowsUpdateSignatureSigner.cs" Link="WindowsUpdateSignatureSigner.cs" />
+    <Compile Include="../../scripts/Vex.Windows.VpnAcceptance/PhysicalNetworkProbe.cs" Link="PhysicalNetworkProbe.cs" />
     <ProjectReference Include="../../src/Vex.Windows.Core/Vex.Windows.Core.csproj" />
     <ProjectReference Include="../../src/Vex.Windows.Client/Vex.Windows.Client.csproj" />
   </ItemGroup>

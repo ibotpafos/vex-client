@@ -488,11 +488,11 @@ try {
     $finalState = Get-PublicVpnNetworkState $Phase
     if ($Phase -eq 'Connected' -and $finalState.VexIndex -ne $state.VexIndex) { throw 'public_vpn_adapter_changed_during_probe' }
     $result.observers = @($observers | Select-Object * -ExcludeProperty parsed_ipv4)
-    $result.actual_public_internet_vpn_egress_verified = $Phase -eq 'Connected'
-    $result.restored_baseline_egress_verified = $Phase -eq 'Restored'
     if (([DateTimeOffset]::UtcNow - (ConvertTo-PublicVpnTimestamp $result.started_at_utc)).TotalSeconds -gt 90) {
         throw 'public_vpn_observation_budget_exceeded'
     }
+    $result.actual_public_internet_vpn_egress_verified = $Phase -eq 'Connected'
+    $result.restored_baseline_egress_verified = $Phase -eq 'Restored'
     $result.stage = 'completed'; $result.passed = $true
 } catch {
     $failure = $_

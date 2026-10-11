@@ -7,6 +7,7 @@ namespace Vex.Windows.App.Services;
 internal static class UiPreviewContext
 {
     internal const string ProtocolScheme = "vexguard-ui-preview";
+    internal const string TrayRequestPrefix = "--ui-smoke-tray-request";
 #if DEBUG
     public static bool IsSupported => true;
 #else
@@ -25,14 +26,18 @@ internal static class UiPreviewContext
         var signedOut = arguments.Contains("--signed-out-ui-preview", StringComparer.Ordinal);
         var fixtures = arguments.Contains("--focus-pulse-ui-preview", StringComparer.Ordinal);
         var protectedStateFaults = arguments.Contains("--protected-state-fault-ui-preview", StringComparer.Ordinal);
+        var trayCommand = arguments.Any(argument => argument is
+            "--ui-smoke-tray-connect" or "--ui-smoke-tray-connect-locked" or "--ui-smoke-tray-reset" ||
+            argument.StartsWith(TrayRequestPrefix, StringComparison.Ordinal));
         var command = arguments.Any(argument => argument is "--ui-smoke-exit" or "--ui-smoke-minimize" or
-            "--ui-smoke-tray-connect" or "--ui-smoke-tray-connect-locked" or "--ui-smoke-tray-reset") ||
+            "--ui-smoke-tray-connect" or "--ui-smoke-tray-connect-locked" or "--ui-smoke-tray-reset" ||
+            argument.StartsWith(TrayRequestPrefix, StringComparison.Ordinal)) ||
             IsPreviewProtocolUri(protocolUri) ||
             ParseActivationUri(string.Join(" ", arguments)) is not null;
         IsPreviewRequest = signedOut || fixtures || protectedStateFaults || command;
         if (!IsPreviewRequest) return;
 #if DEBUG
-        IsCommandOnly = command && !signedOut && !fixtures && !protectedStateFaults;
+        IsCommandOnly = trayCommand || (command && !signedOut && !fixtures && !protectedStateFaults);
         var executable = Path.GetFullPath(Environment.ProcessPath ?? AppContext.BaseDirectory);
         InstanceKey = "vex-ui-preview-" + Convert.ToHexString(
             SHA256.HashData(Encoding.UTF8.GetBytes(executable.ToUpperInvariant())))[..24];
@@ -79,7 +84,8 @@ internal static class UiPreviewContext
     public static bool IsTrayRecoveryCommand(string? arguments) =>
         IsEnabled && arguments is not null &&
         arguments.Split(' ', StringSplitOptions.RemoveEmptyEntries).Any(argument =>
-            argument is "--ui-smoke-tray-connect" or "--ui-smoke-tray-connect-locked" or "--ui-smoke-tray-reset");
+            argument is "--ui-smoke-tray-connect" or "--ui-smoke-tray-connect-locked" or "--ui-smoke-tray-reset" ||
+            argument.StartsWith(TrayRequestPrefix, StringComparison.Ordinal));
 
     public static bool HasCommand(string? arguments, string command) =>
         IsEnabled && arguments is not null &&

@@ -82,6 +82,17 @@
                 <InfoBar x:Name="FoundationNotice" IsClosable="True" IsOpen="False"
                     Message="" Severity="Informational" Title="VEX VPN" />
 
+                <Border x:Name="WindowsBetaPanel" AutomationProperties.AutomationId="HomeWindowsBetaPanel"
+                    MaxWidth="752" Padding="13,10" Margin="0,0,0,8" Background="#1822D3EE"
+                    BorderBrush="#3322D3EE" BorderThickness="1" CornerRadius="16" Visibility="Collapsed">
+                    <StackPanel Spacing="4">
+                        <TextBlock x:Name="WindowsBetaTitle" FontSize="13" FontWeight="Bold"
+                            Foreground="{StaticResource VexCyanLightBrush}" TextWrapping="Wrap" />
+                        <TextBlock x:Name="WindowsBetaDescription" FontSize="11"
+                            Foreground="{StaticResource VexSecondaryTextBrush}" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+
                 <Grid x:Name="FocusPulseHero" MaxWidth="752" Height="252" HorizontalAlignment="Stretch">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />

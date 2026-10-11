@@ -165,6 +165,15 @@ public static class UiPreviewContextTestHarness
             AssertReservedStartup(new[] { "app.exe", "--ui-smoke-minimize" }, null, expectedDebug);
             foreach (var command in new[] { "--ui-smoke-tray-connect", "--ui-smoke-tray-connect-locked", "--ui-smoke-tray-reset" })
                 AssertReservedStartup(new[] { "app.exe", command }, null, expectedDebug);
+            var request = "--ui-smoke-tray-request=" + Guid.NewGuid().ToString("N");
+            foreach (var metadata in new[] { request, "--ui-smoke-tray-request", "--ui-smoke-tray-request=malformed",
+                "--ui-smoke-tray-request-unknown=value" })
+            {
+                AssertReservedStartup(new[] { "app.exe", metadata }, null, expectedDebug);
+                AssertReservedStartup(new[] { "app.exe", "--focus-pulse-ui-preview", metadata }, null, expectedDebug);
+            }
+            foreach (var mode in new[] { "--signed-out-ui-preview", "--focus-pulse-ui-preview", "--protected-state-fault-ui-preview" })
+                AssertReservedStartup(new[] { "app.exe", mode, "--ui-smoke-tray-reset", request }, null, expectedDebug);
             return _scenarios;
         }
         finally

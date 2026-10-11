@@ -37,9 +37,14 @@ internal static class VpnFailurePresentationTests
             Require(VpnFailurePresentation.RequiresAccountAction(code) && message is not null &&
                 message.Contains("«Аккаунт»", StringComparison.Ordinal) &&
                 (code == "vpn_entitlement_required"
-                    ? message.Contains("подписка", StringComparison.Ordinal)
+                    ? message.Contains("тестированию Windows", StringComparison.Ordinal) &&
+                        message.Contains("подписку", StringComparison.Ordinal)
                     : message.Contains("устройств", StringComparison.Ordinal)),
-                "Home and tray guidance must lead to subscription or device management, using shared vetted copy.");
+                "Home and tray guidance must lead to authoritative beta/subscription access or device management, using shared vetted copy.");
+            if (code == "vpn_device_limit_reached" && message is not null)
+                Require(!message.Contains("тариф", StringComparison.Ordinal) &&
+                    !message.Contains("оплат", StringComparison.Ordinal),
+                    "A beta device limit must lead to device management without claiming payment lifts the quota.");
         }
 
         var responseService = Create();

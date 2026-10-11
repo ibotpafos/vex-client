@@ -593,8 +593,10 @@ public sealed class VexApiClient : INativeClientApi
     {
         using var request = Authorized(
             HttpMethod.Get,
-            "/v1/billing/entitlement",
+            "/v1/billing/entitlement?platform=windows&client_flavor=native",
             accessToken);
+        request.Headers.Add("X-Vex-API-Client-Version", NativeApiCompatibility.ApiClientVersion);
+        request.Headers.Add("X-Vex-Platform", "windows");
         return SendAsync<VexEntitlement>(
             request,
             cancellationToken);

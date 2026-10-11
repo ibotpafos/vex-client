@@ -47,8 +47,7 @@ $previousDpiContext = [System.IntPtr]::Zero
 $originalCursorPosition = $null
 $protocolDiagnosticPath = $null
 $protocolDiagnosticHash = $null
-$trayDiagnosticPath = $null
-$trayDiagnosticHash = $null
+$trayDiagnosticHashes = @{}
 $protectedStateDiagnosticPath = $null
 $protectedStateDiagnosticHash = $null
 $windowHandle = [System.IntPtr]::Zero
@@ -83,6 +82,7 @@ $result = [ordered]@{
     minimized_window_restored_by_protocol = $false
     tray_auth_recovery_without_connect = $false
     tray_auth_recovery_diagnostic = $null
+    tray_activation_progress = $null
     protected_state_faults = $null
     preview_protocol_registration = $null
     preview_protocol_diagnostic = $null
@@ -152,23 +152,133 @@ function Assert-SmokeTrayRecoveryDiagnostic {
     }
 }
 
-function Wait-SmokeTrayRecoveryDiagnostic {
-    param([string]$Scenario, [string]$Access)
-    $script:trayRecoveryDiagnostic = $null
-    Wait-SmokeCondition -Failure 'Actual tray recovery did not complete with an isolated diagnostic.' -Condition {
-        if (-not (Test-Path -LiteralPath $trayDiagnosticPath -PathType Leaf)) { return $false }
-        $file = Get-Item -LiteralPath $trayDiagnosticPath
-        if ($file.Length -le 0 -or $file.Length -gt 65536 -or
-            ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+function Get-SmokeTrayRequestPaths {
+    param(
+        [Parameter(Mandatory = $true)][Guid]$RequestId,
+        [Parameter(Mandatory = $true)][ValidateRange(1, 2147483647)][int]$ProcessId,
+        [Parameter(Mandatory = $true)][ValidateSet('locked', 'reset', 'signed-out')][string]$Scenario
+    )
+    if ($RequestId -eq [Guid]::Empty) { throw 'Tray request requires a nonempty nonce.' }
+    if (@('locked', 'reset', 'signed-out') -cnotcontains $Scenario) { throw 'Tray request scenario is invalid.' }
+    $completed = Join-Path ([IO.Path]::GetTempPath()) "vex-ui-preview-tray-$ProcessId-$Scenario-$($RequestId.ToString('N')).json"
+    return [pscustomobject]@{ Completed = $completed; Progress = $completed + '.progress.json' }
+}
+
+function Invoke-SmokeTrayRequest {
+    param([Parameter(Mandatory = $true)][ValidateSet('locked', 'reset', 'signed-out')][string]$Scenario)
+    $requestId = [Guid]::NewGuid()
+    $paths = Get-SmokeTrayRequestPaths -RequestId $requestId -ProcessId $process.Id -Scenario $Scenario
+    foreach ($path in @($paths.Completed, $paths.Completed + '.tmp', $paths.Progress, $paths.Progress + '.tmp')) {
+        if (Test-Path -LiteralPath $path) { throw 'Tray request refuses pre-existing diagnostic paths.' }
+    }
+    $command = switch ($Scenario) {
+        'locked' { '--ui-smoke-tray-connect-locked' }
+        'reset' { '--ui-smoke-tray-reset' }
+        'signed-out' { '--ui-smoke-tray-connect' }
+    }
+    Invoke-RedirectedLaunch -Arguments "$command --ui-smoke-tray-request=$($requestId.ToString('N'))"
+    return $requestId
+}
+
+function Open-SmokeTrayDiagnosticRead {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $file = Get-Item -LiteralPath $Path
+    if ($file.PSIsContainer -or $file.Length -le 0 -or $file.Length -gt 65536 -or
+        ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'Tray recovery diagnostic is not a bounded regular file.'
+    }
+    # Completed receipts are immutable per request. Allow deletion for owned
+    # cleanup while retaining a bounded snapshot on the opened handle.
+    $stream = [IO.FileStream]::new($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read,
+        ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+    try {
+        if ($stream.Length -le 0 -or $stream.Length -gt 65536 -or
+            ([IO.File]::GetAttributes($stream.SafeFileHandle) -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
             throw 'Tray recovery diagnostic is not a bounded regular file.'
         }
-        $diagnostic = Get-Content -LiteralPath $trayDiagnosticPath -Raw | ConvertFrom-Json
-        if ($diagnostic.scenario -cne $Scenario) { return $false }
-        Assert-SmokeTrayRecoveryDiagnostic -Diagnostic $diagnostic -Scenario $Scenario -Access $Access `
-            -Mode $PreviewMode -ProcessId $process.Id
-        $script:trayRecoveryDiagnostic = $diagnostic
-        $script:trayDiagnosticHash = (Get-FileHash -LiteralPath $trayDiagnosticPath -Algorithm SHA256).Hash
-        return $true
+        return $stream
+    }
+    catch { $stream.Dispose(); throw }
+}
+
+function Read-SmokeTrayDiagnostic {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $stream = Open-SmokeTrayDiagnosticRead -Path $Path
+    try {
+        $bytes = [byte[]]::new(65537)
+        $length = 0
+        do {
+            $read = $stream.Read($bytes, $length, $bytes.Length - $length)
+            $length += $read
+            if ($length -gt 65536) { throw 'Tray recovery diagnostic exceeds its bounded read.' }
+        } while ($read -gt 0)
+        if ($length -eq 0) { throw 'Tray recovery diagnostic is empty.' }
+        return ([Text.UTF8Encoding]::new($false, $true).GetString($bytes, 0, $length) | ConvertFrom-Json)
+    }
+    finally { $stream.Dispose() }
+}
+
+function Assert-SmokeTrayActivationProgress {
+    param(
+        [Parameter(Mandatory = $true)]$Diagnostic,
+        [Parameter(Mandatory = $true)][string]$Scenario,
+        [Parameter(Mandatory = $true)][string]$Mode,
+        [Parameter(Mandatory = $true)][int]$ProcessId
+    )
+    $fields = @('schema', 'process_id', 'preview_mode', 'scenario', 'stage', 'failure_type')
+    if (@($Diagnostic.PSObject.Properties).Count -ne $fields.Count) {
+        throw 'Tray activation progress fields are invalid.'
+    }
+    foreach ($field in $Diagnostic.PSObject.Properties.Name) {
+        if ($fields -cnotcontains $field) { throw 'Tray activation progress contains an unexpected field.' }
+    }
+    $stages = @('redirected-request-accepted', 'handler-started', 'reset-session-restoring',
+        'reset-session-restored', 'reset-ui-requested', 'reset-ui-entered', 'reset-ui-state-read',
+        'reset-ui-navigated', 'reset-ui-shown', 'reset-ui-completed', 'completion-recording',
+        'completion-temp-write', 'completion-move')
+    if ($Diagnostic.schema -isnot [string] -or $Diagnostic.schema -cne 'vex.windows.ui-preview-tray-activation.v1' -or
+        ($Diagnostic.process_id -isnot [int] -and $Diagnostic.process_id -isnot [long]) -or
+        $Diagnostic.process_id -ne $ProcessId -or $Diagnostic.preview_mode -isnot [string] -or
+        $Diagnostic.preview_mode -cne $Mode -or $Diagnostic.scenario -isnot [string] -or
+        $Diagnostic.scenario -cne $Scenario -or @('locked', 'reset', 'signed-out') -cnotcontains $Diagnostic.scenario -or
+        $Diagnostic.stage -isnot [string] -or $stages -cnotcontains $Diagnostic.stage -or
+        ($Diagnostic.scenario -cne 'reset' -and $Diagnostic.stage.StartsWith('reset-', [StringComparison]::Ordinal)) -or
+        ($null -ne $Diagnostic.failure_type -and ($Diagnostic.failure_type -isnot [string] -or
+            $Diagnostic.failure_type -cnotmatch '^(Exception|[A-Za-z_][A-Za-z0-9_]{0,70}Exception)$'))) {
+        throw 'Tray activation progress identity, stage or exception type is invalid.'
+    }
+}
+
+function Wait-SmokeTrayRecoveryDiagnostic {
+    param(
+        [Parameter(Mandatory = $true)][Guid]$RequestId,
+        [Parameter(Mandatory = $true)][ValidateSet('locked', 'reset', 'signed-out')][string]$Scenario,
+        [Parameter(Mandatory = $true)][string]$Access
+    )
+    $paths = Get-SmokeTrayRequestPaths -RequestId $RequestId -ProcessId $process.Id -Scenario $Scenario
+    $script:trayRecoveryDiagnostic = $null
+    $result.tray_activation_progress = $null
+    Wait-SmokeCondition -Failure 'Actual tray recovery did not complete with an isolated diagnostic.' -Condition {
+        if (Test-Path -LiteralPath $paths.Completed -PathType Leaf) {
+            $diagnostic = Read-SmokeTrayDiagnostic -Path $paths.Completed
+            Assert-SmokeTrayRecoveryDiagnostic -Diagnostic $diagnostic -Scenario $Scenario -Access $Access `
+                -Mode $PreviewMode -ProcessId $process.Id
+            $script:trayRecoveryDiagnostic = $diagnostic
+            $trayDiagnosticHashes[$paths.Completed] = (Get-FileHash -LiteralPath $paths.Completed -Algorithm SHA256).Hash
+            return $true
+        }
+        if (Test-Path -LiteralPath $paths.Progress -PathType Leaf) {
+            $diagnostic = Read-SmokeTrayDiagnostic -Path $paths.Progress
+            Assert-SmokeTrayActivationProgress -Diagnostic $diagnostic -Scenario $Scenario -Mode $PreviewMode -ProcessId $process.Id
+            $result.tray_activation_progress = [ordered]@{
+                schema = $diagnostic.schema; process_id = $diagnostic.process_id; preview_mode = $diagnostic.preview_mode
+                scenario = $diagnostic.scenario; stage = $diagnostic.stage; failure_type = $diagnostic.failure_type
+            }
+            # Progress and failure evidence never satisfies the v1 completion
+            # contract. Preserve it in the producer JSON if the wait fails.
+            $trayDiagnosticHashes[$paths.Progress] = (Get-FileHash -LiteralPath $paths.Progress -Algorithm SHA256).Hash
+        }
+        return $false
     }
     return $script:trayRecoveryDiagnostic
 }
@@ -613,7 +723,6 @@ try {
     $result.process_id = $process.Id
     if ($DesktopChecks) {
         $protocolDiagnosticPath = Join-Path ([IO.Path]::GetTempPath()) "vex-ui-preview-protocol-$($process.Id).json"
-        $trayDiagnosticPath = Join-Path ([IO.Path]::GetTempPath()) "vex-ui-preview-tray-$($process.Id).json"
         if ($PreviewMode -eq 'protected-state-fault') {
             $protectedStateDiagnosticPath = Join-Path ([IO.Path]::GetTempPath()) "vex-ui-preview-protected-state-$($process.Id).json"
         }
@@ -707,8 +816,8 @@ namespace Vex.Windows.Smoke {
             Wait-SmokeCondition -Failure 'Faulted preview did not hide before tray recovery.' -Condition {
                 -not [Vex.Windows.Smoke.NativeMethods]::IsWindowVisible($windowHandle)
             }
-            Invoke-RedirectedLaunch -Arguments '--ui-smoke-tray-connect'
-            $result.tray_auth_recovery_diagnostic = Wait-SmokeTrayRecoveryDiagnostic -Scenario 'signed-out' -Access 'Missing'
+            $trayRequestId = Invoke-SmokeTrayRequest -Scenario 'signed-out'
+            $result.tray_auth_recovery_diagnostic = Wait-SmokeTrayRecoveryDiagnostic -RequestId $trayRequestId -Scenario 'signed-out' -Access 'Missing'
             Wait-SmokeCondition -Failure 'Faulted preview did not restore the recovery UI.' -Condition {
                 $status = Find-SmokeElement -AutomationId 'AccountSignInStatus'
                 [Vex.Windows.Smoke.NativeMethods]::IsWindowVisible($windowHandle) -and
@@ -935,9 +1044,8 @@ namespace Vex.Windows.Smoke {
         }
         $trayScenario = if ($PreviewMode -eq 'fixtures') { 'locked' } else { 'signed-out' }
         $trayAccess = if ($PreviewMode -eq 'fixtures') { 'Locked' } else { 'Missing' }
-        $trayArguments = if ($PreviewMode -eq 'fixtures') { '--ui-smoke-tray-connect-locked' } else { '--ui-smoke-tray-connect' }
-        Invoke-RedirectedLaunch -Arguments $trayArguments
-        $result.tray_auth_recovery_diagnostic = Wait-SmokeTrayRecoveryDiagnostic -Scenario $trayScenario -Access $trayAccess
+        $trayRequestId = Invoke-SmokeTrayRequest -Scenario $trayScenario
+        $result.tray_auth_recovery_diagnostic = Wait-SmokeTrayRecoveryDiagnostic -RequestId $trayRequestId -Scenario $trayScenario -Access $trayAccess
         Wait-SmokeCondition -Failure 'Actual tray recovery did not show the Home sign-in or Hello unlock controls.' -Condition {
             $homeNavigationElement = Find-SmokeElement -AutomationId 'HomeNavigationButton'
             $signIn = Find-SmokeElement -AutomationId 'WebsiteSignInButton'
@@ -951,8 +1059,8 @@ namespace Vex.Windows.Smoke {
         $result.tray_auth_recovery_without_connect = $true
         if ($PreviewMode -eq 'fixtures') {
             $result.stage = 'tray-auth-recovery-reset'
-            Invoke-RedirectedLaunch -Arguments '--ui-smoke-tray-reset'
-            Wait-SmokeTrayRecoveryDiagnostic -Scenario 'reset' -Access 'Available' | Out-Null
+            $trayRequestId = Invoke-SmokeTrayRequest -Scenario 'reset'
+            Wait-SmokeTrayRecoveryDiagnostic -RequestId $trayRequestId -Scenario 'reset' -Access 'Available' | Out-Null
             Wait-SmokeCondition -Failure 'Locked tray fixture did not restore the authenticated Home after recovery checks.' -Condition {
                 $power = Find-SmokeElement -AutomationId 'PowerButton'
                 $null -ne $power -and -not $power.Current.IsOffscreen -and $power.Current.IsEnabled
@@ -1091,11 +1199,13 @@ finally {
             Remove-Item -LiteralPath $protocolDiagnosticPath
         }
     }
-    if ($null -ne $trayDiagnosticHash -and (Test-Path -LiteralPath $trayDiagnosticPath -PathType Leaf)) {
-        $diagnosticFile = Get-Item -LiteralPath $trayDiagnosticPath
-        if (($diagnosticFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0 -and
-            (Get-FileHash -LiteralPath $trayDiagnosticPath -Algorithm SHA256).Hash -ceq $trayDiagnosticHash) {
-            Remove-Item -LiteralPath $trayDiagnosticPath
+    foreach ($trayDiagnosticPath in $trayDiagnosticHashes.Keys) {
+        if (Test-Path -LiteralPath $trayDiagnosticPath -PathType Leaf) {
+            $diagnosticFile = Get-Item -LiteralPath $trayDiagnosticPath
+            if (($diagnosticFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0 -and
+                (Get-FileHash -LiteralPath $trayDiagnosticPath -Algorithm SHA256).Hash -ceq $trayDiagnosticHashes[$trayDiagnosticPath]) {
+                Remove-Item -LiteralPath $trayDiagnosticPath
+            }
         }
     }
     if ($null -ne $protectedStateDiagnosticHash -and (Test-Path -LiteralPath $protectedStateDiagnosticPath -PathType Leaf)) {

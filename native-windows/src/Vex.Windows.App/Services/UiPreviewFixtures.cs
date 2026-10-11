@@ -16,18 +16,21 @@ internal static class UiPreviewFixtures
     private static int _connectRequests;
     private static int _trustedConnectRequests;
 
-    internal static void RecordTrayRecovery(string scenario, AppServices services)
+    internal static void RecordTrayRecovery(UiPreviewTrayActivation trace, AppServices services)
     {
         if (!UiPreviewContext.IsEnabled || UiPreviewContext.StateDirectory is null)
             throw new InvalidOperationException("Tray diagnostics require isolated UI preview.");
-        var path = Path.Combine(Path.GetTempPath(), $"vex-ui-preview-tray-{Environment.ProcessId}.json");
+        var request = trace.Request;
+        var path = request.CompletedPath;
+        if (File.Exists(path) || Directory.Exists(path) || File.Exists(path + ".tmp") || Directory.Exists(path + ".tmp"))
+            throw new IOException("Tray completed receipt paths must be unused.");
         var value = JsonSerializer.Serialize(new
         {
             schema = "vex.windows.ui-preview-tray-recovery.v1",
             process_id = Environment.ProcessId,
             preview_mode = UiPreviewContext.IsProtectedStateFaultPreview ? "protected-state-fault" :
                 UiPreviewContext.IsAuthenticated ? "fixtures" : "signed-out",
-            scenario,
+            scenario = request.Scenario,
             access = services.Coordinator.CurrentStateAccess.ToString(),
             connect_requests = Volatile.Read(ref _connectRequests),
             trusted_connect_requests = Volatile.Read(ref _trustedConnectRequests),
@@ -35,8 +38,10 @@ internal static class UiPreviewFixtures
             waiting_for_browser_auth = services.Auth.IsWaitingForBrowserAuth,
             handler_completed = true,
         });
+        trace.Record("completion-temp-write");
         File.WriteAllText(path + ".tmp", value);
-        File.Move(path + ".tmp", path, overwrite: true);
+        trace.Record("completion-move");
+        File.Move(path + ".tmp", path, overwrite: false);
     }
 #endif
 
@@ -65,9 +70,20 @@ internal static class UiPreviewFixtures
             new VexAuthSession(new VexUser("ui-preview-user", "preview@example.test", "active"),
                 "isolated-ui-preview-token", now.AddDays(1)),
             "ui-preview-installation", "ui-preview-device", "de-frankfurt",
-            new WireGuardIdentity(key, key, 1)));
+            new WireGuardIdentity(key, key, 1),
+            CachedEntitlement: PreviewEntitlement(now),
+            CachedEntitlementCheckedAt: now,
+            CachedEntitlementValidUntil: now.AddHours(24)));
 #endif
     }
+
+#if DEBUG
+    private static VexEntitlement PreviewEntitlement(DateTimeOffset now) => new(true,
+        "vex-monthly", "VEX", "active", "Подписка VEX", "Все устройства под защитой",
+        "Осталось 30 дней", "active", "premium", now.AddDays(30).ToString("O"),
+        now.AddDays(30).ToString("O"), true,
+        new WindowsBetaAccessGrant(true, "windows", "native", "isolated-ui-preview-beta", null, 5, false));
+#endif
 
     public static HttpMessageHandler CreateHandler() => new OfflineHandler();
 
@@ -121,13 +137,10 @@ internal static class UiPreviewFixtures
         private static object? ResponseFor(string path)
         {
             var now = DateTimeOffset.UtcNow;
-            var nextMonth = now.AddDays(30).ToString("O");
             return path switch
             {
                 "/v1/me" or "/v1/auth/me" => new VexUser("ui-preview-user", "preview@example.test", "active"),
-                "/v1/billing/entitlement" => new VexEntitlement(true, "vex-monthly", "VEX", "active",
-                    "Подписка VEX", "Все устройства под защитой", "Осталось 30 дней", "active",
-                    "premium", nextMonth, nextMonth, true),
+                "/v1/billing/entitlement" => PreviewEntitlement(now),
                 "/v1/billing/plans" => new[] { new BillingPlan("vex-monthly", "VEX", "platega", 29900,
                     "RUB", "month", 5, "premium", "active") },
                 "/v1/billing/payments" => new[] { new BillingPayment("ui-preview-payment", null, null,

@@ -326,6 +326,7 @@ public sealed partial class AccountPage : Page
         PasswordInput.IsEnabled = !busy;
         EmailOtpCodeInput.IsEnabled = !busy;
         RefreshBillingButton.IsEnabled = !busy;
+        RefreshBetaAccessButton.IsEnabled = !busy;
         CheckoutButton.IsEnabled = !authBusy;
         EmailLoginExpander.IsEnabled = !busy;
     }
@@ -345,6 +346,13 @@ public sealed partial class AccountPage : Page
             Coordinator.CurrentStateAccess == ClientStateAccessKind.Locked;
         var waitingForBrowserAuth = Auth.IsWaitingForBrowserAuth;
         var otpChallenge = Auth.EmailOtpChallenge;
+        var beta = WindowsBetaPresentation.FromState(state, DateTimeOffset.UtcNow);
+        var paidAccess = _account?.Entitlement.HasPaidAccess == true;
+        WindowsBetaPanel.Visibility = beta is null ? Visibility.Collapsed : Visibility.Visible;
+        WindowsBetaTitle.Text = beta?.Title ?? string.Empty;
+        WindowsBetaDescription.Text = beta?.Description ?? string.Empty;
+        WindowsBetaPeriod.Text = beta?.Period ?? string.Empty;
+        WindowsBetaSubscriptionNote.Text = beta?.SubscriptionNote ?? string.Empty;
 
         AccountStatus.Text = signedIn ? state!.Session.User.Email : "Аккаунт VEX";
         AccountInitials.Text = AccountInitialsFor(state?.Session.User.Email);
@@ -376,7 +384,7 @@ public sealed partial class AccountPage : Page
             ? Visibility.Collapsed
             : Visibility.Visible;
         AuthHintText.Text = signedIn
-            ? _account?.Entitlement.RemainingText ??
+            ? beta?.Period ?? _account?.Entitlement.RemainingText ??
                 (_account is null ? "Данные обновятся автоматически" : _account.Entitlement.HasPaidAccess
                     ? "VPN-доступ активен"
                     : "Оформите подписку для VPN-доступа")
@@ -434,7 +442,7 @@ public sealed partial class AccountPage : Page
         AccountSummaryPanel.Visibility = signedIn
             ? Visibility.Visible
             : Visibility.Collapsed;
-        BillingPanel.Visibility = signedIn
+        BillingPanel.Visibility = signedIn && (beta is null || beta.ShowSubscription)
             ? Visibility.Visible
             : Visibility.Collapsed;
         DeviceUsagePanel.Visibility = signedIn
@@ -444,18 +452,19 @@ public sealed partial class AccountPage : Page
             ? Visibility.Visible
             : Visibility.Collapsed;
         AccountAccessBadgeText.Text = signedIn
-            ? _account?.Entitlement.HasPaidAccess == true
+            ? beta is not null ? "Бета"
+                : paidAccess
                 ? "Активен"
                 : _account is null
                     ? "Проверка"
                     : "Нет"
             : "Нет";
-        var paidAccess = _account?.Entitlement.HasPaidAccess == true;
-        AccountAccessBadge.Background = ColorBrush(paidAccess ? 0x2922D3EEu :
+        var vpnAccess = paidAccess || beta is not null;
+        AccountAccessBadge.Background = ColorBrush(vpnAccess ? 0x2922D3EEu :
             _account is null ? 0x14FFFFFFu : 0x26FF9E2Eu);
-        AccountAccessBadgeText.Foreground = ColorBrush(paidAccess ? 0xFFB9FBFFu :
+        AccountAccessBadgeText.Foreground = ColorBrush(vpnAccess ? 0xFFB9FBFFu :
             _account is null ? 0xFFA7B9BDu : 0xFFFFC25Cu);
-        AccountPlanFact.Foreground = ColorBrush(paidAccess ? 0xFFB9FBFFu : 0xFFA7B9BDu);
+        AccountPlanFact.Foreground = ColorBrush(vpnAccess ? 0xFFB9FBFFu : 0xFFA7B9BDu);
 
         if (!signedIn || _account is null)
         {
@@ -466,19 +475,19 @@ public sealed partial class AccountPage : Page
             BillingPlan.Text = "Тариф: —";
             BillingAccess.Text = "Доступ: —";
             BillingPeriod.Text = "Период: —";
-            CheckoutButton.Visibility = signedIn
+            CheckoutButton.Visibility = signedIn && (beta is null || beta.ShowCheckout)
                 ? Visibility.Visible
                 : Visibility.Collapsed;
             DeviceUsageList.ItemsSource = null;
             PaymentHistoryList.ItemsSource = null;
-            AccountPlanFact.Text = signedIn ? "Проверяем подписку" : "Требуется вход";
+            AccountPlanFact.Text = beta?.Title ?? (signedIn ? "Проверяем подписку" : "Требуется вход");
             AccountStatusFact.Text = signedIn ? "Статус: проверяем" : "Статус: нет доступа";
             PaymentHistoryList.Visibility = Visibility.Collapsed;
             PaymentHistoryEmpty.Visibility = Visibility.Visible;
             PaymentHistoryStatusText.Text = "История пока недоступна.";
             PaymentHistoryEmptyTitle.Text = "Ожидаем историю оплат";
-            PaymentHistoryEmptyDescription.Text = "Обновите подписку, чтобы загрузить последние операции.";
-            DeviceUsageSummary.Text = "Устройства пока недоступны. Обновите подписку, чтобы повторить загрузку.";
+            PaymentHistoryEmptyDescription.Text = "Обновите данные аккаунта, чтобы загрузить последние операции.";
+            DeviceUsageSummary.Text = "Устройства пока недоступны. Обновите данные аккаунта, чтобы повторить загрузку.";
             DeviceSectionStatusText.Visibility = Visibility.Collapsed;
             return;
         }
@@ -495,12 +504,13 @@ public sealed partial class AccountPage : Page
         BillingAccess.Text = $"Доступ: {AccessText(_account.Entitlement)}";
         BillingPeriod.Text = $"Период: {(currentSummary ? summary.RemainingText ?? summary.CurrentPeriodEnd ?? summary.EffectiveExpiresAt
             : _account.Entitlement.RemainingText ?? _account.Entitlement.CurrentPeriodEnd ?? _account.Entitlement.EffectiveExpiresAt) ?? "Уточняется"}";
-        CheckoutButton.Visibility = Visibility.Visible;
+        CheckoutButton.Visibility = beta is null || beta.ShowCheckout
+            ? Visibility.Visible : Visibility.Collapsed;
         AccountPlanFact.Text =
-            planName ?? AccessText(_account.Entitlement);
+            beta?.Title ?? planName ?? AccessText(_account.Entitlement);
         AccountStatusFact.Text = "Статус: " + (_account.Entitlement.HasPaidAccess
             ? LocalizeSubscriptionStatus(currentSummary ? summary.Status : _account.Entitlement.Status, true)
-            : "Нет VPN-доступа");
+            : beta is not null ? "Бесплатное тестирование Windows" : "Нет VPN-доступа");
         RenderDevices(_account);
         RenderPayments(_account);
     }
@@ -561,7 +571,7 @@ public sealed partial class AccountPage : Page
         PaymentHistoryEmptyTitle.Text = !account.PaymentsStatus.HasData ? "История оплат недоступна"
             : account.PaymentsStatus.IsCurrent ? "Оплат пока нет" : "В сохранённой истории оплат нет";
         PaymentHistoryEmptyDescription.Text = account.PaymentsStatus.IsCurrent
-            ? "Покупки и продления появятся здесь." : "Обновите подписку, чтобы повторить загрузку истории.";
+            ? "Покупки и продления появятся здесь." : "Обновите данные аккаунта, чтобы повторить загрузку истории.";
         var rows = account.Payments
             .OrderByDescending(payment =>
                 ParseTimestamp(
@@ -650,7 +660,7 @@ public sealed partial class AccountPage : Page
                 NativeClientFlowException flow when
                     flow.Code == "windows_hello_required" =>
                     "Сначала разблокируйте сохраненную сессию через Windows Hello.",
-                _ => "Не удалось обновить подписку. Повторите позже.",
+                _ => "Не удалось обновить данные аккаунта. Повторите позже.",
             };
             AccountNotice.Severity = InfoBarSeverity.Warning;
             AccountNotice.IsOpen = true;

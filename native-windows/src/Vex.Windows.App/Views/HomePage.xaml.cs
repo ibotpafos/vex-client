@@ -80,7 +80,8 @@ public sealed partial class HomePage : Page
         }
 
         await LoadLocationsAsync();
-        if (!lifetime.IsCancellationRequested) await RefreshStatusAsync();
+        if (!lifetime.IsCancellationRequested)
+            await Task.WhenAll(RefreshStatusAsync(), RefreshWindowsBetaAccessAsync(lifetime));
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs args)
@@ -310,6 +311,37 @@ public sealed partial class HomePage : Page
     {
         await RunRequestAsync(
             token => _services.VpnClient.GetStatusAsync(token), showBusy: false);
+    }
+
+    private async Task RefreshWindowsBetaAccessAsync(CancellationTokenSource lifetime)
+    {
+        var expectedAccessToken = _services.Coordinator.CurrentState?.Session.AccessToken;
+        if (expectedAccessToken is null) return;
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+        timeout.CancelAfter(TimeSpan.FromSeconds(12));
+        try
+        {
+            // Reuse the coordinator's bounded entitlement cache and session
+            // guard. This read never registers a device or starts the tunnel.
+            await _services.Coordinator.ValidateEntitlementAsync(timeout.Token, expectedAccessToken);
+        }
+        catch (NativeClientFlowException error) when (error.Code == "vpn_entitlement_required")
+        {
+            // A confirmed denial is already cached. Opening Home does not
+            // manufacture a connection failure or force a payment screen.
+        }
+        catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
+        catch (Exception error) when (error is HttpRequestException or IOException or
+            UnauthorizedAccessException or CryptographicException or VexApiException or
+            NativeClientFlowException or OperationCanceledException or InvalidOperationException)
+        {
+            LogUiFailure(error);
+        }
+        finally
+        {
+            if (ReferenceEquals(_pageLifetime, lifetime) && !lifetime.IsCancellationRequested)
+                Render();
+        }
     }
 
     private async Task LoadLocationsAsync()
@@ -924,6 +956,11 @@ public sealed partial class HomePage : Page
     private void Render()
     {
         RenderSelectionControls();
+        var beta = WindowsBetaPresentation.FromState(_services.Coordinator.CurrentState, DateTimeOffset.UtcNow);
+        WindowsBetaPanel.Visibility = beta is null ? Visibility.Collapsed : Visibility.Visible;
+        WindowsBetaTitle.Text = beta?.Title ?? string.Empty;
+        WindowsBetaDescription.Text = beta is null ? string.Empty :
+            $"{beta.Description} {beta.Period}";
         var snapshot = _services.VpnUiState.Snapshot;
         (PowerButtonText.Text, StatusText.Text, PowerButton.IsEnabled) = snapshot.Phase switch
         {
@@ -940,7 +977,7 @@ public sealed partial class HomePage : Page
                 ("Нужна очистка VPN", "Нажмите, чтобы отключить", true),
             VpnConnectionPhase.Error
                 when VpnFailurePresentation.RequiresAccountAction(snapshot.ErrorCode) =>
-                ("Открыть аккаунт", "Подписка и управление устройствами — на вкладке «Аккаунт»", true),
+                ("Открыть аккаунт", "VPN-доступ и управление устройствами — на вкладке «Аккаунт»", true),
             VpnConnectionPhase.Error =>
                 ("Нужна проверка", "Нажмите, чтобы повторить", true),
             _ => ("Неизвестное состояние", "Нажмите, чтобы повторить", true),

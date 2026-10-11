@@ -127,6 +127,14 @@ connection intent. A delayed response cannot disconnect a newer login or
 server selection. Windows Hello locking and temporary network failures preserve
 an admitted tunnel; a current authoritative rejection requests confirmed cleanup.
 
+The free native Windows beta is controlled by the server and has no fixed end
+date. Its access remains separate from an existing paid subscription and does
+not initiate payments or automatic billing. The default limit is five Windows
+installations. Windows refreshes access after five minutes and limits cached
+offline admission to 24 hours; an authoritative beta revocation ends admission.
+Launching the beta requires the backend feature flag and completed Windows
+release qualification, including the signed installer lifecycle and real VPN.
+
 Disconnected clients warm their selected profile without blocking Connect.
 The warm cache requires the release-pinned P256 keyring, exact signed user,
 device, location and routing scope, and matching HTTPS device-key metadata.

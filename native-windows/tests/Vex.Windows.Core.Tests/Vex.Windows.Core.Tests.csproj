@@ -24,6 +24,7 @@
     <Compile Include="../../src/Vex.Windows.App/Services/UiPreviewContext.cs" Link="UiPreviewContext.cs" />
     <Compile Include="../../src/Vex.Windows.App/Services/DiagnosticsQueueService.cs" Link="DiagnosticsQueueService.cs" />
     <Compile Include="../../src/Vex.Windows.App/Services/VpnFailurePresentation.cs" Link="VpnFailurePresentation.cs" />
+    <Compile Include="../../src/Vex.Windows.App/Services/WindowsBetaPresentation.cs" Link="WindowsBetaPresentation.cs" />
     <Compile Include="../../src/Vex.Windows.App/Services/VpnUiStateService.cs" Link="VpnUiStateService.cs" />
     <Compile Include="../../src/Vex.Windows.App/Services/ProfileWarmupTrustStore.cs" Link="ProfileWarmupTrustStore.cs" />
     <Compile Include="../../src/Vex.Windows.App/Services/VpnProductParityService.cs" Link="VpnProductParityService.cs" />

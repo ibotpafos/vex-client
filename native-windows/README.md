@@ -515,7 +515,18 @@ Routine jobs do not access signing secrets. Manual validation needs no release
 inputs; signed release preparation requires `package_release=true`, the main
 branch, release version/revision/notes, and the configured release inputs.
 Signed preparation fails clearly when required signing inputs are missing.
-On a fresh x64 runner it also validates the actual Setup executable and installs
+
+Before selecting a signed release version and manifest revision, run the manual
+`Native Windows release input preflight` workflow on `main`. It receives only
+boolean presence flags for Actions variables and secrets, follows runtime-source
+precedence and retains a bounded report containing missing input names and the
+checkout commit. It preserves the built-in Microsoft VCLibs source. The job
+fails when required inputs are absent; values are excluded from both step
+environment bindings and the report. Passing confirms configured input presence.
+Certificate, key, checksum and file validity, installed-client acceptance and
+public VPN traffic still require their release checks. Preflight does not build,
+sign, publish or activate the free Windows beta.
+Signed release preparation on a fresh x64 runner also validates the actual Setup executable and installs
 through its native Install button, verifies and removes that installation, then
 installs a synthetic preceding package, upgrades, repairs, rolls back,
 reinstalls, opens installed Account/Settings and uninstalls while preserving

@@ -1,0 +1,68 @@
+name: Native Windows release input preflight
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release_inputs:
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'ibotpafos/vex-client'
+    runs-on: windows-2025
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Check configured presence without receiving values
+        shell: pwsh
+        env:
+          VEX_WINDOWS_SIGN_PFX_BASE64_PRESENT: ${{ secrets.VEX_WINDOWS_SIGN_PFX_BASE64 != '' }}
+          VEX_WINDOWS_SIGN_PFX_PASSWORD_PRESENT: ${{ secrets.VEX_WINDOWS_SIGN_PFX_PASSWORD != '' }}
+          VEX_WINDOWS_UPDATE_PUBLIC_KEY_BASE64_PRESENT: ${{ secrets.VEX_WINDOWS_UPDATE_PUBLIC_KEY_BASE64 != '' }}
+          VEX_WINDOWS_UPDATE_PRIVATE_KEY_BASE64_PRESENT: ${{ secrets.VEX_WINDOWS_UPDATE_PRIVATE_KEY_BASE64 != '' }}
+          VEX_WINDOWS_PACKAGE_NAME_PRESENT: ${{ vars.VEX_WINDOWS_PACKAGE_NAME != '' }}
+          VEX_WINDOWS_PACKAGE_DISPLAY_NAME_PRESENT: ${{ vars.VEX_WINDOWS_PACKAGE_DISPLAY_NAME != '' }}
+          VEX_WINDOWS_PACKAGE_PUBLISHER_PRESENT: ${{ vars.VEX_WINDOWS_PACKAGE_PUBLISHER != '' }}
+          VEX_WINDOWS_PACKAGE_PUBLISHER_DISPLAY_NAME_PRESENT: ${{ vars.VEX_WINDOWS_PACKAGE_PUBLISHER_DISPLAY_NAME != '' }}
+          VEX_WINDOWS_PACKAGE_BASE_URI_PRESENT: ${{ vars.VEX_WINDOWS_PACKAGE_BASE_URI != '' }}
+          VEX_WINDOWS_APPINSTALLER_BASE_URI_PRESENT: ${{ vars.VEX_WINDOWS_APPINSTALLER_BASE_URI != '' }}
+          VEX_WINDOWS_UPDATE_KEY_ID_PRESENT: ${{ vars.VEX_WINDOWS_UPDATE_KEY_ID != '' }}
+          VEX_WINDOWS_UPDATE_ORIGIN_PRESENT: ${{ vars.VEX_WINDOWS_UPDATE_ORIGIN != '' }}
+          VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH_PRESENT: ${{ vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH != '' }}
+          VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH_X64_PRESENT: ${{ vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH_X64 != '' }}
+          VEX_WINDOWS_SERVICE_AMNEZIAWG_URI_X64_PRESENT: ${{ vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_URI_X64 != '' }}
+          VEX_WINDOWS_SERVICE_AMNEZIAWG_SHA256_X64_PRESENT: ${{ vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_SHA256_X64 != '' }}
+          VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH_ARM64_PRESENT: ${{ vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH_ARM64 != '' }}
+          VEX_WINDOWS_SERVICE_AMNEZIAWG_URI_ARM64_PRESENT: ${{ vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_URI_ARM64 != '' }}
+          VEX_WINDOWS_SERVICE_AMNEZIAWG_SHA256_ARM64_PRESENT: ${{ vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_SHA256_ARM64 != '' }}
+          VEX_WINDOWS_SERVICE_WINTUN_PATH_PRESENT: ${{ vars.VEX_WINDOWS_SERVICE_WINTUN_PATH != '' }}
+          VEX_WINDOWS_SERVICE_WINTUN_PATH_X64_PRESENT: ${{ vars.VEX_WINDOWS_SERVICE_WINTUN_PATH_X64 != '' }}
+          VEX_WINDOWS_SERVICE_WINTUN_URI_X64_PRESENT: ${{ vars.VEX_WINDOWS_SERVICE_WINTUN_URI_X64 != '' }}
+          VEX_WINDOWS_SERVICE_WINTUN_SHA256_X64_PRESENT: ${{ vars.VEX_WINDOWS_SERVICE_WINTUN_SHA256_X64 != '' }}
+          VEX_WINDOWS_SERVICE_WINTUN_PATH_ARM64_PRESENT: ${{ vars.VEX_WINDOWS_SERVICE_WINTUN_PATH_ARM64 != '' }}
+          VEX_WINDOWS_SERVICE_WINTUN_URI_ARM64_PRESENT: ${{ vars.VEX_WINDOWS_SERVICE_WINTUN_URI_ARM64 != '' }}
+          VEX_WINDOWS_SERVICE_WINTUN_SHA256_ARM64_PRESENT: ${{ vars.VEX_WINDOWS_SERVICE_WINTUN_SHA256_ARM64 != '' }}
+          VEX_WINDOWS_VCLIBS_PATH_PRESENT: ${{ vars.VEX_WINDOWS_VCLIBS_PATH != '' }}
+          VEX_WINDOWS_VCLIBS_PATH_X64_PRESENT: ${{ vars.VEX_WINDOWS_VCLIBS_PATH_X64 != '' }}
+          VEX_WINDOWS_VCLIBS_URI_X64_PRESENT: ${{ vars.VEX_WINDOWS_VCLIBS_URI_X64 != '' }}
+          VEX_WINDOWS_VCLIBS_SHA256_X64_PRESENT: ${{ vars.VEX_WINDOWS_VCLIBS_SHA256_X64 != '' }}
+          VEX_WINDOWS_VCLIBS_PATH_ARM64_PRESENT: ${{ vars.VEX_WINDOWS_VCLIBS_PATH_ARM64 != '' }}
+          VEX_WINDOWS_VCLIBS_URI_ARM64_PRESENT: ${{ vars.VEX_WINDOWS_VCLIBS_URI_ARM64 != '' }}
+          VEX_WINDOWS_VCLIBS_SHA256_ARM64_PRESENT: ${{ vars.VEX_WINDOWS_VCLIBS_SHA256_ARM64 != '' }}
+          VEX_WINDOWS_SIGN_TIMESTAMP_URI_PRESENT: ${{ vars.VEX_WINDOWS_SIGN_TIMESTAMP_URI != '' }}
+        run: |
+          ./native-windows/scripts/test-release-inputs.ps1 `
+            -ResultPath (Join-Path $env:RUNNER_TEMP 'vex-release-input-preflight/result.json')
+      - name: Retain bounded presence receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-release-input-preflight-${{ github.run_id }}
+          path: ${{ runner.temp }}/vex-release-input-preflight/result.json
+          if-no-files-found: error
+          retention-days: 14

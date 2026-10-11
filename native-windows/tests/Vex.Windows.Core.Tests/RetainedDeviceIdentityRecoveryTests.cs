@@ -106,14 +106,16 @@ internal static class RetainedDeviceIdentityRecoveryTests
             Check(retained.Identity == fixture.Original with { KeyEpoch = 3 } &&
                 retained.PendingIdentity == pending with { KeyEpoch = 4 } &&
                 fixture.Store.Load()!.VpnProvisioningPending && fixture.Store.Load()!.DeviceId == string.Empty &&
-                fixture.Rotations.Count == 0,
-                "Unaccepted pending material must be durably rebased while authentication remains independent, before registration and without a recovery POST.");
+                fixture.Rotations.Single() == pending with { KeyEpoch = 4 } &&
+                fixture.Store.AccountVpnIdentities.Load(fixture.Session.User.Id)!.Identity == pending with { KeyEpoch = 4 },
+                "Legacy material must be durably rebased before scoped-map replay; the map confirms that same pending pair before registration while authentication remains independent.");
         };
         await fixture.Coordinator.ConnectAsync(CancellationToken.None);
-        Check(fixture.Registrations.Single() == (fixture.Original.PublicKey, 3) &&
+        Check(fixture.Registrations.Single() == (pending.PublicKey, 4) &&
             fixture.Rotations.Single() == pending with { KeyEpoch = 4 } && fixture.Vpn.PrivateKey == pending.PrivateKey &&
-            fixture.Store.LoadDevice()!.PendingIdentity is null,
-            "The ordinary bound rotation path must finish the same rebased pending identity after registering the authoritative old key.");
+            fixture.Store.LoadRecoveryDevice(fixture.Session.User.Id)!.PendingIdentity is null &&
+            fixture.Store.LoadDevice()!.PendingIdentity == pending with { KeyEpoch = 4 },
+            "Scoped rotation replay must finish the same rebased private pair before registration without replacing the independent legacy migration source.");
     }
 
     private static async Task PskOnlyAdvanceAlignsRegistrationReplayAsync()
@@ -410,9 +412,12 @@ internal static class RetainedDeviceIdentityRecoveryTests
                 await ExpectAsync<VexApiException>(() => fixture.Coordinator.ConnectAsync(CancellationToken.None));
             }
             Check(fixture.Store.LoadDevice()!.DeviceId == "retained-device" &&
-                fixture.Store.LoadDevice()!.PendingIdentity!.PrivateKey == pending.PrivateKey && fixture.Rotations.Count == 0 &&
+                fixture.Store.LoadDevice()!.PendingIdentity!.PrivateKey == pending.PrivateKey &&
+                fixture.Rotations.Single() == pending with { KeyEpoch = 4 } &&
+                fixture.Store.LoadRecoveryDevice(fixture.Session.User.Id)!.Identity == pending with { KeyEpoch = 4 } &&
+                fixture.Store.LoadRecoveryDevice(fixture.Session.User.Id)!.PendingIdentity is null &&
                 fixture.Vpn.PrivateKey is null && (directProvision ? fixture.Store.Load() is null : fixture.Store.Load()!.VpnProvisioningPending),
-                "Unexpected registration IDs or keys cannot rebind another device's pending rotation or publish a completed provisioning state.");
+                "Unexpected registration IDs or keys cannot rebind the journal's owned device or publish provisioning; the prior owned rotation ACK must retain that exact private pair in the map.");
         }
     }
 
@@ -447,8 +452,12 @@ internal static class RetainedDeviceIdentityRecoveryTests
             Store.Save(new(Session, "retained-installation", "retained-device", "fi-1", Original));
             var (api, proxy) = NativeApiProxy.Wrap(new FakeNativeClientApi());
             _api = api;
-            proxy.Overrides[nameof(INativeClientApi.GetDevicesAsync)] = _ =>
-                Task.FromResult<IReadOnlyList<VpnDevice>>([new("retained-device", "Windows", "active", ServerPublicKey)]);
+            proxy.Overrides[nameof(INativeClientApi.GetDevicesAsync)] = args =>
+                Task.FromResult<IReadOnlyList<VpnDevice>>((string)args[0]! == "other-token" ? [] :
+                    [new("retained-device", "Windows", "active", ServerPublicKey,
+                        ProvisioningMode: "managed_native", ClientKeyOwnership: "client",
+                        ExternalDeviceId: "retained-installation", Platform: "windows",
+                        UserId: Session.User.Id, PskEpoch: ServerEpoch)]);
             proxy.Overrides[nameof(INativeClientApi.GetManagedVpnProfileAsync)] = args =>
             {
                 ProfileCalls++;
@@ -470,7 +479,7 @@ internal static class RetainedDeviceIdentityRecoveryTests
             proxy.Overrides[nameof(INativeClientApi.RotateManagedVpnKeyAsync)] = args =>
             {
                 var identity = (WireGuardIdentity)args[2]!;
-                Check(identity.KeyEpoch == ServerEpoch + 1 && Store.LoadDevice()!.PendingIdentity == identity,
+                Check(identity.KeyEpoch == ServerEpoch + 1 && Store.LoadRecoveryDevice(Session.User.Id)!.PendingIdentity == identity,
                     "Normal rotation must persist the exact pending key at the authoritative next epoch before its POST.");
                 Rotations.Add(identity);
                 ServerPublicKey = identity.PublicKey;
@@ -519,17 +528,26 @@ internal static class RetainedDeviceIdentityRecoveryTests
     {
         private string? _sessionJson;
         private string? _deviceJson;
+        public IVpnAccountIdentityStore AccountVpnIdentities { get; private set; } = new MemoryVpnAccountIdentityStore();
         public bool FailDeviceWrite { get; set; }
         public Action? AfterDeviceWrite { get; set; }
         public Func<NativeClientState, bool>? RejectSessionWrite { get; set; }
         public string GetOrCreateInstallationId() => "retained-installation";
         public ClientStateAccessKind GetAccessState() => _sessionJson is null ? ClientStateAccessKind.Missing : ClientStateAccessKind.Available;
-        public NativeClientState? Load() => _sessionJson is null ? null : JsonSerializer.Deserialize<NativeClientState>(_sessionJson);
+        public NativeClientState? Load() => _sessionJson is null ? null :
+            NativeVpnAccountIdentitySynchronization.Restore(AccountVpnIdentities,
+                JsonSerializer.Deserialize<NativeClientState>(_sessionJson)!);
         public NativeDeviceState? LoadDevice() => _deviceJson is null ? null : JsonSerializer.Deserialize<NativeDeviceState>(_deviceJson);
+        public NativeDeviceState? LoadRecoveryDevice(string userId) => AccountVpnIdentities.Load(userId) is { } account
+            ? new("retained-installation", account.DeviceId!, account.LocationId ?? LoadDevice()!.LocationId,
+                account.Identity, userId, account.PendingIdentity)
+            : LoadDevice();
         public void Save(NativeClientState state)
         {
             Check(NativeClientStateValidation.IsValid(state), "The retained persistence fixture must enforce the real App session validator.");
-            if (!state.VpnProvisioningPending) SaveDevice(NativeDeviceState.FromClientState(state));
+            NativeVpnAccountIdentitySynchronization.Save(AccountVpnIdentities, state);
+            if (!state.VpnProvisioningPending && state.VpnRegistrationId is null)
+                SaveDevice(NativeDeviceState.FromClientState(state));
             if (RejectSessionWrite?.Invoke(state) == true) throw new IOException("Session persistence unavailable");
             _sessionJson = JsonSerializer.Serialize(state);
         }
@@ -541,7 +559,11 @@ internal static class RetainedDeviceIdentityRecoveryTests
         }
         public void Clear() => _sessionJson = null;
         public void SetDeviceJson(string value) => _deviceJson = value;
-        public RetainingStateStore ColdRestart() => new() { _sessionJson = _sessionJson, _deviceJson = _deviceJson };
+        public RetainingStateStore ColdRestart() => new()
+        {
+            _sessionJson = _sessionJson, _deviceJson = _deviceJson,
+            AccountVpnIdentities = ((MemoryVpnAccountIdentityStore)AccountVpnIdentities).Clone(),
+        };
     }
 
     private static async Task ExpectAsync<T>(Func<Task> operation, Func<T, bool>? predicate = null) where T : Exception

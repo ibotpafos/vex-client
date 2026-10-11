@@ -43,6 +43,10 @@ public partial class App : Application
         }
         _window.ShowShellWindow();
         _window.Activate();
+#if DEBUG
+        if (UiPreviewContext.IsProtectedStateFaultPreview)
+            ProtectedStateFaultPreview.RecordStartup(AppServices.Current);
+#endif
         _ = HandleActivationAsync(
             current.GetActivatedEventArgs(),
             ProtocolActivationUriParser.Parse(args.Arguments));
@@ -55,6 +59,15 @@ public partial class App : Application
         {
             return;
         }
+
+#if DEBUG
+        if (UiPreviewContext.IsMinimizeCommand(
+            (args.Data as ILaunchActivatedEventArgs)?.Arguments))
+        {
+            _window.MinimizePreviewWindow();
+            return;
+        }
+#endif
 
         if (UiPreviewContext.IsTrayRecoveryCommand(
             (args.Data as ILaunchActivatedEventArgs)?.Arguments))
@@ -162,6 +175,10 @@ public partial class App : Application
                 Debug.WriteLine($"Preview protocol cleanup failed: {error.GetType().Name}");
             }
             UiPreviewContext.Cleanup();
+#if DEBUG
+            if (UiPreviewContext.IsProtectedStateFaultPreview)
+                ProtectedStateFaultPreview.RecordCleanup();
+#endif
         }
     }
 

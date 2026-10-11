@@ -10,6 +10,87 @@ internal static class ProfileIdentityRecoveryTests
 {
     public static void Run() => RunAsync().GetAwaiter().GetResult();
 
+    public static void RunMapped() => RunMappedAsync().GetAwaiter().GetResult();
+    public static void RunMappedAlignment() => PskOnlyEpochPreservesKeyAndInvalidatesSpeculativeLeasesAsync(mapped: true).GetAwaiter().GetResult();
+    public static void RunMappedPendingRebase() => StalePendingRotationRebasesExactKeyAsync(mapped: true).GetAwaiter().GetResult();
+
+    private static async Task RunMappedAsync()
+    {
+        await PskOnlyEpochPreservesKeyAndInvalidatesSpeculativeLeasesAsync(mapped: true);
+        await RotationUsesAuthoritativeNextEpochAsync(mapped: true);
+        await StalePendingRotationRebasesExactKeyAsync(mapped: true);
+        await AlreadyAcceptedPendingKeySurvivesFurtherPskRotationAsync(mapped: true);
+        await AcceptedPendingCannotRollBackCommittedEpochAsync(mapped: true);
+        await InvalidIdentityCannotMutateOrConnectAsync(mapped: true);
+        await MaximumEpochCannotGenerateOrPostRotationAsync(mapped: true);
+        await ReplayResponseMustMatchPendingDeviceAndKeyAsync(mapped: true);
+        await PostflightProfileMustConfirmAcceptedPendingKeyAsync(mapped: true);
+        await ConfirmedAcknowledgementRetainsKeyWhenPostflightFailsAsync(mapped: true);
+        await CancelAtConfirmedAcknowledgementRetainsAcceptedKeyAsync(mapped: true);
+        MappedEpochChangesRejectUnknownOrStaleMaterial();
+    }
+
+    private static void MappedEpochChangesRejectUnknownOrStaleMaterial()
+    {
+        using var fixture = new Fixture(mapped: true);
+        var initial = fixture.Store.State!;
+        var pending = WireGuardIdentity.Generate(2);
+        fixture.Store.Save(initial with { PendingIdentity = pending });
+        var map = fixture.Store.AccountVpnIdentities.Load(initial.Session.User.Id)!;
+        foreach (var invalid in new[]
+        {
+            initial with { Identity = WireGuardIdentity.Generate(3), PendingIdentity = pending },
+            initial with { Identity = initial.Identity with { KeyEpoch = 0 }, PendingIdentity = pending },
+            initial with { PendingIdentity = null },
+            initial with { PendingIdentity = WireGuardIdentity.Generate(3) },
+            initial with { VpnRegistrationId = "another-registration", PendingIdentity = pending },
+            initial with { VpnExternalDeviceId = "another-external", PendingIdentity = pending },
+            initial with { DeviceId = "another-device", PendingIdentity = pending },
+            initial with { Session = initial.Session with { User = initial.Session.User with { Id = "another-user" } }, PendingIdentity = pending },
+        })
+        {
+            try { fixture.Store.Save(invalid); }
+            catch (InvalidOperationException)
+            {
+                Check(fixture.Store.AccountVpnIdentities.Load(initial.Session.User.Id) == map &&
+                    fixture.Store.State!.Identity == initial.Identity && fixture.Store.State.PendingIdentity == pending,
+                    "A foreign pair, pending replacement/drop, rollback or account binding cannot replace the durable mapped journal.");
+                continue;
+            }
+            throw new InvalidOperationException("Expected mapped identity rejection.");
+        }
+        var advanced = map with { Identity = map.Identity with { KeyEpoch = 3 } };
+        fixture.Store.AccountVpnIdentities.Replace(map, advanced);
+        var staleEpochRejected = false;
+        try { fixture.Store.Save(initial with { PendingIdentity = pending }); }
+        catch (InvalidOperationException)
+        {
+            staleEpochRejected = true;
+            Check(fixture.Store.AccountVpnIdentities.Load(initial.Session.User.Id) == advanced,
+                "A stale session cannot roll back a newer same-pair map epoch.");
+        }
+        if (!staleEpochRejected || fixture.Store.AccountVpnIdentities.Load(initial.Session.User.Id) != advanced)
+            throw new InvalidOperationException("Expected stale mapped epoch rejection.");
+        var staleCasRejected = false;
+        try { fixture.Store.AccountVpnIdentities.Replace(map, map); }
+        catch (InvalidOperationException) { staleCasRejected = true; }
+        Check(staleCasRejected, "A stale map record cannot pass the actual file-store CAS.");
+        var rebound = advanced with { DeviceId = "replacement-owned-device" };
+        fixture.Store.AccountVpnIdentities.Replace(advanced, rebound);
+        var staleDeviceRejected = false;
+        try { fixture.Store.Save(initial with { Identity = advanced.Identity, PendingIdentity = pending }); }
+        catch (InvalidOperationException) { staleDeviceRejected = true; }
+        Check(staleDeviceRejected && fixture.Store.AccountVpnIdentities.Load(initial.Session.User.Id) == rebound,
+            "A stale session with the same key and epoch cannot restore an earlier mapped device binding.");
+        var restored = NativeVpnAccountIdentitySynchronization.Restore(fixture.Store.AccountVpnIdentities,
+            initial with { Identity = advanced.Identity, PendingIdentity = pending, CachedAuthorization = fixture.Authorization,
+                CachedProfileVersion = 7, CachedCandidatePolicyExpiresAt = DateTimeOffset.UtcNow.AddHours(1) });
+        Check(restored.DeviceId == rebound.DeviceId && restored.Identity == rebound.Identity &&
+            restored.CachedAuthorization is null && restored.CachedProfileVersion is null &&
+            restored.CachedCandidatePolicyExpiresAt is null,
+            "Restoring the authoritative mapped device must discard stale authorization and leases.");
+    }
+
     private static async Task RunAsync()
     {
         await PskOnlyEpochPreservesKeyAndInvalidatesSpeculativeLeasesAsync();
@@ -17,6 +98,7 @@ internal static class ProfileIdentityRecoveryTests
         await StalePendingRotationRebasesExactKeyAsync();
         await PendingEpochCannotMoveBackwardsAsync();
         await AlreadyAcceptedPendingKeySurvivesFurtherPskRotationAsync();
+        await AcceptedPendingCannotRollBackCommittedEpochAsync();
         await LostRotationResponseRecoversAcceptedKeyAsync();
         await UnchangedEpochAdvanceRequestsFullAuthorityAsync();
         await InvalidIdentityCannotMutateOrConnectAsync();
@@ -30,9 +112,9 @@ internal static class ProfileIdentityRecoveryTests
         await LegacyProfileStillSupportsIdempotentRotationAsync();
     }
 
-    private static async Task PskOnlyEpochPreservesKeyAndInvalidatesSpeculativeLeasesAsync()
+    private static async Task PskOnlyEpochPreservesKeyAndInvalidatesSpeculativeLeasesAsync(bool mapped = false)
     {
-        var fixture = new Fixture();
+        using var fixture = new Fixture(mapped);
         var original = fixture.Store.State!;
         fixture.SeedSpeculativeLeases();
         await fixture.Coordinator.ConnectAsync(CancellationToken.None);
@@ -41,11 +123,14 @@ internal static class ProfileIdentityRecoveryTests
             fixture.Vpn.PrivateKey == original.Identity.PrivateKey && state.WarmedProfile is null &&
             state.CachedCandidateGrants is null && state.CachedCandidatePolicyExpiresAt is null,
             "A server PSK-only epoch advancement must retain the exact key pair and drop all earlier speculative leases.");
+        if (mapped) Check(fixture.Store.AccountVpnIdentities.Load(state.Session.User.Id)!.Identity == state.Identity &&
+            fixture.Store.LoadDevice() is null,
+            "The actual account file must commit same-pair epoch alignment without overwriting a global legacy device file.");
     }
 
-    private static async Task RotationUsesAuthoritativeNextEpochAsync()
+    private static async Task RotationUsesAuthoritativeNextEpochAsync(bool mapped = false)
     {
-        var fixture = new Fixture { RotationRequired = true };
+        using var fixture = new Fixture(mapped) { RotationRequired = true };
         var original = fixture.Store.State!.Identity;
         await fixture.Coordinator.ConnectAsync(CancellationToken.None);
         Check(fixture.Posted is [{ KeyEpoch: 4 }] && fixture.Store.State!.Identity.KeyEpoch == 4 &&
@@ -54,9 +139,9 @@ internal static class ProfileIdentityRecoveryTests
             "Rotation after server epoch 3 must durably generate and confirm epoch 4 before using the new private key.");
     }
 
-    private static async Task StalePendingRotationRebasesExactKeyAsync()
+    private static async Task StalePendingRotationRebasesExactKeyAsync(bool mapped = false)
     {
-        var fixture = new Fixture();
+        using var fixture = new Fixture(mapped);
         var original = fixture.Store.State!.Identity;
         var pending = WireGuardIdentity.Generate(2);
         fixture.Store.Save(fixture.Store.State with { PendingIdentity = pending });
@@ -65,6 +150,8 @@ internal static class ProfileIdentityRecoveryTests
             Check(identity == pending with { KeyEpoch = 4 } && fixture.Store.State!.PendingIdentity == identity &&
                 fixture.Store.State.Identity == original && fixture.Vpn.PrivateKey is null,
                 "A stale pending epoch must be rebased with the same pending private key and saved before POST without committing it.");
+            if (mapped) Check(fixture.Store.AccountVpnIdentities.Load(fixture.Store.State.Session.User.Id)!.PendingIdentity == identity,
+                "The actual account file must retain the rebased pending private pair before the rotation request.");
             return fixture.AcceptRotation(identity);
         };
         await fixture.Coordinator.ConnectAsync(CancellationToken.None);
@@ -76,7 +163,7 @@ internal static class ProfileIdentityRecoveryTests
     {
         foreach (var epoch in new[] { 0, 5 })
         {
-            var fixture = new Fixture();
+            using var fixture = new Fixture();
             var pending = WireGuardIdentity.Generate(2) with { KeyEpoch = epoch };
             fixture.Store.Save(fixture.Store.State! with { PendingIdentity = pending });
             if (epoch == 0)
@@ -88,9 +175,9 @@ internal static class ProfileIdentityRecoveryTests
         }
     }
 
-    private static async Task AlreadyAcceptedPendingKeySurvivesFurtherPskRotationAsync()
+    private static async Task AlreadyAcceptedPendingKeySurvivesFurtherPskRotationAsync(bool mapped = false)
     {
-        var fixture = new Fixture();
+        using var fixture = new Fixture(mapped);
         var pending = WireGuardIdentity.Generate(2);
         fixture.Store.Save(fixture.Store.State! with { PendingIdentity = pending });
         fixture.ServerPublicKey = pending.PublicKey;
@@ -101,9 +188,27 @@ internal static class ProfileIdentityRecoveryTests
             "An accepted pending public key followed by PSK-only rotations must retain that private key without another rotation POST.");
     }
 
+    private static async Task AcceptedPendingCannotRollBackCommittedEpochAsync(bool mapped = false)
+    {
+        using var fixture = new Fixture(mapped);
+        var pending = WireGuardIdentity.Generate(2);
+        fixture.Store.Save(fixture.Store.State! with
+        { Identity = fixture.Store.State!.Identity with { KeyEpoch = 5 }, PendingIdentity = pending });
+        var before = fixture.Store.State!;
+        fixture.ServerPublicKey = pending.PublicKey;
+        fixture.ServerEpoch = 3;
+        await ExpectAsync<VexApiException>(() => fixture.Coordinator.ConnectAsync(CancellationToken.None));
+        Check(fixture.Store.State!.Identity == before.Identity && fixture.Store.State.PendingIdentity == pending &&
+            fixture.Posted.Count == 0 && fixture.Vpn.PrivateKey is null,
+            "An accepted pending key cannot lower the committed epoch high-water mark or admit stale authority.");
+        if (mapped) Check(fixture.Store.AccountVpnIdentities.Load(before.Session.User.Id)!.Identity == before.Identity &&
+            fixture.Store.AccountVpnIdentities.Load(before.Session.User.Id)!.PendingIdentity == pending,
+            "Backward accepted-pending metadata must preserve both pairs in the actual map.");
+    }
+
     private static async Task LostRotationResponseRecoversAcceptedKeyAsync()
     {
-        var fixture = new Fixture { RotationRequired = true };
+        using var fixture = new Fixture { RotationRequired = true };
         fixture.RotationRequest = (identity, cancellationToken) =>
         {
             _ = fixture.AcceptRotation(identity);
@@ -123,7 +228,7 @@ internal static class ProfileIdentityRecoveryTests
 
     private static async Task UnchangedEpochAdvanceRequestsFullAuthorityAsync()
     {
-        var fixture = new Fixture();
+        using var fixture = new Fixture();
         var state = fixture.Store.State!;
         fixture.Store.Save(state with { CachedProfileVersion = 7, CachedAuthorization = fixture.Authorization,
             CachedCandidatePolicyExpiresAt = DateTimeOffset.UtcNow.AddHours(-1) });
@@ -135,7 +240,7 @@ internal static class ProfileIdentityRecoveryTests
             "Epoch advancement in a compact response must drop obsolete cached authority and fetch a full grant before Connect.");
     }
 
-    private static async Task InvalidIdentityCannotMutateOrConnectAsync()
+    private static async Task InvalidIdentityCannotMutateOrConnectAsync(bool mapped = false)
     {
         foreach (var mutate in new Func<ManagedVpnProfile, ManagedVpnProfile>[]
         {
@@ -149,7 +254,7 @@ internal static class ProfileIdentityRecoveryTests
             profile => profile with { ClientKeyEpoch = 1 },
         })
         {
-            var fixture = new Fixture();
+            using var fixture = new Fixture(mapped);
             fixture.Store.Save(fixture.Store.State! with { Identity = fixture.Store.State!.Identity with { KeyEpoch = 2 } });
             var original = fixture.Store.State;
             fixture.ProfileRequest = _ => Task.FromResult(mutate(fixture.Profile()));
@@ -158,7 +263,7 @@ internal static class ProfileIdentityRecoveryTests
                 fixture.Posted.Count == 0 && fixture.Vpn.Authorization is null,
                 "Foreign, partial, nonpositive or backward identity metadata must not mutate keys or execute a tunnel.");
         }
-        var pendingFixture = new Fixture();
+        using var pendingFixture = new Fixture(mapped);
         var pending = WireGuardIdentity.Generate(2);
         pendingFixture.Store.Save(pendingFixture.Store.State! with { PendingIdentity = pending });
         pendingFixture.ServerPublicKey = WireGuardIdentity.Generate().PublicKey;
@@ -167,9 +272,9 @@ internal static class ProfileIdentityRecoveryTests
             pendingFixture.Vpn.PrivateKey is null, "A third-party public key cannot replace either committed or pending private material.");
     }
 
-    private static async Task MaximumEpochCannotGenerateOrPostRotationAsync()
+    private static async Task MaximumEpochCannotGenerateOrPostRotationAsync(bool mapped = false)
     {
-        var fixture = new Fixture { ServerEpoch = int.MaxValue, RotationRequired = true };
+        using var fixture = new Fixture(mapped) { ServerEpoch = int.MaxValue, RotationRequired = true };
         var original = fixture.Store.State!.Identity;
         await ExpectAsync<NativeClientFlowException>(() => fixture.Coordinator.ConnectAsync(CancellationToken.None),
             error => error.Code == "vpn_key_rotation_failed");
@@ -178,38 +283,42 @@ internal static class ProfileIdentityRecoveryTests
             "Maximum epoch must produce a bounded flow failure before key generation or rotation POST.");
     }
 
-    private static async Task ReplayResponseMustMatchPendingDeviceAndKeyAsync()
+    private static async Task ReplayResponseMustMatchPendingDeviceAndKeyAsync(bool mapped = false)
     {
-        foreach (var foreignDevice in new[] { false, true })
+        foreach (var invalid in new Func<WireGuardIdentity, VpnDevice>[]
         {
-            var fixture = new Fixture { RotationRequired = true };
-            fixture.RotationRequest = (identity, _) => Task.FromResult(new VpnDevice(
-                foreignDevice ? "other-device" : "test-device", "Windows", "active",
-                foreignDevice ? identity.PublicKey : WireGuardIdentity.Generate().PublicKey));
+            identity => new("other-device", "Windows", "active", identity.PublicKey),
+            _ => new("test-device", "Windows", "active", WireGuardIdentity.Generate().PublicKey),
+            identity => new("test-device", "Windows", "active", identity.PublicKey, UserId: "other-user"),
+            identity => new("test-device", "Windows", "active", identity.PublicKey, PskEpoch: identity.KeyEpoch - 1),
+        })
+        {
+            using var fixture = new Fixture(mapped) { RotationRequired = true };
+            fixture.RotationRequest = (identity, _) => Task.FromResult(invalid(identity));
             await ExpectAsync<VexApiException>(() => fixture.Coordinator.ConnectAsync(CancellationToken.None));
             Check(fixture.Store.State!.Identity.PublicKey == fixture.ServerPublicKey &&
                 fixture.Store.State.PendingIdentity is not null && fixture.Vpn.PrivateKey is null,
-                "HTTP 200 idempotency replay for another current device/key must not commit pending identity.");
+                "HTTP 200 replay with a foreign device, key, owner or backward epoch must not commit pending identity.");
         }
     }
 
-    private static async Task PostflightProfileMustConfirmAcceptedPendingKeyAsync()
+    private static async Task PostflightProfileMustConfirmAcceptedPendingKeyAsync(bool mapped = false)
     {
-        var fixture = new Fixture { RotationRequired = true };
+        using var fixture = new Fixture(mapped) { RotationRequired = true };
         fixture.RotationRequest = (identity, _) => Task.FromResult(new VpnDevice("test-device", "Windows", "active", identity.PublicKey));
         await ExpectAsync<VexApiException>(() => fixture.Coordinator.ConnectAsync(CancellationToken.None));
         Check(fixture.Store.State!.PendingIdentity is null && fixture.Store.State.Identity == fixture.Posted.Single() &&
             fixture.Vpn.PrivateKey is null, "A matching POST confirms the retained private key, but an inconsistent fresh profile must still prevent Connect.");
     }
 
-    private static async Task ConfirmedAcknowledgementRetainsKeyWhenPostflightFailsAsync()
+    private static async Task ConfirmedAcknowledgementRetainsKeyWhenPostflightFailsAsync(bool mapped = false)
     {
-        var fixture = new Fixture { RotationRequired = true };
+        using var fixture = new Fixture(mapped) { RotationRequired = true };
         fixture.ProfileRequest = _ => fixture.Posted.Count == 0 ? Task.FromResult(fixture.Profile()) :
             Task.FromException<ManagedVpnProfile>(new HttpRequestException("Postflight unavailable"));
         await ExpectAsync<HttpRequestException>(() => fixture.Coordinator.ConnectAsync(CancellationToken.None));
         Check(fixture.Store.State!.Identity == fixture.Posted.Single() && fixture.Store.State.PendingIdentity is null &&
-            fixture.Store.LoadDevice()!.Identity == fixture.Posted.Single() && fixture.Vpn.PrivateKey is null,
+            (mapped ? fixture.Store.AccountVpnIdentities.Load(fixture.Store.State.Session.User.Id)!.Identity : fixture.Store.LoadDevice()!.Identity) == fixture.Posted.Single() && fixture.Vpn.PrivateKey is null,
             "A confirmed rotation key must survive a later profile outage in retained device state without premature Connect.");
         fixture.ProfileRequest = null;
         await fixture.Coordinator.ConnectAsync(CancellationToken.None);
@@ -217,9 +326,9 @@ internal static class ProfileIdentityRecoveryTests
             "Recovery after postflight outage reuses the confirmed private key without generating another rotation.");
     }
 
-    private static async Task CancelAtConfirmedAcknowledgementRetainsAcceptedKeyAsync()
+    private static async Task CancelAtConfirmedAcknowledgementRetainsAcceptedKeyAsync(bool mapped = false)
     {
-        var fixture = new Fixture { RotationRequired = true };
+        using var fixture = new Fixture(mapped) { RotationRequired = true };
         using var cancellation = new CancellationTokenSource();
         fixture.RotationRequest = (identity, _) =>
         {
@@ -229,7 +338,7 @@ internal static class ProfileIdentityRecoveryTests
         };
         await ExpectAsync<OperationCanceledException>(() => fixture.Coordinator.ConnectAsync(cancellation.Token));
         Check(fixture.Store.State!.Identity == fixture.Posted.Single() && fixture.Store.State.PendingIdentity is null &&
-            fixture.Store.LoadDevice()!.Identity == fixture.Posted.Single() && fixture.Vpn.PrivateKey is null,
+            (mapped ? fixture.Store.AccountVpnIdentities.Load(fixture.Store.State.Session.User.Id)!.Identity : fixture.Store.LoadDevice()!.Identity) == fixture.Posted.Single() && fixture.Vpn.PrivateKey is null,
             "Cancellation at a valid ACK must retain the accepted private key while preventing profile requests and Connect.");
     }
 
@@ -237,7 +346,7 @@ internal static class ProfileIdentityRecoveryTests
     {
         foreach (var atRotation in new[] { false, true })
         {
-            var fixture = new Fixture { RotationRequired = true };
+            using var fixture = new Fixture { RotationRequired = true };
             var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var lateProfile = new TaskCompletionSource<ManagedVpnProfile>(TaskCreationOptions.RunContinuationsAsynchronously);
             var lateRotation = new TaskCompletionSource<VpnDevice>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -257,7 +366,7 @@ internal static class ProfileIdentityRecoveryTests
 
     private static async Task ChangedAccountCannotAdoptAnotherSessionIdentityAsync()
     {
-        var fixture = new Fixture();
+        using var fixture = new Fixture();
         fixture.ProfileRequest = _ =>
         {
             var profile = fixture.Profile();
@@ -272,15 +381,16 @@ internal static class ProfileIdentityRecoveryTests
 
     private static async Task LegacyProfileStillSupportsIdempotentRotationAsync()
     {
-        var fixture = new Fixture { ServerEpoch = 1, RotationRequired = true, LegacyMetadata = true };
+        using var fixture = new Fixture { ServerEpoch = 1, RotationRequired = true, LegacyMetadata = true };
         await fixture.Coordinator.ConnectAsync(CancellationToken.None);
         Check(fixture.Posted is [{ KeyEpoch: 2 }] && fixture.Store.State!.Identity == fixture.Posted[0] &&
             fixture.Store.State.PendingIdentity is null, "Servers omitting both identity fields retain the prior foreground rotation contract.");
     }
 
-    private sealed class Fixture
+    private sealed class Fixture : IDisposable
     {
-        public MemoryClientStateStore Store { get; } = new();
+        private readonly string? _directory;
+        public MemoryClientStateStore Store { get; }
         public FakeVpnControlClient Vpn { get; } = new();
         public NativeClientCoordinator Coordinator { get; }
         public int ServerEpoch { get; set; } = 3;
@@ -296,12 +406,22 @@ internal static class ProfileIdentityRecoveryTests
             Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { profile_version = 7,
                 device_id = "test-device", requested_location_id = "fi-1", routing_mode = "full", bypass_region = "" }))), "c2ln");
 
-        public Fixture()
+        public Fixture(bool mapped = false)
         {
             var identity = WireGuardIdentity.Generate();
             ServerPublicKey = identity.PublicKey;
+            IVpnAccountIdentityStore? accounts = null;
+            if (mapped)
+            {
+                _directory = Path.Combine(Path.GetTempPath(), "vex-mapped-profile-recovery-" + Guid.NewGuid().ToString("N"));
+                accounts = new NativeVpnAccountIdentityFileStore(Path.Combine(_directory, "accounts.bin"),
+                    bytes => bytes.ToArray(), bytes => bytes.ToArray());
+                accounts.GetOrAdd(new("test-user", "registration", "external", identity, "test-device", "fi-1"));
+            }
+            Store = new(accounts);
             Store.Save(new(new(new("test-user", "test@example.test", "active"), "test-token", DateTimeOffset.UtcNow.AddHours(1)),
-                "installation", "test-device", "fi-1", identity));
+                "installation", "test-device", "fi-1", identity,
+                VpnRegistrationId: mapped ? "registration" : null, VpnExternalDeviceId: mapped ? "external" : null));
             var (api, proxy) = NativeApiProxy.Wrap(new FakeNativeClientApi());
             proxy.Overrides[nameof(INativeClientApi.GetManagedVpnProfileAsync)] = args =>
             {
@@ -325,6 +445,11 @@ internal static class ProfileIdentityRecoveryTests
             Check(identity.KeyEpoch == ServerEpoch + 1, "Rotation must use the actual backend's next server epoch contract.");
             ServerPublicKey = identity.PublicKey; ServerEpoch = identity.KeyEpoch; RotationRequired = false;
             return Task.FromResult(new VpnDevice("test-device", "Windows", "active", identity.PublicKey));
+        }
+
+        public void Dispose()
+        {
+            if (_directory is not null && Directory.Exists(_directory)) Directory.Delete(_directory, recursive: true);
         }
 
         public void SeedSpeculativeLeases()

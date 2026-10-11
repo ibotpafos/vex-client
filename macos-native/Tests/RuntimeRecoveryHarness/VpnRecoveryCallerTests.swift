@@ -216,13 +216,21 @@ final class RecoveryProfiles {
     unowned let state: VEXAppState
     init(state: VEXAppState) { self.state = state }
     func resolveProfile(accessToken: String, userId: String, locationId: String,
-        routingMode: String, forceRefresh: Bool, writeHelperConfig: Bool) async throws -> RecoveryTunnel {
+        routingMode: String, forceRefresh: Bool, writeHelperConfig: Bool,
+        shouldPersist: () -> Bool = { true }) async throws -> RecoveryTunnel {
+        try Task.checkCancellation()
+        guard shouldPersist() else { throw CancellationError() }
+        let tunnel: RecoveryTunnel
         if state.isRestoring {
             if let gate = state.restoreGate { await gate.pause() }
-            return state.restoreTunnel
+            tunnel = state.restoreTunnel
+        } else {
+            tunnel = try await state.resolveProfileForAuthenticatedSession(accessToken: accessToken,
+                locationId: locationId, routingMode: routingMode, forceRefresh: forceRefresh).0
         }
-        return try await state.resolveProfileForAuthenticatedSession(accessToken: accessToken,
-            locationId: locationId, routingMode: routingMode, forceRefresh: forceRefresh).0
+        try Task.checkCancellation()
+        guard shouldPersist() else { throw CancellationError() }
+        return tunnel
     }
     func writeHelperConfig(for tunnel: RecoveryTunnel, shouldWrite: () -> Bool) async throws {
         if !shouldWrite() { throw CancellationError() }

@@ -61,7 +61,11 @@ export function parseStoredSession(raw: string | null): AuthSession | null {
 
   try {
     const parsed = JSON.parse(raw) as AuthSession;
-    if (!parsed.accessToken || !parsed.user?.email) {
+    // Offline restore must not expose malformed account text or an ownerless
+    // session to the UI and account-scoped VPN storage.
+    if (typeof parsed?.accessToken !== 'string' || !parsed.accessToken.trim() ||
+        typeof parsed.user?.id !== 'string' || !parsed.user.id.trim() ||
+        typeof parsed.user?.email !== 'string' || !parsed.user.email.trim()) {
       return null;
     }
     return parsed;

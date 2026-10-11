@@ -39,6 +39,7 @@ public sealed partial class NativeClientCoordinator
     private async Task<NativeClientState> PreferPolicyGrantAsync(NativeClientState state,
         ResiliencePolicy? policy, CancellationToken cancellationToken)
     {
+        var intent = Volatile.Read(ref _accountIntent);
         if (state.CachedAuthorization is not { } original || !PolicyUnexpired(policy)) { return state; }
         var routes = EligibleRoutes(state, original, policy);
         var preferred = (!CachedAuthorityUnexpired(state)
@@ -53,6 +54,7 @@ public sealed partial class NativeClientCoordinator
         try
         {
             var profile = await GetProfileAsync(state, null, preferred, routeCancellation.Token).ConfigureAwait(false);
+            EnsureAccountIntent(intent, cancellationToken);
             if (profile.Authorization is null || profile.Revoked || profile.RotationRequired || profile.Unchanged ||
                 !GrantMatchesCandidate(profile.Authorization, state, preferred) || !PolicyUnexpired(policy))
             {

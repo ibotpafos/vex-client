@@ -9,10 +9,11 @@ public sealed partial class NativeClientCoordinator
         VexAuthSession session, NativeClientState? previous, string installationId, string locationId,
         CancellationToken cancellationToken)
     {
+        var intent = Volatile.Read(ref _accountIntent);
         var capturedDevice = _stateStore.LoadDevice();
         var retained = await OwnedDeviceAsync(session, previous, installationId, cancellationToken)
             .ConfigureAwait(false);
-        cancellationToken.ThrowIfCancellationRequested();
+        EnsureAccountIntent(intent, cancellationToken);
         EnsureRetainedRecoveryContext(previous, capturedDevice, installationId);
         if (retained is null) return null;
         if (retained.Identity is not { KeyEpoch: > 0 } original ||
@@ -30,7 +31,7 @@ public sealed partial class NativeClientCoordinator
         var profile = await _api.GetManagedVpnProfileAsync(session.AccessToken,
             retained.DeviceId, locationId, "full", null, null, cancellationToken)
             .WaitAsync(cancellationToken).ConfigureAwait(false);
-        cancellationToken.ThrowIfCancellationRequested();
+        EnsureAccountIntent(intent, cancellationToken);
         EnsureRetainedRecoveryContext(previous, capturedDevice, installationId);
         var context = new NativeClientState(session, installationId, retained.DeviceId,
             retained.LocationId, original, pending);
@@ -43,6 +44,8 @@ public sealed partial class NativeClientCoordinator
         }
 
         NativeDeviceState recovered;
+        if (observed.Epoch < original.KeyEpoch)
+            throw new VexApiException(HttpStatusCode.BadGateway, "api_response_invalid");
         if (pending is not null && observed.PublicKey == pending.PublicKey && observed.Epoch >= pending.KeyEpoch)
         {
             recovered = retained with
@@ -71,10 +74,10 @@ public sealed partial class NativeClientCoordinator
             };
         }
 
-        cancellationToken.ThrowIfCancellationRequested();
+        EnsureAccountIntent(intent, cancellationToken);
         EnsureRetainedRecoveryContext(previous, capturedDevice, installationId);
         if (recovered != retained) _stateStore.SaveDevice(recovered);
-        cancellationToken.ThrowIfCancellationRequested();
+        EnsureAccountIntent(intent, cancellationToken);
         EnsureRetainedRecoveryContext(previous, recovered, installationId);
         return recovered;
     }

@@ -77,18 +77,20 @@ export function SessionProvider({ children }: PropsWithChildren) {
     try {
       await runSessionTransition(async () => {
         let storageError: unknown;
+        let storageCleanupFailed = false;
         await clearSession().catch((error) => {
+          storageCleanupFailed = true;
           storageError = error;
         });
         // A new login waits for this teardown before exposing its session.
         // Failed teardown keeps the authenticated screen available for retry.
         await disconnectVpn({ releaseAntiLeak: true });
+        if (storageCleanupFailed) throw storageError;
         sessionRef.current = null;
         if (signOutRevision !== sessionRevisionRef.current) return;
         clearClientData();
         setSession(null);
         setIsLoading(false);
-        if (storageError) throw storageError;
       });
     } finally {
       if (signOutRevision === sessionRevisionRef.current) sessionOperationsBlockedRef.current = false;
@@ -225,7 +227,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
     }
     const refreshRevision = sessionRevisionRef.current;
     const refreshOperation = (async () => {
-      const refreshedSession = await refreshApiSession(currentSession.accessToken);
+      const refreshedSession = await restoreRefresh.run(currentSession.accessToken, refreshApiSession);
       return runSessionTransition(async () => {
         if (!isCurrentSessionMutation(
           refreshRevision,

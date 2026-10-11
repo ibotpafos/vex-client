@@ -205,7 +205,7 @@
                             <TextBlock Text="Ждем подтверждение в браузере" FontSize="13" FontWeight="Black" Foreground="{StaticResource VexTextBrush}" TextWrapping="Wrap" />
                         </StackPanel>
                     </Border>
-                    <TextBlock x:Name="SignInStatusText" FontSize="12" Foreground="{StaticResource VexSecondaryTextBrush}" TextWrapping="Wrap" />
+                    <TextBlock x:Name="SignInStatusText" AutomationProperties.AutomationId="AccountSignInStatus" FontSize="12" Foreground="{StaticResource VexSecondaryTextBrush}" TextWrapping="Wrap" />
                     <Button x:Name="GoogleSignInButton" AutomationProperties.AutomationId="GoogleSignInButton" Click="OnGoogleSignInClick"
                         Content="Войти через Google" HorizontalAlignment="Stretch" MinHeight="52" FontSize="16" Style="{StaticResource VexGlassButtonStyle}" />
                     <Button x:Name="UnlockSessionButton" AutomationProperties.AutomationId="UnlockSessionButton" Click="OnUnlockSessionClick" Content="Открыть сохраненную сессию"

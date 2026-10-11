@@ -21,6 +21,8 @@ var tests = new (string Name, Action Run)[]
     ("A failed session replacement retains the pending device key", PendingKeySurvivesFailedSessionReplacement),
     ("A failed session replacement retains the confirmed device key", ConfirmedKeySurvivesFailedSessionReplacement),
     ("A failed device replacement prevents a new session commit", FailedDeviceReplacementPreservesPreviousSession),
+    ("Sign-out removes owned session remnants and preserves unrelated recovery files", SessionRemnantsAreCleared),
+    ("A locked session remnant prevents a successful sign-out", LockedSessionRemnantPreventsLogout),
     ("Encrypted legacy device records remain readable without optional recovery fields", LegacyDeviceRecordIsReadable),
 };
 
@@ -148,11 +150,67 @@ static void AssertSessionReplacementFailure(StorageFixture fixture,
     var reopened = fixture.Open();
     Check(reopened.Load() == previous,
         "A failed session replacement must preserve the previous authenticated state.");
+    Check(!Directory.EnumerateFiles(fixture.DirectoryPath, "client-state.bin.new*").Any(),
+        "A failed session replacement must remove its encrypted authentication temporary file.");
     CheckRetained(reopened.LoadDevice(), attempted);
     reopened.Clear();
     var signedOut = fixture.Open();
     CheckSignedOut(signedOut);
+    Check(!Directory.EnumerateFiles(fixture.DirectoryPath, "client-state.bin.new*").Any(),
+        "Sign-out must not leave an encrypted authentication temporary file.");
     CheckRetained(signedOut.LoadDevice(), attempted);
+}
+
+static void SessionRemnantsAreCleared()
+{
+    using var fixture = new StorageFixture();
+    var store = fixture.Open();
+    store.Save(fixture.State with { PendingIdentity = fixture.IdentityB });
+    _ = store.GetOrCreateAsync(CancellationToken.None).GetAwaiter().GetResult();
+    var deviceIdentityPath = Path.Combine(fixture.DirectoryPath, "device-identity.bin");
+    var deviceIdentityBytes = File.ReadAllBytes(deviceIdentityPath);
+    var sessionBytes = File.ReadAllBytes(fixture.SessionPath);
+    var legacy = fixture.SessionPath + ".new";
+    var owned = fixture.SessionPath + ".new-" + Guid.NewGuid().ToString("N");
+    var unrelated = fixture.SessionPath + ".new-unrelated";
+    var deviceTemporary = fixture.DevicePath + ".new-" + Guid.NewGuid().ToString("N");
+    foreach (var path in new[] { legacy, owned })
+        File.WriteAllBytes(path, sessionBytes);
+    File.WriteAllText(unrelated, "unrelated fixture file");
+    File.WriteAllBytes(deviceTemporary, File.ReadAllBytes(fixture.DevicePath));
+
+    store.Clear();
+    CheckSignedOut(fixture.Open());
+    Check(!File.Exists(legacy) && !File.Exists(owned) &&
+        File.Exists(unrelated) && File.Exists(deviceTemporary),
+        "Logout must remove only its exact legacy and GUID-owned session remnants.");
+    CheckRetained(fixture.Open().LoadDevice(), fixture.State with { PendingIdentity = fixture.IdentityB });
+    Check(File.ReadAllBytes(deviceIdentityPath).AsSpan().SequenceEqual(deviceIdentityBytes),
+        "Logout must preserve the independently encrypted device-signing identity exactly.");
+}
+
+static void LockedSessionRemnantPreventsLogout()
+{
+    foreach (var suffix in new[] { ".new", ".new-" + Guid.NewGuid().ToString("N") })
+    {
+        using var fixture = new StorageFixture();
+        var store = fixture.Open();
+        store.Save(fixture.State);
+        var remnant = fixture.SessionPath + suffix;
+        File.WriteAllBytes(remnant, File.ReadAllBytes(fixture.SessionPath));
+        using (var lockedRemnant = new FileStream(remnant, FileMode.Open,
+            FileAccess.Read, FileShare.Read))
+        {
+            CheckStorageWriteFails(store.Clear);
+            Check(fixture.Open().Load() == fixture.State && File.Exists(remnant),
+                "A refused authentication-remnant cleanup must preserve the current session and surface failure.");
+            CheckRetained(fixture.Open().LoadDevice(), fixture.State);
+        }
+        store.Clear();
+        CheckSignedOut(fixture.Open());
+        Check(!File.Exists(remnant), "Logout retry must remove the previously locked session remnant.");
+        CheckRetained(fixture.Open().LoadDevice(), fixture.State);
+    }
 }
 
 static void FailedDeviceReplacementPreservesPreviousSession()

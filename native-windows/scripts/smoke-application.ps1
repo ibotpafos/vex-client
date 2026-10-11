@@ -4,7 +4,7 @@ param(
     [Parameter(Mandatory = $true)][string]$ResultPath,
     [ValidateRange(3, 30)][int]$ObserveSeconds = 10,
     [switch]$DesktopChecks,
-    [ValidateSet('signed-out', 'fixtures')][string]$PreviewMode,
+    [ValidateSet('signed-out', 'fixtures', 'protected-state-fault')][string]$PreviewMode,
     [string]$ScreenshotDirectory
 )
 
@@ -49,8 +49,13 @@ $protocolDiagnosticPath = $null
 $protocolDiagnosticHash = $null
 $trayDiagnosticPath = $null
 $trayDiagnosticHash = $null
+$protectedStateDiagnosticPath = $null
+$protectedStateDiagnosticHash = $null
 $windowHandle = [System.IntPtr]::Zero
-$previewArguments = if ($PreviewMode -eq 'signed-out') {
+$previewArguments = if ($PreviewMode -eq 'protected-state-fault') {
+    '--protected-state-fault-ui-preview'
+}
+elseif ($PreviewMode -eq 'signed-out') {
     '--signed-out-ui-preview'
 }
 else {
@@ -78,6 +83,7 @@ $result = [ordered]@{
     minimized_window_restored_by_protocol = $false
     tray_auth_recovery_without_connect = $false
     tray_auth_recovery_diagnostic = $null
+    protected_state_faults = $null
     preview_protocol_registration = $null
     preview_protocol_diagnostic = $null
     protocol_activation_restored_window = $false
@@ -165,6 +171,85 @@ function Wait-SmokeTrayRecoveryDiagnostic {
         return $true
     }
     return $script:trayRecoveryDiagnostic
+}
+
+function Assert-SmokeProtectedStateDiagnostic {
+    param(
+        [Parameter(Mandatory = $true)]$Diagnostic,
+        [Parameter(Mandatory = $true)][int]$ProcessId,
+        [Parameter(Mandatory = $true)][ValidateSet('Startup', 'Cleanup')][string]$Phase
+    )
+    $expected = [ordered]@{
+        'dpapi-roundtrip' = 'available'; 'invalid-ciphertext' = 'unusable'; 'malformed-json' = 'unusable'
+        'invalid-owner-map' = 'unusable'; 'missing-map' = 'unusable'; 'missing-own-account' = 'unusable'
+        'registration-mismatch' = 'unusable'; 'external-id-mismatch' = 'unusable'
+        'map-sharing-violation' = 'unavailable'; 'map-path-is-directory' = 'unavailable'
+        'map-write-sharing-violation' = 'write-unavailable'; 'authoritative-key-restoration' = 'authoritative'
+    }
+    $stage = if ($Phase -eq 'Cleanup') { 'completed' } else { 'startup-completed' }
+    $properties = @('schema', 'process_id', 'mode', 'stage', 'cases', 'case_count', 'real_current_user_dpapi',
+        'startup_completed', 'startup_access', 'startup_has_stored_session', 'startup_error_reported',
+        'startup_files_preserved', 'owned_directory_removed')
+    foreach ($property in $Diagnostic.PSObject.Properties.Name) {
+        if ($properties -cnotcontains $property) { throw 'Protected-state diagnostic contains an unexpected field.' }
+    }
+    if ($Diagnostic.schema -isnot [string] -or $Diagnostic.schema -cne 'vex.windows.protected-state-faults.v1' -or
+        ($Diagnostic.process_id -isnot [int] -and $Diagnostic.process_id -isnot [long]) -or
+        ($Diagnostic.case_count -isnot [int] -and $Diagnostic.case_count -isnot [long]) -or
+        $Diagnostic.process_id -ne $ProcessId -or $Diagnostic.mode -isnot [string] -or
+        $Diagnostic.mode -cne 'protected-state-fault' -or $Diagnostic.stage -isnot [string] -or
+        $Diagnostic.stage -cne $stage -or $Diagnostic.case_count -ne $expected.Count -or
+        @($Diagnostic.cases).Count -ne $expected.Count -or $Diagnostic.startup_access -isnot [string] -or
+        $Diagnostic.startup_access -cne 'Missing') {
+        throw 'Protected-state runtime diagnostic identity, stage or cases do not match.'
+    }
+    foreach ($property in @('real_current_user_dpapi', 'startup_completed', 'startup_has_stored_session',
+        'startup_error_reported', 'startup_files_preserved')) {
+        if ($Diagnostic.$property -isnot [bool] -or -not $Diagnostic.$property) {
+            throw 'Protected-state runtime diagnostic is missing actual startup/preservation proof.'
+        }
+    }
+    if ($Diagnostic.owned_directory_removed -isnot [bool] -or
+        $Diagnostic.owned_directory_removed -ne ($Phase -eq 'Cleanup')) {
+        throw 'Protected-state runtime diagnostic does not prove the expected owned-directory cleanup.'
+    }
+    $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($case in $Diagnostic.cases) {
+        foreach ($property in $case.PSObject.Properties.Name) {
+            if (@('id', 'passed', 'outcome', 'files_preserved', 'reopened', 'recovered') -cnotcontains $property) {
+                throw 'Protected-state case contains an unexpected field.'
+            }
+        }
+        if ($case.id -isnot [string] -or $expected.Keys -cnotcontains $case.id -or -not $seen.Add($case.id) -or
+            $case.outcome -isnot [string] -or $case.outcome -cne $expected[$case.id]) {
+            throw 'Protected-state runtime diagnostic contains a missing, repeated or wrong case.'
+        }
+        foreach ($property in @('passed', 'files_preserved', 'reopened', 'recovered')) {
+            if ($case.$property -isnot [bool] -or -not $case.$property) {
+                throw 'Protected-state runtime diagnostic contains a failed or unverified case.'
+            }
+        }
+    }
+}
+
+function Wait-SmokeProtectedStateDiagnostic {
+    param([ValidateSet('Startup', 'Cleanup')][string]$Phase)
+    Wait-SmokeCondition -TimeoutSeconds 15 -Failure 'Actual protected-state fixture did not publish the expected runtime proof.' -Condition {
+        if (-not (Test-Path -LiteralPath $protectedStateDiagnosticPath -PathType Leaf)) { return $false }
+        $file = Get-Item -LiteralPath $protectedStateDiagnosticPath
+        if ($file.Length -le 0 -or $file.Length -gt 32768 -or
+            ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw 'Protected-state diagnostic is not a bounded regular file.'
+        }
+        $diagnostic = Get-Content -LiteralPath $protectedStateDiagnosticPath -Raw | ConvertFrom-Json
+        if ($Phase -eq 'Startup' -and $diagnostic.stage -ceq 'matrix-completed') { return $false }
+        Assert-SmokeProtectedStateDiagnostic -Diagnostic $diagnostic -ProcessId $process.Id -Phase $Phase
+        $script:protectedStateDiagnosticHash = (Get-FileHash -LiteralPath $protectedStateDiagnosticPath -Algorithm SHA256).Hash
+        # Export only the fixed, sanitized diagnostic fields; private files stay
+        # in the GUID-owned preview root, outside the artifact directory.
+        $result.protected_state_faults = $diagnostic
+        return $true
+    }
 }
 
 function Assert-PreviewProtocolRegistration {
@@ -529,6 +614,9 @@ try {
     if ($DesktopChecks) {
         $protocolDiagnosticPath = Join-Path ([IO.Path]::GetTempPath()) "vex-ui-preview-protocol-$($process.Id).json"
         $trayDiagnosticPath = Join-Path ([IO.Path]::GetTempPath()) "vex-ui-preview-tray-$($process.Id).json"
+        if ($PreviewMode -eq 'protected-state-fault') {
+            $protectedStateDiagnosticPath = Join-Path ([IO.Path]::GetTempPath()) "vex-ui-preview-protected-state-$($process.Id).json"
+        }
     }
     $deadline = $startedAt.AddSeconds($ObserveSeconds)
     while ([DateTime]::UtcNow -lt $deadline) {
@@ -551,6 +639,14 @@ try {
     Write-Host "WinUI application remained alive for $ObserveSeconds seconds."
     Write-Host "WinUI main window created: $($result.main_window_created)."
     if ($DesktopChecks) {
+        if ($PreviewMode -eq 'protected-state-fault' -and -not $result.main_window_created) {
+            Wait-SmokeCondition -TimeoutSeconds 15 -Failure 'Corrupt scoped store did not reach real WinUI window creation.' -Condition {
+                $process.Refresh()
+                if ($process.HasExited) { throw 'Corrupt scoped store crashed during real WinUI startup.' }
+                $result.main_window_created = $process.MainWindowHandle -ne 0
+                return $result.main_window_created
+            }
+        }
         if (-not $result.main_window_created) { throw 'Desktop preview did not create a main window.' }
         $windowHandle = $process.MainWindowHandle
         Add-Type -AssemblyName UIAutomationClient
@@ -593,6 +689,54 @@ namespace Vex.Windows.Smoke {
             $ScreenshotDirectory = Join-Path (Split-Path -Parent $ResultPath) 'screenshots'
         }
         New-Item -ItemType Directory -Path $ScreenshotDirectory -Force | Out-Null
+        if ($PreviewMode -eq 'protected-state-fault') {
+            $result.stage = 'protected-state-startup'
+            Wait-SmokeProtectedStateDiagnostic -Phase Startup
+            Wait-SmokeCondition -Failure 'Corrupt scoped session did not display its recovery error in the login UI.' -Condition {
+                $status = Find-SmokeElement -AutomationId 'AccountSignInStatus'
+                $signIn = Find-SmokeElement -AutomationId 'WebsiteSignInButton'
+                $null -ne $status -and -not $status.Current.IsOffscreen -and
+                    $status.Current.Name -ceq 'Сохраненная сессия повреждена или недоступна для этого пользователя Windows. Выполните вход заново.' -and
+                    $null -ne $signIn -and -not $signIn.Current.IsOffscreen -and $signIn.Current.IsEnabled
+            }
+            Save-SmokeScreenshot -Name 'startup-error' -StableAutomationIds @('AccountSignInTitle', 'WebsiteSignInButton', 'AccountSignInStatus')
+            $result.stage = 'protected-state-tray-recovery'
+            if (-not [Vex.Windows.Smoke.NativeMethods]::PostMessage($windowHandle, 0x10, [System.IntPtr]::Zero, [System.IntPtr]::Zero)) {
+                throw 'Unable to hide the faulted preview before tray recovery.'
+            }
+            Wait-SmokeCondition -Failure 'Faulted preview did not hide before tray recovery.' -Condition {
+                -not [Vex.Windows.Smoke.NativeMethods]::IsWindowVisible($windowHandle)
+            }
+            Invoke-RedirectedLaunch -Arguments '--ui-smoke-tray-connect'
+            $result.tray_auth_recovery_diagnostic = Wait-SmokeTrayRecoveryDiagnostic -Scenario 'signed-out' -Access 'Missing'
+            Wait-SmokeCondition -Failure 'Faulted preview did not restore the recovery UI.' -Condition {
+                $status = Find-SmokeElement -AutomationId 'AccountSignInStatus'
+                [Vex.Windows.Smoke.NativeMethods]::IsWindowVisible($windowHandle) -and
+                    $null -ne $status -and -not $status.Current.IsOffscreen
+            }
+            $result.tray_auth_recovery_without_connect = $true
+            $result.stage = 'protected-state-clean-exit'
+            $exitRequest = Start-Process -FilePath $ApplicationPath -ArgumentList '--ui-smoke-exit' `
+                -WorkingDirectory (Split-Path -Parent $ApplicationPath) -PassThru
+            $ownedProcesses.Add($exitRequest)
+            if (-not $exitRequest.WaitForExit(10000) -or $exitRequest.ExitCode -ne 0 -or
+                -not $process.WaitForExit(10000) -or $process.ExitCode -ne 0) {
+                throw 'Faulted preview did not exit cleanly.'
+            }
+            $result.clean_exit_code = $process.ExitCode
+            $result.exit_code = $process.ExitCode
+            $result.clean_exit = $true
+            Wait-SmokeProtectedStateDiagnostic -Phase Cleanup
+            $result.preview_protocol_unregistered = -not (Test-Path -LiteralPath $previewProtocolKey)
+            $result.service_absent_after_checks = -not [bool](Get-Service -Name 'VEX VPN Service', 'AmneziaWGTunnel$vex' -ErrorAction SilentlyContinue)
+            $result.saved_session_absent_after_checks = -not (Test-Path -LiteralPath $sessionPath)
+            if (-not $result.preview_protocol_unregistered -or -not $result.service_absent_after_checks -or
+                -not $result.saved_session_absent_after_checks) {
+                throw 'Faulted preview left protocol registration, VPN service or production session state.'
+            }
+            Write-Host "Actual application DPAPI fault checks passed: cases=$($result.protected_state_faults.case_count); startup=True; recovery-connects=0; cleanup=True."
+        }
+        else {
         $result.stage = 'initial-screenshot'
         $captureControlIds = if ($PreviewMode -eq 'signed-out') {
             @('AccountSignInTitle', 'WebsiteSignInButton')
@@ -856,12 +1000,9 @@ namespace Vex.Windows.Smoke {
         $result.stage = 'protocol-registration'
         Assert-PreviewProtocolRegistration
         $result.stage = 'minimized-protocol-activation'
-        # The redirected activation can still be finishing Activate/BringToFront
-        # after ShowWindow made the preview visible. Queue the actual caption
-        # minimize command on the owning UI thread after that callback.
-        if (-not [Vex.Windows.Smoke.NativeMethods]::PostMessage($windowHandle, 0x112, [System.IntPtr]0xF020, [System.IntPtr]::Zero)) {
-            throw 'Unable to queue the preview window minimize command.'
-        }
+        # A redirected launch can exit after enqueueing its UI activation.
+        # Serialize minimization behind that callback on the same dispatcher.
+        Invoke-RedirectedLaunch -Arguments '--ui-smoke-minimize'
         Wait-SmokeCondition -Failure 'Preview did not minimize before protocol activation.' -Condition {
             [Vex.Windows.Smoke.NativeMethods]::IsIconic($windowHandle)
         }
@@ -924,6 +1065,7 @@ namespace Vex.Windows.Smoke {
             throw 'UI preview created VPN service or production session state.'
         }
         Write-Host "WinUI desktop checks passed: $PreviewMode; screenshots=$($result.screenshots.Count); single-instance=True; protocol-restored=True; clean-exit=True."
+        }
     }
     $result.stage = 'completed'
 }
@@ -956,6 +1098,13 @@ finally {
             Remove-Item -LiteralPath $trayDiagnosticPath
         }
     }
+    if ($null -ne $protectedStateDiagnosticHash -and (Test-Path -LiteralPath $protectedStateDiagnosticPath -PathType Leaf)) {
+        $diagnosticFile = Get-Item -LiteralPath $protectedStateDiagnosticPath
+        if (($diagnosticFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0 -and
+            (Get-FileHash -LiteralPath $protectedStateDiagnosticPath -Algorithm SHA256).Hash -ceq $protectedStateDiagnosticHash) {
+            Remove-Item -LiteralPath $protectedStateDiagnosticPath
+        }
+    }
     if ($previousDpiContext -ne [System.IntPtr]::Zero) {
         [void][Vex.Windows.Smoke.NativeMethods]::SetThreadDpiAwarenessContext($previousDpiContext)
     }
@@ -986,7 +1135,13 @@ finally {
                 }
             }
     )
+    if ($PreviewMode -eq 'protected-state-fault' -and $result.crash_events.Count -gt 0) {
+        $result.stage = 'crash-event-detected'
+    }
     $directory = Split-Path -Parent $ResultPath
     New-Item -ItemType Directory -Path $directory -Force | Out-Null
     $result | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $ResultPath -Encoding utf8
+    if ($PreviewMode -eq 'protected-state-fault' -and $result.crash_events.Count -gt 0) {
+        throw 'Protected-state runtime emitted an application crash event.'
+    }
 }

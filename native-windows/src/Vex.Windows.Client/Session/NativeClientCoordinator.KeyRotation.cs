@@ -58,14 +58,17 @@ public sealed partial class NativeClientCoordinator
         CancellationToken cancellationToken, ManagedVpnProfile? observedProfile = null)
     {
         if (state.PendingIdentity is not { } pending) return state;
+        var intent = Volatile.Read(ref _accountIntent);
         if (pending.KeyEpoch < 1)
             throw new NativeClientFlowException("vpn_key_rotation_failed");
         var profile = observedProfile ?? await GetProfileAsync(state, null, null, cancellationToken)
             .WaitAsync(cancellationToken).ConfigureAwait(false);
-        cancellationToken.ThrowIfCancellationRequested();
+        EnsureAccountIntent(intent, cancellationToken);
         var observed = ReadProfileClientIdentity(state, profile);
         if (observed is not null)
         {
+            if (observed.Epoch < state.Identity.KeyEpoch)
+                throw new VexApiException(HttpStatusCode.BadGateway, "api_response_invalid");
             if (observed.PublicKey == pending.PublicKey && observed.Epoch >= pending.KeyEpoch)
                 return CommitPendingIdentity(state, pending with { KeyEpoch = observed.Epoch }, cancellationToken);
             if (observed.PublicKey != state.Identity.PublicKey || observed.Epoch < state.Identity.KeyEpoch)
@@ -89,15 +92,14 @@ public sealed partial class NativeClientCoordinator
             pending, cancellationToken).WaitAsync(cancellationToken).ConfigureAwait(false);
         // Idempotency replay returns the current device, not the historical
         // rotation result. Never commit a key solely because POST returned 200.
-        if (rotated is null || rotated.Id != state.DeviceId || rotated.PublicKey != pending.PublicKey)
-            throw new VexApiException(HttpStatusCode.BadGateway, "api_response_invalid");
+        ValidateAcknowledgement(rotated, state.Session, pending, state.DeviceId, allowEpochAdvance: true);
         // The exact device/public-key acknowledgement confirms acceptance of
         // this private key. Retain it before another request can fail or cancel.
         state = CommitPendingIdentity(state, pending, CancellationToken.None);
-        cancellationToken.ThrowIfCancellationRequested();
+        EnsureAccountIntent(intent, cancellationToken);
         profile = await GetProfileAsync(state, null, null, cancellationToken)
             .WaitAsync(cancellationToken).ConfigureAwait(false);
-        cancellationToken.ThrowIfCancellationRequested();
+        EnsureAccountIntent(intent, cancellationToken);
         observed = ReadProfileClientIdentity(state, profile);
         if (observed is not null && (observed.PublicKey != pending.PublicKey || observed.Epoch < pending.KeyEpoch))
             throw new VexApiException(HttpStatusCode.BadGateway, "api_response_invalid");
@@ -121,6 +123,7 @@ public sealed partial class NativeClientCoordinator
         var saved = RequireCurrentState();
         if (saved.Session.User.Id != state.Session.User.Id || saved.Session.AccessToken != state.Session.AccessToken ||
             saved.InstallationId != state.InstallationId || saved.DeviceId != state.DeviceId ||
+            saved.VpnRegistrationId != state.VpnRegistrationId || saved.VpnExternalDeviceId != state.VpnExternalDeviceId ||
             saved.Identity != state.Identity || saved.PendingIdentity != state.PendingIdentity)
             throw new NativeClientFlowException("session_changed");
         return saved;

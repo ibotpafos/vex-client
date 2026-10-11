@@ -15,6 +15,85 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
+if (args is ["--account-recovery-epoch-floor-regression"])
+{
+    try
+    {
+        AccountVpnIdentityTests.RunRecoveryEpochFloorRegression();
+        Console.WriteLine("PASS account recovery epoch floor regression: 4 recovery and 2 rebind cases");
+    }
+    catch (Exception error)
+    {
+        Console.Error.WriteLine("FAIL account recovery epoch floor regression: " + error.Message);
+        Environment.ExitCode = 1;
+    }
+    return;
+}
+
+if (args is ["--account-migration-retry-regression"])
+{
+    try
+    {
+        AccountVpnIdentityTests.RunMigrationRetryRegression();
+        Console.WriteLine("PASS account migration retry/reopen regression");
+    }
+    catch (Exception error)
+    {
+        Console.Error.WriteLine("FAIL account migration retry/reopen regression: " + error.Message);
+        Environment.ExitCode = 1;
+    }
+    return;
+}
+
+if (args is ["--retained-device-identity-regression"])
+{
+    try
+    {
+        RetainedDeviceIdentityRecoveryTests.Run();
+        Console.WriteLine("PASS retained device identity regression: 18 recovery cases");
+    }
+    catch (Exception error)
+    {
+        Console.Error.WriteLine("FAIL retained device identity regression: " + error.Message);
+        Environment.ExitCode = 1;
+    }
+    return;
+}
+
+if (args is ["--mapped-profile-identity-regression"] or
+    ["--mapped-profile-identity-regression", "alignment" or "pending-rebase"])
+{
+    try
+    {
+        if (args is [_, "alignment"]) ProfileIdentityRecoveryTests.RunMappedAlignment();
+        else if (args is [_, "pending-rebase"]) ProfileIdentityRecoveryTests.RunMappedPendingRebase();
+        else ProfileIdentityRecoveryTests.RunMapped();
+        Console.WriteLine("PASS mapped profile identity regression" +
+            (args.Length == 2 ? ": " + args[1] : ": 11 coordinator cases, 11 durable map rejection cases and authoritative device restoration"));
+    }
+    catch (Exception error)
+    {
+        Console.Error.WriteLine("FAIL mapped profile identity regression: " + error.Message);
+        Environment.ExitCode = 1;
+    }
+    return;
+}
+
+if (args is ["--account-vpn-epoch-regression"])
+{
+    try
+    {
+        AccountVpnIdentityTests.RunRegistrationEpochRegression();
+        Console.WriteLine("PASS authoritative registration epoch replay regression");
+    }
+    catch (Exception error)
+    {
+        Console.Error.WriteLine("FAIL authoritative registration epoch replay regression: " + error.Message);
+        Environment.ExitCode = 1;
+    }
+    return;
+}
+
 var tests = new (string Name, Action Run)[]
 {
     ("Native installer rejects changed bundles and retains verified file locks", WindowsSetupBundleTests.Run),
@@ -32,6 +111,7 @@ var tests = new (string Name, Action Run)[]
     ("Service repair verifies trusted health, ownership, cancellation and bounded retries", ServiceMaintenanceTests.Run),
     ("Browser authentication cancellation rejects late sessions and preserves fresh attempts", NativeAuthServiceTests.Run),
     ("Authenticated accounts defer VPN registration and preserve session through provisioning failures", AuthenticatedSessionProvisioningTests.Run),
+    ("Account switches retain independent VPN registrations and device keys", AccountVpnIdentityTests.Run),
     ("API errors preserve safe MFA guidance and device quota contracts", VexApiErrorContractTests.Run),
     ("Startup survives package upgrades and honors Windows ownership and disable states", StartupRegistrationTests.Run),
     ("Automatic update failures preserve retry and lifetime cancellation", NativeUpdateFailureTests.Run),
@@ -156,6 +236,7 @@ var tests = new (string Name, Action Run)[]
     ("Native client refreshes expiring session at refresh boundary", NativeClientRefreshesExpiringSessionAtBoundary),
     ("Native client rotates an expired device key before connect", NativeClientRotatesExpiredKey),
     ("Profile identity follows server PSK epochs and confirms durable key recovery", ProfileIdentityRecoveryTests.Run),
+    ("Mapped profile epochs preserve exact pairs, pending recovery and account CAS fencing", ProfileIdentityRecoveryTests.RunMapped),
     ("Retained device keys recover ambiguous rotations across sign-out and reauthentication", RetainedDeviceIdentityRecoveryTests.Run),
     ("Native client preserves manual location and routing preferences", NativeClientPreservesManualVpnPreferences),
     ("Native client gates VPN connect on entitlement", NativeClientGatesConnectOnEntitlement),
@@ -1490,7 +1571,9 @@ static void WindowsRegistrationUsesVerifiedDeviceIdentity()
     Equal("/v1/devices/identity-challenge", handler.Requests[0].RequestUri!.AbsolutePath);
     Equal("/v1/devices/register", handler.Requests[1].RequestUri!.AbsolutePath);
     Equal(
-        "native-windows-register-win-installation-1-1-verified",
+        "native-windows-register-win-installation-1-1-verified-" +
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")))[..16].ToLowerInvariant() + "-" +
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("win-installation-1")))[..16].ToLowerInvariant(),
         handler.Requests[1].Headers.GetValues("Idempotency-Key").Single());
 
     using var challengeBody = JsonDocument.Parse(handler.Bodies[0]!);
@@ -3457,6 +3540,10 @@ sealed class RoutingHttpHandler : HttpMessageHandler
 
 sealed class MemoryClientStateStore : IClientStateStore
 {
+    public IVpnAccountIdentityStore AccountVpnIdentities { get; }
+    public MemoryClientStateStore(IVpnAccountIdentityStore? identities = null) =>
+        AccountVpnIdentities = identities ?? new MemoryVpnAccountIdentityStore();
+    private NativeDeviceState? _retainedDevice;
     public ClientStateAccessKind GetAccessState() =>
         State is null
             ? ClientStateAccessKind.Missing
@@ -3464,20 +3551,36 @@ sealed class MemoryClientStateStore : IClientStateStore
 
     public string GetOrCreateInstallationId() => "win-installation-1";
 
-    public NativeDeviceState? LoadDevice() =>
-        State is null
-            ? null
-            : new NativeDeviceState(
-                State.InstallationId,
-                State.DeviceId,
-                State.LocationId,
-                State.Identity);
+    public NativeDeviceState? LoadDevice() => _retainedDevice;
 
     public NativeClientState? State { get; private set; }
 
     public NativeClientState? Load() => State;
 
-    public void Save(NativeClientState state) => State = state;
+    public void Save(NativeClientState state)
+    {
+        NativeVpnAccountIdentitySynchronization.Save(AccountVpnIdentities, state);
+        if (!state.VpnProvisioningPending && state.VpnRegistrationId is null)
+            SaveDevice(NativeDeviceState.FromClientState(state));
+        State = state;
+    }
+    public void SaveDevice(NativeDeviceState state) => _retainedDevice = state;
+
+    // Tests that model an independently committed account/key change update
+    // both authoritative stores explicitly, rather than use a stale session save.
+    public void SetExternalSnapshot(NativeClientState state)
+    {
+        if (state.VpnRegistrationId is not null)
+        {
+            var map = AccountVpnIdentities.Load(state.Session.User.Id);
+            var replacement = new NativeVpnAccountIdentity(state.Session.User.Id, state.VpnRegistrationId,
+                state.VpnExternalDeviceId!, state.Identity, state.DeviceId, state.LocationId, state.PendingIdentity);
+            if (map is null) AccountVpnIdentities.GetOrAdd(replacement);
+            else AccountVpnIdentities.Replace(map, replacement);
+        }
+        State = state;
+    }
+    public void SetLegacyDeviceForTest(NativeDeviceState device) => _retainedDevice = device;
 
     public void Clear() => State = null;
 }

@@ -25,7 +25,8 @@ internal static class UiPreviewFixtures
         {
             schema = "vex.windows.ui-preview-tray-recovery.v1",
             process_id = Environment.ProcessId,
-            preview_mode = UiPreviewContext.IsAuthenticated ? "fixtures" : "signed-out",
+            preview_mode = UiPreviewContext.IsProtectedStateFaultPreview ? "protected-state-fault" :
+                UiPreviewContext.IsAuthenticated ? "fixtures" : "signed-out",
             scenario,
             access = services.Coordinator.CurrentStateAccess.ToString(),
             connect_requests = Volatile.Read(ref _connectRequests),

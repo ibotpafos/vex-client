@@ -1,6 +1,6 @@
 import type { AuthSession } from '../api/vexApi';
 
-// A successful startup refresh revokes the stored token. Keep one response
+// A successful refresh revokes the stored token. Keep one response
 // across provider remounts until its replacement can reach durable storage.
 export function createSessionRestoreRefresh() {
   let flight: { accessToken: string; promise: Promise<AuthSession> } | null = null;

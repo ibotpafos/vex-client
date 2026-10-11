@@ -413,6 +413,17 @@ page while its status request is pending, then verifies the resumed refresh.
 HTTP, realtime and service calls use offline fixtures. Release builds cannot
 enable those fixtures. Their PNG captures accompany the unsigned review builds.
 
+An additional Debug-only x64 preview exercises the application's real CurrentUser
+DPAPI account map with corrupt ciphertext/JSON, missing or mismatched ownership,
+actual Windows file-sharing/access failures and atomic-write rejection. It checks
+that original protected files remain intact, unavailable sessions retain their
+stored-session evidence, and a fresh store can recover after explicit fixture
+repair. A separate unread corrupt scoped session then enters real WinUI startup
+and authentication recovery without connecting. Its bounded diagnostic contains
+only case outcomes and preservation/cleanup flags. These Windows adapter cases
+are counted separately from the portable core groups; private fixture state is
+removed on clean exit and excluded from artifacts.
+
 A macOS job renders the existing SwiftUI Home, Account, Settings, server sidebar
 and sign-in screens with its native Debug renderer for visual comparison. A
 separate fresh Windows x64 job qualifies the pinned AmneziaWG 3.1.0 CLI and

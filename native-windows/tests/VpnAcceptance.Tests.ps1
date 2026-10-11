@@ -6,7 +6,8 @@ $source = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '../scripts/invoke-vpn
 $tokens = $null; $errors = $null
 $ast = [Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$errors)
 if ($errors.Count -ne 0) { throw 'VPN acceptance fixture does not parse.' }
-foreach ($name in @('Resolve-FixtureTool', 'Invoke-FixtureProcess', 'Resolve-FixtureHostAddress', 'Read-FixtureEndpointRoutes')) {
+foreach ($name in @('Resolve-FixtureTool', 'Invoke-FixtureProcess', 'Resolve-FixtureHostAddress',
+    'Read-FixtureEndpointRoutes', 'Assert-FixtureHarnessResult')) {
     $functions = @($ast.FindAll({
         param($node)
         $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
@@ -32,6 +33,58 @@ foreach ($name in @('go', 'dotnet')) {
     Invoke-FixtureProcess -FilePath $tool -Arguments @('-NoProfile', '-NonInteractive', '-Command', 'exit 0') -TimeoutSeconds 10
 }
 Write-Output 'VPN acceptance SDK resolution and actual child-process regression passed.'
+
+# Import the exact wrapper validator above; missing, false or truthy non-boolean
+# connected-owner death evidence must fail even if the producer claims passed.
+$summary = [ordered]@{
+    schema = 'vex.windows-vpn-acceptance.v1'; passed = $true
+    full_tunnel_checks_requested = $true; actual_public_internet_vpn_egress_verified = $false
+}
+$scmFlags = @('scm_private_pipe_authenticated', 'scm_bad_token_rejected', 'scm_raw_config_rejected',
+    'scm_tampered_profile_rejected', 'scm_signed_connect_verified', 'scm_status_diagnostics_verified',
+    'scm_crash_status_restored', 'scm_disconnect_verified', 'scm_disconnect_survived_restart',
+    'scm_stop_cleanup_verified', 'scm_graceful_stop_survived_restart',
+    'scm_authorization_expiry_cleanup_verified', 'scm_fixture_service_removed')
+$fullFlags = @('full_tunnel_dns_verified', 'full_tunnel_https_verified',
+    'full_control_plane_https_bypass_verified', 'full_physical_tcp_prebaseline_verified',
+    'full_physical_tcp_blocked', 'full_physical_tcp_restored', 'full_vendor_demand_start_verified',
+    'full_vendor_routes_verified', 'full_physical_route_retained_verified', 'full_anti_leak_enabled',
+    'full_controller_death_watchdog_verified', 'full_owned_cleanup_verified')
+$activeFlags = @('full_active_controller_connected_verified', 'full_active_controller_death_cleanup_verified',
+    'full_active_controller_network_restored_verified', 'full_active_controller_lease_not_expired_verified')
+foreach ($field in $scmFlags + $fullFlags + $activeFlags) { $summary[$field] = $true }
+foreach ($field in @('full_physical_dns_supported', 'full_physical_dns_blocked', 'full_physical_dns_restored')) {
+    $summary[$field] = $false
+}
+Assert-FixtureHarnessResult -Result ([pscustomobject]$summary) -FullTunnelChecks
+foreach ($field in $scmFlags + $fullFlags + $activeFlags + @('passed')) {
+    foreach ($invalid in @($false, 'true', 1, $null, 'missing')) {
+        $candidate = $summary | ConvertTo-Json -Depth 4 | ConvertFrom-Json
+        if ($invalid -is [string] -and $invalid -ceq 'missing') { $candidate.PSObject.Properties.Remove($field) }
+        else { $candidate.$field = $invalid }
+        $rejected = $false
+        try { Assert-FixtureHarnessResult -Result $candidate -FullTunnelChecks } catch { $rejected = $true }
+        if (-not $rejected) { throw "Fixture accepted missing or non-true mandatory evidence: $field" }
+    }
+}
+foreach ($field in @('full_physical_dns_supported', 'full_physical_dns_blocked', 'full_physical_dns_restored')) {
+    $summary[$field] = $true
+}
+Assert-FixtureHarnessResult -Result ([pscustomobject]$summary) -FullTunnelChecks
+$summary.full_physical_dns_restored = $false
+$rejected = $false
+try { Assert-FixtureHarnessResult -Result ([pscustomobject]$summary) -FullTunnelChecks } catch { $rejected = $true }
+if (-not $rejected) { throw 'Fixture accepted unconfirmed supported physical DNS restoration.' }
+$summary.full_physical_dns_restored = $true
+$summary.full_tunnel_checks_requested = $false
+$rejected = $false
+try { Assert-FixtureHarnessResult -Result ([pscustomobject]$summary) -FullTunnelChecks } catch { $rejected = $true }
+if (-not $rejected) { throw 'Fixture accepted a narrow-route result as FULL qualification.' }
+foreach ($field in $fullFlags + $activeFlags + @('full_physical_dns_supported', 'full_physical_dns_blocked', 'full_physical_dns_restored')) {
+    $summary.Remove($field)
+}
+Assert-FixtureHarnessResult -Result ([pscustomobject]$summary)
+Write-Output 'VPN acceptance source-bound mandatory SCM/FULL/active-controller summary regressions passed.'
 
 function Get-NetAdapter {
     param([switch]$Physical)

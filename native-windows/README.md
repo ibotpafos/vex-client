@@ -261,6 +261,17 @@ script pins before enabling installation. Unsigned review launchers without
 embedded metadata refuse installation. No IPC
 credential or other secret is present in those artifacts.
 
+New release candidates record `source_commit` from the actual Git checkout and
+pass it as `SourceRevisionId` to app and service builds. Packaging rejects changed
+tracked files and untracked, non-ignored checkout inputs outside its generated output trees,
+then rechecks the checkout before completing metadata and Setup. The publisher
+requires the same canonical commit for both architectures before creating output
+and preserves it in the bootstrap entry and signed update manifest. This records
+declared checkout lineage; it does not prove a reproducible build or attest the
+external toolchain, configuration above the checkout or supplied runtime assets.
+The additive field preserves reader compatibility. Existing
+published packages and update metadata remain unchanged.
+
 The keyring is release-generated and contains public keys only:
 
 ```json
@@ -435,7 +446,16 @@ the explicit `full_tunnel_checks=true` manual mode then verify full IPv4
 routing, actual AntiLeak, tunnel DNS/HTTPS,
 physical control-plane HTTPS, blocked/restored outside TCP, demand-start vendor
 registration, controller-death detection with an owned idle probe, and graceful
-SCM/tunnel cleanup. Active-tunnel cleanup after controller death remains separate.
+SCM/tunnel cleanup. The full-tunnel harness additionally requires an owned IPC
+fixture controller to establish an encrypted, protected tunnel before the parent
+terminates that exact controller process. A nonce-bound, bounded receipt verifies
+process identity, recent tunnel traffic and AntiLeak before termination. The
+parent then observes autonomous service, adapter, route and journal cleanup and
+restored physical TCP/DNS before the signed lease expires; it sends no disconnect
+or stop command during observation. Failed observation remains a failed check
+even if final cleanup succeeds. This qualifies fixture-owner death, not installed
+application crash policy: closing the production window keeps its tray session,
+and an application crash may leave a valid service-owned tunnel running.
 Its encrypted peer has no public
 Internet forwarding; actual public VPN egress, roaming and physical ARM64
 acceptance remain separate. Full routing uses paired `/1` routes so the vendor

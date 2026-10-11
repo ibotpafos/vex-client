@@ -27,7 +27,9 @@ internal static class FullTunnelAcceptance
             "full_physical_tcp_blocked", "full_physical_tcp_restored", "full_physical_dns_supported",
             "full_physical_dns_blocked", "full_physical_dns_restored", "full_vendor_demand_start_verified",
             "full_vendor_routes_verified", "full_physical_route_retained_verified", "full_anti_leak_enabled",
-            "full_controller_death_watchdog_verified", "full_owned_cleanup_verified" }) result[flag] = false;
+            "full_controller_death_watchdog_verified", "full_owned_cleanup_verified",
+            "full_active_controller_connected_verified", "full_active_controller_death_cleanup_verified",
+            "full_active_controller_network_restored_verified", "full_active_controller_lease_not_expired_verified" }) result[flag] = false;
         Require(Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true" &&
             Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT") == "github-hosted" && OperatingSystem.IsWindows(),
             "fixture_full_requires_disposable_host");
@@ -155,9 +157,13 @@ internal static class FullTunnelAcceptance
                 }
                 result["full_physical_tcp_restored"] = true;
             }, token);
+        // A separate IPC owner dies while actively carrying encrypted traffic.
+        // Keep the original orderly disconnect and all its assertions above.
+        await ControllerDeathAcceptance.RunAsync(directory, runtimeDirectory, outside,
+            dnsSupported ? physicalDns : null, source, index, result, token);
     }
 
-    private static void RequireProtected(VpnServiceResponse response) => Require(response.Success &&
+    internal static void RequireProtected(VpnServiceResponse response) => Require(response.Success &&
         response.Snapshot.Phase == VpnConnectionPhase.Connected &&
         response.Snapshot.Diagnostics is { IsUsable: true, LeakProtection: VpnLeakProtectionState.Armed },
         "fixture_full_protection_not_usable");
@@ -174,7 +180,7 @@ internal static class FullTunnelAcceptance
         catch { socket.Dispose(); throw; }
     }
 
-    private static void VerifyPhysicalRoute(IPAddress source, int index, IPAddress destination)
+    internal static void VerifyPhysicalRoute(IPAddress source, int index, IPAddress destination)
     {
         // Query the production ABI with the same explicit interface constraint
         // as the probe socket. A missing physical route must not pass as an
@@ -194,7 +200,7 @@ internal static class FullTunnelAcceptance
             "fixture_full_physical_route_missing");
     }
 
-    private static async Task<bool> TcpReachableAsync(IPAddress source, int index, IPAddress destination,
+    internal static async Task<bool> TcpReachableAsync(IPAddress source, int index, IPAddress destination,
         TimeSpan budget, CancellationToken token)
     {
         using var socket = PhysicalSocket(source, index, SocketType.Stream, ProtocolType.Tcp);
@@ -230,7 +236,7 @@ internal static class FullTunnelAcceptance
         // cookie, redirect, response body or production account enters evidence.
     }
 
-    private static async Task<bool> PhysicalDnsReachableAsync(IPAddress source, int index, IPAddress destination,
+    internal static async Task<bool> PhysicalDnsReachableAsync(IPAddress source, int index, IPAddress destination,
         TimeSpan budget, CancellationToken token)
     {
         using var socket = PhysicalSocket(source, index, SocketType.Dgram, ProtocolType.Udp);

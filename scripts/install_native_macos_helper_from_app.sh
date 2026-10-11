@@ -21,8 +21,8 @@ for resource in awg amneziawg-go awg-quick.sh vex-helper; do
   [[ -x "${resource_dir}/${resource}" ]] || fail "missing executable helper resource: ${resource}"
 done
 [[ -r "${resource_dir}/helper-version" ]] || fail "missing readable helper resource: helper-version"
-# Fixed approved Apple team or exact local leaf certificate; never environment trust.
-app_requirement='identifier "app.vex.vpn.native" and (certificate leaf = H"c6fd1853a177fbcfb04c5d4f78fbe405777b3a3e" or (anchor apple generic and certificate leaf[subject.OU] = "3JLW9XNU53"))'
+# Fixed approved Apple team or exact local/production leaf certificates; never environment trust.
+app_requirement='identifier "app.vex.vpn.native" and (certificate leaf = H"c6fd1853a177fbcfb04c5d4f78fbe405777b3a3e" or certificate leaf = H"57864e103373517a0f3cd82e9c9a651c54effc79" or (anchor apple generic and certificate leaf[subject.OU] = "3JLW9XNU53"))'
 /usr/bin/codesign --verify --deep --strict -R="${app_requirement}" "${APP_PATH}" || fail "app bundle signature or pinned identity verification failed"
 
 shell_quote() {

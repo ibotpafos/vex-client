@@ -772,8 +772,8 @@ public sealed partial class SettingsPage : Page
             Environment.OSVersion.VersionString,
             System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture
                 .ToString().ToLowerInvariant(),
-            "native-windows-1",
-            1);
+            NativeApiCompatibility.ApiClientVersion,
+            NativeApiCompatibility.ConfigSchemaVersion);
         try
         {
             var configuration = await _services.Coordinator.GetRemoteConfigAsync(metadata, cancellationToken);

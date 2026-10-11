@@ -644,6 +644,7 @@ internal static class CustomerRealtimeSessionTests
 
     private sealed class CountingStateStore : IClientStateStore
     {
+        public IVpnAccountIdentityStore AccountVpnIdentities { get; } = new MemoryVpnAccountIdentityStore();
         public NativeClientState? State { get; private set; }
         public int ClearCount { get; private set; }
         public ClientStateAccessKind GetAccessState() => State is null ? ClientStateAccessKind.Missing : ClientStateAccessKind.Available;
@@ -651,7 +652,7 @@ internal static class CustomerRealtimeSessionTests
         public NativeClientState? Load() => State;
         public NativeDeviceState? LoadDevice() => State is null ? null
             : new(State.InstallationId, State.DeviceId, State.LocationId, State.Identity);
-        public void Save(NativeClientState state) => State = state;
+        public void Save(NativeClientState state) { NativeVpnAccountIdentitySynchronization.Save(AccountVpnIdentities, state); State = state; }
         public void Clear()
         {
             ClearCount++;

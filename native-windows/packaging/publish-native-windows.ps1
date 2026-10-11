@@ -6,6 +6,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'ReleaseValidation.ps1')
 
 function Get-RequiredEnv {
     param([Parameter(Mandatory = $true)][string]$Name)
@@ -41,8 +42,8 @@ function Normalize-Origin {
     if ($parsedOrigin.Scheme -ne 'https') {
         throw 'VEX_WINDOWS_UPDATE_ORIGIN must use https.'
     }
-    if ($parsedOrigin.Query -or $parsedOrigin.Fragment) {
-        throw 'VEX_WINDOWS_UPDATE_ORIGIN cannot contain query or fragment components.'
+    if ($parsedOrigin.Query -or $parsedOrigin.Fragment -or $parsedOrigin.UserInfo) {
+        throw 'VEX_WINDOWS_UPDATE_ORIGIN cannot contain credentials, query or fragment components.'
     }
 
     return $parsedOrigin.ToString().TrimEnd('/') + '/'
@@ -51,7 +52,8 @@ function Normalize-Origin {
 function ConvertTo-Base64Signature {
     param(
         [Parameter(Mandatory = $true)][byte[]]$Payload,
-        [Parameter(Mandatory = $true)][string]$PrivateKeyBase64
+        [Parameter(Mandatory = $true)][string]$PrivateKeyBase64,
+        [Parameter(Mandatory = $true)][string]$PublicKeyBase64
     )
 
     $signerProject = Join-Path `
@@ -62,10 +64,15 @@ function ConvertTo-Base64Signature {
     }
     $previousKey = [Environment]::GetEnvironmentVariable(
         'VEX_WINDOWS_UPDATE_PRIVATE_KEY_BASE64')
+    $previousPublicKey = [Environment]::GetEnvironmentVariable(
+        'VEX_WINDOWS_UPDATE_PUBLIC_KEY_BASE64')
     try {
         [Environment]::SetEnvironmentVariable(
             'VEX_WINDOWS_UPDATE_PRIVATE_KEY_BASE64',
             $PrivateKeyBase64)
+        [Environment]::SetEnvironmentVariable(
+            'VEX_WINDOWS_UPDATE_PUBLIC_KEY_BASE64',
+            $PublicKeyBase64)
         $payloadBase64 = [Convert]::ToBase64String($Payload)
         $signerOutput = @(
             dotnet run `
@@ -94,6 +101,39 @@ function ConvertTo-Base64Signature {
         [Environment]::SetEnvironmentVariable(
             'VEX_WINDOWS_UPDATE_PRIVATE_KEY_BASE64',
             $previousKey)
+        [Environment]::SetEnvironmentVariable(
+            'VEX_WINDOWS_UPDATE_PUBLIC_KEY_BASE64',
+            $previousPublicKey)
+    }
+}
+
+function Get-WindowsReleasePolicy {
+    param(
+        [Parameter(Mandatory = $true)][string]$Version,
+        [string]$MinimumSupportedVersion,
+        [string]$RequiredVersionFloor,
+        [bool]$RequiredUpdate = $false,
+        [ValidateRange(0, 100)][int]$RolloutPercent = 100
+    )
+
+    $normalizedVersion = ConvertTo-WindowsPackageVersion $Version
+    $minimum = if ([string]::IsNullOrWhiteSpace($MinimumSupportedVersion)) { $null }
+               else { ConvertTo-WindowsPackageVersion $MinimumSupportedVersion }
+    $floor = if (-not [string]::IsNullOrWhiteSpace($RequiredVersionFloor)) {
+        ConvertTo-WindowsPackageVersion $RequiredVersionFloor
+    }
+    elseif ($null -ne $minimum) { $minimum }
+    else { '0.0.0.0' }
+    if ([version]$floor -gt [version]$normalizedVersion -or
+        ($null -ne $minimum -and [version]$minimum -gt [version]$normalizedVersion)) {
+        throw 'A Windows release must provide an install target satisfying its required floor and minimum supported version.'
+    }
+    return [pscustomobject]@{
+        RequiredVersionFloor = $floor
+        MinimumSupportedVersion = $minimum
+        RequiredUpdate = $RequiredUpdate
+        # A mandatory release must remain obtainable outside an optional cohort.
+        RolloutPercent = $(if ($RequiredUpdate) { 100 } else { $RolloutPercent })
     }
 }
 
@@ -118,9 +158,101 @@ function Assert-FileHashAndSize {
     }
 }
 
+function Get-WindowsNativeSetupDescriptor {
+    param(
+        [Parameter(Mandatory = $true)]$Metadata,
+        [Parameter(Mandatory = $true)][string]$Directory,
+        [Parameter(Mandatory = $true)][string]$MetadataPath
+    )
+    if ([string]$Metadata.architecture -cnotin @('x64', 'arm64') -or
+        [string]$Metadata.client_certificate_sha256 -notmatch '^[A-Fa-f0-9]{64}$') {
+        throw 'Native Setup requires a valid architecture and embedded release signer pin.'
+    }
+    $name = "VEX.Setup.$($Metadata.architecture).exe"
+    $path = Join-Path $Directory $name
+    $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop
+    if ($item.PSIsContainer -or $item.Length -le 0 -or $item.Length -gt 512MB -or
+        ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        ($null -ne $item.PSObject.Properties['LinkType'] -and $item.LinkType -eq 'HardLink')) {
+        throw 'Native Setup must be a bounded regular executable.'
+    }
+    Assert-WindowsPeArchitecture -Path $path -Architecture ([string]$Metadata.architecture)
+    $signature = Get-AuthenticodeSignature -LiteralPath $path
+    if ($signature.Status -ne [Management.Automation.SignatureStatus]::Valid -or
+        $null -eq $signature.SignerCertificate) {
+        throw 'Native Setup requires a valid trusted Authenticode signature.'
+    }
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try { $certificatePin = [BitConverter]::ToString($sha256.ComputeHash($signature.SignerCertificate.RawData)).Replace('-', '') }
+    finally { $sha256.Dispose() }
+    if ($certificatePin -ine [string]$Metadata.client_certificate_sha256) {
+        throw 'Native Setup signer does not match the exact release metadata.'
+    }
+    $metadataItem = Get-Item -LiteralPath $MetadataPath -Force -ErrorAction Stop
+    if ($metadataItem.PSIsContainer -or $metadataItem.Length -le 0 -or $metadataItem.Length -gt 64KB -or
+        ($metadataItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'Native Setup requires bounded regular release metadata.'
+    }
+    $metadataHash = (Get-FileHash -LiteralPath $MetadataPath -Algorithm SHA256).Hash.ToUpperInvariant()
+    $version = ConvertTo-WindowsPackageVersion ([string]$Metadata.version)
+    $expectedProductVersion = "$version+metadata.$metadataHash"
+    # FileInfo.VersionInfo uses Windows FileVersionInfo.GetVersionInfo. The
+    # ProductVersion resource is protected by the Authenticode check above and
+    # binds either PE architecture without running the executable.
+    if ([string]$item.VersionInfo.ProductVersion -cne $expectedProductVersion) {
+        throw 'Native Setup was not built from the exact completed release metadata.'
+    }
+    return [pscustomobject]@{
+        FileName = $name; SourcePath = $path
+        Sha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+        SizeBytes = [long]$item.Length
+    }
+}
+
+function New-WindowsInstallBundle {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Files,
+        [Parameter(Mandatory = $true)][string]$Destination
+    )
+    # Windows PowerShell 5.1 does not preload the framework ZIP assembly.
+    Add-Type -AssemblyName System.IO.Compression -ErrorAction Stop
+    if ($Files.Count -ne 7) { throw 'A Windows install bundle must contain exactly seven verified release files.' }
+    $names = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $stream = [IO.File]::Open($Destination, [IO.FileMode]::Create, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+    try {
+        $archive = [IO.Compression.ZipArchive]::new($stream, [IO.Compression.ZipArchiveMode]::Create, $true)
+        try {
+            foreach ($path in $Files) {
+                $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop
+                if ($item.PSIsContainer -or $item.Length -le 0 -or
+                    ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+                    -not $names.Add($item.Name)) { throw 'Install bundles only accept distinct ordinary release files.' }
+                # Explicit members prevent private keys, signing caches or
+                # unrelated files in the package directory from being shipped.
+                $bundleInput = [IO.File]::Open($item.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+                try {
+                    $entry = $archive.CreateEntry($item.Name, [IO.Compression.CompressionLevel]::Optimal)
+                    $bundleOutput = $entry.Open()
+                    try { $bundleInput.CopyTo($bundleOutput) } finally { $bundleOutput.Dispose() }
+                }
+                finally { $bundleInput.Dispose() }
+            }
+        }
+        finally { $archive.Dispose() }
+    }
+    finally { $stream.Dispose() }
+    $file = Get-Item -LiteralPath $Destination
+    if ($file.Length -le 0 -or $file.Length -gt 512MB) { throw 'The Windows install bundle exceeds its release size limit.' }
+    return [pscustomobject]@{
+        FileName = $file.Name; Sha256 = (Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash
+        SizeBytes = [long]$file.Length
+    }
+}
+
 $origin = Normalize-Origin (Get-RequiredEnv 'VEX_WINDOWS_UPDATE_ORIGIN')
 $keyId = Get-RequiredEnv 'VEX_WINDOWS_UPDATE_KEY_ID'
 $privateKeyBase64 = Get-RequiredEnv 'VEX_WINDOWS_UPDATE_PRIVATE_KEY_BASE64'
+$publicKeyBase64 = Get-RequiredEnv 'VEX_WINDOWS_UPDATE_PUBLIC_KEY_BASE64'
 $manifestRevisionValue = Get-RequiredEnv 'VEX_WINDOWS_MANIFEST_REVISION'
 $releaseNotes = Get-RequiredEnv 'VEX_WINDOWS_RELEASE_NOTES'
 $manifestRevision = 0L
@@ -134,25 +266,6 @@ $minimumSupportedVersion = [Environment]::GetEnvironmentVariable(
     'VEX_WINDOWS_MINIMUM_SUPPORTED_VERSION')
 $requiredVersionFloor = [Environment]::GetEnvironmentVariable(
     'VEX_WINDOWS_REQUIRED_VERSION_FLOOR')
-if ([string]::IsNullOrWhiteSpace($requiredVersionFloor)) {
-    $requiredVersionFloor = if (
-        [string]::IsNullOrWhiteSpace($minimumSupportedVersion)
-    ) {
-        $null
-    }
-    else {
-        $minimumSupportedVersion.Trim()
-    }
-}
-if (-not [string]::IsNullOrWhiteSpace($requiredVersionFloor)) {
-    $parsedRequiredVersionFloor = $null
-    if (-not [Version]::TryParse(
-            $requiredVersionFloor,
-            [ref]$parsedRequiredVersionFloor)) {
-        throw 'VEX_WINDOWS_REQUIRED_VERSION_FLOOR must be a numeric Windows version.'
-    }
-    $requiredVersionFloor = $parsedRequiredVersionFloor.ToString()
-}
 $requiredUpdate = [string]::Equals(
     [Environment]::GetEnvironmentVariable('VEX_WINDOWS_UPDATE_REQUIRED'),
     'true',
@@ -198,7 +311,7 @@ $releaseArchitectures = @(
         ForEach-Object { [string]$_.Metadata.architecture }
 )
 foreach ($requiredArchitecture in $requiredArchitectures) {
-    if (($releaseArchitectures | Where-Object {
+    if (@($releaseArchitectures | Where-Object {
             $_ -eq $requiredArchitecture
         }).Count -ne 1) {
         throw "Incomplete Windows release set: expected exactly one '$requiredArchitecture' package."
@@ -216,7 +329,37 @@ foreach ($entry in $metadataEntries) {
             throw "Package identity differs between architectures: '$field'."
         }
     }
+    if ([string]$candidate.update_signing_key_id -cne $keyId -or
+        [string]$candidate.update_signing_public_key_base64 -cne $publicKeyBase64) {
+        throw 'Windows update signing inputs do not match the public keyring shipped in every package.'
+    }
+    $policy = Get-WindowsReleasePolicy -Version ([string]$candidate.version) `
+        -MinimumSupportedVersion $minimumSupportedVersion -RequiredVersionFloor $requiredVersionFloor `
+        -RequiredUpdate $requiredUpdate -RolloutPercent $rolloutPercent
+    $entry | Add-Member -NotePropertyName ReleasePolicy -NotePropertyValue $policy
+    $vclibsFile = [string]$candidate.vclibs_dependency_file
+    if ($vclibsFile -cne "Microsoft.VCLibs.$($candidate.architecture).14.00.Desktop.appx" -or
+        [string]$candidate.vclibs_dependency_sha256 -notmatch '^[0-9A-Fa-f]{64}$' -or
+        [long]$candidate.vclibs_dependency_size_bytes -le 0 -or
+        [long]$candidate.vclibs_dependency_size_bytes -gt (32L * 1024 * 1024)) {
+        throw 'Windows release VCLibs dependency metadata is invalid.'
+    }
+    $vclibsVersion = ConvertTo-WindowsPackageVersion ([string]$candidate.vclibs_dependency_version)
+    if ([version]$vclibsVersion -lt [version]'14.0.24217.0') {
+        throw 'Windows release VCLibs dependency is below the declared MSIX framework minimum.'
+    }
+    Assert-FileHashAndSize -Path (Join-Path $entry.SourceFile.Directory.FullName $vclibsFile) `
+        -ExpectedSha256 ([string]$candidate.vclibs_dependency_sha256) `
+        -ExpectedSize ([long]$candidate.vclibs_dependency_size_bytes) -Description 'Microsoft VCLibs dependency'
+    # Setup embeds the finished metadata. Its descriptor belongs to the signed
+    # release entry, never back inside that metadata (which would create a cycle).
+    $setup = Get-WindowsNativeSetupDescriptor -Metadata $candidate -Directory $entry.SourceFile.Directory.FullName -MetadataPath $entry.SourceFile.FullName
+    $entry | Add-Member -NotePropertyName SetupDescriptor -NotePropertyValue $setup
 }
+
+# Reject malformed or mismatched signing keys before creating release outputs.
+$null = ConvertTo-Base64Signature -Payload ([Text.Encoding]::UTF8.GetBytes('VEX Windows release signing preflight')) `
+    -PrivateKeyBase64 $privateKeyBase64 -PublicKeyBase64 $publicKeyBase64
 
 foreach ($entry in $metadataEntries) {
     $metadataFile = $entry.SourceFile
@@ -229,14 +372,8 @@ foreach ($entry in $metadataEntries) {
     $packageFile = [string]$metadata.package_file
     $packageSha256 = [string]$metadata.package_sha256
     $packageSizeBytes = [long]$metadata.package_size_bytes
-    $effectiveRequiredVersionFloor = if (
-        [string]::IsNullOrWhiteSpace($requiredVersionFloor)
-    ) {
-        $version
-    }
-    else {
-        $requiredVersionFloor
-    }
+    $policy = $entry.ReleasePolicy
+    $effectiveRequiredVersionFloor = $policy.RequiredVersionFloor
     if ([string]$metadata.schema -ne 'vex.windows-package-output.v2') {
         throw "Unsupported package metadata schema: $($metadata.schema)"
     }
@@ -252,6 +389,11 @@ foreach ($entry in $metadataEntries) {
         [string]$metadata.uninstall_service_script_sha256
     $uninstallScriptSizeBytes =
         [long]$metadata.uninstall_service_script_size_bytes
+    $vclibsFile = [string]$metadata.vclibs_dependency_file
+    $vclibsSha256 = [string]$metadata.vclibs_dependency_sha256
+    $vclibsSizeBytes = [long]$metadata.vclibs_dependency_size_bytes
+    $vclibsVersion = ConvertTo-WindowsPackageVersion ([string]$metadata.vclibs_dependency_version)
+    $setup = $entry.SetupDescriptor
     $bootstrapSource = Join-Path $metadataFile.Directory.FullName $bootstrapFile
     $installScriptSource = Join-Path `
         $metadataFile.Directory.FullName `
@@ -260,6 +402,7 @@ foreach ($entry in $metadataEntries) {
         $metadataFile.Directory.FullName `
         $uninstallScriptFile
     $packageSource = Join-Path $metadataFile.Directory.FullName $packageFile
+    $vclibsSource = Join-Path $metadataFile.Directory.FullName $vclibsFile
     Assert-FileHashAndSize `
         -Path $packageSource `
         -ExpectedSha256 $packageSha256 `
@@ -291,7 +434,9 @@ foreach ($entry in $metadataEntries) {
     foreach ($requiredFile in @(
         $bootstrapSource,
         $installScriptSource,
-        $uninstallScriptSource
+        $uninstallScriptSource,
+        $vclibsSource,
+        $setup.SourcePath
     )) {
         if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
             throw "Required bootstrap artifact is missing: $requiredFile"
@@ -306,13 +451,27 @@ foreach ($entry in $metadataEntries) {
         -Destination (Join-Path $versionedDirectory 'package-metadata.json') `
         -Force
 
+    $bundleFile = "VEX.Native.$channel.$architecture.$version.zip"
+    $bundle = New-WindowsInstallBundle -Destination (Join-Path $versionedDirectory $bundleFile) -Files @(
+        $packageDestination,
+        (Join-Path $versionedDirectory 'package-metadata.json'),
+        (Join-Path $versionedDirectory $bootstrapFile),
+        (Join-Path $versionedDirectory $installScriptFile),
+        (Join-Path $versionedDirectory $uninstallScriptFile),
+        (Join-Path $versionedDirectory $vclibsFile),
+        (Join-Path $versionedDirectory $setup.FileName)
+    )
+
     $packageUri = "$origin$channel/$version/$architecture/$packageFile"
     $bootstrapUri = "$origin$channel/$version/$architecture/$bootstrapFile"
     $metadataUri = "$origin$channel/$version/$architecture/package-metadata.json"
+    $setupUri = "$origin$channel/$version/$architecture/$($setup.FileName)"
+    $bundleUri = "$origin$channel/$version/$architecture/$bundleFile"
     $installScriptUri =
         "$origin$channel/$version/$architecture/$installScriptFile"
     $uninstallScriptUri =
         "$origin$channel/$version/$architecture/$uninstallScriptFile"
+    $vclibsUri = "$origin$channel/$version/$architecture/$vclibsFile"
     $metadataPublishedPath = Join-Path `
         $versionedDirectory `
         'package-metadata.json'
@@ -359,17 +518,34 @@ foreach ($entry in $metadataEntries) {
             sha256 = $metadataSha256
             size_bytes = $metadataSizeBytes
         }
+        files = [ordered]@{
+            bundle = [ordered]@{
+                uri = $bundleUri
+                sha256 = $bundle.Sha256
+                size_bytes = $bundle.SizeBytes
+            }
+            setup = [ordered]@{
+                uri = $setupUri
+                sha256 = $setup.Sha256
+                size_bytes = $setup.SizeBytes
+            }
+            vclibs_dependency = [ordered]@{
+                uri = $vclibsUri
+                sha256 = $vclibsSha256
+                size_bytes = $vclibsSizeBytes
+            }
+        }
     }
     $bootstrapEntryContent = $bootstrapEntry | ConvertTo-Json -Depth 8
     $bootstrapEntryPath = Join-Path `
         $versionedDirectory `
         $bootstrapEntryFile
+    $bootstrapEntrySignature = ConvertTo-Base64Signature `
+        -Payload ([Text.Encoding]::UTF8.GetBytes($bootstrapEntryContent)) `
+        -PrivateKeyBase64 $privateKeyBase64 -PublicKeyBase64 $publicKeyBase64
     Write-Utf8NoBom `
         -Path $bootstrapEntryPath `
         -Content $bootstrapEntryContent
-    $bootstrapEntrySignature = ConvertTo-Base64Signature `
-        -Payload ([Text.Encoding]::UTF8.GetBytes($bootstrapEntryContent)) `
-        -PrivateKeyBase64 $privateKeyBase64
     Write-Utf8NoBom `
         -Path (Join-Path $versionedDirectory $bootstrapEntrySignatureFile) `
         -Content $bootstrapEntrySignature
@@ -388,6 +564,8 @@ foreach ($entry in $metadataEntries) {
         Replace('__PUBLISHER__', $publisher).
         Replace('__PACKAGE_VERSION__', $version).
         Replace('__ARCHITECTURE__', $architecture).
+        Replace('__VCLIBS_VERSION__', $vclibsVersion).
+        Replace('__VCLIBS_URI__', $vclibsUri).
         Replace('__PACKAGE_URI__', $packageUri)
     Write-Utf8NoBom -Path $appInstallerPath -Content $appInstallerContent
 
@@ -429,26 +607,34 @@ foreach ($entry in $metadataEntries) {
                 package_metadata_uri = $metadataUri
                 package_metadata_sha256 = $metadataSha256
                 package_metadata_size_bytes = $metadataSizeBytes
+                vclibs_dependency_uri = $vclibsUri
+                vclibs_dependency_sha256 = $vclibsSha256
+                vclibs_dependency_size_bytes = $vclibsSizeBytes
+                native_setup_uri = $setupUri
+                native_setup_sha256 = $setup.Sha256
+                native_setup_size_bytes = $setup.SizeBytes
+                native_bundle_uri = $bundleUri
+                native_bundle_sha256 = $bundle.Sha256
+                native_bundle_size_bytes = $bundle.SizeBytes
                 bootstrap_entry_uri = $bootstrapEntryUri
                 bootstrap_entry_sha256 = $bootstrapEntrySha256
                 bootstrap_entry_size_bytes = $bootstrapEntrySizeBytes
                 bootstrap_entry_signature_uri =
                     $bootstrapEntrySignatureUri
-                minimum_supported_version = if ($minimumSupportedVersion) { $minimumSupportedVersion } else { $null }
+                minimum_supported_version = $policy.MinimumSupportedVersion
                 changelog = $releaseNotes
-                required = $requiredUpdate
-                rollout_percent = $rolloutPercent
+                required = $policy.RequiredUpdate
+                rollout_percent = $policy.RolloutPercent
             }
         )
     }
 
     $manifestPath = Join-Path $channelDirectory 'update.json'
     $manifestContent = $manifestObject | ConvertTo-Json -Depth 8
-    Write-Utf8NoBom -Path $manifestPath -Content $manifestContent
-
     $signature = ConvertTo-Base64Signature `
         -Payload ([System.Text.Encoding]::UTF8.GetBytes($manifestContent)) `
-        -PrivateKeyBase64 $privateKeyBase64
+        -PrivateKeyBase64 $privateKeyBase64 -PublicKeyBase64 $publicKeyBase64
+    Write-Utf8NoBom -Path $manifestPath -Content $manifestContent
     Write-Utf8NoBom `
         -Path (Join-Path $channelDirectory 'update.json.sig') `
         -Content $signature

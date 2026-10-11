@@ -138,7 +138,7 @@ public sealed class VpnControlPlaneAddressCache
     {
         if (!VpnEndpointAddressCache.TryParseEndpoint(endpoint, out _, out _) ||
             string.IsNullOrWhiteSpace(peer) || peer.Length > 64 || expiry is null || expiry <= now ||
-            expiry.Value - now > TimeSpan.FromHours(24))
+            expiry.Value - now > VpnProfileLifetimePolicy.MaximumRemainingLifetime)
         {
             return false;
         }

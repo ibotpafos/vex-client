@@ -32,7 +32,20 @@ public sealed class ProtectedClientStateStore :
     private readonly string _deviceIdentityFile;
     private readonly string _windowsHelloPreferenceFile;
     private readonly WindowsHelloSessionState _windowsHello;
+    private readonly object _sessionWriteSync = new();
     private bool _sessionCacheUnavailable;
+
+    public IVpnAccountIdentityStore AccountVpnIdentities { get; }
+
+    public bool HasStoredSession
+    {
+        get
+        {
+            try { File.GetAttributes(_stateFile); return true; }
+            catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException) { return false; }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return true; }
+        }
+    }
 
     public string? StoredSessionError { get; private set; }
 
@@ -49,6 +62,9 @@ public sealed class ProtectedClientStateStore :
         _stateFile = Path.Combine(directory, "client-state.bin");
         _installationIdFile = Path.Combine(directory, "installation-id.bin");
         _deviceStateFile = Path.Combine(directory, "device-state.bin");
+        AccountVpnIdentities = new NativeVpnAccountIdentityFileStore(
+            Path.Combine(directory, "vpn-account-identities.bin"),
+            bytes => ProtectedData.Protect(bytes, Entropy, DataProtectionScope.CurrentUser), Unprotect);
         _deviceIdentityFile = Path.Combine(directory, "device-identity.bin");
         _windowsHelloPreferenceFile = Path.Combine(directory, "windows-hello.bin");
         var helloPreference = ReadProtected<StoredWindowsHelloPreference>(_windowsHelloPreferenceFile);
@@ -231,12 +247,42 @@ public sealed class ProtectedClientStateStore :
                 : "Сохраненная сессия повреждена или недоступна для этого пользователя Windows. Выполните вход заново.";
             return null;
         }
-        StoredSessionError = null;
-        return result.Value;
+        try
+        {
+            var state = result.Value is null
+                ? null
+                : NativeVpnAccountIdentitySynchronization.Restore(AccountVpnIdentities, result.Value);
+            StoredSessionError = null;
+            return state;
+        }
+        catch (Exception error) when (error is JsonException or CryptographicException or IOException or UnauthorizedAccessException ||
+            error is InvalidOperationException { Message: "vpn_identity_missing" or "vpn_identity_changed" })
+        {
+            _sessionCacheUnavailable = true;
+            StoredSessionError = error is IOException or UnauthorizedAccessException
+                ? "Сохраненные данные VEX недоступны. Проверьте доступ к папке приложения и повторите запуск."
+                : "Сохраненная сессия повреждена или недоступна для этого пользователя Windows. Выполните вход заново.";
+            return null;
+        }
     }
 
     public NativeDeviceState? LoadDevice() =>
         LoadProtected<NativeDeviceState>(_deviceStateFile);
+
+    public void SaveDevice(NativeDeviceState state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        if (string.IsNullOrWhiteSpace(state.InstallationId) || string.IsNullOrWhiteSpace(state.DeviceId) ||
+            string.IsNullOrWhiteSpace(state.LocationId) || !ValidRetainedIdentity(state.Identity) ||
+            state.UserId is not null && string.IsNullOrWhiteSpace(state.UserId) ||
+            state.PendingIdentity is not null && !ValidRetainedIdentity(state.PendingIdentity))
+            throw new JsonException("Сохраненный VPN-ключ VEX неполон или поврежден.");
+        SaveProtected(_deviceStateFile, state);
+    }
+
+    private static bool ValidRetainedIdentity(WireGuardIdentity? identity) =>
+        identity is { KeyEpoch: > 0 } && !string.IsNullOrWhiteSpace(identity.PrivateKey) &&
+        !string.IsNullOrWhiteSpace(identity.PublicKey);
 
     public Task<DeviceIdentity?> GetOrCreateAsync(
         CancellationToken cancellationToken)
@@ -281,9 +327,16 @@ public sealed class ProtectedClientStateStore :
 
     public void Save(NativeClientState state)
     {
+        lock (_sessionWriteSync)
+            SaveSession(state);
+    }
+
+    private void SaveSession(NativeClientState state)
+    {
         ArgumentNullException.ThrowIfNull(state);
         if (!NativeClientStateValidation.IsValid(state))
             throw new JsonException("Сохраненная сессия VEX неполна или содержит неподтвержденное VPN-устройство.");
+        NativeVpnAccountIdentitySynchronization.Save(AccountVpnIdentities, state);
         var clearState = JsonSerializer.SerializeToUtf8Bytes(
             state,
             JsonOptions);
@@ -293,20 +346,12 @@ public sealed class ProtectedClientStateStore :
                 clearState,
                 Entropy,
                 DataProtectionScope.CurrentUser);
-            var directory = Path.GetDirectoryName(_stateFile)!;
-            Directory.CreateDirectory(directory);
-            var temporaryFile = _stateFile + ".new";
-            File.WriteAllBytes(temporaryFile, protectedState);
-            File.Move(temporaryFile, _stateFile, overwrite: true);
-            if (!state.VpnProvisioningPending)
-                SaveProtected(
-                    _deviceStateFile,
-                    new NativeDeviceState(
-                        state.InstallationId,
-                        state.DeviceId,
-                        state.LocationId,
-                        state.Identity,
-                        state.Session.User.Id));
+            // Retain recovery before the authenticated session can publish a
+            // rotation acknowledgement. Mapped accounts keep their keys in the
+            // per-user map; preserve the legacy migration source independently.
+            if (!state.VpnProvisioningPending && state.VpnRegistrationId is null)
+                SaveDevice(NativeDeviceState.FromClientState(state));
+            ProtectedStateFileWriter.Write(_stateFile, protectedState);
             _windowsHello.SessionSaved();
             _sessionCacheUnavailable = false;
             StoredSessionError = null;
@@ -319,14 +364,28 @@ public sealed class ProtectedClientStateStore :
 
     public void Clear()
     {
-        if (File.Exists(_stateFile))
+        lock (_sessionWriteSync)
         {
+            // The single application store serializes session writes and
+            // logout. Remove only this session's legacy or GUID-owned temps;
+            // independent device/private-key recovery files remain durable.
+            File.Delete(_stateFile + ".new");
+            var directory = Path.GetDirectoryName(_stateFile)!;
+            if (Directory.Exists(directory))
+            {
+                var prefix = Path.GetFileName(_stateFile) + ".new-";
+                foreach (var temporary in Directory.EnumerateFiles(directory, prefix + "*"))
+                    if (Guid.TryParseExact(Path.GetFileName(temporary)[prefix.Length..], "N", out _))
+                        File.Delete(temporary);
+            }
+            // A cleanup refusal must leave the authenticated session in place
+            // and surface to the caller instead of claiming durable logout.
             File.Delete(_stateFile);
-        }
 
-        _windowsHello.SessionCleared();
-        _sessionCacheUnavailable = false;
-        StoredSessionError = null;
+            _windowsHello.SessionCleared();
+            _sessionCacheUnavailable = false;
+            StoredSessionError = null;
+        }
     }
 
     private static T? LoadProtected<T>(string path)

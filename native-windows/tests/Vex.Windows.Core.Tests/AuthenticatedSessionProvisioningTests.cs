@@ -299,6 +299,7 @@ internal static class AuthenticatedSessionProvisioningTests
 
     private sealed class OwnedStateStore : IClientStateStore
     {
+        public IVpnAccountIdentityStore AccountVpnIdentities { get; } = new MemoryVpnAccountIdentityStore();
         public NativeClientState? State { get; private set; }
         public int SaveCount { get; private set; }
         public ClientStateAccessKind GetAccessState() => State is null ? ClientStateAccessKind.Missing : ClientStateAccessKind.Available;
@@ -306,7 +307,7 @@ internal static class AuthenticatedSessionProvisioningTests
         public NativeClientState? Load() => State;
         public NativeDeviceState? LoadDevice() => State is null ? null :
             new(State.InstallationId, State.DeviceId, State.LocationId, State.Identity, UserId: State.Session.User.Id);
-        public void Save(NativeClientState state) { State = state; SaveCount++; }
+        public void Save(NativeClientState state) { NativeVpnAccountIdentitySynchronization.Save(AccountVpnIdentities, state); State = state; SaveCount++; }
         public void Clear() => State = null;
     }
 

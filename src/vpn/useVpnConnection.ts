@@ -755,7 +755,7 @@ export function useVpnConnection() {
               },
               fetch: async () => {
                 requireCurrentSession();
-                const staged = await fetchStagedDevicePSKProfile(session.accessToken, activeProfile);
+                const staged = await fetchStagedDevicePSKProfile(session.accessToken, activeProfile, session.user.id, () => !cancelled && isCurrentSessionOperation());
                 requireCurrentSession();
                 return staged;
               },
@@ -806,6 +806,7 @@ export function useVpnConnection() {
     isCurrentSessionOperation,
     reportVpnConnectEvent,
     session?.accessToken,
+    session?.user.id,
     setActiveProfile,
     setVpnStatus,
     submitClientDiagnosticsEvent,

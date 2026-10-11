@@ -268,7 +268,8 @@ internal static class ClientRecoveryParityTests
         Check(retained.Identity == (rotationTimesOut ? previous.Identity : rotatingIdentity) &&
             retained.PendingIdentity == (rotationTimesOut ? rotatingIdentity : null),
             "Failed switch discarded the committed key or ambiguous pending rotation.");
-        Check(fixture.Store.LoadDevice()?.Identity == retained.Identity &&
+        Check(fixture.Store.AccountVpnIdentities.Load(retained.Session.User.Id)?.Identity == retained.Identity &&
+            fixture.Store.AccountVpnIdentities.Load(retained.Session.User.Id)?.PendingIdentity == retained.PendingIdentity &&
             retained.Identity.KeyEpoch == (rotationTimesOut ? previous.Identity.KeyEpoch : previous.Identity.KeyEpoch + 1),
             "Failed switch lost the durably registered device key epoch.");
         Check(retained.LocationId == previous.LocationId && retained.CachedProfileVersion is null &&
@@ -369,7 +370,7 @@ public class NativeApiProxy : DispatchProxy
 
     public object? CallUnderlying(string method, object?[] args)
     {
-        try { return typeof(INativeClientApi).GetMethod(method)!.Invoke(_underlying, args); }
+        try { return typeof(INativeClientApi).GetMethods().Single(candidate => candidate.Name == method && candidate.GetParameters().Length == args.Length).Invoke(_underlying, args); }
         catch (TargetInvocationException error) when (error.InnerException is not null)
         {
             ExceptionDispatchInfo.Capture(error.InnerException).Throw();

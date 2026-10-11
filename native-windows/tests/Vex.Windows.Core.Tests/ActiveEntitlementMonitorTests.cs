@@ -396,6 +396,7 @@ internal static class ActiveEntitlementMonitorTests
 
     private sealed class LockableStateStore(MemoryClientStateStore underlying) : IClientStateStore
     {
+        public IVpnAccountIdentityStore AccountVpnIdentities => underlying.AccountVpnIdentities;
         public bool Locked { get; set; }
         public ClientStateAccessKind GetAccessState() => Locked ? ClientStateAccessKind.Locked : underlying.GetAccessState();
         public string GetOrCreateInstallationId() => underlying.GetOrCreateInstallationId();

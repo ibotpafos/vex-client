@@ -31,6 +31,8 @@ internal static class ClientSignedCandidateTests
         ExpiredCachedCandidateRefreshesItsSignedProfile();
         PrefetchedRelayWorksWithoutTheControlPlane();
         PrefetchCachesAtMostThreeGrantsWithoutReplacingWorkingAuthority();
+        ForegroundCandidateAlignsTheSameKeyServerEpoch();
+        CandidatePrefetchNeverRelabelsForeignOrNewerIdentity();
         ExpiredPrefetchedGrantNeverReachesTheService();
         ExpiredPolicyRejectsAnOtherwiseUnexpiredPrefetchedGrant();
         PrefetchedGrantsCannotCrossIdentityNodeOrRoutingScope();
@@ -294,7 +296,7 @@ internal static class ClientSignedCandidateTests
             switch (scope)
             {
                 case "identity":
-                    fixture.Store.Save(state with { Identity = WireGuardIdentity.Generate(state.Identity.KeyEpoch + 1) });
+                    fixture.Store.SetExternalSnapshot(state with { Identity = WireGuardIdentity.Generate(state.Identity.KeyEpoch + 1) });
                     break;
                 case "node":
                     fixture.Policy = fixture.Policy with
@@ -304,7 +306,7 @@ internal static class ClientSignedCandidateTests
                     fixture.Coordinator.GetResiliencePolicyAsync(CancellationToken.None).GetAwaiter().GetResult();
                     break;
                 case "user":
-                    fixture.Store.Save(state with
+                    fixture.Store.SetExternalSnapshot(state with
                     {
                         Session = state.Session with { User = state.Session.User with { Id = "another-user" } },
                     });
@@ -445,7 +447,7 @@ internal static class ClientSignedCandidateTests
                     preferences = preferences with { SmartRoutingEnabled = true };
                     break;
                 default:
-                    fixture.Store.Save(state with
+                    fixture.Store.SetExternalSnapshot(state with
                     {
                         Session = state.Session with { User = state.Session.User with { Id = "another-user" } },
                     });
@@ -541,6 +543,38 @@ internal static class ClientSignedCandidateTests
         catch (HttpRequestException) { }
     }
 
+    private static void ForegroundCandidateAlignsTheSameKeyServerEpoch()
+    {
+        var fixture = new Fixture((string?)null) { CacheableGrants = true };
+        var original = fixture.Store.State!.Identity;
+        fixture.Policy = Policy(2, Candidate("relay-a", RelayEndpoint, 200), Candidate("direct", DirectEndpoint, 100));
+        fixture.TransformProfile = (candidate, profile) => candidate is null ? profile : profile with
+        { ClientPublicKey = original.PublicKey, ClientKeyEpoch = 3 };
+        Check(fixture.Connect().Success && fixture.Vpn.Endpoints.SequenceEqual([RelayEndpoint]) &&
+            fixture.Store.State!.Identity == original with { KeyEpoch = 3 } &&
+            fixture.Store.State.CachedCandidateGrants?.All(grant => grant.ClientKeyEpoch == 3) == true,
+            "An authoritative foreground candidate must align the same private/public key's server epoch before admitting or caching its grant.");
+    }
+
+    private static void CandidatePrefetchNeverRelabelsForeignOrNewerIdentity()
+    {
+        foreach (var mismatch in new[] { "epoch", "key", "device", "partial" })
+        {
+            var fixture = new Fixture((string?)null) { CacheableGrants = true };
+            var original = fixture.Store.State!.Identity;
+            fixture.TransformProfile = (candidate, profile) => candidate is null ? profile : profile with
+            {
+                DeviceId = mismatch == "device" ? "foreign-device" : profile.DeviceId,
+                ClientPublicKey = mismatch == "key" ? "foreign-key" : original.PublicKey,
+                ClientKeyEpoch = mismatch == "partial" ? null : 3,
+            };
+            Check(fixture.Connect().Success && fixture.Vpn.Endpoints.SequenceEqual([DirectEndpoint]) &&
+                fixture.Store.State!.Identity == original &&
+                fixture.Store.State.CachedCandidateGrants?.Any(grant => grant.CandidateId == "relay-a") != true,
+                "Advisory candidate prefetch must preserve the admitted key and cannot label foreign/newer identity authority with the earlier epoch: " + mismatch);
+        }
+    }
+
     private static VexEntitlement PaidUntil(DateTimeOffset expiry) =>
         new(true, "pro_monthly", "Pro", "active", "Pro", "Pro", "Paid", "active", "pro", Timestamp(expiry), null, true);
 
@@ -584,6 +618,7 @@ internal static class ClientSignedCandidateTests
         public int CatalogRequests { get; private set; }
         public string? OfflineCandidateId { get; set; }
         public Func<string, string>? CandidateGrantEndpoint { get; set; }
+        public Func<string?, ManagedVpnProfile, ManagedVpnProfile>? TransformProfile { get; set; }
         public MemoryClientStateStore Store { get; } = new();
         public MemoryRouteStore RouteStore { get; } = new();
         public GrantAwareVpnClient Vpn { get; }
@@ -671,7 +706,8 @@ internal static class ClientSignedCandidateTests
             var authorization = new ManagedVpnProfileAuthorization("profile-key-1", "ECDSA_P256_SHA256_DER",
                 Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(payload))), "c2lnbmF0dXJl");
             IssuedGrants.Add(authorization);
-            return Task.FromResult(new ManagedVpnProfile(version, (string)args[1]!, false, false, authorization));
+            var profile = new ManagedVpnProfile(version, (string)args[1]!, false, false, authorization);
+            return Task.FromResult(TransformProfile?.Invoke(candidateId, profile) ?? profile);
         }
     }
 

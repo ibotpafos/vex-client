@@ -1,4 +1,5 @@
 using System.IO.Pipes;
+using System.Text;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -100,7 +101,9 @@ internal static class VpnServiceServerAttestor
     private const string ServiceName = "VEX VPN Service";
     private const string ServiceExecutableName = "Vex.Windows.Service.exe";
     private const uint ScManagerConnect = 0x0001;
+    private const uint ServiceQueryConfig = 0x0001;
     private const uint ServiceQueryStatus = 0x0004;
+    private const uint ProcessQueryLimitedInformation = 0x1000;
     private const int ScStatusProcessInfo = 0;
     private const uint ServiceRunning = 4;
     private static readonly Guid WinTrustActionGenericVerifyV2 =
@@ -136,51 +139,100 @@ internal static class VpnServiceServerAttestor
                 "The VPN service identity could not be established.");
         }
 
-        var expectedPath = Path.GetFullPath(
-            Path.Combine(AppContext.BaseDirectory, ServiceExecutableName));
-        if (!IsTrustedService(processId))
+        using var manager = OpenSCManager(null, null, ScManagerConnect);
+        using var service = manager.IsInvalid
+            ? throw new UnauthorizedAccessException("The registered VPN service could not be queried.")
+            : OpenService(manager, ServiceName, ServiceQueryStatus | ServiceQueryConfig);
+        if (service.IsInvalid)
+        {
+            throw new UnauthorizedAccessException("The registered VPN service could not be queried.");
+        }
+        using var process = OpenProcess(ProcessQueryLimitedInformation, false, processId);
+        if (process.IsInvalid)
+        {
+            throw new UnauthorizedAccessException("The VPN service process image could not be established.");
+        }
+        var actualImage = ReadProcessImage(process);
+        var expectedImage = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, ServiceExecutableName));
+        if (!VpnServiceImageIdentity.HasExpectedPaths(ReadRegisteredService(service), processId,
+            expectedImage, actualImage))
         {
             throw new UnauthorizedAccessException(
-                "The VPN pipe is not owned by the registered service process.");
+                "The VPN pipe is not owned by the installed service image.");
         }
 
-        if (!HasValidAuthenticodeSignature(expectedPath))
+        // Keep the verified image open without write/delete sharing until all
+        // signature and registration checks complete. Never authenticate a
+        // companion file while a different process owns the actual pipe.
+        using var executable = new FileStream(actualImage, FileMode.Open, FileAccess.Read, FileShare.Read);
+        var actualHash = SHA256.HashData(executable);
+        if (!VpnServiceImageIdentity.HasExpectedHash(
+            ReadMachinePin("ServiceExecutableSha256", "service-executable-sha256"), actualHash))
+        {
+            throw new UnauthorizedAccessException("The VPN service image does not match its installed release.");
+        }
+        if (!HasValidAuthenticodeSignature(actualImage))
         {
             throw new UnauthorizedAccessException(
                 "The VPN service Authenticode signature is not valid.");
         }
 
-        if (!HasPinnedAuthenticodeCertificate(expectedPath))
+        if (!HasPinnedAuthenticodeCertificate(actualImage))
         {
             throw new UnauthorizedAccessException(
                 "The VPN service signer certificate is not trusted.");
         }
+        if (!GetNamedPipeServerProcessId(pipe.SafePipeHandle, out var currentProcessId) ||
+            currentProcessId != processId ||
+            !VpnServiceImageIdentity.HasExpectedPaths(ReadRegisteredService(service), processId,
+                expectedImage, ReadProcessImage(process)) ||
+            !VpnServiceImageIdentity.HasExpectedHash(
+                ReadMachinePin("ServiceExecutableSha256", "service-executable-sha256"), actualHash))
+        {
+            throw new UnauthorizedAccessException("The VPN service identity changed during attestation.");
+        }
     }
 
-    private static bool IsTrustedService(uint processId)
+    private static string ReadProcessImage(SafeProcessHandle process)
     {
-        using var manager = OpenSCManager(
-            machineName: null,
-            databaseName: null,
-            ScManagerConnect);
-        if (manager.IsInvalid)
+        var path = new StringBuilder(32768);
+        var length = (uint)path.Capacity;
+        if (!QueryFullProcessImageName(process, 0, path, ref length) || length == 0)
         {
-            return false;
+            throw new UnauthorizedAccessException("The VPN service process image could not be established.");
         }
+        return path.ToString();
+    }
 
-        using var service = OpenService(
-            manager,
-            ServiceName,
-            ServiceQueryStatus);
-        return !service.IsInvalid &&
-            QueryServiceStatusEx(
-                service,
-                ScStatusProcessInfo,
-                out var status,
-                Marshal.SizeOf<ServiceStatusProcess>(),
-                out _) &&
-            status.ProcessId == processId &&
-            status.CurrentState == ServiceRunning;
+    private static VpnRegisteredServiceIdentity ReadRegisteredService(SafeServiceHandle service)
+    {
+        if (!QueryServiceStatusEx(service, ScStatusProcessInfo, out var status,
+            Marshal.SizeOf<ServiceStatusProcess>(), out _) || status.CurrentState != ServiceRunning)
+        {
+            throw new UnauthorizedAccessException("The registered VPN service is not running.");
+        }
+        _ = QueryServiceConfig(service, IntPtr.Zero, 0, out var required);
+        if (required is < 1 or > 64 * 1024)
+        {
+            throw new UnauthorizedAccessException("The registered VPN service configuration could not be queried.");
+        }
+        var buffer = Marshal.AllocHGlobal(checked((int)required));
+        try
+        {
+            if (!QueryServiceConfig(service, buffer, required, out _))
+            {
+                throw new UnauthorizedAccessException("The registered VPN service configuration could not be queried.");
+            }
+            var configuration = Marshal.PtrToStructure<ServiceConfiguration>(buffer);
+            if (configuration.ServiceType != status.ServiceType)
+            {
+                throw new UnauthorizedAccessException("The registered VPN service type changed during attestation.");
+            }
+            return new VpnRegisteredServiceIdentity(status.ProcessId, status.CurrentState, configuration.ServiceType,
+                Marshal.PtrToStringUni(configuration.BinaryPathName) ?? string.Empty,
+                Marshal.PtrToStringUni(configuration.ServiceStartName) ?? string.Empty);
+        }
+        finally { Marshal.FreeHGlobal(buffer); }
     }
 
     private static bool HasPinnedAuthenticodeCertificate(string executable)
@@ -203,9 +255,8 @@ internal static class VpnServiceServerAttestor
             return false;
         }
 
-        // The full executable SHA-256 is verified separately. Reading the
-        // embedded signer here avoids the ARM64 WinVerifyTrust marshaling
-        // failure while preserving both binary and signer pinning.
+        // Inspect the signer of the same process image whose release hash and
+        // complete Authenticode signature were verified above.
 #pragma warning disable SYSLIB0057
         using var certificate = new X509Certificate2(
             X509Certificate.CreateFromSignedFile(executable));
@@ -244,9 +295,11 @@ internal static class VpnServiceServerAttestor
     {
         var fileInfo = new WinTrustFileInfo(executable);
         var fileInfoPointer = Marshal.AllocHGlobal(Marshal.SizeOf(fileInfo));
+        var marshalled = false;
         try
         {
             Marshal.StructureToPtr(fileInfo, fileInfoPointer, false);
+            marshalled = true;
             var trustData = WinTrustData.ForFile(fileInfoPointer);
             var action = WinTrustActionGenericVerifyV2;
             var result = WinVerifyTrust(
@@ -259,6 +312,7 @@ internal static class VpnServiceServerAttestor
         }
         finally
         {
+            if (marshalled) { Marshal.DestroyStructure<WinTrustFileInfo>(fileInfoPointer); }
             Marshal.FreeHGlobal(fileInfoPointer);
         }
     }
@@ -268,6 +322,16 @@ internal static class VpnServiceServerAttestor
     private static extern bool GetNamedPipeServerProcessId(
         SafePipeHandle pipe,
         out uint serverProcessId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern SafeProcessHandle OpenProcess(uint desiredAccess,
+        [MarshalAs(UnmanagedType.Bool)] bool inheritHandle, uint processId);
+
+    [DllImport("kernel32.dll", EntryPoint = "QueryFullProcessImageNameW", CharSet = CharSet.Unicode,
+        SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryFullProcessImageName(SafeProcessHandle process, uint flags,
+        StringBuilder executableName, ref uint size);
 
     [DllImport(
         "advapi32.dll",
@@ -288,6 +352,12 @@ internal static class VpnServiceServerAttestor
         SafeServiceHandle serviceControlManager,
         string serviceName,
         uint desiredAccess);
+
+    [DllImport("advapi32.dll", EntryPoint = "QueryServiceConfigW", CharSet = CharSet.Unicode,
+        SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryServiceConfig(SafeServiceHandle service, IntPtr configuration,
+        uint bufferSize, out uint bytesNeeded);
 
     [DllImport(
         "advapi32.dll",
@@ -335,6 +405,20 @@ internal static class VpnServiceServerAttestor
         public uint WaitHint;
         public uint ProcessId;
         public uint ServiceFlags;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ServiceConfiguration
+    {
+        public uint ServiceType;
+        public uint StartType;
+        public uint ErrorControl;
+        public IntPtr BinaryPathName;
+        public IntPtr LoadOrderGroup;
+        public uint TagId;
+        public IntPtr Dependencies;
+        public IntPtr ServiceStartName;
+        public IntPtr DisplayName;
     }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]

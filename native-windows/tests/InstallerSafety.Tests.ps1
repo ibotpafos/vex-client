@@ -47,6 +47,8 @@ try {
     $metadata = [ordered]@{
         schema = 'vex.windows-package-output.v2'; install_entrypoint = 'elevated_bootstrap'
         service_ownership = 'manual_sc_bootstrap'; raw_msix_provisions_service = $false; raw_appinstaller_provisions_service = $false
+        architecture = 'x64'; vclibs_dependency_file = 'Microsoft.VCLibs.x64.14.00.Desktop.appx'
+        vclibs_dependency_sha256 = ('A' * 64); vclibs_dependency_size_bytes = 1234; vclibs_dependency_version = '14.0.33519.0'
         package_name = 'VEX.InstallerFixture'; package_file = 'fixture.msix'
         package_sha256 = (Get-FileHash $packagePath).Hash; client_certificate_sha256 = ('A' * 64)
         app_executable_sha256 = ('B' * 64); service_executable_sha256 = ('C' * 64)
@@ -63,6 +65,7 @@ try {
     $validated = Assert-ReleaseArtifacts -Path $packagePath -MetadataFile $MetadataPath -ScriptsRoot $releaseRoot
     Assert ($validated.package_name -eq $metadata.package_name -and $script:signatures.Count -eq 3) 'Release preflight must verify every helper signer'
 
+    function Get-VclibsDependencyPath { param($Metadata,$ScriptsRoot) '/signed/Microsoft.VCLibs.x64.14.00.Desktop.appx' }
     $script:phases = @(); $script:registrations = 0; $script:removals = 0; $script:packageQueries = 0; $script:changedRegistration = $false
     function Get-InstalledPackage {
         param($Name, [switch]$ServiceScope)
@@ -73,7 +76,7 @@ try {
         }
     }
     function Invoke-ServicePhase { param($ServiceAction, $MetadataFile, $ScriptsRoot, $PackageInstallDirectory) $script:phases += $ServiceAction }
-    function Add-AppxPackage { param($Path, $ForceApplicationShutdown, $ErrorAction, [switch]$ForceUpdateFromAnyVersion) $script:registrations++; throw 'Mocked package registration failure' }
+    function Add-AppxPackage { param($Path, $ForceApplicationShutdown, $ErrorAction, $DependencyPath, [switch]$ForceUpdateFromAnyVersion) $script:registrations++; throw 'Mocked package registration failure' }
     function Remove-AppxPackage { param($Package, $ErrorAction) $script:removals++ }
     [IO.File]::WriteAllText($packagePath, 'tampered')
     Assert-Rejected { Install-Package -Path $packagePath -MetadataFile $MetadataPath -ScriptsRoot $releaseRoot } 'Invalid package must be rejected before stopping the old service'

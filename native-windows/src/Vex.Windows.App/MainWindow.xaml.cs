@@ -93,6 +93,14 @@ public sealed partial class MainWindow : Window
         ShellWindowVisibilityChanged?.Invoke(this, EventArgs.Empty);
     }
 
+#if DEBUG
+    internal void MinimizePreviewWindow()
+    {
+        if (!UiPreviewContext.IsEnabled || _closed) return;
+        NativeMethods.ShowWindow(WindowNative.GetWindowHandle(this), 6);
+    }
+#endif
+
     public void HideShellWindow()
     {
         var handle = WindowNative.GetWindowHandle(this);

@@ -74,7 +74,7 @@ internal static class VpnEndpointAddressCacheTests
             original with { Endpoint = "vpn.example.test:0" },
             original with { ServerPublicKey = "invalid" },
             original with { ValidUntil = Now },
-            original with { ValidUntil = Now.AddHours(24).AddTicks(1) },
+            original with { ValidUntil = Now.AddHours(24).AddMinutes(2).AddTicks(1) },
             original with { Addresses = [] },
             original with { Addresses = ["not-an-address"] },
             original with { Addresses = null! },
@@ -120,7 +120,7 @@ internal static class VpnEndpointAddressCacheTests
             Require(!cache.RememberResolved(Endpoint, key, [IPAddress.Loopback], Now.AddMinutes(5), Now),
                 "An invalid configured server key admitted a DNS answer.");
         }
-        foreach (var expiry in new DateTimeOffset?[] { null, Now, Now.AddSeconds(-1), Now.AddHours(24).AddTicks(1) })
+        foreach (var expiry in new DateTimeOffset?[] { null, Now, Now.AddSeconds(-1), Now.AddHours(24).AddMinutes(2).AddTicks(1) })
         {
             Require(!cache.RememberResolved(Endpoint, Peer, [IPAddress.Loopback], expiry, Now),
                 "A missing, expired or unbounded lease admitted a DNS answer.");

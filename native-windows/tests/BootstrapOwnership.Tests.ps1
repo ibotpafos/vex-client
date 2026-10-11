@@ -36,6 +36,11 @@ $env:WINDIR = '/trusted-windows'
 $temporary = Join-Path ([IO.Path]::GetTempPath()) ('vex-bootstrap-ownership-' + [guid]::NewGuid().ToString('N'))
 $env:ProgramData = $temporary
 $null = New-Item -ItemType Directory -Path $temporary
+$signedArtifacts = Join-Path $temporary 'signed artifacts'
+$null = New-Item -ItemType Directory -Path $signedArtifacts
+$script:MetadataPath = Join-Path $signedArtifacts 'package-metadata.json'
+[IO.File]::WriteAllText($script:MetadataPath, '{}')
+[IO.File]::WriteAllText((Join-Path $signedArtifacts 'bootstrap-native-windows.ps1'), '# unsigned fixture')
 function Get-CurrentUserSid { $script:CurrentSid }
 function Get-SystemPowerShellPath { '/trusted-windows/System32/WindowsPowerShell/v1.0/powershell.exe' }
 function Assert-Administrator { }
@@ -45,6 +50,8 @@ $script:Metadata = [pscustomobject]@{
     package_name = 'VEX.Native'; package_sha256 = 'package-pin'; bootstrap_file = 'bootstrap-native-windows.ps1'
     bootstrap_sha256 = 'bootstrap-pin'; client_certificate_sha256 = 'certificate-pin'
 }
+function Get-VclibsDependencyPath { param($Metadata,$ScriptsRoot) '/signed artifacts/Microsoft.VCLibs.x64.14.00.Desktop.appx' }
+function Read-VendorServiceRegistration { return $null }
 function Read-PackageMetadata { param($Path) $script:Metadata }
 function Assert-ReleaseArtifacts { param($Path,$MetadataFile,$ScriptsRoot) $script:Metadata }
 $script:HashChecks = @()
@@ -63,7 +70,7 @@ function Get-AppxPackage {
 }
 $script:NoPackage = $false
 $script:Registrations = 0; $script:Removals = 0; $script:Provisioned = 0; $script:Verified = 0
-function Add-AppxPackage { param($Path,$ForceApplicationShutdown,$ErrorAction,[switch]$ForceUpdateFromAnyVersion) $script:Registrations++ }
+function Add-AppxPackage { param($Path,$ForceApplicationShutdown,$ErrorAction,$DependencyPath,[switch]$ForceUpdateFromAnyVersion) $script:Registrations++ }
 function Remove-AppxPackage { param($Package,$ErrorAction) $script:Removals++ }
 function Invoke-ServiceProvisioning { param($Metadata,$InstallDirectory) $script:Provisioned++; Assert ($InstallDirectory -eq '/packages/vex-original') 'Admin package payload selected' }
 function Assert-InstalledState { param($Metadata,$InstallDirectory) $script:Verified++ }
@@ -108,21 +115,27 @@ try {
         $process | Add-Member ScriptMethod Dispose { $script:Disposed=$true }
         return $process
     }
-    & $realServicePhase -ServiceAction 'Install' -MetadataFile $MetadataPath -ScriptsRoot '/signed artifacts' -PackageInstallDirectory '/packages/vex-original'
+    & $realServicePhase -ServiceAction 'Install' -MetadataFile $MetadataPath -ScriptsRoot $signedArtifacts -PackageInstallDirectory '/packages/vex-original'
     Assert ($script:Launch.Verb -eq 'RunAs' -and $script:Launch.File.Contains('System32') -and $script:Launch.File.Contains('WindowsPowerShell')) 'Elevation must use trusted system PowerShell'
-    Assert ($script:Launch.Arguments.Contains('"-Phase" "Service"') -and $script:Launch.Arguments.Contains('"-OwnerSid" "'+$original+'"')) 'Elevated command must carry original OwnerSid and service-only phase'
+    $encodedMatch = [regex]::Match($script:Launch.Arguments, '"-EncodedCommand" "([A-Za-z0-9+/=]+)"')
+    Assert $encodedMatch.Success 'Elevation must enter through the literal verified command'
+    $guard = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($encodedMatch.Groups[1].Value))
+    $inputMatch = [regex]::Match($guard, "FromBase64String\('([A-Za-z0-9+/=]+)'\)")
+    $guardInput = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($inputMatch.Groups[1].Value)) | ConvertFrom-Json
+    Assert ($guardInput.OwnerSid -eq $original -and $guardInput.ServiceAction -eq 'Install' -and $guard.Contains("Phase='Service'")) 'Elevated verified command must carry original OwnerSid and service-only phase'
+    Assert ($script:Launch.Arguments.Contains('"-ExecutionPolicy" "Bypass"')) 'Verified unattended service phase must avoid AllSigned publisher prompt'
     Assert ($script:Timeout -eq 180000 -and $script:Disposed) 'Service elevation wait must be bounded and process handles disposed'
     Assert ($script:HashChecks[-1].Expected -eq 'bootstrap-pin' -and $script:SignatureChecks[-1] -eq 'certificate-pin') 'Service entrypoint release hash and signer pin must be checked before elevation'
     $script:TimedOut = $true
-    Assert-Rejected { & $realServicePhase -ServiceAction 'Install' -MetadataFile $MetadataPath -ScriptsRoot '/signed artifacts' } 'Timed-out elevation must not report successful installation'
+    Assert-Rejected { & $realServicePhase -ServiceAction 'Install' -MetadataFile $MetadataPath -ScriptsRoot $signedArtifacts } 'Timed-out elevation must not report successful installation'
     $script:TimedOut = $false; $script:ProcessExitCode = 1
-    Assert-Rejected { & $realServicePhase -ServiceAction 'Install' -MetadataFile $MetadataPath -ScriptsRoot '/signed artifacts' } 'Failed service phase must not report successful installation'
+    Assert-Rejected { & $realServicePhase -ServiceAction 'Install' -MetadataFile $MetadataPath -ScriptsRoot $signedArtifacts } 'Failed service phase must not report successful installation'
     Assert-Rejected { Quote-NativeArgument 'unsafe"argument' } 'Native command arguments must reject quote injection'
 
     $script:Phases = @()
     function Invoke-ServicePhase { param($ServiceAction,$MetadataFile,$ScriptsRoot,$PackageInstallDirectory) $script:Phases += $ServiceAction }
     Assert-Rejected { & $realInstall -Path '/release.msix' -MetadataFile $MetadataPath -ForceUpdate } 'Downgrade bypass must be restricted to explicit Rollback'
-    & $realInstall -Path '/release.msix' -MetadataFile $MetadataPath -ScriptsRoot '/signed artifacts'
+    & $realInstall -Path '/release.msix' -MetadataFile $MetadataPath -ScriptsRoot $signedArtifacts
     Assert ($script:Registrations -eq 1 -and $script:Phases.Count -eq 2 -and $script:Phases[0] -eq 'Prepare' -and $script:Phases[1] -eq 'Install') 'Update must stop existing service before original-user registration and provision afterwards'
     Assert ($script:AppxCalls[-1].User -eq $null) 'User registration must query only the original current-user package'
     Assert (($ast.Extent.Text -notmatch 'Remove-AppxPackage[^\r\n]*-AllUsers') -and ($ast.Extent.Text -notmatch 'Get-AppxPackage[^\r\n]*-AllUsers')) 'Bootstrap must not register or remove all users packages'

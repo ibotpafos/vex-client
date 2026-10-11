@@ -380,6 +380,7 @@ internal static class NativeAuthServiceTests
 
     private sealed class CountingClientStateStore : IClientStateStore
     {
+        public IVpnAccountIdentityStore AccountVpnIdentities { get; } = new MemoryVpnAccountIdentityStore();
         public NativeClientState? State { get; private set; }
         public int SaveCount { get; private set; }
         public ClientStateAccessKind GetAccessState() => State is null
@@ -390,6 +391,7 @@ internal static class NativeAuthServiceTests
             : new(State.InstallationId, State.DeviceId, State.LocationId, State.Identity);
         public void Save(NativeClientState state)
         {
+            NativeVpnAccountIdentitySynchronization.Save(AccountVpnIdentities, state);
             State = state;
             SaveCount++;
         }

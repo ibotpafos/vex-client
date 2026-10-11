@@ -57,7 +57,7 @@ if ([Runtime.InteropServices.Marshal]::SizeOf([type][Vex.Windows.Smoke.WindowPoi
 }
 
 # Execute the actual pure capture helpers, without desktop interaction.
-foreach ($functionName in @('Wait-SmokeCondition', 'Wait-SmokeCaptureBounds', 'Get-SmokeCaptureCursorPoint', 'Set-SmokeCaptureFocus', 'Assert-SmokeTrayRecoveryDiagnostic')) {
+foreach ($functionName in @('Wait-SmokeCondition', 'Wait-SmokeCaptureBounds', 'Get-SmokeCaptureCursorPoint', 'Set-SmokeCaptureFocus', 'Assert-SmokeTrayRecoveryDiagnostic', 'Assert-SmokeProtectedStateDiagnostic')) {
     $functionAst = $ast.Find({
         param($node)
         $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $functionName
@@ -85,6 +85,128 @@ foreach ($invalid in @(
     catch { $rejected = $true }
     if (-not $rejected) { throw "Application smoke accepts invalid actual tray evidence: $($invalid.key)." }
 }
+
+# Exercise the exact receipt validator with JSON-shaped values. These checks
+# never invoke DPAPI, the filesystem fault matrix, or the WinUI application.
+function New-SmokeProtectedStateDiagnostic {
+    param([ValidateSet('Startup', 'Cleanup')][string]$Phase)
+    $expectedCases = [ordered]@{
+        'dpapi-roundtrip' = 'available'; 'invalid-ciphertext' = 'unusable'; 'malformed-json' = 'unusable'
+        'invalid-owner-map' = 'unusable'; 'missing-map' = 'unusable'; 'missing-own-account' = 'unusable'
+        'registration-mismatch' = 'unusable'; 'external-id-mismatch' = 'unusable'
+        'map-sharing-violation' = 'unavailable'; 'map-path-is-directory' = 'unavailable'
+        'map-write-sharing-violation' = 'write-unavailable'; 'authoritative-key-restoration' = 'authoritative'
+    }
+    $cases = @(foreach ($id in $expectedCases.Keys) {
+        [pscustomobject][ordered]@{
+            id = $id; outcome = $expectedCases[$id]
+            passed = $true; files_preserved = $true; reopened = $true; recovered = $true
+        }
+    })
+    return [pscustomobject][ordered]@{
+        schema = 'vex.windows.protected-state-faults.v1'; process_id = 123; mode = 'protected-state-fault'
+        stage = $(if ($Phase -eq 'Cleanup') { 'completed' } else { 'startup-completed' })
+        case_count = $cases.Count; cases = $cases
+        real_current_user_dpapi = $true; startup_completed = $true; startup_access = 'Missing'
+        startup_has_stored_session = $true; startup_error_reported = $true; startup_files_preserved = $true
+        owned_directory_removed = ($Phase -eq 'Cleanup')
+    }
+}
+
+$protectedStateMutations = @(
+    @{ name = 'schema'; mutate = { param($bad) $bad.schema = 'vex.windows.protected-state-faults.v0' } }
+    @{ name = 'schema-case'; mutate = { param($bad) $bad.schema = 'VEX.windows.protected-state-faults.v1' } }
+    @{ name = 'schema-boolean-true'; mutate = { param($bad) $bad.schema = $true } }
+    @{ name = 'schema-boolean-false'; mutate = { param($bad) $bad.schema = $false } }
+    @{ name = 'schema-array'; mutate = { param($bad) $bad.schema = @($bad.schema) } }
+    @{ name = 'schema-null'; mutate = { param($bad) $bad.schema = $null } }
+    @{ name = 'unknown-private-field'; mutate = {
+        param($bad)
+        $bad | Add-Member -NotePropertyName 'private_material' -NotePropertyValue 'fixture-private-value'
+    } }
+    @{ name = 'process-id'; mutate = { param($bad) $bad.process_id = 999 } }
+    @{ name = 'process-id-type'; mutate = { param($bad) $bad.process_id = '123' } }
+    @{ name = 'mode'; mutate = { param($bad) $bad.mode = 'fixtures' } }
+    @{ name = 'mode-boolean-true'; mutate = { param($bad) $bad.mode = $true } }
+    @{ name = 'mode-boolean-false'; mutate = { param($bad) $bad.mode = $false } }
+    @{ name = 'mode-array'; mutate = { param($bad) $bad.mode = @($bad.mode) } }
+    @{ name = 'mode-null'; mutate = { param($bad) $bad.mode = $null } }
+    @{ name = 'stage'; mutate = { param($bad) $bad.stage = 'matrix-completed' } }
+    @{ name = 'stage-boolean-true'; mutate = { param($bad) $bad.stage = $true } }
+    @{ name = 'stage-boolean-false'; mutate = { param($bad) $bad.stage = $false } }
+    @{ name = 'stage-array'; mutate = { param($bad) $bad.stage = @($bad.stage) } }
+    @{ name = 'stage-null'; mutate = { param($bad) $bad.stage = $null } }
+    @{ name = 'phase'; mutate = { param($bad) $bad.stage = $(if ($bad.stage -eq 'completed') { 'startup-completed' } else { 'completed' }) } }
+    @{ name = 'case-count'; mutate = { param($bad) $bad.case_count = 11 } }
+    @{ name = 'case-count-type'; mutate = { param($bad) $bad.case_count = '12' } }
+    @{ name = 'missing-case'; mutate = { param($bad) $bad.cases = @($bad.cases[0..10]) } }
+    @{ name = 'unknown-case'; mutate = { param($bad) $bad.cases[11].id = 'unqualified-case' } }
+    @{ name = 'duplicate-case'; mutate = { param($bad) $bad.cases[11] = $bad.cases[0] } }
+    @{ name = 'case-id-case'; mutate = { param($bad) $bad.cases[0].id = 'DPAPI-roundtrip' } }
+    @{ name = 'case-variant-duplicate'; mutate = {
+        param($bad)
+        $bad.cases[11].id = 'DPAPI-roundtrip'; $bad.cases[11].outcome = 'available'
+    } }
+    @{ name = 'wrong-outcome'; mutate = { param($bad) $bad.cases[1].outcome = 'available' } }
+    @{ name = 'outcome-case'; mutate = { param($bad) $bad.cases[0].outcome = 'Available' } }
+    @{ name = 'outcome-boolean-true'; mutate = { param($bad) $bad.cases[0].outcome = $true } }
+    @{ name = 'outcome-boolean-false'; mutate = { param($bad) $bad.cases[0].outcome = $false } }
+    @{ name = 'outcome-array'; mutate = { param($bad) $bad.cases[0].outcome = @($bad.cases[0].outcome) } }
+    @{ name = 'outcome-null'; mutate = { param($bad) $bad.cases[0].outcome = $null } }
+    @{ name = 'failed-case'; mutate = { param($bad) $bad.cases[0].passed = $false } }
+    @{ name = 'case-pass-type'; mutate = { param($bad) $bad.cases[0].passed = 'true' } }
+    @{ name = 'case-files-changed'; mutate = { param($bad) $bad.cases[0].files_preserved = $false } }
+    @{ name = 'case-files-type'; mutate = { param($bad) $bad.cases[0].files_preserved = 'true' } }
+    @{ name = 'case-not-reopened'; mutate = { param($bad) $bad.cases[0].reopened = $false } }
+    @{ name = 'case-reopened-type'; mutate = { param($bad) $bad.cases[0].reopened = 1 } }
+    @{ name = 'case-not-recovered'; mutate = { param($bad) $bad.cases[0].recovered = $false } }
+    @{ name = 'case-recovered-type'; mutate = { param($bad) $bad.cases[0].recovered = 'true' } }
+    @{ name = 'case-missing-proof'; mutate = { param($bad) $bad.cases[0].PSObject.Properties.Remove('recovered') } }
+    @{ name = 'unknown-case-private-field'; mutate = {
+        param($bad)
+        $bad.cases[0] | Add-Member -NotePropertyName 'private_key' -NotePropertyValue 'fixture-private-value'
+    } }
+    @{ name = 'dpapi-not-real'; mutate = { param($bad) $bad.real_current_user_dpapi = $false } }
+    @{ name = 'dpapi-type'; mutate = { param($bad) $bad.real_current_user_dpapi = 'true' } }
+    @{ name = 'startup-incomplete'; mutate = { param($bad) $bad.startup_completed = $false } }
+    @{ name = 'startup-completed-type'; mutate = { param($bad) $bad.startup_completed = 1 } }
+    @{ name = 'startup-access'; mutate = { param($bad) $bad.startup_access = 'Available' } }
+    @{ name = 'startup-access-boolean-true'; mutate = { param($bad) $bad.startup_access = $true } }
+    @{ name = 'startup-access-boolean-false'; mutate = { param($bad) $bad.startup_access = $false } }
+    @{ name = 'startup-access-array'; mutate = { param($bad) $bad.startup_access = @($bad.startup_access) } }
+    @{ name = 'startup-access-null'; mutate = { param($bad) $bad.startup_access = $null } }
+    @{ name = 'startup-session-lost'; mutate = { param($bad) $bad.startup_has_stored_session = $false } }
+    @{ name = 'startup-session-type'; mutate = { param($bad) $bad.startup_has_stored_session = 'true' } }
+    @{ name = 'startup-error-absent'; mutate = { param($bad) $bad.startup_error_reported = $false } }
+    @{ name = 'startup-error-type'; mutate = { param($bad) $bad.startup_error_reported = 'true' } }
+    @{ name = 'startup-files-changed'; mutate = { param($bad) $bad.startup_files_preserved = $false } }
+    @{ name = 'startup-files-type'; mutate = { param($bad) $bad.startup_files_preserved = 'true' } }
+    @{ name = 'startup-missing-proof'; mutate = { param($bad) $bad.PSObject.Properties.Remove('startup_files_preserved') } }
+    @{ name = 'cleanup-phase'; mutate = { param($bad) $bad.owned_directory_removed = -not $bad.owned_directory_removed } }
+    @{ name = 'cleanup-type'; mutate = { param($bad) $bad.owned_directory_removed = 'false' } }
+)
+$protectedStateRejected = 0
+foreach ($phase in @('Startup', 'Cleanup')) {
+    $validProtectedState = New-SmokeProtectedStateDiagnostic -Phase $phase
+    Assert-SmokeProtectedStateDiagnostic -Diagnostic $validProtectedState -ProcessId 123 -Phase $phase
+    $jsonProtectedState = $validProtectedState | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+    Assert-SmokeProtectedStateDiagnostic -Diagnostic $jsonProtectedState -ProcessId 123 -Phase $phase
+    foreach ($mutation in $protectedStateMutations) {
+        $bad = $validProtectedState | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+        $mutate = $mutation.mutate
+        & $mutate $bad
+        # Preserve the malformed field's actual JSON type, including arrays and
+        # null, rather than relying on PowerShell assignment coercion.
+        $bad = $bad | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+        $rejected = $false
+        try { Assert-SmokeProtectedStateDiagnostic -Diagnostic $bad -ProcessId 123 -Phase $phase }
+        catch { $rejected = $true }
+        if (-not $rejected) { throw "Application smoke accepts invalid protected-state $phase evidence: $($mutation.name)." }
+        $protectedStateRejected++
+    }
+}
+Write-Host "Application smoke protected-state receipt verification passed: 2 valid phases; $protectedStateRejected invalid receipts rejected."
+
 $desktop = [pscustomobject]@{ Left = -1920; Top = -200; Right = 0; Bottom = 880 }
 $bounds = [pscustomobject]@{ Left = -1840; Top = -140; Right = -900; Bottom = 500 }
 $point = Get-SmokeCaptureCursorPoint -Desktop $desktop -WindowBounds $bounds

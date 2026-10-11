@@ -276,6 +276,11 @@ public sealed partial class HomePage : Page
         var snapshot = _services.VpnUiState.Snapshot;
         if (!VpnConnectionActionPolicy.ShouldDisconnect(snapshot))
         {
+            if (VpnFailurePresentation.RequiresAccountAction(snapshot.ErrorCode))
+            {
+                _services.MainWindow?.NavigateToSection(AppSection.Account);
+                return;
+            }
             // Startup and periodic background checks keep this snapshot fresh.
             // Connecting must never wait on the updater's network timeout.
             var update = _services.UpdateService.CurrentSnapshot;
@@ -432,7 +437,8 @@ public sealed partial class HomePage : Page
                 }
             }
         }
-        catch (OperationCanceledException) when (connectionOperation)
+        catch (OperationCanceledException error) when (connectionOperation &&
+            !VpnFailurePresentation.IsNetworkTimeout(error))
         {
             // Explicit cancellation is followed by confirmed service cleanup.
         }
@@ -448,9 +454,7 @@ public sealed partial class HomePage : Page
                 or OperationCanceledException)
         {
             LogUiFailure(error);
-            var errorCode = error is NativeClientFlowException flow
-                ? flow.Code
-                : "vpn_service_unavailable";
+            var errorCode = VpnFailurePresentation.CodeFromException(error);
             if (errorCode == "vpn_service_unavailable")
             {
                 HideNotice();
@@ -724,8 +728,9 @@ public sealed partial class HomePage : Page
                 SelectPreferredLocation(preserveCatalogSelection: false);
             }
             if (error is not OperationCanceledException)
-                ShowNotice(error is NativeClientFlowException { Code: "vpn_operation_in_progress" }
-                    ? ErrorMessage("vpn_operation_in_progress") : error.Message, InfoBarSeverity.Error);
+                ShowNotice(ErrorMessage(VpnFailurePresentation.CodeFromException(error)), InfoBarSeverity.Error);
+            else if (VpnFailurePresentation.IsNetworkTimeout(error))
+                ShowNotice(ErrorMessage(VpnFailurePresentation.NetworkTimeout), InfoBarSeverity.Error);
         }
         finally
         {
@@ -800,9 +805,9 @@ public sealed partial class HomePage : Page
             CryptographicException or VpnIpcProtocolException or OperationCanceledException)
         {
             LogUiFailure(error);
-            var message = error is NativeClientFlowException flow ? ErrorMessage(flow.Code)
-                : "Не удалось включить автовыбор. Повторите попытку.";
-            if (error is not OperationCanceledException) ShowNotice(message + (restorationFailed
+            var message = ErrorMessage(VpnFailurePresentation.CodeFromException(error));
+            if (error is not OperationCanceledException || VpnFailurePresentation.IsNetworkTimeout(error))
+                ShowNotice(message + (restorationFailed
                 ? " Не удалось сохранить прежние настройки сервера. Проверьте доступ к папке VEX."
                 : string.Empty), InfoBarSeverity.Error);
         }
@@ -933,6 +938,9 @@ public sealed partial class HomePage : Page
             VpnConnectionPhase.Error
                 when VpnConnectionActionPolicy.ShouldDisconnect(snapshot) =>
                 ("Нужна очистка VPN", "Нажмите, чтобы отключить", true),
+            VpnConnectionPhase.Error
+                when VpnFailurePresentation.RequiresAccountAction(snapshot.ErrorCode) =>
+                ("Открыть аккаунт", "Подписка и управление устройствами — на вкладке «Аккаунт»", true),
             VpnConnectionPhase.Error =>
                 ("Нужна проверка", "Нажмите, чтобы повторить", true),
             _ => ("Неизвестное состояние", "Нажмите, чтобы повторить", true),
@@ -966,7 +974,8 @@ public sealed partial class HomePage : Page
         PowerGlyph.Opacity = busy ? 0.22 : 1;
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(PowerButton,
             canCancel ? "Отменить подключение VPN" :
-                VpnConnectionActionPolicy.ShouldDisconnect(snapshot) ? "Отключить VPN" : "Подключить VPN");
+                VpnConnectionActionPolicy.ShouldDisconnect(snapshot) ? "Отключить VPN" :
+                VpnFailurePresentation.RequiresAccountAction(snapshot.ErrorCode) ? "Открыть аккаунт" : "Подключить VPN");
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetHelpText(PowerButton, StatusText.Text);
         if (connected != _heroWasConnected)
         {
@@ -1343,7 +1352,8 @@ public sealed partial class HomePage : Page
         FoundationNotice.Message = string.Empty;
     }
 
-    private static string ErrorMessage(string? errorCode) => errorCode switch
+    private static string ErrorMessage(string? errorCode) =>
+        VpnFailurePresentation.MessageFor(errorCode) ?? (errorCode switch
     {
         "unauthorized" => "Требуется восстановить безопасную установку VEX.",
         "tunnel_runtime_missing" => "Компоненты VPN повреждены или отсутствуют.",
@@ -1358,7 +1368,7 @@ public sealed partial class HomePage : Page
         "vpn_service_unavailable" => "Системный компонент VEX недоступен. Откройте настройки для восстановления.",
         "tunnel_cleanup_incomplete" => "Отключение VPN ещё не подтверждено. VEX повторит очистку; можно нажать, чтобы повторить сейчас.",
         _ => "Не удалось выполнить операцию VPN.",
-    };
+    });
 
     private sealed record ServerCountryPresentation(string Title, IReadOnlyList<ServerRowPresentation> Rows);
 

@@ -1,15 +1,19 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][switch]$DisposableRunner,
-    [Parameter(Mandatory = $true)][string]$ResultPath
+    [Parameter(Mandatory = $true)][string]$ResultPath,
+    [switch]$FullTunnelChecks
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 # This is a deliberately restrictive CI fixture, never a user's VPN smoke test.
-# It must not install over a service, adopt an adapter, change the default route,
-# change firewall policy, call production endpoints, or use release credentials.
+# It must not install over a service, adopt an adapter, or use release credentials.
+# The explicit FullTunnelChecks mode briefly applies owned full routes/AntiLeak
+# and sends one unauthenticated physical HTTPS request to the control host.
+# Its isolated SCM controller, short signed lease and finally restore only
+# the exact owned network state. Default mode keeps the isolated /32 fixture.
 if (-not $DisposableRunner -or -not $IsWindows -or $env:GITHUB_ACTIONS -cne 'true' -or
     $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:RUNNER_OS -cne 'Windows' -or
     [string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
@@ -160,6 +164,7 @@ $scriptResult = [ordered]@{
     runtime_msi_sha256 = 'a1b48ea8699cd347832a3691d832004574ef8ad65bcf887611ac8acb99b7de8b'
     disposable_hosted_runner = $true
     anti_leak_enabled = $false
+    full_tunnel_checks_requested = [bool]$FullTunnelChecks
     vendor_service_removed = $false
     fixture_controller_service_removed = $false
     tunnel_adapter_removed = $false
@@ -236,8 +241,10 @@ try {
     # before VEX can create its one previously absent vendor tunnel service.
     $runtimeOwned = $true
     $scriptResult.stage = 'runtime-acceptance'
+    $harnessArguments = @('--disposable-runner', $fixtureDirectory, $runtimeDirectory, $ResultPath)
+    if ($FullTunnelChecks) { $harnessArguments += '--full-tunnel-checks' }
     Invoke-FixtureProcess -FilePath (Join-Path $harnessDirectory 'Vex.Windows.VpnAcceptance.exe') `
-        -Arguments @('--disposable-runner', $fixtureDirectory, $runtimeDirectory, $ResultPath) -TimeoutSeconds 390
+        -Arguments $harnessArguments -TimeoutSeconds 390
     $harnessResult = Get-Content -LiteralPath $ResultPath -Raw | ConvertFrom-Json
     if (-not $harnessResult.passed) { throw 'Actual VEX tunnel fixture did not pass.' }
 }

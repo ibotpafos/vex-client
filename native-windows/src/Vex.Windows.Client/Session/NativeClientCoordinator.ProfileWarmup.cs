@@ -84,14 +84,17 @@ public sealed partial class NativeClientCoordinator
             warmup.Token.ThrowIfCancellationRequested();
             if (profile.Revoked || profile.RotationRequired || profile.Unchanged || profile.Version < 1 ||
                 profile.DeviceId != captured.DeviceId || profile.Authorization is null ||
-                profile.ClientPublicKey != captured.Identity.PublicKey || profile.ClientKeyEpoch != captured.Identity.KeyEpoch)
+                profile.ClientPublicKey != captured.Identity.PublicKey || profile.ClientKeyEpoch is not > 0 ||
+                profile.ClientKeyEpoch < captured.Identity.KeyEpoch)
                 return false;
+            var aligned = AlignProfileIdentity(captured, profile);
+            target = target with { Identity = aligned.Identity };
             var authorized = verifier.Authorize(profile.Authorization.ToServiceAuthorization(), captured.Identity.PrivateKey);
             if (authorized.ExpiresAt <= _utcNow() + TimeSpan.FromSeconds(30) ||
                 authorized.LocationId != locationId || !SignedWarmupScopeMatches(profile.Authorization, target, profile.Version))
                 return false;
             var grant = new WarmedProfileGrant(captured.Session.User.Id, captured.DeviceId, locationId,
-                routingMode, bypassRegion, captured.Identity.PublicKey, captured.Identity.KeyEpoch,
+                routingMode, bypassRegion, aligned.Identity.PublicKey, aligned.Identity.KeyEpoch,
                 profile.Version, profile.Authorization, authorized.ExpiresAt);
             if (!_gate.Wait(0)) return false;
             try
@@ -101,9 +104,12 @@ public sealed partial class NativeClientCoordinator
                 {
                     if (warmup.IsCancellationRequested || generation != _warmupGeneration || latest is null ||
                         !SameWarmupSnapshot(captured, latest)) return false;
-                    // Only the optional cache changes. Working authorization,
+                    var saved = MergeNewerEntitlement(latest, entitlementState);
+                    if (aligned.Identity != captured.Identity)
+                        saved = ClearIdentityCaches(saved with { Identity = aligned.Identity });
+                    // A confirmed PSK epoch change invalidates earlier leases;
                     // routing preference and assigned location remain intact.
-                    var saved = MergeNewerEntitlement(latest, entitlementState) with { WarmedProfile = grant };
+                    saved = saved with { WarmedProfile = grant };
                     _stateStore.Save(saved);
                     return true;
                 }
@@ -213,7 +219,8 @@ public sealed partial class NativeClientCoordinator
 
     private static bool SameWarmupSnapshot(NativeClientState before, NativeClientState after) =>
         before.Session.AccessToken == after.Session.AccessToken && before.Session.User.Id == after.Session.User.Id &&
-        before.InstallationId == after.InstallationId && before.DeviceId == after.DeviceId && before.LocationId == after.LocationId &&
+        before.InstallationId == after.InstallationId && before.VpnRegistrationId == after.VpnRegistrationId &&
+        before.VpnExternalDeviceId == after.VpnExternalDeviceId && before.DeviceId == after.DeviceId && before.LocationId == after.LocationId &&
         before.RoutingMode == after.RoutingMode && before.BypassRegion == after.BypassRegion &&
         before.Identity == after.Identity && after.PendingIdentity is null &&
         before.CachedProfileVersion == after.CachedProfileVersion && before.CachedAuthorization == after.CachedAuthorization;

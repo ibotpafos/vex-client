@@ -60,6 +60,20 @@ public partial class App : Application
             return;
         }
 
+        if (UiPreviewContext.IsTrayRecoveryCommand(
+            (args.Data as ILaunchActivatedEventArgs)?.Arguments))
+        {
+#if DEBUG
+            if (!UiPreviewTrayRequest.TryParse((args.Data as ILaunchActivatedEventArgs)?.Arguments, out var request)) return;
+            var trace = new UiPreviewTrayActivation(request!);
+            trace.Record("redirected-request-accepted");
+            _ = HandleActivationAsync(args, trayTrace: trace);
+#else
+            _ = HandleActivationAsync(args);
+#endif
+            return;
+        }
+
 #if DEBUG
         if (UiPreviewContext.IsMinimizeCommand(
             (args.Data as ILaunchActivatedEventArgs)?.Arguments))
@@ -68,20 +82,6 @@ public partial class App : Application
             return;
         }
 #endif
-
-        if (UiPreviewContext.IsTrayRecoveryCommand(
-            (args.Data as ILaunchActivatedEventArgs)?.Arguments))
-        {
-#if DEBUG
-            var trace = new UiPreviewTrayActivation(UiPreviewTrayActivation.Scenario(
-                (args.Data as ILaunchActivatedEventArgs)?.Arguments));
-            trace.Record("redirected-request-accepted");
-            _ = HandleActivationAsync(args, trayTrace: trace);
-#else
-            _ = HandleActivationAsync(args);
-#endif
-            return;
-        }
 
         _window.ShowShellWindow();
         _window.Activate();
@@ -101,13 +101,17 @@ public partial class App : Application
             ? launch.Arguments : null;
         if (UiPreviewContext.IsEnabled)
         {
-            if (UiPreviewContext.IsExitCommand(launchArguments)) ExitApplication();
 #if DEBUG
-            else if (UiPreviewContext.IsTrayRecoveryCommand(launchArguments) && _trayIconHost is not null)
+            if (UiPreviewContext.IsTrayRecoveryCommand(launchArguments))
             {
+                if (trayTrace is null)
+                {
+                    if (!UiPreviewTrayRequest.TryParse(launchArguments, out var request)) return;
+                    trayTrace = new UiPreviewTrayActivation(request!);
+                }
+                if (_trayIconHost is null) return;
                 var services = AppServices.Current;
-                var scenario = UiPreviewTrayActivation.Scenario(launchArguments);
-                trayTrace ??= new UiPreviewTrayActivation(scenario);
+                var scenario = trayTrace.Request.Scenario;
                 try
                 {
                     trayTrace.Record("handler-started");
@@ -128,15 +132,17 @@ public partial class App : Application
                         await _trayIconHost.ToggleConnectionAsync();
                     }
                     trayTrace.Record("completion-recording");
-                    UiPreviewFixtures.RecordTrayRecovery(scenario, services);
+                    UiPreviewFixtures.RecordTrayRecovery(trayTrace, services);
                 }
                 catch (Exception error)
                 {
                     trayTrace.RecordFailure(error);
                     throw;
                 }
+                return;
             }
 #endif
+            if (UiPreviewContext.IsExitCommand(launchArguments)) ExitApplication();
             // UI-review activations never enter browser authentication.
             return;
         }

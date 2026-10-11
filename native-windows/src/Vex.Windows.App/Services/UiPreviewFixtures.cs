@@ -16,18 +16,21 @@ internal static class UiPreviewFixtures
     private static int _connectRequests;
     private static int _trustedConnectRequests;
 
-    internal static void RecordTrayRecovery(string scenario, AppServices services)
+    internal static void RecordTrayRecovery(UiPreviewTrayActivation trace, AppServices services)
     {
         if (!UiPreviewContext.IsEnabled || UiPreviewContext.StateDirectory is null)
             throw new InvalidOperationException("Tray diagnostics require isolated UI preview.");
-        var path = Path.Combine(Path.GetTempPath(), $"vex-ui-preview-tray-{Environment.ProcessId}.json");
+        var request = trace.Request;
+        var path = request.CompletedPath;
+        if (File.Exists(path) || Directory.Exists(path) || File.Exists(path + ".tmp") || Directory.Exists(path + ".tmp"))
+            throw new IOException("Tray completed receipt paths must be unused.");
         var value = JsonSerializer.Serialize(new
         {
             schema = "vex.windows.ui-preview-tray-recovery.v1",
             process_id = Environment.ProcessId,
             preview_mode = UiPreviewContext.IsProtectedStateFaultPreview ? "protected-state-fault" :
                 UiPreviewContext.IsAuthenticated ? "fixtures" : "signed-out",
-            scenario,
+            scenario = request.Scenario,
             access = services.Coordinator.CurrentStateAccess.ToString(),
             connect_requests = Volatile.Read(ref _connectRequests),
             trusted_connect_requests = Volatile.Read(ref _trustedConnectRequests),
@@ -35,8 +38,10 @@ internal static class UiPreviewFixtures
             waiting_for_browser_auth = services.Auth.IsWaitingForBrowserAuth,
             handler_completed = true,
         });
+        trace.Record("completion-temp-write");
         File.WriteAllText(path + ".tmp", value);
-        File.Move(path + ".tmp", path, overwrite: true);
+        trace.Record("completion-move");
+        File.Move(path + ".tmp", path, overwrite: false);
     }
 #endif
 

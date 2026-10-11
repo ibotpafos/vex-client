@@ -59,7 +59,8 @@ if ([Runtime.InteropServices.Marshal]::SizeOf([type][Vex.Windows.Smoke.WindowPoi
 # Execute the actual pure capture helpers, without desktop interaction.
 foreach ($functionName in @('Wait-SmokeCondition', 'Wait-SmokeCaptureBounds', 'Get-SmokeCaptureCursorPoint', 'Set-SmokeCaptureFocus',
     'Assert-SmokeTrayRecoveryDiagnostic', 'Assert-SmokeProtectedStateDiagnostic', 'Open-SmokeTrayDiagnosticRead',
-    'Read-SmokeTrayDiagnostic', 'Assert-SmokeTrayActivationProgress', 'Wait-SmokeTrayRecoveryDiagnostic')) {
+    'Read-SmokeTrayDiagnostic', 'Assert-SmokeTrayActivationProgress', 'Wait-SmokeTrayRecoveryDiagnostic',
+    'Get-SmokeTrayRequestPaths', 'Invoke-SmokeTrayRequest')) {
     $functionAst = $ast.Find({
         param($node)
         $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $functionName
@@ -172,19 +173,33 @@ foreach ($unexpected in @($wrongDenied, $wrongSharing, $wrongFacility, $derivedS
 }
 Write-Host 'Tray sharing exception classification passed: 4 exact/nested positives; 7 unrelated/mismatched negatives.'
 
+# Paths are computed by the actual consumer from a typed nonce and original PID.
 $trayTestRoot = Join-Path ([IO.Path]::GetTempPath()) ('vex-tray-diagnostic-tests-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $trayTestRoot | Out-Null
+$ownedTrayPaths = [Collections.Generic.List[string]]::new()
+function Own-TrayPaths {
+    param([Guid]$RequestId, [int]$ProcessId = $PID, [string]$Scenario = 'reset')
+    $paths = Get-SmokeTrayRequestPaths -RequestId $RequestId -ProcessId $ProcessId -Scenario $Scenario
+    foreach ($candidate in @($paths.Completed, $paths.Completed + '.tmp', $paths.Progress, $paths.Progress + '.tmp')) {
+        if (Test-Path -LiteralPath $candidate) { throw 'Tray test refuses pre-existing request files.' }
+        $ownedTrayPaths.Add($candidate)
+    }
+    return $paths
+}
 try {
-    $trayDiagnosticPath = Join-Path $trayTestRoot 'tray.json'
     $PreviewMode = 'fixtures'
     $process = [pscustomobject]@{ Id = 123 }
     $result = [ordered]@{ tray_activation_progress = $null }
+    $trayDiagnosticHashes = @{}
+    $waitRequest = [Guid]::NewGuid()
+    $waitPaths = Own-TrayPaths -RequestId $waitRequest -ProcessId 123
+    $trayDiagnosticPath = $waitPaths.Completed
     foreach ($failureType in @($null, 'IOException')) {
         $progress.failure_type = $failureType
-        [IO.File]::WriteAllText($trayDiagnosticPath, ([pscustomobject]$progress | ConvertTo-Json -Compress))
+        [IO.File]::WriteAllText($waitPaths.Progress, ([pscustomobject]$progress | ConvertTo-Json -Compress))
         $waitStarted = [DateTime]::UtcNow
         $rejected = $false
-        try { Wait-SmokeTrayRecoveryDiagnostic -Scenario 'reset' -Access 'Available' | Out-Null }
+        try { Wait-SmokeTrayRecoveryDiagnostic -RequestId $waitRequest -Scenario 'reset' -Access 'Available' | Out-Null }
         catch {
             if ($_.Exception.Message -cne 'Actual tray recovery did not complete with an isolated diagnostic.') { throw }
             $rejected = $true
@@ -199,32 +214,69 @@ try {
     foreach ($key in $trayDiagnostic.Keys) { $completed[$key] = $trayDiagnostic[$key] }
     $completed.scenario = 'reset'; $completed.access = 'Available'
     [IO.File]::WriteAllText($trayDiagnosticPath, ([pscustomobject]$completed | ConvertTo-Json -Compress))
-    $actual = Wait-SmokeTrayRecoveryDiagnostic -Scenario 'reset' -Access 'Available'
+    $actual = Wait-SmokeTrayRecoveryDiagnostic -RequestId $waitRequest -Scenario 'reset' -Access 'Available'
     if ($actual.scenario -cne 'reset' -or -not $actual.handler_completed -or $null -ne $result.tray_activation_progress) {
         throw 'Actual completed v1 tray receipt changed its contract or retained stale progress from the previous wait.'
+    }
+    # A valid receipt belonging to another nonce cannot satisfy this request.
+    $wrongNonce = [Guid]::NewGuid()
+    $wrongPaths = Own-TrayPaths -RequestId $wrongNonce -ProcessId 123
+    $waitStarted = [DateTime]::UtcNow
+    $rejected = $false
+    try { Wait-SmokeTrayRecoveryDiagnostic -RequestId $wrongNonce -Scenario 'reset' -Access 'Available' | Out-Null }
+    catch {
+        if ($_.Exception.Message -cne 'Actual tray recovery did not complete with an isolated diagnostic.') { throw }
+        $rejected = $true
+    }
+    if (-not $rejected -or ([DateTime]::UtcNow - $waitStarted).TotalSeconds -lt 8 -or $null -ne $script:trayRecoveryDiagnostic) {
+        throw 'A different request nonce bypassed the original eight-second completion gate.'
+    }
+    foreach ($invalid in @(
+        @{ RequestId = [Guid]::Empty; ProcessId = 123; Scenario = 'reset' }
+        @{ RequestId = [Guid]::NewGuid(); ProcessId = 0; Scenario = 'reset' }
+        @{ RequestId = [Guid]::NewGuid(); ProcessId = 123; Scenario = 'unknown' }
+        @{ RequestId = [Guid]::NewGuid(); ProcessId = 123; Scenario = 'Reset' }
+        @{ RequestId = 'malformed'; ProcessId = 123; Scenario = 'reset' }
+    )) {
+        $rejected = $false
+        try { Get-SmokeTrayRequestPaths @invalid | Out-Null } catch { $rejected = $true }
+        if (-not $rejected) { throw 'Tray request paths accept an invalid nonce, process or scenario.' }
+    }
+    # Exercise actual launch metadata without starting a process or touching UI.
+    function Invoke-RedirectedLaunch { param([string]$Arguments) $script:capturedTrayArguments = $Arguments }
+    $requestA = Invoke-SmokeTrayRequest -Scenario 'locked'
+    $argumentsA = $script:capturedTrayArguments
+    $requestB = Invoke-SmokeTrayRequest -Scenario 'locked'
+    if ($requestA -eq $requestB -or $argumentsA -cne "--ui-smoke-tray-connect-locked --ui-smoke-tray-request=$($requestA.ToString('N'))" -or
+        $script:capturedTrayArguments -cne "--ui-smoke-tray-connect-locked --ui-smoke-tray-request=$($requestB.ToString('N'))") {
+        throw 'Actual tray launch consumer did not issue fresh canonical request metadata.'
     }
     foreach ($invalidBytes in @([byte[]]@(0xff), [byte[]]::new(65537), [byte[]]::new(0))) {
         [IO.File]::WriteAllBytes($trayDiagnosticPath, $invalidBytes)
         $rejected = $false
-        try { Read-SmokeTrayDiagnostic -Path $trayDiagnosticPath | Out-Null }
-        catch { $rejected = $true }
+        try { Read-SmokeTrayDiagnostic -Path $trayDiagnosticPath | Out-Null } catch { $rejected = $true }
         if (-not $rejected) { throw 'Tray diagnostic reader accepts invalid UTF8, an empty file or an oversized file.' }
     }
     [IO.File]::WriteAllText($trayDiagnosticPath, '{')
     $rejected = $false
-    try { Read-SmokeTrayDiagnostic -Path $trayDiagnosticPath | Out-Null }
-    catch { $rejected = $true }
+    try { Read-SmokeTrayDiagnostic -Path $trayDiagnosticPath | Out-Null } catch { $rejected = $true }
     if (-not $rejected) { throw 'Tray diagnostic reader accepts malformed JSON.' }
 
-    # Compile the existing completed receipt writer verbatim. Minimal services
-    # stand in for WinUI; its actual File.WriteAllText/File.Move body is intact.
+    # Current completed writer and typed request/progress helpers are exact
+    # source, compiled with minimal services instead of WinUI/auth/VPN.
     $fixtureSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../src/Vex.Windows.App/Services/UiPreviewFixtures.cs') -Raw
     $start = $fixtureSource.IndexOf('    internal static void RecordTrayRecovery(')
-    $end = $fixtureSource.IndexOf([Environment]::NewLine + '#endif', $start)
-    if ($end -lt 0) { $end = $fixtureSource.IndexOf("`n#endif", $start) }
+    $end = $fixtureSource.IndexOf("`n#endif", $start)
     if ($start -lt 0 -or $end -le $start) { throw 'Actual tray receipt writer cannot be extracted.' }
     $writer = $fixtureSource.Substring($start, $end - $start)
     $activationSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../src/Vex.Windows.App/Services/UiPreviewTrayActivation.cs') -Raw
+    $requestSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../src/Vex.Windows.App/Services/UiPreviewTrayRequest.cs') -Raw
+    # This historical same-path control is VERBATIM from e2779dd2's bounded
+    # RecordTrayRecovery method (full source SHA09a5cbc9...). New overwrite:false
+    # cannot prove old sharing: an existing destination fails without a reader.
+    $legacyWriter = (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'fixtures/UiPreviewTrayLegacyWriter.cs.txt') -Raw).Replace("`r`n", "`n")
+    $legacyHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($legacyWriter))).ToLowerInvariant()
+    if ($legacyHash -cne 'e9a9858211c1e47f391da50b46eafb9a5a98689eee5c7e9565e96e44c34a4b96') { throw 'Historical tray writer control differs from its frozen source method.' }
     $harnessSource = @'
 #nullable enable
 using System;
@@ -235,11 +287,11 @@ using System.Threading;
 namespace Vex.Windows.App.Services;
 internal static class UiPreviewContext
 {
+    internal const string TrayRequestPrefix = "--ui-smoke-tray-request";
     internal static bool IsEnabled = true;
     internal static string? StateDirectory = "isolated-test-directory";
     internal static bool IsProtectedStateFaultPreview = false;
     internal static bool IsAuthenticated = true;
-    internal static bool HasCommand(string? arguments, string command) => arguments == command;
 }
 internal sealed class AppServices
 {
@@ -256,127 +308,206 @@ internal static class UiPreviewFixtures
     private static int _trustedConnectRequests = 0;
 __ACTUAL_WRITER__
 }
+internal static class HistoricalUiPreviewFixtures
+{
+    private static int _connectRequests = 0;
+    private static int _trustedConnectRequests = 0;
+__HISTORICAL_WRITER__
+}
 public static class TrayDiagnosticWriterHarness
 {
-    public static string PathName => Path.Combine(Path.GetTempPath(), $"vex-ui-preview-tray-{Environment.ProcessId}.json");
-    public static void Complete() => UiPreviewFixtures.RecordTrayRecovery("reset", new());
-    public static void Stage(string stage) => new UiPreviewTrayActivation("reset").Record(stage);
-    public static void Fail() => new UiPreviewTrayActivation("reset").RecordFailure(new IOException("private test message"));
-    public static void RejectOutsidePreview()
+    public static string HistoricalPath => Path.Combine(Path.GetTempPath(), $"vex-ui-preview-tray-{Environment.ProcessId}.json");
+    public static void HistoricalComplete() => HistoricalUiPreviewFixtures.RecordTrayRecovery("reset", new());
+    public static string CompletedPath(Guid id) => new UiPreviewTrayRequest(id, "reset").CompletedPath;
+    public static string ProgressPath(Guid id) => new UiPreviewTrayRequest(id, "reset").ProgressPath;
+    public static void Complete(Guid id) => UiPreviewFixtures.RecordTrayRecovery(new(new(id, "reset")), new());
+    public static void Stage(Guid id, string stage) => new UiPreviewTrayActivation(new(id, "reset")).Record(stage);
+    public static void Fail(Guid id) => new UiPreviewTrayActivation(new(id, "reset")).RecordFailure(new IOException("private test message"));
+    public static bool Parse(string? arguments) => UiPreviewTrayRequest.TryParse(arguments, out _);
+    public static void RejectOutsidePreview(Guid id)
     {
         UiPreviewContext.IsEnabled = false;
-        try { Stage("handler-started"); }
+        try { Stage(id, "handler-started"); }
         finally { UiPreviewContext.IsEnabled = true; }
     }
 }
 '@
-    $harnessSource = $harnessSource.Replace('__ACTUAL_WRITER__', $writer)
-    # A file-scoped namespace is shared by concatenating its exact helper body.
+    $harnessSource = $harnessSource.Replace('__ACTUAL_WRITER__', $writer).Replace('__HISTORICAL_WRITER__', $legacyWriter)
     $activationSource = $activationSource.Replace('using System.Text.Json;', '').Replace('namespace Vex.Windows.App.Services;', '')
-    Add-Type -TypeDefinition ($harnessSource + [Environment]::NewLine + $activationSource) -CompilerOptions @('/nullable:enable', '/define:DEBUG')
-    $producerPath = [Vex.Windows.App.Services.TrayDiagnosticWriterHarness]::PathName
-    if (Test-Path -LiteralPath $producerPath) { throw 'Tray writer test refuses a pre-existing per-PID diagnostic.' }
-    try {
-        [Vex.Windows.App.Services.TrayDiagnosticWriterHarness]::Stage('reset-ui-requested')
-        $written = Read-SmokeTrayDiagnostic -Path $producerPath
-        Assert-SmokeTrayActivationProgress -Diagnostic $written -Scenario 'reset' -Mode 'fixtures' -ProcessId $PID
-        [Vex.Windows.App.Services.TrayDiagnosticWriterHarness]::Fail()
-        $written = Read-SmokeTrayDiagnostic -Path $producerPath
-        Assert-SmokeTrayActivationProgress -Diagnostic $written -Scenario 'reset' -Mode 'fixtures' -ProcessId $PID
-        if ($written.failure_type -cne 'IOException' -or ($written | ConvertTo-Json) -match 'private test message') { throw 'Actual Debug progress writer leaked an exception message.' }
-        $before = (Get-FileHash -LiteralPath $producerPath -Algorithm SHA256).Hash
-        [Vex.Windows.App.Services.TrayDiagnosticWriterHarness]::RejectOutsidePreview()
-        if ((Get-FileHash -LiteralPath $producerPath -Algorithm SHA256).Hash -cne $before) { throw 'Debug progress wrote outside active isolated preview.' }
-        # Block its temporary path: best-effort progress must leave the original
-        # outcome/evidence untouched; completed receipt failure must still throw.
-        New-Item -ItemType Directory -Path ($producerPath + '.tmp') | Out-Null
-        try {
-            [Vex.Windows.App.Services.TrayDiagnosticWriterHarness]::Stage('handler-started')
-            $rejected = $false
-            try { [Vex.Windows.App.Services.TrayDiagnosticWriterHarness]::Complete() }
-            catch { $rejected = $true }
-            if (-not $rejected -or (Get-FileHash -LiteralPath $producerPath -Algorithm SHA256).Hash -cne $before) { throw 'Diagnostic path failure changed completed writer behavior or existing evidence.' }
+    $requestSource = $requestSource.Replace('namespace Vex.Windows.App.Services;', '')
+    Add-Type -TypeDefinition ($harnessSource + "`n" + $activationSource + "`n" + $requestSource) -CompilerOptions @('/nullable:enable', '/define:DEBUG')
+    $canonical = 'abcdef0123456789abcdef0123456789'
+    foreach ($command in @('--ui-smoke-tray-reset', '--ui-smoke-tray-connect', '--ui-smoke-tray-connect-locked')) {
+        if (-not [Vex.Windows.App.Services.TrayDiagnosticWriterHarness]::Parse("$command --ui-smoke-tray-request=$canonical")) { throw 'Actual tray parser rejects a canonical request.' }
+        foreach ($executable in @([Environment]::ProcessPath, ('"' + [Environment]::ProcessPath + '"'))) {
+            if (-not [Vex.Windows.App.Services.TrayDiagnosticWriterHarness]::Parse("$executable $command --ui-smoke-tray-request=$canonical")) { throw 'Actual tray parser rejects its exact executable-prefixed SDK launch data.' }
         }
-        finally { Remove-Item -LiteralPath ($producerPath + '.tmp') }
-        if ($IsWindows) {
-            if (Test-Path -LiteralPath ($producerPath + '.tmp')) { throw 'Tray sharing control refuses a pre-existing temporary receipt.' }
-            [IO.File]::WriteAllText($producerPath, ([pscustomobject]$trayDiagnostic | ConvertTo-Json -Compress))
+    }
+    $invalidRequests = @(
+        $null, '', '--ui-smoke-tray-reset', "--ui-smoke-tray-request=$canonical",
+        '--ui-smoke-tray-reset --ui-smoke-tray-request=00000000000000000000000000000000',
+        '--ui-smoke-tray-reset --ui-smoke-tray-request=malformed',
+        "--ui-smoke-tray-reset --ui-smoke-tray-request=$([Guid]::Parse($canonical).ToString('D'))",
+        "--ui-smoke-tray-reset --ui-smoke-tray-request=$($canonical.ToUpperInvariant())",
+        "--ui-smoke-tray-reset --ui-smoke-tray-request=$canonical --ui-smoke-tray-request=$canonical",
+        "--ui-smoke-tray-reset --ui-smoke-tray-reset --ui-smoke-tray-request=$canonical",
+        "--ui-smoke-tray-reset --ui-smoke-tray-connect --ui-smoke-tray-request=$canonical",
+        "--ui-smoke-tray-reset --ui-smoke-tray-request-unknown=$canonical",
+        "--ui-smoke-tray-reset --ui-smoke-tray-request=$canonical --ui-smoke-exit",
+        "--ui-smoke-tray-reset --ui-smoke-tray-request=$canonical --ui-smoke-minimize",
+        "--ui-smoke-tray-reset --ui-smoke-tray-request=$canonical --focus-pulse-ui-preview",
+        "--ui-smoke-tray-reset --ui-smoke-tray-request=$canonical --unknown",
+        "--ui-smoke-tray-reset --ui-smoke-tray-request $canonical"
+        "unknown.exe --ui-smoke-tray-reset --ui-smoke-tray-request=$canonical"
+        ('"unknown.exe" --ui-smoke-tray-reset --ui-smoke-tray-request=' + $canonical)
+        ('"' + [Environment]::ProcessPath + '"--ui-smoke-tray-reset --ui-smoke-tray-request=' + $canonical)
+        ([Environment]::ProcessPath + '.other --ui-smoke-tray-reset --ui-smoke-tray-request=' + $canonical)
+    )
+    foreach ($invalid in $invalidRequests) {
+        if ([Vex.Windows.App.Services.TrayDiagnosticWriterHarness]::Parse($invalid)) { throw 'Actual tray parser accepts malformed, duplicate, missing or mixed request metadata.' }
+    }
+    $producerRequest = [Guid]::NewGuid()
+    $producerPaths = Own-TrayPaths -RequestId $producerRequest
+    if ([Vex.Windows.App.Services.TrayDiagnosticWriterHarness]::CompletedPath($producerRequest) -cne $producerPaths.Completed -or
+        [Vex.Windows.App.Services.TrayDiagnosticWriterHarness]::ProgressPath($producerRequest) -cne $producerPaths.Progress) { throw 'Actual producer and consumer disagree about nonce-bound paths.' }
+    [Vex.Windows.App.Services.TrayDiagnosticWriterHarness]::Stage($producerRequest, 'reset-ui-requested')
+    $written = Read-SmokeTrayDiagnostic -Path $producerPaths.Progress
+    Assert-SmokeTrayActivationProgress -Diagnostic $written -Scenario 'reset' -Mode 'fixtures' -ProcessId $PID
+    [Vex.Windows.App.Services.TrayDiagnosticWriterHarness]::Fail($producerRequest)
+    $written = Read-SmokeTrayDiagnostic -Path $producerPaths.Progress
+    Assert-SmokeTrayActivationProgress -Diagnostic $written -Scenario 'reset' -Mode 'fixtures' -ProcessId $PID
+    if ($written.failure_type -cne 'IOException' -or ($written | ConvertTo-Json) -match 'private test message') { throw 'Actual Debug progress writer leaked an exception message.' }
+    $before = (Get-FileHash -LiteralPath $producerPaths.Progress -Algorithm SHA256).Hash
+    [Vex.Windows.App.Services.TrayDiagnosticWriterHarness]::RejectOutsidePreview($producerRequest)
+    if ((Get-FileHash -LiteralPath $producerPaths.Progress -Algorithm SHA256).Hash -cne $before) { throw 'Debug progress wrote outside active isolated preview.' }
+    New-Item -ItemType Directory -Path ($producerPaths.Progress + '.tmp') | Out-Null
+    try {
+        [Vex.Windows.App.Services.TrayDiagnosticWriterHarness]::Stage($producerRequest, 'handler-started')
+        if ((Get-FileHash -LiteralPath $producerPaths.Progress -Algorithm SHA256).Hash -cne $before) { throw 'Best-effort progress changed evidence after a failed write.' }
+        # Completion must succeed independently of its blocked progress writer.
+        [Vex.Windows.App.Services.TrayDiagnosticWriterHarness]::Complete($producerRequest)
+        $actual = Read-SmokeTrayDiagnostic -Path $producerPaths.Completed
+        Assert-SmokeTrayRecoveryDiagnostic -Diagnostic $actual -Scenario 'reset' -Access 'Available' -Mode 'fixtures' -ProcessId $PID
+    }
+    finally { Remove-Item -LiteralPath ($producerPaths.Progress + '.tmp') }
+    $completedHash = (Get-FileHash -LiteralPath $producerPaths.Completed -Algorithm SHA256).Hash
+    $rejected = $false
+    try { [Vex.Windows.App.Services.TrayDiagnosticWriterHarness]::Complete($producerRequest) } catch { $rejected = $true }
+    if (-not $rejected -or (Get-FileHash -LiteralPath $producerPaths.Completed -Algorithm SHA256).Hash -cne $completedHash -or
+        (Test-Path -LiteralPath ($producerPaths.Completed + '.tmp'))) { throw 'Reused request rewrote an accepted immutable completed receipt.' }
+    $blockedRequest = [Guid]::NewGuid()
+    $blockedPaths = Own-TrayPaths -RequestId $blockedRequest
+    New-Item -ItemType Directory -Path ($blockedPaths.Completed + '.tmp') | Out-Null
+    $rejected = $false
+    try { [Vex.Windows.App.Services.TrayDiagnosticWriterHarness]::Complete($blockedRequest) } catch { $rejected = $true }
+    if (-not $rejected -or (Test-Path -LiteralPath $blockedPaths.Completed)) { throw 'Blocked completed temporary path did not preserve producer failure.' }
+    Remove-Item -LiteralPath ($blockedPaths.Completed + '.tmp')
+
+    function Invoke-CurrentTrayWriterControl {
+        param([Guid]$RequestId)
+        try { [Vex.Windows.App.Services.TrayDiagnosticWriterHarness]::Complete($RequestId) }
+        catch {
+            $original = $_.Exception.GetBaseException()
+            $kind = $original.GetType().Name
+            if ($kind -cnotmatch '^(Exception|[A-Za-z_][A-Za-z0-9_]{0,70}Exception)$') { $kind = 'UnexpectedException' }
+            $stage = 'before-operation-stage'
+            $paths = Get-SmokeTrayRequestPaths -RequestId $RequestId -ProcessId $PID -Scenario 'reset'
+            if (Test-Path -LiteralPath $paths.Progress -PathType Leaf) {
+                $diagnostic = Read-SmokeTrayDiagnostic -Path $paths.Progress
+                Assert-SmokeTrayActivationProgress -Diagnostic $diagnostic -Scenario 'reset' -Mode 'fixtures' -ProcessId $PID
+                $stage = $diagnostic.stage
+            }
+            Write-Host ('Current unique tray producer failure: stage={0}; type={1}; HRESULT={2:X8}.' -f $stage, $kind, $original.HResult)
+            throw 'Current unique tray producer failed its Windows held-reader control.'
+        }
+    }
+    $producerPath = [Vex.Windows.App.Services.TrayDiagnosticWriterHarness]::HistoricalPath
+    if ($IsWindows) {
+        foreach ($candidate in @($producerPath, $producerPath + '.tmp')) {
+            if (Test-Path -LiteralPath $candidate) { throw 'Historical tray writer control refuses pre-existing diagnostic paths.' }
+            $ownedTrayPaths.Add($candidate)
+        }
+        # Both old provider and actual bounded Delete reader retain old paths.
+        # Historical same-path replacement fails; unique current receipt works.
+        foreach ($readerKind in @('provider', 'bounded-Delete')) {
+            $locked = [ordered]@{}
+            foreach ($key in $trayDiagnostic.Keys) { $locked[$key] = $trayDiagnostic[$key] }
+            $locked.process_id = $PID
+            [IO.File]::WriteAllText($producerPath, ([pscustomobject]$locked | ConvertTo-Json -Compress))
+            if (Test-Path -LiteralPath ($producerPath + '.tmp')) { throw 'Historical sharing control refuses a pre-existing temporary receipt.' }
             $legacyTargetHash = (Get-FileHash -LiteralPath $producerPath -Algorithm SHA256).Hash
-            # Hold the actual provider reader used by Get-Content, rather than
-            # modelling its Windows FileShare.ReadWrite flags in another helper.
-            $legacyReaders = $ExecutionContext.SessionState.InvokeProvider.Content.GetReader($producerPath)
-            if ($legacyReaders.Count -ne 1) { throw 'Tray sharing control did not obtain exactly one provider reader.' }
-            $legacy = $legacyReaders[0]
-            try {
-                [void]$legacy.Read(1)
+            $legacyReaders = $null; $held = $null
+            if ($readerKind -ceq 'provider') {
+                $legacyReaders = $ExecutionContext.SessionState.InvokeProvider.Content.GetReader($producerPath)
+                if ($legacyReaders.Count -ne 1) { throw 'Historical control did not obtain exactly one actual provider reader.' }
+                $legacy = $legacyReaders[0]
+                $snapshot = @($legacy.Read(1))
+                if ($snapshot.Count -ne 1) { throw 'Historical provider did not retain exactly one old JSON snapshot.' }
+                $old = $snapshot[0] | ConvertFrom-Json
                 $flags = [Reflection.BindingFlags]'NonPublic,Instance'
                 $streamField = $legacy.GetType().GetField('_stream', $flags)
                 $shareField = $legacy.GetType().GetField('_share', $flags)
-                if ($null -eq $streamField -or $null -eq $shareField) { throw 'Actual provider reader does not expose its held stream/share state for this qualification.' }
-                $legacyStream = $streamField.GetValue($legacy)
-                $legacyShare = $shareField.GetValue($legacy)
-                if ($legacyStream -isnot [IO.FileStream] -or -not $legacyStream.CanRead -or
-                    $legacyStream.SafeFileHandle.IsClosed -or $legacyStream.SafeFileHandle.IsInvalid -or
-                    $legacyShare -isnot [IO.FileShare] -or ($legacyShare -band [IO.FileShare]::Delete) -ne 0) {
-                    throw 'Tray sharing control lacks a valid held provider handle without delete sharing.'
-                }
-                Write-Host ('Tray sharing control runtime: PowerShell={0}; framework={1}; provider-share={2}; held-open=True.' -f
-                    $PSVersionTable.PSVersion.ToString(), [Runtime.InteropServices.RuntimeInformation]::FrameworkDescription, [int]$legacyShare)
-                $moveSucceeded = $false
-                $rejected = $false
-                try {
-                    [Vex.Windows.App.Services.TrayDiagnosticWriterHarness]::Complete()
-                    $moveSucceeded = $true
-                }
+                if ($null -eq $streamField -or $null -eq $shareField) { throw 'Actual provider lacks inspectable held stream/share state.' }
+                $held = $streamField.GetValue($legacy)
+                $share = $shareField.GetValue($legacy)
+                if ($share -isnot [IO.FileShare] -or ($share -band [IO.FileShare]::Delete) -ne 0) { throw 'Provider negative lacks no-Delete sharing.' }
+            }
+            else {
+                $held = Open-SmokeTrayDiagnosticRead -Path $producerPath
+                $share = [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete
+            }
+            try {
+                if ($held -isnot [IO.FileStream] -or -not $held.CanRead -or $held.SafeFileHandle.IsClosed -or $held.SafeFileHandle.IsInvalid) { throw 'Historical control lacks a valid held original handle.' }
+                Write-Host ('Tray sharing control runtime: PowerShell={0}; framework={1}; reader={2}; share={3}; held-open=True.' -f
+                    $PSVersionTable.PSVersion.ToString(), [Runtime.InteropServices.RuntimeInformation]::FrameworkDescription, $readerKind, [int]$share)
+                $succeeded = $false; $rejected = $false
+                try { [Vex.Windows.App.Services.TrayDiagnosticWriterHarness]::HistoricalComplete(); $succeeded = $true }
                 catch {
                     $original = $_.Exception.GetBaseException()
                     $kind = $original.GetType().Name
                     if ($kind -cnotmatch '^(Exception|[A-Za-z_][A-Za-z0-9_]{0,70}Exception)$') { $kind = 'UnexpectedException' }
-                    Write-Host ('Tray sharing control producer failure: type={0}; HRESULT={1:X8}.' -f $kind, $original.HResult)
+                    Write-Host ('Historical same-path producer failure: reader={0}; type={1}; HRESULT={2:X8}.' -f $readerKind, $kind, $original.HResult)
                     $rejected = Test-SmokeTraySharingFailure -ErrorObject $_.Exception
                 }
-                if ($moveSucceeded -or -not $rejected) { throw 'Windows held Get-Content provider reader did not produce an exact denied-sharing failure from the actual writer.' }
-                if (-not $legacyStream.CanRead -or $legacyStream.SafeFileHandle.IsClosed -or
-                    $legacyStream.SafeFileHandle.IsInvalid -or
-                    (Get-FileHash -LiteralPath $producerPath -Algorithm SHA256).Hash -cne $legacyTargetHash) {
-                    throw 'Denied tray replacement lost its held reader or changed the original target.'
+                if ($succeeded -or -not $rejected -or -not $held.CanRead -or $held.SafeFileHandle.IsClosed -or
+                    $held.SafeFileHandle.IsInvalid -or (Get-FileHash -LiteralPath $producerPath -Algorithm SHA256).Hash -cne $legacyTargetHash) {
+                    throw 'Historical held-reader replacement did not prove exact denied sharing and unchanged old receipt.'
                 }
-                # A complete temporary receipt proves the verbatim writer
-                # finished File.WriteAllText and reached the rejected Move.
                 $staged = Read-SmokeTrayDiagnostic -Path ($producerPath + '.tmp')
                 Assert-SmokeTrayRecoveryDiagnostic -Diagnostic $staged -Scenario 'reset' -Access 'Available' -Mode 'fixtures' -ProcessId $PID
+                $uniqueRequest = [Guid]::NewGuid()
+                $uniquePaths = Own-TrayPaths -RequestId $uniqueRequest
+                Invoke-CurrentTrayWriterControl -RequestId $uniqueRequest
+                $new = Read-SmokeTrayDiagnostic -Path $uniquePaths.Completed
+                Assert-SmokeTrayRecoveryDiagnostic -Diagnostic $new -Scenario 'reset' -Access 'Available' -Mode 'fixtures' -ProcessId $PID
+                if (-not $held.CanRead -or $held.SafeFileHandle.IsClosed -or $held.SafeFileHandle.IsInvalid -or
+                    (Get-FileHash -LiteralPath $producerPath -Algorithm SHA256).Hash -cne $legacyTargetHash) { throw 'Unique completion modified the old receipt or lost its held original reader.' }
+                if ($readerKind -ceq 'bounded-Delete') {
+                    $oldReader = [IO.StreamReader]::new($held, [Text.UTF8Encoding]::new($false, $true), $false, 1024, $true)
+                    try { $old = $oldReader.ReadToEnd() | ConvertFrom-Json } finally { $oldReader.Dispose() }
+                }
+                Assert-SmokeTrayRecoveryDiagnostic -Diagnostic $old -Scenario 'locked' -Access 'Locked' -Mode 'fixtures' -ProcessId $PID
             }
-            finally { foreach ($reader in $legacyReaders) { $reader.Close(); $reader.Dispose() } }
-            [Vex.Windows.App.Services.TrayDiagnosticWriterHarness]::Complete()
+            finally {
+                if ($null -ne $legacyReaders) { foreach ($reader in $legacyReaders) { $reader.Close(); $reader.Dispose() } }
+                elseif ($null -ne $held) { $held.Dispose() }
+            }
+            # The SAME historical writer succeeds when its destination closes.
+            [Vex.Windows.App.Services.TrayDiagnosticWriterHarness]::HistoricalComplete()
             $released = Read-SmokeTrayDiagnostic -Path $producerPath
             Assert-SmokeTrayRecoveryDiagnostic -Diagnostic $released -Scenario 'reset' -Access 'Available' -Mode 'fixtures' -ProcessId $PID
-            Write-Host 'Actual Windows tray legacy control passed: held provider blocks Move, original target unchanged, complete reset temporary receipt retained; closing provider permits the same writer.'
-
-            # Reseed the old locked receipt before the original corrected-reader
-            # positive: its held snapshot and the replaced reset must both read.
-            [IO.File]::WriteAllText($producerPath, ([pscustomobject]$trayDiagnostic | ConvertTo-Json -Compress))
-            $held = Open-SmokeTrayDiagnosticRead -Path $producerPath
-            try {
-                [Vex.Windows.App.Services.TrayDiagnosticWriterHarness]::Complete()
-                $oldReader = [IO.StreamReader]::new($held, [Text.UTF8Encoding]::new($false, $true), $false, 1024, $true)
-                try { $old = $oldReader.ReadToEnd() | ConvertFrom-Json }
-                finally { $oldReader.Dispose() }
-                if ($old.scenario -cne 'locked') { throw 'Windows shared-Delete reader lost its prior immutable JSON snapshot.' }
-            }
-            finally { $held.Dispose() }
-            $replaced = Read-SmokeTrayDiagnostic -Path $producerPath
-            Assert-SmokeTrayRecoveryDiagnostic -Diagnostic $replaced -Scenario 'reset' -Access 'Available' -Mode 'fixtures' -ProcessId $PID
-            Write-Host 'Actual Windows tray producer overwrite passed: held Get-Content provider reader rejects; actual shared-Delete reader permits replacement and retains the old snapshot.'
+            Write-Host ('Actual Windows tray topology control passed: reader={0}; historical same-path denied; same writer after close succeeds; current unique receipt succeeds with old reader held and old snapshot unchanged.' -f $readerKind)
         }
-        else { Write-Host 'DEFERRED actual Windows tray sharing negative/positive controls: portable host does not enforce Windows delete sharing.' }
     }
-    finally {
-        Remove-Item -LiteralPath $producerPath -Force -ErrorAction SilentlyContinue
-        Remove-Item -LiteralPath ($producerPath + '.tmp') -Force -ErrorAction SilentlyContinue
-    }
+    else { Write-Host 'DEFERRED actual Windows tray topology controls: portable host does not enforce Windows destination-open replacement semantics.' }
 }
-finally { Remove-Item -LiteralPath $trayTestRoot -Recurse -Force }
-Write-Host "Application smoke tray progress passed: $progressRejected malformed records rejected; pending/fault progress cannot pass; actual Debug writer and bounded reader exercised."
+finally {
+    foreach ($ownedPath in $ownedTrayPaths) {
+        Remove-Item -LiteralPath $ownedPath -Force -ErrorAction SilentlyContinue
+    }
+    Remove-Item -LiteralPath $trayTestRoot -Recurse -Force
+}
+Write-Host "Application smoke tray progress passed: $progressRejected malformed records rejected; pending/fault/wrong-nonce cannot pass; actual Debug producer and bounded reader exercised."
 
 # Exercise the exact receipt validator with JSON-shaped values. These checks
 # never invoke DPAPI, the filesystem fault matrix, or the WinUI application.

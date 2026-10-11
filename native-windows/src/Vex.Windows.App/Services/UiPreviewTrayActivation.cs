@@ -5,13 +5,10 @@ namespace Vex.Windows.App.Services;
 
 // Only fixed stages and exception type names leave the isolated Debug preview.
 // Recording must not replace an activation error or prevent its original work.
-internal sealed class UiPreviewTrayActivation(string scenario)
+internal sealed class UiPreviewTrayActivation(UiPreviewTrayRequest request)
 {
     private string _stage = "redirected-request-accepted";
-
-    internal static string Scenario(string? arguments) =>
-        UiPreviewContext.HasCommand(arguments, "--ui-smoke-tray-connect-locked") ? "locked" :
-        UiPreviewContext.HasCommand(arguments, "--ui-smoke-tray-reset") ? "reset" : "signed-out";
+    internal UiPreviewTrayRequest Request => request;
 
     internal void Record(string stage)
     {
@@ -32,8 +29,8 @@ internal sealed class UiPreviewTrayActivation(string scenario)
     private void TryRecord(string? failureType)
     {
         if (!UiPreviewContext.IsEnabled || UiPreviewContext.StateDirectory is null ||
-            scenario is not ("locked" or "reset" or "signed-out")) return;
-        var path = Path.Combine(Path.GetTempPath(), $"vex-ui-preview-tray-{Environment.ProcessId}.json");
+            request.Id == Guid.Empty) return;
+        var path = request.ProgressPath;
         try
         {
             foreach (var candidate in new[] { path, path + ".tmp" })
@@ -45,7 +42,7 @@ internal sealed class UiPreviewTrayActivation(string scenario)
                 process_id = Environment.ProcessId,
                 preview_mode = UiPreviewContext.IsProtectedStateFaultPreview ? "protected-state-fault" :
                     UiPreviewContext.IsAuthenticated ? "fixtures" : "signed-out",
-                scenario,
+                scenario = request.Scenario,
                 stage = _stage,
                 failure_type = failureType,
             });
@@ -62,6 +59,7 @@ internal sealed class UiPreviewTrayActivation(string scenario)
         "redirected-request-accepted" or "handler-started" or
         "reset-session-restoring" or "reset-session-restored" or "reset-ui-requested" or
         "reset-ui-entered" or "reset-ui-state-read" or "reset-ui-navigated" or
-        "reset-ui-shown" or "reset-ui-completed" or "completion-recording";
+        "reset-ui-shown" or "reset-ui-completed" or "completion-recording" or
+        "completion-temp-write" or "completion-move";
 }
 #endif

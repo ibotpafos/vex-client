@@ -1,6 +1,12 @@
 name: Android signed candidate (no publication)
 on:
   workflow_dispatch:
+    inputs:
+      qualified_source:
+        description: "Sign the fixed independently qualified a135260 candidate source"
+        type: boolean
+        required: false
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -13,6 +19,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 70
     env:
+      QUALIFIED_SOURCE_REQUESTED: ${{ inputs.qualified_source && 'true' || 'false' }}
+      QUALIFIED_SOURCE_COMMIT: a13526075803986eebc396ec24fdc865d00ab5c0
+      QUALIFIED_SOURCE_TREE: a47fd44b6166de98c64263554e6c981c896a8559
       VEX_RELEASE_USE_LOCAL_CACHE: "1"
       VEX_LOCAL_RELEASE_CACHE_ROOT: ${{ github.workspace }}/.ci-cache
       VEX_LOCAL_CACHE_MOVE_EXISTING: "0"
@@ -26,6 +35,54 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Bind selected immutable candidate source before credentials
+        id: source
+        run: |-
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+          expected_commit="$GITHUB_SHA"
+          if [[ "$QUALIFIED_SOURCE_REQUESTED" == "true" ]]; then
+            if ! git cat-file -e "$QUALIFIED_SOURCE_COMMIT^{commit}" 2>/dev/null; then
+              git fetch --no-tags https://github.com/ibotpafos/vex-client.git "$QUALIFIED_SOURCE_COMMIT"
+            fi
+            git checkout --detach "$QUALIFIED_SOURCE_COMMIT"
+            expected_commit="$QUALIFIED_SOURCE_COMMIT"
+            test "$(git rev-parse HEAD^{tree})" = "$QUALIFIED_SOURCE_TREE"
+          fi
+          test "$(git rev-parse HEAD)" = "$expected_commit"
+          test -z "$(git status --porcelain)"
+          echo "commit=$expected_commit" >> "$GITHUB_OUTPUT"
+          python3 - <<'PY_SOURCE_BINDING'
+          import json, os, pathlib, subprocess
+          binding = {
+              "source_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+              "source_tree": subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], text=True).strip(),
+              "orchestration_workflow_commit": os.environ["GITHUB_SHA"],
+              "qualified_source_requested": os.environ["QUALIFIED_SOURCE_REQUESTED"] == "true",
+          }
+          pathlib.Path(os.environ["RUNNER_TEMP"], "android-source-binding.json").write_text(json.dumps(binding, indent=2)+"\n")
+          PY_SOURCE_BINDING
+      - name: Check required signing input names before quality or SDK setup
+        env:
+          KEYSTORE_PRESENT: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 != '' }}
+          STORE_PASSWORD_PRESENT: ${{ secrets.VEX_UPLOAD_STORE_PASSWORD != '' }}
+          KEY_ALIAS_PRESENT: ${{ secrets.VEX_UPLOAD_KEY_ALIAS != '' }}
+          KEY_PASSWORD_PRESENT: ${{ secrets.VEX_UPLOAD_KEY_PASSWORD != '' }}
+          SENTRY_DSN_PRESENT: ${{ secrets.EXPO_PUBLIC_SENTRY_DSN != '' }}
+        run: |-
+          set -euo pipefail
+          set +x
+          missing=0
+          for pair in KEYSTORE_PRESENT:ANDROID_RELEASE_KEYSTORE_BASE64 STORE_PASSWORD_PRESENT:VEX_UPLOAD_STORE_PASSWORD KEY_ALIAS_PRESENT:VEX_UPLOAD_KEY_ALIAS KEY_PASSWORD_PRESENT:VEX_UPLOAD_KEY_PASSWORD SENTRY_DSN_PRESENT:EXPO_PUBLIC_SENTRY_DSN; do
+            variable="${pair%%:*}"
+            if [[ "${!variable}" != "true" ]]; then
+              echo "MISSING_SIGNING_INPUT:${pair#*:}"
+              missing=1
+            fi
+          done
+          [[ "$missing" == "0" ]] || exit 2
+          echo ANDROID_SIGNING_INPUT_NAMES_READY=PASS
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
           node-version: "22"
@@ -66,9 +123,61 @@ jobs:
           export EXPO_PUBLIC_SENTRY_RELEASE="vex-android@$(node -p "require('./versions.json').android.version")+$(node -p "require('./app.json').expo.android.versionCode")"
           npm run android:release -- --no-daemon
           (cd android && ./gradlew :app:testDebugUnitTest --no-daemon)
+          apk="dist/android/$(node -p 'require("./dist/android/release-manifest.json").updater')"
+          apksigner verify --verbose --print-certs "$apk" > "${apk}.verified-signature.txt"
+          grep -Fxq "Signer #1 certificate SHA-256 digest: cc569dfaa4c2c82379669b7c13606eb268cc3eba90a9c88e20a2d4500daf8470" "${apk}.verified-signature.txt"
+          test "$(grep -c 'certificate SHA-256 digest:' "${apk}.verified-signature.txt")" -eq 1
+          git diff --exit-code HEAD --
+          export SIGNED_APK_PATH="$apk"
+          python3 - <<'PY_SIGNED_RECEIPT'
+          import hashlib, json, os, pathlib, subprocess
+          apk = pathlib.Path(os.environ["SIGNED_APK_PATH"])
+          manifest = json.loads(pathlib.Path("dist/android/release-manifest.json").read_text())
+          application = json.loads(pathlib.Path("app.json").read_text())["expo"]
+          binding = json.loads(pathlib.Path(os.environ["RUNNER_TEMP"], "android-source-binding.json").read_text())
+          actual_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          actual_tree = subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], text=True).strip()
+          if actual_commit != binding["source_commit"] or actual_tree != binding["source_tree"]:
+              raise SystemExit("Signed candidate source changed after initial binding")
+          receipt = {
+              "schema": "vex.android.signed-candidate.v1",
+              "source_commit": actual_commit,
+              "source_tree": actual_tree,
+              "orchestration_workflow_commit": binding["orchestration_workflow_commit"],
+              "qualified_source_requested": binding["qualified_source_requested"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "package": application["android"]["package"],
+              "version": manifest["version"],
+              "version_code": application["android"]["versionCode"],
+              "abis": ["arm64-v8a", "armeabi-v7a"],
+              "apk": apk.name,
+              "apk_bytes": apk.stat().st_size,
+              "apk_sha256": hashlib.sha256(apk.read_bytes()).hexdigest(),
+              "certificate_sha256": "cc569dfaa4c2c82379669b7c13606eb268cc3eba90a9c88e20a2d4500daf8470",
+              "signature_verification": "apksigner verify --verbose --print-certs passed; one expected signer",
+              "publication": False,
+              "physical_vpn_acceptance": "not exercised",
+          }
+          mapping = pathlib.Path("android/app/build/outputs/mapping/release/mapping.txt")
+          if not mapping.is_file():
+              raise SystemExit("Current signed release requires retained R8 mapping")
+          mapping_sha256 = hashlib.sha256(mapping.read_bytes()).hexdigest()
+          receipt["r8_mapping_sha256"] = mapping_sha256
+          pathlib.Path("android-r8-provenance").mkdir()
+          pathlib.Path("android-r8-provenance/mapping.txt").write_bytes(mapping.read_bytes())
+          pathlib.Path("android-r8-provenance/provenance.json").write_text(json.dumps(receipt, indent=2)+"\n")
+          pathlib.Path("dist/android/signed-candidate-receipt.json").write_text(json.dumps(receipt, indent=2)+"\n")
+          PY_SIGNED_RECEIPT
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: android-production-${{ github.sha }}
+          name: android-r8-provenance-${{ steps.source.outputs.commit }}
+          path: android-r8-provenance/*
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: android-signed-candidate-${{ steps.source.outputs.commit }}
           path: dist/android/*
           if-no-files-found: error
           retention-days: 14

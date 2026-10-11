@@ -22,6 +22,12 @@ and exposes it for the separately controlled production-download deployment.
 
 - Production release mode requires the pinned self-signed identity and rejects
   ad-hoc, Developer ID, and unpinned certificates.
+- Helper trust retains the exact local certificate and the existing published
+  production certificate. Their DER SHA-256 fingerprints are
+  `441f6e9034ee7582c1ca3579ea805f91f68c3135ec2f59cddc00173fe689dca1`
+  and `8aa47a0d6281276abfb42454fe6a6b1eef94726d663717fbe75222b749c49a87`.
+  Release preflight verifies the fixed helper requirement and requires each
+  bundled helper binary to use the same certificate as the application.
 - Missing or empty signing inputs, including the production-repository token,
   stop before any secondary repository checkout or release build.
 - Private keys, certificate material, passwords, and profiles never appear in

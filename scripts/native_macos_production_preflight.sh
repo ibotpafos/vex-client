@@ -87,6 +87,20 @@ if [[ "${SIGNING_MODE}" == "self-signed" ]]; then
   cert_sha="$(openssl x509 -inform DER -in "${cert_dir}/cert0" -outform DER | shasum -a 256 | awk '{print $1}')"
   expected_cert_sha="$(printf '%s' "${SELF_SIGNED_CERT_SHA256}" | tr '[:upper:]' '[:lower:]')"
   [[ "${cert_sha}" == "${expected_cert_sha}" ]] || fail "self-signed application certificate fingerprint mismatch"
+  # Match the helper's compiled trust roots, in addition to the configured pin.
+  case "${cert_sha}" in
+    441f6e9034ee7582c1ca3579ea805f91f68c3135ec2f59cddc00173fe689dca1|8aa47a0d6281276abfb42454fe6a6b1eef94726d663717fbe75222b749c49a87) ;;
+    *) fail "self-signed application certificate is outside the fixed helper trust policy" ;;
+  esac
+  app_requirement='identifier "app.vex.vpn.native" and (certificate leaf = H"c6fd1853a177fbcfb04c5d4f78fbe405777b3a3e" or certificate leaf = H"57864e103373517a0f3cd82e9c9a651c54effc79" or (anchor apple generic and certificate leaf[subject.OU] = "3JLW9XNU53"))'
+  codesign --verify --deep --strict -R="${app_requirement}" "${APP_PATH}" \
+    || fail "application signature does not satisfy the fixed helper trust policy"
+  cert_sha1="$(openssl x509 -inform DER -in "${cert_dir}/cert0" -outform DER | shasum -a 1 | awk '{print $1}')"
+  resource_requirement="certificate leaf = H\"${cert_sha1}\""
+  for signed_resource in awg amneziawg-go vex-helper; do
+    codesign --verify --strict -R="${resource_requirement}" "${resources_dir}/${signed_resource}" \
+      || fail "helper resource certificate differs from the application: ${signed_resource}"
+  done
 elif grep -q "Signature=adhoc" <<<"${signature_details}"; then
   if [[ "${REQUIRE_DEVELOPER_ID}" == "1" ]]; then
     fail "app is ad-hoc signed; Developer ID signature required"

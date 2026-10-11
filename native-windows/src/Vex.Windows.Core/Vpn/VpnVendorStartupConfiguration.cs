@@ -34,7 +34,7 @@ public static class VpnVendorStartupConfiguration
         {
             if (admittedEndpoint is null || admittedEndpoint.ValidUntil <= now ||
                 admittedEndpoint.ValidUntil != authorizationExpiresAt ||
-                admittedEndpoint.ValidUntil - now > TimeSpan.FromHours(24) ||
+                admittedEndpoint.ValidUntil - now > VpnProfileLifetimePolicy.MaximumRemainingLifetime ||
                 !string.Equals(admittedEndpoint.Endpoint, endpoint, StringComparison.OrdinalIgnoreCase) ||
                 !string.Equals(admittedEndpoint.ServerPublicKey, peer, StringComparison.Ordinal) ||
                 admittedEndpoint.Addresses is not { Count: > 0 and <= 16 } ||

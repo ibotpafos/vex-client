@@ -87,11 +87,25 @@ public sealed partial class NativeClientCoordinator
     private async Task RetireNativeConnectAsync()
     {
         _nativeRetirementRequired = true;
-        if (_stateStore.Load() is { } retiring)
-            _stateStore.Save(retiring with { NativeRetirementRequired = true });
+        Exception? persistenceError = null;
+        try
+        {
+            if (_stateStore.Load() is { } retiring)
+                _stateStore.Save(retiring with { NativeRetirementRequired = true });
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or
+            System.Security.Cryptography.CryptographicException or System.Text.Json.JsonException ||
+            error is InvalidOperationException { Message: "vpn_identity_missing" or "vpn_identity_changed" })
+        {
+            // A damaged or unavailable cache must not block native cleanup.
+            // Preserve the failed transition after its stop is acknowledged.
+            persistenceError = error;
+        }
         var stopped = await _vpnClient.DisconnectAsync(CancellationToken.None).ConfigureAwait(false);
         if (!stopped.Success || stopped.Snapshot.Phase != VpnConnectionPhase.Disconnected)
             throw new NativeClientFlowException("vpn_disconnect_required");
+        if (persistenceError is not null)
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(persistenceError).Throw();
         if (_stateStore.Load() is { } state)
             _stateStore.Save(state with { NativeRetirementRequired = false });
         _nativeRetirementRequired = false;

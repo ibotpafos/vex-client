@@ -1364,7 +1364,12 @@ public sealed partial class NativeClientCoordinator
             SelectionMode: sameUser ? previous!.SelectionMode : "auto",
             RoutingMode: sameUser ? previous!.RoutingMode : "full",
             BypassRegion: sameUser ? previous!.BypassRegion : null,
-            VpnProvisioningPending: true);
+            VpnProvisioningPending: true,
+            // Re-authentication can leave this owner's admitted tunnel running.
+            // Keep its retirement obligation even while registration is deferred,
+            // including after reopening the coordinator from the saved session.
+            NativeRetirementRequired: sameUser &&
+                (previous!.NativeRetirementRequired || !previous.VpnProvisioningPending));
         // Authentication is durable independently of paid access, server
         // availability, device quota and registration network failures.
         cancellationToken.ThrowIfCancellationRequested();

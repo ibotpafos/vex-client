@@ -28,7 +28,9 @@ internal static class AccountVpnIdentityTests
         FailedNativeRetirementBlocksAccountAsync().GetAwaiter().GetResult();
         SupersededRefreshAndProfileNeverActivateAsync().GetAwaiter().GetResult();
         ValidAccountSwitchRetiresConnectedOwnerAsync().GetAwaiter().GetResult();
+        ReauthenticatedOwnerRetiresBeforeReplacementAsync().GetAwaiter().GetResult();
         LogoutWaitsForConfirmedRetirementAsync().GetAwaiter().GetResult();
+        FailedBarrierPersistenceStillStopsOwnerAsync().GetAwaiter().GetResult();
         SupersededSelectionCannotRollbackOldAccountAsync().GetAwaiter().GetResult();
         RegistrationAcceptsSameKeyServerEpochAdvanceAsync().GetAwaiter().GetResult();
         LockedStoredAccountRequiresRetirementAsync().GetAwaiter().GetResult();
@@ -379,6 +381,37 @@ internal static class AccountVpnIdentityTests
             "B stays signed in even without autoconnect while A tunnel is retired.");
     }
 
+    private static async Task ReauthenticatedOwnerRetiresBeforeReplacementAsync()
+    {
+        foreach (var reopen in new[] { false, true })
+        {
+            var vpn = new ControlledVpnClient();
+            vpn.Release.SetResult();
+            using var fixture = new Fixture(vpn: vpn);
+            await fixture.SignInAsync("account-a");
+            await fixture.Coordinator.ConnectAsync(CancellationToken.None);
+            await fixture.SignInAsync("account-a");
+            Check(vpn.Active && fixture.Store.State!.VpnProvisioningPending &&
+                fixture.Store.State.NativeRetirementRequired,
+                "Deferred same-owner reauthentication must durably retain the active tunnel's retirement obligation.");
+            var coordinator = reopen
+                ? new NativeClientCoordinator(new FakeNativeClientApi(), fixture.Store, vpn, "1.0.0")
+                : fixture.Coordinator;
+            var replacement = new VexAuthSession(new("account-b", "b@example.test", "active"),
+                "access-account-b", DateTimeOffset.UtcNow.AddDays(1));
+            var switching = coordinator.AcceptAuthenticatedSessionAsync(replacement, CancellationToken.None);
+            await vpn.StopEntered.Task;
+            Check(!switching.IsCompleted && fixture.Store.State!.Session.User.Id == "account-a" &&
+                fixture.Store.State.NativeRetirementRequired,
+                "A pending reauthenticated owner must survive until confirmed retirement before B acceptance, also after reopen.");
+            vpn.StopRelease.SetResult();
+            await switching;
+            Check(!vpn.Active && vpn.Stops == 1 && fixture.Store.State!.Session.User.Id == "account-b" &&
+                !fixture.Store.State.NativeRetirementRequired,
+                "Confirmed retirement must precede replacement acceptance without carrying A's obligation into B.");
+        }
+    }
+
     private static async Task LogoutWaitsForConfirmedRetirementAsync()
     {
         var vpn = new ControlledVpnClient();
@@ -398,6 +431,62 @@ internal static class AccountVpnIdentityTests
         await switching;
         Check(!vpn.Active && fixture.Store.State!.Session.User.Id == "account-b",
             "Logout acknowledgement must precede B login even after caller cancellation.");
+    }
+
+    private static async Task FailedBarrierPersistenceStillStopsOwnerAsync()
+    {
+        foreach (var replacement in new[] { false, true })
+        foreach (var failedStop in new[] { false, true })
+        {
+            var identities = new RejectingIdentityStore(new MemoryClientStateStore().AccountVpnIdentities);
+            var vpn = new ControlledVpnClient { FailStop = failedStop };
+            vpn.Release.SetResult();
+            using var fixture = new Fixture(identities, vpn);
+            await fixture.SignInAsync("account-a");
+            await fixture.Coordinator.ConnectAsync(CancellationToken.None);
+            var saved = fixture.Store.State;
+            identities.RejectWrites = true;
+            var transition = replacement
+                ? fixture.SignInAsync("account-b")
+                : fixture.Coordinator.SignOutAsync(CancellationToken.None);
+            await Task.WhenAny(transition, vpn.StopEntered.Task);
+            Check(vpn.StopEntered.Task.IsCompleted && !transition.IsCompleted && vpn.Active && fixture.Store.State == saved,
+                "Failed barrier persistence must still issue cleanup and retain A until its native stop is acknowledged.");
+            vpn.StopRelease.SetResult();
+            Exception? failure = null;
+            try { await transition; }
+            catch (IOException error) { failure = error; }
+            Check(failure is not null && vpn.Active == failedStop && vpn.Stops == 1 && fixture.Store.State == saved &&
+                (failedStop ? failure.Message == "Service unreachable; retirement unconfirmed." :
+                    ReferenceEquals(failure, identities.LastWriteError)),
+                "Cleanup must retain A and report the unconfirmed stop or original storage error without accepting B.");
+            identities.RejectWrites = false;
+            if (failedStop)
+            {
+                await ExpectFailureAsync(() => fixture.SignInAsync("account-b"));
+                Check(vpn.Active && fixture.Store.State!.Session.User.Id == "account-a" &&
+                    fixture.Store.State.NativeRetirementRequired && vpn.Stops == 2,
+                    "Recovered storage must persist the retained in-memory barrier while a stop remains unconfirmed.");
+                vpn.FailStop = false;
+            }
+            await fixture.SignInAsync("account-b");
+            Check(!vpn.Active && fixture.Store.State!.Session.User.Id == "account-b",
+                "A replacement account may recover the retained retirement obligation after storage is writable again.");
+        }
+    }
+
+    private sealed class RejectingIdentityStore(IVpnAccountIdentityStore underlying) : IVpnAccountIdentityStore
+    {
+        public bool RejectWrites { get; set; }
+        public IOException? LastWriteError { get; private set; }
+        public NativeVpnAccountIdentity? Load(string userId) => underlying.Load(userId);
+        public NativeVpnAccountIdentity GetOrAdd(NativeVpnAccountIdentity identity, bool claimLegacyKey = false) =>
+            underlying.GetOrAdd(identity, claimLegacyKey);
+        public void Replace(NativeVpnAccountIdentity expected, NativeVpnAccountIdentity replacement)
+        {
+            if (RejectWrites) throw LastWriteError = new IOException("Fixture account-map write sharing violation.");
+            underlying.Replace(expected, replacement);
+        }
     }
 
     private static async Task SupersededSelectionCannotRollbackOldAccountAsync()

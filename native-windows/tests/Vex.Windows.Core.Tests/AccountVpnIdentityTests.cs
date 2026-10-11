@@ -28,6 +28,7 @@ internal static class AccountVpnIdentityTests
         FailedNativeRetirementBlocksAccountAsync().GetAwaiter().GetResult();
         SupersededRefreshAndProfileNeverActivateAsync().GetAwaiter().GetResult();
         ValidAccountSwitchRetiresConnectedOwnerAsync().GetAwaiter().GetResult();
+        ReauthenticatedOwnerRetiresBeforeReplacementAsync().GetAwaiter().GetResult();
         LogoutWaitsForConfirmedRetirementAsync().GetAwaiter().GetResult();
         SupersededSelectionCannotRollbackOldAccountAsync().GetAwaiter().GetResult();
         RegistrationAcceptsSameKeyServerEpochAdvanceAsync().GetAwaiter().GetResult();
@@ -377,6 +378,37 @@ internal static class AccountVpnIdentityTests
         await switching;
         Check(!vpn.Active && fixture.Store.State!.Session.User.Id == "account-b" && fixture.Store.State.VpnProvisioningPending,
             "B stays signed in even without autoconnect while A tunnel is retired.");
+    }
+
+    private static async Task ReauthenticatedOwnerRetiresBeforeReplacementAsync()
+    {
+        foreach (var reopen in new[] { false, true })
+        {
+            var vpn = new ControlledVpnClient();
+            vpn.Release.SetResult();
+            using var fixture = new Fixture(vpn: vpn);
+            await fixture.SignInAsync("account-a");
+            await fixture.Coordinator.ConnectAsync(CancellationToken.None);
+            await fixture.SignInAsync("account-a");
+            Check(vpn.Active && fixture.Store.State!.VpnProvisioningPending &&
+                fixture.Store.State.NativeRetirementRequired,
+                "Deferred same-owner reauthentication must durably retain the active tunnel's retirement obligation.");
+            var coordinator = reopen
+                ? new NativeClientCoordinator(new FakeNativeClientApi(), fixture.Store, vpn, "1.0.0")
+                : fixture.Coordinator;
+            var replacement = new VexAuthSession(new("account-b", "b@example.test", "active"),
+                "access-account-b", DateTimeOffset.UtcNow.AddDays(1));
+            var switching = coordinator.AcceptAuthenticatedSessionAsync(replacement, CancellationToken.None);
+            await vpn.StopEntered.Task;
+            Check(!switching.IsCompleted && fixture.Store.State!.Session.User.Id == "account-a" &&
+                fixture.Store.State.NativeRetirementRequired,
+                "A pending reauthenticated owner must survive until confirmed retirement before B acceptance, also after reopen.");
+            vpn.StopRelease.SetResult();
+            await switching;
+            Check(!vpn.Active && vpn.Stops == 1 && fixture.Store.State!.Session.User.Id == "account-b" &&
+                !fixture.Store.State.NativeRetirementRequired,
+                "Confirmed retirement must precede replacement acceptance without carrying A's obligation into B.");
+        }
     }
 
     private static async Task LogoutWaitsForConfirmedRetirementAsync()

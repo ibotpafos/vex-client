@@ -412,6 +412,7 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($env:RELEASE_NOTES)) { throw 'Release notes are required.' }
           ./native-windows/scripts/stage-runtime-assets.ps1 -DestinationRoot (Join-Path $env:RUNNER_TEMP 'vex-native-runtime')
       - name: Package signed native Windows releases
+        id: package_signed
         shell: pwsh
         env:
           VEX_WINDOWS_RELEASE_VERSION: ${{ inputs.release_version }}
@@ -458,9 +459,20 @@ jobs:
           $precedingVersion = $parts -join '.'
           $precedingRoot = Join-Path $env:RUNNER_TEMP 'vex-synthetic-preceding-release'
           ./native-windows/packaging/package-native-windows.ps1 -Architecture x64 -Version $precedingVersion -OutputRoot $precedingRoot
+          $candidateDirectory = Join-Path $PWD "native-windows/packaging/out/stable/x64/$candidateVersion"
+          $precedingDirectory = Join-Path $precedingRoot "stable/x64/$precedingVersion"
+          "candidate_directory=$candidateDirectory" >> $env:GITHUB_OUTPUT
+          "preceding_directory=$precedingDirectory" >> $env:GITHUB_OUTPUT
+      - name: Verify signed Windows install lifecycle without signing credentials
+        shell: pwsh
+        env:
+          CANDIDATE_BUNDLE_DIRECTORY: ${{ steps.package_signed.outputs.candidate_directory }}
+          PRECEDING_BUNDLE_DIRECTORY: ${{ steps.package_signed.outputs.preceding_directory }}
+        run: |
+          # Consumer Setup/bootstrap processes must not inherit packaging keys.
           ./native-windows/scripts/invoke-signed-install-acceptance.ps1 -DisposableRunner -PrecedingIsSynthetic `
-            -CandidateBundleDirectory (Join-Path $PWD "native-windows/packaging/out/stable/x64/$candidateVersion") `
-            -PrecedingBundleDirectory (Join-Path $precedingRoot "stable/x64/$precedingVersion") `
+            -CandidateBundleDirectory $env:CANDIDATE_BUNDLE_DIRECTORY `
+            -PrecedingBundleDirectory $env:PRECEDING_BUNDLE_DIRECTORY `
             -ResultPath (Join-Path $PWD 'native-windows/packaging/out/signed-install-acceptance-x64.json')
       - name: Retain sanitized signed-install phase evidence
         if: always()

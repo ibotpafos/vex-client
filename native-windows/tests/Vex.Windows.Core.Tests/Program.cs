@@ -18,6 +18,7 @@ using System.Text.Json.Nodes;
 var tests = new (string Name, Action Run)[]
 {
     ("Native installer rejects changed bundles and retains verified file locks", WindowsSetupBundleTests.Run),
+    ("Physical AntiLeak probes reject remote failures and preserve caller cancellation", FullTunnelProbeFailurePolicyTests.Run),
     ("VPN access and network failures preserve actionable guidance and safe intent", VpnFailurePresentationTests.Run),
     ("Release cohorts preserve actionable mandatory targets and strict dependency trust", WindowsReleasePolicyTests.Run),
     ("Shipping update keys match P256 signatures and reject incompatible key material", WindowsUpdateSignatureSignerTests.Run),
@@ -157,7 +158,9 @@ var tests = new (string Name, Action Run)[]
     ("Native client reports successful connect and disconnect", NativeClientReportsVpnLifecycle),
 }.Concat(VpnServiceImageIdentityTests.All)
  .Concat(VexApiResponseDeadlineTests.Cases)
- .Concat(VpnWindowsStartupSafetyTests.All).ToArray();
+ .Concat(VpnWindowsStartupSafetyTests.All)
+ .Concat(VpnVendorServiceSafetyTests.All)
+ .Concat(VpnProfileLifetimeCompatibilityTests.All).ToArray();
 
 tests = [.. tests, .. VpnNamedPipeTransportTests.Cases, .. VpnRuntimeLifetimeTests.All, .. VpnRuntimeRecoveryTests.All,
     .. VpnEndpointAddressCacheTests.All, .. VpnAuthorizationDeadlineTests.All, .. VpnControlPlaneAddressCacheTests.All,

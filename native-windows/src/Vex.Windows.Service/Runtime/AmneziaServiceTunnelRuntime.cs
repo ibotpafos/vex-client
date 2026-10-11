@@ -557,7 +557,7 @@ public sealed class AmneziaServiceTunnelRuntime : IVpnTunnelRuntime, IVpnRuntime
         _backgroundWork.Token.ThrowIfCancellationRequested();
         try
         {
-            QualifyOwnedVendorService();
+            VpnVendorServiceSafetyPolicy.QualifyForStartup(EnsureRuntimeFilesExist, QualifyOwnedVendorService);
             PrepareVendorConfiguration();
             using var service = OpenVendorService();
             void StartService()
@@ -1104,11 +1104,13 @@ public sealed class AmneziaServiceTunnelRuntime : IVpnTunnelRuntime, IVpnRuntime
 
     private void QualifyOwnedVendorService()
     {
-        EnsureRuntimeFilesExist();
-        if (!OwnedVendorServiceRegistration.QualifyIfPresent(VendorExecutablePath(), _configurationPath))
+        VpnVendorServiceSafetyPolicy.QualifyForRecoveryOrStop(() =>
         {
-            throw new VpnTunnelException("tunnel_configuration_missing");
-        }
+            if (!OwnedVendorServiceRegistration.QualifyIfPresent(VendorExecutablePath(), _configurationPath))
+            {
+                throw new VpnTunnelException("tunnel_configuration_missing");
+            }
+        });
     }
 
     private static string ComputeHash(string value) =>

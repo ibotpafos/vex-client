@@ -39,7 +39,7 @@ public sealed class VpnEndpointAddressCache
     public bool Restore(VpnEndpointAddressSnapshot? snapshot, DateTimeOffset now)
     {
         if (snapshot is null || snapshot.Addresses is null || snapshot.Addresses.Count is < 1 or > 16 ||
-            snapshot.ValidUntil <= now || snapshot.ValidUntil > now.AddHours(24) ||
+            snapshot.ValidUntil <= now || snapshot.ValidUntil - now > VpnProfileLifetimePolicy.MaximumRemainingLifetime ||
             !TryParseEndpoint(snapshot.Endpoint, out _, out _) || !ValidPeer(snapshot.ServerPublicKey))
         {
             return false;
@@ -58,7 +58,8 @@ public sealed class VpnEndpointAddressCache
         DateTimeOffset? authorizationExpiresAt, DateTimeOffset now)
     {
         if (!TryParseEndpoint(endpoint, out var host, out _) || !ValidPeer(serverPublicKey) ||
-            authorizationExpiresAt is null || authorizationExpiresAt <= now || authorizationExpiresAt > now.AddHours(24))
+            authorizationExpiresAt is null || authorizationExpiresAt <= now ||
+            authorizationExpiresAt.Value - now > VpnProfileLifetimePolicy.MaximumRemainingLifetime)
         {
             return false;
         }

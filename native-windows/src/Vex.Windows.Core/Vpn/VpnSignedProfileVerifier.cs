@@ -79,10 +79,6 @@ public sealed class VpnSignedProfileVerifier
 {
     public const string SupportedAlgorithm = "ECDSA_P256_SHA256_DER";
 
-    private static readonly TimeSpan ClockSkew = TimeSpan.FromMinutes(2);
-    // The control plane currently issues managed native profiles for 24 hours.
-    // Reject any longer-lived authorization even when its signature is valid.
-    private static readonly TimeSpan MaximumLifetime = TimeSpan.FromHours(24);
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = false,
@@ -295,10 +291,10 @@ public sealed class VpnSignedProfileVerifier
         }
 
         var now = _utcNow();
-        if (policy.IssuedAt > now + ClockSkew ||
+        if (policy.IssuedAt > now + VpnProfileLifetimePolicy.ClockSkew ||
             policy.ExpiresAt <= now ||
             policy.ExpiresAt <= policy.IssuedAt ||
-            policy.ExpiresAt - policy.IssuedAt > MaximumLifetime)
+            policy.ExpiresAt - policy.IssuedAt > VpnProfileLifetimePolicy.MaximumLifetime)
         {
             Reject("profile_expired");
         }

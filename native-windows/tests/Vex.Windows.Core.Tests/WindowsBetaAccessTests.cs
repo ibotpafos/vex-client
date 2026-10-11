@@ -25,6 +25,7 @@ internal static class WindowsBetaAccessTests
         await BetaConnectRegistersWithoutBillingMutationsAsync();
         await BetaNeverBypassesTheServerDeviceQuotaAsync();
         await BetaCacheHasFreshnessAndOfflineBoundsAsync();
+        await InvalidCachedLeaseCannotAdmitOfflineAsync();
         await AuthoritativeBetaRevocationSupersedesPositiveCacheAsync();
         await ActiveMonitorKeepsBetaAndDisconnectsRevokedBetaAsync();
         await BetaWarmupAndOfflineReconnectRequireBoundedAccessAsync();
@@ -174,6 +175,9 @@ internal static class WindowsBetaAccessTests
             var publicKey = root.GetProperty("public_key").GetString()!;
             var installation = root.GetProperty("installation_id").GetString()!;
             var signature = root.GetProperty("identity_signature").GetString()!;
+            var expectedIdempotency = $"native-windows-register-{installation}-{root.GetProperty("key_epoch").GetInt32()}-verified-" +
+                Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(publicKey)))[..16].ToLowerInvariant() + "-" +
+                Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(fixture.Session.User.Id)))[..16].ToLowerInvariant();
             var payload = DeviceIdentity.SignaturePayload("beta-challenge", "beta-nonce", "register", installation,
                 provider.Identity.PublicKey, publicKey);
             var normalized = signature.Replace('-', '+').Replace('_', '/');
@@ -187,7 +191,7 @@ internal static class WindowsBetaAccessTests
                 root.GetProperty("identity_public_key").GetString() == provider.Identity.PublicKey &&
                 root.GetProperty("identity_key_type").GetString() == DeviceIdentity.KeyTypeP256Jwk &&
                 root.GetProperty("identity_challenge_id").GetString() == "beta-challenge" &&
-                request.Headers.GetValues("Idempotency-Key").Single().EndsWith("-verified", StringComparison.Ordinal) &&
+                request.Headers.GetValues("Idempotency-Key").Single() == expectedIdempotency &&
                 verifier.VerifyData(Encoding.UTF8.GetBytes(payload), Convert.FromBase64String(normalized),
                     HashAlgorithmName.SHA256, DSASignatureFormat.Rfc3279DerSequence),
                 "A beta registration used a legacy identity or an unverifiable P-256 challenge signature.");
@@ -240,6 +244,44 @@ internal static class WindowsBetaAccessTests
         catch (HttpRequestException) { }
         Check(fixture.Vpn.ConnectCalls == 0 && fixture.BillingMutations == 0,
             "Entitlement refresh or offline validation mutated billing or started a tunnel.");
+    }
+
+    private static async Task InvalidCachedLeaseCannotAdmitOfflineAsync()
+    {
+        var admitted = new List<string>();
+        foreach (var paid in new[] { false, true })
+        foreach (var kind in new[] { "future-check", "overlong-lease", "missing-check" })
+        {
+            using var fixture = new Fixture(provisioned: true);
+            if (paid) fixture.Entitlement = new FakeNativeClientApi().Entitlement;
+            Check(await fixture.Coordinator.WarmProfileAsync("fi-1", "full", null, CancellationToken.None),
+                "Invalid-lease controls require a genuinely signed warm profile.");
+            DateTimeOffset? checkedAt = kind switch
+            {
+                "future-check" => fixture.Now.AddHours(1),
+                "overlong-lease" => fixture.Now.AddHours(-25),
+                _ => null,
+            };
+            fixture.Store.SetExternalSnapshot(fixture.Store.State! with
+            {
+                CachedEntitlementCheckedAt = checkedAt,
+                CachedEntitlementValidUntil = fixture.Now.AddHours(2),
+            });
+            fixture.Offline = true;
+            var reconnect = fixture.Coordinator.TryGetCachedReconnectLocation("full", null, out _);
+            var validateRejected = false;
+            var connectRejected = false;
+            try { await fixture.Coordinator.ValidateEntitlementAsync(CancellationToken.None); }
+            catch (HttpRequestException) { validateRejected = true; }
+            try { await fixture.Coordinator.ConnectAsync(CancellationToken.None); }
+            catch (HttpRequestException) { connectRejected = true; }
+            Console.WriteLine($"Invalid lease {(paid ? "paid" : "beta")}/{kind}: reconnect={reconnect}, validateRejected={validateRejected}, connectRejected={connectRejected}, starts={fixture.Vpn.ConnectCalls}");
+            if (reconnect || !validateRejected || !connectRejected || fixture.Vpn.ConnectCalls != 0)
+                admitted.Add($"{(paid ? "paid" : "beta")}/{kind}");
+            Check(fixture.BillingMutations == 0 && fixture.Store.State!.Session == fixture.Session,
+                "Rejecting invalid cached access must not mutate billing or discard authentication.");
+        }
+        Check(admitted.Count == 0, "Invalid cached leases admitted offline: " + string.Join(", ", admitted));
     }
 
     private static async Task AuthoritativeBetaRevocationSupersedesPositiveCacheAsync()

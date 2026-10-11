@@ -890,9 +890,7 @@ public sealed partial class NativeClientCoordinator
         NativeClientState state, CancellationToken cancellationToken)
     {
         var now = _utcNow();
-        if (state.CachedEntitlement?.HasVpnAccess == true &&
-            (KnownEntitlementExpiry(state.CachedEntitlement) is not { } knownExpiry || knownExpiry > now) &&
-            state.CachedEntitlementValidUntil > now &&
+        if (HasBoundedOfflineEntitlement(state) &&
             state.CachedEntitlementCheckedAt > now - TimeSpan.FromMinutes(5))
         {
             return state;
@@ -913,12 +911,11 @@ public sealed partial class NativeClientCoordinator
             !cancellationToken.IsCancellationRequested &&
             error is HttpRequestException or IOException or TaskCanceledException)
         {
-            if (KnownEntitlementExpiry(state.CachedEntitlement) is { } paidExpiry && paidExpiry <= now)
+            if (KnownEntitlementExpiry(state.CachedEntitlement) is { } accessExpiry && accessExpiry <= now)
             {
                 throw new NativeClientFlowException("vpn_entitlement_required");
             }
-            if (state.CachedEntitlement?.HasVpnAccess == true &&
-                state.CachedEntitlementValidUntil > now)
+            if (HasBoundedOfflineEntitlement(state))
             {
                 return state;
             }

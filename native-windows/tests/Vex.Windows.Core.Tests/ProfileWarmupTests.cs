@@ -232,7 +232,7 @@ internal static class ProfileWarmupTests
             if (failure == "expiry") fixture.Now = fixture.Now.AddMinutes(15);
             if (failure == "entitlement") fixture.Store.Save(state with { CachedEntitlement = FakeNativeClientApi.NoVpnEntitlement });
             if (failure == "user") fixture.Store.SetExternalSnapshot(state with { Session = state.Session with { User = state.Session.User with { Id = "other-user" } } });
-            if (failure == "device") fixture.Store.Save(state with { DeviceId = "other-device" });
+            if (failure == "device") fixture.Store.SetExternalSnapshot(state with { DeviceId = "other-device" });
             if (failure == "key") fixture.Store.SetExternalSnapshot(state with { Identity = Vex.Windows.Client.Security.WireGuardIdentity.Generate(2) });
             if (failure == "trust") fixture.TrustAvailable = false;
             fixture.GoOffline(failure == "auth", failure == "forbidden" ? System.Net.HttpStatusCode.Forbidden : null);

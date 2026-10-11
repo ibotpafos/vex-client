@@ -13,6 +13,9 @@ public interface IClientStateStore
 
     NativeDeviceState? LoadDevice();
 
+    void SaveDevice(NativeDeviceState state) =>
+        throw new NotSupportedException("This state store cannot retain independent device-key recovery.");
+
     NativeClientState? Load();
 
     void Save(NativeClientState state);
@@ -78,7 +81,13 @@ public sealed record NativeDeviceState(
     string DeviceId,
     string LocationId,
     WireGuardIdentity Identity,
-    string? UserId = null);
+    string? UserId = null,
+    WireGuardIdentity? PendingIdentity = null)
+{
+    public static NativeDeviceState FromClientState(NativeClientState state) =>
+        new(state.InstallationId, state.DeviceId, state.LocationId, state.Identity,
+            state.Session.User.Id, state.PendingIdentity);
+}
 
 public sealed class NativeClientFlowException : Exception
 {
@@ -596,11 +605,15 @@ public sealed partial class NativeClientCoordinator
                 "vpn_profile_revoked");
         }
 
+        var aligned = AlignProfileIdentity(state, profile);
+        PersistProfileEpoch(state, aligned, cancellationToken);
+        state = aligned;
+
         if (profile.RotationRequired)
         {
             var identity = state.PendingIdentity ??
                 WireGuardIdentity.Generate(
-                    checked(state.Identity.KeyEpoch + 1));
+                    NextIdentityEpoch(state.Identity.KeyEpoch));
             if (state.PendingIdentity is null)
             {
                 state = state with
@@ -610,27 +623,24 @@ public sealed partial class NativeClientCoordinator
                 _stateStore.Save(state);
             }
 
-            await _api.RotateManagedVpnKeyAsync(
-                state.Session.AccessToken,
-                state.DeviceId,
-                identity,
-                cancellationToken).ConfigureAwait(false);
-            state = state with
-            {
-                Identity = identity,
-                PendingIdentity = null,
-                CachedProfileVersion = null,
-                CachedAuthorization = null,
-                CachedCandidatePolicyExpiresAt = null,
-                CachedCandidateGrants = null,
-            };
-            _stateStore.Save(state);
+            state = await CompletePendingRotationAsync(state, cancellationToken, profile).ConfigureAwait(false);
             profile = await GetProfileAsync(state, null, candidate, cancellationToken).ConfigureAwait(false);
             if (profile.Revoked || profile.RotationRequired)
             {
                 throw new NativeClientFlowException(
                     "vpn_key_rotation_failed");
             }
+            aligned = AlignProfileIdentity(state, profile);
+            PersistProfileEpoch(state, aligned, cancellationToken);
+            state = aligned;
+        }
+
+        if (profile.Unchanged && state.CachedAuthorization is null)
+        {
+            profile = await GetProfileAsync(state, null, candidate, cancellationToken).ConfigureAwait(false);
+            aligned = AlignProfileIdentity(state, profile);
+            PersistProfileEpoch(state, aligned, cancellationToken);
+            state = aligned;
         }
 
         ManagedVpnProfileAuthorization authorization;
@@ -1248,33 +1258,6 @@ public sealed partial class NativeClientCoordinator
         return RequireCurrentState();
     }
 
-    private async Task<NativeClientState> CompletePendingRotationAsync(
-        NativeClientState state,
-        CancellationToken cancellationToken)
-    {
-        if (state.PendingIdentity is null)
-        {
-            return state;
-        }
-
-        await _api.RotateManagedVpnKeyAsync(
-            state.Session.AccessToken,
-            state.DeviceId,
-            state.PendingIdentity,
-            cancellationToken).ConfigureAwait(false);
-        var committed = state with
-        {
-            Identity = state.PendingIdentity,
-            PendingIdentity = null,
-            CachedProfileVersion = null,
-            CachedAuthorization = null,
-            CachedCandidatePolicyExpiresAt = null,
-            CachedCandidateGrants = null,
-        };
-        _stateStore.Save(committed);
-        return committed;
-    }
-
     private async Task<NativeClientState> ProvisionAuthenticatedSessionCoreAsync(
         VexAuthSession session,
         CancellationToken cancellationToken)
@@ -1284,21 +1267,22 @@ public sealed partial class NativeClientCoordinator
             cancellationToken).ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
         var existingState = _stateStore.Load();
-        var existingDevice = await OwnedDeviceAsync(session, existingState,
-            _stateStore.GetOrCreateInstallationId(), cancellationToken).ConfigureAwait(false);
+        var installationId = _stateStore.GetOrCreateInstallationId();
+        var ownedDevice = await OwnedDeviceAsync(session, existingState,
+            installationId, cancellationToken).ConfigureAwait(false);
         var preferredLocationId =
             existingState?.SelectionMode == "manual"
                 ? existingState.LocationId
-                : existingDevice?.LocationId;
+                : ownedDevice?.LocationId;
         var location = locations.FirstOrDefault(candidate =>
                 candidate.Id == preferredLocationId) ??
             locations.FirstOrDefault() ??
             throw new NativeClientFlowException(
                 "vpn_location_unavailable");
+        var existingDevice = await RecoverRetainedDeviceIdentityAsync(session, existingState,
+            installationId, location.Id, cancellationToken).ConfigureAwait(false);
         var identity = existingDevice?.Identity ??
             WireGuardIdentity.Generate();
-        var installationId =
-            _stateStore.GetOrCreateInstallationId();
         var device = await _api.RegisterNativeDeviceAsync(
             session.AccessToken,
             installationId,
@@ -1307,12 +1291,15 @@ public sealed partial class NativeClientCoordinator
             location.Id,
             _appVersion,
             cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        ValidateRegisteredDevice(device, existingDevice, identity);
         var state = new NativeClientState(
             session,
             installationId,
             device.Id,
             location.Id,
             identity,
+            PendingIdentity: existingDevice?.PendingIdentity,
             SelectionMode:
                 existingState?.SelectionMode == "manual" &&
                 location.Id == existingState.LocationId
@@ -1375,19 +1362,18 @@ public sealed partial class NativeClientCoordinator
             ? available.FirstOrDefault(location => location.Id == preferred)?.Id
             : VpnLocationSelector.SelectAutomaticLocation(available, preferred);
         if (locationId is null) throw new NativeClientFlowException("vpn_location_unavailable");
-        var retained = await OwnedDeviceAsync(state.Session, state,
-            state.InstallationId, cancellationToken).ConfigureAwait(false);
+        var retained = await RecoverRetainedDeviceIdentityAsync(state.Session, state,
+            state.InstallationId, locationId, cancellationToken).ConfigureAwait(false);
         var identity = retained?.Identity ?? state.Identity;
         var device = await _api.RegisterNativeDeviceAsync(state.Session.AccessToken, state.InstallationId,
             identity.PublicKey, identity.KeyEpoch, locationId, _appVersion, cancellationToken)
             .WaitAsync(cancellationToken).ConfigureAwait(false);
-        if (device is null || string.IsNullOrWhiteSpace(device.Id) ||
-            (!string.IsNullOrWhiteSpace(device.PublicKey) && device.PublicKey != identity.PublicKey))
-            throw new VexApiException(System.Net.HttpStatusCode.BadGateway, "api_response_invalid");
+        cancellationToken.ThrowIfCancellationRequested();
+        ValidateRegisteredDevice(device, retained, identity);
         var provisioned = state with
         {
             DeviceId = device.Id, LocationId = locationId, Identity = identity,
-            VpnProvisioningPending = false, PendingIdentity = null,
+            VpnProvisioningPending = false, PendingIdentity = retained?.PendingIdentity,
             CachedProfileVersion = null, CachedAuthorization = null, CachedCandidateGrants = null,
             CachedCandidatePolicyExpiresAt = null, WarmedProfile = null,
         };
@@ -1413,8 +1399,20 @@ public sealed partial class NativeClientCoordinator
         var devices = await _api.GetDevicesAsync(session.AccessToken, cancellationToken)
             .WaitAsync(cancellationToken).ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
-        return devices.Any(device => device is not null && device.Id == retained.DeviceId &&
-            device.PublicKey == retained.Identity.PublicKey) ? retained : null;
+        var owned = devices.FirstOrDefault(device => device is not null && device.Id == retained.DeviceId);
+        if (owned is null) return null;
+        if (owned.PublicKey != retained.Identity.PublicKey &&
+            (retained.PendingIdentity is null || owned.PublicKey != retained.PendingIdentity.PublicKey))
+            throw new VexApiException(System.Net.HttpStatusCode.BadGateway, "api_response_invalid");
+        return retained;
+    }
+
+    private static void ValidateRegisteredDevice(VpnDevice? device, NativeDeviceState? retained,
+        WireGuardIdentity identity)
+    {
+        if (device is null || string.IsNullOrWhiteSpace(device.Id) || device.PublicKey != identity.PublicKey ||
+            retained is not null && device.Id != retained.DeviceId)
+            throw new VexApiException(System.Net.HttpStatusCode.BadGateway, "api_response_invalid");
     }
 
     private NativeClientState RequireCurrentState()

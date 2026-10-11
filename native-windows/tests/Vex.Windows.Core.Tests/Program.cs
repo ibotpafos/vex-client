@@ -153,6 +153,8 @@ var tests = new (string Name, Action Run)[]
     ("Native client refetches when cached profile metadata is corrupted", NativeClientRecoversFromCorruptedProfileCache),
     ("Native client refreshes expiring session at refresh boundary", NativeClientRefreshesExpiringSessionAtBoundary),
     ("Native client rotates an expired device key before connect", NativeClientRotatesExpiredKey),
+    ("Profile identity follows server PSK epochs and confirms durable key recovery", ProfileIdentityRecoveryTests.Run),
+    ("Retained device keys recover ambiguous rotations across sign-out and reauthentication", RetainedDeviceIdentityRecoveryTests.Run),
     ("Native client preserves manual location and routing preferences", NativeClientPreservesManualVpnPreferences),
     ("Native client gates VPN connect on entitlement", NativeClientGatesConnectOnEntitlement),
     ("Native client reports successful connect and disconnect", NativeClientReportsVpnLifecycle),

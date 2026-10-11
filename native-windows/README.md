@@ -133,6 +133,20 @@ device, location and routing scope, and matching HTTPS device-key metadata.
 Warm-up cannot change the active profile or connection preference; login,
 key, routing and connection changes invalidate pending work. Older servers
 without device-key metadata use the ordinary foreground profile flow.
+Server PSK rotation can advance the device epoch while retaining the same
+X25519 public key. Windows aligns that epoch without replacing the private
+key and invalidates older cached grants. Key rotation derives the next epoch
+from current device metadata, retains the same pending key after an ambiguous
+response, and verifies the returned device/public key before committing it.
+An unrelated key, stale epoch or mismatched device fails before tunnel admission.
+Both the current and pending private keys remain in independent CurrentUser
+DPAPI device storage across sign-out and authentication-only saves. Before
+registering a retained device, Windows verifies its owner and fetches current
+key metadata through an available location. A lost rotation acknowledgement
+can then recover the accepted key without generating another identity.
+Device-key writes precede session writes; a failed session replacement cannot
+discard the recovery key. Windows x64 CI exercises real DPAPI and file-lock
+failures in `Vex.Windows.Storage.Tests` in addition to coordinator regressions.
 An exact warmed grant and bounded cached paid entitlement also support cold
 automatic connection during transient catalog failures. A fresh negative
 entitlement supersedes an older paid cache; authentication failures and grants

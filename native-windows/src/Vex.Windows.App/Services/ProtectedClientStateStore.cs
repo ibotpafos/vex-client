@@ -238,6 +238,21 @@ public sealed class ProtectedClientStateStore :
     public NativeDeviceState? LoadDevice() =>
         LoadProtected<NativeDeviceState>(_deviceStateFile);
 
+    public void SaveDevice(NativeDeviceState state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        if (string.IsNullOrWhiteSpace(state.InstallationId) || string.IsNullOrWhiteSpace(state.DeviceId) ||
+            string.IsNullOrWhiteSpace(state.LocationId) || !ValidRetainedIdentity(state.Identity) ||
+            state.UserId is not null && string.IsNullOrWhiteSpace(state.UserId) ||
+            state.PendingIdentity is not null && !ValidRetainedIdentity(state.PendingIdentity))
+            throw new JsonException("Сохраненный VPN-ключ VEX неполон или поврежден.");
+        SaveProtected(_deviceStateFile, state);
+    }
+
+    private static bool ValidRetainedIdentity(WireGuardIdentity? identity) =>
+        identity is { KeyEpoch: > 0 } && !string.IsNullOrWhiteSpace(identity.PrivateKey) &&
+        !string.IsNullOrWhiteSpace(identity.PublicKey);
+
     public Task<DeviceIdentity?> GetOrCreateAsync(
         CancellationToken cancellationToken)
     {
@@ -295,18 +310,14 @@ public sealed class ProtectedClientStateStore :
                 DataProtectionScope.CurrentUser);
             var directory = Path.GetDirectoryName(_stateFile)!;
             Directory.CreateDirectory(directory);
+            // Device recovery must be durable before the session can claim a
+            // rotation acknowledgement. A failed retained write keeps the
+            // previous authenticated state intact and prevents the next POST.
+            if (!state.VpnProvisioningPending)
+                SaveDevice(NativeDeviceState.FromClientState(state));
             var temporaryFile = _stateFile + ".new";
             File.WriteAllBytes(temporaryFile, protectedState);
             File.Move(temporaryFile, _stateFile, overwrite: true);
-            if (!state.VpnProvisioningPending)
-                SaveProtected(
-                    _deviceStateFile,
-                    new NativeDeviceState(
-                        state.InstallationId,
-                        state.DeviceId,
-                        state.LocationId,
-                        state.Identity,
-                        state.Session.User.Id));
             _windowsHello.SessionSaved();
             _sessionCacheUnavailable = false;
             StoredSessionError = null;

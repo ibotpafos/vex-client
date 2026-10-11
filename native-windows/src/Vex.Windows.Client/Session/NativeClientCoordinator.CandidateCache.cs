@@ -58,7 +58,9 @@ public sealed partial class NativeClientCoordinator
             {
                 return state;
             }
-            return state with
+            var aligned = AlignProfileIdentity(state, profile);
+            PersistProfileEpoch(state, aligned, cancellationToken);
+            return aligned with
             {
                 CachedProfileVersion = profile.Version,
                 CachedAuthorization = profile.Authorization,
@@ -126,6 +128,9 @@ public sealed partial class NativeClientCoordinator
                         state.DeviceId, state.LocationId, state.RoutingMode, state.BypassRegion,
                         candidate.Id, token).ConfigureAwait(false);
                     if (profile.Revoked || profile.RotationRequired || profile.Unchanged) { continue; }
+                    // Advisory prefetch cannot relabel an earlier admitted
+                    // transport with another server key/PSK epoch.
+                    if (AlignProfileIdentity(state, profile).Identity != state.Identity) { continue; }
                     authorization = profile.Authorization;
                     profileVersion = profile.Version;
                 }

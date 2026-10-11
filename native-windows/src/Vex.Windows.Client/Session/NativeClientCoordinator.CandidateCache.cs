@@ -39,6 +39,7 @@ public sealed partial class NativeClientCoordinator
     private async Task<NativeClientState> PreferPolicyGrantAsync(NativeClientState state,
         ResiliencePolicy? policy, CancellationToken cancellationToken)
     {
+        var intent = Volatile.Read(ref _accountIntent);
         if (state.CachedAuthorization is not { } original || !PolicyUnexpired(policy)) { return state; }
         var routes = EligibleRoutes(state, original, policy);
         var preferred = (!CachedAuthorityUnexpired(state)
@@ -53,12 +54,15 @@ public sealed partial class NativeClientCoordinator
         try
         {
             var profile = await GetProfileAsync(state, null, preferred, routeCancellation.Token).ConfigureAwait(false);
+            EnsureAccountIntent(intent, cancellationToken);
             if (profile.Authorization is null || profile.Revoked || profile.RotationRequired || profile.Unchanged ||
                 !GrantMatchesCandidate(profile.Authorization, state, preferred) || !PolicyUnexpired(policy))
             {
                 return state;
             }
-            return state with
+            var aligned = AlignProfileIdentity(state, profile);
+            PersistProfileEpoch(state, aligned, cancellationToken);
+            return aligned with
             {
                 CachedProfileVersion = profile.Version,
                 CachedAuthorization = profile.Authorization,
@@ -126,6 +130,9 @@ public sealed partial class NativeClientCoordinator
                         state.DeviceId, state.LocationId, state.RoutingMode, state.BypassRegion,
                         candidate.Id, token).ConfigureAwait(false);
                     if (profile.Revoked || profile.RotationRequired || profile.Unchanged) { continue; }
+                    // Advisory prefetch cannot relabel an earlier admitted
+                    // transport with another server key/PSK epoch.
+                    if (AlignProfileIdentity(state, profile).Identity != state.Identity) { continue; }
                     authorization = profile.Authorization;
                     profileVersion = profile.Version;
                 }

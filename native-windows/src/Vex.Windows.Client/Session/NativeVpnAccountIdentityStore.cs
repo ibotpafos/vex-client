@@ -9,7 +9,8 @@ namespace Vex.Windows.Client.Session;
 public sealed record NativeVpnAccountIdentity(string UserId, string RegistrationId,
     string ExternalDeviceId, WireGuardIdentity Identity, string? DeviceId = null,
     string? LocationId = null, WireGuardIdentity? PendingIdentity = null,
-    bool MigrationRotationPending = false, bool LegacyRegistration = false);
+    bool MigrationRotationPending = false, bool LegacyRegistration = false,
+    bool LegacyKeyIsolated = false);
 
 public interface IVpnAccountIdentityStore
 {
@@ -55,7 +56,7 @@ public sealed class NativeVpnAccountIdentityFileStore : IVpnAccountIdentityStore
                 if (envelope.LegacyKeyOwner is null) envelope = envelope with { LegacyKeyOwner = identity.UserId };
                 else if (envelope.LegacyKeyOwner != identity.UserId)
                     identity = identity with { Identity = WireGuardIdentity.Generate(checked(identity.Identity.KeyEpoch + 1)),
-                        MigrationRotationPending = true };
+                        PendingIdentity = null, MigrationRotationPending = true, LegacyKeyIsolated = true };
             }
             envelope.Accounts.Add(identity.UserId, identity);
             Write(envelope);
@@ -150,16 +151,22 @@ public static class NativeVpnAccountIdentitySynchronization
     {
         if (state.VpnProvisioningPending || state.VpnRegistrationId is null) return;
         var existing = store.Load(state.Session.User.Id) ?? throw new InvalidOperationException("vpn_identity_missing");
-        if (existing.RegistrationId != state.VpnRegistrationId || existing.ExternalDeviceId != state.VpnExternalDeviceId)
+        if (existing.RegistrationId != state.VpnRegistrationId || existing.ExternalDeviceId != state.VpnExternalDeviceId ||
+            existing.DeviceId is not null && existing.DeviceId != state.DeviceId)
             throw new InvalidOperationException("vpn_identity_changed");
-        if (state.Identity != existing.Identity && state.Identity != existing.PendingIdentity)
+        if (!SameKeyAtOrAfter(existing.Identity, state.Identity) &&
+            !SameKeyAtOrAfter(existing.PendingIdentity, state.Identity))
             throw new InvalidOperationException("vpn_identity_changed");
-        if (existing.PendingIdentity is not null && state.Identity != existing.PendingIdentity &&
-            state.PendingIdentity != existing.PendingIdentity)
+        if (existing.PendingIdentity is not null && !SameKeyAtOrAfter(existing.PendingIdentity, state.Identity) &&
+            !SameKeyAtOrAfter(existing.PendingIdentity, state.PendingIdentity))
             throw new InvalidOperationException("vpn_identity_changed");
         store.Replace(existing, existing with { Identity = state.Identity, PendingIdentity = state.PendingIdentity,
             DeviceId = state.DeviceId, LocationId = state.LocationId });
     }
+
+    private static bool SameKeyAtOrAfter(WireGuardIdentity? previous, WireGuardIdentity? next) =>
+        previous is not null && next is not null && previous.PublicKey == next.PublicKey &&
+        previous.PrivateKey == next.PrivateKey && next.KeyEpoch >= previous.KeyEpoch;
 
     public static NativeClientState Restore(IVpnAccountIdentityStore store, NativeClientState state)
     {
@@ -167,8 +174,10 @@ public static class NativeVpnAccountIdentitySynchronization
         var existing = store.Load(state.Session.User.Id) ?? throw new InvalidOperationException("vpn_identity_missing");
         if (existing.RegistrationId != state.VpnRegistrationId || existing.ExternalDeviceId != state.VpnExternalDeviceId)
             throw new InvalidOperationException("vpn_identity_changed");
-        if (state.Identity == existing.Identity && state.PendingIdentity == existing.PendingIdentity) return state;
+        if (state.Identity == existing.Identity && state.PendingIdentity == existing.PendingIdentity &&
+            (existing.DeviceId is null || state.DeviceId == existing.DeviceId)) return state;
         return state with { Identity = existing.Identity, PendingIdentity = existing.PendingIdentity,
+            DeviceId = existing.DeviceId ?? state.DeviceId,
             CachedAuthorization = null, CachedProfileVersion = null, CachedCandidateGrants = null,
             CachedCandidatePolicyExpiresAt = null, WarmedProfile = null };
     }

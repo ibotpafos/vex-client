@@ -78,7 +78,7 @@ internal static class VpnControlPlaneAddressCacheTests
             Require(cache.Get(Endpoint, Peer, hosts, Now.AddMinutes(10), Now).Count == 0,
                 "Control-plane cache crossed the current configured-host set.");
         }
-        foreach (var expiry in new DateTimeOffset?[] { null, Now, Now.AddTicks(-1), Now.AddHours(24).AddTicks(1) })
+        foreach (var expiry in new DateTimeOffset?[] { null, Now, Now.AddTicks(-1), Now.AddHours(24).AddMinutes(2).AddTicks(1) })
         {
             Require(cache.Get(Endpoint, Peer, Hosts, expiry, Now).Count == 0,
                 "Missing, expired or unbounded current signed authorization admitted cached routes.");
@@ -103,7 +103,7 @@ internal static class VpnControlPlaneAddressCacheTests
             original with { Endpoint = "vpn.example.test:0" },
             original with { ServerPublicKey = "invalid" },
             original with { ValidUntil = Now },
-            original with { ValidUntil = Now.AddHours(24).AddTicks(1) },
+            original with { ValidUntil = Now.AddHours(24).AddMinutes(2).AddTicks(1) },
             original with { ConfiguredHosts = null! },
             original with { ConfiguredHosts = ["api.example.test", "other.example.test"] },
             original with { Entries = null! },
@@ -156,7 +156,7 @@ internal static class VpnControlPlaneAddressCacheTests
             Require(!cache.Remember(Endpoint, Peer, hosts, new Dictionary<string, IPAddress[]>(), Now.AddMinutes(10), Now),
                 "Malformed or oversized configured host sets admitted routing metadata.");
         }
-        foreach (var expiry in new DateTimeOffset?[] { null, Now, Now.AddMinutes(-1), Now.AddHours(24).AddTicks(1) })
+        foreach (var expiry in new DateTimeOffset?[] { null, Now, Now.AddMinutes(-1), Now.AddHours(24).AddMinutes(2).AddTicks(1) })
         {
             Require(!cache.Remember(Endpoint, Peer, Hosts, Answers((Hosts[0], ["192.0.2.3"])), expiry, Now),
                 "An unsigned, expired or unbounded lease admitted fresh control-plane answers.");

@@ -14,6 +14,9 @@ internal static class AccountVpnIdentityTests
     public static void Run()
     {
         BFirstHistoricalPairCollisionIsRepairedAsync().GetAwaiter().GetResult();
+        FreshMigrationPairSurvivesRegistrationFailureAndReopenAsync().GetAwaiter().GetResult();
+        AccountRecoveryEpochFloorsPreserveJournalAsync().GetAwaiter().GetResult();
+        RebindRejectsBackwardOwnedEpochAsync().GetAwaiter().GetResult();
         AccountSwitchPreservesIndependentRegistrationAsync().GetAwaiter().GetResult();
         ReopenedCoordinatorPreservesAccountsAsync().GetAwaiter().GetResult();
         UpgradedLegacyAccountSurvivesSwitchAsync().GetAwaiter().GetResult();
@@ -37,6 +40,114 @@ internal static class AccountVpnIdentityTests
         PendingRotationReplaysBeforeRegistrationAfterReopenAsync().GetAwaiter().GetResult();
         RejectedSessionRetiresBeforeLosingOwnerAsync().GetAwaiter().GetResult();
         ScopedRegistrationRequiresIdentityProofAsync().GetAwaiter().GetResult();
+    }
+
+    public static void RunMigrationRetryRegression() => FreshMigrationPairSurvivesRegistrationFailureAndReopenAsync().GetAwaiter().GetResult();
+    public static void RunRecoveryEpochFloorRegression()
+    {
+        AccountRecoveryEpochFloorsPreserveJournalAsync().GetAwaiter().GetResult();
+        RebindRejectsBackwardOwnedEpochAsync().GetAwaiter().GetResult();
+    }
+
+    private static async Task AccountRecoveryEpochFloorsPreserveJournalAsync()
+    {
+        foreach (var scenario in new[]
+        {
+            (Committed: 5, Pending: (int?)6, Live: 3, Migration: false),
+            (Committed: 3, Pending: (int?)8, Live: 4, Migration: false),
+            (Committed: 7, Pending: (int?)null, Live: 4, Migration: true),
+            (Committed: 4, Pending: (int?)5, Live: int.MaxValue, Migration: false),
+        })
+        {
+            var directory = Path.Combine(Path.GetTempPath(), "vex-win-map-epoch-floor-" + Guid.NewGuid().ToString("N"));
+            var path = Path.Combine(directory, "accounts.bin");
+            try
+            {
+                var identity = WireGuardIdentity.Generate(scenario.Committed);
+                var pending = scenario.Pending is { } epoch ? WireGuardIdentity.Generate(epoch) : null;
+                FileStore(path).GetOrAdd(new("account-a", "win-scoped-a", "win-scoped-a", identity,
+                    DeviceId: "device-account-a", PendingIdentity: pending, MigrationRotationPending: scenario.Migration));
+                var before = File.ReadAllBytes(path);
+                var vpn = new FakeVpnControlClient();
+                using var fixture = new Fixture(FileStore(path), vpn);
+                var liveKey = scenario.Migration ? WireGuardIdentity.Generate().PublicKey : identity.PublicKey;
+                fixture.Server.Seed("account-a", LegacyDevice("account-a", liveKey, scenario.Live, "win-scoped-a"));
+                await fixture.SignInAsync("account-a");
+                var rejected = false;
+                try { await fixture.Coordinator.ConnectAsync(CancellationToken.None); }
+                catch (NativeClientFlowException error) when (error.Code is "vpn_key_epoch_unavailable" or "vpn_key_rotation_failed")
+                { rejected = true; }
+                Check(rejected && File.ReadAllBytes(path).SequenceEqual(before) && fixture.Server.Rotations.Count == 0 &&
+                    fixture.Server.Registrations.Count == 0 && fixture.Store.State!.VpnProvisioningPending && vpn.PrivateKey is null,
+                    "Backward committed or pending epochs, stale migration intent and maximum live epoch must retain the exact durable journal before POST or native activation.");
+            }
+            finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        }
+    }
+
+    private static async Task RebindRejectsBackwardOwnedEpochAsync()
+    {
+        foreach (var isolated in new[] { false, true })
+        {
+            var directory = Path.Combine(Path.GetTempPath(), "vex-win-rebind-epoch-floor-" + Guid.NewGuid().ToString("N"));
+            var path = Path.Combine(directory, "accounts.bin");
+            try
+            {
+                var identity = WireGuardIdentity.Generate(4);
+                FileStore(path).GetOrAdd(new("account-b", "win-installation-1", "win-installation-1", identity,
+                    DeviceId: "device-account-b", LegacyRegistration: true, LegacyKeyIsolated: isolated));
+                var before = File.ReadAllBytes(path);
+                var vpn = new FakeVpnControlClient();
+                using var fixture = new Fixture(FileStore(path), vpn);
+                fixture.Server.Seed("account-b", LegacyDevice("account-b", identity.PublicKey), bindingOwner: "account-a");
+                var getDevices = fixture.Proxy.Overrides[nameof(INativeClientApi.GetDevicesAsync)];
+                var reads = 0;
+                fixture.Proxy.Overrides[nameof(INativeClientApi.GetDevicesAsync)] = args => ++reads == 2
+                    ? Task.FromResult<IReadOnlyList<VpnDevice>>([LegacyDevice("account-b", identity.PublicKey, 2)])
+                    : getDevices(args);
+                await fixture.SignInAsync("account-b");
+                var rejected = false;
+                try { await fixture.Coordinator.ConnectAsync(CancellationToken.None); }
+                catch (NativeClientFlowException error) when (error.Code == "vpn_key_epoch_unavailable") { rejected = true; }
+                Check(rejected && reads == 2 && File.ReadAllBytes(path).SequenceEqual(before) &&
+                    fixture.Server.Rotations.Count == 0 && fixture.Server.Registrations.Count == 1 &&
+                    fixture.Store.State!.VpnProvisioningPending && vpn.PrivateKey is null,
+                    "Exact409 repair must reject a backward owned DTO before changing registration, key or journal, including an already isolated pair.");
+            }
+            finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        }
+    }
+
+    private static async Task FreshMigrationPairSurvivesRegistrationFailureAndReopenAsync()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "vex-win-migration-retry-" + Guid.NewGuid().ToString("N"));
+        var path = Path.Combine(directory, "accounts.bin");
+        try
+        {
+            var vpn = new FakeVpnControlClient();
+            using var fixture = new Fixture(FileStore(path), vpn);
+            var legacy = WireGuardIdentity.Generate(4);
+            var retained = new NativeDeviceState("win-installation-1", "device-account-a", "fi-1", legacy);
+            fixture.Store.SetLegacyDeviceForTest(retained);
+            fixture.Server.Seed("account-a", LegacyDevice("account-a", legacy.PublicKey), bindingOwner: "account-a");
+            fixture.Server.Seed("account-b", LegacyDevice("account-b", legacy.PublicKey));
+            fixture.Server.ChallengeError = HttpStatusCode.ServiceUnavailable;
+            await fixture.SignInAsync("account-b");
+            await ExpectFailureAsync(() => fixture.Coordinator.ConnectAsync(CancellationToken.None));
+            var accepted = FileStore(path).Load("account-b")!;
+            Check(accepted.LegacyKeyIsolated && !accepted.MigrationRotationPending && accepted.PendingIdentity is null &&
+                accepted.Identity.PublicKey != legacy.PublicKey && fixture.Server.Rotations.Count == 1 &&
+                fixture.Store.State!.VpnProvisioningPending && vpn.PrivateKey is null,
+                "An owned migration rotation ACK must retain its fresh private pair and provenance before registration transport can fail.");
+            fixture.Server.ChallengeError = null;
+            fixture.ReopenCoordinator(FileStore(path));
+            Check((await fixture.Coordinator.ConnectAsync(CancellationToken.None)).Success &&
+                fixture.Store.State!.Identity == accepted.Identity && vpn.PrivateKey == accepted.Identity.PrivateKey &&
+                fixture.Server.Rotations.Count == 1 && fixture.Server.DeviceCount == 2 &&
+                fixture.Store.LoadDevice() == retained && fixture.Server.Device("account-a", "win-installation-1").PublicKey == legacy.PublicKey,
+                "After reopening the real map, exact409 repairs only the fresh pair's registration without another rotation, quota row or global A-key replacement.");
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
     }
 
     private static async Task BFirstHistoricalPairCollisionIsRepairedAsync()
@@ -168,12 +279,14 @@ internal static class AccountVpnIdentityTests
         try
         {
             var legacy = WireGuardIdentity.Generate(4);
+            var pending = WireGuardIdentity.Generate(5);
             var store = FileStore(path);
-            var a = store.GetOrAdd(new("a", "same-legacy", "same-legacy", legacy), claimLegacyKey: true);
-            var b = FileStore(path).GetOrAdd(new("b", "same-legacy", "same-legacy", legacy), claimLegacyKey: true);
+            var a = store.GetOrAdd(new("a", "same-legacy", "same-legacy", legacy, PendingIdentity: pending), claimLegacyKey: true);
+            var b = FileStore(path).GetOrAdd(new("b", "same-legacy", "same-legacy", legacy, PendingIdentity: pending), claimLegacyKey: true);
             Check(a.Identity == legacy && b.Identity.PublicKey != legacy.PublicKey &&
-                b.MigrationRotationPending && b.Identity.KeyEpoch == 5,
-                "Only first owner may adopt the global legacy WG pair; another own row needs scoped next-epoch rotation.");
+                a.PendingIdentity == pending && b.PendingIdentity is null &&
+                b.MigrationRotationPending && b.LegacyKeyIsolated && b.Identity.KeyEpoch == 5,
+                "Only the first owner may adopt either legacy pair; another own row must discard foreign pending material and use scoped next-epoch rotation.");
         }
         finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
     }
@@ -689,10 +802,12 @@ internal static class AccountVpnIdentityTests
     {
         public OwnerGuardServer Server { get; } = new();
         private readonly HttpClient _http;
+        private readonly INativeClientApi _api;
+        private readonly IVpnControlClient _vpn;
         public FakeDeviceIdentityProvider IdentityProvider { get; } = new();
-        public MemoryClientStateStore Store { get; }
+        public MemoryClientStateStore Store { get; private set; }
         public NativeApiProxy Proxy { get; }
-        public NativeClientCoordinator Coordinator { get; }
+        public NativeClientCoordinator Coordinator { get; private set; }
         private VexAuthSession _session = Session("account-a");
 
         public Fixture(IVpnAccountIdentityStore? identities = null, IVpnControlClient? vpn = null,
@@ -702,6 +817,8 @@ internal static class AccountVpnIdentityTests
             _http = new HttpClient(Server) { BaseAddress = new Uri("https://api.example.test") };
             var realApi = new VexApiClient(_http, signerAvailable ? IdentityProvider : null);
             var (api, proxy) = NativeApiProxy.Wrap(new FakeNativeClientApi());
+            _api = api;
+            _vpn = vpn ?? new FakeVpnControlClient();
             Proxy = proxy;
             proxy.Overrides[nameof(INativeClientApi.LoginAsync)] = _ => Task.FromResult(_session);
             proxy.Overrides[nameof(INativeClientApi.GetDevicesAsync)] = args =>
@@ -712,7 +829,17 @@ internal static class AccountVpnIdentityTests
             proxy.Overrides[nameof(INativeClientApi.RotateManagedVpnKeyAsync)] = args =>
                 realApi.RotateManagedVpnKeyAsync((string)args[0]!, (string)args[1]!,
                     (WireGuardIdentity)args[2]!, (CancellationToken)args[^1]!);
-            Coordinator = new(api, accessStore?.Invoke(Store) ?? Store, vpn ?? new FakeVpnControlClient(), "1.0.0");
+            Coordinator = new(api, accessStore?.Invoke(Store) ?? Store, _vpn, "1.0.0");
+        }
+
+        public void ReopenCoordinator(IVpnAccountIdentityStore identities)
+        {
+            var state = Store.State!;
+            var legacy = Store.LoadDevice();
+            Store = new(identities);
+            if (legacy is not null) Store.SetLegacyDeviceForTest(legacy);
+            Store.Save(state);
+            Coordinator = new(_api, Store, _vpn, "1.0.0");
         }
 
         public Task SignInAsync(string user)

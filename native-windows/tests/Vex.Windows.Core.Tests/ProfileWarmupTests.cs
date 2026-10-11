@@ -15,6 +15,7 @@ internal static class ProfileWarmupTests
         ProfileDtoPreservesAuthoritativeIdentityAndLegacyCompatibility();
         ProtectedTrustPinIsRequired();
         await WarmupPreservesPreferencesAndAvoidsColdIssuanceAsync();
+        await ServerPskEpochAdvanceWarmsSamePrivateKeyAsync();
         await ConnectNeverWaitsForWarmupAndRejectsItsLateResponseAsync();
         await ScopeChangesRejectLateWarmupAsync();
         await SupersededWarmupCannotReplaceANewerGrantAsync();
@@ -131,6 +132,24 @@ internal static class ProfileWarmupTests
         }
     }
 
+    private static async Task ServerPskEpochAdvanceWarmsSamePrivateKeyAsync()
+    {
+        using var fixture = new Fixture();
+        var original = fixture.Store.State!;
+        fixture.Request = (routing, bypass, _) => Task.FromResult(fixture.Profile(routing, bypass) with { ClientKeyEpoch = 3 });
+        Check(await fixture.Coordinator.WarmProfileAsync(null, "full", null, CancellationToken.None),
+            "A signed profile after PSK-only rotation can warm the original X25519 key at the authoritative server epoch.");
+        var warmed = fixture.Store.State!;
+        Check(warmed.Identity == original.Identity with { KeyEpoch = 3 } && warmed.WarmedProfile?.ClientKeyEpoch == 3 &&
+            warmed.WarmedProfile.ClientPublicKey == original.Identity.PublicKey && warmed.LocationId == original.LocationId &&
+            warmed.RoutingMode == original.RoutingMode && fixture.Vpn.Authorization is null,
+            "Warm-up must preserve the exact private/public key and routing preference while aligning the cache epoch.");
+        fixture.GoOffline();
+        Check((await fixture.Coordinator.ConnectAsync(CancellationToken.None)).Success &&
+            fixture.Vpn.PrivateKey == original.Identity.PrivateKey && fixture.ProfileCalls == 1,
+            "The warmed same-key epoch must reconnect offline without another profile issuance.");
+    }
+
     private static async Task SupersededWarmupCannotReplaceANewerGrantAsync()
     {
         using var fixture = new Fixture();
@@ -150,7 +169,7 @@ internal static class ProfileWarmupTests
         {
             profile => profile with { ClientPublicKey = null, ClientKeyEpoch = null },
             profile => profile with { ClientPublicKey = "foreign-key" },
-            profile => profile with { ClientKeyEpoch = 99 },
+            profile => profile with { ClientKeyEpoch = 0 },
             profile => profile with { DeviceId = "foreign-device" },
             profile => profile with { Revoked = true },
             profile => profile with { RotationRequired = true },

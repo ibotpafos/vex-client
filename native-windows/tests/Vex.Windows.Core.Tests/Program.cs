@@ -15,6 +15,70 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
+if (args is ["--account-recovery-epoch-floor-regression"])
+{
+    try
+    {
+        AccountVpnIdentityTests.RunRecoveryEpochFloorRegression();
+        Console.WriteLine("PASS account recovery epoch floor regression: 4 recovery and 2 rebind cases");
+    }
+    catch (Exception error)
+    {
+        Console.Error.WriteLine("FAIL account recovery epoch floor regression: " + error.Message);
+        Environment.ExitCode = 1;
+    }
+    return;
+}
+
+if (args is ["--account-migration-retry-regression"])
+{
+    try
+    {
+        AccountVpnIdentityTests.RunMigrationRetryRegression();
+        Console.WriteLine("PASS account migration retry/reopen regression");
+    }
+    catch (Exception error)
+    {
+        Console.Error.WriteLine("FAIL account migration retry/reopen regression: " + error.Message);
+        Environment.ExitCode = 1;
+    }
+    return;
+}
+
+if (args is ["--retained-device-identity-regression"])
+{
+    try
+    {
+        RetainedDeviceIdentityRecoveryTests.Run();
+        Console.WriteLine("PASS retained device identity regression: 18 recovery cases");
+    }
+    catch (Exception error)
+    {
+        Console.Error.WriteLine("FAIL retained device identity regression: " + error.Message);
+        Environment.ExitCode = 1;
+    }
+    return;
+}
+
+if (args is ["--mapped-profile-identity-regression"] or
+    ["--mapped-profile-identity-regression", "alignment" or "pending-rebase"])
+{
+    try
+    {
+        if (args is [_, "alignment"]) ProfileIdentityRecoveryTests.RunMappedAlignment();
+        else if (args is [_, "pending-rebase"]) ProfileIdentityRecoveryTests.RunMappedPendingRebase();
+        else ProfileIdentityRecoveryTests.RunMapped();
+        Console.WriteLine("PASS mapped profile identity regression" +
+            (args.Length == 2 ? ": " + args[1] : ": 11 coordinator cases, 11 durable map rejection cases and authoritative device restoration"));
+    }
+    catch (Exception error)
+    {
+        Console.Error.WriteLine("FAIL mapped profile identity regression: " + error.Message);
+        Environment.ExitCode = 1;
+    }
+    return;
+}
+
 if (args is ["--account-vpn-epoch-regression"])
 {
     try
@@ -32,6 +96,11 @@ if (args is ["--account-vpn-epoch-regression"])
 
 var tests = new (string Name, Action Run)[]
 {
+    ("Native installer rejects changed bundles and retains verified file locks", WindowsSetupBundleTests.Run),
+    ("Physical AntiLeak probes reject remote failures and preserve caller cancellation", FullTunnelProbeFailurePolicyTests.Run),
+    ("VPN access and network failures preserve actionable guidance and safe intent", VpnFailurePresentationTests.Run),
+    ("Release cohorts preserve actionable mandatory targets and strict dependency trust", WindowsReleasePolicyTests.Run),
+    ("Shipping update keys match P256 signatures and reject incompatible key material", WindowsUpdateSignatureSignerTests.Run),
     ("Realtime session recovery preserves outages and rejects stale credential events", CustomerRealtimeSessionTests.Run),
     ("Realtime billing and device events cannot mutate a replacement session", RealtimeScopeIsolationTests.Run),
     ("Periodic entitlement checks preserve current sessions and user connection intent", ActiveEntitlementMonitorTests.Run),
@@ -48,6 +117,7 @@ var tests = new (string Name, Action Run)[]
     ("Unreadable durable update state retains mandatory recovery protection", NativeUpdateRecoveryTests.Run),
     ("Preferences decode corruption safely and preserve valid legacy choices", NativeClientPreferencesJsonTests.Run),
     ("App metadata decodes current server contracts and explicit historical aliases", AppMetadataContractTests.Run),
+    ("Windows app metadata matches the published API compatibility contract on both architectures", AppMetadataContractTests.WindowsApiCompatibilityMatchesPublishedContract),
     ("Protected session cache handles corruption without replacing identity files", ProtectedStateFileTests.Run),
     ("Windows Hello changes commit durably and reject cancelled verification", WindowsHelloSessionTests.Run),
     ("Signed relay candidates preserve authorization and bounded offline recovery", ClientSignedCandidateTests.Run),
@@ -163,10 +233,17 @@ var tests = new (string Name, Action Run)[]
     ("Native client refetches when cached profile metadata is corrupted", NativeClientRecoversFromCorruptedProfileCache),
     ("Native client refreshes expiring session at refresh boundary", NativeClientRefreshesExpiringSessionAtBoundary),
     ("Native client rotates an expired device key before connect", NativeClientRotatesExpiredKey),
+    ("Profile identity follows server PSK epochs and confirms durable key recovery", ProfileIdentityRecoveryTests.Run),
+    ("Mapped profile epochs preserve exact pairs, pending recovery and account CAS fencing", ProfileIdentityRecoveryTests.RunMapped),
+    ("Retained device keys recover ambiguous rotations across sign-out and reauthentication", RetainedDeviceIdentityRecoveryTests.Run),
     ("Native client preserves manual location and routing preferences", NativeClientPreservesManualVpnPreferences),
     ("Native client gates VPN connect on entitlement", NativeClientGatesConnectOnEntitlement),
     ("Native client reports successful connect and disconnect", NativeClientReportsVpnLifecycle),
-};
+}.Concat(VpnServiceImageIdentityTests.All)
+ .Concat(VexApiResponseDeadlineTests.Cases)
+ .Concat(VpnWindowsStartupSafetyTests.All)
+ .Concat(VpnVendorServiceSafetyTests.All)
+ .Concat(VpnProfileLifetimeCompatibilityTests.All).ToArray();
 
 tests = [.. tests, .. VpnNamedPipeTransportTests.Cases, .. VpnRuntimeLifetimeTests.All, .. VpnRuntimeRecoveryTests.All,
     .. VpnEndpointAddressCacheTests.All, .. VpnAuthorizationDeadlineTests.All, .. VpnControlPlaneAddressCacheTests.All,
@@ -1780,7 +1857,8 @@ static void WindowsControlPlaneExposesAppConfiguration()
 {
     var metadata = new ClientAppMetadata(
         "windows", "1.0.54", 54, "stable", "1.0.0",
-        "Windows 11", "arm64", "native-windows-1", 1);
+        "Windows 11", "arm64", NativeApiCompatibility.ApiClientVersion,
+        NativeApiCompatibility.ConfigSchemaVersion);
     var configHandler = new RecordingHttpHandler(
         """{"version":"1","routing_policy_version":"2026.07.1","incident_banner":"ok"}""");
     var configClient = new VexApiClient(new HttpClient(configHandler)
@@ -3480,10 +3558,11 @@ sealed class MemoryClientStateStore : IClientStateStore
     public void Save(NativeClientState state)
     {
         NativeVpnAccountIdentitySynchronization.Save(AccountVpnIdentities, state);
+        if (!state.VpnProvisioningPending && state.VpnRegistrationId is null)
+            SaveDevice(NativeDeviceState.FromClientState(state));
         State = state;
-        if (!state.VpnProvisioningPending && state.VpnRegistrationId is null) _retainedDevice = new(state.InstallationId, state.DeviceId,
-            state.LocationId, state.Identity, state.Session.User.Id);
     }
+    public void SaveDevice(NativeDeviceState state) => _retainedDevice = state;
 
     // Tests that model an independently committed account/key change update
     // both authoritative stores explicitly, rather than use a stale session save.

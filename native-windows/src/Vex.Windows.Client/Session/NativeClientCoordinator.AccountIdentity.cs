@@ -122,7 +122,8 @@ public sealed partial class NativeClientCoordinator
         !string.IsNullOrWhiteSpace(device.PublicKey);
 
     private async Task<NativeVpnAccountIdentity> ResolveAccountIdentityAsync(VexAuthSession session,
-        string globalId, IReadOnlyList<VpnLocation> locations, long intent, CancellationToken cancellationToken)
+        string globalId, IReadOnlyList<VpnLocation> locations, long intent, CancellationToken cancellationToken,
+        string? selectedLocationId = null)
     {
         EnsureAccountIntent(intent, cancellationToken);
         var stored = _stateStore.AccountVpnIdentities.Load(session.User.Id);
@@ -149,17 +150,33 @@ public sealed partial class NativeClientCoordinator
         {
             var device = candidates[0];
             var legacy = _stateStore.LoadDevice();
-            var canCopy = legacy is not null && legacy.InstallationId == globalId &&
-                legacy.Identity.PublicKey == device.PublicKey &&
+            var canCopy = legacy is not null && legacy.InstallationId == globalId && legacy.DeviceId == device.Id &&
+                (legacy.Identity.PublicKey == device.PublicKey || legacy.PendingIdentity?.PublicKey == device.PublicKey) &&
                 (legacy.UserId is null || legacy.UserId == session.User.Id);
             if (device.PskEpoch is not > 0)
                 throw new NativeClientFlowException("vpn_key_epoch_unavailable");
             claimLegacyKey = canCopy;
-            var key = canCopy ? legacy!.Identity with { KeyEpoch = device.PskEpoch.Value } :
-                WireGuardIdentity.Generate(checked(device.PskEpoch.Value + 1));
+            if (canCopy)
+            {
+                var previous = _stateStore.Load();
+                var preferred = selectedLocationId ?? (previous?.Session.User.Id == session.User.Id &&
+                    previous.SelectionMode == "manual" ? previous.LocationId : legacy!.LocationId);
+                var available = locations.Where(ServerCatalog.IsAvailable).ToArray();
+                var location = available.FirstOrDefault(candidate => candidate.Id == preferred) ??
+                    available.FirstOrDefault() ?? throw new NativeClientFlowException("vpn_location_unavailable");
+                // Ownership was proven by the exact authenticated legacy row.
+                // Reconcile its independent journal before migrating it into
+                // the per-user map; never discard an already accepted pending key.
+                legacy = await RecoverRetainedDeviceIdentityAsync(session, previous, globalId,
+                    location.Id, cancellationToken).ConfigureAwait(false) ??
+                    throw new NativeClientFlowException("vpn_identity_changed");
+                EnsureAccountIntent(intent, cancellationToken);
+            }
+            var key = canCopy ? legacy!.Identity : WireGuardIdentity.Generate(NextIdentityEpoch(device.PskEpoch.Value));
             identity = new(session.User.Id, globalId, device.ExternalDeviceId!, key, device.Id,
                 legacy?.UserId == session.User.Id ? legacy.LocationId : null,
-                MigrationRotationPending: !canCopy, LegacyRegistration: true);
+                PendingIdentity: canCopy ? legacy!.PendingIdentity : null,
+                MigrationRotationPending: !canCopy, LegacyRegistration: true, LegacyKeyIsolated: !canCopy);
         }
         EnsureAccountIntent(intent, cancellationToken);
         return _stateStore.AccountVpnIdentities.GetOrAdd(identity, claimLegacyKey);
@@ -212,17 +229,22 @@ public sealed partial class NativeClientCoordinator
                 candidate.ExternalDeviceId == account.ExternalDeviceId &&
                 OwnedLegacy(candidate, session) && candidate.PublicKey == account.Identity.PublicKey).ToArray();
             if (selected.Length != 1 || !LegacyExternalMatches(account.ExternalDeviceId, globalId, locations)) throw;
-            if (selected[0].PskEpoch is not > 0) throw new NativeClientFlowException("vpn_key_epoch_unavailable");
+            if (selected[0].PskEpoch is not > 0 || selected[0].PskEpoch < account.Identity.KeyEpoch)
+                throw new NativeClientFlowException("vpn_key_epoch_unavailable");
             // A first-use global pair may already be a peer on another account.
-            // The exact foreign-binding conflict requires a fresh B pair, not
-            // just another installation signature over that shared public key.
+            // The exact conflict requires an isolated B pair. A previously
+            // confirmed fresh migration pair stays isolated across retries;
+            // repair its registration without rotating that accepted key again.
             var repaired = account with { RegistrationId = "win-" + Guid.NewGuid().ToString("N"),
-                Identity = WireGuardIdentity.Generate(checked(selected[0].PskEpoch!.Value + 1)),
-                MigrationRotationPending = true, LegacyRegistration = false };
+                Identity = account.LegacyKeyIsolated ? account.Identity :
+                    WireGuardIdentity.Generate(NextIdentityEpoch(selected[0].PskEpoch!.Value)),
+                MigrationRotationPending = !account.LegacyKeyIsolated, LegacyRegistration = false,
+                LegacyKeyIsolated = true };
             _stateStore.AccountVpnIdentities.Replace(account, repaired);
             account = repaired;
-            account = await RecoverAccountRotationAsync(session, account, intent, cancellationToken, selected[0])
-                .ConfigureAwait(false);
+            if (account.MigrationRotationPending)
+                account = await RecoverAccountRotationAsync(session, account, intent, cancellationToken, selected[0])
+                    .ConfigureAwait(false);
             device = await RegisterAsync(account).ConfigureAwait(false);
         }
         EnsureAccountIntent(intent, cancellationToken);
@@ -252,6 +274,8 @@ public sealed partial class NativeClientCoordinator
             live = own[0];
         }
         if (live.PskEpoch is not > 0) throw new NativeClientFlowException("vpn_key_epoch_unavailable");
+        if (account.PendingIdentity is not null && live.PskEpoch < account.Identity.KeyEpoch)
+            throw new NativeClientFlowException("vpn_key_epoch_unavailable");
         var intended = account.PendingIdentity ?? account.Identity;
         if (live.PublicKey == intended.PublicKey)
         {
@@ -264,7 +288,9 @@ public sealed partial class NativeClientCoordinator
         {
             if (account.PendingIdentity is not null && live.PublicKey != account.Identity.PublicKey)
                 throw new NativeClientFlowException("vpn_device_key_changed");
-            intended = intended with { KeyEpoch = checked(live.PskEpoch.Value + 1) };
+            var nextEpoch = NextIdentityEpoch(live.PskEpoch.Value);
+            if (nextEpoch < intended.KeyEpoch) throw new NativeClientFlowException("vpn_key_epoch_unavailable");
+            intended = intended with { KeyEpoch = nextEpoch };
             var journal = account.PendingIdentity is null ? account with { Identity = intended } :
                 account with { PendingIdentity = intended };
             EnsureAccountIntent(intent, cancellationToken);
@@ -275,7 +301,8 @@ public sealed partial class NativeClientCoordinator
             EnsureAccountIntent(intent, cancellationToken);
             ValidateAcknowledgement(rotated, session, intended, account.DeviceId);
         }
-        var committed = account with { Identity = intended, PendingIdentity = null, MigrationRotationPending = false };
+        var committed = account with { Identity = intended, PendingIdentity = null, MigrationRotationPending = false,
+            LegacyKeyIsolated = account.LegacyKeyIsolated || account.MigrationRotationPending };
         EnsureAccountIntent(intent, cancellationToken);
         _stateStore.AccountVpnIdentities.Replace(account, committed);
         return committed;

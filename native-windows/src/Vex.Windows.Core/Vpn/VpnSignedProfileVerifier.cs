@@ -79,10 +79,6 @@ public sealed class VpnSignedProfileVerifier
 {
     public const string SupportedAlgorithm = "ECDSA_P256_SHA256_DER";
 
-    private static readonly TimeSpan ClockSkew = TimeSpan.FromMinutes(2);
-    // The control plane currently issues managed native profiles for 24 hours.
-    // Reject any longer-lived authorization even when its signature is valid.
-    private static readonly TimeSpan MaximumLifetime = TimeSpan.FromHours(24);
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = false,
@@ -295,10 +291,10 @@ public sealed class VpnSignedProfileVerifier
         }
 
         var now = _utcNow();
-        if (policy.IssuedAt > now + ClockSkew ||
+        if (policy.IssuedAt > now + VpnProfileLifetimePolicy.ClockSkew ||
             policy.ExpiresAt <= now ||
             policy.ExpiresAt <= policy.IssuedAt ||
-            policy.ExpiresAt - policy.IssuedAt > MaximumLifetime)
+            policy.ExpiresAt - policy.IssuedAt > VpnProfileLifetimePolicy.MaximumLifetime)
         {
             Reject("profile_expired");
         }
@@ -330,9 +326,15 @@ public sealed class VpnSignedProfileVerifier
             tunnel.AssignedIpv4,
             AddressFamily.InterNetwork,
             "profile_assigned_ipv4_invalid");
+        if (tunnel.AssignedIpv6 is not null)
+        {
+            ValidateCidr(tunnel.AssignedIpv6, AddressFamily.InterNetworkV6, "profile_assigned_ipv6_invalid");
+            if (tunnel.Mtu < 1280) { Reject("profile_transport_invalid"); }
+        }
         ValidateList(tunnel.Dns, 8, value =>
         {
-            if (!IPAddress.TryParse(value, out _))
+            if (!IPAddress.TryParse(value, out var address) ||
+                address.AddressFamily == AddressFamily.InterNetworkV6 && tunnel.AssignedIpv6 is null)
             {
                 Reject("profile_dns_invalid");
             }
@@ -354,7 +356,7 @@ public sealed class VpnSignedProfileVerifier
         {
             "[Interface]",
             $"PrivateKey = {localPrivateKey}",
-            $"Address = {tunnel.AssignedIpv4}",
+            $"Address = {tunnel.AssignedIpv4}{(tunnel.AssignedIpv6 is null ? "" : ", " + tunnel.AssignedIpv6)}",
             $"DNS = {string.Join(", ", tunnel.Dns)}",
             $"MTU = {tunnel.Mtu}",
         };
@@ -368,11 +370,10 @@ public sealed class VpnSignedProfileVerifier
         }
 
         lines.Add($"Endpoint = {tunnel.Endpoint}");
-        // Managed profiles currently assign only IPv4. Match the macOS helper:
-        // do not install unusable IPv6 routes without an IPv6 interface address.
-        var allowedIps = tunnel.AllowedIps.Where(value =>
-            !value.Contains(':')).ToArray();
-        if (allowedIps.Length == 0)
+        // IPv6 routes require an explicitly signed IPv6 assignment. Full
+        // coverage uses paired /1 routes so only VEX owns the kill switch.
+        var allowedIps = VpnWindowsRouteMaterializer.Materialize(tunnel.AllowedIps, tunnel.AssignedIpv6 is not null);
+        if (allowedIps.Count == 0)
         {
             Reject("profile_allowed_ips_invalid");
         }
@@ -567,6 +568,9 @@ public sealed class VpnSignedProfileVerifier
 
         [JsonPropertyName("assigned_ipv4")]
         public string AssignedIpv4 { get; init; } = string.Empty;
+
+        [JsonPropertyName("assigned_ipv6")]
+        public string? AssignedIpv6 { get; init; }
 
         [JsonPropertyName("dns")]
         public IReadOnlyList<string> Dns { get; init; } = [];

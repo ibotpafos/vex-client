@@ -8,6 +8,7 @@ public static class WindowsUpdateConstants
     public const int MaxSignatureBytes = 16 * 1024;
     public const long MaxPackageBytes = 512L * 1024 * 1024;
     public const long MaxProvisioningArtifactBytes = 4L * 1024 * 1024;
+    public const long MaxDependencyBytes = 32L * 1024 * 1024;
     public static readonly TimeSpan MaxManifestAge = TimeSpan.FromDays(14);
     public static readonly TimeSpan MaxClockSkew = TimeSpan.FromMinutes(10);
     public const string ManifestSchema = "vex.windows-update-manifest.v1";
@@ -57,7 +58,10 @@ public sealed record WindowsUpdateRelease(
     long? UninstallServiceScriptSizeBytes = null,
     string? PackageMetadataUri = null,
     string? PackageMetadataSha256 = null,
-    long? PackageMetadataSizeBytes = null);
+    long? PackageMetadataSizeBytes = null,
+    string? VclibsDependencyUri = null,
+    string? VclibsDependencySha256 = null,
+    long? VclibsDependencySizeBytes = null);
 
 public sealed record WindowsUpdateKeyring(
     string Schema,
@@ -114,7 +118,8 @@ public sealed record WindowsStagedProvisioningBundle(
     string InstallServiceScriptPath,
     string UninstallServiceScriptPath,
     string PackageMetadataPath,
-    WindowsUpdateRelease Release);
+    WindowsUpdateRelease Release,
+    string? VclibsDependencyPath = null);
 
 internal static class WindowsUpdateJson
 {

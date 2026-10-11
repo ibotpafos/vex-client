@@ -199,7 +199,7 @@ public sealed class VpnUiStateService
             var response = await operation(cancellationToken)
                 .ConfigureAwait(false);
             Apply(response);
-            if (!response.Success && VpnRecoveryPolicy.IsTerminalError(response.ErrorCode))
+            if (!response.Success && VpnFailurePresentation.IsTerminalError(response.ErrorCode))
                 MarkConnectionDesired(false);
             return response;
         }
@@ -207,14 +207,13 @@ public sealed class VpnUiStateService
         {
             // Record failures before releasing the gate. A caller reporting a
             // late poll failure must never overwrite a newer connect/disconnect.
-            if (!_shutdownComplete && (error is not OperationCanceledException || recordCancellationFailure))
+            if (!_shutdownComplete && (error is not OperationCanceledException || recordCancellationFailure ||
+                VpnFailurePresentation.IsNetworkTimeout(error)))
             {
-                var code = error is NativeClientFlowException flow
-                    ? flow.Code
-                    : "vpn_service_unavailable";
+                var code = VpnFailurePresentation.CodeFromException(error);
                 Apply(new VpnServiceResponse(Guid.NewGuid().ToString("N"), false,
                     VpnConnectionSnapshot.ClientFailure(Snapshot, code), code));
-                if (VpnRecoveryPolicy.IsTerminalError(code)) MarkConnectionDesired(false);
+                if (VpnFailurePresentation.IsTerminalError(code)) MarkConnectionDesired(false);
             }
             throw;
         }

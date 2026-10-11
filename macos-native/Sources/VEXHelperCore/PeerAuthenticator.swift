@@ -22,7 +22,9 @@ public protocol PeerAuthenticating: Sendable {
 public struct SystemPeerAuthenticator: PeerAuthenticating {
     // Trust anchors are compiled in; caller/launchd environment cannot broaden them.
     public static let localCertificateSHA256 = "441f6e9034ee7582c1ca3579ea805f91f68c3135ec2f59cddc00173fe689dca1"
-    public static let clientRequirement = "identifier \"app.vex.vpn.native\" and (certificate leaf = H\"c6fd1853a177fbcfb04c5d4f78fbe405777b3a3e\" or (anchor apple generic and certificate leaf[subject.OU] = \"3JLW9XNU53\"))"
+    // The already-published production identity; retain the local identity for upgrades.
+    public static let productionCertificateSHA256 = "8aa47a0d6281276abfb42454fe6a6b1eef94726d663717fbe75222b749c49a87"
+    public static let clientRequirement = "identifier \"app.vex.vpn.native\" and (certificate leaf = H\"c6fd1853a177fbcfb04c5d4f78fbe405777b3a3e\" or certificate leaf = H\"57864e103373517a0f3cd82e9c9a651c54effc79\" or (anchor apple generic and certificate leaf[subject.OU] = \"3JLW9XNU53\"))"
 
     public init() {}
 

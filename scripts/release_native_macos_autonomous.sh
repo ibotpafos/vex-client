@@ -321,6 +321,24 @@ if [[ "${RUN_CHECKS}" == "1" ]]; then
 fi
 
 bash "${ROOT_DIR}/scripts/build_native_macos_internal_release.sh"
+
+if [[ "${VEX_NATIVE_PRODUCTION}" == "1" && "${VEX_NATIVE_SIGNING_MODE}" == "self-signed" ]]; then
+  # Exercise the compiled helper requirement with the actual imported release key.
+  # These signed, nonprivileged probes never install or connect a helper.
+  matrix_dir="$(mktemp -d)"
+  trap 'rm -rf "${matrix_dir}"' EXIT
+  matrix_codesign_args=(--force --sign "${VEX_CODESIGN_IDENTITY:?release signing identity required}" --timestamp=none)
+  [[ -z "${VEX_CODESIGN_KEYCHAIN:-}" ]] || matrix_codesign_args+=(--keychain "${VEX_CODESIGN_KEYCHAIN}")
+  printf '%s\n' 'print("VEX signing policy probe")' > "${matrix_dir}/probe.swift"
+  swiftc "${matrix_dir}/probe.swift" -o "${matrix_dir}/correct-id"
+  cp "${matrix_dir}/correct-id" "${matrix_dir}/wrong-id"
+  codesign "${matrix_codesign_args[@]}" --identifier app.vex.vpn.native "${matrix_dir}/correct-id"
+  codesign "${matrix_codesign_args[@]}" --identifier app.vex.vpn.native.unrelated "${matrix_dir}/wrong-id"
+  python3 "${ROOT_DIR}/scripts/tests/test_vex_local_signing_policy.py" "${matrix_dir}/correct-id" "${matrix_dir}/wrong-id"
+  rm -rf "${matrix_dir}"
+  trap - EXIT
+fi
+
 bash "${ROOT_DIR}/scripts/prepare_native_macos_deploy_bundle.sh"
 
 if [[ "${RUN_PUBLIC_PREFLIGHT}" == "1" ]]; then

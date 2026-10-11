@@ -268,7 +268,7 @@ struct VEXHelperInstaller {
     }
 
     // Keep identical to SystemPeerAuthenticator and the root installer policy.
-    static let appSigningRequirement = "identifier \"app.vex.vpn.native\" and (certificate leaf = H\"c6fd1853a177fbcfb04c5d4f78fbe405777b3a3e\" or (anchor apple generic and certificate leaf[subject.OU] = \"3JLW9XNU53\"))"
+    static let appSigningRequirement = "identifier \"app.vex.vpn.native\" and (certificate leaf = H\"c6fd1853a177fbcfb04c5d4f78fbe405777b3a3e\" or certificate leaf = H\"57864e103373517a0f3cd82e9c9a651c54effc79\" or (anchor apple generic and certificate leaf[subject.OU] = \"3JLW9XNU53\"))"
 
     private func verifyCurrentAppBundleSignature() -> Bool {
         let process = Process()

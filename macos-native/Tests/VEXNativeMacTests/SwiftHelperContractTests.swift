@@ -95,6 +95,7 @@ final class SwiftHelperContractTests: XCTestCase {
         XCTAssertTrue(auth.contains("peer.effectiveUID == consoleUID"))
         XCTAssertEqual(SystemPeerAuthenticator.clientRequirement, VEXHelperInstaller.appSigningRequirement)
         XCTAssertTrue(SystemPeerAuthenticator.clientRequirement.contains(#"certificate leaf = H"c6fd1853a177fbcfb04c5d4f78fbe405777b3a3e""#))
+        XCTAssertTrue(SystemPeerAuthenticator.clientRequirement.contains(#"certificate leaf = H"57864e103373517a0f3cd82e9c9a651c54effc79""#))
         XCTAssertTrue(SystemPeerAuthenticator.clientRequirement.contains(#"anchor apple generic and certificate leaf[subject.OU] = "3JLW9XNU53""#))
         XCTAssertFalse(auth.contains("ProcessInfo.processInfo.environment"))
     }

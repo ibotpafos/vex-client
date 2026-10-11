@@ -13,9 +13,12 @@ fi
 # Fixed trust roots; VEX_EXPECTED_TEAM_ID and certificate environment overrides
 # deliberately have no effect. SHA256 of the local DER certificate:
 # 441f6e9034ee7582c1ca3579ea805f91f68c3135ec2f59cddc00173fe689dca1
+# SHA256 of the already-published production DER certificate:
+# 8aa47a0d6281276abfb42454fe6a6b1eef94726d663717fbe75222b749c49a87
 local_requirement='certificate leaf = H"c6fd1853a177fbcfb04c5d4f78fbe405777b3a3e"'
+production_requirement='certificate leaf = H"57864e103373517a0f3cd82e9c9a651c54effc79"'
 apple_requirement='anchor apple generic and certificate leaf[subject.OU] = "3JLW9XNU53"'
-app_requirement="identifier \"app.vex.vpn.native\" and ($local_requirement or ($apple_requirement))"
+app_requirement="identifier \"app.vex.vpn.native\" and ($local_requirement or $production_requirement or ($apple_requirement))"
 # Only the root-created private snapshot may supply executable installer inputs.
 snapshot_parent="$(/usr/bin/dirname "$verified_app")"
 if [[ "$EUID" != 0 || -L "$verified_app" || -L "$snapshot_parent" \
@@ -30,6 +33,8 @@ fi
 # All Mach-O resources must match the same signing branch as the enclosing app.
 if /usr/bin/codesign --verify --strict -R="$local_requirement" "$verified_app" >/dev/null 2>&1; then
   resource_requirement="$local_requirement"
+elif /usr/bin/codesign --verify --strict -R="$production_requirement" "$verified_app" >/dev/null 2>&1; then
+  resource_requirement="$production_requirement"
 else
   resource_requirement="$apple_requirement"
 fi

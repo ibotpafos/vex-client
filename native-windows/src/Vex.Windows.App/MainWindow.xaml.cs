@@ -109,16 +109,32 @@ public sealed partial class MainWindow : Window
         ShellWindowVisibilityChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    internal Task ShowAuthenticationRecoveryAsync()
+    internal Task ShowAuthenticationRecoveryAsync(
+#if DEBUG
+        Action<string>? previewStage = null
+#endif
+        )
     {
         void ShowRecovery()
         {
             if (_closed) return;
+#if DEBUG
+            previewStage?.Invoke("reset-ui-entered");
+#endif
             _hasAuthenticatedSession = AppServices.Current.Coordinator.CurrentState is not null;
+#if DEBUG
+            previewStage?.Invoke("reset-ui-state-read");
+#endif
             NavigateToSection(AppSection.Home, forceReload: true);
+#if DEBUG
+            previewStage?.Invoke("reset-ui-navigated");
+#endif
             ShowShellWindow();
             Activate();
             BringToFront();
+#if DEBUG
+            previewStage?.Invoke("reset-ui-shown");
+#endif
         }
 
         if (DispatcherQueue.HasThreadAccess)

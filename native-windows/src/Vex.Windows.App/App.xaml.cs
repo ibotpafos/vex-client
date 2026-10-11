@@ -72,7 +72,14 @@ public partial class App : Application
         if (UiPreviewContext.IsTrayRecoveryCommand(
             (args.Data as ILaunchActivatedEventArgs)?.Arguments))
         {
+#if DEBUG
+            var trace = new UiPreviewTrayActivation(UiPreviewTrayActivation.Scenario(
+                (args.Data as ILaunchActivatedEventArgs)?.Arguments));
+            trace.Record("redirected-request-accepted");
+            _ = HandleActivationAsync(args, trayTrace: trace);
+#else
             _ = HandleActivationAsync(args);
+#endif
             return;
         }
 
@@ -84,7 +91,11 @@ public partial class App : Application
 
     private async Task HandleActivationAsync(
         AppActivationArguments args,
-        Uri? launchUri = null)
+        Uri? launchUri = null
+#if DEBUG
+        , UiPreviewTrayActivation? trayTrace = null
+#endif
+        )
     {
         var launchArguments = args.Data is ILaunchActivatedEventArgs launch
             ? launch.Arguments : null;
@@ -95,21 +106,35 @@ public partial class App : Application
             else if (UiPreviewContext.IsTrayRecoveryCommand(launchArguments) && _trayIconHost is not null)
             {
                 var services = AppServices.Current;
-                var scenario = UiPreviewContext.HasCommand(launchArguments, "--ui-smoke-tray-connect-locked")
-                    ? "locked" : UiPreviewContext.HasCommand(launchArguments, "--ui-smoke-tray-reset") ? "reset" : "signed-out";
-                if (scenario == "reset")
+                var scenario = UiPreviewTrayActivation.Scenario(launchArguments);
+                trayTrace ??= new UiPreviewTrayActivation(scenario);
+                try
                 {
-                    await services.StateStore.RestorePreviewSessionAsync();
-                    await _window!.ShowAuthenticationRecoveryAsync();
+                    trayTrace.Record("handler-started");
+                    if (scenario == "reset")
+                    {
+                        trayTrace.Record("reset-session-restoring");
+                        await services.StateStore.RestorePreviewSessionAsync();
+                        trayTrace.Record("reset-session-restored");
+                        trayTrace.Record("reset-ui-requested");
+                        await _window!.ShowAuthenticationRecoveryAsync(trayTrace.Record);
+                        trayTrace.Record("reset-ui-completed");
+                    }
+                    else
+                    {
+                        if (scenario == "locked") await services.StateStore.LockPreviewSessionAsync();
+                        else if (UiPreviewContext.IsAuthenticated)
+                            throw new InvalidOperationException("Signed-out tray checks require a signed-out preview.");
+                        await _trayIconHost.ToggleConnectionAsync();
+                    }
+                    trayTrace.Record("completion-recording");
+                    UiPreviewFixtures.RecordTrayRecovery(scenario, services);
                 }
-                else
+                catch (Exception error)
                 {
-                    if (scenario == "locked") await services.StateStore.LockPreviewSessionAsync();
-                    else if (UiPreviewContext.IsAuthenticated)
-                        throw new InvalidOperationException("Signed-out tray checks require a signed-out preview.");
-                    await _trayIconHost.ToggleConnectionAsync();
+                    trayTrace.RecordFailure(error);
+                    throw;
                 }
-                UiPreviewFixtures.RecordTrayRecovery(scenario, services);
             }
 #endif
             // UI-review activations never enter browser authentication.

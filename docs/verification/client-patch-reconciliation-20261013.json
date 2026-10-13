@@ -1,0 +1,1178 @@
+{
+  "schema_version": 1,
+  "review_date": "2026-10-13",
+  "base_commit": "f9481da7225fd0d394f7f08952963d1c8afc677d",
+  "total": 86,
+  "pending": 0,
+  "counts": {
+    "adapted": 9,
+    "superseded": 18,
+    "represented": 18,
+    "retired": 41
+  },
+  "patches": [
+    {
+      "source_commit": "24afbb7e7fab7e8b1c8ec612853643e42dcb2f3a",
+      "stable_patch_id": "2f7d58ed11d20552148f63ecf584531e7834522f",
+      "subject": "fix(api): align client DTOs with server nullability",
+      "disposition": "adapted",
+      "reason": "Nullability and generated DTOs are already represented. Restore nonempty, trimmed access-token validation for all five authentication entry points; retain optional expiry compatibility.",
+      "evidence": [
+        "src/api/auth.ts",
+        "src/api/dto.ts",
+        "src/api/generated-contract.ts",
+        "tests/auth-response-token.test.cjs"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "2ddaed4ec13bb241329ec15c2234d2a8887482e2",
+      "stable_patch_id": "5c1d0eb75e4d9534fa0fbf6f33871bff6b03994f",
+      "subject": "fix: harden native macOS install and release",
+      "disposition": "adapted",
+      "reason": "Restore confirmed teardown rather than treating a down ACK as completed disconnect. Adapt to operation ownership and cancellation; stopping bypasses installation. Earlier installer/release mechanics are superseded.",
+      "evidence": [
+        "macos-native/Sources/VEXNativeMac/Services/HelperDisconnectConfirmation.swift",
+        "macos-native/Sources/VEXNativeMac/VEXHelperClient.swift",
+        "macos-native/Tests/VEXNativeMacTests/HelperSocketSimulationTests.swift",
+        "macos-native/Tests/RecoveryHarness/main.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "647a1899e4fb7a87dfd11cf79d97a3f00b5dd2a4",
+      "stable_patch_id": "39fd12363fcf8f364ded1db907824b2c1758829d",
+      "subject": "feat: add explicit self-signed macOS channel",
+      "disposition": "superseded",
+      "reason": "The explicit self-signed mode exists in current build/preflight and installer policy. Retire environment-broadened trust and old package mechanics; current fixed identities and production pins are stricter.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/PeerAuthenticator.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VEXHelperInstaller.swift",
+        "macos-native/HelperResources/install-vex-vpn-helper.sh",
+        "scripts/native_macos_production_preflight.sh",
+        "macos-native/Tests/VEXPrivilegedHelperTests/VEXSigningPolicyTests.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "73039009338f110d4e44760822460e44dce1cea9",
+      "stable_patch_id": "094d60aca9bab355e5679784bb696a06c3cef598",
+      "subject": "fix(macOS): correct helper install state handshake",
+      "disposition": "superseded",
+      "reason": "Current installer state separately checks filesCurrent and socketConnectable; the signed read-only status probe remains. The old extra install-state CLI and directory patch belong to the replaced installer layout.",
+      "evidence": [
+        "macos-native/Sources/VEXNativeMac/Services/VEXHelperInstaller.swift",
+        "macos-native/Sources/VEXNativeMac/VEXNativeMacApp.swift",
+        "macos-native/HelperResources/install-vex-vpn-helper.sh"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "7b31430a96a94da871474cb5e8933d12aca6c55f",
+      "stable_patch_id": "5d9bce569572a1384f9fe47060d34ee9d160a73a",
+      "subject": "fix(macOS): preserve Sparkle in self-signed releases",
+      "disposition": "superseded",
+      "reason": "Current native packaging preserves Sparkle and the narrow app-only library-validation entitlement. Retire the earlier self-signed PKG flow and historical identity-generation instructions.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/PeerAuthenticator.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VEXHelperInstaller.swift",
+        "macos-native/HelperResources/install-vex-vpn-helper.sh",
+        "scripts/native_macos_production_preflight.sh",
+        "macos-native/Tests/VEXPrivilegedHelperTests/VEXSigningPolicyTests.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "916e5eba69c72ec050b4156c51e7bd7cbe2b27a7",
+      "stable_patch_id": "5acf48653bc1c1e8292f8423747c9345bfe397c5",
+      "subject": "fix(macOS): stabilize launch and install privileged helper",
+      "disposition": "superseded",
+      "reason": "Current privileged-helper installation, rollback and lazy Sparkle startup replace the older launch implementation. Keep current ownership and fixed signature verification.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/PeerAuthenticator.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VEXHelperInstaller.swift",
+        "macos-native/HelperResources/install-vex-vpn-helper.sh",
+        "scripts/native_macos_production_preflight.sh",
+        "macos-native/Tests/VEXPrivilegedHelperTests/VEXSigningPolicyTests.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "02bd486b537561e0a4e602d43e537f24fb046e6d",
+      "stable_patch_id": "98d8841d14e1e43be5d3c0bde84479684adcf79e",
+      "subject": "ci: add required Android, iOS, macOS and Expo checks",
+      "disposition": "superseded",
+      "reason": "Historical runner/workflow arrangement is replaced by the current locked platform lanes and toolchains. Do not reintroduce deleted workflows, obsolete Swift/Xcode versions or additional runners. Existing CI is unchanged by this integration.",
+      "evidence": [
+        ".github/workflows/native-reliability-ci.yml",
+        "tests/client-ci-contract.mjs"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "09cb2f134597d676b7bda96380e78e4c8670cc3d",
+      "stable_patch_id": "adeb5f4edec608f0296cb0ddabc43dd13e9cd65c",
+      "subject": "ci: use Swift 6.2 macOS runner",
+      "disposition": "superseded",
+      "reason": "Historical runner/workflow arrangement is replaced by the current locked platform lanes and toolchains. Do not reintroduce deleted workflows, obsolete Swift/Xcode versions or additional runners. Existing CI is unchanged by this integration.",
+      "evidence": [
+        ".github/workflows/native-reliability-ci.yml",
+        "tests/client-ci-contract.mjs"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "81a1c9825a9e47250d100b4165406b4b2e6bd13d",
+      "stable_patch_id": "373474bf9f41148772b98fb2a7f4e464b284d7e8",
+      "subject": "fix(macos): remove legacy UDP fallback",
+      "disposition": "represented",
+      "reason": "Current native fallbackTunnels authorizes only the supplied complete profile; the removed legacy UDP/guessed-port fallback stays removed.",
+      "evidence": [
+        "src/vpn/connectionFallback.ts",
+        "src/vpn/connectVerification.ts",
+        "src/vpn/dynamicRouteCore.ts",
+        "tests/run-unit-tests.ts",
+        "macos-native/Sources/VEXNativeMac/Services/VpnAutopilotService.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "841ebe1d34ce8b7ca0b200069f2bfdc97c0ed9aa",
+      "stable_patch_id": "2ab6231c179ab06bdd0e70c087fdaae18956c1f7",
+      "subject": "fix(reliability): fail closed AWG3 recovery endpoints",
+      "disposition": "represented",
+      "reason": "Current mobile transport fallback admits only the supplied AWG3 endpoint, rejects profile admission errors and does not infer ports/transports from a bare endpoint.",
+      "evidence": [
+        "src/vpn/connectionFallback.ts",
+        "src/vpn/connectVerification.ts",
+        "src/vpn/dynamicRouteCore.ts",
+        "tests/run-unit-tests.ts"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "c6594e7cdc1093d5669d4a5e3fc1928fb78a70b5",
+      "stable_patch_id": "c0948cf11ad01965be5e38ee4478e9a30ac6bf17",
+      "subject": "fix(macOS): preserve helper profile readiness",
+      "disposition": "superseded",
+      "reason": "Retain current complete-profile helper admission, strict update metadata and typed readiness state. Retire the older profile-readiness/install probe and fallback update decoding tied to previous response/release schemas.",
+      "evidence": [
+        "macos-native/Sources/VEXNativeMac/Services/VEXHelperInstaller.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Models/VEXModels.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "a432db37d7cb31948f5794b7496aa88e0b299904",
+      "stable_patch_id": "71cfb0db9219307a4efa573ed4c7335d71a3df88",
+      "subject": "fix(ci): bootstrap clean native mobile runners",
+      "disposition": "superseded",
+      "reason": "Historical runner/workflow arrangement is replaced by the current locked platform lanes and toolchains. Do not reintroduce deleted workflows, obsolete Swift/Xcode versions or additional runners. Existing CI is unchanged by this integration.",
+      "evidence": [
+        ".github/workflows/native-reliability-ci.yml",
+        "tests/client-ci-contract.mjs"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "18402093640c41f98aa85b6ca54fda3ac34d61da",
+      "stable_patch_id": "8c70ddb3b6e6c10cc406d4a8a8613b29bc00b99e",
+      "subject": "fix(clients): report native connection telemetry (IBO-272)",
+      "disposition": "adapted",
+      "reason": "Restore additive diagnostics duration/uptime fields and measured route durations. Record uptime only for a locally observed successful start; fence asynchronous route reports. Retire the old Windows UI tracker and blanket success-event emitter: the current coordinator owns transitions, and unprobed DNS/HTTPS must not become new healthy reports.",
+      "evidence": [
+        "macos-native/Sources/VEXNativeMac/Models/VEXModels.swift",
+        "macos-native/Sources/VEXNativeMac/Stores/VEXAppState.swift",
+        "macos-native/Tests/VEXNativeMacTests/ClientDiagnosticsTelemetryTests.swift",
+        "native-windows/src/Vex.Windows.Client/Session/NativeClientCoordinator.cs"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "fcf5407da2ee8109dcc3b4e17c72b55a07cf3e65",
+      "stable_patch_id": "b9c5143655f21bfef4d83da67989920bf41dcbd8",
+      "subject": "fix(clients): stabilize iOS tunnel lifecycle (IBO-276)",
+      "disposition": "represented",
+      "reason": "The same iOS lifecycle work is represented by the newer transition actor, bounded strict runtime parser and cancellation/restart tests. Registration now coalesces by token plus installation, not a single shared promise; do not restore the weaker saturating parser.",
+      "evidence": [
+        "modules/vex-vpn/ios/IosTunnelTransition.swift",
+        "modules/vex-vpn/ios/VexVpnModule.swift",
+        "src/api/nativeDeviceRegistration.ts",
+        "tests/ios-tunnel-transitions/IosTunnelRuntimeStatusTests.swift",
+        "tests/native-device-registration.test.mjs"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "b5ae053c9b9fe6a63c8b2665b438d46d41324b70",
+      "stable_patch_id": "c915bfe1bd744bb47e5f3ee96bd5fd1ba235a7af",
+      "subject": "fix(android): Require Bugsink in production artifacts",
+      "disposition": "represented",
+      "reason": "Current release verification requires the approved Bugsink DSN in release artifacts and canonical configuration. Its stricter validation and release-negative fixtures replace the earlier presence-only implementation.",
+      "evidence": [
+        "scripts/verify_android_observability.sh",
+        "scripts/build_android_release.sh",
+        "scripts/sign_android_candidate_ci.sh",
+        "tests/android-observability-release-contract.cjs"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "281e4c4aba73f2c8eada4b254821bc73ef6a4433",
+      "stable_patch_id": "abcc63036e4a8601706626bc19cee78b9fa143d1",
+      "subject": "feat(mobile): switch VEX flows to text-only branding",
+      "disposition": "represented",
+      "reason": "Current visual primitives, text branding, grouped country/server selection and separators include this behavior. Later picker/home changes supersede the old labels and layout fragments; current mobile visual and selection contracts pass.",
+      "evidence": [
+        "src/ui/vex-mobile-visual.ts",
+        "src/screens/country-groups.ts",
+        "src/screens/server-picker-interactions.ts",
+        "tests/mobile-visual-contract.ts"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "793dbead9c0e4ba713519cc2f4f90e816b46b16b",
+      "stable_patch_id": "e4be9088b18a7bb1cfa8cecedd3dc3553f40ba03",
+      "subject": "feat(mobile): add unified VEX visual primitives",
+      "disposition": "represented",
+      "reason": "Current visual primitives, text branding, grouped country/server selection and separators include this behavior. Later picker/home changes supersede the old labels and layout fragments; current mobile visual and selection contracts pass.",
+      "evidence": [
+        "src/ui/vex-mobile-visual.ts",
+        "src/screens/country-groups.ts",
+        "src/screens/server-picker-interactions.ts",
+        "tests/mobile-visual-contract.ts"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "d27dd76a7914ac2dbf3192d51b132d68eeb774cf",
+      "stable_patch_id": "5b27584ae2b7ea7402b42d51eadcb6a2bdc13d1f",
+      "subject": "feat(mobile): group servers by country",
+      "disposition": "represented",
+      "reason": "Current visual primitives, text branding, grouped country/server selection and separators include this behavior. Later picker/home changes supersede the old labels and layout fragments; current mobile visual and selection contracts pass.",
+      "evidence": [
+        "src/ui/vex-mobile-visual.ts",
+        "src/screens/country-groups.ts",
+        "src/screens/server-picker-interactions.ts",
+        "tests/mobile-visual-contract.ts"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "e3d3906bece315c0cf76e6983e70af7262180132",
+      "stable_patch_id": "7bfd70f45870abac7cd1e0e6b4c06d23d97f8958",
+      "subject": "fix(android): separate country server cards",
+      "disposition": "represented",
+      "reason": "Current visual primitives, text branding, grouped country/server selection and separators include this behavior. Later picker/home changes supersede the old labels and layout fragments; current mobile visual and selection contracts pass.",
+      "evidence": [
+        "src/ui/vex-mobile-visual.ts",
+        "src/screens/country-groups.ts",
+        "src/screens/server-picker-interactions.ts",
+        "tests/mobile-visual-contract.ts"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "eb875d7c31709f6b6812ed44ee496e5e12d6bf4b",
+      "stable_patch_id": "c11b786a7b41b0667e2900ad23f70cfefbc3ec89",
+      "subject": "feat(mobile): simplify server selection",
+      "disposition": "represented",
+      "reason": "Current visual primitives, text branding, grouped country/server selection and separators include this behavior. Later picker/home changes supersede the old labels and layout fragments; current mobile visual and selection contracts pass.",
+      "evidence": [
+        "src/ui/vex-mobile-visual.ts",
+        "src/screens/country-groups.ts",
+        "src/screens/server-picker-interactions.ts",
+        "tests/mobile-visual-contract.ts"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "40b74b220b9d72c8b579cfae598502a535bd979c",
+      "stable_patch_id": "00d77f5654a85b580998744347c9f1a6c7efd620",
+      "subject": "fix(vpn): Harden mobile connection recovery",
+      "disposition": "represented",
+      "reason": "Overlapping mobile recovery revisions are represented in current deadline, handshake, registration and foreground-latency tests. Retain current ownership and endpoint admission rather than applying the older rewrite.",
+      "evidence": [
+        "src/vpn/connectionFallback.ts",
+        "src/vpn/connectVerification.ts",
+        "src/vpn/dynamicRouteCore.ts",
+        "tests/run-unit-tests.ts",
+        "tests/ios-handshake-verification.test.mjs",
+        "tests/native-health-freshness.test.mjs"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "4580a5a79b6c08be116ea09dc20814d1f3264f7c",
+      "stable_patch_id": "6dcf9dea5fa427c49940081f3cf5bafc4f74bc69",
+      "subject": "fix(vpn): Harden mobile connection recovery",
+      "disposition": "represented",
+      "reason": "Overlapping mobile recovery revisions are represented in current deadline, handshake, registration and foreground-latency tests. Retain current ownership and endpoint admission rather than applying the older rewrite.",
+      "evidence": [
+        "src/vpn/connectionFallback.ts",
+        "src/vpn/connectVerification.ts",
+        "src/vpn/dynamicRouteCore.ts",
+        "tests/run-unit-tests.ts",
+        "tests/ios-handshake-verification.test.mjs",
+        "tests/native-health-freshness.test.mjs"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "285915dc224888fbff1a553e4b6559b9752a9d4d",
+      "stable_patch_id": "1db6a1b4fb3db16fd915af514d8b1bb9cb7309a5",
+      "subject": "fix(macos): Consolidate client features and reliable startup",
+      "disposition": "adapted",
+      "reason": "Extract confirmed-disconnect safety and preserve current ownership. Retire the old in-app billing/device mutations, obsolete installer snapshot and QA scripts; current AccountPanel deliberately opens the billing website and the helper is Swift-based.",
+      "evidence": [
+        "macos-native/Sources/VEXNativeMac/Services/HelperDisconnectConfirmation.swift",
+        "macos-native/Sources/VEXNativeMac/VEXHelperClient.swift",
+        "macos-native/Tests/VEXNativeMacTests/HelperSocketSimulationTests.swift",
+        "macos-native/Tests/RecoveryHarness/main.swift",
+        "macos-native/Sources/VEXNativeMac/Views/AccountPanel.swift",
+        "macos-native/Sources/VEXHelperCore/Runtime.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "93036e6d3cb1c7591c5b28fac670d09396618ee4",
+      "stable_patch_id": "c4edadb7a6414e23b450e4eebcd1b2c107a0dbea",
+      "subject": "fix(macos): Restore the photo location design",
+      "disposition": "superseded",
+      "reason": "Historical photo hero/layout is replaced by the current native design. Retire obsolete artwork resources and layout tests rather than overwriting the present interface.",
+      "evidence": [
+        "macos-native/Sources/VEXNativeMac/Views/HomePanel.swift",
+        "macos-native/Sources/VEXNativeMac/Models/FocusPulsePresentation.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "ed75502439a0900d6b5dc5f649ea039b11a0e075",
+      "stable_patch_id": "e0a5e9f3d54a768521848d744faddca337d221c9",
+      "subject": "fix(macos): Preserve the VEX release signature",
+      "disposition": "superseded",
+      "reason": "Current helper, installer and preflight agree on the published production certificate plus the local/Apple identities. The historical v4 signing pin is superseded; do not restore that retired trust root.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/PeerAuthenticator.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VEXHelperInstaller.swift",
+        "macos-native/HelperResources/install-vex-vpn-helper.sh",
+        "scripts/native_macos_production_preflight.sh",
+        "macos-native/Tests/VEXPrivilegedHelperTests/VEXSigningPolicyTests.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "9fe46a3fbf9e9bcba343e4f50c4c531451297e9e",
+      "stable_patch_id": "add446e4f18f21cc20b88acdab2bc72a04165e1c",
+      "subject": "fix(macos): Keep automatic recovery in auto mode",
+      "disposition": "adapted",
+      "reason": "Keep automatic failover in Auto after verified success, distinguish silent peers from invalid keys, and bound automatic recovery frequency per account/device. Explicit connect remains immediate; current complete-profile admission and same-exit route policy remain authoritative.",
+      "evidence": [
+        "macos-native/Sources/VEXNativeMac/Stores/VEXAppState.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VpnAutopilotService.swift",
+        "macos-native/Tests/RuntimeRecoveryHarness/VpnRecoveryCallerTests.swift",
+        "macos-native/Tests/VEXNativeMacTests/AutopilotAssessmentTests.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "d1ea8711f6db0c736e208f2fc6a68e83b716f3b1",
+      "stable_patch_id": "4e981f75d9910d7f660e56bad8135c9924b02fee",
+      "subject": "feat: add dynamic route failover on macOS",
+      "disposition": "represented",
+      "reason": "Overlapping native/mobile dynamic-route patches are represented by the current policy engine, complete profile candidates, bounded verification and direct/relay ordering. Retain newer account/admission safeguards.",
+      "evidence": [
+        "macos-native/Sources/VEXNativeMac/Services/DynamicRouteEngine.swift",
+        "src/vpn/dynamicRouteCore.ts",
+        "src/vpn/dynamicRouteRuntime.ts",
+        "tests/run-unit-tests.ts"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "03e43f7045ee36400a78f3290f1b349586eddd07",
+      "stable_patch_id": "f0bc9be3dd5219db57489f7d83a80bbfdf384328",
+      "subject": "feat: add dynamic route failover on macOS",
+      "disposition": "represented",
+      "reason": "Overlapping native/mobile dynamic-route patches are represented by the current policy engine, complete profile candidates, bounded verification and direct/relay ordering. Retain newer account/admission safeguards.",
+      "evidence": [
+        "macos-native/Sources/VEXNativeMac/Services/DynamicRouteEngine.swift",
+        "src/vpn/dynamicRouteCore.ts",
+        "src/vpn/dynamicRouteRuntime.ts",
+        "tests/run-unit-tests.ts"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "1fe7fd3b9a96e7fba4b4f467214a7dafb2303bac",
+      "stable_patch_id": "881ab4e728948e5b8ba98d3abb88e3e19314ec2c",
+      "subject": "feat(android): recover AWG3 through policy-driven routes",
+      "disposition": "represented",
+      "reason": "Overlapping native/mobile dynamic-route patches are represented by the current policy engine, complete profile candidates, bounded verification and direct/relay ordering. Retain newer account/admission safeguards.",
+      "evidence": [
+        "macos-native/Sources/VEXNativeMac/Services/DynamicRouteEngine.swift",
+        "src/vpn/dynamicRouteCore.ts",
+        "src/vpn/dynamicRouteRuntime.ts",
+        "tests/run-unit-tests.ts"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "f4a981545a1ad649092a338c4bcc43a40fe256e9",
+      "stable_patch_id": "06a68caa711df102ac4fb8bb692055f55fb7e8af",
+      "subject": "feat(android): recover AWG3 through policy-driven routes",
+      "disposition": "represented",
+      "reason": "Overlapping native/mobile dynamic-route patches are represented by the current policy engine, complete profile candidates, bounded verification and direct/relay ordering. Retain newer account/admission safeguards.",
+      "evidence": [
+        "macos-native/Sources/VEXNativeMac/Services/DynamicRouteEngine.swift",
+        "src/vpn/dynamicRouteCore.ts",
+        "src/vpn/dynamicRouteRuntime.ts",
+        "tests/run-unit-tests.ts"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "514c6a77ef67f721035257067462f420ed1b3be1",
+      "stable_patch_id": "0386e2cf10c4983af217f9e02431d2f8d54b30e7",
+      "subject": "test(vpn): Align fallback fixtures with transport-only policy",
+      "disposition": "superseded",
+      "reason": "The current fixtures intentionally reject inferred UDP443 and cross-transport fallback; old endpoint-fallback expectations are superseded by complete-profile admission tests.",
+      "evidence": [
+        "src/vpn/connectionFallback.ts",
+        "src/vpn/connectVerification.ts",
+        "src/vpn/dynamicRouteCore.ts",
+        "tests/run-unit-tests.ts"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "7f040c52bb9080ecc932b4104081d98a78f9ea57",
+      "stable_patch_id": "45a385d63c5b88295df99d80fabf5e556b736746",
+      "subject": "chore(client): Preserve tested working-tree source checkpoint",
+      "disposition": "superseded",
+      "reason": "Mixed checkpoint overlaps later source, version and packaging work. Useful teardown/telemetry is reconciled separately; retain current operation fencing, update and query-cache tests. Do not roll back versions, Windows architecture, website billing or obsolete boot/settings cache code.",
+      "evidence": [
+        "src/vpn/connectionFallback.ts",
+        "src/vpn/connectVerification.ts",
+        "src/vpn/dynamicRouteCore.ts",
+        "tests/run-unit-tests.ts",
+        "macos-native/Sources/VEXNativeMac/Stores/VEXAppState.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VpnAutopilotService.swift",
+        "macos-native/Tests/RuntimeRecoveryHarness/VpnRecoveryCallerTests.swift",
+        "native-windows/src/Vex.Windows.Client/Session/NativeClientCoordinator.cs"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "b48bacf4f6605ca0416766a3ff00add1da7ea557",
+      "stable_patch_id": "51516313df4a602e74386ffefeca57471d9618ad",
+      "subject": "fix(clients): stabilize iOS tunnel lifecycle (IBO-276)",
+      "disposition": "represented",
+      "reason": "The same iOS lifecycle work is represented by the newer transition actor, bounded strict runtime parser and cancellation/restart tests. Registration now coalesces by token plus installation, not a single shared promise; do not restore the weaker saturating parser.",
+      "evidence": [
+        "modules/vex-vpn/ios/IosTunnelTransition.swift",
+        "modules/vex-vpn/ios/VexVpnModule.swift",
+        "src/api/nativeDeviceRegistration.ts",
+        "tests/ios-tunnel-transitions/IosTunnelRuntimeStatusTests.swift",
+        "tests/native-device-registration.test.mjs"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "d02e8eaf0b110d1d68efbff6205f2eacca373357",
+      "stable_patch_id": "2670f512e4fde9d5b517bef736c589f068b76a4b",
+      "subject": "test(macos): Align parity contracts with consolidated UI",
+      "disposition": "superseded",
+      "reason": "Historical UI parity string expectations target the old consolidated billing/support layout. Retain the present native model/behavior tests and website billing flow.",
+      "evidence": [
+        "macos-native/Tests/VEXNativeMacTests/NativeParityModelTests.swift",
+        "macos-native/Sources/VEXNativeMac/Views/AccountPanel.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "06e30ba793af5f4e6eb1b70eda01b185862f375c",
+      "stable_patch_id": "3bdc4aa1ab2f123106b866b1d911e3abcda0a813",
+      "subject": "chore(archive): Preserve local Android sources",
+      "disposition": "superseded",
+      "reason": "Android/Google auth, profile-request queue, network callback, push permission and SSE behavior are represented in current source and executable contracts. Historical runtime versions and weaker prompt/ownership conditions are superseded.",
+      "evidence": [
+        "src/api/nativeDeviceRegistration.ts",
+        "src/auth/googleSignIn.ts",
+        "src/notifications/pushRegistrationLoop.ts",
+        "tests/email-otp-mfa-contract.mjs",
+        "tests/profile-request-queue.test.mjs",
+        "tests/android-network-callback-contract.cjs"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "479d12cb4da839ea0f073fe099a5dc1bd49d3001",
+      "stable_patch_id": "33a6e4024c9c257e598712b165c4ec36987fd343",
+      "subject": "fix(macos): Isolate late auth responses and notification delivery",
+      "disposition": "adapted",
+      "reason": "Current auth/profile generation fences replace the old auth rewrite. Restore notification invalidation and add account/token/stream-generation guards to status, rejection and post-refresh SSE callbacks.",
+      "evidence": [
+        "macos-native/Sources/VEXNativeMac/Services/CustomerNotificationService.swift",
+        "macos-native/Sources/VEXNativeMac/Models/CustomerNotificationPolicy.swift",
+        "macos-native/Tests/RuntimeRecoveryHarness/CustomerRealtimeCallerTests.swift",
+        "scripts/tests/test_macos_notification_service.py",
+        "macos-native/Tests/RuntimeRecoveryHarness/SessionUserCallerTests.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "4ee9dd686b0dd9cdcf5732161895b621cba496e9",
+      "stable_patch_id": "1eb4ea88fb5f56e402308adbca317ef606205ce4",
+      "subject": "fix(macos): Isolate cached profiles by account and installation",
+      "disposition": "adapted",
+      "reason": "Current cache identity is stricter than the historical account/installation key. Restore owner-only permissions even when cached helper bytes are unchanged; retain current device, key-epoch and profile checks.",
+      "evidence": [
+        "macos-native/Sources/VEXNativeMac/Services/VPNAccountScope.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift",
+        "macos-native/Tests/VEXNativeMacTests/VPNProfileCacheTests.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "580a79ce8be76226301ec893b6a2f50a4e47a57f",
+      "stable_patch_id": "3ed9a53e6c9ec797fc19497ceb8619ee197ce34b",
+      "subject": "ci(client): Validate active clients on standard hosted runners",
+      "disposition": "superseded",
+      "reason": "Historical runner/workflow arrangement is replaced by the current locked platform lanes and toolchains. Do not reintroduce deleted workflows, obsolete Swift/Xcode versions or additional runners. Existing CI is unchanged by this integration.",
+      "evidence": [
+        ".github/workflows/native-reliability-ci.yml",
+        "tests/client-ci-contract.mjs"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "69706274f4a2dec5a1f1be362d14610c489b2c01",
+      "stable_patch_id": "b1f6af406ebc9d57872a8d56b6778b7893f33d1b",
+      "subject": "fix(macos): Guard authenticated tunnel transitions across awaits",
+      "disposition": "represented",
+      "reason": "Current VpnOperationOwnership, VpnRecoveryIntent, profile account generation and persistence predicates guard authenticated awaits. Actual caller tests cover stop, replacement login and stale replies; the earlier auth rewrite is redundant.",
+      "evidence": [
+        "macos-native/Sources/VEXNativeMac/Stores/VEXAppState.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VpnAutopilotService.swift",
+        "macos-native/Tests/RuntimeRecoveryHarness/VpnRecoveryCallerTests.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNAccountScope.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift",
+        "macos-native/Tests/VEXNativeMacTests/VPNProfileCacheTests.swift",
+        "macos-native/Tests/RuntimeRecoveryHarness/SessionUserCallerTests.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "ab88738f205b469de004679c98e77f825ac7db05",
+      "stable_patch_id": "71b55e589959cf72e3ac54dd3e651a0d4476fcc2",
+      "subject": "fix(macos): Keep offline notification previews isolated",
+      "disposition": "adapted",
+      "reason": "Restore lazy notification backends, fake-backend delivery verification and side-effect-free preview construction, including late-add eviction after account reset.",
+      "evidence": [
+        "macos-native/Sources/VEXNativeMac/Services/CustomerNotificationService.swift",
+        "macos-native/Sources/VEXNativeMac/Models/CustomerNotificationPolicy.swift",
+        "macos-native/Tests/RuntimeRecoveryHarness/CustomerRealtimeCallerTests.swift",
+        "scripts/tests/test_macos_notification_service.py"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "bad84ddb6758666e8ab0cd3b30696ff9ef581059",
+      "stable_patch_id": "e3f56afeb2d062f82d33b45351cabcd47680f8c5",
+      "subject": "chore(archive): Preserve local macOS sources",
+      "disposition": "superseded",
+      "reason": "Snapshot of the same retired photo/location layout; source and artwork are preserved in the recovery archive. It adds no missing tunnel behavior to current main.",
+      "evidence": [
+        "macos-native/Sources/VEXNativeMac/Views/HomePanel.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "e59d1b73826879cdddf5e1eaf02ddd4383b6061c",
+      "stable_patch_id": "64161cfb69348cc0e3bff96a68255df117d1bbbf",
+      "subject": "feat(macos): Add private opt-in activity notifications",
+      "disposition": "adapted",
+      "reason": "Restore bounded, generic support/release notices as foreground SSE notifications, off by default and enabled explicitly. No event payload or account identifier is included; delivery cannot affect the tunnel.",
+      "evidence": [
+        "macos-native/Sources/VEXNativeMac/Services/CustomerNotificationService.swift",
+        "macos-native/Sources/VEXNativeMac/Models/CustomerNotificationPolicy.swift",
+        "macos-native/Tests/RuntimeRecoveryHarness/CustomerRealtimeCallerTests.swift",
+        "scripts/tests/test_macos_notification_service.py"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "00747b0fb1eb0c60c5ba747d1617211553220933",
+      "stable_patch_id": "2b3f2b4d4e0ba74575dee14bf59c6a19953211c7",
+      "subject": "feat(macos): Package explicit verified public profile trust anchors",
+      "disposition": "retired",
+      "reason": "Profile trust-anchor packaging would introduce a new signed-profile release contract and retired build inputs. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "1c9a805bf54b69f5491709315364d95aa5d23260",
+      "stable_patch_id": "7d39d73b4b79aaf677e5e14316bd6738ad1d2740",
+      "subject": "docs(macos): Record APNs outbox release contract",
+      "disposition": "retired",
+      "reason": "Historical APNs outbox release notes do not describe the current foreground-only notification feature. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "271285315a0bd73b0d67d4597b6cd06838e7b90c",
+      "stable_patch_id": "68c5e96fc27db31aa593882ba9ea5dfd9e852052",
+      "subject": "feat(macos): Add account-scoped opt-in native push registration",
+      "disposition": "retired",
+      "reason": "Account-scoped APNs registration requires the old native push identity, entitlements and release/device validation. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "37cf1052b7c6c062af3e291376aaa6fa45ac5c96",
+      "stable_patch_id": "09620f1ff237c0bf4c25ece21256fca8b2fa274e",
+      "subject": "test(macos): port normal pending processor",
+      "disposition": "retired",
+      "reason": "Normal pending processor fixtures require the retired pending-profile implementation. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "3dec359482ab6dd82542b33c790cae0eb198c70c",
+      "stable_patch_id": "99caaca5285cb56c7b07eee6ec79e5b87c60c7d7",
+      "subject": "feat(macos): Bind APNs cleanup to server registration revision",
+      "disposition": "retired",
+      "reason": "Registration-revision cleanup depends on the retired APNs registration coordinator. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "4004912226422c4ea1b159154f8ebfc69d52745b",
+      "stable_patch_id": "70bbc596e8173f2f90251ef1b23640dbed2555a1",
+      "subject": "fix(macos): Preserve pending recovery across ordinary helper actions",
+      "disposition": "retired",
+      "reason": "Pending recovery across ordinary actions depends on private staged journals absent from the current helper. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "4ca730cc25b771661c2ae11d5a66b140bb83cb58",
+      "stable_patch_id": "83d2ad7e2bee23e638d0e285f881c9adf6fb2cb2",
+      "subject": "fix(macos): Harden protected helper replacement transactions",
+      "disposition": "retired",
+      "reason": "Protected replacement transaction hardening applies to the retired private journal/RPC implementation. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "56fab1db6c7435ed0be448265427eab2acc7b8ef",
+      "stable_patch_id": "c9e8e88444c8a050c7fc86b4404e5af462df8e7b",
+      "subject": "test(macos): verify helper preflight readiness",
+      "disposition": "retired",
+      "reason": "Old helper preflight readiness tests require unsupported staged/preflight commands. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "7d17ff3e97a31d4a473ec82842685e9f8ba527e4",
+      "stable_patch_id": "032b0048dbde097dd236b299817d051c7f377f49",
+      "subject": "fix(macos): Preserve signed smart-profile metadata through cache",
+      "disposition": "retired",
+      "reason": "Signed smart-profile cache metadata requires the retired signed profile format. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "7f843577b63d42475892a6894ad20eef787dae59",
+      "stable_patch_id": "9228c277466ce20cce9f26f73fc0002e83ecd236",
+      "subject": "fix(macos): Verify normal signed profile policy",
+      "disposition": "retired",
+      "reason": "Enforcing old normal signed policy would replace the current AWG admission/profile contract. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "89782f70116d7e7654f5c308dd1e5888fb87dec0",
+      "stable_patch_id": "186dbc7bce3cc3dd05a1561a415137443bd9fd07",
+      "subject": "test(macos): Bind pending-normal state in consent fixtures",
+      "disposition": "retired",
+      "reason": "Consent fixtures exercise the retired pending-normal signed lifecycle. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "aa96c67c1b1c70ae401b0c18c7b3179ce18f7df0",
+      "stable_patch_id": "c0efe238757811dea4cb325eedfee7cc667a2a73",
+      "subject": "test(macos): cover normal pending preflight",
+      "disposition": "retired",
+      "reason": "Pending-normal preflight fixtures depend on the retired pending state machine. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "ade9d41b03134cda5cd370402b81581a97954c79",
+      "stable_patch_id": "59d21ee10ae957f0a4283a5979835e8aa82d9e0c",
+      "subject": "test(macos): Verify signed stage routing with geometry and backend fixtures",
+      "disposition": "retired",
+      "reason": "Signed stage geometry/backend fixtures target retired staged routing and new helper RPCs. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "aece8ad2481a2df858284c72dee516cf3b02d9f9",
+      "stable_patch_id": "3e66fc42077e4730e2581450a3314e7665d08324",
+      "subject": "feat(android): Surface subscription renewal and support",
+      "disposition": "represented",
+      "reason": "Current Android subscription renewal/support presentation includes the feature with newer expiry/trial handling. Renewal card source matches the reviewed feature; current renewal tests pass.",
+      "evidence": [
+        "src/screens/subscription-renewal-presentation.ts",
+        "src/components/subscription-renewal-card.tsx",
+        "tests/subscription-renewal.test.mjs"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "b3b5cdcfdbb08f0a56f43b2fda45efbf0631e4b3",
+      "stable_patch_id": "dd45f14bb320e756b4a0f3b530f067a4f2b4cff7",
+      "subject": "feat(macos): Verify and consume signed staged PSK profiles",
+      "disposition": "retired",
+      "reason": "Signed staged PSK admission requires matching trust anchors, signed stage APIs and helper lifecycle. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "bb28d01f695703286930452ac1efbb477899eb1b",
+      "stable_patch_id": "3f679eac75a454fbce84c112a2a53f782cca19c5",
+      "subject": "feat(macos): Add durable PSK push inbox and staged profile API",
+      "disposition": "retired",
+      "reason": "The durable PSK inbox and staged API DTOs require the old staged profile lifecycle, helper and opt-in flow. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "bdcebd4cc9bfc0b5927f213fa1d345f14e8a4a7d",
+      "stable_patch_id": "f3a77ef99cd821b65ac8bd90f6f9a3376b980b68",
+      "subject": "test(macos): Make offline lifecycle probes deterministic",
+      "disposition": "retired",
+      "reason": "Deterministic offline lifecycle probes target the retired push/PSK coordinator; current caller tests provide isolated recovery verification. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "be3540fa6fe61bf47d9b69d608b94c8f546b14f6",
+      "stable_patch_id": "ea503942bd3ac9cb77fccff05660d4c6d6ac2786",
+      "subject": "fix(macos): Admit only signed session-bound profiles",
+      "disposition": "retired",
+      "reason": "Requiring only signed session-bound profiles would reject the existing complete-profile contract. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "c96cfc112f8a71701abcd85266a44c10e99d158c",
+      "stable_patch_id": "5c57d025c8e601a3ce532031edd4962a32736479",
+      "subject": "fix(macos): Reverify signed local cache authority",
+      "disposition": "retired",
+      "reason": "Local signed-cache revalidation depends on retired authority fields and trust roots. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "ccdab26e920d6c58da1a77715d296702192547bd",
+      "stable_patch_id": "379b6df000a0002c24a1de359da05e896636823d",
+      "subject": "feat(macos): Fence normal profile preflight and armed PF updates",
+      "disposition": "retired",
+      "reason": "Normal preflight/armed PF update RPCs are outside the current helper command surface. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "ceecefb752f5c260e1e7a47119577ce87c94cb5a",
+      "stable_patch_id": "cf40bccdd8cf991f217b36e6f09dc70f5de296c9",
+      "subject": "feat(macos): Serialize push registration and clear exact APNs tokens",
+      "disposition": "retired",
+      "reason": "Exact APNs token cleanup and serialization depend on the retired push registration coordinator. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "d131969f1f92c28dba247bddde51a40d3eefa887",
+      "stable_patch_id": "6d7c80812ce2f125751ddcc4d2dd51c4fcebcce2",
+      "subject": "test(macos): fence pending preflight awaits",
+      "disposition": "retired",
+      "reason": "Await fencing covers the retired pending-preflight processor; current ordinary callers retain stricter ownership tests. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "d7338910b5f30446776e1fed1cbb7ea4d8b5c814",
+      "stable_patch_id": "a006e527319db29a69acba8f48cf538dd6f1be93",
+      "subject": "fix(macos): Reconcile ordinary push with signed profiles",
+      "disposition": "retired",
+      "reason": "Ordinary push reconciliation uses the retired APNs and signed staged profile services. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "e6e9346ba52b7c3cb53b4a17c072525208caf563",
+      "stable_patch_id": "eb4a22e1b156569c83f9520a3ab8c58b1b5af10a",
+      "subject": "feat(macos): Prepare guarded PSK rotation with real server identifiers",
+      "disposition": "retired",
+      "reason": "PSK rotation preparation assumes staged signed identifiers and the retired guarded promotion flow. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "eddd39c69a39bf65e48123c8b29e264708509e2b",
+      "stable_patch_id": "5f6d4ad6ce2aa3fb52e7bc8789307e36d97b5f0c",
+      "subject": "feat(macos): Stage scoped normal updates off the active tunnel",
+      "disposition": "retired",
+      "reason": "Scoped normal update staging requires the old pending-normal state machine and helper RPCs. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "fa9344919e01f376ba4966d0fe89f544eb4b68b4",
+      "stable_patch_id": "5f13f469f7110edc12c6ce635f434dfa2272ebac",
+      "subject": "docs(macos): Record durable lifecycle push boundaries",
+      "disposition": "retired",
+      "reason": "Durable lifecycle push notes and the early realtime comment target the retired APNs/PSK stack. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "0232ee93999605c2ae5412186713731355386d7f",
+      "stable_patch_id": "536ff6c0adc65304b8c7160cf045454c0cc20828",
+      "subject": "fix(macos): Restore executable cutover fixture",
+      "disposition": "retired",
+      "reason": "Executable cutover fixture exercises the retired protected profile coordinator. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "086eeade7316b13984d98c683d0b13c721074447",
+      "stable_patch_id": "8ddc4888399218f589779db9c978049418258b26",
+      "subject": "fix(macos): Continue explicitly authorized protected journals",
+      "disposition": "retired",
+      "reason": "Authorized journal continuation targets the retired protected helper transaction system. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "0ad5ab15346021406689bab7c89d6f8e27b6d3b6",
+      "stable_patch_id": "8dafecd3bbdfbb2264a8b8f6fa594f561fd7b554",
+      "subject": "fix(macos): Validate the public protected snapshot contract",
+      "disposition": "retired",
+      "reason": "Public protected snapshot validation targets an unsupported helper snapshot RPC. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "13518f952b24f87da1c19cb81a35cbd1787db5d7",
+      "stable_patch_id": "d9469db64c538b6dde3e2e5a802bc61c4314afe8",
+      "subject": "fix(macos): Reconcile lost commit replies with private helper receipts",
+      "disposition": "retired",
+      "reason": "Lost commit-reply receipts require the retired private promotion commit protocol. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "14fa818cb569cd1ff1e2baf33cecb3d60941e56c",
+      "stable_patch_id": "e4a9c70f901d06edaf556deaf7a04ecdd5347a2d",
+      "subject": "fix(macos): Retain terminal proof across private promotion cleanup",
+      "disposition": "retired",
+      "reason": "Terminal promotion proof cleanup applies to the retired protected receipt protocol. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "37ea23779ed16a4b29d3456378f7f9f0d4c32e59",
+      "stable_patch_id": "424daff8730898f365cba6282b080f984c0eb87f",
+      "subject": "feat(macos): Authenticate protected profile replacement",
+      "disposition": "retired",
+      "reason": "Authenticated protected replacement introduces the retired journal, authorization and helper command protocol. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "529f733465d079641df64a688acf5fa8d9a7077c",
+      "stable_patch_id": "66166d9798f8bea028644d6e3c9d574916833bf0",
+      "subject": "fix(macos): Keep exact candidate bytes through protected retries",
+      "disposition": "retired",
+      "reason": "Exact candidate retries are specific to the retired signed promotion/journal protocol. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "673081f13b42e80be2c98849f04d4bf0c877b7a5",
+      "stable_patch_id": "329a76b83f2a6e45994bcb56802c8ff546f2ee02",
+      "subject": "fix(macos): Reconcile legacy private cleanup after new admission",
+      "disposition": "retired",
+      "reason": "Legacy private cleanup reconciliation applies to retired protected journals, not the current helper state store. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "716c8416a23b886f01d8f4a8ca09e9d31331977b",
+      "stable_patch_id": "6f785328597097b8c441094e7f98b53e484564df",
+      "subject": "fix(macos): Authorize explicit protected owner transfer",
+      "disposition": "retired",
+      "reason": "Explicit protected owner transfer operates on the retired private journal authority. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "72af9a637592ea9128e0208a93ab3c84f87c87b2",
+      "stable_patch_id": "a1d63aa447a4da3927aecdf7be5b489feb482571",
+      "subject": "fix(macos): Persist protected promotion intent before helper mutation",
+      "disposition": "retired",
+      "reason": "Promotion intent ordering targets helper mutations in the retired protected protocol. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "79b4c47a1ec6d9dd3644d7d61460b241e5d19bdf",
+      "stable_patch_id": "3f924e07b9dcedc5129f2aa4f23fbec117eed01f",
+      "subject": "fix(macos): Bind protected sources to confirmed admission bytes",
+      "disposition": "retired",
+      "reason": "Binding protected admission bytes requires the retired signed admission/journal state. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "7ec0fdab3c6c4be18a80264082d11215e242367e",
+      "stable_patch_id": "f6d39d57d5479af4b97bed96f2598e4f58ffb7ad",
+      "subject": "fix(macos): Add separate durable pre-stage consent",
+      "disposition": "retired",
+      "reason": "Durable pre-stage consent depends on the retired staged push/profile coordinator. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "94890bcd3ed1a5033514394bcfacc277a838d082",
+      "stable_patch_id": "e194451ea10bc1458b0601c5dea260df5c1c2911",
+      "subject": "fix(macos): Make pre-stage cancellation ACK durable and retryable",
+      "disposition": "retired",
+      "reason": "Durable cancellation ACKs require the retired pre-stage consent journal and RPCs. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "9d1a9132ed59c53e4a6f5c14051b736ff279629b",
+      "stable_patch_id": "214bc6b69ae97d75332ef6a90e2398c1bb9017fd",
+      "subject": "fix(macos): Couple opt-in consent before protected replacement",
+      "disposition": "retired",
+      "reason": "Consent coupling is specific to the retired protected replacement state machine. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "a42459d3a58d2b052004a44505f47d3911ce1ef1",
+      "stable_patch_id": "f0279c400ef500dc8ed9d01630a6f6ca8e94419a",
+      "subject": "fix(macos): Retain cancellation custody across private retirement",
+      "disposition": "retired",
+      "reason": "Cancellation custody applies to the retired protected journal retirement flow. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "f274ee6969b6fdd0f0e8b265663fc02f3e9e74b4",
+      "stable_patch_id": "fd6f2c6f3d784949ad51e4d42f1d0be9a9f1229e",
+      "subject": "fix(macos): Recover explicitly authorized protected client state",
+      "disposition": "retired",
+      "reason": "Protected restart recovery assumes explicitly authorized legacy journal/consent files. Retain compatible ordinary profiles, current fixed app signing policy and the existing Swift helper; preserved history is available for a separately specified migration.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/CoreTypes.swift",
+        "macos-native/Sources/VEXHelperCore/AwgConfigAdmission.swift",
+        "macos-native/Sources/VEXNativeMac/Services/VPNProfileCacheIdentity.swift"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "8d4d948e013edbde1ab5bc6c647b477ed322b257",
+      "stable_patch_id": "acdbed368a7a400759da83e09bbdb1cb9691b37a",
+      "subject": "chore(clients): Preserve local helper and interface QA work",
+      "disposition": "superseded",
+      "reason": "QA logs/images and a local prebuilt helper binary are archival evidence. Current Swift helper is built from reviewed source; never substitute an unverified old binary or delete current AGENTS.md from this checkpoint.",
+      "evidence": [
+        "macos-native/Sources/VEXHelperCore/Runtime.swift",
+        "macos-native/Package.swift",
+        "AGENTS.md"
+      ],
+      "reviewed": true
+    },
+    {
+      "source_commit": "e16392448448c18d1567f998fbc7b9fca8023b7d",
+      "stable_patch_id": "81a3dc76a01ba7b65449498184370c6af607ca92",
+      "subject": "chore(macos): Preserve local location artwork and design QA",
+      "disposition": "superseded",
+      "reason": "Later checkpoint of the retired photo/layout experiment; preserve current native design. Screenshots, obsolete artwork and visual harnesses remain recovery evidence, not runtime inputs.",
+      "evidence": [
+        "macos-native/Sources/VEXNativeMac/Views/HomePanel.swift"
+      ],
+      "reviewed": true
+    }
+  ]
+}

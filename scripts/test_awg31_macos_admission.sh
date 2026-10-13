@@ -12,5 +12,6 @@ swiftc -o "$BUILD/admission" \
 
 swiftc -parse-as-library -o "$BUILD/recovery" \
   "$ROOT/macos-native/Sources/VEXNativeMac/Services/VpnAdmissionRecovery.swift" \
+  "$ROOT/macos-native/Sources/VEXNativeMac/Services/HelperDisconnectConfirmation.swift" \
   "$ROOT/macos-native/Tests/RecoveryHarness/main.swift"
 "$BUILD/recovery"

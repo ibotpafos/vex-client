@@ -21,6 +21,7 @@ final class HelperCommandFixture {
     var consecutiveStatusFailures = 0
     var helperReadinessValidated = false
     var helperCommandGeneration = 0
+    var disconnectionIsConfirmed = false
     var helperCommandOwnership = VpnOperationOwnership()
     let connectStabilizationDeadline: Duration = .milliseconds(600)
     let handshakePatienceDeadline: Duration = .seconds(8)
@@ -50,7 +51,7 @@ struct HelperFixtureStatus: Equatable {
         self.state = state; self.routeOk = routeOk; self.socketExists = socketExists
     }
     init(helperResponse: String) {
-        let connected = helperResponse == "connected"
+        let connected = helperResponse.contains("state=connected")
         self.init(state: connected ? .connected : .disconnected,
                   routeOk: connected, socketExists: connected)
     }
@@ -77,6 +78,7 @@ final class HelperFixtureClient {
     var downGates: [Int: RecoveryGate] = [:]
     var statusGates: [Int: RecoveryGate] = [:]
     var upErrors: [Int: Error] = [:]
+    var downErrors: [Int: Error] = [:]
     private(set) var commands: [String] = []
     private(set) var upCalls = 0
     private(set) var downCalls = 0
@@ -108,9 +110,21 @@ final class HelperFixtureClient {
     }
     func sendStatus() async throws -> String {
         statusCalls += 1
-        let snapshot = connected ? "connected" : "disconnected"
+        let snapshot = connected
+            ? "state=connected route_ok=true socket_exists=true"
+            : "state=disconnected route_ok=false socket_exists=false"
         if let gate = statusGates[statusCalls] { await gate.pause() }
         return snapshot
+    }
+    func disconnectAndConfirm(commandTimeoutSeconds: Int = 10,
+                              shouldContinue: () -> Bool = { true }) async throws -> HelperFixtureStatus {
+        guard shouldContinue() else { throw CancellationError() }
+        let call = downCalls + 1
+        try await sendExpectingOK("down", timeoutSeconds: Double(commandTimeoutSeconds))
+        if let error = downErrors[call] { throw error }
+        let response = try await sendStatus()
+        guard shouldContinue() else { throw CancellationError() }
+        return HelperFixtureStatus(helperResponse: response)
     }
 }
 
@@ -210,7 +224,7 @@ final class VpnHelperCallerTests: XCTestCase {
     func testExplicitDownStillRunsWhenCallerTaskWasCancelled() async throws {
         let helper = HelperCommandFixture(), gate = RecoveryGate()
         helper.client.connected = true
-        helper.installer.gates[1] = gate
+        helper.client.downGates[1] = gate
         let stop = Task { await helper.runDown() }
         try await gate.awaitEntry()
         stop.cancel()

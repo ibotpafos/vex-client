@@ -30,5 +30,18 @@ struct RecoveryHarness {
             precondition(calls == expected, "unexpected recovery side effects")
             print(admissionRejected ? "FRESH_ADMISSION=PROPAGATED; CONNECTS=2; FALLBACK_SELECTION_RESOLUTION_CONNECT_CLEANUP=0" : "FRESH_TRANSPORT=FAILOVER_ALLOWED; CONNECTS=3")
         }
+        var selectedFallback = false
+        do {
+            _ = try await VpnAdmissionRecovery.retryFreshProfile {
+                throw HelperDisconnectError.unconfirmed
+            } failover: { _ -> String in
+                selectedFallback = true
+                return "unexpected"
+            }
+            preconditionFailure("unconfirmed stop escaped into another connection")
+        } catch is HelperDisconnectError {
+            precondition(!selectedFallback, "unconfirmed teardown selected a fallback")
+        }
+        print("UNCONFIRMED_STOP=PROPAGATED; FALLBACK_SELECTION_RESOLUTION_CONNECT=0")
     }
 }

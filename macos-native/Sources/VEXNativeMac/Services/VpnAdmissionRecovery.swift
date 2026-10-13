@@ -12,7 +12,7 @@ enum VpnAdmissionRecovery {
         } catch {
             // A fresh-profile admission rejection must not inherit the initial
             // transport assessment or authorize another location/activation.
-            if error.localizedDescription.contains("VPN_CONFIG_INVALID") { throw error }
+            if error is HelperDisconnectError || error.localizedDescription.contains("VPN_CONFIG_INVALID") { throw error }
             return try await failover(error)
         }
     }

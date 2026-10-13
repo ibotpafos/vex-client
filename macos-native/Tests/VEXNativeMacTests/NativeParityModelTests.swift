@@ -896,7 +896,7 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(keyAssessment.canFailover)
 
         let handshakeAssessment = service.assess(error: NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "no_handshake: tunnel route is active but peer did not answer"]))
-        XCTAssertEqual(handshakeAssessment.cause, .keyOrProfile)
+        XCTAssertEqual(handshakeAssessment.cause, .server)
         XCTAssertTrue(handshakeAssessment.canFailover)
 
         let serverAssessment = service.assess(healthReasons: [.deviceUsageDegraded, .staleLocalHandshake])

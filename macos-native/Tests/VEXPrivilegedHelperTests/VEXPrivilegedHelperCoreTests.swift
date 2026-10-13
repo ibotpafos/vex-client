@@ -36,7 +36,7 @@ final class VEXPrivilegedHelperCoreTests: XCTestCase {
         )
     }
 
-    func testBootstrapKeepsLiveAntiLeakWhenStateDirectoriesCannotBeCreated() async {
+    func testBootstrapFlushesLiveAntiLeakBeforeFailingWhenStateDirectoriesCannotBeCreated() async {
         let fileSystem = InMemoryFileSystem(failDirectories: ["/helper"])
         let firewall = TrackingFirewall(active: true)
         let paths = HelperPathsLayout(
@@ -65,7 +65,7 @@ final class VEXPrivilegedHelperCoreTests: XCTestCase {
             XCTFail("bootstrap must fail when its root-owned state directory is unavailable")
         } catch {
             XCTAssertTrue(error.localizedDescription.contains("injected directory failure"))
-            XCTAssertEqual(firewall.disableCallCount, 0)
+            XCTAssertEqual(firewall.disableCallCount, 1)
         }
     }
 
@@ -104,7 +104,7 @@ final class VEXPrivilegedHelperCoreTests: XCTestCase {
         XCTAssertTrue(fileSystem.fileExists(at: "/helper/antileak.state"))
     }
 
-    func testOwnerWatchdogKeepsRequestedProtectionWhenIdentityChanges() async throws {
+    func testOwnerWatchdogTearsDownSessionWhenIdentityChanges() async throws {
         let fileSystem = InMemoryFileSystem(files: [
             "/helper/session.state": HelperSession(interfaceName: "utun9", endpoint: "1.1.1.1:51820", ownerPID: 42, socketExists: true, antiLeakArmed: true).payload,
             "/helper/owner.state": OwnerSession(pid: 42, token: "42-token", identity: "old").payload,
@@ -133,10 +133,7 @@ final class VEXPrivilegedHelperCoreTests: XCTestCase {
         await runtime.runOwnerWatchdogTick()
 
         let snapshot = await runtime.snapshotStatus()
-        XCTAssertEqual(snapshot.state, "error")
-        XCTAssertEqual(snapshot.leakProtection, "armed")
-        XCTAssertTrue(fileSystem.fileExists(at: "/helper/session.state"))
-        XCTAssertFalse(runner.calls.contains { $0.arguments.contains("-F") })
+        XCTAssertEqual(snapshot.state, "disconnected")
         XCTAssertFalse(fileSystem.fileExists(at: "/helper/owner.state"))
     }
 
@@ -322,8 +319,8 @@ final class VEXPrivilegedHelperCoreTests: XCTestCase {
         await runtime.runRouteWatchdogTick()
         await runtime.runRouteWatchdogTick()
 
-        XCTAssertEqual(tunnel.bringDownCallCount, 0)
-        XCTAssertTrue(fileSystem.fileExists(at: "/helper/session.state"))
+        XCTAssertEqual(tunnel.bringDownCallCount, 1)
+        XCTAssertFalse(fileSystem.fileExists(at: "/helper/session.state"))
     }
 
     func testBootstrapRecoveryTearsDownPersistedTunnelEvenWithoutAntiLeak() async throws {

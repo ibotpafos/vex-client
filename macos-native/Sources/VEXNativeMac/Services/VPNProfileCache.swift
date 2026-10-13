@@ -77,26 +77,6 @@ struct VPNProfileCache {
         try setOwnerOnlyPermissions(url)
     }
 
-    func writeRoutingParameters(_ parameters: String) throws {
-        let url = URL(fileURLWithPath: helperConfigURL().path + ".routing.json")
-        try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try parameters.write(to: url, atomically: true, encoding: .utf8)
-        try setOwnerOnlyPermissions(url)
-    }
-
-    func cachedRoutingAuthorization() -> NativeRoutingAuthorization? {
-        let url = appDataURL().appendingPathComponent("routing-authorization-v2.json")
-        guard let data = try? Data(contentsOf: url), data.count <= 2 * 1024 * 1024 else { return nil }
-        return try? JSONDecoder().decode(NativeRoutingAuthorization.self, from: data)
-    }
-
-    func cacheRoutingAuthorization(_ authorization: NativeRoutingAuthorization) throws {
-        let url = appDataURL().appendingPathComponent("routing-authorization-v2.json")
-        try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try JSONEncoder().encode(authorization).write(to: url, options: [.atomic])
-        try setOwnerOnlyPermissions(url)
-    }
-
     func readHelperConfig() -> String? {
         let config = try? String(contentsOf: helperConfigURL(), encoding: .utf8)
         guard let config,
@@ -156,7 +136,6 @@ struct PreparedTunnelCacheRecord: Codable, Equatable {
     var routingPolicyVersion: String
     var fetchedAt: Date?
     var awgVersion: Int?
-    var routingParameters: String?
 
     init(tunnel: PreparedTunnel, accountUserId: String? = nil, localKeyEpoch: Int? = nil) {
         self.accountUserId = accountUserId
@@ -173,7 +152,6 @@ struct PreparedTunnelCacheRecord: Codable, Equatable {
         routingPolicyVersion = tunnel.routingPolicyVersion
         fetchedAt = Date()
         awgVersion = tunnel.awgVersion
-        routingParameters = tunnel.routingParameters
     }
 
     var isFresh: Bool {
@@ -197,8 +175,7 @@ struct PreparedTunnelCacheRecord: Codable, Equatable {
             bypassDomainsCount: bypassDomainsCount,
             routingPolicyVersion: routingPolicyVersion,
             rotationRequired: rotationRequired ?? false,
-            awgVersion: awgVersion ?? 3,
-            routingParameters: routingParameters
+            awgVersion: awgVersion ?? 3
         )
     }
 }

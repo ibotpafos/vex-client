@@ -189,7 +189,6 @@ struct VEXAPIClient {
             URLQueryItem(name: "routing_mode", value: routingMode.rawValue),
             URLQueryItem(name: "platform", value: "macos"),
             URLQueryItem(name: "awg_version", value: "3"),
-            URLQueryItem(name: "routing_policy_version", value: "2"),
         ]
         if let bypassRegion {
             query.append(URLQueryItem(name: "bypass_region", value: bypassRegion))
@@ -198,10 +197,6 @@ struct VEXAPIClient {
             query.append(URLQueryItem(name: "known_version", value: String(knownVersion)))
         }
         return try await json("/v1/vpn/profile?\(queryString(query))", accessToken: accessToken)
-    }
-
-    func nativeRoutingPolicy(accessToken: String) async throws -> NativeRoutingPolicyEnvelope {
-        try await json("/v1/vpn/routing-policy?region=ru&platform=macos&schema_version=2", accessToken: accessToken, timeout: 3)
     }
 
     func reportVpnConnect(accessToken: String, tunnel: PreparedTunnel) async {

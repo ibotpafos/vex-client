@@ -317,7 +317,7 @@ try {
         # Re-import actual ACL and DPAPI functions; no mock may stand in for these.
         Import-ProductionFunctions 'install-vpn-service.ps1'
         $privateDirectory = Join-Path $script:dataDirectory 'Private'
-        $null = New-Item -ItemType Directory -Path $privateDirectory
+        $null = New-Item -ItemType Directory -Path $privateDirectory -Force
         $privateConfig = Join-Path $privateDirectory 'vex.conf'
         [IO.File]::WriteAllText($privateConfig, 'fixture-private-material')
         Set-PrivateDirectoryAcl

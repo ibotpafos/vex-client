@@ -2,7 +2,6 @@ import Darwin
 import Foundation
 
 public struct HelperPathsLayout: Sendable, Equatable {
-    public var routingParametersPath: String { activeConfigPath + ".routing.json" }
     public var helperDirectory: String
     public var socketPath: String
     public var ownerSessionPath: String
@@ -81,7 +80,6 @@ public struct HelperPathsLayout: Sendable, Equatable {
 public enum HelperCommand: Equatable, Sendable {
     case up(armAntiLeak: Bool, ownerPID: Int32?)
     case down
-    case downProtected
     case shutdown
     case repair
     case status
@@ -102,9 +100,6 @@ public enum HelperCommand: Equatable, Sendable {
         case "down":
             try ensureNoCommandMetadata(metadata)
             return .down
-        case "down-keep-antileak":
-            try ensureNoCommandMetadata(metadata)
-            return .downProtected
         case "shutdown":
             try ensureNoCommandMetadata(metadata)
             return .shutdown
@@ -257,7 +252,6 @@ public struct HelperSession: Equatable, Sendable {
     public var ipv6RouteInterface: String?
     public var socketExists: Bool
     public var antiLeakArmed: Bool
-    public var routingTransportStopped: Bool
     public var ipv6RouteExpected: Bool
     public var rxBytes: UInt64
     public var txBytes: UInt64
@@ -278,8 +272,7 @@ public struct HelperSession: Equatable, Sendable {
         txBytes: UInt64 = 0,
         latestHandshake: UInt64? = nil,
         startedAt: UInt64 = UInt64(Date().timeIntervalSince1970),
-        dnsHealthy: Bool = true,
-        routingTransportStopped: Bool = false
+        dnsHealthy: Bool = true
     ) {
         self.interfaceName = interfaceName
         self.endpoint = endpoint
@@ -294,7 +287,6 @@ public struct HelperSession: Equatable, Sendable {
         self.latestHandshake = latestHandshake
         self.startedAt = startedAt
         self.dnsHealthy = dnsHealthy
-        self.routingTransportStopped = routingTransportStopped
     }
 
     public init?(payload: String) {
@@ -319,8 +311,7 @@ public struct HelperSession: Equatable, Sendable {
             txBytes: values["tx"].flatMap(UInt64.init) ?? 0,
             latestHandshake: values["latest_handshake"].flatMap(UInt64.init),
             startedAt: values["started_at"].flatMap(UInt64.init) ?? 0,
-            dnsHealthy: values["dns_healthy"] != "false",
-            routingTransportStopped: values["routing_transport_stopped"] == "true"
+            dnsHealthy: values["dns_healthy"] != "false"
         )
     }
 
@@ -338,8 +329,7 @@ public struct HelperSession: Equatable, Sendable {
             "tx=\(txBytes)",
             "latest_handshake=\(latestHandshake ?? 0)",
             "started_at=\(startedAt)",
-            "dns_healthy=\(dnsHealthy)",
-            "routing_transport_stopped=\(routingTransportStopped)"
+            "dns_healthy=\(dnsHealthy)"
         ].joined(separator: "\n") + "\n"
     }
 }
@@ -462,14 +452,10 @@ public protocol TunnelControlling: Sendable {
     func repair(currentSession: HelperSession?) throws -> HelperSession?
     func refreshedSession(currentSession: HelperSession?) throws -> HelperSession?
     func hasManagedState() -> Bool
-    func bringDownPreservingProtection(currentSession: HelperSession?) throws
 }
 
 public extension TunnelControlling {
     func hasManagedState() -> Bool { false }
-    func bringDownPreservingProtection(currentSession: HelperSession?) throws {
-        throw HelperError.protocolViolation("protected stop is unavailable")
-    }
 }
 
 public protocol PFFirewallControlling: Sendable {

@@ -37,9 +37,9 @@ scratch="$(mktemp -d)"
 trap 'rm -rf "${scratch}"' EXIT
 
 echo "== building amneziawg-go (AmneziaWG 3.1 v3.1.20260828) universal =="
-(cd "${root_dir}/native-routing"
-  GOARCH=arm64 go build -o "${scratch}/amneziawg-go-arm64" ./cmd/vex-awg
-  GOARCH=amd64 go build -o "${scratch}/amneziawg-go-amd64" ./cmd/vex-awg
+(cd "${external_dir}/amneziawg-go"
+  GOARCH=arm64 go build -o "${scratch}/amneziawg-go-arm64" .
+  GOARCH=amd64 go build -o "${scratch}/amneziawg-go-amd64" .
 )
 lipo -create -output "${scratch}/amneziawg-go-universal" \
   "${scratch}/amneziawg-go-arm64" "${scratch}/amneziawg-go-amd64"

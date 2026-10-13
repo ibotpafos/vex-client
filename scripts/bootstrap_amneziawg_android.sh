@@ -91,10 +91,9 @@ fi
 routing_patch="${root_dir}/patches/amnezia/amneziawg-android-native-routing.patch"
 if git -C "${external_dir}/amneziawg-android" apply --reverse --check "${routing_patch}" >/dev/null 2>&1; then
   git -C "${external_dir}/amneziawg-android" apply --reverse "${routing_patch}"
-elif ! git -C "${external_dir}/amneziawg-android" apply --check "${routing_patch}" >/dev/null 2>&1; then
-  echo "Routing SDK patch differs from the supported form" >&2
-  exit 1
 fi
+# Fresh checkouts first need the local-Go/foreground prerequisites below.
+# apply_patch_once still rejects a changed/partial routing patch afterwards.
 migrate_legacy_local_go_patch "${external_dir}/amneziawg-android" "${root_dir}/patches/amnezia/amneziawg-android-macos-local-go.patch"
 local_go_patch="${root_dir}/patches/amnezia/amneziawg-android-macos-local-go.patch"
 if git -C "${external_dir}/amneziawg-android" apply --check --exclude=tunnel/tools/libwg-go/go.mod "${local_go_patch}" >/dev/null 2>&1; then

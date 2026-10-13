@@ -14,6 +14,8 @@ namespace Vex.Windows.App.Services;
 
 public sealed class VpnServiceClient : IVpnControlClient
 {
+    public static bool SupportsNativeRouting() => VpnRoutingCapability.IsAvailable(Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "VEX", "VPN"));
     private readonly VpnNamedPipeTransport _transport;
 
     public VpnServiceClient(ProtectedAuthorizationStore authorizationStore)
@@ -58,6 +60,9 @@ public sealed class VpnServiceClient : IVpnControlClient
         SendAsync(
             VpnServiceRequest.Disconnect(NewRequestId()),
             cancellationToken);
+
+    public Task<VpnServiceResponse> SuspendAsync(CancellationToken cancellationToken) =>
+        SupportsNativeRouting() ? SendAsync(VpnServiceRequest.StopTransport(NewRequestId()), cancellationToken) : DisconnectAsync(cancellationToken);
 
     public Task<VpnServiceResponse> GetDiagnosticsAsync(
         CancellationToken cancellationToken) =>

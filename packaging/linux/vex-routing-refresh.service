@@ -1,0 +1,6 @@
+[Unit]
+Description=VEX routing underlay and verified policy cache
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/vex/vex-routing-refresh

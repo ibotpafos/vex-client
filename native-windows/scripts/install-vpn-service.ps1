@@ -29,7 +29,10 @@ param(
 
     [Parameter(Mandatory = $true)]
     [ValidatePattern('^[0-9A-Fa-f]{64}$')]
-    [string]$ProfileSigningKeyringSha256
+    [string]$ProfileSigningKeyringSha256,
+
+    [ValidatePattern('^(?:[0-9A-Fa-f]{64})?$')]
+    [string]$RouterExecutableSha256 = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -46,6 +49,7 @@ $wintunLibrary = Join-Path $InstallDirectory 'wintun.dll'
 $profileSigningKeyring = Join-Path `
     $InstallDirectory `
     'profile-signing-keys.json'
+$routerExecutable = Join-Path $InstallDirectory 'vex-awg.exe'
 $requiredFiles = @(
     $serviceExecutable,
     $clientExecutable,
@@ -53,6 +57,7 @@ $requiredFiles = @(
     $wintunLibrary,
     $profileSigningKeyring
 )
+if ($RouterExecutableSha256) { $requiredFiles += $routerExecutable }
 
 function Assert-Administrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -83,6 +88,10 @@ function Assert-InstallPayload {
 
     Assert-PinnedSignature -Path $clientExecutable -Description 'client'
     Assert-PinnedSignature -Path $serviceExecutable -Description 'service'
+    if ($RouterExecutableSha256) {
+        Assert-PinnedSignature -Path $routerExecutable -Description 'routed engine'
+        Assert-FileHash -Path $routerExecutable -ExpectedHash $RouterExecutableSha256 -Description 'routed engine'
+    }
     Assert-FileHash `
         -Path $clientExecutable `
         -ExpectedHash $AppExecutableSha256 `
@@ -375,6 +384,7 @@ function Install-Service {
 
 Assert-Administrator
 Assert-InstallPayload
+if (-not $RouterExecutableSha256 -and (Test-Path -LiteralPath (Join-Path $dataDirectory 'Private/routed-lease.json'))) { throw 'A routed session must be explicitly stopped before rollback to a legacy service.' }
 $null = @(Get-PrivateStateItems)
 Stop-ServiceBeforeProvisioning
 Set-PrivateDirectoryAcl
@@ -389,6 +399,13 @@ Write-Pin -Name 'app-executable-sha256' -Value $AppExecutableSha256
 Write-Pin -Name 'service-executable-sha256' -Value $ServiceExecutableSha256
 Write-Pin -Name 'amneziawg-sha256' -Value $AmneziaExecutableSha256
 Write-Pin -Name 'wintun-sha256' -Value $WintunSha256
+if ($RouterExecutableSha256) {
+    Write-Pin -Name 'router-sha256' -Value $RouterExecutableSha256
+    $routingCapability = [ordered]@{Schema='vex.native-routing.v2';InstallDirectory=$InstallDirectory;ServiceSha256=$ServiceExecutableSha256.ToUpperInvariant();RouterSha256=$RouterExecutableSha256.ToUpperInvariant()}
+    [IO.File]::WriteAllText((Join-Path $dataDirectory 'routing-capability.json'), ($routingCapability | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))
+} else {
+    foreach ($file in @('router-sha256','routing-capability.json')) { Remove-Item -LiteralPath (Join-Path $dataDirectory $file) -Force -ErrorAction SilentlyContinue }
+}
 Write-Pin `
     -Name 'profile-signing-keys-sha256' `
     -Value $ProfileSigningKeyringSha256

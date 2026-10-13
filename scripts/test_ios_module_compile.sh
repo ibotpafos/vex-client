@@ -66,7 +66,7 @@ project = Xcodeproj::Project.open(ARGV[0])
 target = project.targets.find { |candidate| candidate.name == 'VexVpn' }
 abort('The generated Pods project has no VexVpn target') unless target
 source_paths = target.source_build_phase.files_references.map { |file| File.realpath(file.real_path) }
-%w[VexVpnModule.swift IosTunnelTransition.swift].each do |name|
+%w[VexVpnModule.swift IosTunnelTransition.swift IosRoutingConnectRequest.swift].each do |name|
   expected = File.realpath(File.join(ARGV[1], 'modules', 'vex-vpn', 'ios', name))
   abort("VexVpn must compile the live #{name}") unless source_paths.include?(expected)
   puts "Qualified live pod source: #{expected}"
@@ -96,7 +96,7 @@ xcodebuild \
   build 2>&1 | tee "$compile_log"
 "$ruby_binary" - "$compile_log" <<'RUBY'
 trace = File.read(ARGV[0])
-%w[VexVpnModule.swift IosTunnelTransition.swift].each do |name|
+%w[VexVpnModule.swift IosTunnelTransition.swift IosRoutingConnectRequest.swift].each do |name|
   abort("The fresh SDK build did not report compiling #{name}") unless trace.include?(name)
   puts "Verified SDK compilation trace: #{name}"
 end

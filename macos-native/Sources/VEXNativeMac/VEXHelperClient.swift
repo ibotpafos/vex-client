@@ -128,7 +128,7 @@ final class VEXHelperModel: ObservableObject {
 
     @discardableResult
     func disconnect(releaseAntiLeak: Bool) async -> Bool {
-        await runCommand("down", busyState: .disconnecting, successMessage: "VPN отключен.")
+        await runCommand(releaseAntiLeak ? "down" : "down-keep-antileak", busyState: .disconnecting, successMessage: "VPN отключен.")
     }
 
     @discardableResult
@@ -138,6 +138,7 @@ final class VEXHelperModel: ObservableObject {
         status = status.withState(.disconnecting)
         do {
             let confirmedStatus = try await client.disconnectAndConfirm(
+                releaseAntiLeak: releaseAntiLeak,
                 commandTimeoutSeconds: 15,
                 shouldContinue: { self.helperCommandGeneration == operation.generation }
             )
@@ -249,8 +250,9 @@ final class VEXHelperModel: ObservableObject {
 
         do {
             try ensureCurrentHelperCommand(command, generation: operation.generation, shouldConnect: shouldConnect)
-            if command == "down" {
+            if command == "down" || command == "down-keep-antileak" {
                 let confirmedStatus = try await client.disconnectAndConfirm(
+                    releaseAntiLeak: command == "down",
                     shouldContinue: { self.helperCommandGeneration == operation.generation }
                 )
                 try ensureCurrentHelperCommand(command, generation: operation.generation, shouldConnect: shouldConnect)
@@ -282,7 +284,7 @@ final class VEXHelperModel: ObservableObject {
                 lastConnectAdmissionRejected = error.localizedDescription.contains("VPN_CONFIG_INVALID")
                 if !lastConnectAdmissionRejected {
                     helperReadinessValidated = false
-                    await client.silentDisconnect(releaseAntiLeak: true)
+                    await client.silentDisconnect(releaseAntiLeak: !command.hasPrefix("up "))
                     guard (try? ensureCurrentHelperCommand(command, generation: operation.generation,
                                                           shouldConnect: shouldConnect)) != nil else { return false }
                 }
@@ -425,7 +427,7 @@ struct VEXHelperClient {
     }
 
     func silentDisconnect(releaseAntiLeak: Bool) async {
-        _ = try? await sendExpectingOK("down", timeoutSeconds: 10)
+        _ = try? await sendExpectingOK(releaseAntiLeak ? "down" : "down-keep-antileak", timeoutSeconds: 10)
     }
 
     func sendExpectingOK(_ command: String, timeoutSeconds: Int = 5) async throws {
@@ -437,6 +439,7 @@ struct VEXHelperClient {
 
     @MainActor
     func disconnectAndConfirm(
+        releaseAntiLeak: Bool = true,
         commandTimeoutSeconds: Int = 10,
         maxStatusAttempts: Int = 8,
         pollNanoseconds: UInt64 = 100_000_000,
@@ -445,12 +448,13 @@ struct VEXHelperClient {
         // Teardown also runs from a cancelled connect task. Ownership, rather
         // than that task's cancellation, decides whether this down is current.
         guard shouldContinue() else { throw CancellationError() }
-        try await sendExpectingOK("down", timeoutSeconds: commandTimeoutSeconds)
+        try await sendExpectingOK(releaseAntiLeak ? "down" : "down-keep-antileak", timeoutSeconds: commandTimeoutSeconds)
         for attempt in 0..<max(1, maxStatusAttempts) {
             guard shouldContinue() else { throw CancellationError() }
             let response = try await send("status", timeoutSeconds: 1)
             guard shouldContinue() else { throw CancellationError() }
             let snapshot = VpnStatus(helperResponse: response)
+            if !releaseAntiLeak && snapshot.state == .disconnected && snapshot.leakProtection == "blocking" && !snapshot.socketExists && !snapshot.routeOk { return snapshot }
             if HelperDisconnectConfirmation.isExplicitlyDisconnected(response),
                snapshot.state == .disconnected, !snapshot.hasManagedNetworkState {
                 return snapshot

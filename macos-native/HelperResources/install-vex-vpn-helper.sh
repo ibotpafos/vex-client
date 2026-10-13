@@ -90,6 +90,34 @@ if [[ ! -x "$src_dir/awg-quick.sh" ]]; then
 fi
 
 /usr/bin/install -d -o root -g wheel -m 0755 "$helper_dir"
+
+# PF grants physical sockets only to this dedicated non-login identity.
+if ! /usr/bin/dscl . -read /Users/_vexvpn UniqueID >/dev/null 2>&1; then
+  routing_uid=""
+  for candidate_uid in $(/usr/bin/jot 200 300); do
+    if ! /usr/bin/dscl . -search /Users UniqueID "$candidate_uid" | /usr/bin/grep -q . &&
+       ! /usr/bin/dscl . -search /Groups PrimaryGroupID "$candidate_uid" | /usr/bin/grep -q .; then
+      routing_uid="$candidate_uid"
+      break
+    fi
+  done
+  [[ -n "$routing_uid" ]] || { echo "No dedicated VPN routing identity is available" >&2; exit 1; }
+  /usr/bin/dscl . -create /Groups/_vexvpn
+  /usr/bin/dscl . -create /Groups/_vexvpn PrimaryGroupID "$routing_uid"
+  /usr/bin/dscl . -create /Groups/_vexvpn Password '*'
+  /usr/bin/dscl . -create /Users/_vexvpn
+  /usr/bin/dscl . -create /Users/_vexvpn UniqueID "$routing_uid"
+  /usr/bin/dscl . -create /Users/_vexvpn PrimaryGroupID "$routing_uid"
+  /usr/bin/dscl . -create /Users/_vexvpn UserShell /usr/bin/false
+  /usr/bin/dscl . -create /Users/_vexvpn NFSHomeDirectory /var/empty
+  /usr/bin/dscl . -create /Users/_vexvpn RealName 'VEX VPN routing daemon'
+  /usr/bin/dscl . -create /Users/_vexvpn Password '*'
+fi
+identity_uid="$(/usr/bin/dscl . -read /Users/_vexvpn UniqueID | /usr/bin/awk '{print $2}')"
+identity_gid="$(/usr/bin/dscl . -read /Users/_vexvpn PrimaryGroupID | /usr/bin/awk '{print $2}')"
+[[ "$identity_uid" =~ ^[0-9]+$ && "$identity_uid" -ge 300 && "$identity_uid" -le 499 && "$identity_gid" == "$identity_uid" ]] || { echo "VPN routing identity is not a dedicated system account" >&2; exit 1; }
+[[ "$(/usr/bin/dscl . -read /Users/_vexvpn UserShell | /usr/bin/awk '{print $2}')" == /usr/bin/false &&
+   "$(/usr/bin/dscl . -read /Users/_vexvpn NFSHomeDirectory | /usr/bin/awk '{print $2}')" == /var/empty ]] || { echo "VPN routing identity permits an interactive login" >&2; exit 1; }
 stage_dir="$(/usr/bin/mktemp -d "$helper_dir/.install.XXXXXX")"
 rollback_dir="$(/usr/bin/mktemp -d /var/tmp/vex-helper-rollback.XXXXXX)"
 replacement_started=0

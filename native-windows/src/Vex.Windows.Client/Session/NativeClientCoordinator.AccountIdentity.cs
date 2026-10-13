@@ -101,7 +101,7 @@ public sealed partial class NativeClientCoordinator
             // Preserve the failed transition after its stop is acknowledged.
             persistenceError = error;
         }
-        var stopped = await _vpnClient.DisconnectAsync(CancellationToken.None).ConfigureAwait(false);
+        var stopped = await _vpnClient.SuspendAsync(CancellationToken.None).ConfigureAwait(false);
         if (!stopped.Success || stopped.Snapshot.Phase != VpnConnectionPhase.Disconnected)
             throw new NativeClientFlowException("vpn_disconnect_required");
         if (persistenceError is not null)

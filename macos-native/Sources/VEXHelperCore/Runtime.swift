@@ -81,6 +81,10 @@ public actor HelperRuntime {
         do {
             try store.ensureDirectories()
         } catch {
+            if store.loadSession()?.antiLeakArmed == true || firewallController.antileakIsActive() {
+                logger.error("bootstrap", "state directory unavailable; retaining requested leak protection")
+                throw error
+            }
             // PF cleanup must not depend on a writable state directory. If the
             // root-owned store is damaged after a crash, flush live anti-leak
             // rules first so launchd retries cannot strand the host offline.
@@ -143,6 +147,11 @@ public actor HelperRuntime {
         guard let ownerSession = store.loadOwnerSession() else { return }
         let currentIdentity = processInspector.processIdentity(pid: ownerSession.pid)
         guard currentIdentity != ownerSession.identity else { return }
+        if store.loadSession()?.antiLeakArmed == true {
+            logger.warn("watchdog", "owner exited; retaining requested leak protection")
+            store.clearOwnerSession()
+            return
+        }
         logger.warn("watchdog", "owner pid \(ownerSession.pid) exited; releasing VEX tunnel")
         do {
             try store.withOperationLock(staleAfter: configuration.operationLockStaleAfter) {
@@ -172,6 +181,7 @@ public actor HelperRuntime {
             }
             handshakeStarvedTicks += 1
             if handshakeStarvedTicks >= configuration.handshakeStarveFailOpenTicks {
+                if session.antiLeakArmed { return }
                 do {
                     try store.withOperationLock(staleAfter: configuration.operationLockStaleAfter) {
                         try actionDownWithoutLock()
@@ -199,6 +209,7 @@ public actor HelperRuntime {
         } catch {
             logger.warn("route-watchdog", "repair deferred: \(error.localizedDescription)")
             if unhealthyTunnelTicks >= 2 {
+                if session.antiLeakArmed { return }
                 do {
                     try store.withOperationLock(staleAfter: configuration.operationLockStaleAfter) {
                         try actionDownWithoutLock()
@@ -216,6 +227,10 @@ public actor HelperRuntime {
         let persistedSession = store.loadSession()
         let firewallActive = firewallController.antileakIsActive()
         guard firewallActive || persistedSession != nil || tunnelController.hasManagedState() else { return }
+        if persistedSession?.antiLeakArmed == true || firewallActive {
+            logger.warn("bootstrap", "retaining requested leak protection until explicit release")
+            return
+        }
         let currentSession = (try? tunnelController.refreshedSession(currentSession: persistedSession)) ?? persistedSession
         let owner = store.loadOwnerSession()
         let ownerIsValid = owner.map { processInspector.processIdentity(pid: $0.pid) == $0.identity } ?? false
@@ -240,6 +255,7 @@ public actor HelperRuntime {
     public func resumeOwnerWatchdog() async {
         guard let existing = store.loadOwnerSession() else { return }
         guard processInspector.processIdentity(pid: existing.pid) == existing.identity else {
+            if store.loadSession()?.antiLeakArmed == true { store.clearOwnerSession(); return }
             do {
                 try store.withOperationLock(staleAfter: configuration.operationLockStaleAfter) {
                     try actionDownWithoutLock()
@@ -254,6 +270,7 @@ public actor HelperRuntime {
             try armOwnerWatchdog(ownerPID: existing.pid)
         } catch {
             logger.error("watchdog", "could not resume owner watchdog: \(error.localizedDescription)")
+            if store.loadSession()?.antiLeakArmed == true { return }
             do {
                 try store.withOperationLock(staleAfter: configuration.operationLockStaleAfter) {
                     try actionDownWithoutLock()
@@ -283,6 +300,19 @@ public actor HelperRuntime {
 
     private func execute(command: HelperCommand, peerPID: Int32?) async throws -> HelperCommandResponse {
         switch command {
+        case .downProtected:
+            try store.withOperationLock(staleAfter: configuration.operationLockStaleAfter) {
+                let session = store.loadSession()
+                try tunnelController.bringDownPreservingProtection(currentSession: session)
+                if var retained = session {
+                    retained.routingTransportStopped = true
+                    retained.latestHandshake = nil
+                    retained.antiLeakArmed = firewallController.antileakIsActive()
+                    try store.persistSession(retained)
+                } else { store.clearSession() }
+                store.clearOwnerSession()
+            }
+            return HelperCommandResponse(payload: "ok\n")
         case .status:
             return HelperCommandResponse(payload: makeStatusSnapshot(from: refreshedStatusSession()).statusResponse)
         case .diagnostics:
@@ -296,9 +326,7 @@ public actor HelperRuntime {
             do {
                 try armOwnerWatchdog(ownerPID: verified)
             } catch {
-                try? store.withOperationLock(staleAfter: configuration.operationLockStaleAfter) {
-                    try actionDownWithoutLock()
-                }
+                if !armAntiLeak { try? store.withOperationLock(staleAfter: configuration.operationLockStaleAfter) { try actionDownWithoutLock() } }
                 throw error
             }
             return HelperCommandResponse(payload: "ok\n")
@@ -362,7 +390,7 @@ public actor HelperRuntime {
     }
 
     private func tunnelIsHealthy(_ session: HelperSession) -> Bool {
-        guard session.socketExists,
+        guard !session.routingTransportStopped, session.socketExists,
               !session.interfaceName.isEmpty,
               session.routeInterface == session.interfaceName,
               session.dnsHealthy else {
@@ -383,14 +411,14 @@ public actor HelperRuntime {
         let routeInterface = session?.routeInterface ?? ""
         let ipv6Expected = session?.ipv6RouteExpected ?? false
         let ipv6RouteInterface = session?.ipv6RouteInterface ?? ""
-        let routeOK = !interfaceName.isEmpty && routeInterface == interfaceName
+        let routeOK = session?.routingTransportStopped != true && !interfaceName.isEmpty && routeInterface == interfaceName
         let ipv6OK = !ipv6Expected
             || (!interfaceName.isEmpty && ipv6RouteInterface == interfaceName)
         return HelperStatusSnapshot(
             operationInProgress: operation,
             interfaceName: interfaceName,
             endpoint: session?.endpoint ?? "",
-            socketExists: session?.socketExists ?? false,
+            socketExists: (session?.socketExists ?? false) && session?.routingTransportStopped != true,
             routeOK: routeOK,
             routeInterface: routeInterface,
             ipv6RouteExpected: ipv6Expected,
@@ -399,7 +427,7 @@ public actor HelperRuntime {
             rxBytes: session?.rxBytes ?? 0,
             txBytes: session?.txBytes ?? 0,
             latestHandshake: session?.latestHandshake ?? 0,
-            leakProtection: (session?.antiLeakArmed ?? false) || firewallController.antileakIsActive() ? "armed" : "off"
+            leakProtection: session?.routingTransportStopped == true && firewallController.antileakIsActive() ? "blocking" : ((session?.antiLeakArmed ?? false) || firewallController.antileakIsActive() ? "armed" : "off")
         )
     }
 

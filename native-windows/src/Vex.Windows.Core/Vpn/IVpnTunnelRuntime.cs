@@ -2,6 +2,8 @@ namespace Vex.Windows.Core.Vpn;
 
 public interface IVpnTunnelRuntime
 {
+    Task<VpnTunnelStatus> ConnectAuthorizedAsync(VpnAuthorizedProfile profile, bool antiLeakEnabled, CancellationToken cancellationToken) =>
+        ConnectAsync(profile.LocationId, profile.TunnelConfig, profile.ExpiresAt, antiLeakEnabled, cancellationToken);
     Task<VpnTunnelStatus> GetStatusAsync(CancellationToken cancellationToken);
 
     Task<VpnTunnelStatus> GetDiagnosticsAsync(
@@ -32,6 +34,7 @@ public interface IVpnTunnelRuntime
             cancellationToken);
 
     Task<VpnTunnelStatus> DisconnectAsync(CancellationToken cancellationToken);
+    Task<VpnTunnelStatus> SuspendAsync(CancellationToken cancellationToken) => throw new VpnTunnelException("routing_suspend_unsupported");
 }
 
 public sealed record VpnTunnelStatus

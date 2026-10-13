@@ -175,7 +175,7 @@ test('a superseded profile response cannot seed the global cache for a later log
 function vpnApi(operations) {
   return load('src/api/vpn.ts', {
     'react-native': { Platform: { OS: 'android' } }, '@/native/appInfo': { getOrCreateDeviceId: async () => 'installation-fixture' }, '@/native/deviceIdentity': {},
-    '@/native/vexVpn': operations.native, '@/vpn/nativeDeviceSelection': { nativeVpnDeviceForClient: devices => devices[0] },
+    '@/native/vexVpn': { supportsNativeRoutingPolicy: () => false, ...operations.native }, '@/vpn/nativeDeviceSelection': { nativeVpnDeviceForClient: devices => devices[0] },
     '@/vpn/keyEpochRecovery': { nextManagedKeyEpoch: (_, epoch) => (epoch ?? 0) + 1, isKeyEpochMismatchError: error => error.code === 'epoch_mismatch' },
     '@/vpn/routingPolicy': { defaultVpnRoutingMode: 'default', defaultVpnRoutingPolicyVersion: 'v1', resolvedVpnBypassRegion: () => '' },
     '@/notifications/pushRegistration': {}, './client': operations.client, './error': { ApiRequestError: class ApiRequestError extends Error {} },
@@ -189,6 +189,7 @@ function vpnApi(operations) {
     '../vpn/amneziaConfig': {}, '../vpn/profileCapabilities': { withManagedProfileAWGCapability: query => query },
     '../vpn/locationCatalog': {}, '../vpn/locationId': { requireVpnLocationId: value => value }, '../vpn/profileRevalidation': {},
     '../vpn/sessionOperation': sessionOperation,
+    '../vpn/nativeRoutingPolicy': {},
   });
 }
 

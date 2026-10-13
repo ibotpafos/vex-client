@@ -1,0 +1,206 @@
+--- a/tunnel/src/main/java/org/amnezia/awg/GoBackend.java
++++ b/tunnel/src/main/java/org/amnezia/awg/GoBackend.java
+@@ -14,5 +14,14 @@
+ 
+     public static native int awgTurnOn(String ifName, int tunFd, String settings);
+ 
++    public interface SocketProtector { boolean prepare(int fd, long generation, int purpose); }
++    public static native int awgTurnOnRouted(String name, int fd, String settings, String params, SocketProtector protector, long generation, boolean retainCapture);
++    public static native void awgRouterSetUnderlying(int handle, long generation);
++    public static native int awgRouterUpdatePolicy(int handle, String params);
++    public static native boolean awgRouterCaptureActive(int handle);
++    public static native boolean awgRouterPolicyActive(int handle);
++    public static native void awgRouterRelease(int handle);
++    public static native String awgRouterAuthorization(int handle);
++
+     public static native String awgVersion();
+ }
+--- a/tunnel/src/main/java/org/amnezia/awg/backend/GoBackend.java
++++ b/tunnel/src/main/java/org/amnezia/awg/backend/GoBackend.java
+@@ -56,6 +56,42 @@
+     @Nullable private Config currentConfig;
+     @Nullable private Tunnel currentTunnel;
+     private int currentTunnelHandle = -1;
++    @Nullable private String routingParameters;
++    @Nullable private org.amnezia.awg.GoBackend.SocketProtector routingProtector;
++    private volatile long routingGeneration;
++    private boolean retainRoutingCapture;
++    private int retainedRoutingHandle = -1;
++
++    public void setRoutingParameters(@Nullable String parameters, @Nullable org.amnezia.awg.GoBackend.SocketProtector protector, long generation, boolean retainCapture) {
++        routingParameters = parameters;
++        routingProtector = protector;
++        routingGeneration = generation;
++        retainRoutingCapture = retainCapture;
++        if (parameters != null && currentTunnelHandle >= 0) awgRouterUpdatePolicy(currentTunnelHandle, parameters);
++    }
++
++    public void setRoutingUnderlying(long generation) {
++        routingGeneration = generation;
++        if (currentTunnelHandle >= 0) awgRouterSetUnderlying(currentTunnelHandle, generation);
++        if (retainedRoutingHandle >= 0) awgRouterSetUnderlying(retainedRoutingHandle, generation);
++    }
++
++    public boolean isRoutingPolicyActive() { return currentTunnelHandle >= 0 && awgRouterPolicyActive(currentTunnelHandle); }
++
++    public String getRoutingAuthorization() {
++        final int handle = currentTunnelHandle >= 0 ? currentTunnelHandle : retainedRoutingHandle;
++        return handle >= 0 ? awgRouterAuthorization(handle) : null;
++    }
++
++    public boolean hasRoutingCapture() {
++        return (currentTunnelHandle >= 0 && awgRouterCaptureActive(currentTunnelHandle)) ||
++            (retainedRoutingHandle >= 0 && awgRouterCaptureActive(retainedRoutingHandle));
++    }
++
++    public void releaseRetainedRoutingCapture() {
++        if (retainedRoutingHandle >= 0) awgRouterRelease(retainedRoutingHandle);
++        retainedRoutingHandle = -1;
++    }
+     @Nullable private Thread statusThread;
+     @Nullable private StatusCallback statusCallback;
+ 
+@@ -421,25 +457,31 @@
+             for (final String dnsSearchDomain : config.getInterface().getDnsSearchDomains())
+                 builder.addSearchDomain(dnsSearchDomain);
+ 
+-            boolean sawDefaultRoute = false;
+-            for (final Peer peer : config.getPeers()) {
+-                for (final InetNetwork addr : peer.getAllowedIps()) {
+-                    if (addr.getMask() == 0)
+-                        sawDefaultRoute = true;
+-                    // VpnService.Builder rejects loopback route prefixes on Android.
+-                    // Loopback must remain local and must never enter a VPN tunnel.
+-                    if (addr.getAddress().isLoopbackAddress()) {
+-                        Log.w(TAG, "Skipping Android-rejected loopback VPN route " + addr);
+-                        continue;
++            if (routingParameters != null) {
++                builder.addRoute("0.0.0.0", 0);
++                builder.addRoute("::", 0);
++            } else {
++                boolean sawDefaultRoute = false;
++                for (final Peer peer : config.getPeers()) {
++                    for (final InetNetwork addr : peer.getAllowedIps()) {
++                        if (addr.getMask() == 0)
++                            sawDefaultRoute = true;
++                        // VpnService.Builder rejects loopback route prefixes on Android.
++                        // Loopback must remain local and must never enter a VPN tunnel.
++                        if (addr.getAddress().isLoopbackAddress()) {
++                            Log.w(TAG, "Skipping Android-rejected loopback VPN route " + addr);
++                            continue;
++                        }
++                        builder.addRoute(addr.getAddress(), addr.getMask());
+                     }
+-                    builder.addRoute(addr.getAddress(), addr.getMask());
+-                }
+-            }
+-
+-            // "Kill-switch" semantics
+-            if (!(sawDefaultRoute && config.getPeers().size() == 1)) {
+-                builder.allowFamily(OsConstants.AF_INET);
+-                builder.allowFamily(OsConstants.AF_INET6);
++                }
++
++                // "Kill-switch" semantics
++                if (!(sawDefaultRoute && config.getPeers().size() == 1)) {
++                    builder.allowFamily(OsConstants.AF_INET);
++                    builder.allowFamily(OsConstants.AF_INET6);
++                }
++
+             }
+ 
+             builder.setMtu(config.getInterface().getMtu().orElse(1280));
+@@ -451,10 +493,26 @@
+                 if (tun == null)
+                     throw new BackendException(Reason.TUN_CREATION_ERROR);
+                 Log.d(TAG, "Go backend " + awgVersion());
+-                currentTunnelHandle = awgTurnOn(tunnel.getName(), tun.detachFd(), goConfig);
+-            }
+-            if (currentTunnelHandle < 0)
+-                throw new BackendException(Reason.GO_ACTIVATION_ERROR_CODE, currentTunnelHandle);
++                if (routingParameters == null) {
++                    currentTunnelHandle = awgTurnOn(tunnel.getName(), tun.detachFd(), goConfig);
++                } else {
++                    org.amnezia.awg.GoBackend.SocketProtector qualified = (fd, generation, purpose) ->
++                        generation == routingGeneration && service.protect(fd) && routingProtector != null &&
++                        routingProtector.prepare(fd, generation, purpose);
++                    currentTunnelHandle = awgTurnOnRouted(tunnel.getName(), tun.detachFd(), goConfig,
++                        routingParameters, qualified, routingGeneration, retainRoutingCapture);
++                }
++            }
++            if (currentTunnelHandle < 0) {
++                int failure = currentTunnelHandle;
++                currentTunnelHandle = -1;
++                if (failure <= -2) {
++                    releaseRetainedRoutingCapture();
++                    retainedRoutingHandle = -failure - 2;
++                }
++                throw new BackendException(Reason.GO_ACTIVATION_ERROR_CODE, failure);
++            }
++            releaseRetainedRoutingCapture();
+ 
+             currentTunnel = tunnel;
+             currentConfig = config;
+@@ -474,6 +532,15 @@
+             currentTunnelHandle = -1;
+             currentConfig = null;
+             awgTurnOff(handleToClose);
++            if (routingParameters != null) {
++                releaseRetainedRoutingCapture();
++                retainedRoutingHandle = handleToClose;
++                if (retainRoutingCapture && hasRoutingCapture()) {
++                    tunnel.onStateChange(state);
++                    return;
++                }
++                releaseRetainedRoutingCapture();
++            }
+             try {
+                 vpnService.get(0, TimeUnit.NANOSECONDS).stopSelf();
+             } catch (final TimeoutException ignored) { }
+--- a/tunnel/tools/libwg-go/api-android.go
++++ b/tunnel/tools/libwg-go/api-android.go
+@@ -74,6 +74,8 @@
+ 
+ //export awgTurnOn
+ func awgTurnOn(interfaceName string, tunFd int32, settings string) int32 {
++	vexTunnelHandlesMu.Lock()
++	defer vexTunnelHandlesMu.Unlock()
+ 	tag := cstring("AmneziaWG/" + interfaceName)
+ 	logger := &device.Logger{
+ 		Verbosef: AndroidLogger{level: C.ANDROID_LOG_DEBUG, tag: tag}.Printf,
+@@ -148,6 +150,8 @@
+ 
+ //export awgTurnOff
+ func awgTurnOff(tunnelHandle int32) {
++	vexTunnelHandlesMu.Lock()
++	defer vexTunnelHandlesMu.Unlock()
+ 	handle, ok := tunnelHandles[tunnelHandle]
+ 	if !ok {
+ 		return
+@@ -161,6 +165,8 @@
+ 
+ //export awgGetSocketV4
+ func awgGetSocketV4(tunnelHandle int32) int32 {
++	vexTunnelHandlesMu.Lock()
++	defer vexTunnelHandlesMu.Unlock()
+ 	handle, ok := tunnelHandles[tunnelHandle]
+ 	if !ok {
+ 		return -1
+@@ -178,6 +184,8 @@
+ 
+ //export awgGetSocketV6
+ func awgGetSocketV6(tunnelHandle int32) int32 {
++	vexTunnelHandlesMu.Lock()
++	defer vexTunnelHandlesMu.Unlock()
+ 	handle, ok := tunnelHandles[tunnelHandle]
+ 	if !ok {
+ 		return -1
+@@ -195,6 +203,8 @@
+ 
+ //export awgGetConfig
+ func awgGetConfig(tunnelHandle int32) *C.char {
++	vexTunnelHandlesMu.Lock()
++	defer vexTunnelHandlesMu.Unlock()
+ 	handle, ok := tunnelHandles[tunnelHandle]
+ 	if !ok {
+ 		return nil

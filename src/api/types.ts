@@ -184,6 +184,7 @@ export type ClientConnectionTelemetryInput = Pick<ClientDiagnosticsReportInput,
   'connectionEvent' | 'connectDurationMs' | 'transportFrom' | 'transportTo' | 'sessionUptimeSeconds'>;
 
 export type PreparedTunnel = {
+  routingParameters?: string;
   resolutionTiming?: {
     startedAtMs: number;
     localPrepareMs: number;

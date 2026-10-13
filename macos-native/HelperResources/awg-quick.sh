@@ -120,6 +120,11 @@ get_real_interface() {
 }
 
 add_if() {
+	if [[ -f "$CONFIG_FILE.routing.json" ]]; then
+		export VEX_ROUTING_PARAMETERS="$CONFIG_FILE.routing.json"
+	else
+		unset VEX_ROUTING_PARAMETERS
+	fi
 	export WG_TUN_NAME_FILE="/var/run/amneziawg/$INTERFACE.name"
 	mkdir -p "/var/run/amneziawg/"
 	# Run the userspace daemon in foreground mode and background it, so it owns

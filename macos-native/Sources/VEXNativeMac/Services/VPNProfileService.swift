@@ -62,7 +62,7 @@ struct VPNProfileService {
                 requestedRoutingMode: routingMode
            ) {
             if writeHelperConfig {
-                try await writeSanitizedHelperConfig(cached.config, shouldPersist: shouldPersist)
+                try await self.writeHelperConfig(for: cached.tunnel, shouldWrite: shouldPersist)
             }
             try ensureProfileRequestCurrent(shouldPersist)
             return cached.tunnel
@@ -166,7 +166,7 @@ struct VPNProfileService {
                     allowStale: true
                ) {
                 if writeHelperConfig {
-                    try await writeSanitizedHelperConfig(cached.config, shouldPersist: shouldPersist)
+                    try await self.writeHelperConfig(for: cached.tunnel, shouldWrite: shouldPersist)
                 }
                 try ensureProfileRequestCurrent(shouldPersist)
                 return cached.tunnel
@@ -186,11 +186,12 @@ struct VPNProfileService {
                     managedProfile,
                     cached: cached,
                     accountUserId: accountUserId,
+                    accessToken: accessToken,
                     device: device,
                     keyPair: keyPair,
                     locationId: normalizedLocationId,
-                    routingMode: effectiveRoutingMode,
-                    bypassRegion: effectiveBypassRegion,
+                    routingMode: routingMode,
+                    bypassRegion: bypassRegion,
                     writeHelperConfig: writeHelperConfig,
                     shouldPersist: shouldPersist
                 )
@@ -209,11 +210,18 @@ struct VPNProfileService {
                     requestedLocationId: normalizedLocationId,
                     requestedRoutingMode: .fullTunnel
                ) {
+                var fallbackTunnel = fallbackCached.tunnel
+                // Compact transport is reusable across modes. API recovery
+                // must not change the user's requested destination policy.
+                fallbackTunnel.routingMode = routingMode
+                fallbackTunnel.bypassRegion = bypassRegion
+                fallbackTunnel.routingParameters = try Self.routingParameters(config: fallbackTunnel.config,
+                    mode: routingMode, authorization: cache.cachedRoutingAuthorization())
                 if writeHelperConfig {
-                    try await writeSanitizedHelperConfig(fallbackCached.config, shouldPersist: shouldPersist)
+                    try await self.writeHelperConfig(for: fallbackTunnel, shouldWrite: shouldPersist)
                 }
                 try ensureProfileRequestCurrent(shouldPersist)
-                return fallbackCached.tunnel
+                return fallbackTunnel
             }
             managedProfile = try await api.managedVpnProfile(
                 accessToken: accessToken,
@@ -248,11 +256,12 @@ struct VPNProfileService {
             managedProfile,
             cached: cached,
             accountUserId: accountUserId,
+            accessToken: accessToken,
             device: device,
             keyPair: keyPair,
             locationId: normalizedLocationId,
-            routingMode: effectiveRoutingMode,
-            bypassRegion: effectiveBypassRegion,
+            routingMode: routingMode,
+            bypassRegion: bypassRegion,
             writeHelperConfig: writeHelperConfig,
             shouldPersist: shouldPersist
         )
@@ -262,6 +271,7 @@ struct VPNProfileService {
         _ managedProfile: ManagedVpnProfile,
         cached: PreparedTunnelCacheRecord?,
         accountUserId: String,
+        accessToken: String,
         device: VpnDevice,
         keyPair: WireGuardKeyPair,
         locationId normalizedLocationId: String,
@@ -307,7 +317,7 @@ struct VPNProfileService {
         guard VPNProfileCacheIdentity.configMatches(config, keyPair: keyPair, device: nextDevice) else {
             throw VPNProfileError.profileIdentityMismatch
         }
-        let tunnel = PreparedTunnel(
+        var tunnel = PreparedTunnel(
             device: nextDevice,
             config: config,
             locationId: normalizedLocationId,
@@ -320,11 +330,17 @@ struct VPNProfileService {
             rotationRequired: managedProfile.rotationRequired == true,
             awgVersion: Self.awgVersion
         )
+        var authorization = cache.cachedRoutingAuthorization()
+        if effectiveRoutingMode == .allExceptRu, let envelope = try? await api.nativeRoutingPolicy(accessToken: accessToken), let received = envelope.authorization {
+            authorization = received
+            try? cache.cacheRoutingAuthorization(received)
+        }
+        tunnel.routingParameters = try Self.routingParameters(config: config, mode: effectiveRoutingMode, authorization: authorization)
         try ensureProfileRequestCurrent(shouldPersist)
         guard try keyStore.existing(accountUserId: accountUserId) == keyPair else { throw VPNProfileError.profileIdentityMismatch }
         try cache.save(PreparedTunnelCacheRecord(tunnel: tunnel, accountUserId: accountUserId, localKeyEpoch: keyPair.keyEpoch), locationId: normalizedLocationId, routingMode: effectiveRoutingMode)
         if writeHelperConfig {
-            try await writeSanitizedHelperConfig(config, shouldPersist: shouldPersist)
+            try await self.writeHelperConfig(for: tunnel, shouldWrite: shouldPersist)
         }
         try ensureProfileRequestCurrent(shouldPersist)
         return tunnel
@@ -374,6 +390,22 @@ struct VPNProfileService {
         try Task.checkCancellation()
         guard shouldWrite() else { throw CancellationError() }
         try cache.writeHelperConfig(sanitized)
+        let parameters = try Self.routingParameters(config: sanitized, mode: tunnel.routingMode,
+            authorization: cache.cachedRoutingAuthorization())
+        try cache.writeRoutingParameters(parameters)
+    }
+
+    nonisolated static func routingParameters(config: String, mode: VpnRoutingMode, authorization: NativeRoutingAuthorization?) throws -> String {
+        func values(_ key: String) -> [String] {
+            let value = config.split(whereSeparator: \.isNewline).first { $0.split(separator: "=", maxSplits: 1).first?.trimmingCharacters(in: .whitespaces).lowercased() == key.lowercased() }?
+                .split(separator: "=", maxSplits: 1).dropFirst().first
+            return value?.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) } ?? []
+        }
+        var payload: [String: Any] = ["addresses": values("Address"), "dns": values("DNS"), "mode": mode.rawValue]
+        if let authorization, mode == .allExceptRu {
+            payload["authorization"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(authorization))
+        }
+        return String(decoding: try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]), as: UTF8.self)
     }
 
     private func writeSanitizedHelperConfig(_ config: String, shouldPersist: () -> Bool) async throws {

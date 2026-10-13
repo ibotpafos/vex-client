@@ -9,6 +9,7 @@ import type { PreparedTunnel, PreparedTunnelOptions } from '../api/types';
 import { SessionOperationSupersededError } from './sessionOperation';
 
 export type VpnProfile = {
+  routingParameters?: string;
   resolutionTiming?: PreparedTunnel['resolutionTiming'];
   connectPreparationTiming?: {
     startedAtMs: number;
@@ -133,6 +134,7 @@ async function refreshVpnProfile(
   const profile: VpnProfile = {
     resolutionTiming: tunnel.resolutionTiming ? { ...tunnel.resolutionTiming, queueWaitMs } : undefined,
     config: tunnel.config,
+    routingParameters: tunnel.routingParameters,
     device: tunnel.device,
     entitlement: currentEntitlement,
     locationId: selectedLocationId,

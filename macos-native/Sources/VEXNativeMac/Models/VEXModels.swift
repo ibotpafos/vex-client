@@ -555,6 +555,18 @@ struct PreparedTunnel: Equatable {
     var routingPolicyVersion: String
     var rotationRequired: Bool
     var awgVersion: Int = 3
+    var routingParameters: String? = nil
+}
+
+struct NativeRoutingAuthorization: Codable, Equatable {
+    var key_id: String
+    var algorithm: String
+    var payload_base64: String
+    var signature_base64: String
+}
+
+struct NativeRoutingPolicyEnvelope: Decodable {
+    var authorization: NativeRoutingAuthorization?
 }
 
 struct ManagedVpnProfile: Codable, Equatable {

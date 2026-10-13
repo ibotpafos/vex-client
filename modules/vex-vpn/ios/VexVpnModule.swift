@@ -27,8 +27,13 @@ public class VexVpnModule: Module {
       return await self.tunnelStore.currentStatus()
     }
 
-    AsyncFunction("disconnect") { (_: Bool?) async throws -> [String: Any] in
-      try await self.tunnelStore.disconnect()
+    AsyncFunction("connectWithRoutingPolicy") { (config: String, antiLeak: Bool, parameters: String, _: [String], _: Bool) async throws -> [String: Any] in
+      try await self.tunnelStore.connect(config: config, routingParameters: parameters, antiLeak: antiLeak)
+      return await self.tunnelStore.currentStatus()
+    }
+
+    AsyncFunction("disconnect") { (releaseAntiLeak: Bool?) async throws -> [String: Any] in
+      try await self.tunnelStore.disconnect(releaseAntiLeak: releaseAntiLeak != false)
       return await self.tunnelStore.currentStatus()
     }
 
@@ -228,6 +233,8 @@ private final class IosTunnelStore {
       loadOrCreate: { try await Self.loadOrCreateManager() },
       loadExisting: { try await Self.loadExistingManager() },
       configure: { manager, config in
+        let request = IosRoutingConnectRequest.decode(config)
+        let config = request?.config ?? config
         let tunnelProtocol = NETunnelProviderProtocol()
         tunnelProtocol.providerBundleIdentifier = Self.providerBundleIdentifier
         tunnelProtocol.serverAddress = Self.serverAddress(from: config)
@@ -236,6 +243,15 @@ private final class IosTunnelStore {
           "wgQuickConfig": config,
           "createdAt": ISO8601DateFormatter().string(from: Date())
         ]
+        if let request {
+          tunnelProtocol.providerConfiguration?["RoutingParameters"] = request.routingParameters
+          tunnelProtocol.providerConfiguration?["RoutingActivationID"] = UUID().uuidString
+          tunnelProtocol.providerConfiguration?["AntiLeak"] = request.antiLeak
+          tunnelProtocol.includeAllNetworks = request.antiLeak
+          tunnelProtocol.enforceRoutes = !request.antiLeak
+          manager.onDemandRules = request.antiLeak ? [NEOnDemandRuleConnect()] : []
+          manager.isOnDemandEnabled = request.antiLeak
+        }
         manager.localizedDescription = Self.tunnelDescription
         manager.protocolConfiguration = tunnelProtocol
         manager.isEnabled = true
@@ -259,6 +275,16 @@ private final class IosTunnelStore {
           let status = manager.connection.status
           return status == .invalid || status == .disconnected
         }
+      },
+      prepareExplicitDisconnect: { manager in
+        manager.isOnDemandEnabled = false
+        manager.onDemandRules = []
+        try await Self.save(manager)
+      },
+      suspendTransport: { manager in
+        guard let session = manager.connection as? NETunnelProviderSession else { throw IosRoutingRequestError() }
+        let response = await IosTunnelStatusRequest.read(timeout: 6) { reply in try session.sendProviderMessage(Data([1]), responseHandler: reply) }
+        guard response == Data([1]) else { throw IosRoutingRequestError() }
       }
     ))
   }
@@ -267,18 +293,28 @@ private final class IosTunnelStore {
     try await transition.connect(config: config)
   }
 
-  func disconnect() async throws {
-    try await transition.disconnect()
+  func connect(config: String, routingParameters: String, antiLeak: Bool) async throws {
+    guard routingParameters.utf8.count <= 2 * 1024 * 1024 else { throw IosRoutingRequestError() }
+    let request = IosRoutingConnectRequest(config: config, routingParameters: routingParameters, antiLeak: antiLeak)
+    let payload = try JSONEncoder().encode(request)
+    try await transition.connect(config: String(decoding: payload, as: UTF8.self))
+  }
+
+  func disconnect(releaseAntiLeak: Bool = true) async throws {
+    if releaseAntiLeak { try await transition.disconnect() }
+    else { try await transition.suspend() }
   }
 
   func currentStatus() async -> [String: Any] {
     let status = await transition.currentStatus(using: IosTunnelStatusOperations(
       readState: { manager in
         let state = manager.connection.status
+        let captured = state == .connected || state == .reasserting
         return IosTunnelStatusSnapshot(
           state: Self.stateName(state),
           nativeState: state.rawValue,
-          connectedAt: manager.connection.connectedDate
+          connectedAt: manager.connection.connectedDate,
+          leakProtection: captured && ((manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?["AntiLeak"] as? Bool) == true ? "armed" : "off"
         )
       },
       requestRuntime: { manager, reply in

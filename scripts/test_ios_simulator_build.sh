@@ -174,7 +174,7 @@ pods = Xcodeproj::Project.open(File.join(fixture, 'ios/Pods/Pods.xcodeproj'))
 pod = pods.targets.find { |target| target.name == 'VexVpn' }
 abort('Missing real VexVpn pod target') unless pod
 source_paths = pod.source_build_phase.files_references.map { |file| File.realpath(file.real_path) }
-%w[VexVpnModule.swift IosTunnelTransition.swift].each do |name|
+%w[VexVpnModule.swift IosTunnelTransition.swift IosRoutingConnectRequest.swift].each do |name|
   relative = File.join('modules/vex-vpn/ios', name)
   path = File.realpath(File.join(fixture, relative))
   abort("Missing live #{name} source") unless source_paths.include?(path)
@@ -209,7 +209,7 @@ done
 trace = File.read(ARGV.fetch(0))
 abort('Missing actual source compilation of ExpoModulesCore') unless trace.lines.any? { |line| line.include?('SwiftCompile') && line.include?("in target 'ExpoModulesCore' from project 'Pods'") }
 puts 'Verified full-app SDK source compilation: ExpoModulesCore.'
-%w[VexVpnModule.swift IosTunnelTransition.swift AppDelegate.swift PacketTunnelProvider.swift VexLiveActivityWidget.swift].each do |name|
+%w[VexVpnModule.swift IosTunnelTransition.swift IosRoutingConnectRequest.swift AppDelegate.swift PacketTunnelProvider.swift VexLiveActivityWidget.swift].each do |name|
   abort("Missing actual SwiftCompile trace for #{name}") unless trace.lines.any? { |line| line.include?('SwiftCompile') && line.include?(name) }
   puts "Verified full-app SDK compilation trace: #{name}"
 end

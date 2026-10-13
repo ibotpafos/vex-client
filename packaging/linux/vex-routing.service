@@ -1,0 +1,17 @@
+[Unit]
+Description=VEX protected Russian routing engine
+After=network-online.target systemd-resolved.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/vex/vex-awg -f --parameters /etc/vex-routing/parameters.json vex
+ExecStartPost=/usr/libexec/vex/vex-routing-activate
+Restart=on-failure
+RestartSec=2
+KillMode=control-group
+TimeoutStopSec=10
+# The engine opens TUN/UAPI, then drops to its dedicated non-login socket UID.
+
+[Install]
+WantedBy=multi-user.target

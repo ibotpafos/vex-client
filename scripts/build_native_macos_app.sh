@@ -90,6 +90,7 @@ fi
 
 cd "${PACKAGE_DIR}"
 export VEX_CODESIGN_IDENTITY="${CODESIGN_IDENTITY}"
+"${ROOT_DIR}/scripts/build_amneziawg_macos_binaries.sh"
 "${ROOT_DIR}/scripts/build_swift_macos_helper.sh"
 
 APP_SCRATCH_ROOT="${PACKAGE_DIR}/.build-app"

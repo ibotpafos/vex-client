@@ -202,24 +202,26 @@ public final class SystemPFFirewallController: PFFirewallControlling, @unchecked
     }
 
     public func enable(endpoint: String, interfaceName: String) throws {
-        try fileSystem.writeTextAtomically("", to: paths.antileakAnchorPath, mode: 0o644)
+        let routed = fileSystem.fileExists(at: paths.routingParametersPath)
+        let rules = buildRules(endpoint: endpoint, interfaceName: interfaceName)
+        try fileSystem.writeTextAtomically(routed ? rules : "", to: paths.antileakAnchorPath, mode: 0o644)
         try ensureAnchorRegistered()
         try fileSystem.writeTextAtomically(
             "status=pending\nendpoint=\(endpoint)\niface=\(interfaceName)\n",
             to: paths.antileakStatePath,
             mode: 0o600
         )
-        try fileSystem.writeTextAtomically(buildRules(endpoint: endpoint, interfaceName: interfaceName), to: paths.antileakAnchorPath, mode: 0o644)
+        try fileSystem.writeTextAtomically(rules, to: paths.antileakAnchorPath, mode: 0o644)
 
         let load = try runner.run(CommandSpec(program: "/sbin/pfctl", arguments: ["-a", "com.vexguard.antileak", "-f", paths.antileakAnchorPath]))
         guard load.succeeded else {
-            _ = try? disable()
+            if !routed { _ = try? disable() }
             throw HelperError.commandFailed("pfctl -a com.vexguard.antileak -f failed with status \(load.status)")
         }
 
         let enable = try runner.run(CommandSpec(program: "/sbin/pfctl", arguments: ["-E"]))
         guard enable.succeeded else {
-            _ = try? disable()
+            if !routed { _ = try? disable() }
             throw HelperError.commandFailed("pfctl -E failed with status \(enable.status)")
         }
 
@@ -230,7 +232,7 @@ public final class SystemPFFirewallController: PFFirewallControlling, @unchecked
                 mode: 0o600
             )
         } catch {
-            _ = try? disable()
+            if !routed { _ = try? disable() }
             throw error
         }
     }
@@ -308,8 +310,17 @@ public final class SystemPFFirewallController: PFFirewallControlling, @unchecked
     }
 
     private func buildRules(endpoint: String, interfaceName: String) -> String {
-        var rules = "set block-policy drop\npass quick on lo0 all\npass out quick on \(interfaceName) all\n"
-        if let endpoint = pfEndpoint(from: endpoint) {
+        var rules = "set block-policy drop\npass quick on lo0 all\n"
+        if !interfaceName.isEmpty { rules += "pass out quick on \(interfaceName) all\n" }
+        if fileSystem.fileExists(at: paths.routingParametersPath) {
+            // Only the attested router UID can create physical DIRECT sockets.
+            // Applications retain full capture, including shared CDN addresses.
+            rules += "pass out quick proto { tcp udp } user _vexvpn keep state\n"
+            rules += "pass out quick inet proto udp from any port = 68 to any port = 67\n"
+            rules += "pass out quick inet6 proto udp from any port = 546 to any port = 547\n"
+            rules += "pass out quick inet6 proto ipv6-icmp from any to { fe80::/10 ff02::/16 } icmp6-type { routersol neighbrsol neighbradv }\n"
+        }
+        if !fileSystem.fileExists(at: paths.routingParametersPath), let endpoint = pfEndpoint(from: endpoint) {
             if let port = endpoint.port {
                 rules += "pass out quick \(endpoint.addressFamily) proto udp from any to \(endpoint.host) port = \(port) keep state\n"
             }
@@ -396,6 +407,8 @@ public final class SystemTunnelController: TunnelControlling, @unchecked Sendabl
     private let paths: HelperPathsLayout
     private let runner: CommandRunning
     private let firewall: PFFirewallControlling
+    private var nextRoutingCacheCheck = Date.distantPast
+    private var routingCachePath: String { paths.helperDirectory + "/routing-policy.json" }
 
     public init(
         fileSystem: HelperFileSystem,
@@ -412,20 +425,43 @@ public final class SystemTunnelController: TunnelControlling, @unchecked Sendabl
     public func bringUp(currentSession: HelperSession?, armAntiLeak: Bool, ownerPID: Int32?) throws -> HelperSession {
         // Admission is read-only and precedes even prior-session cleanup.
         let sanitized: String
+        var preparedRouting: String?
+        let pendingRouting = paths.routingParametersPath + ".pending"
+        var wrotePendingRouting = false
+        defer { if wrotePendingRouting { try? fileSystem.removeItem(at: pendingRouting) } }
         do {
             let sourceConfigPath = try resolvedConfigPath()
             sanitized = try sanitizedConfig(from: fileSystem.readText(at: sourceConfigPath))
             try AwgConfigAdmission.validate(sanitized)
+            let routingInput = sourceConfigPath + ".routing.json"
+            if fileSystem.fileExists(at: routingInput) {
+                guard let size = fileSystem.fileSize(at: routingInput), size <= 2 * 1024 * 1024,
+                      let physicalInterface = routeInterface(for: "default") else {
+                    throw HelperError.protocolViolation("VPN_CONFIG_INVALID: routing input unavailable")
+                }
+                let parameters = try NativeRoutingMetadata.prepare(raw: fileSystem.readText(at: routingInput), interfaceName: physicalInterface, config: sanitized,
+                    previousAuthorization: try? fileSystem.readText(at: routingCachePath))
+                preparedRouting = parameters
+                try fileSystem.writeTextAtomically(parameters, to: pendingRouting, mode: 0o600)
+                wrotePendingRouting = true
+                let admitted = try runner.run(CommandSpec(program: paths.helperDirectory + "/amneziawg-go",
+                    arguments: ["--check-routing-parameters", "--parameters", pendingRouting, "utun"]))
+                guard admitted.succeeded else { throw HelperError.protocolViolation("VPN_CONFIG_INVALID: routing admission failed") }
+            }
         } catch {
             throw HelperError.protocolViolation("VPN_CONFIG_INVALID: next profile admission failed")
         }
         if currentSession != nil || hasManagedState() || firewall.antileakIsActive() {
-            try bringDown(currentSession: currentSession)
+            try bringDown(currentSession: currentSession, preservingProtection: armAntiLeak)
         }
+
+        if let preparedRouting { try fileSystem.writeTextAtomically(preparedRouting, to: paths.routingParametersPath, mode: 0o600) }
+        else { try? fileSystem.removeItem(at: paths.routingParametersPath) }
 
         try captureDNSBaseline()
         do {
-            try fileSystem.writeTextAtomically(sanitized, to: paths.activeConfigPath, mode: 0o600)
+            let captureConfig = preparedRouting == nil ? sanitized : fullCaptureConfig(sanitized)
+            try fileSystem.writeTextAtomically(captureConfig, to: paths.activeConfigPath, mode: 0o600)
         } catch {
             try? fileSystem.removeItem(at: paths.dnsStatePath)
             throw error
@@ -434,6 +470,10 @@ public final class SystemTunnelController: TunnelControlling, @unchecked Sendabl
         let logicalInterface = URL(fileURLWithPath: configPath).deletingPathExtension().lastPathComponent
         guard !logicalInterface.isEmpty else {
             throw HelperError.missingTunnelMetadata("could not derive tunnel name from config path")
+        }
+
+        if armAntiLeak {
+            try firewall.enable(endpoint: try endpoint(fromConfigAt: configPath), interfaceName: "")
         }
 
         let up = try runQuick("up", configPath: configPath)
@@ -482,13 +522,28 @@ public final class SystemTunnelController: TunnelControlling, @unchecked Sendabl
     }
 
     public func bringDown(currentSession: HelperSession?) throws {
+        try bringDown(currentSession: currentSession, preservingProtection: false)
+    }
+
+    public func bringDownPreservingProtection(currentSession: HelperSession?) throws {
+        if let session = currentSession, fileSystem.fileExists(at: paths.routingParametersPath) {
+            let result = try runner.run(CommandSpec(program: paths.helperDirectory + "/amneziawg-go", arguments: ["--stop-transport", session.interfaceName]))
+            guard result.succeeded else { throw HelperError.commandFailed("protected AWG stop failed") }
+            return
+        }
+        try bringDown(currentSession: currentSession, preservingProtection: true)
+    }
+
+    private func bringDown(currentSession: HelperSession?, preservingProtection: Bool) throws {
         var persistenceError: Error?
-        if currentSession?.antiLeakArmed == true || firewall.antileakIsActive() {
-            do {
-                try firewall.disable()
-            } catch let error as HelperError {
-                guard case .pfPersistenceAfterRuntimeClear = error else { throw error }
-                persistenceError = error
+        func releaseProtection() throws {
+            if !preservingProtection && (currentSession?.antiLeakArmed == true || firewall.antileakIsActive()) {
+                do {
+                    try firewall.disable()
+                } catch let error as HelperError {
+                    guard case .pfPersistenceAfterRuntimeClear = error else { throw error }
+                    persistenceError = error
+                }
             }
         }
 
@@ -497,6 +552,7 @@ public final class SystemTunnelController: TunnelControlling, @unchecked Sendabl
         let activeConfigExists = fileSystem.fileExists(at: paths.activeConfigPath)
         let runtimeNameExists = fileSystem.fileExists(at: namePath)
         if currentSession == nil, !activeConfigExists, !runtimeNameExists {
+            try releaseProtection()
             if let persistenceError { throw persistenceError }
             return
         }
@@ -507,6 +563,7 @@ public final class SystemTunnelController: TunnelControlling, @unchecked Sendabl
             try restoreDNSBaseline()
             try? fileSystem.removeItem(at: namePath)
             try? fileSystem.removeItem(at: paths.dnsStatePath)
+            try releaseProtection()
             if let persistenceError { throw persistenceError }
             return
         }
@@ -535,6 +592,7 @@ public final class SystemTunnelController: TunnelControlling, @unchecked Sendabl
         try restoreDNSBaseline()
         clearRecoveryArtifacts()
         try? fileSystem.removeItem(at: namePath)
+        try releaseProtection()
         if let persistenceError { throw persistenceError }
     }
 
@@ -560,6 +618,14 @@ public final class SystemTunnelController: TunnelControlling, @unchecked Sendabl
             session.dnsHealthy = false
             session.antiLeakArmed = firewall.antileakIsActive()
             return session
+        }
+        try? refreshRoutingUnderlay(interfaceName: session.interfaceName)
+        if fileSystem.fileExists(at: paths.routingParametersPath), Date() >= nextRoutingCacheCheck {
+            nextRoutingCacheCheck = Date().addingTimeInterval(300)
+            if let result = try? runner.run(CommandSpec(program: paths.helperDirectory + "/amneziawg-go", arguments: ["--get-routing-authorization", session.interfaceName], timeout: 3)),
+               result.succeeded, !result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, result.stdout.utf8.count <= 2 * 1024 * 1024 {
+                try? fileSystem.writeTextAtomically(result.stdout, to: routingCachePath, mode: 0o600)
+            }
         }
         let dump = try runner.run(CommandSpec(program: paths.awgPath, arguments: ["show", session.interfaceName, "dump"], timeout: 3))
         session.socketExists = dump.succeeded
@@ -818,6 +884,19 @@ public final class SystemTunnelController: TunnelControlling, @unchecked Sendabl
         try? fileSystem.removeItem(at: paths.dnsStatePath)
     }
 
+    private func refreshRoutingUnderlay(interfaceName: String) throws {
+        guard fileSystem.fileExists(at: paths.routingParametersPath), let physical = routeInterface(for: "default"),
+              !physical.hasPrefix("utun"), if_nametoindex(physical) > 0,
+              var value = try JSONSerialization.jsonObject(with: Data(fileSystem.readText(at: paths.routingParametersPath).utf8)) as? [String: Any] else { return }
+        let index = Int(if_nametoindex(physical))
+        guard (value["physical_interface_index"] as? NSNumber)?.intValue != index else { return }
+        let result = try runner.run(CommandSpec(program: paths.helperDirectory + "/amneziawg-go",
+            arguments: ["--update-underlay", "--physical-interface-index", String(index), interfaceName]))
+        guard result.succeeded else { throw HelperError.commandFailed("routing underlay update failed") }
+        value["physical_interface_index"] = index
+        try fileSystem.writeTextAtomically(String(decoding: JSONSerialization.data(withJSONObject: value), as: UTF8.self), to: paths.routingParametersPath, mode: 0o600)
+    }
+
     private func configHasIPv6DefaultRoute(_ path: String) -> Bool {
         guard let config = try? fileSystem.readText(at: path) else { return false }
         return config
@@ -826,6 +905,19 @@ public final class SystemTunnelController: TunnelControlling, @unchecked Sendabl
                 let compact = line.replacingOccurrences(of: " ", with: "")
                 return compact.lowercased().hasPrefix("allowedips=") && compact.contains("::/0")
             }
+    }
+
+    private func fullCaptureConfig(_ config: String) -> String {
+        config.split(separator: "\n", omittingEmptySubsequences: false).map { line -> String in
+            let parts = line.split(separator: "=", maxSplits: 1)
+            guard parts.count == 2 else { return String(line) }
+            switch parts[0].trimmingCharacters(in: .whitespaces).lowercased() {
+            case "address":
+                return parts[1].contains(":") ? String(line) : String(line) + ", fd7a:115c:a1e0:ffff::1/120"
+            case "allowedips": return "AllowedIPs = 0.0.0.0/0, ::/0"
+            default: return String(line)
+            }
+        }.joined(separator: "\n")
     }
 
     private func runQuick(_ action: String, configPath: String) throws -> CommandResult {

@@ -122,6 +122,7 @@ public sealed class NamedPipeVpnServer
             return;
         }
 
+        VpnAuthorizedProfile? authorizedProfile = null;
         if (request.Operation == VpnServiceOperation.Connect)
         {
             try
@@ -129,6 +130,7 @@ public sealed class NamedPipeVpnServer
                 var profile = _profileVerifier.Authorize(
                     request.ProfileAuthorization!,
                     request.LocalPrivateKey!);
+                authorizedProfile = profile;
                 request = VpnServiceRequest.Connect(
                     request.RequestId,
                     profile.LocationId,
@@ -153,7 +155,7 @@ public sealed class NamedPipeVpnServer
 
         var response = await _handler.HandleAsync(
             request,
-            timeout.Token).ConfigureAwait(false);
+            timeout.Token, authorizedProfile).ConfigureAwait(false);
         await VpnIpcFrameCodec.WriteResponseAsync(
             pipe,
             response,

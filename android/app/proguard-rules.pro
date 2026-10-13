@@ -16,3 +16,12 @@
 # Preserve source/line metadata so the separately retained, hash-bound R8
 # mapping can symbolize a signed release without retaining raw diagnostics.
 -keepattributes SourceFile,LineNumberTable
+
+# C calls this upcall by GetMethodID("prepare", "(IJI)Z"). R8 cannot see it.
+# https://developer.android.com/topic/performance/app-optimization/keep-rule-examples
+-keep,includedescriptorclasses interface org.amnezia.awg.GoBackend$SocketProtector {
+    public boolean prepare(int, long, int);
+}
+-keepclassmembers,includedescriptorclasses class * implements org.amnezia.awg.GoBackend$SocketProtector {
+    public boolean prepare(int, long, int);
+}

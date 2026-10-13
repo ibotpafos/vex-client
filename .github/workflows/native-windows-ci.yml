@@ -396,6 +396,13 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: "1.25.14"
+          cache: false
+      - name: Build routing runtime from reviewed release source
+        shell: pwsh
+        run: ./native-windows/scripts/build-routing-runtime.ps1 -DestinationRoot (Join-Path $env:RUNNER_TEMP 'vex-native-routing')
       - name: Verify release inputs and stage architecture-specific runtimes
         shell: pwsh
         env:

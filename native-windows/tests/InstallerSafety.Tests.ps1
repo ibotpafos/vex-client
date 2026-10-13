@@ -190,12 +190,32 @@ try {
     $script:ClientCertificateSha256 = $metadata.client_certificate_sha256; $script:AppExecutableSha256 = $metadata.app_executable_sha256
     $script:ServiceExecutableSha256 = $metadata.service_executable_sha256; $script:AmneziaExecutableSha256 = $metadata.amneziawg_sha256
     $script:WintunSha256 = $metadata.wintun_sha256; $script:ProfileSigningKeyringSha256 = $metadata.profile_signing_keyring_sha256
+    $script:RouterExecutableSha256 = ''
     & $tail
     Assert ($script:mutationOrder[0] -eq 'stop' -and $script:mutationOrder[1] -eq 'authorization' -and $script:mutationOrder[-1] -eq 'start') 'Live authorization changed before stopping the controller'
     $script:mutationOrder = @()
     function Stop-ServiceBeforeProvisioning { throw 'Mock stop failure' }
     Assert-Rejected { & $tail } 'Provisioning must fail when the old controller cannot stop'
     Assert ($script:mutationOrder.Count -eq 0) 'Failed stop changed authorization or restarted service'
+
+    # A legacy rollback may not tear down an active routed capture. Exercise
+    # the production tail over a private lease without touching SCM/network.
+    $leaseDirectory = Join-Path $script:dataDirectory 'Private'
+    $null = New-Item -ItemType Directory -Path $leaseDirectory -Force
+    $leasePath = Join-Path $leaseDirectory 'routed-lease.json'
+    [IO.File]::WriteAllText($leasePath, '{}')
+    function Stop-ServiceBeforeProvisioning { $script:mutationOrder += 'stop' }
+    Assert-Rejected { & $tail } 'Legacy rollback accepted an active routed capture'
+    Assert ($script:mutationOrder.Count -eq 0) 'Rejected legacy rollback changed live authorization'
+    Remove-Item -LiteralPath $leasePath
+    $script:RouterExecutableSha256 = '9' * 64
+    & $tail
+    $capability = [IO.File]::ReadAllText((Join-Path $script:dataDirectory 'routing-capability.json')) | ConvertFrom-Json
+    Assert ($capability.Schema -ceq 'vex.native-routing.v2' -and $capability.RouterSha256 -ceq $script:RouterExecutableSha256 -and
+        $capability.ServiceSha256 -ceq $script:ServiceExecutableSha256.ToUpperInvariant()) 'Routed install failed to pin the actual service/router pair'
+    $script:RouterExecutableSha256 = ''
+    & $tail
+    Assert (-not (Test-Path -LiteralPath (Join-Path $script:dataDirectory 'routing-capability.json'))) 'Idle legacy rollback retained a stale routed capability'
 
     Import-ProductionFunctions 'uninstall-vpn-service.ps1'
     $script:serviceProbes = 0; $script:disposed = 0

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# TODO(ru-direct release): archive/sign and record physical routing/leak checks
+# for the new candidate; this CLT-only host has no iOS SDK or Apple identity.
+# Owner performs iOS device acceptance; see docs/verification/native-russian-direct-device-acceptance.md.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

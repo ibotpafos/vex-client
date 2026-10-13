@@ -17,8 +17,28 @@ final class IosTunnelRuntimeStatusTests: XCTestCase {
     XCTAssertEqual(status.rxBytes, 128)
     XCTAssertEqual(status.txBytes, 64)
     XCTAssertEqual(status.latestHandshakeEpochMillis, 1_700_000_000_500)
-    XCTAssertEqual(Set(status.toDictionary().keys), ["state", "nativeState", "rxBytes", "txBytes", "verified", "latestHandshakeEpochMillis"])
+    XCTAssertEqual(Set(status.toDictionary().keys), ["state", "nativeState", "rxBytes", "txBytes", "verified", "latestHandshakeEpochMillis", "leakProtection"])
+    XCTAssertEqual(status.toDictionary()["leakProtection"] as? String, "off")
     XCTAssertFalse(String(describing: status.toDictionary()).contains("do-not-export"))
+  }
+
+  func testStoppedTransportCannotExposeOldHandshakeAsConnected() async {
+    for (protection, expected) in [("armed", "blocking"), ("off", "off")] {
+      let system = StatusSystem()
+      system.leakProtection = protection
+      system.immediateReply = Data(("vex_transport_stopped=true\n" + String(decoding: healthy, as: UTF8.self)).utf8)
+      let transition = IosTunnelTransition(operations: system.operations)
+      let status = await transition.currentStatus(using: system.statusOperations)
+      XCTAssertEqual(status.state, "disconnected")
+      XCTAssertEqual(status.nativeState, 3)
+      XCTAssertEqual(status.leakProtection, expected)
+      XCTAssertFalse(status.verified)
+      XCTAssertNil(status.latestHandshakeEpochMillis)
+      XCTAssertEqual(status.rxBytes, 0)
+      XCTAssertEqual(status.txBytes, 0)
+      XCTAssertNil(status.toDictionary()["verified"])
+      XCTAssertFalse(String(describing: status.toDictionary()).contains("do-not-export"))
+    }
   }
 
   func testConcurrentPollsShareOnePreferencesAndProviderRequest() async throws {
@@ -218,6 +238,7 @@ private final class StatusSystem: @unchecked Sendable {
   private var loads = 0
   private var replies: [(Data?) -> Void] = []
   var failLoad = false
+  var leakProtection = "off"
   var immediateReply: Data?
 
   var requestCount: Int { locked { replies.count } }
@@ -239,7 +260,7 @@ private final class StatusSystem: @unchecked Sendable {
   var statusOperations: IosTunnelStatusOperations<StatusManager> {
     IosTunnelStatusOperations(readState: { _ in
       self.locked {
-        IosTunnelStatusSnapshot(state: self.active ? "connected" : "disconnected", nativeState: self.active ? 3 : 1, connectedAt: self.active ? self.connectedAt : nil)
+        IosTunnelStatusSnapshot(state: self.active ? "connected" : "disconnected", nativeState: self.active ? 3 : 1, connectedAt: self.active ? self.connectedAt : nil, leakProtection: self.leakProtection)
       }
     }, requestRuntime: { _, reply in
       let immediate = self.locked { self.replies.append(reply); return self.immediateReply }

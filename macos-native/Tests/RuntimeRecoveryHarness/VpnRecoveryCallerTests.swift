@@ -42,6 +42,8 @@ final class VEXAppState {
     var profileErrors: [Int: Error] = [:]
     var profileCalls = 0
     var diagnosticsCalls = 0
+    var connectErrors: [Int: Error] = [:]
+    var autopilotCalls = 0
     var restoreTunnel = RecoveryTunnel.original
     var isRestoring = false
     var accessToken: String? { session?.accessToken }
@@ -81,6 +83,8 @@ final class VEXAppState {
     private func connectWithAutopilot(initialTunnel: RecoveryTunnel, accessToken: String,
         accountUserId: String, helper: RecoveryHelper, generation: Int) async throws -> RecoveryTunnel {
         try ensureConnectStillDesired(generation: generation)
+        autopilotCalls += 1
+        if let error = connectErrors[autopilotCalls] { throw error }
         await helper.connect(antiLeakEnabled: antiLeakEnabled)
         return initialTunnel
     }
@@ -189,6 +193,7 @@ final class RecoveryHelper {
     var downGate: RecoveryGate?
     var interruptGate: RecoveryGate?
     var disconnectConfirmed = true
+    var statusAfterDown: RecoveryState?
     var disconnectionIsConfirmed: Bool { status.state == .disconnected && disconnectConfirmed }
     private(set) var downCalls = 0
     private(set) var upCalls = 0
@@ -198,7 +203,7 @@ final class RecoveryHelper {
         downCalls += 1
         status.state = .disconnecting
         if let downGate { await downGate.pause() }
-        status.state = disconnectConfirmed ? .disconnected : .connected
+        status.state = statusAfterDown ?? (disconnectConfirmed ? .disconnected : .connected)
         isBusy = false
         return disconnectConfirmed
     }
@@ -227,6 +232,7 @@ final class RecoveryAPI: @unchecked Sendable {
 final class RecoveryProfiles {
     unowned let state: VEXAppState
     init(state: VEXAppState) { self.state = state }
+    private(set) var helperConfigWrites = 0
     func resolveProfile(accessToken: String, userId: String, locationId: String,
         routingMode: String, forceRefresh: Bool, writeHelperConfig: Bool,
         shouldPersist: () -> Bool = { true }) async throws -> RecoveryTunnel {
@@ -246,6 +252,7 @@ final class RecoveryProfiles {
     }
     func writeHelperConfig(for tunnel: RecoveryTunnel, shouldWrite: () -> Bool) async throws {
         if !shouldWrite() { throw CancellationError() }
+        helperConfigWrites += 1
     }
 }
 
@@ -262,6 +269,34 @@ final class VpnRecoveryCallerTests: XCTestCase {
         XCTAssertEqual(helper.upCalls, 0)
         XCTAssertFalse(state.isVpnBusy)
         XCTAssertNotEqual(state.statusMessage, "VPN отключен.")
+    }
+
+    @MainActor
+    func testUnconfirmedSwitchTeardownCannotReconnectPreviousProfile() async {
+        let state = VEXAppState(), helper = RecoveryHelper()
+        state.targetLocationId = "fi"
+        state.connectErrors[1] = HelperDisconnectError.unconfirmed
+        let switched = await state.runSwitch(using: helper)
+        XCTAssertFalse(switched)
+        XCTAssertEqual(state.autopilotCalls, 1)
+        XCTAssertEqual(helper.upCalls, 0, "Restoration is another activation and must be stopped")
+        XCTAssertEqual(state.profileService.helperConfigWrites, 0)
+        XCTAssertEqual(state.activeTunnel?.device.id, "original-device")
+        XCTAssertEqual(state.statusMessage, HelperDisconnectError.unconfirmed.localizedDescription)
+        XCTAssertFalse(state.isVpnBusy)
+    }
+
+    @MainActor
+    func testWatchdogCannotConnectFromUnconfirmedDisconnectedSnapshot() async {
+        let state = VEXAppState(), helper = RecoveryHelper()
+        helper.disconnectConfirmed = false
+        helper.statusAfterDown = .disconnected
+        await state.recoverTunnelIfNeeded(using: helper)
+        XCTAssertEqual(helper.downCalls, 1)
+        XCTAssertEqual(helper.upCalls, 0)
+        XCTAssertFalse(helper.disconnectionIsConfirmed)
+        XCTAssertEqual(state.profileCalls, 0)
+        XCTAssertEqual(state.activeTunnel?.device.id, "original-device")
     }
 
     @MainActor

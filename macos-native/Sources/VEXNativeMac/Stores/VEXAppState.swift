@@ -963,10 +963,18 @@ final class VEXAppState: ObservableObject {
             serverSidebarOperation = .failed(statusMessage ?? "Переключение сервера отменено.")
             return false
         } catch {
-            guard session?.user.id == accountUserId, vpnOperationGeneration == generation else { return false }
+            guard session?.user.id == accountUserId, profileAccountGeneration == accountGeneration,
+                  vpnOperationGeneration == generation else { return false }
             activeTunnel = previousTunnel
             activeResiliencePolicy = previousResiliencePolicy
             activeResilienceRoute = previousResilienceRoute
+            if error is HelperDisconnectError {
+                // No confirmed teardown: even restoring the old profile would
+                // start another helper transaction over uncertain live state.
+                statusMessage = error.localizedDescription
+                serverSidebarOperation = .failed(statusMessage ?? "Проверьте состояние VPN.")
+                return false
+            }
             if let previousTunnel, !error.localizedDescription.contains("VPN_CONFIG_INVALID") {
                 do {
                     try await profileService.writeHelperConfig(for: previousTunnel, shouldWrite: {
@@ -1314,7 +1322,7 @@ final class VEXAppState: ObservableObject {
             ProcessInfo.processInfo.systemUptime)
         await disconnectVPN(using: helper, reason: "watchdog_recovery")
         guard !Task.isCancelled, autoRecoveryEnabled, !isVpnBusy, !helper.isBusy,
-              helper.status.state == .disconnected,
+              helper.status.state == .disconnected, helper.disconnectionIsConfirmed,
               intent.matchesRecoveryDisconnect(userId: session?.user.id,
                   accountGeneration: profileAccountGeneration,
                   operationGeneration: vpnOperationGeneration,

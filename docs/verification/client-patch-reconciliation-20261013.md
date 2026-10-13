@@ -12,8 +12,9 @@ Historical branches and checkpoint material remain in the operator's private ver
 
 - Pinned locked Node install, full `npm run check` (unit/contracts, TypeScript, lint, upstream, CI/release negative fixtures).
 - Full native Swift debug build of the app and helper on macOS Command Line Tools.
-- 172 actual Swift source tests passed (35 native transport/cache/models/classifier, 60 production runtime/realtime callers, 33 iOS transitions, 11 iOS parser, 33 helper core/signing). Tests executed with pinned official Swift 6.2 corelibs XCTest because this host lacks the Apple XCTest/Xcode module: native transport/cache/model/classifier tests, extracted production runtime and realtime callers, pure iOS transitions/parser, and helper core/signing tests. Fakes replace API, stream, permission, filesystem/command and tunnel dependencies.
+- 174 actual Swift source tests passed (35 native transport/cache/models/classifier, 62 production runtime/realtime callers, 33 iOS transitions, 11 iOS parser, 33 helper core/signing). Tests executed with pinned official Swift 6.2 corelibs XCTest because this host lacks the Apple XCTest/Xcode module: native transport/cache/model/classifier tests, extracted production runtime and realtime callers, pure iOS transitions/parser, and helper core/signing tests. Fakes replace API, stream, permission, filesystem/command and tunnel dependencies.
 - Admission harness accepted 41 valid profile/flag combinations and rejected 65 malformed profiles without side effects; it also checks, no side effects on rejection, fresh-profile admission and terminal unconfirmed-stop behavior; notification fake-backend harness verifies opt-in, late callback cancellation and late-add eviction.
+- Negative control: the previous production switch/watchdog callers fail the new terminal-stop tests (extra activation/config write and an unconfirmed disconnected snapshot); the fixed callers pass.
 - Existing signed artifacts, update metadata and active network state are outside this source change. Notification banner/permission acceptance, signed app install/upgrade/rollback and real tunnel acceptance remain release gates.
 
 ## Per-patch disposition

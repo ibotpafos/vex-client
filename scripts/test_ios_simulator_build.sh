@@ -61,7 +61,7 @@ copy_canonical_project() {
   mkdir -p "$destination"
   (
     cd "$root_dir"
-    git ls-files -z -- ios scripts modules assets app src patches ':(top,glob)*' \
+    git ls-files -z -- ios scripts modules assets app src patches native-routing ':(top,glob)*' \
       | tar --null -T - -cf - | tar -xf - -C "$destination"
   )
   cp -R "$root_dir/node_modules" "$destination/node_modules"

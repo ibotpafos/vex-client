@@ -61,7 +61,7 @@ for offset in range(1, len(sys.argv), 3):
     pathlib.Path(sys.argv[offset + 2]).write_text(fixture.replace(marker, "\n\n".join(methods)))
 PY
 
-for name in VpnRecoveryIntent VpnOperationOwnership; do
+for name in VpnRecoveryIntent VpnOperationOwnership HelperDisconnectConfirmation; do
     cp "$native_dir/Services/$name.swift" "$source_dir/"
 done
 cp "$native_dir/Models/CustomerNotificationPolicy.swift" "$source_dir/"

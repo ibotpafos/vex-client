@@ -84,6 +84,10 @@ if clone_or_reset "amneziawg-android" "${android_repo_url}" "${android_ref}"; th
 fi
 # Peel the exact additive SDK patch before checking earlier patches whose
 # context it extends. This keeps repeated bootstrap safe after go mod tidy.
+toolchain_patch="${root_dir}/patches/amnezia/amneziawg-android-routing-go126-toolchain.patch"
+if git -C "${external_dir}/amneziawg-android" apply --reverse --check "${toolchain_patch}" >/dev/null 2>&1; then
+  git -C "${external_dir}/amneziawg-android" apply --reverse "${toolchain_patch}"
+fi
 build_patch="${root_dir}/patches/amnezia/amneziawg-android-routing-build.patch"
 if git -C "${external_dir}/amneziawg-android" apply --reverse --check "${build_patch}" >/dev/null 2>&1; then
   git -C "${external_dir}/amneziawg-android" apply --reverse "${build_patch}"
@@ -105,6 +109,7 @@ fi
 # The pinned v3.1 engine requires Go >=1.25; keep the bundled compiler and
 # its upstream boottime runtime patch, rather than bypassing runtime preparation.
 apply_patch_once "${external_dir}/amneziawg-android" "${root_dir}/patches/amnezia/amneziawg-android-go125-toolchain.patch"
+apply_patch_once "${external_dir}/amneziawg-android" "${toolchain_patch}"
 apply_patch_once "${external_dir}/amneziawg-android" "${root_dir}/patches/amnezia/amneziawg-android-vpn-foreground-service.patch"
 apply_patch_once "${external_dir}/amneziawg-android" "${root_dir}/patches/amnezia/amneziawg-android-native-routing.patch"
 apply_patch_once "${external_dir}/amneziawg-android" "${build_patch}"

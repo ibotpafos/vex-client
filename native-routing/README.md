@@ -36,6 +36,9 @@ network restoration.
 
 Android/Apple SDK patches are additive to pinned AWG 3.1 sources. The shared Go
 module uses the existing MIT AWG NetTUN and Apache-2.0 gVisor implementation.
+Routing builds use Go 1.26.9 and `golang.org/x/net` v0.60.0, including the
+malformed DNS response and HTTP/2 security fixes. Android retains the upstream
+boottime runtime patch and verifies the bundled compiler archive SHA-256.
 `policy-signing-keys.json` contains public keys only. Key rotation must update
 all sealed engine builds together with the packaged signing keyring. SDK native
 builds include the shared routing sources on every incremental build.

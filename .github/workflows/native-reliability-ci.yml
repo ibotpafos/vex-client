@@ -9,6 +9,7 @@ on:
       - "app/**"
       - "assets/**"
       - "modules/**"
+      - "native-routing/**"
       - "tests/**"
       - "scripts/**"
       - "android/**"
@@ -28,6 +29,7 @@ on:
       - "app/**"
       - "assets/**"
       - "modules/**"
+      - "native-routing/**"
       - "tests/**"
       - "scripts/**"
       - "android/**"
@@ -62,6 +64,10 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: "22"
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: "1.26.9"
+          cache: false
       - run: npm ci
       - name: Check workflow with pinned actionlint
         shell: bash
@@ -77,6 +83,13 @@ jobs:
         run: |
           npm run check
           npm run build:web
+      - name: Test routing packets and audit called dependencies
+        working-directory: native-routing
+        env:
+          GOTOOLCHAIN: local
+        run: |
+          go test -race -timeout 45s ./...
+          go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
   android:
     name: Android network recovery

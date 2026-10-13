@@ -40,7 +40,7 @@ index 2e68d3b..fa8fe03 100644
 +        }
 +    }
 +
-+    private func physicalInterfaceIndex(_ path: NWPath?) -> Int32 {
++    private func physicalInterfaceIndex(_ path: Network.NWPath?) -> Int32 {
 +        guard let path, path.status == .satisfied else { return 0 }
 +        let physical = path.availableInterfaces.first { $0.type == .wifi || $0.type == .cellular || $0.type == .wiredEthernet }
 +        guard let physical else { return 0 }

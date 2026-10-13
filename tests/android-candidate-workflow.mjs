@@ -25,7 +25,7 @@ export function check(workflow) {
       assert.equal(step.with.ref, undefined);
     }
   }
-  assert.equal(job.steps.find(step => step.uses?.startsWith('actions/setup-go@')).with['go-version'], '1.25.x');
+  assert.equal(job.steps.find(step => step.uses?.startsWith('actions/setup-go@')).with['go-version'], '1.26.9');
   const build = job.steps[signing].run;
   assert.ok(build.includes('verify_android_signing_secret.sh cc569dfaa4c2c82379669b7c13606eb268cc3eba90a9c88e20a2d4500daf8470'));
   assert.ok(build.includes(':app:testDebugUnitTest'));

@@ -495,11 +495,13 @@ struct ClientDiagnosticsReport: Codable, Equatable {
     var txBytes: Int64
     var samples: [String: String]
     var connectionEvent: String? = nil
+    var connectDurationMs: Int? = nil
     var transportFrom: String? = nil
     var transportTo: String? = nil
     var networkClass: String? = nil
     var networkObservationId: String? = nil
     var networkGeneration: String? = nil
+    var sessionUptimeSeconds: Int? = nil
 
     enum CodingKeys: String, CodingKey {
         case deviceId = "device_id"
@@ -516,11 +518,13 @@ struct ClientDiagnosticsReport: Codable, Equatable {
         case txBytes = "tx_bytes"
         case samples
         case connectionEvent = "connection_event"
+        case connectDurationMs = "connect_duration_ms"
         case transportFrom = "transport_from"
         case transportTo = "transport_to"
         case networkClass = "network_class"
         case networkObservationId = "network_observation_id"
         case networkGeneration = "network_generation"
+        case sessionUptimeSeconds = "session_uptime_seconds"
     }
 }
 

@@ -79,9 +79,14 @@ export async function refreshSession(accessToken: string): Promise<AuthSession> 
 }
 
 export function parseAuth(item: AuthResultDTO): AuthSession {
+  const rawToken = item.session?.access_token;
+  const accessToken = typeof rawToken === 'string' ? rawToken.trim() : '';
+  if (!accessToken) {
+    throw new Error('Ответ авторизации не содержит access token.');
+  }
   return {
     user: parseUser(item.user),
-    accessToken: item.session.access_token || '',
+    accessToken,
     expiresAt: item.session.expires_at || undefined,
   };
 }

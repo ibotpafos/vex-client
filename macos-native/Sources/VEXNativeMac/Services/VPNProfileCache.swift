@@ -68,6 +68,9 @@ struct VPNProfileCache {
         // Rewrites are skipped when the sanitized config is unchanged, so repeated
         // connect attempts do not touch disk (and trigger file-provider syncs) needlessly.
         if let current = try? String(contentsOf: url, encoding: .utf8), current == config {
+            // Existing versions can leave the same secret bytes with broader
+            // permissions. Skipping a rewrite must not skip access repair.
+            try setOwnerOnlyPermissions(url)
             return
         }
         try config.write(to: url, atomically: true, encoding: .utf8)

@@ -3,6 +3,103 @@ import XCTest
 @testable import VEXNativeMac
 
 final class HelperSocketSimulationTests: XCTestCase {
+    func testDisconnectWaitsForCompleteHelperTeardown() async throws {
+        let server = try SequencedHelperSocket { command, index in
+            if command == "down" { return "ok\n" }
+            return index == 1
+                ? "state=connected route_ok=true socket_exists=true iface=utun9 endpoint=fixture:51820 leak_protection=armed\n"
+                : "state=disconnected operation_in_progress=false route_ok=false socket_exists=false iface= endpoint= leak_protection=off\n"
+        }
+        defer { server.stop() }
+        let result = try await VEXHelperClient(socketPath: server.path)
+            .disconnectAndConfirm(commandTimeoutSeconds: 1, maxStatusAttempts: 3, pollNanoseconds: 0)
+        XCTAssertEqual(result.state, .disconnected)
+        XCTAssertFalse(result.hasManagedNetworkState)
+        XCTAssertEqual(server.waitForCommands(count: 3), ["down", "status", "status"])
+    }
+
+    func testDisconnectRejectsAcknowledgedButStillConnectedTunnel() async throws {
+        let server = try SequencedHelperSocket { command, _ in
+            command == "down" ? "ok\n" : "state=connected route_ok=true socket_exists=true\n"
+        }
+        defer { server.stop() }
+        do {
+            _ = try await VEXHelperClient(socketPath: server.path)
+                .disconnectAndConfirm(commandTimeoutSeconds: 1, maxStatusAttempts: 2, pollNanoseconds: 0)
+            XCTFail("Acknowledgement is not evidence of teardown")
+        } catch HelperDisconnectError.unconfirmed {
+        }
+        XCTAssertEqual(server.waitForCommands(count: 3), ["down", "status", "status"])
+    }
+
+    func testDisconnectRejectsIncompleteAndAmbiguousStatus() async throws {
+        for response in [
+            "route_ok=false socket_exists=false",
+            "state=disconnected route_ok=false socket_exists=false operation_in_progress=true",
+            "state=disconnected route_ok=false socket_exists=false iface=utun9",
+            "state=disconnected route_ok=false socket_exists=false endpoint=fixture:51820",
+            "state=disconnected route_ok=false socket_exists=false leak_protection=armed",
+            "state=disconnected state=connected route_ok=false socket_exists=false",
+            "error: helper status unavailable",
+        ] {
+            let server = try SequencedHelperSocket { command, _ in
+                command == "down" ? "ok\n" : response + "\n"
+            }
+            defer { server.stop() }
+            do {
+                _ = try await VEXHelperClient(socketPath: server.path)
+                    .disconnectAndConfirm(commandTimeoutSeconds: 1, maxStatusAttempts: 1, pollNanoseconds: 0)
+                XCTFail("Incomplete/ambiguous status must not confirm teardown: \(response)")
+            } catch HelperDisconnectError.unconfirmed {
+            }
+        }
+    }
+
+    func testDisconnectSupportsLegacyCompleteStatus() async throws {
+        let server = try SequencedHelperSocket { command, _ in
+            command == "down" ? "ok\n" : "state=disconnected route_ok=false socket_exists=false\n"
+        }
+        defer { server.stop() }
+        let result = try await VEXHelperClient(socketPath: server.path)
+            .disconnectAndConfirm(commandTimeoutSeconds: 1, maxStatusAttempts: 1, pollNanoseconds: 0)
+        XCTAssertEqual(result.state, .disconnected)
+        XCTAssertFalse(result.hasManagedNetworkState)
+    }
+
+    @MainActor
+    func testCancelledConnectTaskStillCompletesOwnedTeardown() async throws {
+        let server = try SequencedHelperSocket { command, _ in
+            command == "down" ? "ok\n" : "state=disconnected route_ok=false socket_exists=false\n"
+        }
+        defer { server.stop() }
+        let task = Task {
+            try await VEXHelperClient(socketPath: server.path)
+                .disconnectAndConfirm(commandTimeoutSeconds: 1, maxStatusAttempts: 1, pollNanoseconds: 0)
+        }
+        task.cancel()
+        let result = try await task.value
+        XCTAssertEqual(result.state, .disconnected)
+        XCTAssertEqual(server.waitForCommands(count: 2), ["down", "status"])
+    }
+
+    @MainActor
+    func testLateDisconnectReceiptCannotFinishNewerOperation() async throws {
+        let server = try SequencedHelperSocket { command, _ in
+            command == "down" ? "ok\n" : "state=disconnected route_ok=false socket_exists=false\n"
+        }
+        defer { server.stop() }
+        var checks = 0
+        do {
+            _ = try await VEXHelperClient(socketPath: server.path).disconnectAndConfirm(
+                commandTimeoutSeconds: 1, maxStatusAttempts: 2, pollNanoseconds: 0,
+                shouldContinue: { checks += 1; return checks < 3 }
+            )
+            XCTFail("A superseded operation cannot publish a successful receipt")
+        } catch is CancellationError {
+        }
+        XCTAssertEqual(server.waitForCommands(count: 2), ["down", "status"])
+    }
+
     func testResponseFrameRequiresNewlineAndValidUTF8() throws {
         XCTAssertEqual(
             try decodeHelperResponseFrame(Array("ok\n".utf8), reachedLimit: false),
@@ -80,6 +177,75 @@ final class HelperSocketSimulationTests: XCTestCase {
         } catch {
             XCTAssertLessThan(started.duration(to: .now), .seconds(2))
         }
+    }
+}
+
+private final class SequencedHelperSocket: @unchecked Sendable {
+    let path: String
+    private let listener: Int32
+    private let response: @Sendable (String, Int) -> String
+    private let worker = DispatchGroup()
+    private let lock = NSLock()
+    private var commands: [String] = []
+    private var stopped = false
+
+    init(response: @escaping @Sendable (String, Int) -> String) throws {
+        path = "/tmp/vex-helper-sequence-\(UUID().uuidString.prefix(8)).sock"
+        self.response = response
+        listener = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard listener >= 0 else { throw POSIXError(.ENOTSOCK) }
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let length = MemoryLayout.size(ofValue: address.sun_path)
+        _ = withUnsafeMutablePointer(to: &address.sun_path) { pointer in
+            path.withCString { strncpy(UnsafeMutableRawPointer(pointer).assumingMemoryBound(to: CChar.self), $0, length) }
+        }
+        let bound = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(listener, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        guard bound == 0, Darwin.listen(listener, 4) == 0 else {
+            Darwin.close(listener)
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        worker.enter()
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
+            defer { worker.leave() }
+            while true {
+                let client = Darwin.accept(listener, nil, nil)
+                if client < 0 {
+                    lock.lock(); let shouldStop = stopped; lock.unlock()
+                    if shouldStop { return }
+                    continue
+                }
+                var bytes: [UInt8] = [], byte: UInt8 = 0
+                while Darwin.read(client, &byte, 1) == 1 {
+                    if byte == 10 { break }
+                    bytes.append(byte)
+                }
+                let command = String(decoding: bytes, as: UTF8.self)
+                lock.lock(); let index = commands.count; commands.append(command); lock.unlock()
+                let payload = response(command, index)
+                payload.withCString { _ = Darwin.write(client, $0, strlen($0)) }
+                Darwin.close(client)
+            }
+        }
+    }
+    func waitForCommands(count: Int) -> [String] {
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline {
+            lock.lock(); let snapshot = commands; lock.unlock()
+            if snapshot.count >= count { return snapshot }
+            usleep(10_000)
+        }
+        lock.lock(); defer { lock.unlock() }; return commands
+    }
+    func stop() {
+        lock.lock(); stopped = true; lock.unlock()
+        Darwin.shutdown(listener, SHUT_RDWR); Darwin.close(listener)
+        _ = worker.wait(timeout: .now() + 3)
+        unlink(path)
     }
 }
 

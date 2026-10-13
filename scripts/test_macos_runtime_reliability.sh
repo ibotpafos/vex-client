@@ -24,7 +24,10 @@ python3 - "$app_state_source" \
     "$test_dir/VpnHelperCallerTests.swift" \
     "$app_state_source" \
     "$root_dir/macos-native/Tests/RuntimeRecoveryHarness/SessionUserCallerTests.swift" \
-    "$test_dir/SessionUserCallerTests.swift" <<'PY'
+    "$test_dir/SessionUserCallerTests.swift" \
+    "$app_state_source" \
+    "$root_dir/macos-native/Tests/RuntimeRecoveryHarness/CustomerRealtimeCallerTests.swift" \
+    "$test_dir/CustomerRealtimeCallerTests.swift" <<'PY'
 import pathlib
 import re
 import sys
@@ -58,9 +61,16 @@ for offset in range(1, len(sys.argv), 3):
     pathlib.Path(sys.argv[offset + 2]).write_text(fixture.replace(marker, "\n\n".join(methods)))
 PY
 
-for name in VpnRecoveryIntent VpnOperationOwnership; do
+for name in VpnRecoveryIntent VpnOperationOwnership HelperDisconnectConfirmation; do
     cp "$native_dir/Services/$name.swift" "$source_dir/"
 done
+cp "$native_dir/Models/CustomerNotificationPolicy.swift" "$source_dir/"
+# Only pure parser/metadata types; the fake stream executes the real callbacks.
+python3 - "$native_dir/Services/CustomerRealtimeService.swift" "$source_dir/CustomerRealtimeTypes.swift" <<'PY'
+import pathlib, sys
+source = pathlib.Path(sys.argv[1]).read_text()
+pathlib.Path(sys.argv[2]).write_text(source[:source.index("@MainActor")])
+PY
 cp "$root_dir/macos-native/Tests/VEXNativeMacTests/VpnRecoveryIntentTests.swift" "$test_dir/"
 cat > "$harness_dir/Package.swift" <<'SWIFT'
 // swift-tools-version: 6.2

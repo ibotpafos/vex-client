@@ -14,7 +14,7 @@ vm.runInNewContext(ts.transpileModule(source, {
     assert.equal(name, './client');
     return { jsonRequest: async (path, options) => {
       request = { path, ...options };
-      return { user: { id: 'fixture-user', email: 'fixture@example.com' }, session: {} };
+      return { user: { id: 'fixture-user', email: 'fixture@example.com' }, session: { access_token: 'fixture-token' } };
     } };
   },
 });

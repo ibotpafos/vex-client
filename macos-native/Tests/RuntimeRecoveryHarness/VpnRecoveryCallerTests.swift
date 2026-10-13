@@ -2,7 +2,9 @@ import Foundation
 import XCTest
 @testable import VEXNativeMac
 
-// VEX_RUNTIME_METHOD_NAMES: recoverTunnelIfNeeded restoreActiveTunnelIfHelperIsConnected connectVPN performConnectVPN disconnectVPN performDisconnectVPN toggleVPNPower switchConnectedVPNLocation beginVpnOperation finishVpnOperation invalidateVpnOperation ensureConnectStillDesired sessionUserId clearActiveTunnelRouteState finishInterruptedVpnStop ensureProfileSession prepareSelectedProfile
+private typealias PreparedTunnel = RecoveryTunnel
+
+// VEX_RUNTIME_METHOD_NAMES: recoverTunnelIfNeeded restoreActiveTunnelIfHelperIsConnected connectVPN performConnectVPN disconnectVPN performDisconnectVPN toggleVPNPower switchConnectedVPNLocation beginVpnOperation finishVpnOperation invalidateVpnOperation ensureConnectStillDesired sessionUserId clearActiveTunnelRouteState finishInterruptedVpnStop ensureProfileSession prepareSelectedProfile rememberAutomaticFailover
 
 // The portable runner inserts the named, unmodified production methods at the
 // marker below. Only dependencies are fake; no helper, network or stores run.
@@ -12,6 +14,9 @@ final class VEXAppState {
     var desiredVpnState: RecoveryDesiredState = .connected
     var vpnOperationGeneration = 17
     var profileAccountGeneration = 4
+    var nativeConnectedAtUptime: TimeInterval?
+    var lastAutomaticRecovery: (accountGeneration: Int, deviceId: String, uptime: TimeInterval)?
+    var automaticFailoverLocationId: String?
     var vpnOperationOwnership = VpnOperationOwnership()
     var autoRecoveryEnabled = true
     var isVpnBusy = false
@@ -37,6 +42,8 @@ final class VEXAppState {
     var profileErrors: [Int: Error] = [:]
     var profileCalls = 0
     var diagnosticsCalls = 0
+    var connectErrors: [Int: Error] = [:]
+    var autopilotCalls = 0
     var restoreTunnel = RecoveryTunnel.original
     var isRestoring = false
     var accessToken: String? { session?.accessToken }
@@ -51,6 +58,7 @@ final class VEXAppState {
     func runSwitch(using helper: RecoveryHelper) async -> Bool {
         await switchConnectedVPNLocation(using: helper)
     }
+    func runRememberAutomaticFailover(_ tunnel: RecoveryTunnel) { rememberAutomaticFailover(tunnel) }
     func replaceSession(userId: String) {
         vpnOperationGeneration += 1
         profileAccountGeneration += 1
@@ -75,6 +83,8 @@ final class VEXAppState {
     private func connectWithAutopilot(initialTunnel: RecoveryTunnel, accessToken: String,
         accountUserId: String, helper: RecoveryHelper, generation: Int) async throws -> RecoveryTunnel {
         try ensureConnectStillDesired(generation: generation)
+        autopilotCalls += 1
+        if let error = connectErrors[autopilotCalls] { throw error }
         await helper.connect(antiLeakEnabled: antiLeakEnabled)
         return initialTunnel
     }
@@ -182,21 +192,28 @@ final class RecoveryHelper {
     var message: String?
     var downGate: RecoveryGate?
     var interruptGate: RecoveryGate?
+    var disconnectConfirmed = true
+    var statusAfterDown: RecoveryState?
+    var disconnectionIsConfirmed: Bool { status.state == .disconnected && disconnectConfirmed }
     private(set) var downCalls = 0
     private(set) var upCalls = 0
-    func disconnect(releaseAntiLeak: Bool) async {
+    @discardableResult
+    func disconnect(releaseAntiLeak: Bool) async -> Bool {
         isBusy = true
         downCalls += 1
         status.state = .disconnecting
         if let downGate { await downGate.pause() }
-        status.state = .disconnected
+        status.state = statusAfterDown ?? (disconnectConfirmed ? .disconnected : .connected)
         isBusy = false
+        return disconnectConfirmed
     }
-    func interruptWithDisconnect(releaseAntiLeak: Bool) async {
+    @discardableResult
+    func interruptWithDisconnect(releaseAntiLeak: Bool) async -> Bool {
         downCalls += 1
         status.state = .disconnecting
         if let interruptGate { await interruptGate.pause() }
-        status.state = .disconnected
+        status.state = disconnectConfirmed ? .disconnected : .connected
+        return disconnectConfirmed
     }
     func connect(antiLeakEnabled: Bool, shouldConnect: @escaping () -> Bool = { true }) async {
         guard shouldConnect() else { return }
@@ -215,6 +232,7 @@ final class RecoveryAPI: @unchecked Sendable {
 final class RecoveryProfiles {
     unowned let state: VEXAppState
     init(state: VEXAppState) { self.state = state }
+    private(set) var helperConfigWrites = 0
     func resolveProfile(accessToken: String, userId: String, locationId: String,
         routingMode: String, forceRefresh: Bool, writeHelperConfig: Bool,
         shouldPersist: () -> Bool = { true }) async throws -> RecoveryTunnel {
@@ -234,10 +252,130 @@ final class RecoveryProfiles {
     }
     func writeHelperConfig(for tunnel: RecoveryTunnel, shouldWrite: () -> Bool) async throws {
         if !shouldWrite() { throw CancellationError() }
+        helperConfigWrites += 1
     }
 }
 
 final class VpnRecoveryCallerTests: XCTestCase {
+    @MainActor
+    func testUnconfirmedUserDisconnectRetainsActiveTunnel() async {
+        let state = VEXAppState(), helper = RecoveryHelper()
+        helper.disconnectConfirmed = false
+        await state.disconnectVPN(using: helper)
+        XCTAssertEqual(state.desiredVpnState, .disconnected)
+        XCTAssertEqual(state.activeTunnel?.device.id, "original-device")
+        XCTAssertEqual(helper.status.state, .connected)
+        XCTAssertEqual(helper.downCalls, 1)
+        XCTAssertEqual(helper.upCalls, 0)
+        XCTAssertFalse(state.isVpnBusy)
+        XCTAssertNotEqual(state.statusMessage, "VPN отключен.")
+    }
+
+    @MainActor
+    func testUnconfirmedSwitchTeardownCannotReconnectPreviousProfile() async {
+        let state = VEXAppState(), helper = RecoveryHelper()
+        state.targetLocationId = "fi"
+        state.connectErrors[1] = HelperDisconnectError.unconfirmed
+        let switched = await state.runSwitch(using: helper)
+        XCTAssertFalse(switched)
+        XCTAssertEqual(state.autopilotCalls, 1)
+        XCTAssertEqual(helper.upCalls, 0, "Restoration is another activation and must be stopped")
+        XCTAssertEqual(state.profileService.helperConfigWrites, 0)
+        XCTAssertEqual(state.activeTunnel?.device.id, "original-device")
+        XCTAssertEqual(state.statusMessage, HelperDisconnectError.unconfirmed.localizedDescription)
+        XCTAssertFalse(state.isVpnBusy)
+    }
+
+    @MainActor
+    func testWatchdogCannotConnectFromUnconfirmedDisconnectedSnapshot() async {
+        let state = VEXAppState(), helper = RecoveryHelper()
+        helper.disconnectConfirmed = false
+        helper.statusAfterDown = .disconnected
+        await state.recoverTunnelIfNeeded(using: helper)
+        XCTAssertEqual(helper.downCalls, 1)
+        XCTAssertEqual(helper.upCalls, 0)
+        XCTAssertFalse(helper.disconnectionIsConfirmed)
+        XCTAssertEqual(state.profileCalls, 0)
+        XCTAssertEqual(state.activeTunnel?.device.id, "original-device")
+    }
+
+    @MainActor
+    func testPowerOnDuringFailedDownDoesNotStartAnotherTunnel() async throws {
+        let state = VEXAppState(), helper = RecoveryHelper(), gate = RecoveryGate()
+        helper.disconnectConfirmed = false
+        helper.downGate = gate
+        let stopped = Task { await state.disconnectVPN(using: helper) }
+        try await gate.awaitEntry()
+        await state.connectVPN(using: helper)
+        gate.release()
+        await stopped.value
+        XCTAssertEqual(state.desiredVpnState, .connected)
+        XCTAssertEqual(state.activeTunnel?.device.id, "original-device")
+        XCTAssertEqual(helper.upCalls, 0)
+        XCTAssertNotEqual(state.statusMessage, "VPN отключен.")
+    }
+
+    @MainActor
+    func testFailedInterruptedStopKeepsActiveTunnelAndBusyOwner() async {
+        let state = VEXAppState(), helper = RecoveryHelper()
+        helper.disconnectConfirmed = false
+        let owner = state.vpnOperationOwnership.begin()
+        state.isVpnBusy = true
+        await state.disconnectVPN(using: helper)
+        XCTAssertEqual(state.activeTunnel?.device.id, "original-device")
+        XCTAssertTrue(state.vpnOperationOwnership.owns(owner))
+        XCTAssertEqual(helper.upCalls, 0)
+        XCTAssertNotEqual(state.statusMessage, "VPN отключен.")
+    }
+
+    @MainActor
+    func testPowerToggleCannotClearTunnelOnUnconfirmedInterruptedStop() async {
+        let state = VEXAppState(), helper = RecoveryHelper()
+        helper.disconnectConfirmed = false
+        let owner = state.vpnOperationOwnership.begin()
+        state.isVpnBusy = true
+        await state.toggleVPNPower(using: helper)
+        XCTAssertEqual(state.activeTunnel?.device.id, "original-device")
+        XCTAssertTrue(state.vpnOperationOwnership.owns(owner))
+        XCTAssertEqual(helper.upCalls, 0)
+        XCTAssertEqual(state.desiredVpnState, .disconnected)
+    }
+
+    @MainActor
+    func testRecoveryCooldownIsScopedToAccountAndDevice() async {
+        let state = VEXAppState(), helper = RecoveryHelper()
+        state.lastAutomaticRecovery = (state.profileAccountGeneration, "original-device",
+            ProcessInfo.processInfo.systemUptime)
+        await state.recoverTunnelIfNeeded(using: helper)
+        XCTAssertEqual(helper.downCalls, 0)
+        XCTAssertEqual(helper.upCalls, 0)
+        state.profileAccountGeneration += 1
+        await state.recoverTunnelIfNeeded(using: helper)
+        XCTAssertEqual(helper.downCalls, 1, "A later login must not inherit the old cooldown")
+    }
+
+    @MainActor
+    func testRecoveryCooldownDoesNotDelayExplicitConnection() async {
+        let state = VEXAppState(), helper = RecoveryHelper()
+        state.lastAutomaticRecovery = (state.profileAccountGeneration, "original-device",
+            ProcessInfo.processInfo.systemUptime)
+        await state.connectVPN(using: helper)
+        XCTAssertEqual(helper.upCalls, 1)
+    }
+
+    @MainActor
+    func testAutomaticFailoverKeepsAutoModeAndPinsOnlyConfirmedLocation() {
+        let state = VEXAppState()
+        state.allowsAutomaticFailover = true
+        state.runRememberAutomaticFailover(.init(locationId: "fi", device: .init(id: "device-fi"), endpoint: "fixture:443"))
+        XCTAssertEqual(state.selectedLocationId, "fi")
+        XCTAssertEqual(state.automaticFailoverLocationId, "fi")
+        XCTAssertTrue(state.allowsAutomaticFailover)
+        state.allowsAutomaticFailover = false
+        state.runRememberAutomaticFailover(.original)
+        XCTAssertEqual(state.selectedLocationId, "fi", "Manual mode must retain the user's choice")
+    }
+
     @MainActor
     func testUserStopDuringUsageCannotRestartVpn() async throws {
         let state = VEXAppState(), helper = RecoveryHelper(), gate = RecoveryGate()

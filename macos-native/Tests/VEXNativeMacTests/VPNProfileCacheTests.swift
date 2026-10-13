@@ -3,6 +3,22 @@ import XCTest
 @testable import VEXNativeMac
 
 final class VPNProfileCacheTests: XCTestCase {
+    func testUnchangedHelperConfigRepairsLegacyPermissionsWithoutRewritingBytes() throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let helperURL = directory.appendingPathComponent("tunnel.conf")
+        let cache = VPNProfileCache(directoryURL: directory, helperConfigURL: helperURL)
+        let config = "[Interface]\nPrivateKey=fixture\n[Peer]\nEndpoint=fixture:51820\n"
+        try cache.writeHelperConfig(config)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: helperURL.path)
+        let previousDate = try FileManager.default.attributesOfItem(atPath: helperURL.path)[.modificationDate] as? Date
+        try cache.writeHelperConfig(config)
+        let attributes = try FileManager.default.attributesOfItem(atPath: helperURL.path)
+        XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+        XCTAssertEqual(attributes[.modificationDate] as? Date, previousDate)
+        XCTAssertEqual(try String(contentsOf: helperURL, encoding: .utf8), config)
+    }
+
     func testAccountsKeepSeparateProfilesForTheSameLocationAndMode() throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

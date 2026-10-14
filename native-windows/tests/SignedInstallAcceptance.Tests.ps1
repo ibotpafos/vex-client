@@ -244,7 +244,8 @@ try {
     Assert (-not $proof.native_consumer_installation_verified -and -not $proof.native_double_click_installer_acceptance) 'Remaining service/state falsely qualified native installation.'
     $script:failNativeCleanup = $false; $proof = New-NativeEvidence
     & $realNativeInstall -Bundle $bundle -OwnerSid 'owner' -Evidence $proof
-    Assert ($proof.native_consumer_installation_verified -and $proof.verified_shell_setup_launch -and
+    Assert ($proof.native_consumer_installation_verified -and $proof.verified_direct_setup_launch -and
+        -not $proof.verified_shell_setup_launch -and
         -not $proof.native_double_click_installer_acceptance -and -not $proof.shell_reputation_prompt_acceptance -and
         $proof.native_setup_window_verified -and $proof.phases.Count -eq 5 -and $nativeInstalls -eq 3) 'Complete native consumer installation was not distinguished from window-only smoke.'
 

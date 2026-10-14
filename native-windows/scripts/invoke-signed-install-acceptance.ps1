@@ -414,7 +414,14 @@ try {
     Add-Type -AssemblyName UIAutomationClient
     Add-Type -AssemblyName UIAutomationTypes
     $stage = 'start_setup'
-    $owned = Start-Process -FilePath $inputValue.executable -WorkingDirectory (Split-Path -Parent $inputValue.executable) -PassThru
+    # Exercise the signed image after explicit trust and independent bundle
+    # verification. Shell reputation remains a separate acceptance surface;
+    # no MOTW, Defender, execution policy or signature setting is changed.
+    $start = [Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = $inputValue.executable
+    $start.WorkingDirectory = Split-Path -Parent $inputValue.executable
+    $start.UseShellExecute = $false
+    $owned = [Diagnostics.Process]::Start($start)
     $deadline = [DateTime]::UtcNow.AddSeconds($(if ($inputValue.install) { 180 } else { 35 }))
     do {
         $stage = 'inspect_process'
@@ -531,7 +538,7 @@ function Invoke-AcceptanceNativeInstall {
     # A window-only smoke never qualifies the consumer Install path. Commit
     # these flags only after its actual action, independent Verify and cleanup.
     $Evidence.native_consumer_installation_verified = $true
-    $Evidence.verified_shell_setup_launch = $true
+    $Evidence.verified_direct_setup_launch = $true
 }
 
 function Get-AcceptanceOwnedBundle {

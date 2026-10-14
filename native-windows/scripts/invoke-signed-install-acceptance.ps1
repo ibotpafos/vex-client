@@ -307,6 +307,16 @@ function Invoke-AcceptanceProcess {
                     hresult = [long]$match.Groups['hresult'].Value
                 }
             }
+            $bootstrapMatch = [regex]::Match($stderr.GetAwaiter().GetResult(),
+                '(?m)^VEX_BOOTSTRAP_DIAGNOSTIC=(?<stage>load_modules|invoke_bootstrap);(?<line>[0-9]{1,4});(?<type>[A-Za-z0-9_.]{1,180});(?<hresult>-?[0-9]{1,11})\r?$')
+            if ($bootstrapMatch.Success) {
+                $script:BootstrapDiagnostic = [ordered]@{
+                    stage = $bootstrapMatch.Groups['stage'].Value
+                    script_line = [int]$bootstrapMatch.Groups['line'].Value
+                    exception_type = $bootstrapMatch.Groups['type'].Value
+                    hresult = [long]$bootstrapMatch.Groups['hresult'].Value
+                }
+            }
             throw 'Acceptance child reported failure.'
         }
     }
@@ -508,15 +518,52 @@ function Invoke-AcceptanceBootstrap {
             $validated.Metadata.client_certificate_sha256 -ine $Bundle.Metadata.client_certificate_sha256) {
             throw 'Acceptance input changed after initial verification.'
         }
-        $arguments = @('-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-            '-File', (Join-Path $Bundle.Root $Bundle.Metadata.bootstrap_file), '-Phase', 'User', '-Action', $Action,
-            '-MetadataPath', $Bundle.MetadataPath, '-PackagePath', $Bundle.PackagePath)
+        $inputData = [ordered]@{
+            bootstrap = Join-Path $Bundle.Root $Bundle.Metadata.bootstrap_file
+            parameters = [ordered]@{ Phase = 'User'; Action = $Action;
+                MetadataPath = $Bundle.MetadataPath; PackagePath = $Bundle.PackagePath }
+        }
         if ($Action -eq 'Rollback') {
             if ($null -eq $RollbackBundle) { throw 'Acceptance rollback requires the verified preceding release.' }
             $locks += @(Open-AcceptanceBundleLocks $RollbackBundle)
             $null = Read-AcceptanceBundle $RollbackBundle.Root
-            $arguments += @('-RollbackPackagePath', $RollbackBundle.PackagePath, '-RollbackMetadataPath', $RollbackBundle.MetadataPath)
+            $inputData.parameters.RollbackPackagePath = $RollbackBundle.PackagePath
+            $inputData.parameters.RollbackMetadataPath = $RollbackBundle.MetadataPath
         }
+        # Match the real Setup's fixed system-module initialization. In PS5.1,
+        # built-in manifests may live beside powershell.exe rather than Modules.
+        $payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($inputData | ConvertTo-Json -Compress)))
+        $command = @'
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+$stage = 'load_modules'
+try {
+    $systemModules = [IO.Path]::Combine([Environment]::GetFolderPath([Environment+SpecialFolder]::System), 'WindowsPowerShell', 'v1.0', 'Modules')
+    $env:PSModulePath = $systemModules
+    $requiredCommands = @{'Microsoft.PowerShell.Utility'='Get-FileHash';'Microsoft.PowerShell.Security'='Get-AuthenticodeSignature';'Microsoft.PowerShell.Management'='Get-Content'}
+    foreach ($module in $requiredCommands.Keys) {
+        $provider = Microsoft.PowerShell.Core\Get-Command -Name ($module + '\' + $requiredCommands[$module]) -CommandType Cmdlet -ListImported -ErrorAction SilentlyContinue
+        if ($null -eq $provider) {
+            $manifest = [IO.Path]::Combine($systemModules, $module, ($module + '.psd1'))
+            if (-not [IO.File]::Exists($manifest)) { $manifest = [IO.Path]::Combine([IO.Path]::GetDirectoryName($systemModules), ($module + '.psd1')) }
+            Microsoft.PowerShell.Core\Import-Module -Name $manifest -Force -ErrorAction Stop
+        }
+    }
+    $inputData = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__INPUT__')) | Microsoft.PowerShell.Utility\ConvertFrom-Json
+    $parameters = @{}
+    foreach ($property in $inputData.parameters.PSObject.Properties) { $parameters[$property.Name] = $property.Value }
+    $stage = 'invoke_bootstrap'
+    & $inputData.bootstrap @parameters
+    if (-not $?) { throw 'The verified bootstrap failed.' }
+}
+catch {
+    [Console]::Error.WriteLine('VEX_BOOTSTRAP_DIAGNOSTIC=' + $stage + ';' +
+        $_.InvocationInfo.ScriptLineNumber + ';' + $_.Exception.GetType().FullName + ';' + $_.Exception.HResult)
+    exit 3
+}
+'@
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command.Replace('__INPUT__', $payload)))
+        $arguments = @('-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $encoded)
         Invoke-AcceptanceProcess -Executable (Get-AcceptanceSystemPowerShellPath) -Arguments $arguments
     }
     finally { foreach ($stream in $locks) { $stream.Dispose() } }
@@ -729,6 +776,7 @@ $privateDirectory = $null; $fixtureId = [Guid]::NewGuid().ToString('N')
 $ownerSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $shared = @()
 $script:NativeSetupUiDiagnostic = $null
+$script:BootstrapDiagnostic = $null
 $evidence = [ordered]@{
     schema = 'vex.windows-signed-install-acceptance.v1'
     fixture_source_commit = $(if ($env:GITHUB_SHA -match '^[a-fA-F0-9]{40}$') { $env:GITHUB_SHA } else { $null })
@@ -740,6 +788,7 @@ $evidence = [ordered]@{
     downloaded_bundle_preverification_guard = $false; native_double_click_installer_acceptance = $false
     shell_reputation_prompt_acceptance = $false; verified_direct_setup_launch = $false
     verified_shell_setup_launch = $false
+    bootstrap_diagnostic = $null
     native_setup = $null; native_setup_bundle_verification = $false
     native_setup_ui_diagnostic = $null
     native_setup_window_verified = $false; native_consumer_installation_verified = $false
@@ -793,6 +842,7 @@ try {
 catch { $failure = $_; $evidence.failure_type = $_.Exception.GetType().Name }
 finally {
     $evidence.native_setup_ui_diagnostic = $script:NativeSetupUiDiagnostic
+    $evidence.bootstrap_diagnostic = $script:BootstrapDiagnostic
     try {
         if ($mutationStarted) {
             Invoke-AcceptanceOwnedCleanup -MutationStarted $true -Bundles @($candidate, $preceding) -OwnerSid $ownerSid

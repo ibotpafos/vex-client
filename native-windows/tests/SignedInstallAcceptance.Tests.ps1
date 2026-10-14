@@ -21,6 +21,7 @@ function Assert-Rejected([scriptblock]$Operation, [string]$Message) {
 $temporary = Join-Path ([IO.Path]::GetTempPath()) ('vex-signed-install-tests-' + [Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($temporary) | Out-Null
 $realInvokeProcess = (Get-Item Function:Invoke-AcceptanceProcess).ScriptBlock
+$realPowerShellPath = (Get-Item Function:Get-AcceptanceSystemPowerShellPath).ScriptBlock
 $realInvokeBootstrap = (Get-Item Function:Invoke-AcceptanceBootstrap).ScriptBlock
 $realOwnedBundle = (Get-Item Function:Get-AcceptanceOwnedBundle).ScriptBlock
 $realRemoveDirectory = (Get-Item Function:Remove-AcceptancePrivateDirectory).ScriptBlock
@@ -124,9 +125,40 @@ try {
         $script:launch = [pscustomobject]@{Executable=$Executable;Arguments=$Arguments}
     }
     & $realInvokeBootstrap -Bundle $bundle -Action Install
+    $bootstrapCommand = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($launch.Arguments[-1]))
+    $payloadMatch = [regex]::Match($bootstrapCommand, "FromBase64String\('(?<payload>[A-Za-z0-9+/=]+)'\)")
+    Assert $payloadMatch.Success 'Bootstrap parameters were not encoded as data.'
+    $bootstrapInput = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($payloadMatch.Groups['payload'].Value)) | ConvertFrom-Json
     Assert ($launch.Executable -match 'WindowsPowerShell[\\/]v1\.0[\\/]powershell.exe$' -and
-        $launch.Arguments -contains 'Bypass' -and $launch.Arguments -contains 'User' -and
-        $launch.Arguments -notcontains '-RelaunchAfterInstall') 'Installer did not use verified system PowerShell with original-user registration.'
+        $launch.Arguments -contains 'Bypass' -and $launch.Arguments -contains '-EncodedCommand' -and
+        $bootstrapInput.parameters.Phase -ceq 'User' -and $bootstrapInput.parameters.Action -ceq 'Install' -and
+        $bootstrapInput.bootstrap -ceq (Join-Path $bundle.Root $bundle.Metadata.bootstrap_file) -and
+        'RelaunchAfterInstall' -notin $bootstrapInput.parameters.PSObject.Properties.Name) 'Installer did not use verified system PowerShell with original-user registration.'
+    $commandTokens = $null; $commandErrors = $null
+    [Management.Automation.Language.Parser]::ParseInput($bootstrapCommand, [ref]$commandTokens, [ref]$commandErrors) | Out-Null
+    Assert ($commandErrors.Count -eq 0) 'Actual bootstrap verifier command does not parse.'
+    if ($IsWindows) {
+        # Execute that same initializer and encoded data binding in the real PS5
+        # child. The callback only reads fixture files and records its parameters.
+        $callback = Join-Path $temporary 'bootstrap-callback.ps1'
+        $marker = Join-Path $temporary 'bootstrap-callback-result'
+        [IO.File]::WriteAllText($callback, @'
+param($Phase, $Action, $MetadataPath, $PackagePath)
+$ErrorActionPreference = 'Stop'
+Get-AuthenticodeSignature -LiteralPath $PSCommandPath | Out-Null
+Get-FileHash -LiteralPath $MetadataPath | Out-Null
+Get-Content -LiteralPath $MetadataPath | Out-Null
+[IO.File]::WriteAllText($PackagePath, ($Phase + ':' + $Action))
+'@)
+        $callbackData = @{bootstrap=$callback;parameters=@{Phase='User';Action='Verify';MetadataPath=$metadataPath;PackagePath=$marker}} | ConvertTo-Json -Compress
+        $callbackPayload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($callbackData))
+        $callbackCommand = $bootstrapCommand.Replace($payloadMatch.Groups['payload'].Value, $callbackPayload)
+        $callbackEncoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($callbackCommand))
+        $callbackArguments = @($launch.Arguments)
+        $callbackArguments[-1] = $callbackEncoded
+        & $realInvokeProcess -Executable (& $realPowerShellPath) -Arguments $callbackArguments -TimeoutSeconds 20
+        Assert ([IO.File]::ReadAllText($marker) -ceq 'User:Verify') 'The actual PS5 bootstrap initializer lost original-user action binding.'
+    }
     Assert (@($heldLocks | Where-Object { -not $_.SafeFileHandle.IsClosed }).Count -eq 0) 'Successful bootstrap leaked input locks.'
     $script:validated = [pscustomobject]@{Metadata=[pscustomobject]@{package_sha256=('0'*64);bootstrap_sha256=$bundle.Metadata.bootstrap_sha256;client_certificate_sha256=$bundle.Metadata.client_certificate_sha256}}
     $script:launch = $null
@@ -209,6 +241,19 @@ try {
         } 'A failing unrecognized child was accepted.'
         Assert ($null -eq $NativeSetupUiDiagnostic) 'Unrecognized child content escaped the sanitized diagnostic protocol.'
     }
+    $script:BootstrapDiagnostic = $null
+    Assert-Rejected {
+        & $realInvokeProcess -Executable $executable -Arguments @('-NoLogo','-NoProfile','-Command',
+            "[Console]::Error.WriteLine('VEX_BOOTSTRAP_DIAGNOSTIC=invoke_bootstrap;324;System.InvalidOperationException;-2146233079'); exit 3")
+    } 'A failed signed bootstrap was accepted.'
+    Assert ($BootstrapDiagnostic.stage -ceq 'invoke_bootstrap' -and $BootstrapDiagnostic.script_line -eq 324 -and
+        $BootstrapDiagnostic.exception_type -ceq 'System.InvalidOperationException') 'Owned bootstrap diagnostics were lost.'
+    $script:BootstrapDiagnostic = $null
+    Assert-Rejected {
+        & $realInvokeProcess -Executable $executable -Arguments @('-NoLogo','-NoProfile','-Command',
+            "[Console]::Error.WriteLine('VEX_BOOTSTRAP_DIAGNOSTIC=unknown_stage;324;Secret.Type;0'); exit 3")
+    } 'An unknown failing bootstrap was accepted.'
+    Assert ($null -eq $BootstrapDiagnostic) 'Arbitrary bootstrap diagnostics escaped the whitelist.'
 
     # Execute the production native lifecycle with UI/install boundaries mocked.
     # Only the actual Install invocation plus independent verification, app and

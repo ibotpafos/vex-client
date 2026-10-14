@@ -27,6 +27,19 @@ $realRemoveDirectory = (Get-Item Function:Remove-AcceptancePrivateDirectory).Scr
 $realOpenLocks = (Get-Item Function:Open-AcceptanceBundleLocks).ScriptBlock
 $realNativeInstall = (Get-Item Function:Invoke-AcceptanceNativeInstall).ScriptBlock
 try {
+    # A PS7 parent must not poison PS5.1 module auto-loading. Exercise the real
+    # fixed system child with an empty parent module directory; no install runs.
+    if ($IsWindows) {
+        $savedModulePath = $env:PSModulePath
+        try {
+            $env:PSModulePath = Join-Path $temporary 'no-parent-modules'
+            & $realInvokeProcess -Executable (Get-AcceptanceSystemPowerShellPath) -Arguments @(
+                '-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+                '$ErrorActionPreference = "Stop"; Get-Command Get-FileHash, Start-Process | Out-Null; Get-FileHash -LiteralPath ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) | Out-Null'
+            ) -TimeoutSeconds 20
+        }
+        finally { $env:PSModulePath = $savedModulePath }
+    }
     $root = Join-Path $temporary 'bundle'
     [IO.Directory]::CreateDirectory($root) | Out-Null
     $metadata = [ordered]@{
@@ -221,7 +234,7 @@ try {
     function New-NativeEvidence {
         [ordered]@{ phases=[Collections.Generic.List[object]]::new(); native_setup_window_verified=$false
             native_consumer_installation_verified=$false; native_double_click_installer_acceptance=$false
-            verified_direct_setup_launch=$false; shell_reputation_prompt_acceptance=$false }
+            verified_direct_setup_launch=$false; verified_shell_setup_launch=$false; shell_reputation_prompt_acceptance=$false }
     }
     $script:failNativeVerify = $true; $proof = New-NativeEvidence
     Assert-Rejected { & $realNativeInstall -Bundle $bundle -OwnerSid 'owner' -Evidence $proof } 'A failed independent Verify was ignored.'
@@ -231,7 +244,7 @@ try {
     Assert (-not $proof.native_consumer_installation_verified -and -not $proof.native_double_click_installer_acceptance) 'Remaining service/state falsely qualified native installation.'
     $script:failNativeCleanup = $false; $proof = New-NativeEvidence
     & $realNativeInstall -Bundle $bundle -OwnerSid 'owner' -Evidence $proof
-    Assert ($proof.native_consumer_installation_verified -and $proof.verified_direct_setup_launch -and
+    Assert ($proof.native_consumer_installation_verified -and $proof.verified_shell_setup_launch -and
         -not $proof.native_double_click_installer_acceptance -and -not $proof.shell_reputation_prompt_acceptance -and
         $proof.native_setup_window_verified -and $proof.phases.Count -eq 5 -and $nativeInstalls -eq 3) 'Complete native consumer installation was not distinguished from window-only smoke.'
 

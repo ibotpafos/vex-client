@@ -30,9 +30,11 @@ $receipt = [ordered]@{
     certificate_sha256 = $certificatePin
     disposable_windows_runner = $true
     untrusted_before_import = $false
+    before_import_signature_status = $null
     valid_after_import = $false
     tampered_signature_rejected = $false
     wrong_certificate_pin_rejected = $false
+    trust_helper_signed = $false
     trust_removed_after_check = $false
     passed = $false
 }
@@ -67,8 +69,16 @@ try {
         $probe = Join-Path $credentialDirectory 'signature-probe.ps1'
         [IO.File]::WriteAllText($probe, "Write-Output 'VEX signature probe'`n", [Text.UTF8Encoding]::new($false))
         $signature = Set-AuthenticodeSignature -LiteralPath $probe -Certificate $signer -HashAlgorithm SHA256
-        if ($signature.Status -ne [Management.Automation.SignatureStatus]::NotTrusted) {
-            throw 'The fresh runner must reject VEX self-signed code before explicit trust installation.'
+        $signature = Get-AuthenticodeSignature -LiteralPath $probe
+        $receipt.before_import_signature_status = $signature.Status.ToString()
+        # Windows maps CERT_E_UNTRUSTEDROOT to UnknownError on some builds.
+        # Require a real pinned signature before trust, then Valid after trust;
+        # neither NotSigned nor an arbitrary signing failure is acceptable.
+        if ($signature.Status -notin @([Management.Automation.SignatureStatus]::NotTrusted,
+                [Management.Automation.SignatureStatus]::UnknownError) -or
+            $null -eq $signature.SignerCertificate -or
+            $signature.SignerCertificate.GetCertHashString([Security.Cryptography.HashAlgorithmName]::SHA256) -cne $certificatePin) {
+            throw "Untrusted signature preflight failed with status $($signature.Status)."
         }
         $receipt.untrusted_before_import = $true
     }
@@ -139,6 +149,20 @@ try {
         & (Join-Path $root 'native-windows/packaging/package-native-windows.ps1') -Architecture $architecture -Version $normalizedVersion -OutputRoot $packagesRoot
     }
     & (Join-Path $root 'native-windows/packaging/publish-native-windows.ps1') -PackagesRoot $packagesRoot -PublishRoot $publishedRoot
+    # The downloadable trust-management helper must also run under RemoteSigned
+    # once the public certificate has been explicitly trusted by the owner.
+    $publicTrustScript = Join-Path $OutputRoot 'manage-self-signed-trust.ps1'
+    Copy-Item -LiteralPath $trustScript -Destination $publicTrustScript
+    $helperSigner = [Security.Cryptography.X509Certificates.X509Certificate2]::new($pfxPath,
+        $env:VEX_WINDOWS_SIGN_PFX_PASSWORD, [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet)
+    try {
+        $helperSignature = Set-AuthenticodeSignature -LiteralPath $publicTrustScript -Certificate $helperSigner `
+            -HashAlgorithm SHA256 -TimestampServer 'http://timestamp.digicert.com'
+        if ($helperSignature.Status -ne [Management.Automation.SignatureStatus]::Valid -or
+            $null -eq $helperSignature.TimeStamperCertificate) { throw 'Trust helper signing or timestamp verification failed.' }
+        $receipt.trust_helper_signed = $true
+    }
+    finally { $helperSigner.Dispose() }
     $precedingVersion = [Version]::new(0, 0, 0, 1).ToString()
     if ([Version]$normalizedVersion -le [Version]$precedingVersion) { throw 'Candidate version must exceed the synthetic preceding version.' }
     $precedingRoot = Join-Path $credentialDirectory 'preceding'
@@ -151,10 +175,10 @@ try {
         -CandidateBundleDirectory (Join-Path $packagesRoot "stable/x64/$normalizedVersion") `
         -PrecedingBundleDirectory (Join-Path $precedingRoot "stable/x64/$precedingVersion") `
         -ResultPath (Join-Path $OutputRoot 'signed-install-acceptance-x64.json')
-    Copy-Item -LiteralPath $publicCertificate, $trustScript -Destination $OutputRoot
+    Copy-Item -LiteralPath $publicCertificate -Destination $OutputRoot
     Copy-Item -LiteralPath (Join-Path $root 'native-windows/packaging/self-signed/README.md') -Destination $OutputRoot
     foreach ($directory in @(Get-ChildItem -LiteralPath $publishedRoot -Directory -Recurse | Where-Object Name -EQ 'stable')) {
-        Copy-Item -LiteralPath $publicCertificate, $trustScript -Destination $directory.FullName
+        Copy-Item -LiteralPath $publicCertificate, $publicTrustScript -Destination $directory.FullName
         Copy-Item -LiteralPath (Join-Path $root 'native-windows/packaging/self-signed/README.md') -Destination $directory.FullName
     }
     $receipt.passed = $true

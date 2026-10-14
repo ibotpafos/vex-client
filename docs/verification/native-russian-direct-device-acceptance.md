@@ -14,6 +14,13 @@ Apple Development identity и provisioning с Network Extension / App Groups.
 На текущем Mac этих средств подписи и полного Xcode нет. Ветки исходников
 не являются подписанным IPA или доставкой в TestFlight/App Store.
 
+В готовой среде с существующей подписью установить зависимости через `npm ci`
+и `pod install --deployment` в `ios/`. Из корня вызвать
+`GOTOOLCHAIN=go1.26.9 IOS_DEVELOPMENT_TEAM=<TeamID> IOS_CONFIGURATION=Release npm run ios:device-build`.
+Device builder проверит компилятор перед sync/build; нужно сохранить именно
+commit этой сборки и её подпись. Этот шаг требует готового Apple Developer
+окружения и не создаёт подтверждение проверки на устройстве.
+
 1. Записать commit сборки, её версию, номер, SHA-256 и версию iOS.
 2. Включить Smart routing и защиту от утечек. На Wi-Fi проверить российские
    домены `.ru`, `.su`, `.рф` и российский сервис вне этих зон. Они должны

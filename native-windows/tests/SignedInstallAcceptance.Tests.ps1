@@ -177,6 +177,26 @@ try {
     Invoke-AcceptanceOwnedCleanup -MutationStarted $true -Bundles @($bundle) -OwnerSid 'owner'
     Assert ($watch.Elapsed -lt [TimeSpan]::FromSeconds(8) -and $uninstalls -eq 1) 'A process timeout prevented independent owned cleanup.'
 
+    # Keep owned UI stage/type/line diagnostics while rejecting arbitrary child
+    # output. Execute actual child processes; no Windows/UI mutation is involved.
+    $script:NativeSetupUiDiagnostic = $null
+    Assert-Rejected {
+        & $realInvokeProcess -Executable $executable -Arguments @('-NoLogo', '-NoProfile', '-Command',
+            "[Console]::Error.WriteLine('VEX_NATIVE_UI_DIAGNOSTIC=find_controls;27;System.InvalidOperationException;-2146233079'); exit 2")
+    } 'A failed UI probe was accepted.'
+    Assert ($NativeSetupUiDiagnostic.stage -ceq 'find_controls' -and
+        $NativeSetupUiDiagnostic.script_line -eq 27 -and
+        $NativeSetupUiDiagnostic.exception_type -ceq 'System.InvalidOperationException' -and
+        $NativeSetupUiDiagnostic.hresult -eq -2146233079) 'Owned UI diagnostic binding was lost.'
+    foreach ($privateOutput in @('private-fixture-data', 'VEX_NATIVE_UI_DIAGNOSTIC=unknown_stage;27;Secret.Type;0')) {
+        $script:NativeSetupUiDiagnostic = $null
+        Assert-Rejected {
+            & $realInvokeProcess -Executable $executable -Arguments @('-NoLogo', '-NoProfile', '-Command',
+                "[Console]::Error.WriteLine('$privateOutput'); exit 2")
+        } 'A failing unrecognized child was accepted.'
+        Assert ($null -eq $NativeSetupUiDiagnostic) 'Unrecognized child content escaped the sanitized diagnostic protocol.'
+    }
+
     # Execute the production native lifecycle with UI/install boundaries mocked.
     # Only the actual Install invocation plus independent verification, app and
     # cleanup success can commit consumer-install evidence.

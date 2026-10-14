@@ -289,7 +289,21 @@ function Invoke-AcceptanceProcess {
         if (-not [Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]]@($stdout, $stderr), 5000)) {
             throw 'Acceptance child output handles did not close.'
         }
-        if ($process.ExitCode -ne 0) { throw 'Acceptance child reported failure.' }
+        if ($process.ExitCode -ne 0) {
+            # Only the owned UI probe's bounded stage/type/line protocol is
+            # retained. Arbitrary application output and exception text stay private.
+            $match = [regex]::Match($stderr.GetAwaiter().GetResult(),
+                '(?m)^VEX_NATIVE_UI_DIAGNOSTIC=(?<stage>load_automation|start_setup|inspect_process|inspect_window|find_controls|invoke_install|inspect_install);(?<line>[0-9]{1,4});(?<type>[A-Za-z0-9_.]{1,180});(?<hresult>-?[0-9]{1,11})\r?$')
+            if ($match.Success) {
+                $script:NativeSetupUiDiagnostic = [ordered]@{
+                    stage = $match.Groups['stage'].Value
+                    script_line = [int]$match.Groups['line'].Value
+                    exception_type = $match.Groups['type'].Value
+                    hresult = [long]$match.Groups['hresult'].Value
+                }
+            }
+            throw 'Acceptance child reported failure.'
+        }
     }
     finally { $process.Dispose() }
 }
@@ -389,21 +403,26 @@ function Invoke-AcceptanceNativeSetupUi {
         $probe = @'
 $ErrorActionPreference = 'Stop'
 $inputValue = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__PAYLOAD__')) | ConvertFrom-Json
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
 $owned = $null
+$stage = 'load_automation'
 try {
+    Add-Type -AssemblyName UIAutomationClient
+    Add-Type -AssemblyName UIAutomationTypes
+    $stage = 'start_setup'
     $owned = Start-Process -FilePath $inputValue.executable -WorkingDirectory (Split-Path -Parent $inputValue.executable) -PassThru
     $deadline = [DateTime]::UtcNow.AddSeconds($(if ($inputValue.install) { 180 } else { 35 }))
     do {
+        $stage = 'inspect_process'
         $owned.Refresh()
         if ($owned.HasExited) { throw 'Native setup exited before its UI was inspected.' }
         if ($owned.MainModule.FileName -ine $inputValue.executable -or
             (Get-FileHash -LiteralPath $inputValue.executable -Algorithm SHA256).Hash -ine $inputValue.sha256) { throw 'Unexpected setup process image.' }
         if ($owned.MainWindowHandle -ne [IntPtr]::Zero) {
+            $stage = 'inspect_window'
             $window = [Windows.Automation.AutomationElement]::FromHandle($owned.MainWindowHandle)
             $ready = $window.Current.AutomationId -ceq 'VexSetupWindow' -or $window.Current.Name -ceq 'VexSetupWindow'
             foreach ($id in @('SetupInstallButton', 'SetupRepairButton', 'SetupUninstallButton', 'SetupVerifyButton', 'SetupStatusText')) {
+                $stage = 'find_controls'
                 $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, $id)
                 $element = $window.FindFirst([Windows.Automation.TreeScope]::Descendants, $condition)
                 if ($null -eq $element -or $element.Current.IsOffscreen) { $ready = $false }
@@ -416,12 +435,14 @@ try {
     } while ([DateTime]::UtcNow -lt $deadline)
     if (-not $ready) { throw 'Native setup window and action controls were not available.' }
     if ($inputValue.install) {
+        $stage = 'invoke_install'
         if (@(Get-AppxPackage -Name $inputValue.package_name).Count -or
             @(Get-Service -Name 'VEX VPN Service' -ErrorAction SilentlyContinue).Count) { throw 'Native install requires the fresh acceptance baseline.' }
         ([Windows.Automation.InvokePattern]$installButton.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)).Invoke()
         $deadline = [DateTime]::UtcNow.AddSeconds(360)
         $installed = $false
         do {
+            $stage = 'inspect_install'
             $owned.Refresh()
             if ($owned.HasExited) { throw 'Native setup exited during its Install action.' }
             $package = @(Get-AppxPackage -Name $inputValue.package_name)
@@ -439,6 +460,11 @@ try {
         # The parent independently verifies protected state, signatures, hashes,
         # actual SCM image and the signed-out app before accepting this action.
     }
+}
+catch {
+    [Console]::Error.WriteLine('VEX_NATIVE_UI_DIAGNOSTIC=' + $stage + ';' +
+        $_.InvocationInfo.ScriptLineNumber + ';' + $_.Exception.GetType().FullName + ';' + $_.Exception.HResult)
+    throw
 }
 finally {
     if ($null -ne $owned) {
@@ -690,6 +716,7 @@ $candidate = $null; $preceding = $null; $mutationStarted = $false; $failure = $n
 $privateDirectory = $null; $fixtureId = [Guid]::NewGuid().ToString('N')
 $ownerSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $shared = @()
+$script:NativeSetupUiDiagnostic = $null
 $evidence = [ordered]@{
     schema = 'vex.windows-signed-install-acceptance.v1'
     fixture_source_commit = $(if ($env:GITHUB_SHA -match '^[a-fA-F0-9]{40}$') { $env:GITHUB_SHA } else { $null })
@@ -700,6 +727,7 @@ $evidence = [ordered]@{
     cleanup_confirmed = $false; installed_release_signed_out_ui = $false
     downloaded_bundle_preverification_guard = $false; native_double_click_installer_acceptance = $false
     native_setup = $null; native_setup_bundle_verification = $false
+    native_setup_ui_diagnostic = $null
     native_setup_window_verified = $false; native_consumer_installation_verified = $false
     vclibs_absent_before_install = $false; clean_host_dependency_acceptance = $false
     real_authenticated_vpn_acceptance = $false; physical_arm64_acceptance = $false
@@ -750,6 +778,7 @@ try {
 }
 catch { $failure = $_; $evidence.failure_type = $_.Exception.GetType().Name }
 finally {
+    $evidence.native_setup_ui_diagnostic = $script:NativeSetupUiDiagnostic
     try {
         if ($mutationStarted) {
             Invoke-AcceptanceOwnedCleanup -MutationStarted $true -Bundles @($candidate, $preceding) -OwnerSid $ownerSid

@@ -409,7 +409,14 @@ try {
     Add-Type -AssemblyName UIAutomationClient
     Add-Type -AssemblyName UIAutomationTypes
     $stage = 'start_setup'
-    $owned = Start-Process -FilePath $inputValue.executable -WorkingDirectory (Split-Path -Parent $inputValue.executable) -PassThru
+    # Exercise the exact signed image after explicit trust, under immutable input
+    # locks. Shell reputation prompts remain a separate acceptance surface.
+    # Preserve the downloaded-file ADS and Windows protection settings.
+    $start = [Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = $inputValue.executable
+    $start.WorkingDirectory = Split-Path -Parent $inputValue.executable
+    $start.UseShellExecute = $false
+    $owned = [Diagnostics.Process]::Start($start)
     $deadline = [DateTime]::UtcNow.AddSeconds($(if ($inputValue.install) { 180 } else { 35 }))
     do {
         $stage = 'inspect_process'
@@ -526,7 +533,7 @@ function Invoke-AcceptanceNativeInstall {
     # A window-only smoke never qualifies the consumer Install path. Commit
     # these flags only after its actual action, independent Verify and cleanup.
     $Evidence.native_consumer_installation_verified = $true
-    $Evidence.native_double_click_installer_acceptance = $true
+    $Evidence.verified_direct_setup_launch = $true
 }
 
 function Get-AcceptanceOwnedBundle {
@@ -726,6 +733,7 @@ $evidence = [ordered]@{
     phases = [Collections.Generic.List[object]]::new()
     cleanup_confirmed = $false; installed_release_signed_out_ui = $false
     downloaded_bundle_preverification_guard = $false; native_double_click_installer_acceptance = $false
+    shell_reputation_prompt_acceptance = $false; verified_direct_setup_launch = $false
     native_setup = $null; native_setup_bundle_verification = $false
     native_setup_ui_diagnostic = $null
     native_setup_window_verified = $false; native_consumer_installation_verified = $false

@@ -220,7 +220,8 @@ try {
     }
     function New-NativeEvidence {
         [ordered]@{ phases=[Collections.Generic.List[object]]::new(); native_setup_window_verified=$false
-            native_consumer_installation_verified=$false; native_double_click_installer_acceptance=$false }
+            native_consumer_installation_verified=$false; native_double_click_installer_acceptance=$false
+            verified_direct_setup_launch=$false; shell_reputation_prompt_acceptance=$false }
     }
     $script:failNativeVerify = $true; $proof = New-NativeEvidence
     Assert-Rejected { & $realNativeInstall -Bundle $bundle -OwnerSid 'owner' -Evidence $proof } 'A failed independent Verify was ignored.'
@@ -230,7 +231,8 @@ try {
     Assert (-not $proof.native_consumer_installation_verified -and -not $proof.native_double_click_installer_acceptance) 'Remaining service/state falsely qualified native installation.'
     $script:failNativeCleanup = $false; $proof = New-NativeEvidence
     & $realNativeInstall -Bundle $bundle -OwnerSid 'owner' -Evidence $proof
-    Assert ($proof.native_consumer_installation_verified -and $proof.native_double_click_installer_acceptance -and
+    Assert ($proof.native_consumer_installation_verified -and $proof.verified_direct_setup_launch -and
+        -not $proof.native_double_click_installer_acceptance -and -not $proof.shell_reputation_prompt_acceptance -and
         $proof.native_setup_window_verified -and $proof.phases.Count -eq 5 -and $nativeInstalls -eq 3) 'Complete native consumer installation was not distinguished from window-only smoke.'
 
     $fixtureId = [Guid]::NewGuid().ToString('N')

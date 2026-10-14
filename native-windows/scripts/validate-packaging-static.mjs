@@ -176,6 +176,13 @@ const render = (template, values) =>
   );
 
 const manifestTemplate = read(path.join(packagingDirectory, "AppxManifest.xml.template"));
+// Foundation PackageDependency has no ProcessorArchitecture attribute. Windows
+// resolves compatible frameworks; the bundled APPX identity is checked separately.
+assert.doesNotMatch(
+  manifestTemplate,
+  /<PackageDependency\b[^>]*\bProcessorArchitecture=/,
+  "foundation PackageDependency must follow the Windows manifest schema",
+);
 requireText(
   manifestTemplate,
   /<Resource Language="ru-ru"\s*\/>[\s\S]*<Resource Language="en-us"\s*\/>/,

@@ -116,8 +116,8 @@ try {
     $env:VEX_WINDOWS_UPDATE_KEY_ID = 'windows-selfsigned-20261014'
     $env:VEX_WINDOWS_RELEASE_CHANNEL = 'stable'
     $env:VEX_WINDOWS_RELEASE_VERSION = $normalizedVersion
-    $env:VEX_WINDOWS_UPDATE_ORIGIN = 'https://vexvpn.app'
-    $env:VEX_WINDOWS_PACKAGE_BASE_URI = 'https://vexvpn.app/self-signed-candidate/'
+    $env:VEX_WINDOWS_UPDATE_ORIGIN = 'https://downloads.vexguard.app/windows/native/self-signed-candidate'
+    $env:VEX_WINDOWS_PACKAGE_BASE_URI = $env:VEX_WINDOWS_UPDATE_ORIGIN + '/'
     $env:VEX_WINDOWS_APPINSTALLER_BASE_URI = $env:VEX_WINDOWS_PACKAGE_BASE_URI
     $env:VEX_WINDOWS_MANIFEST_REVISION = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds().ToString()
     $env:VEX_WINDOWS_RELEASE_NOTES = 'Прямой доступ к российским сайтам с сохранением защиты от утечек.'
@@ -184,9 +184,12 @@ try {
         -ResultPath (Join-Path $OutputRoot 'signed-install-acceptance-x64.json')
     Copy-Item -LiteralPath $publicCertificate -Destination $OutputRoot
     Copy-Item -LiteralPath (Join-Path $root 'native-windows/packaging/self-signed/README.md') -Destination $OutputRoot
-    foreach ($directory in @(Get-ChildItem -LiteralPath $publishedRoot -Directory -Recurse | Where-Object Name -EQ 'stable')) {
-        Copy-Item -LiteralPath $publicCertificate, $publicTrustScript -Destination $directory.FullName
-        Copy-Item -LiteralPath (Join-Path $root 'native-windows/packaging/self-signed/README.md') -Destination $directory.FullName
+    foreach ($architecture in @('x64', 'arm64')) {
+        foreach ($directory in @((Join-Path $publishedRoot "stable/$architecture"),
+            (Join-Path $publishedRoot "stable/$normalizedVersion/$architecture"))) {
+            Copy-Item -LiteralPath $publicCertificate, $publicTrustScript -Destination $directory
+            Copy-Item -LiteralPath (Join-Path $root 'native-windows/packaging/self-signed/README.md') -Destination $directory
+        }
     }
     $receipt.passed = $true
 }

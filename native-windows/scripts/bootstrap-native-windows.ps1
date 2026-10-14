@@ -874,6 +874,9 @@ function Assert-InstalledState {
 
 function Assert-AuthorizationToken {
     param([Parameter(Mandatory = $true)][string]$Path)
+    # Independent Verify/Restore runs in a fresh PS5.1 process, without the
+    # provisioning script that normally loads the DPAPI framework assembly.
+    Add-Type -AssemblyName System.Security
     $protectedToken = [IO.File]::ReadAllBytes($Path)
     $token = [Security.Cryptography.ProtectedData]::Unprotect($protectedToken,
         [Text.Encoding]::UTF8.GetBytes('VEX VPN IPC v1'), [Security.Cryptography.DataProtectionScope]::LocalMachine)

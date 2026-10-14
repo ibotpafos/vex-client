@@ -349,8 +349,36 @@ try {
         $validToken = [Security.Cryptography.ProtectedData]::Protect([byte[]]::new(32), [Text.Encoding]::UTF8.GetBytes('VEX VPN IPC v1'), [Security.Cryptography.DataProtectionScope]::LocalMachine)
         [IO.File]::WriteAllBytes($file, $validToken)
         Assert-AuthorizationToken -Path $file
+        # The parent already loaded System.Security above. Qualify standalone
+        # Verify in a fresh Windows PowerShell5.1 process without that side effect.
+        $tokenVerifier = (Get-Item Function:Assert-AuthorizationToken).ScriptBlock.ToString()
+        function Invoke-FreshTokenVerifier([bool]$ShouldReject) {
+            $inputData = @{path=$file;reject=$ShouldReject} | ConvertTo-Json -Compress
+            $payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($inputData))
+            $command = "`$ErrorActionPreference = 'Stop'`nfunction Assert-AuthorizationToken {`n" + $tokenVerifier + "`n}`n" + @'
+$inputData = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__INPUT__')) | ConvertFrom-Json
+$rejected = $false
+try { Assert-AuthorizationToken -Path $inputData.path } catch { $rejected = $true }
+if ($rejected -ne $inputData.reject) { exit 3 }
+'@.Replace('__INPUT__', $payload)
+            $start = [Diagnostics.ProcessStartInfo]::new()
+            $start.FileName = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'WindowsPowerShell\v1.0\powershell.exe'
+            $start.UseShellExecute = $false
+            $start.RedirectStandardOutput = $true; $start.RedirectStandardError = $true
+            $start.Arguments = '-NoLogo -NoProfile -NonInteractive -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+            $process = [Diagnostics.Process]::Start($start)
+            try {
+                $output = $process.StandardOutput.ReadToEndAsync(); $errorOutput = $process.StandardError.ReadToEndAsync()
+                if (-not $process.WaitForExit(30000)) { $process.Kill(); throw 'Fresh DPAPI verifier exceeded its deadline.' }
+                Assert ($process.ExitCode -eq 0) 'Fresh PS5.1 token verification did not preserve valid/corrupt admission.'
+                Assert ([Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]]@($output,$errorOutput),5000)) 'Fresh token verifier did not close its output handles.'
+            }
+            finally { $process.Dispose() }
+        }
+        Invoke-FreshTokenVerifier $false
         [IO.File]::WriteAllBytes($file, [byte[]]::new(3))
         Assert-Rejected { Assert-AuthorizationToken -Path $file } 'Corrupt machine DPAPI authorization must be rejected'
+        Invoke-FreshTokenVerifier $true
 
         Import-ProductionFunctions 'uninstall-vpn-service.ps1'
         $script:registryFixture = 'Software\VexInstallerSafety\' + [guid]::NewGuid().ToString('N')

@@ -33,6 +33,7 @@ $receipt = [ordered]@{
     before_import_signature_status = $null
     valid_after_import = $false
     tampered_signature_rejected = $false
+    tampered_signature_status = $null
     wrong_certificate_pin_rejected = $false
     trust_helper_signed = $false
     trust_removed_after_check = $false
@@ -90,9 +91,15 @@ try {
         throw 'Authenticode did not accept the pinned code-signing certificate after trust installation.'
     }
     $receipt.valid_after_import = $true
-    [IO.File]::AppendAllText($probe, "Write-Output 'altered'`n", [Text.UTF8Encoding]::new($false))
-    if ((Get-AuthenticodeSignature -LiteralPath $probe).Status -ne [Management.Automation.SignatureStatus]::HashMismatch) {
-        throw 'Authenticode did not reject tampered self-signed code.'
+    # Alter the signed payload before its signature block, rather than appending
+    # after the block (which the PowerShell SIP can treat as a malformed signature).
+    $signedProbe = [IO.File]::ReadAllText($probe)
+    if (-not $signedProbe.Contains('VEX signature probe')) { throw 'Signed probe payload is missing.' }
+    [IO.File]::WriteAllText($probe, $signedProbe.Replace('VEX signature probe', 'VEX altered payload'), [Text.UTF8Encoding]::new($false))
+    $tamperedSignature = Get-AuthenticodeSignature -LiteralPath $probe
+    $receipt.tampered_signature_status = $tamperedSignature.Status.ToString()
+    if ($tamperedSignature.Status -ne [Management.Automation.SignatureStatus]::HashMismatch) {
+        throw "Tampered signature preflight failed with status $($tamperedSignature.Status)."
     }
     $receipt.tampered_signature_rejected = $true
     try {

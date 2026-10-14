@@ -422,18 +422,33 @@ jobs:
         run: |
           ./native-windows/scripts/package-self-signed-candidate.ps1 -DisposableRunner `
             -Version $env:CANDIDATE_VERSION -OutputRoot (Join-Path $env:RUNNER_TEMP 'vex-self-signed-candidate')
-      - name: Retain self-signed packages and sanitized lifecycle evidence
+      - name: Retain small sanitized self-signed lifecycle evidence
         if: always() && inputs.self_signed_candidate
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: vex-native-windows-self-signed-candidate
+          name: vex-native-windows-self-signed-evidence
           path: |
-            ${{ runner.temp }}/vex-self-signed-candidate/published/**
             ${{ runner.temp }}/vex-self-signed-candidate/*.json
             ${{ runner.temp }}/vex-self-signed-candidate/*.cer
             ${{ runner.temp }}/vex-self-signed-candidate/*.ps1
             ${{ runner.temp }}/vex-self-signed-candidate/README.md
           if-no-files-found: error
+          retention-days: 14
+      - name: Retain self-signed x64 delivery files
+        if: always() && inputs.self_signed_candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: vex-native-windows-self-signed-x64
+          path: ${{ runner.temp }}/vex-self-signed-candidate/published/stable/*/x64/**
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Retain self-signed arm64 delivery files
+        if: always() && inputs.self_signed_candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: vex-native-windows-self-signed-arm64
+          path: ${{ runner.temp }}/vex-self-signed-candidate/published/stable/*/arm64/**
+          if-no-files-found: ignore
           retention-days: 14
       - name: Verify release inputs and stage architecture-specific runtimes
         if: inputs.package_release && !inputs.self_signed_candidate

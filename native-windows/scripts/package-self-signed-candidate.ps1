@@ -174,14 +174,6 @@ try {
     if ([Version]$normalizedVersion -le [Version]$precedingVersion) { throw 'Candidate version must exceed the synthetic preceding version.' }
     $precedingRoot = Join-Path $credentialDirectory 'preceding'
     & (Join-Path $root 'native-windows/packaging/package-native-windows.ps1') -Architecture x64 -Version $precedingVersion -OutputRoot $precedingRoot
-    # Do not pass signing secrets into installed clients or consumer processes.
-    foreach ($name in $environmentNames) { [Environment]::SetEnvironmentVariable($name, $null) }
-    foreach ($name in @('VEX_WINDOWS_SELF_SIGNED_PFX_BASE64', 'VEX_WINDOWS_SELF_SIGNED_PFX_PASSWORD',
-        'VEX_WINDOWS_SELF_SIGNED_UPDATE_PRIVATE_KEY_BASE64')) { [Environment]::SetEnvironmentVariable($name, $null) }
-    & (Join-Path $PSScriptRoot 'invoke-signed-install-acceptance.ps1') -DisposableRunner -PrecedingIsSynthetic `
-        -CandidateBundleDirectory (Join-Path $packagesRoot "stable/x64/$normalizedVersion") `
-        -PrecedingBundleDirectory (Join-Path $precedingRoot "stable/x64/$precedingVersion") `
-        -ResultPath (Join-Path $OutputRoot 'signed-install-acceptance-x64.json')
     Copy-Item -LiteralPath $publicCertificate -Destination $OutputRoot
     Copy-Item -LiteralPath (Join-Path $root 'native-windows/packaging/self-signed/README.md') -Destination $OutputRoot
     foreach ($architecture in @('x64', 'arm64')) {
@@ -191,6 +183,14 @@ try {
             Copy-Item -LiteralPath (Join-Path $root 'native-windows/packaging/self-signed/README.md') -Destination $directory
         }
     }
+    # Do not pass signing secrets into installed clients or consumer processes.
+    foreach ($name in $environmentNames) { [Environment]::SetEnvironmentVariable($name, $null) }
+    foreach ($name in @('VEX_WINDOWS_SELF_SIGNED_PFX_BASE64', 'VEX_WINDOWS_SELF_SIGNED_PFX_PASSWORD',
+        'VEX_WINDOWS_SELF_SIGNED_UPDATE_PRIVATE_KEY_BASE64')) { [Environment]::SetEnvironmentVariable($name, $null) }
+    & (Join-Path $PSScriptRoot 'invoke-signed-install-acceptance.ps1') -DisposableRunner -PrecedingIsSynthetic `
+        -CandidateBundleDirectory (Join-Path $packagesRoot "stable/x64/$normalizedVersion") `
+        -PrecedingBundleDirectory (Join-Path $precedingRoot "stable/x64/$precedingVersion") `
+        -ResultPath (Join-Path $OutputRoot 'signed-install-acceptance-x64.json')
     $receipt.passed = $true
 }
 finally {
@@ -205,4 +205,10 @@ finally {
     [IO.Directory]::CreateDirectory($OutputRoot) | Out-Null
     [IO.File]::WriteAllText((Join-Path $OutputRoot 'self-signed-acceptance.json'),
         ($receipt | ConvertTo-Json -Depth 4), [Text.UTF8Encoding]::new($false))
+    $installReceipt = Join-Path $OutputRoot 'signed-install-acceptance-x64.json'
+    if (Test-Path -LiteralPath $installReceipt -PathType Leaf) {
+        # The harness writes only its explicitly sanitized operator receipt.
+        # Keep this available in CI diagnostics even if large delivery transfers fail.
+        Write-Output ('SIGNED_INSTALL_ACCEPTANCE=' + (Get-Content -LiteralPath $installReceipt -Raw))
+    }
 }

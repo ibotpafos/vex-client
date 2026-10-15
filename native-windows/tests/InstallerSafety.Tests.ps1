@@ -364,6 +364,7 @@ if ($rejected -ne $inputData.reject) { exit 3 }
             $start = [Diagnostics.ProcessStartInfo]::new()
             $start.FileName = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'WindowsPowerShell\v1.0\powershell.exe'
             $start.UseShellExecute = $false
+            $start.EnvironmentVariables['PSModulePath'] = Join-Path (Split-Path -Parent $start.FileName) 'Modules'
             $start.RedirectStandardOutput = $true; $start.RedirectStandardError = $true
             $start.Arguments = '-NoLogo -NoProfile -NonInteractive -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
             $process = [Diagnostics.Process]::Start($start)

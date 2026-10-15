@@ -113,11 +113,14 @@ function Wait-SmokeCondition {
 }
 
 function Assert-PrimaryInstance {
-    $process.Refresh()
-    if ($process.HasExited) { throw 'Primary preview exited during desktop checks.' }
-    $instances = @(Get-Process -Name 'Vex.Windows.App' -ErrorAction SilentlyContinue)
-    if ($instances.Count -ne 1 -or $instances[0].Id -ne $process.Id) {
-        throw 'Preview activation did not preserve one original application instance.'
+    param([ValidateRange(1, 15)][int]$TimeoutSeconds = 8)
+    # Enumeration can briefly retain a redirected secondary after WaitForExit.
+    # Require the original live instance; reject persistent duplicates by deadline.
+    Wait-SmokeCondition -TimeoutSeconds $TimeoutSeconds -Failure 'Preview activation did not preserve one original application instance.' -Condition {
+        $process.Refresh()
+        if ($process.HasExited) { throw 'Primary preview exited during desktop checks.' }
+        $instances = @(Get-Process -Name 'Vex.Windows.App' -ErrorAction SilentlyContinue)
+        $instances.Count -eq 1 -and $instances[0].Id -eq $process.Id
     }
 }
 

@@ -317,6 +317,16 @@ function Invoke-AcceptanceProcess {
                     hresult = [long]$bootstrapMatch.Groups['hresult'].Value
                 }
             }
+            $installedUiMatch = [regex]::Match($stderr.GetAwaiter().GetResult(),
+                '(?m)^VEX_INSTALLED_UI_DIAGNOSTIC=(?<stage>activate_package|inspect_process|inspect_window|find_signed_out|inspect_settings);(?<line>[0-9]{1,4});(?<type>[A-Za-z0-9_.]{1,180});(?<hresult>-?[0-9]{1,11})\r?$')
+            if ($installedUiMatch.Success) {
+                $script:InstalledUiDiagnostic = [ordered]@{
+                    stage = $installedUiMatch.Groups['stage'].Value
+                    script_line = [int]$installedUiMatch.Groups['line'].Value
+                    exception_type = $installedUiMatch.Groups['type'].Value
+                    hresult = [long]$installedUiMatch.Groups['hresult'].Value
+                }
+            }
             throw 'Acceptance child reported failure.'
         }
     }
@@ -700,14 +710,23 @@ function Find-Element([string]$id) {
     $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, $id)
     return $script:window.FindFirst([Windows.Automation.TreeScope]::Descendants, $condition)
 }
+$stage = 'activate_package'
 try {
     $existing = @(Get-Process -Name 'Vex.Windows.App' -ErrorAction SilentlyContinue)
     if ($existing.Count -gt 1) { throw 'Application ownership is ambiguous.' }
     if ($existing.Count -eq 0) {
-        $null = Start-Process -FilePath (Join-Path ([Environment]::GetFolderPath('Windows')) 'explorer.exe') -ArgumentList ('shell:AppsFolder\'+$inputValue.family+'!VexWindowsApp')
+        # Keep the registered package's ordinary AppsFolder activation target,
+        # avoiding the same PS5 Shell wrapper that blocked the Setup UI probe.
+        $start = [Diagnostics.ProcessStartInfo]::new()
+        $start.FileName = Join-Path ([Environment]::GetFolderPath('Windows')) 'explorer.exe'
+        $start.Arguments = 'shell:AppsFolder\' + $inputValue.family + '!VexWindowsApp'
+        $start.UseShellExecute = $false
+        $activation = [Diagnostics.Process]::Start($start)
+        if ($null -ne $activation) { $activation.Dispose() }
     }
     $deadline = [DateTime]::UtcNow.AddSeconds(25)
     do {
+        $stage = 'inspect_process'
         $processes = @(Get-Process -Name 'Vex.Windows.App' -ErrorAction SilentlyContinue)
         if ($processes.Count -gt 1) { throw 'Application ownership is ambiguous.' }
         if ($processes.Count -eq 1) {
@@ -720,11 +739,13 @@ try {
         Start-Sleep -Milliseconds 200
     } while ([DateTime]::UtcNow -lt $deadline)
     if ($null -eq $owned -or $owned.MainWindowHandle -eq [IntPtr]::Zero) { throw 'Installed application created no window.' }
+    $stage = 'inspect_window'
     $script:window = [Windows.Automation.AutomationElement]::FromHandle($owned.MainWindowHandle)
     # Fresh Release Home resolves to AccountPage until a real session exists.
     # Wait for the real signed-out controls; do not invoke any auth action.
     $deadline = [DateTime]::UtcNow.AddSeconds(20)
     do {
+        $stage = 'find_signed_out'
         $signIn = Find-Element 'WebsiteSignInButton'
         $title = Find-Element 'AccountSignInTitle'
         $settings = Find-Element 'SettingsNavigationButton'
@@ -737,12 +758,18 @@ try {
     ([Windows.Automation.InvokePattern]$settings.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)).Invoke()
     $deadline = [DateTime]::UtcNow.AddSeconds(10)
     do {
+        $stage = 'inspect_settings'
         $toggle = Find-Element 'AutoLaunchToggle'
         if ($null -ne $toggle -and $toggle.Current.IsEnabled) { break }
         Start-Sleep -Milliseconds 200
     } while ([DateTime]::UtcNow -lt $deadline)
     if ($null -eq $toggle -or -not $toggle.Current.IsEnabled) { throw 'Installed Settings is unavailable.' }
     # Read only: do not sign in, enable startup, request a VPN profile or connect.
+}
+catch {
+    [Console]::Error.WriteLine('VEX_INSTALLED_UI_DIAGNOSTIC=' + $stage + ';' +
+        $_.InvocationInfo.ScriptLineNumber + ';' + $_.Exception.GetType().FullName + ';' + $_.Exception.HResult)
+    throw
 }
 finally {
     if ($null -ne $owned) {
@@ -777,6 +804,7 @@ $ownerSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $shared = @()
 $script:NativeSetupUiDiagnostic = $null
 $script:BootstrapDiagnostic = $null
+$script:InstalledUiDiagnostic = $null
 $evidence = [ordered]@{
     schema = 'vex.windows-signed-install-acceptance.v1'
     fixture_source_commit = $(if ($env:GITHUB_SHA -match '^[a-fA-F0-9]{40}$') { $env:GITHUB_SHA } else { $null })
@@ -789,6 +817,7 @@ $evidence = [ordered]@{
     shell_reputation_prompt_acceptance = $false; verified_direct_setup_launch = $false
     verified_shell_setup_launch = $false
     bootstrap_diagnostic = $null
+    installed_ui_diagnostic = $null
     native_setup = $null; native_setup_bundle_verification = $false
     native_setup_ui_diagnostic = $null
     native_setup_window_verified = $false; native_consumer_installation_verified = $false
@@ -843,6 +872,7 @@ catch { $failure = $_; $evidence.failure_type = $_.Exception.GetType().Name }
 finally {
     $evidence.native_setup_ui_diagnostic = $script:NativeSetupUiDiagnostic
     $evidence.bootstrap_diagnostic = $script:BootstrapDiagnostic
+    $evidence.installed_ui_diagnostic = $script:InstalledUiDiagnostic
     try {
         if ($mutationStarted) {
             Invoke-AcceptanceOwnedCleanup -MutationStarted $true -Bundles @($candidate, $preceding) -OwnerSid $ownerSid

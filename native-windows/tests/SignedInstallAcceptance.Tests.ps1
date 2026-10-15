@@ -254,6 +254,19 @@ Get-Content -LiteralPath $MetadataPath | Out-Null
             "[Console]::Error.WriteLine('VEX_BOOTSTRAP_DIAGNOSTIC=unknown_stage;324;Secret.Type;0'); exit 3")
     } 'An unknown failing bootstrap was accepted.'
     Assert ($null -eq $BootstrapDiagnostic) 'Arbitrary bootstrap diagnostics escaped the whitelist.'
+    $script:InstalledUiDiagnostic = $null
+    Assert-Rejected {
+        & $realInvokeProcess -Executable $executable -Arguments @('-NoLogo','-NoProfile','-Command',
+            "[Console]::Error.WriteLine('VEX_INSTALLED_UI_DIAGNOSTIC=activate_package;20;System.ComponentModel.Win32Exception;5'); exit 3")
+    } 'A failing installed UI probe was accepted.'
+    Assert ($InstalledUiDiagnostic.stage -ceq 'activate_package' -and $InstalledUiDiagnostic.script_line -eq 20 -and
+        $InstalledUiDiagnostic.hresult -eq 5) 'Installed UI diagnostic binding was lost.'
+    $script:InstalledUiDiagnostic = $null
+    Assert-Rejected {
+        & $realInvokeProcess -Executable $executable -Arguments @('-NoLogo','-NoProfile','-Command',
+            "[Console]::Error.WriteLine('VEX_INSTALLED_UI_DIAGNOSTIC=unknown_stage;20;Secret.Type;5'); exit 3")
+    } 'An unknown failing installed UI probe was accepted.'
+    Assert ($null -eq $InstalledUiDiagnostic) 'Arbitrary installed UI content escaped the whitelist.'
 
     # Execute the production native lifecycle with UI/install boundaries mocked.
     # Only the actual Install invocation plus independent verification, app and

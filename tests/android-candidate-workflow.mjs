@@ -8,12 +8,18 @@ export function check(workflow) {
   assert.equal(workflow.concurrency['cancel-in-progress'], false);
   assert.deepEqual(Object.keys(workflow.jobs), ['release']);
   const job = workflow.jobs.release;
-  assert.equal(job.if, "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.repository == 'ibotpafos/vex-client'");
+  assert.equal(job.if, "github.event_name == 'workflow_dispatch' && github.repository == 'ibotpafos/vex-client' && (github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/codex/ru-direct-native-20261013' && github.actor == 'ibotpafos' && inputs.native_routing_source && !inputs.qualified_source))");
   assert.equal(job.environment, 'android-candidate-signing');
   assert.equal(job['runs-on'], 'ubuntu-24.04');
   assert.equal(job.env.ANDROID_RELEASE_ABIS, 'arm64-v8a,armeabi-v7a');
   assert.equal(job.permissions, undefined);
   assert.equal(job.env.ANDROID_RELEASE_KEYSTORE_BASE64, undefined);
+  assert.equal(job.env.NATIVE_ROUTING_SOURCE_COMMIT, 'e8b8b2cae299df6eb8e5afe84d7a0a431d256ccc');
+  assert.equal(job.env.NATIVE_ROUTING_SOURCE_TREE, '1aa3b04ced3e80b98912dfdcbbbb92c8978c7c95');
+  const sourceBinding = job.steps.find(step => step.id === 'source').run;
+  assert.ok(sourceBinding.includes('"$QUALIFIED_SOURCE_REQUESTED" == "true" && "$NATIVE_ROUTING_SOURCE_REQUESTED" == "true"'));
+  assert.ok(sourceBinding.includes('git checkout --detach "$NATIVE_ROUTING_SOURCE_COMMIT"'));
+  assert.ok(sourceBinding.includes('test "$(git rev-parse HEAD^{tree})" = "$NATIVE_ROUTING_SOURCE_TREE"'));
   const quality = job.steps.findIndex(step => step.run === 'npm run check');
   const signing = job.steps.findIndex(step => step.env?.ANDROID_RELEASE_KEYSTORE_BASE64);
   assert.ok(quality >= 0 && signing > quality);
@@ -44,6 +50,9 @@ let negativeFixtures = 0;
 for (const mutate of [
   w => w.on.push = {},
   w => w.jobs.release.if = 'true',
+  w => w.jobs.release.if = w.jobs.release.if.replace("github.actor == 'ibotpafos'", 'true'),
+  w => w.jobs.release.env.NATIVE_ROUTING_SOURCE_COMMIT = '${{ inputs.ref }}',
+  w => w.jobs.release.env.NATIVE_ROUTING_SOURCE_TREE = '0'.repeat(40),
   w => w.jobs.release.environment = undefined,
   w => w.permissions.contents = 'write',
   w => w.jobs.release.env.ANDROID_RELEASE_KEYSTORE_BASE64 = '${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}',
@@ -56,4 +65,4 @@ for (const mutate of [
   assert.throws(() => check(invalid));
   negativeFixtures++;
 }
-console.log(JSON.stringify({ status: 'pass', signedCandidateOnly: true, mainOnly: true, negativeFixtures }));
+console.log(JSON.stringify({ status: 'pass', signedCandidateOnly: true, fixedNativeSource: true, negativeFixtures }));

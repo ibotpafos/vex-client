@@ -39,8 +39,8 @@ func (*fixtureTUN) BatchSize() int             { return 1 }
 func (t *fixtureTUN) Events() <-chan tun.Event { return t.events }
 func (t *fixtureTUN) Close() error             { t.closeOnce.Do(func() { close(t.done) }); return nil }
 func (t *fixtureTUN) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
-	if offset < 4 {
-		return 0, errors.New("Darwin TUN headroom missing")
+	if offset < 10 {
+		return 0, errors.New("native TUN virtio headroom missing")
 	}
 	select {
 	case p := <-t.input:
@@ -51,8 +51,8 @@ func (t *fixtureTUN) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
 	}
 }
 func (t *fixtureTUN) Write(bufs [][]byte, offset int) (int, error) {
-	if offset < 4 {
-		return 0, errors.New("Darwin TUN headroom missing")
+	if offset < 10 {
+		return 0, errors.New("native TUN virtio headroom missing")
 	}
 	for _, buf := range bufs {
 		select {

@@ -29,6 +29,11 @@ import (
 type DialFunc func(context.Context, string, string) (net.Conn, error)
 type DNSExchangeFunc func(context.Context, []byte) ([]byte, error)
 
+// Native Linux TUN offload writes prepend a virtio header (10 bytes); Darwin
+// prepends a 4-byte address family. Reserve the same 16-byte headroom as AWG's
+// packet path so either native device can write without releasing capture.
+const osPacketHeadroom = 16
+
 type Options struct {
 	Addresses     []netip.Addr
 	DNS           []netip.Addr
@@ -208,10 +213,10 @@ func (r *Router) readOS() {
 	batch := r.osTun.BatchSize()
 	bufs, sizes := make([][]byte, batch), make([]int, batch)
 	for i := range bufs {
-		bufs[i] = make([]byte, 65536+4)
+		bufs[i] = make([]byte, 65536+osPacketHeadroom)
 	}
 	for {
-		n, err := r.osTun.Read(bufs, sizes, 4)
+		n, err := r.osTun.Read(bufs, sizes, osPacketHeadroom)
 		if err != nil {
 			r.Close()
 			return
@@ -221,7 +226,7 @@ func (r *Router) readOS() {
 				continue
 			}
 			var protocol tcpip.NetworkProtocolNumber
-			switch bufs[i][4] >> 4 {
+			switch bufs[i][osPacketHeadroom] >> 4 {
 			case 4:
 				protocol = ipv4.ProtocolNumber
 			case 6:
@@ -229,7 +234,7 @@ func (r *Router) readOS() {
 			default:
 				continue
 			}
-			packet := stack.NewPacketBuffer(stack.PacketBufferOptions{Payload: buffer.MakeWithData(bufs[i][4 : 4+sizes[i]])})
+			packet := stack.NewPacketBuffer(stack.PacketBufferOptions{Payload: buffer.MakeWithData(bufs[i][osPacketHeadroom : osPacketHeadroom+sizes[i]])})
 			r.link.InjectInbound(protocol, packet)
 			packet.DecRef()
 		}
@@ -245,9 +250,9 @@ func (r *Router) writeOS() {
 		view := packet.ToView()
 		packet.DecRef()
 		r.writeMu.Lock()
-		payload := make([]byte, 4+view.Size())
-		copy(payload[4:], view.AsSlice())
-		_, err := r.osTun.Write([][]byte{payload}, 4)
+		payload := make([]byte, osPacketHeadroom+view.Size())
+		copy(payload[osPacketHeadroom:], view.AsSlice())
+		_, err := r.osTun.Write([][]byte{payload}, osPacketHeadroom)
 		r.writeMu.Unlock()
 		view.Release()
 		if err != nil {

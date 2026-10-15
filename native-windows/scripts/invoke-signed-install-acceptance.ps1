@@ -755,7 +755,19 @@ try {
     } while ([DateTime]::UtcNow -lt $deadline)
     if ($null -eq $signIn -or -not $signIn.Current.IsEnabled -or $signIn.Current.IsOffscreen -or
         $null -eq $title -or $null -eq $settings) { throw 'Installed signed-out status is missing.' }
-    ([Windows.Automation.InvokePattern]$settings.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)).Invoke()
+    # WinUI navigation is a ToggleButton; use the same supported interaction
+    # patterns as the existing desktop smoke instead of requiring InvokePattern.
+    $pattern = $null
+    if ($settings.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {
+        ([Windows.Automation.InvokePattern]$pattern).Invoke()
+    }
+    elseif ($settings.TryGetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern, [ref]$pattern)) {
+        ([Windows.Automation.SelectionItemPattern]$pattern).Select()
+    }
+    elseif ($settings.TryGetCurrentPattern([Windows.Automation.TogglePattern]::Pattern, [ref]$pattern)) {
+        ([Windows.Automation.TogglePattern]$pattern).Toggle()
+    }
+    else { throw 'Installed Settings navigation has no supported interaction pattern.' }
     $deadline = [DateTime]::UtcNow.AddSeconds(10)
     do {
         $stage = 'inspect_settings'

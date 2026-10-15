@@ -64,6 +64,7 @@ export type AppRemoteConfig = {
   minConfigSchemaVersion: number;
   routingPolicyVersion?: string;
   featureFlags: Record<string, boolean>;
+  accountFeatureFlags?: Record<string, boolean>;
   incidentBanner?: string;
 };
 

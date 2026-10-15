@@ -4,6 +4,7 @@ import {
   ChevronRight,
   ChevronLeft,
   CreditCard,
+  FlaskConical,
   Globe2,
   Languages,
   LogOut,
@@ -425,6 +426,20 @@ export default function SettingsScreen() {
               <Text numberOfLines={2} style={styles.rowDescription}>
                 {isAndroidApp ? "Тарифы, цена и оплата — в личном кабинете на сайте VEX." : "Подписка, оплата и устройства — на сайте VEX."}
               </Text>
+            </View>
+            <ChevronRight color="#A7B9BD" size={22} strokeWidth={2.5} />
+          </VexPressable>
+          <VexPressable
+            accessibilityLabel="Открыть программу тестировщиков на сайте VEX"
+            accessibilityRole="button"
+            onPress={() => openWebsite(vexWebsite.testing())}
+            style={styles.settingRow}
+            title="Аккаунт тестировщика"
+          >
+            <View style={styles.rowIcon}><FlaskConical color={vexColors.accent} size={21} strokeWidth={2.5} /></View>
+            <View style={styles.rowCopy}>
+              <Text style={styles.rowTitle}>Аккаунт тестировщика</Text>
+              <Text numberOfLines={2} style={styles.rowDescription}>Заявка, тестовые версии и обратная связь — в кабинете VEX.</Text>
             </View>
             <ChevronRight color="#A7B9BD" size={22} strokeWidth={2.5} />
           </VexPressable>

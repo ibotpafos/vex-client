@@ -332,6 +332,7 @@ export type AppRemoteConfigResponseDTO = {
   routingPolicyVersionPrefix?: string;
   routingPolicyVersion?: string;
   featureFlags?: Record<string, boolean>;
+  accountFeatureFlags?: Record<string, boolean>;
   incidentBanner?: string;
   checkedAt: string;
 };

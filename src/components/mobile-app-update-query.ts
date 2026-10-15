@@ -5,14 +5,19 @@ import { shouldOfferAppUpdate, updateCheckChannel } from '@/api/updatePreflight'
 import { appUpdateCheck, type AppUpdateCheckResult } from '@/api/vexApi';
 import { createApiQueryRetry } from '@/api/queryRetry';
 import { getAppInfo, getOrCreateDeviceId } from '@/native/appInfo';
+import { useSession } from '@/auth/session-context';
 
 const appUpdatePollIntervalMs = 5 * 60_000;
 
 export function useMobileAppUpdateQuery(targetPlatform: 'android' | 'ios', buildNumber: number) {
-  const queryKey = useMemo(() => [`${targetPlatform}-update`, buildNumber] as const, [buildNumber, targetPlatform]);
+  const { session, sessionRevision, isLoading, isCurrentSessionOperation } = useSession();
+  const accessToken = session?.accessToken;
+  const queryKey = useMemo(() => [`${targetPlatform}-update`, buildNumber, sessionRevision] as const, [buildNumber, targetPlatform, sessionRevision]);
   const queryFn = useCallback(async (): Promise<AppUpdateCheckResult> => {
     const [appInfo, deviceId] = await Promise.all([getAppInfo(), getOrCreateDeviceId()]);
-    return appUpdateCheck({
+    if (accessToken && !isCurrentSessionOperation()) throw new Error('Update session changed.');
+    const update = await appUpdateCheck({
+      accessToken,
       platform: targetPlatform,
       appVersion: appInfo.version,
       buildNumber,
@@ -23,11 +28,14 @@ export function useMobileAppUpdateQuery(targetPlatform: 'android' | 'ios', build
       apiClientVersion: appInfo.apiClientVersion,
       configSchemaVersion: appInfo.configSchemaVersion,
     });
-  }, [buildNumber, targetPlatform]);
+    if (accessToken && !isCurrentSessionOperation()) throw new Error('Update session changed.');
+    return update;
+  }, [accessToken, buildNumber, targetPlatform, isCurrentSessionOperation]);
 
   return useQuery({
     queryKey,
     queryFn,
+    enabled: !isLoading && (!accessToken || isCurrentSessionOperation()),
     staleTime: 0,
     refetchOnMount: true,
     refetchOnWindowFocus: true,

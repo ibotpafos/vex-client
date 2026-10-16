@@ -112,12 +112,23 @@ function Wait-SmokeCondition {
     throw $Failure
 }
 
+function Get-SmokeLiveInstanceIds {
+    # Windows can still enumerate a terminated process while a Process object
+    # retains its handle. Count running instances and release snapshot handles.
+    foreach ($instance in @(Get-Process -Name 'Vex.Windows.App' -ErrorAction SilentlyContinue)) {
+        try {
+            if (-not $instance.HasExited) { $instance.Id }
+        }
+        finally { $instance.Dispose() }
+    }
+}
+
 function Assert-PrimaryInstance {
     $process.Refresh()
     if ($process.HasExited) { throw 'Primary preview exited during desktop checks.' }
-    $instances = @(Get-Process -Name 'Vex.Windows.App' -ErrorAction SilentlyContinue)
-    if ($instances.Count -ne 1 -or $instances[0].Id -ne $process.Id) {
-        throw 'Preview activation did not preserve one original application instance.'
+    $instances = @(Get-SmokeLiveInstanceIds)
+    if ($instances.Count -ne 1 -or $instances[0] -ne $process.Id) {
+        throw "Preview activation did not preserve one original application instance (live=$($instances.Count))."
     }
 }
 
@@ -130,6 +141,8 @@ function Invoke-RedirectedLaunch {
         throw 'Secondary preview process did not complete bounded activation redirection.'
     }
     if ($secondary.ExitCode -ne 0) { throw 'Secondary preview activation exited unsuccessfully.' }
+    [void]$ownedProcesses.Remove($secondary)
+    $secondary.Dispose()
     Assert-PrimaryInstance
 }
 
@@ -1121,7 +1134,7 @@ namespace Vex.Windows.Smoke {
                 [Vex.Windows.Smoke.NativeMethods]::IsZoomed($windowHandle)
         }
         Wait-SmokeCondition -Failure 'Minimized protocol activation left an additional application instance.' -Condition {
-            @(Get-Process -Name 'Vex.Windows.App' -ErrorAction SilentlyContinue).Count -eq 1
+            @(Get-SmokeLiveInstanceIds).Count -eq 1
         }
         Assert-PrimaryInstance
         $result.minimized_window_restored_by_protocol = $true
@@ -1146,7 +1159,7 @@ namespace Vex.Windows.Smoke {
             [Vex.Windows.Smoke.NativeMethods]::IsWindowVisible($windowHandle)
         }
         Wait-SmokeCondition -Failure 'Protocol activation left an additional application instance.' -Condition {
-            @(Get-Process -Name 'Vex.Windows.App' -ErrorAction SilentlyContinue).Count -eq 1
+            @(Get-SmokeLiveInstanceIds).Count -eq 1
         }
         Assert-PrimaryInstance
         $result.protocol_activation_restored_window = $true

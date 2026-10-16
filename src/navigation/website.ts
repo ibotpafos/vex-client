@@ -13,6 +13,7 @@ export function vexWebsiteUrl(path: string, baseUrl = defaultWebsiteBaseUrl): st
 }
 
 export const vexWebsite = {
+  testing: () => vexWebsiteUrl('/dashboard/testing'),
   dashboard: () => vexWebsiteUrl('/dashboard'),
   support: () => vexWebsiteUrl('/support'),
 } as const;

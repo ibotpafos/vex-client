@@ -103,6 +103,7 @@ try {
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
 $initial = @([AppDomain]::CurrentDomain.GetAssemblies() | Where-Object { $_.GetName().Name -ceq 'System.Security' }).Count -gt 0
+$ProgressPreference = 'SilentlyContinue'
 __DEFINITION__
 $inputValue = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__PAYLOAD__')) | ConvertFrom-Json
 Assert-AuthorizationToken $inputValue.valid
@@ -124,7 +125,13 @@ foreach ($path in @($inputValue.short,$inputValue.corrupt)) {
             if (-not $process.WaitForExit(30000)) { $process.Kill(); throw 'The fresh DPAPI test exceeded its deadline.' }
             Assert ($process.ExitCode -eq 0) 'The isolated fresh WinPS5.1 DPAPI verifier failed.'
             Assert ($stdout.Result.Trim() -cmatch '^VEX_DPAPI_FRESH_PROCESS passed=true initial_system_security_loaded=(true|false)$') 'The fresh DPAPI test did not produce its bounded proof.'
-            Assert ([string]::IsNullOrWhiteSpace($stderr.Result)) 'The fresh DPAPI probe reported an unexpected error.'
+            if (-not [string]::IsNullOrWhiteSpace($stderr.Result)) {
+                [Console]::WriteLine('VEX_DPAPI_UNEXPECTED_STDERR bytes=' + [Text.Encoding]::UTF8.GetByteCount($stderr.Result) +
+                    ' clixml=' + $stderr.Result.Contains('#< CLIXML').ToString().ToLowerInvariant() +
+                    ' progress=' + ([regex]::Matches($stderr.Result,'S="progress"')).Count +
+                    ' errors=' + ([regex]::Matches($stderr.Result,'S="Error"|S="error"')).Count)
+                throw 'The fresh DPAPI probe reported an unexpected error.'
+            }
             Write-Output $stdout.Result.Trim()
         }
         finally { $process.Dispose() }

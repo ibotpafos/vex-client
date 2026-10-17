@@ -212,6 +212,7 @@ function New-VerifiedServiceCommand {
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 # VEX_TRUSTED_POWERSHELL_MODULES_BEGIN
+$ProgressPreference = 'SilentlyContinue'
 $systemModules = [IO.Path]::Combine([Environment]::GetFolderPath([Environment+SpecialFolder]::System), 'WindowsPowerShell', 'v1.0', 'Modules')
 $env:PSModulePath = $systemModules
 $requiredCommands = @{

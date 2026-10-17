@@ -116,6 +116,7 @@ throw 'private-service-exception-never-upload'
     $signerBase64=[Convert]::ToBase64String($certificateBytes)
     $prelude=@'
 function Get-FixtureAuthenticodeSignature { param($LiteralPath) [pscustomobject]@{Status='Valid';SignerCertificate=[pscustomobject]@{RawData=[Convert]::FromBase64String('__SIGNER__')}} }
+$ProgressPreference='SilentlyContinue'
 '@
     $prelude=$prelude.Replace('__SIGNER__',$signerBase64)+[Environment]::NewLine
     if (-not $isNativeWindowsPowerShell) {

@@ -529,6 +529,7 @@ function New-AcceptanceBootstrapCommand {
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $inputValue = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__VEX_ACCEPTANCE_BOOTSTRAP__')) | ConvertFrom-Json
+$ProgressPreference = 'SilentlyContinue'
 try {
     $parameters = @{ Phase='User'; Action=$inputValue.action; MetadataPath=$inputValue.metadata; PackagePath=$inputValue.package }
     if ($inputValue.action -ceq 'Rollback') {

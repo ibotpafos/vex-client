@@ -271,7 +271,8 @@ function Stop-AcceptanceProcess {
 }
 
 function Invoke-AcceptanceProcess {
-    param([string]$Executable, [string[]]$Arguments, [ValidateRange(1, 600)][int]$TimeoutSeconds = 240)
+    param([string]$Executable, [string[]]$Arguments, [ValidateRange(1, 600)][int]$TimeoutSeconds = 240,
+        [switch]$ObserveShellRefusal)
     $start = [Diagnostics.ProcessStartInfo]::new()
     $start.FileName = $Executable
     $start.UseShellExecute = $false
@@ -298,6 +299,13 @@ function Invoke-AcceptanceProcess {
                 '^VEX_SETUP_UI_ERROR win32=(unknown|-?[0-9]{1,10}) hresult=-?[0-9]{1,10}$')) {
                 $markers = @($stderr.Result -split '\r?\n' | Where-Object { $_ -cmatch $pattern } | Select-Object -First 1)
                 foreach ($marker in $markers) { [Console]::WriteLine($marker) }
+            }
+            # A window-only observation may record an OS-cancelled Shell launch.
+            # This is never an accepted Install action or an accepted timeout.
+            if ($ObserveShellRefusal -and
+                @($stderr.Result -split '\r?\n' | Where-Object { $_ -cmatch '^VEX_SETUP_UI_FAILURE stage=launch exception=[A-Za-z][A-Za-z0-9]{0,79} native_exit=unknown$' }).Count -eq 1 -and
+                @($stderr.Result -split '\r?\n' | Where-Object { $_ -cmatch '^VEX_SETUP_UI_ERROR win32=1223 hresult=-?[0-9]{1,10}$' }).Count -eq 1) {
+                return [pscustomobject]@{ ShellRefused = $true; Win32Error = 1223 }
             }
             throw 'Acceptance child reported failure.'
         }
@@ -397,7 +405,8 @@ function Invoke-AcceptanceNativeVerification {
 }
 
 function Invoke-AcceptanceNativeSetupUi {
-    param($Bundle, [switch]$Install)
+    param($Bundle, [switch]$Install, [switch]$ObserveDownloadedLaunch)
+    if ($Install -and $ObserveDownloadedLaunch) { throw 'An observed Shell refusal cannot qualify an Install action.' }
     $locks = @(Open-AcceptanceNativeSetupLocks $Bundle)
     try {
         $setup = Read-AcceptanceNativeSetup $Bundle
@@ -415,7 +424,14 @@ try {
     Add-Type -AssemblyName UIAutomationClient
     Add-Type -AssemblyName UIAutomationTypes
     $stage = 'launch'
-    $owned = Start-Process -FilePath $inputValue.executable -WorkingDirectory (Split-Path -Parent $inputValue.executable) -PassThru
+    # Preserve Shell/MOTW behavior, while retaining the native error as an inner
+    # Win32Exception instead of the Start-Process cmdlet's generic wrapper.
+    $start = [Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = $inputValue.executable
+    $start.WorkingDirectory = Split-Path -Parent $inputValue.executable
+    $start.UseShellExecute = $true
+    $owned = [Diagnostics.Process]::Start($start)
+    if ($null -eq $owned) { throw 'Native Shell launch returned no owned process.' }
     $stage = 'locate_controls'
     $ready = $false
     $deadline = [DateTime]::UtcNow.AddSeconds($(if ($inputValue.install) { 180 } else { 35 }))
@@ -496,7 +512,11 @@ finally {
 }
 '@
         $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($probe.Replace('__PAYLOAD__', $encodedPayload)))
-        Invoke-AcceptanceProcess -Executable (Get-AcceptanceUiPowerShellPath) -Arguments @('-STA', '-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', $encoded) -TimeoutSeconds $(if ($Install) { 600 } else { 50 })
+        $observed = Invoke-AcceptanceProcess -Executable (Get-AcceptanceUiPowerShellPath) -Arguments @('-STA', '-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', $encoded) -TimeoutSeconds $(if ($Install) { 600 } else { 50 }) -ObserveShellRefusal:$ObserveDownloadedLaunch
+        if ($ObserveDownloadedLaunch) {
+            return [pscustomobject]@{ status = $(if ($null -ne $observed -and $observed.ShellRefused) { 'os_cancelled' } else { 'window_verified' });
+                win32_error = $(if ($null -ne $observed) { $observed.Win32Error } else { $null }); installation_performed = $false }
+        }
     }
     finally { foreach ($stream in $locks) { $stream.Dispose() } }
 }
@@ -527,8 +547,74 @@ function Invoke-AcceptanceBootstrap {
     finally { foreach ($stream in $locks) { $stream.Dispose() } }
 }
 
+function Get-AcceptanceVerifiedTesterSetup {
+    param($Bundle, $NativeVerification)
+    $metadata = Read-AcceptanceMetadata $Bundle.MetadataPath
+    if ($metadata.channel -cne 'beta' -or $metadata.signing_mode -cne 'tester-ca' -or
+        $env:VEX_WINDOWS_TEST_ROOT_SHA256 -cnotmatch '^[a-f0-9]{64}$' -or
+        $env:VEX_WINDOWS_TEST_CERT_SHA256 -cnotmatch '^[a-f0-9]{64}$' -or
+        $metadata.tester_root_sha256 -ine $env:VEX_WINDOWS_TEST_ROOT_SHA256 -or
+        $metadata.client_certificate_sha256 -ine $env:VEX_WINDOWS_TEST_CERT_SHA256 -or
+        $NativeVerification.bundle_verified -isnot [bool] -or -not $NativeVerification.bundle_verified) {
+        throw 'Explicit download trust is restricted to this verified beta publisher and bundle.'
+    }
+    $setup = Read-AcceptanceNativeSetup $Bundle
+    if ($setup.Sha256 -ine $NativeVerification.sha256 -or $setup.MetadataSha256 -ine $NativeVerification.metadata_sha256) {
+        throw 'The verified beta Setup changed before explicit download trust.'
+    }
+    return $setup
+}
+
+function Assert-AcceptanceOwnedCandidate {
+    param([string]$CandidateRoot, [string]$RunnerTemp)
+    $candidate = Assert-AcceptanceRegularPath -Path $CandidateRoot -Directory
+    $runner = Assert-AcceptanceRegularPath -Path $RunnerTemp -Directory
+    $privateRoot = Split-Path -Parent $candidate
+    $fixtureName = [IO.Path]::GetFileName($privateRoot)
+    $match = [regex]::Match($fixtureName, '^vex-signed-install-([a-f0-9]{32})$')
+    $prefix = $runner.TrimEnd([char[]]@('\', '/')) + [IO.Path]::DirectorySeparatorChar
+    if ([IO.Path]::GetFileName($candidate) -cne 'candidate' -or -not $match.Success -or
+        -not $privateRoot.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Beta download trust requires the separate owned candidate copy.'
+    }
+    $marker = Assert-AcceptanceRegularPath (Join-Path $privateRoot 'owned-fixture')
+    if ((Get-Item -LiteralPath $marker).Length -ne 32 -or [IO.File]::ReadAllText($marker) -cne $match.Groups[1].Value) {
+        throw 'The beta candidate ownership marker changed.'
+    }
+}
+
+function Confirm-AcceptanceBetaSetupDownloadTrust {
+    param($Bundle, $NativeVerification, [bool]$ExplicitlyDisposable)
+    Assert-AcceptanceRunner $ExplicitlyDisposable
+    $setup = Get-AcceptanceVerifiedTesterSetup -Bundle $Bundle -NativeVerification $NativeVerification
+    Assert-AcceptanceOwnedCandidate -CandidateRoot $Bundle.Root -RunnerTemp $env:RUNNER_TEMP
+    $zone = Get-Content -LiteralPath $setup.Path -Stream Zone.Identifier -Raw
+    if ($zone -notmatch '(?m)^ZoneId=3\s*$') { throw 'The original downloaded beta marker was not verified.' }
+    # This is the documented per-file user trust step after exact verification.
+    # Never clear a directory, disable protection or change another input's ADS.
+    Unblock-File -LiteralPath $setup.Path
+    if (@(Get-Item -LiteralPath $setup.Path -Stream Zone.Identifier -ErrorAction SilentlyContinue).Count -ne 0) {
+        throw 'Explicit beta file trust was not confirmed.'
+    }
+    $null = Get-AcceptanceVerifiedTesterSetup -Bundle $Bundle -NativeVerification $NativeVerification
+}
+
 function Invoke-AcceptanceNativeInstall {
-    param($Bundle, [string]$OwnerSid, $Evidence)
+    param($Bundle, [string]$OwnerSid, $Evidence, [bool]$ExplicitlyDisposable = $false)
+    if ($null -ne $Bundle.Metadata.PSObject.Properties['signing_mode'] -and $Bundle.Metadata.signing_mode -ceq 'tester-ca') {
+        Assert-AcceptanceRunner $ExplicitlyDisposable
+        Add-AcceptancePhase 'observe_downloaded_beta_setup_launch' {
+            $Evidence['downloaded_setup_shell_launch'] = Invoke-AcceptanceNativeSetupUi -Bundle $Bundle -ObserveDownloadedLaunch
+            if (@(Get-AppxPackage -Name $Bundle.Metadata.package_name).Count -or
+                @(Get-Service -Name 'VEX VPN Service' -ErrorAction SilentlyContinue).Count) {
+                throw 'The window-only downloaded launch changed the installation baseline.'
+            }
+        } $Evidence
+        Add-AcceptancePhase 'confirm_verified_beta_setup_download_trust' {
+            Confirm-AcceptanceBetaSetupDownloadTrust -Bundle $Bundle -NativeVerification $Evidence.native_setup -ExplicitlyDisposable $ExplicitlyDisposable
+            $Evidence['verified_beta_setup_download_trust'] = $true
+        } $Evidence
+    }
     Add-AcceptancePhase 'native_setup_install_action' { Invoke-AcceptanceNativeSetupUi -Bundle $Bundle -Install } $Evidence
     $Evidence.native_setup_window_verified = $true
     Add-AcceptancePhase 'verify_native_installed_candidate' { Invoke-AcceptanceBootstrap -Bundle $Bundle -Action Verify } $Evidence
@@ -744,6 +830,7 @@ $evidence = [ordered]@{
     cleanup_confirmed = $false; installed_release_signed_out_ui = $false
     downloaded_bundle_preverification_guard = $false; native_double_click_installer_acceptance = $false
     native_setup = $null; native_setup_bundle_verification = $false
+    downloaded_setup_shell_launch = $null; verified_beta_setup_download_trust = $false
     native_setup_window_verified = $false; native_consumer_installation_verified = $false
     vclibs_absent_before_install = $false; clean_host_dependency_acceptance = $false
     real_authenticated_vpn_acceptance = $false; physical_arm64_acceptance = $false
@@ -772,7 +859,7 @@ try {
     } $evidence
     $evidence.native_setup_bundle_verification = $true
     $mutationStarted = $true
-    Invoke-AcceptanceNativeInstall -Bundle $candidate -OwnerSid $ownerSid -Evidence $evidence
+    Invoke-AcceptanceNativeInstall -Bundle $candidate -OwnerSid $ownerSid -Evidence $evidence -ExplicitlyDisposable ([bool]$DisposableRunner)
     Add-AcceptancePhase 'install_preceding' { Invoke-AcceptanceBootstrap $preceding Install } $evidence
     Add-AcceptancePhase 'verify_preceding' { Invoke-AcceptanceBootstrap $preceding Verify } $evidence
     Add-AcceptancePhase 'install_candidate' { Invoke-AcceptanceBootstrap $candidate Install } $evidence

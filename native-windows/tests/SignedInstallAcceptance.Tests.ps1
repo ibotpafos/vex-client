@@ -161,6 +161,59 @@ try {
     } else {
         Assert-Rejected { Get-AcceptanceUiPowerShellPath } 'The Windows UI host was admitted on another operating system.'
     }
+    Assert-Rejected { Invoke-AcceptanceNativeSetupUi -Bundle $bundle -Install -ObserveDownloadedLaunch } 'An observed Shell refusal was admitted as an Install action.'
+
+    # Admission is tested against actual metadata/image hashes with only the
+    # existing portable signature boundary mocked. No file is unblocked here.
+    $savedRootPin = $env:VEX_WINDOWS_TEST_ROOT_SHA256
+    $savedLeafPin = $env:VEX_WINDOWS_TEST_CERT_SHA256
+    $originalMetadataBytes = [IO.File]::ReadAllText($metadataPath)
+    try {
+        $env:VEX_WINDOWS_TEST_ROOT_SHA256 = '5' * 64
+        $env:VEX_WINDOWS_TEST_CERT_SHA256 = ('B' * 64).ToLowerInvariant()
+        $metadata.channel = 'beta'; $metadata.signing_mode = 'tester-ca'; $metadata.tester_root_sha256 = '5' * 64
+        Write-TestMetadata
+        $proof = [pscustomobject]@{ bundle_verified = $true; sha256 = (Get-FileHash $setupPath).Hash; metadata_sha256 = (Get-FileHash $metadataPath).Hash }
+        $admitted = Get-AcceptanceVerifiedTesterSetup -Bundle $bundle -NativeVerification $proof
+        Assert ($admitted.Path -ceq $setupPath) 'The exact verified beta Setup was not admitted.'
+        foreach ($change in @(@('sha256', '0' * 64), @('metadata_sha256', '0' * 64), @('bundle_verified', 'true'))) {
+            $original = $proof.($change[0]); $proof.($change[0]) = $change[1]
+            Assert-Rejected { Get-AcceptanceVerifiedTesterSetup -Bundle $bundle -NativeVerification $proof } 'Unbound or nonboolean beta verification admitted download trust.'
+            $proof.($change[0]) = $original
+        }
+        foreach ($change in @(@('channel', 'stable'), @('signing_mode', 'public-ca'), @('tester_root_sha256', '0' * 64))) {
+            $original = $metadata[$change[0]]; $metadata[$change[0]] = $change[1]; Write-TestMetadata
+            Assert-Rejected { Get-AcceptanceVerifiedTesterSetup -Bundle $bundle -NativeVerification $proof } 'Stable, foreign or unpinned metadata admitted beta file trust.'
+            $metadata[$change[0]] = $original; Write-TestMetadata
+        }
+        $script:unblockCalls = 0
+        function Unblock-File { param($LiteralPath) $script:unblockCalls++; throw 'No portable test may unblock a file.' }
+        $guardDenied = $false
+        try { Confirm-AcceptanceBetaSetupDownloadTrust -Bundle $bundle -NativeVerification $proof -ExplicitlyDisposable $false }
+        catch {
+            if ($_.Exception.Message -cne 'Signed install acceptance requires an explicitly disposable GitHub-hosted Windows x64 runner.') { throw }
+            $guardDenied = $true
+        }
+        Assert ($guardDenied -and $unblockCalls -eq 0) 'The explicit disposable-runner guard did not precede beta file trust.'
+    } finally {
+        Remove-Item Function:Unblock-File -ErrorAction SilentlyContinue
+        $env:VEX_WINDOWS_TEST_ROOT_SHA256 = $savedRootPin; $env:VEX_WINDOWS_TEST_CERT_SHA256 = $savedLeafPin
+        foreach ($key in @('channel', 'signing_mode', 'tester_root_sha256')) { $metadata.Remove($key) }
+        [IO.File]::WriteAllText($metadataPath, $originalMetadataBytes)
+    }
+    $ownedId = 'a' * 32
+    $ownedRoot = Join-Path $temporary ('vex-signed-install-' + $ownedId)
+    $ownedCandidate = Join-Path $ownedRoot 'candidate'
+    [IO.Directory]::CreateDirectory($ownedCandidate) | Out-Null
+    $ownedMarker = Join-Path $ownedRoot 'owned-fixture'
+    [IO.File]::WriteAllText($ownedMarker, $ownedId)
+    Assert-AcceptanceOwnedCandidate -CandidateRoot $ownedCandidate -RunnerTemp $temporary
+    Assert-Rejected { Assert-AcceptanceOwnedCandidate -CandidateRoot $root -RunnerTemp $temporary } 'An ordinary bundle directory was admitted for explicit beta file trust.'
+    Assert-Rejected { Assert-AcceptanceOwnedCandidate -CandidateRoot $ownedCandidate -RunnerTemp $root } 'A candidate outside the runner root was admitted.'
+    [IO.File]::WriteAllText($ownedMarker, 'b' * 32)
+    Assert-Rejected { Assert-AcceptanceOwnedCandidate -CandidateRoot $ownedCandidate -RunnerTemp $temporary } 'A foreign candidate ownership marker was adopted.'
+    [IO.File]::WriteAllText($ownedMarker, $ownedId + 'extra')
+    Assert-Rejected { Assert-AcceptanceOwnedCandidate -CandidateRoot $ownedCandidate -RunnerTemp $temporary } 'An unbounded ownership marker was admitted.'
 
     # Production cleanup rejects a foreign registered publisher before touching
     # the service or state. An unowned/no-mutation run never invokes uninstall.
@@ -198,6 +251,25 @@ try {
         Assert-Rejected { & $realInvokeProcess -Executable $executable -Arguments @('-NoLogo','-NoProfile','-EncodedCommand',$encodedChild) -TimeoutSeconds 5 } 'A failed child was accepted after emitting diagnostics.'
     } finally { [Console]::SetOut($originalOutput) }
     Assert ($captured.ToString().Trim() -ceq ($marker + [Environment]::NewLine + $numeric)) 'Private child output or a forged diagnostic marker escaped.'
+    $captured.Dispose()
+
+    # Record OS cancellation only in an explicit non-installing observation.
+    # A real Install path/default failure and a possibly running image still fail.
+    $shellMarker = 'VEX_SETUP_UI_FAILURE stage=launch exception=Win32Exception native_exit=unknown'
+    $shellCode = 'VEX_SETUP_UI_ERROR win32=1223 hresult=-2147467259'
+    $shellChild = "[Console]::Error.WriteLine('private-shell-output');[Console]::Error.WriteLine('$shellMarker');[Console]::Error.WriteLine('$shellCode');exit 7"
+    $shellEncoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($shellChild))
+    $captured = [IO.StringWriter]::new()
+    try {
+        [Console]::SetOut($captured)
+        Assert-Rejected { & $realInvokeProcess -Executable $executable -Arguments @('-NoLogo','-NoProfile','-EncodedCommand',$shellEncoded) -TimeoutSeconds 5 } 'A cancelled Install child became success by default.'
+        $observation = & $realInvokeProcess -Executable $executable -Arguments @('-NoLogo','-NoProfile','-EncodedCommand',$shellEncoded) -TimeoutSeconds 5 -ObserveShellRefusal
+        Assert ($observation.ShellRefused -and $observation.Win32Error -eq 1223) 'A bounded window-only OS cancellation was not recorded.'
+        $runningChild = $shellChild.Replace('native_exit=unknown', 'native_exit=running')
+        $runningEncoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($runningChild))
+        Assert-Rejected { & $realInvokeProcess -Executable $executable -Arguments @('-NoLogo','-NoProfile','-EncodedCommand',$runningEncoded) -TimeoutSeconds 5 -ObserveShellRefusal } 'A possibly running image was adopted as an OS-cancelled launch.'
+    } finally { [Console]::SetOut($originalOutput) }
+    Assert (-not $captured.ToString().Contains('private-shell-output')) 'Private Shell output escaped diagnostics.'
     $captured.Dispose()
 
     # Execute the production native lifecycle with UI/install boundaries mocked.

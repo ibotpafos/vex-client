@@ -15,9 +15,25 @@ VEX VPN — Windows beta для одобренных тестировщиков
 2. Откройте VEX-Tester-Root.cer, выберите «Установить сертификат», «Локальный
    компьютер», затем вручную хранилище «Доверенные корневые центры сертификации».
    Подтвердите только центр «VEX VPN Tester Root 2026» после сверки отпечатка.
-3. Запустите VEX.Setup.x64.exe или VEX.Setup.arm64.exe из той же папки.
+3. После настройки доверия проверьте подпись самого Setup. В PowerShell,
+   открытом в распакованной папке, выберите файл своей архитектуры:
+
+   $setup = '.\VEX.Setup.x64.exe'
+   # Для ARM64 вместо x64 укажите arm64.
+   $signature = Get-AuthenticodeSignature -LiteralPath $setup
+   if ($signature.Status -ne 'Valid') { throw 'Подпись Setup не подтверждена' }
+   $hash = [Security.Cryptography.SHA256]::Create()
+   try { $pin = [BitConverter]::ToString($hash.ComputeHash($signature.SignerCertificate.RawData)).Replace('-', '').ToLowerInvariant() }
+   finally { $hash.Dispose() }
+   if ($pin -cne '6a4f3f238671b275a6f51f638d3852b55fc9dbd6b7acb4b703c492b00c0faf55') { throw 'Издатель Setup отличается от тестового издателя VEX' }
+   Unblock-File -LiteralPath $setup
+
+   Эта команда подтверждает доверие только проверенному Setup, скачанному
+   из интернета. Она соответствует флажку «Разблокировать» в свойствах
+   этого файла и не меняет настройки защиты Windows.
+4. Запустите VEX.Setup.x64.exe или VEX.Setup.arm64.exe из той же папки.
    Установщик проверяет подписи, состав и хэши пакета перед установкой службы.
-4. Войдите в одобренный аккаунт VEX. Бесплатный доступ действует в течение
+5. Войдите в одобренный аккаунт VEX. Бесплатный доступ действует в течение
    участия в программе. Проверяйте задания и отправляйте обратную связь
    в разделе «Тестирование» личного кабинета.
 

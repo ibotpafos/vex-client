@@ -55,6 +55,54 @@ iOS выше, дополнительно проверить always-on/блоки
 процесса и загрузку на поддерживаемых API. Не объявлять APK установленным или
 проверенным только по успеху Gradle.
 
+## Android — текущий кандидат17октября
+
+На USB Mi A1/API28 штатное signed обновление1.0.69 →1.0.70/code1007078
+сохранило вход, first-install timestamp и настройки. Проверены actual APK SHA,
+production signer, R8 mapping/source receipt, обе ABI, embedded bundle и JNI;
+это не подтверждение пакетной маршрутизации. APK SHA-256:
+`45bec1b486a7f41167758ec994729b644437568828f88331045c6e353c204e29`.
+Обычный UID-наблюдатель подтвердил базовые RU/foreign HTTPS и foreign UDP DNS
+на IPv4. На Wi-Fi отсутствует IPv6 uplink; IPv6 защита ещё не квалифицирована.
+
+Реальное подключение1.0.70 выявило отсутствие подписи прежней регистрации до
+старта VPN. Source `705378724c0efc49f6ac7bd87dcc713e2559f52d` исправляет Android/iOS
+native P256 через Expo CSPRNG/hash и pinned MIT noble2.4.0, сохраняя JWK/P1363.
+31 identity/account/legacy transport проверка и полный client check прошли.
+Нативный транспорт для старого API запрашивает full tunnel без stale split cache.
+
+Замена1.0.71/build79/code1007179 успешно собрана в manual no-publication
+[39056433324](https://github.com/ibotpafos/vex-client/actions/runs/39056433324),
+source7053787/tree d07ca378, orchestration227efab. Actual APK SHA-256:
+`50cbda9f975a5ed6edac34e24b9c1e64cd73704ba80ed1228c7327e1605c2360`.
+Независимые signer/aapt/байты/sidecar/R8/source/both-ABI/Go/embedded-bundle и
+MIT notice проверки прошли, как и JNI load/protector/invalid-admission на телефоне.
+JNI probe явно оставляет packet acceptance NOT_RUN. Raw ZIP digest независимо
+не пересчитывался. Штатное обновление1.0.70 →1.0.71 сохранило first-install
+и вход; ошибка прежней регистрации не повторилась, реальный VPN подключился.
+
+Обычный application UID подтвердил смену зарубежного IPv4 HTTPS egress с ISP
+на VPN, RU/foreign HTTPS и foreign UDP DNS на стабильном Wi-Fi. RU пока имеет
+тот же VPN egress: новая signed-v2 policy/backend ещё не развёрнута. Прямой RU
+маршрут не принят. При возврате Wi-Fi трафик восстановился, в фоне проверки
+проходили; UI позднее сохранял DNS-предупреждение, несмотря на успешные пробы.
+Эта неоднозначность требует продолжения device QA и не закрывает recovery gate.
+
+Мобильная передача данных фактически не установилась: оба modem data state0,
+физического default route нет. IPv6 uplink также отсутствует. В Android Settings
+always-on явно не поддержан, как и в двух текущих manifest VpnService declarations;
+OS флаги не менялись. Controlled native protected-stop, force-stop/reboot,
+независимый DNS egress и IPv6 leakage не подтверждены. Не заменять эти результаты
+полным native acceptance receipt. После явного Disconnect исходный ISP egress
+вернулся; Wi-Fi восстановлен, Smart/AntiDetect true, autoconnect/auto-selection
+false, VPN остановлен, как до QA. Вход, данные и ключи не сбрасывались.
+
+Проверенный APK/partial evidence сохранены в
+`/Volumes/D/VEX-Releases/ru-direct-20261017`. Серверная сборка API/scheduler через
+MCP остановилась до build/push на существующем disk guard:9,8ГБ свободно на D
+при минимуме40ГБ. Нужны минимум31ГБ и затем signed-v2 backend/device QA.
+macOS исключён; его VPN/сеть/trust не изменялись.
+
 ## Windows и Linux
 
 Windows: реальные Wintun/firewall/service и signed install/upgrade/rollback/

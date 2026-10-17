@@ -30,6 +30,7 @@ foreach (var test in tests)
 {
     try
     {
+        Console.WriteLine($"RUN: {test.Name}");
         test.Run();
         Console.WriteLine($"PASS: {test.Name}");
     }

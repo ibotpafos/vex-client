@@ -146,6 +146,7 @@ jobs:
         if: matrix.architecture == 'x64'
         run: dotnet run --project native-windows/tests/Vex.Windows.Core.Tests/Vex.Windows.Core.Tests.csproj -c Release
       - name: Verify protected device-key retention across sign-out
+        timeout-minutes: 5
         if: matrix.architecture == 'x64'
         run: dotnet run --project native-windows/tests/Vex.Windows.Storage.Tests/Vex.Windows.Storage.Tests.csproj -c Release
       - name: Validate native surfaces and release scripts

@@ -227,8 +227,9 @@ try {
     $process = [pscustomobject]@{ Id = 123 }
     $result = [ordered]@{ tray_activation_progress = $null }
     $trayDiagnosticHashes = @{}
-    # An atomic replacement after open must leave the parsed document and its
-    # hash bound to the same old handle, even though the path now has new bytes.
+    # A replacement after open must leave the document/hash on the same handle.
+    # Windows may refuse replacement despite delete sharing; that exact refusal
+    # must preserve the original bytes, as the best-effort producer requires.
     & {
         $snapshotPaths = Own-TrayPaths -RequestId ([Guid]::NewGuid()) -ProcessId 123
         $snapshotBytes = [Text.UTF8Encoding]::new($false).GetBytes(
@@ -241,18 +242,33 @@ try {
         $replacementPath = $snapshotPaths.Progress + '.tmp'
         [IO.File]::WriteAllText($replacementPath, ([pscustomobject]$replacement | ConvertTo-Json -Compress))
         $openSnapshot = (Get-Command Open-SmokeTrayDiagnosticRead).ScriptBlock
+        $replacementState = @{ replaced = $false; sharing_refused = $false }
         function Open-SmokeTrayDiagnosticRead {
             param([string]$Path)
             $stream = & $openSnapshot -Path $Path
-            try { [IO.File]::Move($replacementPath, $Path, $true); return $stream }
+            try {
+                try {
+                    [IO.File]::Move($replacementPath, $Path, $true)
+                    $replacementState.replaced = $true
+                }
+                catch {
+                    if (-not $IsWindows -or -not (Test-SmokeTraySharingFailure -ErrorObject $_.Exception)) { throw }
+                    $replacementState.sharing_refused = $true
+                }
+                return $stream
+            }
             catch { $stream.Dispose(); throw }
         }
         $snapshotHash = $null
         $snapshot = Read-SmokeTrayDiagnostic -Path $snapshotPaths.Progress -Sha256 ([ref]$snapshotHash)
         Assert-SmokeTrayActivationProgress -Diagnostic $snapshot -Scenario 'reset' -Mode 'fixtures' -ProcessId 123
-        if ($snapshot.stage -cne 'reset-ui-requested' -or $snapshotHash -cne $expectedSnapshotHash -or
-            (Get-FileHash -LiteralPath $snapshotPaths.Progress -Algorithm SHA256).Hash -ceq $snapshotHash) {
+        if ($snapshot.stage -cne 'reset-ui-requested' -or $snapshotHash -cne $expectedSnapshotHash) {
             throw 'Tray diagnostic document and hash were not read from the same bounded snapshot.'
+        }
+        $currentHash = (Get-FileHash -LiteralPath $snapshotPaths.Progress -Algorithm SHA256).Hash
+        if (($replacementState.replaced -and $currentHash -ceq $snapshotHash) -or
+            (-not $replacementState.replaced -and (-not $replacementState.sharing_refused -or $currentHash -cne $snapshotHash))) {
+            throw 'Tray replacement neither changed the path nor preserved it after an exact Windows sharing refusal.'
         }
     }
     $waitRequest = [Guid]::NewGuid()

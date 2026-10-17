@@ -1,10 +1,10 @@
 {
   "android": {
-    "version": "1.0.70",
-    "build": 78,
+    "version": "1.0.71",
+    "build": 79,
     "min_supported_build": 1002930,
     "is_required": false,
-    "release_notes": "Android 1.0.70: российские сайты открываются напрямую в Smart routing; зарубежный трафик и DNS остаются под защитой VPN. Кандидат для проверки маршрутизации и защиты от утечек.",
+    "release_notes": "Android 1.0.71: исправлено подтверждение прежней регистрации устройства в нативном окружении, сохранена совместимость VPN со старым API. Российский DIRECT и защита от утечек проходят проверку перед выпуском.",
     "core_version": "0.1.0",
     "config_schema_version": 1,
     "min_config_schema_version": 1,

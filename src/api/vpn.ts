@@ -265,10 +265,14 @@ function requestManagedVpnProfile(
   accessToken: string, deviceId: string, locationId: string, routingMode: string,
   bypassRegion: string | undefined, headers: Record<string, string>, knownVersion?: number,
 ): Promise<NativeVPNProfileDTO> {
-  const query = withManagedProfileAWGCapability(new URLSearchParams({device_id: deviceId, location: locationId, routing_mode: routingMode}));
-  if (supportsNativeRoutingPolicy()) query.set('routing_policy_version', '2');
-  if (bypassRegion) query.set('bypass_region', bypassRegion);
-  if (typeof knownVersion === 'number' && knownVersion > 0) query.set('known_version', String(knownVersion));
+  const routed = supportsNativeRoutingPolicy();
+  // Destination policy belongs to the native router. Its encrypted transport
+  // must include RU even when an older server ignores the v2 capability. Do not
+  // let a v1 unchanged acknowledgement resurrect a cached split AllowedIPs set.
+  const query = withManagedProfileAWGCapability(new URLSearchParams({device_id: deviceId, location: locationId, routing_mode: routed ? 'full_tunnel' : routingMode}));
+  if (routed) query.set('routing_policy_version', '2');
+  if (!routed && bypassRegion) query.set('bypass_region', bypassRegion);
+  if (!routed && typeof knownVersion === 'number' && knownVersion > 0) query.set('known_version', String(knownVersion));
   return jsonRequest<NativeVPNProfileDTO>(`/v1/vpn/profile?${query.toString()}`, {accessToken, headers, suppressErrorLog:true});
 }
 

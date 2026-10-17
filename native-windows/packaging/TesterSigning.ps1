@@ -37,7 +37,7 @@ function Get-WindowsTesterSigningIdentity {
             }
             $rsa = [Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPublicKey($certificate)
             try {
-                if ($null -eq $rsa -or $rsa.KeySize -lt 3072 -or $certificate.SignatureAlgorithm.Value -cne '1.2.840.113549.1.1.11') {
+                if ($null -eq $rsa -or $rsa.ExportParameters($false).Modulus.Length -lt 384 -or $certificate.SignatureAlgorithm.Value -cne '1.2.840.113549.1.1.11') {
                     throw 'Tester signing requires RSA-3072 or stronger with SHA-256 signatures.'
                 }
             }

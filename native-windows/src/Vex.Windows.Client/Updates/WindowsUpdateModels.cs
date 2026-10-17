@@ -67,6 +67,12 @@ public sealed record WindowsUpdateKeyring(
     string Schema,
     IReadOnlyList<WindowsUpdatePublicKey> Keys)
 {
+    public string? ReleaseChannel { get; init; }
+
+    // Older signed packages omit this field and retain the stable default.
+    public string ResolveChannel(string? channelOverride = null) =>
+        WindowsUpdateManifestVerifier.NormalizeChannel(channelOverride ?? ReleaseChannel ?? "stable");
+
     public static WindowsUpdateKeyring Parse(string json)
     {
         var keyring = JsonSerializer.Deserialize<WindowsUpdateKeyring>(

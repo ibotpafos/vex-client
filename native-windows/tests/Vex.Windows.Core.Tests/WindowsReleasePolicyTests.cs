@@ -11,6 +11,7 @@ internal static class WindowsReleasePolicyTests
     public static void Run()
     {
         using var signer = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        VerifyPackagedChannel(signer);
         var release = Release();
         var selected = Verify(signer, release, "0.0.0.0", "1.0.0.0", 5);
         var excluded = Verify(signer, release, "0.0.0.0", "1.0.0.0", 50);
@@ -83,6 +84,37 @@ internal static class WindowsReleasePolicyTests
             "The matching ARM64 dependency filename must be accepted.");
     }
 
+    private static void VerifyPackagedChannel(ECDsa signer)
+    {
+        var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+        var legacy = WindowsUpdateKeyring.Parse(JsonSerializer.Serialize(new
+        {
+            schema = WindowsUpdateConstants.KeyringSchema,
+            keys = new[] { new WindowsUpdatePublicKey("readiness-p256", WindowsUpdateConstants.SupportedAlgorithm,
+                Convert.ToBase64String(signer.ExportSubjectPublicKeyInfo())) },
+        }, jsonOptions));
+        Require(legacy.ResolveChannel() == "stable",
+            "Existing keyrings without a release channel must keep receiving stable updates.");
+        var beta = WindowsUpdateKeyring.Parse(JsonSerializer.Serialize(legacy with { ReleaseChannel = "beta" }, jsonOptions));
+        Require(beta.ResolveChannel() == "beta" && beta.ResolveChannel("stable") == "stable" &&
+            legacy.ResolveChannel("beta") == "beta",
+            "Packaged beta must select its feed while preserving explicit channel overrides.");
+        var release = Release();
+        var betaRelease = release with
+        {
+            PackageUri = release.PackageUri.Replace("/stable/", "/beta/", StringComparison.Ordinal),
+            BootstrapUri = release.BootstrapUri!.Replace("/stable/", "/beta/", StringComparison.Ordinal),
+            InstallServiceScriptUri = release.InstallServiceScriptUri!.Replace("/stable/", "/beta/", StringComparison.Ordinal),
+            UninstallServiceScriptUri = release.UninstallServiceScriptUri!.Replace("/stable/", "/beta/", StringComparison.Ordinal),
+            PackageMetadataUri = release.PackageMetadataUri!.Replace("/stable/", "/beta/", StringComparison.Ordinal),
+        };
+        Require(Verify(signer, betaRelease, "0.0.0.0", "1.0.0.0", 0,
+            channel: beta.ResolveChannel(), manifestChannel: "beta").UpdateAvailable,
+            "A beta installation must accept the matching signed beta release.");
+        Reject(() => Verify(signer, release, "0.0.0.0", "1.0.0.0", 0, channel: beta.ResolveChannel()));
+        Reject(() => Verify(signer, betaRelease, "0.0.0.0", "1.0.0.0", 0, manifestChannel: "beta"));
+    }
+
     private static WindowsUpdateRelease Release() => new(
         "2.0.0.0", "x64", "msix", Origin + "stable/2.0.0.0/x64/VEX.Native.msix",
         new string('A', 64), "VEX.Native.Windows", "CN=VEX", null, 1024, null,
@@ -100,15 +132,15 @@ internal static class WindowsReleasePolicyTests
 
     private static WindowsUpdateAssessment Verify(ECDsa signer, WindowsUpdateRelease release,
         string floor, string currentVersion, int bucket, WindowsUpdateRollbackState? previous = null,
-        string architecture = "x64")
+        string architecture = "x64", string channel = "stable", string manifestChannel = "stable")
     {
         var payload = JsonSerializer.SerializeToUtf8Bytes(new WindowsUpdateManifest(
-            WindowsUpdateConstants.ManifestSchema, "stable", Now.ToString("O"), 2, floor,
+            WindowsUpdateConstants.ManifestSchema, manifestChannel, Now.ToString("O"), 2, floor,
             new("readiness-p256", WindowsUpdateConstants.SupportedAlgorithm), [release]),
             new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower });
         var signature = signer.SignData(payload, HashAlgorithmName.SHA256, DSASignatureFormat.Rfc3279DerSequence);
         return WindowsUpdateManifestVerifier.Verify(payload, Convert.ToBase64String(signature),
-            new WindowsUpdateVerificationOptions(Origin, "stable", architecture, currentVersion,
+            new WindowsUpdateVerificationOptions(Origin, channel, architecture, currentVersion,
                 new WindowsUpdateKeyring(WindowsUpdateConstants.KeyringSchema,
                     [new("readiness-p256", WindowsUpdateConstants.SupportedAlgorithm,
                         Convert.ToBase64String(signer.ExportSubjectPublicKeyInfo()))]),
@@ -125,7 +157,7 @@ internal static class WindowsReleasePolicyTests
     {
         var rejected = false;
         try { action(); } catch (InvalidOperationException) { rejected = true; }
-        Require(rejected, "Malformed or partial framework descriptors must be rejected before staging.");
+        Require(rejected, "Incompatible release channels or malformed framework descriptors must be rejected before staging.");
     }
 
     private static void Require(bool condition, string message)

@@ -228,6 +228,7 @@ function New-UpdateKeyringJson {
 
     $payload = [ordered]@{
         schema = 'vex.windows-update-keyring.v1'
+        release_channel = $Channel
         keys = @(
             [ordered]@{
                 key_id = $KeyId

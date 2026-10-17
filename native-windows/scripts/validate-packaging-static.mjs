@@ -293,6 +293,9 @@ for (const [requirement, message] of [
   [/manifest_revision:/, "release workflow must accept a monotonic manifest revision"],
   [/release_notes:/, "release workflow must require release notes"],
   [/rollout_percent:/, "release workflow must accept a staged rollout percentage"],
+  [/release_channel:[\s\S]*?type: choice[\s\S]*?options: \[stable, beta\][\s\S]*?default: stable/, "manual beta packaging must preserve the stable default"],
+  [/VEX_WINDOWS_RELEASE_CHANNEL:.*inputs\.release_channel \|\| 'stable'/, "release channel must reach both packaging and lifecycle validation"],
+  [/VEX_WINDOWS_RELEASE_CHANNEL -cnotin @\('stable', 'beta'\)/, "unexpected API dispatch channels must fail before packaging"],
   [/VEX_WINDOWS_MANIFEST_REVISION:.*inputs\.manifest_revision/, "manifest revision is not passed to publisher"],
   [/VEX_WINDOWS_RELEASE_NOTES:.*inputs\.release_notes/, "release notes are not passed to publisher"],
   [/validate-packaging-static\.mjs/, "packaging static validator is not part of CI"],
@@ -313,6 +316,10 @@ for (const [requirement, message] of [
 ]) {
   requireText(workflow, requirement, message);
 }
+
+assert.doesNotMatch(workflow, /out\/stable\/x64\/\$candidateVersion|"stable\/x64\/\$precedingVersion"/,
+  "beta install acceptance must use the selected channel rather than stable paths");
+requireText(packageScript, /release_channel = \$Channel/, "the signed package must retain its default update channel");
 
 const versions = JSON.parse(read(path.join(repositoryRoot, "versions.json")));
 const windowsStable = versions.app?.compatibility_matrix?.find(

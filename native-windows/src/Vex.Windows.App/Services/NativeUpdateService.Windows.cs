@@ -222,6 +222,8 @@ public sealed partial class NativeUpdateService
 
         var keyring = WindowsUpdateKeyring.Parse(
             File.ReadAllText(keyringPath));
+        channel = keyring.ResolveChannel(
+            Environment.GetEnvironmentVariable("VEX_WINDOWS_UPDATE_CHANNEL"));
         if (keyring.Schema != WindowsUpdateConstants.KeyringSchema || keyring.Keys is not { Count: > 0 } ||
             keyring.Keys.Any(key => key is null || string.IsNullOrWhiteSpace(key.KeyId) ||
                 key.Algorithm != WindowsUpdateConstants.SupportedAlgorithm ||

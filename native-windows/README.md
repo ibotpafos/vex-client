@@ -516,6 +516,19 @@ inputs; signed release preparation requires `package_release=true`, the main
 branch, release version/revision/notes, and the configured release inputs.
 Signed preparation fails clearly when required signing inputs are missing.
 
+For the approved tester program, select `release_channel=beta`. The existing
+`stable` default is preserved when this input is omitted. Both architectures,
+the synthetic preceding package and signed install acceptance use that same
+validated channel. The signed MSIX includes its channel in the public update
+keyring, so a beta installation checks the beta feed without requiring users to
+set an environment variable. Older keyrings retain the stable default; the
+existing explicit `VEX_WINDOWS_UPDATE_CHANNEL` override still takes precedence.
+The workflow retains artifacts for review and does not publish either channel.
+After signed lifecycle and real Windows VPN acceptance, the operator can publish
+the beta through the approved tester catalog in the account. Membership and
+free access remain controlled by the tester program; a beta artifact is not an
+authorization grant. Feedback and testing assignments remain in the account.
+
 Before selecting a signed release version and manifest revision, run the manual
 `Native Windows release input preflight` workflow on `main`. It receives only
 boolean presence flags for Actions variables and secrets, follows runtime-source

@@ -37,10 +37,23 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
 
     def test_windows_workflow_job_conditions_do_not_reference_secrets(self) -> None:
         workflow = (WORKFLOWS / "native-windows-ci.yml").read_text()
-        package_job = workflow.split("  package_release:", 1)[1]
+        package_job = workflow.split("\n  package_release:\n", 1)[1]
         condition = package_job.split("    runs-on:", 1)[0]
         self.assertNotIn("secrets.", condition)
         self.assertIn("github.event_name == 'workflow_dispatch'", condition)
+
+    def test_windows_beta_preparation_preserves_signed_lifecycle_gates(self) -> None:
+        workflow = (WORKFLOWS / "native-windows-ci.yml").read_text()
+        package_job = workflow.split("\n  package_release:\n", 1)[1]
+        self.assertIn("options: [stable, beta]", workflow)
+        self.assertIn("inputs.release_channel || 'stable'", package_job)
+        self.assertLess(package_job.index("Release channel must be stable or beta."),
+                        package_job.index("stage-runtime-assets.ps1"))
+        for path in ("out/$channel/x64/$candidateVersion", "$channel/x64/$precedingVersion"):
+            self.assertIn(path, package_job)
+        self.assertIn("needs: [portable, build, macos_reference, vpn_acceptance]", package_job)
+        self.assertIn("invoke-signed-install-acceptance.ps1 -DisposableRunner", package_job)
+        self.assertIn("Retain signed release artifacts for review", package_job)
 
     def test_legacy_desktop_release_workflows_are_removed(self) -> None:
         self.assertFalse((WORKFLOWS / "windows-release.yml").exists())

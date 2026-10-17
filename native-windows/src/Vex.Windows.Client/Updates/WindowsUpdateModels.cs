@@ -73,6 +73,11 @@ public sealed record WindowsUpdateKeyring(
     public string ResolveChannel(string? channelOverride = null) =>
         WindowsUpdateManifestVerifier.NormalizeChannel(channelOverride ?? ReleaseChannel ?? "stable");
 
+    public Uri ResolveOrigin(string? channelOverride = null) => new(
+        ResolveChannel(channelOverride) == "beta"
+            ? "https://vexguard.app/downloads/windows/native/"
+            : "https://downloads.vexguard.app/windows/native/", UriKind.Absolute);
+
     public static WindowsUpdateKeyring Parse(string json)
     {
         var keyring = JsonSerializer.Deserialize<WindowsUpdateKeyring>(

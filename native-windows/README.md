@@ -521,7 +521,9 @@ For the approved tester program, select `release_channel=beta`. The existing
 the synthetic preceding package and signed install acceptance use that same
 validated channel. The signed MSIX includes its channel in the public update
 keyring, so a beta installation checks the beta feed without requiring users to
-set an environment variable. Older keyrings retain the stable default; the
+set an environment variable. Beta Release builds pin `https://vexguard.app/downloads/windows/native/`,
+the existing first-party download namespace; their signed manifests and artifact URLs
+must remain inside that origin and path. Older keyrings retain the stable default; the
 existing explicit `VEX_WINDOWS_UPDATE_CHANNEL` override still takes precedence.
 The workflow retains artifacts for review and does not publish either channel.
 The explicit `tester-ca` signing mode uses the reviewed certificates in

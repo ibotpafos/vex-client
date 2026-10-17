@@ -99,18 +99,29 @@ internal static class WindowsReleasePolicyTests
         Require(beta.ResolveChannel() == "beta" && beta.ResolveChannel("stable") == "stable" &&
             legacy.ResolveChannel("beta") == "beta",
             "Packaged beta must select its feed while preserving explicit channel overrides.");
+        var betaOrigin = new Uri("https://vexguard.app/downloads/windows/native/");
+        Require(beta.ResolveOrigin() == betaOrigin && legacy.ResolveOrigin("beta") == betaOrigin &&
+            legacy.ResolveOrigin() == Origin && beta.ResolveOrigin("stable") == Origin,
+            "Beta must use the serving first-party namespace while old stable packages retain their origin.");
+        string BetaUri(string value) => value.Replace(Origin.AbsoluteUri, betaOrigin.AbsoluteUri,
+            StringComparison.Ordinal).Replace("/stable/", "/beta/", StringComparison.Ordinal);
         var release = Release();
         var betaRelease = release with
         {
-            PackageUri = release.PackageUri.Replace("/stable/", "/beta/", StringComparison.Ordinal),
-            BootstrapUri = release.BootstrapUri!.Replace("/stable/", "/beta/", StringComparison.Ordinal),
-            InstallServiceScriptUri = release.InstallServiceScriptUri!.Replace("/stable/", "/beta/", StringComparison.Ordinal),
-            UninstallServiceScriptUri = release.UninstallServiceScriptUri!.Replace("/stable/", "/beta/", StringComparison.Ordinal),
-            PackageMetadataUri = release.PackageMetadataUri!.Replace("/stable/", "/beta/", StringComparison.Ordinal),
+            PackageUri = BetaUri(release.PackageUri),
+            BootstrapUri = BetaUri(release.BootstrapUri!),
+            InstallServiceScriptUri = BetaUri(release.InstallServiceScriptUri!),
+            UninstallServiceScriptUri = BetaUri(release.UninstallServiceScriptUri!),
+            PackageMetadataUri = BetaUri(release.PackageMetadataUri!),
         };
         Require(Verify(signer, betaRelease, "0.0.0.0", "1.0.0.0", 0,
-            channel: beta.ResolveChannel(), manifestChannel: "beta").UpdateAvailable,
+            channel: beta.ResolveChannel(), manifestChannel: "beta", trustedOrigin: beta.ResolveOrigin()).UpdateAvailable,
             "A beta installation must accept the matching signed beta release.");
+        Reject(() => Verify(signer, betaRelease, "0.0.0.0", "1.0.0.0", 0,
+            channel: "beta", manifestChannel: "beta", trustedOrigin: Origin));
+        Reject(() => Verify(signer, betaRelease with { PackageUri = betaRelease.PackageUri.Replace(
+            betaOrigin.AbsoluteUri, Origin.AbsoluteUri, StringComparison.Ordinal) }, "0.0.0.0", "1.0.0.0", 0,
+            channel: "beta", manifestChannel: "beta", trustedOrigin: beta.ResolveOrigin()));
         Reject(() => Verify(signer, release, "0.0.0.0", "1.0.0.0", 0, channel: beta.ResolveChannel()));
         Reject(() => Verify(signer, betaRelease, "0.0.0.0", "1.0.0.0", 0, manifestChannel: "beta"));
     }
@@ -132,7 +143,7 @@ internal static class WindowsReleasePolicyTests
 
     private static WindowsUpdateAssessment Verify(ECDsa signer, WindowsUpdateRelease release,
         string floor, string currentVersion, int bucket, WindowsUpdateRollbackState? previous = null,
-        string architecture = "x64", string channel = "stable", string manifestChannel = "stable")
+        string architecture = "x64", string channel = "stable", string manifestChannel = "stable", Uri? trustedOrigin = null)
     {
         var payload = JsonSerializer.SerializeToUtf8Bytes(new WindowsUpdateManifest(
             WindowsUpdateConstants.ManifestSchema, manifestChannel, Now.ToString("O"), 2, floor,
@@ -140,7 +151,7 @@ internal static class WindowsReleasePolicyTests
             new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower });
         var signature = signer.SignData(payload, HashAlgorithmName.SHA256, DSASignatureFormat.Rfc3279DerSequence);
         return WindowsUpdateManifestVerifier.Verify(payload, Convert.ToBase64String(signature),
-            new WindowsUpdateVerificationOptions(Origin, channel, architecture, currentVersion,
+            new WindowsUpdateVerificationOptions(trustedOrigin ?? Origin, channel, architecture, currentVersion,
                 new WindowsUpdateKeyring(WindowsUpdateConstants.KeyringSchema,
                     [new("readiness-p256", WindowsUpdateConstants.SupportedAlgorithm,
                         Convert.ToBase64String(signer.ExportSubjectPublicKeyInfo()))]),

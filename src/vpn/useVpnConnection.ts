@@ -1074,6 +1074,10 @@ export function useVpnConnection() {
     }
   }, [selectedLocationId, setActiveProfile, setSelectedLocationId, setVpnStatus]);
 
+  const handleNativeWatchdogHealthRecovered = useCallback((previousMessage: string) => {
+    setVpnError((current) => current === previousMessage ? null : current);
+  }, []);
+
   const { recordNativeStatus } = useNativeVpnWatchdog({
     activeDeviceId: activeProfileDeviceId,
     activeLocationId: selectedLocationId,
@@ -1088,6 +1092,7 @@ export function useVpnConnection() {
     onRecoveryFailed: setVpnError,
     onRecoveryStarted: handleNativeWatchdogRecoveryStarted,
     onRecoverySucceeded: handleNativeWatchdogRecovery,
+    onHealthRecovered: handleNativeWatchdogHealthRecovered,
     operationInFlightRef: vpnOperationInFlightRef,
     isCurrentLocation: useCallback((locationId: string) => selectedLocationIdRef.current === locationId, []),
     persistLocation: setSelectedVpnLocation,

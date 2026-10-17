@@ -42,6 +42,7 @@ type NativeVpnWatchdogInput = {
   onRecoveryFailed: (message: string) => void;
   onRecoveryStarted?: (message: string) => void;
   onRecoverySucceeded: (profile: VpnProfile, status: VpnStatus, locationId: string) => void;
+  onHealthRecovered?: (previousMessage: string) => void;
   operationInFlightRef: MutableBooleanRef;
   persistLocation: RecoverVpnConnectionInput['persistLocation'];
   probeHealth?: (profile: VpnProfile) => Promise<VpnAutopilotProbeResult>;
@@ -84,6 +85,8 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
   const lastReconnectAtRef = useRef(0);
   const recoveryBackoffRef = useRef(initialRecoveryBackoffState());
   const connectedAtRef = useRef<number | null>(null);
+  const lastRecoveryFailureRef = useRef<{ message: string; deviceId: string; locationId: string;
+    profileVersion?: number; accessToken: string } | null>(null);
 
   const recordNativeStatus = useCallback((currentStatus: VpnStatus, nextStatus: VpnStatus) => {
     lastLocalStatusRef.current = {status: nextStatus, deviceId: activeProfileForStatus?.device?.id, locationId: activeProfileForStatus?.locationId, profileVersion: activeProfileForStatus?.profileVersion};
@@ -175,6 +178,26 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
         backendHealthFailuresRef.current = health.healthy ? 0 : backendHealthFailuresRef.current + 1;
         if (health.healthy && localHealthFailuresRef.current === 0) {
           recoveryBackoffRef.current = resetRecoveryBackoff();
+          const failure = lastRecoveryFailureRef.current;
+          if (failure && input.onHealthRecovered && input.probeHealth &&
+              failure.deviceId === activeDeviceId && failure.locationId === input.activeLocationId &&
+              failure.profileVersion === activeProfile.profileVersion && failure.accessToken === accessToken &&
+              localStatus?.state === 'connected') {
+            const recovered = await input.probeHealth(activeProfile).catch(() => null);
+            const confirmed = lastLocalStatusRef.current;
+            // A fresh HTTPS result may clear only this watchdog's warning for
+            // the same session/profile. User actions and later local failures win.
+            if (isCurrent() && !input.operationInFlightRef.current &&
+                lastRecoveryFailureRef.current === failure && localHealthFailuresRef.current === 0 &&
+                recovered?.httpsOk === true && recovered.dnsOk !== false &&
+                confirmed?.deviceId === activeDeviceId && confirmed.locationId === input.activeLocationId &&
+                confirmed.profileVersion === activeProfile.profileVersion && confirmed.status.state === 'connected' &&
+                localStatusHealthReasons(confirmed.status, Date.now(), input.staleHandshakeSeconds).length === 0) {
+              lastRecoveryFailureRef.current = null;
+              input.onHealthRecovered(failure.message);
+            }
+          }
+          return;
         }
 
         const healthFailureCount = Math.max(backendHealthFailuresRef.current, localHealthFailuresRef.current);
@@ -243,6 +266,7 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
           return;
         }
         if (recovery.ok) {
+          lastRecoveryFailureRef.current = null;
           recoveryBackoffRef.current = resetRecoveryBackoff();
           input.onRecoverySucceeded(recovery.profile, recovery.status, recovery.locationId);
           reportConnect(recovery.profile);
@@ -263,6 +287,8 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
           return;
         }
 
+        lastRecoveryFailureRef.current = { message: assessment.userMessage, deviceId: activeDeviceId,
+          locationId: input.activeLocationId, profileVersion: activeProfile.profileVersion, accessToken };
         input.onRecoveryFailed(assessment.userMessage);
         recoveryBackoffRef.current = recordRecoveryFailure(recoveryBackoffRef.current, Date.now(), {
           baseDelayMs: input.reconnectCooldownMs,
@@ -323,6 +349,7 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
     input.onRecoveryFailed,
     input.onRecoveryStarted,
     input.onRecoverySucceeded,
+    input.onHealthRecovered,
     input.operationInFlightRef,
     input.persistLocation,
     input.probeHealth,

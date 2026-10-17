@@ -20,6 +20,8 @@ const scriptPaths = [
   path.join(packagingDirectory, "package-native-windows.ps1"),
   path.join(packagingDirectory, "publish-native-windows.ps1"),
   path.join(packagingDirectory, "ReleaseValidation.ps1"),
+  path.join(packagingDirectory, "TesterSigning.ps1"),
+  path.join(scriptsDirectory, "prepare-tester-signing-trust.ps1"),
   path.join(scriptsDirectory, "stage-runtime-assets.ps1"),
   path.join(windowsRoot, "tests", "ReleaseValidation.Tests.ps1"),
 ];
@@ -320,6 +322,9 @@ for (const [requirement, message] of [
 assert.doesNotMatch(workflow, /out\/stable\/x64\/\$candidateVersion|"stable\/x64\/\$precedingVersion"/,
   "beta install acceptance must use the selected channel rather than stable paths");
 requireText(packageScript, /release_channel = \$Channel/, "the signed package must retain its default update channel");
+requireText(packageScript, /Assert-WindowsTesterSigningScope/, "tester signing must fail outside its explicit beta scope");
+requireText(publishScript, /Get-WindowsTesterReleaseAssets/, "public trust assets must be verified before inclusion in the bundle");
+requireText(workflow, /prepare-tester-signing-trust\.ps1 -DisposableRunner -Action Cleanup/, "disposable beta trust requires owned cleanup");
 
 const versions = JSON.parse(read(path.join(repositoryRoot, "versions.json")));
 const windowsStable = versions.app?.compatibility_matrix?.find(

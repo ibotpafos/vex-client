@@ -1,0 +1,13 @@
+{
+  "schema": "vex.windows-tester-signing-identity.v1",
+  "mode": "tester-ca",
+  "root_subject": "CN=VEX VPN Tester Root 2026",
+  "publisher": "CN=VEX VPN Testers",
+  "root_sha256": "86e38cef04f8c768d8cf6ae3fd27347a16fd9620063c7835220d2a650202a461",
+  "leaf_sha256": "6a4f3f238671b275a6f51f638d3852b55fc9dbd6b7acb4b703c492b00c0faf55",
+  "root_constraints": "CA=true,pathlen=0,EKU=codeSigning only",
+  "leaf_constraints": "CA=false,EKU=codeSigning only",
+  "root_private_key_in_ci": false,
+  "update_key_id": "vex-windows-testers-20261017-p256",
+  "public_key_sha256": "2e72689caa1f95cf5c52eba55a1fc5382894b53514544cb2c2b835d2ccc7e60b"
+}

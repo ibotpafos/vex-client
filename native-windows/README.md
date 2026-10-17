@@ -524,6 +524,21 @@ keyring, so a beta installation checks the beta feed without requiring users to
 set an environment variable. Older keyrings retain the stable default; the
 existing explicit `VEX_WINDOWS_UPDATE_CHANNEL` override still takes precedence.
 The workflow retains artifacts for review and does not publish either channel.
+The explicit `tester-ca` signing mode uses the reviewed certificates in
+`packaging/tester-trust`: a separate RSA authority restricted to code signing,
+with path length zero, and its end-entity signer. The authority private key stays
+offline; CI receives only the encrypted end-entity PFX and the public chain.
+The manual job imports the exact pinned public authority solely on its
+disposable Windows host and removes its owned trust afterward. It cannot use
+this identity for stable. Authenticode, timestamps, Setup pins, service
+attestation and MSIX validation retain their ordinary checks.
+First-time testers explicitly import the public code-signing authority using
+the bundled `TESTER-INSTALL.txt` and the account's fingerprint, then run Setup.
+The complete bundle includes both public certificates and the reviewed guide;
+their descriptors are bound into the signed Setup metadata. No private key is
+distributed. `VEX_WINDOWS_SERVICE_MSI_SOURCE=amneziawg-3.1.0` explicitly opts
+into the pinned official x64/arm64 MSI pair on disposable runners; extraction
+preserves existing explicit PE URI/path precedence and validates both PE types.
 After signed lifecycle and real Windows VPN acceptance, the operator can publish
 the beta through the approved tester catalog in the account. Membership and
 free access remain controlled by the tester program; a beta artifact is not an

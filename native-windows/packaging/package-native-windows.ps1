@@ -17,6 +17,9 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'ReleaseValidation.ps1')
+. (Join-Path $PSScriptRoot 'TesterSigning.ps1')
+$signingMode = if ($env:VEX_WINDOWS_SIGNING_MODE) { $env:VEX_WINDOWS_SIGNING_MODE } else { 'public-trusted' }
+Assert-WindowsTesterSigningScope -Channel $Channel -Mode $signingMode
 
 function Get-RequiredEnv {
     param([Parameter(Mandatory = $true)][string]$Name)
@@ -290,6 +293,11 @@ $packageName = Get-RequiredEnv 'VEX_WINDOWS_PACKAGE_NAME'
 $displayName = Get-RequiredEnv 'VEX_WINDOWS_PACKAGE_DISPLAY_NAME'
 $publisher = Get-RequiredEnv 'VEX_WINDOWS_PACKAGE_PUBLISHER'
 $publisherDisplayName = Get-RequiredEnv 'VEX_WINDOWS_PACKAGE_PUBLISHER_DISPLAY_NAME'
+$testerIdentity = $null
+if ($signingMode -ceq 'tester-ca') {
+    $testerIdentity = Get-WindowsTesterSigningIdentity -ExpectedRootSha256 $env:VEX_WINDOWS_TEST_ROOT_SHA256 `
+        -ExpectedLeafSha256 $env:VEX_WINDOWS_TEST_CERT_SHA256 -Publisher $publisher
+}
 $pfxBase64 = Get-RequiredEnv 'VEX_WINDOWS_SIGN_PFX_BASE64'
 $pfxPassword = Get-RequiredEnv 'VEX_WINDOWS_SIGN_PFX_PASSWORD'
 $updateKeyId = Get-RequiredEnv 'VEX_WINDOWS_UPDATE_KEY_ID'
@@ -441,6 +449,7 @@ try {
     $clientCertificateSha256 = Get-PfxCertificateSha256 `
         -Path $temporaryPfxPath `
         -Password $pfxPassword
+    Assert-WindowsTesterSigningScope -Channel $Channel -Mode $signingMode -LeafSha256 $clientCertificateSha256
     Invoke-SignTool `
         -SignTool $signtool `
         -PfxPath $temporaryPfxPath `
@@ -576,6 +585,7 @@ $metadata = [ordered]@{
     architecture = $Architecture
     version = $normalizedVersion
     source_commit = $sourceCommit
+    signing_mode = $signingMode
     package_name = $packageName
     publisher = $publisher
     display_name = $displayName
@@ -614,6 +624,18 @@ $metadata = [ordered]@{
         (Get-Item -LiteralPath $uninstallServiceScriptPath).Length
     appinstaller_file = [IO.Path]::GetFileName($appInstallerPath)
     appinstaller_uri = $appInstallerUri
+}
+
+if ($null -ne $testerIdentity) {
+    $testerFiles = @()
+    foreach ($name in @('VEX-Tester-Root.cer', 'VEX-Tester-Signing.cer', 'TESTER-INSTALL.txt')) {
+        $destination = Join-Path $publishRoot $name
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot "tester-trust/$name") -Destination $destination
+        $testerFiles += @{ file = $name; sha256 = ConvertTo-HexSha256 $destination; size_bytes = (Get-Item -LiteralPath $destination).Length }
+    }
+    $metadata.tester_trust_files = $testerFiles
+    $metadata.tester_root_sha256 = $testerIdentity.RootSha256
+    $metadata.tester_leaf_sha256 = $testerIdentity.LeafSha256
 }
 
 Write-Utf8NoBom `

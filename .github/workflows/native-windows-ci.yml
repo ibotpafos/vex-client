@@ -94,6 +94,7 @@ jobs:
           ./native-windows/tests/ReleaseValidation.Tests.ps1
           ./native-windows/tests/ReleaseReadiness.Tests.ps1
           ./native-windows/tests/ReleaseInputPreflight.Tests.ps1
+          ./native-windows/tests/TesterSigning.Tests.ps1
           ./native-windows/tests/VclibsDependency.Tests.ps1
           ./native-windows/tests/VerifiedBootstrapLaunch.Tests.ps1
           ./native-windows/tests/VendorStartupMigration.Tests.ps1
@@ -154,6 +155,7 @@ jobs:
           ./native-windows/tests/ReleaseValidation.Tests.ps1
           ./native-windows/tests/ReleaseReadiness.Tests.ps1
           ./native-windows/tests/ReleaseInputPreflight.Tests.ps1
+          ./native-windows/tests/TesterSigning.Tests.ps1
           ./native-windows/tests/VclibsDependency.Tests.ps1
           ./native-windows/tests/VerifiedBootstrapLaunch.Tests.ps1
           ./native-windows/tests/VendorStartupMigration.Tests.ps1
@@ -184,6 +186,12 @@ jobs:
           }
       - name: Publish self-contained VPN service
         run: dotnet publish native-windows/src/Vex.Windows.Service/Vex.Windows.Service.csproj -c Release -r win-${{ matrix.architecture }} -p:Platform=${{ matrix.architecture }} -o "${{ runner.temp }}/vex-windows/service-${{ matrix.architecture }}"
+      - name: Verify both qualified MSI runtime architectures on a disposable host
+        if: matrix.architecture == 'x64'
+        shell: pwsh
+        env:
+          VEX_WINDOWS_SERVICE_MSI_SOURCE: amneziawg-3.1.0
+        run: ./native-windows/scripts/stage-runtime-assets.ps1 -DestinationRoot (Join-Path $env:RUNNER_TEMP 'vex-runtime-review') -DisposableRunner
       - name: Publish self-contained WinUI application
         run: dotnet publish native-windows/src/Vex.Windows.App/Vex.Windows.App.csproj -c Release -r win-${{ matrix.architecture }} -p:Platform=${{ matrix.architecture }} -o "${{ runner.temp }}/vex-windows/app-${{ matrix.architecture }}"
       - name: Publish native installer for unsigned review
@@ -383,9 +391,9 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # TODO(windows-tester-launch): configure the owner's signing identity and qualify
-  # signed installation plus real Windows VPN before beta promotion. Signing and
-  # package inputs are absent as of 2026-10-17; unsigned review builds cannot ship.
+  # Signed preparation retains ordinary native signature/install verification.
+  # The beta authority is public, pinned, code-signing-only and prepared solely
+  # on this explicit disposable release host. No authority private key enters CI.
   package_release:
     name: Prepare signed Windows release artifacts
     if: >-
@@ -399,6 +407,10 @@ jobs:
     needs: [portable, build, macos_reference, vpn_acceptance]
     env:
       VEX_WINDOWS_RELEASE_CHANNEL: ${{ inputs.release_channel || 'stable' }}
+      VEX_WINDOWS_SIGNING_MODE: ${{ vars.VEX_WINDOWS_SIGNING_MODE || 'public-trusted' }}
+      VEX_WINDOWS_TEST_ROOT_SHA256: ${{ vars.VEX_WINDOWS_TEST_ROOT_SHA256 }}
+      VEX_WINDOWS_TEST_CERT_SHA256: ${{ vars.VEX_WINDOWS_TEST_CERT_SHA256 }}
+      VEX_WINDOWS_PACKAGE_PUBLISHER: ${{ vars.VEX_WINDOWS_PACKAGE_PUBLISHER }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -406,12 +418,16 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
+      - name: Prepare pinned beta signing trust on the disposable release host
+        shell: pwsh
+        run: ./native-windows/scripts/prepare-tester-signing-trust.ps1 -DisposableRunner
       - name: Verify release inputs and stage architecture-specific runtimes
         shell: pwsh
         env:
           RELEASE_VERSION: ${{ inputs.release_version }}
           MANIFEST_REVISION: ${{ inputs.manifest_revision }}
           RELEASE_NOTES: ${{ inputs.release_notes }}
+          VEX_WINDOWS_SERVICE_MSI_SOURCE: ${{ vars.VEX_WINDOWS_SERVICE_MSI_SOURCE }}
           VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH: ${{ vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH }}
           VEX_WINDOWS_SERVICE_WINTUN_PATH: ${{ vars.VEX_WINDOWS_SERVICE_WINTUN_PATH }}
           VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH_X64: ${{ vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH_X64 }}
@@ -439,7 +455,7 @@ jobs:
           $revision = 0L
           if (-not [long]::TryParse($env:MANIFEST_REVISION, [ref]$revision) -or $revision -le 0) { throw 'A positive manifest revision is required.' }
           if ([string]::IsNullOrWhiteSpace($env:RELEASE_NOTES)) { throw 'Release notes are required.' }
-          ./native-windows/scripts/stage-runtime-assets.ps1 -DestinationRoot (Join-Path $env:RUNNER_TEMP 'vex-native-runtime')
+          ./native-windows/scripts/stage-runtime-assets.ps1 -DestinationRoot (Join-Path $env:RUNNER_TEMP 'vex-native-runtime') -DisposableRunner
       - name: Package signed native Windows releases
         id: package_signed
         shell: pwsh
@@ -520,3 +536,7 @@ jobs:
             native-windows/packaging/published/**
           if-no-files-found: error
           retention-days: 7
+      - name: Remove owned beta signing trust
+        if: always()
+        shell: pwsh
+        run: ./native-windows/scripts/prepare-tester-signing-trust.ps1 -DisposableRunner -Action Cleanup

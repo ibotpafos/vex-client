@@ -279,7 +279,7 @@ function Invoke-AcceptanceProcess {
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
     if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT -and
-        [IO.Path]::GetFullPath($Executable) -ieq [IO.Path]::GetFullPath((Get-AcceptanceUiPowerShellPath))) {
+        [IO.Path]::GetFullPath($Executable) -ieq [IO.Path]::GetFullPath((Get-AcceptanceSystemPowerShellPath))) {
         # Match native Setup before WinPS startup can inspect inherited Core or
         # user module paths; the encoded command also selects system providers.
         $start.Environment['PSModulePath'] = [IO.Path]::Combine(

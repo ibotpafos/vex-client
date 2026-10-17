@@ -407,6 +407,20 @@ $global:VexModuleProbeInitialHash = $null -ne (Microsoft.PowerShell.Core\Get-Com
         $moduleResult = Get-Content -LiteralPath $moduleMarker -Raw | ConvertFrom-Json
         Assert ($moduleResult.passed -eq $true -and -not (Test-Path -LiteralPath $hostileMarker)) 'Acceptance loaded an untrusted provider or lost its real hash/signature checks.'
         Write-Host ('VEX_ACCEPTANCE_FRESH_PROCESS passed=true windows_powershell=5.1 initial_hash_available=' + $moduleResult.initial_hash_available.ToString().ToLowerInvariant())
+        # WinUI probes deliberately run under Core7. Applying the Framework
+        # module path to that executable would break its existing desktop flow.
+        $coreModuleRoot = Join-Path $temporary 'core-module-path-marker'
+        [IO.Directory]::CreateDirectory($coreModuleRoot) | Out-Null
+        $coreMarker = Join-Path $temporary 'core-module-result.txt'
+        $coreProbe = "[IO.File]::WriteAllText('" + $coreMarker.Replace("'","''") + "',`$env:PSModulePath)"
+        $coreCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($coreProbe))
+        $oldModulePath = $env:PSModulePath
+        try {
+            $env:PSModulePath = $coreModuleRoot
+            & $realInvokeProcess -Executable ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -Arguments @('-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',$coreCommand) -TimeoutSeconds 15
+        }
+        finally { $env:PSModulePath = $oldModulePath }
+        Assert (@([IO.File]::ReadAllText($coreMarker) -split [IO.Path]::PathSeparator) -contains $coreModuleRoot) 'A Core UI child was assigned the Framework-only module path.'
     }
     # Exercise the literal bootstrap wrapper in a real harmless child. Quotes,
     # dollars and rollback inputs remain data; failure output stays allowlisted.

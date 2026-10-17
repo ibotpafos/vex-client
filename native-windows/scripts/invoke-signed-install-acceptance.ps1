@@ -278,6 +278,13 @@ function Invoke-AcceptanceProcess {
     $start.UseShellExecute = $false
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
+    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT -and
+        [IO.Path]::GetFullPath($Executable) -ieq [IO.Path]::GetFullPath((Get-AcceptanceUiPowerShellPath))) {
+        # Match native Setup before WinPS startup can inspect inherited Core or
+        # user module paths; the encoded command also selects system providers.
+        $start.Environment['PSModulePath'] = [IO.Path]::Combine(
+            [Environment]::GetFolderPath([Environment+SpecialFolder]::System), 'WindowsPowerShell', 'v1.0', 'Modules')
+    }
     foreach ($argument in $Arguments) { $start.ArgumentList.Add($argument) }
     $process = [Diagnostics.Process]::Start($start)
     try {

@@ -393,8 +393,8 @@ if ($PSVersionTable.PSEdition -cne 'Desktop' -or $PSVersionTable.PSVersion.Major
             package=(Get-FileHash -LiteralPath $moduleData -Algorithm SHA256).Hash }
         $moduleCommand = Get-TestAcceptanceBootstrapCommand $moduleInput
         $prefix = @'
-$global:VexModuleProbeInitialHash = $null -ne (Microsoft.PowerShell.Core\Get-Command -Name 'Microsoft.PowerShell.Utility\Get-FileHash' -ListImported -ErrorAction SilentlyContinue)
 $PSModuleAutoLoadingPreference = 'None'
+$global:VexModuleProbeInitialHash = $null -ne (Microsoft.PowerShell.Core\Get-Command -Name 'Microsoft.PowerShell.Utility\Get-FileHash' -ListImported -ErrorAction SilentlyContinue)
 '@
         $moduleCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes(
             $prefix + [Environment]::NewLine + [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($moduleCommand))))

@@ -940,7 +940,8 @@ try {
     # Read only: do not sign in, enable startup, request a VPN profile or connect.
 }
 catch {
-    $kind = $_.Exception.GetType().Name
+    $uiFailure = $_
+    $kind = $uiFailure.Exception.GetType().Name
     if ($kind -cnotmatch '^[A-Za-z][A-Za-z0-9]{0,79}$') { $kind = 'Exception' }
     $nativeExit = 'unknown'
     try {
@@ -950,7 +951,7 @@ catch {
         }
     }
     catch { }
-    [Console]::Error.WriteLine('VEX_INSTALLED_UI_FAILURE stage=' + $stage + ' exception=' + $kind + ' hresult=' + [string]$_.Exception.HResult + ' native_exit=' + $nativeExit)
+    [Console]::Error.WriteLine('VEX_INSTALLED_UI_FAILURE stage=' + $stage + ' exception=' + $kind + ' hresult=' + [string]$uiFailure.Exception.HResult + ' native_exit=' + $nativeExit)
     throw
 }
 finally {

@@ -212,6 +212,7 @@ function New-VerifiedServiceCommand {
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 # VEX_TRUSTED_POWERSHELL_MODULES_BEGIN
+$ProgressPreference = 'SilentlyContinue'
 $systemModules = [IO.Path]::Combine([Environment]::GetFolderPath([Environment+SpecialFolder]::System), 'WindowsPowerShell', 'v1.0', 'Modules')
 $env:PSModulePath = $systemModules
 $requiredCommands = @{
@@ -262,6 +263,24 @@ try {
     & $inputData.BootstrapPath @parameters
     if (-not $?) { throw 'The verified elevated Windows bootstrap failed.' }
 }
+catch {
+    # Internal callers may retain a source location as a numeric failure code.
+    # No exception text, identity, command argument or file path is exported.
+    if ($null -ne $inputData.PSObject.Properties['DiagnosticExitCodes'] -and
+        $inputData.DiagnosticExitCodes -is [bool] -and $inputData.DiagnosticExitCodes) {
+        $site = $_.InvocationInfo
+        $line = [int]$site.ScriptLineNumber
+        if ($line -lt 1 -or $line -gt 9999) { $line = 0 }
+        $offset = switch ([IO.Path]::GetFileName([string]$site.ScriptName)) {
+            'bootstrap-native-windows.ps1' { 100000 }
+            'install-vpn-service.ps1' { 200000 }
+            'uninstall-vpn-service.ps1' { 300000 }
+            default { 900000 }
+        }
+        exit ($offset + $line)
+    }
+    throw
+}
 finally { foreach ($heldFile in $heldFiles) { $heldFile.Dispose() } }
 '@
     $encodedInput = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($InputData | ConvertTo-Json -Compress)))
@@ -293,6 +312,7 @@ function Invoke-ServicePhase {
             MetadataSha256=(Get-FileHash -LiteralPath $MetadataFile -Algorithm SHA256).Hash
             CertificateSha256=[string]$serviceMetadata.client_certificate_sha256
             ServiceAction=$ServiceAction; OwnerSid=(Resolve-OwnerSid); InstallDirectory=$PackageInstallDirectory
+            DiagnosticExitCodes=$true
         })
         # Only the literal verifier uses Bypass; no downloaded script executes
         # until release pins and the trusted Authenticode signer pass again.
@@ -304,6 +324,11 @@ function Invoke-ServicePhase {
                 throw 'The elevated service operation did not finish within three minutes. Do not start another installation until it finishes.'
             }
             if ($process.ExitCode -ne 0) {
+                $code = [string]$process.ExitCode
+                if ($code -notmatch '^-?[0-9]{1,10}$') { $code = 'unknown' }
+                if ($ServiceAction -in @('Install','Repair','Verify','Prepare','Restore','Uninstall')) {
+                    [Console]::Error.WriteLine('VEX_BOOTSTRAP_SERVICE_FAILURE action=' + $ServiceAction + ' code=' + $code)
+                }
                 throw "The elevated service operation '$ServiceAction' failed. Use the verified installer to repair VEX."
             }
         }
@@ -856,6 +881,8 @@ function Assert-InstalledState {
 
 function Assert-AuthorizationToken {
     param([Parameter(Mandatory = $true)][string]$Path)
+    # Verify runs in a fresh WinPS 5.1 process without the installer's imports.
+    Microsoft.PowerShell.Utility\Add-Type -AssemblyName 'System.Security, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'
     $protectedToken = [IO.File]::ReadAllBytes($Path)
     $token = [Security.Cryptography.ProtectedData]::Unprotect($protectedToken,
         [Text.Encoding]::UTF8.GetBytes('VEX VPN IPC v1'), [Security.Cryptography.DataProtectionScope]::LocalMachine)

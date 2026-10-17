@@ -78,6 +78,64 @@ function Invoke-ServiceRemoval { param($Metadata,$InstallDirectory) $script:Remo
 $script:Stopped = 0
 function Stop-ServiceForPackageUpdate { $script:Stopped++ }
 try {
+    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+        # A fresh verifier cannot depend on the installer's assembly imports.
+        # Test real DPAPI in an independent system WinPS5.1 process, never SCM,
+        # package registration or a real service/authorization token.
+        $validToken = Join-Path $temporary 'synthetic-valid.dpapi'
+        $shortToken = Join-Path $temporary 'synthetic-short.dpapi'
+        $corruptToken = Join-Path $temporary 'synthetic-corrupt.dpapi'
+        foreach ($pair in @(@($validToken,32), @($shortToken,31))) {
+            $plain = [byte[]](1..$pair[1])
+            try {
+                $protected = [Security.Cryptography.ProtectedData]::Protect($plain,
+                    [Text.Encoding]::UTF8.GetBytes('VEX VPN IPC v1'), [Security.Cryptography.DataProtectionScope]::LocalMachine)
+                [IO.File]::WriteAllBytes($pair[0],$protected)
+            }
+            finally { [Array]::Clear($plain,0,$plain.Length) }
+        }
+        [IO.File]::WriteAllBytes($corruptToken,[byte[]](1..16))
+        $definition = ($ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -ceq 'Assert-AuthorizationToken'},$false))[0].Extent.Text
+        $payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((@{
+            valid=$validToken; short=$shortToken; corrupt=$corruptToken } | ConvertTo-Json -Compress)))
+        $probe = @'
+$ErrorActionPreference='Stop'
+Set-StrictMode -Version Latest
+$initial = @([AppDomain]::CurrentDomain.GetAssemblies() | Where-Object { $_.GetName().Name -ceq 'System.Security' }).Count -gt 0
+$ProgressPreference = 'SilentlyContinue'
+__DEFINITION__
+$inputValue = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__PAYLOAD__')) | ConvertFrom-Json
+Assert-AuthorizationToken $inputValue.valid
+foreach ($path in @($inputValue.short,$inputValue.corrupt)) {
+    $rejected=$false
+    try { Assert-AuthorizationToken $path } catch { $rejected=$true }
+    if (-not $rejected) { throw 'The fresh DPAPI verifier accepted invalid synthetic data.' }
+}
+[Console]::WriteLine('VEX_DPAPI_FRESH_PROCESS passed=true initial_system_security_loaded=' + $initial.ToString().ToLowerInvariant())
+'@
+        $probe = $probe.Replace('__DEFINITION__',$definition).Replace('__PAYLOAD__',$payload)
+        $start = [Diagnostics.ProcessStartInfo]::new()
+        $start.FileName = [IO.Path]::Combine([Environment]::GetFolderPath([Environment+SpecialFolder]::System),'WindowsPowerShell','v1.0','powershell.exe')
+        $start.Arguments = '-NoLogo -NoProfile -NonInteractive -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($probe))
+        $start.UseShellExecute=$false; $start.RedirectStandardOutput=$true; $start.RedirectStandardError=$true
+        $process = [Diagnostics.Process]::Start($start)
+        try {
+            $stdout=$process.StandardOutput.ReadToEndAsync(); $stderr=$process.StandardError.ReadToEndAsync()
+            if (-not $process.WaitForExit(30000)) { $process.Kill(); throw 'The fresh DPAPI test exceeded its deadline.' }
+            Assert ($process.ExitCode -eq 0) 'The isolated fresh WinPS5.1 DPAPI verifier failed.'
+            Assert ($stdout.Result.Trim() -cmatch '^VEX_DPAPI_FRESH_PROCESS passed=true initial_system_security_loaded=(true|false)$') 'The fresh DPAPI test did not produce its bounded proof.'
+            if (-not [string]::IsNullOrWhiteSpace($stderr.Result)) {
+                [Console]::WriteLine('VEX_DPAPI_UNEXPECTED_STDERR bytes=' + [Text.Encoding]::UTF8.GetByteCount($stderr.Result) +
+                    ' clixml=' + $stderr.Result.Contains('#< CLIXML').ToString().ToLowerInvariant() +
+                    ' progress=' + ([regex]::Matches($stderr.Result,'S="progress"')).Count +
+                    ' errors=' + ([regex]::Matches($stderr.Result,'S="Error"|S="error"')).Count)
+                throw 'The fresh DPAPI probe reported an unexpected error.'
+            }
+            Write-Output $stdout.Result.Trim()
+        }
+        finally { $process.Dispose() }
+    }
     Assert-OriginalUserContext
     $script:CurrentSid = $administrator
     Assert-Rejected { Assert-OriginalUserContext } 'Other-admin token must not register or relaunch the owning user app'

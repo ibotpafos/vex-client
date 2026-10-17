@@ -583,26 +583,110 @@ function Assert-AcceptanceOwnedCandidate {
     }
 }
 
+function Get-AcceptanceInternetMarker {
+    param([string]$Path)
+    return Get-Content -LiteralPath $Path -Stream Zone.Identifier -Raw
+}
+
+function Set-AcceptanceInternetMarker {
+    param([string]$Path)
+    Set-Content -LiteralPath $Path -Stream Zone.Identifier -Value "[ZoneTransfer]`r`nZoneId=3" -Encoding ASCII
+}
+
+function Get-AcceptanceStreamHash {
+    param([IO.FileStream]$Stream)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        $Stream.Position = 0
+        return [BitConverter]::ToString($sha.ComputeHash($Stream)).Replace('-', '')
+    }
+    finally { $Stream.Position = 0; $sha.Dispose() }
+}
+
+function Close-AcceptanceTrustedCopy {
+    param($Copy)
+    foreach ($stream in $Copy.Handles) { $stream.Dispose() }
+    Remove-AcceptancePrivateDirectory -Path $Copy.Directory -FixtureId $Copy.FixtureId
+}
+
 function Confirm-AcceptanceBetaSetupDownloadTrust {
     param($Bundle, $NativeVerification, [bool]$ExplicitlyDisposable)
     Assert-AcceptanceRunner $ExplicitlyDisposable
-    $setup = Get-AcceptanceVerifiedTesterSetup -Bundle $Bundle -NativeVerification $NativeVerification
     Assert-AcceptanceOwnedCandidate -CandidateRoot $Bundle.Root -RunnerTemp $env:RUNNER_TEMP
-    $zone = Get-Content -LiteralPath $setup.Path -Stream Zone.Identifier -Raw
-    if ($zone -notmatch '(?m)^ZoneId=3\s*$') { throw 'The original downloaded beta marker was not verified.' }
-    # This is the documented per-file user trust step after exact verification.
-    # Never clear a directory, disable protection or change another input's ADS.
-    Unblock-File -LiteralPath $setup.Path
-    if (@(Get-Item -LiteralPath $setup.Path -Stream Zone.Identifier -ErrorAction SilentlyContinue).Count -ne 0) {
-        throw 'Explicit beta file trust was not confirmed.'
+    $sources = @(); $held = @(); $directory = $null
+    $fixture = [Guid]::NewGuid().ToString('N')
+    try {
+        # Bind every copied byte to a verified, non-writable/non-deletable source
+        # descriptor. Never remove an ADS by path after checking a different file.
+        $sources = @(Open-AcceptanceNativeSetupLocks $Bundle)
+        $validated = Read-AcceptanceBundle $Bundle.Root
+        $setup = Get-AcceptanceVerifiedTesterSetup -Bundle $validated -NativeVerification $NativeVerification
+        $metadata = $validated.Metadata
+        $expected = @{
+            'package-metadata.json' = $setup.MetadataSha256
+            $metadata.package_file = $metadata.package_sha256
+            $metadata.bootstrap_file = $metadata.bootstrap_sha256
+            $metadata.install_service_script_file = $metadata.install_service_script_sha256
+            $metadata.uninstall_service_script_file = $metadata.uninstall_service_script_sha256
+            $metadata.vclibs_dependency_file = $metadata.vclibs_dependency_sha256
+            ([IO.Path]::GetFileName($setup.Path)) = $setup.Sha256
+        }
+        if ($sources.Count -ne 7 -or $expected.Count -ne 7) { throw 'Beta trust requires exactly the verified seven-file bundle.' }
+        foreach ($stream in $sources) {
+            $name = [IO.Path]::GetFileName($stream.Name)
+            if (-not $expected.ContainsKey($name) -or (Get-AcceptanceStreamHash $stream) -ine $expected[$name]) {
+                throw 'The beta source descriptor does not match the verified bundle.'
+            }
+        }
+        if ((Get-AcceptanceInternetMarker $setup.Path) -notmatch '(?m)^ZoneId=3\s*$') {
+            throw 'The original downloaded beta marker was not verified.'
+        }
+        $directory = New-AcceptancePrivateDirectory $fixture
+        $destination = Join-Path $directory 'candidate'
+        [IO.Directory]::CreateDirectory($destination) | Out-Null
+        foreach ($source in $sources) {
+            $name = [IO.Path]::GetFileName($source.Name)
+            $path = Join-Path $destination $name
+            $writer = [IO.File]::Open($path, [IO.FileMode]::CreateNew, [IO.FileAccess]::ReadWrite, [IO.FileShare]::Read)
+            try {
+                $source.Position = 0; $source.CopyTo($writer); $writer.Flush($true)
+                if ((Get-AcceptanceStreamHash $writer) -ine $expected[$name]) {
+                    throw 'The owned beta copy does not match the verified source descriptor.'
+                }
+            }
+            finally { $writer.Dispose() }
+            # Only the exact locally created Setup is trusted. Keep downloaded
+            # markers on every other input and leave all original ADS untouched.
+            if ($name -cne [IO.Path]::GetFileName($setup.Path)) { Set-AcceptanceInternetMarker $path }
+        }
+        $copyBundle = Read-AcceptanceBundle $destination
+        $held = @(Open-AcceptanceNativeSetupLocks $copyBundle)
+        foreach ($stream in $held) {
+            $name = [IO.Path]::GetFileName($stream.Name)
+            if (-not $expected.ContainsKey($name) -or (Get-AcceptanceStreamHash $stream) -ine $expected[$name]) {
+                throw 'The owned beta copy changed before its held execution.'
+            }
+        }
+        $null = Read-AcceptanceBundle $destination
+        $null = Get-AcceptanceVerifiedTesterSetup -Bundle $copyBundle -NativeVerification $NativeVerification
+        Assert-AcceptanceOwnedCandidate -CandidateRoot $destination -RunnerTemp $env:RUNNER_TEMP
+        return [pscustomobject]@{ Bundle = $copyBundle; Handles = $held; Directory = $directory; FixtureId = $fixture }
     }
-    $null = Get-AcceptanceVerifiedTesterSetup -Bundle $Bundle -NativeVerification $NativeVerification
+    catch {
+        foreach ($stream in $held) { $stream.Dispose() }
+        if ($null -ne $directory) { Remove-AcceptancePrivateDirectory -Path $directory -FixtureId $fixture }
+        throw
+    }
+    finally { foreach ($stream in $sources) { $stream.Dispose() } }
 }
 
 function Invoke-AcceptanceNativeInstall {
-    param($Bundle, [string]$OwnerSid, $Evidence, [bool]$ExplicitlyDisposable = $false)
+    param($Bundle, [string]$OwnerSid, $Evidence, [bool]$ExplicitlyDisposable = $false,
+        [Collections.Generic.List[object]]$OwnedTrustCopies)
+    $installContext = [pscustomobject]@{ Bundle = $Bundle }
     if ($null -ne $Bundle.Metadata.PSObject.Properties['signing_mode'] -and $Bundle.Metadata.signing_mode -ceq 'tester-ca') {
         Assert-AcceptanceRunner $ExplicitlyDisposable
+        if ($null -eq $OwnedTrustCopies) { throw 'Beta trust requires owned-copy cleanup registration.' }
         Add-AcceptancePhase 'observe_downloaded_beta_setup_launch' {
             $Evidence['downloaded_setup_shell_launch'] = Invoke-AcceptanceNativeSetupUi -Bundle $Bundle -ObserveDownloadedLaunch
             if (@(Get-AppxPackage -Name $Bundle.Metadata.package_name).Count -or
@@ -611,10 +695,13 @@ function Invoke-AcceptanceNativeInstall {
             }
         } $Evidence
         Add-AcceptancePhase 'confirm_verified_beta_setup_download_trust' {
-            Confirm-AcceptanceBetaSetupDownloadTrust -Bundle $Bundle -NativeVerification $Evidence.native_setup -ExplicitlyDisposable $ExplicitlyDisposable
+            $copy = Confirm-AcceptanceBetaSetupDownloadTrust -Bundle $Bundle -NativeVerification $Evidence.native_setup -ExplicitlyDisposable $ExplicitlyDisposable
+            $OwnedTrustCopies.Add($copy)
+            $installContext.Bundle = $copy.Bundle
             $Evidence['verified_beta_setup_download_trust'] = $true
         } $Evidence
     }
+    $Bundle = $installContext.Bundle
     Add-AcceptancePhase 'native_setup_install_action' { Invoke-AcceptanceNativeSetupUi -Bundle $Bundle -Install } $Evidence
     $Evidence.native_setup_window_verified = $true
     Add-AcceptancePhase 'verify_native_installed_candidate' { Invoke-AcceptanceBootstrap -Bundle $Bundle -Action Verify } $Evidence
@@ -820,6 +907,7 @@ $candidate = $null; $preceding = $null; $mutationStarted = $false; $failure = $n
 $privateDirectory = $null; $fixtureId = [Guid]::NewGuid().ToString('N')
 $ownerSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $shared = @()
+$ownedTrustCopies = [Collections.Generic.List[object]]::new()
 $evidence = [ordered]@{
     schema = 'vex.windows-signed-install-acceptance.v1'
     fixture_source_commit = $(if ($env:GITHUB_SHA -match '^[a-fA-F0-9]{40}$') { $env:GITHUB_SHA } else { $null })
@@ -859,7 +947,7 @@ try {
     } $evidence
     $evidence.native_setup_bundle_verification = $true
     $mutationStarted = $true
-    Invoke-AcceptanceNativeInstall -Bundle $candidate -OwnerSid $ownerSid -Evidence $evidence -ExplicitlyDisposable ([bool]$DisposableRunner)
+    Invoke-AcceptanceNativeInstall -Bundle $candidate -OwnerSid $ownerSid -Evidence $evidence -ExplicitlyDisposable ([bool]$DisposableRunner) -OwnedTrustCopies $ownedTrustCopies
     Add-AcceptancePhase 'install_preceding' { Invoke-AcceptanceBootstrap $preceding Install } $evidence
     Add-AcceptancePhase 'verify_preceding' { Invoke-AcceptanceBootstrap $preceding Verify } $evidence
     Add-AcceptancePhase 'install_candidate' { Invoke-AcceptanceBootstrap $candidate Install } $evidence
@@ -890,6 +978,10 @@ finally {
         $evidence.cleanup_confirmed = $true
     }
     catch { $cleanupFailure = $_; $evidence.cleanup_failure_type = $_.Exception.GetType().Name; $evidence.passed = $false }
+    foreach ($copy in $ownedTrustCopies) {
+        try { Close-AcceptanceTrustedCopy $copy }
+        catch { $cleanupFailure = $_; $evidence.cleanup_failure_type = $_.Exception.GetType().Name; $evidence.passed = $false }
+    }
     try { Remove-AcceptancePrivateDirectory -Path $privateDirectory -FixtureId $fixtureId }
     catch { $cleanupFailure = $_; $evidence.cleanup_failure_type = $_.Exception.GetType().Name; $evidence.passed = $false }
     [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($ResultPath)) | Out-Null

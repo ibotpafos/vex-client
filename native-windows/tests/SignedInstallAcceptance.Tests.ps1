@@ -26,6 +26,7 @@ $realOwnedBundle = (Get-Item Function:Get-AcceptanceOwnedBundle).ScriptBlock
 $realRemoveDirectory = (Get-Item Function:Remove-AcceptancePrivateDirectory).ScriptBlock
 $realOpenLocks = (Get-Item Function:Open-AcceptanceBundleLocks).ScriptBlock
 $realNativeInstall = (Get-Item Function:Invoke-AcceptanceNativeInstall).ScriptBlock
+$realReadBundle = (Get-Item Function:Read-AcceptanceBundle).ScriptBlock
 try {
     $root = Join-Path $temporary 'bundle'
     [IO.Directory]::CreateDirectory($root) | Out-Null
@@ -214,6 +215,104 @@ try {
     Assert-Rejected { Assert-AcceptanceOwnedCandidate -CandidateRoot $ownedCandidate -RunnerTemp $temporary } 'A foreign candidate ownership marker was adopted.'
     [IO.File]::WriteAllText($ownedMarker, $ownedId + 'extra')
     Assert-Rejected { Assert-AcceptanceOwnedCandidate -CandidateRoot $ownedCandidate -RunnerTemp $temporary } 'An unbounded ownership marker was admitted.'
+
+    # Real descriptors, byte hashes and ownership guards exercise the complete
+    # trust-copy boundary. Mock only Windows admission, ADS and directory ACLs.
+    # No installer, Unblock-File, certificate store or Mac quarantine is touched.
+    $savedFunctions = @{}
+    foreach ($name in @('Assert-AcceptanceRunner', 'New-AcceptancePrivateDirectory',
+        'Get-AcceptanceInternetMarker', 'Set-AcceptanceInternetMarker')) {
+        $savedFunctions[$name] = (Get-Item ('Function:' + $name)).ScriptBlock
+    }
+    $savedRunnerTemp = $env:RUNNER_TEMP
+    $savedRootPin = $env:VEX_WINDOWS_TEST_ROOT_SHA256; $savedLeafPin = $env:VEX_WINDOWS_TEST_CERT_SHA256
+    $originalMetadataBytes = [IO.File]::ReadAllText($metadataPath)
+    $savedReadBundle = (Get-Item Function:Read-AcceptanceBundle).ScriptBlock
+    Set-Item Function:Read-AcceptanceBundle $realReadBundle
+    $script:unblockCalls = 0
+    function Unblock-File { param($LiteralPath) $script:unblockCalls++; throw 'Trust must never remove an ADS by path.' }
+    function Assert-AcceptanceRunner {
+        param([bool]$ExplicitlyDisposable)
+        if (-not $ExplicitlyDisposable) { throw 'The test requires explicit disposable admission.' }
+    }
+    function New-AcceptancePrivateDirectory {
+        param([string]$FixtureId)
+        $path = Join-Path $env:RUNNER_TEMP ('vex-signed-install-' + $FixtureId)
+        if (Test-Path -LiteralPath $path) { throw 'Test private-directory collision.' }
+        [IO.Directory]::CreateDirectory($path) | Out-Null
+        [IO.File]::WriteAllText((Join-Path $path 'owned-fixture'), $FixtureId)
+        return $path
+    }
+    function Get-AcceptanceInternetMarker {
+        param([string]$Path)
+        if ($script:trustRace -ceq 'source') {
+            $script:trustRaceAttempted = $true
+            # Windows denies this writer while the verified source is held. On
+            # other hosts, altered bytes must fail the descriptor-copy digest.
+            try { [IO.File]::WriteAllText($Path, 'unverified replacement; never execute') } catch {}
+        }
+        return "[ZoneTransfer]`r`nZoneId=3"
+    }
+    function Set-AcceptanceInternetMarker {
+        param([string]$Path)
+        $script:markedCopies.Add($Path)
+        if ($script:trustRace -ceq 'destination') {
+            $script:trustRaceAttempted = $true
+            [IO.File]::WriteAllText((Join-Path (Split-Path $Path -Parent) 'VEX.Setup.x64.exe'), 'unverified destination replacement')
+        }
+    }
+    try {
+        $env:RUNNER_TEMP = $temporary
+        $env:VEX_WINDOWS_TEST_ROOT_SHA256 = '5' * 64
+        $env:VEX_WINDOWS_TEST_CERT_SHA256 = ('B' * 64).ToLowerInvariant()
+        $metadata.channel = 'beta'; $metadata.signing_mode = 'tester-ca'; $metadata.tester_root_sha256 = '5' * 64
+        Write-TestMetadata
+        foreach ($race in @('none', 'source', 'destination')) {
+            $sourceId = [Guid]::NewGuid().ToString('N')
+            $sourceRoot = New-AcceptancePrivateDirectory $sourceId
+            $sourceCandidate = Join-Path $sourceRoot 'candidate'
+            [IO.Directory]::CreateDirectory($sourceCandidate) | Out-Null
+            foreach ($file in @(Get-ChildItem -LiteralPath $root -File)) {
+                Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $sourceCandidate $file.Name)
+            }
+            $sourceBundle = Read-AcceptanceBundle $sourceCandidate
+            $proof = [pscustomobject]@{ bundle_verified=$true
+                sha256=(Get-FileHash (Join-Path $sourceCandidate 'VEX.Setup.x64.exe')).Hash
+                metadata_sha256=(Get-FileHash $sourceBundle.MetadataPath).Hash }
+            $script:trustRace = $race; $script:trustRaceAttempted = $false
+            $script:markedCopies = [Collections.Generic.List[string]]::new()
+            $copy = $null; $rejected = $false
+            try {
+                $copy = Confirm-AcceptanceBetaSetupDownloadTrust -Bundle $sourceBundle -NativeVerification $proof -ExplicitlyDisposable $true
+                Assert ($race -cne 'destination') 'A replaced destination crossed the trust boundary.'
+                Assert ($copy.Bundle.Root -cne $sourceCandidate -and $copy.Handles.Count -eq 7) 'Trust did not retain a separate seven-file owned copy.'
+                Assert ((Get-FileHash (Join-Path $copy.Bundle.Root 'VEX.Setup.x64.exe')).Hash -ceq $proof.sha256) 'Unverified replacement bytes became trusted.'
+                Assert ($script:markedCopies.Count -eq 6 -and
+                    @($script:markedCopies | Where-Object { [IO.Path]::GetFileName($_) -ceq 'VEX.Setup.x64.exe' }).Count -eq 0) 'Trust changed the wrong file markers.'
+                Assert ((Get-FileHash (Join-Path $sourceCandidate 'VEX.Setup.x64.exe')).Hash -ceq $proof.sha256) 'Positive trust rewrote the downloaded source.'
+            }
+            catch {
+                if ($race -ceq 'none') { throw }
+                $rejected = $true
+            }
+            finally {
+                if ($null -ne $copy) { Close-AcceptanceTrustedCopy $copy }
+                Remove-AcceptancePrivateDirectory -Path $sourceRoot -FixtureId $sourceId
+            }
+            Assert ($race -ceq 'none' -or $script:trustRaceAttempted) 'The injected replacement race did not execute.'
+            Assert ($race -cne 'destination' -or $rejected) 'Destination replacement was not rejected before execution.'
+        }
+        Assert ($script:unblockCalls -eq 0) 'Trust still performs a path-based unblock.'
+    }
+    finally {
+        foreach ($name in $savedFunctions.Keys) { Set-Item ('Function:' + $name) $savedFunctions[$name] }
+        Set-Item Function:Read-AcceptanceBundle $savedReadBundle
+        Remove-Item Function:Unblock-File -ErrorAction SilentlyContinue
+        $env:RUNNER_TEMP = $savedRunnerTemp
+        $env:VEX_WINDOWS_TEST_ROOT_SHA256 = $savedRootPin; $env:VEX_WINDOWS_TEST_CERT_SHA256 = $savedLeafPin
+        foreach ($key in @('channel', 'signing_mode', 'tester_root_sha256')) { $metadata.Remove($key) }
+        [IO.File]::WriteAllText($metadataPath, $originalMetadataBytes)
+    }
 
     # Production cleanup rejects a foreign registered publisher before touching
     # the service or state. An unowned/no-mutation run never invokes uninstall.

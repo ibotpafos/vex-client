@@ -21,12 +21,27 @@ function Assert-Rejected([scriptblock]$Operation, [string]$Message) {
 $temporary = Join-Path ([IO.Path]::GetTempPath()) ('vex-signed-install-tests-' + [Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($temporary) | Out-Null
 $realInvokeProcess = (Get-Item Function:Invoke-AcceptanceProcess).ScriptBlock
+$realSystemPowerShellPath = (Get-Item Function:Get-AcceptanceSystemPowerShellPath).ScriptBlock
 $realInvokeBootstrap = (Get-Item Function:Invoke-AcceptanceBootstrap).ScriptBlock
 $realOwnedBundle = (Get-Item Function:Get-AcceptanceOwnedBundle).ScriptBlock
 $realRemoveDirectory = (Get-Item Function:Remove-AcceptancePrivateDirectory).ScriptBlock
 $realOpenLocks = (Get-Item Function:Open-AcceptanceBundleLocks).ScriptBlock
 $realNativeInstall = (Get-Item Function:Invoke-AcceptanceNativeInstall).ScriptBlock
 $realReadBundle = (Get-Item Function:Read-AcceptanceBundle).ScriptBlock
+function Get-TestAcceptanceBootstrapCommand($InputData) {
+    $encoded = New-AcceptanceBootstrapCommand $InputData
+    $command = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($encoded))
+    Assert ($command.Contains('$env:PSModulePath = $systemModules') -and
+        $command.Contains('Microsoft.PowerShell.Core\Import-Module') -and
+        $command.Contains('Microsoft.PowerShell.Core\Get-Command') -and
+        $command.Contains('Microsoft.PowerShell.Utility\ConvertFrom-Json')) 'Acceptance child does not select trusted system command providers.'
+    if (-not $IsWindows) {
+        # This entrypoint always launches fixed WinPS5.1 in production. Core on
+        # other systems can exercise transport without loading Framework modules.
+        $command = [regex]::Replace($command, '(?s)# VEX_TRUSTED_POWERSHELL_MODULES_BEGIN.*?# VEX_TRUSTED_POWERSHELL_MODULES_END', '')
+    }
+    return [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+}
 try {
     $root = Join-Path $temporary 'bundle'
     [IO.Directory]::CreateDirectory($root) | Out-Null
@@ -338,7 +353,77 @@ try {
 
     # Run the real process deadline against an actual sleeping child, then the
     # independent guarded cleanup function. No Windows installer is executed.
+    Set-Item Function:Get-AcceptanceSystemPowerShellPath $realSystemPowerShellPath
     $executable = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+    if ($IsWindows) {
+        $executable = [IO.Path]::Combine([Environment]::GetFolderPath([Environment+SpecialFolder]::System),
+            'WindowsPowerShell', 'v1.0', 'powershell.exe')
+        # Exercise the actual acceptance wrapper and bootstrap hash helper in a
+        # fresh system WinPS5.1 child. No certificate store, SCM or package writes.
+        $bootstrapAst = [Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $PSScriptRoot '../scripts/bootstrap-native-windows.ps1'), [ref]$null, [ref]$null)
+        $hashDefinition = $bootstrapAst.Find({
+            param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Assert-Hash'
+        }, $false).Extent.Text
+        $moduleData = Join-Path $temporary 'public-module-probe.ps1'
+        [IO.File]::WriteAllText($moduleData, '# VEX public module probe')
+        $moduleBootstrap = Join-Path $temporary 'module-probe-bootstrap.ps1'
+        $moduleMarker = Join-Path $temporary 'module-probe-result.json'
+        $moduleFixture = @'
+param($Phase,$Action,$MetadataPath,$PackagePath)
+__HASH_DEFINITION__
+Assert-Hash -Path $MetadataPath -Expected $PackagePath -Description 'public synthetic data'
+if ((Microsoft.PowerShell.Management\Get-Content -LiteralPath $MetadataPath -Raw) -cne '# VEX public module probe') { throw 'System content provider changed the synthetic data.' }
+$signature = Microsoft.PowerShell.Security\Get-AuthenticodeSignature -LiteralPath $MetadataPath
+if ($signature.Status -ne [Management.Automation.SignatureStatus]::NotSigned) { throw 'Unsigned synthetic data acquired a trusted signature.' }
+$trustedModules = [IO.Path]::Combine([Environment]::GetFolderPath([Environment+SpecialFolder]::System),'WindowsPowerShell','v1.0','Modules')
+$provider = Microsoft.PowerShell.Core\Get-Command -Name 'Microsoft.PowerShell.Utility\Get-FileHash' -ListImported -ErrorAction Stop
+if ($PSVersionTable.PSEdition -cne 'Desktop' -or $PSVersionTable.PSVersion.Major -ne 5 -or
+    $PSVersionTable.PSVersion.Minor -ne 1 -or $env:PSModulePath -cne $trustedModules -or
+    $provider.ModuleName -cne 'Microsoft.PowerShell.Utility') { throw 'Acceptance did not use the system WinPS5.1 providers.' }
+[IO.File]::WriteAllText((Join-Path $PSScriptRoot 'module-probe-result.json'),
+    (@{ passed=$true; initial_hash_available=$global:VexModuleProbeInitialHash } | Microsoft.PowerShell.Utility\ConvertTo-Json -Compress))
+'@
+        [IO.File]::WriteAllText($moduleBootstrap, $moduleFixture.Replace('__HASH_DEFINITION__', $hashDefinition))
+        $hostileRoot = Join-Path $temporary 'hostile-module-path'
+        $hostileUtility = Join-Path $hostileRoot 'Microsoft.PowerShell.Utility'
+        [IO.Directory]::CreateDirectory($hostileUtility) | Out-Null
+        $hostileMarker = Join-Path $temporary 'hostile-module-loaded'
+        [IO.File]::WriteAllText((Join-Path $hostileUtility 'Microsoft.PowerShell.Utility.psm1'),
+            "[IO.File]::WriteAllText('$($hostileMarker.Replace("'","''"))','unexpected')")
+        $moduleInput = @{ bootstrap=$moduleBootstrap; action='Verify'; metadata=$moduleData
+            package=(Get-FileHash -LiteralPath $moduleData -Algorithm SHA256).Hash }
+        $moduleCommand = Get-TestAcceptanceBootstrapCommand $moduleInput
+        $prefix = @'
+$PSModuleAutoLoadingPreference = 'None'
+$global:VexModuleProbeInitialHash = $null -ne (Microsoft.PowerShell.Core\Get-Command -Name 'Microsoft.PowerShell.Utility\Get-FileHash' -ListImported -ErrorAction SilentlyContinue)
+'@
+        $moduleCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes(
+            $prefix + [Environment]::NewLine + [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($moduleCommand))))
+        $oldModulePath = $env:PSModulePath
+        try {
+            $env:PSModulePath = $hostileRoot
+            & $realInvokeProcess -Executable $executable -Arguments @('-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',$moduleCommand) -TimeoutSeconds 30
+        }
+        finally { $env:PSModulePath = $oldModulePath }
+        $moduleResult = Get-Content -LiteralPath $moduleMarker -Raw | ConvertFrom-Json
+        Assert ($moduleResult.passed -eq $true -and -not (Test-Path -LiteralPath $hostileMarker)) 'Acceptance loaded an untrusted provider or lost its real hash/signature checks.'
+        Write-Host ('VEX_ACCEPTANCE_FRESH_PROCESS passed=true windows_powershell=5.1 initial_hash_available=' + $moduleResult.initial_hash_available.ToString().ToLowerInvariant())
+        # WinUI probes deliberately run under Core7. Applying the Framework
+        # module path to that executable would break its existing desktop flow.
+        $coreModuleRoot = Join-Path $temporary 'core-module-path-marker'
+        [IO.Directory]::CreateDirectory($coreModuleRoot) | Out-Null
+        $coreMarker = Join-Path $temporary 'core-module-result.txt'
+        $coreProbe = "[IO.File]::WriteAllText('" + $coreMarker.Replace("'","''") + "',`$env:PSModulePath)"
+        $coreCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($coreProbe))
+        $oldModulePath = $env:PSModulePath
+        try {
+            $env:PSModulePath = $coreModuleRoot
+            & $realInvokeProcess -Executable ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -Arguments @('-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',$coreCommand) -TimeoutSeconds 15
+        }
+        finally { $env:PSModulePath = $oldModulePath }
+        Assert (@([IO.File]::ReadAllText($coreMarker) -split [IO.Path]::PathSeparator) -contains $coreModuleRoot) 'A Core UI child was assigned the Framework-only module path.'
+    }
     # Exercise the literal bootstrap wrapper in a real harmless child. Quotes,
     # dollars and rollback inputs remain data; failure output stays allowlisted.
     $literalBootstrap = Join-Path $temporary "literal ' bootstrap.ps1"
@@ -357,7 +442,7 @@ if ($Action -ceq 'Verify') {
     $literalInput = [ordered]@{ bootstrap=$literalBootstrap; action='Rollback'
         metadata='C:\literal $() ` '' metadata.json'; package='C:\literal $() ` '' package.msix'
         rollback_package="C:\literal rollback ' package.msix"; rollback_metadata="C:\literal rollback ' metadata.json" }
-    $literalCommand = New-AcceptanceBootstrapCommand $literalInput
+    $literalCommand = Get-TestAcceptanceBootstrapCommand $literalInput
     & $realInvokeProcess -Executable $executable -Arguments @('-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',$literalCommand) -TimeoutSeconds 10
     $received = Get-Content -LiteralPath (Join-Path $temporary 'literal-bootstrap-result.json') -Raw | ConvertFrom-Json
     Assert ($received.phase -ceq 'User' -and $received.action -ceq 'Rollback' -and
@@ -368,13 +453,37 @@ if ($Action -ceq 'Verify') {
     $previousOutput = [Console]::Out
     try {
         [Console]::SetOut($capturedBootstrap)
-        $literalCommand = New-AcceptanceBootstrapCommand $literalInput
+        $literalCommand = Get-TestAcceptanceBootstrapCommand $literalInput
         Assert-Rejected { & $realInvokeProcess -Executable $executable -Arguments @('-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',$literalCommand) -TimeoutSeconds 10 } 'A real bootstrap failure was accepted.'
     }
     finally { [Console]::SetOut($previousOutput) }
     Assert ($capturedBootstrap.ToString().Contains('VEX_BOOTSTRAP_SERVICE_FAILURE action=Verify code=100123') -and
         $capturedBootstrap.ToString() -cmatch 'VEX_BOOTSTRAP_FAILURE action=Verify line=[0-9]+ exception=RuntimeException' -and
         -not $capturedBootstrap.ToString().Contains('private-') -and -not $capturedBootstrap.ToString().Contains('never-upload')) 'Private bootstrap output escaped the numeric diagnostics boundary.'
+    # The missing-command marker cannot disclose arbitrary command text or a
+    # forged suffix, including paths or arguments present in an exception.
+    foreach ($missing in @('Get-FileHash','private-command-never-upload')) {
+        [IO.File]::WriteAllText($literalBootstrap,
+            "param(`$Phase,`$Action,`$MetadataPath,`$PackagePath); & '$missing'")
+        $capturedBootstrap = [IO.StringWriter]::new()
+        $previousOutput = [Console]::Out
+        try {
+            [Console]::SetOut($capturedBootstrap)
+            # Remove the provider only in this synthetic child; production still
+            # uses its real system import and refuses every missing command.
+            $command = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String(
+                (Get-TestAcceptanceBootstrapCommand $literalInput)))
+            if ($missing -ceq 'Get-FileHash') {
+                $command = $command.Replace('& $inputValue.bootstrap @parameters',
+                    'function Get-FileHash { throw [Management.Automation.CommandNotFoundException]::new(''synthetic private-command-never-upload'') }; & $inputValue.bootstrap @parameters')
+            }
+            $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+            Assert-Rejected { & $realInvokeProcess -Executable $executable -Arguments @('-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',$encoded) -TimeoutSeconds 15 } 'A missing command became acceptance success.'
+        }
+        finally { [Console]::SetOut($previousOutput) }
+        Assert ($capturedBootstrap.ToString().Contains('VEX_BOOTSTRAP_COMMAND_MISSING action=Verify command=other') -and
+            -not $capturedBootstrap.ToString().Contains('private-') -and -not $capturedBootstrap.ToString().Contains('never-upload')) 'Missing-command diagnostics disclosed arbitrary exception data.'
+    }
     $watch = [Diagnostics.Stopwatch]::StartNew()
     Assert-Rejected { & $realInvokeProcess -Executable $executable -Arguments @('-NoLogo','-NoProfile','-Command','Start-Sleep -Seconds 30') -TimeoutSeconds 1 } 'A stalled phase exceeded its bounded deadline.'
     Invoke-AcceptanceOwnedCleanup -MutationStarted $true -Bundles @($bundle) -OwnerSid 'owner'
@@ -384,7 +493,8 @@ if ($Action -ceq 'Verify') {
     # probe marker can reach diagnostics, and a forged suffix must be rejected.
     $marker = 'VEX_SETUP_UI_FAILURE stage=locate_controls exception=RuntimeException native_exit=running'
     $numeric = 'VEX_SETUP_UI_ERROR win32=32 hresult=-2147467259'
-    $child = "[Console]::Error.WriteLine('private-child-content-never-upload');[Console]::Error.WriteLine('$marker');[Console]::Error.WriteLine('$marker private=never-upload');[Console]::Error.WriteLine('$numeric');[Console]::Error.WriteLine('$numeric private=never-upload');exit 7"
+    $missingMarker = 'VEX_BOOTSTRAP_COMMAND_MISSING action=Verify command=Get-FileHash'
+    $child = "[Console]::Error.WriteLine('private-child-content-never-upload');[Console]::Error.WriteLine('$marker');[Console]::Error.WriteLine('$marker private=never-upload');[Console]::Error.WriteLine('$numeric');[Console]::Error.WriteLine('$numeric private=never-upload');[Console]::Error.WriteLine('$missingMarker');[Console]::Error.WriteLine('$missingMarker private=never-upload');[Console]::Error.WriteLine('VEX_BOOTSTRAP_COMMAND_MISSING action=Verify command=private-command-never-upload');exit 7"
     $encodedChild = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($child))
     $originalOutput = [Console]::Out
     $captured = [IO.StringWriter]::new()
@@ -392,7 +502,7 @@ if ($Action -ceq 'Verify') {
         [Console]::SetOut($captured)
         Assert-Rejected { & $realInvokeProcess -Executable $executable -Arguments @('-NoLogo','-NoProfile','-EncodedCommand',$encodedChild) -TimeoutSeconds 5 } 'A failed child was accepted after emitting diagnostics.'
     } finally { [Console]::SetOut($originalOutput) }
-    Assert ($captured.ToString().Trim() -ceq ($marker + [Environment]::NewLine + $numeric)) 'Private child output or a forged diagnostic marker escaped.'
+    Assert ($captured.ToString().Trim() -ceq ($marker + [Environment]::NewLine + $numeric + [Environment]::NewLine + $missingMarker)) 'Private child output or a forged diagnostic marker escaped.'
     $captured.Dispose()
 
     # Record OS cancellation only in an explicit non-installing observation.

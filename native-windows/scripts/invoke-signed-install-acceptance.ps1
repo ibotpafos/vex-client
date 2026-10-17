@@ -278,6 +278,13 @@ function Invoke-AcceptanceProcess {
     $start.UseShellExecute = $false
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
+    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT -and
+        [IO.Path]::GetFullPath($Executable) -ieq [IO.Path]::GetFullPath((Get-AcceptanceSystemPowerShellPath))) {
+        # Match native Setup before WinPS startup can inspect inherited Core or
+        # user module paths; the encoded command also selects system providers.
+        $start.Environment['PSModulePath'] = [IO.Path]::Combine(
+            [Environment]::GetFolderPath([Environment+SpecialFolder]::System), 'WindowsPowerShell', 'v1.0', 'Modules')
+    }
     foreach ($argument in $Arguments) { $start.ArgumentList.Add($argument) }
     $process = [Diagnostics.Process]::Start($start)
     try {
@@ -298,7 +305,8 @@ function Invoke-AcceptanceProcess {
                 '^VEX_SETUP_UI_FAILURE stage=(initialize|launch|locate_controls|invoke_install|wait_install) exception=[A-Za-z][A-Za-z0-9]{0,79} native_exit=(running|unknown|-?[0-9]{1,10})$',
                 '^VEX_SETUP_UI_ERROR win32=(unknown|-?[0-9]{1,10}) hresult=-?[0-9]{1,10}$',
                 '^VEX_BOOTSTRAP_SERVICE_FAILURE action=(Install|Repair|Verify|Prepare|Restore|Uninstall) code=(unknown|-?[0-9]{1,10})$',
-                '^VEX_BOOTSTRAP_FAILURE action=(Install|Verify|Repair|Rollback|Uninstall) line=[0-9]{1,6} exception=[A-Za-z][A-Za-z0-9]{0,79}$')) {
+                '^VEX_BOOTSTRAP_FAILURE action=(Install|Verify|Repair|Rollback|Uninstall) line=[0-9]{1,6} exception=[A-Za-z][A-Za-z0-9]{0,79}$',
+                '^VEX_BOOTSTRAP_COMMAND_MISSING action=(Install|Verify|Repair|Rollback|Uninstall) command=(Assert-Hash|Get-FileHash|Read-PackageMetadata|Assert-ScriptSignature|Get-AuthenticodeSignature|Test-Path|Get-Content|ConvertFrom-Json|other)$')) {
                 $markers = @($stderr.Result -split '\r?\n' | Where-Object { $_ -cmatch $pattern } | Select-Object -First 1)
                 foreach ($marker in $markers) { [Console]::WriteLine($marker) }
             }
@@ -528,8 +536,21 @@ function New-AcceptanceBootstrapCommand {
     $template = @'
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-$inputValue = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__VEX_ACCEPTANCE_BOOTSTRAP__')) | ConvertFrom-Json
 $ProgressPreference = 'SilentlyContinue'
+# VEX_TRUSTED_POWERSHELL_MODULES_BEGIN
+$systemModules = [IO.Path]::Combine([Environment]::GetFolderPath([Environment+SpecialFolder]::System), 'WindowsPowerShell', 'v1.0', 'Modules')
+$env:PSModulePath = $systemModules
+$requiredCommands = @{'Microsoft.PowerShell.Utility'='Get-FileHash';'Microsoft.PowerShell.Security'='Get-AuthenticodeSignature';'Microsoft.PowerShell.Management'='Get-Content'}
+foreach ($module in $requiredCommands.Keys) {
+    $provider = Microsoft.PowerShell.Core\Get-Command -Name ($module + '\' + $requiredCommands[$module]) -CommandType Cmdlet -ListImported -ErrorAction SilentlyContinue
+    if ($null -eq $provider) {
+        $manifest = [IO.Path]::Combine($systemModules, $module, ($module + '.psd1'))
+        if (-not [IO.File]::Exists($manifest)) { $manifest = [IO.Path]::Combine([IO.Path]::GetDirectoryName($systemModules), ($module + '.psd1')) }
+        Microsoft.PowerShell.Core\Import-Module -Name $manifest -Force -ErrorAction Stop
+    }
+}
+# VEX_TRUSTED_POWERSHELL_MODULES_END
+$inputValue = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__VEX_ACCEPTANCE_BOOTSTRAP__')) | Microsoft.PowerShell.Utility\ConvertFrom-Json
 try {
     $parameters = @{ Phase='User'; Action=$inputValue.action; MetadataPath=$inputValue.metadata; PackagePath=$inputValue.package }
     if ($inputValue.action -ceq 'Rollback') {
@@ -545,6 +566,12 @@ catch {
     $line = [int]$_.InvocationInfo.ScriptLineNumber
     if ($line -lt 0 -or $line -gt 999999) { $line = 0 }
     [Console]::Error.WriteLine('VEX_BOOTSTRAP_FAILURE action=' + $inputValue.action + ' line=' + $line + ' exception=' + $kind)
+    if ($_.Exception -is [Management.Automation.CommandNotFoundException]) {
+        $missing = [string]$_.CategoryInfo.TargetName
+        if (@('Assert-Hash','Get-FileHash','Read-PackageMetadata','Assert-ScriptSignature',
+            'Get-AuthenticodeSignature','Test-Path','Get-Content','ConvertFrom-Json') -cnotcontains $missing) { $missing = 'other' }
+        [Console]::Error.WriteLine('VEX_BOOTSTRAP_COMMAND_MISSING action=' + $inputValue.action + ' command=' + $missing)
+    }
     exit 1
 }
 '@

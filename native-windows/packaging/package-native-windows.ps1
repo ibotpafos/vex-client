@@ -422,6 +422,11 @@ foreach ($requiredAsset in @(
 Copy-Item -LiteralPath $amneziaExecutablePath -Destination (Join-Path $packageDir 'amneziawg.exe') -Force
 Copy-Item -LiteralPath $wintunLibraryPath -Destination (Join-Path $packageDir 'wintun.dll') -Force
 Copy-Item -LiteralPath $profileSigningKeyringPath -Destination (Join-Path $packageDir 'profile-signing-keys.json') -Force
+$runtimeNotices = Join-Path $packageDir 'ThirdParty'
+New-Item -ItemType Directory -Path $runtimeNotices -Force | Out-Null
+foreach ($notice in @('AmneziaWG-COPYING.txt', 'Wintun-LICENSE.txt', 'README.txt')) {
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot "licenses/$notice") -Destination (Join-Path $runtimeNotices $notice) -Force
+}
 
 $iconMap = @{
     'StoreLogo.png' = 'StoreLogo.png'

@@ -293,10 +293,12 @@ function Invoke-AcceptanceProcess {
         if ($process.ExitCode -ne 0) {
             # Only our fixed UI probe marker may escape. Arbitrary child output,
             # exception messages and installer contents remain private.
-            $markers = @($stderr.Result -split '\r?\n' | Where-Object {
-                $_ -cmatch '^VEX_SETUP_UI_FAILURE stage=(initialize|launch|locate_controls|invoke_install|wait_install) exception=[A-Za-z][A-Za-z0-9]{0,79} native_exit=(running|unknown|-?[0-9]{1,10})$'
-            } | Select-Object -First 1)
-            foreach ($marker in $markers) { [Console]::WriteLine($marker) }
+            foreach ($pattern in @(
+                '^VEX_SETUP_UI_FAILURE stage=(initialize|launch|locate_controls|invoke_install|wait_install) exception=[A-Za-z][A-Za-z0-9]{0,79} native_exit=(running|unknown|-?[0-9]{1,10})$',
+                '^VEX_SETUP_UI_ERROR win32=(unknown|-?[0-9]{1,10}) hresult=-?[0-9]{1,10}$')) {
+                $markers = @($stderr.Result -split '\r?\n' | Where-Object { $_ -cmatch $pattern } | Select-Object -First 1)
+                foreach ($marker in $markers) { [Console]::WriteLine($marker) }
+            }
             throw 'Acceptance child reported failure.'
         }
     }
@@ -305,6 +307,15 @@ function Invoke-AcceptanceProcess {
 
 function Get-AcceptanceSystemPowerShellPath {
     return Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'WindowsPowerShell\v1.0\powershell.exe'
+}
+
+function Get-AcceptanceUiPowerShellPath {
+    if (-not $IsWindows -or $PSVersionTable.PSEdition -cne 'Core' -or $PSVersionTable.PSVersion.Major -lt 7) {
+        throw 'The Setup UI probe requires the same Windows PowerShell 7 host as the qualified window smoke check.'
+    }
+    $hostPath = Join-Path $PSHOME 'pwsh.exe'
+    $null = Assert-AcceptanceRegularPath $hostPath
+    return $hostPath
 }
 
 function Open-AcceptanceBundleLocks {
@@ -463,6 +474,13 @@ catch {
     $kind = $_.Exception.GetType().Name
     if ($kind -cnotmatch '^[A-Za-z][A-Za-z0-9]{0,79}$') { $kind = 'Exception' }
     [Console]::Error.WriteLine('VEX_SETUP_UI_FAILURE stage=' + $stage + ' exception=' + $kind + ' native_exit=' + $nativeExit)
+    $nativeError = 'unknown'
+    $exception = $_.Exception
+    while ($null -ne $exception) {
+        if ($exception -is [ComponentModel.Win32Exception]) { $nativeError = [string]$exception.NativeErrorCode; break }
+        $exception = $exception.InnerException
+    }
+    [Console]::Error.WriteLine('VEX_SETUP_UI_ERROR win32=' + $nativeError + ' hresult=' + [string]$_.Exception.HResult)
     throw
 }
 finally {
@@ -478,7 +496,7 @@ finally {
 }
 '@
         $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($probe.Replace('__PAYLOAD__', $encodedPayload)))
-        Invoke-AcceptanceProcess -Executable (Get-AcceptanceSystemPowerShellPath) -Arguments @('-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', $encoded) -TimeoutSeconds $(if ($Install) { 600 } else { 50 })
+        Invoke-AcceptanceProcess -Executable (Get-AcceptanceUiPowerShellPath) -Arguments @('-STA', '-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', $encoded) -TimeoutSeconds $(if ($Install) { 600 } else { 50 })
     }
     finally { foreach ($stream in $locks) { $stream.Dispose() } }
 }

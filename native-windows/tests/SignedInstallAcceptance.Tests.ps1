@@ -154,6 +154,14 @@ try {
     Assert-Rejected { Invoke-AcceptanceNativeVerification -Bundle $bundle -PrivateDirectory $temporary } 'A native metadata mismatch was ignored after a zero child exit code.'
     $nativeResult.metadata_matches_embedded = $true
 
+    # UI automation uses the qualified Core host; bootstrap compatibility still
+    # uses the fixed system Windows PowerShell asserted above.
+    if ($IsWindows) {
+        Assert ((Get-AcceptanceUiPowerShellPath) -ceq (Join-Path $PSHOME 'pwsh.exe')) 'The UI probe selected a different or unqualified host.'
+    } else {
+        Assert-Rejected { Get-AcceptanceUiPowerShellPath } 'The Windows UI host was admitted on another operating system.'
+    }
+
     # Production cleanup rejects a foreign registered publisher before touching
     # the service or state. An unowned/no-mutation run never invokes uninstall.
     function Get-AppxPackage { param($Name) [pscustomobject]@{Name='VEX.Acceptance';Publisher='CN=Foreign';Version=[version]'1.2.3.4'} }
@@ -180,7 +188,8 @@ try {
     # A failed real child may emit arbitrary private content. Only the fixed
     # probe marker can reach diagnostics, and a forged suffix must be rejected.
     $marker = 'VEX_SETUP_UI_FAILURE stage=locate_controls exception=RuntimeException native_exit=running'
-    $child = "[Console]::Error.WriteLine('private-child-content-never-upload');[Console]::Error.WriteLine('$marker');[Console]::Error.WriteLine('$marker private=never-upload');exit 7"
+    $numeric = 'VEX_SETUP_UI_ERROR win32=32 hresult=-2147467259'
+    $child = "[Console]::Error.WriteLine('private-child-content-never-upload');[Console]::Error.WriteLine('$marker');[Console]::Error.WriteLine('$marker private=never-upload');[Console]::Error.WriteLine('$numeric');[Console]::Error.WriteLine('$numeric private=never-upload');exit 7"
     $encodedChild = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($child))
     $originalOutput = [Console]::Out
     $captured = [IO.StringWriter]::new()
@@ -188,7 +197,7 @@ try {
         [Console]::SetOut($captured)
         Assert-Rejected { & $realInvokeProcess -Executable $executable -Arguments @('-NoLogo','-NoProfile','-EncodedCommand',$encodedChild) -TimeoutSeconds 5 } 'A failed child was accepted after emitting diagnostics.'
     } finally { [Console]::SetOut($originalOutput) }
-    Assert ($captured.ToString().Trim() -ceq $marker) 'Private child output or a forged diagnostic marker escaped.'
+    Assert ($captured.ToString().Trim() -ceq ($marker + [Environment]::NewLine + $numeric)) 'Private child output or a forged diagnostic marker escaped.'
     $captured.Dispose()
 
     # Execute the production native lifecycle with UI/install boundaries mocked.

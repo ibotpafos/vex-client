@@ -29,10 +29,14 @@ Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 $started = [DateTime]::UtcNow
 $owned = $null
+$imageLock = $null
 $receipt = [ordered]@{ schema = 'vex.windows-unsigned-setup-ui.v1'; passed = $false; stage = 'launch'; window_found = $false;
     disabled_install_verified = $false; installation_performed = $false; native_exit_code = $null; exception_type = $null;
-    managed_crash_types = @(); cleanup_confirmed = $false }
+    managed_crash_types = @(); executable_read_lock_held = $false; win32_error_code = $null; hresult = $null; cleanup_confirmed = $false }
 try {
+    # Match the signed UI probe's anti-replacement handle through launch/cleanup.
+    $imageLock = [IO.File]::Open($image, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    $receipt.executable_read_lock_held = -not $imageLock.SafeFileHandle.IsClosed
     $owned = Start-Process -FilePath $image -WorkingDirectory (Split-Path -Parent $image) -PassThru
     $receipt.stage = 'locate_controls'
     $until = [DateTime]::UtcNow.AddSeconds(35)
@@ -61,6 +65,12 @@ try {
     $receipt.stage = 'completed'
 } catch {
     $receipt.exception_type = $_.Exception.GetType().Name
+    $receipt.hresult = $_.Exception.HResult
+    $exception = $_.Exception
+    while ($null -ne $exception) {
+        if ($exception -is [ComponentModel.Win32Exception]) { $receipt.win32_error_code = $exception.NativeErrorCode; break }
+        $exception = $exception.InnerException
+    }
     # Inspect only this freshly launched executable's managed crash. Never
     # upload event text, paths, stack traces or arbitrary exception messages.
     try {
@@ -85,6 +95,7 @@ try {
         } catch { $receipt.exception_type = 'OwnedCleanupFailed' }
         finally { $owned.Dispose() }
     }
+    if ($null -ne $imageLock) { $imageLock.Dispose() }
     $receipt.passed = $receipt.window_found -and $receipt.disabled_install_verified -and $receipt.cleanup_confirmed
     [IO.File]::WriteAllText($destination, ($receipt | ConvertTo-Json -Depth 4), [Text.UTF8Encoding]::new($false))
 }

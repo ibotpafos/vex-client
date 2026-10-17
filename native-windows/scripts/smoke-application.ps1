@@ -215,7 +215,10 @@ function Open-SmokeTrayDiagnosticRead {
 }
 
 function Read-SmokeTrayDiagnostic {
-    param([Parameter(Mandatory = $true)][string]$Path)
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [ref]$Sha256
+    )
     $stream = Open-SmokeTrayDiagnosticRead -Path $Path
     try {
         $bytes = [byte[]]::new(65537)
@@ -226,7 +229,15 @@ function Read-SmokeTrayDiagnostic {
             if ($length -gt 65536) { throw 'Tray recovery diagnostic exceeds its bounded read.' }
         } while ($read -gt 0)
         if ($length -eq 0) { throw 'Tray recovery diagnostic is empty.' }
-        return ([Text.UTF8Encoding]::new($false, $true).GetString($bytes, 0, $length) | ConvertFrom-Json)
+        $diagnostic = [Text.UTF8Encoding]::new($false, $true).GetString($bytes, 0, $length) | ConvertFrom-Json
+        if ($null -ne $Sha256) {
+            # Hash exactly the parsed snapshot; reopening an atomically replaced
+            # progress path can conflict with the writer or hash different bytes.
+            $hasher = [Security.Cryptography.SHA256]::Create()
+            try { $Sha256.Value = [BitConverter]::ToString($hasher.ComputeHash($bytes, 0, $length)).Replace('-', '') }
+            finally { $hasher.Dispose() }
+        }
+        return $diagnostic
     }
     finally { $stream.Dispose() }
 }
@@ -273,15 +284,17 @@ function Wait-SmokeTrayRecoveryDiagnostic {
     $result.tray_activation_progress = $null
     Wait-SmokeCondition -Failure 'Actual tray recovery did not complete with an isolated diagnostic.' -Condition {
         if (Test-Path -LiteralPath $paths.Completed -PathType Leaf) {
-            $diagnostic = Read-SmokeTrayDiagnostic -Path $paths.Completed
+            $snapshotSha256 = $null
+            $diagnostic = Read-SmokeTrayDiagnostic -Path $paths.Completed -Sha256 ([ref]$snapshotSha256)
             Assert-SmokeTrayRecoveryDiagnostic -Diagnostic $diagnostic -Scenario $Scenario -Access $Access `
                 -Mode $PreviewMode -ProcessId $process.Id
             $script:trayRecoveryDiagnostic = $diagnostic
-            $trayDiagnosticHashes[$paths.Completed] = (Get-FileHash -LiteralPath $paths.Completed -Algorithm SHA256).Hash
+            $trayDiagnosticHashes[$paths.Completed] = $snapshotSha256
             return $true
         }
         if (Test-Path -LiteralPath $paths.Progress -PathType Leaf) {
-            $diagnostic = Read-SmokeTrayDiagnostic -Path $paths.Progress
+            $snapshotSha256 = $null
+            $diagnostic = Read-SmokeTrayDiagnostic -Path $paths.Progress -Sha256 ([ref]$snapshotSha256)
             Assert-SmokeTrayActivationProgress -Diagnostic $diagnostic -Scenario $Scenario -Mode $PreviewMode -ProcessId $process.Id
             $result.tray_activation_progress = [ordered]@{
                 schema = $diagnostic.schema; process_id = $diagnostic.process_id; preview_mode = $diagnostic.preview_mode
@@ -289,7 +302,7 @@ function Wait-SmokeTrayRecoveryDiagnostic {
             }
             # Progress and failure evidence never satisfies the v1 completion
             # contract. Preserve it in the producer JSON if the wait fails.
-            $trayDiagnosticHashes[$paths.Progress] = (Get-FileHash -LiteralPath $paths.Progress -Algorithm SHA256).Hash
+            $trayDiagnosticHashes[$paths.Progress] = $snapshotSha256
         }
         return $false
     }

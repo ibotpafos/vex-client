@@ -21,6 +21,7 @@ function Assert-Rejected([scriptblock]$Operation, [string]$Message) {
 $temporary = Join-Path ([IO.Path]::GetTempPath()) ('vex-signed-install-tests-' + [Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($temporary) | Out-Null
 $realInvokeProcess = (Get-Item Function:Invoke-AcceptanceProcess).ScriptBlock
+$realSystemPowerShellPath = (Get-Item Function:Get-AcceptanceSystemPowerShellPath).ScriptBlock
 $realInvokeBootstrap = (Get-Item Function:Invoke-AcceptanceBootstrap).ScriptBlock
 $realOwnedBundle = (Get-Item Function:Get-AcceptanceOwnedBundle).ScriptBlock
 $realRemoveDirectory = (Get-Item Function:Remove-AcceptancePrivateDirectory).ScriptBlock
@@ -352,6 +353,7 @@ try {
 
     # Run the real process deadline against an actual sleeping child, then the
     # independent guarded cleanup function. No Windows installer is executed.
+    Set-Item Function:Get-AcceptanceSystemPowerShellPath $realSystemPowerShellPath
     $executable = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
     if ($IsWindows) {
         $executable = [IO.Path]::Combine([Environment]::GetFolderPath([Environment+SpecialFolder]::System),

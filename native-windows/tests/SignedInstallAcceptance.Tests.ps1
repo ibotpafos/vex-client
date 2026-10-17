@@ -540,6 +540,77 @@ function Get-Process {
         -not $uiOutput.ToString().Contains('private=') -and -not $uiOutput.ToString().Contains('never-upload')) 'Installed UI diagnostics leaked private error content or a forged marker suffix.'
     $uiOutput.Dispose()
 
+    # Execute the real polling/image guard with a staged process observation:
+    # no window, then a null main module, then a readable image. A hash sentinel
+    # stops before UIAutomation/window access; foreign images/hashes and expiry
+    # must still fail without adopting or stopping an unverified process.
+    $uiReadinessPrelude = @'
+function Get-Process {
+    param($Name, $ErrorAction)
+    if ($Name -cne 'Vex.Windows.App') { throw 'Unexpected readiness lookup.' }
+    $script:observations++
+    $window = if ($script:readinessCase -ceq 'no_window_timeout' -or
+        ($script:readinessCase -cne 'module_timeout' -and $script:observations -lt 3)) { [IntPtr]::Zero } else { [IntPtr]1 }
+    $process = [pscustomobject]@{ Observation=$script:observations; MainWindowHandle=$window }
+    $process | Add-Member ScriptProperty MainModule {
+        if ($script:readinessCase -ceq 'module_timeout') { return $null }
+        if ($this.MainWindowHandle -eq [IntPtr]::Zero) { throw 'Module read before window readiness.' }
+        if ($this.Observation -eq 3) { return $null }
+        $path = if ($script:readinessCase -ceq 'foreign_image') { 'C:\foreign\Vex.Windows.App.exe' } else { 'C:\fixture\Vex.Windows.App.exe' }
+        return [pscustomobject]@{ FileName=$path }
+    }
+    $process | Add-Member ScriptMethod Refresh { $script:refreshes++ }
+    $process | Add-Member ScriptMethod Dispose { $script:disposed++ }
+    $process | Add-Member ScriptMethod Kill { $script:stops++; throw 'Unverified process was stopped.' }
+    return $process
+}
+function Start-Process { throw 'Readiness fixture must not activate an app.' }
+function Start-Sleep {
+    param($Milliseconds)
+    if ($Milliseconds -ne 200) { throw 'Readiness polling interval changed.' }
+    if ($script:readinessCase -in @('module_timeout','no_window_timeout')) {
+        Set-Variable -Scope 1 -Name deadline -Value ([DateTime]::UtcNow.AddSeconds(-1))
+    }
+}
+function Get-FileHash {
+    param($LiteralPath, $Algorithm)
+    $script:hashes++
+    if ($LiteralPath -cne 'C:\fixture\Vex.Windows.App.exe' -or $Algorithm -cne 'SHA256' -or
+        $script:observations -ne 4) { throw 'Hash guard ran before a readable matching image.' }
+    if ($script:readinessCase -ceq 'foreign_hash') { return [pscustomobject]@{ Hash=('D'*64) } }
+    throw 'Matching image reached the hash guard before window resolution.'
+}
+foreach ($script:readinessCase in @('ready','foreign_image','foreign_hash','module_timeout','no_window_timeout')) {
+    $script:observations=0; $script:refreshes=0; $script:disposed=0; $script:stops=0; $script:hashes=0
+    $failedAsExpected = $false
+    try { & {
+'@
+    $uiReadinessAssertion = @'
+    } }
+    catch {
+        $expected = if ($script:readinessCase -ceq 'ready') { 'Matching image reached the hash guard before window resolution.' }
+            elseif ($script:readinessCase -in @('module_timeout','no_window_timeout')) { 'Installed application created no window.' }
+            else { 'Unexpected application image.' }
+        if ($_.Exception.Message -cne $expected) { throw }
+        $failedAsExpected = $true
+    }
+    $expired = $script:readinessCase -in @('module_timeout','no_window_timeout')
+    $expectedObservations = if ($expired) { 2 } else { 4 }
+    $expectedDisposals = if ($expired) { 1 } else { 3 }
+    $expectedHashes = if ($script:readinessCase -in @('ready','foreign_hash')) { 1 } else { 0 }
+    if (-not $failedAsExpected -or $script:observations -ne $expectedObservations -or
+        $script:refreshes -ne $expectedDisposals -or $script:disposed -ne $expectedDisposals -or
+        $script:hashes -ne $expectedHashes -or $script:stops -ne 0) {
+        throw 'Installed UI readiness, strict identity, deadline or provisional-process ownership regressed.'
+    }
+}
+'@
+    $uiReadinessBody = $uiReadinessPrelude + [Environment]::NewLine + $uiProbe + [Environment]::NewLine + $uiReadinessAssertion
+    $uiReadinessCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($uiReadinessBody))
+    $uiReadinessArguments = @('-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',$uiReadinessCommand)
+    if ($IsWindows) { $uiReadinessArguments = @('-STA') + $uiReadinessArguments }
+    & $realInvokeProcess -Executable ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -Arguments $uiReadinessArguments -TimeoutSeconds 20
+
     # A failed real child may emit arbitrary private content. Only the fixed
     # probe marker can reach diagnostics, and a forged suffix must be rejected.
     $marker = 'VEX_SETUP_UI_FAILURE stage=locate_controls exception=RuntimeException native_exit=running'

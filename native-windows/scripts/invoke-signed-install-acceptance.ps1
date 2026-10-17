@@ -901,11 +901,26 @@ try {
         if ($processes.Count -gt 1) { throw 'Application ownership is ambiguous.' }
         if ($processes.Count -eq 1) {
             $candidate = $processes[0]
-            $stage = 'verify_image'
-            if ($candidate.MainModule.FileName -ine $inputValue.executable -or
-                (Get-FileHash -LiteralPath $candidate.MainModule.FileName -Algorithm SHA256).Hash -ine $inputValue.sha256) { throw 'Unexpected application image.' }
-            $owned = $candidate
-            if ($owned.MainWindowHandle -ne [IntPtr]::Zero) { break }
+            try {
+                $candidate.Refresh()
+                # MSIX activation can expose a process before its window or main
+                # module is ready. Keep polling within the original deadline;
+                # adopt it only after the exact installed image and hash match.
+                if ($candidate.MainWindowHandle -ne [IntPtr]::Zero) {
+                    $stage = 'verify_image'
+                    $module = $candidate.MainModule
+                    if ($null -ne $module) {
+                        $image = $module.FileName
+                        if ($image -ine $inputValue.executable -or
+                            (Get-FileHash -LiteralPath $image -Algorithm SHA256).Hash -ine $inputValue.sha256) { throw 'Unexpected application image.' }
+                        $owned = $candidate
+                        break
+                    }
+                }
+            }
+            finally {
+                if (-not [Object]::ReferenceEquals($owned, $candidate)) { $candidate.Dispose() }
+            }
         }
         $stage = 'wait_window'
         Start-Sleep -Milliseconds 200

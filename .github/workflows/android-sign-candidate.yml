@@ -8,7 +8,7 @@ on:
         required: false
         default: false
       native_routing_source:
-        description: "Sign the fixed reviewed e5aff40c RU DIRECT 1.0.70 source without publication"
+        description: "Sign the fixed reviewed 70537872 RU DIRECT 1.0.71 source without publication"
         type: boolean
         required: false
         default: false
@@ -28,8 +28,8 @@ jobs:
       QUALIFIED_SOURCE_COMMIT: a13526075803986eebc396ec24fdc865d00ab5c0
       QUALIFIED_SOURCE_TREE: a47fd44b6166de98c64263554e6c981c896a8559
       NATIVE_ROUTING_SOURCE_REQUESTED: ${{ inputs.native_routing_source && 'true' || 'false' }}
-      NATIVE_ROUTING_SOURCE_COMMIT: e5aff40cb902a1c235f87256f1eefffe6b5d64b0
-      NATIVE_ROUTING_SOURCE_TREE: 44f95ce4befb133adfe1f1f13f5af6a7c344ffe7
+      NATIVE_ROUTING_SOURCE_COMMIT: 705378724c0efc49f6ac7bd87dcc713e2559f52d
+      NATIVE_ROUTING_SOURCE_TREE: d07ca3784e982ebaadd26276d246effcf7dbd995
       VEX_RELEASE_USE_LOCAL_CACHE: "1"
       VEX_LOCAL_RELEASE_CACHE_ROOT: ${{ github.workspace }}/.ci-cache
       VEX_LOCAL_CACHE_MOVE_EXISTING: "0"

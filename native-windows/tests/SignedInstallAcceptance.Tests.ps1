@@ -21,12 +21,26 @@ function Assert-Rejected([scriptblock]$Operation, [string]$Message) {
 $temporary = Join-Path ([IO.Path]::GetTempPath()) ('vex-signed-install-tests-' + [Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($temporary) | Out-Null
 $realInvokeProcess = (Get-Item Function:Invoke-AcceptanceProcess).ScriptBlock
+$realPowerShellPath = (Get-Item Function:Get-AcceptanceSystemPowerShellPath).ScriptBlock
 $realInvokeBootstrap = (Get-Item Function:Invoke-AcceptanceBootstrap).ScriptBlock
 $realOwnedBundle = (Get-Item Function:Get-AcceptanceOwnedBundle).ScriptBlock
 $realRemoveDirectory = (Get-Item Function:Remove-AcceptancePrivateDirectory).ScriptBlock
 $realOpenLocks = (Get-Item Function:Open-AcceptanceBundleLocks).ScriptBlock
 $realNativeInstall = (Get-Item Function:Invoke-AcceptanceNativeInstall).ScriptBlock
 try {
+    # A PS7 parent must not poison PS5.1 module auto-loading. Exercise the real
+    # fixed system child with an empty parent module directory; no install runs.
+    if ($IsWindows) {
+        $savedModulePath = $env:PSModulePath
+        try {
+            $env:PSModulePath = Join-Path $temporary 'no-parent-modules'
+            & $realInvokeProcess -Executable (Get-AcceptanceSystemPowerShellPath) -Arguments @(
+                '-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+                '$ErrorActionPreference = "Stop"; Get-Command Get-FileHash, Start-Process | Out-Null; Get-FileHash -LiteralPath ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) | Out-Null'
+            ) -TimeoutSeconds 20
+        }
+        finally { $env:PSModulePath = $savedModulePath }
+    }
     $root = Join-Path $temporary 'bundle'
     [IO.Directory]::CreateDirectory($root) | Out-Null
     $metadata = [ordered]@{
@@ -111,9 +125,40 @@ try {
         $script:launch = [pscustomobject]@{Executable=$Executable;Arguments=$Arguments}
     }
     & $realInvokeBootstrap -Bundle $bundle -Action Install
+    $bootstrapCommand = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($launch.Arguments[-1]))
+    $payloadMatch = [regex]::Match($bootstrapCommand, "FromBase64String\('(?<payload>[A-Za-z0-9+/=]+)'\)")
+    Assert $payloadMatch.Success 'Bootstrap parameters were not encoded as data.'
+    $bootstrapInput = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($payloadMatch.Groups['payload'].Value)) | ConvertFrom-Json
     Assert ($launch.Executable -match 'WindowsPowerShell[\\/]v1\.0[\\/]powershell.exe$' -and
-        $launch.Arguments -contains 'Bypass' -and $launch.Arguments -contains 'User' -and
-        $launch.Arguments -notcontains '-RelaunchAfterInstall') 'Installer did not use verified system PowerShell with original-user registration.'
+        $launch.Arguments -contains 'Bypass' -and $launch.Arguments -contains '-EncodedCommand' -and
+        $bootstrapInput.parameters.Phase -ceq 'User' -and $bootstrapInput.parameters.Action -ceq 'Install' -and
+        $bootstrapInput.bootstrap -ceq (Join-Path $bundle.Root $bundle.Metadata.bootstrap_file) -and
+        'RelaunchAfterInstall' -notin $bootstrapInput.parameters.PSObject.Properties.Name) 'Installer did not use verified system PowerShell with original-user registration.'
+    $commandTokens = $null; $commandErrors = $null
+    [Management.Automation.Language.Parser]::ParseInput($bootstrapCommand, [ref]$commandTokens, [ref]$commandErrors) | Out-Null
+    Assert ($commandErrors.Count -eq 0) 'Actual bootstrap verifier command does not parse.'
+    if ($IsWindows) {
+        # Execute that same initializer and encoded data binding in the real PS5
+        # child. The callback only reads fixture files and records its parameters.
+        $callback = Join-Path $temporary 'bootstrap-callback.ps1'
+        $marker = Join-Path $temporary 'bootstrap-callback-result'
+        [IO.File]::WriteAllText($callback, @'
+param($Phase, $Action, $MetadataPath, $PackagePath)
+$ErrorActionPreference = 'Stop'
+Get-AuthenticodeSignature -LiteralPath $PSCommandPath | Out-Null
+Get-FileHash -LiteralPath $MetadataPath | Out-Null
+Get-Content -LiteralPath $MetadataPath | Out-Null
+[IO.File]::WriteAllText($PackagePath, ($Phase + ':' + $Action))
+'@)
+        $callbackData = @{bootstrap=$callback;parameters=@{Phase='User';Action='Verify';MetadataPath=$metadataPath;PackagePath=$marker}} | ConvertTo-Json -Compress
+        $callbackPayload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($callbackData))
+        $callbackCommand = $bootstrapCommand.Replace($payloadMatch.Groups['payload'].Value, $callbackPayload)
+        $callbackEncoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($callbackCommand))
+        $callbackArguments = @($launch.Arguments)
+        $callbackArguments[-1] = $callbackEncoded
+        & $realInvokeProcess -Executable (& $realPowerShellPath) -Arguments $callbackArguments -TimeoutSeconds 20
+        Assert ([IO.File]::ReadAllText($marker) -ceq 'User:Verify') 'The actual PS5 bootstrap initializer lost original-user action binding.'
+    }
     Assert (@($heldLocks | Where-Object { -not $_.SafeFileHandle.IsClosed }).Count -eq 0) 'Successful bootstrap leaked input locks.'
     $script:validated = [pscustomobject]@{Metadata=[pscustomobject]@{package_sha256=('0'*64);bootstrap_sha256=$bundle.Metadata.bootstrap_sha256;client_certificate_sha256=$bundle.Metadata.client_certificate_sha256}}
     $script:launch = $null
@@ -177,6 +222,52 @@ try {
     Invoke-AcceptanceOwnedCleanup -MutationStarted $true -Bundles @($bundle) -OwnerSid 'owner'
     Assert ($watch.Elapsed -lt [TimeSpan]::FromSeconds(8) -and $uninstalls -eq 1) 'A process timeout prevented independent owned cleanup.'
 
+    # Keep owned UI stage/type/line diagnostics while rejecting arbitrary child
+    # output. Execute actual child processes; no Windows/UI mutation is involved.
+    $script:NativeSetupUiDiagnostic = $null
+    Assert-Rejected {
+        & $realInvokeProcess -Executable $executable -Arguments @('-NoLogo', '-NoProfile', '-Command',
+            "[Console]::Error.WriteLine('VEX_NATIVE_UI_DIAGNOSTIC=find_controls;27;System.InvalidOperationException;-2146233079'); exit 2")
+    } 'A failed UI probe was accepted.'
+    Assert ($NativeSetupUiDiagnostic.stage -ceq 'find_controls' -and
+        $NativeSetupUiDiagnostic.script_line -eq 27 -and
+        $NativeSetupUiDiagnostic.exception_type -ceq 'System.InvalidOperationException' -and
+        $NativeSetupUiDiagnostic.hresult -eq -2146233079) 'Owned UI diagnostic binding was lost.'
+    foreach ($privateOutput in @('private-fixture-data', 'VEX_NATIVE_UI_DIAGNOSTIC=unknown_stage;27;Secret.Type;0')) {
+        $script:NativeSetupUiDiagnostic = $null
+        Assert-Rejected {
+            & $realInvokeProcess -Executable $executable -Arguments @('-NoLogo', '-NoProfile', '-Command',
+                "[Console]::Error.WriteLine('$privateOutput'); exit 2")
+        } 'A failing unrecognized child was accepted.'
+        Assert ($null -eq $NativeSetupUiDiagnostic) 'Unrecognized child content escaped the sanitized diagnostic protocol.'
+    }
+    $script:BootstrapDiagnostic = $null
+    Assert-Rejected {
+        & $realInvokeProcess -Executable $executable -Arguments @('-NoLogo','-NoProfile','-Command',
+            "[Console]::Error.WriteLine('VEX_BOOTSTRAP_DIAGNOSTIC=invoke_bootstrap;324;System.InvalidOperationException;-2146233079'); exit 3")
+    } 'A failed signed bootstrap was accepted.'
+    Assert ($BootstrapDiagnostic.stage -ceq 'invoke_bootstrap' -and $BootstrapDiagnostic.script_line -eq 324 -and
+        $BootstrapDiagnostic.exception_type -ceq 'System.InvalidOperationException') 'Owned bootstrap diagnostics were lost.'
+    $script:BootstrapDiagnostic = $null
+    Assert-Rejected {
+        & $realInvokeProcess -Executable $executable -Arguments @('-NoLogo','-NoProfile','-Command',
+            "[Console]::Error.WriteLine('VEX_BOOTSTRAP_DIAGNOSTIC=unknown_stage;324;Secret.Type;0'); exit 3")
+    } 'An unknown failing bootstrap was accepted.'
+    Assert ($null -eq $BootstrapDiagnostic) 'Arbitrary bootstrap diagnostics escaped the whitelist.'
+    $script:InstalledUiDiagnostic = $null
+    Assert-Rejected {
+        & $realInvokeProcess -Executable $executable -Arguments @('-NoLogo','-NoProfile','-Command',
+            "[Console]::Error.WriteLine('VEX_INSTALLED_UI_DIAGNOSTIC=activate_package;20;System.ComponentModel.Win32Exception;5'); exit 3")
+    } 'A failing installed UI probe was accepted.'
+    Assert ($InstalledUiDiagnostic.stage -ceq 'activate_package' -and $InstalledUiDiagnostic.script_line -eq 20 -and
+        $InstalledUiDiagnostic.hresult -eq 5) 'Installed UI diagnostic binding was lost.'
+    $script:InstalledUiDiagnostic = $null
+    Assert-Rejected {
+        & $realInvokeProcess -Executable $executable -Arguments @('-NoLogo','-NoProfile','-Command',
+            "[Console]::Error.WriteLine('VEX_INSTALLED_UI_DIAGNOSTIC=unknown_stage;20;Secret.Type;5'); exit 3")
+    } 'An unknown failing installed UI probe was accepted.'
+    Assert ($null -eq $InstalledUiDiagnostic) 'Arbitrary installed UI content escaped the whitelist.'
+
     # Execute the production native lifecycle with UI/install boundaries mocked.
     # Only the actual Install invocation plus independent verification, app and
     # cleanup success can commit consumer-install evidence.
@@ -200,7 +291,8 @@ try {
     }
     function New-NativeEvidence {
         [ordered]@{ phases=[Collections.Generic.List[object]]::new(); native_setup_window_verified=$false
-            native_consumer_installation_verified=$false; native_double_click_installer_acceptance=$false }
+            native_consumer_installation_verified=$false; native_double_click_installer_acceptance=$false
+            verified_direct_setup_launch=$false; verified_shell_setup_launch=$false; shell_reputation_prompt_acceptance=$false }
     }
     $script:failNativeVerify = $true; $proof = New-NativeEvidence
     Assert-Rejected { & $realNativeInstall -Bundle $bundle -OwnerSid 'owner' -Evidence $proof } 'A failed independent Verify was ignored.'
@@ -210,7 +302,9 @@ try {
     Assert (-not $proof.native_consumer_installation_verified -and -not $proof.native_double_click_installer_acceptance) 'Remaining service/state falsely qualified native installation.'
     $script:failNativeCleanup = $false; $proof = New-NativeEvidence
     & $realNativeInstall -Bundle $bundle -OwnerSid 'owner' -Evidence $proof
-    Assert ($proof.native_consumer_installation_verified -and $proof.native_double_click_installer_acceptance -and
+    Assert ($proof.native_consumer_installation_verified -and $proof.verified_direct_setup_launch -and
+        -not $proof.verified_shell_setup_launch -and
+        -not $proof.native_double_click_installer_acceptance -and -not $proof.shell_reputation_prompt_acceptance -and
         $proof.native_setup_window_verified -and $proof.phases.Count -eq 5 -and $nativeInstalls -eq 3) 'Complete native consumer installation was not distinguished from window-only smoke.'
 
     $fixtureId = [Guid]::NewGuid().ToString('N')

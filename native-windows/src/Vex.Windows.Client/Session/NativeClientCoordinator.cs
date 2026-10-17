@@ -58,6 +58,7 @@ public interface IVpnControlClient
 
     Task<VpnServiceResponse> DisconnectAsync(
         CancellationToken cancellationToken);
+    Task<VpnServiceResponse> SuspendAsync(CancellationToken cancellationToken) => DisconnectAsync(cancellationToken);
 }
 
 public sealed record NativeClientState(
@@ -884,7 +885,7 @@ public sealed partial class NativeClientCoordinator
         _vpnClient.GetStatusAsync(cancellationToken);
 
     public Task<VpnServiceResponse> DisconnectTunnelAsync(CancellationToken cancellationToken) =>
-        _vpnClient.DisconnectAsync(cancellationToken);
+        _vpnClient.SuspendAsync(cancellationToken);
 
     private async Task<NativeClientState> EnsureEntitlementAsync(
         NativeClientState state, CancellationToken cancellationToken)

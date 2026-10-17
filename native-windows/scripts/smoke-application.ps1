@@ -124,11 +124,14 @@ function Get-SmokeLiveInstanceIds {
 }
 
 function Assert-PrimaryInstance {
-    $process.Refresh()
-    if ($process.HasExited) { throw 'Primary preview exited during desktop checks.' }
-    $instances = @(Get-SmokeLiveInstanceIds)
-    if ($instances.Count -ne 1 -or $instances[0] -ne $process.Id) {
-        throw "Preview activation did not preserve one original application instance (live=$($instances.Count))."
+    param([ValidateRange(1, 15)][int]$TimeoutSeconds = 8)
+    # Enumeration can briefly retain a redirected secondary after WaitForExit.
+    # Require the original live instance; reject persistent duplicates by deadline.
+    Wait-SmokeCondition -TimeoutSeconds $TimeoutSeconds -Failure 'Preview activation did not preserve one original application instance.' -Condition {
+        $process.Refresh()
+        if ($process.HasExited) { throw 'Primary preview exited during desktop checks.' }
+        $instances = @(Get-SmokeLiveInstanceIds)
+        $instances.Count -eq 1 -and $instances[0] -eq $process.Id
     }
 }
 
@@ -289,7 +292,15 @@ function Wait-SmokeTrayRecoveryDiagnostic {
             }
             # Progress and failure evidence never satisfies the v1 completion
             # contract. Preserve it in the producer JSON if the wait fails.
-            $trayDiagnosticHashes[$paths.Progress] = (Get-FileHash -LiteralPath $paths.Progress -Algorithm SHA256).Hash
+            # The producer can still be updating progress. Match the shared
+            # reader above; this hash is evidence, never a completion receipt.
+            $progressStream = [IO.File]::Open($paths.Progress, [IO.FileMode]::Open, [IO.FileAccess]::Read,
+                ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+            try {
+                $trayDiagnosticHashes[$paths.Progress] = (Get-FileHash -InputStream $progressStream -Algorithm SHA256).Hash
+            } finally {
+                $progressStream.Dispose()
+            }
         }
         return $false
     }

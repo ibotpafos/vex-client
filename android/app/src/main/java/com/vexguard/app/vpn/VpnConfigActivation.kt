@@ -15,12 +15,15 @@ internal object VpnConfigActivation {
     routeOnlySelectedApplications: Boolean,
     selectedApplications: List<String>,
     appPackageName: String,
+    captureSelf: Boolean = false,
   ): Admission {
     val normalized = normalizeRawConfig(rawConfigText)
     val configText = if (routeOnlySelectedApplications) {
       configTextIncludingSelectedApplications(normalized, selectedApplications)
-    } else {
+    } else if (!captureSelf) {
       configTextExcludingSelf(normalized, appPackageName)
+    } else {
+      normalized
     }
     return Admission(configText, parse(configText))
   }
@@ -38,12 +41,14 @@ internal object VpnConfigActivation {
     appPackageName: String,
     mutate: suspend (Admission) -> T,
     onMutationFailure: suspend (Throwable) -> Unit,
+    captureSelf: Boolean = false,
   ): T {
     val admission = prepare(
       rawConfigText,
       routeOnlySelectedApplications,
       selectedApplications,
       appPackageName,
+      captureSelf,
     )
     return try {
       mutate(admission)

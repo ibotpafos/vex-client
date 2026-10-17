@@ -1,0 +1,8 @@
+[Unit]
+Description=VEX routing owner refresh
+PartOf=vex-routing.service
+
+[Timer]
+OnActiveSec=2min
+OnUnitActiveSec=2min
+Unit=vex-routing-refresh.service

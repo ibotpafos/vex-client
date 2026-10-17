@@ -82,7 +82,7 @@ function harness(platform = 'ios', existingStore) {
     throw Error(`Unexpected API route ${requestPath}`);
   };
   const api = load('src/api/vpn.ts', 'preparedTunnel,rotateManagedVpnKey,fetchStagedDevicePSKProfile', {
-    Platform: { OS: platform }, ...app, ...signer, ...native, ...scoped, ...location, ...selection, ...session,
+    supportsNativeRoutingPolicy: () => false, Platform: { OS: platform }, ...app, ...signer, ...native, ...scoped, ...location, ...selection, ...session,
     ...load('src/api/nativeDeviceRegistration.ts', 'getOrCreateNativeDeviceRegistration'),
     ...load('src/vpn/keyEpochRecovery.ts', 'nextManagedKeyEpoch,isKeyEpochMismatchError'),
     ...load('src/vpn/amneziaConfig.ts', 'managedProfileAmneziaConfig'),

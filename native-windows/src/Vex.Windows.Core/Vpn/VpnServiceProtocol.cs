@@ -15,6 +15,7 @@ public enum VpnServiceOperation
     Disconnect,
     Diagnostics,
     SetAntiLeak,
+    StopTransport,
 }
 
 [DebuggerDisplay("{Operation} {RequestId} protocol={ProtocolVersion}")]
@@ -158,6 +159,8 @@ public sealed record VpnServiceRequest
 
     public static VpnServiceRequest Diagnostics(string requestId) =>
         WithoutPayload(requestId, VpnServiceOperation.Diagnostics);
+
+    public static VpnServiceRequest StopTransport(string requestId) => WithoutPayload(requestId, VpnServiceOperation.StopTransport);
 
     public static VpnServiceRequest SetAntiLeak(
         string requestId,

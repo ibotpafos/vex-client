@@ -24,7 +24,7 @@ function Assert-Rejected([scriptblock]$action, $message) {
 }
 $findRoute = Script-With '# Never use Find-NetRoute'
 $verify = Script-With 'firewall_external_allow_active'
-$capture = Script-With 'Version=3;Profiles='
+$capture = Script-With '$version=if($args[6])'
 $arm = Script-With 'New-NetFirewallRule -Name $names[0]'
 $refresh = Script-With '# Narrow an existing owned policy'
 $restore = Script-With '# Migration of the old profile-only journal'
@@ -173,7 +173,7 @@ $script:rules = @(
 $script:filters = @{}
 function Get-Service { param($Name) [pscustomobject]@{Status='Running'} }
 function Get-NetFirewallProfile { param($PolicyStore) $script:profiles }
-function Get-NetFirewallRule { [CmdletBinding()]param($PolicyStore) $script:rules }
+function Get-NetFirewallRule { [CmdletBinding()]param($PolicyStore,$Name) if($Name){$script:rules | Where-Object {$_.Name -ceq $Name}}else{$script:rules} }
 function Disable-NetFirewallRule { param([Parameter(ValueFromPipeline)]$InputObject) process {$InputObject.Enabled='False'} }
 function Enable-NetFirewallRule { param([Parameter(ValueFromPipeline)]$InputObject) process {$InputObject.Enabled='True'} }
 function Remove-NetFirewallRule { param([Parameter(ValueFromPipeline)]$InputObject) process {$script:rules=@($script:rules | Where-Object {$_.Name -cne $InputObject.Name})} }
@@ -190,18 +190,20 @@ function New-NetFirewallRule {
     $script:filters[$Name]=@{
         Interface=[pscustomobject]@{InterfaceAlias=@($InterfaceAlias);RuleName=$Name}
         Type=[pscustomobject]@{InterfaceType=@($InterfaceType)}
-        Address=[pscustomobject]@{RemoteAddress=@($RemoteAddress)}
-        Port=[pscustomobject]@{Protocol=$Protocol;LocalPort=@($LocalPort);RemotePort=@($RemotePort);IcmpType=@($IcmpType)}
+        Address=[pscustomobject]@{RemoteAddress=$(if($null -eq $RemoteAddress){@('Any')}else{@($RemoteAddress)})}
+        Port=[pscustomobject]@{Protocol=$Protocol;LocalPort=$(if($null -eq $LocalPort){@('Any')}else{@($LocalPort)});RemotePort=$(if($null -eq $RemotePort){@('Any')}else{@($RemotePort)});IcmpType=@($IcmpType)}
         Application=[pscustomobject]@{Program=$Program};Service=[pscustomobject]@{Service=$Service}
     }
 }
 function Set-NetFirewallRule {
-    param([Parameter(ValueFromPipeline)]$InputObject,$Protocol,$RemotePort,$RemoteAddress,$Enabled)
+    param([Parameter(ValueFromPipeline)]$InputObject,$Protocol,$RemotePort,$RemoteAddress,$Enabled,$Program,$InterfaceAlias)
     process {
         if($PSBoundParameters.ContainsKey('Protocol')){$script:filters[$InputObject.Name].Port.Protocol=$Protocol}
         if($PSBoundParameters.ContainsKey('RemotePort')){$script:filters[$InputObject.Name].Port.RemotePort=@($RemotePort)}
         if($PSBoundParameters.ContainsKey('RemoteAddress')){$script:filters[$InputObject.Name].Address.RemoteAddress=@($RemoteAddress)}
         if($PSBoundParameters.ContainsKey('Enabled')){$InputObject.Enabled=$Enabled}
+        if($PSBoundParameters.ContainsKey('Program')){$script:filters[$InputObject.Name].Application.Program=$Program}
+        if($PSBoundParameters.ContainsKey('InterfaceAlias')){$script:filters[$InputObject.Name].Interface.InterfaceAlias=@($InterfaceAlias)}
     }
 }
 function Set-NetFirewallInterfaceFilter {
@@ -222,7 +224,7 @@ $namesJson = ConvertTo-Json -InputObject $names -Compress
 $ipsJson = ConvertTo-Json -InputObject $ips -Compress
 $controlJson = ConvertTo-Json -InputObject $controlIps -Compress
 $allIpsJson = ConvertTo-Json -InputObject $allIps -Compress
-$stateJson = & $capture $namesJson 'VEX VPN' $allIpsJson $ipsJson '51820' $controlJson
+$stateJson = & $capture $namesJson 'VEX VPN' $allIpsJson $ipsJson '51820' $controlJson '' ''
 $state = $stateJson | ConvertFrom-Json
 Assert (@($state.DisabledOutboundAllowRuleNames).Count -eq 2 -and 'ExistingAllow' -in $state.DisabledOutboundAllowRuleNames -and 'SurvivingAllow' -in $state.DisabledOutboundAllowRuleNames) 'Snapshot must contain only previously enabled local outbound allows'
 & $arm $stateJson $ipsJson | Out-Null
@@ -313,6 +315,38 @@ Assert ((& $restore $legacy) -eq 'ok') 'Legacy profile-only journal cleanup fail
 Assert (@($script:rules | Where-Object {$_.Name -in @('LegacyTunnel','LegacyBypass')}).Count -eq 0) 'Recognized legacy owned rules not removed'
 Assert (@($script:rules | Where-Object Name -eq 'UnrelatedVexGroup').Count -eq 1) 'Legacy cleanup deleted unrelated same-group rule'
 
+# The routed engine may use DIRECT only as its pinned program on the current
+# physical NIC. Ordinary applications never inherit those TCP/UDP exceptions.
+$routedNames=@('Tunnel','Protected','Dhcp4','Dhcp6','Neighbor','ControlPlane','RouterTcp','RouterUdp' | ForEach-Object {"VEX.AntiLeak.routed.$_"})
+$routerProgram='C:\VEX\vex-routing.exe'
+$routedJson=& $capture (ConvertTo-Json -InputObject $routedNames -Compress) 'VEX VPN' $ipsJson $ipsJson '51820' '[]' $routerProgram 'Fixture Wi-Fi'
+$routed=$routedJson | ConvertFrom-Json
+Assert ($routed.Version -eq 4) 'Routed capture did not create the v4 rollback journal'
+& $arm $routedJson | Out-Null
+Assert ((& $verify $routedJson) -eq 'ok') 'Bound program/interface routed policy failed verification'
+Assert (($script:rules | Where-Object Name -eq $routedNames[5]).Enabled -eq 'False') 'Routed mode granted an ordinary global control-plane HTTPS exception'
+foreach($i in 6..7){
+    $filter=$script:filters[$routedNames[$i]]
+    $filter.Application.Program='Any'
+    Assert-Rejected {& $verify $routedJson} 'Any-program DIRECT exception was accepted'
+    $filter.Application.Program=$routerProgram
+    $filter.Interface.InterfaceAlias=@('Any')
+    Assert-Rejected {& $verify $routedJson} 'Any-interface DIRECT exception was accepted'
+    $filter.Interface.InterfaceAlias=@('Fixture Wi-Fi')
+    $protocol=$filter.Port.Protocol;$filter.Port.Protocol='Any'
+    Assert-Rejected {& $verify $routedJson} 'Any-protocol DIRECT exception was accepted'
+    $filter.Port.Protocol=$protocol
+}
+$script:filters[$routedNames[1]].Application.Program='Any'
+Assert-Rejected {& $verify $routedJson} 'VPN peer exception was available to ordinary applications'
+$script:filters[$routedNames[1]].Application.Program=$routerProgram
+$routed.PhysicalInterface='Fixture Ethernet'
+$newUplink=ConvertTo-Json -InputObject $routed -Compress -Depth 5
+& $refresh $newUplink | Out-Null
+Assert ((& $verify $newUplink) -eq 'ok') 'Routed refresh did not bind DIRECT to the replacement uplink'
+Assert ((& $restore $newUplink) -eq 'ok') 'Routed rollback did not restore the original firewall baseline'
+Assert (@($script:rules | Where-Object {$_.Name -in $routedNames}).Count -eq 0) 'Routed rollback left DIRECT exceptions active'
+
 # Exercise exact production capture/arm/verify/restore with 5.1-shaped JSON
 # output too. A non-enumerated array must remain a flat journal/address list.
 function Test-WindowsPowerShellJsonPolicy {
@@ -323,7 +357,7 @@ function Test-WindowsPowerShellJsonPolicy {
             Write-Output -NoEnumerate $decoded
         }
     }
-    $compatJson=& $capture $namesJson 'VEX VPN' $allIpsJson $ipsJson '51820' $controlJson
+    $compatJson=& $capture $namesJson 'VEX VPN' $allIpsJson $ipsJson '51820' $controlJson '' ''
     $compat=Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $compatJson
     Assert ($compat.OwnedRuleNames.Count -eq $names.Count -and $compat.OwnedRuleNames[0] -is [string]) '5.1 capture nested the owned rule names'
     Assert ($compat.ProtectedAddresses.Count -eq $allIps.Count -and $compat.ProtectedAddresses[0] -is [string]) '5.1 capture nested protected addresses'

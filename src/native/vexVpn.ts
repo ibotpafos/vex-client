@@ -2,6 +2,8 @@ import { NativeEventEmitter, NativeModules, Platform, type NativeModule } from '
 import { requireNativeModule as requireExpoNativeModule } from 'expo';
 import { disconnectWithRecoveryTimeout } from '@/vpn/disconnectRecovery';
 import { resolveNativeTunnelVerified } from '@/vpn/vpnStatusVerification';
+import { nativeRoutingParameters } from '@/vpn/nativeRoutingPolicy';
+import type { VpnRoutingMode } from '@/vpn/routingPolicy';
 
 export type VpnState = 'connected' | 'connecting' | 'disconnecting' | 'disconnected' | 'error' | 'verifying' | 'degraded';
 export type LeakProtectionState = 'off' | 'armed' | 'blocking';
@@ -55,6 +57,7 @@ type VexVpnNativeModule = {
   needsPermission(): Promise<boolean>;
   requestPermission(): Promise<boolean>;
   connect(wgQuickConfig: string, antiLeakEnabled: boolean): Promise<VpnStatus>;
+  connectWithRoutingPolicy?(wgQuickConfig: string, antiLeakEnabled: boolean, routingParameters: string, selectedApplications: string[], routeOnlySelectedApplications: boolean): Promise<VpnStatus>;
   connectWithApplications?(
     wgQuickConfig: string,
     antiLeakEnabled: boolean,
@@ -131,6 +134,8 @@ export type ConnectVpnOptions = {
   antiLeakEnabled?: boolean;
   applicationRoutingMode?: 'all' | 'selected';
   selectedApplications?: string[];
+  routingParameters?: string;
+  routingMode?: VpnRoutingMode;
 };
 
 export type DisconnectVpnOptions = {
@@ -139,7 +144,11 @@ export type DisconnectVpnOptions = {
 
 export async function connectVpn(wgQuickConfig: string, options: ConnectVpnOptions = {}): Promise<VpnStatus> {
   const module = requireNativeModule();
-  const nativeStatus = Platform.OS === 'android' && module.connectWithApplications
+  const nativeStatus = module.connectWithRoutingPolicy
+    ? await module.connectWithRoutingPolicy(wgQuickConfig, options.antiLeakEnabled !== false,
+      options.routingParameters ?? nativeRoutingParameters(wgQuickConfig, options.routingMode ?? 'all_except_ru'),
+      options.selectedApplications ?? [], options.applicationRoutingMode === 'selected')
+    : Platform.OS === 'android' && module.connectWithApplications
     ? await module.connectWithApplications(
       wgQuickConfig,
       options.antiLeakEnabled !== false,
@@ -150,6 +159,10 @@ export async function connectVpn(wgQuickConfig: string, options: ConnectVpnOptio
   const status = normalizeVpnStatus(nativeStatus);
   updateCachedVpnStatus(status);
   return status;
+}
+
+export function supportsNativeRoutingPolicy(): boolean {
+  try { return typeof requireNativeModule().connectWithRoutingPolicy === 'function'; } catch { return false; }
 }
 
 export async function getInstalledVpnApplications(): Promise<InstalledVpnApplication[]> {

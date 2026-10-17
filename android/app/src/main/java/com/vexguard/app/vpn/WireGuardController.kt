@@ -8,6 +8,7 @@ import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Build
 import android.os.SystemClock
+import android.os.ParcelFileDescriptor
 import android.system.Os
 import android.system.OsConstants.AF_INET
 import android.system.OsConstants.IPPROTO_ICMP
@@ -52,6 +53,26 @@ class WireGuardController(context: Context) {
   private var antiLeakArmed = false
   private var lastRoutedApplications: List<String> = emptyList()
   private var lastConfigText: String? = null
+  private var lastRoutingParameters: String? = null
+  private val routingPolicyStore = NativeRoutingPolicyStore(appContext)
+  @Volatile private var routingNetworkGeneration = 1L
+  private var nextRoutingCacheCheck = 0L
+
+  fun hasProtectedRoutingCapture(): Boolean = antiLeakArmed && backend.hasRoutingCapture()
+
+  private fun configureRouting(parameters: String?, antiLeak: Boolean) {
+    val protector = if (parameters == null) null else org.amnezia.awg.GoBackend.SocketProtector { fd, generation, _ ->
+      if (generation != routingNetworkGeneration) false else runCatching {
+        val network = selectedUnderlyingNetworkSnapshot() ?: return@runCatching false
+        val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return@runCatching false
+        if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return@runCatching false
+        // Borrow the FD. Closing this duplicate never closes Go's live socket.
+        ParcelFileDescriptor.fromFd(fd).use { network.bindSocket(it.fileDescriptor) }
+        generation == routingNetworkGeneration
+      }.getOrDefault(false)
+    }
+    backend.setRoutingParameters(parameters, protector, routingNetworkGeneration, antiLeak)
+  }
   private var selectedUnderlyingNetwork: Network? = null
   private var diagnosticNetworkGeneration = UUID.randomUUID().toString()
   private var diagnosticObservedNetwork: Network? = null
@@ -101,6 +122,7 @@ class WireGuardController(context: Context) {
           leakBlockerActive = VexLeakBlockerService.isActive(),
           currentState = backend.getState(tunnel),
         )) return@withLock
+      if (backend.hasRoutingCapture()) return@withLock
       transitionState = "blocking"
       // Keep the requested protection armed if service startup fails; a failed
       // start is not a manual release and must not be reported as Blocking.
@@ -125,6 +147,7 @@ class WireGuardController(context: Context) {
     antiLeakEnabled: Boolean,
     routeOnlySelectedApplications: Boolean,
     selectedApplications: List<String>,
+    routingParameters: String? = null,
   ): VpnConnectionState = tunnelMutex.withLock {
     transitionState = "connecting"
     try {
@@ -142,7 +165,11 @@ class WireGuardController(context: Context) {
           routeOnlySelectedApplications = routeOnlySelectedApplications,
           selectedApplications = routedApplications,
           appPackageName = appContext.packageName,
+          captureSelf = routingParameters != null,
           mutate = { admission ->
+            val admittedRouting = routingParameters?.let { routingPolicyStore.parameters(it, admission.config) }
+            configureRouting(admittedRouting, antiLeakEnabled)
+            lastRoutingParameters = admittedRouting
             // Do not mutate retained routing state until profile admission succeeds.
             lastRoutedApplications = routedApplications
             if (shouldReuseActiveVpnTunnel(
@@ -158,7 +185,7 @@ class WireGuardController(context: Context) {
                 if (antiLeakEnabled) LeakProtectionState.Armed else LeakProtectionState.Off,
               )
             }
-            if (!VexLeakBlockerService.stopAndAwait(appContext)) {
+            if (admittedRouting == null && !VexLeakBlockerService.stopAndAwait(appContext)) {
               throw IllegalStateException("Anti-leak service did not stop before VPN connect.")
             }
             val state = backend.setState(tunnel, Tunnel.State.UP, admission.config)
@@ -174,6 +201,9 @@ class WireGuardController(context: Context) {
               }
             }
             val traffic = statsOrEmpty()
+            if (admittedRouting != null) {
+              runCatching { backend.getRoutingAuthorization()?.takeIf { it.isNotEmpty() }?.let { routingPolicyStore.saveAuthorization(it) } }
+            }
             lastConfigText = admission.text
             antiLeakArmed = antiLeakEnabled
             VpnConnectionState.Connected(traffic, if (antiLeakEnabled) LeakProtectionState.Armed else LeakProtectionState.Off)
@@ -184,7 +214,7 @@ class WireGuardController(context: Context) {
                 setTunnelDown()
               } catch (_: Throwable) {
               }
-              antiLeakArmed = VexLeakBlockerService.startAndAwait(appContext, routedApplications)
+              antiLeakArmed = backend.hasRoutingCapture() || VexLeakBlockerService.startAndAwait(appContext, routedApplications)
             }
           },
         )
@@ -208,9 +238,11 @@ class WireGuardController(context: Context) {
           antiLeakArmed = false
         }
         setTunnelDown()
+        if (releaseAntiLeak) backend.releaseRetainedRoutingCapture()
         lastConfigText = null
+        lastRoutingParameters = null
         if (!releaseAntiLeak) {
-          antiLeakArmed = VexLeakBlockerService.startAndAwait(appContext, lastRoutedApplications)
+          antiLeakArmed = backend.hasRoutingCapture() || VexLeakBlockerService.startAndAwait(appContext, lastRoutedApplications)
           if (!antiLeakArmed) {
             throw IllegalStateException("Anti-leak service did not start after VPN disconnect.")
           }
@@ -231,9 +263,15 @@ class WireGuardController(context: Context) {
     }
     return try {
       withContext(Dispatchers.IO) {
+        val now = SystemClock.elapsedRealtime()
+        if (now >= nextRoutingCacheCheck) {
+          nextRoutingCacheCheck = now + 5 * 60 * 1000L
+          runCatching { backend.getRoutingAuthorization()?.takeIf { it.isNotEmpty() }?.let { routingPolicyStore.saveAuthorization(it) } }
+        }
         if (VexLeakBlockerService.isActive()) {
           return@withContext VpnConnectionState.Blocking
         }
+        if (backend.getState(tunnel) == Tunnel.State.DOWN && backend.hasRoutingCapture()) return@withContext VpnConnectionState.Blocking
         backend.getState(tunnel).toConnectionState(statsOrEmpty(), antiLeakArmed)
       }
     } finally {
@@ -374,6 +412,8 @@ class WireGuardController(context: Context) {
       return
     }
     selectedUnderlyingNetwork = selected
+    routingNetworkGeneration++
+    backend.setRoutingUnderlying(routingNetworkGeneration)
     diagnosticNetworkGeneration = UUID.randomUUID().toString()
     Log.i(TAG, "Underlying network selection changed from $previous to $selected")
     networkTransitionTracker.update(selected)?.let { (recoveryFrom, recoveryTo) ->
@@ -419,7 +459,7 @@ class WireGuardController(context: Context) {
       Log.e(TAG, "VPN network recovery rejected invalid profile: ${error.message}")
       return@runVpnNetworkRecovery
     }
-    if (backend.getState(tunnel) != Tunnel.State.UP && !VexLeakBlockerService.isActive()) {
+    if (backend.getState(tunnel) != Tunnel.State.UP && !VexLeakBlockerService.isActive() && !backend.hasRoutingCapture()) {
       return@runVpnNetworkRecovery
     }
     transitionState = "connecting"
@@ -451,6 +491,22 @@ class WireGuardController(context: Context) {
       }
     }
     val preserveAntiLeak = antiLeakArmed
+    if (lastRoutingParameters != null && backend.hasRoutingCapture()) {
+      try {
+        for (candidate in recoveryCandidates) {
+          configureRouting(lastRoutingParameters, preserveAntiLeak)
+          if (backend.setState(tunnel, Tunnel.State.UP, candidate.config) == Tunnel.State.UP && awaitHandshake()) {
+            lastConfigText = candidate.text
+            return@runVpnNetworkRecovery
+          }
+          setTunnelDown() // Go retains the capture and blocks foreign traffic.
+        }
+      } finally {
+        antiLeakArmed = preserveAntiLeak
+        transitionState = null
+      }
+      return@runVpnNetworkRecovery
+    }
     try {
       // Stop the native VPN service cleanly before the blocker takes ownership.
       // If the blocker revokes it first, Android may deliver a delayed onDestroy

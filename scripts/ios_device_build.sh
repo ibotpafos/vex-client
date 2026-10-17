@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# TODO(ru-direct release): archive/sign and record physical routing/leak checks
+# for the new candidate; this CLT-only host has no iOS SDK or Apple identity.
+# Owner performs iOS device acceptance; see docs/verification/native-russian-direct-device-acceptance.md.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -10,6 +13,9 @@ fail() {
 }
 
 [ -n "${IOS_DEVELOPMENT_TEAM:-}" ] || fail "Set IOS_DEVELOPMENT_TEAM to a paid Apple Developer Team ID."
+command -v go >/dev/null || fail "The pinned Go 1.26.9 toolchain is required."
+[ "$(go env GOVERSION)" = go1.26.9 ] || fail "Use the qualified Go 1.26.9 toolchain for this iOS candidate."
+export GOTOOLCHAIN=go1.26.9
 
 cd "$APP_DIR"
 

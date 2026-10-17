@@ -61,7 +61,7 @@ copy_canonical_project() {
   mkdir -p "$destination"
   (
     cd "$root_dir"
-    git ls-files -z -- ios scripts modules assets app src patches ':(top,glob)*' \
+    git ls-files -z -- ios scripts modules assets app src patches native-routing ':(top,glob)*' \
       | tar --null -T - -cf - | tar -xf - -C "$destination"
   )
   cp -R "$root_dir/node_modules" "$destination/node_modules"
@@ -174,7 +174,7 @@ pods = Xcodeproj::Project.open(File.join(fixture, 'ios/Pods/Pods.xcodeproj'))
 pod = pods.targets.find { |target| target.name == 'VexVpn' }
 abort('Missing real VexVpn pod target') unless pod
 source_paths = pod.source_build_phase.files_references.map { |file| File.realpath(file.real_path) }
-%w[VexVpnModule.swift IosTunnelTransition.swift].each do |name|
+%w[VexVpnModule.swift IosTunnelTransition.swift IosRoutingConnectRequest.swift].each do |name|
   relative = File.join('modules/vex-vpn/ios', name)
   path = File.realpath(File.join(fixture, relative))
   abort("Missing live #{name} source") unless source_paths.include?(path)
@@ -192,14 +192,26 @@ end
 RUBY
 
 compile_log="$fixture_dir/xcodebuild.log"
-xcodebuild \
+if ! xcodebuild \
   -workspace "$project_dir/ios/VEX.xcworkspace" \
   -scheme VEX -configuration Debug \
   -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
   -derivedDataPath "$fixture_dir/derived-data" -jobs 2 \
   ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= DEVELOPMENT_TEAM= \
-  build 2>&1 | tee "$compile_log"
+  build 2>&1 | tee "$compile_log"; then
+  # Parallel SDK output can bury the compiler error before the CI log bound.
+  # Repeat bounded diagnostic context at the end without uploading app artifacts.
+  "$ruby_binary" - "$compile_log" <<'RUBY'
+lines = File.readlines(ARGV.fetch(0))
+indexes = lines.each_index.select { |index| lines[index].match?(/error:|fatal error:|Undefined symbols|duplicate symbol|BUILD FAILED/) }
+indexes.last(20).each do |index|
+  puts lines[[index - 1, 0].max..[index + 2, lines.length - 1].min].map { |line| line[0, 800] }
+end
+puts lines.last(20).map { |line| line[0, 800] }
+RUBY
+  exit 1
+fi
 app_dir="$fixture_dir/derived-data/Build/Products/Debug-iphonesimulator/VEX.app"
 for relative in VEX PlugIns/VexVpnTunnel.appex/VexVpnTunnel PlugIns/VexLiveActivityWidgetExtension.appex/VexLiveActivityWidgetExtension main.jsbundle; do
   [[ -s "$app_dir/$relative" ]] || { echo "Missing full iOS app output: $relative" >&2; exit 1; }
@@ -209,7 +221,7 @@ done
 trace = File.read(ARGV.fetch(0))
 abort('Missing actual source compilation of ExpoModulesCore') unless trace.lines.any? { |line| line.include?('SwiftCompile') && line.include?("in target 'ExpoModulesCore' from project 'Pods'") }
 puts 'Verified full-app SDK source compilation: ExpoModulesCore.'
-%w[VexVpnModule.swift IosTunnelTransition.swift AppDelegate.swift PacketTunnelProvider.swift VexLiveActivityWidget.swift].each do |name|
+%w[VexVpnModule.swift IosTunnelTransition.swift IosRoutingConnectRequest.swift AppDelegate.swift PacketTunnelProvider.swift VexLiveActivityWidget.swift].each do |name|
   abort("Missing actual SwiftCompile trace for #{name}") unless trace.lines.any? { |line| line.include?('SwiftCompile') && line.include?(name) }
   puts "Verified full-app SDK compilation trace: #{name}"
 end

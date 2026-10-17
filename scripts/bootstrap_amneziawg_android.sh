@@ -31,8 +31,8 @@ apply_patch_once() {
 # patch first; refuse unrelated edits rather than resetting a reused checkout.
 migrate_legacy_local_go_patch() {
   local dir="$1" patch="$2" legacy
-  if git -C "${dir}" apply --check "${patch}" >/dev/null 2>&1 ||
-     git -C "${dir}" apply --reverse --check "${patch}" >/dev/null 2>&1; then
+  if git -C "${dir}" apply --check --exclude=tunnel/tools/libwg-go/go.mod "${patch}" >/dev/null 2>&1 ||
+     git -C "${dir}" apply --reverse --check --exclude=tunnel/tools/libwg-go/go.mod "${patch}" >/dev/null 2>&1; then
     return
   fi
   legacy="$(mktemp)"
@@ -82,12 +82,49 @@ clone_or_reset "amneziawg-go" "${go_repo_url}" "${go_ref}" || true
 if clone_or_reset "amneziawg-android" "${android_repo_url}" "${android_ref}"; then
   git -C "${external_dir}/amneziawg-android" submodule update --init --recursive --depth 1
 fi
+# Peel the exact additive SDK patch before checking earlier patches whose
+# context it extends. This keeps repeated bootstrap safe after go mod tidy.
+toolchain_patch="${root_dir}/patches/amnezia/amneziawg-android-routing-go126-toolchain.patch"
+if git -C "${external_dir}/amneziawg-android" apply --reverse --check "${toolchain_patch}" >/dev/null 2>&1; then
+  git -C "${external_dir}/amneziawg-android" apply --reverse "${toolchain_patch}"
+fi
+build_patch="${root_dir}/patches/amnezia/amneziawg-android-routing-build.patch"
+if git -C "${external_dir}/amneziawg-android" apply --reverse --check "${build_patch}" >/dev/null 2>&1; then
+  git -C "${external_dir}/amneziawg-android" apply --reverse "${build_patch}"
+fi
+routing_patch="${root_dir}/patches/amnezia/amneziawg-android-native-routing.patch"
+if git -C "${external_dir}/amneziawg-android" apply --reverse --check "${routing_patch}" >/dev/null 2>&1; then
+  git -C "${external_dir}/amneziawg-android" apply --reverse "${routing_patch}"
+fi
+# Fresh checkouts first need the local-Go/foreground prerequisites below.
+# apply_patch_once still rejects a changed/partial routing patch afterwards.
 migrate_legacy_local_go_patch "${external_dir}/amneziawg-android" "${root_dir}/patches/amnezia/amneziawg-android-macos-local-go.patch"
-apply_patch_once "${external_dir}/amneziawg-android" "${root_dir}/patches/amnezia/amneziawg-android-macos-local-go.patch"
+local_go_patch="${root_dir}/patches/amnezia/amneziawg-android-macos-local-go.patch"
+if git -C "${external_dir}/amneziawg-android" apply --check --exclude=tunnel/tools/libwg-go/go.mod "${local_go_patch}" >/dev/null 2>&1; then
+  git -C "${external_dir}/amneziawg-android" apply --exclude=tunnel/tools/libwg-go/go.mod "${local_go_patch}"
+elif ! git -C "${external_dir}/amneziawg-android" apply --reverse --check --exclude=tunnel/tools/libwg-go/go.mod "${local_go_patch}" >/dev/null 2>&1; then
+  echo "Local Go Makefile patch differs from the supported form" >&2
+  exit 1
+fi
 # The pinned v3.1 engine requires Go >=1.25; keep the bundled compiler and
 # its upstream boottime runtime patch, rather than bypassing runtime preparation.
 apply_patch_once "${external_dir}/amneziawg-android" "${root_dir}/patches/amnezia/amneziawg-android-go125-toolchain.patch"
+apply_patch_once "${external_dir}/amneziawg-android" "${toolchain_patch}"
 apply_patch_once "${external_dir}/amneziawg-android" "${root_dir}/patches/amnezia/amneziawg-android-vpn-foreground-service.patch"
+apply_patch_once "${external_dir}/amneziawg-android" "${root_dir}/patches/amnezia/amneziawg-android-native-routing.patch"
+apply_patch_once "${external_dir}/amneziawg-android" "${build_patch}"
+
+routing_bridge="${external_dir}/amneziawg-android/tunnel/tools/libwg-go"
+cp "${root_dir}/native-routing/bridges/android/vex_routing_android.go" "${routing_bridge}/"
+cp "${root_dir}/native-routing/bridges/android/vex-routing-jni.c" "${routing_bridge}/"
+(
+  cd "${routing_bridge}"
+  go mod edit -dropreplace=github.com/amnezia-vpn/amneziawg-go
+  go mod edit -replace=github.com/amnezia-vpn/amneziawg-go/v3=../../../../amneziawg-go
+  go mod edit -require=vex.dev/native-routing@v0.0.0
+  go mod edit "-replace=vex.dev/native-routing=${root_dir}/native-routing"
+  go mod tidy
+)
 
 # Check the effective module graph, not only the text of a potentially unused replace.
 (cd "${external_dir}/amneziawg-android/tunnel/tools/libwg-go" &&

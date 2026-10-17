@@ -190,12 +190,32 @@ try {
     $script:ClientCertificateSha256 = $metadata.client_certificate_sha256; $script:AppExecutableSha256 = $metadata.app_executable_sha256
     $script:ServiceExecutableSha256 = $metadata.service_executable_sha256; $script:AmneziaExecutableSha256 = $metadata.amneziawg_sha256
     $script:WintunSha256 = $metadata.wintun_sha256; $script:ProfileSigningKeyringSha256 = $metadata.profile_signing_keyring_sha256
+    $script:RouterExecutableSha256 = ''
     & $tail
     Assert ($script:mutationOrder[0] -eq 'stop' -and $script:mutationOrder[1] -eq 'authorization' -and $script:mutationOrder[-1] -eq 'start') 'Live authorization changed before stopping the controller'
     $script:mutationOrder = @()
     function Stop-ServiceBeforeProvisioning { throw 'Mock stop failure' }
     Assert-Rejected { & $tail } 'Provisioning must fail when the old controller cannot stop'
     Assert ($script:mutationOrder.Count -eq 0) 'Failed stop changed authorization or restarted service'
+
+    # A legacy rollback may not tear down an active routed capture. Exercise
+    # the production tail over a private lease without touching SCM/network.
+    $leaseDirectory = Join-Path $script:dataDirectory 'Private'
+    $null = New-Item -ItemType Directory -Path $leaseDirectory -Force
+    $leasePath = Join-Path $leaseDirectory 'routed-lease.json'
+    [IO.File]::WriteAllText($leasePath, '{}')
+    function Stop-ServiceBeforeProvisioning { $script:mutationOrder += 'stop' }
+    Assert-Rejected { & $tail } 'Legacy rollback accepted an active routed capture'
+    Assert ($script:mutationOrder.Count -eq 0) 'Rejected legacy rollback changed live authorization'
+    Remove-Item -LiteralPath $leasePath
+    $script:RouterExecutableSha256 = '9' * 64
+    & $tail
+    $capability = [IO.File]::ReadAllText((Join-Path $script:dataDirectory 'routing-capability.json')) | ConvertFrom-Json
+    Assert ($capability.Schema -ceq 'vex.native-routing.v2' -and $capability.RouterSha256 -ceq $script:RouterExecutableSha256 -and
+        $capability.ServiceSha256 -ceq $script:ServiceExecutableSha256.ToUpperInvariant()) 'Routed install failed to pin the actual service/router pair'
+    $script:RouterExecutableSha256 = ''
+    & $tail
+    Assert (-not (Test-Path -LiteralPath (Join-Path $script:dataDirectory 'routing-capability.json'))) 'Idle legacy rollback retained a stale routed capability'
 
     Import-ProductionFunctions 'uninstall-vpn-service.ps1'
     $script:serviceProbes = 0; $script:disposed = 0
@@ -297,7 +317,7 @@ try {
         # Re-import actual ACL and DPAPI functions; no mock may stand in for these.
         Import-ProductionFunctions 'install-vpn-service.ps1'
         $privateDirectory = Join-Path $script:dataDirectory 'Private'
-        $null = New-Item -ItemType Directory -Path $privateDirectory
+        $null = New-Item -ItemType Directory -Path $privateDirectory -Force
         $privateConfig = Join-Path $privateDirectory 'vex.conf'
         [IO.File]::WriteAllText($privateConfig, 'fixture-private-material')
         Set-PrivateDirectoryAcl
@@ -329,8 +349,37 @@ try {
         $validToken = [Security.Cryptography.ProtectedData]::Protect([byte[]]::new(32), [Text.Encoding]::UTF8.GetBytes('VEX VPN IPC v1'), [Security.Cryptography.DataProtectionScope]::LocalMachine)
         [IO.File]::WriteAllBytes($file, $validToken)
         Assert-AuthorizationToken -Path $file
+        # The parent already loaded System.Security above. Qualify standalone
+        # Verify in a fresh Windows PowerShell5.1 process without that side effect.
+        $tokenVerifier = (Get-Item Function:Assert-AuthorizationToken).ScriptBlock.ToString()
+        function Invoke-FreshTokenVerifier([bool]$ShouldReject) {
+            $inputData = @{path=$file;reject=$ShouldReject} | ConvertTo-Json -Compress
+            $payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($inputData))
+            $command = "`$ErrorActionPreference = 'Stop'`nfunction Assert-AuthorizationToken {`n" + $tokenVerifier + "`n}`n" + @'
+$inputData = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__INPUT__')) | ConvertFrom-Json
+$rejected = $false
+try { Assert-AuthorizationToken -Path $inputData.path } catch { $rejected = $true }
+if ($rejected -ne $inputData.reject) { exit 3 }
+'@.Replace('__INPUT__', $payload)
+            $start = [Diagnostics.ProcessStartInfo]::new()
+            $start.FileName = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'WindowsPowerShell\v1.0\powershell.exe'
+            $start.UseShellExecute = $false
+            $start.EnvironmentVariables['PSModulePath'] = Join-Path (Split-Path -Parent $start.FileName) 'Modules'
+            $start.RedirectStandardOutput = $true; $start.RedirectStandardError = $true
+            $start.Arguments = '-NoLogo -NoProfile -NonInteractive -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+            $process = [Diagnostics.Process]::Start($start)
+            try {
+                $output = $process.StandardOutput.ReadToEndAsync(); $errorOutput = $process.StandardError.ReadToEndAsync()
+                if (-not $process.WaitForExit(30000)) { $process.Kill(); throw 'Fresh DPAPI verifier exceeded its deadline.' }
+                Assert ($process.ExitCode -eq 0) 'Fresh PS5.1 token verification did not preserve valid/corrupt admission.'
+                Assert ([Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]]@($output,$errorOutput),5000)) 'Fresh token verifier did not close its output handles.'
+            }
+            finally { $process.Dispose() }
+        }
+        Invoke-FreshTokenVerifier $false
         [IO.File]::WriteAllBytes($file, [byte[]]::new(3))
         Assert-Rejected { Assert-AuthorizationToken -Path $file } 'Corrupt machine DPAPI authorization must be rejected'
+        Invoke-FreshTokenVerifier $true
 
         Import-ProductionFunctions 'uninstall-vpn-service.ps1'
         $script:registryFixture = 'Software\VexInstallerSafety\' + [guid]::NewGuid().ToString('N')

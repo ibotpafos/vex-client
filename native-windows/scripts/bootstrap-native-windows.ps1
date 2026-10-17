@@ -634,6 +634,9 @@ function Invoke-ServiceProvisioning {
         -Path $installer `
         -ExpectedCertificateSha256 ([string]$Metadata.client_certificate_sha256)
 
+    $routingArguments = @{}
+    if ($Metadata.PSObject.Properties['router_sha256']) { $routingArguments.RouterExecutableSha256 = [string]$Metadata.router_sha256 }
+
     & $installer `
         -InstallDirectory $InstallDirectory `
         -OwnerSid (Resolve-OwnerSid) `
@@ -642,7 +645,7 @@ function Invoke-ServiceProvisioning {
         -ServiceExecutableSha256 ([string]$Metadata.service_executable_sha256) `
         -AmneziaExecutableSha256 ([string]$Metadata.amneziawg_sha256) `
         -WintunSha256 ([string]$Metadata.wintun_sha256) `
-        -ProfileSigningKeyringSha256 ([string]$Metadata.profile_signing_keyring_sha256)
+        -ProfileSigningKeyringSha256 ([string]$Metadata.profile_signing_keyring_sha256) @routingArguments
 }
 
 function Read-VclibsDependencyIdentity {
@@ -779,6 +782,21 @@ function Assert-InstalledState {
         [switch]$AllowStopped
     )
 
+    if ($Metadata.PSObject.Properties['router_sha256']) {
+        Assert-NoReparsePath -Path (Join-Path $InstallDirectory 'vex-awg.exe')
+        Assert-Hash -Path (Join-Path $InstallDirectory 'vex-awg.exe') -Expected ([string]$Metadata.router_sha256) -Description 'routed engine'
+        Assert-ScriptSignature -Path (Join-Path $InstallDirectory 'vex-awg.exe') -ExpectedCertificateSha256 ([string]$Metadata.client_certificate_sha256)
+        $routingState = Join-Path (Get-VexDataDirectory) 'routing-capability.json'
+        Assert-PrivateStateAcl -Path $routingState
+        Assert-PrivateStateAcl -Path (Join-Path (Get-VexDataDirectory) 'router-sha256')
+        $receipt = Get-Content -LiteralPath $routingState -Raw | ConvertFrom-Json
+        if ($receipt.Schema -ne 'vex.native-routing.v2' -or $receipt.InstallDirectory -ine $InstallDirectory -or
+            $receipt.ServiceSha256 -ine [string]$Metadata.service_executable_sha256 -or $receipt.RouterSha256 -ine [string]$Metadata.router_sha256 -or
+            [IO.File]::ReadAllText((Join-Path (Get-VexDataDirectory) 'router-sha256')).Trim() -ine [string]$Metadata.router_sha256) {
+            throw 'The routed engine capability does not match the verified installation.'
+        }
+    }
+
     foreach ($pin in @(
         @('Vex.Windows.App.exe', 'app_executable_sha256', 'client executable'),
         @('Vex.Windows.Service.exe', 'service_executable_sha256', 'service executable'),
@@ -856,6 +874,9 @@ function Assert-InstalledState {
 
 function Assert-AuthorizationToken {
     param([Parameter(Mandatory = $true)][string]$Path)
+    # Independent Verify/Restore runs in a fresh PS5.1 process, without the
+    # provisioning script that normally loads the DPAPI framework assembly.
+    Add-Type -AssemblyName System.Security
     $protectedToken = [IO.File]::ReadAllBytes($Path)
     $token = [Security.Cryptography.ProtectedData]::Unprotect($protectedToken,
         [Text.Encoding]::UTF8.GetBytes('VEX VPN IPC v1'), [Security.Cryptography.DataProtectionScope]::LocalMachine)

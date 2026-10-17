@@ -11,6 +11,8 @@ using Vex.Windows.Core.Vpn;
 
 namespace Vex.Windows.Service.Runtime;
 
+internal sealed record RoutedFirewallScope(string Program, string PhysicalInterface);
+
 internal sealed class NetworkSafetyController
 {
     private static readonly TimeSpan CommandTimeout = TimeSpan.FromSeconds(30);
@@ -369,7 +371,7 @@ internal sealed class NetworkSafetyController
     }
 
     public async Task ArmFirewallAsync(string adapterName, string endpoint, CancellationToken cancellationToken,
-        string? serverPublicKey = null, DateTimeOffset? authorizationExpiresAt = null)
+        string? serverPublicKey = null, DateTimeOffset? authorizationExpiresAt = null, RoutedFirewallScope? routed = null)
     {
         await _operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -385,24 +387,26 @@ internal sealed class NetworkSafetyController
                 }
                 else
                 {
-                    await RefreshFirewallBypassAsync(resolved, cancellationToken, adapterName).ConfigureAwait(false);
+                    await RefreshFirewallBypassAsync(resolved, cancellationToken, adapterName, routed).ConfigureAwait(false);
                     return;
                 }
             }
             var prefix = $"VEX.AntiLeak.{Guid.NewGuid():N}.";
             var names = new[] { prefix + "Tunnel", prefix + "Protected", prefix + "Dhcp4", prefix + "Dhcp6", prefix + "Neighbor", prefix + "ControlPlane" };
+            if (routed is not null) { names = names.Concat(new[] { prefix + "RouterTcp", prefix + "RouterUdp" }).ToArray(); }
             const string captureScript = """
                 $ErrorActionPreference='Stop'
                 $profiles=@(Get-NetFirewallProfile -PolicyStore PersistentStore | Select-Object Name,@{Name='Enabled';Expression={$_.Enabled.ToString()}},@{Name='DefaultOutboundAction';Expression={$_.DefaultOutboundAction.ToString()}})
                 $rules=@(Get-NetFirewallRule -PolicyStore PersistentStore | Where-Object {$_.Direction -eq 'Outbound' -and $_.Action -eq 'Allow' -and $_.Enabled -eq 'True'} | Select-Object -ExpandProperty Name)
                 $ownedNames=ConvertFrom-Json $args[0];$protectedAddresses=ConvertFrom-Json $args[2];$endpointAddresses=ConvertFrom-Json $args[3];$controlAddresses=ConvertFrom-Json $args[5]
-                [pscustomobject]@{Version=3;Profiles=$profiles;DisabledOutboundAllowRuleNames=$rules;OwnedRuleNames=@($ownedNames);AdapterName=$args[1];ProtectedAddresses=@($protectedAddresses);EndpointAddresses=@($endpointAddresses);EndpointPort=[int]$args[4];ControlPlaneAddresses=@($controlAddresses)} | ConvertTo-Json -Compress -Depth 5
+                $version=if($args[6]){4}else{3}
+                [pscustomobject]@{Version=$version;Profiles=$profiles;DisabledOutboundAllowRuleNames=$rules;OwnedRuleNames=@($ownedNames);AdapterName=$args[1];ProtectedAddresses=@($protectedAddresses);EndpointAddresses=@($endpointAddresses);EndpointPort=[int]$args[4];ControlPlaneAddresses=@($controlAddresses);RouterProgram=$args[6];PhysicalInterface=$args[7]} | ConvertTo-Json -Compress -Depth 5
                 """;
             var rollbackJson = await _commandRunner(captureScript,
                 [JsonSerializer.Serialize(names), adapterName, JsonSerializer.Serialize(resolved.Addresses.Select(address => address.ToString())),
                     JsonSerializer.Serialize(resolved.EndpointAddresses.Select(address => address.ToString())),
                     resolved.EndpointPort.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                    JsonSerializer.Serialize(resolved.ControlPlaneAddresses.Select(address => address.ToString()))], cancellationToken).ConfigureAwait(false);
+                    JsonSerializer.Serialize(resolved.ControlPlaneAddresses.Select(address => address.ToString())), routed?.Program ?? "", routed?.PhysicalInterface ?? ""], cancellationToken).ConfigureAwait(false);
             var rollback = ParseFirewallRollback(rollbackJson);
             // The complete ownership/restore journal is durable before any mutation.
             WriteAtomic(_firewallStatePath, rollbackJson);
@@ -412,6 +416,7 @@ internal sealed class NetworkSafetyController
                 const string armScript = """
                     $ErrorActionPreference='Stop'
                     $state=ConvertFrom-Json $args[0];$names=@($state.OwnedRuleNames)
+                    Set-NetFirewallProfile -Profile Domain,Private,Public -PolicyStore PersistentStore -Enabled True -DefaultOutboundAction Block
                     Get-NetFirewallRule -PolicyStore PersistentStore | Where-Object {$_.Name -cin @($state.DisabledOutboundAllowRuleNames)} | Disable-NetFirewallRule | Out-Null
                     New-NetFirewallRule -Name $names[0] -DisplayName 'VEX VPN tunnel' -Group 'VEX VPN AntiLeak' -PolicyStore PersistentStore -Direction Outbound -Action Allow -InterfaceAlias $state.AdapterName -Profile Any | Out-Null
                     New-NetFirewallRule -Name $names[1] -DisplayName 'VEX VPN protected endpoints' -Group 'VEX VPN AntiLeak' -PolicyStore PersistentStore -Direction Outbound -Action Allow -Protocol UDP -RemotePort $state.EndpointPort -RemoteAddress @($state.EndpointAddresses) -InterfaceType Wired,Wireless -Profile Any | Out-Null
@@ -420,6 +425,12 @@ internal sealed class NetworkSafetyController
                     New-NetFirewallRule -Name $names[4] -DisplayName 'VEX VPN IPv6 neighbors' -Group 'VEX VPN AntiLeak' -PolicyStore PersistentStore -Direction Outbound -Action Allow -Protocol ICMPv6 -IcmpType 133,135,136 -RemoteAddress 'fe80::/10','ff02::/16' -InterfaceType Wired,Wireless -Profile Any | Out-Null
                     $control=@($state.ControlPlaneAddresses);$controlEnabled=if($control.Count -gt 0){'True'}else{'False'};if($control.Count -eq 0){$control=@('127.0.0.1')}
                     New-NetFirewallRule -Name $names[5] -DisplayName 'VEX VPN control plane HTTPS' -Group 'VEX VPN AntiLeak' -PolicyStore PersistentStore -Direction Outbound -Action Allow -Protocol TCP -RemotePort 443 -RemoteAddress $control -Enabled $controlEnabled -InterfaceType Wired,Wireless -Profile Any | Out-Null
+                    if($state.Version -eq 4){
+                        Get-NetFirewallRule -Name $names[1] | Set-NetFirewallRule -Program $state.RouterProgram | Out-Null
+                        foreach($i in 6..7){$protocol=if($i -eq 6){'TCP'}else{'UDP'}
+                            New-NetFirewallRule -Name $names[$i] -DisplayName ('VEX routed '+$protocol) -Group 'VEX VPN AntiLeak' -PolicyStore PersistentStore -Direction Outbound -Action Allow -Protocol $protocol -Program $state.RouterProgram -InterfaceAlias $state.PhysicalInterface -Profile Any | Out-Null
+                        }
+                    }
                     Set-NetFirewallProfile -Profile Domain,Private,Public -PolicyStore PersistentStore -Enabled True -DefaultOutboundAction Block
                     """;
                 await _commandRunner(armScript, [rollbackJson], cancellationToken).ConfigureAwait(false);
@@ -429,9 +440,11 @@ internal sealed class NetworkSafetyController
             {
                 SetFirewallStatus(armed: true, verified: false);
                 // Cancellation also kills the PowerShell process before this restore.
-                await RestoreFirewallAsync(rollbackJson, CancellationToken.None).ConfigureAwait(false);
-                File.Delete(_firewallStatePath);
-                SetFirewallStatus(armed: false, verified: false);
+                if (routed is null) {
+                    await RestoreFirewallAsync(rollbackJson, CancellationToken.None).ConfigureAwait(false);
+                    File.Delete(_firewallStatePath);
+                    SetFirewallStatus(armed: false, verified: false);
+                }
                 throw;
             }
         }
@@ -458,16 +471,18 @@ internal sealed class NetworkSafetyController
         SetFirewallStatus(armed: false, verified: false);
     }
 
-    private async Task RefreshFirewallBypassAsync(ProtectedAddressSet resolved, CancellationToken cancellationToken, string? adapterName = null)
+    private async Task RefreshFirewallBypassAsync(ProtectedAddressSet resolved, CancellationToken cancellationToken, string? adapterName = null, RoutedFirewallScope? routed = null)
     {
         SetFirewallStatus(armed: true, verified: false);
         var state = ParseFirewallRollback(File.ReadAllText(_firewallStatePath));
         state = state with
         {
-            Version = 3,
+            Version = routed is not null || state.Version == 4 ? 4 : 3,
             // Preserve the exact original baseline when narrowing an armed v2
             // journal. Disarming and recapturing would restore broad allows.
-            OwnedRuleNames = state.Version == 2 ? state.OwnedRuleNames.Append(state.OwnedRuleNames[0] + ".ControlPlane").ToArray() : state.OwnedRuleNames,
+            OwnedRuleNames = CompleteOwnedRuleNames(state, routed is not null),
+            RouterProgram = routed?.Program ?? state.RouterProgram,
+            PhysicalInterface = routed?.PhysicalInterface ?? state.PhysicalInterface,
             AdapterName = adapterName ?? state.AdapterName,
             ProtectedAddresses = resolved.Addresses.Select(address => address.ToString()).ToArray(),
             EndpointAddresses = resolved.EndpointAddresses.Select(address => address.ToString()).ToArray(),
@@ -489,6 +504,15 @@ internal sealed class NetworkSafetyController
             }elseif($controlRule.Count -eq 1){
                 $controlRule | Set-NetFirewallRule -Protocol TCP -RemotePort 443 -RemoteAddress $control -Enabled $enabled | Out-Null
             }else{throw 'firewall_owned_rule_duplicate'}
+            if($state.Version -eq 4){
+                $rule | Set-NetFirewallRule -Program $state.RouterProgram | Out-Null
+                foreach($i in 6..7){$protocol=if($i -eq 6){'TCP'}else{'UDP'}
+                    $routerRule=@(Get-NetFirewallRule -PolicyStore PersistentStore | Where-Object {$_.Name -ceq $names[$i]})
+                    if($routerRule.Count -eq 0){New-NetFirewallRule -Name $names[$i] -DisplayName ('VEX routed '+$protocol) -Group 'VEX VPN AntiLeak' -PolicyStore PersistentStore -Direction Outbound -Action Allow -Protocol $protocol -Program $state.RouterProgram -InterfaceAlias $state.PhysicalInterface -Profile Any | Out-Null}
+                    elseif($routerRule.Count -eq 1){$routerRule | Set-NetFirewallRule -Protocol $protocol -Program $state.RouterProgram -InterfaceAlias $state.PhysicalInterface | Out-Null}
+                    else{throw 'firewall_router_rule_duplicate'}
+                }
+            }
             """;
         await _commandRunner(script, [JsonSerializer.Serialize(state)], cancellationToken).ConfigureAwait(false);
         await VerifyFirewallAsync(state, cancellationToken).ConfigureAwait(false);
@@ -506,7 +530,7 @@ internal sealed class NetworkSafetyController
             if((Get-Service MpsSvc).Status -ne 'Running'){throw 'firewall_service_inactive'}
             $profiles=@(Get-NetFirewallProfile -PolicyStore ActiveStore)
             if($profiles.Count -ne 3 -or @( $profiles | Where-Object {$_.Enabled -ne 'True' -or $_.DefaultOutboundAction -ne 'Block'}).Count -ne 0){throw 'firewall_effective_profile_unverified'}
-            if($state.Version -ne 3){throw 'firewall_policy_version_unverified'}
+            if($state.Version -notin @(3,4)){throw 'firewall_policy_version_unverified'}
             $rules=@(Get-NetFirewallRule -PolicyStore ActiveStore | Where-Object {$_.Direction -eq 'Outbound' -and $_.Action -eq 'Allow'})
             if(@($rules | Where-Object {$_.Enabled -eq 'True' -and $_.Name -cnotin $names}).Count -ne 0){throw 'firewall_external_allow_active'}
             foreach($name in $names){if(@($rules | Where-Object {$_.Name -ceq $name}).Count -ne 1){throw 'firewall_owned_allow_missing'}}
@@ -538,6 +562,18 @@ internal sealed class NetworkSafetyController
             $types=@($port.IcmpType | ForEach-Object {$_.ToString().Split(':')[0]})
             if($port.Protocol -notin @('58','ICMPv6') -or !(Same-Set $types @('133','135','136'))){throw 'firewall_neighbor_protocol_unverified'}
             if(!(Same-Set @($neighbor | Get-NetFirewallAddressFilter | Select-Object -ExpandProperty RemoteAddress) @('fe80::/10','ff02::/16'))){throw 'firewall_neighbor_addresses_unverified'}
+            if($state.Version -eq 4){
+                if(($protected | Get-NetFirewallApplicationFilter).Program -ine $state.RouterProgram){throw 'firewall_peer_program_unverified'}
+                foreach($i in 6..7){
+                    $router=$rules | Where-Object {$_.Name -ceq $names[$i]};$port=$router | Get-NetFirewallPortFilter
+                    $protocol=if($i -eq 6){'TCP'}else{'UDP'};$number=if($i -eq 6){'6'}else{'17'}
+                    if($router.Enabled -ne 'True' -or $port.Protocol -notin @($protocol,$number)){throw 'firewall_router_protocol_unverified'}
+                    if(($router | Get-NetFirewallApplicationFilter).Program -ine $state.RouterProgram){throw 'firewall_router_program_unverified'}
+                    if(!(Same-Set @($router | Get-NetFirewallInterfaceFilter | Select-Object -ExpandProperty InterfaceAlias) @($state.PhysicalInterface))){throw 'firewall_router_interface_unverified'}
+                    if(!(Same-Set @($router | Get-NetFirewallAddressFilter | Select-Object -ExpandProperty RemoteAddress) @('Any'))){throw 'firewall_router_addresses_unverified'}
+                    if(!(Same-Set @($port.RemotePort) @('Any')) -or !(Same-Set @($port.LocalPort) @('Any'))){throw 'firewall_router_ports_unverified'}
+                }
+            }
             'ok'
             """;
         try
@@ -597,24 +633,32 @@ internal sealed class NetworkSafetyController
     private static FirewallRollback ParseFirewallRollback(string json)
     {
         var state = JsonSerializer.Deserialize<FirewallRollback>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-        if (state is null || state.Version is not (2 or 3) || state.Profiles is not { Length: 3 } ||
-            state.OwnedRuleNames is null || state.OwnedRuleNames.Length != (state.Version == 2 ? 5 : 6) ||
+        if (state is null || state.Version is not (2 or 3 or 4) || state.Profiles is not { Length: 3 } ||
+            state.OwnedRuleNames is null || state.OwnedRuleNames.Length != (state.Version == 2 ? 5 : state.Version == 4 ? 8 : 6) ||
             state.DisabledOutboundAllowRuleNames is null || state.ProtectedAddresses is not { Length: > 0 } || string.IsNullOrWhiteSpace(state.AdapterName) ||
             state.OwnedRuleNames.Any(name => string.IsNullOrWhiteSpace(name) || !name.StartsWith("VEX.AntiLeak.", StringComparison.Ordinal)) ||
             state.OwnedRuleNames.Distinct(StringComparer.Ordinal).Count() != state.OwnedRuleNames.Length ||
-            (state.Version == 3 && (state.EndpointPort is < 1 or > 65535 || state.EndpointAddresses is not { Length: > 0 } ||
+            (state.Version >= 3 && (state.EndpointPort is < 1 or > 65535 || state.EndpointAddresses is not { Length: > 0 } ||
                 state.ControlPlaneAddresses is null || state.EndpointAddresses.Concat(state.ControlPlaneAddresses).Any(value => !IPAddress.TryParse(value, out _)))))
         {
             throw new VpnTunnelException("firewall_rollback_state_invalid");
         }
+        if (state.Version == 4 && (string.IsNullOrWhiteSpace(state.RouterProgram) || !Path.IsPathFullyQualified(state.RouterProgram) || !string.Equals(Path.GetFileName(state.RouterProgram), "vex-awg.exe", StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(state.PhysicalInterface))) { throw new VpnTunnelException("firewall_router_state_invalid"); }
         return state;
+    }
+
+    private static string[] CompleteOwnedRuleNames(FirewallRollback state, bool routed) {
+        var names = state.OwnedRuleNames.ToList();
+        if (state.Version == 2) { names.Add(names[0] + ".ControlPlane"); }
+        if (routed && names.Count == 6) { names.Add(names[0] + ".RouterTcp"); names.Add(names[0] + ".RouterUdp"); }
+        return names.ToArray();
     }
 
     private async Task RestoreFirewallAsync(string rollbackJson, CancellationToken cancellationToken)
     {
         const string script = """
             $ErrorActionPreference='Stop';$state=ConvertFrom-Json $args[0]
-            if($state.Version -in @(2,3)){
+            if($state.Version -in @(2,3,4)){
                 $profiles=@($state.Profiles);$names=@($state.OwnedRuleNames);$disabled=@($state.DisabledOutboundAllowRuleNames)
                 Get-NetFirewallRule -PolicyStore PersistentStore | Where-Object {$_.Name -cin $names} | Remove-NetFirewallRule
                 $rules=@(Get-NetFirewallRule -PolicyStore PersistentStore | Where-Object {$_.Name -cin $disabled})
@@ -1033,7 +1077,7 @@ internal sealed class NetworkSafetyController
         }
     }
 
-    private static async Task<string> RunPowerShellAsync(string script, IReadOnlyList<string> arguments, CancellationToken cancellationToken)
+    internal static async Task<string> RunPowerShellAsync(string script, IReadOnlyList<string> arguments, CancellationToken cancellationToken)
     {
         if (arguments.Any(argument => argument.Length > 8 * 1024 * 1024 || argument.IndexOf('\0') >= 0))
         {
@@ -1164,6 +1208,6 @@ internal sealed class NetworkSafetyController
         int EndpointPort, IPAddress[] ControlPlaneAddresses);
     private sealed record FirewallRollback(int Version, FirewallProfile[] Profiles, string[] DisabledOutboundAllowRuleNames,
         string[] OwnedRuleNames, string AdapterName, string[] ProtectedAddresses, string[]? EndpointAddresses = null,
-        int EndpointPort = 0, string[]? ControlPlaneAddresses = null);
+        int EndpointPort = 0, string[]? ControlPlaneAddresses = null, string? RouterProgram = null, string? PhysicalInterface = null);
     private sealed record FirewallProfile(string Name, string Enabled, string DefaultOutboundAction);
 }

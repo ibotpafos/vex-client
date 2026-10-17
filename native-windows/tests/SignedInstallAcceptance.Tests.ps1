@@ -112,9 +112,16 @@ try {
         $script:launch = [pscustomobject]@{Executable=$Executable;Arguments=$Arguments}
     }
     & $realInvokeBootstrap -Bundle $bundle -Action Install
+    $decoded = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($launch.Arguments[-1]))
+    $match = [regex]::Match($decoded, "FromBase64String\('([A-Za-z0-9+/=]+)'\)")
+    Assert $match.Success 'The bootstrap input did not use literal JSON transport.'
+    $inputValue = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($match.Groups[1].Value)) | ConvertFrom-Json
     Assert ($launch.Executable -match 'WindowsPowerShell[\\/]v1\.0[\\/]powershell.exe$' -and
-        $launch.Arguments -contains 'Bypass' -and $launch.Arguments -contains 'User' -and
-        $launch.Arguments -notcontains '-RelaunchAfterInstall') 'Installer did not use verified system PowerShell with original-user registration.'
+        $launch.Arguments -contains 'Bypass' -and $launch.Arguments -contains '-EncodedCommand' -and
+        $decoded.Contains("Phase='User'") -and $inputValue.action -ceq 'Install' -and
+        $inputValue.bootstrap -ceq (Join-Path $bundle.Root $bundle.Metadata.bootstrap_file) -and
+        $inputValue.metadata -ceq $bundle.MetadataPath -and $inputValue.package -ceq $bundle.PackagePath -and
+        -not $decoded.Contains('RelaunchAfterInstall')) 'Installer did not use verified system PowerShell with original-user registration.'
     Assert (@($heldLocks | Where-Object { -not $_.SafeFileHandle.IsClosed }).Count -eq 0) 'Successful bootstrap leaked input locks.'
     $script:validated = [pscustomobject]@{Metadata=[pscustomobject]@{package_sha256=('0'*64);bootstrap_sha256=$bundle.Metadata.bootstrap_sha256;client_certificate_sha256=$bundle.Metadata.client_certificate_sha256}}
     $script:launch = $null
@@ -332,6 +339,42 @@ try {
     # Run the real process deadline against an actual sleeping child, then the
     # independent guarded cleanup function. No Windows installer is executed.
     $executable = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+    # Exercise the literal bootstrap wrapper in a real harmless child. Quotes,
+    # dollars and rollback inputs remain data; failure output stays allowlisted.
+    $literalBootstrap = Join-Path $temporary "literal ' bootstrap.ps1"
+    [IO.File]::WriteAllText($literalBootstrap,@'
+param($Phase,$Action,$MetadataPath,$PackagePath,$RollbackPackagePath,$RollbackMetadataPath)
+if ($Action -ceq 'Verify') {
+    [Console]::Error.WriteLine('private-bootstrap-content-never-upload')
+    [Console]::Error.WriteLine('VEX_BOOTSTRAP_SERVICE_FAILURE action=Verify code=100123')
+    [Console]::Error.WriteLine('VEX_BOOTSTRAP_SERVICE_FAILURE action=Verify code=100123 private=never-upload')
+    throw 'private-bootstrap-exception-never-upload'
+}
+[IO.File]::WriteAllText((Join-Path $PSScriptRoot 'literal-bootstrap-result.json'),(@{
+    phase=$Phase; action=$Action; metadata=$MetadataPath; package=$PackagePath
+    rollback_package=$RollbackPackagePath; rollback_metadata=$RollbackMetadataPath } | ConvertTo-Json))
+'@)
+    $literalInput = [ordered]@{ bootstrap=$literalBootstrap; action='Rollback'
+        metadata='C:\literal $() ` '' metadata.json'; package='C:\literal $() ` '' package.msix'
+        rollback_package="C:\literal rollback ' package.msix"; rollback_metadata="C:\literal rollback ' metadata.json" }
+    $literalCommand = New-AcceptanceBootstrapCommand $literalInput
+    & $realInvokeProcess -Executable $executable -Arguments @('-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',$literalCommand) -TimeoutSeconds 10
+    $received = Get-Content -LiteralPath (Join-Path $temporary 'literal-bootstrap-result.json') -Raw | ConvertFrom-Json
+    Assert ($received.phase -ceq 'User' -and $received.action -ceq 'Rollback' -and
+        $received.metadata -ceq $literalInput.metadata -and $received.package -ceq $literalInput.package -and
+        $received.rollback_package -ceq $literalInput.rollback_package -and $received.rollback_metadata -ceq $literalInput.rollback_metadata) 'Bootstrap literal arguments changed in the real child.'
+    $literalInput.action='Verify'
+    $capturedBootstrap = [IO.StringWriter]::new()
+    $previousOutput = [Console]::Out
+    try {
+        [Console]::SetOut($capturedBootstrap)
+        $literalCommand = New-AcceptanceBootstrapCommand $literalInput
+        Assert-Rejected { & $realInvokeProcess -Executable $executable -Arguments @('-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',$literalCommand) -TimeoutSeconds 10 } 'A real bootstrap failure was accepted.'
+    }
+    finally { [Console]::SetOut($previousOutput) }
+    Assert ($capturedBootstrap.ToString().Contains('VEX_BOOTSTRAP_SERVICE_FAILURE action=Verify code=100123') -and
+        $capturedBootstrap.ToString() -cmatch 'VEX_BOOTSTRAP_FAILURE action=Verify line=[0-9]+ exception=RuntimeException' -and
+        -not $capturedBootstrap.ToString().Contains('private-') -and -not $capturedBootstrap.ToString().Contains('never-upload')) 'Private bootstrap output escaped the numeric diagnostics boundary.'
     $watch = [Diagnostics.Stopwatch]::StartNew()
     Assert-Rejected { & $realInvokeProcess -Executable $executable -Arguments @('-NoLogo','-NoProfile','-Command','Start-Sleep -Seconds 30') -TimeoutSeconds 1 } 'A stalled phase exceeded its bounded deadline.'
     Invoke-AcceptanceOwnedCleanup -MutationStarted $true -Bundles @($bundle) -OwnerSid 'owner'

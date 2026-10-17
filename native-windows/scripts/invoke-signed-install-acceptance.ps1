@@ -296,7 +296,9 @@ function Invoke-AcceptanceProcess {
             # exception messages and installer contents remain private.
             foreach ($pattern in @(
                 '^VEX_SETUP_UI_FAILURE stage=(initialize|launch|locate_controls|invoke_install|wait_install) exception=[A-Za-z][A-Za-z0-9]{0,79} native_exit=(running|unknown|-?[0-9]{1,10})$',
-                '^VEX_SETUP_UI_ERROR win32=(unknown|-?[0-9]{1,10}) hresult=-?[0-9]{1,10}$')) {
+                '^VEX_SETUP_UI_ERROR win32=(unknown|-?[0-9]{1,10}) hresult=-?[0-9]{1,10}$',
+                '^VEX_BOOTSTRAP_SERVICE_FAILURE action=(Install|Repair|Verify|Prepare|Restore|Uninstall) code=(unknown|-?[0-9]{1,10})$',
+                '^VEX_BOOTSTRAP_FAILURE action=(Install|Verify|Repair|Rollback|Uninstall) line=[0-9]{1,6} exception=[A-Za-z][A-Za-z0-9]{0,79}$')) {
                 $markers = @($stderr.Result -split '\r?\n' | Where-Object { $_ -cmatch $pattern } | Select-Object -First 1)
                 foreach ($marker in $markers) { [Console]::WriteLine($marker) }
             }
@@ -521,6 +523,34 @@ finally {
     finally { foreach ($stream in $locks) { $stream.Dispose() } }
 }
 
+function New-AcceptanceBootstrapCommand {
+    param($InputData)
+    $template = @'
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+$inputValue = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__VEX_ACCEPTANCE_BOOTSTRAP__')) | ConvertFrom-Json
+try {
+    $parameters = @{ Phase='User'; Action=$inputValue.action; MetadataPath=$inputValue.metadata; PackagePath=$inputValue.package }
+    if ($inputValue.action -ceq 'Rollback') {
+        $parameters.RollbackPackagePath = $inputValue.rollback_package
+        $parameters.RollbackMetadataPath = $inputValue.rollback_metadata
+    }
+    & $inputValue.bootstrap @parameters
+    if (-not $?) { throw 'The verified bootstrap did not complete.' }
+}
+catch {
+    $kind = $_.Exception.GetType().Name
+    if ($kind -cnotmatch '^[A-Za-z][A-Za-z0-9]{0,79}$') { $kind = 'Exception' }
+    $line = [int]$_.InvocationInfo.ScriptLineNumber
+    if ($line -lt 0 -or $line -gt 999999) { $line = 0 }
+    [Console]::Error.WriteLine('VEX_BOOTSTRAP_FAILURE action=' + $inputValue.action + ' line=' + $line + ' exception=' + $kind)
+    exit 1
+}
+'@
+    $json = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($InputData | ConvertTo-Json -Compress)))
+    return [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($template.Replace('__VEX_ACCEPTANCE_BOOTSTRAP__', $json)))
+}
+
 function Invoke-AcceptanceBootstrap {
     param($Bundle, [ValidateSet('Install', 'Verify', 'Repair', 'Rollback', 'Uninstall')][string]$Action, $RollbackBundle)
     $locks = @(Open-AcceptanceBundleLocks $Bundle)
@@ -533,15 +563,16 @@ function Invoke-AcceptanceBootstrap {
             $validated.Metadata.client_certificate_sha256 -ine $Bundle.Metadata.client_certificate_sha256) {
             throw 'Acceptance input changed after initial verification.'
         }
-        $arguments = @('-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-            '-File', (Join-Path $Bundle.Root $Bundle.Metadata.bootstrap_file), '-Phase', 'User', '-Action', $Action,
-            '-MetadataPath', $Bundle.MetadataPath, '-PackagePath', $Bundle.PackagePath)
+        $inputData = [ordered]@{ bootstrap=(Join-Path $Bundle.Root $Bundle.Metadata.bootstrap_file); action=$Action
+            metadata=$Bundle.MetadataPath; package=$Bundle.PackagePath; rollback_package=$null; rollback_metadata=$null }
         if ($Action -eq 'Rollback') {
             if ($null -eq $RollbackBundle) { throw 'Acceptance rollback requires the verified preceding release.' }
             $locks += @(Open-AcceptanceBundleLocks $RollbackBundle)
             $null = Read-AcceptanceBundle $RollbackBundle.Root
-            $arguments += @('-RollbackPackagePath', $RollbackBundle.PackagePath, '-RollbackMetadataPath', $RollbackBundle.MetadataPath)
+            $inputData.rollback_package=$RollbackBundle.PackagePath; $inputData.rollback_metadata=$RollbackBundle.MetadataPath
         }
+        $arguments = @('-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+            '-EncodedCommand', (New-AcceptanceBootstrapCommand $inputData))
         Invoke-AcceptanceProcess -Executable (Get-AcceptanceSystemPowerShellPath) -Arguments $arguments
     }
     finally { foreach ($stream in $locks) { $stream.Dispose() } }

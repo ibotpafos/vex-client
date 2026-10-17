@@ -103,5 +103,41 @@ if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
     Assert-Rejected { Invoke-Verifier } 'Valid but unpinned signer was executed'
     Assert (-not (Test-Path -LiteralPath $marker)) 'Unpinned script was invoked'
     }
+    # Execute the service verifier's opt-in numeric failure transport in a fresh
+    # real child. It must retain failure and suppress the private exception text.
+    [IO.File]::WriteAllText($bootstrap,@'
+param($Phase,$Action,$MetadataPath,$OwnerSid,$InstallDirectory)
+throw 'private-service-exception-never-upload'
+'@)
+    $serviceInput=@{BootstrapPath=$bootstrap;MetadataPath=$metadataPath;BootstrapSha256=(Get-FileHash $bootstrap).Hash
+        MetadataSha256=(Get-FileHash $metadataPath).Hash;CertificateSha256=$certificatePin;ServiceAction='Verify'
+        OwnerSid=$inputData.OwnerSid;InstallDirectory='';DiagnosticExitCodes=$true}
+    # This fixture's signer is public synthetic data, not a certificate store.
+    $signerBase64=[Convert]::ToBase64String($certificateBytes)
+    $prelude=@'
+function Get-FixtureAuthenticodeSignature { param($LiteralPath) [pscustomobject]@{Status='Valid';SignerCertificate=[pscustomobject]@{RawData=[Convert]::FromBase64String('__SIGNER__')}} }
+'@
+    $prelude=$prelude.Replace('__SIGNER__',$signerBase64)+[Environment]::NewLine
+    if (-not $isNativeWindowsPowerShell) {
+        $utility=Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1'
+        $prelude=("Microsoft.PowerShell.Core\Import-Module -Name '"+$utility.Replace("'","''")+"' -Force")+[Environment]::NewLine+$prelude
+    }
+    $command=New-VerifiedServiceCommand -InputData $serviceInput
+    $command=$prelude+(Get-TestVerifier ([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($command))))
+    $start=[Diagnostics.ProcessStartInfo]::new()
+    $start.FileName=[Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+    $start.Arguments='-NoLogo -NoProfile -NonInteractive -EncodedCommand '+[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+    $start.UseShellExecute=$false;$start.RedirectStandardOutput=$true;$start.RedirectStandardError=$true
+    $child=[Diagnostics.Process]::Start($start)
+    try {
+        $stdout=$child.StandardOutput.ReadToEndAsync();$stderr=$child.StandardError.ReadToEndAsync()
+        if (-not $child.WaitForExit(15000)) { $child.Kill();throw 'The numeric service failure test exceeded its deadline.' }
+        Assert ($child.ExitCode -ne 0) 'A failed verified service command became success.'
+        if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+            Assert ($child.ExitCode -ge 900000 -and $child.ExitCode -lt 910000) 'The service failure did not retain its bounded source location.'
+        }
+        Assert ([string]::IsNullOrWhiteSpace($stdout.Result) -and [string]::IsNullOrWhiteSpace($stderr.Result)) 'Private verified service diagnostics escaped the child.'
+    }
+    finally { $child.Dispose() }
     Write-Output 'Actual unattended bootstrap verifier hash, signer and argument transport regressions passed'
 } finally { $env:PSModulePath=$originalModulePath; Remove-Item -LiteralPath $temp -Recurse -Force }

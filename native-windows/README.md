@@ -551,8 +551,8 @@ signed main run and its six required jobs before downloading that run's exact
 artifact. On a fresh disposable Windows x64 host it installs the signed beta,
 uses the normal native PKCE callback with an approved ordinary tester, selects
 full traffic, verifies public VPN egress and restoration, saves idempotent
-feedback, and removes its own installation and public CA trust. Its unique
-two-hour tester secret contains no administrator or signing credential and is
+feedback, and removes its own installation and public CA trust. Its sole static
+tester secret contains a namespace and two-hour ordinary session, without administrator or signing credentials, and is
 removed by the operator after the terminal run and fixture cleanup. The workflow
 only retains sanitized receipts and cannot publish. Physical ARM64, reboot,
 roaming, DNS leakage and IPv6 acceptance remain separate explicit observations.

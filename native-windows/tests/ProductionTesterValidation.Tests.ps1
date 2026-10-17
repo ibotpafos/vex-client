@@ -32,6 +32,10 @@ foreach ($change in @(
 $rejected = $false
 try { $null = Read-Fixture $payload ('0' * 64) } catch { $rejected = $true }
 Assert $rejected 'A different approved payload hash was admitted.'
+$workflow = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '../../.github/workflows/native-windows-production-acceptance.yml'))
+$references = @([regex]::Matches($workflow, '\$\{\{\s*secrets[.]([A-Za-z_][A-Za-z0-9_]*)\s*\}\}') | ForEach-Object { $_.Groups[1].Value })
+Assert ($references.Count -eq 1 -and $references[0] -ceq 'VEX_WINDOWS_TESTER_QA') 'Production QA can receive only its one statically named ordinary tester secret.'
+Assert ($workflow -notmatch 'secrets\s*\[|toJSON\s*\(\s*secrets\s*\)|secrets\s*:\s*inherit') 'Dynamic or inherited secret context can expose signing/admin credentials.'
 # Importing lifecycle helpers must not execute its administrator/install path.
 . (Join-Path $PSScriptRoot '../scripts/invoke-signed-install-acceptance.ps1') -FunctionsOnly
 Assert ($null -ne (Get-Command Read-AcceptanceBundle -CommandType Function)) 'Lifecycle helpers were not imported.'

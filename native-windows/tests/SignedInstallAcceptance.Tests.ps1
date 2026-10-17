@@ -177,6 +177,20 @@ try {
     Invoke-AcceptanceOwnedCleanup -MutationStarted $true -Bundles @($bundle) -OwnerSid 'owner'
     Assert ($watch.Elapsed -lt [TimeSpan]::FromSeconds(8) -and $uninstalls -eq 1) 'A process timeout prevented independent owned cleanup.'
 
+    # A failed real child may emit arbitrary private content. Only the fixed
+    # probe marker can reach diagnostics, and a forged suffix must be rejected.
+    $marker = 'VEX_SETUP_UI_FAILURE stage=locate_controls exception=RuntimeException native_exit=running'
+    $child = "[Console]::Error.WriteLine('private-child-content-never-upload');[Console]::Error.WriteLine('$marker');[Console]::Error.WriteLine('$marker private=never-upload');exit 7"
+    $encodedChild = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($child))
+    $originalOutput = [Console]::Out
+    $captured = [IO.StringWriter]::new()
+    try {
+        [Console]::SetOut($captured)
+        Assert-Rejected { & $realInvokeProcess -Executable $executable -Arguments @('-NoLogo','-NoProfile','-EncodedCommand',$encodedChild) -TimeoutSeconds 5 } 'A failed child was accepted after emitting diagnostics.'
+    } finally { [Console]::SetOut($originalOutput) }
+    Assert ($captured.ToString().Trim() -ceq $marker) 'Private child output or a forged diagnostic marker escaped.'
+    $captured.Dispose()
+
     # Execute the production native lifecycle with UI/install boundaries mocked.
     # Only the actual Install invocation plus independent verification, app and
     # cleanup success can commit consumer-install evidence.

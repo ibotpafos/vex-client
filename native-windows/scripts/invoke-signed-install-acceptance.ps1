@@ -1,11 +1,12 @@
 #requires -Version 7.0
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = 'Run')]
 param(
-    [Parameter(Mandatory = $true)][Alias('ExplicitlyDisposableRunner')][switch]$DisposableRunner,
-    [Parameter(Mandatory = $true)][string]$CandidateBundleDirectory,
-    [Parameter(Mandatory = $true)][string]$PrecedingBundleDirectory,
-    [Parameter(Mandatory = $true)][string]$ResultPath,
-    [switch]$PrecedingIsSynthetic
+    [Parameter(Mandatory = $true, ParameterSetName = 'Run')][Alias('ExplicitlyDisposableRunner')][switch]$DisposableRunner,
+    [Parameter(Mandatory = $true, ParameterSetName = 'Run')][string]$CandidateBundleDirectory,
+    [Parameter(Mandatory = $true, ParameterSetName = 'Run')][string]$PrecedingBundleDirectory,
+    [Parameter(Mandatory = $true, ParameterSetName = 'Run')][string]$ResultPath,
+    [Parameter(ParameterSetName = 'Run')][switch]$PrecedingIsSynthetic,
+    [Parameter(Mandatory = $true, ParameterSetName = 'Functions')][switch]$FunctionsOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -289,7 +290,15 @@ function Invoke-AcceptanceProcess {
         if (-not [Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]]@($stdout, $stderr), 5000)) {
             throw 'Acceptance child output handles did not close.'
         }
-        if ($process.ExitCode -ne 0) { throw 'Acceptance child reported failure.' }
+        if ($process.ExitCode -ne 0) {
+            # Only our fixed UI probe marker may escape. Arbitrary child output,
+            # exception messages and installer contents remain private.
+            $markers = @($stderr.Result -split '\r?\n' | Where-Object {
+                $_ -cmatch '^VEX_SETUP_UI_FAILURE stage=(initialize|launch|locate_controls|invoke_install|wait_install) exception=[A-Za-z][A-Za-z0-9]{0,79} native_exit=(running|unknown|-?[0-9]{1,10})$'
+            } | Select-Object -First 1)
+            foreach ($marker in $markers) { [Console]::WriteLine($marker) }
+            throw 'Acceptance child reported failure.'
+        }
     }
     finally { $process.Dispose() }
 }
@@ -388,12 +397,16 @@ function Invoke-AcceptanceNativeSetupUi {
         $encodedPayload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($payload))
         $probe = @'
 $ErrorActionPreference = 'Stop'
-$inputValue = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__PAYLOAD__')) | ConvertFrom-Json
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
 $owned = $null
+$stage = 'initialize'
 try {
+    $inputValue = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__PAYLOAD__')) | ConvertFrom-Json
+    Add-Type -AssemblyName UIAutomationClient
+    Add-Type -AssemblyName UIAutomationTypes
+    $stage = 'launch'
     $owned = Start-Process -FilePath $inputValue.executable -WorkingDirectory (Split-Path -Parent $inputValue.executable) -PassThru
+    $stage = 'locate_controls'
+    $ready = $false
     $deadline = [DateTime]::UtcNow.AddSeconds($(if ($inputValue.install) { 180 } else { 35 }))
     do {
         $owned.Refresh()
@@ -401,6 +414,7 @@ try {
         if ($owned.MainModule.FileName -ine $inputValue.executable -or
             (Get-FileHash -LiteralPath $inputValue.executable -Algorithm SHA256).Hash -ine $inputValue.sha256) { throw 'Unexpected setup process image.' }
         if ($owned.MainWindowHandle -ne [IntPtr]::Zero) {
+          try {
             $window = [Windows.Automation.AutomationElement]::FromHandle($owned.MainWindowHandle)
             $ready = $window.Current.AutomationId -ceq 'VexSetupWindow' -or $window.Current.Name -ceq 'VexSetupWindow'
             foreach ($id in @('SetupInstallButton', 'SetupRepairButton', 'SetupUninstallButton', 'SetupVerifyButton', 'SetupStatusText')) {
@@ -411,6 +425,7 @@ try {
             }
             if ($inputValue.install -and ($null -eq $installButton -or -not $installButton.Current.IsEnabled)) { $ready = $false }
             if ($ready) { break }
+          } catch [Windows.Automation.ElementNotAvailableException] { $ready = $false }
         }
         Start-Sleep -Milliseconds 200
     } while ([DateTime]::UtcNow -lt $deadline)
@@ -418,7 +433,9 @@ try {
     if ($inputValue.install) {
         if (@(Get-AppxPackage -Name $inputValue.package_name).Count -or
             @(Get-Service -Name 'VEX VPN Service' -ErrorAction SilentlyContinue).Count) { throw 'Native install requires the fresh acceptance baseline.' }
+        $stage = 'invoke_install'
         ([Windows.Automation.InvokePattern]$installButton.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)).Invoke()
+        $stage = 'wait_install'
         $deadline = [DateTime]::UtcNow.AddSeconds(360)
         $installed = $false
         do {
@@ -439,6 +456,14 @@ try {
         # The parent independently verifies protected state, signatures, hashes,
         # actual SCM image and the signed-out app before accepting this action.
     }
+}
+catch {
+    $nativeExit = 'unknown'
+    try { if ($null -ne $owned) { $nativeExit = if ($owned.HasExited) { [string]$owned.ExitCode } else { 'running' } } } catch { }
+    $kind = $_.Exception.GetType().Name
+    if ($kind -cnotmatch '^[A-Za-z][A-Za-z0-9]{0,79}$') { $kind = 'Exception' }
+    [Console]::Error.WriteLine('VEX_SETUP_UI_FAILURE stage=' + $stage + ' exception=' + $kind + ' native_exit=' + $nativeExit)
+    throw
 }
 finally {
     if ($null -ne $owned) {
@@ -684,6 +709,7 @@ function Add-AcceptancePhase {
     }
 }
 
+if ($FunctionsOnly) { return }
 Assert-AcceptanceRunner ([bool]$DisposableRunner)
 $ResultPath = [IO.Path]::GetFullPath($ResultPath)
 $candidate = $null; $preceding = $null; $mutationStarted = $false; $failure = $null; $cleanupFailure = $null

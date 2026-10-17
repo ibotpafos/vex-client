@@ -50,6 +50,40 @@ try {
         tester_trust_files = $descriptors
     }
     Assert (@(Get-WindowsTesterReleaseAssets -Metadata $metadata -Directory $temporary).Count -eq 3) 'The beta bundle must include exactly the reviewed public trust assets.'
+    # Exercise the actual archive writer with the verified public assets. This
+    # catches a seven-file-only writer before an expensive signed release run.
+    $writerPath = Join-Path $PSScriptRoot '../packaging/publish-native-windows.ps1'
+    $tokens = $null; $parseErrors = $null
+    $writerAst = [Management.Automation.Language.Parser]::ParseFile($writerPath, [ref]$tokens, [ref]$parseErrors)
+    Assert ($parseErrors.Count -eq 0) 'Release publisher does not parse.'
+    $definition = @($writerAst.FindAll({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq 'New-WindowsInstallBundle' }, $false))
+    Assert ($definition.Count -eq 1) 'The real archive writer must be unambiguous.'
+    Invoke-Expression $definition[0].Extent.Text
+    $core = @(1..7 | ForEach-Object {
+        $file = Join-Path $temporary "release-$_.bin"
+        [IO.File]::WriteAllText($file, "verified release fixture $_")
+        $file
+    })
+    $public = @(Get-WindowsTesterReleaseAssets -Metadata $metadata -Directory $temporary)
+    foreach ($withTrust in @($false, $true)) {
+        $archivePath = Join-Path $temporary ("bundle-$withTrust.zip")
+        $files = @(if ($withTrust) { $public })
+        $bundle = New-WindowsInstallBundle -Files $core -Destination $archivePath -TesterFiles $files
+        Assert ($bundle.Sha256 -ceq (Get-FileHash -LiteralPath $archivePath).Hash) 'Bundle hash does not bind the actual archive.'
+        $archive = [IO.Compression.ZipFile]::OpenRead($archivePath)
+        try {
+            $wanted = @($core + $files | ForEach-Object { [IO.Path]::GetFileName($_) } | Sort-Object)
+            $actual = @($archive.Entries.FullName | Sort-Object)
+            Assert (($actual -join '|') -ceq ($wanted -join '|')) 'The archive omitted public trust assets or included unrelated files.'
+        } finally { $archive.Dispose() }
+    }
+    $rejectedArchive = Join-Path $temporary 'rejected.zip'
+    Reject { New-WindowsInstallBundle -Files ($core + $public) -Destination $rejectedArchive }
+    Reject { New-WindowsInstallBundle -Files $core -Destination $rejectedArchive -TesterFiles @($public[0]) }
+    Reject { New-WindowsInstallBundle -Files $core -Destination $rejectedArchive -TesterFiles @($public[0], $public[0], $public[2]) }
+    $unrelated = Join-Path $temporary 'private-key.pfx'; [IO.File]::WriteAllText($unrelated, 'never ship unrelated files')
+    Reject { New-WindowsInstallBundle -Files $core -Destination $rejectedArchive -TesterFiles @($public[0], $public[1], $unrelated) }
+    Assert (-not (Test-Path -LiteralPath $rejectedArchive)) 'Invalid trust inputs created a release archive.'
     $metadata.channel = 'stable'
     Reject { Get-WindowsTesterReleaseAssets -Metadata $metadata -Directory $temporary }
     $metadata.channel = 'beta'; $metadata.tester_trust_files = $descriptors + $descriptors[0]

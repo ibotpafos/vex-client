@@ -213,17 +213,28 @@ function Get-WindowsNativeSetupDescriptor {
 function New-WindowsInstallBundle {
     param(
         [Parameter(Mandatory = $true)][string[]]$Files,
-        [Parameter(Mandatory = $true)][string]$Destination
+        [Parameter(Mandatory = $true)][string]$Destination,
+        [string[]]$TesterFiles = @()
     )
     # Windows PowerShell 5.1 does not preload the framework ZIP assembly.
     Add-Type -AssemblyName System.IO.Compression -ErrorAction Stop
     if ($Files.Count -ne 7) { throw 'A Windows install bundle must contain exactly seven verified release files.' }
+    if ($null -eq $TesterFiles) { $TesterFiles = @() }
+    if ($TesterFiles.Count -ne 0) {
+        $expected = @('VEX-Tester-Root.cer', 'VEX-Tester-Signing.cer', 'TESTER-INSTALL.txt')
+        if ($TesterFiles.Count -ne $expected.Count) { throw 'A tester bundle requires exactly its three verified public trust assets.' }
+        foreach ($name in $expected) {
+            if (@($TesterFiles | Where-Object { [IO.Path]::GetFileName($_) -ceq $name }).Count -ne 1) {
+                throw 'A tester bundle cannot contain unrelated or duplicated trust assets.'
+            }
+        }
+    }
     $names = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     $stream = [IO.File]::Open($Destination, [IO.FileMode]::Create, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
     try {
         $archive = [IO.Compression.ZipArchive]::new($stream, [IO.Compression.ZipArchiveMode]::Create, $true)
         try {
-            foreach ($path in $Files) {
+            foreach ($path in (@($Files) + @($TesterFiles))) {
                 $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop
                 if ($item.PSIsContainer -or $item.Length -le 0 -or
                     ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
@@ -480,7 +491,7 @@ foreach ($entry in $metadataEntries) {
         (Join-Path $versionedDirectory $uninstallScriptFile),
         (Join-Path $versionedDirectory $vclibsFile),
         (Join-Path $versionedDirectory $setup.FileName)
-    ) + @($entry.TesterFiles | ForEach-Object { Join-Path $versionedDirectory ([IO.Path]::GetFileName($_)) }))
+    )) -TesterFiles @($entry.TesterFiles | ForEach-Object { Join-Path $versionedDirectory ([IO.Path]::GetFileName($_)) })
 
     $packageUri = "$origin$channel/$version/$architecture/$packageFile"
     $bootstrapUri = "$origin$channel/$version/$architecture/$bootstrapFile"

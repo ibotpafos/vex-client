@@ -7,6 +7,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'ReleaseValidation.ps1')
+. (Join-Path $PSScriptRoot 'TesterSigning.ps1')
 
 function Get-RequiredEnv {
     param([Parameter(Mandatory = $true)][string]$Name)
@@ -337,6 +338,11 @@ foreach ($entry in $metadataEntries) {
             throw "Package identity differs between architectures: '$field'."
         }
     }
+    $referenceModeProperty = $referenceMetadata.PSObject.Properties['signing_mode']
+    $candidateModeProperty = $candidate.PSObject.Properties['signing_mode']
+    $referenceMode = if ($null -eq $referenceModeProperty) { 'public-trusted' } else { $referenceModeProperty.Value }
+    $candidateMode = if ($null -eq $candidateModeProperty) { 'public-trusted' } else { $candidateModeProperty.Value }
+    if ($referenceMode -cne $candidateMode) { throw 'Windows release architectures cannot mix public and tester signing.' }
     if ([string]$candidate.update_signing_key_id -cne $keyId -or
         [string]$candidate.update_signing_public_key_base64 -cne $publicKeyBase64) {
         throw 'Windows update signing inputs do not match the public keyring shipped in every package.'
@@ -363,6 +369,8 @@ foreach ($entry in $metadataEntries) {
     # release entry, never back inside that metadata (which would create a cycle).
     $setup = Get-WindowsNativeSetupDescriptor -Metadata $candidate -Directory $entry.SourceFile.Directory.FullName -MetadataPath $entry.SourceFile.FullName
     $entry | Add-Member -NotePropertyName SetupDescriptor -NotePropertyValue $setup
+    $entry | Add-Member -NotePropertyName TesterFiles -NotePropertyValue @(Get-WindowsTesterReleaseAssets `
+        -Metadata $candidate -Directory $entry.SourceFile.Directory.FullName)
 }
 
 # Reject malformed or mismatched signing keys before creating release outputs.
@@ -459,9 +467,12 @@ foreach ($entry in $metadataEntries) {
         -LiteralPath $metadataFile.FullName `
         -Destination (Join-Path $versionedDirectory 'package-metadata.json') `
         -Force
+    foreach ($testerFile in $entry.TesterFiles) {
+        Copy-Item -LiteralPath $testerFile -Destination (Join-Path $versionedDirectory ([IO.Path]::GetFileName($testerFile))) -Force
+    }
 
     $bundleFile = "VEX.Native.$channel.$architecture.$version.zip"
-    $bundle = New-WindowsInstallBundle -Destination (Join-Path $versionedDirectory $bundleFile) -Files @(
+    $bundle = New-WindowsInstallBundle -Destination (Join-Path $versionedDirectory $bundleFile) -Files (@(
         $packageDestination,
         (Join-Path $versionedDirectory 'package-metadata.json'),
         (Join-Path $versionedDirectory $bootstrapFile),
@@ -469,7 +480,7 @@ foreach ($entry in $metadataEntries) {
         (Join-Path $versionedDirectory $uninstallScriptFile),
         (Join-Path $versionedDirectory $vclibsFile),
         (Join-Path $versionedDirectory $setup.FileName)
-    )
+    ) + @($entry.TesterFiles | ForEach-Object { Join-Path $versionedDirectory ([IO.Path]::GetFileName($_)) }))
 
     $packageUri = "$origin$channel/$version/$architecture/$packageFile"
     $bootstrapUri = "$origin$channel/$version/$architecture/$bootstrapFile"

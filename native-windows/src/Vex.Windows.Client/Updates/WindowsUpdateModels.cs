@@ -67,6 +67,17 @@ public sealed record WindowsUpdateKeyring(
     string Schema,
     IReadOnlyList<WindowsUpdatePublicKey> Keys)
 {
+    public string? ReleaseChannel { get; init; }
+
+    // Older signed packages omit this field and retain the stable default.
+    public string ResolveChannel(string? channelOverride = null) =>
+        WindowsUpdateManifestVerifier.NormalizeChannel(channelOverride ?? ReleaseChannel ?? "stable");
+
+    public Uri ResolveOrigin(string? channelOverride = null) => new(
+        ResolveChannel(channelOverride) == "beta"
+            ? "https://vexguard.app/downloads/windows/native/"
+            : "https://downloads.vexguard.app/windows/native/", UriKind.Absolute);
+
     public static WindowsUpdateKeyring Parse(string json)
     {
         var keyring = JsonSerializer.Deserialize<WindowsUpdateKeyring>(

@@ -14,8 +14,6 @@ namespace Vex.Windows.App.Services;
 
 public sealed partial class NativeUpdateService
 {
-    private static readonly Uri ProductionOrigin =
-        new("https://downloads.vexguard.app/windows/native/", UriKind.Absolute);
     private readonly int _rolloutBucket;
     private readonly WindowsUpdateRollbackStateStore? _rollbackStateStore;
 
@@ -175,32 +173,6 @@ public sealed partial class NativeUpdateService
                     reason: error.Message));
         }
 
-        var trustedOrigin =
-#if DEBUG
-            Uri.TryCreate(
-                Environment.GetEnvironmentVariable("VEX_WINDOWS_UPDATE_ORIGIN"),
-                UriKind.Absolute,
-                out var debugOrigin)
-                ? debugOrigin
-                : ProductionOrigin;
-#else
-            ProductionOrigin;
-#endif
-
-        if (!string.Equals(
-                trustedOrigin.Scheme,
-                "https",
-                StringComparison.OrdinalIgnoreCase))
-        {
-            return (
-                null,
-                NativeUpdateSnapshot.Disabled(
-                    CurrentVersion(),
-                    channel,
-                    architecture,
-                    "Pinned update origin must use https."));
-        }
-
         var keyringPath =
 #if DEBUG
             Environment.GetEnvironmentVariable("VEX_WINDOWS_UPDATE_KEYRING_PATH") ??
@@ -222,6 +194,37 @@ public sealed partial class NativeUpdateService
 
         var keyring = WindowsUpdateKeyring.Parse(
             File.ReadAllText(keyringPath));
+        channel = keyring.ResolveChannel(
+            Environment.GetEnvironmentVariable("VEX_WINDOWS_UPDATE_CHANNEL"));
+        // Beta uses the existing first-party download namespace. Keep the
+        // legacy stable origin and Debug-only override contract intact.
+        var channelOrigin = keyring.ResolveOrigin(channel);
+        var trustedOrigin =
+#if DEBUG
+            Uri.TryCreate(
+                Environment.GetEnvironmentVariable("VEX_WINDOWS_UPDATE_ORIGIN"),
+                UriKind.Absolute,
+                out var debugOrigin)
+                ? debugOrigin
+                : channelOrigin;
+#else
+            channelOrigin;
+#endif
+
+        if (!string.Equals(
+                trustedOrigin.Scheme,
+                "https",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return (
+                null,
+                NativeUpdateSnapshot.Disabled(
+                    CurrentVersion(),
+                    channel,
+                    architecture,
+                    "Pinned update origin must use https."));
+        }
+
         if (keyring.Schema != WindowsUpdateConstants.KeyringSchema || keyring.Keys is not { Count: > 0 } ||
             keyring.Keys.Any(key => key is null || string.IsNullOrWhiteSpace(key.KeyId) ||
                 key.Algorithm != WindowsUpdateConstants.SupportedAlgorithm ||

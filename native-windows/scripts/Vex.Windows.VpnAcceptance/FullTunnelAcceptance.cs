@@ -119,7 +119,12 @@ internal static class FullTunnelAcceptance
                 Require(admitted.TryGetValue(ControlHost, out var addresses), "fixture_full_control_host_not_admitted");
                 var control = addresses!.FirstOrDefault(address => address.AddressFamily == AddressFamily.InterNetwork);
                 Require(control is not null && !control.Equals(outside), "fixture_full_control_address_invalid");
-                await ProbeControlHttpsAsync(source, index, control!, leaseToken);
+                try { await ProbeControlHttpsAsync(source, index, control!, leaseToken); }
+                catch (OperationCanceledException)
+                {
+                    result["full_control_probe_lease_cancelled"] = leaseToken.IsCancellationRequested;
+                    throw;
+                }
                 result["full_control_plane_https_bypass_verified"] = true;
                 result["stage"] = "full-physical-deny";
                 VerifyPhysicalRoute(source, index, outside);

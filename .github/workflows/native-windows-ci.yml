@@ -28,6 +28,11 @@ on:
         description: "Exercise full routing and AntiLeak on a fresh disposable Windows runner"
         type: boolean
         default: false
+      release_channel:
+        description: "Signed release channel; beta is for approved tester distribution"
+        type: choice
+        options: [stable, beta]
+        default: stable
       release_version:
         description: "Windows package version (for example 1.2.3.4; packaging only)"
         required: false
@@ -38,7 +43,7 @@ on:
         description: "User-facing Windows release notes (packaging only)"
         required: false
       rollout_percent:
-        description: "Initial stable rollout percentage (0-100)"
+        description: "Initial rollout percentage within the selected channel (0-100)"
         default: "10"
       minimum_supported_version:
         description: "Oldest native Windows version allowed to update"
@@ -89,6 +94,7 @@ jobs:
           ./native-windows/tests/ReleaseValidation.Tests.ps1
           ./native-windows/tests/ReleaseReadiness.Tests.ps1
           ./native-windows/tests/ReleaseInputPreflight.Tests.ps1
+          ./native-windows/tests/TesterSigning.Tests.ps1
           ./native-windows/tests/VclibsDependency.Tests.ps1
           ./native-windows/tests/VerifiedBootstrapLaunch.Tests.ps1
           ./native-windows/tests/VendorStartupMigration.Tests.ps1
@@ -140,6 +146,7 @@ jobs:
         if: matrix.architecture == 'x64'
         run: dotnet run --project native-windows/tests/Vex.Windows.Core.Tests/Vex.Windows.Core.Tests.csproj -c Release
       - name: Verify protected device-key retention across sign-out
+        timeout-minutes: 5
         if: matrix.architecture == 'x64'
         run: dotnet run --project native-windows/tests/Vex.Windows.Storage.Tests/Vex.Windows.Storage.Tests.csproj -c Release
       - name: Validate native surfaces and release scripts
@@ -149,6 +156,7 @@ jobs:
           ./native-windows/tests/ReleaseValidation.Tests.ps1
           ./native-windows/tests/ReleaseReadiness.Tests.ps1
           ./native-windows/tests/ReleaseInputPreflight.Tests.ps1
+          ./native-windows/tests/TesterSigning.Tests.ps1
           ./native-windows/tests/VclibsDependency.Tests.ps1
           ./native-windows/tests/VerifiedBootstrapLaunch.Tests.ps1
           ./native-windows/tests/VendorStartupMigration.Tests.ps1
@@ -179,6 +187,12 @@ jobs:
           }
       - name: Publish self-contained VPN service
         run: dotnet publish native-windows/src/Vex.Windows.Service/Vex.Windows.Service.csproj -c Release -r win-${{ matrix.architecture }} -p:Platform=${{ matrix.architecture }} -o "${{ runner.temp }}/vex-windows/service-${{ matrix.architecture }}"
+      - name: Verify both qualified MSI runtime architectures on a disposable host
+        if: matrix.architecture == 'x64'
+        shell: pwsh
+        env:
+          VEX_WINDOWS_SERVICE_MSI_SOURCE: amneziawg-3.1.0
+        run: ./native-windows/scripts/stage-runtime-assets.ps1 -DestinationRoot (Join-Path $env:RUNNER_TEMP 'vex-runtime-review') -DisposableRunner
       - name: Publish self-contained WinUI application
         run: dotnet publish native-windows/src/Vex.Windows.App/Vex.Windows.App.csproj -c Release -r win-${{ matrix.architecture }} -p:Platform=${{ matrix.architecture }} -o "${{ runner.temp }}/vex-windows/app-${{ matrix.architecture }}"
       - name: Publish native installer for unsigned review
@@ -378,6 +392,9 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # Signed preparation retains ordinary native signature/install verification.
+  # The beta authority is public, pinned, code-signing-only and prepared solely
+  # on this explicit disposable release host. No authority private key enters CI.
   package_release:
     name: Prepare signed Windows release artifacts
     if: >-
@@ -389,6 +406,12 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 60
     needs: [portable, build, macos_reference, vpn_acceptance]
+    env:
+      VEX_WINDOWS_RELEASE_CHANNEL: ${{ inputs.release_channel || 'stable' }}
+      VEX_WINDOWS_SIGNING_MODE: ${{ vars.VEX_WINDOWS_SIGNING_MODE || 'public-trusted' }}
+      VEX_WINDOWS_TEST_ROOT_SHA256: ${{ vars.VEX_WINDOWS_TEST_ROOT_SHA256 }}
+      VEX_WINDOWS_TEST_CERT_SHA256: ${{ vars.VEX_WINDOWS_TEST_CERT_SHA256 }}
+      VEX_WINDOWS_PACKAGE_PUBLISHER: ${{ vars.VEX_WINDOWS_PACKAGE_PUBLISHER }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -396,12 +419,16 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
+      - name: Prepare pinned beta signing trust on the disposable release host
+        shell: pwsh
+        run: ./native-windows/scripts/prepare-tester-signing-trust.ps1 -DisposableRunner
       - name: Verify release inputs and stage architecture-specific runtimes
         shell: pwsh
         env:
           RELEASE_VERSION: ${{ inputs.release_version }}
           MANIFEST_REVISION: ${{ inputs.manifest_revision }}
           RELEASE_NOTES: ${{ inputs.release_notes }}
+          VEX_WINDOWS_SERVICE_MSI_SOURCE: ${{ vars.VEX_WINDOWS_SERVICE_MSI_SOURCE }}
           VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH: ${{ vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH }}
           VEX_WINDOWS_SERVICE_WINTUN_PATH: ${{ vars.VEX_WINDOWS_SERVICE_WINTUN_PATH }}
           VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH_X64: ${{ vars.VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH_X64 }}
@@ -424,17 +451,17 @@ jobs:
           VEX_WINDOWS_VCLIBS_SHA256_ARM64: ${{ vars.VEX_WINDOWS_VCLIBS_SHA256_ARM64 }}
         run: |
           . ./native-windows/packaging/ReleaseValidation.ps1
+          if ($env:VEX_WINDOWS_RELEASE_CHANNEL -cnotin @('stable', 'beta')) { throw 'Release channel must be stable or beta.' }
           ConvertTo-WindowsPackageVersion $env:RELEASE_VERSION | Out-Null
           $revision = 0L
           if (-not [long]::TryParse($env:MANIFEST_REVISION, [ref]$revision) -or $revision -le 0) { throw 'A positive manifest revision is required.' }
           if ([string]::IsNullOrWhiteSpace($env:RELEASE_NOTES)) { throw 'Release notes are required.' }
-          ./native-windows/scripts/stage-runtime-assets.ps1 -DestinationRoot (Join-Path $env:RUNNER_TEMP 'vex-native-runtime')
+          ./native-windows/scripts/stage-runtime-assets.ps1 -DestinationRoot (Join-Path $env:RUNNER_TEMP 'vex-native-runtime') -DisposableRunner
       - name: Package signed native Windows releases
         id: package_signed
         shell: pwsh
         env:
           VEX_WINDOWS_RELEASE_VERSION: ${{ inputs.release_version }}
-          VEX_WINDOWS_RELEASE_CHANNEL: stable
           VEX_WINDOWS_MANIFEST_REVISION: ${{ inputs.manifest_revision }}
           VEX_WINDOWS_RELEASE_NOTES: ${{ inputs.release_notes }}
           VEX_WINDOWS_MINIMUM_SUPPORTED_VERSION: ${{ inputs.minimum_supported_version }}
@@ -457,8 +484,9 @@ jobs:
           VEX_WINDOWS_ROLLOUT_PERCENT: ${{ inputs.rollout_percent }}
         run: |
           . ./native-windows/packaging/ReleaseValidation.ps1
-          ./native-windows/packaging/package-native-windows.ps1 -Architecture x64
-          ./native-windows/packaging/package-native-windows.ps1 -Architecture arm64
+          $channel = $env:VEX_WINDOWS_RELEASE_CHANNEL
+          ./native-windows/packaging/package-native-windows.ps1 -Architecture x64 -Channel $channel
+          ./native-windows/packaging/package-native-windows.ps1 -Architecture arm64 -Channel $channel
           ./native-windows/packaging/publish-native-windows.ps1
           # A separate synthetic preceding version exercises package relocation
           # and rollback without publishing an invented historical release.
@@ -476,9 +504,9 @@ jobs:
           if (-not $changed) { throw 'Release version must permit a preceding version for install acceptance.' }
           $precedingVersion = $parts -join '.'
           $precedingRoot = Join-Path $env:RUNNER_TEMP 'vex-synthetic-preceding-release'
-          ./native-windows/packaging/package-native-windows.ps1 -Architecture x64 -Version $precedingVersion -OutputRoot $precedingRoot
-          $candidateDirectory = Join-Path $PWD "native-windows/packaging/out/stable/x64/$candidateVersion"
-          $precedingDirectory = Join-Path $precedingRoot "stable/x64/$precedingVersion"
+          ./native-windows/packaging/package-native-windows.ps1 -Architecture x64 -Channel $channel -Version $precedingVersion -OutputRoot $precedingRoot
+          $candidateDirectory = Join-Path $PWD "native-windows/packaging/out/$channel/x64/$candidateVersion"
+          $precedingDirectory = Join-Path $precedingRoot "$channel/x64/$precedingVersion"
           "candidate_directory=$candidateDirectory" >> $env:GITHUB_OUTPUT
           "preceding_directory=$precedingDirectory" >> $env:GITHUB_OUTPUT
       - name: Verify signed Windows install lifecycle without signing credentials
@@ -509,3 +537,7 @@ jobs:
             native-windows/packaging/published/**
           if-no-files-found: error
           retention-days: 7
+      - name: Remove owned beta signing trust
+        if: always()
+        shell: pwsh
+        run: ./native-windows/scripts/prepare-tester-signing-trust.ps1 -DisposableRunner -Action Cleanup

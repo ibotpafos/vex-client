@@ -21,6 +21,7 @@ function Get-ReleasePresenceInputNames {
         }
     }
     'VEX_WINDOWS_SIGN_TIMESTAMP_URI' # Optional: the packager supplies its default.
+    'VEX_WINDOWS_SERVICE_MSI_SOURCE' # Explicit opt-in to the pinned official MSI pair.
 }
 
 function Get-ReleaseInputPresenceReport {
@@ -61,6 +62,7 @@ function Get-ReleaseInputPresenceReport {
                 if (-not $ready) { $null = $missing.Add($hash) }
             }
             elseif ($hasPath) { $ready = $true }
+            elseif ($prefix -cne 'VEX_WINDOWS_VCLIBS' -and $known['VEX_WINDOWS_SERVICE_MSI_SOURCE']) { $ready = $true }
             elseif ($prefix -ceq 'VEX_WINDOWS_VCLIBS') { $ready = $true; $builtin = $true }
             else {
                 $ready = $false

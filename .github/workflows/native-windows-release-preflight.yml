@@ -55,6 +55,7 @@ jobs:
           VEX_WINDOWS_VCLIBS_URI_ARM64_PRESENT: ${{ vars.VEX_WINDOWS_VCLIBS_URI_ARM64 != '' }}
           VEX_WINDOWS_VCLIBS_SHA256_ARM64_PRESENT: ${{ vars.VEX_WINDOWS_VCLIBS_SHA256_ARM64 != '' }}
           VEX_WINDOWS_SIGN_TIMESTAMP_URI_PRESENT: ${{ vars.VEX_WINDOWS_SIGN_TIMESTAMP_URI != '' }}
+          VEX_WINDOWS_SERVICE_MSI_SOURCE_PRESENT: ${{ vars.VEX_WINDOWS_SERVICE_MSI_SOURCE != '' }}
         run: |
           ./native-windows/scripts/test-release-inputs.ps1 `
             -ResultPath (Join-Path $env:RUNNER_TEMP 'vex-release-input-preflight/result.json')

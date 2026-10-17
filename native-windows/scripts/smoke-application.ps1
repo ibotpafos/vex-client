@@ -917,6 +917,7 @@ namespace Vex.Windows.Smoke {
                 $recoveryPattern = [Windows.Automation.TogglePattern]$recoveryToggle.GetCurrentPattern(
                     [Windows.Automation.TogglePattern]::Pattern)
                 $originalRecoveryState = $recoveryPattern.Current.ToggleState
+                $result.settings_recovery_original_state = [string]$originalRecoveryState
                 if ($originalRecoveryState -eq [Windows.Automation.ToggleState]::Indeterminate) {
                     throw 'AutoRecovery must expose a two-state preference.'
                 }
@@ -930,6 +931,8 @@ namespace Vex.Windows.Smoke {
                             -not $recoveryToggle.Current.IsEnabled) { return $false }
                         $pattern = [Windows.Automation.TogglePattern]$recoveryToggle.GetCurrentPattern(
                             [Windows.Automation.TogglePattern]::Pattern)
+                        $result.settings_recovery_observed_state = [string]$pattern.Current.ToggleState
+                        $result.settings_refresh_enabled_during_mutation = [bool]$refreshButton.Current.IsEnabled
                         $pattern.Current.ToggleState -ne $originalRecoveryState -and
                             -not $refreshButton.Current.IsEnabled
                     }

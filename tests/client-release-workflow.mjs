@@ -27,6 +27,10 @@ function check(workflow) {
   assert.equal(workflow.jobs.publish.permissions.contents, 'write');
   assert.ok(workflow.jobs.publish.steps.some(s => s.uses?.startsWith('actions/attest-build-provenance@')));
   assert.ok(workflow.jobs.publish.steps.some(s => s.run?.includes('verify_release_receipt.py')));
+  assert.equal(workflow.jobs.publish['timeout-minutes'], 35);
+  const receiptGate = workflow.jobs.publish.steps.find(s => s.name === 'Website receipt gate');
+  assert.ok(receiptGate.run.includes('timeout=1200'));
+  assert.ok(receiptGate.run.includes('--timeout-seconds "$timeout"'));
   const r8 = workflow.jobs.android.steps.find(s => s.name === 'Bind separately retained R8 mapping to the signed APK');
   assert.ok(r8);
   assert.ok(r8.run.includes("node -e 'process.stdout.write(require(\"./dist/android/release-manifest.json\").updater)'"));

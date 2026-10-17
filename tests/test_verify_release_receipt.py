@@ -2,6 +2,7 @@ import hashlib
 import importlib.util
 import io
 import unittest
+from unittest.mock import patch
 import urllib.error
 from pathlib import Path
 
@@ -110,3 +111,28 @@ class ReceiptContract(unittest.TestCase):
                 "https://vexguard.app", "macos", target, RedirectResponseOpener("https://example.invalid/file")
             )
         )
+
+    def test_private_delivery_wait_is_bounded_and_recovers_without_publication(self):
+        clock = [0]
+        def sleep(seconds):
+            clock[0] += seconds
+        with patch.object(receipt.time, "monotonic", side_effect=lambda: clock[0]), \
+                patch.object(receipt.time, "sleep", side_effect=sleep), \
+                patch.object(receipt, "update_receipt", return_value=self.response), \
+                patch.object(receipt, "android_receipt_matches", side_effect=[False, False, True]) as verify:
+            result = receipt.wait_for_receipt(self.release, "https://vexguard.app", 1200)
+            self.assertEqual(result["status"], "website_verified")
+            self.assertEqual(clock[0], 10)
+            self.assertEqual(verify.call_count, 3)
+        clock[0] = 0
+        with patch.object(receipt.time, "monotonic", side_effect=lambda: clock[0]), \
+                patch.object(receipt.time, "sleep", side_effect=sleep), \
+                patch.object(receipt, "update_receipt", side_effect=OSError("temporarily unavailable")):
+            with self.assertRaisesRegex(RuntimeError, "Preserve the immutable"):
+                receipt.wait_for_receipt(self.release, "https://vexguard.app", 12)
+            self.assertEqual(clock[0], 12)
+
+    def test_receipt_timeout_rejects_unbounded_or_negative_values(self):
+        for value in ("-1", "0", "4", "1201"):
+            with self.assertRaises(Exception): receipt.bounded_timeout(value)
+        self.assertEqual(receipt.bounded_timeout("1200"), 1200)

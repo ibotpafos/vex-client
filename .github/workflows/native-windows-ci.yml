@@ -95,6 +95,7 @@ jobs:
           ./native-windows/tests/ReleaseReadiness.Tests.ps1
           ./native-windows/tests/ReleaseInputPreflight.Tests.ps1
           ./native-windows/tests/TesterSigning.Tests.ps1
+          ./native-windows/tests/ProductionTesterValidation.Tests.ps1
           ./native-windows/tests/VclibsDependency.Tests.ps1
           ./native-windows/tests/VerifiedBootstrapLaunch.Tests.ps1
           ./native-windows/tests/VendorStartupMigration.Tests.ps1
@@ -157,6 +158,7 @@ jobs:
           ./native-windows/tests/ReleaseReadiness.Tests.ps1
           ./native-windows/tests/ReleaseInputPreflight.Tests.ps1
           ./native-windows/tests/TesterSigning.Tests.ps1
+          ./native-windows/tests/ProductionTesterValidation.Tests.ps1
           ./native-windows/tests/VclibsDependency.Tests.ps1
           ./native-windows/tests/VerifiedBootstrapLaunch.Tests.ps1
           ./native-windows/tests/VendorStartupMigration.Tests.ps1

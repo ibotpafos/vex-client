@@ -1,11 +1,12 @@
 #requires -Version 7.0
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = 'Run')]
 param(
-    [Parameter(Mandatory = $true)][Alias('ExplicitlyDisposableRunner')][switch]$DisposableRunner,
-    [Parameter(Mandatory = $true)][string]$CandidateBundleDirectory,
-    [Parameter(Mandatory = $true)][string]$PrecedingBundleDirectory,
-    [Parameter(Mandatory = $true)][string]$ResultPath,
-    [switch]$PrecedingIsSynthetic
+    [Parameter(Mandatory = $true, ParameterSetName = 'Run')][Alias('ExplicitlyDisposableRunner')][switch]$DisposableRunner,
+    [Parameter(Mandatory = $true, ParameterSetName = 'Run')][string]$CandidateBundleDirectory,
+    [Parameter(Mandatory = $true, ParameterSetName = 'Run')][string]$PrecedingBundleDirectory,
+    [Parameter(Mandatory = $true, ParameterSetName = 'Run')][string]$ResultPath,
+    [Parameter(ParameterSetName = 'Run')][switch]$PrecedingIsSynthetic,
+    [Parameter(Mandatory = $true, ParameterSetName = 'Functions')][switch]$FunctionsOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -684,6 +685,7 @@ function Add-AcceptancePhase {
     }
 }
 
+if ($FunctionsOnly) { return }
 Assert-AcceptanceRunner ([bool]$DisposableRunner)
 $ResultPath = [IO.Path]::GetFullPath($ResultPath)
 $candidate = $null; $preceding = $null; $mutationStarted = $false; $failure = $null; $cleanupFailure = $null

@@ -529,7 +529,7 @@ The workflow retains artifacts for review and does not publish either channel.
 The explicit `tester-ca` signing mode uses the reviewed certificates in
 `packaging/tester-trust`: a separate RSA authority restricted to code signing,
 with path length zero, and its end-entity signer. The authority private key stays
-offline; CI receives only the encrypted end-entity PFX and the public chain.
+encrypted outside CI; CI receives only the encrypted end-entity PFX and the public chain.
 The manual job imports the exact pinned public authority solely on its
 disposable Windows host and removes its owned trust afterward. It cannot use
 this identity for stable. Authenticode, timestamps, Setup pins, service
@@ -545,6 +545,19 @@ After signed lifecycle and real Windows VPN acceptance, the operator can publish
 the beta through the approved tester catalog in the account. Membership and
 free access remain controlled by the tester program; a beta artifact is not an
 authorization grant. Feedback and testing assignments remain in the account.
+
+The manual `Windows production tester acceptance` workflow checks a successful
+signed main run and its six required jobs before downloading that run's exact
+artifact. On a fresh disposable Windows x64 host it installs the signed beta,
+uses the normal native PKCE callback with an approved ordinary tester, selects
+full traffic, verifies public VPN egress and restoration, saves idempotent
+feedback, and removes its own installation and public CA trust. Its unique
+two-hour tester secret contains no administrator or signing credential and is
+removed by the operator after the terminal run and fixture cleanup. The workflow
+only retains sanitized receipts and cannot publish. Physical ARM64, reboot,
+roaming, DNS leakage and IPv6 acceptance remain separate explicit observations.
+Use these receipts together with the signed installer lifecycle; routine
+encrypted-fixture CI alone does not prove a public VEX VPN connection.
 
 Before selecting a signed release version and manifest revision, run the manual
 `Native Windows release input preflight` workflow on `main`. It receives only

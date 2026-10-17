@@ -65,4 +65,20 @@ finally {
     Remove-Item -LiteralPath $temporaryRoot -Recurse -Force
 }
 
-Write-Host 'Windows release version, architecture and runtime selection tests passed.'
+$template = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../packaging/AppxManifest.xml.template') -Raw
+foreach ($architecture in @('x64', 'arm64')) {
+    $content = New-WindowsPackageManifest -Template $template -PackageName 'VEX.Manifest.Test' -Version '0.1.75' `
+        -Publisher 'CN=VEX & Test' -Architecture $architecture -VclibsVersion '14.0.24217.0' `
+        -DisplayName 'VEX <beta>' -PublisherDisplayName 'VEX & Test'
+    [xml]$document = $content
+    $ns = [Xml.XmlNamespaceManager]::new($document.NameTable)
+    $ns.AddNamespace('m', 'http://schemas.microsoft.com/appx/manifest/foundation/windows10')
+    $identity = $document.SelectSingleNode('/m:Package/m:Identity', $ns)
+    $dependency = $document.SelectSingleNode('/m:Package/m:Dependencies/m:PackageDependency', $ns)
+    if ($identity.GetAttribute('ProcessorArchitecture') -cne $architecture -or $identity.GetAttribute('Version') -cne '0.1.75.0' -or
+        $identity.GetAttribute('Publisher') -cne 'CN=VEX & Test' -or $dependency.HasAttribute('ProcessorArchitecture') -or
+        $dependency.GetAttribute('Name') -cne 'Microsoft.VCLibs.140.00.UWPDesktop' -or $dependency.GetAttribute('MinVersion') -cne '14.0.24217.0') {
+        throw 'The rendered manifest changed the application ABI or foundation framework dependency contract.'
+    }
+}
+Write-Host 'Windows release version, architecture, manifest and runtime selection tests passed.'

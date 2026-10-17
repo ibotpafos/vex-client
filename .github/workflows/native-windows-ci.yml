@@ -60,8 +60,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: native-windows-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: native-windows-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.package_release && 'release' || 'ci' }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' || !inputs.package_release }}
 
 jobs:
   portable:
@@ -195,6 +195,13 @@ jobs:
         run: ./native-windows/scripts/stage-runtime-assets.ps1 -DestinationRoot (Join-Path $env:RUNNER_TEMP 'vex-runtime-review') -DisposableRunner
       - name: Publish self-contained WinUI application
         run: dotnet publish native-windows/src/Vex.Windows.App/Vex.Windows.App.csproj -c Release -r win-${{ matrix.architecture }} -p:Platform=${{ matrix.architecture }} -o "${{ runner.temp }}/vex-windows/app-${{ matrix.architecture }}"
+      - name: Validate the real MSIX manifest with the Windows SDK
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          ./native-windows/scripts/validate-msix-manifest.ps1 -DisposableRunner -Architecture '${{ matrix.architecture }}' `
+            -ApplicationPath (Join-Path $env:RUNNER_TEMP 'vex-windows/app-${{ matrix.architecture }}/Vex.Windows.App.exe') `
+            -ResultPath (Join-Path $env:RUNNER_TEMP 'vex-windows/msix-schema-${{ matrix.architecture }}.json')
       - name: Publish native installer for unsigned review
         run: dotnet publish native-windows/src/Vex.Windows.Setup/Vex.Windows.Setup.csproj -c Release -r win-${{ matrix.architecture }} -p:Platform=${{ matrix.architecture }} -o "${{ runner.temp }}/vex-windows/setup-${{ matrix.architecture }}"
       - name: Verify published PE architectures and runtime resources

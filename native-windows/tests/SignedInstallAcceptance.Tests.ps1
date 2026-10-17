@@ -27,6 +27,7 @@ $realOwnedBundle = (Get-Item Function:Get-AcceptanceOwnedBundle).ScriptBlock
 $realRemoveDirectory = (Get-Item Function:Remove-AcceptancePrivateDirectory).ScriptBlock
 $realOpenLocks = (Get-Item Function:Open-AcceptanceBundleLocks).ScriptBlock
 $realNativeInstall = (Get-Item Function:Invoke-AcceptanceNativeInstall).ScriptBlock
+$realInstalledUi = (Get-Item Function:Invoke-AcceptanceInstalledUi).ScriptBlock
 $realReadBundle = (Get-Item Function:Read-AcceptanceBundle).ScriptBlock
 function Get-TestAcceptanceBootstrapCommand($InputData) {
     $encoded = New-AcceptanceBootstrapCommand $InputData
@@ -181,6 +182,27 @@ try {
     # uses the fixed system Windows PowerShell asserted above.
     if ($IsWindows) {
         Assert ((Get-AcceptanceUiPowerShellPath) -ceq (Join-Path $PSHOME 'pwsh.exe')) 'The UI probe selected a different or unqualified host.'
+        $script:installedUiLaunch = $null
+        & {
+            function Get-AppxPackage {
+                param($Name)
+                [pscustomobject]@{ Version='1.2.3.4'; PackageFamilyName='VEX.Acceptance_fixture'; InstallLocation='C:\fixture\installed' }
+            }
+            function Invoke-AcceptanceProcess {
+                param($Executable,$Arguments,$TimeoutSeconds)
+                $script:installedUiLaunch = [pscustomobject]@{ executable=$Executable; arguments=$Arguments; timeout=$TimeoutSeconds }
+            }
+            & $realInstalledUi -Bundle $bundle
+        }
+        Assert ($installedUiLaunch.executable -ceq (Get-AcceptanceUiPowerShellPath) -and
+            $installedUiLaunch.arguments -contains '-STA' -and $installedUiLaunch.timeout -eq 75) 'Installed UI did not use the qualified Core7/STA host and bounded deadline.'
+        $installedUiBody = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($installedUiLaunch.arguments[-1]))
+        $installedUiData = [regex]::Match($installedUiBody, "FromBase64String\('([A-Za-z0-9+/=]+)'\)")
+        Assert $installedUiData.Success 'Installed UI payload did not use literal JSON transport.'
+        $installedUiInput = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($installedUiData.Groups[1].Value)) | ConvertFrom-Json
+        Assert ($installedUiInput.family -ceq 'VEX.Acceptance_fixture' -and
+            $installedUiInput.executable -ceq (Join-Path 'C:\fixture\installed' 'Vex.Windows.App.exe') -and
+            $installedUiInput.sha256 -ceq $bundle.Metadata.app_executable_sha256) 'Installed UI lost its package family, image path or signed release hash.'
     } else {
         Assert-Rejected { Get-AcceptanceUiPowerShellPath } 'The Windows UI host was admitted on another operating system.'
     }
@@ -488,6 +510,35 @@ if ($Action -ceq 'Verify') {
     Assert-Rejected { & $realInvokeProcess -Executable $executable -Arguments @('-NoLogo','-NoProfile','-Command','Start-Sleep -Seconds 30') -TimeoutSeconds 1 } 'A stalled phase exceeded its bounded deadline.'
     Invoke-AcceptanceOwnedCleanup -MutationStarted $true -Bundles @($bundle) -OwnerSid 'owner'
     Assert ($watch.Elapsed -lt [TimeSpan]::FromSeconds(8) -and $uninstalls -eq 1) 'A process timeout prevented independent owned cleanup.'
+
+    # Execute the actual installed-UI command in a harmless Core child. Reject
+    # before process/window discovery; no app activation or host state changes.
+    $uiCommand = New-AcceptanceInstalledUiCommand @{
+        family='VEX.Acceptance_fixture'; executable='C:\fixture\Vex.Windows.App.exe'; sha256=('C'*64) }
+    $uiProbe = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($uiCommand))
+    if (-not $IsWindows) {
+        $uiProbe = $uiProbe.Replace('Add-Type -AssemblyName UIAutomationClient','').Replace('Add-Type -AssemblyName UIAutomationTypes','')
+    }
+    $uiPrelude = @'
+function Get-Process {
+    param($Name,$ErrorAction)
+    [Console]::Error.WriteLine('VEX_INSTALLED_UI_FAILURE stage=locate_process exception=RuntimeException hresult=-2146233087 native_exit=unknown private=never-upload')
+    throw 'private-installed-ui-error-never-upload'
+}
+'@
+    $uiCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($uiPrelude + [Environment]::NewLine + $uiProbe))
+    $uiArguments = @('-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',$uiCommand)
+    if ($IsWindows) { $uiArguments = @('-STA') + $uiArguments }
+    $uiOutput = [IO.StringWriter]::new()
+    $previousOutput = [Console]::Out
+    try {
+        [Console]::SetOut($uiOutput)
+        Assert-Rejected { & $realInvokeProcess -Executable ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -Arguments $uiArguments -TimeoutSeconds 15 } 'Installed UI accepted a failed process lookup.'
+    }
+    finally { [Console]::SetOut($previousOutput) }
+    Assert ($uiOutput.ToString().Trim() -cmatch '^VEX_INSTALLED_UI_FAILURE stage=locate_process exception=RuntimeException hresult=-?[0-9]{1,10} native_exit=unknown$' -and
+        -not $uiOutput.ToString().Contains('private=') -and -not $uiOutput.ToString().Contains('never-upload')) 'Installed UI diagnostics leaked private error content or a forged marker suffix.'
+    $uiOutput.Dispose()
 
     # A failed real child may emit arbitrary private content. Only the fixed
     # probe marker can reach diagnostics, and a forged suffix must be rejected.

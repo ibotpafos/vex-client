@@ -92,35 +92,51 @@ def update_receipt(base_url, release):
         return json.load(response)
 
 
+def bounded_timeout(value):
+    seconds = int(value)
+    if not 5 <= seconds <= 1200:
+        raise argparse.ArgumentTypeError("receipt timeout must be between 5 and 1200 seconds")
+    return seconds
+
+
+def wait_for_receipt(release, base_url, timeout_seconds):
+    # The private release controller qualifies and mirrors the immutable bundle
+    # while this read-only job waits. A monotonic deadline also bounds failures.
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        try:
+            if release.get("platform") == "android":
+                verified = android_receipt_matches(release, update_receipt(base_url, release), base_url)
+            else:
+                asset = asset_by_name(release, release["download_asset"])
+                response = update_receipt(base_url, release)
+                verified = (
+                    (response.get("latestVersion"), response.get("latestBuild"), response.get("downloadUrl"), response.get("checksumSha256"))
+                    == (release["version"], release["build"], asset.get("url"), asset["sha256"])
+                    and website_redirect_matches(base_url, release["platform"], asset["url"])
+                )
+            if verified:
+                return {"status": "website_verified", "platform": release["platform"], "version": release["version"], "build": release["build"]}
+        except (OSError, ValueError, KeyError, urllib.error.HTTPError):
+            pass
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError("Published release has no matching website receipt; inspect the private release operation. Preserve the immutable release and prior stable state.")
+        time.sleep(min(5, remaining))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
+    parser.add_argument("--timeout-seconds", type=bounded_timeout, default=90)
     args = parser.parse_args()
     with open(args.manifest, encoding="utf-8") as source:
         release = json.load(source)
-    # TODO: Add a signed, idempotent publisher that mirrors the verified Android
-    # APK/.sig and atomically updates API metadata before this read-only gate.
-    for attempt in range(18):
-        try:
-            if release.get("platform") == "android":
-                verified = android_receipt_matches(release, update_receipt(args.base_url, release), args.base_url)
-            else:
-                asset = asset_by_name(release, release["download_asset"])
-                response = update_receipt(args.base_url, release)
-                verified = (
-                    (response.get("latestVersion"), response.get("latestBuild"), response.get("downloadUrl"), response.get("checksumSha256"))
-                    == (release["version"], release["build"], asset.get("url"), asset["sha256"])
-                    and website_redirect_matches(args.base_url, release["platform"], asset["url"])
-                )
-            if verified:
-                print(json.dumps({"status": "website_verified", "platform": release["platform"], "version": release["version"], "build": release["build"]}))
-                return
-        except (OSError, ValueError, KeyError, urllib.error.HTTPError):
-            pass
-        if attempt == 17:
-            raise SystemExit("Published release has no matching first-party immutable Android receipt; retain prior stable state and inspect the mirror/metadata. No forced rollback or republish.")
-        time.sleep(5)
+    try:
+        print(json.dumps(wait_for_receipt(release, args.base_url, args.timeout_seconds)))
+    except RuntimeError as error:
+        raise SystemExit(str(error)) from error
 
 
 if __name__ == "__main__":

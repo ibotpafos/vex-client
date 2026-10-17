@@ -57,7 +57,8 @@ if ([Runtime.InteropServices.Marshal]::SizeOf([type][Vex.Windows.Smoke.WindowPoi
 }
 
 # Execute the actual pure capture helpers, without desktop interaction.
-foreach ($functionName in @('Wait-SmokeCondition', 'Assert-PrimaryInstance', 'Wait-SmokeCaptureBounds', 'Get-SmokeCaptureCursorPoint', 'Set-SmokeCaptureFocus',
+foreach ($functionName in @('Wait-SmokeCondition', 'Get-SmokeLiveInstanceIds', 'Assert-PrimaryInstance',
+    'Wait-SmokeCaptureBounds', 'Get-SmokeCaptureCursorPoint', 'Set-SmokeCaptureFocus',
     'Assert-SmokeTrayRecoveryDiagnostic', 'Assert-SmokeProtectedStateDiagnostic', 'Open-SmokeTrayDiagnosticRead',
     'Read-SmokeTrayDiagnostic', 'Assert-SmokeTrayActivationProgress', 'Wait-SmokeTrayRecoveryDiagnostic',
     'Get-SmokeTrayRequestPaths', 'Invoke-SmokeTrayRequest')) {
@@ -72,17 +73,16 @@ foreach ($functionName in @('Wait-SmokeCondition', 'Assert-PrimaryInstance', 'Wa
     $process = [pscustomobject]@{Id=123;HasExited=$false}
     $process | Add-Member -MemberType ScriptMethod -Name Refresh -Value {}
     $script:instanceReads = 0
-    function Get-Process {
-        param($Name, $ErrorAction)
+    function Get-SmokeLiveInstanceIds {
         $script:instanceReads++
-        [pscustomobject]@{Id=123}
-        if ($script:instanceReads -eq 1) { [pscustomobject]@{Id=456} }
+        123
+        if ($script:instanceReads -eq 1) { 456 }
     }
     Assert-PrimaryInstance -TimeoutSeconds 1
     if ($script:instanceReads -lt 2) { throw 'Primary-instance assertion did not wait for redirected enumeration to settle.' }
     foreach ($ids in @(@(123,456),@(456))) {
         $script:fixedInstanceIds = $ids
-        function Get-Process { param($Name,$ErrorAction) foreach ($id in $script:fixedInstanceIds) { [pscustomobject]@{Id=$id} } }
+        function Get-SmokeLiveInstanceIds { $script:fixedInstanceIds }
         $rejected = $false
         try { Assert-PrimaryInstance -TimeoutSeconds 1 } catch { $rejected = $true }
         if (-not $rejected) { throw 'Persistent duplicates or replacement of the original instance were accepted.' }
@@ -92,6 +92,41 @@ foreach ($functionName in @('Wait-SmokeCondition', 'Assert-PrimaryInstance', 'Wa
     try { Assert-PrimaryInstance -TimeoutSeconds 1 } catch { $rejected = $true }
     if (-not $rejected) { throw 'An exited original instance was accepted.' }
 }
+
+# A completed redirected process can remain in the Windows process snapshot.
+# It must not hide a live duplicate, a replacement primary, or primary exit.
+& {
+    function New-InstanceSnapshot([int]$Id, [bool]$Exited) {
+        $snapshot = [pscustomobject]@{ Id = $Id; HasExited = $Exited; Disposed = $false }
+        $snapshot | Add-Member -MemberType ScriptMethod -Name Dispose -Value { $this.Disposed = $true }
+        return $snapshot
+    }
+    function Get-Process { param($Name, $ErrorAction) $script:instanceSnapshots }
+    $process = [pscustomobject]@{ Id = 123; HasExited = $false }
+    $process | Add-Member -MemberType ScriptMethod -Name Refresh -Value { }
+    try {
+        foreach ($scenario in @('primary', 'terminated-secondary', 'live-secondary', 'replacement', 'primary-exited')) {
+            $process.HasExited = $scenario -eq 'primary-exited'
+            $script:instanceSnapshots = @(New-InstanceSnapshot -Id 123 -Exited $false)
+            switch ($scenario) {
+                'terminated-secondary' { $script:instanceSnapshots += New-InstanceSnapshot -Id 456 -Exited $true }
+                'live-secondary' { $script:instanceSnapshots += New-InstanceSnapshot -Id 456 -Exited $false }
+                'replacement' { $script:instanceSnapshots = @(New-InstanceSnapshot -Id 456 -Exited $false) }
+            }
+            $rejected = $false
+            try { Assert-PrimaryInstance -TimeoutSeconds 1 } catch { $rejected = $true }
+            if ($rejected -ne ($scenario -in @('live-secondary', 'replacement', 'primary-exited'))) {
+                throw "Application smoke primary identity gate mishandles $scenario."
+            }
+            if ($scenario -ne 'primary-exited' -and @($script:instanceSnapshots | Where-Object { -not $_.Disposed }).Count -ne 0) {
+                throw 'Application smoke retained a process snapshot handle.'
+            }
+        }
+    }
+    finally { Remove-Variable instanceSnapshots -Scope Script }
+}
+Write-Host 'Application smoke process lifetime verification passed: exited secondary ignored; live duplicate, replacement and primary exit rejected.'
+
 $trayDiagnostic = [ordered]@{
     schema = 'vex.windows.ui-preview-tray-recovery.v1'; process_id = 123; preview_mode = 'fixtures';
     scenario = 'locked'; access = 'Locked'; handler_completed = $true;

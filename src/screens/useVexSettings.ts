@@ -10,7 +10,8 @@ import { getAndroidAutoConnectEnabled, getAntiLeakEnabled, getServerSelectionMod
 import { useToast, type ToastOptions } from '@/ui/toast';
 
 export function useVexSettings(showToastOverride?: (options: ToastOptions) => void) {
-  const { signOut } = useSession();
+  const { signOut, session, sessionRevision, isCurrentSessionOperation } = useSession();
+  const accessToken = session?.accessToken;
   const { showToast: showGlobalToast } = useToast();
   const showToast = showToastOverride ?? showGlobalToast;
   const [isSigningOut, setIsSigningOut] = useState(false);
@@ -21,7 +22,8 @@ export function useVexSettings(showToastOverride?: (options: ToastOptions) => vo
   const [isAutoServerSelectionEnabled, setIsAutoServerSelectionEnabled] = useState(true);
   const [isSavingServerSelection, setIsSavingServerSelection] = useState(false);
   const [appInfo, setAppInfo] = useState<AppInfo>({ name: 'VEX', version: 'dev', build: '0', platform: 'web', channel: 'stable', coreVersion: '0.1.0', configSchemaVersion: 1, apiClientVersion: 'expo-1', otaRuntimeVersion: null, otaLaunch: 'unknown' });
-  const [remoteConfig, setRemoteConfig] = useState<AppRemoteConfig | null>(null);
+  const [remoteSnapshot, setRemoteSnapshot] = useState<{ revision: number; value: AppRemoteConfig } | null>(null);
+  const remoteConfig = remoteSnapshot?.revision === sessionRevision ? remoteSnapshot.value : null;
 
   useEffect(() => {
     let mounted = true;
@@ -37,6 +39,7 @@ export function useVexSettings(showToastOverride?: (options: ToastOptions) => vo
           return;
         }
         const config = await appRemoteConfig({
+          accessToken,
           platform: info.platform,
           appVersion: info.version,
           buildNumber: Number.parseInt(info.build || '0', 10) || 0,
@@ -46,8 +49,8 @@ export function useVexSettings(showToastOverride?: (options: ToastOptions) => vo
           apiClientVersion: info.apiClientVersion,
           configSchemaVersion: info.configSchemaVersion,
         });
-        if (mounted) {
-          setRemoteConfig(config);
+        if (mounted && (!accessToken || isCurrentSessionOperation())) {
+          setRemoteSnapshot({ revision: sessionRevision, value: config });
         }
       })
       .catch(() => undefined);
@@ -78,7 +81,7 @@ export function useVexSettings(showToastOverride?: (options: ToastOptions) => vo
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [accessToken, sessionRevision, isCurrentSessionOperation]);
 
   const handleSignOut = useCallback(async () => {
     if (isSigningOut) {

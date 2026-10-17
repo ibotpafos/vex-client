@@ -1,6 +1,6 @@
 # GitHub client release pipeline
 
-Platforms: Android and native macOS. iOS has no app; Windows is paused. Existing
+Platforms: Android and native macOS. iOS has no app; Windows publication is separate. Existing
 public releases remain unchanged; this change is not a new client version.
 
 ## Release contract
@@ -18,9 +18,14 @@ public releases remain unchanged; this change is not a new client version.
 2. Dispatch **Client signed tag release**, `dry_run=true`, from main. Planning and
    locked dependency/quality checks run without signing secrets or publication.
 3. Once receiver/site acceptance is complete and the repo variable
-   `VEX_CLIENT_AUTOPUBLISH_ENABLED=true` is set, push the matching `android-vX.Y.Z`
-   or `macos-vX.Y.Z` tag. A tag is the explicit publication action; an ordinary
-   push to main never distributes a release.
+   `VEX_CLIENT_AUTOPUBLISH_ENABLED=true` is set, start Android through the private
+   VEX `vpn_deploy_action action=android_release` controller with the exact
+   `releaseTag=android-vX.Y.Z` and full merged client `expectedCommit`. Dry run
+   returns the operator/source/tag confirmation; approved execution creates the
+   tag, waits for signed publication and delivers the same files to the website.
+   Native macOS retains its `macos-vX.Y.Z` tag entry point. An ordinary push to
+   main never distributes a release. A separately pushed Android tag alone does
+   not start the private website publisher.
 4. Protected tag-only environments `client-release-signing` and
    `client-release-publish` separate signing and GitHub write permissions. Only
    the publish job receives content-write/OIDC/attestation permission. Actions
@@ -38,9 +43,21 @@ public releases remain unchanged; this change is not a new client version.
 6. GitHub sends its separately HMAC-signed `release.published` event to
    `https://vexguard.app/v1/webhooks/github/releases`. The API validates repository,
    tag, manifest, signer pin and immutable asset digests, and atomically imports
-   stable metadata with a durable delivery receipt. Out-of-order and duplicate
-   deliveries cannot downgrade or republish metadata. Public metadata AND actual
-   website download redirect must match before the workflow reports acceptance.
+   native macOS stable metadata with a durable delivery receipt. Android events
+   return `awaiting_first_party_delivery` and preserve the prior stable version;
+   the private controller verifies attestations and the actual APK signer,
+   mirrors exactly APK/.sig/.sha256, then atomically promotes Android metadata.
+   Installed legacy clients receive first-party HTTPS URLs without redirects.
+   Out-of-order and duplicate deliveries cannot downgrade or republish metadata.
+   The Android receipt gate waits up to 20 minutes while private delivery runs;
+   macOS retains its existing receipt timeout and redirect contract.
+
+The private controller records the exact signing run, survives a chat restart,
+and resumes the same tag/source without rerunning the immutable publisher. An
+already-correct website is verified without a second production write. It is
+part of the private operator tooling, so this public workflow receives no new
+production credential. A missing delivery capability on the API prevents the
+controller from creating a new tag.
 
 ## Activation gates
 

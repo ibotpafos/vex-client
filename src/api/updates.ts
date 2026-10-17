@@ -12,6 +12,7 @@ import {
 } from './dto';
 
 export async function appUpdateCheck(input: {
+  accessToken?: string;
   platform: string;
   appVersion: string;
   buildNumber: number;
@@ -24,13 +25,14 @@ export async function appUpdateCheck(input: {
   configSchemaVersion?: number;
   timeoutMs?: number;
 }): Promise<AppUpdateCheckResult> {
-  const { timeoutMs, ...requestBody } = input;
+  const { timeoutMs, accessToken, ...requestBody } = input;
   const appVersion = normalizeUpdateCheckVersion(input.appVersion);
   const item = await jsonRequest<AppUpdateCheckResponseDTO>('/v1/app/update/check', {
     method: 'POST',
+    accessToken,
     suppressErrorLog: true,
     timeout: timeoutMs,
-    headers: { 'X-Vex-App-Version': appVersion },
+    headers: { 'X-Vex-App-Version': appVersion, 'X-Vex-Account-Updates': '1' },
     body: {
       ...requestBody,
       appVersion,
@@ -59,6 +61,7 @@ export async function appUpdateCheck(input: {
 }
 
 export async function appRemoteConfig(input: {
+  accessToken?: string;
   platform: string;
   appVersion: string;
   buildNumber: number;
@@ -70,10 +73,13 @@ export async function appRemoteConfig(input: {
   apiClientVersion?: string;
   configSchemaVersion?: number;
 }): Promise<AppRemoteConfig> {
+  const { accessToken, ...requestBody } = input;
   const item = await jsonRequest<AppRemoteConfigResponseDTO>('/v1/app/remote-config', {
     method: 'POST',
+    accessToken,
+    headers: { 'X-Vex-Account-Updates': '1' },
     body: {
-      ...input,
+      ...requestBody,
       apiClientVersion: input.apiClientVersion ?? VEX_API_CLIENT_VERSION,
       configSchemaVersion: input.configSchemaVersion ?? VEX_CONFIG_SCHEMA_VERSION,
     },
@@ -92,6 +98,7 @@ export async function appRemoteConfig(input: {
     minConfigSchemaVersion: item.minConfigSchemaVersion ?? 0,
     routingPolicyVersion: item.routingPolicyVersion || undefined,
     featureFlags: item.featureFlags ?? {},
+    accountFeatureFlags: item.accountFeatureFlags ?? {},
     incidentBanner: item.incidentBanner || undefined,
   };
 }

@@ -18,6 +18,8 @@ type SessionContextValue = {
   isLoading: boolean;
   loadError: string | null;
   session: AuthSession | null;
+  // Non-secret login boundary; stable while the same session's token rotates.
+  sessionRevision: number;
   isCurrentSessionOperation: () => boolean;
   signIn: (nextSession: AuthSession) => Promise<void>;
   signOut: () => Promise<void>;
@@ -266,12 +268,13 @@ export function SessionProvider({ children }: PropsWithChildren) {
       isLoading,
       loadError,
       session,
+      sessionRevision: sessionOperationRevision,
       isCurrentSessionOperation: sessionOperationIsCurrent,
       signIn,
       signOut,
       refreshSession,
     }),
-    [isLoading, loadError, refreshSession, session, sessionOperationIsCurrent, signIn, signOut],
+    [isLoading, loadError, refreshSession, session, sessionOperationRevision, sessionOperationIsCurrent, signIn, signOut],
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

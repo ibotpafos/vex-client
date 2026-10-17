@@ -306,7 +306,8 @@ function Invoke-AcceptanceProcess {
                 '^VEX_SETUP_UI_ERROR win32=(unknown|-?[0-9]{1,10}) hresult=-?[0-9]{1,10}$',
                 '^VEX_BOOTSTRAP_SERVICE_FAILURE action=(Install|Repair|Verify|Prepare|Restore|Uninstall) code=(unknown|-?[0-9]{1,10})$',
                 '^VEX_BOOTSTRAP_FAILURE action=(Install|Verify|Repair|Rollback|Uninstall) line=[0-9]{1,6} exception=[A-Za-z][A-Za-z0-9]{0,79}$',
-                '^VEX_BOOTSTRAP_COMMAND_MISSING action=(Install|Verify|Repair|Rollback|Uninstall) command=(Assert-Hash|Get-FileHash|Read-PackageMetadata|Assert-ScriptSignature|Get-AuthenticodeSignature|Test-Path|Get-Content|ConvertFrom-Json|other)$')) {
+                '^VEX_BOOTSTRAP_COMMAND_MISSING action=(Install|Verify|Repair|Rollback|Uninstall) command=(Assert-Hash|Get-FileHash|Read-PackageMetadata|Assert-ScriptSignature|Get-AuthenticodeSignature|Test-Path|Get-Content|ConvertFrom-Json|other)$',
+                '^VEX_INSTALLED_UI_FAILURE stage=(initialize|load_automation|locate_process|launch|wait_window|verify_image|resolve_window|wait_account|open_settings|wait_settings) exception=[A-Za-z][A-Za-z0-9]{0,79} hresult=-?[0-9]{1,10} native_exit=(unknown|running|-?[0-9]{1,10})$')) {
                 $markers = @($stderr.Result -split '\r?\n' | Where-Object { $_ -cmatch $pattern } | Select-Object -First 1)
                 foreach ($marker in $markers) { [Console]::WriteLine($marker) }
             }
@@ -868,51 +869,53 @@ function Assert-AcceptanceRemoved {
     }
 }
 
-function Invoke-AcceptanceInstalledUi {
-    param($Bundle)
-    $package = @(Get-AppxPackage -Name $Bundle.Metadata.package_name)
-    if ($package.Count -ne 1 -or [version]$package[0].Version -ne [version]$Bundle.Metadata.version) {
-        throw 'Acceptance UI requires the verified installed candidate.'
-    }
-    $payload = [pscustomobject]@{
-        family = $package[0].PackageFamilyName
-        executable = Join-Path $package[0].InstallLocation 'Vex.Windows.App.exe'
-        sha256 = $Bundle.Metadata.app_executable_sha256
-    } | ConvertTo-Json -Compress
-    $encodedPayload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($payload))
+function New-AcceptanceInstalledUiCommand {
+    param($InputData)
+    $encodedPayload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($InputData | ConvertTo-Json -Compress)))
     $probe = @'
 $ErrorActionPreference = 'Stop'
-$inputValue = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__PAYLOAD__')) | ConvertFrom-Json
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
+Set-StrictMode -Version Latest
+$ProgressPreference = 'SilentlyContinue'
 $owned = $null
+$stage = 'initialize'
 function Find-Element([string]$id) {
     $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, $id)
     return $script:window.FindFirst([Windows.Automation.TreeScope]::Descendants, $condition)
 }
 try {
+    $inputValue = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__PAYLOAD__')) | ConvertFrom-Json
+    $stage = 'load_automation'
+    Add-Type -AssemblyName UIAutomationClient
+    Add-Type -AssemblyName UIAutomationTypes
+    $stage = 'locate_process'
     $existing = @(Get-Process -Name 'Vex.Windows.App' -ErrorAction SilentlyContinue)
     if ($existing.Count -gt 1) { throw 'Application ownership is ambiguous.' }
     if ($existing.Count -eq 0) {
+        $stage = 'launch'
         $null = Start-Process -FilePath (Join-Path ([Environment]::GetFolderPath('Windows')) 'explorer.exe') -ArgumentList ('shell:AppsFolder\'+$inputValue.family+'!VexWindowsApp')
     }
+    $stage = 'wait_window'
     $deadline = [DateTime]::UtcNow.AddSeconds(25)
     do {
         $processes = @(Get-Process -Name 'Vex.Windows.App' -ErrorAction SilentlyContinue)
         if ($processes.Count -gt 1) { throw 'Application ownership is ambiguous.' }
         if ($processes.Count -eq 1) {
             $candidate = $processes[0]
+            $stage = 'verify_image'
             if ($candidate.MainModule.FileName -ine $inputValue.executable -or
                 (Get-FileHash -LiteralPath $candidate.MainModule.FileName -Algorithm SHA256).Hash -ine $inputValue.sha256) { throw 'Unexpected application image.' }
             $owned = $candidate
             if ($owned.MainWindowHandle -ne [IntPtr]::Zero) { break }
         }
+        $stage = 'wait_window'
         Start-Sleep -Milliseconds 200
     } while ([DateTime]::UtcNow -lt $deadline)
     if ($null -eq $owned -or $owned.MainWindowHandle -eq [IntPtr]::Zero) { throw 'Installed application created no window.' }
+    $stage = 'resolve_window'
     $script:window = [Windows.Automation.AutomationElement]::FromHandle($owned.MainWindowHandle)
     # Fresh Release Home resolves to AccountPage until a real session exists.
     # Wait for the real signed-out controls; do not invoke any auth action.
+    $stage = 'wait_account'
     $deadline = [DateTime]::UtcNow.AddSeconds(20)
     do {
         $signIn = Find-Element 'WebsiteSignInButton'
@@ -924,7 +927,9 @@ try {
     } while ([DateTime]::UtcNow -lt $deadline)
     if ($null -eq $signIn -or -not $signIn.Current.IsEnabled -or $signIn.Current.IsOffscreen -or
         $null -eq $title -or $null -eq $settings) { throw 'Installed signed-out status is missing.' }
+    $stage = 'open_settings'
     ([Windows.Automation.InvokePattern]$settings.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)).Invoke()
+    $stage = 'wait_settings'
     $deadline = [DateTime]::UtcNow.AddSeconds(10)
     do {
         $toggle = Find-Element 'AutoLaunchToggle'
@@ -934,6 +939,20 @@ try {
     if ($null -eq $toggle -or -not $toggle.Current.IsEnabled) { throw 'Installed Settings is unavailable.' }
     # Read only: do not sign in, enable startup, request a VPN profile or connect.
 }
+catch {
+    $kind = $_.Exception.GetType().Name
+    if ($kind -cnotmatch '^[A-Za-z][A-Za-z0-9]{0,79}$') { $kind = 'Exception' }
+    $nativeExit = 'unknown'
+    try {
+        if ($null -ne $owned) {
+            $owned.Refresh()
+            $nativeExit = if ($owned.HasExited) { [string]$owned.ExitCode } else { 'running' }
+        }
+    }
+    catch { }
+    [Console]::Error.WriteLine('VEX_INSTALLED_UI_FAILURE stage=' + $stage + ' exception=' + $kind + ' hresult=' + [string]$_.Exception.HResult + ' native_exit=' + $nativeExit)
+    throw
+}
 finally {
     if ($null -ne $owned) {
         try { if (-not $owned.HasExited) { $owned.Kill(); [void]$owned.WaitForExit(5000) } }
@@ -942,8 +961,24 @@ finally {
 }
 '@
     $probe = $probe.Replace('__PAYLOAD__', $encodedPayload)
-    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($probe))
-    Invoke-AcceptanceProcess -Executable (Get-AcceptanceSystemPowerShellPath) -Arguments @('-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', $encoded) -TimeoutSeconds 75
+    return [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($probe))
+}
+
+function Invoke-AcceptanceInstalledUi {
+    param($Bundle)
+    $package = @(Get-AppxPackage -Name $Bundle.Metadata.package_name)
+    if ($package.Count -ne 1 -or [version]$package[0].Version -ne [version]$Bundle.Metadata.version) {
+        throw 'Acceptance UI requires the verified installed candidate.'
+    }
+    $payload = [pscustomobject]@{
+        family = $package[0].PackageFamilyName
+        executable = Join-Path $package[0].InstallLocation 'Vex.Windows.App.exe'
+        sha256 = $Bundle.Metadata.app_executable_sha256
+    }
+    $encoded = New-AcceptanceInstalledUiCommand $payload
+    # Use the same qualified Core7/STA UI host as native Setup automation; only
+    # service/bootstrap compatibility actions use system WinPS5.1.
+    Invoke-AcceptanceProcess -Executable (Get-AcceptanceUiPowerShellPath) -Arguments @('-STA', '-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', $encoded) -TimeoutSeconds 75
 }
 
 function Add-AcceptancePhase {

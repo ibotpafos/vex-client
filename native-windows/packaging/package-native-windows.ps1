@@ -60,31 +60,6 @@ function Get-WindowsCheckoutSourceCommit {
     }
 }
 
-function Resolve-WindowsSdkTool {
-    param([Parameter(Mandatory = $true)][string]$ToolName)
-
-    $kitRoot = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
-    if (-not (Test-Path -LiteralPath $kitRoot -PathType Container)) {
-        throw 'Windows SDK is not installed. Expected Windows Kits\10\bin.'
-    }
-
-    $candidate = Get-ChildItem -LiteralPath $kitRoot -Directory |
-        Sort-Object Name -Descending |
-        ForEach-Object {
-            $path = Join-Path $_.FullName "x64\$ToolName"
-            if (Test-Path -LiteralPath $path -PathType Leaf) {
-                return $path
-            }
-        } |
-        Select-Object -First 1
-
-    if (-not $candidate) {
-        throw "Unable to locate '$ToolName' inside the Windows SDK."
-    }
-
-    return $candidate
-}
-
 function Write-Utf8NoBom {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -481,14 +456,9 @@ $profileSigningKeyringSha256 = ConvertTo-HexSha256 `
     (Join-Path $packageDir 'profile-signing-keys.json')
 
 $manifestTemplate = Get-Content -LiteralPath $manifestTemplatePath -Raw
-$manifestContent = $manifestTemplate.
-    Replace('__PACKAGE_NAME__', $packageName).
-    Replace('__PACKAGE_VERSION__', $normalizedVersion).
-    Replace('__PUBLISHER__', $publisher).
-    Replace('__VCLIBS_VERSION__', $vclibsDependencyVersion).
-    Replace('__ARCHITECTURE__', $Architecture).
-    Replace('__DISPLAY_NAME__', $displayName).
-    Replace('__PUBLISHER_DISPLAY_NAME__', $publisherDisplayName)
+$manifestContent = New-WindowsPackageManifest -Template $manifestTemplate -PackageName $packageName `
+    -Version $normalizedVersion -Publisher $publisher -VclibsVersion $vclibsDependencyVersion -Architecture $Architecture `
+    -DisplayName $displayName -PublisherDisplayName $publisherDisplayName
 
 $appxManifestPath = Join-Path $packageDir 'AppxManifest.xml'
 Write-Utf8NoBom -Path $appxManifestPath -Content $manifestContent

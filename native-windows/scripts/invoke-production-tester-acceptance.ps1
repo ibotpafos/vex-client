@@ -94,31 +94,39 @@ function Get-QASignInObservation {
     }
     return $observation
 }
-function Get-QABrowserRequest {
-    foreach ($browser in @(Get-Process -Name 'msedge', 'chrome' -ErrorAction SilentlyContinue | Where-Object MainWindowHandle -NE ([IntPtr]::Zero))) {
-        $root = [Windows.Automation.AutomationElement]::FromHandle($browser.MainWindowHandle)
-        $edits = $root.FindAll([Windows.Automation.TreeScope]::Descendants,
-            [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Edit))
-        foreach ($edit in $edits) {
+function Get-QABrowserControlValue($Element) {
+    try {
+        $pattern = $null
+        if (-not $Element.TryGetCurrentPattern([Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) { return $null }
+        $value = [string]$pattern.Current.Value
+        if ($value.StartsWith('vexguard.app/', [StringComparison]::Ordinal)) {
+            # Focusing the browser edit reveals its complete address. Never
+            # invent HTTPS for an elided value; the parser checks the reread.
+            $Element.SetFocus()
             $pattern = $null
-            if (-not $edit.TryGetCurrentPattern([Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) { continue }
+            if (-not $Element.TryGetCurrentPattern([Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) { return $null }
             $value = [string]$pattern.Current.Value
-            if ($value.Length -gt 8192) { continue }
-            if ($value.StartsWith('vexguard.app/', [StringComparison]::Ordinal)) { $value = 'https://' + $value }
-            $uri = $null
-            if (-not [Uri]::TryCreate($value, [UriKind]::Absolute, [ref]$uri) -or $uri.Scheme -cne 'https' -or $uri.Host -cne 'vexguard.app') { continue }
-            if ($uri.AbsolutePath -ceq '/sign-in') {
-                $callback = [Web.HttpUtility]::ParseQueryString($uri.Query).Get('callbackUrl')
-                if ($callback -and $callback.StartsWith('/auth/app?', [StringComparison]::Ordinal)) { $uri = [Uri]::new([Uri]'https://vexguard.app', $callback) }
-            }
-            if ($uri.AbsolutePath -cne '/auth/app') { continue }
-            $query = [Web.HttpUtility]::ParseQueryString($uri.Query)
-            foreach ($key in @('state', 'code_challenge', 'device_id', 'device_name', 'platform')) {
-                if (@($query.GetValues($key)).Count -ne 1 -or [string]::IsNullOrWhiteSpace($query.Get($key))) { throw 'The native browser request is ambiguous.' }
-            }
-            if ($query.Get('platform') -cne 'windows' -or $query.Get('state') -cnotmatch '^[A-Za-z0-9_-]{16,128}$' -or
-                $query.Get('code_challenge') -cnotmatch '^[A-Za-z0-9_-]{43}$') { throw 'The native browser request is invalid.' }
-            return ,$query
+        }
+        return $value
+    }
+    catch [Windows.Automation.ElementNotAvailableException], [Runtime.InteropServices.COMException], [InvalidOperationException] { return $null }
+}
+function Get-QABrowserRequest {
+    foreach ($browser in @(Get-Process -Name 'msedge', 'chrome' -ErrorAction SilentlyContinue)) {
+        try {
+            if ($browser.MainWindowHandle -eq [IntPtr]::Zero) { continue }
+            $root = [Windows.Automation.AutomationElement]::FromHandle($browser.MainWindowHandle)
+            $edits = $root.FindAll([Windows.Automation.TreeScope]::Descendants,
+                [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Edit))
+        }
+        catch [Windows.Automation.ElementNotAvailableException], [Runtime.InteropServices.COMException], [InvalidOperationException] { continue }
+        foreach ($edit in $edits) {
+            $value = Get-QABrowserControlValue $edit
+            if ($null -eq $value) { continue }
+            # Permanent URL-validation errors escape. Only transient UIA reads
+            # are retried, within the existing single Wait-QA deadline.
+            $query = Read-WindowsProductionBrowserRequest $value
+            if ($null -ne $query) { return ,$query }
         }
     }
     return $null

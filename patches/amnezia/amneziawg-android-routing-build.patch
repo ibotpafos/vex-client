@@ -1,0 +1,16 @@
+diff --git a/tunnel/tools/libwg-go/Makefile b/tunnel/tools/libwg-go/Makefile
+--- a/tunnel/tools/libwg-go/Makefile
++++ b/tunnel/tools/libwg-go/Makefile
+@@ -47,6 +47,11 @@
+ 
+ $(DESTDIR)/libwg-go.so: export PATH := $(BUILDDIR)/go-$(GO_VERSION)/bin/:$(PATH)
+ $(DESTDIR)/libwg-go.so: $(BUILDDIR)/go-$(GO_VERSION)/.prepared go.mod
+-	go build -tags linux -ldflags="-X github.com/amnezia-vpn/amneziawg-go/ipc.socketDirectory=/data/data/$(ANDROID_PACKAGE_NAME)/cache/amneziawg -buildid=" -v -trimpath -buildvcs=false -o "$@" -buildmode c-shared
++	go build -tags linux -ldflags="-X github.com/amnezia-vpn/amneziawg-go/v3/ipc.socketDirectory=/data/data/$(ANDROID_PACKAGE_NAME)/cache/amneziawg -buildid=" -v -trimpath -buildvcs=false -o "$@" -buildmode c-shared
+ 
+ .DELETE_ON_ERROR:
++
++# Include the local routing module in every incremental native build. Go owns its build cache.
++.PHONY: vex-routing-force
++vex-routing-force:
++$(DESTDIR)/libwg-go.so: vex-routing-force

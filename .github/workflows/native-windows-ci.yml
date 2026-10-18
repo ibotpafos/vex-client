@@ -24,6 +24,10 @@ on:
         description: "Prepare signed x64/arm64 artifacts for release review"
         type: boolean
         default: false
+      self_signed_candidate:
+        description: "Sign an isolated candidate with the owner's self-signed certificate; no promotion"
+        type: boolean
+        default: false
       full_tunnel_checks:
         description: "Exercise full routing and AntiLeak on a fresh disposable Windows runner"
         type: boolean
@@ -400,7 +404,7 @@ jobs:
           dotnet-version: 10.0.x
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version: 1.26.6
+          go-version: "1.26.9"
           cache: true
           cache-dependency-path: native-windows/scripts/vpn-fixture-peer/go.sum
       - name: Validate the qualified runtime on a disposable host
@@ -430,10 +434,13 @@ jobs:
     if: >-
       ${{
         github.event_name == 'workflow_dispatch' &&
-        inputs.package_release &&
-        github.ref == 'refs/heads/main'
+        github.repository == 'ibotpafos/vex-client' &&
+        ((inputs.package_release && !inputs.self_signed_candidate && github.ref == 'refs/heads/main') ||
+         (inputs.self_signed_candidate && !inputs.package_release && github.actor == 'ibotpafos' &&
+          (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/codex/ru-direct-native-20261013')))
       }}
     runs-on: windows-2025
+    environment: ${{ inputs.self_signed_candidate && 'windows-self-signed-candidate' || 'client-release-signing' }}
     timeout-minutes: 60
     needs: [portable, build, macos_reference, vpn_acceptance]
     env:
@@ -449,10 +456,59 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: "1.26.9"
+          cache: false
+      - name: Build routing runtime from reviewed release source
+        shell: pwsh
+        run: ./native-windows/scripts/build-routing-runtime.ps1 -DestinationRoot (Join-Path $env:RUNNER_TEMP 'vex-native-routing')
+      - name: Sign and verify the owner-authorized self-signed candidate
+        if: inputs.self_signed_candidate
+        shell: pwsh
+        env:
+          CANDIDATE_VERSION: ${{ inputs.release_version }}
+          VEX_WINDOWS_SELF_SIGNED_PFX_BASE64: ${{ secrets.VEX_WINDOWS_SELF_SIGNED_PFX_BASE64 }}
+          VEX_WINDOWS_SELF_SIGNED_PFX_PASSWORD: ${{ secrets.VEX_WINDOWS_SELF_SIGNED_PFX_PASSWORD }}
+          VEX_WINDOWS_SELF_SIGNED_UPDATE_PRIVATE_KEY_BASE64: ${{ secrets.VEX_WINDOWS_SELF_SIGNED_UPDATE_PRIVATE_KEY_BASE64 }}
+          VEX_WINDOWS_SELF_SIGNED_UPDATE_PUBLIC_KEY_BASE64: ${{ secrets.VEX_WINDOWS_SELF_SIGNED_UPDATE_PUBLIC_KEY_BASE64 }}
+        run: |
+          ./native-windows/scripts/package-self-signed-candidate.ps1 -DisposableRunner `
+            -Version $env:CANDIDATE_VERSION -OutputRoot (Join-Path $env:RUNNER_TEMP 'vex-self-signed-candidate')
+      - name: Retain small sanitized self-signed lifecycle evidence
+        if: always() && inputs.self_signed_candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: vex-native-windows-self-signed-evidence
+          path: |
+            ${{ runner.temp }}/vex-self-signed-candidate/*.json
+            ${{ runner.temp }}/vex-self-signed-candidate/*.cer
+            ${{ runner.temp }}/vex-self-signed-candidate/*.ps1
+            ${{ runner.temp }}/vex-self-signed-candidate/README.md
+          if-no-files-found: error
+          retention-days: 14
+      - name: Retain self-signed x64 delivery files
+        if: always() && inputs.self_signed_candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: vex-native-windows-self-signed-x64
+          path: ${{ runner.temp }}/vex-self-signed-candidate/published/stable/*/x64/**
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Retain self-signed arm64 delivery files
+        if: always() && inputs.self_signed_candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: vex-native-windows-self-signed-arm64
+          path: ${{ runner.temp }}/vex-self-signed-candidate/published/stable/*/arm64/**
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Prepare pinned beta signing trust on the disposable release host
+        if: inputs.package_release && !inputs.self_signed_candidate
         shell: pwsh
         run: ./native-windows/scripts/prepare-tester-signing-trust.ps1 -DisposableRunner
       - name: Verify release inputs and stage architecture-specific runtimes
+        if: inputs.package_release && !inputs.self_signed_candidate
         shell: pwsh
         env:
           RELEASE_VERSION: ${{ inputs.release_version }}
@@ -488,6 +544,7 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($env:RELEASE_NOTES)) { throw 'Release notes are required.' }
           ./native-windows/scripts/stage-runtime-assets.ps1 -DestinationRoot (Join-Path $env:RUNNER_TEMP 'vex-native-runtime') -DisposableRunner
       - name: Package signed native Windows releases
+        if: inputs.package_release && !inputs.self_signed_candidate
         id: package_signed
         shell: pwsh
         env:
@@ -540,6 +597,7 @@ jobs:
           "candidate_directory=$candidateDirectory" >> $env:GITHUB_OUTPUT
           "preceding_directory=$precedingDirectory" >> $env:GITHUB_OUTPUT
       - name: Verify signed Windows install lifecycle without signing credentials
+        if: inputs.package_release && !inputs.self_signed_candidate
         shell: pwsh
         env:
           CANDIDATE_BUNDLE_DIRECTORY: ${{ steps.package_signed.outputs.candidate_directory }}
@@ -551,7 +609,7 @@ jobs:
             -PrecedingBundleDirectory $env:PRECEDING_BUNDLE_DIRECTORY `
             -ResultPath (Join-Path $PWD 'native-windows/packaging/out/signed-install-acceptance-x64.json')
       - name: Retain sanitized signed-install phase evidence
-        if: always()
+        if: always() && inputs.package_release && !inputs.self_signed_candidate
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: vex-native-windows-signed-install-evidence-x64
@@ -559,6 +617,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
       - name: Retain signed release artifacts for review
+        if: inputs.package_release && !inputs.self_signed_candidate
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: vex-native-windows-packaged-release

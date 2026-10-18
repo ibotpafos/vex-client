@@ -24,12 +24,13 @@ public sealed class VpnServiceCommandHandler : IDisposable
 
     public async Task<VpnServiceResponse> HandleAsync(
         VpnServiceRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        VpnAuthorizedProfile? authorizedProfile = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(request);
 
-        if (request.Operation == VpnServiceOperation.Disconnect)
+        if (request.Operation is VpnServiceOperation.Disconnect or VpnServiceOperation.StopTransport)
         {
             lock (_operationGate)
             {
@@ -40,16 +41,17 @@ public sealed class VpnServiceCommandHandler : IDisposable
         await _commandGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            var requestFingerprint = Fingerprint(request) + "|" + (authorizedProfile?.RoutingMode ?? "") + "|" + (authorizedProfile?.BypassRegion ?? "");
             if (_responses.TryGetValue(request.RequestId, out var cached))
             {
-                return cached.RequestFingerprint == Fingerprint(request)
+                return cached.RequestFingerprint == requestFingerprint
                     ? cached.Response
                     : Failure(request.RequestId, "request_id_conflict");
             }
 
-            var response = await ExecuteAsync(request, cancellationToken)
+            var response = await ExecuteAsync(request, cancellationToken, authorizedProfile)
                 .ConfigureAwait(false);
-            Cache(request, response);
+            Cache(request, response, requestFingerprint);
             return response;
         }
         finally
@@ -77,7 +79,8 @@ public sealed class VpnServiceCommandHandler : IDisposable
 
     private async Task<VpnServiceResponse> ExecuteAsync(
         VpnServiceRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        VpnAuthorizedProfile? authorizedProfile)
     {
         try
         {
@@ -86,9 +89,10 @@ public sealed class VpnServiceCommandHandler : IDisposable
                 VpnServiceOperation.Status =>
                     await _runtime.GetStatusAsync(cancellationToken).ConfigureAwait(false),
                 VpnServiceOperation.Connect =>
-                    await ConnectAsync(request, cancellationToken).ConfigureAwait(false),
+                    await ConnectAsync(request, cancellationToken, authorizedProfile).ConfigureAwait(false),
                 VpnServiceOperation.Disconnect =>
                     await DisconnectAsync(cancellationToken).ConfigureAwait(false),
+                VpnServiceOperation.StopTransport => await _runtime.SuspendAsync(cancellationToken).ConfigureAwait(false),
                 VpnServiceOperation.Diagnostics =>
                     await _runtime.GetDiagnosticsAsync(cancellationToken).ConfigureAwait(false),
                 VpnServiceOperation.SetAntiLeak =>
@@ -121,7 +125,8 @@ public sealed class VpnServiceCommandHandler : IDisposable
 
     private async Task<VpnTunnelStatus> ConnectAsync(
         VpnServiceRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        VpnAuthorizedProfile? authorizedProfile)
     {
         _current = new VpnConnectionSnapshot(
             VpnConnectionPhase.Connecting,
@@ -138,6 +143,9 @@ public sealed class VpnServiceCommandHandler : IDisposable
 
         try
         {
+            if (authorizedProfile is not null) {
+                return await _runtime.ConnectAuthorizedAsync(authorizedProfile, request.AntiLeakEnabled ?? true, connectCancellation.Token).ConfigureAwait(false);
+            }
             return await _runtime.ConnectAsync(
                 request.LocationId!,
                 request.TunnelConfig!,
@@ -198,11 +206,11 @@ public sealed class VpnServiceCommandHandler : IDisposable
 
     private long NextSequence() => checked(_current.Sequence + 1);
 
-    private void Cache(VpnServiceRequest request, VpnServiceResponse response)
+    private void Cache(VpnServiceRequest request, VpnServiceResponse response, string fingerprint)
     {
         _responses.Add(
             request.RequestId,
-            new CachedResponse(Fingerprint(request), response));
+            new CachedResponse(fingerprint, response));
         _responseOrder.Enqueue(request.RequestId);
 
         while (_responseOrder.Count > MaxCachedResponses)

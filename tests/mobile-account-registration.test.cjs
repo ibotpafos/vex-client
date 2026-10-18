@@ -4,6 +4,9 @@ const path = require('node:path');
 const { stripTypeScriptTypes } = require('node:module');
 const { test } = require('node:test');
 const { Buffer } = require('node:buffer');
+const nodeCrypto = require('node:crypto');
+const { p256 } = require('@noble/curves/nist.js');
+const { hexToBytes } = require('@noble/curves/utils.js');
 
 const sourceRoot = process.env.VEX_MOBILE_REGISTRATION_SOURCE_ROOT || path.resolve(__dirname, '..');
 function load(file, names, stubs = {}) {
@@ -16,7 +19,7 @@ const legacyPair = { publicKey: key(1), privateKey: key(2), keyEpoch: 1 };
 const legacyId = 'vexd_legacy-installation';
 const gate = () => { let resolve; const promise = new Promise(ok => { resolve = ok; }); return { promise, resolve }; };
 
-function harness(platform = 'ios', existingStore) {
+function harness(platform = 'ios', existingStore, nativeRouting = false) {
   const saved = existingStore || new Map([['vex.auth.device_id', legacyId]]);
   const devices = new Map(), bindings = new Map([[legacyId, 'A']]), registrations = [], writes = [], requests = [];
   let generations = 0, lookupFailure = false, writeFailure = false, readFailure = false, markerFailure = false, interruptedConfirmation, removeLegacyBeforeRegistration = false, registerError, holdLookup, holdProfile, profileReached, stagedEpoch, legacyReplacementAllowed = false;
@@ -27,7 +30,16 @@ function harness(platform = 'ios', existingStore) {
     deleteItemAsync: async storageKey => { saved.delete(storageKey); },
   };
   const app = load('src/native/appInfo.ts', 'getOrCreateDeviceId,getAppInfo,createInstallationUUID', { SecureStore: store, Application: {}, Platform: { OS: platform }, getOtaProvenance: () => ({}) });
-  const signer = load('src/native/deviceIdentity.ts', 'getOrCreateDeviceIdentity,deviceIdentitySignaturePayload', { SecureStore: store });
+  // Hermes has no browser SubtleCrypto. Exercise the real native signing path;
+  // Node's separate WebCrypto verifier below still checks each request signature.
+  const signer = load('src/native/deviceIdentity.ts', 'getOrCreateDeviceIdentity,deviceIdentitySignaturePayload', {
+    SecureStore: store, Platform: { OS: platform }, globalThis: {}, p256, hexToBytes,
+    Crypto: {
+      CryptoDigestAlgorithm: { SHA256: 'SHA-256' },
+      getRandomBytesAsync: async size => new Uint8Array(nodeCrypto.randomBytes(size)),
+      digestStringAsync: async (_algorithm, payload) => nodeCrypto.createHash('sha256').update(payload, 'utf8').digest('hex'),
+    },
+  });
   const session = load('src/vpn/sessionOperation.ts', 'SessionOperationSupersededError');
   const native = { getOrCreateWireGuardKeyPair: async () => ({ ...globalPair }), generateWireGuardKeyPair: async () => ({ publicKey: key(10 + ++generations), privateKey: key(90 + generations), keyEpoch: 2 }), replaceWireGuardKeyPair: async pair => { if (!legacyReplacementAllowed) throw Error('Global key must not be replaced'); globalPair = pair; } };
   const scoped = fs.existsSync(path.join(sourceRoot, 'src/native/vpnAccountIdentity.ts'))
@@ -41,6 +53,7 @@ function harness(platform = 'ios', existingStore) {
   devices.set('A', [dto('A')]);
   const jsonRequest = async (requestPath, options) => {
     requests.push(requestPath); const owner = ownerFor(options.accessToken);
+    if (requestPath.startsWith('/v1/vpn/routing-policy?')) return {}; // Older API: no signed v2 policy.
     if (requestPath === '/v1/devices') { if (lookupFailure) throw Error('lookup unavailable'); if (holdLookup) await holdLookup.promise; return devices.get(owner) || []; }
     if (requestPath === '/v1/devices/identity-challenge') { if (interruptedConfirmation === 'challenge') throw Error('challenge unavailable'); return { id: `challenge-${registrations.length}-${owner}`, nonce: `nonce-${owner}`, purpose: 'register' }; }
     if (requestPath === '/v1/devices/register') {
@@ -73,7 +86,9 @@ function harness(platform = 'ios', existingStore) {
     }
     if (requestPath.startsWith('/v1/vpn/profile?')) {
       if (holdProfile) { profileReached.resolve(); await holdProfile.promise; }
-      return profile((devices.get(owner) || []).find(device => device.id === new URLSearchParams(requestPath.split('?')[1]).get('device_id')));
+      const query = new URLSearchParams(requestPath.split('?')[1]);
+      const value = profile((devices.get(owner) || []).find(device => device.id === query.get('device_id')));
+      return nativeRouting ? { ...value, allowed_ips: query.get('routing_mode') === 'full_tunnel' ? ['0.0.0.0/0', '::/0'] : ['0.0.0.0/1'] } : value;
     }
     if (requestPath.startsWith('/v1/vpn/psk-rotations/current?')) {
       const device = (devices.get(owner) || []).find(item => item.id === new URLSearchParams(requestPath.split('?')[1]).get('device_id'));
@@ -82,7 +97,8 @@ function harness(platform = 'ios', existingStore) {
     throw Error(`Unexpected API route ${requestPath}`);
   };
   const api = load('src/api/vpn.ts', 'preparedTunnel,rotateManagedVpnKey,fetchStagedDevicePSKProfile', {
-    Platform: { OS: platform }, ...app, ...signer, ...native, ...scoped, ...location, ...selection, ...session,
+    supportsNativeRoutingPolicy: () => nativeRouting, Platform: { OS: platform }, ...app, ...signer, ...native, ...scoped, ...location, ...selection, ...session,
+    ...load('src/vpn/nativeRoutingPolicy.ts', 'nativeRoutingParameters,routingAuthorization'),
     ...load('src/api/nativeDeviceRegistration.ts', 'getOrCreateNativeDeviceRegistration'),
     ...load('src/vpn/keyEpochRecovery.ts', 'nextManagedKeyEpoch,isKeyEpochMismatchError'),
     ...load('src/vpn/amneziaConfig.ts', 'managedProfileAmneziaConfig'),
@@ -100,6 +116,25 @@ function harness(platform = 'ios', existingStore) {
     prepare: (owner, options = {}) => api.preparedTunnel(owner, { platform, deviceName: platform, idempotencyPrefix: platform }, { userId: ownerFor(owner), locationId: 'de', isCurrentSessionOperation: () => true, ...options }),
   };
 }
+
+for (const platform of ['android', 'ios']) test(`${platform}: native routing uses a complete transport on a v1 server and cannot reuse a split cache`, async () => {
+  const h = harness(platform, undefined, true);
+  const first = await h.prepare('A', { routingMode: 'all_except_ru', bypassRegion: 'ru' });
+  const queries = () => h.requests.filter(path => path.startsWith('/v1/vpn/profile?')).map(path => new URLSearchParams(path.split('?')[1]));
+  assert.equal(queries().at(-1).get('routing_mode'), 'full_tunnel');
+  assert.equal(queries().at(-1).get('routing_policy_version'), '2');
+  assert.equal(queries().at(-1).has('bypass_region'), false);
+  assert.match(first.config, /AllowedIPs = 0\.0\.0\.0\/0, ::\/0/);
+  assert.equal(first.routingMode, 'all_except_ru');
+  assert.equal(JSON.parse(first.routingParameters).authorization, undefined);
+  const next = await h.prepare('A', {
+    routingMode: 'all_except_ru', bypassRegion: 'ru',
+    cachedDevice: first.device, cachedConfig: 'legacy split cache', knownVersion: 1,
+  });
+  assert.equal(queries().at(-1).has('known_version'), false);
+  assert.notEqual(next.config, 'legacy split cache');
+  assert.match(next.config, /AllowedIPs = 0\.0\.0\.0\/0, ::\/0/);
+});
 
 for (const platform of ['android', 'ios']) test(`${platform}: A logout → B login → A keeps distinct logical identities and one A device`, async () => {
   const h = harness(platform);

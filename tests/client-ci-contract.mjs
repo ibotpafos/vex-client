@@ -18,7 +18,7 @@ function violations(value, packageValue = packageConfig) {
   if (!value.on?.pull_request || !value.on?.push || !Object.hasOwn(value.on ?? {}, 'workflow_dispatch')) failures.push('PR/main/manual triggers');
   if (!value.concurrency?.group || value.concurrency?.['cancel-in-progress'] !== true) failures.push('bounded concurrency');
   const paths = value.on?.pull_request?.paths ?? [];
-  for (const scope of ['src/**', 'app/**', 'assets/**', 'modules/**', 'scripts/**']) {
+  for (const scope of ['src/**', 'app/**', 'assets/**', 'modules/**', 'native-routing/**', 'scripts/**']) {
     if (!paths.includes(scope)) failures.push(`trigger coverage: ${scope}`);
   }
   for (const excluded of ['ios', 'windows']) {
@@ -54,7 +54,7 @@ function violations(value, packageValue = packageConfig) {
     const commands = (job.steps ?? []).map(step => step.run ?? '').join('\n');
     if (/npm run (?:ota:|.*:publish|.*:deploy-release)|package-native-windows\.ps1|publish-native-windows\.ps1|-allowProvisioningUpdates/.test(commands)) failures.push(`no signing/publication: ${lane}`);
     if (lane === 'android' && /(?:^|\n)\s*sdkmanager\s/.test(commands)) failures.push('explicit Android SDK tool path');
-    if (lane === 'android' && !(job.steps ?? []).some(step => step.uses?.startsWith('actions/setup-go@') && step.with?.['go-version'] === '1.25.x')) failures.push('pinned upstream Go toolchain floor');
+    if (['shared', 'android'].includes(lane) && !(job.steps ?? []).some(step => step.uses?.startsWith('actions/setup-go@') && step.with?.['go-version'] === '1.26.9')) failures.push(`pinned patched Go toolchain: ${lane}`);
     if (lane === 'macos') {
       if (job.env?.DEVELOPER_DIR !== '/Applications/Xcode_26.6.app/Contents/Developer') failures.push('supported pinned Xcode toolchain');
       if (!(job.steps ?? []).some(step => step.uses === 'actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16'
@@ -72,7 +72,7 @@ function violations(value, packageValue = packageConfig) {
         || transaction?.env?.BASE_COMMIT !== '${{ github.event.pull_request.base.sha }}') failures.push('PR-only transaction baseline');
     }
     const required = {
-      shared: ['npm run check', 'npm run build:web', 'actionlint'],
+      shared: ['npm run check', 'npm run build:web', 'actionlint', 'go test -race -timeout 45s ./...', 'govulncheck@v1.8.0'],
       android: ['sdkmanager', ':app:testDebugUnitTest', 'npm run android:build:debug:fast'],
       macos: ['swift build', '--target VEXNativeMac', 'swift test'],
     }[lane];

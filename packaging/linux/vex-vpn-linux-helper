@@ -49,10 +49,25 @@ case "$ACTION" in
   up)
     config="$(validate_config_path "$CONFIG_PATH")"
     validate_config_content "$config"
+    if [[ -x /usr/libexec/vex/vex-routing-up ]]; then exec /usr/libexec/vex/vex-routing-up "$config"; fi
     "$(quick_tool)" up "$config"
     ;;
   down)
+    if [[ -f /etc/vex-routing/owned ]]; then
+      systemctl stop vex-routing-refresh.timer
+      systemctl stop vex-routing.service
+      if ip link show vex >/dev/null 2>&1; then echo "VEX capture stop was not confirmed" >&2; exit 1; fi
+      nft delete table inet vex_routing
+      rm -f /etc/vex-routing/owned
+      exit 0
+    fi
     "$(quick_tool)" down "$INTERFACE_NAME" || true
+    ;;
+  down-keep-antileak)
+    [[ ${EUID} == 0 && -f /etc/vex-routing/owned ]] || exit 77
+    umask 077
+    printf 'retired\n' > /etc/vex-routing/transport-retired
+    /usr/libexec/vex/vex-awg --stop-transport vex
     ;;
   *)
     echo "usage: vex-vpn-linux-helper up <config>|down" >&2

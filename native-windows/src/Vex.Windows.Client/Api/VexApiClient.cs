@@ -165,10 +165,12 @@ public sealed class VexApiClient : INativeClientApi
 
     private readonly HttpClient _httpClient;
     private readonly IDeviceIdentityProvider? _deviceIdentityProvider;
+    private readonly Func<bool> _nativeRoutingCapability;
 
     public VexApiClient(
         HttpClient httpClient,
-        IDeviceIdentityProvider? deviceIdentityProvider = null)
+        IDeviceIdentityProvider? deviceIdentityProvider = null,
+        Func<bool>? nativeRoutingCapability = null)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
         if (httpClient.BaseAddress is null ||
@@ -182,6 +184,7 @@ public sealed class VexApiClient : INativeClientApi
 
         _httpClient = httpClient;
         _deviceIdentityProvider = deviceIdentityProvider;
+        _nativeRoutingCapability = nativeRoutingCapability ?? (() => false);
     }
 
     public Uri BaseUri => _httpClient.BaseAddress!;
@@ -523,6 +526,7 @@ public sealed class VexApiClient : INativeClientApi
             routingMode +
             "&platform=windows" +
             "&awg_version=3" +
+            (_nativeRoutingCapability() ? "&routing_policy_version=2" : string.Empty) +
             (candidateId is null ? string.Empty :
                 "&candidate_id=" + Uri.EscapeDataString(candidateId)) +
             (string.IsNullOrWhiteSpace(bypassRegion)

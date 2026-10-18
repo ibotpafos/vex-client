@@ -1,0 +1,2 @@
+# Unified diff context requires space prefixes before tabs and blank lines.
+patches/amnezia/*.patch -whitespace

@@ -17,5 +17,6 @@ let package = Package(name: "IosTunnelTransitionHarness", platforms: [.macOS(.v1
 ], swiftLanguageModes: [.v5])
 SWIFT
 swiftc -frontend -parse "$root_dir/modules/vex-vpn/ios/VexVpnModule.swift"
+bash "$root_dir/scripts/test_ios_routing_suspend.sh"
 swift test --package-path "$harness_dir" -j 2
 bash "$root_dir/scripts/test_ios_wgquick_parser.sh"

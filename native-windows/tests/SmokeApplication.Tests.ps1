@@ -69,6 +69,29 @@ foreach ($functionName in @('Wait-SmokeCondition', 'Get-SmokeLiveInstanceIds', '
     if ($null -eq $functionAst) { throw "Application smoke helper is missing: $functionName" }
     . ([scriptblock]::Create($functionAst.Extent.Text))
 }
+& {
+    $process = [pscustomobject]@{Id=123;HasExited=$false}
+    $process | Add-Member -MemberType ScriptMethod -Name Refresh -Value {}
+    $script:instanceReads = 0
+    function Get-SmokeLiveInstanceIds {
+        $script:instanceReads++
+        123
+        if ($script:instanceReads -eq 1) { 456 }
+    }
+    Assert-PrimaryInstance -TimeoutSeconds 1
+    if ($script:instanceReads -lt 2) { throw 'Primary-instance assertion did not wait for redirected enumeration to settle.' }
+    foreach ($ids in @(@(123,456),@(456))) {
+        $script:fixedInstanceIds = $ids
+        function Get-SmokeLiveInstanceIds { $script:fixedInstanceIds }
+        $rejected = $false
+        try { Assert-PrimaryInstance -TimeoutSeconds 1 } catch { $rejected = $true }
+        if (-not $rejected) { throw 'Persistent duplicates or replacement of the original instance were accepted.' }
+    }
+    $process.HasExited = $true
+    $rejected = $false
+    try { Assert-PrimaryInstance -TimeoutSeconds 1 } catch { $rejected = $true }
+    if (-not $rejected) { throw 'An exited original instance was accepted.' }
+}
 
 # A completed redirected process can remain in the Windows process snapshot.
 # It must not hide a live duplicate, a replacement primary, or primary exit.
@@ -91,7 +114,7 @@ foreach ($functionName in @('Wait-SmokeCondition', 'Get-SmokeLiveInstanceIds', '
                 'replacement' { $script:instanceSnapshots = @(New-InstanceSnapshot -Id 456 -Exited $false) }
             }
             $rejected = $false
-            try { Assert-PrimaryInstance } catch { $rejected = $true }
+            try { Assert-PrimaryInstance -TimeoutSeconds 1 } catch { $rejected = $true }
             if ($rejected -ne ($scenario -in @('live-secondary', 'replacement', 'primary-exited'))) {
                 throw "Application smoke primary identity gate mishandles $scenario."
             }

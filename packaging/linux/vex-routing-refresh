@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+[[ ${EUID} == 0 && -f /etc/vex-routing/owned ]] || exit 0
+systemctl is-active --quiet vex-routing.service || exit 0
+physical=$(python3 - <<'PY'
+import json,subprocess
+for family in ('-4','-6'):
+ routes=json.loads(subprocess.check_output(['ip','-j',family,'route','show','default']))
+ usable=sorted((r for r in routes if r.get('dev') and r['dev'] != 'vex'),key=lambda r:r.get('metric',0))
+ if usable: print(usable[0]['dev']); break
+else: raise SystemExit('VEX physical route unavailable')
+PY
+)
+index=$(cat "/sys/class/net/$physical/ifindex")
+umask 077
+previous=$(python3 -c 'import json; print(json.load(open("/etc/vex-routing/parameters.json"))["physical_interface_index"])')
+if [[ "$index" != "$previous" ]]; then
+  /usr/libexec/vex/vex-awg --update-underlay --physical-interface-index "$index" vex
+  python3 - "$index" <<'PY'
+import json,pathlib,sys
+path=pathlib.Path('/etc/vex-routing/parameters.json')
+value=json.loads(path.read_text()); value['physical_interface_index']=int(sys.argv[1])
+pending=path.with_suffix('.refresh'); pending.write_text(json.dumps(value)); pending.replace(path)
+PY
+fi
+/usr/libexec/vex/vex-awg --get-routing-authorization vex > /etc/vex-routing/routing-policy.pending
+if [[ -s /etc/vex-routing/routing-policy.pending ]]; then mv /etc/vex-routing/routing-policy.pending /etc/vex-routing/routing-policy.json; else rm -f /etc/vex-routing/routing-policy.pending; fi

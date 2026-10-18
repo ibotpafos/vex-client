@@ -51,7 +51,7 @@ public sealed class AppServices
         else
 #endif
         UiPreviewFixtures.Seed(StateStore);
-        var apiClient = new VexApiClient(httpClient, StateStore);
+        var apiClient = new VexApiClient(httpClient, StateStore, VpnServiceClient.SupportsNativeRouting);
         var realtimeHttpHandler = new SocketsHttpHandler
         {
             AllowAutoRedirect = false,

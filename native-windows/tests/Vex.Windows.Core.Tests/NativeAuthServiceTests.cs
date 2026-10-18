@@ -41,8 +41,19 @@ internal static class NativeAuthServiceTests
             };
         }
 
+        const string probe = "vexguard://auth/callback?code=vex-probe-invalid&state=vex-probe-invalid";
+        var callback = ProtocolActivationUriParser.Parse(probe) ??
+            throw new InvalidOperationException("The signed client parser rejected the exact inert probe.");
+        Check(callback.Scheme == "vexguard" && callback.Host == "auth" &&
+            callback.AbsolutePath == "/callback" &&
+            callback.Query == "?code=vex-probe-invalid&state=vex-probe-invalid",
+            "The parsed inert callback changed origin, path or query.");
+        var parsedExchange = PkceAuthFlow.ResolveCallback(callback, "vex-probe-invalid", "inert-probe-verifier");
+        Check(parsedExchange.Code == "vex-probe-invalid" && parsedExchange.CodeVerifier == "inert-probe-verifier",
+            "The actual callback guards rejected the inert code/state shape.");
+
         await fixture.Auth.HandleProtocolActivationAsync(
-            new Uri("vexguard://auth/callback?code=vex-probe-invalid&state=vex-probe-invalid"),
+            callback,
             CancellationToken.None).WaitAsync(Deadline);
 
         Check(apiCalls == 0 && fixture.Api.RegisterCalls == 0 &&

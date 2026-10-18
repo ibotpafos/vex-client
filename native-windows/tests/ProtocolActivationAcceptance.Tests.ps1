@@ -77,3 +77,75 @@ if (-not $observation['SignInStatusText'].readable -or -not $observation['SignIn
     throw 'The production observation lost the actual XAML status peer or changed its legacy report key.'
 }
 Write-Output 'Signed-out protocol oracle regressions passed; no Windows install or activation executed.'
+
+# Exercise the actual Shell transport with an inert COM constructor and receiver.
+$transportTokens = $null; $transportErrors = $null
+$transportSource = Join-Path $PSScriptRoot '../scripts/ProtocolCallback.ps1'
+$transportAst = [Management.Automation.Language.Parser]::ParseFile($transportSource, [ref]$transportTokens, [ref]$transportErrors)
+if (@($transportErrors).Count -ne 0) { throw 'The shared Shell callback transport must parse.' }
+$transport = @($transportAst.FindAll({ param($node)
+    $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Invoke-AcceptanceProtocolCallback'
+}, $true))
+if ($transport.Count -ne 1) { throw 'The actual shared callback transport is unavailable or ambiguous.' }
+& {
+    param($definition)
+    $script:constructorCalls = 0
+    $script:fakeShell = [pscustomobject]@{ Calls = [Collections.Generic.List[object]]::new() }
+    $script:fakeShell | Add-Member -MemberType ScriptMethod -Name ShellExecute -Value {
+        param($Target, $Parameters, $Directory, $Operation, $Show)
+        $this.Calls.Add([pscustomobject]@{ Target = $Target; Parameters = $Parameters;
+            Directory = $Directory; Operation = $Operation; Show = $Show })
+    }
+    function New-Object([string]$ComObject) {
+        if ($ComObject -cne 'Shell.Application') { throw 'The transport selected an unexpected COM class.' }
+        $script:constructorCalls++
+        return $script:fakeShell
+    }
+    Invoke-Expression $definition
+    foreach ($uri in @('vexguard://auth/callback?code=vex-probe-invalid&state=vex-probe-invalid',
+        'vexguard://auth/callback?code=abc%2Bdef%2Fghi%3D&state=inert-state')) {
+        Invoke-AcceptanceProtocolCallback ([Uri]$uri)
+        $call = $script:fakeShell.Calls[$script:fakeShell.Calls.Count - 1]
+        if ($call.Target -cne $uri -or $call.Parameters -cne '' -or $call.Directory -cne '' -or
+            $call.Operation -cne 'open' -or $call.Show -ne 1) {
+            throw 'The actual Shell transport changed the URI or its fixed association operation.'
+        }
+    }
+    foreach ($uri in @('https://example.invalid/callback?code=inert', 'file:///C:/Windows/notepad.exe',
+        'vexguard://other/callback?code=inert', 'vexguard://auth/other?code=inert',
+        'vexguard://user@auth/callback?code=inert', 'vexguard://auth:99/callback?code=inert',
+        'vexguard://auth/callback?code=inert#fragment', 'vexguard://auth/callback')) {
+        $rejected = $false
+        try { Invoke-AcceptanceProtocolCallback ([Uri]$uri) } catch { $rejected = $true }
+        if (-not $rejected -or $script:constructorCalls -ne 2 -or $script:fakeShell.Calls.Count -ne 2) {
+            throw 'A foreign callback reached the Shell constructor or receiver.'
+        }
+    }
+} $transport[0].Extent.Text
+
+$completion = @($ast.FindAll({ param($node)
+    $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Test-ProtocolProbeComplete'
+}, $true))
+if ($completion.Count -ne 1) { throw 'The actual warm/cold acceptance decision is unavailable or ambiguous.' }
+Invoke-Expression $completion[0].Extent.Text
+function New-InertProtocolEvidence {
+    return @{ local_guard_rejection_observed = $true; cold_start_observed = $true;
+        cold_local_guard_rejection_observed = $true;
+        observation = @{ primary_process_alive = $true; single_app_process = $true; authenticated_button_visible = $false };
+        cold_observation = @{ primary_process_alive = $true; single_app_process = $true; authenticated_button_visible = $false } }
+}
+if (-not (Test-ProtocolProbeComplete (New-InertProtocolEvidence))) { throw 'Both actual local observations were rejected.' }
+foreach ($flag in @('local_guard_rejection_observed', 'cold_start_observed', 'cold_local_guard_rejection_observed')) {
+    $candidate = New-InertProtocolEvidence; $candidate[$flag] = $false
+    if (Test-ProtocolProbeComplete $candidate) { throw 'An incomplete warm/cold observation passed.' }
+}
+foreach ($route in @('observation', 'cold_observation')) {
+    $candidate = New-InertProtocolEvidence; $candidate[$route] = $null
+    if (Test-ProtocolProbeComplete $candidate) { throw 'An absent route observation passed.' }
+    foreach ($flag in @('primary_process_alive', 'single_app_process', 'authenticated_button_visible')) {
+        $candidate = New-InertProtocolEvidence
+        $candidate[$route][$flag] = $flag -ceq 'authenticated_button_visible'
+        if (Test-ProtocolProbeComplete $candidate) { throw 'An unowned or authenticated route observation passed.' }
+    }
+}
+Write-Output 'Actual Shell arguments, origin guard and warm/cold acceptance regressions passed without COM activation.'

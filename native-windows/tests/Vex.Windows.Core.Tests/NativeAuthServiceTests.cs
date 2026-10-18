@@ -12,10 +12,22 @@ internal static class NativeAuthServiceTests
     public static void RunMissingChallengeRegression() =>
         CallbackWithoutChallengeStaysLocalAsync().GetAwaiter().GetResult();
 
+    public static void RunPendingBrowserLaunchRegression() =>
+        PendingBrowserLaunchCallbacksAsync().GetAwaiter().GetResult();
+
+    private static async Task PendingBrowserLaunchCallbacksAsync()
+    {
+        await CallbackDuringPendingBrowserLaunchAsync(lateLaunchException: false);
+        await CallbackDuringPendingBrowserLaunchAsync(lateLaunchException: true);
+        await AcceptedCallbackSurvivesPendingLaunchFailureAsync(lateLaunchException: false);
+        await AcceptedCallbackSurvivesPendingLaunchFailureAsync(lateLaunchException: true);
+    }
+
     private static async Task RunAsync()
     {
         await CallbackWithoutChallengeStaysLocalAsync();
         await BrowserCallbackProvisionsAndClearsChallengeAsync();
+        await PendingBrowserLaunchCallbacksAsync();
         await PersistedChallengeCompletesAfterRestartAsync();
         await CancellationDuringExchangeCannotProvisionAsync(lateFailure: false);
         await CancellationDuringExchangeCannotProvisionAsync(lateFailure: true);
@@ -84,6 +96,99 @@ internal static class NativeAuthServiceTests
         Check(fixture.Pkce.Pending is null && !fixture.Auth.IsWaitingForBrowserAuth &&
             fixture.Auth.Error is null && !string.IsNullOrEmpty(fixture.Auth.Notice),
             "Successful browser login retained its pending challenge or error.");
+    }
+
+    private static async Task CallbackDuringPendingBrowserLaunchAsync(bool lateLaunchException)
+    {
+        var fixture = new Fixture();
+        var launchStarted = Signal();
+        var launchResult = Result<bool>();
+        fixture.LaunchOverride = _ =>
+        {
+            launchStarted.TrySetResult();
+            return launchResult.Task;
+        };
+        var launching = fixture.Auth.StartBrowserAuthAsync(WebAuthMode.Login, CancellationToken.None);
+        Task? callback = null;
+        try
+        {
+            await launchStarted.Task.WaitAsync(Deadline);
+            Check(!launching.IsCompleted && fixture.Auth.IsWaitingForBrowserAuth,
+                "The browser launch did not remain pending for the callback regression.");
+            callback = fixture.Auth.HandleProtocolActivationAsync(Callback(RequireChallenge(fixture)),
+                CancellationToken.None);
+            await callback.WaitAsync(Deadline);
+            Check(fixture.Store.SaveCount == 1 && fixture.Store.State is { VpnProvisioningPending: true } &&
+                fixture.Pkce.Pending is null && !fixture.Auth.IsWaitingForBrowserAuth && fixture.Auth.Error is null,
+                "A valid callback waited for browser launch completion or lost the authenticated session.");
+
+            if (lateLaunchException)
+            {
+                launchResult.TrySetException(new InvalidOperationException("Late browser launch failure."));
+                _ = launchResult.Task.Exception;
+            }
+            else launchResult.TrySetResult(false);
+            await launching.WaitAsync(Deadline);
+            Check(fixture.Store.SaveCount == 1 && fixture.Auth.Error is null &&
+                !fixture.Auth.IsWaitingForBrowserAuth && fixture.Pkce.Pending is null,
+                "A late launch failure overwrote the completed browser authentication.");
+        }
+        finally
+        {
+            launchResult.TrySetResult(true);
+            await launching.WaitAsync(Deadline);
+            if (callback is not null) await callback.WaitAsync(Deadline);
+        }
+    }
+
+    private static async Task AcceptedCallbackSurvivesPendingLaunchFailureAsync(bool lateLaunchException)
+    {
+        var fixture = new Fixture();
+        var launchStarted = Signal();
+        var launchResult = Result<bool>();
+        var exchangeStarted = Signal();
+        var exchangeResult = Result<VexAuthSession>();
+        fixture.LaunchOverride = _ =>
+        {
+            launchStarted.TrySetResult();
+            return launchResult.Task;
+        };
+        fixture.Proxy.Overrides[nameof(INativeClientApi.ExchangeAppAuthCodeAsync)] = _ =>
+        {
+            exchangeStarted.TrySetResult();
+            return exchangeResult.Task;
+        };
+        var launching = fixture.Auth.StartBrowserAuthAsync(WebAuthMode.Login, CancellationToken.None);
+        Task? callback = null;
+        try
+        {
+            await launchStarted.Task.WaitAsync(Deadline);
+            callback = fixture.Auth.HandleProtocolActivationAsync(Callback(RequireChallenge(fixture)),
+                CancellationToken.None);
+            await exchangeStarted.Task.WaitAsync(Deadline);
+            if (lateLaunchException)
+            {
+                launchResult.TrySetException(new InvalidOperationException("Late browser launch failure."));
+                _ = launchResult.Task.Exception;
+            }
+            else launchResult.TrySetResult(false);
+            await launching.WaitAsync(Deadline);
+            Check(fixture.Auth.IsWaitingForBrowserAuth && fixture.Auth.Error is null &&
+                fixture.Pkce.Pending is not null && fixture.Store.SaveCount == 0,
+                "A late browser launch failure cancelled an already accepted callback.");
+            exchangeResult.TrySetResult(Session());
+            await callback.WaitAsync(Deadline);
+            Check(fixture.Store.SaveCount == 1 && fixture.Pkce.Pending is null &&
+                !fixture.Auth.IsWaitingForBrowserAuth && fixture.Auth.Error is null,
+                "The accepted callback could not persist its session after a late launch failure.");
+        }
+        finally
+        {
+            launchResult.TrySetResult(true);
+            exchangeResult.TrySetResult(Session());
+            await launching.WaitAsync(Deadline);
+            if (callback is not null) await callback.WaitAsync(Deadline);
+        }
     }
 
     private static async Task CancellationDuringExchangeCannotProvisionAsync(bool lateFailure)

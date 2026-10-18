@@ -238,6 +238,7 @@ public sealed class NativeAuthService
         WebAuthProvider? provider = null)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var gateHeld = true;
         BrowserAttempt? attempt = null;
         BrowserAttempt? previous = null;
         try
@@ -272,10 +273,15 @@ public sealed class NativeAuthService
             NotifyChanged();
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, attempt.Token);
             linked.Token.ThrowIfCancellationRequested();
+            // The browser may return the callback before its launch operation
+            // completes. That callback needs the same auth gate to finish.
+            _gate.Release();
+            gateHeld = false;
             var launched = await _launchBrowser(request.Url).WaitAsync(linked.Token).ConfigureAwait(false);
             if (!launched)
             {
-                FailBrowserAttempt(attempt, "Не удалось открыть браузер для входа через сайт.");
+                FailBrowserAttempt(attempt, "Не удалось открыть браузер для входа через сайт.",
+                    preserveStartedCallback: true);
             }
         }
         catch (Exception error) when (IsAuthStorageError(error) || error is ArgumentException or
@@ -283,12 +289,12 @@ public sealed class NativeAuthService
         {
             FailBrowserAttempt(attempt, error is OperationCanceledException
                 ? "Вход через сайт отменен."
-                : "Не удалось начать вход через сайт.");
+                : "Не удалось начать вход через сайт.", preserveStartedCallback: true);
         }
         finally
         {
             previous?.Cancel();
-            _gate.Release();
+            if (gateHeld) _gate.Release();
             NotifyChanged();
         }
     }
@@ -320,6 +326,7 @@ public sealed class NativeAuthService
                 }
                 attempt = _browserAttempt ??= new BrowserAttempt(pending.State);
                 if (attempt.State != pending.State) return;
+                attempt.CallbackStarted = true;
                 IsWaitingForBrowserAuth = true;
             }
             NotifyChanged();
@@ -388,12 +395,13 @@ public sealed class NativeAuthService
     private bool IsCurrentBrowserAttempt(BrowserAttempt attempt) =>
         ReferenceEquals(attempt, _browserAttempt) && !_browserAuthInvalidated && !attempt.Token.IsCancellationRequested;
 
-    private void FailBrowserAttempt(BrowserAttempt? attempt, string message)
+    private void FailBrowserAttempt(BrowserAttempt? attempt, string message, bool preserveStartedCallback = false)
     {
         lock (_browserSync)
         {
             if (attempt is not null && !IsCurrentBrowserAttempt(attempt)) return;
             if (attempt is null && _browserAuthInvalidated) return;
+            if (preserveStartedCallback && attempt?.CallbackStarted is true) return;
             _browserAuthInvalidated = true;
             _browserAttempt = null;
             IsWaitingForBrowserAuth = false;
@@ -453,6 +461,7 @@ public sealed class NativeAuthService
             Token = _cancellation.Token;
         }
         public string State { get; set; }
+        public bool CallbackStarted { get; set; }
         public CancellationToken Token { get; }
 
         public void Cancel()

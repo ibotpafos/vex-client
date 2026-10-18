@@ -10,8 +10,9 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+$explicitDisposable = [bool]$DisposableRunner
 . (Join-Path $PSScriptRoot 'invoke-signed-install-acceptance.ps1') -FunctionsOnly
-Assert-AcceptanceRunner ([bool]$DisposableRunner)
+Assert-AcceptanceRunner $explicitDisposable
 if ($env:GITHUB_EVENT_NAME -cne 'workflow_dispatch' -or $env:GITHUB_REF -cne 'refs/heads/main' -or
     $env:GITHUB_REPOSITORY -cne 'ibotpafos/vex-client' -or $env:VEX_WINDOWS_PROTOCOL_PROBE -cne '1') {
     throw 'Protocol acceptance requires its explicit protected disposable workflow.'

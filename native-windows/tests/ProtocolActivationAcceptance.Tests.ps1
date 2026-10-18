@@ -4,6 +4,31 @@ $source = Join-Path $PSScriptRoot '../scripts/invoke-protocol-activation-accepta
 $tokens = $null; $errors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile($source, [ref]$tokens, [ref]$errors)
 if (@($errors).Count -ne 0) { throw 'Protocol acceptance must parse before its isolated predicate regression.' }
+$guard = @($ast.FindAll({ param($node)
+    $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -ceq 'Assert-AcceptanceRunner'
+}, $true))
+if ($guard.Count -ne 1) { throw 'The actual disposable runner admission is unavailable or ambiguous.' }
+$sourceText = [IO.File]::ReadAllText((Resolve-Path $source).Path)
+$start = $ast.EndBlock.Statements[0].Extent.StartOffset
+$prefixText = $sourceText.Substring($start, $guard[0].Extent.StartOffset - $start)
+# Execute the real initialization and FunctionsOnly import. Rebind only its
+# source directory because this extracted block runs from the tests directory.
+# The real installer entrypoint and Windows admission are never executed.
+$prefix = [scriptblock]::Create($prefixText.Replace('$PSScriptRoot', '$probeScriptDirectory'))
+$admission = [scriptblock]::Create($guard[0].Extent.Text)
+$directory = Split-Path -Parent (Resolve-Path $source).Path
+foreach ($requested in @($true, $false)) {
+    $observed = @(& {
+        param($prefix, $admission, $probeScriptDirectory, [bool]$requested)
+        [switch]$DisposableRunner = $requested
+        . $prefix
+        function Assert-AcceptanceRunner([bool]$ExplicitlyDisposable) { return $ExplicitlyDisposable }
+        & $admission
+    } $prefix $admission $directory $requested)
+    if ($observed.Count -ne 1 -or $observed[0] -isnot [bool] -or $observed[0] -cne $requested) {
+        throw 'The FunctionsOnly import changed the explicit disposable runner decision.'
+    }
+}
 $function = @($ast.FindAll({ param($node)
     $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Test-ProtocolProbeRejection'
 }, $true))

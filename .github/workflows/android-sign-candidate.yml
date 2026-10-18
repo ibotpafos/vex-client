@@ -7,6 +7,11 @@ on:
         type: boolean
         required: false
         default: false
+      native_routing_source:
+        description: "Sign the fixed reviewed 43cc3ac4 RU DIRECT 1.0.72 source without publication"
+        type: boolean
+        required: false
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -14,7 +19,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   release:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.repository == 'ibotpafos/vex-client'
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'ibotpafos/vex-client' && (github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/codex/ru-direct-native-20261013' && github.actor == 'ibotpafos' && inputs.native_routing_source && !inputs.qualified_source))
     environment: android-candidate-signing
     runs-on: ubuntu-24.04
     timeout-minutes: 70
@@ -22,6 +27,9 @@ jobs:
       QUALIFIED_SOURCE_REQUESTED: ${{ inputs.qualified_source && 'true' || 'false' }}
       QUALIFIED_SOURCE_COMMIT: a13526075803986eebc396ec24fdc865d00ab5c0
       QUALIFIED_SOURCE_TREE: a47fd44b6166de98c64263554e6c981c896a8559
+      NATIVE_ROUTING_SOURCE_REQUESTED: ${{ inputs.native_routing_source && 'true' || 'false' }}
+      NATIVE_ROUTING_SOURCE_COMMIT: 43cc3ac4b4740049aa3ecbfcc5a20d9c289f7866
+      NATIVE_ROUTING_SOURCE_TREE: 1012559172cf73a99497daa9da2b03a3b886afe9
       VEX_RELEASE_USE_LOCAL_CACHE: "1"
       VEX_LOCAL_RELEASE_CACHE_ROOT: ${{ github.workspace }}/.ci-cache
       VEX_LOCAL_CACHE_MOVE_EXISTING: "0"
@@ -42,6 +50,14 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test -z "$(git status --porcelain)"
           expected_commit="$GITHUB_SHA"
+          if [[ "$QUALIFIED_SOURCE_REQUESTED" == "true" && "$NATIVE_ROUTING_SOURCE_REQUESTED" == "true" ]]; then
+            echo 'Select exactly one immutable candidate source' >&2; exit 2
+          fi
+          if [[ "$NATIVE_ROUTING_SOURCE_REQUESTED" == "true" ]]; then
+            git checkout --detach "$NATIVE_ROUTING_SOURCE_COMMIT"
+            expected_commit="$NATIVE_ROUTING_SOURCE_COMMIT"
+            test "$(git rev-parse HEAD^{tree})" = "$NATIVE_ROUTING_SOURCE_TREE"
+          fi
           if [[ "$QUALIFIED_SOURCE_REQUESTED" == "true" ]]; then
             if ! git cat-file -e "$QUALIFIED_SOURCE_COMMIT^{commit}" 2>/dev/null; then
               git fetch --no-tags https://github.com/ibotpafos/vex-client.git "$QUALIFIED_SOURCE_COMMIT"
@@ -60,6 +76,7 @@ jobs:
               "source_tree": subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], text=True).strip(),
               "orchestration_workflow_commit": os.environ["GITHUB_SHA"],
               "qualified_source_requested": os.environ["QUALIFIED_SOURCE_REQUESTED"] == "true",
+              "native_routing_source_requested": os.environ["NATIVE_ROUTING_SOURCE_REQUESTED"] == "true",
           }
           pathlib.Path(os.environ["RUNNER_TEMP"], "android-source-binding.json").write_text(json.dumps(binding, indent=2)+"\n")
           PY_SOURCE_BINDING
@@ -92,7 +109,7 @@ jobs:
           java-version: "17"
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: 1.25.x
+          go-version: "1.26.9"
           cache: false
       - run: npm ci
       - name: Quality before signing
@@ -145,6 +162,7 @@ jobs:
               "source_tree": actual_tree,
               "orchestration_workflow_commit": binding["orchestration_workflow_commit"],
               "qualified_source_requested": binding["qualified_source_requested"],
+              "native_routing_source_requested": binding["native_routing_source_requested"],
               "run_id": os.environ["GITHUB_RUN_ID"],
               "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
               "package": application["android"]["package"],

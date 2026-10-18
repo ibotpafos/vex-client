@@ -15,6 +15,14 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
+if (args is ["--native-routing-regression"])
+{
+    RoutedProfileMetadataAndUapi();
+    RoutedCapabilityPins();
+    Console.WriteLine("PASS native routing signed metadata, UAPI, protected stop and capability admission");
+    return;
+}
+
 if (args is ["--pending-browser-launch-callback-regression"] or ["--native-auth-service-regressions"])
 {
     try
@@ -222,6 +230,8 @@ var tests = new (string Name, Action Run)[]
     ("Tunnel config rejects unknown fields", TunnelConfigRejectsUnknownFields),
     ("IPC access policy blocks unsigned connect profiles", IpcPolicyBlocksUnsignedConnect),
     ("Signed profile materializes a trusted tunnel", SignedProfileMaterializesTunnel),
+    ("Routed AWG preserves signed routing metadata and UAPI without revealing keys", RoutedProfileMetadataAndUapi),
+    ("Routed capability requires the exact current service and engine receipts", RoutedCapabilityPins),
     ("Signed profile rejects payload tampering", SignedProfileRejectsTampering),
     ("Signed profile rejects expiration", SignedProfileRejectsExpiration),
     ("Signed profile reports an unsupported tunnel protocol", SignedProfileReportsUnsupportedProtocol),
@@ -1107,6 +1117,40 @@ static void SignedProfileMaterializesTunnel()
     {
         throw new InvalidOperationException("trusted tunnel config was incomplete");
     }
+}
+
+static void RoutedProfileMetadataAndUapi() {
+    using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+    var now = DateTimeOffset.FromUnixTimeSeconds(2_000_000_000);
+    var profile = CreateSignedProfileVerifier(key, now).Authorize(CreateSignedProfileAuthorization(key, now), "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
+    Equal("full", profile.RoutingMode);
+    Equal("10.64.1.25/32", profile.Addresses.Single());
+    Equal(2, profile.Dns.Count);
+    var uapi = VpnUapiConfigurationRenderer.Render(profile.TunnelConfig);
+    foreach (var expected in new[] {"private_key=" + new string('0',64), "replace_peers=true", "endpoint=198.51.100.10:443", "persistent_keepalive_interval=25", "allowed_ip=0.0.0.0/1", "i1=<b 0x01020304>"}) {
+        if (!uapi.Contains(expected, StringComparison.Ordinal)) { throw new InvalidOperationException("AWG UAPI contract field missing"); }
+    }
+    if (uapi.Contains("Address =") || uapi.Contains("DNS =") || profile.ToString().Contains("PrivateKey")) { throw new InvalidOperationException("routing metadata/key logging crossed its boundary"); }
+    var request = VpnServiceRequest.StopTransport("fixture-stop");
+    if (!VpnServiceAccessPolicy.IsAuthorized(request) || request.ProtocolVersion != 2 || request.LocalPrivateKey is not null) { throw new InvalidOperationException("additive protected stop contract changed v2"); }
+}
+
+static void RoutedCapabilityPins() {
+    var root = Path.Combine(Path.GetTempPath(), "vex-routing-fixture-"+Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    try {
+        File.WriteAllText(Path.Combine(root,"Vex.Windows.Service.exe"),"fixture-service");
+        File.WriteAllText(Path.Combine(root,"vex-awg.exe"),"fixture-engine");
+        string Digest(string name) => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(Path.Combine(root,name))));
+        var service = Digest("Vex.Windows.Service.exe"); var engine = Digest("vex-awg.exe");
+        File.WriteAllText(Path.Combine(root,"routing-capability.json"),JsonSerializer.Serialize(new VpnRoutingCapability.Receipt("vex.native-routing.v2",root,service,engine)));
+        File.WriteAllText(Path.Combine(root,"service-executable-sha256"),service);File.WriteAllText(Path.Combine(root,"router-sha256"),engine);
+        if (!VpnRoutingCapability.IsAvailable(root)) { throw new InvalidOperationException("sealed fixture not recognized"); }
+        File.WriteAllText(Path.Combine(root,"Vex.Windows.Service.exe"),"old-service");
+        if (VpnRoutingCapability.IsAvailable(root)) { throw new InvalidOperationException("old service inherited native capability"); }
+        File.WriteAllText(Path.Combine(root,"routing-capability.json"), "{\"Schema\":\"vex.native-routing.v2\",\"InstallDirectory\":" + JsonSerializer.Serialize(root) + ",\"ServiceSha256\":null,\"RouterSha256\":null}");
+        if (VpnRoutingCapability.IsAvailable(root)) { throw new InvalidOperationException("malformed capability was accepted"); }
+    } finally { Directory.Delete(root,true); }
 }
 
 static void SignedProfileRejectsTampering()

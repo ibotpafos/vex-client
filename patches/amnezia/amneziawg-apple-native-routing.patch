@@ -1,0 +1,224 @@
+diff --git a/Sources/WireGuardKit/WireGuardAdapter.swift b/Sources/WireGuardKit/WireGuardAdapter.swift
+index 2e68d3b..fa8fe03 100644
+--- a/Sources/WireGuardKit/WireGuardAdapter.swift
++++ b/Sources/WireGuardKit/WireGuardAdapter.swift
+@@ -41,6 +41,47 @@ private enum State {
+ public class WireGuardAdapter {
+     public typealias LogHandler = (WireGuardLogLevel, String) -> Void
+ 
++    /// The signed routing envelope is admitted again in the Go bridge.
++    public var routingParameters: String?
++    public var routingStartsSuspended = false
++    public private(set) var routingTransportStopped = false
++    private var routingInterfaceIndex: Int32 = 0
++
++    public func stopRoutingTransport(completion: @escaping (Bool) -> Void) {
++        workQueue.async {
++            guard case .started(let handle, _) = self.state, self.routingParameters != nil else { completion(false); return }
++            let stopped = wgRouterStopTransport(handle) == 0
++            if stopped { self.routingTransportStopped = true }
++            completion(stopped)
++        }
++    }
++
++    public func verifiedRoutingAuthorization(completion: @escaping (String?) -> Void) {
++        workQueue.async {
++            guard case .started(let handle, _) = self.state,
++                  let pointer = wgRouterAuthorization(handle) else { completion(nil); return }
++            let value = String(cString: pointer)
++            free(pointer)
++            completion(value.isEmpty ? nil : value)
++        }
++    }
++
++    public func updateRoutingPolicy(_ parameters: String, completion: @escaping (Bool) -> Void) {
++        workQueue.async {
++            guard case .started(let handle, _) = self.state, self.routingParameters != nil else { completion(false); return }
++            let result = wgRouterUpdatePolicy(handle, parameters)
++            if result >= 0 { self.routingParameters = parameters }
++            completion(result >= 0)
++        }
++    }
++
++    private func physicalInterfaceIndex(_ path: Network.NWPath?) -> Int32 {
++        guard let path, path.status == .satisfied else { return 0 }
++        let physical = path.availableInterfaces.first { $0.type == .wifi || $0.type == .cellular || $0.type == .wiredEthernet }
++        guard let physical else { return 0 }
++        return Int32(if_nametoindex(physical.name))
++    }
++
+     /// Network routes monitor.
+     private var networkMonitor: NWPathMonitor?
+ 
+@@ -206,6 +247,9 @@ public class WireGuardAdapter {
+                 let (wgConfig, resolutionResults) = settingsGenerator.uapiConfiguration()
+                 self.logEndpointResolutionResults(resolutionResults)
+ 
++                if self.routingParameters != nil {
++                    self.routingInterfaceIndex = self.physicalInterfaceIndex(networkMonitor.currentPath)
++                }
+                 self.state = .started(
+                     try self.startWireGuardBackend(wgConfig: wgConfig),
+                     settingsGenerator
+@@ -328,6 +372,16 @@ public class WireGuardAdapter {
+     /// - Throws: an error of type `WireGuardAdapterError`.
+     /// - Returns: `PacketTunnelSettingsGenerator`.
+     private func setNetworkSettings(_ networkSettings: NEPacketTunnelNetworkSettings) throws {
++        if routingParameters != nil {
++            // Policy stays in memory; NE installs only full capture routes.
++            networkSettings.ipv4Settings?.includedRoutes = [NEIPv4Route.default()]
++            networkSettings.ipv4Settings?.excludedRoutes = []
++            if networkSettings.ipv6Settings?.addresses.isEmpty != false {
++                networkSettings.ipv6Settings = NEIPv6Settings(addresses: ["fd7a:115c:a1e0:ffff::1"], networkPrefixLengths: [120])
++            }
++            networkSettings.ipv6Settings?.includedRoutes = [NEIPv6Route.default()]
++            networkSettings.ipv6Settings?.excludedRoutes = []
++        }
+         self.logHandler(.verbose, "setNetworkSettings: applying")
+         var systemError: Error?
+         let condition = NSCondition()
+@@ -350,6 +404,9 @@ public class WireGuardAdapter {
+                 throw WireGuardAdapterError.setNetworkSettings(systemError)
+             }
+         } else {
++            if routingParameters != nil {
++                throw WireGuardAdapterError.setNetworkSettings(NSError(domain: "VEXRouting", code: 1, userInfo: [NSLocalizedDescriptionKey: "Tunnel network settings timed out"]))
++            }
+             self.logHandler(.error, "setTunnelNetworkSettings timed out after 5 seconds; proceeding anyway")
+         }
+ 
+@@ -393,10 +450,19 @@ public class WireGuardAdapter {
+         }
+ 
+         self.logHandler(.verbose, "Starting WireGuard backend (config bytes: \(wgConfig.utf8.count), fd: \(tunnelFileDescriptor))")
+-        let handle = wgTurnOn(wgConfig, tunnelFileDescriptor)
++        let handle: Int32
++        if let parameters = routingParameters {
++            if routingInterfaceIndex == 0 { routingInterfaceIndex = physicalInterfaceIndex(networkMonitor?.currentPath) }
++            let stoppedConfig = "private_key=" + String(repeating: "0", count: 64) + "\nreplace_peers=true\n"
++            let transportConfig = routingStartsSuspended ? stoppedConfig : wgConfig
++            handle = wgTurnOnRouted(transportConfig, tunnelFileDescriptor, parameters, routingInterfaceIndex)
++        } else {
++            handle = wgTurnOn(wgConfig, tunnelFileDescriptor)
++        }
+         if handle < 0 {
+             throw WireGuardAdapterError.startWireGuardBackend(handle)
+         }
++        routingTransportStopped = routingParameters != nil && routingStartsSuspended
+         self.logHandler(.verbose, "WireGuard backend started with handle \(handle)")
+         #if os(iOS)
+         wgDisableSomeRoamingForBrokenMobileSemantics(handle)
+@@ -454,6 +520,14 @@ public class WireGuardAdapter {
+         let lastUpdate = self.lastNetworkSettingsUpdateAt.map { String(describing: $0) } ?? "nil"
+         self.logHandler(.verbose, "Path update state: state=\(self.state) everHadHandshake=\(self.everHadHandshake) lastNetworkSettingsUpdateAt=\(lastUpdate)")
+ 
++        if routingParameters != nil {
++            routingInterfaceIndex = physicalInterfaceIndex(path)
++            if case .started(let handle, _) = self.state { wgRouterSetInterface(handle, routingInterfaceIndex) }
++            // A routed backend retains capture when the physical path is down.
++            // Retirement must never replay the saved old-account configuration.
++            if routingTransportStopped || !path.status.isSatisfiable { return }
++        }
++
+         #if os(macOS)
+         if case .started(let handle, _) = self.state {
+             wgBumpSockets(handle)
+diff --git a/Sources/WireGuardKitGo/Makefile b/Sources/WireGuardKitGo/Makefile
+index 16cb2d5..79b8318 100644
+--- a/Sources/WireGuardKitGo/Makefile
++++ b/Sources/WireGuardKitGo/Makefile
+@@ -39,7 +39,7 @@ $(BUILDDIR)/libwg-go-$(1).a: export CGO_CFLAGS := $(CFLAGS_PREFIX) $(ARCH)
+ $(BUILDDIR)/libwg-go-$(1).a: export CGO_LDFLAGS := $(CFLAGS_PREFIX) $(ARCH)
+ $(BUILDDIR)/libwg-go-$(1).a: export GOOS := $(GOOS_$(PLATFORM_NAME))
+ $(BUILDDIR)/libwg-go-$(1).a: export GOARCH := $(GOARCH_$(1))
+-$(BUILDDIR)/libwg-go-$(1).a: $(GOROOT)/.prepared go.mod
++$(BUILDDIR)/libwg-go-$(1).a: $(GOROOT)/.prepared go.mod vex-routing-force
+ 	go build -ldflags=-w -trimpath -v -o "$(BUILDDIR)/libwg-go-$(1).a" -buildmode c-archive
+ 	rm -f "$(BUILDDIR)/libwg-go-$(1).h"
+ endef
+@@ -58,3 +58,7 @@ clean:
+ install: build
+ 
+ .PHONY: clean build version-header install
++
++# Source dependencies include the shared routing module outside this SDK.
++.PHONY: vex-routing-force
++vex-routing-force:
+diff --git a/Sources/WireGuardKitGo/api-apple.go b/Sources/WireGuardKitGo/api-apple.go
+index 58cb59a..4499a55 100644
+--- a/Sources/WireGuardKitGo/api-apple.go
++++ b/Sources/WireGuardKitGo/api-apple.go
+@@ -84,6 +84,8 @@ func wgSetLogger(context, loggerFn uintptr) {
+ 
+ //export wgTurnOn
+ func wgTurnOn(settings *C.char, tunFd int32) int32 {
++	vexTunnelHandlesMu.Lock()
++	defer vexTunnelHandlesMu.Unlock()
+ 	logger := &device.Logger{
+ 		Verbosef: CLogger(0).Printf,
+ 		Errorf:   CLogger(1).Printf,
+@@ -135,16 +137,21 @@ func wgTurnOn(settings *C.char, tunFd int32) int32 {
+ 
+ //export wgTurnOff
+ func wgTurnOff(tunnelHandle int32) {
++	vexTunnelHandlesMu.Lock()
++	defer vexTunnelHandlesMu.Unlock()
+ 	dev, ok := tunnelHandles[tunnelHandle]
+ 	if !ok {
+ 		return
+ 	}
+ 	delete(tunnelHandles, tunnelHandle)
++	vexRoutingDidStop(tunnelHandle)
+ 	dev.Close()
+ }
+ 
+ //export wgSetConfig
+ func wgSetConfig(tunnelHandle int32, settings *C.char) int64 {
++	vexTunnelHandlesMu.Lock()
++	defer vexTunnelHandlesMu.Unlock()
+ 	dev, ok := tunnelHandles[tunnelHandle]
+ 	if !ok {
+ 		return 0
+@@ -162,6 +169,8 @@ func wgSetConfig(tunnelHandle int32, settings *C.char) int64 {
+ 
+ //export wgGetConfig
+ func wgGetConfig(tunnelHandle int32) *C.char {
++	vexTunnelHandlesMu.Lock()
++	defer vexTunnelHandlesMu.Unlock()
+ 	device, ok := tunnelHandles[tunnelHandle]
+ 	if !ok {
+ 		return nil
+@@ -175,6 +184,8 @@ func wgGetConfig(tunnelHandle int32) *C.char {
+ 
+ //export wgBumpSockets
+ func wgBumpSockets(tunnelHandle int32) {
++	vexTunnelHandlesMu.Lock()
++	defer vexTunnelHandlesMu.Unlock()
+ 	dev, ok := tunnelHandles[tunnelHandle]
+ 	if !ok {
+ 		return
+@@ -195,6 +206,8 @@ func wgBumpSockets(tunnelHandle int32) {
+ 
+ //export wgDisableSomeRoamingForBrokenMobileSemantics
+ func wgDisableSomeRoamingForBrokenMobileSemantics(tunnelHandle int32) {
++	vexTunnelHandlesMu.Lock()
++	defer vexTunnelHandlesMu.Unlock()
+ 	dev, ok := tunnelHandles[tunnelHandle]
+ 	if !ok {
+ 		return
+diff --git a/Sources/WireGuardKitGo/wireguard.h b/Sources/WireGuardKitGo/wireguard.h
+index 7234c3d..62df41b 100644
+--- a/Sources/WireGuardKitGo/wireguard.h
++++ b/Sources/WireGuardKitGo/wireguard.h
+@@ -13,6 +13,11 @@
+ typedef void(*logger_fn_t)(void *context, int level, const char *msg);
+ extern void wgSetLogger(void *context, logger_fn_t logger_fn);
+ extern int wgTurnOn(const char *settings, int32_t tun_fd);
++extern int wgTurnOnRouted(const char *settings, int32_t tun_fd, const char *parameters, int32_t interface_index);
++extern void wgRouterSetInterface(int handle, int32_t interface_index);
++extern int wgRouterUpdatePolicy(int handle, const char *parameters);
++extern char *wgRouterAuthorization(int handle);
++extern int wgRouterStopTransport(int handle);
+ extern void wgTurnOff(int handle);
+ extern int64_t wgSetConfig(int handle, const char *settings);
+ extern char *wgGetConfig(int handle);

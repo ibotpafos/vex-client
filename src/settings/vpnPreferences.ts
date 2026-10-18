@@ -5,6 +5,7 @@ import { defaultVpnRoutingMode, isSmartRoutingMode, normalizeVpnRoutingMode, typ
 import { normalizeServerSelectionMode, type ServerSelectionMode } from '@/vpn/serverSelection';
 import { normalizePackageNames, type VpnApplicationRoutingMode } from '@/vpn/applicationRouting';
 import { androidExperimentalRoutingEnabled } from '@/vpn/androidRoutingSafety';
+import { supportsNativeRoutingPolicy } from '@/native/vexVpn';
 
 export { normalizePackageNames, type VpnApplicationRoutingMode } from '@/vpn/applicationRouting';
 
@@ -16,7 +17,7 @@ const serverSelectionModeKey = 'vex.settings.vpn.server_selection_mode.v1';
 const selectedVpnLocationKey = 'vex.settings.vpn.location.v1';
 const vpnApplicationRoutingModeKey = 'vex.settings.vpn.application_routing_mode.v1';
 const selectedVpnApplicationsKey = 'vex.settings.vpn.selected_applications.v1';
-const androidRoutingExperiment = androidExperimentalRoutingEnabled(
+const androidRoutingExperiment = supportsNativeRoutingPolicy() || androidExperimentalRoutingEnabled(
   Platform.OS,
   process.env.EXPO_PUBLIC_VEX_ANDROID_EXPERIMENTAL_ROUTING,
 );
@@ -46,8 +47,8 @@ export async function setAndroidAutoConnectEnabled(enabled: boolean): Promise<bo
 }
 
 export async function getAntiLeakEnabled(): Promise<boolean> {
-  // The production build enables this gate after the Android 9/16 acceptance matrix.
-  // Keeping the gate lets an emergency OTA force full-tunnel/no-blocker behavior.
+  // Older binaries retain the existing Android acceptance gate. Routed native
+  // binaries default to protection and preserve the user's explicit choice.
   if (Platform.OS === 'android' && !androidRoutingExperiment) {
     return false;
   }

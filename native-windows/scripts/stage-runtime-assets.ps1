@@ -54,6 +54,7 @@ foreach ($architecture in @('x64', 'arm64')) {
     $qualifiedRuntime = $null
     foreach ($asset in @(
         @{ Name = 'AMNEZIAWG'; File = 'amneziawg.exe' },
+        @{ Name = 'ROUTER'; File = 'vex-awg.exe' },
         @{ Name = 'WINTUN'; File = 'wintun.dll' }
     )) {
         $baseName = "VEX_WINDOWS_SERVICE_$($asset.Name)"

@@ -145,6 +145,7 @@ internal static class SetupBundleVerifier
         RequireFalse(root, "raw_appinstaller_provisions_service");
         foreach (var name in new[] { "app_executable_sha256", "service_executable_sha256", "amneziawg_sha256",
                      "wintun_sha256", "profile_signing_keyring_sha256" }) Hash(root, name);
+        if (root.TryGetProperty("router_sha256", out _)) { Hash(root, "router_sha256"); }
         return new SetupMetadata(channel, architecture, version, packageName, publisher,
             Hash(root, "client_certificate_sha256"),
             Artifact(root, "package", $"VEX.Native.{channel}.{architecture}.{version}.msix", MaximumPackageBytes),

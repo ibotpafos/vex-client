@@ -10,7 +10,7 @@ const awg31GoVersion = 'v3.1.20260828';
 const awg31ToolsRef = 'ee0f0a9aa34ff0a0da4b3433b9512781cfe02843';
 const awg31ToolsVersion = 'v3.1.20260812';
 const awg31AndroidRef = '5c16489e2cd9ed3a0a7a27c7445bba5238132f86';
-const iosGoVersion = 'v3.0.20260805';
+const iosGoVersion = awg31GoVersion;
 const read = (relative) => readFileSync(join(root, relative), 'utf8');
 
 const android = read('scripts/bootstrap_amneziawg_android.sh');

@@ -12,6 +12,8 @@ struct IosTunnelOperations<Manager> {
   let stop: (Manager) -> Void
   var needsRestart: (Manager) -> Bool = { _ in false }
   var waitUntilStopped: (Manager) async throws -> Void = { _ in }
+  var prepareExplicitDisconnect: (Manager) async throws -> Void = { _ in }
+  var suspendTransport: (Manager) async throws -> Void = { _ in throw IosTunnelSuspendError() }
 }
 
 actor IosTunnelTransition<Manager> {
@@ -26,6 +28,31 @@ actor IosTunnelTransition<Manager> {
 
   init(operations: IosTunnelOperations<Manager>) {
     self.operations = operations
+  }
+
+  func suspend() async throws {
+    try Task.checkCancellation()
+    requestedState = "disconnecting"
+    let operation = nextGeneration()
+    await acquireTransition()
+    defer { releaseTransition() }
+    try checkCurrent(operation)
+    let loadedManager: Manager?
+    do {
+      loadedManager = try await operations.loadExisting() ?? knownManager
+    } catch {
+      guard let knownManager else { throw error }
+      loadedManager = knownManager
+    }
+    try checkCurrent(operation)
+    guard let manager = loadedManager else {
+      requestedState = "disconnected"
+      return
+    }
+    knownManager = manager
+    try await operations.suspendTransport(manager)
+    try checkCurrent(operation)
+    requestedState = "disconnected"
   }
 
   func connect(config: String) async throws {
@@ -84,6 +111,8 @@ actor IosTunnelTransition<Manager> {
     try checkCurrent(operation)
     if let manager {
       knownManager = manager
+      try await operations.prepareExplicitDisconnect(manager)
+      try checkCurrent(operation)
       operations.stop(manager)
     }
   }
@@ -130,6 +159,10 @@ actor IosTunnelTransition<Manager> {
     status = statusOperations.readState(manager)
     guard status.state == "connected", status.connectedAt == connectedAt else { return status }
     if let data, let runtime = IosTunnelRuntimeStatus(data: data) {
+      if runtime.transportStopped {
+        return IosTunnelStatusSnapshot(state: "disconnected", nativeState: status.nativeState,
+          leakProtection: status.leakProtection == "armed" ? "blocking" : "off")
+      }
       status.rxBytes = runtime.rxBytes
       status.txBytes = runtime.txBytes
       status.latestHandshakeEpochMillis = runtime.latestHandshakeEpochMillis
@@ -204,12 +237,13 @@ struct IosTunnelStatusSnapshot {
   var txBytes: Double = 0
   var latestHandshakeEpochMillis: Double? = nil
   var verified = false
+  var leakProtection = "off"
 
   static var disconnected: Self { Self(state: "disconnected", nativeState: 1) }
   static var error: Self { Self(state: "error", nativeState: 0) }
 
   func toDictionary() -> [String: Any] {
-    var result: [String: Any] = ["state": state, "nativeState": nativeState, "rxBytes": rxBytes, "txBytes": txBytes]
+    var result: [String: Any] = ["state": state, "nativeState": nativeState, "rxBytes": rxBytes, "txBytes": txBytes, "leakProtection": leakProtection]
     if state == "connected" {
       result["verified"] = verified
       if let latestHandshakeEpochMillis { result["latestHandshakeEpochMillis"] = latestHandshakeEpochMillis }
@@ -222,6 +256,7 @@ struct IosTunnelStatusSnapshot {
 // The provider response is UAPI, which includes private key material. Extract
 // only counters and handshake times; never expose or log the raw response.
 struct IosTunnelRuntimeStatus {
+  private(set) var transportStopped = false
   private static let maximumSafeInteger: UInt64 = 9_007_199_254_740_991
   private(set) var rxBytes: Double = 0
   private(set) var txBytes: Double = 0
@@ -230,6 +265,7 @@ struct IosTunnelRuntimeStatus {
   init?(data: Data) {
     guard data.count <= 128 * 1024,
           let text = String(data: data, encoding: .utf8) else { return nil }
+    transportStopped = text.split(whereSeparator: \.isNewline).contains("vex_transport_stopped=true")
     let fields: Set<String> = ["rx_bytes", "tx_bytes", "last_handshake_time_sec", "last_handshake_time_nsec"]
     var peer: [String: UInt64]?
     var totalRX: UInt64 = 0
@@ -275,11 +311,14 @@ struct IosTunnelRuntimeStatus {
         }
       }
     }
+    if transportStopped && peer == nil { return }
     guard collectPeer(), peerCount > 0 else { return nil }
     rxBytes = Double(totalRX)
     txBytes = Double(totalTX)
   }
 }
+
+private struct IosTunnelSuspendError: Error {}
 
 enum IosTunnelStatusRequest {
   static func read(timeout: TimeInterval, send: (@escaping (Data?) -> Void) throws -> Void) async -> Data? {

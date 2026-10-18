@@ -1,7 +1,7 @@
 import { Platform } from 'react-native';
 import { getAppInfo, getOrCreateDeviceId } from '@/native/appInfo';
 import { deviceIdentitySignaturePayload, getOrCreateDeviceIdentity } from '@/native/deviceIdentity';
-import { generateWireGuardKeyPair, replaceWireGuardKeyPair, getOrCreateWireGuardKeyPair, type WireGuardKeyPair } from '@/native/vexVpn';
+import { generateWireGuardKeyPair, replaceWireGuardKeyPair, getOrCreateWireGuardKeyPair, supportsNativeRoutingPolicy, type WireGuardKeyPair } from '@/native/vexVpn';
 import { nativeVpnDeviceForClient } from '@/vpn/nativeDeviceSelection';
 import { isKeyEpochMismatchError, nextManagedKeyEpoch } from '@/vpn/keyEpochRecovery';
 import { defaultVpnRoutingMode, defaultVpnRoutingPolicyVersion, resolvedVpnBypassRegion } from '@/vpn/routingPolicy';
@@ -44,6 +44,7 @@ import { normalizeLocationCatalog } from '../vpn/locationCatalog';
 import { requireVpnLocationId } from '../vpn/locationId';
 import { canRevalidateDevice } from '../vpn/profileRevalidation';
 import { SessionOperationSupersededError } from '../vpn/sessionOperation';
+import { nativeRoutingParameters, routingAuthorization } from '../vpn/nativeRoutingPolicy';
 
 const mobileProtocol = 'amneziawg';
 
@@ -133,6 +134,11 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
   const externalDeviceId = baseExternalDeviceId;
   const routingMode = options.routingMode ?? defaultVpnRoutingMode;
   const bypassRegion = resolvedVpnBypassRegion(routingMode, options.bypassRegion);
+  const routingPolicy = supportsNativeRoutingPolicy() && routingMode === 'all_except_ru'
+    ? jsonRequest<{ authorization?: unknown }>(`/v1/vpn/routing-policy?region=ru&platform=${Platform.OS}&schema_version=2`, {
+      accessToken, headers: versionHeaders, retryCount: 0, timeout: 5_000, suppressErrorLog: true,
+    }).then(result => routingAuthorization(result.authorization)).catch(() => undefined)
+    : Promise.resolve(undefined);
   let device: VpnDevice | undefined;
   let profile: NativeVPNProfileDTO | undefined;
   let revalidateCachedConfig = false;
@@ -213,12 +219,15 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
   if ((profile.device_id !== undefined && profile.device_id !== device.id) ||
       (profile.client_public_key !== undefined && profile.client_public_key !== keyPair?.publicKey) ||
       (profile.client_key_epoch !== undefined && (!Number.isSafeInteger(profile.client_key_epoch) || profile.client_key_epoch < 1 || profile.client_key_epoch < (device.keyEpoch ?? 0)))) throw new Error('Сервер вернул профиль другого ключа VPN.');
+  const authorization = await routingPolicy;
+  requireCurrentOperation();
   if (profile.unchanged) {
     if (!revalidateCachedConfig || !options.cachedConfig) {
       throw new Error('Управляемый VPN-профиль не изменился, но локальный cache пуст.');
     }
     return {
       config: options.cachedConfig,
+      routingParameters: supportsNativeRoutingPolicy() ? nativeRoutingParameters(options.cachedConfig, routingMode, authorization) : undefined,
       resolutionTiming,
       device,
       profileVersion: typeof profile.version === 'number' ? profile.version : options.knownVersion,
@@ -234,6 +243,7 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
   return {
     resolutionTiming,
     config,
+    routingParameters: supportsNativeRoutingPolicy() ? nativeRoutingParameters(config, routingMode, authorization) : undefined,
     device: {
       ...device,
       keyEpoch: profile.client_key_epoch ?? device.keyEpoch,
@@ -255,9 +265,14 @@ function requestManagedVpnProfile(
   accessToken: string, deviceId: string, locationId: string, routingMode: string,
   bypassRegion: string | undefined, headers: Record<string, string>, knownVersion?: number,
 ): Promise<NativeVPNProfileDTO> {
-  const query = withManagedProfileAWGCapability(new URLSearchParams({device_id: deviceId, location: locationId, routing_mode: routingMode}));
-  if (bypassRegion) query.set('bypass_region', bypassRegion);
-  if (typeof knownVersion === 'number' && knownVersion > 0) query.set('known_version', String(knownVersion));
+  const routed = supportsNativeRoutingPolicy();
+  // Destination policy belongs to the native router. Its encrypted transport
+  // must include RU even when an older server ignores the v2 capability. Do not
+  // let a v1 unchanged acknowledgement resurrect a cached split AllowedIPs set.
+  const query = withManagedProfileAWGCapability(new URLSearchParams({device_id: deviceId, location: locationId, routing_mode: routed ? 'full_tunnel' : routingMode}));
+  if (routed) query.set('routing_policy_version', '2');
+  if (!routed && bypassRegion) query.set('bypass_region', bypassRegion);
+  if (!routed && typeof knownVersion === 'number' && knownVersion > 0) query.set('known_version', String(knownVersion));
   return jsonRequest<NativeVPNProfileDTO>(`/v1/vpn/profile?${query.toString()}`, {accessToken, headers, suppressErrorLog:true});
 }
 

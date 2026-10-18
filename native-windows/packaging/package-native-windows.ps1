@@ -281,6 +281,8 @@ $amneziaExecutablePath = Get-WindowsRuntimeAssetPath `
     -EnvironmentName 'VEX_WINDOWS_SERVICE_AMNEZIAWG_PATH' -Architecture $Architecture
 $wintunLibraryPath = Get-WindowsRuntimeAssetPath `
     -EnvironmentName 'VEX_WINDOWS_SERVICE_WINTUN_PATH' -Architecture $Architecture
+$routerExecutablePath = Get-WindowsRuntimeAssetPath `
+    -EnvironmentName 'VEX_WINDOWS_SERVICE_ROUTER_PATH' -Architecture $Architecture
 $vclibsDependencyInput = Get-WindowsRuntimeAssetPath `
     -EnvironmentName 'VEX_WINDOWS_VCLIBS_PATH' -Architecture $Architecture
 $timestampUri = if ($env:VEX_WINDOWS_SIGN_TIMESTAMP_URI) {
@@ -330,6 +332,12 @@ $vclibsDependencyPath = Join-Path $publishRoot "Microsoft.VCLibs.$Architecture.1
 
 Assert-WindowsPeArchitecture -Path $amneziaExecutablePath -Architecture $Architecture
 Assert-WindowsPeArchitecture -Path $wintunLibraryPath -Architecture $Architecture
+Assert-WindowsPeArchitecture -Path $routerExecutablePath -Architecture $Architecture
+$compiledPolicyKeys = Get-Content -LiteralPath (Join-Path $root 'native-routing/policy-signing-keys.json') -Raw | ConvertFrom-Json
+$packagedPolicyKeys = Get-Content -LiteralPath $profileSigningKeyringPath -Raw | ConvertFrom-Json
+if (($compiledPolicyKeys | ConvertTo-Json -Compress -Depth 6) -cne ($packagedPolicyKeys | ConvertTo-Json -Compress -Depth 6)) {
+    throw 'The routing engine must embed the exact packaged public signing keyring.'
+}
 $vclibsDependencyVersion = Read-VclibsDependencyIdentity -Path $vclibsDependencyInput -Architecture $Architecture
 
 # A failed publish must never leave a stale binary eligible for signing.
@@ -386,6 +394,7 @@ Assert-WindowsPeArchitecture -Path (Join-Path $packageDir 'Vex.Windows.Service.e
 
 foreach ($requiredAsset in @(
     $amneziaExecutablePath,
+    $routerExecutablePath,
     $wintunLibraryPath,
     $profileSigningKeyringPath
 )) {
@@ -395,6 +404,7 @@ foreach ($requiredAsset in @(
 }
 
 Copy-Item -LiteralPath $amneziaExecutablePath -Destination (Join-Path $packageDir 'amneziawg.exe') -Force
+Copy-Item -LiteralPath $routerExecutablePath -Destination (Join-Path $packageDir 'vex-awg.exe') -Force
 Copy-Item -LiteralPath $wintunLibraryPath -Destination (Join-Path $packageDir 'wintun.dll') -Force
 Copy-Item -LiteralPath $profileSigningKeyringPath -Destination (Join-Path $packageDir 'profile-signing-keys.json') -Force
 $runtimeNotices = Join-Path $packageDir 'ThirdParty'
@@ -440,6 +450,7 @@ try {
         -PfxPath $temporaryPfxPath `
         -Password $pfxPassword `
         -Path $serviceExecutable
+    Invoke-SignTool -SignTool $signtool -PfxPath $temporaryPfxPath -Password $pfxPassword -Path (Join-Path $packageDir 'vex-awg.exe')
 }
 finally {
     if (Test-Path -LiteralPath $temporaryPfxPath -PathType Leaf) {
@@ -452,6 +463,7 @@ $serviceExecutableSha256 = ConvertTo-HexSha256 $serviceExecutable
 $amneziaExecutableSha256 = ConvertTo-HexSha256 `
     (Join-Path $packageDir 'amneziawg.exe')
 $wintunSha256 = ConvertTo-HexSha256 (Join-Path $packageDir 'wintun.dll')
+$routerSha256 = ConvertTo-HexSha256 (Join-Path $packageDir 'vex-awg.exe')
 $profileSigningKeyringSha256 = ConvertTo-HexSha256 `
     (Join-Path $packageDir 'profile-signing-keys.json')
 
@@ -576,6 +588,7 @@ $metadata = [ordered]@{
     app_executable_sha256 = $appExecutableSha256
     service_executable_sha256 = $serviceExecutableSha256
     amneziawg_sha256 = $amneziaExecutableSha256
+    router_sha256 = $routerSha256
     wintun_sha256 = $wintunSha256
     profile_signing_keyring_sha256 = $profileSigningKeyringSha256
     update_signing_key_id = $updateKeyId

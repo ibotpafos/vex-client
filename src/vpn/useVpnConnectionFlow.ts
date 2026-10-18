@@ -151,6 +151,8 @@ export function useVpnConnectionFlow({
         const startedStatus = await withTimeout(
           connectVpn(attempt.config, {
             antiLeakEnabled,
+            routingParameters: attempt.routingParameters,
+            routingMode: attempt.routingMode,
             applicationRoutingMode: applicationSelection.mode,
             selectedApplications: applicationSelection.packageNames,
           }),

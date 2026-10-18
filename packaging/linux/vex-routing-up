@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# Elevated first-party owner; never install country/CDN routes in the kernel.
+set -euo pipefail
+[[ ${EUID} == 0 ]] || exit 77
+state=/etc/vex-routing
+engine=/usr/libexec/vex/vex-awg
+config=${1:?config required}
+[[ -f "$engine" && ! -L "$engine" && $(stat -c %u "$engine") == 0 ]] || exit 77
+for tool in nft ip awg awg-quick systemctl resolvectl python3 getent; do command -v "$tool" >/dev/null || exit 69; done
+routing_uid=$(getent passwd _vexvpn | cut -d: -f3)
+routing_gid=$(getent passwd _vexvpn | cut -d: -f4)
+[[ "$routing_uid" =~ ^[0-9]+$ && "$routing_uid" != 0 && "$routing_gid" != 0 ]] || exit 77
+identity=$(getent passwd _vexvpn)
+IFS=: read -r _ _ uid gid _ directory shell <<< "$identity"
+[[ "$uid" -lt 1000 && "$directory" == /var/empty && "$shell" == /usr/sbin/nologin ]] || exit 77
+install -d -m 700 -o root -g root "$state"
+# Refuse takeover of either an unrelated TUN or an unowned firewall table.
+if ip link show vex >/dev/null 2>&1 && [[ ! -f "$state/owned" ]]; then exit 73; fi
+if nft list table inet vex_routing >/dev/null 2>&1 && [[ ! -f "$state/owned" ]]; then exit 73; fi
+physical=$(python3 - <<'PY'
+import json,subprocess
+for family in ('-4','-6'):
+ routes=json.loads(subprocess.check_output(['ip','-j',family,'route','show','default']))
+ usable=sorted((r for r in routes if r.get('dev') and r['dev'] != 'vex'),key=lambda r:r.get('metric',0))
+ if usable: print(usable[0]['dev']); break
+else: raise SystemExit('VEX physical route unavailable')
+PY
+)
+index=$(cat "/sys/class/net/$physical/ifindex")
+umask 077
+python3 - "$config" "$state" "$index" "$routing_uid" "$routing_gid" <<'PY'
+import base64,ipaddress,json,pathlib,re,sys
+source,state,index,uid,gid=sys.argv[1:]; state=pathlib.Path(state)
+assert pathlib.Path(source).stat().st_size <= 65536
+text=pathlib.Path(source).read_text(); assert len(text.encode()) <= 65536
+sections={}; current=None
+allowed={'Interface':{'PrivateKey','Address','DNS','MTU','Jc','Jmin','Jmax','S1','S2','S3','S4','H1','H2','H3','H4','I1','I2','I3','I4','I5','HeaderProtectionKey','ContentPaddingAddition','RekeyAfterTime','RekeyTimeout','RejectAfterTime','KeepaliveTimeout','MaxHandshakeAttempts','RandomTrailers','DisableCookies'},'Peer':{'PublicKey','PresharedKey','Endpoint','AllowedIPs','PersistentKeepalive'}}
+for raw in text.splitlines():
+ line=raw.split('#',1)[0].strip()
+ if not line: continue
+ if line in ('[Interface]','[Peer]'):
+  current=line[1:-1]; assert current not in sections; sections[current]={}; continue
+ assert current and '=' in line
+ key,value=map(str.strip,line.split('=',1)); assert key in allowed[current] and key not in sections[current]
+ assert value and not any(c in value for c in '$`\\\"\'\x00\r\n;'); sections[current][key]=value
+interface,peer=sections['Interface'],sections['Peer']
+for section,key in ((interface,'PrivateKey'),(peer,'PublicKey')):
+ assert len(base64.b64decode(section[key],validate=True)) == 32
+for section,key in ((interface,'HeaderProtectionKey'),(peer,'PresharedKey')):
+ if key in section: assert len(base64.b64decode(section[key],validate=True)) == 32
+addresses=[v.strip() for v in interface['Address'].split(',')]
+for value in addresses: ipaddress.ip_interface(value)
+dns=[str(ipaddress.ip_address(v.strip())) for v in interface['DNS'].split(',')]
+endpoint=peer['Endpoint']; match=re.fullmatch(r'(?:\[([^]]+)\]|([^:]+)):(\d+)',endpoint); assert match
+ipaddress.ip_address(match[1] or match[2]); assert 0 < int(match[3]) < 65536
+mode='all_except_ru'
+mode_file=pathlib.Path(source+'.routing-mode')
+if mode_file.exists(): mode=mode_file.read_text().strip()
+assert mode in ('all_except_ru','full_tunnel')
+cache=state/'routing-policy.json'; previous=None
+if cache.exists() and cache.stat().st_size <= 2*1024*1024:
+ try: previous=json.loads(cache.read_text())
+ except ValueError: pass
+routing={'addresses':addresses,'dns':dns,'mode':mode}
+if previous: routing.update(previous_authorization=previous,**({'authorization':previous} if mode=='all_except_ru' else {}))
+(state/'parameters.pending').write_text(json.dumps({'routing':routing,'physical_interface_index':int(index),'uid':int(uid),'gid':int(gid)}))
+interface['MTU']='1360'; peer['AllowedIPs']='0.0.0.0/0, ::/0'
+if not any(':' in value for value in addresses): addresses.append('fd7a:115c:a1e0:ffff::1/120')
+interface['Address']=', '.join(addresses)
+(state/'vex.pending').write_text('\n\n'.join('['+name+']\n'+'\n'.join(k+' = '+v for k,v in values.items()) for name,values in sections.items())+'\n')
+PY
+"$engine" --check-routing-parameters --parameters "$state/parameters.pending" vex
+# Arm Block before replacing any capture. Only the sealed engine UID can egress.
+printf 'vex.native-routing.v2\n' > "$state/owned"
+if ! nft list table inet vex_routing >/dev/null 2>&1; then nft add table inet vex_routing; fi
+nft -f - <<RULES
+flush table inet vex_routing
+add chain inet vex_routing output { type filter hook output priority -10; policy drop; }
+add rule inet vex_routing output oifname "lo" accept
+add rule inet vex_routing output oifname "vex" accept
+add rule inet vex_routing output meta skuid $routing_uid meta l4proto { tcp, udp } accept
+add rule inet vex_routing output udp sport 68 udp dport 67 accept
+add rule inet vex_routing output udp sport 546 udp dport 547 accept
+add rule inet vex_routing output ip6 daddr { fe80::/10, ff02::/16 } icmpv6 type { nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert } accept
+RULES
+systemctl stop vex-routing.service
+mv "$state/parameters.pending" "$state/parameters.json"
+mv "$state/vex.pending" "$state/vex.conf"
+rm -f "$state/transport-retired"
+systemctl start vex-routing.service
+systemctl start vex-routing-refresh.timer

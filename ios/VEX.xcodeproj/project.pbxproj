@@ -24,6 +24,7 @@
 		BACD7857C49B0A49B54D8DC7 /* VexVpnTunnel.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = D66A112DEEB53F1724C1D77B /* VexVpnTunnel.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		BB2F792D24A3F905000567C9 /* Expo.plist in Resources */ = {isa = PBXBuildFile; fileRef = BB2F792C24A3F905000567C9 /* Expo.plist */; };
 		F11748422D0307B40044C1D9 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11748412D0307B40044C1D9 /* AppDelegate.swift */; };
+		D86E04AFEDB74E298E5F6191 /* ThirdPartyCryptoNotices.txt in Resources */ = {isa = PBXBuildFile; fileRef = E2E21EF315E043B0BCF3A628 /* ThirdPartyCryptoNotices.txt */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -82,6 +83,7 @@
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
 		F11748412D0307B40044C1D9 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = VEX/AppDelegate.swift; sourceTree = "<group>"; };
 		F11748442D0722820044C1D9 /* VEX-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = "VEX-Bridging-Header.h"; path = "VEX/VEX-Bridging-Header.h"; sourceTree = "<group>"; };
+		E2E21EF315E043B0BCF3A628 /* ThirdPartyCryptoNotices.txt */ = {isa = PBXFileReference; lastKnownFileType = text; name = ThirdPartyCryptoNotices.txt; path = VEX/ThirdPartyCryptoNotices.txt; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -133,6 +135,7 @@
 				13B07FB61A68108700A75B9A /* Info.plist */,
 				AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */,
 				71B2DC5907C84AE4CC1752D8 /* PrivacyInfo.xcprivacy */,
+				E2E21EF315E043B0BCF3A628 /* ThirdPartyCryptoNotices.txt */,
 			);
 			name = VEX;
 			sourceTree = "<group>";
@@ -365,6 +368,7 @@
 				13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */,
 				3E461D99554A48A4959DE609 /* SplashScreen.storyboard in Resources */,
 				134E3D5E486352F2A35EAC88 /* PrivacyInfo.xcprivacy in Resources */,
+				D86E04AFEDB74E298E5F6191 /* ThirdPartyCryptoNotices.txt in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -150,13 +150,20 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
     selectedApplications: List<String>,
     routeOnlySelectedApplications: Boolean,
     promise: Promise,
+    routingParameters: String? = null,
   ) {
     val recoveryHandler = Handler(Looper.getMainLooper())
+    val settled = java.util.concurrent.atomic.AtomicBoolean(false)
     val hardRecovery = object : Runnable {
       override fun run() {
         if (controller.isNetworkRecoveryPending()) {
           Log.w(TAG, "Delaying VPN connect hard recovery while network recovery is active.")
           recoveryHandler.postDelayed(this, NETWORK_RECOVERY_HARD_TIMEOUT_RETRY_MS)
+          return
+        }
+        if (antiLeakEnabled && controller.hasProtectedRoutingCapture()) {
+          Log.e(TAG, "VPN connect timed out; keeping the protected capture installed.")
+          if (settled.compareAndSet(false, true)) promise.reject("VPN_CONNECT_TIMEOUT", "VPN connection timed out; leak protection remains active.")
           return
         }
         Log.e(TAG, "VPN connect exceeded ${CONNECT_HARD_RECOVERY_MS}ms; terminating the app process to release Android VPN descriptors.")
@@ -174,15 +181,25 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
           antiLeakEnabled,
           routeOnlySelectedApplications,
           selectedApplications,
+          routingParameters,
         ).toWritableMap()
         emitVpnStatusChanged(status, force = true)
-        promise.resolve(status)
+        if (settled.compareAndSet(false, true)) promise.resolve(status)
       } catch (error: VpnPermissionRequiredException) {
-        rejectVpnError(promise, "VPN_PERMISSION_REQUIRED", "Android VPN permission is required.", error)
+        if (settled.compareAndSet(false, true)) rejectVpnError(promise, "VPN_PERMISSION_REQUIRED", "Android VPN permission is required.", error)
       } catch (error: Throwable) {
-        rejectVpnError(promise, "VPN_CONNECT_FAILED", "VPN connection failed.", error)
+        if (settled.compareAndSet(false, true)) rejectVpnError(promise, "VPN_CONNECT_FAILED", "VPN connection failed.", error)
       }
     }
+  }
+
+  @ReactMethod
+  fun connectWithRoutingPolicy(
+    config: String, antiLeakEnabled: Boolean, routingParameters: String,
+    applications: ReadableArray, selectedOnly: Boolean, promise: Promise,
+  ) {
+    val packages = (0 until applications.size()).mapNotNull { applications.getString(it)?.trim() }.filter { it.isNotEmpty() }.distinct()
+    startConnection(config, antiLeakEnabled, packages, selectedOnly, promise, routingParameters)
   }
 
   @ReactMethod

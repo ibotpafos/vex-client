@@ -73,7 +73,14 @@ public sealed record VpnProfileSigningKey
 public sealed record VpnAuthorizedProfile(
     string LocationId,
     string TunnelConfig,
-    DateTimeOffset ExpiresAt);
+    DateTimeOffset ExpiresAt)
+{
+    public string RoutingMode { get; init; } = "full";
+    public string BypassRegion { get; init; } = "";
+    public IReadOnlyList<string> Addresses { get; init; } = [];
+    public IReadOnlyList<string> Dns { get; init; } = [];
+    public override string ToString() => "VpnAuthorizedProfile { TunnelConfig = <redacted> }";
+}
 
 public sealed class VpnSignedProfileVerifier
 {
@@ -169,7 +176,13 @@ public sealed class VpnSignedProfileVerifier
         return new VpnAuthorizedProfile(
             policy.AssignedLocationId,
             BuildTunnelConfig(policy, localPrivateKey),
-            policy.ExpiresAt);
+            policy.ExpiresAt)
+        {
+            RoutingMode = policy.RoutingMode,
+            BypassRegion = policy.BypassRegion,
+            Addresses = policy.Tunnel.AssignedIpv6 is null ? [policy.Tunnel.AssignedIpv4] : [policy.Tunnel.AssignedIpv4, policy.Tunnel.AssignedIpv6],
+            Dns = policy.Tunnel.Dns.ToArray(),
+        };
     }
 
     private void VerifySignature(

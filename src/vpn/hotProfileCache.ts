@@ -91,6 +91,9 @@ export async function saveHotVpnProfile(
   delete storedProfile.connectPreparationTiming;
   delete storedProfile.hotProfileAgeMs;
   delete storedProfile.hotProfileUsed;
+  // The native policy cache re-verifies public routing data on reuse. Avoid
+  // duplicating a large authorization envelope in secret profile storage.
+  delete storedProfile.routingParameters;
   const record: HotVpnProfileRecord = {
     schemaVersion: hotVpnProfileSchemaVersion,
     userId: userId.trim(),

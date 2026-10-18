@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+[[ ${EUID} == 0 ]] || exit 77
+state=/etc/vex-routing
+[[ -f "$state/owned" ]] || exit 77
+# ExecStartPost runs for every supervised restart, under the same Block policy.
+for attempt in $(seq 1 40); do if ip link show vex >/dev/null 2>&1; then break; fi; sleep 0.1; done
+ip link set dev vex mtu 1360 up
+while IFS= read -r address; do ip address add "$address" dev vex; done < <(python3 - "$state/vex.conf" <<'PY'
+import sys
+for line in open(sys.argv[1]):
+ if line.split('=',1)[0].strip() == 'Address':
+  for value in line.split('=',1)[1].split(','): print(value.strip())
+PY
+)
+ip -4 route add 0.0.0.0/1 dev vex
+ip -4 route add 128.0.0.0/1 dev vex
+ip -6 route add ::/1 dev vex
+ip -6 route add 8000::/1 dev vex
+read -r -a dns <<< "$(python3 - "$state/parameters.json" <<'PY'
+import json,sys
+print(' '.join(json.load(open(sys.argv[1]))['routing']['dns']))
+PY
+)"
+resolvectl dns vex "${dns[@]}"
+resolvectl domain vex '~.'
+# strip removes OS-only fields; no hooks or shell expressions survived admission.
+if [[ ! -f "$state/transport-retired" ]]; then
+  awg setconf vex <(awg-quick strip "$state/vex.conf")
+fi

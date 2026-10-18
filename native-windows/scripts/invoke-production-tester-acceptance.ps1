@@ -45,7 +45,8 @@ $evidence = [ordered]@{ schema = 'vex.windows-production-tester-acceptance.v1'; 
     qa_workflow_commit = $env:GITHUB_SHA; release_version = $qa.release_version; qa_payload_sha256 = $digest;
     passed = $false; normal_pkce_callback = $false; free_tester_access = $false; public_vpn_verified = $false;
     restored_baseline_egress_verified = $false; feedback_saved = $false; cleanup_confirmed = $false;
-    physical_arm64_verified = $false; reboot_verified = $false; phases = [Collections.Generic.List[object]]::new(); failure_type = $null }
+    physical_arm64_verified = $false; reboot_verified = $false; phases = [Collections.Generic.List[object]]::new(); failure_type = $null;
+    sign_in_stage = 'not_started'; sign_in_observation = $null }
 $baseline = Join-Path $ResultDirectory 'baseline.json'; $connected = Join-Path $ResultDirectory 'connected.json'; $restored = Join-Path $ResultDirectory 'restored.json'
 $ownerSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $mutationStarted = $false; $owned = $null; $shared = @(); $failure = $null
@@ -77,6 +78,21 @@ function Invoke-QAControl([string]$Id) {
     Wait-QA { $item = Find-QAControl $Id; $null -ne $item -and $item.Current.IsEnabled -and -not $item.Current.IsOffscreen }
     $item = Find-QAControl $Id
     Invoke-AcceptanceUiControl $item
+}
+function Get-QASignInObservation {
+    # Fixed identifiers and booleans only. Never serialize UI text, callback
+    # arguments, account identity, exception messages or the desktop tree.
+    $observation = [ordered]@{}
+    foreach ($id in @('WebsiteSignInButton', 'CancelWebsiteAuthButton', 'AccountNavigationButton', 'PowerButton', 'SignOutButton', 'SignInStatusText')) {
+        try {
+            $item = Find-QAControl $id
+            $observation[$id] = [ordered]@{ readable = $true; present = $null -ne $item;
+                enabled = $null -ne $item -and $item.Current.IsEnabled;
+                offscreen = $null -ne $item -and $item.Current.IsOffscreen }
+        }
+        catch { $observation[$id] = [ordered]@{ readable = $false; present = $false; enabled = $false; offscreen = $false } }
+    }
+    return $observation
 }
 function Get-QABrowserRequest {
     foreach ($browser in @(Get-Process -Name 'msedge', 'chrome' -ErrorAction SilentlyContinue | Where-Object MainWindowHandle -NE ([IntPtr]::Zero))) {
@@ -137,12 +153,15 @@ try {
         $script:owned = $processes[0]; $script:window = [Windows.Automation.AutomationElement]::FromHandle($script:owned.MainWindowHandle); return $true
     }
     Add-AcceptancePhase 'normal_native_pkce_sign_in' {
+        $evidence.sign_in_stage = 'open_browser'
         $edge = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Microsoft/Edge/Application/msedge.exe'
         if (Test-Path -LiteralPath $edge -PathType Leaf) { $null = Start-Process -FilePath $edge -ArgumentList @('--no-first-run', '--no-default-browser-check', '--new-window', 'about:blank') }
         Invoke-QAControl 'WebsiteSignInButton'
+        $evidence.sign_in_stage = 'browser_request'
         $script:browserRequest = $null
         Wait-QA { $script:browserRequest = Get-QABrowserRequest; return $null -ne $script:browserRequest } 45
         $q = $script:browserRequest; $state = $q.Get('state')
+        $evidence.sign_in_stage = 'server_state'
         $details = Invoke-QAApi 'GET' ('/v1/auth/app?state=' + [Uri]::EscapeDataString($state)) $null @(200, 404)
         if ($details.PSObject.Properties.Name -notcontains 'state') {
             $init = @{ state = $state; code_challenge = $q.Get('code_challenge'); device_id = $q.Get('device_id'); device_name = $q.Get('device_name'); platform = 'windows' }
@@ -151,6 +170,7 @@ try {
         }
         if ($details.state -cne $state -or $details.platform -cne 'windows' -or $details.code_challenge -cne $q.Get('code_challenge') -or
             $details.device_id -cne $q.Get('device_id') -or [DateTimeOffset]::Parse($details.expires_at) -le [DateTimeOffset]::UtcNow) { throw 'The native PKCE server state changed.' }
+        $evidence.sign_in_stage = 'approve_callback'
         $approval = Invoke-QAApi 'POST' '/v1/auth/app/approve' @{ state = $state }
         $redirect = [Uri]$approval.redirect_url
         if (-not (($redirect.Scheme -ceq 'vexguard' -and $redirect.Host -ceq 'auth' -and $redirect.AbsolutePath -ceq '/callback') -or
@@ -161,14 +181,18 @@ try {
         # Phase output is discarded; host output must still register this mask.
         Write-Host ('::add-mask::' + $parameters.Get('code'))
         $callback = 'vexguard://auth/callback?code=' + [Uri]::EscapeDataString($parameters.Get('code')) + '&state=' + [Uri]::EscapeDataString($state)
+        $evidence.sign_in_stage = 'protocol_callback'
         $null = Start-Process -FilePath $callback
         Wait-QA {
             $signOut = Find-QAControl 'SignOutButton'; $power = Find-QAControl 'PowerButton'
             return ($null -ne $signOut -and -not $signOut.Current.IsOffscreen) -or ($null -ne $power -and $power.Current.IsEnabled)
         } 60
+        $evidence.sign_in_stage = 'open_account'
         Invoke-QAControl 'AccountNavigationButton'
+        $evidence.sign_in_stage = 'account_status'
         Wait-QA { $signOut = Find-QAControl 'SignOutButton'; return $null -ne $signOut -and -not $signOut.Current.IsOffscreen }
         $evidence.normal_pkce_callback = $true
+        $evidence.sign_in_stage = 'completed'
     } $evidence
     Add-AcceptancePhase 'select_full_traffic' {
         Invoke-QAControl 'SettingsNavigationButton'
@@ -205,7 +229,10 @@ try {
         if (@($workspace.feedback | Where-Object { $_.id -ceq $first.id }).Count -ne 1) { throw 'Tester feedback did not appear in its account.' }
         $evidence.feedback_saved = $true
     } $evidence
-} catch { $failure = $_.Exception.GetType().Name; $evidence.failure_type = $failure }
+} catch {
+    $failure = $_.Exception.GetType().Name; $evidence.failure_type = $failure
+    $evidence.sign_in_observation = Get-QASignInObservation
+}
 finally {
     try {
         if ($mutationStarted) {

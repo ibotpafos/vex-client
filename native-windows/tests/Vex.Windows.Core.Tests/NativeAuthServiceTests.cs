@@ -9,8 +9,12 @@ internal static class NativeAuthServiceTests
 
     public static void Run() => RunAsync().GetAwaiter().GetResult();
 
+    public static void RunMissingChallengeRegression() =>
+        CallbackWithoutChallengeStaysLocalAsync().GetAwaiter().GetResult();
+
     private static async Task RunAsync()
     {
+        await CallbackWithoutChallengeStaysLocalAsync();
         await BrowserCallbackProvisionsAndClearsChallengeAsync();
         await PersistedChallengeCompletesAfterRestartAsync();
         await CancellationDuringExchangeCannotProvisionAsync(lateFailure: false);
@@ -22,6 +26,32 @@ internal static class NativeAuthServiceTests
         await QueuedStaleCallbackPreservesFreshChallengeAsync();
         await CancellationSurvivesChallengeClearFailureAsync();
         await BrowserLaunchFailureSurvivesChallengeClearFailureAsync();
+    }
+
+    private static async Task CallbackWithoutChallengeStaysLocalAsync()
+    {
+        var fixture = new Fixture();
+        var apiCalls = 0;
+        foreach (var method in typeof(INativeClientApi).GetMethods())
+        {
+            fixture.Proxy.Overrides[method.Name] = _ =>
+            {
+                apiCalls++;
+                throw new InvalidOperationException("A callback without a challenge reached the API.");
+            };
+        }
+
+        await fixture.Auth.HandleProtocolActivationAsync(
+            new Uri("vexguard://auth/callback?code=vex-probe-invalid&state=vex-probe-invalid"),
+            CancellationToken.None).WaitAsync(Deadline);
+
+        Check(apiCalls == 0 && fixture.Api.RegisterCalls == 0 &&
+            fixture.Store.SaveCount == 0 && fixture.Store.State is null &&
+            fixture.Pkce.Pending is null && fixture.BrowserUris.Count == 0,
+            "A callback without a saved challenge contacted the API or created authentication state.");
+        Check(!fixture.Auth.IsWaitingForBrowserAuth && fixture.Auth.Notice is null &&
+            fixture.Auth.Error == "Сессия входа через сайт устарела. Запустите вход заново.",
+            "The signed-out callback probe did not reach the existing local rejection guard.");
     }
 
     private static async Task BrowserCallbackProvisionsAndClearsChallengeAsync()

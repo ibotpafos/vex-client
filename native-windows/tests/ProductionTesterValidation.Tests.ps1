@@ -39,4 +39,39 @@ Assert ($workflow -notmatch 'secrets\s*\[|toJSON\s*\(\s*secrets\s*\)|secrets\s*:
 # Importing lifecycle helpers must not execute its administrator/install path.
 . (Join-Path $PSScriptRoot '../scripts/invoke-signed-install-acceptance.ps1') -FunctionsOnly
 Assert ($null -ne (Get-Command Read-AcceptanceBundle -CommandType Function)) 'Lifecycle helpers were not imported.'
+# Import only the observation definition: never run the production script or
+# discover a real window, process, account or certificate during unit tests.
+$tokens = $null; $errors = $null
+$driver = Join-Path $PSScriptRoot '../scripts/invoke-production-tester-acceptance.ps1'
+$ast = [Management.Automation.Language.Parser]::ParseFile($driver, [ref]$tokens, [ref]$errors)
+Assert ($errors.Count -eq 0) 'Production tester driver has invalid PowerShell syntax.'
+$definitions = @($ast.FindAll({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and
+    $n.Name -ceq 'Get-QASignInObservation' }, $false))
+Assert ($definitions.Count -eq 1) 'Production sign-in observation definition is ambiguous.'
+Invoke-Expression $definitions[0].Extent.Text
+$privateCanary = 'private-token-callback-account-never-upload'
+$script:observationFixture = @{
+    WebsiteSignInButton = [pscustomobject]@{ Current = [pscustomobject]@{ IsEnabled = $true; IsOffscreen = $false; Name = $privateCanary } }
+    CancelWebsiteAuthButton = [pscustomobject]@{ Current = [pscustomobject]@{ IsEnabled = $false; IsOffscreen = $true; Name = $privateCanary } }
+    PowerButton = [pscustomobject]@{ Current = [pscustomobject]@{ IsEnabled = $true; IsOffscreen = $true; Name = $privateCanary } }
+}
+function Find-QAControl([string]$Id) {
+    if ($Id -ceq 'AccountNavigationButton') { throw $privateCanary }
+    return $script:observationFixture[$Id]
+}
+$observation = Get-QASignInObservation
+Assert ($observation.Count -eq 6 -and $observation.WebsiteSignInButton.readable -and
+    $observation.WebsiteSignInButton.present -and $observation.WebsiteSignInButton.enabled -and
+    -not $observation.WebsiteSignInButton.offscreen) 'Visible, enabled sign-in observation was lost.'
+Assert ($observation.CancelWebsiteAuthButton.present -and -not $observation.CancelWebsiteAuthButton.enabled -and
+    $observation.CancelWebsiteAuthButton.offscreen -and $observation.PowerButton.offscreen) 'Disabled and offscreen states were conflated with absence.'
+Assert (-not $observation.AccountNavigationButton.readable -and -not $observation.SignOutButton.present -and
+    $observation.SignOutButton.readable) 'An unreadable UI provider was confused with an absent control.'
+foreach ($control in $observation.Values) {
+    Assert ($control.Count -eq 4) 'An observation contains unexpected private fields.'
+    foreach ($key in @('readable', 'present', 'enabled', 'offscreen')) {
+        Assert ($control[$key] -is [bool]) 'Only boolean UI state may enter an observation.'
+    }
+}
+Assert (-not (($observation | ConvertTo-Json -Depth 4 -Compress).Contains($privateCanary))) 'UI or exception text leaked into the observation.'
 Write-Output 'Limited Windows tester validation passed: exact release/hash, ordinary namespace, TTL, public exits, and inert helper import.'

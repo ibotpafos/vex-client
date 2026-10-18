@@ -12,9 +12,13 @@ public partial class App : Application
 {
     private MainWindow? _window;
     private TrayIconHost? _trayIconHost;
+    private AppActivationArguments? _initialActivation;
+    private AppActivationArguments? _startupRedirect;
 
-    public App()
+    public App(AppActivationArguments initialActivation)
     {
+        ArgumentNullException.ThrowIfNull(initialActivation);
+        _initialActivation = initialActivation;
         InitializeComponent();
     }
 
@@ -27,7 +31,6 @@ public partial class App : Application
         Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
     {
         RegisterProtocolActivations();
-        var current = AppInstance.GetCurrent();
         _window ??= new MainWindow();
         _window.Closed += OnWindowClosed;
         AppServices.Current.RegisterMainWindow(_window);
@@ -47,9 +50,19 @@ public partial class App : Application
         if (UiPreviewContext.IsProtectedStateFaultPreview)
             ProtectedStateFaultPreview.RecordStartup(AppServices.Current);
 #endif
-        _ = HandleActivationAsync(
-            current.GetActivatedEventArgs(),
-            ProtocolActivationUriParser.Parse(args.Arguments));
+        // Packaged activation arguments are available only on their first SDK
+        // read. Program captured them before selecting the primary instance.
+        var initialActivation = _initialActivation;
+        _initialActivation = null;
+        if (initialActivation is not null)
+        {
+            _ = HandleActivationAsync(
+                initialActivation,
+                ProtocolActivationUriParser.Parse(args.Arguments));
+        }
+        var startupRedirect = _startupRedirect;
+        _startupRedirect = null;
+        if (startupRedirect is not null) HandleRedirectedActivation(startupRedirect);
     }
 
     internal void HandleRedirectedActivation(
@@ -57,6 +70,9 @@ public partial class App : Application
     {
         if (_window is null)
         {
+            // A redirected callback can reach the dispatcher before OnLaunched
+            // has created the window. Keep it until the shell can receive it.
+            _startupRedirect = args;
             return;
         }
 

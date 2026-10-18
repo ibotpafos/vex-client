@@ -190,7 +190,9 @@ try {
         Write-Host ('::add-mask::' + $parameters.Get('code'))
         $callback = 'vexguard://auth/callback?code=' + [Uri]::EscapeDataString($parameters.Get('code')) + '&state=' + [Uri]::EscapeDataString($state)
         $evidence.sign_in_stage = 'protocol_callback'
-        $null = Start-Process -FilePath $callback
+        # Match the initial packaged-app launch: the installer host is elevated,
+        # while URI activation belongs to the user's existing desktop shell.
+        $null = Start-Process -FilePath (Join-Path ([Environment]::GetFolderPath('Windows')) 'explorer.exe') -ArgumentList $callback
         Wait-QA {
             $signOut = Find-QAControl 'SignOutButton'; $power = Find-QAControl 'PowerButton'
             return ($null -ne $signOut -and -not $signOut.Current.IsOffscreen) -or ($null -ne $power -and $power.Current.IsEnabled)

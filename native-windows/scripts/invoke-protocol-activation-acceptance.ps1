@@ -57,7 +57,7 @@ function Find-ProtocolProbeControl([string]$Id) {
         [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, $Id))
 }
 function Test-ProtocolProbeRejection {
-    $status = Find-ProtocolProbeControl 'SignInStatusText'
+    $status = Find-ProtocolProbeControl 'AccountSignInStatus'
     return $null -ne $status -and -not $status.Current.IsOffscreen -and
         $status.Current.Name -ceq 'Сессия входа через сайт устарела. Запустите вход заново.'
 }
@@ -72,12 +72,17 @@ function Get-ProtocolProbeObservation {
         open_with_process_present = @(Get-Process -Name 'OpenWith' -ErrorAction SilentlyContinue).Count -gt 0
         protocol_user_choice_present = Test-Path -LiteralPath 'HKCU:\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\vexguard\UserChoice'
         local_guard_rejection_observed = $false
+        auth_status_present = $false
+        auth_status_visible = $false
         signed_out_button_visible = $false
         browser_wait_visible = $false
         authenticated_button_visible = $false
         uia_readable = $false
     }
     try {
+        $status = Find-ProtocolProbeControl 'AccountSignInStatus'
+        $observation.auth_status_present = $null -ne $status
+        $observation.auth_status_visible = $null -ne $status -and -not $status.Current.IsOffscreen
         $observation.local_guard_rejection_observed = Test-ProtocolProbeRejection
         foreach ($pair in @(@('WebsiteSignInButton', 'signed_out_button_visible'),
             @('CancelWebsiteAuthButton', 'browser_wait_visible'), @('SignOutButton', 'authenticated_button_visible'))) {

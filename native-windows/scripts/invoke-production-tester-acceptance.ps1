@@ -85,7 +85,9 @@ function Get-QASignInObservation {
     $observation = [ordered]@{}
     foreach ($id in @('WebsiteSignInButton', 'CancelWebsiteAuthButton', 'AccountNavigationButton', 'PowerButton', 'SignOutButton', 'SignInStatusText')) {
         try {
-            $item = Find-QAControl $id
+            # Keep the legacy report key while selecting the actual XAML peer.
+            $selector = if ($id -ceq 'SignInStatusText') { 'AccountSignInStatus' } else { $id }
+            $item = Find-QAControl $selector
             $observation[$id] = [ordered]@{ readable = $true; present = $null -ne $item;
                 enabled = $null -ne $item -and $item.Current.IsEnabled;
                 offscreen = $null -ne $item -and $item.Current.IsOffscreen }

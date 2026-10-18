@@ -48,7 +48,7 @@ internal static class Program
             var dispatcherQueue = DispatcherQueue.GetForCurrentThread();
             SynchronizationContext.SetSynchronizationContext(
                 new DispatcherQueueSynchronizationContext(dispatcherQueue));
-            var app = new App();
+            var app = new App(activationArgs);
             AppActivationArguments? pendingActivation;
             lock (ActivationSync)
             {

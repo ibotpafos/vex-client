@@ -15,6 +15,21 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
+if (args is ["--missing-pkce-challenge-regression"])
+{
+    try
+    {
+        NativeAuthServiceTests.RunMissingChallengeRegression();
+        Console.WriteLine("PASS callback without PKCE challenge rejects locally without API or session writes");
+    }
+    catch (Exception error)
+    {
+        Console.Error.WriteLine("FAIL callback without PKCE challenge: " + error.Message);
+        Environment.ExitCode = 1;
+    }
+    return;
+}
+
 if (args is ["--controller-death-receipt-regression"])
 {
     try

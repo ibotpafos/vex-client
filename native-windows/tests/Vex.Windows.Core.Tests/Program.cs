@@ -15,6 +15,22 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
+if (args is ["--pending-browser-launch-callback-regression"] or ["--native-auth-service-regressions"])
+{
+    try
+    {
+        if (args[0] == "--native-auth-service-regressions") NativeAuthServiceTests.Run();
+        else NativeAuthServiceTests.RunPendingBrowserLaunchRegression();
+        Console.WriteLine("PASS PKCE callback completes while browser launch is pending and survives late launch failure");
+    }
+    catch (Exception error)
+    {
+        Console.Error.WriteLine("FAIL pending browser launch callback: " + error.Message);
+        Environment.ExitCode = 1;
+    }
+    return;
+}
+
 if (args is ["--missing-pkce-challenge-regression"])
 {
     try

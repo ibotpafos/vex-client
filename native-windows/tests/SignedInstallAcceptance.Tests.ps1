@@ -516,6 +516,53 @@ if ($Action -ceq 'Verify') {
     $uiCommand = New-AcceptanceInstalledUiCommand @{
         family='VEX.Acceptance_fixture'; executable='C:\fixture\Vex.Windows.App.exe'; sha256=('C'*64) }
     $uiProbe = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($uiCommand))
+    Assert ($uiProbe.Contains((Get-Item Function:Invoke-AcceptanceUiControl).ScriptBlock.ToString()) -and
+        $uiProbe.Contains('Invoke-AcceptanceUiControl $settings')) 'Installed UI did not embed and use the shared interaction guard.'
+    if ($IsWindows) {
+        Add-Type -AssemblyName UIAutomationClient
+        Add-Type -AssemblyName UIAutomationTypes
+        # Inert providers exercise the actual shared function with real pattern
+        # identifiers. No desktop element, application or VPN is touched.
+        $script:patternIds = @{
+            invoke = [Windows.Automation.InvokePattern]::Pattern.Id
+            selection = [Windows.Automation.SelectionItemPattern]::Pattern.Id
+            toggle = [Windows.Automation.TogglePattern]::Pattern.Id
+        }
+        foreach ($script:patternCase in @('invoke','selection','toggle','all','unsupported','disabled','offscreen','action_failure')) {
+            $script:patternQueries = [Collections.Generic.List[int]]::new()
+            $script:patternActions = [Collections.Generic.List[string]]::new()
+            $script:inertPattern = [pscustomobject]@{}
+            $inertPattern | Add-Member ScriptMethod Invoke {
+                $script:patternActions.Add('invoke')
+                if ($script:patternCase -ceq 'action_failure') { throw 'Inert provider action failed.' }
+            }
+            $inertPattern | Add-Member ScriptMethod Select { $script:patternActions.Add('selection') }
+            $inertPattern | Add-Member ScriptMethod Toggle { $script:patternActions.Add('toggle') }
+            $element = [pscustomobject]@{ Current=[pscustomobject]@{
+                IsEnabled=($patternCase -cne 'disabled'); IsOffscreen=($patternCase -ceq 'offscreen') } }
+            $element | Add-Member ScriptMethod TryGetCurrentPattern {
+                param($Id, $Result)
+                $script:patternQueries.Add($Id.Id)
+                $Result.Value = $script:inertPattern
+                return ($script:patternCase -in @('all','action_failure') -or
+                    ($script:patternIds.ContainsKey($script:patternCase) -and
+                        $Id.Id -eq $script:patternIds[$script:patternCase]))
+            }
+            if ($patternCase -in @('unsupported','disabled','offscreen','action_failure')) {
+                Assert-Rejected { Invoke-AcceptanceUiControl $element } 'Unavailable or failed UI provider was admitted.'
+            }
+            else { Invoke-AcceptanceUiControl $element }
+            $expectedAction = if ($patternCase -in @('all','action_failure')) { 'invoke' } else { $patternCase }
+            $expectedQueries = if ($patternCase -in @('disabled','offscreen')) { 0 }
+                elseif ($patternCase -in @('toggle','unsupported')) { 3 }
+                elseif ($patternCase -ceq 'selection') { 2 } else { 1 }
+            $expectedActions = if ($patternCase -in @('unsupported','disabled','offscreen')) { 0 } else { 1 }
+            Assert ($patternQueries.Count -eq $expectedQueries -and $patternActions.Count -eq $expectedActions) 'UI interaction ignored availability, tried an unoffered pattern or repeated a failed action.'
+            if ($expectedActions -eq 1) {
+                Assert ($patternActions[0] -ceq $expectedAction) 'UI interaction selected the wrong supported pattern.'
+            }
+        }
+    }
     if (-not $IsWindows) {
         $uiProbe = $uiProbe.Replace('Add-Type -AssemblyName UIAutomationClient','').Replace('Add-Type -AssemblyName UIAutomationTypes','')
     }

@@ -337,6 +337,26 @@ function Get-AcceptanceUiPowerShellPath {
     return $hostPath
 }
 
+function Invoke-AcceptanceUiControl {
+    param($Element)
+    if ($null -eq $Element -or -not $Element.Current.IsEnabled -or $Element.Current.IsOffscreen) {
+        throw 'Acceptance UI control is unavailable.'
+    }
+    # Match the existing desktop smoke driver. Navigation uses ToggleButton;
+    # choose only a pattern actually offered by the verified window's control.
+    $pattern = $null
+    if ($Element.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {
+        $pattern.Invoke()
+    }
+    elseif ($Element.TryGetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern, [ref]$pattern)) {
+        $pattern.Select()
+    }
+    elseif ($Element.TryGetCurrentPattern([Windows.Automation.TogglePattern]::Pattern, [ref]$pattern)) {
+        $pattern.Toggle()
+    }
+    else { throw 'Acceptance UI control has no supported interaction pattern.' }
+}
+
 function Open-AcceptanceBundleLocks {
     param($Bundle)
     $streams = [Collections.Generic.List[IO.FileStream]]::new()
@@ -871,6 +891,7 @@ function Assert-AcceptanceRemoved {
 
 function New-AcceptanceInstalledUiCommand {
     param($InputData)
+    $uiControlBody = (Get-Item Function:Invoke-AcceptanceUiControl).ScriptBlock.ToString()
     $encodedPayload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($InputData | ConvertTo-Json -Compress)))
     $probe = @'
 $ErrorActionPreference = 'Stop'
@@ -881,6 +902,9 @@ $stage = 'initialize'
 function Find-Element([string]$id) {
     $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, $id)
     return $script:window.FindFirst([Windows.Automation.TreeScope]::Descendants, $condition)
+}
+function Invoke-AcceptanceUiControl {
+__UI_CONTROL_BODY__
 }
 try {
     $inputValue = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__PAYLOAD__')) | ConvertFrom-Json
@@ -943,7 +967,7 @@ try {
     if ($null -eq $signIn -or -not $signIn.Current.IsEnabled -or $signIn.Current.IsOffscreen -or
         $null -eq $title -or $null -eq $settings) { throw 'Installed signed-out status is missing.' }
     $stage = 'open_settings'
-    ([Windows.Automation.InvokePattern]$settings.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)).Invoke()
+    Invoke-AcceptanceUiControl $settings
     $stage = 'wait_settings'
     $deadline = [DateTime]::UtcNow.AddSeconds(10)
     do {
@@ -976,7 +1000,7 @@ finally {
     }
 }
 '@
-    $probe = $probe.Replace('__PAYLOAD__', $encodedPayload)
+    $probe = $probe.Replace('__PAYLOAD__', $encodedPayload).Replace('__UI_CONTROL_BODY__', $uiControlBody)
     return [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($probe))
 }
 

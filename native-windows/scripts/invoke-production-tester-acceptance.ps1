@@ -74,9 +74,9 @@ function Find-QAControl([string]$Id) {
         [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, $Id))
 }
 function Invoke-QAControl([string]$Id) {
-    Wait-QA { $item = Find-QAControl $Id; $null -ne $item -and $item.Current.IsEnabled }
+    Wait-QA { $item = Find-QAControl $Id; $null -ne $item -and $item.Current.IsEnabled -and -not $item.Current.IsOffscreen }
     $item = Find-QAControl $Id
-    ([Windows.Automation.InvokePattern]$item.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)).Invoke()
+    Invoke-AcceptanceUiControl $item
 }
 function Get-QABrowserRequest {
     foreach ($browser in @(Get-Process -Name 'msedge', 'chrome' -ErrorAction SilentlyContinue | Where-Object MainWindowHandle -NE ([IntPtr]::Zero))) {

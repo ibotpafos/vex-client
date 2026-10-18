@@ -130,38 +130,54 @@ if ($IsWindows) {
         $n.Name -ceq 'Get-QABrowserControlValue' }, $false))
     Assert ($readers.Count -eq 1) 'Browser control reader is ambiguous.'
     Invoke-Expression $readers[0].Extent.Text
-    $script:browserValuePattern = [pscustomobject]@{ Current = [pscustomobject]@{ Value = $browserValue } }
-    $element = [pscustomobject]@{}
-    $element | Add-Member ScriptMethod TryGetCurrentPattern {
-        param($Id, $Result)
-        if ($script:browserReadCase -ceq 'unsupported') { return $false }
-        if ($script:browserReadCase -ceq 'stale') { throw [Windows.Automation.ElementNotAvailableException]::new($privateCanary) }
-        if ($script:browserReadCase -ceq 'com') { throw [Runtime.InteropServices.COMException]::new($privateCanary) }
-        if ($script:browserReadCase -ceq 'inactive') { throw [InvalidOperationException]::new($privateCanary) }
-        if ($script:browserReadCase -ceq 'unexpected') { throw [IO.IOException]::new($privateCanary) }
-        $Result.Value = $script:browserValuePattern; return $true
+    # Use real .NET method calls: a PowerShell ScriptMethod adds a separate
+    # ParentContainsErrorRecordException wrapper that UIA does not produce.
+    Add-Type -TypeDefinition @'
+public sealed class VexBrowserControlFixture {
+    public bool Supported = true;
+    public object Pattern;
+    public object FocusedPattern;
+    public System.Exception Failure;
+    public int FocusCalls;
+    public bool TryGetCurrentPattern(object id, ref object pattern) {
+        if (Failure != null) throw Failure;
+        pattern = FocusCalls > 0 && FocusedPattern != null ? FocusedPattern : Pattern;
+        return Supported;
     }
-    $script:browserExpandedValue = $browserValue
-    $element | Add-Member ScriptMethod SetFocus {
-        $script:browserFocusCalls++
-        if ($script:browserReadCase -ceq 'hidden_https') { $script:browserValuePattern.Current.Value = $script:browserExpandedValue }
-        if ($script:browserReadCase -ceq 'hidden_http') { $script:browserValuePattern.Current.Value = $script:browserExpandedValue.Replace('https://', 'http://') }
-    }
-    foreach ($script:browserReadCase in @('value', 'unsupported', 'stale', 'com', 'inactive')) {
+    public void SetFocus() { FocusCalls++; }
+}
+'@
+    $element = [VexBrowserControlFixture]::new()
+    $element.Pattern = [pscustomobject]@{ Current = [pscustomobject]@{ Value = $browserValue } }
+    foreach ($browserReadCase in @('value', 'unsupported', 'stale', 'com', 'inactive')) {
+        $element.Supported = $browserReadCase -cne 'unsupported'
+        $element.Failure = switch ($browserReadCase) {
+            'stale' { [Windows.Automation.ElementNotAvailableException]::new($privateCanary) }
+            'com' { [Runtime.InteropServices.COMException]::new($privateCanary) }
+            'inactive' { [InvalidOperationException]::new($privateCanary) }
+            default { $null }
+        }
         $value = Get-QABrowserControlValue $element
         if ($browserReadCase -ceq 'value') { Assert ($value -ceq $browserValue) 'The UIA value was lost.' }
         else { Assert ($null -eq $value) 'A transient provider failure escaped as browser input.' }
     }
-    foreach ($script:browserReadCase in @('hidden_https', 'hidden_still', 'hidden_http')) {
-        $script:browserFocusCalls = 0
-        $script:browserValuePattern.Current.Value = $browserValue.Substring('https://'.Length)
+    $element.Supported = $true; $element.Failure = $null
+    foreach ($browserReadCase in @('hidden_https', 'hidden_still', 'hidden_http')) {
+        $element.FocusCalls = 0
+        $element.Pattern.Current.Value = $browserValue.Substring('https://'.Length)
+        $expandedValue = switch ($browserReadCase) {
+            'hidden_https' { $browserValue }
+            'hidden_http' { $browserValue.Replace('https://', 'http://') }
+            default { $element.Pattern.Current.Value }
+        }
+        $element.FocusedPattern = [pscustomobject]@{ Current = [pscustomobject]@{ Value = $expandedValue } }
         $value = Get-QABrowserControlValue $element
-        Assert ($browserFocusCalls -eq 1) 'An elided address was not reread after browser focus.'
+        Assert ($element.FocusCalls -eq 1) 'An elided address was not reread after browser focus.'
         if ($browserReadCase -ceq 'hidden_https') { Assert ((Read-WindowsProductionBrowserRequest $value).Get('state') -ceq $browserFields.state) 'The actual expanded HTTPS address was lost.' }
         else { Assert ($null -eq (Read-WindowsProductionBrowserRequest $value)) 'A hidden or actual HTTP address was silently upgraded to HTTPS.' }
     }
-    $script:browserReadCase = 'unexpected'; $rejected = $false
-    try { $null = Get-QABrowserControlValue $element } catch { $rejected = $true }
+    $element.Failure = [IO.IOException]::new($privateCanary); $rejected = $false
+    try { $null = Get-QABrowserControlValue $element } catch [IO.IOException] { $rejected = $true }
     Assert $rejected 'An unexpected browser reader failure was silently retried.'
 }
 Write-Output 'Limited Windows tester validation passed: exact release/hash, ordinary namespace, TTL, public exits, and inert helper import.'

@@ -124,14 +124,11 @@ function Get-SmokeLiveInstanceIds {
 }
 
 function Assert-PrimaryInstance {
-    param([ValidateRange(1, 15)][int]$TimeoutSeconds = 8)
-    # Enumeration can briefly retain a redirected secondary after WaitForExit.
-    # Require the original live instance; reject persistent duplicates by deadline.
-    Wait-SmokeCondition -TimeoutSeconds $TimeoutSeconds -Failure 'Preview activation did not preserve one original application instance.' -Condition {
-        $process.Refresh()
-        if ($process.HasExited) { throw 'Primary preview exited during desktop checks.' }
-        $instances = @(Get-SmokeLiveInstanceIds)
-        $instances.Count -eq 1 -and $instances[0] -eq $process.Id
+    $process.Refresh()
+    if ($process.HasExited) { throw 'Primary preview exited during desktop checks.' }
+    $instances = @(Get-SmokeLiveInstanceIds)
+    if ($instances.Count -ne 1 -or $instances[0] -ne $process.Id) {
+        throw "Preview activation did not preserve one original application instance (live=$($instances.Count))."
     }
 }
 
@@ -218,7 +215,10 @@ function Open-SmokeTrayDiagnosticRead {
 }
 
 function Read-SmokeTrayDiagnostic {
-    param([Parameter(Mandatory = $true)][string]$Path)
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [ref]$Sha256
+    )
     $stream = Open-SmokeTrayDiagnosticRead -Path $Path
     try {
         $bytes = [byte[]]::new(65537)
@@ -229,7 +229,15 @@ function Read-SmokeTrayDiagnostic {
             if ($length -gt 65536) { throw 'Tray recovery diagnostic exceeds its bounded read.' }
         } while ($read -gt 0)
         if ($length -eq 0) { throw 'Tray recovery diagnostic is empty.' }
-        return ([Text.UTF8Encoding]::new($false, $true).GetString($bytes, 0, $length) | ConvertFrom-Json)
+        $diagnostic = [Text.UTF8Encoding]::new($false, $true).GetString($bytes, 0, $length) | ConvertFrom-Json
+        if ($null -ne $Sha256) {
+            # Hash exactly the parsed snapshot; reopening an atomically replaced
+            # progress path can conflict with the writer or hash different bytes.
+            $hasher = [Security.Cryptography.SHA256]::Create()
+            try { $Sha256.Value = [BitConverter]::ToString($hasher.ComputeHash($bytes, 0, $length)).Replace('-', '') }
+            finally { $hasher.Dispose() }
+        }
+        return $diagnostic
     }
     finally { $stream.Dispose() }
 }
@@ -276,15 +284,17 @@ function Wait-SmokeTrayRecoveryDiagnostic {
     $result.tray_activation_progress = $null
     Wait-SmokeCondition -Failure 'Actual tray recovery did not complete with an isolated diagnostic.' -Condition {
         if (Test-Path -LiteralPath $paths.Completed -PathType Leaf) {
-            $diagnostic = Read-SmokeTrayDiagnostic -Path $paths.Completed
+            $snapshotSha256 = $null
+            $diagnostic = Read-SmokeTrayDiagnostic -Path $paths.Completed -Sha256 ([ref]$snapshotSha256)
             Assert-SmokeTrayRecoveryDiagnostic -Diagnostic $diagnostic -Scenario $Scenario -Access $Access `
                 -Mode $PreviewMode -ProcessId $process.Id
             $script:trayRecoveryDiagnostic = $diagnostic
-            $trayDiagnosticHashes[$paths.Completed] = (Get-FileHash -LiteralPath $paths.Completed -Algorithm SHA256).Hash
+            $trayDiagnosticHashes[$paths.Completed] = $snapshotSha256
             return $true
         }
         if (Test-Path -LiteralPath $paths.Progress -PathType Leaf) {
-            $diagnostic = Read-SmokeTrayDiagnostic -Path $paths.Progress
+            $snapshotSha256 = $null
+            $diagnostic = Read-SmokeTrayDiagnostic -Path $paths.Progress -Sha256 ([ref]$snapshotSha256)
             Assert-SmokeTrayActivationProgress -Diagnostic $diagnostic -Scenario $Scenario -Mode $PreviewMode -ProcessId $process.Id
             $result.tray_activation_progress = [ordered]@{
                 schema = $diagnostic.schema; process_id = $diagnostic.process_id; preview_mode = $diagnostic.preview_mode
@@ -292,15 +302,7 @@ function Wait-SmokeTrayRecoveryDiagnostic {
             }
             # Progress and failure evidence never satisfies the v1 completion
             # contract. Preserve it in the producer JSON if the wait fails.
-            # The producer can still be updating progress. Match the shared
-            # reader above; this hash is evidence, never a completion receipt.
-            $progressStream = [IO.File]::Open($paths.Progress, [IO.FileMode]::Open, [IO.FileAccess]::Read,
-                ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
-            try {
-                $trayDiagnosticHashes[$paths.Progress] = (Get-FileHash -InputStream $progressStream -Algorithm SHA256).Hash
-            } finally {
-                $progressStream.Dispose()
-            }
+            $trayDiagnosticHashes[$paths.Progress] = $snapshotSha256
         }
         return $false
     }
@@ -928,6 +930,7 @@ namespace Vex.Windows.Smoke {
                 $recoveryPattern = [Windows.Automation.TogglePattern]$recoveryToggle.GetCurrentPattern(
                     [Windows.Automation.TogglePattern]::Pattern)
                 $originalRecoveryState = $recoveryPattern.Current.ToggleState
+                $result.settings_recovery_original_state = [string]$originalRecoveryState
                 if ($originalRecoveryState -eq [Windows.Automation.ToggleState]::Indeterminate) {
                     throw 'AutoRecovery must expose a two-state preference.'
                 }
@@ -941,6 +944,8 @@ namespace Vex.Windows.Smoke {
                             -not $recoveryToggle.Current.IsEnabled) { return $false }
                         $pattern = [Windows.Automation.TogglePattern]$recoveryToggle.GetCurrentPattern(
                             [Windows.Automation.TogglePattern]::Pattern)
+                        $result.settings_recovery_observed_state = [string]$pattern.Current.ToggleState
+                        $result.settings_refresh_enabled_during_mutation = [bool]$refreshButton.Current.IsEnabled
                         $pattern.Current.ToggleState -ne $originalRecoveryState -and
                             -not $refreshButton.Current.IsEnabled
                     }

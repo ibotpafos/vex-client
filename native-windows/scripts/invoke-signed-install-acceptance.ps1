@@ -1,11 +1,12 @@
 #requires -Version 7.0
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = 'Run')]
 param(
-    [Parameter(Mandatory = $true)][Alias('ExplicitlyDisposableRunner')][switch]$DisposableRunner,
-    [Parameter(Mandatory = $true)][string]$CandidateBundleDirectory,
-    [Parameter(Mandatory = $true)][string]$PrecedingBundleDirectory,
-    [Parameter(Mandatory = $true)][string]$ResultPath,
-    [switch]$PrecedingIsSynthetic
+    [Parameter(Mandatory = $true, ParameterSetName = 'Run')][Alias('ExplicitlyDisposableRunner')][switch]$DisposableRunner,
+    [Parameter(Mandatory = $true, ParameterSetName = 'Run')][string]$CandidateBundleDirectory,
+    [Parameter(Mandatory = $true, ParameterSetName = 'Run')][string]$PrecedingBundleDirectory,
+    [Parameter(Mandatory = $true, ParameterSetName = 'Run')][string]$ResultPath,
+    [Parameter(ParameterSetName = 'Run')][switch]$PrecedingIsSynthetic,
+    [Parameter(Mandatory = $true, ParameterSetName = 'Functions')][switch]$FunctionsOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -270,16 +271,19 @@ function Stop-AcceptanceProcess {
 }
 
 function Invoke-AcceptanceProcess {
-    param([string]$Executable, [string[]]$Arguments, [ValidateRange(1, 600)][int]$TimeoutSeconds = 240)
+    param([string]$Executable, [string[]]$Arguments, [ValidateRange(1, 600)][int]$TimeoutSeconds = 240,
+        [switch]$ObserveShellRefusal)
     $start = [Diagnostics.ProcessStartInfo]::new()
     $start.FileName = $Executable
     $start.UseShellExecute = $false
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
-    if ($Executable -match '(?i)[\\/]WindowsPowerShell[\\/]v1\.0[\\/]powershell\.exe$') {
-        # A PowerShell 7 parent carries its own module directories. PS 5.1 must
-        # load only its fixed system modules, as the real Setup launcher does.
-        $start.Environment['PSModulePath'] = Join-Path (Split-Path -Parent $Executable) 'Modules'
+    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT -and
+        [IO.Path]::GetFullPath($Executable) -ieq [IO.Path]::GetFullPath((Get-AcceptanceSystemPowerShellPath))) {
+        # Match native Setup before WinPS startup can inspect inherited Core or
+        # user module paths; the encoded command also selects system providers.
+        $start.Environment['PSModulePath'] = [IO.Path]::Combine(
+            [Environment]::GetFolderPath([Environment+SpecialFolder]::System), 'WindowsPowerShell', 'v1.0', 'Modules')
     }
     foreach ($argument in $Arguments) { $start.ArgumentList.Add($argument) }
     $process = [Diagnostics.Process]::Start($start)
@@ -295,37 +299,24 @@ function Invoke-AcceptanceProcess {
             throw 'Acceptance child output handles did not close.'
         }
         if ($process.ExitCode -ne 0) {
-            # Only the owned UI probe's bounded stage/type/line protocol is
-            # retained. Arbitrary application output and exception text stay private.
-            $match = [regex]::Match($stderr.GetAwaiter().GetResult(),
-                '(?m)^VEX_NATIVE_UI_DIAGNOSTIC=(?<stage>load_automation|start_setup|inspect_process|inspect_window|find_controls|invoke_install|inspect_install);(?<line>[0-9]{1,4});(?<type>[A-Za-z0-9_.]{1,180});(?<hresult>-?[0-9]{1,11})\r?$')
-            if ($match.Success) {
-                $script:NativeSetupUiDiagnostic = [ordered]@{
-                    stage = $match.Groups['stage'].Value
-                    script_line = [int]$match.Groups['line'].Value
-                    exception_type = $match.Groups['type'].Value
-                    hresult = [long]$match.Groups['hresult'].Value
-                }
+            # Only our fixed UI probe marker may escape. Arbitrary child output,
+            # exception messages and installer contents remain private.
+            foreach ($pattern in @(
+                '^VEX_SETUP_UI_FAILURE stage=(initialize|launch|locate_controls|invoke_install|wait_install) exception=[A-Za-z][A-Za-z0-9]{0,79} native_exit=(running|unknown|-?[0-9]{1,10})$',
+                '^VEX_SETUP_UI_ERROR win32=(unknown|-?[0-9]{1,10}) hresult=-?[0-9]{1,10}$',
+                '^VEX_BOOTSTRAP_SERVICE_FAILURE action=(Install|Repair|Verify|Prepare|Restore|Uninstall) code=(unknown|-?[0-9]{1,10})$',
+                '^VEX_BOOTSTRAP_FAILURE action=(Install|Verify|Repair|Rollback|Uninstall) line=[0-9]{1,6} exception=[A-Za-z][A-Za-z0-9]{0,79}$',
+                '^VEX_BOOTSTRAP_COMMAND_MISSING action=(Install|Verify|Repair|Rollback|Uninstall) command=(Assert-Hash|Get-FileHash|Read-PackageMetadata|Assert-ScriptSignature|Get-AuthenticodeSignature|Test-Path|Get-Content|ConvertFrom-Json|other)$',
+                '^VEX_INSTALLED_UI_FAILURE stage=(initialize|load_automation|locate_process|launch|wait_window|verify_image|resolve_window|wait_account|open_settings|wait_settings) exception=[A-Za-z][A-Za-z0-9]{0,79} hresult=-?[0-9]{1,10} native_exit=(unknown|running|-?[0-9]{1,10})$')) {
+                $markers = @($stderr.Result -split '\r?\n' | Where-Object { $_ -cmatch $pattern } | Select-Object -First 1)
+                foreach ($marker in $markers) { [Console]::WriteLine($marker) }
             }
-            $bootstrapMatch = [regex]::Match($stderr.GetAwaiter().GetResult(),
-                '(?m)^VEX_BOOTSTRAP_DIAGNOSTIC=(?<stage>load_modules|invoke_bootstrap);(?<line>[0-9]{1,4});(?<type>[A-Za-z0-9_.]{1,180});(?<hresult>-?[0-9]{1,11})\r?$')
-            if ($bootstrapMatch.Success) {
-                $script:BootstrapDiagnostic = [ordered]@{
-                    stage = $bootstrapMatch.Groups['stage'].Value
-                    script_line = [int]$bootstrapMatch.Groups['line'].Value
-                    exception_type = $bootstrapMatch.Groups['type'].Value
-                    hresult = [long]$bootstrapMatch.Groups['hresult'].Value
-                }
-            }
-            $installedUiMatch = [regex]::Match($stderr.GetAwaiter().GetResult(),
-                '(?m)^VEX_INSTALLED_UI_DIAGNOSTIC=(?<stage>activate_package|inspect_process|inspect_window|find_signed_out|inspect_settings);(?<line>[0-9]{1,4});(?<type>[A-Za-z0-9_.]{1,180});(?<hresult>-?[0-9]{1,11})\r?$')
-            if ($installedUiMatch.Success) {
-                $script:InstalledUiDiagnostic = [ordered]@{
-                    stage = $installedUiMatch.Groups['stage'].Value
-                    script_line = [int]$installedUiMatch.Groups['line'].Value
-                    exception_type = $installedUiMatch.Groups['type'].Value
-                    hresult = [long]$installedUiMatch.Groups['hresult'].Value
-                }
+            # A window-only observation may record an OS-cancelled Shell launch.
+            # This is never an accepted Install action or an accepted timeout.
+            if ($ObserveShellRefusal -and
+                @($stderr.Result -split '\r?\n' | Where-Object { $_ -cmatch '^VEX_SETUP_UI_FAILURE stage=launch exception=[A-Za-z][A-Za-z0-9]{0,79} native_exit=unknown$' }).Count -eq 1 -and
+                @($stderr.Result -split '\r?\n' | Where-Object { $_ -cmatch '^VEX_SETUP_UI_ERROR win32=1223 hresult=-?[0-9]{1,10}$' }).Count -eq 1) {
+                return [pscustomobject]@{ ShellRefused = $true; Win32Error = 1223 }
             }
             throw 'Acceptance child reported failure.'
         }
@@ -335,6 +326,35 @@ function Invoke-AcceptanceProcess {
 
 function Get-AcceptanceSystemPowerShellPath {
     return Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'WindowsPowerShell\v1.0\powershell.exe'
+}
+
+function Get-AcceptanceUiPowerShellPath {
+    if (-not $IsWindows -or $PSVersionTable.PSEdition -cne 'Core' -or $PSVersionTable.PSVersion.Major -lt 7) {
+        throw 'The Setup UI probe requires the same Windows PowerShell 7 host as the qualified window smoke check.'
+    }
+    $hostPath = Join-Path $PSHOME 'pwsh.exe'
+    $null = Assert-AcceptanceRegularPath $hostPath
+    return $hostPath
+}
+
+function Invoke-AcceptanceUiControl {
+    param($Element)
+    if ($null -eq $Element -or -not $Element.Current.IsEnabled -or $Element.Current.IsOffscreen) {
+        throw 'Acceptance UI control is unavailable.'
+    }
+    # Match the existing desktop smoke driver. Navigation uses ToggleButton;
+    # choose only a pattern actually offered by the verified window's control.
+    $pattern = $null
+    if ($Element.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {
+        $pattern.Invoke()
+    }
+    elseif ($Element.TryGetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern, [ref]$pattern)) {
+        $pattern.Select()
+    }
+    elseif ($Element.TryGetCurrentPattern([Windows.Automation.TogglePattern]::Pattern, [ref]$pattern)) {
+        $pattern.Toggle()
+    }
+    else { throw 'Acceptance UI control has no supported interaction pattern.' }
 }
 
 function Open-AcceptanceBundleLocks {
@@ -416,7 +436,8 @@ function Invoke-AcceptanceNativeVerification {
 }
 
 function Invoke-AcceptanceNativeSetupUi {
-    param($Bundle, [switch]$Install)
+    param($Bundle, [switch]$Install, [switch]$ObserveDownloadedLaunch)
+    if ($Install -and $ObserveDownloadedLaunch) { throw 'An observed Shell refusal cannot qualify an Install action.' }
     $locks = @(Open-AcceptanceNativeSetupLocks $Bundle)
     try {
         $setup = Read-AcceptanceNativeSetup $Bundle
@@ -427,34 +448,34 @@ function Invoke-AcceptanceNativeSetupUi {
         $encodedPayload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($payload))
         $probe = @'
 $ErrorActionPreference = 'Stop'
-$inputValue = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__PAYLOAD__')) | ConvertFrom-Json
 $owned = $null
-$stage = 'load_automation'
+$stage = 'initialize'
 try {
+    $inputValue = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__PAYLOAD__')) | ConvertFrom-Json
     Add-Type -AssemblyName UIAutomationClient
     Add-Type -AssemblyName UIAutomationTypes
-    $stage = 'start_setup'
-    # Exercise the signed image after explicit trust and independent bundle
-    # verification. Shell reputation remains a separate acceptance surface;
-    # no MOTW, Defender, execution policy or signature setting is changed.
+    $stage = 'launch'
+    # Preserve Shell/MOTW behavior, while retaining the native error as an inner
+    # Win32Exception instead of the Start-Process cmdlet's generic wrapper.
     $start = [Diagnostics.ProcessStartInfo]::new()
     $start.FileName = $inputValue.executable
     $start.WorkingDirectory = Split-Path -Parent $inputValue.executable
-    $start.UseShellExecute = $false
+    $start.UseShellExecute = $true
     $owned = [Diagnostics.Process]::Start($start)
+    if ($null -eq $owned) { throw 'Native Shell launch returned no owned process.' }
+    $stage = 'locate_controls'
+    $ready = $false
     $deadline = [DateTime]::UtcNow.AddSeconds($(if ($inputValue.install) { 180 } else { 35 }))
     do {
-        $stage = 'inspect_process'
         $owned.Refresh()
         if ($owned.HasExited) { throw 'Native setup exited before its UI was inspected.' }
         if ($owned.MainModule.FileName -ine $inputValue.executable -or
             (Get-FileHash -LiteralPath $inputValue.executable -Algorithm SHA256).Hash -ine $inputValue.sha256) { throw 'Unexpected setup process image.' }
         if ($owned.MainWindowHandle -ne [IntPtr]::Zero) {
-            $stage = 'inspect_window'
+          try {
             $window = [Windows.Automation.AutomationElement]::FromHandle($owned.MainWindowHandle)
             $ready = $window.Current.AutomationId -ceq 'VexSetupWindow' -or $window.Current.Name -ceq 'VexSetupWindow'
             foreach ($id in @('SetupInstallButton', 'SetupRepairButton', 'SetupUninstallButton', 'SetupVerifyButton', 'SetupStatusText')) {
-                $stage = 'find_controls'
                 $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, $id)
                 $element = $window.FindFirst([Windows.Automation.TreeScope]::Descendants, $condition)
                 if ($null -eq $element -or $element.Current.IsOffscreen) { $ready = $false }
@@ -462,19 +483,20 @@ try {
             }
             if ($inputValue.install -and ($null -eq $installButton -or -not $installButton.Current.IsEnabled)) { $ready = $false }
             if ($ready) { break }
+          } catch [Windows.Automation.ElementNotAvailableException] { $ready = $false }
         }
         Start-Sleep -Milliseconds 200
     } while ([DateTime]::UtcNow -lt $deadline)
     if (-not $ready) { throw 'Native setup window and action controls were not available.' }
     if ($inputValue.install) {
-        $stage = 'invoke_install'
         if (@(Get-AppxPackage -Name $inputValue.package_name).Count -or
             @(Get-Service -Name 'VEX VPN Service' -ErrorAction SilentlyContinue).Count) { throw 'Native install requires the fresh acceptance baseline.' }
+        $stage = 'invoke_install'
         ([Windows.Automation.InvokePattern]$installButton.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)).Invoke()
+        $stage = 'wait_install'
         $deadline = [DateTime]::UtcNow.AddSeconds(360)
         $installed = $false
         do {
-            $stage = 'inspect_install'
             $owned.Refresh()
             if ($owned.HasExited) { throw 'Native setup exited during its Install action.' }
             $package = @(Get-AppxPackage -Name $inputValue.package_name)
@@ -494,8 +516,18 @@ try {
     }
 }
 catch {
-    [Console]::Error.WriteLine('VEX_NATIVE_UI_DIAGNOSTIC=' + $stage + ';' +
-        $_.InvocationInfo.ScriptLineNumber + ';' + $_.Exception.GetType().FullName + ';' + $_.Exception.HResult)
+    $nativeExit = 'unknown'
+    try { if ($null -ne $owned) { $nativeExit = if ($owned.HasExited) { [string]$owned.ExitCode } else { 'running' } } } catch { }
+    $kind = $_.Exception.GetType().Name
+    if ($kind -cnotmatch '^[A-Za-z][A-Za-z0-9]{0,79}$') { $kind = 'Exception' }
+    [Console]::Error.WriteLine('VEX_SETUP_UI_FAILURE stage=' + $stage + ' exception=' + $kind + ' native_exit=' + $nativeExit)
+    $nativeError = 'unknown'
+    $exception = $_.Exception
+    while ($null -ne $exception) {
+        if ($exception -is [ComponentModel.Win32Exception]) { $nativeError = [string]$exception.NativeErrorCode; break }
+        $exception = $exception.InnerException
+    }
+    [Console]::Error.WriteLine('VEX_SETUP_UI_ERROR win32=' + $nativeError + ' hresult=' + [string]$_.Exception.HResult)
     throw
 }
 finally {
@@ -511,9 +543,61 @@ finally {
 }
 '@
         $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($probe.Replace('__PAYLOAD__', $encodedPayload)))
-        Invoke-AcceptanceProcess -Executable (Get-AcceptanceSystemPowerShellPath) -Arguments @('-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', $encoded) -TimeoutSeconds $(if ($Install) { 600 } else { 50 })
+        $observed = Invoke-AcceptanceProcess -Executable (Get-AcceptanceUiPowerShellPath) -Arguments @('-STA', '-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', $encoded) -TimeoutSeconds $(if ($Install) { 600 } else { 50 }) -ObserveShellRefusal:$ObserveDownloadedLaunch
+        if ($ObserveDownloadedLaunch) {
+            return [pscustomobject]@{ status = $(if ($null -ne $observed -and $observed.ShellRefused) { 'os_cancelled' } else { 'window_verified' });
+                win32_error = $(if ($null -ne $observed) { $observed.Win32Error } else { $null }); installation_performed = $false }
+        }
     }
     finally { foreach ($stream in $locks) { $stream.Dispose() } }
+}
+
+function New-AcceptanceBootstrapCommand {
+    param($InputData)
+    $template = @'
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+$ProgressPreference = 'SilentlyContinue'
+# VEX_TRUSTED_POWERSHELL_MODULES_BEGIN
+$systemModules = [IO.Path]::Combine([Environment]::GetFolderPath([Environment+SpecialFolder]::System), 'WindowsPowerShell', 'v1.0', 'Modules')
+$env:PSModulePath = $systemModules
+$requiredCommands = @{'Microsoft.PowerShell.Utility'='Get-FileHash';'Microsoft.PowerShell.Security'='Get-AuthenticodeSignature';'Microsoft.PowerShell.Management'='Get-Content'}
+foreach ($module in $requiredCommands.Keys) {
+    $provider = Microsoft.PowerShell.Core\Get-Command -Name ($module + '\' + $requiredCommands[$module]) -CommandType Cmdlet -ListImported -ErrorAction SilentlyContinue
+    if ($null -eq $provider) {
+        $manifest = [IO.Path]::Combine($systemModules, $module, ($module + '.psd1'))
+        if (-not [IO.File]::Exists($manifest)) { $manifest = [IO.Path]::Combine([IO.Path]::GetDirectoryName($systemModules), ($module + '.psd1')) }
+        Microsoft.PowerShell.Core\Import-Module -Name $manifest -Force -ErrorAction Stop
+    }
+}
+# VEX_TRUSTED_POWERSHELL_MODULES_END
+$inputValue = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__VEX_ACCEPTANCE_BOOTSTRAP__')) | Microsoft.PowerShell.Utility\ConvertFrom-Json
+try {
+    $parameters = @{ Phase='User'; Action=$inputValue.action; MetadataPath=$inputValue.metadata; PackagePath=$inputValue.package }
+    if ($inputValue.action -ceq 'Rollback') {
+        $parameters.RollbackPackagePath = $inputValue.rollback_package
+        $parameters.RollbackMetadataPath = $inputValue.rollback_metadata
+    }
+    & $inputValue.bootstrap @parameters
+    if (-not $?) { throw 'The verified bootstrap did not complete.' }
+}
+catch {
+    $kind = $_.Exception.GetType().Name
+    if ($kind -cnotmatch '^[A-Za-z][A-Za-z0-9]{0,79}$') { $kind = 'Exception' }
+    $line = [int]$_.InvocationInfo.ScriptLineNumber
+    if ($line -lt 0 -or $line -gt 999999) { $line = 0 }
+    [Console]::Error.WriteLine('VEX_BOOTSTRAP_FAILURE action=' + $inputValue.action + ' line=' + $line + ' exception=' + $kind)
+    if ($_.Exception -is [Management.Automation.CommandNotFoundException]) {
+        $missing = [string]$_.CategoryInfo.TargetName
+        if (@('Assert-Hash','Get-FileHash','Read-PackageMetadata','Assert-ScriptSignature',
+            'Get-AuthenticodeSignature','Test-Path','Get-Content','ConvertFrom-Json') -cnotcontains $missing) { $missing = 'other' }
+        [Console]::Error.WriteLine('VEX_BOOTSTRAP_COMMAND_MISSING action=' + $inputValue.action + ' command=' + $missing)
+    }
+    exit 1
+}
+'@
+    $json = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($InputData | ConvertTo-Json -Compress)))
+    return [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($template.Replace('__VEX_ACCEPTANCE_BOOTSTRAP__', $json)))
 }
 
 function Invoke-AcceptanceBootstrap {
@@ -528,59 +612,176 @@ function Invoke-AcceptanceBootstrap {
             $validated.Metadata.client_certificate_sha256 -ine $Bundle.Metadata.client_certificate_sha256) {
             throw 'Acceptance input changed after initial verification.'
         }
-        $inputData = [ordered]@{
-            bootstrap = Join-Path $Bundle.Root $Bundle.Metadata.bootstrap_file
-            parameters = [ordered]@{ Phase = 'User'; Action = $Action;
-                MetadataPath = $Bundle.MetadataPath; PackagePath = $Bundle.PackagePath }
-        }
+        $inputData = [ordered]@{ bootstrap=(Join-Path $Bundle.Root $Bundle.Metadata.bootstrap_file); action=$Action
+            metadata=$Bundle.MetadataPath; package=$Bundle.PackagePath; rollback_package=$null; rollback_metadata=$null }
         if ($Action -eq 'Rollback') {
             if ($null -eq $RollbackBundle) { throw 'Acceptance rollback requires the verified preceding release.' }
             $locks += @(Open-AcceptanceBundleLocks $RollbackBundle)
             $null = Read-AcceptanceBundle $RollbackBundle.Root
-            $inputData.parameters.RollbackPackagePath = $RollbackBundle.PackagePath
-            $inputData.parameters.RollbackMetadataPath = $RollbackBundle.MetadataPath
+            $inputData.rollback_package=$RollbackBundle.PackagePath; $inputData.rollback_metadata=$RollbackBundle.MetadataPath
         }
-        # Match the real Setup's fixed system-module initialization. In PS5.1,
-        # built-in manifests may live beside powershell.exe rather than Modules.
-        $payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($inputData | ConvertTo-Json -Compress)))
-        $command = @'
-$ErrorActionPreference = 'Stop'
-Set-StrictMode -Version Latest
-$stage = 'load_modules'
-try {
-    $systemModules = [IO.Path]::Combine([Environment]::GetFolderPath([Environment+SpecialFolder]::System), 'WindowsPowerShell', 'v1.0', 'Modules')
-    $env:PSModulePath = $systemModules
-    $requiredCommands = @{'Microsoft.PowerShell.Utility'='Get-FileHash';'Microsoft.PowerShell.Security'='Get-AuthenticodeSignature';'Microsoft.PowerShell.Management'='Get-Content'}
-    foreach ($module in $requiredCommands.Keys) {
-        $provider = Microsoft.PowerShell.Core\Get-Command -Name ($module + '\' + $requiredCommands[$module]) -CommandType Cmdlet -ListImported -ErrorAction SilentlyContinue
-        if ($null -eq $provider) {
-            $manifest = [IO.Path]::Combine($systemModules, $module, ($module + '.psd1'))
-            if (-not [IO.File]::Exists($manifest)) { $manifest = [IO.Path]::Combine([IO.Path]::GetDirectoryName($systemModules), ($module + '.psd1')) }
-            Microsoft.PowerShell.Core\Import-Module -Name $manifest -Force -ErrorAction Stop
-        }
-    }
-    $inputData = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__INPUT__')) | Microsoft.PowerShell.Utility\ConvertFrom-Json
-    $parameters = @{}
-    foreach ($property in $inputData.parameters.PSObject.Properties) { $parameters[$property.Name] = $property.Value }
-    $stage = 'invoke_bootstrap'
-    & $inputData.bootstrap @parameters
-    if (-not $?) { throw 'The verified bootstrap failed.' }
-}
-catch {
-    [Console]::Error.WriteLine('VEX_BOOTSTRAP_DIAGNOSTIC=' + $stage + ';' +
-        $_.InvocationInfo.ScriptLineNumber + ';' + $_.Exception.GetType().FullName + ';' + $_.Exception.HResult)
-    exit 3
-}
-'@
-        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command.Replace('__INPUT__', $payload)))
-        $arguments = @('-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $encoded)
+        $arguments = @('-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+            '-EncodedCommand', (New-AcceptanceBootstrapCommand $inputData))
         Invoke-AcceptanceProcess -Executable (Get-AcceptanceSystemPowerShellPath) -Arguments $arguments
     }
     finally { foreach ($stream in $locks) { $stream.Dispose() } }
 }
 
+function Get-AcceptanceVerifiedTesterSetup {
+    param($Bundle, $NativeVerification)
+    $metadata = Read-AcceptanceMetadata $Bundle.MetadataPath
+    if ($metadata.channel -cne 'beta' -or $metadata.signing_mode -cne 'tester-ca' -or
+        $env:VEX_WINDOWS_TEST_ROOT_SHA256 -cnotmatch '^[a-f0-9]{64}$' -or
+        $env:VEX_WINDOWS_TEST_CERT_SHA256 -cnotmatch '^[a-f0-9]{64}$' -or
+        $metadata.tester_root_sha256 -ine $env:VEX_WINDOWS_TEST_ROOT_SHA256 -or
+        $metadata.client_certificate_sha256 -ine $env:VEX_WINDOWS_TEST_CERT_SHA256 -or
+        $NativeVerification.bundle_verified -isnot [bool] -or -not $NativeVerification.bundle_verified) {
+        throw 'Explicit download trust is restricted to this verified beta publisher and bundle.'
+    }
+    $setup = Read-AcceptanceNativeSetup $Bundle
+    if ($setup.Sha256 -ine $NativeVerification.sha256 -or $setup.MetadataSha256 -ine $NativeVerification.metadata_sha256) {
+        throw 'The verified beta Setup changed before explicit download trust.'
+    }
+    return $setup
+}
+
+function Assert-AcceptanceOwnedCandidate {
+    param([string]$CandidateRoot, [string]$RunnerTemp)
+    $candidate = Assert-AcceptanceRegularPath -Path $CandidateRoot -Directory
+    $runner = Assert-AcceptanceRegularPath -Path $RunnerTemp -Directory
+    $privateRoot = Split-Path -Parent $candidate
+    $fixtureName = [IO.Path]::GetFileName($privateRoot)
+    $match = [regex]::Match($fixtureName, '^vex-signed-install-([a-f0-9]{32})$')
+    $prefix = $runner.TrimEnd([char[]]@('\', '/')) + [IO.Path]::DirectorySeparatorChar
+    if ([IO.Path]::GetFileName($candidate) -cne 'candidate' -or -not $match.Success -or
+        -not $privateRoot.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Beta download trust requires the separate owned candidate copy.'
+    }
+    $marker = Assert-AcceptanceRegularPath (Join-Path $privateRoot 'owned-fixture')
+    if ((Get-Item -LiteralPath $marker).Length -ne 32 -or [IO.File]::ReadAllText($marker) -cne $match.Groups[1].Value) {
+        throw 'The beta candidate ownership marker changed.'
+    }
+}
+
+function Get-AcceptanceInternetMarker {
+    param([string]$Path)
+    return Get-Content -LiteralPath $Path -Stream Zone.Identifier -Raw
+}
+
+function Set-AcceptanceInternetMarker {
+    param([string]$Path)
+    Set-Content -LiteralPath $Path -Stream Zone.Identifier -Value "[ZoneTransfer]`r`nZoneId=3" -Encoding ASCII
+}
+
+function Get-AcceptanceStreamHash {
+    param([IO.FileStream]$Stream)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        $Stream.Position = 0
+        return [BitConverter]::ToString($sha.ComputeHash($Stream)).Replace('-', '')
+    }
+    finally { $Stream.Position = 0; $sha.Dispose() }
+}
+
+function Close-AcceptanceTrustedCopy {
+    param($Copy)
+    foreach ($stream in $Copy.Handles) { $stream.Dispose() }
+    Remove-AcceptancePrivateDirectory -Path $Copy.Directory -FixtureId $Copy.FixtureId
+}
+
+function Confirm-AcceptanceBetaSetupDownloadTrust {
+    param($Bundle, $NativeVerification, [bool]$ExplicitlyDisposable)
+    Assert-AcceptanceRunner $ExplicitlyDisposable
+    Assert-AcceptanceOwnedCandidate -CandidateRoot $Bundle.Root -RunnerTemp $env:RUNNER_TEMP
+    $sources = @(); $held = @(); $directory = $null
+    $fixture = [Guid]::NewGuid().ToString('N')
+    try {
+        # Bind every copied byte to a verified, non-writable/non-deletable source
+        # descriptor. Never remove an ADS by path after checking a different file.
+        $sources = @(Open-AcceptanceNativeSetupLocks $Bundle)
+        $validated = Read-AcceptanceBundle $Bundle.Root
+        $setup = Get-AcceptanceVerifiedTesterSetup -Bundle $validated -NativeVerification $NativeVerification
+        $metadata = $validated.Metadata
+        $expected = @{
+            'package-metadata.json' = $setup.MetadataSha256
+            $metadata.package_file = $metadata.package_sha256
+            $metadata.bootstrap_file = $metadata.bootstrap_sha256
+            $metadata.install_service_script_file = $metadata.install_service_script_sha256
+            $metadata.uninstall_service_script_file = $metadata.uninstall_service_script_sha256
+            $metadata.vclibs_dependency_file = $metadata.vclibs_dependency_sha256
+            ([IO.Path]::GetFileName($setup.Path)) = $setup.Sha256
+        }
+        if ($sources.Count -ne 7 -or $expected.Count -ne 7) { throw 'Beta trust requires exactly the verified seven-file bundle.' }
+        foreach ($stream in $sources) {
+            $name = [IO.Path]::GetFileName($stream.Name)
+            if (-not $expected.ContainsKey($name) -or (Get-AcceptanceStreamHash $stream) -ine $expected[$name]) {
+                throw 'The beta source descriptor does not match the verified bundle.'
+            }
+        }
+        if ((Get-AcceptanceInternetMarker $setup.Path) -notmatch '(?m)^ZoneId=3\s*$') {
+            throw 'The original downloaded beta marker was not verified.'
+        }
+        $directory = New-AcceptancePrivateDirectory $fixture
+        $destination = Join-Path $directory 'candidate'
+        [IO.Directory]::CreateDirectory($destination) | Out-Null
+        foreach ($source in $sources) {
+            $name = [IO.Path]::GetFileName($source.Name)
+            $path = Join-Path $destination $name
+            $writer = [IO.File]::Open($path, [IO.FileMode]::CreateNew, [IO.FileAccess]::ReadWrite, [IO.FileShare]::Read)
+            try {
+                $source.Position = 0; $source.CopyTo($writer); $writer.Flush($true)
+                if ((Get-AcceptanceStreamHash $writer) -ine $expected[$name]) {
+                    throw 'The owned beta copy does not match the verified source descriptor.'
+                }
+            }
+            finally { $writer.Dispose() }
+            # Only the exact locally created Setup is trusted. Keep downloaded
+            # markers on every other input and leave all original ADS untouched.
+            if ($name -cne [IO.Path]::GetFileName($setup.Path)) { Set-AcceptanceInternetMarker $path }
+        }
+        $copyBundle = Read-AcceptanceBundle $destination
+        $held = @(Open-AcceptanceNativeSetupLocks $copyBundle)
+        foreach ($stream in $held) {
+            $name = [IO.Path]::GetFileName($stream.Name)
+            if (-not $expected.ContainsKey($name) -or (Get-AcceptanceStreamHash $stream) -ine $expected[$name]) {
+                throw 'The owned beta copy changed before its held execution.'
+            }
+        }
+        $null = Read-AcceptanceBundle $destination
+        $null = Get-AcceptanceVerifiedTesterSetup -Bundle $copyBundle -NativeVerification $NativeVerification
+        Assert-AcceptanceOwnedCandidate -CandidateRoot $destination -RunnerTemp $env:RUNNER_TEMP
+        return [pscustomobject]@{ Bundle = $copyBundle; Handles = $held; Directory = $directory; FixtureId = $fixture }
+    }
+    catch {
+        foreach ($stream in $held) { $stream.Dispose() }
+        if ($null -ne $directory) { Remove-AcceptancePrivateDirectory -Path $directory -FixtureId $fixture }
+        throw
+    }
+    finally { foreach ($stream in $sources) { $stream.Dispose() } }
+}
+
 function Invoke-AcceptanceNativeInstall {
-    param($Bundle, [string]$OwnerSid, $Evidence)
+    param($Bundle, [string]$OwnerSid, $Evidence, [bool]$ExplicitlyDisposable = $false,
+        [Collections.Generic.List[object]]$OwnedTrustCopies)
+    $installContext = [pscustomobject]@{ Bundle = $Bundle }
+    if ($null -ne $Bundle.Metadata.PSObject.Properties['signing_mode'] -and $Bundle.Metadata.signing_mode -ceq 'tester-ca') {
+        Assert-AcceptanceRunner $ExplicitlyDisposable
+        if ($null -eq $OwnedTrustCopies) { throw 'Beta trust requires owned-copy cleanup registration.' }
+        Add-AcceptancePhase 'observe_downloaded_beta_setup_launch' {
+            $Evidence['downloaded_setup_shell_launch'] = Invoke-AcceptanceNativeSetupUi -Bundle $Bundle -ObserveDownloadedLaunch
+            if (@(Get-AppxPackage -Name $Bundle.Metadata.package_name).Count -or
+                @(Get-Service -Name 'VEX VPN Service' -ErrorAction SilentlyContinue).Count) {
+                throw 'The window-only downloaded launch changed the installation baseline.'
+            }
+        } $Evidence
+        Add-AcceptancePhase 'confirm_verified_beta_setup_download_trust' {
+            $copy = Confirm-AcceptanceBetaSetupDownloadTrust -Bundle $Bundle -NativeVerification $Evidence.native_setup -ExplicitlyDisposable $ExplicitlyDisposable
+            $OwnedTrustCopies.Add($copy)
+            $installContext.Bundle = $copy.Bundle
+            $Evidence['verified_beta_setup_download_trust'] = $true
+        } $Evidence
+    }
+    $Bundle = $installContext.Bundle
     Add-AcceptancePhase 'native_setup_install_action' { Invoke-AcceptanceNativeSetupUi -Bundle $Bundle -Install } $Evidence
     $Evidence.native_setup_window_verified = $true
     Add-AcceptancePhase 'verify_native_installed_candidate' { Invoke-AcceptanceBootstrap -Bundle $Bundle -Action Verify } $Evidence
@@ -595,7 +796,7 @@ function Invoke-AcceptanceNativeInstall {
     # A window-only smoke never qualifies the consumer Install path. Commit
     # these flags only after its actual action, independent Verify and cleanup.
     $Evidence.native_consumer_installation_verified = $true
-    $Evidence.verified_direct_setup_launch = $true
+    $Evidence.native_double_click_installer_acceptance = $true
 }
 
 function Get-AcceptanceOwnedBundle {
@@ -688,6 +889,121 @@ function Assert-AcceptanceRemoved {
     }
 }
 
+function New-AcceptanceInstalledUiCommand {
+    param($InputData)
+    $uiControlBody = (Get-Item Function:Invoke-AcceptanceUiControl).ScriptBlock.ToString()
+    $encodedPayload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($InputData | ConvertTo-Json -Compress)))
+    $probe = @'
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+$ProgressPreference = 'SilentlyContinue'
+$owned = $null
+$stage = 'initialize'
+function Find-Element([string]$id) {
+    $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, $id)
+    return $script:window.FindFirst([Windows.Automation.TreeScope]::Descendants, $condition)
+}
+function Invoke-AcceptanceUiControl {
+__UI_CONTROL_BODY__
+}
+try {
+    $inputValue = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__PAYLOAD__')) | ConvertFrom-Json
+    $stage = 'load_automation'
+    Add-Type -AssemblyName UIAutomationClient
+    Add-Type -AssemblyName UIAutomationTypes
+    $stage = 'locate_process'
+    $existing = @(Get-Process -Name 'Vex.Windows.App' -ErrorAction SilentlyContinue)
+    if ($existing.Count -gt 1) { throw 'Application ownership is ambiguous.' }
+    if ($existing.Count -eq 0) {
+        $stage = 'launch'
+        $null = Start-Process -FilePath (Join-Path ([Environment]::GetFolderPath('Windows')) 'explorer.exe') -ArgumentList ('shell:AppsFolder\'+$inputValue.family+'!VexWindowsApp')
+    }
+    $stage = 'wait_window'
+    $deadline = [DateTime]::UtcNow.AddSeconds(25)
+    do {
+        $processes = @(Get-Process -Name 'Vex.Windows.App' -ErrorAction SilentlyContinue)
+        if ($processes.Count -gt 1) { throw 'Application ownership is ambiguous.' }
+        if ($processes.Count -eq 1) {
+            $candidate = $processes[0]
+            try {
+                $candidate.Refresh()
+                # MSIX activation can expose a process before its window or main
+                # module is ready. Keep polling within the original deadline;
+                # adopt it only after the exact installed image and hash match.
+                if ($candidate.MainWindowHandle -ne [IntPtr]::Zero) {
+                    $stage = 'verify_image'
+                    $module = $candidate.MainModule
+                    if ($null -ne $module) {
+                        $image = $module.FileName
+                        if ($image -ine $inputValue.executable -or
+                            (Get-FileHash -LiteralPath $image -Algorithm SHA256).Hash -ine $inputValue.sha256) { throw 'Unexpected application image.' }
+                        $owned = $candidate
+                        break
+                    }
+                }
+            }
+            finally {
+                if (-not [Object]::ReferenceEquals($owned, $candidate)) { $candidate.Dispose() }
+            }
+        }
+        $stage = 'wait_window'
+        Start-Sleep -Milliseconds 200
+    } while ([DateTime]::UtcNow -lt $deadline)
+    if ($null -eq $owned -or $owned.MainWindowHandle -eq [IntPtr]::Zero) { throw 'Installed application created no window.' }
+    $stage = 'resolve_window'
+    $script:window = [Windows.Automation.AutomationElement]::FromHandle($owned.MainWindowHandle)
+    # Fresh Release Home resolves to AccountPage until a real session exists.
+    # Wait for the real signed-out controls; do not invoke any auth action.
+    $stage = 'wait_account'
+    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    do {
+        $signIn = Find-Element 'WebsiteSignInButton'
+        $title = Find-Element 'AccountSignInTitle'
+        $settings = Find-Element 'SettingsNavigationButton'
+        if ($null -ne $signIn -and $signIn.Current.IsEnabled -and -not $signIn.Current.IsOffscreen -and
+            $null -ne $title -and $null -ne $settings) { break }
+        Start-Sleep -Milliseconds 200
+    } while ([DateTime]::UtcNow -lt $deadline)
+    if ($null -eq $signIn -or -not $signIn.Current.IsEnabled -or $signIn.Current.IsOffscreen -or
+        $null -eq $title -or $null -eq $settings) { throw 'Installed signed-out status is missing.' }
+    $stage = 'open_settings'
+    Invoke-AcceptanceUiControl $settings
+    $stage = 'wait_settings'
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    do {
+        $toggle = Find-Element 'AutoLaunchToggle'
+        if ($null -ne $toggle -and $toggle.Current.IsEnabled) { break }
+        Start-Sleep -Milliseconds 200
+    } while ([DateTime]::UtcNow -lt $deadline)
+    if ($null -eq $toggle -or -not $toggle.Current.IsEnabled) { throw 'Installed Settings is unavailable.' }
+    # Read only: do not sign in, enable startup, request a VPN profile or connect.
+}
+catch {
+    $uiFailure = $_
+    $kind = $uiFailure.Exception.GetType().Name
+    if ($kind -cnotmatch '^[A-Za-z][A-Za-z0-9]{0,79}$') { $kind = 'Exception' }
+    $nativeExit = 'unknown'
+    try {
+        if ($null -ne $owned) {
+            $owned.Refresh()
+            $nativeExit = if ($owned.HasExited) { [string]$owned.ExitCode } else { 'running' }
+        }
+    }
+    catch { }
+    [Console]::Error.WriteLine('VEX_INSTALLED_UI_FAILURE stage=' + $stage + ' exception=' + $kind + ' hresult=' + [string]$uiFailure.Exception.HResult + ' native_exit=' + $nativeExit)
+    throw
+}
+finally {
+    if ($null -ne $owned) {
+        try { if (-not $owned.HasExited) { $owned.Kill(); [void]$owned.WaitForExit(5000) } }
+        finally { $owned.Dispose() }
+    }
+}
+'@
+    $probe = $probe.Replace('__PAYLOAD__', $encodedPayload).Replace('__UI_CONTROL_BODY__', $uiControlBody)
+    return [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($probe))
+}
+
 function Invoke-AcceptanceInstalledUi {
     param($Bundle)
     $package = @(Get-AppxPackage -Name $Bundle.Metadata.package_name)
@@ -698,101 +1014,11 @@ function Invoke-AcceptanceInstalledUi {
         family = $package[0].PackageFamilyName
         executable = Join-Path $package[0].InstallLocation 'Vex.Windows.App.exe'
         sha256 = $Bundle.Metadata.app_executable_sha256
-    } | ConvertTo-Json -Compress
-    $encodedPayload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($payload))
-    $probe = @'
-$ErrorActionPreference = 'Stop'
-$inputValue = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__PAYLOAD__')) | ConvertFrom-Json
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
-$owned = $null
-function Find-Element([string]$id) {
-    $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, $id)
-    return $script:window.FindFirst([Windows.Automation.TreeScope]::Descendants, $condition)
-}
-$stage = 'activate_package'
-try {
-    $existing = @(Get-Process -Name 'Vex.Windows.App' -ErrorAction SilentlyContinue)
-    if ($existing.Count -gt 1) { throw 'Application ownership is ambiguous.' }
-    if ($existing.Count -eq 0) {
-        # Keep the registered package's ordinary AppsFolder activation target,
-        # avoiding the same PS5 Shell wrapper that blocked the Setup UI probe.
-        $start = [Diagnostics.ProcessStartInfo]::new()
-        $start.FileName = Join-Path ([Environment]::GetFolderPath('Windows')) 'explorer.exe'
-        $start.Arguments = 'shell:AppsFolder\' + $inputValue.family + '!VexWindowsApp'
-        $start.UseShellExecute = $false
-        $activation = [Diagnostics.Process]::Start($start)
-        if ($null -ne $activation) { $activation.Dispose() }
     }
-    $deadline = [DateTime]::UtcNow.AddSeconds(25)
-    do {
-        $stage = 'inspect_process'
-        $processes = @(Get-Process -Name 'Vex.Windows.App' -ErrorAction SilentlyContinue)
-        if ($processes.Count -gt 1) { throw 'Application ownership is ambiguous.' }
-        if ($processes.Count -eq 1) {
-            $candidate = $processes[0]
-            if ($candidate.MainModule.FileName -ine $inputValue.executable -or
-                (Get-FileHash -LiteralPath $candidate.MainModule.FileName -Algorithm SHA256).Hash -ine $inputValue.sha256) { throw 'Unexpected application image.' }
-            $owned = $candidate
-            if ($owned.MainWindowHandle -ne [IntPtr]::Zero) { break }
-        }
-        Start-Sleep -Milliseconds 200
-    } while ([DateTime]::UtcNow -lt $deadline)
-    if ($null -eq $owned -or $owned.MainWindowHandle -eq [IntPtr]::Zero) { throw 'Installed application created no window.' }
-    $stage = 'inspect_window'
-    $script:window = [Windows.Automation.AutomationElement]::FromHandle($owned.MainWindowHandle)
-    # Fresh Release Home resolves to AccountPage until a real session exists.
-    # Wait for the real signed-out controls; do not invoke any auth action.
-    $deadline = [DateTime]::UtcNow.AddSeconds(20)
-    do {
-        $stage = 'find_signed_out'
-        $signIn = Find-Element 'WebsiteSignInButton'
-        $title = Find-Element 'AccountSignInTitle'
-        $settings = Find-Element 'SettingsNavigationButton'
-        if ($null -ne $signIn -and $signIn.Current.IsEnabled -and -not $signIn.Current.IsOffscreen -and
-            $null -ne $title -and $null -ne $settings) { break }
-        Start-Sleep -Milliseconds 200
-    } while ([DateTime]::UtcNow -lt $deadline)
-    if ($null -eq $signIn -or -not $signIn.Current.IsEnabled -or $signIn.Current.IsOffscreen -or
-        $null -eq $title -or $null -eq $settings) { throw 'Installed signed-out status is missing.' }
-    # WinUI navigation is a ToggleButton; use the same supported interaction
-    # patterns as the existing desktop smoke instead of requiring InvokePattern.
-    $pattern = $null
-    if ($settings.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {
-        ([Windows.Automation.InvokePattern]$pattern).Invoke()
-    }
-    elseif ($settings.TryGetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern, [ref]$pattern)) {
-        ([Windows.Automation.SelectionItemPattern]$pattern).Select()
-    }
-    elseif ($settings.TryGetCurrentPattern([Windows.Automation.TogglePattern]::Pattern, [ref]$pattern)) {
-        ([Windows.Automation.TogglePattern]$pattern).Toggle()
-    }
-    else { throw 'Installed Settings navigation has no supported interaction pattern.' }
-    $deadline = [DateTime]::UtcNow.AddSeconds(10)
-    do {
-        $stage = 'inspect_settings'
-        $toggle = Find-Element 'AutoLaunchToggle'
-        if ($null -ne $toggle -and $toggle.Current.IsEnabled) { break }
-        Start-Sleep -Milliseconds 200
-    } while ([DateTime]::UtcNow -lt $deadline)
-    if ($null -eq $toggle -or -not $toggle.Current.IsEnabled) { throw 'Installed Settings is unavailable.' }
-    # Read only: do not sign in, enable startup, request a VPN profile or connect.
-}
-catch {
-    [Console]::Error.WriteLine('VEX_INSTALLED_UI_DIAGNOSTIC=' + $stage + ';' +
-        $_.InvocationInfo.ScriptLineNumber + ';' + $_.Exception.GetType().FullName + ';' + $_.Exception.HResult)
-    throw
-}
-finally {
-    if ($null -ne $owned) {
-        try { if (-not $owned.HasExited) { $owned.Kill(); [void]$owned.WaitForExit(5000) } }
-        finally { $owned.Dispose() }
-    }
-}
-'@
-    $probe = $probe.Replace('__PAYLOAD__', $encodedPayload)
-    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($probe))
-    Invoke-AcceptanceProcess -Executable (Get-AcceptanceSystemPowerShellPath) -Arguments @('-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', $encoded) -TimeoutSeconds 75
+    $encoded = New-AcceptanceInstalledUiCommand $payload
+    # Use the same qualified Core7/STA UI host as native Setup automation; only
+    # service/bootstrap compatibility actions use system WinPS5.1.
+    Invoke-AcceptanceProcess -Executable (Get-AcceptanceUiPowerShellPath) -Arguments @('-STA', '-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', $encoded) -TimeoutSeconds 75
 }
 
 function Add-AcceptancePhase {
@@ -808,15 +1034,14 @@ function Add-AcceptancePhase {
     }
 }
 
+if ($FunctionsOnly) { return }
 Assert-AcceptanceRunner ([bool]$DisposableRunner)
 $ResultPath = [IO.Path]::GetFullPath($ResultPath)
 $candidate = $null; $preceding = $null; $mutationStarted = $false; $failure = $null; $cleanupFailure = $null
 $privateDirectory = $null; $fixtureId = [Guid]::NewGuid().ToString('N')
 $ownerSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $shared = @()
-$script:NativeSetupUiDiagnostic = $null
-$script:BootstrapDiagnostic = $null
-$script:InstalledUiDiagnostic = $null
+$ownedTrustCopies = [Collections.Generic.List[object]]::new()
 $evidence = [ordered]@{
     schema = 'vex.windows-signed-install-acceptance.v1'
     fixture_source_commit = $(if ($env:GITHUB_SHA -match '^[a-fA-F0-9]{40}$') { $env:GITHUB_SHA } else { $null })
@@ -826,12 +1051,8 @@ $evidence = [ordered]@{
     phases = [Collections.Generic.List[object]]::new()
     cleanup_confirmed = $false; installed_release_signed_out_ui = $false
     downloaded_bundle_preverification_guard = $false; native_double_click_installer_acceptance = $false
-    shell_reputation_prompt_acceptance = $false; verified_direct_setup_launch = $false
-    verified_shell_setup_launch = $false
-    bootstrap_diagnostic = $null
-    installed_ui_diagnostic = $null
     native_setup = $null; native_setup_bundle_verification = $false
-    native_setup_ui_diagnostic = $null
+    downloaded_setup_shell_launch = $null; verified_beta_setup_download_trust = $false
     native_setup_window_verified = $false; native_consumer_installation_verified = $false
     vclibs_absent_before_install = $false; clean_host_dependency_acceptance = $false
     real_authenticated_vpn_acceptance = $false; physical_arm64_acceptance = $false
@@ -860,7 +1081,7 @@ try {
     } $evidence
     $evidence.native_setup_bundle_verification = $true
     $mutationStarted = $true
-    Invoke-AcceptanceNativeInstall -Bundle $candidate -OwnerSid $ownerSid -Evidence $evidence
+    Invoke-AcceptanceNativeInstall -Bundle $candidate -OwnerSid $ownerSid -Evidence $evidence -ExplicitlyDisposable ([bool]$DisposableRunner) -OwnedTrustCopies $ownedTrustCopies
     Add-AcceptancePhase 'install_preceding' { Invoke-AcceptanceBootstrap $preceding Install } $evidence
     Add-AcceptancePhase 'verify_preceding' { Invoke-AcceptanceBootstrap $preceding Verify } $evidence
     Add-AcceptancePhase 'install_candidate' { Invoke-AcceptanceBootstrap $candidate Install } $evidence
@@ -882,9 +1103,6 @@ try {
 }
 catch { $failure = $_; $evidence.failure_type = $_.Exception.GetType().Name }
 finally {
-    $evidence.native_setup_ui_diagnostic = $script:NativeSetupUiDiagnostic
-    $evidence.bootstrap_diagnostic = $script:BootstrapDiagnostic
-    $evidence.installed_ui_diagnostic = $script:InstalledUiDiagnostic
     try {
         if ($mutationStarted) {
             Invoke-AcceptanceOwnedCleanup -MutationStarted $true -Bundles @($candidate, $preceding) -OwnerSid $ownerSid
@@ -894,6 +1112,10 @@ finally {
         $evidence.cleanup_confirmed = $true
     }
     catch { $cleanupFailure = $_; $evidence.cleanup_failure_type = $_.Exception.GetType().Name; $evidence.passed = $false }
+    foreach ($copy in $ownedTrustCopies) {
+        try { Close-AcceptanceTrustedCopy $copy }
+        catch { $cleanupFailure = $_; $evidence.cleanup_failure_type = $_.Exception.GetType().Name; $evidence.passed = $false }
+    }
     try { Remove-AcceptancePrivateDirectory -Path $privateDirectory -FixtureId $fixtureId }
     catch { $cleanupFailure = $_; $evidence.cleanup_failure_type = $_.Exception.GetType().Name; $evidence.passed = $false }
     [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($ResultPath)) | Out-Null

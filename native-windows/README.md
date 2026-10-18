@@ -516,6 +516,49 @@ inputs; signed release preparation requires `package_release=true`, the main
 branch, release version/revision/notes, and the configured release inputs.
 Signed preparation fails clearly when required signing inputs are missing.
 
+For the approved tester program, select `release_channel=beta`. The existing
+`stable` default is preserved when this input is omitted. Both architectures,
+the synthetic preceding package and signed install acceptance use that same
+validated channel. The signed MSIX includes its channel in the public update
+keyring, so a beta installation checks the beta feed without requiring users to
+set an environment variable. Beta Release builds pin `https://vexguard.app/downloads/windows/native/`,
+the existing first-party download namespace; their signed manifests and artifact URLs
+must remain inside that origin and path. Older keyrings retain the stable default; the
+existing explicit `VEX_WINDOWS_UPDATE_CHANNEL` override still takes precedence.
+The workflow retains artifacts for review and does not publish either channel.
+The explicit `tester-ca` signing mode uses the reviewed certificates in
+`packaging/tester-trust`: a separate RSA authority restricted to code signing,
+with path length zero, and its end-entity signer. The authority private key stays
+encrypted outside CI; CI receives only the encrypted end-entity PFX and the public chain.
+The manual job imports the exact pinned public authority solely on its
+disposable Windows host and removes its owned trust afterward. It cannot use
+this identity for stable. Authenticode, timestamps, Setup pins, service
+attestation and MSIX validation retain their ordinary checks.
+First-time testers explicitly import the public code-signing authority using
+the bundled `TESTER-INSTALL.txt` and the account's fingerprint, then run Setup.
+The complete bundle includes both public certificates and the reviewed guide;
+their descriptors are bound into the signed Setup metadata. No private key is
+distributed. `VEX_WINDOWS_SERVICE_MSI_SOURCE=amneziawg-3.1.0` explicitly opts
+into the pinned official x64/arm64 MSI pair on disposable runners; extraction
+preserves existing explicit PE URI/path precedence and validates both PE types.
+After signed lifecycle and real Windows VPN acceptance, the operator can publish
+the beta through the approved tester catalog in the account. Membership and
+free access remain controlled by the tester program; a beta artifact is not an
+authorization grant. Feedback and testing assignments remain in the account.
+
+The manual `Windows production tester acceptance` workflow checks a successful
+signed main run and its six required jobs before downloading that run's exact
+artifact. On a fresh disposable Windows x64 host it installs the signed beta,
+uses the normal native PKCE callback with an approved ordinary tester, selects
+full traffic, verifies public VPN egress and restoration, saves idempotent
+feedback, and removes its own installation and public CA trust. Its sole static
+tester secret contains a namespace and two-hour ordinary session, without administrator or signing credentials, and is
+removed by the operator after the terminal run and fixture cleanup. The workflow
+only retains sanitized receipts and cannot publish. Physical ARM64, reboot,
+roaming, DNS leakage and IPv6 acceptance remain separate explicit observations.
+Use these receipts together with the signed installer lifecycle; routine
+encrypted-fixture CI alone does not prove a public VEX VPN connection.
+
 Before selecting a signed release version and manifest revision, run the manual
 `Native Windows release input preflight` workflow on `main`. It receives only
 boolean presence flags for Actions variables and secrets, follows runtime-source

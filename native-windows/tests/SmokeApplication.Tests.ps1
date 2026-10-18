@@ -250,22 +250,82 @@ try {
     $process = [pscustomobject]@{ Id = 123 }
     $result = [ordered]@{ tray_activation_progress = $null }
     $trayDiagnosticHashes = @{}
+    # A replacement after open must leave the document/hash on the same handle.
+    # Windows may refuse replacement despite delete sharing; that exact refusal
+    # must preserve the original bytes, as the best-effort producer requires.
+    & {
+        $snapshotPaths = Own-TrayPaths -RequestId ([Guid]::NewGuid()) -ProcessId 123
+        $snapshotBytes = [Text.UTF8Encoding]::new($false).GetBytes(
+            ([pscustomobject]$progress | ConvertTo-Json -Compress) + "`n")
+        [IO.File]::WriteAllBytes($snapshotPaths.Progress, $snapshotBytes)
+        $expectedSnapshotHash = (Get-FileHash -LiteralPath $snapshotPaths.Progress -Algorithm SHA256).Hash
+        $replacement = [ordered]@{}
+        foreach ($key in $progress.Keys) { $replacement[$key] = $progress[$key] }
+        $replacement.stage = 'reset-ui-entered'
+        $replacementPath = $snapshotPaths.Progress + '.tmp'
+        [IO.File]::WriteAllText($replacementPath, ([pscustomobject]$replacement | ConvertTo-Json -Compress))
+        $openSnapshot = (Get-Command Open-SmokeTrayDiagnosticRead).ScriptBlock
+        $replacementState = @{ replaced = $false; sharing_refused = $false }
+        function Open-SmokeTrayDiagnosticRead {
+            param([string]$Path)
+            $stream = & $openSnapshot -Path $Path
+            try {
+                try {
+                    [IO.File]::Move($replacementPath, $Path, $true)
+                    $replacementState.replaced = $true
+                }
+                catch {
+                    if (-not $IsWindows -or -not (Test-SmokeTraySharingFailure -ErrorObject $_.Exception)) { throw }
+                    $replacementState.sharing_refused = $true
+                }
+                return $stream
+            }
+            catch { $stream.Dispose(); throw }
+        }
+        $snapshotHash = $null
+        $snapshot = Read-SmokeTrayDiagnostic -Path $snapshotPaths.Progress -Sha256 ([ref]$snapshotHash)
+        Assert-SmokeTrayActivationProgress -Diagnostic $snapshot -Scenario 'reset' -Mode 'fixtures' -ProcessId 123
+        if ($snapshot.stage -cne 'reset-ui-requested' -or $snapshotHash -cne $expectedSnapshotHash) {
+            throw 'Tray diagnostic document and hash were not read from the same bounded snapshot.'
+        }
+        $currentHash = (Get-FileHash -LiteralPath $snapshotPaths.Progress -Algorithm SHA256).Hash
+        if (($replacementState.replaced -and $currentHash -ceq $snapshotHash) -or
+            (-not $replacementState.replaced -and (-not $replacementState.sharing_refused -or $currentHash -cne $snapshotHash))) {
+            throw 'Tray replacement neither changed the path nor preserved it after an exact Windows sharing refusal.'
+        }
+    }
     $waitRequest = [Guid]::NewGuid()
     $waitPaths = Own-TrayPaths -RequestId $waitRequest -ProcessId 123
     $trayDiagnosticPath = $waitPaths.Completed
     foreach ($failureType in @($null, 'IOException')) {
         $progress.failure_type = $failureType
         [IO.File]::WriteAllText($waitPaths.Progress, ([pscustomobject]$progress | ConvertTo-Json -Compress))
+        $expectedProgressHash = (Get-FileHash -LiteralPath $waitPaths.Progress -Algorithm SHA256).Hash
+        $writer = [IO.FileStream]::new($waitPaths.Progress, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite,
+            ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
         $waitStarted = [DateTime]::UtcNow
         $rejected = $false
-        try { Wait-SmokeTrayRecoveryDiagnostic -RequestId $waitRequest -Scenario 'reset' -Access 'Available' | Out-Null }
+        try {
+            if ($IsWindows) {
+                $legacyRejected = $false
+                try { Get-FileHash -LiteralPath $waitPaths.Progress -Algorithm SHA256 -ErrorAction Stop | Out-Null }
+                catch {
+                    if (-not (Test-SmokeTraySharingFailure -ErrorObject $_.Exception)) { throw }
+                    $legacyRejected = $true
+                }
+                if (-not $legacyRejected) { throw 'Windows sharing regression fixture did not exercise a conflicting legacy hash open.' }
+            }
+            Wait-SmokeTrayRecoveryDiagnostic -RequestId $waitRequest -Scenario 'reset' -Access 'Available' | Out-Null
+        }
         catch {
             if ($_.Exception.Message -cne 'Actual tray recovery did not complete with an isolated diagnostic.') { throw }
             $rejected = $true
         }
+        finally { $writer.Dispose() }
         if (-not $rejected -or ([DateTime]::UtcNow - $waitStarted).TotalSeconds -lt 8 -or
             $null -ne $script:trayRecoveryDiagnostic -or $null -eq $result.tray_activation_progress -or
-            $result.tray_activation_progress.failure_type -cne $failureType) {
+            $result.tray_activation_progress.failure_type -cne $failureType -or
+            $trayDiagnosticHashes[$waitPaths.Progress] -cne $expectedProgressHash) {
             throw 'Tray progress or failure bypassed completion, lost its sanitized evidence or changed the eight-second wait.'
         }
     }
@@ -273,8 +333,13 @@ try {
     foreach ($key in $trayDiagnostic.Keys) { $completed[$key] = $trayDiagnostic[$key] }
     $completed.scenario = 'reset'; $completed.access = 'Available'
     [IO.File]::WriteAllText($trayDiagnosticPath, ([pscustomobject]$completed | ConvertTo-Json -Compress))
-    $actual = Wait-SmokeTrayRecoveryDiagnostic -RequestId $waitRequest -Scenario 'reset' -Access 'Available'
-    if ($actual.scenario -cne 'reset' -or -not $actual.handler_completed -or $null -ne $result.tray_activation_progress) {
+    $expectedCompletedHash = (Get-FileHash -LiteralPath $trayDiagnosticPath -Algorithm SHA256).Hash
+    $writer = [IO.FileStream]::new($trayDiagnosticPath, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite,
+        ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+    try { $actual = Wait-SmokeTrayRecoveryDiagnostic -RequestId $waitRequest -Scenario 'reset' -Access 'Available' }
+    finally { $writer.Dispose() }
+    if ($actual.scenario -cne 'reset' -or -not $actual.handler_completed -or $null -ne $result.tray_activation_progress -or
+        $trayDiagnosticHashes[$trayDiagnosticPath] -cne $expectedCompletedHash) {
         throw 'Actual completed v1 tray receipt changed its contract or retained stale progress from the previous wait.'
     }
     # A valid receipt belonging to another nonce cannot satisfy this request.

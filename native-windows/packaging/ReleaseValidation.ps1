@@ -1,5 +1,53 @@
 Set-StrictMode -Version Latest
 
+function Resolve-WindowsSdkTool {
+    param([Parameter(Mandatory = $true)][string]$ToolName)
+
+    $kitRoot = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
+    if (-not (Test-Path -LiteralPath $kitRoot -PathType Container)) {
+        throw 'Windows SDK is not installed. Expected Windows Kits\10\bin.'
+    }
+
+    $candidate = Get-ChildItem -LiteralPath $kitRoot -Directory |
+        Sort-Object Name -Descending |
+        ForEach-Object {
+            $path = Join-Path $_.FullName "x64\$ToolName"
+            if (Test-Path -LiteralPath $path -PathType Leaf) {
+                return $path
+            }
+        } |
+        Select-Object -First 1
+
+    if (-not $candidate) {
+        throw "Unable to locate '$ToolName' inside the Windows SDK."
+    }
+
+    return $candidate
+}
+
+function New-WindowsPackageManifest {
+    param(
+        [Parameter(Mandatory = $true)][string]$Template,
+        [Parameter(Mandatory = $true)][string]$PackageName,
+        [Parameter(Mandatory = $true)][string]$Version,
+        [Parameter(Mandatory = $true)][string]$Publisher,
+        [Parameter(Mandatory = $true)][ValidateSet('x64', 'arm64')][string]$Architecture,
+        [Parameter(Mandatory = $true)][string]$VclibsVersion,
+        [Parameter(Mandatory = $true)][string]$DisplayName,
+        [Parameter(Mandatory = $true)][string]$PublisherDisplayName
+    )
+    $values = @{
+        '__PACKAGE_NAME__' = $PackageName; '__PACKAGE_VERSION__' = (ConvertTo-WindowsPackageVersion $Version)
+        '__PUBLISHER__' = $Publisher; '__ARCHITECTURE__' = $Architecture
+        '__VCLIBS_VERSION__' = (ConvertTo-WindowsPackageVersion $VclibsVersion)
+        '__DISPLAY_NAME__' = $DisplayName; '__PUBLISHER_DISPLAY_NAME__' = $PublisherDisplayName
+    }
+    foreach ($key in $values.Keys) { $Template = $Template.Replace($key, [Security.SecurityElement]::Escape([string]$values[$key])) }
+    if ($Template -match '__[A-Z_]+__') { throw 'The Windows package manifest has unresolved inputs.' }
+    return $Template
+}
+
+
 function ConvertTo-WindowsPackageVersion {
     param([Parameter(Mandatory = $true)][string]$Value)
 

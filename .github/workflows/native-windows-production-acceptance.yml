@@ -1,0 +1,155 @@
+name: Windows production tester acceptance
+
+# An explicit, ordinary synthetic tester exercises the exact signed candidate.
+# This workflow cannot publish a release and receives no signing/admin secrets.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_production_qa:
+        description: "Exercise the approved synthetic tester on a disposable Windows host"
+        required: true
+        type: boolean
+        default: false
+      protocol_probe:
+        description: "Probe signed-out URI delivery with inert parameters and no tester identity"
+        required: false
+        type: boolean
+        default: false
+      release_run_id:
+        description: "Successful signed Native Windows CI run"
+        required: true
+        type: string
+      release_source_commit:
+        description: "Exact signed candidate source commit"
+        required: true
+        type: string
+      release_version:
+        description: "Exact four-part beta version"
+        required: true
+        type: string
+      qa_payload_sha256:
+        description: "Hash of the limited, short-lived tester payload"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: native-windows-production-tester-acceptance
+  cancel-in-progress: false
+
+jobs:
+  production_tester:
+    name: Signed Windows beta with an approved free tester
+    if: github.repository == 'ibotpafos/vex-client' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && ((inputs.confirm_production_qa && !inputs.protocol_probe) || (inputs.protocol_probe && !inputs.confirm_production_qa))
+    runs-on: windows-2025
+    timeout-minutes: 25
+    env:
+      VEX_WINDOWS_RELEASE_CHANNEL: beta
+      VEX_WINDOWS_SIGNING_MODE: tester-ca
+      VEX_WINDOWS_TEST_ROOT_SHA256: ${{ vars.VEX_WINDOWS_TEST_ROOT_SHA256 }}
+      VEX_WINDOWS_TEST_CERT_SHA256: ${{ vars.VEX_WINDOWS_TEST_CERT_SHA256 }}
+      VEX_WINDOWS_PACKAGE_PUBLISHER: ${{ vars.VEX_WINDOWS_PACKAGE_PUBLISHER }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Admit only the exact successful signed main candidate
+        id: candidate
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_RUN_ID: ${{ inputs.release_run_id }}
+          RELEASE_SOURCE_COMMIT: ${{ inputs.release_source_commit }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          QA_PAYLOAD_SHA256: ${{ inputs.qa_payload_sha256 }}
+          PROTOCOL_PROBE: ${{ inputs.protocol_probe }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+          if ($env:RELEASE_RUN_ID -cnotmatch '^[1-9][0-9]{0,15}$' -or $env:RELEASE_SOURCE_COMMIT -cnotmatch '^[a-f0-9]{40}$') { throw 'Candidate identifiers are invalid.' }
+          if ($env:PROTOCOL_PROBE -ceq 'true') {
+            if (-not [string]::IsNullOrEmpty($env:QA_PAYLOAD_SHA256)) { throw 'The signed-out probe must not receive a tester payload.' }
+          } elseif ($env:QA_PAYLOAD_SHA256 -cnotmatch '^[a-f0-9]{64}$') { throw 'Production QA requires its exact limited payload hash.' }
+          . ./native-windows/packaging/ReleaseValidation.ps1
+          if ((ConvertTo-WindowsPackageVersion $env:RELEASE_VERSION) -cne $env:RELEASE_VERSION) { throw 'Candidate version is not canonical.' }
+          $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2026-03-10' }
+          $base = 'https://api.github.com/repos/ibotpafos/vex-client/actions/runs/' + $env:RELEASE_RUN_ID
+          $run = Invoke-RestMethod -Uri $base -Headers $headers
+          if ($run.head_sha -cne $env:RELEASE_SOURCE_COMMIT -or $run.head_branch -cne 'main' -or $run.event -cne 'workflow_dispatch' -or $run.path -cne '.github/workflows/native-windows-ci.yml' -or $run.status -cne 'completed' -or $run.conclusion -cne 'success') { throw 'Candidate is not the exact successful signed main run.' }
+          $jobs = Invoke-RestMethod -Uri ($base + '/jobs?per_page=100') -Headers $headers
+          if ($jobs.total_count -ne @($jobs.jobs).Count) { throw 'Candidate job evidence is incomplete.' }
+          foreach ($name in @('Portable client and release contracts', 'Windows x64 application and VPN service', 'Windows arm64 application and VPN service', 'Capture actual macOS interface reference', 'Windows x64 real encrypted tunnel acceptance', 'Prepare signed Windows release artifacts')) {
+            $matching = @($jobs.jobs | Where-Object name -CEQ $name)
+            if ($matching.Count -ne 1 -or $matching[0].status -cne 'completed' -or $matching[0].conclusion -cne 'success') { throw 'A required signed candidate gate did not pass.' }
+          }
+          $artifacts = Invoke-RestMethod -Uri ($base + '/artifacts?per_page=100') -Headers $headers
+          if ($artifacts.total_count -ne @($artifacts.artifacts).Count) { throw 'Candidate artifact evidence is incomplete.' }
+          $artifact = @($artifacts.artifacts | Where-Object name -CEQ 'vex-native-windows-packaged-release')
+          if ($artifact.Count -ne 1 -or $artifact[0].expired -ne $false -or $artifact[0].size_in_bytes -le 0 -or $artifact[0].size_in_bytes -gt 2GB) { throw 'The exact bounded signed candidate artifact is unavailable.' }
+          "artifact_id=$($artifact[0].id)" >> $env:GITHUB_OUTPUT
+      - name: Download only the admitted signed artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ steps.candidate.outputs.artifact_id }}
+          run-id: ${{ inputs.release_run_id }}
+          github-token: ${{ github.token }}
+          merge-multiple: true
+          digest-mismatch: error
+          path: ${{ runner.temp }}/vex-signed-candidate
+      - name: Prepare the pinned public beta authority on this disposable host
+        shell: pwsh
+        run: ./native-windows/scripts/prepare-tester-signing-trust.ps1 -DisposableRunner
+      - name: Exercise ordinary sign-in, free access, real VPN and feedback
+        if: ${{ !inputs.protocol_probe }}
+        timeout-minutes: 15
+        shell: pwsh
+        env:
+          VEX_WINDOWS_TESTER_QA: ${{ secrets.VEX_WINDOWS_TESTER_QA }}
+          RELEASE_RUN_ID: ${{ inputs.release_run_id }}
+          RELEASE_SOURCE_COMMIT: ${{ inputs.release_source_commit }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          QA_PAYLOAD_SHA256: ${{ inputs.qa_payload_sha256 }}
+        run: |
+          $bundle = Join-Path $env:RUNNER_TEMP ('vex-signed-candidate/out/beta/x64/' + $env:RELEASE_VERSION)
+          $result = Join-Path $env:RUNNER_TEMP 'vex-production-tester-evidence'
+          ./native-windows/scripts/invoke-production-tester-acceptance.ps1 -DisposableRunner -BundleDirectory $bundle -ReleaseSourceCommit $env:RELEASE_SOURCE_COMMIT -ReleaseRunId $env:RELEASE_RUN_ID -ExpectedQaPayloadSha256 $env:QA_PAYLOAD_SHA256 -ResultDirectory $result
+      - name: Probe signed-out protocol delivery without tester credentials
+        if: inputs.protocol_probe
+        timeout-minutes: 8
+        shell: pwsh
+        env:
+          VEX_WINDOWS_PROTOCOL_PROBE: '1'
+          RELEASE_RUN_ID: ${{ inputs.release_run_id }}
+          RELEASE_SOURCE_COMMIT: ${{ inputs.release_source_commit }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+        run: |
+          $bundle = Join-Path $env:RUNNER_TEMP ('vex-signed-candidate/out/beta/x64/' + $env:RELEASE_VERSION)
+          $result = Join-Path $env:RUNNER_TEMP 'vex-protocol-probe-evidence'
+          ./native-windows/scripts/invoke-protocol-activation-acceptance.ps1 -DisposableRunner -BundleDirectory $bundle -ReleaseSourceCommit $env:RELEASE_SOURCE_COMMIT -ReleaseRunId $env:RELEASE_RUN_ID -ReleaseVersion $env:RELEASE_VERSION -ResultDirectory $result
+      - name: Remove only the owned beta trust
+        if: always()
+        shell: pwsh
+        run: ./native-windows/scripts/prepare-tester-signing-trust.ps1 -DisposableRunner -Action Cleanup
+      - name: Retain sanitized production tester observations
+        if: ${{ always() && !inputs.protocol_probe }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: vex-native-windows-production-tester-evidence-x64
+          path: |
+            ${{ runner.temp }}/vex-production-tester-evidence/result.json
+            ${{ runner.temp }}/vex-production-tester-evidence/baseline.json
+            ${{ runner.temp }}/vex-production-tester-evidence/connected.json
+            ${{ runner.temp }}/vex-production-tester-evidence/restored.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Retain sanitized signed-out protocol observations
+        if: ${{ always() && inputs.protocol_probe }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: vex-native-windows-protocol-activation-evidence-x64
+          path: ${{ runner.temp }}/vex-protocol-probe-evidence/result.json
+          if-no-files-found: ignore
+          retention-days: 7

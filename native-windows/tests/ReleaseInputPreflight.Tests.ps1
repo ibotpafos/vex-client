@@ -63,7 +63,7 @@ if ([regex]::Matches($lfWorkflow, $historicalLfOnlyMatcher).Count -ne $allNames.
     [regex]::Matches($crlfWorkflow, $historicalLfOnlyMatcher).Count -ne 0) {
     throw 'Historical LF-only matcher did not reproduce the original CRLF failure.'
 }
-Write-Output 'Historical exact LF-only matcher reproduced 34 LF matches and zero CRLF matches.'
+Write-Output ("Historical LF-only matcher reproduced {0} LF matches and zero CRLF matches." -f $allNames.Count)
 foreach ($variant in @($lfWorkflow, $crlfWorkflow)) {
     Assert-ReleasePreflightWorkflowContract -Workflow $variant -Names $allNames
     foreach ($invalid in @(
@@ -77,7 +77,7 @@ foreach ($variant in @($lfWorkflow, $crlfWorkflow)) {
         if (-not $rejected) { throw 'Workflow line-ending support accepted raw values, wrong provenance or unknown binding names.' }
     }
 }
-Write-Output 'Exact 34 boolean workflow bindings passed LF and CRLF; six raw-value/provenance/name controls rejected.'
+Write-Output ("Exact {0} boolean workflow bindings passed LF and CRLF; six raw-value/provenance/name controls rejected." -f $allNames.Count)
 
 $presence = @{}
 foreach ($name in $allNames) { $presence[$name] = $false }
@@ -93,6 +93,18 @@ if (-not $positive.configured_inputs_ready -or @($positive.missing_inputs).Count
     @($positive.runtime_sources | Where-Object { -not $_.vclibs_builtin_source }).Count -ne 0) {
     throw 'Required persistent inputs and built-in Microsoft VCLibs source did not pass presence.'
 }
+$msiPresence = $presence.Clone()
+foreach ($architecture in @('X64', 'ARM64')) {
+    foreach ($asset in @('AMNEZIAWG', 'WINTUN')) {
+        $msiPresence["VEX_WINDOWS_SERVICE_$($asset)_URI_$architecture"] = $false
+        $msiPresence["VEX_WINDOWS_SERVICE_$($asset)_SHA256_$architecture"] = $false
+    }
+}
+if ((Get-ReleaseInputPresenceReport -Presence $msiPresence).configured_inputs_ready) { throw 'MSI fallback cannot be implicit.' }
+$msiPresence['VEX_WINDOWS_SERVICE_MSI_SOURCE'] = $true
+if (-not (Get-ReleaseInputPresenceReport -Presence $msiPresence).configured_inputs_ready) { throw 'Explicit qualified MSI pair must provide both runtime architectures.' }
+$msiPresence['VEX_WINDOWS_SERVICE_AMNEZIAWG_URI_X64'] = $true
+if ((Get-ReleaseInputPresenceReport -Presence $msiPresence).configured_inputs_ready) { throw 'MSI fallback cannot bypass a custom PE URI missing its hash.' }
 foreach ($name in $required) {
     $copy = $presence.Clone(); $copy[$name] = $false
     $negative = Get-ReleaseInputPresenceReport -Presence $copy

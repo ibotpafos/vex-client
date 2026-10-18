@@ -34,11 +34,19 @@ $function = @($ast.FindAll({ param($node)
 }, $true))
 if ($function.Count -ne 1) { throw 'The production rejection predicate is unavailable or ambiguous.' }
 Invoke-Expression $function[0].Extent.Text
+# Derive the public peer identity from the actual product XAML. A control's
+# x:Name can differ from its explicit AutomationId and is not a UIA selector.
+$accountSource = Join-Path $PSScriptRoot '../src/Vex.Windows.App/Views/AccountPage.xaml'
+$accountXaml = [xml][IO.File]::ReadAllText((Resolve-Path $accountSource).Path)
+$statusPeer = $accountXaml.SelectSingleNode("//*[local-name()='TextBlock' and @*[local-name()='Name']='SignInStatusText']")
+if ($null -eq $statusPeer) { throw 'The actual account status peer is unavailable.' }
+$script:statusAutomationId = $statusPeer.GetAttribute('AutomationProperties.AutomationId')
+if ([string]::IsNullOrWhiteSpace($script:statusAutomationId)) { throw 'The account status peer has no explicit AutomationId.' }
 # The actual predicate runs against an inert UIA surface on every platform.
 # It must observe the existing local error, rather than accept any status text.
 $script:status = $null
 function Find-ProtocolProbeControl([string]$Id) {
-    if ($Id -cne 'SignInStatusText') { throw 'The predicate read an unexpected control.' }
+    if ($Id -cne $script:statusAutomationId) { throw 'The predicate did not select the actual XAML status peer.' }
     return $script:status
 }
 if (Test-ProtocolProbeRejection) { throw 'Missing UI was accepted as callback delivery.' }
@@ -49,4 +57,23 @@ $script:status.Current.IsOffscreen = $true
 if (Test-ProtocolProbeRejection) { throw 'A hidden stale control was accepted as visible delivery.' }
 $script:status.Current.IsOffscreen = $false
 if (-not (Test-ProtocolProbeRejection)) { throw 'The actual visible local rejection was not recognized.' }
-Write-Output 'Signed-out protocol predicate regression passed; no Windows install or activation executed.'
+# Exercise the real production observation too, retaining its existing JSON key.
+$qaTokens = $null; $qaErrors = $null
+$qaSource = Join-Path $PSScriptRoot '../scripts/invoke-production-tester-acceptance.ps1'
+$qaAst = [Management.Automation.Language.Parser]::ParseFile($qaSource, [ref]$qaTokens, [ref]$qaErrors)
+if (@($qaErrors).Count -ne 0) { throw 'Production tester acceptance must parse before the isolated observation regression.' }
+$qaFunction = @($qaAst.FindAll({ param($node)
+    $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Get-QASignInObservation'
+}, $true))
+if ($qaFunction.Count -ne 1) { throw 'The actual production sign-in observation is unavailable or ambiguous.' }
+Invoke-Expression $qaFunction[0].Extent.Text
+function Find-QAControl([string]$Id) {
+    if ($Id -cne $script:statusAutomationId) { return $null }
+    return [pscustomobject]@{ Current = [pscustomobject]@{ IsOffscreen = $false; IsEnabled = $true } }
+}
+$observation = Get-QASignInObservation
+if (-not $observation['SignInStatusText'].readable -or -not $observation['SignInStatusText'].present -or
+    -not $observation['SignInStatusText'].enabled -or $observation['SignInStatusText'].offscreen) {
+    throw 'The production observation lost the actual XAML status peer or changed its legacy report key.'
+}
+Write-Output 'Signed-out protocol oracle regressions passed; no Windows install or activation executed.'

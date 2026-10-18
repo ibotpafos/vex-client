@@ -74,4 +74,110 @@ foreach ($control in $observation.Values) {
     }
 }
 Assert (-not (($observation | ConvertTo-Json -Depth 4 -Compress).Contains($privateCanary))) 'UI or exception text leaked into the observation.'
+
+function New-BrowserRequestValue([hashtable]$Fields) {
+    return 'https://vexguard.app/auth/app?' + (($Fields.GetEnumerator() | ForEach-Object {
+        [Uri]::EscapeDataString($_.Key) + '=' + [Uri]::EscapeDataString($_.Value)
+    }) -join '&')
+}
+function Assert-BrowserRequestRejected([string]$Value) {
+    $rejected = $false
+    try { $null = Read-WindowsProductionBrowserRequest $Value }
+    catch [InvalidOperationException] {
+        $rejected = $true
+        Assert (-not $_.Exception.Message.Contains($privateCanary)) 'Browser validation disclosed private input.'
+    }
+    Assert $rejected 'A malformed native browser request was admitted.'
+}
+$browserFields = @{ state = (('a' * 14) + '.~'); code_challenge = 'A' * 43;
+    device_id = 'installation-fixture'; device_name = 'Windows'; platform = 'windows'; client_id = 'vex_app'; mode = 'login' }
+# Match the actual native generator's URI-unreserved alphabet. In particular,
+# state is not restricted to the separately validated base64url challenge.
+foreach ($testState in @(('a' * 16), (('a' * 14) + '.~'), 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~')) {
+    $fields = $browserFields.Clone(); $fields.state = $testState
+    $value = New-BrowserRequestValue $fields
+    Assert ((Read-WindowsProductionBrowserRequest $value).Get('state') -ceq $testState) 'A native-generated state was rejected.'
+    Assert ($null -eq (Read-WindowsProductionBrowserRequest $value.Substring('https://'.Length))) 'An elided browser display was assumed to use HTTPS.'
+    $relative = $value.Substring('https://vexguard.app'.Length)
+    $login = 'https://vexguard.app/sign-in?callbackUrl=' + [Uri]::EscapeDataString($relative)
+    Assert ((Read-WindowsProductionBrowserRequest $login).Get('state') -ceq $testState) 'The normal sign-in redirect changed its native state.'
+    Assert-BrowserRequestRejected ($login + '&callbackUrl=' + [Uri]::EscapeDataString($relative))
+}
+$browserValue = New-BrowserRequestValue $browserFields
+foreach ($value in @('', 'http://vexguard.app/auth/app', 'https://foreign.example.test/auth/app',
+    'https://vexguard.app:8443/auth/app', 'https://user@vexguard.app/auth/app', 'https://vexguard.app/auth/app-other',
+    'https://vexguard.app/sign-in', 'https://vexguard.app/sign-in?callbackUrl=https%3A%2F%2Fforeign.example.test%2Fauth%2Fapp',
+    ('https://vexguard.app/auth/app?' + ('x' * 8192)))) {
+    Assert ($null -eq (Read-WindowsProductionBrowserRequest $value)) 'An unrelated or unbounded browser URL became a native request.'
+}
+foreach ($key in @('state', 'code_challenge', 'device_id', 'device_name', 'platform')) {
+    $fields = $browserFields.Clone(); $fields.Remove($key)
+    Assert-BrowserRequestRejected (New-BrowserRequestValue $fields)
+    $fields = $browserFields.Clone(); $fields[$key] = ' '
+    Assert-BrowserRequestRejected (New-BrowserRequestValue $fields)
+    Assert-BrowserRequestRejected ($browserValue + '&' + $key + '=' + [Uri]::EscapeDataString($browserFields[$key]))
+}
+foreach ($change in @(@{ state = 'a' * 15 }, @{ state = 'a' * 129 }, @{ state = 'state/with/slashes' },
+    @{ state = 'state+with+pluses' }, @{ state = $privateCanary + '%' }, @{ platform = 'android' },
+    @{ code_challenge = 'A' * 42 }, @{ code_challenge = ('A' * 42) + '.' }, @{ code_challenge = ('A' * 42) + '~' })) {
+    $fields = $browserFields.Clone()
+    foreach ($key in $change.Keys) { $fields[$key] = $change[$key] }
+    Assert-BrowserRequestRejected (New-BrowserRequestValue $fields)
+}
+if ($IsWindows) {
+    Add-Type -AssemblyName UIAutomationClient; Add-Type -AssemblyName UIAutomationTypes
+    $readers = @($ast.FindAll({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and
+        $n.Name -ceq 'Get-QABrowserControlValue' }, $false))
+    Assert ($readers.Count -eq 1) 'Browser control reader is ambiguous.'
+    Invoke-Expression $readers[0].Extent.Text
+    # Use real .NET method calls: a PowerShell ScriptMethod adds a separate
+    # ParentContainsErrorRecordException wrapper that UIA does not produce.
+    Add-Type -TypeDefinition @'
+public sealed class VexBrowserControlFixture {
+    public bool Supported = true;
+    public object Pattern;
+    public object FocusedPattern;
+    public System.Exception Failure;
+    public int FocusCalls;
+    public bool TryGetCurrentPattern(object id, ref object pattern) {
+        if (Failure != null) throw Failure;
+        pattern = FocusCalls > 0 && FocusedPattern != null ? FocusedPattern : Pattern;
+        return Supported;
+    }
+    public void SetFocus() { FocusCalls++; }
+}
+'@
+    $element = [VexBrowserControlFixture]::new()
+    $element.Pattern = [pscustomobject]@{ Current = [pscustomobject]@{ Value = $browserValue } }
+    foreach ($browserReadCase in @('value', 'unsupported', 'stale', 'com', 'inactive')) {
+        $element.Supported = $browserReadCase -cne 'unsupported'
+        $element.Failure = switch ($browserReadCase) {
+            'stale' { [Windows.Automation.ElementNotAvailableException]::new($privateCanary) }
+            'com' { [Runtime.InteropServices.COMException]::new($privateCanary) }
+            'inactive' { [InvalidOperationException]::new($privateCanary) }
+            default { $null }
+        }
+        $value = Get-QABrowserControlValue $element
+        if ($browserReadCase -ceq 'value') { Assert ($value -ceq $browserValue) 'The UIA value was lost.' }
+        else { Assert ($null -eq $value) 'A transient provider failure escaped as browser input.' }
+    }
+    $element.Supported = $true; $element.Failure = $null
+    foreach ($browserReadCase in @('hidden_https', 'hidden_still', 'hidden_http')) {
+        $element.FocusCalls = 0
+        $element.Pattern.Current.Value = $browserValue.Substring('https://'.Length)
+        $expandedValue = switch ($browserReadCase) {
+            'hidden_https' { $browserValue }
+            'hidden_http' { $browserValue.Replace('https://', 'http://') }
+            default { $element.Pattern.Current.Value }
+        }
+        $element.FocusedPattern = [pscustomobject]@{ Current = [pscustomobject]@{ Value = $expandedValue } }
+        $value = Get-QABrowserControlValue $element
+        Assert ($element.FocusCalls -eq 1) 'An elided address was not reread after browser focus.'
+        if ($browserReadCase -ceq 'hidden_https') { Assert ((Read-WindowsProductionBrowserRequest $value).Get('state') -ceq $browserFields.state) 'The actual expanded HTTPS address was lost.' }
+        else { Assert ($null -eq (Read-WindowsProductionBrowserRequest $value)) 'A hidden or actual HTTP address was silently upgraded to HTTPS.' }
+    }
+    $element.Failure = [IO.IOException]::new($privateCanary); $rejected = $false
+    try { $null = Get-QABrowserControlValue $element } catch [IO.IOException] { $rejected = $true }
+    Assert $rejected 'An unexpected browser reader failure was silently retried.'
+}
 Write-Output 'Limited Windows tester validation passed: exact release/hash, ordinary namespace, TTL, public exits, and inert helper import.'

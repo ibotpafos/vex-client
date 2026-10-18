@@ -21,6 +21,10 @@ internal static class NativeAuthServiceTests
         await CallbackDuringPendingBrowserLaunchAsync(lateLaunchException: true);
         await AcceptedCallbackSurvivesPendingLaunchFailureAsync(lateLaunchException: false);
         await AcceptedCallbackSurvivesPendingLaunchFailureAsync(lateLaunchException: true);
+        await OldLaunchFailurePreservesReplacementOrSignOutAsync(signOut: false, lateLaunchException: false);
+        await OldLaunchFailurePreservesReplacementOrSignOutAsync(signOut: false, lateLaunchException: true);
+        await OldLaunchFailurePreservesReplacementOrSignOutAsync(signOut: true, lateLaunchException: false);
+        await OldLaunchFailurePreservesReplacementOrSignOutAsync(signOut: true, lateLaunchException: true);
     }
 
     private static async Task RunAsync()
@@ -186,6 +190,74 @@ internal static class NativeAuthServiceTests
         {
             launchResult.TrySetResult(true);
             exchangeResult.TrySetResult(Session());
+            await launching.WaitAsync(Deadline);
+            if (callback is not null) await callback.WaitAsync(Deadline);
+        }
+    }
+
+    private static async Task OldLaunchFailurePreservesReplacementOrSignOutAsync(bool signOut, bool lateLaunchException)
+    {
+        var fixture = new Fixture();
+        var launchStarted = Signal();
+        var oldLaunch = Result<bool>();
+        fixture.LaunchOverride = _ =>
+        {
+            if (fixture.BrowserUris.Count != 1) return Task.FromResult(true);
+            launchStarted.TrySetResult();
+            return oldLaunch.Task;
+        };
+        var launching = fixture.Auth.StartBrowserAuthAsync(WebAuthMode.Login, CancellationToken.None);
+        Task? callback = null;
+        try
+        {
+            await launchStarted.Task.WaitAsync(Deadline);
+            if (signOut)
+            {
+                callback = fixture.Auth.HandleProtocolActivationAsync(Callback(RequireChallenge(fixture)),
+                    CancellationToken.None);
+                await callback.WaitAsync(Deadline);
+                await fixture.Coordinator.SignOutAsync(CancellationToken.None);
+                fixture.Auth.ClearStatus();
+            }
+            else
+            {
+                fixture.Auth.CancelBrowserAuth();
+                await fixture.Auth.StartBrowserAuthAsync(WebAuthMode.Register, CancellationToken.None);
+            }
+            var pending = fixture.Pkce.Pending;
+            var notice = fixture.Auth.Notice;
+            var error = fixture.Auth.Error;
+            var saves = fixture.Store.SaveCount;
+            if (lateLaunchException)
+            {
+                oldLaunch.TrySetException(new InvalidOperationException("Old browser launch failed."));
+                _ = oldLaunch.Task.Exception;
+            }
+            else oldLaunch.TrySetResult(false);
+            await launching.WaitAsync(Deadline);
+            Check(fixture.Pkce.Pending == pending && fixture.Auth.Notice == notice && fixture.Auth.Error == error &&
+                fixture.Store.SaveCount == saves,
+                "An old browser launch failure changed the replacement attempt or signed-out state.");
+            if (signOut)
+            {
+                Check(fixture.Store.State is null && !fixture.Auth.IsWaitingForBrowserAuth && pending is null,
+                    "A late browser result restored an explicitly signed-out session.");
+                await fixture.Auth.StartBrowserAuthAsync(WebAuthMode.Login, CancellationToken.None);
+                fixture.Auth.CancelBrowserAuth();
+            }
+            else
+            {
+                Check(fixture.Auth.IsWaitingForBrowserAuth && pending is not null && fixture.Store.State is null,
+                    "An old browser result consumed the new registration challenge.");
+                await fixture.Auth.HandleProtocolActivationAsync(Callback(pending!), CancellationToken.None);
+                Check(fixture.Store.SaveCount == 1 && !fixture.Auth.IsWaitingForBrowserAuth &&
+                    fixture.Auth.Error is null && fixture.Pkce.Pending is null,
+                    "The replacement challenge could not finish after an old browser result.");
+            }
+        }
+        finally
+        {
+            oldLaunch.TrySetResult(true);
             await launching.WaitAsync(Deadline);
             if (callback is not null) await callback.WaitAsync(Deadline);
         }

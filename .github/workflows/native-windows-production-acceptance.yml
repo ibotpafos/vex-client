@@ -31,6 +31,22 @@ on:
         description: "Hash of the limited, short-lived tester payload"
         required: false
         type: string
+      expected_artifact_id:
+        description: "Required for protocol probes: confirmed immutable artifact ID"
+        required: false
+        type: string
+      expected_artifact_digest:
+        description: "Required for protocol probes: confirmed sha256: ZIP digest"
+        required: false
+        type: string
+      expected_root_sha256:
+        description: "Required for protocol probes: confirmed public root certificate SHA-256"
+        required: false
+        type: string
+      expected_leaf_sha256:
+        description: "Required for protocol probes: confirmed public leaf certificate SHA-256"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -66,6 +82,10 @@ jobs:
           RELEASE_VERSION: ${{ inputs.release_version }}
           QA_PAYLOAD_SHA256: ${{ inputs.qa_payload_sha256 }}
           PROTOCOL_PROBE: ${{ inputs.protocol_probe }}
+          EXPECTED_ARTIFACT_ID: ${{ inputs.expected_artifact_id }}
+          EXPECTED_ARTIFACT_DIGEST: ${{ inputs.expected_artifact_digest }}
+          EXPECTED_ROOT_SHA256: ${{ inputs.expected_root_sha256 }}
+          EXPECTED_LEAF_SHA256: ${{ inputs.expected_leaf_sha256 }}
         run: |
           $ErrorActionPreference = 'Stop'
           Set-StrictMode -Version Latest
@@ -87,9 +107,21 @@ jobs:
           }
           $artifacts = Invoke-RestMethod -Uri ($base + '/artifacts?per_page=100') -Headers $headers
           if ($artifacts.total_count -ne @($artifacts.artifacts).Count) { throw 'Candidate artifact evidence is incomplete.' }
-          $artifact = @($artifacts.artifacts | Where-Object name -CEQ 'vex-native-windows-packaged-release')
-          if ($artifact.Count -ne 1 -or $artifact[0].expired -ne $false -or $artifact[0].size_in_bytes -le 0 -or $artifact[0].size_in_bytes -gt 2GB) { throw 'The exact bounded signed candidate artifact is unavailable.' }
-          "artifact_id=$($artifact[0].id)" >> $env:GITHUB_OUTPUT
+          if ($env:PROTOCOL_PROBE -ceq 'true') {
+            . ./native-windows/packaging/ProtocolProbeCandidate.ps1
+            $binding = @{ expected_artifact_id = $env:EXPECTED_ARTIFACT_ID; expected_artifact_digest = $env:EXPECTED_ARTIFACT_DIGEST
+              expected_root_sha256 = $env:EXPECTED_ROOT_SHA256; expected_leaf_sha256 = $env:EXPECTED_LEAF_SHA256 }
+            $artifact = Assert-ProtocolProbeCandidate -Artifacts $artifacts -Binding $binding -ReleaseRunId $env:RELEASE_RUN_ID -ReleaseSourceCommit $env:RELEASE_SOURCE_COMMIT -ConfiguredRootSha256 $env:VEX_WINDOWS_TEST_ROOT_SHA256 -ConfiguredLeafSha256 $env:VEX_WINDOWS_TEST_CERT_SHA256
+            # Subsequent trust/installer steps consume these confirmed inputs,
+            # rather than re-reading mutable repository variables.
+            "VEX_WINDOWS_TEST_ROOT_SHA256=$($binding.expected_root_sha256)" >> $env:GITHUB_ENV
+            "VEX_WINDOWS_TEST_CERT_SHA256=$($binding.expected_leaf_sha256)" >> $env:GITHUB_ENV
+          } else {
+            $matching = @($artifacts.artifacts | Where-Object name -CEQ 'vex-native-windows-packaged-release')
+            if ($matching.Count -ne 1 -or $matching[0].expired -ne $false -or $matching[0].size_in_bytes -le 0 -or $matching[0].size_in_bytes -gt 2GB) { throw 'The exact bounded signed candidate artifact is unavailable.' }
+            $artifact = $matching[0]
+          }
+          "artifact_id=$($artifact.id)" >> $env:GITHUB_OUTPUT
       - name: Download only the admitted signed artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
@@ -98,7 +130,16 @@ jobs:
           github-token: ${{ github.token }}
           merge-multiple: true
           digest-mismatch: error
-          path: ${{ runner.temp }}/vex-signed-candidate
+          skip-decompress: ${{ inputs.protocol_probe }}
+          path: ${{ runner.temp }}/${{ inputs.protocol_probe && 'vex-probe-archive' || 'vex-signed-candidate' }}
+      - name: Verify confirmed protocol probe ZIP bytes before extraction
+        if: inputs.protocol_probe
+        shell: pwsh
+        env:
+          EXPECTED_ARTIFACT_DIGEST: ${{ inputs.expected_artifact_digest }}
+        run: |
+          . ./native-windows/packaging/ProtocolProbeCandidate.ps1
+          Expand-ExpectedProtocolProbeArtifact -ArchiveDirectory (Join-Path $env:RUNNER_TEMP 'vex-probe-archive') -DestinationDirectory (Join-Path $env:RUNNER_TEMP 'vex-signed-candidate') -ExpectedDigest $env:EXPECTED_ARTIFACT_DIGEST
       - name: Prepare the pinned public beta authority on this disposable host
         shell: pwsh
         run: ./native-windows/scripts/prepare-tester-signing-trust.ps1 -DisposableRunner

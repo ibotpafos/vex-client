@@ -13,6 +13,7 @@ Set-StrictMode -Version Latest
 $explicitDisposable = [bool]$DisposableRunner
 . (Join-Path $PSScriptRoot 'invoke-signed-install-acceptance.ps1') -FunctionsOnly
 Assert-AcceptanceRunner $explicitDisposable
+. (Join-Path $PSScriptRoot 'ProtocolCallback.ps1')
 if ($env:GITHUB_EVENT_NAME -cne 'workflow_dispatch' -or $env:GITHUB_REF -cne 'refs/heads/main' -or
     $env:GITHUB_REPOSITORY -cne 'ibotpafos/vex-client' -or $env:VEX_WINDOWS_PROTOCOL_PROBE -cne '1') {
     throw 'Protocol acceptance requires its explicit protected disposable workflow.'
@@ -39,18 +40,36 @@ New-Item -ItemType Directory -Path $ResultDirectory -Force | Out-Null
 $null = Assert-AcceptanceRegularPath -Path $ResultDirectory -Directory
 $ownerSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $evidence = [ordered]@{
-    schema = 'vex.windows-protocol-activation-acceptance.v1'; source_commit = $ReleaseSourceCommit
+    schema = 'vex.windows-protocol-activation-acceptance.v2'; source_commit = $ReleaseSourceCommit
     workflow_commit = $env:GITHUB_SHA; release_run_id = $ReleaseRunId; release_version = $bundle.Metadata.version
     passed = $false; production_qa_passed = $false; no_identity_credentials = $true; inert_callback_only = $true
     local_guard_rejection_observed = $false; cleanup_confirmed = $false; failure_type = $null
+    cold_local_guard_rejection_observed = $false; cold_start_observed = $false; cold_observation = $null
     cleanup_failure_type = $null; observation = $null; phases = [Collections.Generic.List[object]]::new()
 }
 $mutationStarted = $false; $owned = $null; $script:window = $null; $shared = @(); $failure = $null; $cleanupFailure = $null
+$script:protocolObservationIsCold = $false
 
-function Wait-ProtocolProbe([scriptblock]$Condition, [int]$Seconds = 30) {
+function Wait-ProtocolProbe([scriptblock]$Condition, [int]$Seconds = 30, [switch]$ObservationOnly) {
     $until = [DateTime]::UtcNow.AddSeconds($Seconds)
-    do { if (& $Condition) { return }; Start-Sleep -Milliseconds 250 } while ([DateTime]::UtcNow -lt $until)
+    do {
+        if (& $Condition) { if ($ObservationOnly) { return $true }; return }
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $until)
+    if ($ObservationOnly) { return $false }
     throw 'The required signed-out protocol observation did not arrive.'
+}
+function Set-ProtocolProbeOwnedWindow {
+    $processes = @(Get-Process -Name 'Vex.Windows.App' -ErrorAction SilentlyContinue)
+    if ($processes.Count -gt 1) { throw 'The signed-out app ownership is ambiguous.' }
+    if ($processes.Count -ne 1 -or $processes[0].MainWindowHandle -eq [IntPtr]::Zero) { return $false }
+    if ($processes[0].MainModule.FileName -ine $image -or
+        (Get-FileHash -LiteralPath $image -Algorithm SHA256).Hash -ine $bundle.Metadata.app_executable_sha256) {
+        throw 'The signed-out application changed identity.'
+    }
+    $script:owned = $processes[0]
+    $script:window = [Windows.Automation.AutomationElement]::FromHandle($script:owned.MainWindowHandle)
+    return $true
 }
 function Find-ProtocolProbeControl([string]$Id) {
     return $script:window.FindFirst([Windows.Automation.TreeScope]::Descendants,
@@ -60,6 +79,14 @@ function Test-ProtocolProbeRejection {
     $status = Find-ProtocolProbeControl 'AccountSignInStatus'
     return $null -ne $status -and -not $status.Current.IsOffscreen -and
         $status.Current.Name -ceq 'Сессия входа через сайт устарела. Запустите вход заново.'
+}
+function Test-ProtocolProbeComplete($Evidence) {
+    return $Evidence.local_guard_rejection_observed -and $Evidence.cold_start_observed -and
+        $Evidence.cold_local_guard_rejection_observed -and $null -ne $Evidence.observation -and
+        $null -ne $Evidence.cold_observation -and $Evidence.observation.primary_process_alive -and
+        $Evidence.observation.single_app_process -and -not $Evidence.observation.authenticated_button_visible -and
+        $Evidence.cold_observation.primary_process_alive -and $Evidence.cold_observation.single_app_process -and
+        -not $Evidence.cold_observation.authenticated_button_visible
 }
 function Get-ProtocolProbeObservation {
     # Fixed booleans only: no UI text, titles, process arguments, callback values,
@@ -109,18 +136,7 @@ try {
     $image = Join-Path $package[0].InstallLocation 'Vex.Windows.App.exe'
     $explorer = Join-Path ([Environment]::GetFolderPath('Windows')) 'explorer.exe'
     $null = Start-Process -FilePath $explorer -ArgumentList ('shell:AppsFolder\' + $package[0].PackageFamilyName + '!VexWindowsApp')
-    Wait-ProtocolProbe {
-        $processes = @(Get-Process -Name 'Vex.Windows.App' -ErrorAction SilentlyContinue)
-        if ($processes.Count -gt 1) { throw 'The signed-out app ownership is ambiguous.' }
-        if ($processes.Count -ne 1 -or $processes[0].MainWindowHandle -eq [IntPtr]::Zero) { return $false }
-        if ($processes[0].MainModule.FileName -ine $image -or
-            (Get-FileHash -LiteralPath $image -Algorithm SHA256).Hash -ine $bundle.Metadata.app_executable_sha256) {
-            throw 'The signed-out application changed identity.'
-        }
-        $script:owned = $processes[0]
-        $script:window = [Windows.Automation.AutomationElement]::FromHandle($script:owned.MainWindowHandle)
-        return $true
-    }
+    Wait-ProtocolProbe { Set-ProtocolProbeOwnedWindow }
     Add-AcceptancePhase 'signed_out_without_pending_challenge' {
         Wait-ProtocolProbe {
             $login = Find-ProtocolProbeControl 'WebsiteSignInButton'
@@ -133,26 +149,48 @@ try {
         }
         if (Test-ProtocolProbeRejection) { throw 'The local rejection was already visible before activation.' }
     } $evidence
+    $callback = 'vexguard://auth/callback?code=vex-probe-invalid&state=vex-probe-invalid'
     Add-AcceptancePhase 'warm_shell_callback_local_rejection' {
         # No browser attempt is started. The actual NativeAuthService contract
         # rejects a missing stored challenge before calling any API or saving a
         # session. This tests delivery, not successful authentication.
-        $callback = 'vexguard://auth/callback?code=vex-probe-invalid&state=vex-probe-invalid'
-        $null = Start-Process -FilePath $explorer -ArgumentList $callback
-        Wait-ProtocolProbe { Test-ProtocolProbeRejection } 20
-        $evidence.local_guard_rejection_observed = $true
+        Invoke-AcceptanceProtocolCallback ([Uri]$callback)
+        $evidence.local_guard_rejection_observed = Wait-ProtocolProbe { Test-ProtocolProbeRejection } 20 -ObservationOnly
     } $evidence
+    $evidence.phases[$evidence.phases.Count - 1].passed = $evidence.local_guard_rejection_observed
+    Wait-ProtocolProbe {
+        return -not $script:owned.HasExited -and @(Get-Process -Name 'Vex.Windows.App' -ErrorAction SilentlyContinue).Count -eq 1
+    } 5
     $evidence.observation = Get-ProtocolProbeObservation
     if (-not $evidence.observation.primary_process_alive -or -not $evidence.observation.single_app_process -or
-        -not $evidence.observation.local_guard_rejection_observed -or $evidence.observation.authenticated_button_visible) {
+        $evidence.observation.authenticated_button_visible) {
         throw 'The signed-out protocol observation did not preserve its owned unauthenticated process.'
     }
-    $evidence.passed = $true
+    $script:protocolObservationIsCold = $true
+    Add-AcceptancePhase 'cold_shell_callback_local_rejection' {
+        Stop-AcceptanceInstalledApplication $bundle $ownerSid
+        $script:owned = $null; $script:window = $null
+        if (@(Get-Process -Name 'Vex.Windows.App' -ErrorAction SilentlyContinue).Count -ne 0) {
+            throw 'The owned app did not stop before the cold protocol observation.'
+        }
+        Invoke-AcceptanceProtocolCallback ([Uri]$callback)
+        $evidence.cold_start_observed = Wait-ProtocolProbe { Set-ProtocolProbeOwnedWindow } 20 -ObservationOnly
+        if ($evidence.cold_start_observed) {
+            $evidence.cold_local_guard_rejection_observed = Wait-ProtocolProbe { Test-ProtocolProbeRejection } 20 -ObservationOnly
+            $evidence.cold_observation = Get-ProtocolProbeObservation
+        }
+    } $evidence
+    $evidence.phases[$evidence.phases.Count - 1].passed = $evidence.cold_local_guard_rejection_observed
+    $evidence.passed = Test-ProtocolProbeComplete $evidence
+    if (-not $evidence.passed) { $evidence.failure_type = 'ProtocolObservationMissing' }
 }
 catch {
     $failure = $_
     $evidence.failure_type = $_.Exception.GetType().Name
-    if ($null -ne $script:window) { $evidence.observation = Get-ProtocolProbeObservation }
+    if ($null -ne $script:window) {
+        if ($script:protocolObservationIsCold) { $evidence.cold_observation = Get-ProtocolProbeObservation }
+        else { $evidence.observation = Get-ProtocolProbeObservation }
+    }
 }
 finally {
     try {
@@ -170,7 +208,7 @@ finally {
     if ([Text.Encoding]::UTF8.GetByteCount($json) -gt 16384) { throw 'The protocol observation exceeded its fixed evidence budget.' }
     [IO.File]::WriteAllText((Join-Path $ResultDirectory 'result.json'), $json, [Text.UTF8Encoding]::new($false))
 }
-if ($null -ne $failure -or $null -ne $cleanupFailure) {
+if (-not $evidence.passed -or $null -ne $failure -or $null -ne $cleanupFailure) {
     throw 'Signed-out protocol acceptance failed; inspect its fixed sanitized observations.'
 }
 Write-Output 'Signed-out protocol delivery reached the local rejection guard; production login and VPN remain separate acceptance.'

@@ -13,6 +13,7 @@ Set-StrictMode -Version Latest
 $explicitDisposable = [bool]$DisposableRunner
 . (Join-Path $PSScriptRoot 'invoke-signed-install-acceptance.ps1') -FunctionsOnly
 Assert-AcceptanceRunner $explicitDisposable
+. (Join-Path $PSScriptRoot 'ProtocolCallback.ps1')
 if ($env:GITHUB_EVENT_NAME -cne 'workflow_dispatch' -or $env:GITHUB_REF -cne 'refs/heads/main' -or
     $env:GITHUB_REPOSITORY -cne 'ibotpafos/vex-client') { throw 'Production QA requires the reviewed main workflow on a disposable host.' }
 foreach ($name in @('VEX_WINDOWS_SIGN_PFX_BASE64', 'VEX_WINDOWS_SIGN_PFX_PASSWORD', 'VEX_WINDOWS_UPDATE_PRIVATE_KEY_BASE64')) {
@@ -192,9 +193,7 @@ try {
         Write-Host ('::add-mask::' + $parameters.Get('code'))
         $callback = 'vexguard://auth/callback?code=' + [Uri]::EscapeDataString($parameters.Get('code')) + '&state=' + [Uri]::EscapeDataString($state)
         $evidence.sign_in_stage = 'protocol_callback'
-        # Match the initial packaged-app launch: the installer host is elevated,
-        # while URI activation belongs to the user's existing desktop shell.
-        $null = Start-Process -FilePath (Join-Path ([Environment]::GetFolderPath('Windows')) 'explorer.exe') -ArgumentList $callback
+        Invoke-AcceptanceProtocolCallback ([Uri]$callback)
         Wait-QA {
             $signOut = Find-QAControl 'SignOutButton'; $power = Find-QAControl 'PowerButton'
             return ($null -ne $signOut -and -not $signOut.Current.IsOffscreen) -or ($null -ne $power -and $power.Current.IsEnabled)

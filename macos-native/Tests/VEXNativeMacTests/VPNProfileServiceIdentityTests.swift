@@ -200,6 +200,39 @@ final class VPNProfileServiceIdentityTests: XCTestCase {
         XCTAssertEqual(fixture.cache.load(locationId: "de", routingMode: .fullTunnel, accountUserId: "account-a")?.localKeyEpoch, 7)
     }
 
+    func testFullTunnelProvisioningFailurePreservesModeAndDoesNotWriteHelperConfig() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let network = Network(device: try fixture.device(), profile: fixture.profile(), onProfile: {
+            throw VEXAPIError.http(status: 400, message: "add-peer unavailable", code: "provisioning_failed")
+        })
+        do {
+            _ = try await fixture.service(network).resolveProfile(accessToken: "fixture-token", userId: "account-a",
+                locationId: "de", routingMode: .fullTunnel, writeHelperConfig: true, prevalidatedEntitlement: fixture.paid)
+            XCTFail("Provisioning failure must reach the caller")
+        } catch { XCTAssertTrue(error.isProfileProvisioningUnavailable) }
+        XCTAssertEqual(network.paths, ["/v1/devices", "/v1/vpn/profile"])
+        XCTAssertEqual(network.routingModes, [VpnRoutingMode.fullTunnel.rawValue])
+        XCTAssertNil(fixture.cache.readHelperConfig())
+        XCTAssertNil(fixture.cache.load(locationId: "de", routingMode: .allExceptRu, accountUserId: "account-a"))
+    }
+
+    func testSmartTimeoutCannotUseAnotherModesQualifiedCache() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let full = try fixture.record()
+        try fixture.cache.save(full, locationId: "de", routingMode: .fullTunnel)
+        let network = Network(device: full.device, profile: fixture.profile(), onProfile: { throw URLError(.timedOut) })
+        do {
+            _ = try await fixture.service(network).resolveProfile(accessToken: "fixture-token", userId: "account-a",
+                locationId: "de", routingMode: .allExceptRu, writeHelperConfig: true, prevalidatedEntitlement: fixture.paid)
+            XCTFail("A different-mode cache cannot satisfy the request")
+        } catch { guard case VEXAPIError.requestTimeout = error else { return XCTFail("Expected normalized timeout") } }
+        XCTAssertEqual(network.routingModes, [VpnRoutingMode.allExceptRu.rawValue])
+        XCTAssertEqual(fixture.cache.load(locationId: "de", routingMode: .fullTunnel, accountUserId: "account-a"), full)
+        XCTAssertNil(fixture.cache.readHelperConfig())
+    }
+
     private struct Fixture {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("VPNProfileServiceIdentityTests-\(UUID().uuidString)")
         let keyPair = WireGuardKeyPair(privateKey: "dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=",
@@ -277,6 +310,12 @@ final class VPNProfileServiceIdentityTests: XCTestCase {
         }
 
         var paths: [String] { lock.lock(); defer { lock.unlock() }; return requests.compactMap { $0.url?.path } }
+        var routingModes: [String?] {
+            lock.lock(); defer { lock.unlock() }
+            return requests.filter { $0.url?.path == "/v1/vpn/profile" }.map {
+                URLComponents(url: $0.url!, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "routing_mode" }?.value
+            }
+        }
         var knownVersions: [Int?] {
             lock.lock(); defer { lock.unlock() }
             return requests.filter { $0.url?.path == "/v1/vpn/profile" }.map {

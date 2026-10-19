@@ -527,21 +527,6 @@ final class NativeParityModelTests: XCTestCase {
         XCTAssertTrue(VPNProfileService.cachedProfileNeedsRefresh(cached, requestedLocationId: "fi", requestedRoutingMode: .allExceptRu))
     }
 
-    func testFullTunnelProfileProvisioningFailureFallsBackToSmartRoute() throws {
-        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let profileServiceURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/VPNProfileService.swift")
-        let apiURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/VEXAPIClient.swift")
-        let profileService = try String(contentsOf: profileServiceURL, encoding: .utf8)
-        let api = try String(contentsOf: apiURL, encoding: .utf8)
-
-        XCTAssertTrue(api.contains("isProfileProvisioningUnavailable"))
-        XCTAssertTrue(api.contains("add-peer"))
-        XCTAssertTrue(profileService.contains("routingMode == .fullTunnel, error.isProfileProvisioningUnavailable"))
-        XCTAssertTrue(profileService.contains("effectiveRoutingMode = .allExceptRu"))
-        XCTAssertTrue(profileService.contains("bypassRegion: effectiveBypassRegion"))
-        XCTAssertTrue(profileService.contains("copy.nodeId = managedProfileNodeId(profile) ?? nodeIdForLocation(locationId)"))
-    }
-
     func testNativeDeviceMetadataSyncsExistingDeviceVersion() throws {
         let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let profileServiceURL = packageRoot.appendingPathComponent("Sources/VEXNativeMac/Services/VPNProfileService.swift")

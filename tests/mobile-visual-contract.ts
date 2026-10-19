@@ -2,7 +2,7 @@ import {
   mobileStateNoticePresentation,
   vexMobileType,
 } from '../src/ui/vex-mobile-visual';
-import { homeBrandPresentation, homeLocationBackdropKey, homeLocationCopy } from '../src/screens/home-screen-visual';
+import { homeBrandPresentation, homeConnectionPresentation, homeLocationBackdropKey, homeLocationCopy } from '../src/screens/home-screen-visual';
 import {
   groupVpnLocationsByCountry,
   serverCountLabel,
@@ -33,6 +33,16 @@ assertDeepEqual(homeBrandPresentation(), {
   usesEmblem: false,
   wordmark: 'VEX',
 });
+for (const phase of ['connecting', 'verifying'] as const) {
+  const pending = homeConnectionPresentation(phase);
+  assertEqual(pending.tone, 'connected');
+  assertEqual(pending.action, 'Включён');
+  assertEqual(pending.helper, 'Завершаем подключение');
+}
+assertEqual(homeConnectionPresentation('connected').helper, 'Соединение защищено');
+assertEqual(homeConnectionPresentation('idle').action, 'Подключить');
+assertEqual(homeConnectionPresentation('blocked').tone, 'warning');
+assertEqual(homeConnectionPresentation('degraded').tone, 'warning');
 const germanyLocation: VpnLocation = {
   availability: 'available',
   capabilities: [],

@@ -199,6 +199,15 @@ jobs:
           }
       - name: Publish self-contained VPN service
         run: dotnet publish native-windows/src/Vex.Windows.Service/Vex.Windows.Service.csproj -c Release -r win-${{ matrix.architecture }} -p:Platform=${{ matrix.architecture }} -o "${{ runner.temp }}/vex-windows/service-${{ matrix.architecture }}"
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        if: matrix.architecture == 'x64'
+        with:
+          go-version: "1.26.9"
+          cache: false
+      - name: Build routing runtime for asset verification
+        if: matrix.architecture == 'x64'
+        shell: pwsh
+        run: ./native-windows/scripts/build-routing-runtime.ps1 -DestinationRoot (Join-Path $env:RUNNER_TEMP 'vex-native-routing')
       - name: Verify both qualified MSI runtime architectures on a disposable host
         if: matrix.architecture == 'x64'
         shell: pwsh

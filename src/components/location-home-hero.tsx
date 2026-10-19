@@ -62,6 +62,9 @@ export function LocationHomeHero({
 }: LocationHomeHeroProps) {
   const safeAreaInsets = useSafeAreaInsets();
   const presentation = homeConnectionPresentation(connectionPhase);
+  const activationPending = connectionPhase === 'connecting' || connectionPhase === 'verifying';
+  const powerActionLabel = connectionPhase === 'connecting' ? 'Отменить подключение'
+    : activationPending ? presentation.helper : presentation.action;
   const locationCopy = location ? homeLocationCopy(location, latencyText, selectionMode) : null;
   const backgroundSource = locationBackgrounds[homeLocationBackdropKey(location)];
   const reduceMotion = Platform.OS === 'android';
@@ -116,13 +119,14 @@ export function LocationHomeHero({
           ]}
         >
           <VexPressable
-            accessibilityLabel={presentation.action}
+            accessibilityLabel={powerActionLabel}
             accessibilityRole="button"
+            accessibilityState={{ busy: activationPending, disabled: powerButtonDisabled }}
             disabled={powerButtonDisabled}
             hoverStyle={styles.portalPressed}
             onPress={onPowerPress}
-            style={[styles.portalButton, powerButtonDisabled && styles.portalDisabled]}
-            title={presentation.action}
+            style={[styles.portalButton, powerButtonDisabled && !activationPending && styles.portalDisabled]}
+            title={powerActionLabel}
           >
             <View pointerEvents="none" style={styles.shieldIcon}>
               <Shield color="#ECFCFD" size={58} strokeWidth={1.75} />

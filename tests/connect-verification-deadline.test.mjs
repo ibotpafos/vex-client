@@ -109,3 +109,52 @@ test('a current handshake within the deadline succeeds', async () => {
   });
   assert.equal(status.verified, true);
 });
+
+for (const timeoutMs of [10_000, 15_000]) {
+  test(`default polling uses the ${timeoutMs}ms deadline for a delayed fresh handshake`, async () => {
+    let now = 0;
+    let reads = 0;
+    const freshAt = timeoutMs - 1000;
+    const result = await waitForVerifiedVpnConnection(pending, async () => {
+      reads++;
+      return { ...pending, verified: now >= freshAt, latestHandshakeEpochMillis: now };
+    }, {
+      timeoutMs,
+      minimumHandshakeEpochMillis: freshAt,
+      now: () => now,
+      wait: async (delayMs) => { now += delayMs; },
+    });
+    assert.equal(result.verified, true);
+    assert.equal(now, freshAt);
+    assert.ok(reads > 20, 'the old implicit attempt cap must not preempt the deadline');
+  });
+}
+
+test('an unresponsive peer exhausts the deadline without accepting a stale handshake', async () => {
+  let now = 0;
+  await assert.rejects(waitForVerifiedVpnConnection(pending, async () => ({
+    ...pending, verified: true, latestHandshakeEpochMillis: 1000,
+  }), {
+    timeoutMs: 10_000,
+    minimumHandshakeEpochMillis: 2000,
+    now: () => now,
+    wait: async (delayMs) => { now += delayMs; },
+  }), /VPN handshake timed out/);
+  assert.equal(now, 10_000);
+});
+
+test('an explicit attempt limit remains a caller-controlled bound', async () => {
+  let now = 0;
+  let reads = 0;
+  await assert.rejects(waitForVerifiedVpnConnection(pending, async () => {
+    reads++;
+    return pending;
+  }, {
+    attempts: 2,
+    timeoutMs: 10_000,
+    now: () => now,
+    wait: async (delayMs) => { now += delayMs; },
+  }), /VPN handshake timed out/);
+  assert.equal(reads, 2);
+  assert.equal(now, 250);
+});

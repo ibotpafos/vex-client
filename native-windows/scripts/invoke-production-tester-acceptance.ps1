@@ -25,6 +25,8 @@ if ([string]::IsNullOrEmpty($raw) -or [Text.Encoding]::UTF8.GetByteCount($raw) -
 $digest = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($raw))).ToLowerInvariant()
 if ($digest -cne $ExpectedQaPayloadSha256) { throw 'The limited tester identity changed after its approved plan.' }
 . (Join-Path $PSScriptRoot 'ProductionTesterValidation.ps1')
+. (Join-Path $PSScriptRoot 'verify-public-vpn.ps1') -FunctionsOnly
+. (Join-Path $PSScriptRoot 'RussianDirectAcceptance.ps1')
 $qa = Read-WindowsProductionQaPayload -Raw $raw -ExpectedSha256 $ExpectedQaPayloadSha256 -ReleaseSourceCommit $ReleaseSourceCommit -ReleaseRunId $ReleaseRunId
 $raw = $null
 foreach ($private in @($qa.token, $qa.email, $qa.user_id)) { Write-Output ('::add-mask::' + $private) }
@@ -45,10 +47,11 @@ $http = [Net.Http.HttpClient]::new($handler); $http.Timeout = [TimeSpan]::FromSe
 $evidence = [ordered]@{ schema = 'vex.windows-production-tester-acceptance.v1'; source_commit = $ReleaseSourceCommit;
     qa_workflow_commit = $env:GITHUB_SHA; release_version = $qa.release_version; qa_payload_sha256 = $digest;
     passed = $false; normal_pkce_callback = $false; free_tester_access = $false; public_vpn_verified = $false;
-    restored_baseline_egress_verified = $false; feedback_saved = $false; cleanup_confirmed = $false;
+    restored_baseline_egress_verified = $false; russian_direct_verified = $false; feedback_saved = $false; cleanup_confirmed = $false;
     physical_arm64_verified = $false; reboot_verified = $false; phases = [Collections.Generic.List[object]]::new(); failure_type = $null;
     sign_in_stage = 'not_started'; sign_in_observation = $null }
 $baseline = Join-Path $ResultDirectory 'baseline.json'; $connected = Join-Path $ResultDirectory 'connected.json'; $restored = Join-Path $ResultDirectory 'restored.json'
+$fullConnected = Join-Path $ResultDirectory 'full-connected.json'
 $ownerSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $mutationStarted = $false; $owned = $null; $shared = @(); $failure = $null
 
@@ -143,7 +146,10 @@ try {
             @($workspace.campaigns | Where-Object { $_.id -ceq $qa.campaign_id -and $_.platform -ceq 'windows' }).Count -ne 1) { throw 'The exact approved free Windows tester was not verified.' }
         $evidence.free_tester_access = $true
     } $evidence
-    Add-AcceptancePhase 'public_baseline' { & (Join-Path $PSScriptRoot 'verify-public-vpn.ps1') -Phase Baseline -ResultPath $baseline -ExpectedVpnExitIpv4 @($qa.expected_exit_ipv4) | Out-Null } $evidence
+    Add-AcceptancePhase 'public_baseline' {
+        & (Join-Path $PSScriptRoot 'verify-public-vpn.ps1') -Phase Baseline -ResultPath $baseline -ExpectedVpnExitIpv4 @($qa.expected_exit_ipv4) | Out-Null
+        $script:ruObserverAddress = Resolve-WindowsRussianDirectObserver
+    } $evidence
     $mutationStarted = $true
     Add-AcceptancePhase 'install_exact_signed_beta' {
         Invoke-AcceptanceBootstrap $bundle Install
@@ -217,10 +223,25 @@ try {
     Add-AcceptancePhase 'connect_real_vex_vpn' {
         Invoke-QAControl 'PowerButton'
         Wait-QA { $button = Find-QAControl 'PowerButton'; return $null -ne $button -and $button.Current.Name -match 'Отключить|Disconnect' } 90
-        & (Join-Path $PSScriptRoot 'verify-public-vpn.ps1') -Phase Connected -ResultPath $connected -ExpectedVpnExitIpv4 @($qa.expected_exit_ipv4) -BaselinePath $baseline | Out-Null
-        $proof = Get-Content -LiteralPath $connected -Raw | ConvertFrom-Json
+        & (Join-Path $PSScriptRoot 'verify-public-vpn.ps1') -Phase Connected -ResultPath $fullConnected -ExpectedVpnExitIpv4 @($qa.expected_exit_ipv4) -BaselinePath $baseline | Out-Null
+        $proof = Get-Content -LiteralPath $fullConnected -Raw | ConvertFrom-Json
         if ($proof.passed -ne $true -or $proof.actual_public_internet_vpn_egress_verified -ne $true) { throw 'Actual production VPN egress was not verified.' }
         $evidence.public_vpn_verified = $true
+    } $evidence
+    Add-AcceptancePhase 'russian_direct_with_foreign_vpn' {
+        Invoke-QAControl 'PowerButton'
+        Wait-QA { return @(Get-NetAdapter -IncludeHidden | Where-Object { $_.Name -ieq 'vex' -and $_.Status -eq 'Up' }).Count -eq 0 } 30
+        Invoke-QAControl 'SettingsNavigationButton'
+        Wait-QA { return $null -ne (Find-QAControl 'SmartRoutingToggle') }
+        $toggle = Find-QAControl 'SmartRoutingToggle'
+        $pattern = [Windows.Automation.TogglePattern]$toggle.GetCurrentPattern([Windows.Automation.TogglePattern]::Pattern)
+        if ($pattern.Current.ToggleState -ne [Windows.Automation.ToggleState]::On) { $pattern.Toggle() }
+        Wait-QA { return $pattern.Current.ToggleState -eq [Windows.Automation.ToggleState]::On }
+        Invoke-QAControl 'HomeNavigationButton'; Invoke-QAControl 'PowerButton'
+        Wait-QA { $button = Find-QAControl 'PowerButton'; return $null -ne $button -and $button.Current.Name -match 'Отключить|Disconnect' } 90
+        & (Join-Path $PSScriptRoot 'verify-public-vpn.ps1') -Phase Connected -ResultPath $connected -ExpectedVpnExitIpv4 @($qa.expected_exit_ipv4) -BaselinePath $baseline | Out-Null
+        Invoke-WindowsRussianDirectProbe -DisposableRunner $explicitDisposable -RemoteAddress $script:ruObserverAddress -BaselinePath $baseline -ConnectedPath $connected -ResultPath (Join-Path $ResultDirectory 'russian-direct.json')
+        $evidence.russian_direct_verified = $true
     } $evidence
     Add-AcceptancePhase 'disconnect_and_restore_egress' {
         Invoke-QAControl 'PowerButton'
@@ -229,8 +250,8 @@ try {
         $evidence.restored_baseline_egress_verified = $true
     } $evidence
     Add-AcceptancePhase 'persist_tester_feedback' {
-        $body = @{ campaign_id = $qa.campaign_id; platform = 'windows'; outcome = 'works'; summary = 'Windows beta: установка и реальный VPN проверены';
-            details = 'На отдельном Windows x64 host проверены подписанная установка, обычный PKCE callback, бесплатный доступ программы, реальный выход через VEX и восстановление исходного выхода после отключения.';
+        $body = @{ campaign_id = $qa.campaign_id; platform = 'windows'; outcome = 'works'; summary = 'Windows beta: установка, VPN и Russian DIRECT проверены';
+            details = 'На отдельном Windows x64 host проверены подписанная установка, обычный PKCE callback, бесплатный доступ программы, полный VPN, российский HTTPS через физическое подключение в умном режиме при сохранении зарубежного выхода через VEX и восстановление исходного выхода после отключения.';
             os_version = [Environment]::OSVersion.Version.ToString(); app_version = $qa.release_version; build_number = $qa.release_build }
         $key = 'windows-production-' + $qa.namespace
         $first = Invoke-QAApi 'POST' '/v1/testing/feedback' $body @(201) $key
@@ -254,7 +275,7 @@ finally {
     } catch { $failure = 'OwnedCleanupFailed'; $evidence.failure_type = $failure }
     $http.Dispose(); $qa = $null
     $evidence.passed = $null -eq $failure -and $evidence.normal_pkce_callback -and $evidence.free_tester_access -and $evidence.public_vpn_verified -and
-        $evidence.restored_baseline_egress_verified -and $evidence.feedback_saved -and $evidence.cleanup_confirmed
+        $evidence.restored_baseline_egress_verified -and $evidence.russian_direct_verified -and $evidence.feedback_saved -and $evidence.cleanup_confirmed
     [IO.File]::WriteAllText((Join-Path $ResultDirectory 'result.json'), ($evidence | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
 }
 if (-not $evidence.passed) { throw 'Windows production tester acceptance failed; inspect only its sanitized phase receipts.' }

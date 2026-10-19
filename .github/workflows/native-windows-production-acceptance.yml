@@ -143,7 +143,7 @@ jobs:
       - name: Prepare the pinned public beta authority on this disposable host
         shell: pwsh
         run: ./native-windows/scripts/prepare-tester-signing-trust.ps1 -DisposableRunner
-      - name: Exercise ordinary sign-in, free access, real VPN and feedback
+      - name: Exercise ordinary sign-in, free access, VPN, Russian DIRECT and feedback
         if: ${{ !inputs.protocol_probe }}
         timeout-minutes: 15
         shell: pwsh
@@ -183,6 +183,8 @@ jobs:
             ${{ runner.temp }}/vex-production-tester-evidence/result.json
             ${{ runner.temp }}/vex-production-tester-evidence/baseline.json
             ${{ runner.temp }}/vex-production-tester-evidence/connected.json
+            ${{ runner.temp }}/vex-production-tester-evidence/full-connected.json
+            ${{ runner.temp }}/vex-production-tester-evidence/russian-direct.json
             ${{ runner.temp }}/vex-production-tester-evidence/restored.json
           if-no-files-found: ignore
           retention-days: 7

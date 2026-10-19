@@ -1,3 +1,4 @@
+using System;
 using System.Diagnostics.Tracing;
 
 namespace Vex.Windows.Client.Auth;
@@ -33,6 +34,11 @@ public enum AuthActivationStage
     HandlerFaulted,
     BrowserRequestStarted,
     UiRefreshRequested,
+    ActivationCaptured,
+    ActivationCaptureFailed,
+    HandlerWrongThread,
+    HandlerInvalidCast,
+    HandlerOtherFault,
 }
 
 public static class AuthActivationTrace
@@ -42,12 +48,20 @@ public static class AuthActivationTrace
 
     public static void Record(AuthActivationStage stage)
     {
-        if (stage is < AuthActivationStage.ProcessStarted or > AuthActivationStage.UiRefreshRequested) return;
+        if (stage is < AuthActivationStage.ProcessStarted or > AuthActivationStage.HandlerOtherFault) return;
         try
         {
             if (AuthActivationEventSource.Log.IsEnabled()) AuthActivationEventSource.Log.Stage((int)stage);
         }
         catch (EventSourceException) { /* Diagnostics cannot interrupt login. */ }
+    }
+
+    public static void RecordFault(Exception error)
+    {
+        // Finite categories only; never serialize an exception or its message.
+        Record(error.HResult == unchecked((int)0x8001010E) ? AuthActivationStage.HandlerWrongThread
+            : error is InvalidCastException ? AuthActivationStage.HandlerInvalidCast
+            : AuthActivationStage.HandlerOtherFault);
     }
 }
 

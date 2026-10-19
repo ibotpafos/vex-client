@@ -13,11 +13,12 @@ if (-not $FixtureProcess) {
 $sources = @(
     (Join-Path $PSScriptRoot '../src/Vex.Windows.App/Program.cs'),
     (Join-Path $PSScriptRoot '../src/Vex.Windows.App/App.xaml.cs'),
+    (Join-Path $PSScriptRoot '../src/Vex.Windows.App/ActivationSnapshot.cs'),
     (Join-Path $PSScriptRoot '../src/Vex.Windows.Client/Auth/ProtocolActivationUriParser.cs'),
     (Join-Path $PSScriptRoot '../src/Vex.Windows.Client/Auth/AuthActivationTrace.cs'),
     (Join-Path $PSScriptRoot 'fixtures/ActivationRoutingFixture.cs')
 )
-# Compile all three production files verbatim. The fixture supplies only inert
+# Compile production activation files verbatim. The fixture supplies only inert
 # platform/UI/services: no native activation, account, storage, VPN or network.
 Add-Type -Path $sources -CompilerOptions @('/nullable:enable')
 $scenarios = [Vex.Windows.App.ActivationRoutingFixture]::Run()

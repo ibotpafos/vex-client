@@ -14,7 +14,7 @@ internal static class Program
     private static AppInstance? _instance;
     private static App? _app;
     private static DispatcherQueue? _dispatcherQueue;
-    private static AppActivationArguments? _pendingActivation;
+    private static ActivationSnapshot? _pendingActivation;
 
     [STAThread]
     private static int Main(string[] args)
@@ -24,13 +24,11 @@ internal static class Program
 
         var current = AppInstance.GetCurrent();
         var activationArgs = current.GetActivatedEventArgs();
-        var protocolUri = activationArgs.Kind switch
-        {
-            ExtendedActivationKind.Protocol when activationArgs.Data is IProtocolActivatedEventArgs protocol => protocol.Uri,
-            ExtendedActivationKind.Launch when activationArgs.Data is ILaunchActivatedEventArgs launch =>
-                ProtocolActivationUriParser.Parse(launch.Arguments) ?? UiPreviewContext.ParseActivationUri(launch.Arguments),
-            _ => ProtocolActivationUriParser.Parse(string.Join(" ", args)) ?? UiPreviewContext.ParseActivationUri(string.Join(" ", args)),
-        };
+        var activation = ActivationSnapshot.Capture(activationArgs);
+        var protocolUri = activation.CaptureFailed ? null : activation.ProtocolUri
+            ?? UiPreviewContext.ParseActivationUri(activation.LaunchArguments)
+            ?? ProtocolActivationUriParser.Parse(string.Join(" ", args))
+            ?? UiPreviewContext.ParseActivationUri(string.Join(" ", args));
         UiPreviewContext.Initialize(args, protocolUri);
         if (UiPreviewContext.IsPreviewRequest && !UiPreviewContext.IsSupported) return 0;
         _instance = AppInstance.FindOrRegisterForKey(UiPreviewContext.InstanceKey);
@@ -54,8 +52,8 @@ internal static class Program
             var dispatcherQueue = DispatcherQueue.GetForCurrentThread();
             SynchronizationContext.SetSynchronizationContext(
                 new DispatcherQueueSynchronizationContext(dispatcherQueue));
-            var app = new App(activationArgs);
-            AppActivationArguments? pendingActivation;
+            var app = new App(activation);
+            ActivationSnapshot? pendingActivation;
             lock (ActivationSync)
             {
                 _app = app;
@@ -77,6 +75,9 @@ internal static class Program
         AppActivationArguments args)
     {
         AuthActivationTrace.Record(AuthActivationStage.RedirectReceived);
+        // Read WinRT arguments on the event's receiving thread, before either
+        // startup retention or the UI queue can outlive their native context.
+        var activation = ActivationSnapshot.Capture(args);
         App? app;
         DispatcherQueue? dispatcherQueue;
         lock (ActivationSync)
@@ -85,16 +86,16 @@ internal static class Program
             dispatcherQueue = _dispatcherQueue;
             if (app is null || dispatcherQueue is null)
             {
-                _pendingActivation = args;
+                _pendingActivation = activation;
                 AuthActivationTrace.Record(AuthActivationStage.StartupQueued);
                 return;
             }
         }
 
-        EnqueueActivation(dispatcherQueue, app, args);
+        EnqueueActivation(dispatcherQueue, app, activation);
     }
 
-    private static void EnqueueActivation(DispatcherQueue dispatcherQueue, App app, AppActivationArguments args)
+    private static void EnqueueActivation(DispatcherQueue dispatcherQueue, App app, ActivationSnapshot args)
     {
         var accepted = dispatcherQueue.TryEnqueue(() => app.HandleRedirectedActivation(args));
         AuthActivationTrace.Record(accepted ? AuthActivationStage.DispatcherAccepted : AuthActivationStage.DispatcherRejected);

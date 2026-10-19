@@ -546,6 +546,18 @@ the beta through the approved tester catalog in the account. Membership and
 free access remain controlled by the tester program; a beta artifact is not an
 authorization grant. Feedback and testing assignments remain in the account.
 
+Authentication activation also exposes a fixed numeric ETW stage provider.
+It carries no URL, auth code, state, identity, token or exception text. The
+production tester harness starts one bounded 8 MiB trace only on an explicitly
+disposable Windows x64 runner and retains allowlisted stage names grouped by
+the owned primary process; raw ETL is removed and never uploaded. Native CI
+qualifies decoding with an inert emitter before any production tester is used.
+The separate QA reader uses MIT-licensed Microsoft TraceEvent 4.0.0 with a
+locked dependency graph; it is built before supplying tester credentials and
+does not ship in the application. It reads at most 9 MiB / 256 fixed stages,
+with a 15-second caller deadline and no global event-manifest registration.
+Stage diagnostics do not establish successful sign-in or VPN acceptance.
+
 The manual `Windows production tester acceptance` workflow checks a successful
 signed main run and its six required jobs before downloading that run's exact
 artifact. On a fresh disposable Windows x64 host it installs the signed beta,

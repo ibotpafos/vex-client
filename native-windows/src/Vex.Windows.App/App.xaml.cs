@@ -113,6 +113,32 @@ public partial class App : Application
 #endif
         )
     {
+        AuthActivationTrace.Record(AuthActivationStage.HandlerStarted);
+        try
+        {
+            await HandleActivationCoreAsync(args, launchUri
+#if DEBUG
+                , trayTrace
+#endif
+            );
+            AuthActivationTrace.Record(AuthActivationStage.HandlerCompleted);
+        }
+        catch (Exception error) when (error is not OutOfMemoryException and not AccessViolationException)
+        {
+            // Observe every activation task. Fixed stages carry no callback,
+            // account data or exception text; native auth presents its errors.
+            AuthActivationTrace.Record(AuthActivationStage.HandlerFaulted);
+        }
+    }
+
+    private async Task HandleActivationCoreAsync(
+        AppActivationArguments args,
+        Uri? launchUri = null
+#if DEBUG
+        , UiPreviewTrayActivation? trayTrace = null
+#endif
+        )
+    {
         var launchArguments = args.Data is ILaunchActivatedEventArgs launch
             ? launch.Arguments : null;
         if (UiPreviewContext.IsEnabled)
@@ -174,6 +200,7 @@ public partial class App : Application
         };
         if (protocolUri is null)
         {
+            AuthActivationTrace.Record(AuthActivationStage.HandlerNoProtocol);
             return;
         }
 

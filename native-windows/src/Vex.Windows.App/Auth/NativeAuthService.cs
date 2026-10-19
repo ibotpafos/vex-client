@@ -258,6 +258,7 @@ public sealed class NativeAuthService
                 "windows",
                 mode,
                 provider: provider);
+            AuthActivationTrace.Record(AuthActivationStage.BrowserRequestStarted);
             lock (_browserSync)
             {
                 if (!IsCurrentBrowserAttempt(attempt)) return;
@@ -303,18 +304,25 @@ public sealed class NativeAuthService
         Uri callbackUri,
         CancellationToken cancellationToken)
     {
+        AuthActivationTrace.Record(AuthActivationStage.CallbackEntered);
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        AuthActivationTrace.Record(AuthActivationStage.AuthGateEntered);
         BrowserAttempt? attempt = null;
         try
         {
             AppAuthCodeExchange exchange;
             lock (_browserSync)
             {
-                if (_browserAuthInvalidated) return;
+                if (_browserAuthInvalidated)
+                {
+                    AuthActivationTrace.Record(AuthActivationStage.CallbackIgnoredAfterCancellation);
+                    return;
+                }
                 attempt = _browserAttempt;
                 var pending = _pkceStateStore.Load() ??
                     throw new InvalidOperationException(
                         "Сессия входа через сайт устарела. Запустите вход заново.");
+                AuthActivationTrace.Record(AuthActivationStage.ChallengeLoaded);
                 try
                 {
                     exchange = PkceAuthFlow.ResolveCallback(callbackUri, pending.State, pending.Verifier);
@@ -322,24 +330,39 @@ public sealed class NativeAuthService
                 catch (InvalidOperationException) when (IsWaitingForBrowserAuth)
                 {
                     // An older or malformed callback cannot replace an active challenge.
+                    AuthActivationTrace.Record(AuthActivationStage.CallbackRejected);
                     return;
                 }
                 attempt = _browserAttempt ??= new BrowserAttempt(pending.State);
-                if (attempt.State != pending.State) return;
+                if (attempt.State != pending.State)
+                {
+                    AuthActivationTrace.Record(AuthActivationStage.CallbackRejected);
+                    return;
+                }
+                AuthActivationTrace.Record(AuthActivationStage.StateMatched);
+                // Match the public token-exchange contract before entering the
+                // API. A valid-state malformed code must end this attempt,
+                // rather than faulting a discarded activation task forever.
+                if (exchange.Code.Trim().Length is < 8 or > 4096)
+                    throw new ArgumentException("Auth code is invalid.");
                 attempt.CallbackStarted = true;
                 IsWaitingForBrowserAuth = true;
             }
             NotifyChanged();
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, attempt.Token);
             linked.Token.ThrowIfCancellationRequested();
+            AuthActivationTrace.Record(AuthActivationStage.ExchangeStarted);
             var session = await _api.ExchangeAppAuthCodeAsync(
                 exchange.Code,
                 exchange.CodeVerifier,
                 linked.Token).WaitAsync(linked.Token).ConfigureAwait(false);
+            AuthActivationTrace.Record(AuthActivationStage.ExchangeCompleted);
             linked.Token.ThrowIfCancellationRequested();
+            AuthActivationTrace.Record(AuthActivationStage.SessionSaveStarted);
             await _coordinator.AcceptAuthenticatedSessionAsync(
                 session,
                 linked.Token).WaitAsync(linked.Token).ConfigureAwait(false);
+            AuthActivationTrace.Record(AuthActivationStage.SessionSaveCompleted);
             lock (_browserSync)
             {
                 if (!IsCurrentBrowserAttempt(attempt)) return;
@@ -353,10 +376,12 @@ public sealed class NativeAuthService
                 Error = cleared ? null : "Вход выполнен, но временные данные входа не удалось удалить.";
             }
             attempt.Cancel();
+            AuthActivationTrace.Record(AuthActivationStage.AuthSucceeded);
         }
-        catch (Exception error) when (IsAuthStorageError(error) || error is InvalidOperationException or
+        catch (Exception error) when (IsAuthStorageError(error) || error is ArgumentException or InvalidOperationException or
             HttpRequestException or OperationCanceledException or VexApiException or NativeClientFlowException)
         {
+            AuthActivationTrace.Record(AuthActivationStage.AuthFailed);
             FailBrowserAttempt(attempt, error switch
             {
                 NativeClientFlowException flow when flow.Code == "vpn_location_unavailable" =>
@@ -369,6 +394,7 @@ public sealed class NativeAuthService
         finally
         {
             _gate.Release();
+            AuthActivationTrace.Record(AuthActivationStage.UiRefreshRequested);
             NotifyChanged();
         }
     }

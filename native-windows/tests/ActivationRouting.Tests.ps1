@@ -14,6 +14,7 @@ $sources = @(
     (Join-Path $PSScriptRoot '../src/Vex.Windows.App/Program.cs'),
     (Join-Path $PSScriptRoot '../src/Vex.Windows.App/App.xaml.cs'),
     (Join-Path $PSScriptRoot '../src/Vex.Windows.Client/Auth/ProtocolActivationUriParser.cs'),
+    (Join-Path $PSScriptRoot '../src/Vex.Windows.Client/Auth/AuthActivationTrace.cs'),
     (Join-Path $PSScriptRoot 'fixtures/ActivationRoutingFixture.cs')
 )
 # Compile all three production files verbatim. The fixture supplies only inert

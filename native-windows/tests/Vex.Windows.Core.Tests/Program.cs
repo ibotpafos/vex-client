@@ -27,7 +27,7 @@ if (args is ["--pending-browser-launch-callback-regression"] or ["--native-auth-
 {
     try
     {
-        if (args[0] == "--native-auth-service-regressions") NativeAuthServiceTests.Run();
+        if (args[0] == "--native-auth-service-regressions") { AuthActivationTraceTests.Run(); NativeAuthServiceTests.Run(); }
         else NativeAuthServiceTests.RunPendingBrowserLaunchRegression();
         Console.WriteLine("PASS PKCE callback completes while browser launch is pending and survives late launch failure");
     }
@@ -165,6 +165,7 @@ var tests = new (string Name, Action Run)[]
     ("Signed profile warm-up preserves routing, identity, trust and foreground priority", ProfileWarmupTests.Run),
     ("Service repair verifies trusted health, ownership, cancellation and bounded retries", ServiceMaintenanceTests.Run),
     ("Browser authentication cancellation rejects late sessions and preserves fresh attempts", NativeAuthServiceTests.Run),
+    ("Authentication diagnostics expose fixed numeric stages without identity or secret payloads", AuthActivationTraceTests.Run),
     ("Authenticated accounts defer VPN registration and preserve session through provisioning failures", AuthenticatedSessionProvisioningTests.Run),
     ("Account switches retain independent VPN registrations and device keys", AccountVpnIdentityTests.Run),
     ("API errors preserve safe MFA guidance and device quota contracts", VexApiErrorContractTests.Run),

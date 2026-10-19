@@ -298,6 +298,34 @@ const repositoryRoot = path.resolve(windowsRoot, "..");
 const workflow = read(
   path.join(repositoryRoot, ".github", "workflows", "native-windows-ci.yml"),
 );
+
+function assertRoutingPrerequisites(source) {
+  // This contract deliberately checks the build job's canonical YAML layout;
+  // a builder in the later packaging job cannot populate this job's GITHUB_ENV.
+  const jobs = source.split(/^  build:[ \t]*\r?$/m);
+  assert.equal(jobs.length, 2, "one Windows build job is required");
+  const build = jobs[1].split(/^  [A-Za-z_][A-Za-z0-9_-]*:[ \t]*\r?$/m)[0];
+  const steps = build.split(/^      - /m).slice(1);
+  const go = steps.findIndex((step) => /^uses: actions\/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16[ \t]*$/m.test(step));
+  const router = steps.findIndex((step) => /run: \.\/native-windows\/scripts\/build-routing-runtime\.ps1 /.test(step));
+  const stage = steps.findIndex((step) => /run: \.\/native-windows\/scripts\/stage-runtime-assets\.ps1 /.test(step));
+  assert.ok(go >= 0 && router > go && stage > router, "the pinned Go setup and routing runtime builder must precede asset staging in the same job");
+  for (const index of [go, router, stage]) {
+    assert.match(steps[index], /^        if: matrix\.architecture == 'x64'[ \t]*$/m, "runtime prerequisites must execute for the x64 staging check");
+  }
+  assert.match(steps[go], /^          go-version: "1\.26\.9"[ \t]*$/m);
+  assert.match(steps[go], /^          cache: false[ \t]*$/m, "Go action caching must remain disabled");
+  assert.match(steps[router], /^        shell: pwsh[ \t]*$/m);
+  assert.doesNotMatch(steps[router], /-Architecture\b/, "the stager requires both router architectures");
+  return {go: "      - " + steps[go], router: "      - " + steps[router], stage: "      - " + steps[stage]};
+}
+
+const prerequisites = assertRoutingPrerequisites(workflow);
+assert.throws(() => assertRoutingPrerequisites(workflow.replace(prerequisites.router, "")), /must precede/);
+assert.throws(() => assertRoutingPrerequisites(workflow.replace(prerequisites.router, "").replace(prerequisites.stage, prerequisites.stage + prerequisites.router)), /must precede/);
+assert.throws(() => assertRoutingPrerequisites(workflow.replace(prerequisites.go, prerequisites.go.replace("cache: false", "cache: true"))), /caching must remain disabled/);
+assert.throws(() => assertRoutingPrerequisites(workflow.replace(prerequisites.router, prerequisites.router.replace("== 'x64'", "== 'arm64'"))), /must execute for the x64/);
+
 for (const [requirement, message] of [
   [/manifest_revision:/, "release workflow must accept a monotonic manifest revision"],
   [/release_notes:/, "release workflow must require release notes"],

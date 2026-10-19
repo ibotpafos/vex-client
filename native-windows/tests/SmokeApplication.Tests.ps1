@@ -57,7 +57,7 @@ if ([Runtime.InteropServices.Marshal]::SizeOf([type][Vex.Windows.Smoke.WindowPoi
 }
 
 # Execute the actual pure capture helpers, without desktop interaction.
-foreach ($functionName in @('Wait-SmokeCondition', 'Get-SmokeLiveInstanceIds', 'Assert-PrimaryInstance',
+foreach ($functionName in @('Wait-SmokeCondition', 'Get-SmokeLiveInstanceIds', 'Assert-PrimaryInstance', 'Get-SmokeUtcNow', 'Wait-SmokeMainWindow',
     'Wait-SmokeCaptureBounds', 'Get-SmokeCaptureCursorPoint', 'Set-SmokeCaptureFocus',
     'Assert-SmokeTrayRecoveryDiagnostic', 'Assert-SmokeProtectedStateDiagnostic', 'Open-SmokeTrayDiagnosticRead',
     'Read-SmokeTrayDiagnostic', 'Assert-SmokeTrayActivationProgress', 'Wait-SmokeTrayRecoveryDiagnostic',
@@ -69,6 +69,38 @@ foreach ($functionName in @('Wait-SmokeCondition', 'Get-SmokeLiveInstanceIds', '
     if ($null -eq $functionAst) { throw "Application smoke helper is missing: $functionName" }
     . ([scriptblock]::Create($functionAst.Extent.Text))
 }
+
+& {
+    function Get-SmokeUtcNow { return $script:windowClock }
+    function Start-Sleep { param($Milliseconds) $script:windowClock = $script:windowClock.AddSeconds(1) }
+    function Get-SmokeLiveInstanceIds { return 123 }
+    foreach ($scenario in @('delayed', 'deadline-boundary', 'never-created', 'exit-before', 'exit-after')) {
+        $script:windowClock = [DateTime]::new(2026,1,1,0,0,0,[DateTimeKind]::Utc)
+        $deadline = $script:windowClock.AddSeconds($(if ($scenario -eq 'delayed') { 10 } else { 1 }))
+        $script:windowSamples = 0
+        $script:readyAfter = switch ($scenario) { 'delayed' { 5 } 'deadline-boundary' { 2 } 'exit-after' { 1 } default { 99 } }
+        $script:exitAfter = switch ($scenario) { 'exit-before' { 1 } 'exit-after' { 2 } default { 99 } }
+        $process = [pscustomobject]@{Id=123;HasExited=$false;MainWindowHandle=[IntPtr]::Zero}
+        $process | Add-Member -MemberType ScriptMethod -Name Refresh -Value {
+            $script:windowSamples++
+            $this.HasExited = $script:windowSamples -ge $script:exitAfter
+            if ($script:windowSamples -ge $script:readyAfter) { $this.MainWindowHandle = [IntPtr]1234 }
+        }
+        $rejected = $false
+        try {
+            $handle = Wait-SmokeMainWindow -Deadline $deadline
+            if ($handle -eq [IntPtr]::Zero) { throw 'Readiness returned a zero window handle.' }
+            Assert-PrimaryInstance
+        } catch { $rejected = $true }
+        if ($rejected -ne ($scenario -in @('never-created', 'exit-before', 'exit-after'))) {
+            throw "Window readiness mishandles $scenario."
+        }
+        if ($scenario -eq 'deadline-boundary' -and $script:windowSamples -lt 2) { throw 'Window readiness omitted the final deadline sample.' }
+        if ($scenario -eq 'never-created' -and $script:windowClock -gt $deadline.AddSeconds(1)) { throw 'Window readiness exceeded its bounded deadline.' }
+    }
+}
+Write-Host 'Window readiness passed: delayed and boundary windows required; absent window and process exit rejected.'
+
 & {
     $process = [pscustomobject]@{Id=123;HasExited=$false}
     $process | Add-Member -MemberType ScriptMethod -Name Refresh -Value {}

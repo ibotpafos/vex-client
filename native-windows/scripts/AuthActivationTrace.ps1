@@ -4,7 +4,8 @@ $script:AuthTraceStages = @('ProcessStarted', 'PrimarySelected', 'RedirectStarte
     'RedirectReceived', 'DispatcherAccepted', 'DispatcherRejected', 'StartupQueued', 'HandlerStarted', 'HandlerNoProtocol',
     'CallbackEntered', 'AuthGateEntered', 'CallbackIgnoredAfterCancellation', 'ChallengeLoaded', 'CallbackRejected',
     'StateMatched', 'ExchangeStarted', 'ExchangeCompleted', 'SessionSaveStarted', 'SessionSaveCompleted', 'AuthSucceeded',
-    'AuthFailed', 'HandlerCompleted', 'HandlerFaulted', 'BrowserRequestStarted', 'UiRefreshRequested')
+    'AuthFailed', 'HandlerCompleted', 'HandlerFaulted', 'BrowserRequestStarted', 'UiRefreshRequested',
+    'ActivationCaptured', 'ActivationCaptureFailed', 'HandlerWrongThread', 'HandlerInvalidCast', 'HandlerOtherFault')
 
 function Invoke-WindowsAuthLogman([string[]]$Arguments) {
     $start = [Diagnostics.ProcessStartInfo]::new((Join-Path ([Environment]::GetFolderPath('Windows')) 'System32/logman.exe'))

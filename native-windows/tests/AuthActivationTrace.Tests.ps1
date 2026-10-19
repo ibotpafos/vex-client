@@ -12,7 +12,12 @@ $summary = Convert-WindowsAuthTraceEvents -Events $events
 Check ($summary.stage_payload_only -and @($summary.primary_stages).Count -eq 3 -and @($summary.secondary_stages).Count -eq 2) 'Stage grouping changed.'
 Check ('CallbackEntered' -cin $summary.primary_stages -and 'RedirectCompleted' -cin $summary.secondary_stages) 'Primary/secondary attribution changed.'
 Check (($summary | ConvertTo-Json -Compress) -cnotmatch 'ProcessId|ProviderId|Properties|"10"|"11"') 'Raw event metadata escaped.'
-foreach ($bad in @(@((Event 0 $true)), @((Event 28 $true)), (@((Event 1 $true)) * 257),
+$captureStages = @('ActivationCaptured', 'ActivationCaptureFailed', 'HandlerWrongThread', 'HandlerInvalidCast', 'HandlerOtherFault')
+for ($index = 0; $index -lt $captureStages.Count; $index++) {
+    $captureSummary = Convert-WindowsAuthTraceEvents -Events @((Event ($index + 28) $true))
+    Check (@($captureSummary.primary_stages).Count -eq 1 -and $captureSummary.primary_stages[0] -ceq $captureStages[$index]) 'Capture diagnostics changed their append-only stage IDs.'
+}
+foreach ($bad in @(@((Event 0 $true)), @((Event 33 $true)), (@((Event 1 $true)) * 257),
     @([pscustomobject]@{ Primary = $true; Stage = 'private-value' }), @([pscustomobject]@{ Primary = $true; Stage = 1; Extra = 'private-value' }))) {
     $rejected = $false
     try { $null = Convert-WindowsAuthTraceEvents -Events $bad } catch { $rejected = $true }
@@ -27,8 +32,9 @@ if ($NativeEtwFixture) {
     try {
         [Vex.Windows.Client.Auth.AuthActivationTrace]::Record([Vex.Windows.Client.Auth.AuthActivationStage]::ProcessStarted)
         [Vex.Windows.Client.Auth.AuthActivationTrace]::Record([Vex.Windows.Client.Auth.AuthActivationStage]::AuthSucceeded)
+        [Vex.Windows.Client.Auth.AuthActivationTrace]::Record([Vex.Windows.Client.Auth.AuthActivationStage]::ActivationCaptured)
     } finally { $native = Stop-WindowsAuthTrace -State $trace -PrimaryProcessId $PID }
-    Check ('ProcessStarted' -cin $native.primary_stages -and 'AuthSucceeded' -cin $native.primary_stages) 'Native ETW did not decode the actual numeric provider payload.'
+    Check ('ProcessStarted' -cin $native.primary_stages -and 'AuthSucceeded' -cin $native.primary_stages -and 'ActivationCaptured' -cin $native.primary_stages) 'Native ETW did not decode the actual numeric provider payload.'
     Check (-not (Test-Path -LiteralPath $trace.Directory)) 'Owned native trace files remained.'
     Write-Host 'PASS native bounded ETW capture, stage decoding and owned cleanup; authentication was not attempted.'
 }

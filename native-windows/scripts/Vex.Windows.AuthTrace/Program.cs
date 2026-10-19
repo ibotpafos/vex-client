@@ -54,14 +54,14 @@ internal sealed class StageProjection
     public List<StageObservation> Events { get; } = [];
     public void Add(object? payload, bool primary)
     {
-        if (payload is not int stage || stage is < 1 or > 27 || Events.Count >= 256) throw new InvalidOperationException();
+        if (payload is not int stage || stage is < 1 or > 32 || Events.Count >= 256) throw new InvalidOperationException();
         Events.Add(new(stage, primary));
     }
     public static void SelfTest()
     {
-        var actual = new StageProjection(); actual.Add(1, true); actual.Add(22, false);
-        if (!actual.Events.SequenceEqual(new[] { new StageObservation(1, true), new StageObservation(22, false) })) throw new InvalidOperationException();
-        foreach (var bad in new object?[] { null, 0, 28, "private payload", 1L })
+        var actual = new StageProjection(); actual.Add(1, true); actual.Add(22, false); actual.Add(32, true);
+        if (!actual.Events.SequenceEqual(new[] { new StageObservation(1, true), new StageObservation(22, false), new StageObservation(32, true) })) throw new InvalidOperationException();
+        foreach (var bad in new object?[] { null, 0, 33, "private payload", 1L })
         {
             try { actual.Add(bad, true); throw new Exception("Invalid payload accepted."); }
             catch (InvalidOperationException) { }

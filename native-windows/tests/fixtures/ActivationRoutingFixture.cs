@@ -11,12 +11,16 @@ namespace Vex.Windows.App
     public static class ActivationRoutingFixture
     {
         internal static readonly List<Uri> Received = new();
+        internal static readonly Queue<Action> Dispatches = new();
+        internal static Action? BeforeInitialize;
         internal static Action? BeforeLaunch;
         internal static bool WindowReady;
         internal static int WindowCount;
         internal static bool Preview;
         internal static bool RejectQueue;
+        internal static bool DeferQueue;
         internal static bool FaultAuthentication;
+        internal static int AuthenticationThread;
 
         public static int Main()
         {
@@ -34,6 +38,11 @@ namespace Vex.Windows.App
                 ("launch-argument", LaunchArgument),
                 ("startup-redirect", StartupRedirect),
                 ("warm-redirect", WarmRedirect),
+                ("cold-released-payload", ColdReleasedPayload),
+                ("early-worker-redirect", EarlyWorkerRedirect),
+                ("deferred-worker-redirect", DeferredWorkerRedirect),
+                ("unreadable-payload", UnreadablePayload),
+                ("finite-fault-categories", FiniteFaultCategories),
                 ("rejected-dispatch", RejectedDispatch),
                 ("observed-auth-fault", ObservedAuthFault),
                 ("preview-isolation", PreviewIsolation),
@@ -57,8 +66,9 @@ namespace Vex.Windows.App
 
         private static void Reset(Microsoft.Windows.AppLifecycle.AppActivationArguments initial)
         {
-            Received.Clear(); BeforeLaunch = null; WindowReady = false; WindowCount = 0; Preview = false;
-            RejectQueue = false; FaultAuthentication = false;
+            Received.Clear(); Dispatches.Clear(); BeforeInitialize = null; BeforeLaunch = null;
+            WindowReady = false; WindowCount = 0; Preview = false;
+            RejectQueue = false; DeferQueue = false; FaultAuthentication = false; AuthenticationThread = 0;
             foreach (var name in new[] { "_instance", "_app", "_dispatcherQueue", "_pendingActivation" })
                 typeof(Program).GetField(name, BindingFlags.NonPublic | BindingFlags.Static)!.SetValue(null, null);
             Microsoft.Windows.AppLifecycle.AppInstance.Reset(initial);
@@ -101,6 +111,62 @@ namespace Vex.Windows.App
             var reads = instance.ReadCount;
             instance.Raise(Protocol(uri));
             Check(Received.Count == 1 && Received[0] == uri && WindowCount == 1 && instance.ReadCount == reads);
+        }
+        private static void ColdReleasedPayload()
+        {
+            var uri = Callback(); var activation = Protocol(uri); activation.BindToReceivingThread = true;
+            Reset(activation); BeforeLaunch = activation.Release;
+            Start(); Check(Received.Count == 1 && Received[0] == uri && WindowCount == 1);
+        }
+        private static void EarlyWorkerRedirect()
+        {
+            var uri = Callback(); Reset(Launch());
+            BeforeInitialize = () => OnWorker(() =>
+            {
+                var activation = Protocol(uri); activation.BindToReceivingThread = true;
+                Microsoft.Windows.AppLifecycle.AppInstance.GetCurrent().Raise(activation);
+                activation.Release(); Check(!WindowReady && Received.Count == 0);
+            });
+            Start(); Check(Received.Count == 1 && Received[0] == uri && WindowCount == 1);
+        }
+        private static void DeferredWorkerRedirect()
+        {
+            var uri = Callback(); Reset(Launch()); Start(); DeferQueue = true;
+            var uiThread = Environment.CurrentManagedThreadId;
+            OnWorker(() =>
+            {
+                var activation = Protocol(uri); activation.BindToReceivingThread = true;
+                Microsoft.Windows.AppLifecycle.AppInstance.GetCurrent().Raise(activation);
+                activation.Release();
+            });
+            Check(Received.Count == 0 && Dispatches.Count == 1);
+            Dispatches.Dequeue()();
+            Check(Received.Count == 1 && Received[0] == uri && AuthenticationThread == uiThread);
+        }
+        private static void UnreadablePayload()
+        {
+            Reset(Launch()); Start(); using var trace = new StageListener();
+            var activation = Protocol(Callback()); activation.RejectData = true;
+            Microsoft.Windows.AppLifecycle.AppInstance.GetCurrent().Raise(activation);
+            Check(Received.Count == 0 && trace.Stages.Contains(29) && trace.Stages.Contains(31) && trace.Stages.Contains(25));
+        }
+        private static void FiniteFaultCategories()
+        {
+            using var trace = new StageListener();
+            Vex.Windows.Client.Auth.AuthActivationTrace.RecordFault(new System.Runtime.InteropServices.COMException(
+                "private callback context", unchecked((int)0x8001010E)));
+            Vex.Windows.Client.Auth.AuthActivationTrace.RecordFault(new InvalidCastException("private callback context"));
+            Vex.Windows.Client.Auth.AuthActivationTrace.RecordFault(new ArgumentException("private callback context"));
+            Check(trace.Stages.SequenceEqual(new[] { 30, 31, 32 }));
+            Check(ActivationSnapshot.Capture(Protocol(Callback())).ToString() == "ActivationSnapshot");
+        }
+        private static void OnWorker(Action action)
+        {
+            Exception? failure = null;
+            var thread = new Thread(() => { try { action(); } catch (Exception error) { failure = error; } });
+            thread.IsBackground = true; thread.Start();
+            Check(thread.Join(TimeSpan.FromSeconds(5)));
+            if (failure is not null) throw new InvalidOperationException("Worker activation failed.", failure);
         }
         private static void PreviewIsolation()
         {
@@ -169,6 +235,7 @@ namespace Microsoft.UI.Xaml
         protected Application() { _current = this; }
         public static void Start(Action<object> initialize)
         {
+            Vex.Windows.App.ActivationRoutingFixture.BeforeInitialize?.Invoke();
             initialize(new object());
             Vex.Windows.App.ActivationRoutingFixture.BeforeLaunch?.Invoke();
             _current!.OnLaunched(new LaunchActivatedEventArgs());
@@ -184,6 +251,11 @@ namespace Microsoft.UI.Dispatching
         public bool TryEnqueue(Action callback)
         {
             if (Vex.Windows.App.ActivationRoutingFixture.RejectQueue) return false;
+            if (Vex.Windows.App.ActivationRoutingFixture.DeferQueue)
+            {
+                Vex.Windows.App.ActivationRoutingFixture.Dispatches.Enqueue(callback);
+                return true;
+            }
             callback(); return true;
         }
     }
@@ -194,7 +266,24 @@ namespace Microsoft.Windows.AppLifecycle
 {
     public enum ExtendedActivationKind { Launch, Protocol }
     public sealed class AppActivationArguments(ExtendedActivationKind kind, object data)
-    { public ExtendedActivationKind Kind => kind; public object Data => data; }
+    {
+        private readonly int _receivingThread = Environment.CurrentManagedThreadId;
+        private bool _released;
+        public bool BindToReceivingThread { get; set; }
+        public bool RejectData { get; set; }
+        public ExtendedActivationKind Kind { get { CheckReadable(); return kind; } }
+        public object Data
+        {
+            get { CheckReadable(); if (RejectData) throw new InvalidCastException("private activation context"); return data; }
+        }
+        public void Release() => Volatile.Write(ref _released, true);
+        private void CheckReadable()
+        {
+            if (BindToReceivingThread && _receivingThread != Environment.CurrentManagedThreadId)
+                throw new System.Runtime.InteropServices.COMException("private activation context", unchecked((int)0x8001010E));
+            if (Volatile.Read(ref _released)) throw new ObjectDisposedException("private activation context");
+        }
+    }
     public sealed class AppInstance
     {
         private static AppInstance _current = new();
@@ -276,6 +365,7 @@ namespace Vex.Windows.App.Services
         {
             if (!Vex.Windows.App.ActivationRoutingFixture.WindowReady) throw new InvalidOperationException("Window not ready.");
             Vex.Windows.App.ActivationRoutingFixture.Received.Add(uri);
+            Vex.Windows.App.ActivationRoutingFixture.AuthenticationThread = Environment.CurrentManagedThreadId;
             return Vex.Windows.App.ActivationRoutingFixture.FaultAuthentication
                 ? Task.FromException(new ArgumentException("private callback context")) : Task.CompletedTask;
         }

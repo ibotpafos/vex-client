@@ -138,6 +138,23 @@ function Assert-PrimaryInstance {
         }
 }
 
+function Get-SmokeUtcNow {
+    return [DateTime]::UtcNow
+}
+
+function Wait-SmokeMainWindow {
+    param([Parameter(Mandatory=$true)][DateTime]$Deadline)
+
+    while ($true) {
+        $process.Refresh()
+        if ($process.HasExited) { throw 'Published WinUI application exited before main-window readiness.' }
+        if ($process.MainWindowHandle -ne [IntPtr]::Zero) { return $process.MainWindowHandle }
+        # Sample before checking the deadline, including the final observation.
+        if ((Get-SmokeUtcNow) -ge $Deadline) { throw 'Desktop preview did not create a main window before its readiness deadline.' }
+        Start-Sleep -Milliseconds 150
+    }
+}
+
 function Invoke-RedirectedLaunch {
     param([Parameter(Mandatory = $true)][string]$Arguments)
     $secondary = Start-Process -FilePath $ApplicationPath -ArgumentList $Arguments `
@@ -751,6 +768,7 @@ try {
     }
     if ($DesktopChecks) { $launch.ArgumentList = $previewArguments }
     $process = Start-Process @launch
+    $windowReadinessDeadline = (Get-SmokeUtcNow).AddSeconds($ObserveSeconds + 15)
     $ownedProcesses.Add($process)
     $result.process_id = $process.Id
     if ($DesktopChecks) {
@@ -776,20 +794,15 @@ try {
         $result.exit_code = $process.ExitCode
         throw 'Published WinUI application exited before the observation deadline.'
     }
+    $result.main_window_created = $result.main_window_created -or ($process.MainWindowHandle -ne 0)
     $result.alive_at_deadline = $true
     Write-Host "WinUI application remained alive for $ObserveSeconds seconds."
     Write-Host "WinUI main window created: $($result.main_window_created)."
     if ($DesktopChecks) {
-        if ($PreviewMode -eq 'protected-state-fault' -and -not $result.main_window_created) {
-            Wait-SmokeCondition -TimeoutSeconds 15 -Failure 'Corrupt scoped store did not reach real WinUI window creation.' -Condition {
-                $process.Refresh()
-                if ($process.HasExited) { throw 'Corrupt scoped store crashed during real WinUI startup.' }
-                $result.main_window_created = $process.MainWindowHandle -ne 0
-                return $result.main_window_created
-            }
-        }
-        if (-not $result.main_window_created) { throw 'Desktop preview did not create a main window.' }
-        $windowHandle = $process.MainWindowHandle
+        $windowHandle = Wait-SmokeMainWindow -Deadline $windowReadinessDeadline
+        Assert-PrimaryInstance
+        $result.main_window_created = $true
+        Write-Host 'WinUI desktop main window reached readiness.'
         Add-Type -AssemblyName UIAutomationClient
         Add-Type -AssemblyName UIAutomationTypes
         Add-Type -AssemblyName System.Drawing

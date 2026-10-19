@@ -154,6 +154,10 @@ jobs:
       - name: Test native contracts on Windows
         if: matrix.architecture == 'x64'
         run: dotnet run --project native-windows/tests/Vex.Windows.Core.Tests/Vex.Windows.Core.Tests.csproj -c Release
+      - name: Verify bounded authentication ETW stages on the disposable host
+        if: matrix.architecture == 'x64'
+        shell: pwsh
+        run: ./native-windows/tests/AuthActivationTrace.Tests.ps1 -NativeEtwFixture
       - name: Verify protected device-key retention across sign-out
         timeout-minutes: 5
         if: matrix.architecture == 'x64'

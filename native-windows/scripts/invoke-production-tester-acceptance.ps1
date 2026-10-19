@@ -27,6 +27,7 @@ if ($digest -cne $ExpectedQaPayloadSha256) { throw 'The limited tester identity 
 . (Join-Path $PSScriptRoot 'ProductionTesterValidation.ps1')
 . (Join-Path $PSScriptRoot 'verify-public-vpn.ps1') -FunctionsOnly
 . (Join-Path $PSScriptRoot 'RussianDirectAcceptance.ps1')
+. (Join-Path $PSScriptRoot 'AuthActivationTrace.ps1')
 $qa = Read-WindowsProductionQaPayload -Raw $raw -ExpectedSha256 $ExpectedQaPayloadSha256 -ReleaseSourceCommit $ReleaseSourceCommit -ReleaseRunId $ReleaseRunId
 $raw = $null
 foreach ($private in @($qa.token, $qa.email, $qa.user_id)) { Write-Output ('::add-mask::' + $private) }
@@ -49,11 +50,12 @@ $evidence = [ordered]@{ schema = 'vex.windows-production-tester-acceptance.v1'; 
     passed = $false; normal_pkce_callback = $false; free_tester_access = $false; public_vpn_verified = $false;
     restored_baseline_egress_verified = $false; russian_direct_verified = $false; feedback_saved = $false; cleanup_confirmed = $false;
     physical_arm64_verified = $false; reboot_verified = $false; phases = [Collections.Generic.List[object]]::new(); failure_type = $null;
-    sign_in_stage = 'not_started'; sign_in_observation = $null }
+    sign_in_stage = 'not_started'; sign_in_observation = $null; auth_activation = $null }
 $baseline = Join-Path $ResultDirectory 'baseline.json'; $connected = Join-Path $ResultDirectory 'connected.json'; $restored = Join-Path $ResultDirectory 'restored.json'
 $fullConnected = Join-Path $ResultDirectory 'full-connected.json'
 $ownerSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $mutationStarted = $false; $owned = $null; $shared = @(); $failure = $null
+$authTrace = $null
 
 function Invoke-QAApi([string]$Method, [string]$Path, $Body = $null, [int[]]$Expected = @(200), [string]$IdempotencyKey = '') {
     if (-not $Path.StartsWith('/v1/', [StringComparison]::Ordinal) -or $Path.Contains('://')) { throw 'QA API path is invalid.' }
@@ -138,6 +140,7 @@ function Get-QABrowserRequest {
     return $null
 }
 try {
+    $authTrace = Start-WindowsAuthTrace -DisposableRunner:$explicitDisposable
     Add-AcceptancePhase 'approved_free_tester' {
         $workspace = Invoke-QAApi 'GET' '/v1/testing/me'
         $access = Invoke-QAApi 'GET' '/v1/billing/entitlement'
@@ -266,6 +269,10 @@ try {
     $evidence.sign_in_observation = Get-QASignInObservation
 }
 finally {
+    if ($null -ne $authTrace) {
+        try { $evidence.auth_activation = Stop-WindowsAuthTrace -State $authTrace -PrimaryProcessId $(if ($null -ne $owned) { $owned.Id } else { 0 }) }
+        catch { $evidence.auth_activation = @{ schema = 'vex.windows-auth-trace.v1'; available = $false } }
+    }
     try {
         if ($mutationStarted) {
             Invoke-AcceptanceOwnedCleanup -MutationStarted:$mutationStarted -Bundles @($bundle) -OwnerSid $ownerSid

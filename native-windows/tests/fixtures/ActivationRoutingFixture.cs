@@ -15,6 +15,8 @@ namespace Vex.Windows.App
         internal static bool WindowReady;
         internal static int WindowCount;
         internal static bool Preview;
+        internal static bool RejectQueue;
+        internal static bool FaultAuthentication;
 
         public static int Main()
         {
@@ -32,6 +34,8 @@ namespace Vex.Windows.App
                 ("launch-argument", LaunchArgument),
                 ("startup-redirect", StartupRedirect),
                 ("warm-redirect", WarmRedirect),
+                ("rejected-dispatch", RejectedDispatch),
+                ("observed-auth-fault", ObservedAuthFault),
                 ("preview-isolation", PreviewIsolation),
             };
             try
@@ -54,6 +58,7 @@ namespace Vex.Windows.App
         private static void Reset(Microsoft.Windows.AppLifecycle.AppActivationArguments initial)
         {
             Received.Clear(); BeforeLaunch = null; WindowReady = false; WindowCount = 0; Preview = false;
+            RejectQueue = false; FaultAuthentication = false;
             foreach (var name in new[] { "_instance", "_app", "_dispatcherQueue", "_pendingActivation" })
                 typeof(Program).GetField(name, BindingFlags.NonPublic | BindingFlags.Static)!.SetValue(null, null);
             Microsoft.Windows.AppLifecycle.AppInstance.Reset(initial);
@@ -103,6 +108,37 @@ namespace Vex.Windows.App
             Check(Received.Count == 0 && WindowCount == 1);
         }
 
+        private static void RejectedDispatch()
+        {
+            Reset(Launch()); Start(); RejectQueue = true;
+            using var trace = new StageListener();
+            Microsoft.Windows.AppLifecycle.AppInstance.GetCurrent().Raise(Protocol(Callback()));
+            Check(Received.Count == 0 && WindowCount == 1 && trace.Stages.Contains(8));
+        }
+
+        private static void ObservedAuthFault()
+        {
+            Reset(Launch()); Start(); FaultAuthentication = true;
+            using var trace = new StageListener();
+            Microsoft.Windows.AppLifecycle.AppInstance.GetCurrent().Raise(Protocol(Callback()));
+            Check(Received.Count == 1 && WindowCount == 1 && trace.Stages.Contains(25));
+        }
+
+        private sealed class StageListener : System.Diagnostics.Tracing.EventListener
+        {
+            public List<int> Stages { get; } = new();
+            protected override void OnEventSourceCreated(System.Diagnostics.Tracing.EventSource source)
+            {
+                if (source.Name == Vex.Windows.Client.Auth.AuthActivationTrace.ProviderName)
+                    EnableEvents(source, System.Diagnostics.Tracing.EventLevel.Informational);
+            }
+            protected override void OnEventWritten(System.Diagnostics.Tracing.EventWrittenEventArgs value)
+            {
+                if (value.EventSource.Name == Vex.Windows.Client.Auth.AuthActivationTrace.ProviderName &&
+                    value.EventId == 1 && value.Payload is { Count: 1 } && value.Payload[0] is int stage) Stages.Add(stage);
+            }
+        }
+
         private sealed class ProtocolData(Uri uri) : global::Windows.ApplicationModel.Activation.IProtocolActivatedEventArgs
         { public Uri Uri => uri; }
         private sealed class LaunchData(string arguments) : global::Windows.ApplicationModel.Activation.ILaunchActivatedEventArgs
@@ -145,7 +181,11 @@ namespace Microsoft.UI.Dispatching
     public sealed class DispatcherQueue
     {
         public static DispatcherQueue GetForCurrentThread() => new();
-        public bool TryEnqueue(Action callback) { callback(); return true; }
+        public bool TryEnqueue(Action callback)
+        {
+            if (Vex.Windows.App.ActivationRoutingFixture.RejectQueue) return false;
+            callback(); return true;
+        }
     }
     public sealed class DispatcherQueueSynchronizationContext : SynchronizationContext
     { public DispatcherQueueSynchronizationContext(DispatcherQueue queue) { } }
@@ -235,7 +275,9 @@ namespace Vex.Windows.App.Services
         public Task HandleProtocolActivationAsync(Uri uri, CancellationToken token)
         {
             if (!Vex.Windows.App.ActivationRoutingFixture.WindowReady) throw new InvalidOperationException("Window not ready.");
-            Vex.Windows.App.ActivationRoutingFixture.Received.Add(uri); return Task.CompletedTask;
+            Vex.Windows.App.ActivationRoutingFixture.Received.Add(uri);
+            return Vex.Windows.App.ActivationRoutingFixture.FaultAuthentication
+                ? Task.FromException(new ArgumentException("private callback context")) : Task.CompletedTask;
         }
     }
     public sealed class InertCoordinator

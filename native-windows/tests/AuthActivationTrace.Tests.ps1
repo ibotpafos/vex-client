@@ -1,6 +1,9 @@
 param([switch]$NativeEtwFixture)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+# Compile the provider on its own, as the native ETW fixture does. The routing
+# fixture's global usings must not mask a missing dependency in this source.
+Add-Type -Path (Join-Path $PSScriptRoot '../src/Vex.Windows.Client/Auth/AuthActivationTrace.cs')
 . (Join-Path $PSScriptRoot '../scripts/invoke-signed-install-acceptance.ps1') -FunctionsOnly
 . (Join-Path $PSScriptRoot '../scripts/AuthActivationTrace.ps1')
 function Check([bool]$Condition, [string]$Message) { if (-not $Condition) { throw $Message } }
@@ -27,7 +30,6 @@ if ($NativeEtwFixture) {
     # Explicit disposable x64 runner only; no installed app, account, VPN or
     # signing credentials. Qualify the real OS consumer before production QA.
     Assert-AcceptanceRunner $true
-    Add-Type -Path (Join-Path $PSScriptRoot '../src/Vex.Windows.Client/Auth/AuthActivationTrace.cs')
     $trace = Start-WindowsAuthTrace -DisposableRunner
     try {
         [Vex.Windows.Client.Auth.AuthActivationTrace]::Record([Vex.Windows.Client.Auth.AuthActivationStage]::ProcessStarted)

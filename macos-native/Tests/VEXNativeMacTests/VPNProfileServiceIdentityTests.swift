@@ -228,7 +228,9 @@ final class VPNProfileServiceIdentityTests: XCTestCase {
                 locationId: "de", routingMode: .allExceptRu, writeHelperConfig: true, prevalidatedEntitlement: fixture.paid)
             XCTFail("A different-mode cache cannot satisfy the request")
         } catch { guard case VEXAPIError.requestTimeout = error else { return XCTFail("Expected normalized timeout") } }
-        XCTAssertEqual(network.routingModes, [VpnRoutingMode.allExceptRu.rawValue])
+        XCTAssertFalse(network.routingModes.isEmpty)
+        XCTAssertTrue(network.routingModes.allSatisfy { $0 == VpnRoutingMode.allExceptRu.rawValue },
+            "Transport retries must preserve the requested mode")
         XCTAssertEqual(fixture.cache.load(locationId: "de", routingMode: .fullTunnel, accountUserId: "account-a"), full)
         XCTAssertNil(fixture.cache.readHelperConfig())
     }

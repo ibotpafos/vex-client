@@ -124,12 +124,18 @@ function Get-SmokeLiveInstanceIds {
 }
 
 function Assert-PrimaryInstance {
-    $process.Refresh()
-    if ($process.HasExited) { throw 'Primary preview exited during desktop checks.' }
-    $instances = @(Get-SmokeLiveInstanceIds)
-    if ($instances.Count -ne 1 -or $instances[0] -ne $process.Id) {
-        throw "Preview activation did not preserve one original application instance (live=$($instances.Count))."
-    }
+    param([ValidateRange(1, 15)][int]$TimeoutSeconds = 8)
+
+    Wait-SmokeCondition -TimeoutSeconds $TimeoutSeconds `
+        -Failure 'Preview activation did not preserve one original application instance.' `
+        -Condition {
+            $process.Refresh()
+            if ($process.HasExited) {
+                throw 'Primary preview exited during desktop checks.'
+            }
+            $instances = @(Get-SmokeLiveInstanceIds)
+            $instances.Count -eq 1 -and $instances[0] -eq $process.Id
+        }
 }
 
 function Invoke-RedirectedLaunch {

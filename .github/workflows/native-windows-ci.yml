@@ -157,7 +157,10 @@ jobs:
       - name: Verify bounded authentication ETW stages on the disposable host
         if: matrix.architecture == 'x64'
         shell: pwsh
-        run: ./native-windows/tests/AuthActivationTrace.Tests.ps1 -NativeEtwFixture
+        run: |
+          dotnet build native-windows/scripts/Vex.Windows.AuthTrace/Vex.Windows.AuthTrace.csproj -c Release -p:RestoreLockedMode=true --nologo --verbosity quiet
+          if ($LASTEXITCODE -ne 0) { throw 'Locked auth trace reader build failed.' }
+          ./native-windows/tests/AuthActivationTrace.Tests.ps1 -NativeEtwFixture
       - name: Verify protected device-key retention across sign-out
         timeout-minutes: 5
         if: matrix.architecture == 'x64'

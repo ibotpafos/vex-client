@@ -140,6 +140,14 @@ jobs:
         run: |
           . ./native-windows/packaging/ProtocolProbeCandidate.ps1
           Expand-ExpectedProtocolProbeArtifact -ArchiveDirectory (Join-Path $env:RUNNER_TEMP 'vex-probe-archive') -DestinationDirectory (Join-Path $env:RUNNER_TEMP 'vex-signed-candidate') -ExpectedDigest $env:EXPECTED_ARTIFACT_DIGEST
+      - uses: actions/setup-dotnet@v4
+        if: ${{ !inputs.protocol_probe }}
+        with:
+          dotnet-version: 10.0.x
+      - name: Prepare the locked auth-stage reader before tester credentials
+        if: ${{ !inputs.protocol_probe }}
+        shell: pwsh
+        run: dotnet build native-windows/scripts/Vex.Windows.AuthTrace/Vex.Windows.AuthTrace.csproj -c Release -p:RestoreLockedMode=true --nologo --verbosity quiet
       - name: Prepare the pinned public beta authority on this disposable host
         shell: pwsh
         run: ./native-windows/scripts/prepare-tester-signing-trust.ps1 -DisposableRunner

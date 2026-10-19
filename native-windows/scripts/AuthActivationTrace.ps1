@@ -24,6 +24,8 @@ function Invoke-WindowsAuthLogman([string[]]$Arguments) {
 function Start-WindowsAuthTrace {
     param([Parameter(Mandatory = $true)][switch]$DisposableRunner)
     Assert-AcceptanceRunner ([bool]$DisposableRunner)
+    $reader = Join-Path $PSScriptRoot 'Vex.Windows.AuthTrace/bin/Release/net10.0/Vex.Windows.AuthTrace.dll'
+    if (-not (Test-Path -LiteralPath $reader -PathType Leaf)) { throw 'Build the locked authentication trace reader before supplying a tester identity.' }
     $root = Assert-AcceptanceRegularPath -Path $env:RUNNER_TEMP -Directory
     $name = 'VexAuth-' + [Guid]::NewGuid().ToString('N')
     $directory = Join-Path $root $name
@@ -50,20 +52,38 @@ function Start-WindowsAuthTrace {
 }
 
 function Convert-WindowsAuthTraceEvents {
-    param([object[]]$Events, [int]$PrimaryProcessId)
+    param([object[]]$Events)
     if ($Events.Count -gt 256) { throw 'Authentication trace exceeded its event budget.' }
     $primary = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $secondary = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     foreach ($event in $Events) {
-        if ($event.ProviderId -ne $script:AuthTraceProvider) { continue }
-        if ($event.Properties.Count -ne 1 -or $event.Properties[0].Value -isnot [int]) { throw 'Authentication trace stage format is invalid.' }
-        $stage = [int]$event.Properties[0].Value
+        $names = @($event.PSObject.Properties.Name)
+        if ($names.Count -ne 2 -or 'Stage' -cnotin $names -or 'Primary' -cnotin $names -or $event.Primary -isnot [bool] -or
+            ($event.Stage -isnot [int] -and $event.Stage -isnot [long])) { throw 'Authentication trace stage format is invalid.' }
+        $stage = [long]$event.Stage
         if ($stage -lt 1 -or $stage -gt $script:AuthTraceStages.Count) { throw 'Authentication trace stage is outside its allowlist.' }
-        if ($event.ProcessId -eq $PrimaryProcessId) { $null = $primary.Add($script:AuthTraceStages[$stage - 1]) }
+        if ($event.Primary) { $null = $primary.Add($script:AuthTraceStages[$stage - 1]) }
         else { $null = $secondary.Add($script:AuthTraceStages[$stage - 1]) }
     }
     return [ordered]@{ schema = 'vex.windows-auth-trace.v1'; available = $true; stage_payload_only = $true;
         primary_stages = @($primary | Sort-Object); secondary_stages = @($secondary | Sort-Object) }
+}
+
+function Read-WindowsAuthTraceProjection([string]$Path, [int]$PrimaryProcessId) {
+    $reader = Join-Path $PSScriptRoot 'Vex.Windows.AuthTrace/bin/Release/net10.0/Vex.Windows.AuthTrace.dll'
+    $start = [Diagnostics.ProcessStartInfo]::new((Get-Command dotnet -CommandType Application).Source)
+    $start.UseShellExecute = $false; $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true; $start.RedirectStandardError = $true
+    foreach ($argument in @($reader, '--etl', $Path, '--primary-pid', [string]$PrimaryProcessId)) { $start.ArgumentList.Add($argument) }
+    $child = [Diagnostics.Process]::new(); $child.StartInfo = $start
+    try {
+        if (-not $child.Start()) { throw 'Authentication trace reader did not start.' }
+        $output = $child.StandardOutput.ReadToEndAsync(); $errors = $child.StandardError.ReadToEndAsync()
+        if (-not $child.WaitForExit(15000)) { $child.Kill($true); throw 'Authentication trace reader exceeded its deadline.' }
+        $raw = $output.GetAwaiter().GetResult(); $null = $errors.GetAwaiter().GetResult()
+        if ($child.ExitCode -ne 0 -or [Text.Encoding]::UTF8.GetByteCount($raw) -gt 64KB) { throw 'Authentication trace reader did not complete within its output contract.' }
+        return $raw
+    } finally { $child.Dispose() }
 }
 
 function Stop-WindowsAuthTrace {
@@ -82,8 +102,13 @@ function Stop-WindowsAuthTrace {
     $size = (Get-Item -LiteralPath $State.Path).Length
     if ($size -le 0 -or $size -gt 9MB) { throw 'Authentication trace file is outside its fixed budget.' }
     try {
-        $events = @(Get-WinEvent -Path $State.Path -Oldest -MaxEvents 257 -ErrorAction Stop)
-        return Convert-WindowsAuthTraceEvents -Events $events -PrimaryProcessId $PrimaryProcessId
+        # TraceEvent decodes self-describing EventSource metadata directly;
+        # Get-WinEvent cannot reliably decode this provider without installing
+        # global event manifests. The separate QA reader never ships in VEX.
+        $raw = Read-WindowsAuthTraceProjection -Path $State.Path -PrimaryProcessId $PrimaryProcessId
+        $decoded = $raw | ConvertFrom-Json
+        if ($decoded.schema -cne 'vex.windows-auth-stage-projection.v1') { throw 'Authentication trace reader returned an unknown schema.' }
+        return Convert-WindowsAuthTraceEvents -Events @($decoded.events)
     } finally {
         # Only this validated session's three paths are removable. Preserve
         # unexpected siblings instead of broad recursive cleanup.

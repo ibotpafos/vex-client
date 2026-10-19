@@ -4,18 +4,18 @@ Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot '../scripts/invoke-signed-install-acceptance.ps1') -FunctionsOnly
 . (Join-Path $PSScriptRoot '../scripts/AuthActivationTrace.ps1')
 function Check([bool]$Condition, [string]$Message) { if (-not $Condition) { throw $Message } }
-function Event([int]$Stage, [int]$ProcessId, [Guid]$Provider = $script:AuthTraceProvider) {
-    return [pscustomobject]@{ ProviderId = $Provider; ProcessId = $ProcessId; Properties = @([pscustomobject]@{ Value = $Stage }) }
+function Event([int]$Stage, [bool]$Primary) {
+    return [pscustomobject]@{ Stage = $Stage; Primary = $Primary }
 }
-$events = @((Event 1 10), (Event 12 10), (Event 22 10), (Event 3 11), (Event 4 11), (Event 1 10 ([Guid]::Empty)))
-$summary = Convert-WindowsAuthTraceEvents -Events $events -PrimaryProcessId 10
+$events = @((Event 1 $true), (Event 12 $true), (Event 22 $true), (Event 3 $false), (Event 4 $false))
+$summary = Convert-WindowsAuthTraceEvents -Events $events
 Check ($summary.stage_payload_only -and @($summary.primary_stages).Count -eq 3 -and @($summary.secondary_stages).Count -eq 2) 'Stage grouping changed.'
 Check ('CallbackEntered' -cin $summary.primary_stages -and 'RedirectCompleted' -cin $summary.secondary_stages) 'Primary/secondary attribution changed.'
 Check (($summary | ConvertTo-Json -Compress) -cnotmatch 'ProcessId|ProviderId|Properties|"10"|"11"') 'Raw event metadata escaped.'
-foreach ($bad in @(@((Event 0 10)), @((Event 28 10)), (@((Event 1 10)) * 257),
-    @([pscustomobject]@{ ProviderId = $script:AuthTraceProvider; ProcessId = 10; Properties = @([pscustomobject]@{ Value = 'private-value' }) }))) {
+foreach ($bad in @(@((Event 0 $true)), @((Event 28 $true)), (@((Event 1 $true)) * 257),
+    @([pscustomobject]@{ Primary = $true; Stage = 'private-value' }), @([pscustomobject]@{ Primary = $true; Stage = 1; Extra = 'private-value' }))) {
     $rejected = $false
-    try { $null = Convert-WindowsAuthTraceEvents -Events $bad -PrimaryProcessId 10 } catch { $rejected = $true }
+    try { $null = Convert-WindowsAuthTraceEvents -Events $bad } catch { $rejected = $true }
     Check $rejected 'Invalid/unbounded stage data was accepted.'
 }
 if ($NativeEtwFixture) {

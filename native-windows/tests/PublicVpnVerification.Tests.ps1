@@ -88,6 +88,11 @@ Assert-PublicCheck ($child.TimedOut -and $clock.Elapsed.TotalSeconds -lt 5) 'Act
 $child = Invoke-PublicChild '[Console]::Write(($null -eq [Environment]::GetEnvironmentVariable("HTTPS_PROXY") -and $null -eq [Environment]::GetEnvironmentVariable("ALL_PROXY")))'
 Assert-PublicCheck ($child.Output -ceq 'True') 'Probe inherited HTTPS/ALL proxy environment.'
 Assert-PublicReject { [VexPublicVpnBoundedProcess]::Run($script:childPath, '', 0, 512) } 'public_vpn_process_budget_invalid'
+$asyncCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes('Start-Sleep -Milliseconds 200; [Console]::Write("async-probe")'))
+$pending = [VexPublicVpnBoundedProcess]::Begin($script:childPath, ('-NoLogo -NoProfile -NonInteractive -EncodedCommand ' + $asyncCommand), 5000, 512)
+Assert-PublicCheck (-not $pending.IsCompleted) 'Asynchronous observer blocked the calling thread.'
+$asyncResult = $pending.GetAwaiter().GetResult()
+Assert-PublicCheck ($asyncResult.ExitCode -eq 0 -and $asyncResult.Output -ceq 'async-probe' -and -not $asyncResult.TimedOut) 'Bounded asynchronous observer did not return its actual child result.'
 
 $script:routeIndex = 7
 $script:routeSourceIndex = 7

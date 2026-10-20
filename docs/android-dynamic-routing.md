@@ -27,6 +27,11 @@ signed profile endpoint immediately. A missing policy does not hold the tunnel
 behind the optional HTTP request. The 30-second retry cooldown remains in place,
 and repeated callers share an unfinished refresh.
 
+If the background policy arrives during the first native attempt and that
+endpoint then fails, the same connection can consume its bounded relay choices.
+Already attempted endpoints are excluded, and cancellation is checked before
+starting a fallback.
+
 Cache hydration, HTTP responses, and queued cache writes are fenced by login
 generation and the current session predicate. Switching A to B to A or logging
 back into the same account cannot apply an earlier login's result. This keeps
@@ -40,6 +45,11 @@ the removed dependency on the HTTP response; they do not measure customer
 connection latency. The separate underlay observation can still wait up to
 1.5 seconds when no receipt is ready. Signed device acceptance remains required
 before publishing this follow-up.
+
+Two production-flow callback regressions also cover a policy arriving during
+the first attempt and cancellation at that boundary. The relay case fails
+against the earlier policy-preparation change and passes with late-policy
+recovery; the cancellation case keeps the existing operation fence.
 
 This is route failover, not a physical mesh. The current server topology has
 one qualified relay ingress failure domain, so a second provider must pass

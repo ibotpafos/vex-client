@@ -180,7 +180,7 @@ export function useVpnConnectionFlow({
         // can bypass the tunnel in per-app mode, so it cannot prove this safely.
         if (candidate) {
           dynamicRouteRuntime.recordSuccess(candidate);
-          reportRoute(candidate, previousRouteTransport ? 'fallback_succeeded' : 'connect_succeeded', 'ok');
+          reportRoute(candidate, endpointAttempts.length > 1 ? 'fallback_succeeded' : 'connect_succeeded', 'ok');
         } else {
           dynamicRouteRuntime.clearActive();
         }
@@ -200,8 +200,20 @@ export function useVpnConnectionFlow({
         }
         if (candidate) {
           dynamicRouteRuntime.recordFailure(candidate);
-          reportRoute(candidate, previousRouteTransport ? 'fallback_failed' : 'connect_failed', 'error');
+          reportRoute(candidate, endpointAttempts.length > 1 ? 'fallback_failed' : 'connect_failed', 'error');
           previousRouteTransport = routeTransport(candidate);
+        }
+        if (Platform.OS === 'android' && !attempts.some((item) => item.candidate)) {
+          // A background policy may arrive while the signed endpoint is being
+          // tried. Keep its bounded relay choices available to this connection.
+          const seen = new Set(endpointAttempts.map((endpoint) => endpoint.toLowerCase()));
+          for (const prepared of dynamicRouteRuntime.attempts(profile)) {
+            const endpoint = profileEndpoint(prepared.profile)?.toLowerCase();
+            if (prepared.candidate && endpoint && !seen.has(endpoint)) {
+              seen.add(endpoint);
+              attempts.push(prepared);
+            }
+          }
         }
       }
     }

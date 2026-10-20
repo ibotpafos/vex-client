@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { stripTypeScriptTypes } from 'node:module';
 import test from 'node:test';
 import { QueryClient } from '@tanstack/react-query';
-import { ApiRequestError, isMaintenanceStatus, normalizeApiRequestError } from '../src/api/error.ts';
+import { ApiRequestError, isMaintenanceStatus, normalizeApiRequestError, readApiErrorPayload } from '../src/api/error.ts';
 import { createApiQueryRetry } from '../src/api/queryRetry.ts';
 
 function queryClient(maxRetries = 1) {
@@ -78,8 +78,8 @@ for (const retries of [1, 2]) {
 const source = stripTypeScriptTypes(fs.readFileSync('src/api/client.ts', 'utf8'))
   .replace(/^import .*;$/gm, '').replace(/^export \{.*;$/gm, '').replace(/\bexport /g, '');
 function rawClient(fetch) {
-  return new Function('fetch', 'ApiRequestError', 'isMaintenanceStatus', 'normalizeApiRequestError', 'getAppInfo', 'getOrCreateDeviceId', 'Platform', 'androidExperimentalRoutingEnabled', 'androidProfilePlatform', source + '; return rawRequest;')(
-    fetch, ApiRequestError, isMaintenanceStatus, normalizeApiRequestError, async () => ({}), async () => 'fixture', { OS: 'android' }, () => false, () => 'android',
+  return new Function('fetch', 'ApiRequestError', 'isMaintenanceStatus', 'normalizeApiRequestError', 'readApiErrorPayload', 'getAppInfo', 'getOrCreateDeviceId', 'Platform', 'androidExperimentalRoutingEnabled', 'androidProfilePlatform', source + '; return rawRequest;')(
+    fetch, ApiRequestError, isMaintenanceStatus, normalizeApiRequestError, readApiErrorPayload, async () => ({}), async () => 'fixture', { OS: 'android' }, () => false, () => 'android',
   );
 }
 

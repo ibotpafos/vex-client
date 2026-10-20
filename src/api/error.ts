@@ -56,3 +56,24 @@ export function isTechnicalWorksError(error: unknown): boolean {
     || message.includes('connection reset')
     || message.includes('превышено время ожидания api');
 }
+
+
+/** Narrow Go error DTO fields independently; never echo unknown structured data. */
+export function readApiErrorPayload(text: string): { code?: string; message?: string } {
+  const stringValue = (value: unknown) => typeof value === 'string' ? value.trim() || undefined : undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    const legacyText = text.trim();
+    const structured = ['{', '[', '"', '<'].some(prefix => legacyText.startsWith(prefix));
+    return { message: structured ? undefined : stringValue(legacyText) };
+  }
+  if (typeof parsed === 'string') return { message: stringValue(parsed) };
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+  const fields = parsed as Record<string, unknown>;
+  return {
+    code: stringValue(fields.code),
+    message: stringValue(fields.message) ?? stringValue(fields.error),
+  };
+}

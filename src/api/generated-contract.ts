@@ -57,6 +57,7 @@ export interface AppRemoteConfigResponseDTOSpec {
   routingPolicyVersionPrefix?: string
   routingPolicyVersion?: string
   featureFlags?: Record<string, boolean>
+  accountFeatureFlags?: Record<string, boolean>
   incidentBanner?: string
   checkedAt: string
 }
@@ -219,6 +220,7 @@ export interface EmailOTPChallengeDTOSpec {
 type _EmailOTPChallengeDTOContract = VexApiSpecExpect<EmailOTPChallengeDTOSpec extends EmailOTPChallengeDTO ? true : false>
 
 export interface EntitlementDTOSpec {
+  windows_beta?: null | { active: boolean } & { platform: string } & { client_flavor: string } & { campaign_id: string } & { ends_at: null | string } & { device_limit: number } & { requires_payment: boolean }
   user_id: string
   active: boolean
   reason: string

@@ -22,4 +22,4 @@ let package = Package(name: "VEXAPITransportHarness", platforms: [.macOS(.v15)],
 ], swiftLanguageModes: [.v5])
 SWIFT
 swiftc -frontend -parse "$root_dir/macos-native/Sources/VEXNativeMac/Services/VEXAPIClient.swift"
-swift test --package-path "$harness_dir" --filter VEXAPITransportTests
+swift test --package-path "$harness_dir" --filter VEXAPITransportTests "$@"

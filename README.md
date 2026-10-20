@@ -57,6 +57,38 @@ npm run test:unit
 npm run lint
 ```
 
+Native API verification uses production Foundation code and private loopback
+fixtures. With full Xcode, run the transport/profile XCTest harnesses:
+
+```bash
+TMPDIR=/Volumes/D/VEX-CI/cache/local-user/tmp/ npm run test:macos-api-transport
+TMPDIR=/Volumes/D/VEX-CI/cache/local-user/tmp/ npm run test:macos-profile-identity
+```
+
+On a Command Line Tools host without XCTest, explicitly run the shared API
+scenarios as a fixture executable:
+
+```bash
+TMPDIR=/Volumes/D/VEX-CI/cache/local-user/tmp/ npm run test:macos-api-contract-probe
+```
+
+The probe and XCTest share the same redirect, body deadline/cancellation and
+error-reader scenarios. The probe compiles the production API/models with the
+existing isolated platform stores; it does not run AppKit, access the keychain,
+start the privileged helper or change VPN state. Passing it does not establish
+XCTest, full-app, cryptographic, device or release acceptance. The profile harness
+uses existing SwiftPM/module cache paths on D when the checkout is on D; pass
+SwiftPM cache options through the transport harness when needed.
+
+API GET retries share one total deadline, including body reads and server
+cooldowns. Writes remain a single attempt. macOS API requests return HTTP
+redirects as failures to the API consumer, preserving the original request.
+Mobile/macOS error readers retain string `code`, `message` and legacy `error`
+fields independently, preserve legacy plain/string responses, and avoid echoing
+unknown JSON or HTML bodies. Windows keeps its narrower endpoint-specific
+public error-code allowlist. Mobile React Native redirect behavior still needs
+native-runtime qualification; setting a Fetch option alone is insufficient proof.
+
 Native macOS release:
 
 ```bash

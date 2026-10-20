@@ -130,3 +130,46 @@ test('outer deadline retains the machine-readable request_timeout code',async t=
   const result=assert.rejects(raw('/v1/devices',{timeout:1000}),error=>error.code==='request_timeout');
   await settle();t.mock.timers.tick(1000);await settle();await result;
 });
+
+
+for (const [body, code, message] of [
+  ['{"code":17,"message":" visible "}', undefined, 'visible'],
+  ['{"code":" quota ","message":42,"error":" legacy "}', 'quota', 'legacy'],
+  ['{"code":"quota","message":"  ","error":"legacy"}', 'quota', 'legacy'],
+  ['{"code":"quota","message":null,"error":[]}', 'quota', 'HTTP 400'],
+  ['{"code":{},"debug":"inert-private-fixture"}', undefined, 'HTTP 400'],
+  ['null', undefined, 'HTTP 400'],
+  ['[]', undefined, 'HTTP 400'],
+  ['123', undefined, 'HTTP 400'],
+  ['true', undefined, 'HTTP 400'],
+  ['{"message":"inert-private-fixture"', undefined, 'HTTP 400'],
+  ['<html>inert-private-fixture</html>', undefined, 'HTTP 400'],
+  ['" legacy string "', undefined, 'legacy string'],
+  [' legacy text ', undefined, 'legacy text'],
+]) {
+  test('error fields are independently narrowed: ' + body, async () => {
+    const raw = client(async () => ({ ok: false, status: 400, text: async () => body }));
+    await assert.rejects(raw('/v1/devices'), error => error.status === 400 && error.code === code && error.message === message);
+  });
+}
+
+test('a malformed message cannot discard a maintenance code and trigger session expiry', async () => {
+  const raw = client(async () => ({ ok: false, status: 401, text: async () => '{"code":"maintenance","message":42,"error":"temporary"}' }));
+  await assert.rejects(raw('/v1/auth/me'), error => error.status === 401 && error.code === 'maintenance');
+});
+
+
+test('development diagnostics never echo the raw error response body', async t => {
+  const prior = globalThis.__DEV__;
+  globalThis.__DEV__ = true;
+  const lines = [];
+  t.mock.method(console, 'log', (...parts) => lines.push(parts.join(' ')));
+  try {
+    const raw = client(async () => ({ ok: false, status: 400, text: async () => '{"message":"public failure","debug":"inert-private-fixture"}' }));
+    await assert.rejects(raw('/v1/devices'), error => error.status === 400);
+    assert.equal(lines.some(line => line.includes('inert-private-fixture')), false);
+  } finally {
+    if (prior === undefined) delete globalThis.__DEV__;
+    else globalThis.__DEV__ = prior;
+  }
+});

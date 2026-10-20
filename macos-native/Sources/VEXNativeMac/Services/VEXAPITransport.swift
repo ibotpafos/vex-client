@@ -7,7 +7,7 @@ import FoundationNetworking
 /// idempotency key is present: mutation replay is a separate server contract.
 struct VEXAPITransport: Sendable {
     var load: @Sendable (URLRequest) async throws -> (Data, URLResponse) = {
-        try await URLSession.shared.data(for: $0)
+        try await URLSession.shared.data(for: $0, delegate: VEXAPIRedirectDelegate.shared)
     }
     var now: @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     var sleep: @Sendable (TimeInterval) async throws -> Void = {
@@ -78,7 +78,7 @@ struct VEXAPITransport: Sendable {
         return max(0, date.timeIntervalSince(now))
     }
 
-    private static func isRetryable(_ error: Error) -> Bool {
+    static func isRetryable(_ error: Error) -> Bool {
         guard let error = error as? URLError else { return false }
         return [.timedOut, .cannotFindHost, .cannotConnectToHost, .networkConnectionLost,
                 .dnsLookupFailed, .notConnectedToInternet].contains(error.code)
@@ -87,5 +87,19 @@ struct VEXAPITransport: Sendable {
     private struct Response: @unchecked Sendable {
         let data: Data
         let response: URLResponse
+    }
+}
+
+
+/// API requests keep their original method, authority and single-attempt write
+/// semantics. Return the redirect response instead of replaying it implicitly.
+private final class VEXAPIRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    static let shared = VEXAPIRedirectDelegate()
+
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
+        completionHandler(nil)
     }
 }

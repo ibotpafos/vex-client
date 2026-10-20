@@ -1,7 +1,7 @@
 import { Platform } from 'react-native';
 import { getAppInfo, getOrCreateDeviceId } from '@/native/appInfo';
 import { androidExperimentalRoutingEnabled, androidProfilePlatform } from '@/vpn/androidRoutingSafety';
-import { ApiRequestError, isMaintenanceStatus, normalizeApiRequestError } from './error';
+import { ApiRequestError, isMaintenanceStatus, normalizeApiRequestError, readApiErrorPayload } from './error';
 export { isMaintenanceStatus, isTechnicalWorksError, normalizeApiRequestError, technicalWorksMessage } from './error';
 
 export type RequestOptions = {
@@ -126,10 +126,7 @@ async function rawRequestAttempt(path: string, options: RequestOptions, method: 
     const text = await response.text();
     requireRequestTime(signal, deadline);
     if (!response.ok) {
-      if (shouldLogApiRequests && !options.suppressErrorLog) {
-        logApiDebug(`API Error Response: ${text}`);
-      }
-      const apiError = parseApiErrorPayload(text);
+      const apiError = readApiErrorPayload(text);
       throw new ApiRequestError(apiError.message ?? `HTTP ${response.status}`, {
         status: response.status,
         code: apiError.code,
@@ -197,21 +194,9 @@ function logApiDebug(...items: unknown[]) {
 }
 
 export function parseApiError(text: string): string | null {
-  return parseApiErrorPayload(text).message ?? null;
+  return readApiErrorPayload(text).message ?? null;
 }
 
-function parseApiErrorPayload(text: string): { code?: string; message?: string } {
-  try {
-    const parsed = JSON.parse(text) as { code?: string; message?: string; error?: string };
-    return {
-      code: parsed.code?.trim() || undefined,
-      message: parsed.message?.trim() || parsed.error?.trim() || undefined,
-    };
-  } catch {
-    const message = text.trim();
-    return { message: message || undefined };
-  }
-}
 
 
 export function trimTrailingSlash(value: string): string {

@@ -366,7 +366,7 @@ struct VEXAPIClient {
             throw VEXAPIError.invalidResponse
         }
         guard (200..<300).contains(http.statusCode) else {
-            let apiError = apiErrorPayload(data)
+            let apiError = VEXAPIError.payload(data)
             throw VEXAPIError.http(
                 status: http.statusCode, message: apiError.message, code: apiError.code,
                 retryAfter: VEXAPITransport.retryAfter(http.value(forHTTPHeaderField: "Retry-After"))
@@ -391,14 +391,7 @@ struct VEXAPIClient {
         return components.percentEncodedQuery ?? ""
     }
 
-    private func apiErrorPayload(_ data: Data) -> (code: String?, message: String) {
-        if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            let code = object["code"] as? String
-            let message = object["message"] as? String ?? object["error"] as? String
-            return (code, message ?? String(data: data, encoding: .utf8) ?? "HTTP request failed")
-        }
-        return (nil, String(data: data, encoding: .utf8) ?? "HTTP request failed")
-    }
+
 }
 
 private struct NativeDeviceRegistrationResponse: Decodable {
@@ -443,6 +436,27 @@ enum VEXAPIError: LocalizedError {
     case http(status: Int, message: String, code: String? = nil, retryAfter: TimeInterval? = nil)
 
     static let technicalWorksMessage = "Идут технические работы. Мы уже переключаем сервисы, попробуйте через пару минут."
+
+    static func payload(_ data: Data) -> (code: String?, message: String) {
+        let fallback = "HTTP request failed"
+        let decoded: Any
+        do {
+            decoded = try JSONSerialization.jsonObject(with: data, options: .fragmentsAllowed)
+        } catch {
+            let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let structured = ["{", "[", "\"", "<"].contains { text.hasPrefix($0) }
+            return (nil, !structured && !text.isEmpty ? text : fallback)
+        }
+        if let text = decoded as? String { return (nil, stringValue(text) ?? fallback) }
+        guard let fields = decoded as? [String: Any] else { return (nil, fallback) }
+        return (stringValue(fields["code"]), stringValue(fields["message"]) ?? stringValue(fields["error"]) ?? fallback)
+    }
+
+    private static func stringValue(_ value: Any?) -> String? {
+        guard let value = value as? String else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
 
     var isUnauthorized: Bool {
         if case .http(let status, _, let code, _) = self {
@@ -496,15 +510,7 @@ enum VEXAPIError: LocalizedError {
             }
         }
         if let urlError = error as? URLError {
-            let unavailableCodes: [URLError.Code] = [
-                .timedOut,
-                .cannotFindHost,
-                .cannotConnectToHost,
-                .networkConnectionLost,
-                .dnsLookupFailed,
-                .notConnectedToInternet,
-            ]
-            return unavailableCodes.contains(urlError.code)
+            return VEXAPITransport.isRetryable(urlError)
         }
         let message = error.localizedDescription.localizedLowercase
         return message.contains("идут технические работы")

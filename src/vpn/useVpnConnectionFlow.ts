@@ -111,7 +111,7 @@ export function useVpnConnectionFlow({
     };
     requireCurrentOperation();
     if (session?.accessToken) {
-      await withTimeout(prepareClientNetworkDiagnostics(session.accessToken, profile.device?.id), 1_500, 'Optional network observation timed out.').catch(() => undefined);
+      await withTimeout(prepareClientNetworkDiagnostics(session.accessToken, profile.device?.id, isCurrentSessionOperation), 1_500, 'Optional network observation timed out.').catch(() => undefined);
       requireCurrentOperation();
     }
     if (!vpnProfileAddressMatchesDevice(profile)) {
@@ -206,7 +206,7 @@ export function useVpnConnectionFlow({
       }
     }
     throw lastError;
-  }, [antiLeakEnabled, requireCurrentSession, session?.accessToken, session?.user.id]);
+  }, [antiLeakEnabled, isCurrentSessionOperation, requireCurrentSession, session?.accessToken, session?.user.id]);
 
   const connectCurrentVpn = useCallback(async ({
     locationId = selectedLocationId,

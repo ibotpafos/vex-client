@@ -18,6 +18,9 @@ function fixture(results) {
   let network = { networkClass: 'cellular', generation: 'ba88893a-0bc5-4c1b-8f69-b9cce50172d0' };
   let nativeState = 'disconnected';
   let failSeed = false;
+  let seedWait = null;
+  let nextTimer = 0;
+  const timers = new Map();
   const pure = { exports: {} };
   vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(path.dirname(sourcePath), 'networkObservation.ts'), 'utf8'), {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
@@ -28,6 +31,7 @@ function fixture(results) {
       submitClientDiagnostics: async (_token, report) => {
         if (failSeed && report.reason === 'network_before_connect') throw new Error('Offline fixture');
         reports.push(report);
+        if (report.reason === 'network_before_connect' && seedWait) await seedWait;
         return { id: 'fixture-observation' };
       },
     },
@@ -68,11 +72,15 @@ function fixture(results) {
     module, exports: module.exports,
     require: (id) => { assert.ok(modules[id], `Unexpected import ${id}`); return modules[id]; },
     Date: class extends Date { static now() { return now; } },
+    setTimeout: (callback) => { const id = ++nextTimer; timers.set(id, callback); return id; },
+    clearTimeout: (id) => timers.delete(id),
     fetch: () => { throw new Error('Real network forbidden'); },
   }, { filename: sourcePath });
   return {
     reports,
-    capture: () => module.exports.prepareClientNetworkDiagnostics('TOKEN', 'fixture-device'),
+    capture: (token = 'TOKEN', device = 'fixture-device', isCurrent) => module.exports.prepareClientNetworkDiagnostics(token, device, isCurrent),
+    holdSeed: (promise) => { seedWait = promise; },
+    expireCapture: () => { for (const callback of [...timers.values()]) callback(); },
     network: (generation) => { network = { ...network, generation }; },
     nativeState: (state) => { nativeState = state; },
     failSeed: () => { failSeed = true; },
@@ -92,6 +100,95 @@ test('unknown DNS preserves the legacy boolean wire contract and unmeasured samp
   assert.equal(f.reports[0].dnsOk, true);
   assert.equal(f.reports[0].samples.network_probe.dnsOk, undefined);
   assert.equal(f.reports[0].httpsOk, true);
+});
+
+test('a prepared observation is reused at Connect without a second server seed', async () => {
+  const f = fixture([]);
+  await f.capture();
+  await f.capture();
+  assert.equal(f.reports.length, 1);
+});
+
+test('background preparation and Connect share one in-flight observation', async () => {
+  const f = fixture([]);
+  let release;
+  f.holdSeed(new Promise(resolve => { release = resolve; }));
+  const background = f.capture();
+  const connect = f.capture();
+  let backgroundSettled = false;
+  void background.then(() => { backgroundSettled = true; });
+  await new Promise(setImmediate);
+  assert.equal(f.reports.length, 1);
+  assert.equal(backgroundSettled, false);
+  release();
+  await Promise.all([background, connect]);
+});
+
+test('prepared observation is refreshed for a changed network, account or device', async () => {
+  const f = fixture([]);
+  await f.capture();
+  f.network('cd88893a-0bc5-4c1b-8f69-b9cce50172d0');
+  await f.capture();
+  await f.capture('OTHER_TOKEN');
+  await f.capture('OTHER_TOKEN', 'other-fixture-device');
+  assert.equal(f.reports.length, 4);
+});
+
+test('a superseded session cannot seed an observation or reuse a prepared one', async () => {
+  const f = fixture([{ httpsOk: true }]);
+  await f.capture('TOKEN', 'fixture-device', () => false);
+  assert.equal(f.reports.length, 0);
+  let current = true;
+  let release;
+  f.holdSeed(new Promise(resolve => { release = resolve; }));
+  const pending = f.capture('TOKEN', 'fixture-device', () => current);
+  await new Promise(setImmediate);
+  current = false;
+  release();
+  await pending;
+  await f.upload('connected', 100);
+  assert.equal(f.reports.at(-1).networkObservationId, undefined);
+});
+
+test('stalled optional preparation expires and a late result cannot replace a newer capture', async () => {
+  const f = fixture([{ httpsOk: true }]);
+  let release;
+  f.holdSeed(new Promise(resolve => { release = resolve; }));
+  const pending = f.capture();
+  await new Promise(setImmediate);
+  f.expireCapture();
+  assert.equal(await Promise.race([pending.then(() => true), new Promise(resolve => setImmediate(() => resolve(false)))]), true);
+  f.holdSeed(null);
+  f.network('cd88893a-0bc5-4c1b-8f69-b9cce50172d0');
+  await f.capture();
+  release();
+  await new Promise(setImmediate);
+  await f.upload('connected', 100);
+  assert.equal(f.reports.at(-1).networkObservationId, 'fixture-observation');
+});
+
+test('a VPN started during optional capture cannot become an underlay observation', async () => {
+  const f = fixture([{ httpsOk: true }]);
+  let release;
+  f.holdSeed(new Promise(resolve => { release = resolve; }));
+  const pending = f.capture();
+  await new Promise(setImmediate);
+  f.nativeState('connected');
+  release();
+  await pending;
+  await f.upload('connected', 100);
+  assert.equal(f.reports.at(-1).networkObservationId, undefined);
+});
+
+test('a prepared receipt cannot survive its owning login operation', async () => {
+  const f = fixture([{ httpsOk: true }]);
+  let current = true;
+  await f.capture('TOKEN', 'fixture-device', () => current);
+  current = false;
+  await f.upload('connected', 100);
+  assert.equal(f.reports.at(-1).networkObservationId, undefined);
+  await f.capture('TOKEN', 'fixture-device', () => true);
+  assert.equal(f.reports.filter(report => report.reason === 'network_before_connect').length, 2);
 });
 
 test('diagnostics attach OTA rollback provenance without a raw emergency reason', async () => {

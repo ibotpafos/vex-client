@@ -36,26 +36,71 @@ export type VpnDiagnosticsSnapshot = {
 let uploadChain: Promise<void> = Promise.resolve();
 let capturedNetwork: CapturedNetworkObservation | null = null;
 let capturedAccessToken: string | undefined;
+let capturedSessionIsCurrent: (() => boolean) | undefined;
 let captureGeneration = 0;
+let pendingNetworkCapture: {
+  accessToken: string;
+  deviceId: string;
+  sessionIsCurrent: (() => boolean) | undefined;
+  startedAt: number;
+  deadline: number;
+  promise: Promise<void>;
+} | null = null;
 
-export async function prepareClientNetworkDiagnostics(accessToken: string, deviceId: string | undefined): Promise<void> {
+export function prepareClientNetworkDiagnostics(
+  accessToken: string,
+  deviceId: string | undefined,
+  sessionIsCurrent?: () => boolean,
+): Promise<void> {
+  if (!deviceId || sessionIsCurrent?.() === false) return Promise.resolve();
+  const now = Date.now();
+  if (pendingNetworkCapture?.accessToken === accessToken && pendingNetworkCapture.deviceId === deviceId
+    && pendingNetworkCapture.sessionIsCurrent === sessionIsCurrent
+    && now >= pendingNetworkCapture.startedAt && now < pendingNetworkCapture.deadline) {
+    return pendingNetworkCapture.promise;
+  }
   const attempt = ++captureGeneration;
-  const deadline = Date.now() + 1_500;
-  capturedNetwork = null;
-  capturedAccessToken = undefined;
-  if (!deviceId) return;
+  const deadline = now + 1_500;
+  let timer: ReturnType<typeof setTimeout>;
+  const expired = new Promise<void>((resolve) => {
+    timer = setTimeout(() => {
+      if (attempt === captureGeneration) captureGeneration++;
+      resolve();
+    }, 1_500);
+  });
+  const promise = Promise.race([captureClientNetworkDiagnostics(accessToken, deviceId, sessionIsCurrent, attempt, deadline), expired])
+    .finally(() => {
+      clearTimeout(timer);
+      if (pendingNetworkCapture?.promise === promise) pendingNetworkCapture = null;
+    });
+  pendingNetworkCapture = { accessToken, deviceId, sessionIsCurrent, startedAt: now, deadline, promise };
+  return promise;
+}
+
+async function captureClientNetworkDiagnostics(accessToken: string, deviceId: string,
+  sessionIsCurrent: (() => boolean) | undefined, attempt: number, deadline: number): Promise<void> {
+  const currentAttempt = () => attempt === captureGeneration && Date.now() < deadline && sessionIsCurrent?.() !== false;
   try {
-    const [network, status, app] = await Promise.all([readVpnNetworkObservation(), getVpnStatus(), getAppInfo()]);
-    if (!network.generation || status.state !== 'disconnected' || Date.now() >= deadline || attempt !== captureGeneration) return;
+    const [network, status] = await Promise.all([readVpnNetworkObservation(), getVpnStatus()]);
+    if (!currentAttempt() || !network.generation || status.state !== 'disconnected') return;
+    if (capturedAccessToken === accessToken && capturedSessionIsCurrent?.() !== false
+      && matchingNetworkObservation(capturedNetwork, network, deviceId, Date.now())) return;
+    capturedNetwork = null;
+    capturedAccessToken = undefined;
+    capturedSessionIsCurrent = undefined;
+    const app = await getAppInfo();
+    if (!currentAttempt()) return;
     // Never queue this seed: retrying it through a tunnel observes the VPN exit.
     const response = await submitClientDiagnostics(accessToken, {
       deviceId, platform: app.platform, appVersion: app.version, reason: 'network_before_connect', status: 'info',
       vpnState: 'disconnected', networkClass: network.networkClass, networkGeneration: network.generation,
     }, Math.min(1_000, deadline - Date.now()));
-    const current = await readVpnNetworkObservation();
-    if (attempt !== captureGeneration || Date.now() >= deadline || current.generation !== network.generation || current.networkClass !== network.networkClass || !response.id) return;
+    const [current, currentStatus] = await Promise.all([readVpnNetworkObservation(), getVpnStatus()]);
+    if (!currentAttempt() || currentStatus.state !== 'disconnected' || current.generation !== network.generation
+      || current.networkClass !== network.networkClass || !response.id) return;
     capturedNetwork = { ...network, id: response.id, deviceId, capturedAt: Date.now() };
     capturedAccessToken = accessToken;
+    capturedSessionIsCurrent = sessionIsCurrent;
   } catch { /* Optional capture must not prevent VPN connection. */ }
 }
 let cachedNetworkProbe: {
@@ -104,7 +149,8 @@ async function buildClientDiagnosticsReport(snapshot: VpnDiagnosticsSnapshot, ac
   const beforeProbe = await readVpnNetworkObservation();
   const networkProbe = await cachedDiagnosticsNetworkProbe(snapshot.endpoint, snapshot.vpnStatus, beforeProbe.generation);
   const currentNetwork = await readVpnNetworkObservation();
-  const observationId = matchingNetworkObservation(capturedAccessToken === accessToken ? capturedNetwork : null, currentNetwork, snapshot.deviceId, Date.now());
+  const observationId = matchingNetworkObservation(capturedAccessToken === accessToken && capturedSessionIsCurrent?.() !== false
+    ? capturedNetwork : null, currentNetwork, snapshot.deviceId, Date.now());
   return {
     deviceId: snapshot.deviceId,
     networkClass: currentNetwork.networkClass,

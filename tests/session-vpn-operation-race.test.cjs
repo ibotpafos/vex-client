@@ -86,11 +86,12 @@ function connectionHarness(stage, platform = 'android') {
   };
   const session = provider({ disconnect: async () => { state.logoutCalls++; state.nativeOwner = null; } });
   const mountedRef = { current: true };
+  const isCurrentSessionOperation = session.guard();
   const requireCurrentSession = bind(flow.requireCurrentSession, {
-    mountedRef, isCurrentSessionOperation: session.guard(), SessionOperationSupersededError,
+    mountedRef, isCurrentSessionOperation, SessionOperationSupersededError,
   });
   const context = {
-    Date, Error, requireCurrentSession, SessionOperationSupersededError, session: { accessToken: 'token-A', user: { id: 'A' } },
+    Date, Error, requireCurrentSession, isCurrentSessionOperation, SessionOperationSupersededError, session: { accessToken: 'token-A', user: { id: 'A' } },
     Platform: { OS: platform }, antiLeakEnabled: true,
     prepareClientNetworkDiagnostics: () => wait('diagnostics'),
     withTimeout: operation => operation, vpnProfileAddressMatchesDevice: () => true,

@@ -1,6 +1,5 @@
 import { ChevronRight, Power, Settings, Shield } from 'lucide-react-native';
 import type { ReactNode } from 'react';
-import React from 'react';
 import {
   Animated,
   ImageBackground,

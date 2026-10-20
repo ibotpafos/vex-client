@@ -81,6 +81,43 @@ class PackagedResourcesTests(unittest.TestCase):
         self.resources(self.case)
         self.probe(executable)
 
+    def test_swiftpm_xctest_host(self):
+        # Exercise the actual XCTest host, whose main bundle is the Xcode runner.
+        if subprocess.run(["xcrun", "--find", "xctest"], capture_output=True).returncode:
+            self.skipTest("XCTest host requires full Xcode; Command Line Tools cover the packaged layouts")
+        source = self.case / "Sources/VEXNativeMac"
+        source.mkdir(parents=True)
+        for name in ["Support/VEXAppResources.swift", "Views/CountrySilhouette.swift"]:
+            shutil.copy2(NATIVE / "Sources/VEXNativeMac" / name, source)
+        (source / "Resources").mkdir()
+        shutil.copy2(NATIVE / "Sources/VEXNativeMac/Resources/country-silhouettes.json", source / "Resources")
+        (self.case / "Package.swift").write_text('''// swift-tools-version: 6.2
+import PackageDescription
+let package = Package(name: "VEXNativeMac", platforms: [.macOS(.v15)], targets: [
+    .target(name: "VEXNativeMac", resources: [.process("Resources")]),
+    .testTarget(name: "ResourceTests", dependencies: ["VEXNativeMac"])
+], swiftLanguageModes: [.v5])
+''')
+        tests = self.case / "Tests/ResourceTests"
+        tests.mkdir(parents=True)
+        (tests / "ResourceTests.swift").write_text('''import XCTest
+@testable import VEXNativeMac
+final class ResourceTests: XCTestCase {
+    func testCountryResourcesInXCTest() {
+        for country in ["DE", "FI", "NL", "US", "JP"] {
+            XCTAssertNotNil(CountrySilhouetteStore.geometry(for: country))
+        }
+    }
+}
+''')
+        result = subprocess.run([
+            "swift", "test", "--package-path", str(self.case),
+            "--cache-path", str(self.root / "swiftpm-cache"),
+            "--config-path", str(self.root / "swiftpm-config"),
+            "--security-path", str(self.root / "swiftpm-security"), "-j", "2",
+        ], capture_output=True, text=True, timeout=180)
+        self.assertEqual(result.returncode, 0, (result.stdout + result.stderr)[-6000:])
+
     def test_legacy_app_root_bundle(self):
         app, executable = self.app()
         self.resources(app)

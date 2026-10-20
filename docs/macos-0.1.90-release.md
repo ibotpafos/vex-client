@@ -1,6 +1,6 @@
 # macOS 0.1.90 (120)
 
-Candidate: preserves the selected routing mode after provisioning errors and
+Published on 20 October 2026 at 13:44 Moscow time: preserves the selected routing mode after provisioning errors and
 timeouts, and includes the account/profile identity and bounded recovery fixes
 accepted since 0.1.88. This release retains the packaged upstream AWG engine;
 the shared Go engine and its new DIRECT policy are not enabled on macOS.
@@ -24,6 +24,25 @@ before extraction is enabled. The existing self-signed ZIP distribution does
 not meet that migration contract. Developer ID, notarization and first-launch
 Gatekeeper acceptance are not claimed by this candidate.
 
-Publication and installation acceptance remain pending until the exact signed
-candidate and public update/download receipts are verified. The active host VPN
-must remain untouched during release preparation.
+The immutable [release](https://github.com/ibotpafos/vex-client/releases/tag/macos-v0.1.90)
+was published from `439cec873fd40b234d70976c682379305d6280a8` by protected
+workflow run `39409362771`. Release planning, locked quality checks, native
+signing, immutable publication and the website receipt gate passed. The API
+and both Sparkle feed paths select build 120.
+
+The separate source-bound candidate `39406949962` passed SHA-256, Ed25519,
+bundle key/version, universal architecture and Russian release-note checks in
+memory. Package bytes were not written to the space-constrained D volume.
+The candidate CI verified nested code signatures; this is not a claim of a
+local physical installation or fresh tunnel test. The owner's installed 0.1.87
+and active VPN were preserved. Physical install/upgrade/rollback and notification
+permission acceptance still need an isolated Mac.
+
+Public acceptance at 13:48 Moscow time verified all six GitHub asset digests,
+the immutable tag/source binding, Ed25519 on both legacy and API appcasts,
+the native update-check response from 0.1.88 and the website download redirect.
+The published ZIP is 15,814,132 bytes with SHA-256
+`a71f0177f4fd6aadaf4ced2eaa9dabb29f51e76ecb1f2af88b53e08915101bd9`.
+Its actual bundle retains the stable key and verification before extraction,
+and uses the API appcast URL. Public package bytes were checked in memory;
+the installed app and active VPN were unchanged.

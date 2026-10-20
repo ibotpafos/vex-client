@@ -38,6 +38,7 @@ require_file "${APP_PATH}"
 require_file "${APP_PATH}/Contents/Info.plist"
 require_file "${APP_PATH}/Contents/MacOS/VEXNativeMac"
 require_file "${APP_PATH}/Contents/Resources/VEXNativeMac_VEXNativeMac.bundle"
+require_file "${APP_PATH}/Contents/Resources/VEXNativeMac_VEXNativeMac.bundle/country-silhouettes.json"
 
 bundle_id="$(plist_value "${APP_PATH}/Contents/Info.plist" CFBundleIdentifier)"
 [[ "${bundle_id}" == "app.vex.vpn.native" ]] || fail "unexpected bundle id: ${bundle_id}"

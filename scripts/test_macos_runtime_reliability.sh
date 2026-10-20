@@ -3,6 +3,7 @@
 # methods with isolated fake dependencies. macOS CI must still build the app.
 set -euo pipefail
 root_dir="$(cd "$(dirname "$0")/.." && pwd)"
+python3 "$root_dir/scripts/test_macos_packaged_resources.py"
 harness_dir="$(mktemp -d "${TMPDIR:-/tmp}/vex-runtime-reliability.XXXXXX")"
 trap 'rm -rf "$harness_dir"' EXIT
 source_dir="$harness_dir/Sources/VEXNativeMac"

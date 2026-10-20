@@ -38,7 +38,30 @@ Existing cross-account/session and handshake-deadline cases remain covered.
 This follow-up still requires a new signed candidate and physical reacceptance
 before publication. Repeat rapid cancel, cancel followed by a new connection,
 normal connection, background/foreground, DNS/HTTPS and loss/recovery of Wi-Fi.
-On the available phone, cellular connectivity did not become available during
-the handover attempt; Wi-Fi was restored. A successful Wi-Fi/cellular handover
-has not been established. No production promotion follows from these local
+The owner confirmed that the available phone has Wi-Fi only. Wi-Fi was
+restored after the handover attempt; Wi-Fi/cellular acceptance requires a
+different device with mobile connectivity. No production promotion follows from these local
 checks alone.
+
+## Подготовка до нажатия Connect
+
+Профиль выбранной локации уже загружается заранее через `useVpnProfileState`,
+сохраняется в памяти и защищённом hot cache; подходящий профиль используется
+до online fallback. Однако перед native start отдельно ожидалась необязательная
+сетевая диагностика, до 1500 мс. Поэтому `profile_resolve_ms` включает больше,
+чем время получения профиля с API.
+
+На Android подготовка этой диагностики теперь начинается при готовом профиле,
+пока приложение активно и VPN отключён, а также при возврате приложения.
+Connect переиспользует действующий receipt той же сети, аккаунта и устройства
+или присоединяется к уже начатой подготовке. Холодная подготовка остаётся
+ограничена 1500 мс; таймаут освобождает следующий запрос, поздний ответ не
+может заменить новый результат. При смене login или запуске VPN в процессе
+подготовки attribution не принимается. Сетевые настройки и проверка handshake
+сохраняются; наблюдение через VPN не объявляется underlay proof.
+
+Пять регрессий падали до исправления. Проверены повторное использование,
+совместный запрос, смена сети/аккаунта/устройства, устаревшая сессия, таймаут,
+поздний ответ и начало VPN во время capture. Полный `npm run check` прошёл.
+Физическое ускорение и приёмка этого source требуют нового подписанного APK;
+цифры старых кандидатов не доказывают результат новой оптимизации.

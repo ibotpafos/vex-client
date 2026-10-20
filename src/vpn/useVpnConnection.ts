@@ -21,6 +21,7 @@ import {
 } from '@/api/vexApi';
 import { startPushRegistrationLoop } from '@/notifications/pushRegistrationLoop';
 import { diagnosticFailureSamples } from '@/diagnostics/failureSamples';
+import { prepareClientNetworkDiagnostics } from '@/diagnostics/clientDiagnostics';
 import { useSession } from '@/auth/session-context';
 import { openExternalUrl } from '@/auth/systemAuth';
 import { vexWebsite } from '@/navigation/website';
@@ -391,6 +392,21 @@ export function useVpnConnection() {
     selectedLocationId,
     userId: session?.user.id,
   });
+
+  useEffect(() => {
+    const token = session?.accessToken;
+    if (Platform.OS !== 'android' || !hasVpnAccess || !token || !activeProfileDeviceId || vpnStatus.state !== 'disconnected') return;
+    let stopped = false;
+    const prepare = () => {
+      if (stopped || AppState.currentState !== 'active' || vpnOperationInFlightRef.current || !isCurrentSessionOperation()) return;
+      // Prepare while idle. Connect joins this bounded work, or reuses its
+      // receipt, so a pre-VPN observation is never captured through the tunnel.
+      void prepareClientNetworkDiagnostics(token, activeProfileDeviceId, isCurrentSessionOperation).catch(() => undefined);
+    };
+    prepare();
+    const subscription = AppState.addEventListener('change', (state) => { if (state === 'active') prepare(); });
+    return () => { stopped = true; subscription.remove(); };
+  }, [activeProfileDeviceId, hasVpnAccess, isCurrentSessionOperation, session?.accessToken, vpnStatus.state]);
 
   const activeDevice = activeProfile?.device
     ? (devicesData ?? persistedDevices)?.find((device) => device.id === activeProfile.device?.id) ?? activeProfile.device

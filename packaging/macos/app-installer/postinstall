@@ -1,0 +1,11 @@
+#!/bin/bash
+set -euo pipefail
+source "$(/usr/bin/dirname "$0")/common.sh"
+[[ "$(read_info CFBundleIdentifier)" == "app.vex.vpn.native" &&
+   "$(read_info CFBundleShortVersionString)" == "${EXPECTED_VERSION}" &&
+   "$(read_info CFBundleVersion)" == "${EXPECTED_BUILD}" ]] || fail "Версия установленного приложения не совпадает с пакетом."
+/usr/bin/codesign --verify --all-architectures --deep --strict -R "=${REQUIREMENT}" "${APP_PATH}" || fail "Подпись приложения не прошла проверку."
+# The user's Installer confirmation authorizes this specific app copy only.
+# -s acts on symlinks themselves; it must never follow links outside the app.
+/usr/bin/xattr -drs com.apple.quarantine "${APP_PATH}"
+# Do not launch the app, install/restart the helper, or alter a connection.

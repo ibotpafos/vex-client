@@ -100,10 +100,8 @@ struct VpnAutopilotService {
     }
 
     private func probeHTTPS() async -> VpnAutopilotProbeResult {
-        var components = URLComponents(url: api.baseURL, resolvingAgainstBaseURL: false)
-        components?.path = "/v1/app/remote-config"
-        components?.query = nil
-        guard let url = components?.url else { return .empty }
+        guard let baseURL = try? VEXAPIConfiguration.requireBaseURL(api.baseURL) else { return .empty }
+        let url = baseURL.appendingPathComponent("v1/app/remote-config")
 
         var request = URLRequest(url: url)
         request.httpMethod = "GET"

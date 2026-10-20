@@ -9,7 +9,8 @@ export function createApiQueryRetry(maxRetries: number) {
       if (error.status === 429 || (error.retryAfterMs ?? 0) > 0) return false;
       if (error.status && error.status >= 400 && error.status < 500 && error.status !== 408) return false;
       if (error.status && isMaintenanceStatus(error.status)) return false;
-      if (error.code === 'network_unavailable' || error.code === 'request_timeout') return false;
+      if (error.code === 'network_unavailable' || error.code === 'request_timeout'
+        || error.code === 'invalid_api_base_url' || error.code === 'invalid_api_path') return false;
     }
     return true;
   };

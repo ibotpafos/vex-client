@@ -28,6 +28,7 @@ enum APIContractScenarios {
             try require((response as? HTTPURLResponse)?.statusCode == status, "API followed HTTP \(status) redirect for \(method)")
             let requests = try fixture.requests()
             try require(requests == [method + " /start"], "A redirect replayed API work")
+            try fixture.closeAndVerify()
         }
     }
 
@@ -44,6 +45,7 @@ enum APIContractScenarios {
         try require(ProcessInfo.processInfo.systemUptime - started < 2, "stalled body retained API operation")
         let requests = try fixture.requests()
         try require(requests == ["GET /start"], "deadline restarted the request")
+        try fixture.closeAndVerify()
     }
 
     static func bodyCancellation() async throws {
@@ -59,6 +61,7 @@ enum APIContractScenarios {
         } catch is CancellationError { }
         let requests = try fixture.requests()
         try require(requests == ["GET /start"], "cancellation retried API work")
+        try fixture.closeAndVerify()
     }
 
     static func errorBodies() async throws {
@@ -93,6 +96,44 @@ enum APIContractScenarios {
         }
     }
 
+    static func baseURLConfiguration() async throws {
+        try require(VEXAPIConfiguration.resolve(nil)?.absoluteString == "https://vexguard.app", "missing base lost production default")
+        try require(VEXAPIConfiguration.resolve("")?.absoluteString == "https://vexguard.app", "empty base lost default")
+        for value in [" ", "relative/path", "file:///private/fixture", "https://user:fixture@example.invalid", "https://example.invalid?", "https://example.invalid#", "http://[invalid", "https://example.invalid:65536"] {
+            try require(VEXAPIConfiguration.resolve(value) == nil, "invalid base was replaced by an API origin")
+        }
+        for (value, expected) in [
+            ("http://127.0.0.1:45678/gateway///", "http://127.0.0.1:45678/gateway/v1/billing/plans"),
+            ("https://staging.example.invalid", "https://staging.example.invalid/v1/billing/plans"),
+        ] {
+            var api = VEXAPIClient()
+            api.baseURL = VEXAPIConfiguration.resolve(value)
+            api.transport.load = { request in
+                try require(request.url?.absoluteString == expected, "base path or custom origin changed")
+                return (Data("[]".utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!)
+            }
+            let plans = try await api.billingPlans()
+            try require(plans.isEmpty, "valid API response changed")
+        }
+    }
+
+    static func invalidBaseURLs() async throws {
+        for value in ["relative/path", "file:///private/fixture", "https://user:fixture@example.invalid", "https://example.invalid?route=other", "https://example.invalid#fragment", "http://[invalid", "https://example.invalid:65536"] {
+            var api = VEXAPIClient()
+            api.baseURL = URL(string: value)
+            api.transport.load = { _ in
+                throw Failure("invalid API configuration reached transport")
+            }
+            do {
+                _ = try await api.billingPlans()
+                throw Failure("invalid API configuration returned a response")
+            } catch let error as VEXAPIError {
+                try require(error.code == "invalid_api_base_url", "configuration failure was not classified")
+                try require(!VEXAPIError.isServerUnavailable(error), "configuration failure became a server outage")
+            }
+        }
+    }
+
     static func maintenanceClassification() async throws {
         var api = VEXAPIClient()
         api.transport.load = { request in
@@ -115,6 +156,9 @@ private final class LoopbackRedirectFixture {
     private let directory = FileManager.default.temporaryDirectory.appendingPathComponent("vex-api-redirect-" + UUID().uuidString)
     private let process = Process()
     private let output = Pipe()
+    private let terminated = DispatchSemaphore(value: 0)
+    private var closed = false
+    private var cleanupTimedOut = false
     var url = URL(string: "http://127.0.0.1")!
 
     init(status: Int, mode: String = "redirect") throws {
@@ -122,14 +166,20 @@ private final class LoopbackRedirectFixture {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
         process.arguments = ["-u", "-c", Self.script, directory.appendingPathComponent("requests").path, String(status), mode]
         process.standardOutput = output
+        process.terminationHandler = { [terminated] _ in terminated.signal() }
         process.standardError = Pipe()
-        try process.run()
-        let line = String(data: output.fileHandleForReading.availableData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let line, let port = UInt16(line), port > 0 else {
+        do {
+            try process.run()
+            try String(ProcessInfo.processInfo.processIdentifier).write(to: directory.appendingPathComponent("owner"), atomically: true, encoding: .utf8)
+            let line = String(data: output.fileHandleForReading.availableData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let line, let port = UInt16(line), port > 0 else {
+                throw NSError(domain: "LoopbackRedirectFixture", code: 1)
+            }
+            url = URL(string: "http://127.0.0.1:\(port)/start")!
+        } catch {
             close()
-            throw NSError(domain: "LoopbackRedirectFixture", code: 1)
+            throw error
         }
-        url = URL(string: "http://127.0.0.1:\(port)/start")!
     }
 
     func requests() throws -> [String] {
@@ -146,9 +196,21 @@ private final class LoopbackRedirectFixture {
     }
 
     func close() {
-        if process.isRunning { process.terminate(); process.waitUntilExit() }
+        guard !closed else { return }
+        closed = true
+        if process.isRunning {
+            process.terminate()
+            // waitUntilExit can block a cooperative executor's run loop after
+            // the child has exited. The handler is installed before launch.
+            cleanupTimedOut = terminated.wait(timeout: .now() + 2) == .timedOut
+        }
         try? output.fileHandleForReading.close()
-        try? FileManager.default.removeItem(at: directory)
+        if !cleanupTimedOut { try? FileManager.default.removeItem(at: directory) }
+    }
+
+    func closeAndVerify() throws {
+        close()
+        try APIContractScenarios.require(!cleanupTimedOut, "owned HTTP fixture did not terminate within its cleanup deadline")
     }
 
     private static let script = #"""

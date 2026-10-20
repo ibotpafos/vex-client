@@ -80,6 +80,27 @@ XCTest, full-app, cryptographic, device or release acceptance. The profile harne
 uses existing SwiftPM/module cache paths on D when the checkout is on D; pass
 SwiftPM cache options through the transport harness when needed.
 
+Mobile and macOS share one API configuration boundary per platform. Set
+`EXPO_PUBLIC_VEX_API_BASE_URL` for Expo or `VEX_API_BASE_URL` for macOS; absent
+or empty values keep `https://vexguard.app`. Absolute HTTP/HTTPS URLs support
+custom hosts, local ports and path prefixes. Credentials, query strings,
+fragments, relative URLs and malformed addresses are rejected. A configured
+invalid address is never replaced with a production fallback.
+
+Validation happens before native request setup, transport dispatch or PKCE
+state/device access. It returns `invalid_api_base_url`, preserving a previous
+PKCE attempt and avoiding outage/session-expiry classification or query retries.
+Public `vexApiBaseUrl` and `trimTrailingSlash` exports remain available. Website
+links, manual Android update trust and web auth reuse the same mobile source;
+existing update checksum/signature rules are retained. Expo's literal
+[`process.env.EXPO_PUBLIC_…` access](https://docs.expo.dev/guides/environment-variables/)
+is preserved for bundler substitution.
+
+The shared native probe now includes configuration/default/custom-prefix cases
+alongside the transport scenarios. Its owned HTTP fixture uses bounded,
+verified termination rather than an unbounded process wait. Mobile guards are
+also exercised with Expo's installed WHATWG URL implementation.
+
 API GET retries share one total deadline, including body reads and server
 cooldowns. Writes remain a single attempt. macOS API requests return HTTP
 redirects as failures to the API consumer, preserving the original request.

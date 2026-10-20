@@ -2,7 +2,7 @@ import Foundation
 
 struct VEXAPIClient {
     var transport = VEXAPITransport()
-    var baseURL = URL(string: ProcessInfo.processInfo.environment["VEX_API_BASE_URL"] ?? "https://vexguard.app")!
+    var baseURL = VEXAPIConfiguration.baseURL
 
     func me(accessToken: String) async throws -> VEXUser {
         try await json("/v1/auth/me", accessToken: accessToken)
@@ -267,7 +267,7 @@ struct VEXAPIClient {
                 "configSchemaVersion": VEXAppInfo.configSchemaVersion,
             ]
         )
-        result.downloadUrl = absolutize(result.downloadUrl)
+        result.downloadUrl = try absolutize(result.downloadUrl)
         return result
     }
 
@@ -297,11 +297,12 @@ struct VEXAPIClient {
         #endif
     }
 
-    private func absolutize(_ value: String) -> String {
+    private func absolutize(_ value: String) throws -> String {
         guard !value.isEmpty else { return "" }
         if value.hasPrefix("http://") || value.hasPrefix("https://") {
             return value
         }
+        let baseURL = try VEXAPIConfiguration.requireBaseURL(baseURL)
         if value.hasPrefix("/") {
             return "\(baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")))\(value)"
         }
@@ -326,6 +327,7 @@ struct VEXAPIClient {
         idempotencyKey: String? = nil,
         timeout: TimeInterval = 12
     ) async throws -> T {
+        let baseURL = try VEXAPIConfiguration.requireBaseURL(baseURL)
         guard let url = URL(string: "\(baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/\(path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))") else {
             throw VEXAPIError.invalidResponse
         }
@@ -431,6 +433,7 @@ private struct AuthSessionPayload: Decodable {
 
 enum VEXAPIError: LocalizedError {
     case invalidResponse
+    case invalidAPIBaseURL
     case technicalWorks
     case requestTimeout
     case http(status: Int, message: String, code: String? = nil, retryAfter: TimeInterval? = nil)
@@ -474,6 +477,7 @@ enum VEXAPIError: LocalizedError {
 
     var code: String? {
         switch self {
+        case .invalidAPIBaseURL: return "invalid_api_base_url"
         case .requestTimeout: return "request_timeout"
         case .http(_, _, let code, _): return code
         default: return nil
@@ -484,6 +488,8 @@ enum VEXAPIError: LocalizedError {
         switch self {
         case .invalidResponse:
             return "Некорректный ответ API."
+        case .invalidAPIBaseURL:
+            return "Неверно настроен адрес API."
         case .technicalWorks, .requestTimeout:
             return Self.technicalWorksMessage
         case .http(let status, let message, let code, _):
@@ -505,7 +511,7 @@ enum VEXAPIError: LocalizedError {
                 return true
             case .http(let status, _, let code, _):
                 return isMaintenanceStatus(status) || code == "maintenance"
-            case .invalidResponse:
+            case .invalidResponse, .invalidAPIBaseURL:
                 return false
             }
         }

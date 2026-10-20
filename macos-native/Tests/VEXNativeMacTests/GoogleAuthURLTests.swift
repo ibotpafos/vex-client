@@ -4,6 +4,26 @@ import CryptoKit
 
 final class GoogleAuthURLTests: XCTestCase {
     @MainActor
+    func testInvalidAPIBaseDoesNotCreateOrReplacePKCEState() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let files = AppSensitiveFileStore(directoryURL: directory)
+        let suite = "GoogleAuthURLTests.invalid.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("existing-verifier", forKey: "vex.auth.pkce.verifier")
+        defaults.set("existing-state", forKey: "vex.auth.pkce.state")
+        for value in ["relative/path", "file:///private/fixture", "https://user:fixture@example.invalid", "https://example.invalid?other", "https://example.invalid#fragment", "http://[invalid", "https://example.invalid:65536"] {
+            let service = PKCEAuthService(apiBaseURL: URL(string: value), defaults: defaults, identityStore: VEXDeviceIdentityStore(fileStore: files))
+            XCTAssertThrowsError(try service.makeWebAuthURL(mode: .login)) { error in
+                XCTAssertEqual((error as? VEXAPIError)?.code, "invalid_api_base_url")
+            }
+            XCTAssertEqual(defaults.string(forKey: "vex.auth.pkce.verifier"), "existing-verifier")
+            XCTAssertEqual(defaults.string(forKey: "vex.auth.pkce.state"), "existing-state")
+        }
+    }
+
+    @MainActor
     func testGoogleURLRetainsPKCEStateAndDefaultURLDoesNotForceProvider() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

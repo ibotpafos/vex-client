@@ -1837,10 +1837,11 @@ final class VEXAppState: ObservableObject {
     private func startCustomerRealtime(accessToken: String) {
         guard let accountUserId = sessionUserId(for: accessToken) else { return }
         resetCustomerNotificationSession()
+        guard let baseURL = try? VEXAPIConfiguration.requireBaseURL(api.baseURL) else { return }
         let realtimeGeneration = customerRealtimeGeneration
         let accountGeneration = profileAccountGeneration
         let service = CustomerRealtimeService(
-            baseURL: api.baseURL,
+            baseURL: baseURL,
             onStatus: { [weak self] connected in
                 guard let self, self.isCurrentCustomerRealtimeSession(
                     generation: realtimeGeneration, accountGeneration: accountGeneration,

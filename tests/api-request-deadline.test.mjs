@@ -2,14 +2,17 @@ import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import { stripTypeScriptTypes } from 'node:module';
 import test from 'node:test';
+import { URL as ExpoURL } from 'whatwg-url-minimum';
 
+const config = stripTypeScriptTypes(fs.readFileSync('src/api/config.ts', 'utf8'))
+  .replace(/^import .*;$/gm, '').replace(/\bexport /g, '');
 const source = stripTypeScriptTypes(fs.readFileSync('src/api/client.ts', 'utf8'))
   .replace(/^import .*;$/gm, '').replace(/^export \{.*;$/gm, '').replace(/\bexport /g, '');
 const errors = stripTypeScriptTypes(fs.readFileSync('src/api/error.ts', 'utf8')).replace(/\bexport /g, '');
 const settle = async () => { for (let i=0; i<30; i++) await Promise.resolve(); };
-function client(fetch, appInfo = async () => ({})) {
-  return new Function('fetch', 'getAppInfo', 'getOrCreateDeviceId', 'Platform', 'androidExperimentalRoutingEnabled', 'androidProfilePlatform', errors + source + '; return rawRequest;')(
-    fetch, appInfo, async () => 'fixture', {OS:'android'}, () => false, () => 'android');
+function client(fetch, appInfo = async () => ({}), baseUrl, URLImplementation = URL) {
+  return new Function('URL', 'process', 'fetch', 'getAppInfo', 'getOrCreateDeviceId', 'Platform', 'androidExperimentalRoutingEnabled', 'androidProfilePlatform', errors + config + source + '; return rawRequest;')(
+    URLImplementation, { env: { EXPO_PUBLIC_VEX_API_BASE_URL: baseUrl } }, fetch, appInfo, async () => 'fixture', {OS:'android'}, () => false, () => 'android');
 }
 
 test('a stalled GET has one total deadline rather than three full timeouts', async t => {
@@ -173,3 +176,23 @@ test('development diagnostics never echo the raw error response body', async t =
     else globalThis.__DEV__ = prior;
   }
 });
+
+for (const URLImplementation of [URL, ExpoURL]) {
+for (const baseUrl of ['relative/path', 'file:///private/fixture', 'https://user:fixture@example.invalid', 'https://example.invalid?route=other', 'https://example.invalid#fragment', 'http://[invalid']) {
+  test(`${URLImplementation === URL ? 'Node' : 'Expo'} URL: invalid API base fails before native setup or fetch: ${baseUrl}`, async () => {
+    let setupCalls = 0, requests = 0;
+    const raw = client(async () => { requests++; return { ok: true, text: async () => '[]' }; }, async () => { setupCalls++; return {}; }, baseUrl, URLImplementation);
+    await assert.rejects(raw('/v1/billing/plans'), error => error.code === 'invalid_api_base_url');
+    assert.equal(setupCalls, 0);
+    assert.equal(requests, 0);
+  });
+}
+
+test(`${URLImplementation === URL ? 'Node' : 'Expo'} URL: API base path and query parameters survive shared URL construction`, async () => {
+  const requests = [];
+  const raw = client(async url => { requests.push(url); return { ok: true, text: async () => '[]' }; }, undefined, 'http://127.0.0.1:45678/gateway///', URLImplementation);
+  assert.equal(await raw('/v1/devices?limit=24&cursor=a%2Fb'), '[]');
+  assert.deepEqual(requests, ['http://127.0.0.1:45678/gateway/v1/devices?limit=24&cursor=a%2Fb']);
+});
+
+}

@@ -16,6 +16,12 @@ final class VEXAPIResponseContractTests: XCTestCase {
     func testErrorFieldsAreNarrowedIndependentlyWithoutEchoingStructuredBodies() async throws {
         try await APIContractScenarios.errorBodies()
     }
+    func testInvalidBaseURLFailsBeforeTransportAndWithoutOutageClassification() async throws {
+        try await APIContractScenarios.invalidBaseURLs()
+    }
+    func testConfiguredAPIBasePreservesDefaultsCustomOriginsAndPathPrefixes() async throws {
+        try await APIContractScenarios.baseURLConfiguration()
+    }
     func testMalformedMessageCannotDiscardMaintenanceCode() async throws {
         try await APIContractScenarios.maintenanceClassification()
     }

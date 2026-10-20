@@ -1,7 +1,9 @@
 import { Platform } from 'react-native';
 import { getAppInfo, getOrCreateDeviceId } from '@/native/appInfo';
 import { androidExperimentalRoutingEnabled, androidProfilePlatform } from '@/vpn/androidRoutingSafety';
+import { apiRequestUrl } from './config';
 import { ApiRequestError, isMaintenanceStatus, normalizeApiRequestError, readApiErrorPayload } from './error';
+export { trimTrailingSlash, vexApiBaseUrl } from './config';
 export { isMaintenanceStatus, isTechnicalWorksError, normalizeApiRequestError, technicalWorksMessage } from './error';
 
 export type RequestOptions = {
@@ -20,14 +22,13 @@ const getRequestRetryCount = 2;
 const requestRetryDelayMs = 600;
 const shouldLogApiRequests = typeof __DEV__ !== 'undefined' && __DEV__;
 
-export const vexApiBaseUrl = trimTrailingSlash(process.env.EXPO_PUBLIC_VEX_API_BASE_URL || 'https://vexguard.app');
-const apiRequestBaseUrl = vexApiBaseUrl;
 
 export async function jsonRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
   return JSON.parse(await rawRequest(path, options)) as T;
 }
 
 export async function rawRequest(path: string, options: RequestOptions = {}): Promise<string> {
+  const url = apiRequestUrl(path);
   const controller = new AbortController();
   const timeoutMs = options.timeout ?? requestTimeoutMs;
   const deadline = Date.now() + timeoutMs;
@@ -39,7 +40,7 @@ export async function rawRequest(path: string, options: RequestOptions = {}): Pr
     }, timeoutMs);
   });
   try {
-    return await Promise.race([requestWithinDeadline(path, options, controller.signal, deadline), expired]);
+    return await Promise.race([requestWithinDeadline(url, options, controller.signal, deadline), expired]);
   } catch (error) {
     throw normalizeApiRequestError(error);
   } finally {
@@ -53,7 +54,7 @@ function requireRequestTime(signal: AbortSignal, deadline: number): void {
   }
 }
 
-async function requestWithinDeadline(path: string, options: RequestOptions, signal: AbortSignal, deadline: number): Promise<string> {
+async function requestWithinDeadline(url: string, options: RequestOptions, signal: AbortSignal, deadline: number): Promise<string> {
   const method = options.method ?? 'GET';
   const maxAttempts = method === 'GET' ? Math.max(0, Math.min(getRequestRetryCount, options.retryCount ?? getRequestRetryCount)) + 1 : 1;
   let lastError: unknown;
@@ -61,7 +62,7 @@ async function requestWithinDeadline(path: string, options: RequestOptions, sign
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       requireRequestTime(signal, deadline);
-      return await rawRequestAttempt(path, options, method, signal, deadline);
+      return await rawRequestAttempt(url, options, method, signal, deadline);
     } catch (error) {
       lastError = error;
       if (signal.aborted || Date.now() >= deadline || attempt >= maxAttempts || !isRetryableRequestError(error)) {
@@ -81,7 +82,7 @@ async function requestWithinDeadline(path: string, options: RequestOptions, sign
   throw normalizeApiRequestError(lastError);
 }
 
-async function rawRequestAttempt(path: string, options: RequestOptions, method: string, signal: AbortSignal, deadline: number): Promise<string> {
+async function rawRequestAttempt(url: string, options: RequestOptions, method: string, signal: AbortSignal, deadline: number): Promise<string> {
   const headers: Record<string, string> = {
     Accept: 'application/json',
   };
@@ -114,10 +115,10 @@ async function rawRequestAttempt(path: string, options: RequestOptions, method: 
   try {
     let response;
     if (shouldLogApiRequests && !options.suppressErrorLog) {
-      logApiDebug(`API Request: [${init.method || 'GET'}] ${apiRequestBaseUrl}${path}`);
+      logApiDebug(`API Request: [${init.method || 'GET'}] ${url}`);
     }
     
-    response = await fetch(`${apiRequestBaseUrl}${path}`, { ...init, signal });
+    response = await fetch(url, { ...init, signal });
     requireRequestTime(signal, deadline);
     
     if (shouldLogApiRequests && !options.suppressErrorLog) {
@@ -199,10 +200,6 @@ export function parseApiError(text: string): string | null {
 
 
 
-export function trimTrailingSlash(value: string): string {
-  return value.replace(/\/+$/, '');
-}
-
 export function absolutizeUrl(value: string): string {
   if (!value) {
     return '';
@@ -211,9 +208,9 @@ export function absolutizeUrl(value: string): string {
     return value;
   }
   if (value.startsWith('/')) {
-    return `${vexApiBaseUrl}${value}`;
+    return apiRequestUrl(value);
   }
-  return `${vexApiBaseUrl}/${value}`;
+  return apiRequestUrl(`/${value}`);
 }
 
 export async function clientVersionHeaders(): Promise<Record<string, string>> {

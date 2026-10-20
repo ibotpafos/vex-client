@@ -1,8 +1,8 @@
 import type { AndroidUpdateDownload, AndroidUpdateInstallResult } from '@/native/vexVpn';
 import { validateManualUpdatePayloadForBaseUrl } from './updatePreflight';
 import type { AppUpdateCheckResult } from './types';
+import { validatedApiBaseUrl } from './config';
 
-const defaultTrustedUpdateBaseUrl = process.env.EXPO_PUBLIC_VEX_API_BASE_URL || 'https://vexguard.app';
 
 export type ManualUpdateInstallPlatform = 'android' | 'ios';
 
@@ -30,7 +30,7 @@ export async function installManualUpdate(
       checksumSha256: update.checksumSha256,
       downloadUrl: update.downloadUrl,
       signatureUrl: update.signatureUrl,
-    }, defaultTrustedUpdateBaseUrl);
+    }, validatedApiBaseUrl().toString());
     if (!preflight.ok) {
       throw new Error(preflight.error || 'Обновление не прошло проверку целостности.');
     }

@@ -156,7 +156,7 @@ def build(request, evidence):
         for entry in app.rglob("*"):
             require(entry.resolve().is_relative_to(app.resolve()), "Extracted link escapes the application")
         run("/usr/bin/codesign", "--verify", "--all-architectures", "--deep", "--strict", str(app))
-        run("/usr/bin/codesign", "-d", "--extract-certificates", str(work / "signer-"), str(app))
+        run("/usr/bin/codesign", "-d", "--extract-certificates=" + str(work / "signer-"), str(app))
         require(hash_file(work / "signer-0") == request["signer_sha256"], "Application signer differs from the approved release pin")
         requirement = cdhash_requirement(app)
         root = work / "root/Applications"

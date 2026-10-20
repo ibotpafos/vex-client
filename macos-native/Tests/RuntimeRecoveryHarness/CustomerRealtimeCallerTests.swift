@@ -13,7 +13,7 @@ final class RealtimeCallerState {
     var customerRealtimeConnected = false
     var customerNotificationPolicy = CustomerNotificationPolicy()
     let customerNotifications = RealtimeNotifications()
-    let api = RealtimeAPI()
+    var api = RealtimeAPI()
     var customerRealtimeService: CustomerRealtimeService?
     var customerFallbackTask: Task<Void, Never>?
     static let customerFallbackIntervalNanoseconds: UInt64 = 60_000_000_000
@@ -62,7 +62,7 @@ final class RealtimeCallerState {
     }
 }
 
-struct RealtimeAPI { let baseURL = URL(string: "https://api.example.test")! }
+struct RealtimeAPI { var baseURL = URL(string: "https://api.example.test") }
 struct RealtimeSessionStore {
     func clearSession() throws {}
     func hasStoredNativeSession() -> Bool { false }
@@ -93,6 +93,18 @@ final class CustomerRealtimeService {
 }
 
 final class CustomerRealtimeCallerTests: XCTestCase {
+    @MainActor
+    func testInvalidAPIConfigurationDoesNotCreateRealtimeStream() {
+        for baseURL in [nil, URL(string: "file:///private/fixture"), URL(string: "https://example.invalid?other")] {
+            let state = RealtimeCallerState()
+            defer { state.stop() }
+            state.api.baseURL = baseURL
+            state.start()
+            XCTAssertNil(state.customerRealtimeService)
+            XCTAssertFalse(state.customerRealtimeConnected)
+        }
+    }
+
     @MainActor
     func testCurrentStreamRefreshesAndDeduplicatesNotices() async throws {
         let state = RealtimeCallerState()

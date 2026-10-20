@@ -21,7 +21,7 @@ if [[ "$(uname -s)" == Darwin && "$root_dir" == /Volumes/D/* ]]; then
                   --security-path "$swift_cache/security" --scratch-path "$harness_dir/.build" --manifest-cache local)
 fi
 cp "$native_dir/Models/VEXModels.swift" "$source_dir/"
-for name in VPNProfileCache VPNProfileCacheIdentity VPNAccountScope AppSensitiveFileStore NativeAwgBoolean VEXAPITransport VEXAPIConfiguration; do
+for name in VPNProfileCache VPNProfileCacheIdentity VPNAccountScope AppSensitiveFileStore NativeAwgBoolean VEXAPITransport VEXAPIConfiguration VEXAPIError; do
     cp "$native_dir/Services/$name.swift" "$source_dir/"
 done
 {

@@ -8,10 +8,7 @@ trap 'rm -rf "$harness_dir"' EXIT
 mkdir -p "$harness_dir/Sources/VEXAPITransportHarness" "$harness_dir/Tests/VEXAPITransportHarnessTests"
 cp "$root_dir/macos-native/Sources/VEXNativeMac/Services/VEXAPITransport.swift" "$harness_dir/Sources/VEXAPITransportHarness/"
 cp "$root_dir/macos-native/Tests/VEXNativeMacTests/VEXAPITransportTests.swift" "$harness_dir/Tests/VEXAPITransportHarnessTests/"
-{
-    printf 'import Foundation\n#if canImport(FoundationNetworking)\nimport FoundationNetworking\n#endif\n'
-    awk '/^enum VEXAPIError:/ { copying = 1 } copying { print }' "$root_dir/macos-native/Sources/VEXNativeMac/Services/VEXAPIClient.swift"
-} > "$harness_dir/Sources/VEXAPITransportHarness/VEXAPIError.swift"
+cp "$root_dir/macos-native/Sources/VEXNativeMac/Services/VEXAPIError.swift" "$harness_dir/Sources/VEXAPITransportHarness/"
 
 cat > "$harness_dir/Package.swift" <<'SWIFT'
 // swift-tools-version: 6.2

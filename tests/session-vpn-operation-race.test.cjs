@@ -125,6 +125,59 @@ function connectionHarness(stage, platform = 'android') {
   return { state, session, gate, reached, mountedRef, connect: bind(flow.connectCurrentVpn, context) };
 }
 
+for (const cancel of [false, true]) {
+  test(`a policy arriving during the first native attempt preserves relay recovery; cancel=${cancel}`, async () => {
+    let current = true;
+    let prepared = false;
+    const nativeConfigs = [];
+    const reports = [];
+    const relayProfile = fallback.profileWithEndpoint(profile, 'relay.fixture:443');
+    assert.ok(relayProfile);
+    const direct = { id: 'direct', pathKind: 'direct' };
+    const relay = { id: 'relay', pathKind: 'relay' };
+    const context = {
+      Date, Error, SessionOperationSupersededError,
+      requireCurrentSession: () => { if (!current) throw new SessionOperationSupersededError(); },
+      isCurrentSessionOperation: () => current, session: { accessToken: 'token-A', user: { id: 'A' } },
+      Platform: { OS: 'android' }, antiLeakEnabled: true,
+      prepareClientNetworkDiagnostics: async () => {}, withTimeout: operation => operation,
+      vpnProfileAddressMatchesDevice: () => true, androidVpnProfileWithinBinderBudget: () => true,
+      getVpnApplicationSelection: async () => ({ mode: 'all', packageNames: [] }),
+      dynamicRouteRuntime: {
+        prepare: async () => {},
+        attempts: () => prepared ? [{ profile, candidate: direct }, { profile: relayProfile, candidate: relay }] : [{ profile }],
+        clearActive: () => {}, recordSuccess: () => {}, recordFailure: () => {},
+      },
+      ...fallback, routeTransport: candidate => candidate.pathKind === 'relay' ? 'awg3_relay' : 'awg3_direct',
+      getVpnStatus: async () => ({ state: 'disconnected' }),
+      connectVpn: async config => {
+        nativeConfigs.push(config);
+        if (nativeConfigs.length === 1) {
+          prepared = true;
+          if (cancel) current = false;
+          throw new Error('VPN handshake timed out');
+        }
+        return { state: 'connected' };
+      },
+      connectAttemptTimeoutMs: 100,
+      waitForVerifiedVpnConnection: async value => value,
+      submitClientDiagnostics: async (_token, report) => { reports.push(report); }, withLastSuccessfulEndpoint: value => value,
+    };
+    const pending = bind(flow.connectProfileWithEndpointFallback, context)(profile);
+    if (cancel) {
+      await assert.rejects(pending, error => error.code === 'SESSION_OPERATION_SUPERSEDED');
+      assert.equal(nativeConfigs.length, 1);
+    } else {
+      const result = await pending;
+      assert.equal(nativeConfigs.length, 2, 'Use the newly prepared relay without retrying the failed direct endpoint');
+      assert.equal(nativeConfigs[1], relayProfile.config);
+      assert.equal(result.profile, relayProfile);
+      assert.equal(reports[0].connectionEvent, 'fallback_succeeded');
+      assert.equal(reports[0].transportFrom, undefined, 'The original profile transport has no policy attribution');
+    }
+  });
+}
+
 for (const stage of ['profile', 'diagnostics', 'applications', 'route', 'status', 'native', 'verification', 'fresh-profile', 'persist']) {
   test(`explicit cancellation during ${stage} fences late native work and publication in the same login`, async () => {
     const h = connectionHarness(stage);

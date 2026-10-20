@@ -55,6 +55,12 @@ function violations(value, packageValue = packageConfig) {
     if (/npm run (?:ota:|.*:publish|.*:deploy-release)|package-native-windows\.ps1|publish-native-windows\.ps1|-allowProvisioningUpdates/.test(commands)) failures.push(`no signing/publication: ${lane}`);
     if (lane === 'android' && /(?:^|\n)\s*sdkmanager\s/.test(commands)) failures.push('explicit Android SDK tool path');
     if (['shared', 'android'].includes(lane) && !(job.steps ?? []).some(step => step.uses?.startsWith('actions/setup-go@') && step.with?.['go-version'] === '1.26.9')) failures.push(`pinned patched Go toolchain: ${lane}`);
+    if (lane === 'android') {
+      const sdkIndex = job.steps.findIndex(step => step.name === 'Install locked Android build components');
+      const buildIndex = job.steps.findIndex(step => step.run?.includes('npm run android:build:debug:fast'));
+      if (sdkIndex < 0 || buildIndex < 0 || sdkIndex >= buildIndex
+        || job.steps[sdkIndex].run?.trim() !== 'bash scripts/install_android_sdk_components.sh') failures.push('shared fail-closed Android SDK setup before build');
+    }
     if (lane === 'macos') {
       if (job.env?.DEVELOPER_DIR !== '/Applications/Xcode_26.6.app/Contents/Developer') failures.push('supported pinned Xcode toolchain');
       if (!(job.steps ?? []).some(step => step.uses === 'actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16'
@@ -73,7 +79,7 @@ function violations(value, packageValue = packageConfig) {
     }
     const required = {
       shared: ['npm run check', 'npm run build:web', 'actionlint', 'go test -race -timeout 45s ./...', 'govulncheck@v1.8.0'],
-      android: ['sdkmanager', ':app:testDebugUnitTest', 'npm run android:build:debug:fast'],
+      android: ['bash scripts/install_android_sdk_components.sh', ':app:testDebugUnitTest', 'npm run android:build:debug:fast'],
       macos: ['swift build', '--target VEXNativeMac', 'swift test'],
     }[lane];
     for (const command of required) if (!commands.includes(command)) failures.push(`build/test command: ${lane}/${command}`);
@@ -98,6 +104,8 @@ if (failures.length) {
     value => { value.jobs.macos.steps.find(step => step.name === 'Build the canonical iOS simulator app without signing').run = 'bash scripts/test_ios_module_compile.sh'; },
     value => { value.jobs.macos.steps.find(step => step.name === 'Build the canonical iOS simulator app without signing').run += ' --regenerate-lock'; },
     value => { value.jobs.android.steps.find(step => step.name === 'Install locked Android build components').run = 'sdkmanager \"platform-tools\"'; },
+    value => { value.jobs.android.steps.find(step => step.name === 'Install locked Android build components').run += ' || true'; },
+    value => { const index = value.jobs.android.steps.findIndex(step => step.name === 'Install locked Android build components'); value.jobs.android.steps.push(value.jobs.android.steps.splice(index, 1)[0]); },
     value => { value.jobs.android.steps.find(step => step.uses?.startsWith('actions/setup-go@')).with['go-version'] = '1.24.x'; },
     value => { value.permissions.contents = 'write'; },
     value => { value.jobs.android.env = { SIGNING_KEY: '${{ secrets.PRODUCTION_KEY }}' }; },

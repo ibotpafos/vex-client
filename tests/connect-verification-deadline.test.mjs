@@ -4,6 +4,35 @@ import { waitForVerifiedVpnConnection } from '../src/vpn/connectVerification.ts'
 
 const pending = { state: 'connected', rxBytes: 0, txBytes: 0, verified: false };
 
+test('an already canceled operation cannot accept an initial verified status', async () => {
+  const canceled = new Error('operation superseded');
+  await assert.rejects(waitForVerifiedVpnConnection({ ...pending, verified: true }, async () => pending, {
+    assertCurrent: () => { throw canceled; },
+  }), error => error === canceled);
+});
+
+test('cancellation during a poll delay prevents the next native read', async () => {
+  let current = true, reads = 0;
+  const canceled = new Error('operation superseded');
+  await assert.rejects(waitForVerifiedVpnConnection(pending, async () => {
+    reads++;
+    return { ...pending, verified: reads > 1 };
+  }, {
+    assertCurrent: () => { if (!current) throw canceled; },
+    wait: async () => { current = false; },
+  }), error => error === canceled);
+  assert.equal(reads, 1);
+});
+
+test('a native status returned after cancellation cannot publish a fresh handshake', async () => {
+  let current = true;
+  const canceled = new Error('operation superseded');
+  await assert.rejects(waitForVerifiedVpnConnection(pending, async () => {
+    current = false;
+    return { ...pending, verified: true };
+  }, { assertCurrent: () => { if (!current) throw canceled; } }), error => error === canceled);
+});
+
 for (const state of ['connecting', 'verifying']) {
   test(`an initial ${state} status without verification fields cannot return early`, async () => {
     let reads = 0;

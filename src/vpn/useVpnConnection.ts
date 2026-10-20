@@ -395,18 +395,19 @@ export function useVpnConnection() {
 
   useEffect(() => {
     const token = session?.accessToken;
-    if (Platform.OS !== 'android' || !hasVpnAccess || !token || !activeProfileDeviceId || vpnStatus.state !== 'disconnected') return;
+    const userId = session?.user.id;
+    if (Platform.OS !== 'android' || !hasVpnAccess || !token || !userId || !activeProfileDeviceId || vpnStatus.state !== 'disconnected') return;
     let stopped = false;
     const prepare = () => {
       if (stopped || AppState.currentState !== 'active' || vpnOperationInFlightRef.current || !isCurrentSessionOperation()) return;
-      // Prepare while idle. Connect joins this bounded work, or reuses its
-      // receipt, so a pre-VPN observation is never captured through the tunnel.
+      void dynamicRouteRuntime.prepare(userId, token, isCurrentSessionOperation).catch(() => undefined);
+      // Only the underlay observation needs to finish before the tunnel starts.
       void prepareClientNetworkDiagnostics(token, activeProfileDeviceId, isCurrentSessionOperation).catch(() => undefined);
     };
     prepare();
     const subscription = AppState.addEventListener('change', (state) => { if (state === 'active') prepare(); });
     return () => { stopped = true; subscription.remove(); };
-  }, [activeProfileDeviceId, hasVpnAccess, isCurrentSessionOperation, session?.accessToken, vpnStatus.state]);
+  }, [activeProfileDeviceId, hasVpnAccess, isCurrentSessionOperation, session?.accessToken, session?.user.id, vpnStatus.state]);
 
   const activeDevice = activeProfile?.device
     ? (devicesData ?? persistedDevices)?.find((device) => device.id === activeProfile.device?.id) ?? activeProfile.device

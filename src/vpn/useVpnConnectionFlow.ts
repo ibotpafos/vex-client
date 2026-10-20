@@ -124,7 +124,7 @@ export function useVpnConnectionFlow({
     const applicationSelection = await getVpnApplicationSelection();
     requireCurrentOperation();
     if (Platform.OS === 'android' && session?.user.id && session.accessToken) {
-      await dynamicRouteRuntime.prepare(session.user.id, session.accessToken);
+      await dynamicRouteRuntime.prepare(session.user.id, session.accessToken, isCurrentSessionOperation);
       requireCurrentOperation();
     }
     const attempts: DynamicRouteAttempt[] = Platform.OS === 'android'

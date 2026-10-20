@@ -4,7 +4,7 @@
 // openapi.yaml. DO NOT EDIT BY HAND — regenerate from the VPN repo:
 //   python3 scripts/generate_openapi_schemas.py --client
 // Every `Contract` alias asserts the spec shape stays assignable to the
-// hand-written DTO in ./dto; a violation fails `npm run typecheck` here.
+// client DTO projection in ./dto; a violation fails `npm run typecheck` here.
 
 import type {
   AcknowledgeStagedDevicePSKProfileResultDTO,
@@ -81,7 +81,7 @@ export interface AppUpdateCheckResponseDTOSpec {
   rolloutPercent?: number
   checkedAt: string
 }
-type _AppUpdateCheckResponseDTOWidened = (Omit<AppUpdateCheckResponseDTO, "delivery"> & { "delivery"?: string })
+type _AppUpdateCheckResponseDTOWidened = { [Key in keyof AppUpdateCheckResponseDTO]: Key extends "delivery" ? string : AppUpdateCheckResponseDTO[Key] }
 type _AppUpdateCheckResponseDTOCheck = AppUpdateCheckResponseDTOSpec extends _AppUpdateCheckResponseDTOWidened ? true : false
 type _AppUpdateCheckResponseDTOContract = VexApiSpecExpect<_AppUpdateCheckResponseDTOCheck>
 
@@ -153,7 +153,7 @@ export interface DeviceDTOSpec {
   last_node_change_at?: null | string
   endpoint?: string
   latency_ms?: null | number
-  saved_profiles?: { node_id: string } & { assigned_ipv4: string } & { status: string } & { profile_version: number }[]
+  saved_profiles?: ({ node_id: string } & { assigned_ipv4: string } & { status: string } & { profile_version: number })[]
   created_at: string
   revoked_at?: null | string
 }
@@ -307,9 +307,7 @@ export interface NativeVPNProfileDTOSpec {
   routing_policy_version?: string
   authorization?: null | { algorithm: string } & { key_id: string } & { payload_base64: string } & { signature_base64: string }
 }
-type _NativeVPNProfileDTOWidened = (Omit<NativeVPNProfileDTO, "authorization"> & { authorization?: (Omit<NonNullable<NativeVPNProfileDTO["authorization"]>, "algorithm"> & { "algorithm": string }) | null })
-type _NativeVPNProfileDTOCheck = NativeVPNProfileDTOSpec extends _NativeVPNProfileDTOWidened ? true : false
-type _NativeVPNProfileDTOContract = VexApiSpecExpect<_NativeVPNProfileDTOCheck>
+type _NativeVPNProfileDTOContract = VexApiSpecExpect<NativeVPNProfileDTOSpec extends NativeVPNProfileDTO ? true : false>
 
 export interface PortalSessionDTOSpec {
   id: string

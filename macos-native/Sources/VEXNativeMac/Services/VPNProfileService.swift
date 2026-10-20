@@ -134,8 +134,8 @@ struct VPNProfileService {
             try identityStore.confirmDeviceScope(accountUserId: accountUserId, expectedInstallationId: resolvedScope.installationId)
         }
 
-        var effectiveRoutingMode = routingMode
-        var effectiveBypassRegion = bypassRegion
+        let effectiveRoutingMode = routingMode
+        let effectiveBypassRegion = bypassRegion
         let canRevalidate = cached.map {
             VPNProfileCacheIdentity.canReuse($0, accountUserId: accountUserId, installationId: externalDeviceId,
                 keyPair: keyPair, locationId: normalizedLocationId, routingMode: routingMode, currentDevice: device)
@@ -171,58 +171,10 @@ struct VPNProfileService {
                 try ensureProfileRequestCurrent(shouldPersist)
                 return cached.tunnel
             }
-            if routingMode == .fullTunnel, error.isProfileProvisioningUnavailable {
-                effectiveRoutingMode = .allExceptRu
-                effectiveBypassRegion = VEXAppInfo.defaultBypassRegion
-                managedProfile = try await api.managedVpnProfile(
-                    accessToken: accessToken,
-                    deviceId: device.id,
-                    locationId: normalizedLocationId,
-                    routingMode: .allExceptRu,
-                    bypassRegion: effectiveBypassRegion,
-                    knownVersion: nil
-                )
-                return try await persistManagedProfile(
-                    managedProfile,
-                    cached: cached,
-                    accountUserId: accountUserId,
-                    device: device,
-                    keyPair: keyPair,
-                    locationId: normalizedLocationId,
-                    routingMode: effectiveRoutingMode,
-                    bypassRegion: effectiveBypassRegion,
-                    writeHelperConfig: writeHelperConfig,
-                    shouldPersist: shouldPersist
-                )
-            }
-            guard routingMode != .fullTunnel, error.isTimeout else {
-                throw error
-            }
-            effectiveRoutingMode = .fullTunnel
-            effectiveBypassRegion = nil
-            if !forceRefresh,
-               let fallbackCached = cache.load(locationId: normalizedLocationId, routingMode: .fullTunnel, accountUserId: accountUserId),
-               VPNProfileCacheIdentity.canReuse(fallbackCached, accountUserId: accountUserId, installationId: externalDeviceId,
-                   keyPair: keyPair, locationId: normalizedLocationId, routingMode: .fullTunnel, currentDevice: device),
-               !Self.cachedProfileNeedsRefresh(
-                    fallbackCached,
-                    requestedLocationId: normalizedLocationId,
-                    requestedRoutingMode: .fullTunnel
-               ) {
-                if writeHelperConfig {
-                    try await writeSanitizedHelperConfig(fallbackCached.config, shouldPersist: shouldPersist)
-                }
-                try ensureProfileRequestCurrent(shouldPersist)
-                return fallbackCached.tunnel
-            }
-            managedProfile = try await api.managedVpnProfile(
-                accessToken: accessToken,
-                deviceId: device.id,
-                locationId: normalizedLocationId,
-                routingMode: .fullTunnel,
-                bypassRegion: nil,
-                knownVersion: nil
-            )
+            // A provisioning error cannot authorize another routing policy.
+            // Only the identity-qualified cache for this exact mode may be
+            // reused above; otherwise surface the original failure.
+            throw error
         }
 
         try ensureProfileRequestCurrent(shouldPersist)

@@ -216,7 +216,6 @@ jobs:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
       VEX_NATIVE_VERSION: ${{ needs.prepare.outputs.version }}
       VEX_NATIVE_BUILD: ${{ needs.prepare.outputs.build }}
-      VEX_NATIVE_CHANGELOG: Automated verified native macOS release
       VEX_NATIVE_PRODUCTION: "1"
       VEX_NATIVE_SIGNING_MODE: self-signed
       VEX_NATIVE_REQUIRE_DEVELOPER_ID: "0"
@@ -280,6 +279,8 @@ jobs:
           VEX_CODESIGN_TIMESTAMP: none
         run: |-
           set -euo pipefail
+          VEX_NATIVE_CHANGELOG="$(python3 -c 'import json; print(json.load(open("release-plan.json"))["changelog"])')"
+          export VEX_NATIVE_CHANGELOG
           swift test --package-path macos-native
           bash scripts/build_native_macos_internal_release.sh
           bash scripts/prepare_native_macos_deploy_bundle.sh

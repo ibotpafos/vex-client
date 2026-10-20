@@ -53,6 +53,10 @@ sparkle_key="$(plist_value "${APP_PATH}/Contents/Info.plist" SUPublicEDKey)"
 if [[ -z "${sparkle_key}" || "${sparkle_key}" == "VEX_SPARKLE_PUBLIC_ED_KEY_NOT_SET" ]]; then
   fail "SUPublicEDKey is missing or placeholder"
 fi
+if [[ "${PRODUCTION}" == "1" ]]; then
+  stable_sparkle_key="$(cat "${ROOT_DIR}/macos-native/sparkle-public-ed-key.txt")"
+  [[ "${sparkle_key}" == "${stable_sparkle_key}" ]] || fail "SUPublicEDKey differs from the reviewed stable key; automatic update compatibility is not established"
+fi
 
 sparkle_feed="$(plist_value "${APP_PATH}/Contents/Info.plist" SUFeedURL)"
 [[ "${sparkle_feed}" == https://* ]] || fail "SUFeedURL must be https: ${sparkle_feed}"

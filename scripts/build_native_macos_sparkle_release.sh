@@ -272,11 +272,8 @@ ZIP_PATH="${ARCHIVES_DIR}/${ZIP_NAME}"
 ditto -c -k --sequesterRsrc --keepParent "${APP_DIR}" "${ZIP_PATH}"
 
 RELEASE_NOTES="${ARCHIVES_DIR}/${APP_NAME}-${APP_VERSION}-${APP_BUILD}.md"
-cat >"${RELEASE_NOTES}" <<NOTES
-# VEX Native ${APP_VERSION}
-
-Native macOS update delivered through Sparkle 2.
-NOTES
+printf '# VEX Native %s\n\n%s\n' "${APP_VERSION}" \
+  "${VEX_NATIVE_CHANGELOG:-Native macOS update delivered through Sparkle 2.}" > "${RELEASE_NOTES}"
 
 APPCAST_ARGS=(
   "--download-url-prefix" "${DOWNLOAD_URL_PREFIX%/}/"

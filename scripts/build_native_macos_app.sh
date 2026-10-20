@@ -11,8 +11,10 @@ ICONSET_DIR="${BUILD_DIR}/VEXNative.iconset"
 ICNS_PATH="${APP_DIR}/Contents/Resources/VEXNative.icns"
 APP_VERSION="${VEX_NATIVE_VERSION:-0.1.0}"
 APP_BUILD="${VEX_NATIVE_BUILD:-1}"
+PRODUCTION_BUILD="${VEX_NATIVE_PRODUCTION:-0}"
 SPARKLE_FEED_URL="${VEX_SPARKLE_FEED_URL:-https://vexguard.app/downloads/native-macos/appcast.xml}"
-SPARKLE_PUBLIC_ED_KEY="${VEX_SPARKLE_PUBLIC_ED_KEY:-cwILAPfDRcrjrAWmD/VrMzIh983R2hncvI44tfEZauI=}"
+PINNED_SPARKLE_PUBLIC_ED_KEY="$(cat "${PACKAGE_DIR}/sparkle-public-ed-key.txt")"
+SPARKLE_PUBLIC_ED_KEY="${VEX_SPARKLE_PUBLIC_ED_KEY:-${PINNED_SPARKLE_PUBLIC_ED_KEY}}"
 CODESIGN_IDENTITY="${VEX_CODESIGN_IDENTITY:--}"
 CODESIGN_KEYCHAIN="${VEX_CODESIGN_KEYCHAIN:-}"
 CODESIGN_TIMESTAMP="${VEX_CODESIGN_TIMESTAMP:-automatic}"
@@ -28,6 +30,11 @@ if [[ -f "${ROOT_DIR}/.env.sparkle.local" ]]; then
   SPARKLE_FEED_URL="${VEX_SPARKLE_FEED_URL:-${SPARKLE_FEED_URL}}"
   SPARKLE_PUBLIC_ED_KEY="${VEX_SPARKLE_PUBLIC_ED_KEY:-${SPARKLE_PUBLIC_ED_KEY}}"
   CODESIGN_IDENTITY="${VEX_CODESIGN_IDENTITY:-${CODESIGN_IDENTITY}}"
+fi
+
+if [[ ( "${PRODUCTION_BUILD}" == "1" || "${VEX_NATIVE_PRODUCTION:-0}" == "1" ) && "${SPARKLE_PUBLIC_ED_KEY}" != "${PINNED_SPARKLE_PUBLIC_ED_KEY}" ]]; then
+  echo "Production Sparkle public key differs from the reviewed stable key; key migration requires a separate release plan." >&2
+  exit 2
 fi
 
 if [[ "${CODESIGN_IDENTITY}" == "-" ]]; then

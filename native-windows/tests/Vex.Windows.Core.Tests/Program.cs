@@ -307,7 +307,7 @@ var tests = new (string Name, Action Run)[]
 
 tests = [.. tests, .. VpnNamedPipeTransportTests.Cases, .. VpnRuntimeLifetimeTests.All, .. VpnRuntimeRecoveryTests.All,
     .. VpnEndpointAddressCacheTests.All, .. VpnAuthorizationDeadlineTests.All, .. VpnControlPlaneAddressCacheTests.All,
-    .. NetworkSafetyControllerRecoveryTests.All];
+    .. NetworkSafetyControllerRecoveryTests.All, .. VexApiConfigurationTests.All];
 
 var failures = new List<string>();
 foreach (var test in tests.Concat(RuntimeParityTests.All))

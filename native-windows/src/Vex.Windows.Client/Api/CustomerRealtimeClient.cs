@@ -221,6 +221,7 @@ public sealed class CustomerRealtimeClient : IAsyncDisposable
 {
     public static readonly TimeSpan LivenessDeadline = TimeSpan.FromSeconds(90);
     private readonly HttpClient _httpClient;
+    private readonly Uri _apiBaseUri;
     private readonly TimeSpan _livenessTimeout;
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
     private CancellationTokenSource? _streamLifetime;
@@ -231,6 +232,7 @@ public sealed class CustomerRealtimeClient : IAsyncDisposable
     public CustomerRealtimeClient(HttpClient httpClient, TimeSpan? livenessTimeout = null)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
+        _apiBaseUri = VexApiConfiguration.Require(httpClient.BaseAddress, nameof(httpClient));
         _httpClient = httpClient;
         _livenessTimeout = livenessTimeout ?? LivenessDeadline;
         if (_livenessTimeout <= TimeSpan.Zero || _livenessTimeout.TotalMilliseconds > uint.MaxValue - 1)
@@ -386,7 +388,7 @@ public sealed class CustomerRealtimeClient : IAsyncDisposable
         var cancellationToken = liveness.Token;
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
-            "/v1/events");
+            VexApiConfiguration.Endpoint(_apiBaseUri, "/v1/events"));
         request.Headers.Accept.Add(
             new MediaTypeWithQualityHeaderValue("text/event-stream"));
         request.Headers.Authorization =

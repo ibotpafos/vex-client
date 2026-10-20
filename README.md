@@ -101,6 +101,16 @@ alongside the transport scenarios. Its owned HTTP fixture uses bounded,
 verified termination rather than an unbounded process wait. Mobile guards are
 also exercised with Expo's installed WHATWG URL implementation.
 
+Windows HTTP, realtime and PKCE clients reuse `VexApiConfiguration`. Windows
+retains HTTPS for remote origins and HTTP only for loopback; custom path prefixes
+(including escaped segments) apply consistently to each client. Invalid bases
+raise an `ArgumentException` with the fixed `invalid_api_base_url` code before
+HTTP, native auth or PKCE state/device access. The release origin stays pinned;
+`VEX_API_BASE_URL` remains a debug-only override. Missing/empty debug values use
+the shared production default. Portable .NET tests compile the real client/auth
+sources and use in-memory HTTP handlers; WinUI, Windows services and real tunnel
+acceptance still require Windows.
+
 API GET retries share one total deadline, including body reads and server
 cooldowns. Writes remain a single attempt. macOS API requests return HTTP
 redirects as failures to the API consumer, preserving the original request.

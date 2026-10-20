@@ -4,6 +4,35 @@ import { waitForVerifiedVpnConnection } from '../src/vpn/connectVerification.ts'
 
 const pending = { state: 'connected', rxBytes: 0, txBytes: 0, verified: false };
 
+test('an already canceled operation cannot accept an initial verified status', async () => {
+  const canceled = new Error('operation superseded');
+  await assert.rejects(waitForVerifiedVpnConnection({ ...pending, verified: true }, async () => pending, {
+    assertCurrent: () => { throw canceled; },
+  }), error => error === canceled);
+});
+
+test('cancellation during a poll delay prevents the next native read', async () => {
+  let current = true, reads = 0;
+  const canceled = new Error('operation superseded');
+  await assert.rejects(waitForVerifiedVpnConnection(pending, async () => {
+    reads++;
+    return { ...pending, verified: reads > 1 };
+  }, {
+    assertCurrent: () => { if (!current) throw canceled; },
+    wait: async () => { current = false; },
+  }), error => error === canceled);
+  assert.equal(reads, 1);
+});
+
+test('a native status returned after cancellation cannot publish a fresh handshake', async () => {
+  let current = true;
+  const canceled = new Error('operation superseded');
+  await assert.rejects(waitForVerifiedVpnConnection(pending, async () => {
+    current = false;
+    return { ...pending, verified: true };
+  }, { assertCurrent: () => { if (!current) throw canceled; } }), error => error === canceled);
+});
+
 for (const state of ['connecting', 'verifying']) {
   test(`an initial ${state} status without verification fields cannot return early`, async () => {
     let reads = 0;
@@ -108,4 +137,53 @@ test('a current handshake within the deadline succeeds', async () => {
     pollMs: 0, timeoutMs: 1000,
   });
   assert.equal(status.verified, true);
+});
+
+for (const timeoutMs of [10_000, 15_000]) {
+  test(`default polling uses the ${timeoutMs}ms deadline for a delayed fresh handshake`, async () => {
+    let now = 0;
+    let reads = 0;
+    const freshAt = timeoutMs - 1000;
+    const result = await waitForVerifiedVpnConnection(pending, async () => {
+      reads++;
+      return { ...pending, verified: now >= freshAt, latestHandshakeEpochMillis: now };
+    }, {
+      timeoutMs,
+      minimumHandshakeEpochMillis: freshAt,
+      now: () => now,
+      wait: async (delayMs) => { now += delayMs; },
+    });
+    assert.equal(result.verified, true);
+    assert.equal(now, freshAt);
+    assert.ok(reads > 20, 'the old implicit attempt cap must not preempt the deadline');
+  });
+}
+
+test('an unresponsive peer exhausts the deadline without accepting a stale handshake', async () => {
+  let now = 0;
+  await assert.rejects(waitForVerifiedVpnConnection(pending, async () => ({
+    ...pending, verified: true, latestHandshakeEpochMillis: 1000,
+  }), {
+    timeoutMs: 10_000,
+    minimumHandshakeEpochMillis: 2000,
+    now: () => now,
+    wait: async (delayMs) => { now += delayMs; },
+  }), /VPN handshake timed out/);
+  assert.equal(now, 10_000);
+});
+
+test('an explicit attempt limit remains a caller-controlled bound', async () => {
+  let now = 0;
+  let reads = 0;
+  await assert.rejects(waitForVerifiedVpnConnection(pending, async () => {
+    reads++;
+    return pending;
+  }, {
+    attempts: 2,
+    timeoutMs: 10_000,
+    now: () => now,
+    wait: async (delayMs) => { now += delayMs; },
+  }), /VPN handshake timed out/);
+  assert.equal(reads, 2);
+  assert.equal(now, 250);
 });

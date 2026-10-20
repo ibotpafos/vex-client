@@ -8,9 +8,9 @@ type HandshakeVerificationOptions = {
   timeoutMs?: number;
   now?: () => number;
   wait?: (delayMs: number) => Promise<void>;
+  assertCurrent?: () => void;
 };
 
-const defaultHandshakeAttempts = 20;
 const defaultHandshakePollMs = 250;
 
 export async function waitForVerifiedVpnConnection(
@@ -18,6 +18,7 @@ export async function waitForVerifiedVpnConnection(
   readStatus: () => Promise<VpnStatus>,
   options: HandshakeVerificationOptions = {},
 ): Promise<VpnStatus> {
+  options.assertCurrent?.();
   if (initialStatus.state !== 'connected' && initialStatus.state !== 'connecting' && initialStatus.state !== 'verifying') {
     throw new Error('VPN backend did not enter the connected state.');
   }
@@ -25,7 +26,9 @@ export async function waitForVerifiedVpnConnection(
     return initialStatus;
   }
 
-  const attempts = Math.max(1, options.attempts ?? defaultHandshakeAttempts);
+  // A default attempt cap can expire before WireGuard's first retry (~5s).
+  // Use the elapsed-time deadline unless the caller explicitly limits reads.
+  const attempts = options.attempts === undefined ? Infinity : Math.max(1, options.attempts);
   const pollMs = Math.max(0, options.pollMs ?? defaultHandshakePollMs);
   const wait = options.wait ?? delay;
   const now = options.now ?? Date.now;
@@ -42,8 +45,11 @@ export async function waitForVerifiedVpnConnection(
   let latestStatus = initialStatus;
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    if (attempt > 0) await withDeadline(() => wait(pollMs), remaining());
+    options.assertCurrent?.();
+    if (attempt > 0) await withDeadline(() => wait(Math.min(pollMs, remaining())), remaining());
+    options.assertCurrent?.();
     latestStatus = await withDeadline(readStatus, remaining());
+    options.assertCurrent?.();
     remaining();
     // Native tunnel activation and status reads can return a pending snapshot.
     // Keep the same bounded budget until a connected handshake is verified.

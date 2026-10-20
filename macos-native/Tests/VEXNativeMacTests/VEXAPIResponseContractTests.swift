@@ -1,6 +1,10 @@
 import XCTest
 
 final class VEXAPIResponseContractTests: XCTestCase {
+    func testLocationCapabilitiesAndEligibilityStayConsistent() async throws {
+        try await APIContractScenarios.locationCapabilities()
+    }
+
     func testDefaultGETReturnsRedirectWithoutVisitingItsTarget() async throws {
         try await APIContractScenarios.redirects(method: "GET")
     }

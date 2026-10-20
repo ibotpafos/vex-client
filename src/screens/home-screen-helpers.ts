@@ -3,7 +3,7 @@ import { hasPaidEntitlement, type Entitlement, type VpnLocation } from '@/api/ve
 import type { VpnStatus } from '@/native/vexVpn';
 import type { VpnProfile } from '@/vpn/profile';
 import { errorMessage } from '@/utils/error';
-import { locationDisplayName, selectableVpnLocations } from '@/vpn/serverSelection';
+import { isSelectableLocation, locationDisplayName, selectableVpnLocations } from '@/vpn/serverSelection';
 
 export const animationKickDelayMs = 80;
 export const activeDeviceRefreshMs = 30_000;
@@ -144,13 +144,7 @@ export function serverLocationLabel(location: VpnLocation): string {
 }
 
 export function locationStatusText(location: VpnLocation): string {
-  if (location.status === 'healthy' && location.healthyNodes > 0) {
-    return 'Доступен';
-  }
-  if (location.healthyNodes > 0) {
-    return 'Доступен';
-  }
-  return 'Недоступен';
+  return isSelectableLocation(location) ? 'Доступен' : 'Недоступен';
 }
 
 export function formatBytes(value: number) {

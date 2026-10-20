@@ -115,6 +115,7 @@ function isVpnLocations(value: unknown): value is VpnLocation[] {
       && typeof item.priority === 'number'
       && typeof item.status === 'string'
       && typeof item.healthyNodes === 'number'
+      && (item.awg3Nodes === undefined || (Number.isSafeInteger(item.awg3Nodes) && item.awg3Nodes >= 0))
       && Array.isArray(item.capabilities)
       && item.capabilities.every((capability: unknown) => typeof capability === 'string'));
 }

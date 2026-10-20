@@ -22,7 +22,7 @@ public static class ServerCatalogTests
             Check(ServerCatalog.IsAvailable(available with { Status = status }), $"Status '{status}' should be available");
         foreach (var status in new[] { "offline", "disabled", "maintenance", "unavailable", "retired", "unknown" })
             Check(!ServerCatalog.IsAvailable(available with { Status = status }), $"Status '{status}' must not connect");
-        foreach (var availability in new[] { "MAINTENANCE", " unavailable ", "retired" })
+        foreach (var availability in new[] { "MAINTENANCE", " unavailable ", "retired", "hidden", "unknown", "", "  " })
             Check(!ServerCatalog.IsAvailable(available with { Availability = availability }), $"Availability '{availability}' must not connect");
         Check(!ServerCatalog.IsAvailable(available with { HealthyNodes = 0 }), "Zero healthy nodes is unavailable");
         Check(!ServerCatalog.IsAvailable(available with { HealthyNodes = -1 }), "Negative healthy nodes is unavailable");

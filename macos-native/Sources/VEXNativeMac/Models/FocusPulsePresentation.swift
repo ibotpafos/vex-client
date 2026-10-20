@@ -89,10 +89,7 @@ enum FocusPulsePresentation {
         let healthyStatuses = Set(["active", "online", "healthy"])
         let healthyCount = locations.filter { location in
             let status = location.status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            let availability = location.availability.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            return location.healthyNodes > 0
-                && healthyStatuses.contains(status)
-                && !["maintenance", "unavailable", "retired"].contains(availability)
+            return location.isAvailableForVpn && healthyStatuses.contains(status)
         }.count
 
         if healthyCount == locations.count {

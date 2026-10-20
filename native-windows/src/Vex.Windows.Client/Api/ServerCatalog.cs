@@ -99,7 +99,7 @@ public static class ServerCatalog
         var status = location.Status?.Trim().ToLowerInvariant() ?? string.Empty;
         return location.HealthyNodes > 0 &&
                (location.Awg3Nodes ?? 1) > 0 &&
-               availability is not ("maintenance" or "unavailable" or "retired") &&
+               availability == "available" &&
                status is "" or "active" or "online" or "healthy" or "degraded";
     }
 

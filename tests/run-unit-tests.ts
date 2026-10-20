@@ -270,7 +270,7 @@ assertDeepEqual(
   ]).map((location) => [location.id, location.displayName]),
   [['edge-a', 'First Edge'], ['edge-b', 'Second']],
 );
-assertEqual(locationCatalogCacheSchemaVersion, 2);
+assertEqual(locationCatalogCacheSchemaVersion, 3);
 const shouldResetVpnCacheForSession = (
   vpnQueryCachePolicyModule as unknown as Record<string, unknown>
 ).shouldResetVpnCacheForSession;
@@ -347,7 +347,7 @@ assertEqual(
 );
 assertDeepEqual(
   validCachedValueForUser(
-    { savedAtMs: 1, schemaVersion: 2, userId: 'user-a', value: [catalogFixture] },
+    { savedAtMs: 1, schemaVersion: locationCatalogCacheSchemaVersion, userId: 'user-a', value: [catalogFixture] },
     'user-a',
     locationCatalogCacheSchemaVersion,
     (value): value is VpnLocation[] => Array.isArray(value),
@@ -356,7 +356,7 @@ assertDeepEqual(
 );
 assertEqual(
   validCachedValueForUser(
-    { savedAtMs: 1, schemaVersion: 2, userId: 'user-a', value: [catalogFixture] },
+    { savedAtMs: 1, schemaVersion: locationCatalogCacheSchemaVersion, userId: 'user-a', value: [catalogFixture] },
     'user-b',
     locationCatalogCacheSchemaVersion,
     (value): value is VpnLocation[] => Array.isArray(value),
@@ -1770,13 +1770,14 @@ async function testFreshSameLocationProfileConnectsSecondNode(): Promise<void> {
 }
 
 async function testMissingFallbackProfileSkipsOnly404(): Promise<void> {
-  const locations = [
-    { id: 'de', availability: 'available', healthyNodes: 1 },
-    { id: 'retired', availability: 'retired', healthyNodes: 1 },
-    { id: 'unhealthy', availability: 'available', healthyNodes: 0 },
-    { id: 'fi', availability: 'available', healthyNodes: 1 },
-    { id: 'nl', availability: 'available', healthyNodes: 1 },
-  ] as VpnLocation[];
+  const locations: VpnLocation[] = [
+    { ...catalogFixture, id: 'de' },
+    { ...catalogFixture, id: 'retired', availability: 'retired' },
+    { ...catalogFixture, id: 'unhealthy', healthyNodes: 0 },
+    { ...catalogFixture, id: 'incompatible', awg3Nodes: 0 },
+    { ...catalogFixture, id: 'fi' },
+    { ...catalogFixture, id: 'nl' },
+  ];
   const attempted: string[] = [];
   let resolved: string | null = null;
   for (const location of profileResolutionOrder('de', locations).slice(1)) {
@@ -1960,13 +1961,15 @@ assertEqual(androidVpnProfileRequiresRefresh('ios', oversizedAndroidProfile), fa
 assertEqual(androidProfilePlatform('android', true), 'android-smart-v1');
 assertEqual(androidProfilePlatform('android', false), 'android');
 
-const profileFallbackLocations = [
-  { id: 'de', availability: 'available', healthyNodes: 1 },
-  { id: 'fi', availability: 'available', healthyNodes: 1 },
-  { id: 'retired', availability: 'retired', healthyNodes: 1 },
-  { id: 'pilot', availability: 'pilot', healthyNodes: 1 },
-  { id: 'unhealthy', availability: 'available', healthyNodes: 0 },
-] as any;
+const profileFallbackLocations: VpnLocation[] = [
+  { ...catalogFixture, id: 'de' },
+  { ...catalogFixture, id: 'fi' },
+  { ...catalogFixture, id: 'retired', availability: 'retired' },
+  { ...catalogFixture, id: 'pilot', availability: 'pilot' },
+  { ...catalogFixture, id: 'unhealthy', healthyNodes: 0 },
+  { ...catalogFixture, id: 'incompatible', awg3Nodes: 0 },
+  { ...catalogFixture, id: 'unknown', status: 'unknown' },
+];
 assertDeepEqual(
   profileResolutionOrder('de', profileFallbackLocations).map((location) => location.id),
   ['de', 'fi'],

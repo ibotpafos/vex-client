@@ -16,6 +16,38 @@ enum APIContractScenarios {
         if !condition() { throw Failure(message) }
     }
 
+    static func locationCapabilities() async throws {
+        let cases: [(String, String, String, Int?, Bool)] = [
+            ("zero", "available", "healthy", 0, false),
+            ("ready", "available", "healthy", 2, true),
+            ("legacy", "available", "healthy", nil, true),
+            ("negative", "available", "healthy", -1, false),
+            ("maintenance", "maintenance", "healthy", 1, false),
+            ("hidden", "hidden", "healthy", 1, false),
+            ("offline", "available", "offline", 1, false),
+            ("unknown", "available", "unknown", 1, false),
+            ("degraded", " AVAILABLE ", " Degraded ", 1, true),
+        ]
+        let payload: [[String: Any]] = cases.map { id, availability, status, count, _ in
+            var value: [String: Any] = ["id": id, "country_code": "ZZ", "city": id,
+                "availability": availability, "status": status, "healthy_nodes": 2]
+            if let count { value["awg3_nodes"] = count }
+            return value
+        }
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        let decoded = try JSONDecoder().decode([VpnLocation].self, from: data)
+        for (location, fixture) in zip(decoded, cases) {
+            try require(VEXCountryGroup.isAvailable(location) == fixture.4, "country eligibility mismatch: " + location.id)
+            try require(ServerSidebarCatalog.isAvailable(location) == fixture.4, "sidebar eligibility mismatch: " + location.id)
+        }
+        var api = VEXAPIClient()
+        api.transport.load = { request in
+            (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!)
+        }
+        let selected = try await api.vpnLocations(accessToken: "inert-fixture-token")
+        try require(selected.map(\.id) == cases.filter { $0.4 }.map { $0.0 }, "API eligibility differs from cards/sidebar")
+    }
+
     static func redirects(method: String) async throws {
         for status in [301, 302, 303, 307, 308] {
             let fixture = try LoopbackRedirectFixture(status: status)

@@ -60,7 +60,7 @@ export function createLocationCatalogRefresher(options: LocationCatalogRefresher
           )
             ? current
             : locations;
-          if (stableLocations === locations) {
+          if (stableLocations !== current) {
             await options.commitCatalog(locations);
           }
           lastCatalog = stableLocations;
@@ -109,6 +109,7 @@ function areLocationCatalogsEqual(left: VpnLocation[], right: VpnLocation[]): bo
       && location.priority === candidate.priority
       && location.status === candidate.status
       && location.healthyNodes === candidate.healthyNodes
+      && location.awg3Nodes === candidate.awg3Nodes
       && location.endpoint === candidate.endpoint
       && location.capabilities.length === candidate.capabilities.length
       && location.capabilities.every((capability, capabilityIndex) => capability === candidate.capabilities[capabilityIndex]);

@@ -50,6 +50,15 @@ struct VpnLocation: Codable, Equatable, Identifiable {
     var awg3Nodes: Int?
     var latencyMs: Double?
 
+    var isAvailableForVpn: Bool {
+        let availability = self.availability.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let status = self.status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        // Legacy backends omit the count; an explicit zero cannot serve AWG3.
+        return healthyNodes > 0 && (awg3Nodes ?? 1) > 0
+            && availability == "available"
+            && ["active", "online", "healthy", "degraded"].contains(status)
+    }
+
     var displayName: String {
         if city.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return id.uppercased()

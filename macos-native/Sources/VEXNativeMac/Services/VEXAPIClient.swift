@@ -73,13 +73,7 @@ struct VEXAPIClient {
         // macOS client speaks AmneziaWG 3 only: show locations that have
         // AWG3-capable nodes (older backends without the field keep all
         // locations; profile requests still pin awg_version=3).
-        return locations.filter { location in
-            guard location.healthyNodes > 0, location.availability != "retired" else { return false }
-            if let awg3Nodes = location.awg3Nodes {
-                return awg3Nodes > 0
-            }
-            return true
-        }
+        return locations.filter(\.isAvailableForVpn)
     }
 
     func entitlement(accessToken: String) async throws -> Entitlement {

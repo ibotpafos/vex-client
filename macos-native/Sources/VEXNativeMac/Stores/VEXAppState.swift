@@ -2123,9 +2123,7 @@ final class VEXAppState: ObservableObject {
         return locations
             .filter { location in
                 location.id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != normalizedActive
-                    && location.healthyNodes > 0
-                    && (location.awg3Nodes ?? 1) > 0
-                    && location.availability != "retired"
+                    && location.isAvailableForVpn
             }
             .sorted(by: locationSort)
             .first

@@ -90,7 +90,7 @@ function connectionHarness(stage, platform = 'android') {
     mountedRef, isCurrentSessionOperation: session.guard(), SessionOperationSupersededError,
   });
   const context = {
-    Date, Error, requireCurrentSession, session: { accessToken: 'token-A', user: { id: 'A' } },
+    Date, Error, requireCurrentSession, SessionOperationSupersededError, session: { accessToken: 'token-A', user: { id: 'A' } },
     Platform: { OS: platform }, antiLeakEnabled: true,
     prepareClientNetworkDiagnostics: () => wait('diagnostics'),
     withTimeout: operation => operation, vpnProfileAddressMatchesDevice: () => true,
@@ -123,6 +123,97 @@ function connectionHarness(stage, platform = 'android') {
   context.connectProfileWithEndpointFallback = bind(flow.connectProfileWithEndpointFallback, context);
   return { state, session, gate, reached, mountedRef, connect: bind(flow.connectCurrentVpn, context) };
 }
+
+for (const stage of ['profile', 'diagnostics', 'applications', 'route', 'status', 'native', 'verification', 'fresh-profile', 'persist']) {
+  test(`explicit cancellation during ${stage} fences late native work and publication in the same login`, async () => {
+    const h = connectionHarness(stage);
+    let current = true;
+    const pending = h.connect({ isCurrentOperation: () => current });
+    const rejected = assert.rejects(pending, error => error.code === 'SESSION_OPERATION_SUPERSEDED');
+    await h.reached.promise;
+    current = false;
+    h.state.nativeOwner = 'newer-intent';
+    const calls = h.state.nativeCalls;
+    h.gate.resolve(stage === 'profile' || stage === 'fresh-profile' ? profile : stage === 'persist' ? 'de' : { state: 'connected', mode: 'all', packageNames: [] });
+    await rejected;
+    assert.equal(h.state.nativeCalls, calls, 'a canceled request must not start another native connection');
+    assert.equal(h.state.cleanupCalls, 0, 'late cleanup must not stop the newer intent');
+    assert.equal(h.state.nativeOwner, 'newer-intent');
+    assert.equal(h.state.published, 0);
+    assert.equal(h.state.cached, 0);
+  });
+}
+
+for (const outcome of ['resolve', 'reject']) {
+  test(`a canceled power operation ${outcome} cannot stop or unlock a newer connection`, async () => {
+    const old = deferred(), newer = deferred(), started = [];
+    let disconnects = 0, failures = 0;
+    const context = {
+      isCurrentSessionOperation: () => true, autoConnectAttemptedRef: { current: false },
+      isVpnBusy: false, vpnOperationInFlightRef: { current: false }, vpnConnectGenerationRef: { current: 0 },
+      connectionPhase: 'idle', isConnected: false, isLeakBlocked: false, isKeyRotationBusy: false,
+      setIsVpnBusy: value => { context.isVpnBusy = value; }, setVpnError: () => {}, setVpnStatus: () => {},
+      getVpnStatus: async () => ({ state: 'disconnected' }),
+      connectCurrentVpn: options => { started.push(options); return started.length === 1 ? old.promise : newer.promise; },
+      disconnectVpn: async () => { disconnects++; return { state: 'disconnected' }; },
+      disconnectedVpnStatus: () => ({ state: 'disconnected' }), dynamicRouteRuntime: { clearActive: () => {} },
+      session: account('A', 'token-A'), activeProfile: null, reportVpnDisconnectEvent: () => {},
+      nextVpnStatusWithState: (current, state) => ({ ...current, state }), handleVpnFailure: () => { failures++; },
+      playWarningHaptic: () => {}, playMediumImpactHaptic: () => {}, playSuccessHaptic: () => {},
+    };
+    const original = bind(failure.handlePowerPress, context)();
+    context.connectionPhase = 'connecting';
+    await bind(failure.handlePowerPress, context)();
+    context.connectionPhase = 'idle';
+    const replacement = bind(failure.handlePowerPress, context)();
+    if (outcome === 'resolve') old.resolve(); else old.reject(new Error('late old native failure'));
+    await original;
+    assert.equal(disconnects, 1, 'only the explicit cancellation owns teardown');
+    assert.equal(failures, 0, 'the canceled result cannot overwrite a new connection with an error');
+    assert.equal(context.vpnOperationInFlightRef.current, true);
+    assert.equal(context.isVpnBusy, true);
+    assert.equal(started[0].isCurrentOperation(), false);
+    assert.equal(started[1].isCurrentOperation(), true);
+    newer.resolve();
+    await replacement;
+    assert.equal(context.vpnOperationInFlightRef.current, false);
+  });
+}
+
+for (const busy of [false, true]) test(`verification remains explicitly cancellable with local busy=${busy}`, async () => {
+  let disconnects = 0;
+  const context = {
+    isCurrentSessionOperation: () => true, autoConnectAttemptedRef: { current: false },
+    isVpnBusy: busy, vpnOperationInFlightRef: { current: busy }, vpnConnectGenerationRef: { current: 1 },
+    connectionPhase: 'verifying', isConnected: false, isLeakBlocked: false,
+    setIsVpnBusy: () => {}, setVpnError: () => {}, setVpnStatus: () => {},
+    getVpnStatus: async () => ({ state: 'connected', verified: false }),
+    disconnectVpn: async () => { disconnects++; return { state: 'disconnected' }; },
+    disconnectedVpnStatus: () => ({ state: 'disconnected' }), dynamicRouteRuntime: { clearActive: () => {} },
+    session: null, activeProfile: null, nextVpnStatusWithState: (current, state) => ({ ...current, state }),
+    handleVpnFailure: error => { throw error; }, playWarningHaptic: () => {}, playSuccessHaptic: () => {},
+  };
+  await bind(failure.handlePowerPress, context)();
+  assert.equal(disconnects, 1);
+});
+
+test('a failed native cancellation is reported instead of silently fabricating a stopped tunnel', async () => {
+  let failures = 0, successes = 0;
+  const context = {
+    isCurrentSessionOperation: () => true, autoConnectAttemptedRef: { current: false },
+    isVpnBusy: true, vpnOperationInFlightRef: { current: true }, vpnConnectGenerationRef: { current: 1 },
+    connectionPhase: 'connecting', isConnected: false, isLeakBlocked: false,
+    setIsVpnBusy: () => {}, setVpnError: () => {}, setVpnStatus: () => {},
+    getVpnStatus: async () => ({ state: 'connected', verified: false }),
+    disconnectVpn: async () => { throw new Error('native stop failed'); },
+    disconnectedVpnStatus: () => ({ state: 'disconnected' }), dynamicRouteRuntime: { clearActive: () => {} },
+    session: null, activeProfile: null, nextVpnStatusWithState: (current, state) => ({ ...current, state }),
+    handleVpnFailure: () => { failures++; }, playWarningHaptic: () => {}, playSuccessHaptic: () => { successes++; },
+  };
+  await bind(failure.handlePowerPress, context)();
+  assert.equal(failures, 1);
+  assert.equal(successes, 0);
+});
 
 test('logout invalidates old callbacks synchronously before storage or native teardown', async () => {
   const storage = deferred(); let nativeCalls = 0;

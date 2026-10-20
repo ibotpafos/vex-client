@@ -62,6 +62,7 @@ reuse_primary_worktree_sparkle_cache() {
 }
 
 run_native_macos_tests() {
+  python3 "${ROOT_DIR}/scripts/test_macos_packaged_resources.py"
   reuse_primary_worktree_sparkle_cache
   if [[ -d "${ROOT_DIR}/macos-native/.build/artifacts/sparkle" ]]; then
     swift test --package-path "${ROOT_DIR}/macos-native" --disable-automatic-resolution

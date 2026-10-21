@@ -117,41 +117,42 @@ public sealed class CustomerSseParser
         "customer.heartbeat",
     ];
     private readonly StringBuilder _remainder = new();
+    private bool _skipLineFeed;
 
     public string Remainder => _remainder.ToString();
 
     public IReadOnlyList<CustomerRealtimeEvent> Append(string chunk)
     {
         ArgumentNullException.ThrowIfNull(chunk);
-        var buffered = (_remainder + chunk)
-            .Replace("\r\n", "\n", StringComparison.Ordinal)
-            .Replace('\r', '\n');
-        var boundary = buffered.LastIndexOf(
-            "\n\n",
-            StringComparison.Ordinal);
-        if (boundary < 0)
+        var events = new List<CustomerRealtimeEvent>();
+        foreach (var character in chunk)
         {
-            SetRemainder(buffered);
-            return [];
+            // CRLF remains one newline even when its bytes arrive in separate reads.
+            if (_skipLineFeed)
+            {
+                _skipLineFeed = false;
+                if (character == '\n') continue;
+            }
+            var normalized = character;
+            if (character == '\r')
+            {
+                normalized = '\n';
+                _skipLineFeed = true;
+            }
+            if (_remainder.Length == MaximumRemainderLength)
+            {
+                _remainder.Clear();
+                _skipLineFeed = false;
+                throw new InvalidDataException("The realtime frame exceeded its size limit.");
+            }
+            _remainder.Append(normalized);
+            if (normalized != '\n' || _remainder.Length < 2 || _remainder[^2] != '\n') continue;
+            var frame = _remainder.ToString(0, _remainder.Length - 2);
+            _remainder.Clear();
+            var parsed = ParseFrame(frame);
+            if (parsed is not null) events.Add(parsed);
         }
-
-        var complete = buffered[..boundary];
-        SetRemainder(buffered[(boundary + 2)..]);
-        return complete
-            .Split("\n\n", StringSplitOptions.None)
-            .Select(ParseFrame)
-            .Where(value => value is not null)
-            .Cast<CustomerRealtimeEvent>()
-            .ToArray();
-    }
-
-    private void SetRemainder(string value)
-    {
-        _remainder.Clear();
-        _remainder.Append(
-            value.Length <= MaximumRemainderLength
-                ? value
-                : value[^MaximumRemainderLength..]);
+        return events.ToArray();
     }
 
     private static CustomerRealtimeEvent? ParseFrame(string frame)
@@ -348,7 +349,7 @@ public sealed class CustomerRealtimeClient : IAsyncDisposable
                 // already rejected token cannot restore the session.
                 if (error.StatusCode == HttpStatusCode.Unauthorized) return;
             }
-            catch (IOException)
+            catch (Exception error) when (error is IOException or InvalidDataException)
             {
                 SetConnected(false);
             }
@@ -429,15 +430,17 @@ public sealed class CustomerRealtimeClient : IAsyncDisposable
         using var reader = new StreamReader(
             new LivenessStream(stream, liveness, _livenessTimeout), Encoding.UTF8);
         var parser = new CustomerSseParser();
+        var buffer = new char[4096];
         while (true)
         {
-            var line = await reader.ReadLineAsync(cancellationToken)
+            var read = await reader.ReadAsync(buffer.AsMemory(), cancellationToken)
                 .ConfigureAwait(false);
-            if (line is null)
+            cancellationToken.ThrowIfCancellationRequested();
+            if (read == 0)
             {
                 break;
             }
-            foreach (var realtimeEvent in parser.Append(line + "\n"))
+            foreach (var realtimeEvent in parser.Append(new string(buffer, 0, read)))
             {
                 if (!string.IsNullOrEmpty(realtimeEvent.Id))
                 {

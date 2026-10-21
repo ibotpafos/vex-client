@@ -156,6 +156,7 @@ var tests = new (string Name, Action Run)[]
     ("VPN access and network failures preserve actionable guidance and safe intent", VpnFailurePresentationTests.Run),
     ("Release cohorts preserve actionable mandatory targets and strict dependency trust", WindowsReleasePolicyTests.Run),
     ("Shipping update keys match P256 signatures and reject incompatible key material", WindowsUpdateSignatureSignerTests.Run),
+    ("Realtime framing bounds transport reads and preserves chunked events", CustomerRealtimeFramingTests.Run),
     ("Realtime session recovery preserves outages and rejects stale credential events", CustomerRealtimeSessionTests.Run),
     ("Realtime billing and device events cannot mutate a replacement session", RealtimeScopeIsolationTests.Run),
     ("Periodic entitlement checks preserve current sessions and user connection intent", ActiveEntitlementMonitorTests.Run),

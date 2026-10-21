@@ -178,6 +178,7 @@ var tests = new (string Name, Action Run)[]
     ("Preferences decode corruption safely and preserve valid legacy choices", NativeClientPreferencesJsonTests.Run),
     ("Settings preserve toggle intent across inline refresh cancellation", SettingsPreferenceReentrancyTests.Run),
     ("App metadata decodes current server contracts and explicit historical aliases", AppMetadataContractTests.Run),
+    ("Update decisions require boolean controls and preserve legacy optional release metadata", AppUpdateControlContractTests.Run),
     ("Windows app metadata matches the published API compatibility contract on both architectures", AppMetadataContractTests.WindowsApiCompatibilityMatchesPublishedContract),
     ("Protected session cache handles corruption without replacing identity files", ProtectedStateFileTests.Run),
     ("Windows Hello changes commit durably and reject cancelled verification", WindowsHelloSessionTests.Run),

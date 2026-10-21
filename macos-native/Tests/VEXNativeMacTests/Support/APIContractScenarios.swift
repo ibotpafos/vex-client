@@ -23,6 +23,7 @@ enum APIContractScenarios {
         // Marshaled from Go domain.AppUpdateCheckResponse; release fields use omitempty.
         let cases: [(String, Bool)] = [
             (#"{"updateAvailable":false,"delivery":"native_macos","required":false,"checkedAt":"2026-10-21T00:00:00Z"}"#, false),
+            (#"{"updateAvailable":false,"required":false,"currentBuildBlocked":null}"#, false),
             (#"{"updateAvailable":false,"delivery":"native_macos","required":true,"currentBuildBlocked":true,"minConfigSchemaVersion":3,"reason":"no_artifact","checkedAt":"2026-10-21T00:00:00Z"}"#, false),
             (#"{"updateAvailable":true,"delivery":"native_macos","required":true,"currentBuildBlocked":true,"latestVersion":"999.3.0","latestBuild":999,"minSupportedBuild":1,"minConfigSchemaVersion":3,"downloadUrl":"/downloads/update.zip","changelog":"Contract fixture","checksumSha256":"fixture-hash","signatureUrl":"/downloads/update.zip.sig","channel":"stable","reason":"new_build","rolloutPercent":100,"checkedAt":"2026-10-21T00:00:00Z"}"#, true),
         ]
@@ -61,9 +62,31 @@ enum APIContractScenarios {
             let remote = try await api.appRemoteConfig()
             try require(remote.platform == "macos" && remote.channel == "stable", "remote-config metadata changed")
         }
-        for invalid in [#"{"updateAvailable":false}"#, #"{"updateAvailable":"false","required":false}"#, #"{"updateAvailable":false,"required":false,"latestBuild":"bad"}"#] {
+        var invalid = ["{}", #"{"required":false}"#, #"{"updateAvailable":false}"#,
+            #"{"updateAvailable":false,"required":false,"latestBuild":"bad"}"#].map { Data($0.utf8) }
+        let wrong: [Any] = [NSNull(), 0, 1, "false", "true", [Any](), [String: Any]()]
+        for field in ["updateAvailable", "required"] {
+            for value in wrong {
+                var payload: [String: Any] = ["updateAvailable": false, "required": false]
+                payload[field] = value
+                invalid.append(try JSONSerialization.data(withJSONObject: payload))
+            }
+        }
+        for value in wrong where !(value is NSNull) {
+            invalid.append(try JSONSerialization.data(withJSONObject:
+                ["updateAvailable": false, "required": false, "currentBuildBlocked": value]))
+        }
+        for value: Any in [NSNull(), [Any](), [false], true, "false", 0] {
+            invalid.append(try JSONSerialization.data(withJSONObject: value, options: .fragmentsAllowed))
+        }
+        for payload in invalid {
+            var api = VEXAPIClient()
+            api.baseURL = URL(string: "https://metadata.example.invalid")
+            api.transport.load = { request in
+                (payload, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!)
+            }
             do {
-                _ = try JSONDecoder().decode(AppUpdateCheckResult.self, from: Data(invalid.utf8))
+                _ = try await api.appUpdateCheck()
                 throw Failure("malformed update metadata admitted")
             } catch is DecodingError { }
         }

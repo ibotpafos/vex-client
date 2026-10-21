@@ -208,6 +208,62 @@ for (const endpoint of ['entitlement', 'devices', 'locations', 'usage', 'policy'
   });
 }
 
+const invalidUpdateControls = [
+  ['empty object', {}], ['missing availability', { required: false }], ['missing requirement', { updateAvailable: false }],
+  ...[null, [], [false], true, 'false', 0].map(value => [`root ${JSON.stringify(value)}`, value]),
+  ...['updateAvailable', 'required'].flatMap(field => [null, 0, 1, 'false', 'true', [], {}]
+    .map(value => [`${field} ${JSON.stringify(value)}`, { updateAvailable: false, required: false, [field]: value }])),
+  ...[0, 1, 'false', 'true', [], {}].map(value => [`blocked ${JSON.stringify(value)}`,
+    { updateAvailable: false, required: false, currentBuildBlocked: value }]),
+];
+for (const [name, payload] of invalidUpdateControls) {
+  test(`real update response rejects ${name} instead of caching a successful update decision`, async () => {
+    let requests = 0;
+    const h = harness({ fetch: async () => { requests++; return response(payload); } });
+    const query = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+    try {
+      await assert.rejects(query.fetchQuery({ queryKey: ['update-fixture'], queryFn: () =>
+        h.load('@/api/updates').appUpdateCheck({ platform: 'android', appVersion: '1.0.73', buildNumber: 1 }) }),
+      error => error.code === 'api_response_invalid' && error.status === 502);
+      assert.equal(query.getQueryState(['update-fixture']).status, 'error');
+      assert.equal(query.getQueryData(['update-fixture']), undefined);
+      assert.equal(requests, 1, 'invalid replies must not replay the POST');
+      assert.equal(h.timers.size, 0);
+    } finally { query.clear(); }
+  });
+}
+test('an invalid update refresh cannot overwrite the last valid cached decision', async () => {
+  const h = harness({ fetch: async () => response({}) });
+  const query = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+  const last = { updateAvailable: true, required: true, currentBuildBlocked: true, latestVersion: '1.3.0' };
+  try {
+    query.setQueryData(['update-fixture'], last);
+    await assert.rejects(query.fetchQuery({ queryKey: ['update-fixture'], queryFn: () =>
+      h.load('@/api/updates').appUpdateCheck({ platform: 'android', appVersion: '1.0.73', buildNumber: 1 }) }),
+    error => error.code === 'api_response_invalid');
+    assert.equal(query.getQueryState(['update-fixture']).status, 'error');
+    assert.deepEqual(query.getQueryData(['update-fixture']), last);
+    assert.equal(h.timers.size, 0);
+  } finally { query.clear(); }
+});
+for (const flags of [
+  { updateAvailable: false, required: false },
+  { updateAvailable: false, required: true, currentBuildBlocked: true },
+  { updateAvailable: true, required: false, currentBuildBlocked: false },
+  { updateAvailable: true, required: true, currentBuildBlocked: true },
+  { updateAvailable: false, required: false, currentBuildBlocked: null },
+]) {
+  test(`valid update flags retain omission and independent control values ${JSON.stringify(flags)}`, async () => {
+    const h = harness({ fetch: async () => response(flags) });
+    const update = await h.load('@/api/updates').appUpdateCheck({ platform: 'android', appVersion: '1.0.73', buildNumber: 1 });
+    assert.equal(update.updateAvailable, flags.updateAvailable);
+    assert.equal(update.required, flags.required);
+    assert.equal(update.currentBuildBlocked, flags.currentBuildBlocked ?? false);
+    assert.equal(update.latestVersion, ''); assert.equal(update.latestBuild, 0);
+    assert.equal(update.downloadUrl, ''); assert.equal(h.timers.size, 0);
+  });
+}
+
 for (const action of ['cancelQueries', 'removeQueries']) {
   test(`real QueryClient.${action} aborts endpoint transport and allows the replacement query`, async () => {
     const hold = gate(), seen = [];

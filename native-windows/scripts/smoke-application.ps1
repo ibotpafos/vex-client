@@ -965,8 +965,10 @@ namespace Vex.Windows.Smoke {
                             [Windows.Automation.TogglePattern]::Pattern)
                         $result.settings_recovery_observed_state = [string]$pattern.Current.ToggleState
                         $result.settings_refresh_enabled_during_mutation = [bool]$refreshButton.Current.IsEnabled
-                        $pattern.Current.ToggleState -ne $originalRecoveryState -and
-                            -not $refreshButton.Current.IsEnabled
+                        # Reuse the recorded observations: the read may finish
+                        # between two UI Automation property queries.
+                        $result.settings_recovery_observed_state -ne [string]$originalRecoveryState -and
+                            -not $result.settings_refresh_enabled_during_mutation
                     }
                 }
                 catch {

@@ -3,6 +3,7 @@ import { router } from 'expo-router';
 import { AppState, Platform } from 'react-native';
 import { isCancelledError, useQueryClient } from '@tanstack/react-query';
 import { isApiRequestCancelled } from '@/api/error';
+import { useOwnedState } from '@/hooks/useOwnedState';
 
 import {
   type Entitlement,
@@ -180,6 +181,8 @@ function closeRouteOverlay() {
 export function useVpnConnection() {
   const queryClient = useQueryClient();
   const { session, refreshSession, signOut, isCurrentSessionOperation } = useSession();
+  const accessToken = session?.accessToken;
+  const cacheUserId = session?.user.id ?? '';
   const customerRealtime = useCustomerRealtimeStatus();
 
   const vpnStatusRef = useRef<VpnStatus>({ state: 'disconnected', rxBytes: 0, txBytes: 0 });
@@ -259,21 +262,19 @@ export function useVpnConnection() {
   const autoConnectAttemptedRef = useRef(false);
   const vpnOperationInFlightRef = useRef(false);
   const vpnConnectGenerationRef = useRef(0);
-  const [persistedEntitlement, setPersistedEntitlement] = useState<Entitlement | null>(null);
-  const [persistedLocations, setPersistedLocations] = useState<VpnLocation[] | null>(null);
-  const [persistedDevices, setPersistedDevices] = useState<VpnDevice[] | null>(null);
-  const [entitlementData, setEntitlementData] = useState<Entitlement | null>(null);
-  const [entitlementError, setEntitlementError] = useState<unknown>(null);
-  const [locationsData, setLocationsData] = useState<VpnLocation[] | null>(null);
-  const [locationsRefreshError, setLocationsRefreshError] = useState<unknown>(null);
-  const [isLocationsRefreshing, setIsLocationsRefreshing] = useState(false);
+  const [persistedEntitlement, setPersistedEntitlement] = useOwnedState<Entitlement | null>(cacheUserId, isCurrentSessionOperation, null);
+  const [persistedLocations, setPersistedLocations] = useOwnedState<VpnLocation[] | null>(cacheUserId, isCurrentSessionOperation, null);
+  const [persistedDevices, setPersistedDevices] = useOwnedState<VpnDevice[] | null>(cacheUserId, isCurrentSessionOperation, null);
+  const [entitlementData, setEntitlementData] = useOwnedState<Entitlement | null>(cacheUserId, isCurrentSessionOperation, null);
+  const [entitlementError, setEntitlementError] = useOwnedState<unknown>(cacheUserId, isCurrentSessionOperation, null);
+  const [locationsData, setLocationsData] = useOwnedState<VpnLocation[] | null>(cacheUserId, isCurrentSessionOperation, null);
+  const [locationsRefreshError, setLocationsRefreshError] = useOwnedState<unknown>(cacheUserId, isCurrentSessionOperation, null);
+  const [isLocationsRefreshing, setIsLocationsRefreshing] = useOwnedState(cacheUserId, isCurrentSessionOperation, false);
   const [deviceLocationLatencies, setDeviceLocationLatencies] = useState<Record<string, number>>(() => ({
     ...deviceLocationLatencyCache,
   }));
-  const [devicesData, setDevicesData] = useState<VpnDevice[] | null>(null);
-  const [deviceUsageSnapshot, setDeviceUsageSnapshot] = useState<VpnDeviceUsageSnapshot | null>(null);
-  const accessToken = session?.accessToken;
-  const cacheUserId = session?.user.id ?? '';
+  const [devicesData, setDevicesData] = useOwnedState<VpnDevice[] | null>(cacheUserId, isCurrentSessionOperation, null);
+  const [deviceUsageSnapshot, setDeviceUsageSnapshot] = useOwnedState<VpnDeviceUsageSnapshot | null>(cacheUserId, isCurrentSessionOperation, null);
   const catalogOwner = `${cacheUserId}:${accessToken ?? ''}`;
   const entitlementQueryKey = useMemo(() => ['entitlement', accessToken] as const, [accessToken]);
   const locationsQueryKey = useMemo(() => ['vpn-locations', accessToken] as const, [accessToken]);

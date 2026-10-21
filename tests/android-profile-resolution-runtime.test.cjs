@@ -31,8 +31,9 @@ async function resolveCase({ cached, hot, knownEntitlement = paid, permission = 
     setQueryData: () => {}, removeQueries: () => {},
     fetchQuery: async ({ queryFn }) => queryFn(), invalidateQueries: async () => {},
   };
+  const react = { useCallback: fn => fn, useEffect: () => {}, useMemo: fn => fn(), useRef: value => ({ current: value }), useState: value => [value, () => {}] };
   const module = load(sourcePath, {
-    react: { useCallback: fn => fn, useEffect: () => {}, useMemo: fn => fn(), useRef: value => ({ current: value }), useState: value => [value, () => {}] },
+    react, '../hooks/useOwnedState': load(path.join(repo, 'src/hooks/useOwnedState.ts'), { react }),
     '@tanstack/react-query': { useQueryClient: () => queryClient, isCancelledError: () => false },
     '../api/error': load(path.join(repo, 'src/api/error.ts'), {}),
     'react-native': { Platform: { OS: 'android' } },

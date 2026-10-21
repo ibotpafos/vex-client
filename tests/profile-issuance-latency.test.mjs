@@ -137,8 +137,9 @@ test('background profile refresh revalidates the cached version before issuing a
   const effects = [];
   const resolutions = [];
   const queryClient = {getQueryData:()=>cached, setQueryData:()=>{}, fetchQuery:({queryFn})=>queryFn()};
+  const react = { useRef:current=>({current}), useState:initial=>[initial,()=>{}], useMemo:fn=>fn(), useCallback:fn=>fn, useEffect:fn=>effects.push(fn) };
   const run = load('src/vpn/useVpnProfileState.ts', 'useVpnProfileState', {
-    useRef:current=>({current}), useState:initial=>[initial,()=>{}], useMemo:fn=>fn(), useCallback:fn=>fn, useEffect:fn=>effects.push(fn),
+    ...react, useOwnedState: load('src/hooks/useOwnedState.ts', 'useOwnedState', react),
     useQueryClient:()=>queryClient, resolveVpnProfile:async(...args)=>{resolutions.push(args); return cached;},
     hydrateHotVpnProfilesToQueryCache:async()=>[], saveHotVpnProfile:async()=>null,
   });

@@ -55,6 +55,7 @@ function hookHarness(stage, { rotationRequired = false, knownEntitlement = paid 
     invalidateQueries: () => wait('invalidate'), fetchQuery: ({ queryFn }) => queryFn(),
   };
   const module = load('src/vpn/useVpnProfileState.ts', {
+    '../hooks/useOwnedState': load('src/hooks/useOwnedState.ts', { react }),
     react, '@tanstack/react-query': { useQueryClient: () => query, isCancelledError: () => false },
     'react-native': { Platform: { OS: 'ios' } },
     '@/utils/error': { errorMessage: error => error.message },

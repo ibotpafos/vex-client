@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { isCancelledError, useQueryClient } from '@tanstack/react-query';
 import { isApiRequestCancelled } from '../api/error';
+import { useOwnedState } from '../hooks/useOwnedState';
 import { Platform } from 'react-native';
 import { errorMessage } from '@/utils/error';
 
@@ -83,16 +84,13 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
     const current = currentRequestScope.current;
     return current.isCurrentSessionOperation?.() !== false && current.accessToken === token && current.selectedLocationId === location && current.canRefreshInBackground?.(location) !== false;
   }, []);
-  const [vpnProfile, setVpnProfileState] = useState<VpnProfile | null>(null);
-  const vpnProfileOwnerRef = useRef<{ userId?: string; isCurrentSessionOperation: () => boolean } | null>(null);
-  const setVpnProfile = useCallback((value: React.SetStateAction<VpnProfile | null>) => {
-    if (!isCurrentSessionOperation()) return;
-    const previousOwner = vpnProfileOwnerRef.current;
-    const previousProfileIsOwned = previousOwner?.userId === userId && previousOwner?.isCurrentSessionOperation();
-    vpnProfileOwnerRef.current = { userId, isCurrentSessionOperation };
-    setVpnProfileState((current) => typeof value === 'function' ? value(previousProfileIsOwned ? current : null) : value);
-  }, [isCurrentSessionOperation, userId]);
-  const [isKeyRotationBusy, setIsKeyRotationBusy] = useState(false);
+  const profileOwnerRef = useRef<{ userId?: string; isCurrent: () => boolean } | null>(null);
+  if (!profileOwnerRef.current || profileOwnerRef.current.userId !== userId || !profileOwnerRef.current.isCurrent()) {
+    profileOwnerRef.current = { userId, isCurrent: isCurrentSessionOperation };
+  }
+  const profileOwner = profileOwnerRef.current;
+  const [vpnProfile, setVpnProfile] = useOwnedState<VpnProfile | null>(profileOwner, isCurrentSessionOperation, null);
+  const [isKeyRotationBusy, setIsKeyRotationBusy] = useOwnedState(profileOwner, isCurrentSessionOperation, false);
   const profileQueryKey = useMemo(() => ['vpn-profile', accessToken, selectedLocationId, routingMode] as const, [accessToken, routingMode, selectedLocationId]);
   const fetchSelectedProfile = useCallback(({ signal }: { signal?: AbortSignal } = {}) => resolveVpnProfile(accessToken!, knownEntitlement, selectedLocationId, {
     forceRefresh: true,
@@ -103,15 +101,8 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
     routingMode,
     userId,
   }), [accessToken, backgroundRequestIsCurrent, isCurrentSessionOperation, knownEntitlement, profileQueryKey, queryClient, routingMode, selectedLocationId, userId]);
-  const activeProfile = vpnProfileOwnerRef.current?.userId === userId
-    && vpnProfileOwnerRef.current?.isCurrentSessionOperation() && isCurrentSessionOperation() ? vpnProfile : null;
+  const activeProfile = vpnProfile;
   const entitlementState = knownEntitlement ?? activeProfile?.entitlement ?? null;
-
-  useEffect(() => {
-    vpnProfileOwnerRef.current = null;
-    setVpnProfileState(null);
-    setIsKeyRotationBusy(false);
-  }, [isCurrentSessionOperation, userId]);
 
   const cacheProfile = useCallback((locationId: string, profile: VpnProfile) => {
     if (!accessToken || !isCurrentSessionOperation()) {

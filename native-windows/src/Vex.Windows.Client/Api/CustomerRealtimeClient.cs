@@ -444,16 +444,16 @@ public sealed class CustomerRealtimeClient : IAsyncDisposable
             }
             foreach (var realtimeEvent in parser.Append(new string(buffer, 0, read)))
             {
-                if (!string.IsNullOrEmpty(realtimeEvent.Id))
-                {
-                    lastEventId = realtimeEvent.Id;
-                    recordEventId(lastEventId);
-                }
                 var metadata = CustomerRealtimeMetadata.Parse(
                     realtimeEvent.Type,
                     realtimeEvent.Data);
                 if (metadata is not null)
                 {
+                    if (!string.IsNullOrEmpty(realtimeEvent.Id))
+                    {
+                        lastEventId = realtimeEvent.Id;
+                        recordEventId(lastEventId);
+                    }
                     Changed?.Invoke(
                         this,
                         new CustomerRealtimeChangedEventArgs(

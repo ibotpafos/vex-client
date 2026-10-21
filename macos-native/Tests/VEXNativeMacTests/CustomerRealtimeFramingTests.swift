@@ -82,69 +82,11 @@ final class CustomerRealtimeFramingTests: XCTestCase {
 
     @MainActor
     func testOversizedResponseIsCancelledAndReconnectKeepsLastEventID() async throws {
-        let fixture = RealtimeFramingFixture()
-        RealtimeFramingProtocol.fixture = fixture
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [RealtimeFramingProtocol.self]
-        let session = URLSession(configuration: configuration)
-        defer { session.invalidateAndCancel(); RealtimeFramingProtocol.fixture = nil }
-        let firstStopped = expectation(description: "Oversized response closed before EOF")
-        let reconnected = expectation(description: "Existing reconnect path receives next event")
-        fixture.onFirstStop = { firstStopped.fulfill() }
-        var events: [CustomerRealtimeEvent] = []
-        let service = CustomerRealtimeService(
-            baseURL: URL(string: "https://realtime.example.test/prefix")!, session: session
-        ) { event, _ in
-            events.append(event)
-            if event.type == "customer.heartbeat" { reconnected.fulfill() }
-        }
-        defer { service.stop() }
-        service.start(accessToken: "fixture-token")
-        await fulfillment(of: [firstStopped, reconnected], timeout: 4)
-        service.stop()
-        let requests = fixture.requests
-        XCTAssertEqual(requests.count, 2)
-        XCTAssertEqual(requests.map { $0.url?.path }, ["/prefix/v1/events", "/prefix/v1/events"])
-        XCTAssertEqual(requests.map { $0.value(forHTTPHeaderField: "Authorization") }, Array(repeating: "Bearer fixture-token", count: 2))
-        XCTAssertEqual(requests.map { $0.value(forHTTPHeaderField: "Last-Event-ID") }, [nil, "devices:7"])
-        XCTAssertEqual(events.map(\.type), ["customer.change", "customer.heartbeat"])
-        XCTAssertEqual(events.first?.id, "devices:7")
+        try await APIContractScenarios.oversizedRealtimeReconnect(invalidMetadata: false)
     }
-}
 
-// URLProtocol consumes a reserved fixture hostname without creating a socket.
-// Neither response reaches EOF: only cancellation can stop the first stream.
-private final class RealtimeFramingFixture: @unchecked Sendable {
-    private let lock = NSLock()
-    private var recorded: [URLRequest] = []
-    var onFirstStop: (() -> Void)?
-    var requests: [URLRequest] { lock.lock(); defer { lock.unlock() }; return recorded }
-    func record(_ request: URLRequest) -> Int {
-        lock.lock(); defer { lock.unlock() }
-        recorded.append(request)
-        return recorded.count
-    }
-}
-
-private final class RealtimeFramingProtocol: URLProtocol, @unchecked Sendable {
-    static var fixture: RealtimeFramingFixture?
-    private var ordinal = 0
-    private var activeFixture: RealtimeFramingFixture?
-    override class func canInit(with request: URLRequest) -> Bool { true }
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-    override func startLoading() {
-        guard let fixture = Self.fixture else { return }
-        activeFixture = fixture
-        ordinal = fixture.record(request)
-        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
-                                       headerFields: ["Content-Type": "text/event-stream"])!
-        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        let wire = ordinal == 1
-            ? "event: customer.change\nid: devices:7\ndata: {\"domain\":\"devices\",\"version\":7}\n\n" + String(repeating: "x", count: 64 * 1024 + 1)
-            : "event: customer.heartbeat\ndata: {}\n\n"
-        client?.urlProtocol(self, didLoad: Data(wire.utf8))
-    }
-    override func stopLoading() {
-        if ordinal == 1 { activeFixture?.onFirstStop?() }
+    @MainActor
+    func testRejectedMetadataDoesNotAdvanceReconnectCursor() async throws {
+        try await APIContractScenarios.oversizedRealtimeReconnect(invalidMetadata: true)
     }
 }

@@ -159,6 +159,7 @@ final class CustomerRealtimeService {
     private let onEvent: EventHandler
     private let onStatus: StatusHandler
     private let onSessionRejected: SessionRejectedHandler
+    private let reconnectSleep: @Sendable (TimeInterval) async throws -> Void
     private var streamTask: Task<Void, Never>?
 
     init(
@@ -166,12 +167,16 @@ final class CustomerRealtimeService {
         session: URLSession = .shared,
         onStatus: @escaping StatusHandler = { _ in },
         onSessionRejected: @escaping SessionRejectedHandler = {},
+        reconnectSleep: @escaping @Sendable (TimeInterval) async throws -> Void = {
+            try await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000))
+        },
         onEvent: @escaping EventHandler
     ) {
         self.baseURL = baseURL
         self.session = session
         self.onStatus = onStatus
         self.onSessionRejected = onSessionRejected
+        self.reconnectSleep = reconnectSleep
         self.onEvent = onEvent
     }
 
@@ -239,10 +244,10 @@ final class CustomerRealtimeService {
                         throw URLError(.dataLengthExceedsMaximum)
                     }
                     for event in events {
-                        if !event.id.isEmpty { lastEventID = event.id }
                         guard let metadata = CustomerRealtimeMetadata.parse(type: event.type, data: event.data) else {
                             continue
                         }
+                        if !event.id.isEmpty { lastEventID = event.id }
                         await onEvent(event, metadata)
                     }
                 }
@@ -255,7 +260,7 @@ final class CustomerRealtimeService {
             guard !Task.isCancelled else { return }
             let delay = Self.reconnectDelay(attempt: attempt)
             attempt += 1
-            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            try? await reconnectSleep(delay)
         }
     }
 }

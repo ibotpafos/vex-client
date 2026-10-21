@@ -1,6 +1,10 @@
 import XCTest
 
 final class VEXAPIResponseContractTests: XCTestCase {
+    func testAppUpdateMetadataPreservesGoOmissionAndRequestContracts() async throws {
+        try await APIContractScenarios.appUpdateMetadata()
+    }
+
     func testLocationCapabilitiesAndEligibilityStayConsistent() async throws {
         try await APIContractScenarios.locationCapabilities()
     }

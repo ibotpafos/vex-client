@@ -154,6 +154,29 @@ struct AppUpdateCheckResult: Codable, Equatable {
     }
 }
 
+// The Go response omits zero-valued release fields when no candidate exists.
+// Keep the public nonoptional properties and the synthesized Encodable keys.
+extension AppUpdateCheckResult {
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        updateAvailable = try values.decode(Bool.self, forKey: .updateAvailable)
+        required = try values.decode(Bool.self, forKey: .required)
+        currentBuildBlocked = try values.decodeIfPresent(Bool.self, forKey: .currentBuildBlocked)
+        latestVersion = try values.decodeIfPresent(String.self, forKey: .latestVersion) ?? ""
+        latestBuild = try values.decodeIfPresent(Int.self, forKey: .latestBuild) ?? 0
+        minSupportedBuild = try values.decodeIfPresent(Int.self, forKey: .minSupportedBuild) ?? 0
+        minConfigSchemaVersion = try values.decodeIfPresent(Int.self, forKey: .minConfigSchemaVersion)
+        downloadUrl = try values.decodeIfPresent(String.self, forKey: .downloadUrl) ?? ""
+        changelog = try values.decodeIfPresent(String.self, forKey: .changelog)
+        checksumSha256 = try values.decodeIfPresent(String.self, forKey: .checksumSha256)
+        signatureUrl = try values.decodeIfPresent(String.self, forKey: .signatureUrl)
+        channel = try values.decodeIfPresent(String.self, forKey: .channel)
+        reason = try values.decodeIfPresent(String.self, forKey: .reason)
+        rolloutPercent = try values.decodeIfPresent(Int.self, forKey: .rolloutPercent)
+        checkedAt = try values.decodeIfPresent(String.self, forKey: .checkedAt)
+    }
+}
+
 struct VpnDevice: Codable, Equatable, Identifiable {
     var id: String
     var userId: String?

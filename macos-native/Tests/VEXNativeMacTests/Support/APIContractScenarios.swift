@@ -16,6 +16,76 @@ enum APIContractScenarios {
         if !condition() { throw Failure(message) }
     }
 
+    static func appUpdateMetadata() async throws {
+        let constructed = AppUpdateCheckResult(updateAvailable: false, required: false,
+            latestVersion: "", latestBuild: 0, minSupportedBuild: 0, downloadUrl: "")
+        try require(!constructed.isNewerThanInstalledApp(), "existing memberwise initializer changed")
+        // Marshaled from Go domain.AppUpdateCheckResponse; release fields use omitempty.
+        let cases: [(String, Bool)] = [
+            (#"{"updateAvailable":false,"delivery":"native_macos","required":false,"checkedAt":"2026-10-21T00:00:00Z"}"#, false),
+            (#"{"updateAvailable":false,"delivery":"native_macos","required":true,"currentBuildBlocked":true,"minConfigSchemaVersion":3,"reason":"no_artifact","checkedAt":"2026-10-21T00:00:00Z"}"#, false),
+            (#"{"updateAvailable":true,"delivery":"native_macos","required":true,"currentBuildBlocked":true,"latestVersion":"999.3.0","latestBuild":999,"minSupportedBuild":1,"minConfigSchemaVersion":3,"downloadUrl":"/downloads/update.zip","changelog":"Contract fixture","checksumSha256":"fixture-hash","signatureUrl":"/downloads/update.zip.sig","channel":"stable","reason":"new_build","rolloutPercent":100,"checkedAt":"2026-10-21T00:00:00Z"}"#, true),
+        ]
+        for (payload, available) in cases {
+            var api = VEXAPIClient()
+            api.baseURL = URL(string: "https://metadata.example.invalid")
+            api.transport.load = { request in
+                try verifyAppMetadataRequest(request)
+                let body = request.url!.path == "/v1/app/update/check" ? payload : #"{"platform":"macos","channel":"stable"}"#
+                return (Data(body.utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!)
+            }
+            let update = try await api.appUpdateCheck()
+            try require(update.updateAvailable == available, "update availability changed")
+            if available {
+                try require(update.latestVersion == "999.3.0" && update.latestBuild == 999 && update.minSupportedBuild == 1, "release metadata lost")
+                try require(update.downloadUrl == "https://metadata.example.invalid/downloads/update.zip", "download projection changed")
+                try require(update.checksumSha256 == "fixture-hash" && update.signatureUrl == "/downloads/update.zip.sig", "integrity metadata lost")
+            } else {
+                try require(update.latestVersion == "" && update.latestBuild == 0 && update.minSupportedBuild == 0 && update.downloadUrl == "", "omitted Go release fields lost zero-value semantics")
+                try require(!update.isNewerThanInstalledApp(), "empty release was offered as an update")
+            }
+            let original = try JSONSerialization.jsonObject(with: Data(payload.utf8)) as! [String: Any]
+            try require(update.required == (original["required"] as? Bool), "required flag lost")
+            try require(update.currentBuildBlocked == (original["currentBuildBlocked"] as? Bool), "blocked flag lost")
+            try require(update.minConfigSchemaVersion == (original["minConfigSchemaVersion"] as? Int), "schema guard lost")
+            let encoded = try JSONEncoder().encode(update)
+            if available {
+                var expected = original
+                expected.removeValue(forKey: "delivery") // platform routing is not a stored Swift field
+                expected["downloadUrl"] = "https://metadata.example.invalid/downloads/update.zip"
+                let actual = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
+                try require(NSDictionary(dictionary: actual).isEqual(to: expected), "complete release metadata projection changed")
+            }
+            let roundTrip = try JSONDecoder().decode(AppUpdateCheckResult.self, from: encoded)
+            try require(roundTrip == update, "Codable round trip changed app metadata")
+            let remote = try await api.appRemoteConfig()
+            try require(remote.platform == "macos" && remote.channel == "stable", "remote-config metadata changed")
+        }
+        for invalid in [#"{"updateAvailable":false}"#, #"{"updateAvailable":"false","required":false}"#, #"{"updateAvailable":false,"required":false,"latestBuild":"bad"}"#] {
+            do {
+                _ = try JSONDecoder().decode(AppUpdateCheckResult.self, from: Data(invalid.utf8))
+                throw Failure("malformed update metadata admitted")
+            } catch is DecodingError { }
+        }
+    }
+
+    private static func verifyAppMetadataRequest(_ request: URLRequest) throws {
+        try require(request.httpMethod == "POST", "app metadata method changed")
+        try require(["/v1/app/update/check", "/v1/app/remote-config"].contains(request.url!.path), "unexpected metadata route")
+        let body = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
+        let keys: Set<String> = ["platform", "appVersion", "buildNumber", "channel", "coreVersion", "osVersion", "arch", "apiClientVersion", "configSchemaVersion"]
+        try require(Set(body.keys) == keys, "app metadata request keys changed")
+        try require(body["platform"] as? String == "macos" && body["appVersion"] as? String == VEXAppInfo.version && body["buildNumber"] as? Int == VEXAppInfo.buildNumber, "app identity metadata changed")
+        try require(body["channel"] as? String == VEXAppInfo.channel && body["coreVersion"] as? String == VEXAppInfo.coreVersion, "release channel/core metadata changed")
+        try require(body["apiClientVersion"] as? String == VEXAppInfo.apiClientVersion && body["configSchemaVersion"] as? Int == VEXAppInfo.configSchemaVersion, "compatibility metadata changed")
+        try require(body["osVersion"] as? String == ProcessInfo.processInfo.operatingSystemVersionString, "OS metadata changed")
+        #if arch(arm64)
+        try require(body["arch"] as? String == "arm64", "architecture changed")
+        #else
+        try require(body["arch"] as? String == "x64", "architecture changed")
+        #endif
+    }
+
     static func locationCapabilities() async throws {
         let cases: [(String, String, String, Int?, Bool)] = [
             ("zero", "available", "healthy", 0, false),

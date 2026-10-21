@@ -249,17 +249,7 @@ struct VEXAPIClient {
         var result: AppUpdateCheckResult = try await json(
             "/v1/app/update/check",
             method: "POST",
-            body: [
-                "platform": "macos",
-                "appVersion": VEXAppInfo.version,
-                "buildNumber": VEXAppInfo.buildNumber,
-                "channel": VEXAppInfo.channel,
-                "coreVersion": VEXAppInfo.coreVersion,
-                "osVersion": ProcessInfo.processInfo.operatingSystemVersionString,
-                "arch": nativeArch,
-                "apiClientVersion": VEXAppInfo.apiClientVersion,
-                "configSchemaVersion": VEXAppInfo.configSchemaVersion,
-            ]
+            body: appMetadataBody
         )
         result.downloadUrl = try absolutize(result.downloadUrl)
         return result
@@ -269,18 +259,22 @@ struct VEXAPIClient {
         try await json(
             "/v1/app/remote-config",
             method: "POST",
-            body: [
-                "platform": "macos",
-                "appVersion": VEXAppInfo.version,
-                "buildNumber": VEXAppInfo.buildNumber,
-                "channel": VEXAppInfo.channel,
-                "coreVersion": VEXAppInfo.coreVersion,
-                "osVersion": ProcessInfo.processInfo.operatingSystemVersionString,
-                "arch": nativeArch,
-                "apiClientVersion": VEXAppInfo.apiClientVersion,
-                "configSchemaVersion": VEXAppInfo.configSchemaVersion,
-            ]
+            body: appMetadataBody
         )
+    }
+
+    private var appMetadataBody: [String: Any] {
+        [
+            "platform": "macos",
+            "appVersion": VEXAppInfo.version,
+            "buildNumber": VEXAppInfo.buildNumber,
+            "channel": VEXAppInfo.channel,
+            "coreVersion": VEXAppInfo.coreVersion,
+            "osVersion": ProcessInfo.processInfo.operatingSystemVersionString,
+            "arch": nativeArch,
+            "apiClientVersion": VEXAppInfo.apiClientVersion,
+            "configSchemaVersion": VEXAppInfo.configSchemaVersion,
+        ]
     }
 
     private var nativeArch: String {

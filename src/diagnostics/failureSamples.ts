@@ -16,6 +16,7 @@ export function diagnosticFailureSamples(error: unknown): {
     }
     if (error.code === 'request_timeout') return { diagnostic_error_class: 'timeout' };
     if (error.code === 'network_unavailable') return { diagnostic_error_class: 'network' };
+    if (error.code === 'api_response_invalid') return { diagnostic_error_class: 'response_parse' };
   }
   if (error instanceof Error && error.name === 'AbortError') return { diagnostic_error_class: 'cancelled' };
   if (error instanceof SyntaxError) return { diagnostic_error_class: 'response_parse' };

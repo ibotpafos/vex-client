@@ -14,6 +14,19 @@ export class ApiRequestError extends Error {
   }
 }
 
+export function requestCancelledError(): ApiRequestError {
+  // Do not copy signal.reason: it can contain private application data.
+  return new ApiRequestError('Запрос отменён.', { code: 'request_cancelled' });
+}
+
+export function requireRequestActive(signal?: AbortSignal): void {
+  if (signal?.aborted) throw requestCancelledError();
+}
+
+export function isApiRequestCancelled(error: unknown): boolean {
+  return error instanceof ApiRequestError && error.code === 'request_cancelled';
+}
+
 export function normalizeApiRequestError(error: unknown): Error {
   if (isTechnicalWorksError(error)) {
     if (error instanceof ApiRequestError) {

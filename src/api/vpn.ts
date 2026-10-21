@@ -7,7 +7,8 @@ import { isKeyEpochMismatchError, nextManagedKeyEpoch } from '@/vpn/keyEpochReco
 import { defaultVpnRoutingMode, defaultVpnRoutingPolicyVersion, resolvedVpnBypassRegion } from '@/vpn/routingPolicy';
 import { devicePushTokenPath } from '@/notifications/pushRegistration';
 import { jsonRequest, rawRequest, clientVersionHeaders } from './client';
-import { ApiRequestError } from './error';
+import { ApiRequestError, isApiRequestCancelled, requireRequestActive } from './error';
+import { withRequestCancellation } from './requestCancellation';
 import { buildCreateDeviceRequest } from './deviceCreateRequest';
 import { clientDiagnosticsRequestBody } from './clientDiagnosticsRequest';
 import { getOrCreateNativeDeviceRegistration } from './nativeDeviceRegistration';
@@ -49,12 +50,12 @@ import { nativeRoutingParameters, routingAuthorization } from '../vpn/nativeRout
 const mobileProtocol = 'amneziawg';
 
 export async function preparedTunnel(accessToken: string, client: VpnClientDescriptor = currentVpnClient(), options: PreparedTunnelOptions = {}): Promise<PreparedTunnel> {
-  requireCurrentSession(options.isCurrentSessionOperation);
+  requireProfileRequest(options);
   try {
     return await managedVpnProfile(accessToken, client, options);
   } catch (error) {
-    requireCurrentSession(options.isCurrentSessionOperation);
-    if (error instanceof SessionOperationSupersededError) throw error;
+    requireProfileRequest(options);
+    if (error instanceof SessionOperationSupersededError || isApiRequestCancelled(error)) throw error;
     if (requiresManagedNativeProfile(client)) {
       throw error;
     }
@@ -64,17 +65,24 @@ export async function preparedTunnel(accessToken: string, client: VpnClientDescr
 }
 
 async function preparedTunnelFromDeviceConfig(accessToken: string, client: VpnClientDescriptor = currentVpnClient(), options: PreparedTunnelOptions = {}): Promise<PreparedTunnel> {
-  const versionHeaders = await clientVersionHeaders();
+  requireProfileRequest(options);
+  const versionHeaders = await withRequestCancellation(clientVersionHeaders, options.signal);
+  requireProfileRequest(options);
   const locationId = normalizeLocationId(options.locationId);
-  const [allDevices, runtimeDeviceId] = await Promise.all([vpnDevices(accessToken), getOrCreateDeviceId()]);
+  const [allDevices, runtimeDeviceId] = await withRequestCancellation(() => Promise.all([vpnDevices(accessToken, options.signal), getOrCreateDeviceId()]), options.signal);
+  requireProfileRequest(options);
   const baseExternalDeviceId = nativeDeviceId(runtimeDeviceId);
   let device = nativeVpnDeviceForClient(allDevices, locationId, baseExternalDeviceId, baseExternalDeviceId);
   device ??= allDevices.find((d) => d.status === 'active' && d.protocol === mobileProtocol && d.name === client.deviceName);
 
   if (!device) {
     try {
-      device = await createDevice(accessToken, client, locationId, baseExternalDeviceId);
+      requireProfileRequest(options);
+      device = await createDevice(accessToken, client, locationId, baseExternalDeviceId, options);
+      requireProfileRequest(options);
     } catch (error) {
+      requireProfileRequest(options);
+      if (isApiRequestCancelled(error)) throw error;
       const fallback = allDevices.find((d) => d.status === 'active' && d.protocol === mobileProtocol);
       if (fallback) {
         logApiDebug('createDevice failed, falling back to existing active device for testing:', fallback.name);
@@ -85,11 +93,13 @@ async function preparedTunnelFromDeviceConfig(accessToken: string, client: VpnCl
     }
   }
 
+  requireProfileRequest(options);
   const token = await jsonRequest<{ token: string }>(`/v1/devices/${encodeURIComponent(device.id)}/config-token`, {
     method: 'POST',
     accessToken,
     headers: versionHeaders,
   });
+  requireProfileRequest(options);
   const configQuery = new URLSearchParams({
     format: 'conf',
     token: token.token,
@@ -98,23 +108,25 @@ async function preparedTunnelFromDeviceConfig(accessToken: string, client: VpnCl
   const config = await rawRequest(`/v1/devices/${encodeURIComponent(device.id)}/config?${configQuery.toString()}`, {
     accessToken,
     headers: versionHeaders,
+    ...(options.signal ? { signal: options.signal } : {}),
   });
+  requireProfileRequest(options);
   return { device, config };
 }
 
 async function managedVpnProfile(accessToken: string, client: VpnClientDescriptor, options: PreparedTunnelOptions): Promise<PreparedTunnel> {
-  const requireCurrentOperation = () => requireCurrentSession(options.isCurrentSessionOperation);
+  const requireCurrentOperation = () => requireProfileRequest(options);
   requireCurrentOperation();
   const startedAtMs = Date.now();
   const locationId = normalizeLocationId(options.locationId);
   const accountPreparation = requiresManagedNativeProfile(client)
-    ? vpnAccountOptions(accessToken, client, locationId, options.userId, options.isCurrentSessionOperation)
+    ? vpnAccountOptions(accessToken, client, locationId, options.userId, options.isCurrentSessionOperation, options.signal)
       .then(async accountOptions => ({ accountOptions, accountIdentity: await getOrCreateVpnAccountIdentity(accountOptions) }))
     : Promise.resolve(undefined);
-  const [versionHeaders, initialKeyPair, runtimeDeviceId, account] = await Promise.all([
+  const [versionHeaders, initialKeyPair, runtimeDeviceId, account] = await withRequestCancellation(() => Promise.all([
     clientVersionHeaders(), requiresManagedNativeProfile(client) ? Promise.resolve(null) : getOrCreateWireGuardKeyPair(), getOrCreateDeviceId(),
     accountPreparation,
-  ]);
+  ]), options.signal);
   requireCurrentOperation();
   const accountOptions = account?.accountOptions, accountIdentity = account?.accountIdentity;
   const resolutionTiming = { startedAtMs, localPrepareMs: Math.max(0, Date.now() - startedAtMs), deviceLookupMs: 0, profileRequestMs: 0 };
@@ -122,7 +134,7 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
     const started = Date.now();
     try {
       requireCurrentOperation();
-      const response = await requestManagedVpnProfile(accessToken, deviceId, locationId, routingMode, bypassRegion, versionHeaders, knownVersion);
+      const response = await requestManagedVpnProfile(accessToken, deviceId, locationId, routingMode, bypassRegion, versionHeaders, knownVersion, options.signal);
       requireCurrentOperation();
       return response;
     } finally {
@@ -137,6 +149,7 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
   const routingPolicy = supportsNativeRoutingPolicy() && routingMode === 'all_except_ru'
     ? jsonRequest<{ authorization?: unknown }>(`/v1/vpn/routing-policy?region=ru&platform=${Platform.OS}&schema_version=2`, {
       accessToken, headers: versionHeaders, retryCount: 0, timeout: 5_000, suppressErrorLog: true,
+      ...(options.signal ? { signal: options.signal } : {}),
     }).then(result => routingAuthorization(result.authorization)).catch(() => undefined)
     : Promise.resolve(undefined);
   let device: VpnDevice | undefined;
@@ -168,12 +181,14 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
     // Older servers and changed/replaced identities retain the full lookup and
     // transactional key-recovery path. Unconditional repair always enters here.
     const lookupStarted = Date.now();
-    const allDevices = accountIdentity?.ownedDevices ?? await vpnDevices(accessToken);
+    const allDevices = accountIdentity?.ownedDevices ?? await vpnDevices(accessToken, options.signal);
     requireCurrentOperation();
     if (accountOptions && allDevices.some(item => item.userId && item.userId !== accountOptions.userId)) throw new Error('Список VPN-устройств принадлежит другому аккаунту.');
     resolutionTiming.deviceLookupMs = Math.max(0, Date.now() - lookupStarted);
     device = nativeVpnDeviceForClient(allDevices, locationId, externalDeviceId, baseExternalDeviceId);
     if (!device || accountIdentity?.legacyRegistrationPending) {
+      // Registration/key confirmation is owned by the session transaction.
+      // A cancelled borrower must not interrupt its durable receipt or key.
       device = await getOrCreateNativeDeviceRegistration(
         accessToken,
         externalDeviceId,
@@ -263,7 +278,7 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
 
 function requestManagedVpnProfile(
   accessToken: string, deviceId: string, locationId: string, routingMode: string,
-  bypassRegion: string | undefined, headers: Record<string, string>, knownVersion?: number,
+  bypassRegion: string | undefined, headers: Record<string, string>, knownVersion?: number, signal?: AbortSignal,
 ): Promise<NativeVPNProfileDTO> {
   const routed = supportsNativeRoutingPolicy();
   // Destination policy belongs to the native router. Its encrypted transport
@@ -273,30 +288,30 @@ function requestManagedVpnProfile(
   if (routed) query.set('routing_policy_version', '2');
   if (!routed && bypassRegion) query.set('bypass_region', bypassRegion);
   if (!routed && typeof knownVersion === 'number' && knownVersion > 0) query.set('known_version', String(knownVersion));
-  return jsonRequest<NativeVPNProfileDTO>(`/v1/vpn/profile?${query.toString()}`, {accessToken, headers, suppressErrorLog:true});
+  return jsonRequest<NativeVPNProfileDTO>(`/v1/vpn/profile?${query.toString()}`, {accessToken, headers, suppressErrorLog:true, ...(signal ? { signal } : {})});
 }
 
-export async function vpnDevices(accessToken: string): Promise<VpnDevice[]> {
-  const response = await jsonRequest<DeviceDTO[]>('/v1/devices', { accessToken });
+export async function vpnDevices(accessToken: string, signal?: AbortSignal): Promise<VpnDevice[]> {
+  const response = await jsonRequest<DeviceDTO[]>('/v1/devices', { accessToken, ...(signal ? { signal } : {}) });
   return response.map(parseDevice);
 }
 
-export async function vpnLocations(accessToken: string): Promise<VpnLocation[]> {
-  const response = await jsonRequest<LocationDTO[]>('/v1/locations', { accessToken, suppressErrorLog: true });
+export async function vpnLocations(accessToken: string, signal?: AbortSignal): Promise<VpnLocation[]> {
+  const response = await jsonRequest<LocationDTO[]>('/v1/locations', { accessToken, suppressErrorLog: true, ...(signal ? { signal } : {}) });
   return normalizeLocationCatalog(response);
 }
 
-export async function vpnDeviceUsage(accessToken: string): Promise<VpnDeviceUsage[]> {
-  return (await vpnDeviceUsageSnapshot(accessToken)).usage;
+export async function vpnDeviceUsage(accessToken: string, signal?: AbortSignal): Promise<VpnDeviceUsage[]> {
+  return (await vpnDeviceUsageSnapshot(accessToken, undefined, signal)).usage;
 }
 
-export async function vpnDeviceUsageSnapshot(accessToken: string, deviceId?: string): Promise<VpnDeviceUsageSnapshot> {
+export async function vpnDeviceUsageSnapshot(accessToken: string, deviceId?: string, signal?: AbortSignal): Promise<VpnDeviceUsageSnapshot> {
   const query = new URLSearchParams();
   if (deviceId?.trim()) {
     query.set('device_id', deviceId.trim());
   }
   const path = query.size > 0 ? `/v1/devices/usage?${query.toString()}` : '/v1/devices/usage';
-  const response = await jsonRequest<DeviceUsageResponseDTO>(path, { accessToken, suppressErrorLog: true });
+  const response = await jsonRequest<DeviceUsageResponseDTO>(path, { accessToken, suppressErrorLog: true, ...(signal ? { signal } : {}) });
   return {
     usage: (response.usage ?? []).map(parseDeviceUsage),
     currentDeviceId: response.current_device_id || undefined,
@@ -305,9 +320,10 @@ export async function vpnDeviceUsageSnapshot(accessToken: string, deviceId?: str
   };
 }
 
-export async function vpnResiliencePolicy(accessToken: string): Promise<unknown> {
+export async function vpnResiliencePolicy(accessToken: string, signal?: AbortSignal): Promise<unknown> {
   return jsonRequest<unknown>('/v1/resilience/policy', {
     accessToken,
+    ...(signal ? { signal } : {}),
     retryCount: 0,
     suppressErrorLog: true,
     timeout: 2_500,
@@ -509,12 +525,19 @@ async function separateLegacyAccountKey(accessToken: string, device: VpnDevice, 
   return commitManagedVpnKey(accessToken, device.id, pending, isCurrentSessionOperation, identity);
 }
 
-async function vpnAccountOptions(accessToken: string, client: VpnClientDescriptor, locationId?: string, userId?: string, isCurrentSessionOperation?: () => boolean): Promise<VpnAccountIdentityOptions> {
+async function vpnAccountOptions(accessToken: string, client: VpnClientDescriptor, locationId?: string, userId?: string, isCurrentSessionOperation?: () => boolean, signal?: AbortSignal): Promise<VpnAccountIdentityOptions> {
   requireCurrentSession(isCurrentSessionOperation);
-  const accountId = userId?.trim() || (await me(accessToken)).id;
+  requireRequestActive(signal);
+  const accountId = userId?.trim() || (await me(accessToken, signal)).id;
+  requireRequestActive(signal);
   requireCurrentSession(isCurrentSessionOperation);
   const platform = client.platform === 'ios' || Platform.OS === 'ios' ? 'ios' : 'android';
   return { userId: accountId, platform, locationId: locationId?.trim() || '', loadOwnedDevices: () => vpnDevices(accessToken), isCurrentSessionOperation };
+}
+
+function requireProfileRequest(options: PreparedTunnelOptions): void {
+  requireCurrentSession(options.isCurrentSessionOperation);
+  requireRequestActive(options.signal);
 }
 
 function requireCurrentSession(isCurrentSessionOperation?: () => boolean): void {
@@ -537,9 +560,11 @@ async function syncManagedVpnKey(accessToken: string, deviceId: string, keyPair:
   return parseDevice(response.device);
 }
 
-async function createDevice(accessToken: string, client: VpnClientDescriptor, locationId: string | undefined, externalDeviceId: string): Promise<VpnDevice> {
+async function createDevice(accessToken: string, client: VpnClientDescriptor, locationId: string | undefined, externalDeviceId: string, options: PreparedTunnelOptions = {}): Promise<VpnDevice> {
   const location = normalizeLocationId(locationId);
-  const appInfo = await getAppInfo();
+  requireProfileRequest(options);
+  const appInfo = await withRequestCancellation(getAppInfo, options.signal);
+  requireProfileRequest(options);
   const request = buildCreateDeviceRequest(client, location, externalDeviceId, appInfo);
   const response = await jsonRequest<{ device: DeviceDTO }>('/v1/devices', {
     method: 'POST',

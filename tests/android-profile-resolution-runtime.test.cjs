@@ -33,7 +33,8 @@ async function resolveCase({ cached, hot, knownEntitlement = paid, permission = 
   };
   const module = load(sourcePath, {
     react: { useCallback: fn => fn, useEffect: () => {}, useMemo: fn => fn(), useRef: value => ({ current: value }), useState: value => [value, () => {}] },
-    '@tanstack/react-query': { useQueryClient: () => queryClient },
+    '@tanstack/react-query': { useQueryClient: () => queryClient, isCancelledError: () => false },
+    '../api/error': load(path.join(repo, 'src/api/error.ts'), {}),
     'react-native': { Platform: { OS: 'android' } },
     '@/utils/error': { errorMessage: e => e instanceof Error ? e.message : String(e) },
     '../api/vexApi': { entitlement: async () => knownEntitlement, hasPaidEntitlement: entitlementAccess.hasPaidEntitlement },

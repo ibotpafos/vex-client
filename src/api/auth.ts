@@ -65,8 +65,8 @@ export async function exchangeAppAuthCode(code: string, codeVerifier: string): P
   }));
 }
 
-export async function me(accessToken: string): Promise<User> {
-  const user = await jsonRequest<UserDTO>('/v1/auth/me', { accessToken });
+export async function me(accessToken: string, signal?: AbortSignal): Promise<User> {
+  const user = await jsonRequest<UserDTO>('/v1/auth/me', { accessToken, ...(signal ? { signal } : {}) });
   return parseUser(user);
 }
 

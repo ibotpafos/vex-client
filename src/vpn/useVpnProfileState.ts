@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { isCancelledError, useQueryClient } from '@tanstack/react-query';
+import { isApiRequestCancelled } from '../api/error';
 import { Platform } from 'react-native';
 import { errorMessage } from '@/utils/error';
 
@@ -93,8 +94,9 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
   }, [isCurrentSessionOperation, userId]);
   const [isKeyRotationBusy, setIsKeyRotationBusy] = useState(false);
   const profileQueryKey = useMemo(() => ['vpn-profile', accessToken, selectedLocationId, routingMode] as const, [accessToken, routingMode, selectedLocationId]);
-  const fetchSelectedProfile = useCallback(() => resolveVpnProfile(accessToken!, knownEntitlement, selectedLocationId, {
+  const fetchSelectedProfile = useCallback(({ signal }: { signal?: AbortSignal } = {}) => resolveVpnProfile(accessToken!, knownEntitlement, selectedLocationId, {
     forceRefresh: true,
+    signal,
     revalidateProfile: queryClient.getQueryData<VpnProfile>(profileQueryKey),
     shouldFetch: () => backgroundRequestIsCurrent(accessToken, selectedLocationId),
     isCurrentSessionOperation,
@@ -221,7 +223,7 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
         queryFn: fetchSelectedProfile,
         staleTime: profileRefreshMs,
       }).catch((error) => {
-        if (cancelled || error instanceof ProfileRequestSupersededError || error instanceof SessionOperationSupersededError || !isCurrentSessionOperation()) return null;
+        if (cancelled || isCancelledError(error) || isApiRequestCancelled(error) || error instanceof ProfileRequestSupersededError || error instanceof SessionOperationSupersededError || !isCurrentSessionOperation()) return null;
         onProfileRefreshFailed?.({
           error,
           locationId: selectedLocationId,
@@ -383,7 +385,7 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
       try {
         currentEntitlement = await queryClient.fetchQuery<Entitlement>({
           queryKey: ['entitlement', accessToken],
-          queryFn: () => entitlement(accessToken),
+          queryFn: ({ signal }: { signal?: AbortSignal } = {}) => entitlement(accessToken, signal),
           staleTime: 5 * 60_000,
         });
         requireCurrentSession();

@@ -206,6 +206,7 @@ export type PreparedTunnel = {
 };
 
 export type PreparedTunnelOptions = {
+  signal?: AbortSignal;
   userId?: string;
   isCurrentSessionOperation?: () => boolean;
   cachedDevice?: VpnDevice;

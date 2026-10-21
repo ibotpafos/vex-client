@@ -24,14 +24,16 @@ export async function appUpdateCheck(input: {
   apiClientVersion?: string;
   configSchemaVersion?: number;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<AppUpdateCheckResult> {
-  const { timeoutMs, accessToken, ...requestBody } = input;
+  const { timeoutMs, accessToken, signal, ...requestBody } = input;
   const appVersion = normalizeUpdateCheckVersion(input.appVersion);
   const item = await jsonRequest<AppUpdateCheckResponseDTO>('/v1/app/update/check', {
     method: 'POST',
     accessToken,
     suppressErrorLog: true,
     timeout: timeoutMs,
+    ...(signal ? { signal } : {}),
     headers: { 'X-Vex-App-Version': appVersion, 'X-Vex-Account-Updates': '1' },
     body: {
       ...requestBody,

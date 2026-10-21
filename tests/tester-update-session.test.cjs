@@ -37,6 +37,9 @@ test('update API sends enrollment identity as a header option, never in JSON', a
   assert.equal(requests[2].options.accessToken, undefined, 'anonymous stable checks stay supported');
 });
 
+const apiErrors = load('src/api/error.ts', {});
+const cancellation = load('src/api/requestCancellation.ts', { './error': apiErrors });
+
 function queryFixture({ sessionRevision = 1, loading = false, current = () => true, info = async () => ({ version: '1.2.3', channel: 'stable' }), update = async () => ({ updateAvailable: true }) } = {}) {
   const session = { accessToken: `fixture-token-${sessionRevision}`, user: { id: 'fixture-account' } };
   const hook = load('src/components/mobile-app-update-query.ts', {
@@ -45,6 +48,7 @@ function queryFixture({ sessionRevision = 1, loading = false, current = () => tr
     'react': { useMemo: fn => fn(), useCallback: fn => fn },
     '@/api/updatePreflight': { updateCheckChannel: x => x, shouldOfferAppUpdate: () => true },
     '@/api/vexApi': { appUpdateCheck: update },
+    '@/api/error': apiErrors, '@/api/requestCancellation': cancellation,
     '@/api/queryRetry': { createApiQueryRetry: () => false },
     '@/native/appInfo': { getAppInfo: info, getOrCreateDeviceId: async () => 'fixture-device' },
     '@/auth/session-context': { useSession: () => ({ session, sessionRevision, isLoading: loading, isCurrentSessionOperation: current }) },

@@ -37,6 +37,7 @@ type LocationCatalogRefresherOptions = {
   currentCatalog?: () => VpnLocation[] | null | undefined;
   now?: () => number;
   onDiagnostics?: (event: LocationCatalogDiagnostics) => void;
+  shouldReportError?: (error: unknown) => boolean;
 };
 
 export function createLocationCatalogRefresher(options: LocationCatalogRefresherOptions) {
@@ -74,7 +75,7 @@ export function createLocationCatalogRefresher(options: LocationCatalogRefresher
           return { locations: stableLocations, source: 'network' as const, reason };
         } catch (error) {
           const prior = options.currentCatalog?.() ?? lastCatalog ?? [];
-          options.onDiagnostics?.({
+          if (options.shouldReportError?.(error) !== false) options.onDiagnostics?.({
             reason,
             outcome: 'error',
             durationMs: Math.max(0, now() - startedAt),

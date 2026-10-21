@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { router } from 'expo-router';
 import { AppState, Platform } from 'react-native';
-import { useQueryClient } from '@tanstack/react-query';
+import { isCancelledError, useQueryClient } from '@tanstack/react-query';
+import { isApiRequestCancelled } from '@/api/error';
 
 import {
   type Entitlement,
@@ -277,9 +278,9 @@ export function useVpnConnection() {
   const entitlementQueryKey = useMemo(() => ['entitlement', accessToken] as const, [accessToken]);
   const locationsQueryKey = useMemo(() => ['vpn-locations', accessToken] as const, [accessToken]);
   const devicesQueryKey = useMemo(() => ['vpn-devices', accessToken] as const, [accessToken]);
-  const fetchEntitlement = useCallback(() => entitlement(accessToken!), [accessToken]);
-  const fetchVpnLocations = useCallback(() => vpnLocations(accessToken!), [accessToken]);
-  const fetchVpnDevices = useCallback(() => vpnDevices(accessToken!), [accessToken]);
+  const fetchEntitlement = useCallback(({ signal }: { signal?: AbortSignal } = {}) => entitlement(accessToken!, signal), [accessToken]);
+  const fetchVpnLocations = useCallback(({ signal }: { signal?: AbortSignal } = {}) => vpnLocations(accessToken!, signal), [accessToken]);
+  const fetchVpnDevices = useCallback(({ signal }: { signal?: AbortSignal } = {}) => vpnDevices(accessToken!, signal), [accessToken]);
   const catalogSnapshotRef = useRef<VpnLocation[] | null>(null);
   const catalogOwnerRef = useRef(catalogOwner);
   const catalogDiagnosticsRef = useRef<(event: LocationCatalogDiagnostics) => void>(() => {});
@@ -298,8 +299,9 @@ export function useVpnConnection() {
       }
     },
     currentCatalog: () => catalogSnapshotRef.current,
-    onDiagnostics: (event) => catalogDiagnosticsRef.current(event),
-  }), [catalogOwner, fetchLocationCatalog]);
+    onDiagnostics: (event) => { if (isCurrentSessionOperation()) catalogDiagnosticsRef.current(event); },
+    shouldReportError: (error) => !isCancelledError(error) && !isApiRequestCancelled(error),
+  }), [catalogOwner, fetchLocationCatalog, isCurrentSessionOperation]);
   const refreshLocations = useCallback(async (reason: LocationCatalogRefreshReason) => {
     const showRefresh = isVisibleLocationCatalogRefresh(
       reason,
@@ -310,17 +312,17 @@ export function useVpnConnection() {
     }
     try {
       const result = await locationCatalogRefresher.refresh(reason);
-      setLocationsRefreshError(null);
+      if (isCurrentSessionOperation()) setLocationsRefreshError(null);
       return result;
     } catch (error) {
-      setLocationsRefreshError(error);
+      if (isCurrentSessionOperation() && !isCancelledError(error) && !isApiRequestCancelled(error)) setLocationsRefreshError(error);
       throw error;
     } finally {
-      if (showRefresh) {
+      if (showRefresh && isCurrentSessionOperation()) {
         setIsLocationsRefreshing(false);
       }
     }
-  }, [locationCatalogRefresher]);
+  }, [isCurrentSessionOperation, locationCatalogRefresher]);
 
   const cachedSelectedProfile = accessToken
     ? queryClient.getQueryData<VpnProfile>(['vpn-profile', accessToken, selectedLocationId, routingMode])
@@ -506,7 +508,7 @@ export function useVpnConnection() {
           setEntitlementError(null);
         }
       } catch (error) {
-        if (!cancelled) {
+        if (!cancelled && !isCancelledError(error) && !isApiRequestCancelled(error)) {
           setEntitlementError(error);
         }
       }

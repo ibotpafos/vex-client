@@ -7,6 +7,8 @@ import { requireVpnLocationId } from './locationId';
 import { profileRevalidationOptions } from './profileRevalidation';
 import type { PreparedTunnel, PreparedTunnelOptions } from '../api/types';
 import { SessionOperationSupersededError } from './sessionOperation';
+import { requireRequestActive } from '../api/error';
+import { withRequestCancellation } from '../api/requestCancellation';
 
 export type VpnProfile = {
   routingParameters?: string;
@@ -42,36 +44,38 @@ export async function resolveVpnProfile(
   accessToken?: string,
   knownEntitlement?: Entitlement | null,
   locationId = '',
-  options: { allowPersistentHotProfile?: boolean; forceRefresh?: boolean; shouldFetch?: () => boolean; isCurrentSessionOperation?: () => boolean; routingMode?: VpnRoutingMode; userId?: string; revalidateProfile?: VpnProfile | null } = {},
+  options: { signal?: AbortSignal; allowPersistentHotProfile?: boolean; forceRefresh?: boolean; shouldFetch?: () => boolean; isCurrentSessionOperation?: () => boolean; routingMode?: VpnRoutingMode; userId?: string; revalidateProfile?: VpnProfile | null } = {},
 ): Promise<VpnProfile> {
-  requireCurrentSession(options.isCurrentSessionOperation);
-  const token = accessToken?.trim() || '';
-  const normalizedLocationId = normalizeLocationId(locationId);
-  const routingMode = options.routingMode ?? defaultVpnRoutingMode;
-  const cacheKey = profileCacheKey(token, normalizedLocationId, routingMode);
-  if (!options.forceRefresh) {
-    if (cachedProfile?.key === cacheKey && !cachedProfile.profile.rotationRequired && vpnProfileAddressMatchesDevice(cachedProfile.profile)) {
-      return { ...cachedProfile.profile, source: 'local' };
-    }
-    if (options.allowPersistentHotProfile !== false && options.userId) {
-      const hotProfile = await loadHotVpnProfile(options.userId, normalizedLocationId, routingMode);
-      requireCurrentSession(options.isCurrentSessionOperation);
-      if (hotProfile) {
-        const profile = profileFromHotRecord(hotProfile);
-        if (profile.routingMode !== routingMode || !vpnProfileAddressMatchesDevice(profile)) {
-          return refreshVpnProfile(token, { routingMode, userId: options.userId, isCurrentSessionOperation: options.isCurrentSessionOperation }, knownEntitlement, normalizedLocationId, options.shouldFetch);
+  return withRequestCancellation(async () => {
+    requireProfileRequest(options);
+    const token = accessToken?.trim() || '';
+    const normalizedLocationId = normalizeLocationId(locationId);
+    const routingMode = options.routingMode ?? defaultVpnRoutingMode;
+    const cacheKey = profileCacheKey(token, normalizedLocationId, routingMode);
+    if (!options.forceRefresh) {
+      if (cachedProfile?.key === cacheKey && !cachedProfile.profile.rotationRequired && vpnProfileAddressMatchesDevice(cachedProfile.profile)) {
+        return { ...cachedProfile.profile, source: 'local' };
+      }
+      if (options.allowPersistentHotProfile !== false && options.userId) {
+        const hotProfile = await loadHotVpnProfile(options.userId, normalizedLocationId, routingMode);
+        requireProfileRequest(options);
+        if (hotProfile) {
+          const profile = profileFromHotRecord(hotProfile);
+          if (profile.routingMode !== routingMode || !vpnProfileAddressMatchesDevice(profile)) {
+            return refreshVpnProfile(token, { routingMode, userId: options.userId, isCurrentSessionOperation: options.isCurrentSessionOperation, ...(options.signal ? { signal: options.signal } : {}) }, knownEntitlement, normalizedLocationId, options.shouldFetch);
+          }
+          cachedProfile = { key: cacheKey, profile };
+          return profile;
         }
-        cachedProfile = { key: cacheKey, profile };
-        return profile;
       }
     }
-  }
 
-  if (token) {
-    return refreshVpnProfile(token, { ...profileRevalidationOptions(options.revalidateProfile, normalizedLocationId, routingMode), routingMode, userId: options.userId, isCurrentSessionOperation: options.isCurrentSessionOperation }, knownEntitlement, normalizedLocationId, options.shouldFetch);
-  }
+    if (token) {
+      return refreshVpnProfile(token, { ...profileRevalidationOptions(options.revalidateProfile, normalizedLocationId, routingMode), routingMode, userId: options.userId, isCurrentSessionOperation: options.isCurrentSessionOperation, ...(options.signal ? { signal: options.signal } : {}) }, knownEntitlement, normalizedLocationId, options.shouldFetch);
+    }
 
-  throw new Error('Сначала войдите в аккаунт.');
+    throw new Error('Сначала войдите в аккаунт.');
+  }, options.signal);
 }
 
 export function resetVpnProfileCache() {
@@ -113,9 +117,9 @@ async function refreshVpnProfile(
   locationId = '',
   shouldFetch?: () => boolean,
 ): Promise<VpnProfile> {
-  requireCurrentSession(options.isCurrentSessionOperation);
-  const currentEntitlement = knownEntitlement ?? await entitlement(token);
-  requireCurrentSession(options.isCurrentSessionOperation);
+  requireProfileRequest(options);
+  const currentEntitlement = knownEntitlement ?? await entitlement(token, options.signal);
+  requireProfileRequest(options);
   if (!hasPaidEntitlement(currentEntitlement)) {
     throw new Error('Подписка не активна.');
   }
@@ -125,12 +129,13 @@ async function refreshVpnProfile(
   const queuedAtMs = Date.now();
   let queueWaitMs = 0;
   const coalesceKey = profileRequestCoalesceKey(token, selectedLocationId, routingMode, options);
-  const tunnel = await runProfileRequest(() => {
+  const tunnel = await runProfileRequest((signal) => {
     requireCurrentSession(options.isCurrentSessionOperation);
+    requireRequestActive(signal);
     queueWaitMs = Math.max(0, Date.now() - queuedAtMs);
-    return preparedTunnel(token, undefined, { ...options, locationId: selectedLocationId, routingMode });
-  }, shouldFetch, shouldFetch ? 'background' : 'foreground', coalesceKey);
-  requireCurrentSession(options.isCurrentSessionOperation);
+    return preparedTunnel(token, undefined, { ...options, signal, locationId: selectedLocationId, routingMode });
+  }, shouldFetch, shouldFetch ? 'background' : 'foreground', coalesceKey, options.signal);
+  requireProfileRequest(options);
   const profile: VpnProfile = {
     resolutionTiming: tunnel.resolutionTiming ? { ...tunnel.resolutionTiming, queueWaitMs } : undefined,
     config: tunnel.config,
@@ -168,6 +173,11 @@ function profileRequestCoalesceKey(token: string, locationId: string, routingMod
 
 function normalizeLocationId(locationId: string): string {
   return requireVpnLocationId(locationId);
+}
+
+function requireProfileRequest(options: PreparedTunnelOptions): void {
+  requireCurrentSession(options.isCurrentSessionOperation);
+  requireRequestActive(options.signal);
 }
 
 function requireCurrentSession(isCurrentSessionOperation?: () => boolean): void {

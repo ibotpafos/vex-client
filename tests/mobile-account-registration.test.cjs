@@ -46,7 +46,9 @@ function harness(platform = 'ios', existingStore, nativeRouting = false) {
     ? load('src/native/vpnAccountIdentity.ts', 'getOrCreateVpnAccountIdentity,withVpnAccountIdentity,saveVpnAccountKeyPair,pendingVpnAccountKeyPair,savePendingVpnAccountKeyPair,clearPendingVpnAccountKeyPair,renewVpnAccountInstallation,confirmVpnAccountRegistration,vpnAccountRegistrationIdempotencyKey,validatedVpnAccountKeyPair', { SecureStore: store, ...app, ...native, ...session }) : {};
   const location = load('src/vpn/locationId.ts', 'requireVpnLocationId,comparableVpnLocationId');
   const selection = load('src/vpn/nativeDeviceSelection.ts', 'nativeVpnDeviceForClient', location);
-  const { ApiRequestError } = load('src/api/error.ts', 'ApiRequestError');
+  const errors = load('src/api/error.ts', 'ApiRequestError,requireRequestActive,isApiRequestCancelled,requestCancelledError');
+  const { ApiRequestError } = errors;
+  const cancellation = load('src/api/requestCancellation.ts', 'withRequestCancellation', errors);
   const ownerFor = token => token === 'refreshed-A' ? 'A' : token;
   const dto = (owner, extra = {}) => ({ id: `device-${owner}`, user_id: owner, status: 'active', protocol: 'amneziawg', platform, provisioning_mode: 'managed_native', client_key_ownership: 'client', external_device_id: legacyId, public_key: legacyPair.publicKey, psk_epoch: 1, ...extra });
   const profile = device => ({ device_id: device.id, assigned_ipv4: '10.0.0.2/32', server: 'fixture.example', port: 443, server_public_key: key(4), client_public_key: device.public_key, client_key_epoch: device.psk_epoch, preshared_key: key(device.psk_epoch + 20), version: 1 });
@@ -103,7 +105,7 @@ function harness(platform = 'ios', existingStore, nativeRouting = false) {
     ...load('src/vpn/keyEpochRecovery.ts', 'nextManagedKeyEpoch,isKeyEpochMismatchError'),
     ...load('src/vpn/amneziaConfig.ts', 'managedProfileAmneziaConfig'),
     ...load('src/vpn/profileRevalidation.ts', 'canRevalidateDevice'),
-    me: async token => ({ id: ownerFor(token) }), clientVersionHeaders: async () => ({}), jsonRequest, ApiRequestError,
+    me: async token => ({ id: ownerFor(token) }), clientVersionHeaders: async () => ({}), jsonRequest, ...errors, ...cancellation,
     defaultVpnRoutingMode: 'default', defaultVpnRoutingPolicyVersion: 'v1', resolvedVpnBypassRegion: () => '', withManagedProfileAWGCapability: query => query,
   });
   return { api, scoped, saved, devices, bindings, registrations, requests, writes, dto, generations: () => generations,

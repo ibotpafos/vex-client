@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import {stripTypeScriptTypes} from 'node:module';
 import test from 'node:test';
+import {requireRequestActive} from '../src/api/error.ts';
+import {withRequestCancellation} from '../src/api/requestCancellation.ts';
 import {profileRevalidationOptions,canRevalidateDevice} from '../src/vpn/profileRevalidation.ts';
 const device={id:'device',publicKey:'public',keyEpoch:2,status:'active',assignedIpv4:'10.0.0.2'};
 const profile={config:'Address = 10.0.0.2/32',device,locationId:'de',routingMode:'smart',profileVersion:7};
@@ -17,7 +19,7 @@ test('managed profile revalidation always reaches API and rejects revocation or 
  for(const scenario of ['unchanged','revoked','replacement','epoch','repair']){
   const queries=[];
   const current={...device,...(scenario==='replacement'?{id:'replacement'}:{}),...(scenario==='epoch'?{keyEpoch:3}:{})};
-  const stubs={supportsNativeRoutingPolicy:()=>false, Platform:{OS:'android'},me:async()=>({id:'fixture-owner'}),getOrCreateVpnAccountIdentity:async()=>({installationId:'runtime',externalDeviceId:'runtime',keyScope:'fixture-scope',keyPair:{publicKey:'public'}}),clientVersionHeaders:async()=>({}),getOrCreateWireGuardKeyPair:async()=>({publicKey:'public'}),getOrCreateDeviceId:async()=> 'runtime',nativeVpnDeviceForClient:devices=>devices.length?undefined:current,
+  const stubs={requireRequestActive,withRequestCancellation,supportsNativeRoutingPolicy:()=>false, Platform:{OS:'android'},me:async()=>({id:'fixture-owner'}),getOrCreateVpnAccountIdentity:async()=>({installationId:'runtime',externalDeviceId:'runtime',keyScope:'fixture-scope',keyPair:{publicKey:'public'}}),clientVersionHeaders:async()=>({}),getOrCreateWireGuardKeyPair:async()=>({publicKey:'public'}),getOrCreateDeviceId:async()=> 'runtime',nativeVpnDeviceForClient:devices=>devices.length?undefined:current,
    withManagedProfileAWGCapability:q=>q,defaultVpnRoutingMode:'smart',defaultVpnRoutingPolicyVersion:'v1',resolvedVpnBypassRegion:()=>'',requireVpnLocationId:x=>x,
    canRevalidateDevice,jsonRequest:async path=>{if(path==='/v1/devices')return [];queries.push(path);return scenario==='revoked'?{revoked:true}:{unchanged:true,version:7};}};
   const run=new Function(...Object.keys(stubs),source+';return managedVpnProfile;')(...Object.values(stubs));

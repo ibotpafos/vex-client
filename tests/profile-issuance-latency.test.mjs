@@ -4,7 +4,8 @@ import { stripTypeScriptTypes } from 'node:module';
 import test from 'node:test';
 import { profileRevalidationOptions, canRevalidateDevice } from '../src/vpn/profileRevalidation.ts';
 import { nativeVpnDeviceForClient } from '../src/vpn/nativeDeviceSelection.ts';
-import { ApiRequestError } from '../src/api/error.ts';
+import { ApiRequestError, requireRequestActive, isApiRequestCancelled } from '../src/api/error.ts';
+import { withRequestCancellation } from '../src/api/requestCancellation.ts';
 
 const device = {id:'device', publicKey:'public', keyEpoch:2, status:'active', assignedIpv4:'10.0.0.2', externalDeviceId:'runtime', protocol:'amneziawg', provisioningMode:'managed_native', clientKeyOwnership:'client'};
 const cached = {config:'Address = 10.0.0.2/32', device, locationId:'de', routingMode:'smart', profileVersion:7};
@@ -24,7 +25,7 @@ function managedHarness({response = confirmed, current = device, key = {publicKe
     getOrCreateVpnAccountIdentity:async()=>({installationId:'runtime',externalDeviceId:'runtime',keyScope:'fixture-scope',keyPair:{...(typeof key === 'function' ? key() : key),keyEpoch:2}}),
     clientVersionHeaders:headers, getOrCreateWireGuardKeyPair:async()=>typeof key === 'function' ? key() : key, getOrCreateDeviceId:async()=> 'runtime', nativeVpnDeviceForClient,
     withManagedProfileAWGCapability:q=>q, defaultVpnRoutingMode:'smart', defaultVpnRoutingPolicyVersion:'v1', resolvedVpnBypassRegion:()=>'', requireVpnLocationId:x=>x,
-    canRevalidateDevice, ApiRequestError, jsonRequest:async path=> {
+    canRevalidateDevice, ApiRequestError, requireRequestActive, isApiRequestCancelled, withRequestCancellation, jsonRequest:async path=> {
       requests.push(path);
       if(path==='/v1/devices') return list ? list() : [{id:current.id, public_key:current.publicKey, psk_epoch:current.keyEpoch, status:current.status,
         assigned_ipv4:current.assignedIpv4, external_device_id:current.externalDeviceId, protocol:current.protocol,
@@ -119,7 +120,7 @@ test('API profile delivery does not wait for duplicate secure-cache persistence'
   const run = load('src/vpn/profile.ts','resolveVpnProfile', {
     defaultVpnRoutingMode:'smart', defaultVpnBypassRegion:'ru', defaultVpnRoutingPolicyVersion:'v1',
     requireVpnLocationId:x=>x, profileRevalidationOptions, vpnProfileAddressMatchesDevice:()=>true,
-    hasPaidEntitlement:()=>true, preparedTunnel:async()=>({...cached, config:cached.config}), runProfileRequest:fn=>fn(),
+    requireRequestActive, withRequestCancellation, hasPaidEntitlement:()=>true, preparedTunnel:async()=>({...cached, config:cached.config}), runProfileRequest:fn=>fn(),
     saveHotVpnProfile:()=>{writes++; return storage.promise;},
   });
   let resolved = false;

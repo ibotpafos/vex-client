@@ -18,6 +18,8 @@ function load(file, dependencies = {}) {
   return exports;
 }
 const sessionOperation = load('src/vpn/sessionOperation.ts');
+const apiErrors = load('src/api/error.ts');
+const cancellation = load('src/api/requestCancellation.ts', { './error': apiErrors });
 const deferred = () => {
   let resolve, reject;
   const promise = new Promise((ok, fail) => { resolve = ok; reject = fail; });
@@ -53,7 +55,8 @@ function hookHarness(stage, { rotationRequired = false, knownEntitlement = paid 
     invalidateQueries: () => wait('invalidate'), fetchQuery: ({ queryFn }) => queryFn(),
   };
   const module = load('src/vpn/useVpnProfileState.ts', {
-    react, '@tanstack/react-query': { useQueryClient: () => query }, 'react-native': { Platform: { OS: 'ios' } },
+    react, '@tanstack/react-query': { useQueryClient: () => query, isCancelledError: () => false },
+    'react-native': { Platform: { OS: 'ios' } },
     '@/utils/error': { errorMessage: error => error.message },
     '../api/vexApi': { hasPaidEntitlement: value => Boolean(value?.active), entitlement: () => wait('entitlement', paid) },
     './profile': {
@@ -62,6 +65,7 @@ function hookHarness(stage, { rotationRequired = false, knownEntitlement = paid 
       rotateVpnProfileKey: (...args) => { assert.equal(typeof args[2], 'function'); return wait('rotate', makeProfile()); },
     },
     './profileRequestQueue': { ProfileRequestSupersededError: class ProfileRequestSupersededError extends Error {} },
+    '../api/error': apiErrors, '../api/requestCancellation': cancellation,
     './sessionOperation': sessionOperation,
     './hotProfileCache': {
       clearHotVpnProfiles: () => wait('clear-hot'), hydrateHotVpnProfilesToQueryCache: async () => [],
@@ -163,6 +167,7 @@ test('a superseded profile response cannot seed the global cache for a later log
     './profileRequestQueue': { runProfileRequest: operation => operation() },
     './profileConsistency': { vpnProfileAddressMatchesDevice: () => true },
     './locationId': { requireVpnLocationId: value => value }, './profileRevalidation': { profileRevalidationOptions: () => ({}) },
+    '../api/error': apiErrors, '../api/requestCancellation': cancellation,
     './sessionOperation': sessionOperation,
   });
   const pending = module.resolveVpnProfile('fixture-token', paid, 'de', { forceRefresh: true, isCurrentSessionOperation: () => current });
@@ -178,7 +183,7 @@ function vpnApi(operations) {
     '@/native/vexVpn': { supportsNativeRoutingPolicy: () => false, ...operations.native }, '@/vpn/nativeDeviceSelection': { nativeVpnDeviceForClient: devices => devices[0] },
     '@/vpn/keyEpochRecovery': { nextManagedKeyEpoch: (_, epoch) => (epoch ?? 0) + 1, isKeyEpochMismatchError: error => error.code === 'epoch_mismatch' },
     '@/vpn/routingPolicy': { defaultVpnRoutingMode: 'default', defaultVpnRoutingPolicyVersion: 'v1', resolvedVpnBypassRegion: () => '' },
-    '@/notifications/pushRegistration': {}, './client': operations.client, './error': { ApiRequestError: class ApiRequestError extends Error {} },
+    '@/notifications/pushRegistration': {}, './client': operations.client, './error': apiErrors, './requestCancellation': cancellation,
     './auth': { me: async () => ({ id: 'fixture-owner' }) },
     '../native/vpnAccountIdentity': {
       getOrCreateVpnAccountIdentity: async () => ({ installationId: 'installation-fixture', externalDeviceId: 'installation-fixture', keyScope: 'fixture-scope', keyPair: await operations.native.getOrCreateWireGuardKeyPair() }),

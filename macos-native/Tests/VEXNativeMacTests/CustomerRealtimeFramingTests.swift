@@ -82,11 +82,11 @@ final class CustomerRealtimeFramingTests: XCTestCase {
 
     @MainActor
     func testOversizedResponseIsCancelledAndReconnectKeepsLastEventID() async throws {
-        try await APIContractScenarios.oversizedRealtimeReconnect(invalidMetadata: false)
+        try await RealtimeFramingScenarios.oversizedRealtimeReconnect(invalidMetadata: false)
     }
 
     @MainActor
     func testRejectedMetadataDoesNotAdvanceReconnectCursor() async throws {
-        try await APIContractScenarios.oversizedRealtimeReconnect(invalidMetadata: true)
+        try await RealtimeFramingScenarios.oversizedRealtimeReconnect(invalidMetadata: true)
     }
 }

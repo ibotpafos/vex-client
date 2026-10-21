@@ -82,6 +82,7 @@ if [[ "${1:-}" == --api-contract-probe ]]; then
     shift
     # Use the exact same scenarios in the explicit CLT executable and XCTest.
     cp "$root_dir/macos-native/Tests/VEXNativeMacTests/Support/APIContractScenarios.swift" "$source_dir/"
+    cp "$root_dir/macos-native/Tests/VEXNativeMacTests/Support/RealtimeFramingScenarios.swift" "$source_dir/"
     cp "$root_dir/scripts/tests/vex_api_contract_probe.swift" "$source_dir/"
     cat > "$harness_dir/Package.swift" <<'SWIFT'
 // swift-tools-version: 6.2
@@ -94,6 +95,7 @@ SWIFT
     exit
 fi
 cp "$root_dir/macos-native/Tests/VEXNativeMacTests/Support/APIContractScenarios.swift" "$test_dir/"
+cp "$root_dir/macos-native/Tests/VEXNativeMacTests/Support/RealtimeFramingScenarios.swift" "$test_dir/"
 cat > "$harness_dir/Package.swift" <<'SWIFT'
 // swift-tools-version: 6.2
 import PackageDescription

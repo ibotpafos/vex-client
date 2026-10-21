@@ -9,6 +9,8 @@ struct VEXAPIContractProbe {
     static func main() async {
         let scenarios: [(String, () async throws -> Void)] = [
             ("app update metadata", { try await APIContractScenarios.appUpdateMetadata() }),
+            ("successful JSON body classification", { try await APIContractScenarios.successfulBodyDecoding() }),
+            ("successful body parent cancellation", { try await APIContractScenarios.successfulBodyCancellation() }),
             ("location capability contract", { try await APIContractScenarios.locationCapabilities() }),
             ("GET redirects", { try await APIContractScenarios.redirects(method: "GET") }),
             ("POST redirects", { try await APIContractScenarios.redirects(method: "POST") }),

@@ -88,8 +88,131 @@ enum APIContractScenarios {
             do {
                 _ = try await api.appUpdateCheck()
                 throw Failure("malformed update metadata admitted")
-            } catch is DecodingError { }
+            } catch VEXAPIError.invalidResponse { }
         }
+    }
+
+    static func successfulBodyDecoding() async throws {
+        var failures: [String] = []
+        for body in ["QSECRET", "", "{", "[1,", "null", "{}", "true", #"[{"id":7}]"#] {
+            let calls = APIBodyCounter()
+            var api = VEXAPIClient()
+            api.transport.load = { request in
+                calls.increment()
+                return (Data(body.utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!)
+            }
+            do {
+                _ = try await api.billingPlans()
+                failures.append("invalid successful body admitted")
+            } catch let error as VEXAPIError {
+                guard case .invalidResponse = error else {
+                    failures.append("decode failure changed to another API failure")
+                    continue
+                }
+                try require(error.code == "api_response_invalid", "decode failure lost its protocol code")
+                try require(!VEXAPIError.isServerUnavailable(error) && !error.isTimeout && !error.isProfileProvisioningUnavailable,
+                    "local decode failure enabled an outage/profile fallback")
+                try require(!error.isUnauthorized && !error.isRateLimited, "decode failure rejected a session or imposed cooldown")
+                try require(!String(describing: error).contains("QSECRET") && !error.localizedDescription.contains("QSECRET"), "decode failure exposed body diagnostics")
+            } catch {
+                failures.append("unclassified successful body: " + String(describing: type(of: error)))
+            }
+            try require(calls.value == 1, "successful decode failure replayed the request")
+        }
+
+        var api = VEXAPIClient()
+        api.transport.load = { request in
+            let body = request.url!.path == "/v1/auth/me"
+                ? #"{"id":"fixture","email":"fixture@example.invalid","status":"active"}"# : "[]"
+            return (Data(body.utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!)
+        }
+        let plans = try await api.billingPlans()
+        let user = try await api.me(accessToken: "inert-fixture-token")
+        try require(plans.isEmpty && user.id == "fixture" && user.status == "active", "valid object/array response changed")
+        for body in ["", "{}"] {
+            api.transport.load = { request in
+                (Data(body.utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!)
+            }
+            try await api.submitClientDiagnostics(accessToken: "inert-fixture-token", report: bodyFixtureReport())
+        }
+        api.transport.load = { _ in
+            throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "inert transport preparation failure"))
+        }
+        do {
+            _ = try await api.billingPlans()
+            throw Failure("transport decoding failure disappeared")
+        } catch let DecodingError.dataCorrupted(context) {
+            try require(context.debugDescription == "inert transport preparation failure", "transport decoding error was relabeled")
+        }
+        try require(failures.isEmpty, failures.joined(separator: "; "))
+    }
+
+    static func successfulBodyCancellation() async throws {
+        var failures: [String] = []
+        let cases = [("[]", false, 200), ("QSECRET", false, 200), ("", true, 200), ("{}", true, 200), ("QSECRET", true, 200),
+            ("{}", true, 400), ("{}", true, 401), ("{}", true, 429), ("{}", true, 503)]
+        for (body, empty, status) in cases {
+            let response = APICancellingBodyResponse(url: URL(string: "https://body.example.invalid")!,
+                statusCode: status, httpVersion: "HTTP/1.1", headerFields: nil)!
+            // GET transport reads status once to select retries; POST has one
+            // attempt and skips that read. Cancel in the API parent's status
+            // inspection after transport has returned in either case.
+            response.cancelAtRead = empty ? 1 : 2
+            let calls = APIBodyCounter()
+            var api = VEXAPIClient()
+            api.transport.load = { _ in calls.increment(); return (Data(body.utf8), response) }
+            let client = api
+            let task = Task {
+                if empty {
+                    try await client.submitClientDiagnostics(accessToken: "inert-fixture-token", report: bodyFixtureReport())
+                } else {
+                    _ = try await client.billingPlans()
+                }
+            }
+            switch await task.result {
+            case .success: failures.append("cancelled body returned a value: empty=\(empty)")
+            case .failure(let error):
+                if !(error is CancellationError) { failures.append("body failure hid cancellation status=\(status): " + String(describing: type(of: error))) }
+            }
+            try require(response.didCancel, "fixture did not reach the API parent")
+            try require(calls.value == 1, "parent cancellation replayed HTTP")
+        }
+        for invalidBase in [false, true] {
+            let calls = APIBodyCounter()
+            var api = VEXAPIClient()
+            if invalidBase { api.baseURL = URL(string: "relative/fixture") }
+            api.transport.load = { _ in calls.increment(); throw Failure("cancelled request reached transport") }
+            let client = api
+            let task = Task {
+                withUnsafeCurrentTask { $0?.cancel() }
+                _ = try await client.billingPlans()
+            }
+            switch await task.result {
+            case .success: failures.append("already cancelled body returned")
+            case .failure(let error):
+                if !(error is CancellationError) { failures.append("configuration hid preexisting cancellation") }
+            }
+            try require(calls.value == 0, "already cancelled request did work")
+        }
+        for unavailable in [false, true] {
+            let failure = APIParentCancellingError(unavailable: unavailable)
+            let calls = APIBodyCounter()
+            var api = VEXAPIClient()
+            api.transport.load = { _ in calls.increment(); throw failure }
+            let client = api
+            let task = Task { _ = try await client.billingPlans() }
+            switch await task.result {
+            case .success: failures.append("cancelled transport error returned")
+            case .failure(let error):
+                if !(error is CancellationError) { failures.append("transport classification hid parent cancellation") }
+            }
+            try require(failure.didCancel && calls.value == 1, "transport classification fixture did not reach parent once")
+        }
+        try require(failures.isEmpty, failures.joined(separator: "; "))
+    }
+
+    private static func bodyFixtureReport() -> ClientDiagnosticsReport {
+        ClientDiagnosticsReport(reason: "fixture", status: "fixture", vpnState: "disconnected", rxBytes: 0, txBytes: 0, samples: [:])
     }
 
     private static func verifyAppMetadataRequest(_ request: URLRequest) throws {
@@ -356,6 +479,49 @@ enum APIContractScenarios {
             try require(!error.isUnauthorized, "maintenance became session expiry")
             try require(error.errorDescription == VEXAPIError.technicalWorksMessage, "maintenance presentation changed")
         }
+    }
+}
+
+private final class APIBodyCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    func increment() { lock.lock(); count += 1; lock.unlock() }
+    var value: Int { lock.lock(); defer { lock.unlock() }; return count }
+}
+
+private final class APIParentCancellingError: LocalizedError, @unchecked Sendable {
+    private let lock = NSLock()
+    private let unavailable: Bool
+    private var cancelled = false
+    init(unavailable: Bool) { self.unavailable = unavailable }
+    var didCancel: Bool { lock.lock(); defer { lock.unlock() }; return cancelled }
+    var errorDescription: String? {
+        withUnsafeCurrentTask { task in
+            task?.cancel()
+            lock.lock(); cancelled = task != nil; lock.unlock()
+        }
+        return unavailable ? "could not connect" : "inert transport preparation failure"
+    }
+}
+
+private final class APICancellingBodyResponse: HTTPURLResponse, @unchecked Sendable {
+    private let lock = NSLock()
+    private var reads = 0
+    private var cancelled = false
+    var cancelAtRead = 2 // configured before the response is shared
+    var didCancel: Bool { lock.lock(); defer { lock.unlock() }; return cancelled }
+    override var statusCode: Int {
+        lock.lock()
+        reads += 1
+        let shouldCancel = reads == cancelAtRead
+        lock.unlock()
+        if shouldCancel {
+            withUnsafeCurrentTask { task in
+                task?.cancel()
+                lock.lock(); cancelled = task != nil; lock.unlock()
+            }
+        }
+        return super.statusCode
     }
 }
 

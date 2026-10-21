@@ -46,6 +46,7 @@ enum VEXAPIError: LocalizedError {
 
     var code: String? {
         switch self {
+        case .invalidResponse: return "api_response_invalid"
         case .invalidAPIBaseURL: return "invalid_api_base_url"
         case .requestTimeout: return "request_timeout"
         case .http(_, _, let code, _): return code

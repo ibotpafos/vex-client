@@ -315,6 +315,7 @@ struct VEXAPIClient {
         idempotencyKey: String? = nil,
         timeout: TimeInterval = 12
     ) async throws -> T {
+        try Task.checkCancellation()
         let baseURL = try VEXAPIConfiguration.requireBaseURL(baseURL)
         guard let url = URL(string: "\(baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/\(path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))") else {
             throw VEXAPIError.invalidResponse
@@ -344,35 +345,49 @@ struct VEXAPIClient {
         do {
             (data, response) = try await transport.data(for: request, timeout: timeout)
         } catch {
+            let normalized: Error
             if (error as? URLError)?.code == .timedOut {
-                throw VEXAPIError.requestTimeout
+                normalized = VEXAPIError.requestTimeout
+            } else if VEXAPIError.isServerUnavailable(error) {
+                normalized = VEXAPIError.technicalWorks
+            } else {
+                normalized = error
             }
-            if VEXAPIError.isServerUnavailable(error) {
-                throw VEXAPIError.technicalWorks
-            }
-            throw error
+            try Task.checkCancellation()
+            throw normalized
         }
+        try Task.checkCancellation()
         guard let http = response as? HTTPURLResponse else {
             throw VEXAPIError.invalidResponse
         }
-        guard (200..<300).contains(http.statusCode) else {
+        let status = http.statusCode
+        guard (200..<300).contains(status) else {
             let apiError = VEXAPIError.payload(data)
-            throw VEXAPIError.http(
-                status: http.statusCode, message: apiError.message, code: apiError.code,
+            let error = VEXAPIError.http(
+                status: status, message: apiError.message, code: apiError.code,
                 retryAfter: VEXAPITransport.retryAfter(http.value(forHTTPHeaderField: "Retry-After"))
             )
+            try Task.checkCancellation()
+            throw error
         }
+        let result: T
         if T.self == EmptyResponse.self, data.isEmpty {
             guard let emptyResponse = EmptyResponse() as? T else {
                 throw VEXAPIError.invalidResponse
             }
-            return emptyResponse
+            result = emptyResponse
+        } else if T.self == String.self, let text = String(data: data, encoding: .utf8) as? T {
+            result = text
+        } else {
+            do {
+                result = try JSONDecoder().decode(T.self, from: data)
+            } catch is DecodingError {
+                try Task.checkCancellation()
+                throw VEXAPIError.invalidResponse
+            }
         }
-        if T.self == String.self, let text = String(data: data, encoding: .utf8) as? T {
-            return text
-        }
-        let decoder = JSONDecoder()
-        return try decoder.decode(T.self, from: data)
+        try Task.checkCancellation()
+        return result
     }
 
     private func queryString(_ items: [URLQueryItem]) -> String {

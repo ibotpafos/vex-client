@@ -5,6 +5,14 @@ final class VEXAPIResponseContractTests: XCTestCase {
         try await APIContractScenarios.appUpdateMetadata()
     }
 
+    func testSuccessfulJSONBodiesUseTheExistingProtocolFailureWithoutReplay() async throws {
+        try await APIContractScenarios.successfulBodyDecoding()
+    }
+
+    func testAPIBodyDeliveryHonorsParentCancellation() async throws {
+        try await APIContractScenarios.successfulBodyCancellation()
+    }
+
     func testLocationCapabilitiesAndEligibilityStayConsistent() async throws {
         try await APIContractScenarios.locationCapabilities()
     }

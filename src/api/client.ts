@@ -1,8 +1,8 @@
-import { fetch as expoFetch } from 'expo/fetch';
 import { Platform } from 'react-native';
 import { getAppInfo, getOrCreateDeviceId } from '@/native/appInfo';
 import { androidExperimentalRoutingEnabled, androidProfilePlatform } from '@/vpn/androidRoutingSafety';
 import { apiRequestUrl } from './config';
+import { apiFetch } from './apiFetch';
 import { ApiRequestError, isMaintenanceStatus, normalizeApiRequestError, readApiErrorPayload } from './error';
 export { trimTrailingSlash, vexApiBaseUrl } from './config';
 export { isMaintenanceStatus, isTechnicalWorksError, normalizeApiRequestError, technicalWorksMessage } from './error';
@@ -109,8 +109,6 @@ async function rawRequestAttempt(url: string, options: RequestOptions, method: s
   const init: RequestInit = {
     headers,
     method,
-    // Neither credentials nor a mutation body may be replayed by the platform.
-    redirect: 'manual',
   };
 
   if (options.body) {
@@ -119,20 +117,11 @@ async function rawRequestAttempt(url: string, options: RequestOptions, method: s
   }
 
   try {
-    let response;
     if (shouldLogApiRequests && !options.suppressErrorLog) {
       logApiDebug(`API Request: [${init.method || 'GET'}] ${url}`);
     }
     
-    // Preserve global instrumentation (including Sentry) on the SDK default.
-    // Legacy RN fetch ignores redirect policy, so use the installed Expo API
-    // only when that explicit native opt-out is enabled.
-    const useLegacyRNFetch = Platform.OS !== 'web' && (
-      process.env.EXPO_PUBLIC_USE_RN_FETCH === '1' || process.env.EXPO_PUBLIC_USE_RN_FETCH === 'true'
-    );
-    response = useLegacyRNFetch
-      ? await expoFetch(url, { ...init, signal })
-      : await fetch(url, { ...init, signal });
+    const response = await apiFetch(url, { ...init, signal });
     requireRequestTime(signal, deadline);
     if (response.type === 'opaqueredirect' || [301, 302, 303, 307, 308].includes(response.status)) {
       throw new ApiRequestError('Не удалось выполнить запрос. Попробуйте позже.', {

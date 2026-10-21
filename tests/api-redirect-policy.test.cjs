@@ -30,7 +30,7 @@ function client(fetch, baseURL = 'https://fixture.example.test', globalFetch = f
       if (id === '@/vpn/androidRoutingSafety') return {
         androidExperimentalRoutingEnabled: () => false, androidProfilePlatform: () => 'android',
       };
-      assert.ok(['./config', './error'].includes(id), 'Unexpected API module dependency');
+      assert.ok(['./config', './error', './apiFetch'].includes(id), 'Unexpected API module dependency');
       return load(id.slice(2));
     };
     new Function('module', 'exports', 'require', 'fetch', 'process', '__DEV__', output)(

@@ -14,8 +14,8 @@ function load(name) {
   vm.runInNewContext(source, {
     module, exports: module.exports, Set, JSON,
     require(id) {
-      assert.equal(id, './customerRealtimeCore', 'Only actual pure realtime code may be imported');
-      return load('customerRealtimeCore');
+      assert.ok(['./customerRealtimeCore', '../api/apiFetch'].includes(id), 'Only actual realtime and fetch modules may be imported');
+      return load(id);
     },
   }, { filename });
   return module.exports;
@@ -36,7 +36,7 @@ function harness(callbacks = {}) {
         responseText: '', readyState: 1, status: 200, headers: {}, aborts: 0,
         open(method, url, async) { Object.assign(this, { method, url, async }); },
         setRequestHeader(name, value) { this.headers[name] = value; },
-        send() {}, abort() { this.aborts++; this.onabort?.(); },
+        send() { callbacks.onSend?.(this); }, abort() { this.aborts++; this.onabort?.(); },
       };
       requests.push(request);
       return request;
@@ -232,4 +232,50 @@ test('all positive Go int64 versions remain valid invalidations', () => {
     }
     assert.equal(h.events.length, 6);
   } finally { h.stop(); }
+});
+
+test('revocation event cannot retire a replacement stream started by its callback', () => {
+  let restarted = false;
+  const h = harness({ onEvent(transport, event) {
+    if (event.type === 'customer.session.revoked' && !restarted) {
+      restarted = true; transport.stop(); transport.start();
+    }
+  } });
+  try {
+    h.progress('event: customer.session.revoked\ndata: {}\n\n');
+    assert.equal(h.requests.length, 2); assert.equal(h.revoked, 0);
+    h.progress(frame('replacement'));
+    assert.deepEqual(h.events.map(event => event.type), ['customer.session.revoked', 'customer.change']);
+  } finally { h.stop(); }
+});
+
+test('HTTP401 status callback cannot revoke a replacement stream', () => {
+  let restarted = false;
+  const h = harness({ onStatus(transport, connected) {
+    if (!connected && !restarted) { restarted = true; transport.stop(); transport.start(); }
+  } });
+  try {
+    h.requests[0].status = 401; h.requests[0].readyState = 2; h.requests[0].onreadystatechange();
+    assert.equal(h.requests.length, 2); assert.equal(h.revoked, 0);
+    h.progress(frame('replacement')); assert.equal(h.events[0].id, 'replacement');
+  } finally { h.stop(); }
+});
+
+test('queued retired reconnect cannot replace the next stream or discard its backoff', () => {
+  const h = harness();
+  try {
+    h.requests[0].onerror();
+    const stale = [...h.timers.values()].find(timer => timer.milliseconds === 1_000).callback;
+    h.stop(); h.transport.start(); h.progress(frame('current')); h.requests[1].onerror();
+    stale(); assert.equal(h.requests.length, 2);
+    h.reconnect(); assert.equal(h.requests.length, 3);
+  } finally { h.stop(); }
+});
+
+test('synchronous injected rejection cannot arm a watchdog for a retired request', () => {
+  const h = harness({ onSend(request) {
+    request.status = 401; request.readyState = 2; request.onreadystatechange();
+  } });
+  try { assert.equal(h.revoked, 1); assert.equal(h.timers.size, 0); }
+  finally { h.stop(); }
 });

@@ -82,7 +82,8 @@ const config = stripTypeScriptTypes(fs.readFileSync('src/api/config.ts', 'utf8')
 const source = stripTypeScriptTypes(fs.readFileSync('src/api/client.ts', 'utf8'))
   .replace(/^import .*;$/gm, '').replace(/^export \{.*;$/gm, '').replace(/\bexport /g, '');
 function rawClient(fetch) {
-  return new Function('fetch', 'ApiRequestError', 'isMaintenanceStatus', 'normalizeApiRequestError', 'readApiErrorPayload', 'getAppInfo', 'getOrCreateDeviceId', 'Platform', 'androidExperimentalRoutingEnabled', 'androidProfilePlatform', config + source + '; return rawRequest;')(
+  const fetchPolicy = stripTypeScriptTypes(fs.readFileSync('src/api/apiFetch.ts', 'utf8')).replace(/\bexport /g, '');
+  return new Function('fetch', 'ApiRequestError', 'isMaintenanceStatus', 'normalizeApiRequestError', 'readApiErrorPayload', 'getAppInfo', 'getOrCreateDeviceId', 'Platform', 'androidExperimentalRoutingEnabled', 'androidProfilePlatform', fetchPolicy + config + source + '; return rawRequest;')(
     fetch, ApiRequestError, isMaintenanceStatus, normalizeApiRequestError, readApiErrorPayload, async () => ({}), async () => 'fixture', { OS: 'android' }, () => false, () => 'android',
   );
 }

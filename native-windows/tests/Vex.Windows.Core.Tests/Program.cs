@@ -176,6 +176,7 @@ var tests = new (string Name, Action Run)[]
     ("Required updates survive installer launch, restart and offline failures", NativeUpdateServiceTests.Run),
     ("Unreadable durable update state retains mandatory recovery protection", NativeUpdateRecoveryTests.Run),
     ("Preferences decode corruption safely and preserve valid legacy choices", NativeClientPreferencesJsonTests.Run),
+    ("Settings preserve toggle intent across inline refresh cancellation", SettingsPreferenceReentrancyTests.Run),
     ("App metadata decodes current server contracts and explicit historical aliases", AppMetadataContractTests.Run),
     ("Windows app metadata matches the published API compatibility contract on both architectures", AppMetadataContractTests.WindowsApiCompatibilityMatchesPublishedContract),
     ("Protected session cache handles corruption without replacing identity files", ProtectedStateFileTests.Run),

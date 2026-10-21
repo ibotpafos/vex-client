@@ -206,6 +206,9 @@ public sealed partial class SettingsPage : Page
             return;
         }
 
+        // Cancelling a refresh may run callbacks and render saved preferences.
+        // Capture the user's change before entering that cancellation/UI work.
+        var enabled = sender is ToggleSwitch changed && changed.IsOn;
         SetBusy(true);
         var saved = false;
         try
@@ -216,19 +219,19 @@ public sealed partial class SettingsPage : Page
             {
                 ToggleSwitch toggle when toggle == AutoServerToggle => current with
                 {
-                    AutoServerEnabled = toggle.IsOn,
+                    AutoServerEnabled = enabled,
                 },
                 ToggleSwitch toggle when toggle == SmartRoutingToggle => current with
                 {
-                    SmartRoutingEnabled = toggle.IsOn,
+                    SmartRoutingEnabled = enabled,
                 },
                 ToggleSwitch toggle when toggle == AntiLeakToggle => current with
                 {
-                    AntiLeakEnabled = toggle.IsOn,
+                    AntiLeakEnabled = enabled,
                 },
                 ToggleSwitch toggle when toggle == AutoRecoveryToggle => current with
                 {
-                    AutoRecoveryEnabled = toggle.IsOn,
+                    AutoRecoveryEnabled = enabled,
                 },
                 _ => current,
             });
@@ -487,10 +490,10 @@ public sealed partial class SettingsPage : Page
             return;
         }
 
+        var enabled = AutoUpdatesToggle.IsOn;
         SetBusy(true);
         try
         {
-            var enabled = AutoUpdatesToggle.IsOn;
             _services.Preferences.Update(current => current with
             {
                 AutoUpdatesEnabled = enabled,

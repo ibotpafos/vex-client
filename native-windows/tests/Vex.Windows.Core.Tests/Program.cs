@@ -264,6 +264,7 @@ var tests = new (string Name, Action Run)[]
     ("Windows billing summary uses plans and entitlement contracts", WindowsBillingSummaryUsesContracts),
     ("Windows billing checkout uses the native billing contract", WindowsBillingCheckoutUsesContract),
     ("Windows control plane exposes macOS parity read APIs", WindowsControlPlaneExposesParityReads),
+    ("Billing payment amounts preserve server integer range and legacy optional fields", BillingPaymentContractTests.Run),
     ("Windows control plane sends VPN telemetry and diagnostics", WindowsControlPlaneSendsTelemetryAndDiagnostics),
     ("Windows control plane exposes app configuration and update metadata", WindowsControlPlaneExposesAppConfiguration),
     ("Windows realtime parser preserves complete SSE frames", WindowsRealtimeParserPreservesFrames),

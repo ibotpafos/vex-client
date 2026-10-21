@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const ts = require('typescript');
 const test = require('node:test');
+const { spawnSync } = require('node:child_process');
 const { QueryClient, isCancelledError } = require('@tanstack/react-query');
 
 const root = path.resolve(process.env.VEX_CANCELLATION_SOURCE_ROOT || path.join(__dirname, '..'));
@@ -69,6 +70,36 @@ function harness({ fetch = async () => response({}), appInfo = async () => ({ pl
   }
   return { load, timers };
 }
+
+test('session replacement during native setup leaves no unhandled account preparation', () => {
+  // A separate strict process catches an orphan rejection without installing a
+  // global handler that could hide failures from the other cancellation tests.
+  const helpers = fs.readFileSync(__filename, 'utf8').split("test('session replacement during native setup")[0];
+  const script = helpers + `
+    (async () => {
+      const controller = new AbortController(); let current = true, identityCalls = 0, httpCalls = 0;
+      const h = harness({ platform: 'android', adapters: {
+        '@/native/vpnAccountIdentity': { getOrCreateVpnAccountIdentity: async () => {
+          identityCalls++; current = false; controller.abort();
+          throw new (h.load('@/vpn/sessionOperation').SessionOperationSupersededError)();
+        } },
+      }, fetch: async () => { httpCalls++; throw Error('Unexpected stale HTTP request'); } });
+      const result = tracked(h.load('@/vpn/profile').resolveVpnProfile('token', paid, 'de', {
+        forceRefresh: true, userId: 'owner', signal: controller.signal, isCurrentSessionOperation: () => current,
+      }));
+      await result.promise;
+      await h.load('@/vpn/profileRequestQueue').runProfileRequest(async () => 'barrier');
+      await tick();
+      cancelled(result); assert.equal(identityCalls, 1); assert.equal(httpCalls, 0); assert.equal(h.timers.size, 0);
+      console.log('PASS native preparation rejection remains observed');
+    })().catch(error => { console.error(error); process.exitCode = 1; });
+  `;
+  const child = spawnSync(process.execPath, ['--unhandled-rejections=strict', '-e', script], {
+    cwd: root, env: { ...process.env, VEX_CANCELLATION_SOURCE_ROOT: root }, encoding: 'utf8', timeout: 15000,
+  });
+  assert.equal(child.status, 0, child.error?.message || child.stdout + child.stderr);
+  assert.match(child.stdout, /PASS native preparation rejection remains observed/);
+});
 
 test('an already cancelled request does no metadata lookup or HTTP work', async () => {
   let setup = 0, calls = 0;

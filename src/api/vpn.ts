@@ -119,13 +119,14 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
   requireCurrentOperation();
   const startedAtMs = Date.now();
   const locationId = normalizeLocationId(options.locationId);
-  const accountPreparation = requiresManagedNativeProfile(client)
-    ? vpnAccountOptions(accessToken, client, locationId, options.userId, options.isCurrentSessionOperation, options.signal)
-      .then(async accountOptions => ({ accountOptions, accountIdentity: await getOrCreateVpnAccountIdentity(accountOptions) }))
-    : Promise.resolve(undefined);
   const [versionHeaders, initialKeyPair, runtimeDeviceId, account] = await withRequestCancellation(() => Promise.all([
     clientVersionHeaders(), requiresManagedNativeProfile(client) ? Promise.resolve(null) : getOrCreateWireGuardKeyPair(), getOrCreateDeviceId(),
-    accountPreparation,
+    // Start setup inside the observed aggregate. Cancellation before this
+    // callback runs must not leave an eager account promise unobserved.
+    requiresManagedNativeProfile(client)
+      ? vpnAccountOptions(accessToken, client, locationId, options.userId, options.isCurrentSessionOperation, options.signal)
+        .then(async accountOptions => ({ accountOptions, accountIdentity: await getOrCreateVpnAccountIdentity(accountOptions) }))
+      : Promise.resolve(undefined),
   ]), options.signal);
   requireCurrentOperation();
   const accountOptions = account?.accountOptions, accountIdentity = account?.accountIdentity;

@@ -302,7 +302,7 @@ export function useVpnConnection() {
     currentCatalog: () => catalogSnapshotRef.current,
     onDiagnostics: (event) => { if (isCurrentSessionOperation()) catalogDiagnosticsRef.current(event); },
     shouldReportError: (error) => !isCancelledError(error) && !isApiRequestCancelled(error),
-  }), [catalogOwner, fetchLocationCatalog, isCurrentSessionOperation]);
+  }), [catalogOwner, fetchLocationCatalog, isCurrentSessionOperation, setLocationsData]);
   const refreshLocations = useCallback(async (reason: LocationCatalogRefreshReason) => {
     const showRefresh = isVisibleLocationCatalogRefresh(
       reason,
@@ -323,7 +323,7 @@ export function useVpnConnection() {
         setIsLocationsRefreshing(false);
       }
     }
-  }, [isCurrentSessionOperation, locationCatalogRefresher]);
+  }, [isCurrentSessionOperation, locationCatalogRefresher, setIsLocationsRefreshing, setLocationsRefreshError]);
 
   const cachedSelectedProfile = accessToken
     ? queryClient.getQueryData<VpnProfile>(['vpn-profile', accessToken, selectedLocationId, routingMode])
@@ -472,7 +472,7 @@ export function useVpnConnection() {
     return () => {
       cancelled = true;
     };
-  }, [cacheUserId]);
+  }, [cacheUserId, setLocationsData, setPersistedDevices, setPersistedEntitlement, setPersistedLocations]);
 
   useEffect(() => {
     if (!accessToken) {
@@ -523,7 +523,7 @@ export function useVpnConnection() {
       cancelled = true;
       if (timer) clearInterval(timer);
     };
-  }, [accessToken, customerRealtime.connected, customerRealtime.revision, entitlementQueryKey, fetchEntitlement, queryClient]);
+  }, [accessToken, customerRealtime.connected, customerRealtime.revision, entitlementQueryKey, fetchEntitlement, queryClient, setEntitlementData, setEntitlementError]);
 
   useEffect(() => {
     if (!accessToken || !hasVpnAccess) {
@@ -539,7 +539,7 @@ export function useVpnConnection() {
     return () => {
       clearInterval(timer);
     };
-  }, [accessToken, hasVpnAccess, refreshLocations]);
+  }, [accessToken, hasVpnAccess, refreshLocations, setLocationsData, setLocationsRefreshError]);
 
   useEffect(() => {
     if (!accessToken || !activeProfile?.device?.id || !isConnected) {
@@ -567,7 +567,7 @@ export function useVpnConnection() {
       cancelled = true;
       if (timer) clearInterval(timer);
     };
-  }, [accessToken, activeProfile?.device?.id, customerRealtime.connected, customerRealtime.revision, devicesQueryKey, fetchVpnDevices, isConnected, queryClient]);
+  }, [accessToken, activeProfile?.device?.id, customerRealtime.connected, customerRealtime.revision, devicesQueryKey, fetchVpnDevices, isConnected, queryClient, setDevicesData]);
 
   useEffect(() => {
     if (!accessToken || !activeProfileDeviceId || !isAppActive) return undefined;
@@ -588,7 +588,7 @@ export function useVpnConnection() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [accessToken, activeProfileDeviceId, isAppActive]);
+  }, [accessToken, activeProfileDeviceId, isAppActive, setDeviceUsageSnapshot]);
 
   useEffect(() => {
     if (!cacheUserId || !entitlementData) {
@@ -596,7 +596,7 @@ export function useVpnConnection() {
     }
     setPersistedEntitlement(entitlementData);
     void saveCachedEntitlement(cacheUserId, entitlementData).catch(() => undefined);
-  }, [cacheUserId, entitlementData]);
+  }, [cacheUserId, entitlementData, setPersistedEntitlement]);
 
   useEffect(() => {
     if (!cacheUserId || !locationsData) {
@@ -604,7 +604,7 @@ export function useVpnConnection() {
     }
     setPersistedLocations(locationsData);
     void saveCachedVpnLocations(cacheUserId, locationsData).catch(() => undefined);
-  }, [cacheUserId, locationsData]);
+  }, [cacheUserId, locationsData, setPersistedLocations]);
 
   useEffect(() => {
     if (!cacheUserId || !devicesData) {
@@ -612,7 +612,7 @@ export function useVpnConnection() {
     }
     setPersistedDevices(devicesData);
     void saveCachedVpnDevices(cacheUserId, devicesData).catch(() => undefined);
-  }, [cacheUserId, devicesData]);
+  }, [cacheUserId, devicesData, setPersistedDevices]);
 
   const handleSignOut = useCallback(async () => {
     dynamicRouteRuntime.clearActive();

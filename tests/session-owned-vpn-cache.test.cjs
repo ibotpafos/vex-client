@@ -163,6 +163,18 @@ test('same-login token rotation retains account snapshots and preserves cache re
   } finally { h.close(); }
 });
 
+test('replacement login for the same account and token refreshes with current session setters', async () => {
+  let calls = 0;
+  const h = harness({ api: () => ({ active: true, vpnAccess: true, displayName: `login-${++calls}` }) });
+  try {
+    h.render(); h.commit(); await tick();
+    assert.equal(h.render().entitlementData.displayName, 'login-1');
+    h.change('A'); h.render(); h.commit(); await tick();
+    assert.equal(calls, 2, 'Replacement login must restart effects that captured superseded setters');
+    assert.equal(h.render().entitlementData.displayName, 'login-2');
+  } finally { h.close(); }
+});
+
 test('a functional update in B never receives A devices as its previous value', () => {
   const h = harness();
   try {

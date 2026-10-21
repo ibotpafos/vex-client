@@ -268,7 +268,7 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
     } finally {
       if (isCurrentSessionOperation()) setIsKeyRotationBusy(false);
     }
-  }, [accessToken, cacheProfile, isCurrentSessionOperation, requireCurrentSession, setVpnProfile, userId]);
+  }, [accessToken, cacheProfile, isCurrentSessionOperation, requireCurrentSession, setIsKeyRotationBusy, setVpnProfile, userId]);
 
   const resolveConnectableVpnProfile = useCallback(async (
     locationId: string,
@@ -445,7 +445,7 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
     profile = withConnectPreparationTiming(profile);
     cacheProfile(locationId, profile);
     return profile;
-  }, [accessToken, cacheProfile, cachedProfileForLocation, entitlementState, isCurrentSessionOperation, onProfileRefreshFailed, onProfileRotationRequired, onSubscriptionRequired, queryClient, refreshProfileInBackground, requestVpnPermission, requireCurrentSession, routingMode, userId]);
+  }, [accessToken, cacheProfile, cachedProfileForLocation, entitlementState, isCurrentSessionOperation, onProfileRefreshFailed, onProfileRotationRequired, onSubscriptionRequired, queryClient, refreshProfileInBackground, requestVpnPermission, requireCurrentSession, routingMode, setIsKeyRotationBusy, userId]);
 
   const refreshManagedProfile = useCallback(async (event: VpnProfileRefreshEvent = {}) => {
     if (!accessToken || !isCurrentSessionOperation()) {

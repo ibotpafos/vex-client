@@ -15,7 +15,8 @@ function load(file, deps) {
 }
 const consistency = load(path.join(repo, 'src/vpn/profileConsistency.ts'), {});
 const fallback = load(path.join(repo, 'src/vpn/connectionFallback.ts'), {});
-const connectFlow = load(path.join(repo, 'src/vpn/connectFlow.ts'), { './profileConsistency': consistency, './connectionFallback': fallback });
+const entitlementAccess = load(path.join(repo, 'src/api/entitlement.ts'), {});
+const connectFlow = load(path.join(repo, 'src/vpn/connectFlow.ts'), { '../api/entitlement': entitlementAccess, './profileConsistency': consistency, './connectionFallback': fallback });
 const androidSafety = load(path.join(repo, 'src/vpn/androidRoutingSafety.ts'), {});
 const paid = { active: true, vpnAccess: true };
 const inactive = { active: false, vpnAccess: false };
@@ -35,7 +36,7 @@ async function resolveCase({ cached, hot, knownEntitlement = paid, permission = 
     '@tanstack/react-query': { useQueryClient: () => queryClient },
     'react-native': { Platform: { OS: 'android' } },
     '@/utils/error': { errorMessage: e => e instanceof Error ? e.message : String(e) },
-    '../api/vexApi': { entitlement: async () => knownEntitlement, hasPaidEntitlement: value => Boolean(value?.active || value?.vpnAccess) },
+    '../api/vexApi': { entitlement: async () => knownEntitlement, hasPaidEntitlement: entitlementAccess.hasPaidEntitlement },
     './profile': { resetVpnProfileCache: () => {}, resolveVpnProfile: async () => { online++; return fresh; }, rotateVpnProfileKey: async () => fresh },
     './profileRequestQueue': { ProfileRequestSupersededError: class ProfileRequestSupersededError extends Error {} },
     './sessionOperation': { SessionOperationSupersededError: class SessionOperationSupersededError extends Error {} },

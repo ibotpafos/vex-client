@@ -1,3 +1,4 @@
+import { hasPaidEntitlement, type EntitlementLike } from '../api/entitlement';
 import type { VpnProfile } from './profile';
 import { vpnProfileAddressMatchesDevice } from './profileConsistency';
 import { profileEndpoint } from './connectionFallback';
@@ -8,11 +9,6 @@ export const explicitConnectProfileResolutionOptions = {
   validateCachedProfile: true,
 } as const;
 
-type EntitlementLike = {
-  active?: boolean;
-  vpnAccess?: boolean;
-};
-
 export function shouldUseLocalProfileBeforeOnline(
   profile: VpnProfile | null | undefined,
   fallbackEntitlement: EntitlementLike | null | undefined,
@@ -20,7 +16,7 @@ export function shouldUseLocalProfileBeforeOnline(
   if (!profile || profile.rotationRequired) {
     return false;
   }
-  return hasPaidEntitlementLike(profile.entitlement ?? fallbackEntitlement);
+  return hasPaidEntitlement(profile.entitlement ?? fallbackEntitlement);
 }
 
 export function connectableLocalProfile(
@@ -158,8 +154,4 @@ function endpointPort(endpoint?: string): number | undefined {
   }
   const port = Number(match[1]);
   return Number.isInteger(port) ? port : undefined;
-}
-
-function hasPaidEntitlementLike(item: EntitlementLike | null | undefined): boolean {
-  return Boolean(item?.vpnAccess || item?.active);
 }

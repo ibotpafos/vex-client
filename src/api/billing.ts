@@ -1,9 +1,10 @@
 import { jsonRequest } from './client';
+import { hasPaidEntitlement as matchesPaidEntitlement } from './entitlement';
 import { type Entitlement } from './types';
 import { type EntitlementDTO } from './dto';
 
 export function hasPaidEntitlement(item: Entitlement | null | undefined): item is Entitlement {
-  return Boolean(item?.vpnAccess || item?.active);
+  return matchesPaidEntitlement(item);
 }
 
 export async function entitlement(accessToken: string): Promise<Entitlement> {

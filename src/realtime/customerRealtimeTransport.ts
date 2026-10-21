@@ -1,7 +1,7 @@
 import {
   customerRealtimeMetadata,
   customerRealtimeReconnectDelay,
-  parseCustomerSSE,
+  CustomerSSEParser,
   type CustomerSSEEvent,
 } from './customerRealtimeCore';
 
@@ -33,6 +33,8 @@ export type CustomerRealtimeTransportOptions = {
 
 export class CustomerRealtimeTransport {
   private static readonly livenessDeadlineMilliseconds = 45_000;
+  // XHR retains the whole responseText; retire the response at the next progress callback.
+  private static readonly maximumResponseLength = 1024 * 1024;
   private readonly options: CustomerRealtimeTransportOptions;
   private active = false;
   private request: XMLHttpRequestLike | null = null;
@@ -41,7 +43,7 @@ export class CustomerRealtimeTransport {
   private watchdogGeneration = 0;
   private reconnectAttempt = 0;
   private processedLength = 0;
-  private buffer = '';
+  private parser = new CustomerSSEParser();
   private lastEventId = '';
 
   constructor(options: CustomerRealtimeTransportOptions) {
@@ -60,6 +62,7 @@ export class CustomerRealtimeTransport {
     this.clearWatchdog();
     const request = this.request;
     this.request = null;
+    this.parser = new CustomerSSEParser();
     request?.abort();
     this.options.onStatus(false);
   }
@@ -69,7 +72,7 @@ export class CustomerRealtimeTransport {
     const request = this.options.createRequest?.() ?? new XMLHttpRequest();
     this.request = request;
     this.processedLength = 0;
-    this.buffer = '';
+    this.parser = new CustomerSSEParser();
     request.open('GET', `${this.options.baseUrl.replace(/\/+$/, '')}/v1/events`, true);
     request.setRequestHeader('Accept', 'text/event-stream');
     request.setRequestHeader('Authorization', `Bearer ${this.options.accessToken}`);
@@ -89,17 +92,19 @@ export class CustomerRealtimeTransport {
   }
 
   private consume(request: XMLHttpRequestLike): void {
-    if (this.request !== request || request.responseText.length < this.processedLength) return;
-    this.buffer += request.responseText.slice(this.processedLength);
-    this.processedLength = request.responseText.length;
+    if (!this.active || this.request !== request) return;
+    const response = request.responseText;
+    if (response.length < this.processedLength) return;
+    const end = Math.min(response.length, CustomerRealtimeTransport.maximumResponseLength);
+    const events = this.parser.append(response.slice(this.processedLength, end));
+    this.processedLength = end;
     this.armWatchdog(request);
-    const parsed = parseCustomerSSE(this.buffer);
-    this.buffer = parsed.remainder.slice(-64 * 1024);
-    for (const event of parsed.events) {
+    for (const event of events) {
+      if (!this.active || this.request !== request) return;
       const metadata = customerRealtimeMetadata(event.type, event.data);
       if (!metadata) continue;
-      if (event.id) this.lastEventId = event.id;
       if (event.type === 'customer.session.revoked') {
+        if (event.id) this.lastEventId = event.id;
         this.options.onEvent(event);
         this.options.onSessionRevoked();
         this.active = false;
@@ -108,13 +113,19 @@ export class CustomerRealtimeTransport {
       }
       this.reconnectAttempt = 0;
       this.options.onStatus(true);
+      if (!this.active || this.request !== request) return;
+      if (event.id) this.lastEventId = event.id;
       this.options.onEvent(event);
+    }
+    if (this.parser.hasExceededFrameLimit || response.length >= CustomerRealtimeTransport.maximumResponseLength) {
+      this.finish(request, false);
     }
   }
 
   private finish(request: XMLHttpRequestLike, sessionRejected: boolean): void {
     if (this.request !== request) return;
     this.request = null;
+    this.parser = new CustomerSSEParser();
     this.clearWatchdog();
     request.abort();
     this.options.onStatus(false);

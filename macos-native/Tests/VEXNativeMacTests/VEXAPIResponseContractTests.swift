@@ -15,6 +15,18 @@ final class VEXAPIResponseContractTests: XCTestCase {
     func testDefaultPOSTNeverReplaysItsBodyThroughRedirects() async throws {
         try await APIContractScenarios.redirects(method: "POST")
     }
+    func testRealtimeNeverFollowsSameOrForeignAuthorityRedirects() async throws {
+        try await APIContractScenarios.realtimeRedirects()
+    }
+    func testRealtimeStopFromStatusClosesStreamWithoutLateStatus() async throws {
+        try await APIContractScenarios.realtimeStop(fromEvent: false)
+    }
+    func testRealtimeStopFromEventClosesStreamWithoutLateStatus() async throws {
+        try await APIContractScenarios.realtimeStop(fromEvent: true)
+    }
+    func testRealtimeUnauthorizedStillRejectsSessionOnce() async throws {
+        try await APIContractScenarios.realtimeUnauthorized()
+    }
     func testDefaultLoaderBoundsAStalledResponseBody() async throws {
         try await APIContractScenarios.bodyDeadline()
     }

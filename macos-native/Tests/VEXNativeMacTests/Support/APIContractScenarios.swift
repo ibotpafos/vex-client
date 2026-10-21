@@ -134,6 +134,89 @@ enum APIContractScenarios {
         }
     }
 
+    @MainActor
+    static func realtimeRedirects() async throws {
+        var failures: [String] = []
+        for foreign in [false, true] {
+            for status in [301, 302, 303, 307, 308] {
+                let fixture = try LoopbackRedirectFixture(status: status, foreignAuthority: foreign)
+                defer { fixture.close() }
+                var statuses: [Bool] = [], events = 0, rejected = 0
+                let service = CustomerRealtimeService(
+                    baseURL: fixture.url.deletingLastPathComponent(),
+                    onStatus: { statuses.append($0) },
+                    onSessionRejected: { rejected += 1 }
+                ) { _, _ in events += 1 }
+                service.start(accessToken: "inert-fixture-token")
+                defer { service.stop() }
+                try await waitUntil { statuses.count > 1 }
+                service.stop()
+                let requests = try fixture.requests()
+                if requests != ["GET /v1/events"] || statuses.contains(true) || events != 0 || rejected != 0 {
+                    failures.append("HTTP \(status) foreign=\(foreign) requests=\(requests) statuses=\(statuses)")
+                }
+                try fixture.closeAndVerify()
+            }
+        }
+        try require(failures.isEmpty, "SSE followed redirects: " + failures.joined(separator: "; "))
+    }
+
+    @MainActor
+    static func realtimeStop(fromEvent: Bool) async throws {
+        let fixture = try LoopbackRedirectFixture(status: 200, mode: "stream")
+        defer { fixture.close() }
+        var statuses: [Bool] = [], events = 0, rejected = 0
+        var service: CustomerRealtimeService!
+        service = CustomerRealtimeService(
+            baseURL: fixture.url.deletingLastPathComponent(),
+            onStatus: { connected in
+                statuses.append(connected)
+                if connected && !fromEvent { service.stop() }
+            },
+            onSessionRejected: { rejected += 1 }
+        ) { _, _ in
+            events += 1
+            service.stop()
+        }
+        defer { service.stop(); service = nil }
+        service.start(accessToken: "inert-fixture-token")
+        try await waitUntil { fixture.streamClosed }
+        // Let the cancelled URLSession iterator finish its catch/EOF path.
+        try await Task.sleep(nanoseconds: 30_000_000)
+        try require(statuses == [false, true, false], "Cancelled SSE published a late status: \(statuses)")
+        try require(events == (fromEvent ? 1 : 0) && rejected == 0, "Cancellation dispatched a late event/session rejection")
+        let requests = try fixture.requests()
+        try require(requests == ["GET /v1/events"], "Cancellation reconnected SSE")
+        try fixture.closeAndVerify()
+    }
+
+    @MainActor
+    static func realtimeUnauthorized() async throws {
+        let fixture = try LoopbackRedirectFixture(status: 401)
+        defer { fixture.close() }
+        var statuses: [Bool] = [], events = 0, rejected = 0
+        let service = CustomerRealtimeService(
+            baseURL: fixture.url.deletingLastPathComponent(),
+            onStatus: { statuses.append($0) }, onSessionRejected: { rejected += 1 }
+        ) { _, _ in events += 1 }
+        defer { service.stop() }
+        service.start(accessToken: "inert-fixture-token")
+        try await waitUntil { rejected > 0 }
+        try require(statuses == [false, false] && events == 0 && rejected == 1, "HTTP401 realtime session contract changed")
+        let requests = try fixture.requests()
+        try require(requests == ["GET /v1/events"], "HTTP401 replayed a rejected session")
+        try fixture.closeAndVerify()
+    }
+
+    @MainActor
+    private static func waitUntil(_ ready: () -> Bool) async throws {
+        let deadline = ProcessInfo.processInfo.systemUptime + 3
+        while !ready() {
+            try require(ProcessInfo.processInfo.systemUptime < deadline, "SSE fixture condition timed out")
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+    }
+
     static func bodyDeadline() async throws {
         let fixture = try LoopbackRedirectFixture(status: 200, mode: "stall")
         defer { fixture.close() }
@@ -263,10 +346,12 @@ private final class LoopbackRedirectFixture {
     private var cleanupTimedOut = false
     var url = URL(string: "http://127.0.0.1")!
 
-    init(status: Int, mode: String = "redirect") throws {
+    var streamClosed: Bool { FileManager.default.fileExists(atPath: directory.appendingPathComponent("closed").path) }
+
+    init(status: Int, mode: String = "redirect", foreignAuthority: Bool = false) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-        process.arguments = ["-u", "-c", Self.script, directory.appendingPathComponent("requests").path, String(status), mode]
+        process.arguments = ["-u", "-c", Self.script, directory.appendingPathComponent("requests").path, String(status), mode, foreignAuthority ? "1" : "0"]
         process.standardOutput = output
         process.terminationHandler = { [terminated] _ in terminated.signal() }
         process.standardError = Pipe()
@@ -316,8 +401,9 @@ private final class LoopbackRedirectFixture {
     }
 
     private static let script = #"""
-import http.server, pathlib, sys, time
+import http.server, pathlib, sys, time, threading
 trace, status, mode = pathlib.Path(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
+foreign = sys.argv[4] == '1'
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args): pass
     def do_GET(self): self.handle_api()
@@ -325,13 +411,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def handle_api(self):
         self.rfile.read(int(self.headers.get('Content-Length', '0')))
         with trace.open('a') as output: output.write(self.command + ' ' + self.path + '\n')
-        self.send_response(status if self.path == '/start' else 200)
-        if mode == 'redirect' and self.path == '/start': self.send_header('Location', '/target')
+        initial = self.path in ('/start', '/v1/events')
+        self.send_response(status if initial else 200)
+        if mode == 'redirect' and initial:
+            self.send_header('Location', f'http://127.0.0.1:{target.server_port}/target' if foreign else '/target')
+        if mode == 'stream':
+            self.send_header('Content-Type', 'text/event-stream')
+            self.end_headers()
+            self.wfile.write(b'event: customer.heartbeat\ndata: {}\n\n')
+            self.wfile.flush()
+            self.connection.settimeout(3)
+            if self.connection.recv(1) == b'': trace.with_name('closed').write_text('closed')
+            return
         self.send_header('Content-Length', '2')
         self.end_headers()
         if mode == 'stall': time.sleep(10)
         else: self.wfile.write(b'{}')
-server = http.server.HTTPServer(('127.0.0.1', 0), Handler)
+server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+target = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler) if foreign else server
+if foreign: threading.Thread(target=target.serve_forever, daemon=True).start()
 server.timeout = 0.1
 print(server.server_port, flush=True)
 deadline = time.monotonic() + 15

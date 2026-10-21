@@ -91,9 +91,9 @@ struct VEXAPITransport: Sendable {
 }
 
 
-/// API requests keep their original method, authority and single-attempt write
+/// JSON API and realtime requests keep their original method, authority and single-attempt write
 /// semantics. Return the redirect response instead of replaying it implicitly.
-private final class VEXAPIRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+final class VEXAPIRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     static let shared = VEXAPIRedirectDelegate()
 
     func urlSession(_ session: URLSession, task: URLSessionTask,

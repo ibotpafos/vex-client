@@ -24,7 +24,7 @@ cp "$native_dir/Models/VEXModels.swift" "$source_dir/"
 cp "$native_dir/Models/VEXCountryGroup.swift" "$source_dir/"
 cp "$native_dir/Support/ServerSidebarCatalog.swift" "$source_dir/"
 cp "$native_dir/Support/ServerSidebarSearch.swift" "$source_dir/"
-for name in VPNProfileCache VPNProfileCacheIdentity VPNAccountScope AppSensitiveFileStore NativeAwgBoolean VEXAPITransport VEXAPIConfiguration VEXAPIError; do
+for name in VPNProfileCache VPNProfileCacheIdentity VPNAccountScope AppSensitiveFileStore NativeAwgBoolean VEXAPITransport VEXAPIConfiguration VEXAPIError CustomerRealtimeService; do
     cp "$native_dir/Services/$name.swift" "$source_dir/"
 done
 {

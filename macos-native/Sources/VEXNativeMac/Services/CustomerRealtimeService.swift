@@ -214,7 +214,7 @@ final class CustomerRealtimeService {
                     request.setValue(lastEventID, forHTTPHeaderField: "Last-Event-ID")
                 }
 
-                let (bytes, response) = try await session.bytes(for: request)
+                let (bytes, response) = try await session.bytes(for: request, delegate: VEXAPIRedirectDelegate.shared)
                 defer { bytes.task.cancel() }
                 guard let http = response as? HTTPURLResponse else {
                     throw URLError(.badServerResponse)

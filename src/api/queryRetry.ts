@@ -10,7 +10,8 @@ export function createApiQueryRetry(maxRetries: number) {
       if (error.status && error.status >= 400 && error.status < 500 && error.status !== 408) return false;
       if (error.status && isMaintenanceStatus(error.status)) return false;
       if (error.code === 'network_unavailable' || error.code === 'request_timeout' || error.code === 'request_cancelled'
-        || error.code === 'invalid_api_base_url' || error.code === 'invalid_api_path' || error.code === 'api_redirect_blocked') return false;
+        || error.code === 'invalid_api_base_url' || error.code === 'invalid_api_path' || error.code === 'api_redirect_blocked'
+        || error.code === 'api_response_invalid') return false;
     }
     return true;
   };

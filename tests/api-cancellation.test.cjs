@@ -101,6 +101,75 @@ test('session replacement during native setup leaves no unhandled account prepar
   assert.match(child.stdout, /PASS native preparation rejection remains observed/);
 });
 
+for (const body of ['QSECRET', '', '{', '[1,', '{"field":"fixture"']) {
+  test(`malformed successful JSON is a private protocol error: ${JSON.stringify(body)}`, async () => {
+    const h = harness({ fetch: async () => ({ ok: true, status: 200, text: async () => body }) });
+    let failure;
+    try { await h.load('@/api/client').jsonRequest('/v1/fixture'); }
+    catch (error) { failure = error; }
+    assert.ok(failure, 'invalid JSON was admitted');
+    assert.ok(!failure.message.includes('QSECRET'), 'parser diagnostics exposed response content');
+    assert.ok(!failure.stack.includes('QSECRET'), 'parser stack exposed response content');
+    assert.equal(failure.code, 'api_response_invalid');
+    assert.equal(failure.status, undefined, 'a local decode failure must not invent an HTTP outage');
+    assert.equal(h.load('@/api/error').isTechnicalWorksError(failure), false);
+    assert.equal(h.timers.size, 0);
+  });
+}
+for (const method of ['GET', 'POST']) {
+  test(`Query does not replay ${method} after a malformed successful JSON response`, async () => {
+    let requests = 0;
+    const h = harness({ fetch: async () => { requests++; return { ok: true, status: 200, text: async () => '{' }; } });
+    const query = new QueryClient({ defaultOptions: { queries: {
+      retry: h.load('@/api/queryRetry').createApiQueryRetry(2), retryDelay: 0, gcTime: Infinity,
+    } } });
+    try {
+      let failure;
+      try {
+        await query.fetchQuery({ queryKey: ['malformed-fixture'], queryFn: () =>
+          h.load('@/api/client').jsonRequest('/v1/fixture', { method, ...(method === 'POST' ? { idempotencyKey: 'inert-fixture' } : {}) }) });
+      } catch (error) { failure = error; }
+      assert.equal(requests, 1, 'protocol failure replayed the complete API operation');
+      assert.equal(failure?.code, 'api_response_invalid');
+      assert.equal(h.timers.size, 0);
+    } finally { query.clear(); }
+  });
+}
+for (const body of ['{"ok":true}', 'QSECRET']) {
+  test(`caller cancellation after HTTP cleanup precedes JSON decode: ${body}`, async () => {
+    const controller = new AbortController();
+    const remove = controller.signal.removeEventListener.bind(controller.signal);
+    controller.signal.removeEventListener = (...args) => {
+      remove(...args);
+      // HTTP has settled, but jsonRequest's await continuation has not run.
+      queueMicrotask(() => controller.abort('inert-private-cancellation-reason'));
+    };
+    const h = harness({ fetch: async () => ({ ok: true, status: 200, text: async () => body }) });
+    await assert.rejects(h.load('@/api/client').jsonRequest('/v1/fixture', { signal: controller.signal }),
+      error => error.code === 'request_cancelled' && !error.message.includes('inert-private'));
+    assert.equal(h.timers.size, 0);
+  });
+}
+test('a transport-origin SyntaxError is not relabeled as a JSON body failure', async () => {
+  const failure = new SyntaxError('inert transport preparation failure');
+  const h = harness({ fetch: async () => { throw failure; } });
+  await assert.rejects(h.load('@/api/client').jsonRequest('/v1/fixture'), error => error === failure);
+});
+for (const value of [null, { ok: true }, [1, 'ok'], false, 42, 'value']) {
+  test(`generic JSON retains valid scalar/object/array semantics: ${JSON.stringify(value)}`, async () => {
+    const h = harness({ fetch: async () => response(value) });
+    assert.deepEqual(await h.load('@/api/client').jsonRequest('/v1/fixture'), value);
+    assert.equal(h.timers.size, 0);
+  });
+}
+for (const body of ['', '[Interface]\nPrivateKey = inert-fixture\n']) {
+  test(`raw responses retain non-JSON and empty content: ${JSON.stringify(body)}`, async () => {
+    const h = harness({ fetch: async () => ({ ok: true, status: 200, text: async () => body }) });
+    assert.equal(await h.load('@/api/client').rawRequest('/v1/fixture'), body);
+    assert.equal(h.timers.size, 0);
+  });
+}
+
 test('an already cancelled request does no metadata lookup or HTTP work', async () => {
   let setup = 0, calls = 0;
   const h = harness({ appInfo: async () => { setup++; return {}; }, fetch: async () => { calls++; return response({}); } });

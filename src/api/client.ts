@@ -26,7 +26,18 @@ const shouldLogApiRequests = typeof __DEV__ !== 'undefined' && __DEV__;
 
 
 export async function jsonRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  return JSON.parse(await rawRequest(path, options)) as T;
+  const text = await rawRequest(path, options);
+  requireRequestActive(options.signal);
+  try {
+    return JSON.parse(text) as T;
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      // Parser diagnostics can contain response content. A local decode failure
+      // has no HTTP status and must not be mistaken for a server outage.
+      throw new ApiRequestError('Некорректный ответ API.', { code: 'api_response_invalid' });
+    }
+    throw error;
+  }
 }
 
 export async function rawRequest(path: string, options: RequestOptions = {}): Promise<string> {

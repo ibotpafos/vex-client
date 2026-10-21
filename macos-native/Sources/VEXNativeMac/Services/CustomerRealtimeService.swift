@@ -7,8 +7,11 @@ struct CustomerRealtimeEvent: Equatable {
 }
 
 struct CustomerSSEParser {
-    private(set) var remainder = ""
-    private static let maximumRemainderLength = 64 * 1024
+    private var frameBytes = Data()
+    private var suppressLF = false
+    private(set) var hasExceededFrameLimit = false
+    private static let maximumFrameBytes = 64 * 1024
+    var remainder: String { String(decoding: frameBytes, as: UTF8.self) }
     private static let supportedTypes: Set<String> = [
         "customer.change",
         "customer.resync",
@@ -17,17 +20,34 @@ struct CustomerSSEParser {
     ]
 
     mutating func append(_ chunk: String) -> [CustomerRealtimeEvent] {
-        let buffered = (remainder + chunk)
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: "\r", with: "\n")
-        guard let boundary = buffered.range(of: "\n\n", options: .backwards) else {
-            remainder = String(buffered.suffix(Self.maximumRemainderLength))
-            return []
+        var events: [CustomerRealtimeEvent] = []
+        for byte in chunk.utf8 {
+            if let event = append(byte) { events.append(event) }
+            if hasExceededFrameLimit { break }
         }
+        return events
+    }
 
-        let complete = String(buffered[..<boundary.lowerBound])
-        remainder = String(buffered[boundary.upperBound...].suffix(Self.maximumRemainderLength))
-        return complete.components(separatedBy: "\n\n").compactMap(Self.parseFrame)
+    fileprivate mutating func append(_ byte: UInt8) -> CustomerRealtimeEvent? {
+        guard !hasExceededFrameLimit else { return nil }
+        // A CRLF pair remains one newline even across separate appends.
+        if suppressLF {
+            suppressLF = false
+            if byte == 0x0A { return nil }
+        }
+        let normalized = byte == 0x0D ? 0x0A : byte
+        suppressLF = byte == 0x0D
+        guard frameBytes.count < Self.maximumFrameBytes else {
+            frameBytes.removeAll(keepingCapacity: false)
+            hasExceededFrameLimit = true
+            return nil
+        }
+        frameBytes.append(normalized)
+        guard normalized == 0x0A, frameBytes.count >= 2,
+              frameBytes[frameBytes.endIndex - 2] == 0x0A else { return nil }
+        let frame = String(decoding: frameBytes.dropLast(2), as: UTF8.self)
+        frameBytes.removeAll(keepingCapacity: true)
+        return Self.parseFrame(frame)
     }
 
     private static func parseFrame(_ frame: String) -> CustomerRealtimeEvent? {
@@ -50,21 +70,10 @@ struct CustomerSSEParser {
 
 struct CustomerSSEWireDecoder {
     private var parser = CustomerSSEParser()
-    private var lineBytes = Data()
-    private var suppressLF = false
+    var hasExceededFrameLimit: Bool { parser.hasExceededFrameLimit }
 
     mutating func append(_ byte: UInt8) -> [CustomerRealtimeEvent] {
-        if suppressLF {
-            suppressLF = false
-            if byte == 0x0A { return [] }
-        }
-
-        lineBytes.append(byte)
-        guard byte == 0x0A || byte == 0x0D else { return [] }
-        suppressLF = byte == 0x0D
-        let chunk = String(decoding: lineBytes, as: UTF8.self)
-        lineBytes.removeAll(keepingCapacity: true)
-        return parser.append(chunk)
+        parser.append(byte).map { [$0] } ?? []
     }
 }
 
@@ -199,6 +208,7 @@ final class CustomerRealtimeService {
                 }
 
                 let (bytes, response) = try await session.bytes(for: request)
+                defer { bytes.task.cancel() }
                 guard let http = response as? HTTPURLResponse else {
                     throw URLError(.badServerResponse)
                 }
@@ -217,7 +227,11 @@ final class CustomerRealtimeService {
                 var decoder = CustomerSSEWireDecoder()
                 for try await byte in bytes {
                     guard !Task.isCancelled else { return }
-                    for event in decoder.append(byte) {
+                    let events = decoder.append(byte)
+                    guard !decoder.hasExceededFrameLimit else {
+                        throw URLError(.dataLengthExceedsMaximum)
+                    }
+                    for event in events {
                         if !event.id.isEmpty { lastEventID = event.id }
                         guard let metadata = CustomerRealtimeMetadata.parse(type: event.type, data: event.data) else {
                             continue

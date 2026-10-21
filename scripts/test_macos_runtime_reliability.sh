@@ -73,12 +73,23 @@ source = pathlib.Path(sys.argv[1]).read_text()
 pathlib.Path(sys.argv[2]).write_text(source[:source.index("@MainActor")])
 PY
 cp "$root_dir/macos-native/Tests/VEXNativeMacTests/VpnRecoveryIntentTests.swift" "$test_dir/"
+# Run the complete production SSE reader separately from the fake callback stream.
+realtime_source_dir="$harness_dir/Sources/CustomerRealtimeHarness"
+realtime_test_dir="$harness_dir/Tests/CustomerRealtimeHarnessTests"
+mkdir -p "$realtime_source_dir" "$realtime_test_dir"
+cp "$native_dir/Services/CustomerRealtimeService.swift" "$realtime_source_dir/"
+for name in CustomerRealtimeTests CustomerRealtimeFramingTests; do
+    sed 's/@testable import VEXNativeMac/@testable import CustomerRealtimeHarness/' \
+        "$root_dir/macos-native/Tests/VEXNativeMacTests/$name.swift" > "$realtime_test_dir/$name.swift"
+done
 cat > "$harness_dir/Package.swift" <<'SWIFT'
 // swift-tools-version: 6.2
 import PackageDescription
 let package = Package(name: "VEXRuntimeReliabilityHarness", platforms: [.macOS(.v15)], targets: [
     .target(name: "VEXNativeMac"),
-    .testTarget(name: "VEXNativeMacTests", dependencies: ["VEXNativeMac"])
+    .testTarget(name: "VEXNativeMacTests", dependencies: ["VEXNativeMac"]),
+    .target(name: "CustomerRealtimeHarness"),
+    .testTarget(name: "CustomerRealtimeHarnessTests", dependencies: ["CustomerRealtimeHarness"])
 ], swiftLanguageModes: [.v5])
 SWIFT
 swiftc -frontend -parse "$native_dir/Services/VpnAutopilotService.swift"

@@ -117,7 +117,9 @@ struct CustomerRealtimeMetadata: Equatable {
             else { return nil }
             return CustomerRealtimeMetadata(domains: [domain], reason: "")
         case "customer.resync":
-            guard let versions = payload["versions"] as? [[String: Any]] else { return nil }
+            // Older Go servers encode an absent version snapshot as null.
+            let rawVersions = payload["versions"]
+            guard let versions = rawVersions is NSNull ? [] : rawVersions as? [[String: Any]] else { return nil }
             let domains = versions.compactMap { version -> String? in
                 guard
                     let domain = version["domain"] as? String,

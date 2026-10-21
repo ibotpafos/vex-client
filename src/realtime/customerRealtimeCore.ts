@@ -36,8 +36,10 @@ export function customerRealtimeMetadata(type: CustomerRealtimeEventType, data: 
     if (!domain || typeof record.version !== 'number' || record.version <= 0) return null;
     return { domains: [domain], reason: '' };
   }
-  if (!Array.isArray(record.versions)) return null;
-  const parsedDomains = [...new Set(record.versions.flatMap((version) => {
+  // Older Go servers encode an absent version snapshot as null.
+  if (record.versions !== null && !Array.isArray(record.versions)) return null;
+  const versions = record.versions ?? [];
+  const parsedDomains = [...new Set(versions.flatMap((version) => {
     if (!version || typeof version !== 'object') return [];
     const domain = validDomain((version as Record<string, unknown>).domain);
     return domain ? [domain] : [];

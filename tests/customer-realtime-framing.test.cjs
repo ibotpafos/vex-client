@@ -178,3 +178,31 @@ test('fragmented Unicode and incomplete EOF preserve existing event behavior', (
     assert.equal(h.events.length, 1);
   } finally { h.stop(); }
 });
+
+
+test('legacy null resync survives framing and metadata projection', () => {
+  const { customerRealtimeMetadata } = load('customerRealtimeCore');
+  for (const reason of ['broker_error', 'initial', 'reconnect', 'subscriber_overflow', undefined]) {
+    const h = harness();
+    try {
+      const data = JSON.stringify({ versions: null, reason });
+      h.progress(`event: customer.resync\ndata: ${data}\n\n`);
+      assert.deepEqual(h.events, [{ type: 'customer.resync', id: '', data }]);
+      assert.deepEqual(plain(customerRealtimeMetadata('customer.resync', data)), { domains: [], reason: reason ?? 'resync' });
+      assert.equal(h.statuses.at(-1), true);
+      assert.equal(h.revoked, 0);
+    } finally { h.stop(); }
+  }
+});
+
+test('malformed and missing resync versions still reject', () => {
+  for (const versions of [undefined, true, 1, 'null', {}]) {
+    const h = harness();
+    try {
+      h.progress(`event: customer.resync\nid: invalid\ndata: ${JSON.stringify({ versions })}\n\n`);
+      assert.equal(h.events.length, 0);
+      h.requests[0].onerror(); h.reconnect();
+      assert.equal(h.requests[1].headers['Last-Event-ID'], undefined);
+    } finally { h.stop(); }
+  }
+});

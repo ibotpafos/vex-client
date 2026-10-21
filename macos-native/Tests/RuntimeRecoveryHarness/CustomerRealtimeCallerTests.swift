@@ -85,14 +85,27 @@ final class CustomerRealtimeService {
     }
     func start(accessToken: String) {}
     func stop() {}
-    func change(id: String = "change-1", type: String = "customer.change") async {
-        let event = CustomerRealtimeEvent(type: type, id: id, data: #"{"domain":"support","version":1}"#)
+    func change(id: String = "change-1", type: String = "customer.change",
+                data: String = #"{"domain":"support","version":1}"#) async {
+        let event = CustomerRealtimeEvent(type: type, id: id, data: data)
         guard let metadata = CustomerRealtimeMetadata.parse(type: type, data: event.data) else { return }
         await onEvent(event, metadata)
     }
 }
 
 final class CustomerRealtimeCallerTests: XCTestCase {
+    @MainActor
+    func testLegacyNullResyncRefreshesCustomerStateWithoutCredentialRotation() async throws {
+        let state = RealtimeCallerState()
+        defer { state.stop() }
+        state.start()
+        let stream = try XCTUnwrap(state.customerRealtimeService)
+        await stream.change(id: "", type: "customer.resync", data: #"{"versions":null,"reason":"broker_error"}"#)
+        XCTAssertEqual(state.refreshCalls, 1)
+        XCTAssertEqual(state.sessionRetryCalls, 0)
+        XCTAssertTrue(state.customerNotifications.delivered.isEmpty)
+    }
+
     @MainActor
     func testInvalidAPIConfigurationDoesNotCreateRealtimeStream() {
         for baseURL in [nil, URL(string: "file:///private/fixture"), URL(string: "https://example.invalid?other")] {

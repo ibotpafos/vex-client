@@ -72,13 +72,15 @@ public sealed record CustomerRealtimeMetadata(
 
             if (type != "customer.resync" ||
                 !root.TryGetProperty("versions", out var versions) ||
-                versions.ValueKind != JsonValueKind.Array)
+                versions.ValueKind is not (JsonValueKind.Array or JsonValueKind.Null))
             {
                 return null;
             }
 
-            var domains = versions
-                .EnumerateArray()
+            // Older Go servers encode an absent version snapshot as null.
+            var domains = versions.ValueKind == JsonValueKind.Null
+                ? Array.Empty<string>()
+                : versions.EnumerateArray()
                 .Where(item => item.ValueKind == JsonValueKind.Object)
                 .Select(item => StringProperty(item, "domain"))
                 .Where(domain =>

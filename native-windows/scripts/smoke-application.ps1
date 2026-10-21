@@ -969,6 +969,22 @@ namespace Vex.Windows.Smoke {
                             -not $refreshButton.Current.IsEnabled
                     }
                 }
+                catch {
+                    # Keep the actual observations in the primary CI log before
+                    # the finally block restores the preference.
+                    [ordered]@{
+                        schema = 'vex.settings-mutation-observation.v1'
+                        original_state = $result.settings_recovery_original_state
+                        observed_state = if ($result.Contains('settings_recovery_observed_state')) {
+                            $result.settings_recovery_observed_state
+                        } else { $null }
+                        refresh_enabled = if ($result.Contains('settings_refresh_enabled_during_mutation')) {
+                            $result.settings_refresh_enabled_during_mutation
+                        } else { $null }
+                        elapsed_ms = [math]::Round($resumedRefreshTimer.Elapsed.TotalMilliseconds)
+                    } | ConvertTo-Json -Compress | Write-Host
+                    throw
+                }
                 finally {
                     $recoveryToggle = Find-SmokeElement -AutomationId 'AutoRecoveryToggle'
                     if ($null -ne $recoveryToggle) {

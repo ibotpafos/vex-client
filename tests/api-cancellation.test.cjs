@@ -240,7 +240,7 @@ test('a cancelled joined foreground waiter is not retried after background failu
 });
 
 for (const stage of ['metadata', 'devices', 'profile']) {
-  test(`preparedTunnel cancellation during ${stage} starts no fallback or later HTTP stage`, async () => {
+  test(`profile resolution cancellation during ${stage} starts no fallback or later HTTP stage`, async () => {
     const hold = gate(), controller = new AbortController(), calls = [];
     const h = harness({ appInfo: stage === 'metadata' ? () => hold.promise : async () => ({ platform: 'web' }), fetch: async (url, init) => {
       const requestPath = new URL(url).pathname; calls.push(requestPath);
@@ -248,10 +248,10 @@ for (const stage of ['metadata', 'devices', 'profile']) {
       if (requestPath === '/v1/vpn/profile') return hold.promise;
       throw new Error(`Unexpected fallback ${requestPath} ${init.method}`);
     } });
-    const result = tracked(h.load('@/api/vpn').preparedTunnel('token', { platform: 'web', deviceName: 'fixture' }, { locationId: 'de', signal: controller.signal }));
+    const result = tracked(h.load('@/vpn/profile').resolveVpnProfile('token', paid, 'de', { forceRefresh: true, signal: controller.signal }));
     await tick(); controller.abort(); await tick(); const before = calls.slice(), immediate = result.done;
     hold.resolve(stage === 'metadata' ? { platform: 'web' } : response(stage === 'devices' ? [device] : profile));
-    await result.promise; await tick(); cancelled(result); assert.equal(immediate, true); assert.deepEqual(calls, before);
+    await result.promise; await h.load('@/vpn/profileRequestQueue').runProfileRequest(async () => 'barrier'); cancelled(result); assert.equal(immediate, true); assert.deepEqual(calls, before);
     assert.ok(!calls.some(name => name.includes('config'))); assert.equal(h.timers.size, 0);
   });
 }
@@ -273,6 +273,25 @@ test('profile borrower cancellation retains queue ownership until a dispatched k
   hold.resolve(response({ device })); await old.promise; await next;
   cancelled(old); assert.equal(immediate, true); assert.equal(overlapped, false); assert.equal(writeAborted, false);
   assert.equal(calls.filter(name => name === '/v1/vpn/rotate-key').length, 1); assert.ok(!calls.includes('/v1/vpn/profile'));
+});
+
+test('cancelled profile issuance retains its queue slot until the dispatched profile GET completes', async () => {
+  const hold = gate(), controller = new AbortController(), calls = []; let issuanceSignal;
+  const h = harness({ fetch: async (url, init) => {
+    const route = new URL(url).pathname; calls.push(route);
+    if (route === '/v1/devices') return response([device]);
+    if (route === '/v1/vpn/profile') { issuanceSignal = init.signal; return hold.promise; }
+    throw Error(`Unexpected issuance stage ${route}`);
+  } });
+  const resolver = h.load('@/vpn/profile'), queue = h.load('@/vpn/profileRequestQueue');
+  const old = tracked(resolver.resolveVpnProfile('token', paid, 'de', { forceRefresh: true, signal: controller.signal }));
+  await tick(); assert.ok(issuanceSignal); controller.abort(); await tick();
+  const immediate = old.done, aborted = issuanceSignal.aborted;
+  let nextStarted = false; const next = queue.runProfileRequest(async () => { nextStarted = true; return 'current'; });
+  await tick(); const overlapped = nextStarted;
+  hold.resolve(response(profile)); await old.promise; assert.equal(await next, 'current');
+  cancelled(old); assert.equal(immediate, true); assert.equal(aborted, false); assert.equal(overlapped, false);
+  assert.equal(calls.filter(route => route === '/v1/vpn/profile').length, 1); assert.equal(h.timers.size, 0);
 });
 
 test('two profile callers share registration and retain its durable confirmation after one cancels', async () => {

@@ -134,7 +134,7 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
     const started = Date.now();
     try {
       requireCurrentOperation();
-      const response = await requestManagedVpnProfile(accessToken, deviceId, locationId, routingMode, bypassRegion, versionHeaders, knownVersion, options.signal);
+      const response = await requestManagedVpnProfile(accessToken, deviceId, locationId, routingMode, bypassRegion, versionHeaders, knownVersion);
       requireCurrentOperation();
       return response;
     } finally {
@@ -278,7 +278,7 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
 
 function requestManagedVpnProfile(
   accessToken: string, deviceId: string, locationId: string, routingMode: string,
-  bypassRegion: string | undefined, headers: Record<string, string>, knownVersion?: number, signal?: AbortSignal,
+  bypassRegion: string | undefined, headers: Record<string, string>, knownVersion?: number,
 ): Promise<NativeVPNProfileDTO> {
   const routed = supportsNativeRoutingPolicy();
   // Destination policy belongs to the native router. Its encrypted transport
@@ -288,7 +288,10 @@ function requestManagedVpnProfile(
   if (routed) query.set('routing_policy_version', '2');
   if (!routed && bypassRegion) query.set('bypass_region', bypassRegion);
   if (!routed && typeof knownVersion === 'number' && knownVersion > 0) query.set('known_version', String(knownVersion));
-  return jsonRequest<NativeVPNProfileDTO>(`/v1/vpn/profile?${query.toString()}`, {accessToken, headers, suppressErrorLog:true, ...(signal ? { signal } : {})});
+  // Profile GET can assign a node or reconcile its peer. Once dispatched, it
+  // owns the queue slot through completion, like registration/key writes. Only
+  // the caller wait is cancellable; guard before/after this operation instead.
+  return jsonRequest<NativeVPNProfileDTO>(`/v1/vpn/profile?${query.toString()}`, {accessToken, headers, suppressErrorLog:true});
 }
 
 export async function vpnDevices(accessToken: string, signal?: AbortSignal): Promise<VpnDevice[]> {

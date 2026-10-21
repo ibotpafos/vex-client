@@ -206,3 +206,30 @@ test('malformed and missing resync versions still reject', () => {
     } finally { h.stop(); }
   }
 });
+
+for (const version of ['true', 'false', '0', '-1', '0.5', '1.5', '1e400', '"7"', 'null']) {
+  test(`invalid change version ${version} cannot update cursor or dispatch a refresh`, () => {
+    const h = harness();
+    try {
+      h.progress(`event: customer.change\nid: invalid-version\ndata: {"domain":"devices","version":${version}}\n\n`);
+      assert.equal(h.events.length, 0);
+      h.requests[0].onerror(); h.reconnect();
+      assert.equal(h.requests[1].headers['Last-Event-ID'], undefined);
+      assert.equal(h.revoked, 0);
+    } finally { h.stop(); }
+  });
+}
+
+test('all positive Go int64 versions remain valid invalidations', () => {
+  const { customerRealtimeMetadata } = load('customerRealtimeCore');
+  const h = harness();
+  try {
+    for (const version of ['1', '9007199254740991', '9007199254740992', '9007199254740993', '9223372036854775806', '9223372036854775807']) {
+      const data = `{"domain":"devices","version":${version}}`;
+      assert.deepEqual(plain(customerRealtimeMetadata('customer.change', data)), { domains: ['devices'], reason: '' });
+      h.progress(`event: customer.change\nid: devices:${version}\ndata: ${data}\n\n`);
+      assert.equal(h.events.at(-1).id, `devices:${version}`);
+    }
+    assert.equal(h.events.length, 6);
+  } finally { h.stop(); }
+});

@@ -78,7 +78,7 @@ realtime_source_dir="$harness_dir/Sources/CustomerRealtimeHarness"
 realtime_test_dir="$harness_dir/Tests/CustomerRealtimeHarnessTests"
 mkdir -p "$realtime_source_dir" "$realtime_test_dir"
 cp "$native_dir/Services/CustomerRealtimeService.swift" "$realtime_source_dir/"
-for name in CustomerRealtimeTests CustomerRealtimeFramingTests CustomerRealtimeResyncContractTests; do
+for name in CustomerRealtimeTests CustomerRealtimeFramingTests CustomerRealtimeResyncContractTests CustomerRealtimeVersionContractTests; do
     sed 's/@testable import VEXNativeMac/@testable import CustomerRealtimeHarness/' \
         "$root_dir/macos-native/Tests/VEXNativeMacTests/$name.swift" > "$realtime_test_dir/$name.swift"
 done

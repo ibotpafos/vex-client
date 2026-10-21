@@ -33,7 +33,7 @@ export function customerRealtimeMetadata(type: CustomerRealtimeEventType, data: 
   }
   if (type === 'customer.change') {
     const domain = validDomain(record.domain);
-    if (!domain || typeof record.version !== 'number' || record.version <= 0) return null;
+    if (!domain || typeof record.version !== 'number' || !Number.isInteger(record.version) || record.version <= 0) return null;
     return { domains: [domain], reason: '' };
   }
   // Older Go servers encode an absent version snapshot as null.

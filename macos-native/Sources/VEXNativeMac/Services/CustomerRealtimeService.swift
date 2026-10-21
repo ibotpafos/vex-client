@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 
 struct CustomerRealtimeEvent: Equatable {
     let type: String
@@ -113,7 +114,11 @@ struct CustomerRealtimeMetadata: Equatable {
                 let domain = payload["domain"] as? String,
                 supportedDomains.contains(domain),
                 let version = payload["version"] as? NSNumber,
-                version.doubleValue > 0
+                // JSON booleans bridge to NSNumber too. Keep integer precision
+                // through the standard decimal conversion rather than Double.
+                CFGetTypeID(version) != CFBooleanGetTypeID(),
+                let exactVersion = Int64(version.stringValue),
+                exactVersion > 0
             else { return nil }
             return CustomerRealtimeMetadata(domains: [domain], reason: "")
         case "customer.resync":

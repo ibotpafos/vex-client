@@ -208,7 +208,7 @@ jobs:
           retention-days: 3
           if-no-files-found: error
       - name: Test all native macOS behavior
-        run: swift test --package-path macos-native
+        run: python3 scripts/run_test_with_failure_summary.py swift test --package-path macos-native
       - name: Build the canonical iOS simulator app without signing
         if: github.event_name != 'workflow_dispatch' || !inputs.skip_ios
         timeout-minutes: 40

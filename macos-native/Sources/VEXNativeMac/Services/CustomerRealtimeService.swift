@@ -236,20 +236,10 @@ final class CustomerRealtimeService {
                 }
                 onStatus(true)
                 attempt = 0
-                var decoder = CustomerSSEWireDecoder()
-                for try await byte in bytes {
+                try await Self.consume(bytes) { event, metadata in
                     guard !Task.isCancelled else { return }
-                    let events = decoder.append(byte)
-                    guard !decoder.hasExceededFrameLimit else {
-                        throw URLError(.dataLengthExceedsMaximum)
-                    }
-                    for event in events {
-                        guard let metadata = CustomerRealtimeMetadata.parse(type: event.type, data: event.data) else {
-                            continue
-                        }
-                        if !event.id.isEmpty { lastEventID = event.id }
-                        await onEvent(event, metadata)
-                    }
+                    if !event.id.isEmpty { lastEventID = event.id }
+                    await self.onEvent(event, metadata)
                 }
                 onStatus(false)
             } catch is CancellationError {
@@ -261,6 +251,28 @@ final class CustomerRealtimeService {
             let delay = Self.reconnectDelay(attempt: attempt)
             attempt += 1
             try? await reconnectSleep(delay)
+        }
+    }
+
+    // AsyncBytes yields individual bytes. Decode away from MainActor so each
+    // byte does not need a UI-executor hop; deliver only accepted events there.
+    nonisolated private static func consume(
+        _ bytes: URLSession.AsyncBytes,
+        onEvent: @MainActor (CustomerRealtimeEvent, CustomerRealtimeMetadata) async -> Void
+    ) async throws {
+        var decoder = CustomerSSEWireDecoder()
+        for try await byte in bytes {
+            try Task.checkCancellation()
+            let events = decoder.append(byte)
+            guard !decoder.hasExceededFrameLimit else {
+                throw URLError(.dataLengthExceedsMaximum)
+            }
+            for event in events {
+                guard let metadata = CustomerRealtimeMetadata.parse(type: event.type, data: event.data) else {
+                    continue
+                }
+                await onEvent(event, metadata)
+            }
         }
     }
 }

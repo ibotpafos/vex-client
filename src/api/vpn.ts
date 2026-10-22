@@ -46,6 +46,7 @@ import { requireVpnLocationId } from '../vpn/locationId';
 import { canRevalidateDevice } from '../vpn/profileRevalidation';
 import { SessionOperationSupersededError } from '../vpn/sessionOperation';
 import { nativeRoutingParameters, routingAuthorization } from '../vpn/nativeRoutingPolicy';
+import { isPositiveSafeInteger, isNonnegativeSafeInteger } from '../vpn/profileNumbers';
 
 const mobileProtocol = 'amneziawg';
 
@@ -137,6 +138,9 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
       requireCurrentOperation();
       const response = await requestManagedVpnProfile(accessToken, deviceId, locationId, routingMode, bypassRegion, versionHeaders, knownVersion);
       requireCurrentOperation();
+      if (!response.revoked && response.version !== undefined && !isPositiveSafeInteger(response.version)) {
+        throw new Error('Сервер вернул некорректную версию VPN-профиля.');
+      }
       return response;
     } finally {
       resolutionTiming.profileRequestMs += Math.max(0, Date.now() - started);
@@ -158,8 +162,8 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
   let revalidateCachedConfig = false;
   const cachedDevice = options.cachedDevice;
   if (accountOptions && cachedDevice?.userId && cachedDevice.userId !== accountOptions.userId) throw new Error('VPN-устройство принадлежит другому аккаунту.');
-  if (!accountIdentity?.legacyRegistrationPending && options.cachedConfig && Number.isInteger(options.knownVersion) && (options.knownVersion ?? 0) > 0 &&
-      cachedDevice && Number.isInteger(cachedDevice.keyEpoch) && (cachedDevice.keyEpoch ?? 0) > 0 &&
+  if (!accountIdentity?.legacyRegistrationPending && options.cachedConfig && isPositiveSafeInteger(options.knownVersion) &&
+      cachedDevice && isPositiveSafeInteger(cachedDevice.keyEpoch) &&
       canRevalidateDevice(cachedDevice, cachedDevice, keyPair?.publicKey ?? '') &&
       nativeVpnDeviceForClient([cachedDevice], locationId, externalDeviceId, baseExternalDeviceId)) {
     // A cached device is only a request hint. The authorized profile response
@@ -221,7 +225,7 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
         requireCurrentOperation();
       }
     }
-    revalidateCachedConfig = Boolean(options.cachedConfig) && canRevalidateDevice(options.cachedDevice, device, keyPair?.publicKey ?? '');
+    revalidateCachedConfig = Boolean(options.cachedConfig) && isPositiveSafeInteger(options.knownVersion) && canRevalidateDevice(options.cachedDevice, device, keyPair?.publicKey ?? '');
     profile = await requestProfile(device.id, revalidateCachedConfig ? options.knownVersion : undefined);
   }
   if (profile.revoked) {
@@ -240,6 +244,9 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
   if (profile.unchanged) {
     if (!revalidateCachedConfig || !options.cachedConfig) {
       throw new Error('Управляемый VPN-профиль не изменился, но локальный cache пуст.');
+    }
+    if (profile.version !== undefined && profile.version !== options.knownVersion) {
+      throw new Error('Сервер вернул несовпадающую версию VPN-профиля.');
     }
     return {
       config: options.cachedConfig,
@@ -288,7 +295,7 @@ function requestManagedVpnProfile(
   const query = withManagedProfileAWGCapability(new URLSearchParams({device_id: deviceId, location: locationId, routing_mode: routed ? 'full_tunnel' : routingMode}));
   if (routed) query.set('routing_policy_version', '2');
   if (!routed && bypassRegion) query.set('bypass_region', bypassRegion);
-  if (!routed && typeof knownVersion === 'number' && knownVersion > 0) query.set('known_version', String(knownVersion));
+  if (!routed && isPositiveSafeInteger(knownVersion)) query.set('known_version', String(knownVersion));
   // Profile GET can assign a node or reconcile its peer. Once dispatched, it
   // owns the queue slot through completion, like registration/key writes. Only
   // the caller wait is cancellable; guard before/after this operation instead.
@@ -405,7 +412,7 @@ export async function fetchStagedDevicePSKProfile(accessToken: string, currentPr
     suppressErrorLog: true,
   });
   requireCurrentSession(isCurrentSessionOperation);
-  if (response.activate !== false || response.profile_version !== response.profile.version) {
+  if (response.activate !== false || !isPositiveSafeInteger(response.profile_version) || !isPositiveSafeInteger(response.profile.version) || response.profile_version !== response.profile.version) {
     throw new Error('Сервер вернул некорректный staged AmneziaWG профиль.');
   }
   const client = currentVpnClient();
@@ -466,6 +473,8 @@ export async function acknowledgeStagedDevicePSKProfile(
 
 export async function rotateManagedVpnKey(accessToken: string, deviceId: string, serverCurrentEpoch?: number, isCurrentSessionOperation?: () => boolean, userId?: string): Promise<VpnDevice> {
   requireCurrentSession(isCurrentSessionOperation);
+  // Account setup may persist keys. Reject an unusable server identity first.
+  if (serverCurrentEpoch !== undefined) nextManagedKeyEpoch(undefined, serverCurrentEpoch);
   const client = currentVpnClient();
   const accountOptions = requiresManagedNativeProfile(client)
     ? await vpnAccountOptions(accessToken, client, undefined, userId, isCurrentSessionOperation)
@@ -477,7 +486,7 @@ export async function rotateManagedVpnKey(accessToken: string, deviceId: string,
 
 async function rotateManagedVpnKeyForIdentity(accessToken: string, deviceId: string, serverCurrentEpoch?: number, isCurrentSessionOperation?: () => boolean, identity?: VpnAccountIdentity): Promise<VpnDevice> {
   requireCurrentSession(isCurrentSessionOperation);
-  const generatedKeyPair = await generateWireGuardKeyPair();
+  const generatedKeyPair = await generateWireGuardKeyPair({ independentEpoch: serverCurrentEpoch !== undefined });
   requireCurrentSession(isCurrentSessionOperation);
   if (!generatedKeyPair?.publicKey) {
     throw new Error('Локальный WireGuard ключ недоступен.');
@@ -519,7 +528,7 @@ async function separateLegacyAccountKey(accessToken: string, device: VpnDevice, 
     return device;
   }
   if (!pending) {
-    pending = await generateWireGuardKeyPair() ?? undefined;
+    pending = await generateWireGuardKeyPair({ independentEpoch: device.keyEpoch !== undefined }) ?? undefined;
     requireCurrentSession(isCurrentSessionOperation);
     if (!pending) throw new Error('Локальный WireGuard ключ недоступен.');
   }
@@ -759,6 +768,9 @@ function logApiDebug(...items: unknown[]) {
 }
 
 export function parseDevice(item: DeviceDTO): VpnDevice {
+  if (item.psk_epoch !== undefined && !isNonnegativeSafeInteger(item.psk_epoch)) {
+    throw new Error('Сервер вернул некорректную эпоху ключа VPN.');
+  }
   return {
     id: item.id,
     userId: item.user_id || undefined,

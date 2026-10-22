@@ -1,6 +1,7 @@
 import { entitlement, hasPaidEntitlement, preparedTunnel, rotateManagedVpnKey, type Entitlement, type VpnDevice } from '../api/vexApi';
 import { loadHotVpnProfile, profileFromHotRecord } from './hotProfileCache';
 import { runtimeProfileKey, vpnProfileCacheIsCurrent } from './hotProfileCacheCore';
+import { isPositiveSafeInteger } from './profileNumbers';
 import { defaultVpnBypassRegion, defaultVpnRoutingMode, defaultVpnRoutingPolicyVersion, type VpnRoutingMode } from './routingPolicy';
 import { runProfileRequest } from './profileRequestQueue';
 import { vpnProfileAddressMatchesDevice } from './profileConsistency';
@@ -158,7 +159,7 @@ function profileCacheKey(token: string, locationId: string, routingMode: VpnRout
 function profileRequestCoalesceKey(token: string, locationId: string, routingMode: VpnRoutingMode, options: PreparedTunnelOptions): string {
   const bypassRegion = (options.bypassRegion ?? defaultVpnBypassRegion).trim().toLowerCase();
   const cachedDevice = options.cachedDevice;
-  const revalidation = options.cachedConfig && cachedDevice?.id && Number.isInteger(options.knownVersion) && (options.knownVersion ?? 0) > 0
+  const revalidation = options.cachedConfig && cachedDevice?.id && isPositiveSafeInteger(options.knownVersion)
     ? `revalidate:${cachedDevice.id}:${options.knownVersion}:${cachedDevice.keyEpoch ?? 0}:${cachedDevice.assignedIpv4 ?? ''}`
     : 'fresh';
   return `${profileCacheKey(token, locationId, routingMode)}:${bypassRegion}:${revalidation}`;

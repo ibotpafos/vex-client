@@ -7,7 +7,8 @@ const ts = require('typescript');
 
 const repo = path.resolve(__dirname, '..');
 function load(file, dependencies = {}) {
-  const source = file === 'src/api/vpn.ts' && process.env.VEX_STAGED_PROFILE_SOURCE || path.join(repo, file);
+  const overlay = process.env.VEX_PROFILE_NUMERIC_SOURCE_ROOT && path.join(process.env.VEX_PROFILE_NUMERIC_SOURCE_ROOT, file);
+  const source = file === 'src/api/vpn.ts' && process.env.VEX_STAGED_PROFILE_SOURCE || (overlay && fs.existsSync(overlay) ? overlay : path.join(repo, file));
   const code = ts.transpileModule(fs.readFileSync(source, 'utf8'), {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
   }).outputText;
@@ -21,6 +22,9 @@ function load(file, dependencies = {}) {
 const sessionOperation = load('src/vpn/sessionOperation.ts');
 const apiErrors = load('src/api/error.ts');
 const cancellation = load('src/api/requestCancellation.ts', { './error': apiErrors });
+const profileNumbers = fs.existsSync(path.join(repo, 'src/vpn/profileNumbers.ts')) ? load('src/vpn/profileNumbers.ts') : {};
+const epochRecovery = load('src/vpn/keyEpochRecovery.ts', { './profileNumbers': profileNumbers });
+const pskEvents = load('src/vpn/devicePskRotation.ts', { './profileNumbers': profileNumbers });
 const profileCore = load('src/vpn/hotProfileCacheCore.ts', { './locationId': load('src/vpn/locationId.ts') });
 const deferred = () => {
   let resolve, reject;
@@ -167,6 +171,7 @@ test('a superseded profile response cannot seed the global cache for a later log
     },
     './hotProfileCache': {},
     './hotProfileCacheCore': profileCore,
+    './profileNumbers': profileNumbers,
     './routingPolicy': { defaultVpnRoutingMode: 'default', defaultVpnBypassRegion: 'ru', defaultVpnRoutingPolicyVersion: 'v1' },
     './profileRequestQueue': { runProfileRequest: operation => operation() },
     './profileConsistency': { vpnProfileAddressMatchesDevice: () => true },
@@ -185,13 +190,13 @@ function vpnApi(operations) {
   return load('src/api/vpn.ts', {
     'react-native': { Platform: { OS: 'android' } }, '@/native/appInfo': { getOrCreateDeviceId: async () => 'installation-fixture' }, '@/native/deviceIdentity': {},
     '@/native/vexVpn': { supportsNativeRoutingPolicy: () => false, ...operations.native }, '@/vpn/nativeDeviceSelection': { nativeVpnDeviceForClient: devices => devices[0] },
-    '@/vpn/keyEpochRecovery': { nextManagedKeyEpoch: (_, epoch) => (epoch ?? 0) + 1, isKeyEpochMismatchError: error => error.code === 'epoch_mismatch' },
+    '@/vpn/keyEpochRecovery': operations.epochRecovery ?? { nextManagedKeyEpoch: (_, epoch) => (epoch ?? 0) + 1, isKeyEpochMismatchError: error => error.code === 'epoch_mismatch' },
     '@/vpn/routingPolicy': { defaultVpnRoutingMode: 'default', defaultVpnRoutingPolicyVersion: 'v1', resolvedVpnBypassRegion: () => '' },
     '@/notifications/pushRegistration': {}, './client': operations.client, './error': apiErrors, './requestCancellation': cancellation,
     './auth': { me: async () => ({ id: 'fixture-owner' }) },
     '../native/vpnAccountIdentity': {
       getOrCreateVpnAccountIdentity: async () => ({ installationId: 'installation-fixture', externalDeviceId: 'installation-fixture', keyScope: 'fixture-scope', keyPair: await operations.native.getOrCreateWireGuardKeyPair() }),
-      withVpnAccountIdentity: async (_, callback) => callback({ keyScope: 'fixture-scope' }),
+      withVpnAccountIdentity: async (_, callback) => { operations.observe?.('account'); return callback({ keyScope: 'fixture-scope' }); },
       saveVpnAccountKeyPair: async () => operations.native.replaceWireGuardKeyPair(),
     },
     './deviceCreateRequest': {}, './clientDiagnosticsRequest': {}, './nativeDeviceRegistration': {},
@@ -199,6 +204,96 @@ function vpnApi(operations) {
     '../vpn/locationCatalog': {}, '../vpn/locationId': { requireVpnLocationId: value => value }, '../vpn/profileRevalidation': {},
     '../vpn/sessionOperation': sessionOperation,
     '../vpn/nativeRoutingPolicy': {},
+    '../vpn/profileNumbers': profileNumbers,
+  });
+}
+
+for (const value of [null, '2', NaN, Infinity, -1, 1.5, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER + 1]) {
+  test(`invalid or overflowing server epoch ${String(value)} cannot dispatch rotation or replace a key`, async () => {
+    let requests = 0, replacements = 0, generations = 0, setup = 0;
+    const api = vpnApi({ epochRecovery, observe: () => { setup++; }, native: { generateWireGuardKeyPair: async () => { generations++; return { publicKey: 'fixture-key', keyEpoch: 2 }; }, replaceWireGuardKeyPair: async () => { replacements++; } },
+      client: { jsonRequest: async () => { requests++; throw new Error('unexpected fixture mutation'); } } });
+    await assert.rejects(api.rotateManagedVpnKey('fixture-token', 'device-A', value, () => true), /эпох|epoch/i);
+    assert.equal(requests, 0); assert.equal(replacements, 0); assert.equal(generations, 0); assert.equal(setup, 0);
+  });
+}
+
+test('epoch calculation retains legacy zero/missing and exact safe boundary behavior', () => {
+  assert.equal(epochRecovery.nextManagedKeyEpoch(undefined, undefined), 1);
+  assert.equal(epochRecovery.nextManagedKeyEpoch(0, 0), 1);
+  assert.equal(epochRecovery.nextManagedKeyEpoch(8, 5), 6);
+  assert.equal(epochRecovery.nextManagedKeyEpoch(2, Number.MAX_SAFE_INTEGER - 1), Number.MAX_SAFE_INTEGER);
+  assert.equal(epochRecovery.nextManagedKeyEpoch(Number.MAX_SAFE_INTEGER), Number.MAX_SAFE_INTEGER);
+  for (const value of [NaN, Infinity, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => epochRecovery.nextManagedKeyEpoch(value), /эпох|epoch/i);
+  }
+});
+
+test('rotation uses independent material only when an authoritative epoch is available', async () => {
+  for (const serverEpoch of [undefined, 0, 5]) {
+    const expected = serverEpoch === undefined ? 7 : serverEpoch + 1; let posts = 0, saves = 0;
+    const api = vpnApi({ epochRecovery, native: {
+      generateWireGuardKeyPair: async options => {
+        assert.equal(options.independentEpoch, serverEpoch !== undefined);
+        return { publicKey: 'fixture-new-key', keyEpoch: options.independentEpoch ? 1 : 7 };
+      }, replaceWireGuardKeyPair: async () => { saves++; },
+    }, client: { jsonRequest: async (requestPath, options) => {
+      assert.equal(requestPath, '/v1/vpn/rotate-key'); assert.equal(options.body.key_epoch, expected); posts++;
+      return { device: { id: 'fixture-device', public_key: 'fixture-new-key', psk_epoch: expected } };
+    } } });
+    assert.equal((await api.rotateManagedVpnKey('fixture-token', 'fixture-device', serverEpoch, () => true, 'owner')).keyEpoch, expected);
+    assert.equal(posts, 1); assert.equal(saves, 1);
+  }
+});
+
+const numericEvent = version => ({ event_id: 'fixture-event', type: 'profile_updated', device_id: 'fixture-device', rotation_id: 'fixture-rotation', profile_version: version });
+for (const version of ['7junk', '7.5', '7e3', '+7', [7], { toString: () => '7' }, Number.MAX_SAFE_INTEGER + 1, '9007199254740993']) {
+  test(`push profile identity rejects partial/coerced version ${String(version)}`, async () => {
+    for (const type of ['profile_updated', 'cutover_ready']) {
+      const event = pskEvents.parseDevicePSKRotationEvent({ ...numericEvent(version), type }), calls = [];
+      if (event) {
+        const staged = { deviceId: event.deviceId, rotationId: event.rotationId, profileVersion: event.profileVersion, profileDigest: 'fixture', profile: { profileVersion: event.profileVersion } };
+        const record = action => async () => { calls.push(action); return staged; };
+        await pskEvents.processDevicePSKRotationEvent(event, event.deviceId, { load: record('load'), fetch: record('fetch'), save: record('save'), acknowledge: record('ack'), activate: record('activate'), clear: record('clear') });
+      }
+      assert.deepEqual(calls, []); assert.equal(event, null);
+    }
+  });
+}
+
+test('push profile identity retains safe numbers and whole decimal legacy strings', () => {
+  for (const version of [7, '7', ' 007 ', Number.MAX_SAFE_INTEGER, String(Number.MAX_SAFE_INTEGER)]) {
+    assert.equal(pskEvents.parseDevicePSKRotationEvent(numericEvent(version)).profileVersion, Number(version));
+  }
+});
+
+test('an invalid direct rotation event cannot bypass parser validation', async () => {
+  const calls = [], event = { eventId: 'fixture', type: 'cutover_ready', deviceId: 'fixture-device', rotationId: 'fixture', profileVersion: Number.MAX_SAFE_INTEGER + 1 };
+  const dependency = async () => { calls.push('unexpected'); };
+  assert.equal(await pskEvents.processDevicePSKRotationEvent(event, event.deviceId, { load: dependency, fetch: dependency, save: dependency, acknowledge: dependency, activate: dependency, clear: dependency }), 'ignored');
+  assert.deepEqual(calls, []);
+});
+
+for (const epoch of [null, '2', NaN, Infinity, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+  test(`device API rejects explicit malformed epoch ${String(epoch)}`, () => {
+    const api = vpnApi({ native: {}, client: {} });
+    assert.throws(() => api.parseDevice({ id: 'fixture-device', psk_epoch: epoch }), /эпох|epoch/i);
+  });
+}
+
+test('device API preserves missing and zero legacy epochs without narrowing exact safe values', () => {
+  const api = vpnApi({ native: {}, client: {} });
+  for (const epoch of [undefined, 0, 1, Number.MAX_SAFE_INTEGER]) assert.equal(api.parseDevice({ id: 'fixture-device', psk_epoch: epoch }).keyEpoch, epoch);
+});
+
+for (const version of [null, '7', NaN, Infinity, 0, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+  test(`equal malformed staged versions ${String(version)} cannot acquire keys or authorize a stage`, async () => {
+    let reads = 0, requests = 0;
+    const api = vpnApi({ native: { getOrCreateWireGuardKeyPair: async () => { reads++; return { publicKey: 'fixture' }; } }, client: { clientVersionHeaders: async () => ({}), jsonRequest: async () => {
+      requests++; return { activate: false, profile_version: version, profile: { version, config: 'fixture' } };
+    } } });
+    await assert.rejects(api.fetchStagedDevicePSKProfile('fixture-token', makeProfile(), 'owner', () => true), /staged/i);
+    assert.equal(requests, 1); assert.equal(reads, 0);
   });
 }
 

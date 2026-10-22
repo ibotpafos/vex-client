@@ -41,7 +41,7 @@ function harness(platform = 'ios', existingStore, nativeRouting = false) {
     },
   });
   const session = load('src/vpn/sessionOperation.ts', 'SessionOperationSupersededError');
-  const native = { getOrCreateWireGuardKeyPair: async () => ({ ...globalPair }), generateWireGuardKeyPair: async () => ({ publicKey: key(10 + ++generations), privateKey: key(90 + generations), keyEpoch: 2 }), replaceWireGuardKeyPair: async pair => { if (!legacyReplacementAllowed) throw Error('Global key must not be replaced'); globalPair = pair; } };
+  const native = { getOrCreateWireGuardKeyPair: async () => ({ ...globalPair }), generateWireGuardKeyPair: async options => { assert.equal(typeof options?.independentEpoch, 'boolean', 'account callers must choose their counter ownership explicitly'); return { publicKey: key(10 + ++generations), privateKey: key(90 + generations), keyEpoch: 2 }; }, replaceWireGuardKeyPair: async pair => { if (!legacyReplacementAllowed) throw Error('Global key must not be replaced'); globalPair = pair; } };
   const scoped = fs.existsSync(path.join(sourceRoot, 'src/native/vpnAccountIdentity.ts'))
     ? load('src/native/vpnAccountIdentity.ts', 'getOrCreateVpnAccountIdentity,withVpnAccountIdentity,saveVpnAccountKeyPair,pendingVpnAccountKeyPair,savePendingVpnAccountKeyPair,clearPendingVpnAccountKeyPair,renewVpnAccountInstallation,confirmVpnAccountRegistration,vpnAccountRegistrationIdempotencyKey,validatedVpnAccountKeyPair', { SecureStore: store, ...app, ...native, ...session }) : {};
   const location = load('src/vpn/locationId.ts', 'requireVpnLocationId,comparableVpnLocationId');
@@ -99,12 +99,13 @@ function harness(platform = 'ios', existingStore, nativeRouting = false) {
     throw Error(`Unexpected API route ${requestPath}`);
   };
   const api = load('src/api/vpn.ts', 'preparedTunnel,rotateManagedVpnKey,fetchStagedDevicePSKProfile', {
+    ...load('src/vpn/profileNumbers.ts', 'isPositiveSafeInteger,isNonnegativeSafeInteger'),
     supportsNativeRoutingPolicy: () => nativeRouting, Platform: { OS: platform }, ...app, ...signer, ...native, ...scoped, ...location, ...selection, ...session,
     ...load('src/vpn/nativeRoutingPolicy.ts', 'nativeRoutingParameters,routingAuthorization'),
     ...load('src/api/nativeDeviceRegistration.ts', 'getOrCreateNativeDeviceRegistration'),
-    ...load('src/vpn/keyEpochRecovery.ts', 'nextManagedKeyEpoch,isKeyEpochMismatchError'),
+    ...load('src/vpn/keyEpochRecovery.ts', 'nextManagedKeyEpoch,isKeyEpochMismatchError', load('src/vpn/profileNumbers.ts', 'isNonnegativeSafeInteger')),
     ...load('src/vpn/amneziaConfig.ts', 'managedProfileAmneziaConfig'),
-    ...load('src/vpn/profileRevalidation.ts', 'canRevalidateDevice'),
+    ...load('src/vpn/profileRevalidation.ts', 'canRevalidateDevice', load('src/vpn/profileNumbers.ts', 'isNonnegativeSafeInteger')),
     me: async token => ({ id: ownerFor(token) }), clientVersionHeaders: async () => ({}), jsonRequest, ...errors, ...cancellation,
     defaultVpnRoutingMode: 'default', defaultVpnRoutingPolicyVersion: 'v1', resolvedVpnBypassRegion: () => '', withManagedProfileAWGCapability: query => query,
   });

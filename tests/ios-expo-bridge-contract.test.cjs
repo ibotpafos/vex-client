@@ -5,6 +5,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { spawnSync } = require('node:child_process');
 const { test } = require('node:test');
+const ts = require('typescript');
 
 const root = path.resolve(__dirname, '..');
 const modulePath = process.env.VEX_IOS_BRIDGE_MODULE_SOURCE || path.join(root, 'modules/vex-vpn/ios/VexVpnModule.swift');
@@ -65,6 +66,48 @@ test('optional platform flags preserve older iOS calls and reject excess argumen
   for (const name of ['connect', 'disconnect']) {
     assert.equal(accepted(name, nativeContract(name).argumentsCount + 1), false);
   }
+});
+
+test('independent key-material generation keeps the zero-argument Expo contract', () => {
+  assert.equal(accepted('generateWireGuardKeyMaterial', 0), true);
+  assert.equal(accepted('generateWireGuardKeyMaterial', 1), false);
+});
+
+function keyBridge(platform, native) {
+  const exports = {}, code = ts.transpileModule(sharedSource, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+  vm.runInNewContext(code, { exports, require: name => {
+    if (name === 'react-native') return { Platform: { OS: platform }, NativeModules: platform === 'ios' ? {} : { VexVpn: native }, NativeEventEmitter: class {} };
+    if (name === 'expo') return { requireNativeModule: () => native };
+    assert.ok(['@/vpn/disconnectRecovery', '@/vpn/vpnStatusVerification', '@/vpn/nativeRoutingPolicy'].includes(name), `unexpected bridge dependency ${name}`);
+    return {};
+  } });
+  return exports;
+}
+
+for (const platform of ['android', 'ios']) {
+  test(`${platform} account key material bypasses an exhausted global counter`, async () => {
+    let globalCalls = 0, materialCalls = 0;
+    const bridge = keyBridge(platform, { generateWireGuardKeyPair: async () => { globalCalls++; throw new Error('global counter exhausted'); }, generateWireGuardKeyMaterial: async () => { materialCalls++; return { privateKey: 'fixture-private', publicKey: 'fixture-public', keyEpoch: 1 }; } });
+    assert.equal((await bridge.generateWireGuardKeyPair({ independentEpoch: true })).keyEpoch, 1);
+    assert.equal(globalCalls, 0); assert.equal(materialCalls, 1);
+  });
+}
+
+test('older native binaries retain fallback while default callers retain legacy generation', async () => {
+  let calls = 0;
+  const native = { generateWireGuardKeyPair: async () => { calls++; return { keyEpoch: 7 }; } };
+  assert.equal((await keyBridge('android', native).generateWireGuardKeyPair({ independentEpoch: true })).keyEpoch, 7);
+  native.generateWireGuardKeyMaterial = async () => { throw new Error('must not replace the legacy default'); };
+  assert.equal((await keyBridge('android', native).generateWireGuardKeyPair()).keyEpoch, 7);
+  assert.equal(calls, 2);
+});
+
+test('material generation failure never falls back to another key or counter', async () => {
+  const failure = new Error('fixture generation failed'); let legacy = 0;
+  const bridge = keyBridge('android', { generateWireGuardKeyPair: async () => { legacy++; return {}; }, generateWireGuardKeyMaterial: async () => { throw failure; } });
+  await assert.rejects(bridge.generateWireGuardKeyPair({ independentEpoch: true }), error => error === failure);
+  assert.equal(legacy, 0);
+  assert.equal(await keyBridge('web', {}).generateWireGuardKeyPair({ independentEpoch: true }), null);
 });
 
 // The macOS lane explicitly selects its checked Xcode compiler. Generic Node

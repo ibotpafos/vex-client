@@ -170,7 +170,7 @@ async function persistVpnAccountRegistration(options: VpnAccountIdentityOptions,
 }
 async function generatedAccountKeyPair(options: VpnAccountIdentityOptions): Promise<WireGuardKeyPair> {
   requireCurrent(options);
-  const generated = await generateWireGuardKeyPair();
+  const generated = await generateWireGuardKeyPair({ independentEpoch: true });
   requireCurrent(options);
   return validatedVpnAccountKeyPair(generated && { ...generated, keyEpoch: 1 });
 }

@@ -14,6 +14,7 @@ import javax.crypto.spec.GCMParameterSpec
 class WireGuardKeyStore(context: Context) {
   private val appContext = context.applicationContext
   private val preferences = appContext.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
+  private val keyPairGenerator = WireGuardKeyPairGenerator(::currentKeyEpoch, ::generateKeyPair)
 
   fun getOrCreateKeyPair(): StoredWireGuardKeyPair {
     try {
@@ -28,8 +29,10 @@ class WireGuardKeyStore(context: Context) {
   }
 
   fun generateNextKeyPair(): StoredWireGuardKeyPair {
-    return generateKeyPair(keyEpoch = currentKeyEpoch() + 1)
+    return keyPairGenerator.nextLegacy()
   }
+
+  fun generateAccountKeyPair(): StoredWireGuardKeyPair = keyPairGenerator.forAccount()
 
   fun replaceKeyPair(keyPair: StoredWireGuardKeyPair) {
     persistKeyPair(keyPair.normalized())

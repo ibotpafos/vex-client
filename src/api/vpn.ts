@@ -426,6 +426,7 @@ export async function fetchStagedDevicePSKProfile(accessToken: string, currentPr
     profileDigest: response.profile_digest,
     profile: {
       ...currentProfile,
+      cacheSavedAtMs: Date.now(),
       config,
       device: {
         ...device,

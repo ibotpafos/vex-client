@@ -1,5 +1,6 @@
 import { entitlement, hasPaidEntitlement, preparedTunnel, rotateManagedVpnKey, type Entitlement, type VpnDevice } from '../api/vexApi';
 import { loadHotVpnProfile, profileFromHotRecord } from './hotProfileCache';
+import { runtimeProfileKey, vpnProfileCacheIsCurrent } from './hotProfileCacheCore';
 import { defaultVpnBypassRegion, defaultVpnRoutingMode, defaultVpnRoutingPolicyVersion, type VpnRoutingMode } from './routingPolicy';
 import { runProfileRequest } from './profileRequestQueue';
 import { vpnProfileAddressMatchesDevice } from './profileConsistency';
@@ -22,6 +23,8 @@ export type VpnProfile = {
     permissionWaitMs: number;
   };
   config: string;
+  /** Original local cache receipt time; API/wire and persisted schema unchanged. */
+  cacheSavedAtMs?: number;
   device?: VpnDevice;
   entitlement?: Entitlement;
   hotProfileAgeMs?: number;
@@ -53,7 +56,7 @@ export async function resolveVpnProfile(
     const routingMode = options.routingMode ?? defaultVpnRoutingMode;
     const cacheKey = profileCacheKey(token, normalizedLocationId, routingMode);
     if (!options.forceRefresh) {
-      if (cachedProfile?.key === cacheKey && !cachedProfile.profile.rotationRequired && vpnProfileAddressMatchesDevice(cachedProfile.profile)) {
+      if (cachedProfile?.key === cacheKey && vpnProfileCacheIsCurrent(cachedProfile.profile) && !cachedProfile.profile.rotationRequired && vpnProfileAddressMatchesDevice(cachedProfile.profile)) {
         return { ...cachedProfile.profile, source: 'local' };
       }
       if (options.allowPersistentHotProfile !== false && options.userId) {
@@ -61,7 +64,7 @@ export async function resolveVpnProfile(
         requireProfileRequest(options);
         if (hotProfile) {
           const profile = profileFromHotRecord(hotProfile);
-          if (profile.routingMode !== routingMode || !vpnProfileAddressMatchesDevice(profile)) {
+          if (profile.routingMode !== routingMode || !vpnProfileCacheIsCurrent(profile) || !vpnProfileAddressMatchesDevice(profile)) {
             return refreshVpnProfile(token, { routingMode, userId: options.userId, isCurrentSessionOperation: options.isCurrentSessionOperation, ...(options.signal ? { signal: options.signal } : {}) }, knownEntitlement, normalizedLocationId, options.shouldFetch);
           }
           cachedProfile = { key: cacheKey, profile };
@@ -99,17 +102,6 @@ export async function rotateVpnProfileKey(accessToken: string, profile: VpnProfi
   return refreshVpnProfile(token, { routingMode: profile.routingMode ?? defaultVpnRoutingMode, userId, isCurrentSessionOperation }, profile.entitlement, profile.locationId);
 }
 
-function runtimeProfileKey(): string {
-  if (typeof navigator === 'undefined') {
-    return 'native';
-  }
-  const platform = typeof navigator.platform === 'string' && navigator.platform.trim()
-    ? navigator.platform
-    : 'native';
-  const userAgent = typeof navigator.userAgent === 'string' ? navigator.userAgent : '';
-  return `${platform}:${userAgent || 'runtime'}`;
-}
-
 async function refreshVpnProfile(
   token: string,
   options: PreparedTunnelOptions,
@@ -137,6 +129,7 @@ async function refreshVpnProfile(
   }, shouldFetch, shouldFetch ? 'background' : 'foreground', coalesceKey, options.signal);
   requireProfileRequest(options);
   const profile: VpnProfile = {
+    cacheSavedAtMs: Date.now(),
     resolutionTiming: tunnel.resolutionTiming ? { ...tunnel.resolutionTiming, queueWaitMs } : undefined,
     config: tunnel.config,
     routingParameters: tunnel.routingParameters,

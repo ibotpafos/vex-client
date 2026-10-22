@@ -7,7 +7,8 @@ const ts = require('typescript');
 
 const repo = path.resolve(__dirname, '..');
 function load(file, dependencies = {}) {
-  const code = ts.transpileModule(fs.readFileSync(path.join(repo, file), 'utf8'), {
+  const source = file === 'src/api/vpn.ts' && process.env.VEX_STAGED_PROFILE_SOURCE || path.join(repo, file);
+  const code = ts.transpileModule(fs.readFileSync(source, 'utf8'), {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
   }).outputText;
   const exports = {};
@@ -20,6 +21,7 @@ function load(file, dependencies = {}) {
 const sessionOperation = load('src/vpn/sessionOperation.ts');
 const apiErrors = load('src/api/error.ts');
 const cancellation = load('src/api/requestCancellation.ts', { './error': apiErrors });
+const profileCore = load('src/vpn/hotProfileCacheCore.ts', { './locationId': load('src/vpn/locationId.ts') });
 const deferred = () => {
   let resolve, reject;
   const promise = new Promise((ok, fail) => { resolve = ok; reject = fail; });
@@ -164,6 +166,7 @@ test('a superseded profile response cannot seed the global cache for a later log
       },
     },
     './hotProfileCache': {},
+    './hotProfileCacheCore': profileCore,
     './routingPolicy': { defaultVpnRoutingMode: 'default', defaultVpnBypassRegion: 'ru', defaultVpnRoutingPolicyVersion: 'v1' },
     './profileRequestQueue': { runProfileRequest: operation => operation() },
     './profileConsistency': { vpnProfileAddressMatchesDevice: () => true },
@@ -198,6 +201,22 @@ function vpnApi(operations) {
     '../vpn/nativeRoutingPolicy': {},
   });
 }
+
+test('validated staged configuration gets a fresh receipt instead of inheriting old profile age', async () => {
+  let requests = 0;
+  const module = vpnApi({
+    native: { getOrCreateWireGuardKeyPair: async () => ({ publicKey: 'fixture-public', keyEpoch: 2 }) },
+    client: { clientVersionHeaders: async () => ({}), jsonRequest: async requestPath => {
+      assert.match(requestPath, /^\/v1\/vpn\/psk-rotations\/current\?/); requests++;
+      return { activate: false, profile_version: 7, rotation_id: 'fixture-rotation', profile_digest: 'fixture-digest',
+        profile: { version: 7, config: 'fresh staged configuration', device_id: 'device-A', client_public_key: 'fixture-public', client_key_epoch: 2 } };
+    } },
+  });
+  const before = Date.now();
+  const result = await module.fetchStagedDevicePSKProfile('fixture-token', makeProfile('A', { cacheSavedAtMs: 1 }), 'owner', () => true);
+  assert.equal(requests, 1); assert.equal(result.profile.config, 'fresh staged configuration');
+  assert.ok(result.profile.cacheSavedAtMs >= before && result.profile.cacheSavedAtMs <= Date.now());
+});
 
 for (const stage of ['generate', 'api']) {
   test(`late explicit API key rotation during ${stage} cannot replace B shared native keypair`, async () => {

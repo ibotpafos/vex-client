@@ -26,20 +26,140 @@ function harness(hooks = {}) {
     const filename = path.resolve(root, relative);
     if (cache.has(filename)) return cache.get(filename);
     const exports = {}; cache.set(filename, exports);
-    const compiled = ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+    const overlay = process.env.VEX_PROFILE_LIFETIME_SOURCE_ROOT && path.resolve(process.env.VEX_PROFILE_LIFETIME_SOURCE_ROOT, relative);
+    const compiled = ts.transpileModule(fs.readFileSync(overlay && fs.existsSync(overlay) ? overlay : filename, 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
     const requireForTest = name => {
+      if (Object.hasOwn(hooks.modules ?? {}, name)) return hooks.modules[name];
       if (name === 'expo-secure-store') return native;
       if (name === 'react-native') return { Platform: { OS: hooks.platform ?? 'android' } };
       if (name.startsWith('@/')) return load('src/' + name.slice(2) + '.ts');
       if (name.startsWith('.')) return load(path.relative(root, path.resolve(path.dirname(filename), name + '.ts')));
       return require(name);
     };
-    vm.runInNewContext(compiled, { exports, require: requireForTest, Date, Map, Set, Promise, JSON, Object, Number, console, localStorage }, { filename });
+    const Clock = hooks.now ? class extends Date { static now() { return hooks.now(); } } : Date;
+    vm.runInNewContext(compiled, { exports, require: requireForTest, Date: Clock, Map, Set, Promise, JSON, Object, Number, console, localStorage, AbortController }, { filename });
     return exports;
   }
   return { values, webValues, calls, load };
 }
 const profile = id => ({ config: 'Address = 10.0.0.2/32', device: { id }, locationId: id, routingMode: 'full_tunnel', source: 'api' });
+
+function profileHarness() {
+  let now = 1000, requests = 0;
+  const paid = { active: true, vpnAccess: true };
+  const h = harness({ now: () => now, modules: {
+    '../api/vexApi': { entitlement: async () => paid, hasPaidEntitlement: value => Boolean(value?.active || value?.vpnAccess), preparedTunnel: async () => { requests++; return profile('de'); } },
+    './connectionFallback': { profileEndpoint: () => undefined },
+  } });
+  return { ...h, paid, clock: value => { now = value; }, requests: () => requests };
+}
+
+test('a hydrated local profile keeps its original timestamp when saved again', async () => {
+  const h = profileHarness(), hot = h.load('src/vpn/hotProfileCache.ts');
+  const record = await hot.saveHotVpnProfile('owner', 'de', profile('de'));
+  h.clock(1000 + 12 * 60 * 60_000);
+  const local = hot.profileFromHotRecord(record);
+  await hot.saveHotVpnProfile('owner', 'de', local);
+  const stored = Object.values(JSON.parse(h.values.get(hotKey)))[0];
+  assert.equal(stored.savedAtMs, 1000);
+  assert.equal(stored.profile.cacheSavedAtMs, undefined, 'the record owns the persisted timestamp');
+  h.clock(1001 + hot.hotVpnProfileTtlMs);
+  assert.equal(await hot.loadHotVpnProfile('owner', 'de', 'full_tunnel'), null);
+});
+
+test('saving an expired local profile cannot renew its lifetime or overwrite a fresh record', async () => {
+  const h = profileHarness(), hot = h.load('src/vpn/hotProfileCache.ts');
+  const old = hot.profileFromHotRecord(await hot.saveHotVpnProfile('owner', 'de', profile('de')));
+  h.clock(1001 + hot.hotVpnProfileTtlMs);
+  await hot.saveHotVpnProfile('owner', 'de', { ...profile('de'), config: 'fresh-authoritative-config' });
+  const bytes = h.values.get(hotKey); h.calls.length = 0;
+  assert.equal(await hot.saveHotVpnProfile('owner', 'de', old), null);
+  assert.equal(h.values.get(hotKey), bytes);
+  assert.equal(h.calls.filter(([operation]) => operation === 'set').length, 0);
+});
+
+test('query and active local copies expire at the original inclusive 24-hour boundary', async () => {
+  const h = profileHarness(), hot = h.load('src/vpn/hotProfileCache.ts'), flow = h.load('src/vpn/connectFlow.ts');
+  const local = hot.profileFromHotRecord(await hot.saveHotVpnProfile('owner', 'de', { ...profile('de'), entitlement: h.paid }));
+  h.clock(1000 + hot.hotVpnProfileTtlMs);
+  assert.ok(flow.connectableLocalProfile(local, 'de', h.paid, 'full_tunnel'));
+  h.clock(1001 + hot.hotVpnProfileTtlMs);
+  assert.equal(flow.connectableLocalProfile({ ...local }, 'de', h.paid, 'full_tunnel'), null);
+});
+
+test('the resolver memory cache expires without renewing on repeated hits', async () => {
+  const h = profileHarness(), api = h.load('src/vpn/profile.ts'), core = h.load('src/vpn/hotProfileCacheCore.ts');
+  await api.resolveVpnProfile('fixture-token', h.paid, 'de', { allowPersistentHotProfile: false });
+  h.clock(1000 + core.hotVpnProfileTtlMs);
+  assert.equal((await api.resolveVpnProfile('fixture-token', h.paid, 'de')).source, 'local');
+  assert.equal(h.requests(), 1);
+  h.clock(1001 + core.hotVpnProfileTtlMs);
+  assert.equal((await api.resolveVpnProfile('fixture-token', h.paid, 'de')).source, 'api');
+  assert.equal(h.requests(), 2);
+});
+
+test('loading a nearly expired persistent profile does not reset its memory-cache age', async () => {
+  const h = profileHarness(), hot = h.load('src/vpn/hotProfileCache.ts'), api = h.load('src/vpn/profile.ts');
+  await hot.saveHotVpnProfile('owner', 'de', profile('de'));
+  h.clock(1000 + hot.hotVpnProfileTtlMs - 1);
+  const options = { userId: 'owner', routingMode: 'full_tunnel' };
+  assert.equal((await api.resolveVpnProfile('fixture-token', h.paid, 'de', options)).source, 'local');
+  assert.equal(h.requests(), 0);
+  h.clock(1001 + hot.hotVpnProfileTtlMs);
+  assert.equal((await api.resolveVpnProfile('fixture-token', h.paid, 'de', options)).source, 'api');
+  assert.equal(h.requests(), 1);
+});
+
+for (const invalidNow of [NaN, Infinity, -1, 999]) {
+  test(`local memory/query reuse fails closed for clock ${String(invalidNow)}`, async () => {
+    const h = profileHarness(), hot = h.load('src/vpn/hotProfileCache.ts'), flow = h.load('src/vpn/connectFlow.ts');
+    const local = hot.profileFromHotRecord(await hot.saveHotVpnProfile('owner', 'de', profile('de')));
+    h.clock(invalidNow);
+    assert.equal(flow.connectableLocalProfile(local, 'de', h.paid, 'full_tunnel'), null);
+    if (!Number.isFinite(invalidNow) || invalidNow < 0) {
+      assert.equal(flow.connectableLocalProfile(profile('de'), 'de', h.paid, 'full_tunnel'), null);
+    }
+    assert.equal(await hot.saveHotVpnProfile('owner', 'de', local), null);
+  });
+}
+
+test('a fresh authoritative response starts a new lifetime after stale local evidence', async () => {
+  const h = profileHarness(), api = h.load('src/vpn/profile.ts'), hot = h.load('src/vpn/hotProfileCache.ts');
+  const first = await api.resolveVpnProfile('fixture-token', h.paid, 'de');
+  h.clock(1001 + hot.hotVpnProfileTtlMs);
+  const fresh = await api.resolveVpnProfile('fixture-token', h.paid, 'de', { forceRefresh: true });
+  assert.equal(first.cacheSavedAtMs, 1000);
+  assert.equal(fresh.cacheSavedAtMs, 1001 + hot.hotVpnProfileTtlMs);
+  assert.equal((await hot.saveHotVpnProfile('owner', 'de', fresh)).savedAtMs, fresh.cacheSavedAtMs);
+  assert.equal(h.requests(), 2);
+});
+
+test('legacy profiles without lifetime metadata retain compatibility and acquire a record timestamp', async () => {
+  const h = profileHarness(), hot = h.load('src/vpn/hotProfileCache.ts'), flow = h.load('src/vpn/connectFlow.ts');
+  assert.ok(flow.connectableLocalProfile(profile('de'), 'de', h.paid, 'full_tunnel'));
+  const record = await hot.saveHotVpnProfile('owner', 'de', profile('de'));
+  assert.equal(record.schemaVersion, 2); assert.equal(record.savedAtMs, 1000);
+  assert.equal(hot.profileFromHotRecord(record).cacheSavedAtMs, 1000);
+});
+
+for (const malformed of [null, '1000', NaN, Infinity, -1, 1001]) {
+  test(`explicit invalid profile timestamp ${String(malformed)} never becomes a fresh receipt`, async () => {
+    const h = profileHarness(), hot = h.load('src/vpn/hotProfileCache.ts'), flow = h.load('src/vpn/connectFlow.ts');
+    const invalid = { ...profile('de'), cacheSavedAtMs: malformed };
+    assert.equal(flow.connectableLocalProfile(invalid, 'de', h.paid, 'full_tunnel'), null);
+    assert.equal(await hot.saveHotVpnProfile('owner', 'de', invalid), null);
+    assert.equal(h.values.has(hotKey), false);
+  });
+}
+
+test('hot conversion trusts only the outer timestamp and runtime-key compatibility uses the shared export', async () => {
+  const h = profileHarness(), hot = h.load('src/vpn/hotProfileCache.ts'), core = h.load('src/vpn/hotProfileCacheCore.ts');
+  const record = await hot.saveHotVpnProfile('owner', 'de', profile('de'));
+  record.profile.cacheSavedAtMs = 1000 + hot.hotVpnProfileTtlMs;
+  assert.equal(hot.profileFromHotRecord(record).cacheSavedAtMs, 1000);
+  assert.equal(hot.runtimeProfileKey, core.runtimeProfileKey);
+  assert.equal(hot.runtimeProfileKey(), 'native');
+});
 
 for (const [name, module, save, key, a, b] of [
   ['hot profiles', 'src/vpn/hotProfileCache.ts', 'saveHotVpnProfile', hotKey, ['owner', 'de', profile('de')], ['owner', 'fi', profile('fi')]],

@@ -13,6 +13,8 @@ import {
   isUsableHotVpnProfileRecord as isUsableHotVpnProfileRecordForRuntime,
   normalizeHotProfileLocationId,
   profileFromHotRecord,
+  profileCacheTimestampRejectionReason,
+  runtimeProfileKey,
   type HotVpnProfileRecord,
 } from './hotProfileCacheCore';
 
@@ -23,6 +25,7 @@ export {
   isUsableHotVpnProfileRecord,
   profileFromHotRecord,
   withLastSuccessfulEndpoint,
+  runtimeProfileKey,
   type HotVpnProfileRecord,
 } from './hotProfileCacheCore';
 
@@ -83,7 +86,11 @@ export async function saveHotVpnProfile(
   if (!supportsPersistentHotVpnProfiles() || profile.rotationRequired) {
     return null;
   }
+  const nowMs = metadata.nowMs ?? Date.now();
+  const savedAtMs = profile.cacheSavedAtMs === undefined ? nowMs : profile.cacheSavedAtMs;
+  if (profileCacheTimestampRejectionReason(savedAtMs, nowMs) !== null) return null;
   const storedProfile = { ...profile, source: 'local' as const };
+  delete storedProfile.cacheSavedAtMs;
   delete storedProfile.connectPreparationTiming;
   delete storedProfile.hotProfileAgeMs;
   delete storedProfile.hotProfileUsed;
@@ -96,7 +103,7 @@ export async function saveHotVpnProfile(
     runtimeKey: runtimeProfileKey(),
     locationId: normalizeHotProfileLocationId(locationId || profile.locationId),
     profile: storedProfile,
-    savedAtMs: metadata.nowMs ?? Date.now(),
+    savedAtMs,
     lastSuccessfulEndpoint: normalizeOptionalEndpoint(metadata.lastSuccessfulEndpoint),
   };
   await updateStoredJsonObject<HotVpnProfileRecord, void>(hotVpnProfilesStorageKey, (store) => {
@@ -153,17 +160,6 @@ export async function hydrateHotVpnProfilesToQueryCache(
     }
   }
   return records;
-}
-
-export function runtimeProfileKey(): string {
-  if (typeof navigator === 'undefined') {
-    return 'native';
-  }
-  const platform = typeof navigator.platform === 'string' && navigator.platform.trim()
-    ? navigator.platform
-    : 'native';
-  const userAgent = typeof navigator.userAgent === 'string' ? navigator.userAgent : '';
-  return `${platform}:${userAgent || 'runtime'}`;
 }
 
 function normalizeOptionalEndpoint(endpoint?: string): string | undefined {

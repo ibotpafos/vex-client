@@ -295,12 +295,15 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
         permissionWaitMs,
       },
     });
+    let permissionGrantedForPreparation = false;
     const requestPermissionWithTiming = async () => {
+      if (permissionGrantedForPreparation) { requireCurrentSession(); return true; }
       const startedAtMs = Date.now();
       try {
         requireCurrentSession();
         const granted = await requestVpnPermission();
         requireCurrentSession();
+        permissionGrantedForPreparation = granted;
         return granted;
       } finally {
         permissionWaitMs += Math.max(0, Date.now() - startedAtMs);
@@ -310,7 +313,7 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
     const preferCached = options.preferCached !== false && options.forceRefresh !== true;
     const cachedProfile = options.cachedProfile ?? cachedProfileForLocation(locationId);
     let forceRouteBudgetRefresh = androidVpnProfileRequiresRefresh(Platform.OS, cachedProfile?.config);
-    const cachedLocalProfile = preferCached
+    let cachedLocalProfile = preferCached
       ? connectableLocalProfile(cachedProfile, locationId, entitlementState, routingMode)
       : null;
     if (
@@ -324,10 +327,13 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
           throw new Error('Разрешение Android VPN не выдано.');
         }
       }
-      const localProfile = withConnectPreparationTiming(cachedLocalProfile);
-      cacheProfile(locationId, localProfile);
-      refreshProfileInBackground(locationId, cachedEntitlement!, cachedLocalProfile);
-      return localProfile;
+      cachedLocalProfile = connectableLocalProfile(cachedLocalProfile, locationId, cachedEntitlement, routingMode);
+      if (cachedLocalProfile) {
+        const localProfile = withConnectPreparationTiming(cachedLocalProfile);
+        cacheProfile(locationId, localProfile);
+        refreshProfileInBackground(locationId, cachedEntitlement!, cachedLocalProfile);
+        return localProfile;
+      }
     }
 
     if (preferCached && userId) {
@@ -346,7 +352,7 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
       }
       const hotProfile = hotResult.record ? profileFromHotRecord(hotResult.record) : null;
       forceRouteBudgetRefresh = forceRouteBudgetRefresh || androidVpnProfileRequiresRefresh(Platform.OS, hotProfile?.config);
-      const connectableHotProfile = hotProfile?.hotProfileUsed
+      let connectableHotProfile = hotProfile?.hotProfileUsed
         ? connectableLocalProfile(hotProfile, locationId, null, routingMode)
         : null;
       if (
@@ -363,10 +369,13 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
             throw new Error('Разрешение Android VPN не выдано.');
           }
         }
-        const preparedHotProfile = withConnectPreparationTiming(connectableHotProfile);
-        cacheProfile(locationId, preparedHotProfile);
-        refreshProfileInBackground(locationId, hotEntitlement, connectableHotProfile);
-        return preparedHotProfile;
+        connectableHotProfile = connectableLocalProfile(connectableHotProfile, locationId, hotEntitlement, routingMode);
+        if (connectableHotProfile) {
+          const preparedHotProfile = withConnectPreparationTiming(connectableHotProfile);
+          cacheProfile(locationId, preparedHotProfile);
+          refreshProfileInBackground(locationId, hotEntitlement, connectableHotProfile);
+          return preparedHotProfile;
+        }
       }
     }
 
@@ -405,6 +414,7 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
       }
     }
 
+    cachedLocalProfile = cachedLocalProfile && connectableLocalProfile(cachedLocalProfile, locationId, currentEntitlement, routingMode);
     let profile = !options.forceRefresh && !forceRouteBudgetRefresh && cachedLocalProfile
       ? cachedLocalProfile
       : await resolveVpnProfile(accessToken, currentEntitlement, locationId, {

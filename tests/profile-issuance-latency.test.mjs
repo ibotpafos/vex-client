@@ -6,6 +6,7 @@ import { profileRevalidationOptions, canRevalidateDevice } from '../src/vpn/prof
 import { nativeVpnDeviceForClient } from '../src/vpn/nativeDeviceSelection.ts';
 import { ApiRequestError, requireRequestActive, isApiRequestCancelled } from '../src/api/error.ts';
 import { withRequestCancellation } from '../src/api/requestCancellation.ts';
+import { runtimeProfileKey, vpnProfileCacheIsCurrent } from '../src/vpn/hotProfileCacheCore.ts';
 
 const device = {id:'device', publicKey:'public', keyEpoch:2, status:'active', assignedIpv4:'10.0.0.2', externalDeviceId:'runtime', protocol:'amneziawg', provisioningMode:'managed_native', clientKeyOwnership:'client'};
 const cached = {config:'Address = 10.0.0.2/32', device, locationId:'de', routingMode:'smart', profileVersion:7};
@@ -120,6 +121,7 @@ test('API profile delivery does not wait for duplicate secure-cache persistence'
   const run = load('src/vpn/profile.ts','resolveVpnProfile', {
     defaultVpnRoutingMode:'smart', defaultVpnBypassRegion:'ru', defaultVpnRoutingPolicyVersion:'v1',
     requireVpnLocationId:x=>x, profileRevalidationOptions, vpnProfileAddressMatchesDevice:()=>true,
+    runtimeProfileKey, vpnProfileCacheIsCurrent,
     requireRequestActive, withRequestCancellation, hasPaidEntitlement:()=>true, preparedTunnel:async()=>({...cached, config:cached.config}), runProfileRequest:fn=>fn(),
     saveHotVpnProfile:()=>{writes++; return storage.promise;},
   });

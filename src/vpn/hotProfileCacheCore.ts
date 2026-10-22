@@ -23,6 +23,7 @@ export function withLastSuccessfulEndpoint(profile: VpnProfile, endpoint?: strin
 export function profileFromHotRecord(record: HotVpnProfileRecord, nowMs = Date.now()): VpnProfile {
   return {
     ...record.profile,
+    cacheSavedAtMs: record.savedAtMs,
     hotProfileAgeMs: Math.max(0, nowMs - record.savedAtMs),
     hotProfileUsed: true,
     lastSuccessfulEndpoint: record.lastSuccessfulEndpoint ?? record.profile.lastSuccessfulEndpoint,
@@ -71,19 +72,41 @@ export function hotVpnProfileRejectionReason(
   if (record.profile.rotationRequired) {
     return 'rotation_required';
   }
-  if (typeof record.savedAtMs !== 'number' || !Number.isFinite(record.savedAtMs) || record.savedAtMs < 0) {
+  return profileCacheTimestampRejectionReason(record.savedAtMs, nowMs);
+}
+
+/** The record timestamp is authoritative; local reuse must not renew it. */
+export function profileCacheTimestampRejectionReason(savedAtMs: unknown, nowMs = Date.now()): string | null {
+  if (typeof savedAtMs !== 'number' || !Number.isFinite(savedAtMs) || savedAtMs < 0) {
     return 'missing_saved_at';
   }
   if (!Number.isFinite(nowMs) || nowMs < 0) {
     return 'invalid_clock';
   }
-  if (nowMs < record.savedAtMs) {
+  if (nowMs < savedAtMs) {
     return 'future_saved_at';
   }
-  if (nowMs - record.savedAtMs > hotVpnProfileTtlMs) {
+  if (nowMs - savedAtMs > hotVpnProfileTtlMs) {
     return 'expired';
   }
   return null;
+}
+
+export function vpnProfileCacheIsCurrent(profile: VpnProfile, nowMs = Date.now()): boolean {
+  // Legacy in-memory callers have no timestamp. Persistent records always do,
+  // and conversion/fresh API resolution stamps every normal runtime profile.
+  return profileCacheTimestampRejectionReason(profile.cacheSavedAtMs === undefined ? nowMs : profile.cacheSavedAtMs, nowMs) === null;
+}
+
+export function runtimeProfileKey(): string {
+  if (typeof navigator === 'undefined') {
+    return 'native';
+  }
+  const platform = typeof navigator.platform === 'string' && navigator.platform.trim()
+    ? navigator.platform
+    : 'native';
+  const userAgent = typeof navigator.userAgent === 'string' ? navigator.userAgent : '';
+  return `${platform}:${userAgent || 'runtime'}`;
 }
 
 export function hotVpnProfileStoreKey(userId: string, locationId: string, runtimeKey: string, routingMode?: string): string {

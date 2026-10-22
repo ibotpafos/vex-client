@@ -1,7 +1,7 @@
-// Native response projections share Go-derived types from generated-contract.
+// Native request/response projections share Go-derived generated-contract types.
 // Field selections and optional keys preserve the existing client API.
 // Legacy-only fields/nullability remain explicit compatibility rules.
-// Type queries keep this response-only module fully erased at runtime.
+// Type queries keep this projection module fully erased at runtime.
 type UserDTOSpec = import('./generated-contract').UserDTOSpec;
 type AuthResultDTOSpec = import('./generated-contract').AuthResultDTOSpec;
 type EmailOTPChallengeDTOSpec = import('./generated-contract').EmailOTPChallengeDTOSpec;
@@ -234,4 +234,10 @@ export type AppRemoteConfigResponseDTO = WireProjection<
   | 'recommendedVersion' | 'coreVersion' | 'configSchemaVersion' | 'minConfigSchemaVersion'
   | 'minCoreVersion' | 'supportedApiClientVersions' | 'routingPolicyVersionPrefix'
   | 'routingPolicyVersion' | 'featureFlags' | 'accountFeatureFlags' | 'incidentBanner'
+>;
+
+// The desktop app-code exchange shares the server's Go-derived request fields.
+export type AppAuthTokenRequest = Pick<
+  import('./generated-contract').AppAuthTokenRequestSpec,
+  'code' | 'code_verifier'
 >;

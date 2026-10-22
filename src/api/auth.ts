@@ -4,6 +4,7 @@ import {
   type User,
 } from './types';
 import {
+  type AppAuthTokenRequest,
   type AuthResultDTO,
   type EmailOTPChallengeDTO,
   type UserDTO,
@@ -61,7 +62,7 @@ export async function exchangeAppAuthCode(code: string, codeVerifier: string): P
     body: {
       code,
       code_verifier: codeVerifier,
-    },
+    } satisfies AppAuthTokenRequest,
   }));
 }
 

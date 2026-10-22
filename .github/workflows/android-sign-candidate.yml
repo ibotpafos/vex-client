@@ -49,6 +49,11 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test -z "$(git status --porcelain)"
+          orchestration_sdk="$(mktemp -d "$RUNNER_TEMP/android-sdk-orchestration.XXXXXX")"
+          git show "$GITHUB_SHA:scripts/install_android_sdk_components.sh" > "$orchestration_sdk/install_android_sdk_components.sh"
+          git show "$GITHUB_SHA:scripts/android_sdk_packages.txt" > "$orchestration_sdk/android_sdk_packages.txt"
+          echo "sdk_directory=$orchestration_sdk" >> "$GITHUB_OUTPUT"
+          export VEX_ANDROID_SDK_ORCHESTRATION="$orchestration_sdk"
           expected_commit="$GITHUB_SHA"
           if [[ "$QUALIFIED_SOURCE_REQUESTED" == "true" && "$NATIVE_ROUTING_SOURCE_REQUESTED" == "true" ]]; then
             echo 'Select exactly one immutable candidate source' >&2; exit 2
@@ -70,13 +75,15 @@ jobs:
           test -z "$(git status --porcelain)"
           echo "commit=$expected_commit" >> "$GITHUB_OUTPUT"
           python3 - <<'PY_SOURCE_BINDING'
-          import json, os, pathlib, subprocess
+          import hashlib, json, os, pathlib, subprocess
           binding = {
               "source_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
               "source_tree": subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], text=True).strip(),
               "orchestration_workflow_commit": os.environ["GITHUB_SHA"],
               "qualified_source_requested": os.environ["QUALIFIED_SOURCE_REQUESTED"] == "true",
               "native_routing_source_requested": os.environ["NATIVE_ROUTING_SOURCE_REQUESTED"] == "true",
+              "sdk_installer_sha256": hashlib.sha256(pathlib.Path(os.environ["VEX_ANDROID_SDK_ORCHESTRATION"], "install_android_sdk_components.sh").read_bytes()).hexdigest(),
+              "sdk_packages_sha256": hashlib.sha256(pathlib.Path(os.environ["VEX_ANDROID_SDK_ORCHESTRATION"], "android_sdk_packages.txt").read_bytes()).hexdigest(),
           }
           pathlib.Path(os.environ["RUNNER_TEMP"], "android-source-binding.json").write_text(json.dumps(binding, indent=2)+"\n")
           PY_SOURCE_BINDING
@@ -115,9 +122,11 @@ jobs:
       - name: Quality before signing
         run: npm run check
       - name: Install locked Android SDK
+        env:
+          VEX_ANDROID_SDK_ORCHESTRATION: ${{ steps.source.outputs.sdk_directory }}
         run: |-
           set -euo pipefail
-          bash scripts/install_android_sdk_components.sh
+          bash "$VEX_ANDROID_SDK_ORCHESTRATION/install_android_sdk_components.sh"
           echo "$ANDROID_HOME/build-tools/36.0.0" >> "$GITHUB_PATH"
       - name: Build, verify signer and native unit suites
         env:
@@ -159,6 +168,8 @@ jobs:
               "source_commit": actual_commit,
               "source_tree": actual_tree,
               "orchestration_workflow_commit": binding["orchestration_workflow_commit"],
+              "sdk_installer_sha256": binding["sdk_installer_sha256"],
+              "sdk_packages_sha256": binding["sdk_packages_sha256"],
               "qualified_source_requested": binding["qualified_source_requested"],
               "native_routing_source_requested": binding["native_routing_source_requested"],
               "run_id": os.environ["GITHUB_RUN_ID"],

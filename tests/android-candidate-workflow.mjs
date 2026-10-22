@@ -17,6 +17,13 @@ export function check(workflow) {
   assert.equal(job.env.NATIVE_ROUTING_SOURCE_COMMIT, '43cc3ac4b4740049aa3ecbfcc5a20d9c289f7866');
   assert.equal(job.env.NATIVE_ROUTING_SOURCE_TREE, '1012559172cf73a99497daa9da2b03a3b886afe9');
   const sourceBinding = job.steps.find(step => step.id === 'source').run;
+  const sdkCapture = sourceBinding.indexOf('git show "$GITHUB_SHA:scripts/install_android_sdk_components.sh"');
+  assert.ok(sdkCapture >= 0 && sdkCapture < sourceBinding.indexOf('git checkout --detach'));
+  assert.ok(sourceBinding.includes('git show "$GITHUB_SHA:scripts/android_sdk_packages.txt"'));
+  assert.ok(sourceBinding.includes('sdk_installer_sha256') && sourceBinding.includes('sdk_packages_sha256'));
+  const sdk = job.steps.find(step => step.name === 'Install locked Android SDK');
+  assert.equal(sdk.env.VEX_ANDROID_SDK_ORCHESTRATION, '${{ steps.source.outputs.sdk_directory }}');
+  assert.ok(sdk.run.includes('bash "$VEX_ANDROID_SDK_ORCHESTRATION/install_android_sdk_components.sh"'));
   assert.ok(sourceBinding.includes('"$QUALIFIED_SOURCE_REQUESTED" == "true" && "$NATIVE_ROUTING_SOURCE_REQUESTED" == "true"'));
   assert.ok(sourceBinding.includes('git checkout --detach "$NATIVE_ROUTING_SOURCE_COMMIT"'));
   assert.ok(sourceBinding.includes('test "$(git rev-parse HEAD^{tree})" = "$NATIVE_ROUTING_SOURCE_TREE"'));
@@ -53,6 +60,8 @@ for (const mutate of [
   w => w.jobs.release.if = w.jobs.release.if.replace("github.actor == 'ibotpafos'", 'true'),
   w => w.jobs.release.env.NATIVE_ROUTING_SOURCE_COMMIT = '${{ inputs.ref }}',
   w => w.jobs.release.env.NATIVE_ROUTING_SOURCE_TREE = '0'.repeat(40),
+  w => w.jobs.release.steps.find(step => step.id === 'source').run = w.jobs.release.steps.find(step => step.id === 'source').run.replace('git show "$GITHUB_SHA:scripts/install_android_sdk_components.sh"', 'git show HEAD:scripts/install_android_sdk_components.sh'),
+  w => w.jobs.release.steps.find(step => step.name === 'Install locked Android SDK').run = 'bash scripts/install_android_sdk_components.sh',
   w => w.jobs.release.environment = undefined,
   w => w.permissions.contents = 'write',
   w => w.jobs.release.env.ANDROID_RELEASE_KEYSTORE_BASE64 = '${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}',

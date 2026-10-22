@@ -89,3 +89,11 @@ configuration were untouched in this cycle.
 Private receipts: `/Volumes/D/Codex Storage/evidence/vpn-independent-hardening-20261023/`.
 The final race log is `routing-tests-final.jsonl`; the original-source packet
 replay is `packet-baseline.jsonl`, with mappings in `baseline-overlay.json`.
+
+The same 59 leaf tests (43 leak scenarios) also passed as a Linux/arm64 test
+binary in the existing lab image. This second run has no race detector. The
+container had network=none, no capabilities, a read-only root, UID/GID65534,
+one CPU and 512MiB; its configuration was inspected before execution and it was
+removed afterward. Docker storage resolves to mounted D. `linux-runtime.json`
+and `linux-runtime.log` retain acceptance and cleanup. This remains in-memory
+packet testing, not a native Linux TUN/OS kill-switch or physical-device result.

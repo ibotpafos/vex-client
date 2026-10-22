@@ -119,7 +119,7 @@
     "contract:check": "node scripts/check-generated-contract.mjs",
     "android:verify-upgrade": "node scripts/verify_android_upgrade.cjs",
     "eas-build-pre-install": "bash scripts/eas_build_pre_install.sh",
-    "test:client-ci": "node tests/client-ci-contract.mjs",
+    "test:client-ci": "node tests/client-ci-contract.mjs && python3 -m unittest discover -s tests -p test_android_sdk_components.py",
     "test:client-release": "node tests/android-candidate-workflow.mjs && node tests/client-release-workflow.mjs && python3 -m unittest discover -s tests -p client_release_test.py && python3 -m unittest discover -s tests -p test_verify_release_receipt.py && python3 -m unittest discover -s scripts/tests -p test_macos_release_sources.py && python3 -m unittest discover -s scripts/tests -p test_macos_app_installer.py"
   },
   "resolutions": {

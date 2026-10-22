@@ -126,9 +126,7 @@ jobs:
       - run: npm ci
       - name: Install locked Android build components
         run: |
-          sdkmanager="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
-          test -x "$sdkmanager"
-          "$sdkmanager" "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;27.1.12297006"
+          bash scripts/install_android_sdk_components.sh
       - name: Build and verify debug APK without release credentials
         run: npm run android:build:debug:fast -- --stacktrace --no-daemon
       - name: Test all Android debug unit suites

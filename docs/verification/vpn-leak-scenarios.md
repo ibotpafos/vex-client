@@ -97,3 +97,10 @@ one CPU and 512MiB; its configuration was inspected before execution and it was
 removed afterward. Docker storage resolves to mounted D. `linux-runtime.json`
 and `linux-runtime.log` retain acceptance and cleanup. This remains in-memory
 packet testing, not a native Linux TUN/OS kill-switch or physical-device result.
+
+The Android follow-up uses the production-signed 1.0.74 APK on the explicitly
+isolated Mi A1. Clean-user onboarding, upgrade, real VPN, Wi-Fi loss/rebind,
+Doze/wake and reboot/app-open auto-connect have their own
+[device acceptance report](android-network-transition-20261023.md). It retains
+the unverified LTE/IPv6/resolver-egress and unsupported boot-lockdown gates;
+these logical packet tests do not close them.

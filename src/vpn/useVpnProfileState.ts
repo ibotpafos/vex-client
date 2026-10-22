@@ -136,7 +136,7 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
       return;
     }
     let cancelled = false;
-    void hydrateHotVpnProfilesToQueryCache(userId, accessToken, queryClient)
+    void hydrateHotVpnProfilesToQueryCache(userId, accessToken, queryClient, Date.now(), () => !cancelled && isCurrentSessionOperation())
       .then((records) => {
         const selected = records.find((record) =>
           record.locationId === selectedLocationId && record.profile.routingMode === routingMode

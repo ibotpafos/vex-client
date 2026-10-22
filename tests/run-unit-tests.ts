@@ -1224,7 +1224,7 @@ async function runSafeStorageTests(): Promise<void> {
 }
 
 function runHotVpnProfileTests(): void {
-  const nowMs = 1_000_000;
+  const nowMs = 2 * hotVpnProfileTtlMs;
   const runtimeKey = 'test-runtime';
   const profile = profileWithEndpoint('de.example.com:51820');
   const record: HotVpnProfileRecord = {

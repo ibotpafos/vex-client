@@ -37,26 +37,7 @@ export function isUsableHotVpnProfileRecord(
   runtimeKey: string,
   nowMs = Date.now(),
 ): value is HotVpnProfileRecord {
-  if (!value || typeof value !== 'object') {
-    return false;
-  }
-  const record = value as Partial<HotVpnProfileRecord>;
-  if (record.schemaVersion !== hotVpnProfileSchemaVersion) {
-    return false;
-  }
-  if (record.userId !== userId.trim()) {
-    return false;
-  }
-  if (record.runtimeKey !== runtimeKey) {
-    return false;
-  }
-  if (normalizeLocationId(record.locationId || '') !== normalizeLocationId(locationId)) {
-    return false;
-  }
-  if (!record.profile?.config || record.profile.rotationRequired) {
-    return false;
-  }
-  return typeof record.savedAtMs === 'number' && nowMs - record.savedAtMs <= hotVpnProfileTtlMs;
+  return hotVpnProfileRejectionReason(value, userId, locationId, runtimeKey, nowMs) === null;
 }
 
 export function hotVpnProfileRejectionReason(
@@ -66,7 +47,7 @@ export function hotVpnProfileRejectionReason(
   runtimeKey: string,
   nowMs = Date.now(),
 ): string | null {
-  if (!value || typeof value !== 'object') {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return 'missing';
   }
   const record = value as Partial<HotVpnProfileRecord>;
@@ -79,17 +60,25 @@ export function hotVpnProfileRejectionReason(
   if (record.runtimeKey !== runtimeKey) {
     return 'runtime_mismatch';
   }
-  if (normalizeLocationId(record.locationId || '') !== normalizeLocationId(locationId)) {
+  if (typeof record.locationId !== 'string' || typeof locationId !== 'string'
+    || normalizeLocationId(record.locationId) !== normalizeLocationId(locationId)) {
     return 'location_mismatch';
   }
-  if (!record.profile?.config) {
+  if (!record.profile || typeof record.profile !== 'object' || Array.isArray(record.profile)
+    || typeof record.profile.config !== 'string' || !record.profile.config.trim()) {
     return 'missing_config';
   }
   if (record.profile.rotationRequired) {
     return 'rotation_required';
   }
-  if (typeof record.savedAtMs !== 'number') {
+  if (typeof record.savedAtMs !== 'number' || !Number.isFinite(record.savedAtMs) || record.savedAtMs < 0) {
     return 'missing_saved_at';
+  }
+  if (!Number.isFinite(nowMs) || nowMs < 0) {
+    return 'invalid_clock';
+  }
+  if (nowMs < record.savedAtMs) {
+    return 'future_saved_at';
   }
   if (nowMs - record.savedAtMs > hotVpnProfileTtlMs) {
     return 'expired';

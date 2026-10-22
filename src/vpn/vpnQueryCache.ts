@@ -1,5 +1,5 @@
 import type { Entitlement, VpnDevice, VpnLocation } from '@/api/vexApi';
-import * as SecureStore from '@/native/secureStore';
+import { updateStoredJsonObject } from '@/native/storedJsonObject';
 import {
   baseVpnQueryCacheSchemaVersion,
   locationCatalogCacheSchemaVersion,
@@ -10,7 +10,6 @@ import {
 const entitlementCacheKey = 'vex.entitlement.v1';
 const locationsCacheKey = 'vex.vpn.locations.v1';
 const devicesCacheKey = 'vex.vpn.devices.v1';
-type CacheStore<T> = Record<string, VpnQueryCacheEntry<T>>;
 
 export async function loadCachedEntitlement(userId: string): Promise<Entitlement | null> {
   return loadCachedValue(entitlementCacheKey, userId, isEntitlement);
@@ -46,17 +45,11 @@ async function loadCachedValue<T>(
   if (!normalizedUserId) {
     return null;
   }
-  const store = await readStore<T>(storageKey);
-  const entry = store[normalizedUserId];
-  const value = validCachedValueForUser(entry, normalizedUserId, schemaVersion, isValid);
-  if (value === null) {
-    if (entry) {
-      delete store[normalizedUserId];
-      await writeStore(storageKey, store);
-    }
-    return null;
-  }
-  return value;
+  return updateStoredJsonObject<VpnQueryCacheEntry<T>, T | null>(storageKey, (store) => {
+    const value = validCachedValueForUser(store[normalizedUserId], normalizedUserId, schemaVersion, isValid);
+    if (value === null) delete store[normalizedUserId];
+    return value;
+  }).catch(() => null);
 }
 
 async function saveCachedValue<T>(storageKey: string, userId: string, value: T, schemaVersion = baseVpnQueryCacheSchemaVersion): Promise<void> {
@@ -64,35 +57,14 @@ async function saveCachedValue<T>(storageKey: string, userId: string, value: T, 
   if (!normalizedUserId) {
     return;
   }
-  const store = await readStore<T>(storageKey);
-  store[normalizedUserId] = {
-    savedAtMs: Date.now(),
-    schemaVersion,
-    userId: normalizedUserId,
-    value,
-  };
-  await writeStore(storageKey, store);
-}
-
-async function readStore<T>(storageKey: string): Promise<CacheStore<T>> {
-  const raw = await SecureStore.getItemAsync(storageKey).catch(() => null);
-  if (!raw) {
-    return {};
-  }
-  try {
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-async function writeStore<T>(storageKey: string, store: CacheStore<T>): Promise<void> {
-  if (Object.keys(store).length === 0) {
-    await SecureStore.deleteItemAsync(storageKey).catch(() => undefined);
-    return;
-  }
-  await SecureStore.setItemAsync(storageKey, JSON.stringify(store));
+  await updateStoredJsonObject<VpnQueryCacheEntry<T>, void>(storageKey, (store) => {
+    store[normalizedUserId] = {
+      savedAtMs: Date.now(),
+      schemaVersion,
+      userId: normalizedUserId,
+      value,
+    };
+  });
 }
 
 function isEntitlement(value: unknown): value is Entitlement {

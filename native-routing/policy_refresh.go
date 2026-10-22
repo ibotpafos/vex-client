@@ -201,12 +201,21 @@ func sameAddresses(a, b []netip.Addr) bool {
 
 func (r *Router) refreshPolicies(source PolicySource) {
 	delay := time.Duration(0)
+	underlay := r.underlyingContext()
 	for {
+		if r.ctx.Err() != nil {
+			return
+		}
 		timer := time.NewTimer(delay)
 		select {
 		case <-r.ctx.Done():
 			timer.Stop()
 			return
+		case <-underlay.Done():
+			timer.Stop()
+			underlay = r.underlyingContext()
+			delay = 0
+			continue
 		case <-timer.C:
 		}
 		r.policyMu.Lock()
@@ -216,9 +225,12 @@ func (r *Router) refreshPolicies(source PolicySource) {
 		if !enabled {
 			continue
 		}
-		ctx, cancel := context.WithTimeout(r.ctx, 20*time.Second)
+		ctx, cancel := context.WithTimeout(underlay, 20*time.Second)
 		auth, err := source(ctx)
 		cancel()
+		if underlay.Err() != nil {
+			continue
+		}
 		if err == nil && r.AcceptAuthorization(auth) == nil {
 			delay = 6 * time.Hour
 		}

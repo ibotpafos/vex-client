@@ -166,7 +166,9 @@ func TestLeakScenariosDNSNoPhysicalFallback(t *testing.T) {
 				if scenario.protocol == "udp" {
 					conn, err = client.DialUDPAddrPort(netip.AddrPort{}, netip.MustParseAddrPort(destination))
 				} else {
-					ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+					// Handshake setup has its own budget under the race detector;
+					// the short blocked-response window below remains unchanged.
+					ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 					conn, err = client.DialContextTCPAddrPort(ctx, netip.MustParseAddrPort(destination))
 					cancel()
 				}

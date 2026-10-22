@@ -78,6 +78,8 @@ type Router struct {
 	writeMu            sync.Mutex
 	activeMu           sync.Mutex
 	directConnections  map[net.Conn]struct{}
+	underlay           context.Context
+	cancelUnderlay     context.CancelFunc
 	flowBudget         chan struct{}
 }
 
@@ -112,6 +114,7 @@ func Attach(osTun tun.Device, options Options) (*Router, tun.Device, error) {
 	r.addresses = append([]netip.Addr(nil), options.Addresses...)
 	r.mode, r.platform, r.highWater, r.authorization = options.Mode, options.Platform, options.HighWater, options.Authorization
 	r.policy.Store(options.Policy)
+	r.underlay, r.cancelUnderlay = context.WithCancel(ctx)
 	r.link = channel.New(1024, uint32(mtu), "")
 	r.stack = stack.New(stack.Options{NetworkProtocols: []stack.NetworkProtocolFactory{ipv4.NewProtocol, ipv6.NewProtocol},
 		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol}})
@@ -154,9 +157,30 @@ func (r *Router) UpdatePolicy(policy *CompiledPolicy) {
 func (r *Router) UnderlyingNetworkChanged() {
 	r.activeMu.Lock()
 	defer r.activeMu.Unlock()
+	r.cancelUnderlay()
+	r.underlay, r.cancelUnderlay = context.WithCancel(r.ctx)
 	for connection := range r.directConnections {
 		connection.Close()
 	}
+}
+
+// Keep caller deadlines and cancel pending physical work when its network is
+// retired. The captured underlay is also checked under activeMu at admission:
+// AfterFunc cancellation is asynchronous, and a callback can return late.
+func (r *Router) physicalContext(parent context.Context) (context.Context, context.CancelFunc, context.Context) {
+	underlay := r.underlyingContext()
+	ctx, cancel := context.WithCancel(parent)
+	stop := context.AfterFunc(underlay, cancel)
+	if underlay.Err() != nil {
+		cancel()
+	}
+	return ctx, func() { stop(); cancel() }, underlay
+}
+
+func (r *Router) underlyingContext() context.Context {
+	r.activeMu.Lock()
+	defer r.activeMu.Unlock()
+	return r.underlay
 }
 
 func (r *Router) Close() error {
@@ -299,12 +323,23 @@ func (r *Router) dial(ctx context.Context, protocol string, target netip.AddrPor
 		if r.direct == nil {
 			return nil, true, errors.New("routing physical binder unavailable")
 		}
+		ctx, cancel, underlay := r.physicalContext(ctx)
+		defer cancel()
+		if ctx.Err() != nil || underlay.Err() != nil {
+			return nil, true, errors.New("routing physical network retired")
+		}
 		connection, err := r.direct(ctx, protocol, address.String())
 		if err != nil {
+			if connection != nil {
+				connection.Close()
+			}
 			return nil, true, err
 		}
+		if connection == nil {
+			return nil, true, errors.New("routing physical connection missing")
+		}
 		r.activeMu.Lock()
-		if !control && (policy != r.policy.Load() || !policy.valid(r.now())) {
+		if ctx.Err() != nil || underlay.Err() != nil || (!control && (policy != r.policy.Load() || !policy.valid(r.now()))) {
 			r.activeMu.Unlock()
 			connection.Close()
 			return nil, true, errors.New("routing authority changed")

@@ -46,3 +46,46 @@ Private reproducible receipts, captures and raw measurements:
 `/Volumes/D/Codex Storage/evidence/vpn-reliability-live-20261022/`.
 The server repository records this cycle in
 `docs/operations/records/2026-10-22-kernel-guard-live-vpn-acceptance.md`.
+
+## Network transition cancellation, 23 October 2026
+
+The router previously closed registered DIRECT sockets when the underlay
+changed, but an earlier dial could return afterward and register a stale
+socket. Recovery-origin connections could also finish after explicit disconnect.
+DIRECT DNS could return an answer from the retired network. The new
+`network_transition_test.go` first reproduced 14 failures across late dial/DNS
+cases. An independent replay using the original source and Go's file overlay
+also received stale TCP and UDP payloads through the in-memory packet stack.
+
+Physical work now receives cancellation when its underlay is retired, and
+admission rechecks the captured network under the connection lock. Late
+connections close even when a callback ignores cancellation. Late DIRECT and
+recovery DNS answers are rejected. Changing networks retains capture; only an
+explicit disconnect releases it. Caller deadlines and policy checks still apply.
+
+Policy refresh is canceled with the old network and retried on the new one
+without waiting for its five-minute failure delay. The refresh loop retains its
+network context while waiting, so a change between a completed request and the
+next timer cannot be missed. This uses context cancellation rather than polling.
+
+The full Go module passed 59 leaf tests, including 43 leak scenarios, with
+`go test -race -count=1 -timeout 150s ./...`; `go vet ./...` also passed.
+The added cases cover late IPv4/IPv6 TCP/UDP dials, domain/recovery identities,
+A/AAAA DNS, cooperative cancellation, repeated network changes, post-disconnect
+rejection, refresh during a pending request/backoff and packet-level stale/fresh
+controls. Tests use in-memory TUN/gVisor and net.Pipe, with no physical egress.
+
+A full run exposed an existing one-second local TCP handshake timeout while
+cross-compilation was active. That setup budget is now three seconds; the
+150ms blocked DNS response window and the no-physical-fallback assertions are
+unchanged. The initial failed run remains in private evidence.
+
+Common-code build checks passed for Linux/amd64, Windows/amd64, macOS/arm64
+executables and the Android/arm64 Go library. These unsigned candidate builds
+were not installed or published. JNI/Apple packaging, physical devices, reboot
+and sleep acceptance remain separate. The active personal VPN and all server
+configuration were untouched in this cycle.
+
+Private receipts: `/Volumes/D/Codex Storage/evidence/vpn-independent-hardening-20261023/`.
+The final race log is `routing-tests-final.jsonl`; the original-source packet
+replay is `packet-baseline.jsonl`, with mappings in `baseline-overlay.json`.

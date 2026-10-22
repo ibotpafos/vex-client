@@ -97,7 +97,19 @@ func (r *Router) dnsExchange(query []byte) ([]byte, error) {
 		if r.directDNS == nil {
 			return nil, errors.New("routing direct DNS unavailable")
 		}
-		answer, err = r.directDNS(ctx, query)
+		physical, cancelPhysical, underlay := r.physicalContext(ctx)
+		defer cancelPhysical()
+		if physical.Err() != nil || underlay.Err() != nil {
+			return nil, errors.New("routing DNS network retired")
+		}
+		answer, err = r.directDNS(physical, query)
+		// Serialize admission with network retirement, including recovery names
+		// that intentionally do not require a current country policy.
+		r.activeMu.Lock()
+		defer r.activeMu.Unlock()
+		if physical.Err() != nil || underlay.Err() != nil {
+			return nil, errors.New("routing DNS network retired")
+		}
 	} else {
 		// Failure remains inside AWG; never retry a foreign name with direct DNS.
 		if r.transportStopped.Load() {

@@ -44,7 +44,6 @@ const profile = id => ({ config: 'Address = 10.0.0.2/32', device: { id }, locati
 for (const [name, module, save, key, a, b] of [
   ['hot profiles', 'src/vpn/hotProfileCache.ts', 'saveHotVpnProfile', hotKey, ['owner', 'de', profile('de')], ['owner', 'fi', profile('fi')]],
   ['entitlement', 'src/vpn/vpnQueryCache.ts', 'saveCachedEntitlement', 'vex.entitlement.v1', ['owner-a', { active: true, vpnAccess: true }], ['owner-b', { active: true, vpnAccess: true }]],
-  ['billing', 'src/api/billingSummaryCache.ts', 'saveCachedBillingSummary', 'vex.billing.summary.v1', ['owner-a', { title: 'A', subtitle: 'fixture', plans: [] }], ['owner-b', { title: 'B', subtitle: 'fixture', plans: [] }]],
 ]) {
   test(`parallel ${name} saves retain both independent records`, async () => {
     const h = harness(), api = h.load(module);
@@ -59,12 +58,14 @@ for (const clear of ['clearHotVpnProfiles', 'clearSensitiveStorageHistory']) {
     const h = harness({ set: async key => { if (key === hotKey) { started.resolve(); await release.promise; } } });
     const hot = h.load('src/vpn/hotProfileCache.ts');
     const storage = h.load('src/native/secureStore.ts');
+    h.values.set('vex.billing.summary.v1', 'legacy-billing-cache');
     const saving = hot.saveHotVpnProfile('owner', 'de', profile('de'));
     await started.promise;
     const clearing = (clear === 'clearHotVpnProfiles' ? hot : storage)[clear]();
     await tick(); release.resolve();
     await Promise.all([saving, clearing]);
     assert.equal(h.values.has(hotKey), false);
+    assert.equal(h.values.has('vex.billing.summary.v1'), clear !== 'clearSensitiveStorageHistory');
   });
 }
 
@@ -184,6 +185,7 @@ test('web logout removes legacy and memory copies while preserving installation 
   for (const key of sessionKeys) h.webValues.set(key, 'legacy-session');
   assert.equal(await store.getItemAsync(sessionKeys[0]), 'legacy-session');
   assert.equal(h.webValues.has(sessionKeys[0]), false);
+  await store.setItemAsync('vex.billing.summary.v1', 'legacy-billing-cache');
   await store.setItemAsync('vex.app.install_id.v1', 'fixture-install');
   await store.setItemAsync('vex.vpn.account_keys.v1.fixture', 'fixture-key');
   await store.clearSensitiveStorageHistory();
@@ -191,6 +193,7 @@ test('web logout removes legacy and memory copies while preserving installation 
     assert.equal(h.webValues.has(key), false);
     assert.equal(await store.getItemAsync(key), null);
   }
+  assert.equal(await store.getItemAsync('vex.billing.summary.v1'), null);
   assert.equal(await store.getItemAsync('vex.app.install_id.v1'), 'fixture-install');
   assert.equal(await store.getItemAsync('vex.vpn.account_keys.v1.fixture'), 'fixture-key');
 });

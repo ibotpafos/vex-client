@@ -520,9 +520,9 @@ final class VEXAppState: ObservableObject {
                 return try await connectPreparedTunnel(rotatedTunnel, helper: helper, generation: generation, resiliencePolicy: resiliencePolicy)
             }
 
-            return try await VpnAdmissionRecovery.retryFreshProfile {
+            return try await VpnAdmissionRecovery.retryFreshProfile(resolve: {
                 try ensureProfileSession(accountUserId: accountUserId, generation: generation)
-                let freshTunnel = try await profileService.resolveProfile(
+                return try await profileService.resolveProfile(
                     accessToken: token,
                     userId: accountUserId,
                     locationId: initialTunnel.locationId,
@@ -531,8 +531,9 @@ final class VEXAppState: ObservableObject {
                     writeHelperConfig: false,
                     shouldPersist: shouldPersistProfile
                 )
+            }, connect: { freshTunnel in
                 return try await connectPreparedTunnel(freshTunnel, helper: helper, generation: generation, resiliencePolicy: resiliencePolicy)
-            } failover: { error in
+            }) { error in
                 try ensureProfileSession(accountUserId: accountUserId, generation: generation)
                 guard allowsAutomaticFailover, assessment.canFailover, let failoverLocation = bestFailoverLocation(excluding: initialTunnel.locationId) else {
                     throw error

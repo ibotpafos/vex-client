@@ -12,6 +12,7 @@ prepared→fetched. Legacy config GET тоже может выполнять pro
 | JS preparedTunnelFromDeviceConfig | 1 на config GET; POST token остаётся1 | Прежний caller AbortSignal и session guards сохранены | Ошибка возвращается caller; отмена не подтверждает remote rollback |
 | Swift managedVpnProfile | 1 | JSON API/transport сохраняют task cancellation и общий deadline | Existing profile service решает восстановление отдельно |
 | Windows GetManagedVpnProfile | 1, SendCoreAsync вызывает HttpClient один раз | Прежний linked deadline покрывает headers/body и caller cancellation | Existing caller policy; Windows code не менялся |
+| JS coalesced profile borrowers | One shared callback; after a started failure no follower re-dispatch | Owner slot/cancellation are retained; current borrowers share the same result/error | Only queue refusal before callback allows one replacement foreground owner for all live borrowers |
 | Обычные JS/Swift GET reads | До3 в прежнем budget | Retry-After, cancellation, error classification прежние | Прежняя bounded retry policy |
 
 Swift transport принимает retryCount с default2 и clamp0…2 для GET; writes
@@ -82,3 +83,29 @@ fired first. The original exception is rethrown;5-second connect and8-second
 operation limits, TLS/hostname validation, physical endpoint, lease and cleanup
 remain unchanged. Portable helper tests and crossbuilds pass, but this change
 does not establish the cause or successful Windows encrypted-tunnel acceptance.
+
+
+Coalesced foreground callers no longer obtain an automatic issuance attempt
+when the background callback fails. That callback may already have registered
+a device, rotated a key or dispatched a profile GET; network, HTTP and JSON
+errors do not establish rollback. All live/current borrowers receive the same
+error. Cancelled borrowers stay cancelled, stale borrowers receive the existing
+superseded error, and a separate explicit request can still start afterwards.
+
+The queue records callback entry itself. Only its own refusal before entry
+proves that no callback work started. In that case it promotes one current
+foreground borrower and attaches the others to that same owner, ahead of queued
+background work. An error named ProfileRequestSupersededError thrown inside
+an already started callback cannot authorize a retry. This change does not
+classify every internal callback stage as replay-safe, add remote idempotency,
+or complete the remaining reconnect/key/candidate recovery matrix.
+
+
+Swift fresh-profile recovery now makes resolution and native connection separate
+callbacks of the existing VpnAdmissionRecovery helper. Resolution is awaited
+outside the native-connect catch, so its network/HTTP/decode/cancellation error
+cannot select or issue another location. A successfully resolved profile can
+still follow the existing native transport failover policy. Admission rejection
+and unconfirmed teardown continue to propagate without failover. The actual
+VEXAppState call site uses this boundary; rotation, native helper policy and
+session/operation checks are preserved.

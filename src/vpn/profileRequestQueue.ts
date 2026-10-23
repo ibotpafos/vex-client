@@ -84,10 +84,12 @@ function drainProfileRequestQueue(): void {
   if (!next) return;
 
   requestInFlight = next;
+  let operationStarted = false;
   Promise.resolve()
     .then(() => {
       requireRequestActive(next.controller.signal);
       if (!next.isCurrent()) throw new ProfileRequestSupersededError();
+      operationStarted = true;
       return next.operation(next.controller.signal);
     })
     .then((value) => {
@@ -102,10 +104,22 @@ function drainProfileRequestQueue(): void {
     }, (error) => {
       requestInFlight = null;
       next.reject(error);
-      // A foreground connect that joined a failed speculative background
-      // request still gets its own attempt, ahead of queued revalidations.
-      if (next.followers.length > 0) {
-        foregroundQueue.unshift(...next.followers.filter(item => !item.cancelled));
+      const unstartedFollowers: QueuedProfileRequest[] = [];
+      for (const follower of next.followers) {
+        if (follower.cancelled) continue;
+        if (!follower.isCurrent()) follower.reject(new ProfileRequestSupersededError());
+        // Once the callback starts it can issue a profile or write a key.
+        // Its failure does not prove remote rollback. Every live borrower
+        // observes that same outcome rather than dispatching another issuance.
+        else if (operationStarted) follower.reject(error);
+        else unstartedFollowers.push(follower);
+      }
+      // Only the queue's own pre-callback refusal proves no work was started.
+      // Current foreground borrowers retain priority over other background work.
+      if (unstartedFollowers.length > 0) {
+        const [owner, ...borrowers] = unstartedFollowers;
+        owner.followers.push(...borrowers);
+        foregroundQueue.unshift(owner);
       }
       drainProfileRequestQueue();
     });

@@ -711,3 +711,84 @@ for (const status of [404, 405, 501]) {
     });
   }
 }
+
+
+for (const failure of ['network', 'http503', 'malformed']) {
+  for (const cancelLeader of [false, true]) {
+    test(`joined profile request shares ${failure} failure without issuance replay (cancel leader=${cancelLeader})`, async () => {
+      const hold = gate(), controller = new AbortController(), calls = [];
+      let issued = 0;
+      const h = harness({ fetch: async (url) => {
+        const route = new URL(url).pathname; calls.push(route);
+        if (route === '/v1/devices') return response([device]);
+        if (route === '/v1/vpn/profile') {
+          issued++;
+          if (issued > 1) return response(profile);
+          await hold.promise;
+          if (failure === 'network') throw new Error('lost profile response after dispatch');
+          if (failure === 'http503') return { ok: false, status: 503, headers: { get: () => null }, text: async () => '{"code":"unavailable","message":"fixture"}' };
+          return { ok: true, status: 200, text: async () => '{' };
+        }
+        throw new Error(`Unexpected replay stage ${route}`);
+      } });
+      const resolver = h.load('@/vpn/profile');
+      const leader = tracked(resolver.resolveVpnProfile('token', paid, 'de', {
+        forceRefresh: true, shouldFetch: () => true, signal: controller.signal,
+      }));
+      await tick();
+      assert.equal(issued, 1, 'fixture must reach actual profile dispatch');
+      const follower = tracked(resolver.resolveVpnProfile('token', paid, 'de', { forceRefresh: true }));
+      await tick();
+      assert.equal(issued, 1, 'the foreground request must join the pending issuance');
+      if (cancelLeader) controller.abort();
+      hold.resolve();
+      await leader.promise; await follower.promise;
+      await h.load('@/vpn/profileRequestQueue').runProfileRequest(async () => 'barrier');
+      assert.equal(issued, 1, 'a failed shared dispatch cannot authorize another profile issuance');
+      assert.ok(follower.error, 'joined caller must observe the failed owned operation');
+      if (cancelLeader) cancelled(leader);
+      else assert.equal(follower.error, leader.error, 'borrowers share the original owner error');
+      assert.ok(!calls.some(route => route.includes('config-token') || route.includes('rotate-key')));
+      assert.equal(h.timers.size, 0);
+    });
+  }
+}
+
+
+test('a queue-refused background owner lets current foreground borrowers start before queued background work', async () => {
+  const h = harness(), queue = h.load('@/vpn/profileRequestQueue'), calls = [];
+  let current = true;
+  const leader = tracked(queue.runProfileRequest(async () => { calls.push('stale owner body'); }, () => current, 'background', 'same'));
+  const follower = tracked(queue.runProfileRequest(async () => { calls.push('foreground'); return 'owned'; }, () => true, 'foreground', 'same'));
+  const secondFollower = tracked(queue.runProfileRequest(async () => { calls.push('duplicate foreground'); return 'duplicate'; }, () => true, 'foreground', 'same'));
+  const background = tracked(queue.runProfileRequest(async () => { calls.push('later background'); return 'later'; }, () => true, 'background', 'other'));
+  current = false;
+  await leader.promise; await follower.promise; await secondFollower.promise; await background.promise;
+  assert.ok(leader.error instanceof queue.ProfileRequestSupersededError);
+  assert.equal(follower.value, 'owned'); assert.equal(secondFollower.value, 'owned'); assert.equal(background.value, 'later');
+  assert.deepEqual(calls, ['foreground', 'later background']);
+});
+
+test('a superseded error from a started callback is not evidence that issuance never began', async () => {
+  const h = harness(), queue = h.load('@/vpn/profileRequestQueue'), hold = gate();
+  const failure = new queue.ProfileRequestSupersededError(); let duplicate = 0;
+  const owner = tracked(queue.runProfileRequest(async () => { await hold.promise; throw failure; }, undefined, 'background', 'same'));
+  await tick();
+  const follower = tracked(queue.runProfileRequest(async () => { duplicate++; return 'duplicate'; }, undefined, 'foreground', 'same'));
+  hold.resolve(); await owner.promise; await follower.promise;
+  assert.equal(owner.error, failure); assert.equal(follower.error, failure); assert.equal(duplicate, 0);
+});
+
+test('shared issuance failure rejects stale followers and releases the queue for separate intent', async () => {
+  const h = harness(), queue = h.load('@/vpn/profileRequestQueue'), hold = gate();
+  const failure = new Error('uncertain owner'); let current = true, duplicate = 0;
+  const owner = tracked(queue.runProfileRequest(() => hold.promise, undefined, 'background', 'same'));
+  await tick();
+  const stale = tracked(queue.runProfileRequest(async () => { duplicate++; }, () => current, 'foreground', 'same'));
+  const live = tracked(queue.runProfileRequest(async () => { duplicate++; }, undefined, 'foreground', 'same'));
+  const next = tracked(queue.runProfileRequest(async () => 'separate intent', undefined, 'foreground', 'different'));
+  current = false; hold.reject(failure);
+  await owner.promise; await stale.promise; await live.promise; await next.promise;
+  assert.equal(owner.error, failure); assert.ok(stale.error instanceof queue.ProfileRequestSupersededError);
+  assert.equal(live.error, failure); assert.equal(duplicate, 0); assert.equal(next.value, 'separate intent');
+});

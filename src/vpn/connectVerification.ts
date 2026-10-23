@@ -19,7 +19,7 @@ export async function waitForVerifiedVpnConnection(
   readStatus: () => Promise<VpnStatus>,
   options: HandshakeVerificationOptions = {},
 ): Promise<VpnStatus> {
-  const timeoutMessage = options.requireDataPlane ? 'VPN DNS/HTTPS verification timed out.' : 'VPN handshake timed out.';
+  const timeoutMessage = options.requireDataPlane ? 'VPN traffic verification timed out.' : 'VPN handshake timed out.';
   options.assertCurrent?.();
   if (initialStatus.state !== 'connected' && initialStatus.state !== 'connecting' && initialStatus.state !== 'verifying') {
     throw new Error('VPN backend did not enter the connected state.');

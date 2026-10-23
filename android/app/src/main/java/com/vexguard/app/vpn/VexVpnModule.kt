@@ -558,6 +558,7 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
 
   private fun VpnConnectionState.toWritableMap(): WritableMap {
     val map = Arguments.createMap()
+    map.putBoolean("dataPlaneVerified", false)
     when (this) {
       is VpnConnectionState.Connected -> {
         val hasTunnelActivity = VpnHandshakeVerifier.isVerified(traffic.latestHandshakeEpochMillis)

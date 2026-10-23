@@ -127,7 +127,9 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
     if (localHealthReasons.length > 0) {
       localHealthFailuresRef.current += 1;
       lastLocalDegradedStatusRef.current = nextStatus;
-      return true;
+      // Count the failure for recovery, but immediately revoke a previously
+      // green UI when Android withdraws its DNS/HTTPS proof (including DOWN).
+      return nextStatus.dataPlaneVerified !== false;
     }
     localHealthFailuresRef.current = 0;
     lastLocalDegradedStatusRef.current = null;

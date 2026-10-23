@@ -3,6 +3,10 @@ import test from 'node:test';
 import { resolveNativeTunnelVerified } from '../src/vpn/vpnStatusVerification.ts';
 import { waitForVerifiedVpnConnection } from '../src/vpn/connectVerification.ts';
 import { assessNativeTunnelHealth } from '../src/vpn/nativeTunnelHealth.ts';
+import { localStatusHealthReasons } from '../src/vpn/nativeTunnelHealth.ts';
+import { readFileSync } from 'node:fs';
+import { stripTypeScriptTypes } from 'node:module';
+import { assessVpnAutopilotIssue } from '../src/vpn/vpnAutopilotAssessment.ts';
 
 const handshake = { state: 'connected', rxBytes: 4096, txBytes: 8192, latestHandshakeEpochMillis: 1000, verified: true };
 
@@ -53,4 +57,25 @@ test('a failed data plane triggers recovery even with a fresh handshake', () => 
   assert.equal(assessNativeTunnelHealth({ nowMs: 1100, staleHandshakeSeconds: 180,
     status: { ...handshake, verified: false, dataPlaneVerified: false, verificationReason: 'data_plane_pending' },
   }).healthy, true, 'pending verification must not cause a reconnect loop');
+});
+
+test('watchdog records failed traffic without freezing the previous connected UI', () => {
+  const source = stripTypeScriptTypes(readFileSync('src/vpn/useNativeVpnWatchdog.ts', 'utf8'))
+    .replace(/import[\s\S]*?from '[^']+';/g, '').replace('export function useNativeVpnWatchdog', 'function useNativeVpnWatchdog');
+  const stubs = { useRef: value => ({current: value}), useCallback: fn => fn, useEffect: () => {},
+    localStatusHealthReasons, initialRecoveryBackoffState: () => ({}), vpnUnexpectedDisconnectTelemetry: () => null };
+  const hook = new Function(...Object.keys(stubs), source + ';return useNativeVpnWatchdog;')(...Object.values(stubs));
+  const watchdog = hook({ activeProfile: {locationId: 'nl', device: {id: 'fixture'}},
+    staleHandshakeSeconds: 180, submitDiagnostics: async () => {}, reportConnect: () => {} });
+  for (const state of ['connected', 'error', 'disconnected']) {
+    assert.equal(watchdog.recordNativeStatus(handshake, { ...handshake, state, latestHandshakeEpochMillis: Date.now(),
+      verified: false, dataPlaneVerified: false, verificationReason: 'https_failed',
+    }), false, 'native unverified proof must reach the UI while recovery is scheduled');
+  }
+});
+
+test('HTTPS failure and admission timeout do not misclassify DNS or authorize a location change', () => {
+  assert.equal(assessVpnAutopilotIssue({localStatus: {...handshake, verificationReason: 'https_failed'}}).cause, 'network');
+  assert.equal(assessVpnAutopilotIssue({error: new Error('VPN traffic verification timed out.')}).canFailover, false);
+  assert.equal(assessVpnAutopilotIssue({localStatus: {...handshake, verificationReason: 'dns_failed'}}).cause, 'dns');
 });

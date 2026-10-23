@@ -178,6 +178,9 @@ export function useVpnConnectionFlow({
         // TODO(android-route-canary): require DNS and HTTPS over a VPN-bound
         // socket before calling this full data-plane recovery. A plain JS fetch
         // can bypass the tunnel in per-app mode, so it cannot prove this safely.
+        // The 2026-10-23 Mi A1 run observed DE then NL egress with Noord selected.
+        // Paired native node attribution is still missing; handshake success
+        // alone must not be treated as acceptance of the selected exit node.
         if (candidate) {
           dynamicRouteRuntime.recordSuccess(candidate);
           reportRoute(candidate, endpointAttempts.length > 1 ? 'fallback_succeeded' : 'connect_succeeded', 'ok');

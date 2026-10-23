@@ -104,3 +104,12 @@ Doze/wake and reboot/app-open auto-connect have their own
 [device acceptance report](android-network-transition-20261023.md). It retains
 the unverified LTE/IPv6/resolver-egress and unsupported boot-lockdown gates;
 these logical packet tests do not close them.
+
+
+The next [Android blocker and DNS acceptance](android-blocker-idle-20261023.md)
+reproduces and removes a one-core idle spin in the fallback TUN service, tests
+the actual component against live underlay controls, and verifies signed1.0.75
+upgrade/real VPN on the same isolated device. Connected system-DNS egress is
+independently observed with the Mullvad protocol. The report separately retains
+an unexplained DE→NL egress transition, full-APK protected-stop and boot/LTE/IPv6
+gates; component acceptance does not close those gates.

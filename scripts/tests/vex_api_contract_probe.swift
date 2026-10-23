@@ -9,6 +9,7 @@ struct VEXAPIContractProbe {
     static func main() async {
         let scenarios: [(String, () async throws -> Void)] = [
             ("app update metadata", { try await APIContractScenarios.appUpdateMetadata() }),
+            ("profile issuance no replay", { try await APIContractScenarios.profileIssuanceDoesNotReplay() }),
             ("successful JSON body classification", { try await APIContractScenarios.successfulBodyDecoding() }),
             ("successful body parent cancellation", { try await APIContractScenarios.successfulBodyCancellation() }),
             ("oversized SSE reconnect", { try await RealtimeFramingScenarios.oversizedRealtimeReconnect(invalidMetadata: false) }),

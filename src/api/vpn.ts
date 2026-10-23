@@ -111,6 +111,8 @@ async function preparedTunnelFromDeviceConfig(accessToken: string, client: VpnCl
   const config = await rawRequest(`/v1/devices/${encodeURIComponent(device.id)}/config?${configQuery.toString()}`, {
     accessToken,
     headers: versionHeaders,
+    // Config issuance can also assign or reconcile a peer.
+    retryCount: 0,
     ...(options.signal ? { signal: options.signal } : {}),
   });
   requireProfileRequest(options);
@@ -301,7 +303,7 @@ function requestManagedVpnProfile(
   // Profile GET can assign a node or reconcile its peer. Once dispatched, it
   // owns the queue slot through completion, like registration/key writes. Only
   // the caller wait is cancellable; guard before/after this operation instead.
-  return jsonRequest<NativeVPNProfileDTO>(`/v1/vpn/profile?${query.toString()}`, {accessToken, headers, suppressErrorLog:true});
+  return jsonRequest<NativeVPNProfileDTO>(`/v1/vpn/profile?${query.toString()}`, {accessToken, headers, suppressErrorLog:true, retryCount:0});
 }
 
 export async function vpnDevices(accessToken: string, signal?: AbortSignal): Promise<VpnDevice[]> {
@@ -412,6 +414,9 @@ export async function fetchStagedDevicePSKProfile(accessToken: string, currentPr
     accessToken,
     headers: await clientVersionHeaders(),
     suppressErrorLog: true,
+    // Fetching staged material advances its durable state. An uncertain
+    // response belongs to explicit recovery, even though this is a GET.
+    retryCount: 0,
   });
   requireCurrentSession(isCurrentSessionOperation);
   if (response.activate !== false || !isPositiveSafeInteger(response.profile_version) || !isPositiveSafeInteger(response.profile.version) || response.profile_version !== response.profile.version) {

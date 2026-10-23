@@ -92,6 +92,44 @@ enum APIContractScenarios {
         }
     }
 
+    static func profileIssuanceDoesNotReplay() async throws {
+        // Use the real profile API, transport and JSON decoder. Ordinary GET
+        // reads retain their existing bounded recovery.
+        for status in [429, 502, 503, 504, 0] {
+            let calls = APIBodyCounter()
+            let waits = APIBodyCounter()
+            var api = VEXAPIClient()
+            api.baseURL = URL(string: "https://profile.example.invalid/prefix")
+            api.transport.sleep = { _ in waits.increment() }
+            api.transport.load = { request in
+                calls.increment()
+                try require(request.url?.path == "/prefix/v1/vpn/profile", "profile path/prefix changed")
+                try require(request.value(forHTTPHeaderField: "Authorization") == "Bearer inert-token", "profile auth changed")
+                if status == 0 { throw URLError(.networkConnectionLost) }
+                return (Data(#"{"code":"fixture","message":"fixture"}"#.utf8),
+                    HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Retry-After":"0"])!)
+            }
+            var rejected = false
+            do {
+                _ = try await api.managedVpnProfile(accessToken: "inert-token", deviceId: "fixture-device",
+                    locationId: "de", routingMode: .fullTunnel, bypassRegion: nil, knownVersion: nil)
+            } catch { rejected = true }
+            try require(rejected, "uncertain profile result disappeared")
+            try require(calls.value == 1 && waits.value == 0, "profile issuance replayed after uncertain outcome status=\(status) calls=\(calls.value)")
+        }
+        let calls = APIBodyCounter()
+        let waits = APIBodyCounter()
+        var api = VEXAPIClient()
+        api.transport.sleep = { _ in waits.increment() }
+        api.transport.load = { request in
+            calls.increment()
+            return (Data("[]".utf8), HTTPURLResponse(url: request.url!, statusCode: calls.value == 1 ? 503 : 200,
+                httpVersion: "HTTP/1.1", headerFields: nil)!)
+        }
+        _ = try await api.vpnDevices(accessToken: "inert-token")
+        try require(calls.value == 2 && waits.value == 1, "ordinary read recovery changed")
+    }
+
     static func successfulBodyDecoding() async throws {
         var failures: [String] = []
         for body in ["QSECRET", "", "{", "[1,", "null", "{}", "true", #"[{"id":7}]"#] {

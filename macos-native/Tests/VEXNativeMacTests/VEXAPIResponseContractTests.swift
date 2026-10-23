@@ -5,6 +5,10 @@ final class VEXAPIResponseContractTests: XCTestCase {
         try await APIContractScenarios.appUpdateMetadata()
     }
 
+    func testProfileIssuanceDoesNotReplayUncertainGETResults() async throws {
+        try await APIContractScenarios.profileIssuanceDoesNotReplay()
+    }
+
     func testSuccessfulJSONBodiesUseTheExistingProtocolFailureWithoutReplay() async throws {
         try await APIContractScenarios.successfulBodyDecoding()
     }

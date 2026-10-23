@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { stripTypeScriptTypes } from 'node:module';
 import test from 'node:test';
 import { URL as ExpoURL } from 'whatwg-url-minimum';
+import { withManagedProfileAWGCapability } from '../src/vpn/profileCapabilities.ts';
+import { isPositiveSafeInteger } from '../src/vpn/profileNumbers.ts';
 
 const config = stripTypeScriptTypes(fs.readFileSync('src/api/config.ts', 'utf8'))
   .replace(/^import .*;$/gm, '').replace(/\bexport /g, '');
@@ -11,9 +13,14 @@ const source = stripTypeScriptTypes(fs.readFileSync('src/api/client.ts', 'utf8')
 const errors = stripTypeScriptTypes(fs.readFileSync('src/api/error.ts', 'utf8')).replace(/\bexport /g, '');
 const fetchPolicy = stripTypeScriptTypes(fs.readFileSync('src/api/apiFetch.ts', 'utf8')).replace(/\bexport /g, '');
 const settle = async () => { for (let i=0; i<30; i++) await Promise.resolve(); };
-function client(fetch, appInfo = async () => ({}), baseUrl, URLImplementation = URL) {
-  return new Function('URL', 'process', 'fetch', 'getAppInfo', 'getOrCreateDeviceId', 'Platform', 'androidExperimentalRoutingEnabled', 'androidProfilePlatform', errors + fetchPolicy + config + source + '; return rawRequest;')(
-    URLImplementation, { env: { EXPO_PUBLIC_VEX_API_BASE_URL: baseUrl } }, fetch, appInfo, async () => 'fixture', {OS:'android'}, () => false, () => 'android');
+const cancellationSource = stripTypeScriptTypes(fs.readFileSync('src/api/requestCancellation.ts', 'utf8'))
+  .replace(/^import .*;$/gm, '').replace(/\bexport /g, '');
+const vpnSource = stripTypeScriptTypes(fs.readFileSync('src/api/vpn.ts', 'utf8'))
+  .replace(/^import[\s\S]*?from ['"][^'"]+['"];\s*/gm, '').replace(/\bexport /g, '');
+function client(...args) { return clientSurface(...args).rawRequest; }
+function clientSurface(fetch, appInfo = async () => ({}), baseUrl, URLImplementation = URL) {
+  return new Function('URL', 'process', 'fetch', 'getAppInfo', 'getOrCreateDeviceId', 'Platform', 'androidExperimentalRoutingEnabled', 'androidProfilePlatform', 'supportsNativeRoutingPolicy', 'withManagedProfileAWGCapability', 'isPositiveSafeInteger', 'nativeVpnDeviceForClient', 'requireVpnLocationId', errors + fetchPolicy + config + source + cancellationSource + vpnSource + '; return {rawRequest,requestManagedVpnProfile,fetchStagedDevicePSKProfile,preparedTunnelFromDeviceConfig};')(
+    URLImplementation, { env: { EXPO_PUBLIC_VEX_API_BASE_URL: baseUrl } }, fetch, appInfo, async () => 'fixture', {OS:'android'}, () => false, () => 'android', () => false, withManagedProfileAWGCapability, isPositiveSafeInteger, devices => devices[0], value => value);
 }
 
 test('a stalled GET has one total deadline rather than three full timeouts', async t => {
@@ -197,3 +204,47 @@ test(`${URLImplementation === URL ? 'Node' : 'Expo'} URL: API base path and quer
 });
 
 }
+
+// Exercise the actual profile producers through the production HTTP transport.
+// An HTTP GET here may assign/reconcile a peer or mark staged material fetched.
+for (const kind of ['issued', 'staged', 'legacy']) {
+  for (const failureKind of [429, 502, 503, 504, 'network', 'body']) {
+    test(`${kind} profile does not replay an uncertain ${failureKind} response`, async t => {
+      t.mock.timers.enable({apis:['setTimeout','Date'],now:0});
+      let calls = 0;
+      const api = clientSurface(async url => {
+        const path = new URL(url).pathname;
+        if (path === '/v1/devices') return {ok:true, status:200, text:async()=>JSON.stringify([{id:'fixture-device',name:'Fixture',protocol:'amneziawg'}])};
+        if (path.endsWith('/config-token')) return {ok:true, status:201, text:async()=>JSON.stringify({token:'inert-config-token'})};
+        calls++;
+        if (failureKind === 'network') throw new TypeError('network request failed');
+        if (failureKind === 'body') return {ok:true, status:200, text:async()=>{throw new TypeError('connection reset');}};
+        return failure(failureKind, '0');
+      });
+      const request = kind === 'issued'
+        ? api.requestManagedVpnProfile('inert-token', 'fixture-device', 'de', 'smart', undefined, {})
+        : kind === 'staged' ? api.fetchStagedDevicePSKProfile('inert-token', {device:{id:'fixture-device'}})
+        : api.preparedTunnelFromDeviceConfig('inert-token', {deviceName:'Fixture',platform:'web'}, {locationId:'de'});
+      let rejected = false;
+      const outcome = request.then(() => assert.fail('expected request failure'), () => { rejected = true; });
+      for (let step = 0; step < 8; step++) {
+        await settle();
+        t.mock.timers.tick(600);
+      }
+      await settle();
+      assert.equal(rejected, true, 'fixture must settle within the original request budget');
+      await outcome;
+      assert.equal(calls, 1, 'profile issuance/fetch must leave uncertain work to explicit recovery');
+    });
+  }
+}
+
+test('ordinary device reads retain bounded automatic GET recovery', async t => {
+  t.mock.timers.enable({apis:['setTimeout','Date'],now:0});
+  let calls = 0;
+  const api = clientSurface(async () => ++calls === 1 ? failure(503,'0') : {ok:true, status:200, text:async()=>'[]'});
+  const pending = api.rawRequest('/v1/devices');
+  await settle(); t.mock.timers.tick(600); await settle();
+  assert.equal(await pending, '[]');
+  assert.equal(calls, 2);
+});

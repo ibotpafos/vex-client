@@ -190,7 +190,9 @@ struct VEXAPIClient {
         if let knownVersion, knownVersion > 0 {
             query.append(URLQueryItem(name: "known_version", value: String(knownVersion)))
         }
-        return try await json("/v1/vpn/profile?\(queryString(query))", accessToken: accessToken)
+        // GET can assign/reconcile a peer. Leave uncertain outcomes to explicit
+        // recovery instead of the transport's ordinary read retry policy.
+        return try await json("/v1/vpn/profile?\(queryString(query))", accessToken: accessToken, retryCount: 0)
     }
 
     func reportVpnConnect(accessToken: String, tunnel: PreparedTunnel) async {
@@ -313,7 +315,8 @@ struct VEXAPIClient {
         accessToken: String? = nil,
         body: [String: Any]? = nil,
         idempotencyKey: String? = nil,
-        timeout: TimeInterval = 12
+        timeout: TimeInterval = 12,
+        retryCount: Int = 2
     ) async throws -> T {
         try Task.checkCancellation()
         let baseURL = try VEXAPIConfiguration.requireBaseURL(baseURL)
@@ -343,7 +346,7 @@ struct VEXAPIClient {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await transport.data(for: request, timeout: timeout)
+            (data, response) = try await transport.data(for: request, timeout: timeout, retryCount: retryCount)
         } catch {
             let normalized: Error
             if (error as? URLError)?.code == .timedOut {

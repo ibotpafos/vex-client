@@ -316,6 +316,29 @@ export interface NativeDeviceRegistrationRequestSpec {
   [key: string]: unknown
 }
 
+export type NativeVPNConnectionEventInputSpec = {
+  device_id?: string | null
+  profile_version?: number | null
+  protocol?: string | null
+  client_time?: string | null
+  reason?: string | null
+  [key: string]: unknown
+} | null
+
+export interface NativeVPNKeyRotationInputSpec {
+  device_id?: string | null
+  public_key: string
+  key_epoch?: number | null
+  [key: string]: unknown
+}
+
+export interface NativeVPNPSKRotationACKInputSpec {
+  device_id?: string | null
+  profile_version: number
+  profile_digest: string
+  [key: string]: unknown
+}
+
 export interface NativeVPNProfileDTOSpec {
   unchanged?: boolean
   version: number
@@ -342,6 +365,13 @@ export interface NativeVPNProfileDTOSpec {
   authorization?: null | { algorithm: string } & { key_id: string } & { payload_base64: string } & { signature_base64: string }
 }
 type _NativeVPNProfileDTOContract = VexApiSpecExpect<NativeVPNProfileDTOSpec extends NativeVPNProfileDTO ? true : false>
+
+export type NativeVPNPushTokenInputSpec = {
+  device_id?: string | null
+  provider?: string | null
+  token?: string | null
+  [key: string]: unknown
+} | null
 
 export interface PortalSessionDTOSpec {
   id: string

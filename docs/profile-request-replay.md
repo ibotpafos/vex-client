@@ -61,3 +61,24 @@ do not change the acceptance verdict and do not prove a customer incident.
 The prior full-physical-baseline failure occurred after TCP prebaseline passed;
 HTTPS-control and physical DNS were still indistinguishable in that report.
 No TLS/probe timeout, route, DNS, lease, service or cleanup guard was weakened.
+
+
+Four generated lifecycle request projections now check six actual native payload
+producers: connect, disconnect, push token, staged ACK and both key-rotation
+producers. Nullable event/push HTTP forms and optional legacy device selectors
+are represented in the generated specs; existing native function arguments and
+body serialization still produce objects. Event responses remain empty202.
+Key rotation retains its existing key/header-or-epoch precondition; staged ACK
+uses its version/digest tuple and does not consume an Idempotency-Key header.
+The type-only producer changes emit identical JS. Prior generated declarations
+and compatibility assertions remain intact.
+
+The latest prior Windows run locates the failure at HTTPS control baseline with
+category cancelled and cleanup confirmed. The probe now records parent-token
+cancellation, independent8-second budget expiry and an immediate inner timeout
+as three boolean observations. Unobserved facts remain null in the safe summary;
+strings/numbers are not coerced. These observations do not prove which timer
+fired first. The original exception is rethrown;5-second connect and8-second
+operation limits, TLS/hostname validation, physical endpoint, lease and cleanup
+remain unchanged. Portable helper tests and crossbuilds pass, but this change
+does not establish the cause or successful Windows encrypted-tunnel acceptance.

@@ -8,6 +8,14 @@ namespace Vex.Windows.VpnAcceptance;
 // enter public CI logs, and classification does not change the verdict.
 internal static class AcceptanceFailure
 {
+    internal static void RecordControlProbeCancellation(IDictionary<string, object?> result,
+        OperationCanceledException error, CancellationToken parent, CancellationToken budget)
+    {
+        result["full_control_probe_parent_cancelled"] = parent.IsCancellationRequested;
+        result["full_control_probe_budget_expired"] = budget.IsCancellationRequested;
+        result["full_control_probe_inner_timeout"] = error.InnerException is TimeoutException;
+    }
+
     internal static string Classify(Exception error)
     {
         var fallback = "other";

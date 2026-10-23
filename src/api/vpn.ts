@@ -38,6 +38,10 @@ import {
   type RegisterNativeDeviceResultDTO,
   type NativeDeviceRegistrationRequest,
   type NativeDeviceIdentityChallengeRequest,
+  type NativeVPNKeyRotationInput,
+  type NativeVPNConnectionEventInput,
+  type NativeVPNPushTokenInput,
+  type NativeVPNPSKRotationACKInput,
 } from './dto';
 import { managedProfileAmneziaConfig } from '../vpn/amneziaConfig';
 import { withManagedProfileAWGCapability } from '../vpn/profileCapabilities';
@@ -386,7 +390,7 @@ export async function reportVpnConnect(accessToken: string, tunnel: PreparedTunn
       profile_version: tunnel.profileVersion,
       protocol: tunnel.device?.protocol,
       client_time: new Date().toISOString(),
-    },
+    } satisfies NativeVPNConnectionEventInput,
   });
 }
 
@@ -403,7 +407,7 @@ export async function reportVpnDisconnect(accessToken: string, tunnel: { device?
       device_id: deviceId,
       profile_version: tunnel.profileVersion,
       reason,
-    },
+    } satisfies NativeVPNConnectionEventInput,
   });
 }
 
@@ -425,7 +429,7 @@ export async function registerDevicePushToken(accessToken: string, deviceId: str
       device_id: deviceId,
       provider: push.provider,
       token: push.token,
-    },
+    } satisfies NativeVPNPushTokenInput,
   });
   return parseDevice(response.device || ({} as DeviceDTO));
 }
@@ -497,7 +501,7 @@ export async function acknowledgeStagedDevicePSKProfile(
         device_id: staged.deviceId,
         profile_version: staged.profileVersion,
         profile_digest: staged.profileDigest,
-      },
+      } satisfies NativeVPNPSKRotationACKInput,
     },
   );
   if (!response.accepted || response.rotation_id !== staged.rotationId) {
@@ -542,7 +546,7 @@ async function commitManagedVpnKey(accessToken: string, deviceId: string, keyPai
       device_id: deviceId,
       public_key: keyPair.publicKey,
       key_epoch: keyPair.keyEpoch ?? 1,
-    },
+    } satisfies NativeVPNKeyRotationInput,
   });
   requireCurrentSession(isCurrentSessionOperation);
   if (response.device.id !== deviceId || response.device.public_key !== keyPair.publicKey || response.device.psk_epoch !== keyPair.keyEpoch) throw new Error('Сервер не подтвердил новый ключ VPN.');
@@ -603,7 +607,7 @@ async function syncManagedVpnKey(accessToken: string, deviceId: string, keyPair:
       device_id: deviceId,
       public_key: keyPair.publicKey,
       key_epoch: keyPair.keyEpoch ?? 1,
-    },
+    } satisfies NativeVPNKeyRotationInput,
   });
   return parseDevice(response.device);
 }

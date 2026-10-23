@@ -181,10 +181,15 @@ function Get-FixtureAcceptanceLogSummary {
     $summary.harness_stage = 'unknown'
     $summary.harness_passed = $false
     $summary.failure_category = 'unknown'
+    foreach ($field in @('full_control_probe_parent_cancelled', 'full_control_probe_budget_expired', 'full_control_probe_inner_timeout')) { $summary[$field] = $null }
     $summary.failed_or_missing_checks = @()
     if ($null -ne $HarnessResult) {
         $stage = $HarnessResult.PSObject.Properties['stage']
         if ($null -ne $stage -and $stage.Value -is [string] -and $stage.Value -cin $harnessStages) { $summary.harness_stage = $stage.Value }
+        foreach ($field in @('full_control_probe_parent_cancelled', 'full_control_probe_budget_expired', 'full_control_probe_inner_timeout')) {
+            $value = $HarnessResult.PSObject.Properties[$field]
+            if ($null -ne $value -and $value.Value -is [bool]) { $summary[$field] = $value.Value }
+        }
         $category = $HarnessResult.PSObject.Properties['failure_category']
         if ($null -ne $category -and $category.Value -is [string] -and $category.Value -cin @('dns', 'tls', 'connection', 'protocol', 'cancelled', 'timeout', 'socket', 'http', 'other')) { $summary.failure_category = $category.Value }
         $passed = $HarnessResult.PSObject.Properties['passed']

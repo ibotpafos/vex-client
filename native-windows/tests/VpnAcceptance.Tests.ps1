@@ -237,3 +237,14 @@ foreach ($stage in @('full-control-https-baseline', 'full-physical-dns-baseline'
     $parsed = (Get-FixtureAcceptanceLogSummary -WrapperResult $wrapper -HarnessResult ([pscustomobject]$harness)) | ConvertFrom-Json
     if ($parsed.harness_stage -cne $stage -or $parsed.failure_category -cne 'connection') { throw 'Physical prebaseline diagnostics lost a fixed stage or category.' }
 }
+
+foreach ($value in @($true, $false, $null, 'QSECRET', 1)) {
+    foreach ($field in @('full_control_probe_parent_cancelled','full_control_probe_budget_expired','full_control_probe_inner_timeout')) { $harness[$field]=$value }
+    $log=Get-FixtureAcceptanceLogSummary -WrapperResult $wrapper -HarnessResult ([pscustomobject]$harness)
+    if ($log.Contains('QSECRET')) { throw 'Control probe cancellation diagnostic leaked non-boolean data.' }
+    $parsed=$log | ConvertFrom-Json
+    $expected=if($value -is [bool]){$value}else{$null}
+    foreach ($field in @('full_control_probe_parent_cancelled','full_control_probe_budget_expired','full_control_probe_inner_timeout')) {
+        if ($parsed.$field -cne $expected) { throw 'Control probe cancellation diagnostic changed false or missing evidence.' }
+    }
+}

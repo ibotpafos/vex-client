@@ -69,6 +69,36 @@ test('native device request projections check live payload fields and compatible
   assert.equal(diagnostics.length, 0, messages(diagnostics));
 });
 
+test('native lifecycle inputs retain root/default compatibility and required key/ACK fields', () => {
+  const diagnostics = diagnosticsWith({ consumer: `
+    import type { NativeVPNKeyRotationInput, NativeVPNConnectionEventInput, NativeVPNPushTokenInput, NativeVPNPSKRotationACKInput } from './dto';
+    const rotation: NativeVPNKeyRotationInput = {public_key:'fixture', key_epoch:null, future_hint:true};
+    const event: NativeVPNConnectionEventInput = {profile_version:null, client_time:null, future_hint:true};
+    const nullEvent: NativeVPNConnectionEventInput = null;
+    const emptyEvent: NativeVPNConnectionEventInput = {};
+    const push: NativeVPNPushTokenInput = {provider:'future-provider',token:null};
+    const nullPush: NativeVPNPushTokenInput = null;
+    const emptyPush: NativeVPNPushTokenInput = {};
+    const ack: NativeVPNPSKRotationACKInput = {profile_version:2,profile_digest:'fixture',device_id:null};
+    // @ts-expect-error rotation requires a nonnull public key
+    const missingKey: NativeVPNKeyRotationInput = {};
+    // @ts-expect-error rotation key is a string
+    const badKey: NativeVPNKeyRotationInput = {public_key:null};
+    // @ts-expect-error epochs decode as integers, not strings
+    const badEpoch: NativeVPNKeyRotationInput = {public_key:'fixture',key_epoch:'1'};
+    // @ts-expect-error event version cannot be a string
+    const badEvent: NativeVPNConnectionEventInput = {profile_version:'2'};
+    // @ts-expect-error push token cannot be an array
+    const badPush: NativeVPNPushTokenInput = {token:[]};
+    // @ts-expect-error ACK requires the exact profile version
+    const missingVersion: NativeVPNPSKRotationACKInput = {profile_digest:'fixture'};
+    // @ts-expect-error ACK digest cannot be null
+    const missingDigest: NativeVPNPSKRotationACKInput = {profile_version:2,profile_digest:null};
+    void [rotation,event,nullEvent,emptyEvent,push,nullPush,emptyPush,ack,missingKey,badKey,badEpoch,badEvent,badPush,missingVersion,missingDigest];
+  ` });
+  assert.equal(diagnostics.length, 0, messages(diagnostics));
+});
+
 test('removing an optional Go field still invalidates a native projection', () => {
   const fs = require('node:fs');
   const source = ts.createSourceFile(contract, fs.readFileSync(contract, 'utf8'), ts.ScriptTarget.Latest, true);

@@ -8,7 +8,7 @@ on:
         required: false
         default: false
       native_routing_source:
-        description: "Sign the fixed reviewed cb4c58b recovery-and-boot 1.0.78 candidate without publication"
+        description: "Sign the fixed reviewed a76284d recovery-and-boot 1.0.78 candidate without publication"
         type: boolean
         required: false
         default: false
@@ -28,8 +28,8 @@ jobs:
       QUALIFIED_SOURCE_COMMIT: a13526075803986eebc396ec24fdc865d00ab5c0
       QUALIFIED_SOURCE_TREE: a47fd44b6166de98c64263554e6c981c896a8559
       NATIVE_ROUTING_SOURCE_REQUESTED: ${{ inputs.native_routing_source && 'true' || 'false' }}
-      NATIVE_ROUTING_SOURCE_COMMIT: cb4c58b2d041da2929d51363c092a6eab094377e
-      NATIVE_ROUTING_SOURCE_TREE: 4ab12b46aa10d72f7c3d6c717a9a41bcf3088d74
+      NATIVE_ROUTING_SOURCE_COMMIT: a76284db8fb4f51bd751599fa9bdc1e61e1fdb74
+      NATIVE_ROUTING_SOURCE_TREE: db46029e328f795134105a5a3b8cd22301359827
       VEX_RELEASE_USE_LOCAL_CACHE: "1"
       VEX_LOCAL_RELEASE_CACHE_ROOT: ${{ github.workspace }}/.ci-cache
       VEX_LOCAL_CACHE_MOVE_EXISTING: "0"

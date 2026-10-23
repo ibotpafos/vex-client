@@ -14,8 +14,8 @@ export function check(workflow) {
   assert.equal(job.env.ANDROID_RELEASE_ABIS, 'arm64-v8a,armeabi-v7a');
   assert.equal(job.permissions, undefined);
   assert.equal(job.env.ANDROID_RELEASE_KEYSTORE_BASE64, undefined);
-  assert.equal(job.env.NATIVE_ROUTING_SOURCE_COMMIT, 'cb4c58b2d041da2929d51363c092a6eab094377e');
-  assert.equal(job.env.NATIVE_ROUTING_SOURCE_TREE, '4ab12b46aa10d72f7c3d6c717a9a41bcf3088d74');
+  assert.equal(job.env.NATIVE_ROUTING_SOURCE_COMMIT, 'a76284db8fb4f51bd751599fa9bdc1e61e1fdb74');
+  assert.equal(job.env.NATIVE_ROUTING_SOURCE_TREE, 'db46029e328f795134105a5a3b8cd22301359827');
   const sourceBinding = job.steps.find(step => step.id === 'source').run;
   assert.ok(sourceBinding.includes('"$QUALIFIED_SOURCE_REQUESTED" == "true" && "$NATIVE_ROUTING_SOURCE_REQUESTED" == "true"'));
   assert.ok(sourceBinding.includes('git checkout --detach "$NATIVE_ROUTING_SOURCE_COMMIT"'));

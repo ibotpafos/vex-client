@@ -36,6 +36,8 @@ import {
   type AcknowledgeStagedDevicePSKProfileResultDTO,
   type RegisterDevicePushTokenResultDTO,
   type RegisterNativeDeviceResultDTO,
+  type NativeDeviceRegistrationRequest,
+  type NativeDeviceIdentityChallengeRequest,
 } from './dto';
 import { managedProfileAmneziaConfig } from '../vpn/amneziaConfig';
 import { withManagedProfileAWGCapability } from '../vpn/profileCapabilities';
@@ -668,16 +670,20 @@ async function registerNativeDevice(accessToken: string, client: VpnClientDescri
       public_key: keyPair?.publicKey,
       key_epoch: keyPair?.keyEpoch ?? (keyPair ? 1 : undefined),
       ...identity,
-    },
+    } satisfies NativeDeviceRegistrationRequest,
   });
   return parseDevice(response.device);
 }
+
+type NativeDeviceIdentityProof = {
+  [Key in 'identity_public_key' | 'identity_key_type' | 'identity_challenge_id' | 'identity_signature']-?: NonNullable<NativeDeviceRegistrationRequest[Key]>;
+};
 
 async function nativeDeviceIdentityRegistration(
   accessToken: string,
   installationId: string,
   wireGuardPublicKey: string,
-): Promise<Record<string, string>> {
+): Promise<NativeDeviceIdentityProof | Record<string, never>> {
   const identity = await getOrCreateDeviceIdentity().catch((error) => {
     logApiDebug('device identity unavailable:', error instanceof Error ? error.message : error);
     return null;
@@ -693,7 +699,7 @@ async function nativeDeviceIdentityRegistration(
       body: {
         installation_id: installationId,
         purpose: 'register',
-      },
+      } satisfies NativeDeviceIdentityChallengeRequest,
     });
     const payload = deviceIdentitySignaturePayload(
       {

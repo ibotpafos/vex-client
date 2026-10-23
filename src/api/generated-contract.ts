@@ -289,6 +289,33 @@ export interface LocationDTOSpec {
 }
 type _LocationDTOContract = VexApiSpecExpect<LocationDTOSpec extends LocationDTO ? true : false>
 
+export interface NativeDeviceIdentityChallengeRequestSpec {
+  device_id?: string | null
+  installation_id: string
+  purpose?: string | null
+  [key: string]: unknown
+}
+
+export interface NativeDeviceRegistrationRequestSpec {
+  device_id?: string | null
+  installation_id?: string | null
+  device_name?: string | null
+  name?: string | null
+  platform?: string | null
+  app_version?: string | null
+  push_provider?: string | null
+  push_token?: string | null
+  protocol?: string | null
+  location?: string | null
+  public_key: string
+  key_epoch?: number | null
+  identity_public_key?: string | null
+  identity_key_type?: string | null
+  identity_challenge_id?: string | null
+  identity_signature?: string | null
+  [key: string]: unknown
+}
+
 export interface NativeVPNProfileDTOSpec {
   unchanged?: boolean
   version: number

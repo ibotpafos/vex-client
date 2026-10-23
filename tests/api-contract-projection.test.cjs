@@ -46,6 +46,29 @@ test('native DTO projections retain legacy partial responses and reject invalid 
   assert.equal(diagnostics.length, 0, messages(diagnostics));
 });
 
+test('native device request projections check live payload fields and compatible defaults', () => {
+  const diagnostics = diagnosticsWith({ consumer: `
+    import type { NativeDeviceRegistrationRequest, NativeDeviceIdentityChallengeRequest } from './dto';
+    const legacy: NativeDeviceRegistrationRequest = { public_key: 'fixture', name: null, key_epoch: null, future_hint: true };
+    const signed: NativeDeviceRegistrationRequest = { public_key: 'fixture', installation_id: 'fixture', identity_public_key: 'fixture', identity_key_type: 'ecdsa_p256_jwk', identity_challenge_id: 'fixture', identity_signature: 'fixture', key_epoch: 2 };
+    const defaultPurpose: NativeDeviceIdentityChallengeRequest = { installation_id: 'fixture' };
+    const normalizedPurpose: NativeDeviceIdentityChallengeRequest = { installation_id: 'fixture', purpose: 'future-purpose' };
+    const nullPurpose: NativeDeviceIdentityChallengeRequest = { installation_id: 'fixture', purpose: null };
+    // @ts-expect-error the native handler requires a public key
+    const missingKey: NativeDeviceRegistrationRequest = {};
+    // @ts-expect-error a required key cannot be null
+    const nullKey: NativeDeviceRegistrationRequest = { public_key: null };
+    // @ts-expect-error Go decodes key_epoch as an integer, not a string
+    const wrongEpoch: NativeDeviceRegistrationRequest = { public_key: 'fixture', key_epoch: '1' };
+    // @ts-expect-error challenge requires an installation id
+    const missingInstallation: NativeDeviceIdentityChallengeRequest = {};
+    // @ts-expect-error a required installation id cannot be null
+    const nullInstallation: NativeDeviceIdentityChallengeRequest = { installation_id: null };
+    void [legacy, signed, defaultPurpose, normalizedPurpose, nullPurpose, missingKey, nullKey, wrongEpoch, missingInstallation, nullInstallation];
+  ` });
+  assert.equal(diagnostics.length, 0, messages(diagnostics));
+});
+
 test('removing an optional Go field still invalidates a native projection', () => {
   const fs = require('node:fs');
   const source = ts.createSourceFile(contract, fs.readFileSync(contract, 'utf8'), ts.ScriptTarget.Latest, true);

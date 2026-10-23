@@ -41,10 +41,16 @@ HTTP response, certificate, tunnel, cleanup or customer recovery.
 The portable suite links the actual connection helper and exercises owned
 loopback sockets: failed/closed socket cleanup, caller cancellation, connected
 stream ownership and bytes, a TLS ClientHello followed by a stalled handshake,
-and rejection of a matching-host but untrusted certificate under default TLS
-validation. The TLS stall produces a connect timeout after TCP completion while
+and rejection of a matching-host but untrusted certificate. A test-only TLS
+observer verifies the exact peer certificate and OS chain/name errors, allowing
+only zero policy errors. Production TLS validation has no observer override. The TLS stall produces a connect timeout after TCP completion while
 the outer caller is still live. No system trust, VPN, routes, DNS or firewall
-state is changed by these scenarios.
+state is changed by these scenarios. On Windows, Schannel's fixture server uses
+an ordinary temporary user-key PFX import, disposed after both peers finish;
+its in-memory PFX bytes are cleared. No PersistKeySet or trusted-root install is
+used. The cryptographic provider may temporarily materialize an OS-managed key
+file; this is separate from development caches/artifacts on disk D. This follows
+the documented [Schannel ephemeral-key limitation](https://learn.microsoft.com/en-us/dotnet/core/extensions/sslstream-troubleshooting).
 
 Local qualification: 271 portable Windows test groups pass, strict PowerShell
 summary tests pass, the existing full portable client check passes, and the

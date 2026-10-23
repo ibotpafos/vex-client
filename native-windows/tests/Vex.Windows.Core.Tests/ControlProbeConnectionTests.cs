@@ -127,29 +127,64 @@ internal static class ControlProbeConnectionTests
         var names = new SubjectAlternativeNameBuilder();
         names.AddDnsName("control.example.test");
         request.CertificateExtensions.Add(names.Build());
-        using var certificate = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddMinutes(5));
+        using var generated = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddMinutes(5));
+        // Schannel needs a provider-backed private key. A temporary user-key
+        // import is disposed after both peers finish; never persist the key or
+        // install this untrusted certificate in a trust store.
+        using var imported = OperatingSystem.IsWindows() ? ImportTemporaryServerCertificate(generated) : null;
+        var certificate = imported ?? generated;
         var connection = new ControlProbeConnection();
-        using var handler = Handler(connection, listener.LocalEndpoint);
-        // Give the certificate validation case its own ample fixture bound;
-        // production connect/operation limits remain in FullTunnelAcceptance.
-        handler.ConnectTimeout = TimeSpan.FromSeconds(5);
-        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+        using var socket = Socket();
         var accepting = listener.AcceptSocketAsync(deadline.Token);
-        var pending = client.GetAsync("https://control.example.test/", HttpCompletionOption.ResponseHeadersRead, deadline.Token);
+        await using var stream = await connection.ConnectAsync(socket, listener.LocalEndpoint, deadline.Token);
         using var peer = await accepting;
         using var tls = new SslStream(new NetworkStream(peer, ownsSocket: false));
-        var handshake = tls.AuthenticateAsServerAsync(new SslServerAuthenticationOptions
+        byte[]? receivedCertificate = null;
+        SslPolicyErrors? validationErrors = null;
+        var chainStatus = X509ChainStatusFlags.NoError;
+        using var clientTls = new SslStream(stream, leaveInnerStreamOpen: false, (_, received, chain, errors) =>
         {
-            ServerCertificate = certificate,
-        }, deadline.Token);
+            receivedCertificate = received?.GetRawCertData();
+            validationErrors = errors;
+            if (chain is not null)
+                foreach (var status in chain.ChainStatus) chainStatus |= status.Status;
+            // Observe before failed-auth getters become unavailable. Keep the
+            // default acceptance rule: no chain or hostname errors are allowed.
+            return errors == SslPolicyErrors.None;
+        });
+        var handshake = ServeAsync();
+        async Task ServeAsync()
+        {
+            try
+            {
+                await tls.AuthenticateAsServerAsync(new SslServerAuthenticationOptions
+                {
+                    ServerCertificate = certificate,
+                }, deadline.Token);
+            }
+            catch
+            {
+                // A server setup failure must close the transport, rather than
+                // leave the client waiting until its connect timer expires.
+                peer.Dispose();
+                throw;
+            }
+        }
         try
         {
-            using var response = await pending;
+            await clientTls.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
+            {
+                TargetHost = "control.example.test",
+            }, deadline.Token);
             throw new InvalidOperationException("An untrusted TLS certificate qualified a control-plane probe.");
         }
-        catch (HttpRequestException error) when (error.HttpRequestError == HttpRequestError.SecureConnectionError)
+        catch (AuthenticationException)
         {
-            Require(connection.TcpConnected == true, "TLS rejection lost its completed TCP observation.");
+            Require(connection.TcpConnected == true && receivedCertificate is not null &&
+                receivedCertificate.AsSpan().SequenceEqual(certificate.RawData) &&
+                validationErrors == SslPolicyErrors.RemoteCertificateChainErrors &&
+                chainStatus.HasFlag(X509ChainStatusFlags.UntrustedRoot) && !clientTls.IsAuthenticated,
+                "TLS failed before receiving and rejecting the actual fixture certificate's untrusted chain.");
         }
         finally
         {
@@ -157,6 +192,13 @@ internal static class ControlProbeConnectionTests
             try { await handshake; }
             catch (Exception error) when (error is AuthenticationException or IOException or OperationCanceledException) { }
         }
+    }
+
+    private static X509Certificate2 ImportTemporaryServerCertificate(X509Certificate2 certificate)
+    {
+        var pfx = certificate.Export(X509ContentType.Pkcs12);
+        try { return X509CertificateLoader.LoadPkcs12(pfx, null, X509KeyStorageFlags.UserKeySet); }
+        finally { CryptographicOperations.ZeroMemory(pfx); }
     }
 
     private static void Require(bool condition, string message)

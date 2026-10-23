@@ -15,7 +15,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 
-class VexLeakBlockerService : VpnService() {
+open class VexLeakBlockerService : VpnService() {
   private var tunnel: ParcelFileDescriptor? = null
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

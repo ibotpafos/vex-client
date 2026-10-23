@@ -1,10 +1,10 @@
 {
   "android": {
-    "version": "1.0.76",
-    "build": 84,
+    "version": "1.0.77",
+    "build": 85,
     "min_supported_build": 1002930,
     "is_required": false,
-    "release_notes": "Кандидат Android 1.0.76: исправлено согласование адреса и узла VPN после обновления профиля. Устаревшие данные устройства больше не мешают выбору маршрутов новой локации.",
+    "release_notes": "Кандидат Android 1.0.77: системная защита при загрузке до открытия приложения и проверка активного ключа VPN при смене профиля.",
     "core_version": "0.1.0",
     "config_schema_version": 1,
     "min_config_schema_version": 1,

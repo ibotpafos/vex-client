@@ -54,11 +54,33 @@ class WireGuardController(context: Context) {
   private var lastRoutedApplications: List<String> = emptyList()
   private var lastConfigText: String? = null
   private var lastRoutingParameters: String? = null
+  private var activePeerIdentity: Map<String, String> = emptyMap()
   private val routingPolicyStore = NativeRoutingPolicyStore(appContext)
   @Volatile private var routingNetworkGeneration = 1L
   private var nextRoutingCacheCheck = 0L
 
   fun hasProtectedRoutingCapture(): Boolean = antiLeakArmed && backend.hasRoutingCapture()
+
+  private fun verifyActivePeer(config: Config): List<String> {
+    val expected = config.peers.map { it.publicKey.toBase64() }
+    val active = backend.getStatistics(tunnel).peers().map { it.toBase64() }
+    check(vpnPeerKeysMatch(expected, active)) { "Active VPN peer differs from the admitted profile." }
+    return active
+  }
+
+  private fun admitActivePeer(config: Config) {
+    val active = verifyActivePeer(config)
+    activePeerIdentity = mapOf(
+      "generation" to UUID.randomUUID().toString(),
+      "peerSha256" to vpnIdentityFingerprint(active.sorted().joinToString("\n")),
+      "endpointSha256" to vpnIdentityFingerprint(config.peers.joinToString("\n") { it.endpoint.map { endpoint -> endpoint.toString() }.orElse("") }),
+    )
+    Log.i(TAG, "vpn_peer_admitted generation=${activePeerIdentity["generation"]} peerSha256=${activePeerIdentity["peerSha256"]} endpointSha256=${activePeerIdentity["endpointSha256"]}")
+  }
+
+  suspend fun peerIdentity(): Map<String, String> = tunnelMutex.withLock {
+    if (backend.getState(tunnel) == Tunnel.State.UP) activePeerIdentity else emptyMap()
+  }
 
   private fun configureRouting(parameters: String?, antiLeak: Boolean) {
     val protector = if (parameters == null) null else org.amnezia.awg.GoBackend.SocketProtector { fd, generation, _ ->
@@ -180,6 +202,7 @@ class WireGuardController(context: Context) {
                 antiLeakEnabled = antiLeakEnabled,
                 leakBlockerActive = VexLeakBlockerService.isActive(),
               )) {
+              verifyActivePeer(admission.config)
               return@orchestrate VpnConnectionState.Connected(
                 statsOrEmpty(),
                 if (antiLeakEnabled) LeakProtectionState.Armed else LeakProtectionState.Off,
@@ -192,6 +215,7 @@ class WireGuardController(context: Context) {
             if (state != Tunnel.State.UP) {
               throw IllegalStateException("VPN backend did not enter the UP state.")
             }
+            admitActivePeer(admission.config)
             selectedUnderlyingNetworkSnapshot()?.let { network ->
               try {
                 backend.bindTunnelSocketsToNetwork(network)
@@ -240,6 +264,7 @@ class WireGuardController(context: Context) {
         setTunnelDown()
         if (releaseAntiLeak) backend.releaseRetainedRoutingCapture()
         lastConfigText = null
+        activePeerIdentity = emptyMap()
         lastRoutingParameters = null
         if (!releaseAntiLeak) {
           antiLeakArmed = backend.hasRoutingCapture() || VexLeakBlockerService.startAndAwait(appContext, lastRoutedApplications)
@@ -496,6 +521,7 @@ class WireGuardController(context: Context) {
         for (candidate in recoveryCandidates) {
           configureRouting(lastRoutingParameters, preserveAntiLeak)
           if (backend.setState(tunnel, Tunnel.State.UP, candidate.config) == Tunnel.State.UP && awaitHandshake()) {
+            admitActivePeer(candidate.config)
             lastConfigText = candidate.text
             return@runVpnNetworkRecovery
           }
@@ -545,6 +571,7 @@ class WireGuardController(context: Context) {
         throw IllegalStateException("VPN handshake did not recover after network change.")
       }
       lastConfigText = recoveredConfigText
+      admitActivePeer(recoveredConfig)
       VexLeakBlockerService.stopAndAwait(appContext)
       antiLeakArmed = preserveAntiLeak
       Log.i(TAG, "VPN recovered after underlying network change")

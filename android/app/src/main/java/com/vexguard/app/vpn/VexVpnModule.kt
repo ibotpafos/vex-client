@@ -355,6 +355,9 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
         event.putString("source", "android-native")
         event.putString("event", "vpn_status_snapshot")
         event.putMap("status", controller.status().toWritableMap())
+        val identity = Arguments.createMap()
+        controller.peerIdentity().forEach { (key, value) -> identity.putString(key, value) }
+        event.putMap("activePeerIdentity", identity)
         val events = Arguments.createArray()
         events.pushMap(event)
         promise.resolve(events)

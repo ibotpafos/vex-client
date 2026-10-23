@@ -8,7 +8,7 @@ on:
         required: false
         default: false
       native_routing_source:
-        description: "Sign the fixed reviewed b9716eb route-attribution 1.0.76 candidate without publication"
+        description: "Sign the fixed reviewed 0a86158 boot-protection 1.0.77 candidate without publication"
         type: boolean
         required: false
         default: false
@@ -28,8 +28,8 @@ jobs:
       QUALIFIED_SOURCE_COMMIT: a13526075803986eebc396ec24fdc865d00ab5c0
       QUALIFIED_SOURCE_TREE: a47fd44b6166de98c64263554e6c981c896a8559
       NATIVE_ROUTING_SOURCE_REQUESTED: ${{ inputs.native_routing_source && 'true' || 'false' }}
-      NATIVE_ROUTING_SOURCE_COMMIT: b9716eb7e5e57e18082ebbba3664dc30996787e0
-      NATIVE_ROUTING_SOURCE_TREE: e77a6e16f7c4685256414e4b6adefbece4f015f7
+      NATIVE_ROUTING_SOURCE_COMMIT: 0a8615826324e11969294e7f259768d50fe1b58f
+      NATIVE_ROUTING_SOURCE_TREE: b5d4c250ece50b4cf4c3e10669af30ca325645dd
       VEX_RELEASE_USE_LOCAL_CACHE: "1"
       VEX_LOCAL_RELEASE_CACHE_ROOT: ${{ github.workspace }}/.ci-cache
       VEX_LOCAL_CACHE_MOVE_EXISTING: "0"

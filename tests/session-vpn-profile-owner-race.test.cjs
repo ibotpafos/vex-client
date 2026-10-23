@@ -108,6 +108,17 @@ for (const stage of ['hot', 'entitlement', 'permission', 'resolve', 'rotate']) {
   });
 }
 
+for (const stage of ['hot', 'entitlement', 'permission', 'resolve']) {
+  test(`a newer user intent during ${stage} cannot issue/cache the old recovery profile`, async () => {
+    const h = hookHarness(stage, { knownEntitlement: stage === 'entitlement' ? null : paid });
+    let current = true;
+    const pending = h.render().resolveConnectableVpnProfile('de', { forceRefresh: stage !== 'hot', isCurrentOperation: () => current });
+    const rejected = assert.rejects(pending, error => error.code === 'SESSION_OPERATION_SUPERSEDED');
+    await h.reached.promise; current = false; const before = h.calls.slice(); h.gate.resolve(); await rejected;
+    assert.deepEqual(h.calls, before);
+  });
+}
+
 for (const stage of ['invalidate', 'clear-hot']) {
   test(`late device revocation during ${stage} cannot disconnect B`, async () => {
     const h = hookHarness(stage), state = h.render(); state.setActiveProfile(makeProfile());

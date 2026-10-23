@@ -1077,6 +1077,13 @@ export function useVpnConnection() {
     });
   }, []);
 
+  const beginNativeWatchdogRecovery = useCallback(() => {
+    const generation = ++vpnConnectGenerationRef.current;
+    return () => isCurrentSessionOperation() && vpnConnectGenerationRef.current === generation;
+  }, [isCurrentSessionOperation]);
+
+  const protectFailedNativeWatchdogRecovery = useCallback(() => disconnectVpn({ releaseAntiLeak: false }), []);
+
   const handleNativeWatchdogRecoveryStarted = useCallback(() => {
     setVpnError(null);
     setVpnStatus((current) => nextVpnStatusWithState(current, 'degraded'));
@@ -1105,6 +1112,9 @@ export function useVpnConnection() {
     fetchDeviceUsage: vpnDeviceUsage,
     isRetryableConnectError: isVpnTransportFallbackError,
     isVpnBusy,
+    isCurrentSessionOperation,
+    beginRecoveryOperation: beginNativeWatchdogRecovery,
+    protectFailedRecovery: protectFailedNativeWatchdogRecovery,
     onRecoveryFailed: setVpnError,
     onRecoveryStarted: handleNativeWatchdogRecoveryStarted,
     onRecoverySucceeded: handleNativeWatchdogRecovery,

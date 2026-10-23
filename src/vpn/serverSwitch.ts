@@ -3,6 +3,7 @@ import type { VpnProfile } from './profile';
 import { SessionOperationSupersededError } from './sessionOperation';
 
 export type ResolveConnectableProfileOptions = {
+  isCurrentOperation?: () => boolean;
   allowPersistentHotProfile?: boolean;
   cachedProfile?: VpnProfile | null;
   forceRefresh?: boolean;

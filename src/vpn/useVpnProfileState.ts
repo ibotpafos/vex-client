@@ -281,7 +281,11 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
     locationId: string,
     options: ResolveConnectableProfileOptions = {},
   ) => {
-    requireCurrentSession();
+    const requireCurrentOperation = () => {
+      requireCurrentSession();
+      if (options.isCurrentOperation?.() === false) throw new SessionOperationSupersededError();
+    };
+    requireCurrentOperation();
     if (!accessToken) {
       throw new Error('Сначала войдите в аккаунт.');
     }
@@ -305,9 +309,9 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
     const requestPermissionWithTiming = async () => {
       const startedAtMs = Date.now();
       try {
-        requireCurrentSession();
+        requireCurrentOperation();
         const granted = await requestVpnPermission();
-        requireCurrentSession();
+        requireCurrentOperation();
         return granted;
       } finally {
         permissionWaitMs += Math.max(0, Date.now() - startedAtMs);
@@ -342,7 +346,7 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
       const hotResult = options.allowPersistentHotProfile === false
         ? { record: null }
         : await loadHotVpnProfileResult(userId, locationId, routingMode);
-      requireCurrentSession();
+      requireCurrentOperation();
       hotProfileLookupMs += Math.max(0, Date.now() - hotLookupStartedAtMs);
       if (hotResult.rejectedReason && hotResult.rejectedReason !== 'missing') {
         onProfileRefreshFailed?.({
@@ -386,7 +390,7 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
           queryFn: () => entitlement(accessToken),
           staleTime: 5 * 60_000,
         });
-        requireCurrentSession();
+        requireCurrentOperation();
       } finally {
         entitlementWaitMs += Math.max(0, Date.now() - entitlementStartedAtMs);
       }
@@ -408,7 +412,7 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
       queryClient.removeQueries({ queryKey: ['vpn-profile', accessToken, locationId, routingMode], exact: true });
       if (userId) {
         await clearHotVpnProfiles(userId).catch(() => undefined);
-        requireCurrentSession();
+        requireCurrentOperation();
       }
     }
 
@@ -417,12 +421,12 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
       : await resolveVpnProfile(accessToken, currentEntitlement, locationId, {
         allowPersistentHotProfile: forceRouteBudgetRefresh ? false : options.allowPersistentHotProfile,
         forceRefresh: options.forceRefresh === true || forceRouteBudgetRefresh,
-        isCurrentSessionOperation,
+        isCurrentSessionOperation: () => isCurrentSessionOperation() && options.isCurrentOperation?.() !== false,
         revalidateProfile: options.validateCachedProfile && !forceRouteBudgetRefresh ? cachedProfile : undefined,
         routingMode,
         userId,
       });
-    requireCurrentSession();
+    requireCurrentOperation();
     if (!profile) {
       throw new Error('VPN-профиль недоступен.');
     }
@@ -430,7 +434,7 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
       resetVpnProfileCache();
       if (userId) {
         await clearHotVpnProfiles(userId).catch(() => undefined);
-        requireCurrentSession();
+        requireCurrentOperation();
       }
       throw new Error('Сервер вернул слишком большой VPN-профиль. Повторите подключение после обновления профиля.');
     }
@@ -441,7 +445,7 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
         const rotationStartedAtMs = Date.now();
         try {
           profile = await rotateVpnProfileKey(accessToken, profile, isCurrentSessionOperation, userId);
-          requireCurrentSession();
+          requireCurrentOperation();
         } finally {
           keyRotationMs += Math.max(0, Date.now() - rotationStartedAtMs);
         }

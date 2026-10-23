@@ -8,21 +8,41 @@ import { readFileSync } from 'node:fs';
 import { stripTypeScriptTypes } from 'node:module';
 import { assessVpnAutopilotIssue } from '../src/vpn/vpnAutopilotAssessment.ts';
 
-const handshake = { state: 'connected', rxBytes: 4096, txBytes: 8192, latestHandshakeEpochMillis: 1000, verified: true };
+const handshake = { state: 'connected', rxBytes: 4096, txBytes: 8192, latestHandshakeEpochMillis: 1000, verified: true, dataPlaneGeneration: 'new-peer' };
 
 test('Android handshake, counters and a legacy native verified flag cannot replace DNS/HTTPS', () => {
   assert.equal(resolveNativeTunnelVerified(handshake, 'android'), false);
   assert.equal(resolveNativeTunnelVerified({ ...handshake, dataPlaneVerified: false }, 'android'), false);
   assert.equal(resolveNativeTunnelVerified({ ...handshake, dataPlaneVerified: true }, 'android'), true);
+  assert.equal(resolveNativeTunnelVerified({ ...handshake, dataPlaneVerified: true, dataPlaneGeneration: undefined }, 'android'), false);
   assert.equal(resolveNativeTunnelVerified({ ...handshake, dataPlaneVerified: true, verified: false }, 'android'), false);
   assert.equal(resolveNativeTunnelVerified({ ...handshake, dataPlaneVerified: true, latestHandshakeEpochMillis: 0 }, 'android'), false);
+});
+
+test('fresh traffic proof for a reused tunnel does not wait for its next rekey', async () => {
+  const result = await waitForVerifiedVpnConnection({ ...handshake, dataPlaneVerified: false }, async () => ({
+    ...handshake, dataPlaneVerified: true,
+  }), { requireDataPlane: true, expectedDataPlaneGeneration: 'new-peer',
+    minimumHandshakeEpochMillis: 5000, previousHandshakeEpochMillis: 1000, attempts: 2, pollMs: 0 });
+  assert.equal(result.latestHandshakeEpochMillis, 1000);
+  assert.equal(result.dataPlaneVerified, true);
+});
+
+test('cached proof of the previous peer cannot confirm the selected peer', async () => {
+  const previous = { ...handshake, dataPlaneVerified: true, dataPlaneGeneration: 'previous-peer' };
+  await assert.rejects(waitForVerifiedVpnConnection(previous, async () => previous, {
+    requireDataPlane: true, expectedDataPlaneGeneration: 'new-peer', attempts: 2, pollMs: 0,
+  }), /verification/);
+  await assert.rejects(waitForVerifiedVpnConnection(previous, async () => previous, {
+    requireDataPlane: true,
+  }), /Update the Android app/);
 });
 
 test('Android connection waits for both real traffic checks after the fresh handshake', async () => {
   let reads = 0;
   const result = await waitForVerifiedVpnConnection(handshake, async () => ({
     ...handshake, dataPlaneVerified: ++reads >= 3,
-  }), { requireDataPlane: true, minimumHandshakeEpochMillis: 1000, pollMs: 0 });
+  }), { requireDataPlane: true, expectedDataPlaneGeneration: 'new-peer', minimumHandshakeEpochMillis: 1000, pollMs: 0 });
   assert.equal(reads, 3);
   assert.equal(result.dataPlaneVerified, true);
 });
@@ -30,7 +50,7 @@ test('Android connection waits for both real traffic checks after the fresh hand
 test('an old binary or failed DNS/HTTPS cannot produce connected acceptance', async () => {
   for (const dataPlaneVerified of [undefined, false]) {
     await assert.rejects(waitForVerifiedVpnConnection({ ...handshake, dataPlaneVerified }, async () => handshake, {
-      requireDataPlane: true, attempts: 2, pollMs: 0,
+      requireDataPlane: true, expectedDataPlaneGeneration: 'new-peer', attempts: 2, pollMs: 0,
     }), /verification|handshake/i);
   }
 });
@@ -41,7 +61,7 @@ test('a canceled selection cannot accept late DNS/HTTPS success', async () => {
     current = false;
     return { ...handshake, dataPlaneVerified: true };
   }, {
-    requireDataPlane: true,
+    requireDataPlane: true, expectedDataPlaneGeneration: 'new-peer',
     assertCurrent: () => { if (!current) throw new Error('superseded'); },
   }), /superseded/);
 });

@@ -568,6 +568,7 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
         map.putDouble("latestHandshakeEpochMillis", traffic.latestHandshakeEpochMillis.toDouble())
         map.putString("leakProtection", this.leakProtection.wireValue)
         map.putBoolean("dataPlaneVerified", dataPlaneVerified)
+        map.putString("dataPlaneGeneration", dataPlaneGeneration)
         map.putBoolean("verified", hasTunnelActivity && dataPlaneVerified)
         if (!hasTunnelActivity) {
           map.putString("verificationReason", "handshake_pending")

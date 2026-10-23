@@ -649,7 +649,7 @@ class WireGuardController(context: Context) {
             val identityMatches = runCatching { verifyActivePeer(VpnConfigActivation.parse(lastConfigText ?: "")); true }.getOrDefault(false)
             val accepted = dataPlaneVerification.complete(attempt, if (identityMatches) result else 3, SystemClock.elapsedRealtime())
             if (accepted) {
-              Log.i(TAG, "vpn_data_plane_result generation=$peer networkGeneration=$network result=$result identityMatches=$identityMatches durationMs=${SystemClock.elapsedRealtime() - started}")
+              Log.i(TAG, "vpn_data_plane_result generation=$peer networkGeneration=$network result=$result identityMatches=$identityMatches durationMs=${SystemClock.elapsedRealtime() - started} handshakeEpochMillis=${statsOrEmpty().latestHandshakeEpochMillis}")
             }
           }
         }
@@ -657,7 +657,7 @@ class WireGuardController(context: Context) {
     }
     return VpnConnectionState.Connected(traffic,
       if (antiLeakEnabled) LeakProtectionState.Armed else LeakProtectionState.Off,
-      proof.verified, proof.reason)
+      proof.verified, proof.reason, peer)
   }
 
   private fun endpointHost(endpoint: String): String? {
@@ -758,7 +758,8 @@ sealed interface VpnConnectionState {
   data object Blocking : VpnConnectionState
   data class Transition(val state: String, val leakProtection: LeakProtectionState) : VpnConnectionState
   data class Connected(val traffic: VpnTraffic, val leakProtection: LeakProtectionState,
-    val dataPlaneVerified: Boolean = false, val verificationReason: String? = "data_plane_pending") : VpnConnectionState
+    val dataPlaneVerified: Boolean = false, val verificationReason: String? = "data_plane_pending",
+    val dataPlaneGeneration: String = "") : VpnConnectionState
 }
 
 enum class LeakProtectionState(val wireValue: String) {

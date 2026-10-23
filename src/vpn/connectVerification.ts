@@ -10,6 +10,7 @@ type HandshakeVerificationOptions = {
   wait?: (delayMs: number) => Promise<void>;
   assertCurrent?: () => void;
   requireDataPlane?: boolean;
+  expectedDataPlaneGeneration?: string;
 };
 
 const defaultHandshakePollMs = 250;
@@ -21,6 +22,9 @@ export async function waitForVerifiedVpnConnection(
 ): Promise<VpnStatus> {
   const timeoutMessage = options.requireDataPlane ? 'VPN traffic verification timed out.' : 'VPN handshake timed out.';
   options.assertCurrent?.();
+  if (options.requireDataPlane && !options.expectedDataPlaneGeneration) {
+    throw new Error('VPN native traffic verification unavailable. Update the Android app.');
+  }
   if (initialStatus.state !== 'connected' && initialStatus.state !== 'connecting' && initialStatus.state !== 'verifying') {
     throw new Error('VPN backend did not enter the connected state.');
   }
@@ -84,7 +88,13 @@ async function withDeadline<T>(operation: () => Promise<T>, timeoutMs: number, t
 }
 
 function isHandshakeVerifiedForAttempt(status: VpnStatus, options: HandshakeVerificationOptions): boolean {
-  if (options.requireDataPlane && status.dataPlaneVerified !== true) return false;
+  if (options.requireDataPlane) {
+    // A reused live tunnel need not rekey before accepting new real traffic.
+    // The new native connect always retires its previous proof generation.
+    return status.verified !== false && status.dataPlaneVerified === true &&
+      status.dataPlaneGeneration === options.expectedDataPlaneGeneration &&
+      typeof status.latestHandshakeEpochMillis === 'number' && status.latestHandshakeEpochMillis > 0;
+  }
   const { minimumHandshakeEpochMillis, previousHandshakeEpochMillis } = options;
   if (minimumHandshakeEpochMillis === undefined) {
     return status.verified !== false &&

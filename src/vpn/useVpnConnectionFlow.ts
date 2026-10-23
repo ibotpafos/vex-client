@@ -168,6 +168,7 @@ export function useVpnConnectionFlow({
         const status = await waitForVerifiedVpnConnection(startedStatus, getVpnStatus, {
           assertCurrent: requireCurrentOperation,
           requireDataPlane: Platform.OS === 'android',
+          expectedDataPlaneGeneration: startedStatus.dataPlaneGeneration,
           timeoutMs: Platform.OS === 'android' ? 25_000 : 10_000,
           // The native backend can briefly expose the previous peer timestamp
           // while replacing a tunnel. Require activity from this attempt. The

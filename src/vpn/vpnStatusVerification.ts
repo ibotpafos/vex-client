@@ -15,7 +15,8 @@ export function resolveNativeTunnelVerified(status: VpnStatus, platform: string)
   if (platform === 'android') {
     // Old Android binaries cannot establish this proof. A signed native update
     // is required; counters and a legacy `verified` flag must fail closed.
-    return hasVerifiedActivity && status.verified !== false && status.dataPlaneVerified === true;
+    return hasVerifiedActivity && status.verified !== false && status.dataPlaneVerified === true &&
+      typeof status.dataPlaneGeneration === 'string' && status.dataPlaneGeneration.length > 0;
   }
   if (platform === 'ios') {
     return hasVerifiedActivity;

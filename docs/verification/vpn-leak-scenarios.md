@@ -113,3 +113,9 @@ upgrade/real VPN on the same isolated device. Connected system-DNS egress is
 independently observed with the Mullvad protocol. The report separately retains
 an unexplained DE→NL egress transition, full-APK protected-stop and boot/LTE/IPv6
 gates; component acceptance does not close those gates.
+
+The [Android1.0.76 node-attribution cycle](android-node-attribution-20261023.md)
+verifies a preserved-data signed upgrade, ordinary-UID NL HTTPS/STUN, two6/6
+Mullvad-authoritative DNS batches, Wi-Fi loss/rebind, screen-off and explicit
+post-reboot connection. Native-bound selected-node attribution, boot lockdown
+and continuous live-underlay failure remain separate acceptance gates.

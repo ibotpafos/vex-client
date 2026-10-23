@@ -1340,11 +1340,12 @@ function runHotConnectFlowTests(): void {
 
   const awg3Initial: VpnProfile = {
     ...hotProfile,
-    config: `${hotProfile.config}\nHeaderProtectionKey = test-key`,
+    config: `${hotProfile.config.replace('de.example.com:51820', 'de.example.com:51821')}\nHeaderProtectionKey = test-key`,
     device: { ...hotProfile.device!, endpoint: 'de.example.com:51821', protocol: 'amneziawg' },
   };
   const awg3Fallback: VpnProfile = {
     ...awg3Initial,
+    config: awg3Initial.config.replace('de.example.com:51821', 'de.example.com:443'),
     device: { ...awg3Initial.device!, endpoint: 'de.example.com:443' },
   };
   assertDeepEqual(vpnConnectTelemetry({

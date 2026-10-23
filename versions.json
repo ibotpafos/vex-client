@@ -1,10 +1,10 @@
 {
   "android": {
-    "version": "1.0.75",
-    "build": 83,
+    "version": "1.0.76",
+    "build": 84,
     "min_supported_build": 1002930,
     "is_required": false,
-    "release_notes": "Кандидат Android 1.0.75: устранена постоянная загрузка одного ядра CPU сервисом блокировки интернета AntiDetect. Защитный TUN сохраняется без фонового цикла чтения.",
+    "release_notes": "Кандидат Android 1.0.76: исправлено согласование адреса и узла VPN после обновления профиля. Устаревшие данные устройства больше не мешают выбору маршрутов новой локации.",
     "core_version": "0.1.0",
     "config_schema_version": 1,
     "min_config_schema_version": 1,

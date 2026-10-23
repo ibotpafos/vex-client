@@ -84,7 +84,8 @@ export function profileWithEndpoint(profile: VpnProfile, endpoint: string): VpnP
 }
 
 export function profileEndpoint(profile: VpnProfile): string | undefined {
-  return profile.device?.endpoint || configEndpoint(profile.config);
+  // The native backend consumes config; device metadata may predate placement.
+  return configEndpoint(profile.config) || profile.device?.endpoint;
 }
 
 function configEndpoint(config: string): string | undefined {

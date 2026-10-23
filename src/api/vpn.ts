@@ -229,7 +229,7 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
       config: options.cachedConfig,
       routingParameters: supportsNativeRoutingPolicy() ? nativeRoutingParameters(options.cachedConfig, routingMode, authorization) : undefined,
       resolutionTiming,
-      device,
+      device: managedProfileDevice(device, profile, options.cachedConfig),
       profileVersion: typeof profile.version === 'number' ? profile.version : options.knownVersion,
       routingMode,
       bypassRegion,
@@ -244,13 +244,7 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
     resolutionTiming,
     config,
     routingParameters: supportsNativeRoutingPolicy() ? nativeRoutingParameters(config, routingMode, authorization) : undefined,
-    device: {
-      ...device,
-      keyEpoch: profile.client_key_epoch ?? device.keyEpoch,
-      assignedIpv4: profile.assigned_ipv4 || device.assignedIpv4,
-      endpoint: managedProfileEndpoint(profile) || device.endpoint,
-      protocol: profile.protocol || device.protocol,
-    },
+    device: managedProfileDevice(device, profile, config),
     profileVersion: typeof profile.version === 'number' ? profile.version : undefined,
     routingMode,
     bypassRegion,
@@ -407,13 +401,7 @@ export async function fetchStagedDevicePSKProfile(accessToken: string, currentPr
     profile: {
       ...currentProfile,
       config,
-      device: {
-        ...device,
-        keyEpoch: response.profile.client_key_epoch ?? device.keyEpoch,
-        assignedIpv4: response.profile.assigned_ipv4 || device.assignedIpv4,
-        endpoint: managedProfileEndpoint(response.profile) || device.endpoint,
-        protocol: response.profile.protocol || device.protocol,
-      },
+      device: managedProfileDevice(device, response.profile, config),
       profileVersion: response.profile_version,
       rotationRequired: false,
       source: 'api',
@@ -816,6 +804,22 @@ ${presharedKey ? `PresharedKey = ${presharedKey}\n` : ''}Endpoint = ${endpoint}
 AllowedIPs = ${(allowedIps?.length ? allowedIps : ['0.0.0.0/0']).join(', ')}
 PersistentKeepalive = 25
 `;
+}
+
+function managedProfileDevice(device: VpnDevice, profile: NativeVPNProfileDTO, config: string): VpnDevice {
+  const endpoint = /^Endpoint\s*=\s*(.+)$/m.exec(config)?.[1]?.trim()
+    || managedProfileEndpoint(profile) || device.endpoint;
+  return {
+    ...device,
+    keyEpoch: profile.client_key_epoch ?? device.keyEpoch,
+    assignedIpv4: profile.assigned_ipv4 || device.assignedIpv4,
+    endpoint,
+    // Issuing a profile can move this installation after /devices was read.
+    // An old node id must not suppress the new location's route policy.
+    // A changed endpoint gives no proof of node identity (it can be a relay).
+    nodeId: endpoint && endpoint === device.endpoint?.trim() ? device.nodeId : undefined,
+    protocol: profile.protocol || device.protocol,
+  };
 }
 
 export function managedProfileEndpoint(profile: NativeVPNProfileDTO): string | undefined {

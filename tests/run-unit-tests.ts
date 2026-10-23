@@ -89,7 +89,7 @@ import {
 import * as homeLocationPreviewModule from '../src/screens/home-location-previews';
 import { trafficSessionLabel } from '../src/components/traffic-summary';
 import appConfig from '../app.config';
-import type { ConfigContext } from '@expo/config';
+import type { ConfigContext } from 'expo/config';
 import { vexWebsiteUrl } from '../src/navigation/website';
 import { authEntryStepAfterBack } from '../src/auth/authEntry';
 import { clientDiagnosticsRequestBody } from '../src/api/clientDiagnosticsRequest';

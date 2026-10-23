@@ -1,6 +1,6 @@
 const { spawnSync } = require('node:child_process');
 const path = require('node:path');
-const { withDangerousMod, withEntitlementsPlist } = require('@expo/config-plugins');
+const { withDangerousMod, withEntitlementsPlist } = require('expo/config-plugins');
 
 const appGroup = 'group.com.vexguard.app';
 const packetTunnelProvider = 'packet-tunnel-provider';

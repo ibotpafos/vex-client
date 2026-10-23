@@ -11,14 +11,12 @@ import android.os.Build
 import android.os.ParcelFileDescriptor
 import androidx.core.content.ContextCompat
 import com.vexguard.app.MainActivity
-import java.io.FileInputStream
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 
 class VexLeakBlockerService : VpnService() {
   private var tunnel: ParcelFileDescriptor? = null
-  private var drainThread: Thread? = null
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     if (intent?.action == ACTION_STOP) {
@@ -74,32 +72,16 @@ class VexLeakBlockerService : VpnService() {
         }
       }
     }
+    // Retaining the TUN captures traffic without forwarding it. Its bounded
+    // kernel queue may fill; packets must never be written to another network.
+    // Do not drain a nonblocking TUN: Android returns 0 for EAGAIN, which made
+    // the old read loop consume a CPU core while idle. Keep one descriptor
+    // owner as well, so a reader cannot close a descriptor reused after stop.
     tunnel = builder.establish()
-
     active.set(tunnel != null)
-    val descriptor = tunnel?.fileDescriptor ?: return
-    drainThread = Thread {
-      val buffer = ByteArray(32_768)
-      try {
-        FileInputStream(descriptor).use { input ->
-          while (!Thread.currentThread().isInterrupted) {
-            if (input.read(buffer) < 0) {
-              break
-            }
-          }
-        }
-      } catch (_: Throwable) {
-      }
-    }.apply {
-      name = "vex-leak-blocker"
-      isDaemon = true
-      start()
-    }
   }
 
   private fun stopBlocking() {
-    drainThread?.interrupt()
-    drainThread = null
     try {
       tunnel?.close()
     } catch (_: Throwable) {

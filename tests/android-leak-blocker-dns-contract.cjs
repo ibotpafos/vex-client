@@ -23,7 +23,7 @@ if (process.argv[3] !== '--probe') {
   assert.ok(body.includes('builder.addDisallowedApplication(packageName)'));
   assert.ok(body.includes('builder.addAllowedApplication(allowedPackage)'));
   assert.doesNotMatch(configuration, /allowBypass|allowFamily/);
-  assert.ok(body.includes('input.read(buffer)'));
+  assert.doesNotMatch(source, /FileInputStream|drainThread/, 'Retain the blackhole TUN without an idle reader or a second descriptor owner');
   assert.ok(!body.includes('output.write'));
   console.log('BLOCKER_FAIL_CLOSED_DNS_CONTRACT=PASS');
 }

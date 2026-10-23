@@ -221,6 +221,7 @@ internal static class FullTunnelAcceptance
         // from parent cancellation; a linked token alone cannot identify expiry.
         using var budget = new CancellationTokenSource(TimeSpan.FromSeconds(8));
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token, budget.Token);
+        var connection = new ControlProbeConnection();
         using var handler = new SocketsHttpHandler
         {
             UseProxy = false, AllowAutoRedirect = false, ConnectTimeout = TimeSpan.FromSeconds(5),
@@ -229,12 +230,7 @@ internal static class FullTunnelAcceptance
                 Require(context.DnsEndPoint.Host.Equals(ControlHost, StringComparison.OrdinalIgnoreCase) &&
                     context.DnsEndPoint.Port == 443, "fixture_full_control_request_scope_invalid");
                 var socket = PhysicalSocket(source, index, SocketType.Stream, ProtocolType.Tcp);
-                try
-                {
-                    await socket.ConnectAsync(new IPEndPoint(destination, 443), cancellation);
-                    return new NetworkStream(socket, ownsSocket: true);
-                }
-                catch { socket.Dispose(); throw; }
+                return await connection.ConnectAsync(socket, new IPEndPoint(destination, 443), cancellation);
             },
         };
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
@@ -249,6 +245,7 @@ internal static class FullTunnelAcceptance
             AcceptanceFailure.RecordControlProbeCancellation(result, error, token, budget.Token);
             throw;
         }
+        finally { result["full_control_probe_tcp_connected"] = connection.TcpConnected; }
         // Normal public TLS/hostname validation is mandatory. No authorization,
         // cookie, redirect, response body or production account enters evidence.
     }

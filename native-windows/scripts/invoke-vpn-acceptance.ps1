@@ -181,12 +181,12 @@ function Get-FixtureAcceptanceLogSummary {
     $summary.harness_stage = 'unknown'
     $summary.harness_passed = $false
     $summary.failure_category = 'unknown'
-    foreach ($field in @('full_control_probe_parent_cancelled', 'full_control_probe_budget_expired', 'full_control_probe_inner_timeout')) { $summary[$field] = $null }
+    foreach ($field in @('full_control_probe_parent_cancelled', 'full_control_probe_budget_expired', 'full_control_probe_inner_timeout', 'full_control_probe_tcp_connected')) { $summary[$field] = $null }
     $summary.failed_or_missing_checks = @()
     if ($null -ne $HarnessResult) {
         $stage = $HarnessResult.PSObject.Properties['stage']
         if ($null -ne $stage -and $stage.Value -is [string] -and $stage.Value -cin $harnessStages) { $summary.harness_stage = $stage.Value }
-        foreach ($field in @('full_control_probe_parent_cancelled', 'full_control_probe_budget_expired', 'full_control_probe_inner_timeout')) {
+        foreach ($field in @('full_control_probe_parent_cancelled', 'full_control_probe_budget_expired', 'full_control_probe_inner_timeout', 'full_control_probe_tcp_connected')) {
             $value = $HarnessResult.PSObject.Properties[$field]
             if ($null -ne $value -and $value.Value -is [bool]) { $summary[$field] = $value.Value }
         }

@@ -311,7 +311,7 @@ var tests = new (string Name, Action Run)[]
  .Concat(VpnVendorServiceSafetyTests.All)
  .Concat(VpnProfileLifetimeCompatibilityTests.All).ToArray();
 
-tests = [.. tests, .. VpnNamedPipeTransportTests.Cases, .. VpnRuntimeLifetimeTests.All, .. VpnRuntimeRecoveryTests.All,
+tests = [.. tests, .. ControlProbeConnectionTests.Cases, .. VpnNamedPipeTransportTests.Cases, .. VpnRuntimeLifetimeTests.All, .. VpnRuntimeRecoveryTests.All,
     .. VpnEndpointAddressCacheTests.All, .. VpnAuthorizationDeadlineTests.All, .. VpnControlPlaneAddressCacheTests.All,
     .. NetworkSafetyControllerRecoveryTests.All, .. VexApiConfigurationTests.All];
 

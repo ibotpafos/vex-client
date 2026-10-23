@@ -18,11 +18,22 @@ Swift transport принимает retryCount с default2 и clamp0…2 для G
 всегда one-attempt, даже с idempotency key. Caller budgets, URL/auth/query,
 key material, signing, wire DTOs и storage formats не меняются.
 
-Это граница одного transport exchange. Более высокие profile/legacy fallback,
-queue recovery, reconnect и user retry остаются отдельными решениями. В
-частности JS preparedTunnel сохраняет legacy fallback для non-mobile callers;
-он не квалифицирован этим change как remote exactly-once. Полную mixed/native
-ownership matrix ещё нужно завершить.
+Legacy fallback JS теперь требует отдельного положительного основания. Private
+context marker создаётся только при recognized profile-endpoint rejection без
+API code:404 с canonical "404 page not found",405 "Method Not Allowed" или501
+"Not Implemented" (trim/case normalization), либо при отсутствии локального
+web key до dispatch native registration. Generic/malformed/error DTO responses
+не дают разрешения на другую выдачу. Ошибки device lookup, регистрации, auth,
+entitlement, body/JSON и profile identity возвращаются без legacy/config-token
+ветки. Required native clients получают прежнюю исходную ошибку; private marker
+не становится публичным error code. Успешный managed web профиль без local key
+при старой форме без identity fields остаётся допустимым.
+
+Сохранено прежнее bounded recovery удалённого cache hint: один full owned lookup
+после404, включая старые ответы без error code. Это не разрешение на fallback
+после произвольной ошибки. Key-epoch recovery, reconnect, queue recovery и user
+retry остаются отдельными решениями. Полная mixed/native matrix и remote
+exactly-once не установлены этим scoped change.
 
 Regression controls вызывают actual producers через production transport,
 подменяя только внешние dependencies. На exact preceding source18 JS controls
@@ -41,3 +52,12 @@ read cannot change the original acceptance exit or production/network gates.
 Portable PowerShell helper tests cover missing/false/nonboolean evidence and
 privacy. A preceding encrypted-tunnel CI failure still needs runtime evidence;
 this diagnostic change does not establish a cause or a successful tunnel.
+
+
+The Windows failure summary now distinguishes HTTPS-control and physical-DNS
+prebaseline stages and reports one fixed failure category from a bounded
+exception chain. Categories do not expose exception messages/types/addresses,
+do not change the acceptance verdict and do not prove a customer incident.
+The prior full-physical-baseline failure occurred after TCP prebaseline passed;
+HTTPS-control and physical DNS were still indistinguishable in that report.
+No TLS/probe timeout, route, DNS, lease, service or cleanup guard was weakened.

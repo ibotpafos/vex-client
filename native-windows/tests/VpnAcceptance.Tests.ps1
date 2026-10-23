@@ -211,7 +211,7 @@ Write-Output 'VPN acceptance actual DNS dropped-datagram retry, strict answer an
 # Failure diagnostics reuse the validator's check names and must never echo an
 # arbitrary result field, string, path, key, or exception body.
 $wrapper = [pscustomobject]@{passed=$false;stage='runtime-acceptance';cleanup_stage='completed';fixture_private_material_removed=$true}
-$harness = [ordered]@{passed=$false;stage='tunnel-dns';private_key='QSECRET';endpoint='QSECRET';error='QSECRET'}
+$harness = [ordered]@{passed=$false;stage='tunnel-dns';failure_category='tls';private_key='QSECRET';endpoint='QSECRET';error='QSECRET'}
 foreach ($field in @(Get-FixtureHarnessCheckNames -FullTunnelChecks)) { $harness[$field]=$true }
 $harness.scm_disconnect_verified=$false
 $harness.scm_signed_connect_verified='true'
@@ -219,13 +219,21 @@ $harness.Remove('full_tunnel_dns_verified')
 $log = Get-FixtureAcceptanceLogSummary -WrapperResult $wrapper -HarnessResult ([pscustomobject]$harness) -FullTunnelChecks
 if ($log.Contains('QSECRET') -or $log.Contains('private_key') -or $log.Contains('"endpoint":')) { throw 'Acceptance diagnostics leaked arbitrary source data.' }
 $parsed = $log | ConvertFrom-Json
-if ($parsed.stage -cne 'runtime-acceptance' -or $parsed.harness_stage -cne 'tunnel-dns' -or $parsed.harness_passed -or $parsed.passed) { throw 'Acceptance diagnostic stage/verdict changed.' }
+if ($parsed.stage -cne 'runtime-acceptance' -or $parsed.harness_stage -cne 'tunnel-dns' -or $parsed.harness_passed -or $parsed.passed -or $parsed.failure_category -cne 'tls') { throw 'Acceptance diagnostic stage/verdict changed.' }
 $expected = @('full_tunnel_dns_verified','scm_disconnect_verified','scm_signed_connect_verified') | Sort-Object
 if (($parsed.failed_or_missing_checks | Sort-Object) -join ',' -cne ($expected -join ',')) { throw 'Acceptance diagnostic lost missing/false/non-boolean evidence.' }
 $harness.stage='QSECRET'
+$harness.failure_category='QSECRET'
 $wrapper.stage='QSECRET'
 $log = Get-FixtureAcceptanceLogSummary -WrapperResult $wrapper -HarnessResult ([pscustomobject]$harness)
 if ($log.Contains('QSECRET')) { throw 'Unknown diagnostic stage escaped the allowlist.' }
 $parsed = (Get-FixtureAcceptanceLogSummary -WrapperResult $wrapper -HarnessResult $null) | ConvertFrom-Json
 if ($parsed.harness_available -or $parsed.harness_passed -or $parsed.failed_or_missing_checks.Count -ne 0) { throw 'Missing harness report invented diagnostic evidence.' }
 Write-Output 'VPN acceptance allowlisted failure diagnostics regression passed.'
+
+foreach ($stage in @('full-control-https-baseline', 'full-physical-dns-baseline')) {
+    $harness.stage = $stage
+    $harness.failure_category = 'connection'
+    $parsed = (Get-FixtureAcceptanceLogSummary -WrapperResult $wrapper -HarnessResult ([pscustomobject]$harness)) | ConvertFrom-Json
+    if ($parsed.harness_stage -cne $stage -or $parsed.failure_category -cne 'connection') { throw 'Physical prebaseline diagnostics lost a fixed stage or category.' }
+}

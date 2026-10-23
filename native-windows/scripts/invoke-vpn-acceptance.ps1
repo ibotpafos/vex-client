@@ -165,7 +165,7 @@ function Get-FixtureAcceptanceLogSummary {
     # Only fixed field names, booleans and source-defined stage IDs may leave
     # the fixture. Never echo raw JSON, exceptions, paths or connection data.
     $wrapperStages = @('adapter-route-dns-firewall', 'completed', 'fixture-controller-service', 'harness-build', 'not-started', 'peer-build-and-test', 'peer-start', 'runtime-acceptance', 'runtime-download', 'runtime-extraction', 'vendor-log', 'vendor-service', 'wintun-driver')
-    $harnessStages = @('completed', 'full-active-controller-abrupt-death', 'full-active-controller-start', 'full-disconnect-restoration', 'full-physical-baseline', 'full-physical-control-bypass', 'full-physical-deny', 'full-signed-connect', 'full-tunnel-acceptance', 'full-tunnel-traffic', 'isolation', 'native-owned-route', 'native-route-abi', 'peer-traffic-confirmation', 'runtime-connect', 'scm-admission', 'scm-autonomous-authorization-expiry', 'scm-crash-restart', 'scm-disconnect-restart', 'scm-graceful-stop', 'scm-graceful-stop-restart', 'scm-install', 'scm-private-pipe-lifecycle', 'scm-signed-connect', 'signed-profile-admission', 'tunnel-dns', 'tunnel-https')
+    $harnessStages = @('full-control-https-baseline', 'full-physical-dns-baseline', 'completed', 'full-active-controller-abrupt-death', 'full-active-controller-start', 'full-disconnect-restoration', 'full-physical-baseline', 'full-physical-control-bypass', 'full-physical-deny', 'full-signed-connect', 'full-tunnel-acceptance', 'full-tunnel-traffic', 'isolation', 'native-owned-route', 'native-route-abi', 'peer-traffic-confirmation', 'runtime-connect', 'scm-admission', 'scm-autonomous-authorization-expiry', 'scm-crash-restart', 'scm-disconnect-restart', 'scm-graceful-stop', 'scm-graceful-stop-restart', 'scm-install', 'scm-private-pipe-lifecycle', 'scm-signed-connect', 'signed-profile-admission', 'tunnel-dns', 'tunnel-https')
     $summary = [ordered]@{ schema = 'vex.windows-vpn-acceptance-log.v1' }
     foreach ($field in @('stage', 'cleanup_stage')) {
         $value = $WrapperResult.PSObject.Properties[$field]
@@ -180,10 +180,13 @@ function Get-FixtureAcceptanceLogSummary {
     $summary.harness_available = $null -ne $HarnessResult
     $summary.harness_stage = 'unknown'
     $summary.harness_passed = $false
+    $summary.failure_category = 'unknown'
     $summary.failed_or_missing_checks = @()
     if ($null -ne $HarnessResult) {
         $stage = $HarnessResult.PSObject.Properties['stage']
         if ($null -ne $stage -and $stage.Value -is [string] -and $stage.Value -cin $harnessStages) { $summary.harness_stage = $stage.Value }
+        $category = $HarnessResult.PSObject.Properties['failure_category']
+        if ($null -ne $category -and $category.Value -is [string] -and $category.Value -cin @('dns', 'tls', 'connection', 'protocol', 'cancelled', 'timeout', 'socket', 'http', 'other')) { $summary.failure_category = $category.Value }
         $passed = $HarnessResult.PSObject.Properties['passed']
         $summary.harness_passed = $null -ne $passed -and $passed.Value -is [bool] -and $passed.Value
         foreach ($field in @(Get-FixtureHarnessCheckNames -FullTunnelChecks:$FullTunnelChecks)) {

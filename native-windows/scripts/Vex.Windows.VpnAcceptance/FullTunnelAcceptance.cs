@@ -56,7 +56,9 @@ internal static class FullTunnelAcceptance
         Require(await TcpReachableAsync(source, index, outside, TimeSpan.FromSeconds(8), token),
             "fixture_full_physical_tcp_baseline_unavailable");
         result["full_physical_tcp_prebaseline_verified"] = true;
+        result["stage"] = "full-control-https-baseline";
         await ProbeControlHttpsAsync(source, index, controlAddresses[0], token);
+        result["stage"] = "full-physical-dns-baseline";
         var physicalDns = nic.GetIPProperties().DnsAddresses.FirstOrDefault(address =>
             address.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(address) &&
             !address.Equals(source) && !controlAddresses.Contains(address));

@@ -24,6 +24,7 @@
     <Compile Include="../../src/Vex.Windows.Setup/SetupBundleVerifier.cs" Link="SetupBundleVerifier.cs" />
     <Compile Include="../../packaging/UpdateManifestSigner/WindowsUpdateSignatureSigner.cs" Link="WindowsUpdateSignatureSigner.cs" />
     <Compile Include="../../scripts/Vex.Windows.VpnAcceptance/PhysicalNetworkProbe.cs" Link="PhysicalNetworkProbe.cs" />
+    <Compile Include="../../scripts/Vex.Windows.VpnAcceptance/AcceptanceFailure.cs" Link="AcceptanceFailure.cs" />
     <Compile Include="../../scripts/Vex.Windows.VpnAcceptance/ControllerDeathReceipt.cs" Link="ControllerDeathReceipt.cs" />
     <ProjectReference Include="../../src/Vex.Windows.Core/Vex.Windows.Core.csproj" />
     <ProjectReference Include="../../src/Vex.Windows.Client/Vex.Windows.Client.csproj" />

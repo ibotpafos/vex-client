@@ -152,6 +152,7 @@ var tests = new (string Name, Action Run)[]
 {
     ("Native installer rejects changed bundles and retains verified file locks", WindowsSetupBundleTests.Run),
     ("Physical AntiLeak probes reject remote failures and preserve caller cancellation", FullTunnelProbeFailurePolicyTests.Run),
+    ("Acceptance failures expose bounded fixed categories without private exception data", AcceptanceFailureClassificationTests.Run),
     ("Active controller death requires fresh exact-owner encrypted protection evidence", ControllerDeathReceiptTests.Run),
     ("VPN access and network failures preserve actionable guidance and safe intent", VpnFailurePresentationTests.Run),
     ("Release cohorts preserve actionable mandatory targets and strict dependency trust", WindowsReleasePolicyTests.Run),

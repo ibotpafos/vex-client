@@ -547,7 +547,7 @@ for (const stage of ['create-metadata', 'config-token', 'config']) {
         if (devices === 2 && stage === 'create-metadata') { holdMetadata = true; return response([]); }
         return response([device]);
       }
-      if (route === '/v1/vpn/profile') return { ok: false, status: 400, text: async () => '{}' };
+      if (route === '/v1/vpn/profile') return { ok: false, status: 404, text: async () => '404 page not found' };
       if (route.endsWith('/config-token')) return stage === 'config-token' ? hold.promise : response({ token: 'fixture-config-token' });
       if (route.endsWith('/config')) return hold.promise;
       throw Error(`Unexpected fallback route ${route}`);
@@ -579,3 +579,135 @@ test('the actual catalog Query cancellation policy suppresses failure diagnostic
     rejected = true; await assert.rejects(refresher.refresh('retry'), /real failure/); assert.equal(reported.length, 1); assert.equal(reported[0].outcome, 'error');
   } finally { hold.resolve([]); query.clear(); }
 });
+
+
+for (const stage of ['devices', 'profile', 'register']) {
+  for (const status of [400, 401, 402, 403, 404, 409, 429, 500, 502, 503, 504]) {
+    test(`managed preparation ${stage} HTTP ${status} cannot authorize legacy issuance`, async () => {
+      const calls = [];
+      const h = harness({ fetch: async (url, init) => {
+        const route = new URL(url).pathname; calls.push(`${init.method} ${route}`);
+        if (route === '/v1/devices') return stage === 'devices'
+          ? {ok:false,status,text:async()=>JSON.stringify({code:'fixture_denial',message:'fixture denial'})}
+          : response(stage === 'register' ? [] : [device]);
+        if (route === '/v1/vpn/profile' || route === '/v1/devices/register') return {ok:false,status,text:async()=>JSON.stringify({code:status === 404 ? 'not_found' : 'fixture_denial',message:'fixture denial'})};
+        if (route.endsWith('/config-token')) return response({token:'inert-config-token'});
+        if (route.endsWith('/config')) return {ok:true,status:200,text:async()=>'Address = 10.0.0.2/32'};
+        throw Error('Unexpected managed preparation request');
+      } });
+      await assert.rejects(h.load('@/api/vpn').preparedTunnel('inert-token', {platform:'web',deviceName:'Fixture',idempotencyPrefix:'fixture'}, {locationId:'de'}), error => error.status === status);
+      assert.equal(calls.some(call => /\/config(?:-token)?$/.test(call)), false, 'a failed managed request must not start another issuance path');
+      assert.equal(calls.filter(call => call === 'POST /v1/devices').length, 0);
+      const readAttempts = stage === 'devices' && [429, 502, 503, 504].includes(status) ? 3 : 1;
+      assert.equal(calls.filter(call => call === 'GET /v1/devices').length, readAttempts, 'fallback must not restart an already failed device lookup');
+      assert.equal(h.timers.size, 0);
+    });
+  }
+}
+
+for (const kind of ['network', 'body', 'invalid-json', 'invalid-profile']) {
+  test(`uncertain managed profile ${kind} result cannot fall back to legacy issuance`, async () => {
+    const calls = [];
+    const h = harness({fetch:async (url, init) => {
+      const route = new URL(url).pathname; calls.push(`${init.method} ${route}`);
+      if (route === '/v1/devices') return response([device]);
+      if (route === '/v1/vpn/profile') {
+        if (kind === 'network') throw new TypeError('network request failed');
+        if (kind === 'body') return {ok:true,status:200,text:async()=>{throw new TypeError('connection reset');}};
+        if (kind === 'invalid-json') return {ok:true,status:200,text:async()=>'{'};
+        return response({...profile, version:'1'});
+      }
+      if (route.endsWith('/config-token')) return response({token:'inert-config-token'});
+      if (route.endsWith('/config')) return {ok:true,status:200,text:async()=>'Address = 10.0.0.2/32'};
+      throw Error('Unexpected profile fallback request');
+    }});
+    await assert.rejects(h.load('@/api/vpn').preparedTunnel('inert-token', {platform:'web',deviceName:'Fixture',idempotencyPrefix:'fixture'}, {locationId:'de'}));
+    assert.deepEqual(calls, ['GET /v1/devices', 'GET /v1/vpn/profile']);
+    assert.equal(h.timers.size, 0);
+  });
+}
+
+for (const status of [404, 405, 501]) {
+  test(`a confirmed legacy profile endpoint rejection HTTP ${status} retains web fallback`, async () => {
+    const calls = [];
+    const h = harness({ fetch:async (url, init) => {
+      const route = new URL(url).pathname;calls.push(`${init.method} ${route}`);
+      if (route === '/v1/devices') return response([device]);
+      if (route === '/v1/vpn/profile') return {ok:false,status,text:async()=>status===404?'404 page not found':status===405?'Method Not Allowed':'Not Implemented'};
+      if (route.endsWith('/config-token')) return response({token:'inert-config-token'});
+      if (route.endsWith('/config')) return {ok:true,status:200,text:async()=>'Address = 10.0.0.2/32'};
+      throw Error('Unexpected legacy profile request');
+    }});
+    const value = await h.load('@/api/vpn').preparedTunnel('inert-token', {platform:'web',deviceName:'Fixture',idempotencyPrefix:'fixture'}, {locationId:'de'});
+    assert.equal(value.device.id, device.id);
+    assert.equal(value.config, 'Address = 10.0.0.2/32');
+    assert.equal(calls.filter(call=>call==='GET /v1/vpn/profile').length,1);
+    assert.equal(calls.filter(call=>call.endsWith('/config-token')).length,1);
+    assert.equal(calls.filter(call=>call.endsWith('/config')).length,1);
+  });
+}
+
+
+test('web without local native keys keeps server-generated legacy config without registering a native key', async () => {
+  const calls = [];
+  const h = harness({adapters:{'@/native/vexVpn':{supportsNativeRoutingPolicy:()=>false,getOrCreateWireGuardKeyPair:async()=>null}}, fetch:async (url, init)=>{
+    const route = new URL(url).pathname;calls.push(`${init.method} ${route}`);
+    if(route==='/v1/devices') return init.method==='POST'?response({device}):response([]);
+    if(route.endsWith('/config-token')) return response({token:'inert-config-token'});
+    if(route.endsWith('/config')) return {ok:true,status:200,text:async()=>'Address = 10.0.0.2/32'};
+    throw Error('Unexpected native-key requirement on web');
+  }});
+  const value=await h.load('@/api/vpn').preparedTunnel('inert-token',{platform:'web',deviceName:'Fixture',idempotencyPrefix:'fixture'},{locationId:'de'});
+  assert.equal(value.device.id,device.id);
+  assert.equal(value.config,'Address = 10.0.0.2/32');
+  assert.equal(calls.filter(call=>call==='POST /v1/devices').length,1);
+  assert.equal(calls.some(call=>call==='POST /v1/devices/register'||call==='GET /v1/vpn/profile'),false);
+});
+
+test('web keeps a successful managed profile even when no local native key exists', async () => {
+  const calls=[];
+  const h=harness({adapters:{'@/native/vexVpn':{supportsNativeRoutingPolicy:()=>false,getOrCreateWireGuardKeyPair:async()=>null}},fetch:async(url,init)=>{
+    const route=new URL(url).pathname;calls.push(`${init.method} ${route}`);
+    if(route==='/v1/devices')return response([device]);
+    if(route==='/v1/vpn/profile')return response({config:profile.config,version:profile.version});
+    throw Error('Successful managed web profile opened a legacy path');
+  }});
+  const value=await h.load('@/api/vpn').preparedTunnel('inert-token',{platform:'web',deviceName:'Fixture',idempotencyPrefix:'fixture'},{locationId:'de'});
+  assert.equal(value.config,profile.config);assert.deepEqual(calls,['GET /v1/devices','GET /v1/vpn/profile']);
+});
+
+
+for (const status of [404, 405, 501]) {
+  for (const body of ['{', '{}', '{"message":"generic failure"}', JSON.stringify({code:'fixture_denial',message:status===404?'404 page not found':status===405?'Method Not Allowed':'Not Implemented'})]) {
+    test(`unrecognized profile endpoint HTTP ${status} body cannot authorize legacy issuance: ${body}`, async()=>{
+      const calls=[];
+      const h=harness({fetch:async(url,init)=>{
+        const route=new URL(url).pathname;calls.push(`${init.method} ${route}`);
+        if(route==='/v1/devices')return response([device]);
+        if(route==='/v1/vpn/profile')return {ok:false,status,text:async()=>body};
+        if(route.endsWith('/config-token'))return response({token:'inert-config-token'});
+        if(route.endsWith('/config'))return {ok:true,status:200,text:async()=>'Address = 10.0.0.2/32'};
+        throw Error('Unexpected unknown profile rejection request');
+      }});
+      await assert.rejects(h.load('@/api/vpn').preparedTunnel('inert-token',{platform:'web',deviceName:'Fixture',idempotencyPrefix:'fixture'},{locationId:'de'}),error=>error.status===status);
+      assert.deepEqual(calls,['GET /v1/devices','GET /v1/vpn/profile']);
+    });
+  }
+  for(const stage of ['devices','register']) {
+    test(`unsupported response from ${stage} HTTP ${status} cannot authorize profile fallback`, async()=>{
+      const calls=[];
+      const unsupported=()=>({ok:false,status,text:async()=>status===404?'404 page not found':status===405?'Method Not Allowed':'Not Implemented'});
+      const h=harness({fetch:async(url,init)=>{
+        const route=new URL(url).pathname;calls.push(`${init.method} ${route}`);
+        if(route==='/v1/devices')return stage==='devices'?unsupported():response([]);
+        if(route==='/v1/devices/register')return unsupported();
+        if(route.endsWith('/config-token'))return response({token:'inert-config-token'});
+        if(route.endsWith('/config'))return {ok:true,status:200,text:async()=>'Address = 10.0.0.2/32'};
+        throw Error('Unexpected misplaced unsupported response');
+      }});
+      await assert.rejects(h.load('@/api/vpn').preparedTunnel('inert-token',{platform:'web',deviceName:'Fixture',idempotencyPrefix:'fixture'},{locationId:'de'}),error=>error.status===status);
+      assert.equal(calls.filter(call=>call==='GET /v1/devices').length,1);
+      assert.equal(calls.some(call=>/\/config(?:-token)?$/.test(call)),false);
+    });
+  }
+}

@@ -52,17 +52,29 @@ import { isPositiveSafeInteger, isNonnegativeSafeInteger } from '../vpn/profileN
 
 const mobileProtocol = 'amneziawg';
 
+// A legacy path is eligible only after a local pre-dispatch capability failure
+// or a recognized legacy rejection from the managed-profile endpoint itself.
+class LegacyProfileFallbackError extends Error {
+  readonly originalError: Error;
+
+  constructor(originalError: Error) {
+    super('Managed VPN profile is unavailable for this legacy client.');
+    this.originalError = originalError;
+  }
+}
+
 export async function preparedTunnel(accessToken: string, client: VpnClientDescriptor = currentVpnClient(), options: PreparedTunnelOptions = {}): Promise<PreparedTunnel> {
   requireProfileRequest(options);
   try {
     return await managedVpnProfile(accessToken, client, options);
   } catch (error) {
     requireProfileRequest(options);
-    if (error instanceof SessionOperationSupersededError || isApiRequestCancelled(error)) throw error;
-    if (requiresManagedNativeProfile(client)) {
-      throw error;
+    const originalError = error instanceof LegacyProfileFallbackError ? error.originalError : error;
+    if (originalError instanceof SessionOperationSupersededError || isApiRequestCancelled(originalError)) throw originalError;
+    if (!(error instanceof LegacyProfileFallbackError) || requiresManagedNativeProfile(client)) {
+      throw originalError;
     }
-    logApiDebug('managed vpn profile failed, falling back to prepared tunnel:', error instanceof Error ? error.message : error);
+    logApiDebug('managed profile unavailable for legacy client; using device config');
   }
   return preparedTunnelFromDeviceConfig(accessToken, client, options);
 }
@@ -174,7 +186,10 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
     // must confirm its exact key identity before we can skip /v1/devices.
     const candidate = await requestProfile(cachedDevice.id, options.knownVersion)
       .catch((error: unknown) => {
-        if (error instanceof ApiRequestError && error.status === 404) return null;
+        // Older servers may omit the error code for a deleted cache hint.
+        // Keep the existing one full lookup before deciding on legacy fallback.
+        const responseError = error instanceof LegacyProfileFallbackError ? error.originalError : error;
+        if (responseError instanceof ApiRequestError && responseError.status === 404) return null;
         throw error;
       });
     if (candidate?.revoked) throw new Error('Устройство отключено администратором.');
@@ -303,7 +318,19 @@ function requestManagedVpnProfile(
   // Profile GET can assign a node or reconcile its peer. Once dispatched, it
   // owns the queue slot through completion, like registration/key writes. Only
   // the caller wait is cancellable; guard before/after this operation instead.
-  return jsonRequest<NativeVPNProfileDTO>(`/v1/vpn/profile?${query.toString()}`, {accessToken, headers, suppressErrorLog:true, retryCount:0});
+  return jsonRequest<NativeVPNProfileDTO>(`/v1/vpn/profile?${query.toString()}`, {accessToken, headers, suppressErrorLog:true, retryCount:0})
+    .catch((error: unknown) => {
+      // Coded API errors (including current owned-device404) remain authoritative.
+      // A failure from setup, registration or another route cannot reach here.
+      const legacyMessage = error instanceof ApiRequestError ? error.message.trim().toLowerCase() : '';
+      const unsupported = error instanceof ApiRequestError && !error.code && (
+        (error.status === 404 && legacyMessage === '404 page not found') ||
+        (error.status === 405 && legacyMessage === 'method not allowed') ||
+        (error.status === 501 && legacyMessage === 'not implemented')
+      );
+      if (unsupported) throw new LegacyProfileFallbackError(error);
+      throw error;
+    });
 }
 
 export async function vpnDevices(accessToken: string, signal?: AbortSignal): Promise<VpnDevice[]> {
@@ -653,7 +680,11 @@ async function registerAccountNativeDevice(accessToken: string, client: VpnClien
 
 async function registerNativeDevice(accessToken: string, client: VpnClientDescriptor, keyPair: WireGuardKeyPair | null, locationId: string, externalDeviceId: string, isCurrentSessionOperation?: () => boolean, installationId = externalDeviceId, accountUserId?: string, requireIdentityProof = false): Promise<VpnDevice> {
   if (!keyPair?.publicKey) {
-    throw new Error('Локальные ключи WireGuard не сгенерированы. Проверьте настройки устройства.');
+    const error = new Error('Локальные ключи WireGuard не сгенерированы. Проверьте настройки устройства.');
+    // Web can use the server-generated legacy config. No registration has
+    // been dispatched at this local capability check. Native callers fail.
+    if (!requiresManagedNativeProfile(client)) throw new LegacyProfileFallbackError(error);
+    throw error;
   }
   const appInfo = await getAppInfo();
   requireCurrentSession(isCurrentSessionOperation);

@@ -8,7 +8,7 @@ on:
         required: false
         default: false
       native_routing_source:
-        description: "Sign the fixed reviewed fb24fa6 DNS-and-HTTPS 1.0.79 candidate without publication"
+        description: "Sign the fixed reviewed 860d4b6 DNS-and-HTTPS 1.0.79 candidate without publication"
         type: boolean
         required: false
         default: false
@@ -28,8 +28,8 @@ jobs:
       QUALIFIED_SOURCE_COMMIT: a13526075803986eebc396ec24fdc865d00ab5c0
       QUALIFIED_SOURCE_TREE: a47fd44b6166de98c64263554e6c981c896a8559
       NATIVE_ROUTING_SOURCE_REQUESTED: ${{ inputs.native_routing_source && 'true' || 'false' }}
-      NATIVE_ROUTING_SOURCE_COMMIT: fb24fa6e6eca409478a975e019ea75b41a94faeb
-      NATIVE_ROUTING_SOURCE_TREE: 96c7b8b8f0eecd7e85f4f11f86bb36adc8e23394
+      NATIVE_ROUTING_SOURCE_COMMIT: 860d4b6618e39663bcc7f79a460647b6a46d6bf2
+      NATIVE_ROUTING_SOURCE_TREE: 9da12e882049aa157fd4ba2ff724a05e3f45916f
       VEX_RELEASE_USE_LOCAL_CACHE: "1"
       VEX_LOCAL_RELEASE_CACHE_ROOT: ${{ github.workspace }}/.ci-cache
       VEX_LOCAL_CACHE_MOVE_EXISTING: "0"

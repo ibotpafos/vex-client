@@ -9,8 +9,11 @@ const source=stripTypeScriptTypes(fs.readFileSync(process.env.VEX_WATCHDOG_SOURC
   .replace(/import[\s\S]*?from '[^']+';/g,'').replace('export function useNativeVpnWatchdog','function useNativeVpnWatchdog');
 const tick=()=>new Promise(r=>setImmediate(r));
 const profile=locationId=>({locationId,device:{id:'fixture'},config:locationId});
+const parentSource=stripTypeScriptTypes(fs.readFileSync('src/vpn/useVpnConnection.ts','utf8'));
+const protectionCallback=parentSource.match(/const protectFailedNativeWatchdogRecovery = useCallback\(([\s\S]*?), \[antiLeakEnabled\]\)/)?.[1];
+assert.ok(protectionCallback, 'Use the actual parent recovery teardown callback');
 
-for(const stage of ['catalog','callbacks','profile','background','new-intent','new-account','new-location','failed-target','persist-rejected']) {
+for(const stage of ['catalog','callbacks','profile','background','new-intent','new-account','new-location','failed-target','persist-rejected','anti-leak-off']) {
   test(`a native failover cannot lose its owner during ${stage}`,async()=>{
     let cursor=0,deps,cleanup,interval,generation=0,accountCurrent=true,release;
     const slots=[],ui=[],persist=[],cache=[],telemetry=[],operation={current:false};
@@ -35,12 +38,13 @@ for(const stage of ['catalog','callbacks','profile','background','new-intent','n
         if(p.locationId==='nl')throw new Error('transport unavailable');
         assert.ok(isCurrent());nativeLocation='de';await nativeGate;
         if(!isCurrent())throw new SessionOperationSupersededError();
-        if(stage==='failed-target')throw new Error('unverified native exit');
+        if(stage==='failed-target'||stage==='anti-leak-off')throw new Error('unverified native exit');
         return {profile:p,status:{state:'connected'}};
       },
       resolveProfile:async(id,options)=>{if(options.isCurrentOperation)assert.ok(options.isCurrentOperation());return profile(id);},
       isRetryableConnectError:()=>true,persistLocation:async id=>{if(stage==='persist-rejected')throw new Error('preference unavailable');persist.push(id);return id;},setCachedProfile:id=>cache.push(id),
-      protectFailedRecovery:async()=>{nativeLocation='blocked';},
+      protectFailedRecovery:new Function('disconnectVpn','antiLeakEnabled','return ('+protectionCallback+');')(
+        async ({releaseAntiLeak})=>{nativeLocation=releaseAntiLeak?'direct':'blocked';},stage!=='anti-leak-off'),
       onRecoverySucceeded:(p,s,id)=>ui.push(id),onRecoveryFailed:()=>ui.push('failed'),reportConnect:()=>{},
       submitDiagnostics:async(reason,status,samples)=>telemetry.push({reason,status,samples})};
     const render=value=>{cursor=0;hook(value);};render(input);
@@ -55,10 +59,10 @@ for(const stage of ['catalog','callbacks','profile','background','new-intent','n
     if(stage==='new-location')render({...input,activeLocationId:'fi'});
     release();for(let i=0;i<12;i++)await tick();
     const superseded=stage.startsWith('new-');
-    const failed=stage==='failed-target'||stage==='persist-rejected';
+    const failed=stage==='failed-target'||stage==='persist-rejected'||stage==='anti-leak-off';
     assert.deepEqual(ui,superseded?[]:failed?['failed']:['de'],'accepted native exit and displayed location must commit together');
     assert.deepEqual(persist,superseded||failed?[]:['de']);assert.deepEqual(cache,superseded||failed?[]:['de']);
-    if(failed)assert.equal(nativeLocation,'blocked','a failed recovery cannot leave an unaccepted foreign exit forwarding traffic');
+    if(failed)assert.equal(nativeLocation,stage==='anti-leak-off'?'direct':'blocked','stop the unaccepted native exit and respect the anti-leak preference');
     if(stage==='new-location')assert.equal(nativeLocation,'blocked');
     assert.equal(operation.current,superseded&&stage!=='new-location','an old completion must not release a newer operation lease');
     if(!superseded&&!failed)assert.equal(telemetry.filter(x=>x.reason==='native_watchdog_reconnect_result'&&x.status==='ok').length,1);

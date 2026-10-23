@@ -1082,7 +1082,8 @@ export function useVpnConnection() {
     return () => isCurrentSessionOperation() && vpnConnectGenerationRef.current === generation;
   }, [isCurrentSessionOperation]);
 
-  const protectFailedNativeWatchdogRecovery = useCallback(() => disconnectVpn({ releaseAntiLeak: false }), []);
+  const protectFailedNativeWatchdogRecovery = useCallback(() =>
+    disconnectVpn({ releaseAntiLeak: !antiLeakEnabled }), [antiLeakEnabled]);
 
   const handleNativeWatchdogRecoveryStarted = useCallback(() => {
     setVpnError(null);

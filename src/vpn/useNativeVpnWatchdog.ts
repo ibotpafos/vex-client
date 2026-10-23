@@ -343,7 +343,7 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
         if (ownsOperation) {
           await input.protectFailedRecovery?.().catch(() => undefined);
           if (!recoveryIsCurrent()) return;
-          input.onRecoveryFailed(errorMessage(error, 'Не удалось восстановить VPN. Трафик заблокирован.'));
+          input.onRecoveryFailed(errorMessage(error, 'Не удалось восстановить VPN.'));
         }
         void submitDiagnostics('native_watchdog_check_failed', 'error', {
           watchdog_error: errorMessage(error, 'native_watchdog_check_failed'),

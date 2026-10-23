@@ -9,6 +9,7 @@ type HandshakeVerificationOptions = {
   now?: () => number;
   wait?: (delayMs: number) => Promise<void>;
   assertCurrent?: () => void;
+  requireDataPlane?: boolean;
 };
 
 const defaultHandshakePollMs = 250;
@@ -18,6 +19,7 @@ export async function waitForVerifiedVpnConnection(
   readStatus: () => Promise<VpnStatus>,
   options: HandshakeVerificationOptions = {},
 ): Promise<VpnStatus> {
+  const timeoutMessage = options.requireDataPlane ? 'VPN DNS/HTTPS verification timed out.' : 'VPN handshake timed out.';
   options.assertCurrent?.();
   if (initialStatus.state !== 'connected' && initialStatus.state !== 'connecting' && initialStatus.state !== 'verifying') {
     throw new Error('VPN backend did not enter the connected state.');
@@ -39,16 +41,16 @@ export async function waitForVerifiedVpnConnection(
   const deadline = now() + timeoutMs;
   const remaining = () => {
     const budget = deadline - now();
-    if (budget <= 0) throw new Error('VPN handshake timed out.');
+    if (budget <= 0) throw new Error(timeoutMessage);
     return budget;
   };
   let latestStatus = initialStatus;
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     options.assertCurrent?.();
-    if (attempt > 0) await withDeadline(() => wait(Math.min(pollMs, remaining())), remaining());
+    if (attempt > 0) await withDeadline(() => wait(Math.min(pollMs, remaining())), remaining(), timeoutMessage);
     options.assertCurrent?.();
-    latestStatus = await withDeadline(readStatus, remaining());
+    latestStatus = await withDeadline(readStatus, remaining(), timeoutMessage);
     options.assertCurrent?.();
     remaining();
     // Native tunnel activation and status reads can return a pending snapshot.
@@ -64,16 +66,16 @@ export async function waitForVerifiedVpnConnection(
     }
   }
 
-  throw new Error('VPN handshake timed out.');
+  throw new Error(timeoutMessage);
 }
 
-async function withDeadline<T>(operation: () => Promise<T>, timeoutMs: number): Promise<T> {
+async function withDeadline<T>(operation: () => Promise<T>, timeoutMs: number, timeoutMessage: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       Promise.resolve().then(operation),
       new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error('VPN handshake timed out.')), timeoutMs);
+        timer = setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
       }),
     ]);
   } finally {
@@ -82,6 +84,7 @@ async function withDeadline<T>(operation: () => Promise<T>, timeoutMs: number): 
 }
 
 function isHandshakeVerifiedForAttempt(status: VpnStatus, options: HandshakeVerificationOptions): boolean {
+  if (options.requireDataPlane && status.dataPlaneVerified !== true) return false;
   const { minimumHandshakeEpochMillis, previousHandshakeEpochMillis } = options;
   if (minimumHandshakeEpochMillis === undefined) {
     return status.verified !== false &&

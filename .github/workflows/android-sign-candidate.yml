@@ -114,6 +114,9 @@ jobs:
       - run: npm ci
       - name: Quality before signing
         run: npm run check
+      - name: Native data-plane and routing race tests before signing
+        working-directory: native-routing
+        run: go test -race ./...
       - name: Install locked Android SDK
         run: |-
           set -euo pipefail

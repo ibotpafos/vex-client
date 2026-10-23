@@ -1036,7 +1036,7 @@ export function useVpnConnection() {
   }, [activeDevice?.endpoint, isAppActive, isConnected]);
 
   useEffect(() => {
-    if (!isAppActive || !isConnected || !session?.accessToken || !activeProfileDeviceId) {
+    if (!isAppActive || !isConnected || vpnStatusCore.verified === false || !session?.accessToken || !activeProfileDeviceId) {
       return undefined;
     }
 
@@ -1057,7 +1057,7 @@ export function useVpnConnection() {
       disposed = true;
       clearInterval(timer);
     };
-  }, [activeProfileDeviceId, isAppActive, isConnected, session?.accessToken, submitVpnDiagnostics]);
+  }, [activeProfileDeviceId, isAppActive, isConnected, vpnStatusCore.verified, session?.accessToken, submitVpnDiagnostics]);
 
 
 
@@ -1706,5 +1706,6 @@ function areVpnStatusCoresEqual(left: VpnStatusCore, right: VpnStatusCore): bool
     && left.latestHandshakeEpochMillis === right.latestHandshakeEpochMillis
     && left.leakProtection === right.leakProtection
     && left.verified === right.verified
+    && left.dataPlaneVerified === right.dataPlaneVerified
     && left.verificationReason === right.verificationReason;
 }

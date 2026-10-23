@@ -6,7 +6,8 @@ export type NativeTunnelHealthReason =
   | 'leak_blocking'
   | 'local_status_disconnected'
   | 'local_status_error'
-  | 'stale_local_handshake';
+  | 'stale_local_handshake'
+  | 'data_plane_failed';
 
 export type NativeTunnelHealthInput = {
   deviceUsage?: VpnDeviceUsage;
@@ -48,6 +49,9 @@ export function localStatusHealthReasons(
   staleHandshakeSeconds: number,
 ): NativeTunnelHealthReason[] {
   const reasons: NativeTunnelHealthReason[] = [];
+  if (status.dataPlaneVerified === false && ['dns_failed', 'https_failed', 'data_plane_unavailable'].includes(status.verificationReason ?? '')) {
+    reasons.push('data_plane_failed');
+  }
   if (status.leakProtection === 'blocking') {
     reasons.push('leak_blocking');
   }

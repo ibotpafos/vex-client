@@ -27,6 +27,7 @@ export function isVpnTransportFallbackError(error: unknown): boolean {
   // permission, or local application faults and must stay on the selected
   // location for a clear, recoverable error.
   return message.includes('handshake') ||
+    message.includes('vpn dns/https verification') ||
     message.includes('vpn backend did not enter the connected state') ||
     message.includes('vpn connection failed') ||
     message.includes('vpn_connect_failed') ||

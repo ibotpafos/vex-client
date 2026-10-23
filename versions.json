@@ -1,10 +1,10 @@
 {
   "android": {
-    "version": "1.0.78",
-    "build": 86,
+    "version": "1.0.79",
+    "build": 87,
     "min_supported_build": 1002930,
     "is_required": false,
-    "release_notes": "Кандидат Android 1.0.78: защита при загрузке и исправление рассинхронизации локации при автоматическом восстановлении VPN. Отменённые попытки не меняют новое подключение; неудачное восстановление сохраняет блокировку трафика.",
+    "release_notes": "Android: подтверждение DNS и HTTPS через выбранный VPN перед статусом подключения.",
     "core_version": "0.1.0",
     "config_schema_version": 1,
     "min_config_schema_version": 1,

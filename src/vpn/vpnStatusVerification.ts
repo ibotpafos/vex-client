@@ -12,7 +12,12 @@ export function hasVerifiedNativeTunnelActivity(status: VpnStatus, platform: str
 
 export function resolveNativeTunnelVerified(status: VpnStatus, platform: string): boolean {
   const hasVerifiedActivity = hasVerifiedNativeTunnelActivity(status, platform);
-  if (platform === 'android' || platform === 'ios') {
+  if (platform === 'android') {
+    // Old Android binaries cannot establish this proof. A signed native update
+    // is required; counters and a legacy `verified` flag must fail closed.
+    return hasVerifiedActivity && status.verified !== false && status.dataPlaneVerified === true;
+  }
+  if (platform === 'ios') {
     return hasVerifiedActivity;
   }
   return hasVerifiedActivity || status.verified === true;

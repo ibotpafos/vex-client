@@ -68,6 +68,7 @@ export function areVpnStatusesEqual(left: VpnStatus, right: VpnStatus) {
     && left.latestHandshakeEpochMillis === right.latestHandshakeEpochMillis
     && left.leakProtection === right.leakProtection
     && left.verified === right.verified
+    && left.dataPlaneVerified === right.dataPlaneVerified
     && left.verificationReason === right.verificationReason;
 }
 

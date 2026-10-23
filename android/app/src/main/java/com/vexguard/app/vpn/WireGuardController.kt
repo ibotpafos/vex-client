@@ -55,6 +55,7 @@ class WireGuardController(context: Context) {
   private var lastConfigText: String? = null
   private var lastRoutingParameters: String? = null
   private var activePeerIdentity: Map<String, String> = emptyMap()
+  private val dataPlaneVerification = VpnDataPlaneVerification()
   private val routingPolicyStore = NativeRoutingPolicyStore(appContext)
   @Volatile private var routingNetworkGeneration = 1L
   private var nextRoutingCacheCheck = 0L
@@ -70,6 +71,7 @@ class WireGuardController(context: Context) {
 
   private fun admitActivePeer(config: Config) {
     val active = verifyActivePeer(config)
+    dataPlaneVerification.clear()
     activePeerIdentity = mapOf(
       "generation" to UUID.randomUUID().toString(),
       "peerSha256" to vpnIdentityFingerprint(active.sorted().joinToString("\n")),
@@ -202,11 +204,8 @@ class WireGuardController(context: Context) {
                 antiLeakEnabled = antiLeakEnabled,
                 leakBlockerActive = VexLeakBlockerService.isActive(),
               )) {
-              verifyActivePeer(admission.config)
-              return@orchestrate VpnConnectionState.Connected(
-                statsOrEmpty(),
-                if (antiLeakEnabled) LeakProtectionState.Armed else LeakProtectionState.Off,
-              )
+              admitActivePeer(admission.config)
+              return@orchestrate connectedState(statsOrEmpty(), antiLeakEnabled)
             }
             if (admittedRouting == null && !VexLeakBlockerService.stopAndAwait(appContext)) {
               throw IllegalStateException("Anti-leak service did not stop before VPN connect.")
@@ -230,7 +229,7 @@ class WireGuardController(context: Context) {
             }
             lastConfigText = admission.text
             antiLeakArmed = antiLeakEnabled
-            VpnConnectionState.Connected(traffic, if (antiLeakEnabled) LeakProtectionState.Armed else LeakProtectionState.Off)
+            connectedState(traffic, antiLeakEnabled)
           },
           onMutationFailure = {
             if (antiLeakEnabled) {
@@ -383,6 +382,7 @@ class WireGuardController(context: Context) {
   }
 
   private fun setTunnelDown() {
+    dataPlaneVerification.clear()
     try {
       backend.setState(tunnel, Tunnel.State.DOWN, null)
     } catch (error: Throwable) {
@@ -623,10 +623,41 @@ class WireGuardController(context: Context) {
 
   private fun Tunnel.State.toConnectionState(traffic: VpnTraffic, antiLeakEnabled: Boolean): VpnConnectionState {
     return when (this) {
-      Tunnel.State.UP -> VpnConnectionState.Connected(traffic, if (antiLeakEnabled) LeakProtectionState.Armed else LeakProtectionState.Off)
+      Tunnel.State.UP -> connectedState(traffic, antiLeakEnabled)
       Tunnel.State.DOWN -> VpnConnectionState.Disconnected
       Tunnel.State.TOGGLE -> VpnConnectionState.Disconnected
     }
+  }
+
+  // Called under tunnelMutex. The check itself runs outside that lock, so
+  // cancel, disconnect and handover remain available throughout its deadline.
+  private fun connectedState(traffic: VpnTraffic, antiLeakEnabled: Boolean): VpnConnectionState.Connected {
+    val peer = activePeerIdentity["generation"].orEmpty()
+    val network = routingNetworkGeneration
+    val now = SystemClock.elapsedRealtime()
+    val proof = dataPlaneVerification.status(peer, network, now)
+    val handle = backend.getRoutingDataPlaneHandle()
+    if (traffic.latestHandshakeEpochMillis > 0L && handle >= 0) {
+      dataPlaneVerification.begin(peer, network, now)?.let { attempt ->
+        recoveryScope.launch {
+          val started = SystemClock.elapsedRealtime()
+          val result = runCatching { org.amnezia.awg.GoBackend.awgRouterVerifyDataPlane(handle) }.getOrDefault(3)
+          tunnelMutex.withLock {
+            // Re-read both owners and the real UAPI keyset before accepting.
+            dataPlaneVerification.status(activePeerIdentity["generation"].orEmpty(), routingNetworkGeneration, SystemClock.elapsedRealtime())
+            if (peer != activePeerIdentity["generation"] || network != routingNetworkGeneration || backend.getState(tunnel) != Tunnel.State.UP) return@withLock
+            val identityMatches = runCatching { verifyActivePeer(VpnConfigActivation.parse(lastConfigText ?: "")); true }.getOrDefault(false)
+            val accepted = dataPlaneVerification.complete(attempt, if (identityMatches) result else 3, SystemClock.elapsedRealtime())
+            if (accepted) {
+              Log.i(TAG, "vpn_data_plane_result generation=$peer networkGeneration=$network result=$result identityMatches=$identityMatches durationMs=${SystemClock.elapsedRealtime() - started}")
+            }
+          }
+        }
+      }
+    }
+    return VpnConnectionState.Connected(traffic,
+      if (antiLeakEnabled) LeakProtectionState.Armed else LeakProtectionState.Off,
+      proof.verified, proof.reason)
   }
 
   private fun endpointHost(endpoint: String): String? {
@@ -726,7 +757,8 @@ sealed interface VpnConnectionState {
   data object Disconnected : VpnConnectionState
   data object Blocking : VpnConnectionState
   data class Transition(val state: String, val leakProtection: LeakProtectionState) : VpnConnectionState
-  data class Connected(val traffic: VpnTraffic, val leakProtection: LeakProtectionState) : VpnConnectionState
+  data class Connected(val traffic: VpnTraffic, val leakProtection: LeakProtectionState,
+    val dataPlaneVerified: Boolean = false, val verificationReason: String? = "data_plane_pending") : VpnConnectionState
 }
 
 enum class LeakProtectionState(val wireValue: String) {

@@ -167,6 +167,8 @@ export function useVpnConnectionFlow({
         requireCurrentOperation();
         const status = await waitForVerifiedVpnConnection(startedStatus, getVpnStatus, {
           assertCurrent: requireCurrentOperation,
+          requireDataPlane: Platform.OS === 'android',
+          timeoutMs: Platform.OS === 'android' ? 25_000 : 10_000,
           // The native backend can briefly expose the previous peer timestamp
           // while replacing a tunnel. Require activity from this attempt. The
           // small tolerance covers second-resolution backend timestamps.
@@ -175,13 +177,8 @@ export function useVpnConnectionFlow({
         });
         const verificationCompletedMs = Date.now();
         requireCurrentOperation();
-        // TODO(android-route-canary): require DNS and HTTPS over a VPN-bound
-        // socket before calling this full data-plane recovery. A plain JS fetch
-        // can bypass the tunnel in per-app mode, so it cannot prove this safely.
-        // The 2026-10-23 Mi A1 qualification paired live peer/endpoint identity
-        // with ordinary-UID DE/NL egress and covered recovery ownership. That
-        // lab evidence does not supply a per-connection native-bound canary;
-        // handshake success alone still cannot prove data-plane reachability.
+        // Android admission requires fresh peer-bound DNS and TLS/HTTP proof
+        // from the AWG NetTUN, independent of DIRECT and per-app routing.
         if (candidate) {
           dynamicRouteRuntime.recordSuccess(candidate);
           reportRoute(candidate, endpointAttempts.length > 1 ? 'fallback_succeeded' : 'connect_succeeded', 'ok');

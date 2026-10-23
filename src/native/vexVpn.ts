@@ -7,7 +7,8 @@ import type { VpnRoutingMode } from '@/vpn/routingPolicy';
 
 export type VpnState = 'connected' | 'connecting' | 'disconnecting' | 'disconnected' | 'error' | 'verifying' | 'degraded';
 export type LeakProtectionState = 'off' | 'armed' | 'blocking';
-export type VpnVerificationReason = 'handshake_pending' | 'handshake_stale' | 'device_usage_degraded' | 'endpoint_failed';
+export type VpnVerificationReason = 'handshake_pending' | 'handshake_stale' | 'device_usage_degraded' | 'endpoint_failed'
+  | 'data_plane_pending' | 'dns_failed' | 'https_failed' | 'data_plane_unavailable';
 
 export type VpnStatus = {
   state: VpnState;
@@ -16,6 +17,7 @@ export type VpnStatus = {
   latestHandshakeEpochMillis?: number;
   leakProtection?: LeakProtectionState;
   verified?: boolean;
+  dataPlaneVerified?: boolean;
   verificationReason?: VpnVerificationReason;
 };
 

@@ -38,7 +38,6 @@ import { foregroundLatencyTargets } from '../src/vpn/foregroundLatencyTargets';
 import { DynamicRouteEngine, parseDynamicRoutePolicy } from '../src/vpn/dynamicRouteCore';
 import { connectableLocalProfile, explicitConnectProfileResolutionOptions, shouldUseLocalProfileBeforeOnline, vpnConnectTelemetry, vpnConnectTimingSamples, vpnUnexpectedDisconnectTelemetry } from '../src/vpn/connectFlow';
 import { recoverVpnConnection } from '../src/vpn/connectionRecovery';
-import { connectFreshSameLocationProfile } from '../src/vpn/sameLocationProfileRecovery';
 import {
   initialRecoveryBackoffState,
   recoveryAttemptAllowed,
@@ -1652,7 +1651,6 @@ async function runAsyncTests(): Promise<void> {
   runServerPickerInteractionTests();
   runTrafficSummaryTests();
   runRecoveryBackoffTests();
-  await testFreshSameLocationProfileConnectsSecondNode();
   await testMissingFallbackProfileSkipsOnly404();
   await runServerSwitchTests();
   await runLocationCatalogRefreshTests();
@@ -1748,25 +1746,6 @@ async function runLocationCatalogRefreshTests(): Promise<void> {
   });
   await changed.refresh('interval');
   assertDeepEqual(changedCommits, [changedCatalog]);
-}
-
-async function testFreshSameLocationProfileConnectsSecondNode(): Promise<void> {
-  const calls: string[] = [];
-  const freshProfile = profileForLocation('de', 'de-second.example.com:443');
-  const connected = await connectFreshSameLocationProfile({
-    connectProfile: async (profile) => {
-      calls.push(`connect:${profileEndpoint(profile)}`);
-      return { profile, status: connectedStatus };
-    },
-    locationId: 'de',
-    resolveProfile: async (locationId, options) => {
-      calls.push(`resolve:${locationId}:${options.forceRefresh ? 'fresh' : 'cached'}`);
-      return freshProfile;
-    },
-  });
-
-  assertEqual(profileEndpoint(connected.profile), 'de-second.example.com:443');
-  assertDeepEqual(calls, ['resolve:de:fresh', 'connect:de-second.example.com:443']);
 }
 
 async function testMissingFallbackProfileSkipsOnly404(): Promise<void> {

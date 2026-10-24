@@ -49,7 +49,6 @@ import { submitClientDiagnostics, type VpnLocation } from '@/api/vexApi';
 import { dynamicRouteRuntime } from '@/vpn/dynamicRouteRuntime';
 import { routeTransport, type DynamicRouteAttempt, type DynamicRouteCandidate } from '@/vpn/dynamicRouteCore';
 import type { VpnProfile } from '@/vpn/profile';
-import { connectFreshSameLocationProfile } from '@/vpn/sameLocationProfileRecovery';
 import { SessionOperationSupersededError } from '@/vpn/sessionOperation';
 
 type UseVpnConnectionFlowInput = {
@@ -114,6 +113,9 @@ export function useVpnConnectionFlow({
       await withTimeout(prepareClientNetworkDiagnostics(session.accessToken, profile.device?.id, isCurrentSessionOperation), 1_500, 'Optional network observation timed out.').catch(() => undefined);
       requireCurrentOperation();
     }
+    // TODO(account-key-admission): reconcile the account's pending/confirmed
+    // key before dispatching a cached managed profile. Address/budget checks
+    // do not consult the rotation journal; reconciliation currently starts in API.
     if (!vpnProfileAddressMatchesDevice(profile)) {
       throw new Error('VPN connection failed: cached profile address does not match its device assignment.');
     }
@@ -310,17 +312,29 @@ export function useVpnConnectionFlow({
 
     try {
       if (!connected) {
+        let freshProfile: VpnProfile | undefined;
         try {
-          connected = await connectFreshSameLocationProfile({
-            connectProfile: connectCurrentProfile,
-            locationId: profileLocationId,
-            resolveProfile: resolveCurrentProfile,
+          freshProfile = await resolveCurrentProfile(profileLocationId, {
+            forceRefresh: true,
+            requestPermission: false,
           });
-          connectedLocationId = profileLocationId;
         } catch (error) {
           lastConnectError = error;
-          if (!isVpnTransportFallbackError(error) && !isProfileResolutionFallbackError(error)) {
+          // Issuance can commit placement before losing its reply. A transport-
+          // shaped preparation error cannot authorize another location's issue.
+          if (!isProfileResolutionFallbackError(error)) {
             throw error;
+          }
+        }
+        if (freshProfile) {
+          try {
+            connected = await connectCurrentProfile(freshProfile);
+            connectedLocationId = profileLocationId;
+          } catch (error) {
+            lastConnectError = error;
+            if (!isVpnTransportFallbackError(error) && !isProfileResolutionFallbackError(error)) {
+              throw error;
+            }
           }
         }
       }

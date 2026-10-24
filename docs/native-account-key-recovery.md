@@ -30,6 +30,19 @@ private pair is reused. If the replacement already has that public key and an
 accepted epoch, recovery promotes that pair without another rotation. Session
 supersession and storage errors stop subsequent writes and dispatch.
 
+Cancelling a profile request also stops its pending-key recovery at the existing
+account-owner fences. A cancellation during journal persistence cannot start a
+later rotation, including implicit repair after a rejected local key sync;
+a cancellation after an identity challenge cannot dispatch its
+proof. If cancellation arrives while the active key is being saved, the pending
+journal stays available for the next reconciliation. Already accepted requests
+may complete; cancellation does not prove that the server rejected a mutation.
+
+Shared registration remains a session-owned transaction. Cancelling one profile
+borrower does not interrupt its durable confirmation or another live borrower.
+Profile-owned recovery combines the request cancellation and session checks
+without applying that request lifetime to the shared registration.
+
 Recovery does not automatically replay an uncertain registration or rotation.
 It does not transfer an older orphan journal whose source cannot be confirmed
 from the account mapping or its existing migration record. That case still

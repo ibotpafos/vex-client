@@ -137,6 +137,7 @@ async function preparedTunnelFromDeviceConfig(accessToken: string, client: VpnCl
 
 async function managedVpnProfile(accessToken: string, client: VpnClientDescriptor, options: PreparedTunnelOptions): Promise<PreparedTunnel> {
   const requireCurrentOperation = () => requireProfileRequest(options);
+  const isCurrentProfileOperation = () => { requireCurrentOperation(); return true; };
   requireCurrentOperation();
   const startedAtMs = Date.now();
   const locationId = normalizeLocationId(options.locationId);
@@ -237,12 +238,19 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
     }
     if (accountOptions && device.userId && device.userId !== accountOptions.userId) throw new Error('VPN-устройство принадлежит другому аккаунту.');
     if (accountOptions && pendingAccountKeyPair) {
-      const recovered = await withVpnAccountDevice(accessToken, device.id, accountOptions, async (currentDevice, identity) => {
-        const pending = await pendingVpnAccountKeyPair(identity.keyScope, options.isCurrentSessionOperation);
+      // This recovery belongs to the profile request. Reuse the account
+      // owner's fences for both session and caller cancellation, while the
+      // shared registration above retains its independent durable receipt.
+      const recoveryOptions: VpnAccountIdentityOptions = {
+        ...accountOptions,
+        isCurrentSessionOperation: isCurrentProfileOperation,
+      };
+      const recovered = await withVpnAccountDevice(accessToken, device.id, recoveryOptions, async (currentDevice, identity) => {
+        const pending = await pendingVpnAccountKeyPair(identity.keyScope, recoveryOptions.isCurrentSessionOperation);
         requireCurrentOperation();
         if (!pending) return { device: currentDevice, keyPair: identity.keyPair };
-        const result = await rotateVpnAccountDeviceKey(accessToken, currentDevice, identity, pending, options.isCurrentSessionOperation, { client, options: accountOptions });
-        if (!identity.legacyRegistrationPending) await clearPendingVpnAccountKeyPair(identity.keyScope, options.isCurrentSessionOperation);
+        const result = await rotateVpnAccountDeviceKey(accessToken, currentDevice, identity, pending, recoveryOptions.isCurrentSessionOperation, { client, options: recoveryOptions });
+        if (!identity.legacyRegistrationPending) await clearPendingVpnAccountKeyPair(identity.keyScope, recoveryOptions.isCurrentSessionOperation);
         return result;
       });
       requireCurrentOperation();
@@ -260,7 +268,7 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
         }
         // Web authorization can create a placeholder before the native key.
         // Recover through the normal transactional rotation to the next epoch.
-        device = await rotateManagedVpnKey(accessToken, device.id, device.keyEpoch, options.isCurrentSessionOperation, accountOptions?.userId);
+        device = await rotateManagedVpnKey(accessToken, device.id, device.keyEpoch, isCurrentProfileOperation, accountOptions?.userId);
         requireCurrentOperation();
         keyPair = accountOptions ? (await getOrCreateVpnAccountIdentity(accountOptions)).keyPair : await getOrCreateWireGuardKeyPair();
         requireCurrentOperation();

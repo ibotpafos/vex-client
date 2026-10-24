@@ -21,6 +21,75 @@ const legacyPair = { publicKey: key(1), privateKey: key(2), keyEpoch: 1 };
 const legacyId = 'vexd_legacy-installation';
 const gate = () => { let resolve; const promise = new Promise(ok => { resolve = ok; }); return { promise, resolve }; };
 
+for (const platform of ['ios', 'android']) {
+  test(`${platform}: cancelled profile recovery cannot rotate after its journal write`, async () => {
+    const h = harness(platform), initial = await h.prepare('A');
+    h.interruptConfirmation('ordinary-rotate-before-commit');
+    await assert.rejects(h.api.rotateManagedVpnKey('A', initial.device.id, initial.device.keyEpoch, () => true, 'A'));
+    h.interruptConfirmation(undefined);
+    const name = [...h.saved.keys()].find(key => key.endsWith('.pending'));
+    const pending = h.saved.get(name), device = JSON.stringify(h.devices.get('A'));
+    const activeName = name.slice(0, -'.pending'.length), active = h.saved.get(activeName);
+    const rotations = h.rotations.length, controller = new AbortController();
+    h.onStoreWrite(key => { if (key === name) controller.abort(); });
+    await assert.rejects(h.prepare('A', { signal: controller.signal }), error => error.code === 'request_cancelled');
+    assert.equal(h.rotations.length, rotations, 'cancellation dispatched a late key rotation');
+    assert.equal(JSON.stringify(h.devices.get('A')), device);
+    assert.equal(h.saved.get(name), pending); assert.equal(h.saved.get(activeName), active);
+    h.onStoreWrite(undefined);
+    const recovered = await h.prepare('A');
+    assert.equal(recovered.device.publicKey, JSON.parse(pending).publicKey);
+    assert.equal(h.rotations.length, rotations + 1); assert.equal(h.saved.has(name), false);
+  });
+
+  test(`${platform}: cancelled profile recovery cannot dispatch proof after its challenge`, async () => {
+    const scenario = await orphanedRotation(platform), h = scenario.restarted;
+    const controller = new AbortController(), before = new Map(h.saved);
+    h.onChallengeComplete(body => { if (body.purpose === 'reconcile') controller.abort(); });
+    await assert.rejects(h.prepare('A', { signal: controller.signal }), error => error.code === 'request_cancelled');
+    assert.equal(h.registrations.length, 0, 'cancellation dispatched a late reconciliation proof');
+    assert.equal(h.rotations.length, 0); assert.deepEqual(h.saved, before);
+    h.onChallengeComplete(undefined);
+    const recovered = await h.prepare('A');
+    assert.equal(recovered.device.publicKey, scenario.pending.publicKey);
+    assert.equal(h.rotations.length, 1);
+  });
+
+  test(`${platform}: cancelled implicit profile recovery cannot rotate after its journal write`, async () => {
+    const h = harness(platform); await h.prepare('A');
+    Object.assign(h.devices.get('A')[0], { public_key: key(48), psk_epoch: 5 });
+    const before = JSON.stringify(h.devices.get('A')), controller = new AbortController();
+    h.onStoreWrite(key => { if (key.endsWith('.pending')) controller.abort(); });
+    await assert.rejects(h.prepare('A', { signal: controller.signal }), error => error.code === 'request_cancelled');
+    assert.equal(h.rotations.length, 1, 'cancelled implicit recovery dispatched a new rotation after the rejected sync');
+    assert.equal(JSON.stringify(h.devices.get('A')), before);
+    const name = [...h.saved.keys()].find(key => key.endsWith('.pending'));
+    const pending = JSON.parse(h.saved.get(name));
+    h.onStoreWrite(undefined);
+    const recovered = await h.prepare('A');
+    assert.equal(recovered.device.publicKey, pending.publicKey); assert.equal(recovered.device.keyEpoch, 6);
+    assert.equal(h.rotations.length, 2); assert.equal(h.saved.has(name), false);
+  });
+
+  test(`${platform}: cancelled profile recovery retains its journal after active promotion`, async () => {
+    const h = harness(platform), initial = await h.prepare('A');
+    h.interruptConfirmation('ordinary-rotate-after-commit');
+    await assert.rejects(h.api.rotateManagedVpnKey('A', initial.device.id, initial.device.keyEpoch, () => true, 'A'));
+    h.interruptConfirmation(undefined);
+    const name = [...h.saved.keys()].find(key => key.endsWith('.pending'));
+    const pending = h.saved.get(name), rotations = h.rotations.length;
+    const controller = new AbortController();
+    h.onStoreWrite(key => { if (key === name.slice(0, -'.pending'.length)) controller.abort(); });
+    await assert.rejects(h.prepare('A', { signal: controller.signal }), error => error.code === 'request_cancelled');
+    assert.equal(h.saved.get(name), pending, 'cancellation deleted the only recovery journal');
+    assert.equal(h.rotations.length, rotations);
+    h.onStoreWrite(undefined);
+    const recovered = await h.prepare('A');
+    assert.equal(recovered.device.publicKey, JSON.parse(pending).publicKey);
+    assert.equal(h.rotations.length, rotations); assert.equal(h.saved.has(name), false);
+  });
+}
+
 function harness(platform = 'ios', existingStore, nativeRouting = false) {
   const saved = existingStore || new Map([['vex.auth.device_id', legacyId]]);
   const devices = new Map(), bindings = new Map([[legacyId, 'A']]), registrations = [], writes = [], requests = [], rotations = [];

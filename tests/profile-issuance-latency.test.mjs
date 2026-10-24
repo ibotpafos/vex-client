@@ -25,7 +25,7 @@ function managedHarness({response = confirmed, current = device, key = {publicKe
   const requests = [];
   const run = load('src/api/vpn.ts', 'managedVpnProfile', {
     supportsNativeRoutingPolicy:()=>false, Platform:{OS:'android'}, me:async()=>({id:'fixture-owner'}),
-    getOrCreateVpnAccountIdentity:async()=>({installationId:'runtime',externalDeviceId:'runtime',keyScope:'fixture-scope',keyPair:{...(typeof key === 'function' ? key() : key),keyEpoch:2}}),
+    pendingVpnAccountKeyPair:async()=>undefined,getOrCreateVpnAccountIdentity:async()=>({installationId:'runtime',externalDeviceId:'runtime',keyScope:'fixture-scope',keyPair:{...(typeof key === 'function' ? key() : key),keyEpoch:2}}),
     clientVersionHeaders:headers, getOrCreateWireGuardKeyPair:async()=>typeof key === 'function' ? key() : key, getOrCreateDeviceId:async()=> 'runtime', nativeVpnDeviceForClient,
     withManagedProfileAWGCapability:q=>q, defaultVpnRoutingMode:'smart', defaultVpnRoutingPolicyVersion:'v1', resolvedVpnBypassRegion:()=>'', requireVpnLocationId:x=>x,
     canRevalidateDevice, isPositiveSafeInteger, isNonnegativeSafeInteger, ApiRequestError, requireRequestActive, isApiRequestCancelled, withRequestCancellation, jsonRequest:async path=> {

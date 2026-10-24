@@ -54,17 +54,27 @@ export async function saveVpnAccountKeyPair(keyScope: string, pair: WireGuardKey
   await SecureStore.setItemAsync(keyPrefix + requireScope(keyScope), JSON.stringify(validatedVpnAccountKeyPair(pair)));
   requireCurrent(options);
 }
-export async function pendingVpnAccountKeyPair(keyScope: string, isCurrentSessionOperation?: () => boolean): Promise<WireGuardKeyPair | undefined> {
+type PendingVpnAccountKeyPair = WireGuardKeyPair & { deviceId?: string };
+
+function validatedPendingVpnAccountKeyPair(value: unknown): PendingVpnAccountKeyPair {
+  const pair = validatedVpnAccountKeyPair(value);
+  const deviceId = (value as { deviceId?: unknown }).deviceId;
+  if (deviceId === undefined) return pair; // Existing legacy journals have no target field.
+  if (typeof deviceId !== 'string' || !deviceId.trim() || deviceId !== deviceId.trim()) throw new Error('Сохранённое намерение ротации VPN повреждено.');
+  return { ...pair, deviceId };
+}
+
+export async function pendingVpnAccountKeyPair(keyScope: string, isCurrentSessionOperation?: () => boolean): Promise<PendingVpnAccountKeyPair | undefined> {
   const options = { isCurrentSessionOperation };
   requireCurrent(options);
   const raw = await SecureStore.getItemAsync(keyPrefix + requireScope(keyScope) + '.pending');
   requireCurrent(options);
-  return raw === null ? undefined : validatedVpnAccountKeyPair(JSON.parse(raw));
+  return raw === null ? undefined : validatedPendingVpnAccountKeyPair(JSON.parse(raw));
 }
-export async function savePendingVpnAccountKeyPair(keyScope: string, pair: WireGuardKeyPair, isCurrentSessionOperation?: () => boolean): Promise<void> {
+export async function savePendingVpnAccountKeyPair(keyScope: string, pair: PendingVpnAccountKeyPair, isCurrentSessionOperation?: () => boolean): Promise<void> {
   const options = { isCurrentSessionOperation };
   requireCurrent(options);
-  await SecureStore.setItemAsync(keyPrefix + requireScope(keyScope) + '.pending', JSON.stringify(validatedVpnAccountKeyPair(pair)));
+  await SecureStore.setItemAsync(keyPrefix + requireScope(keyScope) + '.pending', JSON.stringify(validatedPendingVpnAccountKeyPair(pair)));
   requireCurrent(options);
 }
 export async function clearPendingVpnAccountKeyPair(keyScope: string, isCurrentSessionOperation?: () => boolean): Promise<void> {

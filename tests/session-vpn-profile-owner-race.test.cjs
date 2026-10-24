@@ -198,6 +198,9 @@ function vpnApi(operations) {
       getOrCreateVpnAccountIdentity: async () => ({ installationId: 'installation-fixture', externalDeviceId: 'installation-fixture', keyScope: 'fixture-scope', keyPair: await operations.native.getOrCreateWireGuardKeyPair() }),
       withVpnAccountIdentity: async (_, callback) => { operations.observe?.('account'); return callback({ keyScope: 'fixture-scope' }); },
       saveVpnAccountKeyPair: async () => operations.native.replaceWireGuardKeyPair(),
+      pendingVpnAccountKeyPair: async () => undefined,
+      savePendingVpnAccountKeyPair: async () => undefined,
+      clearPendingVpnAccountKeyPair: async () => undefined,
     },
     './deviceCreateRequest': {}, './clientDiagnosticsRequest': {}, './nativeDeviceRegistration': {},
     '../vpn/amneziaConfig': {}, '../vpn/profileCapabilities': { withManagedProfileAWGCapability: query => query },
@@ -238,6 +241,7 @@ test('rotation uses independent material only when an authoritative epoch is ava
         return { publicKey: 'fixture-new-key', keyEpoch: options.independentEpoch ? 1 : 7 };
       }, replaceWireGuardKeyPair: async () => { saves++; },
     }, client: { jsonRequest: async (requestPath, options) => {
+      if (requestPath === '/v1/devices') return [{ id: 'fixture-device', public_key: 'fixture-old-key', psk_epoch: serverEpoch }];
       assert.equal(requestPath, '/v1/vpn/rotate-key'); assert.equal(options.body.key_epoch, expected); posts++;
       return { device: { id: 'fixture-device', public_key: 'fixture-new-key', psk_epoch: expected } };
     } } });
@@ -319,7 +323,9 @@ for (const stage of ['generate', 'api']) {
     const wait = async (name, value) => { calls.push(name); if (stage === name) { reached.resolve(); await gate.promise; } return value; };
     const api = vpnApi({
       native: { generateWireGuardKeyPair: () => wait('generate', { publicKey: 'key-A', keyEpoch: 2 }), replaceWireGuardKeyPair: async () => calls.push('replace-native-key') },
-      client: { jsonRequest: () => wait('api', { device: { id: 'device-A' } }) },
+      client: { jsonRequest: path => path === '/v1/devices'
+        ? Promise.resolve([{ id: 'device-A', public_key: 'key-A', psk_epoch: 2 }])
+        : wait('api', { device: { id: 'device-A' } }) },
     });
     const pending = api.rotateManagedVpnKey('token-A', 'device-A', 2, () => current);
     const rejected = assert.rejects(pending, error => error.code === 'SESSION_OPERATION_SUPERSEDED');

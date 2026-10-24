@@ -21,12 +21,15 @@ const gate = () => { let resolve; const promise = new Promise(ok => { resolve = 
 
 function harness(platform = 'ios', existingStore, nativeRouting = false) {
   const saved = existingStore || new Map([['vex.auth.device_id', legacyId]]);
-  const devices = new Map(), bindings = new Map([[legacyId, 'A']]), registrations = [], writes = [], requests = [];
+  const devices = new Map(), bindings = new Map([[legacyId, 'A']]), registrations = [], writes = [], requests = [], rotations = [];
   let generations = 0, lookupFailure = false, writeFailure = false, readFailure = false, markerFailure = false, interruptedConfirmation, removeLegacyBeforeRegistration = false, registerError, holdLookup, holdProfile, profileReached, stagedEpoch, legacyReplacementAllowed = false;
   let globalPair = { ...legacyPair };
+  let activeKeyWriteFailure = false;
+  let rotationComplete;
+  let rotationResponse = {};
   const store = {
     getItemAsync: async storageKey => { if (readFailure && storageKey.startsWith('vex.vpn.account_')) throw Error('locked'); return saved.get(storageKey) ?? null; },
-    setItemAsync: async (storageKey, value) => { writes.push(storageKey); if ((writeFailure && storageKey.startsWith('vex.vpn.account_')) || (markerFailure && storageKey === 'vex.vpn.legacy_key_owner.v1')) throw Error('persistence'); if (interruptedConfirmation === 'confirmation' && storageKey.startsWith('vex.vpn.account_registration') && JSON.parse(value).legacyRegistrationPending === false) throw Error('confirmation storage lost'); saved.set(storageKey, value); },
+    setItemAsync: async (storageKey, value) => { writes.push(storageKey); if ((writeFailure && storageKey.startsWith('vex.vpn.account_')) || (activeKeyWriteFailure && storageKey.startsWith('vex.vpn.account_keys.') && !storageKey.endsWith('.pending')) || (markerFailure && storageKey === 'vex.vpn.legacy_key_owner.v1')) throw Error('persistence'); if (interruptedConfirmation === 'confirmation' && storageKey.startsWith('vex.vpn.account_registration') && JSON.parse(value).legacyRegistrationPending === false) throw Error('confirmation storage lost'); saved.set(storageKey, value); },
     deleteItemAsync: async storageKey => { saved.delete(storageKey); },
   };
   const app = load('src/native/appInfo.ts', 'getOrCreateDeviceId,getAppInfo,createInstallationUUID', { SecureStore: store, Application: {}, Platform: { OS: platform }, getOtaProvenance: () => ({}) });
@@ -76,15 +79,22 @@ function harness(platform = 'ios', existingStore, nativeRouting = false) {
       bindings.set(body.installation_id, owner); if (interruptedConfirmation === 'register') throw Error('registration response lost'); return { device };
     }
     if (requestPath === '/v1/vpn/rotate-key') {
+      rotations.push({ owner, body: { ...options.body }, idempotencyKey: options.idempotencyKey, retryCount: options.retryCount });
       const device = (devices.get(owner) || []).find(item => item.id === options.body.device_id);
       if (options.body.key_epoch !== device.psk_epoch + 1) throw new ApiRequestError('key_epoch does not match next device epoch', { status: 409, code: 'conflict' });
+      if (interruptedConfirmation === 'ordinary-rotate-before-commit') throw Error('rotation response lost before commit');
+      if (interruptedConfirmation === 'ordinary-rotate-after-commit') {
+        device.public_key = options.body.public_key; device.psk_epoch = options.body.key_epoch;
+        throw Error('rotation response lost after commit');
+      }
       if (interruptedConfirmation === 'rotate') {
         const pending = [...saved.entries()].find(([storageKey]) => storageKey.endsWith('.pending'));
         assert.ok(pending, 'repair private pair must be durable before rotation POST');
         assert.equal(JSON.parse(pending[1]).publicKey, options.body.public_key);
         device.public_key = options.body.public_key; device.psk_epoch = options.body.key_epoch; throw Error('rotation response lost');
       }
-      device.public_key = options.body.public_key; device.psk_epoch = options.body.key_epoch; return { device };
+      device.public_key = options.body.public_key; device.psk_epoch = options.body.key_epoch;
+      rotationComplete?.(); return { device: { ...device, ...rotationResponse } };
     }
     if (requestPath.startsWith('/v1/vpn/profile?')) {
       if (holdProfile) { profileReached.resolve(); await holdProfile.promise; }
@@ -109,10 +119,13 @@ function harness(platform = 'ios', existingStore, nativeRouting = false) {
     me: async token => ({ id: ownerFor(token) }), clientVersionHeaders: async () => ({}), jsonRequest, ...errors, ...cancellation,
     defaultVpnRoutingMode: 'default', defaultVpnRoutingPolicyVersion: 'v1', resolvedVpnBypassRegion: () => '', withManagedProfileAWGCapability: query => query,
   });
-  return { api, scoped, saved, devices, bindings, registrations, requests, writes, dto, generations: () => generations,
+  return { api, scoped, saved, devices, bindings, registrations, requests, writes, rotations, dto, generations: () => generations,
     setLookupFailure: value => { lookupFailure = value; }, setWriteFailure: value => { writeFailure = value; }, setReadFailure: value => { readFailure = value; }, setRegisterError: value => { registerError = value; }, holdLookup: value => { holdLookup = value; }, ApiRequestError,
     holdProfile: (value, reached) => { holdProfile = value; profileReached = reached; }, allowLegacyReplacement: () => { legacyReplacementAllowed = true; },
     setMarkerFailure: value => { markerFailure = value; },
+    setActiveKeyWriteFailure: value => { activeKeyWriteFailure = value; },
+    onRotationComplete: value => { rotationComplete = value; },
+    setRotationResponse: value => { rotationResponse = value; },
     interruptConfirmation: value => { interruptedConfirmation = value; },
     removeLegacyBeforeRegister: () => { removeLegacyBeforeRegistration = true; },
     setStagedEpoch: value => { stagedEpoch = value; },
@@ -361,4 +374,188 @@ test('corrupt pair and ambiguous legacy list fail closed', async () => {
   await assert.rejects(ambiguous.prepare('B'), /неоднозначные/); assert.equal(ambiguous.registrations.length, 0);
   const empty = harness(); empty.saved.set('vex.vpn.account_registration.v1.42', '');
   await assert.rejects(empty.prepare('B'), /регистрация VPN повреждена/); assert.equal(empty.generations(), 0); assert.equal(empty.registrations.length, 0);
+});
+
+
+for (const platform of ['android', 'ios']) {
+  for (const fault of ['ordinary-rotate-before-commit', 'ordinary-rotate-after-commit', 'active-key-persistence']) {
+    test(`${platform}: ordinary rotation retains its prepared private key across ${fault}`, async () => {
+      const h = harness(platform); const initial = await h.prepare('A');
+      const mapping = JSON.parse(h.saved.get('vex.vpn.account_registration.v1.41'));
+      const activeKey = `vex.vpn.account_keys.v1.${mapping.keyScope}`;
+      const old = h.saved.get(activeKey);
+      if (fault === 'active-key-persistence') h.setActiveKeyWriteFailure(true);
+      else h.interruptConfirmation(fault);
+      await assert.rejects(h.api.rotateManagedVpnKey('A', initial.device.id, initial.device.keyEpoch, () => true, 'A'), /response lost|persistence/);
+      const pendingRaw = h.saved.get(activeKey + '.pending');
+      assert.ok(pendingRaw, 'prepared private material must be durable before the mutation');
+      const pending = JSON.parse(pendingRaw);
+      assert.equal(pending.deviceId, initial.device.id, 'the intent belongs to one device');
+      assert.equal(h.saved.get(activeKey), old, 'the confirmed pair remains active until acknowledgement is durable');
+      const after = h.devices.get('A')[0];
+      const restarted = harness(platform, h.saved); restarted.devices.set('A', h.devices.get('A'));
+      for (const [installation, owner] of h.bindings) restarted.bindings.set(installation, owner);
+      const repaired = await restarted.prepare('A');
+      assert.equal(repaired.device.id, initial.device.id);
+      assert.equal(repaired.device.publicKey, pending.publicKey);
+      assert.ok(repaired.config.includes(`PrivateKey = ${pending.privateKey}`));
+      assert.equal(restarted.generations(), 0, 'recovery must reuse the durable material');
+      assert.equal(restarted.requests.filter(route => route === '/v1/vpn/rotate-key').length, fault === 'ordinary-rotate-before-commit' ? 1 : 0);
+      assert.equal(after.public_key, pending.publicKey);
+      assert.equal(h.saved.has(activeKey + '.pending'), false);
+    });
+  }
+}
+
+
+for (const platform of ['android', 'ios']) {
+  test(`${platform}: uncommitted rotation resumes the exact saved request without new material`, async () => {
+    const h = harness(platform); const initial = await h.prepare('A');
+    h.interruptConfirmation('ordinary-rotate-before-commit');
+    await assert.rejects(h.api.rotateManagedVpnKey('A', initial.device.id, initial.device.keyEpoch, () => true, 'A'));
+    const request = h.rotations[0]; assert.equal(request.retryCount, 0);
+    assert.equal(Object.hasOwn(request.body, 'private_key'), false);
+    const restarted = harness(platform, h.saved); restarted.devices.set('A', h.devices.get('A'));
+    await restarted.prepare('A');
+    assert.equal(restarted.generations(), 0); assert.deepEqual(restarted.rotations, [request]);
+  });
+
+  test(`${platform}: cancellation after server rotation retains a recoverable intent`, async () => {
+    const h = harness(platform); const initial = await h.prepare('A'); let current = true;
+    h.onRotationComplete(() => { current = false; });
+    await assert.rejects(h.api.rotateManagedVpnKey('A', initial.device.id, initial.device.keyEpoch, () => current, 'A'), error => error.code === 'SESSION_OPERATION_SUPERSEDED');
+    const restarted = harness(platform, h.saved); restarted.devices.set('A', h.devices.get('A'));
+    const recovered = await restarted.prepare('A');
+    assert.equal(recovered.device.publicKey, h.rotations[0].body.public_key);
+    assert.equal(restarted.rotations.length, 0); assert.equal(restarted.generations(), 0);
+  });
+
+  test(`${platform}: a later server PSK epoch confirms the same pending private material`, async () => {
+    const h = harness(platform); const initial = await h.prepare('A');
+    h.interruptConfirmation('ordinary-rotate-after-commit');
+    await assert.rejects(h.api.rotateManagedVpnKey('A', initial.device.id, initial.device.keyEpoch, () => true, 'A'));
+    h.devices.get('A')[0].psk_epoch += 1;
+    const restarted = harness(platform, h.saved); restarted.devices.set('A', h.devices.get('A'));
+    const recovered = await restarted.prepare('A');
+    assert.equal(recovered.device.keyEpoch, initial.device.keyEpoch + 2);
+    assert.equal(recovered.device.publicKey, h.rotations[0].body.public_key);
+    assert.equal(restarted.rotations.length, 0); assert.equal(restarted.generations(), 0);
+  });
+
+  test(`${platform}: no rotation is posted when its private journal cannot be saved`, async () => {
+    const h = harness(platform); const initial = await h.prepare('A'); const before = JSON.stringify(h.devices.get('A'));
+    h.setWriteFailure(true);
+    await assert.rejects(h.api.rotateManagedVpnKey('A', initial.device.id, initial.device.keyEpoch, () => true, 'A'), /persistence/);
+    assert.equal(h.rotations.length, 0); assert.equal(JSON.stringify(h.devices.get('A')), before);
+  });
+
+  test(`${platform}: stale explicit rotation does not create a second key after completion`, async () => {
+    const h = harness(platform); const initial = await h.prepare('A');
+    await h.api.rotateManagedVpnKey('A', initial.device.id, initial.device.keyEpoch, () => true, 'A');
+    const generations = h.generations();
+    await assert.rejects(h.api.rotateManagedVpnKey('A', initial.device.id, initial.device.keyEpoch, () => true, 'A'), error => error.code === 'SESSION_OPERATION_SUPERSEDED');
+    assert.equal(h.rotations.length, 1); assert.equal(h.generations(), generations);
+  });
+}
+
+for (const change of ['target', 'newer-key', 'foreign-owner', 'malformed-target']) {
+  test(`pending rotation cannot overwrite ${change}`, async () => {
+    const h = harness(); const initial = await h.prepare('A');
+    h.interruptConfirmation('ordinary-rotate-before-commit');
+    await assert.rejects(h.api.rotateManagedVpnKey('A', initial.device.id, initial.device.keyEpoch, () => true, 'A'));
+    const mapping = JSON.parse(h.saved.get('vex.vpn.account_registration.v1.41'));
+    const name = `vex.vpn.account_keys.v1.${mapping.keyScope}.pending`;
+    const pending = JSON.parse(h.saved.get(name));
+    if (change === 'target') pending.deviceId = 'different-device';
+    if (change === 'malformed-target') pending.deviceId = 42;
+    h.saved.set(name, JSON.stringify(pending));
+    if (change === 'newer-key') Object.assign(h.devices.get('A')[0], { public_key: key(44), psk_epoch: 9 });
+    if (change === 'foreign-owner') h.devices.get('A')[0].user_id = 'B';
+    const snapshot = JSON.stringify(h.devices.get('A'));
+    const restarted = harness('ios', h.saved); restarted.devices.set('A', h.devices.get('A'));
+    await assert.rejects(restarted.prepare('A'));
+    assert.equal(restarted.rotations.length, 0); assert.equal(restarted.generations(), 0);
+    assert.equal(JSON.stringify(h.devices.get('A')), snapshot); assert.equal(h.saved.get(name), JSON.stringify(pending));
+  });
+}
+
+for (const response of [{ id: 'other-device' }, { public_key: key(44) }, { psk_epoch: 50 }]) {
+  test(`a mismatched rotation acknowledgement preserves its durable intent ${Object.keys(response)[0]}`, async () => {
+    const h = harness(); const initial = await h.prepare('A'); h.setRotationResponse(response);
+    await assert.rejects(h.api.rotateManagedVpnKey('A', initial.device.id, initial.device.keyEpoch, () => true, 'A'), /не подтвердил/);
+    const restarted = harness('ios', h.saved); restarted.devices.set('A', h.devices.get('A'));
+    const repaired = await restarted.prepare('A');
+    assert.equal(repaired.device.publicKey, h.rotations[0].body.public_key);
+    assert.equal(restarted.rotations.length, 0); assert.equal(restarted.generations(), 0);
+  });
+}
+
+
+for (const platform of ['android', 'ios']) {
+  test(`${platform}: direct retry confirms a committed pending rotation without another POST`, async () => {
+    const h = harness(platform); const initial = await h.prepare('A');
+    h.interruptConfirmation('ordinary-rotate-after-commit');
+    await assert.rejects(h.api.rotateManagedVpnKey('A', initial.device.id, initial.device.keyEpoch, () => true, 'A'));
+    h.interruptConfirmation(undefined); const generations = h.generations();
+    const recovered = await h.api.rotateManagedVpnKey('A', initial.device.id, initial.device.keyEpoch, () => true, 'A');
+    assert.equal(recovered.publicKey, h.rotations[0].body.public_key);
+    assert.equal(h.rotations.length, 1); assert.equal(h.generations(), generations);
+  });
+
+  test(`${platform}: cached hints cannot bypass an uncommitted durable rotation`, async () => {
+    const h = harness(platform); const initial = await h.prepare('A');
+    h.interruptConfirmation('ordinary-rotate-before-commit');
+    await assert.rejects(h.api.rotateManagedVpnKey('A', initial.device.id, initial.device.keyEpoch, () => true, 'A'));
+    h.interruptConfirmation(undefined); const generations = h.generations(); const offset = h.requests.length;
+    const recovered = await h.prepare('A', { cachedDevice: initial.device, cachedConfig: initial.config, knownVersion: 1 });
+    const work = h.requests.slice(offset);
+    assert.equal(work[0], '/v1/devices', 'reconcile owned state before issuing another profile');
+    assert.ok(work.indexOf('/v1/vpn/rotate-key') < work.findIndex(route => route.startsWith('/v1/vpn/profile?')));
+    assert.notEqual(recovered.config, initial.config); assert.equal(recovered.device.publicKey, h.rotations[0].body.public_key);
+    assert.equal(h.generations(), generations); assert.deepEqual(h.rotations[1], h.rotations[0]);
+  });
+
+  test(`${platform}: PSK-only advancement before commit reuses the pending key at the current counter`, async () => {
+    const h = harness(platform); const initial = await h.prepare('A');
+    h.interruptConfirmation('ordinary-rotate-before-commit');
+    await assert.rejects(h.api.rotateManagedVpnKey('A', initial.device.id, initial.device.keyEpoch, () => true, 'A'));
+    h.devices.get('A')[0].psk_epoch += 2;
+    const restarted = harness(platform, h.saved); restarted.devices.set('A', h.devices.get('A'));
+    const repaired = await restarted.prepare('A');
+    assert.equal(repaired.device.keyEpoch, initial.device.keyEpoch + 3);
+    assert.equal(repaired.device.publicKey, h.rotations[0].body.public_key);
+    assert.equal(restarted.rotations.length, 1); assert.equal(restarted.generations(), 0);
+    assert.notEqual(restarted.rotations[0].idempotencyKey, h.rotations[0].idempotencyKey);
+  });
+}
+
+test('legacy pending pairs remain readable and new device targets round-trip in the same journal', async () => {
+  const h = harness(); const pair = { publicKey: key(44), privateKey: key(45), keyEpoch: 3 };
+  await h.scoped.savePendingVpnAccountKeyPair('fixture-scope', pair);
+  assert.deepEqual(await h.scoped.pendingVpnAccountKeyPair('fixture-scope'), pair);
+  const targeted = { ...pair, deviceId: 'fixture-device' };
+  await h.scoped.savePendingVpnAccountKeyPair('fixture-scope', targeted);
+  assert.deepEqual(await h.scoped.pendingVpnAccountKeyPair('fixture-scope'), targeted);
+  await assert.rejects(h.scoped.savePendingVpnAccountKeyPair('fixture-scope', { ...pair, deviceId: ' ' }), /повреждено/);
+  assert.deepEqual(await h.scoped.pendingVpnAccountKeyPair('fixture-scope'), targeted);
+});
+
+
+test('another account completes its own rotation without consuming an unresolved private intent', async () => {
+  const h = harness(); const a = await h.prepare('A'); const b = await h.prepare('B');
+  h.interruptConfirmation('ordinary-rotate-after-commit');
+  await assert.rejects(h.api.rotateManagedVpnKey('A', a.device.id, a.device.keyEpoch, () => true, 'A'));
+  const aScope = JSON.parse(h.saved.get('vex.vpn.account_registration.v1.41')).keyScope;
+  const aIntentName = `vex.vpn.account_keys.v1.${aScope}.pending`;
+  const aIntent = h.saved.get(aIntentName);
+  h.interruptConfirmation(undefined);
+  const rotatedB = await h.api.rotateManagedVpnKey('B', b.device.id, b.device.keyEpoch, () => true, 'B');
+  assert.notEqual(rotatedB.publicKey, JSON.parse(aIntent).publicKey);
+  assert.equal(h.saved.get(aIntentName), aIntent);
+  const bState = JSON.stringify(h.devices.get('B'));
+  const restarted = harness('ios', h.saved); restarted.devices.set('A', h.devices.get('A')); restarted.devices.set('B', h.devices.get('B'));
+  const repairedA = await restarted.prepare('A');
+  assert.equal(repairedA.device.publicKey, JSON.parse(aIntent).publicKey);
+  assert.equal(restarted.rotations.length, 0); assert.equal(restarted.generations(), 0);
+  assert.equal(JSON.stringify(h.devices.get('B')), bState);
 });

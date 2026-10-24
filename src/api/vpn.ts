@@ -167,6 +167,8 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
     }
   };
   let keyPair = accountIdentity?.keyPair ?? initialKeyPair;
+  const pendingAccountKeyPair = accountIdentity ? await pendingVpnAccountKeyPair(accountIdentity.keyScope, options.isCurrentSessionOperation) : undefined;
+  requireCurrentOperation();
   const baseExternalDeviceId = nativeDeviceId(accountIdentity?.externalDeviceId ?? runtimeDeviceId);
   const externalDeviceId = baseExternalDeviceId;
   const routingMode = options.routingMode ?? defaultVpnRoutingMode;
@@ -182,7 +184,7 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
   let revalidateCachedConfig = false;
   const cachedDevice = options.cachedDevice;
   if (accountOptions && cachedDevice?.userId && cachedDevice.userId !== accountOptions.userId) throw new Error('VPN-устройство принадлежит другому аккаунту.');
-  if (!accountIdentity?.legacyRegistrationPending && options.cachedConfig && isPositiveSafeInteger(options.knownVersion) &&
+  if (!pendingAccountKeyPair && !accountIdentity?.legacyRegistrationPending && options.cachedConfig && isPositiveSafeInteger(options.knownVersion) &&
       cachedDevice && isPositiveSafeInteger(cachedDevice.keyEpoch) &&
       canRevalidateDevice(cachedDevice, cachedDevice, keyPair?.publicKey ?? '') &&
       nativeVpnDeviceForClient([cachedDevice], locationId, externalDeviceId, baseExternalDeviceId)) {
@@ -231,6 +233,19 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
       }
     }
     if (accountOptions && device.userId && device.userId !== accountOptions.userId) throw new Error('VPN-устройство принадлежит другому аккаунту.');
+    if (accountOptions && pendingAccountKeyPair) {
+      const recovered = await withVpnAccountDevice(accessToken, device.id, accountOptions, async (currentDevice, identity) => {
+        const pending = await pendingVpnAccountKeyPair(identity.keyScope, options.isCurrentSessionOperation);
+        requireCurrentOperation();
+        if (!pending) return { device: currentDevice, keyPair: identity.keyPair };
+        const result = await rotateVpnAccountDeviceKey(accessToken, currentDevice, identity, pending, options.isCurrentSessionOperation);
+        if (!identity.legacyRegistrationPending) await clearPendingVpnAccountKeyPair(identity.keyScope, options.isCurrentSessionOperation);
+        return result;
+      });
+      requireCurrentOperation();
+      device = recovered.device;
+      keyPair = recovered.keyPair;
+    }
     if (deviceNeedsLocalKeySync(device, keyPair)) {
       try {
         device = await syncManagedVpnKey(accessToken, device.id, keyPair);
@@ -509,6 +524,17 @@ export async function acknowledgeStagedDevicePSKProfile(
   }
 }
 
+type AccountKeyRotationResult = { device: VpnDevice; keyPair: WireGuardKeyPair };
+
+async function withVpnAccountDevice<T>(accessToken: string, deviceId: string, options: VpnAccountIdentityOptions, use: (device: VpnDevice, identity: VpnAccountIdentity) => Promise<T>): Promise<T> {
+  return withVpnAccountIdentity(options, async identity => {
+    const device = (await vpnDevices(accessToken)).find(row => row.id === deviceId);
+    requireCurrentSession(options.isCurrentSessionOperation);
+    if (!device || (device.userId && device.userId !== options.userId)) throw new Error('Не удалось подтвердить VPN-устройство этого аккаунта.');
+    return use(device, identity);
+  });
+}
+
 export async function rotateManagedVpnKey(accessToken: string, deviceId: string, serverCurrentEpoch?: number, isCurrentSessionOperation?: () => boolean, userId?: string): Promise<VpnDevice> {
   requireCurrentSession(isCurrentSessionOperation);
   // Account setup may persist keys. Reject an unusable server identity first.
@@ -517,12 +543,22 @@ export async function rotateManagedVpnKey(accessToken: string, deviceId: string,
   const accountOptions = requiresManagedNativeProfile(client)
     ? await vpnAccountOptions(accessToken, client, undefined, userId, isCurrentSessionOperation)
     : undefined;
-  return accountOptions
-    ? withVpnAccountIdentity(accountOptions, identity => rotateManagedVpnKeyForIdentity(accessToken, deviceId, serverCurrentEpoch, isCurrentSessionOperation, identity))
-    : rotateManagedVpnKeyForIdentity(accessToken, deviceId, serverCurrentEpoch, isCurrentSessionOperation);
+  if (accountOptions) {
+    return withVpnAccountDevice(accessToken, deviceId, accountOptions, async (device, identity) => {
+      const pending = await pendingVpnAccountKeyPair(identity.keyScope, isCurrentSessionOperation);
+      requireCurrentSession(isCurrentSessionOperation);
+      // A stale second caller must not generate another key after the first
+      // owner has completed. Pending material is reconciled instead.
+      if (!pending && serverCurrentEpoch !== undefined && device.keyEpoch !== undefined && device.keyEpoch !== serverCurrentEpoch) throw new SessionOperationSupersededError();
+      const result = await rotateVpnAccountDeviceKey(accessToken, device.keyEpoch === undefined ? { ...device, keyEpoch: serverCurrentEpoch } : device, identity, pending, isCurrentSessionOperation);
+      if (!identity.legacyRegistrationPending) await clearPendingVpnAccountKeyPair(identity.keyScope, isCurrentSessionOperation);
+      return result.device;
+    });
+  }
+  return rotateUnscopedVpnKey(accessToken, deviceId, serverCurrentEpoch, isCurrentSessionOperation);
 }
 
-async function rotateManagedVpnKeyForIdentity(accessToken: string, deviceId: string, serverCurrentEpoch?: number, isCurrentSessionOperation?: () => boolean, identity?: VpnAccountIdentity): Promise<VpnDevice> {
+async function rotateUnscopedVpnKey(accessToken: string, deviceId: string, serverCurrentEpoch?: number, isCurrentSessionOperation?: () => boolean): Promise<VpnDevice> {
   requireCurrentSession(isCurrentSessionOperation);
   const generatedKeyPair = await generateWireGuardKeyPair({ independentEpoch: serverCurrentEpoch !== undefined });
   requireCurrentSession(isCurrentSessionOperation);
@@ -533,7 +569,7 @@ async function rotateManagedVpnKeyForIdentity(accessToken: string, deviceId: str
     ...generatedKeyPair,
     keyEpoch: nextManagedKeyEpoch(generatedKeyPair.keyEpoch, serverCurrentEpoch),
   };
-  return commitManagedVpnKey(accessToken, deviceId, keyPair, isCurrentSessionOperation, identity);
+  return commitManagedVpnKey(accessToken, deviceId, keyPair, isCurrentSessionOperation);
 }
 
 async function commitManagedVpnKey(accessToken: string, deviceId: string, keyPair: WireGuardKeyPair, isCurrentSessionOperation?: () => boolean, identity?: VpnAccountIdentity): Promise<VpnDevice> {
@@ -542,6 +578,7 @@ async function commitManagedVpnKey(accessToken: string, deviceId: string, keyPai
     method: 'POST',
     accessToken,
     idempotencyKey: `native-rotate-key-${deviceId}-${keyPair.keyEpoch ?? Date.now()}`,
+    retryCount: 0,
     body: {
       device_id: deviceId,
       public_key: keyPair.publicKey,
@@ -556,25 +593,34 @@ async function commitManagedVpnKey(accessToken: string, deviceId: string, keyPai
   return parseDevice(response.device);
 }
 
-async function separateLegacyAccountKey(accessToken: string, device: VpnDevice, identity: VpnAccountIdentity, isCurrentSessionOperation?: () => boolean): Promise<VpnDevice> {
-  let pending = await pendingVpnAccountKeyPair(identity.keyScope, isCurrentSessionOperation);
+async function rotateVpnAccountDeviceKey(accessToken: string, device: VpnDevice, identity: VpnAccountIdentity, pending: Awaited<ReturnType<typeof pendingVpnAccountKeyPair>>, isCurrentSessionOperation?: () => boolean): Promise<AccountKeyRotationResult> {
   requireCurrentSession(isCurrentSessionOperation);
+  if (pending?.deviceId && pending.deviceId !== device.id) {
+    // TODO(account-key-recovery): a deleted/replaced target needs a signed
+    // registration-owner reconciliation before transferring its pending intent.
+    throw new Error('Незавершённая ротация относится к другому VPN-устройству.');
+  }
   if (pending && device.publicKey === pending.publicKey && Number.isSafeInteger(device.keyEpoch) && (device.keyEpoch ?? 0) >= (pending.keyEpoch ?? 1)) {
     // A lost rotation response must not discard its only private key. The
     // signed, owner-filtered response confirms this exact durable intent.
-    await saveVpnAccountKeyPair(identity.keyScope, { ...pending, keyEpoch: device.keyEpoch }, isCurrentSessionOperation);
-    return device;
+    const confirmed = { ...pending, keyEpoch: device.keyEpoch };
+    await saveVpnAccountKeyPair(identity.keyScope, confirmed, isCurrentSessionOperation);
+    return { device, keyPair: confirmed };
+  }
+  if (pending && ((!pending.deviceId && !identity.legacyRegistrationPending) || device.publicKey !== identity.keyPair.publicKey)) {
+    throw new Error('Не удалось подтвердить прежний ключ незавершённой ротации VPN.');
   }
   if (!pending) {
     pending = await generateWireGuardKeyPair({ independentEpoch: device.keyEpoch !== undefined }) ?? undefined;
     requireCurrentSession(isCurrentSessionOperation);
     if (!pending) throw new Error('Локальный WireGuard ключ недоступен.');
   }
-  pending = { ...pending, keyEpoch: nextManagedKeyEpoch(pending.keyEpoch, device.keyEpoch) };
+  pending = { ...pending, deviceId: device.id, keyEpoch: nextManagedKeyEpoch(pending.keyEpoch, device.keyEpoch) };
   // Keep the last confirmed active pair until the server accepts the next one.
   // The journal is durable before POST and reuses the same key after restart.
   await savePendingVpnAccountKeyPair(identity.keyScope, pending, isCurrentSessionOperation);
-  return commitManagedVpnKey(accessToken, device.id, pending, isCurrentSessionOperation, identity);
+  const rotated = await commitManagedVpnKey(accessToken, device.id, pending, isCurrentSessionOperation, identity);
+  return { device: rotated, keyPair: pending };
 }
 
 async function vpnAccountOptions(accessToken: string, client: VpnClientDescriptor, locationId?: string, userId?: string, isCurrentSessionOperation?: () => boolean, signal?: AbortSignal): Promise<VpnAccountIdentityOptions> {
@@ -674,7 +720,7 @@ async function registerAccountNativeDevice(accessToken: string, client: VpnClien
     if (requiresKeySeparation) {
       // Register can reuse the row without changing its WG public key. A B-first
       // migration may have copied A's old global pair: rotate only B's row.
-      device = await separateLegacyAccountKey(accessToken, device, scope, options.isCurrentSessionOperation);
+      device = (await rotateVpnAccountDeviceKey(accessToken, device, scope, await pendingVpnAccountKeyPair(scope.keyScope, options.isCurrentSessionOperation), options.isCurrentSessionOperation)).device;
     }
     if (scope.legacyRegistrationPending) await confirmVpnAccountRegistration(options, scope);
     if (requiresKeySeparation) await clearPendingVpnAccountKeyPair(scope.keyScope, options.isCurrentSessionOperation);

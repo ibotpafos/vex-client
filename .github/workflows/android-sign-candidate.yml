@@ -13,7 +13,7 @@ on:
         required: false
         default: false
       dns_reliability_source:
-        description: "Sign the fixed reviewed cc63b55 Android DNS capacity/recovery 1.0.81 candidate without publication"
+        description: "Sign the fixed reviewed 683186a Android DNS and cancellation recovery 1.0.82 candidate without publication"
         type: boolean
         required: false
         default: false
@@ -36,8 +36,8 @@ jobs:
       NATIVE_ROUTING_SOURCE_COMMIT: 07058bc912a2c523d79908548047496c723821cd
       NATIVE_ROUTING_SOURCE_TREE: 1799b429665619ad18d1b6868b49b346741041cf
       DNS_RELIABILITY_SOURCE_REQUESTED: ${{ inputs.dns_reliability_source && 'true' || 'false' }}
-      DNS_RELIABILITY_SOURCE_COMMIT: cc63b55058912eccabc28ff395e105927df11f5b
-      DNS_RELIABILITY_SOURCE_TREE: 628c7b63b703e11ecf0cd8161d3aa87b120bb42a
+      DNS_RELIABILITY_SOURCE_COMMIT: 683186a3f8e2bb0a433fba7892fa4ff9db6a1cd9
+      DNS_RELIABILITY_SOURCE_TREE: 673e040b1905901c9b9fc8adddd469ade4eef170
       VEX_RELEASE_USE_LOCAL_CACHE: "1"
       VEX_LOCAL_RELEASE_CACHE_ROOT: ${{ github.workspace }}/.ci-cache
       VEX_LOCAL_CACHE_MOVE_EXISTING: "0"

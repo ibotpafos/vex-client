@@ -16,10 +16,10 @@ export function check(workflow) {
   assert.equal(job.env.ANDROID_RELEASE_KEYSTORE_BASE64, undefined);
   assert.equal(job.env.NATIVE_ROUTING_SOURCE_COMMIT, '07058bc912a2c523d79908548047496c723821cd');
   assert.equal(job.env.NATIVE_ROUTING_SOURCE_TREE, '1799b429665619ad18d1b6868b49b346741041cf');
-  assert.equal(job.env.DNS_RELIABILITY_SOURCE_COMMIT, 'cc63b55058912eccabc28ff395e105927df11f5b');
-  assert.equal(job.env.DNS_RELIABILITY_SOURCE_TREE, '628c7b63b703e11ecf0cd8161d3aa87b120bb42a');
+  assert.equal(job.env.DNS_RELIABILITY_SOURCE_COMMIT, '683186a3f8e2bb0a433fba7892fa4ff9db6a1cd9');
+  assert.equal(job.env.DNS_RELIABILITY_SOURCE_TREE, '673e040b1905901c9b9fc8adddd469ade4eef170');
   assert.deepEqual(workflow.on.workflow_dispatch.inputs.dns_reliability_source, {
-    description: 'Sign the fixed reviewed cc63b55 Android DNS capacity/recovery 1.0.81 candidate without publication',
+    description: 'Sign the fixed reviewed 683186a Android DNS and cancellation recovery 1.0.82 candidate without publication',
     type: 'boolean', required: false, default: false,
   });
   assert.equal(job.env.DNS_RELIABILITY_SOURCE_REQUESTED, "${{ inputs.dns_reliability_source && 'true' || 'false' }}");

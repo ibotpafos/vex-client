@@ -8,7 +8,7 @@ on:
         required: false
         default: false
       native_routing_source:
-        description: "Sign the fixed reviewed 509f608 selected-peer DNS-and-HTTPS 1.0.79 candidate without publication"
+        description: "Sign the fixed reviewed 07058bc Android DNS-cache continuity 1.0.80 candidate without publication"
         type: boolean
         required: false
         default: false
@@ -28,8 +28,8 @@ jobs:
       QUALIFIED_SOURCE_COMMIT: a13526075803986eebc396ec24fdc865d00ab5c0
       QUALIFIED_SOURCE_TREE: a47fd44b6166de98c64263554e6c981c896a8559
       NATIVE_ROUTING_SOURCE_REQUESTED: ${{ inputs.native_routing_source && 'true' || 'false' }}
-      NATIVE_ROUTING_SOURCE_COMMIT: 509f608ff94ff7d2e0fd498f1727f7f36cb9468a
-      NATIVE_ROUTING_SOURCE_TREE: a9d0a6eed707bad57c8b0a8ae11591d2283db48c
+      NATIVE_ROUTING_SOURCE_COMMIT: 07058bc912a2c523d79908548047496c723821cd
+      NATIVE_ROUTING_SOURCE_TREE: 1799b429665619ad18d1b6868b49b346741041cf
       VEX_RELEASE_USE_LOCAL_CACHE: "1"
       VEX_LOCAL_RELEASE_CACHE_ROOT: ${{ github.workspace }}/.ci-cache
       VEX_LOCAL_CACHE_MOVE_EXISTING: "0"

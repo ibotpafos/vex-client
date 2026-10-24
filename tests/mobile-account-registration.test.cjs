@@ -29,9 +29,16 @@ function harness(platform = 'ios', existingStore, nativeRouting = false) {
   let activeKeyWriteFailure = false;
   let rotationComplete;
   let rotationResponse = {};
+  let registrationResponse = {};
+  let registrationComplete;
+  let beforeStoreWrite;
+  let challengePurpose, challengePurposeSet = false;
+  let challengeComplete;
+  let reconciliationSupported = true;
+  let challengeOverride = {};
   const store = {
     getItemAsync: async storageKey => { if (readFailure && storageKey.startsWith('vex.vpn.account_')) throw Error('locked'); return saved.get(storageKey) ?? null; },
-    setItemAsync: async (storageKey, value) => { writes.push(storageKey); if ((writeFailure && storageKey.startsWith('vex.vpn.account_')) || (activeKeyWriteFailure && storageKey.startsWith('vex.vpn.account_keys.') && !storageKey.endsWith('.pending')) || (markerFailure && storageKey === 'vex.vpn.legacy_key_owner.v1')) throw Error('persistence'); if (interruptedConfirmation === 'confirmation' && storageKey.startsWith('vex.vpn.account_registration') && JSON.parse(value).legacyRegistrationPending === false) throw Error('confirmation storage lost'); saved.set(storageKey, value); },
+    setItemAsync: async (storageKey, value) => { beforeStoreWrite?.(storageKey, value); writes.push(storageKey); if ((writeFailure && storageKey.startsWith('vex.vpn.account_')) || (activeKeyWriteFailure && storageKey.startsWith('vex.vpn.account_keys.') && !storageKey.endsWith('.pending')) || (markerFailure && storageKey === 'vex.vpn.legacy_key_owner.v1')) throw Error('persistence'); if (interruptedConfirmation === 'confirmation' && storageKey.startsWith('vex.vpn.account_registration') && JSON.parse(value).legacyRegistrationPending === false) throw Error('confirmation storage lost'); saved.set(storageKey, value); },
     deleteItemAsync: async storageKey => { saved.delete(storageKey); },
   };
   const app = load('src/native/appInfo.ts', 'getOrCreateDeviceId,getAppInfo,createInstallationUUID', { SecureStore: store, Application: {}, Platform: { OS: platform }, getOtaProvenance: () => ({}) });
@@ -48,7 +55,7 @@ function harness(platform = 'ios', existingStore, nativeRouting = false) {
   const session = load('src/vpn/sessionOperation.ts', 'SessionOperationSupersededError');
   const native = { getOrCreateWireGuardKeyPair: async () => ({ ...globalPair }), generateWireGuardKeyPair: async options => { assert.equal(typeof options?.independentEpoch, 'boolean', 'account callers must choose their counter ownership explicitly'); return { publicKey: key(10 + ++generations), privateKey: key(90 + generations), keyEpoch: 2 }; }, replaceWireGuardKeyPair: async pair => { if (!legacyReplacementAllowed) throw Error('Global key must not be replaced'); globalPair = pair; } };
   const scoped = fs.existsSync(path.join(sourceRoot, 'src/native/vpnAccountIdentity.ts'))
-    ? load('src/native/vpnAccountIdentity.ts', 'getOrCreateVpnAccountIdentity,withVpnAccountIdentity,saveVpnAccountKeyPair,pendingVpnAccountKeyPair,savePendingVpnAccountKeyPair,clearPendingVpnAccountKeyPair,renewVpnAccountInstallation,confirmVpnAccountRegistration,vpnAccountRegistrationIdempotencyKey,validatedVpnAccountKeyPair', { SecureStore: store, ...app, ...native, ...session }) : {};
+    ? load('src/native/vpnAccountIdentity.ts', 'getOrCreateVpnAccountIdentity,withVpnAccountIdentity,saveVpnAccountKeyPair,pendingVpnAccountKeyPair,savePendingVpnAccountKeyPair,clearPendingVpnAccountKeyPair,rememberVpnAccountDevice,renewVpnAccountInstallation,confirmVpnAccountRegistration,vpnAccountRegistrationIdempotencyKey,validatedVpnAccountKeyPair', { SecureStore: store, ...app, ...native, ...session }) : {};
   const location = load('src/vpn/locationId.ts', 'requireVpnLocationId,comparableVpnLocationId');
   const selection = load('src/vpn/nativeDeviceSelection.ts', 'nativeVpnDeviceForClient', location);
   const errors = load('src/api/error.ts', 'ApiRequestError,requireRequestActive,isApiRequestCancelled,requestCancelledError');
@@ -62,13 +69,30 @@ function harness(platform = 'ios', existingStore, nativeRouting = false) {
     requests.push(requestPath); const owner = ownerFor(options.accessToken);
     if (requestPath.startsWith('/v1/vpn/routing-policy?')) return {}; // Older API: no signed v2 policy.
     if (requestPath === '/v1/devices') { if (lookupFailure) throw Error('lookup unavailable'); if (holdLookup) await holdLookup.promise; return devices.get(owner) || []; }
-    if (requestPath === '/v1/devices/identity-challenge') { if (interruptedConfirmation === 'challenge') throw Error('challenge unavailable'); return { id: `challenge-${registrations.length}-${owner}`, nonce: `nonce-${owner}`, purpose: 'register' }; }
+    if (requestPath === '/v1/devices/identity-challenge') { if (interruptedConfirmation === 'challenge') throw Error('challenge unavailable'); challengeComplete?.(options.body); return { id: `challenge-${nodeCrypto.randomUUID()}`, nonce: `nonce-${owner}`, purpose: challengePurposeSet ? challengePurpose : options.body.purpose, ...challengeOverride }; }
     if (requestPath === '/v1/devices/register') {
-      const body = options.body; registrations.push({ owner, body, idempotency: options.idempotencyKey });
+      const body = options.body; registrations.push({ owner, body, idempotency: options.idempotencyKey, retryCount: options.retryCount });
+      if (body.reconcile_device_id && !reconciliationSupported) {
+        // A previous API ignores the new field, checks a creation replay first,
+        // then rejects a reconcile-purpose challenge on a cache miss.
+        const indexed = (devices.get(owner) || []).find(row => row.fixture_creation_key === options.idempotencyKey);
+        if (indexed && indexed.public_key === body.public_key && indexed.psk_epoch === body.key_epoch) {
+          indexed.app_version = body.app_version;
+          return { device_registered: true, binding_status: 'active', trust_level: 'software_secure_store', device: { ...indexed } };
+        }
+        throw new ApiRequestError('device_identity_challenge_invalid', { status: 400, code: 'invalid_request' });
+      }
       const publicKey = await crypto.subtle.importKey('jwk', JSON.parse(body.identity_public_key), { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
-      const payload = signer.deviceIdentitySignaturePayload({ id: body.identity_challenge_id, nonce: `nonce-${owner}`, purpose: 'register' }, body.installation_id, body.identity_public_key, body.public_key);
+      const payload = signer.deviceIdentitySignaturePayload({ id: body.identity_challenge_id, nonce: `nonce-${owner}`, purpose: body.reconcile_device_id ? 'reconcile' : 'register' }, body.installation_id, body.identity_public_key, body.public_key);
       assert.equal(await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, publicKey, Buffer.from(body.identity_signature, 'base64url'), new TextEncoder().encode(payload)), true);
       if (registerError) throw registerError;
+      if (body.reconcile_device_id) {
+        const device = (devices.get(owner) || []).find(row => row.id === body.reconcile_device_id);
+        if (!device || device.user_id !== owner || device.status !== 'active' || device.public_key !== body.public_key || device.psk_epoch !== body.key_epoch) throw new ApiRequestError('device_rebind_required', { status: 409, code: 'conflict' });
+        if (bindings.has(body.installation_id) && bindings.get(body.installation_id) !== owner) throw new ApiRequestError('device_rebind_required', { status: 409, code: 'conflict' });
+        registrationComplete?.(); if (interruptedConfirmation === 'register') throw Error('registration response lost');
+        return { device_registered: true, binding_status: 'active', trust_level: 'software_secure_store', ...registrationResponse, device: { ...device, ...registrationResponse.device } };
+      }
       if (removeLegacyBeforeRegistration && owner === 'B') { devices.set('B', []); removeLegacyBeforeRegistration = false; }
       // The real replay guard reads the current row indexed by its creation
       // header and rejects a stale request public key or authoritative epoch.
@@ -78,7 +102,7 @@ function harness(platform = 'ios', existingStore, nativeRouting = false) {
       const existing = (devices.get(owner) || []).find(device => device.status === 'active' && device.external_device_id === body.device_id);
       const device = existing || dto(owner, { id: `registered-${owner}-${registrations.length}`, external_device_id: body.device_id, public_key: body.public_key, psk_epoch: body.key_epoch, fixture_creation_key: options.idempotencyKey });
       if (!existing) devices.set(owner, [...(devices.get(owner) || []), device]);
-      bindings.set(body.installation_id, owner); if (interruptedConfirmation === 'register') throw Error('registration response lost'); return { device };
+      bindings.set(body.installation_id, owner); registrationComplete?.(); if (interruptedConfirmation === 'register') throw Error('registration response lost'); return { device_registered: true, binding_status: 'active', trust_level: 'software_secure_store', ...registrationResponse, device: { ...device, ...registrationResponse.device } };
     }
     if (requestPath === '/v1/vpn/rotate-key') {
       rotations.push({ owner, body: { ...options.body }, idempotencyKey: options.idempotencyKey, retryCount: options.retryCount });
@@ -128,12 +152,228 @@ function harness(platform = 'ios', existingStore, nativeRouting = false) {
     setActiveKeyWriteFailure: value => { activeKeyWriteFailure = value; },
     onRotationComplete: value => { rotationComplete = value; },
     setRotationResponse: value => { rotationResponse = value; },
+    setRegistrationResponse: value => { registrationResponse = value; },
+    onRegistrationComplete: value => { registrationComplete = value; },
+    onStoreWrite: value => { beforeStoreWrite = value; },
+    setChallengePurpose: value => { challengePurposeSet = true; challengePurpose = value; },
+    onChallengeComplete: value => { challengeComplete = value; },
+    setReconciliationSupported: value => { reconciliationSupported = value; },
+    setChallengeOverride: value => { challengeOverride = value; },
     interruptConfirmation: value => { interruptedConfirmation = value; },
     removeLegacyBeforeRegister: () => { removeLegacyBeforeRegistration = true; },
     setStagedEpoch: value => { stagedEpoch = value; },
     prepare: (owner, options = {}) => api.preparedTunnel(owner, { platform, deviceName: platform, idempotencyPrefix: platform }, { userId: ownerFor(owner), locationId: 'de', isCurrentSessionOperation: () => true, ...options }),
   };
 }
+
+async function orphanedRotation(platform = 'ios', { owner = 'A', oldStatus = 'deleted', accepted = false, replacementEpoch = 4 } = {}) {
+  const original = harness(platform); const initial = await original.prepare(owner);
+  original.interruptConfirmation(accepted ? 'ordinary-rotate-after-commit' : 'ordinary-rotate-before-commit');
+  await assert.rejects(original.api.rotateManagedVpnKey(owner, initial.device.id, initial.device.keyEpoch, () => true, owner));
+  const mappingName = 'vex.vpn.account_registration.v1.' + Buffer.from(owner).toString('hex');
+  const mapping = JSON.parse(original.saved.get(mappingName));
+  const activeName = `vex.vpn.account_keys.v1.${mapping.keyScope}`; const pendingName = activeName + '.pending';
+  const intent = original.saved.get(pendingName), active = original.saved.get(activeName), pending = JSON.parse(intent);
+  const old = original.devices.get(owner).find(row => row.id === initial.device.id);
+  const replacement = { ...old, id: 'replacement-' + owner, status: 'active', external_device_id: mapping.externalDeviceId,
+    public_key: accepted ? pending.publicKey : JSON.parse(active).publicKey, psk_epoch: replacementEpoch };
+  const rows = oldStatus === 'deleted' ? [replacement] : [{ ...old, status: oldStatus }, replacement];
+  const restarted = harness(platform, original.saved); restarted.devices.set(owner, rows);
+  return { original, restarted, owner, initial, mapping, mappingName, activeName, pendingName, active, intent, pending, replacement, rows };
+}
+
+for (const platform of ['android', 'ios']) {
+  for (const owner of ['A', 'B']) test(`${platform}: deleted pending target recovers through its signed ${owner} registration`, async () => {
+    const s = await orphanedRotation(platform, { owner }); const h = s.restarted;
+    h.onRegistrationComplete(() => {
+      assert.equal(h.saved.get(s.pendingName), s.intent, 'target must not transfer before its signed acknowledgement');
+      assert.equal(h.saved.get(s.activeName), s.active);
+    });
+    h.onRotationComplete(() => {
+      const transferred = JSON.parse(h.saved.get(s.pendingName));
+      assert.equal(transferred.deviceId, s.replacement.id);
+      assert.equal(transferred.publicKey, s.pending.publicKey);
+      assert.equal(h.saved.get(s.activeName), s.active, 'rotation response must precede active-key promotion');
+    });
+    const recovered = await h.prepare(owner);
+    assert.equal(h.registrations.length, 1); assert.equal(h.registrations[0].retryCount, 0);
+    assert.equal(h.registrations[0].body.installation_id, s.mapping.installationId);
+    assert.equal(h.rotations.length, 1); assert.equal(h.rotations[0].body.device_id, s.replacement.id);
+    assert.equal(h.rotations[0].body.public_key, s.pending.publicKey); assert.equal(h.rotations[0].body.key_epoch, 5);
+    assert.equal(h.generations(), 0); assert.equal(h.saved.has(s.pendingName), false);
+    assert.equal(JSON.parse(h.saved.get(s.mappingName)).confirmedDeviceId, s.replacement.id);
+    assert.ok(recovered.config.includes(`PrivateKey = ${s.pending.privateKey}`));
+  });
+
+  test(`${platform}: revoked source can recover while the revoked row stays untouched`, async () => {
+    const s = await orphanedRotation(platform, { oldStatus: 'revoked' }); const old = JSON.stringify(s.rows[0]);
+    const recovered = await s.restarted.prepare('A');
+    assert.equal(recovered.device.id, s.replacement.id); assert.equal(JSON.stringify(s.rows[0]), old);
+    assert.equal(s.restarted.rotations.length, 1); assert.equal(s.restarted.generations(), 0);
+  });
+
+  test(`${platform}: replacement already carrying the pending key is confirmed without another rotation`, async () => {
+    const s = await orphanedRotation(platform, { accepted: true, replacementEpoch: 8 }); const h = s.restarted;
+    const recovered = await h.prepare('A');
+    assert.equal(h.registrations.length, 1); assert.equal(h.registrations[0].body.public_key, s.pending.publicKey);
+    assert.equal(h.registrations[0].body.key_epoch, 8); assert.equal(h.rotations.length, 0); assert.equal(h.generations(), 0);
+    assert.equal(recovered.device.keyEpoch, 8); assert.ok(recovered.config.includes(`PrivateKey = ${s.pending.privateKey}`));
+    assert.equal(h.saved.has(s.pendingName), false);
+  });
+
+  for (const failure of ['register', 'ordinary-rotate-before-commit', 'ordinary-rotate-after-commit']) test(`${platform}: interrupted replacement ${failure} resumes its original key`, async () => {
+    const s = await orphanedRotation(platform); const h = s.restarted;
+    h.interruptConfirmation(failure);
+    await assert.rejects(h.prepare('A'));
+    assert.equal(h.saved.get(s.activeName), s.active); assert.equal(h.generations(), 0);
+    const durable = JSON.parse(h.saved.get(s.pendingName));
+    assert.equal(durable.privateKey, s.pending.privateKey);
+    assert.equal(durable.deviceId, failure === 'register' ? s.pending.deviceId : s.replacement.id);
+    const resumed = harness(platform, h.saved); resumed.devices.set('A', h.devices.get('A'));
+    const recovered = await resumed.prepare('A');
+    assert.equal(resumed.generations(), 0); assert.ok(recovered.config.includes(`PrivateKey = ${s.pending.privateKey}`));
+    assert.equal(resumed.rotations.length, failure === 'ordinary-rotate-after-commit' ? 0 : 1);
+    assert.equal(resumed.registrations.length, failure === 'register' ? 1 : 0);
+  });
+
+  test(`${platform}: transfer persistence failure cannot dispatch rotation or promote the active key`, async () => {
+    const s = await orphanedRotation(platform); const h = s.restarted;
+    h.setWriteFailure(true); await assert.rejects(h.prepare('A'), /persistence/);
+    assert.equal(h.registrations.length, 1); assert.equal(h.rotations.length, 0);
+    assert.equal(h.saved.get(s.activeName), s.active); assert.equal(h.saved.get(s.pendingName), s.intent);
+  });
+
+  test(`${platform}: replacement acknowledgement cannot outlive the current session`, async () => {
+    const s = await orphanedRotation(platform); const h = s.restarted; let current = true;
+    h.onRegistrationComplete(() => { current = false; });
+    await assert.rejects(h.prepare('A', { isCurrentSessionOperation: () => current }), error => error.code === 'SESSION_OPERATION_SUPERSEDED');
+    assert.equal(h.rotations.length, 0); assert.equal(h.saved.get(s.activeName), s.active); assert.equal(h.saved.get(s.pendingName), s.intent);
+  });
+}
+
+for (const response of [
+  { device_registered: false }, { binding_status: 'legacy' }, { trust_level: 'legacy_unverified' },
+  { device: { id: 'another-device' } }, { device: { user_id: 'B' } }, { device: { public_key: key(44) } },
+  { device: { psk_epoch: 0 } }, { device: { psk_epoch: 3 } }, { device: { platform: 'android' } },
+  { device: { status: 'revoked' } }, { device: { client_key_ownership: 'backend' } },
+  { device: { provisioning_mode: 'legacy' } }, { device: { client_key_ownership: undefined } },
+]) test(`replacement recovery refuses a mismatched signed acknowledgement ${JSON.stringify(response)}`, async () => {
+  const s = await orphanedRotation(); const h = s.restarted; h.setRegistrationResponse(response);
+  await assert.rejects(h.prepare('A'));
+  assert.equal(h.rotations.length, 0); assert.equal(h.generations(), 0);
+  assert.equal(h.saved.get(s.activeName), s.active); assert.equal(h.saved.get(s.pendingName), s.intent);
+});
+
+for (const change of ['foreign-owner', 'missing-owner', 'newer-key', 'active-source', 'unrecorded-source', 'challenge']) test(`replacement recovery cannot bypass ${change}`, async () => {
+  const s = await orphanedRotation('ios', { oldStatus: change === 'active-source' ? 'active' : 'deleted' }); const h = s.restarted;
+  if (change === 'foreign-owner') s.replacement.user_id = 'B';
+  if (change === 'missing-owner') delete s.replacement.user_id;
+  if (change === 'newer-key') s.replacement.public_key = key(44);
+  if (change === 'unrecorded-source') {
+    const mapping = JSON.parse(h.saved.get(s.mappingName)); delete mapping.confirmedDeviceId; delete mapping.legacyOwnedDeviceId;
+    h.saved.set(s.mappingName, JSON.stringify(mapping));
+  }
+  if (change === 'challenge') h.interruptConfirmation('challenge');
+  await assert.rejects(h.api.rotateManagedVpnKey('A', s.replacement.id, s.replacement.psk_epoch, () => true, 'A'));
+  assert.equal(h.registrations.length, 0); assert.equal(h.rotations.length, 0);
+  assert.equal(h.saved.get(s.activeName), s.active); assert.equal(h.saved.get(s.pendingName), s.intent);
+});
+
+for (const purpose of ['register', '', undefined, 'replace']) test(`older server purpose ${String(purpose)} cannot authorize a reconciliation POST`, async () => {
+  const s = await orphanedRotation(); const h = s.restarted;
+  h.setChallengePurpose(purpose);
+  await assert.rejects(h.prepare('A'));
+  assert.equal(h.registrations.length, 0); assert.equal(h.rotations.length, 0);
+  assert.equal(h.saved.get(s.activeName), s.active); assert.equal(h.saved.get(s.pendingName), s.intent);
+});
+
+test('a candidate disappearing after its challenge cannot create another device', async () => {
+  const s = await orphanedRotation(); const h = s.restarted;
+  h.onChallengeComplete(body => { if (body.purpose === 'reconcile') h.devices.set('A', []); });
+  await assert.rejects(h.prepare('A'));
+  assert.deepEqual(h.devices.get('A'), []); assert.equal(h.rotations.length, 0);
+  assert.equal(h.saved.get(s.pendingName), s.intent); assert.equal(h.saved.get(s.activeName), s.active);
+  assert.equal(h.registrations[0].body.reconcile_device_id, s.replacement.id);
+});
+
+test('a new challenge followed by an old registration node cannot replay a creation write', async () => {
+  const s = await orphanedRotation(); const h = s.restarted;
+  s.replacement.fixture_creation_key = h.scoped.vpnAccountRegistrationIdempotencyKey('A', s.mapping.installationId, 'de');
+  s.replacement.app_version = 'prior-version';
+  const before = JSON.stringify(h.devices.get('A'));
+  h.setReconciliationSupported(false);
+  await assert.rejects(h.prepare('A'), /device_identity_challenge_invalid/);
+  assert.equal(JSON.stringify(h.devices.get('A')), before); assert.equal(h.rotations.length, 0);
+  assert.equal(h.saved.get(s.pendingName), s.intent); assert.equal(h.saved.get(s.activeName), s.active);
+  assert.match(h.registrations[0].idempotency, /^native-reconcile-challenge-/);
+});
+
+for (const id of [undefined, '', '../invalid', 'x'.repeat(129)]) test(`malformed reconcile challenge ID ${String(id)} cannot reach registration`, async () => {
+  const s = await orphanedRotation(); const h = s.restarted; h.setChallengeOverride({ id });
+  await assert.rejects(h.prepare('A'));
+  assert.equal(h.registrations.length, 0); assert.equal(h.rotations.length, 0);
+  assert.equal(h.saved.get(s.activeName), s.active); assert.equal(h.saved.get(s.pendingName), s.intent);
+});
+
+for (const id of ['', undefined, null, '   ', 14, 'x'.repeat(161)]) test(`malformed replacement ID ${String(id)} cannot turn reconciliation into registration`, async () => {
+  const s = await orphanedRotation(); const h = s.restarted; s.replacement.id = id;
+  await assert.rejects(h.prepare('A'));
+  assert.equal(h.registrations.length, 0); assert.equal(h.rotations.length, 0);
+  assert.equal(h.requests.includes('/v1/devices/identity-challenge'), false);
+  assert.equal(h.generations(), 0); assert.equal(h.saved.get(s.activeName), s.active); assert.equal(h.saved.get(s.pendingName), s.intent);
+});
+
+test('a malformed replacement cannot trigger legacy registration before recovery', async () => {
+  const s = await orphanedRotation(); const h = s.restarted; s.replacement.id = '';
+  const mapping = JSON.parse(h.saved.get(s.mappingName)); mapping.legacyRegistrationPending = true;
+  h.saved.set(s.mappingName, JSON.stringify(mapping));
+  await assert.rejects(h.prepare('A'));
+  assert.equal(h.registrations.length, 0); assert.equal(h.rotations.length, 0);
+  assert.equal(h.requests.includes('/v1/devices/identity-challenge'), false);
+  assert.equal(h.saved.get(s.pendingName), s.intent); assert.equal(h.saved.get(s.activeName), s.active);
+});
+
+test('a legacy recorded source remains recoverable without the new optional mapping field', async () => {
+  const s = await orphanedRotation(); const h = s.restarted;
+  const mapping = JSON.parse(h.saved.get(s.mappingName)); assert.equal(mapping.legacyOwnedDeviceId, s.pending.deviceId);
+  delete mapping.confirmedDeviceId; h.saved.set(s.mappingName, JSON.stringify(mapping));
+  const recovered = await h.prepare('A');
+  assert.equal(recovered.device.id, s.replacement.id); assert.equal(h.rotations.length, 1); assert.equal(h.generations(), 0);
+});
+
+test('a crash between transferred journal and mapping pointer is recoverable without registration replay', async () => {
+  const s = await orphanedRotation(); const h = s.restarted;
+  h.onStoreWrite((name, raw) => {
+    if (name === s.mappingName && JSON.parse(raw).confirmedDeviceId === s.replacement.id) throw Error('pointer storage unavailable');
+  });
+  await assert.rejects(h.prepare('A'), /pointer storage/);
+  assert.equal(JSON.parse(h.saved.get(s.pendingName)).deviceId, s.replacement.id);
+  assert.equal(h.saved.get(s.activeName), s.active); assert.equal(h.rotations.length, 0);
+  const resumed = harness('ios', h.saved); resumed.devices.set('A', h.devices.get('A'));
+  const recovered = await resumed.prepare('A');
+  assert.equal(resumed.registrations.length, 0); assert.equal(resumed.rotations.length, 1);
+  assert.equal(resumed.generations(), 0); assert.ok(recovered.config.includes(`PrivateKey = ${s.pending.privateKey}`));
+});
+
+test('supersession during source pointer persistence cannot create a rotation intent or send it', async () => {
+  const h = harness(); const initial = await h.prepare('A'); let current = true;
+  h.onStoreWrite((name, raw) => {
+    if (name.startsWith('vex.vpn.account_registration.') && JSON.parse(raw).confirmedDeviceId) current = false;
+  });
+  await assert.rejects(h.api.rotateManagedVpnKey('A', initial.device.id, initial.device.keyEpoch, () => current, 'A'), error => error.code === 'SESSION_OPERATION_SUPERSEDED');
+  assert.equal(h.rotations.length, 0); assert.equal([...h.saved.keys()].some(name => name.endsWith('.pending')), false);
+});
+
+test('a malformed optional source pointer is rejected before registration or rotation', async () => {
+  for (const value of ['', 42, 'other device', 'x'.repeat(161)]) {
+    const s = await orphanedRotation(); const h = s.restarted;
+    const mapping = JSON.parse(h.saved.get(s.mappingName)); mapping.confirmedDeviceId = value;
+    h.saved.set(s.mappingName, JSON.stringify(mapping));
+    await assert.rejects(h.prepare('A'), /регистрация.*повреждена/);
+    assert.equal(h.registrations.length, 0); assert.equal(h.rotations.length, 0);
+    assert.equal(h.saved.get(s.activeName), s.active); assert.equal(h.saved.get(s.pendingName), s.intent);
+  }
+});
 
 for (const platform of ['android', 'ios']) test(`${platform}: native routing uses a complete transport on a v1 server and cannot reuse a split cache`, async () => {
   const h = harness(platform, undefined, true);

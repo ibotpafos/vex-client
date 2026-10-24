@@ -313,6 +313,7 @@ export interface NativeDeviceRegistrationRequestSpec {
   identity_key_type?: string | null
   identity_challenge_id?: string | null
   identity_signature?: string | null
+  reconcile_device_id?: string | null
   [key: string]: unknown
 }
 

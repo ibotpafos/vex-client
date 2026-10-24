@@ -200,6 +200,10 @@ function vpnApi(operations) {
       withVpnAccountIdentity: async (_, callback) => { operations.observe?.('account'); return callback({ keyScope: 'fixture-scope', keyPair: { publicKey: 'fixture-old-key', keyEpoch: 1 } }); },
       saveVpnAccountKeyPair: async () => operations.native.replaceWireGuardKeyPair(),
       pendingVpnAccountKeyPair: async () => undefined,
+      rememberVpnAccountDevice: async (options, identity, confirmedDeviceId) => {
+        if (options.isCurrentSessionOperation && !options.isCurrentSessionOperation()) throw new sessionOperation.SessionOperationSupersededError();
+        return { ...identity, confirmedDeviceId };
+      },
       savePendingVpnAccountKeyPair: async () => undefined,
       clearPendingVpnAccountKeyPair: async () => undefined,
     },

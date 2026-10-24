@@ -11,6 +11,9 @@ This repository contains VEX client applications for desktop and mobile. It inte
 - `native-windows/` - active standalone Windows client, with WinUI 3 UI and a privileged VPN service.
 - `android/`, `ios/`, `modules/` - mobile native projects and local Expo native module.
 
+See [account key recovery](docs/native-account-key-recovery.md) for the durable
+rotation journal, verified replacement flow and compatibility boundaries.
+
 ## Release Model
 
 Native macOS uses its native build and packaging scripts; Android and iOS use

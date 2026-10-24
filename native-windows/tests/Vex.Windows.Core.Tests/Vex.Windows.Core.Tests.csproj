@@ -7,12 +7,25 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
 
+  <!-- Use the installed SDK compiler to execute actual page handlers with fake
+       controls. No WinUI, native service, registry or DPAPI is opened. -->
+  <ItemGroup>
+    <Reference Include="Microsoft.CodeAnalysis">
+      <HintPath>$(MSBuildToolsPath)/Roslyn/bincore/Microsoft.CodeAnalysis.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.CodeAnalysis.CSharp">
+      <HintPath>$(MSBuildToolsPath)/Roslyn/bincore/Microsoft.CodeAnalysis.CSharp.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
   <ItemGroup>
     <Compile Include="../../src/Vex.Windows.App/Services/CustomerRealtimeSessionRecovery.cs" Link="CustomerRealtimeSessionRecovery.cs" />
     <Compile Include="../../src/Vex.Windows.App/Auth/NativeAuthService.cs" Link="NativeAuthService.cs" />
     <Compile Include="../../src/Vex.Windows.Setup/SetupBundleVerifier.cs" Link="SetupBundleVerifier.cs" />
     <Compile Include="../../packaging/UpdateManifestSigner/WindowsUpdateSignatureSigner.cs" Link="WindowsUpdateSignatureSigner.cs" />
     <Compile Include="../../scripts/Vex.Windows.VpnAcceptance/PhysicalNetworkProbe.cs" Link="PhysicalNetworkProbe.cs" />
+    <Compile Include="../../scripts/Vex.Windows.VpnAcceptance/ControlProbeConnection.cs" Link="ControlProbeConnection.cs" />
+    <Compile Include="../../scripts/Vex.Windows.VpnAcceptance/AcceptanceFailure.cs" Link="AcceptanceFailure.cs" />
     <Compile Include="../../scripts/Vex.Windows.VpnAcceptance/ControllerDeathReceipt.cs" Link="ControllerDeathReceipt.cs" />
     <ProjectReference Include="../../src/Vex.Windows.Core/Vex.Windows.Core.csproj" />
     <ProjectReference Include="../../src/Vex.Windows.Client/Vex.Windows.Client.csproj" />

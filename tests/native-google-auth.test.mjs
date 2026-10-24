@@ -57,3 +57,40 @@ assert.match(native, /clearCredentialState\(ClearCredentialStateRequest\(\)\)/);
 assert.doesNotMatch(native, /https?:\/\/|Log\.|startActivity/);
 assert.match(api, /'\/v1\/auth\/oauth\/google'/);
 console.log('PASS: native Google credential exchange, empty token, cancellation, rejection, retry guard and sign-out contracts');
+
+// Execute the actual UI callback with inert platform effects. Validation must
+// happen before it replaces a previous PKCE attempt or opens a browser.
+const ts = (await import('typescript')).default;
+const { stripTypeScriptTypes } = await import('node:module');
+const { validatedApiBaseUrl } = await import('../src/api/config.ts');
+const tree = ts.createSourceFile('screen.tsx', screen, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+let callback;
+function visit(node) {
+  if (ts.isVariableDeclaration(node) && node.name.getText(tree) === 'handleWebAuthStart') callback = node.initializer.arguments[0];
+  ts.forEachChild(node, visit);
+}
+visit(tree);
+assert.ok(callback, 'actual web-auth callback must be found');
+for (const baseUrl of ['relative/path', 'https://user:fixture@example.invalid', 'https://example.invalid?other', 'https://example.invalid#fragment', 'http://[invalid']) {
+  const effects = { nonce: 0, writes: 0, device: 0, browser: 0 };
+  const inFlight = { current: false };
+  let error, busy;
+  const deps = {
+    authSubmitInFlight: inFlight, playLightImpactHaptic: () => {}, playErrorHaptic: () => {},
+    setIsAuthBusy: value => { busy = value; }, setAuthError: value => { error = value; },
+    validatedApiBaseUrl: () => validatedApiBaseUrl(baseUrl), vexApiBaseUrl: baseUrl,
+    generateRandomString: () => { effects.nonce++; return 'fixture'; }, generateChallenge: async () => 'fixture',
+    SecureStore: { setItemAsync: async () => { effects.writes++; } },
+    getOrCreateDeviceId: async () => { effects.device++; return 'fixture'; },
+    getDeviceDetails: () => ({ platform: 'ios', deviceName: 'fixture' }), buildAppWebAuthUrl,
+    openWebAuthUrl: async () => { effects.browser++; return ''; }, isAppAuthCallbackUrl: () => false,
+    handleCallbackUrl: async () => {}, console: { log() {}, error() {} },
+  };
+  const handler = new Function(...Object.keys(deps), 'return (' + stripTypeScriptTypes(callback.getText(tree)) + ');')(...Object.values(deps));
+  await handler('google');
+  assert.equal(error, 'Неверно настроен адрес API.');
+  assert.deepEqual(effects, { nonce: 0, writes: 0, device: 0, browser: 0 });
+  assert.equal(inFlight.current, false);
+  assert.equal(busy, false);
+}
+console.log('PASS: invalid API configuration cannot replace PKCE state, access device identity or open web auth');

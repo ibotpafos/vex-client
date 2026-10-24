@@ -137,10 +137,7 @@ enum ServerSidebarCatalog {
     }
 
     static func isAvailable(_ location: VpnLocation) -> Bool {
-        let unavailableStatuses = Set(["maintenance", "offline", "unavailable", "disabled"])
-        return location.healthyNodes > 0
-            && location.availability.lowercased() != "unavailable"
-            && !unavailableStatuses.contains(location.status.lowercased())
+        location.isAvailableForVpn
     }
 }
 

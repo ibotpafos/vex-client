@@ -85,6 +85,19 @@ fi
 # Peel the exact additive SDK patch before checking earlier patches whose
 # context it extends. This keeps repeated bootstrap safe after go mod tidy.
 toolchain_patch="${root_dir}/patches/amnezia/amneziawg-android-routing-go126-toolchain.patch"
+# Peel only the exact previous compiler patch so prepared checkouts can upgrade.
+# Unknown/partial edits still fail the existing apply_patch_once checks below.
+legacy_toolchain_patch="$(mktemp)"
+sed \
+  -e 's@+GO_VERSION := 1.26.10@+GO_VERSION := 1.26.9@' \
+  -e 's@e820ab780c273ae4a340b79d0f3c4313b74ee029aa3874792145d44b9f4f91da@00c29e3d4c8562f547410daa18d2959b641bd691ab00c4a525ea817a0253d4bd@' \
+  -e 's@0b5183492292ada170f9b561a834863808dd02edba599e4ad0e89899330020b3@f9bb7c0a02506c5d9bf0d1eb1f7ee6c7684f844ae49558308a0427b830e022cc@' \
+  -e 's@ccfe7ae822d2c2f41f4fe7c956199967a4dac22d0ee0d2b2bfdb440aab3b20c5@42d158b4d8f7b61ac0a830567c940a86098fb7aac52e467a5ebec03ef5cc2f8d@' \
+  "${toolchain_patch}" > "${legacy_toolchain_patch}"
+if git -C "${external_dir}/amneziawg-android" apply --reverse --check "${legacy_toolchain_patch}" >/dev/null 2>&1; then
+  git -C "${external_dir}/amneziawg-android" apply --reverse "${legacy_toolchain_patch}"
+fi
+rm -f "${legacy_toolchain_patch}"
 if git -C "${external_dir}/amneziawg-android" apply --reverse --check "${toolchain_patch}" >/dev/null 2>&1; then
   git -C "${external_dir}/amneziawg-android" apply --reverse "${toolchain_patch}"
 fi

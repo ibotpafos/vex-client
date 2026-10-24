@@ -36,6 +36,7 @@ import {
 } from '@/vpn/profileResolutionFallback';
 import { androidVpnProfileWithinBinderBudget } from '@/vpn/androidRoutingSafety';
 import { vpnProfileAddressMatchesDevice } from '@/vpn/profileConsistency';
+import { withCurrentVpnProfileKey, VpnProfileKeyChangedError } from '@/api/vexApi';
 import {
   getVpnApplicationSelection,
   setSelectedVpnLocation,
@@ -49,7 +50,6 @@ import { submitClientDiagnostics, type VpnLocation } from '@/api/vexApi';
 import { dynamicRouteRuntime } from '@/vpn/dynamicRouteRuntime';
 import { routeTransport, type DynamicRouteAttempt, type DynamicRouteCandidate } from '@/vpn/dynamicRouteCore';
 import type { VpnProfile } from '@/vpn/profile';
-import { connectFreshSameLocationProfile } from '@/vpn/sameLocationProfileRecovery';
 import { SessionOperationSupersededError } from '@/vpn/sessionOperation';
 
 type UseVpnConnectionFlowInput = {
@@ -104,7 +104,7 @@ export function useVpnConnectionFlow({
     }
   }, [isCurrentSessionOperation]);
 
-  const connectProfileWithEndpointFallback = useCallback(async (profile: VpnProfile, isCurrentOperation: () => boolean = () => true) => {
+  const connectProfileWithEndpointFallback = useCallback(async (profile: VpnProfile, isCurrentOperation: () => boolean = () => true, beforeNativeConnect?: () => Promise<unknown>) => {
     const requireCurrentOperation = () => {
       requireCurrentSession();
       if (!isCurrentOperation()) throw new SessionOperationSupersededError();
@@ -132,6 +132,7 @@ export function useVpnConnectionFlow({
       : connectionAttemptsForProfile(profile).map((attempt) => ({ profile: attempt }));
     let previousRouteTransport: 'awg3_direct' | 'awg3_relay' | undefined;
     let lastError: unknown = new Error('VPN connection failed.');
+    let nativePreparationCompleted = false;
     const reportRoute = (candidate: DynamicRouteCandidate, event: 'connect_failed' | 'connect_succeeded' | 'fallback_failed' | 'fallback_succeeded', status: string) => {
       if (!session?.accessToken) return;
       void submitClientDiagnostics(session.accessToken, {
@@ -141,6 +142,7 @@ export function useVpnConnectionFlow({
       }).catch(() => undefined);
     };
     for (const { profile: attempt, candidate } of attempts) {
+      let nativeDispatched = false;
       try {
         requireCurrentOperation();
         const endpoint = profileEndpoint(attempt);
@@ -151,18 +153,32 @@ export function useVpnConnectionFlow({
           ? await getVpnStatus().catch(() => null)
           : null;
         requireCurrentOperation();
-        const nativeStartMs = Date.now();
-        const startedStatus = await withTimeout(
-          connectVpn(attempt.config, {
-            antiLeakEnabled,
-            routingParameters: attempt.routingParameters,
-            routingMode: attempt.routingMode,
-            applicationRoutingMode: applicationSelection.mode,
-            selectedApplications: applicationSelection.packageNames,
-          }),
-          connectAttemptTimeoutMs,
-          'VPN connect timed out.',
-        );
+        let nativeStartMs = Date.now();
+        let admissionIsCurrent = true;
+        let startedStatus: VpnStatus;
+        try {
+          startedStatus = await withTimeout(withCurrentVpnProfileKey(session?.accessToken ?? '', attempt, async () => {
+            requireCurrentOperation();
+            if (!nativePreparationCompleted) {
+              await beforeNativeConnect?.();
+              nativePreparationCompleted = true;
+            }
+            requireCurrentOperation();
+            if (!admissionIsCurrent) throw new SessionOperationSupersededError();
+            nativeStartMs = Date.now();
+            nativeDispatched = true;
+            return connectVpn(attempt.config, {
+              antiLeakEnabled,
+              routingParameters: attempt.routingParameters,
+              routingMode: attempt.routingMode,
+              applicationRoutingMode: applicationSelection.mode,
+              selectedApplications: applicationSelection.packageNames,
+            });
+          }, { userId: session?.user.id, isCurrentSessionOperation: () => admissionIsCurrent && mountedRef.current && isCurrentSessionOperation() && isCurrentOperation() }), connectAttemptTimeoutMs, 'VPN connect timed out.');
+        } finally {
+          // A timed-out borrower must not dispatch later from the owner queue.
+          admissionIsCurrent = false;
+        }
         const interfaceUpMs = Date.now();
         requireCurrentOperation();
         const status = await waitForVerifiedVpnConnection(startedStatus, getVpnStatus, {
@@ -194,6 +210,10 @@ export function useVpnConnectionFlow({
         };
       } catch (error) {
         requireCurrentOperation();
+        if (!nativeDispatched) {
+          if (error instanceof VpnProfileKeyChangedError || error instanceof SessionOperationSupersededError) throw error;
+          throw new Error('Не удалось проверить ключ и подготовить VPN к подключению.', { cause: error });
+        }
         lastError = error;
         if (!isVpnTransportFallbackError(error)) {
           throw error;
@@ -310,17 +330,29 @@ export function useVpnConnectionFlow({
 
     try {
       if (!connected) {
+        let freshProfile: VpnProfile | undefined;
         try {
-          connected = await connectFreshSameLocationProfile({
-            connectProfile: connectCurrentProfile,
-            locationId: profileLocationId,
-            resolveProfile: resolveCurrentProfile,
+          freshProfile = await resolveCurrentProfile(profileLocationId, {
+            forceRefresh: true,
+            requestPermission: false,
           });
-          connectedLocationId = profileLocationId;
         } catch (error) {
           lastConnectError = error;
-          if (!isVpnTransportFallbackError(error) && !isProfileResolutionFallbackError(error)) {
+          // Issuance can commit placement before losing its reply. A transport-
+          // shaped preparation error cannot authorize another location's issue.
+          if (!isProfileResolutionFallbackError(error)) {
             throw error;
+          }
+        }
+        if (freshProfile) {
+          try {
+            connected = await connectCurrentProfile(freshProfile);
+            connectedLocationId = profileLocationId;
+          } catch (error) {
+            lastConnectError = error;
+            if (!isVpnTransportFallbackError(error) && !isProfileResolutionFallbackError(error)) {
+              throw error;
+            }
           }
         }
       }

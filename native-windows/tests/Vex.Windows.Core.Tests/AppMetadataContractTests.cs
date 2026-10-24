@@ -127,7 +127,7 @@ internal static class AppMetadataContractTests
             throw new InvalidOperationException("Serialized app metadata is incompatible with the published Windows contract.");
     }
 
-    private static string FindRepositoryRoot()
+    internal static string FindRepositoryRoot()
     {
         foreach (var start in new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory })
         {

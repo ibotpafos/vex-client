@@ -69,6 +69,7 @@ type VexVpnNativeModule = {
   openVpnSettings?(): Promise<boolean>;
   getOrCreateWireGuardKeyPair(): Promise<WireGuardKeyPair>;
   generateWireGuardKeyPair(): Promise<WireGuardKeyPair>;
+  generateWireGuardKeyMaterial?(): Promise<WireGuardKeyPair>;
   replaceWireGuardKeyPair(privateKey: string, publicKey: string, keyEpoch: number): Promise<boolean>;
   resetWireGuardKeyPair(): Promise<boolean>;
   measureEndpointLatency(endpoint: string): Promise<number | null>;
@@ -264,11 +265,14 @@ export async function getOrCreateWireGuardKeyPair(): Promise<WireGuardKeyPair | 
   return requireNativeModule().getOrCreateWireGuardKeyPair();
 }
 
-export async function generateWireGuardKeyPair(): Promise<WireGuardKeyPair | null> {
+export async function generateWireGuardKeyPair(options?: { independentEpoch?: boolean }): Promise<WireGuardKeyPair | null> {
   if (Platform.OS !== 'android' && Platform.OS !== 'ios') {
     return null;
   }
-  return requireNativeModule().generateWireGuardKeyPair();
+  const module = requireNativeModule();
+  return options?.independentEpoch && typeof module.generateWireGuardKeyMaterial === 'function'
+    ? module.generateWireGuardKeyMaterial()
+    : module.generateWireGuardKeyPair();
 }
 
 export async function replaceWireGuardKeyPair(keyPair: WireGuardKeyPair): Promise<boolean> {

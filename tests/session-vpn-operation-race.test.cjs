@@ -47,7 +47,6 @@ const { ApiRequestError } = policy('src/api/error.ts');
 const { createSessionRestoreRefresh } = policy('src/auth/sessionRestoreRefresh.ts');
 const fallback = policy('src/vpn/connectionFallback.ts');
 const { cleanupFailedVpnConnection } = policy('src/vpn/failedConnectionCleanup.ts', { './connectionFallback': fallback });
-const { connectFreshSameLocationProfile } = policy('src/vpn/sameLocationProfileRecovery.ts');
 function deferred() {
   let resolve, reject;
   const promise = new Promise((ok, fail) => { resolve = ok; reject = fail; });
@@ -95,6 +94,7 @@ function connectionHarness(stage, platform = 'android') {
     Platform: { OS: platform }, antiLeakEnabled: true,
     prepareClientNetworkDiagnostics: () => wait('diagnostics'),
     withTimeout: operation => operation, vpnProfileAddressMatchesDevice: () => true,
+    withCurrentVpnProfileKey: async (_token, _profile, operation) => operation(),
     androidVpnProfileWithinBinderBudget: () => true,
     getVpnApplicationSelection: () => wait('applications', { mode: 'all', packageNames: [] }),
     dynamicRouteRuntime: { prepare: () => wait('route'), attempts: () => [{ profile }], clearActive: () => {}, recordSuccess: () => {}, recordFailure: () => {} },
@@ -112,7 +112,7 @@ function connectionHarness(stage, platform = 'android') {
       state.resolutions++;
       return wait(state.resolutions > 1 ? 'fresh-profile' : 'profile', profile);
     },
-    isProfileResolutionFallbackError: () => false, resolveProfileOrSkipMissing: resolve => resolve(), connectFreshSameLocationProfile,
+    isProfileResolutionFallbackError: () => false, resolveProfileOrSkipMissing: resolve => resolve(),
     cleanupFailedVpnConnection, disconnectVpn: async () => { state.cleanupCalls++; state.nativeOwner = null; },
     setSelectedVpnLocation: location => wait('persist', location), setSelectedLocationId: () => {},
     cacheProfile: () => { state.cached++; }, setActiveProfile: () => { state.published++; }, setVpnStatus: () => {},
@@ -141,6 +141,7 @@ for (const cancel of [false, true]) {
       isCurrentSessionOperation: () => current, session: { accessToken: 'token-A', user: { id: 'A' } },
       Platform: { OS: 'android' }, antiLeakEnabled: true,
       prepareClientNetworkDiagnostics: async () => {}, withTimeout: operation => operation,
+      withCurrentVpnProfileKey: async (_token, _profile, operation) => operation(),
       vpnProfileAddressMatchesDevice: () => true, androidVpnProfileWithinBinderBudget: () => true,
       getVpnApplicationSelection: async () => ({ mode: 'all', packageNames: [] }),
       dynamicRouteRuntime: {

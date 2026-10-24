@@ -54,15 +54,21 @@ function violations(value, packageValue = packageConfig) {
     const commands = (job.steps ?? []).map(step => step.run ?? '').join('\n');
     if (/npm run (?:ota:|.*:publish|.*:deploy-release)|package-native-windows\.ps1|publish-native-windows\.ps1|-allowProvisioningUpdates/.test(commands)) failures.push(`no signing/publication: ${lane}`);
     if (lane === 'android' && /(?:^|\n)\s*sdkmanager\s/.test(commands)) failures.push('explicit Android SDK tool path');
-    if (['shared', 'android'].includes(lane) && !(job.steps ?? []).some(step => step.uses?.startsWith('actions/setup-go@') && step.with?.['go-version'] === '1.26.9')) failures.push(`pinned patched Go toolchain: ${lane}`);
+    if (['shared', 'android'].includes(lane) && !(job.steps ?? []).some(step => step.uses?.startsWith('actions/setup-go@') && step.with?.['go-version'] === '1.26.10')) failures.push(`pinned patched Go toolchain: ${lane}`);
+    if (lane === 'android') {
+      const sdkIndex = job.steps.findIndex(step => step.name === 'Install locked Android build components');
+      const buildIndex = job.steps.findIndex(step => step.run?.includes('npm run android:build:debug:fast'));
+      if (sdkIndex < 0 || buildIndex < 0 || sdkIndex >= buildIndex
+        || job.steps[sdkIndex].run?.trim() !== 'bash scripts/install_android_sdk_components.sh') failures.push('shared fail-closed Android SDK setup before build');
+    }
     if (lane === 'macos') {
       if (job.env?.DEVELOPER_DIR !== '/Applications/Xcode_26.6.app/Contents/Developer') failures.push('supported pinned Xcode toolchain');
       if (!(job.steps ?? []).some(step => step.uses === 'actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16'
-        && step.with?.['go-version'] === '1.26.9' && step.with?.cache === false)) failures.push('pinned iOS bridge Go toolchain');
+        && step.with?.['go-version'] === '1.26.10' && step.with?.cache === false)) failures.push('pinned iOS bridge Go toolchain');
       const ios = (job.steps ?? []).find(step => step.name === 'Build the canonical iOS simulator app without signing');
       if (ios?.run?.trim() !== 'bash scripts/test_ios_simulator_build.sh'
         || !(ios['timeout-minutes'] > 0 && ios['timeout-minutes'] <= 40)) failures.push('bounded canonical iOS app qualification');
-      if (!(job.steps ?? []).some(step => step.run?.trim() === 'swift test --package-path macos-native')) failures.push('complete macOS suite');
+      if (!(job.steps ?? []).some(step => step.run?.trim() === 'python3 scripts/run_test_with_failure_summary.py swift test --package-path macos-native')) failures.push('complete macOS suite with retained failure diagnostics');
       if (!(job.steps ?? []).some(step => step.run?.trim() === 'bash scripts/test_macos_runtime_reliability.sh')) failures.push('macOS runtime cancellation and recovery');
       if (!(job.steps ?? []).some(step => step.run?.includes('bash scripts/test_ios_tunnel_transitions.sh'))) failures.push('iOS transition and parser regressions');
       if (!(job.steps ?? []).some(step => step.run?.trim() === 'node --test tests/ios-expo-bridge-contract.test.cjs'
@@ -73,7 +79,7 @@ function violations(value, packageValue = packageConfig) {
     }
     const required = {
       shared: ['npm run check', 'npm run build:web', 'actionlint', 'go test -race -timeout 45s ./...', 'govulncheck@v1.8.0'],
-      android: ['sdkmanager', ':app:testDebugUnitTest', 'npm run android:build:debug:fast'],
+      android: ['bash scripts/install_android_sdk_components.sh', ':app:testDebugUnitTest', 'npm run android:build:debug:fast'],
       macos: ['swift build', '--target VEXNativeMac', 'swift test'],
     }[lane];
     for (const command of required) if (!commands.includes(command)) failures.push(`build/test command: ${lane}/${command}`);
@@ -98,12 +104,15 @@ if (failures.length) {
     value => { value.jobs.macos.steps.find(step => step.name === 'Build the canonical iOS simulator app without signing').run = 'bash scripts/test_ios_module_compile.sh'; },
     value => { value.jobs.macos.steps.find(step => step.name === 'Build the canonical iOS simulator app without signing').run += ' --regenerate-lock'; },
     value => { value.jobs.android.steps.find(step => step.name === 'Install locked Android build components').run = 'sdkmanager \"platform-tools\"'; },
+    value => { value.jobs.android.steps.find(step => step.name === 'Install locked Android build components').run += ' || true'; },
+    value => { const index = value.jobs.android.steps.findIndex(step => step.name === 'Install locked Android build components'); value.jobs.android.steps.push(value.jobs.android.steps.splice(index, 1)[0]); },
     value => { value.jobs.android.steps.find(step => step.uses?.startsWith('actions/setup-go@')).with['go-version'] = '1.24.x'; },
     value => { value.permissions.contents = 'write'; },
     value => { value.jobs.android.env = { SIGNING_KEY: '${{ secrets.PRODUCTION_KEY }}' }; },
     value => { value.jobs.shared.steps[0].with['persist-credentials'] = true; },
     value => { value.jobs.macos.steps.push({ uses: 'actions/upload-artifact@v4' }); },
     value => { value.jobs.macos.steps.find(step => step.name === 'Test all native macOS behavior').run += ' --filter SparkleUpdateTests'; },
+    value => { value.jobs.macos.steps.find(step => step.name === 'Test all native macOS behavior').run += ' || true'; },
     value => { value.jobs.macos.steps = value.jobs.macos.steps.filter(step => step.run?.trim() !== 'bash scripts/test_macos_runtime_reliability.sh'); },
     value => { value.jobs.macos.steps.find(step => step.run?.includes('bash scripts/test_ios_tunnel_transitions.sh')).run = 'ruby -c modules/vex-vpn/ios/VexVpn.podspec'; },
     value => { value.jobs.macos.steps = value.jobs.macos.steps.filter(step => step.run?.trim() !== 'node --test tests/ios-expo-bridge-contract.test.cjs'); },

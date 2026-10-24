@@ -1,338 +1,249 @@
-// Thin TypeScript mirror of Go response DTOs for API payloads consumed by the client.
-//
-// Contract: every type below is guarded by src/api/generated-contract.ts, which
-// is GENERATED from the VPN repo's openapi.yaml (Go DTO structs). If you change
-// a field here and the server shape does not match, `npm run typecheck` fails.
-// To refresh the generated contract run, from the VPN repo:
-//   python3 scripts/generate_openapi_schemas.py --client
+// Native request/response projections share Go-derived generated-contract types.
+// Field selections and optional keys preserve the existing client API.
+// Legacy-only fields/nullability remain explicit compatibility rules.
+// Type queries keep this projection module fully erased at runtime.
+type UserDTOSpec = import('./generated-contract').UserDTOSpec;
+type AuthResultDTOSpec = import('./generated-contract').AuthResultDTOSpec;
+type EmailOTPChallengeDTOSpec = import('./generated-contract').EmailOTPChallengeDTOSpec;
+type DeviceDTOSpec = import('./generated-contract').DeviceDTOSpec;
+type DeviceUsageResponseDTOSpec = import('./generated-contract').DeviceUsageResponseDTOSpec;
+type DeviceTrafficQuotaDTOSpec = import('./generated-contract').DeviceTrafficQuotaDTOSpec;
+type DeviceUsageDTOSpec = import('./generated-contract').DeviceUsageDTOSpec;
+type LocationDTOSpec = import('./generated-contract').LocationDTOSpec;
+type NativeVPNProfileDTOSpec = import('./generated-contract').NativeVPNProfileDTOSpec;
+type StagedDevicePSKProfileDTOSpec = import('./generated-contract').StagedDevicePSKProfileDTOSpec;
+type AcknowledgeStagedDevicePSKProfileResultDTOSpec =
+  import('./generated-contract').AcknowledgeStagedDevicePSKProfileResultDTOSpec;
+type RegisterNativeDeviceResultDTOSpec = import('./generated-contract').RegisterNativeDeviceResultDTOSpec;
+type RegisterDevicePushTokenResultDTOSpec = import('./generated-contract').RegisterDevicePushTokenResultDTOSpec;
+type DeviceIdentityChallengeDTOSpec = import('./generated-contract').DeviceIdentityChallengeDTOSpec;
+export type NativeDeviceRegistrationRequest = import('./generated-contract').NativeDeviceRegistrationRequestSpec;
+export type NativeDeviceIdentityChallengeRequest = import('./generated-contract').NativeDeviceIdentityChallengeRequestSpec;
+export type NativeVPNKeyRotationInput = import('./generated-contract').NativeVPNKeyRotationInputSpec;
+export type NativeVPNConnectionEventInput = import('./generated-contract').NativeVPNConnectionEventInputSpec;
+export type NativeVPNPushTokenInput = import('./generated-contract').NativeVPNPushTokenInputSpec;
+export type NativeVPNPSKRotationACKInput = import('./generated-contract').NativeVPNPSKRotationACKInputSpec;
+type SupportMessageDTOSpec = import('./generated-contract').SupportMessageDTOSpec;
+type SupportTicketDTOSpec = import('./generated-contract').SupportTicketDTOSpec;
+type EntitlementDTOSpec = import('./generated-contract').EntitlementDTOSpec;
+type BillingPlanDTOSpec = import('./generated-contract').BillingPlanDTOSpec;
+type CheckoutSessionDTOSpec = import('./generated-contract').CheckoutSessionDTOSpec;
+type PortalSessionDTOSpec = import('./generated-contract').PortalSessionDTOSpec;
+type AppUpdateCheckResponseDTOSpec = import('./generated-contract').AppUpdateCheckResponseDTOSpec;
+type AppRemoteConfigResponseDTOSpec = import('./generated-contract').AppRemoteConfigResponseDTOSpec;
 
-export type UserDTO = {
-  id: string;
-  email: string;
-  status?: string;
+type WireProjection<
+  T,
+  RequiredKeys extends keyof T,
+  OptionalKeys extends keyof T = never,
+> = Required<Pick<T, RequiredKeys>> & Partial<Pick<T, OptionalKeys>>;
+
+type AuthSessionDTO = Partial<Pick<AuthResultDTOSpec['session'], 'id' | 'access_token'>> & {
+  expires_at?: AuthResultDTOSpec['session']['expires_at'] | null;
 };
 
-export type AuthResultDTO = {
-  user: UserDTO;
-  session: {
-    id?: string;
-    access_token?: string;
-    expires_at?: string | null;
-  };
-  access_grant?: AccessGrantSummary | null;
-};
-
+// Retain the legacy auth field absent from the current server response.
 type AccessGrantSummary = {
   active?: boolean;
   device_limit?: number;
   tier?: string;
 };
 
-export type EmailOTPChallengeDTO = {
-  challenge_id: string;
-  expires_at?: string;
+type DeviceSavedProfile = Partial<Pick<
+  NonNullable<DeviceDTOSpec['saved_profiles']>[number],
+  'node_id' | 'assigned_ipv4' | 'status' | 'profile_version'
+>>;
+
+type NativeAWGConfig = Partial<Pick<
+  NonNullable<NativeVPNProfileDTOSpec['amnezia']>,
+  'jc' | 'jmin' | 'jmax' | 's1' | 's2' | 's3' | 's4' |
+  'h1' | 'h2' | 'h3' | 'h4' | 'i1' | 'i2' | 'i3' | 'i4' | 'i5' |
+  'header_protection_key'
+>>;
+
+export type UserDTO = WireProjection<
+  UserDTOSpec,
+  'id' | 'email',
+  'status'
+>;
+
+export type AuthResultDTO = Omit<WireProjection<
+  AuthResultDTOSpec,
+  'user' | 'session',
+  never
+>, 'user' | 'session'> & {
+  user: UserDTO;
+  session: AuthSessionDTO;
+  access_grant?: AccessGrantSummary | null;
 };
 
-export type DeviceDTO = {
-  id: string;
-  user_id?: string;
-  name?: string;
-  protocol?: string;
-  protocol_label?: string;
-  status?: string;
-  provisioning_mode?: string;
-  client_key_ownership?: string;
-  external_device_id?: string;
-  platform?: string;
-  app_version?: string;
-  push_provider?: string;
-  public_key?: string;
-  crypto_profile?: string;
-  psk_epoch?: number;
-  profile_version?: number;
-  psk_rotated_at?: string | null;
-  billing_plan_id?: string;
-  billing_tier?: string;
-  rate_limit_mbps?: number | null;
-  traffic_priority?: number;
-  shield_enabled?: boolean;
-  assigned_ipv4?: string;
-  node_id?: string;
-  node_assignment_reason?: string;
-  node_assigned_at?: string | null;
-  last_node_change_at?: string | null;
-  endpoint?: string;
-  latency_ms?: number | null;
+export type EmailOTPChallengeDTO = WireProjection<
+  EmailOTPChallengeDTOSpec,
+  'challenge_id',
+  'expires_at'
+>;
+
+export type DeviceDTO = Omit<WireProjection<
+  DeviceDTOSpec,
+  'id',
+  'user_id' | 'name' | 'protocol' | 'protocol_label' | 'status' | 'provisioning_mode'
+  | 'client_key_ownership' | 'external_device_id' | 'platform' | 'app_version' | 'push_provider'
+  | 'public_key' | 'crypto_profile' | 'psk_epoch' | 'profile_version' | 'psk_rotated_at'
+  | 'billing_plan_id' | 'billing_tier' | 'rate_limit_mbps' | 'traffic_priority' | 'shield_enabled'
+  | 'assigned_ipv4' | 'node_id' | 'node_assignment_reason' | 'node_assigned_at'
+  | 'last_node_change_at' | 'endpoint' | 'latency_ms' | 'saved_profiles' | 'created_at'
+  | 'revoked_at'
+>, 'saved_profiles'> & {
   saved_profiles?: DeviceSavedProfile[];
-  created_at?: string;
-  revoked_at?: string | null;
 };
 
-type DeviceSavedProfile = {
-  node_id?: string;
-  assigned_ipv4?: string;
-  status?: string;
-  profile_version?: number;
-};
-
-export type DeviceUsageResponseDTO = {
+export type DeviceUsageResponseDTO = Omit<WireProjection<
+  DeviceUsageResponseDTOSpec,
+  never,
+  'usage' | 'client_ip' | 'current_device_id' | 'current_device_by' | 'traffic_quota'
+>, 'usage'> & {
   usage?: DeviceUsageDTO[];
-  client_ip?: string;
-  current_device_id?: string;
-  current_device_by?: string;
-  traffic_quota?: DeviceTrafficQuotaDTO | null;
 };
 
-export type DeviceTrafficQuotaDTO = {
-  device_id: string;
-  used_bytes: number;
-  limit_bytes: number;
-  reset_at: string;
-  multiplier: number;
-  limit_reached: boolean;
-  effective_rate_limit_mbps?: number | null;
+export type DeviceTrafficQuotaDTO = WireProjection<
+  DeviceTrafficQuotaDTOSpec,
+  'device_id' | 'used_bytes' | 'limit_bytes' | 'reset_at' | 'multiplier' | 'limit_reached',
+  'effective_rate_limit_mbps'
+>;
+
+export type DeviceUsageDTO = WireProjection<
+  DeviceUsageDTOSpec,
+  'device_id',
+  'user_id' | 'node_id' | 'connection_status' | 'connected' | 'multiple_devices_detected'
+  | 'latest_handshake_at' | 'seconds_since_handshake' | 'rx_bytes' | 'tx_bytes' | 'total_bytes'
+  | 'historical_rx_bytes' | 'historical_tx_bytes' | 'historical_total_bytes'
+  | 'last_nonzero_traffic_at' | 'rate_limit_mbps' | 'traffic_priority' | 'rx_rate_bps'
+  | 'tx_rate_bps'
+>;
+
+export type LocationDTO = WireProjection<
+  LocationDTOSpec,
+  'id',
+  'country_code' | 'city' | 'display_name' | 'flag_emoji' | 'availability' | 'priority' | 'status'
+  | 'node_count' | 'healthy_nodes' | 'awg3_nodes' | 'average_load_percent' | 'available_slots'
+  | 'capabilities' | 'endpoint' | 'latency_ms'
+>;
+
+export type NativeVPNProfileDTO = Omit<WireProjection<
+  NativeVPNProfileDTOSpec,
+  'version' | 'revoked' | 'rotation_required',
+  'unchanged' | 'device_id' | 'client_public_key' | 'client_key_epoch' | 'protocol' | 'server'
+  | 'port' | 'server_public_key' | 'preshared_key' | 'assigned_ipv4' | 'dns' | 'allowed_ips'
+  | 'bypass_ranges' | 'bypass_domains' | 'routing_policy_version' | 'expires_at' | 'authorization'
+  | 'amnezia' | 'amnezia_version' | 'config'
+>, 'amnezia'> & {
+  amnezia?: NativeAWGConfig | null;
 };
 
-export type DeviceUsageDTO = {
-  device_id: string;
-  user_id?: string;
-  node_id?: string;
-  connection_status?: string;
-  connected?: boolean;
-  multiple_devices_detected?: boolean;
-  latest_handshake_at?: string | null;
-  seconds_since_handshake?: number | null;
-  rx_bytes?: number;
-  tx_bytes?: number;
-  total_bytes?: number;
-  historical_rx_bytes?: number;
-  historical_tx_bytes?: number;
-  historical_total_bytes?: number;
-  last_nonzero_traffic_at?: string | null;
-  rate_limit_mbps?: number | null;
-  traffic_priority?: number;
-  rx_rate_bps?: number | null;
-  tx_rate_bps?: number | null;
-};
-
-export type LocationDTO = {
-  id: string;
-  country_code?: string;
-  city?: string;
-  display_name?: string;
-  flag_emoji?: string;
-  availability?: string;
-  priority?: number;
-  status?: string;
-  node_count?: number;
-  healthy_nodes?: number;
-  awg3_nodes?: number;
-  average_load_percent?: number;
-  available_slots?: number;
-  capabilities?: string[];
-  endpoint?: string;
-  latency_ms?: number | null;
-};
-
-export type NativeVPNProfileDTO = {
-  unchanged?: boolean;
-  version: number;
-  revoked: boolean;
-  rotation_required: boolean;
-  device_id?: string;
-  client_public_key?: string;
-  client_key_epoch?: number;
-  protocol?: string;
-  server?: string;
-  port?: number;
-  server_public_key?: string;
-  preshared_key?: string;
-  assigned_ipv4?: string;
-  dns?: string[];
-  allowed_ips?: string[];
-  bypass_ranges?: string[];
-  bypass_domains?: string[];
-  routing_policy_version?: string;
-  expires_at?: string | null;
-  authorization?: {
-    key_id: string;
-    algorithm: string;
-    payload_base64: string;
-    signature_base64: string;
-  } | null;
-  amnezia?: {
-    jc?: number;
-    jmin?: number;
-    jmax?: number;
-    s1?: number;
-    s2?: number;
-    s3?: number;
-    s4?: number;
-    h1?: string;
-    h2?: string;
-    h3?: string;
-    h4?: string;
-    i1?: string;
-    i2?: string;
-    i3?: string;
-    i4?: string;
-    i5?: string;
-    header_protection_key?: string;
-  } | null;
-  amnezia_version?: number;
-  config?: string;
-};
-
-export type StagedDevicePSKProfileDTO = {
-  rotation_id: string;
-  activate: boolean;
-  current_version: number;
-  profile_version: number;
-  profile_digest: string;
-  deadline_at: string;
+export type StagedDevicePSKProfileDTO = Omit<WireProjection<
+  StagedDevicePSKProfileDTOSpec,
+  'rotation_id' | 'activate' | 'current_version' | 'profile_version' | 'profile_digest'
+  | 'deadline_at' | 'profile',
+  never
+>, 'profile'> & {
   profile: NativeVPNProfileDTO;
 };
 
-export type AcknowledgeStagedDevicePSKProfileResultDTO = {
-  rotation_id: string;
-  accepted: boolean;
-  replayed: boolean;
-};
+export type AcknowledgeStagedDevicePSKProfileResultDTO = WireProjection<
+  AcknowledgeStagedDevicePSKProfileResultDTOSpec,
+  'rotation_id' | 'accepted' | 'replayed',
+  never
+>;
 
-export type RegisterNativeDeviceResultDTO = {
-  device_registered?: boolean;
+export type RegisterNativeDeviceResultDTO = Omit<WireProjection<
+  RegisterNativeDeviceResultDTOSpec,
+  'device',
+  'device_registered' | 'binding_status' | 'trust_level'
+>, 'device'> & {
   device: DeviceDTO;
-  binding_status?: string;
-  trust_level?: string;
 };
 
-export type RegisterDevicePushTokenResultDTO = {
+export type RegisterDevicePushTokenResultDTO = Omit<WireProjection<
+  RegisterDevicePushTokenResultDTOSpec,
+  never,
+  'device'
+>, 'device'> & {
   device?: DeviceDTO;
 };
 
-export type DeviceIdentityChallengeDTO = {
-  id: string;
-  nonce: string;
-  purpose: string;
-  expires_at?: string | null;
+export type DeviceIdentityChallengeDTO = Omit<WireProjection<
+  DeviceIdentityChallengeDTOSpec,
+  'id' | 'nonce' | 'purpose',
+  'expires_at'
+>, 'expires_at'> & {
+  expires_at?: DeviceIdentityChallengeDTOSpec['expires_at'] | null;
 };
 
-export type SupportMessageDTO = {
-  id: string;
-  ticket_id: string;
-  sender: string;
-  author_id?: string;
-  body: string;
-  created_at: string;
-};
+export type SupportMessageDTO = WireProjection<
+  SupportMessageDTOSpec,
+  'id' | 'ticket_id' | 'sender' | 'body' | 'created_at',
+  'author_id'
+>;
 
-export type SupportTicketDTO = {
-  id: string;
-  user_id?: string;
-  subject: string;
-  message: string;
+export type SupportTicketDTO = Omit<WireProjection<
+  SupportTicketDTOSpec,
+  'id' | 'subject' | 'message' | 'status' | 'source' | 'created_at' | 'updated_at',
+  'user_id' | 'messages' | 'priority' | 'assigned_admin_user_id' | 'admin_note' | 'support_rating'
+  | 'support_feedback' | 'support_rated_at' | 'closed_at'
+>, 'messages' | 'support_feedback'> & {
   messages?: SupportMessageDTO[];
-  status: string;
-  priority?: string;
-  assigned_admin_user_id?: string;
-  source: string;
-  admin_note?: string;
-  support_rating?: number | null;
-  support_feedback?: string | null;
-  support_rated_at?: string | null;
-  created_at: string;
-  updated_at: string;
-  closed_at?: string | null;
+  support_feedback?: NonNullable<SupportTicketDTOSpec['support_feedback']> | null;
 };
 
-export type EntitlementDTO = {
-  user_id?: string;
-  active?: boolean;
-  reason?: string;
-  plan_id?: string;
-  display_name?: string;
-  account_status?: string;
-  subscription_title?: string;
-  subscription_subtitle?: string;
-  remaining_text?: string;
-  status?: string;
-  tier?: string;
-  current_period_end?: string | null;
-  effective_expires_at?: string | null;
-  switch_bonus_status?: string;
-  switch_bonus_days?: number;
-  switch_bonus_until?: string | null;
-  device_limit?: number;
-  active_devices?: number;
-  grace_until?: string | null;
-  can_create_device?: boolean;
-  vpn_access?: boolean;
-};
+export type EntitlementDTO = WireProjection<
+  EntitlementDTOSpec,
+  never,
+  'user_id' | 'active' | 'reason' | 'plan_id' | 'display_name' | 'account_status'
+  | 'subscription_title' | 'subscription_subtitle' | 'remaining_text' | 'status' | 'tier'
+  | 'current_period_end' | 'effective_expires_at' | 'switch_bonus_status' | 'switch_bonus_days'
+  | 'switch_bonus_until' | 'device_limit' | 'active_devices' | 'grace_until' | 'can_create_device'
+  | 'vpn_access'
+>;
 
-export type BillingPlanDTO = {
-  id: string;
-  name?: string;
-  provider?: string;
-  amount_cents: number;
-  currency: string;
-  interval: string;
-  device_limit: number;
-  tier: string;
-  status: string;
-};
+export type BillingPlanDTO = WireProjection<
+  BillingPlanDTOSpec,
+  'id' | 'amount_cents' | 'currency' | 'interval' | 'device_limit' | 'tier' | 'status',
+  'name' | 'provider'
+>;
 
-export type CheckoutSessionDTO = {
-  id: string;
-  plan_id: string;
-  provider: string;
-  url: string;
-  status: string;
-};
+export type CheckoutSessionDTO = WireProjection<
+  CheckoutSessionDTOSpec,
+  'id' | 'plan_id' | 'provider' | 'url' | 'status',
+  never
+>;
 
-export type PortalSessionDTO = {
-  id?: string;
-  provider?: string;
-  url?: string;
-  created_at?: string;
-};
+export type PortalSessionDTO = WireProjection<
+  PortalSessionDTOSpec,
+  never,
+  'id' | 'provider' | 'url' | 'created_at'
+>;
 
-export type AppUpdateCheckResponseDTO = {
-  updateAvailable: boolean;
+export type AppUpdateCheckResponseDTO = Omit<WireProjection<
+  AppUpdateCheckResponseDTOSpec,
+  'updateAvailable' | 'checkedAt',
+  'delivery' | 'required' | 'currentBuildBlocked' | 'latestVersion' | 'latestBuild'
+  | 'minSupportedBuild' | 'minConfigSchemaVersion' | 'downloadUrl' | 'changelog' | 'checksumSha256'
+  | 'signatureUrl' | 'channel' | 'reason' | 'rolloutPercent'
+>, 'delivery'> & {
   delivery?: 'native' | 'ota';
-  required?: boolean;
-  currentBuildBlocked?: boolean;
-  latestVersion?: string;
-  latestBuild?: number;
-  minSupportedBuild?: number;
-  minConfigSchemaVersion?: number;
-  downloadUrl?: string;
-  changelog?: string;
-  checksumSha256?: string;
-  signatureUrl?: string;
-  channel?: string;
-  reason?: string;
-  rolloutPercent?: number;
-  checkedAt: string;
 };
 
-export type AppRemoteConfigResponseDTO = {
-  version?: string;
-  signature?: string;
-  releasedAt?: string | null;
-  platform: string;
-  channel: string;
-  minSupportedBuild?: number;
-  recommendedBuild?: number;
-  recommendedVersion?: string;
-  coreVersion?: string;
-  configSchemaVersion?: number;
-  minConfigSchemaVersion?: number;
-  minCoreVersion?: string;
-  supportedApiClientVersions?: string[];
-  routingPolicyVersionPrefix?: string;
-  routingPolicyVersion?: string;
-  featureFlags?: Record<string, boolean>;
-  accountFeatureFlags?: Record<string, boolean>;
-  incidentBanner?: string;
-  checkedAt: string;
-};
+export type AppRemoteConfigResponseDTO = WireProjection<
+  AppRemoteConfigResponseDTOSpec,
+  'platform' | 'channel' | 'checkedAt',
+  'version' | 'signature' | 'releasedAt' | 'minSupportedBuild' | 'recommendedBuild'
+  | 'recommendedVersion' | 'coreVersion' | 'configSchemaVersion' | 'minConfigSchemaVersion'
+  | 'minCoreVersion' | 'supportedApiClientVersions' | 'routingPolicyVersionPrefix'
+  | 'routingPolicyVersion' | 'featureFlags' | 'accountFeatureFlags' | 'incidentBanner'
+>;
+
+// The desktop app-code exchange shares the server's Go-derived request fields.
+export type AppAuthTokenRequest = Pick<
+  import('./generated-contract').AppAuthTokenRequestSpec,
+  'code' | 'code_verifier'
+>;

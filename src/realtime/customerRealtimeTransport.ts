@@ -1,7 +1,8 @@
+import { apiFetch } from '../api/apiFetch';
 import {
   customerRealtimeMetadata,
   customerRealtimeReconnectDelay,
-  parseCustomerSSE,
+  CustomerSSEParser,
   type CustomerSSEEvent,
 } from './customerRealtimeCore';
 
@@ -31,17 +32,22 @@ export type CustomerRealtimeTransportOptions = {
   cancelSchedule?: (timer: ReturnType<typeof setTimeout>) => void;
 };
 
+type RealtimeRequest = { abort(): void };
+
 export class CustomerRealtimeTransport {
   private static readonly livenessDeadlineMilliseconds = 45_000;
+  // XHR retains the whole responseText; retire the response at the next progress callback.
+  private static readonly maximumResponseLength = 1024 * 1024;
   private readonly options: CustomerRealtimeTransportOptions;
   private active = false;
-  private request: XMLHttpRequestLike | null = null;
+  private request: RealtimeRequest | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectGeneration = 0;
   private watchdogTimer: ReturnType<typeof setTimeout> | null = null;
   private watchdogGeneration = 0;
   private reconnectAttempt = 0;
   private processedLength = 0;
-  private buffer = '';
+  private parser = new CustomerSSEParser();
   private lastEventId = '';
 
   constructor(options: CustomerRealtimeTransportOptions) {
@@ -60,21 +66,31 @@ export class CustomerRealtimeTransport {
     this.clearWatchdog();
     const request = this.request;
     this.request = null;
+    this.parser = new CustomerSSEParser();
     request?.abort();
     this.options.onStatus(false);
   }
 
   private connect(): void {
     if (!this.active || this.request) return;
-    const request = this.options.createRequest?.() ?? new XMLHttpRequest();
+    this.clearReconnect();
+    const url = `${this.options.baseUrl.replace(/\/+$/, '')}/v1/events`;
+    const headers: Record<string, string> = {
+      Accept: 'text/event-stream', Authorization: `Bearer ${this.options.accessToken}`, 'Cache-Control': 'no-cache',
+    };
+    if (this.lastEventId) headers['Last-Event-ID'] = this.lastEventId;
+    if (!this.options.createRequest) {
+      void this.connectFetch(url, headers);
+      return;
+    }
+    // Preserve explicitly injected XHR clients. The default owns a streaming
+    // response rather than retaining a cumulative native responseText.
+    const request = this.options.createRequest();
     this.request = request;
     this.processedLength = 0;
-    this.buffer = '';
-    request.open('GET', `${this.options.baseUrl.replace(/\/+$/, '')}/v1/events`, true);
-    request.setRequestHeader('Accept', 'text/event-stream');
-    request.setRequestHeader('Authorization', `Bearer ${this.options.accessToken}`);
-    request.setRequestHeader('Cache-Control', 'no-cache');
-    if (this.lastEventId) request.setRequestHeader('Last-Event-ID', this.lastEventId);
+    this.parser = new CustomerSSEParser();
+    request.open('GET', url, true);
+    for (const [name, value] of Object.entries(headers)) request.setRequestHeader(name, value);
     request.onprogress = () => this.consume(request);
     request.onreadystatechange = () => {
       if (request.readyState >= 2 && request.status >= 400) this.finish(request, request.status === 401);
@@ -85,60 +101,132 @@ export class CustomerRealtimeTransport {
       if (this.request === request) this.request = null;
     };
     request.send();
+    if (this.active && this.request === request) this.armWatchdog(request);
+  }
+
+  private async connectFetch(url: string, headers: Record<string, string>): Promise<void> {
+    const controller = new AbortController();
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let aborted = false;
+    const request: RealtimeRequest = { abort() {
+      if (aborted) return;
+      aborted = true;
+      controller.abort();
+      if (reader) {
+        void reader.cancel().catch(() => {});
+        reader.releaseLock();
+      }
+    } };
+    this.request = request;
+    this.parser = new CustomerSSEParser();
     this.armWatchdog(request);
+    try {
+      const response = await apiFetch(url, { method: 'GET', headers, signal: controller.signal });
+      if (!this.active || this.request !== request) {
+        void response.body?.cancel().catch(() => {});
+        return;
+      }
+      // A redirect must not dispatch events or initiate credential recovery.
+      if (response.type === 'opaqueredirect' || response.status !== 200) {
+        this.finish(request, response.status === 401);
+        return;
+      }
+      reader = response.body?.getReader();
+      if (!reader) return;
+      const decoder = new TextDecoder();
+      while (this.active && this.request === request) {
+        const { done, value } = await reader.read();
+        if (!this.active || this.request !== request) return;
+        if (done) {
+          this.consumeChunk(request, decoder.decode());
+          return;
+        }
+        // Decode a bounded slice even when the native boundary returns one
+        // large chunk. The existing parser separately bounds each SSE frame.
+        for (let offset = 0; offset < value.length; offset += 16 * 1024) {
+          if (!this.active || this.request !== request) return;
+          this.consumeChunk(request, decoder.decode(value.subarray(offset, offset + 16 * 1024), { stream: true }));
+        }
+      }
+    } catch {
+      // Network, parser and retired-reader errors use the same owned finish.
+    } finally {
+      this.finish(request, false);
+      request.abort();
+    }
   }
 
   private consume(request: XMLHttpRequestLike): void {
-    if (this.request !== request || request.responseText.length < this.processedLength) return;
-    this.buffer += request.responseText.slice(this.processedLength);
-    this.processedLength = request.responseText.length;
+    if (!this.active || this.request !== request) return;
+    const response = request.responseText;
+    if (response.length < this.processedLength) return;
+    const end = Math.min(response.length, CustomerRealtimeTransport.maximumResponseLength);
+    const chunk = response.slice(this.processedLength, end);
+    this.processedLength = end;
+    this.consumeChunk(request, chunk);
+    if (response.length >= CustomerRealtimeTransport.maximumResponseLength) this.finish(request, false);
+  }
+
+  private consumeChunk(request: RealtimeRequest, chunk: string): void {
+    const events = this.parser.append(chunk);
     this.armWatchdog(request);
-    const parsed = parseCustomerSSE(this.buffer);
-    this.buffer = parsed.remainder.slice(-64 * 1024);
-    for (const event of parsed.events) {
+    for (const event of events) {
+      if (!this.active || this.request !== request) return;
       const metadata = customerRealtimeMetadata(event.type, event.data);
       if (!metadata) continue;
-      if (event.id) this.lastEventId = event.id;
       if (event.type === 'customer.session.revoked') {
+        if (event.id) this.lastEventId = event.id;
         this.options.onEvent(event);
+        if (!this.active || this.request !== request) return;
         this.options.onSessionRevoked();
+        if (!this.active || this.request !== request) return;
         this.active = false;
         this.finish(request, false);
         return;
       }
       this.reconnectAttempt = 0;
       this.options.onStatus(true);
+      if (!this.active || this.request !== request) return;
+      if (event.id) this.lastEventId = event.id;
       this.options.onEvent(event);
+    }
+    if (this.parser.hasExceededFrameLimit) {
+      this.finish(request, false);
     }
   }
 
-  private finish(request: XMLHttpRequestLike, sessionRejected: boolean): void {
+  private finish(request: RealtimeRequest, sessionRejected: boolean): void {
     if (this.request !== request) return;
     this.request = null;
+    this.parser = new CustomerSSEParser();
+    this.clearReconnect();
+    const generation = this.reconnectGeneration;
     this.clearWatchdog();
     request.abort();
     this.options.onStatus(false);
+    if (generation !== this.reconnectGeneration || !this.active) return;
     if (sessionRejected) {
       this.active = false;
       this.options.onSessionRevoked();
       return;
     }
-    if (!this.active) return;
     const delay = customerRealtimeReconnectDelay(this.reconnectAttempt++);
     const schedule = this.options.schedule ?? setTimeout;
     this.reconnectTimer = schedule(() => {
+      if (generation !== this.reconnectGeneration) return;
       this.reconnectTimer = null;
       this.connect();
     }, delay);
   }
 
   private clearReconnect(): void {
+    this.reconnectGeneration += 1;
     if (this.reconnectTimer === null) return;
     (this.options.cancelSchedule ?? clearTimeout)(this.reconnectTimer);
     this.reconnectTimer = null;
   }
 
-  private armWatchdog(request: XMLHttpRequestLike): void {
+  private armWatchdog(request: RealtimeRequest): void {
     this.clearWatchdog();
     const generation = this.watchdogGeneration;
     const schedule = this.options.schedule ?? setTimeout;

@@ -50,6 +50,15 @@ struct VpnLocation: Codable, Equatable, Identifiable {
     var awg3Nodes: Int?
     var latencyMs: Double?
 
+    var isAvailableForVpn: Bool {
+        let availability = self.availability.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let status = self.status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        // Legacy backends omit the count; an explicit zero cannot serve AWG3.
+        return healthyNodes > 0 && (awg3Nodes ?? 1) > 0
+            && availability == "available"
+            && ["active", "online", "healthy", "degraded"].contains(status)
+    }
+
     var displayName: String {
         if city.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return id.uppercased()
@@ -142,6 +151,29 @@ struct AppUpdateCheckResult: Codable, Equatable {
         value
             .split { !$0.isNumber }
             .map { Int($0) ?? 0 }
+    }
+}
+
+// The Go response omits zero-valued release fields when no candidate exists.
+// Keep the public nonoptional properties and the synthesized Encodable keys.
+extension AppUpdateCheckResult {
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        updateAvailable = try values.decode(Bool.self, forKey: .updateAvailable)
+        required = try values.decode(Bool.self, forKey: .required)
+        currentBuildBlocked = try values.decodeIfPresent(Bool.self, forKey: .currentBuildBlocked)
+        latestVersion = try values.decodeIfPresent(String.self, forKey: .latestVersion) ?? ""
+        latestBuild = try values.decodeIfPresent(Int.self, forKey: .latestBuild) ?? 0
+        minSupportedBuild = try values.decodeIfPresent(Int.self, forKey: .minSupportedBuild) ?? 0
+        minConfigSchemaVersion = try values.decodeIfPresent(Int.self, forKey: .minConfigSchemaVersion)
+        downloadUrl = try values.decodeIfPresent(String.self, forKey: .downloadUrl) ?? ""
+        changelog = try values.decodeIfPresent(String.self, forKey: .changelog)
+        checksumSha256 = try values.decodeIfPresent(String.self, forKey: .checksumSha256)
+        signatureUrl = try values.decodeIfPresent(String.self, forKey: .signatureUrl)
+        channel = try values.decodeIfPresent(String.self, forKey: .channel)
+        reason = try values.decodeIfPresent(String.self, forKey: .reason)
+        rolloutPercent = try values.decodeIfPresent(Int.self, forKey: .rolloutPercent)
+        checkedAt = try values.decodeIfPresent(String.self, forKey: .checkedAt)
     }
 }
 

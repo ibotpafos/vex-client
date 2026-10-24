@@ -311,13 +311,24 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
   }
 
   @ReactMethod
+  fun generateWireGuardKeyMaterial(promise: Promise) {
+    scope.launch {
+      try {
+        promise.resolve(wireGuardKeyStore.generateAccountKeyPair().toWritableMap())
+      } catch (error: Throwable) {
+        rejectVpnError(promise, "VPN_KEYPAIR_GENERATE_FAILED", "WireGuard keypair generation failed.", error)
+      }
+    }
+  }
+
+  @ReactMethod
   fun replaceWireGuardKeyPair(privateKey: String, publicKey: String, keyEpoch: Double, promise: Promise) {
     try {
       wireGuardKeyStore.replaceKeyPair(
         StoredWireGuardKeyPair(
           privateKey = privateKey.trim(),
           publicKey = publicKey.trim(),
-          keyEpoch = keyEpoch.toInt(),
+          keyEpoch = VpnIdentityNumbers.legacyKeyEpoch(keyEpoch),
         ),
       )
       promise.resolve(true)

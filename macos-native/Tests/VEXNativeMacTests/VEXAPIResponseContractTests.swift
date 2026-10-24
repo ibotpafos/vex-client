@@ -1,0 +1,60 @@
+import XCTest
+
+final class VEXAPIResponseContractTests: XCTestCase {
+    func testAppUpdateMetadataPreservesGoOmissionAndRequestContracts() async throws {
+        try await APIContractScenarios.appUpdateMetadata()
+    }
+
+    func testProfileIssuanceDoesNotReplayUncertainGETResults() async throws {
+        try await APIContractScenarios.profileIssuanceDoesNotReplay()
+    }
+
+    func testSuccessfulJSONBodiesUseTheExistingProtocolFailureWithoutReplay() async throws {
+        try await APIContractScenarios.successfulBodyDecoding()
+    }
+
+    func testAPIBodyDeliveryHonorsParentCancellation() async throws {
+        try await APIContractScenarios.successfulBodyCancellation()
+    }
+
+    func testLocationCapabilitiesAndEligibilityStayConsistent() async throws {
+        try await APIContractScenarios.locationCapabilities()
+    }
+
+    func testDefaultGETReturnsRedirectWithoutVisitingItsTarget() async throws {
+        try await APIContractScenarios.redirects(method: "GET")
+    }
+    func testDefaultPOSTNeverReplaysItsBodyThroughRedirects() async throws {
+        try await APIContractScenarios.redirects(method: "POST")
+    }
+    func testRealtimeNeverFollowsSameOrForeignAuthorityRedirects() async throws {
+        try await APIContractScenarios.realtimeRedirects()
+    }
+    func testRealtimeStopFromStatusClosesStreamWithoutLateStatus() async throws {
+        try await APIContractScenarios.realtimeStop(fromEvent: false)
+    }
+    func testRealtimeStopFromEventClosesStreamWithoutLateStatus() async throws {
+        try await APIContractScenarios.realtimeStop(fromEvent: true)
+    }
+    func testRealtimeUnauthorizedStillRejectsSessionOnce() async throws {
+        try await APIContractScenarios.realtimeUnauthorized()
+    }
+    func testDefaultLoaderBoundsAStalledResponseBody() async throws {
+        try await APIContractScenarios.bodyDeadline()
+    }
+    func testDefaultLoaderCancelsAStalledResponseBodyWithoutRetry() async throws {
+        try await APIContractScenarios.bodyCancellation()
+    }
+    func testErrorFieldsAreNarrowedIndependentlyWithoutEchoingStructuredBodies() async throws {
+        try await APIContractScenarios.errorBodies()
+    }
+    func testInvalidBaseURLFailsBeforeTransportAndWithoutOutageClassification() async throws {
+        try await APIContractScenarios.invalidBaseURLs()
+    }
+    func testConfiguredAPIBasePreservesDefaultsCustomOriginsAndPathPrefixes() async throws {
+        try await APIContractScenarios.baseURLConfiguration()
+    }
+    func testMalformedMessageCannotDiscardMaintenanceCode() async throws {
+        try await APIContractScenarios.maintenanceClassification()
+    }
+}

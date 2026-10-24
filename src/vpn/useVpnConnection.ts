@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { router } from 'expo-router';
 import { AppState, Platform } from 'react-native';
-import { useQueryClient } from '@tanstack/react-query';
+import { isCancelledError, useQueryClient } from '@tanstack/react-query';
+import { isApiRequestCancelled } from '@/api/error';
+import { useOwnedState } from '@/hooks/useOwnedState';
 
 import {
   type Entitlement,
@@ -179,6 +181,8 @@ function closeRouteOverlay() {
 export function useVpnConnection() {
   const queryClient = useQueryClient();
   const { session, refreshSession, signOut, isCurrentSessionOperation } = useSession();
+  const accessToken = session?.accessToken;
+  const cacheUserId = session?.user.id ?? '';
   const customerRealtime = useCustomerRealtimeStatus();
 
   const vpnStatusRef = useRef<VpnStatus>({ state: 'disconnected', rxBytes: 0, txBytes: 0 });
@@ -258,28 +262,26 @@ export function useVpnConnection() {
   const autoConnectAttemptedRef = useRef(false);
   const vpnOperationInFlightRef = useRef(false);
   const vpnConnectGenerationRef = useRef(0);
-  const [persistedEntitlement, setPersistedEntitlement] = useState<Entitlement | null>(null);
-  const [persistedLocations, setPersistedLocations] = useState<VpnLocation[] | null>(null);
-  const [persistedDevices, setPersistedDevices] = useState<VpnDevice[] | null>(null);
-  const [entitlementData, setEntitlementData] = useState<Entitlement | null>(null);
-  const [entitlementError, setEntitlementError] = useState<unknown>(null);
-  const [locationsData, setLocationsData] = useState<VpnLocation[] | null>(null);
-  const [locationsRefreshError, setLocationsRefreshError] = useState<unknown>(null);
-  const [isLocationsRefreshing, setIsLocationsRefreshing] = useState(false);
+  const [persistedEntitlement, setPersistedEntitlement] = useOwnedState<Entitlement | null>(cacheUserId, isCurrentSessionOperation, null);
+  const [persistedLocations, setPersistedLocations] = useOwnedState<VpnLocation[] | null>(cacheUserId, isCurrentSessionOperation, null);
+  const [persistedDevices, setPersistedDevices] = useOwnedState<VpnDevice[] | null>(cacheUserId, isCurrentSessionOperation, null);
+  const [entitlementData, setEntitlementData] = useOwnedState<Entitlement | null>(cacheUserId, isCurrentSessionOperation, null);
+  const [entitlementError, setEntitlementError] = useOwnedState<unknown>(cacheUserId, isCurrentSessionOperation, null);
+  const [locationsData, setLocationsData] = useOwnedState<VpnLocation[] | null>(cacheUserId, isCurrentSessionOperation, null);
+  const [locationsRefreshError, setLocationsRefreshError] = useOwnedState<unknown>(cacheUserId, isCurrentSessionOperation, null);
+  const [isLocationsRefreshing, setIsLocationsRefreshing] = useOwnedState(cacheUserId, isCurrentSessionOperation, false);
   const [deviceLocationLatencies, setDeviceLocationLatencies] = useState<Record<string, number>>(() => ({
     ...deviceLocationLatencyCache,
   }));
-  const [devicesData, setDevicesData] = useState<VpnDevice[] | null>(null);
-  const [deviceUsageSnapshot, setDeviceUsageSnapshot] = useState<VpnDeviceUsageSnapshot | null>(null);
-  const accessToken = session?.accessToken;
-  const cacheUserId = session?.user.id ?? '';
+  const [devicesData, setDevicesData] = useOwnedState<VpnDevice[] | null>(cacheUserId, isCurrentSessionOperation, null);
+  const [deviceUsageSnapshot, setDeviceUsageSnapshot] = useOwnedState<VpnDeviceUsageSnapshot | null>(cacheUserId, isCurrentSessionOperation, null);
   const catalogOwner = `${cacheUserId}:${accessToken ?? ''}`;
   const entitlementQueryKey = useMemo(() => ['entitlement', accessToken] as const, [accessToken]);
   const locationsQueryKey = useMemo(() => ['vpn-locations', accessToken] as const, [accessToken]);
   const devicesQueryKey = useMemo(() => ['vpn-devices', accessToken] as const, [accessToken]);
-  const fetchEntitlement = useCallback(() => entitlement(accessToken!), [accessToken]);
-  const fetchVpnLocations = useCallback(() => vpnLocations(accessToken!), [accessToken]);
-  const fetchVpnDevices = useCallback(() => vpnDevices(accessToken!), [accessToken]);
+  const fetchEntitlement = useCallback(({ signal }: { signal?: AbortSignal } = {}) => entitlement(accessToken!, signal), [accessToken]);
+  const fetchVpnLocations = useCallback(({ signal }: { signal?: AbortSignal } = {}) => vpnLocations(accessToken!, signal), [accessToken]);
+  const fetchVpnDevices = useCallback(({ signal }: { signal?: AbortSignal } = {}) => vpnDevices(accessToken!, signal), [accessToken]);
   const catalogSnapshotRef = useRef<VpnLocation[] | null>(null);
   const catalogOwnerRef = useRef(catalogOwner);
   const catalogDiagnosticsRef = useRef<(event: LocationCatalogDiagnostics) => void>(() => {});
@@ -298,8 +300,9 @@ export function useVpnConnection() {
       }
     },
     currentCatalog: () => catalogSnapshotRef.current,
-    onDiagnostics: (event) => catalogDiagnosticsRef.current(event),
-  }), [catalogOwner, fetchLocationCatalog]);
+    onDiagnostics: (event) => { if (isCurrentSessionOperation()) catalogDiagnosticsRef.current(event); },
+    shouldReportError: (error) => !isCancelledError(error) && !isApiRequestCancelled(error),
+  }), [catalogOwner, fetchLocationCatalog, isCurrentSessionOperation, setLocationsData]);
   const refreshLocations = useCallback(async (reason: LocationCatalogRefreshReason) => {
     const showRefresh = isVisibleLocationCatalogRefresh(
       reason,
@@ -310,17 +313,17 @@ export function useVpnConnection() {
     }
     try {
       const result = await locationCatalogRefresher.refresh(reason);
-      setLocationsRefreshError(null);
+      if (isCurrentSessionOperation()) setLocationsRefreshError(null);
       return result;
     } catch (error) {
-      setLocationsRefreshError(error);
+      if (isCurrentSessionOperation() && !isCancelledError(error) && !isApiRequestCancelled(error)) setLocationsRefreshError(error);
       throw error;
     } finally {
-      if (showRefresh) {
+      if (showRefresh && isCurrentSessionOperation()) {
         setIsLocationsRefreshing(false);
       }
     }
-  }, [locationCatalogRefresher]);
+  }, [isCurrentSessionOperation, locationCatalogRefresher, setIsLocationsRefreshing, setLocationsRefreshError]);
 
   const cachedSelectedProfile = accessToken
     ? queryClient.getQueryData<VpnProfile>(['vpn-profile', accessToken, selectedLocationId, routingMode])
@@ -469,7 +472,7 @@ export function useVpnConnection() {
     return () => {
       cancelled = true;
     };
-  }, [cacheUserId]);
+  }, [cacheUserId, setLocationsData, setPersistedDevices, setPersistedEntitlement, setPersistedLocations]);
 
   useEffect(() => {
     if (!accessToken) {
@@ -506,7 +509,7 @@ export function useVpnConnection() {
           setEntitlementError(null);
         }
       } catch (error) {
-        if (!cancelled) {
+        if (!cancelled && !isCancelledError(error) && !isApiRequestCancelled(error)) {
           setEntitlementError(error);
         }
       }
@@ -520,7 +523,7 @@ export function useVpnConnection() {
       cancelled = true;
       if (timer) clearInterval(timer);
     };
-  }, [accessToken, customerRealtime.connected, customerRealtime.revision, entitlementQueryKey, fetchEntitlement, queryClient]);
+  }, [accessToken, customerRealtime.connected, customerRealtime.revision, entitlementQueryKey, fetchEntitlement, queryClient, setEntitlementData, setEntitlementError]);
 
   useEffect(() => {
     if (!accessToken || !hasVpnAccess) {
@@ -536,7 +539,7 @@ export function useVpnConnection() {
     return () => {
       clearInterval(timer);
     };
-  }, [accessToken, hasVpnAccess, refreshLocations]);
+  }, [accessToken, hasVpnAccess, refreshLocations, setLocationsData, setLocationsRefreshError]);
 
   useEffect(() => {
     if (!accessToken || !activeProfile?.device?.id || !isConnected) {
@@ -564,7 +567,7 @@ export function useVpnConnection() {
       cancelled = true;
       if (timer) clearInterval(timer);
     };
-  }, [accessToken, activeProfile?.device?.id, customerRealtime.connected, customerRealtime.revision, devicesQueryKey, fetchVpnDevices, isConnected, queryClient]);
+  }, [accessToken, activeProfile?.device?.id, customerRealtime.connected, customerRealtime.revision, devicesQueryKey, fetchVpnDevices, isConnected, queryClient, setDevicesData]);
 
   useEffect(() => {
     if (!accessToken || !activeProfileDeviceId || !isAppActive) return undefined;
@@ -585,7 +588,7 @@ export function useVpnConnection() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [accessToken, activeProfileDeviceId, isAppActive]);
+  }, [accessToken, activeProfileDeviceId, isAppActive, setDeviceUsageSnapshot]);
 
   useEffect(() => {
     if (!cacheUserId || !entitlementData) {
@@ -593,7 +596,7 @@ export function useVpnConnection() {
     }
     setPersistedEntitlement(entitlementData);
     void saveCachedEntitlement(cacheUserId, entitlementData).catch(() => undefined);
-  }, [cacheUserId, entitlementData]);
+  }, [cacheUserId, entitlementData, setPersistedEntitlement]);
 
   useEffect(() => {
     if (!cacheUserId || !locationsData) {
@@ -601,7 +604,7 @@ export function useVpnConnection() {
     }
     setPersistedLocations(locationsData);
     void saveCachedVpnLocations(cacheUserId, locationsData).catch(() => undefined);
-  }, [cacheUserId, locationsData]);
+  }, [cacheUserId, locationsData, setPersistedLocations]);
 
   useEffect(() => {
     if (!cacheUserId || !devicesData) {
@@ -609,7 +612,7 @@ export function useVpnConnection() {
     }
     setPersistedDevices(devicesData);
     void saveCachedVpnDevices(cacheUserId, devicesData).catch(() => undefined);
-  }, [cacheUserId, devicesData]);
+  }, [cacheUserId, devicesData, setPersistedDevices]);
 
   const handleSignOut = useCallback(async () => {
     dynamicRouteRuntime.clearActive();
@@ -752,9 +755,11 @@ export function useVpnConnection() {
                 }
                 vpnOperationInFlightRef.current = true;
                 try {
-                  await disconnectVpn({ releaseAntiLeak: false });
-                  requireCurrentSession();
-                  const connected = await connectProfileWithEndpointFallback(staged.profile);
+                  const connected = await connectProfileWithEndpointFallback(staged.profile, () => !cancelled && isCurrentSessionOperation(), async () => {
+                    requireCurrentSession();
+                    await disconnectVpn({ releaseAntiLeak: false });
+                    requireCurrentSession();
+                  });
                   requireCurrentSession();
                   setActiveProfile(connected.profile);
                   cacheProfile(connected.profile.locationId, connected.profile);

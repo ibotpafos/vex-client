@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 
 struct CustomerRealtimeEvent: Equatable {
     let type: String
@@ -7,8 +8,11 @@ struct CustomerRealtimeEvent: Equatable {
 }
 
 struct CustomerSSEParser {
-    private(set) var remainder = ""
-    private static let maximumRemainderLength = 64 * 1024
+    private var frameBytes = Data()
+    private var suppressLF = false
+    private(set) var hasExceededFrameLimit = false
+    private static let maximumFrameBytes = 64 * 1024
+    var remainder: String { String(decoding: frameBytes, as: UTF8.self) }
     private static let supportedTypes: Set<String> = [
         "customer.change",
         "customer.resync",
@@ -17,17 +21,34 @@ struct CustomerSSEParser {
     ]
 
     mutating func append(_ chunk: String) -> [CustomerRealtimeEvent] {
-        let buffered = (remainder + chunk)
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: "\r", with: "\n")
-        guard let boundary = buffered.range(of: "\n\n", options: .backwards) else {
-            remainder = String(buffered.suffix(Self.maximumRemainderLength))
-            return []
+        var events: [CustomerRealtimeEvent] = []
+        for byte in chunk.utf8 {
+            if let event = append(byte) { events.append(event) }
+            if hasExceededFrameLimit { break }
         }
+        return events
+    }
 
-        let complete = String(buffered[..<boundary.lowerBound])
-        remainder = String(buffered[boundary.upperBound...].suffix(Self.maximumRemainderLength))
-        return complete.components(separatedBy: "\n\n").compactMap(Self.parseFrame)
+    fileprivate mutating func append(_ byte: UInt8) -> CustomerRealtimeEvent? {
+        guard !hasExceededFrameLimit else { return nil }
+        // A CRLF pair remains one newline even across separate appends.
+        if suppressLF {
+            suppressLF = false
+            if byte == 0x0A { return nil }
+        }
+        let normalized = byte == 0x0D ? 0x0A : byte
+        suppressLF = byte == 0x0D
+        guard frameBytes.count < Self.maximumFrameBytes else {
+            frameBytes.removeAll(keepingCapacity: false)
+            hasExceededFrameLimit = true
+            return nil
+        }
+        frameBytes.append(normalized)
+        guard normalized == 0x0A, frameBytes.count >= 2,
+              frameBytes[frameBytes.endIndex - 2] == 0x0A else { return nil }
+        let frame = String(decoding: frameBytes.dropLast(2), as: UTF8.self)
+        frameBytes.removeAll(keepingCapacity: true)
+        return Self.parseFrame(frame)
     }
 
     private static func parseFrame(_ frame: String) -> CustomerRealtimeEvent? {
@@ -50,21 +71,10 @@ struct CustomerSSEParser {
 
 struct CustomerSSEWireDecoder {
     private var parser = CustomerSSEParser()
-    private var lineBytes = Data()
-    private var suppressLF = false
+    var hasExceededFrameLimit: Bool { parser.hasExceededFrameLimit }
 
     mutating func append(_ byte: UInt8) -> [CustomerRealtimeEvent] {
-        if suppressLF {
-            suppressLF = false
-            if byte == 0x0A { return [] }
-        }
-
-        lineBytes.append(byte)
-        guard byte == 0x0A || byte == 0x0D else { return [] }
-        suppressLF = byte == 0x0D
-        let chunk = String(decoding: lineBytes, as: UTF8.self)
-        lineBytes.removeAll(keepingCapacity: true)
-        return parser.append(chunk)
+        parser.append(byte).map { [$0] } ?? []
     }
 }
 
@@ -104,11 +114,17 @@ struct CustomerRealtimeMetadata: Equatable {
                 let domain = payload["domain"] as? String,
                 supportedDomains.contains(domain),
                 let version = payload["version"] as? NSNumber,
-                version.doubleValue > 0
+                // JSON booleans bridge to NSNumber too. Keep integer precision
+                // through the standard decimal conversion rather than Double.
+                CFGetTypeID(version) != CFBooleanGetTypeID(),
+                let exactVersion = Int64(version.stringValue),
+                exactVersion > 0
             else { return nil }
             return CustomerRealtimeMetadata(domains: [domain], reason: "")
         case "customer.resync":
-            guard let versions = payload["versions"] as? [[String: Any]] else { return nil }
+            // Older Go servers encode an absent version snapshot as null.
+            let rawVersions = payload["versions"]
+            guard let versions = rawVersions is NSNull ? [] : rawVersions as? [[String: Any]] else { return nil }
             let domains = versions.compactMap { version -> String? in
                 guard
                     let domain = version["domain"] as? String,
@@ -143,6 +159,7 @@ final class CustomerRealtimeService {
     private let onEvent: EventHandler
     private let onStatus: StatusHandler
     private let onSessionRejected: SessionRejectedHandler
+    private let reconnectSleep: @Sendable (TimeInterval) async throws -> Void
     private var streamTask: Task<Void, Never>?
 
     init(
@@ -150,12 +167,16 @@ final class CustomerRealtimeService {
         session: URLSession = .shared,
         onStatus: @escaping StatusHandler = { _ in },
         onSessionRejected: @escaping SessionRejectedHandler = {},
+        reconnectSleep: @escaping @Sendable (TimeInterval) async throws -> Void = {
+            try await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000))
+        },
         onEvent: @escaping EventHandler
     ) {
         self.baseURL = baseURL
         self.session = session
         self.onStatus = onStatus
         self.onSessionRejected = onSessionRejected
+        self.reconnectSleep = reconnectSleep
         self.onEvent = onEvent
     }
 
@@ -198,7 +219,8 @@ final class CustomerRealtimeService {
                     request.setValue(lastEventID, forHTTPHeaderField: "Last-Event-ID")
                 }
 
-                let (bytes, response) = try await session.bytes(for: request)
+                let (bytes, response) = try await session.bytes(for: request, delegate: VEXAPIRedirectDelegate.shared)
+                defer { bytes.task.cancel() }
                 guard let http = response as? HTTPURLResponse else {
                     throw URLError(.badServerResponse)
                 }
@@ -214,16 +236,10 @@ final class CustomerRealtimeService {
                 }
                 onStatus(true)
                 attempt = 0
-                var decoder = CustomerSSEWireDecoder()
-                for try await byte in bytes {
+                try await Self.consume(bytes) { event, metadata in
                     guard !Task.isCancelled else { return }
-                    for event in decoder.append(byte) {
-                        if !event.id.isEmpty { lastEventID = event.id }
-                        guard let metadata = CustomerRealtimeMetadata.parse(type: event.type, data: event.data) else {
-                            continue
-                        }
-                        await onEvent(event, metadata)
-                    }
+                    if !event.id.isEmpty { lastEventID = event.id }
+                    await self.onEvent(event, metadata)
                 }
                 onStatus(false)
             } catch is CancellationError {
@@ -234,7 +250,29 @@ final class CustomerRealtimeService {
             guard !Task.isCancelled else { return }
             let delay = Self.reconnectDelay(attempt: attempt)
             attempt += 1
-            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            try? await reconnectSleep(delay)
+        }
+    }
+
+    // AsyncBytes yields individual bytes. Decode away from MainActor so each
+    // byte does not need a UI-executor hop; deliver only accepted events there.
+    nonisolated private static func consume(
+        _ bytes: URLSession.AsyncBytes,
+        onEvent: @MainActor (CustomerRealtimeEvent, CustomerRealtimeMetadata) async -> Void
+    ) async throws {
+        var decoder = CustomerSSEWireDecoder()
+        for try await byte in bytes {
+            try Task.checkCancellation()
+            let events = decoder.append(byte)
+            guard !decoder.hasExceededFrameLimit else {
+                throw URLError(.dataLengthExceedsMaximum)
+            }
+            for event in events {
+                guard let metadata = CustomerRealtimeMetadata.parse(type: event.type, data: event.data) else {
+                    continue
+                }
+                await onEvent(event, metadata)
+            }
         }
     }
 }

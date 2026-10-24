@@ -640,24 +640,6 @@ public sealed partial class HomePage : Page
         Microsoft.UI.Xaml.Input.PointerRoutedEventArgs args) =>
         SetCountryArtworkHover(sender as DependencyObject, false, _uiSettings.AnimationsEnabled);
 
-    private void OnServerModeChecked(
-        object sender,
-        RoutedEventArgs args)
-    {
-        if (LocationPicker is null ||
-            ApplyLocationButton is null ||
-            AutoServerRadio is null)
-        {
-            return;
-        }
-
-        var auto = AutoServerRadio.IsChecked == true;
-        LocationPicker.IsEnabled = !_selectionBusy;
-        ApplyLocationButton.Content = auto
-            ? "Использовать автовыбор"
-            : "Применить сервер";
-    }
-
     private async void OnApplyLocationClick(
         object sender,
         RoutedEventArgs args)

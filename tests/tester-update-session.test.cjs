@@ -17,12 +17,15 @@ function load(file, dependencies) {
   return exports;
 }
 
+const apiErrors = load('src/api/error.ts', {});
+
 test('update API sends enrollment identity as a header option, never in JSON', async () => {
   const requests = [];
   const api = load('src/api/updates.ts', {
     '@/native/appInfo': { VEX_API_CLIENT_VERSION: 'fixture-api', VEX_CONFIG_SCHEMA_VERSION: 1 },
     './updatePreflight': { normalizeUpdateCheckVersion: x => x },
-    './client': { jsonRequest: async (url, options) => { requests.push({ url, options }); return { channel: 'beta' }; }, absolutizeUrl: x => x },
+    './error': apiErrors,
+    './client': { jsonRequest: async (url, options) => { requests.push({ url, options }); return { channel: 'beta', updateAvailable: false, required: false }; }, absolutizeUrl: x => x },
   });
   const input = { accessToken: 'fixture-token-only', platform: 'android', appVersion: '1.2.3', buildNumber: 123 };
   await api.appUpdateCheck(input); await api.appRemoteConfig(input);
@@ -37,6 +40,8 @@ test('update API sends enrollment identity as a header option, never in JSON', a
   assert.equal(requests[2].options.accessToken, undefined, 'anonymous stable checks stay supported');
 });
 
+const cancellation = load('src/api/requestCancellation.ts', { './error': apiErrors });
+
 function queryFixture({ sessionRevision = 1, loading = false, current = () => true, info = async () => ({ version: '1.2.3', channel: 'stable' }), update = async () => ({ updateAvailable: true }) } = {}) {
   const session = { accessToken: `fixture-token-${sessionRevision}`, user: { id: 'fixture-account' } };
   const hook = load('src/components/mobile-app-update-query.ts', {
@@ -45,6 +50,7 @@ function queryFixture({ sessionRevision = 1, loading = false, current = () => tr
     'react': { useMemo: fn => fn(), useCallback: fn => fn },
     '@/api/updatePreflight': { updateCheckChannel: x => x, shouldOfferAppUpdate: () => true },
     '@/api/vexApi': { appUpdateCheck: update },
+    '@/api/error': apiErrors, '@/api/requestCancellation': cancellation,
     '@/api/queryRetry': { createApiQueryRetry: () => false },
     '@/native/appInfo': { getAppInfo: info, getOrCreateDeviceId: async () => 'fixture-device' },
     '@/auth/session-context': { useSession: () => ({ session, sessionRevision, isLoading: loading, isCurrentSessionOperation: current }) },

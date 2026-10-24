@@ -20,8 +20,8 @@ import {
   requestEmailOTP,
   confirmEmailOTP,
   exchangeAppAuthCode,
-  vexApiBaseUrl,
 } from "@/api/vexApi";
+import { validatedApiBaseUrl } from "@/api/config";
 import { signInWithGoogleAndroid, isGoogleSignInCancelled } from "@/native/googleAuth";
 import { useSession } from "@/auth/session-context";
 import {
@@ -231,6 +231,7 @@ export default function SignInScreen() {
     setAuthError(null);
 
     try {
+      const baseUrl = validatedApiBaseUrl().toString();
       const verifier = generateRandomString(64);
       const challenge = await generateChallenge(verifier);
       const state = generateRandomString(16);
@@ -242,7 +243,7 @@ export default function SignInScreen() {
       const { platform, deviceName } = getDeviceDetails();
 
       const webAuthUrl = buildAppWebAuthUrl({
-        baseUrl: vexApiBaseUrl,
+        baseUrl,
         challenge,
         deviceId,
         deviceName,

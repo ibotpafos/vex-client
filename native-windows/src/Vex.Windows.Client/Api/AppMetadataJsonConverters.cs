@@ -5,6 +5,10 @@ namespace Vex.Windows.Client.Api;
 
 internal static class AppMetadataJson
 {
+    public static T ReadRequired<T>(JsonElement root, string name, JsonSerializerOptions options, string? legacy = null)
+        where T : struct => Read<T?>(root, name, options, legacy)
+            ?? throw new JsonException("Missing or null app metadata field: " + name);
+
     public static T? Read<T>(JsonElement root, string name, JsonSerializerOptions options, string? legacy = null)
     {
         if (root.ValueKind != JsonValueKind.Object) throw new JsonException("App metadata must be an object.");
@@ -56,8 +60,8 @@ public sealed class AppUpdateCheckResultJsonConverter : JsonConverter<AppUpdateC
         using var document = JsonDocument.ParseValue(ref reader);
         var root = document.RootElement;
         return new(
-            AppMetadataJson.Read<bool>(root, "updateAvailable", options, "update_available"),
-            AppMetadataJson.Read<bool>(root, "required", options),
+            AppMetadataJson.ReadRequired<bool>(root, "updateAvailable", options, "update_available"),
+            AppMetadataJson.ReadRequired<bool>(root, "required", options),
             AppMetadataJson.Read<string>(root, "latestVersion", options, "latest_version") ?? string.Empty,
             AppMetadataJson.Read<int>(root, "latestBuild", options, "latest_build"),
             AppMetadataJson.Read<int>(root, "minSupportedBuild", options, "min_supported_build"),

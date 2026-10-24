@@ -3,13 +3,43 @@
 # methods with isolated fake dependencies. macOS CI must still build the app.
 set -euo pipefail
 root_dir="$(cd "$(dirname "$0")/.." && pwd)"
-python3 "$root_dir/scripts/test_macos_packaged_resources.py"
+realtime_probe=false
+if [[ "${1:-}" == --realtime-contract-probe ]]; then
+    realtime_probe=true
+    shift
+else
+    python3 "$root_dir/scripts/test_macos_packaged_resources.py"
+fi
 harness_dir="$(mktemp -d "${TMPDIR:-/tmp}/vex-runtime-reliability.XXXXXX")"
 trap 'rm -rf "$harness_dir"' EXIT
 source_dir="$harness_dir/Sources/VEXNativeMac"
 test_dir="$harness_dir/Tests/VEXNativeMacTests"
 mkdir -p "$source_dir" "$test_dir"
 native_dir="$root_dir/macos-native/Sources/VEXNativeMac"
+swiftpm_args=()
+if [[ "$(uname -s)" == Darwin && "$root_dir" == /Volumes/D/* ]]; then
+    swift_cache=/Volumes/D/VEX-CI/cache/swift-client-patch-integration
+    export CLANG_MODULE_CACHE_PATH=/Volumes/D/VEX-CI/cache/swift-modules-client-patches
+    export SWIFTPM_MODULECACHE_OVERRIDE="$CLANG_MODULE_CACHE_PATH"
+    mkdir -p "$swift_cache/cache" "$swift_cache/config" "$swift_cache/security" "$CLANG_MODULE_CACHE_PATH"
+    swiftpm_args=(--cache-path "$swift_cache/cache" --config-path "$swift_cache/config"
+                  --security-path "$swift_cache/security" --scratch-path "$harness_dir/.build" --manifest-cache local)
+fi
+if $realtime_probe; then
+    cp "$native_dir/Services/CustomerRealtimeService.swift" "$source_dir/"
+    cp "$native_dir/Services/VEXAPITransport.swift" "$source_dir/"
+    cp "$root_dir/macos-native/Tests/VEXNativeMacTests/Support/RealtimeFramingScenarios.swift" "$source_dir/"
+    cp "$root_dir/scripts/tests/vex_realtime_contract_probe.swift" "$source_dir/"
+    cat > "$harness_dir/Package.swift" <<'SWIFT'
+// swift-tools-version: 6.2
+import PackageDescription
+let package = Package(name: "VEXRealtimeContractProbe", platforms: [.macOS(.v15)], targets: [
+    .executableTarget(name: "VEXNativeMac")
+], swiftLanguageModes: [.v5])
+SWIFT
+    swift run --package-path "$harness_dir" -j 2 ${swiftpm_args[@]+"${swiftpm_args[@]}"} -Xswiftc -DVEX_API_STANDALONE VEXNativeMac "$@"
+    exit
+fi
 app_state_source="${VEX_RUNTIME_APP_STATE_SOURCE:-$native_dir/Stores/VEXAppState.swift}"
 helper_source="${VEX_RUNTIME_HELPER_SOURCE:-$native_dir/VEXHelperClient.swift}"
 cp "$native_dir/Services/VpnEndpointProbe.swift" "$source_dir/"
@@ -62,7 +92,7 @@ for offset in range(1, len(sys.argv), 3):
     pathlib.Path(sys.argv[offset + 2]).write_text(fixture.replace(marker, "\n\n".join(methods)))
 PY
 
-for name in VpnRecoveryIntent VpnOperationOwnership HelperDisconnectConfirmation; do
+for name in VpnRecoveryIntent VpnOperationOwnership HelperDisconnectConfirmation VEXAPIConfiguration VEXAPIError VEXAPITransport; do
     cp "$native_dir/Services/$name.swift" "$source_dir/"
 done
 cp "$native_dir/Models/CustomerNotificationPolicy.swift" "$source_dir/"
@@ -73,15 +103,29 @@ source = pathlib.Path(sys.argv[1]).read_text()
 pathlib.Path(sys.argv[2]).write_text(source[:source.index("@MainActor")])
 PY
 cp "$root_dir/macos-native/Tests/VEXNativeMacTests/VpnRecoveryIntentTests.swift" "$test_dir/"
+# Run the complete production SSE reader separately from the fake callback stream.
+realtime_source_dir="$harness_dir/Sources/CustomerRealtimeHarness"
+realtime_test_dir="$harness_dir/Tests/CustomerRealtimeHarnessTests"
+mkdir -p "$realtime_source_dir" "$realtime_test_dir"
+cp "$native_dir/Services/CustomerRealtimeService.swift" "$realtime_source_dir/"
+cp "$native_dir/Services/VEXAPITransport.swift" "$realtime_source_dir/"
+for name in CustomerRealtimeTests CustomerRealtimeFramingTests CustomerRealtimeResyncContractTests CustomerRealtimeVersionContractTests; do
+    sed 's/@testable import VEXNativeMac/@testable import CustomerRealtimeHarness/' \
+        "$root_dir/macos-native/Tests/VEXNativeMacTests/$name.swift" > "$realtime_test_dir/$name.swift"
+done
+sed 's/@testable import VEXNativeMac/@testable import CustomerRealtimeHarness/' \
+    "$root_dir/macos-native/Tests/VEXNativeMacTests/Support/RealtimeFramingScenarios.swift" > "$realtime_test_dir/RealtimeFramingScenarios.swift"
 cat > "$harness_dir/Package.swift" <<'SWIFT'
 // swift-tools-version: 6.2
 import PackageDescription
 let package = Package(name: "VEXRuntimeReliabilityHarness", platforms: [.macOS(.v15)], targets: [
     .target(name: "VEXNativeMac"),
-    .testTarget(name: "VEXNativeMacTests", dependencies: ["VEXNativeMac"])
+    .testTarget(name: "VEXNativeMacTests", dependencies: ["VEXNativeMac"]),
+    .target(name: "CustomerRealtimeHarness"),
+    .testTarget(name: "CustomerRealtimeHarnessTests", dependencies: ["CustomerRealtimeHarness"])
 ], swiftLanguageModes: [.v5])
 SWIFT
 swiftc -frontend -parse "$native_dir/Services/VpnAutopilotService.swift"
 swiftc -frontend -parse "$native_dir/VEXHelperClient.swift"
 swiftc -frontend -parse "$native_dir/Stores/VEXAppState.swift"
-swift test --package-path "$harness_dir" -j 2 "$@"
+swift test --package-path "$harness_dir" -j 2 ${swiftpm_args[@]+"${swiftpm_args[@]}"} "$@"

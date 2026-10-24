@@ -109,7 +109,7 @@ func Attach(osTun tun.Device, options Options) (*Router, tun.Device, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	r := &Router{osTun: osTun, transport: transport, net: virtual, direct: options.DirectDial,
 		directDNS: options.DirectDNS, dns: append([]netip.Addr(nil), options.DNS...), now: options.Now,
-		fakes: newFakeTable(), ctx: ctx, cancel: cancel, directConnections: make(map[net.Conn]struct{}), flowBudget: make(chan struct{}, options.MaxFlows)}
+		fakes: fakeTableForPlatform(options.Platform), ctx: ctx, cancel: cancel, directConnections: make(map[net.Conn]struct{}), flowBudget: make(chan struct{}, options.MaxFlows)}
 	r.preserveCapture = options.PreserveCaptureOnTransportClose
 	r.addresses = append([]netip.Addr(nil), options.Addresses...)
 	r.mode, r.platform, r.highWater, r.authorization = options.Mode, options.Platform, options.HighWater, options.Authorization

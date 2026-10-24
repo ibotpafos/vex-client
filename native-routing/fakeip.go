@@ -11,6 +11,20 @@ import (
 const maxFakeMappings = 8192
 const controlMappingVersion = "vex-control/v1"
 
+// Android retains application/OS DNS answers while a new AWG peer replaces its
+// router. Reuse hostname identities for the process lifetime, so a cached fake
+// address cannot disappear or become a different origin after that replacement.
+// Only mappings are shared: each router still checks its current policy,
+// expiry, control TCP/443 restriction and qualified physical network.
+var androidFakeMappings = newFakeTable()
+
+func fakeTableForPlatform(platform string) *fakeTable {
+	if platform == "android" {
+		return androidFakeMappings
+	}
+	return newFakeTable()
+}
+
 // These are the first-party recovery origins, provisioned by the distribution.
 // A hostname identity grants only TCP/443; its shared real IP is never allowed.
 func controlDomain(name string) bool { return name == "vexguard.app" || name == "www.vexguard.app" }

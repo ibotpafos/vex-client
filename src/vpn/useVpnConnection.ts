@@ -1471,11 +1471,6 @@ export function useVpnConnection() {
         return;
       }
 
-      // TODO(android-api-tls): Reproduce and fix the Mi A1 DE-to-NL API TLS
-      // failure observed twice before an underlay rebind restored switching.
-      // Peer traffic and a separate UID's HTTPS succeeded; the cause is still
-      // unknown. Retain this failure for a controlled API regression test.
-      // Evidence: docs/verification/android-data-plane-20261023.md.
       const message = errorMessage(result.error, 'Не удалось переключиться на выбранный сервер.');
       setVpnError(`${message} Вернули предыдущий сервер.`);
     } catch (error) {

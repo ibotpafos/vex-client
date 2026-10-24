@@ -12,6 +12,11 @@ on:
         type: boolean
         required: false
         default: false
+      dns_reliability_source:
+        description: "Sign the fixed reviewed cc63b55 Android DNS capacity/recovery 1.0.81 candidate without publication"
+        type: boolean
+        required: false
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -19,7 +24,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   release:
-    if: github.event_name == 'workflow_dispatch' && github.repository == 'ibotpafos/vex-client' && (github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/codex/ru-direct-native-20261013' && github.actor == 'ibotpafos' && inputs.native_routing_source && !inputs.qualified_source))
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'ibotpafos/vex-client' && (github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/codex/ru-direct-native-20261013' && github.actor == 'ibotpafos' && inputs.native_routing_source && !inputs.qualified_source && !inputs.dns_reliability_source) || (github.ref == 'refs/heads/codex/dns-stream-recovery-20261024' && github.actor == 'ibotpafos' && inputs.dns_reliability_source && !inputs.qualified_source && !inputs.native_routing_source))
     environment: android-candidate-signing
     runs-on: ubuntu-24.04
     timeout-minutes: 70
@@ -30,6 +35,9 @@ jobs:
       NATIVE_ROUTING_SOURCE_REQUESTED: ${{ inputs.native_routing_source && 'true' || 'false' }}
       NATIVE_ROUTING_SOURCE_COMMIT: 07058bc912a2c523d79908548047496c723821cd
       NATIVE_ROUTING_SOURCE_TREE: 1799b429665619ad18d1b6868b49b346741041cf
+      DNS_RELIABILITY_SOURCE_REQUESTED: ${{ inputs.dns_reliability_source && 'true' || 'false' }}
+      DNS_RELIABILITY_SOURCE_COMMIT: cc63b55058912eccabc28ff395e105927df11f5b
+      DNS_RELIABILITY_SOURCE_TREE: 628c7b63b703e11ecf0cd8161d3aa87b120bb42a
       VEX_RELEASE_USE_LOCAL_CACHE: "1"
       VEX_LOCAL_RELEASE_CACHE_ROOT: ${{ github.workspace }}/.ci-cache
       VEX_LOCAL_CACHE_MOVE_EXISTING: "0"
@@ -50,8 +58,19 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test -z "$(git status --porcelain)"
           expected_commit="$GITHUB_SHA"
-          if [[ "$QUALIFIED_SOURCE_REQUESTED" == "true" && "$NATIVE_ROUTING_SOURCE_REQUESTED" == "true" ]]; then
+          requested_sources=0
+          for requested in "$QUALIFIED_SOURCE_REQUESTED" "$NATIVE_ROUTING_SOURCE_REQUESTED" "$DNS_RELIABILITY_SOURCE_REQUESTED"; do
+            if [[ "$requested" == "true" ]]; then
+              requested_sources=$((requested_sources + 1))
+            fi
+          done
+          if (( requested_sources > 1 )); then
             echo 'Select exactly one immutable candidate source' >&2; exit 2
+          fi
+          if [[ "$DNS_RELIABILITY_SOURCE_REQUESTED" == "true" ]]; then
+            git checkout --detach "$DNS_RELIABILITY_SOURCE_COMMIT"
+            expected_commit="$DNS_RELIABILITY_SOURCE_COMMIT"
+            test "$(git rev-parse HEAD^{tree})" = "$DNS_RELIABILITY_SOURCE_TREE"
           fi
           if [[ "$NATIVE_ROUTING_SOURCE_REQUESTED" == "true" ]]; then
             git checkout --detach "$NATIVE_ROUTING_SOURCE_COMMIT"
@@ -77,6 +96,7 @@ jobs:
               "orchestration_workflow_commit": os.environ["GITHUB_SHA"],
               "qualified_source_requested": os.environ["QUALIFIED_SOURCE_REQUESTED"] == "true",
               "native_routing_source_requested": os.environ["NATIVE_ROUTING_SOURCE_REQUESTED"] == "true",
+              "dns_reliability_source_requested": os.environ["DNS_RELIABILITY_SOURCE_REQUESTED"] == "true",
           }
           pathlib.Path(os.environ["RUNNER_TEMP"], "android-source-binding.json").write_text(json.dumps(binding, indent=2)+"\n")
           PY_SOURCE_BINDING
@@ -166,6 +186,7 @@ jobs:
               "orchestration_workflow_commit": binding["orchestration_workflow_commit"],
               "qualified_source_requested": binding["qualified_source_requested"],
               "native_routing_source_requested": binding["native_routing_source_requested"],
+              "dns_reliability_source_requested": binding["dns_reliability_source_requested"],
               "run_id": os.environ["GITHUB_RUN_ID"],
               "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
               "package": application["android"]["package"],

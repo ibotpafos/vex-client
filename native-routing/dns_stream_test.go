@@ -71,9 +71,7 @@ func dnsStreamFixture(t *testing.T, query []byte, handle func(int, net.Conn)) (f
 }
 
 func TestDNSStreamRetriesEarlyClose(t *testing.T) {
-	// TODO(physical-qa): accept this retry in a signed Android client on Mi A1.
-	// Stand login is restored. Standalone run-as socket probes did not establish
-	// a qualified VPN path; only the updated APK can complete this acceptance.
+	// Signed Android acceptance and fault-injection limits: docs/android-dns-stream-recovery-20261024.md.
 	query, answer, frame := dnsStreamMessages(t)
 	for label, partial := range map[string][]byte{"before_length": nil, "partial_length": frame[:1], "partial_body": frame[:7]} {
 		t.Run(label, func(t *testing.T) {

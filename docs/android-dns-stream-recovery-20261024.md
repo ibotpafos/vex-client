@@ -1,11 +1,12 @@
 # Android DNS and transport candidate, 24 October 2026
 
-Status: Android 1.0.81/build89/code1008189 is a private candidate. Production
-publication, OTA, server configuration and the owner's iPhone are outside this
-change. Physical acceptance of the updated APK remains open; the isolated Mi A1
-currently has 1.0.80. The owner authorized autonomous login on the stand, and the
-normal Google sign-in using its existing account succeeded without reading codes
-or credentials.
+Status: Android1.0.81/build89/code1008189 was built privately, installed and
+rejected during physical acceptance after a native crash. Android1.0.82/build90/
+code1008290 adds the typed-nil cancellation fix below. Production publication,
+OTA, server configuration and the owner's iPhone are outside this change. The
+owner authorized autonomous login on the stand, and normal Google sign-in using
+its existing account succeeded without reading codes or credentials. Update-r
+preserved the application UID, first-install time and authenticated session.
 
 Three defects have deterministic regressions:
 
@@ -65,3 +66,32 @@ receipts reside under `/Volumes/D/Codex Storage/evidence/incy-dns-latency-202610
 No authenticated screenshots, raw profiles, customer identities or keys belong in
 this commit. Release and final device evidence must be added after actual
 candidate installation and traffic acceptance.
+
+## Rejected 1.0.81 and fourth regression
+
+Private run40116784871 successfully signed sourcecc63b55/tree628c7b63. Local ZIP
+and APK digests, signer, both ABIs, JNI export, boot service, runtime and upgrade
+compatibility passed. Installed bytes matched the verified APK. FI repeated
+workload improved from96/108 DNS and22/24 STUN to108/108 and24/24; all36 HTTPS
+passed. DNS successful tails around1s remain. DE gave105/108 DNS,24/24 STUN and
+all36 HTTPS, with isolated successful delays up to2.4s and cold transition failures.
+These samples do not establish zero loss or a fleet latency SLO.
+
+After DE the app exited with native SIGSEGV. The crash PC dereferences the null
+receiver at+0x30; its LR identifies the canceled happy-eyeballs cleanup call in
+`dialQualifiedAddresses`. A failed gVisor dial can carry a typed nil through
+`net.Conn`; its interface is non-nil, so the old cleanup called Close on it.
+The regression reproduces the forbidden method call after the winning dial
+cancels a losing failed dial. Cleanup now owns only successful connections
+(`err == nil`), and a second regression retains successful-loser close behavior.
+This is a previously unchecked cancellation path, not proof that every DNS or
+latency failure caused the crash, or that 1.0.81 introduced the defect.
+
+The first Wi-Fi-return controller aborted before changing Wi-Fi because the VPN
+was already gone. Its following probes were rejected as direct/non-inventory;
+no network-return acceptance is claimed from them. A delayed picker render also
+caused a temporary RU selection; it was excluded and DE was selected using the
+fully rendered UI. No owner device or production configuration was changed.
+Full Go1.26.9 race/vet and npm checks pass after the fourth fix. Final ARM64
+DNS and cancellation regressions pass on Mi A1; the temporary binary was removed.
+Signed1.0.82 and its physical acceptance remain required.

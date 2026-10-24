@@ -1,10 +1,10 @@
 {
   "android": {
-    "version": "1.0.81",
-    "build": 89,
+    "version": "1.0.82",
+    "build": 90,
     "min_supported_build": 1002930,
     "is_required": false,
-    "release_notes": "Android: DNS-сессии освобождают лимит потоков после простоя; добавлены восстановление после раннего TCP EOF и безопасное закрытие виртуального интерфейса.",
+    "release_notes": "Android: повышена стабильность соединения под нагрузкой и исправлено падение при восстановлении VPN.",
     "core_version": "0.1.0",
     "config_schema_version": 1,
     "min_config_schema_version": 1,

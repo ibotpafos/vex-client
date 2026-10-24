@@ -117,7 +117,9 @@ func dialQualifiedAddresses(ctx context.Context, dial DialFunc, addresses []neti
 			select {
 			case results <- result{connection, err}:
 			case <-ctx.Done():
-				if connection != nil {
+				// A failed typed dial may become a non-nil net.Conn interface
+				// containing a nil *TCPConn. Only successful connections are owned.
+				if err == nil && connection != nil {
 					connection.Close()
 				}
 			}

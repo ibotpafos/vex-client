@@ -24,7 +24,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   release:
-    if: github.event_name == 'workflow_dispatch' && github.repository == 'ibotpafos/vex-client' && (github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/codex/ru-direct-native-20261013' && github.actor == 'ibotpafos' && inputs.native_routing_source && !inputs.qualified_source && !inputs.dns_reliability_source) || (github.ref == 'refs/heads/codex/dns-stream-recovery-20261024' && github.actor == 'ibotpafos' && inputs.dns_reliability_source && !inputs.qualified_source && !inputs.native_routing_source))
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'ibotpafos/vex-client' && (github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/codex/ru-direct-native-20261013' && github.actor == 'ibotpafos' && !inputs.qualified_source && ((inputs.native_routing_source && !inputs.dns_reliability_source) || (inputs.dns_reliability_source && !inputs.native_routing_source))))
     environment: android-candidate-signing
     runs-on: ubuntu-24.04
     timeout-minutes: 70

@@ -8,7 +8,7 @@ export function check(workflow) {
   assert.equal(workflow.concurrency['cancel-in-progress'], false);
   assert.deepEqual(Object.keys(workflow.jobs), ['release']);
   const job = workflow.jobs.release;
-  assert.equal(job.if, "github.event_name == 'workflow_dispatch' && github.repository == 'ibotpafos/vex-client' && (github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/codex/ru-direct-native-20261013' && github.actor == 'ibotpafos' && inputs.native_routing_source && !inputs.qualified_source && !inputs.dns_reliability_source) || (github.ref == 'refs/heads/codex/dns-stream-recovery-20261024' && github.actor == 'ibotpafos' && inputs.dns_reliability_source && !inputs.qualified_source && !inputs.native_routing_source))");
+  assert.equal(job.if, "github.event_name == 'workflow_dispatch' && github.repository == 'ibotpafos/vex-client' && (github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/codex/ru-direct-native-20261013' && github.actor == 'ibotpafos' && !inputs.qualified_source && ((inputs.native_routing_source && !inputs.dns_reliability_source) || (inputs.dns_reliability_source && !inputs.native_routing_source))))");
   assert.equal(job.environment, 'android-candidate-signing');
   assert.equal(job['runs-on'], 'ubuntu-24.04');
   assert.equal(job.env.ANDROID_RELEASE_ABIS, 'arm64-v8a,armeabi-v7a');

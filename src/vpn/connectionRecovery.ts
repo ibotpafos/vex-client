@@ -60,16 +60,25 @@ async function recoverWithFreshProfile(
   activeLocationId: string,
   previousError: unknown,
 ): Promise<RecoverVpnConnectionResult> {
-  let freshProfile: VpnProfile | null = null;
+  let freshProfile: VpnProfile;
   try {
     freshProfile = await input.resolveProfile(activeLocationId, {
       forceRefresh: true,
       requestPermission: false,
     });
+  } catch (error) {
+    // Issuance may have changed the backend before its response was lost.
+    // Only a returned profile's connection failure can authorize failover.
+    // TODO(watchdog-recovery): reconcile uncertain preparation with its API
+    // owner before retrying it in a later watchdog cycle. This guard covers
+    // this attempt; the API owner does not yet expose an outcome receipt.
+    return failedRecovery(input, activeLocationId, error);
+  }
+  try {
     const connected = await input.connectProfile(freshProfile);
     return successfulRecovery(input, activeLocationId, connected, 'same_location_fresh_profile');
   } catch (error) {
-    if (freshProfile && shouldRotateProfile(input, error)) {
+    if (shouldRotateProfile(input, error)) {
       return recoverWithRotatedProfile(input, activeLocationId, freshProfile, error);
     }
     if (!input.isRetryableConnectError(error)) {
@@ -88,8 +97,15 @@ async function recoverWithRotatedProfile(
   if (!input.rotateProfile) {
     return failedRecovery(input, activeLocationId, previousError);
   }
+  let rotatedProfile: VpnProfile;
   try {
-    const rotatedProfile = await input.rotateProfile(profile, activeLocationId);
+    rotatedProfile = await input.rotateProfile(profile, activeLocationId);
+  } catch (error) {
+    // An uncertain key rotation must retain its owner and pending key state;
+    // issuing another location's profile cannot confirm or undo that rotation.
+    return failedRecovery(input, activeLocationId, error);
+  }
+  try {
     const connected = await input.connectProfile(rotatedProfile);
     return successfulRecovery(input, activeLocationId, connected, 'rotated_profile');
   } catch (error) {

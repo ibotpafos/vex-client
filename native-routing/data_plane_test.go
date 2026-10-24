@@ -20,8 +20,8 @@ import (
 	"time"
 
 	"github.com/amnezia-vpn/amneziawg-go/v3/tun"
-	"github.com/amnezia-vpn/amneziawg-go/v3/tun/netstack"
 	"golang.org/x/net/dns/dnsmessage"
+	"vex.dev/native-routing/internal/awgnetstack"
 )
 
 // Entire DNS/TCP/TLS/HTTP exchange is packet-only, with the real AWG NetTUN

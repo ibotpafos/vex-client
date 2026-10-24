@@ -49,17 +49,49 @@ func DirectDoH(dial DialFunc) DNSExchangeFunc {
 }
 
 func exchangeDNSStream(ctx context.Context, dial func(context.Context, netip.AddrPort) (net.Conn, error), server netip.Addr, query []byte) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var err error
+	for attempt := 0; attempt < 2; attempt++ {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		var answer []byte
+		answer, err = exchangeDNSStreamOnce(ctx, dial, server, query)
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if err == nil {
+			return answer, nil
+		}
+		// RFC 7766 section 6.2.4: retry an unanswered query after early close.
+		// Both attempts use the same encrypted dialler, DNS address and deadline.
+		if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+			return nil, err
+		}
+	}
+	return nil, err
+}
+
+func exchangeDNSStreamOnce(ctx context.Context, dial func(context.Context, netip.AddrPort) (net.Conn, error), server netip.Addr, query []byte) ([]byte, error) {
 	connection, err := dial(ctx, netip.AddrPortFrom(server, 53))
 	if err != nil {
 		return nil, err
 	}
 	defer connection.Close()
-	connection.SetDeadline(time.Now().Add(5 * time.Second))
+	stopCancel := context.AfterFunc(ctx, func() { connection.Close() })
+	defer stopCancel()
+	deadline, _ := ctx.Deadline()
+	if err := connection.SetDeadline(deadline); err != nil {
+		return nil, err
+	}
 	framed := make([]byte, 2+len(query))
 	binary.BigEndian.PutUint16(framed[:2], uint16(len(query)))
 	copy(framed[2:], query)
-	if _, err := connection.Write(framed); err != nil {
+	if n, err := connection.Write(framed); err != nil {
 		return nil, err
+	} else if n != len(framed) {
+		return nil, io.ErrShortWrite
 	}
 	var length [2]byte
 	if _, err := io.ReadFull(connection, length[:]); err != nil {
@@ -192,10 +224,14 @@ func dnsFailure(query []byte) []byte {
 	return answer
 }
 
+// UDP clients do not signal socket close. Reclaim idle DNS mappings promptly
+// so completed lookups cannot hold the shared application flow budget for 30s.
+const dnsDatagramIdleTimeout = time.Second
+
 func (r *Router) serveDNSDatagrams(client net.Conn) {
 	query := make([]byte, 65536)
 	for {
-		client.SetReadDeadline(r.now().Add(30 * time.Second))
+		client.SetReadDeadline(time.Now().Add(dnsDatagramIdleTimeout))
 		n, err := client.Read(query)
 		if err != nil {
 			return

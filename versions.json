@@ -1,10 +1,10 @@
 {
   "android": {
-    "version": "1.0.80",
-    "build": 88,
+    "version": "1.0.81",
+    "build": 89,
     "min_supported_build": 1002930,
     "is_required": false,
-    "release_notes": "Android: исправлено сохранение DNS-адресов API при смене VPN-сервера; подтверждение реального трафика сохранено.",
+    "release_notes": "Android: DNS-сессии освобождают лимит потоков после простоя; добавлены восстановление после раннего TCP EOF и безопасное закрытие виртуального интерфейса.",
     "core_version": "0.1.0",
     "config_schema_version": 1,
     "min_config_schema_version": 1,

@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/amnezia-vpn/amneziawg-go/v3/tun"
-	"github.com/amnezia-vpn/amneziawg-go/v3/tun/netstack"
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
@@ -24,6 +23,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 	"gvisor.dev/gvisor/pkg/waiter"
+	"vex.dev/native-routing/internal/awgnetstack"
 )
 
 type DialFunc func(context.Context, string, string) (net.Conn, error)

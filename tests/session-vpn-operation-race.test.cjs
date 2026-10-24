@@ -94,6 +94,7 @@ function connectionHarness(stage, platform = 'android') {
     Platform: { OS: platform }, antiLeakEnabled: true,
     prepareClientNetworkDiagnostics: () => wait('diagnostics'),
     withTimeout: operation => operation, vpnProfileAddressMatchesDevice: () => true,
+    withCurrentVpnProfileKey: async (_token, _profile, operation) => operation(),
     androidVpnProfileWithinBinderBudget: () => true,
     getVpnApplicationSelection: () => wait('applications', { mode: 'all', packageNames: [] }),
     dynamicRouteRuntime: { prepare: () => wait('route'), attempts: () => [{ profile }], clearActive: () => {}, recordSuccess: () => {}, recordFailure: () => {} },
@@ -140,6 +141,7 @@ for (const cancel of [false, true]) {
       isCurrentSessionOperation: () => current, session: { accessToken: 'token-A', user: { id: 'A' } },
       Platform: { OS: 'android' }, antiLeakEnabled: true,
       prepareClientNetworkDiagnostics: async () => {}, withTimeout: operation => operation,
+      withCurrentVpnProfileKey: async (_token, _profile, operation) => operation(),
       vpnProfileAddressMatchesDevice: () => true, androidVpnProfileWithinBinderBudget: () => true,
       getVpnApplicationSelection: async () => ({ mode: 'all', packageNames: [] }),
       dynamicRouteRuntime: {

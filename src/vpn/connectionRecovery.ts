@@ -45,6 +45,11 @@ export async function recoverVpnConnection(input: RecoverVpnConnectionInput): Pr
     const connected = await input.connectProfile(input.activeProfile);
     return successfulRecovery(input, activeLocationId, connected, 'same_profile');
   } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'VPN_PROFILE_KEY_CHANGED') {
+      // Reconcile through the existing preparation owner exactly once. This
+      // admission refusal is not a transport failure or a new rotation request.
+      return recoverWithFreshProfile(input, activeLocationId, error, true);
+    }
     if (shouldRotateProfile(input, error)) {
       return recoverWithRotatedProfile(input, activeLocationId, input.activeProfile, error);
     }
@@ -59,6 +64,7 @@ async function recoverWithFreshProfile(
   input: RecoverVpnConnectionInput,
   activeLocationId: string,
   previousError: unknown,
+  reconcileKeyOnly = false,
 ): Promise<RecoverVpnConnectionResult> {
   let freshProfile: VpnProfile;
   try {
@@ -78,6 +84,7 @@ async function recoverWithFreshProfile(
     const connected = await input.connectProfile(freshProfile);
     return successfulRecovery(input, activeLocationId, connected, 'same_location_fresh_profile');
   } catch (error) {
+    if (reconcileKeyOnly) return failedRecovery(input, activeLocationId, error);
     if (shouldRotateProfile(input, error)) {
       return recoverWithRotatedProfile(input, activeLocationId, freshProfile, error);
     }

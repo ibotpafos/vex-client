@@ -102,3 +102,28 @@ for (const stage of ['fresh issuance', 'initial rotation', 'fresh rotation']) {
       : stage === 'initial rotation' ? ['rotate:active', 'issue:fi'] : ['issue:de', 'rotate:fresh', 'issue:fi']);
   });
 }
+
+for (const failing of ['none', 'preparation', 'connect']) test('key admission reconciliation stops at ' + failing + ' without rotation or failover', async () => {
+  const { input, calls } = fixture('fresh issuance', undefined);
+  const changed = Object.assign(new Error('Key changed'), { code: 'VPN_PROFILE_KEY_CHANGED' });
+  const failed = new ApiRequestError('connection timed out', { status: 503 });
+  input.connectProfile = async candidate => {
+    calls.push('connect:' + candidate.id);
+    if (candidate === input.activeProfile) throw changed;
+    if (failing === 'connect') throw failed;
+    return { profile: candidate, status: { state: 'connected' } };
+  };
+  input.resolveProfile = async (location, options) => {
+    calls.push('resolve:' + location); assert.equal(options.forceRefresh, true);
+    assert.equal(options.requestPermission, false);
+    if (failing === 'preparation') throw failed;
+    return profile('fresh', location);
+  };
+  const result = await recoverVpnConnection(input);
+  assert.equal(result.ok, failing === 'none');
+  if (failing !== 'none') assert.equal(result.error, failed);
+  else assert.equal(result.outcome, 'same_location_fresh_profile');
+  assert.deepEqual(calls, failing === 'preparation' ? ['connect:active', 'resolve:de']
+    : failing === 'connect' ? ['connect:active', 'resolve:de', 'connect:fresh']
+      : ['connect:active', 'resolve:de', 'connect:fresh', 'cache:de']);
+});

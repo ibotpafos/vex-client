@@ -755,9 +755,11 @@ export function useVpnConnection() {
                 }
                 vpnOperationInFlightRef.current = true;
                 try {
-                  await disconnectVpn({ releaseAntiLeak: false });
-                  requireCurrentSession();
-                  const connected = await connectProfileWithEndpointFallback(staged.profile);
+                  const connected = await connectProfileWithEndpointFallback(staged.profile, () => !cancelled && isCurrentSessionOperation(), async () => {
+                    requireCurrentSession();
+                    await disconnectVpn({ releaseAntiLeak: false });
+                    requireCurrentSession();
+                  });
                   requireCurrentSession();
                   setActiveProfile(connected.profile);
                   cacheProfile(connected.profile.locationId, connected.profile);

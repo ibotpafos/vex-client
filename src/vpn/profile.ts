@@ -1,4 +1,4 @@
-import { entitlement, hasPaidEntitlement, preparedTunnel, rotateManagedVpnKey, type Entitlement, type VpnDevice } from '../api/vexApi';
+import { entitlement, hasPaidEntitlement, preparedTunnel, rotateManagedVpnKey, vpnProfileKeyIsCurrent, type Entitlement, type VpnDevice } from '../api/vexApi';
 import { loadHotVpnProfile, profileFromHotRecord } from './hotProfileCache';
 import { runtimeProfileKey, vpnProfileCacheIsCurrent } from './hotProfileCacheCore';
 import { isPositiveSafeInteger } from './profileNumbers';
@@ -57,17 +57,20 @@ export async function resolveVpnProfile(
     const routingMode = options.routingMode ?? defaultVpnRoutingMode;
     const cacheKey = profileCacheKey(token, normalizedLocationId, routingMode);
     if (!options.forceRefresh) {
-      if (cachedProfile?.key === cacheKey && vpnProfileCacheIsCurrent(cachedProfile.profile) && !cachedProfile.profile.rotationRequired && vpnProfileAddressMatchesDevice(cachedProfile.profile)) {
-        return { ...cachedProfile.profile, source: 'local' };
+      const localProfile = cachedProfile?.key === cacheKey ? cachedProfile.profile : undefined;
+      if (localProfile && vpnProfileCacheIsCurrent(localProfile) && !localProfile.rotationRequired && vpnProfileAddressMatchesDevice(localProfile) && await vpnProfileKeyIsCurrent(token, localProfile, options) && vpnProfileCacheIsCurrent(localProfile)) {
+        requireProfileRequest(options);
+        return { ...localProfile, source: 'local' };
       }
       if (options.allowPersistentHotProfile !== false && options.userId) {
         const hotProfile = await loadHotVpnProfile(options.userId, normalizedLocationId, routingMode);
         requireProfileRequest(options);
         if (hotProfile) {
           const profile = profileFromHotRecord(hotProfile);
-          if (profile.routingMode !== routingMode || !vpnProfileCacheIsCurrent(profile) || !vpnProfileAddressMatchesDevice(profile)) {
+          if (profile.routingMode !== routingMode || !vpnProfileCacheIsCurrent(profile) || !vpnProfileAddressMatchesDevice(profile) || !await vpnProfileKeyIsCurrent(token, profile, options) || !vpnProfileCacheIsCurrent(profile)) {
             return refreshVpnProfile(token, { routingMode, userId: options.userId, isCurrentSessionOperation: options.isCurrentSessionOperation, ...(options.signal ? { signal: options.signal } : {}) }, knownEntitlement, normalizedLocationId, options.shouldFetch);
           }
+          requireProfileRequest(options);
           cachedProfile = { key: cacheKey, profile };
           return profile;
         }

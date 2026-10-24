@@ -158,7 +158,10 @@ function rotationHarness(stage, { type = 'cutover_ready', connected = true } = {
     acknowledgeStagedDevicePSKProfile: () => wait('api-ack'), clearStagedDevicePSKProfile: () => wait('clear'),
     acknowledgeDevicePushEvent: () => wait('native-ack'),
     disconnectVpn: () => wait('disconnect'),
-    connectProfileWithEndpointFallback: value => wait('connect', { profile: value, status: connectedStatus }),
+    connectProfileWithEndpointFallback: async (value, _isCurrent, beforeNativeConnect) => {
+      await beforeNativeConnect?.();
+      return wait('connect', { profile: value, status: connectedStatus });
+    },
     setActiveProfile: value => { calls.push('publish-profile'); state.activeProfile = value; },
     cacheProfile: () => calls.push('cache'), setVpnStatus: () => calls.push('publish-status'),
     reportVpnConnectEvent: () => calls.push('report-connect'),

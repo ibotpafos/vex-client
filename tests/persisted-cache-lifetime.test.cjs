@@ -44,11 +44,11 @@ function harness(hooks = {}) {
 }
 const profile = id => ({ config: 'Address = 10.0.0.2/32', device: { id }, locationId: id, routingMode: 'full_tunnel', source: 'api' });
 
-function profileHarness() {
+function profileHarness(hooks = {}) {
   let now = 1000, requests = 0;
   const paid = { active: true, vpnAccess: true };
   const h = harness({ now: () => now, modules: {
-    '../api/vexApi': { entitlement: async () => paid, hasPaidEntitlement: value => Boolean(value?.active || value?.vpnAccess), preparedTunnel: async () => { requests++; return profile('de'); } },
+    '../api/vexApi': { vpnProfileKeyIsCurrent: async () => { await hooks.admission?.(); return true; }, entitlement: async () => paid, hasPaidEntitlement: value => Boolean(value?.active || value?.vpnAccess), preparedTunnel: async () => { requests++; return profile('de'); } },
     './connectionFallback': { profileEndpoint: () => undefined },
   } });
   return { ...h, paid, clock: value => { now = value; }, requests: () => requests };
@@ -96,6 +96,16 @@ test('the resolver memory cache expires without renewing on repeated hits', asyn
   h.clock(1001 + core.hotVpnProfileTtlMs);
   assert.equal((await api.resolveVpnProfile('fixture-token', h.paid, 'de')).source, 'api');
   assert.equal(h.requests(), 2);
+});
+
+for (const cache of ['memory', 'persistent-hot']) test(cache + ' expiry during key admission forces a fresh profile', async () => {
+  const h = profileHarness({ admission: () => h.clock(1001 + core.hotVpnProfileTtlMs) });
+  const core = h.load('src/vpn/hotProfileCacheCore.ts'), api = h.load('src/vpn/profile.ts');
+  if (cache === 'memory') await api.resolveVpnProfile('fixture-token', h.paid, 'de', { forceRefresh: true });
+  else await h.load('src/vpn/hotProfileCache.ts').saveHotVpnProfile('owner', 'de', profile('de'));
+  h.clock(1000 + core.hotVpnProfileTtlMs);
+  const result = await api.resolveVpnProfile('fixture-token', h.paid, 'de', { userId: 'owner', routingMode: 'full_tunnel' });
+  assert.equal(result.source, 'api'); assert.equal(h.requests(), cache === 'memory' ? 2 : 1);
 });
 
 test('loading a nearly expired persistent profile does not reset its memory-cache age', async () => {

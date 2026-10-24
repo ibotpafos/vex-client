@@ -27,7 +27,7 @@ const inactive = { active: false, vpnAccess: false };
 function profile(address, assigned = address, source = 'api') {
   return { config: `[Interface]\nAddress = ${address}/32\n[Peer]\nPublicKey = fixture`, device: { id: 'device', assignedIpv4: assigned }, entitlement: paid, locationId: 'de', routingMode: 'default', source };
 }
-async function resolveCase({ cached, hot, knownEntitlement = paid, permission = true, permissionWait, explicit, expectedError, expectedSource, expectOnline }) {
+async function resolveCase({ cached, hot, knownEntitlement = paid, permission = true, permissionWait, keyAdmissionWait, explicit, expectedError, expectedSource, expectOnline }) {
   let online = 0; let subscription = 0; let permissionCalls = 0;
   const publishedProfiles = [];
   const fresh = profile('10.0.0.9');
@@ -43,7 +43,7 @@ async function resolveCase({ cached, hot, knownEntitlement = paid, permission = 
     '../api/error': load(path.join(repo, 'src/api/error.ts'), {}),
     'react-native': { Platform: { OS: 'android' } },
     '@/utils/error': { errorMessage: e => e instanceof Error ? e.message : String(e) },
-    '../api/vexApi': { entitlement: async () => knownEntitlement, hasPaidEntitlement: entitlementAccess.hasPaidEntitlement },
+    '../api/vexApi': { vpnProfileKeyIsCurrent: async () => { await keyAdmissionWait?.(); return true; }, entitlement: async () => knownEntitlement, hasPaidEntitlement: entitlementAccess.hasPaidEntitlement },
     './profile': { resetVpnProfileCache: () => {}, resolveVpnProfile: async () => { online++; return fresh; }, rotateVpnProfileKey: async () => fresh },
     './profileRequestQueue': { ProfileRequestSupersededError: class ProfileRequestSupersededError extends Error {} },
     './sessionOperation': { SessionOperationSupersededError: class SessionOperationSupersededError extends Error {} },
@@ -83,6 +83,14 @@ async function resolveCase({ cached, hot, knownEntitlement = paid, permission = 
       assert.equal(resolved.result.config, profile('10.0.0.9').config, 'the expired selected profile must be replaced online');
     });
   }
+  for (const source of ['query', 'hot']) await test(source + ' profile expiring during key admission is replaced before publication', async () => {
+    let now = 1000 + profileCore.hotVpnProfileTtlMs; clock = () => now;
+    const old = { ...profile('10.0.0.2'), cacheSavedAtMs: 1000 };
+    const resolved = await resolveCase({ [source === 'query' ? 'cached' : 'hot']: old,
+      keyAdmissionWait: () => { now++; }, expectedSource: 'api', expectOnline: 1 });
+    assert.equal(resolved.permissionCalls, 1);
+    assert.equal(resolved.result.config, profile('10.0.0.9').config);
+  });
   await test('the owning hook replaces a legacy query copy with its anchored local receipt', async () => {
     clock = () => 1000;
     const legacy = await resolveCase({ cached: profile('10.0.0.2'), expectedSource: 'local', expectOnline: 1 });

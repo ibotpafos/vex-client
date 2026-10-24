@@ -1386,10 +1386,8 @@ function runVpnConnectTimingSourceContractTests(): void {
     getBuiltinModule: (id: 'node:fs') => { readFileSync: (path: string, encoding: string) => string };
   }).getBuiltinModule('node:fs');
   const source = readFileSync('src/vpn/useVpnConnectionFlow.ts', 'utf8');
-  assertEqual(
-    /connectVpn\([\s\S]*?\),\s*connectAttemptTimeoutMs,[\s\S]*?\);\s*const interfaceUpMs = Date\.now\(\);/.test(source),
-    true,
-  );
+  // Native start/interface-up timing, including time in the account-owner
+  // queue, is covered by the real callback in mobile-account-registration.
   assertEqual(
     /const status = await waitForVerifiedVpnConnection\([\s\S]*?\}\);\s*const verificationCompletedMs = Date\.now\(\);/.test(source),
     true,

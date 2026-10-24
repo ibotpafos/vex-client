@@ -36,6 +36,7 @@ import {
 } from '@/vpn/profileResolutionFallback';
 import { androidVpnProfileWithinBinderBudget } from '@/vpn/androidRoutingSafety';
 import { vpnProfileAddressMatchesDevice } from '@/vpn/profileConsistency';
+import { withCurrentVpnProfileKey, VpnProfileKeyChangedError } from '@/api/vexApi';
 import {
   getVpnApplicationSelection,
   setSelectedVpnLocation,
@@ -103,7 +104,7 @@ export function useVpnConnectionFlow({
     }
   }, [isCurrentSessionOperation]);
 
-  const connectProfileWithEndpointFallback = useCallback(async (profile: VpnProfile, isCurrentOperation: () => boolean = () => true) => {
+  const connectProfileWithEndpointFallback = useCallback(async (profile: VpnProfile, isCurrentOperation: () => boolean = () => true, beforeNativeConnect?: () => Promise<unknown>) => {
     const requireCurrentOperation = () => {
       requireCurrentSession();
       if (!isCurrentOperation()) throw new SessionOperationSupersededError();
@@ -113,9 +114,6 @@ export function useVpnConnectionFlow({
       await withTimeout(prepareClientNetworkDiagnostics(session.accessToken, profile.device?.id, isCurrentSessionOperation), 1_500, 'Optional network observation timed out.').catch(() => undefined);
       requireCurrentOperation();
     }
-    // TODO(account-key-admission): reconcile the account's pending/confirmed
-    // key before dispatching a cached managed profile. Address/budget checks
-    // do not consult the rotation journal; reconciliation currently starts in API.
     if (!vpnProfileAddressMatchesDevice(profile)) {
       throw new Error('VPN connection failed: cached profile address does not match its device assignment.');
     }
@@ -134,6 +132,7 @@ export function useVpnConnectionFlow({
       : connectionAttemptsForProfile(profile).map((attempt) => ({ profile: attempt }));
     let previousRouteTransport: 'awg3_direct' | 'awg3_relay' | undefined;
     let lastError: unknown = new Error('VPN connection failed.');
+    let nativePreparationCompleted = false;
     const reportRoute = (candidate: DynamicRouteCandidate, event: 'connect_failed' | 'connect_succeeded' | 'fallback_failed' | 'fallback_succeeded', status: string) => {
       if (!session?.accessToken) return;
       void submitClientDiagnostics(session.accessToken, {
@@ -143,6 +142,7 @@ export function useVpnConnectionFlow({
       }).catch(() => undefined);
     };
     for (const { profile: attempt, candidate } of attempts) {
+      let nativeDispatched = false;
       try {
         requireCurrentOperation();
         const endpoint = profileEndpoint(attempt);
@@ -153,18 +153,32 @@ export function useVpnConnectionFlow({
           ? await getVpnStatus().catch(() => null)
           : null;
         requireCurrentOperation();
-        const nativeStartMs = Date.now();
-        const startedStatus = await withTimeout(
-          connectVpn(attempt.config, {
-            antiLeakEnabled,
-            routingParameters: attempt.routingParameters,
-            routingMode: attempt.routingMode,
-            applicationRoutingMode: applicationSelection.mode,
-            selectedApplications: applicationSelection.packageNames,
-          }),
-          connectAttemptTimeoutMs,
-          'VPN connect timed out.',
-        );
+        let nativeStartMs = Date.now();
+        let admissionIsCurrent = true;
+        let startedStatus: VpnStatus;
+        try {
+          startedStatus = await withTimeout(withCurrentVpnProfileKey(session?.accessToken ?? '', attempt, async () => {
+            requireCurrentOperation();
+            if (!nativePreparationCompleted) {
+              await beforeNativeConnect?.();
+              nativePreparationCompleted = true;
+            }
+            requireCurrentOperation();
+            if (!admissionIsCurrent) throw new SessionOperationSupersededError();
+            nativeStartMs = Date.now();
+            nativeDispatched = true;
+            return connectVpn(attempt.config, {
+              antiLeakEnabled,
+              routingParameters: attempt.routingParameters,
+              routingMode: attempt.routingMode,
+              applicationRoutingMode: applicationSelection.mode,
+              selectedApplications: applicationSelection.packageNames,
+            });
+          }, { userId: session?.user.id, isCurrentSessionOperation: () => admissionIsCurrent && mountedRef.current && isCurrentSessionOperation() && isCurrentOperation() }), connectAttemptTimeoutMs, 'VPN connect timed out.');
+        } finally {
+          // A timed-out borrower must not dispatch later from the owner queue.
+          admissionIsCurrent = false;
+        }
         const interfaceUpMs = Date.now();
         requireCurrentOperation();
         const status = await waitForVerifiedVpnConnection(startedStatus, getVpnStatus, {
@@ -196,6 +210,10 @@ export function useVpnConnectionFlow({
         };
       } catch (error) {
         requireCurrentOperation();
+        if (!nativeDispatched) {
+          if (error instanceof VpnProfileKeyChangedError || error instanceof SessionOperationSupersededError) throw error;
+          throw new Error('Не удалось проверить ключ и подготовить VPN к подключению.', { cause: error });
+        }
         lastError = error;
         if (!isVpnTransportFallbackError(error)) {
           throw error;

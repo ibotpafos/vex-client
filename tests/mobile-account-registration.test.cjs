@@ -10,7 +10,9 @@ const { hexToBytes } = require('@noble/curves/utils.js');
 
 const sourceRoot = process.env.VEX_MOBILE_REGISTRATION_SOURCE_ROOT || path.resolve(__dirname, '..');
 function load(file, names, stubs = {}) {
-  const source = stripTypeScriptTypes(fs.readFileSync(path.join(sourceRoot, file), 'utf8'))
+  const entryRoot = process.env.VEX_KEY_ADMISSION_ENTRY_ROOT;
+  const root = entryRoot && ['src/vpn/profile.ts', 'src/vpn/useVpnProfileState.ts'].includes(file) ? entryRoot : sourceRoot;
+  const source = stripTypeScriptTypes(fs.readFileSync(path.join(root, file), 'utf8'))
     .replace(/^import[\s\S]*?from ['"][^'"]+['"];\s*/gm, '').replace(/\bexport /g, '');
   return new Function(...Object.keys(stubs), source + `;return {${names}};`)(...Object.values(stubs));
 }
@@ -108,7 +110,7 @@ function harness(platform = 'ios', existingStore, nativeRouting = false) {
     }
     throw Error(`Unexpected API route ${requestPath}`);
   };
-  const api = load('src/api/vpn.ts', 'preparedTunnel,rotateManagedVpnKey,fetchStagedDevicePSKProfile', {
+  const api = load('src/api/vpn.ts', 'preparedTunnel,rotateManagedVpnKey,fetchStagedDevicePSKProfile,withCurrentVpnProfileKey,vpnProfileKeyIsCurrent,VpnProfileKeyChangedError', {
     ...load('src/vpn/profileNumbers.ts', 'isPositiveSafeInteger,isNonnegativeSafeInteger'),
     supportsNativeRoutingPolicy: () => nativeRouting, Platform: { OS: platform }, ...app, ...signer, ...native, ...scoped, ...location, ...selection, ...session,
     ...load('src/vpn/nativeRoutingPolicy.ts', 'nativeRoutingParameters,routingAuthorization'),
@@ -640,3 +642,250 @@ for (const advanced of [false, true]) {
     assert.equal(restarted.generations(), 0);
   });
 }
+
+
+// Exercise the production cache/hook/native-dispatch entry points with the
+// same durable account owner and signed API fixture used above.
+const paidAccess = { active: true, vpnAccess: true };
+function profileOwners(h, hotProfile) {
+  const location = load('src/vpn/locationId.ts', 'requireVpnLocationId,comparableVpnLocationId');
+  const core = load('src/vpn/hotProfileCacheCore.ts', 'runtimeProfileKey,vpnProfileCacheIsCurrent,profileFromHotRecord,withLastSuccessfulEndpoint', location);
+  const consistency = load('src/vpn/profileConsistency.ts', 'vpnProfileAddressMatchesDevice,vpnProfileInterfaceIpv4');
+  const session = load('src/vpn/sessionOperation.ts', 'SessionOperationSupersededError');
+  const errors = load('src/api/error.ts', 'requireRequestActive,requestCancelledError,isApiRequestCancelled');
+  const cancellation = load('src/api/requestCancellation.ts', 'withRequestCancellation', errors);
+  const api = { ...h.api, entitlement: async () => paidAccess, hasPaidEntitlement: value => !!value?.vpnAccess };
+  const revalidation = load('src/vpn/profileRevalidation.ts', 'profileRevalidationOptions', {
+    ...consistency, ...load('src/vpn/profileNumbers.ts', 'isPositiveSafeInteger,isNonnegativeSafeInteger'),
+  });
+  const record = () => hotProfile && { profile: hotProfile, savedAtMs: Date.now() };
+  const profiles = load('src/vpn/profile.ts', 'resolveVpnProfile,resetVpnProfileCache,rotateVpnProfileKey', {
+    ...api, ...core, ...consistency, ...session, ...errors, ...cancellation, ...location, ...revalidation,
+    ...load('src/vpn/profileNumbers.ts', 'isPositiveSafeInteger'),
+    defaultVpnRoutingMode: 'default', defaultVpnBypassRegion: '', defaultVpnRoutingPolicyVersion: 'v1',
+    loadHotVpnProfile: async () => record(), runProfileRequest: work => work(undefined),
+  });
+  return { api, profiles, core, consistency, session, record };
+}
+function profileState(h, platform, cached, hot) {
+  const owners = profileOwners(h, hot);
+  const queryClient = {
+    getQueryData: () => cached, setQueryData: () => {}, removeQueries: () => {},
+    fetchQuery: ({ queryFn }) => queryFn(), invalidateQueries: async () => {},
+  };
+  const react = { useCallback: fn => fn, useEffect: () => {}, useMemo: fn => fn(), useRef: value => ({ current: value }) };
+  const module = load('src/vpn/useVpnProfileState.ts', 'useVpnProfileState', {
+    ...react, useQueryClient: () => queryClient, isCancelledError: () => false,
+    useOwnedState: (_owner, _isCurrent, value) => [value, () => {}],
+    Platform: { OS: platform }, errorMessage: error => error.message,
+    ...owners.api, ...owners.profiles, ...owners.session,
+    isApiRequestCancelled: () => false, ProfileRequestSupersededError: class extends Error {},
+    clearHotVpnProfiles: async () => {}, hydrateHotVpnProfilesToQueryCache: async () => [],
+    loadHotVpnProfileResult: async () => ({ record: owners.record() }),
+    profileFromHotRecord: owners.core.profileFromHotRecord, saveHotVpnProfile: async () => {},
+    connectableLocalProfile: load('src/vpn/connectFlow.ts', 'connectableLocalProfile', {
+      ...owners.consistency, ...owners.core, hasPaidEntitlement: owners.api.hasPaidEntitlement,
+    }).connectableLocalProfile,
+    ...load('src/vpn/androidRoutingSafety.ts', 'androidVpnProfileRequiresRefresh,androidVpnProfileWithinBinderBudget'),
+  });
+  return module.useVpnProfileState({ accessToken: 'A', userId: 'A', hasVpnAccess: true,
+    knownEntitlement: paidAccess, isCurrentSessionOperation: () => true,
+    onDeviceRevoked: async () => {}, onProfileRefreshFailed: () => {},
+    onProfileRotationRequired: () => {}, onSubscriptionRequired: () => {},
+    profileRefreshMs: 1, requestVpnPermission: async () => true,
+    routingMode: 'default', selectedLocationId: 'de',
+  });
+}
+function connectEntry(h, platform, nativeConnect, timeout = promise => promise, overrides = {}) {
+  const ts = require('typescript');
+  const file = path.join(process.env.VEX_KEY_ADMISSION_ENTRY_ROOT || sourceRoot, 'src/vpn/useVpnConnectionFlow.ts');
+  const text = fs.readFileSync(file, 'utf8');
+  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+  let callback;
+  function visit(node) {
+    if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'connectProfileWithEndpointFallback') {
+      assert.equal(callback, undefined); callback = node.initializer.arguments[0].getText(source);
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(source); assert.ok(callback);
+  const owners = profileOwners(h);
+  const dependencies = {
+    ...owners.api, ...owners.consistency,
+    ...load('src/vpn/androidRoutingSafety.ts', 'androidVpnProfileWithinBinderBudget'),
+    ...load('src/vpn/connectionFallback.ts', 'connectionAttemptsForProfile,isVpnTransportFallbackError,profileEndpoint'),
+    ...owners.session,
+    Platform: { OS: platform }, mountedRef: { current: true },
+    session: { accessToken: 'A', user: { id: 'A' } }, isCurrentSessionOperation: () => true,
+    requireCurrentSession: () => {}, prepareClientNetworkDiagnostics: async () => {},
+    getVpnApplicationSelection: async () => ({ mode: 'all', packageNames: [] }),
+    dynamicRouteRuntime: { prepare: async () => {}, attempts: profile => [{ profile }], clearActive: () => {} },
+    connectVpn: nativeConnect, getVpnStatus: async () => ({ state: 'disconnected' }),
+    withTimeout: timeout, connectAttemptTimeoutMs: 1000, antiLeakEnabled: true,
+    waitForVerifiedVpnConnection: async status => status,
+    withLastSuccessfulEndpoint: owners.core.withLastSuccessfulEndpoint,
+    ...overrides,
+  };
+  const compiled = stripTypeScriptTypes('const connect = ' + callback + ';');
+  return new Function(...Object.keys(dependencies), compiled + '; return connect;')(...Object.values(dependencies));
+}
+function localProfile(tunnel) {
+  return { ...tunnel, config: tunnel.config.replace('[Interface]', '[Interface]\nHeaderProtectionKey = isolated-fixture'), locationId: 'de', routingMode: 'default', entitlement: paidAccess, source: 'local', cacheSavedAtMs: Date.now() };
+}
+
+for (const platform of ['android', 'ios']) {
+  for (const interrupted of ['ordinary-rotate-before-commit', 'ordinary-rotate-after-commit']) {
+    for (const cache of ['memory', 'persistent-hot', 'query-hook', 'hot-hook']) {
+      test(platform + ': ' + cache + ' reconciles ' + interrupted + ' before returning an old key', { timeout: 2000 }, async () => {
+        const h = harness(platform);
+        const old = localProfile(await h.prepare('A'));
+        const owners = profileOwners(h, cache.includes('hot') ? old : undefined);
+        if (cache === 'memory') await owners.profiles.resolveVpnProfile('A', paidAccess, 'de', { userId: 'A', forceRefresh: true });
+        h.interruptConfirmation(interrupted);
+        await assert.rejects(h.api.rotateManagedVpnKey('A', old.device.id, old.device.keyEpoch, () => true, 'A'), /rotation response lost/);
+        const generations = h.generations();
+        const pending = JSON.parse([...h.saved.entries()].find(([key]) => key.endsWith('.pending'))[1]);
+        h.interruptConfirmation(undefined);
+        const fresh = cache.endsWith('hook')
+          ? await profileState(h, platform, cache === 'query-hook' ? old : null, cache === 'hot-hook' ? old : null).resolveConnectableVpnProfile('de')
+          : await owners.profiles.resolveVpnProfile('A', paidAccess, 'de', { userId: 'A' });
+        assert.ok(fresh.config.includes('PrivateKey = ' + pending.privateKey), 'the lost-response key, not the stale cached pair, must reach the caller');
+        assert.equal(fresh.source, 'api');
+        assert.equal(h.generations(), generations, 'reconciliation must reuse the durable pair');
+        assert.equal(h.rotations.length, interrupted.endsWith('before-commit') ? 2 : 1);
+        assert.equal([...h.saved.keys()].some(key => key.endsWith('.pending')), false);
+      });
+    }
+  }
+  test(platform + ': pending journal blocks actual native dispatch without hidden repair', async () => {
+    const h = harness(platform), old = localProfile(await h.prepare('A'));
+    h.interruptConfirmation('ordinary-rotate-after-commit');
+    await assert.rejects(h.api.rotateManagedVpnKey('A', old.device.id, old.device.keyEpoch, () => true, 'A'));
+    const requests = h.requests.length, rotations = h.rotations.length;
+    let calls = 0;
+    await assert.rejects(connectEntry(h, platform, async () => { calls++; return { state: 'connected' }; })(old), h.api.VpnProfileKeyChangedError);
+    assert.equal(calls, 0); assert.equal(h.rotations.length, rotations);
+    assert.equal(h.requests.length, requests, 'dispatch admission is local after account setup');
+    assert.equal([...h.saved.keys()].some(key => key.endsWith('.pending')), true);
+  });
+  test(platform + ': rotation after preparation fences actual native dispatch', async () => {
+    const h = harness(platform), old = localProfile(await h.prepare('A'));
+    await h.api.rotateManagedVpnKey('A', old.device.id, old.device.keyEpoch, () => true, 'A');
+    let calls = 0;
+    await assert.rejects(connectEntry(h, platform, async () => { calls++; return { state: 'connected' }; })(old), h.api.VpnProfileKeyChangedError);
+    assert.equal(calls, 0);
+  });
+  test(platform + ': admitted native promise retains the existing rotation owner', { timeout: 2000 }, async () => {
+    const h = harness(platform), old = localProfile(await h.prepare('A'));
+    const reached = gate(), release = gate();
+    const connected = connectEntry(h, platform, async () => { reached.resolve(); await release.promise; return { state: 'connected' }; })(old);
+    await reached.promise;
+    const rotated = h.api.rotateManagedVpnKey('A', old.device.id, old.device.keyEpoch, () => true, 'A');
+    await new Promise(setImmediate);
+    assert.equal(h.rotations.length, 0, 'rotation must wait for the real native promise');
+    release.resolve(); await connected; await rotated;
+    assert.equal(h.rotations.length, 1);
+  });
+  test(platform + ': timed-out queued admission cannot start native later', { timeout: 2000 }, async () => {
+    const h = harness(platform), old = localProfile(await h.prepare('A'));
+    const lookup = gate(); h.holdLookup(lookup);
+    const rotated = h.api.rotateManagedVpnKey('A', old.device.id, old.device.keyEpoch, () => true, 'A');
+    await new Promise(setImmediate);
+    const expired = gate(); let calls = 0;
+    const timeout = (promise, _ms, label) => label === 'VPN connect timed out.'
+      ? Promise.race([promise, expired.promise.then(() => { throw Error('fixture deadline'); })]) : promise;
+    const connecting = connectEntry(h, platform, async () => { calls++; return { state: 'connected' }; }, timeout)(old);
+    const rejected = assert.rejects(connecting, error => error.cause?.message === 'fixture deadline');
+    await new Promise(setImmediate); expired.resolve(); await rejected;
+    lookup.resolve(); await rotated; await new Promise(setImmediate);
+    assert.equal(calls, 0);
+  });
+  test(platform + ': timing starts at admitted native dispatch and records interface-up before verification', { timeout: 2000 }, async () => {
+    const h = harness(platform), old = localProfile(await h.prepare('A'));
+    const reached = gate(), release = gate(); let now = 1000, minimumHandshake;
+    const owner = h.scoped.withVpnAccountIdentity({ userId: 'A', platform, locationId: 'de', loadOwnedDevices: async () => [] }, async () => { reached.resolve(); await release.promise; });
+    await reached.promise;
+    const connecting = connectEntry(h, platform, async () => { assert.equal(now, 9000); now = 10000; return { state: 'connected' }; }, undefined, {
+      Date: { now: () => now }, waitForVerifiedVpnConnection: async (status, _getStatus, options) => { minimumHandshake = options.minimumHandshakeEpochMillis; now = 11000; return status; },
+    })(old);
+    await new Promise(setImmediate); now = 9000; release.resolve(); await owner;
+    const result = await connecting;
+    assert.equal(result.nativeStartMs, 9000); assert.equal(result.interfaceUpMs, 10000);
+    assert.equal(result.verificationCompletedMs, 11000); assert.equal(minimumHandshake, 7000);
+  });
+  test(platform + ': borrower timeout retains ownership until the real native promise settles', { timeout: 2000 }, async () => {
+    const h = harness(platform), old = localProfile(await h.prepare('A'));
+    const reached = gate(), release = gate(), expired = gate();
+    const timeout = (promise, _ms, label) => label === 'VPN connect timed out.' ? Promise.race([promise, expired.promise.then(() => { throw Error('fixture deadline'); })]) : promise;
+    const connecting = connectEntry(h, platform, async () => { reached.resolve(); await release.promise; return { state: 'connected' }; }, timeout)(old);
+    const rejected = assert.rejects(connecting, /fixture deadline/);
+    await reached.promise; expired.resolve(); await rejected;
+    const rotating = h.api.rotateManagedVpnKey('A', old.device.id, old.device.keyEpoch, () => true, 'A');
+    await new Promise(setImmediate); assert.equal(h.rotations.length, 0);
+    release.resolve(); await rotating; assert.equal(h.rotations.length, 1);
+  });
+  test(platform + ': matching material accepts PSK-only epoch advancement but rejects ambiguous or foreign keys', async () => {
+    const h = harness(platform), profile = localProfile(await h.prepare('A'));
+    assert.equal(await h.api.vpnProfileKeyIsCurrent('A', profile, { userId: 'A' }), true);
+    for (const keyEpoch of [0, undefined]) assert.equal(await h.api.vpnProfileKeyIsCurrent('A', { ...profile, device: { ...profile.device, keyEpoch } }, { userId: 'A' }), true, 'legacy unknown epoch must retain matching-key compatibility');
+    assert.equal(await h.api.vpnProfileKeyIsCurrent('A', { ...profile, device: { ...profile.device, keyEpoch: profile.device.keyEpoch + 1 } }, { userId: 'A' }), true);
+    for (const changed of [
+      { ...profile, config: profile.config + '\nPrivateKey = ' + legacyPair.privateKey },
+      { ...profile, config: profile.config.replace(legacyPair.privateKey, key(32)) },
+      { ...profile, device: { ...profile.device, userId: 'B' } },
+      { ...profile, device: { ...profile.device, publicKey: key(33) } },
+      { ...profile, device: { ...profile.device, externalDeviceId: 'native-foreign' } },
+    ]) assert.equal(await h.api.vpnProfileKeyIsCurrent('A', changed, { userId: 'A' }), false);
+    h.setReadFailure(true);
+    await assert.rejects(h.api.vpnProfileKeyIsCurrent('A', profile, { userId: 'A' }), /locked/, 'storage errors must not be interpreted as absence');
+  });
+}
+
+function stagedActivation(connect, disconnect, busy) {
+  const ts = require('typescript');
+  const file = path.join(process.env.VEX_KEY_ADMISSION_ENTRY_ROOT || sourceRoot, 'src/vpn/useVpnConnection.ts');
+  const source = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
+  let activate;
+  function visit(node) {
+    if (ts.isPropertyAssignment(node) && node.name.getText(source) === 'activate') {
+      assert.equal(activate, undefined); activate = node.initializer.getText(source);
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(source); assert.ok(activate);
+  const bindings = { requireCurrentSession: () => {}, isConnected: true,
+    setActiveProfile: () => {}, cacheProfile: () => {}, vpnOperationInFlightRef: busy,
+    disconnectVpn: disconnect, connectProfileWithEndpointFallback: connect,
+    isCurrentSessionOperation: () => true, cancelled: false,
+    setVpnStatus: () => {}, reportVpnConnectEvent: () => {},
+  };
+  return new Function(...Object.keys(bindings), stripTypeScriptTypes('const activate = ' + activate + ';') + ';return activate;')(...Object.values(bindings));
+}
+for (const platform of ['android', 'ios']) {
+  test(platform + ': absent account mapping cannot allocate a key or call API during actual dispatch', async () => {
+    const h = harness(platform), old = localProfile(await h.prepare('A'));
+    for (const key of h.saved.keys()) if (key.startsWith('vex.vpn.account_registration.')) h.saved.delete(key);
+    const requests = h.requests.length, writes = h.writes.length, generations = h.generations();
+    let nativeCalls = 0;
+    await assert.rejects(connectEntry(h, platform, async () => { nativeCalls++; })(old), h.api.VpnProfileKeyChangedError);
+    assert.equal(nativeCalls, 0); assert.equal(h.requests.length, requests);
+    assert.equal(h.writes.length, writes); assert.equal(h.generations(), generations);
+  });
+}
+for (const pending of [false, true]) test('staged PSK activation admits the key before teardown, pending=' + pending, async () => {
+  const h = harness('android'), old = localProfile(await h.prepare('A'));
+  if (pending) {
+    h.interruptConfirmation('ordinary-rotate-before-commit');
+    await assert.rejects(h.api.rotateManagedVpnKey('A', old.device.id, old.device.keyEpoch, () => true, 'A'));
+  }
+  const order = [], busy = { current: false };
+  const connect = connectEntry(h, 'android', async () => { order.push('connect'); return { state: 'connected' }; });
+  const activate = stagedActivation(connect, async options => { assert.equal(options.releaseAntiLeak, false); order.push('disconnect'); }, busy);
+  if (pending) {
+    await assert.rejects(activate({ profile: old }), h.api.VpnProfileKeyChangedError);
+    assert.deepEqual(order, [], 'an unadmitted key must preserve the current tunnel');
+  } else {
+    await activate({ profile: old }); assert.deepEqual(order, ['disconnect', 'connect']);
+  }
+  assert.equal(busy.current, false);
+});

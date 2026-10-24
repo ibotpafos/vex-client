@@ -5,7 +5,7 @@ import { useOwnedState } from '../hooks/useOwnedState';
 import { Platform } from 'react-native';
 import { errorMessage } from '@/utils/error';
 
-import { entitlement, hasPaidEntitlement, type Entitlement } from '../api/vexApi';
+import { entitlement, hasPaidEntitlement, vpnProfileKeyIsCurrent, type Entitlement } from '../api/vexApi';
 import { resetVpnProfileCache, resolveVpnProfile, rotateVpnProfileKey, type VpnProfile } from './profile';
 import { ProfileRequestSupersededError } from './profileRequestQueue';
 import type { ResolveConnectableProfileOptions } from './serverSwitch';
@@ -328,6 +328,9 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
         }
       }
       cachedLocalProfile = connectableLocalProfile(cachedLocalProfile, locationId, cachedEntitlement, routingMode);
+      if (cachedLocalProfile && !await vpnProfileKeyIsCurrent(accessToken, cachedLocalProfile, { userId, isCurrentSessionOperation })) cachedLocalProfile = null;
+      requireCurrentSession();
+      cachedLocalProfile = cachedLocalProfile && connectableLocalProfile(cachedLocalProfile, locationId, cachedEntitlement, routingMode);
       if (cachedLocalProfile) {
         const localProfile = withConnectPreparationTiming(cachedLocalProfile);
         cacheProfile(locationId, localProfile);
@@ -370,6 +373,9 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
           }
         }
         connectableHotProfile = connectableLocalProfile(connectableHotProfile, locationId, hotEntitlement, routingMode);
+        if (connectableHotProfile && !await vpnProfileKeyIsCurrent(accessToken, connectableHotProfile, { userId, isCurrentSessionOperation })) connectableHotProfile = null;
+        requireCurrentSession();
+        connectableHotProfile = connectableHotProfile && connectableLocalProfile(connectableHotProfile, locationId, hotEntitlement, routingMode);
         if (connectableHotProfile) {
           const preparedHotProfile = withConnectPreparationTiming(connectableHotProfile);
           cacheProfile(locationId, preparedHotProfile);

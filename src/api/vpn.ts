@@ -526,6 +526,46 @@ export async function acknowledgeStagedDevicePSKProfile(
 
 type AccountKeyRotationResult = { device: VpnDevice; keyPair: WireGuardKeyPair };
 
+export class VpnProfileKeyChangedError extends Error {
+  readonly code = 'VPN_PROFILE_KEY_CHANGED';
+  constructor() { super('Ключ VPN-профиля изменился. Обновите профиль перед подключением.'); }
+}
+
+type ProfileKeyAdmissionOptions = Pick<PreparedTunnelOptions, 'userId' | 'isCurrentSessionOperation' | 'signal'>;
+
+export async function withCurrentVpnProfileKey<T>(accessToken: string, profile: VpnProfile, operation: () => Promise<T>, options: ProfileKeyAdmissionOptions = {}): Promise<T> {
+  requireProfileRequest(options);
+  const client = currentVpnClient();
+  if (!requiresManagedNativeProfile(client)) return operation();
+  if (!accessToken.trim()) throw new Error('Сначала войдите в аккаунт.');
+  const accountOptions = { ...await vpnAccountOptions(accessToken, client, profile.locationId, options.userId, options.isCurrentSessionOperation, options.signal),
+    // Admission may read an existing mapping; only preparation may create or
+    // migrate one. resolveAccountIdentity calls this before allocating a key.
+    loadOwnedDevices: async (): Promise<VpnDevice[]> => { throw new VpnProfileKeyChangedError(); },
+  };
+  return withVpnAccountIdentity(accountOptions, async identity => {
+    const pending = await pendingVpnAccountKeyPair(identity.keyScope, options.isCurrentSessionOperation);
+    requireProfileRequest(options);
+    const device = profile.device;
+    const externalDeviceId = nativeDeviceId(identity.externalDeviceId);
+    const privateKeys = Array.from(profile.config.matchAll(/^[ \t]*PrivateKey[ \t]*=[ \t]*([^\r\n]*)\r?$/gim), match => match[1].trim());
+    if (pending || identity.legacyRegistrationPending || !device ||
+        (device.userId && device.userId !== accountOptions.userId) ||
+        !nativeVpnDeviceForClient([device], profile.locationId, externalDeviceId, externalDeviceId) ||
+        (device.publicKey !== undefined && device.publicKey !== identity.keyPair.publicKey) ||
+        (device.keyEpoch !== undefined && (!isNonnegativeSafeInteger(device.keyEpoch) || (device.keyEpoch > 0 && device.keyEpoch < (identity.keyPair.keyEpoch ?? 1)))) ||
+        privateKeys.length !== 1 || privateKeys[0] !== identity.keyPair.privateKey) throw new VpnProfileKeyChangedError();
+    // Rotation and native dispatch share the account owner. Keep it until the
+    // real native promise settles, even when its caller stops waiting.
+    return operation();
+  });
+}
+
+export async function vpnProfileKeyIsCurrent(accessToken: string, profile: VpnProfile, options: ProfileKeyAdmissionOptions = {}): Promise<boolean> {
+  try { return await withCurrentVpnProfileKey(accessToken, profile, async () => true, options); }
+  catch (error) { if (error instanceof VpnProfileKeyChangedError) return false; throw error; }
+}
+
 async function withVpnAccountDevice<T>(accessToken: string, deviceId: string, options: VpnAccountIdentityOptions, use: (device: VpnDevice, identity: VpnAccountIdentity) => Promise<T>): Promise<T> {
   return withVpnAccountIdentity(options, async identity => {
     const device = (await vpnDevices(accessToken)).find(row => row.id === deviceId);

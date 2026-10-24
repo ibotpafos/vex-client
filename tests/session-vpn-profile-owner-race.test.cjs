@@ -65,7 +65,7 @@ function hookHarness(stage, { rotationRequired = false, knownEntitlement = paid 
     react, '@tanstack/react-query': { useQueryClient: () => query, isCancelledError: () => false },
     'react-native': { Platform: { OS: 'ios' } },
     '@/utils/error': { errorMessage: error => error.message },
-    '../api/vexApi': { hasPaidEntitlement: value => Boolean(value?.active), entitlement: () => wait('entitlement', paid) },
+    '../api/vexApi': { vpnProfileKeyIsCurrent: async () => true, hasPaidEntitlement: value => Boolean(value?.active), entitlement: () => wait('entitlement', paid) },
     './profile': {
       resetVpnProfileCache: () => calls.push('reset-cache'),
       resolveVpnProfile: (...args) => { assert.equal(typeof args[3].isCurrentSessionOperation, 'function'); return wait('resolve', makeProfile(owner, { rotationRequired, locationId: args[2] })); },
@@ -162,6 +162,7 @@ test('a superseded profile response cannot seed the global cache for a later log
   const gate = deferred(), reached = deferred(); let current = true, requests = 0;
   const module = load('src/vpn/profile.ts', {
     '../api/vexApi': {
+      vpnProfileKeyIsCurrent: async () => true,
       hasPaidEntitlement: value => value.active,
       preparedTunnel: async (_, __, options) => {
         assert.equal(typeof options.isCurrentSessionOperation, 'function'); requests++;

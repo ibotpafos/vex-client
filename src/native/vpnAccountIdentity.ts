@@ -54,14 +54,17 @@ export async function saveVpnAccountKeyPair(keyScope: string, pair: WireGuardKey
   await SecureStore.setItemAsync(keyPrefix + requireScope(keyScope), JSON.stringify(validatedVpnAccountKeyPair(pair)));
   requireCurrent(options);
 }
-type PendingVpnAccountKeyPair = WireGuardKeyPair & { deviceId?: string };
+type PendingVpnAccountKeyPair = WireGuardKeyPair & { deviceId?: string; basePublicKey?: string; ownerPublicKey?: string };
 
 function validatedPendingVpnAccountKeyPair(value: unknown): PendingVpnAccountKeyPair {
-  const pair = validatedVpnAccountKeyPair(value);
-  const deviceId = (value as { deviceId?: unknown }).deviceId;
-  if (deviceId === undefined) return pair; // Existing legacy journals have no target field.
-  if (typeof deviceId !== 'string' || !deviceId.trim() || deviceId !== deviceId.trim()) throw new Error('Сохранённое намерение ротации VPN повреждено.');
-  return { ...pair, deviceId };
+  const pair: PendingVpnAccountKeyPair = validatedVpnAccountKeyPair(value);
+  for (const field of ['deviceId', 'basePublicKey', 'ownerPublicKey'] as const) {
+    const item = (value as Record<string, unknown>)[field];
+    if (item === undefined) continue; // Existing legacy journals retain their format.
+    if (typeof item !== 'string' || (field !== 'basePublicKey' && (!item.trim() || item !== item.trim()))) throw new Error('Сохранённое намерение ротации VPN повреждено.');
+    pair[field] = item;
+  }
+  return pair;
 }
 
 export async function pendingVpnAccountKeyPair(keyScope: string, isCurrentSessionOperation?: () => boolean): Promise<PendingVpnAccountKeyPair | undefined> {

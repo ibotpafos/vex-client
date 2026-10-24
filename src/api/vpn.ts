@@ -600,6 +600,12 @@ async function rotateVpnAccountDeviceKey(accessToken: string, device: VpnDevice,
     // registration-owner reconciliation before transferring its pending intent.
     throw new Error('Незавершённая ротация относится к другому VPN-устройству.');
   }
+  if (pending && identity.keyPair.publicKey !== pending.publicKey) {
+    const ownsBase = pending.ownerPublicKey !== undefined
+      ? identity.keyPair.publicKey === pending.ownerPublicKey
+      : (identity.keyPair.keyEpoch ?? 0) < (pending.keyEpoch ?? 1);
+    if (!ownsBase) throw new Error('Подтверждённый локальный ключ изменился после подготовки ротации VPN.');
+  }
   if (pending && device.publicKey === pending.publicKey && Number.isSafeInteger(device.keyEpoch) && (device.keyEpoch ?? 0) >= (pending.keyEpoch ?? 1)) {
     // A lost rotation response must not discard its only private key. The
     // signed, owner-filtered response confirms this exact durable intent.
@@ -607,7 +613,18 @@ async function rotateVpnAccountDeviceKey(accessToken: string, device: VpnDevice,
     await saveVpnAccountKeyPair(identity.keyScope, confirmed, isCurrentSessionOperation);
     return { device, keyPair: confirmed };
   }
-  if (pending && ((!pending.deviceId && !identity.legacyRegistrationPending) || device.publicKey !== identity.keyPair.publicKey)) {
+  if (pending?.basePublicKey === '' && device.keyEpoch !== undefined && device.keyEpoch + 1 !== pending.keyEpoch) {
+    // TODO(account-key-recovery): explicitly reconcile an omitted server base
+    // after counter advancement; its absence cannot prove a PSK-only change.
+    throw new Error('Не удалось подтвердить исходный серверный ключ незавершённой ротации VPN.');
+  }
+  const boundIntent = pending?.deviceId && pending.basePublicKey !== undefined && pending.ownerPublicKey !== undefined;
+  // A target-only journal can be upgraded only while the confirmed local pair
+  // is still older and matches the owned server row. It cannot elect a newer
+  // local owner as the base of an earlier intent.
+  const olderTargetIntent = pending?.deviceId && pending.basePublicKey === undefined && pending.ownerPublicKey === undefined &&
+    (identity.keyPair.keyEpoch ?? 0) < (pending.keyEpoch ?? 1) && device.publicKey === identity.keyPair.publicKey;
+  if (pending && ((!boundIntent && !olderTargetIntent && !identity.legacyRegistrationPending) || (device.publicKey ?? '') !== (pending.basePublicKey ?? identity.keyPair.publicKey))) {
     throw new Error('Не удалось подтвердить прежний ключ незавершённой ротации VPN.');
   }
   if (!pending) {
@@ -615,7 +632,13 @@ async function rotateVpnAccountDeviceKey(accessToken: string, device: VpnDevice,
     requireCurrentSession(isCurrentSessionOperation);
     if (!pending) throw new Error('Локальный WireGuard ключ недоступен.');
   }
-  pending = { ...pending, deviceId: device.id, keyEpoch: nextManagedKeyEpoch(pending.keyEpoch, device.keyEpoch) };
+  pending = {
+    ...pending,
+    deviceId: device.id,
+    basePublicKey: pending.basePublicKey ?? device.publicKey ?? '',
+    ownerPublicKey: pending.ownerPublicKey ?? identity.keyPair.publicKey,
+    keyEpoch: nextManagedKeyEpoch(pending.keyEpoch, device.keyEpoch),
+  };
   // Keep the last confirmed active pair until the server accepts the next one.
   // The journal is durable before POST and reuses the same key after restart.
   await savePendingVpnAccountKeyPair(identity.keyScope, pending, isCurrentSessionOperation);

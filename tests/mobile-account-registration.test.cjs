@@ -559,3 +559,84 @@ test('another account completes its own rotation without consuming an unresolved
   assert.equal(restarted.rotations.length, 0); assert.equal(restarted.generations(), 0);
   assert.equal(JSON.stringify(h.devices.get('B')), bState);
 });
+
+
+for (const format of ['bound', 'target-only']) for (const server of ['newer-local-key', 'pending-key']) {
+  test(`a stale ${format} pending intent cannot replace a newer confirmed local owner while server has ${server}`, async () => {
+    const h = harness(); const initial = await h.prepare('A');
+    h.interruptConfirmation('ordinary-rotate-before-commit');
+    await assert.rejects(h.api.rotateManagedVpnKey('A', initial.device.id, initial.device.keyEpoch, () => true, 'A'));
+    const scope = JSON.parse(h.saved.get('vex.vpn.account_registration.v1.41')).keyScope;
+    const activeName = `vex.vpn.account_keys.v1.${scope}`;
+    const pendingName = activeName + '.pending'; const pending = JSON.parse(h.saved.get(pendingName));
+    if (format === 'target-only') { delete pending.basePublicKey; delete pending.ownerPublicKey; h.saved.set(pendingName, JSON.stringify(pending)); }
+    const intent = h.saved.get(pendingName);
+    // A prior app version or another confirmed writer completed a newer key
+    // while the earlier durable intent remained on disk.
+    const newer = { publicKey: key(46), privateKey: key(47), keyEpoch: 5 };
+    h.saved.set(activeName, JSON.stringify(newer));
+    Object.assign(h.devices.get('A')[0], { public_key: server === 'newer-local-key' ? newer.publicKey : pending.publicKey, psk_epoch: server === 'newer-local-key' ? 5 : pending.keyEpoch });
+    const snapshot = JSON.stringify(h.devices.get('A'));
+    const restarted = harness('ios', h.saved); restarted.devices.set('A', h.devices.get('A'));
+    await assert.rejects(restarted.prepare('A'));
+    assert.equal(restarted.rotations.length, 0); assert.equal(restarted.generations(), 0);
+    assert.equal(h.saved.get(activeName), JSON.stringify(newer)); assert.equal(h.saved.get(pendingName), intent);
+    assert.equal(JSON.stringify(h.devices.get('A')), snapshot);
+  });
+}
+
+
+for (const outcome of ['ordinary-rotate-before-commit', 'ordinary-rotate-after-commit']) {
+  test(`an older target-only journal retains recovery for ${outcome}`, async () => {
+    const h = harness(); const initial = await h.prepare('A'); h.interruptConfirmation(outcome);
+    await assert.rejects(h.api.rotateManagedVpnKey('A', initial.device.id, initial.device.keyEpoch, () => true, 'A'));
+    const scope = JSON.parse(h.saved.get('vex.vpn.account_registration.v1.41')).keyScope;
+    const name = `vex.vpn.account_keys.v1.${scope}.pending`; const pending = JSON.parse(h.saved.get(name));
+    delete pending.basePublicKey; delete pending.ownerPublicKey; h.saved.set(name, JSON.stringify(pending));
+    const restarted = harness('ios', h.saved); restarted.devices.set('A', h.devices.get('A'));
+    const recovered = await restarted.prepare('A');
+    assert.equal(recovered.device.publicKey, pending.publicKey); assert.equal(restarted.generations(), 0);
+    assert.equal(restarted.rotations.length, outcome === 'ordinary-rotate-before-commit' ? 1 : 0);
+    assert.ok(recovered.config.includes(`PrivateKey = ${pending.privateKey}`));
+  });
+}
+
+test('an uncommitted placeholder replacement resumes against its saved server and local base', async () => {
+  const h = harness(); const initial = await h.prepare('A');
+  Object.assign(h.devices.get('A')[0], { public_key: key(48), psk_epoch: 5 });
+  h.interruptConfirmation('ordinary-rotate-before-commit');
+  await assert.rejects(h.api.rotateManagedVpnKey('A', initial.device.id, 5, () => true, 'A'));
+  const scope = JSON.parse(h.saved.get('vex.vpn.account_registration.v1.41')).keyScope;
+  const pending = JSON.parse(h.saved.get(`vex.vpn.account_keys.v1.${scope}.pending`));
+  assert.equal(pending.basePublicKey, key(48)); assert.equal(pending.ownerPublicKey, initial.device.publicKey);
+  const restarted = harness('ios', h.saved); restarted.devices.set('A', h.devices.get('A'));
+  const repaired = await restarted.prepare('A');
+  assert.equal(repaired.device.publicKey, pending.publicKey); assert.equal(repaired.device.keyEpoch, 6);
+  assert.equal(restarted.generations(), 0); assert.equal(restarted.rotations.length, 1);
+});
+
+
+for (const advanced of [false, true]) {
+  test(`an omitted server base key ${advanced ? 'cannot authorize a counter rebase' : 'retains exact-counter recovery'}`, async () => {
+    const h = harness(); const initial = await h.prepare('A');
+    h.devices.get('A')[0].public_key = undefined;
+    h.interruptConfirmation('ordinary-rotate-before-commit');
+    await assert.rejects(h.api.rotateManagedVpnKey('A', initial.device.id, initial.device.keyEpoch, () => true, 'A'));
+    const scope = JSON.parse(h.saved.get('vex.vpn.account_registration.v1.41')).keyScope;
+    const name = `vex.vpn.account_keys.v1.${scope}.pending`; const intent = h.saved.get(name);
+    assert.equal(JSON.parse(intent).basePublicKey, '');
+    if (advanced) h.devices.get('A')[0].psk_epoch += 2;
+    const snapshot = JSON.stringify(h.devices.get('A'));
+    const restarted = harness('ios', h.saved); restarted.devices.set('A', h.devices.get('A'));
+    if (advanced) {
+      await assert.rejects(restarted.prepare('A'));
+      assert.equal(restarted.rotations.length, 0); assert.equal(h.saved.get(name), intent);
+      assert.equal(JSON.stringify(h.devices.get('A')), snapshot);
+    } else {
+      const recovered = await restarted.prepare('A');
+      assert.equal(recovered.device.publicKey, JSON.parse(intent).publicKey);
+      assert.equal(restarted.rotations.length, 1); assert.equal(h.saved.has(name), false);
+    }
+    assert.equal(restarted.generations(), 0);
+  });
+}

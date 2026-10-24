@@ -196,7 +196,7 @@ function vpnApi(operations) {
     './auth': { me: async () => ({ id: 'fixture-owner' }) },
     '../native/vpnAccountIdentity': {
       getOrCreateVpnAccountIdentity: async () => ({ installationId: 'installation-fixture', externalDeviceId: 'installation-fixture', keyScope: 'fixture-scope', keyPair: await operations.native.getOrCreateWireGuardKeyPair() }),
-      withVpnAccountIdentity: async (_, callback) => { operations.observe?.('account'); return callback({ keyScope: 'fixture-scope' }); },
+      withVpnAccountIdentity: async (_, callback) => { operations.observe?.('account'); return callback({ keyScope: 'fixture-scope', keyPair: { publicKey: 'fixture-old-key', keyEpoch: 1 } }); },
       saveVpnAccountKeyPair: async () => operations.native.replaceWireGuardKeyPair(),
       pendingVpnAccountKeyPair: async () => undefined,
       savePendingVpnAccountKeyPair: async () => undefined,

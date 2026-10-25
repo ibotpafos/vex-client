@@ -46,13 +46,15 @@
       </intent-filter>
     </activity>
     <service android:name="org.amnezia.awg.backend.GoBackend$VpnService" android:exported="false" android:foregroundServiceType="systemExempted" android:permission="android.permission.BIND_VPN_SERVICE">
-      <meta-data android:name="android.net.VpnService.SUPPORTS_ALWAYS_ON" android:value="false"/>
-      <intent-filter>
-        <action android:name="android.net.VpnService"/>
-      </intent-filter>
+      <!-- Started explicitly by GoBackend. Only the offline boot service may
+           handle an implicit system Always-on start. Remove library filters. -->
+      <intent-filter tools:node="removeAll"/>
     </service>
     <service android:name=".vpn.VexLeakBlockerService" android:exported="false" android:foregroundServiceType="systemExempted" android:permission="android.permission.BIND_VPN_SERVICE">
-      <meta-data android:name="android.net.VpnService.SUPPORTS_ALWAYS_ON" android:value="false"/>
+      <intent-filter tools:node="removeAll"/>
+    </service>
+    <service android:name=".vpn.VexBootProtectionService" android:process=":boot_protection" android:directBootAware="true" android:exported="true" android:foregroundServiceType="systemExempted" android:permission="android.permission.BIND_VPN_SERVICE">
+      <meta-data android:name="android.net.VpnService.SUPPORTS_ALWAYS_ON" android:value="true"/>
       <intent-filter>
         <action android:name="android.net.VpnService"/>
       </intent-filter>

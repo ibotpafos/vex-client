@@ -65,6 +65,10 @@ operator action and an isolated target.
 
 ## Release acceptance
 
+The repeatable [leak scenario suite](../docs/verification/vpn-leak-scenarios.md)
+adds state and DNS packet regressions with live observer controls. Run it with
+`bash scripts/test_vpn_leak_scenarios.sh`; it never changes host networking.
+
 Source/build evidence does not establish physical leak protection. Before rollout:
 
 - Build the real iOS extension with full Xcode and verify its memory budget,

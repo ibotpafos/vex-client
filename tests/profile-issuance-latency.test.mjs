@@ -8,6 +8,8 @@ import { ApiRequestError, requireRequestActive, isApiRequestCancelled } from '..
 import { withRequestCancellation } from '../src/api/requestCancellation.ts';
 import { runtimeProfileKey, vpnProfileCacheIsCurrent } from '../src/vpn/hotProfileCacheCore.ts';
 import { isPositiveSafeInteger, isNonnegativeSafeInteger } from '../src/vpn/profileNumbers.ts';
+import { profileEndpoint } from '../src/vpn/connectionFallback.ts';
+import { DynamicRouteEngine, parseDynamicRoutePolicy } from '../src/vpn/dynamicRouteCore.ts';
 
 const device = {id:'device', publicKey:'public', keyEpoch:2, status:'active', assignedIpv4:'10.0.0.2', externalDeviceId:'runtime', protocol:'amneziawg', provisioningMode:'managed_native', clientKeyOwnership:'client'};
 const cached = {config:'Address = 10.0.0.2/32', device, locationId:'de', routingMode:'smart', profileVersion:7};
@@ -97,6 +99,55 @@ test('changed routing profile with matching key is delivered without redundant l
   assert.equal(result.profileVersion,8);
   assert.equal(result.device.assignedIpv4,'10.0.0.3/32');
   assert.equal(h.requests.length,1);
+});
+
+test('a reassigned profile cannot retain the previous endpoint node identity', async () => {
+  const old = {...device, nodeId:'old-node', endpoint:'old.example:443'};
+  const h = managedHarness({options:{cachedDevice:old}, response:{...confirmed, unchanged:false, version:8,
+    config:'Address = 10.0.0.2/32\nEndpoint = new.example:443\n', server:'new.example',port:443}});
+  const result = await h.run();
+  assert.equal(result.device.endpoint, 'new.example:443');
+  assert.equal(result.device.nodeId, undefined, 'the device list predates profile placement; its old node is not evidence');
+  assert.equal(h.requests.length,1, 'metadata repair must not issue another peer or device lookup');
+});
+
+test('rendered tunnel endpoint is authoritative over stale list or response metadata', async () => {
+  const old = {...device, nodeId:'old-node', endpoint:'old.example:443'};
+  const config='Address = 10.0.0.2/32\nEndpoint = new.example:443\n';
+  for (const response of [confirmed, {...confirmed,unchanged:false,config,server:'old.example',port:443}]) {
+    const h = managedHarness({options:{cachedDevice:old,cachedConfig:config},response});
+    const result = await h.run();
+    assert.equal(result.device.endpoint,'new.example:443');
+    assert.equal(result.device.nodeId,undefined);
+    assert.equal(profileEndpoint({...result,device:old}),'new.example:443', 'cached metadata must not misreport the tunnel endpoint');
+  }
+});
+
+test('matching endpoint retains the known node while legacy endpoint-only profiles still work', async () => {
+  const matching={...device,nodeId:'same-node',endpoint:'same.example:443'};
+  const h=managedHarness({options:{cachedDevice:matching},response:{...confirmed,unchanged:false,
+    config:'Address = 10.0.0.2/32\nEndpoint = same.example:443\n',server:'same.example',port:443}});
+  assert.equal((await h.run()).device.nodeId,'same-node');
+  assert.equal(profileEndpoint({config:'legacy config',device:matching}),'same.example:443');
+});
+
+test('placement refresh admits the new route without accepting another device or location', async () => {
+  const old={...device,nodeId:'old-node',endpoint:'old.example:443'};
+  const h=managedHarness({options:{cachedDevice:old},response:{...confirmed,unchanged:false,
+    config:'Address = 10.0.0.2/32\nHeaderProtectionKey = fixture\nEndpoint = new.example:443\n',server:'new.example',port:443}});
+  const result=await h.run();
+  const expires_at=new Date(Date.now()+60_000).toISOString();
+  const candidate={id:'new-route',path_kind:'relay',device_id:device.id,protocol:'amneziawg',location_id:'de',
+    node_id:'new-node',endpoint:'relay.example:443',priority:10,health_score:100,expires_at};
+  const policy=parseDynamicRoutePolicy({policy_version:'placement-test',expires_at,
+    probe:{max_candidates:3},candidates:[candidate,{...candidate,id:'other-location',location_id:'fi'},
+      {...candidate,id:'other-device',device_id:'another-device'}]});
+  assert.ok(policy);
+  const engine=new DynamicRouteEngine();engine.setPolicy(policy);
+  const attempts=profile=>engine.attempts({...profile,locationId:'de'}).flatMap(x=>x.candidate?.id??[]);
+  assert.deepEqual(attempts({...result,device:{...result.device,nodeId:'old-node'}}),[], 'old metadata suppresses the authorized new route');
+  assert.deepEqual(attempts(result),['new-route']);
+  assert.deepEqual(attempts({...result,device:old}),['new-route'], 'old hot-cache metadata cannot veto the current config');
 });
 
 test('missing key identity and changed device or epoch fall back to current device lookup', async () => {

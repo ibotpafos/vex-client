@@ -18,7 +18,7 @@ const installer = fs.readFileSync(path.join(root, 'scripts/install_android_sdk_c
 const packages = fs.readFileSync(path.join(root, 'scripts/android_sdk_packages.txt'));
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 
-for (const mode of ['current', 'qualified', 'native-routing']) {
+for (const mode of ['current', 'qualified', 'native-routing', 'dns-reliability']) {
   test(`Android SDK preparation preserves the ${mode} candidate source`, () => {
     const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'vex-candidate-sdk-history-'));
     try {
@@ -40,6 +40,7 @@ for (const mode of ['current', 'qualified', 'native-routing']) {
         VEX_TEST_SDK_MANIFEST: path.join(runner, 'requested-packages'),
         QUALIFIED_SOURCE_REQUESTED: String(mode === 'qualified'),
         NATIVE_ROUTING_SOURCE_REQUESTED: String(mode === 'native-routing'),
+        DNS_RELIABILITY_SOURCE_REQUESTED: String(mode === 'dns-reliability'),
         PYTHONDONTWRITEBYTECODE: '1',
       });
       delete env.VEX_ANDROID_SDK_ORCHESTRATION;
@@ -54,9 +55,10 @@ for (const mode of ['current', 'qualified', 'native-routing']) {
         git('commit', '-m', marker);
         return { commit: git('rev-parse', 'HEAD'), tree: git('rev-parse', 'HEAD^{tree}') };
       };
-      // Both historical trees deliberately predate the shared SDK scripts.
+      // All historical trees deliberately predate the shared SDK scripts.
       const qualified = commit('qualified');
       const routing = commit('native-routing');
+      const dns = commit('dns-reliability');
       fs.mkdirSync(path.join(repo, 'scripts'));
       fs.writeFileSync(path.join(repo, 'scripts/install_android_sdk_components.sh'), installer);
       fs.writeFileSync(path.join(repo, 'scripts/android_sdk_packages.txt'), packages);
@@ -65,8 +67,10 @@ for (const mode of ['current', 'qualified', 'native-routing']) {
         GITHUB_SHA: orchestration.commit,
         QUALIFIED_SOURCE_COMMIT: qualified.commit, QUALIFIED_SOURCE_TREE: qualified.tree,
         NATIVE_ROUTING_SOURCE_COMMIT: routing.commit, NATIVE_ROUTING_SOURCE_TREE: routing.tree,
+        DNS_RELIABILITY_SOURCE_COMMIT: dns.commit, DNS_RELIABILITY_SOURCE_TREE: dns.tree,
       });
-      const selected = mode === 'qualified' ? qualified : mode === 'native-routing' ? routing : orchestration;
+      const selected = mode === 'qualified' ? qualified : mode === 'native-routing' ? routing
+        : mode === 'dns-reliability' ? dns : orchestration;
 
       // Only inert local SDK executables run: no downloads, Gradle or signing.
       const executable = (relative, source) => {
@@ -104,6 +108,9 @@ printf 'cmake version 3.22.1\\n'
       assert.equal(binding.source_commit, selected.commit);
       assert.equal(binding.source_tree, selected.tree);
       assert.equal(binding.orchestration_workflow_commit, orchestration.commit);
+      assert.equal(binding.qualified_source_requested, mode === 'qualified');
+      assert.equal(binding.native_routing_source_requested, mode === 'native-routing');
+      assert.equal(binding.dns_reliability_source_requested, mode === 'dns-reliability');
       if (sdkStep.env?.VEX_ANDROID_SDK_ORCHESTRATION) {
         assert.equal(binding.sdk_installer_sha256, sha256(installer));
         assert.equal(binding.sdk_packages_sha256, sha256(packages));
@@ -126,6 +133,7 @@ printf 'cmake version 3.22.1\\n'
           assert.equal(receipt.sdk_packages_sha256, sha256(packages));
           assert.equal(receipt.source_commit, selected.commit);
           assert.equal(receipt.source_tree, selected.tree);
+          assert.equal(receipt.dns_reliability_source_requested, mode === 'dns-reliability');
         }
       }
     } finally {

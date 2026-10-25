@@ -35,6 +35,19 @@ var vexTunnelHandlesMu sync.Mutex
 var vexRoutingMu sync.Mutex
 var vexRoutingHandles = make(map[int32]*vexRoutingHandle)
 
+//export awgRouterVerifyDataPlane
+func awgRouterVerifyDataPlane(id int32) int32 {
+	vexRoutingMu.Lock()
+	handle := vexRoutingHandles[id]
+	vexRoutingMu.Unlock()
+	if handle == nil {
+		return routing.DataPlaneRetired
+	}
+	// Never hold the handle-map lock over network I/O. Release/underlay change
+	// can cancel this exact router; a reused numeric ID cannot change the peer.
+	return int32(handle.router.VerifyDataPlane())
+}
+
 //export awgRouterAuthorization
 func awgRouterAuthorization(id int32) *C.char {
 	vexRoutingMu.Lock()

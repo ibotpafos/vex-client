@@ -25,6 +25,8 @@ for (const [field, value] of [
   ['latestHandshakeEpochMillis', 2_000],
   ['leakProtection', 'on'],
   ['verified', true],
+  ['dataPlaneVerified', true],
+  ['dataPlaneGeneration', 'new-peer'],
   ['verificationReason', 'probe_failed'],
 ]) {
   assert.equal(areVpnStatusesEqual(connected, { ...connected, [field]: value }), false, `${field} change must update VPN status`);

@@ -4,6 +4,7 @@ import { chooseBestVpnLocation } from './serverSelection';
 import { comparableVpnLocationId } from './locationId';
 import type { ConnectedVpnProfile, ResolveConnectableProfileOptions } from './serverSwitch';
 import { assessVpnAutopilotIssue } from './vpnAutopilotAssessment';
+import { SessionOperationSupersededError } from './sessionOperation';
 
 export type RecoveryOutcome = 'same_profile' | 'same_location_fresh_profile' | 'rotated_profile' | 'failover_location' | 'failed';
 
@@ -11,11 +12,12 @@ export type RecoverVpnConnectionInput = {
   activeLocationId: string;
   activeProfile: VpnProfile;
   availableLocations: VpnLocation[];
-  connectProfile: (profile: VpnProfile) => Promise<ConnectedVpnProfile>;
+  connectProfile: (profile: VpnProfile, isCurrentOperation?: () => boolean) => Promise<ConnectedVpnProfile>;
+  isCurrentOperation?: () => boolean;
   isRetryableConnectError: (error: unknown) => boolean;
   persistLocation: (locationId: string) => Promise<string>;
   resolveProfile: (locationId: string, options: ResolveConnectableProfileOptions) => Promise<VpnProfile>;
-  rotateProfile?: (profile: VpnProfile, locationId: string) => Promise<VpnProfile>;
+  rotateProfile?: (profile: VpnProfile, locationId: string, isCurrentOperation?: () => boolean) => Promise<VpnProfile>;
   setCachedProfile: (locationId: string, profile: VpnProfile) => void;
 };
 
@@ -39,12 +41,52 @@ export type RecoverVpnConnectionResult =
   };
 
 export async function recoverVpnConnection(input: RecoverVpnConnectionInput): Promise<RecoverVpnConnectionResult> {
+  // One owner spans profile issuance, native activation, persistence and UI
+  // acceptance. A retired owner must never try another location or cache it.
+  const guarded: RecoverVpnConnectionInput = {
+    ...input,
+    connectProfile: async (profile) => {
+      requireCurrentRecovery(input);
+      const result = await input.connectProfile(profile, input.isCurrentOperation);
+      requireCurrentRecovery(input);
+      return result;
+    },
+    resolveProfile: async (location, options) => {
+      requireCurrentRecovery(input);
+      const result = await input.resolveProfile(location, {
+        ...options, ...(input.isCurrentOperation ? { isCurrentOperation: input.isCurrentOperation } : {}),
+      });
+      requireCurrentRecovery(input);
+      return result;
+    },
+    rotateProfile: input.rotateProfile ? async (profile, location) => {
+      requireCurrentRecovery(input);
+      const result = await input.rotateProfile!(profile, location, input.isCurrentOperation);
+      requireCurrentRecovery(input);
+      return result;
+    } : undefined,
+    persistLocation: async (location) => {
+      requireCurrentRecovery(input);
+      const result = await input.persistLocation(location);
+      requireCurrentRecovery(input);
+      return result;
+    },
+    setCachedProfile: (location, profile) => {
+      requireCurrentRecovery(input);
+      input.setCachedProfile(location, profile);
+    },
+  };
+  return recoverCurrentConnection(guarded);
+}
+
+async function recoverCurrentConnection(input: RecoverVpnConnectionInput): Promise<RecoverVpnConnectionResult> {
   const activeLocationId = normalizeLocationId(input.activeLocationId || input.activeProfile.locationId);
 
   try {
     const connected = await input.connectProfile(input.activeProfile);
     return successfulRecovery(input, activeLocationId, connected, 'same_profile');
   } catch (error) {
+    requireCurrentRecovery(input, error);
     if (error instanceof Error && 'code' in error && error.code === 'VPN_PROFILE_KEY_CHANGED') {
       // Reconcile through the existing preparation owner exactly once. This
       // admission refusal is not a transport failure or a new rotation request.
@@ -73,6 +115,7 @@ async function recoverWithFreshProfile(
       requestPermission: false,
     });
   } catch (error) {
+    requireCurrentRecovery(input, error);
     // Issuance may have changed the backend before its response was lost.
     // Only a returned profile's connection failure can authorize failover.
     // TODO(watchdog-recovery): reconcile uncertain preparation with its API
@@ -84,6 +127,7 @@ async function recoverWithFreshProfile(
     const connected = await input.connectProfile(freshProfile);
     return successfulRecovery(input, activeLocationId, connected, 'same_location_fresh_profile');
   } catch (error) {
+    requireCurrentRecovery(input, error);
     if (reconcileKeyOnly) return failedRecovery(input, activeLocationId, error);
     if (shouldRotateProfile(input, error)) {
       return recoverWithRotatedProfile(input, activeLocationId, freshProfile, error);
@@ -108,6 +152,7 @@ async function recoverWithRotatedProfile(
   try {
     rotatedProfile = await input.rotateProfile(profile, activeLocationId);
   } catch (error) {
+    requireCurrentRecovery(input, error);
     // An uncertain key rotation must retain its owner and pending key state;
     // issuing another location's profile cannot confirm or undo that rotation.
     return failedRecovery(input, activeLocationId, error);
@@ -116,6 +161,7 @@ async function recoverWithRotatedProfile(
     const connected = await input.connectProfile(rotatedProfile);
     return successfulRecovery(input, activeLocationId, connected, 'rotated_profile');
   } catch (error) {
+    requireCurrentRecovery(input, error);
     if (!input.isRetryableConnectError(error)) {
       return failedRecovery(input, activeLocationId, error);
     }
@@ -141,6 +187,7 @@ async function recoverWithFailoverLocation(
     const connected = await input.connectProfile(failoverProfile);
     return successfulRecovery(input, activeLocationId, connected, 'failover_location', failoverLocationId);
   } catch (error) {
+    requireCurrentRecovery(input, error);
     return failedRecovery(input, activeLocationId, error);
   }
 }
@@ -196,4 +243,9 @@ function shouldRotateProfile(input: RecoverVpnConnectionInput, error: unknown): 
 
 function normalizeLocationId(locationId: string): string {
   return comparableVpnLocationId(locationId);
+}
+
+function requireCurrentRecovery(input: RecoverVpnConnectionInput, error?: unknown): void {
+  if (error instanceof SessionOperationSupersededError) throw error;
+  if (input.isCurrentOperation?.() === false) throw new SessionOperationSupersededError();
 }

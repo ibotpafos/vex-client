@@ -39,7 +39,7 @@ const makeProfile = (owner = 'A', extra = {}) => ({
 });
 
 function hookHarness(stage, { rotationRequired = false, knownEntitlement = paid } = {}) {
-  const gate = deferred(), reached = deferred(), calls = [], slots = [], effects = [];
+  const gate = deferred(), reached = deferred(), calls = [], slots = [], effects = [], rotationOwners = [];
   let cursor = 0, revision = 0, owner = 'A';
   const wait = async (name, value) => {
     calls.push(name);
@@ -69,7 +69,7 @@ function hookHarness(stage, { rotationRequired = false, knownEntitlement = paid 
     './profile': {
       resetVpnProfileCache: () => calls.push('reset-cache'),
       resolveVpnProfile: (...args) => { assert.equal(typeof args[3].isCurrentSessionOperation, 'function'); return wait('resolve', makeProfile(owner, { rotationRequired, locationId: args[2] })); },
-      rotateVpnProfileKey: (...args) => { assert.equal(typeof args[2], 'function'); return wait('rotate', makeProfile()); },
+      rotateVpnProfileKey: (...args) => { assert.equal(typeof args[2], 'function'); rotationOwners.push(args[2]); return wait('rotate', makeProfile()); },
     },
     './profileRequestQueue': { ProfileRequestSupersededError: class ProfileRequestSupersededError extends Error {} },
     '../api/error': apiErrors, '../api/requestCancellation': cancellation,
@@ -94,7 +94,7 @@ function hookHarness(stage, { rotationRequired = false, knownEntitlement = paid 
       onSubscriptionRequired: () => calls.push('subscription-required'),
     });
   }
-  return { calls, gate, reached, render, effects, supersede: () => { revision++; owner = 'B'; } };
+  return { calls, gate, reached, render, effects, rotationOwners, supersede: () => { revision++; owner = 'B'; } };
 }
 
 for (const outcome of ['resolve', 'reject']) {
@@ -118,6 +118,42 @@ for (const stage of ['hot', 'entitlement', 'permission', 'resolve', 'rotate']) {
     assert.deepEqual(h.calls, before, 'no subsequent permission, rotation, cache, subscription or UI mutations');
   });
 }
+
+for (const stage of ['hot', 'entitlement', 'permission', 'resolve', 'rotate']) {
+  test(`a newer user intent during ${stage} cannot issue/cache the old recovery profile`, async () => {
+    const h = hookHarness(stage, { rotationRequired: stage === 'rotate', knownEntitlement: stage === 'entitlement' ? null : paid });
+    let current = true;
+    const pending = h.render().resolveConnectableVpnProfile('de', { forceRefresh: stage !== 'hot', isCurrentOperation: () => current });
+    const rejected = assert.rejects(pending, error => error.code === 'SESSION_OPERATION_SUPERSEDED');
+    await h.reached.promise; current = false; const before = h.calls.slice(); h.gate.resolve(); await rejected;
+    if (stage === 'rotate') {
+      assert.equal(h.rotationOwners[0](), false);
+      // This session still owns its busy indicator and must release it.
+      assert.deepEqual(h.calls, [...before, before.find(call => call.startsWith('state:'))]);
+      assert.equal(h.render().isKeyRotationBusy, false);
+    } else {
+      assert.deepEqual(h.calls, before);
+    }
+  });
+}
+
+test('recovery key rotation carries its operation owner through the API and local cache', async () => {
+  const h = hookHarness('rotate');
+  let current = true;
+  const pending = h.render().rotateActiveProfile(makeProfile(), 'de', () => current);
+  const rejected = assert.rejects(pending, error => error.code === 'SESSION_OPERATION_SUPERSEDED');
+  await h.reached.promise;
+  assert.equal(h.rotationOwners[0](), true);
+  current = false;
+  // The same account can stay logged in while a newer connection intent wins.
+  const apiOwnerRetired = h.rotationOwners[0]() === false;
+  h.gate.resolve();
+  await rejected;
+  assert.equal(apiOwnerRetired, true, 'native key replacement must see the retired recovery owner');
+  assert.equal(h.render().activeProfile, null);
+  assert.ok(!h.calls.includes('cache-query'));
+  assert.ok(!h.calls.includes('save-hot'));
+});
 
 for (const stage of ['invalidate', 'clear-hot']) {
   test(`late device revocation during ${stage} cannot disconnect B`, async () => {

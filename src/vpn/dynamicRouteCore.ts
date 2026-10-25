@@ -218,10 +218,14 @@ export class DynamicRouteEngine {
     // older AWG profile, even when the device id and location happen to match.
     if (!this.policy || !unexpired(this.policy.expiresAt, nowMs) || !profile.device?.id ||
         !/^HeaderProtectionKey\s*=\s*\S+/m.test(profile.config)) return [];
+    // Old hot profiles can contain pre-placement device metadata. Only use its
+    // node restriction when it describes the endpoint in the native config.
+    const nodeId = profile.device.endpoint && profile.device.endpoint.trim() !== profileEndpoint(profile)
+      ? undefined : profile.device.nodeId;
     return this.policy.candidates.filter((candidate) =>
       candidate.deviceId === profile.device?.id &&
       candidate.locationId.toLowerCase() === profile.locationId.toLowerCase() &&
-      (!profile.device?.nodeId || candidate.nodeId.toLowerCase() === profile.device.nodeId.toLowerCase()) &&
+      (!nodeId || candidate.nodeId.toLowerCase() === nodeId.toLowerCase()) &&
       (!profile.device?.protocol || candidate.protocol.toLowerCase() === profile.device.protocol.toLowerCase()) &&
       unexpired(candidate.expiresAt, nowMs));
   }

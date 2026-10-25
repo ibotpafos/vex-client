@@ -7,7 +7,8 @@ import type { VpnRoutingMode } from '@/vpn/routingPolicy';
 
 export type VpnState = 'connected' | 'connecting' | 'disconnecting' | 'disconnected' | 'error' | 'verifying' | 'degraded';
 export type LeakProtectionState = 'off' | 'armed' | 'blocking';
-export type VpnVerificationReason = 'handshake_pending' | 'handshake_stale' | 'device_usage_degraded' | 'endpoint_failed';
+export type VpnVerificationReason = 'handshake_pending' | 'handshake_stale' | 'device_usage_degraded' | 'endpoint_failed'
+  | 'data_plane_pending' | 'dns_failed' | 'https_failed' | 'data_plane_unavailable';
 
 export type VpnStatus = {
   state: VpnState;
@@ -16,6 +17,8 @@ export type VpnStatus = {
   latestHandshakeEpochMillis?: number;
   leakProtection?: LeakProtectionState;
   verified?: boolean;
+  dataPlaneVerified?: boolean;
+  dataPlaneGeneration?: string;
   verificationReason?: VpnVerificationReason;
 };
 
@@ -104,6 +107,7 @@ const vpnStatusChangedEvent = 'vpn-status-changed';
 
 let cachedVpnStatus: { status: VpnStatus; cachedAt: number } | null = null;
 let inflightVpnStatusPromise: Promise<VpnStatus> | null = null;
+let vpnStatusControlEpoch = 0;
 let nativeVpnEventEmitter: NativeEventEmitter | null = null;
 
 function requireNativeModule(): VexVpnNativeModule {
@@ -145,6 +149,7 @@ export type DisconnectVpnOptions = {
 
 export async function connectVpn(wgQuickConfig: string, options: ConnectVpnOptions = {}): Promise<VpnStatus> {
   const module = requireNativeModule();
+  const controlEpoch = invalidateVpnStatusCache();
   const nativeStatus = module.connectWithRoutingPolicy
     ? await module.connectWithRoutingPolicy(wgQuickConfig, options.antiLeakEnabled !== false,
       options.routingParameters ?? nativeRoutingParameters(wgQuickConfig, options.routingMode ?? 'all_except_ru'),
@@ -158,7 +163,7 @@ export async function connectVpn(wgQuickConfig: string, options: ConnectVpnOptio
     )
     : await module.connect(wgQuickConfig, options.antiLeakEnabled !== false);
   const status = normalizeVpnStatus(nativeStatus);
-  updateCachedVpnStatus(status);
+  if (controlEpoch === vpnStatusControlEpoch) updateCachedVpnStatus(status);
   return status;
 }
 
@@ -188,6 +193,7 @@ function isInstalledVpnApplication(value: unknown): value is InstalledVpnApplica
 
 export async function disconnectVpn(options: DisconnectVpnOptions = {}): Promise<VpnStatus> {
   const module = requireNativeModule();
+  const controlEpoch = invalidateVpnStatusCache();
   const releaseAntiLeak = options.releaseAntiLeak !== false;
   const operation = module.disconnect(releaseAntiLeak);
   const nativeStatus = Platform.OS === 'android'
@@ -197,7 +203,7 @@ export async function disconnectVpn(options: DisconnectVpnOptions = {}): Promise
     )
     : await operation;
   const status = normalizeVpnStatus(nativeStatus);
-  updateCachedVpnStatus(status);
+  if (controlEpoch === vpnStatusControlEpoch) updateCachedVpnStatus(status);
   return status;
 }
 
@@ -212,15 +218,16 @@ export async function getVpnStatus(): Promise<VpnStatus> {
     }
   }
 
+  const controlEpoch = vpnStatusControlEpoch;
   const request = requireNativeModule()
     .status()
     .then((status) => {
       const normalizedStatus = normalizeVpnStatus(status);
-      updateCachedVpnStatus(normalizedStatus);
+      if (controlEpoch === vpnStatusControlEpoch) updateCachedVpnStatus(normalizedStatus);
       return normalizedStatus;
     })
     .finally(() => {
-      inflightVpnStatusPromise = null;
+      if (inflightVpnStatusPromise === request) inflightVpnStatusPromise = null;
     });
 
   if (Platform.OS === 'android') {
@@ -381,6 +388,12 @@ function updateCachedVpnStatus(status: VpnStatus): void {
     status,
     cachedAt: Date.now(),
   };
+}
+
+function invalidateVpnStatusCache(): number {
+  cachedVpnStatus = null;
+  inflightVpnStatusPromise = null;
+  return ++vpnStatusControlEpoch;
 }
 
 function getNativeVpnEventEmitter(): NativeEventEmitter | null {

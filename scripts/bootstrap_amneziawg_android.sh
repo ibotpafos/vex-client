@@ -84,6 +84,10 @@ if clone_or_reset "amneziawg-android" "${android_repo_url}" "${android_ref}"; th
 fi
 # Peel the exact additive SDK patch before checking earlier patches whose
 # context it extends. This keeps repeated bootstrap safe after go mod tidy.
+data_plane_patch="${root_dir}/patches/amnezia/amneziawg-android-data-plane.patch"
+if git -C "${external_dir}/amneziawg-android" apply --reverse --check "${data_plane_patch}" >/dev/null 2>&1; then
+  git -C "${external_dir}/amneziawg-android" apply --reverse "${data_plane_patch}"
+fi
 toolchain_patch="${root_dir}/patches/amnezia/amneziawg-android-routing-go126-toolchain.patch"
 # Peel only the exact previous compiler patch so prepared checkouts can upgrade.
 # Unknown/partial edits still fail the existing apply_patch_once checks below.
@@ -125,6 +129,7 @@ apply_patch_once "${external_dir}/amneziawg-android" "${root_dir}/patches/amnezi
 apply_patch_once "${external_dir}/amneziawg-android" "${toolchain_patch}"
 apply_patch_once "${external_dir}/amneziawg-android" "${root_dir}/patches/amnezia/amneziawg-android-vpn-foreground-service.patch"
 apply_patch_once "${external_dir}/amneziawg-android" "${root_dir}/patches/amnezia/amneziawg-android-native-routing.patch"
+apply_patch_once "${external_dir}/amneziawg-android" "${data_plane_patch}"
 apply_patch_once "${external_dir}/amneziawg-android" "${build_patch}"
 
 routing_bridge="${external_dir}/amneziawg-android/tunnel/tools/libwg-go"

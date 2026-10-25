@@ -3,6 +3,7 @@ import test from 'node:test';
 import { ApiRequestError, requestCancelledError } from '../src/api/error.ts';
 import { recoverVpnConnection } from '../src/vpn/connectionRecovery.ts';
 import { isVpnTransportFallbackError } from '../src/vpn/connectionFallback.ts';
+import { SessionOperationSupersededError } from '../src/vpn/sessionOperation.ts';
 
 function profile(id, locationId = 'de') {
   return { id, locationId, config: `Endpoint = ${locationId}.example.test:51820` };
@@ -41,6 +42,21 @@ function fixture(stage, failure) {
   };
   return { input, calls, mutations };
 }
+
+test('recovery rotation passes the live operation owner to the profile owner', async () => {
+  const { input, calls } = fixture('initial rotation', undefined);
+  let current = true;
+  input.isCurrentOperation = () => current;
+  input.rotateProfile = async (candidate, locationId, isCurrentOperation) => {
+    assert.equal(isCurrentOperation, input.isCurrentOperation);
+    assert.equal(isCurrentOperation(), true);
+    current = false;
+    assert.equal(isCurrentOperation(), false);
+    throw new SessionOperationSupersededError();
+  };
+  await assert.rejects(recoverVpnConnection(input), error => error.code === 'SESSION_OPERATION_SUPERSEDED');
+  assert.deepEqual(calls, ['connect:active']);
+});
 
 for (const stage of ['fresh issuance', 'initial rotation', 'fresh rotation']) {
   for (const [name, createError] of [

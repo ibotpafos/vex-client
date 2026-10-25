@@ -183,6 +183,9 @@ export function useVpnConnectionFlow({
         requireCurrentOperation();
         const status = await waitForVerifiedVpnConnection(startedStatus, getVpnStatus, {
           assertCurrent: requireCurrentOperation,
+          requireDataPlane: Platform.OS === 'android',
+          expectedDataPlaneGeneration: startedStatus.dataPlaneGeneration,
+          timeoutMs: Platform.OS === 'android' ? 25_000 : 10_000,
           // The native backend can briefly expose the previous peer timestamp
           // while replacing a tunnel. Require activity from this attempt. The
           // small tolerance covers second-resolution backend timestamps.
@@ -191,9 +194,8 @@ export function useVpnConnectionFlow({
         });
         const verificationCompletedMs = Date.now();
         requireCurrentOperation();
-        // TODO(android-route-canary): require DNS and HTTPS over a VPN-bound
-        // socket before calling this full data-plane recovery. A plain JS fetch
-        // can bypass the tunnel in per-app mode, so it cannot prove this safely.
+        // Android admission requires fresh peer-bound DNS and TLS/HTTP proof
+        // from the AWG NetTUN, independent of DIRECT and per-app routing.
         if (candidate) {
           dynamicRouteRuntime.recordSuccess(candidate);
           reportRoute(candidate, endpointAttempts.length > 1 ? 'fallback_succeeded' : 'connect_succeeded', 'ok');

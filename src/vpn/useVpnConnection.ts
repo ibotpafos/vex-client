@@ -1041,7 +1041,7 @@ export function useVpnConnection() {
   }, [activeDevice?.endpoint, isAppActive, isConnected]);
 
   useEffect(() => {
-    if (!isAppActive || !isConnected || !session?.accessToken || !activeProfileDeviceId) {
+    if (!isAppActive || !isConnected || vpnStatusCore.verified === false || !session?.accessToken || !activeProfileDeviceId) {
       return undefined;
     }
 
@@ -1062,7 +1062,7 @@ export function useVpnConnection() {
       disposed = true;
       clearInterval(timer);
     };
-  }, [activeProfileDeviceId, isAppActive, isConnected, session?.accessToken, submitVpnDiagnostics]);
+  }, [activeProfileDeviceId, isAppActive, isConnected, vpnStatusCore.verified, session?.accessToken, submitVpnDiagnostics]);
 
 
 
@@ -1081,6 +1081,14 @@ export function useVpnConnection() {
       measureEndpointLatency,
     });
   }, []);
+
+  const beginNativeWatchdogRecovery = useCallback(() => {
+    const generation = ++vpnConnectGenerationRef.current;
+    return () => isCurrentSessionOperation() && vpnConnectGenerationRef.current === generation;
+  }, [isCurrentSessionOperation]);
+
+  const protectFailedNativeWatchdogRecovery = useCallback(() =>
+    disconnectVpn({ releaseAntiLeak: !antiLeakEnabled }), [antiLeakEnabled]);
 
   const handleNativeWatchdogRecoveryStarted = useCallback(() => {
     setVpnError(null);
@@ -1110,6 +1118,9 @@ export function useVpnConnection() {
     fetchDeviceUsage: vpnDeviceUsage,
     isRetryableConnectError: isVpnTransportFallbackError,
     isVpnBusy,
+    isCurrentSessionOperation,
+    beginRecoveryOperation: beginNativeWatchdogRecovery,
+    protectFailedRecovery: protectFailedNativeWatchdogRecovery,
     onRecoveryFailed: setVpnError,
     onRecoveryStarted: handleNativeWatchdogRecoveryStarted,
     onRecoverySucceeded: handleNativeWatchdogRecovery,
@@ -1700,5 +1711,7 @@ function areVpnStatusCoresEqual(left: VpnStatusCore, right: VpnStatusCore): bool
     && left.latestHandshakeEpochMillis === right.latestHandshakeEpochMillis
     && left.leakProtection === right.leakProtection
     && left.verified === right.verified
+    && left.dataPlaneVerified === right.dataPlaneVerified
+    && left.dataPlaneGeneration === right.dataPlaneGeneration
     && left.verificationReason === right.verificationReason;
 }

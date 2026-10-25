@@ -366,6 +366,9 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
         event.putString("source", "android-native")
         event.putString("event", "vpn_status_snapshot")
         event.putMap("status", controller.status().toWritableMap())
+        val identity = Arguments.createMap()
+        controller.peerIdentity().forEach { (key, value) -> identity.putString(key, value) }
+        event.putMap("activePeerIdentity", identity)
         val events = Arguments.createArray()
         events.pushMap(event)
         promise.resolve(events)
@@ -566,6 +569,7 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
 
   private fun VpnConnectionState.toWritableMap(): WritableMap {
     val map = Arguments.createMap()
+    map.putBoolean("dataPlaneVerified", false)
     when (this) {
       is VpnConnectionState.Connected -> {
         val hasTunnelActivity = VpnHandshakeVerifier.isVerified(traffic.latestHandshakeEpochMillis)
@@ -574,9 +578,13 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
         map.putDouble("txBytes", traffic.txBytes.toDouble())
         map.putDouble("latestHandshakeEpochMillis", traffic.latestHandshakeEpochMillis.toDouble())
         map.putString("leakProtection", this.leakProtection.wireValue)
-        map.putBoolean("verified", hasTunnelActivity)
+        map.putBoolean("dataPlaneVerified", dataPlaneVerified)
+        map.putString("dataPlaneGeneration", dataPlaneGeneration)
+        map.putBoolean("verified", hasTunnelActivity && dataPlaneVerified)
         if (!hasTunnelActivity) {
           map.putString("verificationReason", "handshake_pending")
+        } else if (!dataPlaneVerified) {
+          map.putString("verificationReason", verificationReason ?: "data_plane_pending")
         }
       }
       VpnConnectionState.Disconnected -> {

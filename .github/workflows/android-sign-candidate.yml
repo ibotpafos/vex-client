@@ -8,7 +8,12 @@ on:
         required: false
         default: false
       native_routing_source:
-        description: "Sign the fixed reviewed 43cc3ac4 RU DIRECT 1.0.72 source without publication"
+        description: "Sign the fixed reviewed 07058bc Android DNS-cache continuity 1.0.80 candidate without publication"
+        type: boolean
+        required: false
+        default: false
+      dns_reliability_source:
+        description: "Sign the fixed reviewed 683186a Android DNS and cancellation recovery 1.0.82 candidate without publication"
         type: boolean
         required: false
         default: false
@@ -19,7 +24,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   release:
-    if: github.event_name == 'workflow_dispatch' && github.repository == 'ibotpafos/vex-client' && (github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/codex/ru-direct-native-20261013' && github.actor == 'ibotpafos' && inputs.native_routing_source && !inputs.qualified_source))
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'ibotpafos/vex-client' && (github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/codex/ru-direct-native-20261013' && github.actor == 'ibotpafos' && !inputs.qualified_source && ((inputs.native_routing_source && !inputs.dns_reliability_source) || (inputs.dns_reliability_source && !inputs.native_routing_source))))
     environment: android-candidate-signing
     runs-on: ubuntu-24.04
     timeout-minutes: 70
@@ -28,8 +33,11 @@ jobs:
       QUALIFIED_SOURCE_COMMIT: a13526075803986eebc396ec24fdc865d00ab5c0
       QUALIFIED_SOURCE_TREE: a47fd44b6166de98c64263554e6c981c896a8559
       NATIVE_ROUTING_SOURCE_REQUESTED: ${{ inputs.native_routing_source && 'true' || 'false' }}
-      NATIVE_ROUTING_SOURCE_COMMIT: 43cc3ac4b4740049aa3ecbfcc5a20d9c289f7866
-      NATIVE_ROUTING_SOURCE_TREE: 1012559172cf73a99497daa9da2b03a3b886afe9
+      NATIVE_ROUTING_SOURCE_COMMIT: 07058bc912a2c523d79908548047496c723821cd
+      NATIVE_ROUTING_SOURCE_TREE: 1799b429665619ad18d1b6868b49b346741041cf
+      DNS_RELIABILITY_SOURCE_REQUESTED: ${{ inputs.dns_reliability_source && 'true' || 'false' }}
+      DNS_RELIABILITY_SOURCE_COMMIT: 683186a3f8e2bb0a433fba7892fa4ff9db6a1cd9
+      DNS_RELIABILITY_SOURCE_TREE: 673e040b1905901c9b9fc8adddd469ade4eef170
       VEX_RELEASE_USE_LOCAL_CACHE: "1"
       VEX_LOCAL_RELEASE_CACHE_ROOT: ${{ github.workspace }}/.ci-cache
       VEX_LOCAL_CACHE_MOVE_EXISTING: "0"
@@ -55,8 +63,19 @@ jobs:
           echo "sdk_directory=$orchestration_sdk" >> "$GITHUB_OUTPUT"
           export VEX_ANDROID_SDK_ORCHESTRATION="$orchestration_sdk"
           expected_commit="$GITHUB_SHA"
-          if [[ "$QUALIFIED_SOURCE_REQUESTED" == "true" && "$NATIVE_ROUTING_SOURCE_REQUESTED" == "true" ]]; then
+          requested_sources=0
+          for requested in "$QUALIFIED_SOURCE_REQUESTED" "$NATIVE_ROUTING_SOURCE_REQUESTED" "$DNS_RELIABILITY_SOURCE_REQUESTED"; do
+            if [[ "$requested" == "true" ]]; then
+              requested_sources=$((requested_sources + 1))
+            fi
+          done
+          if (( requested_sources > 1 )); then
             echo 'Select exactly one immutable candidate source' >&2; exit 2
+          fi
+          if [[ "$DNS_RELIABILITY_SOURCE_REQUESTED" == "true" ]]; then
+            git checkout --detach "$DNS_RELIABILITY_SOURCE_COMMIT"
+            expected_commit="$DNS_RELIABILITY_SOURCE_COMMIT"
+            test "$(git rev-parse HEAD^{tree})" = "$DNS_RELIABILITY_SOURCE_TREE"
           fi
           if [[ "$NATIVE_ROUTING_SOURCE_REQUESTED" == "true" ]]; then
             git checkout --detach "$NATIVE_ROUTING_SOURCE_COMMIT"
@@ -84,6 +103,7 @@ jobs:
               "native_routing_source_requested": os.environ["NATIVE_ROUTING_SOURCE_REQUESTED"] == "true",
               "sdk_installer_sha256": hashlib.sha256(pathlib.Path(os.environ["VEX_ANDROID_SDK_ORCHESTRATION"], "install_android_sdk_components.sh").read_bytes()).hexdigest(),
               "sdk_packages_sha256": hashlib.sha256(pathlib.Path(os.environ["VEX_ANDROID_SDK_ORCHESTRATION"], "android_sdk_packages.txt").read_bytes()).hexdigest(),
+              "dns_reliability_source_requested": os.environ["DNS_RELIABILITY_SOURCE_REQUESTED"] == "true",
           }
           pathlib.Path(os.environ["RUNNER_TEMP"], "android-source-binding.json").write_text(json.dumps(binding, indent=2)+"\n")
           PY_SOURCE_BINDING
@@ -121,6 +141,9 @@ jobs:
       - run: npm ci
       - name: Quality before signing
         run: npm run check
+      - name: Native data-plane and routing race tests before signing
+        working-directory: native-routing
+        run: go test -race ./...
       - name: Install locked Android SDK
         env:
           VEX_ANDROID_SDK_ORCHESTRATION: ${{ steps.source.outputs.sdk_directory }}
@@ -172,6 +195,7 @@ jobs:
               "sdk_packages_sha256": binding["sdk_packages_sha256"],
               "qualified_source_requested": binding["qualified_source_requested"],
               "native_routing_source_requested": binding["native_routing_source_requested"],
+              "dns_reliability_source_requested": binding["dns_reliability_source_requested"],
               "run_id": os.environ["GITHUB_RUN_ID"],
               "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
               "package": application["android"]["package"],

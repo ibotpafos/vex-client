@@ -237,7 +237,7 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
       }
     }
     if (accountOptions && device.userId && device.userId !== accountOptions.userId) throw new Error('VPN-устройство принадлежит другому аккаунту.');
-    if (accountOptions && pendingAccountKeyPair) {
+    if (accountOptions && (pendingAccountKeyPair || !device.publicKey)) {
       // This recovery belongs to the profile request. Reuse the account
       // owner's fences for both session and caller cancellation, while the
       // shared registration above retains its independent durable receipt.
@@ -248,7 +248,23 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
       const recovered = await withVpnAccountDevice(accessToken, device.id, recoveryOptions, async (currentDevice, identity) => {
         const pending = await pendingVpnAccountKeyPair(identity.keyScope, recoveryOptions.isCurrentSessionOperation);
         requireCurrentOperation();
-        if (!pending) return { device: currentDevice, keyPair: identity.keyPair };
+        if (!pending) {
+          if (currentDevice.publicKey || identity.confirmedKeyDeviceId === undefined) {
+            return { device: currentDevice, keyPair: identity.keyPair };
+          }
+          if (identity.legacyRegistrationPending || !isAccountKeyRecoveryDevice(currentDevice, recoveryOptions) || !isPositiveSafeInteger(currentDevice.keyEpoch)) {
+            throw new VpnProfileKeyChangedError();
+          }
+          if (identity.confirmedKeyDeviceId === currentDevice.id && currentDevice.keyEpoch < (identity.keyPair.keyEpoch ?? 1)) {
+            throw new VpnProfileKeyChangedError();
+          }
+          // The receipt selects known material; an omitted list field still
+          // needs a fresh noncreating proof, including at the same counter.
+          const confirmed = await confirmVpnAccountDeviceKey(accessToken, currentDevice, identity, identity.keyPair.publicKey, { client, options: recoveryOptions });
+          const keyPair = { ...identity.keyPair, keyEpoch: currentDevice.keyEpoch };
+          await saveVpnAccountKeyPair(identity.keyScope, keyPair, recoveryOptions.isCurrentSessionOperation, currentDevice.id);
+          return { device: confirmed, keyPair };
+        }
         const result = await rotateVpnAccountDeviceKey(accessToken, currentDevice, identity, pending, recoveryOptions.isCurrentSessionOperation, { client, options: recoveryOptions });
         if (!identity.legacyRegistrationPending) await clearPendingVpnAccountKeyPair(identity.keyScope, recoveryOptions.isCurrentSessionOperation);
         return result;
@@ -562,6 +578,7 @@ export async function withCurrentVpnProfileKey<T>(accessToken: string, profile: 
     const privateKeys = Array.from(profile.config.matchAll(/^[ \t]*PrivateKey[ \t]*=[ \t]*([^\r\n]*)\r?$/gim), match => match[1].trim());
     if (pending || identity.legacyRegistrationPending || !device ||
         (device.userId && device.userId !== accountOptions.userId) ||
+        (identity.confirmedKeyDeviceId !== undefined && device.id !== identity.confirmedKeyDeviceId) ||
         !nativeVpnDeviceForClient([device], profile.locationId, externalDeviceId, externalDeviceId) ||
         (device.publicKey !== undefined && device.publicKey !== identity.keyPair.publicKey) ||
         (device.keyEpoch !== undefined && (!isNonnegativeSafeInteger(device.keyEpoch) || (device.keyEpoch > 0 && device.keyEpoch < (identity.keyPair.keyEpoch ?? 1)))) ||
@@ -638,7 +655,7 @@ async function commitManagedVpnKey(accessToken: string, deviceId: string, keyPai
   });
   requireCurrentSession(isCurrentSessionOperation);
   if (response.device.id !== deviceId || response.device.public_key !== keyPair.publicKey || response.device.psk_epoch !== keyPair.keyEpoch) throw new Error('Сервер не подтвердил новый ключ VPN.');
-  if (identity) await saveVpnAccountKeyPair(identity.keyScope, keyPair, isCurrentSessionOperation);
+  if (identity) await saveVpnAccountKeyPair(identity.keyScope, keyPair, isCurrentSessionOperation, deviceId);
   else await replaceWireGuardKeyPair(keyPair);
   requireCurrentSession(isCurrentSessionOperation);
   return parseDevice(response.device);
@@ -660,13 +677,55 @@ function requirePendingKeyOwner(identity: VpnAccountIdentity, pending: AccountKe
   }
 }
 
+function isAccountKeyRecoveryDevice(device: VpnDevice, options: VpnAccountIdentityOptions): boolean {
+  return device.userId === options.userId && device.platform === options.platform && device.status === 'active' &&
+    device.protocol === mobileProtocol && device.provisioningMode === 'managed_native' && device.clientKeyOwnership === 'client';
+}
+
+async function confirmVpnAccountDeviceKey(accessToken: string, device: VpnDevice, identity: VpnAccountIdentity, publicKey: string, recovery: AccountKeyRecovery): Promise<VpnDevice> {
+  const { client, options } = recovery;
+  if (!isPositiveSafeInteger(device.keyEpoch)) throw new Error('Не удалось подтвердить версию нового VPN-устройства.');
+  const confirmed = await registerNativeDevice(accessToken, client, { publicKey, keyEpoch: device.keyEpoch }, options.locationId,
+    identity.externalDeviceId, options.isCurrentSessionOperation, identity.installationId, options.userId, true, { deviceId: device.id });
+  requireCurrentSession(options.isCurrentSessionOperation);
+  if (confirmed.id !== device.id || !isAccountKeyRecoveryDevice(confirmed, options) ||
+      confirmed.publicKey !== publicKey || confirmed.keyEpoch !== device.keyEpoch) {
+    throw new Error('Сервер не подтвердил замену VPN-устройства.');
+  }
+  return confirmed;
+}
+
+async function reconcilePendingKeyBase(accessToken: string, device: VpnDevice, identity: VpnAccountIdentity, pending: AccountKeyIntent, recovery: AccountKeyRecovery | undefined): Promise<{ device: VpnDevice; pending: AccountKeyIntent }> {
+  const basePublicKey = pending.basePublicKey || identity.keyPair.publicKey;
+  if (!recovery || pending.deviceId !== device.id || pending.deviceId !== (identity.confirmedDeviceId ?? identity.legacyOwnedDeviceId) ||
+      !isAccountKeyRecoveryDevice(device, recovery.options) || !isPositiveSafeInteger(device.keyEpoch) ||
+      (device.publicKey && device.publicKey !== pending.publicKey && device.publicKey !== basePublicKey)) {
+    throw new Error('Не удалось подтвердить исходный серверный ключ незавершённой ротации VPN.');
+  }
+  let confirmed: VpnDevice;
+  try {
+    // A lost rotation response may already have installed the durable pair.
+    // These signed requests only read the existing binding/key tuple.
+    confirmed = await confirmVpnAccountDeviceKey(accessToken, device, identity, pending.publicKey, recovery);
+  } catch (error) {
+    requireCurrentSession(recovery.options.isCurrentSessionOperation);
+    // Only the established, definitive read-only conflict permits a second
+    // proof. Network/unknown results and malformed receipts retain the intent.
+    if (!(error instanceof ApiRequestError) || error.status !== 409 || error.code !== 'conflict' ||
+        error.message !== 'device_rebind_required' || basePublicKey === pending.publicKey) throw error;
+    confirmed = await confirmVpnAccountDeviceKey(accessToken, device, identity, basePublicKey, recovery);
+  }
+  return { device: confirmed, pending: { ...pending,
+    basePublicKey: confirmed.publicKey === pending.publicKey ? pending.basePublicKey : confirmed.publicKey } };
+}
+
 async function reconcilePendingKeyTarget(accessToken: string, device: VpnDevice, identity: VpnAccountIdentity, pending: AccountKeyIntent, recovery: AccountKeyRecovery | undefined): Promise<{ device: VpnDevice; pending: AccountKeyIntent }> {
   if (!recovery || pending.deviceId !== (identity.confirmedDeviceId ?? identity.legacyOwnedDeviceId)) {
     // TODO(account-key-recovery): older orphan journals without a recorded or
     // migrated source device need an explicit owner-confirmed recovery flow.
     throw new Error('Незавершённая ротация относится к другому VPN-устройству.');
   }
-  const { client, options } = recovery;
+  const { options } = recovery;
   const owned = await vpnDevices(accessToken);
   requireCurrentSession(options.isCurrentSessionOperation);
   // A still-active target remains the owner of its original intent. Account
@@ -675,8 +734,7 @@ async function reconcilePendingKeyTarget(accessToken: string, device: VpnDevice,
     throw new Error('Не удалось подтвердить замену прежнего VPN-устройства.');
   }
   const replacement = owned.find(row => row.id === device.id);
-  if (!replacement || replacement.userId !== options.userId || replacement.platform !== options.platform ||
-      replacement.status !== 'active' || replacement.protocol !== mobileProtocol || replacement.provisioningMode !== 'managed_native' || replacement.clientKeyOwnership !== 'client' ||
+  if (!replacement || !isAccountKeyRecoveryDevice(replacement, options) ||
       !isPositiveSafeInteger(replacement.keyEpoch) ||
       (replacement.publicKey !== identity.keyPair.publicKey && replacement.publicKey !== pending.publicKey)) {
     throw new Error('Не удалось подтвердить ключ нового VPN-устройства.');
@@ -685,14 +743,7 @@ async function reconcilePendingKeyTarget(accessToken: string, device: VpnDevice,
   if (replacement.publicKey === pending.publicKey && replacement.keyEpoch < (pending.keyEpoch ?? 1)) {
     throw new Error('Не удалось подтвердить версию нового VPN-устройства.');
   }
-  const confirmed = await registerNativeDevice(accessToken, client, { ...requestPair, keyEpoch: replacement.keyEpoch }, options.locationId,
-    identity.externalDeviceId, options.isCurrentSessionOperation, identity.installationId, options.userId, true, { deviceId: replacement.id });
-  requireCurrentSession(options.isCurrentSessionOperation);
-  if (confirmed.id !== replacement.id || confirmed.userId !== options.userId || confirmed.platform !== options.platform ||
-      confirmed.status !== 'active' || confirmed.protocol !== mobileProtocol || confirmed.provisioningMode !== 'managed_native' || confirmed.clientKeyOwnership !== 'client' ||
-      confirmed.publicKey !== replacement.publicKey || !isPositiveSafeInteger(confirmed.keyEpoch) || confirmed.keyEpoch < replacement.keyEpoch) {
-    throw new Error('Сервер не подтвердил замену VPN-устройства.');
-  }
+  const confirmed = await confirmVpnAccountDeviceKey(accessToken, replacement, identity, requestPair.publicKey, recovery);
   const transferred = { ...pending, deviceId: confirmed.id,
     basePublicKey: confirmed.publicKey === pending.publicKey ? pending.basePublicKey : confirmed.publicKey,
     ownerPublicKey: pending.ownerPublicKey ?? identity.keyPair.publicKey,
@@ -711,17 +762,18 @@ async function rotateVpnAccountDeviceKey(accessToken: string, device: VpnDevice,
   if (pending?.deviceId && pending.deviceId !== device.id) {
     ({ device, pending } = await reconcilePendingKeyTarget(accessToken, device, identity, pending, recovery));
   }
+  if (pending && device.publicKey !== pending.publicKey && (
+    (pending.basePublicKey === '' && (Boolean(device.publicKey) || (device.keyEpoch !== undefined && device.keyEpoch + 1 !== pending.keyEpoch))) ||
+    (pending.basePublicKey !== '' && !device.publicKey)
+  )) {
+    ({ device, pending } = await reconcilePendingKeyBase(accessToken, device, identity, pending, recovery));
+  }
   if (pending && device.publicKey === pending.publicKey && Number.isSafeInteger(device.keyEpoch) && (device.keyEpoch ?? 0) >= (pending.keyEpoch ?? 1)) {
     // A lost rotation response must not discard its only private key. The
     // signed, owner-filtered response confirms this exact durable intent.
     const confirmed = { ...pending, keyEpoch: device.keyEpoch };
-    await saveVpnAccountKeyPair(identity.keyScope, confirmed, isCurrentSessionOperation);
+    await saveVpnAccountKeyPair(identity.keyScope, confirmed, isCurrentSessionOperation, device.id);
     return { device, keyPair: confirmed };
-  }
-  if (pending?.basePublicKey === '' && device.keyEpoch !== undefined && device.keyEpoch + 1 !== pending.keyEpoch) {
-    // TODO(account-key-recovery): explicitly reconcile an omitted server base
-    // after counter advancement; its absence cannot prove a PSK-only change.
-    throw new Error('Не удалось подтвердить исходный серверный ключ незавершённой ротации VPN.');
   }
   const boundIntent = pending?.deviceId && pending.basePublicKey !== undefined && pending.ownerPublicKey !== undefined;
   // A target-only journal can be upgraded only while the confirmed local pair
@@ -858,7 +910,7 @@ async function registerAccountNativeDevice(accessToken: string, client: VpnClien
   });
 }
 
-async function registerNativeDevice(accessToken: string, client: VpnClientDescriptor, keyPair: WireGuardKeyPair | null, locationId: string, externalDeviceId: string, isCurrentSessionOperation?: () => boolean, installationId = externalDeviceId, accountUserId?: string, requireIdentityProof = false, reconciliation?: { deviceId: string }): Promise<VpnDevice> {
+async function registerNativeDevice(accessToken: string, client: VpnClientDescriptor, keyPair: Pick<WireGuardKeyPair, 'publicKey' | 'keyEpoch'> | null, locationId: string, externalDeviceId: string, isCurrentSessionOperation?: () => boolean, installationId = externalDeviceId, accountUserId?: string, requireIdentityProof = false, reconciliation?: { deviceId: string }): Promise<VpnDevice> {
   const reconcileDeviceId = reconciliation?.deviceId;
   if (reconciliation !== undefined && !isVpnAccountDeviceId(reconcileDeviceId)) {
     throw new Error('Не удалось подтвердить цель сверки VPN-устройства.');

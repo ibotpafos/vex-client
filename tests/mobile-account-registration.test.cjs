@@ -103,6 +103,7 @@ function harness(platform = 'ios', existingStore, nativeRouting = false) {
   let beforeStoreWrite;
   let challengePurpose, challengePurposeSet = false;
   let challengeComplete;
+  let omittedListedPublicKeys = false, reconciliationBinding, reconciliationAttempt;
   let reconciliationSupported = true;
   let challengeOverride = {};
   const store = {
@@ -137,7 +138,7 @@ function harness(platform = 'ios', existingStore, nativeRouting = false) {
   const jsonRequest = async (requestPath, options) => {
     requests.push(requestPath); const owner = ownerFor(options.accessToken);
     if (requestPath.startsWith('/v1/vpn/routing-policy?')) return {}; // Older API: no signed v2 policy.
-    if (requestPath === '/v1/devices') { if (lookupFailure) throw Error('lookup unavailable'); if (holdLookup) await holdLookup.promise; return devices.get(owner) || []; }
+    if (requestPath === '/v1/devices') { if (lookupFailure) throw Error('lookup unavailable'); if (holdLookup) await holdLookup.promise; const rows = devices.get(owner) || []; return omittedListedPublicKeys ? rows.map(row => ({ ...row, public_key: undefined })) : rows; }
     if (requestPath === '/v1/devices/identity-challenge') { if (interruptedConfirmation === 'challenge') throw Error('challenge unavailable'); challengeComplete?.(options.body); return { id: `challenge-${nodeCrypto.randomUUID()}`, nonce: `nonce-${owner}`, purpose: challengePurposeSet ? challengePurpose : options.body.purpose, ...challengeOverride }; }
     if (requestPath === '/v1/devices/register') {
       const body = options.body; registrations.push({ owner, body, idempotency: options.idempotencyKey, retryCount: options.retryCount });
@@ -156,11 +157,19 @@ function harness(platform = 'ios', existingStore, nativeRouting = false) {
       assert.equal(await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, publicKey, Buffer.from(body.identity_signature, 'base64url'), new TextEncoder().encode(payload)), true);
       if (registerError) throw registerError;
       if (body.reconcile_device_id) {
+        reconciliationAttempt?.(body);
         const device = (devices.get(owner) || []).find(row => row.id === body.reconcile_device_id);
         if (!device || device.user_id !== owner || device.status !== 'active' || device.public_key !== body.public_key || device.psk_epoch !== body.key_epoch) throw new ApiRequestError('device_rebind_required', { status: 409, code: 'conflict' });
         if (bindings.has(body.installation_id) && bindings.get(body.installation_id) !== owner) throw new ApiRequestError('device_rebind_required', { status: 409, code: 'conflict' });
-        registrationComplete?.(); if (interruptedConfirmation === 'register') throw Error('registration response lost');
-        return { device_registered: true, binding_status: 'active', trust_level: 'software_secure_store', ...registrationResponse, device: { ...device, ...registrationResponse.device } };
+        if (reconciliationBinding !== undefined && (!reconciliationBinding ||
+            reconciliationBinding.userId !== owner || reconciliationBinding.deviceId !== device.id ||
+            reconciliationBinding.installationId !== body.installation_id || reconciliationBinding.identityPublicKey !== body.identity_public_key ||
+            reconciliationBinding.identityKeyType !== body.identity_key_type || reconciliationBinding.status !== 'active' || reconciliationBinding.trustLevel !== 'software_secure_store')) throw new ApiRequestError('device_rebind_required', { status: 409, code: 'conflict' });
+        // The real reader returns one coherent locked tuple, even if a writer
+        // advances the server after that read and before its response arrives.
+        const receipt = { ...device, ...registrationResponse.device };
+        registrationComplete?.(body); if (interruptedConfirmation === 'register') throw Error('registration response lost');
+        return { device_registered: true, binding_status: 'active', trust_level: 'software_secure_store', ...registrationResponse, device: receipt };
       }
       if (removeLegacyBeforeRegistration && owner === 'B') { devices.set('B', []); removeLegacyBeforeRegistration = false; }
       // The real replay guard reads the current row indexed by its creation
@@ -227,6 +236,9 @@ function harness(platform = 'ios', existingStore, nativeRouting = false) {
     setChallengePurpose: value => { challengePurposeSet = true; challengePurpose = value; },
     onChallengeComplete: value => { challengeComplete = value; },
     setReconciliationSupported: value => { reconciliationSupported = value; },
+    omitListedPublicKeys: value => { omittedListedPublicKeys = value; },
+    setReconciliationBinding: value => { reconciliationBinding = value; },
+    onReconciliationAttempt: value => { reconciliationAttempt = value; },
     setChallengeOverride: value => { challengeOverride = value; },
     interruptConfirmation: value => { interruptedConfirmation = value; },
     removeLegacyBeforeRegister: () => { removeLegacyBeforeRegistration = true; },
@@ -323,7 +335,7 @@ for (const platform of ['android', 'ios']) {
 for (const response of [
   { device_registered: false }, { binding_status: 'legacy' }, { trust_level: 'legacy_unverified' },
   { device: { id: 'another-device' } }, { device: { user_id: 'B' } }, { device: { public_key: key(44) } },
-  { device: { psk_epoch: 0 } }, { device: { psk_epoch: 3 } }, { device: { platform: 'android' } },
+  { device: { psk_epoch: 0 } }, { device: { psk_epoch: 3 } }, { device: { psk_epoch: 5 } }, { device: { platform: 'android' } },
   { device: { status: 'revoked' } }, { device: { client_key_ownership: 'backend' } },
   { device: { provisioning_mode: 'legacy' } }, { device: { client_key_ownership: undefined } },
 ]) test(`replacement recovery refuses a mismatched signed acknowledgement ${JSON.stringify(response)}`, async () => {
@@ -926,6 +938,303 @@ test('an uncommitted placeholder replacement resumes against its saved server an
   assert.equal(restarted.generations(), 0); assert.equal(restarted.rotations.length, 1);
 });
 
+
+async function omittedKeyRotation(platform = 'ios', { owner = 'A', accepted = false, recordedBase = false } = {}) {
+  const original = harness(platform), initial = await original.prepare(owner);
+  original.omitListedPublicKeys(!recordedBase);
+  original.interruptConfirmation(accepted ? 'ordinary-rotate-after-commit' : 'ordinary-rotate-before-commit');
+  await assert.rejects(original.api.rotateManagedVpnKey(owner, initial.device.id, initial.device.keyEpoch, () => true, owner));
+  const mappingName = 'vex.vpn.account_registration.v1.' + Buffer.from(owner).toString('hex');
+  const mapping = JSON.parse(original.saved.get(mappingName));
+  const activeName = `vex.vpn.account_keys.v1.${mapping.keyScope}`, pendingName = activeName + '.pending';
+  const active = original.saved.get(activeName), intent = original.saved.get(pendingName), pending = JSON.parse(intent);
+  assert.equal(pending.basePublicKey, recordedBase ? initial.device.publicKey : '');
+  const row = original.devices.get(owner).find(row => row.id === initial.device.id);
+  row.psk_epoch += 2;
+  const proof = original.registrations.find(record => record.body.installation_id === mapping.installationId);
+  assert.ok(proof?.body.identity_signature, 'fixture must retain its registered signing identity');
+  const restarted = harness(platform, original.saved); restarted.devices.set(owner, original.devices.get(owner));
+  for (const [installation, bindingOwner] of original.bindings) restarted.bindings.set(installation, bindingOwner);
+  const binding = { userId: owner, deviceId: row.id, installationId: mapping.installationId,
+    identityPublicKey: proof.body.identity_public_key, identityKeyType: proof.body.identity_key_type,
+    status: 'active', trustLevel: 'software_secure_store' };
+  restarted.setReconciliationBinding(binding); restarted.omitListedPublicKeys(true);
+  return { original, restarted, owner, initial, row, mapping, mappingName, activeName, pendingName, active, intent, pending, binding };
+}
+
+for (const platform of ['ios', 'android']) {
+  for (const owner of ['A', 'B']) for (const accepted of [false, true]) for (const recordedBase of [false, true]) {
+    test(`omitted-key proof ${platform}/${owner}: ${accepted ? 'confirms accepted intent' : 'rebases proven active key'} with ${recordedBase ? 'recorded' : 'omitted'} base`, async () => {
+      const s = await omittedKeyRotation(platform, { owner, accepted, recordedBase }), h = s.restarted;
+      const beforeCount = h.devices.get(owner).length, beforeBindings = new Map(h.bindings), observedEpoch = s.row.psk_epoch;
+      const recovered = await h.prepare(owner);
+      assert.equal(recovered.device.publicKey, s.pending.publicKey);
+      assert.equal(recovered.device.keyEpoch, observedEpoch + (accepted ? 0 : 1));
+      assert.ok(recovered.config.includes(`PrivateKey = ${s.pending.privateKey}`));
+      assert.equal(h.generations(), 0); assert.equal(h.rotations.length, accepted ? 0 : 1);
+      assert.equal(h.registrations.length, accepted ? 1 : 2);
+      for (const request of h.registrations) {
+        assert.equal(request.body.reconcile_device_id, s.row.id);
+        assert.equal(request.body.installation_id, s.mapping.installationId);
+        assert.equal(request.body.key_epoch, observedEpoch);
+        assert.equal(request.retryCount, 0); assert.match(request.idempotency, /^native-reconcile-/);
+      }
+      assert.equal(h.registrations[0].body.public_key, s.pending.publicKey);
+      if (!accepted) {
+        assert.equal(h.registrations[1].body.public_key, JSON.parse(s.active).publicKey);
+        assert.notEqual(h.registrations[0].idempotency, h.registrations[1].idempotency);
+        assert.equal(h.rotations[0].body.public_key, s.pending.publicKey);
+        assert.equal(h.rotations[0].body.key_epoch, observedEpoch + 1);
+      }
+      assert.equal(h.devices.get(owner).length, beforeCount); assert.deepEqual(h.bindings, beforeBindings);
+      assert.equal(h.saved.has(s.pendingName), false);
+    });
+  }
+
+  for (const accepted of [false, true]) test(`omitted-key proof ${platform}: lost ${accepted ? 'pending' : 'base'} acknowledgement preserves its original journal`, async () => {
+    const s = await omittedKeyRotation(platform, { accepted }), h = s.restarted;
+    h.interruptConfirmation('register');
+    await assert.rejects(h.prepare('A'), /response lost/);
+    assert.equal(h.rotations.length, 0); assert.equal(h.generations(), 0);
+    assert.equal(h.saved.get(s.pendingName), s.intent); assert.equal(h.saved.get(s.activeName), s.active);
+    h.interruptConfirmation(undefined);
+    const recovered = await h.prepare('A');
+    assert.ok(recovered.config.includes(`PrivateKey = ${s.pending.privateKey}`));
+    assert.equal(h.rotations.length, accepted ? 0 : 1); assert.equal(h.generations(), 0);
+  });
+
+  test(`omitted-key proof ${platform}: the recorded server base remains distinct from the local owner`, async () => {
+    const s = await omittedKeyRotation(platform, { recordedBase: true }), h = s.restarted;
+    const pending = { ...s.pending, basePublicKey: key(48) };
+    h.saved.set(s.pendingName, JSON.stringify(pending)); s.row.public_key = pending.basePublicKey;
+    const recovered = await h.prepare('A');
+    assert.equal(h.registrations[1].body.public_key, pending.basePublicKey);
+    assert.notEqual(pending.basePublicKey, JSON.parse(s.active).publicKey);
+    assert.equal(h.rotations[0].body.public_key, pending.publicKey);
+    assert.ok(recovered.config.includes(`PrivateKey = ${pending.privateKey}`));
+    assert.equal(h.rotations.length, 1); assert.equal(h.generations(), 0);
+    assert.equal(h.saved.has(s.pendingName), false);
+  });
+
+  test(`omitted-key proof ${platform}: lost rebased rotation response confirms its existing pair on restart`, async () => {
+    const s = await omittedKeyRotation(platform), h = s.restarted;
+    h.interruptConfirmation('ordinary-rotate-after-commit');
+    await assert.rejects(h.prepare('A'), /response lost/);
+    const durable = JSON.parse(h.saved.get(s.pendingName));
+    assert.equal(durable.publicKey, s.pending.publicKey); assert.equal(durable.privateKey, s.pending.privateKey);
+    assert.equal(durable.basePublicKey, JSON.parse(s.active).publicKey);
+    assert.equal(h.rotations.length, 1); assert.equal(h.saved.get(s.activeName), s.active);
+    h.interruptConfirmation(undefined);
+    const recovered = await h.prepare('A');
+    assert.ok(recovered.config.includes(`PrivateKey = ${s.pending.privateKey}`));
+    assert.equal(h.rotations.length, 1, 'lost accepted result must not create a second rotation');
+    assert.equal(h.generations(), 0); assert.equal(h.saved.has(s.pendingName), false);
+  });
+
+  test(`omitted-key proof ${platform}: cancellation after conflict cannot dispatch a second proof`, async () => {
+    const s = await omittedKeyRotation(platform), h = s.restarted, controller = new AbortController();
+    h.onReconciliationAttempt(body => { if (body.public_key === s.pending.publicKey) controller.abort(); });
+    await assert.rejects(h.prepare('A', { signal: controller.signal }), error => error.code === 'request_cancelled');
+    assert.equal(h.registrations.length, 1); assert.equal(h.rotations.length, 0);
+    assert.equal(h.saved.get(s.activeName), s.active); assert.equal(h.saved.get(s.pendingName), s.intent);
+  });
+
+  test(`omitted-key proof ${platform}: a counter advance after receipt retains the same key for the next attempt`, async () => {
+    const s = await omittedKeyRotation(platform), h = s.restarted; let advance = true;
+    h.onRegistrationComplete(() => { if (advance) { advance = false; s.row.psk_epoch++; } });
+    await assert.rejects(h.prepare('A'), /next device epoch/);
+    assert.equal(h.saved.get(s.activeName), s.active);
+    assert.equal(JSON.parse(h.saved.get(s.pendingName)).publicKey, s.pending.publicKey);
+    h.onRegistrationComplete(undefined);
+    const recovered = await h.prepare('A');
+    assert.ok(recovered.config.includes(`PrivateKey = ${s.pending.privateKey}`));
+    assert.equal(h.generations(), 0); assert.equal(h.rotations.length, 2);
+  });
+
+  test(`omitted-key proof ${platform}: a later uncached preparation must not rotate its confirmed key again`, async () => {
+    const s = await omittedKeyRotation(platform), h = s.restarted;
+    const first = await h.prepare('A');
+    const requests = h.rotations.length;
+    const later = await h.prepare('A');
+    assert.equal(later.device.publicKey, first.device.publicKey);
+    assert.equal(later.device.keyEpoch, first.device.keyEpoch);
+    assert.ok(later.config.includes(`PrivateKey = ${s.pending.privateKey}`));
+    assert.equal(h.rotations.length, requests); assert.equal(h.generations(), 0);
+  });
+
+  for (const accepted of [false, true]) test(`omitted-key receipt ${platform}: concurrent borrowers and restart retain the confirmed pair (${accepted})`, async () => {
+    const s = await omittedKeyRotation(platform, { accepted }), h = s.restarted;
+    const profiles = await Promise.all([h.prepare('A'), h.prepare('A')]);
+    for (const profile of profiles) assert.equal(profile.device.publicKey, s.pending.publicKey);
+    assert.equal(h.rotations.length, accepted ? 0 : 1); assert.equal(h.generations(), 0);
+    const active = JSON.parse(h.saved.get(s.activeName));
+    assert.equal(active.confirmedKeyDeviceId, s.row.id);
+    assert.equal(active.publicKey, s.pending.publicKey); assert.equal(active.privateKey, s.pending.privateKey);
+    const restored = harness(platform, h.saved); restored.devices.set('A', h.devices.get('A'));
+    restored.omitListedPublicKeys(true); restored.setReconciliationBinding(s.binding);
+    const recovered = await restored.prepare('A');
+    assert.ok(recovered.config.includes(`PrivateKey = ${s.pending.privateKey}`));
+    assert.equal(restored.rotations.length, 0); assert.equal(restored.registrations.length, 1);
+    assert.equal(restored.generations(), 0);
+  });
+
+  test(`omitted-key receipt ${platform}: later PSK advancement confirms the same key once`, async () => {
+    const s = await omittedKeyRotation(platform), h = s.restarted;
+    await h.prepare('A'); const rotations = h.rotations.length, registrations = h.registrations.length;
+    s.row.psk_epoch += 2;
+    const profile = await h.prepare('A');
+    assert.equal(profile.device.keyEpoch, s.row.psk_epoch); assert.equal(profile.device.publicKey, s.pending.publicKey);
+    const active = JSON.parse(h.saved.get(s.activeName));
+    assert.equal(active.keyEpoch, s.row.psk_epoch); assert.equal(active.confirmedKeyDeviceId, s.row.id);
+    assert.equal(active.privateKey, s.pending.privateKey); assert.equal(h.saved.has(s.pendingName), false);
+    await h.prepare('A');
+    assert.equal(h.registrations.length, registrations + 2, 'each omitted-key prepare needs a fresh noncreating proof');
+    assert.equal(h.rotations.length, rotations); assert.equal(h.generations(), 0);
+  });
+
+  for (const failure of ['network', 'newer-key', 'storage', 'cancelled', 'invalid-ack']) test(`omitted-key receipt ${platform}: later ${failure} cannot issue another key`, async () => {
+    const s = await omittedKeyRotation(platform), h = s.restarted;
+    await h.prepare('A'); const active = h.saved.get(s.activeName), rotations = h.rotations.length;
+    s.row.psk_epoch += 2;
+    const controller = new AbortController();
+    if (failure === 'network') h.interruptConfirmation('register');
+    if (failure === 'newer-key') s.row.public_key = key(44);
+    if (failure === 'storage') h.setActiveKeyWriteFailure(true);
+    if (failure === 'cancelled') h.onRegistrationComplete(() => controller.abort());
+    if (failure === 'invalid-ack') h.setRegistrationResponse({ device: { psk_epoch: s.row.psk_epoch + 1 } });
+    const row = JSON.stringify(s.row);
+    await assert.rejects(h.prepare('A', { signal: controller.signal }));
+    assert.equal(h.saved.get(s.activeName), active); assert.equal(h.saved.has(s.pendingName), false);
+    assert.equal(h.rotations.length, rotations); assert.equal(h.generations(), 0);
+    assert.equal(JSON.stringify(s.row), row);
+  });
+
+  test(`omitted-key receipt ${platform}: another target at the same counter still needs proof`, async () => {
+    const s = await omittedKeyRotation(platform), h = s.restarted;
+    await h.prepare('A'); const rotations = h.rotations.length, registrations = h.registrations.length;
+    s.row.id = 'confirmed-replacement'; s.binding.deviceId = s.row.id;
+    const profile = await h.prepare('A');
+    assert.equal(profile.device.id, s.row.id); assert.equal(profile.device.publicKey, s.pending.publicKey);
+    assert.equal(h.registrations.length, registrations + 1); assert.equal(h.rotations.length, rotations);
+    assert.equal(JSON.parse(h.saved.get(s.activeName)).confirmedKeyDeviceId, s.row.id);
+    assert.equal(h.generations(), 0);
+  });
+
+  test(`omitted-key receipt ${platform}: same-target epoch rollback cannot lower the durable floor`, async () => {
+    const s = await omittedKeyRotation(platform), h = s.restarted;
+    await h.prepare('A'); const active = h.saved.get(s.activeName), rotations = h.rotations.length, proofs = h.registrations.length;
+    s.row.psk_epoch--;
+    await assert.rejects(h.prepare('A'), error => error.code === 'VPN_PROFILE_KEY_CHANGED');
+    assert.equal(h.saved.get(s.activeName), active); assert.equal(h.saved.has(s.pendingName), false);
+    assert.equal(h.rotations.length, rotations); assert.equal(h.registrations.length, proofs);
+    assert.equal(h.generations(), 0);
+  });
+
+  test(`omitted-key receipt ${platform}: same-counter receipt cannot substitute for a fresh key proof`, async () => {
+    const s = await omittedKeyRotation(platform), h = s.restarted;
+    await h.prepare('A'); const active = h.saved.get(s.activeName), rotations = h.rotations.length, proofs = h.registrations.length;
+    s.row.public_key = key(45);
+    await assert.rejects(h.prepare('A'), /device_rebind_required/);
+    assert.equal(h.saved.get(s.activeName), active); assert.equal(h.saved.has(s.pendingName), false);
+    assert.equal(h.rotations.length, rotations); assert.equal(h.registrations.length, proofs + 1);
+    assert.equal(h.generations(), 0);
+  });
+
+  test(`omitted-key receipt ${platform}: lower-counter replacement cannot admit the old target cache`, async () => {
+    const s = await omittedKeyRotation(platform), h = s.restarted;
+    const prior = await h.prepare('A');
+    s.row.id = 'lower-counter-replacement'; s.row.psk_epoch = 1; s.binding.deviceId = s.row.id;
+    const replacement = await h.prepare('A'); let dispatches = 0;
+    assert.equal(replacement.device.keyEpoch, 1); assert.equal(replacement.device.publicKey, s.pending.publicKey);
+    await assert.rejects(h.api.withCurrentVpnProfileKey('A', { ...prior, locationId: 'de' }, async () => { dispatches++; }, { userId: 'A' }), error => error.code === 'VPN_PROFILE_KEY_CHANGED');
+    assert.equal(dispatches, 0);
+    await h.api.withCurrentVpnProfileKey('A', { ...replacement, locationId: 'de' }, async () => { dispatches++; }, { userId: 'A' });
+    assert.equal(dispatches, 1); assert.equal(h.generations(), 0);
+  });
+}
+
+test('confirmed key receipt is optional, atomic and readable by the prior key validator', async () => {
+  const h = harness(), initial = await h.prepare('A');
+  const mapping = JSON.parse(h.saved.get('vex.vpn.account_registration.v1.41'));
+  const name = `vex.vpn.account_keys.v1.${mapping.keyScope}`;
+  const pair = JSON.parse(h.saved.get(name)); delete pair.confirmedKeyDeviceId;
+  await h.scoped.saveVpnAccountKeyPair(mapping.keyScope, pair, () => true, initial.device.id);
+  const raw = JSON.parse(h.saved.get(name));
+  assert.deepEqual(h.scoped.validatedVpnAccountKeyPair(raw), pair);
+  // Frozen d063 V1 reader: extra fields were ignored by the released grammar.
+  // Keep this oracle portable; CI must not depend on a local parent checkout.
+  const legacyRead = value => {
+    const validKey = key => typeof key === 'string' && /^[a-zA-Z0-9+/]{43}=$/.test(key) && atob(key).length === 32 && btoa(atob(key)) === key;
+    if (!value || !validKey(value.privateKey) || !validKey(value.publicKey) || !Number.isSafeInteger(value.keyEpoch) || (value.keyEpoch ?? 0) < 1) throw Error('Сохранённый ключ VPN повреждён.');
+    return { privateKey: value.privateKey, publicKey: value.publicKey, keyEpoch: value.keyEpoch };
+  };
+  assert.deepEqual(legacyRead(raw), pair);
+  const identity = await h.scoped.getOrCreateVpnAccountIdentity({ userId: 'A', platform: 'ios', locationId: 'de', loadOwnedDevices: async () => [], isCurrentSessionOperation: () => true });
+  assert.equal(identity.confirmedKeyDeviceId, initial.device.id); assert.deepEqual(identity.keyPair, pair);
+  h.setActiveKeyWriteFailure(true);
+  await assert.rejects(h.scoped.saveVpnAccountKeyPair(mapping.keyScope, { ...pair, publicKey: key(44) }, () => true, 'other-device'), /persistence/);
+  assert.deepEqual(JSON.parse(h.saved.get(name)), raw, 'failed write must not detach receipt from its pair');
+  h.setActiveKeyWriteFailure(false);
+  await h.scoped.saveVpnAccountKeyPair(mapping.keyScope, pair);
+  assert.deepEqual(JSON.parse(h.saved.get(name)), pair, 'unconfirmed writes cannot inherit a receipt');
+});
+
+for (const receipt of ['', ' ', 1, null, '../other']) test(`invalid persisted key receipt fails closed: ${JSON.stringify(receipt)}`, async () => {
+  const s = await omittedKeyRotation(), h = s.restarted;
+  await h.prepare('A'); const active = JSON.parse(h.saved.get(s.activeName)); active.confirmedKeyDeviceId = receipt;
+  h.saved.set(s.activeName, JSON.stringify(active)); const rotations = h.rotations.length;
+  await assert.rejects(h.prepare('A'));
+  assert.equal(h.rotations.length, rotations); assert.equal(h.generations(), 0);
+  assert.equal(h.saved.get(s.activeName), JSON.stringify(active));
+});
+
+for (const change of ['unrecorded-source', 'foreign-owner', 'missing-owner', 'wrong-platform', 'inactive', 'unknown-key', 'invalid-counter', 'missing-binding', 'foreign-binding', 'wrong-identity', 'replaced-binding', 'legacy-trust', 'old-challenge']) {
+  test(`omitted-key proof refuses ${change}`, async () => {
+    const s = await omittedKeyRotation(), h = s.restarted;
+    if (change === 'unrecorded-source') { const mapping = JSON.parse(h.saved.get(s.mappingName)); delete mapping.confirmedDeviceId; delete mapping.legacyOwnedDeviceId; h.saved.set(s.mappingName, JSON.stringify(mapping)); }
+    if (change === 'foreign-owner') s.row.user_id = 'B';
+    if (change === 'missing-owner') delete s.row.user_id;
+    if (change === 'wrong-platform') s.row.platform = 'android';
+    if (change === 'inactive') s.row.status = 'revoked';
+    if (change === 'unknown-key') s.row.public_key = key(44);
+    if (change === 'invalid-counter') s.row.psk_epoch = 0;
+    if (change === 'missing-binding') h.setReconciliationBinding(null);
+    if (change === 'foreign-binding') s.binding.userId = 'B';
+    if (change === 'wrong-identity') s.binding.identityPublicKey = 'another-identity';
+    if (change === 'replaced-binding') s.binding.status = 'replaced';
+    if (change === 'legacy-trust') s.binding.trustLevel = 'legacy_unverified';
+    if (change === 'old-challenge') h.setChallengePurpose('register');
+    const rows = JSON.stringify(h.devices.get('A'));
+    await assert.rejects(h.api.rotateManagedVpnKey('A', s.row.id, s.row.psk_epoch, () => true, 'A'));
+    assert.equal(h.rotations.length, 0); assert.equal(h.generations(), 0);
+    assert.equal(h.saved.get(s.activeName), s.active); assert.equal(h.saved.get(s.pendingName), s.intent);
+    assert.equal(JSON.stringify(h.devices.get('A')), rows);
+    assert.ok(h.registrations.every(request => request.body.reconcile_device_id === s.row.id), 'must not fall back to creating registration');
+  });
+}
+
+for (const response of [
+  { device_registered: false }, { binding_status: 'legacy' }, { trust_level: 'legacy_unverified' },
+  { device: { id: 'other' } }, { device: { user_id: 'B' } }, { device: { public_key: key(44) } },
+  { device: { psk_epoch: 0 } }, { device: { psk_epoch: 3 } }, { device: { psk_epoch: 5 } },
+  { device: { platform: 'android' } }, { device: { status: 'revoked' } },
+  { device: { provisioning_mode: 'legacy' } }, { device: { client_key_ownership: 'backend' } },
+]) test(`omitted-key proof rejects a mismatched receipt ${JSON.stringify(response)}`, async () => {
+  const s = await omittedKeyRotation('ios', { accepted: true }), h = s.restarted;
+  h.setRegistrationResponse(response);
+  await assert.rejects(h.prepare('A'));
+  assert.equal(h.rotations.length, 0); assert.equal(h.generations(), 0);
+  assert.equal(h.saved.get(s.activeName), s.active); assert.equal(h.saved.get(s.pendingName), s.intent);
+});
+
+for (const failure of ['network', 'maintenance', 'forbidden', 'not-found', 'generic-conflict', 'legacy-conflict']) test(`omitted-key proof cannot use ${failure} as evidence for another key`, async () => {
+  const s = await omittedKeyRotation(), h = s.restarted;
+  const error = failure === 'network' ? Error('network unavailable')
+    : new h.ApiRequestError(failure === 'legacy-conflict' ? 'device_rebind_required' : failure, { status: { maintenance: 503, forbidden: 403, 'not-found': 404, 'generic-conflict': 409, 'legacy-conflict': 409 }[failure], code: failure === 'legacy-conflict' ? undefined : 'conflict' });
+  h.setRegisterError(error); await assert.rejects(h.prepare('A'));
+  assert.equal(h.rotations.length, 0); assert.equal(h.saved.get(s.pendingName), s.intent); assert.equal(h.saved.get(s.activeName), s.active);
+  assert.equal(h.registrations.length, 1, 'uncertainty must not start another proof');
+});
 
 for (const advanced of [false, true]) {
   test(`an omitted server base key ${advanced ? 'cannot authorize a counter rebase' : 'retains exact-counter recovery'}`, async () => {

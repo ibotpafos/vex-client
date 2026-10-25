@@ -16,6 +16,7 @@ export type VpnAccountIdentity = {
   keyScope: string;
   legacyOwnedDeviceId?: string;
   confirmedDeviceId?: string;
+  confirmedKeyDeviceId?: string;
   legacyRegistrationPending?: boolean;
   keyPair: WireGuardKeyPair;
   ownedDevices?: VpnDevice[];
@@ -49,10 +50,13 @@ export function validatedVpnAccountKeyPair(value: unknown): WireGuardKeyPair {
   if (!pair || !validKey(pair.privateKey) || !validKey(pair.publicKey) || !Number.isSafeInteger(pair.keyEpoch) || (pair.keyEpoch ?? 0) < 1) throw new Error('Сохранённый ключ VPN повреждён.');
   return { privateKey: pair.privateKey, publicKey: pair.publicKey, keyEpoch: pair.keyEpoch };
 }
-export async function saveVpnAccountKeyPair(keyScope: string, pair: WireGuardKeyPair, isCurrentSessionOperation?: () => boolean): Promise<void> {
+export async function saveVpnAccountKeyPair(keyScope: string, pair: WireGuardKeyPair, isCurrentSessionOperation?: () => boolean, confirmedKeyDeviceId?: string): Promise<void> {
   const options = { isCurrentSessionOperation };
   requireCurrent(options);
-  await SecureStore.setItemAsync(keyPrefix + requireScope(keyScope), JSON.stringify(validatedVpnAccountKeyPair(pair)));
+  // Bind a proven device to the exact pair in the same atomic blob. A source
+  // pointer written before a rotation is not evidence that its key was applied.
+  const receipt = confirmedKeyDeviceId === undefined ? {} : { confirmedKeyDeviceId: requireScope(confirmedKeyDeviceId) };
+  await SecureStore.setItemAsync(keyPrefix + requireScope(keyScope), JSON.stringify({ ...validatedVpnAccountKeyPair(pair), ...receipt }));
   requireCurrent(options);
 }
 type PendingVpnAccountKeyPair = WireGuardKeyPair & { deviceId?: string; basePublicKey?: string; ownerPublicKey?: string };
@@ -137,7 +141,11 @@ async function resolveAccountIdentity(options: VpnAccountIdentityOptions): Promi
     if (mapping.legacyRegistrationPending !== undefined && typeof mapping.legacyRegistrationPending !== 'boolean') throw new Error('Сохранённая регистрация VPN повреждена.');
     const legacyRegistrationPending = mapping.legacyRegistrationPending === undefined ? Boolean(legacyOwnedDeviceId) : mapping.legacyRegistrationPending;
     const confirmedDeviceId = mapping.confirmedDeviceId === undefined ? undefined : requireScope(mapping.confirmedDeviceId);
-    return { installationId, externalDeviceId, keyScope, legacyOwnedDeviceId, confirmedDeviceId, legacyRegistrationPending, keyPair: validatedVpnAccountKeyPair(JSON.parse(stored)) };
+    const storedPair = JSON.parse(stored) as WireGuardKeyPair & { confirmedKeyDeviceId?: unknown };
+    const keyPair = validatedVpnAccountKeyPair(storedPair);
+    const confirmedKeyDeviceId = storedPair.confirmedKeyDeviceId === undefined ? undefined : requireScope(storedPair.confirmedKeyDeviceId);
+    return { installationId, externalDeviceId, keyScope, legacyOwnedDeviceId, confirmedDeviceId, legacyRegistrationPending, keyPair,
+      ...(confirmedKeyDeviceId === undefined ? {} : { confirmedKeyDeviceId }) };
   }
   // A successful live lookup is required before adopting or allocating an ID.
   const ownedDevices = await options.loadOwnedDevices();

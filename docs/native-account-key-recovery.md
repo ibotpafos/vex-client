@@ -43,11 +43,47 @@ borrower does not interrupt its durable confirmation or another live borrower.
 Profile-owned recovery combines the request cancellation and session checks
 without applying that request lifetime to the shared registration.
 
-Recovery does not automatically replay an uncertain registration or rotation.
+When the device list omits its public key after an epoch advance, recovery uses
+the same noncreating proof. It first confirms the pending public key, because a
+lost rotation reply may already have committed it. Only the specific
+`409 conflict / device_rebind_required` response permits checking the recorded
+base key (or the existing local key when no base was recorded). Other errors,
+unsupported proof and malformed acknowledgements retain the journal and stop.
+A confirmed base rebases the existing intent to the next device epoch; it never
+generates another private pair. The acknowledgement must match the requested
+device, public key and exact epoch.
+
+After a successful key acknowledgement, the active V1 key blob atomically stores
+an optional `confirmedKeyDeviceId` alongside the existing key triple. Existing
+V1 blobs remain readable, and the preceding V1 reader ignores this extra field.
+An unconfirmed key save clears the receipt. Storage failure preserves the
+previous blob. The registration mapping's source pointer is separate: saving
+that pointer alone does not prove that a key was applied.
+
+For later uncached preparations, concurrent borrowers and restarts, an omitted
+list key with a receipt requires a fresh signed noncreating proof, even when the
+epoch is unchanged. Its failure cannot fall back to sync or rotation. A lower
+epoch on the same device is rejected before proof or persistence; another
+confirmed device has its own epoch sequence. Native profile admission checks
+the receipt's device ID, preventing a cached profile for the preceding target
+from reaching the native callback after replacement.
+
+Registration and recovery disable automatic transport retries. A later
+preparation may recover and resend an existing durable rotation intent using
+the same private pair; a lost response may already have committed that intent.
 It does not transfer an older orphan journal whose source cannot be confirmed
 from the account mapping or its existing migration record. That case still
-requires an explicit owner recovery flow. An omitted server base key after a
-counter advance is also unfinished; neither case permits guessing key ownership.
+requires an explicit owner recovery flow. Uncertain profile issuance and later
+watchdog outcomes remain separate work. The omitted-base recovery above needs
+the supporting noncreating API capability before client rollout; unavailable
+proof stops safely without creating another device or key.
+
+The current portable account suite passes 256 tests on the iOS/Android fixtures.
+The exact preceding source passes 189 and fails 67 of these assertions; six
+additional receipt-guard cases reproduce against the intermediate implementation.
+Full `npm run check` passes with 1082 standard Node PASS events, one existing
+installed-Expo Swift-validator skip, 48 Python tests, types, lint and portable
+CI/release checks. Counts overlap; skipped/device/runtime paths remain unaccepted.
 
 Run `node --test tests/mobile-account-registration.test.cjs
 tests/session-vpn-profile-owner-race.test.cjs` for account isolation, both mobile

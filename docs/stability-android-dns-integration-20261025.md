@@ -53,14 +53,27 @@ not a claim that EOAS is dead code. Existing dependency audit findings remain
 open. Android metadata consistently identifies the imported private
 1.0.82/build90/code1008290 candidate; no artifact is published by this merge.
 
+## Numeric-port analysis follow-up
+
+CodeQL on the initial combined commit reported an integer-conversion alert in
+the imported adapter. Its existing parser already rejects values outside
+0..65535. The conversion now immediately follows that check in the parsing
+branch, and the common port variable has type uint16 with the existing zero
+default for ping. Atoi's accepted signed-zero, positive-sign and leading-zero
+forms remain compatible. Thirty-two literal-address/cancelled-context cases
+pass against both the preceding and clarified implementation; they perform no
+packet I/O. This is not a reproduced range-bypass vulnerability. Remote CodeQL
+confirmation must come from the follow-up source, without suppressing the alert.
+
 ## Verification and limits
 
 - Full `npm run check`: **1116 standard Node PASS events, one existing installed-
   Expo Swift-validator SKIP, zero FAIL**, plus **48 Python tests**, type checking,
   ESLint, upstream and portable CI/release contracts.
-- Full Go1.26.10 routing suite with `-race -count=1`: **101 test PASS events**,
+- Full Go1.26.10 routing suite with `-race -count=1`: **134 test PASS events**,
   zero test failures or skips. These are userspace/in-memory fixtures and do not
-  change the active VPN, OS routes, DNS or PF.
+  change the active VPN, OS routes, DNS or PF. The initial merge had 101; the
+  additional 33 events are the numeric-port parent test and its 32 cases. Vet passes.
 - Focused recovery/key-owner suite: **88 PASS**; it overlaps the full check.
   The preceding callback fails the added stale-rotation control.
 - Cached Kotlin2.1.20/JDK17 compilation of the exact two new pure Kotlin models

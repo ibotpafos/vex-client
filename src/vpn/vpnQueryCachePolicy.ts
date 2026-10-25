@@ -1,5 +1,6 @@
 export const baseVpnQueryCacheSchemaVersion = 1;
-export const locationCatalogCacheSchemaVersion = 2;
+// Earlier catalog projections discarded explicit AWG3 capacity. Refresh those caches.
+export const locationCatalogCacheSchemaVersion = 3;
 
 export type VpnQueryCacheEntry<T> = {
   savedAtMs: number;

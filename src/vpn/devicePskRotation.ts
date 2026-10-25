@@ -1,4 +1,5 @@
 import type { VpnProfile } from './profile';
+import { isPositiveSafeInteger } from './profileNumbers';
 
 export type DevicePSKRotationEvent = {
   eventId: string;
@@ -73,7 +74,7 @@ export function parseDevicePSKRotationEvent(input: Record<string, unknown>): Dev
 }
 
 function eventMatchesDevice(event: DevicePSKRotationEvent, activeDeviceId: string): boolean {
-  return Boolean(activeDeviceId.trim()) && event.deviceId === activeDeviceId.trim();
+  return isPositiveSafeInteger(event.profileVersion) && Boolean(activeDeviceId.trim()) && event.deviceId === activeDeviceId.trim();
 }
 
 function requireMatchingStagedProfile(event: DevicePSKRotationEvent, staged: StagedDevicePSKProfile): void {
@@ -96,6 +97,7 @@ function stringField(input: Record<string, unknown>, key: string): string {
 
 function integerField(input: Record<string, unknown>, key: string): number {
   const value = input[key];
-  const parsed = typeof value === 'number' ? value : Number.parseInt(String(value ?? ''), 10);
-  return Number.isInteger(parsed) ? parsed : 0;
+  const parsed = typeof value === 'number' ? value
+    : typeof value === 'string' && /^\d+$/.test(value.trim()) ? Number(value.trim()) : 0;
+  return isPositiveSafeInteger(parsed) ? parsed : 0;
 }

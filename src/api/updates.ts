@@ -1,5 +1,6 @@
 import { VEX_API_CLIENT_VERSION, VEX_CONFIG_SCHEMA_VERSION } from '@/native/appInfo';
 import { jsonRequest, vexApiBaseUrl, absolutizeUrl } from './client';
+import { ApiRequestError } from './error';
 import { normalizeUpdateCheckVersion, validateManualUpdatePayloadForBaseUrl } from './updatePreflight';
 import {
   type AppUpdateCheckResult,
@@ -24,14 +25,16 @@ export async function appUpdateCheck(input: {
   apiClientVersion?: string;
   configSchemaVersion?: number;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<AppUpdateCheckResult> {
-  const { timeoutMs, accessToken, ...requestBody } = input;
+  const { timeoutMs, accessToken, signal, ...requestBody } = input;
   const appVersion = normalizeUpdateCheckVersion(input.appVersion);
   const item = await jsonRequest<AppUpdateCheckResponseDTO>('/v1/app/update/check', {
     method: 'POST',
     accessToken,
     suppressErrorLog: true,
     timeout: timeoutMs,
+    ...(signal ? { signal } : {}),
     headers: { 'X-Vex-App-Version': appVersion, 'X-Vex-Account-Updates': '1' },
     body: {
       ...requestBody,
@@ -40,11 +43,18 @@ export async function appUpdateCheck(input: {
       configSchemaVersion: input.configSchemaVersion ?? VEX_CONFIG_SCHEMA_VERSION,
     },
   });
+  // Go always emits both decision flags. Missing/null or coerced values must
+  // not turn malformed metadata into a successful "no update" cache entry.
+  if (!item || typeof item !== 'object' || Array.isArray(item)
+    || typeof item.updateAvailable !== 'boolean' || typeof item.required !== 'boolean'
+    || (item.currentBuildBlocked != null && typeof item.currentBuildBlocked !== 'boolean')) {
+    throw new ApiRequestError('Сервер вернул некорректные данные обновления.', { status: 502, code: 'api_response_invalid' });
+  }
   return {
-    updateAvailable: Boolean(item.updateAvailable),
+    updateAvailable: item.updateAvailable,
     delivery: item.delivery,
-    required: Boolean(item.required),
-    currentBuildBlocked: Boolean(item.currentBuildBlocked),
+    required: item.required,
+    currentBuildBlocked: item.currentBuildBlocked ?? false,
     latestVersion: item.latestVersion || '',
     latestBuild: item.latestBuild ?? 0,
     minSupportedBuild: item.minSupportedBuild ?? 0,

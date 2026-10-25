@@ -56,7 +56,9 @@ internal static class FullTunnelAcceptance
         Require(await TcpReachableAsync(source, index, outside, TimeSpan.FromSeconds(8), token),
             "fixture_full_physical_tcp_baseline_unavailable");
         result["full_physical_tcp_prebaseline_verified"] = true;
-        await ProbeControlHttpsAsync(source, index, controlAddresses[0], token);
+        result["stage"] = "full-control-https-baseline";
+        await ProbeControlHttpsAsync(source, index, controlAddresses[0], result, token);
+        result["stage"] = "full-physical-dns-baseline";
         var physicalDns = nic.GetIPProperties().DnsAddresses.FirstOrDefault(address =>
             address.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(address) &&
             !address.Equals(source) && !controlAddresses.Contains(address));
@@ -119,7 +121,7 @@ internal static class FullTunnelAcceptance
                 Require(admitted.TryGetValue(ControlHost, out var addresses), "fixture_full_control_host_not_admitted");
                 var control = addresses!.FirstOrDefault(address => address.AddressFamily == AddressFamily.InterNetwork);
                 Require(control is not null && !control.Equals(outside), "fixture_full_control_address_invalid");
-                try { await ProbeControlHttpsAsync(source, index, control!, leaseToken); }
+                try { await ProbeControlHttpsAsync(source, index, control!, result, leaseToken); }
                 catch (OperationCanceledException)
                 {
                     result["full_control_probe_lease_cancelled"] = leaseToken.IsCancellationRequested;
@@ -213,10 +215,13 @@ internal static class FullTunnelAcceptance
             await socket.ConnectAsync(new IPEndPoint(destination, 443), deadline), budget, token);
     }
 
-    private static async Task ProbeControlHttpsAsync(IPAddress source, int index, IPAddress destination, CancellationToken token)
+    private static async Task ProbeControlHttpsAsync(IPAddress source, int index, IPAddress destination, Dictionary<string, object?> result, CancellationToken token)
     {
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-        deadline.CancelAfter(TimeSpan.FromSeconds(8));
+        // Keep the same8-second operation bound, but observe its timer apart
+        // from parent cancellation; a linked token alone cannot identify expiry.
+        using var budget = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token, budget.Token);
+        var connection = new ControlProbeConnection();
         using var handler = new SocketsHttpHandler
         {
             UseProxy = false, AllowAutoRedirect = false, ConnectTimeout = TimeSpan.FromSeconds(5),
@@ -225,18 +230,22 @@ internal static class FullTunnelAcceptance
                 Require(context.DnsEndPoint.Host.Equals(ControlHost, StringComparison.OrdinalIgnoreCase) &&
                     context.DnsEndPoint.Port == 443, "fixture_full_control_request_scope_invalid");
                 var socket = PhysicalSocket(source, index, SocketType.Stream, ProtocolType.Tcp);
-                try
-                {
-                    await socket.ConnectAsync(new IPEndPoint(destination, 443), cancellation);
-                    return new NetworkStream(socket, ownsSocket: true);
-                }
-                catch { socket.Dispose(); throw; }
+                return await connection.ConnectAsync(socket, new IPEndPoint(destination, 443), cancellation);
             },
         };
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         using var request = new HttpRequestMessage(HttpMethod.Get, "https://" + ControlHost + "/");
-        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
-        Require((int)response.StatusCode is >= 100 and <= 599, "fixture_full_control_https_invalid");
+        try
+        {
+            using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
+            Require((int)response.StatusCode is >= 100 and <= 599, "fixture_full_control_https_invalid");
+        }
+        catch (OperationCanceledException error)
+        {
+            AcceptanceFailure.RecordControlProbeCancellation(result, error, token, budget.Token);
+            throw;
+        }
+        finally { result["full_control_probe_tcp_connected"] = connection.TcpConnected; }
         // Normal public TLS/hostname validation is mandatory. No authorization,
         // cookie, redirect, response body or production account enters evidence.
     }

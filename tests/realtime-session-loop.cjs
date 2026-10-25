@@ -37,7 +37,7 @@ function recoveryHarness(refresh) {
   signOut: async () => { state.signOuts++; },
  });
  load(path.resolve(__dirname, '../src/realtime/customer-realtime-context.tsx')).CustomerRealtimeProvider({ children: null });
- return { state, revoked: options.onSessionRevoked, unmount: () => cleanups.forEach(cleanup => cleanup()) };
+ return { state, event: options.onEvent, revoked: options.onSessionRevoked, unmount: () => cleanups.forEach(cleanup => cleanup()) };
 }
 const settleRecovery = () => new Promise(resolve => setImmediate(resolve));
 const { ApiRequestError } = modules['@/api/error'];
@@ -69,4 +69,15 @@ test('definitively rejected refresh still signs out the current account', async 
  const h = recoveryHarness(async () => { throw new ApiRequestError('session revoked', { status: 401 }); });
  h.revoked(); await settleRecovery();
  assert.equal(h.state.refreshes, 1); assert.equal(h.state.signOuts, 1);
+});
+
+
+test('legacy null resync invalidates customer queries without credential rotation', () => {
+ const h = recoveryHarness(async () => undefined);
+ const before = invalidations;
+ h.event({ type: 'customer.resync', data: '{"versions":null,"reason":"broker_error"}' });
+ assert.equal(invalidations - before, 6);
+ assert.equal(h.state.refreshes, 0);
+ assert.equal(h.state.signOuts, 0);
+ h.unmount();
 });

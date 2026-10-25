@@ -23,6 +23,7 @@ export function withLastSuccessfulEndpoint(profile: VpnProfile, endpoint?: strin
 export function profileFromHotRecord(record: HotVpnProfileRecord, nowMs = Date.now()): VpnProfile {
   return {
     ...record.profile,
+    cacheSavedAtMs: record.savedAtMs,
     hotProfileAgeMs: Math.max(0, nowMs - record.savedAtMs),
     hotProfileUsed: true,
     lastSuccessfulEndpoint: record.lastSuccessfulEndpoint ?? record.profile.lastSuccessfulEndpoint,
@@ -37,26 +38,7 @@ export function isUsableHotVpnProfileRecord(
   runtimeKey: string,
   nowMs = Date.now(),
 ): value is HotVpnProfileRecord {
-  if (!value || typeof value !== 'object') {
-    return false;
-  }
-  const record = value as Partial<HotVpnProfileRecord>;
-  if (record.schemaVersion !== hotVpnProfileSchemaVersion) {
-    return false;
-  }
-  if (record.userId !== userId.trim()) {
-    return false;
-  }
-  if (record.runtimeKey !== runtimeKey) {
-    return false;
-  }
-  if (normalizeLocationId(record.locationId || '') !== normalizeLocationId(locationId)) {
-    return false;
-  }
-  if (!record.profile?.config || record.profile.rotationRequired) {
-    return false;
-  }
-  return typeof record.savedAtMs === 'number' && nowMs - record.savedAtMs <= hotVpnProfileTtlMs;
+  return hotVpnProfileRejectionReason(value, userId, locationId, runtimeKey, nowMs) === null;
 }
 
 export function hotVpnProfileRejectionReason(
@@ -66,7 +48,7 @@ export function hotVpnProfileRejectionReason(
   runtimeKey: string,
   nowMs = Date.now(),
 ): string | null {
-  if (!value || typeof value !== 'object') {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return 'missing';
   }
   const record = value as Partial<HotVpnProfileRecord>;
@@ -79,22 +61,52 @@ export function hotVpnProfileRejectionReason(
   if (record.runtimeKey !== runtimeKey) {
     return 'runtime_mismatch';
   }
-  if (normalizeLocationId(record.locationId || '') !== normalizeLocationId(locationId)) {
+  if (typeof record.locationId !== 'string' || typeof locationId !== 'string'
+    || normalizeLocationId(record.locationId) !== normalizeLocationId(locationId)) {
     return 'location_mismatch';
   }
-  if (!record.profile?.config) {
+  if (!record.profile || typeof record.profile !== 'object' || Array.isArray(record.profile)
+    || typeof record.profile.config !== 'string' || !record.profile.config.trim()) {
     return 'missing_config';
   }
   if (record.profile.rotationRequired) {
     return 'rotation_required';
   }
-  if (typeof record.savedAtMs !== 'number') {
+  return profileCacheTimestampRejectionReason(record.savedAtMs, nowMs);
+}
+
+/** The record timestamp is authoritative; local reuse must not renew it. */
+export function profileCacheTimestampRejectionReason(savedAtMs: unknown, nowMs = Date.now()): string | null {
+  if (typeof savedAtMs !== 'number' || !Number.isFinite(savedAtMs) || savedAtMs < 0) {
     return 'missing_saved_at';
   }
-  if (nowMs - record.savedAtMs > hotVpnProfileTtlMs) {
+  if (!Number.isFinite(nowMs) || nowMs < 0) {
+    return 'invalid_clock';
+  }
+  if (nowMs < savedAtMs) {
+    return 'future_saved_at';
+  }
+  if (nowMs - savedAtMs > hotVpnProfileTtlMs) {
     return 'expired';
   }
   return null;
+}
+
+export function vpnProfileCacheIsCurrent(profile: VpnProfile, nowMs = Date.now()): boolean {
+  // Legacy in-memory callers have no timestamp. Persistent records always do,
+  // and conversion/fresh API resolution stamps every normal runtime profile.
+  return profileCacheTimestampRejectionReason(profile.cacheSavedAtMs === undefined ? nowMs : profile.cacheSavedAtMs, nowMs) === null;
+}
+
+export function runtimeProfileKey(): string {
+  if (typeof navigator === 'undefined') {
+    return 'native';
+  }
+  const platform = typeof navigator.platform === 'string' && navigator.platform.trim()
+    ? navigator.platform
+    : 'native';
+  const userAgent = typeof navigator.userAgent === 'string' ? navigator.userAgent : '';
+  return `${platform}:${userAgent || 'runtime'}`;
 }
 
 export function hotVpnProfileStoreKey(userId: string, locationId: string, runtimeKey: string, routingMode?: string): string {

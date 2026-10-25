@@ -4,7 +4,12 @@ import { stripTypeScriptTypes } from 'node:module';
 import test from 'node:test';
 import { profileRevalidationOptions, canRevalidateDevice } from '../src/vpn/profileRevalidation.ts';
 import { nativeVpnDeviceForClient } from '../src/vpn/nativeDeviceSelection.ts';
-import { ApiRequestError } from '../src/api/error.ts';
+import { ApiRequestError, requireRequestActive, isApiRequestCancelled } from '../src/api/error.ts';
+import { withRequestCancellation } from '../src/api/requestCancellation.ts';
+import { runtimeProfileKey, vpnProfileCacheIsCurrent } from '../src/vpn/hotProfileCacheCore.ts';
+import { isPositiveSafeInteger, isNonnegativeSafeInteger } from '../src/vpn/profileNumbers.ts';
+import { profileEndpoint } from '../src/vpn/connectionFallback.ts';
+import { DynamicRouteEngine, parseDynamicRoutePolicy } from '../src/vpn/dynamicRouteCore.ts';
 
 const device = {id:'device', publicKey:'public', keyEpoch:2, status:'active', assignedIpv4:'10.0.0.2', externalDeviceId:'runtime', protocol:'amneziawg', provisioningMode:'managed_native', clientKeyOwnership:'client'};
 const cached = {config:'Address = 10.0.0.2/32', device, locationId:'de', routingMode:'smart', profileVersion:7};
@@ -13,7 +18,8 @@ const deferred = () => { let resolve; const promise = new Promise(r => {resolve=
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 function load(sourcePath, exported, stubs) {
-  const source = stripTypeScriptTypes(fs.readFileSync(sourcePath, 'utf8')).replace(/^import[\s\S]*?from ['"][^'"]+['"];\s*/gm,'').replace(/\bexport /g,'');
+  const overlay = process.env.VEX_PROFILE_NUMERIC_SOURCE_ROOT && `${process.env.VEX_PROFILE_NUMERIC_SOURCE_ROOT}/${sourcePath}`;
+  const source = stripTypeScriptTypes(fs.readFileSync(overlay && fs.existsSync(overlay) ? overlay : sourcePath, 'utf8')).replace(/^import[\s\S]*?from ['"][^'"]+['"];\s*/gm,'').replace(/\bexport /g,'');
   return new Function(...Object.keys(stubs), source+`;return ${exported};`)(...Object.values(stubs));
 }
 
@@ -21,10 +27,10 @@ function managedHarness({response = confirmed, current = device, key = {publicKe
   const requests = [];
   const run = load('src/api/vpn.ts', 'managedVpnProfile', {
     supportsNativeRoutingPolicy:()=>false, Platform:{OS:'android'}, me:async()=>({id:'fixture-owner'}),
-    getOrCreateVpnAccountIdentity:async()=>({installationId:'runtime',externalDeviceId:'runtime',keyScope:'fixture-scope',keyPair:{...(typeof key === 'function' ? key() : key),keyEpoch:2}}),
+    pendingVpnAccountKeyPair:async()=>undefined,getOrCreateVpnAccountIdentity:async()=>({installationId:'runtime',externalDeviceId:'runtime',keyScope:'fixture-scope',keyPair:{...(typeof key === 'function' ? key() : key),keyEpoch:2}}),
     clientVersionHeaders:headers, getOrCreateWireGuardKeyPair:async()=>typeof key === 'function' ? key() : key, getOrCreateDeviceId:async()=> 'runtime', nativeVpnDeviceForClient,
     withManagedProfileAWGCapability:q=>q, defaultVpnRoutingMode:'smart', defaultVpnRoutingPolicyVersion:'v1', resolvedVpnBypassRegion:()=>'', requireVpnLocationId:x=>x,
-    canRevalidateDevice, ApiRequestError, jsonRequest:async path=> {
+    canRevalidateDevice, isPositiveSafeInteger, isNonnegativeSafeInteger, ApiRequestError, requireRequestActive, isApiRequestCancelled, withRequestCancellation, jsonRequest:async path=> {
       requests.push(path);
       if(path==='/v1/devices') return list ? list() : [{id:current.id, public_key:current.publicKey, psk_epoch:current.keyEpoch, status:current.status,
         assigned_ipv4:current.assignedIpv4, external_device_id:current.externalDeviceId, protocol:current.protocol,
@@ -95,6 +101,55 @@ test('changed routing profile with matching key is delivered without redundant l
   assert.equal(h.requests.length,1);
 });
 
+test('a reassigned profile cannot retain the previous endpoint node identity', async () => {
+  const old = {...device, nodeId:'old-node', endpoint:'old.example:443'};
+  const h = managedHarness({options:{cachedDevice:old}, response:{...confirmed, unchanged:false, version:8,
+    config:'Address = 10.0.0.2/32\nEndpoint = new.example:443\n', server:'new.example',port:443}});
+  const result = await h.run();
+  assert.equal(result.device.endpoint, 'new.example:443');
+  assert.equal(result.device.nodeId, undefined, 'the device list predates profile placement; its old node is not evidence');
+  assert.equal(h.requests.length,1, 'metadata repair must not issue another peer or device lookup');
+});
+
+test('rendered tunnel endpoint is authoritative over stale list or response metadata', async () => {
+  const old = {...device, nodeId:'old-node', endpoint:'old.example:443'};
+  const config='Address = 10.0.0.2/32\nEndpoint = new.example:443\n';
+  for (const response of [confirmed, {...confirmed,unchanged:false,config,server:'old.example',port:443}]) {
+    const h = managedHarness({options:{cachedDevice:old,cachedConfig:config},response});
+    const result = await h.run();
+    assert.equal(result.device.endpoint,'new.example:443');
+    assert.equal(result.device.nodeId,undefined);
+    assert.equal(profileEndpoint({...result,device:old}),'new.example:443', 'cached metadata must not misreport the tunnel endpoint');
+  }
+});
+
+test('matching endpoint retains the known node while legacy endpoint-only profiles still work', async () => {
+  const matching={...device,nodeId:'same-node',endpoint:'same.example:443'};
+  const h=managedHarness({options:{cachedDevice:matching},response:{...confirmed,unchanged:false,
+    config:'Address = 10.0.0.2/32\nEndpoint = same.example:443\n',server:'same.example',port:443}});
+  assert.equal((await h.run()).device.nodeId,'same-node');
+  assert.equal(profileEndpoint({config:'legacy config',device:matching}),'same.example:443');
+});
+
+test('placement refresh admits the new route without accepting another device or location', async () => {
+  const old={...device,nodeId:'old-node',endpoint:'old.example:443'};
+  const h=managedHarness({options:{cachedDevice:old},response:{...confirmed,unchanged:false,
+    config:'Address = 10.0.0.2/32\nHeaderProtectionKey = fixture\nEndpoint = new.example:443\n',server:'new.example',port:443}});
+  const result=await h.run();
+  const expires_at=new Date(Date.now()+60_000).toISOString();
+  const candidate={id:'new-route',path_kind:'relay',device_id:device.id,protocol:'amneziawg',location_id:'de',
+    node_id:'new-node',endpoint:'relay.example:443',priority:10,health_score:100,expires_at};
+  const policy=parseDynamicRoutePolicy({policy_version:'placement-test',expires_at,
+    probe:{max_candidates:3},candidates:[candidate,{...candidate,id:'other-location',location_id:'fi'},
+      {...candidate,id:'other-device',device_id:'another-device'}]});
+  assert.ok(policy);
+  const engine=new DynamicRouteEngine();engine.setPolicy(policy);
+  const attempts=profile=>engine.attempts({...profile,locationId:'de'}).flatMap(x=>x.candidate?.id??[]);
+  assert.deepEqual(attempts({...result,device:{...result.device,nodeId:'old-node'}}),[], 'old metadata suppresses the authorized new route');
+  assert.deepEqual(attempts(result),['new-route']);
+  assert.deepEqual(attempts({...result,device:old}),['new-route'], 'old hot-cache metadata cannot veto the current config');
+});
+
 test('missing key identity and changed device or epoch fall back to current device lookup', async () => {
   for (const response of [
     {unchanged:true, version:7}, {...confirmed, client_public_key:'different'}, {...confirmed, client_key_epoch:3},
@@ -113,13 +168,37 @@ test('unconditional recovery still performs current device lookup and does not s
   assert.doesNotMatch(h.requests.at(-1), /known_version=/);
 });
 
+for (const version of [null, '7', NaN, Infinity, -1, 0, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+  test(`a malformed explicit profile version ${String(version)} cannot become cached evidence`, async () => {
+    const h = managedHarness({ response: { ...confirmed, unchanged: false, version, config: 'fixture configuration' } });
+    await assert.rejects(h.run(), /верси|version/i);
+    assert.equal(h.requests.length, 1, 'malformed evidence must not trigger a second device lookup/profile assignment');
+  });
+}
+
+test('an unchanged response must confirm the exact cached version after the full lookup too', async () => {
+  const h = managedHarness({ response: { ...confirmed, version: 8 } });
+  await assert.rejects(h.run(), /верси|version/i);
+  assert.ok(h.requests.includes('/v1/devices'));
+});
+
+test('invalid hints never enter known_version while a fresh authoritative profile remains available', async () => {
+  for (const version of [0, -1, 1.5, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+    const h = managedHarness({ options: { knownVersion: version }, response: { ...confirmed, unchanged: false, version: 8, config: 'fresh fixture' } });
+    const result = await h.run();
+    assert.equal(result.profileVersion, 8); assert.ok(h.requests.includes('/v1/devices'));
+    assert.doesNotMatch(h.requests.find(path => path.startsWith('/v1/vpn/profile?')), /known_version=/);
+  }
+});
+
 test('API profile delivery does not wait for duplicate secure-cache persistence', async () => {
   const storage = deferred();
   let writes = 0;
   const run = load('src/vpn/profile.ts','resolveVpnProfile', {
     defaultVpnRoutingMode:'smart', defaultVpnBypassRegion:'ru', defaultVpnRoutingPolicyVersion:'v1',
     requireVpnLocationId:x=>x, profileRevalidationOptions, vpnProfileAddressMatchesDevice:()=>true,
-    hasPaidEntitlement:()=>true, preparedTunnel:async()=>({...cached, config:cached.config}), runProfileRequest:fn=>fn(),
+    runtimeProfileKey, vpnProfileCacheIsCurrent, isPositiveSafeInteger,
+    requireRequestActive, withRequestCancellation, hasPaidEntitlement:()=>true, preparedTunnel:async()=>({...cached, config:cached.config}), runProfileRequest:fn=>fn(),
     saveHotVpnProfile:()=>{writes++; return storage.promise;},
   });
   let resolved = false;
@@ -136,8 +215,9 @@ test('background profile refresh revalidates the cached version before issuing a
   const effects = [];
   const resolutions = [];
   const queryClient = {getQueryData:()=>cached, setQueryData:()=>{}, fetchQuery:({queryFn})=>queryFn()};
+  const react = { useRef:current=>({current}), useState:initial=>[initial,()=>{}], useMemo:fn=>fn(), useCallback:fn=>fn, useEffect:fn=>effects.push(fn) };
   const run = load('src/vpn/useVpnProfileState.ts', 'useVpnProfileState', {
-    useRef:current=>({current}), useState:initial=>[initial,()=>{}], useMemo:fn=>fn(), useCallback:fn=>fn, useEffect:fn=>effects.push(fn),
+    ...react, useOwnedState: load('src/hooks/useOwnedState.ts', 'useOwnedState', react),
     useQueryClient:()=>queryClient, resolveVpnProfile:async(...args)=>{resolutions.push(args); return cached;},
     hydrateHotVpnProfilesToQueryCache:async()=>[], saveHotVpnProfile:async()=>null,
   });

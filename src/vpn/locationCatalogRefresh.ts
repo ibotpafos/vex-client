@@ -37,6 +37,7 @@ type LocationCatalogRefresherOptions = {
   currentCatalog?: () => VpnLocation[] | null | undefined;
   now?: () => number;
   onDiagnostics?: (event: LocationCatalogDiagnostics) => void;
+  shouldReportError?: (error: unknown) => boolean;
 };
 
 export function createLocationCatalogRefresher(options: LocationCatalogRefresherOptions) {
@@ -60,7 +61,7 @@ export function createLocationCatalogRefresher(options: LocationCatalogRefresher
           )
             ? current
             : locations;
-          if (stableLocations === locations) {
+          if (stableLocations !== current) {
             await options.commitCatalog(locations);
           }
           lastCatalog = stableLocations;
@@ -74,7 +75,7 @@ export function createLocationCatalogRefresher(options: LocationCatalogRefresher
           return { locations: stableLocations, source: 'network' as const, reason };
         } catch (error) {
           const prior = options.currentCatalog?.() ?? lastCatalog ?? [];
-          options.onDiagnostics?.({
+          if (options.shouldReportError?.(error) !== false) options.onDiagnostics?.({
             reason,
             outcome: 'error',
             durationMs: Math.max(0, now() - startedAt),
@@ -109,6 +110,7 @@ function areLocationCatalogsEqual(left: VpnLocation[], right: VpnLocation[]): bo
       && location.priority === candidate.priority
       && location.status === candidate.status
       && location.healthyNodes === candidate.healthyNodes
+      && location.awg3Nodes === candidate.awg3Nodes
       && location.endpoint === candidate.endpoint
       && location.capabilities.length === candidate.capabilities.length
       && location.capabilities.every((capability, capabilityIndex) => capability === candidate.capabilities[capabilityIndex]);

@@ -1,7 +1,10 @@
 import { Platform } from 'react-native';
 import { getAppInfo, getOrCreateDeviceId } from '@/native/appInfo';
 import { androidExperimentalRoutingEnabled, androidProfilePlatform } from '@/vpn/androidRoutingSafety';
-import { ApiRequestError, isMaintenanceStatus, normalizeApiRequestError } from './error';
+import { apiRequestUrl } from './config';
+import { apiFetch } from './apiFetch';
+import { ApiRequestError, isMaintenanceStatus, normalizeApiRequestError, readApiErrorPayload, requestCancelledError, requireRequestActive } from './error';
+export { trimTrailingSlash, vexApiBaseUrl } from './config';
 export { isMaintenanceStatus, isTechnicalWorksError, normalizeApiRequestError, technicalWorksMessage } from './error';
 
 export type RequestOptions = {
@@ -11,6 +14,7 @@ export type RequestOptions = {
   idempotencyKey?: string;
   method?: string;
   retryCount?: number;
+  signal?: AbortSignal;
   suppressErrorLog?: boolean;
   timeout?: number;
 };
@@ -20,30 +24,59 @@ const getRequestRetryCount = 2;
 const requestRetryDelayMs = 600;
 const shouldLogApiRequests = typeof __DEV__ !== 'undefined' && __DEV__;
 
-export const vexApiBaseUrl = trimTrailingSlash(process.env.EXPO_PUBLIC_VEX_API_BASE_URL || 'https://vexguard.app');
-const apiRequestBaseUrl = vexApiBaseUrl;
 
 export async function jsonRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  return JSON.parse(await rawRequest(path, options)) as T;
+  const text = await rawRequest(path, options);
+  requireRequestActive(options.signal);
+  try {
+    return JSON.parse(text) as T;
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      // Parser diagnostics can contain response content. A local decode failure
+      // has no HTTP status and must not be mistaken for a server outage.
+      throw new ApiRequestError('Некорректный ответ API.', { code: 'api_response_invalid' });
+    }
+    throw error;
+  }
 }
 
 export async function rawRequest(path: string, options: RequestOptions = {}): Promise<string> {
+  requireRequestActive(options.signal);
+  const url = apiRequestUrl(path);
   const controller = new AbortController();
   const timeoutMs = options.timeout ?? requestTimeoutMs;
   const deadline = Date.now() + timeoutMs;
   let timeout: ReturnType<typeof setTimeout>;
-  const expired = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => {
+  let stopError: ApiRequestError | undefined;
+  let stop!: (error: ApiRequestError) => void;
+  const stopped = new Promise<never>((_, reject) => {
+    stop = (error) => {
+      if (stopError) return;
+      stopError = error;
+      reject(error);
       controller.abort();
-      reject(new ApiRequestError('Превышено время ожидания API.', { code: 'request_timeout' }));
+    };
+    timeout = setTimeout(() => {
+      stop(new ApiRequestError('Превышено время ожидания API.', { code: 'request_timeout' }));
     }, timeoutMs);
   });
+  const onAbort = () => stop(requestCancelledError());
+  options.signal?.addEventListener('abort', onAbort, { once: true });
+  if (options.signal?.aborted) onAbort();
+  const requireActive = () => {
+    if (stopError) throw stopError;
+    requireRequestTime(controller.signal, deadline);
+  };
   try {
-    return await Promise.race([requestWithinDeadline(path, options, controller.signal, deadline), expired]);
+    return await Promise.race([requestWithinDeadline(url, options, controller.signal, deadline, requireActive), stopped]);
   } catch (error) {
-    throw normalizeApiRequestError(error);
+    throw normalizeApiRequestError(stopError ?? error);
   } finally {
+    options.signal?.removeEventListener('abort', onAbort);
     clearTimeout(timeout!);
+    // Retire unread responses as well as the timer; in particular a blocked
+    // redirect must not leave its native body/request alive.
+    controller.abort();
   }
 }
 
@@ -53,15 +86,15 @@ function requireRequestTime(signal: AbortSignal, deadline: number): void {
   }
 }
 
-async function requestWithinDeadline(path: string, options: RequestOptions, signal: AbortSignal, deadline: number): Promise<string> {
+async function requestWithinDeadline(url: string, options: RequestOptions, signal: AbortSignal, deadline: number, requireActive: () => void): Promise<string> {
   const method = options.method ?? 'GET';
   const maxAttempts = method === 'GET' ? Math.max(0, Math.min(getRequestRetryCount, options.retryCount ?? getRequestRetryCount)) + 1 : 1;
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      requireRequestTime(signal, deadline);
-      return await rawRequestAttempt(path, options, method, signal, deadline);
+      requireActive();
+      return await rawRequestAttempt(url, options, method, signal, requireActive);
     } catch (error) {
       lastError = error;
       if (signal.aborted || Date.now() >= deadline || attempt >= maxAttempts || !isRetryableRequestError(error)) {
@@ -74,14 +107,14 @@ async function requestWithinDeadline(path: string, options: RequestOptions, sign
       if (retryDelayMs >= deadline - Date.now()) {
         throw normalizeApiRequestError(error);
       }
-      await delay(retryDelayMs);
+      await delay(retryDelayMs, signal);
     }
   }
 
   throw normalizeApiRequestError(lastError);
 }
 
-async function rawRequestAttempt(path: string, options: RequestOptions, method: string, signal: AbortSignal, deadline: number): Promise<string> {
+async function rawRequestAttempt(url: string, options: RequestOptions, method: string, signal: AbortSignal, requireActive: () => void): Promise<string> {
   const headers: Record<string, string> = {
     Accept: 'application/json',
   };
@@ -94,7 +127,7 @@ async function rawRequestAttempt(path: string, options: RequestOptions, method: 
   
   // Merge client headers
   const versionHeaders = await clientVersionHeaders();
-  requireRequestTime(signal, deadline);
+  requireActive();
   Object.assign(headers, versionHeaders);
   
   if (options.headers) {
@@ -112,24 +145,26 @@ async function rawRequestAttempt(path: string, options: RequestOptions, method: 
   }
 
   try {
-    let response;
     if (shouldLogApiRequests && !options.suppressErrorLog) {
-      logApiDebug(`API Request: [${init.method || 'GET'}] ${apiRequestBaseUrl}${path}`);
+      logApiDebug(`API Request: [${init.method || 'GET'}] ${url}`);
     }
     
-    response = await fetch(`${apiRequestBaseUrl}${path}`, { ...init, signal });
-    requireRequestTime(signal, deadline);
+    const response = await apiFetch(url, { ...init, signal });
+    requireActive();
+    if (response.type === 'opaqueredirect' || [301, 302, 303, 307, 308].includes(response.status)) {
+      throw new ApiRequestError('Не удалось выполнить запрос. Попробуйте позже.', {
+        status: response.status || undefined,
+        code: 'api_redirect_blocked',
+      });
+    }
     
     if (shouldLogApiRequests && !options.suppressErrorLog) {
       logApiDebug(`API Response: ${response.status} ${response.statusText}`);
     }
     const text = await response.text();
-    requireRequestTime(signal, deadline);
+    requireActive();
     if (!response.ok) {
-      if (shouldLogApiRequests && !options.suppressErrorLog) {
-        logApiDebug(`API Error Response: ${text}`);
-      }
-      const apiError = parseApiErrorPayload(text);
+      const apiError = readApiErrorPayload(text);
       throw new ApiRequestError(apiError.message ?? `HTTP ${response.status}`, {
         status: response.status,
         code: apiError.code,
@@ -138,6 +173,7 @@ async function rawRequestAttempt(path: string, options: RequestOptions, method: 
     }
     return text;
   } catch (error: unknown) {
+    requireActive();
     if (shouldLogApiRequests && !options.suppressErrorLog) {
       const message = error instanceof Error ? error.message : String(error);
       logApiDebug('API Outer Catch Error:', message);
@@ -188,8 +224,17 @@ export function parseRetryAfterMs(value: string | null, now = Date.now()): numbe
   return Number.isFinite(timestamp) ? Math.max(0, timestamp - now) : undefined;
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function delay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const finish = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    signal.addEventListener('abort', finish, { once: true });
+    if (signal.aborted) finish();
+  });
 }
 
 function logApiDebug(...items: unknown[]) {
@@ -197,26 +242,10 @@ function logApiDebug(...items: unknown[]) {
 }
 
 export function parseApiError(text: string): string | null {
-  return parseApiErrorPayload(text).message ?? null;
-}
-
-function parseApiErrorPayload(text: string): { code?: string; message?: string } {
-  try {
-    const parsed = JSON.parse(text) as { code?: string; message?: string; error?: string };
-    return {
-      code: parsed.code?.trim() || undefined,
-      message: parsed.message?.trim() || parsed.error?.trim() || undefined,
-    };
-  } catch {
-    const message = text.trim();
-    return { message: message || undefined };
-  }
+  return readApiErrorPayload(text).message ?? null;
 }
 
 
-export function trimTrailingSlash(value: string): string {
-  return value.replace(/\/+$/, '');
-}
 
 export function absolutizeUrl(value: string): string {
   if (!value) {
@@ -226,9 +255,9 @@ export function absolutizeUrl(value: string): string {
     return value;
   }
   if (value.startsWith('/')) {
-    return `${vexApiBaseUrl}${value}`;
+    return apiRequestUrl(value);
   }
-  return `${vexApiBaseUrl}/${value}`;
+  return apiRequestUrl(`/${value}`);
 }
 
 export async function clientVersionHeaders(): Promise<Record<string, string>> {

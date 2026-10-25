@@ -1,6 +1,8 @@
+import { hasPaidEntitlement, type EntitlementLike } from '../api/entitlement';
 import type { VpnProfile } from './profile';
 import { vpnProfileAddressMatchesDevice } from './profileConsistency';
 import { profileEndpoint } from './connectionFallback';
+import { vpnProfileCacheIsCurrent } from './hotProfileCacheCore';
 
 export const explicitConnectProfileResolutionOptions = {
   forceRefresh: false,
@@ -8,19 +10,15 @@ export const explicitConnectProfileResolutionOptions = {
   validateCachedProfile: true,
 } as const;
 
-type EntitlementLike = {
-  active?: boolean;
-  vpnAccess?: boolean;
-};
-
 export function shouldUseLocalProfileBeforeOnline(
   profile: VpnProfile | null | undefined,
   fallbackEntitlement: EntitlementLike | null | undefined,
+  nowMs = Date.now(),
 ): profile is VpnProfile {
-  if (!profile || profile.rotationRequired) {
+  if (!profile || profile.rotationRequired || !vpnProfileCacheIsCurrent(profile, nowMs)) {
     return false;
   }
-  return hasPaidEntitlementLike(profile.entitlement ?? fallbackEntitlement);
+  return hasPaidEntitlement(profile.entitlement ?? fallbackEntitlement);
 }
 
 export function connectableLocalProfile(
@@ -28,6 +26,7 @@ export function connectableLocalProfile(
   locationId: string,
   fallbackEntitlement: EntitlementLike | null | undefined,
   routingMode?: VpnProfile['routingMode'],
+  nowMs = Date.now(),
 ): VpnProfile | null {
   if (!profile || profile.locationId !== locationId) {
     return null;
@@ -40,10 +39,10 @@ export function connectableLocalProfile(
   if (routingMode && profile.routingMode !== routingMode) {
     return null;
   }
-  if (!shouldUseLocalProfileBeforeOnline(profile, fallbackEntitlement)) {
+  if (!shouldUseLocalProfileBeforeOnline(profile, fallbackEntitlement, nowMs)) {
     return null;
   }
-  return { ...profile, source: 'local' };
+  return { ...profile, cacheSavedAtMs: profile.cacheSavedAtMs === undefined ? nowMs : profile.cacheSavedAtMs, source: 'local' };
 }
 
 export function vpnConnectTimingSamples(input: {
@@ -158,8 +157,4 @@ function endpointPort(endpoint?: string): number | undefined {
   }
   const port = Number(match[1]);
   return Number.isInteger(port) ? port : undefined;
-}
-
-function hasPaidEntitlementLike(item: EntitlementLike | null | undefined): boolean {
-  return Boolean(item?.vpnAccess || item?.active);
 }

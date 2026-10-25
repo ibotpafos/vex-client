@@ -27,6 +27,7 @@ export function isVpnTransportFallbackError(error: unknown): boolean {
   // permission, or local application faults and must stay on the selected
   // location for a clear, recoverable error.
   return message.includes('handshake') ||
+    message.includes('vpn traffic verification') ||
     message.includes('vpn backend did not enter the connected state') ||
     message.includes('vpn connection failed') ||
     message.includes('vpn_connect_failed') ||
@@ -84,7 +85,8 @@ export function profileWithEndpoint(profile: VpnProfile, endpoint: string): VpnP
 }
 
 export function profileEndpoint(profile: VpnProfile): string | undefined {
-  return profile.device?.endpoint || configEndpoint(profile.config);
+  // The native backend consumes config; device metadata may predate placement.
+  return configEndpoint(profile.config) || profile.device?.endpoint;
 }
 
 function configEndpoint(config: string): string | undefined {

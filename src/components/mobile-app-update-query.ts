@@ -4,6 +4,8 @@ import { useCallback, useMemo } from 'react';
 import { shouldOfferAppUpdate, updateCheckChannel } from '@/api/updatePreflight';
 import { appUpdateCheck, type AppUpdateCheckResult } from '@/api/vexApi';
 import { createApiQueryRetry } from '@/api/queryRetry';
+import { requireRequestActive } from '@/api/error';
+import { withRequestCancellation } from '@/api/requestCancellation';
 import { getAppInfo, getOrCreateDeviceId } from '@/native/appInfo';
 import { useSession } from '@/auth/session-context';
 
@@ -13,11 +15,13 @@ export function useMobileAppUpdateQuery(targetPlatform: 'android' | 'ios', build
   const { session, sessionRevision, isLoading, isCurrentSessionOperation } = useSession();
   const accessToken = session?.accessToken;
   const queryKey = useMemo(() => [`${targetPlatform}-update`, buildNumber, sessionRevision] as const, [buildNumber, targetPlatform, sessionRevision]);
-  const queryFn = useCallback(async (): Promise<AppUpdateCheckResult> => {
+  const queryFn = useCallback(({ signal }: { signal?: AbortSignal } = {}): Promise<AppUpdateCheckResult> => withRequestCancellation(async () => {
     const [appInfo, deviceId] = await Promise.all([getAppInfo(), getOrCreateDeviceId()]);
+    requireRequestActive(signal);
     if (accessToken && !isCurrentSessionOperation()) throw new Error('Update session changed.');
     const update = await appUpdateCheck({
       accessToken,
+      signal,
       platform: targetPlatform,
       appVersion: appInfo.version,
       buildNumber,
@@ -28,9 +32,10 @@ export function useMobileAppUpdateQuery(targetPlatform: 'android' | 'ios', build
       apiClientVersion: appInfo.apiClientVersion,
       configSchemaVersion: appInfo.configSchemaVersion,
     });
+    requireRequestActive(signal);
     if (accessToken && !isCurrentSessionOperation()) throw new Error('Update session changed.');
     return update;
-  }, [accessToken, buildNumber, targetPlatform, isCurrentSessionOperation]);
+  }, signal), [accessToken, buildNumber, targetPlatform, isCurrentSessionOperation]);
 
   return useQuery({
     queryKey,

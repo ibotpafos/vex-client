@@ -36,7 +36,7 @@ network restoration.
 
 Android/Apple SDK patches are additive to pinned AWG 3.1 sources. The shared Go
 module uses the existing MIT AWG NetTUN and Apache-2.0 gVisor implementation.
-Routing builds use Go 1.26.9 and `golang.org/x/net` v0.60.0, including the
+Routing builds use Go 1.26.10 and `golang.org/x/net` v0.60.0, including the
 malformed DNS response and HTTP/2 security fixes. Android retains the upstream
 boottime runtime patch and verifies the bundled compiler archive SHA-256.
 `policy-signing-keys.json` contains public keys only. Key rotation must update
@@ -64,6 +64,10 @@ them. Installer, TUN daemon and physical acceptance scripts require an explicit
 operator action and an isolated target.
 
 ## Release acceptance
+
+The repeatable [leak scenario suite](../docs/verification/vpn-leak-scenarios.md)
+adds state and DNS packet regressions with live observer controls. Run it with
+`bash scripts/test_vpn_leak_scenarios.sh`; it never changes host networking.
 
 Source/build evidence does not establish physical leak protection. Before rollout:
 

@@ -59,6 +59,7 @@ function sameHomeLocationCard(left: VpnLocation, right?: VpnLocation): boolean {
     && left.priority === right.priority
     && left.status === right.status
     && left.healthyNodes === right.healthyNodes
+    && left.awg3Nodes === right.awg3Nodes
     && left.endpoint === right.endpoint
     && left.capabilities.length === right.capabilities.length
     && left.capabilities.every((capability, index) => capability === right.capabilities[index]);

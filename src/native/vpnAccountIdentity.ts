@@ -15,6 +15,8 @@ export type VpnAccountIdentity = {
   externalDeviceId: string;
   keyScope: string;
   legacyOwnedDeviceId?: string;
+  confirmedDeviceId?: string;
+  confirmedKeyDeviceId?: string;
   legacyRegistrationPending?: boolean;
   keyPair: WireGuardKeyPair;
   ownedDevices?: VpnDevice[];
@@ -48,23 +50,39 @@ export function validatedVpnAccountKeyPair(value: unknown): WireGuardKeyPair {
   if (!pair || !validKey(pair.privateKey) || !validKey(pair.publicKey) || !Number.isSafeInteger(pair.keyEpoch) || (pair.keyEpoch ?? 0) < 1) throw new Error('Сохранённый ключ VPN повреждён.');
   return { privateKey: pair.privateKey, publicKey: pair.publicKey, keyEpoch: pair.keyEpoch };
 }
-export async function saveVpnAccountKeyPair(keyScope: string, pair: WireGuardKeyPair, isCurrentSessionOperation?: () => boolean): Promise<void> {
+export async function saveVpnAccountKeyPair(keyScope: string, pair: WireGuardKeyPair, isCurrentSessionOperation?: () => boolean, confirmedKeyDeviceId?: string): Promise<void> {
   const options = { isCurrentSessionOperation };
   requireCurrent(options);
-  await SecureStore.setItemAsync(keyPrefix + requireScope(keyScope), JSON.stringify(validatedVpnAccountKeyPair(pair)));
+  // Bind a proven device to the exact pair in the same atomic blob. A source
+  // pointer written before a rotation is not evidence that its key was applied.
+  const receipt = confirmedKeyDeviceId === undefined ? {} : { confirmedKeyDeviceId: requireScope(confirmedKeyDeviceId) };
+  await SecureStore.setItemAsync(keyPrefix + requireScope(keyScope), JSON.stringify({ ...validatedVpnAccountKeyPair(pair), ...receipt }));
   requireCurrent(options);
 }
-export async function pendingVpnAccountKeyPair(keyScope: string, isCurrentSessionOperation?: () => boolean): Promise<WireGuardKeyPair | undefined> {
+type PendingVpnAccountKeyPair = WireGuardKeyPair & { deviceId?: string; basePublicKey?: string; ownerPublicKey?: string };
+
+function validatedPendingVpnAccountKeyPair(value: unknown): PendingVpnAccountKeyPair {
+  const pair: PendingVpnAccountKeyPair = validatedVpnAccountKeyPair(value);
+  for (const field of ['deviceId', 'basePublicKey', 'ownerPublicKey'] as const) {
+    const item = (value as Record<string, unknown>)[field];
+    if (item === undefined) continue; // Existing legacy journals retain their format.
+    if (typeof item !== 'string' || (field !== 'basePublicKey' && (!item.trim() || item !== item.trim()))) throw new Error('Сохранённое намерение ротации VPN повреждено.');
+    pair[field] = item;
+  }
+  return pair;
+}
+
+export async function pendingVpnAccountKeyPair(keyScope: string, isCurrentSessionOperation?: () => boolean): Promise<PendingVpnAccountKeyPair | undefined> {
   const options = { isCurrentSessionOperation };
   requireCurrent(options);
   const raw = await SecureStore.getItemAsync(keyPrefix + requireScope(keyScope) + '.pending');
   requireCurrent(options);
-  return raw === null ? undefined : validatedVpnAccountKeyPair(JSON.parse(raw));
+  return raw === null ? undefined : validatedPendingVpnAccountKeyPair(JSON.parse(raw));
 }
-export async function savePendingVpnAccountKeyPair(keyScope: string, pair: WireGuardKeyPair, isCurrentSessionOperation?: () => boolean): Promise<void> {
+export async function savePendingVpnAccountKeyPair(keyScope: string, pair: PendingVpnAccountKeyPair, isCurrentSessionOperation?: () => boolean): Promise<void> {
   const options = { isCurrentSessionOperation };
   requireCurrent(options);
-  await SecureStore.setItemAsync(keyPrefix + requireScope(keyScope) + '.pending', JSON.stringify(validatedVpnAccountKeyPair(pair)));
+  await SecureStore.setItemAsync(keyPrefix + requireScope(keyScope) + '.pending', JSON.stringify(validatedPendingVpnAccountKeyPair(pair)));
   requireCurrent(options);
 }
 export async function clearPendingVpnAccountKeyPair(keyScope: string, isCurrentSessionOperation?: () => boolean): Promise<void> {
@@ -113,7 +131,7 @@ async function resolveAccountIdentity(options: VpnAccountIdentityOptions): Promi
   requireCurrent(options);
   if (raw !== null) {
     if (!raw) throw new Error('Сохранённая регистрация VPN повреждена.');
-    const mapping = JSON.parse(raw) as { version?: unknown; installationId?: unknown; externalDeviceId?: unknown; keyScope?: unknown; legacyOwnedDeviceId?: unknown; legacyRegistrationPending?: unknown };
+    const mapping = JSON.parse(raw) as { version?: unknown; installationId?: unknown; externalDeviceId?: unknown; keyScope?: unknown; legacyOwnedDeviceId?: unknown; confirmedDeviceId?: unknown; legacyRegistrationPending?: unknown };
     if (!mapping || mapping.version !== 1) throw new Error('Сохранённая регистрация VPN повреждена.');
     const installationId = requireScope(mapping.installationId), externalDeviceId = requireScope(mapping.externalDeviceId), keyScope = requireScope(mapping.keyScope);
     const stored = await SecureStore.getItemAsync(keyPrefix + keyScope);
@@ -122,7 +140,12 @@ async function resolveAccountIdentity(options: VpnAccountIdentityOptions): Promi
     const legacyOwnedDeviceId = mapping.legacyOwnedDeviceId === undefined ? undefined : requireScope(mapping.legacyOwnedDeviceId);
     if (mapping.legacyRegistrationPending !== undefined && typeof mapping.legacyRegistrationPending !== 'boolean') throw new Error('Сохранённая регистрация VPN повреждена.');
     const legacyRegistrationPending = mapping.legacyRegistrationPending === undefined ? Boolean(legacyOwnedDeviceId) : mapping.legacyRegistrationPending;
-    return { installationId, externalDeviceId, keyScope, legacyOwnedDeviceId, legacyRegistrationPending, keyPair: validatedVpnAccountKeyPair(JSON.parse(stored)) };
+    const confirmedDeviceId = mapping.confirmedDeviceId === undefined ? undefined : requireScope(mapping.confirmedDeviceId);
+    const storedPair = JSON.parse(stored) as WireGuardKeyPair & { confirmedKeyDeviceId?: unknown };
+    const keyPair = validatedVpnAccountKeyPair(storedPair);
+    const confirmedKeyDeviceId = storedPair.confirmedKeyDeviceId === undefined ? undefined : requireScope(storedPair.confirmedKeyDeviceId);
+    return { installationId, externalDeviceId, keyScope, legacyOwnedDeviceId, confirmedDeviceId, legacyRegistrationPending, keyPair,
+      ...(confirmedKeyDeviceId === undefined ? {} : { confirmedKeyDeviceId }) };
   }
   // A successful live lookup is required before adopting or allocating an ID.
   const ownedDevices = await options.loadOwnedDevices();
@@ -163,14 +186,19 @@ export async function renewVpnAccountInstallation(options: VpnAccountIdentityOpt
 export async function confirmVpnAccountRegistration(options: VpnAccountIdentityOptions, identity: VpnAccountIdentity): Promise<void> {
   await persistVpnAccountRegistration(options, { ...identity, legacyRegistrationPending: false });
 }
+export async function rememberVpnAccountDevice(options: VpnAccountIdentityOptions, identity: VpnAccountIdentity, deviceId: string): Promise<VpnAccountIdentity> {
+  const confirmed = { ...identity, confirmedDeviceId: requireScope(deviceId) };
+  await persistVpnAccountRegistration(options, confirmed);
+  return confirmed;
+}
 async function persistVpnAccountRegistration(options: VpnAccountIdentityOptions, identity: VpnAccountIdentity): Promise<void> {
   requireCurrent(options);
-  await SecureStore.setItemAsync(registrationKey(options.userId), JSON.stringify({ version: 1, installationId: identity.installationId, externalDeviceId: identity.externalDeviceId, keyScope: identity.keyScope, legacyOwnedDeviceId: identity.legacyOwnedDeviceId, legacyRegistrationPending: identity.legacyRegistrationPending }));
+  await SecureStore.setItemAsync(registrationKey(options.userId), JSON.stringify({ version: 1, installationId: identity.installationId, externalDeviceId: identity.externalDeviceId, keyScope: identity.keyScope, legacyOwnedDeviceId: identity.legacyOwnedDeviceId, confirmedDeviceId: identity.confirmedDeviceId, legacyRegistrationPending: identity.legacyRegistrationPending }));
   requireCurrent(options);
 }
 async function generatedAccountKeyPair(options: VpnAccountIdentityOptions): Promise<WireGuardKeyPair> {
   requireCurrent(options);
-  const generated = await generateWireGuardKeyPair();
+  const generated = await generateWireGuardKeyPair({ independentEpoch: true });
   requireCurrent(options);
   return validatedVpnAccountKeyPair(generated && { ...generated, keyEpoch: 1 });
 }

@@ -49,6 +49,10 @@ public class VexVpnModule: Module {
       return WireGuardKeyPair.generate(keyEpoch: self.keyStore.nextKeyEpoch()).toDictionary()
     }
 
+    AsyncFunction("generateWireGuardKeyMaterial") { () -> [String: Any] in
+      return WireGuardKeyPair.generate(keyEpoch: 1).toDictionary()
+    }
+
     AsyncFunction("replaceWireGuardKeyPair") { (privateKey: String, publicKey: String, keyEpoch: Int) throws -> Bool in
       try self.keyStore.replaceKeyPair(WireGuardKeyPair(
         privateKey: privateKey,

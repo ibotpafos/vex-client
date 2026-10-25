@@ -1,9 +1,3 @@
-export type NativeDeviceRegistrationAttempt<T> = {
-  accessToken: string;
-  externalDeviceId: string;
-  promise: Promise<T>;
-};
-
 const registrationAttempts = new Map<string, Map<string, Promise<unknown>>>();
 
 export function getOrCreateNativeDeviceRegistration<T>(

@@ -79,7 +79,11 @@ function compareLocationCandidates(
 }
 
 export function isSelectableLocation(location: VpnLocation): boolean {
-  return location.availability.trim().toLowerCase() === 'available' && location.healthyNodes > 0;
+  if (typeof location.availability !== 'string' || typeof location.status !== 'string') return false;
+  return Number.isFinite(location.healthyNodes) && location.healthyNodes > 0
+    && (location.awg3Nodes === undefined || (Number.isSafeInteger(location.awg3Nodes) && location.awg3Nodes > 0))
+    && location.availability.trim().toLowerCase() === 'available'
+    && ['active', 'online', 'healthy', 'degraded'].includes(location.status.trim().toLowerCase());
 }
 
 function locationStatusScore(location: VpnLocation): number {

@@ -4,7 +4,7 @@ const {
   AndroidConfig,
   withAndroidManifest,
   withDangerousMod,
-} = require('@expo/config-plugins');
+} = require('expo/config-plugins');
 
 const androidPermissions = [
   'android.permission.FOREGROUND_SERVICE',

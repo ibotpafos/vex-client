@@ -61,6 +61,9 @@ profile="${branch}"
 # Production currently exposes the pre-app-id publish API. CLI 3 uses
 # /<app-id>/requestUploadUrl and receives 404; keep the publisher compatible
 # until the server protocol migration is completed and verified.
+# TODO(ota-dependencies): Qualify the pinned publisher and Expo certificate
+# validation against GHSA-86w9-cpqp-85rv when a maintained node-forge fix is
+# available; 1.4.0 has no patched release on 2026-10-23. Keep signing policy intact.
 ota_cli=(npm exec --yes --package=eoas@2.3.23 -- eoas)
 args=("${operation}" --branch "${branch}" --platform "${platform}")
 if [[ "${operation}" == "publish" ]]; then

@@ -2,6 +2,7 @@ import { Platform } from 'react-native';
 import type { QueryClient } from '@tanstack/react-query';
 
 import * as SecureStore from '@/native/secureStore';
+import { updateStoredJsonObject } from '@/native/storedJsonObject';
 import type { VpnProfile } from './profile';
 import { defaultVpnRoutingMode } from './routingPolicy';
 import {
@@ -12,6 +13,8 @@ import {
   isUsableHotVpnProfileRecord as isUsableHotVpnProfileRecordForRuntime,
   normalizeHotProfileLocationId,
   profileFromHotRecord,
+  profileCacheTimestampRejectionReason,
+  runtimeProfileKey,
   type HotVpnProfileRecord,
 } from './hotProfileCacheCore';
 
@@ -22,10 +25,9 @@ export {
   isUsableHotVpnProfileRecord,
   profileFromHotRecord,
   withLastSuccessfulEndpoint,
+  runtimeProfileKey,
   type HotVpnProfileRecord,
 } from './hotProfileCacheCore';
-
-type HotVpnProfileStore = Record<string, HotVpnProfileRecord>;
 
 export type HotVpnProfileMetadata = {
   lastSuccessfulEndpoint?: string;
@@ -63,18 +65,16 @@ export async function loadHotVpnProfileResult(
   }
   const routingMode = typeof routingModeOrNowMs === 'string' ? routingModeOrNowMs : undefined;
   const effectiveNowMs = typeof routingModeOrNowMs === 'number' ? routingModeOrNowMs : nowMs;
-  const store = await readHotVpnProfileStore();
   const key = hotVpnProfileStoreKey(userId, locationId, runtimeProfileKey(), routingMode);
-  const record = store[key];
-  if (!isUsableHotVpnProfileRecordForRuntime(record, userId, locationId, runtimeProfileKey(), effectiveNowMs)) {
-    const rejectedReason = hotVpnProfileRejectionReason(record, userId, locationId, runtimeProfileKey(), effectiveNowMs) ?? undefined;
-    if (record) {
+  return updateStoredJsonObject<HotVpnProfileRecord, HotVpnProfileLoadResult>(hotVpnProfilesStorageKey, (store) => {
+    const record = store[key];
+    const rejectedReason = hotVpnProfileRejectionReason(record, userId, locationId, runtimeProfileKey(), effectiveNowMs);
+    if (rejectedReason !== null) {
       delete store[key];
-      await writeHotVpnProfileStore(store);
+      return { record: null, rejectedReason };
     }
-    return { record: null, rejectedReason };
-  }
-  return { record };
+    return { record };
+  }).catch(() => ({ record: null }));
 }
 
 export async function saveHotVpnProfile(
@@ -86,8 +86,11 @@ export async function saveHotVpnProfile(
   if (!supportsPersistentHotVpnProfiles() || profile.rotationRequired) {
     return null;
   }
-  const store = await readHotVpnProfileStore();
+  const nowMs = metadata.nowMs ?? Date.now();
+  const savedAtMs = profile.cacheSavedAtMs === undefined ? nowMs : profile.cacheSavedAtMs;
+  if (profileCacheTimestampRejectionReason(savedAtMs, nowMs) !== null) return null;
   const storedProfile = { ...profile, source: 'local' as const };
+  delete storedProfile.cacheSavedAtMs;
   delete storedProfile.connectPreparationTiming;
   delete storedProfile.hotProfileAgeMs;
   delete storedProfile.hotProfileUsed;
@@ -100,11 +103,12 @@ export async function saveHotVpnProfile(
     runtimeKey: runtimeProfileKey(),
     locationId: normalizeHotProfileLocationId(locationId || profile.locationId),
     profile: storedProfile,
-    savedAtMs: metadata.nowMs ?? Date.now(),
+    savedAtMs,
     lastSuccessfulEndpoint: normalizeOptionalEndpoint(metadata.lastSuccessfulEndpoint),
   };
-  store[hotVpnProfileStoreKey(userId, locationId || profile.locationId, runtimeProfileKey(), profile.routingMode)] = record;
-  await writeHotVpnProfileStore(store);
+  await updateStoredJsonObject<HotVpnProfileRecord, void>(hotVpnProfilesStorageKey, (store) => {
+    store[hotVpnProfileStoreKey(userId, locationId || profile.locationId, runtimeProfileKey(), profile.routingMode)] = record;
+  });
   return record;
 }
 
@@ -116,14 +120,12 @@ export async function clearHotVpnProfiles(userId?: string): Promise<void> {
     await SecureStore.deleteItemAsync(hotVpnProfilesStorageKey);
     return;
   }
-  const store = await readHotVpnProfileStore();
   const normalizedUserId = userId.trim();
-  for (const [key, record] of Object.entries(store)) {
-    if (record.userId === normalizedUserId) {
-      delete store[key];
+  await updateStoredJsonObject<HotVpnProfileRecord, void>(hotVpnProfilesStorageKey, (store) => {
+    for (const [key, record] of Object.entries(store)) {
+      if (record?.userId === normalizedUserId) delete store[key];
     }
-  }
-  await writeHotVpnProfileStore(store);
+  });
 }
 
 export async function hydrateHotVpnProfilesToQueryCache(
@@ -131,62 +133,33 @@ export async function hydrateHotVpnProfilesToQueryCache(
   accessToken: string,
   queryClient: QueryClient,
   nowMs = Date.now(),
+  isCurrent: () => boolean = () => true,
 ): Promise<HotVpnProfileRecord[]> {
   if (!supportsPersistentHotVpnProfiles()) {
     return [];
   }
-  const store = await readHotVpnProfileStore();
-  const records: HotVpnProfileRecord[] = [];
-  let changed = false;
-  for (const [key, record] of Object.entries(store)) {
-    if (!isUsableHotVpnProfileRecordForRuntime(record, userId, record.locationId, runtimeProfileKey(), nowMs)) {
-      delete store[key];
-      changed = true;
-      continue;
+  const records = await updateStoredJsonObject<HotVpnProfileRecord, HotVpnProfileRecord[]>(hotVpnProfilesStorageKey, (store) => {
+    if (!isCurrent()) return [];
+    const usable: HotVpnProfileRecord[] = [];
+    for (const [key, record] of Object.entries(store)) {
+      if (!isUsableHotVpnProfileRecordForRuntime(record, userId, record?.locationId, runtimeProfileKey(), nowMs)) {
+        delete store[key];
+        continue;
+      }
+      usable.push({ ...record, profile: profileFromHotRecord(record, nowMs) });
     }
-    const profile = profileFromHotRecord(record, nowMs);
+    return usable;
+  }).catch(() => []);
+  for (const record of records) {
+    if (!isCurrent()) return [];
+    const profile = record.profile;
     queryClient.setQueryData(['vpn-profile', accessToken, record.locationId, profile.routingMode ?? defaultVpnRoutingMode], profile);
+    if (!isCurrent()) return [];
     if (profile.entitlement) {
       queryClient.setQueryData(['entitlement', accessToken], profile.entitlement);
     }
-    records.push({ ...record, profile });
-  }
-  if (changed) {
-    await writeHotVpnProfileStore(store);
   }
   return records;
-}
-
-export function runtimeProfileKey(): string {
-  if (typeof navigator === 'undefined') {
-    return 'native';
-  }
-  const platform = typeof navigator.platform === 'string' && navigator.platform.trim()
-    ? navigator.platform
-    : 'native';
-  const userAgent = typeof navigator.userAgent === 'string' ? navigator.userAgent : '';
-  return `${platform}:${userAgent || 'runtime'}`;
-}
-
-async function readHotVpnProfileStore(): Promise<HotVpnProfileStore> {
-  const raw = await SecureStore.getItemAsync(hotVpnProfilesStorageKey).catch(() => null);
-  if (!raw) {
-    return {};
-  }
-  try {
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-async function writeHotVpnProfileStore(store: HotVpnProfileStore): Promise<void> {
-  if (Object.keys(store).length === 0) {
-    await SecureStore.deleteItemAsync(hotVpnProfilesStorageKey).catch(() => undefined);
-    return;
-  }
-  await SecureStore.setItemAsync(hotVpnProfilesStorageKey, JSON.stringify(store));
 }
 
 function normalizeOptionalEndpoint(endpoint?: string): string | undefined {

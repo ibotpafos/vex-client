@@ -36,7 +36,6 @@ function shouldUseWebStorage(): boolean {
   return Platform.OS === 'web';
 }
 
-
 function getWebStorageItem(key: string): string | null {
   if (Platform.OS !== 'web') {
     return null;
@@ -77,20 +76,49 @@ async function clearRequiredLegacyWebSession(): Promise<void> {
   }
 }
 
-function clearWebStorageItems(keys: readonly string[]): void {
-  for (const key of keys) {
-    webSensitiveMemoryStorage.delete(key);
-    deleteWebStorageItem(key);
-  }
+const webSensitiveMemoryStorage = new Map<string, string>();
+const itemOperations = new Map<string, Promise<void>>();
+
+function withItemOperation<T>(key: string, run: () => Promise<T>): Promise<T> {
+  const previous = itemOperations.get(key) ?? Promise.resolve();
+  const pending = previous.then(run);
+  const tail = pending.then(() => undefined, () => undefined);
+  itemOperations.set(key, tail);
+  void tail.then(() => {
+    if (itemOperations.get(key) === tail) itemOperations.delete(key);
+  });
+  return pending;
 }
 
-const webSensitiveMemoryStorage = new Map<string, string>();
+export function getItemAsync(key: string): Promise<string | null> {
+  return withItemOperation(key, () => readItem(key));
+}
+
+export function setItemAsync(key: string, value: string): Promise<void> {
+  return withItemOperation(key, () => writeItem(key, value));
+}
+
+export function deleteItemAsync(key: string): Promise<void> {
+  return withItemOperation(key, () => removeItem(key));
+}
+
+/** A synchronous transform and its write share one key slot in this JS runtime. */
+export function updateItemAsync(key: string, update: (value: string | null) => string | null): Promise<void> {
+  return withItemOperation(key, async () => {
+    const current = await readItem(key);
+    const next = update(current);
+    if (next !== null && typeof next !== 'string') throw new TypeError('Stored item update must return a string or null.');
+    if (next === current) return;
+    if (next === null) await removeItem(key);
+    else await writeItem(key, next);
+  });
+}
 
 function shouldUseMemoryOnlyWebStorage(key: string): boolean {
   return shouldUseMemoryOnlySensitiveWebStorage(Platform.OS, key, SENSITIVE_STORAGE_KEYS);
 }
 
-export async function getItemAsync(key: string): Promise<string | null> {
+async function readItem(key: string): Promise<string | null> {
   if (shouldUseMemoryOnlyWebStorage(key)) {
     if (webSensitiveMemoryStorage.has(key)) {
       return webSensitiveMemoryStorage.get(key) ?? null;
@@ -109,7 +137,7 @@ export async function getItemAsync(key: string): Promise<string | null> {
   return SecureStore.getItemAsync(key);
 }
 
-export async function setItemAsync(key: string, value: string): Promise<void> {
+async function writeItem(key: string, value: string): Promise<void> {
   if (shouldUseMemoryOnlyWebStorage(key)) {
     // A new login must not leave the previous account in either legacy copy.
     // History writes are best effort, so verify both before publishing primary.
@@ -125,7 +153,7 @@ export async function setItemAsync(key: string, value: string): Promise<void> {
   return SecureStore.setItemAsync(key, value);
 }
 
-export async function deleteItemAsync(key: string): Promise<void> {
+async function removeItem(key: string): Promise<void> {
   if (shouldUseMemoryOnlyWebStorage(key)) {
     webSensitiveMemoryStorage.delete(key);
     deleteWebStorageItem(key, LOGOUT_REQUIRED_STORAGE_KEYS.has(key));
@@ -140,9 +168,6 @@ export async function deleteItemAsync(key: string): Promise<void> {
 
 export async function clearSecureKeys(keys: readonly string[]): Promise<void> {
   const results = await Promise.allSettled(keys.map((key) => deleteItemAsync(key)));
-
-  // На вебе сессия могла сохраниться в localStorage в промежуточных версиях.
-  clearWebStorageItems(keys);
 
   // Both durable session copies must be removed before logout can succeed.
   // Attempt every key first; unrelated cache cleanup remains best effort.

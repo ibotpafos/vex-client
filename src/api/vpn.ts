@@ -7,12 +7,13 @@ import { isKeyEpochMismatchError, nextManagedKeyEpoch } from '@/vpn/keyEpochReco
 import { defaultVpnRoutingMode, defaultVpnRoutingPolicyVersion, resolvedVpnBypassRegion } from '@/vpn/routingPolicy';
 import { devicePushTokenPath } from '@/notifications/pushRegistration';
 import { jsonRequest, rawRequest, clientVersionHeaders } from './client';
-import { ApiRequestError } from './error';
+import { ApiRequestError, isApiRequestCancelled, requireRequestActive } from './error';
+import { withRequestCancellation } from './requestCancellation';
 import { buildCreateDeviceRequest } from './deviceCreateRequest';
 import { clientDiagnosticsRequestBody } from './clientDiagnosticsRequest';
 import { getOrCreateNativeDeviceRegistration } from './nativeDeviceRegistration';
 import { me } from './auth';
-import { clearPendingVpnAccountKeyPair, confirmVpnAccountRegistration, getOrCreateVpnAccountIdentity, pendingVpnAccountKeyPair, renewVpnAccountInstallation, savePendingVpnAccountKeyPair, saveVpnAccountKeyPair, vpnAccountRegistrationIdempotencyKey, withVpnAccountIdentity, type VpnAccountIdentity, type VpnAccountIdentityOptions } from '../native/vpnAccountIdentity';
+import { clearPendingVpnAccountKeyPair, confirmVpnAccountRegistration, getOrCreateVpnAccountIdentity, pendingVpnAccountKeyPair, rememberVpnAccountDevice, renewVpnAccountInstallation, savePendingVpnAccountKeyPair, saveVpnAccountKeyPair, vpnAccountRegistrationIdempotencyKey, withVpnAccountIdentity, type VpnAccountIdentity, type VpnAccountIdentityOptions } from '../native/vpnAccountIdentity';
 import {
   type VpnDevice,
   type VpnLocation,
@@ -35,6 +36,12 @@ import {
   type AcknowledgeStagedDevicePSKProfileResultDTO,
   type RegisterDevicePushTokenResultDTO,
   type RegisterNativeDeviceResultDTO,
+  type NativeDeviceRegistrationRequest,
+  type NativeDeviceIdentityChallengeRequest,
+  type NativeVPNKeyRotationInput,
+  type NativeVPNConnectionEventInput,
+  type NativeVPNPushTokenInput,
+  type NativeVPNPSKRotationACKInput,
 } from './dto';
 import { managedProfileAmneziaConfig } from '../vpn/amneziaConfig';
 import { withManagedProfileAWGCapability } from '../vpn/profileCapabilities';
@@ -45,36 +52,56 @@ import { requireVpnLocationId } from '../vpn/locationId';
 import { canRevalidateDevice } from '../vpn/profileRevalidation';
 import { SessionOperationSupersededError } from '../vpn/sessionOperation';
 import { nativeRoutingParameters, routingAuthorization } from '../vpn/nativeRoutingPolicy';
+import { isPositiveSafeInteger, isNonnegativeSafeInteger } from '../vpn/profileNumbers';
 
 const mobileProtocol = 'amneziawg';
 
+// A legacy path is eligible only after a local pre-dispatch capability failure
+// or a recognized legacy rejection from the managed-profile endpoint itself.
+class LegacyProfileFallbackError extends Error {
+  readonly originalError: Error;
+
+  constructor(originalError: Error) {
+    super('Managed VPN profile is unavailable for this legacy client.');
+    this.originalError = originalError;
+  }
+}
+
 export async function preparedTunnel(accessToken: string, client: VpnClientDescriptor = currentVpnClient(), options: PreparedTunnelOptions = {}): Promise<PreparedTunnel> {
-  requireCurrentSession(options.isCurrentSessionOperation);
+  requireProfileRequest(options);
   try {
     return await managedVpnProfile(accessToken, client, options);
   } catch (error) {
-    requireCurrentSession(options.isCurrentSessionOperation);
-    if (error instanceof SessionOperationSupersededError) throw error;
-    if (requiresManagedNativeProfile(client)) {
-      throw error;
+    requireProfileRequest(options);
+    const originalError = error instanceof LegacyProfileFallbackError ? error.originalError : error;
+    if (originalError instanceof SessionOperationSupersededError || isApiRequestCancelled(originalError)) throw originalError;
+    if (!(error instanceof LegacyProfileFallbackError) || requiresManagedNativeProfile(client)) {
+      throw originalError;
     }
-    logApiDebug('managed vpn profile failed, falling back to prepared tunnel:', error instanceof Error ? error.message : error);
+    logApiDebug('managed profile unavailable for legacy client; using device config');
   }
   return preparedTunnelFromDeviceConfig(accessToken, client, options);
 }
 
 async function preparedTunnelFromDeviceConfig(accessToken: string, client: VpnClientDescriptor = currentVpnClient(), options: PreparedTunnelOptions = {}): Promise<PreparedTunnel> {
-  const versionHeaders = await clientVersionHeaders();
+  requireProfileRequest(options);
+  const versionHeaders = await withRequestCancellation(clientVersionHeaders, options.signal);
+  requireProfileRequest(options);
   const locationId = normalizeLocationId(options.locationId);
-  const [allDevices, runtimeDeviceId] = await Promise.all([vpnDevices(accessToken), getOrCreateDeviceId()]);
+  const [allDevices, runtimeDeviceId] = await withRequestCancellation(() => Promise.all([vpnDevices(accessToken, options.signal), getOrCreateDeviceId()]), options.signal);
+  requireProfileRequest(options);
   const baseExternalDeviceId = nativeDeviceId(runtimeDeviceId);
   let device = nativeVpnDeviceForClient(allDevices, locationId, baseExternalDeviceId, baseExternalDeviceId);
   device ??= allDevices.find((d) => d.status === 'active' && d.protocol === mobileProtocol && d.name === client.deviceName);
 
   if (!device) {
     try {
-      device = await createDevice(accessToken, client, locationId, baseExternalDeviceId);
+      requireProfileRequest(options);
+      device = await createDevice(accessToken, client, locationId, baseExternalDeviceId, options);
+      requireProfileRequest(options);
     } catch (error) {
+      requireProfileRequest(options);
+      if (isApiRequestCancelled(error)) throw error;
       const fallback = allDevices.find((d) => d.status === 'active' && d.protocol === mobileProtocol);
       if (fallback) {
         logApiDebug('createDevice failed, falling back to existing active device for testing:', fallback.name);
@@ -85,11 +112,13 @@ async function preparedTunnelFromDeviceConfig(accessToken: string, client: VpnCl
     }
   }
 
+  requireProfileRequest(options);
   const token = await jsonRequest<{ token: string }>(`/v1/devices/${encodeURIComponent(device.id)}/config-token`, {
     method: 'POST',
     accessToken,
     headers: versionHeaders,
   });
+  requireProfileRequest(options);
   const configQuery = new URLSearchParams({
     format: 'conf',
     token: token.token,
@@ -98,23 +127,29 @@ async function preparedTunnelFromDeviceConfig(accessToken: string, client: VpnCl
   const config = await rawRequest(`/v1/devices/${encodeURIComponent(device.id)}/config?${configQuery.toString()}`, {
     accessToken,
     headers: versionHeaders,
+    // Config issuance can also assign or reconcile a peer.
+    retryCount: 0,
+    ...(options.signal ? { signal: options.signal } : {}),
   });
+  requireProfileRequest(options);
   return { device, config };
 }
 
 async function managedVpnProfile(accessToken: string, client: VpnClientDescriptor, options: PreparedTunnelOptions): Promise<PreparedTunnel> {
-  const requireCurrentOperation = () => requireCurrentSession(options.isCurrentSessionOperation);
+  const requireCurrentOperation = () => requireProfileRequest(options);
+  const isCurrentProfileOperation = () => { requireCurrentOperation(); return true; };
   requireCurrentOperation();
   const startedAtMs = Date.now();
   const locationId = normalizeLocationId(options.locationId);
-  const accountPreparation = requiresManagedNativeProfile(client)
-    ? vpnAccountOptions(accessToken, client, locationId, options.userId, options.isCurrentSessionOperation)
-      .then(async accountOptions => ({ accountOptions, accountIdentity: await getOrCreateVpnAccountIdentity(accountOptions) }))
-    : Promise.resolve(undefined);
-  const [versionHeaders, initialKeyPair, runtimeDeviceId, account] = await Promise.all([
+  const [versionHeaders, initialKeyPair, runtimeDeviceId, account] = await withRequestCancellation(() => Promise.all([
     clientVersionHeaders(), requiresManagedNativeProfile(client) ? Promise.resolve(null) : getOrCreateWireGuardKeyPair(), getOrCreateDeviceId(),
-    accountPreparation,
-  ]);
+    // Start setup inside the observed aggregate. Cancellation before this
+    // callback runs must not leave an eager account promise unobserved.
+    requiresManagedNativeProfile(client)
+      ? vpnAccountOptions(accessToken, client, locationId, options.userId, options.isCurrentSessionOperation, options.signal)
+        .then(async accountOptions => ({ accountOptions, accountIdentity: await getOrCreateVpnAccountIdentity(accountOptions) }))
+      : Promise.resolve(undefined),
+  ]), options.signal);
   requireCurrentOperation();
   const accountOptions = account?.accountOptions, accountIdentity = account?.accountIdentity;
   const resolutionTiming = { startedAtMs, localPrepareMs: Math.max(0, Date.now() - startedAtMs), deviceLookupMs: 0, profileRequestMs: 0 };
@@ -124,12 +159,17 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
       requireCurrentOperation();
       const response = await requestManagedVpnProfile(accessToken, deviceId, locationId, routingMode, bypassRegion, versionHeaders, knownVersion);
       requireCurrentOperation();
+      if (!response.revoked && response.version !== undefined && !isPositiveSafeInteger(response.version)) {
+        throw new Error('Сервер вернул некорректную версию VPN-профиля.');
+      }
       return response;
     } finally {
       resolutionTiming.profileRequestMs += Math.max(0, Date.now() - started);
     }
   };
   let keyPair = accountIdentity?.keyPair ?? initialKeyPair;
+  const pendingAccountKeyPair = accountIdentity ? await pendingVpnAccountKeyPair(accountIdentity.keyScope, options.isCurrentSessionOperation) : undefined;
+  requireCurrentOperation();
   const baseExternalDeviceId = nativeDeviceId(accountIdentity?.externalDeviceId ?? runtimeDeviceId);
   const externalDeviceId = baseExternalDeviceId;
   const routingMode = options.routingMode ?? defaultVpnRoutingMode;
@@ -137,6 +177,7 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
   const routingPolicy = supportsNativeRoutingPolicy() && routingMode === 'all_except_ru'
     ? jsonRequest<{ authorization?: unknown }>(`/v1/vpn/routing-policy?region=ru&platform=${Platform.OS}&schema_version=2`, {
       accessToken, headers: versionHeaders, retryCount: 0, timeout: 5_000, suppressErrorLog: true,
+      ...(options.signal ? { signal: options.signal } : {}),
     }).then(result => routingAuthorization(result.authorization)).catch(() => undefined)
     : Promise.resolve(undefined);
   let device: VpnDevice | undefined;
@@ -144,15 +185,18 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
   let revalidateCachedConfig = false;
   const cachedDevice = options.cachedDevice;
   if (accountOptions && cachedDevice?.userId && cachedDevice.userId !== accountOptions.userId) throw new Error('VPN-устройство принадлежит другому аккаунту.');
-  if (!accountIdentity?.legacyRegistrationPending && options.cachedConfig && Number.isInteger(options.knownVersion) && (options.knownVersion ?? 0) > 0 &&
-      cachedDevice && Number.isInteger(cachedDevice.keyEpoch) && (cachedDevice.keyEpoch ?? 0) > 0 &&
+  if (!pendingAccountKeyPair && !accountIdentity?.legacyRegistrationPending && options.cachedConfig && isPositiveSafeInteger(options.knownVersion) &&
+      cachedDevice && isPositiveSafeInteger(cachedDevice.keyEpoch) &&
       canRevalidateDevice(cachedDevice, cachedDevice, keyPair?.publicKey ?? '') &&
       nativeVpnDeviceForClient([cachedDevice], locationId, externalDeviceId, baseExternalDeviceId)) {
     // A cached device is only a request hint. The authorized profile response
     // must confirm its exact key identity before we can skip /v1/devices.
     const candidate = await requestProfile(cachedDevice.id, options.knownVersion)
       .catch((error: unknown) => {
-        if (error instanceof ApiRequestError && error.status === 404) return null;
+        // Older servers may omit the error code for a deleted cache hint.
+        // Keep the existing one full lookup before deciding on legacy fallback.
+        const responseError = error instanceof LegacyProfileFallbackError ? error.originalError : error;
+        if (responseError instanceof ApiRequestError && responseError.status === 404) return null;
         throw error;
       });
     if (candidate?.revoked) throw new Error('Устройство отключено администратором.');
@@ -168,12 +212,17 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
     // Older servers and changed/replaced identities retain the full lookup and
     // transactional key-recovery path. Unconditional repair always enters here.
     const lookupStarted = Date.now();
-    const allDevices = accountIdentity?.ownedDevices ?? await vpnDevices(accessToken);
+    const allDevices = accountIdentity?.ownedDevices ?? await vpnDevices(accessToken, options.signal);
     requireCurrentOperation();
     if (accountOptions && allDevices.some(item => item.userId && item.userId !== accountOptions.userId)) throw new Error('Список VPN-устройств принадлежит другому аккаунту.');
     resolutionTiming.deviceLookupMs = Math.max(0, Date.now() - lookupStarted);
     device = nativeVpnDeviceForClient(allDevices, locationId, externalDeviceId, baseExternalDeviceId);
+    if (accountOptions && device && !isVpnAccountDeviceId(device.id)) {
+      throw new Error('Не удалось подтвердить VPN-устройство этого аккаунта.');
+    }
     if (!device || accountIdentity?.legacyRegistrationPending) {
+      // Registration/key confirmation is owned by the session transaction.
+      // A cancelled borrower must not interrupt its durable receipt or key.
       device = await getOrCreateNativeDeviceRegistration(
         accessToken,
         externalDeviceId,
@@ -188,6 +237,42 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
       }
     }
     if (accountOptions && device.userId && device.userId !== accountOptions.userId) throw new Error('VPN-устройство принадлежит другому аккаунту.');
+    if (accountOptions && (pendingAccountKeyPair || !device.publicKey)) {
+      // This recovery belongs to the profile request. Reuse the account
+      // owner's fences for both session and caller cancellation, while the
+      // shared registration above retains its independent durable receipt.
+      const recoveryOptions: VpnAccountIdentityOptions = {
+        ...accountOptions,
+        isCurrentSessionOperation: isCurrentProfileOperation,
+      };
+      const recovered = await withVpnAccountDevice(accessToken, device.id, recoveryOptions, async (currentDevice, identity) => {
+        const pending = await pendingVpnAccountKeyPair(identity.keyScope, recoveryOptions.isCurrentSessionOperation);
+        requireCurrentOperation();
+        if (!pending) {
+          if (currentDevice.publicKey || identity.confirmedKeyDeviceId === undefined) {
+            return { device: currentDevice, keyPair: identity.keyPair };
+          }
+          if (identity.legacyRegistrationPending || !isAccountKeyRecoveryDevice(currentDevice, recoveryOptions) || !isPositiveSafeInteger(currentDevice.keyEpoch)) {
+            throw new VpnProfileKeyChangedError();
+          }
+          if (identity.confirmedKeyDeviceId === currentDevice.id && currentDevice.keyEpoch < (identity.keyPair.keyEpoch ?? 1)) {
+            throw new VpnProfileKeyChangedError();
+          }
+          // The receipt selects known material; an omitted list field still
+          // needs a fresh noncreating proof, including at the same counter.
+          const confirmed = await confirmVpnAccountDeviceKey(accessToken, currentDevice, identity, identity.keyPair.publicKey, { client, options: recoveryOptions });
+          const keyPair = { ...identity.keyPair, keyEpoch: currentDevice.keyEpoch };
+          await saveVpnAccountKeyPair(identity.keyScope, keyPair, recoveryOptions.isCurrentSessionOperation, currentDevice.id);
+          return { device: confirmed, keyPair };
+        }
+        const result = await rotateVpnAccountDeviceKey(accessToken, currentDevice, identity, pending, recoveryOptions.isCurrentSessionOperation, { client, options: recoveryOptions });
+        if (!identity.legacyRegistrationPending) await clearPendingVpnAccountKeyPair(identity.keyScope, recoveryOptions.isCurrentSessionOperation);
+        return result;
+      });
+      requireCurrentOperation();
+      device = recovered.device;
+      keyPair = recovered.keyPair;
+    }
     if (deviceNeedsLocalKeySync(device, keyPair)) {
       try {
         device = await syncManagedVpnKey(accessToken, device.id, keyPair);
@@ -199,13 +284,13 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
         }
         // Web authorization can create a placeholder before the native key.
         // Recover through the normal transactional rotation to the next epoch.
-        device = await rotateManagedVpnKey(accessToken, device.id, device.keyEpoch, options.isCurrentSessionOperation, accountOptions?.userId);
+        device = await rotateManagedVpnKey(accessToken, device.id, device.keyEpoch, isCurrentProfileOperation, accountOptions?.userId);
         requireCurrentOperation();
         keyPair = accountOptions ? (await getOrCreateVpnAccountIdentity(accountOptions)).keyPair : await getOrCreateWireGuardKeyPair();
         requireCurrentOperation();
       }
     }
-    revalidateCachedConfig = Boolean(options.cachedConfig) && canRevalidateDevice(options.cachedDevice, device, keyPair?.publicKey ?? '');
+    revalidateCachedConfig = Boolean(options.cachedConfig) && isPositiveSafeInteger(options.knownVersion) && canRevalidateDevice(options.cachedDevice, device, keyPair?.publicKey ?? '');
     profile = await requestProfile(device.id, revalidateCachedConfig ? options.knownVersion : undefined);
   }
   if (profile.revoked) {
@@ -225,11 +310,14 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
     if (!revalidateCachedConfig || !options.cachedConfig) {
       throw new Error('Управляемый VPN-профиль не изменился, но локальный cache пуст.');
     }
+    if (profile.version !== undefined && profile.version !== options.knownVersion) {
+      throw new Error('Сервер вернул несовпадающую версию VPN-профиля.');
+    }
     return {
       config: options.cachedConfig,
       routingParameters: supportsNativeRoutingPolicy() ? nativeRoutingParameters(options.cachedConfig, routingMode, authorization) : undefined,
       resolutionTiming,
-      device,
+      device: managedProfileDevice(device, profile, options.cachedConfig),
       profileVersion: typeof profile.version === 'number' ? profile.version : options.knownVersion,
       routingMode,
       bypassRegion,
@@ -244,13 +332,7 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
     resolutionTiming,
     config,
     routingParameters: supportsNativeRoutingPolicy() ? nativeRoutingParameters(config, routingMode, authorization) : undefined,
-    device: {
-      ...device,
-      keyEpoch: profile.client_key_epoch ?? device.keyEpoch,
-      assignedIpv4: profile.assigned_ipv4 || device.assignedIpv4,
-      endpoint: managedProfileEndpoint(profile) || device.endpoint,
-      protocol: profile.protocol || device.protocol,
-    },
+    device: managedProfileDevice(device, profile, config),
     profileVersion: typeof profile.version === 'number' ? profile.version : undefined,
     routingMode,
     bypassRegion,
@@ -272,31 +354,46 @@ function requestManagedVpnProfile(
   const query = withManagedProfileAWGCapability(new URLSearchParams({device_id: deviceId, location: locationId, routing_mode: routed ? 'full_tunnel' : routingMode}));
   if (routed) query.set('routing_policy_version', '2');
   if (!routed && bypassRegion) query.set('bypass_region', bypassRegion);
-  if (!routed && typeof knownVersion === 'number' && knownVersion > 0) query.set('known_version', String(knownVersion));
-  return jsonRequest<NativeVPNProfileDTO>(`/v1/vpn/profile?${query.toString()}`, {accessToken, headers, suppressErrorLog:true});
+  if (!routed && isPositiveSafeInteger(knownVersion)) query.set('known_version', String(knownVersion));
+  // Profile GET can assign a node or reconcile its peer. Once dispatched, it
+  // owns the queue slot through completion, like registration/key writes. Only
+  // the caller wait is cancellable; guard before/after this operation instead.
+  return jsonRequest<NativeVPNProfileDTO>(`/v1/vpn/profile?${query.toString()}`, {accessToken, headers, suppressErrorLog:true, retryCount:0})
+    .catch((error: unknown) => {
+      // Coded API errors (including current owned-device404) remain authoritative.
+      // A failure from setup, registration or another route cannot reach here.
+      const legacyMessage = error instanceof ApiRequestError ? error.message.trim().toLowerCase() : '';
+      const unsupported = error instanceof ApiRequestError && !error.code && (
+        (error.status === 404 && legacyMessage === '404 page not found') ||
+        (error.status === 405 && legacyMessage === 'method not allowed') ||
+        (error.status === 501 && legacyMessage === 'not implemented')
+      );
+      if (unsupported) throw new LegacyProfileFallbackError(error);
+      throw error;
+    });
 }
 
-export async function vpnDevices(accessToken: string): Promise<VpnDevice[]> {
-  const response = await jsonRequest<DeviceDTO[]>('/v1/devices', { accessToken });
+export async function vpnDevices(accessToken: string, signal?: AbortSignal): Promise<VpnDevice[]> {
+  const response = await jsonRequest<DeviceDTO[]>('/v1/devices', { accessToken, ...(signal ? { signal } : {}) });
   return response.map(parseDevice);
 }
 
-export async function vpnLocations(accessToken: string): Promise<VpnLocation[]> {
-  const response = await jsonRequest<LocationDTO[]>('/v1/locations', { accessToken, suppressErrorLog: true });
+export async function vpnLocations(accessToken: string, signal?: AbortSignal): Promise<VpnLocation[]> {
+  const response = await jsonRequest<LocationDTO[]>('/v1/locations', { accessToken, suppressErrorLog: true, ...(signal ? { signal } : {}) });
   return normalizeLocationCatalog(response);
 }
 
-export async function vpnDeviceUsage(accessToken: string): Promise<VpnDeviceUsage[]> {
-  return (await vpnDeviceUsageSnapshot(accessToken)).usage;
+export async function vpnDeviceUsage(accessToken: string, signal?: AbortSignal): Promise<VpnDeviceUsage[]> {
+  return (await vpnDeviceUsageSnapshot(accessToken, undefined, signal)).usage;
 }
 
-export async function vpnDeviceUsageSnapshot(accessToken: string, deviceId?: string): Promise<VpnDeviceUsageSnapshot> {
+export async function vpnDeviceUsageSnapshot(accessToken: string, deviceId?: string, signal?: AbortSignal): Promise<VpnDeviceUsageSnapshot> {
   const query = new URLSearchParams();
   if (deviceId?.trim()) {
     query.set('device_id', deviceId.trim());
   }
   const path = query.size > 0 ? `/v1/devices/usage?${query.toString()}` : '/v1/devices/usage';
-  const response = await jsonRequest<DeviceUsageResponseDTO>(path, { accessToken, suppressErrorLog: true });
+  const response = await jsonRequest<DeviceUsageResponseDTO>(path, { accessToken, suppressErrorLog: true, ...(signal ? { signal } : {}) });
   return {
     usage: (response.usage ?? []).map(parseDeviceUsage),
     currentDeviceId: response.current_device_id || undefined,
@@ -305,9 +402,10 @@ export async function vpnDeviceUsageSnapshot(accessToken: string, deviceId?: str
   };
 }
 
-export async function vpnResiliencePolicy(accessToken: string): Promise<unknown> {
+export async function vpnResiliencePolicy(accessToken: string, signal?: AbortSignal): Promise<unknown> {
   return jsonRequest<unknown>('/v1/resilience/policy', {
     accessToken,
+    ...(signal ? { signal } : {}),
     retryCount: 0,
     suppressErrorLog: true,
     timeout: 2_500,
@@ -328,7 +426,7 @@ export async function reportVpnConnect(accessToken: string, tunnel: PreparedTunn
       profile_version: tunnel.profileVersion,
       protocol: tunnel.device?.protocol,
       client_time: new Date().toISOString(),
-    },
+    } satisfies NativeVPNConnectionEventInput,
   });
 }
 
@@ -345,7 +443,7 @@ export async function reportVpnDisconnect(accessToken: string, tunnel: { device?
       device_id: deviceId,
       profile_version: tunnel.profileVersion,
       reason,
-    },
+    } satisfies NativeVPNConnectionEventInput,
   });
 }
 
@@ -367,7 +465,7 @@ export async function registerDevicePushToken(accessToken: string, deviceId: str
       device_id: deviceId,
       provider: push.provider,
       token: push.token,
-    },
+    } satisfies NativeVPNPushTokenInput,
   });
   return parseDevice(response.device || ({} as DeviceDTO));
 }
@@ -383,9 +481,12 @@ export async function fetchStagedDevicePSKProfile(accessToken: string, currentPr
     accessToken,
     headers: await clientVersionHeaders(),
     suppressErrorLog: true,
+    // Fetching staged material advances its durable state. An uncertain
+    // response belongs to explicit recovery, even though this is a GET.
+    retryCount: 0,
   });
   requireCurrentSession(isCurrentSessionOperation);
-  if (response.activate !== false || response.profile_version !== response.profile.version) {
+  if (response.activate !== false || !isPositiveSafeInteger(response.profile_version) || !isPositiveSafeInteger(response.profile.version) || response.profile_version !== response.profile.version) {
     throw new Error('Сервер вернул некорректный staged AmneziaWG профиль.');
   }
   const client = currentVpnClient();
@@ -406,14 +507,9 @@ export async function fetchStagedDevicePSKProfile(accessToken: string, currentPr
     profileDigest: response.profile_digest,
     profile: {
       ...currentProfile,
+      cacheSavedAtMs: Date.now(),
       config,
-      device: {
-        ...device,
-        keyEpoch: response.profile.client_key_epoch ?? device.keyEpoch,
-        assignedIpv4: response.profile.assigned_ipv4 || device.assignedIpv4,
-        endpoint: managedProfileEndpoint(response.profile) || device.endpoint,
-        protocol: response.profile.protocol || device.protocol,
-      },
+      device: managedProfileDevice(device, response.profile, config),
       profileVersion: response.profile_version,
       rotationRequired: false,
       source: 'api',
@@ -435,7 +531,7 @@ export async function acknowledgeStagedDevicePSKProfile(
         device_id: staged.deviceId,
         profile_version: staged.profileVersion,
         profile_digest: staged.profileDigest,
-      },
+      } satisfies NativeVPNPSKRotationACKInput,
     },
   );
   if (!response.accepted || response.rotation_id !== staged.rotationId) {
@@ -443,20 +539,84 @@ export async function acknowledgeStagedDevicePSKProfile(
   }
 }
 
+type AccountKeyRotationResult = { device: VpnDevice; keyPair: WireGuardKeyPair };
+
+export class VpnProfileKeyChangedError extends Error {
+  readonly code = 'VPN_PROFILE_KEY_CHANGED';
+  constructor() { super('Ключ VPN-профиля изменился. Обновите профиль перед подключением.'); }
+}
+
+type ProfileKeyAdmissionOptions = Pick<PreparedTunnelOptions, 'userId' | 'isCurrentSessionOperation' | 'signal'>;
+
+export async function withCurrentVpnProfileKey<T>(accessToken: string, profile: VpnProfile, operation: () => Promise<T>, options: ProfileKeyAdmissionOptions = {}): Promise<T> {
+  requireProfileRequest(options);
+  const client = currentVpnClient();
+  if (!requiresManagedNativeProfile(client)) return operation();
+  if (!accessToken.trim()) throw new Error('Сначала войдите в аккаунт.');
+  const accountOptions = { ...await vpnAccountOptions(accessToken, client, profile.locationId, options.userId, options.isCurrentSessionOperation, options.signal),
+    // Admission may read an existing mapping; only preparation may create or
+    // migrate one. resolveAccountIdentity calls this before allocating a key.
+    loadOwnedDevices: async (): Promise<VpnDevice[]> => { throw new VpnProfileKeyChangedError(); },
+  };
+  return withVpnAccountIdentity(accountOptions, async identity => {
+    const pending = await pendingVpnAccountKeyPair(identity.keyScope, options.isCurrentSessionOperation);
+    requireProfileRequest(options);
+    const device = profile.device;
+    const externalDeviceId = nativeDeviceId(identity.externalDeviceId);
+    const privateKeys = Array.from(profile.config.matchAll(/^[ \t]*PrivateKey[ \t]*=[ \t]*([^\r\n]*)\r?$/gim), match => match[1].trim());
+    if (pending || identity.legacyRegistrationPending || !device ||
+        (device.userId && device.userId !== accountOptions.userId) ||
+        (identity.confirmedKeyDeviceId !== undefined && device.id !== identity.confirmedKeyDeviceId) ||
+        !nativeVpnDeviceForClient([device], profile.locationId, externalDeviceId, externalDeviceId) ||
+        (device.publicKey !== undefined && device.publicKey !== identity.keyPair.publicKey) ||
+        (device.keyEpoch !== undefined && (!isNonnegativeSafeInteger(device.keyEpoch) || (device.keyEpoch > 0 && device.keyEpoch < (identity.keyPair.keyEpoch ?? 1)))) ||
+        privateKeys.length !== 1 || privateKeys[0] !== identity.keyPair.privateKey) throw new VpnProfileKeyChangedError();
+    // Rotation and native dispatch share the account owner. Keep it until the
+    // real native promise settles, even when its caller stops waiting.
+    return operation();
+  });
+}
+
+export async function vpnProfileKeyIsCurrent(accessToken: string, profile: VpnProfile, options: ProfileKeyAdmissionOptions = {}): Promise<boolean> {
+  try { return await withCurrentVpnProfileKey(accessToken, profile, async () => true, options); }
+  catch (error) { if (error instanceof VpnProfileKeyChangedError) return false; throw error; }
+}
+
+async function withVpnAccountDevice<T>(accessToken: string, deviceId: string, options: VpnAccountIdentityOptions, use: (device: VpnDevice, identity: VpnAccountIdentity) => Promise<T>): Promise<T> {
+  return withVpnAccountIdentity(options, async identity => {
+    const device = (await vpnDevices(accessToken)).find(row => row.id === deviceId);
+    requireCurrentSession(options.isCurrentSessionOperation);
+    if (!device || (device.userId && device.userId !== options.userId)) throw new Error('Не удалось подтвердить VPN-устройство этого аккаунта.');
+    return use(device, identity);
+  });
+}
+
 export async function rotateManagedVpnKey(accessToken: string, deviceId: string, serverCurrentEpoch?: number, isCurrentSessionOperation?: () => boolean, userId?: string): Promise<VpnDevice> {
   requireCurrentSession(isCurrentSessionOperation);
+  // Account setup may persist keys. Reject an unusable server identity first.
+  if (serverCurrentEpoch !== undefined) nextManagedKeyEpoch(undefined, serverCurrentEpoch);
   const client = currentVpnClient();
   const accountOptions = requiresManagedNativeProfile(client)
     ? await vpnAccountOptions(accessToken, client, undefined, userId, isCurrentSessionOperation)
     : undefined;
-  return accountOptions
-    ? withVpnAccountIdentity(accountOptions, identity => rotateManagedVpnKeyForIdentity(accessToken, deviceId, serverCurrentEpoch, isCurrentSessionOperation, identity))
-    : rotateManagedVpnKeyForIdentity(accessToken, deviceId, serverCurrentEpoch, isCurrentSessionOperation);
+  if (accountOptions) {
+    return withVpnAccountDevice(accessToken, deviceId, accountOptions, async (device, identity) => {
+      const pending = await pendingVpnAccountKeyPair(identity.keyScope, isCurrentSessionOperation);
+      requireCurrentSession(isCurrentSessionOperation);
+      // A stale second caller must not generate another key after the first
+      // owner has completed. Pending material is reconciled instead.
+      if (!pending && serverCurrentEpoch !== undefined && device.keyEpoch !== undefined && device.keyEpoch !== serverCurrentEpoch) throw new SessionOperationSupersededError();
+      const result = await rotateVpnAccountDeviceKey(accessToken, device.keyEpoch === undefined ? { ...device, keyEpoch: serverCurrentEpoch } : device, identity, pending, isCurrentSessionOperation, { client, options: accountOptions });
+      if (!identity.legacyRegistrationPending) await clearPendingVpnAccountKeyPair(identity.keyScope, isCurrentSessionOperation);
+      return result.device;
+    });
+  }
+  return rotateUnscopedVpnKey(accessToken, deviceId, serverCurrentEpoch, isCurrentSessionOperation);
 }
 
-async function rotateManagedVpnKeyForIdentity(accessToken: string, deviceId: string, serverCurrentEpoch?: number, isCurrentSessionOperation?: () => boolean, identity?: VpnAccountIdentity): Promise<VpnDevice> {
+async function rotateUnscopedVpnKey(accessToken: string, deviceId: string, serverCurrentEpoch?: number, isCurrentSessionOperation?: () => boolean): Promise<VpnDevice> {
   requireCurrentSession(isCurrentSessionOperation);
-  const generatedKeyPair = await generateWireGuardKeyPair();
+  const generatedKeyPair = await generateWireGuardKeyPair({ independentEpoch: serverCurrentEpoch !== undefined });
   requireCurrentSession(isCurrentSessionOperation);
   if (!generatedKeyPair?.publicKey) {
     throw new Error('Локальный WireGuard ключ недоступен.');
@@ -465,7 +625,7 @@ async function rotateManagedVpnKeyForIdentity(accessToken: string, deviceId: str
     ...generatedKeyPair,
     keyEpoch: nextManagedKeyEpoch(generatedKeyPair.keyEpoch, serverCurrentEpoch),
   };
-  return commitManagedVpnKey(accessToken, deviceId, keyPair, isCurrentSessionOperation, identity);
+  return commitManagedVpnKey(accessToken, deviceId, keyPair, isCurrentSessionOperation);
 }
 
 async function commitManagedVpnKey(accessToken: string, deviceId: string, keyPair: WireGuardKeyPair, isCurrentSessionOperation?: () => boolean, identity?: VpnAccountIdentity): Promise<VpnDevice> {
@@ -474,47 +634,177 @@ async function commitManagedVpnKey(accessToken: string, deviceId: string, keyPai
     method: 'POST',
     accessToken,
     idempotencyKey: `native-rotate-key-${deviceId}-${keyPair.keyEpoch ?? Date.now()}`,
+    retryCount: 0,
     body: {
       device_id: deviceId,
       public_key: keyPair.publicKey,
       key_epoch: keyPair.keyEpoch ?? 1,
-    },
+    } satisfies NativeVPNKeyRotationInput,
   });
   requireCurrentSession(isCurrentSessionOperation);
   if (response.device.id !== deviceId || response.device.public_key !== keyPair.publicKey || response.device.psk_epoch !== keyPair.keyEpoch) throw new Error('Сервер не подтвердил новый ключ VPN.');
-  if (identity) await saveVpnAccountKeyPair(identity.keyScope, keyPair, isCurrentSessionOperation);
+  if (identity) await saveVpnAccountKeyPair(identity.keyScope, keyPair, isCurrentSessionOperation, deviceId);
   else await replaceWireGuardKeyPair(keyPair);
   requireCurrentSession(isCurrentSessionOperation);
   return parseDevice(response.device);
 }
 
-async function separateLegacyAccountKey(accessToken: string, device: VpnDevice, identity: VpnAccountIdentity, isCurrentSessionOperation?: () => boolean): Promise<VpnDevice> {
-  let pending = await pendingVpnAccountKeyPair(identity.keyScope, isCurrentSessionOperation);
+type AccountKeyIntent = NonNullable<Awaited<ReturnType<typeof pendingVpnAccountKeyPair>>>;
+type AccountKeyRecovery = { client: VpnClientDescriptor; options: VpnAccountIdentityOptions };
+
+function isVpnAccountDeviceId(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-zA-Z0-9._-]{1,160}$/.test(value);
+}
+
+function requirePendingKeyOwner(identity: VpnAccountIdentity, pending: AccountKeyIntent | undefined): void {
+  if (pending && identity.keyPair.publicKey !== pending.publicKey) {
+    const ownsBase = pending.ownerPublicKey !== undefined
+      ? identity.keyPair.publicKey === pending.ownerPublicKey
+      : (identity.keyPair.keyEpoch ?? 0) < (pending.keyEpoch ?? 1);
+    if (!ownsBase) throw new Error('Подтверждённый локальный ключ изменился после подготовки ротации VPN.');
+  }
+}
+
+function isAccountKeyRecoveryDevice(device: VpnDevice, options: VpnAccountIdentityOptions): boolean {
+  return device.userId === options.userId && device.platform === options.platform && device.status === 'active' &&
+    device.protocol === mobileProtocol && device.provisioningMode === 'managed_native' && device.clientKeyOwnership === 'client';
+}
+
+async function confirmVpnAccountDeviceKey(accessToken: string, device: VpnDevice, identity: VpnAccountIdentity, publicKey: string, recovery: AccountKeyRecovery): Promise<VpnDevice> {
+  const { client, options } = recovery;
+  if (!isPositiveSafeInteger(device.keyEpoch)) throw new Error('Не удалось подтвердить версию нового VPN-устройства.');
+  const confirmed = await registerNativeDevice(accessToken, client, { publicKey, keyEpoch: device.keyEpoch }, options.locationId,
+    identity.externalDeviceId, options.isCurrentSessionOperation, identity.installationId, options.userId, true, { deviceId: device.id });
+  requireCurrentSession(options.isCurrentSessionOperation);
+  if (confirmed.id !== device.id || !isAccountKeyRecoveryDevice(confirmed, options) ||
+      confirmed.publicKey !== publicKey || confirmed.keyEpoch !== device.keyEpoch) {
+    throw new Error('Сервер не подтвердил замену VPN-устройства.');
+  }
+  return confirmed;
+}
+
+async function reconcilePendingKeyBase(accessToken: string, device: VpnDevice, identity: VpnAccountIdentity, pending: AccountKeyIntent, recovery: AccountKeyRecovery | undefined): Promise<{ device: VpnDevice; pending: AccountKeyIntent }> {
+  const basePublicKey = pending.basePublicKey || identity.keyPair.publicKey;
+  if (!recovery || pending.deviceId !== device.id || pending.deviceId !== (identity.confirmedDeviceId ?? identity.legacyOwnedDeviceId) ||
+      !isAccountKeyRecoveryDevice(device, recovery.options) || !isPositiveSafeInteger(device.keyEpoch) ||
+      (device.publicKey && device.publicKey !== pending.publicKey && device.publicKey !== basePublicKey)) {
+    throw new Error('Не удалось подтвердить исходный серверный ключ незавершённой ротации VPN.');
+  }
+  let confirmed: VpnDevice;
+  try {
+    // A lost rotation response may already have installed the durable pair.
+    // These signed requests only read the existing binding/key tuple.
+    confirmed = await confirmVpnAccountDeviceKey(accessToken, device, identity, pending.publicKey, recovery);
+  } catch (error) {
+    requireCurrentSession(recovery.options.isCurrentSessionOperation);
+    // Only the established, definitive read-only conflict permits a second
+    // proof. Network/unknown results and malformed receipts retain the intent.
+    if (!(error instanceof ApiRequestError) || error.status !== 409 || error.code !== 'conflict' ||
+        error.message !== 'device_rebind_required' || basePublicKey === pending.publicKey) throw error;
+    confirmed = await confirmVpnAccountDeviceKey(accessToken, device, identity, basePublicKey, recovery);
+  }
+  return { device: confirmed, pending: { ...pending,
+    basePublicKey: confirmed.publicKey === pending.publicKey ? pending.basePublicKey : confirmed.publicKey } };
+}
+
+async function reconcilePendingKeyTarget(accessToken: string, device: VpnDevice, identity: VpnAccountIdentity, pending: AccountKeyIntent, recovery: AccountKeyRecovery | undefined): Promise<{ device: VpnDevice; pending: AccountKeyIntent }> {
+  if (!recovery || pending.deviceId !== (identity.confirmedDeviceId ?? identity.legacyOwnedDeviceId)) {
+    // TODO(account-key-recovery): older orphan journals without a recorded or
+    // migrated source device need an explicit owner-confirmed recovery flow.
+    throw new Error('Незавершённая ротация относится к другому VPN-устройству.');
+  }
+  const { options } = recovery;
+  const owned = await vpnDevices(accessToken);
+  requireCurrentSession(options.isCurrentSessionOperation);
+  // A still-active target remains the owner of its original intent. Account
+  // membership alone cannot transfer that intent to another installation.
+  if (owned.some(row => row.userId && row.userId !== options.userId) || owned.some(row => row.id === pending.deviceId && row.status === 'active')) {
+    throw new Error('Не удалось подтвердить замену прежнего VPN-устройства.');
+  }
+  const replacement = owned.find(row => row.id === device.id);
+  if (!replacement || !isAccountKeyRecoveryDevice(replacement, options) ||
+      !isPositiveSafeInteger(replacement.keyEpoch) ||
+      (replacement.publicKey !== identity.keyPair.publicKey && replacement.publicKey !== pending.publicKey)) {
+    throw new Error('Не удалось подтвердить ключ нового VPN-устройства.');
+  }
+  const requestPair = replacement.publicKey === pending.publicKey ? pending : identity.keyPair;
+  if (replacement.publicKey === pending.publicKey && replacement.keyEpoch < (pending.keyEpoch ?? 1)) {
+    throw new Error('Не удалось подтвердить версию нового VPN-устройства.');
+  }
+  const confirmed = await confirmVpnAccountDeviceKey(accessToken, replacement, identity, requestPair.publicKey, recovery);
+  const transferred = { ...pending, deviceId: confirmed.id,
+    basePublicKey: confirmed.publicKey === pending.publicKey ? pending.basePublicKey : confirmed.publicKey,
+    ownerPublicKey: pending.ownerPublicKey ?? identity.keyPair.publicKey,
+    keyEpoch: confirmed.publicKey === pending.publicKey ? pending.keyEpoch : nextManagedKeyEpoch(pending.keyEpoch, confirmed.keyEpoch) };
+  // Persist the proven target before rotation or active-key promotion. A lost
+  // registration reply leaves the original journal and active pair intact.
+  await savePendingVpnAccountKeyPair(identity.keyScope, transferred, options.isCurrentSessionOperation);
+  await rememberVpnAccountDevice(options, identity, confirmed.id);
+  return { device: confirmed, pending: transferred };
+}
+
+async function rotateVpnAccountDeviceKey(accessToken: string, device: VpnDevice, identity: VpnAccountIdentity, pending: Awaited<ReturnType<typeof pendingVpnAccountKeyPair>>, isCurrentSessionOperation?: () => boolean, recovery?: AccountKeyRecovery): Promise<AccountKeyRotationResult> {
   requireCurrentSession(isCurrentSessionOperation);
+  if (!isVpnAccountDeviceId(device.id)) throw new Error('Не удалось подтвердить VPN-устройство этого аккаунта.');
+  requirePendingKeyOwner(identity, pending);
+  if (pending?.deviceId && pending.deviceId !== device.id) {
+    ({ device, pending } = await reconcilePendingKeyTarget(accessToken, device, identity, pending, recovery));
+  }
+  if (pending && device.publicKey !== pending.publicKey && (
+    (pending.basePublicKey === '' && (Boolean(device.publicKey) || (device.keyEpoch !== undefined && device.keyEpoch + 1 !== pending.keyEpoch))) ||
+    (pending.basePublicKey !== '' && !device.publicKey)
+  )) {
+    ({ device, pending } = await reconcilePendingKeyBase(accessToken, device, identity, pending, recovery));
+  }
   if (pending && device.publicKey === pending.publicKey && Number.isSafeInteger(device.keyEpoch) && (device.keyEpoch ?? 0) >= (pending.keyEpoch ?? 1)) {
     // A lost rotation response must not discard its only private key. The
     // signed, owner-filtered response confirms this exact durable intent.
-    await saveVpnAccountKeyPair(identity.keyScope, { ...pending, keyEpoch: device.keyEpoch }, isCurrentSessionOperation);
-    return device;
+    const confirmed = { ...pending, keyEpoch: device.keyEpoch };
+    await saveVpnAccountKeyPair(identity.keyScope, confirmed, isCurrentSessionOperation, device.id);
+    return { device, keyPair: confirmed };
+  }
+  const boundIntent = pending?.deviceId && pending.basePublicKey !== undefined && pending.ownerPublicKey !== undefined;
+  // A target-only journal can be upgraded only while the confirmed local pair
+  // is still older and matches the owned server row. It cannot elect a newer
+  // local owner as the base of an earlier intent.
+  const olderTargetIntent = pending?.deviceId && pending.basePublicKey === undefined && pending.ownerPublicKey === undefined &&
+    (identity.keyPair.keyEpoch ?? 0) < (pending.keyEpoch ?? 1) && device.publicKey === identity.keyPair.publicKey;
+  if (pending && ((!boundIntent && !olderTargetIntent && !identity.legacyRegistrationPending) || (device.publicKey ?? '') !== (pending.basePublicKey ?? identity.keyPair.publicKey))) {
+    throw new Error('Не удалось подтвердить прежний ключ незавершённой ротации VPN.');
   }
   if (!pending) {
-    pending = await generateWireGuardKeyPair() ?? undefined;
+    pending = await generateWireGuardKeyPair({ independentEpoch: device.keyEpoch !== undefined }) ?? undefined;
     requireCurrentSession(isCurrentSessionOperation);
     if (!pending) throw new Error('Локальный WireGuard ключ недоступен.');
+    if (recovery) identity = await rememberVpnAccountDevice(recovery.options, identity, device.id);
   }
-  pending = { ...pending, keyEpoch: nextManagedKeyEpoch(pending.keyEpoch, device.keyEpoch) };
+  pending = {
+    ...pending,
+    deviceId: device.id,
+    basePublicKey: pending.basePublicKey ?? device.publicKey ?? '',
+    ownerPublicKey: pending.ownerPublicKey ?? identity.keyPair.publicKey,
+    keyEpoch: nextManagedKeyEpoch(pending.keyEpoch, device.keyEpoch),
+  };
   // Keep the last confirmed active pair until the server accepts the next one.
   // The journal is durable before POST and reuses the same key after restart.
   await savePendingVpnAccountKeyPair(identity.keyScope, pending, isCurrentSessionOperation);
-  return commitManagedVpnKey(accessToken, device.id, pending, isCurrentSessionOperation, identity);
+  const rotated = await commitManagedVpnKey(accessToken, device.id, pending, isCurrentSessionOperation, identity);
+  return { device: rotated, keyPair: pending };
 }
 
-async function vpnAccountOptions(accessToken: string, client: VpnClientDescriptor, locationId?: string, userId?: string, isCurrentSessionOperation?: () => boolean): Promise<VpnAccountIdentityOptions> {
+async function vpnAccountOptions(accessToken: string, client: VpnClientDescriptor, locationId?: string, userId?: string, isCurrentSessionOperation?: () => boolean, signal?: AbortSignal): Promise<VpnAccountIdentityOptions> {
   requireCurrentSession(isCurrentSessionOperation);
-  const accountId = userId?.trim() || (await me(accessToken)).id;
+  requireRequestActive(signal);
+  const accountId = userId?.trim() || (await me(accessToken, signal)).id;
+  requireRequestActive(signal);
   requireCurrentSession(isCurrentSessionOperation);
   const platform = client.platform === 'ios' || Platform.OS === 'ios' ? 'ios' : 'android';
   return { userId: accountId, platform, locationId: locationId?.trim() || '', loadOwnedDevices: () => vpnDevices(accessToken), isCurrentSessionOperation };
+}
+
+function requireProfileRequest(options: PreparedTunnelOptions): void {
+  requireCurrentSession(options.isCurrentSessionOperation);
+  requireRequestActive(options.signal);
 }
 
 function requireCurrentSession(isCurrentSessionOperation?: () => boolean): void {
@@ -532,14 +822,16 @@ async function syncManagedVpnKey(accessToken: string, deviceId: string, keyPair:
       device_id: deviceId,
       public_key: keyPair.publicKey,
       key_epoch: keyPair.keyEpoch ?? 1,
-    },
+    } satisfies NativeVPNKeyRotationInput,
   });
   return parseDevice(response.device);
 }
 
-async function createDevice(accessToken: string, client: VpnClientDescriptor, locationId: string | undefined, externalDeviceId: string): Promise<VpnDevice> {
+async function createDevice(accessToken: string, client: VpnClientDescriptor, locationId: string | undefined, externalDeviceId: string, options: PreparedTunnelOptions = {}): Promise<VpnDevice> {
   const location = normalizeLocationId(locationId);
-  const appInfo = await getAppInfo();
+  requireProfileRequest(options);
+  const appInfo = await withRequestCancellation(getAppInfo, options.signal);
+  requireProfileRequest(options);
   const request = buildCreateDeviceRequest(client, location, externalDeviceId, appInfo);
   const response = await jsonRequest<{ device: DeviceDTO }>('/v1/devices', {
     method: 'POST',
@@ -597,7 +889,8 @@ async function registerAccountNativeDevice(accessToken: string, client: VpnClien
     if (requiresKeySeparation) {
       // Register can reuse the row without changing its WG public key. A B-first
       // migration may have copied A's old global pair: rotate only B's row.
-      device = await separateLegacyAccountKey(accessToken, device, scope, options.isCurrentSessionOperation);
+      device = (await rotateVpnAccountDeviceKey(accessToken, device, scope, await pendingVpnAccountKeyPair(scope.keyScope, options.isCurrentSessionOperation), options.isCurrentSessionOperation, { client, options })).device;
+      scope = { ...scope, confirmedDeviceId: device.id };
     }
     if (scope.legacyRegistrationPending) await confirmVpnAccountRegistration(options, scope);
     if (requiresKeySeparation) await clearPendingVpnAccountKeyPair(scope.keyScope, options.isCurrentSessionOperation);
@@ -605,21 +898,34 @@ async function registerAccountNativeDevice(accessToken: string, client: VpnClien
   });
 }
 
-async function registerNativeDevice(accessToken: string, client: VpnClientDescriptor, keyPair: WireGuardKeyPair | null, locationId: string, externalDeviceId: string, isCurrentSessionOperation?: () => boolean, installationId = externalDeviceId, accountUserId?: string, requireIdentityProof = false): Promise<VpnDevice> {
+async function registerNativeDevice(accessToken: string, client: VpnClientDescriptor, keyPair: Pick<WireGuardKeyPair, 'publicKey' | 'keyEpoch'> | null, locationId: string, externalDeviceId: string, isCurrentSessionOperation?: () => boolean, installationId = externalDeviceId, accountUserId?: string, requireIdentityProof = false, reconciliation?: { deviceId: string }): Promise<VpnDevice> {
+  const reconcileDeviceId = reconciliation?.deviceId;
+  if (reconciliation !== undefined && !isVpnAccountDeviceId(reconcileDeviceId)) {
+    throw new Error('Не удалось подтвердить цель сверки VPN-устройства.');
+  }
   if (!keyPair?.publicKey) {
-    throw new Error('Локальные ключи WireGuard не сгенерированы. Проверьте настройки устройства.');
+    const error = new Error('Локальные ключи WireGuard не сгенерированы. Проверьте настройки устройства.');
+    // Web can use the server-generated legacy config. No registration has
+    // been dispatched at this local capability check. Native callers fail.
+    if (!requiresManagedNativeProfile(client)) throw new LegacyProfileFallbackError(error);
+    throw error;
   }
   const appInfo = await getAppInfo();
   requireCurrentSession(isCurrentSessionOperation);
-  const identity = await nativeDeviceIdentityRegistration(accessToken, installationId, keyPair.publicKey);
+  const identity = await nativeDeviceIdentityRegistration(accessToken, installationId, keyPair.publicKey, reconcileDeviceId);
   requireCurrentSession(isCurrentSessionOperation);
-  if (requireIdentityProof && !identity.identity_signature) throw new Error('Не удалось подтвердить прежнюю регистрацию VPN.');
+  if ((requireIdentityProof || reconcileDeviceId) && !identity.identity_signature) throw new Error('Не удалось подтвердить прежнюю регистрацию VPN.');
   const response = await jsonRequest<RegisterNativeDeviceResultDTO>('/v1/devices/register', {
     method: 'POST',
     accessToken,
-    idempotencyKey: accountUserId ? vpnAccountRegistrationIdempotencyKey(accountUserId, installationId, locationId) : `native-register-${installationId}-${locationId}`,
+    // A prior API may handle this POST during a rolling upgrade. A fresh
+    // challenge key cannot hit its creation replay before purpose validation.
+    idempotencyKey: reconcileDeviceId ? `native-reconcile-${identity.identity_challenge_id}`
+      : accountUserId ? vpnAccountRegistrationIdempotencyKey(accountUserId, installationId, locationId) : `native-register-${installationId}-${locationId}`,
+    ...(reconcileDeviceId ? { retryCount: 0 } : {}),
     body: {
       device_id: externalDeviceId,
+      ...(reconcileDeviceId ? { reconcile_device_id: reconcileDeviceId } : {}),
       installation_id: installationId,
       device_name: nativeDeviceName(client),
       platform: client.platform || appInfo.platform || Platform.OS,
@@ -629,16 +935,24 @@ async function registerNativeDevice(accessToken: string, client: VpnClientDescri
       public_key: keyPair?.publicKey,
       key_epoch: keyPair?.keyEpoch ?? (keyPair ? 1 : undefined),
       ...identity,
-    },
+    } satisfies NativeDeviceRegistrationRequest,
   });
+  if (reconcileDeviceId && (response.device_registered !== true || response.binding_status !== 'active' || response.trust_level !== 'software_secure_store')) {
+    throw new Error('Сервер не подтвердил владельца нового VPN-устройства.');
+  }
   return parseDevice(response.device);
 }
+
+type NativeDeviceIdentityProof = {
+  [Key in 'identity_public_key' | 'identity_key_type' | 'identity_challenge_id' | 'identity_signature']-?: NonNullable<NativeDeviceRegistrationRequest[Key]>;
+};
 
 async function nativeDeviceIdentityRegistration(
   accessToken: string,
   installationId: string,
   wireGuardPublicKey: string,
-): Promise<Record<string, string>> {
+  reconcileDeviceId?: string,
+): Promise<NativeDeviceIdentityProof | Record<string, never>> {
   const identity = await getOrCreateDeviceIdentity().catch((error) => {
     logApiDebug('device identity unavailable:', error instanceof Error ? error.message : error);
     return null;
@@ -653,9 +967,15 @@ async function nativeDeviceIdentityRegistration(
       suppressErrorLog: true,
       body: {
         installation_id: installationId,
-        purpose: 'register',
-      },
+        purpose: reconcileDeviceId ? 'reconcile' : 'register',
+        ...(reconcileDeviceId ? { device_id: reconcileDeviceId } : {}),
+      } satisfies NativeDeviceIdentityChallengeRequest,
     });
+    // An older API may normalize an unknown purpose to register. Never send
+    // the read-only reconciliation request unless support is explicit.
+    if (reconcileDeviceId && (challenge.purpose !== 'reconcile' || typeof challenge.id !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(challenge.id))) {
+      throw new Error('Сервер не поддерживает безопасную сверку VPN-устройства.');
+    }
     const payload = deviceIdentitySignaturePayload(
       {
         id: challenge.id,
@@ -729,6 +1049,9 @@ function logApiDebug(...items: unknown[]) {
 }
 
 export function parseDevice(item: DeviceDTO): VpnDevice {
+  if (item.psk_epoch !== undefined && !isNonnegativeSafeInteger(item.psk_epoch)) {
+    throw new Error('Сервер вернул некорректную эпоху ключа VPN.');
+  }
   return {
     id: item.id,
     userId: item.user_id || undefined,
@@ -816,6 +1139,22 @@ ${presharedKey ? `PresharedKey = ${presharedKey}\n` : ''}Endpoint = ${endpoint}
 AllowedIPs = ${(allowedIps?.length ? allowedIps : ['0.0.0.0/0']).join(', ')}
 PersistentKeepalive = 25
 `;
+}
+
+function managedProfileDevice(device: VpnDevice, profile: NativeVPNProfileDTO, config: string): VpnDevice {
+  const endpoint = /^Endpoint\s*=\s*(.+)$/m.exec(config)?.[1]?.trim()
+    || managedProfileEndpoint(profile) || device.endpoint;
+  return {
+    ...device,
+    keyEpoch: profile.client_key_epoch ?? device.keyEpoch,
+    assignedIpv4: profile.assigned_ipv4 || device.assignedIpv4,
+    endpoint,
+    // Issuing a profile can move this installation after /devices was read.
+    // An old node id must not suppress the new location's route policy.
+    // A changed endpoint gives no proof of node identity (it can be a relay).
+    nodeId: endpoint && endpoint === device.endpoint?.trim() ? device.nodeId : undefined,
+    protocol: profile.protocol || device.protocol,
+  };
 }
 
 export function managedProfileEndpoint(profile: NativeVPNProfileDTO): string | undefined {

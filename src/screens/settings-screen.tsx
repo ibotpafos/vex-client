@@ -23,6 +23,7 @@ import {
   View,
 } from "react-native";
 import { playSelectionHaptic } from "@/native/haptics";
+import { openVpnSettings } from "@/native/vexVpn";
 import {
   HOME_TAB_ROUTE,
   VPN_APPLICATIONS_ROUTE,
@@ -188,6 +189,28 @@ export default function SettingsScreen() {
             </View>
           </VexPressable>
         </VexSection>
+
+        {isAndroidApp ? (
+          <VexSection title="Защита при загрузке">
+            <VexPressable
+              style={styles.settingRow}
+              accessibilityRole="button"
+              accessibilityLabel="Настроить защиту VPN при загрузке"
+              onPress={() => {
+                playSelectionHaptic();
+                void openVpnSettings().then((opened) => {
+                  if (!opened) throw new Error('VPN settings unavailable');
+                }).catch(() => showSettingsToast({ message: 'Не удалось открыть настройки VPN Android.', variant: 'error' }));
+              }}
+            >
+              <View style={styles.rowCopy}>
+                <Text style={styles.rowTitle}>Настройки VPN Android</Text>
+                <Text style={styles.rowDescription}>Включите для VEX «Постоянная VPN» и «Блокировать соединения без VPN». Интернет будет заблокирован до подключения: откройте VEX и подключитесь. Исключённые приложения тоже будут заблокированы. Отключить эту защиту можно в настройках Android.</Text>
+              </View>
+              <ChevronRight color="#22D3EE" size={20} />
+            </VexPressable>
+          </VexSection>
+        ) : null}
 
         <VexSection title="Маршрутизация">
           {isAndroidApp ? (

@@ -110,6 +110,7 @@ export type VpnLocation = {
   priority: number;
   status: string;
   healthyNodes: number;
+  awg3Nodes?: number;
   capabilities: string[];
   endpoint?: string;
   latencyMs?: number;
@@ -205,6 +206,7 @@ export type PreparedTunnel = {
 };
 
 export type PreparedTunnelOptions = {
+  signal?: AbortSignal;
   userId?: string;
   isCurrentSessionOperation?: () => boolean;
   cachedDevice?: VpnDevice;

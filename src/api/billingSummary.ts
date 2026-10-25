@@ -1,17 +1,7 @@
-export type BillingEntitlement = {
-  active: boolean;
-  planId?: string;
-  displayName?: string;
-  accountStatus?: string;
-  subscriptionTitle?: string;
-  subscriptionSubtitle?: string;
-  remainingText?: string;
-  status?: string;
-  tier?: string;
-  currentPeriodEnd?: string;
-  effectiveExpiresAt?: string;
-  vpnAccess: boolean;
-};
+import { hasPaidEntitlement } from './entitlement';
+import type { Entitlement } from './types';
+
+export type BillingEntitlement = Entitlement;
 
 export type BillingPlanOption = {
   id: string;
@@ -97,7 +87,7 @@ export function buildBillingSummary(
     .filter((plan) => plan.status === 'active')
     .sort((a, b) => a.amount_cents - b.amount_cents || a.id.localeCompare(b.id));
   const currentPlan = currentBillingPlan(activePlans, currentEntitlement);
-  const hasActiveEntitlement = hasPaidBillingEntitlement(currentEntitlement);
+  const hasActiveEntitlement = hasPaidEntitlement(currentEntitlement);
   const entitlementStatus = currentEntitlement === null
     ? 'unknown'
     : hasActiveEntitlement
@@ -155,12 +145,8 @@ export function billingSummaryFallbackCopy(isLoading: boolean): BillingSummaryCo
     };
 }
 
-function hasPaidBillingEntitlement(item: BillingEntitlement | null | undefined): item is BillingEntitlement {
-  return Boolean(item?.vpnAccess || item?.active);
-}
-
 function currentBillingPlan(plans: BillingPlanSource[], entitlementState: BillingEntitlement | null): BillingPlanSource | null {
-  if (!hasPaidBillingEntitlement(entitlementState)) {
+  if (!hasPaidEntitlement(entitlementState)) {
     return null;
   }
   const planId = (entitlementState.planId || '').toLowerCase();

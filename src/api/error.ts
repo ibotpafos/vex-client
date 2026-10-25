@@ -14,6 +14,19 @@ export class ApiRequestError extends Error {
   }
 }
 
+export function requestCancelledError(): ApiRequestError {
+  // Do not copy signal.reason: it can contain private application data.
+  return new ApiRequestError('Запрос отменён.', { code: 'request_cancelled' });
+}
+
+export function requireRequestActive(signal?: AbortSignal): void {
+  if (signal?.aborted) throw requestCancelledError();
+}
+
+export function isApiRequestCancelled(error: unknown): boolean {
+  return error instanceof ApiRequestError && error.code === 'request_cancelled';
+}
+
 export function normalizeApiRequestError(error: unknown): Error {
   if (isTechnicalWorksError(error)) {
     if (error instanceof ApiRequestError) {
@@ -55,4 +68,25 @@ export function isTechnicalWorksError(error: unknown): boolean {
     || message.includes('connection refused')
     || message.includes('connection reset')
     || message.includes('превышено время ожидания api');
+}
+
+
+/** Narrow Go error DTO fields independently; never echo unknown structured data. */
+export function readApiErrorPayload(text: string): { code?: string; message?: string } {
+  const stringValue = (value: unknown) => typeof value === 'string' ? value.trim() || undefined : undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    const legacyText = text.trim();
+    const structured = ['{', '[', '"', '<'].some(prefix => legacyText.startsWith(prefix));
+    return { message: structured ? undefined : stringValue(legacyText) };
+  }
+  if (typeof parsed === 'string') return { message: stringValue(parsed) };
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+  const fields = parsed as Record<string, unknown>;
+  return {
+    code: stringValue(fields.code),
+    message: stringValue(fields.message) ?? stringValue(fields.error),
+  };
 }

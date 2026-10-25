@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { stripTypeScriptTypes } from 'node:module';
 import test from 'node:test';
 import { QueryClient } from '@tanstack/react-query';
-import { ApiRequestError, isMaintenanceStatus, normalizeApiRequestError } from '../src/api/error.ts';
+import { ApiRequestError, isMaintenanceStatus, normalizeApiRequestError, readApiErrorPayload, requireRequestActive, requestCancelledError } from '../src/api/error.ts';
 import { createApiQueryRetry } from '../src/api/queryRetry.ts';
 
 function queryClient(maxRetries = 1) {
@@ -19,6 +19,8 @@ for (const error of [
   new ApiRequestError('slow down', { status: 429 }),
   new ApiRequestError('temporarily unavailable', { status: 500, retryAfterMs: 60000 }),
   ...[400, 401, 403, 404, 409, 422].map(status => new ApiRequestError('rejected', { status })),
+  new ApiRequestError('bad config', { code: 'invalid_api_base_url' }),
+  new ApiRequestError('bad path', { code: 'invalid_api_path' }),
   new ApiRequestError('offline', { code: 'network_unavailable' }),
   new ApiRequestError('deadline', { code: 'request_timeout' }),
   ...[502, 503, 504].map(status => new ApiRequestError('maintenance', { status })),
@@ -75,11 +77,14 @@ for (const retries of [1, 2]) {
 
 // Exercise the real HTTP layer together with TanStack Query: a Retry-After
 // longer than the request deadline must remain a single fetch end to end.
+const config = stripTypeScriptTypes(fs.readFileSync('src/api/config.ts', 'utf8'))
+  .replace(/^import .*;$/gm, '').replace(/\bexport /g, '');
 const source = stripTypeScriptTypes(fs.readFileSync('src/api/client.ts', 'utf8'))
   .replace(/^import .*;$/gm, '').replace(/^export \{.*;$/gm, '').replace(/\bexport /g, '');
 function rawClient(fetch) {
-  return new Function('fetch', 'ApiRequestError', 'isMaintenanceStatus', 'normalizeApiRequestError', 'getAppInfo', 'getOrCreateDeviceId', 'Platform', 'androidExperimentalRoutingEnabled', 'androidProfilePlatform', source + '; return rawRequest;')(
-    fetch, ApiRequestError, isMaintenanceStatus, normalizeApiRequestError, async () => ({}), async () => 'fixture', { OS: 'android' }, () => false, () => 'android',
+  const fetchPolicy = stripTypeScriptTypes(fs.readFileSync('src/api/apiFetch.ts', 'utf8')).replace(/\bexport /g, '');
+  return new Function('fetch', 'ApiRequestError', 'isMaintenanceStatus', 'normalizeApiRequestError', 'readApiErrorPayload', 'requireRequestActive', 'requestCancelledError', 'getAppInfo', 'getOrCreateDeviceId', 'Platform', 'androidExperimentalRoutingEnabled', 'androidProfilePlatform', fetchPolicy + config + source + '; return rawRequest;')(
+    fetch, ApiRequestError, isMaintenanceStatus, normalizeApiRequestError, readApiErrorPayload, requireRequestActive, requestCancelledError, async () => ({}), async () => 'fixture', { OS: 'android' }, () => false, () => 'android',
   );
 }
 

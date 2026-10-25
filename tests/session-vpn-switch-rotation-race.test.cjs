@@ -20,7 +20,7 @@ function policy(file, dependencies = {}) {
 const sessionOperation = policy('src/vpn/sessionOperation.ts');
 const { SessionOperationSupersededError } = sessionOperation;
 const { switchVpnLocation } = policy('src/vpn/serverSwitch.ts', { './sessionOperation': sessionOperation });
-const rotation = policy('src/vpn/devicePskRotation.ts');
+const rotation = policy('src/vpn/devicePskRotation.ts', { './profileNumbers': policy('src/vpn/profileNumbers.ts') });
 const file = 'src/vpn/useVpnConnection.ts';
 const source = fs.readFileSync(path.join(repo, file), 'utf8');
 const root = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
@@ -158,7 +158,10 @@ function rotationHarness(stage, { type = 'cutover_ready', connected = true } = {
     acknowledgeStagedDevicePSKProfile: () => wait('api-ack'), clearStagedDevicePSKProfile: () => wait('clear'),
     acknowledgeDevicePushEvent: () => wait('native-ack'),
     disconnectVpn: () => wait('disconnect'),
-    connectProfileWithEndpointFallback: value => wait('connect', { profile: value, status: connectedStatus }),
+    connectProfileWithEndpointFallback: async (value, _isCurrent, beforeNativeConnect) => {
+      await beforeNativeConnect?.();
+      return wait('connect', { profile: value, status: connectedStatus });
+    },
     setActiveProfile: value => { calls.push('publish-profile'); state.activeProfile = value; },
     cacheProfile: () => calls.push('cache'), setVpnStatus: () => calls.push('publish-status'),
     reportVpnConnectEvent: () => calls.push('report-connect'),

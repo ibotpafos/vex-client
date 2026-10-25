@@ -152,10 +152,13 @@ var tests = new (string Name, Action Run)[]
 {
     ("Native installer rejects changed bundles and retains verified file locks", WindowsSetupBundleTests.Run),
     ("Physical AntiLeak probes reject remote failures and preserve caller cancellation", FullTunnelProbeFailurePolicyTests.Run),
+    ("Acceptance failures expose bounded fixed categories without private exception data", AcceptanceFailureClassificationTests.Run),
     ("Active controller death requires fresh exact-owner encrypted protection evidence", ControllerDeathReceiptTests.Run),
     ("VPN access and network failures preserve actionable guidance and safe intent", VpnFailurePresentationTests.Run),
     ("Release cohorts preserve actionable mandatory targets and strict dependency trust", WindowsReleasePolicyTests.Run),
     ("Shipping update keys match P256 signatures and reject incompatible key material", WindowsUpdateSignatureSignerTests.Run),
+    ("Realtime framing bounds transport reads and preserves chunked events", CustomerRealtimeFramingTests.Run),
+    ("Realtime resync preserves legacy null versions", CustomerRealtimeResyncContractTests.Run),
     ("Realtime session recovery preserves outages and rejects stale credential events", CustomerRealtimeSessionTests.Run),
     ("Realtime billing and device events cannot mutate a replacement session", RealtimeScopeIsolationTests.Run),
     ("Periodic entitlement checks preserve current sessions and user connection intent", ActiveEntitlementMonitorTests.Run),
@@ -174,7 +177,9 @@ var tests = new (string Name, Action Run)[]
     ("Required updates survive installer launch, restart and offline failures", NativeUpdateServiceTests.Run),
     ("Unreadable durable update state retains mandatory recovery protection", NativeUpdateRecoveryTests.Run),
     ("Preferences decode corruption safely and preserve valid legacy choices", NativeClientPreferencesJsonTests.Run),
+    ("Settings preserve toggle intent across inline refresh cancellation", SettingsPreferenceReentrancyTests.Run),
     ("App metadata decodes current server contracts and explicit historical aliases", AppMetadataContractTests.Run),
+    ("Update decisions require boolean controls and preserve legacy optional release metadata", AppUpdateControlContractTests.Run),
     ("Windows app metadata matches the published API compatibility contract on both architectures", AppMetadataContractTests.WindowsApiCompatibilityMatchesPublishedContract),
     ("Protected session cache handles corruption without replacing identity files", ProtectedStateFileTests.Run),
     ("Windows Hello changes commit durably and reject cancelled verification", WindowsHelloSessionTests.Run),
@@ -261,6 +266,7 @@ var tests = new (string Name, Action Run)[]
     ("Windows billing summary uses plans and entitlement contracts", WindowsBillingSummaryUsesContracts),
     ("Windows billing checkout uses the native billing contract", WindowsBillingCheckoutUsesContract),
     ("Windows control plane exposes macOS parity read APIs", WindowsControlPlaneExposesParityReads),
+    ("Billing payment amounts preserve server integer range and legacy optional fields", BillingPaymentContractTests.Run),
     ("Windows control plane sends VPN telemetry and diagnostics", WindowsControlPlaneSendsTelemetryAndDiagnostics),
     ("Windows control plane exposes app configuration and update metadata", WindowsControlPlaneExposesAppConfiguration),
     ("Windows realtime parser preserves complete SSE frames", WindowsRealtimeParserPreservesFrames),
@@ -305,9 +311,9 @@ var tests = new (string Name, Action Run)[]
  .Concat(VpnVendorServiceSafetyTests.All)
  .Concat(VpnProfileLifetimeCompatibilityTests.All).ToArray();
 
-tests = [.. tests, .. VpnNamedPipeTransportTests.Cases, .. VpnRuntimeLifetimeTests.All, .. VpnRuntimeRecoveryTests.All,
+tests = [.. tests, .. ControlProbeConnectionTests.Cases, .. VpnNamedPipeTransportTests.Cases, .. VpnRuntimeLifetimeTests.All, .. VpnRuntimeRecoveryTests.All,
     .. VpnEndpointAddressCacheTests.All, .. VpnAuthorizationDeadlineTests.All, .. VpnControlPlaneAddressCacheTests.All,
-    .. NetworkSafetyControllerRecoveryTests.All];
+    .. NetworkSafetyControllerRecoveryTests.All, .. VexApiConfigurationTests.All];
 
 var failures = new List<string>();
 foreach (var test in tests.Concat(RuntimeParityTests.All))

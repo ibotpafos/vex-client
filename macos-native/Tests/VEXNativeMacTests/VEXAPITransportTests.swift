@@ -66,6 +66,20 @@ final class VEXAPITransportTests: XCTestCase {
         XCTAssertEqual(fixture.delays, [0.6, 1.2])
     }
 
+    func testExplicitRetryCountIsBoundedAndCannotReplayWrites() async throws {
+        for (requested, expected) in [(Int.min, 1), (0, 1), (1, 2), (2, 3), (Int.max, 3)] {
+            let fixture = Fixture()
+            _ = try await fixture.transport(retryAfter: nil) { _ in 503 }
+                .data(for: URLRequest(url: url), timeout: 5, retryCount: requested)
+            XCTAssertEqual(fixture.calls, expected)
+        }
+        let fixture = Fixture()
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        _ = try await fixture.transport { _ in 503 }.data(for: request, timeout: 5, retryCount: Int.max)
+        XCTAssertEqual(fixture.calls, 1)
+    }
+
     func testConnectionLossRetriesWithinRemainingBudget() async throws {
         let fixture = Fixture()
         var transport = fixture.transport { _ in 200 }

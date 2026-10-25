@@ -166,7 +166,7 @@ class FakeRealtimeRequest {
     onStatus: (connected) => statuses.push(connected),
     schedule: (callback, milliseconds) => {
       timers.push({ callback, milliseconds });
-      return timers.length as unknown as ReturnType<typeof setTimeout>;
+      return timers.length;
     },
   });
   transport.start();
@@ -210,7 +210,7 @@ class FakeRealtimeRequest {
     onStatus: (connected) => statuses.push(connected),
     schedule: (callback, milliseconds) => {
       timers.push({ callback, milliseconds });
-      return timers.length as unknown as ReturnType<typeof setTimeout>;
+      return timers.length;
     },
   });
   transport.start();
@@ -239,7 +239,7 @@ class FakeRealtimeRequest {
     onStatus: (connected) => statuses.push(connected),
     schedule: (callback, milliseconds) => {
       timers.push({ callback, milliseconds });
-      return timers.length as unknown as ReturnType<typeof setTimeout>;
+      return timers.length;
     },
   });
   transport.start();

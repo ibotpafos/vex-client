@@ -21,6 +21,9 @@ type XMLHttpRequestLike = {
   setRequestHeader(name: string, value: string): void;
 };
 
+// React Native/web return numeric handles; Node-based tools can return objects.
+type CustomerRealtimeTimer = number | ReturnType<typeof setTimeout>;
+
 export type CustomerRealtimeTransportOptions = {
   accessToken: string;
   baseUrl: string;
@@ -28,8 +31,8 @@ export type CustomerRealtimeTransportOptions = {
   onEvent: (event: CustomerSSEEvent) => void;
   onSessionRevoked: () => void;
   onStatus: (connected: boolean) => void;
-  schedule?: (callback: () => void, milliseconds: number) => ReturnType<typeof setTimeout>;
-  cancelSchedule?: (timer: ReturnType<typeof setTimeout>) => void;
+  schedule?: (callback: () => void, milliseconds: number) => CustomerRealtimeTimer;
+  cancelSchedule?: (timer: CustomerRealtimeTimer) => void;
 };
 
 type RealtimeRequest = { abort(): void };
@@ -41,9 +44,9 @@ export class CustomerRealtimeTransport {
   private readonly options: CustomerRealtimeTransportOptions;
   private active = false;
   private request: RealtimeRequest | null = null;
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectTimer: CustomerRealtimeTimer | null = null;
   private reconnectGeneration = 0;
-  private watchdogTimer: ReturnType<typeof setTimeout> | null = null;
+  private watchdogTimer: CustomerRealtimeTimer | null = null;
   private watchdogGeneration = 0;
   private reconnectAttempt = 0;
   private processedLength = 0;

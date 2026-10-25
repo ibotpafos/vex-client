@@ -91,6 +91,35 @@ async function until(ready) {
   const deadline = Date.now() + 2_000;
   while (!ready()) { assert.ok(Date.now() < deadline, 'fixture condition timed out'); await settle(); }
 }
+
+test('Node timer objects return to the matching cancellation hook', async () => {
+  const fixture = streamResponse();
+  const scheduled = [], cancelled = [];
+  const h = transport(async () => fixture.response, {
+    schedule(callback, milliseconds) {
+      const timer = setTimeout(callback, milliseconds);
+      scheduled.push(timer);
+      return timer;
+    },
+    cancelSchedule(timer) {
+      cancelled.push(timer);
+      clearTimeout(timer);
+    },
+  });
+  try {
+    h.start();
+    await until(() => fixture.body.locked);
+    assert.equal(scheduled.length, 1);
+    assert.equal(typeof scheduled[0], 'object');
+    h.stop();
+    assert.deepEqual(cancelled, scheduled);
+    assert.equal(fixture.body.locked, false);
+  } finally {
+    h.stop();
+    for (const timer of scheduled) clearTimeout(timer);
+  }
+});
+
 async function listen(handler) {
   const server = http.createServer(handler);
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });

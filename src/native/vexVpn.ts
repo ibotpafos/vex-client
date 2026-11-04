@@ -13,6 +13,7 @@ export type VpnVerificationReason = 'handshake_pending' | 'handshake_stale' | 'd
 export type VpnStatus = {
   transport?: VpnTransport;
   connectionId?: string;
+  connectionWanted?: boolean;
   verificationEpochMillis?: number;
   state: VpnState;
   rxBytes: number;
@@ -386,6 +387,7 @@ function normalizeVpnStatus(status: VpnStatus): VpnStatus {
   return {
     ...status,
     latestHandshakeEpochMillis,
+    connectionWanted: typeof status.connectionWanted === 'boolean' ? status.connectionWanted : undefined,
     leakProtection: status.leakProtection ?? 'off',
     verified,
     verificationReason: status.verificationReason ?? (status.state === 'connected' && verified === false ? status.transport === 'vless' ? 'probe_pending' : 'handshake_pending' : undefined),

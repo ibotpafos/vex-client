@@ -399,6 +399,7 @@ class VlessVpnService : VpnService() {
     val current = verification.snapshot()
     return JSONObject().put("transport", "vless").put("state", current.state)
       .put("connectionId", current.connectionId).put("verified", current.verified)
+      .put("connectionWanted", current.connectionWanted)
       .put("rxBytes", 0).put("txBytes", 0).put("leakProtection", current.leakProtection).apply {
         if (current.verificationEpochMillis > 0) put("verificationEpochMillis", current.verificationEpochMillis)
         current.verificationReason?.let { put("verificationReason", it) }

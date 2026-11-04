@@ -54,11 +54,11 @@ function violations(value, packageValue = packageConfig) {
     const commands = (job.steps ?? []).map(step => step.run ?? '').join('\n');
     if (/npm run (?:ota:|.*:publish|.*:deploy-release)|package-native-windows\.ps1|publish-native-windows\.ps1|-allowProvisioningUpdates/.test(commands)) failures.push(`no signing/publication: ${lane}`);
     if (lane === 'android' && /(?:^|\n)\s*sdkmanager\s/.test(commands)) failures.push('explicit Android SDK tool path');
-    if (['shared', 'android'].includes(lane) && !(job.steps ?? []).some(step => step.uses?.startsWith('actions/setup-go@') && step.with?.['go-version'] === '1.26.9')) failures.push(`pinned patched Go toolchain: ${lane}`);
+    if (['shared', 'android'].includes(lane) && !(job.steps ?? []).some(step => step.uses?.startsWith('actions/setup-go@') && step.with?.['go-version'] === '1.26.10')) failures.push(`pinned patched Go toolchain: ${lane}`);
     if (lane === 'macos') {
       if (job.env?.DEVELOPER_DIR !== '/Applications/Xcode_26.6.app/Contents/Developer') failures.push('supported pinned Xcode toolchain');
       if (!(job.steps ?? []).some(step => step.uses === 'actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16'
-        && step.with?.['go-version'] === '1.26.9' && step.with?.cache === false)) failures.push('pinned iOS bridge Go toolchain');
+        && step.with?.['go-version'] === '1.26.10' && step.with?.cache === false)) failures.push('pinned iOS bridge Go toolchain');
       const ios = (job.steps ?? []).find(step => step.name === 'Build the canonical iOS simulator app without signing');
       if (ios?.run?.trim() !== 'bash scripts/test_ios_simulator_build.sh'
         || !(ios['timeout-minutes'] > 0 && ios['timeout-minutes'] <= 40)) failures.push('bounded canonical iOS app qualification');

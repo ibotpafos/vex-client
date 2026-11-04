@@ -24,6 +24,25 @@ class VlessVerificationStateTest {
     assertEquals("probe_pending", f.state.snapshot().verificationReason)
   }
 
+  @Test fun connectionIntentSurvivesFailureWithoutProtectionButEndsOnExplicitDisconnect() {
+    val f = Fixture()
+    assertFalse(f.state.snapshot().connectionWanted)
+    f.state.begin(false)
+    assertTrue(f.state.snapshot().connectionWanted)
+    f.state.setCapture(false)
+    f.state.setCoreReady(false)
+    f.state.invalidate("network_unavailable")
+    assertTrue(f.state.snapshot().connectionWanted)
+    assertEquals("off", f.state.snapshot().leakProtection)
+    assertFalse(f.state.snapshot().verified)
+    f.state.stop(false)
+    assertFalse(f.state.snapshot().connectionWanted)
+    f.ready()
+    f.state.stop(true)
+    assertFalse(f.state.snapshot().connectionWanted)
+    assertEquals("blocking", f.state.snapshot().leakProtection)
+  }
+
   @Test fun proofRequiresBothOwnedCaptureAndRunningCore() {
     val f = Fixture()
     val first = f.state.begin(true)

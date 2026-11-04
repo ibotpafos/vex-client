@@ -239,8 +239,9 @@ export function useVpnConnection() {
   );
 
   const isConnected = vpnStatusCore.state === 'connected';
-  const isAutopilotActive = isConnected || vpnStatusCore.state === 'degraded' ||
-    (vpnStatusCore.transport === 'vless' && vpnStatusCore.leakProtection === 'blocking' && ['verifying', 'error'].includes(vpnStatusCore.state));
+  const isAutopilotActive = vpnStatusCore.transport === 'vless'
+    ? vpnStatusCore.connectionWanted === true
+    : isConnected || vpnStatusCore.state === 'degraded';
   const isLeakBlocked = vpnStatusCore.leakProtection === 'blocking';
 
   const connectionPhase: ConnectionPhase = isServerSwitching
@@ -690,11 +691,11 @@ export function useVpnConnection() {
 
   const captureStatusReadOwner = useCallback(() => {
     const generation = vpnConnectGenerationRef.current;
-    const { connectionId, transport: activeTransport, state } = vpnStatusRef.current;
+    const { connectionId, connectionWanted, transport: activeTransport, state } = vpnStatusRef.current;
     const locationId = state === 'disconnected' ? undefined : selectedLocationIdRef.current;
     return () => isCurrentSessionOperation() && !vpnOperationInFlightRef.current &&
       vpnConnectGenerationRef.current === generation && (locationId === undefined || selectedLocationIdRef.current === locationId) &&
-      vpnStatusRef.current.connectionId === connectionId && vpnStatusRef.current.transport === activeTransport &&
+      vpnStatusRef.current.connectionId === connectionId && vpnStatusRef.current.connectionWanted === connectionWanted && vpnStatusRef.current.transport === activeTransport &&
       vpnStatusRef.current.state === state;
   }, [isCurrentSessionOperation]);
 
@@ -1775,6 +1776,7 @@ function areVpnStatusCoresEqual(left: VpnStatusCore, right: VpnStatusCore): bool
   return left.state === right.state
     && left.transport === right.transport
     && left.connectionId === right.connectionId
+    && left.connectionWanted === right.connectionWanted
     && left.verificationEpochMillis === right.verificationEpochMillis
     && left.latestHandshakeEpochMillis === right.latestHandshakeEpochMillis
     && left.leakProtection === right.leakProtection

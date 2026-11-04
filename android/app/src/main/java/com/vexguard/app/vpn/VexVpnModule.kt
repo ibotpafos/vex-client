@@ -632,6 +632,7 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
     result.putString("transport", "vless")
     result.putString("state", optString("state", "error"))
     result.putString("connectionId", optString("connectionId"))
+    result.putBoolean("connectionWanted", optBoolean("connectionWanted"))
     result.putBoolean("verified", optBoolean("verified"))
     result.putString("leakProtection", optString("leakProtection", "off"))
     result.putDouble("rxBytes", 0.0)

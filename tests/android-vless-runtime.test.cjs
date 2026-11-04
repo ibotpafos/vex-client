@@ -456,3 +456,63 @@ test('a bootstrap native status read survives harmless saved-location hydration'
   h.finish({state:'connected',transport:'vless',connectionId,verified:true,verificationEpochMillis:200});
   await pending;assert.equal(h.published.length,1);
 });
+
+
+function connectionDeclaration(name) {
+  const file='src/vpn/useVpnConnection.ts',source=fs.readFileSync(path.join(root,file),'utf8');
+  const ast=ts.createSourceFile(file,source,ts.ScriptTarget.Latest,true);let declaration;
+  const visit=node=>{
+    if(ts.isVariableDeclaration(node)&&node.name.getText(ast)===name)declaration=node.initializer.getText(ast);
+    if(ts.isFunctionDeclaration(node)&&node.name?.getText(ast)===name)declaration=node.getText(ast);
+    ts.forEachChild(node,visit);
+  };visit(ast);assert.ok(declaration);return declaration;
+}
+const autopilotExpression=connectionDeclaration('isAutopilotActive');
+const autopilotPolicy=new Function('vpnStatusCore','isConnected',`return (${autopilotExpression});`);
+
+for(const leakProtection of ['off','blocking'])for(const connectionWanted of [true,false]){
+  test(`VLESS wanted=${connectionWanted} drives recovery with leak protection ${leakProtection}`,async()=>{
+    for(const state of ['connected','degraded','verifying','error','disconnected','disconnecting']){
+      const h=nativeHarness({status:{state,transport:'vless',connectionId,connectionWanted,leakProtection,rxBytes:0,txBytes:0,verified:false}});
+      const normalized=await h.native.getVpnStatus({fresh:true});
+      assert.equal(normalized.connectionWanted,connectionWanted);
+      assert.equal(autopilotPolicy(normalized,state==='connected'),connectionWanted,state);
+    }
+  });
+}
+
+test('an absent or malformed VLESS wanted flag cannot enable recovery after an explicit stop',async()=>{
+  for(const connectionWanted of [undefined,'true','false',1]){
+    const h=nativeHarness({status:{state:'error',transport:'vless',connectionWanted,leakProtection:'blocking',rxBytes:0,txBytes:0}});
+    const normalized=await h.native.getVpnStatus({fresh:true});
+    assert.equal(normalized.connectionWanted,undefined);assert.equal(autopilotPolicy(normalized,false),false);
+  }
+});
+
+test('the VLESS intent gate preserves legacy AWG recovery behavior',()=>{
+  for(const transport of [undefined,'amneziawg'])for(const state of ['connected','degraded','verifying','error','disconnected']){
+    assert.equal(autopilotPolicy({transport,state,connectionWanted:false},state==='connected'),state==='connected'||state==='degraded');
+  }
+});
+
+test('a wanted-only transition updates both status memoization layers',()=>{
+  const coreCode=ts.transpileModule(connectionDeclaration('areVpnStatusCoresEqual'),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+  const coreEqual=new Function(coreCode+';return areVpnStatusCoresEqual;')();
+  const source=fs.readFileSync(path.join(root,'src/screens/home-screen-helpers.ts'),'utf8');
+  const ast=ts.createSourceFile('helpers.ts',source,ts.ScriptTarget.Latest,true);let helper;
+  ast.forEachChild(node=>{if(ts.isFunctionDeclaration(node)&&node.name?.getText(ast)==='areVpnStatusesEqual')helper=node.getText(ast);});
+  const helperCode=ts.transpileModule(helper.replace(/^export /,''),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+  const statusEqual=new Function(helperCode+';return areVpnStatusesEqual;')();
+  const current={state:'error',transport:'vless',connectionId,connectionWanted:true,rxBytes:0,txBytes:0,leakProtection:'off'};
+  for(const equal of [coreEqual,statusEqual]){
+    assert.equal(equal(current,{...current}),true);
+    assert.equal(equal(current,{...current,connectionWanted:false}),false);
+  }
+});
+
+test('an in-flight status read cannot re-enable connection intent after an explicit stop',async()=>{
+  const h=statusReadHarness();h.context.vpnStatusRef.current={...h.context.vpnStatusRef.current,connectionWanted:true};
+  const pending=h.refresh('fixture');h.context.vpnStatusRef.current={...h.context.vpnStatusRef.current,connectionWanted:false};
+  h.finish({...h.context.vpnStatusRef.current,connectionWanted:true});
+  assert.equal(await pending,null);assert.equal(h.published.length,0);
+});

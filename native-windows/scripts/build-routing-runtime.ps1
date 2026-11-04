@@ -7,8 +7,8 @@ Set-StrictMode -Version Latest
 $sourceRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../native-routing'))
 $go = (Get-Command go -ErrorAction Stop).Source
 $goVersion = (& $go env GOVERSION).Trim()
-if ($LASTEXITCODE -ne 0 -or $goVersion -ne 'go1.26.9') {
-    throw 'Routing release builds require the pinned Go 1.26.9 toolchain.'
+if ($LASTEXITCODE -ne 0 -or $goVersion -ne 'go1.26.10') {
+    throw 'Routing release builds require the pinned Go 1.26.10 toolchain.'
 }
 $names = @('GOOS', 'GOARCH', 'CGO_ENABLED', 'GOWORK', 'GOFLAGS')
 $previous = @{}

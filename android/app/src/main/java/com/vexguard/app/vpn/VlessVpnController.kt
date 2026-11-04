@@ -96,7 +96,7 @@ internal class VlessVpnController(context: Context) {
       putStringArrayList(VlessVpnIpc.PACKAGES, ArrayList(packages))
     }, start = true)
     prefs.edit().putString("vless_connection", response.optString("connectionId")).commit()
-    return response
+    return response.put("connectionWanted", connectionWanted())
   }
 
   suspend fun disconnect(releaseAntiLeak: Boolean): JSONObject {
@@ -113,7 +113,7 @@ internal class VlessVpnController(context: Context) {
     if (releaseAntiLeak) {
       require(VexLeakBlockerService.stopAndAwait(app)) { "VPN leak protection did not release." }
     }
-    return response
+    return response.put("connectionWanted", connectionWanted())
   }
 
   suspend fun status(): JSONObject {
@@ -121,14 +121,19 @@ internal class VlessVpnController(context: Context) {
     return runCatching { request(VlessVpnIpc.READ_STATUS) }.getOrElse {
       if (captureWanted() && prefs.getBoolean("vless_antileak", true)) protectAfterWorkerLoss()
       disconnectedSnapshot().put("state", "error").put("verificationReason", "network_unavailable")
-    }
+    }.put("connectionWanted", connectionWanted())
   }
+
+  // Retained capture protects traffic after an explicit disconnect but is
+  // never authority to reconnect. Only the persisted active connection intent is.
+  private fun connectionWanted() = isSelected() && prefs.getBoolean("vless_wanted", false)
 
   private fun captureWanted() = prefs.getBoolean("vless_wanted", false) || prefs.getBoolean("vless_hold_capture", false)
 
   private fun disconnectedSnapshot() = JSONObject().put("transport", "vless")
     .put("state", if (VexLeakBlockerService.isActive()) "error" else "disconnected")
     .put("connectionId", prefs.getString("vless_connection", ""))
+    .put("connectionWanted", connectionWanted())
     .put("verified", false).put("rxBytes", 0).put("txBytes", 0)
     .put("leakProtection", if (VexLeakBlockerService.isActive()) "blocking" else "off")
 

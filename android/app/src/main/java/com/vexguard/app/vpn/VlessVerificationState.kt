@@ -11,6 +11,7 @@ internal class VlessVerificationState(
   data class Snapshot(
     val state: String,
     val connectionId: String,
+    val connectionWanted: Boolean,
     val verified: Boolean,
     val verificationEpochMillis: Long,
     val verificationReason: String?,
@@ -99,6 +100,7 @@ internal class VlessVerificationState(
     return Snapshot(
       state = when { !wanted && !captureHeld -> "disconnected"; fresh -> "connected"; captureHeld && (!wanted || reason != "probe_pending") -> "error"; else -> "verifying" },
       connectionId = connectionId,
+      connectionWanted = wanted,
       verified = fresh,
       verificationEpochMillis = if (fresh) epoch else 0,
       verificationReason = if (fresh || !wanted && !captureHeld) null else if (epoch > 0) "probe_pending" else reason,

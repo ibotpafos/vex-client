@@ -16,6 +16,11 @@ code; VEX does not implement those wire protocols.
   `14641c3977eee0e7ce9c2e1bf2d3399c0158f11a1a500b4ba9b9d5d651c1a9dc`.
 - Both shipping ARM ABIs (`arm64-v8a`, `armeabi-v7a`) are present. Their ELF
   load segments have 16,384-byte alignment; the bootstrap verifies these facts.
+- `go version -m` on both ARM `libgojni.so` members reports `go1.27.3`,
+  `GOOS=android`, and the expected `GOARCH=arm64` / `GOARCH=arm`. This meets
+  the fixed compiler boundary for `GO-2026-6809`; changing the application's
+  shell toolchain would not repair a vulnerable precompiled AAR. Advisory:
+  https://pkg.go.dev/vuln/GO-2026-6809 .
 
 `android/xray-android.lock.json` and `scripts/bootstrap_xray_android.py` pin and
 verify the release. Gradle depends on that bounded bootstrap task. Downloaded

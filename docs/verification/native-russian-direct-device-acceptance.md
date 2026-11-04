@@ -16,7 +16,7 @@ Apple Development identity и provisioning с Network Extension / App Groups.
 
 В готовой среде с существующей подписью установить зависимости через `npm ci`
 и `pod install --deployment` в `ios/`. Из корня вызвать
-`GOTOOLCHAIN=go1.26.9 IOS_DEVELOPMENT_TEAM=<TeamID> IOS_CONFIGURATION=Release npm run ios:device-build`.
+`GOTOOLCHAIN=go1.26.10 IOS_DEVELOPMENT_TEAM=<TeamID> IOS_CONFIGURATION=Release npm run ios:device-build`.
 Device builder проверит компилятор перед sync/build; нужно сохранить именно
 commit этой сборки и её подпись. Этот шаг требует готового Apple Developer
 окружения и не создаёт подтверждение проверки на устройстве.

@@ -16,6 +16,7 @@ import (
 
 	"github.com/amnezia-vpn/amneziawg-go/v3/ipc"
 	"golang.org/x/sys/unix"
+	routing "vex.dev/native-routing"
 )
 
 func requireElevated() error {
@@ -25,7 +26,7 @@ func requireElevated() error {
 	return nil
 }
 func dropSocketPrivileges(uid, gid int) error {
-	if uid <= 0 || gid <= 0 {
+	if !routing.ValidUnixSocketIdentity(uid, gid) {
 		return errors.New("dedicated routing UID required")
 	}
 	if err := unix.Setgroups([]int{}); err != nil {

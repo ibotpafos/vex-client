@@ -14,8 +14,42 @@ Only `awg3_direct` and `awg3_relay` classes appear in route diagnostics. The
 policy and route state are cached in Android secure storage for the current
 account; an expired or unavailable policy falls back to the authorized AWG3
 profile endpoint. It does not guess alternate ports or use AWG2. API policy
-lookup has one 2.5-second attempt so an older API
-does not hold up connection. No new dependency or native permission is needed.
+lookup has one background attempt with a 2.5-second deadline. Connection
+preparation waits for the shared local cache read and starts the HTTP refresh
+without awaiting it. No new dependency or native permission is needed.
+
+## Connection preparation (2026-10-20)
+
+While Android is in the foreground, disconnected, and has an authorized ready
+profile, prepare its route policy alongside the existing underlay observation.
+Connect shares local cache hydration and uses a valid prepared policy or the
+signed profile endpoint immediately. A missing policy does not hold the tunnel
+behind the optional HTTP request. The 30-second retry cooldown remains in place,
+and repeated callers share an unfinished refresh.
+
+If the background policy arrives during the first native attempt and that
+endpoint then fails, the same connection can consume its bounded relay choices.
+Already attempted endpoints are excluded, and cancellation is checked before
+starting a fallback.
+
+Cache hydration, HTTP responses, and queued cache writes are fenced by login
+generation and the current session predicate. Switching A to B to A or logging
+back into the same account cannot apply an earlier login's result. This keeps
+the existing account storage format and policy expiry checks.
+
+The real runtime, parser, route engine, and endpoint fallback are exercised by
+`node --test tests/dynamic-route-preparation.test.cjs` with isolated HTTP,
+storage, and clock adapters. Eight regressions fail before the change; all nine
+cases pass after it. `npm run check` includes this suite. These checks establish
+the removed dependency on the HTTP response; they do not measure customer
+connection latency. The separate underlay observation can still wait up to
+1.5 seconds when no receipt is ready. Signed device acceptance remains required
+before publishing this follow-up.
+
+Two production-flow callback regressions also cover a policy arriving during
+the first attempt and cancellation at that boundary. The relay case fails
+against the earlier policy-preparation change and passes with late-policy
+recovery; the cancellation case keeps the existing operation fence.
 
 This is route failover, not a physical mesh. The current server topology has
 one qualified relay ingress failure domain, so a second provider must pass

@@ -31,6 +31,8 @@ internal static class NativeAuthServiceTests
     {
         await CallbackWithoutChallengeStaysLocalAsync();
         await BrowserCallbackProvisionsAndClearsChallengeAsync();
+        await MalformedCodeEndsOnlyMatchingAttemptAsync();
+        await ExchangeArgumentFailureEndsAttemptAsync();
         await PendingBrowserLaunchCallbacksAsync();
         await PersistedChallengeCompletesAfterRestartAsync();
         await CancellationDuringExchangeCannotProvisionAsync(lateFailure: false);
@@ -100,6 +102,46 @@ internal static class NativeAuthServiceTests
         Check(fixture.Pkce.Pending is null && !fixture.Auth.IsWaitingForBrowserAuth &&
             fixture.Auth.Error is null && !string.IsNullOrEmpty(fixture.Auth.Notice),
             "Successful browser login retained its pending challenge or error.");
+    }
+
+    private static async Task MalformedCodeEndsOnlyMatchingAttemptAsync()
+    {
+        foreach (var code in new[] { "short", new string('x', 4097) })
+        {
+            var fixture = new Fixture();
+            var exchanges = 0;
+            fixture.Proxy.Overrides[nameof(INativeClientApi.ExchangeAppAuthCodeAsync)] = _ =>
+            {
+                exchanges++;
+                throw new InvalidOperationException("Malformed code reached the API.");
+            };
+            await fixture.Auth.StartBrowserAuthAsync(WebAuthMode.Login, CancellationToken.None);
+            var pending = RequireChallenge(fixture);
+            // The same malformed code with a stale state must leave the new
+            // challenge and waiting UI intact, with no exchange or save.
+            await fixture.Auth.HandleProtocolActivationAsync(new Uri(
+                "vexguard://auth/callback?code=" + code + "&state=stale-state"), CancellationToken.None).WaitAsync(Deadline);
+            Check(fixture.Auth.IsWaitingForBrowserAuth && fixture.Pkce.Pending == pending && exchanges == 0,
+                "A stale malformed callback replaced the active challenge.");
+            await fixture.Auth.HandleProtocolActivationAsync(new Uri(
+                "vexguard://auth/callback?code=" + code + "&state=" + Uri.EscapeDataString(pending.State)), CancellationToken.None).WaitAsync(Deadline);
+            Check(!fixture.Auth.IsWaitingForBrowserAuth && fixture.Pkce.Pending is null && fixture.Store.SaveCount == 0 && exchanges == 0,
+                "A matching malformed code retained the waiting state or reached exchange/session persistence.");
+            Check(fixture.Auth.Error == "Не удалось завершить вход через сайт.", "Malformed code did not expose a safe terminal error.");
+            await fixture.Auth.StartBrowserAuthAsync(WebAuthMode.Login, CancellationToken.None).WaitAsync(Deadline);
+            Check(fixture.Auth.IsWaitingForBrowserAuth && fixture.Pkce.Pending is not null, "The next browser attempt did not recover.");
+        }
+    }
+
+    private static async Task ExchangeArgumentFailureEndsAttemptAsync()
+    {
+        var fixture = new Fixture();
+        fixture.Proxy.Overrides[nameof(INativeClientApi.ExchangeAppAuthCodeAsync)] = _ =>
+            throw new ArgumentException("private validation context must not reach the UI");
+        await fixture.Auth.StartBrowserAuthAsync(WebAuthMode.Login, CancellationToken.None);
+        await fixture.Auth.HandleProtocolActivationAsync(Callback(RequireChallenge(fixture)), CancellationToken.None).WaitAsync(Deadline);
+        Check(!fixture.Auth.IsWaitingForBrowserAuth && fixture.Pkce.Pending is null && fixture.Store.SaveCount == 0 &&
+            fixture.Auth.Error == "Не удалось завершить вход через сайт.", "Exchange validation fault escaped or left an active login attempt.");
     }
 
     private static async Task CallbackDuringPendingBrowserLaunchAsync(bool lateLaunchException)

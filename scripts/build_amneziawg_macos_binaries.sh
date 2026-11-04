@@ -9,6 +9,10 @@ set -euo pipefail
 #   scripts/build_amneziawg_macos_binaries.sh [--skip-bootstrap]
 #
 # Requirements: Xcode Command Line Tools, Go (any recent), `make`, `lipo`.
+# TODO(macOS shared routing): bundle native-routing/cmd/vex-awg after the
+# helper transports signed v2 parameters, owns its UID/PF scope and preserves
+# capture during recovery. Those contracts and isolated Mac acceptance are
+# still incomplete, so changing the packaged engine here is premature.
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 external_dir="${AMNEZIAWG_EXTERNAL_DIR:-"${root_dir}/external/amnezia"}"

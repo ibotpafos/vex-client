@@ -14,30 +14,34 @@ internal static class Program
     private static AppInstance? _instance;
     private static App? _app;
     private static DispatcherQueue? _dispatcherQueue;
-    private static AppActivationArguments? _pendingActivation;
+    private static ActivationSnapshot? _pendingActivation;
 
     [STAThread]
     private static int Main(string[] args)
     {
         WinRT.ComWrappersSupport.InitializeComWrappers();
+        AuthActivationTrace.Record(AuthActivationStage.ProcessStarted);
 
         var current = AppInstance.GetCurrent();
         var activationArgs = current.GetActivatedEventArgs();
-        var protocolUri = activationArgs.Kind switch
-        {
-            ExtendedActivationKind.Protocol when activationArgs.Data is IProtocolActivatedEventArgs protocol => protocol.Uri,
-            ExtendedActivationKind.Launch when activationArgs.Data is ILaunchActivatedEventArgs launch =>
-                ProtocolActivationUriParser.Parse(launch.Arguments) ?? UiPreviewContext.ParseActivationUri(launch.Arguments),
-            _ => ProtocolActivationUriParser.Parse(string.Join(" ", args)) ?? UiPreviewContext.ParseActivationUri(string.Join(" ", args)),
-        };
+        var activation = ActivationSnapshot.Capture(activationArgs);
+        var protocolUri = activation.CaptureFailed ? null : activation.ProtocolUri
+            ?? UiPreviewContext.ParseActivationUri(activation.LaunchArguments)
+            ?? ProtocolActivationUriParser.Parse(string.Join(" ", args))
+            ?? UiPreviewContext.ParseActivationUri(string.Join(" ", args));
         UiPreviewContext.Initialize(args, protocolUri);
         if (UiPreviewContext.IsPreviewRequest && !UiPreviewContext.IsSupported) return 0;
         _instance = AppInstance.FindOrRegisterForKey(UiPreviewContext.InstanceKey);
         if (!_instance.IsCurrent)
         {
-            RedirectActivationTo(activationArgs, _instance);
-            return 0;
+            try { RedirectActivationTo(activationArgs, _instance); return 0; }
+            catch (Exception error) when (error is not OutOfMemoryException and not AccessViolationException)
+            {
+                AuthActivationTrace.Record(AuthActivationStage.RedirectFailed);
+                return 1;
+            }
         }
+        AuthActivationTrace.Record(AuthActivationStage.PrimarySelected);
         // Control-only preview activations cannot create a preview or launch
         // the normal account/VPN application when no preview is running.
         if (UiPreviewContext.IsCommandOnly) return 0;
@@ -48,8 +52,8 @@ internal static class Program
             var dispatcherQueue = DispatcherQueue.GetForCurrentThread();
             SynchronizationContext.SetSynchronizationContext(
                 new DispatcherQueueSynchronizationContext(dispatcherQueue));
-            var app = new App(activationArgs);
-            AppActivationArguments? pendingActivation;
+            var app = new App(activation);
+            ActivationSnapshot? pendingActivation;
             lock (ActivationSync)
             {
                 _app = app;
@@ -60,8 +64,7 @@ internal static class Program
 
             if (pendingActivation is not null)
             {
-                dispatcherQueue.TryEnqueue(
-                    () => app.HandleRedirectedActivation(pendingActivation));
+                EnqueueActivation(dispatcherQueue, app, pendingActivation);
             }
         });
         return 0;
@@ -71,6 +74,10 @@ internal static class Program
         object? sender,
         AppActivationArguments args)
     {
+        AuthActivationTrace.Record(AuthActivationStage.RedirectReceived);
+        // Read WinRT arguments on the event's receiving thread, before either
+        // startup retention or the UI queue can outlive their native context.
+        var activation = ActivationSnapshot.Capture(args);
         App? app;
         DispatcherQueue? dispatcherQueue;
         lock (ActivationSync)
@@ -79,20 +86,27 @@ internal static class Program
             dispatcherQueue = _dispatcherQueue;
             if (app is null || dispatcherQueue is null)
             {
-                _pendingActivation = args;
+                _pendingActivation = activation;
+                AuthActivationTrace.Record(AuthActivationStage.StartupQueued);
                 return;
             }
         }
 
-        dispatcherQueue.TryEnqueue(
-            () => app.HandleRedirectedActivation(args));
+        EnqueueActivation(dispatcherQueue, app, activation);
+    }
+
+    private static void EnqueueActivation(DispatcherQueue dispatcherQueue, App app, ActivationSnapshot args)
+    {
+        var accepted = dispatcherQueue.TryEnqueue(() => app.HandleRedirectedActivation(args));
+        AuthActivationTrace.Record(accepted ? AuthActivationStage.DispatcherAccepted : AuthActivationStage.DispatcherRejected);
     }
 
     private static void RedirectActivationTo(
         AppActivationArguments args,
         AppInstance instance)
     {
-        using var completed = new ManualResetEvent(initialState: false);
+        AuthActivationTrace.Record(AuthActivationStage.RedirectStarted);
+        var completed = new ManualResetEvent(initialState: false);
         var redirect = Task.Run(async () =>
         {
             try
@@ -110,24 +124,34 @@ internal static class Program
         };
         var waitResult = CoWaitForMultipleObjects(
             flags: 0,
-            milliseconds: uint.MaxValue,
+            milliseconds: 30_000,
             handleCount: 1,
             handles,
             out _);
         if (waitResult != 0)
         {
+            // A bounded STA wait must not dispose the event while the native
+            // redirect still owns it. Observe its eventual fault and release
+            // the handle after completion, without blocking the primary UI.
+            _ = redirect.ContinueWith(task =>
+            {
+                _ = task.Exception;
+                completed.Dispose();
+            }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
             throw new InvalidOperationException(
                 $"Activation redirection wait failed: 0x{waitResult:X8}");
         }
 
-        redirect.GetAwaiter().GetResult();
+        try { redirect.GetAwaiter().GetResult(); }
+        finally { completed.Dispose(); }
+        AuthActivationTrace.Record(AuthActivationStage.RedirectCompleted);
     }
 
     [DllImport("ole32.dll")]
     private static extern uint CoWaitForMultipleObjects(
         uint flags,
         uint milliseconds,
-        ulong handleCount,
+        uint handleCount,
         nint[] handles,
         out uint index);
 }

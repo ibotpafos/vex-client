@@ -12,6 +12,14 @@ on:
       release_notes:
         description: "User-facing release notes"
         required: true
+      client_source_commit:
+        description: "Optional full client SHA; must match the dispatched workflow"
+        required: false
+        default: ""
+      vpn_source_commit:
+        description: "Optional full VPN main SHA; fail before signing if main moved"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -29,6 +37,8 @@ jobs:
       VEX_NATIVE_VERSION: ${{ inputs.release_version }}
       VEX_NATIVE_BUILD: ${{ inputs.release_build }}
       VEX_NATIVE_CHANGELOG: ${{ inputs.release_notes }}
+      VEX_NATIVE_SOURCE_COMMIT: ${{ inputs.client_source_commit }}
+      VEX_VPN_SOURCE_COMMIT: ${{ inputs.vpn_source_commit }}
       VEX_NATIVE_PRODUCTION: "1"
       VEX_NATIVE_SIGNING_MODE: self-signed
       VEX_NATIVE_REQUIRE_DEVELOPER_ID: "0"
@@ -47,6 +57,7 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+          ref: ${{ github.sha }}
 
       - name: Validate release inputs
         shell: bash
@@ -69,8 +80,15 @@ jobs:
         with:
           persist-credentials: false
           repository: ibotpafos/VPN
+          # Only trusted main code may run with the release credentials. The
+          # source gate below binds this checkout to the requested exact SHA.
+          ref: main
           path: vpn-main
           token: ${{ env.VEX_RELEASE_REPOSITORY_TOKEN }}
+
+      - name: Verify exact release sources before signing
+        shell: bash
+        run: python3 scripts/verify_native_macos_release_sources.py
 
       - name: Import and pin self-signed application identity
         id: signing
@@ -137,6 +155,8 @@ jobs:
                   raise SystemExit(f"self-signed release manifest requires {field}=false")
           print(f"self-signed native macOS release verified: {manifest['version']} ({manifest['build']})")
           PY
+          python3 scripts/verify_native_macos_release_sources.py \
+            --output dist/native-macos/deploy/release-source-provenance.json
 
       - name: Upload verified release bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

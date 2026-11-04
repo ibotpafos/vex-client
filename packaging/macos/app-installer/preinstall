@@ -1,0 +1,13 @@
+#!/bin/bash
+set -euo pipefail
+source "$(/usr/bin/dirname "$0")/common.sh"
+if [[ -e "${APP_PATH}" ]]; then
+  check_existing_version
+  # Refuse to replace an app in use. Never quit it or stop its VPN helper.
+  if /usr/bin/pgrep -x VEXNativeMac >/dev/null; then
+    fail "Закройте VEX перед обновлением приложения. Подключение не изменено."
+  else
+    result=$?
+    [[ "${result}" -eq 1 ]] || fail "Не удалось проверить, запущен ли VEX."
+  fi
+fi

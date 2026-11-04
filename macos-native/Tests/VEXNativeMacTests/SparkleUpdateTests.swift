@@ -236,7 +236,10 @@ final class SparkleUpdateTests: XCTestCase {
         )
         XCTAssertTrue(script.contains("VEX_NATIVE_BUILD must be numeric"))
         XCTAssertTrue(script.contains("Contents/Frameworks/Sparkle.framework"))
-        XCTAssertTrue(script.contains("cwILAPfDRcrjrAWmD/VrMzIh983R2hncvI44tfEZauI="))
+        let stableKey = try String(contentsOf: packageRoot.appendingPathComponent("sparkle-public-ed-key.txt"), encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertEqual(stableKey, "07bGZH2hYsb7XDfB3JafMdyzS6B0YBv7qsGMUweuCJ4=")
+        XCTAssertTrue(script.contains("sparkle-public-ed-key.txt"))
         XCTAssertTrue(script.contains("Sparkle public Ed25519 key must decode to 32 bytes"))
         XCTAssertTrue(script.contains("VEX_SPARKLE_FEED_URL must use HTTPS"))
     }

@@ -43,6 +43,11 @@ on:
       - "*config*"
       - ".github/workflows/native-reliability-ci.yml"
   workflow_dispatch:
+    inputs:
+      skip_ios:
+        description: "Skip iOS fixtures/build while validating shared, Android and native macOS"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -148,6 +153,7 @@ jobs:
       - name: Test isolated macOS cancellation and recovery
         run: bash scripts/test_macos_runtime_reliability.sh
       - name: Test isolated iOS tunnel transition ordering
+        if: github.event_name != 'workflow_dispatch' || !inputs.skip_ios
         run: |
           bash scripts/test_ios_tunnel_transitions.sh
           ruby -c modules/vex-vpn/ios/VexVpn.podspec
@@ -155,8 +161,10 @@ jobs:
         with:
           node-version: "22"
       - name: Install locked JavaScript dependencies for the iOS app fixture
+        if: github.event_name != 'workflow_dispatch' || !inputs.skip_ios
         run: npm ci
       - name: Verify iOS bridge arguments with the installed Expo Swift validator
+        if: github.event_name != 'workflow_dispatch' || !inputs.skip_ios
         env:
           VEX_SWIFTC: swiftc
         run: node --test tests/ios-expo-bridge-contract.test.cjs
@@ -202,6 +210,7 @@ jobs:
       - name: Test all native macOS behavior
         run: swift test --package-path macos-native
       - name: Build the canonical iOS simulator app without signing
+        if: github.event_name != 'workflow_dispatch' || !inputs.skip_ios
         timeout-minutes: 40
         # The owned fixture enforces the reviewed tracked lock with --deployment.
         run: bash scripts/test_ios_simulator_build.sh

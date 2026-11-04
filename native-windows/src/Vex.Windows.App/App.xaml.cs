@@ -12,10 +12,15 @@ public partial class App : Application
 {
     private MainWindow? _window;
     private TrayIconHost? _trayIconHost;
-    private AppActivationArguments? _initialActivation;
-    private AppActivationArguments? _startupRedirect;
+    private ActivationSnapshot? _initialActivation;
+    private ActivationSnapshot? _startupRedirect;
 
     public App(AppActivationArguments initialActivation)
+        : this(ActivationSnapshot.Capture(initialActivation ?? throw new ArgumentNullException(nameof(initialActivation))))
+    {
+    }
+
+    internal App(ActivationSnapshot initialActivation)
     {
         ArgumentNullException.ThrowIfNull(initialActivation);
         _initialActivation = initialActivation;
@@ -66,7 +71,7 @@ public partial class App : Application
     }
 
     internal void HandleRedirectedActivation(
-        AppActivationArguments args)
+        ActivationSnapshot args)
     {
         if (_window is null)
         {
@@ -77,10 +82,10 @@ public partial class App : Application
         }
 
         if (UiPreviewContext.IsTrayRecoveryCommand(
-            (args.Data as ILaunchActivatedEventArgs)?.Arguments))
+            args.LaunchArguments))
         {
 #if DEBUG
-            if (!UiPreviewTrayRequest.TryParse((args.Data as ILaunchActivatedEventArgs)?.Arguments, out var request)) return;
+            if (!UiPreviewTrayRequest.TryParse(args.LaunchArguments, out var request)) return;
             var trace = new UiPreviewTrayActivation(request!);
             trace.Record("redirected-request-accepted");
             _ = HandleActivationAsync(args, trayTrace: trace);
@@ -92,7 +97,7 @@ public partial class App : Application
 
 #if DEBUG
         if (UiPreviewContext.IsMinimizeCommand(
-            (args.Data as ILaunchActivatedEventArgs)?.Arguments))
+            args.LaunchArguments))
         {
             _window.MinimizePreviewWindow();
             return;
@@ -106,15 +111,46 @@ public partial class App : Application
     }
 
     private async Task HandleActivationAsync(
-        AppActivationArguments args,
+        ActivationSnapshot args,
         Uri? launchUri = null
 #if DEBUG
         , UiPreviewTrayActivation? trayTrace = null
 #endif
         )
     {
-        var launchArguments = args.Data is ILaunchActivatedEventArgs launch
-            ? launch.Arguments : null;
+        AuthActivationTrace.Record(AuthActivationStage.HandlerStarted);
+        try
+        {
+            if (args.CaptureFailed)
+            {
+                AuthActivationTrace.Record(AuthActivationStage.HandlerFaulted);
+                return;
+            }
+            await HandleActivationCoreAsync(args, launchUri
+#if DEBUG
+                , trayTrace
+#endif
+            );
+            AuthActivationTrace.Record(AuthActivationStage.HandlerCompleted);
+        }
+        catch (Exception error) when (error is not OutOfMemoryException and not AccessViolationException)
+        {
+            // Observe every activation task. Fixed stages carry no callback,
+            // account data or exception text; native auth presents its errors.
+            AuthActivationTrace.Record(AuthActivationStage.HandlerFaulted);
+            AuthActivationTrace.RecordFault(error);
+        }
+    }
+
+    private async Task HandleActivationCoreAsync(
+        ActivationSnapshot args,
+        Uri? launchUri = null
+#if DEBUG
+        , UiPreviewTrayActivation? trayTrace = null
+#endif
+        )
+    {
+        var launchArguments = args.LaunchArguments;
         if (UiPreviewContext.IsEnabled)
         {
 #if DEBUG
@@ -162,18 +198,10 @@ public partial class App : Application
             // UI-review activations never enter browser authentication.
             return;
         }
-        var protocolUri = args.Kind switch
-        {
-            ExtendedActivationKind.Protocol
-                when args.Data is IProtocolActivatedEventArgs protocolArgs =>
-                    protocolArgs.Uri,
-            ExtendedActivationKind.Launch
-                when args.Data is ILaunchActivatedEventArgs launchArgs =>
-                    ProtocolActivationUriParser.Parse(launchArgs.Arguments),
-            _ => launchUri,
-        };
+        var protocolUri = args.ProtocolUri ?? launchUri;
         if (protocolUri is null)
         {
+            AuthActivationTrace.Record(AuthActivationStage.HandlerNoProtocol);
             return;
         }
 

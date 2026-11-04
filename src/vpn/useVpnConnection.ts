@@ -21,6 +21,7 @@ import {
 } from '@/api/vexApi';
 import { startPushRegistrationLoop } from '@/notifications/pushRegistrationLoop';
 import { diagnosticFailureSamples } from '@/diagnostics/failureSamples';
+import { prepareClientNetworkDiagnostics } from '@/diagnostics/clientDiagnostics';
 import { useSession } from '@/auth/session-context';
 import { openExternalUrl } from '@/auth/systemAuth';
 import { vexWebsite } from '@/navigation/website';
@@ -133,7 +134,6 @@ import {
   areVpnStatusesEqual,
   errorMessage,
   isAuthenticationError,
-  disconnectedVpnStatus,
   formatBytes,
   locationLatencyText,
   serverLocationLabel,
@@ -392,6 +392,22 @@ export function useVpnConnection() {
     selectedLocationId,
     userId: session?.user.id,
   });
+
+  useEffect(() => {
+    const token = session?.accessToken;
+    const userId = session?.user.id;
+    if (Platform.OS !== 'android' || !hasVpnAccess || !token || !userId || !activeProfileDeviceId || vpnStatus.state !== 'disconnected') return;
+    let stopped = false;
+    const prepare = () => {
+      if (stopped || AppState.currentState !== 'active' || vpnOperationInFlightRef.current || !isCurrentSessionOperation()) return;
+      void dynamicRouteRuntime.prepare(userId, token, isCurrentSessionOperation).catch(() => undefined);
+      // Only the underlay observation needs to finish before the tunnel starts.
+      void prepareClientNetworkDiagnostics(token, activeProfileDeviceId, isCurrentSessionOperation).catch(() => undefined);
+    };
+    prepare();
+    const subscription = AppState.addEventListener('change', (state) => { if (state === 'active') prepare(); });
+    return () => { stopped = true; subscription.remove(); };
+  }, [activeProfileDeviceId, hasVpnAccess, isCurrentSessionOperation, session?.accessToken, session?.user.id, vpnStatus.state]);
 
   const activeDevice = activeProfile?.device
     ? (devicesData ?? persistedDevices)?.find((device) => device.id === activeProfile.device?.id) ?? activeProfile.device
@@ -686,7 +702,7 @@ export function useVpnConnection() {
   // clientLatencyMs remains diagnostic telemetry for the active device only.
   const selectedLatencyText = locationLatencyText(selectedLocation);
 
-  const canCancelConnecting = connectionPhase === 'connecting';
+  const canCancelConnecting = connectionPhase === 'connecting' || connectionPhase === 'verifying';
   const powerButtonDisabled = (isVpnBusy && !canCancelConnecting)
     || (!selectedLocation && !isConnected && !isLeakBlocked);
   const processingDevicePSKEventsRef = useRef(false);
@@ -1192,22 +1208,23 @@ export function useVpnConnection() {
     if (!isCurrentSessionOperation()) return;
     // A startup preference must never override an explicit connect/stop/cancel.
     autoConnectAttemptedRef.current = true;
-    if (isVpnBusy || vpnOperationInFlightRef.current) {
-      if (connectionPhase !== 'connecting') {
+    if (isVpnBusy || vpnOperationInFlightRef.current || connectionPhase === 'connecting' || connectionPhase === 'verifying') {
+      if (connectionPhase !== 'connecting' && connectionPhase !== 'verifying') {
         playWarningHaptic();
         return;
       }
 
       vpnOperationInFlightRef.current = true;
-      vpnConnectGenerationRef.current += 1;
+      const cancelGeneration = vpnConnectGenerationRef.current + 1;
+      vpnConnectGenerationRef.current = cancelGeneration;
       setIsVpnBusy(true);
       setVpnError(null);
       setVpnStatus((current) => nextVpnStatusWithState(current, 'disconnecting'));
       try {
         const latestStatus = await getVpnStatus().catch(() => null);
-        if (!isCurrentSessionOperation()) return;
-        const nextStatus = await disconnectVpn({ releaseAntiLeak: true }).catch(disconnectedVpnStatus);
-        if (!isCurrentSessionOperation()) return;
+        if (!isCurrentSessionOperation() || vpnConnectGenerationRef.current !== cancelGeneration) return;
+        const nextStatus = await disconnectVpn({ releaseAntiLeak: true });
+        if (!isCurrentSessionOperation() || vpnConnectGenerationRef.current !== cancelGeneration) return;
         dynamicRouteRuntime.clearActive();
         setVpnStatus(nextStatus);
         if (session && activeProfile && (latestStatus?.state === 'connected' || latestStatus?.leakProtection === 'blocking')) {
@@ -1215,9 +1232,9 @@ export function useVpnConnection() {
         }
         playSuccessHaptic();
       } catch (error) {
-        handleVpnFailure(error, 'disconnected');
+        if (vpnConnectGenerationRef.current === cancelGeneration) handleVpnFailure(error, 'disconnected');
       } finally {
-        if (isCurrentSessionOperation()) {
+        if (isCurrentSessionOperation() && vpnConnectGenerationRef.current === cancelGeneration) {
           vpnOperationInFlightRef.current = false;
           setIsVpnBusy(false);
         }
@@ -1240,7 +1257,7 @@ export function useVpnConnection() {
     try {
       if (isConnected || isLeakBlocked) {
         const nextStatus = await disconnectVpn({ releaseAntiLeak: true });
-        if (!isCurrentSessionOperation()) return;
+        if (!isCurrentSessionOperation() || vpnConnectGenerationRef.current !== connectGeneration) return;
         dynamicRouteRuntime.clearActive();
         setVpnStatus(nextStatus);
         if (session && activeProfile) {
@@ -1250,23 +1267,20 @@ export function useVpnConnection() {
         return;
       }
 
-      await connectCurrentVpn({ waitForAnimation: true });
-      if (!isCurrentSessionOperation()) return;
-      if (vpnConnectGenerationRef.current !== connectGeneration) {
-        const nextStatus = await disconnectVpn({ releaseAntiLeak: true }).catch(disconnectedVpnStatus);
-        if (!isCurrentSessionOperation()) return;
-        dynamicRouteRuntime.clearActive();
-        setVpnStatus(nextStatus);
-        if (session && activeProfile) {
-          reportVpnDisconnectEvent(activeProfile, 'user');
-        }
-        return;
-      }
+      await connectCurrentVpn({
+        waitForAnimation: true,
+        isCurrentOperation: () => vpnConnectGenerationRef.current === connectGeneration,
+      });
+      // Cancellation owns teardown. A late completion must never stop or
+      // unlock the tunnel started by a later press in the same login.
+      if (!isCurrentSessionOperation() || vpnConnectGenerationRef.current !== connectGeneration) return;
       playSuccessHaptic();
     } catch (error) {
-      handleVpnFailure(error, isConnected ? 'connected' : 'disconnected');
+      if (vpnConnectGenerationRef.current === connectGeneration) {
+        handleVpnFailure(error, isConnected ? 'connected' : 'disconnected');
+      }
     } finally {
-      if (isCurrentSessionOperation()) {
+      if (isCurrentSessionOperation() && vpnConnectGenerationRef.current === connectGeneration) {
         vpnOperationInFlightRef.current = false;
         setIsVpnBusy(false);
       }
@@ -1306,16 +1320,18 @@ export function useVpnConnection() {
           return;
         }
         autoConnectAttemptedRef.current = true;
+        const connectGeneration = vpnConnectGenerationRef.current + 1;
+        vpnConnectGenerationRef.current = connectGeneration;
         vpnOperationInFlightRef.current = true;
         setIsVpnBusy(true);
         setVpnError(null);
         setVpnStatus((current) => nextVpnStatusWithState(current, 'connecting'));
         try {
-          await connectCurrentVpn();
+          await connectCurrentVpn({ isCurrentOperation: () => vpnConnectGenerationRef.current === connectGeneration });
         } catch (error) {
-          handleVpnFailure(error, 'disconnected');
+          if (vpnConnectGenerationRef.current === connectGeneration) handleVpnFailure(error, 'disconnected');
         } finally {
-          if (isCurrentSessionOperation()) {
+          if (isCurrentSessionOperation() && vpnConnectGenerationRef.current === connectGeneration) {
             vpnOperationInFlightRef.current = false;
             setIsVpnBusy(false);
           }

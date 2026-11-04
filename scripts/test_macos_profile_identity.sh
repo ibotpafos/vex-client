@@ -10,6 +10,15 @@ source_dir="$harness_dir/Sources/VEXNativeMac"
 test_dir="$harness_dir/Tests/VEXNativeMacTests"
 mkdir -p "$source_dir" "$test_dir"
 native_dir="$root_dir/macos-native/Sources/VEXNativeMac"
+swiftpm_args=()
+if [[ "$(uname -s)" == Darwin && "$root_dir" == /Volumes/D/* ]]; then
+    swift_cache=/Volumes/D/VEX-CI/cache/swift-client-patch-integration
+    export CLANG_MODULE_CACHE_PATH=/Volumes/D/VEX-CI/cache/swift-modules-client-patches
+    export SWIFTPM_MODULECACHE_OVERRIDE="$CLANG_MODULE_CACHE_PATH"
+    mkdir -p "$swift_cache/cache" "$swift_cache/config" "$swift_cache/security" "$CLANG_MODULE_CACHE_PATH"
+    swiftpm_args=(--cache-path "$swift_cache/cache" --config-path "$swift_cache/config"
+                  --security-path "$swift_cache/security" --scratch-path "$harness_dir/.build" --manifest-cache local)
+fi
 cp "$native_dir/Models/VEXModels.swift" "$source_dir/"
 for name in VPNProfileCache VPNProfileCacheIdentity VPNAccountScope AppSensitiveFileStore NativeAwgBoolean VEXAPITransport; do
     cp "$native_dir/Services/$name.swift" "$source_dir/"
@@ -75,4 +84,4 @@ let package = Package(name: "VEXProfileIdentityHarness", platforms: [.macOS(.v15
 SWIFT
 swiftc -frontend -parse "$native_dir/Stores/VEXAppState.swift"
 swiftc -frontend -parse "$native_dir/Services/VPNProfileService.swift"
-swift test --package-path "$harness_dir" -j 2
+swift test --package-path "$harness_dir" -j 2 ${swiftpm_args[@]+"${swiftpm_args[@]}"} "$@"

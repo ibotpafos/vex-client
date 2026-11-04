@@ -35,6 +35,7 @@ async function check({ shouldFail, cancelBeforeStart }) {
     isCurrentSessionOperation: () => true,
     autoConnectAttemptedRef: { current: false },
     vpnOperationInFlightRef: { current: false },
+    vpnConnectGenerationRef: { current: 0 },
     isVpnBusy: false,
     isConnected: false,
     session: {},
@@ -101,6 +102,37 @@ async function checkManualIntent({ initiallyConnected, cancelWhileConnecting = f
   assert.equal(disconnects, invokePower ? 1 : 0);
 }
 
+async function checkSupersededAutoConnect(reject) {
+  let release, fail, entered, options, busy = false, failures = 0;
+  const reached = new Promise(resolve => { entered = resolve; });
+  const pending = new Promise((resolve, reject) => { release = resolve; fail = reject; });
+  const context = {
+    Platform: { OS: 'android' }, autoConnectAttemptedRef: { current: false },
+    isCurrentSessionOperation: () => true,
+    vpnOperationInFlightRef: { current: false }, vpnConnectGenerationRef: { current: 0 },
+    isVpnBusy: false, isConnected: false, session: {}, entitlementState: 'active', hasPaidEntitlement: () => true,
+    getAndroidAutoConnectEnabled: async () => true,
+    setIsVpnBusy: value => { busy = value; }, setVpnError: () => {}, setVpnStatus: () => {}, nextVpnStatusWithState: () => {},
+    connectCurrentVpn: value => { options = value; entered(); return pending; },
+    handleVpnFailure: () => { failures++; },
+  };
+  vm.runInNewContext(compiled, context);
+  const cleanup = vm.runInNewContext('effect()', context);
+  await reached;
+  // A manual cancel/new connect now owns the same login's native operation.
+  context.vpnConnectGenerationRef.current++;
+  context.vpnOperationInFlightRef.current = true;
+  busy = true;
+  if (reject) fail(new Error('late automatic attempt failure')); else release();
+  await new Promise(resolve => setImmediate(resolve));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(busy, true, 'a canceled automatic attempt cannot release a newer busy state');
+  assert.equal(context.vpnOperationInFlightRef.current, true);
+  assert.equal(failures, 0);
+  assert.equal(options.isCurrentOperation(), false);
+  cleanup();
+}
+
 (async () => {
   await check({ shouldFail: false, cancelBeforeStart: false });
   await check({ shouldFail: true, cancelBeforeStart: false });
@@ -110,6 +142,8 @@ async function checkManualIntent({ initiallyConnected, cancelWhileConnecting = f
   await checkManualIntent({ initiallyConnected: false, cancelWhileConnecting: true });
   await checkManualIntent({ initiallyConnected: false, cancelWhileConnecting: true, deferPreference: true });
   await checkManualIntent({ initiallyConnected: false, deferPreference: true, connectBeforePower: true });
+  await checkSupersededAutoConnect(false);
+  await checkSupersededAutoConnect(true);
   console.log('ANDROID_AUTO_CONNECT_EFFECT=PASS');
 })().catch((error) => {
   console.error(error);

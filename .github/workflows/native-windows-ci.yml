@@ -114,6 +114,7 @@ jobs:
           ./native-windows/tests/InstallerSafety.Tests.ps1
           ./native-windows/tests/VpnAcceptance.Tests.ps1
           ./native-windows/tests/PublicVpnVerification.Tests.ps1
+          ./native-windows/tests/RussianDirectAcceptance.Tests.ps1
           ./native-windows/tests/SmokeApplication.Tests.ps1
           ./native-windows/tests/UiPreviewProtocolRegistration.Tests.ps1
           ./native-windows/tests/UiPreviewContext.Tests.ps1
@@ -153,6 +154,13 @@ jobs:
       - name: Test native contracts on Windows
         if: matrix.architecture == 'x64'
         run: dotnet run --project native-windows/tests/Vex.Windows.Core.Tests/Vex.Windows.Core.Tests.csproj -c Release
+      - name: Verify bounded authentication ETW stages on the disposable host
+        if: matrix.architecture == 'x64'
+        shell: pwsh
+        run: |
+          dotnet build native-windows/scripts/Vex.Windows.AuthTrace/Vex.Windows.AuthTrace.csproj -c Release -p:RestoreLockedMode=true --nologo --verbosity quiet
+          if ($LASTEXITCODE -ne 0) { throw 'Locked auth trace reader build failed.' }
+          ./native-windows/tests/AuthActivationTrace.Tests.ps1 -NativeEtwFixture
       - name: Verify protected device-key retention across sign-out
         timeout-minutes: 5
         if: matrix.architecture == 'x64'
@@ -180,6 +188,7 @@ jobs:
           ./native-windows/tests/InstallerSafety.Tests.ps1
           ./native-windows/tests/VpnAcceptance.Tests.ps1
           ./native-windows/tests/PublicVpnVerification.Tests.ps1
+          ./native-windows/tests/RussianDirectAcceptance.Tests.ps1
           ./native-windows/tests/SmokeApplication.Tests.ps1
           ./native-windows/tests/UiPreviewProtocolRegistration.Tests.ps1
           ./native-windows/tests/UiPreviewContext.Tests.ps1
@@ -199,6 +208,15 @@ jobs:
           }
       - name: Publish self-contained VPN service
         run: dotnet publish native-windows/src/Vex.Windows.Service/Vex.Windows.Service.csproj -c Release -r win-${{ matrix.architecture }} -p:Platform=${{ matrix.architecture }} -o "${{ runner.temp }}/vex-windows/service-${{ matrix.architecture }}"
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        if: matrix.architecture == 'x64'
+        with:
+          go-version: "1.26.9"
+          cache: false
+      - name: Build routing runtime for asset verification
+        if: matrix.architecture == 'x64'
+        shell: pwsh
+        run: ./native-windows/scripts/build-routing-runtime.ps1 -DestinationRoot (Join-Path $env:RUNNER_TEMP 'vex-native-routing')
       - name: Verify both qualified MSI runtime architectures on a disposable host
         if: matrix.architecture == 'x64'
         shell: pwsh
@@ -361,6 +379,16 @@ jobs:
               }
             }
           }
+      - name: Retain small startup diagnostic receipts
+        if: always() && matrix.architecture == 'x64'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: vex-native-windows-startup-x64
+          path: |
+            ${{ runner.temp }}/vex-windows/startup-smoke-x64.json
+            ${{ runner.temp }}/vex-windows/desktop-*-x64.json
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Retain unsigned review builds and startup evidence
         if: always() && (github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

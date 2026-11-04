@@ -1,12 +1,13 @@
 #requires -Version 5.1
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = 'Observe')]
 param(
-    [Parameter(Mandatory = $true)][ValidateSet('Baseline', 'Connected', 'Restored')][string]$Phase,
-    [Parameter(Mandatory = $true)][string]$ResultPath,
-    [Parameter(Mandatory = $true)][string[]]$ExpectedVpnExitIpv4,
+    [Parameter(Mandatory = $true, ParameterSetName = 'Observe')][ValidateSet('Baseline', 'Connected', 'Restored')][string]$Phase,
+    [Parameter(Mandatory = $true, ParameterSetName = 'Observe')][string]$ResultPath,
+    [Parameter(Mandatory = $true, ParameterSetName = 'Observe')][string[]]$ExpectedVpnExitIpv4,
     [string]$BaselinePath,
     [string]$ConnectedPath,
-    [ValidateRange(30, 1800)][int]$MaximumBaselineAgeSeconds = 600
+    [ValidateRange(30, 1800)][int]$MaximumBaselineAgeSeconds = 600,
+    [Parameter(Mandatory = $true, ParameterSetName = 'Functions')][switch]$FunctionsOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -123,6 +124,8 @@ public sealed class VexPublicVpnProcessResult
 }
 public static class VexPublicVpnBoundedProcess
 {
+    public static Task<VexPublicVpnProcessResult> Begin(string executable, string arguments, int timeoutMilliseconds, int limit)
+    { return Task.Run(delegate { return Run(executable, arguments, timeoutMilliseconds, limit); }); }
     private sealed class Capture
     {
         public readonly StringBuilder Text = new StringBuilder();
@@ -241,7 +244,59 @@ function Get-PublicVpnNetworkState {
     return [pscustomobject]@{ VexIndex = 0; PhysicalIndexes = $physical; Phase = $PhaseName }
 }
 
+function Test-PublicVpnRoutingProcessIdentity {
+    param($Process, [int]$ControllerId, [string]$RouterImage, [string]$ParametersPath)
+    $pattern = '\A"' + [regex]::Escape($RouterImage) + '" -f --parameters (?:"' + [regex]::Escape($ParametersPath) + '"|' + [regex]::Escape($ParametersPath) + ') vex\z'
+    return $ControllerId -gt 0 -and [int]$Process.ProcessId -gt 0 -and $Process.ExecutablePath -ieq $RouterImage -and
+        [int]$Process.ParentProcessId -eq $ControllerId -and $Process.CommandLine -imatch $pattern
+}
+
+function Get-PublicVpnOwnedRoutingProcess {
+    $controller = @(Get-CimInstance -ClassName Win32_Service -OperationTimeoutSec 5 -Filter 'Name=''VEX VPN Service''' -ErrorAction Stop)
+    if ($controller.Count -ne 1 -or $controller[0].State -cne 'Running' -or $controller[0].StartName -ine 'LocalSystem' -or
+        $controller[0].ServiceType -cne 'Own Process' -or [int]$controller[0].ProcessId -le 0 -or
+        $controller[0].PathName -notmatch '^"(?<image>[^"\r\n]+\\Vex\.Windows\.Service\.exe)"$') {
+        throw 'public_vpn_installed_service_identity_invalid'
+    }
+    $image = $Matches.image
+    $process = @(Get-CimInstance -ClassName Win32_Process -OperationTimeoutSec 5 -Filter ('ProcessId=' + [int]$controller[0].ProcessId) -ErrorAction Stop)
+    if ($process.Count -ne 1 -or $process[0].ExecutablePath -ine $image) { throw 'public_vpn_service_process_identity_invalid' }
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry64)
+    try {
+        $key = $base.OpenSubKey('SOFTWARE\VEX\VPN', $false)
+        if ($null -eq $key) { throw 'public_vpn_installed_service_pin_missing' }
+        try { $servicePin = [string]$key.GetValue('ServiceExecutableSha256', $null); $leafPin = [string]$key.GetValue('ClientCertificateSha256', $null) }
+        finally { $key.Dispose() }
+    } finally { $base.Dispose() }
+    if ($servicePin -notmatch '^[A-Fa-f0-9]{64}$' -or $leafPin -notmatch '^[A-Fa-f0-9]{64}$' -or
+        (Get-FileHash -LiteralPath $image -Algorithm SHA256).Hash -ine $servicePin) { throw 'public_vpn_installed_runtime_hash_mismatch' }
+    $data = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'VEX\VPN'
+    $pinPath = Join-Path $data 'router-sha256'; $routerImage = Join-Path ([IO.Path]::GetDirectoryName($image)) 'vex-awg.exe'
+    foreach ($path in @($data, $pinPath, $routerImage)) {
+        if (((Get-Item -LiteralPath $path -Force -ErrorAction Stop).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'public_vpn_routing_runtime_link_invalid' }
+    }
+    if ((Get-Item -LiteralPath $pinPath).Length -gt 128) { throw 'public_vpn_routing_pin_invalid' }
+    $routerPin = [IO.File]::ReadAllText($pinPath).Trim()
+    if ($routerPin -notmatch '^[A-Fa-f0-9]{64}$' -or (Get-FileHash -LiteralPath $routerImage -Algorithm SHA256).Hash -ine $routerPin) {
+        throw 'public_vpn_routing_runtime_hash_mismatch'
+    }
+    $signature = Get-AuthenticodeSignature -LiteralPath $routerImage -ErrorAction Stop
+    if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or $null -eq $signature.SignerCertificate -or
+        (Get-PublicVpnHash $signature.SignerCertificate.GetRawCertData()) -ine $leafPin) { throw 'public_vpn_routing_signer_invalid' }
+    $parameters = Join-Path $data 'Private\routing-parameters.json'
+    # Only the long-lived, owned engine qualifies, never its short control subprocesses.
+    $engine = @(Get-CimInstance -ClassName Win32_Process -OperationTimeoutSec 5 -Filter 'Name=''vex-awg.exe''' -ErrorAction Stop |
+        Where-Object { Test-PublicVpnRoutingProcessIdentity $_ ([int]$controller[0].ProcessId) $routerImage $parameters })
+    if ($engine.Count -ne 1 -or [int]$engine[0].ProcessId -le 0) { throw 'public_vpn_owned_routing_process_missing' }
+    return [pscustomobject]@{ ProcessId = [int]$engine[0].ProcessId; RouterSha256 = $routerPin.ToLowerInvariant(); ControllerId = [int]$controller[0].ProcessId }
+}
+
 function Assert-PublicVpnOwnedVendor {
+    $dataRoot = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'VEX\VPN'
+    if (Test-Path -LiteralPath (Join-Path $dataRoot 'router-sha256')) {
+        $null = Get-PublicVpnOwnedRoutingProcess
+        return
+    }
     $controller = @(Get-CimInstance -ClassName Win32_Service -OperationTimeoutSec 5 -Filter 'Name=''VEX VPN Service''' -ErrorAction Stop)
     $vendor = @(Get-CimInstance -ClassName Win32_Service -OperationTimeoutSec 5 -Filter 'Name=''AmneziaWGTunnel$vex''' -ErrorAction Stop)
     if ($controller.Count -ne 1 -or $vendor.Count -ne 1 -or $controller[0].State -cne 'Running' -or
@@ -422,6 +477,7 @@ function Test-PublicVpnPhaseResults {
     return $hash
 }
 
+if ($FunctionsOnly) { return }
 # Fail on non-Windows BEFORE DNS, curl, machine identity or result creation.
 Assert-PublicVpnWindows
 Assert-PublicVpnAdministrator

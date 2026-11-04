@@ -84,17 +84,17 @@ export function homeConnectionPresentation(phase: ConnectionPhase): HomeConnecti
       };
     case 'connecting':
       return {
-        action: 'Отменить',
-        helper: 'Создаём защищённый канал',
-        status: 'Подключаем',
-        tone: 'busy',
+        action: 'Включён',
+        helper: 'Завершаем подключение',
+        status: 'Завершаем подключение',
+        tone: 'connected',
       };
     case 'verifying':
       return {
-        action: 'Проверяем',
-        helper: 'Ожидаем подтверждение сервера',
-        status: 'Проверяем защиту',
-        tone: 'busy',
+        action: 'Включён',
+        helper: 'Завершаем подключение',
+        status: 'Завершаем подключение',
+        tone: 'connected',
       };
     case 'switching':
       return {

@@ -29,6 +29,7 @@ export VEX_NATIVE_REQUIRE_DEVELOPER_ID="${VEX_NATIVE_REQUIRE_DEVELOPER_ID:-0}"
 export VEX_NATIVE_SIGNING_MODE="${VEX_NATIVE_SIGNING_MODE:-internal}"
 export VEX_NATIVE_BUILD_PKG="${VEX_NATIVE_BUILD_PKG:-1}"
 
+python3 "${ROOT_DIR}/scripts/test_macos_packaged_resources.py"
 bash "${ROOT_DIR}/scripts/build_native_macos_app.sh"
 pkg_path=""
 if [[ "${VEX_NATIVE_BUILD_PKG:-1}" == "1" ]]; then

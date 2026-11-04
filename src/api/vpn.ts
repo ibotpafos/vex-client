@@ -46,7 +46,54 @@ import { canRevalidateDevice } from '../vpn/profileRevalidation';
 import { SessionOperationSupersededError } from '../vpn/sessionOperation';
 import { nativeRoutingParameters, routingAuthorization } from '../vpn/nativeRoutingPolicy';
 
+import { parseVlessProfileResponse } from './vlessProfile';
+
 const mobileProtocol = 'amneziawg';
+
+export async function preparedVlessTunnel(accessToken: string, options: PreparedTunnelOptions = {}) {
+  requireCurrentSession(options.isCurrentSessionOperation);
+  if (Platform.OS !== 'android') throw new Error('VLESS доступен только в Android-приложении.');
+  const client = currentVpnClient();
+  const locationId = normalizeLocationId(options.locationId);
+  const accountOptions = await vpnAccountOptions(accessToken, client, locationId, options.userId, options.isCurrentSessionOperation);
+  const identity = await getOrCreateVpnAccountIdentity(accountOptions);
+  requireCurrentSession(options.isCurrentSessionOperation);
+  const ownedDevices = await vpnDevices(accessToken);
+  requireCurrentSession(options.isCurrentSessionOperation);
+  if (ownedDevices.some(device => device.userId && device.userId !== accountOptions.userId)) throw new Error('Список VPN-устройств принадлежит другому аккаунту.');
+  const previousDevice = ownedDevices.find(item => item.externalDeviceId === identity.externalDeviceId);
+  if (previousDevice && previousDevice.status !== 'active') throw new Error('VPN-устройство отключено.');
+  let device = nativeVpnDeviceForClient(ownedDevices, locationId, identity.externalDeviceId, identity.externalDeviceId);
+  if (!device || identity.legacyRegistrationPending) {
+    // Enrollment and pending legacy identity migration use the same signed,
+    // account-bound registration journal as AWG, including its key-separation
+    // safeguards. VLESS profile issuance/recovery never requests a WG profile.
+    device = await getOrCreateNativeDeviceRegistration(accessToken, identity.externalDeviceId, () =>
+      registerAccountNativeDevice(accessToken, client, locationId, accountOptions, ownedDevices));
+  }
+  requireCurrentSession(options.isCurrentSessionOperation);
+  if (!device.id || device.status !== 'active' || (device.userId && device.userId !== accountOptions.userId) ||
+      (device.platform && device.platform !== 'android') ||
+      (device.provisioningMode !== 'managed_native' && device.clientKeyOwnership !== 'client')) throw new Error('VLESS требует собственное активное Android-устройство.');
+  const versionHeaders = await clientVersionHeaders();
+  requireCurrentSession(options.isCurrentSessionOperation);
+  const response = await jsonRequest<unknown>('/v1/vpn/vless-profile', {
+    method: 'POST', accessToken, headers: { ...versionHeaders, 'X-Vex-Platform': 'android' },
+    body: { device_id: device.id, location_id: locationId, transport_capability: 'vless-xhttp-v1' },
+    retryCount: 0, suppressErrorLog: true,
+  }).catch((error: unknown) => {
+    requireCurrentSession(options.isCurrentSessionOperation);
+    if (error instanceof ApiRequestError && (error.status === 404 || error.status === 503)) {
+      throw new ApiRequestError('VLESS пока недоступен. Выберите другой сервер или AmneziaWG в настройках.', {
+        status: error.status, code: error.code, retryAfterMs: error.retryAfterMs,
+      });
+    }
+    throw error;
+  });
+  requireCurrentSession(options.isCurrentSessionOperation);
+  const profile = parseVlessProfileResponse(response, device.id, locationId);
+  return { device, config: profile.config, expiresAt: profile.expires_at, routeId: profile.route_id };
+}
 
 export async function preparedTunnel(accessToken: string, client: VpnClientDescriptor = currentVpnClient(), options: PreparedTunnelOptions = {}): Promise<PreparedTunnel> {
   requireCurrentSession(options.isCurrentSessionOperation);

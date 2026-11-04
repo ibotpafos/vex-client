@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -35,6 +37,50 @@ for (const checksum of [
   'a21ae5633a269bcd7e90cf767e48225633795e99d831742cbf3397064fee7712',
 ]) assert.ok(androidToolchainPatch.includes(checksum));
 assert.ok(androidLocalGoPatch.includes('goruntime-boottime-over-monotonic.diff'));
+
+const routingToolchainPatch = read('patches/amnezia/amneziawg-android-routing-go126-toolchain.patch');
+assert.ok(routingToolchainPatch.includes('+GO_VERSION := 1.26.10'));
+for (const checksum of [
+  'e820ab780c273ae4a340b79d0f3c4313b74ee029aa3874792145d44b9f4f91da',
+  '0b5183492292ada170f9b561a834863808dd02edba599e4ad0e89899330020b3',
+  'ccfe7ae822d2c2f41f4fe7c956199967a4dac22d0ee0d2b2bfdb440aab3b20c5',
+]) assert.ok(routingToolchainPatch.includes(checksum));
+
+// Execute only the actual local migration fragment on tiny isolated Makefiles.
+// Never invoke SDK bootstrap, network fetches or a native compiler in this test.
+const securityUpdate = read('patches/amnezia/amneziawg-android-routing-go126-security-update.patch');
+const snapshot = (patch, side) => patch.split('\n')
+  .filter(line => line && !/^(---|\+\+\+|@@)/.test(line) && (line[0] === ' ' || line[0] === side))
+  .map(line => line.slice(1)).join('\n') + '\n';
+const baseMakefile = snapshot(routingToolchainPatch, '-');
+const currentMakefile = snapshot(routingToolchainPatch, '+');
+const previousMakefile = snapshot(securityUpdate, '-');
+const migrationFragment = android.slice(android.indexOf('toolchain_patch='), android.indexOf('build_patch='));
+assert.ok(migrationFragment.includes('toolchain_security_update='));
+const fixture = mkdtempSync(join(tmpdir(), 'vex-toolchain-migration-'));
+try {
+  const checkout = join(fixture, 'amneziawg-android');
+  const makefile = join(checkout, 'tunnel/tools/libwg-go/Makefile');
+  mkdirSync(dirname(makefile), { recursive: true });
+  const prefix = '# unrelated upstream context\n'.repeat(20);
+  for (const initial of [baseMakefile, previousMakefile, currentMakefile]) {
+    writeFileSync(makefile, prefix + initial);
+    for (let pass = 0; pass < 2; pass++) {
+      const result = spawnSync('bash', ['-euc', migrationFragment + '\ngit -C "$external_dir/amneziawg-android" apply "$toolchain_patch"'], {
+        env: { ...process.env, root_dir: root, external_dir: fixture }, encoding: 'utf8',
+      });
+      assert.equal(result.status, 0, `initial=${initial === baseMakefile ? "base" : initial === previousMakefile ? "previous" : "current"}, pass=${pass}: ${result.stderr}`);
+      assert.equal(readFileSync(makefile, 'utf8'), prefix + currentMakefile);
+    }
+  }
+  const unexpected = prefix + previousMakefile.replace('GO_HASH_linux-amd64 := ', 'GO_HASH_linux-amd64 := unexpected-');
+  writeFileSync(makefile, unexpected);
+  const rejected = spawnSync('bash', ['-euc', migrationFragment + '\ngit -C "$external_dir/amneziawg-android" apply "$toolchain_patch"'], {
+    env: { ...process.env, root_dir: root, external_dir: fixture }, encoding: 'utf8',
+  });
+  assert.notEqual(rejected.status, 0);
+  assert.equal(readFileSync(makefile, 'utf8'), unexpected);
+} finally { rmSync(fixture, { recursive: true, force: true }); }
 
 
 const macos = read('scripts/bootstrap_amneziawg_macos.sh');

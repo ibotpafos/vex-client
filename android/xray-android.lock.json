@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "version": "v26.10.31",
+  "source_commit": "7fe8528063e54343af8ba9a37431afc56000de21",
+  "url": "https://github.com/XTLS/libXray/releases/download/v26.10.31/libxray-android.zip",
+  "archive_bytes": 52277046,
+  "archive_sha256": "fb99f04acf379cc2957c1e1d0ce2b3c0005d3f49974a44c09a11242a0562c1ca",
+  "aar_sha256": "4c90532f61ff8363e7fcf52e064ff1aa66d065e06afbadc0ea4c6acf384c452f",
+  "sources_sha256": "14641c3977eee0e7ce9c2e1bf2d3399c0158f11a1a500b4ba9b9d5d651c1a9dc",
+  "required_abis": ["arm64-v8a", "armeabi-v7a"],
+  "minimum_load_alignment": 16384
+}

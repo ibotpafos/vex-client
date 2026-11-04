@@ -1,5 +1,5 @@
 import { StatusBar } from 'expo-status-bar';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import React, { useState } from 'react';
 import { Platform, ScrollView, Text, View } from 'react-native';
 
@@ -27,6 +27,7 @@ export default function App() {
     trafficQuota,
     entitlementState,
     vpnError,
+    vpnStatus,
     isVpnBusy,
     isKeyRotationBusy,
     isUpdateCenterVisible,
@@ -49,7 +50,11 @@ export default function App() {
     retryLocations,
     openUpdateCenter,
     closeUpdateCenter,
+    refreshVpnPreferences,
   } = useVpnConnectionContext();
+  useFocusEffect(React.useCallback(() => {
+    void refreshVpnPreferences().catch(() => undefined);
+  }, [refreshVpnPreferences]));
   const [isServerPickerVisible, setIsServerPickerVisible] = useState(false);
   const [serverPickerSnapshot, setServerPickerSnapshot] = useState<{
     latencyText: string;
@@ -101,6 +106,9 @@ export default function App() {
           pulseProgress={pulseProgress}
           selectionMode={serverSelectionMode}
         >
+          {vpnStatus.state === 'connected' && Platform.OS === 'android' ? (
+            <Text testID="home-active-protocol" style={styles.vpnNoticeText}>Подключено: {vpnStatus.transport === 'vless' ? 'VLESS' : 'AmneziaWG'}</Text>
+          ) : null}
           <MobileUpdateNoticeBanner onOpen={openUpdateCenter} />
           {trafficQuota && shouldShowHomeTrafficQuota(trafficQuota) ? <TrafficQuotaSummary quota={trafficQuota} /> : null}
           {Platform.OS === 'android' ? <SubscriptionRenewalCard entitlement={entitlementState} /> : null}

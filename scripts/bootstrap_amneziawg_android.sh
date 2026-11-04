@@ -85,6 +85,12 @@ fi
 # Peel the exact additive SDK patch before checking earlier patches whose
 # context it extends. This keeps repeated bootstrap safe after go mod tidy.
 toolchain_patch="${root_dir}/patches/amnezia/amneziawg-android-routing-go126-toolchain.patch"
+# Recognize and migrate the exact prior SDK compiler pins before peeling the
+# additive toolchain patch. Existing cached checkouts need no destructive reset.
+toolchain_security_update="${root_dir}/patches/amnezia/amneziawg-android-routing-go126-security-update.patch"
+if git -C "${external_dir}/amneziawg-android" apply --check "${toolchain_security_update}" >/dev/null 2>&1; then
+  git -C "${external_dir}/amneziawg-android" apply "${toolchain_security_update}"
+fi
 if git -C "${external_dir}/amneziawg-android" apply --reverse --check "${toolchain_patch}" >/dev/null 2>&1; then
   git -C "${external_dir}/amneziawg-android" apply --reverse "${toolchain_patch}"
 fi

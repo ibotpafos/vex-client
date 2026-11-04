@@ -5,9 +5,24 @@ import { defaultVpnRoutingMode, isSmartRoutingMode, normalizeVpnRoutingMode, typ
 import { normalizeServerSelectionMode, type ServerSelectionMode } from '@/vpn/serverSelection';
 import { normalizePackageNames, type VpnApplicationRoutingMode } from '@/vpn/applicationRouting';
 import { androidExperimentalRoutingEnabled } from '@/vpn/androidRoutingSafety';
-import { supportsNativeRoutingPolicy } from '@/native/vexVpn';
+import { supportsNativeRoutingPolicy, supportsNativeVless } from '@/native/vexVpn';
+
+import { normalizeVpnTransport, type VpnTransport } from '@/vpn/transport';
 
 export { normalizePackageNames, type VpnApplicationRoutingMode } from '@/vpn/applicationRouting';
+
+const vpnTransportKey = 'vex.settings.vpn.transport.v1';
+
+export async function getVpnTransport(): Promise<VpnTransport> {
+  return Platform.OS === 'android' ? normalizeVpnTransport(await safeGetSetting(vpnTransportKey)) : 'amneziawg';
+}
+
+export async function setVpnTransport(transport: VpnTransport): Promise<VpnTransport> {
+  const normalized = normalizeVpnTransport(transport);
+  if (normalized === 'vless' && !supportsNativeVless()) throw new Error('Для VLESS обновите Android-приложение.');
+  await SecureStore.setItemAsync(vpnTransportKey, normalized);
+  return normalized;
+}
 
 const androidAutoConnectKey = 'vex.settings.android.autoconnect.v1';
 const antiLeakEnabledKey = 'vex.settings.vpn.anti_leak.v1';

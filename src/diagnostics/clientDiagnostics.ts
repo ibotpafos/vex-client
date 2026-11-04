@@ -5,7 +5,7 @@ import { measureEndpointLatency, readNativeVpnDiagnostics, type VpnStatus } from
 import { probeNetworkHealth } from '@/vpn/networkHealthProbe';
 import { getOtaProvenance } from './otaProvenance';
 import { getVpnStatus, readVpnNetworkObservation } from '@/native/vexVpn';
-import { matchingNetworkObservation, type CapturedNetworkObservation } from './networkObservation';
+import { matchingNetworkObservation, type CapturedNetworkObservation, type NetworkObservation } from './networkObservation';
 import type { DiagnosticErrorClass } from './failureSamples';
 
 const queueKey = 'vex.diagnostics.client.queue.v1';
@@ -107,6 +107,7 @@ let cachedNetworkProbe: {
   endpoint?: string;
   vpnState: VpnStatus['state'];
   networkGeneration: string;
+  networkClass: NetworkObservation['networkClass'];
   latestHandshakeEpochMillis?: number;
   measuredAt: number;
   result: Awaited<ReturnType<typeof probeNetworkHealth>>;
@@ -147,10 +148,16 @@ async function buildClientDiagnosticsReport(snapshot: VpnDiagnosticsSnapshot, ac
   const usage = snapshot.usage;
   const generatedAt = new Date().toISOString();
   const beforeProbe = await readVpnNetworkObservation();
-  const networkProbe = await cachedDiagnosticsNetworkProbe(snapshot.endpoint, snapshot.vpnStatus, beforeProbe.generation);
+  const measuredProbe = await cachedDiagnosticsNetworkProbe(snapshot.endpoint, snapshot.vpnStatus, beforeProbe);
   const currentNetwork = await readVpnNetworkObservation();
-  const observationId = matchingNetworkObservation(capturedAccessToken === accessToken && capturedSessionIsCurrent?.() !== false
-    ? capturedNetwork : null, currentNetwork, snapshot.deviceId, Date.now());
+  const networkChanged = beforeProbe.generation !== currentNetwork.generation || beforeProbe.networkClass !== currentNetwork.networkClass;
+  // A probe spanning a handover describes neither underlay reliably. Discard
+  // it and its cache so a subsequent stable report measures the new network.
+  const networkProbe = networkChanged ? {} : measuredProbe;
+  if (networkChanged) cachedNetworkProbe = null;
+  const observationId = networkChanged ? undefined : matchingNetworkObservation(
+    capturedAccessToken === accessToken && capturedSessionIsCurrent?.() !== false ? capturedNetwork : null,
+    currentNetwork, snapshot.deviceId, Date.now());
   return {
     deviceId: snapshot.deviceId,
     networkClass: currentNetwork.networkClass,
@@ -172,7 +179,7 @@ async function buildClientDiagnosticsReport(snapshot: VpnDiagnosticsSnapshot, ac
     // samples.network_probe retains which checks were actually measured.
     dnsOk: networkProbe.dnsOk !== false,
     httpsOk: networkProbe.httpsOk !== false,
-    latencyAverageMs: normalizeNumber(snapshot.latencyMs ?? networkProbe.endpointLatencyMs),
+    latencyAverageMs: networkChanged ? undefined : normalizeNumber(snapshot.latencyMs ?? networkProbe.endpointLatencyMs),
     rxBytes: usage?.rxBytes ?? snapshot.vpnStatus.rxBytes,
     txBytes: usage?.txBytes ?? snapshot.vpnStatus.txBytes,
     samples: {
@@ -186,6 +193,7 @@ async function buildClientDiagnosticsReport(snapshot: VpnDiagnosticsSnapshot, ac
       vpn_status: snapshot.vpnStatus,
       native_vpn_diagnostics: nativeVpnDiagnostics,
       network_probe: networkProbe,
+      ...(networkChanged ? { network_probe_invalidated: 'network_changed' } : {}),
       usage,
       routing: {
         routing_mode: snapshot.routingMode,
@@ -208,9 +216,21 @@ function diagnosticErrorMetadata(reason: string, samples: Record<string, unknown
   if (!errorText) return {};
   const stage = diagnosticErrorStage(reason, samples);
   return {
-    diagnostic_error_class: diagnosticErrorClass(reason, errorText, samples),
+    // Typed API metadata survives normalized customer-facing error messages.
+    diagnostic_error_class: explicitDiagnosticErrorClass(samples) ?? diagnosticErrorClass(reason, errorText, samples),
     ...(stage ? { diagnostic_error_stage: stage } : {}),
   };
+}
+
+function explicitDiagnosticErrorClass(samples: Record<string, unknown> | undefined): DiagnosticErrorClass | undefined {
+  const value = samples?.diagnostic_error_class;
+  switch (value) {
+    case 'auth': case 'entitlement': case 'network': case 'timeout': case 'profile_revoked':
+    case 'native_connect': case 'cancelled': case 'http': case 'response_parse': case 'unknown':
+      return value;
+    default:
+      return undefined;
+  }
 }
 
 function diagnosticErrorText(samples: Record<string, unknown> | undefined): string | undefined {
@@ -248,12 +268,13 @@ function hasErrorKey(samples: Record<string, unknown> | undefined, key: string):
   return typeof samples?.[key] === 'string' && Boolean(samples[key].trim());
 }
 
-async function cachedDiagnosticsNetworkProbe(endpoint: string | undefined, vpnStatus: VpnStatus, networkGeneration: string): Promise<Awaited<ReturnType<typeof probeNetworkHealth>>> {
+async function cachedDiagnosticsNetworkProbe(endpoint: string | undefined, vpnStatus: VpnStatus, network: NetworkObservation): Promise<Awaited<ReturnType<typeof probeNetworkHealth>>> {
   const now = Date.now();
   if (
     cachedNetworkProbe
     && cachedNetworkProbe.endpoint === endpoint
-    && cachedNetworkProbe.networkGeneration === networkGeneration
+    && cachedNetworkProbe.networkGeneration === network.generation
+    && cachedNetworkProbe.networkClass === network.networkClass
     && cachedNetworkProbe.vpnState === vpnStatus.state
     && cachedNetworkProbe.latestHandshakeEpochMillis === vpnStatus.latestHandshakeEpochMillis
     && now >= cachedNetworkProbe.measuredAt
@@ -274,7 +295,8 @@ async function cachedDiagnosticsNetworkProbe(endpoint: string | undefined, vpnSt
       cachedNetworkProbe = {
         endpoint,
         vpnState: vpnStatus.state,
-        networkGeneration,
+        networkGeneration: network.generation,
+        networkClass: network.networkClass,
         latestHandshakeEpochMillis: vpnStatus.latestHandshakeEpochMillis,
         measuredAt: Date.now(),
         result,

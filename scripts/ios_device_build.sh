@@ -13,9 +13,9 @@ fail() {
 }
 
 [ -n "${IOS_DEVELOPMENT_TEAM:-}" ] || fail "Set IOS_DEVELOPMENT_TEAM to a paid Apple Developer Team ID."
-command -v go >/dev/null || fail "The pinned Go 1.26.9 toolchain is required."
-[ "$(go env GOVERSION)" = go1.26.9 ] || fail "Use the qualified Go 1.26.9 toolchain for this iOS candidate."
-export GOTOOLCHAIN=go1.26.9
+command -v go >/dev/null || fail "The pinned Go 1.26.10 toolchain is required."
+[ "$(go env GOVERSION)" = go1.26.10 ] || fail "Use the qualified Go 1.26.10 toolchain for this iOS candidate."
+export GOTOOLCHAIN=go1.26.10
 
 cd "$APP_DIR"
 

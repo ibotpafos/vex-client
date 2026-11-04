@@ -1,6 +1,10 @@
 import type { VpnStatus } from '@/native/vexVpn';
 
 type HandshakeVerificationOptions = {
+  transport?: 'amneziawg' | 'vless';
+  expectedConnectionId?: string;
+  previousConnectionId?: string;
+  minimumVerificationEpochMillis?: number;
   attempts?: number;
   minimumHandshakeEpochMillis?: number;
   previousHandshakeEpochMillis?: number;
@@ -18,11 +22,12 @@ export async function waitForVerifiedVpnConnection(
   readStatus: () => Promise<VpnStatus>,
   options: HandshakeVerificationOptions = {},
 ): Promise<VpnStatus> {
+  const proofOptions = { ...options, expectedConnectionId: options.expectedConnectionId ?? initialStatus.connectionId };
   options.assertCurrent?.();
   if (initialStatus.state !== 'connected' && initialStatus.state !== 'connecting' && initialStatus.state !== 'verifying') {
     throw new Error('VPN backend did not enter the connected state.');
   }
-  if (initialStatus.state === 'connected' && isHandshakeVerifiedForAttempt(initialStatus, options)) {
+  if (initialStatus.state === 'connected' && isHandshakeVerifiedForAttempt(initialStatus, proofOptions)) {
     return initialStatus;
   }
 
@@ -59,7 +64,7 @@ export async function waitForVerifiedVpnConnection(
     if (latestStatus.state !== 'connected') {
       throw new Error(`VPN disconnected before the handshake completed (${latestStatus.state}).`);
     }
-    if (isHandshakeVerifiedForAttempt(latestStatus, options)) {
+    if (isHandshakeVerifiedForAttempt(latestStatus, proofOptions)) {
       return latestStatus;
     }
   }
@@ -82,6 +87,15 @@ async function withDeadline<T>(operation: () => Promise<T>, timeoutMs: number): 
 }
 
 function isHandshakeVerifiedForAttempt(status: VpnStatus, options: HandshakeVerificationOptions): boolean {
+  if (options.transport === 'amneziawg' && status.transport === 'vless') return false;
+  if (options.transport === 'vless' || status.transport === 'vless') {
+    const now = options.now?.() ?? Date.now();
+    return status.transport === 'vless' && status.verified === true &&
+      typeof status.connectionId === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(status.connectionId) &&
+      status.connectionId === options.expectedConnectionId && status.connectionId !== options.previousConnectionId &&
+      typeof status.verificationEpochMillis === 'number' && Number.isFinite(status.verificationEpochMillis) &&
+      status.verificationEpochMillis >= (options.minimumVerificationEpochMillis ?? 1) && status.verificationEpochMillis <= now;
+  }
   const { minimumHandshakeEpochMillis, previousHandshakeEpochMillis } = options;
   if (minimumHandshakeEpochMillis === undefined) {
     return status.verified !== false &&

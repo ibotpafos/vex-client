@@ -1,6 +1,55 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import vm from 'node:vm';
 import { waitForVerifiedVpnConnection } from '../src/vpn/connectVerification.ts';
+
+const ts = createRequire(import.meta.url)('typescript');
+
+function loadNativeAdapter(statusReads) {
+  let reads = 0;
+  let listener;
+  const clock = class extends Date { static now() { return 1_000_000; } };
+  const disconnected = { state: 'disconnected', rxBytes: 0, txBytes: 0 };
+  const native = {
+    connect: async () => ({ state: 'connected', rxBytes: 0, txBytes: 0 }),
+    disconnect: async () => disconnected,
+    status: async () => {
+      const value = statusReads[reads++];
+      assert.ok(value, 'Unexpected native status read');
+      return typeof value === 'function' ? value() : value;
+    },
+  };
+  function load(relativePath, dependencies = {}) {
+    const exports = {};
+    const source = readFileSync(new URL(relativePath, import.meta.url), 'utf8');
+    vm.runInNewContext(ts.transpileModule(source, {
+      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+    }).outputText, {
+      exports, Date: clock,
+      require: name => { assert.ok(Object.hasOwn(dependencies, name), `Unexpected native adapter import ${name}`); return dependencies[name]; },
+    });
+    return exports;
+  }
+  const adapter = load('../src/native/vexVpn.ts', {
+    'react-native': {
+      Platform: { OS: 'android' }, NativeModules: { VexVpn: native },
+      NativeEventEmitter: class { addListener(_event, callback) { listener = callback; return { remove() {} }; } },
+    },
+    expo: {},
+    '@/vpn/disconnectRecovery': { disconnectWithRecoveryTimeout: operation => operation },
+    '@/vpn/vpnStatusVerification': load('../src/vpn/vpnStatusVerification.ts'),
+    '@/vpn/nativeRoutingPolicy': { nativeRoutingParameters: () => '' },
+  });
+  return { adapter, reads: () => reads, emit: status => listener(status), clock };
+}
+
+function deferred() {
+  let resolve;
+  const promise = new Promise(ok => { resolve = ok; });
+  return { promise, resolve };
+}
 
 const pending = { state: 'connected', rxBytes: 0, txBytes: 0, verified: false };
 
@@ -139,6 +188,97 @@ test('a current handshake within the deadline succeeds', async () => {
   assert.equal(status.verified, true);
 });
 
+test('connect verification reads a ready native handshake without the Android cache delay', async () => {
+  const verified = { ...pending, latestHandshakeEpochMillis: 1_000_000 };
+  const f = loadNativeAdapter([{ state: 'disconnected', rxBytes: 0, txBytes: 0 }, verified]);
+  const source = readFileSync(new URL('../src/vpn/useVpnConnectionFlow.ts', import.meta.url), 'utf8');
+  const tree = ts.createSourceFile('flow.ts', source, ts.ScriptTarget.Latest, true);
+  let callback;
+  function visit(node) {
+    if (ts.isVariableDeclaration(node) && node.name.getText(tree) === 'connectProfileWithEndpointFallback') {
+      callback = node.initializer.arguments[0].getText(tree);
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(tree);
+  assert.ok(callback);
+  const context = {
+    ...f.adapter, Date: f.clock, Platform: { OS: 'android' }, session: null,
+    requireCurrentSession() {}, antiLeakEnabled: true,
+    vpnProfileAddressMatchesDevice: () => true, androidVpnProfileWithinBinderBudget: () => true,
+    getVpnApplicationSelection: async () => ({ mode: 'all', packageNames: [] }),
+    dynamicRouteRuntime: { attempts: profile => [{ profile }], clearActive() {} },
+    profileEndpoint: () => 'fixture:443', withLastSuccessfulEndpoint: profile => profile,
+    withTimeout: promise => promise, connectAttemptTimeoutMs: 25_000,
+    waitForVerifiedVpnConnection: (status, readStatus, options) => waitForVerifiedVpnConnection(status, readStatus, {
+      ...options, wait: async () => { throw new Error('A cached pending status forced an unnecessary polling delay'); },
+    }),
+    isVpnTransportFallbackError: () => false,
+  };
+  const code = ts.transpileModule(`return (${callback});`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const connect = new Function(...Object.keys(context), code)(...Object.values(context));
+  const result = await connect({ config: 'fixture' });
+  assert.equal(result.status.latestHandshakeEpochMillis, 1_000_000);
+  assert.equal(result.status.verified, true);
+  assert.equal(f.reads(), 2);
+  await f.adapter.getVpnStatus();
+  assert.equal(f.reads(), 2, 'normal background reads retain the status cache');
+});
+
+test('fresh Android status reads still reject the previous handshake', async () => {
+  const f = loadNativeAdapter([
+    { ...pending, latestHandshakeEpochMillis: 999_000 },
+    { ...pending, latestHandshakeEpochMillis: 1_000_000 },
+  ]);
+  const started = await f.adapter.connectVpn('fixture');
+  let waits = 0;
+  const result = await waitForVerifiedVpnConnection(started, () => f.adapter.getVpnStatus({ fresh: true }), {
+    minimumHandshakeEpochMillis: 998_000, previousHandshakeEpochMillis: 999_000,
+    wait: async () => { waits++; },
+  });
+  assert.equal(waits, 1);
+  assert.equal(result.latestHandshakeEpochMillis, 1_000_000);
+});
+
+for (const resolveOldFirst of [true, false]) {
+  test(`an older status read cannot replace or clear a fresh read (older completes first: ${resolveOldFirst})`, async () => {
+    const old = deferred(), fresh = deferred();
+    const f = loadNativeAdapter([() => old.promise, () => fresh.promise]);
+    const oldRead = f.adapter.getVpnStatus();
+    const freshRead = f.adapter.getVpnStatus({ fresh: true });
+    const verified = { ...pending, latestHandshakeEpochMillis: 1_000_000 };
+    let joined;
+    if (resolveOldFirst) {
+      old.resolve(pending); await oldRead;
+      joined = f.adapter.getVpnStatus();
+      assert.equal(f.reads(), 2, 'old completion must not clear the newer in-flight read');
+    }
+    fresh.resolve(verified); await freshRead; await joined;
+    if (!resolveOldFirst) { old.resolve(pending); await oldRead; }
+    assert.equal((await f.adapter.getVpnStatus()).latestHandshakeEpochMillis, 1_000_000);
+    assert.equal(f.reads(), 2, 'old completion must not replace the fresh cache');
+  });
+}
+
+for (const mutation of ['connect', 'disconnect', 'event']) {
+  test(`an older native status read cannot replace a newer ${mutation} snapshot`, async () => {
+    const old = deferred();
+    const f = loadNativeAdapter([() => old.promise]);
+    const oldRead = f.adapter.getVpnStatus();
+    let expected;
+    if (mutation === 'connect') expected = await f.adapter.connectVpn('fixture');
+    if (mutation === 'disconnect') expected = await f.adapter.disconnectVpn();
+    if (mutation === 'event') {
+      f.adapter.listenVpnStatusChanged(() => {});
+      f.emit({ ...pending, latestHandshakeEpochMillis: 1_000_000 });
+      expected = await f.adapter.getVpnStatus();
+    }
+    old.resolve({ ...pending, state: 'error' }); await oldRead;
+    assert.equal((await f.adapter.getVpnStatus()).state, expected.state);
+    assert.equal((await f.adapter.getVpnStatus()).latestHandshakeEpochMillis, expected.latestHandshakeEpochMillis);
+    assert.equal(f.reads(), 1);
+  });
+}
 for (const timeoutMs of [10_000, 15_000]) {
   test(`default polling uses the ${timeoutMs}ms deadline for a delayed fresh handshake`, async () => {
     let now = 0;

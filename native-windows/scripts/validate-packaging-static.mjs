@@ -313,7 +313,7 @@ function assertRoutingPrerequisites(source) {
   for (const index of [go, router, stage]) {
     assert.match(steps[index], /^        if: matrix\.architecture == 'x64'[ \t]*$/m, "runtime prerequisites must execute for the x64 staging check");
   }
-  assert.match(steps[go], /^          go-version: "1\.26\.9"[ \t]*$/m);
+  assert.match(steps[go], /^          go-version: "1\.26\.10"[ \t]*$/m);
   assert.match(steps[go], /^          cache: false[ \t]*$/m, "Go action caching must remain disabled");
   assert.match(steps[router], /^        shell: pwsh[ \t]*$/m);
   assert.doesNotMatch(steps[router], /-Architecture\b/, "the stager requires both router architectures");

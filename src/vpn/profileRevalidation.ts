@@ -3,6 +3,7 @@ import type { VpnDevice } from '../api/types';
 import { vpnProfileAddressMatchesDevice } from './profileConsistency';
 
 export function profileRevalidationOptions(profile: VpnProfile | null | undefined, locationId: string, routingMode: VpnProfile['routingMode']) {
+  if (profile?.transport === 'vless') return {};
   if (!profile?.config || !profile.device?.id || profile.locationId !== locationId || profile.routingMode !== routingMode ||
       profile.rotationRequired || !Number.isInteger(profile.profileVersion) || (profile.profileVersion ?? 0) <= 0 || !vpnProfileAddressMatchesDevice(profile)) return {};
   return {cachedConfig: profile.config, knownVersion: profile.profileVersion, cachedDevice: profile.device};

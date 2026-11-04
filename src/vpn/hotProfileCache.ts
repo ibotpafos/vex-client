@@ -83,7 +83,7 @@ export async function saveHotVpnProfile(
   profile: VpnProfile,
   metadata: HotVpnProfileMetadata = {},
 ): Promise<HotVpnProfileRecord | null> {
-  if (!supportsPersistentHotVpnProfiles() || profile.rotationRequired) {
+  if (profile.transport === 'vless' || !supportsPersistentHotVpnProfiles() || profile.rotationRequired) {
     return null;
   }
   const store = await readHotVpnProfileStore();

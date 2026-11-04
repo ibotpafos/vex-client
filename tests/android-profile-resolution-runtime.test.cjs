@@ -42,6 +42,7 @@ async function resolveCase({ cached, hot, knownEntitlement = paid, permission = 
     './serverSwitch': {},
     './hotProfileCache': { clearHotVpnProfiles: async () => {}, hydrateHotVpnProfilesToQueryCache: async () => [], loadHotVpnProfileResult: async () => ({ record: hot ?? null }), profileFromHotRecord: record => ({ ...record, hotProfileUsed: true, source: 'local' }), saveHotVpnProfile: async () => {} },
     './connectFlow': connectFlow,
+    './transport': load(path.join(repo, 'src/vpn/transport.ts'), {}),
     './routingPolicy': {}, './androidRoutingSafety': androidSafety,
   });
   const state = module.useVpnProfileState({ accessToken: 'token', hasVpnAccess: true, knownEntitlement, onDeviceRevoked: async () => {}, onProfileRotationRequired: () => {}, onSubscriptionRequired: () => { subscription++; }, profileRefreshMs: 1, requestVpnPermission: async () => { permissionCalls++; return permission; }, routingMode: 'default', selectedLocationId: 'de', userId: hot ? 'user' : undefined });

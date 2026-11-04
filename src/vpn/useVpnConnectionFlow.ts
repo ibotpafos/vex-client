@@ -123,11 +123,11 @@ export function useVpnConnectionFlow({
     const endpointAttempts: string[] = [];
     const applicationSelection = await getVpnApplicationSelection();
     requireCurrentOperation();
-    if (Platform.OS === 'android' && session?.user.id && session.accessToken) {
+    if (profile.transport !== 'vless' && Platform.OS === 'android' && session?.user.id && session.accessToken) {
       await dynamicRouteRuntime.prepare(session.user.id, session.accessToken, isCurrentSessionOperation);
       requireCurrentOperation();
     }
-    const attempts: DynamicRouteAttempt[] = Platform.OS === 'android'
+    const attempts: DynamicRouteAttempt[] = profile.transport === 'vless' ? [{ profile }] : Platform.OS === 'android'
       ? dynamicRouteRuntime.attempts(profile)
       : connectionAttemptsForProfile(profile).map((attempt) => ({ profile: attempt }));
     let previousRouteTransport: 'awg3_direct' | 'awg3_relay' | undefined;
@@ -155,6 +155,7 @@ export function useVpnConnectionFlow({
         const startedStatus = await withTimeout(
           connectVpn(attempt.config, {
             antiLeakEnabled,
+            transport: attempt.transport ?? 'amneziawg',
             routingParameters: attempt.routingParameters,
             routingMode: attempt.routingMode,
             applicationRoutingMode: applicationSelection.mode,
@@ -165,8 +166,12 @@ export function useVpnConnectionFlow({
         );
         const interfaceUpMs = Date.now();
         requireCurrentOperation();
-        const status = await waitForVerifiedVpnConnection(startedStatus, getVpnStatus, {
+        const status = await waitForVerifiedVpnConnection(startedStatus, () => getVpnStatus({ fresh: true }), {
           assertCurrent: requireCurrentOperation,
+          transport: attempt.transport ?? 'amneziawg',
+          expectedConnectionId: startedStatus.connectionId,
+          minimumVerificationEpochMillis: nativeStartMs,
+          previousConnectionId: previousStatus?.connectionId,
           // The native backend can briefly expose the previous peer timestamp
           // while replacing a tunnel. Require activity from this attempt. The
           // small tolerance covers second-resolution backend timestamps.
@@ -203,7 +208,7 @@ export function useVpnConnectionFlow({
           reportRoute(candidate, endpointAttempts.length > 1 ? 'fallback_failed' : 'connect_failed', 'error');
           previousRouteTransport = routeTransport(candidate);
         }
-        if (Platform.OS === 'android' && !attempts.some((item) => item.candidate)) {
+        if (profile.transport !== 'vless' && Platform.OS === 'android' && !attempts.some((item) => item.candidate)) {
           // A background policy may arrive while the signed endpoint is being
           // tried. Keep its bounded relay choices available to this connection.
           const seen = new Set(endpointAttempts.map((endpoint) => endpoint.toLowerCase()));
@@ -223,10 +228,12 @@ export function useVpnConnectionFlow({
   const connectCurrentVpn = useCallback(async ({
     locationId = selectedLocationId,
     waitForAnimation = false,
+    requestPermission = true,
     isCurrentOperation = () => true,
   }: {
     locationId?: string;
     waitForAnimation?: boolean;
+    requestPermission?: boolean;
     isCurrentOperation?: () => boolean;
   } = {}) => {
     const requireCurrentOperation = () => {
@@ -234,10 +241,15 @@ export function useVpnConnectionFlow({
       if (!isCurrentOperation()) throw new SessionOperationSupersededError();
     };
     requireCurrentOperation();
-    const resolveCurrentProfile: typeof resolveConnectableVpnProfile = async (...args) => {
+    const resolveCurrentProfile: typeof resolveConnectableVpnProfile = async (location, options = {}) => {
       requireCurrentOperation();
       try {
-        return await resolveConnectableVpnProfile(...args);
+        return await resolveConnectableVpnProfile(location, {
+          ...options,
+          // Only an explicit manual connect may obtain/reclaim Android's VPN
+          // grant. Automatic retries retain this prohibition for every route.
+          requestPermission: requestPermission && options.requestPermission !== false,
+        });
       } finally {
         requireCurrentOperation();
       }

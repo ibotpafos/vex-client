@@ -33,6 +33,9 @@ class MainApplication : Application(), ReactApplication {
 
   override fun onCreate() {
     super.onCreate()
+    // libXray and AWG each contain a Go runtime. The dedicated VPN process
+    // must not initialize React Native packages, AWG, Expo or crash SDKs.
+    if (com.vexguard.app.vpn.VlessVpnProcess.isVless(this)) return
     DefaultNewArchitectureEntryPoint.releaseLevel = try {
       ReleaseLevel.valueOf(BuildConfig.REACT_NATIVE_RELEASE_LEVEL.uppercase())
     } catch (e: IllegalArgumentException) {
@@ -45,6 +48,7 @@ class MainApplication : Application(), ReactApplication {
 
   override fun onConfigurationChanged(newConfig: Configuration) {
     super.onConfigurationChanged(newConfig)
+    if (com.vexguard.app.vpn.VlessVpnProcess.isVless(this)) return
     ApplicationLifecycleDispatcher.onConfigurationChanged(this, newConfig)
   }
 

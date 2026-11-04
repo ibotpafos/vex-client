@@ -104,7 +104,7 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
       });
       if (telemetry) {
         connectedAtRef.current = null;
-        const failedRoute = Platform.OS === 'android'
+        const failedRoute = Platform.OS === 'android' && activeProfileForStatus.transport !== 'vless'
           ? dynamicRouteRuntime.recordActiveFailure(activeProfileForStatus)
           : null;
         void submitStatusDiagnostics('native_unexpected_disconnect', 'degraded', {
@@ -156,7 +156,7 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
         let activeUsage: VpnDeviceUsage | undefined;
         let usageError: string | undefined;
         try {
-          const usageRows = localHealthFailuresRef.current >= input.failureThreshold
+          const usageRows = activeProfile.transport === 'vless' || localHealthFailuresRef.current >= input.failureThreshold
             ? []
             : await input.fetchDeviceUsage(accessToken);
           activeUsage = usageRows.find((usage) => usage.deviceId === activeDeviceId);
@@ -170,6 +170,7 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
           ? latestLocal.status
           : lastLocalDegradedStatusRef.current ?? undefined;
         const health = assessNativeTunnelHealth({
+          transport: activeProfile.transport,
           deviceUsage: activeUsage,
           nowMs: Date.now(),
           staleHandshakeSeconds: input.staleHandshakeSeconds,
@@ -179,17 +180,17 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
         if (health.healthy && localHealthFailuresRef.current === 0) {
           recoveryBackoffRef.current = resetRecoveryBackoff();
           const failure = lastRecoveryFailureRef.current;
-          if (failure && input.onHealthRecovered && input.probeHealth &&
+          if (failure && input.onHealthRecovered && (activeProfile.transport === 'vless' || input.probeHealth) &&
               failure.deviceId === activeDeviceId && failure.locationId === input.activeLocationId &&
               failure.profileVersion === activeProfile.profileVersion && failure.accessToken === accessToken &&
               localStatus?.state === 'connected') {
-            const recovered = await input.probeHealth(activeProfile).catch(() => null);
+            const recovered = activeProfile.transport === 'vless' ? null : await input.probeHealth!(activeProfile).catch(() => null);
             const confirmed = lastLocalStatusRef.current;
             // A fresh HTTPS result may clear only this watchdog's warning for
             // the same session/profile. User actions and later local failures win.
             if (isCurrent() && !input.operationInFlightRef.current &&
                 lastRecoveryFailureRef.current === failure && localHealthFailuresRef.current === 0 &&
-                recovered?.httpsOk === true && recovered.dnsOk !== false &&
+                (activeProfile.transport === 'vless' || (recovered?.httpsOk === true && recovered.dnsOk !== false)) &&
                 confirmed?.deviceId === activeDeviceId && confirmed.locationId === input.activeLocationId &&
                 confirmed.profileVersion === activeProfile.profileVersion && confirmed.status.state === 'connected' &&
                 localStatusHealthReasons(confirmed.status, Date.now(), input.staleHandshakeSeconds).length === 0) {
@@ -206,7 +207,7 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
         if (healthFailureCount < input.failureThreshold || !cooldownElapsed || !recoveryAttemptAllowed(recoveryBackoffRef.current, nowMs)) {
           return;
         }
-        const probe = localHealthFailuresRef.current >= input.failureThreshold ? undefined : await input.probeHealth?.(activeProfile).catch((error): VpnAutopilotProbeResult => ({
+        const probe = activeProfile.transport === 'vless' || localHealthFailuresRef.current >= input.failureThreshold ? undefined : await input.probeHealth?.(activeProfile).catch((error): VpnAutopilotProbeResult => ({
           endpointProbeError: errorMessage(error, 'network_probe_failed'),
         }));
         if (!isCurrent() || input.operationInFlightRef.current) return;
@@ -221,7 +222,7 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
         // any awaited diagnostics or native mutation can overlap user intent.
         input.operationInFlightRef.current = true;
         ownsOperation = true;
-        const failedRoute = Platform.OS === 'android'
+        const failedRoute = Platform.OS === 'android' && activeProfile.transport !== 'vless'
           ? dynamicRouteRuntime.recordActiveFailure(activeProfile)
           : null;
         if (failedRoute) {
@@ -259,7 +260,7 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
           isRetryableConnectError: input.isRetryableConnectError,
           persistLocation: input.persistLocation,
           resolveProfile: input.resolveProfile,
-          rotateProfile: input.rotateProfile,
+          rotateProfile: activeProfile.transport === 'vless' ? undefined : input.rotateProfile,
           setCachedProfile: input.setCachedProfile,
         });
         if (disposed) {

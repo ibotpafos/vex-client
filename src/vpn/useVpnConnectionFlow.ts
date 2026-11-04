@@ -161,7 +161,7 @@ export function useVpnConnectionFlow({
         );
         const interfaceUpMs = Date.now();
         requireCurrentSession();
-        const status = await waitForVerifiedVpnConnection(startedStatus, getVpnStatus, {
+        const status = await waitForVerifiedVpnConnection(startedStatus, () => getVpnStatus({ fresh: true }), {
           // The native backend can briefly expose the previous peer timestamp
           // while replacing a tunnel. Require activity from this attempt. The
           // small tolerance covers second-resolution backend timestamps.

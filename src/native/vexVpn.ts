@@ -103,6 +103,7 @@ const vpnStatusChangedEvent = 'vpn-status-changed';
 
 let cachedVpnStatus: { status: VpnStatus; cachedAt: number } | null = null;
 let inflightVpnStatusPromise: Promise<VpnStatus> | null = null;
+let vpnStatusRevision = 0;
 let nativeVpnEventEmitter: NativeEventEmitter | null = null;
 
 function requireNativeModule(): VexVpnNativeModule {
@@ -200,8 +201,10 @@ export async function disconnectVpn(options: DisconnectVpnOptions = {}): Promise
   return status;
 }
 
-export async function getVpnStatus(): Promise<VpnStatus> {
-  if (Platform.OS === 'android') {
+// Handshake verification needs a new native snapshot, including when a cached
+// UP result or a status read from before the connect attempt is still pending.
+export async function getVpnStatus(options: { fresh?: boolean } = {}): Promise<VpnStatus> {
+  if (Platform.OS === 'android' && !options.fresh) {
     const now = Date.now();
     if (cachedVpnStatus && now - cachedVpnStatus.cachedAt <= androidStatusCacheTtlMs) {
       return cachedVpnStatus.status;
@@ -211,15 +214,18 @@ export async function getVpnStatus(): Promise<VpnStatus> {
     }
   }
 
+  const requestRevision = ++vpnStatusRevision;
   const request = requireNativeModule()
     .status()
     .then((status) => {
       const normalizedStatus = normalizeVpnStatus(status);
-      updateCachedVpnStatus(normalizedStatus);
+      // A newer read, event or tunnel operation owns the shared snapshot.
+      // An older native read must not replace the result of a fresh read.
+      if (requestRevision === vpnStatusRevision) updateCachedVpnStatus(normalizedStatus);
       return normalizedStatus;
     })
     .finally(() => {
-      inflightVpnStatusPromise = null;
+      if (inflightVpnStatusPromise === request) inflightVpnStatusPromise = null;
     });
 
   if (Platform.OS === 'android') {
@@ -373,6 +379,8 @@ function normalizeVpnStatus(status: VpnStatus): VpnStatus {
 }
 
 function updateCachedVpnStatus(status: VpnStatus): void {
+  vpnStatusRevision += 1;
+  inflightVpnStatusPromise = null;
   cachedVpnStatus = {
     status,
     cachedAt: Date.now(),

@@ -69,7 +69,12 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
       pendingPermissionPromise = null
 
       if (resultCode == Activity.RESULT_OK) {
-        promise.resolve(true)
+        try {
+          vlessController.authorizeManualConnection()
+          promise.resolve(true)
+        } catch (_: Throwable) {
+          promise.reject("VPN_PERMISSION_STATE_FAILED", "VPN permission state could not be recorded.")
+        }
       } else {
         promise.reject("VPN_PERMISSION_DENIED", "Android VPN permission was denied.")
       }
@@ -92,14 +97,21 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
 
   @ReactMethod
   fun needsPermission(promise: Promise) {
-    promise.resolve(controller.needsPermission())
+    // prepare() can change ownership on Android 9. VLESS permission hints and
+    // every automatic status/recovery path use the durable intent instead.
+    promise.resolve(if (vlessController.isSelected()) vlessController.requiresPermissionRequest() else controller.needsPermission())
   }
 
   @ReactMethod
   fun requestPermission(promise: Promise) {
     val intent = VpnService.prepare(reactContext)
     if (intent == null) {
-      promise.resolve(true)
+      try {
+        vlessController.authorizeManualConnection()
+        promise.resolve(true)
+      } catch (_: Throwable) {
+        promise.reject("VPN_PERMISSION_STATE_FAILED", "VPN permission state could not be recorded.")
+      }
       return
     }
 
@@ -193,8 +205,10 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
                 reactContext, if (routeOnlySelectedApplications) selectedApplications else emptyList())) {
               throw IllegalStateException("VPN protection could not be retained during engine handover.")
             }
-            vlessController.selectAwg()
           }
+          // Also retire a VLESS attempt queued before its active-engine flag
+          // reached preferences; the operation revision has already replaced it.
+          vlessController.selectAwg()
           val connected = controller.connect(
             wgQuickConfig,
             antiLeakEnabled,
@@ -230,6 +244,9 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
     applications: ReadableArray, selectedOnly: Boolean, promise: Promise,
   ) {
     val operation = engineRevision.incrementAndGet()
+    // Capture before asynchronous work. Revocation/manual reauthorization
+    // rotates this fence, so an already queued recovery cannot adopt it.
+    val authorization = runCatching { vlessController.connectionAuthorization() }.getOrNull()
     val packages = (0 until applications.size()).mapNotNull { applications.getString(it)?.trim() }
       .filter { it.isNotEmpty() }.distinct()
     scope.launch {
@@ -239,9 +256,10 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
         val admitted = VlessApplicationSelection.admit(reactContext, packages, selectedOnly)
         val status = engineOperations.withLock {
           check(operation == engineRevision.get()) { "VPN operation was superseded." }
+          val attempt = vlessController.beginConnection(checkNotNull(authorization), antiLeakEnabled)
           if (!vlessController.isSelected()) controller.disconnect(releaseAntiLeak = !antiLeakEnabled)
           check(operation == engineRevision.get()) { "VPN operation was superseded." }
-          val connected = vlessController.connect(xrayConfig, antiLeakEnabled, routingParameters, admitted.allowed, selectedOnly).toVlessWritableMap()
+          val connected = vlessController.connect(xrayConfig, antiLeakEnabled, routingParameters, admitted.allowed, selectedOnly, attempt).toVlessWritableMap()
           check(operation == engineRevision.get()) { "VPN operation was superseded." }
           connected
         }
@@ -270,7 +288,8 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
   @ReactMethod
   fun disconnect(releaseAntiLeak: Boolean, promise: Promise) {
     val operation = engineRevision.incrementAndGet()
-    if (vlessController.isSelected()) vlessController.cancelPendingConnection(releaseAntiLeak)
+    // Pending VLESS startup may not have changed active_engine yet.
+    vlessController.cancelPendingConnection(releaseAntiLeak)
     val recoveryHandler = Handler(Looper.getMainLooper())
     val hardRecovery = object : Runnable {
       override fun run() {

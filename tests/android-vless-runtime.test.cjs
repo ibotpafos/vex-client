@@ -516,3 +516,72 @@ test('an in-flight status read cannot re-enable connection intent after an expli
   h.finish({...h.context.vpnStatusRef.current,connectionWanted:true});
   assert.equal(await pending,null);assert.equal(h.published.length,0);
 });
+
+function permissionChainHarness({cached=false,nativeFailures=0,missingInitial=false}={}){
+  let permissions=0,attempts=0;const resolutions=[],published=[],failures=[];
+  const profileFor=locationId=>({...vlessProfile(),locationId,source:cached?'local':'api'});
+  const fallback=pure('connectionFallback');
+  const connectFlow=load('src/vpn/connectFlow.ts',{'./profileConsistency':pure('profileConsistency'),'./connectionFallback':fallback});
+  const profileFallback=load('src/vpn/profileResolutionFallback.ts',{'@/api/error':{ApiRequestError},'./serverSelection':{isSelectableLocation:()=>true}});
+  const react={useRef:current=>({current}),useState:initial=>[initial,()=>{}],useMemo:fn=>fn(),useCallback:fn=>fn,useEffect:()=>{}};
+  const profileHook=raw('src/vpn/useVpnProfileState.ts','useVpnProfileState',{
+    ...react,...transport,...sessionOperation,connectableLocalProfile:connectFlow.connectableLocalProfile,
+    useQueryClient:()=>({getQueryData:key=>cached?profileFor(key[2]):null,setQueryData:()=>{}}),saveHotVpnProfile:async()=>null,
+    resolveVpnProfile:async(_token,_entitlement,location)=>{
+      if(missingInitial&&location==='de')throw new ApiRequestError('location unavailable',{status:404});
+      return {...profileFor(location),source:'api'};
+    },
+  });
+  const profileState=profileHook({transport:'vless',routingMode:'full_tunnel',accessToken:'token',userId:'owner',selectedLocationId:'de',
+    isCurrentSessionOperation:()=>true,knownEntitlement:paid,hasVpnAccess:true,requestVpnPermission:async()=>{permissions++;return true;}});
+  const flowHook=raw('src/vpn/useVpnConnectionFlow.ts','useVpnConnectionFlow',{
+    ...react,...sessionOperation,...profileFallback,...connectFlow,
+    Platform:{OS:'android'},prepareClientNetworkDiagnostics:async()=>{},withTimeout:promise=>promise,
+    vpnProfileAddressMatchesDevice:()=>true,androidVpnProfileWithinBinderBudget:()=>true,
+    getVpnApplicationSelection:async()=>({mode:'all',packageNames:[]}),
+    dynamicRouteRuntime:{prepare:()=>{throw new Error('AWG prepare forbidden');},attempts:()=>{throw new Error('AWG fallback forbidden');},clearActive:()=>{}},
+    profileEndpoint:fallback.profileEndpoint,isVpnTransportFallbackError:fallback.isVpnTransportFallbackError,
+    getVpnStatus:async()=>({state:'disconnected'}),connectVpn:async()=>{
+      if(++attempts<=nativeFailures)throw new Error('VPN connection failed');
+      return {state:'connected',transport:'vless',connectionWanted:true,connectionId,verified:true,verificationEpochMillis:Date.now()};
+    },connectAttemptTimeoutMs:25000,waitForVerifiedVpnConnection,withLastSuccessfulEndpoint:profile=>profile,
+    connectFreshSameLocationProfile:pure('sameLocationProfileRecovery').connectFreshSameLocationProfile,
+    saveHotVpnProfile:async()=>null,uploadClientDiagnostics:async()=>{},setSelectedVpnLocation:async id=>id,errorMessage:error=>error.message,
+  });
+  const flow=flowHook({isCurrentSessionOperation:()=>true,antiLeakEnabled:true,selectedLocationId:'de',serverSelectionMode:'manual',
+    availableLocations:[{id:'de'},{id:'fi'}],cacheProfile:()=>{},
+    resolveConnectableVpnProfile:(location,options)=>{resolutions.push(options);return profileState.resolveConnectableVpnProfile(location,options);},
+    vpnStatus:{state:'disconnected'},clientLatencyMs:null,reportVpnConnectEvent:()=>{},setSelectedLocationId:()=>{},
+    setActiveProfile:profile=>published.push(profile),setVpnStatus:()=>{},session:{accessToken:'token',user:{id:'owner'}}});
+  const file='src/vpn/useVpnConnection.ts',source=fs.readFileSync(path.join(root,file),'utf8');
+  const ast=ts.createSourceFile(file,source,ts.ScriptTarget.Latest,true);let effect;
+  const visit=node=>{
+    if(ts.isCallExpression(node)&&node.expression.getText(ast)==='useEffect'&&node.arguments[0].getText(ast).includes('getAndroidAutoConnectEnabled()'))effect=node.arguments[0].getText(ast);
+    ts.forEachChild(node,visit);
+  };visit(ast);assert.ok(effect);
+  const startAuto=()=>bindCallback(effect,{Platform:{OS:'android'},autoConnectAttemptedRef:{current:false},isConnected:false,isVpnBusy:false,
+    vpnOperationInFlightRef:{current:false},session:{accessToken:'token',user:{id:'owner'}},entitlementState:paid,hasPaidEntitlement:()=>true,
+    vpnConnectGenerationRef:{current:0},getAndroidAutoConnectEnabled:async()=>true,setIsVpnBusy:()=>{},setVpnError:()=>{},setVpnStatus:()=>{},
+    nextVpnStatusWithState:()=>{},connectCurrentVpn:flow.connectCurrentVpn,isCurrentSessionOperation:()=>true,handleVpnFailure:error=>failures.push(error)})();
+  return {flow,startAuto,published,resolutions,failures,permissions:()=>permissions,attempts:()=>attempts};
+}
+
+for(const automatic of [true,false])for(const nativeFailures of [0,1,3]){
+  test(`${automatic?'automatic':'manual'} VLESS real resolver chain requests permission only for the initial manual connect (${nativeFailures} failed attempts)`,async()=>{
+    const h=permissionChainHarness({cached:nativeFailures===1,nativeFailures});let cleanup;
+    if(automatic){cleanup=h.startAuto();for(let i=0;i<10&&!h.published.length&&!h.failures.length;i++)await new Promise(setImmediate);}
+    else await h.flow.connectCurrentVpn();
+    assert.deepEqual(h.failures,[]);assert.equal(h.published.length,1);assert.equal(h.permissions(),automatic?0:1);
+    assert.equal(h.attempts(),nativeFailures+1);
+    assert.equal(h.resolutions.filter(options=>options.requestPermission!==false).length,automatic?0:1);
+    if(nativeFailures===3)assert.equal(h.published[0].locationId,'fi');
+    cleanup?.();
+  });
+}
+
+test('automatic initial-location profile fallback also cannot obtain a VPN permission grant',async()=>{
+  const h=permissionChainHarness({missingInitial:true});const cleanup=h.startAuto();
+  for(let i=0;i<10&&!h.published.length&&!h.failures.length;i++)await new Promise(setImmediate);
+  assert.deepEqual(h.failures,[]);assert.equal(h.published[0].locationId,'fi');assert.equal(h.permissions(),0);
+  assert.equal(h.resolutions.length,2);assert.equal(h.resolutions.every(options=>options.requestPermission===false),true);cleanup();
+});

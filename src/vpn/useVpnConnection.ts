@@ -1378,7 +1378,7 @@ export function useVpnConnection() {
         setVpnError(null);
         setVpnStatus((current) => nextVpnStatusWithState(current, 'connecting'));
         try {
-          await connectCurrentVpn({ isCurrentOperation: () => vpnConnectGenerationRef.current === connectGeneration });
+          await connectCurrentVpn({ requestPermission: false, isCurrentOperation: () => vpnConnectGenerationRef.current === connectGeneration });
         } catch (error) {
           if (vpnConnectGenerationRef.current === connectGeneration) handleVpnFailure(error, 'disconnected');
         } finally {

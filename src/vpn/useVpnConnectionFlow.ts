@@ -208,7 +208,7 @@ export function useVpnConnectionFlow({
           reportRoute(candidate, endpointAttempts.length > 1 ? 'fallback_failed' : 'connect_failed', 'error');
           previousRouteTransport = routeTransport(candidate);
         }
-        if (Platform.OS === 'android' && !attempts.some((item) => item.candidate)) {
+        if (profile.transport !== 'vless' && Platform.OS === 'android' && !attempts.some((item) => item.candidate)) {
           // A background policy may arrive while the signed endpoint is being
           // tried. Keep its bounded relay choices available to this connection.
           const seen = new Set(endpointAttempts.map((endpoint) => endpoint.toLowerCase()));
@@ -228,10 +228,12 @@ export function useVpnConnectionFlow({
   const connectCurrentVpn = useCallback(async ({
     locationId = selectedLocationId,
     waitForAnimation = false,
+    requestPermission = true,
     isCurrentOperation = () => true,
   }: {
     locationId?: string;
     waitForAnimation?: boolean;
+    requestPermission?: boolean;
     isCurrentOperation?: () => boolean;
   } = {}) => {
     const requireCurrentOperation = () => {
@@ -239,10 +241,15 @@ export function useVpnConnectionFlow({
       if (!isCurrentOperation()) throw new SessionOperationSupersededError();
     };
     requireCurrentOperation();
-    const resolveCurrentProfile: typeof resolveConnectableVpnProfile = async (...args) => {
+    const resolveCurrentProfile: typeof resolveConnectableVpnProfile = async (location, options = {}) => {
       requireCurrentOperation();
       try {
-        return await resolveConnectableVpnProfile(...args);
+        return await resolveConnectableVpnProfile(location, {
+          ...options,
+          // Only an explicit manual connect may obtain/reclaim Android's VPN
+          // grant. Automatic retries retain this prohibition for every route.
+          requestPermission: requestPermission && options.requestPermission !== false,
+        });
       } finally {
         requireCurrentOperation();
       }

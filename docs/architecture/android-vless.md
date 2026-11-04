@@ -28,6 +28,28 @@ Network changes invalidate that proof before recovery. Retain the TUN and
 block traffic when an in-process engine failure occurs with anti-leak enabled.
 OS process-death/lockdown behavior requires separate device acceptance.
 
+Android's system revocation is authoritative: stopping VEX from system settings
+or choosing another VPN cancels automatic VLESS intent. A predecessor's late
+revocation cannot cancel a successor connection. Unexpected process death
+retains recovery intent. Automatic recovery must not call `VpnService.prepare`:
+on previously consented Android versions it can acquire VPN ownership. Only
+the explicit user permission flow may acquire ownership. A service uses
+`Builder.establish`, which refuses an unprepared/foreign owner without
+replacing that owner's interface. See the
+[Android API contract](https://developer.android.com/reference/android/net/VpnService.Builder#establish()).
+
+A file-locked journal is the authority shared by the app and worker processes.
+Manual permission authorization changes its fence; each attempt receives a
+separate ID. A new CONNECT retires the previous worker before binding a fresh
+one, with selected traffic retained by the existing blocker when enabled.
+System-binding and Binder callbacks therefore cannot act as a successor's
+callbacks. Withdrawn intent strips proof and cannot report a connected state.
+
+Native Xray byte counters are not wired yet: compatibility status fields emit
+zero and must not be interpreted as measured traffic or used for recovery.
+The managed server ledger remains the accounting authority. The native status
+path records `TODO(vless-traffic-counters)` for verified counter/epoch mapping.
+
 ## Server contract
 
 The existing native registration and device ID remain authoritative. Do not

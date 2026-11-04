@@ -44,6 +44,9 @@ class VlessVpnService : VpnService() {
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private val operations = Mutex()
   private val verification = VlessVerificationState()
+  private val intentJournal by lazy { VlessIntentJournal(filesDir) }
+  private val workerGeneration = VlessWorkerGeneration()
+  private val ownedAttempt: String get() = workerGeneration.attempt()
   private lateinit var connectivity: ConnectivityManager
   private var tunnel: ParcelFileDescriptor? = null
   private var outbound: JSONObject? = null
@@ -70,6 +73,7 @@ class VlessVpnService : VpnService() {
   private val controller = object : DialerController {
     override fun protectFd(fd: Long): Boolean {
       if (fd < 0 || fd > Int.MAX_VALUE) return false
+      if (!enabled || !intentJournal.isCurrent(ownedAttempt)) return false
       val network = selectedNetwork ?: return false
       val generation = networkRevision
       return runCatching {
@@ -151,7 +155,9 @@ class VlessVpnService : VpnService() {
     val admitted = VlessRuntimeConfig.admit(data.getString(VlessVpnIpc.CONFIG).orEmpty(), data.getString(VlessVpnIpc.ROUTING).orEmpty())
     val selectedOnly = data.getBoolean(VlessVpnIpc.SELECTED_ONLY)
     val applications = VlessApplicationSelection.admit(this, data.getStringArrayList(VlessVpnIpc.PACKAGES).orEmpty(), selectedOnly)
-    require(prepare(this) == null) { "Android VPN permission is required." }
+    val attempt = data.getString(VlessVpnIpc.INTENT).orEmpty()
+    check(intentJournal.isCurrent(attempt)) { "VLESS connection intent was superseded." }
+    workerGeneration.claim(attempt)
     check(order == commandRevision.get()) { "VLESS operation was superseded." }
     // All known policy/transport/app checks above precede native mutation.
     recoveryJob?.cancel()
@@ -160,6 +166,7 @@ class VlessVpnService : VpnService() {
     cancelProof()
     stopCore()
     check(order == commandRevision.get() && !destroyed) { "VLESS operation was superseded." }
+    check(intentJournal.isCurrent(attempt)) { "VLESS connection intent was superseded." }
     antiLeak = data.getBoolean(VlessVpnIpc.ANTILEAK, true)
     outbound = admitted
     verification.begin(antiLeak)
@@ -170,17 +177,33 @@ class VlessVpnService : VpnService() {
         .addRoute("0.0.0.0", 0).addRoute("::", 0).addDnsServer(VlessRuntimeConfig.TUN_DNS).setBlocking(false)
       applications.allowed.forEach { builder.addAllowedApplication(it) }
       applications.excluded.forEach { builder.addDisallowedApplication(it) }
-      val current = builder.establish() ?: throw IllegalStateException("VLESS capture could not be established.")
+      // establish() checks Android ownership without preparing/reclaiming a
+      // foreign VPN. prepare() is reserved for the explicit user permission UI.
+      val current = try { builder.establish() } catch (error: SecurityException) {
+        intentJournal.revoke(attempt)
+        throw error
+      } ?: run {
+        intentJournal.revoke(attempt)
+        throw IllegalStateException("VLESS capture could not be established.")
+      }
       tunnel = current
       runCatching { previousTunnel?.close() }
       verification.setCapture(true)
       check(order == commandRevision.get() && !destroyed) { "VLESS operation was superseded." }
+      check(intentJournal.isCurrent(attempt)) { "VLESS connection intent was superseded." }
       enabled = true
       recoveryFailures = 0
       refreshNetwork(schedule = false)
       restartCore(order)
     } catch (_: Throwable) {
       verification.invalidate("data_plane_failed")
+      if (!intentJournal.isCurrent(attempt)) {
+        enabled = false
+        val retain = intentJournal.snapshot().hold && tunnel != null
+        verification.stop(retain)
+        if (!retain) closeTunnel()
+        throw IllegalStateException("VLESS connection intent was superseded.")
+      }
       // Keep whichever TUN is still owned; shutdown of an unverified core is
       // never permission to restore a direct route when protection is enabled.
       if (!antiLeak) closeTunnel()
@@ -200,7 +223,8 @@ class VlessVpnService : VpnService() {
     val network = selectedNetwork
     val physicalRevision = networkRevision
     verification.invalidate(if (network == null) "network_unavailable" else "probe_pending")
-    if (!enabled || destroyed || network == null || order != commandRevision.get()) return
+    if (!enabled || destroyed || network == null || order != commandRevision.get()
+      || !intentJournal.isCurrent(ownedAttempt)) return
     val current = tunnel ?: throw IllegalStateException("VLESS capture is unavailable.")
     val server = outbound ?: throw IllegalStateException("VLESS profile is unavailable.")
     try {
@@ -220,7 +244,7 @@ class VlessVpnService : VpnService() {
       }
       coreRunning = true
       coreNetworkRevision = physicalRevision
-      if (!enabled || destroyed || order != commandRevision.get()) {
+      if (!enabled || destroyed || order != commandRevision.get() || !intentJournal.isCurrent(ownedAttempt)) {
         stopCore()
         return
       }
@@ -247,7 +271,7 @@ class VlessVpnService : VpnService() {
   private fun startHealthChecks() {
     healthJob = scope.launch {
       var failures = 0
-      while (isActive && enabled) {
+      while (isActive && enabled && intentJournal.isCurrent(ownedAttempt)) {
         val lease = verification.lease()
         if (coreNetworkRevision != networkRevision) return@launch
         val started = System.nanoTime()
@@ -322,7 +346,7 @@ class VlessVpnService : VpnService() {
     recoveryJob = scope.launch {
       delay(waitMs)
       operations.withLock {
-        if (enabled && !destroyed && order == commandRevision.get()
+        if (enabled && !destroyed && order == commandRevision.get() && intentJournal.isCurrent(ownedAttempt)
           && (forceRestart || !coreRunning || coreNetworkRevision != networkRevision)) {
           try { restartCore(order) }
           catch (_: Throwable) {
@@ -398,8 +422,11 @@ class VlessVpnService : VpnService() {
   private fun status(): JSONObject {
     val current = verification.snapshot()
     return JSONObject().put("transport", "vless").put("state", current.state)
+      .put(VlessVpnIpc.INTENT, ownedAttempt)
       .put("connectionId", current.connectionId).put("verified", current.verified)
       .put("connectionWanted", current.connectionWanted)
+      // TODO(vless-traffic-counters): wire verified Xray stats with per-core
+      // reset/epoch mapping before exposing measured totals to UI or recovery.
       .put("rxBytes", 0).put("txBytes", 0).put("leakProtection", current.leakProtection).apply {
         if (current.verificationEpochMillis > 0) put("verificationEpochMillis", current.verificationEpochMillis)
         current.verificationReason?.let { put("verificationReason", it) }
@@ -419,8 +446,12 @@ class VlessVpnService : VpnService() {
   }
 
   override fun onRevoke() {
+    // The synchronous durable marker precedes Binder loss and teardown. Old
+    // workers retired for an owned engine/blocker handover cannot revoke a
+    // successor. Android gives no authorization to restart after this event.
+    if (!workerGeneration.revoke { intentJournal.revoke(it) }) return
     commandRevision.incrementAndGet()
-    verification.invalidate("network_unavailable")
+    verification.stop(false)
     enabled = false
     scope.launch { operations.withLock { disconnect(true) } }
     super.onRevoke()

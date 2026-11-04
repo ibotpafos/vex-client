@@ -13,6 +13,14 @@ class VlessRuntimeConfigTest {
     "xhttpSettings":{"path":"/synthetic-path","mode":"stream-one","extra":{"xmux":{"maxConcurrency":8}}}}
   }""")
   private fun source(server: JSONObject = outbound()) = JSONObject().put("outbounds", JSONArray().put(server))
+  // JSONObject.similar exists in the JVM parser but not Android's JSON API.
+  // Compare nested values using only their shared API; preserve array order.
+  private fun semantic(value: Any?): Any? = when (value) {
+    is JSONObject -> value.keys().asSequence().associateWith { semantic(value.get(it)) }
+    is JSONArray -> (0 until value.length()).map { semantic(value.get(it)) }
+    JSONObject.NULL -> null
+    else -> value
+  }
   private fun reject(value: String, routing: String = "{\"mode\":\"full_tunnel\"}") {
     try {
       VlessRuntimeConfig.admit(value, routing)
@@ -26,8 +34,8 @@ class VlessRuntimeConfigTest {
   @Test fun xhttpTlsAndCredentialsRemainSemanticallyUnmodified() {
     val original = outbound()
     val admitted = VlessRuntimeConfig.admit(source(original).toString(), "{\"mode\":\"full_tunnel\"}")
-    assertTrue(original.getJSONObject("settings").similar(admitted.getJSONObject("settings")))
-    assertTrue(original.getJSONObject("streamSettings").similar(admitted.getJSONObject("streamSettings")))
+    assertEquals(semantic(original.getJSONObject("settings")), semantic(admitted.getJSONObject("settings")))
+    assertEquals(semantic(original.getJSONObject("streamSettings")), semantic(admitted.getJSONObject("streamSettings")))
   }
 
   @Test fun clientOwnsTunProtectedDnsAndEveryRouteWithoutFreedomFallback() {

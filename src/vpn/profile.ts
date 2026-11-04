@@ -1,4 +1,4 @@
-import { entitlement, hasPaidEntitlement, preparedTunnel, rotateManagedVpnKey, type Entitlement, type VpnDevice } from '../api/vexApi';
+import { entitlement, hasPaidEntitlement, preparedTunnel, preparedVlessTunnel, rotateManagedVpnKey, type Entitlement, type VpnDevice } from '../api/vexApi';
 import { loadHotVpnProfile, profileFromHotRecord } from './hotProfileCache';
 import { defaultVpnBypassRegion, defaultVpnRoutingMode, defaultVpnRoutingPolicyVersion, type VpnRoutingMode } from './routingPolicy';
 import { runProfileRequest } from './profileRequestQueue';
@@ -8,7 +8,13 @@ import { profileRevalidationOptions } from './profileRevalidation';
 import type { PreparedTunnel, PreparedTunnelOptions } from '../api/types';
 import { SessionOperationSupersededError } from './sessionOperation';
 
+import { supportsNativeVless } from '../native/vexVpn';
+import type { VpnTransport } from './transport';
+
 export type VpnProfile = {
+  transport?: VpnTransport;
+  expiresAt?: string;
+  routeId?: string;
   routingParameters?: string;
   resolutionTiming?: PreparedTunnel['resolutionTiming'];
   connectPreparationTiming?: {
@@ -42,12 +48,26 @@ export async function resolveVpnProfile(
   accessToken?: string,
   knownEntitlement?: Entitlement | null,
   locationId = '',
-  options: { allowPersistentHotProfile?: boolean; forceRefresh?: boolean; shouldFetch?: () => boolean; isCurrentSessionOperation?: () => boolean; routingMode?: VpnRoutingMode; userId?: string; revalidateProfile?: VpnProfile | null } = {},
+  options: { transport?: VpnTransport; allowPersistentHotProfile?: boolean; forceRefresh?: boolean; shouldFetch?: () => boolean; isCurrentSessionOperation?: () => boolean; routingMode?: VpnRoutingMode; userId?: string; revalidateProfile?: VpnProfile | null } = {},
 ): Promise<VpnProfile> {
   requireCurrentSession(options.isCurrentSessionOperation);
   const token = accessToken?.trim() || '';
   const normalizedLocationId = normalizeLocationId(locationId);
   const routingMode = options.routingMode ?? defaultVpnRoutingMode;
+  if (options.transport === 'vless') {
+    if (!supportsNativeVless()) throw new Error('Для VLESS обновите Android-приложение.');
+    if (!token) throw new Error('Сначала войдите в аккаунт.');
+    const currentEntitlement = knownEntitlement ?? await entitlement(token);
+    requireCurrentSession(options.isCurrentSessionOperation);
+    if (!hasPaidEntitlement(currentEntitlement)) throw new Error('Подписка не активна.');
+    const tunnel = await runProfileRequest(() => preparedVlessTunnel(token, {
+      locationId: normalizedLocationId, userId: options.userId, isCurrentSessionOperation: options.isCurrentSessionOperation,
+    }), options.shouldFetch, options.shouldFetch ? 'background' : 'foreground', `vless:${token}:${normalizedLocationId}`);
+    requireCurrentSession(options.isCurrentSessionOperation);
+    return { transport: 'vless', config: tunnel.config, device: tunnel.device, entitlement: currentEntitlement,
+      locationId: normalizedLocationId, expiresAt: tunnel.expiresAt, routeId: tunnel.routeId, routingMode: 'full_tunnel',
+      routingParameters: JSON.stringify({ mode: 'full_tunnel' }), source: 'api' };
+  }
   const cacheKey = profileCacheKey(token, normalizedLocationId, routingMode);
   if (!options.forceRefresh) {
     if (cachedProfile?.key === cacheKey && !cachedProfile.profile.rotationRequired && vpnProfileAddressMatchesDevice(cachedProfile.profile)) {
@@ -80,6 +100,11 @@ export function resetVpnProfileCache() {
 
 export async function rotateVpnProfileKey(accessToken: string, profile: VpnProfile, isCurrentSessionOperation?: () => boolean, userId?: string): Promise<VpnProfile> {
   requireCurrentSession(isCurrentSessionOperation);
+  if (profile.transport === 'vless') {
+    return resolveVpnProfile(accessToken, profile.entitlement, profile.locationId, {
+      transport: 'vless', forceRefresh: true, userId, isCurrentSessionOperation,
+    });
+  }
   const token = accessToken.trim();
   const device = profile.device;
   if (!token || !device?.id) {

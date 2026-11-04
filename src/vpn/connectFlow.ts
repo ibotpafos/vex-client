@@ -29,6 +29,7 @@ export function connectableLocalProfile(
   fallbackEntitlement: EntitlementLike | null | undefined,
   routingMode?: VpnProfile['routingMode'],
 ): VpnProfile | null {
+  if (profile?.transport === 'vless' && (!profile.expiresAt || Date.parse(profile.expiresAt) <= Date.now() || !Number.isFinite(Date.parse(profile.expiresAt)))) return null;
   if (!profile || profile.locationId !== locationId) {
     return null;
   }
@@ -132,7 +133,8 @@ export function vpnUnexpectedDisconnectTelemetry(input: {
   };
 }
 
-export function vpnTransportTelemetry(profile: VpnProfile): 'awg3_udp443' | 'awg3' | 'awg2' | 'wireguard' | 'openvpn' | 'unknown' {
+export function vpnTransportTelemetry(profile: VpnProfile): 'vless' | 'awg3_udp443' | 'awg3' | 'awg2' | 'wireguard' | 'openvpn' | 'unknown' {
+  if (profile.transport === 'vless') return 'vless';
   const protocol = profile.device?.protocol?.trim().toLowerCase() ?? '';
   if (protocol.includes('openvpn')) {
     return 'openvpn';

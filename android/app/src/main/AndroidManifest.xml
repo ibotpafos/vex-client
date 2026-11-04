@@ -1,5 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
   <uses-permission android:name="android.permission.INTERNET"/>
+  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED"/>
   <!-- VpnService-based foreground services are exempt from the per-type
@@ -56,6 +57,10 @@
       <intent-filter>
         <action android:name="android.net.VpnService"/>
       </intent-filter>
+    </service>
+    <service android:name=".vpn.VlessVpnService" android:process=":vless" android:exported="false" android:stopWithTask="false" android:foregroundServiceType="systemExempted" android:permission="android.permission.BIND_VPN_SERVICE">
+      <meta-data android:name="android.net.VpnService.SUPPORTS_ALWAYS_ON" android:value="false"/>
+      <intent-filter><action android:name="android.net.VpnService"/></intent-filter>
     </service>
     <service android:name=".vpn.VexFirebaseMessagingService" android:exported="false">
       <intent-filter>

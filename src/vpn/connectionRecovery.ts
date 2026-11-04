@@ -64,8 +64,11 @@ async function recoverWithFreshProfile(
   try {
     freshProfile = await input.resolveProfile(activeLocationId, {
       forceRefresh: true,
+      transport: input.activeProfile.transport ?? 'amneziawg',
+      routingMode: input.activeProfile.routingMode,
       requestPermission: false,
     });
+    requireMatchingTransport(input.activeProfile, freshProfile);
     const connected = await input.connectProfile(freshProfile);
     return successfulRecovery(input, activeLocationId, connected, 'same_location_fresh_profile');
   } catch (error) {
@@ -113,8 +116,11 @@ async function recoverWithFailoverLocation(
   try {
     const failoverProfile = await input.resolveProfile(failoverLocationId, {
       forceRefresh: true,
+      transport: input.activeProfile.transport ?? 'amneziawg',
+      routingMode: input.activeProfile.routingMode,
       requestPermission: false,
     });
+    requireMatchingTransport(input.activeProfile, failoverProfile);
     const connected = await input.connectProfile(failoverProfile);
     return successfulRecovery(input, activeLocationId, connected, 'failover_location', failoverLocationId);
   } catch (error) {
@@ -168,9 +174,15 @@ function bestFailoverLocationId(locations: VpnLocation[], activeLocationId: stri
 }
 
 function shouldRotateProfile(input: RecoverVpnConnectionInput, error: unknown): boolean {
-  return Boolean(input.rotateProfile && assessVpnAutopilotIssue({ error }).cause === 'key_or_profile');
+  return Boolean(input.activeProfile.transport !== 'vless' && input.rotateProfile && assessVpnAutopilotIssue({ error }).cause === 'key_or_profile');
 }
 
 function normalizeLocationId(locationId: string): string {
   return comparableVpnLocationId(locationId);
+}
+
+function requireMatchingTransport(active: VpnProfile, next: VpnProfile): void {
+  if ((active.transport ?? 'amneziawg') !== (next.transport ?? 'amneziawg')) {
+    throw new Error('Профиль другого протокола VPN отклонён. Выберите протокол в настройках.');
+  }
 }

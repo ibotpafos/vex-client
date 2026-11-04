@@ -3,6 +3,8 @@ import type { VpnProfile } from './profile';
 import { SessionOperationSupersededError } from './sessionOperation';
 
 export type ResolveConnectableProfileOptions = {
+  transport?: 'amneziawg' | 'vless';
+  routingMode?: VpnProfile['routingMode'];
   allowPersistentHotProfile?: boolean;
   cachedProfile?: VpnProfile | null;
   forceRefresh?: boolean;
@@ -142,6 +144,8 @@ async function rollbackToPreviousLocation(
   try {
     const previous = await input.resolveProfile(input.previousLocationId, {
       forceRefresh: true,
+      transport: input.previousProfile?.transport ?? 'amneziawg',
+      routingMode: input.previousProfile?.routingMode,
       requestPermission: false,
     });
     requireCurrentSession(input);

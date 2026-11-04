@@ -38,6 +38,7 @@ import { useVpnConnectionContext } from "@/vpn/vpn-connection-context";
 import { useVexSettings } from "./useVexSettings";
 
 export default function SettingsScreen() {
+  const [isSavingTransport, setIsSavingTransport] = React.useState(false);
   const [isSavingSmartRouting, setIsSavingSmartRouting] = React.useState(false);
   const [applicationRoutingSummary, setApplicationRoutingSummary] = React.useState('Все приложения');
   const { showToast: showGlobalToast } = useToast();
@@ -74,6 +75,10 @@ export default function SettingsScreen() {
     handleSmartRoutingToggle,
     trafficQuota,
     vpnStatus,
+    transport,
+    supportsVless,
+    handleTransportChange,
+    isVpnBusy,
   } = useVpnConnectionContext();
 
   const versionText = appInfo.version || "dev";
@@ -85,7 +90,9 @@ export default function SettingsScreen() {
     ? "Подключать VPN при открытии приложения."
     : "Запускать VEX вместе с системой.";
   const smartRoutingValue = isSmartRoutingEnabled ? "Включено" : "Выключено";
-  const smartRoutingHint = isSmartRoutingEnabled
+  const smartRoutingHint = transport === 'vless'
+    ? 'VLESS: весь трафик через VPN. Умный режим сохранён для AmneziaWG.'
+    : isSmartRoutingEnabled
     ? isAndroidApp
       ? "Часть российских IP напрямую, остальное через VPN."
       : "Российские IP напрямую, остальное через VPN."
@@ -189,6 +196,37 @@ export default function SettingsScreen() {
           </VexPressable>
         </VexSection>
 
+        {isAndroidApp ? (
+          <VexSection title="Протокол VPN">
+            {vpnStatus.state === 'connected' ? <Text style={styles.rowDescription}>Подключено: {vpnStatus.transport === 'vless' ? 'VLESS' : 'AmneziaWG'}</Text> : null}
+            {(supportsVless ? ['amneziawg', 'vless'] as const : ['amneziawg'] as const).map((protocol) => (
+              <VexPressable
+                key={protocol}
+                testID={`settings-protocol-${protocol}`}
+                disabled={isSavingTransport || isVpnBusy || (protocol === 'vless' && !supportsVless)}
+                accessibilityRole="radio"
+                accessibilityState={{ checked: transport === protocol, disabled: isSavingTransport || isVpnBusy || (protocol === 'vless' && !supportsVless) }}
+                onPress={() => {
+                  setIsSavingTransport(true);
+                  void handleTransportChange(protocol)
+                    .then(() => showSettingsToast({ message: vpnStatus.state === 'connected' ? 'Протокол сохранён. Переподключите VPN для применения.' : 'Протокол сохранён.', variant: 'success' }))
+                    .catch((error: unknown) => showSettingsToast({ message: error instanceof Error ? error.message : 'Не удалось сохранить протокол.', variant: 'error' }))
+                    .finally(() => setIsSavingTransport(false));
+                }}
+                style={styles.settingRow}
+              >
+                <View style={styles.rowCopy}>
+                  <Text style={styles.rowTitle}>{protocol === 'vless' ? 'VLESS' : 'AmneziaWG'}</Text>
+                  <Text style={styles.rowDescription}>{protocol === 'vless'
+                    ? supportsVless ? 'HTTPS-туннель. Умный режим недоступен; приложения с UDP могут не работать.' : 'Для VLESS обновите Android-приложение.'
+                    : 'Основной протокол VEX.'}</Text>
+                  {transport === protocol ? <Text style={[styles.rowValue, styles.rowValueActive]}>Выбран</Text> : null}
+                </View>
+              </VexPressable>
+            ))}
+          </VexSection>
+        ) : null}
+
         <VexSection title="Маршрутизация">
           {isAndroidApp ? (
             <VexPressable
@@ -254,7 +292,7 @@ export default function SettingsScreen() {
             </View>
           </VexPressable>
           <VexPressable
-            disabled={isSavingSmartRouting}
+            disabled={isSavingSmartRouting || transport === 'vless'}
             onPress={() => {
               if (isSavingSmartRouting) {
                 playSelectionHaptic();
@@ -286,7 +324,7 @@ export default function SettingsScreen() {
             style={styles.settingRow}
             hoverStyle={{ backgroundColor: 'rgba(7,17,19,0.96)', borderColor: 'rgba(34,211,238,0.36)' }}
             accessibilityRole="switch"
-            accessibilityState={{ checked: isSmartRoutingEnabled, disabled: isSavingSmartRouting }}
+            accessibilityState={{ checked: isSmartRoutingEnabled, disabled: isSavingSmartRouting || transport === 'vless' }}
             accessibilityLabel="Умный режим"
           >
             <View style={styles.rowIcon}>
@@ -309,7 +347,7 @@ export default function SettingsScreen() {
             <View pointerEvents="none">
               <SettingsNativeSwitch
                 accessibilityLabel="Умный режим"
-                disabled={isSavingSmartRouting}
+                disabled={isSavingSmartRouting || transport === 'vless'}
                 onValueChange={handleSmartRoutingToggle}
                 testID="settings-smart-routing-switch"
                 value={isSmartRoutingEnabled}

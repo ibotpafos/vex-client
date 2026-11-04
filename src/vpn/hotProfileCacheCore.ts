@@ -41,6 +41,7 @@ export function isUsableHotVpnProfileRecord(
     return false;
   }
   const record = value as Partial<HotVpnProfileRecord>;
+  if (record.profile?.transport === 'vless') return false;
   if (record.schemaVersion !== hotVpnProfileSchemaVersion) {
     return false;
   }
@@ -70,6 +71,7 @@ export function hotVpnProfileRejectionReason(
     return 'missing';
   }
   const record = value as Partial<HotVpnProfileRecord>;
+  if (record.profile?.transport === 'vless') return 'transport_not_persistent';
   if (record.schemaVersion !== hotVpnProfileSchemaVersion) {
     return 'schema_mismatch';
   }

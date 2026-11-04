@@ -359,6 +359,26 @@ gradle.taskGraph.whenReady { graph ->
     }
 }
 
+// One pinned upstream Go runtime is loaded only by the :vless service process.
+// File dependencies carry their producer task, including on a clean CI checkout.
+def xrayAndroidAar = file("${projectRoot}/external/xray/v26.10.31/libXray.aar")
+def bootstrapXrayAndroid = tasks.register('bootstrapXrayAndroid', Exec) {
+    commandLine 'python3', "${projectRoot}/scripts/bootstrap_xray_android.py"
+    inputs.file("${projectRoot}/android/xray-android.lock.json")
+    inputs.file("${projectRoot}/scripts/bootstrap_xray_android.py")
+    outputs.file(xrayAndroidAar)
+    // Revalidate hashes/ABI even when Gradle has already seen this cache path.
+    outputs.upToDateWhen { false }
+}
+def copyXrayNotices = tasks.register('copyXrayNotices', Sync) {
+    from("${projectRoot}/docs/third-party") {
+        include 'libXray-MIT.txt', 'Xray-core-MPL-2.0.txt', 'libxray-android.md'
+    }
+    into(layout.buildDirectory.dir('generated/xray-notices/third_party'))
+}
+android.sourceSets.main.assets.srcDir(layout.buildDirectory.dir('generated/xray-notices'))
+tasks.named('preBuild') { dependsOn bootstrapXrayAndroid, copyXrayNotices }
+
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
@@ -370,7 +390,10 @@ dependencies {
     implementation("com.google.firebase:firebase-messaging")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     implementation project(":amneziawg-tunnel")
+    implementation files(xrayAndroidAar).builtBy(bootstrapXrayAndroid)
     testImplementation 'junit:junit:4.13.2'
+    // Runtime uses Android's JSONObject; JVM admission tests need a real parser.
+    testImplementation 'org.json:json:20250517'
 
     def isGifEnabled = (findProperty('expo.gif.enabled') ?: "") == "true";
     def isWebpEnabled = (findProperty('expo.webp.enabled') ?: "") == "true";

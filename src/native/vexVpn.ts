@@ -3,13 +3,17 @@ import { requireNativeModule as requireExpoNativeModule } from 'expo';
 import { disconnectWithRecoveryTimeout } from '@/vpn/disconnectRecovery';
 import { resolveNativeTunnelVerified } from '@/vpn/vpnStatusVerification';
 import { nativeRoutingParameters } from '@/vpn/nativeRoutingPolicy';
+import type { VpnTransport } from '@/vpn/transport';
 import type { VpnRoutingMode } from '@/vpn/routingPolicy';
 
 export type VpnState = 'connected' | 'connecting' | 'disconnecting' | 'disconnected' | 'error' | 'verifying' | 'degraded';
 export type LeakProtectionState = 'off' | 'armed' | 'blocking';
-export type VpnVerificationReason = 'handshake_pending' | 'handshake_stale' | 'device_usage_degraded' | 'endpoint_failed';
+export type VpnVerificationReason = 'handshake_pending' | 'handshake_stale' | 'device_usage_degraded' | 'endpoint_failed' | 'probe_pending' | 'data_plane_failed' | 'network_unavailable';
 
 export type VpnStatus = {
+  transport?: VpnTransport;
+  connectionId?: string;
+  verificationEpochMillis?: number;
   state: VpnState;
   rxBytes: number;
   txBytes: number;
@@ -57,6 +61,7 @@ type VexVpnNativeModule = {
   needsPermission(): Promise<boolean>;
   requestPermission(): Promise<boolean>;
   connect(wgQuickConfig: string, antiLeakEnabled: boolean): Promise<VpnStatus>;
+  connectVless?(config: string, antiLeakEnabled: boolean, routingParameters: string, selectedApplications: string[], routeOnlySelectedApplications: boolean): Promise<VpnStatus>;
   connectWithRoutingPolicy?(wgQuickConfig: string, antiLeakEnabled: boolean, routingParameters: string, selectedApplications: string[], routeOnlySelectedApplications: boolean): Promise<VpnStatus>;
   connectWithApplications?(
     wgQuickConfig: string,
@@ -132,6 +137,7 @@ export async function requestVpnPermission(): Promise<boolean> {
 }
 
 export type ConnectVpnOptions = {
+  transport?: VpnTransport;
   antiLeakEnabled?: boolean;
   applicationRoutingMode?: 'all' | 'selected';
   selectedApplications?: string[];
@@ -145,7 +151,11 @@ export type DisconnectVpnOptions = {
 
 export async function connectVpn(wgQuickConfig: string, options: ConnectVpnOptions = {}): Promise<VpnStatus> {
   const module = requireNativeModule();
-  const nativeStatus = module.connectWithRoutingPolicy
+  if (options.transport === 'vless' && !supportsNativeVless()) throw new Error('Для VLESS обновите Android-приложение.');
+  const nativeStatus = options.transport === 'vless'
+    ? await module.connectVless!(wgQuickConfig, options.antiLeakEnabled !== false,
+      JSON.stringify({ mode: 'full_tunnel' }), options.selectedApplications ?? [], options.applicationRoutingMode === 'selected')
+    : module.connectWithRoutingPolicy
     ? await module.connectWithRoutingPolicy(wgQuickConfig, options.antiLeakEnabled !== false,
       options.routingParameters ?? nativeRoutingParameters(wgQuickConfig, options.routingMode ?? 'all_except_ru'),
       options.selectedApplications ?? [], options.applicationRoutingMode === 'selected')
@@ -160,6 +170,10 @@ export async function connectVpn(wgQuickConfig: string, options: ConnectVpnOptio
   const status = normalizeVpnStatus(nativeStatus);
   updateCachedVpnStatus(status);
   return status;
+}
+
+export function supportsNativeVless(): boolean {
+  try { return Platform.OS === 'android' && typeof requireNativeModule().connectVless === 'function'; } catch { return false; }
 }
 
 export function supportsNativeRoutingPolicy(): boolean {
@@ -362,7 +376,7 @@ export async function setStartupEnabled(enabled: boolean): Promise<boolean> {
 }
 
 function normalizeVpnStatus(status: VpnStatus): VpnStatus {
-  const latestHandshakeEpochMillis = typeof status.latestHandshakeEpochMillis === 'number'
+  const latestHandshakeEpochMillis = status.transport !== 'vless' && typeof status.latestHandshakeEpochMillis === 'number'
     ? status.latestHandshakeEpochMillis
     : undefined;
   const verified = status.state === 'connected' ? resolveNativeTunnelVerified({
@@ -374,7 +388,7 @@ function normalizeVpnStatus(status: VpnStatus): VpnStatus {
     latestHandshakeEpochMillis,
     leakProtection: status.leakProtection ?? 'off',
     verified,
-    verificationReason: status.verificationReason ?? (status.state === 'connected' && verified === false ? 'handshake_pending' : undefined),
+    verificationReason: status.verificationReason ?? (status.state === 'connected' && verified === false ? status.transport === 'vless' ? 'probe_pending' : 'handshake_pending' : undefined),
   };
 }
 

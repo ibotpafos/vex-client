@@ -123,11 +123,11 @@ export function useVpnConnectionFlow({
     const endpointAttempts: string[] = [];
     const applicationSelection = await getVpnApplicationSelection();
     requireCurrentOperation();
-    if (Platform.OS === 'android' && session?.user.id && session.accessToken) {
+    if (profile.transport !== 'vless' && Platform.OS === 'android' && session?.user.id && session.accessToken) {
       await dynamicRouteRuntime.prepare(session.user.id, session.accessToken, isCurrentSessionOperation);
       requireCurrentOperation();
     }
-    const attempts: DynamicRouteAttempt[] = Platform.OS === 'android'
+    const attempts: DynamicRouteAttempt[] = profile.transport === 'vless' ? [{ profile }] : Platform.OS === 'android'
       ? dynamicRouteRuntime.attempts(profile)
       : connectionAttemptsForProfile(profile).map((attempt) => ({ profile: attempt }));
     let previousRouteTransport: 'awg3_direct' | 'awg3_relay' | undefined;
@@ -155,6 +155,7 @@ export function useVpnConnectionFlow({
         const startedStatus = await withTimeout(
           connectVpn(attempt.config, {
             antiLeakEnabled,
+            transport: attempt.transport ?? 'amneziawg',
             routingParameters: attempt.routingParameters,
             routingMode: attempt.routingMode,
             applicationRoutingMode: applicationSelection.mode,
@@ -167,6 +168,10 @@ export function useVpnConnectionFlow({
         requireCurrentOperation();
         const status = await waitForVerifiedVpnConnection(startedStatus, () => getVpnStatus({ fresh: true }), {
           assertCurrent: requireCurrentOperation,
+          transport: attempt.transport ?? 'amneziawg',
+          expectedConnectionId: startedStatus.connectionId,
+          minimumVerificationEpochMillis: nativeStartMs,
+          previousConnectionId: previousStatus?.connectionId,
           // The native backend can briefly expose the previous peer timestamp
           // while replacing a tunnel. Require activity from this attempt. The
           // small tolerance covers second-resolution backend timestamps.

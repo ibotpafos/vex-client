@@ -12,7 +12,7 @@ assert.doesNotMatch(settingsHook, /handleLanguagePress|languageKey/);
 
 // The toggle must describe the selected routing mode, not promise a universal
 // Russian-service bypass on Android's route-limited profile.
-assert.match(settings, /const smartRoutingHint = isSmartRoutingEnabled/);
+assert.match(settings, /const smartRoutingHint = transport === 'vless'/);
 assert.match(settings, /Часть российских IP напрямую/);
 assert.match(settings, /Весь трафик через VPN\./);
 assert.match(settings, /Переподключите VPN для применения/);

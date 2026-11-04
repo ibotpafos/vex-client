@@ -4,7 +4,7 @@
     "build": 91,
     "min_supported_build": 1002930,
     "is_required": false,
-    "release_notes": "Android 1.0.83: подтверждение VPN получает свежий статус туннеля без ожидания кеша. Улучшена диагностика ошибок подключения и смены сети; сохранена проверка нового handshake.",
+    "release_notes": "Android 1.0.83: добавлен выбор VLESS через XHTTP/TLS наряду с AmneziaWG. Улучшены проверка подключения, восстановление после смены сети и диагностика ошибок. VLESS использует полный туннель с сохранением выбора приложений.",
     "core_version": "0.1.0",
     "config_schema_version": 1,
     "min_config_schema_version": 1,

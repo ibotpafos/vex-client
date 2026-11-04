@@ -7,6 +7,7 @@ const {
 } = require('@expo/config-plugins');
 
 const androidPermissions = [
+  'android.permission.ACCESS_NETWORK_STATE',
   'android.permission.FOREGROUND_SERVICE',
   'android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED',
   'android.permission.POST_NOTIFICATIONS',
@@ -59,6 +60,23 @@ module.exports = function withVexNativeConfig(config, props = {}) {
       fs.writeFileSync(path.join(resXmlDir, 'network_security_config.xml'), networkSecurityConfigXml(), 'utf8');
       fs.writeFileSync(path.join(resXmlDir, 'backup_rules.xml'), backupRulesXml(), 'utf8');
       fs.writeFileSync(path.join(resXmlDir, 'data_extraction_rules.xml'), dataExtractionRulesXml(), 'utf8');
+      // Expo regeneration must retain the process boundary before RN/Expo/AWG
+      // can initialize a second independent Go runtime in the Xray process.
+      const applicationPath = path.join(mod.modRequest.platformProjectRoot, 'app/src/main/java/com/vexguard/app/MainApplication.kt');
+      if (fs.existsSync(applicationPath)) {
+        const guard = 'if (com.vexguard.app.vpn.VlessVpnProcess.isVless(this)) return';
+        let source = fs.readFileSync(applicationPath, 'utf8');
+        for (const method of ['onCreate', 'onConfigurationChanged']) {
+          const marker = method === 'onCreate' ? 'super.onCreate()' : 'super.onConfigurationChanged(newConfig)';
+          const position = source.indexOf(marker);
+          if (position < 0) throw new Error(`MainApplication is missing ${method} process initialization.`);
+          const followingMethod = source.indexOf('\n  override fun', position + marker.length);
+          if (!source.slice(position, followingMethod < 0 ? source.length : followingMethod).includes(guard)) {
+            source = source.slice(0, position) + source.slice(position).replace(marker, `${marker}\n    ${guard}`);
+          }
+        }
+        fs.writeFileSync(applicationPath, source, 'utf8');
+      }
       return mod;
     },
   ]);
@@ -124,6 +142,18 @@ function upsertVpnServices(application) {
     },
   });
   upsertService(application.service, {
+    name: '.vpn.VlessVpnService',
+    exported: 'false',
+    process: ':vless',
+    foregroundServiceType: 'systemExempted',
+    permission: 'android.permission.BIND_VPN_SERVICE',
+    action: 'android.net.VpnService',
+    metaData: {
+      'android:name': 'android.net.VpnService.SUPPORTS_ALWAYS_ON',
+      'android:value': 'false',
+    },
+  });
+  upsertService(application.service, {
     name: '.vpn.VexFirebaseMessagingService',
     exported: 'false',
     action: 'com.google.firebase.MESSAGING_EVENT',
@@ -143,6 +173,10 @@ function upsertService(services, service) {
   };
   if (service.permission) {
     target.$['android:permission'] = service.permission;
+  }
+  if (service.process) {
+    target.$['android:process'] = service.process;
+    target.$['android:stopWithTask'] = 'false';
   }
   if (service.foregroundServiceType) {
     target.$['android:foregroundServiceType'] = service.foregroundServiceType;

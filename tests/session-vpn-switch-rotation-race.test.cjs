@@ -65,6 +65,7 @@ function switchHarness(stage, options = {}) {
   const context = {
     session: { accessToken: 'token-A', user: { id: 'A' } }, isCurrentSessionOperation: () => current,
     SessionOperationSupersededError, switchVpnLocation,
+    vpnProfileQueryKey: policy('src/vpn/transport.ts').vpnProfileQueryKey, effectiveRoutingMode: 'full', transport: 'amneziawg',
     isVpnBusy: false, vpnOperationInFlightRef: { current: false },
     selectedLocationId: 'fi', activeProfile: state.activeProfile, vpnStatusRef: { current: connectedStatus },
     queryClient: { getQueryData: () => undefined }, routingMode: 'full',

@@ -104,7 +104,7 @@ function classifyVpnAutopilotCause(input: {
   ) {
     return 'server';
   }
-  if (healthReasons.includes('leak_blocking') || healthReasons.includes('local_status_disconnected')) {
+  if (healthReasons.includes('vless_data_plane_unverified') || healthReasons.includes('leak_blocking') || healthReasons.includes('local_status_disconnected')) {
     return 'network';
   }
   return 'unknown';

@@ -65,6 +65,9 @@ export function areVpnStatusesEqual(left: VpnStatus, right: VpnStatus) {
   return left.state === right.state
     && left.rxBytes === right.rxBytes
     && left.txBytes === right.txBytes
+    && left.transport === right.transport
+    && left.connectionId === right.connectionId
+    && left.verificationEpochMillis === right.verificationEpochMillis
     && left.latestHandshakeEpochMillis === right.latestHandshakeEpochMillis
     && left.leakProtection === right.leakProtection
     && left.verified === right.verified

@@ -4,6 +4,7 @@ import { stripTypeScriptTypes } from 'node:module';
 import test from 'node:test';
 import { profileRevalidationOptions, canRevalidateDevice } from '../src/vpn/profileRevalidation.ts';
 import { nativeVpnDeviceForClient } from '../src/vpn/nativeDeviceSelection.ts';
+import { vpnProfileQueryKey, normalizeVpnTransport } from '../src/vpn/transport.ts';
 import { ApiRequestError } from '../src/api/error.ts';
 
 const device = {id:'device', publicKey:'public', keyEpoch:2, status:'active', assignedIpv4:'10.0.0.2', externalDeviceId:'runtime', protocol:'amneziawg', provisioningMode:'managed_native', clientKeyOwnership:'client'};
@@ -138,7 +139,7 @@ test('background profile refresh revalidates the cached version before issuing a
   const queryClient = {getQueryData:()=>cached, setQueryData:()=>{}, fetchQuery:({queryFn})=>queryFn()};
   const run = load('src/vpn/useVpnProfileState.ts', 'useVpnProfileState', {
     useRef:current=>({current}), useState:initial=>[initial,()=>{}], useMemo:fn=>fn(), useCallback:fn=>fn, useEffect:fn=>effects.push(fn),
-    useQueryClient:()=>queryClient, resolveVpnProfile:async(...args)=>{resolutions.push(args); return cached;},
+    vpnProfileQueryKey, normalizeVpnTransport, useQueryClient:()=>queryClient, resolveVpnProfile:async(...args)=>{resolutions.push(args); return cached;},
     hydrateHotVpnProfilesToQueryCache:async()=>[], saveHotVpnProfile:async()=>null,
   });
   run({accessToken:'token', userId:'user', hasVpnAccess:true, knownEntitlement:{active:true}, selectedLocationId:'de', routingMode:'smart',

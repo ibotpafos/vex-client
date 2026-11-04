@@ -3,6 +3,7 @@ package com.vexguard.app.vpn
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.IOException
+import java.io.InputStream
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -31,24 +32,66 @@ internal object VlessHttpsProbe {
         tls.sslParameters = tls.sslParameters.apply { endpointIdentificationAlgorithm = "HTTPS" }
         tls.startHandshake()
         tls.soTimeout = remaining()
-        tls.getOutputStream().write(("GET ${VlessRuntimeConfig.HEALTH_PATH} HTTP/1.1\r\n" +
+        tls.getOutputStream().write(("HEAD ${VlessRuntimeConfig.HEALTH_PATH} HTTP/1.1\r\n" +
           "Host: ${VlessRuntimeConfig.HEALTH_HOST}\r\nConnection: close\r\nCache-Control: no-cache\r\n\r\n").toByteArray(Charsets.US_ASCII))
         tls.getOutputStream().flush()
-        val input = tls.getInputStream()
-        val status = StringBuilder()
-        while (status.length < 1024) {
+        readFinalResponse(tls.getInputStream()) {
           tls.soTimeout = remaining()
-          val next = input.read()
-          if (next < 0) throw IOException("VLESS verification response ended early.")
-          if (next == 10) break
-          if (next != 13) status.append(next.toChar())
         }
-        return status.toString().matches(Regex("HTTP/1\\.[01] 200(?: .*)?"))
+        // A complete authenticated HTTPS response proves the transport even
+        // when the origin rejects, rate-limits or cannot serve this request.
+        return true
       }
     } finally {
       runCatching { socket.close() }
       socketChanged(null)
     }
+  }
+
+  /** Read only bounded HTTP/1.x status/header framing; never consume a body. */
+  internal fun readFinalResponse(input: InputStream, beforeRead: () -> Unit = {}): Int {
+    var bytes = 0
+    var headers = 0
+    fun next(): Int {
+      if (++bytes > 16_384) throw IOException("VLESS verification headers are too large.")
+      beforeRead()
+      return input.read().also { if (it < 0) throw IOException("VLESS verification response ended early.") }
+    }
+    fun line(limit: Int): String {
+      val result = StringBuilder()
+      while (true) {
+        val character = next()
+        if (character == 13) {
+          if (next() != 10) throw IOException("VLESS verification response framing is invalid.")
+          return result.toString()
+        }
+        if (character == 10 || result.length >= limit) throw IOException("VLESS verification response framing is invalid.")
+        result.append(character.toChar())
+      }
+    }
+    fun fieldCharacter(character: Char) = character == '\t' || character.code >= 32 && character.code != 127
+    fun nameCharacter(character: Char) = character in 'a'..'z' || character in 'A'..'Z' || character in '0'..'9'
+      || character in "!#$%&'*+-.^_`|~"
+    // Permit at most four complete informational responses before the final
+    // response. Switching protocols is not an HTTP final response for this probe.
+    repeat(5) { block ->
+      val status = line(1024)
+      if (!(status.startsWith("HTTP/1.0 ") || status.startsWith("HTTP/1.1 "))
+        || status.length < 13 || status[12] != ' ' || status.substring(9, 12).any { it !in '0'..'9' }
+        || status.drop(13).any { !fieldCharacter(it) }) throw IOException("VLESS verification status is invalid.")
+      val code = status.substring(9, 12).toInt()
+      if (code !in 100..599 || code == 101 || code < 200 && block == 4) throw IOException("VLESS verification status is invalid.")
+      while (true) {
+        val header = line(4096)
+        if (header.isEmpty()) break
+        if (++headers > 100) throw IOException("VLESS verification has too many headers.")
+        val colon = header.indexOf(':')
+        if (colon < 1 || header.take(colon).any { !nameCharacter(it) }
+          || header.drop(colon + 1).any { !fieldCharacter(it) }) throw IOException("VLESS verification header is invalid.")
+      }
+      if (code >= 200) return code
+    }
+    throw IOException("VLESS verification final response is missing.")
   }
 
   // RFC 1928/1929 local proxy framing only. All VLESS/XHTTP/TLS transport

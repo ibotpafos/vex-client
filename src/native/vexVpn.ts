@@ -220,8 +220,9 @@ export async function disconnectVpn(options: DisconnectVpnOptions = {}): Promise
 
 let verificationTimerSequence = 0;
 
-// Android UI-frame timers pause in the background. Only an owned connection
-// verification uses this bounded native clock; older binaries retain JS timers.
+/** Schedule an owned verification callback independently of Android UI frames.
+ * Older binaries use JS timers. Returns an idempotent cancellation callback.
+ */
 export function scheduleVpnVerificationTimeout(delayMs: number, onTimeout: () => void): () => void {
   if (Platform.OS === 'android' && nativeModule?.scheduleVerificationTimer && nativeModule.cancelVerificationTimer) {
     const id = `verify-${++verificationTimerSequence}`;

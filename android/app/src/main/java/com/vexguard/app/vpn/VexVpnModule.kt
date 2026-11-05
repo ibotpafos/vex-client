@@ -356,6 +356,7 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
   }
 
   @ReactMethod
+  /** Resolve from a Handler even while React Native UI-frame timers are paused. */
   fun scheduleVerificationTimer(id: String, delayMs: Double, promise: Promise) {
     if (!verificationTimers.schedule(id, delayMs) { expired -> promise.resolve(expired) }) {
       promise.reject("VPN_VERIFICATION_TIMER_FAILED", "VPN verification timer is unavailable.")
@@ -363,6 +364,7 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
   }
 
   @ReactMethod
+  /** Cancel only the explicitly owned verification timer. */
   fun cancelVerificationTimer(id: String) {
     verificationTimers.cancel(id)
   }

@@ -142,5 +142,8 @@ teardown, ID reuse, registration failure and resource bounds.
 
 Candidate 1.0.89 still requires a signed Android build and real-device cold
 connect acceptance with the app backgrounded before verification finishes,
-including selected-app routing and Wi-Fi recovery. These isolated tests do
+including selected-app routing and Wi-Fi recovery. Release also requires
+accepted server API deployment and the full VLESS Wi-Fi, transport-switch,
+loss/recovery, selected-app and explicit-stop scenario on the signed APK.
+These isolated tests do
 not establish the cause of every observed packet timeout or authorize release.

@@ -4,7 +4,8 @@ import {stripTypeScriptTypes} from 'node:module';
 import test from 'node:test';
 const source=stripTypeScriptTypes(fs.readFileSync('src/vpn/useNativeVpnWatchdog.ts','utf8')).replace(/import[\s\S]*?from '[^']+';/g,'').replace('export function useNativeVpnWatchdog','function useNativeVpnWatchdog');
 test('confirmed local failure recovers without waiting for backend usage or a network probe',async()=>{
- let effect,usage=0,probes=0,recovered=0;
+ let effect,usage=0,probes=0,recovered=0,acquired=0,released=0;
+ const operation={current:false};
  const stubs={useCallback:f=>f,useRef:value=>({current:value}),useEffect:f=>effect=f,setInterval:()=>0,clearInterval:()=>{},errorMessage:String,
  Platform:{OS:'android'},dynamicRouteRuntime:{recordActiveFailure:()=>null},routeTransport:()=> 'awg3_direct',
  localStatusHealthReasons:()=>['local_status_error'],vpnUnexpectedDisconnectTelemetry:()=>null,vpnTransportTelemetry:()=>({}),
@@ -12,10 +13,12 @@ test('confirmed local failure recovers without waiting for backend usage or a ne
  initialRecoveryBackoffState:()=>({}),recoveryAttemptAllowed:()=>true,resetRecoveryBackoff:()=>({}),recordRecoveryFailure:()=>({}),
  recoverVpnConnection:async()=>{recovered++;return {ok:true,profile:{},status:{state:'connected'},locationId:'de'};}};
  const run=new Function(...Object.keys(stubs),source+';return useNativeVpnWatchdog;')(...Object.values(stubs));
- const watchdog=run({enabled:true,activeDeviceId:'device',activeLocationId:'de',activeProfile:{locationId:'de',device:{id:'device'}},sessionAccessToken:'fixture',operationInFlightRef:{current:false},failureThreshold:1,reconnectCooldownMs:0,
+ const watchdog=run({enabled:true,activeDeviceId:'device',activeLocationId:'de',activeProfile:{locationId:'de',device:{id:'device'}},sessionAccessToken:'fixture',operationInFlightRef:operation,failureThreshold:1,reconnectCooldownMs:0,
+ acquireOperation:()=>{acquired++;assert.equal(operation.current,false);operation.current=true;return()=>{released++;operation.current=false;};},
  fetchDeviceUsage:()=>{usage++;return new Promise(()=>{});},probeHealth:()=>{probes++;return new Promise(()=>{});},submitDiagnostics:async()=>{},reportConnect:()=>{},onRecoverySucceeded:()=>{}});
  watchdog.recordNativeStatus({state:'connected'},{state:'error'});
  const cleanup=effect();
  for(let i=0;i<40;i++)await Promise.resolve();
- assert.equal(usage,0);assert.equal(probes,0);assert.equal(recovered,1);cleanup();
+ assert.equal(usage,0);assert.equal(probes,0);assert.equal(recovered,1);
+ assert.equal(acquired,1);assert.equal(released,1);assert.equal(operation.current,false);cleanup();
 });

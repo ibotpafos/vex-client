@@ -367,19 +367,32 @@ function connectionCallbacks() {
   const visit=node=>{
     if(ts.isVariableDeclaration(node)&&['captureStatusReadOwner','refreshVpnStatus'].includes(node.name.getText(ast)))callbacks[node.name.getText(ast)]=node.initializer.arguments[0].getText(ast);
     if(ts.isCallExpression(node)&&node.expression.getText(ast)==='useEffect'&&node.arguments[0].getText(ast).includes("refreshVpnStatus('native_status_poll_failed'"))callbacks.poll=node.arguments[0].getText(ast);
+    if(ts.isCallExpression(node)&&node.expression.getText(ast)==='useEffect'&&node.arguments[0].getText(ast).includes("refreshVpnStatus('native_status_startup_failed'"))callbacks.startup=node.arguments[0].getText(ast);
+    if(ts.isCallExpression(node)&&node.expression.getText(ast)==='useEffect'&&node.arguments[0].getText(ast).includes("refreshVpnStatus('native_status_on_active_failed'"))callbacks.foreground=node.arguments[0].getText(ast);
     ts.forEachChild(node,visit);
-  };visit(ast);return callbacks;
+  };visit(ast);
+  const profileAst=ts.createSourceFile('useVpnProfileState.ts',fs.readFileSync(path.join(root,'src/vpn/useVpnProfileState.ts'),'utf8'),ts.ScriptTarget.Latest,true);
+  const visitProfile=node=>{
+    if(ts.isVariableDeclaration(node)&&node.name.getText(profileAst)==='setVpnProfile')callbacks.setProfile=node.initializer.arguments[0].getText(profileAst);
+    ts.forEachChild(node,visitProfile);
+  };visitProfile(profileAst);return callbacks;
 }
 const statusCallbacks=connectionCallbacks();
 function bindCallback(callback,context){
+  // The isolated callback delegates lease lifecycle to its hook boundary.
+  const operation = context.vpnOperationInFlightRef;
+  context = {...context,
+    acquireVpnOperation: context.acquireVpnOperation ?? (() => { operation.current = true; return () => { operation.current = false; }; }),
+    releaseVpnOperation: () => { operation.current = false; },
+  };
+
   const code=ts.transpileModule(`return (${callback});`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
   return new Function(...Object.keys(context),code)(...Object.values(context));
 }
-function statusReadHarness({poll=false}={}){
+function statusReadHarness({poll=false,initial={state:'connected',transport:'vless',connectionId,verified:true,verificationEpochMillis:100}}={}){
   let finish,tick,current=true,reads=0,diagnostics=0,recorded=0;const published=[];
   const gate=new Promise(resolve=>{finish=resolve;});
-  const initial={state:'connected',transport:'vless',connectionId,verified:true,verificationEpochMillis:100};
-  const context={vpnConnectGenerationRef:{current:1},selectedLocationIdRef:{current:'de'},vpnStatusRef:{current:initial},
+  const context={activeProfileRevisionRef:{current:0},vpnMountedRef:{current:true},vpnOperationRevisionRef:{current:0},preferencesRevisionRef:{current:0},vpnConnectGenerationRef:{current:1},selectedLocationIdRef:{current:'de'},vpnStatusRef:{current:initial},
     vpnOperationInFlightRef:{current:false},isCurrentSessionOperation:()=>current,
     getVpnStatus:async()=>{reads++;return gate;},setVpnStatus:update=>{
       const next=typeof update==='function'?update(context.vpnStatusRef.current):update;
@@ -399,8 +412,8 @@ function statusReadHarness({poll=false}={}){
     reads:()=>reads,diagnostics:()=>diagnostics,recorded:()=>recorded};
 }
 
-for(const poll of [false,true])for(const mutation of ['logout-login','connection','generation','location','same-account-token-refresh']){
-  test(`${poll?'polling callback':'status refresh'} rejects ${mutation} races without treating token refresh as a new login`,async()=>{
+for(const poll of [false,true])for(const mutation of ['logout-login','connection','generation','location','profile','same-account-token-refresh']){
+  test(`${poll?'polling callback':'status refresh'} gates ${mutation} without confusing profile hydration with a new connection`,async()=>{
     const h=statusReadHarness({poll});let pending;
     if(poll)h.poll();else pending=h.refresh('fixture');
     await Promise.resolve();assert.equal(h.reads(),1);
@@ -408,13 +421,45 @@ for(const poll of [false,true])for(const mutation of ['logout-login','connection
     if(mutation==='connection')h.context.vpnStatusRef.current={...h.context.vpnStatusRef.current,connectionId:otherConnectionId};
     if(mutation==='generation')h.context.vpnConnectGenerationRef.current++;
     if(mutation==='location')h.context.selectedLocationIdRef.current='fi';
+    if(mutation==='profile')h.context.activeProfileRevisionRef.current++;
     // Token refresh keeps the login guard, generation, location and native ID.
     if(mutation==='same-account-token-refresh')h.context.refreshedAccessToken='new-token';
     h.finish({state:'connected',transport:'vless',connectionId,verified:true,verificationEpochMillis:200});
     if(pending)await pending;await new Promise(setImmediate);
-    assert.equal(h.published.length,mutation==='same-account-token-refresh'?1:0);
-    assert.equal(h.recorded(),poll&&mutation==='same-account-token-refresh'?1:0);
+    const benign=mutation==='same-account-token-refresh'||mutation==='profile';
+    assert.equal(h.published.length,benign?1:0);
+    assert.equal(h.recorded(),poll&&benign?1:0);
     assert.equal(h.diagnostics(),0);h.cleanup();
+  });
+}
+
+for(const phase of ['startup','foreground']){
+  test(`actual ${phase} effect converges after hot-profile hydration while its only native read is pending`,async()=>{
+    const h=statusReadHarness({initial:{state:'disconnected',rxBytes:0,txBytes:0}});
+    let onAppState,hydrated=null;
+    const cleanup=bindCallback(statusCallbacks[phase],{
+      ...h.context,refreshVpnStatus:h.refresh,session:{user:{id:'fixture-owner'}},
+      AppState:{addEventListener:(_event,callback)=>{onAppState=callback;return {remove:()=>{}};}},
+      setIsAppActive:()=>{},refreshLocations:async()=>{},refreshManagedProfile:async()=>{},
+    })();
+    if(phase==='foreground')onAppState('active');
+    assert.equal(h.reads(),1);
+    // Exercise the real authoritative setter, without a native event or a
+    // repeated effect/read. Profile hydration does not change the live tunnel.
+    const setProfile=bindCallback(statusCallbacks.setProfile,{
+      ...h.context,userId:'fixture-owner',vpnProfileOwnerRef:{current:null},
+      setVpnProfileState:update=>{hydrated=update(hydrated);},
+    });
+    setProfile({locationId:'de',profileVersion:7,device:{id:'fixture-device'}});
+    assert.equal(h.context.activeProfileRevisionRef.current,1);
+    assert.equal(hydrated.profileVersion,7);
+    const fresh={state:'connected',transport:'amneziawg',verified:true,rxBytes:0,txBytes:0,
+      latestHandshakeEpochMillis:Date.now(),leakProtection:'armed'};
+    h.finish(fresh);await new Promise(setImmediate);
+    assert.deepEqual(h.published,[fresh]);
+    assert.equal(h.context.vpnStatusRef.current.state,'connected');
+    assert.equal(h.reads(),1,'no native event replay, new timer or retry is needed');
+    assert.equal(h.diagnostics(),0);cleanup?.();
   });
 }
 

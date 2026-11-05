@@ -33,6 +33,13 @@ function callbacks(file, names) {
   return found;
 }
 function bind(callback, context) {
+  // The isolated callback delegates lease lifecycle to its hook boundary.
+  const operation = context.vpnOperationInFlightRef;
+  context = {...context,
+    acquireVpnOperation: context.acquireVpnOperation ?? (() => { operation.current = true; return () => { operation.current = false; }; }),
+    releaseVpnOperation: () => { operation.current = false; },
+  };
+
   const code = ts.transpileModule(`return (${callback});`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   return new Function(...Object.keys(context), code)(...Object.values(context));
 }

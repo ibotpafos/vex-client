@@ -260,8 +260,9 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
         val status = engineOperations.withLock {
           check(operation == engineRevision.get()) { "VPN operation was superseded." }
           val attempt = vlessController.beginConnection(checkNotNull(authorization), antiLeakEnabled)
-          check(engineRevision.setAwgWanted(operation, false)) { "VPN operation was superseded." }
           if (!vlessController.isSelected()) controller.disconnect(releaseAntiLeak = !antiLeakEnabled)
+          // A failed retirement may leave AWG active and still needing recovery.
+          check(engineRevision.setAwgWanted(operation, false)) { "VPN operation was superseded." }
           check(operation == engineRevision.get()) { "VPN operation was superseded." }
           val connected = vlessController.connect(xrayConfig, antiLeakEnabled, routingParameters, admitted.allowed, selectedOnly, attempt).toVlessWritableMap()
           check(operation == engineRevision.get()) { "VPN operation was superseded." }

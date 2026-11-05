@@ -2,7 +2,7 @@ import { NativeEventEmitter, NativeModules, Platform, type NativeModule } from '
 import { requireNativeModule as requireExpoNativeModule } from 'expo';
 import { disconnectWithRecoveryTimeout } from '@/vpn/disconnectRecovery';
 import { resolveNativeTunnelVerified } from '@/vpn/vpnStatusVerification';
-import { nativeRoutingParameters } from '@/vpn/nativeRoutingPolicy';
+import { androidRoutingParametersWithFallback, nativeRoutingParameters } from '@/vpn/nativeRoutingPolicy';
 import type { VpnTransport } from '@/vpn/transport';
 import type { VpnRoutingMode } from '@/vpn/routingPolicy';
 
@@ -153,12 +153,14 @@ export type DisconnectVpnOptions = {
 export async function connectVpn(wgQuickConfig: string, options: ConnectVpnOptions = {}): Promise<VpnStatus> {
   const module = requireNativeModule();
   if (options.transport === 'vless' && !supportsNativeVless()) throw new Error('Для VLESS обновите Android-приложение.');
+  const requestedRouting = options.routingParameters ?? nativeRoutingParameters(wgQuickConfig, options.routingMode ?? 'all_except_ru');
+  const routingParameters = Platform.OS === 'android' ? androidRoutingParametersWithFallback(requestedRouting) : requestedRouting;
   const nativeStatus = options.transport === 'vless'
     ? await module.connectVless!(wgQuickConfig, options.antiLeakEnabled !== false,
       JSON.stringify({ mode: 'full_tunnel' }), options.selectedApplications ?? [], options.applicationRoutingMode === 'selected')
     : module.connectWithRoutingPolicy
     ? await module.connectWithRoutingPolicy(wgQuickConfig, options.antiLeakEnabled !== false,
-      options.routingParameters ?? nativeRoutingParameters(wgQuickConfig, options.routingMode ?? 'all_except_ru'),
+      routingParameters,
       options.selectedApplications ?? [], options.applicationRoutingMode === 'selected')
     : Platform.OS === 'android' && module.connectWithApplications
     ? await module.connectWithApplications(

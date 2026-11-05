@@ -55,16 +55,42 @@ test('VLESS cache keys are separate while old AWG cache keys retain their contra
   assert.equal(transport.normalizeVpnTransport(undefined), 'amneziawg');
 });
 
-function nativeHarness({ support = true, status = { state:'connected', rxBytes:0, txBytes:0, transport:'vless', verified:true, connectionId, verificationEpochMillis:Date.now() } } = {}) {
+function nativeHarness({ support = true, routing = false, status = { state:'connected', rxBytes:0, txBytes:0, transport:'vless', verified:true, connectionId, verificationEpochMillis:Date.now() } } = {}) {
   const calls = [];
   const module = { connect: async () => { calls.push('awg'); return status; }, status:async()=>status };
   if (support) module.connectVless = async (...args) => { calls.push(args); return status; };
+  if (routing) module.connectWithRoutingPolicy = async (...args) => { calls.push(args); return status; };
   const native = load('src/native/vexVpn.ts', {
     'react-native': { NativeModules:{VexVpn:module}, Platform:{OS:'android'} }, expo:{},
-    '@/vpn/disconnectRecovery': {}, '@/vpn/vpnStatusVerification':verification, '@/vpn/nativeRoutingPolicy':{nativeRoutingParameters:()=>''},
+    '@/vpn/disconnectRecovery': {}, '@/vpn/vpnStatusVerification':verification, '@/vpn/nativeRoutingPolicy':pure('nativeRoutingPolicy'),
   });
   return { calls, native };
 }
+
+test('Android keeps all traffic in AWG when a fresh smart-routing policy is absent, including cached profiles',async()=>{
+  const policy=pure('nativeRoutingPolicy');
+  const wg='Address = 10.0.0.2/32\nDNS = 10.0.0.1\nAllowedIPs = 0.0.0.0/0, ::/0';
+  for(const explicit of [false,true]){
+    const h=nativeHarness({routing:true,status:{state:'connected',rxBytes:0,txBytes:0}});
+    const parameters=policy.nativeRoutingParameters(wg,'all_except_ru');
+    await h.native.connectVpn(wg,{routingMode:'all_except_ru',...(explicit?{routingParameters:parameters}:{}),applicationRoutingMode:'selected',selectedApplications:['fixture.app']});
+    assert.equal(h.calls.length,1);const args=h.calls[0];
+    assert.equal(args[0],wg);assert.equal(args[1],true);assert.equal(args[4],true);assert.deepEqual([...args[3]],['fixture.app']);
+    assert.equal(JSON.parse(args[2]).mode,'full_tunnel');assert.equal(policy.androidRoutingPolicyUnavailable(parameters),true);
+    assert.deepEqual(JSON.parse(args[2]).addresses,JSON.parse(parameters).addresses);
+    assert.deepEqual(JSON.parse(args[2]).dns,JSON.parse(parameters).dns);
+  }
+});
+
+test('policy-bearing smart parameters, explicit full tunnel and malformed inputs remain for native admission',()=>{
+  const p=pure('nativeRoutingPolicy');
+  for(const value of ['not-json','null','[]','{"mode":"unknown"}','{"mode":"full_tunnel"}',
+    '{"mode":"all_except_ru","authorization":{"signature_base64":"fixture"}}']){
+    assert.equal(p.androidRoutingParametersWithFallback(value),value);
+    assert.equal(p.androidRoutingPolicyUnavailable(value),false);
+  }
+  assert.equal(p.androidRoutingPolicyUnavailable(undefined),true);
+});
 
 test('VLESS bridge admission never falls back to AWG on an old native binary', async () => {
   const h = nativeHarness({support:false});

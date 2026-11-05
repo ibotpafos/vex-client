@@ -40,7 +40,7 @@ function loadNativeAdapter(statusReads) {
     expo: {},
     '@/vpn/disconnectRecovery': { disconnectWithRecoveryTimeout: operation => operation },
     '@/vpn/vpnStatusVerification': load('../src/vpn/vpnStatusVerification.ts'),
-    '@/vpn/nativeRoutingPolicy': { nativeRoutingParameters: () => '' },
+    '@/vpn/nativeRoutingPolicy': load('../src/vpn/nativeRoutingPolicy.ts'),
   });
   return { adapter, reads: () => reads, emit: status => listener(status), clock };
 }

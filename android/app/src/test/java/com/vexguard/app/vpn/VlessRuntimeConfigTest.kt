@@ -49,7 +49,8 @@ class VlessRuntimeConfigTest {
     assertEquals(listOf("vless", "dns", "blackhole"), (0 until outbounds.length()).map { outbounds.getJSONObject(it).getString("protocol") })
     val dnsPolicy = outbounds.getJSONObject(1).getJSONObject("settings").getJSONArray("rules")
     assertEquals("hijack", dnsPolicy.getJSONObject(0).getString("action"))
-    assertEquals("[1,28]", dnsPolicy.getJSONObject(0).getJSONArray("qType").toString())
+    // Xray PortList rejects JSON arrays before its core can start.
+    assertEquals("1,28", dnsPolicy.getJSONObject(0).getString("qType"))
     assertEquals("return", dnsPolicy.getJSONObject(1).getString("action"))
     assertEquals(5, dnsPolicy.getJSONObject(1).getInt("rCode"))
     val rules = config.getJSONObject("routing").getJSONArray("rules")

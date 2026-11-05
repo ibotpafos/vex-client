@@ -83,6 +83,8 @@ jobs:
       - run: npm run check
       - name: Release contract and negative fixtures
         run: python3 -m unittest discover -s tests -p "client_release_test.py" -v
+      - name: Android hosted runner cleanup safety
+        run: python3 -m unittest discover -s tests -p "android_release_runner_test.py" -v
       - name: Validate all release workflows
         run: node tests/client-release-workflow.mjs
   android:
@@ -127,6 +129,8 @@ jobs:
           test -x "$sdkmanager"
           "$sdkmanager" 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0' 'ndk;27.1.12297006'
           echo "$ANDROID_HOME/build-tools/36.0.0" >> "$GITHUB_PATH"
+      - name: Reserve disk space for Android native compilation
+        run: python3 scripts/prepare_android_release_runner.py --execute
       - name: Build, verify signer and native unit suites
         env:
           ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}

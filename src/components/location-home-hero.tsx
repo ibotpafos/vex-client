@@ -42,6 +42,7 @@ type LocationHomeHeroProps = {
   onPowerPress: () => void;
   onSettingsPress: () => void;
   powerButtonDisabled: boolean;
+  protocolLabel?: 'AWG' | 'VLESS';
   pulseProgress: Animated.Value;
   selectionMode: ServerSelectionMode;
 };
@@ -57,6 +58,7 @@ export function LocationHomeHero({
   onPowerPress,
   onSettingsPress,
   powerButtonDisabled,
+  protocolLabel,
   pulseProgress,
   selectionMode,
 }: LocationHomeHeroProps) {
@@ -141,7 +143,7 @@ export function LocationHomeHero({
       <View style={styles.footer}>
         {children ? <View style={styles.notices}>{children}</View> : null}
         <VexPressable
-          accessibilityLabel={locationCopy ? `Выбрать локацию. Сейчас ${locationCopy.city}` : 'Выбрать локацию'}
+          accessibilityLabel={`${locationCopy ? `Выбрать локацию. Сейчас ${locationCopy.city}` : 'Выбрать локацию'}${protocolLabel ? `. Выбранный протокол: ${protocolLabel}` : ''}`}
           accessibilityRole="button"
           disabled={powerButtonDisabled && !location}
           hoverStyle={styles.locationPressed}
@@ -157,7 +159,14 @@ export function LocationHomeHero({
               <Text numberOfLines={1} style={styles.locationTitle}>{locationCopy?.city ?? 'Локация не выбрана'}</Text>
               <ChevronRight color="#F2F8F8" size={27} strokeWidth={2.1} />
             </View>
-            <Text numberOfLines={1} style={styles.locationMeta}>{locationCopy?.countryAndLatency ?? 'Выберите доступный сервер'}</Text>
+            <View style={styles.locationMetaRow}>
+              <Text numberOfLines={1} style={styles.locationMeta}>{locationCopy?.countryAndLatency ?? 'Выберите доступный сервер'}</Text>
+              {protocolLabel ? (
+                <View style={styles.protocolBadge}>
+                  <Text testID="home-selected-protocol" style={styles.protocolLabel}>{protocolLabel}</Text>
+                </View>
+              ) : null}
+            </View>
           </View>
         </VexPressable>
       </View>
@@ -351,9 +360,31 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     letterSpacing: -0.35,
   },
+  locationMetaRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    columnGap: 8,
+    rowGap: 4,
+    marginTop: 3,
+  },
   locationMeta: {
     color: 'rgba(205, 229, 233, 0.78)',
+    flexShrink: 1,
     fontSize: 15,
-    marginTop: 3,
+  },
+  protocolBadge: {
+    backgroundColor: 'rgba(57, 164, 171, 0.16)',
+    borderColor: 'rgba(145, 224, 227, 0.32)',
+    borderRadius: 6,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+  },
+  protocolLabel: {
+    color: '#BCEDEF',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.5,
   },
 });

@@ -53,6 +53,9 @@ const { SessionOperationSupersededError } = policy('src/vpn/sessionOperation.ts'
 const { ApiRequestError } = policy('src/api/error.ts');
 const { createSessionRestoreRefresh } = policy('src/auth/sessionRestoreRefresh.ts');
 const fallback = policy('src/vpn/connectionFallback.ts');
+const { explicitConnectProfileResolutionOptions } = policy('src/vpn/connectFlow.ts', {
+  './profileConsistency': policy('src/vpn/profileConsistency.ts'), './connectionFallback': fallback,
+});
 const scheduleVpnVerificationTimeout = (delayMs, onTimeout) => {
   const timer = setTimeout(onTimeout, delayMs);
   return () => clearTimeout(timer);
@@ -120,7 +123,7 @@ function connectionHarness(stage, platform = 'android', overrides = {}) {
     connectAttemptTimeoutMs: 100, scheduleVpnVerificationTimeout,
     waitForVerifiedVpnConnection: () => wait('verification', { state: 'connected' }),
     selectedLocationId: stage === 'persist' ? 'previous' : 'de', serverSelectionMode: 'auto', availableLocations: [{ id: 'de' }],
-    chooseBestVpnLocation: () => ({ id: 'de' }), profileResolutionOrder: id => [{ id }], explicitConnectProfileResolutionOptions: {},
+    chooseBestVpnLocation: () => ({ id: 'de' }), profileResolutionOrder: id => [{ id }], explicitConnectProfileResolutionOptions,
     resolveConnectableVpnProfile: async () => {
       state.resolutions++;
       return wait(state.resolutions > 1 ? 'fresh-profile' : 'profile', profile);
@@ -138,6 +141,72 @@ function connectionHarness(stage, platform = 'android', overrides = {}) {
   context.connectProfileWithEndpointFallback = bind(flow.connectProfileWithEndpointFallback, context);
   return { state, session, gate, reached, mountedRef, connect: bind(flow.connectCurrentVpn, context) };
 }
+
+function placementFallbackHarness({ rejectFreshFallback = false, firstConnectSucceeds = false } = {}) {
+  const locations = [{ id: 'nl' }, { id: 'fi' }];
+  const profiles = Object.fromEntries(locations.map(({ id }) => [id, {
+    ...profile, locationId: id, config: profile.config.replace('fixture:443', `${id}.fixture:443`),
+    device: { ...profile.device, nodeId: id, endpoint: `${id}.fixture:443` },
+  }]));
+  const state = { canonicalLocation: 'nl', nativeLocation: null, resolutions: [], nativeAttempts: [] };
+  const harness = connectionHarness(undefined, 'android', {
+    selectedLocationId: 'fi', availableLocations: locations,
+    chooseBestVpnLocation: () => locations[0],
+    profileResolutionOrder: () => locations,
+    dynamicRouteRuntime: {
+      prepare: async () => {}, attempts: candidate => [{ profile: candidate }],
+      clearActive: () => {}, recordSuccess: () => {}, recordFailure: () => {},
+    },
+    resolveConnectableVpnProfile: async (id, options) => {
+      state.resolutions.push({ id, options });
+      if (options.forceRefresh) {
+        if (id === 'fi' && rejectFreshFallback) throw new ApiRequestError('profile unavailable', { status: 401 });
+        // The real profile endpoint moves this shared installation's peer.
+        state.canonicalLocation = id;
+      }
+      return { ...profiles[id], source: options.forceRefresh ? 'api' : 'local' };
+    },
+    connectVpn: async config => {
+      const id = config.includes('nl.fixture:443') ? 'nl' : 'fi';
+      state.nativeAttempts.push(id);
+      if (id === 'nl' && !firstConnectSucceeds) throw new Error('VPN handshake failed');
+      // A retained peer can handshake before deferred server cleanup removes it.
+      state.nativeLocation = id;
+      return { state: 'connected', verified: true };
+    },
+  });
+  return { ...harness, placement: state };
+}
+
+test('cross-location fallback confirms shared peer placement before activating a saved profile', async () => {
+  const h = placementFallbackHarness();
+  await h.connect();
+  assert.equal(h.placement.nativeLocation, 'fi');
+  assert.equal(h.placement.canonicalLocation, 'fi', 'a transient handshake must not leave server placement on the failed location');
+  const next = h.placement.resolutions.find(item => item.id === 'fi');
+  assert.equal(next.options.forceRefresh, true);
+  assert.equal(next.options.preferCached, false);
+  assert.equal(next.options.requestPermission, false);
+  assert.deepEqual(h.placement.nativeAttempts, ['nl', 'nl', 'fi']);
+});
+
+test('failed cross-location placement confirmation cannot activate the saved fallback', async () => {
+  const h = placementFallbackHarness({ rejectFreshFallback: true });
+  await assert.rejects(h.connect(), error => error.status === 401);
+  assert.equal(h.placement.nativeLocation, null);
+  assert.deepEqual(h.placement.nativeAttempts, ['nl', 'nl']);
+  assert.equal(h.state.cleanupCalls, 1);
+});
+
+test('successful initial cached connection retains its fast path without another profile request', async () => {
+  const h = placementFallbackHarness({ firstConnectSucceeds: true });
+  await h.connect();
+  assert.equal(h.placement.resolutions.length, 1);
+  assert.deepEqual(h.placement.resolutions[0].options, {
+    forceRefresh: false, preferCached: true, validateCachedProfile: true, requestPermission: true,
+  });
+  assert.deepEqual(h.placement.nativeAttempts, ['nl']);
+});
 
 test('the actual connect flow advances to a fresh profile after a background verification deadline', async () => {
   let connects = 0;

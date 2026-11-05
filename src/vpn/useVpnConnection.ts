@@ -242,7 +242,8 @@ export function useVpnConnection() {
   const isConnected = vpnStatusCore.state === 'connected';
   const isAutopilotActive = vpnStatusCore.transport === 'vless'
     ? vpnStatusCore.connectionWanted === true
-    : isConnected || vpnStatusCore.state === 'degraded';
+    : vpnStatusCore.connectionWanted !== false && (isConnected || vpnStatusCore.state === 'degraded' ||
+      (vpnStatusCore.connectionWanted === true && vpnStatusCore.leakProtection === 'blocking'));
   const isLeakBlocked = vpnStatusCore.leakProtection === 'blocking';
 
   const connectionPhase: ConnectionPhase = isServerSwitching

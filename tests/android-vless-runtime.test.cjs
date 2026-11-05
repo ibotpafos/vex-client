@@ -534,10 +534,23 @@ test('an absent or malformed VLESS wanted flag cannot enable recovery after an e
   }
 });
 
-test('the VLESS intent gate preserves legacy AWG recovery behavior',()=>{
+test('AWG binaries without the optional intent flag retain their legacy recovery behavior',()=>{
   for(const transport of [undefined,'amneziawg'])for(const state of ['connected','degraded','verifying','error','disconnected']){
-    assert.equal(autopilotPolicy({transport,state,connectionWanted:false},state==='connected'),state==='connected'||state==='degraded');
+    assert.equal(autopilotPolicy({transport,state},state==='connected'),state==='connected'||state==='degraded');
   }
+});
+
+test('persisted AWG intent recovers a protected native failure and an explicit stop disables recovery',async()=>{
+  for(const transport of [undefined,'amneziawg'])for(const connectionWanted of [true,false]){
+    for(const state of ['connected','degraded','error','disconnected']){
+      const h=nativeHarness({status:{state,transport,connectionWanted,leakProtection:'blocking',rxBytes:0,txBytes:0}});
+      const normalized=await h.native.getVpnStatus({fresh:true});
+      assert.equal(normalized.connectionWanted,connectionWanted);
+      assert.equal(autopilotPolicy(normalized,state==='connected'),connectionWanted,`${state}/${connectionWanted}`);
+    }
+  }
+  assert.equal(autopilotPolicy({state:'error',connectionWanted:true,leakProtection:'off'},false),false);
+  assert.equal(autopilotPolicy({state:'error',leakProtection:'blocking'},false),false);
 });
 
 test('a wanted-only transition updates both status memoization layers',()=>{

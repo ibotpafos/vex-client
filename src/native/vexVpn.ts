@@ -72,6 +72,8 @@ type VexVpnNativeModule = {
   ): Promise<VpnStatus>;
   disconnect(releaseAntiLeak: boolean): Promise<VpnStatus>;
   status(): Promise<VpnStatus>;
+  scheduleVerificationTimer?(id: string, delayMs: number): Promise<boolean>;
+  cancelVerificationTimer?(id: string): void;
   openVpnSettings?(): Promise<boolean>;
   getOrCreateWireGuardKeyPair(): Promise<WireGuardKeyPair>;
   generateWireGuardKeyPair(): Promise<WireGuardKeyPair>;
@@ -214,6 +216,35 @@ export async function disconnectVpn(options: DisconnectVpnOptions = {}): Promise
   const status = normalizeVpnStatus(nativeStatus);
   updateCachedVpnStatus(status);
   return status;
+}
+
+let verificationTimerSequence = 0;
+
+/** Schedule an owned verification callback independently of Android UI frames.
+ * Older binaries use JS timers. Returns an idempotent cancellation callback.
+ */
+export function scheduleVpnVerificationTimeout(delayMs: number, onTimeout: () => void): () => void {
+  if (Platform.OS === 'android' && nativeModule?.scheduleVerificationTimer && nativeModule.cancelVerificationTimer) {
+    const id = `verify-${++verificationTimerSequence}`;
+    let active = true;
+    const complete = () => {
+      if (!active) return;
+      active = false;
+      onTimeout();
+    };
+    try {
+      void nativeModule.scheduleVerificationTimer(id, delayMs).then(complete, complete);
+    } catch {
+      complete();
+    }
+    return () => {
+      if (!active) return;
+      active = false;
+      try { nativeModule.cancelVerificationTimer?.(id); } catch { /* Module teardown owns any remaining timer. */ }
+    };
+  }
+  const timer = setTimeout(onTimeout, delayMs);
+  return () => clearTimeout(timer);
 }
 
 // Handshake verification needs a new native snapshot, including when a cached

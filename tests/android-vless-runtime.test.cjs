@@ -28,6 +28,10 @@ const { parseVlessProfileResponse } = load('src/api/vlessProfile.ts');
 const { ApiRequestError } = load('src/api/error.ts');
 const verification = pure('vpnStatusVerification');
 const { waitForVerifiedVpnConnection } = pure('connectVerification');
+const scheduleVpnVerificationTimeout = (delayMs, callback) => {
+  const timer = setTimeout(callback, delayMs);
+  return () => clearTimeout(timer);
+};
 const { assessNativeTunnelHealth } = pure('nativeTunnelHealth');
 const sessionOperation = pure('sessionOperation');
 const paid = { active: true, vpnAccess: true };
@@ -241,7 +245,7 @@ function connectionFlowHarness({cancelOnRead=false}={}) {
       return {state:'connected',transport:'vless',connectionId,verificationEpochMillis:Date.now(),verified:true};
     },
     connectVpn:async(_config,options)=>{calls.push(options);return {state:'verifying',transport:'vless',connectionId,verified:false};},
-    connectAttemptTimeoutMs:25000,waitForVerifiedVpnConnection,withLastSuccessfulEndpoint:profile=>profile,isVpnTransportFallbackError:fallback.isVpnTransportFallbackError,
+    connectAttemptTimeoutMs:25000,waitForVerifiedVpnConnection,scheduleVpnVerificationTimeout,withLastSuccessfulEndpoint:profile=>profile,isVpnTransportFallbackError:fallback.isVpnTransportFallbackError,
   });
   return {calls,flow:hook({isCurrentSessionOperation:()=>!cancelled,antiLeakEnabled:true,session:{accessToken:'token',user:{id:'owner'}}})};
 }
@@ -602,7 +606,7 @@ function permissionChainHarness({cached=false,nativeFailures=0,missingInitial=fa
     getVpnStatus:async()=>({state:'disconnected'}),connectVpn:async()=>{
       if(++attempts<=nativeFailures)throw new Error('VPN connection failed');
       return {state:'connected',transport:'vless',connectionWanted:true,connectionId,verified:true,verificationEpochMillis:Date.now()};
-    },connectAttemptTimeoutMs:25000,waitForVerifiedVpnConnection,withLastSuccessfulEndpoint:profile=>profile,
+    },connectAttemptTimeoutMs:25000,waitForVerifiedVpnConnection,scheduleVpnVerificationTimeout,withLastSuccessfulEndpoint:profile=>profile,
     connectFreshSameLocationProfile:pure('sameLocationProfileRecovery').connectFreshSameLocationProfile,
     saveHotVpnProfile:async()=>null,uploadClientDiagnostics:async()=>{},setSelectedVpnLocation:async id=>id,errorMessage:error=>error.message,
   });

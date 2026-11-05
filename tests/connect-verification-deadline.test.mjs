@@ -7,12 +7,13 @@ import { waitForVerifiedVpnConnection } from '../src/vpn/connectVerification.ts'
 
 const ts = createRequire(import.meta.url)('typescript');
 
-function loadNativeAdapter(statusReads) {
+function loadNativeAdapter(statusReads, extraNative = {}, timerGlobals = { setTimeout, clearTimeout }) {
   let reads = 0;
   let listener;
   const clock = class extends Date { static now() { return 1_000_000; } };
   const disconnected = { state: 'disconnected', rxBytes: 0, txBytes: 0 };
   const native = {
+    ...extraNative,
     connect: async () => ({ state: 'connected', rxBytes: 0, txBytes: 0 }),
     disconnect: async () => disconnected,
     status: async () => {
@@ -27,7 +28,7 @@ function loadNativeAdapter(statusReads) {
     vm.runInNewContext(ts.transpileModule(source, {
       compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
     }).outputText, {
-      exports, Date: clock,
+      exports, Date: clock, ...timerGlobals,
       require: name => { assert.ok(Object.hasOwn(dependencies, name), `Unexpected native adapter import ${name}`); return dependencies[name]; },
     });
     return exports;
@@ -52,6 +53,88 @@ function deferred() {
 }
 
 const pending = { state: 'connected', rxBytes: 0, txBytes: 0, verified: false };
+
+function nativeTimers() {
+  const pending = new Map();
+  return {
+    pending,
+    methods: {
+      scheduleVerificationTimer(id, delayMs) {
+        return new Promise(resolve => {
+          const timer = setTimeout(() => { pending.delete(id); resolve(true); }, delayMs);
+          pending.set(id, { timer, resolve });
+        });
+      },
+      cancelVerificationTimer(id) {
+        const entry = pending.get(id);
+        if (!entry) return;
+        pending.delete(id);
+        clearTimeout(entry.timer);
+        entry.resolve(false);
+      },
+    },
+  };
+}
+
+const pausedUiTimers = {
+  setTimeout() { throw new Error('React Native UI frame timers are paused'); },
+  clearTimeout() { throw new Error('React Native UI frame timers are paused'); },
+};
+
+test('native timers finish handshake polling while UI frame timers are paused', async () => {
+  const timers = nativeTimers();
+  const { adapter } = loadNativeAdapter([], timers.methods, pausedUiTimers);
+  let reads = 0;
+  const result = await waitForVerifiedVpnConnection(pending, async () => ({
+    ...pending, verified: ++reads === 3, latestHandshakeEpochMillis: 1000,
+  }), { minimumHandshakeEpochMillis: 1000, pollMs: 1, timeoutMs: 1000,
+    scheduleTimeout: adapter.scheduleVpnVerificationTimeout });
+  assert.equal(result.latestHandshakeEpochMillis, 1000);
+  assert.equal(reads, 3);
+  assert.equal(timers.pending.size, 0);
+});
+
+for (const hung of ['status', 'custom poll']) {
+  test(`native deadline bounds a hung ${hung} with paused UI frame timers`, async () => {
+    const timers = nativeTimers();
+    const { adapter } = loadNativeAdapter([], timers.methods, pausedUiTimers);
+    await assert.rejects(waitForVerifiedVpnConnection(pending,
+      hung === 'status' ? () => new Promise(() => {}) : async () => pending,
+      { timeoutMs: 25, wait: () => new Promise(() => {}),
+        scheduleTimeout: adapter.scheduleVpnVerificationTimeout }), /VPN handshake timed out/);
+    assert.equal(timers.pending.size, 0);
+  });
+}
+
+test('canceling a native timer releases its promise and ignores late completion', async () => {
+  const timers = nativeTimers();
+  const { adapter } = loadNativeAdapter([], timers.methods, pausedUiTimers);
+  let fired = 0;
+  const cancel = adapter.scheduleVpnVerificationTimeout(1000, () => { fired++; });
+  assert.equal(timers.pending.size, 1);
+  cancel();
+  cancel();
+  await Promise.resolve();
+  assert.equal(fired, 0);
+  assert.equal(timers.pending.size, 0);
+});
+
+for (const native of [{}, { scheduleVerificationTimer() { throw new Error('partial ABI'); } }]) {
+  test(`legacy native timer ABI retains JS scheduling: ${Object.keys(native).length} methods`, async () => {
+    const { adapter } = loadNativeAdapter([], native);
+    await new Promise(resolve => adapter.scheduleVpnVerificationTimeout(0, resolve));
+  });
+}
+
+test('native timer registration failure cannot leave verification waiting forever', async () => {
+  const { adapter } = loadNativeAdapter([], {
+    scheduleVerificationTimer: async () => { throw new Error('native module invalidated'); },
+    cancelVerificationTimer() {},
+  }, pausedUiTimers);
+  await assert.rejects(waitForVerifiedVpnConnection(pending, () => new Promise(() => {}), {
+    timeoutMs: 1000, scheduleTimeout: adapter.scheduleVpnVerificationTimeout,
+  }), /VPN handshake timed out/);
+});
 
 test('an already canceled operation cannot accept an initial verified status', async () => {
   const canceled = new Error('operation superseded');

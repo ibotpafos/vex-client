@@ -38,6 +38,7 @@ export default function App() {
     activeProfile,
     selectedLocation,
     selectedLatencyText,
+    transport,
     powerButtonDisabled,
     handlePowerPress,
     handleRotateKeyPress,
@@ -96,6 +97,7 @@ export default function App() {
           )}
           latencyText={selectedLatencyText}
           location={selectedLocation}
+          protocolLabel={Platform.OS === 'android' ? (transport === 'vless' ? 'VLESS' : 'AWG') : undefined}
           onLocationPress={openServerPicker}
           onPowerPress={handlePowerPress}
           onSettingsPress={() => {

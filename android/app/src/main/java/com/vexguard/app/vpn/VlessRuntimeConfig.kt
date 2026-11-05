@@ -50,7 +50,8 @@ internal object VlessRuntimeConfig {
     val dns = JSONObject().put("servers", JSONArray().put("https://1.1.1.1/dns-query"))
       .put("tag", "vex-dns-query").put("queryStrategy", "UseIPv4").put("disableFallback", true)
     val dnsPolicy = JSONArray()
-      .put(JSONObject().put("action", "hijack").put("qType", JSONArray().put(1).put(28)))
+      // Upstream DNSOutboundRuleConfig uses PortList: a number or comma-separated string.
+      .put(JSONObject().put("action", "hijack").put("qType", "1,28"))
       .put(JSONObject().put("action", "return").put("rCode", 5))
     val dnsOut = JSONObject().put("tag", "vex-dns").put("protocol", "dns")
       .put("settings", JSONObject().put("rules", dnsPolicy))

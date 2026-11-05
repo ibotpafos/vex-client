@@ -92,10 +92,21 @@ TCP/HTTPS path inside VLESS, with no direct resolver fallback. Full-tunnel and
 per-app data-plane checks must be exercised on a physical device alongside
 connect/disconnect, protocol switching, interruption and leak protection.
 
-The release gate includes Wi-Fi to cellular and cellular to Wi-Fi. On
-4 November 2026 the attached Mi A1 detected its SIM but had no cellular service;
-the owner confirmed that mobile internet was unavailable. That matrix remains
-unqualified. A successful build or Wi-Fi-only test cannot satisfy it.
+On 5 November 2026 the owner changed this release gate to physical Wi-Fi
+acceptance. The attached Mi A1 has no cellular service, as confirmed by the
+owner. Wi-Fi loss/restoration, fresh admission after expiry, per-app routing
+and protocol switching remain required; cellular transitions remain unqualified.
+A successful build alone does not establish physical acceptance.
+
+Android AWG status events arriving during a connection operation are ignored
+to preserve operation ownership. After its own lease ends, a remaining degraded
+state needs one fresh native read because AWG has no JS status polling and the
+native emitter suppresses unchanged snapshots. Promotion requires current
+verified native proof. Session, operation, preferences and profile ownership
+must invalidate delayed reads; a previous operation must never release a newer
+lease. The 1.0.84 candidate adds this convergence path without changing VLESS
+polling. Its focused race tests do not prove the cause of the Mi A1 observation
+or replace acceptance of the signed APK.
 
 The current release workflow rebuilds the tagged source after signing a
 pre-release candidate. Source equality alone does not prove the final APK is

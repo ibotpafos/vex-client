@@ -25,7 +25,11 @@ const file = 'src/vpn/useVpnConnection.ts';
 const source = fs.readFileSync(path.join(repo, file), 'utf8');
 const root = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 let switchCallback, rotationEffect;
+const leaseCallbacks = {};
 function visit(node) {
+  if (ts.isVariableDeclaration(node) && ['releaseVpnOperation', 'acquireVpnOperation'].includes(node.name.getText(root))) {
+    leaseCallbacks[node.name.getText(root)] = node.initializer.arguments[0].getText(root);
+  }
   if (ts.isVariableDeclaration(node) && node.name.getText(root) === 'switchConnectedVpnLocation') {
     switchCallback = node.initializer.arguments[0].getText(root);
   }
@@ -38,6 +42,13 @@ function visit(node) {
 visit(root);
 assert.ok(switchCallback); assert.ok(rotationEffect);
 function bind(callback, context) {
+  // The isolated callback delegates lease lifecycle to its hook boundary.
+  const operation = context.vpnOperationInFlightRef;
+  context = {...context,
+    acquireVpnOperation: context.acquireVpnOperation ?? (() => { operation.current = true; return () => { operation.current = false; }; }),
+    releaseVpnOperation: context.releaseVpnOperation ?? (() => { operation.current = false; }),
+  };
+
   const code = ts.transpileModule(`return (${callback});`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   return new Function(...Object.keys(context), code)(...Object.values(context));
 }
@@ -99,6 +110,34 @@ function switchHarness(stage, options = {}) {
     },
   };
 }
+
+test('a canceled old server-switch finally cannot release a newer lease in the same login', async () => {
+  const h = switchHarness('connect:de');
+  let reconciliations = 0;
+  const leaseContext = {
+    vpnOperationInFlightRef: h.context.vpnOperationInFlightRef,
+    vpnOperationRevisionRef: {current: 0}, vpnMountedRef: {current: true},
+    reconcileReleasedStatusRef: {current: async () => {reconciliations++;}},
+  };
+  leaseContext.releaseVpnOperation = bind(leaseCallbacks.releaseVpnOperation, leaseContext);
+  const acquire = bind(leaseCallbacks.acquireVpnOperation, leaseContext);
+  const run = bind(switchCallback, {...h.context, acquireVpnOperation: acquire});
+  const pending = run('de');
+  await h.reached.promise;
+  assert.equal(h.context.isCurrentSessionOperation(), true);
+  const releaseNewLease = acquire();
+  const newerStatus = {state: 'connecting', rxBytes: 0, txBytes: 0};
+  h.state.status = newerStatus;
+  h.gate.reject(new SessionOperationSupersededError());
+  await pending;
+  assert.equal(h.context.vpnOperationInFlightRef.current, true, 'the old actual finally must retain the newer lease');
+  assert.equal(reconciliations, 0, 'the old actual finally cannot authorize a fresh status publication');
+  assert.equal(h.state.status, newerStatus, 'the canceled switch cannot admit its old status');
+  assert.equal(h.calls.includes('publish-status'), false);
+  releaseNewLease();
+  assert.equal(h.context.vpnOperationInFlightRef.current, false);
+  assert.equal(reconciliations, 1, 'only the newer lease owner may trigger reconciliation');
+});
 
 for (const [stage, rollback] of [
   ['resolve:de', false], ['connect:de', false], ['persist:de', false],

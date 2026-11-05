@@ -1,10 +1,10 @@
 {
   "android": {
-    "version": "1.0.83",
-    "build": 91,
+    "version": "1.0.84",
+    "build": 92,
     "min_supported_build": 1002930,
     "is_required": false,
-    "release_notes": "Android 1.0.83: добавлен выбор VLESS через XHTTP/TLS наряду с AmneziaWG. Улучшены проверка подключения, восстановление после смены сети и диагностика ошибок. VLESS использует полный туннель с сохранением выбора приложений.",
+    "release_notes": "Android 1.0.84: добавлен выбор VLESS через XHTTP/TLS наряду с AmneziaWG. Улучшены проверка подключения и восстановление после смены сети. Исправлено обновление статуса VPN после переподключения; сохранён выбор приложений для туннеля.",
     "core_version": "0.1.0",
     "config_schema_version": 1,
     "min_config_schema_version": 1,

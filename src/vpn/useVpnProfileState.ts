@@ -43,6 +43,7 @@ type UseVpnProfileStateInput = {
 
 type UseVpnProfileStateResult = {
   activeProfile: VpnProfile | null;
+  activeProfileRevisionRef: Readonly<{ current: number }>;
   activeProfileConfig?: string;
   activeProfileDeviceId?: string;
   cacheProfile: (locationId: string, profile: VpnProfile) => void;
@@ -89,9 +90,13 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
     return current.transport === transport && current.isCurrentSessionOperation?.() !== false && current.accessToken === token && current.selectedLocationId === location && current.canRefreshInBackground?.(location) !== false;
   }, [transport]);
   const [vpnProfile, setVpnProfileState] = useState<VpnProfile | null>(null);
+  const activeProfileRevisionRef = useRef(0);
   const vpnProfileOwnerRef = useRef<{ userId?: string; isCurrentSessionOperation: () => boolean } | null>(null);
   const setVpnProfile = useCallback((value: React.SetStateAction<VpnProfile | null>) => {
     if (!isCurrentSessionOperation()) return;
+    // Invalidate pending native status reads before React schedules a render
+    // or evaluates a functional updater, including background/PSK activation.
+    activeProfileRevisionRef.current += 1;
     const previousOwner = vpnProfileOwnerRef.current;
     const previousProfileIsOwned = previousOwner?.userId === userId && previousOwner?.isCurrentSessionOperation();
     vpnProfileOwnerRef.current = { userId, isCurrentSessionOperation };
@@ -113,6 +118,7 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
   const entitlementState = knownEntitlement ?? activeProfile?.entitlement ?? null;
 
   useEffect(() => {
+    activeProfileRevisionRef.current += 1;
     vpnProfileOwnerRef.current = null;
     setVpnProfileState(null);
     setIsKeyRotationBusy(false);
@@ -516,6 +522,7 @@ export function useVpnProfileState(input: UseVpnProfileStateInput): UseVpnProfil
 
   return {
     activeProfile,
+    activeProfileRevisionRef,
     activeProfileConfig: activeProfile?.config,
     activeProfileDeviceId: activeProfile?.device?.id,
     cacheProfile,

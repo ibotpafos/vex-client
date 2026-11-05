@@ -55,6 +55,8 @@ async function check({ shouldFail, cancelBeforeStart }) {
     },
     handleVpnFailure: () => { failureHandled = true; },
   };
+  context.acquireVpnOperation = () => { context.vpnOperationInFlightRef.current = true; return () => { context.vpnOperationInFlightRef.current = false; }; };
+  context.releaseVpnOperation = () => { context.vpnOperationInFlightRef.current = false; };
   vm.runInNewContext(compiled, context);
   cleanup = vm.runInNewContext('effect()', context);
   if (cancelBeforeStart) cleanup();
@@ -89,6 +91,8 @@ async function checkManualIntent({ initiallyConnected, cancelWhileConnecting = f
     dynamicRouteRuntime: { clearActive: () => {} }, handleVpnFailure: () => {}, reportVpnDisconnectEvent: () => {},
     playWarningHaptic: () => {}, playMediumImpactHaptic: () => {}, playSuccessHaptic: () => {},
   };
+  context.acquireVpnOperation = () => { context.vpnOperationInFlightRef.current = true; return () => { context.vpnOperationInFlightRef.current = false; }; };
+  context.releaseVpnOperation = () => { context.vpnOperationInFlightRef.current = false; };
   vm.runInNewContext(compiled, context);
   vm.runInNewContext('effect()', context); // startup or a pending preference read
   if (connectBeforePower) context.isConnected = true;
@@ -116,6 +120,8 @@ async function checkSupersededAutoConnect(reject) {
     connectCurrentVpn: value => { options = value; entered(); return pending; },
     handleVpnFailure: () => { failures++; },
   };
+  context.acquireVpnOperation = () => { context.vpnOperationInFlightRef.current = true; return () => { context.vpnOperationInFlightRef.current = false; }; };
+  context.releaseVpnOperation = () => { context.vpnOperationInFlightRef.current = false; };
   vm.runInNewContext(compiled, context);
   const cleanup = vm.runInNewContext('effect()', context);
   await reached;

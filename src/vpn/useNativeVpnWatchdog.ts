@@ -28,6 +28,7 @@ type MutableBooleanRef = {
 };
 
 type NativeVpnWatchdogInput = {
+  acquireOperation?: () => () => void;
   activeDeviceId?: string;
   activeLocationId: string;
   activeProfile: VpnProfile | null;
@@ -152,6 +153,7 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
       // clear the lease of a newer check while its network requests are pending.
       reconnectInFlightRef.current = true;
       let ownsOperation = false;
+      let releaseOperation: (() => void) | undefined;
       try {
         let activeUsage: VpnDeviceUsage | undefined;
         let usageError: string | undefined;
@@ -220,7 +222,8 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
 
         // Claim the same lease used by explicit connect/switch operations before
         // any awaited diagnostics or native mutation can overlap user intent.
-        input.operationInFlightRef.current = true;
+        if (input.acquireOperation) releaseOperation = input.acquireOperation();
+        else input.operationInFlightRef.current = true;
         ownsOperation = true;
         const failedRoute = Platform.OS === 'android' && activeProfile.transport !== 'vless'
           ? dynamicRouteRuntime.recordActiveFailure(activeProfile)
@@ -320,7 +323,10 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
         }).catch(() => undefined);
         backendHealthFailuresRef.current = 0;
       } finally {
-        if (ownsOperation) input.operationInFlightRef.current = false;
+        if (ownsOperation) {
+          if (releaseOperation) releaseOperation();
+          else input.operationInFlightRef.current = false;
+        }
         reconnectInFlightRef.current = false;
       }
     };
@@ -336,6 +342,7 @@ export function useNativeVpnWatchdog(input: NativeVpnWatchdogInput): NativeVpnWa
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
+    input.acquireOperation,
     input.activeDeviceId,
     input.activeLocationId,
     input.activeProfile,

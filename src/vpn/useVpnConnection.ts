@@ -86,6 +86,7 @@ import {
 import { switchVpnLocation } from '@/vpn/serverSwitch';
 import { shouldResetVpnCacheForSession, type VpnCacheSession } from '@/vpn/vpnQueryCachePolicy';
 import { useNativeVpnWatchdog } from '@/vpn/useNativeVpnWatchdog';
+import { localStatusHealthReasons } from '@/vpn/nativeTunnelHealth';
 import { useVpnProfileState } from '@/vpn/useVpnProfileState';
 import { SessionOperationSupersededError } from '@/vpn/sessionOperation';
 import { parseDevicePSKRotationEvent, processDevicePSKRotationEvent } from '@/vpn/devicePskRotation';
@@ -266,6 +267,29 @@ export function useVpnConnection() {
   const autoConnectAttemptedRef = useRef(false);
   const vpnOperationInFlightRef = useRef(false);
   const vpnConnectGenerationRef = useRef(0);
+  const vpnOperationRevisionRef = useRef(0);
+  const vpnMountedRef = useRef(true);
+  const reconcileReleasedStatusRef = useRef<() => Promise<void>>(async () => {});
+  const releaseVpnOperation = useCallback(() => {
+    if (!vpnMountedRef.current || !vpnOperationInFlightRef.current) return;
+    vpnOperationInFlightRef.current = false;
+    void reconcileReleasedStatusRef.current();
+  }, []);
+  const acquireVpnOperation = useCallback(() => {
+    vpnOperationRevisionRef.current += 1;
+    const owner = vpnOperationRevisionRef.current;
+    vpnOperationInFlightRef.current = true;
+    return () => {
+      if (vpnOperationRevisionRef.current === owner) releaseVpnOperation();
+    };
+  }, [releaseVpnOperation]);
+  useEffect(() => {
+    vpnMountedRef.current = true;
+    return () => {
+      vpnMountedRef.current = false;
+      vpnOperationRevisionRef.current += 1;
+    };
+  }, []);
   const [persistedEntitlement, setPersistedEntitlement] = useState<Entitlement | null>(null);
   const [persistedLocations, setPersistedLocations] = useState<VpnLocation[] | null>(null);
   const [persistedDevices, setPersistedDevices] = useState<VpnDevice[] | null>(null);
@@ -373,6 +397,7 @@ export function useVpnConnection() {
 
   const {
     activeProfile,
+    activeProfileRevisionRef,
     activeProfileConfig,
     activeProfileDeviceId,
     cacheProfile,
@@ -689,15 +714,22 @@ export function useVpnConnection() {
     }).catch(() => undefined);
   };
 
-  const captureStatusReadOwner = useCallback(() => {
+  const captureStatusReadOwner = useCallback(({ bindProfile = false }: { bindProfile?: boolean } = {}) => {
+    // Startup/foreground observe the live native tunnel independently of hot
+    // profile hydration. Only release recovery binds proof to that profile.
     const generation = vpnConnectGenerationRef.current;
+    const revision = vpnOperationRevisionRef.current;
+    const profileRevision = activeProfileRevisionRef.current;
+    const preferences = preferencesRevisionRef.current;
     const { connectionId, connectionWanted, transport: activeTransport, state } = vpnStatusRef.current;
     const locationId = state === 'disconnected' ? undefined : selectedLocationIdRef.current;
-    return () => isCurrentSessionOperation() && !vpnOperationInFlightRef.current &&
+    return () => vpnMountedRef.current && isCurrentSessionOperation() && !vpnOperationInFlightRef.current &&
+      vpnOperationRevisionRef.current === revision && preferencesRevisionRef.current === preferences &&
+      (!bindProfile || activeProfileRevisionRef.current === profileRevision) &&
       vpnConnectGenerationRef.current === generation && (locationId === undefined || selectedLocationIdRef.current === locationId) &&
       vpnStatusRef.current.connectionId === connectionId && vpnStatusRef.current.connectionWanted === connectionWanted && vpnStatusRef.current.transport === activeTransport &&
       vpnStatusRef.current.state === state;
-  }, [isCurrentSessionOperation]);
+  }, [activeProfileRevisionRef, isCurrentSessionOperation]);
 
   const refreshVpnStatus = useCallback(async (failureEvent: string, publish = true) => {
     const ownsRead = captureStatusReadOwner();
@@ -757,6 +789,7 @@ export function useVpnConnection() {
     // A new login owns fresh operation leases. Token refresh preserves this
     // guard's identity and must not interrupt the account's existing tunnel.
     vpnConnectGenerationRef.current += 1;
+    vpnOperationRevisionRef.current += 1;
     vpnOperationInFlightRef.current = false;
     processingDevicePSKEventsRef.current = false;
     setIsVpnBusy(false);
@@ -797,7 +830,7 @@ export function useVpnConnection() {
                   cacheProfile(staged.profile.locationId, staged.profile);
                   return;
                 }
-                vpnOperationInFlightRef.current = true;
+                const releaseOwnOperation = acquireVpnOperation();
                 try {
                   await disconnectVpn({ releaseAntiLeak: false });
                   requireCurrentSession();
@@ -808,7 +841,7 @@ export function useVpnConnection() {
                   setVpnStatus(connected.status);
                   reportVpnConnectEvent(connected.profile, 'psk_rotation_cutover');
                 } finally {
-                  if (isCurrentSessionOperation()) vpnOperationInFlightRef.current = false;
+                  if (isCurrentSessionOperation()) releaseOwnOperation();
                 }
               },
               clear: async () => {
@@ -866,6 +899,7 @@ export function useVpnConnection() {
     cacheProfile,
     connectProfileWithEndpointFallback,
     isConnected,
+    acquireVpnOperation,
     isCurrentSessionOperation,
     reportVpnConnectEvent,
     session?.accessToken,
@@ -1143,6 +1177,7 @@ export function useVpnConnection() {
   }, []);
 
   const { recordNativeStatus } = useNativeVpnWatchdog({
+    acquireOperation: acquireVpnOperation,
     activeDeviceId: activeProfileDeviceId,
     activeLocationId: selectedLocationId,
     activeProfile,
@@ -1173,6 +1208,32 @@ export function useVpnConnection() {
     staleHandshakeSeconds: staleHandshakeReconnectSeconds,
     submitDiagnostics: submitVpnDiagnostics,
   });
+
+  reconcileReleasedStatusRef.current = async () => {
+    // Android AWG has no JS status poll and suppresses unchanged native events.
+    // Re-read once after a lease may have dropped the only recovery event.
+    // VLESS retains its existing owned native-proof polling path.
+    if (Platform.OS !== 'android' || vpnStatusRef.current.transport === 'vless' || vpnStatusRef.current.state !== 'degraded') return;
+    const ownsRead = captureStatusReadOwner({ bindProfile: true });
+    if (!ownsRead()) return;
+    try {
+      const nextStatus = await getVpnStatus({ fresh: true });
+      if (!ownsRead() || normalizeVpnTransport(nextStatus.transport) !== normalizeVpnTransport(vpnStatusRef.current.transport)) return;
+      if (nextStatus.state === 'connected' && nextStatus.leakProtection !== 'blocking') {
+        const now = Date.now();
+        const proofAt = nextStatus.latestHandshakeEpochMillis;
+        if (nextStatus.verified !== true || typeof proofAt !== 'number' || !Number.isFinite(proofAt) || proofAt <= 0 || proofAt > now ||
+            now - proofAt > staleHandshakeReconnectSeconds * 1000 ||
+            localStatusHealthReasons(nextStatus, now, staleHandshakeReconnectSeconds).length > 0) return;
+      }
+      setVpnStatus((current) => {
+        if (!ownsRead() || recordNativeStatus(current, nextStatus)) return current;
+        return areVpnStatusesEqual(current, nextStatus) ? current : nextStatus;
+      });
+    } catch {
+      // An unavailable or unverified read cannot promote the previous state.
+    }
+  };
 
   useEffect(() => {
     if (Platform.OS !== 'android') {
@@ -1265,7 +1326,7 @@ export function useVpnConnection() {
         return;
       }
 
-      vpnOperationInFlightRef.current = true;
+      const releaseOwnOperation = acquireVpnOperation();
       const cancelGeneration = vpnConnectGenerationRef.current + 1;
       vpnConnectGenerationRef.current = cancelGeneration;
       setIsVpnBusy(true);
@@ -1286,7 +1347,7 @@ export function useVpnConnection() {
         if (vpnConnectGenerationRef.current === cancelGeneration) handleVpnFailure(error, 'disconnected');
       } finally {
         if (isCurrentSessionOperation() && vpnConnectGenerationRef.current === cancelGeneration) {
-          vpnOperationInFlightRef.current = false;
+          releaseOwnOperation();
           setIsVpnBusy(false);
         }
       }
@@ -1298,7 +1359,7 @@ export function useVpnConnection() {
       return;
     }
 
-    vpnOperationInFlightRef.current = true;
+    const releaseOwnOperation = acquireVpnOperation();
     playMediumImpactHaptic();
     setIsVpnBusy(true);
     setVpnError(null);
@@ -1332,7 +1393,7 @@ export function useVpnConnection() {
       }
     } finally {
       if (isCurrentSessionOperation() && vpnConnectGenerationRef.current === connectGeneration) {
-        vpnOperationInFlightRef.current = false;
+        releaseOwnOperation();
         setIsVpnBusy(false);
       }
     }
@@ -1340,6 +1401,7 @@ export function useVpnConnection() {
     activeProfile,
     connectCurrentVpn,
     connectionPhase,
+    acquireVpnOperation,
     handleVpnFailure,
     isCurrentSessionOperation,
     isConnected,
@@ -1373,7 +1435,7 @@ export function useVpnConnection() {
         autoConnectAttemptedRef.current = true;
         const connectGeneration = vpnConnectGenerationRef.current + 1;
         vpnConnectGenerationRef.current = connectGeneration;
-        vpnOperationInFlightRef.current = true;
+        const releaseOwnOperation = acquireVpnOperation();
         setIsVpnBusy(true);
         setVpnError(null);
         setVpnStatus((current) => nextVpnStatusWithState(current, 'connecting'));
@@ -1383,7 +1445,7 @@ export function useVpnConnection() {
           if (vpnConnectGenerationRef.current === connectGeneration) handleVpnFailure(error, 'disconnected');
         } finally {
           if (isCurrentSessionOperation() && vpnConnectGenerationRef.current === connectGeneration) {
-            vpnOperationInFlightRef.current = false;
+            releaseOwnOperation();
             setIsVpnBusy(false);
           }
         }
@@ -1393,7 +1455,7 @@ export function useVpnConnection() {
     return () => {
       cancelled = true;
     };
-  }, [connectCurrentVpn, entitlementState, handleVpnFailure, isConnected, isCurrentSessionOperation, isVpnBusy, session, setVpnStatus]);
+  }, [acquireVpnOperation, connectCurrentVpn, entitlementState, handleVpnFailure, isConnected, isCurrentSessionOperation, isVpnBusy, session, setVpnStatus]);
 
   const openSubscriptionModal = useCallback(() => {
     if (!session) {
@@ -1452,7 +1514,7 @@ export function useVpnConnection() {
     const previousProfile = activeProfile;
     const previousStatus = vpnStatusRef.current;
 
-    vpnOperationInFlightRef.current = true;
+    const releaseOwnOperation = acquireVpnOperation();
     if (closeOverlay) {
       closeRouteOverlay();
     }
@@ -1522,7 +1584,7 @@ export function useVpnConnection() {
       setVpnError(errorMessage(error, 'Не удалось переключиться на выбранный сервер.'));
     } finally {
       if (isCurrentSessionOperation()) {
-        vpnOperationInFlightRef.current = false;
+        releaseOwnOperation();
         setIsServerSwitching(false);
         setIsVpnBusy(false);
       }
@@ -1531,6 +1593,7 @@ export function useVpnConnection() {
     activeProfile,
     cacheProfile,
     connectProfileWithEndpointFallback,
+    acquireVpnOperation,
     isCurrentSessionOperation,
     isVpnBusy,
     queryClient,
@@ -1683,7 +1746,7 @@ export function useVpnConnection() {
   const handleTransportChange = useCallback(async (next: VpnTransport) => {
     if (!isCurrentSessionOperation()) throw new SessionOperationSupersededError();
     if (vpnOperationInFlightRef.current || isKeyRotationBusy) throw new Error('Дождитесь завершения подключения.');
-    vpnOperationInFlightRef.current = true;
+    const releaseOwnOperation = acquireVpnOperation();
     preferencesRevisionRef.current += 1;
     try {
       const saved = await setVpnTransport(next);
@@ -1691,8 +1754,8 @@ export function useVpnConnection() {
       setTransport(saved);
       if (vpnStatusRef.current.state !== 'connected') setActiveProfile(null);
       return saved;
-    } finally { vpnOperationInFlightRef.current = false; }
-  }, [isCurrentSessionOperation, isKeyRotationBusy, setActiveProfile]);
+    } finally { releaseOwnOperation(); }
+  }, [acquireVpnOperation, isCurrentSessionOperation, isKeyRotationBusy, setActiveProfile]);
 
   const refreshVpnPreferences = useCallback(async () => {
     const revision = preferencesRevisionRef.current;

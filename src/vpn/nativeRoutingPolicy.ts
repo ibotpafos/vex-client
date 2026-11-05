@@ -26,21 +26,3 @@ export function nativeRoutingParameters(config: string, mode: VpnRoutingMode, au
   };
   return JSON.stringify({ addresses: values('Address'), dns: values('DNS'), mode, ...(authorization ? { authorization } : {}) });
 }
-
-export function androidRoutingPolicyUnavailable(parameters: string | undefined): boolean {
-  if (parameters === undefined) return true;
-  try {
-    const value = JSON.parse(parameters);
-    return value !== null && !Array.isArray(value) && typeof value === 'object' &&
-      value.mode === 'all_except_ru' && value.authorization == null;
-  } catch {
-    return false; // Preserve malformed input for native admission to reject.
-  }
-}
-
-export function androidRoutingParametersWithFallback(parameters: string): string {
-  if (!androidRoutingPolicyUnavailable(parameters)) return parameters;
-  // Without a fresh policy, keep every destination inside the encrypted tunnel.
-  // Never convert outer profile fields into direct-connection exceptions.
-  return JSON.stringify({ ...JSON.parse(parameters), mode: 'full_tunnel' });
-}

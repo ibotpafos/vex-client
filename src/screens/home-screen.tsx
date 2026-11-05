@@ -14,8 +14,6 @@ import { playSelectionHaptic } from '@/native/haptics';
 import { VexNativeActivityIndicator } from '@/ui/native-activity-indicator';
 import { VexPressable } from '@/ui/vex-ui';
 import { useVpnConnectionContext } from '@/vpn/vpn-connection-context';
-import { supportsNativeRoutingPolicy } from '@/native/vexVpn';
-import { androidRoutingPolicyUnavailable } from '@/vpn/nativeRoutingPolicy';
 
 import { ServerPickerModal } from '../components/server-picker-modal';
 import { serverPickerActionForSource } from './server-picker-interactions';
@@ -113,11 +111,6 @@ export default function App() {
         >
           {vpnStatus.state === 'connected' && Platform.OS === 'android' ? (
             <Text testID="home-active-protocol" style={styles.vpnNoticeText}>Подключено: {vpnStatus.transport === 'vless' ? 'VLESS' : 'AmneziaWG'}</Text>
-          ) : null}
-          {vpnStatus.state === 'connected' && Platform.OS === 'android' && supportsNativeRoutingPolicy() &&
-            activeProfile?.transport !== 'vless' && activeProfile?.routingMode === 'all_except_ru' &&
-            androidRoutingPolicyUnavailable(activeProfile.routingParameters) ? (
-            <Text testID="home-smart-routing-fallback" style={styles.vpnNoticeText}>Умный режим временно недоступен. Весь трафик через VPN.</Text>
           ) : null}
           <MobileUpdateNoticeBanner onOpen={openUpdateCenter} />
           {trafficQuota && shouldShowHomeTrafficQuota(trafficQuota) ? <TrafficQuotaSummary quota={trafficQuota} /> : null}

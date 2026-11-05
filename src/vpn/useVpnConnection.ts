@@ -62,8 +62,7 @@ import {
   profileEndpoint,
 } from '@/vpn/connectionFallback';
 import { normalizeVpnTransport, vpnProfileQueryKey, type VpnTransport } from '@/vpn/transport';
-import { supportsNativeRoutingPolicy, supportsNativeVless } from '@/native/vexVpn';
-import { androidRoutingPolicyUnavailable } from '@/vpn/nativeRoutingPolicy';
+import { supportsNativeVless } from '@/native/vexVpn';
 import { resolveVpnProfile, type VpnProfile } from '@/vpn/profile';
 import { probeNetworkHealth } from '@/vpn/networkHealthProbe';
 import { foregroundLatencyTargets } from '@/vpn/foregroundLatencyTargets';
@@ -956,9 +955,7 @@ export function useVpnConnection() {
       latencyMs: clientLatencyMs,
       endpoint: activeDevice?.endpoint,
       profileVersion: activeProfile?.profileVersion,
-      routingMode: Platform.OS === 'android' && supportsNativeRoutingPolicy() && activeProfile?.transport !== 'vless' &&
-        activeProfile?.routingMode === 'all_except_ru' && androidRoutingPolicyUnavailable(activeProfile.routingParameters)
-        ? 'full_tunnel' : activeProfile?.routingMode ?? routingMode,
+      routingMode: activeProfile?.routingMode ?? routingMode,
       bypassRegion: activeProfile?.bypassRegion,
       bypassRangesCount: activeProfile?.bypassRangesCount,
       routingPolicyVersion: activeProfile?.routingPolicyVersion,
@@ -970,8 +967,6 @@ export function useVpnConnection() {
     activeProfile?.bypassRegion,
     activeProfile?.profileVersion,
     activeProfile?.routingMode,
-    activeProfile?.routingParameters,
-    activeProfile?.transport,
     activeProfile?.routingPolicyVersion,
     clientLatencyMs,
     routingMode,

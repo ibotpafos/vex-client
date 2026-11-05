@@ -344,7 +344,10 @@ export function useVpnConnectionFlow({
           continue;
         }
         const fallbackProfile = await resolveProfileOrSkipMissing(() => resolveCurrentProfile(fallbackLocation.id, {
-          preferCached: true,
+          // The failed location's fresh profile may have moved this shared
+          // installation's peer. Confirm the next placement before activation.
+          forceRefresh: true,
+          preferCached: false,
           requestPermission: false,
         }));
         if (!fallbackProfile) continue;

@@ -53,6 +53,11 @@ const { SessionOperationSupersededError } = policy('src/vpn/sessionOperation.ts'
 const { ApiRequestError } = policy('src/api/error.ts');
 const { createSessionRestoreRefresh } = policy('src/auth/sessionRestoreRefresh.ts');
 const fallback = policy('src/vpn/connectionFallback.ts');
+const scheduleVpnVerificationTimeout = (delayMs, onTimeout) => {
+  const timer = setTimeout(onTimeout, delayMs);
+  return () => clearTimeout(timer);
+};
+const { waitForVerifiedVpnConnection } = policy('src/vpn/connectVerification.ts', {}, { Date, setTimeout, clearTimeout });
 const { cleanupFailedVpnConnection } = policy('src/vpn/failedConnectionCleanup.ts', { './connectionFallback': fallback });
 const { connectFreshSameLocationProfile } = policy('src/vpn/sameLocationProfileRecovery.ts');
 function deferred() {
@@ -84,7 +89,7 @@ const profile = {
   locationId: 'de', config: '[Interface]\nPrivateKey = fixture-A\nAddress = 10.0.0.2/32\nHeaderProtectionKey = fixture\n[Peer]\nEndpoint = fixture:443',
   device: { id: 'device-A', assignedIpv4: '10.0.0.2', endpoint: 'fixture:443' },
 };
-function connectionHarness(stage, platform = 'android') {
+function connectionHarness(stage, platform = 'android', overrides = {}) {
   const gate = deferred(), reached = deferred();
   const state = { nativeCalls: 0, cleanupCalls: 0, logoutCalls: 0, published: 0, cached: 0, resolutions: 0, nativeOwner: null };
   const wait = async (name, value) => {
@@ -112,7 +117,8 @@ function connectionHarness(stage, platform = 'android') {
       if (stage === 'fresh-profile') throw new Error('VPN handshake failed');
       return wait('native', { state: 'connected' });
     },
-    connectAttemptTimeoutMs: 100, waitForVerifiedVpnConnection: () => wait('verification', { state: 'connected' }),
+    connectAttemptTimeoutMs: 100, scheduleVpnVerificationTimeout,
+    waitForVerifiedVpnConnection: () => wait('verification', { state: 'connected' }),
     selectedLocationId: stage === 'persist' ? 'previous' : 'de', serverSelectionMode: 'auto', availableLocations: [{ id: 'de' }],
     chooseBestVpnLocation: () => ({ id: 'de' }), profileResolutionOrder: id => [{ id }], explicitConnectProfileResolutionOptions: {},
     resolveConnectableVpnProfile: async () => {
@@ -127,10 +133,39 @@ function connectionHarness(stage, platform = 'android') {
     reportVpnConnectEvent: () => {}, vpnConnectTelemetry: () => ({}), vpnConnectTimingSamples: () => ({}),
     vpnStatus: { state: 'disconnected' }, clientLatencyMs: null, errorMessage: error => error.message,
     withLastSuccessfulEndpoint: value => value,
+    ...overrides,
   };
   context.connectProfileWithEndpointFallback = bind(flow.connectProfileWithEndpointFallback, context);
   return { state, session, gate, reached, mountedRef, connect: bind(flow.connectCurrentVpn, context) };
 }
+
+test('the actual connect flow advances to a fresh profile after a background verification deadline', async () => {
+  let connects = 0;
+  let scheduled = 0;
+  const scheduler = (delayMs, onTimeout) => {
+    scheduled++;
+    return scheduleVpnVerificationTimeout(delayMs, onTimeout);
+  };
+  const h = connectionHarness('background', 'android', {
+    scheduleVpnVerificationTimeout: scheduler,
+    connectVpn: async () => { connects++; return { state: 'connected', verified: false }; },
+    getVpnStatus: async options => {
+      if (!options?.fresh) return { state: 'disconnected' };
+      if (connects === 1) return new Promise(() => {});
+      return { state: 'connected', verified: true, latestHandshakeEpochMillis: Date.now() };
+    },
+    waitForVerifiedVpnConnection: (initial, read, options) => {
+      assert.equal(options.scheduleTimeout, scheduler, 'The production flow must supply its native clock');
+      return waitForVerifiedVpnConnection(initial, read, { ...options, timeoutMs: 25, pollMs: 1 });
+    },
+  });
+  await h.connect();
+  assert.equal(connects, 2);
+  assert.equal(h.state.resolutions, 2);
+  assert.equal(h.state.published, 1);
+  assert.equal(h.state.cleanupCalls, 0);
+  assert.ok(scheduled >= 2);
+});
 
 for (const cancel of [false, true]) {
   test(`a policy arriving during the first native attempt preserves relay recovery; cancel=${cancel}`, async () => {
@@ -167,6 +202,7 @@ for (const cancel of [false, true]) {
         return { state: 'connected' };
       },
       connectAttemptTimeoutMs: 100,
+      scheduleVpnVerificationTimeout,
       waitForVerifiedVpnConnection: async value => value,
       submitClientDiagnostics: async (_token, report) => { reports.push(report); }, withLastSuccessfulEndpoint: value => value,
     };

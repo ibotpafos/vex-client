@@ -57,6 +57,11 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
   )
   private val wireGuardKeyStore = WireGuardKeyStore(reactContext)
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+  private val verificationHandler = Handler(Looper.getMainLooper())
+  private val verificationTimers = VpnVerificationTimers(
+    { task, delayMs -> verificationHandler.postDelayed(task, delayMs) },
+    { task -> verificationHandler.removeCallbacks(task) },
+  )
   private var pendingPermissionPromise: Promise? = null
   private var listenerCount = 0
   private var statusEmitterJob: Job? = null
@@ -351,6 +356,18 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
   }
 
   @ReactMethod
+  fun scheduleVerificationTimer(id: String, delayMs: Double, promise: Promise) {
+    if (!verificationTimers.schedule(id, delayMs) { expired -> promise.resolve(expired) }) {
+      promise.reject("VPN_VERIFICATION_TIMER_FAILED", "VPN verification timer is unavailable.")
+    }
+  }
+
+  @ReactMethod
+  fun cancelVerificationTimer(id: String) {
+    verificationTimers.cancel(id)
+  }
+
+  @ReactMethod
   fun status(promise: Promise) {
     scope.launch {
       try {
@@ -562,6 +579,7 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
   }
 
   override fun invalidate() {
+    verificationTimers.clear()
     pendingPermissionPromise?.reject("MODULE_INVALIDATED", "VexVpn module was invalidated.")
     pendingPermissionPromise = null
     stopStatusEmitter()

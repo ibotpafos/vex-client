@@ -121,3 +121,26 @@ require a separate backward-compatible backend/storage/reader change.
 The native status also needs a transport-generation signal to invalidate
 cache across every Wi-Fi/mobile handoff; state/handshake coverage is not a
 claim that this complete lifecycle matrix has passed.
+
+## Android background connection verification
+
+React Native 0.86.3 pauses UI-frame timers in `JavaTimerManager.onHostPause`.
+An explicit connection can still be awaiting a handshake when another app
+becomes foreground. Android therefore supplies bounded Handler timers for
+verification polling and deadlines. Each timer has an owned ID; cancellation
+and module teardown remove its callback and resolve the pending native promise.
+Late callbacks cannot complete a replacement timer with the same ID. Existing
+binaries without both timer methods keep the JS scheduling path.
+
+`tsx --test tests/connect-verification-deadline.test.mjs` executes the real
+adapter and verification loop with unavailable UI-frame timers. It checks
+polling, hung status/poll deadlines, cancellation and legacy ABI fallback.
+`node --test tests/session-vpn-operation-race.test.cjs` also verifies that the
+actual connect flow uses this clock and advances to a fresh same-location
+profile after a deadline. `VpnVerificationTimersTest` covers native expiry,
+teardown, ID reuse, registration failure and resource bounds.
+
+Candidate 1.0.89 still requires a signed Android build and real-device cold
+connect acceptance with the app backgrounded before verification finishes,
+including selected-app routing and Wi-Fi recovery. These isolated tests do
+not establish the cause of every observed packet timeout or authorize release.

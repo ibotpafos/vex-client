@@ -25,6 +25,7 @@ import {
   connectVpn,
   disconnectVpn,
   getVpnStatus,
+  scheduleVpnVerificationTimeout,
   type VpnStatus,
 } from '@/native/vexVpn';
 import { waitForVerifiedVpnConnection } from '@/vpn/connectVerification';
@@ -167,6 +168,7 @@ export function useVpnConnectionFlow({
         const interfaceUpMs = Date.now();
         requireCurrentOperation();
         const status = await waitForVerifiedVpnConnection(startedStatus, () => getVpnStatus({ fresh: true }), {
+          scheduleTimeout: scheduleVpnVerificationTimeout,
           assertCurrent: requireCurrentOperation,
           transport: attempt.transport ?? 'amneziawg',
           expectedConnectionId: startedStatus.connectionId,

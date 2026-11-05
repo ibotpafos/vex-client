@@ -1777,6 +1777,7 @@ export function useVpnConnection() {
     antiLeakEnabled,
     routingMode,
     transport,
+    areVpnPreferencesHydrated,
     supportsVless: supportsNativeVless(),
     handleTransportChange,
     refreshVpnPreferences,

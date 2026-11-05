@@ -39,6 +39,7 @@ export default function App() {
     selectedLocation,
     selectedLatencyText,
     transport,
+    areVpnPreferencesHydrated,
     powerButtonDisabled,
     handlePowerPress,
     handleRotateKeyPress,
@@ -97,7 +98,7 @@ export default function App() {
           )}
           latencyText={selectedLatencyText}
           location={selectedLocation}
-          protocolLabel={Platform.OS === 'android' ? (transport === 'vless' ? 'VLESS' : 'AWG') : undefined}
+          protocolLabel={Platform.OS === 'android' && areVpnPreferencesHydrated ? (transport === 'vless' ? 'VLESS' : 'AWG') : undefined}
           onLocationPress={openServerPicker}
           onPowerPress={handlePowerPress}
           onSettingsPress={() => {

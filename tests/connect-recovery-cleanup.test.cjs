@@ -59,6 +59,7 @@ async function run(scenario) {
   let nativeState = scenario.admission ? 'connected' : 'disconnected';
   let nativeCalls = 0;
   let resolveCalls = 0;
+  let recoveryDepth = 0;
   const disconnects = [];
   const apiError = (status) => Object.assign(new Error(`fixture API ${status}`), { status });
   const profile = (locationId) => ({ locationId, config: 'fixture', hotProfileUsed: true, device: { id: 'fixture-device' } });
@@ -72,6 +73,8 @@ async function run(scenario) {
     profileResolutionOrder: (id) => [{ id }, ...['selected', 'alternate'].filter((v) => v !== id).map((v) => ({ id: v }))],
     explicitConnectProfileResolutionOptions: {},
     resolveConnectableVpnProfile: async (locationId, options = {}) => {
+      assert.equal(recoveryDepth, options.forceRefresh && options.requestPermission === false ? 1 : 0,
+        'only automatic fresh-profile recovery owns the underlying API transport');
       resolveCalls++;
       if (scenario.initialStatus) throw apiError(scenario.initialStatus);
       if (locationId === 'selected' && options.forceRefresh && scenario.freshStatus) throw apiError(scenario.freshStatus);
@@ -94,6 +97,10 @@ async function run(scenario) {
       throw new Error('VPN handshake failed');
     },
     connectFreshSameLocationProfile, cleanupFailedVpnConnection,
+    withProfileRecoveryTransport: async (operation) => {
+      recoveryDepth++;
+      try { return await operation(); } finally { recoveryDepth--; }
+    },
     isVpnTransportFallbackError: fallback.isVpnTransportFallbackError,
     antiLeakEnabled: scenario.antiLeakEnabled !== false,
     disconnectVpn: async (options) => {
@@ -116,6 +123,7 @@ async function run(scenario) {
   vm.runInNewContext(compiled, context);
   let error;
   try { await vm.runInNewContext('connect()', context); } catch (caught) { error = caught; }
+  assert.equal(recoveryDepth, 0, 'every success/error path releases its recovery scope');
   return { name: scenario.name, nativeCalls, resolveCalls, disconnects, nativeState, error: error?.message ?? null };
 }
 (async () => {

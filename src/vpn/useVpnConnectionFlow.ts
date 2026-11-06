@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react';
+import { withProfileRecoveryTransport } from '@/api/client';
 import { Platform } from 'react-native';
 
 import {
@@ -246,12 +247,17 @@ export function useVpnConnectionFlow({
     const resolveCurrentProfile: typeof resolveConnectableVpnProfile = async (location, options = {}) => {
       requireCurrentOperation();
       try {
-        return await resolveConnectableVpnProfile(location, {
+        const resolve = () => resolveConnectableVpnProfile(location, {
           ...options,
           // Only an explicit manual connect may obtain/reclaim Android's VPN
           // grant. Automatic retries retain this prohibition for every route.
           requestPermission: requestPermission && options.requestPermission !== false,
         });
+        // Smart routing captures this app too. A failed tunnel must not carry
+        // the API request that repairs it; keep other app UIDs protected.
+        return options.forceRefresh && options.requestPermission === false
+          ? await withProfileRecoveryTransport(resolve)
+          : await resolve();
       } finally {
         requireCurrentOperation();
       }

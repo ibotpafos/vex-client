@@ -1,4 +1,4 @@
-import { Platform } from 'react-native';
+import { NativeModules, Platform } from 'react-native';
 import { getAppInfo, getOrCreateDeviceId } from '@/native/appInfo';
 import { androidExperimentalRoutingEnabled, androidProfilePlatform } from '@/vpn/androidRoutingSafety';
 import { ApiRequestError, isMaintenanceStatus, normalizeApiRequestError } from './error';
@@ -23,6 +23,64 @@ const shouldLogApiRequests = typeof __DEV__ !== 'undefined' && __DEV__;
 export const vexApiBaseUrl = trimTrailingSlash(process.env.EXPO_PUBLIC_VEX_API_BASE_URL || 'https://vexguard.app');
 const apiRequestBaseUrl = vexApiBaseUrl;
 
+let profileRecoveryDepth = 0;
+let recoveryRequestSequence = 0;
+type RecoveryReply = { status: number; statusText: string; body: string; headers: Record<string, string> };
+type RecoveryModule = {
+  requestApiRecovery(id: string, url: string, method: string, headers: Record<string, string>, body: string | null, deadline: number): Promise<RecoveryReply>;
+  cancelApiRecovery(id: string): void;
+};
+type ApiResponse = Pick<Response, 'ok' | 'status' | 'statusText' | 'text'> & { headers: Pick<Headers, 'get'> };
+
+/** Retain VPN capture while a failed connection obtains a fresh first-party profile. */
+export async function withProfileRecoveryTransport<T>(operation: () => Promise<T>): Promise<T> {
+  profileRecoveryDepth++;
+  try { return await operation(); }
+  finally { profileRecoveryDepth--; }
+}
+
+function recoveryModule(url: string): RecoveryModule | undefined {
+  if (Platform.OS !== 'android' || typeof NativeModules === 'undefined') return undefined;
+  const module = NativeModules?.VexVpn as RecoveryModule | undefined;
+  if (typeof module?.requestApiRecovery !== 'function' || typeof module.cancelApiRecovery !== 'function') return undefined;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:' || !['vexguard.app', 'www.vexguard.app', 'api.vexguard.app'].includes(parsed.hostname)
+      || (parsed.port !== '' && parsed.port !== '443') || parsed.username || parsed.password || parsed.hash
+      || !parsed.pathname.startsWith('/v1/') || decodeURIComponent(parsed.pathname).split('/').some(part => part === '.' || part === '..')) return undefined;
+    return module;
+  } catch { return undefined; }
+}
+
+function recoveryRequest(module: RecoveryModule, url: string, method: string, headers: Record<string, string>,
+  body: string | null, signal: AbortSignal, deadline: number): Promise<ApiResponse> {
+  requireRequestTime(signal, deadline);
+  const id = `api-${Date.now()}-${++recoveryRequestSequence}`;
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      try { module.cancelApiRecovery(id); } catch { /* Cancellation must still settle the caller. */ }
+      reject(new ApiRequestError('Превышено время ожидания API.', { code: 'request_timeout' }));
+    };
+    signal.addEventListener('abort', abort, { once: true });
+    if (signal.aborted) { abort(); signal.removeEventListener('abort', abort); return; }
+    Promise.resolve().then(() => {
+      requireRequestTime(signal, deadline);
+      return module.requestApiRecovery(id, url, method, headers, body, Math.min(deadline, Date.now() + 120_000));
+    }).then(reply => {
+      requireRequestTime(signal, deadline);
+      if (!Number.isInteger(reply?.status) || reply.status < 100 || reply.status > 599 || typeof reply.body !== 'string'
+        || !reply.headers || typeof reply.headers !== 'object' || Array.isArray(reply.headers)
+        || !Object.values(reply.headers).every(value => typeof value === 'string')) throw new TypeError('Invalid recovery API response');
+      resolve({
+        ok: reply.status >= 200 && reply.status < 300, status: reply.status, statusText: reply.statusText ?? '',
+        text: async () => reply.body,
+        headers: { get: name => Object.entries(reply.headers).find(([key]) => key.toLowerCase() === name.toLowerCase())?.[1] ?? null },
+      });
+    }).catch(error => reject(signal.aborted ? new ApiRequestError('Превышено время ожидания API.', { code: 'request_timeout' }) : error))
+      .finally(() => signal.removeEventListener('abort', abort));
+  });
+}
+
 export async function jsonRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
   return JSON.parse(await rawRequest(path, options)) as T;
 }
@@ -31,6 +89,8 @@ export async function rawRequest(path: string, options: RequestOptions = {}): Pr
   const controller = new AbortController();
   const timeoutMs = options.timeout ?? requestTimeoutMs;
   const deadline = Date.now() + timeoutMs;
+  // Capture once; a concurrent recovery ending must not move an in-flight retry.
+  const useRecoveryTransport = profileRecoveryDepth > 0;
   let timeout: ReturnType<typeof setTimeout>;
   const expired = new Promise<never>((_, reject) => {
     timeout = setTimeout(() => {
@@ -39,7 +99,7 @@ export async function rawRequest(path: string, options: RequestOptions = {}): Pr
     }, timeoutMs);
   });
   try {
-    return await Promise.race([requestWithinDeadline(path, options, controller.signal, deadline), expired]);
+    return await Promise.race([requestWithinDeadline(path, options, controller.signal, deadline, useRecoveryTransport), expired]);
   } catch (error) {
     throw normalizeApiRequestError(error);
   } finally {
@@ -53,7 +113,7 @@ function requireRequestTime(signal: AbortSignal, deadline: number): void {
   }
 }
 
-async function requestWithinDeadline(path: string, options: RequestOptions, signal: AbortSignal, deadline: number): Promise<string> {
+async function requestWithinDeadline(path: string, options: RequestOptions, signal: AbortSignal, deadline: number, useRecoveryTransport = false): Promise<string> {
   const method = options.method ?? 'GET';
   const maxAttempts = method === 'GET' ? Math.max(0, Math.min(getRequestRetryCount, options.retryCount ?? getRequestRetryCount)) + 1 : 1;
   let lastError: unknown;
@@ -61,7 +121,7 @@ async function requestWithinDeadline(path: string, options: RequestOptions, sign
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       requireRequestTime(signal, deadline);
-      return await rawRequestAttempt(path, options, method, signal, deadline);
+      return await rawRequestAttempt(path, options, method, signal, deadline, useRecoveryTransport);
     } catch (error) {
       lastError = error;
       if (signal.aborted || Date.now() >= deadline || attempt >= maxAttempts || !isRetryableRequestError(error)) {
@@ -81,7 +141,7 @@ async function requestWithinDeadline(path: string, options: RequestOptions, sign
   throw normalizeApiRequestError(lastError);
 }
 
-async function rawRequestAttempt(path: string, options: RequestOptions, method: string, signal: AbortSignal, deadline: number): Promise<string> {
+async function rawRequestAttempt(path: string, options: RequestOptions, method: string, signal: AbortSignal, deadline: number, useRecoveryTransport = false): Promise<string> {
   const headers: Record<string, string> = {
     Accept: 'application/json',
   };
@@ -117,7 +177,11 @@ async function rawRequestAttempt(path: string, options: RequestOptions, method: 
       logApiDebug(`API Request: [${init.method || 'GET'}] ${apiRequestBaseUrl}${path}`);
     }
     
-    response = await fetch(`${apiRequestBaseUrl}${path}`, { ...init, signal });
+    const url = `${apiRequestBaseUrl}${path}`;
+    const native = useRecoveryTransport ? recoveryModule(url) : undefined;
+    response = native
+      ? await recoveryRequest(native, url, method, headers, typeof init.body === 'string' ? init.body : null, signal, deadline)
+      : await fetch(url, { ...init, signal });
     requireRequestTime(signal, deadline);
     
     if (shouldLogApiRequests && !options.suppressErrorLog) {

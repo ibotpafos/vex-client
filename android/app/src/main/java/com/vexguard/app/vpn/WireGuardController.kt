@@ -425,6 +425,16 @@ class WireGuardController(context: Context) {
     networkRecoveryRequests.trySend(previous to selected)
   }
 
+  /** A fresh, non-VPN network for first-party recovery HTTP; no routing mutation. */
+  fun apiRecoveryNetwork(): Network? = connectivityManager.allNetworks
+    .mapNotNull { network -> connectivityManager.getNetworkCapabilities(network)?.let { network to it } }
+    .filter { (_, capabilities) ->
+      capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+        capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) &&
+        !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+    }
+    .maxByOrNull { (_, capabilities) -> underlyingNetworkPreference(capabilities) }?.first
+
   private fun selectedUnderlyingNetworkSnapshot(): Network? = synchronized(availableUnderlyingNetworks) {
     selectedUnderlyingNetwork ?: connectivityManager.allNetworks
       .mapNotNull { network ->

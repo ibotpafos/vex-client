@@ -200,6 +200,15 @@ class WireGuardController(context: Context) {
                 Log.e(TAG, "Initial VPN socket bind to $network failed; retaining fail-closed TUN", error)
               }
             }
+            if (admittedRouting != null) {
+              // Android replaces the old TUN, but a same-package blocker service
+              // can retain its descriptor/active flag. Retire it only after the
+              // routed backend owns capture; failures retain fail-closed recovery.
+              completeRoutedVpnHandover(
+                hasRoutingCapture = { backend.hasRoutingCapture() },
+                stopBlocker = { VexLeakBlockerService.stopAndAwait(appContext) },
+              )
+            }
             val traffic = statsOrEmpty()
             if (admittedRouting != null) {
               runCatching { backend.getRoutingAuthorization()?.takeIf { it.isNotEmpty() }?.let { routingPolicyStore.saveAuthorization(it) } }

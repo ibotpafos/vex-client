@@ -53,8 +53,13 @@ class InstallScriptTests(unittest.TestCase):
         cls.template = cls.root / "template.app"
         binary = cls.template / "Contents/MacOS/VEXNativeMac"
         binary.parent.mkdir(parents=True)
-        shutil.copyfile("/usr/bin/true", binary)
-        binary.chmod(0o755)
+        # New macOS system binaries can contain arm64e subtypes that lipo and
+        # codesign name differently. Build known universal fixture slices so the
+        # real signature checks remain independent of the host's /usr/bin/true.
+        fixture_source = cls.root / "fixture.c"
+        fixture_source.write_text("int main(void) { return 0; }\n")
+        subprocess.run(["/usr/bin/xcrun", "clang", "-arch", "arm64", "-arch", "x86_64",
+                        str(fixture_source), "-o", str(binary)], check=True, capture_output=True)
         cls.info = {"CFBundleIdentifier": "app.vex.vpn.native", "CFBundleExecutable": "VEXNativeMac",
                     "CFBundlePackageType": "APPL", "CFBundleShortVersionString": "0.1.90", "CFBundleVersion": "120"}
         (cls.template / "Contents/Info.plist").write_bytes(plistlib.dumps(cls.info))

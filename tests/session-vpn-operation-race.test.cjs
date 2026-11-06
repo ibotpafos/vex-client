@@ -129,6 +129,7 @@ function connectionHarness(stage, platform = 'android', overrides = {}) {
       return wait(state.resolutions > 1 ? 'fresh-profile' : 'profile', profile);
     },
     isProfileResolutionFallbackError: () => false, resolveProfileOrSkipMissing: resolve => resolve(), connectFreshSameLocationProfile,
+    withProfileRecoveryTransport: operation => operation(),
     cleanupFailedVpnConnection, disconnectVpn: async () => { state.cleanupCalls++; state.nativeOwner = null; },
     setSelectedVpnLocation: location => wait('persist', location), setSelectedLocationId: () => {},
     cacheProfile: () => { state.cached++; }, setActiveProfile: () => { state.published++; }, setVpnStatus: () => {},

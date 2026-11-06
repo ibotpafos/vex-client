@@ -17,6 +17,7 @@ function load(file, dependencies = {}, globals = {}) {
   return exports;
 }
 function raw(file, symbol, bindings) {
+  if (file === 'src/vpn/useVpnConnectionFlow.ts') bindings = { withProfileRecoveryTransport: operation => operation(), ...bindings };
   const source = ts.transpileModule(fs.readFileSync(path.join(root, file), 'utf8'), {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
   }).outputText.replace(/^import[\s\S]*?from ['"][^'"]+['"];\s*/gm, '').replace(/\bexport /g, '');

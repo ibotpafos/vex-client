@@ -4,6 +4,22 @@ import { appRemoteConfig } from '@/api/vexApi';
 import { useSession } from '@/auth/session-context';
 import { getAppInfo } from '@/native/appInfo';
 import { createRemoteConfigStore } from './remote-config-store';
+import { createIndependentStatusStore, readIndependentServiceStatus } from './independent-service-status';
+import { projectServiceNotice } from './service-notice-state';
+
+// This anonymous observer is deliberately shared across accounts and screens.
+const independentStore = createIndependentStatusStore(() => readIndependentServiceStatus(), {
+  foreground(callback) {
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') callback();
+    });
+    return () => subscription.remove();
+  },
+  schedule(callback, delay) {
+    const timer = setTimeout(() => { if (AppState.currentState === 'active') callback(); }, delay);
+    return () => clearTimeout(timer);
+  },
+});
 
 type Store = ReturnType<typeof createRemoteConfigStore>;
 let current: { token: string | undefined; revision: number; store: Store } | undefined;
@@ -31,7 +47,7 @@ function getStore(token: string | undefined, revision: number): Store {
       return () => subscription.remove();
     },
     schedule(callback, delay) {
-      const timer = setTimeout(callback, delay);
+      const timer = setTimeout(() => { if (AppState.currentState === 'active') callback(); }, delay);
       return () => clearTimeout(timer);
     },
   });
@@ -44,5 +60,7 @@ export function useServiceNotice() {
   const token = session?.accessToken;
   // Session-scoped stores keep an old account response out of a new session.
   const store = useMemo(() => getStore(token, sessionRevision), [token, sessionRevision]);
-  return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+  const api = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+  const external = useSyncExternalStore(independentStore.subscribe, independentStore.getSnapshot, independentStore.getSnapshot);
+  return useMemo(() => ({ ...api, notice: projectServiceNotice(api, external) }), [api, external]);
 }

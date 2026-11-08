@@ -1,4 +1,5 @@
 import type { AppRemoteConfig } from '../api/types';
+import { serviceStatusRefreshMs, withServiceStatusDeadline } from './independent-service-status';
 
 export type RemoteConfigSnapshot = { config: AppRemoteConfig | null; unavailable: boolean };
 
@@ -19,7 +20,7 @@ export function createRemoteConfigStore(
   const refresh = () => {
     if (pending) return pending;
     stopTimer?.();
-    pending = Promise.resolve().then(load).then((config) => {
+    pending = withServiceStatusDeadline(() => load()).then((config) => {
       // An available incident read without a banner confirms its removal.
       if (
         !config || typeof config.platform !== 'string' ||
@@ -41,7 +42,7 @@ export function createRemoteConfigStore(
     }).finally(() => {
       pending = null;
       listeners.forEach((listener) => listener());
-      if (listeners.size) stopTimer = lifecycle.schedule(() => { void refresh(); }, 60_000);
+      if (listeners.size) stopTimer = lifecycle.schedule(() => { void refresh(); }, serviceStatusRefreshMs);
     });
     return pending;
   };
@@ -50,13 +51,14 @@ export function createRemoteConfigStore(
     getSnapshot: () => snapshot,
     refresh,
     subscribe(listener: () => void) {
-      listeners.add(listener);
+      const subscription = () => listener();
+      listeners.add(subscription);
       if (listeners.size === 1) {
         stopForeground = lifecycle.foreground(() => { void refresh(); });
         void refresh();
       }
       return () => {
-        listeners.delete(listener);
+        listeners.delete(subscription);
         if (!listeners.size) {
           stopTimer?.();
           stopForeground?.();

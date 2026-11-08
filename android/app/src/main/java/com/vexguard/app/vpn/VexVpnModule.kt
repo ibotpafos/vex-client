@@ -50,6 +50,7 @@ import java.security.MessageDigest
 class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext), LifecycleEventListener {
   private val controller = WireGuardController(reactContext)
   private val apiRecoveryTransport = ApiRecoveryTransport { controller.apiRecoveryNetwork() }
+  private val apiMutationTransport = ApiRecoveryTransport(mutationsOnly = true)
   private val vlessController = VlessVpnController(reactContext)
   private val engineOperations = Mutex()
   private val awgIntentPrefs = reactContext.getSharedPreferences("vex_awg_intent", android.content.Context.MODE_PRIVATE)
@@ -98,6 +99,13 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
 
   override fun getName(): String = "VexVpn"
 
+  override fun getConstants(): MutableMap<String, Any> =
+    (super.getConstants() ?: emptyMap()).toMutableMap().apply {
+      this["apiRecoveryHosts"] = ApiRecoveryPolicy.recoveryHosts()
+      this["apiMutationNoReplay"] = true
+      this["apiRecoveryPreservesHttpErrors"] = true
+    }
+
   @ReactMethod
   fun requestApiRecovery(id: String, url: String, method: String, headers: ReadableMap,
                          body: String?, deadlineEpochMillis: Double, promise: Promise) {
@@ -106,6 +114,15 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
 
   @ReactMethod
   fun cancelApiRecovery(id: String) { apiRecoveryTransport.cancel(id) }
+
+  @ReactMethod
+  fun requestApiMutation(id: String, url: String, method: String, headers: ReadableMap,
+                         body: String?, deadlineEpochMillis: Double, promise: Promise) {
+    apiMutationTransport.request(id, url, method, headers, body, deadlineEpochMillis, promise)
+  }
+
+  @ReactMethod
+  fun cancelApiMutation(id: String) { apiMutationTransport.cancel(id) }
 
   @ReactMethod
   fun networkObservation(promise: Promise) {
@@ -593,6 +610,7 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
 
   override fun invalidate() {
     apiRecoveryTransport.close()
+    apiMutationTransport.close()
     verificationTimers.clear()
     pendingPermissionPromise?.reject("MODULE_INVALIDATED", "VexVpn module was invalidated.")
     pendingPermissionPromise = null

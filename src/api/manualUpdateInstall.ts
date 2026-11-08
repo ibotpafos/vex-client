@@ -1,8 +1,7 @@
 import type { AndroidUpdateDownload, AndroidUpdateInstallResult } from '@/native/vexVpn';
 import { validateManualUpdatePayloadForBaseUrl } from './updatePreflight';
 import type { AppUpdateCheckResult } from './types';
-
-const defaultTrustedUpdateBaseUrl = process.env.EXPO_PUBLIC_VEX_API_BASE_URL || 'https://vexguard.app';
+import { trustedUpdateBaseUrl as defaultTrustedUpdateBaseUrl } from './origins';
 
 export type ManualUpdateInstallPlatform = 'android' | 'ios';
 

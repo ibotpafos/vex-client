@@ -1,5 +1,6 @@
 import { VEX_API_CLIENT_VERSION, VEX_CONFIG_SCHEMA_VERSION } from '@/native/appInfo';
-import { jsonRequest, vexApiBaseUrl, absolutizeUrl } from './client';
+import { trustedUpdateBaseUrl } from './origins';
+import { jsonRequest, absolutizeUrl } from './client';
 import { normalizeUpdateCheckVersion, validateManualUpdatePayloadForBaseUrl } from './updatePreflight';
 import {
   type AppUpdateCheckResult,
@@ -108,5 +109,5 @@ export function validateManualUpdatePayload(input: {
   checksumSha256?: string | null;
   signatureUrl?: string | null;
 }): ManualUpdatePreflightResult {
-  return validateManualUpdatePayloadForBaseUrl(input, vexApiBaseUrl);
+  return validateManualUpdatePayloadForBaseUrl(input, trustedUpdateBaseUrl);
 }

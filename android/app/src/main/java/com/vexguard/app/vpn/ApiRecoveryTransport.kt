@@ -7,24 +7,26 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReadableMap
 import com.facebook.react.bridge.ReadableType
 import com.facebook.react.modules.network.OkHttpClientProvider
-import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.net.InetAddress
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.ConnectionPool
 import okhttp3.Dns
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 
-/** First-party profile recovery only; never changes process or VPN routing. */
-internal class ApiRecoveryTransport(private val selectNetwork: () -> Network?) {
+/** Separate instances keep default-route mutations distinct from bound recovery. */
+internal class ApiRecoveryTransport(
+  private val mutationsOnly: Boolean = false,
+  private val selectNetwork: (() -> Network?)? = null,
+) {
   private class Pending {
     val cancelled = AtomicBoolean(false)
     @Volatile var call: Call? = null
@@ -33,6 +35,7 @@ internal class ApiRecoveryTransport(private val selectNetwork: () -> Network?) {
 
   private val closed = AtomicBoolean(false)
   private val pending = ConcurrentHashMap<String, Pending>()
+  private val errorCode get() = if (mutationsOnly) "API_MUTATION_FAILED" else "API_RECOVERY_FAILED"
 
   fun cancel(id: String) { pending[id]?.cancel() }
 
@@ -44,6 +47,7 @@ internal class ApiRecoveryTransport(private val selectNetwork: () -> Network?) {
   fun request(id: String, url: String, method: String, headers: ReadableMap,
               body: String?, deadlineEpochMillis: Double, promise: Promise) {
     val slot = Pending()
+    val httpError = AtomicReference<ApiHttpReply?>()
     var pool: ConnectionPool? = null
     try {
       require(ApiRecoveryPolicy.acceptsRequestId(id) && ApiRecoveryPolicy.acceptsUrl(url))
@@ -51,9 +55,10 @@ internal class ApiRecoveryTransport(private val selectNetwork: () -> Network?) {
       require(deadlineEpochMillis - System.currentTimeMillis() in 1.0..120_000.0)
       val verb = method.uppercase(Locale.US)
       require(verb in setOf("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"))
-      require(body == null || body.length <= ApiRecoveryPolicy.MAX_BYTES)
+      require(!mutationsOnly || ApiRecoveryPolicy.acceptsMutationMethod(verb))
+      require(body == null || ApiRecoveryPolicy.acceptsBodySize(body.length, mutationsOnly))
       val bytes = body?.toByteArray(Charsets.UTF_8)
-      require(bytes == null || bytes.size <= ApiRecoveryPolicy.MAX_BYTES)
+      require(bytes == null || ApiRecoveryPolicy.acceptsBodySize(bytes.size, mutationsOnly))
       require(verb !in setOf("GET", "HEAD") || body == null)
       val builder = Request.Builder().url(url)
       val names = headers.keySetIterator()
@@ -70,69 +75,67 @@ internal class ApiRecoveryTransport(private val selectNetwork: () -> Network?) {
         builder.header(name, value)
         if (name.equals("content-type", true)) contentType = value
       }
-      val requestBody = if (bytes != null || verb in setOf("POST", "PUT", "PATCH"))
-        (bytes ?: ByteArray(0)).toRequestBody(contentType?.toMediaTypeOrNull()) else null
+      val requestBody = ApiHttpSafety.requestBody(verb, bytes, contentType?.toMediaTypeOrNull())
       val request = builder.method(verb, requestBody).build()
       synchronized(pending) {
         require(!closed.get() && pending.size < ApiRecoveryPolicy.MAX_CALLS && !pending.containsKey(id))
         pending[id] = slot
       }
-      val network = selectNetwork() ?: error("No underlying network")
       val timeoutMs = deadlineEpochMillis.toLong() - System.currentTimeMillis()
       require(timeoutMs in 1L..120_000L)
-      // A private pool cannot reuse a connection made through the failed VPN.
-      // Preserve the application's TLS validation, pinning and cookie policy.
+      val ensureActive = {
+        if (slot.cancelled.get() || closed.get() || slot.call?.isCanceled() == true || System.currentTimeMillis() >= deadlineEpochMillis) {
+          throw IOException("API request cancelled or expired")
+        }
+      }
+      // Private pools never reuse sockets across routing classes or requests.
       val ownedPool = ConnectionPool(0, 1, TimeUnit.SECONDS)
       pool = ownedPool
-      val client = OkHttpClientProvider.getOkHttpClient().newBuilder()
-        .socketFactory(network.socketFactory)
-        .dns(object : Dns {
-          override fun lookup(hostname: String): List<InetAddress> = network.getAllByName(hostname).toList()
-        })
-        .connectionPool(ownedPool)
-        .cache(null)
-        .callTimeout(timeoutMs.toLong(), TimeUnit.MILLISECONDS)
-        .connectTimeout(timeoutMs.toLong(), TimeUnit.MILLISECONDS)
-        .readTimeout(timeoutMs.toLong(), TimeUnit.MILLISECONDS)
-        .writeTimeout(timeoutMs.toLong(), TimeUnit.MILLISECONDS)
-        // Recovery must not forward credentials to another origin or downgrade TLS.
-        .followRedirects(false).followSslRedirects(false)
-        .build()
+      val clientBuilder = ApiHttpSafety.clientBuilder(OkHttpClientProvider.getOkHttpClient(), ownedPool, timeoutMs, ensureActive) {
+        httpError.set(it)
+      }
+      if (mutationsOnly) {
+        // Ordinary mutations follow the OS's default route, including captured
+        // VPN routing. Never select/protect/bind an underlying network here.
+        check(selectNetwork == null)
+      } else {
+        val network = selectNetwork?.invoke() ?: error("No underlying network")
+        clientBuilder.socketFactory(network.socketFactory)
+          .dns(object : Dns {
+            override fun lookup(hostname: String): List<InetAddress> = network.getAllByName(hostname).toList()
+          })
+      }
+      val client = clientBuilder.build()
       val call = client.newCall(request)
       slot.call = call
       if (slot.cancelled.get() || closed.get()) call.cancel()
       call.enqueue(object : Callback {
         override fun onFailure(call: Call, error: IOException) {
-          finish(id, slot, ownedPool)
-          promise.reject("API_RECOVERY_FAILED", "Network request failed")
+          try {
+            val knownHttp = if (error is ApiHttpError) error.reply else httpError.get()
+            if (knownHttp != null) {
+              // Header arrival is irreversible evidence even when cancellation
+              // or a body deadline replaces OkHttp's failure. JS still rejects
+              // its own expired/aborted attempt before consuming this reply.
+              resolve(promise, knownHttp)
+            } else {
+              ensureActive()
+              promise.reject(errorCode, "Network request failed")
+            }
+          } catch (_: Exception) {
+            promise.reject(errorCode, "Network request failed")
+          } finally {
+            finish(id, slot, ownedPool)
+          }
         }
 
         override fun onResponse(call: Call, response: Response) {
           try {
-            response.use {
-              val output = ByteArrayOutputStream()
-              it.body?.byteStream()?.use { input ->
-                val buffer = ByteArray(8192)
-                while (true) {
-                  val read = input.read(buffer)
-                  if (read < 0) break
-                  require(output.size() + read <= ApiRecoveryPolicy.MAX_BYTES)
-                  output.write(buffer, 0, read)
-                }
-              }
-              check(!slot.cancelled.get() && !closed.get() && !call.isCanceled() && System.currentTimeMillis() < deadlineEpochMillis)
-              val result = Arguments.createMap()
-              result.putInt("status", it.code)
-              result.putString("statusText", it.message)
-              result.putString("body", output.toString("UTF-8"))
-              val replyHeaders = Arguments.createMap()
-              it.headers.toMultimap().forEach { (name, values) -> replyHeaders.putString(name, values.joinToString(", ")) }
-              result.putMap("headers", replyHeaders)
-              Log.i("VexApiRecovery", "First-party recovery request completed")
-              promise.resolve(result)
-            }
+            val reply = ApiHttpSafety.readReply(response, ensureActive)
+            ensureActive()
+            resolve(promise, reply)
           } catch (_: Exception) {
-            promise.reject("API_RECOVERY_FAILED", "Network request failed")
+            promise.reject(errorCode, "Network request failed")
           } finally {
             finish(id, slot, ownedPool)
           }
@@ -141,8 +144,20 @@ internal class ApiRecoveryTransport(private val selectNetwork: () -> Network?) {
     } catch (_: Exception) {
       pending.remove(id, slot)
       pool?.evictAll()
-      promise.reject("API_RECOVERY_FAILED", "Network request failed")
+      promise.reject(errorCode, "Network request failed")
     }
+  }
+
+  private fun resolve(promise: Promise, reply: ApiHttpReply) {
+    val result = Arguments.createMap()
+    result.putInt("status", reply.status)
+    result.putString("statusText", reply.statusText)
+    result.putString("body", reply.body)
+    val headers = Arguments.createMap()
+    reply.headers.forEach { (name, value) -> headers.putString(name, value) }
+    result.putMap("headers", headers)
+    Log.i("VexApiRecovery", "First-party API request completed")
+    promise.resolve(result)
   }
 
   private fun finish(id: String, slot: Pending, pool: ConnectionPool) {

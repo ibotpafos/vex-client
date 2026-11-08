@@ -3,13 +3,14 @@ import assert from 'node:assert/strict';
 import { stripTypeScriptTypes } from 'node:module';
 import test from 'node:test';
 
-const source = stripTypeScriptTypes(fs.readFileSync('src/api/client.ts', 'utf8'))
+const origins = stripTypeScriptTypes(fs.readFileSync('src/api/origins.ts', 'utf8')).replace(/\bexport /g, '');
+const source = origins + `const process = {env: {EXPO_PUBLIC_VEX_API_BASE_URL: 'http://localhost:3011'}};` + stripTypeScriptTypes(fs.readFileSync('src/api/client.ts', 'utf8'))
   .replace(/^import .*;$/gm, '').replace(/^export \{.*;$/gm, '').replace(/\bexport /g, '');
 const errors = stripTypeScriptTypes(fs.readFileSync('src/api/error.ts', 'utf8')).replace(/\bexport /g, '');
 const settle = async () => { for (let i=0; i<30; i++) await Promise.resolve(); };
 function client(fetch, appInfo = async () => ({})) {
-  return new Function('fetch', 'getAppInfo', 'getOrCreateDeviceId', 'Platform', 'androidExperimentalRoutingEnabled', 'androidProfilePlatform', errors + source + '; return rawRequest;')(
-    fetch, appInfo, async () => 'fixture', {OS:'android'}, () => false, () => 'android');
+  return new Function('expoFetch', 'fetch', 'getAppInfo', 'getOrCreateDeviceId', 'Platform', 'androidExperimentalRoutingEnabled', 'androidProfilePlatform', errors + source + '; return rawRequest;')(
+    fetch, fetch, appInfo, async () => 'fixture', {OS:'web'}, () => false, () => 'android');
 }
 
 test('a stalled GET has one total deadline rather than three full timeouts', async t => {

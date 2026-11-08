@@ -20,6 +20,7 @@ function load(file, dependencies) {
 test('update API sends enrollment identity as a header option, never in JSON', async () => {
   const requests = [];
   const api = load('src/api/updates.ts', {
+    './origins': { trustedUpdateBaseUrl: 'https://vexguard.app' },
     '@/native/appInfo': { VEX_API_CLIENT_VERSION: 'fixture-api', VEX_CONFIG_SCHEMA_VERSION: 1 },
     './updatePreflight': { normalizeUpdateCheckVersion: x => x },
     './client': { jsonRequest: async (url, options) => { requests.push({ url, options }); return { channel: 'beta' }; }, absolutizeUrl: x => x },

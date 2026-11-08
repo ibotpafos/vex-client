@@ -20,7 +20,8 @@
         "EXPO_PUBLIC_VEX_UPDATE_CHANNEL": "development",
         "VEX_BUILD_PROFILE": "development",
         "VEX_DEBUG_APPLICATION_ID_SUFFIX": ".debug",
-        "VEX_UPDATES_ENABLED": "0"
+        "VEX_UPDATES_ENABLED": "0",
+        "EXPO_PUBLIC_VEX_API_ORIGIN": "https://api.vexguard.app"
       },
       "ios": {
         "simulator": false
@@ -40,7 +41,8 @@
         "EXPO_PUBLIC_VEX_RELEASE_CHANNEL": "local",
         "EXPO_PUBLIC_VEX_UPDATE_CHANNEL": "local",
         "VEX_BUILD_PROFILE": "local",
-        "VEX_UPDATES_ENABLED": "0"
+        "VEX_UPDATES_ENABLED": "0",
+        "EXPO_PUBLIC_VEX_API_ORIGIN": "https://api.vexguard.app"
       }
     },
     "preview": {
@@ -58,7 +60,8 @@
         "EXPO_PUBLIC_VEX_RELEASE_CHANNEL": "preview",
         "EXPO_PUBLIC_VEX_UPDATE_CHANNEL": "preview",
         "VEX_BUILD_PROFILE": "preview",
-        "VEX_UPDATES_ENABLED": "1"
+        "VEX_UPDATES_ENABLED": "1",
+        "EXPO_PUBLIC_VEX_API_ORIGIN": "https://api.vexguard.app"
       },
       "ios": {
         "simulator": false
@@ -79,7 +82,8 @@
         "EXPO_PUBLIC_VEX_RELEASE_CHANNEL": "production",
         "EXPO_PUBLIC_VEX_UPDATE_CHANNEL": "production",
         "VEX_BUILD_PROFILE": "production",
-        "VEX_UPDATES_ENABLED": "1"
+        "VEX_UPDATES_ENABLED": "1",
+        "EXPO_PUBLIC_VEX_API_ORIGIN": "https://api.vexguard.app"
       }
     }
   },

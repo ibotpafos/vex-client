@@ -1,3 +1,4 @@
+import { productionApiOrigins, trustedUpdateBaseUrl } from './origins';
 export type ManualUpdatePreflightResult = {
   ok: boolean;
   error?: string;
@@ -265,8 +266,9 @@ function signatureStatusLabel(
 function isTrustedUpdateUrl(value: string, trustedBaseUrl: string): boolean {
   try {
     const candidate = new URL(value);
-    const trustedBase = new URL(trustedBaseUrl);
-    return candidate.protocol === 'https:' && candidate.host === trustedBase.host;
+    const trustedBase = new URL(productionApiOrigins.includes(trustedBaseUrl as typeof productionApiOrigins[number]) ? trustedUpdateBaseUrl : trustedBaseUrl);
+    return candidate.protocol === 'https:' && candidate.origin === trustedBase.origin
+      && !candidate.username && !candidate.password && !candidate.hash;
   } catch {
     return false;
   }

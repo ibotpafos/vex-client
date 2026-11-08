@@ -21,6 +21,9 @@ for (const error of [
   ...[400, 401, 403, 404, 409, 422].map(status => new ApiRequestError('rejected', { status })),
   new ApiRequestError('offline', { code: 'network_unavailable' }),
   new ApiRequestError('deadline', { code: 'request_timeout' }),
+  new ApiRequestError('legacy recovery status unavailable', { code: 'recovery_status_ambiguous' }),
+  new ApiRequestError('native update required', { code: 'native_transport_update_required' }),
+  new ApiRequestError('native local proxy unsupported', { code: 'native_mutation_origin_unsupported' }),
   ...[502, 503, 504].map(status => new ApiRequestError('maintenance', { status })),
 ]) {
   test(`query never restarts rejected API work: ${error.status ?? error.code}, retryAfter=${error.retryAfterMs}`, async () => {
@@ -75,11 +78,12 @@ for (const retries of [1, 2]) {
 
 // Exercise the real HTTP layer together with TanStack Query: a Retry-After
 // longer than the request deadline must remain a single fetch end to end.
-const source = stripTypeScriptTypes(fs.readFileSync('src/api/client.ts', 'utf8'))
+const origins = stripTypeScriptTypes(fs.readFileSync('src/api/origins.ts', 'utf8')).replace(/\bexport /g, '');
+const source = origins + `const process = {env: {EXPO_PUBLIC_VEX_API_BASE_URL: 'http://localhost:3011'}};` + stripTypeScriptTypes(fs.readFileSync('src/api/client.ts', 'utf8'))
   .replace(/^import .*;$/gm, '').replace(/^export \{.*;$/gm, '').replace(/\bexport /g, '');
 function rawClient(fetch) {
-  return new Function('fetch', 'ApiRequestError', 'isMaintenanceStatus', 'normalizeApiRequestError', 'getAppInfo', 'getOrCreateDeviceId', 'Platform', 'androidExperimentalRoutingEnabled', 'androidProfilePlatform', source + '; return rawRequest;')(
-    fetch, ApiRequestError, isMaintenanceStatus, normalizeApiRequestError, async () => ({}), async () => 'fixture', { OS: 'android' }, () => false, () => 'android',
+  return new Function('expoFetch', 'fetch', 'ApiRequestError', 'isMaintenanceStatus', 'normalizeApiRequestError', 'getAppInfo', 'getOrCreateDeviceId', 'Platform', 'androidExperimentalRoutingEnabled', 'androidProfilePlatform', source + '; return rawRequest;')(
+    fetch, fetch, ApiRequestError, isMaintenanceStatus, normalizeApiRequestError, async () => ({}), async () => 'fixture', { OS: 'web' }, () => false, () => 'android',
   );
 }
 

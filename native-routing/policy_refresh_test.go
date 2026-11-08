@@ -17,7 +17,41 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"golang.org/x/net/dns/dnsmessage"
 )
+
+func TestProtectedPolicySourceKeepsCanonicalBootstrap(t *testing.T) {
+	queries, dials := 0, 0
+	dns := func(_ context.Context, wire []byte) ([]byte, error) {
+		queries++
+		var message dnsmessage.Message
+		if err := message.Unpack(wire); err != nil {
+			return nil, err
+		}
+		if len(message.Questions) != 1 || message.Questions[0].Name.String() != "vexguard.app." {
+			t.Fatalf("control allowlist changed policy bootstrap: %v", message.Questions)
+		}
+		message.Response = true
+		if message.Questions[0].Type == dnsmessage.TypeA {
+			message.Answers = []dnsmessage.Resource{{Header: dnsmessage.ResourceHeader{Name: message.Questions[0].Name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: 60}, Body: &dnsmessage.AResource{A: [4]byte{104, 16, 10, 10}}}}
+		}
+		return message.Pack()
+	}
+	dial := func(_ context.Context, protocol, address string) (net.Conn, error) {
+		dials++
+		if protocol != "tcp" || address != "104.16.10.10:443" {
+			t.Errorf("policy refresh escaped qualified HTTPS: %s %s", protocol, address)
+		}
+		return nil, errors.New("isolated policy dial failure")
+	}
+	if _, err := ProtectedPolicySource(dns, dial, "android")(context.Background()); err == nil {
+		t.Fatal("refresh ignored qualified dial failure")
+	}
+	if queries != 2 || dials != 1 {
+		t.Fatalf("unexpected bootstrap attempts: DNS=%d dial=%d", queries, dials)
+	}
+}
 
 // Isolated distribution fixture, restored after each test. These tests are
 // deliberately not parallel: production always uses the embedded public ring.

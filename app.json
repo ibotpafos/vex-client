@@ -100,7 +100,8 @@
         "appVariant": "production",
         "billingFailedUrl": "https://vexguard.app/v1/billing/mobile-return?status=failed",
         "billingReturnUrl": "https://vexguard.app/v1/billing/mobile-return?status=success",
-        "updateChannel": "production"
+        "updateChannel": "production",
+        "apiOrigin": "https://api.vexguard.app"
       },
       "router": {},
       "eas": {

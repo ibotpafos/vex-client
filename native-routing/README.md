@@ -18,8 +18,13 @@ other DNS and TCP/UDP use AWG, with no physical fallback. Application DoH/ECH
 cannot supply a new hostname exception; unrecognized destinations follow the
 signed IP policy. Unknown/stale FakeIP addresses are rejected.
 
-The only built-in control exception is TCP/443 for `vexguard.app` and
-`www.vexguard.app` through the same per-host identity. The fixed recovery origin
+The only built-in control exception is TCP/443 for the exact hosts
+`vexguard.app`, `www.vexguard.app`, `api.vexguard.app` and `api2.vexguard.app`
+through the same per-host identity, including missing/expired policy or stopped
+AWG transport. This does not grant subdomains or shared CDN IPs DIRECT access.
+Before VPN capture starts, these API hosts use ordinary system connectivity;
+the exception preserves HTTPS access while native capture is active.
+The independent fixed recovery origin remains `https://vexguard.app` and
 serves public signed policy data at `/v1/vpn/routing-policy/public?platform=...`;
 it supplies no account/device/profile keys or VPN access. The engine refreshes
 independently of the UI, normally every six hours, retrying failures every five
@@ -55,7 +60,7 @@ Run `go test -race -timeout 45s ./...` here. Packet fixtures use in-memory TUN,
 virtual peers and fake physical sockets; they do not change a running VPN, OS
 routes, DNS or firewall. They cover TCP, UDP/QUIC, IPv6, shared-CDN identity,
 control-port confinement, unavailable AWG, retained capture and invalid signing
-scope, cache replay floors, memory reclamation and clock-driven expiry (11 tests).
+scope, cache replay floors, memory reclamation and clock-driven expiry.
 The pure Foundation checks in `scripts/test_ios_routing_suspend.sh` and fake
 macOS helper checks in `scripts/test_awg31_macos_admission.sh` exercise protected
 stop/failure paths without accessing the system VPN. Windows Core checks accept

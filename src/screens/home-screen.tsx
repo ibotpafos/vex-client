@@ -1,3 +1,4 @@
+import { ServiceNotice } from "@/components/service-notice";
 import { StatusBar } from 'expo-status-bar';
 import { router, useFocusEffect } from 'expo-router';
 import React, { useState } from 'react';
@@ -112,6 +113,7 @@ export default function App() {
           {vpnStatus.state === 'connected' && Platform.OS === 'android' ? (
             <Text testID="home-active-protocol" style={styles.vpnNoticeText}>Подключено: {vpnStatus.transport === 'vless' ? 'VLESS' : 'AmneziaWG'}</Text>
           ) : null}
+          <ServiceNotice />
           <MobileUpdateNoticeBanner onOpen={openUpdateCenter} />
           {trafficQuota && shouldShowHomeTrafficQuota(trafficQuota) ? <TrafficQuotaSummary quota={trafficQuota} /> : null}
           {Platform.OS === 'android' ? <SubscriptionRenewalCard entitlement={entitlementState} /> : null}

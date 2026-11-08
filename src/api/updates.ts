@@ -100,6 +100,7 @@ export async function appRemoteConfig(input: {
     featureFlags: item.featureFlags ?? {},
     accountFeatureFlags: item.accountFeatureFlags ?? {},
     incidentBanner: item.incidentBanner || undefined,
+    incidentBannerUnavailable: item.incidentBannerUnavailable,
   };
 }
 

@@ -1,3 +1,4 @@
+import { ServiceNotice } from "@/components/service-notice";
 import { Host, Switch as ExpoSwitch } from "@expo/ui";
 import { router, useFocusEffect } from "expo-router";
 import {
@@ -150,12 +151,7 @@ export default function SettingsScreen() {
         showsVerticalScrollIndicator={false}
         style={styles.scroll}
       >
-        {remoteConfig?.incidentBanner ? (
-          <View style={styles.noticePanel}>
-            <Text style={styles.noticeTitle}>Статус сервиса</Text>
-            <Text style={styles.noticeText}>{remoteConfig.incidentBanner}</Text>
-          </View>
-        ) : null}
+        <ServiceNotice />
 
         <VexSection title="Подключение">
           <VexPressable
@@ -617,24 +613,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     minHeight: 56,
-  },
-  noticePanel: {
-    backgroundColor: "rgba(34,211,238,0.08)",
-    borderColor: "rgba(34,211,238,0.22)",
-    borderRadius: 12,
-    borderWidth: 1,
-    padding: 10,
-  },
-  noticeTitle: {
-    color: vexColors.textSoft,
-    fontSize: 14,
-    fontWeight: "900",
-  },
-  noticeText: {
-    color: vexColors.muted,
-    fontSize: 13,
-    lineHeight: 18,
-    marginTop: 6,
   },
   accountSummaryCard: {
     borderBottomColor: "rgba(159, 218, 223, 0.14)",

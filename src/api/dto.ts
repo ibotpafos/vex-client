@@ -334,5 +334,6 @@ export type AppRemoteConfigResponseDTO = {
   featureFlags?: Record<string, boolean>;
   accountFeatureFlags?: Record<string, boolean>;
   incidentBanner?: string;
+  incidentBannerUnavailable?: boolean;
   checkedAt: string;
 };

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Platform } from 'react-native';
 import { router } from 'expo-router';
-import { appRemoteConfig, type AppRemoteConfig } from '@/api/vexApi';
+import { useServiceNotice } from '@/status/use-service-notice';
 import { useSession } from '@/auth/session-context';
 import { getAppInfo, type AppInfo } from '@/native/appInfo';
 import { playErrorHaptic, playLightImpactHaptic, playSelectionHaptic, playSuccessHaptic, playWarningHaptic } from '@/native/haptics';
@@ -10,8 +10,7 @@ import { getAndroidAutoConnectEnabled, getAntiLeakEnabled, getServerSelectionMod
 import { useToast, type ToastOptions } from '@/ui/toast';
 
 export function useVexSettings(showToastOverride?: (options: ToastOptions) => void) {
-  const { signOut, session, sessionRevision, isCurrentSessionOperation } = useSession();
-  const accessToken = session?.accessToken;
+  const { signOut } = useSession();
   const { showToast: showGlobalToast } = useToast();
   const showToast = showToastOverride ?? showGlobalToast;
   const [isSigningOut, setIsSigningOut] = useState(false);
@@ -22,8 +21,7 @@ export function useVexSettings(showToastOverride?: (options: ToastOptions) => vo
   const [isAutoServerSelectionEnabled, setIsAutoServerSelectionEnabled] = useState(true);
   const [isSavingServerSelection, setIsSavingServerSelection] = useState(false);
   const [appInfo, setAppInfo] = useState<AppInfo>({ name: 'VEX', version: 'dev', build: '0', platform: 'web', channel: 'stable', coreVersion: '0.1.0', configSchemaVersion: 1, apiClientVersion: 'expo-1', otaRuntimeVersion: null, otaLaunch: 'unknown' });
-  const [remoteSnapshot, setRemoteSnapshot] = useState<{ revision: number; value: AppRemoteConfig } | null>(null);
-  const remoteConfig = remoteSnapshot?.revision === sessionRevision ? remoteSnapshot.value : null;
+  const { config: remoteConfig } = useServiceNotice();
 
   useEffect(() => {
     let mounted = true;
@@ -33,25 +31,6 @@ export function useVexSettings(showToastOverride?: (options: ToastOptions) => vo
           setAppInfo(info);
         }
         return info;
-      })
-      .then(async (info) => {
-        if (!mounted) {
-          return;
-        }
-        const config = await appRemoteConfig({
-          accessToken,
-          platform: info.platform,
-          appVersion: info.version,
-          buildNumber: Number.parseInt(info.build || '0', 10) || 0,
-          channel: info.channel,
-          coreVersion: info.coreVersion,
-          osVersion: `${info.platform} ${String(Platform.Version ?? '')}`,
-          apiClientVersion: info.apiClientVersion,
-          configSchemaVersion: info.configSchemaVersion,
-        });
-        if (mounted && (!accessToken || isCurrentSessionOperation())) {
-          setRemoteSnapshot({ revision: sessionRevision, value: config });
-        }
       })
       .catch(() => undefined);
     const loadAutomationPreference = Platform.OS === 'android'
@@ -81,7 +60,7 @@ export function useVexSettings(showToastOverride?: (options: ToastOptions) => vo
     return () => {
       mounted = false;
     };
-  }, [accessToken, sessionRevision, isCurrentSessionOperation]);
+  }, []);
 
   const handleSignOut = useCallback(async () => {
     if (isSigningOut) {

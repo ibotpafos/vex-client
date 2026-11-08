@@ -66,6 +66,7 @@ export type AppRemoteConfig = {
   featureFlags: Record<string, boolean>;
   accountFeatureFlags?: Record<string, boolean>;
   incidentBanner?: string;
+  incidentBannerUnavailable?: boolean;
 };
 
 export type User = {

@@ -36,7 +36,7 @@ network restoration.
 
 Android/Apple SDK patches are additive to pinned AWG 3.1 sources. The shared Go
 module uses the existing MIT AWG NetTUN and Apache-2.0 gVisor implementation.
-Routing builds use Go 1.26.10 and `golang.org/x/net` v0.60.0, including the
+Routing builds use Go 1.26.11 and `golang.org/x/net` v0.60.0, including the
 malformed DNS response, HTTP/2 and `GO-2026-6809` certificate validation security
 fixes. Android retains the upstream
 boottime runtime patch and verifies the bundled compiler archive SHA-256.

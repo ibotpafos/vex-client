@@ -39,11 +39,11 @@ for (const checksum of [
 assert.ok(androidLocalGoPatch.includes('goruntime-boottime-over-monotonic.diff'));
 
 const routingToolchainPatch = read('patches/amnezia/amneziawg-android-routing-go126-toolchain.patch');
-assert.ok(routingToolchainPatch.includes('+GO_VERSION := 1.26.10'));
+assert.ok(routingToolchainPatch.includes('+GO_VERSION := 1.26.11'));
 for (const checksum of [
-  'e820ab780c273ae4a340b79d0f3c4313b74ee029aa3874792145d44b9f4f91da',
-  '0b5183492292ada170f9b561a834863808dd02edba599e4ad0e89899330020b3',
-  'ccfe7ae822d2c2f41f4fe7c956199967a4dac22d0ee0d2b2bfdb440aab3b20c5',
+  '394baae971332f2bc783d6e2004ae57101479bd3b06ed8209a3fe3570d4ce498',
+  'e3a42e67a7a8acf450ebada2b074c7ca863000ca514907b7185b45e8f5cdff57',
+  '9849f4e04ee35303714e34fbc3ac8ab44ea3e448a95aa182f91e3b9b79c710ec',
 ]) assert.ok(routingToolchainPatch.includes(checksum));
 
 // Execute only the actual local migration fragment on tiny isolated Makefiles.
@@ -55,6 +55,7 @@ const snapshot = (patch, side) => patch.split('\n')
 const baseMakefile = snapshot(routingToolchainPatch, '-');
 const currentMakefile = snapshot(routingToolchainPatch, '+');
 const previousMakefile = snapshot(securityUpdate, '-');
+const legacyMakefile = snapshot(read('patches/amnezia/amneziawg-android-routing-go126-toolchain-legacy.patch'), '+');
 const migrationFragment = android.slice(android.indexOf('toolchain_patch='), android.indexOf('build_patch='));
 assert.ok(migrationFragment.includes('toolchain_security_update='));
 const fixture = mkdtempSync(join(tmpdir(), 'vex-toolchain-migration-'));
@@ -63,7 +64,7 @@ try {
   const makefile = join(checkout, 'tunnel/tools/libwg-go/Makefile');
   mkdirSync(dirname(makefile), { recursive: true });
   const prefix = '# unrelated upstream context\n'.repeat(20);
-  for (const initial of [baseMakefile, previousMakefile, currentMakefile]) {
+  for (const initial of [baseMakefile, previousMakefile, legacyMakefile, currentMakefile]) {
     writeFileSync(makefile, prefix + initial);
     for (let pass = 0; pass < 2; pass++) {
       const result = spawnSync('bash', ['-euc', migrationFragment + '\ngit -C "$external_dir/amneziawg-android" apply "$toolchain_patch"'], {

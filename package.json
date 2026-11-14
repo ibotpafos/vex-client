@@ -130,10 +130,12 @@
     "@expo/fingerprint": "0.20.13",
     "@expo/metro": "56.0.2",
     "@xmldom/xmldom": "0.9.12",
-    "decode-uri-component": "0.5.0",
+    "decode-uri-component": "0.5.1",
     "file-type": "^21.3.2",
     "joi": "^17.13.4",
-    "tar": "^7.5.22"
+    "tar": "^7.5.22",
+    "glob": "^14.0.6",
+    "minimatch": "^11.0.8"
   },
   "expo": {
     "autolinking": {

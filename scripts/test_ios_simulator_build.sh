@@ -18,7 +18,7 @@ done
   echo "Install the locked JavaScript dependencies with npm ci first." >&2
   exit 1
 }
-[[ "$(go env GOVERSION)" == go1.26.10 ]] || { echo "Use the pinned Go 1.26.10 toolchain." >&2; exit 1; }
+[[ "$(go env GOVERSION)" == go1.26.11 ]] || { echo "Use the pinned Go 1.26.11 toolchain." >&2; exit 1; }
 simulator_sdk="$(xcrun --sdk iphonesimulator --show-sdk-path)"
 clang_binary="$(xcrun --sdk iphonesimulator --find clang)"
 fixture_dir="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/vex-ios-app.XXXXXX")"

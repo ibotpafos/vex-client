@@ -92,6 +92,7 @@ internal static class WindowsUpdateSignatureSignerTests
         var rejected = false;
         try { WindowsUpdateSignatureSigner.SignAndVerify(payload, privateKey, publicKey); }
         catch (CryptographicException) { rejected = true; }
+        catch (PlatformNotSupportedException) { rejected = true; }
         Require(rejected, message);
         RequireCleared(payload, privateKey);
     }

@@ -1,5 +1,6 @@
 import React from 'react';
-import Svg, { Defs, LinearGradient, Path, Stop } from 'react-native-svg';
+import Svg, { Path } from 'react-native-svg';
+import { vexTheme } from '@/ui/vex-theme';
 
 type CountrySilhouette = {
   rings: number[][][];
@@ -27,22 +28,16 @@ export const CountryIsland = React.memo(function CountryIsland({
 
     return silhouette.rings
       .filter((ring) => ring.length >= 3)
-      .map((ring) => `M ${ring.map(([x, y]) => `${x * 82} ${y * 82}`).join(' L ')} Z`)
+      .map((ring) => `M ${ring.map(([x, y]) => `${x * 80} ${y * 80}`).join(' L ')} Z`)
       .join(' ');
   }, [countryCode]);
 
   if (!path) return null;
 
   return (
-    <Svg height={82} viewBox="0 0 82 82" width={82}>
-      <Defs>
-        <LinearGradient id="countryIsland" x1="0" x2="1" y1="1" y2="0">
-          <Stop offset="0" stopColor="#22D3EE" stopOpacity={0.3} />
-          <Stop offset="1" stopColor="#B9FBFF" />
-        </LinearGradient>
-      </Defs>
-      <Path d={path} fill="url(#countryIsland)" fillOpacity={selected ? 0.085 : 0.048} fillRule="evenodd" />
-      <Path d={path} fill="none" stroke="#B9FBFF" strokeOpacity={selected ? 0.18 : 0.1} strokeWidth={0.6} />
+    <Svg height={80} viewBox="0 0 80 80" width={80}>
+      <Path d={path} fill={vexTheme.colors.textMuted} fillOpacity={selected ? 0.085 : 0.048} fillRule="evenodd" />
+      <Path d={path} fill="none" stroke={vexTheme.colors.textMuted} strokeOpacity={selected ? 0.18 : 0.1} strokeWidth={0.6} />
     </Svg>
   );
 });

@@ -1,3 +1,4 @@
+import { productionApiOrigins, trustedUpdateBaseUrl } from './config';
 export type ManualUpdatePreflightResult = {
   ok: boolean;
   error?: string;
@@ -189,30 +190,30 @@ function updateCenterTitle(reason: string, required: boolean, currentBuildBlocke
 
 function updateCenterMessage(reason: string, required: boolean, currentBuildBlocked: boolean, updateAvailable: boolean, otaAvailable: boolean): string {
   if (currentBuildBlocked || reason === 'blocked_release') {
-    return 'Эта сборка заблокирована. Установите предложенную стабильную версию, чтобы вернуться на поддерживаемый канал.';
+    return 'Сборка заблокирована. Установите стабильную версию.';
   }
   if (reason === 'android_signing_key_migration') {
-    return 'Мы выпустили новую Android-сборку с обновленной подписью. Установите ее как новое приложение, войдите в аккаунт и после проверки доступа удалите старый VEX.';
+    return 'Другая подпись: установите VEX отдельно. Войдите и проверьте доступ, затем удалите старое приложение.';
   }
   if (reason === 'unsupported_config_schema') {
-    return 'Текущий клиент несовместим с новым форматом конфигурации. Обновление обязательно перед выдачей VPN-профиля.';
+    return 'Формат конфигурации устарел. Обновите VEX для получения VPN-профиля.';
   }
   if (reason === 'core_version_unsupported') {
-    return 'Ядро клиента больше не поддерживается текущей серверной политикой.';
+    return 'Ядро VPN больше не поддерживается. Обновите VEX.';
   }
   if (reason === 'api_client_version_unsupported') {
-    return 'API-клиент устарел. Обновление нужно для совместимости с сервером.';
+    return 'API-клиент устарел. Обновите VEX.';
   }
   if (otaAvailable) {
-    return 'Если обновление совместимо с текущим runtime, VEX скачает и применит его через OTA без установки APK.';
+    return 'Если версия совместима, обновим VEX без переустановки.';
   }
   if (required) {
-    return 'Эта версия больше не поддерживается. Установите новую сборку, чтобы продолжить пользоваться сервисом.';
+    return 'Версия не поддерживается. Обновите VEX.';
   }
   if (updateAvailable) {
-    return 'Новая версия прошла проверку метаданных и готова к установке.';
+    return 'Обновление проверено и готово к установке.';
   }
-  return 'Установленная версия совместима с текущим серверным контрактом.';
+  return 'Версия совместима с сервером.';
 }
 
 function compatibilityCopy(
@@ -265,8 +266,9 @@ function signatureStatusLabel(
 function isTrustedUpdateUrl(value: string, trustedBaseUrl: string): boolean {
   try {
     const candidate = new URL(value);
-    const trustedBase = new URL(trustedBaseUrl);
-    return candidate.protocol === 'https:' && candidate.host === trustedBase.host;
+    const trustedBase = new URL(productionApiOrigins.includes(trustedBaseUrl as typeof productionApiOrigins[number]) ? trustedUpdateBaseUrl : trustedBaseUrl);
+    return candidate.protocol === 'https:' && candidate.origin === trustedBase.origin
+      && !candidate.username && !candidate.password && !candidate.hash;
   } catch {
     return false;
   }

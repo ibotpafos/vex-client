@@ -33,3 +33,14 @@ for (const status of [399, 600, 503.1, NaN]) {
   expectSamples(diagnosticFailureSamples(new ApiRequestError('private', { status })), { diagnostic_error_class: 'unknown' }, 'invalid HTTP status');
 }
 expectSamples(diagnosticFailureSamples({ status: 503, message: 'private', code: 'request_timeout' }), { diagnostic_error_class: 'unknown' }, 'untyped error object');
+
+const invalidResponse = new ApiRequestError('synthetic-private-material', { code: 'api_response_invalid' });
+for (const error of [invalidResponse, normalizeApiRequestError(invalidResponse)]) {
+  const samples = diagnosticFailureSamples(error);
+  expectSamples(samples, { diagnostic_error_class: 'response_parse' }, 'classified successful JSON parse failure');
+  check(!JSON.stringify(samples).includes('synthetic-private-material'), 'parse failure leaked private diagnostics');
+}
+expectSamples(diagnosticFailureSamples(new ApiRequestError('private', { status: 502, code: 'api_response_invalid' })),
+  { diagnostic_error_class: 'http', diagnostic_http_status: 502 }, 'existing explicit HTTP status takes precedence');
+expectSamples(diagnosticFailureSamples({ code: 'api_response_invalid', message: 'private' }),
+  { diagnostic_error_class: 'unknown' }, 'untyped code cannot forge diagnostics');

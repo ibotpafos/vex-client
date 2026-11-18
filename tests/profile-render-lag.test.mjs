@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { runProfileRequest, ProfileRequestSupersededError } from '../src/vpn/profileRequestQueue.ts';
+import loader from './vpn-module-loader.cjs';
+const { runProfileRequest, ProfileRequestSupersededError } = loader.loadModule('src/vpn/profileRequestQueue.ts');
 const root=process.argv[2]||'src/vpn';
 const connection=fs.readFileSync(path.join(root,'useVpnConnection.ts'),'utf8');
 const profile=fs.readFileSync(path.join(root,'useVpnProfileState.ts'),'utf8');

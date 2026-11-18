@@ -59,9 +59,5 @@ function isActiveMobileProtocolDevice(device: NativeVpnDevice): boolean {
 }
 
 function nativeDeviceLocationId(deviceId: string, locationId: string): string {
-  return `${deviceId.trim()}:${normalizeLocationId(locationId)}`;
-}
-
-function normalizeLocationId(locationId?: string): string {
-  return comparableVpnLocationId(locationId);
+  return `${deviceId.trim()}:${comparableVpnLocationId(locationId)}`;
 }

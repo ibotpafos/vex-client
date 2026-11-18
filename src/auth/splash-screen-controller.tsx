@@ -11,10 +11,7 @@ export function SplashScreenController() {
     if (isLoading) {
       return;
     }
-    const timer = setTimeout(() => {
-      void SplashScreen.hideAsync();
-    }, 120);
-    return () => clearTimeout(timer);
+    void SplashScreen.hideAsync();
   }, [isLoading]);
 
   return null;

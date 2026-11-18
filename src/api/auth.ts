@@ -4,6 +4,7 @@ import {
   type User,
 } from './types';
 import {
+  type AppAuthTokenRequest,
   type AuthResultDTO,
   type EmailOTPChallengeDTO,
   type UserDTO,
@@ -50,7 +51,7 @@ export async function exchangeGoogleIDToken(idToken: string): Promise<AuthSessio
   if (!idToken.trim()) throw new Error('Google не вернул подтверждение входа.');
   return parseAuth(await jsonRequest<AuthResultDTO>('/v1/auth/oauth/google', {
     method: 'POST',
-    body: { id_token: idToken, remember_me: true, trial_code: 'incy' },
+      body: { id_token: idToken, remember_me: true },
     suppressErrorLog: true,
   }));
 }
@@ -61,12 +62,12 @@ export async function exchangeAppAuthCode(code: string, codeVerifier: string): P
     body: {
       code,
       code_verifier: codeVerifier,
-    },
+    } satisfies AppAuthTokenRequest,
   }));
 }
 
-export async function me(accessToken: string): Promise<User> {
-  const user = await jsonRequest<UserDTO>('/v1/auth/me', { accessToken });
+export async function me(accessToken: string, signal?: AbortSignal): Promise<User> {
+  const user = await jsonRequest<UserDTO>('/v1/auth/me', { accessToken, ...(signal ? { signal } : {}) });
   return parseUser(user);
 }
 

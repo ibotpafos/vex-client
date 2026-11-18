@@ -50,6 +50,7 @@ import java.security.MessageDigest
 class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext), LifecycleEventListener {
   private val controller = WireGuardController(reactContext)
   private val apiRecoveryTransport = ApiRecoveryTransport { controller.apiRecoveryNetwork() }
+  private val apiMutationTransport = ApiRecoveryTransport(mutationsOnly = true)
   private val vlessController = VlessVpnController(reactContext)
   private val engineOperations = Mutex()
   private val awgIntentPrefs = reactContext.getSharedPreferences("vex_awg_intent", android.content.Context.MODE_PRIVATE)
@@ -98,6 +99,13 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
 
   override fun getName(): String = "VexVpn"
 
+  override fun getConstants(): MutableMap<String, Any> =
+    (super.getConstants() ?: emptyMap()).toMutableMap().apply {
+      this["apiRecoveryHosts"] = ApiRecoveryPolicy.recoveryHosts()
+      this["apiMutationNoReplay"] = true
+      this["apiRecoveryPreservesHttpErrors"] = true
+    }
+
   @ReactMethod
   fun requestApiRecovery(id: String, url: String, method: String, headers: ReadableMap,
                          body: String?, deadlineEpochMillis: Double, promise: Promise) {
@@ -106,6 +114,15 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
 
   @ReactMethod
   fun cancelApiRecovery(id: String) { apiRecoveryTransport.cancel(id) }
+
+  @ReactMethod
+  fun requestApiMutation(id: String, url: String, method: String, headers: ReadableMap,
+                         body: String?, deadlineEpochMillis: Double, promise: Promise) {
+    apiMutationTransport.request(id, url, method, headers, body, deadlineEpochMillis, promise)
+  }
+
+  @ReactMethod
+  fun cancelApiMutation(id: String) { apiMutationTransport.cancel(id) }
 
   @ReactMethod
   fun networkObservation(promise: Promise) {
@@ -433,13 +450,24 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
   }
 
   @ReactMethod
+  fun generateWireGuardKeyMaterial(promise: Promise) {
+    scope.launch {
+      try {
+        promise.resolve(wireGuardKeyStore.generateAccountKeyPair().toWritableMap())
+      } catch (error: Throwable) {
+        rejectVpnError(promise, "VPN_KEYPAIR_GENERATE_FAILED", "WireGuard keypair generation failed.", error)
+      }
+    }
+  }
+
+  @ReactMethod
   fun replaceWireGuardKeyPair(privateKey: String, publicKey: String, keyEpoch: Double, promise: Promise) {
     try {
       wireGuardKeyStore.replaceKeyPair(
         StoredWireGuardKeyPair(
           privateKey = privateKey.trim(),
           publicKey = publicKey.trim(),
-          keyEpoch = keyEpoch.toInt(),
+          keyEpoch = VpnIdentityNumbers.legacyKeyEpoch(keyEpoch),
         ),
       )
       promise.resolve(true)
@@ -480,6 +508,9 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
         event.putString("source", "android-native")
         event.putString("event", "vpn_status_snapshot")
         event.putMap("status", currentVpnStatus())
+        val identity = Arguments.createMap()
+        controller.peerIdentity().forEach { (key, value) -> identity.putString(key, value) }
+        event.putMap("activePeerIdentity", identity)
         val events = Arguments.createArray()
         events.pushMap(event)
         promise.resolve(events)
@@ -593,6 +624,7 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
 
   override fun invalidate() {
     apiRecoveryTransport.close()
+    apiMutationTransport.close()
     verificationTimers.clear()
     pendingPermissionPromise?.reject("MODULE_INVALIDATED", "VexVpn module was invalidated.")
     pendingPermissionPromise = null
@@ -708,6 +740,7 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
 
   private fun VpnConnectionState.toWritableMap(): WritableMap {
     val map = Arguments.createMap()
+    map.putBoolean("dataPlaneVerified", false)
     when (this) {
       is VpnConnectionState.Connected -> {
         val hasTunnelActivity = VpnHandshakeVerifier.isVerified(traffic.latestHandshakeEpochMillis)
@@ -716,9 +749,13 @@ class VexVpnModule(private val reactContext: ReactApplicationContext) : ReactCon
         map.putDouble("txBytes", traffic.txBytes.toDouble())
         map.putDouble("latestHandshakeEpochMillis", traffic.latestHandshakeEpochMillis.toDouble())
         map.putString("leakProtection", this.leakProtection.wireValue)
-        map.putBoolean("verified", hasTunnelActivity)
+        map.putBoolean("dataPlaneVerified", dataPlaneVerified)
+        map.putString("dataPlaneGeneration", dataPlaneGeneration)
+        map.putBoolean("verified", hasTunnelActivity && dataPlaneVerified)
         if (!hasTunnelActivity) {
           map.putString("verificationReason", "handshake_pending")
+        } else if (!dataPlaneVerified) {
+          map.putString("verificationReason", verificationReason ?: "data_plane_pending")
         }
       }
       VpnConnectionState.Disconnected -> {

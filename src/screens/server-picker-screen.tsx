@@ -1,10 +1,11 @@
+import React from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { useLocalSearchParams } from 'expo-router';
 
 import { ServerPickerContent } from '@/components/server-picker-modal';
 import { useVpnConnectionContext } from '@/vpn/vpn-connection-context';
 
-export default function ServerPickerScreen() {
+export const ServerPickerScreen = React.memo(function ServerPickerScreen() {
   const params = useLocalSearchParams<{ activeLatencyText?: string; activeLocationId?: string }>();
   const {
     availableLocations,
@@ -38,4 +39,4 @@ export default function ServerPickerScreen() {
       />
     </>
   );
-}
+});

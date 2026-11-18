@@ -34,6 +34,8 @@ export type VpnDiagnosticsSnapshot = {
 };
 
 let uploadChain: Promise<void> = Promise.resolve();
+let uploadChainStartedAt = 0;
+const maxUploadChainAgeMs = 5 * 60_000;
 let capturedNetwork: CapturedNetworkObservation | null = null;
 let capturedAccessToken: string | undefined;
 let capturedSessionIsCurrent: (() => boolean) | undefined;
@@ -115,8 +117,12 @@ let cachedNetworkProbe: {
 let inflightNetworkProbe: Promise<Awaited<ReturnType<typeof probeNetworkHealth>>> | null = null;
 
 export function uploadClientDiagnostics(accessToken: string, snapshot: VpnDiagnosticsSnapshot): Promise<void> {
+  if (Date.now() - uploadChainStartedAt > maxUploadChainAgeMs) {
+    uploadChain = Promise.resolve();
+    uploadChainStartedAt = Date.now();
+  }
   uploadChain = uploadChain
-    .catch(() => undefined)
+    .catch((error) => { console.log('diagnostics upload chain error', error); })
     .then(() => uploadClientDiagnosticsNow(accessToken, snapshot));
   return uploadChain;
 }

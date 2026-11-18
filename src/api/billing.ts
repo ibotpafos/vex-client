@@ -1,15 +1,17 @@
 import { jsonRequest } from './client';
+import { hasPaidEntitlement as matchesPaidEntitlement } from './entitlement';
 import { type Entitlement } from './types';
 import { type EntitlementDTO } from './dto';
 
 export function hasPaidEntitlement(item: Entitlement | null | undefined): item is Entitlement {
-  return Boolean(item?.vpnAccess || item?.active);
+  return matchesPaidEntitlement(item);
 }
 
-export async function entitlement(accessToken: string): Promise<Entitlement> {
+export async function entitlement(accessToken: string, signal?: AbortSignal): Promise<Entitlement> {
   const item = await jsonRequest<EntitlementDTO>('/v1/billing/entitlement', {
     accessToken,
     suppressErrorLog: true,
+    ...(signal ? { signal } : {}),
   });
   return parseEntitlement(item);
 }

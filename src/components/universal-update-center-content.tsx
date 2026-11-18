@@ -1,3 +1,4 @@
+import { vexTheme } from "@/ui/vex-theme";
 import { Button, Column, Host, List, ListItem, Text } from "@expo/ui";
 
 export type UniversalUpdateCenterContentProps = {
@@ -32,12 +33,12 @@ export function UniversalUpdateCenterContent({
   values,
 }: UniversalUpdateCenterContentProps) {
   return (
-    <Host colorScheme="dark" style={styles.host} useViewportSizeMeasurement>
+    <Host colorScheme="dark" seedColor={vexTheme.colors.accent} style={styles.host} useViewportSizeMeasurement>
       <Column spacing={8} style={styles.content}>
         <List>
           <ListItem leading="‹" onPress={onClose}>Обновления</ListItem>
         </List>
-        <Text textStyle={styles.eyebrow}>СИСТЕМА</Text>
+        <Text textStyle={styles.eyebrow}>Система</Text>
         <Text textStyle={styles.title}>{statusTitle}</Text>
         <Text textStyle={styles.message}>{statusMessage}</Text>
         <List>
@@ -62,33 +63,31 @@ export function UniversalUpdateCenterContent({
 
 const styles = {
   content: {
-    backgroundColor: "#041315",
+    backgroundColor: vexTheme.colors.background,
     paddingBottom: 20,
     paddingHorizontal: 20,
   },
   eyebrow: {
-    color: "#43D9E7",
+    color: vexTheme.colors.textMuted,
     fontSize: 12,
-    fontWeight: "700" as const,
-    letterSpacing: 1.2,
+    fontWeight: "600" as const,
   },
   footnote: {
-    color: "#A7B9BD",
+    color: vexTheme.colors.textSecondary,
     fontSize: 13,
-    lineHeight: 18,
+    lineHeight: 20,
   },
   host: {
     flex: 1,
   },
   message: {
-    color: "#A7B9BD",
+    color: vexTheme.colors.textSecondary,
     fontSize: 15,
-    lineHeight: 21,
+    lineHeight: 24,
   },
   title: {
-    color: "#F2F8F8",
+    color: vexTheme.colors.text,
     fontSize: 28,
-    fontWeight: "700" as const,
-    letterSpacing: -0.5,
+    fontWeight: "600" as const,
   },
 };

@@ -1,6 +1,8 @@
+import { hasPaidEntitlement, type EntitlementLike } from '../api/entitlement';
 import type { VpnProfile } from './profile';
 import { vpnProfileAddressMatchesDevice } from './profileConsistency';
 import { profileEndpoint } from './connectionFallback';
+import { vpnProfileCacheIsCurrent } from './hotProfileCacheCore';
 
 export const explicitConnectProfileResolutionOptions = {
   forceRefresh: false,
@@ -8,19 +10,20 @@ export const explicitConnectProfileResolutionOptions = {
   validateCachedProfile: true,
 } as const;
 
-type EntitlementLike = {
-  active?: boolean;
-  vpnAccess?: boolean;
-};
-
+// A cached or hot profile is unverified: it may point at an endpoint the server
+// already replaced, so it gets a short first probe and a parallel fresh fetch.
+export function isUnverifiedProfileSource(profile: Pick<VpnProfile, 'source' | 'hotProfileUsed'>): boolean {
+  return profile.source === 'local' || profile.hotProfileUsed === true;
+}
 export function shouldUseLocalProfileBeforeOnline(
   profile: VpnProfile | null | undefined,
   fallbackEntitlement: EntitlementLike | null | undefined,
+  nowMs = Date.now(),
 ): profile is VpnProfile {
-  if (!profile || profile.rotationRequired) {
+  if (!profile || profile.rotationRequired || !vpnProfileCacheIsCurrent(profile, nowMs)) {
     return false;
   }
-  return hasPaidEntitlementLike(profile.entitlement ?? fallbackEntitlement);
+  return hasPaidEntitlement(profile.entitlement ?? fallbackEntitlement);
 }
 
 export function connectableLocalProfile(
@@ -28,6 +31,7 @@ export function connectableLocalProfile(
   locationId: string,
   fallbackEntitlement: EntitlementLike | null | undefined,
   routingMode?: VpnProfile['routingMode'],
+  nowMs = Date.now(),
 ): VpnProfile | null {
   if (profile?.transport === 'vless' && (!profile.expiresAt || Date.parse(profile.expiresAt) <= Date.now() || !Number.isFinite(Date.parse(profile.expiresAt)))) return null;
   if (!profile || profile.locationId !== locationId) {
@@ -41,14 +45,15 @@ export function connectableLocalProfile(
   if (routingMode && profile.routingMode !== routingMode) {
     return null;
   }
-  if (!shouldUseLocalProfileBeforeOnline(profile, fallbackEntitlement)) {
+  if (!shouldUseLocalProfileBeforeOnline(profile, fallbackEntitlement, nowMs)) {
     return null;
   }
-  return { ...profile, source: 'local' };
+  return { ...profile, cacheSavedAtMs: profile.cacheSavedAtMs === undefined ? nowMs : profile.cacheSavedAtMs, source: 'local' };
 }
 
 export function vpnConnectTimingSamples(input: {
   endpointAttempts: string[];
+  firstAttemptMs?: number | null;
   interfaceUpMs: number;
   nativeStartMs: number;
   profile: VpnProfile;
@@ -59,6 +64,9 @@ export function vpnConnectTimingSamples(input: {
   const preparation = input.profile.connectPreparationTiming;
   const stages: Record<string, number> = {};
   if (input.profile.source === 'api' && timing && timing.startedAtMs >= input.tapStartedAt && timing.startedAtMs <= input.nativeStartMs) {
+    if (typeof timing.routingPolicyMs === 'number' && Number.isFinite(timing.routingPolicyMs) && timing.routingPolicyMs >= 0) {
+      stages.profile_routing_policy_ms = timing.routingPolicyMs;
+    }
     for (const [field, value] of Object.entries({
       profile_local_prepare_ms: timing.localPrepareMs,
       profile_device_lookup_ms: timing.deviceLookupMs,
@@ -86,6 +94,7 @@ export function vpnConnectTimingSamples(input: {
   }
   return {
     ...stages,
+    ...(typeof input.firstAttemptMs === 'number' ? { connect_first_attempt_ms: input.firstAttemptMs } : {}),
     connect_profile_source: input.profile.source,
     endpoint_attempts: input.endpointAttempts,
     hot_profile_age_ms: input.profile.hotProfileAgeMs ?? null,
@@ -160,8 +169,4 @@ function endpointPort(endpoint?: string): number | undefined {
   }
   const port = Number(match[1]);
   return Number.isInteger(port) ? port : undefined;
-}
-
-function hasPaidEntitlementLike(item: EntitlementLike | null | undefined): boolean {
-  return Boolean(item?.vpnAccess || item?.active);
 }

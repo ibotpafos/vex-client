@@ -1,0 +1,14 @@
+--- a/tunnel/src/main/java/org/amnezia/awg/GoBackend.java
++++ b/tunnel/src/main/java/org/amnezia/awg/GoBackend.java
+@@ -22,3 +22,4 @@
+     public static native String awgRouterAuthorization(int handle);
++    public static native int awgRouterVerifyDataPlane(int handle);
+ 
+     public static native String awgVersion();
+--- a/tunnel/src/main/java/org/amnezia/awg/backend/GoBackend.java
++++ b/tunnel/src/main/java/org/amnezia/awg/backend/GoBackend.java
+@@ -101,3 +101,4 @@
+     public boolean isRoutingPolicyActive() { return currentTunnelHandle >= 0 && awgRouterPolicyActive(currentTunnelHandle); }
++    public int getRoutingDataPlaneHandle() { return currentTunnelHandle; }
+ 
+     public String getRoutingAuthorization() {

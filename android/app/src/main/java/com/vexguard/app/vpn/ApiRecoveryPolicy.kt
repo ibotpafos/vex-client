@@ -6,8 +6,17 @@ import java.util.Locale
 /** Only first-party API recovery may use a socket outside captured VPN routing. */
 internal object ApiRecoveryPolicy {
   const val MAX_BYTES = 2 * 1024 * 1024
+  const val MAX_MUTATION_BYTES = 6 * 1024 * 1024
   const val MAX_CALLS = 8
-  private val hosts = setOf("vexguard.app", "www.vexguard.app", "api.vexguard.app")
+  private val hosts = setOf("vexguard.app", "www.vexguard.app", "api.vexguard.app", "api2.vexguard.app")
+
+  // Export a snapshot of the actual admission policy for JS/native compatibility.
+  fun recoveryHosts(): List<String> = hosts.toList()
+
+  fun acceptsMutationMethod(method: String): Boolean = method in setOf("POST", "PUT", "PATCH", "DELETE", "OPTIONS")
+
+  fun acceptsBodySize(size: Int, mutation: Boolean): Boolean =
+    size >= 0 && size <= if (mutation) MAX_MUTATION_BYTES else MAX_BYTES
 
   fun acceptsUrl(raw: String): Boolean = runCatching {
     if (raw.length > 4096) return@runCatching false

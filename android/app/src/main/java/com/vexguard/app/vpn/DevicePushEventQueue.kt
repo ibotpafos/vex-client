@@ -14,8 +14,8 @@ object DevicePushEventQueue {
     val eventID = data["event_id"].orEmpty().trim()
     val type = data["type"].orEmpty().trim()
     val rotationID = data["rotation_id"].orEmpty().trim()
-    val profileVersion = data["profile_version"].orEmpty().toIntOrNull() ?: 0
-    if (eventID.isEmpty() || rotationID.isEmpty() || profileVersion <= 0 || (type != "profile_updated" && type != "cutover_ready")) return
+    val profileVersion = VpnIdentityNumbers.profileVersion(data["profile_version"])
+    if (eventID.isEmpty() || rotationID.isEmpty() || profileVersion == null || (type != "profile_updated" && type != "cutover_ready")) return
 
     val events = read(context)
     if ((0 until events.length()).any { events.optJSONObject(it)?.optString("event_id") == eventID }) return

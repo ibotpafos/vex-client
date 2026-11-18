@@ -61,3 +61,6 @@ __pycache__/
 # Metro file map cache is local to each checkout.
 .metro-file-map-cache/
 .metro-cache/
+
+# Local automated test reports.
+.test-results/

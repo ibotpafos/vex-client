@@ -7,18 +7,18 @@ import { normalizePackageNames, type VpnApplicationRoutingMode } from '@/vpn/app
 import { androidExperimentalRoutingEnabled } from '@/vpn/androidRoutingSafety';
 import { supportsNativeRoutingPolicy, supportsNativeVless } from '@/native/vexVpn';
 
-import { normalizeVpnTransport, type VpnTransport } from '@/vpn/transport';
+import { normalizeVpnTransportPreference, type VpnTransportPreference } from '@/vpn/transport';
 
 export { normalizePackageNames, type VpnApplicationRoutingMode } from '@/vpn/applicationRouting';
 
 const vpnTransportKey = 'vex.settings.vpn.transport.v1';
 
-export async function getVpnTransport(): Promise<VpnTransport> {
-  return Platform.OS === 'android' ? normalizeVpnTransport(await safeGetSetting(vpnTransportKey)) : 'amneziawg';
+export async function getVpnTransport(): Promise<VpnTransportPreference> {
+  return Platform.OS === 'android' ? normalizeVpnTransportPreference(await safeGetSetting(vpnTransportKey)) : 'amneziawg';
 }
 
-export async function setVpnTransport(transport: VpnTransport): Promise<VpnTransport> {
-  const normalized = normalizeVpnTransport(transport);
+export async function setVpnTransport(transport: VpnTransportPreference): Promise<VpnTransportPreference> {
+  const normalized = normalizeVpnTransportPreference(transport);
   if (normalized === 'vless' && !supportsNativeVless()) throw new Error('Для VLESS обновите Android-приложение.');
   await SecureStore.setItemAsync(vpnTransportKey, normalized);
   return normalized;

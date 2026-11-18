@@ -1,5 +1,6 @@
-import React from 'react';
+import { vexTheme } from '@/ui/vex-theme';
 import { StyleSheet, Text, View } from 'react-native';
+import React from 'react';
 
 import type { Entitlement } from '@/api/types';
 import { openExternalUrl } from '@/auth/systemAuth';
@@ -9,7 +10,7 @@ import { subscriptionRenewalPresentation } from '@/screens/subscription-renewal-
 import { useToast } from '@/ui/toast';
 import { VexPressable } from '@/ui/vex-ui';
 
-export function SubscriptionRenewalCard({ entitlement }: { entitlement: Entitlement | null }) {
+export const SubscriptionRenewalCard = React.memo(function SubscriptionRenewalCard({ entitlement }: { entitlement: Entitlement | null }) {
   const { showToast } = useToast();
   const presentation = subscriptionRenewalPresentation(entitlement);
   if (!presentation) return null;
@@ -35,15 +36,15 @@ export function SubscriptionRenewalCard({ entitlement }: { entitlement: Entitlem
       </View>
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
-  card: {backgroundColor: 'rgba(6,23,29,0.96)', borderColor: 'rgba(132,239,250,0.3)', borderWidth: 1, borderRadius: 16, padding: 12, gap: 8},
-  title: {color: '#ECFCFD', fontSize: 14, fontWeight: '700'},
-  message: {color: '#C4DADD', fontSize: 12, lineHeight: 18},
+  card: {backgroundColor: vexTheme.colors.surface, borderColor: vexTheme.colors.line, borderWidth: 1, borderRadius: 16, padding: 16, gap: 8},
+  title: {color: vexTheme.colors.text, fontSize: 14, fontWeight: '600'},
+  message: {color: vexTheme.colors.textSecondary, fontSize: 12, lineHeight: 20},
   actions: {flexDirection: 'row', flexWrap: 'wrap', gap: 8},
-  primary: {minHeight: 44, paddingHorizontal: 14, borderRadius: 12, backgroundColor: '#22D3EE', justifyContent: 'center'},
-  primaryLabel: {color: '#06171D', fontSize: 13, fontWeight: '700'},
-  support: {minHeight: 44, paddingHorizontal: 10, justifyContent: 'center'},
-  supportLabel: {color: '#C4DADD', fontSize: 13},
+  primary: {minHeight: 44, paddingHorizontal: 16, borderRadius: 10, backgroundColor: vexTheme.colors.accent, justifyContent: 'center'},
+  primaryLabel: {color: vexTheme.colors.accentInk, fontSize: 13, fontWeight: '600'},
+  support: {minHeight: 44, borderRadius: 10, paddingHorizontal: 12, justifyContent: 'center'},
+  supportLabel: {color: vexTheme.colors.textSecondary, fontSize: 13},
 });

@@ -84,17 +84,17 @@ export function homeConnectionPresentation(phase: ConnectionPhase): HomeConnecti
       };
     case 'connecting':
       return {
-        action: 'Включён',
-        helper: 'Завершаем подключение',
-        status: 'Завершаем подключение',
-        tone: 'connected',
+        action: 'Подключение',
+        helper: 'Подключаем VPN',
+        status: 'Подключаем VPN',
+        tone: 'busy',
       };
     case 'verifying':
       return {
-        action: 'Включён',
-        helper: 'Завершаем подключение',
-        status: 'Завершаем подключение',
-        tone: 'connected',
+        action: 'Проверяем',
+        helper: 'Проверяем соединение',
+        status: 'Проверяем доступ',
+        tone: 'busy',
       };
     case 'switching':
       return {
@@ -127,7 +127,7 @@ export function homeConnectionPresentation(phase: ConnectionPhase): HomeConnecti
     default:
       return {
         action: 'Подключить',
-        helper: 'Одно касание',
+        helper: 'VPN выключен',
         status: 'VPN выключен',
         tone: 'idle',
       };

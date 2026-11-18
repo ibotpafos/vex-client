@@ -33,3 +33,24 @@ assert.match(actions, /"Повторить проверку"/);
 assert.match(content, /const needsNativeRecovery =\s*assessment\.updateAvailable/);
 assert.match(content, /if \(needsNativeRecovery\) \{\s*await checkForUpdates\(\);/);
 console.log("UPDATE_CENTER_CLEANUP=PASS: user-facing update state only, single action, no idle header icon");
+
+// Copy stays actionable without changing the update controller's safety policy.
+const android = readFileSync("src/components/android-update-overlay.tsx", "utf8");
+const ios = readFileSync("src/components/ios-update-overlay.tsx", "utf8");
+const otaOverlay = readFileSync("src/components/ota-update-overlay.tsx", "utf8");
+assert.match(source, /Новая сборка VEX/);
+assert.match(source, /Обновление скачано\. Применим его безопасно, когда VPN можно отключить\./);
+assert.match(source, /Другая подпись: автоустановка недоступна\./);
+assert.match(android, /Другая подпись: скачайте APK и установите отдельно\. Войдите и проверьте доступ, затем удалите старый VEX\./);
+assert.match(android, /проверим контрольную сумму и подпись/);
+assert.match(android, /Если Android запросил разрешение, включите установку для VEX и вернитесь\./);
+assert.match(android, /Если она не открылась или отменена, нажмите «Продолжить установку»\./);
+for (const overlay of [android, ios]) {
+  assert.match(overlay, /Установите стабильную версию: текущая сборка не поддерживается\./);
+  assert.ok(overlay.includes("update.latestVersion") && overlay.includes("update.latestBuild"));
+}
+assert.match(ios, /Версия не поддерживается\. Обновите VEX, чтобы продолжить работу\./);
+assert.match(otaOverlay, /Безопасная встроенная версия запущена и готова к работе\./);
+assert.match(otaOverlay, /Перезапускаем VEX без переустановки\./);
+assert.ok(otaOverlay.includes("Скачиваем исправления: ${ota.progress}%."));
+console.log("UPDATE_COPY=PASS: concise Russian with migration, installer, compatibility, VPN safety and progress intact");

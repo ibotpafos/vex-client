@@ -1,4 +1,4 @@
-import { forwardRef, useImperativeHandle, useRef } from 'react';
+import { forwardRef, useImperativeHandle, useRef, type ComponentRef } from 'react';
 import { Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { emailOTPCells, normalizeEmailOTPCode } from '@/auth/emailOtp';
 import { vexColors } from '@/ui/vex-ui';
@@ -20,7 +20,7 @@ export const OTPCodeInput = forwardRef<OTPCodeInputHandle, OTPCodeInputProps>(fu
   { value, onChangeText, disabled = false, length = defaultLength },
   ref,
 ) {
-  const inputRef = useRef<TextInput>(null);
+  const inputRef = useRef<ComponentRef<typeof TextInput>>(null);
   const digits = emailOTPCells(value, length);
 
   useImperativeHandle(ref, () => ({
@@ -67,7 +67,7 @@ export const OTPCodeInput = forwardRef<OTPCodeInputHandle, OTPCodeInputProps>(fu
 
 const styles = StyleSheet.create({
   root: {
-    minHeight: 58,
+    minHeight: 56,
     position: 'relative',
     width: '100%',
   },
@@ -81,11 +81,11 @@ const styles = StyleSheet.create({
     backgroundColor: vexColors.field,
     borderColor: vexColors.lineStrong,
     borderCurve: 'continuous',
-    borderRadius: 14,
+    borderRadius: 10,
     borderWidth: 1,
     flex: 1,
     justifyContent: 'center',
-    minHeight: 58,
+    minHeight: 56,
   },
   cellFilled: {
     borderColor: vexColors.accent,
@@ -97,7 +97,7 @@ const styles = StyleSheet.create({
     color: vexColors.text,
     fontSize: 22,
     fontVariant: ['tabular-nums'],
-    fontWeight: '800',
+    fontWeight: '600',
   },
   hiddenInput: {
     height: 1,

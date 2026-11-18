@@ -1,7 +1,7 @@
 import { ServiceNotice } from "@/components/service-notice";
 import { StatusBar } from 'expo-status-bar';
 import { router, useFocusEffect } from 'expo-router';
-import React, { useState } from 'react';
+import React, { useState, useTransition } from 'react';
 import { Platform, ScrollView, Text, View } from 'react-native';
 
 import type { VpnLocation } from '@/api/vexApi';
@@ -20,7 +20,7 @@ import { ServerPickerModal } from '../components/server-picker-modal';
 import { serverPickerActionForSource } from './server-picker-interactions';
 import { styles } from './home-screen.styles';
 
-export default function App() {
+export const HomeScreen = React.memo(function HomeScreen() {
   useRenderProfilerMark('HomeScreen');
   const {
     session,
@@ -63,6 +63,7 @@ export default function App() {
     latencyText: string;
     locations: VpnLocation[];
   } | null>(null);
+  const [, startTransition] = useTransition();
 
   function openServerPicker() {
     if (serverPickerActionForSource('all_locations') !== 'open_picker') {
@@ -73,7 +74,7 @@ export default function App() {
       locations: availableLocations.map((location) => ({ ...location })),
     });
     void refreshLocationsForPicker().catch(() => undefined);
-    requestAnimationFrame(() => setIsServerPickerVisible(true));
+    startTransition(() => setIsServerPickerVisible(true));
   }
 
   return (
@@ -82,7 +83,7 @@ export default function App() {
       {Platform.OS !== 'android' ? <StatusBar style="light" /> : null}
       {!session ? (
         <View style={styles.centerState}>
-          <VexNativeActivityIndicator color="#22D3EE" size="large" />
+          <VexNativeActivityIndicator color="#43D9E7" size="large" />
           <Text style={styles.centerStateText}>Загружаем VEX</Text>
         </View>
       ) : (
@@ -99,7 +100,7 @@ export default function App() {
           )}
           latencyText={selectedLatencyText}
           location={selectedLocation}
-          protocolLabel={Platform.OS === 'android' && areVpnPreferencesHydrated ? (transport === 'vless' ? 'VLESS' : 'AWG') : undefined}
+          protocolLabel={Platform.OS === 'android' && areVpnPreferencesHydrated && transport !== 'auto' ? (transport === 'vless' ? 'VLESS' : 'AWG') : undefined}
           onLocationPress={openServerPicker}
           onPowerPress={handlePowerPress}
           onSettingsPress={() => {
@@ -110,6 +111,9 @@ export default function App() {
           pulseProgress={pulseProgress}
           selectionMode={serverSelectionMode}
         >
+          {Platform.OS === 'android' && areVpnPreferencesHydrated && transport === 'auto' ? (
+            <Text testID="home-saved-protocol" style={styles.vpnNoticeText}>Авто</Text>
+          ) : null}
           {vpnStatus.state === 'connected' && Platform.OS === 'android' ? (
             <Text testID="home-active-protocol" style={styles.vpnNoticeText}>Подключено: {vpnStatus.transport === 'vless' ? 'VLESS' : 'AmneziaWG'}</Text>
           ) : null}
@@ -126,13 +130,13 @@ export default function App() {
               title="Обновить ключи VPN"
             >
               <Text numberOfLines={2} style={styles.vpnNoticeText}>
-                {isKeyRotationBusy ? 'Обновляем VPN-ключ...' : 'Ключ VPN устарел. Нажмите, чтобы обновить.'}
+                {isKeyRotationBusy ? 'Обновляем VPN-ключ...' : 'Ключ устарел · обновить'}
               </Text>
             </VexPressable>
           ) : null}
           {availableLocations.length === 0 ? (
             <Text accessibilityRole="alert" style={styles.vpnErrorText}>
-              Серверы временно недоступны. Обновите каталог и попробуйте снова.
+              Нет доступных серверов. Обновите список.
             </Text>
           ) : null}
           {vpnError ? <Text numberOfLines={2} style={styles.vpnErrorText}>{vpnError}</Text> : null}
@@ -149,29 +153,31 @@ export default function App() {
         selectedLocationId={selectedLocationId}
         visible={isServerPickerVisible}
         onAutoSelect={() => {
-          setIsServerPickerVisible(false);
+          startTransition(() => setIsServerPickerVisible(false));
           void handleAutoServerSelectionPress(false);
         }}
-        onClose={() => setIsServerPickerVisible(false)}
+        onClose={() => {
+          startTransition(() => setIsServerPickerVisible(false));
+        }}
         onRetry={() => {
           void retryLocations().catch(() => undefined);
         }}
         onSelect={(locationId) => {
-          setIsServerPickerVisible(false);
+          startTransition(() => setIsServerPickerVisible(false));
           void handleLocationPress(locationId, false);
         }}
       />
       </View>
     </View>
   );
-}
+});
 
 // The renewal notice must not push location/help controls outside a small
-// Android screen or a large-font viewport. Other platforms keep their layout.
+// screen or a large-font viewport on any platform.
 function HomeBody({ children }: React.PropsWithChildren) {
-  return Platform.OS === 'android' ? (
+  return (
     <ScrollView style={{flex: 1}} contentContainerStyle={{flexGrow: 1}} showsVerticalScrollIndicator={false}>
       {children}
     </ScrollView>
-  ) : <>{children}</>;
+  );
 }

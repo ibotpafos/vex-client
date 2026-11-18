@@ -1,3 +1,4 @@
+import { vexTheme } from '@/ui/vex-theme';
 import * as Application from 'expo-application';
 import { Button, Column, Host, List, ListItem, Spacer, Text as UniversalText } from '@expo/ui';
 import { useCallback, useEffect, useState } from 'react';
@@ -45,15 +46,15 @@ function IOSUpdateOverlayContent() {
 
   return (
     <View style={styles.overlay}>
-      <Host colorScheme="dark" seedColor="#22D3EE" style={styles.host} useViewportSizeMeasurement>
-        <Column spacing={14} style={styles.panel}>
+      <Host colorScheme="dark" seedColor={vexTheme.colors.accent} style={styles.host} useViewportSizeMeasurement>
+        <Column spacing={16} style={styles.panel}>
           <Spacer flexible />
           <UniversalText textStyle={styles.title}>{update.currentBuildBlocked ? 'Сборка отозвана' : update.required ? 'Нужно обновить VEX' : 'Доступно обновление'}</UniversalText>
           <UniversalText textStyle={styles.text}>
             {update.currentBuildBlocked
-              ? 'Установите предложенную стабильную версию, чтобы вернуться на поддерживаемую сборку.'
+              ? 'Установите стабильную версию: текущая сборка не поддерживается.'
               : update.required
-                ? 'Эта версия VEX VPN больше не поддерживается. Обновите приложение, чтобы продолжить пользоваться сервисом.'
+                ? 'Версия не поддерживается. Обновите VEX, чтобы продолжить работу.'
                 : 'Доступна новая версия VEX VPN для iPhone.'}
           </UniversalText>
           {update.changelog ? <UniversalText textStyle={styles.notes}>{update.changelog}</UniversalText> : null}
@@ -63,8 +64,8 @@ function IOSUpdateOverlayContent() {
             </ListItem>
           </List>
           {updateError ? <UniversalText textStyle={styles.error}>{updateError}</UniversalText> : null}
-          <Button label={update.currentBuildBlocked ? 'Вернуться на стабильную' : 'Открыть обновление'} onPress={handleUpdatePress} />
-          {!update.required ? <Button label="Позже" onPress={() => setDismissedBuild(update.latestBuild)} variant="outlined" /> : null}
+          <Button style={styles.action} label={update.currentBuildBlocked ? 'Вернуться на стабильную' : 'Открыть обновление'} onPress={handleUpdatePress} />
+          {!update.required ? <Button style={styles.action} label="Позже" onPress={() => setDismissedBuild(update.latestBuild)} variant="outlined" /> : null}
           <Spacer flexible />
         </Column>
       </Host>
@@ -78,6 +79,7 @@ function currentIOSBuild() {
 }
 
 const styles = StyleSheet.create({
+  action: { height: 48, borderRadius: 10 },
   overlay: {
     alignItems: 'center',
     bottom: 0,
@@ -91,42 +93,40 @@ const styles = StyleSheet.create({
   },
   host: {
     flex: 1,
-    width: '100%',
   },
   panel: {
-    backgroundColor: '#041315',
+    backgroundColor: vexTheme.colors.background,
     flex: 1,
     paddingHorizontal: 24,
     paddingVertical: 32,
-    width: '100%',
   },
   title: {
-    color: '#F4FCFD',
+    color: vexTheme.colors.text,
     fontSize: 24,
-    fontWeight: '900',
+    fontWeight: '600',
     textAlign: 'center',
   },
   text: {
-    color: '#C6D6D9',
+    color: vexTheme.colors.textSecondary,
     fontSize: 15,
-    fontWeight: '600',
-    lineHeight: 21,
+    fontWeight: '400',
+    lineHeight: 24,
     textAlign: 'center',
   },
   notes: {
-    backgroundColor: 'rgba(34,211,238,0.08)',
-    borderColor: 'rgba(34,211,238,0.16)',
+    backgroundColor: vexTheme.colors.surface,
+    borderColor: vexTheme.colors.line,
     borderRadius: 16,
     borderWidth: 1,
-    color: '#A7B9BD',
+    color: vexTheme.colors.textSecondary,
     fontSize: 14,
     lineHeight: 20,
     padding: 12,
   },
   error: {
-    color: '#FF9F9F',
+    color: vexTheme.colors.danger,
     fontSize: 13,
-    fontWeight: '800',
+    fontWeight: '600',
     textAlign: 'center',
   },
 });

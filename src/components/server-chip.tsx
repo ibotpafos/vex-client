@@ -1,6 +1,6 @@
 import React, { useRef } from 'react';
-import { View, Text, type GestureResponderEvent } from 'react-native';
-import { Check, Circle, Gauge } from 'lucide-react-native';
+import { View, Text, StyleSheet, type GestureResponderEvent } from 'react-native';
+import { Check, Circle, Gauge, Globe2 } from 'lucide-react-native';
 import type { VpnLocation } from '@/api/vexApi';
 import { useRenderProfilerMark } from '@/debug/render-profiler';
 import { homeLocationCardLabel } from '../screens/home-location-previews';
@@ -61,8 +61,8 @@ export const ServerChip = React.memo(function ServerChip({
           y: event.nativeEvent.pageY,
         });
       }}
-      style={[styles.serverChip, isSelected && styles.serverChipSelected, disabled && styles.serverChipDisabled]}
-      hoverStyle={{ backgroundColor: 'rgba(7,17,19,0.96)', borderColor: 'rgba(34,211,238,0.4)' }}
+      style={[styles.serverChip, polish.card, isSelected && polish.selected, disabled && styles.serverChipDisabled]}
+      hoverStyle={{ backgroundColor: vexTheme.colors.surfaceRaised }}
       title="Выбрать сервер подключения"
       accessibilityRole="button"
       accessibilityLabel={`Открыть серверы: ${serverLabel}, ${availableNodeCountText(availableNodeCount)}, задержка ${latencyText}`}
@@ -70,24 +70,35 @@ export const ServerChip = React.memo(function ServerChip({
       <View style={styles.serverChipCountryIsland}>
         <CountryIsland countryCode={location?.countryCode} selected={isSelected} />
       </View>
-      <View style={styles.serverChipFlag}>
-        <Text style={styles.serverChipFlagText}>{location?.flagEmoji ?? '🌐'}</Text>
+      <View style={[styles.serverChipFlag, polish.flag]}>
+        <Globe2 color={vexTheme.colors.textSecondary} size={18} strokeWidth={1.75} />
       </View>
       <View style={styles.serverChipCopy}>
-        <Text numberOfLines={1} style={styles.serverChipLabel}>
+        <Text numberOfLines={1} style={[styles.serverChipLabel, polish.label]}>
           {visibleServerLabel}
         </Text>
-        <Text style={styles.serverChipCaption}>{availableNodeCountText(availableNodeCount)} · {availableNodeCount > 0 ? 'доступно' : 'нет доступных'}</Text>
+        <Text style={[styles.serverChipCaption, polish.caption]}>{availableNodeCountText(availableNodeCount)} · {availableNodeCount > 0 ? 'доступно' : 'нет доступных'}</Text>
       </View>
-      <View style={styles.serverLatencyPill}>
-        <Gauge color={vexTheme.colors.accentStrong} size={13} strokeWidth={2.6} />
-        <Text numberOfLines={1} style={styles.serverLatencyText}>{latencyText}</Text>
+      <View style={[styles.serverLatencyPill, polish.latency]}>
+        <Gauge color={vexTheme.colors.textSecondary} size={18} strokeWidth={1.75} />
+        <Text numberOfLines={1} style={[styles.serverLatencyText, polish.latencyText]}>{latencyText}</Text>
       </View>
       {isSelected ? (
-        <View style={styles.serverSelectedIcon}>
-          <Check color={vexTheme.colors.accentInk} size={16} strokeWidth={3.3} />
+        <View style={[styles.serverSelectedIcon, polish.selection]}>
+          <Check color={vexTheme.colors.text} size={18} strokeWidth={1.75} />
         </View>
-      ) : <Circle color={vexTheme.colors.textMuted} size={27} strokeWidth={2.3} />}
+      ) : <Circle color={vexTheme.colors.textMuted} size={18} strokeWidth={1.75} />}
     </VexPressable>
   );
+});
+
+const polish = StyleSheet.create({
+  card: { borderRadius: 16, minHeight: 80 },
+  selected: { backgroundColor: vexTheme.colors.surfaceRaised },
+  flag: { height: 44, width: 44 },
+  label: { fontWeight: '600', marginTop: 0 },
+  caption: { fontWeight: '400', marginTop: 4 },
+  latency: { borderRadius: 10, gap: 4 },
+  latencyText: { color: vexTheme.colors.textSecondary, fontWeight: '500' },
+  selection: { backgroundColor: vexTheme.colors.surfaceRaised, borderRadius: 10 },
 });

@@ -14,9 +14,11 @@ type HandshakeVerificationOptions = {
   wait?: (delayMs: number) => Promise<void>;
   scheduleTimeout?: (delayMs: number, onTimeout: () => void) => () => void;
   assertCurrent?: () => void;
+  requireDataPlane?: boolean;
+  expectedDataPlaneGeneration?: string;
 };
 
-const defaultHandshakePollMs = 250;
+const defaultHandshakePollMs = 100;
 
 export async function waitForVerifiedVpnConnection(
   initialStatus: VpnStatus,
@@ -24,7 +26,11 @@ export async function waitForVerifiedVpnConnection(
   options: HandshakeVerificationOptions = {},
 ): Promise<VpnStatus> {
   const proofOptions = { ...options, expectedConnectionId: options.expectedConnectionId ?? initialStatus.connectionId };
+  const timeoutMessage = options.requireDataPlane ? 'VPN traffic verification timed out.' : 'VPN handshake timed out.';
   options.assertCurrent?.();
+  if (options.requireDataPlane && !options.expectedDataPlaneGeneration) {
+    throw new Error('VPN native traffic verification unavailable. Update the Android app.');
+  }
   if (initialStatus.state !== 'connected' && initialStatus.state !== 'connecting' && initialStatus.state !== 'verifying') {
     throw new Error('VPN backend did not enter the connected state.');
   }
@@ -41,23 +47,23 @@ export async function waitForVerifiedVpnConnection(
     scheduleTimeout(delayMs, resolve);
   }));
   const now = options.now ?? Date.now;
-  const timeoutMs = options.timeoutMs ?? 10_000;
+  const timeoutMs = options.timeoutMs ?? 8_000;
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     throw new Error('VPN handshake timeout must be positive.');
   }
   const deadline = now() + timeoutMs;
   const remaining = () => {
     const budget = deadline - now();
-    if (budget <= 0) throw new Error('VPN handshake timed out.');
+    if (budget <= 0) throw new Error(timeoutMessage);
     return budget;
   };
   let latestStatus = initialStatus;
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     options.assertCurrent?.();
-    if (attempt > 0) await withDeadline(() => wait(Math.min(pollMs, remaining())), remaining(), scheduleTimeout);
+    if (attempt > 0) await withDeadline(() => wait(Math.min(pollMs, remaining())), remaining(), scheduleTimeout, timeoutMessage);
     options.assertCurrent?.();
-    latestStatus = await withDeadline(readStatus, remaining(), scheduleTimeout);
+    latestStatus = await withDeadline(readStatus, remaining(), scheduleTimeout, timeoutMessage);
     options.assertCurrent?.();
     remaining();
     // Native tunnel activation and status reads can return a pending snapshot.
@@ -73,17 +79,18 @@ export async function waitForVerifiedVpnConnection(
     }
   }
 
-  throw new Error('VPN handshake timed out.');
+  throw new Error(timeoutMessage);
 }
 
 async function withDeadline<T>(operation: () => Promise<T>, timeoutMs: number,
-  scheduleTimeout: (delayMs: number, onTimeout: () => void) => () => void): Promise<T> {
+  scheduleTimeout: (delayMs: number, onTimeout: () => void) => () => void,
+  timeoutMessage: string): Promise<T> {
   let cancel: (() => void) | undefined;
   try {
     return await Promise.race([
       Promise.resolve().then(operation),
       new Promise<never>((_, reject) => {
-        cancel = scheduleTimeout(timeoutMs, () => reject(new Error('VPN handshake timed out.')));
+        cancel = scheduleTimeout(timeoutMs, () => reject(new Error(timeoutMessage)));
       }),
     ]);
   } finally {
@@ -100,6 +107,13 @@ function isHandshakeVerifiedForAttempt(status: VpnStatus, options: HandshakeVeri
       status.connectionId === options.expectedConnectionId && status.connectionId !== options.previousConnectionId &&
       typeof status.verificationEpochMillis === 'number' && Number.isFinite(status.verificationEpochMillis) &&
       status.verificationEpochMillis >= (options.minimumVerificationEpochMillis ?? 1) && status.verificationEpochMillis <= now;
+  }
+  if (options.requireDataPlane) {
+    // A reused live tunnel need not rekey before accepting new real traffic.
+    // The new native connect always retires its previous proof generation.
+    return status.verified !== false && status.dataPlaneVerified === true &&
+      status.dataPlaneGeneration === options.expectedDataPlaneGeneration &&
+      typeof status.latestHandshakeEpochMillis === 'number' && status.latestHandshakeEpochMillis > 0;
   }
   const { minimumHandshakeEpochMillis, previousHandshakeEpochMillis } = options;
   if (minimumHandshakeEpochMillis === undefined) {

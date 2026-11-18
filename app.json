@@ -27,7 +27,7 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false,
+      "predictiveBackGestureEnabled": true,
       "softwareKeyboardLayoutMode": "resize",
       "versionCode": 1009201,
       "package": "com.vexguard.app",
@@ -100,7 +100,8 @@
         "appVariant": "production",
         "billingFailedUrl": "https://vexguard.app/v1/billing/mobile-return?status=failed",
         "billingReturnUrl": "https://vexguard.app/v1/billing/mobile-return?status=success",
-        "updateChannel": "production"
+        "updateChannel": "production",
+        "apiOrigin": "https://api.vexguard.app"
       },
       "router": {},
       "eas": {

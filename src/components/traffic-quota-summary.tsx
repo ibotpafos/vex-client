@@ -1,5 +1,5 @@
-import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import React from 'react';
 
 import type { VpnTrafficQuota } from '@/api/vexApi';
 import {
@@ -11,7 +11,7 @@ import {
   quotaProgress,
 } from '@/components/traffic-quota-presentation';
 
-export function TrafficQuotaSummary({ quota }: { quota: VpnTrafficQuota }) {
+export const TrafficQuotaSummary = React.memo(function TrafficQuotaSummary({ quota }: { quota: VpnTrafficQuota }) {
   const limited = hasQuotaLimit(quota.limitBytes);
   const headline = quotaHeadline(quota.usedBytes, quota.limitBytes);
   const progress = quotaProgress(quota.usedBytes, quota.limitBytes);
@@ -47,7 +47,7 @@ export function TrafficQuotaSummary({ quota }: { quota: VpnTrafficQuota }) {
       ) : null}
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   card: {

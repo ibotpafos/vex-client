@@ -87,6 +87,7 @@ test('successful config with failed incident read retains warning while applying
   const dependencies = {
     '@/native/appInfo': { VEX_API_CLIENT_VERSION: 'fixture-api', VEX_CONFIG_SCHEMA_VERSION: 1 },
     './client': { jsonRequest: async () => response },
+    './origins': { trustedUpdateBaseUrl: 'https://vexguard.app' },
     './updatePreflight': {},
   };
   vm.runInNewContext(source, { exports: api, require(name) {

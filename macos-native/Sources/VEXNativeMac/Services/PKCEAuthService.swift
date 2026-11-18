@@ -6,14 +6,14 @@ import Security
 
 @MainActor
 final class PKCEAuthService: NSObject, ASWebAuthenticationPresentationContextProviding {
-    private let apiBaseURL: URL
+    private let apiBaseURL: URL?
     private let defaults: UserDefaults
     private let identityStore: VEXDeviceIdentityStore
     private let verifierKey = "vex.auth.pkce.verifier"
     private let stateKey = "vex.auth.pkce.state"
     private var webAuthSession: ASWebAuthenticationSession?
 
-    init(apiBaseURL: URL = URL(string: ProcessInfo.processInfo.environment["VEX_API_BASE_URL"] ?? "https://vexguard.app")!,
+    init(apiBaseURL: URL? = VEXAPIConfiguration.baseURL,
          defaults: UserDefaults = .standard,
          identityStore: VEXDeviceIdentityStore = VEXDeviceIdentityStore()) {
         self.apiBaseURL = apiBaseURL
@@ -65,6 +65,7 @@ final class PKCEAuthService: NSObject, ASWebAuthenticationPresentationContextPro
     }
 
     func makeWebAuthURL(mode: WebAuthMode, provider: WebAuthProvider? = nil) throws -> URL {
+        let apiBaseURL = try VEXAPIConfiguration.requireBaseURL(apiBaseURL)
         let verifier = randomString(length: 64)
         let state = randomString(length: 16)
         defaults.set(verifier, forKey: verifierKey)

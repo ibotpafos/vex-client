@@ -1,17 +1,30 @@
 import { jsonRequest } from './client';
+import { hasPaidEntitlement as matchesPaidEntitlement } from './entitlement';
 import { type Entitlement } from './types';
 import { type EntitlementDTO } from './dto';
+import { type CheckoutSessionDTO } from './dto';
 
 export function hasPaidEntitlement(item: Entitlement | null | undefined): item is Entitlement {
-  return Boolean(item?.vpnAccess || item?.active);
+  return matchesPaidEntitlement(item);
 }
 
-export async function entitlement(accessToken: string): Promise<Entitlement> {
+export async function entitlement(accessToken: string, signal?: AbortSignal): Promise<Entitlement> {
   const item = await jsonRequest<EntitlementDTO>('/v1/billing/entitlement', {
     accessToken,
     suppressErrorLog: true,
+    ...(signal ? { signal } : {}),
   });
   return parseEntitlement(item);
+}
+
+export async function createCheckoutSession(accessToken: string, planId: string, signal?: AbortSignal): Promise<CheckoutSessionDTO> {
+  const item = await jsonRequest<CheckoutSessionDTO>('/v1/billing/checkout', {
+    accessToken,
+    method: 'POST',
+    body: { plan_id: planId },
+    ...(signal ? { signal } : {}),
+  });
+  return item;
 }
 
 export function parseEntitlement(item: EntitlementDTO): Entitlement {

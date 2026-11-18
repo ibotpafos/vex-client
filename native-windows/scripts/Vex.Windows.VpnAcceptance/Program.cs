@@ -139,6 +139,7 @@ internal static class Program
         {
             // Never emit arbitrary exception messages, config, manifest or UAPI.
             result["failure_type"] = exception.GetType().FullName;
+            result["failure_category"] = AcceptanceFailure.Classify(exception);
             if (exception is VpnTunnelException tunnelException) { result["failure_code"] = tunnelException.Code; }
             if (exception is FixtureException fixtureException) { result["failure_code"] = fixtureException.Code; }
             await ObserveFailureTrafficAsync(runtime, directory, result);
@@ -176,6 +177,7 @@ internal static class Program
                 catch (Exception exception)
                 {
                     result["failure_type"] = exception.GetType().FullName;
+                    result["failure_category"] = AcceptanceFailure.Classify(exception);
                     if (exception is FixtureException fixtureException) result["failure_code"] = fixtureException.Code;
                     if (exception is System.ComponentModel.Win32Exception nativeError)
                         result["failure_native_error"] = nativeError.NativeErrorCode;

@@ -15,22 +15,21 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
-import { useCallback, useState, useEffect, useRef } from "react";
+import React, { useCallback, useState, useEffect, useRef } from "react";
 import {
   requestEmailOTP,
   confirmEmailOTP,
   exchangeAppAuthCode,
-  vexApiBaseUrl,
 } from "@/api/vexApi";
+import { validatedApiBaseUrl } from "@/api/config";
 import { signInWithGoogleAndroid, isGoogleSignInCancelled } from "@/native/googleAuth";
-import { useSession } from "@/auth/session-context";
+import { loadSession, useSession } from "@/auth/session-context";
 import {
   authCallbackAttemptKey,
   getOrCreateAuthCallbackAttempt,
   resolveAuthCallbackExchange,
   type AuthCallbackAttempt,
 } from "@/auth/callbackParams";
-import { loadSession } from "@/auth/sessionStore";
 import { loadSessionWithRetry, loadWithRetry } from "@/auth/sessionLoadRetry";
 import {
   authenticateWithBiometrics,
@@ -69,7 +68,7 @@ import {
 
 WebBrowser.maybeCompleteAuthSession();
 
-export default function SignInScreen() {
+export const SignInScreen = React.memo(function SignInScreen() {
   const queryClient = useQueryClient();
   const { width } = useWindowDimensions();
   const { loadError, signIn } = useSession();
@@ -103,7 +102,7 @@ export default function SignInScreen() {
       if (handledCallbackUrls.current.has(url)) return;
       handledCallbackUrls.current.add(url);
 
-      console.log("Received auth callback");
+      if (__DEV__) console.log("Received auth callback");
       playLightImpactHaptic();
       setIsAuthBusy(true);
       setAuthError(null);
@@ -142,7 +141,7 @@ export default function SignInScreen() {
         playSuccessHaptic();
         router.replace("/");
       } catch (err) {
-        console.error("Failed to handle callback URL:", err);
+      if (__DEV__) console.error("Failed to handle callback URL:", err);
         playErrorHaptic();
         setAuthError(
           err instanceof Error ? err.message : "Не удалось завершить вход.",
@@ -231,6 +230,7 @@ export default function SignInScreen() {
     setAuthError(null);
 
     try {
+      const baseUrl = validatedApiBaseUrl().toString();
       const verifier = generateRandomString(64);
       const challenge = await generateChallenge(verifier);
       const state = generateRandomString(16);
@@ -242,7 +242,7 @@ export default function SignInScreen() {
       const { platform, deviceName } = getDeviceDetails();
 
       const webAuthUrl = buildAppWebAuthUrl({
-        baseUrl: vexApiBaseUrl,
+        baseUrl,
         challenge,
         deviceId,
         deviceName,
@@ -251,13 +251,13 @@ export default function SignInScreen() {
         provider,
       });
 
-      console.log("Opening Web Auth URL for platform:", platform);
+      if (__DEV__) console.log("Opening Web Auth URL for platform:", platform);
       const callbackUrl = await openWebAuthUrl(webAuthUrl);
       if (isAppAuthCallbackUrl(callbackUrl)) {
         await handleCallbackUrl(callbackUrl);
       }
     } catch (err) {
-      console.error("Failed to start web auth:", err);
+      if (__DEV__) console.error("Failed to start web auth:", err);
       playErrorHaptic();
       setAuthError(
         err instanceof Error
@@ -563,7 +563,7 @@ export default function SignInScreen() {
       </SignInBottomSheet>
     </Host>
   );
-}
+});
 
 const styles = {
   error: {

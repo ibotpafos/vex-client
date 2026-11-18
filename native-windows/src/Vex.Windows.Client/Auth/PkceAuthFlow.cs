@@ -1,3 +1,4 @@
+using Vex.Windows.Client.Api;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -40,6 +41,7 @@ public static class PkceAuthFlow
         WebAuthProvider? provider = null)
     {
         ArgumentNullException.ThrowIfNull(apiBaseUri);
+        apiBaseUri = VexApiConfiguration.Require(apiBaseUri);
         randomString ??= CreateRandomString;
 
         deviceId = deviceId.Trim();
@@ -55,9 +57,7 @@ public static class PkceAuthFlow
         var verifier = randomString(64);
         var state = randomString(16);
         var builder = new UriBuilder(
-            new Uri(
-                apiBaseUri,
-                "/auth/app"));
+            VexApiConfiguration.Endpoint(apiBaseUri, "/auth/app"));
         builder.Query = string.Join(
             "&",
             new[]

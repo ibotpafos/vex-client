@@ -1,4 +1,5 @@
 import { type PropsWithChildren } from 'react';
+import React from 'react';
 import { Platform, Pressable, StyleSheet, useWindowDimensions, View, type PressableProps, type StyleProp, type ViewStyle } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -121,7 +122,7 @@ export interface VexPressableProps extends PressableProps {
   title?: string;
 }
 
-export function VexPressable({
+export const VexPressable = React.memo(function VexPressable({
   children,
   style,
   hoverStyle,
@@ -146,4 +147,4 @@ export function VexPressable({
       {children}
     </Pressable>
   );
-}
+});

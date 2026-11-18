@@ -164,6 +164,7 @@ public sealed class VexApiClient : INativeClientApi
     };
 
     private readonly HttpClient _httpClient;
+    private readonly Uri _apiBaseUri;
     private readonly IDeviceIdentityProvider? _deviceIdentityProvider;
     private readonly Func<bool> _nativeRoutingCapability;
 
@@ -173,21 +174,14 @@ public sealed class VexApiClient : INativeClientApi
         Func<bool>? nativeRoutingCapability = null)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
-        if (httpClient.BaseAddress is null ||
-            (!httpClient.BaseAddress.IsLoopback &&
-             httpClient.BaseAddress.Scheme != Uri.UriSchemeHttps))
-        {
-            throw new ArgumentException(
-                "The VEX API base address must use HTTPS.",
-                nameof(httpClient));
-        }
+        _apiBaseUri = VexApiConfiguration.Require(httpClient.BaseAddress, nameof(httpClient));
 
         _httpClient = httpClient;
         _deviceIdentityProvider = deviceIdentityProvider;
         _nativeRoutingCapability = nativeRoutingCapability ?? (() => false);
     }
 
-    public Uri BaseUri => _httpClient.BaseAddress!;
+    public Uri BaseUri => _apiBaseUri;
 
     public async Task<ResiliencePolicy?> GetResiliencePolicyAsync(
         string accessToken,
@@ -227,7 +221,7 @@ public sealed class VexApiClient : INativeClientApi
 
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
-            "/v1/auth/login")
+            Endpoint("/v1/auth/login"))
         {
             Content = JsonContent.Create(new
             {
@@ -250,7 +244,7 @@ public sealed class VexApiClient : INativeClientApi
         email = NormalizeEmail(email, nameof(email));
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
-            "/v1/auth/email-otp/request")
+            Endpoint("/v1/auth/email-otp/request"))
         {
             Content = JsonContent.Create(new
             {
@@ -282,7 +276,7 @@ public sealed class VexApiClient : INativeClientApi
 
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
-            "/v1/auth/email-otp/confirm")
+            Endpoint("/v1/auth/email-otp/confirm"))
         {
             Content = JsonContent.Create(new
             {
@@ -313,7 +307,7 @@ public sealed class VexApiClient : INativeClientApi
         ValidatePkceVerifier(codeVerifier, nameof(codeVerifier));
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
-            "/v1/auth/token")
+            Endpoint("/v1/auth/token"))
         {
             Content = JsonContent.Create(new
             {
@@ -641,8 +635,8 @@ public sealed class VexApiClient : INativeClientApi
             provider = string.IsNullOrWhiteSpace(provider)
                 ? "platega"
                 : provider,
-            return_url = _httpClient.BaseAddress!.AbsoluteUri,
-            failed_url = _httpClient.BaseAddress!.AbsoluteUri,
+            return_url = BaseUri.AbsoluteUri,
+            failed_url = BaseUri.AbsoluteUri,
         });
         return await SendAsync<CheckoutSession>(
             request,
@@ -805,7 +799,7 @@ public sealed class VexApiClient : INativeClientApi
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(metadata);
-        using var request = new HttpRequestMessage(HttpMethod.Post, path)
+        using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint(path))
         {
             Content = JsonContent.Create(new
             {
@@ -945,12 +939,12 @@ public sealed class VexApiClient : INativeClientApi
         }
     }
 
-    private static async Task<string> ReadKnownErrorAsync(HttpRequestMessage request,
+    private async Task<string> ReadKnownErrorAsync(HttpRequestMessage request,
         HttpResponseMessage response, CancellationToken cancellationToken,
         CancellationToken callerCancellationToken)
     {
         var fallback = response.StatusCode == HttpStatusCode.Unauthorized ? "session_expired" : "api_request_failed";
-        var path = request.RequestUri?.AbsolutePath;
+        var path = VexApiConfiguration.ApiPath(_apiBaseUri, request.RequestUri);
         var authError = response.StatusCode == HttpStatusCode.Unauthorized &&
             path is "/v1/auth/login" or "/v1/auth/email-otp/confirm";
         var quotaError = response.StatusCode == HttpStatusCode.Forbidden && path == "/v1/devices/register";
@@ -1014,7 +1008,7 @@ public sealed class VexApiClient : INativeClientApi
     {
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
-            "/v1/billing/plans");
+            Endpoint("/v1/billing/plans"));
         return await SendAsync<List<BillingPlan>>(request, cancellationToken).ConfigureAwait(false);
     }
 
@@ -1066,7 +1060,9 @@ public sealed class VexApiClient : INativeClientApi
                 cancellationToken).ConfigureAwait(false));
     }
 
-    private static HttpRequestMessage Authorized(
+    private Uri Endpoint(string path) => VexApiConfiguration.Endpoint(_apiBaseUri, path);
+
+    private HttpRequestMessage Authorized(
         HttpMethod method,
         string path,
         string accessToken)
@@ -1079,7 +1075,7 @@ public sealed class VexApiClient : INativeClientApi
                 nameof(accessToken));
         }
 
-        return new HttpRequestMessage(method, path)
+        return new HttpRequestMessage(method, Endpoint(path))
         {
             Headers =
             {

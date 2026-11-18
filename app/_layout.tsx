@@ -129,7 +129,7 @@ function ReactQueryAppStateBridge() {
       focusManager.setFocused(status === "active");
     };
 
-    syncFocusState(AppState.currentState);
+    syncFocusState(AppState.currentState as AppStateStatus);
     const subscription = AppState.addEventListener("change", syncFocusState);
     return () => subscription.remove();
   }, []);
@@ -231,11 +231,9 @@ function DeferredStartupOverlays() {
   const [canMount, setCanMount] = useState(false);
 
   useEffect(() => {
-    const timer = setTimeout(
-      () => setCanMount(true),
-      Platform.OS === "android" ? 3500 : 1500,
-    );
-    return () => clearTimeout(timer);
+    // Показываем оверлеи обновлений сразу после готовности сессии,
+    // не блокируя отрисовку приложения на 3.5 секунды.
+    setCanMount(true);
   }, []);
 
   if (!canMount) {

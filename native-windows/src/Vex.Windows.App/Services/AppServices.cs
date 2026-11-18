@@ -16,10 +16,11 @@ public sealed class AppServices
 #if DEBUG
         var apiBaseUrl =
             Environment.GetEnvironmentVariable("VEX_API_BASE_URL") ??
-            "https://vexguard.app";
+            VexApiConfiguration.DefaultBaseUrl;
 #else
-        const string apiBaseUrl = "https://vexguard.app";
+        const string apiBaseUrl = VexApiConfiguration.DefaultBaseUrl;
 #endif
+        var apiBaseUri = VexApiConfiguration.Resolve(apiBaseUrl);
         AppVersion =
             typeof(App).Assembly.GetName().Version?.ToString() ??
             "0.0.0";
@@ -37,7 +38,7 @@ public sealed class AppServices
         var httpClient = new HttpClient(UiPreviewContext.IsEnabled
             ? UiPreviewFixtures.CreateHandler() : httpHandler)
         {
-            BaseAddress = new Uri(apiBaseUrl, UriKind.Absolute),
+            BaseAddress = apiBaseUri,
             // Profile issuance performs server-side node selection and may
             // legitimately take longer than ordinary control-plane calls.
             // Background warm-up usually fills the signed local cache. A cold

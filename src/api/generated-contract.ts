@@ -8,6 +8,7 @@
 
 import type {
   AcknowledgeStagedDevicePSKProfileResultDTO,
+  AppAuthTokenRequest,
   AppRemoteConfigResponseDTO,
   AppUpdateCheckResponseDTO,
   AuthResultDTO,
@@ -39,6 +40,12 @@ export interface AcknowledgeStagedDevicePSKProfileResultDTOSpec {
   replayed: boolean
 }
 type _AcknowledgeStagedDevicePSKProfileResultDTOContract = VexApiSpecExpect<AcknowledgeStagedDevicePSKProfileResultDTOSpec extends AcknowledgeStagedDevicePSKProfileResultDTO ? true : false>
+
+export interface AppAuthTokenRequestSpec {
+  code: string
+  code_verifier: string
+}
+type _AppAuthTokenRequestContract = VexApiSpecExpect<AppAuthTokenRequestSpec extends AppAuthTokenRequest ? true : false>
 
 export interface AppRemoteConfigResponseDTOSpec {
   version?: string
@@ -284,6 +291,57 @@ export interface LocationDTOSpec {
 }
 type _LocationDTOContract = VexApiSpecExpect<LocationDTOSpec extends LocationDTO ? true : false>
 
+export interface NativeDeviceIdentityChallengeRequestSpec {
+  device_id?: string | null
+  installation_id: string
+  purpose?: string | null
+  [key: string]: unknown
+}
+
+export interface NativeDeviceRegistrationRequestSpec {
+  device_id?: string | null
+  installation_id?: string | null
+  device_name?: string | null
+  name?: string | null
+  platform?: string | null
+  app_version?: string | null
+  push_provider?: string | null
+  push_token?: string | null
+  protocol?: string | null
+  location?: string | null
+  public_key: string
+  key_epoch?: number | null
+  identity_public_key?: string | null
+  identity_key_type?: string | null
+  identity_challenge_id?: string | null
+  identity_signature?: string | null
+  reconcile_device_id?: string | null
+  [key: string]: unknown
+}
+
+export type NativeVPNConnectionEventInputSpec = {
+  device_id?: string | null
+  profile_version?: number | null
+  protocol?: string | null
+  client_time?: string | null
+  reason?: string | null
+  [key: string]: unknown
+} | null
+
+export interface NativeVPNKeyRotationInputSpec {
+  device_id?: string | null
+  public_key: string
+  key_epoch?: number | null
+  [key: string]: unknown
+}
+
+export interface NativeVPNPSKRotationACKInputSpec {
+  device_id?: string | null
+  profile_version: number
+  profile_digest: string
+  [key: string]: unknown
+}
+
 export interface NativeVPNProfileDTOSpec {
   unchanged?: boolean
   version: number
@@ -310,6 +368,13 @@ export interface NativeVPNProfileDTOSpec {
   authorization?: null | { algorithm: string } & { key_id: string } & { payload_base64: string } & { signature_base64: string }
 }
 type _NativeVPNProfileDTOContract = VexApiSpecExpect<NativeVPNProfileDTOSpec extends NativeVPNProfileDTO ? true : false>
+
+export type NativeVPNPushTokenInputSpec = {
+  device_id?: string | null
+  provider?: string | null
+  token?: string | null
+  [key: string]: unknown
+} | null
 
 export interface PortalSessionDTOSpec {
   id: string

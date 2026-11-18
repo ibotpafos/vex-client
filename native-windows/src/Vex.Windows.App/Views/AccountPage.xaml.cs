@@ -907,7 +907,7 @@ public sealed partial class AccountPage : Page
     }
 
     private static string FormatMoney(
-        int amountMinor,
+        long amountMinor,
         string currency)
     {
         var amount = amountMinor / 100m;

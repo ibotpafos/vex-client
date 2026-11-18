@@ -1,4 +1,5 @@
 import * as Notifications from 'expo-notifications';
+import { AndroidImportance } from 'expo-notifications';
 import { Platform } from 'react-native';
 import { buildSubscriptionReminders } from './subscriptionReminderSchedule';
 
@@ -49,7 +50,7 @@ async function cancelSubscriptionReminders() {
 async function ensureAndroidChannel() {
   if (Platform.OS !== 'android') return;
   await Notifications.setNotificationChannelAsync(androidChannelId, {
-    importance: Notifications.AndroidImportance.DEFAULT,
+    importance: AndroidImportance.DEFAULT,
     name: 'Напоминания о подписке',
   });
 }

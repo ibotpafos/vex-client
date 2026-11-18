@@ -241,7 +241,7 @@ function OtaUpdateProviderContent({ children }: PropsWithChildren) {
   const reload = useCallback(
     async (): Promise<boolean> =>
       reloadOtaSafely({
-        getAppState: () => AppState.currentState,
+        getAppState: () => AppState.currentState as AppStateStatus,
         canApply: canAutomaticallyApplyOtaUpdate,
         getVpnStatus,
         isReady: () => statusRef.current === "ready" && !runningRef.current,

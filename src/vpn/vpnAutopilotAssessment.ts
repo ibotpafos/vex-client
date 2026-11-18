@@ -92,7 +92,7 @@ function classifyVpnAutopilotCause(input: {
   if (probe?.dnsOk === false || matchesAny(joinedMessage, ['dns', 'resolve', 'lookup', 'name resolution', 'unable to resolve host'])) {
     return 'dns';
   }
-  if (probe?.httpsOk === false || matchesAny(joinedMessage, ['network request failed', 'offline', 'no internet', 'timed out', 'timeout', 'cancelled', 'canceled'])) {
+  if (probe?.httpsOk === false || matchesAny(joinedMessage, ['https_failed', 'data_plane_unavailable', 'network request failed', 'offline', 'no internet', 'timed out', 'timeout', 'cancelled', 'canceled'])) {
     return 'network';
   }
   if (

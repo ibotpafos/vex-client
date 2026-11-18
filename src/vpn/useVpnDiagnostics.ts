@@ -5,7 +5,9 @@ import {
   reportVpnConnect,
   reportVpnDisconnect,
   vpnDeviceUsage,
+  type AuthSession,
   type ClientConnectionTelemetryInput,
+  type Entitlement,
   type VpnDeviceUsage,
 } from '@/api/vexApi';
 import { uploadClientDiagnostics } from '@/diagnostics/clientDiagnostics';
@@ -28,8 +30,8 @@ type UseVpnDiagnosticsInput = {
   vpnStatus: VpnStatus;
   diagnosticsSnapshotRef: React.RefObject<DiagnosticsSnapshotRef>;
   entitlementQueryError: unknown;
-  cachedEntitlement: any;
-  refreshSession: () => Promise<any>;
+  cachedEntitlement: Entitlement | null;
+  refreshSession: () => Promise<AuthSession | null>;
 };
 
 export function useVpnDiagnostics({

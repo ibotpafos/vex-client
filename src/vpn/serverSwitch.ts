@@ -5,6 +5,7 @@ import { SessionOperationSupersededError } from './sessionOperation';
 export type ResolveConnectableProfileOptions = {
   transport?: 'amneziawg' | 'vless';
   routingMode?: VpnProfile['routingMode'];
+  isCurrentOperation?: () => boolean;
   allowPersistentHotProfile?: boolean;
   cachedProfile?: VpnProfile | null;
   forceRefresh?: boolean;

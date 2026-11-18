@@ -1,3 +1,13 @@
-import UpdateCenterScreen from '@/screens/update-center-screen';
+import React, { Suspense } from 'react';
 
-export default UpdateCenterScreen;
+const UpdateCenterScreen = React.lazy(() => import('../../src/screens/update-center-screen').then((mod) => ({
+  default: mod.UpdateCenterScreen,
+})));
+
+export default function UpdateCenterRoute() {
+  return (
+    <Suspense fallback={null}>
+      <UpdateCenterScreen />
+    </Suspense>
+  );
+}

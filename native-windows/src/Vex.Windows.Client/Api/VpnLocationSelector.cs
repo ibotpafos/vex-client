@@ -9,7 +9,7 @@ public static class VpnLocationSelector
         ArgumentNullException.ThrowIfNull(locations);
 
         var eligible = locations
-            .Where(IsEligible)
+            .Where(ServerCatalog.IsAvailable)
             .ToArray();
         var preferred = eligible.FirstOrDefault(location =>
             string.Equals(
@@ -30,5 +30,4 @@ public static class VpnLocationSelector
             .FirstOrDefault();
     }
 
-    private static bool IsEligible(VpnLocation location) => ServerCatalog.IsAvailable(location);
 }

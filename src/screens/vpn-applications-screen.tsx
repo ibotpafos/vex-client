@@ -1,5 +1,5 @@
 import { router } from "expo-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { Platform } from "react-native";
 import { UniversalVpnApplicationsContent } from "@/components/universal-vpn-applications-content";
 import { playErrorHaptic, playSelectionHaptic } from "@/native/haptics";
@@ -12,12 +12,13 @@ import {
 } from "@/settings/vpnPreferences";
 import { useToast } from "@/ui/toast";
 
-export default function VpnApplicationsScreen() {
+export const VpnApplicationsScreen = React.memo(function VpnApplicationsScreen() {
   const { showToast } = useToast();
   const [applications, setApplications] = useState<InstalledVpnApplication[]>([]);
   const [selectedPackages, setSelectedPackages] = useState<Set<string>>(new Set());
   const [mode, setMode] = useState<VpnApplicationRoutingMode>("all");
   const [query, setQuery] = useState("");
+  const deferredQuery = useDeferredValue(query);
   const [loading, setLoading] = useState(true);
   const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
 
@@ -54,12 +55,12 @@ export default function VpnApplicationsScreen() {
   }, [queueSave, showToast]);
 
   const filteredApplications = useMemo(() => {
-    const normalizedQuery = query.trim().toLocaleLowerCase();
+    const normalizedQuery = deferredQuery.trim().toLocaleLowerCase();
     if (!normalizedQuery) return applications;
     return applications.filter((application) =>
       application.label.toLocaleLowerCase().includes(normalizedQuery)
       || application.packageName.toLocaleLowerCase().includes(normalizedQuery));
-  }, [applications, query]);
+  }, [applications, deferredQuery]);
 
   const selectMode = useCallback((nextMode: VpnApplicationRoutingMode) => {
     if (nextMode === "selected" && selectedPackages.size === 0) {
@@ -98,4 +99,4 @@ export default function VpnApplicationsScreen() {
       selectedPackages={selectedPackages}
     />
   );
-}
+});

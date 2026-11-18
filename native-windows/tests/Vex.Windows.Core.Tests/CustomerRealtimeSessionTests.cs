@@ -291,6 +291,9 @@ internal static class CustomerRealtimeSessionTests
     {
         var firstStream = new QueuedStream();
         firstStream.Append("event: customer.heartbeat\nid: event-42\ndata: {}\n\n");
+        firstStream.Append("event: customer.change\nid: rejected-fraction\ndata: {\"domain\":\"devices\",\"version\":1.5}\n\n" +
+            "event: customer.change\nid: rejected-boolean\ndata: {\"domain\":\"devices\",\"version\":true}\n\n" +
+            "event: customer.change\nid: rejected-domain\ndata: {\"domain\":\"unknown\",\"version\":8}\n\n");
         var reconnected = Signal();
         var requests = 0;
         await using var fixture = new Fixture(streamResponse: _ =>
@@ -311,8 +314,9 @@ internal static class CustomerRealtimeSessionTests
         Check(await disconnected.Task.WaitAsync(Deadline),
             "A silent SSE stream did not cancel/dispose its read and expose disconnected status before backoff.");
         await reconnected.Task.WaitAsync(Deadline);
+        Check(fixture.Handler.LastEventIds.SequenceEqual([string.Empty, "event-42"]),
+            "Rejected SSE metadata advanced the reconnect cursor: " + string.Join("|", fixture.Handler.LastEventIds));
         Check(fixture.Handler.Tokens.Count == 2 && fixture.Handler.Tokens.All(token => token == OldToken) &&
-            fixture.Handler.LastEventIds.SequenceEqual([string.Empty, "event-42"]) &&
             fixture.Store.State?.Session.AccessToken == OldToken && fixture.Store.ClearCount == 0 &&
             fixture.RefreshCalls == 0 && fixture.MatchedSignOuts == 0 && fixture.Vpn.DisconnectCount == 0 &&
             fixture.Events.Count == 0,

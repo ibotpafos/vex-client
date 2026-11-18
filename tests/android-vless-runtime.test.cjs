@@ -246,7 +246,9 @@ function connectionFlowHarness({cancelOnRead=false}={}) {
       return {state:'connected',transport:'vless',connectionId,verificationEpochMillis:Date.now(),verified:true};
     },
     connectVpn:async(_config,options)=>{calls.push(options);return {state:'verifying',transport:'vless',connectionId,verified:false};},
-    connectAttemptTimeoutMs:25000,waitForVerifiedVpnConnection,scheduleVpnVerificationTimeout,withLastSuccessfulEndpoint:profile=>profile,isVpnTransportFallbackError:fallback.isVpnTransportFallbackError,
+    cachedConnectAttemptTimeoutMs:10000,connectAttemptTimeoutMs:25000,connectDiagnosticsPrepareTimeoutMs:400,
+    isUnverifiedProfileSource:profile=>profile.source==='local'||profile.hotProfileUsed===true,
+    waitForVerifiedVpnConnection,scheduleVpnVerificationTimeout,withLastSuccessfulEndpoint:profile=>profile,isVpnTransportFallbackError:fallback.isVpnTransportFallbackError,
   });
   return {calls,flow:hook({isCurrentSessionOperation:()=>!cancelled,antiLeakEnabled:true,session:{accessToken:'token',user:{id:'owner'}}})};
 }
@@ -607,7 +609,7 @@ function permissionChainHarness({cached=false,nativeFailures=0,missingInitial=fa
     getVpnStatus:async()=>({state:'disconnected'}),connectVpn:async()=>{
       if(++attempts<=nativeFailures)throw new Error('VPN connection failed');
       return {state:'connected',transport:'vless',connectionWanted:true,connectionId,verified:true,verificationEpochMillis:Date.now()};
-    },connectAttemptTimeoutMs:25000,waitForVerifiedVpnConnection,scheduleVpnVerificationTimeout,withLastSuccessfulEndpoint:profile=>profile,
+    },cachedConnectAttemptTimeoutMs:10000,connectAttemptTimeoutMs:25000,connectDiagnosticsPrepareTimeoutMs:400,waitForVerifiedVpnConnection,scheduleVpnVerificationTimeout,withLastSuccessfulEndpoint:profile=>profile,
     connectFreshSameLocationProfile:pure('sameLocationProfileRecovery').connectFreshSameLocationProfile,
     saveHotVpnProfile:async()=>null,uploadClientDiagnostics:async()=>{},setSelectedVpnLocation:async id=>id,errorMessage:error=>error.message,
   });

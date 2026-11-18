@@ -2,7 +2,7 @@ import Foundation
 
 struct VEXAPIClient {
     var transport = VEXAPITransport()
-    var baseURL = URL(string: ProcessInfo.processInfo.environment["VEX_API_BASE_URL"] ?? "https://vexguard.app")!
+    var baseURL = VEXAPIConfiguration.baseURL
 
     func me(accessToken: String) async throws -> VEXUser {
         try await json("/v1/auth/me", accessToken: accessToken)
@@ -73,13 +73,7 @@ struct VEXAPIClient {
         // macOS client speaks AmneziaWG 3 only: show locations that have
         // AWG3-capable nodes (older backends without the field keep all
         // locations; profile requests still pin awg_version=3).
-        return locations.filter { location in
-            guard location.healthyNodes > 0, location.availability != "retired" else { return false }
-            if let awg3Nodes = location.awg3Nodes {
-                return awg3Nodes > 0
-            }
-            return true
-        }
+        return locations.filter(\.isAvailableForVpn)
     }
 
     func entitlement(accessToken: String) async throws -> Entitlement {
@@ -196,7 +190,9 @@ struct VEXAPIClient {
         if let knownVersion, knownVersion > 0 {
             query.append(URLQueryItem(name: "known_version", value: String(knownVersion)))
         }
-        return try await json("/v1/vpn/profile?\(queryString(query))", accessToken: accessToken)
+        // GET can assign/reconcile a peer. Leave uncertain outcomes to explicit
+        // recovery instead of the transport's ordinary read retry policy.
+        return try await json("/v1/vpn/profile?\(queryString(query))", accessToken: accessToken, retryCount: 0)
     }
 
     func reportVpnConnect(accessToken: String, tunnel: PreparedTunnel) async {
@@ -255,19 +251,9 @@ struct VEXAPIClient {
         var result: AppUpdateCheckResult = try await json(
             "/v1/app/update/check",
             method: "POST",
-            body: [
-                "platform": "macos",
-                "appVersion": VEXAppInfo.version,
-                "buildNumber": VEXAppInfo.buildNumber,
-                "channel": VEXAppInfo.channel,
-                "coreVersion": VEXAppInfo.coreVersion,
-                "osVersion": ProcessInfo.processInfo.operatingSystemVersionString,
-                "arch": nativeArch,
-                "apiClientVersion": VEXAppInfo.apiClientVersion,
-                "configSchemaVersion": VEXAppInfo.configSchemaVersion,
-            ]
+            body: appMetadataBody
         )
-        result.downloadUrl = absolutize(result.downloadUrl)
+        result.downloadUrl = try absolutize(result.downloadUrl)
         return result
     }
 
@@ -275,18 +261,22 @@ struct VEXAPIClient {
         try await json(
             "/v1/app/remote-config",
             method: "POST",
-            body: [
-                "platform": "macos",
-                "appVersion": VEXAppInfo.version,
-                "buildNumber": VEXAppInfo.buildNumber,
-                "channel": VEXAppInfo.channel,
-                "coreVersion": VEXAppInfo.coreVersion,
-                "osVersion": ProcessInfo.processInfo.operatingSystemVersionString,
-                "arch": nativeArch,
-                "apiClientVersion": VEXAppInfo.apiClientVersion,
-                "configSchemaVersion": VEXAppInfo.configSchemaVersion,
-            ]
+            body: appMetadataBody
         )
+    }
+
+    private var appMetadataBody: [String: Any] {
+        [
+            "platform": "macos",
+            "appVersion": VEXAppInfo.version,
+            "buildNumber": VEXAppInfo.buildNumber,
+            "channel": VEXAppInfo.channel,
+            "coreVersion": VEXAppInfo.coreVersion,
+            "osVersion": ProcessInfo.processInfo.operatingSystemVersionString,
+            "arch": nativeArch,
+            "apiClientVersion": VEXAppInfo.apiClientVersion,
+            "configSchemaVersion": VEXAppInfo.configSchemaVersion,
+        ]
     }
 
     private var nativeArch: String {
@@ -297,11 +287,12 @@ struct VEXAPIClient {
         #endif
     }
 
-    private func absolutize(_ value: String) -> String {
+    private func absolutize(_ value: String) throws -> String {
         guard !value.isEmpty else { return "" }
         if value.hasPrefix("http://") || value.hasPrefix("https://") {
             return value
         }
+        let baseURL = try VEXAPIConfiguration.requireBaseURL(baseURL)
         if value.hasPrefix("/") {
             return "\(baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")))\(value)"
         }
@@ -324,8 +315,11 @@ struct VEXAPIClient {
         accessToken: String? = nil,
         body: [String: Any]? = nil,
         idempotencyKey: String? = nil,
-        timeout: TimeInterval = 12
+        timeout: TimeInterval = 12,
+        retryCount: Int = 2
     ) async throws -> T {
+        try Task.checkCancellation()
+        let baseURL = try VEXAPIConfiguration.requireBaseURL(baseURL)
         guard let url = URL(string: "\(baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/\(path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))") else {
             throw VEXAPIError.invalidResponse
         }
@@ -352,37 +346,51 @@ struct VEXAPIClient {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await transport.data(for: request, timeout: timeout)
+            (data, response) = try await transport.data(for: request, timeout: timeout, retryCount: retryCount)
         } catch {
+            let normalized: Error
             if (error as? URLError)?.code == .timedOut {
-                throw VEXAPIError.requestTimeout
+                normalized = VEXAPIError.requestTimeout
+            } else if VEXAPIError.isServerUnavailable(error) {
+                normalized = VEXAPIError.technicalWorks
+            } else {
+                normalized = error
             }
-            if VEXAPIError.isServerUnavailable(error) {
-                throw VEXAPIError.technicalWorks
-            }
-            throw error
+            try Task.checkCancellation()
+            throw normalized
         }
+        try Task.checkCancellation()
         guard let http = response as? HTTPURLResponse else {
             throw VEXAPIError.invalidResponse
         }
-        guard (200..<300).contains(http.statusCode) else {
-            let apiError = apiErrorPayload(data)
-            throw VEXAPIError.http(
-                status: http.statusCode, message: apiError.message, code: apiError.code,
+        let status = http.statusCode
+        guard (200..<300).contains(status) else {
+            let apiError = VEXAPIError.payload(data)
+            let error = VEXAPIError.http(
+                status: status, message: apiError.message, code: apiError.code,
                 retryAfter: VEXAPITransport.retryAfter(http.value(forHTTPHeaderField: "Retry-After"))
             )
+            try Task.checkCancellation()
+            throw error
         }
+        let result: T
         if T.self == EmptyResponse.self, data.isEmpty {
             guard let emptyResponse = EmptyResponse() as? T else {
                 throw VEXAPIError.invalidResponse
             }
-            return emptyResponse
+            result = emptyResponse
+        } else if T.self == String.self, let text = String(data: data, encoding: .utf8) as? T {
+            result = text
+        } else {
+            do {
+                result = try JSONDecoder().decode(T.self, from: data)
+            } catch is DecodingError {
+                try Task.checkCancellation()
+                throw VEXAPIError.invalidResponse
+            }
         }
-        if T.self == String.self, let text = String(data: data, encoding: .utf8) as? T {
-            return text
-        }
-        let decoder = JSONDecoder()
-        return try decoder.decode(T.self, from: data)
+        try Task.checkCancellation()
+        return result
     }
 
     private func queryString(_ items: [URLQueryItem]) -> String {
@@ -391,14 +399,7 @@ struct VEXAPIClient {
         return components.percentEncodedQuery ?? ""
     }
 
-    private func apiErrorPayload(_ data: Data) -> (code: String?, message: String) {
-        if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            let code = object["code"] as? String
-            let message = object["message"] as? String ?? object["error"] as? String
-            return (code, message ?? String(data: data, encoding: .utf8) ?? "HTTP request failed")
-        }
-        return (nil, String(data: data, encoding: .utf8) ?? "HTTP request failed")
-    }
+
 }
 
 private struct NativeDeviceRegistrationResponse: Decodable {
@@ -433,119 +434,5 @@ private struct AuthSessionPayload: Decodable {
     enum CodingKeys: String, CodingKey {
         case accessToken = "access_token"
         case expiresAt = "expires_at"
-    }
-}
-
-enum VEXAPIError: LocalizedError {
-    case invalidResponse
-    case technicalWorks
-    case requestTimeout
-    case http(status: Int, message: String, code: String? = nil, retryAfter: TimeInterval? = nil)
-
-    static let technicalWorksMessage = "Идут технические работы. Мы уже переключаем сервисы, попробуйте через пару минут."
-
-    var isUnauthorized: Bool {
-        if case .http(let status, _, let code, _) = self {
-            return status == 401 && code != "maintenance"
-        }
-        return false
-    }
-
-    var isRateLimited: Bool {
-        if case .http(let status, _, _, _) = self {
-            return status == 429
-        }
-        return false
-    }
-
-    var code: String? {
-        switch self {
-        case .requestTimeout: return "request_timeout"
-        case .http(_, _, let code, _): return code
-        default: return nil
-        }
-    }
-
-    var errorDescription: String? {
-        switch self {
-        case .invalidResponse:
-            return "Некорректный ответ API."
-        case .technicalWorks, .requestTimeout:
-            return Self.technicalWorksMessage
-        case .http(let status, let message, let code, _):
-            if Self.isMaintenanceStatus(status) || code == "maintenance" {
-                return Self.technicalWorksMessage
-            }
-            return "HTTP \(status): \(message)"
-        }
-    }
-
-    static func isMaintenanceStatus(_ status: Int) -> Bool {
-        status == 502 || status == 503 || status == 504
-    }
-
-    static func isServerUnavailable(_ error: Error) -> Bool {
-        if let apiError = error as? VEXAPIError {
-            switch apiError {
-            case .technicalWorks, .requestTimeout:
-                return true
-            case .http(let status, _, let code, _):
-                return isMaintenanceStatus(status) || code == "maintenance"
-            case .invalidResponse:
-                return false
-            }
-        }
-        if let urlError = error as? URLError {
-            let unavailableCodes: [URLError.Code] = [
-                .timedOut,
-                .cannotFindHost,
-                .cannotConnectToHost,
-                .networkConnectionLost,
-                .dnsLookupFailed,
-                .notConnectedToInternet,
-            ]
-            return unavailableCodes.contains(urlError.code)
-        }
-        let message = error.localizedDescription.localizedLowercase
-        return message.contains("идут технические работы")
-            || message.contains("could not connect")
-            || message.contains("connection refused")
-            || message.contains("connection reset")
-            || message.contains("network connection was lost")
-            || message.contains("timed out")
-    }
-}
-
-extension Error {
-    var isUnauthorizedAPIError: Bool {
-        (self as? VEXAPIError)?.isUnauthorized == true
-    }
-
-    var isRateLimitedAPIError: Bool {
-        (self as? VEXAPIError)?.isRateLimited == true
-    }
-
-    var isTimeout: Bool {
-        // Keep normalized API deadlines separate from this legacy transport
-        // flag: profile timeout fallback is not qualified for replaced keys.
-        if let urlError = self as? URLError {
-            return urlError.code == .timedOut
-        }
-        let nsError = self as NSError
-        return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorTimedOut
-    }
-
-    var isProfileProvisioningUnavailable: Bool {
-        guard case .http(let status, let message, let code, _) = self as? VEXAPIError,
-              code != "maintenance" else {
-            return false
-        }
-        let normalized = message.localizedLowercase
-        return status == 400 && (
-            normalized.contains("add-peer")
-                || normalized.contains("node-agent")
-                || normalized.contains("connection refused")
-                || normalized.contains("connect: connection refused")
-        )
     }
 }

@@ -35,9 +35,9 @@ assertDeepEqual(homeBrandPresentation(), {
 });
 for (const phase of ['connecting', 'verifying'] as const) {
   const pending = homeConnectionPresentation(phase);
-  assertEqual(pending.tone, 'connected');
-  assertEqual(pending.action, 'Включён');
-  assertEqual(pending.helper, 'Завершаем подключение');
+  assertEqual(pending.tone, 'busy');
+  assertEqual(pending.action, phase === 'connecting' ? 'Подключение' : 'Проверяем');
+  assertEqual(pending.helper, phase === 'connecting' ? 'Подключаем VPN' : 'Проверяем соединение');
 }
 assertEqual(homeConnectionPresentation('connected').helper, 'Соединение защищено');
 assertEqual(homeConnectionPresentation('idle').action, 'Подключить');

@@ -1,3 +1,5 @@
+import { apiRequestUrl } from '../api/config';
+
 export type AppWebAuthUrlInput = {
   baseUrl: string;
   challenge: string;
@@ -9,7 +11,7 @@ export type AppWebAuthUrlInput = {
 };
 
 export function buildAppWebAuthUrl(input: AppWebAuthUrlInput): string {
-  return `${trimTrailingSlash(input.baseUrl)}/auth/app?${new URLSearchParams({
+  return apiRequestUrl(`/auth/app?${new URLSearchParams({
     client_id: 'vex_app',
     code_challenge: input.challenge,
     state: input.state,
@@ -17,9 +19,5 @@ export function buildAppWebAuthUrl(input: AppWebAuthUrlInput): string {
     device_name: input.deviceName,
     platform: input.platform,
     ...(input.provider ? { provider: input.provider } : {}),
-  }).toString()}`;
-}
-
-function trimTrailingSlash(value: string): string {
-  return value.replace(/\/+$/, '');
+  }).toString()}`, input.baseUrl);
 }

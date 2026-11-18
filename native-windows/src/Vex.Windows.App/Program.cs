@@ -19,7 +19,9 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        AuthActivationTrace.RecordStartup(AppStartupStage.ProcessEntered);
         WinRT.ComWrappersSupport.InitializeComWrappers();
+        AuthActivationTrace.RecordStartup(AppStartupStage.ComWrappersInitialized);
         AuthActivationTrace.Record(AuthActivationStage.ProcessStarted);
 
         var current = AppInstance.GetCurrent();
@@ -30,6 +32,7 @@ internal static class Program
             ?? ProtocolActivationUriParser.Parse(string.Join(" ", args))
             ?? UiPreviewContext.ParseActivationUri(string.Join(" ", args));
         UiPreviewContext.Initialize(args, protocolUri);
+        AuthActivationTrace.RecordStartup(AppStartupStage.PreviewConfigured);
         if (UiPreviewContext.IsPreviewRequest && !UiPreviewContext.IsSupported) return 0;
         _instance = AppInstance.FindOrRegisterForKey(UiPreviewContext.InstanceKey);
         if (!_instance.IsCurrent)
@@ -49,10 +52,12 @@ internal static class Program
         _instance.Activated += OnActivated;
         Application.Start(_ =>
         {
+            AuthActivationTrace.RecordStartup(AppStartupStage.UiDispatcherEntered);
             var dispatcherQueue = DispatcherQueue.GetForCurrentThread();
             SynchronizationContext.SetSynchronizationContext(
                 new DispatcherQueueSynchronizationContext(dispatcherQueue));
             var app = new App(activation);
+            AuthActivationTrace.RecordStartup(AppStartupStage.ApplicationConstructed);
             ActivationSnapshot? pendingActivation;
             lock (ActivationSync)
             {

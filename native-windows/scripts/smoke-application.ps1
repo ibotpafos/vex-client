@@ -142,6 +142,86 @@ function Get-SmokeUtcNow {
     return [DateTime]::UtcNow
 }
 
+function New-SmokeStartupTiming {
+    param([ValidateRange(3, 30)][int]$ObserveSeconds)
+    $launchedAt = Get-SmokeUtcNow
+    return [pscustomobject]@{
+        ObservationDeadline = $launchedAt.AddSeconds($ObserveSeconds)
+        WindowDeadline = $launchedAt.AddSeconds($ObserveSeconds + 15)
+    }
+}
+
+function Wait-SmokeStartupObservation {
+    param([Parameter(Mandatory = $true)][DateTime]$Deadline)
+    while ((Get-SmokeUtcNow) -lt $Deadline) {
+        $process.Refresh()
+        if ($process.HasExited) {
+            $result.exit_code = $process.ExitCode
+            throw 'Published WinUI application exited during startup.'
+        }
+        if ($process.MainWindowHandle -ne 0) { $result.main_window_created = $true }
+        Start-Sleep -Milliseconds 250
+    }
+    $process.Refresh()
+    if ($process.HasExited) {
+        $result.exit_code = $process.ExitCode
+        throw 'Published WinUI application exited before the observation deadline.'
+    }
+    $result.main_window_created = $result.main_window_created -or ($process.MainWindowHandle -ne 0)
+    $result.alive_at_deadline = $true
+}
+
+function Assert-SmokeStartupTraceRequest {
+    param([bool]$Requested, [bool]$Desktop, [bool]$Disposable)
+    if ($Requested -and (-not $Desktop -or -not $Disposable)) {
+        throw 'Startup stage capture requires isolated desktop checks and an explicit disposable runner.'
+    }
+}
+
+# TODO: Wire the opt-in disposable-runner startup trace into launch/finally and
+# add smoke/workflow coverage before publishing. This diagnostic WIP is parked
+# while the first independent server rollout is qualified; Windows is not accepted.
+function Complete-SmokeStartupTrace {
+    param([Parameter(Mandatory = $true)][ref]$TraceState, [int]$PrimaryProcessId)
+    $owned = $TraceState.Value
+    if ($null -eq $owned) { return $null }
+    # Consume ownership before stop/decode: an uncertain stop is never replayed.
+    $TraceState.Value = $null
+    return Stop-WindowsAuthTrace -State $owned -PrimaryProcessId $PrimaryProcessId -Startup
+}
+
+function New-SmokeStartupSummary {
+    param([bool]$Requested, [ValidateSet('signed-out', 'fixtures', 'protected-state-fault')][string]$PreviewMode,
+        [bool]$WindowReady, [bool]$CleanupConfirmed, $Projection)
+    $primary = @(); $secondary = @(); $available = $false
+    if ($Requested -and $null -ne $Projection) {
+        $fields = if ($Projection -is [Collections.IDictionary]) { @($Projection.Keys) } else { @($Projection.PSObject.Properties.Name) }
+        if ($fields.Count -ne 5 -or 'schema' -cnotin $fields -or 'available' -cnotin $fields -or
+            'stage_payload_only' -cnotin $fields -or 'primary_stages' -cnotin $fields -or 'secondary_stages' -cnotin $fields -or
+            $Projection.schema -cne 'vex.windows-startup-trace.v1' -or $Projection.available -isnot [bool] -or
+            -not $Projection.available -or $Projection.stage_payload_only -isnot [bool] -or -not $Projection.stage_payload_only -or
+            $Projection.primary_stages -isnot [array] -or $Projection.secondary_stages -isnot [array]) {
+            throw 'Startup stage summary is outside its fixed projection contract.'
+        }
+        $allowed = @(Get-WindowsTraceStageNames -Startup)
+        foreach ($group in @('primary_stages', 'secondary_stages')) {
+            if ($Projection.$group.Count -gt 256) { throw 'Startup stage summary exceeds its fixed budget.' }
+            $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+            foreach ($stage in $Projection.$group) {
+                if ($stage -isnot [string] -or $stage -cnotin $allowed -or -not $seen.Add($stage)) {
+                    throw 'Startup stage summary contains an unknown or repeated stage.'
+                }
+            }
+        }
+        $primary = @($Projection.primary_stages); $secondary = @($Projection.secondary_stages); $available = $true
+    }
+    return [ordered]@{
+        schema = 'vex.windows-startup-stage-summary.v1'; requested = $Requested; available = $available
+        preview_mode = $PreviewMode; main_window_ready = $WindowReady; trace_cleanup_confirmed = $CleanupConfirmed
+        primary_stages = $primary; secondary_stages = $secondary
+    }
+}
+
 function Wait-SmokeMainWindow {
     param([Parameter(Mandatory=$true)][DateTime]$Deadline)
 
@@ -768,7 +848,8 @@ try {
     }
     if ($DesktopChecks) { $launch.ArgumentList = $previewArguments }
     $process = Start-Process @launch
-    $windowReadinessDeadline = (Get-SmokeUtcNow).AddSeconds($ObserveSeconds + 15)
+    $startupTiming = New-SmokeStartupTiming -ObserveSeconds $ObserveSeconds
+    $windowReadinessDeadline = $startupTiming.WindowDeadline
     $ownedProcesses.Add($process)
     $result.process_id = $process.Id
     if ($DesktopChecks) {
@@ -777,25 +858,7 @@ try {
             $protectedStateDiagnosticPath = Join-Path ([IO.Path]::GetTempPath()) "vex-ui-preview-protected-state-$($process.Id).json"
         }
     }
-    $deadline = $startedAt.AddSeconds($ObserveSeconds)
-    while ([DateTime]::UtcNow -lt $deadline) {
-        $process.Refresh()
-        if ($process.HasExited) {
-            $result.exit_code = $process.ExitCode
-            throw 'Published WinUI application exited during startup.'
-        }
-        if ($process.MainWindowHandle -ne 0) {
-            $result.main_window_created = $true
-        }
-        Start-Sleep -Milliseconds 250
-    }
-    $process.Refresh()
-    if ($process.HasExited) {
-        $result.exit_code = $process.ExitCode
-        throw 'Published WinUI application exited before the observation deadline.'
-    }
-    $result.main_window_created = $result.main_window_created -or ($process.MainWindowHandle -ne 0)
-    $result.alive_at_deadline = $true
+    Wait-SmokeStartupObservation -Deadline $startupTiming.ObservationDeadline
     Write-Host "WinUI application remained alive for $ObserveSeconds seconds."
     Write-Host "WinUI main window created: $($result.main_window_created)."
     if ($DesktopChecks) {

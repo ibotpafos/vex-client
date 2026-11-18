@@ -9,5 +9,6 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Diagnostics.Tracing.TraceEvent" Version="4.0.0" />
+    <Compile Include="../../src/Vex.Windows.Client/Auth/AuthActivationTrace.cs" Link="AuthActivationTrace.cs" />
   </ItemGroup>
 </Project>

@@ -1,4 +1,5 @@
 using Vex.Windows.Client.Api;
+using Vex.Windows.Client.Auth;
 using Vex.Windows.Client.Session;
 using System.Net;
 using System.Security.Cryptography.X509Certificates;
@@ -13,6 +14,7 @@ public sealed class AppServices
 
     private AppServices()
     {
+        AuthActivationTrace.RecordStartup(AppStartupStage.ServicesConstructionStarted);
 #if DEBUG
         var apiBaseUrl =
             Environment.GetEnvironmentVariable("VEX_API_BASE_URL") ??
@@ -107,6 +109,7 @@ public sealed class AppServices
             UploadQueuedDiagnosticsAsync);
         Coordinator.SessionChanged += OnCoordinatorSessionChanged;
         _ = SynchronizeRealtimeAsync();
+        AuthActivationTrace.RecordStartup(AppStartupStage.ServicesConstructed);
     }
 
     public static AppServices Current => SharedServices.Value;

@@ -22,6 +22,48 @@ const shouldLogApiRequests = typeof __DEV__ !== 'undefined' && __DEV__;
 
 export const vexApiBaseUrl = trimTrailingSlash(process.env.EXPO_PUBLIC_VEX_API_BASE_URL || 'https://vexguard.app');
 const apiRequestBaseUrl = vexApiBaseUrl;
+const backupApiReadOrigin = 'https://incy.vexguard.app';
+const firstReadOriginTimeoutMs = 7000;
+const backupReadPreferenceMs = 60000;
+let preferBackupReadsUntil = 0;
+
+// Only native bootstrap reads may carry the existing first-party session to
+// this fixed ingress. Writes, custom API bases and protected recovery retain
+// their established transport and are never replayed across origins.
+function canUseApiReadBackup(path: string, options: RequestOptions, method: string, useRecoveryTransport: boolean): boolean {
+  if (!['android', 'ios'].includes(Platform.OS) || apiRequestBaseUrl !== 'https://vexguard.app'
+    || method !== 'GET' || options.body || options.retryCount === 0 || useRecoveryTransport || path.includes('#')) return false;
+  const pathname = path.split('?')[0];
+  return pathname === '/v1/billing/entitlement' || pathname === '/v1/vpn/profile';
+}
+
+function canFailOverRead(error: unknown): boolean {
+  // A real HTTP reply belongs to the original API policy, including auth,
+  // throttling and maintenance/Retry-After. Never evade it via another ingress.
+  return !(error instanceof ApiRequestError && error.status !== undefined) && isRetryableRequestError(error);
+}
+
+async function boundedReadOriginAttempt(path: string, options: RequestOptions, method: string,
+  signal: AbortSignal, deadline: number, origin: string): Promise<string> {
+  requireRequestTime(signal, deadline);
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  signal.addEventListener('abort', abort, { once: true });
+  if (signal.aborted) controller.abort();
+  let timer: ReturnType<typeof setTimeout>;
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new ApiRequestError('Превышено время ожидания API.', { code: 'request_timeout' }));
+    }, Math.max(0, deadline - Date.now()));
+  });
+  try {
+    return await Promise.race([rawRequestAttempt(path, options, method, controller.signal, deadline, false, origin), expired]);
+  } finally {
+    clearTimeout(timer!);
+    signal.removeEventListener('abort', abort);
+  }
+}
 
 let profileRecoveryDepth = 0;
 let recoveryRequestSequence = 0;
@@ -116,13 +158,35 @@ function requireRequestTime(signal: AbortSignal, deadline: number): void {
 async function requestWithinDeadline(path: string, options: RequestOptions, signal: AbortSignal, deadline: number, useRecoveryTransport = false): Promise<string> {
   const method = options.method ?? 'GET';
   const maxAttempts = method === 'GET' ? Math.max(0, Math.min(getRequestRetryCount, options.retryCount ?? getRequestRetryCount)) + 1 : 1;
+  const readBackup = canUseApiReadBackup(path, options, method, useRecoveryTransport) && deadline - Date.now() >= 3000;
+  const firstOrigin = readBackup && Date.now() < preferBackupReadsUntil ? backupApiReadOrigin : apiRequestBaseUrl;
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       requireRequestTime(signal, deadline);
-      return await rawRequestAttempt(path, options, method, signal, deadline, useRecoveryTransport);
+      if (!readBackup) return await rawRequestAttempt(path, options, method, signal, deadline, useRecoveryTransport);
+      try {
+        return await boundedReadOriginAttempt(path, options, method, signal,
+          Math.min(deadline, Date.now() + Math.min(firstReadOriginTimeoutMs, (deadline - Date.now()) / 2)), firstOrigin);
+      } catch (error) {
+        if (!canFailOverRead(error)) throw error;
+        requireRequestTime(signal, deadline);
+        const otherOrigin = firstOrigin === backupApiReadOrigin ? apiRequestBaseUrl : backupApiReadOrigin;
+        // Exactly one cross-origin attempt, inside the original total budget.
+        // Its failure is terminal; no retry loop can multiply fallback requests.
+        try {
+          const result = await boundedReadOriginAttempt(path, options, method, signal, deadline, otherOrigin);
+          preferBackupReadsUntil = otherOrigin === backupApiReadOrigin ? Date.now() + backupReadPreferenceMs : 0;
+          return result;
+        } catch (fallbackError) {
+          throw { apiReadFallbackFailed: true, error: fallbackError };
+        }
+      }
     } catch (error) {
+      if (typeof error === 'object' && error !== null && 'apiReadFallbackFailed' in error && error.apiReadFallbackFailed === true && 'error' in error) {
+        throw normalizeApiRequestError(error.error);
+      }
       lastError = error;
       if (signal.aborted || Date.now() >= deadline || attempt >= maxAttempts || !isRetryableRequestError(error)) {
         throw normalizeApiRequestError(error);
@@ -141,7 +205,7 @@ async function requestWithinDeadline(path: string, options: RequestOptions, sign
   throw normalizeApiRequestError(lastError);
 }
 
-async function rawRequestAttempt(path: string, options: RequestOptions, method: string, signal: AbortSignal, deadline: number, useRecoveryTransport = false): Promise<string> {
+async function rawRequestAttempt(path: string, options: RequestOptions, method: string, signal: AbortSignal, deadline: number, useRecoveryTransport = false, origin = apiRequestBaseUrl): Promise<string> {
   const headers: Record<string, string> = {
     Accept: 'application/json',
   };
@@ -174,10 +238,10 @@ async function rawRequestAttempt(path: string, options: RequestOptions, method: 
   try {
     let response;
     if (shouldLogApiRequests && !options.suppressErrorLog) {
-      logApiDebug(`API Request: [${init.method || 'GET'}] ${apiRequestBaseUrl}${path}`);
+      logApiDebug(`API Request: [${init.method || 'GET'}] ${origin}${path}`);
     }
     
-    const url = `${apiRequestBaseUrl}${path}`;
+    const url = `${origin}${path}`;
     const native = useRecoveryTransport ? recoveryModule(url) : undefined;
     response = native
       ? await recoveryRequest(native, url, method, headers, typeof init.body === 'string' ? init.body : null, signal, deadline)

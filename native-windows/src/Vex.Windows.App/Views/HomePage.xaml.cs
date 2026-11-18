@@ -123,7 +123,7 @@ public sealed partial class HomePage : Page
         ServerPickerContent.MaxHeight = Math.Max(280, root.Size.Height - 96);
     }
 
-    private IEnumerable<Microsoft.UI.Xaml.Shapes.Ellipse> OrbitRings =>
+    private Microsoft.UI.Xaml.Shapes.Ellipse[] OrbitRings =>
         [Orbit0, Orbit1, Orbit2, Orbit3, Orbit4, Orbit5];
 
     private void OnAnimationsEnabledChanged(UISettings sender, object args) =>
@@ -395,8 +395,8 @@ public sealed partial class HomePage : Page
     private void LoadPreviewLocations()
     {
         _locations.Clear();
-        _locations.AddRange(
-        [
+        _locations.AddRange(new VpnLocation[]
+        {
             new VpnLocation(
                 "de-1",
                 "Frankfurt",
@@ -424,7 +424,7 @@ public sealed partial class HomePage : Page
                 "🇳🇱",
                 "healthy",
                 17),
-        ]);
+        });
         _services.MainWindow?.UpdateServerHealth(_locations);
         SelectPreferredLocation();
         RefreshLocationCards();

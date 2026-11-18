@@ -33,11 +33,13 @@ export function customerRealtimeMetadata(type: CustomerRealtimeEventType, data: 
   }
   if (type === 'customer.change') {
     const domain = validDomain(record.domain);
-    if (!domain || typeof record.version !== 'number' || record.version <= 0) return null;
+    if (!domain || typeof record.version !== 'number' || !Number.isInteger(record.version) || record.version <= 0) return null;
     return { domains: [domain], reason: '' };
   }
-  if (!Array.isArray(record.versions)) return null;
-  const parsedDomains = [...new Set(record.versions.flatMap((version) => {
+  // Older Go servers encode an absent version snapshot as null.
+  if (record.versions !== null && !Array.isArray(record.versions)) return null;
+  const versions = record.versions ?? [];
+  const parsedDomains = [...new Set(versions.flatMap((version) => {
     if (!version || typeof version !== 'object') return [];
     const domain = validDomain((version as Record<string, unknown>).domain);
     return domain ? [domain] : [];
@@ -96,6 +98,41 @@ export function parseCustomerSSE(input: string): { events: CustomerSSEEvent[]; r
     }
   }
   return { events, remainder };
+}
+
+// The pure complete-buffer parser remains the canonical event-field projection.
+// This incremental reader bounds each normalized frame before parsing it.
+export class CustomerSSEParser {
+  private static readonly maximumFrameLength = 64 * 1024;
+  private frame: string[] = [];
+  private suppressLF = false;
+  private exceededFrameLimit = false;
+
+  get hasExceededFrameLimit(): boolean { return this.exceededFrameLimit; }
+
+  append(chunk: string): CustomerSSEEvent[] {
+    const events: CustomerSSEEvent[] = [];
+    if (this.exceededFrameLimit) return events;
+    for (let index = 0; index < chunk.length; index++) {
+      const character = chunk[index]!;
+      if (this.suppressLF) {
+        this.suppressLF = false;
+        if (character === '\n') continue;
+      }
+      const normalized = character === '\r' ? '\n' : character;
+      this.suppressLF = character === '\r';
+      if (this.frame.length === CustomerSSEParser.maximumFrameLength) {
+        this.frame = [];
+        this.exceededFrameLimit = true;
+        break;
+      }
+      this.frame.push(normalized);
+      if (normalized !== '\n' || this.frame.at(-2) !== '\n') continue;
+      events.push(...parseCustomerSSE(this.frame.join('')).events);
+      this.frame = [];
+    }
+    return events;
+  }
 }
 
 export function customerRealtimeReconnectDelay(attempt: number): number {

@@ -1,9 +1,10 @@
+import realSourceLoader from './helpers/real-source-loader.cjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
-import { createRemoteConfigStore } from '../src/status/remote-config-store.ts';
+const { createRemoteConfigStore } = realSourceLoader()('@/status/remote-config-store');
 
 const config = (incidentBanner) => ({ platform: 'android', channel: 'stable', incidentBanner });
 function fixture(load) {
@@ -73,7 +74,7 @@ test('both screens use the accessible shared notice without VPN actions', () => 
   }
   const notice = readFileSync(new URL('../src/components/service-notice.tsx', import.meta.url), 'utf8');
   assert.match(notice, /accessibilityRole="alert" accessibilityLiveRegion="polite"/);
-  assert.match(notice, /восстановление пока не подтверждено/);
+  assert.match(notice, /восстановление не подтверждено/);
   assert.doesNotMatch(notice, /handlePowerPress|disconnect|connectVpn/);
 });
 
@@ -87,7 +88,9 @@ test('successful config with failed incident read retains warning while applying
   const dependencies = {
     '@/native/appInfo': { VEX_API_CLIENT_VERSION: 'fixture-api', VEX_CONFIG_SCHEMA_VERSION: 1 },
     './client': { jsonRequest: async () => response },
+    './config': { trustedUpdateBaseUrl: 'https://vexguard.app' },
     './updatePreflight': {},
+    './error': realSourceLoader()('@/api/error'),
   };
   vm.runInNewContext(source, { exports: api, require(name) {
     assert.ok(Object.hasOwn(dependencies, name), `unexpected import ${name}`);

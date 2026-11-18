@@ -1,3 +1,4 @@
+import { vexTheme } from '@/ui/vex-theme';
 import {
   Column,
   ModalBottomSheet,
@@ -28,8 +29,8 @@ export function SignInBottomSheet({ children, isPresented, onDismiss }: SignInBo
 
   return (
     <ModalBottomSheet
-      containerColor="#041315"
-      contentColor="#E9F7F8"
+      containerColor={vexTheme.colors.background}
+      contentColor={vexTheme.colors.text}
       onDismissRequest={() => {
         setIsMounted(false);
         onDismiss();

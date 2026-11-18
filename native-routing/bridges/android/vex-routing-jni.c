@@ -11,6 +11,7 @@ extern int32_t awgRouterUpdatePolicy(int32_t, struct go_string);
 extern int32_t awgRouterCaptureActive(int32_t);
 extern int32_t awgRouterPolicyActive(int32_t);
 extern void awgRouterRelease(int32_t);
+extern int32_t awgRouterVerifyDataPlane(int32_t);
 
 struct protector {
   uint64_t id;
@@ -106,6 +107,7 @@ JNIEXPORT jint JNICALL Java_org_amnezia_awg_GoBackend_awgRouterUpdatePolicy(JNIE
 JNIEXPORT jboolean JNICALL Java_org_amnezia_awg_GoBackend_awgRouterCaptureActive(JNIEnv *env,jclass cls,jint id){return awgRouterCaptureActive(id)!=0;}
 JNIEXPORT jboolean JNICALL Java_org_amnezia_awg_GoBackend_awgRouterPolicyActive(JNIEnv *env,jclass cls,jint id){return awgRouterPolicyActive(id)!=0;}
 JNIEXPORT void JNICALL Java_org_amnezia_awg_GoBackend_awgRouterRelease(JNIEnv *env,jclass cls,jint id){awgRouterRelease(id);}
+JNIEXPORT jint JNICALL Java_org_amnezia_awg_GoBackend_awgRouterVerifyDataPlane(JNIEnv *env,jclass cls,jint id){return awgRouterVerifyDataPlane(id);}
 
 extern char *awgRouterAuthorization(int32_t);
 JNIEXPORT jstring JNICALL Java_org_amnezia_awg_GoBackend_awgRouterAuthorization(JNIEnv *env,jclass cls,jint id){

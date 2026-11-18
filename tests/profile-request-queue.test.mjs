@@ -82,10 +82,12 @@ async function main() {
    retryCalls.push('foreground-retry');
    return 'foreground-profile';
  }, () => true, 'foreground', 'retry-profile');
+ const foregroundRejected = assert.rejects(retriedForeground, /prefetch failed/);
  releaseFailedPrefetch();
  await failedPrefetchRejected;
- assert.equal(await retriedForeground, 'foreground-profile');
- assert.deepEqual(retryCalls, ['background-failed','foreground-retry']);
+ await foregroundRejected;
+ assert.deepEqual(retryCalls, ['background-failed']);
+ assert.equal(await runProfileRequest(async () => 'explicit-next-request'), 'explicit-next-request');
  console.log('PROFILE_REQUEST_SERIALIZATION_AND_STALE_CANCELLATION=PASS');
 }
 void main();

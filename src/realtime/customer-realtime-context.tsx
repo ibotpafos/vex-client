@@ -2,7 +2,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { createContext, use, useEffect, useMemo, useState, type PropsWithChildren } from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
 
-import { vexApiBaseUrl } from '@/api/vexApi';
+import { realtimeApiBaseUrl } from '@/api/vexApi';
 import { ApiRequestError } from '@/api/error';
 import { useSession } from '@/auth/session-context';
 import {
@@ -28,7 +28,7 @@ export function useCustomerRealtimeStatus(): CustomerRealtimeContextValue {
 export function CustomerRealtimeProvider({ children }: PropsWithChildren) {
   const queryClient = useQueryClient();
   const { isCurrentSessionOperation, refreshSession, session, signOut } = useSession();
-  const [appState, setAppState] = useState<AppStateStatus>(AppState.currentState);
+  const [appState, setAppState] = useState<AppStateStatus>(AppState.currentState as AppStateStatus);
   const [connected, setConnected] = useState(false);
   const [revision, setRevision] = useState(0);
 
@@ -48,7 +48,7 @@ export function CustomerRealtimeProvider({ children }: PropsWithChildren) {
     setConnected(false);
     const transport = new CustomerRealtimeTransport({
       accessToken,
-      baseUrl: vexApiBaseUrl,
+      baseUrl: realtimeApiBaseUrl,
       onStatus: (value) => {
         if (sessionIsCurrent()) setConnected(value);
       },

@@ -1,3 +1,4 @@
+import { vexTheme } from '@/ui/vex-theme';
 import * as Updates from "expo-updates";
 import { Button, Column, Host, Text as UniversalText } from "@expo/ui";
 import {
@@ -241,7 +242,7 @@ function OtaUpdateProviderContent({ children }: PropsWithChildren) {
   const reload = useCallback(
     async (): Promise<boolean> =>
       reloadOtaSafely({
-        getAppState: () => AppState.currentState,
+        getAppState: () => AppState.currentState as AppStateStatus,
         canApply: canAutomaticallyApplyOtaUpdate,
         getVpnStatus,
         isReady: () => statusRef.current === "ready" && !runningRef.current,
@@ -366,7 +367,7 @@ export function OtaUpdateOverlay() {
         : isError
           ? ota.message || "Проверьте подключение и повторите позже."
           : ota.status === "restarting"
-            ? "Перезапускаем VEX без установки APK."
+            ? "Перезапускаем VEX без переустановки."
             : ota.progress === null
               ? "Скачиваем исправления без переустановки приложения."
               : `Скачиваем исправления: ${ota.progress}%.`;
@@ -374,17 +375,17 @@ export function OtaUpdateOverlay() {
     <View pointerEvents="box-none" style={styles.overlay}>
       <Host
         colorScheme="dark"
-        seedColor="#22D3EE"
+        seedColor={vexTheme.colors.accent}
         style={styles.host}
         matchContents={{ vertical: true }}
       >
         <Column spacing={8} style={styles.card}>
-          <UniversalText textStyle={styles.eyebrow}>VEX update</UniversalText>
+          <UniversalText textStyle={styles.eyebrow}>Обновление VEX</UniversalText>
           <UniversalText textStyle={styles.title}>{title}</UniversalText>
           <UniversalText textStyle={styles.text}>{text}</UniversalText>
-          {isError ? <Button label="Повторить" onPress={ota.retry} /> : null}
+          {isError ? <Button style={styles.action} label="Повторить" onPress={ota.retry} /> : null}
           {isError ? (
-            <Button label="Позже" onPress={ota.dismiss} variant="outlined" />
+            <Button style={styles.action} label="Позже" onPress={ota.dismiss} variant="outlined" />
           ) : null}
         </Column>
       </Host>
@@ -393,6 +394,7 @@ export function OtaUpdateOverlay() {
 }
 
 const styles = StyleSheet.create({
+  action: { height: 48, borderRadius: 10 },
   overlay: {
     left: 0,
     position: "absolute",
@@ -402,29 +404,23 @@ const styles = StyleSheet.create({
   },
   host: { alignSelf: "center", maxWidth: 560, width: "92%" },
   card: {
-    backgroundColor: "rgba(7,17,19,0.97)",
-    borderColor: "rgba(34,211,238,0.28)",
-    borderRadius: 18,
+    backgroundColor: vexTheme.colors.surface,
+    borderColor: vexTheme.colors.line,
+    borderRadius: 16,
     borderWidth: 1,
-    padding: 13,
-    shadowColor: "#000000",
-    shadowOffset: { height: 8, width: 0 },
-    shadowOpacity: 0.22,
-    shadowRadius: 18,
+    padding: 16,
   },
   eyebrow: {
-    color: "#22D3EE",
-    fontSize: 10,
-    fontWeight: "900",
-    letterSpacing: 0.7,
-    textTransform: "uppercase",
-  },
-  title: { color: "#F4FCFD", fontSize: 15, fontWeight: "900", marginTop: 2 },
-  text: {
-    color: "#C6D6D9",
+    color: vexTheme.colors.accent,
     fontSize: 12,
-    fontWeight: "700",
+    fontWeight: "600",
+  },
+  title: { color: vexTheme.colors.text, fontSize: 15, fontWeight: "600", marginTop: 4 },
+  text: {
+    color: vexTheme.colors.textSecondary,
+    fontSize: 12,
+    fontWeight: "400",
     lineHeight: 16,
-    marginTop: 3,
+    marginTop: 4,
   },
 });

@@ -19,6 +19,7 @@ export default [
       "certs/**",
       "scripts/**",
       "artifacts/**",
+      ".local/**",
       ".worktrees/**"
     ]
   },

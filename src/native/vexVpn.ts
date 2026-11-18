@@ -1,4 +1,4 @@
-import { NativeEventEmitter, NativeModules, Platform, type NativeModule } from 'react-native';
+import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 import { requireNativeModule as requireExpoNativeModule } from 'expo';
 import { disconnectWithRecoveryTimeout } from '@/vpn/disconnectRecovery';
 import { resolveNativeTunnelVerified } from '@/vpn/vpnStatusVerification';
@@ -8,7 +8,9 @@ import type { VpnRoutingMode } from '@/vpn/routingPolicy';
 
 export type VpnState = 'connected' | 'connecting' | 'disconnecting' | 'disconnected' | 'error' | 'verifying' | 'degraded';
 export type LeakProtectionState = 'off' | 'armed' | 'blocking';
-export type VpnVerificationReason = 'handshake_pending' | 'handshake_stale' | 'device_usage_degraded' | 'endpoint_failed' | 'probe_pending' | 'data_plane_failed' | 'network_unavailable';
+export type VpnVerificationReason = 'handshake_pending' | 'handshake_stale' | 'device_usage_degraded' | 'endpoint_failed'
+  | 'data_plane_pending' | 'dns_failed' | 'https_failed' | 'data_plane_unavailable'
+  | 'probe_pending' | 'data_plane_failed' | 'network_unavailable';
 
 export type VpnStatus = {
   transport?: VpnTransport;
@@ -21,6 +23,8 @@ export type VpnStatus = {
   latestHandshakeEpochMillis?: number;
   leakProtection?: LeakProtectionState;
   verified?: boolean;
+  dataPlaneVerified?: boolean;
+  dataPlaneGeneration?: string;
   verificationReason?: VpnVerificationReason;
 };
 
@@ -77,6 +81,7 @@ type VexVpnNativeModule = {
   openVpnSettings?(): Promise<boolean>;
   getOrCreateWireGuardKeyPair(): Promise<WireGuardKeyPair>;
   generateWireGuardKeyPair(): Promise<WireGuardKeyPair>;
+  generateWireGuardKeyMaterial?(): Promise<WireGuardKeyPair>;
   replaceWireGuardKeyPair(privateKey: string, publicKey: string, keyEpoch: number): Promise<boolean>;
   resetWireGuardKeyPair(): Promise<boolean>;
   measureEndpointLatency(endpoint: string): Promise<number | null>;
@@ -112,6 +117,7 @@ const vpnStatusChangedEvent = 'vpn-status-changed';
 let cachedVpnStatus: { status: VpnStatus; cachedAt: number } | null = null;
 let inflightVpnStatusPromise: Promise<VpnStatus> | null = null;
 let vpnStatusRevision = 0;
+let vpnStatusControlEpoch = 0;
 let nativeVpnEventEmitter: NativeEventEmitter | null = null;
 
 function requireNativeModule(): VexVpnNativeModule {
@@ -155,6 +161,7 @@ export type DisconnectVpnOptions = {
 export async function connectVpn(wgQuickConfig: string, options: ConnectVpnOptions = {}): Promise<VpnStatus> {
   const module = requireNativeModule();
   if (options.transport === 'vless' && !supportsNativeVless()) throw new Error('Для VLESS обновите Android-приложение.');
+  const controlEpoch = invalidateVpnStatusCache();
   const nativeStatus = options.transport === 'vless'
     ? await module.connectVless!(wgQuickConfig, options.antiLeakEnabled !== false,
       JSON.stringify({ mode: 'full_tunnel' }), options.selectedApplications ?? [], options.applicationRoutingMode === 'selected')
@@ -171,7 +178,7 @@ export async function connectVpn(wgQuickConfig: string, options: ConnectVpnOptio
     )
     : await module.connect(wgQuickConfig, options.antiLeakEnabled !== false);
   const status = normalizeVpnStatus(nativeStatus);
-  updateCachedVpnStatus(status);
+  if (controlEpoch === vpnStatusControlEpoch) updateCachedVpnStatus(status);
   return status;
 }
 
@@ -205,6 +212,7 @@ function isInstalledVpnApplication(value: unknown): value is InstalledVpnApplica
 
 export async function disconnectVpn(options: DisconnectVpnOptions = {}): Promise<VpnStatus> {
   const module = requireNativeModule();
+  const controlEpoch = invalidateVpnStatusCache();
   const releaseAntiLeak = options.releaseAntiLeak !== false;
   const operation = module.disconnect(releaseAntiLeak);
   const nativeStatus = Platform.OS === 'android'
@@ -214,7 +222,7 @@ export async function disconnectVpn(options: DisconnectVpnOptions = {}): Promise
     )
     : await operation;
   const status = normalizeVpnStatus(nativeStatus);
-  updateCachedVpnStatus(status);
+  if (controlEpoch === vpnStatusControlEpoch) updateCachedVpnStatus(status);
   return status;
 }
 
@@ -261,13 +269,14 @@ export async function getVpnStatus(options: { fresh?: boolean } = {}): Promise<V
   }
 
   const requestRevision = ++vpnStatusRevision;
+  const controlEpoch = vpnStatusControlEpoch;
   const request = requireNativeModule()
     .status()
     .then((status) => {
       const normalizedStatus = normalizeVpnStatus(status);
       // A newer read, event or tunnel operation owns the shared snapshot.
       // An older native read must not replace the result of a fresh read.
-      if (requestRevision === vpnStatusRevision) updateCachedVpnStatus(normalizedStatus);
+      if (requestRevision === vpnStatusRevision && controlEpoch === vpnStatusControlEpoch) updateCachedVpnStatus(normalizedStatus);
       return normalizedStatus;
     })
     .finally(() => {
@@ -291,8 +300,8 @@ export function listenVpnStatusChanged(listener: (status: VpnStatus) => void): (
     return null;
   }
 
-  const subscription = emitter.addListener(vpnStatusChangedEvent, (status: VpnStatus) => {
-    const normalizedStatus = normalizeVpnStatus(status);
+  const subscription = emitter.addListener(vpnStatusChangedEvent, (status: Object) => {
+    const normalizedStatus = normalizeVpnStatus(status as VpnStatus);
     updateCachedVpnStatus(normalizedStatus);
     listener(normalizedStatus);
   });
@@ -316,11 +325,14 @@ export async function getOrCreateWireGuardKeyPair(): Promise<WireGuardKeyPair | 
   return requireNativeModule().getOrCreateWireGuardKeyPair();
 }
 
-export async function generateWireGuardKeyPair(): Promise<WireGuardKeyPair | null> {
+export async function generateWireGuardKeyPair(options?: { independentEpoch?: boolean }): Promise<WireGuardKeyPair | null> {
   if (Platform.OS !== 'android' && Platform.OS !== 'ios') {
     return null;
   }
-  return requireNativeModule().generateWireGuardKeyPair();
+  const module = requireNativeModule();
+  return options?.independentEpoch && typeof module.generateWireGuardKeyMaterial === 'function'
+    ? module.generateWireGuardKeyMaterial()
+    : module.generateWireGuardKeyPair();
 }
 
 export async function replaceWireGuardKeyPair(keyPair: WireGuardKeyPair): Promise<boolean> {
@@ -434,12 +446,18 @@ function updateCachedVpnStatus(status: VpnStatus): void {
   };
 }
 
+function invalidateVpnStatusCache(): number {
+  cachedVpnStatus = null;
+  inflightVpnStatusPromise = null;
+  return ++vpnStatusControlEpoch;
+}
+
 function getNativeVpnEventEmitter(): NativeEventEmitter | null {
   if (Platform.OS !== 'android') {
     return null;
   }
   if (!nativeVpnEventEmitter) {
-    nativeVpnEventEmitter = new NativeEventEmitter(requireNativeModule() as NativeModule);
+    nativeVpnEventEmitter = new NativeEventEmitter(requireNativeModule() as any);
   }
   return nativeVpnEventEmitter;
 }

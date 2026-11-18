@@ -1,4 +1,5 @@
 import type { VpnLocation } from '../api/vexApi';
+import { comparableVpnLocationId } from './locationId';
 
 export type ServerSelectionMode = 'auto' | 'manual';
 
@@ -24,7 +25,7 @@ export function reconcileLocationSelection(
   locations: VpnLocation[],
 ): { mode: ServerSelectionMode; selectedLocationId: string } {
   const selected = selectedLocationId
-    ? locations.find((location) => normalizeLocationId(location.id) === normalizeLocationId(selectedLocationId))
+    ? locations.find((location) => comparableVpnLocationId(location.id) === comparableVpnLocationId(selectedLocationId))
     : undefined;
   if (selected && isSelectableLocation(selected)) {
     return { mode, selectedLocationId: selected.id };
@@ -53,7 +54,7 @@ export function chooseBestVpnLocation(locations: VpnLocation[]): VpnLocation | u
 
 export function autoSwitchTargetLocationId(currentLocationId: string, locations: VpnLocation[]): string | null {
   const bestLocationId = chooseBestVpnLocation(locations)?.id;
-  if (!bestLocationId || normalizeLocationId(bestLocationId) === normalizeLocationId(currentLocationId)) {
+  if (!bestLocationId || comparableVpnLocationId(bestLocationId) === comparableVpnLocationId(currentLocationId)) {
     return null;
   }
   return bestLocationId;
@@ -79,7 +80,11 @@ function compareLocationCandidates(
 }
 
 export function isSelectableLocation(location: VpnLocation): boolean {
-  return location.availability.trim().toLowerCase() === 'available' && location.healthyNodes > 0;
+  if (typeof location.availability !== 'string' || typeof location.status !== 'string') return false;
+  return Number.isFinite(location.healthyNodes) && location.healthyNodes > 0
+    && (location.awg3Nodes === undefined || (Number.isSafeInteger(location.awg3Nodes) && location.awg3Nodes > 0))
+    && location.availability.trim().toLowerCase() === 'available'
+    && ['active', 'online', 'healthy', 'degraded'].includes(location.status.trim().toLowerCase());
 }
 
 function locationStatusScore(location: VpnLocation): number {
@@ -92,6 +97,14 @@ function normalizedLatency(location: VpnLocation): number {
     : Number.POSITIVE_INFINITY;
 }
 
-function normalizeLocationId(locationId: string): string {
-  return locationId.trim().toLowerCase();
+// Opt-in server capability, not merely the native binary's ability to run Xray.
+export function locationSupportsVless(location: VpnLocation): boolean {
+  return isSelectableLocation(location) && Array.isArray(location.capabilities)
+    && location.capabilities.includes('vless-xhttp-v1');
+}
+
+export function hasAvailableVlessLocation(locations: VpnLocation[] | null | undefined,
+  mode: ServerSelectionMode, selectedLocationId: string): boolean {
+  return Boolean(locations?.some(location => locationSupportsVless(location)
+    && (mode === 'auto' || location.id === selectedLocationId)));
 }

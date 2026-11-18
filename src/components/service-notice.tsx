@@ -10,13 +10,13 @@ export function ServiceNotice() {
     <View accessibilityRole="alert" accessibilityLiveRegion="polite" style={styles.panel} testID="service-notice">
       <Text style={styles.title}>{title}</Text>
       {message ? <Text style={styles.text}>{message}</Text> : null}
-      {unavailable ? <Text style={styles.text}>Не удалось обновить статус. {message ? 'Показано последнее известное сообщение; восстановление пока не подтверждено.' : 'Текущее состояние сервиса неизвестно. Повторяем проверку автоматически.'}</Text> : null}
+      {unavailable ? <Text style={styles.text}>Статус не обновлён. {message ? 'Последнее сообщение; восстановление не подтверждено.' : 'Статус неизвестен. Повторяем проверку.'}</Text> : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  panel: { backgroundColor: 'rgba(34,211,238,0.08)', borderColor: 'rgba(34,211,238,0.22)', borderRadius: 12, borderWidth: 1, padding: 10, gap: 6 },
-  title: { color: vexColors.textSoft, fontSize: 14, fontWeight: '900' },
-  text: { color: vexColors.muted, fontSize: 13, lineHeight: 18 },
+  panel: { backgroundColor: vexColors.card, borderColor: vexColors.line, borderRadius: 16, borderWidth: 1, padding: 16, gap: 8 },
+  title: { color: vexColors.textSoft, fontSize: 14, fontWeight: '600' },
+  text: { color: vexColors.textSoft, fontSize: 13, lineHeight: 20 },
 });

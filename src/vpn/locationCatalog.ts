@@ -34,6 +34,9 @@ function normalizeLocation(item: LocationDTO, index: number, seenIds: Set<string
   if (typeof item.healthy_nodes !== 'number' || !Number.isFinite(item.healthy_nodes) || item.healthy_nodes < 0) {
     throw new VpnLocationCatalogError(`entry ${index} has invalid healthy_nodes`);
   }
+  if (item.awg3_nodes !== undefined && (!Number.isSafeInteger(item.awg3_nodes) || item.awg3_nodes < 0)) {
+    throw new VpnLocationCatalogError(`entry ${index} has invalid awg3_nodes`);
+  }
   if (item.priority !== undefined && (typeof item.priority !== 'number' || !Number.isFinite(item.priority))) {
     throw new VpnLocationCatalogError(`entry ${index} has invalid priority`);
   }
@@ -48,6 +51,7 @@ function normalizeLocation(item: LocationDTO, index: number, seenIds: Set<string
     priority: item.priority ?? 100,
     status: optionalString(item.status)?.trim() || 'unknown',
     healthyNodes: item.healthy_nodes,
+    ...(item.awg3_nodes === undefined ? {} : { awg3Nodes: item.awg3_nodes }),
     capabilities: normalizeCapabilities(item.capabilities, index),
     endpoint: optionalString(item.endpoint)?.trim() || undefined,
     latencyMs: optionalFiniteNumber(item.latency_ms, index, 'latency_ms'),

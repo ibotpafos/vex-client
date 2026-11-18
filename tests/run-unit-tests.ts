@@ -17,7 +17,8 @@ import { isCurrentSessionMutation } from '../src/auth/sessionMutationGuard';
 import { loadSessionWithRetry, loadWithRetry } from '../src/auth/sessionLoadRetry';
 import { vpnConnectionAnimationsEnabled } from '../src/vpn/vpnAnimationPolicy';
 import { formatQuotaBytes, formatQuotaUsage, hasQuotaLimit, quotaHeadline, quotaProgress, quotaRemainingBytes } from '../src/components/traffic-quota-presentation';
-import { generateChallenge, generateRandomString } from '../src/auth/pkce';
+import { createHash } from 'node:crypto';
+import realSourceLoader from './helpers/real-source-loader.cjs';
 import { buildAppWebAuthUrl } from '../src/auth/webAuthUrl';
 import { emailOTPCells, emailOTPRequestErrorMessage, isEmailOTPExpired, isInvalidOrExpiredEmailOTPError, normalizeEmailOTPCode } from '../src/auth/emailOtp';
 import { loadSessionFromStorage, saveSessionToStorage, type SessionStorageAdapter } from '../src/auth/sessionStoreCore';
@@ -36,9 +37,8 @@ import {
 import { AWG3RecoveryPolicyError, connectSuppliedProfile, connectionAttemptsForProfile, isAWG3Profile, isVpnTransportFallbackError, profileEndpoint } from '../src/vpn/connectionFallback';
 import { foregroundLatencyTargets } from '../src/vpn/foregroundLatencyTargets';
 import { DynamicRouteEngine, parseDynamicRoutePolicy } from '../src/vpn/dynamicRouteCore';
-import { connectableLocalProfile, explicitConnectProfileResolutionOptions, shouldUseLocalProfileBeforeOnline, vpnConnectTelemetry, vpnConnectTimingSamples, vpnUnexpectedDisconnectTelemetry } from '../src/vpn/connectFlow';
+import { connectableLocalProfile, explicitConnectProfileResolutionOptions, isUnverifiedProfileSource, shouldUseLocalProfileBeforeOnline, vpnConnectTelemetry, vpnConnectTimingSamples, vpnUnexpectedDisconnectTelemetry } from '../src/vpn/connectFlow';
 import { recoverVpnConnection } from '../src/vpn/connectionRecovery';
-import { connectFreshSameLocationProfile } from '../src/vpn/sameLocationProfileRecovery';
 import {
   initialRecoveryBackoffState,
   recoveryAttemptAllowed,
@@ -71,7 +71,7 @@ import { assessVpnAutopilotIssue } from '../src/vpn/vpnAutopilotAssessment';
 import { buildCreateDeviceRequest } from '../src/api/deviceCreateRequest';
 import { getOrCreateNativeDeviceRegistration } from '../src/api/nativeDeviceRegistration';
 import { canAutomaticallyApplyOtaUpdate } from '../src/updates/otaAutoApply';
-import { HOME_TAB_ROUTE } from '../src/navigation/routes';
+
 import type { VpnDevice, VpnDeviceUsage, VpnLocation } from '../src/api/vexApi';
 import type { VpnStatus } from '../src/native/vexVpn';
 import type { VpnProfile } from '../src/vpn/profile';
@@ -89,7 +89,7 @@ import {
 import * as homeLocationPreviewModule from '../src/screens/home-location-previews';
 import { trafficSessionLabel } from '../src/components/traffic-summary';
 import appConfig from '../app.config';
-import type { ConfigContext } from '@expo/config';
+import type { ConfigContext } from 'expo/config';
 import { vexWebsiteUrl } from '../src/navigation/website';
 import { authEntryStepAfterBack } from '../src/auth/authEntry';
 import { clientDiagnosticsRequestBody } from '../src/api/clientDiagnosticsRequest';
@@ -107,8 +107,26 @@ import {
   customerRealtimeReconnectDelay,
   parseCustomerSSE,
 } from '../src/realtime/customerRealtimeCore';
-import { CustomerRealtimeTransport } from '../src/realtime/customerRealtimeTransport';
 import { processDevicePSKRotationEvent, type StagedDevicePSKProfile } from '../src/vpn/devicePskRotation';
+
+// Native crypto and router are platform boundaries; execute the real app modules.
+const loadNativeBoundaryModule = realSourceLoader({ adapters: {
+  'expo-crypto': {
+    CryptoDigestAlgorithm: { SHA256: 'SHA-256' },
+    digestStringAsync: async (algorithm: string, input: string) => {
+      assertEqual(algorithm, 'SHA-256');
+      return createHash('sha256').update(input).digest('hex');
+    },
+  },
+  'expo-router': { router: {
+    canGoBack: () => false,
+    back: () => { throw new Error('Unexpected navigation in core unit tests'); },
+    replace: () => { throw new Error('Unexpected navigation in core unit tests'); },
+  } },
+} });
+const { generateChallenge, generateRandomString } = loadNativeBoundaryModule('@/auth/pkce');
+const { HOME_TAB_ROUTE } = loadNativeBoundaryModule('@/navigation/routes');
+const { CustomerRealtimeTransport } = loadNativeBoundaryModule('@/realtime/customerRealtimeTransport') as typeof import('../src/realtime/customerRealtimeTransport');
 
 assertDeepEqual(customerRealtimeMetadata('customer.change', JSON.stringify({
   domain: 'devices', version: 7, updated_at: '2026-08-30T12:00:00Z',
@@ -167,7 +185,7 @@ class FakeRealtimeRequest {
     onStatus: (connected) => statuses.push(connected),
     schedule: (callback, milliseconds) => {
       timers.push({ callback, milliseconds });
-      return timers.length as unknown as ReturnType<typeof setTimeout>;
+      return timers.length;
     },
   });
   transport.start();
@@ -211,7 +229,7 @@ class FakeRealtimeRequest {
     onStatus: (connected) => statuses.push(connected),
     schedule: (callback, milliseconds) => {
       timers.push({ callback, milliseconds });
-      return timers.length as unknown as ReturnType<typeof setTimeout>;
+      return timers.length;
     },
   });
   transport.start();
@@ -240,7 +258,7 @@ class FakeRealtimeRequest {
     onStatus: (connected) => statuses.push(connected),
     schedule: (callback, milliseconds) => {
       timers.push({ callback, milliseconds });
-      return timers.length as unknown as ReturnType<typeof setTimeout>;
+      return timers.length;
     },
   });
   transport.start();
@@ -270,7 +288,7 @@ assertDeepEqual(
   ]).map((location) => [location.id, location.displayName]),
   [['edge-a', 'First Edge'], ['edge-b', 'Second']],
 );
-assertEqual(locationCatalogCacheSchemaVersion, 2);
+assertEqual(locationCatalogCacheSchemaVersion, 3);
 const shouldResetVpnCacheForSession = (
   vpnQueryCachePolicyModule as unknown as Record<string, unknown>
 ).shouldResetVpnCacheForSession;
@@ -347,7 +365,7 @@ assertEqual(
 );
 assertDeepEqual(
   validCachedValueForUser(
-    { savedAtMs: 1, schemaVersion: 2, userId: 'user-a', value: [catalogFixture] },
+    { savedAtMs: 1, schemaVersion: locationCatalogCacheSchemaVersion, userId: 'user-a', value: [catalogFixture] },
     'user-a',
     locationCatalogCacheSchemaVersion,
     (value): value is VpnLocation[] => Array.isArray(value),
@@ -356,7 +374,7 @@ assertDeepEqual(
 );
 assertEqual(
   validCachedValueForUser(
-    { savedAtMs: 1, schemaVersion: 2, userId: 'user-a', value: [catalogFixture] },
+    { savedAtMs: 1, schemaVersion: locationCatalogCacheSchemaVersion, userId: 'user-a', value: [catalogFixture] },
     'user-b',
     locationCatalogCacheSchemaVersion,
     (value): value is VpnLocation[] => Array.isArray(value),
@@ -1224,7 +1242,7 @@ async function runSafeStorageTests(): Promise<void> {
 }
 
 function runHotVpnProfileTests(): void {
-  const nowMs = 1_000_000;
+  const nowMs = 2 * hotVpnProfileTtlMs;
   const runtimeKey = 'test-runtime';
   const profile = profileWithEndpoint('de.example.com:51820');
   const record: HotVpnProfileRecord = {
@@ -1338,13 +1356,46 @@ function runHotConnectFlowTests(): void {
     }
   }
 
+  // Cached/hot profiles are unverified: they get the short first probe and a
+  // parallel fresh fetch, and the attempt telemetry must report what happened.
+  assertEqual(isUnverifiedProfileSource({ source: 'local' }), true);
+  assertEqual(isUnverifiedProfileSource({ source: 'api', hotProfileUsed: true }), true);
+  assertEqual(isUnverifiedProfileSource({ source: 'api' }), false);
+  const firstAttemptSamples = vpnConnectTimingSamples({
+    endpointAttempts: ['de.example.com:443'],
+    firstAttemptMs: 10_000,
+    profile: hotProfile,
+    tapStartedAt: 1_000, nativeStartMs: 12_000, interfaceUpMs: 12_300, verificationCompletedMs: 12_500,
+  });
+  assertEqual(firstAttemptSamples.connect_first_attempt_ms, 10_000);
+  const noFirstAttemptSamples = vpnConnectTimingSamples({
+    endpointAttempts: ['de.example.com:443'],
+    firstAttemptMs: null,
+    profile: hotProfile,
+    tapStartedAt: 1_000, nativeStartMs: 1_200, interfaceUpMs: 1_260, verificationCompletedMs: 1_400,
+  });
+  assertEqual('connect_first_attempt_ms' in noFirstAttemptSamples, false);
+  const apiProfile = {
+    ...hotProfile,
+    source: 'api' as const,
+    resolutionTiming: { startedAtMs: 1_100, localPrepareMs: 20, deviceLookupMs: 300, profileRequestMs: 2_000, routingPolicyMs: 900 },
+  };
+  const apiSamples = vpnConnectTimingSamples({
+    endpointAttempts: [],
+    profile: apiProfile,
+    tapStartedAt: 1_000, nativeStartMs: 5_000, interfaceUpMs: 5_300, verificationCompletedMs: 5_500,
+  });
+  assertEqual(apiSamples.profile_routing_policy_ms, 900);
+  assertEqual(apiSamples.profile_request_ms, 2_000);
+
   const awg3Initial: VpnProfile = {
     ...hotProfile,
-    config: `${hotProfile.config}\nHeaderProtectionKey = test-key`,
+    config: `${hotProfile.config.replace('de.example.com:51820', 'de.example.com:51821')}\nHeaderProtectionKey = test-key`,
     device: { ...hotProfile.device!, endpoint: 'de.example.com:51821', protocol: 'amneziawg' },
   };
   const awg3Fallback: VpnProfile = {
     ...awg3Initial,
+    config: awg3Initial.config.replace('de.example.com:51821', 'de.example.com:443'),
     device: { ...awg3Initial.device!, endpoint: 'de.example.com:443' },
   };
   assertDeepEqual(vpnConnectTelemetry({
@@ -1387,8 +1438,14 @@ function runVpnConnectTimingSourceContractTests(): void {
     getBuiltinModule: (id: 'node:fs') => { readFileSync: (path: string, encoding: string) => string };
   }).getBuiltinModule('node:fs');
   const source = readFileSync('src/vpn/useVpnConnectionFlow.ts', 'utf8');
+  // Native start/interface-up timing, including time in the account-owner
+  // queue, is covered by the real callback in mobile-account-registration.
   assertEqual(
-    /connectVpn\([\s\S]*?\),\s*connectAttemptTimeoutMs,[\s\S]*?\);\s*const interfaceUpMs = Date\.now\(\);/.test(source),
+    /attemptIndex === 0 \? firstAttemptTimeoutMs : connectAttemptTimeoutMs,[\s\S]*?'VPN connect timed out\.'\);[\s\S]*?const interfaceUpMs = Date\.now\(\);/.test(source),
+    true,
+  );
+  assertEqual(
+    /const firstAttemptTimeoutMs = isUnverifiedProfileSource\(profile\)\s*\?\s*cachedConnectAttemptTimeoutMs\s*:\s*connectAttemptTimeoutMs;/.test(source),
     true,
   );
   assertEqual(
@@ -1652,7 +1709,6 @@ async function runAsyncTests(): Promise<void> {
   runServerPickerInteractionTests();
   runTrafficSummaryTests();
   runRecoveryBackoffTests();
-  await testFreshSameLocationProfileConnectsSecondNode();
   await testMissingFallbackProfileSkipsOnly404();
   await runServerSwitchTests();
   await runLocationCatalogRefreshTests();
@@ -1750,33 +1806,15 @@ async function runLocationCatalogRefreshTests(): Promise<void> {
   assertDeepEqual(changedCommits, [changedCatalog]);
 }
 
-async function testFreshSameLocationProfileConnectsSecondNode(): Promise<void> {
-  const calls: string[] = [];
-  const freshProfile = profileForLocation('de', 'de-second.example.com:443');
-  const connected = await connectFreshSameLocationProfile({
-    connectProfile: async (profile) => {
-      calls.push(`connect:${profileEndpoint(profile)}`);
-      return { profile, status: connectedStatus };
-    },
-    locationId: 'de',
-    resolveProfile: async (locationId, options) => {
-      calls.push(`resolve:${locationId}:${options.forceRefresh ? 'fresh' : 'cached'}`);
-      return freshProfile;
-    },
-  });
-
-  assertEqual(profileEndpoint(connected.profile), 'de-second.example.com:443');
-  assertDeepEqual(calls, ['resolve:de:fresh', 'connect:de-second.example.com:443']);
-}
-
 async function testMissingFallbackProfileSkipsOnly404(): Promise<void> {
-  const locations = [
-    { id: 'de', availability: 'available', healthyNodes: 1 },
-    { id: 'retired', availability: 'retired', healthyNodes: 1 },
-    { id: 'unhealthy', availability: 'available', healthyNodes: 0 },
-    { id: 'fi', availability: 'available', healthyNodes: 1 },
-    { id: 'nl', availability: 'available', healthyNodes: 1 },
-  ] as VpnLocation[];
+  const locations: VpnLocation[] = [
+    { ...catalogFixture, id: 'de' },
+    { ...catalogFixture, id: 'retired', availability: 'retired' },
+    { ...catalogFixture, id: 'unhealthy', healthyNodes: 0 },
+    { ...catalogFixture, id: 'incompatible', awg3Nodes: 0 },
+    { ...catalogFixture, id: 'fi' },
+    { ...catalogFixture, id: 'nl' },
+  ];
   const attempted: string[] = [];
   let resolved: string | null = null;
   for (const location of profileResolutionOrder('de', locations).slice(1)) {
@@ -1960,13 +1998,15 @@ assertEqual(androidVpnProfileRequiresRefresh('ios', oversizedAndroidProfile), fa
 assertEqual(androidProfilePlatform('android', true), 'android-smart-v1');
 assertEqual(androidProfilePlatform('android', false), 'android');
 
-const profileFallbackLocations = [
-  { id: 'de', availability: 'available', healthyNodes: 1 },
-  { id: 'fi', availability: 'available', healthyNodes: 1 },
-  { id: 'retired', availability: 'retired', healthyNodes: 1 },
-  { id: 'pilot', availability: 'pilot', healthyNodes: 1 },
-  { id: 'unhealthy', availability: 'available', healthyNodes: 0 },
-] as any;
+const profileFallbackLocations: VpnLocation[] = [
+  { ...catalogFixture, id: 'de' },
+  { ...catalogFixture, id: 'fi' },
+  { ...catalogFixture, id: 'retired', availability: 'retired' },
+  { ...catalogFixture, id: 'pilot', availability: 'pilot' },
+  { ...catalogFixture, id: 'unhealthy', healthyNodes: 0 },
+  { ...catalogFixture, id: 'incompatible', awg3Nodes: 0 },
+  { ...catalogFixture, id: 'unknown', status: 'unknown' },
+];
 assertDeepEqual(
   profileResolutionOrder('de', profileFallbackLocations).map((location) => location.id),
   ['de', 'fi'],

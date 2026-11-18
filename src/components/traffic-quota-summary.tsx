@@ -1,3 +1,4 @@
+import { vexTheme } from '@/ui/vex-theme';
 import { StyleSheet, Text, View } from 'react-native';
 import React from 'react';
 
@@ -51,21 +52,21 @@ export const TrafficQuotaSummary = React.memo(function TrafficQuotaSummary({ quo
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: 'rgba(3, 25, 31, 0.72)',
-    borderColor: 'rgba(154, 229, 237, 0.24)',
+    backgroundColor: vexTheme.colors.surface,
+    borderColor: vexTheme.colors.line,
     borderRadius: 16,
     borderWidth: StyleSheet.hairlineWidth,
-    gap: 7,
-    paddingHorizontal: 13,
-    paddingVertical: 11,
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
   },
   footer: { flexDirection: 'row', justifyContent: 'space-between' },
-  header: { alignItems: 'center', flexDirection: 'row', gap: 10, justifyContent: 'space-between' },
-  meta: { color: 'rgba(205, 229, 233, 0.72)', fontSize: 11, fontWeight: '700' },
-  progress: { backgroundColor: '#62E6B5', borderRadius: 999, height: '100%' },
-  progressReached: { backgroundColor: '#F3C969' },
-  remaining: { color: '#F4FCFD', fontSize: 14, fontWeight: '800' },
-  track: { backgroundColor: 'rgba(185, 227, 232, 0.14)', borderRadius: 999, height: 6, overflow: 'hidden' },
-  usage: { color: 'rgba(226, 241, 244, 0.82)', fontSize: 12, fontVariant: ['tabular-nums'], fontWeight: '700' },
-  warning: { color: '#F3C969', fontSize: 11, fontWeight: '800' },
+  header: { alignItems: 'center', flexDirection: 'row', gap: 12, justifyContent: 'space-between' },
+  meta: { color: vexTheme.colors.textMuted, fontSize: 12, fontWeight: '500' },
+  progress: { backgroundColor: vexTheme.colors.success, borderRadius: 999, height: '100%' },
+  progressReached: { backgroundColor: vexTheme.colors.warning },
+  remaining: { color: vexTheme.colors.text, fontSize: 14, fontWeight: '600' },
+  track: { backgroundColor: vexTheme.colors.surfaceRaised, borderRadius: 999, height: 6, overflow: 'hidden' },
+  usage: { color: vexTheme.colors.textSecondary, fontSize: 12, fontVariant: ['tabular-nums'], fontWeight: '500' },
+  warning: { color: vexTheme.colors.warning, fontSize: 12, fontWeight: '500' },
 });

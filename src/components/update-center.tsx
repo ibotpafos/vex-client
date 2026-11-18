@@ -1,3 +1,4 @@
+import { vexTheme } from '@/ui/vex-theme';
 import * as Application from "expo-application";
 import {
   Download,
@@ -128,7 +129,7 @@ function MobileUpdateNoticeBannerContent({
       <View style={styles.noticeCopy}>
         <Text style={styles.noticeTitle}>
           {migration
-            ? "Нужно поставить новую сборку VEX"
+            ? "Новая сборка VEX"
             : mandatoryUpdate
               ? "Требуется обновление VEX"
               : "Доступно обновление VEX"}
@@ -136,7 +137,7 @@ function MobileUpdateNoticeBannerContent({
         <Text numberOfLines={2} style={styles.noticeText}>
           {migration
             ? "Скачайте новый APK, войдите в аккаунт и затем удалите старое приложение."
-            : "Откройте центр обновлений и установите актуальную версию."}
+            : "Установите актуальную версию."}
         </Text>
       </View>
       <Text style={styles.noticeAction}>
@@ -395,7 +396,7 @@ function MobileUpdateCenterContent({
     if (otaUpdateAvailable) {
       if (!ota?.isSupported) {
         setActionError(
-          "Быстрое обновление недоступно в этой сборке. Проверьте установленную версию приложения.",
+          "Быстрое обновление недоступно. Проверьте версию приложения.",
         );
         return;
       }
@@ -497,8 +498,8 @@ function MobileUpdateCenterContent({
       ) : null}
       {canOpenManualDownload && !assessment.preflight.ok ? (
         <Text style={styles.error}>
-          Автоустановка недоступна для этой старой подписи. Скачайте APK с
-          сайта, установите новую сборку и затем удалите старый VEX.
+          Другая подпись: автоустановка недоступна. Установите APK с сайта,
+          затем удалите старый VEX.
         </Text>
       ) : null}
       {actionError ? <Text style={styles.error}>{actionError}</Text> : null}
@@ -622,53 +623,53 @@ const styles = StyleSheet.create({
   },
   noticeBanner: {
     alignItems: "center",
-    backgroundColor: "rgba(255,122,122,0.14)",
-    borderColor: "rgba(255,122,122,0.34)",
-    borderRadius: 18,
+    backgroundColor: vexTheme.colors.surface,
+    borderColor: vexTheme.colors.dangerLine,
+    borderRadius: 16,
     borderWidth: 1,
     flexDirection: "row",
     gap: 12,
-    paddingHorizontal: 14,
+    paddingHorizontal: 16,
     paddingVertical: 12,
   },
   noticeBannerMigration: {
-    backgroundColor: "rgba(248,212,119,0.14)",
-    borderColor: "rgba(248,212,119,0.38)",
+    backgroundColor: vexTheme.colors.surface,
+    borderColor: vexTheme.colors.warning,
   },
   noticeIcon: {
     alignItems: "center",
-    backgroundColor: "#F8D477",
-    borderRadius: 14,
-    height: 34,
+    backgroundColor: vexTheme.colors.warning,
+    borderRadius: 16,
+    height: 32,
     justifyContent: "center",
-    width: 34,
+    width: 32,
   },
   noticeCopy: {
     flex: 1,
-    gap: 3,
+    gap: 4,
   },
   noticeTitle: {
-    color: "#F4FCFD",
+    color: vexTheme.colors.text,
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "600",
   },
   noticeText: {
-    color: "#C6D6D9",
+    color: vexTheme.colors.textSecondary,
     fontSize: 12,
-    fontWeight: "700",
+    fontWeight: "400",
     lineHeight: 16,
   },
   noticeAction: {
-    color: "#F8D477",
+    color: vexTheme.colors.warning,
     fontSize: 13,
-    fontWeight: "900",
+    fontWeight: "600",
   },
   modal: {
     backgroundColor: "transparent",
     flex: 1,
   },
   routeShell: {
-    paddingHorizontal: 18,
+    paddingHorizontal: 20,
     paddingTop: Platform.OS === "android" ? 12 : 20,
   },
   modalHeader: {
@@ -678,167 +679,167 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   eyebrow: {
-    color: "#22D3EE",
+    color: vexTheme.colors.accent,
     fontSize: 12,
-    fontWeight: "900",
-    letterSpacing: 0,
+    fontWeight: "600",
   },
   modalTitle: {
-    color: "#F4FCFD",
+    color: vexTheme.colors.text,
     fontSize: 22,
-    fontWeight: "900",
-    marginTop: 2,
+    fontWeight: "600",
+    marginTop: 4,
   },
   closeButton: {
     alignItems: "center",
-    backgroundColor: "rgba(255,255,255,0.06)",
-    borderColor: "rgba(255,255,255,0.1)",
-    borderRadius: 14,
+    backgroundColor: vexTheme.colors.surfaceRaised,
+    borderColor: vexTheme.colors.line,
+    borderRadius: 10,
     borderWidth: 1,
-    height: 42,
+    height: 44,
     justifyContent: "center",
-    width: 42,
+    width: 44,
   },
   content: {
     gap: 12,
-    paddingBottom: 22,
+    paddingBottom: 24,
   },
   hero: {
     alignItems: "center",
-    backgroundColor: "rgba(8,25,29,0.84)",
-    borderColor: "rgba(34,211,238,0.22)",
-    borderRadius: 26,
+    backgroundColor: vexTheme.colors.surface,
+    borderColor: vexTheme.colors.line,
+    borderRadius: 16,
     borderWidth: 1,
     gap: 12,
-    padding: 22,
+    padding: 24,
   },
   heroDanger: {
-    borderColor: "rgba(255,122,122,0.34)",
+    borderColor: vexTheme.colors.dangerLine,
   },
   heroIcon: {
     alignItems: "center",
-    backgroundColor: "#22D3EE",
-    borderRadius: 20,
+    backgroundColor: vexTheme.colors.accent,
+    borderRadius: 16,
     height: 48,
     justifyContent: "center",
     width: 48,
   },
   heroIconDanger: {
-    backgroundColor: "#FFB4A8",
+    backgroundColor: vexTheme.colors.danger,
   },
   heroTitle: {
-    color: "#F4FCFD",
+    color: vexTheme.colors.text,
     fontSize: 24,
-    fontWeight: "900",
+    fontWeight: "600",
     textAlign: "center",
   },
   heroText: {
-    color: "#C6D6D9",
+    color: vexTheme.colors.textSecondary,
     fontSize: 15,
-    fontWeight: "700",
-    lineHeight: 21,
+    fontWeight: "400",
+    lineHeight: 24,
     textAlign: "center",
   },
   section: {
-    backgroundColor: "rgba(7,17,19,0.86)",
-    borderColor: "rgba(96,118,123,0.32)",
-    borderRadius: 22,
+    backgroundColor: vexTheme.colors.surface,
+    borderColor: vexTheme.colors.line,
+    borderRadius: 16,
     borderWidth: 1,
     overflow: "hidden",
   },
   infoRow: {
     alignItems: "center",
-    borderBottomColor: "rgba(96,118,123,0.18)",
+    borderBottomColor: vexTheme.colors.line,
     borderBottomWidth: 1,
     flexDirection: "row",
     gap: 12,
     justifyContent: "space-between",
     minHeight: 52,
     paddingHorizontal: 12,
-    paddingVertical: 9,
+    paddingVertical: 12,
   },
   infoLabel: {
-    color: "#8FBEC6",
+    color: vexTheme.colors.textSecondary,
     flex: 0.8,
     fontSize: 13,
-    fontWeight: "900",
+    fontWeight: "500",
   },
   infoValue: {
-    color: "#EAF7F8",
+    color: vexTheme.colors.text,
     flex: 1.2,
     fontSize: 13,
-    fontWeight: "900",
+    fontWeight: "500",
+    fontVariant: ["tabular-nums"],
     textAlign: "right",
   },
   infoValueOk: {
-    color: "#6CF5FF",
+    color: vexTheme.colors.success,
   },
   infoValueWarning: {
-    color: "#F8D477",
+    color: vexTheme.colors.warning,
   },
   infoValueDanger: {
-    color: "#FFB4A8",
+    color: vexTheme.colors.danger,
   },
   notes: {
-    backgroundColor: "rgba(34,211,238,0.08)",
-    borderColor: "rgba(34,211,238,0.16)",
-    borderRadius: 18,
+    backgroundColor: vexTheme.colors.surface,
+    borderColor: vexTheme.colors.line,
+    borderRadius: 16,
     borderWidth: 1,
-    color: "#A7B9BD",
+    color: vexTheme.colors.textSecondary,
     fontSize: 14,
-    fontWeight: "700",
+    fontWeight: "400",
     lineHeight: 20,
     padding: 12,
   },
   error: {
-    color: "#FF9F9F",
+    color: vexTheme.colors.danger,
     fontSize: 13,
-    fontWeight: "800",
+    fontWeight: "600",
     textAlign: "center",
   },
   actions: {
     flexDirection: "row",
-    gap: 10,
+    gap: 12,
   },
   secondaryButton: {
     alignItems: "center",
-    borderColor: "rgba(167,185,189,0.24)",
-    borderRadius: 18,
+    borderColor: vexTheme.colors.line,
+    borderRadius: 10,
     borderWidth: 1,
     flex: 1,
     flexDirection: "row",
     gap: 8,
     justifyContent: "center",
-    minHeight: 50,
+    minHeight: 48,
   },
   secondaryText: {
-    color: "#A7B9BD",
+    color: vexTheme.colors.textSecondary,
     fontSize: 15,
-    fontWeight: "900",
+    fontWeight: "600",
   },
   primaryButton: {
     alignItems: "center",
-    backgroundColor: "#22D3EE",
-    borderRadius: 8,
+    backgroundColor: vexTheme.colors.accent,
+    borderRadius: 10,
     flex: 1.25,
     justifyContent: "center",
-    minHeight: 50,
-    paddingHorizontal: 10,
+    minHeight: 48,
+    paddingHorizontal: 12,
   },
   primaryButtonDisabled: {
     opacity: 0.46,
   },
   primaryText: {
-    color: "#031012",
+    color: vexTheme.colors.accentInk,
     fontSize: 15,
-    fontWeight: "900",
+    fontWeight: "600",
     textAlign: "center",
   },
   footnote: {
-    color: "#78969C",
+    color: vexTheme.colors.textMuted,
     fontSize: 12,
-    fontWeight: "700",
-    lineHeight: 17,
+    fontWeight: "400",
+    lineHeight: 20,
     textAlign: "center",
   },
 });

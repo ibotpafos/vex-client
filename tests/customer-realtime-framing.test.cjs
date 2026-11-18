@@ -14,6 +14,8 @@ function load(name) {
   vm.runInNewContext(source, {
     module, exports: module.exports, Set, JSON,
     require(id) {
+      if (id === 'react-native') return { Platform: { OS: 'web' } };
+      if (id === 'expo/fetch') return { fetch() { throw new Error('Injected XHR must not dispatch Fetch'); } };
       assert.ok(['./customerRealtimeCore', '../api/apiFetch'].includes(id), 'Only actual realtime and fetch modules may be imported');
       return load(id);
     },

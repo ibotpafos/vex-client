@@ -1,16 +1,17 @@
+import loader from './vpn-module-loader.cjs';
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
-import { stripTypeScriptTypes } from 'node:module';
 import test from 'node:test';
-import { profileRevalidationOptions, canRevalidateDevice } from '../src/vpn/profileRevalidation.ts';
-import { nativeVpnDeviceForClient } from '../src/vpn/nativeDeviceSelection.ts';
-import { vpnProfileQueryKey, normalizeVpnTransport } from '../src/vpn/transport.ts';
-import { ApiRequestError, requireRequestActive, isApiRequestCancelled } from '../src/api/error.ts';
-import { withRequestCancellation } from '../src/api/requestCancellation.ts';
-import { runtimeProfileKey, vpnProfileCacheIsCurrent } from '../src/vpn/hotProfileCacheCore.ts';
-import { isPositiveSafeInteger, isNonnegativeSafeInteger } from '../src/vpn/profileNumbers.ts';
-import { profileEndpoint } from '../src/vpn/connectionFallback.ts';
-import { DynamicRouteEngine, parseDynamicRoutePolicy } from '../src/vpn/dynamicRouteCore.ts';
+const { loadModule, loadWithBindings } = loader;
+const { profileRevalidationOptions, canRevalidateDevice } = loadModule('src/vpn/profileRevalidation.ts');
+const { nativeVpnDeviceForClient } = loadModule('src/vpn/nativeDeviceSelection.ts');
+const { vpnProfileQueryKey, normalizeVpnTransport } = loadModule('src/vpn/transport.ts');
+const { ApiRequestError, requireRequestActive, isApiRequestCancelled } = loadModule('src/api/error.ts');
+const { withRequestCancellation } = loadModule('src/api/requestCancellation.ts');
+const { runtimeProfileKey, vpnProfileCacheIsCurrent } = loadModule('src/vpn/hotProfileCacheCore.ts');
+const { isPositiveSafeInteger, isNonnegativeSafeInteger } = loadModule('src/vpn/profileNumbers.ts');
+const { profileEndpoint } = loadModule('src/vpn/connectionFallback.ts');
+const { DynamicRouteEngine, parseDynamicRoutePolicy } = loadModule('src/vpn/dynamicRouteCore.ts');
 
 const device = {id:'device', publicKey:'public', keyEpoch:2, status:'active', assignedIpv4:'10.0.0.2', externalDeviceId:'runtime', protocol:'amneziawg', provisioningMode:'managed_native', clientKeyOwnership:'client'};
 const cached = {config:'Address = 10.0.0.2/32', device, locationId:'de', routingMode:'smart', profileVersion:7};
@@ -20,14 +21,13 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 
 function load(sourcePath, exported, stubs) {
   const overlay = process.env.VEX_PROFILE_NUMERIC_SOURCE_ROOT && `${process.env.VEX_PROFILE_NUMERIC_SOURCE_ROOT}/${sourcePath}`;
-  const source = stripTypeScriptTypes(fs.readFileSync(overlay && fs.existsSync(overlay) ? overlay : sourcePath, 'utf8')).replace(/^import[\s\S]*?from ['"][^'"]+['"];\s*/gm,'').replace(/\bexport /g,'');
-  return new Function(...Object.keys(stubs), source+`;return ${exported};`)(...Object.values(stubs));
+  return loadWithBindings(overlay && fs.existsSync(overlay) ? overlay : sourcePath, exported, stubs)[exported];
 }
 
 function managedHarness({response = confirmed, current = device, key = {publicKey:'public'}, headers = async () => ({}), list, options = {}, nativeRouting = false} = {}) {
   const requests = [];
   const requestOptions = [];
-  const run = load('src/api/vpn.ts', 'managedVpnProfile', {
+  const run = load('src/api/vpn.ts', 'preparedTunnel', {
     supportsNativeRoutingPolicy:()=>nativeRouting, Platform:{OS:'android'}, me:async()=>({id:'fixture-owner'}),
     pendingVpnAccountKeyPair:async()=>undefined, routingAuthorization:value=>value,
     nativeRoutingParameters:(config,mode,authorization)=>JSON.stringify({mode,...(authorization?{authorization}:{})}),
@@ -44,7 +44,7 @@ function managedHarness({response = confirmed, current = device, key = {publicKe
       return typeof response === 'function' ? response(requests) : response;
     },
   });
-  return {requests, requestOptions, run:() => run('token', {}, {...profileRevalidationOptions(cached,'de','smart'), locationId:'de', ...options})};
+  return {requests, requestOptions, run:() => run('token', {platform:'android',deviceName:'fixture',idempotencyPrefix:'fixture'}, {...profileRevalidationOptions(cached,'de','smart'), locationId:'de', ...options})};
 }
 
 test('confirmed cached profile needs one authoritative request and no device-list round trip', async () => {
@@ -203,7 +203,7 @@ test('API profile delivery does not wait for duplicate secure-cache persistence'
     defaultVpnRoutingMode:'smart', defaultVpnBypassRegion:'ru', defaultVpnRoutingPolicyVersion:'v1',
     requireVpnLocationId:x=>x, profileRevalidationOptions, vpnProfileAddressMatchesDevice:()=>true,
     runtimeProfileKey, vpnProfileCacheIsCurrent, isPositiveSafeInteger,
-    requireRequestActive, withRequestCancellation, hasPaidEntitlement:()=>true, preparedTunnel:async()=>({...cached, config:cached.config}), runProfileRequest:fn=>fn(),
+    requireRequestActive, withRequestCancellation, hasPaidEntitlement:()=>true, preparedTunnel:async()=>({...cached, config:cached.config}),
     saveHotVpnProfile:()=>{writes++; return storage.promise;},
   });
   let resolved = false;

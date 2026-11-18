@@ -1,27 +1,16 @@
+const { Buffer } = require('node:buffer');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const vm = require('node:vm');
 const ts = require('typescript');
 const test = require('node:test');
 const root = path.resolve(__dirname, '..');
 
 // Execute production modules against isolated adapters: no tunnel, account or network changes.
-function load(file, dependencies = {}, globals = {}) {
-  const exports = {};
-  const code = ts.transpileModule(fs.readFileSync(path.join(root, file), 'utf8'), {
-    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
-  }).outputText;
-  vm.runInNewContext(code, { exports, Error, Date, JSON, Promise, setTimeout, clearTimeout,
-    require: name => { assert.ok(Object.hasOwn(dependencies, name), `unexpected import ${name}`); return dependencies[name]; }, ...globals });
-  return exports;
-}
+const { loadModule: load } = require('./vpn-module-loader.cjs');
+const { loadWithBindings, accountFixture } = require('./vpn-module-loader.cjs');
 function raw(file, symbol, bindings) {
-  if (file === 'src/vpn/useVpnConnectionFlow.ts') bindings = { withProfileRecoveryTransport: operation => operation(), ...bindings };
-  const source = ts.transpileModule(fs.readFileSync(path.join(root, file), 'utf8'), {
-    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
-  }).outputText.replace(/^import[\s\S]*?from ['"][^'"]+['"];\s*/gm, '').replace(/\bexport /g, '');
-  return new Function(...Object.keys(bindings), source + `;return ${symbol};`)(...Object.values(bindings));
+  return loadWithBindings(file, symbol, bindings)[symbol];
 }
 const pure = name => load(`src/vpn/${name}.ts`);
 const transport = pure('transport');
@@ -125,7 +114,7 @@ function profileHarness({available=true,vless=async()=>({device,config,expiresAt
   const resolve=raw('src/vpn/profile.ts','resolveVpnProfile',{
     supportsNativeVless:()=>available, requireVpnLocationId:value=>value, defaultVpnRoutingMode:'full_tunnel',
     defaultVpnBypassRegion:'none',defaultVpnRoutingPolicyVersion:'v1', entitlement:async()=>paid,hasPaidEntitlement:value=>value?.active,
-    runProfileRequest:operation=>operation(),preparedVlessTunnel:async(...args)=>{calls.push('vless');return vless(...args);},
+    preparedVlessTunnel:async(...args)=>{calls.push('vless');return vless(...args);},
     preparedTunnel:async()=>{calls.push('awg');return {config:'Address = 10.0.0.2/32',device};},
     profileRevalidationOptions:()=>({}),vpnProfileAddressMatchesDevice:()=>true,...sessionOperation,
   });
@@ -235,8 +224,9 @@ function connectionFlowHarness({cancelOnRead=false}={}) {
   let cancelled=false,reads=0;const calls=[];
   const fallback=pure('connectionFallback');
   const hook=raw('src/vpn/useVpnConnectionFlow.ts','useVpnConnectionFlow',{
+    ...accountFixture({owner:'owner',deviceId:'device'}).api,
     useRef:current=>({current}),useEffect:()=>{},useCallback:callback=>callback,Platform:{OS:'android'},...sessionOperation,
-    prepareClientNetworkDiagnostics:async()=>{},withTimeout:promise=>promise,vpnProfileAddressMatchesDevice:()=>true,
+    supportsNativeVless:()=>true,prepareClientNetworkDiagnostics:async()=>{},withTimeout:promise=>promise,vpnProfileAddressMatchesDevice:()=>true,
     androidVpnProfileWithinBinderBudget:()=>true,getVpnApplicationSelection:async()=>({mode:'selected',packageNames:['fixture.app']}),
     dynamicRouteRuntime:{prepare:()=>{throw new Error('AWG prepare forbidden');},attempts:()=>{throw new Error('AWG routes forbidden');},clearActive:()=>calls.push('clear-route')},
     connectionAttemptsForProfile:()=>{throw new Error('AWG fallback forbidden');},profileEndpoint:fallback.profileEndpoint,
@@ -250,7 +240,7 @@ function connectionFlowHarness({cancelOnRead=false}={}) {
     isUnverifiedProfileSource:profile=>profile.source==='local'||profile.hotProfileUsed===true,
     waitForVerifiedVpnConnection,scheduleVpnVerificationTimeout,withLastSuccessfulEndpoint:profile=>profile,isVpnTransportFallbackError:fallback.isVpnTransportFallbackError,
   });
-  return {calls,flow:hook({isCurrentSessionOperation:()=>!cancelled,antiLeakEnabled:true,session:{accessToken:'token',user:{id:'owner'}}})};
+  return {calls,flow:hook({supportsVless:true,availableLocations:[{id:'de',availability:'available',status:'active',healthyNodes:1,capabilities:['vless-xhttp-v1']}],isCurrentSessionOperation:()=>!cancelled,antiLeakEnabled:true,session:{accessToken:'token',user:{id:'owner'}}})};
 }
 
 test('the actual connection flow bypasses AWG routes and verifies the VLESS attempt',async()=>{
@@ -378,11 +368,7 @@ function connectionCallbacks() {
     if(ts.isCallExpression(node)&&node.expression.getText(ast)==='useEffect'&&node.arguments[0].getText(ast).includes("refreshVpnStatus('native_status_on_active_failed'"))callbacks.foreground=node.arguments[0].getText(ast);
     ts.forEachChild(node,visit);
   };visit(ast);
-  const profileAst=ts.createSourceFile('useVpnProfileState.ts',fs.readFileSync(path.join(root,'src/vpn/useVpnProfileState.ts'),'utf8'),ts.ScriptTarget.Latest,true);
-  const visitProfile=node=>{
-    if(ts.isVariableDeclaration(node)&&node.name.getText(profileAst)==='setVpnProfile')callbacks.setProfile=node.initializer.arguments[0].getText(profileAst);
-    ts.forEachChild(node,visitProfile);
-  };visitProfile(profileAst);return callbacks;
+  return callbacks;
 }
 const statusCallbacks=connectionCallbacks();
 function bindCallback(callback,context){
@@ -396,10 +382,10 @@ function bindCallback(callback,context){
   const code=ts.transpileModule(`return (${callback});`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
   return new Function(...Object.keys(context),code)(...Object.values(context));
 }
-function statusReadHarness({poll=false,initial={state:'connected',transport:'vless',connectionId,verified:true,verificationEpochMillis:100}}={}){
+function statusReadHarness({activeProfileRevisionRef={current:0},poll=false,initial={state:'connected',transport:'vless',connectionId,verified:true,verificationEpochMillis:100}}={}){
   let finish,tick,current=true,reads=0,diagnostics=0,recorded=0;const published=[];
   const gate=new Promise(resolve=>{finish=resolve;});
-  const context={activeProfileRevisionRef:{current:0},vpnMountedRef:{current:true},vpnOperationRevisionRef:{current:0},preferencesRevisionRef:{current:0},vpnConnectGenerationRef:{current:1},selectedLocationIdRef:{current:'de'},vpnStatusRef:{current:initial},
+  const context={activeProfileRevisionRef,vpnMountedRef:{current:true},vpnOperationRevisionRef:{current:0},preferencesRevisionRef:{current:0},vpnConnectGenerationRef:{current:1},selectedLocationIdRef:{current:'de'},vpnStatusRef:{current:initial},
     vpnOperationInFlightRef:{current:false},isCurrentSessionOperation:()=>current,
     getVpnStatus:async()=>{reads++;return gate;},setVpnStatus:update=>{
       const next=typeof update==='function'?update(context.vpnStatusRef.current):update;
@@ -442,8 +428,11 @@ for(const poll of [false,true])for(const mutation of ['logout-login','connection
 
 for(const phase of ['startup','foreground']){
   test(`actual ${phase} effect converges after hot-profile hydration while its only native read is pending`,async()=>{
-    const h=statusReadHarness({initial:{state:'disconnected',rxBytes:0,txBytes:0}});
     let onAppState,hydrated=null;
+    const react={useRef:current=>({current}),useState:initial=>[initial,update=>{hydrated=typeof update==='function'?update(hydrated):update;}],useMemo:fn=>fn(),useCallback:fn=>fn,useEffect:()=>{}};
+    const hook=raw('src/vpn/useVpnProfileState.ts','useVpnProfileState',{...react,useQueryClient:()=>({})});
+    const state=hook({userId:'fixture-owner',accessToken:'fixture',isCurrentSessionOperation:()=>true});
+    const h=statusReadHarness({initial:{state:'disconnected',rxBytes:0,txBytes:0},activeProfileRevisionRef:state.activeProfileRevisionRef});
     const cleanup=bindCallback(statusCallbacks[phase],{
       ...h.context,refreshVpnStatus:h.refresh,session:{user:{id:'fixture-owner'}},
       AppState:{addEventListener:(_event,callback)=>{onAppState=callback;return {remove:()=>{}};}},
@@ -453,13 +442,10 @@ for(const phase of ['startup','foreground']){
     assert.equal(h.reads(),1);
     // Exercise the real authoritative setter, without a native event or a
     // repeated effect/read. Profile hydration does not change the live tunnel.
-    const setProfile=bindCallback(statusCallbacks.setProfile,{
-      ...h.context,userId:'fixture-owner',vpnProfileOwnerRef:{current:null},
-      setVpnProfileState:update=>{hydrated=update(hydrated);},
-    });
+    const setProfile=state.setActiveProfile;
     setProfile({locationId:'de',profileVersion:7,device:{id:'fixture-device'}});
     assert.equal(h.context.activeProfileRevisionRef.current,1);
-    assert.equal(hydrated.profileVersion,7);
+    assert.equal(hydrated.value.profileVersion,7);
     const fresh={state:'connected',transport:'amneziawg',verified:true,rxBytes:0,txBytes:0,
       latestHandshakeEpochMillis:Date.now(),leakProtection:'armed'};
     h.finish(fresh);await new Promise(setImmediate);
@@ -582,8 +568,8 @@ test('an in-flight status read cannot re-enable connection intent after an expli
   assert.equal(await pending,null);assert.equal(h.published.length,0);
 });
 
-function permissionChainHarness({cached=false,nativeFailures=0,missingInitial=false}={}){
-  let permissions=0,attempts=0;const resolutions=[],published=[],failures=[];
+function permissionChainHarness({cached=false,nativeFailures=0,missingInitial=false,preparationWait}={}){
+  let permissions=0,attempts=0;const resolutions=[],resolutionLocations=[],published=[],failures=[],cleanups=[],nativeErrors=[],persistedLocations=[],savedProfiles=[],profileCacheWrites=[];
   const profileFor=locationId=>({...vlessProfile(),locationId,source:cached?'local':'api'});
   const fallback=pure('connectionFallback');
   const connectFlow=load('src/vpn/connectFlow.ts',{'./profileConsistency':pure('profileConsistency'),'./connectionFallback':fallback});
@@ -591,8 +577,9 @@ function permissionChainHarness({cached=false,nativeFailures=0,missingInitial=fa
   const react={useRef:current=>({current}),useState:initial=>[initial,()=>{}],useMemo:fn=>fn(),useCallback:fn=>fn,useEffect:()=>{}};
   const profileHook=raw('src/vpn/useVpnProfileState.ts','useVpnProfileState',{
     ...react,...transport,...sessionOperation,connectableLocalProfile:connectFlow.connectableLocalProfile,
-    useQueryClient:()=>({getQueryData:key=>cached?profileFor(key[2]):null,setQueryData:()=>{}}),saveHotVpnProfile:async()=>null,
+    useQueryClient:()=>({getQueryData:key=>cached?profileFor(key[2]):null,setQueryData:(...args)=>profileCacheWrites.push(args)}),saveHotVpnProfile:async()=>null,
     resolveVpnProfile:async(_token,_entitlement,location)=>{
+      await preparationWait?.();
       if(missingInitial&&location==='de')throw new ApiRequestError('location unavailable',{status:404});
       return {...profileFor(location),source:'api'};
     },
@@ -600,22 +587,25 @@ function permissionChainHarness({cached=false,nativeFailures=0,missingInitial=fa
   const profileState=profileHook({transport:'vless',routingMode:'full_tunnel',accessToken:'token',userId:'owner',selectedLocationId:'de',
     isCurrentSessionOperation:()=>true,knownEntitlement:paid,hasVpnAccess:true,requestVpnPermission:async()=>{permissions++;return true;}});
   const flowHook=raw('src/vpn/useVpnConnectionFlow.ts','useVpnConnectionFlow',{
+    ...accountFixture({owner:'owner',deviceId:'device'}).api,
     ...react,...sessionOperation,...profileFallback,...connectFlow,
-    Platform:{OS:'android'},prepareClientNetworkDiagnostics:async()=>{},withTimeout:promise=>promise,
+    supportsNativeVless:()=>true,Platform:{OS:'android'},prepareClientNetworkDiagnostics:async()=>{},withTimeout:promise=>promise,
+    readVpnNetworkObservation:async()=>({networkClass:'unknown',generation:''}),
     vpnProfileAddressMatchesDevice:()=>true,androidVpnProfileWithinBinderBudget:()=>true,
     getVpnApplicationSelection:async()=>({mode:'all',packageNames:[]}),
     dynamicRouteRuntime:{prepare:()=>{throw new Error('AWG prepare forbidden');},attempts:()=>{throw new Error('AWG fallback forbidden');},clearActive:()=>{}},
     profileEndpoint:fallback.profileEndpoint,isVpnTransportFallbackError:fallback.isVpnTransportFallbackError,
     getVpnStatus:async()=>({state:'disconnected'}),connectVpn:async()=>{
-      if(++attempts<=nativeFailures)throw new Error('VPN connection failed');
+      if(++attempts<=nativeFailures){const error=new Error('VPN connection failed');nativeErrors.push(error);throw error;}
       return {state:'connected',transport:'vless',connectionWanted:true,connectionId,verified:true,verificationEpochMillis:Date.now()};
     },cachedConnectAttemptTimeoutMs:10000,connectAttemptTimeoutMs:25000,connectDiagnosticsPrepareTimeoutMs:400,waitForVerifiedVpnConnection,scheduleVpnVerificationTimeout,withLastSuccessfulEndpoint:profile=>profile,
     connectFreshSameLocationProfile:pure('sameLocationProfileRecovery').connectFreshSameLocationProfile,
-    saveHotVpnProfile:async()=>null,uploadClientDiagnostics:async()=>{},setSelectedVpnLocation:async id=>id,errorMessage:error=>error.message,
+    saveHotVpnProfile:async(...args)=>{savedProfiles.push(args);},uploadClientDiagnostics:async()=>{},setSelectedVpnLocation:async id=>{persistedLocations.push(id);return id;},errorMessage:error=>error.message,
+    disconnectVpn:async options=>{cleanups.push(options);return {state:'disconnected'};},
   });
-  const flow=flowHook({isCurrentSessionOperation:()=>true,antiLeakEnabled:true,selectedLocationId:'de',serverSelectionMode:'manual',
-    availableLocations:[{id:'de'},{id:'fi'}],cacheProfile:()=>{},
-    resolveConnectableVpnProfile:(location,options)=>{resolutions.push(options);return profileState.resolveConnectableVpnProfile(location,options);},
+  const flow=flowHook({transportPreference:'vless',supportsVless:true,isCurrentSessionOperation:()=>true,antiLeakEnabled:true,selectedLocationId:'de',serverSelectionMode:'manual',
+    availableLocations:['de','fi'].map(id=>({id,availability:'available',status:'active',healthyNodes:1,capabilities:['vless-xhttp-v1']})),cacheProfile:()=>{},
+    resolveConnectableVpnProfile:(location,options)=>{resolutions.push(options);resolutionLocations.push(location);return profileState.resolveConnectableVpnProfile(location,options);},
     vpnStatus:{state:'disconnected'},clientLatencyMs:null,reportVpnConnectEvent:()=>{},setSelectedLocationId:()=>{},
     setActiveProfile:profile=>published.push(profile),setVpnStatus:()=>{},session:{accessToken:'token',user:{id:'owner'}}});
   const file='src/vpn/useVpnConnection.ts',source=fs.readFileSync(path.join(root,file),'utf8');
@@ -624,22 +614,36 @@ function permissionChainHarness({cached=false,nativeFailures=0,missingInitial=fa
     if(ts.isCallExpression(node)&&node.expression.getText(ast)==='useEffect'&&node.arguments[0].getText(ast).includes('getAndroidAutoConnectEnabled()'))effect=node.arguments[0].getText(ast);
     ts.forEachChild(node,visit);
   };visit(ast);assert.ok(effect);
-  const startAuto=()=>bindCallback(effect,{Platform:{OS:'android'},autoConnectAttemptedRef:{current:false},isConnected:false,isVpnBusy:false,
+  const startAuto=()=>bindCallback(effect,{areVpnPreferencesHydrated:true,Platform:{OS:'android'},autoConnectAttemptedRef:{current:false},isConnected:false,isVpnBusy:false,
     vpnOperationInFlightRef:{current:false},session:{accessToken:'token',user:{id:'owner'}},entitlementState:paid,hasPaidEntitlement:()=>true,
     vpnConnectGenerationRef:{current:0},getAndroidAutoConnectEnabled:async()=>true,setIsVpnBusy:()=>{},setVpnError:()=>{},setVpnStatus:()=>{},
     nextVpnStatusWithState:()=>{},connectCurrentVpn:flow.connectCurrentVpn,isCurrentSessionOperation:()=>true,handleVpnFailure:error=>failures.push(error)})();
-  return {flow,startAuto,published,resolutions,failures,permissions:()=>permissions,attempts:()=>attempts};
+  return {flow,startAuto,published,resolutions,resolutionLocations,failures,cleanups,nativeErrors,persistedLocations,savedProfiles,profileCacheWrites,permissions:()=>permissions,attempts:()=>attempts};
 }
 
-for(const automatic of [true,false])for(const nativeFailures of [0,1,3]){
+for(const automatic of [true,false])for(const nativeFailures of [0,1,2,3]){
   test(`${automatic?'automatic':'manual'} VLESS real resolver chain requests permission only for the initial manual connect (${nativeFailures} failed attempts)`,async()=>{
     const h=permissionChainHarness({cached:nativeFailures===1,nativeFailures});let cleanup;
     if(automatic){cleanup=h.startAuto();for(let i=0;i<10&&!h.published.length&&!h.failures.length;i++)await new Promise(setImmediate);}
+    else if(nativeFailures===3)await assert.rejects(h.flow.connectCurrentVpn(),error=>error===h.nativeErrors.at(-1)&&error.message==='VPN connection failed');
     else await h.flow.connectCurrentVpn();
-    assert.deepEqual(h.failures,[]);assert.equal(h.published.length,1);assert.equal(h.permissions(),automatic?0:1);
-    assert.equal(h.attempts(),nativeFailures+1);
+    assert.equal(h.permissions(),automatic?0:1);
     assert.equal(h.resolutions.filter(options=>options.requestPermission!==false).length,automatic?0:1);
-    if(nativeFailures===3)assert.equal(h.published[0].locationId,'fi');
+    if(nativeFailures===3){
+      assert.equal(h.attempts(),3,'never retry a freshly-issued fallback');
+      assert.deepEqual(h.resolutionLocations,['de','de','fi'],'one issuance per admitted stage');
+      assert.equal(h.cleanups.length,1);assert.deepEqual(h.cleanups[0],{releaseAntiLeak:false});
+      assert.deepEqual(h.published,[]);assert.deepEqual(h.persistedLocations,[]);assert.deepEqual(h.savedProfiles,[]);
+      assert.equal(h.failures.length,automatic?1:0);
+      if(automatic)assert.equal(h.failures[0],h.nativeErrors.at(-1),'preserve the specific terminal native error');
+    }else{
+      assert.deepEqual(h.failures,[]);assert.equal(h.published.length,1);assert.equal(h.attempts(),nativeFailures+1);
+      assert.deepEqual(h.cleanups,[]);
+      if(nativeFailures===2){
+        assert.equal(h.published[0].locationId,'fi');assert.deepEqual(h.resolutionLocations,['de','de','fi']);
+        assert.deepEqual(h.persistedLocations,['fi']);
+      }
+    }
     cleanup?.();
   });
 }
@@ -650,3 +654,110 @@ test('automatic initial-location profile fallback also cannot obtain a VPN permi
   assert.deepEqual(h.failures,[]);assert.equal(h.published[0].locationId,'fi');assert.equal(h.permissions(),0);
   assert.equal(h.resolutions.length,2);assert.equal(h.resolutions.every(options=>options.requestPermission===false),true);cleanup();
 });
+
+test('real VLESS admission accepts the confirmed current account without a WG PrivateKey in JSON', async () => {
+  const h = accountFixture({owner:'owner',deviceId:'device'});
+  const profile = {...vlessProfile(),device:h.device};
+  const before = new Map(h.saved); let dispatched = 0;
+  await h.api.withCurrentVpnProfileKey('token',profile,async()=>{dispatched++;},{userId:'owner',isCurrentSessionOperation:()=>true});
+  assert.equal(dispatched,1);
+  assert.deepEqual(h.saved,before,'admission must not mutate the confirmed account');
+});
+
+for (const [name, mutate] of [
+  ['foreign owner', (profile) => {profile.device.userId='foreign';}],
+  ['revoked device', (profile) => {profile.device.status='revoked';}],
+  ['deleted device', (profile) => {profile.device=undefined;}],
+  ['unconfirmed device ID', (profile) => {profile.device.id='other-device';}],
+  ['foreign physical installation', (profile) => {profile.device.externalDeviceId='other-physical';}],
+  ['foreign platform', (profile) => {profile.device.platform='ios';}],
+  ['unmanaged device', (profile) => {profile.device.provisioningMode='legacy';profile.device.clientKeyOwnership='backend';}],
+  ['stale public identity', (profile) => {profile.device.publicKey=Buffer.alloc(32,3).toString('base64');}],
+  ['stale key epoch', (profile) => {profile.device.keyEpoch=1;}],
+  ['missing physical registration', (_profile,h) => {for(const key of h.saved.keys())if(key.startsWith('vex.vpn.account_registration.'))h.saved.delete(key);}],
+  ['changed current identity', (_profile,h) => {const key=[...h.saved.keys()].find(key=>key.startsWith('vex.vpn.account_keys.'));h.saved.set(key,JSON.stringify({...h.keyPair,publicKey:Buffer.alloc(32,4).toString('base64'),privateKey:Buffer.alloc(32,5).toString('base64'),keyEpoch:3,confirmedKeyDeviceId:'device'}));}],
+]) {
+  test(`real VLESS admission rejects ${name} without native dispatch or storage mutation`,async()=>{
+    const h=accountFixture({owner:'owner',deviceId:'device'});
+    const profile={...vlessProfile(),device:{...h.device}};
+    mutate(profile,h);const before=new Map(h.saved);let dispatched=0;
+    await assert.rejects(h.api.withCurrentVpnProfileKey('token',profile,async()=>{dispatched++;},{userId:'owner',isCurrentSessionOperation:()=>true}),h.api.VpnProfileKeyChangedError);
+    assert.equal(dispatched,0);assert.deepEqual(h.saved,before);
+  });
+}
+
+for(const stage of ['before admission','during identity read']) {
+  test(`real VLESS admission rejects a stale session ${stage} without native dispatch`,async()=>{
+    const h=accountFixture({owner:'owner',deviceId:'device'});let checks=0,dispatched=0;
+    const before=new Map(h.saved);
+    await assert.rejects(h.api.withCurrentVpnProfileKey('token',{...vlessProfile(),device:h.device},async()=>{dispatched++;},{userId:'owner',isCurrentSessionOperation:()=>++checks<(stage==='before admission'?1:5)}),error=>error.code==='SESSION_OPERATION_SUPERSEDED');
+    assert.equal(dispatched,0);assert.deepEqual(h.saved,before);
+  });
+}
+
+test('the module loader executes real cancellation guards and isolates account storage',async()=>{
+  const session=load('src/vpn/sessionOperation.ts');
+  assert.throws(()=>session.requireProfileRequest({isCurrentSessionOperation:()=>false}),error=>error.code==='SESSION_OPERATION_SUPERSEDED');
+  const controller=new AbortController();controller.abort();
+  assert.throws(()=>session.requireProfileRequest({signal:controller.signal}),error=>error.code==='request_cancelled');
+  const first=accountFixture(),second=accountFixture();first.saved.clear();assert.ok(second.saved.size>0);
+});
+
+
+test('a cancelled VLESS preparation cannot cache or return a late profile without permission work', async () => {
+  let finish, reached, current = true, permissions = 0, admissionGuard;
+  const gate = new Promise(resolve => { finish = resolve; });
+  const started = new Promise(resolve => { reached = resolve; });
+  const cache = [];
+  const hook = raw('src/vpn/useVpnProfileState.ts', 'useVpnProfileState', {
+    useRef: value => ({ current: value }), useState: value => [value, () => {}],
+    useMemo: fn => fn(), useCallback: fn => fn, useEffect: () => {},
+    useQueryClient: () => ({ getQueryData: () => null, setQueryData: (_key, value) => cache.push(value) }),
+    resolveVpnProfile: async (_token, _entitlement, _location, options) => {
+      admissionGuard = options.isCurrentSessionOperation;
+      reached(); await gate; return vlessProfile();
+    },
+    ...transport, ...sessionOperation,
+  });
+  const state = hook({ transport: 'vless', routingMode: 'full_tunnel', accessToken: 'fixture',
+    selectedLocationId: 'de', knownEntitlement: paid, isCurrentSessionOperation: () => true,
+    requestVpnPermission: async () => { permissions++; return true; } });
+  const pending = state.resolveConnectableVpnProfile('de', { forceRefresh: true, requestPermission: false,
+    isCurrentOperation: () => current });
+  await started; current = false; finish();
+  await assert.rejects(pending, /superseded/);
+  assert.equal(admissionGuard(), false);
+  assert.equal(cache.length, 0); assert.equal(permissions, 0);
+});
+
+
+test('the real connect flow forwards cancellation into VLESS preparation before cache writes', async () => {
+  let finish, reached, current = true;
+  const gate = new Promise(resolve => { finish = resolve; });
+  const started = new Promise(resolve => { reached = resolve; });
+  const h = permissionChainHarness({preparationWait:() => { reached(); return gate; }});
+  const pending = h.flow.connectCurrentVpn({requestPermission:false,isCurrentOperation:() => current});
+  await started; current = false; finish();
+  await assert.rejects(pending,/superseded/);
+  assert.equal(typeof h.resolutions[0].isCurrentOperation,'function');
+  assert.equal(h.resolutions[0].isCurrentOperation(),false);
+  assert.equal(h.profileCacheWrites.length,0);
+  assert.equal(h.attempts(),0); assert.equal(h.permissions(),0);
+  assert.equal(h.published.length,0); assert.equal(h.persistedLocations.length,0);
+});
+
+
+for (const state of ['disconnected','connected','degraded']) for (const next of ['amneziawg','vless']) {
+  test(`changing saved protocol to ${next} in ${state} only clears a retired protocol error`, async () => {
+    let message = 'VLESS unavailable', released = 0, preference;
+    const context = {useCallback: callback => callback, ...sessionOperation, supportsVless:true,
+      transport:'vless', isCurrentSessionOperation:() => true, vpnOperationInFlightRef:{current:false},
+      isKeyRotationBusy:false, preferencesRevisionRef:{current:0}, vpnStatusRef:{current:{state,transport:'vless'}},
+      acquireVpnOperation:() => () => { released++; }, setVpnTransport:async value => value,
+      setTransport:value => { preference=value; }, setActiveProfile:() => {},
+      setVpnError:value => { message=value; }};
+    const change = bindCallback(connectionDeclaration('handleTransportChange'),context);
+    assert.equal(await change(next),next); assert.equal(preference,next); assert.equal(released,1);
+    assert.equal(message,state==='disconnected' && next!=='vless' ? null : 'VLESS unavailable');
+  });
+}

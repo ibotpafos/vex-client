@@ -1,3 +1,4 @@
+import { vexTheme } from "@/ui/vex-theme";
 import {
   FieldGroup,
   Host,
@@ -192,7 +193,7 @@ export function UniversalSettingsContent({
 
 const styles = {
   group: {
-    backgroundColor: "#041315",
+    backgroundColor: vexTheme.colors.background,
   },
   host: {
     flex: 1,

@@ -3,25 +3,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const ts = require('typescript');
-const { connectFreshSameLocationProfile } = require('../src/vpn/sameLocationProfileRecovery');
 
 // Reuse the auto-connect test's AST harness. Only native/API boundaries are
 // mocked; the production callback and cleanup/fallback policy execute as-is.
 const repo = path.resolve(__dirname, '..');
-function loadPolicy(file, dependencies = {}) {
-  const code = ts.transpileModule(fs.readFileSync(path.isAbsolute(file) ? file : path.join(repo, file), 'utf8'), {
-    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
-  }).outputText;
-  const exports = {};
-  vm.runInNewContext(code, {
-    exports, Error,
-    require: (name) => {
-      assert.ok(Object.hasOwn(dependencies, name), `unexpected policy import: ${name}`);
-      return dependencies[name];
-    },
-  });
-  return exports;
-}
+const { loadModule: loadPolicy } = require('./vpn-module-loader.cjs');
+const { connectFreshSameLocationProfile } = loadPolicy('src/vpn/sameLocationProfileRecovery.ts');
 const fallback = loadPolicy('src/vpn/connectionFallback.ts');
 const apiErrors = loadPolicy('src/api/error.ts');
 const profileResolution = loadPolicy('src/vpn/profileResolutionFallback.ts', {
@@ -85,7 +72,12 @@ async function run(scenario) {
   const isMissing = profileResolution.isProfileResolutionFallbackError;
   const context = {
     Date, Error,
-    requireCurrentSession: () => {},
+    requireCurrentSession: () => {}, isCurrentSessionOperation: () => true,
+    transportPreference: 'amneziawg', routingMode: 'full_tunnel',
+    qualifiedLocationRef: { current: null }, qualifiedLocationMaxAgeMs: 5 * 60_000,
+    readBoundedNetworkObservation: async () => null,
+    ...loadPolicy('src/vpn/serverSelection.ts'),
+    requireCurrentVlessLocation: () => assert.fail('AWG recovery must not request VLESS'),
     selectedLocationId: 'old-selection', serverSelectionMode: 'auto',
     availableLocations: [{ id: 'selected' }, { id: 'alternate' }],
     chooseBestVpnLocation: () => ({ id: 'selected' }),

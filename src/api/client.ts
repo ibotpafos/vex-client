@@ -3,7 +3,7 @@ import { apiOrigins, apiUrlFromOrigin, vexApiBaseUrl, realtimeApiBaseUrl, absolu
 import { NativeModules, Platform } from 'react-native';
 import { getAppInfo, getOrCreateDeviceId } from '@/native/appInfo';
 import { androidExperimentalRoutingEnabled, androidProfilePlatform } from '@/vpn/androidRoutingSafety';
-import { ApiRequestError, isMaintenanceStatus, normalizeApiRequestError, requestCancelledError, requireRequestActive } from './error';
+import { ApiRequestError, isMaintenanceStatus, normalizeApiRequestError, requestCancelledError, requireRequestActive, readApiErrorPayload } from './error';
 export { isMaintenanceStatus, isTechnicalWorksError, normalizeApiRequestError, technicalWorksMessage } from './error';
 export { vexApiBaseUrl, realtimeApiBaseUrl, absolutizeUrl };
 
@@ -140,6 +140,7 @@ async function ordinaryRequest(url: string, init: RequestInit, signal: AbortSign
 
 export function jsonRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
   return rawRequest(path, options).then((text) => {
+    requireRequestActive(options.signal);
     try {
       return JSON.parse(text) as T;
     } catch {
@@ -383,7 +384,7 @@ async function rawRequestAttempt(path: string, options: RequestOptions, method: 
       if (shouldLogApiRequests && !options.suppressErrorLog) {
         logApiDebug(`API Error Response: ${response.status}`);
       }
-      const apiError = parseApiErrorPayload(text);
+      const apiError = readApiErrorPayload(text);
       throw new ApiRequestError(apiError.message ?? `HTTP ${response.status}`, {
         status: response.status,
         code: apiError.code,
@@ -458,21 +459,9 @@ function logApiDebug(...items: unknown[]) {
 }
 
 export function parseApiError(text: string): string | null {
-  return parseApiErrorPayload(text).message ?? null;
+  return readApiErrorPayload(text).message ?? null;
 }
 
-function parseApiErrorPayload(text: string): { code?: string; message?: string } {
-  try {
-    const parsed = JSON.parse(text) as { code?: string; message?: string; error?: string };
-    return {
-      code: parsed.code?.trim() || undefined,
-      message: parsed.message?.trim() || parsed.error?.trim() || undefined,
-    };
-  } catch {
-    // A malformed body is a local protocol failure; never surface its text.
-    return {};
-  }
-}
 
 export async function clientVersionHeaders(): Promise<Record<string, string>> {
   const appInfo = await getAppInfo();

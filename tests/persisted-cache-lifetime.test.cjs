@@ -31,6 +31,7 @@ function harness(hooks = {}) {
     const requireForTest = name => {
       if (Object.hasOwn(hooks.modules ?? {}, name)) return hooks.modules[name];
       if (name === 'expo-secure-store') return native;
+      if (name.endsWith('/vexVpn')) return { supportsNativeVless: () => false };
       if (name === 'react-native') return { Platform: { OS: hooks.platform ?? 'android' } };
       if (name.startsWith('@/')) return load('src/' + name.slice(2) + '.ts');
       if (name.startsWith('.')) return load(path.relative(root, path.resolve(path.dirname(filename), name + '.ts')));

@@ -21,6 +21,13 @@ const device = { id: 'device', user_id: 'owner', status: 'active', public_key: p
   provisioning_mode: 'managed_native', client_key_ownership: 'client' };
 const profile = { config: 'Address = 10.0.0.2/32', version: 1, device_id: 'device', client_public_key: pair.publicKey, client_key_epoch: 1 };
 const response = value => ({ ok: true, status: 200, text: async () => JSON.stringify(value) });
+// The real client probes before writes; only this bare read is transport setup.
+function originProbeResponse(url, init) {
+  if (init.method !== 'GET' || new URL(url).pathname !== '/v1/billing/plans') return undefined;
+  assert.deepEqual(init.headers, { Accept: 'application/json' });
+  assert.equal(init.body, undefined);assert.equal(init.redirect, 'error');assert.equal(init.credentials, 'omit');
+  return response([]);
+}
 const tracked = promise => {
   const result = { done: false };
   result.promise = promise.then(value => Object.assign(result, { done: true, value }), error => Object.assign(result, { done: true, error }));
@@ -32,9 +39,22 @@ const cancelled = result => { assert.equal(result.done, true); assert.equal(resu
 // boundaries. Each loader has its own module state and controlled transport.
 function harness({ fetch = async () => response({}), appInfo = async () => ({ platform: 'web' }), platform = 'web', adapters = {} } = {}) {
   const modules = new Map(), timers = new Set();
+  const mutations = new Map();
+  const mutationBridge = {
+    apiMutationNoReplay: true,
+    requestApiMutation: async (id, url, method, headers, body, deadline) => {
+      assert.equal(method, 'POST');assert.ok(deadline > Date.now());
+      const controller = new AbortController();mutations.set(id, controller);
+      try {
+        const reply = await fetch(url, { method, headers, ...(body === null ? {} : { body }), signal:controller.signal, redirect:'error', credentials:'omit' });
+        return { status:reply.status, statusText:reply.statusText || '', headers:{}, body:await reply.text() };
+      } finally { mutations.delete(id); }
+    },
+    cancelApiMutation: id => mutations.get(id)?.abort(),
+  };
   const native = { supportsNativeRoutingPolicy: () => false, getOrCreateWireGuardKeyPair: async () => pair };
   const overrides = {
-    'react-native': { Platform: { OS: platform, Version: 36 } },
+    'react-native': { Platform: { OS: platform, Version: 36 }, NativeModules:{VexVpn:mutationBridge} },
     'expo-secure-store': { getItemAsync: async () => null, setItemAsync: async () => {} },
     'expo/fetch': { fetch: (...args) => fetch(...args) },
     './apiFetch': { apiFetch: (...args) => fetch(...args) },
@@ -121,7 +141,7 @@ for (const body of ['QSECRET', '', '{', '[1,', '{"field":"fixture"']) {
 for (const method of ['GET', 'POST']) {
   test(`Query does not replay ${method} after a malformed successful JSON response`, async () => {
     let requests = 0;
-    const h = harness({ fetch: async () => { requests++; return { ok: true, status: 200, text: async () => '{' }; } });
+    const h = harness({ fetch: async (_url, init) => { if (init.method === method) requests++; return { ok: true, status: 200, text: async () => '{' }; } });
     const query = new QueryClient({ defaultOptions: { queries: {
       retry: h.load('@/api/queryRetry').createApiQueryRetry(2), retryDelay: 0, gcTime: Infinity,
     } } });
@@ -290,7 +310,7 @@ const invalidUpdateControls = [
 for (const [name, payload] of invalidUpdateControls) {
   test(`real update response rejects ${name} instead of caching a successful update decision`, async () => {
     let requests = 0;
-    const h = harness({ fetch: async () => { requests++; return response(payload); } });
+    const h = harness({ fetch: async (_url, init) => { if (init.method === 'POST') requests++; return response(payload); } });
     const query = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
     try {
       await assert.rejects(query.fetchQuery({ queryKey: ['update-fixture'], queryFn: () =>
@@ -417,6 +437,7 @@ for (const stage of ['metadata', 'devices', 'profile']) {
 test('profile borrower cancellation retains queue ownership until a dispatched key write settles', async () => {
   const hold = gate(), controller = new AbortController(), calls = []; let writeSignal;
   const h = harness({ fetch: async (url, init) => {
+      const probe=originProbeResponse(url,init);if(probe)return probe;
     const requestPath = new URL(url).pathname; calls.push(requestPath);
     if (requestPath === '/v1/devices') return response([{ ...device, public_key: 'old-public' }]);
     if (requestPath === '/v1/vpn/rotate-key') { writeSignal = init.signal; return hold.promise; }
@@ -464,6 +485,7 @@ test('two profile callers share registration and retain its durable confirmation
       confirmVpnAccountRegistration: async () => { confirmations++; await persisted.promise; },
     },
   }, fetch: async (url, init) => {
+      const probe=originProbeResponse(url,init);if(probe)return probe;
     const route = new URL(url).pathname;
     if (route === '/v1/devices/identity-challenge') return response({ id: 'challenge', nonce: 'nonce' });
     if (route === '/v1/devices/register') { registrations++; registrationSignal = init.signal; return posted.promise; }
@@ -485,20 +507,20 @@ test('two profile callers share registration and retain its durable confirmation
 
 for (const callback of ['fetchEntitlement', 'fetchVpnLocations', 'fetchVpnDevices']) {
   test(`actual ${callback} Query callback consumes its QueryClient signal`, async () => {
-    const hold = gate(); let transportSignal;
+    const hold = gate(); let transportSignal; let catalogWrites = 0;
     const h = harness({ fetch: (_, init) => { transportSignal = init.signal; return hold.promise; } });
     const source = ts.createSourceFile('connection.ts', fs.readFileSync(path.join(root, 'src/vpn/useVpnConnection.ts'), 'utf8'), ts.ScriptTarget.Latest, true);
     let declaration;
     const visit = node => { if (ts.isVariableDeclaration(node) && node.name.getText(source) === callback) declaration = node; ts.forEachChild(node, visit); };
     visit(source); assert.ok(declaration);
     const code = ts.transpileModule(`const ${declaration.getText(source)};`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-    const queryFn = new Function('useCallback', 'accessToken', 'entitlement', 'vpnLocations', 'vpnDevices', `${code}; return ${callback};`)(
-      fn => fn, 'token', h.load('@/api/billing').entitlement, h.load('@/api/vpn').vpnLocations, h.load('@/api/vpn').vpnDevices);
+    const queryFn = new Function('useCallback', 'accessToken', 'entitlement', 'vpnLocations', 'vpnDevices', 'isCurrentSessionOperation', 'setVlessCatalog', `${code}; return ${callback};`)(
+      fn => fn, 'token', h.load('@/api/billing').entitlement, h.load('@/api/vpn').vpnLocations, h.load('@/api/vpn').vpnDevices, () => true, () => { catalogWrites++; });
     const query = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
     try {
       const result = tracked(query.fetchQuery({ queryKey: ['fixture'], queryFn })); await tick();
       query.removeQueries({ queryKey: ['fixture'] }); await result.promise; const aborted = transportSignal.aborted;
-      hold.resolve(response(callback === 'fetchEntitlement' ? paid : [])); await tick(); assert.equal(aborted, true);
+      hold.resolve(response(callback === 'fetchEntitlement' ? paid : [])); await tick(); assert.equal(aborted, true); assert.equal(catalogWrites, 0, 'cancelled catalog cannot publish capability availability');
     } finally { hold.resolve(response([])); query.clear(); }
   });
 }
@@ -542,6 +564,7 @@ for (const stage of ['create-metadata', 'config-token', 'config']) {
   test(`legacy fallback cancellation during ${stage} stops subsequent stages`, async () => {
     const hold = gate(), controller = new AbortController(), calls = []; let devices = 0, holdMetadata = false;
     const h = harness({ appInfo: () => holdMetadata ? hold.promise : Promise.resolve({ platform: 'web' }), fetch: async (url, init) => {
+      const probe=originProbeResponse(url,init);if(probe)return probe;
       const route = new URL(url).pathname; calls.push(`${init.method} ${route}`);
       if (route === '/v1/devices') {
         if (init.method === 'POST') return response({ device });
@@ -588,6 +611,7 @@ for (const stage of ['devices', 'profile', 'register']) {
     test(`managed preparation ${stage} HTTP ${status} cannot authorize legacy issuance`, async () => {
       const calls = [];
       const h = harness({ fetch: async (url, init) => {
+      const probe=originProbeResponse(url,init);if(probe)return probe;
         const route = new URL(url).pathname; calls.push(`${init.method} ${route}`);
         if (route === '/v1/devices') return stage === 'devices'
           ? {ok:false,status,text:async()=>JSON.stringify({code:'fixture_denial',message:'fixture denial'})}
@@ -633,6 +657,7 @@ for (const status of [404, 405, 501]) {
   test(`a confirmed legacy profile endpoint rejection HTTP ${status} retains web fallback`, async () => {
     const calls = [];
     const h = harness({ fetch:async (url, init) => {
+      const probe=originProbeResponse(url,init);if(probe)return probe;
       const route = new URL(url).pathname;calls.push(`${init.method} ${route}`);
       if (route === '/v1/devices') return response([device]);
       if (route === '/v1/vpn/profile') return {ok:false,status,text:async()=>status===404?'404 page not found':status===405?'Method Not Allowed':'Not Implemented'};
@@ -653,6 +678,7 @@ for (const status of [404, 405, 501]) {
 test('web without local native keys keeps server-generated legacy config without registering a native key', async () => {
   const calls = [];
   const h = harness({adapters:{'@/native/vexVpn':{supportsNativeRoutingPolicy:()=>false,getOrCreateWireGuardKeyPair:async()=>null}}, fetch:async (url, init)=>{
+      const probe=originProbeResponse(url,init);if(probe)return probe;
     const route = new URL(url).pathname;calls.push(`${init.method} ${route}`);
     if(route==='/v1/devices') return init.method==='POST'?response({device}):response([]);
     if(route.endsWith('/config-token')) return response({token:'inert-config-token'});
@@ -700,6 +726,7 @@ for (const status of [404, 405, 501]) {
       const calls=[];
       const unsupported=()=>({ok:false,status,text:async()=>status===404?'404 page not found':status===405?'Method Not Allowed':'Not Implemented'});
       const h=harness({fetch:async(url,init)=>{
+      const probe=originProbeResponse(url,init);if(probe)return probe;
         const route=new URL(url).pathname;calls.push(`${init.method} ${route}`);
         if(route==='/v1/devices')return stage==='devices'?unsupported():response([]);
         if(route==='/v1/devices/register')return unsupported();

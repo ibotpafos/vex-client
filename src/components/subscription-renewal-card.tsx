@@ -1,9 +1,9 @@
+import { vexTheme } from '@/ui/vex-theme';
 import { StyleSheet, Text, View } from 'react-native';
-import React, { useCallback, useState } from 'react';
+import React from 'react';
 
 import type { Entitlement } from '@/api/types';
-import { createCheckoutSession } from '@/api/billing';
-import { openWebAuthUrl } from '@/auth/systemAuth';
+import { openExternalUrl } from '@/auth/systemAuth';
 import { playSelectionHaptic } from '@/native/haptics';
 import { vexWebsite } from '@/navigation/website';
 import { subscriptionRenewalPresentation } from '@/screens/subscription-renewal-presentation';
@@ -12,41 +12,25 @@ import { VexPressable } from '@/ui/vex-ui';
 
 export const SubscriptionRenewalCard = React.memo(function SubscriptionRenewalCard({ entitlement }: { entitlement: Entitlement | null }) {
   const { showToast } = useToast();
-  const [isCreatingCheckout, setIsCreatingCheckout] = useState(false);
   const presentation = subscriptionRenewalPresentation(entitlement);
   if (!presentation) return null;
-  const planId = entitlement?.planId || 'basic_monthly';
-  const openPayment = useCallback(async () => {
+  const openWebsite = (url: string) => {
     playSelectionHaptic();
-    setIsCreatingCheckout(true);
-    try {
-      const session = await createCheckoutSession('', planId);
-      if (session.url) {
-        void openWebAuthUrl(session.url).catch(() => {
-          showToast({ message: 'Не удалось открыть оплату Platega. Попробуйте ещё раз.', variant: 'error' });
-        });
-      } else {
-        showToast({ message: 'Не удалось создать сессию оплаты.', variant: 'error' });
-      }
-    } catch {
-      showToast({ message: 'Не удалось создать сессию оплаты Platega.', variant: 'error' });
-    } finally {
-      setIsCreatingCheckout(false);
-    }
-  }, [planId, showToast]);
+    void openExternalUrl(url).catch(() => {
+      showToast({ message: 'Не удалось открыть сайт VEX. Попробуйте ещё раз.', variant: 'error' });
+    });
+  };
   return (
     <View style={styles.card}>
       <Text style={styles.title}>{presentation.title}</Text>
       <Text style={styles.message}>{presentation.message}</Text>
       <View style={styles.actions}>
-        <VexPressable accessibilityRole="button" accessibilityLabel="Оплатить подписку через Platega"
-          onPress={openPayment} style={styles.primary} title={presentation.action} disabled={isCreatingCheckout}>
-          <Text style={styles.primaryLabel}>{isCreatingCheckout ? 'Оформляем…' : presentation.action}</Text>
+        <VexPressable accessibilityRole="button" accessibilityLabel="Продлить VPN в личном кабинете на сайте"
+          onPress={() => openWebsite(vexWebsite.dashboard())} style={styles.primary} title={presentation.action}>
+          <Text style={styles.primaryLabel}>{presentation.action}</Text>
         </VexPressable>
-        <VexPressable accessibilityRole="button" accessibilityLabel="VPN не работает — открыть поддержку в приложении"
-          onPress={() => openWebAuthUrl(vexWebsite.support()).catch(() => {
-            showToast({ message: 'Не удалось открыть поддержку.', variant: 'error' });
-          })} style={styles.support} title="Нужна помощь?">
+        <VexPressable accessibilityRole="button" accessibilityLabel="VPN не работает — открыть поддержку на сайте"
+          onPress={() => openWebsite(vexWebsite.support())} style={styles.support} title="Нужна помощь?">
           <Text style={styles.supportLabel}>Нужна помощь?</Text>
         </VexPressable>
       </View>
@@ -55,12 +39,12 @@ export const SubscriptionRenewalCard = React.memo(function SubscriptionRenewalCa
 });
 
 const styles = StyleSheet.create({
-  card: {backgroundColor: 'rgba(6,23,29,0.96)', borderColor: 'rgba(132,239,250,0.3)', borderWidth: 1, borderRadius: 16, padding: 12, gap: 8},
-  title: {color: '#ECFCFD', fontSize: 14, fontWeight: '700'},
-  message: {color: '#C4DADD', fontSize: 12, lineHeight: 18},
+  card: {backgroundColor: vexTheme.colors.surface, borderColor: vexTheme.colors.line, borderWidth: 1, borderRadius: 16, padding: 16, gap: 8},
+  title: {color: vexTheme.colors.text, fontSize: 14, fontWeight: '600'},
+  message: {color: vexTheme.colors.textSecondary, fontSize: 12, lineHeight: 20},
   actions: {flexDirection: 'row', flexWrap: 'wrap', gap: 8},
-  primary: {minHeight: 44, paddingHorizontal: 14, borderRadius: 12, backgroundColor: '#22D3EE', justifyContent: 'center'},
-  primaryLabel: {color: '#06171D', fontSize: 13, fontWeight: '700'},
-  support: {minHeight: 44, paddingHorizontal: 10, justifyContent: 'center'},
-  supportLabel: {color: '#C4DADD', fontSize: 13},
+  primary: {minHeight: 44, paddingHorizontal: 16, borderRadius: 10, backgroundColor: vexTheme.colors.accent, justifyContent: 'center'},
+  primaryLabel: {color: vexTheme.colors.accentInk, fontSize: 13, fontWeight: '600'},
+  support: {minHeight: 44, borderRadius: 10, paddingHorizontal: 12, justifyContent: 'center'},
+  supportLabel: {color: vexTheme.colors.textSecondary, fontSize: 13},
 });

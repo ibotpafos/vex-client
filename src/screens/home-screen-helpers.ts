@@ -5,7 +5,7 @@ import type { VpnProfile } from '@/vpn/profile';
 import { errorMessage } from '@/utils/error';
 import { isSelectableLocation, locationDisplayName, selectableVpnLocations } from '@/vpn/serverSelection';
 
-export const animationKickDelayMs = 0;
+export const animationKickDelayMs = 80;
 export const activeDeviceRefreshMs = 30_000;
 export const nativeStatusPollMs = 2_500;
 export const connectedNativeStatusPollMs = 5_000;
@@ -19,11 +19,11 @@ export const foregroundLocationProbeMs = 60_000;
 export const profileRefreshMs = 60_000;
 export const clientDiagnosticsHeartbeatMs = 5 * 60_000;
 export const clientDiagnosticsErrorCooldownMs = 60_000;
-export const connectAttemptTimeoutMs = 15_000;
+export const connectAttemptTimeoutMs = 20_000;
 // Cached and hot profiles can be dead. Waiting the full attempt budget before
 // asking the API for a fresh profile costs the user ~50 s of "connecting";
 // p95 native start is under 1 s, so a short first probe proves the cache.
-export const cachedConnectAttemptTimeoutMs = 2_000;
+export const cachedConnectAttemptTimeoutMs = 3_000;
 // Pre-connect network capture is diagnostic only and must not delay the tunnel.
 export const connectDiagnosticsPrepareTimeoutMs = 400;
 

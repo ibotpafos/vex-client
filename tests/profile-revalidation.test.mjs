@@ -1,11 +1,7 @@
-import fs from 'node:fs';
 import assert from 'node:assert/strict';
-import {stripTypeScriptTypes} from 'node:module';
 import test from 'node:test';
-import {requireRequestActive} from '../src/api/error.ts';
-import {withRequestCancellation} from '../src/api/requestCancellation.ts';
 import {profileRevalidationOptions,canRevalidateDevice} from '../src/vpn/profileRevalidation.ts';
-import {isPositiveSafeInteger,isNonnegativeSafeInteger} from '../src/vpn/profileNumbers.ts';
+import vpnModuleLoader from './vpn-module-loader.cjs';
 const device={id:'device',publicKey:'public',keyEpoch:2,status:'active',assignedIpv4:'10.0.0.2'};
 const profile={config:'Address = 10.0.0.2/32',device,locationId:'de',routingMode:'smart',profileVersion:7};
 test('conditional profile reuse requires matching location, routing, version and address',()=>{
@@ -17,17 +13,33 @@ test('conditional profile reuse requires matching location, routing, version and
 });
 
 test('managed profile revalidation always reaches API and rejects revocation or stale identity',async()=>{
- const source=stripTypeScriptTypes(fs.readFileSync('src/api/vpn.ts','utf8')).replace(/^import[\s\S]*?from ['"][^'"]+['"];\s*/gm,'').replace(/\bexport /g,'');
  for(const scenario of ['unchanged','revoked','replacement','epoch','repair']){
   const queries=[];
-  const current={...device,...(scenario==='replacement'?{id:'replacement'}:{}),...(scenario==='epoch'?{keyEpoch:3}:{})};
-  const stubs={requireRequestActive,withRequestCancellation,supportsNativeRoutingPolicy:()=>false, Platform:{OS:'android'},me:async()=>({id:'fixture-owner'}),pendingVpnAccountKeyPair:async()=>undefined,getOrCreateVpnAccountIdentity:async()=>({installationId:'runtime',externalDeviceId:'runtime',keyScope:'fixture-scope',keyPair:{publicKey:'public'}}),clientVersionHeaders:async()=>({}),getOrCreateWireGuardKeyPair:async()=>({publicKey:'public'}),getOrCreateDeviceId:async()=> 'runtime',nativeVpnDeviceForClient:devices=>devices.length?undefined:current,
-   withManagedProfileAWGCapability:q=>q,defaultVpnRoutingMode:'smart',defaultVpnRoutingPolicyVersion:'v1',resolvedVpnBypassRegion:()=>'',requireVpnLocationId:x=>x,
-   canRevalidateDevice,isPositiveSafeInteger,isNonnegativeSafeInteger,jsonRequest:async path=>{if(path==='/v1/devices')return [];queries.push(path);return scenario==='revoked'?{revoked:true}:{unchanged:true,version:7};}};
-  const run=new Function(...Object.keys(stubs),source+';return managedVpnProfile;')(...Object.values(stubs));
-  const options=scenario==='repair'?{locationId:'de'}:{...profileRevalidationOptions(profile,'de','smart'),locationId:'de'};
-  if(scenario==='unchanged')assert.equal((await run('token',{},options)).config,profile.config);
-  else await assert.rejects(run('token',{},options));
+  const account = vpnModuleLoader.accountFixture({owner:'fixture-owner',deviceId:'device',externalDeviceId:'runtime'});
+  const current = {...account.device, assignedIpv4: device.assignedIpv4,
+    ...(scenario==='replacement'?{id:'replacement'}:{}), ...(scenario==='epoch'?{keyEpoch:3}:{})};
+  // A legacy cache lacks installation metadata: the real selector must read /devices.
+  const cached = {...profile, device:{...device, publicKey:account.keyPair.publicKey}};
+  const {preparedTunnel: run} = vpnModuleLoader.loadWithBindings('src/api/vpn.ts', 'preparedTunnel', {
+    Platform:{OS:'android'}, supportsNativeRoutingPolicy:()=>false,
+    SecureStore:{getItemAsync:async key=>account.saved.get(key)??null,
+      setItemAsync:async()=>assert.fail('revalidation must not mutate account storage')},
+    clientVersionHeaders:async()=>({}), getOrCreateDeviceId:async()=> 'runtime',
+    jsonRequest:async path=>{
+      if(path==='/v1/devices') return [{id:current.id,user_id:current.userId,status:current.status,
+        public_key:current.publicKey,psk_epoch:current.keyEpoch,assigned_ipv4:current.assignedIpv4,
+        external_device_id:current.externalDeviceId,platform:current.platform,protocol:current.protocol,
+        provisioning_mode:current.provisioningMode,client_key_ownership:current.clientKeyOwnership}];
+      assert.ok(path.startsWith('/v1/vpn/profile?'),path);
+      queries.push(path);return scenario==='revoked'?{revoked:true}:{unchanged:true,version:7};
+    },
+    rawRequest:async()=>assert.fail('revalidation must not authorize legacy config issuance'),
+  });
+  const options={...(scenario==='repair'?{}:profileRevalidationOptions(cached,'de','smart')),
+    locationId:'de',routingMode:'smart',userId:'fixture-owner',isCurrentSessionOperation:()=>true};
+  const client={platform:'android',deviceName:'Fixture',idempotencyPrefix:'fixture'};
+  if(scenario==='unchanged')assert.equal((await run('token',client,options)).config,profile.config);
+  else await assert.rejects(run('token',client,options),scenario==='revoked'?/Устройство отключено администратором/:/локальный cache пуст/);
   assert.equal(queries.length,1,'must validate with authoritative endpoint');
   assert.equal(queries[0].includes('known_version=7'),scenario==='unchanged'||scenario==='revoked');
  }

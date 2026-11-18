@@ -127,7 +127,7 @@ export function homeConnectionPresentation(phase: ConnectionPhase): HomeConnecti
     default:
       return {
         action: 'Подключить',
-        helper: 'Одно касание',
+        helper: 'VPN выключен',
         status: 'VPN выключен',
         tone: 'idle',
       };

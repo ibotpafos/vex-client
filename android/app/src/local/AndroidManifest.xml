@@ -6,6 +6,7 @@
     <application>
         <receiver
             android:name=".vpn.VexVpnTestReceiver"
+            android:permission="android.permission.DUMP"
             android:exported="true">
             <intent-filter>
                 <action android:name="com.vexguard.app.dev.TEST_START_BLOCKER" />

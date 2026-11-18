@@ -58,6 +58,9 @@ export default function appConfig({ config }: ConfigContext): ExpoConfig {
       bundleIdentifier: iosBundleIdentifier,
       infoPlist: {
         ...baseConfig.expo.ios?.infoPlist,
+        // Android adapts to rotation; preserve the shipped iOS orientation policy.
+        UISupportedInterfaceOrientations: ['UIInterfaceOrientationPortrait', 'UIInterfaceOrientationPortraitUpsideDown'],
+        'UISupportedInterfaceOrientations~ipad': ['UIInterfaceOrientationPortrait', 'UIInterfaceOrientationPortraitUpsideDown', 'UIInterfaceOrientationLandscapeLeft', 'UIInterfaceOrientationLandscapeRight'],
         UIStatusBarStyle: 'UIStatusBarStyleLightContent',
         UIViewControllerBasedStatusBarAppearance: false,
       },

@@ -1,3 +1,5 @@
+import { fetch as expoFetch } from 'expo/fetch';
+import { Platform } from 'react-native';
 import {
   customerRealtimeMetadata,
   customerRealtimeReconnectDelay,
@@ -123,7 +125,9 @@ export class CustomerRealtimeTransport {
     this.parser = new CustomerSSEParser();
     this.armWatchdog(request);
     try {
-      const response = await fetch(url, { method: 'GET', headers, redirect: 'manual' as const, signal: controller.signal });
+      // RN's legacy global fetch ignores redirect policy; native SSE must use Expo Fetch.
+      const streamFetch = Platform.OS === 'web' ? fetch : expoFetch;
+      const response = await streamFetch(url, { method: 'GET', headers, credentials: 'omit', redirect: 'manual' as const, signal: controller.signal });
       if (!this.active || this.request !== request) {
         void response.body?.cancel().catch(() => {});
         return;

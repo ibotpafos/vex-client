@@ -8,7 +8,7 @@ function indicatorSize(size: VexNativeActivityIndicatorProps['size']) {
   return size === 'large' ? 40 : 22;
 }
 
-export function VexNativeActivityIndicator({ color = '#22D3EE', size = 'small' }: VexNativeActivityIndicatorProps) {
+export function VexNativeActivityIndicator({ color = '#43D9E7', size = 'small' }: VexNativeActivityIndicatorProps) {
   const resolvedSize = indicatorSize(size);
 
   return (

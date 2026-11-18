@@ -2,6 +2,7 @@ package com.vexguard.app.vpn
 
 import java.io.ByteArrayOutputStream
 import java.io.Closeable
+import java.io.DataInputStream
 import java.io.IOException
 import java.net.InetAddress
 import java.net.ServerSocket
@@ -60,7 +61,8 @@ class ApiHttpSafetyTest {
               headers[header.substringBefore(':').lowercase()] = header.substringAfter(':').trim()
             }
             val length = headers["content-length"]?.toInt() ?: 0
-            val body = input.readNBytes(length)
+            val body = ByteArray(length)
+            DataInputStream(input).readFully(body)
             check(body.size == length)
             requests.add(Received(method, headers, body))
             it.getOutputStream().write(reply.toByteArray(Charsets.US_ASCII))
@@ -267,22 +269,22 @@ class ApiHttpSafetyTest {
       .build()
     val client = client(base)
     try {
-      assertTrue(client.interceptors.isEmpty())
-      assertEquals(1, client.networkInterceptors.size)
-      assertSame(Authenticator.NONE, client.authenticator)
-      assertSame(Authenticator.NONE, client.proxyAuthenticator)
-      assertSame(CookieJar.NO_COOKIES, client.cookieJar)
-      assertNull(client.cache)
-      assertFalse(client.retryOnConnectionFailure)
-      assertFalse(client.followRedirects)
-      assertFalse(client.followSslRedirects)
-      assertSame(base.sslSocketFactory, client.sslSocketFactory)
-      assertSame(base.hostnameVerifier, client.hostnameVerifier)
-      assertEquals(base.certificatePinner, client.certificatePinner)
-      assertSame(javax.net.SocketFactory.getDefault(), client.socketFactory)
-      assertSame(okhttp3.Dns.SYSTEM, client.dns)
+      assertTrue("NO_INHERITED_INTERCEPTORS", client.interceptors.isEmpty())
+      assertEquals("ONLY_SAFETY_NETWORK_INTERCEPTOR", 1, client.networkInterceptors.size)
+      assertSame("NO_INHERITED_AUTHENTICATOR", Authenticator.NONE, client.authenticator)
+      assertSame("NO_INHERITED_PROXY_AUTHENTICATOR", Authenticator.NONE, client.proxyAuthenticator)
+      assertSame("NO_INHERITED_COOKIES", CookieJar.NO_COOKIES, client.cookieJar)
+      assertNull("NO_INHERITED_CACHE", client.cache)
+      assertFalse("NO_CONNECTION_RETRY", client.retryOnConnectionFailure)
+      assertFalse("NO_REDIRECTS", client.followRedirects)
+      assertFalse("NO_TLS_REDIRECTS", client.followSslRedirects)
+      assertSame("TLS_FACTORY_IDENTITY", base.sslSocketFactory, client.sslSocketFactory)
+      assertSame("TLS_HOSTNAME_VERIFIER_IDENTITY", base.hostnameVerifier, client.hostnameVerifier)
+      assertEquals("TLS_CERTIFICATE_PINNER", base.certificatePinner, client.certificatePinner)
+      assertSame("PLATFORM_DEFAULT_SOCKET_FACTORY_IDENTITY", javax.net.SocketFactory.getDefault(), client.socketFactory)
+      assertSame("SYSTEM_DNS_IDENTITY", okhttp3.Dns.SYSTEM, client.dns)
       Fixture(response(401)).use { fixture ->
-        assertEquals(401, execute(client, Request.Builder().url(fixture.url).build()).status)
+        assertEquals("LOOPBACK_HTTP_STATUS", 401, execute(client, Request.Builder().url(fixture.url).build()).status)
         fixture.assertCount(1)
       }
     } finally { stop(client) }

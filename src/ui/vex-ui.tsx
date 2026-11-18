@@ -1,7 +1,7 @@
 import { type PropsWithChildren } from 'react';
 import React from 'react';
 import { Platform, Pressable, StyleSheet, useWindowDimensions, View, type PressableProps, type StyleProp, type ViewStyle } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { vexTheme } from '@/ui/vex-theme';
 
@@ -29,12 +29,14 @@ type VexScreenProps = PropsWithChildren<{
 
 export function VexScreen({ children, contentStyle }: VexScreenProps) {
   const { width: viewportWidth } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const availableWidth = Math.max(0, viewportWidth - insets.left - insets.right);
   const horizontalInset = viewportWidth <= 360 ? 16 : 24;
-  const contentWidth = Math.min(viewportWidth - horizontalInset, vexMaxContentWidth);
+  const contentWidth = Math.max(0, Math.min(availableWidth - horizontalInset, vexMaxContentWidth));
 
   return (
     <View style={vexSharedStyles.screen}>
-      <SafeAreaView edges={['top', 'bottom']} style={vexSharedStyles.safeLayer}>
+      <SafeAreaView edges={['top', 'bottom', 'left', 'right']} style={vexSharedStyles.safeLayer}>
         <View style={[vexSharedStyles.shell, { width: contentWidth }, contentStyle]}>
           {children}
         </View>
@@ -69,35 +71,32 @@ export const vexSharedStyles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     minHeight: 56,
-    paddingHorizontal: 6,
+    paddingHorizontal: 8,
   },
   iconButton: {
     alignItems: 'center',
     backgroundColor: vexTheme.colors.surfaceMuted,
     borderColor: vexTheme.colors.line,
-    borderRadius: vexTheme.radius.round,
+    borderRadius: vexTheme.radius.md,
     borderWidth: 1,
-    height: 42,
+    height: 48,
     justifyContent: 'center',
-    width: 42,
+    width: 48,
   },
   iconButtonSpacer: {
-    height: 42,
-    width: 42,
+    height: 48,
+    width: 48,
   },
   title: {
     color: vexColors.text,
     fontSize: 18,
-    fontWeight: '900',
+    fontWeight: '600',
   },
   card: {
     backgroundColor: vexColors.card,
     borderColor: vexColors.line,
     borderRadius: vexTheme.radius.lg,
     borderWidth: 1,
-    shadowColor: '#000',
-    shadowOpacity: 0.18,
-    shadowRadius: 18,
   },
   primaryButton: {
     alignItems: 'center',
@@ -109,7 +108,7 @@ export const vexSharedStyles = StyleSheet.create({
   primaryButtonText: {
     color: '#031012',
     fontSize: vexTheme.type.body,
-    fontWeight: '900',
+    fontWeight: '600',
   },
   busy: {
     opacity: 0.72,

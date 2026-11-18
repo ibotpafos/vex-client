@@ -28,11 +28,12 @@ import {
   connectVpn,
   disconnectVpn,
   getVpnStatus,
+  readVpnNetworkObservation,
   scheduleVpnVerificationTimeout,
+  supportsNativeVless,
   type VpnStatus,
 } from '@/native/vexVpn';
 import { waitForVerifiedVpnConnection } from '@/vpn/connectVerification';
-import { connectFreshSameLocationProfile } from '@/vpn/sameLocationProfileRecovery';
 import { cleanupFailedVpnConnection } from '@/vpn/failedConnectionCleanup';
 import {
   isProfileResolutionFallbackError,
@@ -48,16 +49,54 @@ import {
 } from '@/settings/vpnPreferences';
 import {
   chooseBestVpnLocation,
+  isSelectableLocation,
+  locationSupportsVless,
   type ServerSelectionMode,
 } from '@/vpn/serverSelection';
 import { prepareClientNetworkDiagnostics, uploadClientDiagnostics } from '@/diagnostics/clientDiagnostics';
 import { submitClientDiagnostics, type VpnLocation } from '@/api/vexApi';
 import { dynamicRouteRuntime } from '@/vpn/dynamicRouteRuntime';
 import { routeTransport, type DynamicRouteAttempt, type DynamicRouteCandidate } from '@/vpn/dynamicRouteCore';
+import { canFallbackVpnProtocol, normalizeVpnTransport, type VpnTransport, type VpnTransportPreference } from './transport';
+import type { VpnRoutingMode } from './routingPolicy';
 import type { VpnProfile } from '@/vpn/profile';
+import type { ResolveConnectableProfileOptions } from '@/vpn/serverSwitch';
 import { SessionOperationSupersededError } from '@/vpn/sessionOperation';
 
+// Only inspect the settled disconnect result: Android may retain an empty anti-leak blocker.
+function isSettledVpnDisconnect(status: VpnStatus): boolean {
+  return status.state === 'disconnected' || (
+    status.state === 'error' && status.leakProtection === 'blocking' && status.verified === false
+    && status.rxBytes === 0 && status.txBytes === 0 && status.latestHandshakeEpochMillis === 0
+    && status.verificationReason === 'endpoint_failed'
+  );
+}
+
+// Optional native observation must never hold profile issuance or tunnel admission open.
+const readBoundedNetworkObservation = () => withTimeout(
+  readVpnNetworkObservation(), 200, 'VPN network observation timed out.',
+).catch(() => null);
+
+class VpnVlessUnavailableError extends Error {
+  readonly code = 'VPN_VLESS_UNAVAILABLE';
+  constructor() { super('VLESS недоступен для выбранного сервера. Обновите список серверов.'); }
+}
+
+type QualifiedLocation = {
+  userId: string;
+  isCurrent: () => boolean;
+  locationId: string;
+  transport: VpnTransport;
+  networkClass: string;
+  generation: string;
+  verifiedAt: number;
+};
+const qualifiedLocationMaxAgeMs = 5 * 60_000;
+
 type UseVpnConnectionFlowInput = {
+  supportsVless?: boolean;
+  transportPreference?: VpnTransportPreference;
+  routingMode?: VpnRoutingMode;
   isCurrentSessionOperation: () => boolean;
   antiLeakEnabled: boolean;
   selectedLocationId: string;
@@ -66,12 +105,7 @@ type UseVpnConnectionFlowInput = {
   cacheProfile: (locationId: string, profile: VpnProfile) => void;
   resolveConnectableVpnProfile: (
     locationId: string,
-    options?: {
-      preferCached?: boolean;
-      forceRefresh?: boolean;
-      validateCachedProfile?: boolean;
-      requestPermission?: boolean;
-    }
+    options?: ResolveConnectableProfileOptions
   ) => Promise<VpnProfile>;
   vpnStatus: VpnStatus;
   clientLatencyMs: number | null;
@@ -83,6 +117,9 @@ type UseVpnConnectionFlowInput = {
 };
 
 export function useVpnConnectionFlow({
+  supportsVless = false,
+  transportPreference,
+  routingMode,
   isCurrentSessionOperation,
   antiLeakEnabled,
   selectedLocationId,
@@ -98,6 +135,15 @@ export function useVpnConnectionFlow({
   setVpnStatus,
   session,
 }: UseVpnConnectionFlowInput) {
+  const vlessAvailabilityRef = useRef({ supportsVless, availableLocations, userId: session?.user.id, isCurrent: isCurrentSessionOperation });
+  vlessAvailabilityRef.current = { supportsVless, availableLocations, userId: session?.user.id, isCurrent: isCurrentSessionOperation };
+  const qualifiedLocationRef = useRef<QualifiedLocation | null>(null);
+  const lastVerifiedTransportRef = useRef<{ userId: string; isCurrent: () => boolean; transport: VpnTransport } | null>(null);
+  useEffect(() => {
+    if (session && isCurrentSessionOperation() && vpnStatus.state === 'connected' && vpnStatus.verified === true) {
+      lastVerifiedTransportRef.current = { userId: session.user.id, isCurrent: isCurrentSessionOperation, transport: normalizeVpnTransport(vpnStatus.transport) };
+    }
+  }, [isCurrentSessionOperation, session, vpnStatus]);
   const mountedRef = useRef(true);
   useEffect(() => {
     mountedRef.current = true;
@@ -109,7 +155,19 @@ export function useVpnConnectionFlow({
     }
   }, [isCurrentSessionOperation]);
 
-  const connectProfileWithEndpointFallback = useCallback(async (profile: VpnProfile, isCurrentOperation: () => boolean = () => true, beforeNativeConnect?: () => Promise<unknown>) => {
+  const requireCurrentVlessLocation = useCallback((locationId: string) => {
+    requireCurrentSession();
+    const latest = vlessAvailabilityRef.current;
+    if (latest.userId !== session?.user.id || latest.isCurrent !== isCurrentSessionOperation || !latest.isCurrent()) {
+      throw new SessionOperationSupersededError();
+    }
+    if (!supportsNativeVless() || latest.supportsVless !== true
+      || !latest.availableLocations.some(location => location.id === locationId && locationSupportsVless(location))) {
+      throw new VpnVlessUnavailableError();
+    }
+  }, [isCurrentSessionOperation, requireCurrentSession, session?.user.id]);
+
+  const connectProfileWithEndpointFallback = useCallback(async (profile: VpnProfile, isCurrentOperation: () => boolean = () => true, beforeNativeConnect?: () => Promise<unknown>, onNativeDispatched?: () => void) => {
     const requireCurrentOperation = () => {
       requireCurrentSession();
       if (!isCurrentOperation()) throw new SessionOperationSupersededError();
@@ -180,8 +238,10 @@ export function useVpnConnectionFlow({
             }
             requireCurrentOperation();
             if (!admissionIsCurrent) throw new SessionOperationSupersededError();
+            if (attempt.transport === 'vless') requireCurrentVlessLocation(attempt.locationId);
             nativeStartMs = Date.now();
             nativeDispatched = true;
+            onNativeDispatched?.();
             return connectVpn(attempt.config, {
               antiLeakEnabled,
               transport: attempt.transport ?? 'amneziawg',
@@ -237,7 +297,7 @@ export function useVpnConnectionFlow({
         requireCurrentOperation();
         if (attemptIndex === 0) firstAttemptMs = Date.now() - attemptStartedAtMs;
         if (!nativeDispatched) {
-          if (error instanceof VpnProfileKeyChangedError || error instanceof SessionOperationSupersededError) throw error;
+          if (error instanceof VpnProfileKeyChangedError || error instanceof SessionOperationSupersededError || error instanceof VpnVlessUnavailableError) throw error;
           throw new Error('Не удалось проверить ключ и подготовить VPN к подключению.', { cause: error });
         }
         lastError = error;
@@ -264,18 +324,22 @@ export function useVpnConnectionFlow({
       }
     }
     throw lastError;
-  }, [antiLeakEnabled, isCurrentSessionOperation, requireCurrentSession, session?.accessToken, session?.user.id]);
+  }, [antiLeakEnabled, isCurrentSessionOperation, requireCurrentSession, requireCurrentVlessLocation, session?.accessToken, session?.user.id]);
 
   const connectCurrentVpn = useCallback(async ({
-    locationId = selectedLocationId,
+    locationId: requestedLocationId,
     waitForAnimation = false,
     requestPermission = true,
     isCurrentOperation = () => true,
+    protocol,
+    onFailurePhase,
   }: {
     locationId?: string;
     waitForAnimation?: boolean;
     requestPermission?: boolean;
     isCurrentOperation?: () => boolean;
+    protocol?: VpnTransport;
+    onFailurePhase?: (phase: 'profile' | 'native') => void;
   } = {}) => {
     const requireCurrentOperation = () => {
       requireCurrentSession();
@@ -285,17 +349,26 @@ export function useVpnConnectionFlow({
     const resolveCurrentProfile: typeof resolveConnectableVpnProfile = async (location, options = {}) => {
       requireCurrentOperation();
       try {
-        const resolve = () => resolveConnectableVpnProfile(location, {
-          ...options,
-          // Only an explicit manual connect may obtain/reclaim Android's VPN
-          // grant. Automatic retries retain this prohibition for every route.
-          requestPermission: requestPermission && options.requestPermission !== false,
-        });
+        const resolve = () => {
+          requireCurrentOperation();
+          if (protocol === 'vless' || options.transport === 'vless' || transportPreference === 'vless') requireCurrentVlessLocation(location);
+          return resolveConnectableVpnProfile(location, {
+            ...options,
+            ...(protocol ? { transport: protocol, ...(protocol === 'vless' ? { routingMode: 'full_tunnel' as const } : routingMode ? { routingMode } : {}) } : {}),
+            isCurrentOperation: () => isCurrentOperation() && options.isCurrentOperation?.() !== false,
+            // Only an explicit manual connect may obtain/reclaim Android's VPN
+            // grant. Automatic retries retain this prohibition for every route.
+            requestPermission: requestPermission && options.requestPermission !== false,
+          });
+        };
         // Smart routing captures this app too. A failed tunnel must not carry
         // the API request that repairs it; keep other app UIDs protected.
         return options.forceRefresh && options.requestPermission === false
           ? await withProfileRecoveryTransport(resolve)
           : await resolve();
+      } catch (error) {
+        onFailurePhase?.('profile');
+        throw error;
       } finally {
         requireCurrentOperation();
       }
@@ -303,45 +376,51 @@ export function useVpnConnectionFlow({
     const connectCurrentProfile = async (candidate: VpnProfile) => {
       requireCurrentOperation();
       try {
-        return await connectProfileWithEndpointFallback(candidate, isCurrentOperation);
+        const connected = await connectProfileWithEndpointFallback(candidate, isCurrentOperation, undefined, () => onFailurePhase?.('native'));
+        onFailurePhase?.('profile');
+        return connected;
       } finally {
         requireCurrentOperation();
       }
     };
     const tapStartedAt = Date.now();
+    const locationId = requestedLocationId ?? selectedLocationId;
+    const requiresVless = protocol === 'vless' || transportPreference === 'vless';
+    const protocolLocations = requiresVless ? availableLocations.filter(locationSupportsVless) : availableLocations;
+    // Consume before any fallible work: a failed attempt cannot preserve old success.
+    const evidence = qualifiedLocationRef.current;
+    qualifiedLocationRef.current = null;
+    const networkBefore = await readBoundedNetworkObservation();
+    requireCurrentOperation();
+    const ageMs = evidence ? Date.now() - evidence.verifiedAt : -1;
+    const qualifiedLocation = evidence && session && evidence.userId === session.user.id
+      && evidence.isCurrent === isCurrentSessionOperation && evidence.isCurrent()
+      && ageMs >= 0 && ageMs <= qualifiedLocationMaxAgeMs
+      && evidence.transport === (protocol ?? transportPreference ?? 'amneziawg')
+      && networkBefore?.networkClass === evidence.networkClass && networkBefore.generation === evidence.generation
+      ? protocolLocations.find(location => location.id === evidence.locationId && isSelectableLocation(location))
+      : undefined;
     void waitForAnimation;
 
-    const initialLocationId = serverSelectionMode === 'auto'
-      ? chooseBestVpnLocation(availableLocations)?.id ?? locationId
+    if (serverSelectionMode === 'auto' && requestedLocationId === undefined && requiresVless && protocolLocations.length === 0) {
+      throw new Error('VPN-профиль недоступен.');
+    }
+    const initialLocationId = serverSelectionMode === 'auto' && requestedLocationId === undefined
+      ? qualifiedLocation?.id ?? chooseBestVpnLocation(protocolLocations)?.id ?? locationId
       : locationId;
     let profile: VpnProfile | null = null;
     let profileLocationId = initialLocationId;
     let lastProfileError: unknown;
-    // Разрешаем все локации параллельно: сумма последовательных запросов
-    // стоит дороже, чем самый долгий из параллельных.
-    const orderedLocations = profileResolutionOrder(initialLocationId, availableLocations);
-    const profileResults = await Promise.allSettled<{ locationId: string; profile: VpnProfile } | { locationId: string; profile: null; error: unknown }>(
-      orderedLocations.map(async (candidate) => {
-        try {
-          const p = await resolveCurrentProfile(candidate.id, explicitConnectProfileResolutionOptions);
-          return { locationId: candidate.id, profile: p } as { locationId: string; profile: VpnProfile };
-        } catch (error) {
-          return { locationId: candidate.id, profile: null, error } as { locationId: string; profile: null; error: unknown };
-        }
-      })
-    );
-    for (const result of profileResults) {
-      if (result.status === 'fulfilled') {
-        if (result.value.profile) {
-          profile = result.value.profile;
-          profileLocationId = result.value.locationId;
-          break;
-        }
-      } else {
-        lastProfileError = result.reason;
-        if (!isProfileResolutionFallbackError(result.reason)) {
-          throw result.reason;
-        }
+    // Profile issuance can move placement: never acquire unused locations.
+    const orderedLocations = protocol ? [{ id: initialLocationId }] : profileResolutionOrder(initialLocationId, protocolLocations);
+    for (const candidate of orderedLocations) {
+      try {
+        profile = await resolveCurrentProfile(candidate.id, explicitConnectProfileResolutionOptions);
+        profileLocationId = candidate.id;
+        break;
+      } catch (error) {
+        lastProfileError = error;
+        if (protocol || !isProfileResolutionFallbackError(error)) throw error;
       }
     }
     if (!profile) {
@@ -353,18 +432,8 @@ export function useVpnConnectionFlow({
     let connected: ConnectedVpnAttempt | null = null;
     let connectedLocationId = profileLocationId;
     let lastConnectError: unknown;
-    // A cached or hot profile can be stale. Fetch a fresh one in parallel so
-    // recovery does not add a second network round trip on the slow path. The
-    // prefetch is superseded if the first connect attempt succeeds, so its
-    // result cannot overwrite the just-connected profile in the cache.
-    let prefetchSuperseded = false;
-    const freshProfilePrefetch = isUnverifiedProfileSource(profile)
-      ? resolveCurrentProfile(profileLocationId, { forceRefresh: true, preferCached: false, requestPermission: false }).then((fresh) => (prefetchSuperseded ? null : fresh)).catch(() => null)
-      : null;
-
     try {
       connected = await connectCurrentProfile(profile);
-      prefetchSuperseded = true;
     } catch (error) {
       requireCurrentOperation();
       if (profile.hotProfileUsed && session?.accessToken) {
@@ -384,88 +453,43 @@ export function useVpnConnectionFlow({
         throw error;
       }
       lastConnectError = error;
+      if (protocol) throw error;
     }
 
     try {
       if (!connected) {
-        let freshProfile: VpnProfile | undefined;
-        try {
-          connected = await connectFreshSameLocationProfile({
-            connectProfile: connectCurrentProfile,
-            locationId: profileLocationId,
-            resolveProfile: async (locationId, options) => (freshProfilePrefetch ? await freshProfilePrefetch : null)
-              ?? resolveCurrentProfile(locationId, options),
-          });
-        } catch (error) {
-          lastConnectError = error;
-          // Issuance can commit placement before losing its reply. A transport-
-          // shaped preparation error cannot authorize another location's issue.
-          if (!isProfileResolutionFallbackError(error)) {
-            throw error;
-          }
-        }
+        // A lost issuance reply is not permission to issue on another location.
+        const freshProfile = await resolveProfileOrSkipMissing(() => resolveCurrentProfile(profileLocationId, {
+          forceRefresh: true,
+          preferCached: false,
+          requestPermission: false,
+        }));
         if (freshProfile) {
           try {
             connected = await connectCurrentProfile(freshProfile);
-            connectedLocationId = profileLocationId;
           } catch (error) {
             lastConnectError = error;
-            if (!isVpnTransportFallbackError(error) && !isProfileResolutionFallbackError(error)) {
-              throw error;
-            }
+            if (!isVpnTransportFallbackError(error)) throw error;
           }
         }
       }
 
-      // Разрешаем все профили фолбэков параллельно, затем пробуем подключаться
-      // по очереди (одновременные туннели невозможны, но чтение профилей — параллельно).
-      const fallbackLocations = profileResolutionOrder(profileLocationId, availableLocations)
+      const fallbackLocations = profileResolutionOrder(profileLocationId, protocolLocations)
         .filter((location) => location.id !== profileLocationId);
-      const fallbackProfileResults = await Promise.allSettled(
-        fallbackLocations.map(async (location) => {
-          try {
-            const p = await resolveCurrentProfile(location.id, {
-              forceRefresh: true,
-              preferCached: false,
-              requestPermission: false,
-            });
-            return { locationId: location.id, profile: p as VpnProfile };
-          } catch {
-            return { locationId: location.id, profile: null as VpnProfile | null };
-          }
-        })
-      );
-      const fallbackProfiles = fallbackProfileResults
-        .filter((r): r is PromiseFulfilledResult<{ locationId: string; profile: VpnProfile }> =>
-          r.status === 'fulfilled' && r.value.profile !== null
-        )
-        .map((r) => r.value);
-
-      for (const { locationId, profile: fallbackProfile } of fallbackProfiles) {
+      for (const location of fallbackLocations) {
         if (connected?.status.state === 'connected') break;
+        const fallbackProfile = await resolveProfileOrSkipMissing(() => resolveCurrentProfile(location.id, {
+          forceRefresh: true,
+          preferCached: false,
+          requestPermission: false,
+        }));
+        if (!fallbackProfile) continue;
         try {
           connected = await connectCurrentProfile(fallbackProfile);
-          connectedLocationId = locationId;
+          connectedLocationId = location.id;
         } catch (error) {
           lastConnectError = error;
-          if (!isVpnTransportFallbackError(error)) {
-            throw error;
-          }
-          const freshFallbackProfile = await resolveProfileOrSkipMissing(() => resolveCurrentProfile(locationId, {
-            forceRefresh: true,
-            preferCached: false,
-            requestPermission: false,
-          }));
-          if (!freshFallbackProfile) continue;
-          try {
-            connected = await connectCurrentProfile(freshFallbackProfile);
-            connectedLocationId = locationId;
-          } catch (freshError) {
-            lastConnectError = freshError;
-            if (!isVpnTransportFallbackError(freshError)) {
-              throw freshError;
-            }
-          }
+          if (!isVpnTransportFallbackError(error)) throw error;
         }
       }
 
@@ -482,6 +506,9 @@ export function useVpnConnectionFlow({
       throw error;
     }
 
+    const networkAfter = await readBoundedNetworkObservation();
+    requireCurrentOperation();
+
     if (connectedLocationId !== selectedLocationId) {
       const persistedLocationId = await setSelectedVpnLocation(connectedLocationId);
       requireCurrentOperation();
@@ -490,6 +517,21 @@ export function useVpnConnectionFlow({
     }
 
     requireCurrentOperation();
+    const verifiedAt = Date.now();
+    const actualTransport = connected.profile.transport;
+    if (session && connected.status.verified === true
+      && (actualTransport === 'amneziawg' || actualTransport === 'vless')
+      && connected.status.transport === actualTransport
+      && networkBefore && networkBefore.networkClass !== 'unknown' && networkBefore.generation
+      && networkAfter?.networkClass === networkBefore.networkClass && networkAfter.generation === networkBefore.generation
+      && verifiedAt >= tapStartedAt && verifiedAt - tapStartedAt <= qualifiedLocationMaxAgeMs
+      && availableLocations.some(location => location.id === connected.profile.locationId && isSelectableLocation(location))) {
+      qualifiedLocationRef.current = {
+        userId: session.user.id, isCurrent: isCurrentSessionOperation,
+        locationId: connected.profile.locationId, transport: actualTransport,
+        networkClass: networkBefore.networkClass, generation: networkBefore.generation, verifiedAt,
+      };
+    }
     setActiveProfile(connected.profile);
     if (session?.user.id) {
       void saveHotVpnProfile(session.user.id, connected.profile.locationId || connectedLocationId, connected.profile, {
@@ -530,12 +572,16 @@ export function useVpnConnectionFlow({
     }
   }, [
     antiLeakEnabled,
+    routingMode,
+    transportPreference,
+    isCurrentSessionOperation,
     availableLocations,
     cacheProfile,
     clientLatencyMs,
     connectProfileWithEndpointFallback,
     reportVpnConnectEvent,
     requireCurrentSession,
+    requireCurrentVlessLocation,
     resolveConnectableVpnProfile,
     selectedLocationId,
     setSelectedLocationId,
@@ -546,8 +592,57 @@ export function useVpnConnectionFlow({
     vpnStatus,
   ]);
 
+  const connectAutomaticVpn = useCallback(async (options: Parameters<typeof connectCurrentVpn>[0] = {}) => {
+    const isCurrent = () => mountedRef.current && isCurrentSessionOperation() && options.isCurrentOperation?.() !== false;
+    const requireCurrent = () => { if (!isCurrent()) throw new SessionOperationSupersededError(); };
+    requireCurrent();
+    // A live verified tunnel is evidence, not an opportunity to benchmark another protocol.
+    if (vpnStatus.state === 'connected' && vpnStatus.verified === true) return;
+    const native = await getVpnStatus({ fresh: true });
+    requireCurrent();
+    if (native.state === 'connected' && native.verified === true) return;
+    if (native.state === 'connecting' || native.state === 'verifying' || native.state === 'disconnecting') {
+      throw new Error('Дождитесь завершения текущей операции VPN.');
+    }
+    if (native.state !== 'disconnected') {
+      const stopped = await disconnectVpn({ releaseAntiLeak: !antiLeakEnabled });
+      requireCurrent();
+      if (!isSettledVpnDisconnect(stopped)) throw new Error('Не удалось остановить предыдущее подключение VPN.');
+    }
+    const evidence = lastVerifiedTransportRef.current;
+    const vlessAvailable = supportsNativeVless() && supportsVless === true;
+    const first = evidence?.userId === session?.user.id && evidence?.isCurrent() && (evidence.transport !== 'vless' || vlessAvailable)
+      ? evidence.transport : 'amneziawg';
+    const protocols: VpnTransport[] = vlessAvailable
+      ? [first, first === 'vless' ? 'amneziawg' : 'vless'] : ['amneziawg'];
+    for (const [index, protocol] of protocols.entries()) {
+      requireCurrent();
+      const attempt = { phase: 'profile' as 'profile' | 'native' };
+      try {
+        await connectCurrentVpn({ ...options, protocol, requestPermission: index === 0 && options.requestPermission !== false,
+          isCurrentOperation: isCurrent, onFailurePhase: value => { attempt.phase = value; } });
+        requireCurrent();
+        if (session) lastVerifiedTransportRef.current = { userId: session.user.id, isCurrent: isCurrentSessionOperation, transport: protocol };
+        return;
+      } catch (error) {
+        requireCurrent();
+        if (!canFallbackVpnProtocol(error, attempt.phase)) throw error;
+        const latest = await getVpnStatus({ fresh: true });
+        requireCurrent();
+        if (latest.state === 'connected' && latest.verified === true) throw error;
+        if (attempt.phase === 'native' || latest.state !== 'disconnected') {
+          // Do not issue the alternate until the old native tunnel has actually stopped.
+          const stopped = await disconnectVpn({ releaseAntiLeak: !antiLeakEnabled });
+          requireCurrent();
+          if (!isSettledVpnDisconnect(stopped)) throw error;
+        }
+        if (index === protocols.length - 1) throw error;
+      }
+    }
+  }, [antiLeakEnabled, connectCurrentVpn, isCurrentSessionOperation, session, supportsVless, vpnStatus]);
+
   return {
     connectProfileWithEndpointFallback,
-    connectCurrentVpn,
+    connectCurrentVpn: transportPreference === 'auto' ? connectAutomaticVpn : connectCurrentVpn,
   };
 }

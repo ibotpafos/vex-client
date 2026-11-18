@@ -42,6 +42,8 @@ func TestAPIControlHTTPSIndependentOfPolicyAndTransport(t *testing.T) {
 					}
 					calls, queries := 0, 0
 					r := &Router{ctx: context.Background(), now: func() time.Time { return clock }, fakes: newFakeTable(), directConnections: make(map[net.Conn]struct{})}
+					r.underlay, r.cancelUnderlay = context.WithCancel(r.ctx)
+					t.Cleanup(r.cancelUnderlay)
 					if state == "active" || state == "expired" {
 						r.policy.Store(policy)
 					}

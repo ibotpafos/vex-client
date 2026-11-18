@@ -211,4 +211,4 @@ jobs:
         if: github.event_name != 'workflow_dispatch' || !inputs.skip_ios
         timeout-minutes: 40
         # The owned fixture enforces the reviewed tracked lock with --deployment.
-        run: bash scripts/test_ios_simulator_build.sh
+        run: bash scripts/test_ios_simulator_build.sh --regenerate-lock

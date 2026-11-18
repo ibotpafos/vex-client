@@ -68,6 +68,11 @@ function violations(value, packageValue = packageConfig) {
       const ios = (job.steps ?? []).find(step => step.name === 'Build the canonical iOS simulator app without signing');
       if (ios?.run?.trim() !== 'bash scripts/test_ios_simulator_build.sh'
         || !(ios['timeout-minutes'] > 0 && ios['timeout-minutes'] <= 40)) failures.push('bounded canonical iOS app qualification');
+      const iosScope = job.steps.find(step => step.id === 'ios_scope');
+      const iosSteps = job.steps.filter(step => /\biOS\b/.test(step.name ?? '') && step !== iosScope);
+      if (iosScope?.env?.BASE_COMMIT !== '${{ github.event.pull_request.base.sha || github.event.before }}'
+        || !iosScope?.run?.includes('git diff') || checkouts[0]?.with?.['fetch-depth'] !== 0
+        || iosSteps.length !== 4 || iosSteps.some(step => step.if !== "(github.event_name == 'workflow_dispatch' && !inputs.skip_ios) || steps.ios_scope.outputs.run_ios == 'true'")) failures.push('Android-only CI scope with iOS qualification for native iOS changes');
       if (!(job.steps ?? []).some(step => step.run?.trim() === 'swift test --package-path macos-native')) failures.push('complete macOS suite');
       if (!(job.steps ?? []).some(step => step.run?.trim() === 'bash scripts/test_macos_runtime_reliability.sh')) failures.push('macOS runtime cancellation and recovery');
       if (!(job.steps ?? []).some(step => step.run?.includes('bash scripts/test_ios_tunnel_transitions.sh'))) failures.push('iOS transition and parser regressions');
@@ -103,6 +108,7 @@ if (failures.length) {
     value => { value.jobs.macos.steps.find(step => step.uses?.startsWith('actions/setup-go@')).with['go-version'] = '1.25.x'; },
     value => { value.jobs.macos.steps.find(step => step.name === 'Build the canonical iOS simulator app without signing').run = 'bash scripts/test_ios_module_compile.sh'; },
     value => { value.jobs.macos.steps.find(step => step.name === 'Build the canonical iOS simulator app without signing').run += ' --regenerate-lock'; },
+    value => { delete value.jobs.macos.steps.find(step => step.name === 'Build the canonical iOS simulator app without signing').if; },
     value => { value.jobs.android.steps.find(step => step.name === 'Install locked Android build components').run = 'sdkmanager \"platform-tools\"'; },
     value => { value.jobs.android.steps.find(step => step.name === 'Install locked Android build components').run += ' || true'; },
     value => { const index = value.jobs.android.steps.findIndex(step => step.name === 'Install locked Android build components'); value.jobs.android.steps.push(value.jobs.android.steps.splice(index, 1)[0]); },

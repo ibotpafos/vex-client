@@ -256,7 +256,10 @@ class WireGuardController(context: Context) {
             throw IllegalStateException("Anti-leak service did not start after VPN disconnect.")
           }
         }
-        VpnConnectionState.Disconnected
+        // DOWN stops the encrypted tunnel, but an armed kill switch keeps the
+        // routed capture (or blocker TUN) installed. Report the same protection
+        // state as status(); only an explicit release means fully disconnected.
+        if (antiLeakArmed) VpnConnectionState.Blocking else VpnConnectionState.Disconnected
       }
     } finally {
       transitionState = null

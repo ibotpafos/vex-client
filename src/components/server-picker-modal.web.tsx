@@ -67,15 +67,14 @@ export const ServerPickerContent = React.memo(function ServerPickerContent({
 
   return (
     <View style={styles.content}>
-      <Text style={styles.eyebrow}>ЛОКАЦИЯ</Text>
-      <Text style={styles.title}>Выберите сервер</Text>
-      <Text style={styles.subtitle}>Оставьте автовыбор или откройте страну и нажмите нужный сервер.</Text>
+      <Text style={styles.title}>Серверы</Text>
+      <Text style={styles.subtitle}>Автовыбор или выбор по стране</Text>
       <ServerPickerRow
         disabled={isVpnBusy || countryGroups.length === 0}
         leading="↻"
         onPress={onAutoSelect}
         selected={selectionMode === 'auto'}
-        supportingText="Лучший сервер среди всех стран"
+        supportingText="По всем странам"
         testID="server-picker-auto"
         title="Автоматически"
       />
@@ -94,7 +93,7 @@ export const ServerPickerContent = React.memo(function ServerPickerContent({
           <View key={group.countryCode} style={[styles.countryCard, countrySelected && styles.countryCardSelected]}>
             <ServerPickerRow
               disabled={!bestLocation || Boolean(bestPresentation?.disabled)}
-              leading={group.flagEmoji || group.countryCode}
+              leading={group.countryCode}
               onPress={() => {
                 if (serverCount === 1 && bestLocation) {
                   onSelect(bestLocation.id);
@@ -135,7 +134,7 @@ export const ServerPickerContent = React.memo(function ServerPickerContent({
         );
       })}
       {countryGroups.length === 0 ? (
-        <Text accessibilityRole="alert" style={styles.empty}>Серверы временно недоступны. Попробуйте снова позже.</Text>
+        <Text accessibilityRole="alert" style={styles.empty}>Нет доступных серверов. Попробуйте позже.</Text>
       ) : null}
     </View>
   );
@@ -192,8 +191,8 @@ const styles = StyleSheet.create({
   },
   sheet: {
     alignSelf: 'center',
-    backgroundColor: '#041315',
-    borderColor: 'rgba(121,239,247,0.18)',
+    backgroundColor: '#111416',
+    borderColor: 'rgba(242,245,245,0.08)',
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
     borderWidth: 1,
@@ -204,7 +203,7 @@ const styles = StyleSheet.create({
   },
   handle: {
     alignSelf: 'center',
-    backgroundColor: 'rgba(205,229,233,0.32)',
+    backgroundColor: 'rgba(242,245,245,0.16)',
     borderRadius: 999,
     height: 4,
     marginTop: 10,
@@ -225,12 +224,6 @@ const styles = StyleSheet.create({
   countryCardSelected: {
     borderColor: 'rgba(103,232,249,0.34)',
   },
-  eyebrow: {
-    color: '#67E8F9',
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 1.2,
-  },
   empty: {
     color: '#A7B9BD',
     fontSize: 14,
@@ -241,7 +234,7 @@ const styles = StyleSheet.create({
   title: {
     color: '#F4FCFD',
     fontSize: 26,
-    fontWeight: '800',
+    fontWeight: '600',
     marginTop: 5,
   },
   subtitle: {
@@ -279,7 +272,7 @@ const styles = StyleSheet.create({
   rowTitle: {
     color: '#F4FCFD',
     fontSize: 16,
-    fontWeight: '700',
+    fontWeight: '600',
   },
   rowMeta: {
     color: '#A7B9BD',
@@ -289,7 +282,7 @@ const styles = StyleSheet.create({
   trailing: {
     color: '#67E8F9',
     fontSize: 21,
-    fontWeight: '800',
+    fontWeight: '600',
     width: 28,
   },
 });

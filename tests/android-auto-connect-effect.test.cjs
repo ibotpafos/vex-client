@@ -31,7 +31,7 @@ async function check({ shouldFail, cancelBeforeStart }) {
   let releasePreference;
   const preference = new Promise((resolve) => { releasePreference = resolve; });
   const context = {
-    Platform: { OS: 'android' },
+    areVpnPreferencesHydrated: true, Platform: { OS: 'android' },
     isCurrentSessionOperation: () => true,
     autoConnectAttemptedRef: { current: false },
     vpnOperationInFlightRef: { current: false },
@@ -75,7 +75,7 @@ async function checkManualIntent({ initiallyConnected, cancelWhileConnecting = f
   let releasePreference;
   const preference = deferPreference ? new Promise((resolve) => { releasePreference = resolve; }) : Promise.resolve(true);
   const context = {
-    Platform: { OS: 'android' }, autoConnectAttemptedRef: { current: false },
+    areVpnPreferencesHydrated: true, Platform: { OS: 'android' }, autoConnectAttemptedRef: { current: false },
     isCurrentSessionOperation: () => true,
     vpnOperationInFlightRef: { current: false }, vpnConnectGenerationRef: { current: 0 },
     isVpnBusy: cancelWhileConnecting, connectionPhase: cancelWhileConnecting ? 'connecting' : 'connected',
@@ -111,7 +111,7 @@ async function checkSupersededAutoConnect(reject) {
   const reached = new Promise(resolve => { entered = resolve; });
   const pending = new Promise((resolve, reject) => { release = resolve; fail = reject; });
   const context = {
-    Platform: { OS: 'android' }, autoConnectAttemptedRef: { current: false },
+    areVpnPreferencesHydrated: true, Platform: { OS: 'android' }, autoConnectAttemptedRef: { current: false },
     isCurrentSessionOperation: () => true,
     vpnOperationInFlightRef: { current: false }, vpnConnectGenerationRef: { current: 0 },
     isVpnBusy: false, isConnected: false, session: {}, entitlementState: 'active', hasPaidEntitlement: () => true,

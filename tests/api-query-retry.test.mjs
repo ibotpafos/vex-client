@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import { stripTypeScriptTypes } from 'node:module';
 import test from 'node:test';
 import { QueryClient } from '@tanstack/react-query';
-import { ApiRequestError, isMaintenanceStatus, normalizeApiRequestError, readApiErrorPayload, requireRequestActive, requestCancelledError } from '../src/api/error.ts';
-import { createApiQueryRetry } from '../src/api/queryRetry.ts';
+import realSourceLoader from './helpers/real-source-loader.cjs';
+const load = realSourceLoader();
+const apiErrors = load('@/api/error');
+const { ApiRequestError } = apiErrors;
+const { createApiQueryRetry } = load('@/api/queryRetry');
 
 function queryClient(maxRetries = 1) {
   return new QueryClient({
@@ -80,13 +81,8 @@ for (const retries of [1, 2]) {
 
 // Exercise the real HTTP layer together with TanStack Query: a Retry-After
 // longer than the request deadline must remain a single fetch end to end.
-const origins = stripTypeScriptTypes(fs.readFileSync('src/api/origins.ts', 'utf8')).replace(/\bexport /g, '');
-const source = origins + `const process = {env: {EXPO_PUBLIC_VEX_API_BASE_URL: 'http://localhost:3011'}};` + stripTypeScriptTypes(fs.readFileSync('src/api/client.ts', 'utf8'))
-  .replace(/^import .*;$/gm, '').replace(/^export \{.*;$/gm, '').replace(/\bexport /g, '');
 function rawClient(fetch) {
-  return new Function('expoFetch', 'fetch', 'ApiRequestError', 'isMaintenanceStatus', 'normalizeApiRequestError', 'getAppInfo', 'getOrCreateDeviceId', 'Platform', 'androidExperimentalRoutingEnabled', 'androidProfilePlatform', source + '; return rawRequest;')(
-    fetch, fetch, ApiRequestError, isMaintenanceStatus, normalizeApiRequestError, async () => ({}), async () => 'fixture', { OS: 'web' }, () => false, () => 'android',
-  );
+  return realSourceLoader({ fetch, adapters: { '@/api/error': apiErrors }, env: { EXPO_PUBLIC_VEX_API_BASE_URL: 'http://localhost:3011' } })('@/api/client').rawRequest;
 }
 
 test('outer query retries cannot bypass a server cooldown beyond the HTTP deadline', async () => {

@@ -1,7 +1,9 @@
+import { vexTheme } from "@/ui/vex-theme";
 import { ServiceNotice } from "@/components/service-notice";
 import { Host, Switch as ExpoSwitch } from "@expo/ui";
 import { router, useFocusEffect } from "expo-router";
 import {
+  Check,
   ChevronRight,
   ChevronLeft,
   CreditCard,
@@ -17,6 +19,7 @@ import {
 } from "lucide-react-native";
 import React from "react";
 import {
+  Alert,
   Platform,
   ScrollView,
   StyleSheet,
@@ -39,7 +42,7 @@ import { vexColors, VexScreen, vexSharedStyles, VexPressable } from "@/ui/vex-ui
 import { useVpnConnectionContext } from "@/vpn/vpn-connection-context";
 import { useVexSettings } from "./useVexSettings";
 
-export const SettingsScreen = React.memo(function SettingsScreen() {
+export default function SettingsScreen() {
   const [isSavingTransport, setIsSavingTransport] = React.useState(false);
   const [isSavingSmartRouting, setIsSavingSmartRouting] = React.useState(false);
   const [applicationRoutingSummary, setApplicationRoutingSummary] = React.useState('Все приложения');
@@ -79,6 +82,7 @@ export const SettingsScreen = React.memo(function SettingsScreen() {
     vpnStatus,
     transport,
     supportsVless,
+    unavailableTransportMessage,
     handleTransportChange,
     isVpnBusy,
   } = useVpnConnectionContext();
@@ -87,17 +91,17 @@ export const SettingsScreen = React.memo(function SettingsScreen() {
   const buildText = appInfo.build ? `Сборка ${appInfo.build}` : null;
   const isAndroidApp = Platform.OS === "android";
   const automationTitle = isAndroidApp ? "Автоподключение" : "Автозапуск";
-  const automationValue = isAutomationEnabled ? "Включено" : "Выключено";
   const automationHint = isAndroidApp
-    ? "Подключать VPN при открытии приложения."
-    : "Запускать VEX вместе с системой.";
-  const smartRoutingValue = isSmartRoutingEnabled ? "Включено" : "Выключено";
-  const smartRoutingHint = transport === 'vless'
-    ? 'VLESS: весь трафик через VPN. Умный режим сохранён для AmneziaWG.'
+    ? "При открытии VEX"
+    : "При запуске системы";
+  const smartRoutingHint = transport === 'auto' && supportsVless
+    ? 'VLESS — весь трафик; умный режим — только AmneziaWG.'
+    : transport === 'vless'
+    ? 'Весь трафик через VPN. Умный режим — только AmneziaWG.'
     : isSmartRoutingEnabled
     ? isAndroidApp
-      ? "Часть российских IP напрямую, остальное через VPN."
-      : "Российские IP напрямую, остальное через VPN."
+      ? "Часть российских IP — без VPN."
+      : "Российские IP — без VPN."
     : "Весь трафик через VPN.";
   const smartRoutingDescription = vpnStatus.state === "connected"
     ? `После переподключения: ${smartRoutingHint}`
@@ -135,7 +139,7 @@ export const SettingsScreen = React.memo(function SettingsScreen() {
           title="Назад"
           accessibilityLabel="Назад"
         >
-          <ChevronLeft color="#EAF7F8" size={26} strokeWidth={2.4} />
+          <ChevronLeft color={vexTheme.colors.text} size={18} strokeWidth={1.75} />
         </VexPressable>
         <Text style={vexSharedStyles.title}>Настройки</Text>
         <View style={vexSharedStyles.iconButtonSpacer} />
@@ -155,26 +159,18 @@ export const SettingsScreen = React.memo(function SettingsScreen() {
             disabled={isSavingAutomation}
             onPress={() => handleAutomationToggle(!isAutomationEnabled)}
             style={styles.settingRow}
-            hoverStyle={{ backgroundColor: 'rgba(7,17,19,0.96)', borderColor: 'rgba(34,211,238,0.36)' }}
+            hoverStyle={{ backgroundColor: vexTheme.colors.surfaceRaised }}
             accessibilityRole="switch"
             accessibilityState={{ checked: isAutomationEnabled, disabled: isSavingAutomation }}
             accessibilityLabel={automationTitle}
           >
             <View style={styles.rowIcon}>
-              <Power color="#22D3EE" size={21} strokeWidth={2.5} />
+              <Power color={vexTheme.colors.textSecondary} size={18} strokeWidth={1.75} />
             </View>
             <View style={styles.rowCopy}>
               <Text style={styles.rowTitle}>{automationTitle}</Text>
               <Text numberOfLines={2} style={styles.rowDescription}>
                 {automationHint}
-              </Text>
-              <Text
-                style={[
-                  styles.rowValue,
-                  isAutomationEnabled && styles.rowValueActive,
-                ]}
-              >
-                {automationValue}
               </Text>
             </View>
             <View pointerEvents="none">
@@ -197,24 +193,30 @@ export const SettingsScreen = React.memo(function SettingsScreen() {
               accessibilityLabel="Настроить защиту VPN при загрузке"
               onPress={() => {
                 playSelectionHaptic();
-                void openVpnSettings().then((opened) => {
-                  if (!opened) throw new Error('VPN settings unavailable');
-                }).catch(() => showSettingsToast({ message: 'Не удалось открыть настройки VPN Android.', variant: 'error' }));
+                Alert.alert('Постоянная VPN',
+                  'Включите для VEX «Постоянная VPN» и «Блокировать соединения без VPN». Интернет будет заблокирован до подключения: откройте VEX и подключитесь. Исключённые приложения тоже будут заблокированы. Отключить эту защиту можно в настройках Android.',
+                  [
+                    { text: 'Отмена', style: 'cancel' },
+                    { text: 'Настройки Android', onPress: () => openVpnSettings().then((opened) => {
+                      if (!opened) throw new Error('VPN settings unavailable');
+                    }).catch(() => showSettingsToast({ message: 'Не удалось открыть настройки VPN Android.', variant: 'error' })) },
+                  ]);
               }}
             >
               <View style={styles.rowCopy}>
-                <Text style={styles.rowTitle}>Настройки VPN Android</Text>
-                <Text style={styles.rowDescription}>Включите для VEX «Постоянная VPN» и «Блокировать соединения без VPN». Интернет будет заблокирован до подключения: откройте VEX и подключитесь. Исключённые приложения тоже будут заблокированы. Отключить эту защиту можно в настройках Android.</Text>
+                <Text style={styles.rowTitle}>Постоянная VPN</Text>
+                <Text style={styles.rowDescription}>Интернет только через VPN</Text>
               </View>
-              <ChevronRight color="#22D3EE" size={20} />
+              <ChevronRight color={vexTheme.colors.textSecondary} size={18} strokeWidth={1.75} />
             </VexPressable>
           </VexSection>
         ) : null}
 
         {isAndroidApp ? (
           <VexSection title="Протокол VPN">
+            {unavailableTransportMessage ? <Text accessibilityRole="alert" style={[styles.rowDescription, { padding: 16 }]}>{unavailableTransportMessage}</Text> : null}
             {vpnStatus.state === 'connected' ? <Text style={styles.rowDescription}>Подключено: {vpnStatus.transport === 'vless' ? 'VLESS' : 'AmneziaWG'}</Text> : null}
-            {(supportsVless ? ['amneziawg', 'vless'] as const : ['amneziawg'] as const).map((protocol) => (
+            {(supportsVless ? ['auto', 'amneziawg', 'vless'] as const : ['auto', 'amneziawg'] as const).map((protocol) => (
               <VexPressable
                 key={protocol}
                 testID={`settings-protocol-${protocol}`}
@@ -231,12 +233,12 @@ export const SettingsScreen = React.memo(function SettingsScreen() {
                 style={styles.settingRow}
               >
                 <View style={styles.rowCopy}>
-                  <Text style={styles.rowTitle}>{protocol === 'vless' ? 'VLESS' : 'AmneziaWG'}</Text>
-                  <Text style={styles.rowDescription}>{protocol === 'vless'
-                    ? supportsVless ? 'HTTPS-туннель. Умный режим недоступен; приложения с UDP могут не работать.' : 'Для VLESS обновите Android-приложение.'
-                    : 'Основной протокол VEX.'}</Text>
-                  {transport === protocol ? <Text style={[styles.rowValue, styles.rowValueActive]}>Выбран</Text> : null}
+                  <Text style={styles.rowTitle}>{protocol === 'auto' ? 'Авто' : protocol === 'vless' ? 'VLESS' : 'AmneziaWG'}</Text>
+                  {protocol !== 'amneziawg' ? <Text style={styles.rowDescription}>{protocol === 'auto'
+                    ? 'Выбор доступного протокола'
+                    : 'Без умного режима. UDP может не работать.'}</Text> : null}
                 </View>
+                {transport === protocol ? <Check color={vexTheme.colors.accent} size={20} accessible={false} /> : null}
               </VexPressable>
             ))}
           </VexSection>
@@ -252,48 +254,37 @@ export const SettingsScreen = React.memo(function SettingsScreen() {
                 router.push(VPN_APPLICATIONS_ROUTE);
               }}
               style={styles.settingRow}
-              hoverStyle={{ backgroundColor: 'rgba(7,17,19,0.96)', borderColor: 'rgba(34,211,238,0.36)' }}
+              hoverStyle={{ backgroundColor: vexTheme.colors.surfaceRaised }}
               title="Выбрать приложения для VPN"
             >
               <View style={styles.rowIcon}>
-                <Smartphone color="#22D3EE" size={21} strokeWidth={2.5} />
+                <Smartphone color={vexTheme.colors.textSecondary} size={18} strokeWidth={1.75} />
               </View>
               <View style={styles.rowCopy}>
                 <Text style={styles.rowTitle}>Приложения через VPN</Text>
-                <Text numberOfLines={2} style={styles.rowDescription}>
-                  Направлять через туннель все приложения или только выбранные.
-                </Text>
                 <Text style={[styles.rowValue, applicationRoutingSummary !== 'Все приложения' && styles.rowValueActive]}>
                   {applicationRoutingSummary}
                 </Text>
               </View>
-              <ChevronRight color="#A7B9BD" size={22} strokeWidth={2.5} />
+              <ChevronRight color={vexTheme.colors.textSecondary} size={18} strokeWidth={1.75} />
             </VexPressable>
           ) : null}
           <VexPressable
             disabled={isSavingServerSelection}
             onPress={() => handleServerSelectionToggle(!isAutoServerSelectionEnabled)}
             style={styles.settingRow}
-            hoverStyle={{ backgroundColor: 'rgba(7,17,19,0.96)', borderColor: 'rgba(34,211,238,0.36)' }}
+            hoverStyle={{ backgroundColor: vexTheme.colors.surfaceRaised }}
             accessibilityRole="switch"
             accessibilityState={{ checked: isAutoServerSelectionEnabled, disabled: isSavingServerSelection }}
             accessibilityLabel="Автовыбор сервера"
           >
             <View style={styles.rowIcon}>
-              <ServerCog color="#22D3EE" size={21} strokeWidth={2.5} />
+              <ServerCog color={vexTheme.colors.textSecondary} size={18} strokeWidth={1.75} />
             </View>
             <View style={styles.rowCopy}>
               <Text style={styles.rowTitle}>Автовыбор сервера</Text>
               <Text style={styles.rowDescription}>
-                VEX будет выбирать лучший доступный сервер при подключении.
-              </Text>
-              <Text
-                style={[
-                  styles.rowValue,
-                  isAutoServerSelectionEnabled && styles.rowValueActive,
-                ]}
-              >
-                {isAutoServerSelectionEnabled ? "Включено" : "Выключено"}
+                При каждом подключении
               </Text>
             </View>
             <View pointerEvents="none">
@@ -337,26 +328,18 @@ export const SettingsScreen = React.memo(function SettingsScreen() {
                 .finally(() => setIsSavingSmartRouting(false));
             }}
             style={styles.settingRow}
-            hoverStyle={{ backgroundColor: 'rgba(7,17,19,0.96)', borderColor: 'rgba(34,211,238,0.36)' }}
+            hoverStyle={{ backgroundColor: vexTheme.colors.surfaceRaised }}
             accessibilityRole="switch"
             accessibilityState={{ checked: isSmartRoutingEnabled, disabled: isSavingSmartRouting || transport === 'vless' }}
             accessibilityLabel="Умный режим"
           >
             <View style={styles.rowIcon}>
-              <Globe2 color="#22D3EE" size={21} strokeWidth={2.5} />
+              <Globe2 color={vexTheme.colors.textSecondary} size={18} strokeWidth={1.75} />
             </View>
             <View style={styles.rowCopy}>
               <Text style={styles.rowTitle}>Умный режим</Text>
               <Text style={styles.rowDescription}>
                 {smartRoutingDescription}
-              </Text>
-              <Text
-                style={[
-                  styles.rowValue,
-                  isSmartRoutingEnabled && styles.rowValueActive,
-                ]}
-              >
-                {smartRoutingValue}
               </Text>
             </View>
             <View pointerEvents="none">
@@ -373,31 +356,23 @@ export const SettingsScreen = React.memo(function SettingsScreen() {
             disabled={isSavingAntiLeak}
             onPress={() => handleAntiLeakToggle(!isAntiLeakEnabled)}
             style={styles.settingRow}
-            hoverStyle={{ backgroundColor: 'rgba(7,17,19,0.96)', borderColor: 'rgba(34,211,238,0.36)' }}
+            hoverStyle={{ backgroundColor: vexTheme.colors.surfaceRaised }}
             accessibilityRole="switch"
             accessibilityState={{ checked: isAntiLeakEnabled, disabled: isSavingAntiLeak }}
-            accessibilityLabel="Антидетект IP"
+            accessibilityLabel="Защита от утечек"
           >
             <View style={styles.rowIcon}>
-              <Power color="#22D3EE" size={21} strokeWidth={2.5} />
+              <Power color={vexTheme.colors.textSecondary} size={18} strokeWidth={1.75} />
             </View>
             <View style={styles.rowCopy}>
-              <Text style={styles.rowTitle}>Антидетект IP</Text>
+              <Text style={styles.rowTitle}>Защита от утечек</Text>
               <Text style={styles.rowDescription}>
-                Блокировать прямой интернет, если VPN аварийно упал.
-              </Text>
-              <Text
-                style={[
-                  styles.rowValue,
-                  isAntiLeakEnabled && styles.rowValueActive,
-                ]}
-              >
-                {isAntiLeakEnabled ? "Включено" : "Выключено"}
+                Блокировать интернет при обрыве VPN
               </Text>
             </View>
             <View pointerEvents="none">
               <SettingsNativeSwitch
-                accessibilityLabel="Антидетект IP"
+                accessibilityLabel="Защита от утечек"
                 disabled={isSavingAntiLeak}
                 onValueChange={handleAntiLeakToggle}
                 testID="settings-anti-leak-switch"
@@ -410,12 +385,12 @@ export const SettingsScreen = React.memo(function SettingsScreen() {
         <VexSection title="Интерфейс">
           <View style={styles.settingRow}>
             <View style={styles.rowIcon}>
-              <Languages color="#22D3EE" size={21} strokeWidth={2.5} />
+              <Languages color={vexTheme.colors.textSecondary} size={18} strokeWidth={1.75} />
             </View>
             <View style={styles.rowCopy}>
               <Text style={styles.rowTitle}>Язык</Text>
               <Text numberOfLines={1} style={styles.rowDescription}>
-                Сейчас доступен только русский интерфейс.
+                Русский
               </Text>
             </View>
           </View>
@@ -468,19 +443,19 @@ export const SettingsScreen = React.memo(function SettingsScreen() {
               openWebsite(vexWebsite.dashboard());
             }}
             style={styles.settingRow}
-            hoverStyle={{ backgroundColor: 'rgba(7,17,19,0.96)', borderColor: 'rgba(34,211,238,0.36)' }}
+            hoverStyle={{ backgroundColor: vexTheme.colors.surfaceRaised }}
             title={isAndroidApp ? "Продлить VPN" : "Личный кабинет"}
           >
             <View style={styles.rowIcon}>
-              <CreditCard color="#22D3EE" size={21} strokeWidth={2.5} />
+              <CreditCard color={vexTheme.colors.textSecondary} size={18} strokeWidth={1.75} />
             </View>
             <View style={styles.rowCopy}>
               <Text style={styles.rowTitle}>{isAndroidApp ? "Продлить VPN" : "Личный кабинет"}</Text>
               <Text numberOfLines={2} style={styles.rowDescription}>
-                {isAndroidApp ? "Тарифы, цена и оплата — в личном кабинете на сайте VEX." : "Подписка, оплата и устройства — на сайте VEX."}
+                {isAndroidApp ? "Тарифы и оплата на сайте" : "Подписка и устройства на сайте"}
               </Text>
             </View>
-            <ChevronRight color="#A7B9BD" size={22} strokeWidth={2.5} />
+            <ChevronRight color={vexTheme.colors.textSecondary} size={18} strokeWidth={1.75} />
           </VexPressable>
           <VexPressable
             accessibilityLabel="Открыть программу тестировщиков на сайте VEX"
@@ -489,12 +464,12 @@ export const SettingsScreen = React.memo(function SettingsScreen() {
             style={styles.settingRow}
             title="Аккаунт тестировщика"
           >
-            <View style={styles.rowIcon}><FlaskConical color={vexColors.accent} size={21} strokeWidth={2.5} /></View>
+            <View style={styles.rowIcon}><FlaskConical color={vexTheme.colors.textSecondary} size={18} strokeWidth={1.75} /></View>
             <View style={styles.rowCopy}>
               <Text style={styles.rowTitle}>Аккаунт тестировщика</Text>
-              <Text numberOfLines={2} style={styles.rowDescription}>Заявка, тестовые версии и обратная связь — в кабинете VEX.</Text>
+              <Text numberOfLines={2} style={styles.rowDescription}>Тестовые версии и отзывы</Text>
             </View>
-            <ChevronRight color="#A7B9BD" size={22} strokeWidth={2.5} />
+            <ChevronRight color={vexTheme.colors.textSecondary} size={18} strokeWidth={1.75} />
           </VexPressable>
           <VexPressable
             accessibilityLabel="Открыть поддержку на сайте"
@@ -503,19 +478,19 @@ export const SettingsScreen = React.memo(function SettingsScreen() {
               openWebsite(vexWebsite.support());
             }}
             style={styles.settingRow}
-            hoverStyle={{ backgroundColor: 'rgba(7,17,19,0.96)', borderColor: 'rgba(34,211,238,0.36)' }}
+            hoverStyle={{ backgroundColor: vexTheme.colors.surfaceRaised }}
             title="Поддержка на сайте"
           >
             <View style={styles.rowIcon}>
-              <MessageSquare color="#22D3EE" size={21} strokeWidth={2.5} />
+              <MessageSquare color={vexTheme.colors.textSecondary} size={18} strokeWidth={1.75} />
             </View>
             <View style={styles.rowCopy}>
               <Text style={styles.rowTitle}>Поддержка</Text>
               <Text numberOfLines={2} style={styles.rowDescription}>
-                Открыть сайт VEX и написать в поддержку.
+                На сайте VEX
               </Text>
             </View>
-            <ChevronRight color="#A7B9BD" size={22} strokeWidth={2.5} />
+            <ChevronRight color={vexTheme.colors.textSecondary} size={18} strokeWidth={1.75} />
           </VexPressable>
           <VexPressable
             accessibilityRole="button"
@@ -525,7 +500,7 @@ export const SettingsScreen = React.memo(function SettingsScreen() {
             hoverStyle={{ backgroundColor: 'rgba(255,159,159,0.12)' }}
             title="Выйти из текущей учетной записи"
           >
-            <LogOut color="#FF9F9F" size={22} strokeWidth={2.5} />
+            <LogOut color="#FF9F9F" size={18} strokeWidth={1.75} />
             <Text style={styles.signOutText}>
               {isSigningOut ? "Выходим" : "Выйти из аккаунта"}
             </Text>
@@ -543,12 +518,12 @@ export const SettingsScreen = React.memo(function SettingsScreen() {
           </View>
           <View style={styles.infoGrid}>
             <View style={styles.infoTile}>
-              <ServerCog color="#A7B9BD" size={18} strokeWidth={2.4} />
+              <ServerCog color={vexTheme.colors.textSecondary} size={18} strokeWidth={1.75} />
               <Text style={styles.infoLabel}>Ядро</Text>
               <Text style={styles.infoValue}>{appInfo.coreVersion}</Text>
             </View>
             <View style={styles.infoTile}>
-              <RefreshCw color="#A7B9BD" size={18} strokeWidth={2.4} />
+              <RefreshCw color={vexTheme.colors.textSecondary} size={18} strokeWidth={1.75} />
               <Text style={styles.infoLabel}>Маршруты</Text>
               <Text style={styles.infoValue}>
                 {remoteConfig?.routingPolicyVersion || "Нет данных"}
@@ -576,7 +551,7 @@ export const SettingsScreen = React.memo(function SettingsScreen() {
       </ScrollView>
     </VexScreen>
   );
-});
+}
 
 function formatPlatformLabel(platform: string) {
   if (platform === "android") return "Android";
@@ -606,6 +581,7 @@ function SettingsNativeSwitch({
       accessibilityRole="switch"
       accessibilityState={{ checked: value, disabled }}
       colorScheme="dark"
+      seedColor={vexTheme.colors.accent}
       matchContents
       style={styles.nativeSwitchHost}
     >
@@ -634,27 +610,27 @@ const styles = StyleSheet.create({
     minHeight: 56,
   },
   accountSummaryCard: {
-    borderBottomColor: "rgba(159, 218, 223, 0.14)",
+    borderBottomColor: vexTheme.colors.line,
     borderBottomWidth: 1,
-    gap: 5,
-    paddingHorizontal: 14,
-    paddingVertical: 13,
+    gap: 4,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
   },
   accountPlanTitle: {
     color: vexColors.text,
     fontSize: 17,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   accountSubtitle: {
     color: vexColors.muted,
     fontSize: 13,
-    lineHeight: 18,
+    lineHeight: 20,
   },
   accountQuotaCard: {
-    borderBottomColor: "rgba(159, 218, 223, 0.14)",
+    borderBottomColor: vexTheme.colors.line,
     borderBottomWidth: 1,
-    gap: 7,
-    paddingHorizontal: 14,
+    gap: 8,
+    paddingHorizontal: 16,
     paddingVertical: 12,
   },
   accountDetailRow: {
@@ -662,36 +638,36 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 12,
     justifyContent: "space-between",
-    marginTop: 3,
+    marginTop: 4,
   },
   accountDetailLabel: {
     color: vexColors.muted,
     fontSize: 12,
-    fontWeight: "700",
+    fontWeight: "600",
   },
   accountDetailValue: {
     color: vexColors.textSoft,
     flexShrink: 1,
     fontSize: 12,
-    fontWeight: "800",
+    fontWeight: "600",
     textAlign: "right",
   },
   accountQuotaWarning: {
     color: vexColors.danger,
     fontSize: 12,
-    fontWeight: "800",
-    lineHeight: 17,
-    marginTop: 2,
+    fontWeight: "600",
+    lineHeight: 20,
+    marginTop: 4,
   },
   settingRow: {
     alignItems: "center",
-    borderBottomColor: 'rgba(159, 218, 223, 0.14)',
+    borderBottomColor: vexTheme.colors.line,
     borderBottomWidth: 1,
     flexDirection: "row",
     gap: 12,
     minHeight: 68,
-    paddingHorizontal: 14,
-    paddingVertical: 11,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
   },
   rowIcon: {
     alignItems: "center",
@@ -711,15 +687,14 @@ const styles = StyleSheet.create({
   rowDescription: {
     color: vexColors.muted,
     fontSize: 13,
-    lineHeight: 18,
-    marginTop: 3,
+    lineHeight: 20,
+    marginTop: 4,
   },
   rowValue: {
     color: vexColors.muted,
     fontSize: 12,
-    fontWeight: "700",
+    fontWeight: "600",
     marginTop: 4,
-    textTransform: "uppercase",
   },
   rowValueActive: {
     color: vexColors.accent,
@@ -727,15 +702,13 @@ const styles = StyleSheet.create({
   infoGrid: {
     flexDirection: "row",
     gap: 8,
-    paddingHorizontal: 14,
+    paddingHorizontal: 16,
     paddingTop: 12,
   },
   infoTile: {
     backgroundColor: "transparent",
-    borderLeftColor: "rgba(34,211,238,0.36)",
-    borderLeftWidth: 2,
     flex: 1,
-    gap: 5,
+    gap: 4,
     minHeight: 48,
     paddingLeft: 8,
     paddingVertical: 4,
@@ -743,21 +716,21 @@ const styles = StyleSheet.create({
   infoLabel: {
     color: vexColors.muted,
     fontSize: 11,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   infoValue: {
     color: vexColors.textSoft,
     fontSize: 12,
-    fontWeight: "900",
+    fontWeight: "600",
   },
   detailList: {
     gap: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
   },
   detailRow: {
     alignItems: "flex-start",
-    borderTopColor: "rgba(96,118,123,0.18)",
+    borderTopColor: vexTheme.colors.line,
     borderTopWidth: 1,
     gap: 4,
     paddingTop: 8,
@@ -765,22 +738,22 @@ const styles = StyleSheet.create({
   detailLabel: {
     color: vexColors.muted,
     fontSize: 11,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   detailValue: {
     color: vexColors.textSoft,
     fontSize: 12,
-    fontWeight: "800",
+    fontWeight: "600",
     lineHeight: 16,
   },
   signOutButton: {
     alignItems: "center",
-    backgroundColor: vexColors.dangerSoft,
-    borderColor: vexColors.dangerLine,
-    borderTopColor: vexColors.dangerLine,
+    backgroundColor: vexTheme.colors.surface,
+    borderColor: vexTheme.colors.line,
+    borderTopColor: vexTheme.colors.line,
     borderTopWidth: StyleSheet.hairlineWidth,
     flexDirection: "row",
-    gap: 10,
+    gap: 12,
     justifyContent: "center",
     minHeight: 56,
   },
@@ -790,10 +763,10 @@ const styles = StyleSheet.create({
   signOutText: {
     color: vexColors.danger,
     fontSize: 15,
-    fontWeight: "900",
+    fontWeight: "600",
   },
   nativeSwitchHost: {
-    minHeight: 34,
+    minHeight: 44,
     minWidth: 52,
   },
 });

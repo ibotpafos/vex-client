@@ -1,11 +1,9 @@
+import loader from './vpn-module-loader.cjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
-import vm from 'node:vm';
+import { fileURLToPath } from 'node:url';
 import { waitForVerifiedVpnConnection } from '../src/vpn/connectVerification.ts';
 
-const ts = createRequire(import.meta.url)('typescript');
 
 function loadNativeAdapter(statusReads, extraNative = {}, timerGlobals = { setTimeout, clearTimeout }) {
   let reads = 0;
@@ -14,7 +12,7 @@ function loadNativeAdapter(statusReads, extraNative = {}, timerGlobals = { setTi
   const disconnected = { state: 'disconnected', rxBytes: 0, txBytes: 0 };
   const native = {
     ...extraNative,
-    connect: async () => ({ state: 'connected', rxBytes: 0, txBytes: 0 }),
+    connect: async () => ({ state: 'connected', rxBytes: 0, txBytes: 0, dataPlaneGeneration: 'fixture-generation' }),
     disconnect: async () => disconnected,
     status: async () => {
       const value = statusReads[reads++];
@@ -23,15 +21,7 @@ function loadNativeAdapter(statusReads, extraNative = {}, timerGlobals = { setTi
     },
   };
   function load(relativePath, dependencies = {}) {
-    const exports = {};
-    const source = readFileSync(new URL(relativePath, import.meta.url), 'utf8');
-    vm.runInNewContext(ts.transpileModule(source, {
-      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
-    }).outputText, {
-      exports, Date: clock, ...timerGlobals,
-      require: name => { assert.ok(Object.hasOwn(dependencies, name), `Unexpected native adapter import ${name}`); return dependencies[name]; },
-    });
-    return exports;
+    return loader.loadModule(fileURLToPath(new URL(relativePath, import.meta.url)), dependencies, { Date:clock, ...timerGlobals });
   }
   const adapter = load('../src/native/vexVpn.ts', {
     'react-native': {
@@ -52,7 +42,7 @@ function deferred() {
   return { promise, resolve };
 }
 
-const pending = { state: 'connected', rxBytes: 0, txBytes: 0, verified: false };
+const pending = { state: 'connected', rxBytes: 0, txBytes: 0, verified: false, dataPlaneVerified: true, dataPlaneGeneration: 'fixture-generation' };
 
 function nativeTimers() {
   const pending = new Map();
@@ -272,25 +262,16 @@ test('a current handshake within the deadline succeeds', async () => {
 });
 
 test('connect verification reads a ready native handshake without the Android cache delay', async () => {
-  const verified = { ...pending, latestHandshakeEpochMillis: 1_000_000 };
+  const verified = { ...pending, verified:true, latestHandshakeEpochMillis: 1_000_000 };
   const f = loadNativeAdapter([{ state: 'disconnected', rxBytes: 0, txBytes: 0 }, verified]);
-  const source = readFileSync(new URL('../src/vpn/useVpnConnectionFlow.ts', import.meta.url), 'utf8');
-  const tree = ts.createSourceFile('flow.ts', source, ts.ScriptTarget.Latest, true);
-  let callback;
-  function visit(node) {
-    if (ts.isVariableDeclaration(node) && node.name.getText(tree) === 'connectProfileWithEndpointFallback') {
-      callback = node.initializer.arguments[0].getText(tree);
-    }
-    ts.forEachChild(node, visit);
-  }
-  visit(tree);
-  assert.ok(callback);
+  const account=loader.accountFixture();
   const context = {
-    ...f.adapter, Date: f.clock, Platform: { OS: 'android' }, session: null,
+    ...f.adapter, ...account.api, Date: f.clock, Platform: { OS: 'android' }, session: {accessToken:'token-A',user:{id:'A'}},
+    useRef:current=>({current}),useEffect:()=>{},useCallback:fn=>fn,isCurrentSessionOperation:()=>true,prepareClientNetworkDiagnostics:async()=>{},
     requireCurrentSession() {}, antiLeakEnabled: true,
     vpnProfileAddressMatchesDevice: () => true, androidVpnProfileWithinBinderBudget: () => true,
     getVpnApplicationSelection: async () => ({ mode: 'all', packageNames: [] }),
-    dynamicRouteRuntime: { attempts: profile => [{ profile }], clearActive() {} },
+    dynamicRouteRuntime: { prepare:async()=>{}, attempts: profile => [{ profile }], clearActive() {} },
     profileEndpoint: () => 'fixture:443', withLastSuccessfulEndpoint: profile => profile,
     withTimeout: promise => promise, connectAttemptTimeoutMs: 25_000,
     cachedConnectAttemptTimeoutMs: 10_000, connectDiagnosticsPrepareTimeoutMs: 400,
@@ -300,9 +281,9 @@ test('connect verification reads a ready native handshake without the Android ca
     }),
     isVpnTransportFallbackError: () => false,
   };
-  const code = ts.transpileModule(`return (${callback});`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-  const connect = new Function(...Object.keys(context), code)(...Object.values(context));
-  const result = await connect({ config: 'fixture' });
+  const hook=loader.loadWithBindings('src/vpn/useVpnConnectionFlow.ts','useVpnConnectionFlow',context,{Date:f.clock}).useVpnConnectionFlow;
+  const connect=hook(context).connectProfileWithEndpointFallback;
+  const result = await connect({config:`[Interface]\nPrivateKey = ${account.keyPair.privateKey}`,device:account.device,locationId:'de'});
   assert.equal(result.status.latestHandshakeEpochMillis, 1_000_000);
   assert.equal(result.status.verified, true);
   assert.equal(f.reads(), 2);
@@ -312,8 +293,8 @@ test('connect verification reads a ready native handshake without the Android ca
 
 test('fresh Android status reads still reject the previous handshake', async () => {
   const f = loadNativeAdapter([
-    { ...pending, latestHandshakeEpochMillis: 999_000 },
-    { ...pending, latestHandshakeEpochMillis: 1_000_000 },
+    { ...pending, verified:true, latestHandshakeEpochMillis: 999_000 },
+    { ...pending, verified:true, latestHandshakeEpochMillis: 1_000_000 },
   ]);
   const started = await f.adapter.connectVpn('fixture');
   let waits = 0;
@@ -331,7 +312,7 @@ for (const resolveOldFirst of [true, false]) {
     const f = loadNativeAdapter([() => old.promise, () => fresh.promise]);
     const oldRead = f.adapter.getVpnStatus();
     const freshRead = f.adapter.getVpnStatus({ fresh: true });
-    const verified = { ...pending, latestHandshakeEpochMillis: 1_000_000 };
+    const verified = { ...pending, verified:true, latestHandshakeEpochMillis: 1_000_000 };
     let joined;
     if (resolveOldFirst) {
       old.resolve(pending); await oldRead;
@@ -410,5 +391,27 @@ test('an explicit attempt limit remains a caller-controlled bound', async () => 
     wait: async (delayMs) => { now += delayMs; },
   }), /VPN handshake timed out/);
   assert.equal(reads, 2);
-  assert.equal(now, 150);
+  assert.equal(now, 100);
+});
+
+for (const [name, proof] of [
+  ['missing proof', {dataPlaneVerified:undefined}],
+  ['unverified proof', {dataPlaneVerified:false}],
+  ['foreign generation', {dataPlaneGeneration:'another-attempt'}],
+  ['missing handshake', {latestHandshakeEpochMillis:undefined}],
+]) {
+  test(`Android admission cannot verify ${name}`,async()=>{
+    const f=loadNativeAdapter([{...pending,verified:true,latestHandshakeEpochMillis:1_000_000,...proof}]);
+    await assert.rejects(waitForVerifiedVpnConnection(pending,()=>f.adapter.getVpnStatus({fresh:true}),{
+      requireDataPlane:true,expectedDataPlaneGeneration:'fixture-generation',attempts:1,
+    }),/VPN traffic verification timed out/);
+    assert.equal(f.reads(),1);
+  });
+}
+test('Android verification accepts only the current native proof generation',async()=>{
+  const f=loadNativeAdapter([{...pending,verified:true,latestHandshakeEpochMillis:1_000_000}]);
+  const result=await waitForVerifiedVpnConnection(pending,()=>f.adapter.getVpnStatus({fresh:true}),{
+    requireDataPlane:true,expectedDataPlaneGeneration:'fixture-generation',attempts:1,
+  });
+  assert.equal(result.dataPlaneVerified,true);assert.equal(result.dataPlaneGeneration,'fixture-generation');
 });

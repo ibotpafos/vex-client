@@ -59,7 +59,8 @@ test('Android renewal card is wired to existing website path, without token URLs
   assert.match(home, /Platform\.OS === 'android'/);
   assert.match(home, /SubscriptionRenewalCard/);
   assert.match(home, /<HomeBody>[\s\S]*<LocationHomeHero/);
-  assert.match(home, /function HomeBody[\s\S]*Platform\.OS === 'android'[\s\S]*<ScrollView/);
+  assert.match(home, /function HomeBody[\s\S]*return \([\s\S]*<ScrollView/);
+  assert.doesNotMatch(home.slice(home.indexOf('function HomeBody')), /Platform\.OS|<>/);
   assert.match(context, /return \{[\s\S]*entitlementState,/);
   assert.match(card, /vexWebsite\.dashboard\(\)/);
   assert.match(card, /vexWebsite\.support\(\)/);

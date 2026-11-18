@@ -17,7 +17,8 @@ import { isCurrentSessionMutation } from '../src/auth/sessionMutationGuard';
 import { loadSessionWithRetry, loadWithRetry } from '../src/auth/sessionLoadRetry';
 import { vpnConnectionAnimationsEnabled } from '../src/vpn/vpnAnimationPolicy';
 import { formatQuotaBytes, formatQuotaUsage, hasQuotaLimit, quotaHeadline, quotaProgress, quotaRemainingBytes } from '../src/components/traffic-quota-presentation';
-import { generateChallenge, generateRandomString } from '../src/auth/pkce';
+import { createHash } from 'node:crypto';
+import realSourceLoader from './helpers/real-source-loader.cjs';
 import { buildAppWebAuthUrl } from '../src/auth/webAuthUrl';
 import { emailOTPCells, emailOTPRequestErrorMessage, isEmailOTPExpired, isInvalidOrExpiredEmailOTPError, normalizeEmailOTPCode } from '../src/auth/emailOtp';
 import { loadSessionFromStorage, saveSessionToStorage, type SessionStorageAdapter } from '../src/auth/sessionStoreCore';
@@ -70,7 +71,7 @@ import { assessVpnAutopilotIssue } from '../src/vpn/vpnAutopilotAssessment';
 import { buildCreateDeviceRequest } from '../src/api/deviceCreateRequest';
 import { getOrCreateNativeDeviceRegistration } from '../src/api/nativeDeviceRegistration';
 import { canAutomaticallyApplyOtaUpdate } from '../src/updates/otaAutoApply';
-import { HOME_TAB_ROUTE } from '../src/navigation/routes';
+
 import type { VpnDevice, VpnDeviceUsage, VpnLocation } from '../src/api/vexApi';
 import type { VpnStatus } from '../src/native/vexVpn';
 import type { VpnProfile } from '../src/vpn/profile';
@@ -106,8 +107,26 @@ import {
   customerRealtimeReconnectDelay,
   parseCustomerSSE,
 } from '../src/realtime/customerRealtimeCore';
-import { CustomerRealtimeTransport } from '../src/realtime/customerRealtimeTransport';
 import { processDevicePSKRotationEvent, type StagedDevicePSKProfile } from '../src/vpn/devicePskRotation';
+
+// Native crypto and router are platform boundaries; execute the real app modules.
+const loadNativeBoundaryModule = realSourceLoader({ adapters: {
+  'expo-crypto': {
+    CryptoDigestAlgorithm: { SHA256: 'SHA-256' },
+    digestStringAsync: async (algorithm: string, input: string) => {
+      assertEqual(algorithm, 'SHA-256');
+      return createHash('sha256').update(input).digest('hex');
+    },
+  },
+  'expo-router': { router: {
+    canGoBack: () => false,
+    back: () => { throw new Error('Unexpected navigation in core unit tests'); },
+    replace: () => { throw new Error('Unexpected navigation in core unit tests'); },
+  } },
+} });
+const { generateChallenge, generateRandomString } = loadNativeBoundaryModule('@/auth/pkce');
+const { HOME_TAB_ROUTE } = loadNativeBoundaryModule('@/navigation/routes');
+const { CustomerRealtimeTransport } = loadNativeBoundaryModule('@/realtime/customerRealtimeTransport') as typeof import('../src/realtime/customerRealtimeTransport');
 
 assertDeepEqual(customerRealtimeMetadata('customer.change', JSON.stringify({
   domain: 'devices', version: 7, updated_at: '2026-08-30T12:00:00Z',

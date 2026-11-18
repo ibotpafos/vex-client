@@ -16,7 +16,7 @@ assert.match(attributes, /android:process=":boot_protection"/);
 assert.match(attributes, /android:permission="android.permission.BIND_VPN_SERVICE"/);
 assert.match(body, /SUPPORTS_ALWAYS_ON" android:value="true"/);
 assert.doesNotMatch(all, /SUPPORTS_ALWAYS_ON" android:value="false"/);
-for (const name of ['org.amnezia.awg.backend.GoBackend$VpnService', '.vpn.VexLeakBlockerService']) {
+for (const name of ['org.amnezia.awg.backend.GoBackend$VpnService', '.vpn.VexLeakBlockerService', '.vpn.VlessVpnService']) {
   const service = services.find(([, attrs]) => attrs.includes(`android:name="${name}"`));
   assert.ok(service);
   assert.match(service[2], /<intent-filter tools:node="removeAll"\/>/);

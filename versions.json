@@ -1,10 +1,10 @@
 {
   "android": {
-    "version": "1.0.92",
+    "version": "1.0.93",
     "build": 1,
     "min_supported_build": 1002930,
     "is_required": false,
-    "release_notes": "Android 1.0.92: добавлен VLESS через XHTTP/TLS наряду с AmneziaWG. Улучшено восстановление AWG после неудачного подключения и обновление VPN-профиля. Исправлены фоновая проверка подключения и восстановление после потери Wi-Fi. Возле сервера показан выбранный протокол AWG или VLESS. Исправлено ложное отображение защитной блокировки после восстановления AWG.",
+    "release_notes": "Кандидат Android 1.0.93: переход на Expo SDK 58 и React Native 0.88. Требуется новая нативная сборка; OTA для старого SDK несовместимы.",
     "core_version": "0.1.0",
     "config_schema_version": 1,
     "min_config_schema_version": 1,
@@ -13,9 +13,9 @@
     "signature_url": ""
   },
   "ios": {
-    "version": "1.0.48",
-    "build": 2,
-    "release_notes": "iOS: обновлен нативный VPN UX и подготовлена база для Live Activity.",
+    "version": "1.0.49",
+    "build": 1,
+    "release_notes": "Кандидат iOS 1.0.49: переход на Expo SDK 58 и scene lifecycle. Требуется новая нативная сборка.",
     "core_version": "0.1.0",
     "config_schema_version": 1,
     "min_config_schema_version": 1

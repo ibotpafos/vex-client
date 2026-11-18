@@ -55,7 +55,7 @@ function transport(fetch, { legacyFetch = fetch, flag, platform = 'android', dec
     }).outputText;
     function requireFixture(id) {
       if (id === 'react-native') return { Platform: { OS: platform } };
-      if (id === 'expo/fetch') return { fetch: legacyFetch };
+      if (id === 'expo/fetch') return { fetch: (url, init) => { calls.push({ url, init }); return legacyFetch(url, init); } };
       const target = path.posix.normalize(path.posix.join(path.posix.dirname(relative), id));
       assert.ok(['realtime/customerRealtimeCore', 'api/apiFetch'].includes(target), 'Unexpected transport dependency');
       return load(target);
@@ -158,9 +158,9 @@ for (const status of [301, 302, 303, 307, 308]) for (const foreign of [false, tr
 
 for (const flag of [undefined, '1', 'true']) for (const platform of ['android', 'web']) {
   test(`${platform} flag=${flag} shares manual fetch policy and closes opaque/unread responses`, async () => {
-    let native = 0, global = 0, signal, redirect, bodyReads = 0;
+    let native = 0, global = 0, signal, redirect, credentials, bodyReads = 0;
     const reject = async (_url, init) => {
-      signal = init.signal; redirect = init.redirect;
+      signal = init.signal; redirect = init.redirect; credentials = init.credentials;
       return { status: 0, type: 'opaqueredirect', get body() { bodyReads++; throw new Error('A blocked redirect body must not be opened'); } };
     };
     const h = transport((...args) => { global++; return reject(...args); }, {
@@ -168,9 +168,9 @@ for (const flag of [undefined, '1', 'true']) for (const platform of ['android', 
     });
     try {
       h.start(); await until(() => [...h.timers.values()].some(timer => timer.milliseconds === 1_000));
-      const legacy = platform !== 'web' && flag !== undefined;
+      const legacy = platform !== 'web';
       assert.equal(global, legacy ? 0 : 1); assert.equal(native, legacy ? 1 : 0);
-      assert.equal(redirect, 'manual'); assert.equal(bodyReads, 0);
+      assert.equal(redirect, 'manual'); assert.equal(credentials, 'omit'); assert.equal(bodyReads, 0);
       assert.equal(signal.aborted, true); assert.equal(h.events.length, 0); assert.equal(h.revoked, 0);
     } finally { h.stop(); }
   });
@@ -255,13 +255,9 @@ test('watchdog owns stalled headers and a pending stream read', async () => {
   } finally { active.stop(); }
 });
 
-test('installed Expo UTF8 decoder preserves fragmented native stream bytes', async () => {
-  const module = { exports: {} };
-  const source = ts.transpileModule(fs.readFileSync(path.join(__dirname, '../node_modules/expo/src/winter/TextDecoder.ts'), 'utf8'), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
-  new Function('module', 'exports', source)(module, module.exports);
-  const fixture = streamResponse(), h = transport(async () => fixture.response, { decoder: module.exports.TextDecoder });
+// Public host decoder/parser contract; real Hermes acceptance is test:android-runtime.
+test('public host UTF8 decoder preserves one-byte SSE fragments and releases its reader', async () => {
+  const fixture = streamResponse(), h = transport(async () => fixture.response, { decoder: TextDecoder });
   try {
     h.start(); await until(() => fixture.body.locked);
     const text = 'Привет 👨‍👩‍👧‍👦 e\u0301';

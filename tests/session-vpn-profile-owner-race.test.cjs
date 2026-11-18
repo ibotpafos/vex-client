@@ -2,22 +2,13 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
-const vm = require('node:vm');
-const ts = require('typescript');
 
 const repo = path.resolve(__dirname, '..');
+const { loadModule } = require('./vpn-module-loader.cjs');
 function load(file, dependencies = {}) {
   const overlay = process.env.VEX_PROFILE_NUMERIC_SOURCE_ROOT && path.join(process.env.VEX_PROFILE_NUMERIC_SOURCE_ROOT, file);
   const source = file === 'src/api/vpn.ts' && process.env.VEX_STAGED_PROFILE_SOURCE || (overlay && fs.existsSync(overlay) ? overlay : path.join(repo, file));
-  const code = ts.transpileModule(fs.readFileSync(source, 'utf8'), {
-    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
-  }).outputText;
-  const exports = {};
-  vm.runInNewContext(code, { exports, Error, Date, URLSearchParams, setInterval, clearInterval, require: name => {
-    assert.ok(Object.hasOwn(dependencies, name), `unexpected policy import ${name}`);
-    return dependencies[name];
-  } });
-  return exports;
+  return loadModule(source, dependencies);
 }
 const sessionOperation = load('src/vpn/sessionOperation.ts');
 const apiErrors = load('src/api/error.ts');
@@ -72,7 +63,7 @@ function hookHarness(stage, { rotationRequired = false, knownEntitlement = paid 
       rotateVpnProfileKey: (...args) => { assert.equal(typeof args[2], 'function'); rotationOwners.push(args[2]); return wait('rotate', makeProfile()); },
     },
     './transport': load('src/vpn/transport.ts', {}),
-    './profileRequestQueue': { ProfileRequestSupersededError: class ProfileRequestSupersededError extends Error {} },
+    './profileRequestQueue': load('src/vpn/profileRequestQueue.ts'),
     '../api/error': apiErrors, '../api/requestCancellation': cancellation,
     './sessionOperation': sessionOperation,
     './hotProfileCache': {

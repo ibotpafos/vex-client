@@ -1,28 +1,13 @@
-import fs from 'node:fs';
+import realSourceLoader from './helpers/real-source-loader.cjs';
 import assert from 'node:assert/strict';
-import { stripTypeScriptTypes } from 'node:module';
 import test from 'node:test';
 import { URL as ExpoURL } from 'whatwg-url-minimum';
-import { withManagedProfileAWGCapability } from '../src/vpn/profileCapabilities.ts';
-import { isPositiveSafeInteger } from '../src/vpn/profileNumbers.ts';
 
-const origins = stripTypeScriptTypes(fs.readFileSync('src/api/origins.ts', 'utf8')).replace(/\bexport /g, '');
-const config = stripTypeScriptTypes(fs.readFileSync('src/api/config.ts', 'utf8'))
-  .replace(/^import .*;$/gm, '').replace(/\bexport /g, '');
-const source = origins + `const process = {env: {EXPO_PUBLIC_VEX_API_BASE_URL: 'http://localhost:3011'}};` + stripTypeScriptTypes(fs.readFileSync('src/api/client.ts', 'utf8'))
-  .replace(/^import .*;$/gm, '').replace(/^export \{.*;$/gm, '').replace(/\bexport /g, '');
-const errors = stripTypeScriptTypes(fs.readFileSync('src/api/error.ts', 'utf8')).replace(/\bexport /g, '');
-const fetchPolicy = stripTypeScriptTypes(fs.readFileSync('src/api/apiFetch.ts', 'utf8')).replace(/\bexport /g, '');
-const cancellationSource = stripTypeScriptTypes(fs.readFileSync('src/api/requestCancellation.ts', 'utf8'))
-  .replace(/^import .*;$/gm, '').replace(/\bexport /g, '');
-const vpnSource = stripTypeScriptTypes(fs.readFileSync('src/api/vpn.ts', 'utf8'))
-  .replace(/^import[\s\S]*?from ['"][^'"]+['"];\s*/gm, '').replace(/\bexport /g, '');
-const settle = async () => { for (let i=0; i<30; i++) await Promise.resolve(); };
+const settle = async () => { for (let i=0; i<100; i++) await Promise.resolve(); };
 function client(...args) { return clientSurface(...args).rawRequest; }
 function clientSurface(fetch, appInfo = async () => ({}), baseUrl = 'http://localhost:3011', URLImplementation = URL) {
-  return new Function('URL', 'process', 'expoFetch', 'fetch', 'getAppInfo', 'getOrCreateDeviceId', 'Platform', 'androidExperimentalRoutingEnabled', 'androidProfilePlatform', 'supportsNativeRoutingPolicy', 'withManagedProfileAWGCapability', 'isPositiveSafeInteger', 'nativeVpnDeviceForClient', 'requireVpnLocationId',
-    errors + fetchPolicy + config + source + cancellationSource + vpnSource + '; return {rawRequest,requestManagedVpnProfile,fetchStagedDevicePSKProfile,preparedTunnelFromDeviceConfig};')(
-    URLImplementation, { env: { EXPO_PUBLIC_VEX_API_BASE_URL: baseUrl } }, fetch, fetch, appInfo, async () => 'fixture', {OS:'web'}, () => false, () => 'android', () => false, withManagedProfileAWGCapability, isPositiveSafeInteger, devices => devices[0], value => value);
+  const load = realSourceLoader({ fetch, appInfo, env: { EXPO_PUBLIC_VEX_API_BASE_URL: baseUrl }, globals: { URL: URLImplementation }, expose: { 'src/api/vpn': ['requestManagedVpnProfile', 'preparedTunnelFromDeviceConfig'] } });
+  return { ...load('@/api/client'), ...load('@/api/vpn') };
 }
 
 test('a stalled GET has one total deadline rather than three full timeouts', async t => {
@@ -191,8 +176,10 @@ for (const URLImplementation of [URL, ExpoURL]) {
 for (const baseUrl of ['relative/path', 'file:///private/fixture', 'https://user:fixture@example.invalid', 'https://example.invalid?route=other', 'https://example.invalid#fragment', 'http://[invalid']) {
   test(`${URLImplementation === URL ? 'Node' : 'Expo'} URL: invalid API base fails before native setup or fetch: ${baseUrl}`, async () => {
     let setupCalls = 0, requests = 0;
-    const raw = client(async () => { requests++; return { ok: true, text: async () => '[]' }; }, async () => { setupCalls++; return {}; }, baseUrl, URLImplementation);
-    await assert.rejects(raw('/v1/billing/plans'), error => error.code === 'invalid_api_base_url');
+    await assert.rejects(async () => {
+      const raw = client(async () => { requests++; return { ok: true, text: async () => '[]' }; }, async () => { setupCalls++; return {}; }, baseUrl, URLImplementation);
+      await raw('/v1/billing/plans');
+    }, error => error.code === 'invalid_api_base_url');
     assert.equal(setupCalls, 0);
     assert.equal(requests, 0);
   });
@@ -216,7 +203,7 @@ for (const kind of ['issued', 'staged', 'legacy']) {
       let calls = 0;
       const api = clientSurface(async url => {
         const path = new URL(url).pathname;
-        if (path === '/v1/devices') return {ok:true, status:200, text:async()=>JSON.stringify([{id:'fixture-device',name:'Fixture',protocol:'amneziawg'}])};
+        if (path === '/v1/devices') return {ok:true, status:200, text:async()=>JSON.stringify([{id:'fixture-device',name:'Fixture',status:'active',protocol:'amneziawg'}])};
         if (path.endsWith('/config-token')) return {ok:true, status:201, text:async()=>JSON.stringify({token:'inert-config-token'})};
         calls++;
         if (failureKind === 'network') throw new TypeError('network request failed');

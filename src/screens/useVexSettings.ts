@@ -157,14 +157,14 @@ export function useVexSettings(showToastOverride?: (options: ToastOptions) => vo
       setIsAntiLeakEnabled(result);
       playSuccessHaptic();
       showToast({
-        message: result ? 'Антидетект IP включён.' : 'Антидетект IP выключен.',
+        message: result ? 'Защита от утечек включена.' : 'Защита от утечек выключена.',
         variant: 'success',
       });
     } catch {
       playErrorHaptic();
       showToast({
         duration: 'long',
-        message: 'Не удалось сохранить антидетект IP.',
+        message: 'Не удалось сохранить защиту от утечек.',
         variant: 'error',
       });
     } finally {

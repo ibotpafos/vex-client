@@ -46,7 +46,7 @@ export function UniversalHomeContent({
   const { rxBytes, txBytes } = useVpnTrafficStats();
 
   return (
-    <Host colorScheme="dark" seedColor="#22D3EE" style={styles.host} useViewportSizeMeasurement>
+    <Host colorScheme="dark" seedColor="#43D9E7" style={styles.host} useViewportSizeMeasurement>
       <Column spacing={8} style={styles.content}>
         <List>
           <ListItem onPress={onOpenSettings} trailing="›">VEX</ListItem>
@@ -67,7 +67,7 @@ export function UniversalHomeContent({
             return (
               <ListItem
                 key={location.id}
-                leading={location.flagEmoji || location.countryCode}
+                leading={location.countryCode}
                 onPress={isVpnBusy ? undefined : () => onSelectLocation(location.id)}
                 supportingText={detail}
                 testID={`home-location-${location.id}`}
@@ -98,7 +98,7 @@ export function UniversalHomeContent({
 
 const styles = {
   content: {
-    backgroundColor: "#041315",
+    backgroundColor: "#111416",
     paddingBottom: 12,
   },
   error: {
@@ -112,6 +112,6 @@ const styles = {
   sectionTitle: {
     color: "#F4FCFD",
     fontSize: 20,
-    fontWeight: "800" as const,
+    fontWeight: "500" as const,
   },
 };

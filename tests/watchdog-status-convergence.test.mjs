@@ -2,11 +2,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {stripTypeScriptTypes} from 'node:module';
 import test from 'node:test';
+import vpnModuleLoader from './vpn-module-loader.cjs';
 
 // Inert characterization of the production status publisher, watchdog status
-// recorder and Android listener. No React renderer, timers, native calls or API.
+// recorder and Android listener. The whole profile hook retains its closure;
+// React adapters defer updates/effects. No renderer, timers, native calls or API.
 const connection = fs.readFileSync('src/vpn/useVpnConnection.ts', 'utf8');
-const profileState = fs.readFileSync('src/vpn/useVpnProfileState.ts', 'utf8');
 const helpers = fs.readFileSync('src/screens/home-screen-helpers.ts', 'utf8');
 const health = stripTypeScriptTypes(fs.readFileSync('src/vpn/nativeTunnelHealth.ts', 'utf8'))
   .replace(/import[\s\S]*?from '[^']+';/g, '').replace(/\bexport /g, '');
@@ -44,16 +45,19 @@ function harness() {
   const operation = {current: false};
   const revision = {current: 0}, generation = {current: 0}, preferences = {current: 0}, mounted = {current: true};
   const reconcileReleasedStatusRef = {current: async () => {}};
-  const activeProfileRevisionRef = {current: 0};
   let receive;
   const profile = {locationId: 'fi', profileVersion: 3, transport: 'amneziawg', device: {id: 'fixture'}};
   const pendingProfileUpdates = [];
-  const profileBindings = {useCallback: f => f, isCurrentSessionOperation: () => state.sessionCurrent,
-    activeProfileRevisionRef, userId: 'fixture-owner',
-    vpnProfileOwnerRef: {current: {userId: 'fixture-owner', isCurrentSessionOperation: () => state.sessionCurrent}},
-    setVpnProfileState: update => pendingProfileUpdates.push(update)};
-  const setActiveProfile = new Function(...Object.keys(profileBindings),
-    callback('setVpnProfile', profileState) + ';return setVpnProfile;')(...Object.values(profileBindings));
+  const {useVpnProfileState: runProfileState} = vpnModuleLoader.loadWithBindings('src/vpn/useVpnProfileState.ts', 'useVpnProfileState', {
+    useCallback: f => f, useMemo: f => f(), useRef: current => ({current}), useEffect: () => {},
+    useState: initial => [initial, update => pendingProfileUpdates.push(update)],
+    useQueryClient: () => ({}),
+  });
+  const {setActiveProfile, activeProfileRevisionRef} = runProfileState({
+    userId: 'fixture-owner', accessToken: 'fixture', selectedLocationId: 'fi',
+    transport: 'amneziawg', routingMode: 'full_tunnel',
+    isCurrentSessionOperation: () => state.sessionCurrent,
+  });
   const watchdogBindings = {
     useRef: current => ({current}), useCallback: f => f, useEffect: () => {},
     initialRecoveryBackoffState: () => ({}), Platform: {OS: 'android'},
@@ -184,4 +188,17 @@ test('the status path preserves native blocking and unverified evidence', () => 
     assert.notEqual(h.phase(), 'connected');
     for (const [key, value] of Object.entries(patch)) assert.equal(h.ref.current[key], value);
   }
+});
+
+test('the whole profile hook rejects stale setters and defers owned-state session checks', () => {
+  const stale = harness(); stale.state.sessionCurrent = false;
+  stale.setActiveProfile(stale.profile);
+  assert.equal(stale.activeProfileRevisionRef.current, 0);
+  assert.equal(stale.pendingProfileUpdates.length, 0);
+
+  const pending = harness(); pending.setActiveProfile(pending.profile);
+  assert.equal(pending.activeProfileRevisionRef.current, 1);
+  assert.equal(pending.pendingProfileUpdates.length, 1);
+  pending.state.sessionCurrent = false;
+  assert.equal(pending.pendingProfileUpdates[0](null), null, 'a queued React update cannot publish after its session ends');
 });

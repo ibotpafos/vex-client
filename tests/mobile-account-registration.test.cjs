@@ -9,12 +9,11 @@ const { p256 } = require('@noble/curves/nist.js');
 const { hexToBytes } = require('@noble/curves/utils.js');
 
 const sourceRoot = process.env.VEX_MOBILE_REGISTRATION_SOURCE_ROOT || path.resolve(__dirname, '..');
+const { loadWithBindings } = require('./vpn-module-loader.cjs');
 function load(file, names, stubs = {}) {
   const entryRoot = process.env.VEX_KEY_ADMISSION_ENTRY_ROOT;
   const root = entryRoot && ['src/vpn/profile.ts', 'src/vpn/useVpnProfileState.ts'].includes(file) ? entryRoot : sourceRoot;
-  const source = stripTypeScriptTypes(fs.readFileSync(path.join(root, file), 'utf8'))
-    .replace(/^import[\s\S]*?from ['"][^'"]+['"];\s*/gm, '').replace(/\bexport /g, '');
-  return new Function(...Object.keys(stubs), source + `;return {${names}};`)(...Object.values(stubs));
+  return loadWithBindings(path.join(root, file), names, stubs, Object.hasOwn(stubs, 'globalThis') ? { globalThis: stubs.globalThis } : {});
 }
 const key = byte => Buffer.alloc(32, byte).toString('base64');
 const legacyPair = { publicKey: key(1), privateKey: key(2), keyEpoch: 1 };
@@ -1281,7 +1280,7 @@ function profileOwners(h, hotProfile) {
     ...api, ...core, ...consistency, ...session, ...errors, ...cancellation, ...location, ...revalidation,
     ...load('src/vpn/profileNumbers.ts', 'isPositiveSafeInteger'),
     defaultVpnRoutingMode: 'default', defaultVpnBypassRegion: '', defaultVpnRoutingPolicyVersion: 'v1',
-    loadHotVpnProfile: async () => record(), runProfileRequest: work => work(undefined),
+    loadHotVpnProfile: async () => record(),
   });
   return { api, profiles, core, consistency, session, record };
 }
@@ -1291,13 +1290,11 @@ function profileState(h, platform, cached, hot) {
     getQueryData: () => cached, setQueryData: () => {}, removeQueries: () => {},
     fetchQuery: ({ queryFn }) => queryFn(), invalidateQueries: async () => {},
   };
-  const react = { useCallback: fn => fn, useEffect: () => {}, useMemo: fn => fn(), useRef: value => ({ current: value }) };
+  const react = { useCallback: fn => fn, useEffect: () => {}, useMemo: fn => fn(), useRef: value => ({ current: value }), useState: value => [value, () => {}] };
   const module = load('src/vpn/useVpnProfileState.ts', 'useVpnProfileState', {
     ...react, useQueryClient: () => queryClient, isCancelledError: () => false,
-    useOwnedState: (_owner, _isCurrent, value) => [value, () => {}],
     Platform: { OS: platform }, errorMessage: error => error.message,
     ...owners.api, ...owners.profiles, ...owners.session,
-    isApiRequestCancelled: () => false, ProfileRequestSupersededError: class extends Error {},
     clearHotVpnProfiles: async () => {}, hydrateHotVpnProfilesToQueryCache: async () => [],
     loadHotVpnProfileResult: async () => ({ record: owners.record() }),
     profileFromHotRecord: owners.core.profileFromHotRecord, saveHotVpnProfile: async () => {},
@@ -1315,18 +1312,7 @@ function profileState(h, platform, cached, hot) {
   });
 }
 function connectEntry(h, platform, nativeConnect, timeout = promise => promise, overrides = {}) {
-  const ts = require('typescript');
   const file = path.join(process.env.VEX_KEY_ADMISSION_ENTRY_ROOT || sourceRoot, 'src/vpn/useVpnConnectionFlow.ts');
-  const text = fs.readFileSync(file, 'utf8');
-  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
-  let callback;
-  function visit(node) {
-    if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'connectProfileWithEndpointFallback') {
-      assert.equal(callback, undefined); callback = node.initializer.arguments[0].getText(source);
-    }
-    ts.forEachChild(node, visit);
-  }
-  visit(source); assert.ok(callback);
   const owners = profileOwners(h);
   const dependencies = {
     ...owners.api, ...owners.consistency,
@@ -1340,12 +1326,14 @@ function connectEntry(h, platform, nativeConnect, timeout = promise => promise, 
     dynamicRouteRuntime: { prepare: async () => {}, attempts: profile => [{ profile }], clearActive: () => {} },
     connectVpn: nativeConnect, getVpnStatus: async () => ({ state: 'disconnected' }),
     withTimeout: timeout, connectAttemptTimeoutMs: 1000, antiLeakEnabled: true,
+    scheduleVpnVerificationTimeout: (delay, callback) => { const timer = setTimeout(callback, delay); return () => clearTimeout(timer); },
     waitForVerifiedVpnConnection: async status => status,
     withLastSuccessfulEndpoint: owners.core.withLastSuccessfulEndpoint,
     ...overrides,
   };
-  const compiled = stripTypeScriptTypes('const connect = ' + callback + ';');
-  return new Function(...Object.keys(dependencies), compiled + '; return connect;')(...Object.values(dependencies));
+  const react = { useRef: current => ({ current }), useEffect: () => {}, useCallback: fn => fn };
+  const hook = loadWithBindings(file, 'useVpnConnectionFlow', { ...react, ...dependencies }, overrides.Date ? { Date: overrides.Date } : {}).useVpnConnectionFlow;
+  return hook(dependencies).connectProfileWithEndpointFallback;
 }
 function localProfile(tunnel) {
   return { ...tunnel, config: tunnel.config.replace('[Interface]', '[Interface]\nHeaderProtectionKey = isolated-fixture'), locationId: 'de', routingMode: 'default', entitlement: paidAccess, source: 'local', cacheSavedAtMs: Date.now() };
@@ -1471,13 +1459,23 @@ function stagedActivation(connect, disconnect, busy) {
     ts.forEachChild(node, visit);
   }
   visit(source); assert.ok(activate);
+  const leases = {};
+  function collect(node) {
+    if (ts.isVariableDeclaration(node) && ['acquireVpnOperation', 'releaseVpnOperation'].includes(node.name.getText(source))) leases[node.name.getText(source)] = node.initializer.arguments[0].getText(source);
+    ts.forEachChild(node, collect);
+  }
+  collect(source);
   const bindings = { requireCurrentSession: () => {}, isConnected: true,
     setActiveProfile: () => {}, cacheProfile: () => {}, vpnOperationInFlightRef: busy,
     disconnectVpn: disconnect, connectProfileWithEndpointFallback: connect,
     isCurrentSessionOperation: () => true, cancelled: false,
     setVpnStatus: () => {}, reportVpnConnectEvent: () => {},
   };
-  return new Function(...Object.keys(bindings), stripTypeScriptTypes('const activate = ' + activate + ';') + ';return activate;')(...Object.values(bindings));
+  Object.assign(bindings, { vpnOperationRevisionRef: { current: 0 }, vpnMountedRef: { current: true }, reconcileReleasedStatusRef: { current: async () => {} } });
+  const bind = expression => new Function(...Object.keys(bindings), stripTypeScriptTypes('const value = (' + expression + ');') + ';return value;')(...Object.values(bindings));
+  bindings.releaseVpnOperation = bind(leases.releaseVpnOperation);
+  bindings.acquireVpnOperation = bind(leases.acquireVpnOperation);
+  return bind(activate);
 }
 for (const platform of ['android', 'ios']) {
   test(platform + ': absent account mapping cannot allocate a key or call API during actual dispatch', async () => {

@@ -1,7 +1,7 @@
+import realSourceLoader from './helpers/real-source-loader.cjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'node:fs';
-import { stripTypeScriptTypes } from 'node:module';
 import { client, settle, ok, failure, primary, fallback } from './helpers/dual-origin-client.mjs';
 
 for (const path of ['/v1/billing/entitlement', '/v1/vpn/profile?device_id=fixture', '/v1/auth/me']) {
@@ -49,7 +49,7 @@ for (const when of ['before','fetch','backoff']) test(`caller abort settles and 
   let calls=0;const abort=new AbortController();
   const api=client(async()=>{calls++;if(when==='backoff') return failure(503); return new Promise(()=>{});});
   if(when==='before')abort.abort();
-  const result=assert.rejects(api.rawRequest('/v1/vpn/profile',{signal:abort.signal}),e=>e.code==='request_aborted');
+  const result=assert.rejects(api.rawRequest('/v1/vpn/profile',{signal:abort.signal}),e=>e.code==='request_cancelled');
   await settle();abort.abort();await settle();await result;
   const count=calls;t.mock.timers.tick(60000);await settle();assert.equal(calls,count);if(when==='before')assert.equal(calls,0);
 });
@@ -85,7 +85,7 @@ for(const path of ['https://evil.test/v1/profile','//evil.test/v1/profile','/v1/
 test('redirect replies fail closed without a second origin',async()=>{
   for(const response of [{ok:false,status:302,text:async()=>'',headers:{get:()=> 'https://evil.test'}}, {...ok(),redirected:true,url:'https://evil.test/v1/profile'}]) {
     let calls=0;const api=client(async()=>{calls++;return response;});
-    await assert.rejects(api.rawRequest('/v1/vpn/profile',{accessToken:'fixture'}),e=>e.code==='unsafe_redirect');assert.equal(calls,1);
+    await assert.rejects(api.rawRequest('/v1/vpn/profile',{accessToken:'fixture'}),e=>e.code==='api_redirect_blocked');assert.equal(calls,1);
   }
 });
 
@@ -120,9 +120,7 @@ test('fixed production roots, isolated dev proxy and canonical callback base',as
 });
 
 test('API roots cannot expand artifact trust; canonical signed downloads stay valid',()=>{
-  const origins=stripTypeScriptTypes(fs.readFileSync('src/api/origins.ts','utf8')).replace(/\bexport /g,'');
-  const source=stripTypeScriptTypes(fs.readFileSync('src/api/updatePreflight.ts','utf8')).replace(/^import .*;$/gm,'').replace(/\bexport /g,'');
-  const validate=new Function(origins+source+';return validateManualUpdatePayloadForBaseUrl;')();
+  const validate = realSourceLoader()('@/api/updatePreflight').validateManualUpdatePayloadForBaseUrl;
   const payload=origin=>({downloadUrl:origin+'/downloads/Vex.apk',signatureUrl:origin+'/downloads/Vex.apk.sig',checksumSha256:'a'.repeat(64)});
   for(const base of [primary,fallback,'https://vexguard.app']) {
     assert.equal(validate(payload('https://vexguard.app'),base).ok,true);
@@ -188,8 +186,7 @@ test('mutation primary recovery is re-probed on every operation without replay',
 });
 
 test('manual installer keeps canonical artifact trust independently of API env (mocked download/install only)',async()=>{
-  const read=path=>stripTypeScriptTypes(fs.readFileSync(path,'utf8')).replace(/^import .*;$/gm,'').replace(/\bexport /g,'');
-  const install=new Function('process',read('src/api/origins.ts')+read('src/api/updatePreflight.ts')+'const defaultTrustedUpdateBaseUrl = trustedUpdateBaseUrl;'+read('src/api/manualUpdateInstall.ts')+';return installManualUpdate;')({env:{EXPO_PUBLIC_VEX_API_BASE_URL:primary,EXPO_PUBLIC_VEX_API_ORIGIN:fallback}});
+  const install = realSourceLoader({env:{EXPO_PUBLIC_VEX_API_BASE_URL:primary,EXPO_PUBLIC_VEX_API_ORIGIN:fallback}})('@/api/manualUpdateInstall').installManualUpdate;
   const downloaded=[];const deps={downloadAndroidUpdateApk:async url=>{downloaded.push(url);return {filePath:'mock-only'};},installAndroidUpdateApk:async()=>({status:'mock-only'})};
   const update=origin=>({updateAvailable:true,downloadUrl:origin+'/downloads/Vex.apk',signatureUrl:origin+'/downloads/Vex.apk.sig',checksumSha256:'a'.repeat(64)});
   for(const origin of [primary,fallback])await assert.rejects(install(update(origin),'android',deps));
@@ -251,9 +248,7 @@ for(const env of [
 ])test(`SSE bearer stays on configured loopback: ${JSON.stringify(env)}`,()=>{
   const api=client(()=>assert.fail('HTTP API must not run'),{env});
   const expected=env.EXPO_PUBLIC_VEX_API_BASE_URL||env.EXPO_PUBLIC_VEX_API_ORIGIN;
-  const source=stripTypeScriptTypes(fs.readFileSync('src/realtime/customerRealtimeTransport.ts','utf8'))
-    .replace(/^import \{[\s\S]*?\} from '\.\/customerRealtimeCore';/m,'').replace(/\bexport /g,'');
-  const Transport=new Function('customerRealtimeMetadata','customerRealtimeReconnectDelay','parseCustomerSSE',source+';return CustomerRealtimeTransport;')(()=>null,()=>0,()=>({events:[],remainder:''}));
+  const Transport = realSourceLoader()('@/realtime/customerRealtimeTransport').CustomerRealtimeTransport;
   const requests=[];const request={open:(method,url)=>requests.push({method,url,headers:{}}),setRequestHeader:(name,value)=>{requests[0].headers[name]=value;},send(){},abort(){}};
   const stream=new Transport({accessToken:'fixture-token',baseUrl:api.realtimeApiBaseUrl,createRequest:()=>request,onEvent(){},onSessionRevoked(){},onStatus(){},schedule:()=>0,cancelSchedule(){}});
   stream.start();stream.stop();assert.deepEqual(requests,[{method:'GET',url:expected+'/v1/events',headers:{Accept:'text/event-stream',Authorization:'Bearer fixture-token','Cache-Control':'no-cache'}}]);
@@ -275,4 +270,86 @@ test('Android production-only mutation ABI rejects local proxy before metadata, 
     }});
     await assert.rejects(api.rawRequest('/v1/auth/login',{method:'POST',body:{password:'fixture'}}),e=>e.code==='native_mutation_origin_unsupported');
   }
+});
+
+test('local API override never changes website, auth callback or relative update trust', () => {
+  for (const base of ['http://localhost:3011', 'http://127.0.0.1:3011', 'http://[::1]:3011']) {
+    const load = realSourceLoader({ env: { EXPO_PUBLIC_VEX_API_BASE_URL: base } });
+    const config = load('@/api/config');
+    assert.equal(config.vexApiBaseUrl, 'https://vexguard.app');
+    assert.equal(config.realtimeApiBaseUrl, base);
+    assert.deepEqual(config.apiOrigins, [base]);
+    assert.equal(config.apiRequestUrl('/auth/app?state=fixture'), 'https://vexguard.app/auth/app?state=fixture');
+    assert.equal(config.absolutizeUrl('/downloads/Vex.apk'), 'https://vexguard.app/downloads/Vex.apk');
+    const website = load('@/navigation/website');
+    assert.equal(website.vexWebsite.dashboard(), 'https://vexguard.app/dashboard');
+    assert.throws(() => website.vexWebsiteUrl('//evil.test'), /stay on the VEX website/);
+  }
+});
+
+for (const env of [
+  { EXPO_PUBLIC_VEX_API_BASE_URL: 'http://127.0.0.1:3011/gateway///', EXPO_PUBLIC_VEX_API_ORIGIN: primary },
+  { EXPO_PUBLIC_VEX_API_ORIGIN: 'http://127.0.0.1:3011/gateway///' },
+]) test(`local proxy prefix is scoped to its origin without production failover: ${JSON.stringify(env)}`, async () => {
+  const calls = [];
+  const api = client(async (url, init) => {
+    calls.push([url, init]);
+    return { ...ok(), url };
+  }, { env });
+  assert.deepEqual(api.apiOrigins, ['http://127.0.0.1:3011']);
+  assert.equal(api.apiUrlFromOrigin(primary, '/v1/devices'), primary + '/v1/devices');
+  assert.equal(api.realtimeApiBaseUrl, 'http://127.0.0.1:3011/gateway');
+  assert.equal(await api.rawRequest('/v1/devices?cursor=a%2Fb', { accessToken: 'fixture' }), 'ok');
+  assert.equal(calls[0][0], 'http://127.0.0.1:3011/gateway/v1/devices?cursor=a%2Fb');
+  assert.equal(calls[0][1].headers.Authorization, 'Bearer fixture');
+  assert.equal(calls.length, 1);
+  const failed = [];
+  const offline = client(async (url, init) => {
+    failed.push([url, init]); throw new TypeError('Network request failed');
+  }, { env });
+  await assert.rejects(offline.rawRequest('/v1/auth/login', { method: 'POST', idempotencyKey: 'fixture', accessToken: 'fixture', body: { password: 'fixture' } }));
+  assert.equal(failed.length, 1, 'no probe or mutation replay on the isolated proxy');
+  assert.equal(failed[0][0], 'http://127.0.0.1:3011/gateway/v1/auth/login');
+  assert.equal(failed[0][1].method, 'POST');
+});
+
+for (const base of [
+  'http://localhost:3011/gateway/../admin', 'http://localhost:3011/gateway/%2e%2e/admin',
+  'http://localhost:3011/gateway/%2fadmin', 'http://localhost:3011/gateway//admin',
+  'http://localhost:3011/gateway\\admin', 'http://localhost:3011/gateway?x=1',
+  'http://localhost:3011/gateway#fragment', 'http://user:fixture@localhost:3011',
+]) test(`invalid local override never falls back to a configured production origin: ${base}`, () => {
+  let requests = 0, metadata = 0;
+  assert.throws(() => client(async () => { requests++; return ok(); }, {
+    env: { EXPO_PUBLIC_VEX_API_BASE_URL: base, EXPO_PUBLIC_VEX_API_ORIGIN: primary },
+    appInfo: async () => { metadata++; return {}; },
+  }), error => error.code === 'invalid_api_base_url' && !error.message.includes('fixture'));
+  assert.equal(requests, 0); assert.equal(metadata, 0);
+});
+
+test('all fixed first-party aliases retain primary-first HTTPS routing', () => {
+  for (const value of ['https://vexguard.app', 'https://www.vexguard.app', primary, fallback]) {
+    for (const key of ['EXPO_PUBLIC_VEX_API_BASE_URL', 'EXPO_PUBLIC_VEX_API_ORIGIN']) {
+      const config = realSourceLoader({ env: { [key]: value + '///' } })('@/api/config');
+      assert.deepEqual(config.apiOrigins, [primary, fallback]);
+      assert.equal(config.vexApiBaseUrl, 'https://vexguard.app');
+      assert.equal(config.realtimeApiBaseUrl, 'https://vexguard.app');
+      assert.equal(config.trustedUpdateBaseUrl, 'https://vexguard.app');
+    }
+  }
+});
+
+test('proxy prefixes do not widen API paths or Android native mutation trust', async () => {
+  const env = { EXPO_PUBLIC_VEX_API_BASE_URL: 'http://localhost:3011/gateway/' };
+  const api = client(() => assert.fail('invalid path must not reach transport'), { env });
+  for (const path of ['/v1/../admin', '/v1/%2e%2e/admin', '/v1/%252e%252e/admin', '/v1/%2fadmin', '/v1//admin', '/v1/x#fragment', '//evil.test/v1/auth/me']) {
+    await assert.rejects(api.rawRequest(path, { accessToken: 'fixture' }));
+  }
+  const android = client(() => assert.fail('RN Fetch'), {
+    env, platform: 'android', appInfo: () => assert.fail('metadata before local mutation rejection'),
+    expoFetch: () => assert.fail('local probe/Expo mutation'), native: {
+      apiMutationNoReplay: true, requestApiMutation: () => assert.fail('unsupported native local mutation'), cancelApiMutation() {},
+    },
+  });
+  await assert.rejects(android.rawRequest('/v1/auth/login', { method: 'POST', body: { password: 'fixture' } }), error => error.code === 'native_mutation_origin_unsupported');
 });

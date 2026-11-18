@@ -4,9 +4,9 @@ export type MobileNoticeTone = 'loading' | 'warning' | 'error' | 'success';
 
 export const vexMobileType = {
   wordmark: { fontSize: 25, fontWeight: '700' as const, letterSpacing: 8 },
-  screenTitle: { fontSize: 28, fontWeight: '700' as const, letterSpacing: -0.5 },
-  sectionTitle: { fontSize: 13, fontWeight: '700' as const, letterSpacing: 0.5 },
-  rowTitle: { fontSize: 16, fontWeight: '600' as const },
+  screenTitle: { fontSize: 28, fontWeight: '500' as const, letterSpacing: 0 },
+  sectionTitle: { fontSize: 13, fontWeight: '500' as const, letterSpacing: 0 },
+  rowTitle: { fontSize: 16, fontWeight: '500' as const },
   body: { fontSize: 15, lineHeight: 21 },
   metadata: { fontSize: 13, lineHeight: 18 },
 } as const;
@@ -19,10 +19,10 @@ export const vexMobileSpacing = {
 } as const;
 
 export const vexMobileSurface = {
-  background: '#041315',
-  divider: 'rgba(159, 218, 223, 0.16)',
-  grouped: 'rgba(5, 22, 25, 0.92)',
-  pressed: 'rgba(67, 217, 231, 0.09)',
+  background: vexTheme.colors.background,
+  divider: vexTheme.colors.line,
+  grouped: vexTheme.colors.surface,
+  pressed: vexTheme.colors.surfaceRaised,
 } as const;
 
 export function mobileStateNoticePresentation(tone: MobileNoticeTone) {

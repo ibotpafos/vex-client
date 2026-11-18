@@ -1,3 +1,4 @@
+import { vexTheme } from "@/ui/vex-theme";
 import React from "react";
 import { Platform } from "react-native";
 import {
@@ -61,7 +62,7 @@ export const ServerPickerModal = React.memo(function ServerPickerModal({
       snapPoints={["full"]}
       testID="server-picker-sheet"
     >
-      <Host colorScheme="dark" seedColor="#22D3EE" style={styles.host} useViewportSizeMeasurement>
+      <Host colorScheme="dark" seedColor={vexTheme.colors.accent} style={styles.host} useViewportSizeMeasurement>
         <ServerPickerBody {...props} />
       </Host>
     </BottomSheet>
@@ -85,10 +86,10 @@ function AndroidServerPickerSheet({ visible, ...props }: ServerPickerContentProp
   }
 
   return (
-    <Host colorScheme="dark" seedColor="#22D3EE" style={styles.androidSheetHost} pointerEvents="none">
+    <Host colorScheme="dark" seedColor={vexTheme.colors.accent} style={styles.androidSheetHost} pointerEvents="none">
       <ModalBottomSheet
-        containerColor="#041315"
-        contentColor="#F4FCFD"
+        containerColor={vexTheme.colors.background}
+        contentColor={vexTheme.colors.text}
         onDismissRequest={() => {
           setIsMounted(false);
           props.onClose();
@@ -107,7 +108,7 @@ type ServerPickerContentProps = Omit<ServerPickerModalProps, "visible">;
 
 export const ServerPickerContent = React.memo(function ServerPickerContent(props: ServerPickerContentProps) {
   return (
-    <Host colorScheme="dark" seedColor="#22D3EE" style={styles.host} useViewportSizeMeasurement>
+    <Host colorScheme="dark" seedColor={vexTheme.colors.accent} style={styles.host} useViewportSizeMeasurement>
       <ServerPickerBody {...props} />
     </Host>
   );
@@ -130,21 +131,22 @@ function ServerPickerBody({
 
   return (
     <Column spacing={4} style={styles.content} testID="server-picker-sheet">
-      <UniversalText textStyle={styles.eyebrow}>ЛОКАЦИЯ</UniversalText>
-      <UniversalText textStyle={styles.title}>Выберите сервер</UniversalText>
+      <UniversalText textStyle={styles.title}>Серверы</UniversalText>
       <UniversalText textStyle={styles.subtitle}>
-        Оставьте автовыбор или откройте страну и нажмите нужный сервер.
+        Автовыбор или выбор по стране
       </UniversalText>
       <Column spacing={serverPickerCountryGapDp()}>
+        <Column style={styles.countryCard}>
         <ServerPickerRow
           leading="↻"
           onPress={isVpnBusy || countryGroups.length === 0 ? undefined : onAutoSelect}
-          supportingText="Лучший сервер среди всех стран"
+          supportingText="По всем странам"
           testID="server-picker-auto"
           trailing={selectionMode === "auto" ? "✓" : undefined}
         >
           Автоматически
         </ServerPickerRow>
+        </Column>
         {countryGroups.map((group) => {
           const countrySelected = selectionMode === "manual"
             && group.locations.some((location) => location.id === selectedLocationId);
@@ -159,7 +161,7 @@ function ServerPickerBody({
           return (
             <Column key={group.countryCode} spacing={0} style={styles.countryCard}>
               <ServerPickerRow
-                leading={group.flagEmoji || group.countryCode}
+                leading={group.countryCode}
                 onPress={!bestLocation || bestPresentation?.disabled ? undefined : () => {
                   if (serverCount === 1) {
                     onSelect(bestLocation.id);
@@ -187,7 +189,7 @@ function ServerPickerBody({
                 return (
                   <ServerPickerRow
                     key={location.id}
-                    leading={location.id === bestLocation?.id ? "★" : "•"}
+                    leading={String(index + 1)}
                     onPress={presentation.disabled ? undefined : () => onSelect(location.id)}
                     supportingText={`${locationStatusText(location)} · ${presentation.latency}${location.id === bestLocation?.id ? " · лучший" : ""}`}
                     testID={`server-picker-${location.id}`}
@@ -252,25 +254,17 @@ const styles = {
     position: "absolute" as const,
   },
   content: {
-    backgroundColor: "#041315",
+    backgroundColor: vexTheme.colors.background,
     paddingBottom: 8,
     paddingHorizontal: 20,
     paddingTop: 20,
   },
   countryCard: {
-    borderColor: "rgba(103,232,249,0.12)",
-    borderRadius: 18,
-    borderWidth: 1,
+    borderRadius: 16,
     overflow: "hidden" as const,
   },
-  eyebrow: {
-    color: "#67E8F9",
-    fontSize: 12,
-    fontWeight: "700" as const,
-    letterSpacing: 1.2,
-  },
   empty: {
-    color: "#A7B9BD",
+    color: vexTheme.colors.textSecondary,
     fontSize: 14,
     lineHeight: 20,
     paddingHorizontal: 16,
@@ -280,20 +274,20 @@ const styles = {
     flex: 1,
   },
   rowColors: {
-    containerColor: "#041315",
-    contentColor: "#F4FCFD",
-    leadingContentColor: "#67E8F9",
-    supportingContentColor: "#A7B9BD",
-    trailingContentColor: "#67E8F9",
+    containerColor: vexTheme.colors.surface,
+    contentColor: vexTheme.colors.text,
+    leadingContentColor: vexTheme.colors.textSecondary,
+    supportingContentColor: vexTheme.colors.textSecondary,
+    trailingContentColor: vexTheme.colors.textSecondary,
   },
   subtitle: {
-    color: "#A7B9BD",
+    color: vexTheme.colors.textSecondary,
     fontSize: 14,
     lineHeight: 20,
   },
   title: {
-    color: "#F4FCFD",
+    color: vexTheme.colors.text,
     fontSize: 24,
-    fontWeight: "800" as const,
+    fontWeight: "600" as const,
   },
 };

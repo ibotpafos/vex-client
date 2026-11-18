@@ -96,3 +96,15 @@ function normalizedLatency(location: VpnLocation): number {
     ? Math.max(0, location.latencyMs)
     : Number.POSITIVE_INFINITY;
 }
+
+// Opt-in server capability, not merely the native binary's ability to run Xray.
+export function locationSupportsVless(location: VpnLocation): boolean {
+  return isSelectableLocation(location) && Array.isArray(location.capabilities)
+    && location.capabilities.includes('vless-xhttp-v1');
+}
+
+export function hasAvailableVlessLocation(locations: VpnLocation[] | null | undefined,
+  mode: ServerSelectionMode, selectedLocationId: string): boolean {
+  return Boolean(locations?.some(location => locationSupportsVless(location)
+    && (mode === 'auto' || location.id === selectedLocationId)));
+}

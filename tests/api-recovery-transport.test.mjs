@@ -1,22 +1,15 @@
-import fs from 'node:fs';
+import realSourceLoader from './helpers/real-source-loader.cjs';
 import assert from 'node:assert/strict';
-import { stripTypeScriptTypes } from 'node:module';
 import test from 'node:test';
 
-const origins = stripTypeScriptTypes(fs.readFileSync('src/api/origins.ts', 'utf8')).replace(/\bexport /g, '');
-const source = origins + stripTypeScriptTypes(fs.readFileSync('src/api/client.ts', 'utf8'))
-  .replace(/^import .*;$/gm, '').replace(/^export \{.*;$/gm, '').replace(/\bexport /g, '');
-const errors = stripTypeScriptTypes(fs.readFileSync('src/api/error.ts', 'utf8')).replace(/\bexport /g, '');
 const settle = async () => { for (let i = 0; i < 40; i++) await Promise.resolve(); };
 const reply = (body = 'fresh', status = 200, headers = {}) => ({ status, statusText: '', body, headers });
 function client({ native, platform = 'android', base = 'https://api.vexguard.app', fetch, appInfo } = {}) {
   const calls = [];
   const normal = fetch ?? (async () => { calls.push('default'); return { ok: true, status: 200, text: async () => 'normal' }; });
-  const api = new Function('expoFetch', 'fetch', 'getAppInfo', 'getOrCreateDeviceId', 'Platform', 'NativeModules',
-    'androidExperimentalRoutingEnabled', 'androidProfilePlatform', 'process', errors + source
-      + ';return {rawRequest, withProfileRecoveryTransport};')(
-    normal, normal, appInfo ?? (async () => ({})), async () => 'fixture', { OS: platform }, { VexVpn: native && { apiRecoveryPreservesHttpErrors: true, ...native } },
-    () => false, () => 'android', { env: { EXPO_PUBLIC_VEX_API_BASE_URL: base } });
+  const api = realSourceLoader({ fetch: normal, appInfo, platform,
+    native: native && { apiRecoveryPreservesHttpErrors: true, ...native },
+    env: { EXPO_PUBLIC_VEX_API_BASE_URL: base } })('@/api/client');
   return { ...api, calls };
 }
 

@@ -69,7 +69,7 @@ export default function AuthCallbackScreen() {
   }, [code, queryClient, signIn, state]);
 
   return (
-    <Host colorScheme="dark" seedColor="#22D3EE" style={styles.host} useViewportSizeMeasurement>
+    <Host colorScheme="dark" seedColor="#43D9E7" style={styles.host} useViewportSizeMeasurement>
       <StatusBar style="light" />
       <Column alignment="center" spacing={16} style={styles.content}>
         <Spacer flexible />
@@ -93,7 +93,7 @@ function firstParam(value: string | string[] | undefined): string {
 
 const styles = {
   content: {
-    backgroundColor: '#041315',
+    backgroundColor: '#111416',
     padding: 24,
   },
   host: {
@@ -102,7 +102,7 @@ const styles = {
   title: {
     color: '#43D9E7',
     fontSize: 30,
-    fontWeight: '800' as const,
+    fontWeight: '600' as const,
   },
   message: {
     color: '#DCECEE',

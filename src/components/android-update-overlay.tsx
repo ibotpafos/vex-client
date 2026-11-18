@@ -1,3 +1,4 @@
+import { vexTheme } from '@/ui/vex-theme';
 import * as Application from 'expo-application';
 import { Button, Column, Host, List, ListItem, Spacer, Text as UniversalText } from '@expo/ui';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -202,16 +203,16 @@ function AndroidUpdateOverlayContent() {
             : 'Загружаем обновление';
   const text = isReady
     ? signingMigration
-      ? 'Это новая сборка с другой подписью. Скачайте APK, установите его как новое приложение, войдите в аккаунт и после проверки доступа удалите старый VEX.'
+      ? 'Другая подпись: скачайте APK и установите отдельно. Войдите и проверьте доступ, затем удалите старый VEX.'
       : update.currentBuildBlocked
-        ? 'Установите предложенную стабильную версию, чтобы вернуться на поддерживаемую сборку.'
-        : 'VEX скачает APK, проверит checksum и подпись приложения, затем откроет системный установщик.'
+        ? 'Установите стабильную версию: текущая сборка не поддерживается.'
+        : 'Скачаем APK, проверим контрольную сумму и подпись, затем откроем установщик Android.'
     : needsInstallPermission
-      ? 'Если Android запросил разрешение установки, включите его для VEX и вернитесь в приложение. Если установка не открылась или была отменена, нажмите «Продолжить установку».'
+      ? 'Если Android запросил разрешение, включите установку для VEX и вернитесь. Если она не открылась или отменена, нажмите «Продолжить установку».'
       : isError
         ? 'Не удалось подготовить обновление. Проверьте подключение и попробуйте позже.'
         : signingMigration
-          ? 'Откройте сайт VEX, скачайте новую сборку, установите ее и удалите старую после входа в аккаунт.'
+          ? 'Скачайте и установите APK с сайта. Войдите, затем удалите старый VEX.'
           : 'VEX скачивает и проверяет APK. Дождитесь открытия установщика Android.';
 
   const primaryLabel = isReady
@@ -231,8 +232,8 @@ function AndroidUpdateOverlayContent() {
 
   return (
     <Modal animationType="slide" onRequestClose={handleDismiss} visible>
-      <Host colorScheme="dark" seedColor="#22D3EE" style={styles.host} useViewportSizeMeasurement>
-        <Column spacing={14} style={styles.content}>
+      <Host colorScheme="dark" seedColor={vexTheme.colors.accent} style={styles.host} useViewportSizeMeasurement>
+        <Column spacing={16} style={styles.content}>
           <Spacer flexible />
           <UniversalText textStyle={styles.eyebrow}>VEX Android</UniversalText>
           <UniversalText textStyle={styles.title}>{title}</UniversalText>
@@ -245,8 +246,8 @@ function AndroidUpdateOverlayContent() {
           </List>
           {!preflight.ok ? <UniversalText textStyle={styles.error}>{preflight.error}</UniversalText> : null}
           {isError ? <UniversalText textStyle={styles.error}>{downloadState.message}</UniversalText> : null}
-          <Button disabled={downloadState.status === 'installing'} label={update.required ? 'Закрыть' : 'Позже'} onPress={handleDismiss} variant="outlined" />
-          <Button disabled={primaryDisabled} label={primaryLabel} onPress={handlePrimary} />
+          <Button disabled={downloadState.status === 'installing'} label={update.required ? 'Закрыть' : 'Позже'} onPress={handleDismiss} variant="outlined" style={styles.action} />
+          <Button style={styles.action} disabled={primaryDisabled} label={primaryLabel} onPress={handlePrimary} />
           <Spacer flexible />
         </Column>
       </Host>
@@ -317,39 +318,39 @@ function currentAndroidBuild() {
 }
 
 const styles = StyleSheet.create({
+  action: { height: 48, borderRadius: 10 },
   host: { flex: 1 },
-  content: { backgroundColor: '#041315', flex: 1, paddingHorizontal: 24, paddingVertical: 32 },
+  content: { backgroundColor: vexTheme.colors.background, flex: 1, paddingHorizontal: 24, paddingVertical: 32 },
   eyebrow: {
-    color: '#22D3EE',
-    fontSize: 11,
-    fontWeight: '900',
-    textTransform: 'uppercase',
+    color: vexTheme.colors.accent,
+    fontSize: 12,
+    fontWeight: '600',
   },
   title: {
-    color: '#F4FCFD',
-    fontSize: 21,
-    fontWeight: '900',
-    marginTop: 2,
+    color: vexTheme.colors.text,
+    fontSize: 24,
+    fontWeight: '600',
+    marginTop: 4,
   },
   text: {
-    color: '#C6D6D9',
+    color: vexTheme.colors.textSecondary,
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: '400',
     lineHeight: 20,
   },
   notes: {
-    backgroundColor: 'rgba(34,211,238,0.08)',
-    borderColor: 'rgba(34,211,238,0.16)',
-    borderRadius: 14,
+    backgroundColor: vexTheme.colors.surface,
+    borderColor: vexTheme.colors.line,
+    borderRadius: 16,
     borderWidth: 1,
-    color: '#A7B9BD',
+    color: vexTheme.colors.textSecondary,
     fontSize: 13,
-    lineHeight: 18,
-    padding: 10,
+    lineHeight: 20,
+    padding: 12,
   },
   error: {
-    color: '#FF9F9F',
+    color: vexTheme.colors.danger,
     fontSize: 13,
-    fontWeight: '800',
+    fontWeight: '600',
   },
 });

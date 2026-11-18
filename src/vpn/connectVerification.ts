@@ -47,7 +47,7 @@ export async function waitForVerifiedVpnConnection(
     scheduleTimeout(delayMs, resolve);
   }));
   const now = options.now ?? Date.now;
-  const timeoutMs = options.timeoutMs ?? 8_000;
+  const timeoutMs = options.timeoutMs ?? 10_000;
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     throw new Error('VPN handshake timeout must be positive.');
   }

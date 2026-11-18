@@ -1,3 +1,4 @@
+import { vexTheme } from '@/ui/vex-theme';
 import {
   createContext,
   useCallback,
@@ -99,38 +100,36 @@ const styles = StyleSheet.create({
   },
   toast: {
     alignSelf: 'center',
-    borderRadius: 18,
+    minHeight: 44,
+    justifyContent: 'center',
+    borderRadius: 16,
     borderWidth: 1,
     marginBottom: 28,
     maxWidth: '90%',
     paddingHorizontal: 16,
     paddingVertical: 12,
-    shadowColor: '#000',
-    shadowOffset: { height: 8, width: 0 },
-    shadowOpacity: 0.3,
-    shadowRadius: 18,
   },
   toast_info: {
-    backgroundColor: '#102326',
-    borderColor: 'rgba(34,211,238,0.28)',
+    backgroundColor: vexTheme.colors.surfaceRaised,
+    borderColor: vexTheme.colors.line,
   },
   toast_success: {
-    backgroundColor: '#0F2A20',
-    borderColor: 'rgba(75,232,166,0.34)',
+    backgroundColor: vexTheme.colors.surfaceRaised,
+    borderColor: vexTheme.colors.success,
   },
   toast_warning: {
-    backgroundColor: '#2C2412',
-    borderColor: 'rgba(255,211,106,0.4)',
+    backgroundColor: vexTheme.colors.surfaceRaised,
+    borderColor: vexTheme.colors.warning,
   },
   toast_error: {
-    backgroundColor: '#2B1518',
-    borderColor: 'rgba(255,159,159,0.42)',
+    backgroundColor: vexTheme.colors.surfaceRaised,
+    borderColor: vexTheme.colors.danger,
   },
   toastText: {
-    color: '#F4FCFD',
+    color: vexTheme.colors.text,
     fontSize: 14,
-    fontWeight: '800',
-    lineHeight: 19,
+    fontWeight: '600',
+    lineHeight: 20,
     textAlign: 'center',
   },
 });

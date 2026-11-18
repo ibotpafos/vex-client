@@ -1,3 +1,4 @@
+# TODO: regenerate SDK 58 Podfile.lock with Xcode 27; this host only has Command Line Tools.
 # Set by expo-router. This enables Fabric-only features from react-native-screens
 ENV['RNS_GAMMA_ENABLED'] ||= '1'
 require File.join(File.dirname(`node --print "require.resolve('expo/package.json')"`), "scripts/autolinking")

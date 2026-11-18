@@ -13,8 +13,8 @@ export function subscriptionRenewalPresentation(entitlement: Entitlement | null,
   if (!hasAccess) {
     return {
       title: expired ? 'Доступ к VPN завершён' : 'Доступ к VPN не активен',
-      message: 'Оформите подписку в приложении или обратитесь в поддержку. Тарифы и цена — в приложении VEX.',
-      action: 'Оплатить VPN',
+      message: 'Проверьте подписку на сайте VEX или напишите в поддержку.',
+      action: 'Продлить VPN',
     };
   }
   if (!Number.isFinite(expiresAt)) return null;
@@ -25,7 +25,7 @@ export function subscriptionRenewalPresentation(entitlement: Entitlement | null,
   });
   return {
     title: 'Доступ к VPN',
-    message: `Доступ до ${date}. Тарифы и цена — в приложении.`,
-    action: 'Оплатить VPN',
+    message: `До ${date}. Тарифы — на сайте VEX.`,
+    action: 'Продлить VPN',
   };
 }

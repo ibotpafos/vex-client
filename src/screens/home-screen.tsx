@@ -83,7 +83,7 @@ export const HomeScreen = React.memo(function HomeScreen() {
       {Platform.OS !== 'android' ? <StatusBar style="light" /> : null}
       {!session ? (
         <View style={styles.centerState}>
-          <VexNativeActivityIndicator color="#22D3EE" size="large" />
+          <VexNativeActivityIndicator color="#43D9E7" size="large" />
           <Text style={styles.centerStateText}>Загружаем VEX</Text>
         </View>
       ) : (
@@ -100,7 +100,7 @@ export const HomeScreen = React.memo(function HomeScreen() {
           )}
           latencyText={selectedLatencyText}
           location={selectedLocation}
-          protocolLabel={Platform.OS === 'android' && areVpnPreferencesHydrated ? (transport === 'vless' ? 'VLESS' : 'AWG') : undefined}
+          protocolLabel={Platform.OS === 'android' && areVpnPreferencesHydrated && transport !== 'auto' ? (transport === 'vless' ? 'VLESS' : 'AWG') : undefined}
           onLocationPress={openServerPicker}
           onPowerPress={handlePowerPress}
           onSettingsPress={() => {
@@ -111,6 +111,9 @@ export const HomeScreen = React.memo(function HomeScreen() {
           pulseProgress={pulseProgress}
           selectionMode={serverSelectionMode}
         >
+          {Platform.OS === 'android' && areVpnPreferencesHydrated && transport === 'auto' ? (
+            <Text testID="home-saved-protocol" style={styles.vpnNoticeText}>Авто</Text>
+          ) : null}
           {vpnStatus.state === 'connected' && Platform.OS === 'android' ? (
             <Text testID="home-active-protocol" style={styles.vpnNoticeText}>Подключено: {vpnStatus.transport === 'vless' ? 'VLESS' : 'AmneziaWG'}</Text>
           ) : null}
@@ -127,13 +130,13 @@ export const HomeScreen = React.memo(function HomeScreen() {
               title="Обновить ключи VPN"
             >
               <Text numberOfLines={2} style={styles.vpnNoticeText}>
-                {isKeyRotationBusy ? 'Обновляем VPN-ключ...' : 'Ключ VPN устарел. Нажмите, чтобы обновить.'}
+                {isKeyRotationBusy ? 'Обновляем VPN-ключ...' : 'Ключ устарел · обновить'}
               </Text>
             </VexPressable>
           ) : null}
           {availableLocations.length === 0 ? (
             <Text accessibilityRole="alert" style={styles.vpnErrorText}>
-              Серверы временно недоступны. Обновите каталог и попробуйте снова.
+              Нет доступных серверов. Обновите список.
             </Text>
           ) : null}
           {vpnError ? <Text numberOfLines={2} style={styles.vpnErrorText}>{vpnError}</Text> : null}
@@ -170,11 +173,11 @@ export const HomeScreen = React.memo(function HomeScreen() {
 });
 
 // The renewal notice must not push location/help controls outside a small
-// Android screen or a large-font viewport. Other platforms keep their layout.
+// screen or a large-font viewport on any platform.
 function HomeBody({ children }: React.PropsWithChildren) {
-  return Platform.OS === 'android' ? (
+  return (
     <ScrollView style={{flex: 1}} contentContainerStyle={{flexGrow: 1}} showsVerticalScrollIndicator={false}>
       {children}
     </ScrollView>
-  ) : <>{children}</>;
+  );
 }

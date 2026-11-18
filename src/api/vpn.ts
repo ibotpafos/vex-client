@@ -230,7 +230,7 @@ async function managedVpnProfile(accessToken: string, client: VpnClientDescripto
       accessToken, headers: versionHeaders, retryCount: 0, timeout: 1_500, suppressErrorLog: true,
       ...(options.signal ? { signal: options.signal } : {}),
     }).then(result => routingAuthorization(result.authorization)).catch((error) => {
-      if (__DEV__) console.log('routing-policy request failed', error);
+      console.log('routing-policy request failed', error);
       return undefined;
     })
     : Promise.resolve(undefined);
@@ -619,13 +619,16 @@ export async function withCurrentVpnProfileKey<T>(accessToken: string, profile: 
     const device = profile.device;
     const externalDeviceId = nativeDeviceId(identity.externalDeviceId);
     const privateKeys = Array.from(profile.config.matchAll(/^[ \t]*PrivateKey[ \t]*=[ \t]*([^\r\n]*)\r?$/gim), match => match[1].trim());
+    const tunnelKeyMatches = profile.transport === 'vless'
+      ? client.platform === 'android' && !!device && isManagedClientOwnedDevice(device) && (!device.platform || device.platform === 'android')
+      : privateKeys.length === 1 && privateKeys[0] === identity.keyPair.privateKey;
     if (pending || identity.legacyRegistrationPending || !device ||
         (device.userId && device.userId !== accountOptions.userId) ||
         (identity.confirmedKeyDeviceId !== undefined && device.id !== identity.confirmedKeyDeviceId) ||
         !nativeVpnDeviceForClient([device], profile.locationId, externalDeviceId, externalDeviceId) ||
         (device.publicKey !== undefined && device.publicKey !== identity.keyPair.publicKey) ||
         (device.keyEpoch !== undefined && (!isNonnegativeSafeInteger(device.keyEpoch) || (device.keyEpoch > 0 && device.keyEpoch < (identity.keyPair.keyEpoch ?? 1)))) ||
-        privateKeys.length !== 1 || privateKeys[0] !== identity.keyPair.privateKey) throw new VpnProfileKeyChangedError();
+        !tunnelKeyMatches) throw new VpnProfileKeyChangedError();
     // Rotation and native dispatch share the account owner. Keep it until the
     // real native promise settles, even when its caller stops waiting.
     return operation();
@@ -1085,7 +1088,6 @@ export function requiresManagedNativeProfile(client: VpnClientDescriptor): boole
 }
 
 function logApiDebug(...items: unknown[]) {
-  if (typeof __DEV__ === 'undefined' || !__DEV__) return;
   console.log(...items);
 }
 

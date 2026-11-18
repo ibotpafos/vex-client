@@ -20,14 +20,14 @@ export function MobileScreenHeader({ onBack, title, trailing }: MobileScreenHead
         <VexPressable
           accessibilityLabel="Назад"
           accessibilityRole="button"
-          hitSlop={10}
+          hitSlop={12}
           onPress={() => {
             playSelectionHaptic();
             onBack();
           }}
           style={styles.headerAction}
         >
-          <ChevronLeft color={vexTheme.colors.text} size={27} strokeWidth={2.2} />
+          <ChevronLeft color={vexTheme.colors.text} size={18} strokeWidth={1.75} />
         </VexPressable>
       ) : <View style={styles.headerAction} />}
       {title ? <Text numberOfLines={1} style={styles.title}>{title}</Text> : <View />}

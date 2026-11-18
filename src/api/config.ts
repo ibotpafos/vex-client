@@ -13,10 +13,13 @@ export function resolveApiOrigins(configured?: string): readonly string[] {
   if (!configured || [canonicalWebsiteOrigin, 'https://www.vexguard.app', ...productionApiOrigins].includes(configured.replace(/\/+$/, ''))) {
     return productionApiOrigins;
   }
-  const url = new URL(configured);
+  let url: URL;
+  try { url = new URL(configured); }
+  catch { throw new ApiRequestError('Untrusted API origin', { code: 'invalid_api_base_url' }); }
   const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+  const rawPath = configured.match(/^https?:\/\/[^/?#]+(\/[^?#]*)?$/)?.[1] || '/';
   if (!local || !['http:', 'https:'].includes(url.protocol) || url.username || url.password
-    || url.search || url.hash || url.pathname !== '/') {
+    || /[?#\\\s%]/.test(configured) || url.pathname !== rawPath || trimTrailingSlash(rawPath).includes('//')) {
     throw new ApiRequestError('Untrusted API origin', { code: 'invalid_api_base_url' });
   }
   // Explicit local proxy configuration is isolated: never send its credentials to production.
@@ -32,31 +35,27 @@ export function apiUrlFromOrigin(origin: string, path: string): string {
   if (decoded.includes('\\') || /%|\/\//.test(decoded)
     || decoded.split('/').some(part => part === '.' || part === '..')
     || /%2f/i.test(pathname)) throw new Error('Invalid API path');
-  const url = new URL(path, origin);
-  if (url.origin !== origin || url.pathname !== pathname) throw new Error('Invalid API path');
+  // Keep trust as an origin; only the selected isolated proxy gets its base path.
+  const prefix = localApiBase?.origin === origin ? trimTrailingSlash(localApiBase.pathname) : '';
+  const url = new URL(`${prefix}${path}`, origin);
+  if (url.origin !== origin || url.pathname !== `${prefix}${pathname}`) throw new Error('Invalid API path');
   return url.href;
 }
 
 // A local proxy override wins over the production default; it never joins failover.
 const legacyApiBase = process.env.EXPO_PUBLIC_VEX_API_BASE_URL;
 
-export let apiOrigins: readonly string[];
-try {
-  apiOrigins = resolveApiOrigins(legacyApiBase && /^(https?:\/\/)(localhost|127\.0\.0\.1|\[::1\])(?=[:/]|$)/.test(legacyApiBase)
-    ? legacyApiBase : process.env.EXPO_PUBLIC_VEX_API_ORIGIN || legacyApiBase);
-} catch {
-  // A misconfigured origin must not crash the client bundle at import time.
-  // Fall back to the fixed production trust roots; an untrusted origin is never used.
-  apiOrigins = productionApiOrigins;
-}
-// A configured local proxy also overrides the base used for absolute URLs, so
-// development and fixture transports hit it instead of production. Fixtures that
-// also set EXPO_PUBLIC_VEX_API_BASE_URL must reach their own base path.
-export const vexApiBaseUrl = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?=[:/]|$)/.test(legacyApiBase ?? '')
-  ? legacyApiBase!.replace(/\/+$/, '')
-  : canonicalWebsiteOrigin;
+// Validate the legacy override even when another origin is configured.
+const legacyApiOrigins = resolveApiOrigins(legacyApiBase);
+const configuredApiBase = legacyApiOrigins.length === 1
+  ? legacyApiBase : process.env.EXPO_PUBLIC_VEX_API_ORIGIN || legacyApiBase;
+// Invalid configuration must never reroute local credentials to production.
+export const apiOrigins = resolveApiOrigins(configuredApiBase);
+const localApiBase = apiOrigins.length === 1 ? new URL(configuredApiBase!) : undefined;
+// API overrides never change website callbacks or relative artifact trust.
+export const vexApiBaseUrl = canonicalWebsiteOrigin;
 // SSE keeps legacy production routing, while local development must stay on its proxy.
-export const realtimeApiBaseUrl = apiOrigins.length === 1 ? apiOrigins[0] : canonicalWebsiteOrigin;
+export const realtimeApiBaseUrl = localApiBase ? trimTrailingSlash(localApiBase.toString()) : canonicalWebsiteOrigin;
 
 export function validatedApiBaseUrl(value = vexApiBaseUrl): URL {
   try {

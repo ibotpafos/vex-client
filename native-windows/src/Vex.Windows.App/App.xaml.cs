@@ -35,14 +35,18 @@ public partial class App : Application
     protected override void OnLaunched(
         Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
     {
+        AuthActivationTrace.RecordStartup(AppStartupStage.LaunchEntered);
         RegisterProtocolActivations();
+        AuthActivationTrace.RecordStartup(AppStartupStage.WindowConstructionStarted);
         _window ??= new MainWindow();
+        AuthActivationTrace.RecordStartup(AppStartupStage.WindowConstructed);
         _window.Closed += OnWindowClosed;
         AppServices.Current.RegisterMainWindow(_window);
         _trayIconHost ??= new TrayIconHost(
             _window,
             AppServices.Current,
             ExitApplication);
+        AuthActivationTrace.RecordStartup(AppStartupStage.TrayHostConstructed);
         if (!UiPreviewContext.IsEnabled)
         {
             AppServices.Current.BackgroundUpdates.Start();
@@ -51,6 +55,7 @@ public partial class App : Application
         }
         _window.ShowShellWindow();
         _window.Activate();
+        AuthActivationTrace.RecordStartup(AppStartupStage.WindowActivated);
 #if DEBUG
         if (UiPreviewContext.IsProtectedStateFaultPreview)
             ProtectedStateFaultPreview.RecordStartup(AppServices.Current);

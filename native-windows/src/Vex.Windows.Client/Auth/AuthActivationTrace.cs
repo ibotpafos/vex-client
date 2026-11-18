@@ -41,6 +41,24 @@ public enum AuthActivationStage
     HandlerOtherFault,
 }
 
+// A separate event keeps legacy auth readers' 1..32 stage contract intact.
+public enum AppStartupStage
+{
+    ProcessEntered = 1,
+    ComWrappersInitialized,
+    PreviewConfigured,
+    UiDispatcherEntered,
+    ApplicationConstructed,
+    LaunchEntered,
+    WindowConstructionStarted,
+    WindowXamlInitialized,
+    ServicesConstructionStarted,
+    ServicesConstructed,
+    WindowConstructed,
+    TrayHostConstructed,
+    WindowActivated,
+}
+
 public static class AuthActivationTrace
 {
     public const string ProviderGuid = "5474fab7-6d97-488e-b40f-84ba10c8c1d9";
@@ -63,6 +81,16 @@ public static class AuthActivationTrace
             : error is InvalidCastException ? AuthActivationStage.HandlerInvalidCast
             : AuthActivationStage.HandlerOtherFault);
     }
+
+    public static void RecordStartup(AppStartupStage stage)
+    {
+        if (stage is < AppStartupStage.ProcessEntered or > AppStartupStage.WindowActivated) return;
+        try
+        {
+            if (AuthActivationEventSource.Log.IsEnabled()) AuthActivationEventSource.Log.StartupStage((int)stage);
+        }
+        catch (EventSourceException) { /* Diagnostics cannot interrupt startup. */ }
+    }
 }
 
 [EventSource(Name = AuthActivationTrace.ProviderName, Guid = AuthActivationTrace.ProviderGuid)]
@@ -74,4 +102,7 @@ internal sealed class AuthActivationEventSource : EventSource
 
     [Event(1, Level = EventLevel.Informational)]
     public void Stage(int stage) => WriteEvent(1, stage);
+
+    [Event(2, Level = EventLevel.Informational)]
+    public void StartupStage(int stage) => WriteEvent(2, stage);
 }

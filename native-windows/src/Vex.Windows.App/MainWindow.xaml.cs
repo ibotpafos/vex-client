@@ -14,6 +14,7 @@ using Vex.Windows.App.Views;
 using Vex.Windows.Core.Navigation;
 using Vex.Windows.Core.Presentation;
 using Vex.Windows.Client.Api;
+using Vex.Windows.Client.Auth;
 using WinRT.Interop;
 
 namespace Vex.Windows.App;
@@ -41,6 +42,7 @@ public sealed partial class MainWindow : Window
     {
         _minimumSizeProcedure = OnWindowMessage;
         InitializeComponent();
+        AuthActivationTrace.RecordStartup(AppStartupStage.WindowXamlInitialized);
         Title = "VEX";
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(FocusPulseHeader);

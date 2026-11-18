@@ -3,24 +3,25 @@ import Foundation
 import FoundationNetworking
 #endif
 
-/// GET retries share one deadline. Writes remain single-attempt even when an
+/// Replay-safe GET retries share one deadline; issuance can opt out.
+/// Writes remain single-attempt even when an
 /// idempotency key is present: mutation replay is a separate server contract.
 struct VEXAPITransport: Sendable {
     var load: @Sendable (URLRequest) async throws -> (Data, URLResponse) = {
-        try await URLSession.shared.data(for: $0)
+        try await URLSession.shared.data(for: $0, delegate: VEXAPIRedirectDelegate.shared)
     }
     var now: @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     var sleep: @Sendable (TimeInterval) async throws -> Void = {
         try await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000))
     }
 
-    func data(for request: URLRequest, timeout: TimeInterval) async throws -> (Data, URLResponse) {
+    func data(for request: URLRequest, timeout: TimeInterval, retryCount: Int = 2) async throws -> (Data, URLResponse) {
         guard timeout.isFinite, timeout > 0, timeout <= 86_400 else { throw URLError(.timedOut) }
         let deadline = now() + timeout
         // URLRequest's timeout measures inactivity. A server that keeps sending
         // bytes must not extend the total API operation beyond this deadline.
         return try await withThrowingTaskGroup(of: Response.self) { group in
-            group.addTask { try await attempts(request, deadline: deadline) }
+            group.addTask { try await attempts(request, deadline: deadline, retryCount: retryCount) }
             group.addTask {
                 try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
                 throw URLError(.timedOut)
@@ -31,8 +32,9 @@ struct VEXAPITransport: Sendable {
         }
     }
 
-    private func attempts(_ request: URLRequest, deadline: TimeInterval) async throws -> Response {
-        let limit = request.httpMethod?.uppercased() == "GET" || request.httpMethod == nil ? 3 : 1
+    private func attempts(_ request: URLRequest, deadline: TimeInterval, retryCount: Int) async throws -> Response {
+        let isRead = request.httpMethod?.uppercased() == "GET" || request.httpMethod == nil
+        let limit = isRead ? min(2, max(0, retryCount)) + 1 : 1
         for attempt in 1...limit {
             try Task.checkCancellation()
             let remaining = deadline - now()
@@ -78,7 +80,7 @@ struct VEXAPITransport: Sendable {
         return max(0, date.timeIntervalSince(now))
     }
 
-    private static func isRetryable(_ error: Error) -> Bool {
+    static func isRetryable(_ error: Error) -> Bool {
         guard let error = error as? URLError else { return false }
         return [.timedOut, .cannotFindHost, .cannotConnectToHost, .networkConnectionLost,
                 .dnsLookupFailed, .notConnectedToInternet].contains(error.code)
@@ -87,5 +89,19 @@ struct VEXAPITransport: Sendable {
     private struct Response: @unchecked Sendable {
         let data: Data
         let response: URLResponse
+    }
+}
+
+
+/// JSON API and realtime requests keep their original method, authority and single-attempt write
+/// semantics. Return the redirect response instead of replaying it implicitly.
+final class VEXAPIRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    static let shared = VEXAPIRedirectDelegate()
+
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
+        completionHandler(nil)
     }
 }

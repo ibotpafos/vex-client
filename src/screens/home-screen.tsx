@@ -1,7 +1,7 @@
 import { ServiceNotice } from "@/components/service-notice";
 import { StatusBar } from 'expo-status-bar';
 import { router, useFocusEffect } from 'expo-router';
-import React, { useState } from 'react';
+import React, { useState, useTransition } from 'react';
 import { Platform, ScrollView, Text, View } from 'react-native';
 
 import type { VpnLocation } from '@/api/vexApi';
@@ -20,7 +20,7 @@ import { ServerPickerModal } from '../components/server-picker-modal';
 import { serverPickerActionForSource } from './server-picker-interactions';
 import { styles } from './home-screen.styles';
 
-export default function App() {
+export const HomeScreen = React.memo(function HomeScreen() {
   useRenderProfilerMark('HomeScreen');
   const {
     session,
@@ -63,6 +63,7 @@ export default function App() {
     latencyText: string;
     locations: VpnLocation[];
   } | null>(null);
+  const [, startTransition] = useTransition();
 
   function openServerPicker() {
     if (serverPickerActionForSource('all_locations') !== 'open_picker') {
@@ -73,7 +74,7 @@ export default function App() {
       locations: availableLocations.map((location) => ({ ...location })),
     });
     void refreshLocationsForPicker().catch(() => undefined);
-    requestAnimationFrame(() => setIsServerPickerVisible(true));
+    startTransition(() => setIsServerPickerVisible(true));
   }
 
   return (
@@ -149,22 +150,24 @@ export default function App() {
         selectedLocationId={selectedLocationId}
         visible={isServerPickerVisible}
         onAutoSelect={() => {
-          setIsServerPickerVisible(false);
+          startTransition(() => setIsServerPickerVisible(false));
           void handleAutoServerSelectionPress(false);
         }}
-        onClose={() => setIsServerPickerVisible(false)}
+        onClose={() => {
+          startTransition(() => setIsServerPickerVisible(false));
+        }}
         onRetry={() => {
           void retryLocations().catch(() => undefined);
         }}
         onSelect={(locationId) => {
-          setIsServerPickerVisible(false);
+          startTransition(() => setIsServerPickerVisible(false));
           void handleLocationPress(locationId, false);
         }}
       />
       </View>
     </View>
   );
-}
+});
 
 // The renewal notice must not push location/help controls outside a small
 // Android screen or a large-font viewport. Other platforms keep their layout.

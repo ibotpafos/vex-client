@@ -1,4 +1,4 @@
-import { forwardRef, useImperativeHandle, useRef } from 'react';
+import { forwardRef, useImperativeHandle, useRef, type ComponentRef } from 'react';
 import { Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { emailOTPCells, normalizeEmailOTPCode } from '@/auth/emailOtp';
 import { vexColors } from '@/ui/vex-ui';
@@ -20,7 +20,7 @@ export const OTPCodeInput = forwardRef<OTPCodeInputHandle, OTPCodeInputProps>(fu
   { value, onChangeText, disabled = false, length = defaultLength },
   ref,
 ) {
-  const inputRef = useRef<TextInput>(null);
+  const inputRef = useRef<ComponentRef<typeof TextInput>>(null);
   const digits = emailOTPCells(value, length);
 
   useImperativeHandle(ref, () => ({

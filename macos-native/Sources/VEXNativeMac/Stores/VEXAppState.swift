@@ -520,9 +520,9 @@ final class VEXAppState: ObservableObject {
                 return try await connectPreparedTunnel(rotatedTunnel, helper: helper, generation: generation, resiliencePolicy: resiliencePolicy)
             }
 
-            return try await VpnAdmissionRecovery.retryFreshProfile {
+            return try await VpnAdmissionRecovery.retryFreshProfile(resolve: {
                 try ensureProfileSession(accountUserId: accountUserId, generation: generation)
-                let freshTunnel = try await profileService.resolveProfile(
+                return try await profileService.resolveProfile(
                     accessToken: token,
                     userId: accountUserId,
                     locationId: initialTunnel.locationId,
@@ -531,8 +531,9 @@ final class VEXAppState: ObservableObject {
                     writeHelperConfig: false,
                     shouldPersist: shouldPersistProfile
                 )
+            }, connect: { freshTunnel in
                 return try await connectPreparedTunnel(freshTunnel, helper: helper, generation: generation, resiliencePolicy: resiliencePolicy)
-            } failover: { error in
+            }) { error in
                 try ensureProfileSession(accountUserId: accountUserId, generation: generation)
                 guard allowsAutomaticFailover, assessment.canFailover, let failoverLocation = bestFailoverLocation(excluding: initialTunnel.locationId) else {
                     throw error
@@ -1837,10 +1838,11 @@ final class VEXAppState: ObservableObject {
     private func startCustomerRealtime(accessToken: String) {
         guard let accountUserId = sessionUserId(for: accessToken) else { return }
         resetCustomerNotificationSession()
+        guard let baseURL = try? VEXAPIConfiguration.requireBaseURL(api.baseURL) else { return }
         let realtimeGeneration = customerRealtimeGeneration
         let accountGeneration = profileAccountGeneration
         let service = CustomerRealtimeService(
-            baseURL: api.baseURL,
+            baseURL: baseURL,
             onStatus: { [weak self] connected in
                 guard let self, self.isCurrentCustomerRealtimeSession(
                     generation: realtimeGeneration, accountGeneration: accountGeneration,
@@ -2122,9 +2124,7 @@ final class VEXAppState: ObservableObject {
         return locations
             .filter { location in
                 location.id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != normalizedActive
-                    && location.healthyNodes > 0
-                    && (location.awg3Nodes ?? 1) > 0
-                    && location.availability != "retired"
+                    && location.isAvailableForVpn
             }
             .sorted(by: locationSort)
             .first

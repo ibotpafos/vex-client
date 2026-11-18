@@ -1,4 +1,5 @@
 import * as Notifications from 'expo-notifications';
+import { AndroidImportance } from 'expo-notifications';
 import { Platform } from 'react-native';
 
 import { getFirebaseMessagingToken } from '@/native/vexVpn';
@@ -18,7 +19,7 @@ export async function getFcmAccountPushRegistration(allowPermissionPrompt = true
 
   if (Platform.OS === 'android') {
     await Notifications.setNotificationChannelAsync(androidAccountEventsChannelId, {
-      importance: Notifications.AndroidImportance.DEFAULT,
+      importance: AndroidImportance.DEFAULT,
       name: 'VEX account events',
     });
   }

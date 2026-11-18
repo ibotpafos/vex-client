@@ -34,7 +34,11 @@ export type VpnDiagnosticsSnapshot = {
 };
 
 let uploadChain: Promise<void> = Promise.resolve();
+let uploadChainStartedAt = 0;
+const maxUploadChainAgeMs = 5 * 60_000;
 let capturedNetwork: CapturedNetworkObservation | null = null;
+let capturedNetworkAt = 0;
+const capturedNetworkTtlMs = 5 * 60_000;
 let capturedAccessToken: string | undefined;
 let capturedSessionIsCurrent: (() => boolean) | undefined;
 let captureGeneration = 0;
@@ -84,6 +88,7 @@ async function captureClientNetworkDiagnostics(accessToken: string, deviceId: st
     const [network, status] = await Promise.all([readVpnNetworkObservation(), getVpnStatus()]);
     if (!currentAttempt() || !network.generation || status.state !== 'disconnected') return;
     if (capturedAccessToken === accessToken && capturedSessionIsCurrent?.() !== false
+      && Date.now() - capturedNetworkAt <= capturedNetworkTtlMs
       && matchingNetworkObservation(capturedNetwork, network, deviceId, Date.now())) return;
     capturedNetwork = null;
     capturedAccessToken = undefined;
@@ -99,6 +104,7 @@ async function captureClientNetworkDiagnostics(accessToken: string, deviceId: st
     if (!currentAttempt() || currentStatus.state !== 'disconnected' || current.generation !== network.generation
       || current.networkClass !== network.networkClass || !response.id) return;
     capturedNetwork = { ...network, id: response.id, deviceId, capturedAt: Date.now() };
+    capturedNetworkAt = Date.now();
     capturedAccessToken = accessToken;
     capturedSessionIsCurrent = sessionIsCurrent;
   } catch { /* Optional capture must not prevent VPN connection. */ }
@@ -115,9 +121,20 @@ let cachedNetworkProbe: {
 let inflightNetworkProbe: Promise<Awaited<ReturnType<typeof probeNetworkHealth>>> | null = null;
 
 export function uploadClientDiagnostics(accessToken: string, snapshot: VpnDiagnosticsSnapshot): Promise<void> {
+  if (Date.now() - uploadChainStartedAt > maxUploadChainAgeMs) {
+    uploadChain = Promise.resolve();
+    uploadChainStartedAt = Date.now();
+  }
+  const uploadWithTimeout = (): Promise<void> =>
+    Promise.race([
+      uploadClientDiagnosticsNow(accessToken, snapshot),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('diagnostics upload timeout')), 8_000),
+      ),
+    ]) as Promise<void>;
   uploadChain = uploadChain
-    .catch(() => undefined)
-    .then(() => uploadClientDiagnosticsNow(accessToken, snapshot));
+    .catch((error) => { if (__DEV__) console.log('diagnostics upload chain error', error); })
+    .then(() => uploadWithTimeout());
   return uploadChain;
 }
 

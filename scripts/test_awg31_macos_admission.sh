@@ -10,8 +10,9 @@ swiftc -o "$BUILD/admission" \
   -framework Security -framework SystemConfiguration -lbsm
 "$BUILD/admission"
 
-swiftc -parse-as-library -o "$BUILD/recovery" \
+swiftc -parse-as-library -D VEX_ADMISSION_STANDALONE -o "$BUILD/recovery" \
   "$ROOT/macos-native/Sources/VEXNativeMac/Services/VpnAdmissionRecovery.swift" \
   "$ROOT/macos-native/Sources/VEXNativeMac/Services/HelperDisconnectConfirmation.swift" \
+  "$ROOT/macos-native/Tests/VEXNativeMacTests/Support/VpnAdmissionRecoveryScenarios.swift" \
   "$ROOT/macos-native/Tests/RecoveryHarness/main.swift"
 "$BUILD/recovery"

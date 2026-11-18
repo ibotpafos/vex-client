@@ -72,13 +72,15 @@ public sealed record CustomerRealtimeMetadata(
 
             if (type != "customer.resync" ||
                 !root.TryGetProperty("versions", out var versions) ||
-                versions.ValueKind != JsonValueKind.Array)
+                versions.ValueKind is not (JsonValueKind.Array or JsonValueKind.Null))
             {
                 return null;
             }
 
-            var domains = versions
-                .EnumerateArray()
+            // Older Go servers encode an absent version snapshot as null.
+            var domains = versions.ValueKind == JsonValueKind.Null
+                ? Array.Empty<string>()
+                : versions.EnumerateArray()
                 .Where(item => item.ValueKind == JsonValueKind.Object)
                 .Select(item => StringProperty(item, "domain"))
                 .Where(domain =>
@@ -117,41 +119,42 @@ public sealed class CustomerSseParser
         "customer.heartbeat",
     ];
     private readonly StringBuilder _remainder = new();
+    private bool _skipLineFeed;
 
     public string Remainder => _remainder.ToString();
 
     public IReadOnlyList<CustomerRealtimeEvent> Append(string chunk)
     {
         ArgumentNullException.ThrowIfNull(chunk);
-        var buffered = (_remainder + chunk)
-            .Replace("\r\n", "\n", StringComparison.Ordinal)
-            .Replace('\r', '\n');
-        var boundary = buffered.LastIndexOf(
-            "\n\n",
-            StringComparison.Ordinal);
-        if (boundary < 0)
+        var events = new List<CustomerRealtimeEvent>();
+        foreach (var character in chunk)
         {
-            SetRemainder(buffered);
-            return [];
+            // CRLF remains one newline even when its bytes arrive in separate reads.
+            if (_skipLineFeed)
+            {
+                _skipLineFeed = false;
+                if (character == '\n') continue;
+            }
+            var normalized = character;
+            if (character == '\r')
+            {
+                normalized = '\n';
+                _skipLineFeed = true;
+            }
+            if (_remainder.Length == MaximumRemainderLength)
+            {
+                _remainder.Clear();
+                _skipLineFeed = false;
+                throw new InvalidDataException("The realtime frame exceeded its size limit.");
+            }
+            _remainder.Append(normalized);
+            if (normalized != '\n' || _remainder.Length < 2 || _remainder[^2] != '\n') continue;
+            var frame = _remainder.ToString(0, _remainder.Length - 2);
+            _remainder.Clear();
+            var parsed = ParseFrame(frame);
+            if (parsed is not null) events.Add(parsed);
         }
-
-        var complete = buffered[..boundary];
-        SetRemainder(buffered[(boundary + 2)..]);
-        return complete
-            .Split("\n\n", StringSplitOptions.None)
-            .Select(ParseFrame)
-            .Where(value => value is not null)
-            .Cast<CustomerRealtimeEvent>()
-            .ToArray();
-    }
-
-    private void SetRemainder(string value)
-    {
-        _remainder.Clear();
-        _remainder.Append(
-            value.Length <= MaximumRemainderLength
-                ? value
-                : value[^MaximumRemainderLength..]);
+        return events.ToArray();
     }
 
     private static CustomerRealtimeEvent? ParseFrame(string frame)
@@ -221,6 +224,7 @@ public sealed class CustomerRealtimeClient : IAsyncDisposable
 {
     public static readonly TimeSpan LivenessDeadline = TimeSpan.FromSeconds(90);
     private readonly HttpClient _httpClient;
+    private readonly Uri _apiBaseUri;
     private readonly TimeSpan _livenessTimeout;
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
     private CancellationTokenSource? _streamLifetime;
@@ -231,6 +235,7 @@ public sealed class CustomerRealtimeClient : IAsyncDisposable
     public CustomerRealtimeClient(HttpClient httpClient, TimeSpan? livenessTimeout = null)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
+        _apiBaseUri = VexApiConfiguration.Require(httpClient.BaseAddress, nameof(httpClient));
         _httpClient = httpClient;
         _livenessTimeout = livenessTimeout ?? LivenessDeadline;
         if (_livenessTimeout <= TimeSpan.Zero || _livenessTimeout.TotalMilliseconds > uint.MaxValue - 1)
@@ -346,7 +351,7 @@ public sealed class CustomerRealtimeClient : IAsyncDisposable
                 // already rejected token cannot restore the session.
                 if (error.StatusCode == HttpStatusCode.Unauthorized) return;
             }
-            catch (IOException)
+            catch (Exception error) when (error is IOException or InvalidDataException)
             {
                 SetConnected(false);
             }
@@ -386,7 +391,7 @@ public sealed class CustomerRealtimeClient : IAsyncDisposable
         var cancellationToken = liveness.Token;
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
-            "/v1/events");
+            VexApiConfiguration.Endpoint(_apiBaseUri, "/v1/events"));
         request.Headers.Accept.Add(
             new MediaTypeWithQualityHeaderValue("text/event-stream"));
         request.Headers.Authorization =
@@ -427,26 +432,28 @@ public sealed class CustomerRealtimeClient : IAsyncDisposable
         using var reader = new StreamReader(
             new LivenessStream(stream, liveness, _livenessTimeout), Encoding.UTF8);
         var parser = new CustomerSseParser();
+        var buffer = new char[4096];
         while (true)
         {
-            var line = await reader.ReadLineAsync(cancellationToken)
+            var read = await reader.ReadAsync(buffer.AsMemory(), cancellationToken)
                 .ConfigureAwait(false);
-            if (line is null)
+            cancellationToken.ThrowIfCancellationRequested();
+            if (read == 0)
             {
                 break;
             }
-            foreach (var realtimeEvent in parser.Append(line + "\n"))
+            foreach (var realtimeEvent in parser.Append(new string(buffer, 0, read)))
             {
-                if (!string.IsNullOrEmpty(realtimeEvent.Id))
-                {
-                    lastEventId = realtimeEvent.Id;
-                    recordEventId(lastEventId);
-                }
                 var metadata = CustomerRealtimeMetadata.Parse(
                     realtimeEvent.Type,
                     realtimeEvent.Data);
                 if (metadata is not null)
                 {
+                    if (!string.IsNullOrEmpty(realtimeEvent.Id))
+                    {
+                        lastEventId = realtimeEvent.Id;
+                        recordEventId(lastEventId);
+                    }
                     Changed?.Invoke(
                         this,
                         new CustomerRealtimeChangedEventArgs(

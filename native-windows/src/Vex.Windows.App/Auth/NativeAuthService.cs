@@ -34,7 +34,7 @@ public sealed class NativeAuthService
         _coordinator = coordinator;
         _stateStore = stateStore;
         _pkceStateStore = pkceStateStore;
-        _apiBaseUri = apiBaseUri;
+        _apiBaseUri = VexApiConfiguration.Require(apiBaseUri);
         _launchBrowser = launchBrowser;
     }
 

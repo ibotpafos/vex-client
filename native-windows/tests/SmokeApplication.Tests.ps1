@@ -855,3 +855,81 @@ if ($elements.Count -ne 2 -or $elements[0].left -ne 120 -or $elements[1].left -n
 }
 Write-Host 'Application smoke capture geometry verification passed.'
 Write-Host "Application smoke runtime type verification passed: $($checked.Count) types; Windows-only types deferred: $($deferred.Count)."
+
+
+# Execute the production condition with a provider whose read-only refresh
+# completes (or restarts) between property reads. Only the UIA type binding is
+# replaced; no application, registry, native window or VPN service is opened.
+& {
+    $wait = $ast.Find({
+        param($node)
+        $node -is [System.Management.Automation.Language.CommandAst] -and
+        $node.GetCommandName() -eq 'Wait-SmokeCondition' -and
+        @($node.CommandElements | Where-Object {
+            $_ -is [System.Management.Automation.Language.StringConstantExpressionAst] -and
+            $_.Value -eq 'AutoRecovery did not change while its read-only refresh resumed.'
+        }).Count -eq 1
+    }, $true)
+    if ($null -eq $wait) { throw 'Settings mutation condition is missing.' }
+    $block = @($wait.CommandElements | Where-Object {
+        $_ -is [System.Management.Automation.Language.ScriptBlockExpressionAst]
+    })
+    if ($block.Count -ne 1) { throw 'Settings mutation condition is ambiguous.' }
+    $source = $block[0].ScriptBlock.Extent.Text
+    $source = $source.Substring(1, $source.Length - 2)
+    $binding = '[Windows.Automation.TogglePattern]'
+    if (($source.Split($binding).Count - 1) -ne 2) { throw 'Settings UIA seam changed.' }
+    $source = $source.Replace($binding, '[Vex.Windows.Smoke.Tests.SettingsTogglePattern]')
+    $condition = [scriptblock]::Create($source)
+    if (-not ('Vex.Windows.Smoke.Tests.SettingsTogglePattern' -as [type])) {
+        Add-Type -TypeDefinition @'
+namespace Vex.Windows.Smoke.Tests {
+    public sealed class SettingsTogglePattern {
+        public static readonly object Pattern = new object();
+        public sealed class State { public string ToggleState { get; set; } }
+        public State Current { get; private set; }
+        public SettingsTogglePattern(string state) { Current = new State { ToggleState = state }; }
+    }
+}
+'@
+    }
+    function Find-SmokeElement {
+        param([string]$AutomationId)
+        if ($AutomationId -eq 'AutoRecoveryToggle') { return $script:settingsTestRecovery }
+        if ($AutomationId -eq 'RefreshSettingsButton') { return $script:settingsTestRefresh }
+        throw 'Unexpected settings control.'
+    }
+    $cases = @(
+        @{ name = 'read completes after valid mutation snapshot'; original = 'On'; observed = 'Off'; refresh = @($false, $true); enabled = $true; expected = $true }
+        @{ name = 'later read cannot replace completed snapshot'; original = 'On'; observed = 'Off'; refresh = @($true, $false); enabled = $true; expected = $false }
+        @{ name = 'unchanged preference rejects'; original = 'On'; observed = 'On'; refresh = @($false, $false); enabled = $true; expected = $false }
+        @{ name = 'already completed read rejects'; original = 'On'; observed = 'Off'; refresh = @($true, $true); enabled = $true; expected = $false }
+        @{ name = 'reverse preference with completing read'; original = 'Off'; observed = 'On'; refresh = @($false, $true); enabled = $true; expected = $true }
+        @{ name = 'disabled preference rejects'; original = 'On'; observed = 'Off'; refresh = @($false, $false); enabled = $false; expected = $false }
+    )
+    $failures = [Collections.Generic.List[string]]::new()
+    foreach ($case in $cases) {
+        $result = [ordered]@{}
+        $originalRecoveryState = $case.original
+        $script:settingsTestPattern = [Vex.Windows.Smoke.Tests.SettingsTogglePattern]::new($case.observed)
+        $script:settingsTestRecovery = [pscustomobject]@{ Current = [pscustomobject]@{ IsEnabled = $case.enabled } }
+        $script:settingsTestRecovery | Add-Member ScriptMethod GetCurrentPattern {
+            param($requested)
+            if (-not [object]::ReferenceEquals($requested, [Vex.Windows.Smoke.Tests.SettingsTogglePattern]::Pattern)) {
+                throw 'Wrong settings pattern requested.'
+            }
+            return $script:settingsTestPattern
+        }
+        $script:settingsTestRefreshReads = 0
+        $script:settingsTestRefreshStates = $case.refresh
+        $script:settingsTestRefresh = [pscustomobject]@{}
+        $script:settingsTestRefresh | Add-Member ScriptProperty Current {
+            $index = [math]::Min($script:settingsTestRefreshReads++, $script:settingsTestRefreshStates.Count - 1)
+            [pscustomobject]@{ IsEnabled = $script:settingsTestRefreshStates[$index] }
+        }
+        $actual = & $condition
+        if ($actual -ne $case.expected) { $failures.Add($case.name) }
+        Write-Host "SETTINGS_OBSERVATION_CASE=$($case.name); passed=$($actual -eq $case.expected)"
+    }
+    if ($failures.Count -ne 0) { throw "Settings observation failed: $($failures -join '; ')." }
+}

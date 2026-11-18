@@ -111,17 +111,8 @@ function Read-FixtureEndpointRoutes {
         }) | ConvertTo-Json -Compress -AsArray
 }
 
-function Assert-FixtureHarnessResult {
-    param([Parameter(Mandatory = $true)]$Result, [switch]$FullTunnelChecks)
-    foreach ($field in @('schema', 'passed', 'full_tunnel_checks_requested', 'actual_public_internet_vpn_egress_verified')) {
-        if ($null -eq $Result.PSObject.Properties[$field]) { throw 'Fixture summary identity is incomplete.' }
-    }
-    if ($Result.schema -isnot [string] -or $Result.schema -cne 'vex.windows-vpn-acceptance.v1' -or
-        $Result.passed -isnot [bool] -or -not $Result.passed -or
-        $Result.full_tunnel_checks_requested -isnot [bool] -or
-        $Result.full_tunnel_checks_requested -ne [bool]$FullTunnelChecks -or
-        $Result.actual_public_internet_vpn_egress_verified -isnot [bool] -or
-        $Result.actual_public_internet_vpn_egress_verified) { throw 'Fixture summary identity or scope is invalid.' }
+function Get-FixtureHarnessCheckNames {
+    param([switch]$FullTunnelChecks)
     $required = @('scm_private_pipe_authenticated', 'scm_bad_token_rejected', 'scm_raw_config_rejected',
         'scm_tampered_profile_rejected', 'scm_signed_connect_verified', 'scm_status_diagnostics_verified',
         'scm_crash_status_restored', 'scm_disconnect_verified', 'scm_disconnect_survived_restart',
@@ -135,6 +126,23 @@ function Assert-FixtureHarnessResult {
             'full_controller_death_watchdog_verified', 'full_owned_cleanup_verified',
             'full_active_controller_connected_verified', 'full_active_controller_death_cleanup_verified',
             'full_active_controller_network_restored_verified', 'full_active_controller_lease_not_expired_verified')
+    }
+    return $required
+}
+
+function Assert-FixtureHarnessResult {
+    param([Parameter(Mandatory = $true)]$Result, [switch]$FullTunnelChecks)
+    foreach ($field in @('schema', 'passed', 'full_tunnel_checks_requested', 'actual_public_internet_vpn_egress_verified')) {
+        if ($null -eq $Result.PSObject.Properties[$field]) { throw 'Fixture summary identity is incomplete.' }
+    }
+    if ($Result.schema -isnot [string] -or $Result.schema -cne 'vex.windows-vpn-acceptance.v1' -or
+        $Result.passed -isnot [bool] -or -not $Result.passed -or
+        $Result.full_tunnel_checks_requested -isnot [bool] -or
+        $Result.full_tunnel_checks_requested -ne [bool]$FullTunnelChecks -or
+        $Result.actual_public_internet_vpn_egress_verified -isnot [bool] -or
+        $Result.actual_public_internet_vpn_egress_verified) { throw 'Fixture summary identity or scope is invalid.' }
+    $required = @(Get-FixtureHarnessCheckNames -FullTunnelChecks:$FullTunnelChecks)
+    if ($FullTunnelChecks) {
         foreach ($field in @('full_physical_dns_supported', 'full_physical_dns_blocked', 'full_physical_dns_restored')) {
             if ($null -eq $Result.PSObject.Properties[$field] -or $Result.$field -isnot [bool]) {
                 throw 'Fixture DNS coverage is incomplete.'
@@ -150,6 +158,48 @@ function Assert-FixtureHarnessResult {
             throw 'Fixture mandatory acceptance evidence is incomplete.'
         }
     }
+}
+
+function Get-FixtureAcceptanceLogSummary {
+    param($WrapperResult, $HarnessResult, [switch]$FullTunnelChecks)
+    # Only fixed field names, booleans and source-defined stage IDs may leave
+    # the fixture. Never echo raw JSON, exceptions, paths or connection data.
+    $wrapperStages = @('adapter-route-dns-firewall', 'completed', 'fixture-controller-service', 'harness-build', 'not-started', 'peer-build-and-test', 'peer-start', 'runtime-acceptance', 'runtime-download', 'runtime-extraction', 'vendor-log', 'vendor-service', 'wintun-driver')
+    $harnessStages = @('full-control-https-baseline', 'full-physical-dns-baseline', 'completed', 'full-active-controller-abrupt-death', 'full-active-controller-start', 'full-disconnect-restoration', 'full-physical-baseline', 'full-physical-control-bypass', 'full-physical-deny', 'full-signed-connect', 'full-tunnel-acceptance', 'full-tunnel-traffic', 'isolation', 'native-owned-route', 'native-route-abi', 'peer-traffic-confirmation', 'runtime-connect', 'scm-admission', 'scm-autonomous-authorization-expiry', 'scm-crash-restart', 'scm-disconnect-restart', 'scm-graceful-stop', 'scm-graceful-stop-restart', 'scm-install', 'scm-private-pipe-lifecycle', 'scm-signed-connect', 'signed-profile-admission', 'tunnel-dns', 'tunnel-https')
+    $summary = [ordered]@{ schema = 'vex.windows-vpn-acceptance-log.v1' }
+    foreach ($field in @('stage', 'cleanup_stage')) {
+        $value = $WrapperResult.PSObject.Properties[$field]
+        $summary[$field] = if ($null -ne $value -and $value.Value -is [string] -and $value.Value -cin $wrapperStages) { $value.Value } else { 'unknown' }
+    }
+    foreach ($field in @('passed', 'vendor_service_removed', 'fixture_controller_service_removed',
+        'tunnel_adapter_removed', 'fixture_route_removed', 'native_endpoint_route_unchanged',
+        'physical_dns_and_firewall_unchanged', 'fixture_private_material_removed')) {
+        $value = $WrapperResult.PSObject.Properties[$field]
+        $summary[$field] = $null -ne $value -and $value.Value -is [bool] -and $value.Value
+    }
+    $summary.harness_available = $null -ne $HarnessResult
+    $summary.harness_stage = 'unknown'
+    $summary.harness_passed = $false
+    $summary.failure_category = 'unknown'
+    foreach ($field in @('full_control_probe_parent_cancelled', 'full_control_probe_budget_expired', 'full_control_probe_inner_timeout', 'full_control_probe_tcp_connected')) { $summary[$field] = $null }
+    $summary.failed_or_missing_checks = @()
+    if ($null -ne $HarnessResult) {
+        $stage = $HarnessResult.PSObject.Properties['stage']
+        if ($null -ne $stage -and $stage.Value -is [string] -and $stage.Value -cin $harnessStages) { $summary.harness_stage = $stage.Value }
+        foreach ($field in @('full_control_probe_parent_cancelled', 'full_control_probe_budget_expired', 'full_control_probe_inner_timeout', 'full_control_probe_tcp_connected')) {
+            $value = $HarnessResult.PSObject.Properties[$field]
+            if ($null -ne $value -and $value.Value -is [bool]) { $summary[$field] = $value.Value }
+        }
+        $category = $HarnessResult.PSObject.Properties['failure_category']
+        if ($null -ne $category -and $category.Value -is [string] -and $category.Value -cin @('dns', 'tls', 'connection', 'protocol', 'cancelled', 'timeout', 'socket', 'http', 'other')) { $summary.failure_category = $category.Value }
+        $passed = $HarnessResult.PSObject.Properties['passed']
+        $summary.harness_passed = $null -ne $passed -and $passed.Value -is [bool] -and $passed.Value
+        foreach ($field in @(Get-FixtureHarnessCheckNames -FullTunnelChecks:$FullTunnelChecks)) {
+            $value = $HarnessResult.PSObject.Properties[$field]
+            if ($null -eq $value -or $value.Value -isnot [bool] -or -not $value.Value) { $summary.failed_or_missing_checks += $field }
+        }
+    }
+    return ($summary | ConvertTo-Json -Compress -Depth 4)
 }
 
 function Invoke-FixtureProcess {
@@ -434,5 +484,15 @@ namespace Vex.Windows.Fixture {
         $scriptResult | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath "$ResultPath.cleanup.json" -Encoding utf8
     }
 }
+try {
+    $logHarness = $null
+    if (Test-Path -LiteralPath $ResultPath -PathType Leaf) {
+        $report = Get-Item -LiteralPath $ResultPath
+        if ($report.Length -le 1MB) { $logHarness = Get-Content -LiteralPath $ResultPath -Raw | ConvertFrom-Json }
+    }
+    Write-Host ('VEX_VPN_ACCEPTANCE_SUMMARY=' + (Get-FixtureAcceptanceLogSummary `
+        -WrapperResult ([pscustomobject]$scriptResult) -HarnessResult $logHarness -FullTunnelChecks:$FullTunnelChecks))
+}
+catch { Write-Host 'VEX_VPN_ACCEPTANCE_SUMMARY={"diagnostic_available":false}' }
 if (-not $scriptResult.passed) { throw 'Isolated Windows VPN acceptance failed; inspect sanitized acceptance JSON.' }
 Write-Host 'Real VEX signed AWG3.1 profile, tunnel DNS/HTTPS, private IPC, SCM lifecycle and fixture cleanup passed.'

@@ -91,14 +91,12 @@ const styles = StyleSheet.create({
   },
   host: {
     flex: 1,
-    width: '100%',
   },
   panel: {
     backgroundColor: '#041315',
     flex: 1,
     paddingHorizontal: 24,
     paddingVertical: 32,
-    width: '100%',
   },
   title: {
     color: '#F4FCFD',

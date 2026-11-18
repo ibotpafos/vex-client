@@ -227,6 +227,7 @@ struct Harness {
 '''
 
 sources = [
+    MAC / "Services/VEXAPITransport.swift",
     MAC / "Services/CustomerRealtimeService.swift",
     MAC / "Models/CustomerNotificationPolicy.swift",
     MAC / "Services/CustomerNotificationService.swift",

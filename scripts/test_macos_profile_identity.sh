@@ -2,6 +2,7 @@
 # Exercise the production API/profile/cache flow without AppKit or live secure
 # stores. CryptoKit/keychain identity generation and DNS are isolated below;
 # full macOS package CI still compiles and tests their production implementations.
+# --api-contract-probe explicitly runs the shared API scenarios without XCTest.
 set -euo pipefail
 root_dir="$(cd "$(dirname "$0")/.." && pwd)"
 harness_dir="$(mktemp -d "${TMPDIR:-/tmp}/vex-profile-identity.XXXXXX")"
@@ -20,7 +21,10 @@ if [[ "$(uname -s)" == Darwin && "$root_dir" == /Volumes/D/* ]]; then
                   --security-path "$swift_cache/security" --scratch-path "$harness_dir/.build" --manifest-cache local)
 fi
 cp "$native_dir/Models/VEXModels.swift" "$source_dir/"
-for name in VPNProfileCache VPNProfileCacheIdentity VPNAccountScope AppSensitiveFileStore NativeAwgBoolean VEXAPITransport; do
+cp "$native_dir/Models/VEXCountryGroup.swift" "$source_dir/"
+cp "$native_dir/Support/ServerSidebarCatalog.swift" "$source_dir/"
+cp "$native_dir/Support/ServerSidebarSearch.swift" "$source_dir/"
+for name in VPNProfileCache VPNProfileCacheIdentity VPNAccountScope AppSensitiveFileStore NativeAwgBoolean VEXAPITransport VEXAPIConfiguration VEXAPIError CustomerRealtimeService; do
     cp "$native_dir/Services/$name.swift" "$source_dir/"
 done
 {
@@ -71,9 +75,27 @@ enum IPv4Resolver {
     static func resolve(_ host: String) -> String? { nil }
 }
 SWIFT
-for name in VPNProfileCacheTests VPNProfileCacheIdentityTests VPNProfileServiceIdentityTests VPNAccountIdentityTests; do
+for name in VPNProfileCacheTests VPNProfileCacheIdentityTests VPNProfileServiceIdentityTests VPNAccountIdentityTests VEXAPIResponseContractTests; do
     cp "$root_dir/macos-native/Tests/VEXNativeMacTests/$name.swift" "$test_dir/"
 done
+if [[ "${1:-}" == --api-contract-probe ]]; then
+    shift
+    # Use the exact same scenarios in the explicit CLT executable and XCTest.
+    cp "$root_dir/macos-native/Tests/VEXNativeMacTests/Support/APIContractScenarios.swift" "$source_dir/"
+    cp "$root_dir/macos-native/Tests/VEXNativeMacTests/Support/RealtimeFramingScenarios.swift" "$source_dir/"
+    cp "$root_dir/scripts/tests/vex_api_contract_probe.swift" "$source_dir/"
+    cat > "$harness_dir/Package.swift" <<'SWIFT'
+// swift-tools-version: 6.2
+import PackageDescription
+let package = Package(name: "VEXAPIContractProbe", platforms: [.macOS(.v15)], targets: [
+    .executableTarget(name: "VEXNativeMac")
+], swiftLanguageModes: [.v5])
+SWIFT
+    swift run --package-path "$harness_dir" -j 2 ${swiftpm_args[@]+"${swiftpm_args[@]}"} -Xswiftc -DVEX_API_STANDALONE VEXNativeMac "$@"
+    exit
+fi
+cp "$root_dir/macos-native/Tests/VEXNativeMacTests/Support/APIContractScenarios.swift" "$test_dir/"
+cp "$root_dir/macos-native/Tests/VEXNativeMacTests/Support/RealtimeFramingScenarios.swift" "$test_dir/"
 cat > "$harness_dir/Package.swift" <<'SWIFT'
 // swift-tools-version: 6.2
 import PackageDescription

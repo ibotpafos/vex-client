@@ -4,6 +4,7 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 const ts = require('typescript');
+const { connectFreshSameLocationProfile } = require('../src/vpn/sameLocationProfileRecovery');
 
 const repo = path.resolve(__dirname, '..');
 function policy(file, dependencies = {}, globals = {}) {
@@ -62,7 +63,6 @@ const scheduleVpnVerificationTimeout = (delayMs, onTimeout) => {
 };
 const { waitForVerifiedVpnConnection } = policy('src/vpn/connectVerification.ts', {}, { Date, setTimeout, clearTimeout });
 const { cleanupFailedVpnConnection } = policy('src/vpn/failedConnectionCleanup.ts', { './connectionFallback': fallback });
-const { connectFreshSameLocationProfile } = policy('src/vpn/sameLocationProfileRecovery.ts');
 function deferred() {
   let resolve, reject;
   const promise = new Promise((ok, fail) => { resolve = ok; reject = fail; });
@@ -110,6 +110,7 @@ function connectionHarness(stage, platform = 'android', overrides = {}) {
     Platform: { OS: platform }, antiLeakEnabled: true,
     prepareClientNetworkDiagnostics: () => wait('diagnostics'),
     withTimeout: operation => operation, vpnProfileAddressMatchesDevice: () => true,
+    withCurrentVpnProfileKey: async (_token, _profile, operation) => operation(),
     androidVpnProfileWithinBinderBudget: () => true,
     getVpnApplicationSelection: () => wait('applications', { mode: 'all', packageNames: [] }),
     dynamicRouteRuntime: { prepare: () => wait('route'), attempts: () => [{ profile }], clearActive: () => {}, recordSuccess: () => {}, recordFailure: () => {} },
@@ -120,7 +121,8 @@ function connectionHarness(stage, platform = 'android', overrides = {}) {
       if (stage === 'fresh-profile') throw new Error('VPN handshake failed');
       return wait('native', { state: 'connected' });
     },
-    connectAttemptTimeoutMs: 100, scheduleVpnVerificationTimeout,
+    cachedConnectAttemptTimeoutMs: 50, connectAttemptTimeoutMs: 100, connectDiagnosticsPrepareTimeoutMs: 0,
+    isUnverifiedProfileSource: () => false, scheduleVpnVerificationTimeout,
     waitForVerifiedVpnConnection: () => wait('verification', { state: 'connected' }),
     selectedLocationId: stage === 'persist' ? 'previous' : 'de', serverSelectionMode: 'auto', availableLocations: [{ id: 'de' }],
     chooseBestVpnLocation: () => ({ id: 'de' }), profileResolutionOrder: id => [{ id }], explicitConnectProfileResolutionOptions,
@@ -253,6 +255,7 @@ for (const cancel of [false, true]) {
       isCurrentSessionOperation: () => current, session: { accessToken: 'token-A', user: { id: 'A' } },
       Platform: { OS: 'android' }, antiLeakEnabled: true,
       prepareClientNetworkDiagnostics: async () => {}, withTimeout: operation => operation,
+      withCurrentVpnProfileKey: async (_token, _profile, operation) => operation(),
       vpnProfileAddressMatchesDevice: () => true, androidVpnProfileWithinBinderBudget: () => true,
       getVpnApplicationSelection: async () => ({ mode: 'all', packageNames: [] }),
       dynamicRouteRuntime: {
@@ -271,7 +274,8 @@ for (const cancel of [false, true]) {
         }
         return { state: 'connected' };
       },
-      connectAttemptTimeoutMs: 100,
+      cachedConnectAttemptTimeoutMs: 50, connectAttemptTimeoutMs: 100, connectDiagnosticsPrepareTimeoutMs: 0,
+      isUnverifiedProfileSource: () => false,
       scheduleVpnVerificationTimeout,
       waitForVerifiedVpnConnection: async value => value,
       submitClientDiagnostics: async (_token, report) => { reports.push(report); }, withLastSuccessfulEndpoint: value => value,

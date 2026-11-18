@@ -24,9 +24,10 @@ import {
   View,
 } from "react-native";
 import { playSelectionHaptic } from "@/native/haptics";
+import { openVpnSettings } from "@/native/vexVpn";
 import {
-  HOME_TAB_ROUTE,
   VPN_APPLICATIONS_ROUTE,
+  goBackOrHome,
 } from "@/navigation/routes";
 import { openExternalUrl } from "@/auth/systemAuth";
 import { vexWebsite } from "@/navigation/website";
@@ -38,7 +39,7 @@ import { vexColors, VexScreen, vexSharedStyles, VexPressable } from "@/ui/vex-ui
 import { useVpnConnectionContext } from "@/vpn/vpn-connection-context";
 import { useVexSettings } from "./useVexSettings";
 
-export default function SettingsScreen() {
+export const SettingsScreen = React.memo(function SettingsScreen() {
   const [isSavingTransport, setIsSavingTransport] = React.useState(false);
   const [isSavingSmartRouting, setIsSavingSmartRouting] = React.useState(false);
   const [applicationRoutingSummary, setApplicationRoutingSummary] = React.useState('Все приложения');
@@ -127,11 +128,7 @@ export default function SettingsScreen() {
         <VexPressable
           onPress={() => {
             playSelectionHaptic();
-            if (router.canGoBack()) {
-              router.back();
-              return;
-            }
-            router.replace(HOME_TAB_ROUTE);
+            goBackOrHome();
           }}
           style={vexSharedStyles.iconButton}
           hoverStyle={{ opacity: 0.72 }}
@@ -191,6 +188,28 @@ export default function SettingsScreen() {
             </View>
           </VexPressable>
         </VexSection>
+
+        {isAndroidApp ? (
+          <VexSection title="Защита при загрузке">
+            <VexPressable
+              style={styles.settingRow}
+              accessibilityRole="button"
+              accessibilityLabel="Настроить защиту VPN при загрузке"
+              onPress={() => {
+                playSelectionHaptic();
+                void openVpnSettings().then((opened) => {
+                  if (!opened) throw new Error('VPN settings unavailable');
+                }).catch(() => showSettingsToast({ message: 'Не удалось открыть настройки VPN Android.', variant: 'error' }));
+              }}
+            >
+              <View style={styles.rowCopy}>
+                <Text style={styles.rowTitle}>Настройки VPN Android</Text>
+                <Text style={styles.rowDescription}>Включите для VEX «Постоянная VPN» и «Блокировать соединения без VPN». Интернет будет заблокирован до подключения: откройте VEX и подключитесь. Исключённые приложения тоже будут заблокированы. Отключить эту защиту можно в настройках Android.</Text>
+              </View>
+              <ChevronRight color="#22D3EE" size={20} />
+            </VexPressable>
+          </VexSection>
+        ) : null}
 
         {isAndroidApp ? (
           <VexSection title="Протокол VPN">
@@ -557,7 +576,7 @@ export default function SettingsScreen() {
       </ScrollView>
     </VexScreen>
   );
-}
+});
 
 function formatPlatformLabel(platform: string) {
   if (platform === "android") return "Android";

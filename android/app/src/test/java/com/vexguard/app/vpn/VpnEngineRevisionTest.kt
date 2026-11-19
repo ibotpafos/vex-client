@@ -31,6 +31,23 @@ class VpnEngineRevisionTest {
   }
 
   @Test
+  fun protectedStopForAlternateLocationPreservesIntentAndFencesOldAttempts() {
+    val persisted = mutableListOf<Boolean>()
+    val state = VpnEngineRevision(null) { persisted.add(it) }
+    val firstLocation = state.next(true)
+    val protectedStop = state.next()
+    assertEquals(protectedStop, state.get())
+    assertEquals(listOf(true), persisted)
+    assertFalse(state.setAwgWanted(firstLocation, false))
+
+    val alternateLocation = state.next(true)
+    assertFalse(state.setAwgWanted(protectedStop, false))
+    assertEquals(alternateLocation, state.get())
+    assertEquals(listOf(true, true), persisted)
+    assertEquals(true, state.awgWanted())
+  }
+
+  @Test
   fun admittedTransportSwitchCanWithdrawOnlyItsCurrentAwgIntent() {
     var persisted: Boolean? = null
     val state = VpnEngineRevision(persisted) { persisted = it }

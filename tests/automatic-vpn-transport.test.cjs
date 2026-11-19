@@ -19,7 +19,7 @@ test('new Android preferences default to auto and preserve both existing explici
 
 function harness({preference='auto', profileError, nativeError, stopFails=false, live=false, supported=true, invalidAddress=false, invalidKey=false, nativeLive=false, initialStatus, settledDisconnect, disconnectWait, observation, now, nativeAdmissionWait, ...settings}={}) {
   const account = accountFixture({owner:'owner',deviceId:'device'});
-  const events=[], publications=[], cache=[], disconnectOptions=[], locations=[], refs=[];
+  const events=[], publications=[], cache=[], disconnectOptions=[], locations=[], refs=[], profileRequests=[];
   let cursor=0;
   const ownerGuard=()=>current;
   let nativeCalls=0;
@@ -38,7 +38,7 @@ function harness({preference='auto', profileError, nativeError, stopFails=false,
     androidVpnProfileWithinBinderBudget:()=>true,
     connectVpn:async(_config,options)=>{
       events.push(['native',options.transport]);
-      const error=nativeError?.(options.transport);if(error)throw error;
+      const error=nativeError?.(options.transport,locations.at(-1));if(error)throw error;
       status={state:'connected',transport:options.transport,verified:true,connectionId:(++nativeCalls).toString(16).padStart(8,'0')+'-1234-1234-1234-123456789abc',
         verificationEpochMillis:now?.()??Date.now(),latestHandshakeEpochMillis:now?.()??Date.now(),dataPlaneGeneration:'fixture',
         dataPlaneVerified:true,dataPlaneVerificationEpochMillis:now?.()??Date.now()};
@@ -56,11 +56,12 @@ function harness({preference='auto', profileError, nativeError, stopFails=false,
     resolveConnectableVpnProfile:async(_location,options)=>{
       const protocol=options.transport??(input.transportPreference==='vless'?'vless':'amneziawg'); events.push(['profile',protocol]);locations.push(_location);
       if(options.isCurrentOperation?.()===false) throw new (loadModule('src/vpn/sessionOperation.ts').SessionOperationSupersededError)();
+      profileRequests.push({location:_location, protocol, forceRefresh:options.forceRefresh, requestPermission:options.requestPermission});
       const error=await profileError?.(protocol);if(error)throw error;return {...profile(protocol),locationId:settings.actualLocation??_location};
     },
     vpnStatus:nativeLive?{state:'disconnected'}:status,clientLatencyMs:null,reportVpnConnectEvent:()=>{},setSelectedLocationId:()=>{},
     setActiveProfile:p=>publications.push(p),setVpnStatus:s=>{assert.equal(s.verified,true);events.push(['verified',s.transport]);status=s;},session:{accessToken:'fixture',user:{id:'owner'}},...settings};
-  const h={events,publications,cache,disconnectOptions,locations,drop:()=>{status={state:'disconnected'};},invalidate:()=>{current=false;},
+  const h={events,publications,cache,disconnectOptions,locations,profileRequests,drop:()=>{status={state:'disconnected'};},invalidate:()=>{current=false;},
     render:patch=>{Object.assign(input,patch);cursor=0;h.flow=runFlow(input);}};
   h.render({});return h;
 }
@@ -133,6 +134,44 @@ for (const error of [Object.assign(new Error('VPN connection failed'),{code:'VPN
 test('both native protocols failing exhausts the two-stage budget without publication',async()=>{
   const h=harness({nativeError:()=>new Error('VPN connection failed')});await assert.rejects(h.flow.connectCurrentVpn());
   assert.deepEqual(h.events,[['profile','amneziawg'],['native','amneziawg'],['stop'],['profile','vless'],['native','vless'],['stop']]);
+  assert.equal(h.publications.length,0);
+});
+
+test('AWG-only Auto uses one verified alternate location after traffic verification fails',async()=>{
+  const h=harness({supportsVless:false,serverSelectionMode:'auto',
+    nativeError:(_protocol,location)=>location==='de'?new Error('VPN traffic verification timed out.'):null});
+  await h.flow.connectCurrentVpn();
+  assert.deepEqual(h.events,[['profile','amneziawg'],['native','amneziawg'],['stop'],['profile','amneziawg'],['native','amneziawg'],['verified','amneziawg']]);
+  assert.deepEqual(h.profileRequests,[
+    {location:'de',protocol:'amneziawg',forceRefresh:false,requestPermission:true},
+    {location:'fi',protocol:'amneziawg',forceRefresh:true,requestPermission:false},
+  ]);
+  assert.deepEqual(h.publications.map(p=>p.locationId),['fi']);
+  assert.deepEqual(h.disconnectOptions.map(o=>o.releaseAntiLeak),[false]);
+});
+
+test('AWG-only Auto never changes a specifically requested location',async()=>{
+  const error=new Error('VPN traffic verification timed out.');
+  const h=harness({supportsVless:false,serverSelectionMode:'auto',nativeError:()=>error});
+  await assert.rejects(h.flow.connectCurrentVpn({locationId:'de'}),e=>e===error);
+  assert.deepEqual(h.locations,['de']);
+  assert.equal(h.publications.length,0);
+});
+
+test('AWG-only Auto stops without another placement when disconnect is not settled',async()=>{
+  const error=new Error('VPN traffic verification timed out.');
+  const h=harness({supportsVless:false,serverSelectionMode:'auto',nativeError:()=>error,settledDisconnect:{state:'connecting'}});
+  await assert.rejects(h.flow.connectCurrentVpn(),e=>e===error);
+  assert.deepEqual(h.events,[['profile','amneziawg'],['native','amneziawg'],['stop']]);
+});
+
+test('AWG-only Auto never tries a third location after the alternate fails',async()=>{
+  const error=new Error('VPN traffic verification timed out.');
+  const h=harness({supportsVless:false,serverSelectionMode:'auto',nativeError:()=>error});
+  h.render({availableLocations:['de','fi','nl'].map(id=>({id,availability:'available',status:'active',healthyNodes:1}))});
+  await assert.rejects(h.flow.connectCurrentVpn(),e=>e===error);
+  assert.deepEqual(h.locations,['de','fi']);
+  assert.deepEqual(h.events,[['profile','amneziawg'],['native','amneziawg'],['stop'],['profile','amneziawg'],['native','amneziawg'],['stop']]);
   assert.equal(h.publications.length,0);
 });
 

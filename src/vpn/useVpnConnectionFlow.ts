@@ -332,6 +332,7 @@ export function useVpnConnectionFlow({
     requestPermission = true,
     isCurrentOperation = () => true,
     protocol,
+    allowAutomaticLocationFallback = false,
     onFailurePhase,
   }: {
     locationId?: string;
@@ -339,6 +340,7 @@ export function useVpnConnectionFlow({
     requestPermission?: boolean;
     isCurrentOperation?: () => boolean;
     protocol?: VpnTransport;
+    allowAutomaticLocationFallback?: boolean;
     onFailurePhase?: (phase: 'profile' | 'native') => void;
   } = {}) => {
     const requireCurrentOperation = () => {
@@ -373,10 +375,15 @@ export function useVpnConnectionFlow({
         requireCurrentOperation();
       }
     };
+    let nativeDispatched = false;
     const connectCurrentProfile = async (candidate: VpnProfile) => {
       requireCurrentOperation();
+      nativeDispatched = false;
       try {
-        const connected = await connectProfileWithEndpointFallback(candidate, isCurrentOperation, undefined, () => onFailurePhase?.('native'));
+        const connected = await connectProfileWithEndpointFallback(candidate, isCurrentOperation, undefined, () => {
+          nativeDispatched = true;
+          onFailurePhase?.('native');
+        });
         onFailurePhase?.('profile');
         return connected;
       } finally {
@@ -453,7 +460,28 @@ export function useVpnConnectionFlow({
         throw error;
       }
       lastConnectError = error;
-      if (protocol) throw error;
+      if (protocol) {
+        const alternate = allowAutomaticLocationFallback && protocol === 'amneziawg' && nativeDispatched
+          && serverSelectionMode === 'auto' && requestedLocationId === undefined && canFallbackVpnProtocol(error, 'native')
+          ? chooseBestVpnLocation(protocolLocations.filter((location) => location.id !== profileLocationId))
+          : undefined;
+        if (!alternate) throw error;
+        const latest = await getVpnStatus({ fresh: true });
+        requireCurrentOperation();
+        if (latest.state === 'connected' && latest.verified === true) throw error;
+        // A different location can move the peer. Only issue it after a settled stop.
+        onFailurePhase?.('profile');
+        const stopped = await disconnectVpn({ releaseAntiLeak: !antiLeakEnabled });
+        requireCurrentOperation();
+        if (!isSettledVpnDisconnect(stopped)) throw error;
+        const alternateProfile = await resolveCurrentProfile(alternate.id, {
+          forceRefresh: true,
+          preferCached: false,
+          requestPermission: false,
+        });
+        connected = await connectCurrentProfile(alternateProfile);
+        connectedLocationId = alternate.id;
+      }
     }
 
     try {
@@ -620,6 +648,7 @@ export function useVpnConnectionFlow({
       const attempt = { phase: 'profile' as 'profile' | 'native' };
       try {
         await connectCurrentVpn({ ...options, protocol, requestPermission: index === 0 && options.requestPermission !== false,
+          allowAutomaticLocationFallback: Platform.OS === 'android' && protocols.length === 1,
           isCurrentOperation: isCurrent, onFailurePhase: value => { attempt.phase = value; } });
         requireCurrent();
         if (session) lastVerifiedTransportRef.current = { userId: session.user.id, isCurrent: isCurrentSessionOperation, transport: protocol };

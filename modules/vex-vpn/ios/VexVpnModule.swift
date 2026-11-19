@@ -534,15 +534,15 @@ private final class LatencyProbeState: @unchecked Sendable {
 }
 
 private final class IosTunnelException: Exception, @unchecked Sendable {
-  private let message: String
+  private let detail: String
 
   init(message: String) {
-    self.message = message
+    self.detail = message
     super.init()
   }
 
   override var reason: String {
-    "iOS tunnel operation failed: \(message)"
+    "iOS tunnel operation failed: \(detail)"
   }
 }
 

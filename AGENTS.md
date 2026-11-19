@@ -1,6 +1,12 @@
-# Expo HAS CHANGED
+# Expo documentation when relevant
 
-Read the exact versioned docs at https://docs.expo.dev/versions/v56.0.0/ before writing any code.
+When changing Expo APIs, SDK configuration, native integration, or SDK migration
+behavior, use `dependencies.expo` in `package.json` to select the SDK version.
+For SDK 58, consult [the versioned Expo reference](https://docs.expo.dev/versions/v58.0.0/).
+
+For isolated copy, styling, documentation, routine commands, or native code
+that does not depend on Expo, choose the relevant files, tools, and checks
+without requiring an Expo documentation lookup first.
 
 # Platform scope
 
